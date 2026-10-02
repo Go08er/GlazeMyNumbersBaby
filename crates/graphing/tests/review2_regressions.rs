@@ -244,3 +244,52 @@ fn ncr_near_float_max_is_finite() {
     let k = g.analyze(id);
     assert_eq!(k.analysis_error, AnalysisError::NoError);
 }
+
+/// Cancelling stops a running job promptly (it's cooperative, so this
+/// bounds how long a superseded worker keeps a core busy).
+#[test]
+fn cancellation_mid_flight_is_prompt() {
+    use std::sync::Arc;
+    /// Run `job`, cancel it after `delay`; returns whether it reported
+    /// cancellation, and how long it ran on after being asked to stop.
+    fn stop_after(
+        delay: Duration,
+        job: impl FnOnce(&AtomicBool) -> bool + Send + 'static,
+    ) -> (bool, Duration) {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let c = cancel.clone();
+        let t = std::thread::spawn(move || (job(&c), Instant::now()));
+        std::thread::sleep(delay);
+        let asked = Instant::now();
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        let (cancelled, done) = t.join().unwrap();
+        (cancelled, done.saturating_duration_since(asked))
+    }
+    let prompt = Duration::from_millis(250);
+    let mut heavy = Graph::new();
+    for _ in 0..14 {
+        heavy.add_equation("sin(x*y)<0");
+    }
+    let heavy = Arc::new(heavy);
+    let vp = Viewport::default_for_size(1920.0, 1080.0);
+    let full = Instant::now();
+    heavy.plot_parallel(&vp);
+    let full = full.elapsed();
+    let g = heavy.clone();
+    let (cancelled, lag) = stop_after(full / 4, move |c| {
+        g.plot_parallel_cancellable(&vp, c).is_none()
+    });
+    eprintln!("plot: full {full:?}, stopped {lag:?} after cancel");
+    assert!(cancelled && lag < prompt);
+
+    let mut a = Graph::new();
+    let id = a.add_equation("y=sin(x)^3*cos(x^2)+tan(x)/(x^2-4)+log(abs(x)+1)*sec(x)");
+    let a = Arc::new(a);
+    let full = Instant::now();
+    a.analyze(id);
+    let full = full.elapsed();
+    let g = a.clone();
+    let (cancelled, lag) = stop_after(full / 4, move |c| g.analyze_cancellable(id, c).is_none());
+    eprintln!("analysis: full {full:?}, stopped {lag:?} after cancel");
+    assert!(cancelled && lag < prompt);
+}
