@@ -768,11 +768,41 @@ impl CurrencyConverterDataLoader for CurrencyDataLoader {
     }
 
     fn try_load_data_from_web(&mut self, fetched: Result<CurrencySnapshot, CurrencyError>) -> bool {
+        self.load_from_web(fetched, false)
+    }
+
+    fn try_load_data_from_web_override(
+        &mut self,
+        fetched: Result<CurrencySnapshot, CurrencyError>,
+    ) -> bool {
+        self.metered_override_set = true;
+        self.web_refresh_attempted = true;
+        let did_load = self.load_from_web(fetched, true);
+        if !did_load {
+            self.load_status = CurrencyLoadStatus::FailedToLoad;
+        }
+
+        self.update_displayed_timestamp();
+        did_load
+    }
+}
+
+impl CurrencyDataLoader {
+    /// Adopts fetched rates. The network behaviour gates only automatic
+    /// refreshes: it comes from a connectivity monitor that can be wrong
+    /// (VPNs, sandboxes, systems without NetworkManager), and rates the
+    /// user explicitly asked for that did arrive must not be thrown away.
+    fn load_from_web(
+        &mut self,
+        fetched: Result<CurrencySnapshot, CurrencyError>,
+        explicit: bool,
+    ) -> bool {
         self.reset_load_status();
 
-        if self.network_access_behavior == NetworkAccessBehavior::Offline
-            || (self.network_access_behavior == NetworkAccessBehavior::OptIn
-                && !self.metered_override_set)
+        if !explicit
+            && (self.network_access_behavior == NetworkAccessBehavior::Offline
+                || (self.network_access_behavior == NetworkAccessBehavior::OptIn
+                    && !self.metered_override_set))
         {
             return false;
         }
@@ -793,21 +823,6 @@ impl CurrencyConverterDataLoader for CurrencyDataLoader {
         self.data_source = Some(CurrencyDataSource::Web);
         self.finalize_units(snapshot);
         true
-    }
-
-    fn try_load_data_from_web_override(
-        &mut self,
-        fetched: Result<CurrencySnapshot, CurrencyError>,
-    ) -> bool {
-        self.metered_override_set = true;
-        self.web_refresh_attempted = true;
-        let did_load = self.try_load_data_from_web(fetched);
-        if !did_load {
-            self.load_status = CurrencyLoadStatus::FailedToLoad;
-        }
-
-        self.update_displayed_timestamp();
-        did_load
     }
 }
 

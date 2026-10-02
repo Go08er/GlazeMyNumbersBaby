@@ -949,6 +949,10 @@ impl UnitConverterViewModel {
     /// true if the caller should now fetch (in the background) and call
     /// [`finish_currency_fetch`](Self::finish_currency_fetch); false if a
     /// refresh is already running.
+    ///
+    /// This works whatever the network behaviour: a metered connection is
+    /// the user's to spend, and an "offline" report from the connectivity
+    /// monitor may be wrong, so rates that do arrive are used.
     pub fn start_currency_refresh(&mut self) -> bool {
         if self.is_currency_loading_visible || self.fetch_in_flight == Some(FetchKind::Manual) {
             return false;

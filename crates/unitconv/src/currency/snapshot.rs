@@ -13,8 +13,9 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -129,20 +130,37 @@ impl CurrencySnapshot {
 
 /// Reads a cached snapshot from `path`.
 pub fn load_cache(path: &Path) -> Result<CurrencySnapshot, CurrencyError> {
-    let json = fs::read_to_string(path).map_err(CurrencyError::Io)?;
+    let file = fs::File::open(path).map_err(CurrencyError::Io)?;
+    // A real cache is ~30 KB; refuse to slurp anything absurd.
+    let mut json = String::new();
+    file.take(MAX_CACHE_BYTES + 1)
+        .read_to_string(&mut json)
+        .map_err(CurrencyError::Io)?;
+    if json.len() as u64 > MAX_CACHE_BYTES {
+        return Err(CurrencyError::Parse("cache file is too large".into()));
+    }
     CurrencySnapshot::from_json(&json)
 }
 
+/// Largest cache file [`load_cache`] reads.
+pub const MAX_CACHE_BYTES: u64 = 4 * 1024 * 1024;
+
 /// Writes `snapshot` to `path` (creating parent directories; the file is
-/// replaced atomically via a temporary file).
+/// replaced atomically via a temporary file unique to this writer, so two
+/// instances saving at once cannot interleave their bytes).
 pub fn save_cache(path: &Path, snapshot: &CurrencySnapshot) -> io::Result<()> {
+    static SEQ: AtomicU32 = AtomicU32::new(0);
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
         fs::create_dir_all(parent)?;
     }
     let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
+    tmp.push(format!(
+        ".{}-{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     let tmp = std::path::PathBuf::from(tmp);
     fs::write(&tmp, snapshot.to_json())?;
     fs::rename(&tmp, path).inspect_err(|_| {

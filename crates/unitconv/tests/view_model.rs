@@ -665,6 +665,36 @@ fn currency_refresh_completes_after_initial_load() {
     assert_eq!(vm.unit2().unwrap().abbreviation, "EUR");
 }
 
+/// REVIEW_2 R2-M-02: the connectivity monitor can wrongly report "offline"
+/// (VPNs, sandboxes, no NetworkManager). Automatic refreshes respect it; a
+/// refresh the user asks for is attempted and its rates are used.
+#[test]
+fn explicit_refresh_overrides_a_wrong_offline_signal() {
+    let mut vm = currency_vm();
+    vm.set_network_behavior(NetworkAccessBehavior::Offline);
+    assert!(!vm.start_automatic_currency_fetch());
+    assert!(vm.start_currency_refresh());
+    vm.finish_currency_fetch(Ok(snapshot_at(fixture_time() + TimeDelta::days(3))));
+    assert!(!vm.currency_data_load_failed());
+    assert_eq!(vm.currency_data_source(), Some(CurrencyDataSource::Web));
+    assert!(vm.is_currency_data_loaded());
+}
+
+#[test]
+fn metered_connections_only_fetch_when_asked() {
+    let mut vm = currency_vm();
+    vm.set_network_behavior(NetworkAccessBehavior::OptIn);
+    assert!(!vm.start_automatic_currency_fetch());
+    assert_eq!(vm.currency_status(), CurrencyStatus::ChargesMayApply);
+    assert!(vm.start_currency_refresh());
+    vm.finish_currency_fetch(Ok(snapshot_at(fixture_time() + TimeDelta::days(3))));
+    assert_eq!(vm.currency_data_source(), Some(CurrencyDataSource::Web));
+    // Back on an unrestricted network, the automatic refresh is allowed
+    // again only if the data is stale; it was just refreshed.
+    vm.set_network_behavior(NetworkAccessBehavior::Normal);
+    assert!(!vm.start_automatic_currency_fetch());
+}
+
 #[test]
 fn failed_refresh_reports_and_keeps_rates() {
     let mut vm = currency_vm();

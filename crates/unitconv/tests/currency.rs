@@ -398,9 +398,18 @@ fn newer_bundled_snapshot_beats_old_cache() {
 fn network_behavior_gates_web_loads() {
     let mut loader = loader_with_cache(None, TimeDelta::zero());
     loader.on_network_behavior_changed(NetworkAccessBehavior::Offline);
+    loader.load_data();
+    assert!(!loader.needs_web_refresh());
     assert!(!loader.try_load_data_from_web(Ok(fixture_snapshot())));
-    assert!(!loader.try_load_data_from_web_override(Ok(fixture_snapshot())));
-    assert_eq!(loader.load_status(), CurrencyLoadStatus::FailedToLoad);
+    // REVIEW_2 R2-M-02: "offline" is the connectivity monitor's guess. Rates
+    // the user explicitly asked for that did arrive are used.
+    assert!(loader.try_load_data_from_web_override(Ok(fixture_snapshot())));
+    assert!(loader.loaded_from_web());
+    // A failed explicit refresh still fails.
+    let mut offline = loader_with_cache(None, TimeDelta::zero());
+    offline.on_network_behavior_changed(NetworkAccessBehavior::Offline);
+    assert!(!offline.try_load_data_from_web_override(Err(CurrencyError::NetworkNotAllowed)));
+    assert_eq!(offline.load_status(), CurrencyLoadStatus::FailedToLoad);
 
     // Metered: only an explicit refresh may use the network.
     let mut metered = loader_with_cache(None, TimeDelta::zero());
@@ -641,6 +650,43 @@ fn cache_round_trip() {
         load_cache(&temp_cache_path("nope")),
         Err(CurrencyError::Io(_))
     ));
+    // No temporary files are left behind.
+    let dir = path.parent().unwrap();
+    let leftovers: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[test]
+fn oversized_cache_is_refused() {
+    let path = temp_cache_path("huge");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let padding = " ".repeat(unitconv::currency::MAX_CACHE_BYTES as usize);
+    std::fs::write(&path, format!("{}{padding}", fixture_snapshot().to_json())).unwrap();
+    assert!(matches!(load_cache(&path), Err(CurrencyError::Parse(_))));
+}
+
+#[test]
+fn concurrent_cache_writers_never_corrupt_the_file() {
+    let path = temp_cache_path("concurrent");
+    let snapshots: Vec<_> = (0..4)
+        .map(|d| snapshot_at(fixture_time() + TimeDelta::days(d)))
+        .collect();
+    std::thread::scope(|s| {
+        for snap in &snapshots {
+            let path = &path;
+            s.spawn(move || {
+                for _ in 0..25 {
+                    save_cache(path, snap).unwrap();
+                }
+            });
+        }
+    });
+    let loaded = load_cache(&path).unwrap();
+    assert!(snapshots.contains(&loaded));
 }
 
 #[cfg(feature = "network")]
