@@ -140,35 +140,67 @@ jobs:
           set -euo pipefail
           (cd artifacts && sha256sum -- * > ../SHA256SUMS)
           cat SHA256SUMS
-          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            # SHA256SUMS goes first so even a partly uploaded release says
-            # which build it belongs to.
-            gh release create "$TAG" SHA256SUMS artifacts/* \
+          # Does the release exist? "Not found" is the only failure that
+          # means no; anything else stops the job.
+          if out=$(gh release view "$TAG" --repo "$REPO" --json tagName 2>&1); then
+            existed=true
+          elif grep -qi "release not found" <<<"$out"; then
+            existed=false
+          else
+            echo "::error::Couldn't look up release $TAG: $out"
+            exit 1
+          fi
+          if [ "$existed" = false ]; then
+            # Start as a draft holding just the manifest, so whatever state
+            # an interruption leaves says which build it belongs to; it's
+            # published only once every file is there.
+            gh release create "$TAG" SHA256SUMS --draft \
               --repo "$REPO" \
               --title "GMNB & DGMNB $TAG" \
               --notes "Built from commit $GITHUB_SHA; see SHA256SUMS." \
               --generate-notes
-            exit 0
+          else
+            # A re-run, or a draft an earlier run left behind. Files already
+            # there are never replaced, and only added to if what's there
+            # came from this exact build.
+            mkdir published
+            if ! gh release download "$TAG" --repo "$REPO" -p SHA256SUMS -D published; then
+              echo "::error::$TAG exists without SHA256SUMS; delete it by hand before publishing again."
+              exit 1
+            fi
+            if ! cmp -s published/SHA256SUMS SHA256SUMS; then
+              echo "::error::$TAG holds files from a different build (SHA256SUMS differs). Delete the release by hand to republish."
+              diff published/SHA256SUMS SHA256SUMS || true
+              exit 1
+            fi
           fi
-          # The release exists (a re-run). Published files are never replaced:
-          # only missing ones are added, and only if what's there came from
-          # this exact build.
-          mkdir published
-          if ! gh release download "$TAG" --repo "$REPO" -p SHA256SUMS -D published; then
-            echo "::error::$TAG exists without SHA256SUMS; delete it by hand before publishing again."
-            exit 1
-          fi
-          if ! cmp -s published/SHA256SUMS SHA256SUMS; then
-            echo "::error::$TAG holds files from a different build (SHA256SUMS differs). Delete the release by hand to republish."
-            diff published/SHA256SUMS SHA256SUMS || true
-            exit 1
-          fi
-          existing=$(gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name')
+          assets() { gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name'; }
+          existing=$(assets)
           for f in artifacts/*; do
             name=$(basename "$f")
             if grep -qxF "$name" <<<"$existing"; then
-              echo "already published: $name"
+              echo "already there: $name"
             else
               gh release upload "$TAG" "$f" --repo "$REPO"
             fi
           done
+          # Every file must be there before the release goes public.
+          existing=$(assets)
+          missing=0
+          for f in SHA256SUMS artifacts/*; do
+            name=$(basename "$f")
+            if ! grep -qxF "$name" <<<"$existing"; then
+              echo "::error::$name is missing from $TAG"
+              missing=1
+            fi
+          done
+          [ "$missing" = 0 ] || exit 1
+          if [ "$(gh release view "$TAG" --repo "$REPO" --json isDraft -q .isDraft)" = true ]; then
+            gh release edit "$TAG" --repo "$REPO" --draft=false
+          fi
+          state=$(gh release view "$TAG" --repo "$REPO" --json isDraft,tagName -q '"\(.tagName) \(.isDraft)"')
+          if [ "$state" != "$TAG false" ]; then
+            echo "::error::$TAG didn't end up published ($state)."
+            exit 1
+          fi
+          echo "$TAG is published with every file."
