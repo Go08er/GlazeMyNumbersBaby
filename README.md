@@ -169,6 +169,37 @@ out at `reference/calculator` to regenerate the golden files.
   deleting a history item removed the wrong entry; C left the engine in
   E-notation); each is commented at the fix.
 
+## Memory footprint
+
+Technically, GMNB beats KCalc's memory footprint once Vulkan acceleration is
+off. With GTK's software renderer it has the smaller resident set and the
+same proportional footprint, although KCalc's private heap is a little
+smaller. That's despite GMNB also carrying graphing, 13 converters, date
+calculation and an embedded font.
+
+| App (Standard mode, idle) | RSS | PSS | Private |
+| --- | --- | --- | --- |
+| KCalc 26.08.1 (Qt 6, software-drawn) | 79 MB | 36 MB | 13 MB |
+| **GMNB, software renderer** (`GSK_RENDERER=cairo`) | **67 MB** | **36 MB** | 18 MB |
+| GMNB, default (Vulkan) | 201 MB | 113 MB | 43 MB |
+
+The default build renders on the GPU so the aurora, blur and glow stay
+cheap on the CPU. Nearly all of the extra memory is the GPU driver (here
+NVIDIA's Vulkan stack) being loaded into the process. To trade animation
+smoothness for memory:
+
+```sh
+flatpak override --user --env=GSK_RENDERER=cairo io.github.Go08er.GlazeMyNumbersBaby
+# or, for one run / native installs:
+GSK_RENDERER=cairo gmnb
+```
+
+Measured on NixOS with an RTX 3070 (driver 595), both apps in the same
+headless Wayland session at 760×700, idle in Standard mode. RSS counts
+shared libraries in full; PSS splits them between the processes using them;
+"Private" is anonymous memory (heap) only. Numbers will differ with other
+GPUs, drivers and fonts.
+
 ## Notes
 
 - **Flatpak on NixOS:** Flatpak can't translate NixOS's `/etc/localtime`
