@@ -9,9 +9,9 @@ license=('MIT' 'OFL-1.1')
 depends=('gtk4' 'libadwaita' 'glib2' 'pango' 'cairo' 'gcc-libs' 'glibc' 'hicolor-icon-theme')
 makedepends=('cargo')
 # Rust handles its own LTO; makepkg's -flto would also hit the bundled C (ring).
-options=('!lto')
+options=('!lto' '!debug')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('c467480457b9fa79fa4df9cf5dfe91f4599f3a7f9ef3e70c6a86951a5028390b')
 
 _appid=io.github.Go08er.GlazeMyNumbersBaby
 

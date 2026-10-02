@@ -49,7 +49,9 @@ jobs:
           chown -R builder /home/builder/pkg
           cd /home/builder/pkg
           runuser -u builder -- makepkg --printsrcinfo > .SRCINFO
-          runuser -u builder -- makepkg -f --noconfirm
+          # CI builds the checked-out tree, not the release tarball, so the
+          # PKGBUILD's pinned checksum can't match; skip it here only.
+          runuser -u builder -- makepkg -f --noconfirm --skipchecksums
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp ./*.pkg.tar.zst "$GITHUB_WORKSPACE/out/"
           cp .SRCINFO "$GITHUB_WORKSPACE/out/gmnb.SRCINFO"
