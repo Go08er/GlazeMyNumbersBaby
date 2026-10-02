@@ -1232,8 +1232,33 @@ mod tests {
     #[test]
     fn watcher_ignores_impostors() {
         use std::io::BufRead;
+        // A self-contained bus: its own socket and a permissive policy, so it
+        // doesn't depend on the host's session configuration.
+        let dir = std::env::temp_dir().join(format!("appcore-bus-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let conf = dir.join("bus.conf");
+        std::fs::write(
+            &conf,
+            format!(
+                r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:path={}</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*"/>
+    <allow receive_sender="*"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>"#,
+                dir.join("bus").display()
+            ),
+        )
+        .unwrap();
         let Ok(mut daemon) = std::process::Command::new("dbus-daemon")
-            .args(["--session", "--nofork", "--print-address=1"])
+            .arg(format!("--config-file={}", conf.display()))
+            .args(["--nofork", "--print-address=1"])
             .stdout(std::process::Stdio::piped())
             .spawn()
         else {
@@ -1241,10 +1266,13 @@ mod tests {
             return;
         };
         let mut addr = String::new();
-        std::io::BufReader::new(daemon.stdout.take().unwrap())
-            .read_line(&mut addr)
-            .unwrap();
+        let _ = std::io::BufReader::new(daemon.stdout.take().unwrap()).read_line(&mut addr);
         let addr = addr.trim().to_string();
+        if addr.is_empty() {
+            eprintln!("dbus-daemon didn't start; skipped");
+            let _ = daemon.kill();
+            return;
+        }
         let t = Duration::from_secs(2);
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1290,6 +1318,7 @@ mod tests {
         assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), Some(2));
         let _ = daemon.kill();
         let _ = daemon.wait();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
