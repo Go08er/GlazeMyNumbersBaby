@@ -428,10 +428,10 @@ impl Keypad {
             imp.ripples
                 .borrow_mut()
                 .retain(|r| r.born.elapsed().as_secs_f32() < RIPPLE_LIFE);
-            if let Some(start) = imp.cascade_start.get() {
-                if start.elapsed().as_secs_f32() > k.cascade_len() {
-                    imp.cascade_start.set(None);
-                }
+            if let Some(start) = imp.cascade_start.get()
+                && start.elapsed().as_secs_f32() > k.cascade_len()
+            {
+                imp.cascade_start.set(None);
             }
             k.queue_draw();
             if imp.ripples.borrow().is_empty() && imp.cascade_start.get().is_none() {

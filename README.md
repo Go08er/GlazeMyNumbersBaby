@@ -133,18 +133,19 @@ tools/oracle/       C++ drivers that generate the golden test data
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **524 tests**. The heart of it
+`nix develop -c cargo test --workspace` runs **532 tests** (counts include
+doctests; one more, a live currency fetch, is `#[ignore]`d). The heart of it
 is differential testing against the *real* C++ engine, compiled from the
 upstream sources with g++:
 
 | Crate | What's checked |
 | --- | --- |
-| ratpack | 13,628 golden cases from the C++ Ratpack (every op and function, all angle types, radixes 2–36, formats, precisions, error codes), byte-for-byte; port of `RationalTest.cpp` |
-| calcmanager | 3,500 golden command sequences replayed against the C++ `CalculatorManager` (every display callback, expression token, history and memory state); ports of `CalcEngineTests`, `CalcInputTest`, `CalculatorManagerTest` |
-| calcvm | 121 tests: ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage |
-| unitconv | 136 tests: ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit |
-| datecalc, copypaste | ports of `DateCalculatorTests` and `CopyPasteManagerTests` |
-| graphing | 101 tests: parser, sampling and asymptotes, implicit/inequality plots, function analysis, frame-time budgets |
+| ratpack (11) | 13,628 golden cases from the C++ Ratpack (every op and function, all angle types, radixes 2–36, formats, precisions, error codes), byte-for-byte; port of `RationalTest.cpp` |
+| calcmanager (77) | 3,500 golden command sequences replayed against the C++ `CalculatorManager` (every display callback, expression token, history and memory state); ports of `CalcEngineTests`, `CalcInputTest`, `CalculatorManagerTest` |
+| calcvm (121) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage |
+| unitconv (134 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit |
+| datecalc (40), copypaste (40) | Ports of `DateCalculatorTests` and `CopyPasteManagerTests`, plus paste key-sequence tests |
+| graphing (107) | Parser, sampling and asymptotes, implicit/inequality plots, function analysis, frame-time budgets, and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges) |
 
 The oracles live in `tools/oracle/` and need the upstream repository checked
 out at `reference/calculator` to regenerate the golden files.

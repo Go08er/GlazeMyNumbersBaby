@@ -189,7 +189,8 @@ pub fn csch(x: f64) -> f64 {
 
 #[inline]
 pub fn coth(x: f64) -> f64 {
-    x.cosh() / x.sinh()
+    // Not cosh/sinh: both overflow for |x| ≳ 710 and the ratio becomes NaN.
+    1.0 / x.tanh()
 }
 
 #[inline]
@@ -213,7 +214,7 @@ pub fn root(x: f64, n: f64) -> f64 {
     if n == 0.0 || !n.is_finite() {
         return f64::NAN;
     }
-    if n == n.trunc() && (n as i64) % 2 != 0 {
+    if is_odd_integer(n) {
         if n == 3.0 {
             return x.cbrt();
         }
@@ -354,8 +355,17 @@ pub fn double_factorial(n: f64) -> f64 {
     r
 }
 
+/// True for odd integers. Every `f64` at or beyond 2^53 is an even integer
+/// (a saturating `as i64` cast would wrongly report `i64::MAX`, i.e. odd).
+fn is_odd_integer(n: f64) -> bool {
+    n == n.trunc() && n.abs() < 9_007_199_254_740_992.0 && n % 2.0 != 0.0
+}
+
 /// Number of combinations `nCr(n, r)` (generalised through Γ).
 pub fn ncr(n: f64, r: f64) -> f64 {
+    if !n.is_finite() || !r.is_finite() {
+        return f64::NAN;
+    }
     if n == n.trunc() && r == r.trunc() && n >= 0.0 {
         if r < 0.0 || r > n {
             return 0.0;
@@ -365,6 +375,11 @@ pub fn ncr(n: f64, r: f64) -> f64 {
         let mut i = 1.0;
         while i <= r {
             acc = acc * (n - r + i) / i;
+            // C(n, r) ≥ 2^r here, so a long loop overflows within ~1100
+            // steps; stop there instead of iterating up to r (≤ 10^19…).
+            if !acc.is_finite() {
+                return f64::INFINITY;
+            }
             i += 1.0;
         }
         return acc.round();
@@ -374,6 +389,9 @@ pub fn ncr(n: f64, r: f64) -> f64 {
 
 /// Number of permutations `nPr(n, r)` (generalised through Γ).
 pub fn npr(n: f64, r: f64) -> f64 {
+    if !n.is_finite() || !r.is_finite() {
+        return f64::NAN;
+    }
     if n == n.trunc() && r == r.trunc() && n >= 0.0 {
         if r < 0.0 || r > n {
             return 0.0;
@@ -382,6 +400,11 @@ pub fn npr(n: f64, r: f64) -> f64 {
         let mut i = 0.0;
         while i < r {
             acc *= n - i;
+            // Factors are ≥ 2 until the last one, so this overflows quickly
+            // whenever the loop would be long.
+            if !acc.is_finite() {
+                return f64::INFINITY;
+            }
             i += 1.0;
         }
         return acc;

@@ -101,6 +101,7 @@ pub fn parse_input(input: &str, opts: ParseOptions) -> Result<ParsedInput, Equat
         space_before: &space_before,
         pos: 0,
         abs_depth: 0,
+        depth: 0,
         len,
     };
     let mut parsed = p.parse_input()?;
@@ -108,11 +109,17 @@ pub fn parse_input(input: &str, opts: ParseOptions) -> Result<ParsedInput, Equat
     Ok(parsed)
 }
 
+/// Deepest nesting accepted (parentheses, signs and exponent chains each
+/// count). Far beyond anything typed by hand, far below stack limits.
+const MAX_DEPTH: usize = 200;
+
 struct Parser<'a> {
     toks: &'a [Token],
     space_before: &'a [bool],
     pos: usize,
     abs_depth: usize,
+    /// Current recursion depth (groups, unary signs, exponent chains).
+    depth: usize,
     len: usize,
 }
 
@@ -211,7 +218,25 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Run `f` one recursion level deeper, refusing absurd nesting so that
+    /// pathological input (e.g. thousands of nested parentheses) becomes an
+    /// equation error instead of a stack overflow.
+    fn nested<T>(&mut self, f: impl FnOnce(&mut Self) -> PResult<T>) -> PResult<T> {
+        if self.depth >= MAX_DEPTH {
+            let span = self.peek_token().map(|t| t.span.clone()).unwrap_or(0..0);
+            return err(SyntaxErrorCode::GeneralError, span);
+        }
+        self.depth += 1;
+        let r = f(self);
+        self.depth -= 1;
+        r
+    }
+
     fn parse_sum(&mut self) -> PResult<Expr> {
+        self.nested(|p| p.parse_sum_inner())
+    }
+
+    fn parse_sum_inner(&mut self) -> PResult<Expr> {
         let mut lhs = self.parse_product()?;
         loop {
             let op = match self.peek() {
@@ -272,6 +297,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_unary(&mut self) -> PResult<Expr> {
+        self.nested(|p| p.parse_unary_inner())
+    }
+
+    fn parse_unary_inner(&mut self) -> PResult<Expr> {
         match self.peek() {
             Some(Tok::Minus) => {
                 self.pos += 1;
@@ -317,6 +346,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_exponent(&mut self) -> PResult<Expr> {
+        self.nested(|p| p.parse_exponent_inner())
+    }
+
+    fn parse_exponent_inner(&mut self) -> PResult<Expr> {
         match self.peek() {
             Some(Tok::Minus) => {
                 self.pos += 1;

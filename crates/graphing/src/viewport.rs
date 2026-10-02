@@ -49,6 +49,8 @@ pub enum RangeError {
     XMinNotLessThanMax,
     /// y min ≥ y max.
     YMinNotLessThanMax,
+    /// The span is too large or too small to map onto the graph's pixels.
+    OutOfRange,
 }
 
 /// World-coordinate ranges together with the pixel size of the graph area.
@@ -305,10 +307,19 @@ impl Viewport {
         if y_min >= y_max {
             return Err(RangeError::YMinNotLessThanMax);
         }
-        self.x_min = x_min;
-        self.x_max = x_max;
-        self.y_min = y_min;
-        self.y_max = y_max;
+        // Same validation as zooming: finite spans with usable resolution
+        // (e.g. -1e308..1e308 has an infinite span).
+        let candidate = Viewport {
+            x_min,
+            x_max,
+            y_min,
+            y_max,
+            ..*self
+        };
+        if !candidate.is_sane() {
+            return Err(RangeError::OutOfRange);
+        }
+        *self = candidate;
         Ok(())
     }
 

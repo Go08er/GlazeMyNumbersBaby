@@ -341,6 +341,12 @@ impl Window {
     }
 
     pub fn set_mode(self: &Rc<Self>, mode: ViewMode) {
+        let previous = self.mode.get().page();
+        if previous != mode.page()
+            && let Some(old) = self.pages.borrow().get(&previous).cloned()
+        {
+            old.deactivate();
+        }
         let page = self.page(mode.page());
         self.mode.set(mode);
         self.ctx.store.data.borrow_mut().mode = mode.key().into();
@@ -356,11 +362,9 @@ impl Window {
         }
 
         for (m, row, icon) in self.nav_rows.borrow().iter() {
-            if *m == mode {
-                if !row.is_selected() {
-                    self.nav.select_row(Some(row));
-                    icon.animate_draw();
-                }
+            if *m == mode && !row.is_selected() {
+                self.nav.select_row(Some(row));
+                icon.animate_draw();
             }
         }
     }
@@ -377,9 +381,12 @@ impl Window {
             let Some(w) = weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
-            // Let text entries (graph equations, dialogs) type normally.
+            // Let text entries (graph equations, dialogs) type normally, but
+            // still honour the app-wide chords a text field has no use for.
             if let Some(focus) = gtk::prelude::GtkWindowExt::focus(&w.win) {
-                if focus.is::<gtk::Text>() || focus.ancestor(gtk::Text::static_type()).is_some() {
+                let in_text =
+                    focus.is::<gtk::Text>() || focus.ancestor(gtk::Text::static_type()).is_some();
+                if in_text && !is_global_chord(key, mods) {
                     return glib::Propagation::Proceed;
                 }
             }
@@ -396,16 +403,15 @@ impl Window {
     pub fn handle_key(self: &Rc<Self>, key: gdk::Key, mods: gdk::ModifierType) -> bool {
         let ctrl = mods.contains(gdk::ModifierType::CONTROL_MASK);
         let alt = mods.contains(gdk::ModifierType::ALT_MASK);
-        if alt && !ctrl {
-            if let Some(d) = key.to_unicode().and_then(|c| c.to_digit(10)) {
-                if let Some(mode) = ViewMode::ALL
-                    .into_iter()
-                    .find(|m| m.alt_number() == Some(d))
-                {
-                    self.set_mode(mode);
-                    return true;
-                }
-            }
+        if alt
+            && !ctrl
+            && let Some(d) = key.to_unicode().and_then(|c| c.to_digit(10))
+            && let Some(mode) = ViewMode::ALL
+                .into_iter()
+                .find(|m| m.alt_number() == Some(d))
+        {
+            self.set_mode(mode);
+            return true;
         }
         if ctrl && !alt {
             match key {
@@ -431,9 +437,18 @@ impl Window {
     }
 
     /// Dev/screenshot helper: type `text` through the real keyboard path.
-    /// `\n` is Enter, `\x08` Backspace, `\x1b` Escape.
+    /// `\n` is Enter, `\x08` Backspace, `\x1b` Escape, and `{alt+3}`,
+    /// `{ctrl+home}`, `{alt+up}`… send chords (GDK key names).
     pub fn simulate_keys(self: &Rc<Self>, text: &str) {
-        for c in text.chars() {
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '{' {
+                let chord: String = chars.by_ref().take_while(|&c| c != '}').collect();
+                if let Some((key, mods)) = parse_chord(&chord) {
+                    self.handle_key(key, mods);
+                }
+                continue;
+            }
             let key = match c {
                 '\n' => gdk::Key::Return,
                 '\x08' => gdk::Key::BackSpace,
@@ -459,10 +474,10 @@ impl Window {
         let weak = Rc::downgrade(self);
         let clipboard = display.clipboard();
         glib::spawn_future_local(async move {
-            if let Ok(Some(text)) = clipboard.read_text_future().await {
-                if let Some(w) = weak.upgrade() {
-                    w.current_page().paste(&text);
-                }
+            if let Ok(Some(text)) = clipboard.read_text_future().await
+                && let Some(w) = weak.upgrade()
+            {
+                w.current_page().paste(&text);
             }
         });
     }
@@ -479,5 +494,74 @@ impl Window {
             }
         }
         self.ctx.store.save();
+    }
+}
+
+/// Shortcuts that work even while a text field has focus: mode switching
+/// (Alt+1…5) and upstream's Ctrl+Home "graph view". Everything else belongs
+/// to the text field.
+fn is_global_chord(key: gdk::Key, mods: gdk::ModifierType) -> bool {
+    let ctrl = mods.contains(gdk::ModifierType::CONTROL_MASK);
+    let alt = mods.contains(gdk::ModifierType::ALT_MASK);
+    let digit = key.to_unicode().and_then(|c| c.to_digit(10));
+    (alt && !ctrl && matches!(digit, Some(1..=5)))
+        || (ctrl && !alt && matches!(key, gdk::Key::Home | gdk::Key::KP_Home))
+}
+
+/// `alt+3`, `ctrl+home`, `ctrl+shift+d` → (key, modifiers).
+fn parse_chord(chord: &str) -> Option<(gdk::Key, gdk::ModifierType)> {
+    let mut mods = gdk::ModifierType::empty();
+    let mut key = None;
+    for part in chord.split('+') {
+        match part.to_ascii_lowercase().as_str() {
+            "alt" => mods |= gdk::ModifierType::ALT_MASK,
+            "ctrl" => mods |= gdk::ModifierType::CONTROL_MASK,
+            "shift" => mods |= gdk::ModifierType::SHIFT_MASK,
+            name => {
+                let name = match name {
+                    "home" => "Home",
+                    "up" => "Up",
+                    "down" => "Down",
+                    other => other,
+                };
+                key = gdk::Key::from_name(name);
+            }
+        }
+    }
+    key.map(|k| (k, mods))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn global_chords_pass_through_text_fields() {
+        let alt = gdk::ModifierType::ALT_MASK;
+        let ctrl = gdk::ModifierType::CONTROL_MASK;
+        let none = gdk::ModifierType::empty();
+        // Mode switching and graph view work while editing an equation…
+        assert!(is_global_chord(gdk::Key::_1, alt));
+        assert!(is_global_chord(gdk::Key::_5, alt));
+        assert!(is_global_chord(gdk::Key::Home, ctrl));
+        // …but typing and text editing stay with the entry.
+        assert!(!is_global_chord(gdk::Key::_1, none));
+        assert!(!is_global_chord(gdk::Key::_9, alt));
+        assert!(!is_global_chord(gdk::Key::Home, none));
+        assert!(!is_global_chord(gdk::Key::c, ctrl));
+        assert!(!is_global_chord(gdk::Key::v, ctrl));
+        assert!(!is_global_chord(gdk::Key::BackSpace, none));
+    }
+
+    #[test]
+    fn chord_tokens_parse() {
+        assert_eq!(
+            parse_chord("alt+3"),
+            Some((gdk::Key::_3, gdk::ModifierType::ALT_MASK))
+        );
+        assert_eq!(
+            parse_chord("ctrl+home"),
+            Some((gdk::Key::Home, gdk::ModifierType::CONTROL_MASK))
+        );
     }
 }

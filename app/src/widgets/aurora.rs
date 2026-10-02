@@ -127,10 +127,11 @@ mod imp {
             let obj = self.obj();
             let w = obj.width() as f32;
             let h = obj.height() as f32;
-            if w > 0.0 && h > 0.0 {
-                if let Some(scheme) = self.scheme.get() {
-                    obj.paint_background(snapshot, &scheme, w, h);
-                }
+            if w > 0.0
+                && h > 0.0
+                && let Some(scheme) = self.scheme.get()
+            {
+                obj.paint_background(snapshot, &scheme, w, h);
             }
             self.parent_snapshot(snapshot);
         }

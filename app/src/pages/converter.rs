@@ -5,7 +5,9 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
-use unitconv::{Command, ConverterMode, UnitConverterViewModel, ViewModelConfig};
+use unitconv::{
+    Command, ConverterMode, NetworkAccessBehavior, UnitConverterViewModel, ViewModelConfig,
+};
 
 use super::{Ctx, Page};
 use crate::modes::ViewMode;
@@ -87,6 +89,17 @@ fn field(label: &str) -> Field {
         display,
         dropdown,
         symbol,
+    }
+}
+
+/// Map GIO's view of connectivity onto the loader's behaviour enum.
+fn network_behavior(m: &gio::NetworkMonitor) -> NetworkAccessBehavior {
+    if !m.is_network_available() {
+        NetworkAccessBehavior::Offline
+    } else if m.is_network_metered() {
+        NetworkAccessBehavior::OptIn
+    } else {
+        NetworkAccessBehavior::Normal
     }
 }
 
@@ -344,6 +357,29 @@ impl ConverterPage {
             });
         }
         {
+            // Upstream registers for network-behaviour changes; do the same so
+            // a failed fetch is retried when connectivity returns, and metered
+            // connections only fetch when asked.
+            let monitor = gio::NetworkMonitor::default();
+            page.vm
+                .borrow_mut()
+                .set_network_behavior(network_behavior(&monitor));
+            let weak = Rc::downgrade(&page);
+            monitor.connect_network_changed(move |m, _| {
+                let Some(p) = weak.upgrade() else { return };
+                let behavior = network_behavior(m);
+                p.vm.borrow_mut().set_network_behavior(behavior);
+                let in_currency = p.vm.borrow().is_currency_current_category();
+                if behavior == NetworkAccessBehavior::Normal && in_currency {
+                    let started = p.vm.borrow_mut().start_automatic_currency_fetch();
+                    if started {
+                        p.fetch_currency();
+                    }
+                }
+                p.sync(Change::None, Change::None);
+            });
+        }
+        {
             let weak = Rc::downgrade(&page);
             root.connect_width(move |w| {
                 if let Some(p) = weak.upgrade() {
@@ -451,10 +487,10 @@ impl ConverterPage {
                 f.frame.remove_css_class("wc-active");
             }
             if let Some(u) = unit {
-                if let Some(pos) = ids.iter().position(|&id| id == u.id) {
-                    if f.dropdown.selected() != pos as u32 {
-                        f.dropdown.set_selected(pos as u32);
-                    }
+                if let Some(pos) = ids.iter().position(|&id| id == u.id)
+                    && f.dropdown.selected() != pos as u32
+                {
+                    f.dropdown.set_selected(pos as u32);
                 }
                 f.display
                     .update_property(&[gtk::accessible::Property::Label(&format!(
@@ -551,10 +587,10 @@ impl Page for ConverterHandle {
             },
         };
         let p = &self.0;
-        if let Some(b) = p.keypad.button(id) {
-            if !b.is_sensitive() {
-                return true;
-            }
+        if let Some(b) = p.keypad.button(id)
+            && !b.is_sensitive()
+        {
+            return true;
         }
         if let Some((x, y)) = p.keypad.flash(id) {
             let s = p.ctx.hub.scheme();

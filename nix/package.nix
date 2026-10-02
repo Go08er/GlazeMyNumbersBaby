@@ -35,12 +35,16 @@ rustPlatform.buildRustPackage {
     install -Dm644 packaging/${appId}.desktop -t $out/share/applications
     install -Dm644 packaging/${appId}.metainfo.xml -t $out/share/metainfo
     install -Dm644 packaging/icons/${appId}.svg -t $out/share/icons/hicolor/scalable/apps
-    install -Dm644 LICENSE -t $out/share/licenses/${appId}
+    install -Dm644 LICENSE app/assets/fonts/OFL-Outfit.txt -t $out/share/licenses/${appId}
   '';
   meta = {
     description = "GlazeMyNumbers,Baby: Windows Calculator ported to Rust, made pointlessly beautiful";
     homepage = "https://github.com/Go08er/GlazeMyNumbersBaby";
-    license = lib.licenses.mit;
+    # MIT code; the embedded Outfit typeface is OFL-1.1.
+    license = with lib.licenses; [
+      mit
+      ofl
+    ];
     mainProgram = "gmnb";
     platforms = lib.platforms.linux;
   };

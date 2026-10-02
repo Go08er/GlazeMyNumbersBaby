@@ -9,6 +9,9 @@ use std::cell::{Cell, RefCell};
 use crate::theme::{PaletteId, Scheme, complement, rgba, to_hex};
 use crate::window::{Window, apply_theme_setting};
 
+/// A palette preview: which palette, its current scheme, and its swatch.
+type Tile = (PaletteId, Rc<Cell<Scheme>>, gtk::DrawingArea);
+
 pub fn show(win: &Rc<Window>) {
     let ctx = win.ctx().clone();
     let dialog = adw::PreferencesDialog::new();
@@ -63,8 +66,7 @@ pub fn show(win: &Rc<Window>) {
             .build();
         let dark = adw::StyleManager::default().is_dark();
         // Each tile draws from a cell so the generated palettes can re-preview.
-        let tiles: Rc<RefCell<Vec<(PaletteId, Rc<Cell<Scheme>>, gtk::DrawingArea)>>> =
-            Rc::default();
+        let tiles: Rc<RefCell<Vec<Tile>>> = Rc::default();
         for id in PaletteId::ALL {
             let cell = Rc::new(Cell::new(ctx.hub.scheme_for(id, dark)));
             let swatch = gtk::DrawingArea::builder()
@@ -155,13 +157,18 @@ pub fn show(win: &Rc<Window>) {
             .build();
 
         let apply_custom = {
+            // Weak: these buttons own the closures that hold this.
             let (ctx, primary, secondary, refresh) = (
                 ctx.clone(),
-                primary.clone(),
-                secondary.clone(),
+                primary.downgrade(),
+                secondary.downgrade(),
                 refresh_tiles.clone(),
             );
             Rc::new(move || {
+                let (Some(primary), Some(secondary)) = (primary.upgrade(), secondary.upgrade())
+                else {
+                    return;
+                };
                 let c = |b: &gtk::ColorDialogButton| {
                     let r = b.rgba();
                     [r.red(), r.green(), r.blue()]
@@ -182,8 +189,12 @@ pub fn show(win: &Rc<Window>) {
             b.connect_rgba_notify(move |_| apply());
         }
         {
-            let (primary, secondary) = (primary.clone(), secondary.clone());
+            let (primary, secondary) = (primary.downgrade(), secondary.downgrade());
             complement_btn.connect_clicked(move |_| {
+                let (Some(primary), Some(secondary)) = (primary.upgrade(), secondary.upgrade())
+                else {
+                    return;
+                };
                 let r = primary.rgba();
                 secondary.set_rgba(&rgba(complement([r.red(), r.green(), r.blue()]), 1.0));
             });
@@ -304,7 +315,7 @@ pub fn about(parent: &adw::ApplicationWindow) {
         "Outfit typeface",
         Some("Copyright 2021 The Outfit Project Authors"),
         gtk::License::Custom,
-        Some("SIL Open Font License, Version 1.1"),
+        Some(include_str!("../assets/fonts/OFL-Outfit.txt")),
     );
     about.add_legal_section(
         "Exchange rates",

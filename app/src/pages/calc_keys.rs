@@ -406,8 +406,8 @@ pub fn shortcut(
     }
 
     // Letter "virtual keys" (with and without Shift).
-    if prog {
-        if let Some(d) = [
+    if prog
+        && let Some(d) = [
             gdk::Key::a,
             gdk::Key::b,
             gdk::Key::c,
@@ -417,9 +417,8 @@ pub fn shortcut(
         ]
         .iter()
         .position(|k| *k == lower)
-        {
-            return Some(Press(B::DIGITS[10 + d]));
-        }
+    {
+        return Some(Press(B::DIGITS[10 + d]));
     }
     let letter = match (lower, shift) {
         (gdk::Key::r, false) if std_or_sci => Some(B::Invert),

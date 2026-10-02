@@ -229,10 +229,10 @@ impl CalcPanel {
 
             let weak = Rc::downgrade(self);
             row.connect_activate(move |_| {
-                if let Some(p) = weak.upgrade() {
-                    if let Some(f) = &p.handlers.borrow().history_recall {
-                        f(i);
-                    }
+                if let Some(p) = weak.upgrade()
+                    && let Some(f) = &p.handlers.borrow().history_recall
+                {
+                    f(i);
                 }
             });
             // Context menu → delete.
@@ -246,14 +246,17 @@ impl CalcPanel {
                 let pop = gtk::Popover::builder().child(&del).has_arrow(false).build();
                 pop.set_parent(&anchor);
                 pop.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-                let pop_ = pop.clone();
+                // Weak popover: it contains this button.
+                let pop_ = pop.downgrade();
                 let weak = Rc::downgrade(&p);
                 del.connect_clicked(move |_| {
-                    pop_.popdown();
-                    if let Some(p) = weak.upgrade() {
-                        if let Some(f) = &p.handlers.borrow().history_delete {
-                            f(i);
-                        }
+                    if let Some(pop) = pop_.upgrade() {
+                        pop.popdown();
+                    }
+                    if let Some(p) = weak.upgrade()
+                        && let Some(f) = &p.handlers.borrow().history_delete
+                    {
+                        f(i);
                     }
                 });
                 pop.connect_closed(|p| {
@@ -294,10 +297,10 @@ impl CalcPanel {
                 b.set_tooltip_text(Some(tip));
                 let weak = Rc::downgrade(self);
                 b.connect_clicked(move |_| {
-                    if let Some(p) = weak.upgrade() {
-                        if let Some(f) = &p.handlers.borrow().memory_op {
-                            f(i, op);
-                        }
+                    if let Some(p) = weak.upgrade()
+                        && let Some(f) = &p.handlers.borrow().memory_op
+                    {
+                        f(i, op);
                     }
                 });
                 actions.append(&b);
@@ -310,10 +313,10 @@ impl CalcPanel {
             row.update_property(&[gtk::accessible::Property::Label(value)]);
             let weak = Rc::downgrade(self);
             row.connect_activate(move |_| {
-                if let Some(p) = weak.upgrade() {
-                    if let Some(f) = &p.handlers.borrow().memory_op {
-                        f(i, MemOp::Recall);
-                    }
+                if let Some(p) = weak.upgrade()
+                    && let Some(f) = &p.handlers.borrow().memory_op
+                {
+                    f(i, MemOp::Recall);
                 }
             });
             self.memory_list.append(&row);

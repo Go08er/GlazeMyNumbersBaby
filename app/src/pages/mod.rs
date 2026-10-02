@@ -17,6 +17,9 @@ use crate::settings::Store;
 use crate::theme::Hub;
 use crate::widgets::aurora::Aurora;
 
+/// Enter/leave the compact window chrome.
+pub type CompactHook = Box<dyn Fn(bool)>;
+
 /// Services every page can use.
 pub struct Ctx {
     pub hub: Rc<Hub>,
@@ -24,7 +27,7 @@ pub struct Ctx {
     pub toasts: adw::ToastOverlay,
     pub store: Rc<Store>,
     /// Set by the window: enter/leave the compact "keep on top" chrome.
-    pub compact: std::cell::RefCell<Option<Box<dyn Fn(bool)>>>,
+    pub compact: std::cell::RefCell<Option<CompactHook>>,
 }
 
 impl Ctx {
@@ -67,6 +70,9 @@ pub trait Page {
 
     /// The page is being shown for `mode` (several modes can share a page).
     fn activate(&self, mode: ViewMode);
+
+    /// The window is switching to a different page.
+    fn deactivate(&self) {}
 
     /// Header widgets to show at the end of the title bar while active.
     fn header_end(&self) -> Vec<gtk::Widget> {

@@ -331,11 +331,11 @@ impl GraphView {
         });
         let weak = self.downgrade();
         drag.connect_drag_update(move |_, dx, dy| {
-            if let Some(g) = weak.upgrade() {
-                if let Some(mut vp) = g.imp().drag_origin.get() {
-                    vp.pan_pixels(dx, dy);
-                    g.set_vp(vp);
-                }
+            if let Some(g) = weak.upgrade()
+                && let Some(mut vp) = g.imp().drag_origin.get()
+            {
+                vp.pan_pixels(dx, dy);
+                g.set_vp(vp);
             }
         });
         self.add_controller(drag);
@@ -364,19 +364,19 @@ impl GraphView {
         let zoom = gtk::GestureZoom::new();
         let weak = self.downgrade();
         zoom.connect_begin(move |z, _| {
-            if let Some(g) = weak.upgrade() {
-                if let (Some(vp), Some((cx, cy))) = (g.imp().vp.get(), z.bounding_box_center()) {
-                    g.imp().zoom_origin.set(Some((vp, cx, cy)));
-                }
+            if let Some(g) = weak.upgrade()
+                && let (Some(vp), Some((cx, cy))) = (g.imp().vp.get(), z.bounding_box_center())
+            {
+                g.imp().zoom_origin.set(Some((vp, cx, cy)));
             }
         });
         let weak = self.downgrade();
         zoom.connect_scale_changed(move |_, scale| {
-            if let Some(g) = weak.upgrade() {
-                if let Some((mut vp, cx, cy)) = g.imp().zoom_origin.get() {
-                    vp.zoom_about_pixel(cx, cy, 1.0 / scale.max(0.05));
-                    g.set_vp(vp);
-                }
+            if let Some(g) = weak.upgrade()
+                && let Some((mut vp, cx, cy)) = g.imp().zoom_origin.get()
+            {
+                vp.zoom_about_pixel(cx, cy, 1.0 / scale.max(0.05));
+                g.set_vp(vp);
             }
         });
         self.add_controller(zoom);
@@ -719,7 +719,7 @@ impl GraphView {
                 rgba([1.0, 1.0, 1.0], 0.95)
             };
             s.push_rounded_clip(&bubble);
-            s.append_color(&bg, &bubble.bounds());
+            s.append_color(&bg, bubble.bounds());
             s.pop();
             s.save();
             s.translate(&graphene::Point::new(bx + 9.0, by + 5.0));

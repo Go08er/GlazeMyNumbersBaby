@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>io.github.Go08er.GlazeMyNumbersBaby</id>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>MIT</project_license>
+  <project_license>MIT AND OFL-1.1</project_license>
   <name>GMNB</name>
   <summary>GlazeMyNumbers,Baby — a pointlessly beautiful calculator</summary>
   <description>
@@ -16,7 +16,7 @@
       <li>Standard, Scientific and Programmer calculators with history and memory</li>
       <li>Graphing with variables, tracing and function analysis</li>
       <li>Date calculation and unit conversion for 13 categories, including live currency rates</li>
-      <li>Five colour palettes in light and dark, and a background that blooms when you type</li>
+      <li>Seven colour palettes in light and dark — including one that follows your desktop's accent colour and one you design yourself — and a background that blooms when you type</li>
     </ul>
     <p>
       Not affiliated with or endorsed by Microsoft. Based on microsoft/calculator (MIT).

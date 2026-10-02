@@ -6,10 +6,13 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 
+/// Called with the index of the bit the user toggled.
+type FlipFn = Box<dyn Fn(u32)>;
+
 pub struct BitFlip {
     pub root: gtk::Box,
     bits: Vec<gtk::ToggleButton>,
-    on_flip: RefCell<Option<Box<dyn Fn(u32)>>>,
+    on_flip: RefCell<Option<FlipFn>>,
     syncing: std::cell::Cell<bool>,
 }
 
@@ -59,12 +62,11 @@ impl BitFlip {
         for (i, b) in this.bits.iter().enumerate() {
             let weak = Rc::downgrade(&this);
             b.connect_toggled(move |_| {
-                if let Some(t) = weak.upgrade() {
-                    if !t.syncing.get() {
-                        if let Some(f) = t.on_flip.borrow().as_ref() {
-                            f(i as u32);
-                        }
-                    }
+                if let Some(t) = weak.upgrade()
+                    && !t.syncing.get()
+                    && let Some(f) = t.on_flip.borrow().as_ref()
+                {
+                    f(i as u32);
                 }
             });
         }

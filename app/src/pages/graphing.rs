@@ -40,7 +40,7 @@ pub struct GraphingPage {
     analysis_title: gtk::Label,
     analysis_body: gtk::Box,
     side_stack: gtk::Stack,
-    focused: RefCell<Option<gtk::Entry>>,
+    focused: RefCell<Option<glib::WeakRef<gtk::Entry>>>,
     mode_toggle: adw::ToggleGroup,
     next_color: Cell<usize>,
     wide: Cell<bool>,
@@ -314,23 +314,22 @@ impl GraphingPage {
             trace_btn.connect_toggled(move |b| gv.set_trace(b.is_active()));
             let weak = Rc::downgrade(&page);
             copy.connect_clicked(move |_| {
-                if let Some(p) = weak.upgrade() {
-                    if let (Some(tex), Some(display)) =
+                if let Some(p) = weak.upgrade()
+                    && let (Some(tex), Some(display)) =
                         (p.graph_view.to_texture(), gdk::Display::default())
-                    {
-                        display.clipboard().set_texture(&tex);
-                        p.ctx.toast("Graph copied to clipboard");
-                    }
+                {
+                    display.clipboard().set_texture(&tex);
+                    p.ctx.toast("Graph copied to clipboard");
                 }
             });
         }
         {
             let weak = Rc::downgrade(&page);
             add.connect_clicked(move |_| {
-                if let Some(p) = weak.upgrade() {
-                    if let Some(row) = p.add_equation("") {
-                        row.entry.grab_focus();
-                    }
+                if let Some(p) = weak.upgrade()
+                    && let Some(row) = p.add_equation("")
+                {
+                    row.entry.grab_focus();
                 }
             });
             let ss = side_stack.clone();
@@ -423,7 +422,8 @@ impl GraphingPage {
 
     /// Type into the focused equation (or a new one) at its cursor.
     fn insert_text(self: &Rc<Self>, text: &str) {
-        let entry = match self.focused.borrow().clone() {
+        let focused = self.focused.borrow().as_ref().and_then(|w| w.upgrade());
+        let entry = match focused {
             Some(e) if e.is_mapped() => e,
             _ => match self.rows.borrow().last().map(|r| r.entry.clone()) {
                 Some(e) => e,
@@ -479,6 +479,8 @@ impl GraphingPage {
             .valign(gtk::Align::Center)
             .build();
         let entry = gtk::Entry::builder()
+            // Plenty for any real equation; also bounds parse/compile work.
+            .max_length(1000)
             .text(text)
             .placeholder_text("Enter an expression")
             .hexpand(true)
@@ -535,18 +537,19 @@ impl GraphingPage {
 
         let weak = Rc::downgrade(self);
         entry.connect_changed(move |e| {
-            if let Some(p) = weak.upgrade() {
-                if !p.building.get() {
-                    p.equation_changed(id, &e.text());
-                }
+            if let Some(p) = weak.upgrade()
+                && !p.building.get()
+            {
+                p.equation_changed(id, &e.text());
             }
         });
         let weak = Rc::downgrade(self);
         let focus = gtk::EventControllerFocus::new();
-        let e2 = entry.clone();
-        focus.connect_enter(move |_| {
-            if let Some(p) = weak.upgrade() {
-                p.focused.replace(Some(e2.clone()));
+        // Use the controller's own widget: capturing `entry` here would make
+        // the entry own a closure that owns the entry (a reference cycle).
+        focus.connect_enter(move |c| {
+            if let (Some(p), Some(e)) = (weak.upgrade(), c.widget().and_downcast::<gtk::Entry>()) {
+                p.focused.replace(Some(e.downgrade()));
             }
         });
         entry.add_controller(focus);
@@ -556,10 +559,8 @@ impl GraphingPage {
                 // Enter plots and moves on to a fresh expression, like upstream.
                 p.graph_view.animate_draw(id);
                 let last = p.rows.borrow().last().map(|r| r.id) == Some(id);
-                if last {
-                    if let Some(r) = p.add_equation("") {
-                        r.entry.grab_focus();
-                    }
+                if last && let Some(r) = p.add_equation("") {
+                    r.entry.grab_focus();
                 }
             }
         });
@@ -582,9 +583,12 @@ impl GraphingPage {
             }
         });
         let weak = Rc::downgrade(self);
-        let rev = revealer.clone();
+        // Weak: the revealer contains this button, so a strong capture cycles.
+        let rev = revealer.downgrade();
         remove.connect_clicked(move |_| {
-            let Some(p) = weak.upgrade() else { return };
+            let (Some(p), Some(rev)) = (weak.upgrade(), rev.upgrade()) else {
+                return;
+            };
             p.graph.borrow_mut().remove_equation(id);
             p.rows.borrow_mut().retain(|r| r.id != id);
             rev.set_reveal_child(false);
@@ -619,9 +623,10 @@ impl GraphingPage {
                 color: Cell::new(i),
             };
             self.paint_swatch(&probe);
-            let (weak, r) = (Rc::downgrade(self), row.clone());
+            // Weak row: the row's widgets own this popover and its buttons.
+            let (weak, r) = (Rc::downgrade(self), Rc::downgrade(row));
             b.connect_clicked(move |_| {
-                if let Some(p) = weak.upgrade() {
+                if let (Some(p), Some(r)) = (weak.upgrade(), r.upgrade()) {
                     r.color.set(i);
                     p.paint_swatch(&r);
                     let s = p.ctx.hub.scheme();
@@ -709,7 +714,7 @@ impl GraphingPage {
             .borrow()
             .variables()
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(k, v)| (k.clone(), *v))
             .collect();
         self.vars_header.set_visible(!vars.is_empty());
         for (name, var) in vars {
@@ -740,9 +745,11 @@ impl GraphingPage {
             self.vars_box.append(&row);
 
             let weak = Rc::downgrade(self);
-            let (n, v2) = (name.clone(), value.clone());
+            // The scale and spin button update each other; weak captures so
+            // the pair can be freed when the variable list is rebuilt.
+            let (n, v2) = (name.clone(), value.downgrade());
             scale.connect_value_changed(move |s| {
-                if let Some(p) = weak.upgrade() {
+                if let (Some(p), Some(v2)) = (weak.upgrade(), v2.upgrade()) {
                     p.graph.borrow_mut().set_variable(&n, s.value());
                     if (v2.value() - s.value()).abs() > 1e-12 {
                         v2.set_value(s.value());
@@ -750,10 +757,10 @@ impl GraphingPage {
                     p.graph_view.invalidate();
                 }
             });
-            let (s2, weak) = (scale.clone(), Rc::downgrade(self));
+            let (s2, weak) = (scale.downgrade(), Rc::downgrade(self));
             let n = name.clone();
             value.connect_value_changed(move |v| {
-                if let Some(p) = weak.upgrade() {
+                if let (Some(p), Some(s2)) = (weak.upgrade(), s2.upgrade()) {
                     let x = v.value();
                     // Widen the slider if the typed value is outside it.
                     p.graph.borrow_mut().update_variable(&n, |var| {
@@ -931,15 +938,30 @@ impl GraphingPage {
         for e in [&xmin, &xmax, &ymin, &ymax] {
             let (gv, a, b, c, d) = (
                 self.graph_view.clone(),
-                xmin.clone(),
-                xmax.clone(),
-                ymin.clone(),
-                ymax.clone(),
+                xmin.downgrade(),
+                xmax.downgrade(),
+                ymin.downgrade(),
+                ymax.downgrade(),
             );
             e.connect_activate(move |_| {
+                let (Some(a), Some(b), Some(c), Some(d)) =
+                    (a.upgrade(), b.upgrade(), c.upgrade(), d.upgrade())
+                else {
+                    return;
+                };
                 let p = |e: &gtk::Entry| e.text().replace('−', "-").trim().parse::<f64>().ok();
-                if let (Some(x0), Some(x1), Some(y0), Some(y1)) = (p(&a), p(&b), p(&c), p(&d)) {
-                    gv.set_ranges(x0, x1, y0, y1);
+                let ok = match (p(&a), p(&b), p(&c), p(&d)) {
+                    (Some(x0), Some(x1), Some(y0), Some(y1)) => gv.set_ranges(x0, x1, y0, y1),
+                    _ => false,
+                };
+                // Rejected ranges (unparsable, min ≥ max, or a span the graph
+                // can't map) are flagged instead of silently ignored.
+                for e in [&a, &b, &c, &d] {
+                    if ok {
+                        e.remove_css_class("error");
+                    } else {
+                        e.add_css_class("error");
+                    }
                 }
             });
         }
@@ -1047,7 +1069,7 @@ impl Page for GraphingHandle {
                 gdk::Key::plus | gdk::Key::equal | gdk::Key::KP_Add => p.graph_view.zoom_in(),
                 gdk::Key::minus | gdk::Key::KP_Subtract => p.graph_view.zoom_out(),
                 gdk::Key::_0 | gdk::Key::KP_0 => p.graph_view.reset_view(),
-                gdk::Key::Home => {
+                gdk::Key::Home | gdk::Key::KP_Home => {
                     p.mode_toggle.set_active_name(Some("graph"));
                 }
                 _ => return false,
@@ -1059,7 +1081,12 @@ impl Page for GraphingHandle {
 
     fn copy(&self) -> Option<String> {
         let p = &self.0;
-        let text = p.focused.borrow().as_ref().map(|e| e.text().to_string())?;
+        let text = p
+            .focused
+            .borrow()
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .map(|e| e.text().to_string())?;
         p.ctx.copy_to_clipboard(&text);
         Some(text)
     }

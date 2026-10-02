@@ -342,10 +342,10 @@ impl CalculatorPage {
         fe.set_tooltip_text(Some("Scientific notation (V)"));
         let weak = Rc::downgrade(self);
         fe.connect_clicked(move |w| {
-            if let Some(p) = weak.upgrade() {
-                if w.is_active() != p.vm.borrow().is_fe() {
-                    p.press_from(w, B::FToE);
-                }
+            if let Some(p) = weak.upgrade()
+                && w.is_active() != p.vm.borrow().is_fe()
+            {
+                p.press_from(w, B::FToE);
             }
         });
         top.append(&angle);
@@ -472,12 +472,11 @@ impl CalculatorPage {
             group.get_or_insert(c.clone());
             let weak = Rc::downgrade(self);
             c.connect_toggled(move |c| {
-                if c.is_active() {
-                    if let Some(p) = weak.upgrade() {
-                        if !p.syncing.get() {
-                            p.set_shift(mode);
-                        }
-                    }
+                if c.is_active()
+                    && let Some(p) = weak.upgrade()
+                    && !p.syncing.get()
+                {
+                    p.set_shift(mode);
                 }
             });
             shift_box.append(&c);
@@ -540,14 +539,22 @@ impl CalculatorPage {
             let pop = gtk::Popover::builder().child(&col).has_arrow(false).build();
             pop.set_parent(&p.display);
             pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-            let (pop_, p_) = (pop.clone(), p.clone());
+            // Weak popover: it contains these buttons.
+            let (pop_, p_) = (pop.downgrade(), Rc::downgrade(&p));
             copy.connect_clicked(move |_| {
-                pop_.popdown();
-                p_.copy_value();
+                if let Some(pop) = pop_.upgrade() {
+                    pop.popdown();
+                }
+                if let Some(p) = p_.upgrade() {
+                    p.copy_value();
+                }
             });
-            let (pop_, p_) = (pop.clone(), p.clone());
+            let (pop_, p_) = (pop.downgrade(), Rc::downgrade(&p));
             paste.connect_clicked(move |_| {
-                pop_.popdown();
+                if let Some(pop) = pop_.upgrade() {
+                    pop.popdown();
+                }
+                let Some(p_) = p_.upgrade() else { return };
                 if let Some(root) = p_.display.root().and_downcast::<gtk::Window>() {
                     // Route through the window so Ctrl+V and the menu share one path.
                     let _ = gtk::prelude::WidgetExt::activate_action(&root, "win.paste", None);
@@ -808,22 +815,22 @@ impl CalculatorPage {
             t.set_sensitive(has_memory);
         }
 
-        if let Some(pad) = self.keypads.borrow().get(&mode) {
-            if mode != CalcMode::Standard {
-                pad.set_key_label(
-                    B::Clear.id(),
-                    if vm.shows_clear_entry() { "CE" } else { "C" },
-                );
-                let n = vm.open_parens();
-                pad.set_key_label(
-                    B::OpenParenthesis.id(),
-                    &if n > 0 {
-                        format!("(<sub><small>{n}</small></sub>")
-                    } else {
-                        "(".to_string()
-                    },
-                );
-            }
+        if let Some(pad) = self.keypads.borrow().get(&mode)
+            && mode != CalcMode::Standard
+        {
+            pad.set_key_label(
+                B::Clear.id(),
+                if vm.shows_clear_entry() { "CE" } else { "C" },
+            );
+            let n = vm.open_parens();
+            pad.set_key_label(
+                B::OpenParenthesis.id(),
+                &if n > 0 {
+                    format!("(<sub><small>{n}</small></sub>")
+                } else {
+                    "(".to_string()
+                },
+            );
         }
         // Upstream enablement rules (radix digits, decimal, operators while
         // an error is shown, …) for every engine key, flyouts included.
@@ -910,17 +917,17 @@ impl CalculatorPage {
                 .map(|f| f.0.id())
                 .unwrap_or(other.id()),
         };
-        if let Some(pad) = self.keypads.borrow().get(&mode).cloned() {
-            if let Some((x, y)) = pad.flash(id) {
-                let s = self.ctx.hub.scheme();
-                self.ctx.pulse_at(
-                    &pad,
-                    x,
-                    y,
-                    if b == B::Equals { s.hot_a } else { s.accent },
-                    0.6,
-                );
-            }
+        if let Some(pad) = self.keypads.borrow().get(&mode).cloned()
+            && let Some((x, y)) = pad.flash(id)
+        {
+            let s = self.ctx.hub.scheme();
+            self.ctx.pulse_at(
+                &pad,
+                x,
+                y,
+                if b == B::Equals { s.hot_a } else { s.accent },
+                0.6,
+            );
         }
     }
 }
@@ -1011,6 +1018,12 @@ pub struct CalculatorHandle(pub Rc<CalculatorPage>);
 impl Page for CalculatorHandle {
     fn widget(&self) -> gtk::Widget {
         self.0.root.clone().upcast()
+    }
+
+    fn deactivate(&self) {
+        // Compact ("keep on top") is a Standard-only view; never strand the
+        // window in compact chrome on another page.
+        self.0.set_compact(false);
     }
 
     fn activate(&self, mode: ViewMode) {
