@@ -572,15 +572,21 @@ impl GraphPage {
         true
     }
 
-    /// Two-finger pinch over the canvas: zoom about (x, y) by `factor`
-    /// (below 1 zooms in). True if it applied.
+    /// Whether (x, y) is on the plot (where a pinch has to start).
+    pub fn on_canvas(&self, x: f32, y: f32) -> bool {
+        self.canvas.contains(x, y)
+    }
+
+    /// A pinch that began on the canvas: zoom by `factor` (below 1 zooms
+    /// in) about (x, y), held inside the canvas. True if it applied.
     pub fn pinch(&mut self, x: f32, y: f32, factor: f64) -> bool {
         let c = self.canvas;
-        if !c.contains(x, y) || !factor.is_finite() || factor <= 0.0 {
+        if !factor.is_finite() || factor <= 0.0 || c.w <= 0.0 || c.h <= 0.0 {
             return false;
         }
+        let (px, py) = ((x - c.x).clamp(0.0, c.w), (y - c.y).clamp(0.0, c.h));
         if let Some(vp) = self.vp.as_mut() {
-            vp.zoom_about_pixel((x - c.x) as f64, (y - c.y) as f64, factor);
+            vp.zoom_about_pixel(px as f64, py as f64, factor);
             self.dirty = true;
         }
         true

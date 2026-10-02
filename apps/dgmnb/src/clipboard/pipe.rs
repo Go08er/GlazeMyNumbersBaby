@@ -35,14 +35,23 @@ fn ready(fd: RawFd, events: libc::c_short, deadline: Instant) -> bool {
 /// Read everything from `fd` until EOF; `None` if it takes too long or is
 /// longer than `max` bytes.
 pub fn read_all(fd: OwnedFd, max: usize) -> Option<Vec<u8>> {
+    read_within(fd, max, TRANSFER_TIMEOUT)
+}
+
+fn read_within(fd: OwnedFd, max: usize, timeout: Duration) -> Option<Vec<u8>> {
     if !set_nonblocking(fd.as_raw_fd()) {
         return None;
     }
-    let deadline = Instant::now() + TRANSFER_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     let mut file = std::fs::File::from(fd);
     let mut out = Vec::new();
     let mut chunk = [0u8; 16 * 1024];
     loop {
+        // Checked every time round, not only when waiting: a peer that
+        // keeps data flowing can't stretch the transfer either.
+        if Instant::now() >= deadline {
+            return None;
+        }
         match file.read(&mut chunk) {
             Ok(0) => return Some(out),
             Ok(n) => {
@@ -62,15 +71,23 @@ pub fn read_all(fd: OwnedFd, max: usize) -> Option<Vec<u8>> {
     }
 }
 
-/// Write all of `data` to `fd`; gives up after the deadline.
+/// Write all of `data` to `fd`; gives up after the deadline. A reader that
+/// went away is an error (EPIPE; Rust ignores SIGPIPE), not a crash.
 pub fn write_all(fd: OwnedFd, data: &[u8]) -> bool {
+    write_within(fd, data, TRANSFER_TIMEOUT)
+}
+
+fn write_within(fd: OwnedFd, data: &[u8], timeout: Duration) -> bool {
     if !set_nonblocking(fd.as_raw_fd()) {
         return false;
     }
-    let deadline = Instant::now() + TRANSFER_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     let mut file = std::fs::File::from(fd);
     let mut done = 0;
     while done < data.len() {
+        if Instant::now() >= deadline {
+            return false;
+        }
         match file.write(&data[done..]) {
             Ok(0) => return false,
             Ok(n) => done += n,
@@ -114,5 +131,39 @@ mod tests {
         let t = std::thread::spawn(move || write_all(w, &[1u8; 5000]));
         assert!(read_all(r, 4096).is_none());
         let _ = t.join();
+
+        // The reader is gone: an error, not SIGPIPE.
+        let (r, w) = pipe();
+        drop(r);
+        assert!(!write_all(w, &[1u8; 10]));
+    }
+
+    #[test]
+    fn deadlines_hold_while_data_keeps_flowing() {
+        let limit = Duration::from_millis(150);
+        // A writer that never stops (until its reader leaves).
+        let (r, w) = pipe();
+        let t = std::thread::spawn(move || {
+            let mut w = std::fs::File::from(w);
+            while w.write_all(&[0u8; 4096]).is_ok() {}
+        });
+        let start = Instant::now();
+        assert!(read_within(r, usize::MAX, limit).is_none());
+        assert!(start.elapsed() < limit * 3);
+        t.join().unwrap();
+
+        // A reader that keeps taking bytes, one small read at a time.
+        let (r, w) = pipe();
+        let t = std::thread::spawn(move || {
+            let mut r = std::fs::File::from(r);
+            let mut b = [0u8; 512];
+            while r.read(&mut b).is_ok_and(|n| n > 0) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        let start = Instant::now();
+        assert!(!write_within(w, &vec![0u8; 64 << 20], limit));
+        assert!(start.elapsed() < limit * 3);
+        t.join().unwrap();
     }
 }

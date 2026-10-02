@@ -14,6 +14,7 @@ mod graph;
 mod svgpath;
 mod text;
 mod theme;
+mod touch;
 mod ui;
 
 use std::time::Duration;

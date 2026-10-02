@@ -374,6 +374,8 @@ pub fn parse_chord(chord: &str) -> Option<KeyPress> {
                 key = Some(match name {
                     "home" => Key::Named(Named::Home),
                     "end" => Key::Named(Named::End),
+                    "pageup" => Key::Named(Named::PageUp),
+                    "pagedown" => Key::Named(Named::PageDown),
                     "up" => Key::Named(Named::Up),
                     "down" => Key::Named(Named::Down),
                     "left" => Key::Named(Named::Left),

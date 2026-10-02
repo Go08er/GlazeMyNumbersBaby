@@ -164,8 +164,23 @@ pub struct Frame<'a, 'p> {
     pub nodes: Option<Vec<Node>>,
     parents: Vec<Id>,
     clips: Vec<Option<Rect>>,
-    /// Open scroll areas: (id, viewport).
-    scroll_stack: Vec<(Id, Rect)>,
+    /// Open scroll areas, innermost last.
+    scroll_stack: Vec<OpenScroll>,
+    /// Something drawn this frame is already out of date (a scroll area
+    /// was drawn at an offset its new content no longer allows): draw again.
+    pub again: bool,
+}
+
+/// A scroll area between `scroll_begin` and `scroll_end`.
+#[derive(Clone, Copy)]
+struct OpenScroll {
+    id: Id,
+    view: Rect,
+    /// The offset it was drawn at.
+    offset: f32,
+    /// Its own hit and accessibility node, if recorded.
+    hit: Option<usize>,
+    node: Option<usize>,
 }
 
 impl<'a, 'p> Frame<'a, 'p> {
@@ -190,6 +205,7 @@ impl<'a, 'p> Frame<'a, 'p> {
             parents: Vec::new(),
             clips: Vec::new(),
             scroll_stack: Vec::new(),
+            again: false,
         }
     }
 
@@ -229,7 +245,7 @@ impl<'a, 'p> Frame<'a, 'p> {
             Some(c) => rect.intersect(&c),
             None => Some(rect),
         };
-        let scroll = self.scroll_stack.last().copied();
+        let scroll = self.scroll_stack.last().map(|o| (o.id, o.view));
         if shown.is_none() && scroll.is_none() {
             return; // clipped by something that can't scroll it into view
         }
@@ -709,35 +725,64 @@ impl<'a, 'p> Frame<'a, 'p> {
     /// Begin a vertical scroll area; returns the scroll offset to subtract.
     /// `name` labels the scroll view for assistive technology.
     pub fn scroll_begin(&mut self, id: Id, r: Rect, name: &str) -> f32 {
+        let before = self.hits.len();
         self.hit(id, r, Sense::Scroll, None, false);
+        let hit = (self.hits.len() > before).then_some(before);
         self.push_clip(r);
         let s = self.scrolls.entry(id).or_default();
         s.view = r.h;
         s.offset = s.offset.clamp(0.0, s.max());
         let offset = s.offset;
-        let scrollable = s.max() > 0.0;
+        let node = self.nodes.as_ref().map(Vec::len);
         self.group(id, Role::ScrollView, name, r);
-        if let Some(n) = self.nodes.as_mut().and_then(|v| v.last_mut()) {
-            n.scrollable = scrollable;
-        }
-        self.scroll_stack.push((id, r));
+        self.scroll_stack.push(OpenScroll {
+            id,
+            view: r,
+            offset,
+            hit,
+            node,
+        });
         offset
     }
 
     /// End a scroll area whose content was `content` tall.
     pub fn scroll_end(&mut self, id: Id, r: Rect, content: f32) {
-        self.scroll_stack.pop();
+        let open = self.scroll_stack.pop();
         self.end_group();
         self.pop_clip();
         let t = self.t;
         let s = self.scrolls.entry(id).or_default();
         s.content = content;
         s.offset = s.offset.clamp(0.0, s.max());
-        if s.max() > 0.0 {
+        let (offset, max) = (s.offset, s.max());
+        if max > 0.0 {
             let h = (r.h * r.h / content).max(24.0);
-            let y = r.y + (r.h - h) * (s.offset / s.max());
+            let y = r.y + (r.h - h) * (offset / max);
             self.cv
                 .rounded(Rect::new(r.right() - 5.0, y, 3.0, h), 1.5, t.fg_faint);
+        }
+        let Some(open) = open else { return };
+        if open.offset != offset {
+            self.again = true;
+        }
+        // Overflowing content with nothing focusable in it (results, licence
+        // text): the view itself takes focus, so the keyboard can scroll it.
+        let focusable = max > 0.0
+            && open
+                .hit
+                .is_some_and(|i| !self.hits[i + 1..].iter().any(|h| h.focusable));
+        if let Some(h) = open.hit.and_then(|i| self.hits.get_mut(i)) {
+            h.focusable = focusable;
+        }
+        if let Some(n) = open
+            .node
+            .and_then(|i| self.nodes.as_mut().and_then(|v| v.get_mut(i)))
+        {
+            n.scrollable = max > 0.0;
+            n.focusable = focusable;
+        }
+        if focusable && self.ring(id) {
+            self.focus_ring(r.inset(3.0), 6.0);
         }
     }
 

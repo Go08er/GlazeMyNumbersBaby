@@ -248,6 +248,78 @@ mod tests {
         }
     }
 
+    /// A panel of `rows` 40 px rows in a 200 px scroll view; the rows are
+    /// buttons or plain content. Returns the view's hit and node, and
+    /// whether the frame asked to be drawn again.
+    fn panel(
+        scrolls: &mut HashMap<crate::ui::Id, crate::ui::Scroll>,
+        rows: usize,
+        buttons: bool,
+    ) -> (crate::ui::Hit, Node, bool) {
+        let sid = crate::ui::id("panel");
+        let mut pm = tiny_skia::Pixmap::new(400, 400).unwrap();
+        let (mut text, mut icons, input) = (Text::new(), Icons::default(), Input::default());
+        let mut f = Frame::new(
+            Canvas::new(pm.as_mut(), 1.0, false),
+            &mut text,
+            &mut icons,
+            Theme::new(false, None),
+            &input,
+            scrolls,
+            true,
+        );
+        let view = Rect::new(0.0, 0.0, 300.0, 200.0);
+        let off = f.scroll_begin(sid, view, "Results");
+        for i in 0..rows {
+            let r = Rect::new(0.0, i as f32 * 40.0 - off, 300.0, 40.0);
+            f.node(crate::ui::id(("row", i)), Role::Label, "result", r);
+            if buttons {
+                f.hit(
+                    crate::ui::id(("row", i)),
+                    r,
+                    crate::ui::Sense::Click,
+                    None,
+                    true,
+                );
+            }
+        }
+        f.scroll_end(sid, view, rows as f32 * 40.0);
+        let hit = f.hits.iter().find(|h| h.id == sid).unwrap().clone();
+        let node = f
+            .nodes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|n| n.id == sid)
+            .unwrap()
+            .clone();
+        (hit, node, f.again)
+    }
+
+    /// Read-only content that overflows (analysis results, licences): its
+    /// scroll view is a Tab stop with scroll actions from the first frame it
+    /// overflows. Views whose rows take focus themselves aren't.
+    #[test]
+    fn overflowing_read_only_views_take_focus() {
+        let mut scrolls = HashMap::new();
+        let (hit, node, _) = panel(&mut scrolls, 3, false);
+        assert!(!hit.focusable && !node.focusable && !node.scrollable);
+        // Grows past the view: focusable and scrollable in that same frame.
+        let (hit, node, again) = panel(&mut scrolls, 10, false);
+        assert!(hit.focusable && node.focusable && node.scrollable);
+        assert!(!again);
+        // Focusable rows are the way in instead.
+        let (hit, node, _) = panel(&mut scrolls, 10, true);
+        assert!(!hit.focusable && !node.focusable && node.scrollable);
+        // Shrinks while scrolled to the end: that frame used a stale
+        // offset, so it asks for another, which is settled.
+        scrolls.get_mut(&crate::ui::id("panel")).unwrap().offset = 200.0;
+        let (_, _, again) = panel(&mut scrolls, 6, false);
+        assert!(again);
+        let (_, _, again) = panel(&mut scrolls, 6, false);
+        assert!(!again);
+    }
+
     #[test]
     fn every_page_builds_a_sound_tree() {
         for mode in [

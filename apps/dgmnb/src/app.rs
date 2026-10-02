@@ -29,6 +29,7 @@ use crate::gfx::{Canvas, Rect};
 use crate::graph::{self, GraphPage};
 use crate::text::Text;
 use crate::theme::Theme;
+use crate::touch;
 use crate::ui::{
     self, Align, BODY, CAPTION, Frame, Hit, Icons, Input, Node, SMALL, STRONG, Scroll, Sense,
     Style, TITLE, id,
@@ -218,9 +219,8 @@ pub struct App {
     mods: ModifiersState,
     last_click: Option<(Instant, ui::Id)>,
     drag: Option<(ui::Id, f32, f32)>,
-    /// Touch points (id → position) and the last two-finger spread.
-    touches: HashMap<u64, (f32, f32)>,
-    pinch: Option<f32>,
+    /// Touch contacts and the pinch gesture.
+    touches: touch::Touches,
     /// The text field the input method is enabled for.
     ime: Option<Rect>,
     store: Store,
@@ -243,6 +243,8 @@ pub struct App {
 #[derive(Default)]
 struct Dev {
     screenshot: Option<PathBuf>,
+    /// `DGMNB_KEYS`: a key script (`input::parse_key_script`), typed once
+    /// the clicks are done.
     keys: Option<String>,
     /// `DGMNB_CLICKS="x,y;x,y"`: pointer clicks (logical px), one per frame.
     clicks: std::collections::VecDeque<(f32, f32)>,
@@ -296,8 +298,7 @@ impl App {
             mods: ModifiersState::empty(),
             last_click: None,
             drag: None,
-            touches: HashMap::new(),
-            pinch: None,
+            touches: touch::Touches::default(),
             ime: None,
             store,
             desktop,
@@ -496,15 +497,30 @@ impl App {
                 persist(&self.store);
             }
             Msg::OpenLink(url) => {
-                // Ask the desktop via the OpenURI portal, off the UI thread.
+                // Ask the desktop via the OpenURI portal, off the UI thread;
+                // one request at a time.
+                use std::sync::atomic::{AtomicBool, Ordering};
+                static OPENING: AtomicBool = AtomicBool::new(false);
+                if OPENING.swap(true, Ordering::AcqRel) {
+                    return;
+                }
                 let proxy = self.proxy.clone();
-                let _ = std::thread::Builder::new()
-                    .name("open-uri".into())
-                    .spawn(move || {
-                        if appcore::dbus::open_uri(url, Duration::from_secs(5)).is_err() {
-                            let _ = proxy.send_event(UserEvent::OpenFailed(url));
-                        }
-                    });
+                let spawned =
+                    std::thread::Builder::new()
+                        .name("open-uri".into())
+                        .spawn(move || {
+                            // Wait out an app chooser; only a refused or failed
+                            // request falls back to copying the link.
+                            use appcore::dbus::{Opened, open_uri};
+                            let outcome = open_uri(url, Duration::from_secs(120));
+                            OPENING.store(false, Ordering::Release);
+                            if matches!(outcome, Ok(Opened::Failed) | Err(_)) {
+                                let _ = proxy.send_event(UserEvent::OpenFailed(url));
+                            }
+                        });
+                if spawned.is_err() {
+                    OPENING.store(false, Ordering::Release);
+                }
             }
             Msg::CopyLink(url) => {
                 let (mut cx, ..) = self.cx_parts();
@@ -592,7 +608,9 @@ impl App {
 
     // ------------------------------------------------------------ drawing
 
-    fn draw(&mut self, cv: Canvas, maximized: bool) -> (Vec<Hit>, Option<Vec<Node>>) {
+    /// Draw a frame; returns its hits, its accessibility nodes (if
+    /// collected) and whether it needs drawing again.
+    fn draw(&mut self, cv: Canvas, maximized: bool) -> (Vec<Hit>, Option<Vec<Node>>, bool) {
         let theme = self.theme;
         let App {
             text,
@@ -688,7 +706,7 @@ impl App {
                 n.live = true;
             }
         }
-        (std::mem::take(&mut f.hits), f.nodes.take())
+        (std::mem::take(&mut f.hits), f.nodes.take(), f.again)
     }
 
     fn render(&mut self) {
@@ -712,8 +730,10 @@ impl App {
             buffer.present().ok()?;
             Some(out)
         })();
-        if let Some((hits, nodes)) = drawn {
+        let mut again = false;
+        if let Some((hits, nodes, stale)) = drawn {
             self.hits = hits;
+            again = stale;
             self.dev.frames += 1;
             if let Some(nodes) = nodes {
                 let title = format!("{} — {}", APP_NAME, self.mode.title());
@@ -725,6 +745,9 @@ impl App {
         self.gfx = Some(g);
         self.update_hover();
         self.sync_ime();
+        if again {
+            self.redraw();
+        }
     }
 
     /// Render the window into a PNG (screenshot hook).
@@ -758,18 +781,6 @@ impl App {
             .find(|h| h.visible && h.sense != Sense::Scroll && h.rect.contains(x, y))
     }
 
-    /// Distance between the first two touch points, and their midpoint.
-    fn spread(&self) -> (f32, (f32, f32)) {
-        let mut it = self.touches.values();
-        match (it.next(), it.next()) {
-            (Some(&(ax, ay)), Some(&(bx, by))) => (
-                ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt(),
-                ((ax + bx) / 2.0, (ay + by) / 2.0),
-            ),
-            _ => (0.0, (0.0, 0.0)),
-        }
-    }
-
     /// Scroll `id` into view within its scroll area (keyboard / AT focus).
     fn reveal(&mut self, id: ui::Id) {
         let Some(h) = self.hits.iter().rev().find(|h| h.id == id) else {
@@ -784,18 +795,34 @@ impl App {
         self.redraw();
     }
 
-    /// Scroll an area by a fraction of its height (PageUp/PageDown, AT).
-    fn scroll_by(&mut self, sid: ui::Id, pages: f32) {
+    /// Move an area's scroll offset to `to(current)`, within bounds.
+    fn scroll_set(&mut self, sid: ui::Id, to: impl FnOnce(&Scroll) -> f32) {
         if let Some(s) = self.scrolls.get_mut(&sid) {
-            s.offset = (s.offset + pages * s.view * 0.85).clamp(0.0, s.max());
+            s.offset = to(s).clamp(0.0, s.max());
             self.redraw();
         }
     }
 
-    /// The scroll area for keyboard scrolling: the focused widget's, else the
-    /// one under the pointer.
+    /// Scroll an area by a fraction of its height (PageUp/PageDown, AT).
+    fn scroll_by(&mut self, sid: ui::Id, pages: f32) {
+        self.scroll_set(sid, |s| s.offset + pages * s.view * 0.85);
+    }
+
+    /// The scroll view itself, if it has keyboard focus.
+    fn focused_scroll_view(&self) -> Option<ui::Id> {
+        let f = self.input.focus?;
+        self.hits
+            .iter()
+            .rev()
+            .find(|h| h.id == f && h.sense == Sense::Scroll)
+            .map(|h| h.id)
+    }
+
+    /// The scroll area for keyboard scrolling: the focused scroll view or
+    /// the focused widget's area, else the one under the pointer.
     fn scroll_target(&self) -> Option<ui::Id> {
-        let focused = self.input.focus.and_then(|f| {
+        let focused = self.focused_scroll_view().or_else(|| {
+            let f = self.input.focus?;
             self.hits
                 .iter()
                 .rev()
@@ -1246,6 +1273,21 @@ impl App {
             self.scroll_by(sid, if n == Named::PageDown { 1.0 } else { -1.0 });
             return;
         }
+        // A focused scroll view also takes the arrows, Home and End.
+        if let Key::Named(n @ (Named::Up | Named::Down | Named::Home | Named::End)) = kp.key
+            && !kp.ctrl
+            && !kp.alt
+            && let Some(sid) = self.focused_scroll_view()
+        {
+            const LINE: f32 = 40.0;
+            self.scroll_set(sid, |s| match n {
+                Named::Up => s.offset - LINE,
+                Named::Down => s.offset + LINE,
+                Named::Home => 0.0,
+                _ => s.max(),
+            });
+            return;
+        }
         if let Some(a) = input::window_shortcut(&kp) {
             match a {
                 WindowAction::SwitchMode(m) => self.set_mode(m),
@@ -1543,7 +1585,9 @@ impl ApplicationHandler<UserEvent> for App {
             self.pointer_released(el);
             self.redraw();
         }
-        if !self.dev.started && self.dev.frames > 0 {
+        // Keys go in once the clicks are done and their result is drawn.
+        if !self.dev.started && self.dev.clicks.is_empty() && self.dev.frames > self.dev.clicked_at
+        {
             self.dev.started = true;
             if let Some(keys) = self.dev.keys.take() {
                 for kp in input::parse_key_script(&keys) {
@@ -1675,55 +1719,49 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::Touch(t) => {
+                use touch::Gesture;
                 use winit::event::TouchPhase;
                 let (x, y) = (t.location.x as f32 / scale, t.location.y as f32 / scale);
-                match t.phase {
+                let gesture = match t.phase {
                     TouchPhase::Started => {
-                        self.touches.insert(t.id, (x, y));
-                        if self.touches.len() == 1 {
-                            self.pointer_moved(x, y);
-                            self.pointer_pressed(el, x, y);
-                        } else if self.touches.len() == 2 {
-                            // Second finger: stop the one-finger press/pan
-                            // and start pinching.
-                            self.input.pressed = None;
-                            self.drag = None;
-                            self.pinch = Some(self.spread().0);
+                        let graph = self
+                            .graph
+                            .as_ref()
+                            .filter(|_| self.mode == ViewMode::Graphing);
+                        self.touches.down(t.id, x, y, |mx, my| {
+                            graph.is_some_and(|g| g.on_canvas(mx, my))
+                        })
+                    }
+                    TouchPhase::Moved => self.touches.moved(t.id, x, y),
+                    TouchPhase::Ended => self.touches.up(t.id, false),
+                    TouchPhase::Cancelled => self.touches.up(t.id, true),
+                };
+                match gesture {
+                    Gesture::Press(x, y) => {
+                        self.pointer_moved(x, y);
+                        self.pointer_pressed(el, x, y);
+                    }
+                    Gesture::Move(x, y) => self.pointer_moved(x, y),
+                    Gesture::Release => self.pointer_released(el),
+                    Gesture::Cancel | Gesture::PinchStart => {
+                        self.input.pressed = None;
+                        self.drag = None;
+                    }
+                    Gesture::Zoom { x, y, factor } => {
+                        if self.mode == ViewMode::Graphing
+                            && let Some(g) = self.graph.as_mut()
+                            && g.pinch(x, y, factor)
+                        {
+                            self.redraw();
                         }
                     }
-                    TouchPhase::Moved => {
-                        self.touches.insert(t.id, (x, y));
-                        match self.pinch {
-                            Some(prev) if self.touches.len() == 2 => {
-                                let (d, (mx, my)) = self.spread();
-                                if prev > 1.0
-                                    && d > 1.0
-                                    && self.mode == ViewMode::Graphing
-                                    && let Some(g) = self.graph.as_mut()
-                                    && g.pinch(mx, my, (prev / d) as f64)
-                                {
-                                    self.redraw();
-                                }
-                                self.pinch = Some(d);
-                            }
-                            Some(_) => {}
-                            None => self.pointer_moved(x, y),
-                        }
-                    }
-                    _ => {
-                        self.touches.remove(&t.id);
-                        if self.pinch.is_some() {
-                            if self.touches.len() < 2 {
-                                self.pinch = None;
-                            }
-                        } else {
-                            self.pointer_released(el);
-                        }
-                        if self.touches.is_empty() {
-                            self.input.pointer = None;
-                            self.update_hover();
-                        }
-                    }
+                    Gesture::None => {}
+                }
+                if self.touches.is_empty()
+                    && matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled)
+                {
+                    self.input.pointer = None;
+                    self.update_hover();
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -2098,11 +2136,34 @@ fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: Desktop) {
 
     heading(f, &mut y, "About");
     const ABOUT: &str = "The lean twin of GMNB: the Windows Calculator engine ported to Rust, drawn in software with nothing running while it waits. Not affiliated with or endorsed by Microsoft.";
+    const SITE: &str = "https://github.com/Go08er/GlazeMyNumbersBaby";
     let text_h = {
         let lines = f.wrap(ABOUT, col_w - 28.0, SMALL);
         lines.len() as f32 * (SMALL.size * 1.4).round()
     };
-    let card = Rect::new(x, y, col_w, 136.0 + text_h);
+    // The buttons flow onto further rows when the column is narrow.
+    let buttons = [
+        ("open-site", "Open website", None, Msg::OpenLink(SITE)),
+        (
+            "copy-site",
+            "Copy link",
+            Some("Copy website link"),
+            Msg::CopyLink(SITE),
+        ),
+        ("licences", "Licences", None, Msg::Licences(true)),
+    ];
+    let (top, inner_w) = (78.0 + text_h + 12.0, col_w - 28.0);
+    let (mut bx, mut by) = (0.0, top);
+    let mut placed = Vec::with_capacity(buttons.len());
+    for (key, label, name, msg) in buttons {
+        let w = (f.layout(label, SMALL).width + 28.0).min(inner_w);
+        if bx > 0.0 && bx + w > inner_w {
+            (bx, by) = (0.0, by + 42.0);
+        }
+        placed.push((key, label, name, msg, bx, by, w));
+        bx += w + 8.0;
+    }
+    let card = Rect::new(x, y, col_w, by + 34.0 + 28.0);
     f.cv.rounded(card, 12.0, t.surface);
     let inner = card.inset(14.0);
     f.label(
@@ -2127,43 +2188,15 @@ fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: Desktop) {
         Align::Start,
     );
     f.paragraph(inner.x, inner.y + 78.0, inner.w, ABOUT, SMALL, t.fg);
-    const SITE: &str = "https://github.com/Go08er/GlazeMyNumbersBaby";
-    let b0 = Rect::new(inner.x, inner.bottom() - 36.0, 120.0, 34.0);
-    f.button(
-        id("open-site"),
-        b0,
-        "Open website",
-        SMALL,
-        Msg::OpenLink(SITE),
-        true,
-        None,
-        true,
-    );
-    let b = Rect::new(b0.right() + 8.0, b0.y, 92.0, 34.0);
-    f.button(
-        id("copy-site"),
-        b,
-        "Copy link",
-        SMALL,
-        Msg::CopyLink(SITE),
-        true,
-        None,
-        true,
-    );
-    if let Some(n) = f.nodes.as_mut().and_then(|v| v.last_mut()) {
-        n.label = "Copy website link".into();
+    for (key, label, name, msg, bx, by, w) in placed {
+        let r = Rect::new(inner.x + bx, inner.y + by, w, 34.0);
+        f.button(id(key), r, label, SMALL, msg, true, None, true);
+        if let Some(name) = name
+            && let Some(n) = f.nodes.as_mut().and_then(|v| v.last_mut())
+        {
+            n.label = name.into();
+        }
     }
-    let b2 = Rect::new(b.right() + 8.0, b.y, 92.0, 34.0);
-    f.button(
-        id("licences"),
-        b2,
-        "Licences",
-        SMALL,
-        Msg::Licences(true),
-        true,
-        None,
-        true,
-    );
     y += card.h + 16.0;
     f.scroll_end(sid, area, y + off - area.y);
 }
