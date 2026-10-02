@@ -741,7 +741,7 @@ impl CalcPage {
                         Align::Center,
                     );
                 } else {
-                    let off = f.scroll_begin(sid, list);
+                    let off = f.scroll_begin(sid, list, "History");
                     let mut y = list.y - off;
                     for (i, h) in items.iter().enumerate() {
                         let row = Rect::new(list.x, y, list.w, 64.0);
@@ -807,7 +807,7 @@ impl CalcPage {
                         Align::Center,
                     );
                 } else {
-                    let off = f.scroll_begin(sid, list);
+                    let off = f.scroll_begin(sid, list, "Memory");
                     let mut y = list.y - off;
                     for (i, m) in items.iter().enumerate() {
                         let row = Rect::new(list.x, y, list.w, 70.0);

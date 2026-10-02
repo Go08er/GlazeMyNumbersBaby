@@ -806,7 +806,7 @@ impl GraphPage {
     fn equations(&mut self, f: &mut Frame, r: Rect) {
         let t = f.t;
         let sid = id("eq-scroll");
-        let off = f.scroll_begin(sid, r);
+        let off = f.scroll_begin(sid, r, "Equations");
         let mut y = r.y - off;
         let n_series = t.series.len();
         for i in 0..self.rows.len() {
@@ -963,7 +963,7 @@ impl GraphPage {
             false,
         );
         let sid = id("an-scroll");
-        let off = f.scroll_begin(sid, body);
+        let off = f.scroll_begin(sid, body, "Function analysis");
         let mut y = body.y - off;
         f.label_fit(
             Rect::new(body.x + 6.0, y, body.w - 12.0, 30.0),

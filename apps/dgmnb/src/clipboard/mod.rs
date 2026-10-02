@@ -61,9 +61,13 @@ impl Clipboard {
 
     /// Stop the backend's worker (and, on Wayland, release everything it
     /// holds on the display) before the display goes away.
-    pub fn shutdown(&mut self) {
-        if let Clipboard::Wayland(c) = self {
-            c.shutdown();
+    ///
+    /// False if the Wayland worker didn't stop in time (see
+    /// `wayland::Clipboard::shutdown`).
+    pub fn shutdown(&mut self) -> bool {
+        match self {
+            Clipboard::Wayland(c) => c.shutdown(),
+            Clipboard::X11(_) => true,
         }
     }
 }

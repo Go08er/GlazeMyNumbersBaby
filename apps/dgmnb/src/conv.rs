@@ -225,7 +225,7 @@ impl ConvPage {
     fn values(&mut self, f: &mut Frame, r: Rect) {
         let t = f.t;
         let sid = id("conv-values");
-        let off = f.scroll_begin(sid, r);
+        let off = f.scroll_begin(sid, r, "Conversion");
         let mut y = r.y - off;
         for which in [1u8, 2] {
             let (value, unit, active, sym, name) = if which == 1 {
@@ -478,7 +478,7 @@ impl ConvPage {
         .map(|u| u.id);
         let items = self.matches();
         let sid = id(("unit-scroll", which));
-        let off = f.scroll_begin(sid, list);
+        let off = f.scroll_begin(sid, list, "Units");
         let row_h = 36.0;
         if let Some(pos) = items.iter().position(|i| Some(i.0) == current)
             && self.search.text.is_empty()

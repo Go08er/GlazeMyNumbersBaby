@@ -1570,8 +1570,13 @@ impl ApplicationHandler<UserEvent> for App {
     fn exiting(&mut self, _el: &ActiveEventLoop) {
         // The Wayland clipboard borrows the event loop's display connection:
         // release it now, before the loop (and the display) is torn down.
-        if let Some(mut c) = self.clipboard.take() {
-            c.shutdown();
+        if let Some(mut c) = self.clipboard.take()
+            && !c.shutdown()
+        {
+            // It still holds the display: end the process before winit
+            // closes the connection under it (settings are already saved).
+            eprintln!("dgmnb: clipboard worker did not stop; exiting now");
+            std::process::exit(0);
         }
     }
 
@@ -1944,7 +1949,7 @@ fn draw_nav(f: &mut Frame, full: Rect, mode: ViewMode, settings: bool) {
     let (list, foot) = rest.take_bottom(52.0);
     let (foot, list) = (list, foot);
     let sid = id("nav-scroll");
-    let off = f.scroll_begin(sid, list);
+    let off = f.scroll_begin(sid, list, "Modes");
     let mut y = list.y - off + 4.0;
     let mut group = None;
     for m in ViewMode::ALL {
@@ -2011,7 +2016,7 @@ fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: Desktop) {
     let t = f.t;
     let sid = id("settings-scroll");
     let area = body.inset_xy(0.0, 0.0);
-    let off = f.scroll_begin(sid, area);
+    let off = f.scroll_begin(sid, area, "Settings");
     let col_w = area.w.min(520.0) - 32.0;
     let x = area.x + (area.w - col_w) / 2.0;
     let mut y = area.y + 8.0 - off;
@@ -2198,7 +2203,7 @@ fn draw_licences(f: &mut Frame, full: Rect) {
         None,
     );
     let sid = id("lic-scroll");
-    let off = f.scroll_begin(sid, body);
+    let off = f.scroll_begin(sid, body, "Licences");
     let h = f.paragraph(
         body.x + 4.0,
         body.y - off,

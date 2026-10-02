@@ -707,7 +707,8 @@ impl<'a, 'p> Frame<'a, 'p> {
     }
 
     /// Begin a vertical scroll area; returns the scroll offset to subtract.
-    pub fn scroll_begin(&mut self, id: Id, r: Rect) -> f32 {
+    /// `name` labels the scroll view for assistive technology.
+    pub fn scroll_begin(&mut self, id: Id, r: Rect, name: &str) -> f32 {
         self.hit(id, r, Sense::Scroll, None, false);
         self.push_clip(r);
         let s = self.scrolls.entry(id).or_default();
@@ -715,7 +716,7 @@ impl<'a, 'p> Frame<'a, 'p> {
         s.offset = s.offset.clamp(0.0, s.max());
         let offset = s.offset;
         let scrollable = s.max() > 0.0;
-        self.group(id, Role::ScrollView, "", r);
+        self.group(id, Role::ScrollView, name, r);
         if let Some(n) = self.nodes.as_mut().and_then(|v| v.last_mut()) {
             n.scrollable = scrollable;
         }

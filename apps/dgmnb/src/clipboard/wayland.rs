@@ -89,19 +89,21 @@ impl Clipboard {
     }
 
     /// Stop the worker and wait for it to release the display.
-    pub fn shutdown(&mut self) {
+    ///
+    /// Returns false if it didn't stop in time: it then still holds the
+    /// display, so the caller must not let the display close while this
+    /// process keeps running (the app exits immediately instead).
+    pub fn shutdown(&mut self) -> bool {
         let Some((handle, done)) = self.worker.take() else {
-            return;
+            return true;
         };
         let _ = self.tx.send(Command::Exit);
         match done.recv_timeout(SHUTDOWN_WAIT) {
             Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                 let _ = handle.join();
+                true
             }
-            // Stuck on a dead compositor: don't hang closing the window.
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                eprintln!("dgmnb: clipboard worker did not stop in time");
-            }
+            Err(mpsc::RecvTimeoutError::Timeout) => false,
         }
     }
 
@@ -455,7 +457,11 @@ delegate_registry!(State);
 
 impl Drop for Clipboard {
     fn drop(&mut self) {
-        self.shutdown();
+        if !self.shutdown() {
+            // Never let the worker outlive the display it borrows.
+            eprintln!("dgmnb: clipboard worker did not stop; exiting now");
+            std::process::exit(0);
+        }
     }
 }
 
@@ -489,7 +495,7 @@ mod tests {
         clip.copy_text("probe");
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(clipboard_threads(), before + 1);
-        clip.shutdown();
+        assert!(clip.shutdown(), "worker didn't confirm it stopped");
         assert_eq!(
             clipboard_threads(),
             before,
