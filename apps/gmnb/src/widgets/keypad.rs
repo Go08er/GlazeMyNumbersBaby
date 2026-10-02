@@ -25,63 +25,15 @@ const CASCADE_DUR: f32 = 0.46;
 const REVEAL_RADIUS: f32 = 120.0;
 
 /// Visual role of a key; maps onto a CSS class.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum KeyKind {
-    Number,
-    Operator,
-    Function,
-    Equals,
-    Toggle,
-}
+pub use appcore::keys::{Key, KeyKind};
 
-impl KeyKind {
-    fn css(self) -> &'static str {
-        match self {
-            KeyKind::Number => "wc-num",
-            KeyKind::Operator => "wc-op",
-            KeyKind::Function => "wc-fn",
-            KeyKind::Equals => "wc-eq",
-            KeyKind::Toggle => "wc-fn",
-        }
-    }
-}
-
-/// Description of one key.
-#[derive(Clone, Debug)]
-pub struct Key {
-    pub id: u32,
-    /// Pango markup.
-    pub label: String,
-    pub kind: KeyKind,
-    pub tooltip: Option<String>,
-    /// Accessible name (screen readers); falls back to the tooltip.
-    pub a11y: Option<String>,
-    /// Draw this path icon instead of the label.
-    pub icon: Option<&'static str>,
-}
-
-impl Key {
-    pub fn new(id: impl Into<u32>, label: &str, kind: KeyKind) -> Self {
-        Key {
-            id: id.into(),
-            label: label.to_string(),
-            kind,
-            tooltip: None,
-            a11y: None,
-            icon: None,
-        }
-    }
-    pub fn tip(mut self, tooltip: &str) -> Self {
-        self.tooltip = Some(tooltip.to_string());
-        self
-    }
-    pub fn a11y(mut self, name: &str) -> Self {
-        self.a11y = Some(name.to_string());
-        self
-    }
-    pub fn icon(mut self, path: &'static str) -> Self {
-        self.icon = Some(path);
-        self
+fn kind_css(kind: KeyKind) -> &'static str {
+    match kind {
+        KeyKind::Number => "wc-num",
+        KeyKind::Operator => "wc-op",
+        KeyKind::Function => "wc-fn",
+        KeyKind::Equals => "wc-eq",
+        KeyKind::Toggle => "wc-fn",
     }
 }
 
@@ -275,10 +227,16 @@ impl Keypad {
         };
         let button = gtk::Button::builder()
             .child(&child)
+            // 2nd / hyp / inverse are toggles; screen readers hear their state.
+            .accessible_role(if key.kind == KeyKind::Toggle {
+                gtk::AccessibleRole::ToggleButton
+            } else {
+                gtk::AccessibleRole::Button
+            })
             .focus_on_click(false)
             .hexpand(true)
             .vexpand(true)
-            .css_classes(["wc-key", key.kind.css()])
+            .css_classes(["wc-key", kind_css(key.kind)])
             .build();
         if let Some(tip) = &key.tooltip {
             button.set_tooltip_text(Some(tip));
@@ -332,6 +290,15 @@ impl Keypad {
             .and_downcast::<gtk::Label>()
         {
             label.set_markup(markup);
+        }
+    }
+
+    /// Relabel a key and keep its tooltip and accessible name in step.
+    pub fn set_key(&self, id: u32, markup: &str, tip: &str) {
+        self.set_key_label(id, markup);
+        if let Some(b) = self.button(id) {
+            b.set_tooltip_text(Some(tip));
+            b.update_property(&[gtk::accessible::Property::Label(tip)]);
         }
     }
 

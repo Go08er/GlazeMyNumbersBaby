@@ -1,6 +1,6 @@
 //! The navigation categories (upstream `NavCategory` / `ViewMode`).
 
-use crate::widgets::icon::paths;
+use crate::icons as paths;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ViewMode {
@@ -149,6 +149,37 @@ impl ViewMode {
         }
     }
 
+    /// The converter category behind a converter mode.
+    pub fn converter_mode(self) -> Option<unitconv::ConverterMode> {
+        use unitconv::ConverterMode as C;
+        Some(match self {
+            ViewMode::Currency => C::Currency,
+            ViewMode::Volume => C::Volume,
+            ViewMode::Length => C::Length,
+            ViewMode::Weight => C::Weight,
+            ViewMode::Temperature => C::Temperature,
+            ViewMode::Energy => C::Energy,
+            ViewMode::Area => C::Area,
+            ViewMode::Speed => C::Speed,
+            ViewMode::Time => C::Time,
+            ViewMode::Power => C::Power,
+            ViewMode::Data => C::Data,
+            ViewMode::Pressure => C::Pressure,
+            ViewMode::Angle => C::Angle,
+            _ => return None,
+        })
+    }
+
+    /// The calculator view-model mode behind a calculator mode.
+    pub fn calc_mode(self) -> Option<calcvm::CalcMode> {
+        match self {
+            ViewMode::Standard => Some(calcvm::CalcMode::Standard),
+            ViewMode::Scientific => Some(calcvm::CalcMode::Scientific),
+            ViewMode::Programmer => Some(calcvm::CalcMode::Programmer),
+            _ => None,
+        }
+    }
+
     /// Which page widget hosts this mode.
     pub fn page(self) -> PageKind {
         match self {
@@ -178,5 +209,41 @@ impl PageKind {
             PageKind::Date => "date",
             PageKind::Converter => "converter",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keys_round_trip_and_are_unique() {
+        for m in ViewMode::ALL {
+            assert_eq!(ViewMode::from_key(m.key()), Some(m));
+        }
+        let mut keys: Vec<_> = ViewMode::ALL.iter().map(|m| m.key()).collect();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), ViewMode::ALL.len());
+    }
+
+    #[test]
+    fn every_mode_has_exactly_one_backend() {
+        for m in ViewMode::ALL {
+            let n = [
+                m.converter_mode().is_some(),
+                m.calc_mode().is_some(),
+                m == ViewMode::Graphing,
+                m == ViewMode::Date,
+            ]
+            .iter()
+            .filter(|b| **b)
+            .count();
+            assert_eq!(n, 1, "{m:?}");
+        }
+        assert_eq!(
+            ViewMode::ALL.iter().filter(|m| m.converter_mode().is_some()).count(),
+            unitconv::ConverterMode::ALL.len()
+        );
     }
 }

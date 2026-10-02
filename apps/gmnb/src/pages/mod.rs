@@ -1,6 +1,5 @@
 //! Pages hosted in the main window's stack.
 
-pub mod calc_keys;
 pub mod calculator;
 pub mod converter;
 pub mod date;
@@ -12,7 +11,8 @@ use gtk::gdk;
 use gtk::graphene;
 use gtk::prelude::*;
 
-use crate::modes::ViewMode;
+use appcore::KeyPress;
+use appcore::modes::ViewMode;
 use crate::settings::Store;
 use crate::theme::Hub;
 use crate::widgets::aurora::Aurora;
@@ -80,7 +80,7 @@ pub trait Page {
     }
 
     /// Keyboard input; return true if handled.
-    fn key_pressed(&self, _key: gdk::Key, _mods: gdk::ModifierType) -> bool {
+    fn key_pressed(&self, _kp: &KeyPress) -> bool {
         false
     }
 

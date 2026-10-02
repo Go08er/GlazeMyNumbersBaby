@@ -9,7 +9,7 @@ use datecalc::{DateCalculatorState, strings as S};
 use gtk::glib;
 
 use super::{Ctx, Page};
-use crate::modes::ViewMode;
+use appcore::modes::ViewMode;
 use crate::widgets::display::{Change, Display};
 use crate::widgets::icon::{PathIcon, paths};
 
@@ -201,13 +201,9 @@ impl DatePage {
             state: state.clone(),
         });
 
-        {
-            let (d1, d2) = (diff_result.clone(), date_result.clone());
-            ctx.hub.subscribe(move |s| {
-                d1.set_scheme(*s);
-                d2.set_scheme(*s);
-            });
-        }
+        // Only while the displays live: the hub outlasts this page.
+        ctx.hub.subscribe_while(&diff_result, |d, s| d.set_scheme(*s));
+        ctx.hub.subscribe_while(&date_result, |d, s| d.set_scheme(*s));
 
         let refresh = {
             let state = state.clone();
@@ -239,10 +235,13 @@ impl DatePage {
             Some(d.clamp(datecalc::picker_min_date(), datecalc::picker_max_date()))
         };
         for (which, b) in [(0, &from), (1, &to), (2, &start)] {
-            let (state, refresh, button) = (state.clone(), refresh.clone(), b.button.clone());
+            // Weak button: it owns the popover that owns this calendar.
+            let (state, refresh, button) = (state.clone(), refresh.clone(), b.button.downgrade());
             let ctx = ctx.clone();
             b.calendar.connect_day_selected(move |c| {
-                let Some(d) = limit(c) else { return };
+                let (Some(d), Some(button)) = (limit(c), button.upgrade()) else {
+                    return;
+                };
                 {
                     let mut st = state.borrow_mut();
                     match which {

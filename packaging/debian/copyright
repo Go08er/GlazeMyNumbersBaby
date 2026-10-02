@@ -7,7 +7,7 @@ Copyright: Microsoft Corporation (original Windows Calculator)
            2026 GMNB contributors (Rust port and new code)
 License: MIT
 
-Files: app/assets/fonts/*
+Files: apps/gmnb/assets/fonts/*
 Copyright: 2021 The Outfit Project Authors
 License: OFL-1.1
  Copyright 2021 The Outfit Project Authors (https://github.com/Outfitio/Outfit-Fonts)

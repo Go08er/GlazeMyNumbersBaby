@@ -83,15 +83,21 @@ pub struct Scheme {
     pub series: [[f32; 3]; 6],
 }
 
-const fn hex(c: u32) -> [f32; 3] {
-    [
-        ((c >> 16) & 0xff) as f32 / 255.0,
-        ((c >> 8) & 0xff) as f32 / 255.0,
-        (c & 0xff) as f32 / 255.0,
-    ]
-}
+use appcore::color::{
+    TEXT_CONTRAST, UI_CONTRAST, WHITE, from_hsl, gradient_for_text, hex, mix, readable_gradient,
+    with_contrast,
+};
+pub use appcore::color::{complement, parse_hex, to_hex};
 
 pub fn scheme(id: PaletteId, dark: bool) -> Scheme {
+    let s = built_in(id, dark);
+    match id {
+        PaletteId::System | PaletteId::Custom => s,
+        _ => readable(s, None),
+    }
+}
+
+fn built_in(id: PaletteId, dark: bool) -> Scheme {
     match (id, dark) {
         (PaletteId::System, _) => generate(DEFAULT_PRIMARY, complement(DEFAULT_PRIMARY), dark),
         (PaletteId::Custom, _) => generate(DEFAULT_PRIMARY, DEFAULT_SECONDARY, dark),
@@ -305,78 +311,11 @@ pub fn scheme(id: PaletteId, dark: bool) -> Scheme {
 pub const DEFAULT_PRIMARY: [f32; 3] = hex(0x7c4dff);
 pub const DEFAULT_SECONDARY: [f32; 3] = hex(0xff6fb5);
 
-/// RGB (0..1) → (hue degrees, saturation, lightness).
-pub fn to_hsl(c: [f32; 3]) -> (f32, f32, f32) {
-    let max = c[0].max(c[1]).max(c[2]);
-    let min = c[0].min(c[1]).min(c[2]);
-    let l = (max + min) / 2.0;
-    let d = max - min;
-    if d < 1e-6 {
-        return (0.0, 0.0, l);
-    }
-    let s = d / (1.0 - (2.0 * l - 1.0).abs()).max(1e-6);
-    let h = if max == c[0] {
-        60.0 * (((c[1] - c[2]) / d).rem_euclid(6.0))
-    } else if max == c[1] {
-        60.0 * ((c[2] - c[0]) / d + 2.0)
-    } else {
-        60.0 * ((c[0] - c[1]) / d + 4.0)
-    };
-    (h, s.clamp(0.0, 1.0), l)
-}
-
-pub fn from_hsl(h: f32, s: f32, l: f32) -> [f32; 3] {
-    let h = h.rem_euclid(360.0);
-    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
-    let x = c * (1.0 - ((h / 60.0).rem_euclid(2.0) - 1.0).abs());
-    let m = l - c / 2.0;
-    let (r, g, b) = match (h / 60.0) as u32 {
-        0 => (c, x, 0.0),
-        1 => (x, c, 0.0),
-        2 => (0.0, c, x),
-        3 => (0.0, x, c),
-        4 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-    [r + m, g + m, b + m]
-}
-
-/// The colour opposite on the colour wheel.
-pub fn complement(c: [f32; 3]) -> [f32; 3] {
-    let (h, s, l) = to_hsl(c);
-    from_hsl(h + 180.0, s, l)
-}
-
-/// WCAG relative luminance.
-fn luminance(c: [f32; 3]) -> f32 {
-    let lin = |v: f32| {
-        if v <= 0.040_45 {
-            v / 12.92
-        } else {
-            ((v + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2])
-}
-
-pub fn parse_hex(s: &str) -> Option<[f32; 3]> {
-    let s = s.trim().trim_start_matches('#');
-    if s.len() != 6 {
-        return None;
-    }
-    let v = u32::from_str_radix(s, 16).ok()?;
-    Some(hex(v))
-}
-
-pub fn to_hex(c: [f32; 3]) -> String {
-    let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    format!("#{:02x}{:02x}{:02x}", b(c[0]), b(c[1]), b(c[2]))
-}
-
 /// A complete scheme from two colours: tinted base, an aurora of the two
 /// hues and their neighbours, readable text and accent, a hot gradient
 /// running secondary → primary, and six well-spread graph colours.
 pub fn generate(primary: [f32; 3], secondary: [f32; 3], dark: bool) -> Scheme {
+    use appcore::color::to_hsl;
     let (ph, ps, _) = to_hsl(primary);
     let (qh, qs, _) = to_hsl(secondary);
     // Keep greys grey, but give real colours some life.
@@ -434,14 +373,32 @@ pub fn generate(primary: [f32; 3], secondary: [f32; 3], dark: bool) -> Scheme {
             series: series_hues.map(|h| from_hsl(h, 0.7, 0.42)),
         }
     };
-    // Text on the hot gradient: white unless the gradient is very light.
-    let mid = mix(hot_a, hot_b, 0.5);
-    let on_hot = if luminance(mid) > 0.5 {
-        from_hsl(ph, 0.4, 0.10)
-    } else {
-        [1.0, 1.0, 1.0]
+    readable(scheme, Some(from_hsl(ph, 0.4, 0.10)))
+}
+
+/// Keep what's drawn on top legible: the equals glyph against its whole
+/// gradient (a large glyph: 3:1), accent text against the background
+/// (4.5:1) and graph lines against it (3:1). Generated palettes can come
+/// from anything (a neon-yellow desktop accent, pure grey…) and also pick
+/// light or `dark_text` for the glyph; built-ins keep their glyph colour and
+/// only have their colours nudged.
+fn readable(s: Scheme, dark_text: Option<[f32; 3]>) -> Scheme {
+    let fix = |c, target| with_contrast(with_contrast(c, s.base_top, target), s.base_bottom, target);
+    let (on_hot, hot_a, hot_b) = match dark_text {
+        Some(dark) => readable_gradient(s.hot_a, s.hot_b, WHITE, dark, UI_CONTRAST),
+        None => {
+            let (a, b) = gradient_for_text(s.on_hot, s.hot_a, s.hot_b, UI_CONTRAST);
+            (s.on_hot, a, b)
+        }
     };
-    Scheme { on_hot, ..scheme }
+    Scheme {
+        on_hot,
+        hot_a,
+        hot_b,
+        accent: fix(s.accent, TEXT_CONTRAST),
+        series: s.series.map(|c| fix(c, UI_CONTRAST)),
+        ..s
+    }
 }
 
 pub fn rgba(c: [f32; 3], a: f32) -> gdk::RGBA {
@@ -455,14 +412,6 @@ fn css_rgb(c: [f32; 3]) -> String {
         (c[1] * 255.0).round() as u8,
         (c[2] * 255.0).round() as u8
     )
-}
-
-fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
-    [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-    ]
 }
 
 /// Our tokens and every libadwaita surface colour, derived from a scheme.
@@ -792,4 +741,65 @@ fn read_portal_accent() -> Option<[f32; 3]> {
     let (r, g, b) = inner.get::<(f64, f64, f64)>()?;
     let ok = |v: f64| (0.0..=1.0).contains(&v);
     (ok(r) && ok(g) && ok(b)).then_some([r as f32, g as f32, b as f32])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use appcore::color::{contrast, worst_contrast};
+
+    fn check(s: &Scheme, what: &str) -> Vec<String> {
+        let mut bad = Vec::new();
+        let hot = worst_contrast(s.on_hot, &[s.hot_a, s.hot_b, mix(s.hot_a, s.hot_b, 0.5)]);
+        if hot < UI_CONTRAST {
+            bad.push(format!("{what}: equals glyph {hot:.2}"));
+        }
+        let accent = worst_contrast(s.accent, &[s.base_top, s.base_bottom]);
+        if accent < TEXT_CONTRAST {
+            bad.push(format!("{what}: accent {accent:.2}"));
+        }
+        for (i, c) in s.series.iter().enumerate() {
+            let k = worst_contrast(*c, &[s.base_top, s.base_bottom]);
+            if k < UI_CONTRAST {
+                bad.push(format!("{what}: series {i} {k:.2}"));
+            }
+        }
+        let fg = contrast(s.fg, s.base_bottom).min(contrast(s.fg, s.base_top));
+        if fg < TEXT_CONTRAST {
+            bad.push(format!("{what}: fg {fg:.2}"));
+        }
+        bad
+    }
+
+    #[test]
+    fn generated_palettes_stay_readable_for_extreme_colours() {
+        let inputs = [
+            ("white", WHITE),
+            ("black", [0.0, 0.0, 0.0]),
+            ("grey", hex(0x808080)),
+            ("yellow", hex(0xffff00)),
+            ("blue", hex(0x0000ff)),
+            ("lime", hex(0x00ff00)),
+            ("violet", hex(0x7c4dff)),
+        ];
+        let mut bad = Vec::new();
+        for (name, c) in inputs {
+            for dark in [false, true] {
+                bad.extend(check(&generate(c, complement(c), dark), &format!("system {name} {dark}")));
+                bad.extend(check(&generate(c, c, dark), &format!("freestyle {name} {dark}")));
+            }
+        }
+        assert!(bad.is_empty(), "{bad:#?}");
+    }
+
+    #[test]
+    fn built_in_palettes_stay_readable() {
+        let mut bad = Vec::new();
+        for id in PaletteId::ALL {
+            for dark in [false, true] {
+                bad.extend(check(&scheme(id, dark), &format!("{id:?} {dark}")));
+            }
+        }
+        assert!(bad.is_empty(), "{bad:#?}");
+    }
 }

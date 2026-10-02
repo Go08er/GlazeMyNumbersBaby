@@ -19,3 +19,4 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 unitconv.workspace = true
 graphing.workspace = true
+appcore.workspace = true

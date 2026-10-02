@@ -17,7 +17,7 @@ use graphing::trace::TracePoint;
 use graphing::{EquationId, Graph, Viewport};
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
-use gtk::{glib, graphene, gsk, pango};
+use gtk::{gio, glib, graphene, gsk, pango};
 
 use super::animations_enabled;
 use super::display::display_font;
@@ -26,6 +26,9 @@ use crate::theme::{Scheme, rgba};
 const RADIUS: f32 = 20.0;
 const ZOOM_ANIM: f32 = 0.24;
 const DRAW_IN: f32 = 0.9;
+/// Graphs that sample faster than this re-plot inline (perfectly in step
+/// with panning); slower ones move to a worker thread.
+const INLINE_PLOT_MS: f64 = 12.0;
 
 type ViewportFn = Box<dyn Fn(&Viewport)>;
 
@@ -50,6 +53,11 @@ mod imp {
         pub tick: RefCell<Option<gtk::TickCallbackId>>,
         pub on_viewport: RefCell<Vec<ViewportFn>>,
         pub fitted: Cell<bool>,
+        /// How long the last plot took.
+        pub plot_ms: Cell<f64>,
+        /// A worker plot is running / another was requested meanwhile.
+        pub plot_busy: Cell<bool>,
+        pub plot_again: Cell<bool>,
     }
 
     impl Default for GraphView {
@@ -72,6 +80,9 @@ mod imp {
                 tick: RefCell::new(None),
                 on_viewport: RefCell::default(),
                 fitted: Cell::new(false),
+                plot_ms: Cell::new(0.0),
+                plot_busy: Cell::new(false),
+                plot_again: Cell::new(false),
             }
         }
     }
@@ -411,8 +422,39 @@ impl GraphView {
         let (Some(vp), Some(graph)) = (imp.vp.get(), imp.graph.borrow().clone()) else {
             return;
         };
-        let plots = graph.borrow().plot_parallel(&vp);
-        imp.plots.replace(plots);
+        if imp.plot_ms.get() < INLINE_PLOT_MS {
+            let started = Instant::now();
+            let plots = graph.borrow().plot_parallel(&vp);
+            imp.plot_ms.set(started.elapsed().as_secs_f64() * 1e3);
+            imp.plots.replace(plots);
+            return;
+        }
+        // Heavy graph: plot on a worker and keep drawing the last result
+        // (curves are in graph coordinates, so they still line up while
+        // panning). One job at a time; requests made meanwhile coalesce into
+        // a single re-plot of the latest state.
+        if imp.plot_busy.replace(true) {
+            imp.plot_again.set(true);
+            return;
+        }
+        let graph = graph.borrow().clone();
+        let weak = self.downgrade();
+        glib::spawn_future_local(async move {
+            let started = Instant::now();
+            let plots = gio::spawn_blocking(move || graph.plot_parallel(&vp)).await;
+            let Some(this) = weak.upgrade() else { return };
+            let imp = this.imp();
+            imp.plot_busy.set(false);
+            imp.plot_ms.set(started.elapsed().as_secs_f64() * 1e3);
+            if let Ok(plots) = plots {
+                imp.plots.replace(plots);
+            }
+            if imp.plot_again.replace(false) {
+                imp.dirty.set(true);
+            }
+            this.update_trace();
+            this.queue_draw();
+        });
     }
 
     fn update_trace(&self) {

@@ -21,6 +21,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "appcore"
+version = "0.1.0"
+dependencies = [
+ "calcvm",
+ "graphing",
+ "serde",
+ "serde_json",
+ "unitconv",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -378,6 +389,7 @@ dependencies = [
 name = "gmnb"
 version = "0.1.0"
 dependencies = [
+ "appcore",
  "calcvm",
  "chrono",
  "datecalc",

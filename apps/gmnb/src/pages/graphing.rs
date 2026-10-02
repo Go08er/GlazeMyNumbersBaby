@@ -5,11 +5,15 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use adw::prelude::*;
-use graphing::{EquationId, EquationKind, Graph, TrigUnit};
-use gtk::{gdk, glib};
+use appcore::KeyPress;
+use appcore::graph::{self as session, SavedEquation};
+use appcore::input::{self, GraphAction};
+use appcore::keys::GRAPH_PAD;
+use appcore::modes::ViewMode;
+use graphing::{EquationId, Graph, TrigUnit};
+use gtk::{gdk, gio, glib};
 
 use super::{Ctx, Page};
-use crate::modes::ViewMode;
 use crate::widgets::graph_view::GraphView;
 use crate::widgets::icon::{PathIcon, icon_toggle, paths};
 use crate::widgets::width_bin::WidthBin;
@@ -45,15 +49,8 @@ pub struct GraphingPage {
     next_color: Cell<usize>,
     wide: Cell<bool>,
     building: Cell<bool>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Default)]
-#[serde(default)]
-struct SavedEquation {
-    text: String,
-    color: usize,
-    style: String,
-    hidden: bool,
+    /// Bumped per analysis request; stale background results are dropped.
+    analysis_seq: Cell<u64>,
 }
 
 fn small_button(icon: &str, tip: &str) -> gtk::Button {
@@ -65,64 +62,6 @@ fn small_button(icon: &str, tip: &str) -> gtk::Button {
     b.update_property(&[gtk::accessible::Property::Label(tip)]);
     b
 }
-
-/// The graphing keypad: inserts text at the cursor of the focused equation.
-const PAD: &[&[(&str, &str)]] = &[
-    &[
-        ("x", "x"),
-        ("y", "y"),
-        ("π", "π"),
-        ("e", "e"),
-        ("^", "^"),
-        ("√", "sqrt("),
-        ("|x|", "abs("),
-    ],
-    &[
-        ("sin", "sin("),
-        ("cos", "cos("),
-        ("tan", "tan("),
-        ("ln", "ln("),
-        ("log", "log("),
-        ("(", "("),
-        (")", ")"),
-    ],
-    &[
-        ("7", "7"),
-        ("8", "8"),
-        ("9", "9"),
-        ("÷", "/"),
-        ("<", "<"),
-        ("≤", "<="),
-        ("⌫", "\u{8}"),
-    ],
-    &[
-        ("4", "4"),
-        ("5", "5"),
-        ("6", "6"),
-        ("×", "*"),
-        (">", ">"),
-        ("≥", ">="),
-        ("=", "="),
-    ],
-    &[
-        ("1", "1"),
-        ("2", "2"),
-        ("3", "3"),
-        ("−", "-"),
-        ("n!", "!"),
-        ("⌊x⌋", "floor("),
-        ("⌈x⌉", "ceil("),
-    ],
-    &[
-        ("0", "0"),
-        (".", "."),
-        (",", ","),
-        ("+", "+"),
-        ("sec", "sec("),
-        ("csc", "csc("),
-        ("cot", "cot("),
-    ],
-];
 
 impl GraphingPage {
     pub fn new(ctx: Rc<Ctx>) -> Rc<Self> {
@@ -284,6 +223,7 @@ impl GraphingPage {
             next_color: Cell::new(0),
             wide: Cell::new(false),
             building: Cell::new(false),
+            analysis_seq: Cell::new(0),
         });
         view_stack.add_named(&side, Some("equations"));
         view_stack.add_named(&overlay, Some("graph"));
@@ -332,8 +272,13 @@ impl GraphingPage {
                     row.entry.grab_focus();
                 }
             });
-            let ss = side_stack.clone();
-            back.connect_clicked(move |_| ss.set_visible_child_name("equations"));
+            // Weak: the button lives inside the stack it switches.
+            let ss = side_stack.downgrade();
+            back.connect_clicked(move |_| {
+                if let Some(ss) = ss.upgrade() {
+                    ss.set_visible_child_name("equations");
+                }
+            });
         }
         {
             let vs = view_stack.clone();
@@ -387,9 +332,12 @@ impl GraphingPage {
     }
 
     fn build_pad(self: &Rc<Self>, pad: &gtk::Grid) {
-        for (r, row) in PAD.iter().enumerate() {
+        for (r, row) in GRAPH_PAD.iter().enumerate() {
             for (c, (label, insert)) in row.iter().enumerate() {
                 let b = gtk::Button::with_label(label);
+                b.update_property(&[gtk::accessible::Property::Label(
+                    appcore::keys::graph_pad_name(label),
+                )]);
                 b.add_css_class("wc-key");
                 b.add_css_class(
                     if label.chars().all(|ch| ch.is_ascii_digit() || ch == '.') {
@@ -465,10 +413,11 @@ impl GraphingPage {
     }
 
     fn add_equation(self: &Rc<Self>, text: &str) -> Option<Rc<Row>> {
-        if self.graph.borrow().len() >= graphing::graph::MAX_EQUATIONS {
+        if self.graph.borrow().len() >= session::MAX_EQUATIONS {
             self.ctx.toast("You can graph up to 14 equations");
             return None;
         }
+        let text = session::clamp_text(text);
         let id = self.graph.borrow_mut().add_equation(text);
         let color = self.next_color.get();
         self.next_color.set(color + 1);
@@ -480,7 +429,7 @@ impl GraphingPage {
             .build();
         let entry = gtk::Entry::builder()
             // Plenty for any real equation; also bounds parse/compile work.
-            .max_length(1000)
+            .max_length(session::MAX_EQUATION_CHARS as i32)
             .text(text)
             .placeholder_text("Enter an expression")
             .hexpand(true)
@@ -636,23 +585,17 @@ impl GraphingPage {
             colors.append(&b);
         }
         let styles = adw::ToggleGroup::new();
-        for (name, label) in [("solid", "Solid"), ("dot", "Dot"), ("dash", "Dash")] {
+        for (_, name, label) in session::STYLES {
             styles.add(adw::Toggle::builder().name(name).label(label).build());
         }
-        let current = self.graph.borrow().line_style(row.id);
-        styles.set_active_name(Some(match current {
-            graphing::equation::LineStyle::Dot => "dot",
-            graphing::equation::LineStyle::Dash => "dash",
-            _ => "solid",
-        }));
+        styles.set_active_name(Some(session::style_key(self.graph.borrow().line_style(row.id))));
         let (weak, id) = (Rc::downgrade(self), row.id);
         styles.connect_active_name_notify(move |t| {
             if let Some(p) = weak.upgrade() {
-                let style = match t.active_name().as_deref() {
-                    Some("dot") => graphing::equation::LineStyle::Dot,
-                    Some("dash") => graphing::equation::LineStyle::Dash,
-                    _ => graphing::equation::LineStyle::Solid,
-                };
+                let style = t
+                    .active_name()
+                    .and_then(|n| session::style_from_key(&n))
+                    .unwrap_or_default();
                 p.graph.borrow_mut().set_line_style(id, style);
                 p.graph_view.invalidate();
             }
@@ -782,59 +725,89 @@ impl GraphingPage {
         }
     }
 
+    /// Function analysis runs on a worker thread (it can take a while for
+    /// complicated expressions); the panel shows a spinner meanwhile.
     fn show_analysis(self: &Rc<Self>, id: EquationId) {
         while let Some(c) = self.analysis_body.first_child() {
             self.analysis_body.remove(&c);
         }
         let text = self.graph.borrow().text(id).unwrap_or_default().to_string();
         self.analysis_title.set_text(&text);
-        let kind = self.graph.borrow().kind(id);
-        let features = self.graph.borrow().analyze(id);
-        if let Some(msg) = features.analysis_error_string() {
-            let l = gtk::Label::new(Some(msg));
-            l.set_wrap(true);
-            l.set_xalign(0.0);
-            l.add_css_class("wc-empty");
-            self.analysis_body.append(&l);
-        } else {
-            for item in features.items() {
-                let card = gtk::Box::new(gtk::Orientation::Vertical, 2);
-                card.add_css_class("wc-kgf");
-                if !item.title.is_empty() {
-                    let t = gtk::Label::new(Some(&item.title));
-                    t.add_css_class("wc-kgf-title");
-                    t.set_xalign(0.0);
-                    card.append(&t);
-                }
-                for v in &item.display_items {
-                    let l = gtk::Label::new(Some(v));
-                    l.add_css_class(if item.is_text {
-                        "wc-kgf-text"
-                    } else {
-                        "wc-kgf-value"
-                    });
-                    l.set_xalign(0.0);
-                    l.set_wrap(true);
-                    l.set_selectable(true);
-                    card.append(&l);
-                }
-                for g in &item.grid_items {
-                    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-                    let a = gtk::Label::new(Some(&g.expression));
-                    a.add_css_class("wc-kgf-value");
-                    let b = gtk::Label::new(Some(&g.direction));
-                    b.add_css_class("wc-kgf-text");
-                    row.append(&a);
-                    row.append(&b);
-                    card.append(&row);
-                }
-                self.analysis_body.append(&card);
-            }
-        }
-        let _ = kind == Some(EquationKind::Function);
+        let busy = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        busy.append(&adw::Spinner::new());
+        let label = gtk::Label::new(Some("Analyzing…"));
+        label.add_css_class("wc-empty");
+        busy.append(&label);
+        self.analysis_body.append(&busy);
         self.side_stack.set_visible_child_name("analysis");
         if !self.wide.get() {
             self.mode_toggle.set_active_name(Some("equations"));
+        }
+        let seq = self.analysis_seq.get() + 1;
+        self.analysis_seq.set(seq);
+        let graph = self.graph.borrow().clone();
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let features = gio::spawn_blocking(move || graph.analyze(id)).await;
+            let Some(p) = weak.upgrade() else { return };
+            if p.analysis_seq.get() != seq {
+                return;
+            }
+            while let Some(c) = p.analysis_body.first_child() {
+                p.analysis_body.remove(&c);
+            }
+            match features {
+                Ok(f) => p.fill_analysis(&f),
+                Err(_) => p.analysis_message("Analysis failed for this function."),
+            }
+        });
+    }
+
+    fn analysis_message(&self, msg: &str) {
+        let l = gtk::Label::new(Some(msg));
+        l.set_wrap(true);
+        l.set_xalign(0.0);
+        l.add_css_class("wc-empty");
+        self.analysis_body.append(&l);
+    }
+
+    fn fill_analysis(&self, features: &graphing::analysis::KeyGraphFeatures) {
+        if let Some(msg) = features.analysis_error_string() {
+            self.analysis_message(msg);
+            return;
+        }
+        for item in features.items() {
+            let card = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            card.add_css_class("wc-kgf");
+            if !item.title.is_empty() {
+                let t = gtk::Label::new(Some(&item.title));
+                t.add_css_class("wc-kgf-title");
+                t.set_xalign(0.0);
+                card.append(&t);
+            }
+            for v in &item.display_items {
+                let l = gtk::Label::new(Some(v));
+                l.add_css_class(if item.is_text {
+                    "wc-kgf-text"
+                } else {
+                    "wc-kgf-value"
+                });
+                l.set_xalign(0.0);
+                l.set_wrap(true);
+                l.set_selectable(true);
+                card.append(&l);
+            }
+            for g in &item.grid_items {
+                let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+                let a = gtk::Label::new(Some(&g.expression));
+                a.add_css_class("wc-kgf-value");
+                let b = gtk::Label::new(Some(&g.direction));
+                b.add_css_class("wc-kgf-text");
+                row.append(&a);
+                row.append(&b);
+                card.append(&row);
+            }
+            self.analysis_body.append(&card);
         }
     }
 
@@ -907,17 +880,16 @@ impl GraphingPage {
             .css_classes(["wc-flyout"])
             .build();
 
+        // Weak both ways: the GraphView keeps this callback, and the entries'
+        // handlers reach the GraphView.
         let fill = {
-            let (xmin, xmax, ymin, ymax) = (xmin.clone(), xmax.clone(), ymin.clone(), ymax.clone());
+            let entries = [&xmin, &xmax, &ymin, &ymax].map(|e| e.downgrade());
             move |vp: &graphing::Viewport| {
                 let f = |v: f64| format!("{}", (v * 1000.0).round() / 1000.0);
-                for (e, v) in [
-                    (&xmin, vp.x_min),
-                    (&xmax, vp.x_max),
-                    (&ymin, vp.y_min),
-                    (&ymax, vp.y_max),
-                ] {
-                    if !e.has_focus() {
+                for (e, v) in entries.iter().zip([vp.x_min, vp.x_max, vp.y_min, vp.y_max]) {
+                    if let Some(e) = e.upgrade()
+                        && !e.has_focus()
+                    {
                         e.set_text(&f(v));
                     }
                 }
@@ -928,24 +900,24 @@ impl GraphingPage {
             let on_change = fill.clone();
             self.graph_view
                 .connect_viewport_changed(move |vp| on_change(vp));
-            let (gv, fill) = (self.graph_view.clone(), fill.clone());
+            let (gv, fill) = (self.graph_view.downgrade(), fill.clone());
             pop.connect_show(move |_| {
-                if let Some(vp) = gv.viewport() {
+                if let Some(vp) = gv.upgrade().and_then(|gv| gv.viewport()) {
                     fill(&vp);
                 }
             });
         }
         for e in [&xmin, &xmax, &ymin, &ymax] {
             let (gv, a, b, c, d) = (
-                self.graph_view.clone(),
+                self.graph_view.downgrade(),
                 xmin.downgrade(),
                 xmax.downgrade(),
                 ymin.downgrade(),
                 ymax.downgrade(),
             );
             e.connect_activate(move |_| {
-                let (Some(a), Some(b), Some(c), Some(d)) =
-                    (a.upgrade(), b.upgrade(), c.upgrade(), d.upgrade())
+                let (Some(gv), Some(a), Some(b), Some(c), Some(d)) =
+                    (gv.upgrade(), a.upgrade(), b.upgrade(), c.upgrade(), d.upgrade())
                 else {
                     return;
                 };
@@ -989,40 +961,18 @@ impl GraphingPage {
 
     fn restore(self: &Rc<Self>) {
         let saved: Vec<SavedEquation> = match std::env::var("GMNB_EQUATIONS") {
-            Ok(list) => list
-                .split(';')
-                .map(|t| SavedEquation {
-                    text: t.into(),
-                    ..Default::default()
-                })
-                .enumerate()
-                .map(|(i, mut e)| {
-                    e.color = i;
-                    e
-                })
-                .collect(),
-            Err(_) => self
-                .ctx
-                .store
-                .page_state("graphing")
-                .and_then(|v| serde_json::from_value(v).ok())
-                .unwrap_or_default(),
+            Ok(list) => session::from_list(&list),
+            Err(_) => session::restore(self.ctx.store.page_state("graphing")),
         };
         self.building.set(true);
-        for eq in saved.iter().filter(|e| !e.text.trim().is_empty()) {
+        for eq in &saved {
             if let Some(row) = self.add_equation(&eq.text) {
                 row.color.set(eq.color);
                 self.paint_swatch(&row);
                 let s = self.ctx.hub.scheme();
                 self.graph_view
                     .set_color(row.id, s.series[eq.color % s.series.len()]);
-                let style = match eq.style.as_str() {
-                    "dot" => Some(graphing::equation::LineStyle::Dot),
-                    "dash" => Some(graphing::equation::LineStyle::Dash),
-                    "solid" => Some(graphing::equation::LineStyle::Solid),
-                    _ => None,
-                };
-                if let Some(style) = style {
+                if let Some(style) = session::style_from_key(&eq.style) {
                     self.graph.borrow_mut().set_line_style(row.id, style);
                 }
                 if eq.hidden {
@@ -1031,8 +981,7 @@ impl GraphingPage {
                 }
             }
         }
-        self.next_color
-            .set(saved.iter().map(|e| e.color + 1).max().unwrap_or(0));
+        self.next_color.set(session::next_color(&saved));
         self.building.set(false);
         let rows: Vec<(EquationId, String)> = self
             .rows
@@ -1062,21 +1011,16 @@ impl Page for GraphingHandle {
         vec![self.0.mode_toggle.clone().upcast()]
     }
 
-    fn key_pressed(&self, key: gdk::Key, mods: gdk::ModifierType) -> bool {
+    fn key_pressed(&self, kp: &KeyPress) -> bool {
         let p = &self.0;
-        if mods.contains(gdk::ModifierType::CONTROL_MASK) {
-            match key {
-                gdk::Key::plus | gdk::Key::equal | gdk::Key::KP_Add => p.graph_view.zoom_in(),
-                gdk::Key::minus | gdk::Key::KP_Subtract => p.graph_view.zoom_out(),
-                gdk::Key::_0 | gdk::Key::KP_0 => p.graph_view.reset_view(),
-                gdk::Key::Home | gdk::Key::KP_Home => {
-                    p.mode_toggle.set_active_name(Some("graph"));
-                }
-                _ => return false,
-            }
-            return true;
+        match input::graph_shortcut(kp) {
+            Some(GraphAction::ZoomIn) => p.graph_view.zoom_in(),
+            Some(GraphAction::ZoomOut) => p.graph_view.zoom_out(),
+            Some(GraphAction::ResetView) => p.graph_view.reset_view(),
+            Some(GraphAction::ShowGraph) => p.mode_toggle.set_active_name(Some("graph")),
+            None => return false,
         }
-        false
+        true
     }
 
     fn copy(&self) -> Option<String> {
@@ -1106,12 +1050,7 @@ impl Page for GraphingHandle {
             .map(|r| SavedEquation {
                 text: r.entry.text().to_string(),
                 color: r.color.get(),
-                style: match graph.line_style(r.id) {
-                    graphing::equation::LineStyle::Dot => "dot",
-                    graphing::equation::LineStyle::Dash => "dash",
-                    _ => "solid",
-                }
-                .into(),
+                style: session::style_key(graph.line_style(r.id)).into(),
                 hidden: !graph.is_line_enabled(r.id),
             })
             .collect();

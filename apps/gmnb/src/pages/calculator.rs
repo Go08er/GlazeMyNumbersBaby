@@ -10,9 +10,11 @@ use calcvm::{
 };
 use gtk::{gdk, glib};
 
-use super::calc_keys::{self as keys, Action, KEY_HYP, KEY_SECOND, KEY_TRIG_SECOND};
+use appcore::KeyPress;
+use appcore::input::{self, Action};
+use appcore::keys::{self, KEY_HYP, KEY_SECOND, KEY_TRIG_SECOND};
 use super::{Ctx, Page};
-use crate::modes::ViewMode;
+use appcore::modes::ViewMode;
 use crate::widgets::bitflip::BitFlip;
 use crate::widgets::calc_panel::{CalcPanel, MemOp};
 use crate::widgets::display::{Change, Display};
@@ -737,18 +739,21 @@ impl CalculatorPage {
     fn relabel(&self) {
         let mode = self.vm.borrow().mode();
         if let Some(pad) = self.keypads.borrow().get(&CalcMode::Scientific) {
-            for (normal, _, l1, l2) in keys::SECOND_FLIPS {
-                pad.set_key_label(normal.id(), if self.second.get() { l2 } else { l1 });
+            let second = self.second.get();
+            for f in &keys::SECOND_FLIPS {
+                pad.set_key(f.normal.id(), f.label(second), f.tip(second));
             }
             if let Some(b) = pad.button(KEY_SECOND) {
                 set_on(&b, self.second.get());
             }
         }
         if let Some(trig) = self.trig_pad.borrow().as_ref() {
+            let (inv, hyp) = (self.trig_inv.get(), self.hyp.get());
             for t in keys::TRIG {
-                trig.set_key_label(
+                trig.set_key(
                     t.0.id(),
-                    &keys::trig_label(t.4, self.trig_inv.get(), self.hyp.get()),
+                    &keys::trig_label(t.4, inv, hyp),
+                    &keys::trig_tip(t.4, inv, hyp),
                 );
             }
             if let Some(b) = trig.button(KEY_TRIG_SECOND) {
@@ -759,9 +764,11 @@ impl CalculatorPage {
             }
         }
         if let Some(pad) = self.keypads.borrow().get(&CalcMode::Programmer) {
-            let ((_, l), (_, r)) = keys::shift_keys(self.vm.borrow().shift_mode());
-            pad.set_key_label(B::Lsh.id(), l);
-            pad.set_key_label(B::Rsh.id(), r);
+            let shift = self.vm.borrow().shift_mode();
+            let ((_, l), (_, r)) = keys::shift_keys(shift);
+            let (lt, rt) = keys::shift_tips(shift);
+            pad.set_key(B::Lsh.id(), l, lt);
+            pad.set_key(B::Rsh.id(), r, rt);
         }
         let _ = mode;
     }
@@ -913,8 +920,8 @@ impl CalculatorPage {
             B::ClearEntry if mode != CalcMode::Standard => B::Clear.id(),
             other => keys::SECOND_FLIPS
                 .iter()
-                .find(|f| f.1 == other)
-                .map(|f| f.0.id())
+                .find(|f| f.second == other)
+                .map(|f| f.normal.id())
                 .unwrap_or(other.id()),
         };
         if let Some(pad) = self.keypads.borrow().get(&mode).cloned()
@@ -938,6 +945,11 @@ fn set_on(b: &gtk::Button, on: bool) {
     } else {
         b.remove_css_class("wc-on");
     }
+    b.update_state(&[gtk::accessible::State::Pressed(if on {
+        gtk::AccessibleTristate::True
+    } else {
+        gtk::AccessibleTristate::False
+    })]);
 }
 
 /// Map a keypad id back to the `Button` enum.
@@ -1038,27 +1050,19 @@ impl Page for CalculatorHandle {
         ]
     }
 
-    fn key_pressed(&self, key: gdk::Key, mods: gdk::ModifierType) -> bool {
+    fn key_pressed(&self, kp: &KeyPress) -> bool {
         let p = &self.0;
-        if mods.contains(gdk::ModifierType::ALT_MASK) && p.vm.borrow().mode() == CalcMode::Standard
+        if p.vm.borrow().mode() == CalcMode::Standard
+            && let Some(on) = input::compact_shortcut(kp)
         {
-            match key {
-                gdk::Key::Up => {
-                    p.set_compact(true);
-                    return true;
-                }
-                gdk::Key::Down => {
-                    p.set_compact(false);
-                    return true;
-                }
-                _ => {}
-            }
+            p.set_compact(on);
+            return true;
         }
         let (mode, shift) = {
             let vm = p.vm.borrow();
             (vm.mode(), vm.shift_mode())
         };
-        let Some(action) = keys::shortcut(mode, key, mods, shift) else {
+        let Some(action) = input::shortcut(mode, kp, shift) else {
             return false;
         };
         match action {

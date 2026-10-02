@@ -8,7 +8,8 @@ members = [
     "crates/copypaste",
     "crates/graphing",
     "crates/calcvm",
-    "app",
+    "crates/appcore",
+    "apps/gmnb",
 ]
 
 [workspace.package]
@@ -27,6 +28,7 @@ datecalc = { path = "crates/datecalc" }
 copypaste = { path = "crates/copypaste" }
 graphing = { path = "crates/graphing" }
 calcvm = { path = "crates/calcvm" }
+appcore = { path = "crates/appcore" }
 
 # Arbitrary-precision math is painfully slow unoptimised; keep tests usable.
 [profile.dev]

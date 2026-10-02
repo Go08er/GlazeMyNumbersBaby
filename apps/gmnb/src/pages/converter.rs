@@ -4,26 +4,20 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use adw::prelude::*;
-use gtk::{gdk, gio, glib};
-use unitconv::{
-    Command, ConverterMode, NetworkAccessBehavior, UnitConverterViewModel, ViewModelConfig,
-};
+use gtk::{gio, glib};
+use unitconv::{ConverterMode, NetworkAccessBehavior, UnitConverterViewModel};
 
 use super::{Ctx, Page};
-use crate::modes::ViewMode;
 use crate::widgets::display::{Change, Display};
 use crate::widgets::icon::{PathIcon, paths};
-use crate::widgets::keypad::{Key, KeyKind, Keypad};
+use crate::widgets::keypad::Keypad;
 use crate::widgets::width_bin::WidthBin;
+use appcore::KeyPress;
+use appcore::input;
+use appcore::keys::{self, conv};
+use appcore::modes::ViewMode;
 
 const WIDE_PX: i32 = 700;
-
-// Keypad ids (converter commands aren't calculator buttons).
-const K_CLEAR: u32 = 1;
-const K_BACK: u32 = 2;
-const K_NEGATE: u32 = 3;
-const K_DECIMAL: u32 = 4;
-const K_DIGIT0: u32 = 10;
 
 struct Field {
     frame: gtk::Box,
@@ -94,51 +88,12 @@ fn field(label: &str) -> Field {
 
 /// Map GIO's view of connectivity onto the loader's behaviour enum.
 fn network_behavior(m: &gio::NetworkMonitor) -> NetworkAccessBehavior {
-    if !m.is_network_available() {
-        NetworkAccessBehavior::Offline
-    } else if m.is_network_metered() {
-        NetworkAccessBehavior::OptIn
-    } else {
-        NetworkAccessBehavior::Normal
-    }
-}
-
-fn converter_mode(mode: ViewMode) -> Option<ConverterMode> {
-    Some(match mode {
-        ViewMode::Currency => ConverterMode::Currency,
-        ViewMode::Volume => ConverterMode::Volume,
-        ViewMode::Length => ConverterMode::Length,
-        ViewMode::Weight => ConverterMode::Weight,
-        ViewMode::Temperature => ConverterMode::Temperature,
-        ViewMode::Energy => ConverterMode::Energy,
-        ViewMode::Area => ConverterMode::Area,
-        ViewMode::Speed => ConverterMode::Speed,
-        ViewMode::Time => ConverterMode::Time,
-        ViewMode::Power => ConverterMode::Power,
-        ViewMode::Data => ConverterMode::Data,
-        ViewMode::Pressure => ConverterMode::Pressure,
-        ViewMode::Angle => ConverterMode::Angle,
-        _ => return None,
-    })
+    appcore::converter::network_behavior(m.is_network_available(), m.is_network_metered())
 }
 
 impl ConverterPage {
     pub fn new(ctx: Rc<Ctx>) -> Rc<Self> {
-        let prefs = ctx
-            .store
-            .page_state("converter")
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default();
-        let config = ViewModelConfig {
-            currency_cache_path: Some(
-                glib::user_cache_dir()
-                    .join(crate::DATA_DIR)
-                    .join("currency.json"),
-            ),
-            preferences: prefs,
-            ..ViewModelConfig::default()
-        };
-        let vm = UnitConverterViewModel::new(config);
+        let vm = appcore::converter::view_model(crate::DATA_DIR, ctx.store.page_state("converter"));
 
         let f1 = field("Input unit");
         let f2 = field("Output unit");
@@ -197,48 +152,9 @@ impl ConverterPage {
         values.append(&supp);
 
         let keypad = Keypad::new();
-        keypad.add(
-            Key::new(K_CLEAR, "CE", KeyKind::Function).tip("Clear entry (Esc)"),
-            0,
-            0,
-            1,
-            2,
-        );
-        keypad.add(
-            Key::new(K_BACK, "⌫", KeyKind::Function)
-                .tip("Backspace")
-                .icon(paths::BACKSPACE),
-            0,
-            2,
-            1,
-            1,
-        );
-        for d in 1..=9u32 {
-            let r = 3 - ((d - 1) / 3) as i32;
-            let c = ((d - 1) % 3) as i32;
-            keypad.add(
-                Key::new(K_DIGIT0 + d, &d.to_string(), KeyKind::Number),
-                r,
-                c,
-                1,
-                1,
-            );
+        for (key, r, c, rs, cs) in keys::converter() {
+            keypad.add(key, r, c, rs, cs);
         }
-        keypad.add(
-            Key::new(K_NEGATE, "+/−", KeyKind::Number).tip("Positive negative (F9)"),
-            4,
-            0,
-            1,
-            1,
-        );
-        keypad.add(Key::new(K_DIGIT0, "0", KeyKind::Number), 4, 1, 1, 1);
-        keypad.add(
-            Key::new(K_DECIMAL, ".", KeyKind::Number).tip("Decimal separator"),
-            4,
-            2,
-            1,
-            1,
-        );
         keypad.set_vexpand(true);
         keypad.set_size_request(-1, 280);
 
@@ -408,15 +324,8 @@ impl ConverterPage {
     }
 
     fn press(self: &Rc<Self>, id: u32) {
-        let cmd = match id {
-            K_CLEAR => Command::Clear,
-            K_BACK => Command::Backspace,
-            K_NEGATE => Command::Negate,
-            K_DECIMAL => Command::Decimal,
-            d if (K_DIGIT0..K_DIGIT0 + 10).contains(&d) => {
-                Command::from_digit(d - K_DIGIT0).unwrap_or(Command::None)
-            }
-            _ => return,
+        let Some(cmd) = keys::converter_command(id) else {
+            return;
         };
         self.vm.borrow_mut().button_pressed(cmd);
         self.sync(Change::Typing, Change::Replace);
@@ -542,9 +451,9 @@ impl ConverterPage {
         }
 
         let negate = vm.current_category().is_some_and(|c| c.negate_visible());
-        self.keypad.set_key_sensitive(K_NEGATE, negate);
+        self.keypad.set_key_sensitive(conv::NEGATE, negate);
         self.keypad
-            .set_key_sensitive(K_DECIMAL, vm.is_decimal_enabled());
+            .set_key_sensitive(conv::DECIMAL, vm.is_decimal_enabled());
     }
 }
 
@@ -557,7 +466,7 @@ impl Page for ConverterHandle {
 
     fn activate(&self, mode: ViewMode) {
         let p = &self.0;
-        let Some(cm) = converter_mode(mode) else {
+        let Some(cm) = mode.converter_mode() else {
             return;
         };
         p.vm.borrow_mut().set_current_mode(cm);
@@ -572,19 +481,9 @@ impl Page for ConverterHandle {
         }
     }
 
-    fn key_pressed(&self, key: gdk::Key, mods: gdk::ModifierType) -> bool {
-        if mods.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK) {
+    fn key_pressed(&self, kp: &KeyPress) -> bool {
+        let Some(id) = input::converter_shortcut(kp) else {
             return false;
-        }
-        let id = match key {
-            gdk::Key::Escape | gdk::Key::Delete | gdk::Key::KP_Delete => K_CLEAR,
-            gdk::Key::BackSpace => K_BACK,
-            gdk::Key::F9 | gdk::Key::minus | gdk::Key::KP_Subtract => K_NEGATE,
-            gdk::Key::period | gdk::Key::comma | gdk::Key::KP_Decimal => K_DECIMAL,
-            k => match k.to_unicode().and_then(|c| c.to_digit(10)) {
-                Some(d) => K_DIGIT0 + d,
-                None => return false,
-            },
         };
         let p = &self.0;
         if let Some(b) = p.keypad.button(id)

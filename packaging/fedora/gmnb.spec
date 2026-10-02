@@ -46,7 +46,7 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/%{app_id}.desktop
 appstream-util validate-relax --nonet %{buildroot}%{_metainfodir}/%{app_id}.metainfo.xml
 
 %files
-%license LICENSE app/assets/fonts/OFL-Outfit.txt
+%license LICENSE apps/gmnb/assets/fonts/OFL-Outfit.txt
 %doc README.md
 %{_bindir}/gmnb
 %{_datadir}/applications/%{app_id}.desktop

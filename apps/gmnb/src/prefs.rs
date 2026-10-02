@@ -6,6 +6,7 @@ use adw::prelude::*;
 
 use std::cell::{Cell, RefCell};
 
+use crate::settings::Persist;
 use crate::theme::{PaletteId, Scheme, complement, rgba, to_hex};
 use crate::window::{Window, apply_theme_setting};
 
@@ -44,7 +45,7 @@ pub fn show(win: &Rc<Window>) {
                 .unwrap_or_else(|| "system".into());
             apply_theme_setting(&name);
             ctx.store.data.borrow_mut().theme = name;
-            ctx.store.save();
+            ctx.store.persist();
         });
     }
     page.add(&group);
@@ -180,7 +181,7 @@ pub fn show(win: &Rc<Window>) {
                     d.custom_primary = to_hex(p);
                     d.custom_secondary = to_hex(q);
                 }
-                ctx.store.save();
+                ctx.store.persist();
                 refresh();
             })
         };
@@ -218,7 +219,7 @@ pub fn show(win: &Rc<Window>) {
                 if id != ctx.hub.palette() {
                     ctx.hub.set_palette(id);
                     ctx.store.data.borrow_mut().palette = id.key().into();
-                    ctx.store.save();
+                    ctx.store.persist();
                     let s = ctx.hub.scheme();
                     let a = &ctx.aurora;
                     for (i, c) in s.blobs.iter().enumerate() {
@@ -249,7 +250,7 @@ pub fn show(win: &Rc<Window>) {
             anim.connect_active_notify(move |r| {
                 ctx.aurora.set_animated(r.is_active());
                 ctx.store.data.borrow_mut().animated_background = r.is_active();
-                ctx.store.save();
+                ctx.store.persist();
             });
         }
         group.add(&anim);
