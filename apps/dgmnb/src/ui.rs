@@ -50,7 +50,15 @@ pub enum Sense {
 #[derive(Clone, Debug)]
 pub struct Hit {
     pub id: Id,
+    /// The part the pointer can reach (the whole widget if `!visible`).
     pub rect: Rect,
+    /// The whole widget, including any part scrolled out of view.
+    pub full: Rect,
+    /// False when scrolled entirely out of view: still reachable by
+    /// keyboard and assistive technology, not by the pointer.
+    pub visible: bool,
+    /// The scroll area it lives in, and that area's viewport.
+    pub scroll: Option<(Id, Rect)>,
     pub sense: Sense,
     pub msg: Option<Msg>,
     pub focusable: bool,
@@ -79,6 +87,19 @@ impl Scroll {
     pub fn max(&self) -> f32 {
         (self.content - self.view).max(0.0)
     }
+
+    /// The offset that brings `full` (screen coordinates at the current
+    /// offset) inside `view`, scrolling as little as possible.
+    pub fn revealing(&self, full: Rect, view: Rect) -> f32 {
+        let margin = 4.0;
+        if full.y < view.y {
+            (self.offset - (view.y - full.y) - margin).max(0.0)
+        } else if full.bottom() > view.bottom() {
+            (self.offset + full.bottom() - view.bottom() + margin).min(self.max())
+        } else {
+            self.offset
+        }
+    }
 }
 
 /// One accessibility node (only collected while assistive tech listens).
@@ -96,6 +117,8 @@ pub struct Node {
     pub live: bool,
     pub clickable: bool,
     pub focusable: bool,
+    /// A scroll view whose content overflows (gets scroll actions).
+    pub scrollable: bool,
 }
 
 #[derive(Default)]
@@ -141,6 +164,8 @@ pub struct Frame<'a, 'p> {
     pub nodes: Option<Vec<Node>>,
     parents: Vec<Id>,
     clips: Vec<Option<Rect>>,
+    /// Open scroll areas: (id, viewport).
+    scroll_stack: Vec<(Id, Rect)>,
 }
 
 impl<'a, 'p> Frame<'a, 'p> {
@@ -164,6 +189,7 @@ impl<'a, 'p> Frame<'a, 'p> {
             nodes: a11y.then(Vec::new),
             parents: Vec::new(),
             clips: Vec::new(),
+            scroll_stack: Vec::new(),
         }
     }
 
@@ -196,17 +222,23 @@ impl<'a, 'p> Frame<'a, 'p> {
     // ------------------------------------------------------------ plumbing
 
     /// Record an interactive region (clipped to the current clip).
+    /// Widgets clipped out of a scroll area are recorded too (as invisible)
+    /// so keyboard focus and accessibility actions can still reach them.
     pub fn hit(&mut self, id: Id, rect: Rect, sense: Sense, msg: Option<Msg>, focusable: bool) {
-        let rect = match self.cv.clip() {
-            Some(c) => match rect.intersect(&c) {
-                Some(r) => r,
-                None => return,
-            },
-            None => rect,
+        let shown = match self.cv.clip() {
+            Some(c) => rect.intersect(&c),
+            None => Some(rect),
         };
+        let scroll = self.scroll_stack.last().copied();
+        if shown.is_none() && scroll.is_none() {
+            return; // clipped by something that can't scroll it into view
+        }
         self.hits.push(Hit {
             id,
-            rect,
+            rect: shown.unwrap_or(rect),
+            full: rect,
+            visible: shown.is_some(),
+            scroll,
             sense,
             msg,
             focusable,
@@ -231,6 +263,7 @@ impl<'a, 'p> Frame<'a, 'p> {
             live: false,
             clickable: false,
             focusable: false,
+            scrollable: false,
         });
         nodes.last_mut()
     }
@@ -680,11 +713,20 @@ impl<'a, 'p> Frame<'a, 'p> {
         let s = self.scrolls.entry(id).or_default();
         s.view = r.h;
         s.offset = s.offset.clamp(0.0, s.max());
-        s.offset
+        let offset = s.offset;
+        let scrollable = s.max() > 0.0;
+        self.group(id, Role::ScrollView, "", r);
+        if let Some(n) = self.nodes.as_mut().and_then(|v| v.last_mut()) {
+            n.scrollable = scrollable;
+        }
+        self.scroll_stack.push((id, r));
+        offset
     }
 
     /// End a scroll area whose content was `content` tall.
     pub fn scroll_end(&mut self, id: Id, r: Rect, content: f32) {
+        self.scroll_stack.pop();
+        self.end_group();
         self.pop_clip();
         let t = self.t;
         let s = self.scrolls.entry(id).or_default();

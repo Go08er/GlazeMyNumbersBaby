@@ -2,7 +2,9 @@
 //! KeyGraphFeaturesPanel + GraphingSettings + GraphingNumPad).
 
 use std::collections::BTreeMap;
-use std::time::Instant;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use appcore::KeyPress;
 use appcore::graph::{self as session, SavedEquation};
@@ -26,6 +28,9 @@ pub const WIDE: f32 = 760.0;
 const SIDE_W: f32 = 340.0;
 const PAD_H: f32 = 214.0;
 const INLINE_PLOT_MS: f64 = 12.0;
+/// Re-analysis waits this long after the last edit (typing `sin(x)` doesn't
+/// start six analyses).
+const REANALYZE_AFTER: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Msg {
@@ -59,6 +64,7 @@ struct Row {
 enum Side {
     Equations,
     Analysis {
+        id: EquationId,
         seq: u64,
         title: String,
         result: Option<Box<KeyGraphFeatures>>,
@@ -81,7 +87,13 @@ pub struct GraphPage {
     dirty: bool,
     busy: bool,
     again: bool,
-    seq: u64,
+    plot_seq: u64,
+    /// Cancels the running plot job when a newer one is needed.
+    plot_cancel: Option<Arc<AtomicBool>>,
+    analysis_seq: u64,
+    analysis_cancel: Option<Arc<AtomicBool>>,
+    /// The analysed equation changed: re-run analysis at this time.
+    reanalyze_at: Option<Instant>,
     trace_on: bool,
     pointer: Option<(f32, f32)>,
     trace: Option<(EquationId, TracePoint)>,
@@ -95,6 +107,7 @@ pub struct GraphPage {
     vars: BTreeMap<String, TextEdit>,
     /// The equation field the keypad types into.
     last_field: Option<ui::Id>,
+    /// Delivers worker results; always set in the app (tests plot inline).
     proxy: Option<EventLoopProxy<UserEvent>>,
     drag_vp: Option<Viewport>,
 }
@@ -124,7 +137,16 @@ fn canvas_id() -> ui::Id {
 }
 
 impl GraphPage {
-    pub fn new(saved: Vec<SavedEquation>) -> GraphPage {
+    pub fn new(saved: Vec<SavedEquation>, proxy: EventLoopProxy<UserEvent>) -> GraphPage {
+        Self::build(saved, Some(proxy))
+    }
+
+    #[cfg(test)]
+    pub fn for_test(saved: Vec<SavedEquation>) -> GraphPage {
+        Self::build(saved, None)
+    }
+
+    fn build(saved: Vec<SavedEquation>, proxy: Option<EventLoopProxy<UserEvent>>) -> GraphPage {
         let mut page = GraphPage {
             graph: Graph::new(),
             rows: Vec::new(),
@@ -135,7 +157,11 @@ impl GraphPage {
             dirty: true,
             busy: false,
             again: false,
-            seq: 0,
+            plot_seq: 0,
+            plot_cancel: None,
+            analysis_seq: 0,
+            analysis_cancel: None,
+            reanalyze_at: None,
             trace_on: false,
             pointer: None,
             trace: None,
@@ -148,7 +174,7 @@ impl GraphPage {
             canvas: Rect::default(),
             vars: BTreeMap::new(),
             last_field: None,
-            proxy: None,
+            proxy,
             drag_vp: None,
         };
         for eq in &saved {
@@ -270,6 +296,7 @@ impl GraphPage {
             self.graph.set_equation_text(id, &text);
             self.dirty = true;
             self.sync_vars();
+            self.analysis_inputs_changed();
             return;
         }
         let var = self
@@ -292,6 +319,7 @@ impl GraphPage {
             });
             self.graph.set_variable(&name, x);
             self.dirty = true;
+            self.analysis_inputs_changed();
         }
     }
 
@@ -376,7 +404,6 @@ impl GraphPage {
     // ------------------------------------------------------------ messages
 
     pub fn update(&mut self, m: Msg, cx: &mut Cx) {
-        self.proxy = Some(cx.proxy.clone());
         match m {
             Msg::Add => match self.add("") {
                 Some(id) => *cx.focus = Some(eq_field(id)),
@@ -390,6 +417,7 @@ impl GraphPage {
                 if self.rows.is_empty() {
                     self.add("");
                 }
+                self.analysis_inputs_changed();
             }
             Msg::Toggle(id) => {
                 let on = !self.graph.is_line_enabled(id);
@@ -397,26 +425,13 @@ impl GraphPage {
                 self.dirty = true;
             }
             Msg::Analyze(id) => {
-                self.seq += 1;
-                let seq = self.seq;
-                let title = self.graph.text(id).unwrap_or_default().to_string();
-                self.side = Side::Analysis {
-                    seq,
-                    title,
-                    result: None,
-                };
                 self.show_graph = false;
-                let graph = self.graph.clone();
-                let proxy = cx.proxy.clone();
-                // Analysis can take a moment for complicated expressions.
-                let _ = std::thread::Builder::new()
-                    .name("analysis".into())
-                    .spawn(move || {
-                        let _ =
-                            proxy.send_event(UserEvent::Analysis(seq, Box::new(graph.analyze(id))));
-                    });
+                self.start_analysis(id);
             }
-            Msg::Back => self.side = Side::Equations,
+            Msg::Back => {
+                self.cancel_analysis();
+                self.side = Side::Equations;
+            }
             Msg::StylePopup(p) => self.popup = p.map(Popup::Style),
             Msg::Color(id, c) => {
                 if let Some(r) = self.rows.iter_mut().find(|r| r.id == id) {
@@ -437,6 +452,7 @@ impl GraphPage {
             Msg::Units(u) => {
                 self.graph.set_trig_unit(u);
                 self.dirty = true;
+                self.analysis_inputs_changed();
             }
             Msg::Thickness(i) => {
                 self.line_width = graphing::graph::LINE_WIDTHS[i.min(3)];
@@ -532,6 +548,7 @@ impl GraphPage {
                 e.set_text(&format_value(value));
             }
             self.dirty = true;
+            self.analysis_inputs_changed();
         }
     }
 
@@ -539,7 +556,7 @@ impl GraphPage {
         let top = hits
             .iter()
             .rev()
-            .find(|h| h.rect.contains(x, y) && h.sense != Sense::Scroll);
+            .find(|h| h.visible && h.rect.contains(x, y) && h.sense != Sense::Scroll);
         if !top.is_some_and(|h| h.id == canvas_id()) {
             return false;
         }
@@ -550,6 +567,20 @@ impl GraphPage {
                 (y - c.y) as f64,
                 dy as f64 / 48.0 * graphing::viewport::WHEEL_DELTA,
             );
+            self.dirty = true;
+        }
+        true
+    }
+
+    /// Two-finger pinch over the canvas: zoom about (x, y) by `factor`
+    /// (below 1 zooms in). True if it applied.
+    pub fn pinch(&mut self, x: f32, y: f32, factor: f64) -> bool {
+        let c = self.canvas;
+        if !c.contains(x, y) || !factor.is_finite() || factor <= 0.0 {
+            return false;
+        }
+        if let Some(vp) = self.vp.as_mut() {
+            vp.zoom_about_pixel((x - c.x) as f64, (y - c.y) as f64, factor);
             self.dirty = true;
         }
         true
@@ -599,18 +630,102 @@ impl GraphPage {
 
     // ------------------------------------------------------------ async results
 
+    /// Analyse `id` on a worker, cancelling any analysis still running.
+    fn start_analysis(&mut self, id: EquationId) {
+        self.cancel_analysis();
+        self.analysis_seq += 1;
+        let seq = self.analysis_seq;
+        let title = self.graph.text(id).unwrap_or_default().to_string();
+        self.side = Side::Analysis {
+            id,
+            seq,
+            title,
+            result: None,
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.analysis_cancel = Some(cancel.clone());
+        let graph = self.graph.clone();
+        let Some(proxy) = self.proxy.clone() else {
+            return;
+        };
+        let _ = std::thread::Builder::new()
+            .name("analysis".into())
+            .spawn(move || {
+                if let Some(f) = graph.analyze_cancellable(id, &cancel) {
+                    let _ = proxy.send_event(UserEvent::Analysis(seq, Box::new(f)));
+                }
+            });
+    }
+
+    fn cancel_analysis(&mut self) {
+        if let Some(c) = self.analysis_cancel.take() {
+            c.store(true, Ordering::Relaxed);
+        }
+        self.reanalyze_at = None;
+    }
+
+    /// Something the open analysis depends on changed (its equation, a
+    /// variable, the trig unit): drop the shown result now and re-analyse
+    /// shortly, or go back to the list if the equation is gone.
+    fn analysis_inputs_changed(&mut self) {
+        let Side::Analysis {
+            id, result, title, ..
+        } = &mut self.side
+        else {
+            return;
+        };
+        let id = *id;
+        if !self.rows.iter().any(|r| r.id == id) {
+            self.cancel_analysis();
+            self.side = Side::Equations;
+            return;
+        }
+        *result = None;
+        *title = self.graph.text(id).unwrap_or_default().to_string();
+        if let Some(c) = self.analysis_cancel.take() {
+            c.store(true, Ordering::Relaxed);
+        }
+        self.analysis_seq += 1; // a result already in flight is now stale
+        self.reanalyze_at = Some(Instant::now() + REANALYZE_AFTER);
+    }
+
+    /// When the page next needs waking (pending re-analysis).
+    pub fn deadline(&self) -> Option<Instant> {
+        self.reanalyze_at
+    }
+
+    /// Timer tick; true if something changed.
+    pub fn tick(&mut self, now: Instant) -> bool {
+        match (self.reanalyze_at, &self.side) {
+            (Some(t), Side::Analysis { id, .. }) if now >= t => {
+                let id = *id;
+                self.start_analysis(id);
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn analysis_done(&mut self, seq: u64, features: KeyGraphFeatures) {
         if let Side::Analysis { seq: s, result, .. } = &mut self.side
             && *s == seq
+            && self.analysis_seq == seq
         {
             *result = Some(Box::new(features));
         }
     }
 
-    pub fn plot_done(&mut self, _seq: u64, plots: Vec<EquationPlot>, ms: f64, _cx: &mut Cx) {
+    /// A worker plot finished (`None`: it was cancelled for a newer one).
+    pub fn plot_done(&mut self, seq: u64, plots: Option<Vec<EquationPlot>>, ms: f64, _cx: &mut Cx) {
+        if seq != self.plot_seq {
+            return;
+        }
         self.busy = false;
-        self.plot_ms = ms;
-        self.plots = plots;
+        self.plot_cancel = None;
+        if let Some(plots) = plots {
+            self.plot_ms = ms;
+            self.plots = plots;
+        }
         if self.again {
             self.again = false;
             self.dirty = true;
@@ -623,7 +738,7 @@ impl GraphPage {
         if !self.dirty {
             return;
         }
-        if self.plot_ms < INLINE_PLOT_MS {
+        if self.plot_ms < INLINE_PLOT_MS || self.proxy.is_none() {
             self.dirty = false;
             let t = Instant::now();
             self.plots = self.graph.plot_parallel(&vp);
@@ -633,26 +748,31 @@ impl GraphPage {
         }
         // Heavy graph: plot on a worker and keep drawing the last result
         // (curves are in graph coordinates, so they still line up while
-        // panning). Requests made meanwhile coalesce into one re-plot.
-        let Some(proxy) = self.proxy.clone() else {
-            self.plot_ms = 0.0;
-            return;
-        };
+        // panning). A newer request cancels the running job, which then
+        // reports back so the latest state is plotted once.
         self.dirty = false;
         if self.busy {
             self.again = true;
+            if let Some(c) = &self.plot_cancel {
+                c.store(true, Ordering::Relaxed);
+            }
             return;
         }
         self.busy = true;
-        self.seq += 1;
-        let (seq, graph) = (self.seq, self.graph.clone());
+        self.plot_seq += 1;
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.plot_cancel = Some(cancel.clone());
+        let (seq, graph) = (self.plot_seq, self.graph.clone());
+        let Some(proxy) = self.proxy.clone() else {
+            return;
+        };
         let _ = std::thread::Builder::new()
             .name("plot".into())
             .spawn(move || {
                 let t = Instant::now();
-                let plots = graph.plot_parallel(&vp);
-                let _ =
-                    proxy.send_event(UserEvent::Plot(seq, plots, t.elapsed().as_secs_f64() * 1e3));
+                let plots = graph.plot_parallel_cancellable(&vp, &cancel);
+                let ms = t.elapsed().as_secs_f64() * 1e3;
+                let _ = proxy.send_event(UserEvent::Plot(seq, plots, ms));
             });
     }
 

@@ -389,17 +389,19 @@ impl CalcPage {
             t.fg,
             Align::End,
         );
-        // Right-click menu (copy / paste) and the result announcer.
+        // Right-click menu (copy / paste). The display always reports what it
+        // shows (AccessKit names a label from its value); results are spoken
+        // through a separate live node that changes only when one arrives, so
+        // typing digits isn't read out.
         let did = id("display");
         f.hit(did, r, crate::ui::Sense::Click, None, false);
-        if let Some(n) = f.node(
-            did,
-            accesskit::Role::Label,
-            &format!("Display is {shown}"),
-            r,
-        ) {
-            n.live = true;
+        let current = format!("Display is {shown}");
+        if let Some(n) = f.node(did, accesskit::Role::Label, &current, r) {
+            n.value = Some(current.clone());
+        }
+        if let Some(n) = f.node(id("announcer"), accesskit::Role::Status, &self.announce, r) {
             n.value = Some(self.announce.clone());
+            n.live = true;
         }
         if !e.is_empty()
             && let Some(n) = f.node(

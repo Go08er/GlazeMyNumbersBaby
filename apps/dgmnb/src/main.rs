@@ -51,24 +51,34 @@ fn main() {
     };
     let proxy = event_loop.create_proxy();
     if desktop.portal {
-        // Follow light/dark and accent changes live (one sleeping thread).
+        // Follow light/dark and accent changes live (one sleeping thread). If
+        // the bus connection drops, reconnect with a growing pause.
         let proxy = proxy.clone();
         let _ = std::thread::Builder::new()
             .name("portal".into())
             .stack_size(64 * 1024)
             .spawn(move || {
                 let mut state = desktop;
-                let _ = dbus::watch_portal_settings(|ns, key, value| {
-                    if ns != "org.freedesktop.appearance" {
-                        return;
+                let mut pause = Duration::from_secs(2);
+                loop {
+                    let started = std::time::Instant::now();
+                    let _ = dbus::watch_portal_settings(|ns, key, value| {
+                        if ns != "org.freedesktop.appearance" {
+                            return;
+                        }
+                        match key {
+                            "color-scheme" => state.dark = dbus::prefers_dark(value),
+                            "accent-color" => state.accent = dbus::accent_color(value),
+                            _ => return,
+                        }
+                        let _ = proxy.send_event(UserEvent::Desktop(state));
+                    });
+                    if started.elapsed() > Duration::from_secs(60) {
+                        pause = Duration::from_secs(2);
                     }
-                    match key {
-                        "color-scheme" => state.dark = dbus::prefers_dark(value),
-                        "accent-color" => state.accent = dbus::accent_color(value),
-                        _ => return,
-                    }
-                    let _ = proxy.send_event(UserEvent::Desktop(state));
-                });
+                    std::thread::sleep(pause);
+                    pause = (pause * 2).min(Duration::from_secs(120));
+                }
             });
     }
     let mut app = App::new(proxy, desktop);

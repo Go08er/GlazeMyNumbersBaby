@@ -4,13 +4,17 @@
 //! Berger), reworked to offer any set of MIME types and to use the same
 //! smithay-client-toolkit version as winit. It runs a worker thread with
 //! its own event queue on winit's Wayland connection; pipes are serviced on
-//! short-lived threads so the worker never blocks.
+//! short-lived threads (with deadlines) so the worker never blocks.
+//!
+//! The worker borrows winit's `wl_display`, so it must be shut down — and
+//! all its Wayland objects destroyed — before that display goes away:
+//! [`Clipboard::shutdown`] does that and waits (briefly) for it.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
 use std::sync::Arc;
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use sctk::data_device_manager::data_device::{DataDevice, DataDeviceHandler};
@@ -37,6 +41,8 @@ use sctk::{
 };
 use wayland_backend::client::{Backend, ObjectId};
 
+use super::{MAX_PASTE, pipe};
+
 const TEXT_MIMES: [&str; 4] = [
     "text/plain;charset=utf-8",
     "UTF8_STRING",
@@ -44,31 +50,59 @@ const TEXT_MIMES: [&str; 4] = [
     "STRING",
 ];
 
-/// Largest clipboard text we'll read.
-const MAX_PASTE: u64 = 1 << 20;
+/// How long closing the app waits for the worker to let go of the display.
+const SHUTDOWN_WAIT: Duration = Duration::from_millis(500);
 
 enum Command {
     Store(Vec<(String, Arc<[u8]>)>),
     LoadText(Sender<Option<String>>),
+    Exit,
 }
 
 pub struct Clipboard {
     tx: channel::Sender<Command>,
+    worker: Option<(JoinHandle<()>, Receiver<()>)>,
 }
 
 impl Clipboard {
     /// # Safety
-    /// `display` must be the live `wl_display` of winit's connection.
+    /// `display` must be the live `wl_display` of winit's connection, and
+    /// [`Clipboard::shutdown`] (or drop) must run before it is closed.
     pub unsafe fn new(display: *mut std::ffi::c_void) -> Option<Clipboard> {
         // SAFETY: forwarded from the caller.
         let backend = unsafe { Backend::from_foreign_display(display.cast()) };
         let conn = Connection::from_backend(backend);
         let (tx, rx) = channel::channel();
-        std::thread::Builder::new()
+        let (done_tx, done_rx) = mpsc::channel();
+        let handle = std::thread::Builder::new()
             .name("clipboard".into())
-            .spawn(move || worker(conn, rx))
+            .spawn(move || {
+                worker(conn, rx);
+                // Everything Wayland-side has been dropped by now.
+                let _ = done_tx.send(());
+            })
             .ok()?;
-        Some(Clipboard { tx })
+        Some(Clipboard {
+            tx,
+            worker: Some((handle, done_rx)),
+        })
+    }
+
+    /// Stop the worker and wait for it to release the display.
+    pub fn shutdown(&mut self) {
+        let Some((handle, done)) = self.worker.take() else {
+            return;
+        };
+        let _ = self.tx.send(Command::Exit);
+        match done.recv_timeout(SHUTDOWN_WAIT) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = handle.join();
+            }
+            // Stuck on a dead compositor: don't hang closing the window.
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                eprintln!("dgmnb: clipboard worker did not stop in time");
+            }
+        }
     }
 
     pub fn copy_text(&self, text: &str) {
@@ -105,18 +139,22 @@ fn worker(conn: Connection, rx: Channel<Command>) {
         return;
     };
     let handle = event_loop.handle();
-    let inserted = handle.insert_source(rx, |event, _, state: &mut State| {
-        if let channel::Event::Msg(cmd) = event {
-            match cmd {
-                Command::Store(offers) => state.store(offers),
-                Command::LoadText(reply) => state.load_text(reply),
-            }
-        }
+    let inserted = handle.insert_source(rx, |event, _, state: &mut State| match event {
+        channel::Event::Msg(Command::Store(offers)) => state.store(offers),
+        channel::Event::Msg(Command::LoadText(reply)) => state.load_text(reply),
+        // Exit asked for, or every sender gone: stop.
+        channel::Event::Msg(Command::Exit) | channel::Event::Closed => state.exit = true,
     });
     if inserted.is_err() || WaylandSource::new(conn, queue).insert(handle).is_err() {
         return;
     }
-    while event_loop.dispatch(None, &mut state).is_ok() {}
+    while !state.exit {
+        if event_loop.dispatch(None, &mut state).is_err() {
+            break;
+        }
+    }
+    // `state` (seats, devices, sources) and the event loop holding the queue
+    // drop here, destroying their Wayland objects while the display lives.
 }
 
 #[derive(Default)]
@@ -139,6 +177,7 @@ struct State {
     qh: QueueHandle<State>,
     sources: Vec<CopyPasteSource>,
     offers: Vec<(String, Arc<[u8]>)>,
+    exit: bool,
 }
 
 impl State {
@@ -159,6 +198,7 @@ impl State {
             qh: qh.clone(),
             sources: Vec::new(),
             offers: Vec::new(),
+            exit: false,
         })
     }
 
@@ -199,10 +239,8 @@ impl State {
             return;
         };
         std::thread::spawn(move || {
-            let mut file = std::fs::File::from(OwnedFd::from(pipe));
-            let mut buf = Vec::new();
-            let ok = (&mut file).take(MAX_PASTE).read_to_end(&mut buf).is_ok();
-            let text = ok.then(|| String::from_utf8_lossy(&buf).replace("\r\n", "\n"));
+            let text = pipe::read_all(OwnedFd::from(pipe), MAX_PASTE)
+                .map(|buf| String::from_utf8_lossy(&buf).replace("\r\n", "\n"));
             let _ = reply.send(text);
         });
     }
@@ -212,8 +250,7 @@ impl State {
             return;
         };
         std::thread::spawn(move || {
-            let mut file = std::fs::File::from(OwnedFd::from(pipe));
-            let _ = file.write_all(&data);
+            pipe::write_all(OwnedFd::from(pipe), &data);
         });
     }
 }
@@ -415,3 +452,52 @@ delegate_seat!(State);
 delegate_pointer!(State);
 delegate_data_device!(State);
 delegate_registry!(State);
+
+impl Drop for Clipboard {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn clipboard_threads() -> usize {
+        std::fs::read_dir("/proc/self/task")
+            .map(|d| {
+                d.filter_map(|t| std::fs::read_to_string(t.ok()?.path().join("comm")).ok())
+                    .filter(|n| n.trim() == "clipboard")
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    /// The worker must be gone (and its Wayland objects destroyed) before
+    /// the display connection it borrows is dropped. Needs a compositor:
+    /// skipped unless WAYLAND_DISPLAY points at one.
+    #[test]
+    fn worker_stops_before_the_display_goes() {
+        let Ok(conn) = Connection::connect_to_env() else {
+            eprintln!("no Wayland compositor; skipped");
+            return;
+        };
+        let before = clipboard_threads();
+        let display = conn.backend().display_ptr();
+        // SAFETY: `conn` outlives the clipboard; we shut it down first.
+        let mut clip = unsafe { Clipboard::new(display.cast()) }.expect("clipboard");
+        clip.copy_text("probe");
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(clipboard_threads(), before + 1);
+        clip.shutdown();
+        assert_eq!(
+            clipboard_threads(),
+            before,
+            "worker still running after shutdown"
+        );
+        drop(clip);
+        conn.roundtrip()
+            .expect("display still healthy after shutdown");
+        drop(conn);
+    }
+}

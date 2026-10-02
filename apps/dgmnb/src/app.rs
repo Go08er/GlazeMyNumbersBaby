@@ -110,6 +110,7 @@ pub enum Msg {
     Theme(&'static str),
     SystemAccent(bool),
     CopyLink(&'static str),
+    OpenLink(&'static str),
     Compact(bool),
     Minimize,
     Maximize,
@@ -128,7 +129,10 @@ pub enum UserEvent {
     Desktop(Desktop),
     Currency(Box<Result<unitconv::CurrencySnapshot, unitconv::CurrencyError>>),
     Analysis(u64, Box<graphing::analysis::KeyGraphFeatures>),
-    Plot(u64, Vec<graphing::graph::EquationPlot>, f64),
+    /// A worker plot: `None` if it was cancelled for a newer one.
+    Plot(u64, Option<Vec<graphing::graph::EquationPlot>>, f64),
+    /// The portal couldn't open a link.
+    OpenFailed(&'static str),
 }
 
 impl From<accesskit_winit::Event> for UserEvent {
@@ -154,7 +158,6 @@ pub fn plain(s: &str) -> String {
 pub struct Cx<'a> {
     pub toasts: &'a mut Vec<(String, Instant)>,
     pub clipboard: Option<&'a Clipboard>,
-    pub proxy: &'a EventLoopProxy<UserEvent>,
     pub wide: bool,
     /// Move keyboard focus (e.g. to a new equation field).
     pub focus: &'a mut Option<ui::Id>,
@@ -215,6 +218,9 @@ pub struct App {
     mods: ModifiersState,
     last_click: Option<(Instant, ui::Id)>,
     drag: Option<(ui::Id, f32, f32)>,
+    /// Touch points (id → position) and the last two-finger spread.
+    touches: HashMap<u64, (f32, f32)>,
+    pinch: Option<f32>,
     /// The text field the input method is enabled for.
     ime: Option<Rect>,
     store: Store,
@@ -290,6 +296,8 @@ impl App {
             mods: ModifiersState::empty(),
             last_click: None,
             drag: None,
+            touches: HashMap::new(),
+            pinch: None,
             ime: None,
             store,
             desktop,
@@ -388,7 +396,8 @@ impl App {
                     Some(list) => appcore::graph::from_list(&list),
                     None => appcore::graph::restore(store.page_state("graphing")),
                 };
-                self.graph.get_or_insert_with(|| GraphPage::new(eqs));
+                let proxy = self.proxy.clone();
+                self.graph.get_or_insert_with(|| GraphPage::new(eqs, proxy));
             }
         }
         self.store.data.borrow_mut().mode = mode.key().into();
@@ -456,7 +465,6 @@ impl App {
             Cx {
                 toasts: &mut self.toasts,
                 clipboard: self.clipboard.as_ref(),
-                proxy: &self.proxy,
                 wide,
                 focus: &mut self.input.focus,
             },
@@ -486,6 +494,17 @@ impl App {
                 self.store.data.borrow_mut().system_accent = on;
                 self.retheme();
                 persist(&self.store);
+            }
+            Msg::OpenLink(url) => {
+                // Ask the desktop via the OpenURI portal, off the UI thread.
+                let proxy = self.proxy.clone();
+                let _ = std::thread::Builder::new()
+                    .name("open-uri".into())
+                    .spawn(move || {
+                        if appcore::dbus::open_uri(url, Duration::from_secs(5)).is_err() {
+                            let _ = proxy.send_event(UserEvent::OpenFailed(url));
+                        }
+                    });
             }
             Msg::CopyLink(url) => {
                 let (mut cx, ..) = self.cx_parts();
@@ -736,7 +755,61 @@ impl App {
         self.hits
             .iter()
             .rev()
-            .find(|h| h.sense != Sense::Scroll && h.rect.contains(x, y))
+            .find(|h| h.visible && h.sense != Sense::Scroll && h.rect.contains(x, y))
+    }
+
+    /// Distance between the first two touch points, and their midpoint.
+    fn spread(&self) -> (f32, (f32, f32)) {
+        let mut it = self.touches.values();
+        match (it.next(), it.next()) {
+            (Some(&(ax, ay)), Some(&(bx, by))) => (
+                ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt(),
+                ((ax + bx) / 2.0, (ay + by) / 2.0),
+            ),
+            _ => (0.0, (0.0, 0.0)),
+        }
+    }
+
+    /// Scroll `id` into view within its scroll area (keyboard / AT focus).
+    fn reveal(&mut self, id: ui::Id) {
+        let Some(h) = self.hits.iter().rev().find(|h| h.id == id) else {
+            return;
+        };
+        let (Some((sid, view)), full) = (h.scroll, h.full) else {
+            return;
+        };
+        if let Some(s) = self.scrolls.get_mut(&sid) {
+            s.offset = s.revealing(full, view);
+        }
+        self.redraw();
+    }
+
+    /// Scroll an area by a fraction of its height (PageUp/PageDown, AT).
+    fn scroll_by(&mut self, sid: ui::Id, pages: f32) {
+        if let Some(s) = self.scrolls.get_mut(&sid) {
+            s.offset = (s.offset + pages * s.view * 0.85).clamp(0.0, s.max());
+            self.redraw();
+        }
+    }
+
+    /// The scroll area for keyboard scrolling: the focused widget's, else the
+    /// one under the pointer.
+    fn scroll_target(&self) -> Option<ui::Id> {
+        let focused = self.input.focus.and_then(|f| {
+            self.hits
+                .iter()
+                .rev()
+                .find(|h| h.id == f)
+                .and_then(|h| h.scroll.map(|s| s.0))
+        });
+        focused.or_else(|| {
+            let (x, y) = self.input.pointer?;
+            self.hits
+                .iter()
+                .rev()
+                .find(|h| h.sense == Sense::Scroll && h.rect.contains(x, y))
+                .map(|h| h.id)
+        })
     }
 
     fn update_hover(&mut self) {
@@ -1165,6 +1238,14 @@ impl App {
             }
             _ => {}
         }
+        if let Key::Named(n @ (Named::PageUp | Named::PageDown)) = kp.key
+            && !kp.ctrl
+            && !kp.alt
+            && let Some(sid) = self.scroll_target()
+        {
+            self.scroll_by(sid, if n == Named::PageDown { 1.0 } else { -1.0 });
+            return;
+        }
         if let Some(a) = input::window_shortcut(&kp) {
             match a {
                 WindowAction::SwitchMode(m) => self.set_mode(m),
@@ -1243,6 +1324,7 @@ impl App {
         };
         self.input.focus = Some(ids[next]);
         self.input.focus_visible = true;
+        self.reveal(ids[next]);
         self.sync_ime();
         self.redraw();
     }
@@ -1305,8 +1387,12 @@ impl App {
             accesskit::Action::Focus => {
                 self.input.focus = Some(target);
                 self.input.focus_visible = true;
+                self.reveal(target);
                 self.sync_ime();
             }
+            accesskit::Action::ScrollIntoView => self.reveal(target),
+            accesskit::Action::ScrollDown => self.scroll_by(target, 1.0),
+            accesskit::Action::ScrollUp => self.scroll_by(target, -1.0),
             _ => {}
         }
         self.redraw();
@@ -1392,16 +1478,8 @@ impl ApplicationHandler<UserEvent> for App {
                 return;
             }
         };
-        {
-            use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
-            if let Ok(h) = window.display_handle()
-                && let RawDisplayHandle::Wayland(h) = h.as_raw()
-            {
-                // SAFETY: the display is winit's live connection, which
-                // outlives the clipboard worker (both end with the process).
-                self.clipboard = unsafe { Clipboard::new(h.display.as_ptr()) };
-            }
-        }
+        // SAFETY: shut down in `exiting`, while winit's display is alive.
+        self.clipboard = unsafe { Clipboard::for_window(&window) };
         window.set_visible(true);
         self.gfx = Some(Gfx {
             window,
@@ -1429,6 +1507,11 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
         let now = Instant::now();
+        if let Some(g) = self.graph.as_mut()
+            && g.tick(now)
+        {
+            self.redraw();
+        }
         let before = self.toasts.len();
         self.toasts.retain(|t| t.1 > now);
         if self.toasts.len() != before {
@@ -1476,6 +1559,7 @@ impl ApplicationHandler<UserEvent> for App {
             .map(|t| t.1)
             .chain(self.dev.deadline)
             .chain(self.dev.autoclose)
+            .chain(self.graph.as_ref().and_then(GraphPage::deadline))
             .min();
         el.set_control_flow(match next {
             Some(t) => ControlFlow::WaitUntil(t),
@@ -1483,8 +1567,27 @@ impl ApplicationHandler<UserEvent> for App {
         });
     }
 
+    fn exiting(&mut self, _el: &ActiveEventLoop) {
+        // The Wayland clipboard borrows the event loop's display connection:
+        // release it now, before the loop (and the display) is torn down.
+        if let Some(mut c) = self.clipboard.take() {
+            c.shutdown();
+        }
+    }
+
     fn user_event(&mut self, el: &ActiveEventLoop, event: UserEvent) {
         match event {
+            UserEvent::OpenFailed(url) => {
+                let (mut cx, ..) = self.cx_parts();
+                match cx.clipboard {
+                    Some(c) => {
+                        c.copy_text(url);
+                        cx.toast("Couldn't open the link; copied it instead");
+                    }
+                    None => cx.toast("Couldn't open the link"),
+                }
+                self.redraw();
+            }
             UserEvent::AccessKit(e) => match e.window_event {
                 accesskit_winit::WindowEvent::InitialTreeRequested => {
                     self.a11y = true;
@@ -1567,17 +1670,54 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::Touch(t) => {
+                use winit::event::TouchPhase;
                 let (x, y) = (t.location.x as f32 / scale, t.location.y as f32 / scale);
                 match t.phase {
-                    winit::event::TouchPhase::Started => {
-                        self.pointer_moved(x, y);
-                        self.pointer_pressed(el, x, y);
+                    TouchPhase::Started => {
+                        self.touches.insert(t.id, (x, y));
+                        if self.touches.len() == 1 {
+                            self.pointer_moved(x, y);
+                            self.pointer_pressed(el, x, y);
+                        } else if self.touches.len() == 2 {
+                            // Second finger: stop the one-finger press/pan
+                            // and start pinching.
+                            self.input.pressed = None;
+                            self.drag = None;
+                            self.pinch = Some(self.spread().0);
+                        }
                     }
-                    winit::event::TouchPhase::Moved => self.pointer_moved(x, y),
+                    TouchPhase::Moved => {
+                        self.touches.insert(t.id, (x, y));
+                        match self.pinch {
+                            Some(prev) if self.touches.len() == 2 => {
+                                let (d, (mx, my)) = self.spread();
+                                if prev > 1.0
+                                    && d > 1.0
+                                    && self.mode == ViewMode::Graphing
+                                    && let Some(g) = self.graph.as_mut()
+                                    && g.pinch(mx, my, (prev / d) as f64)
+                                {
+                                    self.redraw();
+                                }
+                                self.pinch = Some(d);
+                            }
+                            Some(_) => {}
+                            None => self.pointer_moved(x, y),
+                        }
+                    }
                     _ => {
-                        self.pointer_released(el);
-                        self.input.pointer = None;
-                        self.update_hover();
+                        self.touches.remove(&t.id);
+                        if self.pinch.is_some() {
+                            if self.touches.len() < 2 {
+                                self.pinch = None;
+                            }
+                        } else {
+                            self.pointer_released(el);
+                        }
+                        if self.touches.is_empty() {
+                            self.input.pointer = None;
+                            self.update_hover();
+                        }
                     }
                 }
             }
@@ -1982,18 +2122,33 @@ fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: Desktop) {
         Align::Start,
     );
     f.paragraph(inner.x, inner.y + 78.0, inner.w, ABOUT, SMALL, t.fg);
-    let b = Rect::new(inner.x, inner.bottom() - 36.0, 150.0, 34.0);
+    const SITE: &str = "https://github.com/Go08er/GlazeMyNumbersBaby";
+    let b0 = Rect::new(inner.x, inner.bottom() - 36.0, 120.0, 34.0);
     f.button(
-        id("copy-site"),
-        b,
-        "Copy website link",
+        id("open-site"),
+        b0,
+        "Open website",
         SMALL,
-        Msg::CopyLink("https://github.com/Go08er/GlazeMyNumbersBaby"),
+        Msg::OpenLink(SITE),
         true,
         None,
         true,
     );
-    let b2 = Rect::new(b.right() + 8.0, b.y, 110.0, 34.0);
+    let b = Rect::new(b0.right() + 8.0, b0.y, 92.0, 34.0);
+    f.button(
+        id("copy-site"),
+        b,
+        "Copy link",
+        SMALL,
+        Msg::CopyLink(SITE),
+        true,
+        None,
+        true,
+    );
+    if let Some(n) = f.nodes.as_mut().and_then(|v| v.last_mut()) {
+        n.label = "Copy website link".into();
+    }
+    let b2 = Rect::new(b.right() + 8.0, b.y, 92.0, 34.0);
     f.button(
         id("licences"),
         b2,
@@ -2015,6 +2170,8 @@ const LICENCES: &str = concat!(
     include_str!("../assets/fonts/OFL-Inter.txt"),
     "\n\n— Noto Sans (Math, Arabic, Armenian, Bengali, Khmer subsets) —\n\n",
     include_str!("../assets/fonts/OFL-Noto.txt"),
+    "\n\n— Clipboard code adapted from smithay-clipboard —\n\n",
+    include_str!("../assets/LICENSE-smithay-clipboard.txt"),
     "\n\nExchange rates: Frankfurter (central bank reference rates)."
 );
 

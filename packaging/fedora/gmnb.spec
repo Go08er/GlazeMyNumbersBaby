@@ -79,7 +79,7 @@ done
 %{_datadir}/icons/hicolor/scalable/apps/%{app_id}.svg
 
 %files -n dgmnb
-%license LICENSE apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt
+%license LICENSE apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt apps/dgmnb/assets/LICENSE-smithay-clipboard.txt
 %doc README.md
 %{_bindir}/dgmnb
 %{_datadir}/applications/%{dapp_id}.desktop

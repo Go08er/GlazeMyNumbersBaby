@@ -680,6 +680,7 @@ dependencies = [
  "chrono",
  "datecalc",
  "graphing",
+ "libc",
  "serde",
  "serde_json",
  "smithay-client-toolkit",
@@ -690,6 +691,7 @@ dependencies = [
  "unitconv",
  "wayland-backend",
  "winit",
+ "x11-clipboard",
 ]
 
 [[package]]
@@ -3368,6 +3370,16 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "x11-clipboard"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "662d74b3d77e396b8e5beb00b9cad6a9eccf40b2ef68cc858784b14c41d535a3"
+dependencies = [
+ "libc",
+ "x11rb",
+]
 
 [[package]]
 name = "x11-dl"

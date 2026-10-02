@@ -50,6 +50,7 @@ rustPlatform.buildRustPackage {
     install -Dm644 packaging/${appId}.metainfo.xml -t $out/share/metainfo
     install -Dm644 packaging/icons/${appId}.svg -t $out/share/icons/hicolor/scalable/apps
     install -Dm644 LICENSE apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt \
+      apps/dgmnb/assets/LICENSE-smithay-clipboard.txt \
       -t $out/share/licenses/${appId}
   '';
   postFixup = ''
