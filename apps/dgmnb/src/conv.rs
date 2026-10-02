@@ -207,8 +207,16 @@ impl ConvPage {
             let (p, v) = area.take_right(300.0);
             (v.take_left(v.w - 20.0).0, p)
         } else {
-            let (p, v) = area.take_bottom((area.h * 0.46).clamp(220.0, 330.0));
-            (v, p)
+            // The keypad gives up height (down to a minimum) before the
+            // values do; anything still left over scrolls.
+            let needed = if self.vm.is_currency_current_category() {
+                320.0
+            } else {
+                250.0
+            };
+            let pad_h = (area.h - needed).min(area.h * 0.5).clamp(168.0, 330.0);
+            let (p, v) = area.take_bottom(pad_h);
+            (v.take_top(v.h - 6.0).0, p)
         };
         self.values(f, values);
         self.keypad(f, pad);
@@ -216,7 +224,9 @@ impl ConvPage {
 
     fn values(&mut self, f: &mut Frame, r: Rect) {
         let t = f.t;
-        let mut y = r.y;
+        let sid = id("conv-values");
+        let off = f.scroll_begin(sid, r);
+        let mut y = r.y - off;
         for which in [1u8, 2] {
             let (value, unit, active, sym, name) = if which == 1 {
                 (
@@ -362,7 +372,7 @@ impl ConvPage {
             }
         }
         let results = self.vm.supplementary_results();
-        if self.vm.supplementary_visible() && !results.is_empty() && y + 60.0 < r.bottom() {
+        if self.vm.supplementary_visible() && !results.is_empty() {
             f.label(
                 Rect::new(r.x, y, r.w, 24.0),
                 "About equal to",
@@ -379,9 +389,6 @@ impl ConvPage {
                     x = r.x;
                     y += 32.0;
                 }
-                if y + 28.0 > r.bottom() {
-                    break;
-                }
                 let chip = Rect::new(x, y, w, 28.0);
                 f.cv.rounded(chip, 14.0, t.surface2);
                 f.label(chip, &label, SMALL, t.fg, Align::Center);
@@ -396,6 +403,7 @@ impl ConvPage {
                 x += w + 6.0;
             }
         }
+        f.scroll_end(sid, r, y + 32.0 + off - r.y);
     }
 
     fn keypad(&mut self, f: &mut Frame, r: Rect) {

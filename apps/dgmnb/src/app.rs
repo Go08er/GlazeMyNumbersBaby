@@ -215,6 +215,8 @@ pub struct App {
     mods: ModifiersState,
     last_click: Option<(Instant, ui::Id)>,
     drag: Option<(ui::Id, f32, f32)>,
+    /// The text field the input method is enabled for.
+    ime: Option<Rect>,
     store: Store,
     desktop: Desktop,
     theme: Theme,
@@ -288,6 +290,7 @@ impl App {
             mods: ModifiersState::empty(),
             last_click: None,
             drag: None,
+            ime: None,
             store,
             desktop,
             theme: Theme::new(false, None),
@@ -529,6 +532,8 @@ impl App {
                 }
             }
         }
+        // Pages may have moved focus (new equation, unit search).
+        self.sync_ime();
         self.redraw();
     }
 
@@ -700,6 +705,7 @@ impl App {
         }
         self.gfx = Some(g);
         self.update_hover();
+        self.sync_ime();
     }
 
     /// Render the window into a PNG (screenshot hook).
@@ -973,19 +979,26 @@ impl App {
         }
     }
 
-    fn sync_ime(&self) {
-        let Some(g) = &self.gfx else { return };
+    /// Enable the input method while a text field has focus (only telling
+    /// the compositor when something changed).
+    fn sync_ime(&mut self) {
         let focus = self.input.focus;
         let field = focus.and_then(|f| {
             self.hits
                 .iter()
                 .find(|h| h.id == f && h.sense == Sense::Text)
+                .map(|h| h.rect)
         });
+        if field == self.ime {
+            return;
+        }
+        self.ime = field;
+        let Some(g) = &self.gfx else { return };
         g.window.set_ime_allowed(field.is_some());
-        if let Some(h) = field {
+        if let Some(r) = field {
             g.window.set_ime_cursor_area(
-                winit::dpi::LogicalPosition::new(h.rect.x as f64, h.rect.y as f64),
-                LogicalSize::new(h.rect.w as f64, h.rect.h as f64),
+                winit::dpi::LogicalPosition::new(r.x as f64, r.y as f64),
+                LogicalSize::new(r.w as f64, r.h as f64),
             );
         }
     }
@@ -1317,7 +1330,7 @@ fn translate_key(ev: &winit::event::KeyEvent, mods: ModifiersState) -> Option<Ke
             NamedKey::ArrowDown => Named::Down,
             NamedKey::ArrowLeft => Named::Left,
             NamedKey::ArrowRight => Named::Right,
-            NamedKey::Space => return Some(KeyPress::new(Key::Char(' '))),
+            NamedKey::Space => Named::F(0),
             other => {
                 let f = format!("{other:?}");
                 let n: u8 = f.strip_prefix('F')?.parse().ok()?;
@@ -1326,6 +1339,12 @@ fn translate_key(ev: &winit::event::KeyEvent, mods: ModifiersState) -> Option<Ke
         }),
         WKey::Character(s) => Key::Char(s.chars().next()?),
         _ => return None,
+    };
+    // Space arrives as a named key; treat it as the character it types.
+    let key = if key == Key::Named(Named::F(0)) {
+        Key::Char(' ')
+    } else {
+        key
     };
     Some(KeyPress {
         key,
@@ -1760,6 +1779,8 @@ fn draw_nav(f: &mut Frame, full: Rect, mode: ViewMode, settings: bool) {
     f.scrim(Msg::Nav(false), true);
     let panel = Rect::new(0.0, 0.0, NAV_W.min(full.w - 40.0), full.h);
     f.cv.fill_rect(panel, t.bg);
+    // Blank parts of the drawer don't close it.
+    f.hit(id("nav-panel"), panel, Sense::Click, None, false);
     f.cv.fill_rect(Rect::new(panel.right() - 1.0, 0.0, 1.0, full.h), t.border);
     f.group(id("nav"), accesskit::Role::Navigation, "Navigation", panel);
     let (head, rest) = panel.take_top(HEADER_H);

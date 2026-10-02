@@ -639,8 +639,21 @@ impl<'a, 'p> Frame<'a, 'p> {
         }
     }
 
-    /// A raised card / popup background.
+    /// A raised card / popup background. Clicks on its blank areas stay
+    /// inside it (they don't fall through to the scrim and close it).
     pub fn card(&mut self, r: Rect, radius: f32) {
+        self.surface(r, radius);
+        self.hit(
+            id(("card", r.x.to_bits(), r.y.to_bits())),
+            r,
+            Sense::Click,
+            None,
+            false,
+        );
+    }
+
+    /// A raised, non-interactive surface (tooltips, bubbles).
+    pub fn surface(&mut self, r: Rect, radius: f32) {
         let t = self.t;
         // A soft shadow from a couple of translucent outlines.
         for (d, a) in [(6.0, 0.05), (3.0, 0.07), (1.0, 0.10)] {

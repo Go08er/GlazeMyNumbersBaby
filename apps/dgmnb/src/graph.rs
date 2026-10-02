@@ -1123,7 +1123,7 @@ impl GraphPage {
                 by = sy + 14.0;
             }
             let bubble = Rect::new(bx, by, bw, bh);
-            f.card(bubble, 8.0);
+            f.surface(bubble, 8.0);
             f.draw_line(&line, bubble, Align::Center, t.fg);
             if let Some(n) = f.node(id("trace"), accesskit::Role::Label, &text, bubble) {
                 n.live = true;
