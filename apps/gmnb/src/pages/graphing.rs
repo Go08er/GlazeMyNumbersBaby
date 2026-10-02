@@ -3,6 +3,9 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use adw::prelude::*;
 use appcore::KeyPress;
@@ -51,7 +54,16 @@ pub struct GraphingPage {
     building: Cell<bool>,
     /// Bumped per analysis request; stale background results are dropped.
     analysis_seq: Cell<u64>,
+    /// The equation the analysis panel describes.
+    analysis_id: Cell<Option<EquationId>>,
+    /// Cancels the running analysis when a newer one replaces it.
+    analysis_cancel: RefCell<Option<Arc<AtomicBool>>>,
+    /// Debounced re-analysis after an edit.
+    reanalyze: RefCell<Option<glib::SourceId>>,
 }
+
+/// Re-analysis waits this long after the last edit.
+const REANALYZE_AFTER: Duration = Duration::from_millis(150);
 
 fn small_button(icon: &str, tip: &str) -> gtk::Button {
     let b = gtk::Button::builder()
@@ -224,6 +236,9 @@ impl GraphingPage {
             wide: Cell::new(false),
             building: Cell::new(false),
             analysis_seq: Cell::new(0),
+            analysis_id: Cell::new(None),
+            analysis_cancel: RefCell::new(None),
+            reanalyze: RefCell::new(None),
         });
         view_stack.add_named(&side, Some("equations"));
         view_stack.add_named(&overlay, Some("graph"));
@@ -272,11 +287,11 @@ impl GraphingPage {
                     row.entry.grab_focus();
                 }
             });
-            // Weak: the button lives inside the stack it switches.
-            let ss = side_stack.downgrade();
+            // Weak: the button lives inside the page it switches.
+            let weak = Rc::downgrade(&page);
             back.connect_clicked(move |_| {
-                if let Some(ss) = ss.upgrade() {
-                    ss.set_visible_child_name("equations");
+                if let Some(p) = weak.upgrade() {
+                    p.close_analysis();
                 }
             });
         }
@@ -373,13 +388,18 @@ impl GraphingPage {
         let focused = self.focused.borrow().as_ref().and_then(|w| w.upgrade());
         let entry = match focused {
             Some(e) if e.is_mapped() => e,
-            _ => match self.rows.borrow().last().map(|r| r.entry.clone()) {
-                Some(e) => e,
-                None => match self.add_equation("") {
-                    Some(r) => r.entry.clone(),
-                    None => return,
-                },
-            },
+            _ => {
+                let e = match self.rows.borrow().last().map(|r| r.entry.clone()) {
+                    Some(e) => e,
+                    None => match self.add_equation("") {
+                        Some(r) => r.entry.clone(),
+                        None => return,
+                    },
+                };
+                // Never focused: type at the end, not before existing text.
+                e.set_position(-1);
+                e
+            }
         };
         let mut pos = entry.position();
         if text == "\u{8}" {
@@ -547,6 +567,7 @@ impl GraphingPage {
             });
             p.graph_view.invalidate();
             p.sync_variables();
+            p.analysis_inputs_changed();
         });
         if !text.is_empty() {
             self.equation_changed(id, text);
@@ -648,6 +669,9 @@ impl GraphingPage {
             self.graph_view.animate_draw(id);
         }
         self.sync_variables();
+        if self.analysis_id.get() == Some(id) {
+            self.analysis_inputs_changed();
+        }
     }
 
     fn sync_variables(self: &Rc<Self>) {
@@ -700,6 +724,7 @@ impl GraphingPage {
                         v2.set_value(s.value());
                     }
                     p.graph_view.invalidate();
+                    p.analysis_inputs_changed();
                 }
             });
             let (s2, weak) = (scale.downgrade(), Rc::downgrade(self));
@@ -730,9 +755,50 @@ impl GraphingPage {
     /// Function analysis runs on a worker thread (it can take a while for
     /// complicated expressions); the panel shows a spinner meanwhile.
     fn show_analysis(self: &Rc<Self>, id: EquationId) {
+        self.show_pending(id);
+        self.side_stack.set_visible_child_name("analysis");
+        if !self.wide.get() {
+            self.mode_toggle.set_active_name(Some("equations"));
+        }
+        let seq = self.analysis_seq.get();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.analysis_cancel.replace(Some(cancel.clone()));
+        let graph = self.graph.borrow().clone();
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let features =
+                gio::spawn_blocking(move || graph.analyze_cancellable(id, &cancel)).await;
+            let Some(p) = weak.upgrade() else { return };
+            if p.analysis_seq.get() != seq {
+                return;
+            }
+            match features {
+                Ok(None) => {} // cancelled for a newer request
+                Ok(Some(f)) => {
+                    p.clear_analysis_body();
+                    p.fill_analysis(&f);
+                }
+                Err(_) => {
+                    p.clear_analysis_body();
+                    p.analysis_message("Analysis failed for this function.");
+                }
+            }
+        });
+    }
+
+    fn clear_analysis_body(&self) {
         while let Some(c) = self.analysis_body.first_child() {
             self.analysis_body.remove(&c);
         }
+    }
+
+    /// Show `id`'s current text with a spinner, and make any result still in
+    /// flight stale.
+    fn show_pending(&self, id: EquationId) {
+        self.cancel_analysis();
+        self.analysis_id.set(Some(id));
+        self.analysis_seq.set(self.analysis_seq.get() + 1);
+        self.clear_analysis_body();
         let text = self.graph.borrow().text(id).unwrap_or_default().to_string();
         self.analysis_title.set_text(&text);
         let busy = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -741,28 +807,45 @@ impl GraphingPage {
         label.add_css_class("wc-empty");
         busy.append(&label);
         self.analysis_body.append(&busy);
-        self.side_stack.set_visible_child_name("analysis");
-        if !self.wide.get() {
-            self.mode_toggle.set_active_name(Some("equations"));
+    }
+
+    fn cancel_analysis(&self) {
+        if let Some(c) = self.analysis_cancel.take() {
+            c.store(true, Ordering::Relaxed);
         }
-        let seq = self.analysis_seq.get() + 1;
-        self.analysis_seq.set(seq);
-        let graph = self.graph.borrow().clone();
+        if let Some(src) = self.reanalyze.take() {
+            src.remove();
+        }
+    }
+
+    fn close_analysis(&self) {
+        self.cancel_analysis();
+        self.analysis_id.set(None);
+        self.analysis_seq.set(self.analysis_seq.get() + 1);
+        self.side_stack.set_visible_child_name("equations");
+    }
+
+    /// Something the open analysis depends on changed (its equation, a
+    /// variable, the trig unit): drop the shown result now and re-analyse
+    /// shortly, or go back to the list if the equation is gone.
+    fn analysis_inputs_changed(self: &Rc<Self>) {
+        let Some(id) = self.analysis_id.get() else {
+            return;
+        };
+        if self.graph.borrow().text(id).is_none() {
+            self.close_analysis();
+            return;
+        }
+        self.show_pending(id);
         let weak = Rc::downgrade(self);
-        glib::spawn_future_local(async move {
-            let features = gio::spawn_blocking(move || graph.analyze(id)).await;
-            let Some(p) = weak.upgrade() else { return };
-            if p.analysis_seq.get() != seq {
-                return;
-            }
-            while let Some(c) = p.analysis_body.first_child() {
-                p.analysis_body.remove(&c);
-            }
-            match features {
-                Ok(f) => p.fill_analysis(&f),
-                Err(_) => p.analysis_message("Analysis failed for this function."),
+        let src = glib::timeout_add_local_once(REANALYZE_AFTER, move || {
+            if let Some(p) = weak.upgrade() {
+                // This source is finishing: forget it before re-analysing.
+                p.reanalyze.take();
+                p.show_analysis(id);
             }
         });
+        self.reanalyze.replace(Some(src));
     }
 
     fn analysis_message(&self, msg: &str) {
@@ -953,6 +1036,7 @@ impl GraphingPage {
                 };
                 p.graph.borrow_mut().set_trig_unit(unit);
                 p.graph_view.invalidate();
+                p.analysis_inputs_changed();
             }
         });
         let gv = self.graph_view.clone();

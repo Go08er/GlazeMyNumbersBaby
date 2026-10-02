@@ -8,6 +8,8 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use graphing::equation::LineStyle;
@@ -58,6 +60,8 @@ mod imp {
         /// A worker plot is running / another was requested meanwhile.
         pub plot_busy: Cell<bool>,
         pub plot_again: Cell<bool>,
+        /// Cancels the running worker plot when a newer one is needed.
+        pub plot_cancel: RefCell<Option<Arc<AtomicBool>>>,
     }
 
     impl Default for GraphView {
@@ -83,6 +87,7 @@ mod imp {
                 plot_ms: Cell::new(0.0),
                 plot_busy: Cell::new(false),
                 plot_again: Cell::new(false),
+                plot_cancel: RefCell::new(None),
             }
         }
     }
@@ -431,22 +436,29 @@ impl GraphView {
         }
         // Heavy graph: plot on a worker and keep drawing the last result
         // (curves are in graph coordinates, so they still line up while
-        // panning). One job at a time; requests made meanwhile coalesce into
-        // a single re-plot of the latest state.
+        // panning). One job at a time: a newer request cancels the running
+        // one, which then reports back so the latest state is plotted once.
         if imp.plot_busy.replace(true) {
             imp.plot_again.set(true);
+            if let Some(c) = imp.plot_cancel.borrow().as_ref() {
+                c.store(true, Ordering::Relaxed);
+            }
             return;
         }
+        let cancel = Arc::new(AtomicBool::new(false));
+        imp.plot_cancel.replace(Some(cancel.clone()));
         let graph = graph.borrow().clone();
         let weak = self.downgrade();
         glib::spawn_future_local(async move {
             let started = Instant::now();
-            let plots = gio::spawn_blocking(move || graph.plot_parallel(&vp)).await;
+            let plots =
+                gio::spawn_blocking(move || graph.plot_parallel_cancellable(&vp, &cancel)).await;
             let Some(this) = weak.upgrade() else { return };
             let imp = this.imp();
             imp.plot_busy.set(false);
-            imp.plot_ms.set(started.elapsed().as_secs_f64() * 1e3);
-            if let Ok(plots) = plots {
+            imp.plot_cancel.replace(None);
+            if let Ok(Some(plots)) = plots {
+                imp.plot_ms.set(started.elapsed().as_secs_f64() * 1e3);
                 imp.plots.replace(plots);
             }
             if imp.plot_again.replace(false) {
