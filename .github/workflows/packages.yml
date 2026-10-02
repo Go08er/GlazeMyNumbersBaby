@@ -17,7 +17,9 @@ jobs:
       - name: Let bubblewrap create user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Install flatpak
-        run: sudo apt-get update && sudo apt-get install -y flatpak
+        # librsvg2-common: gdk-pixbuf's SVG loader, which flatpak uses to
+        # validate the exported (SVG) app icon.
+        run: sudo apt-get update && sudo apt-get install -y flatpak librsvg2-common
       - uses: cachix/install-nix-action@v31
       - name: Build bundle (nix run .#flatpak)
         run: nix run .#flatpak
