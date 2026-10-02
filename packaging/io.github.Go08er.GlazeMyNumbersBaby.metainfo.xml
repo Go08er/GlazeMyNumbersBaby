@@ -64,6 +64,18 @@
     <color type="primary" scheme_preference="dark">#1b1035</color>
   </branding>
   <releases>
+    <release version="0.2.0" date="2026-10-02">
+      <description>
+        <p>GMNB gets a lean twin, DGMNB, built from the same shared core.</p>
+        <ul>
+          <li>Function analysis and heavy graphs no longer block the window</li>
+          <li>Hostile or huge graph input is rejected instead of crashing</li>
+          <li>Generated and built-in palettes keep text readable</li>
+          <li>Screen readers hear the 2nd/inverse/hyperbolic key names and toggle states</li>
+          <li>Manual currency refresh works even when the network monitor says offline</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-10-02">
       <description>
         <p>First release: every Windows Calculator mode, ported to Rust.</p>

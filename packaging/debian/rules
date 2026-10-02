@@ -1,8 +1,8 @@
 #!/usr/bin/make -f
 # Needs `cargo` (Rust >= 1.92) on PATH; Debian 13's rustc is too old, so use rustup.
 
-APP := io.github.Go08er.GlazeMyNumbersBaby
-PKG := debian/gmnb
+GMNB := io.github.Go08er.GlazeMyNumbersBaby
+DGMNB := io.github.Go08er.DontGlazeMyNumbersBaby
 
 %:
 	dh $@
@@ -11,17 +11,22 @@ override_dh_auto_configure:
 
 override_dh_auto_build:
 	cargo build --release --locked -p gmnb
+	cargo build --profile lean --locked -p dgmnb
 
 override_dh_auto_test:
 
 override_dh_auto_install:
-	install -Dm755 target/release/gmnb $(PKG)/usr/bin/gmnb
-	install -Dm644 packaging/$(APP).desktop $(PKG)/usr/share/applications/$(APP).desktop
-	install -Dm644 packaging/$(APP).metainfo.xml $(PKG)/usr/share/metainfo/$(APP).metainfo.xml
-	install -Dm644 packaging/icons/$(APP).svg $(PKG)/usr/share/icons/hicolor/scalable/apps/$(APP).svg
+	install -Dm755 target/release/gmnb debian/gmnb/usr/bin/gmnb
+	install -Dm644 packaging/$(GMNB).desktop debian/gmnb/usr/share/applications/$(GMNB).desktop
+	install -Dm644 packaging/$(GMNB).metainfo.xml debian/gmnb/usr/share/metainfo/$(GMNB).metainfo.xml
+	install -Dm644 packaging/icons/$(GMNB).svg debian/gmnb/usr/share/icons/hicolor/scalable/apps/$(GMNB).svg
+	install -Dm755 target/lean/dgmnb debian/dgmnb/usr/bin/dgmnb
+	install -Dm644 packaging/$(DGMNB).desktop debian/dgmnb/usr/share/applications/$(DGMNB).desktop
+	install -Dm644 packaging/$(DGMNB).metainfo.xml debian/dgmnb/usr/share/metainfo/$(DGMNB).metainfo.xml
+	install -Dm644 packaging/icons/$(DGMNB).svg debian/dgmnb/usr/share/icons/hicolor/scalable/apps/$(DGMNB).svg
 
 override_dh_auto_clean:
 	rm -rf target
 
-# Rust binaries are already stripped of DWARF by the release profile.
+# Rust binaries are already stripped of DWARF by their cargo profiles.
 override_dh_dwz:

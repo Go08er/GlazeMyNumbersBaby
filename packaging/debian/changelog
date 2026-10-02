@@ -1,3 +1,9 @@
+gmnb (0.2.0-1) unstable; urgency=medium
+
+  * New upstream release: adds the dgmnb package, the lean twin.
+
+ -- Go08er <Go08er@users.noreply.github.com>  Fri, 02 Oct 2026 12:00:00 +0000
+
 gmnb (0.1.0-1) unstable; urgency=medium
 
   * Initial release.

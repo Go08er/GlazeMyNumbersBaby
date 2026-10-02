@@ -1,5 +1,5 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: GMNB (GlazeMyNumbers,Baby)
+Upstream-Name: GMNB (GlazeMyNumbers,Baby) and DGMNB
 Source: https://github.com/Go08er/GlazeMyNumbersBaby
 
 Files: *
@@ -8,10 +8,17 @@ Copyright: Microsoft Corporation (original Windows Calculator)
 License: MIT
 
 Files: apps/gmnb/assets/fonts/*
-Copyright: 2021 The Outfit Project Authors
+Copyright: 2021 The Outfit Project Authors (https://github.com/Outfitio/Outfit-Fonts)
 License: OFL-1.1
- Copyright 2021 The Outfit Project Authors (https://github.com/Outfitio/Outfit-Fonts)
- .
+
+Files: apps/dgmnb/assets/fonts/*
+Copyright: 2016 The Inter Project Authors (https://github.com/rsms/inter)
+           2022-2025 The Noto Project Authors (https://github.com/notofonts)
+           2022 Google LLC (Noto Sans Math)
+License: OFL-1.1
+Comment: Subsets of Inter and Noto Sans, made by tools/fonts/subset.sh.
+
+License: OFL-1.1
  This Font Software is licensed under the SIL Open Font License, Version 1.1.
  This license is copied below, and is also available with a FAQ at:
  https://scripts.sil.org/OFL

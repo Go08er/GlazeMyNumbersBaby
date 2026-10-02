@@ -14,7 +14,7 @@ let
 in
 rustPlatform.buildRustPackage {
   pname = "gmnb";
-  version = "0.1.0";
+  version = (lib.importTOML ../Cargo.toml).workspace.package.version;
   src = lib.cleanSource ../.;
   cargoLock.lockFile = ../Cargo.lock;
   cargoBuildFlags = [ "-p" "gmnb" ];

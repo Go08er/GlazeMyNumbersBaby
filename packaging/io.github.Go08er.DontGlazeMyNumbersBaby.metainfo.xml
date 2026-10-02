@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.Go08er.DontGlazeMyNumbersBaby</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT AND OFL-1.1</project_license>
+  <name>DGMNB</name>
+  <summary>Don't Glaze My Numbers, Baby — a lean, plain calculator</summary>
+  <description>
+    <p>
+      DGMNB is the lean twin of GMNB: the same Rust port of the open-source
+      Windows Calculator, with every mode and feature, drawn in software with
+      a plain interface instead of a glossy one. It needs no GPU, uses around
+      13 MB of memory and does nothing at all while it waits for you.
+    </p>
+    <ul>
+      <li>Standard, Scientific and Programmer calculators with history and memory</li>
+      <li>Graphing with variables, tracing and function analysis</li>
+      <li>Date calculation and unit conversion for 13 categories, including live currency rates</li>
+      <li>Light and dark styles that follow your desktop, and its accent colour</li>
+    </ul>
+    <p>
+      Not affiliated with or endorsed by Microsoft. Based on microsoft/calculator (MIT).
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.Go08er.DontGlazeMyNumbersBaby.desktop</launchable>
+  <provides>
+    <binary>dgmnb</binary>
+  </provides>
+  <developer id="io.github.go08er">
+    <name>Go08er</name>
+  </developer>
+  <url type="homepage">https://github.com/Go08er/GlazeMyNumbersBaby</url>
+  <url type="bugtracker">https://github.com/Go08er/GlazeMyNumbersBaby/issues</url>
+  <url type="vcs-browser">https://github.com/Go08er/GlazeMyNumbersBaby</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Standard mode with history</caption>
+      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/main/docs/screenshots/dgmnb-standard.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Graphing</caption>
+      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/main/docs/screenshots/dgmnb-graphing.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Programmer mode</caption>
+      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/main/docs/screenshots/dgmnb-programmer.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Live currency conversion</caption>
+      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/main/docs/screenshots/dgmnb-currency.png</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>touch</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">300</display_length>
+  </requires>
+  <branding>
+    <color type="primary" scheme_preference="light">#dcdce2</color>
+    <color type="primary" scheme_preference="dark">#2a2a30</color>
+  </branding>
+  <releases>
+    <release version="0.2.0" date="2026-10-02">
+      <description>
+        <p>First release of DGMNB, the lean twin of GMNB.</p>
+      </description>
+    </release>
+  </releases>
+</component>

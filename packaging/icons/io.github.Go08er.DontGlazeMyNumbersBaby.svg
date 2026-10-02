@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- GMNB's icon with the glaze scraped off: same layout, flat colours. -->
+  <rect x="8" y="10" width="112" height="110" rx="26" fill="#18181c"/>
+  <rect x="8" y="6" width="112" height="110" rx="26" fill="#2a2a30"/>
+
+  <!-- slab -->
+  <rect x="24" y="20" width="80" height="84" rx="16" fill="#35353c"/>
+
+  <!-- display -->
+  <path fill="#f2f2f5" d="M78.4 37.9h2.3v2.3h-2.3v5.6h-2.9v-5.6h-9.6v-2.2l9-13.6h3.5zm-2.9 0v-9.9l-6.7 9.9zM94.3 45.8H82.9v-2.1l6.1-6.3q1.7-1.7 2.4-2.9.7-1.2.7-2.5 0-1.5-.9-2.4-.9-.9-2.6-.9-1.6 0-2.6 1-1 1-1 2.7h-2.8q0-2.8 1.8-4.5 1.8-1.7 4.6-1.7 2.8 0 4.4 1.4 1.6 1.4 1.6 3.9 0 1.6-.8 3.1-.8 1.5-3.1 3.8l-4.6 4.8h8.2z"/>
+  <rect x="33" y="52" width="62" height="1.4" fill="#f2f2f5" opacity="0.25"/>
+
+  <!-- keys -->
+  <g fill="#4a4a53">
+    <rect x="33" y="59" width="17" height="13" rx="4.5"/>
+    <rect x="55" y="59" width="17" height="13" rx="4.5"/>
+    <rect x="33" y="77" width="17" height="13" rx="4.5"/>
+    <rect x="55" y="77" width="17" height="13" rx="4.5"/>
+  </g>
+  <rect x="77" y="59" width="18" height="31" rx="5.5" fill="#3b6fd8"/>
+  <g stroke="#ffffff" stroke-width="2.4" stroke-linecap="round">
+    <line x1="81.5" y1="71" x2="90.5" y2="71"/>
+    <line x1="81.5" y1="78" x2="90.5" y2="78"/>
+  </g>
+</svg>

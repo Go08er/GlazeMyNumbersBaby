@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=DGMNB
+GenericName=Calculator
+Comment=Don't Glaze My Numbers, Baby — a lean, plain calculator
+Exec=dgmnb
+Icon=io.github.Go08er.DontGlazeMyNumbersBaby
+Terminal=false
+Categories=Utility;Calculator;
+Keywords=calculator;math;scientific;programmer;graphing;converter;currency;date;dgmnb;lightweight;
+StartupNotify=true
+StartupWMClass=io.github.Go08er.DontGlazeMyNumbersBaby

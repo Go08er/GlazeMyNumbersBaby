@@ -8,7 +8,8 @@ Build-Depends: debhelper-compat (= 13),
                libgtk-4-dev (>= 4.18),
                libadwaita-1-dev (>= 1.7),
                libpango1.0-dev (>= 1.56),
-               libglib2.0-dev
+               libglib2.0-dev,
+               libwayland-dev
 Standards-Version: 4.7.2
 Homepage: https://github.com/Go08er/GlazeMyNumbersBaby
 Vcs-Browser: https://github.com/Go08er/GlazeMyNumbersBaby
@@ -25,5 +26,19 @@ Description: GlazeMyNumbers,Baby - a pointlessly beautiful calculator
  .
  The original arbitrary-precision engine was ported function-for-function
  and is verified against the real C++ engine.
+ .
+ Not affiliated with or endorsed by Microsoft.
+
+Package: dgmnb
+Architecture: any
+# libxkbcommon is loaded at run time, so shlibs can't see it.
+Depends: ${shlibs:Depends}, ${misc:Depends}, libxkbcommon0
+Recommends: libx11-6, libxcursor1, libxrandr2, libxi6
+Description: Don't Glaze My Numbers, Baby - the lean twin of GMNB
+ DGMNB is the same Rust port of the open-source Windows Calculator as GMNB,
+ with every mode and feature, drawn in software with a plain interface. It
+ needs no GPU, uses around 13 MB of memory and stays idle while unused.
+ .
+ The X11 libraries are only needed in X11 sessions.
  .
  Not affiliated with or endorsed by Microsoft.

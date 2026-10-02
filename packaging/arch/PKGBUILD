@@ -1,43 +1,62 @@
 # Maintainer: Go08er <https://github.com/Go08er>
-pkgname=gmnb
-pkgver=0.1.0
+pkgbase=gmnb
+pkgname=('gmnb' 'dgmnb')
+pkgver=0.2.0
 pkgrel=1
-pkgdesc='GlazeMyNumbers,Baby: Windows Calculator ported to Rust, made pointlessly beautiful'
+pkgdesc='Windows Calculator ported to Rust, twice: pointlessly beautiful (GMNB) and lean (DGMNB)'
 arch=('x86_64' 'aarch64')
 url='https://github.com/Go08er/GlazeMyNumbersBaby'
 license=('MIT' 'OFL-1.1')
-depends=('gtk4' 'libadwaita' 'glib2' 'pango' 'cairo' 'gcc-libs' 'glibc' 'hicolor-icon-theme')
-makedepends=('cargo')
+makedepends=('cargo' 'gtk4' 'libadwaita' 'wayland' 'libxkbcommon')
 # Rust handles its own LTO; makepkg's -flto would also hit the bundled C (ring).
 options=('!lto' '!debug')
-source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('c467480457b9fa79fa4df9cf5dfe91f4599f3a7f9ef3e70c6a86951a5028390b')
+source=("$pkgbase-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+# Pinned to the tag tarball's checksum once v0.2.0 is published.
+sha256sums=('SKIP')
 
-_appid=io.github.Go08er.GlazeMyNumbersBaby
+_src="GlazeMyNumbersBaby-$pkgver"
 
 prepare() {
-  cd "GlazeMyNumbersBaby-$pkgver"
+  cd "$_src"
   export RUSTUP_TOOLCHAIN=stable
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
 build() {
-  cd "GlazeMyNumbersBaby-$pkgver"
+  cd "$_src"
   export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
   cargo build --frozen --release -p gmnb
+  cargo build --frozen --profile lean -p dgmnb
 }
 
 check() {
-  cd "GlazeMyNumbersBaby-$pkgver"
+  cd "$_src"
   export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
-  cargo test --frozen --release --workspace --exclude gmnb
+  cargo test --frozen --release --workspace --exclude gmnb --exclude dgmnb
 }
 
-package() {
-  cd "GlazeMyNumbersBaby-$pkgver"
+package_gmnb() {
+  pkgdesc='GlazeMyNumbers,Baby: Windows Calculator ported to Rust, made pointlessly beautiful'
+  depends=('gtk4' 'libadwaita' 'glib2' 'pango' 'cairo' 'gcc-libs' 'glibc' 'hicolor-icon-theme')
+  local app=io.github.Go08er.GlazeMyNumbersBaby
+  cd "$_src"
   install -Dm755 target/release/gmnb -t "$pkgdir/usr/bin"
-  install -Dm644 "packaging/$_appid.desktop" -t "$pkgdir/usr/share/applications"
-  install -Dm644 "packaging/$_appid.metainfo.xml" -t "$pkgdir/usr/share/metainfo"
-  install -Dm644 "packaging/icons/$_appid.svg" -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
+  install -Dm644 "packaging/$app.desktop" -t "$pkgdir/usr/share/applications"
+  install -Dm644 "packaging/$app.metainfo.xml" -t "$pkgdir/usr/share/metainfo"
+  install -Dm644 "packaging/icons/$app.svg" -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
   install -Dm644 LICENSE apps/gmnb/assets/fonts/OFL-Outfit.txt -t "$pkgdir/usr/share/licenses/$pkgname"
+}
+
+package_dgmnb() {
+  pkgdesc="Don't Glaze My Numbers, Baby: the lean, software-drawn twin of GMNB"
+  depends=('wayland' 'libxkbcommon' 'gcc-libs' 'glibc' 'hicolor-icon-theme')
+  optdepends=('libx11: X11 sessions' 'libxcursor: X11 sessions' 'libxrandr: X11 sessions' 'libxi: X11 sessions')
+  local app=io.github.Go08er.DontGlazeMyNumbersBaby
+  cd "$_src"
+  install -Dm755 target/lean/dgmnb -t "$pkgdir/usr/bin"
+  install -Dm644 "packaging/$app.desktop" -t "$pkgdir/usr/share/applications"
+  install -Dm644 "packaging/$app.metainfo.xml" -t "$pkgdir/usr/share/metainfo"
+  install -Dm644 "packaging/icons/$app.svg" -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
+  install -Dm644 LICENSE apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt \
+    -t "$pkgdir/usr/share/licenses/$pkgname"
 }

@@ -22,12 +22,16 @@ jobs:
         # validate the exported (SVG) app icon.
         run: sudo apt-get update && sudo apt-get install -y flatpak librsvg2-common
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
-      - name: Build bundle (nix run .#flatpak)
-        run: nix run .#flatpak
+      - name: Build bundles (nix run .#flatpak, .#flatpak-dgmnb)
+        run: |
+          nix run .#flatpak -- --keep-cache
+          nix run .#flatpak-dgmnb
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: flatpak
-          path: dist/GMNB.flatpak
+          path: |
+            dist/GMNB.flatpak
+            dist/DGMNB.flatpak
 
   arch:
     name: Arch Linux
@@ -35,7 +39,7 @@ jobs:
     container: archlinux:latest
     steps:
       - name: Toolchain and dependencies
-        run: pacman -Syu --noconfirm --needed base-devel git rust gtk4 libadwaita
+        run: pacman -Syu --noconfirm --needed base-devel git rust gtk4 libadwaita wayland libxkbcommon
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: makepkg
         run: |
@@ -69,7 +73,8 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends git ca-certificates curl build-essential \
-            debhelper devscripts pkgconf libgtk-4-dev libadwaita-1-dev libpango1.0-dev libglib2.0-dev
+            debhelper devscripts pkgconf libgtk-4-dev libadwaita-1-dev libpango1.0-dev libglib2.0-dev \
+            libwayland-dev
       - name: Rust (rustup; Debian 13's rustc is too old)
         run: curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -93,7 +98,7 @@ jobs:
       - name: Build dependencies
         run: |
           dnf install -y git rpm-build rpmdevtools cargo rust gcc gtk4-devel libadwaita-devel \
-            pango-devel desktop-file-utils libappstream-glib
+            pango-devel wayland-devel desktop-file-utils libappstream-glib
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: rpmbuild
         run: |
@@ -126,7 +131,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -la artifacts
-          gh release create "$GITHUB_REF_NAME" artifacts/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "GMNB $GITHUB_REF_NAME" \
-            --generate-notes
+          # Re-runs refresh the assets of an existing release instead of failing.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" artifacts/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" artifacts/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "GMNB & DGMNB $GITHUB_REF_NAME" \
+              --generate-notes
+          fi

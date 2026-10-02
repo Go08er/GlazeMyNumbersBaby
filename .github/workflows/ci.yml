@@ -19,7 +19,7 @@ jobs:
         run: nix develop -c cargo test --workspace --locked
       - name: Clippy
         run: nix develop -c cargo clippy --workspace --locked
-      - name: Nix package
-        run: nix build -L
+      - name: Nix packages
+        run: nix build -L .#gmnb .#dgmnb
       - name: Flake check
         run: nix flake check
