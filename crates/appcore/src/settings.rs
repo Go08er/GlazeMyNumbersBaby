@@ -109,7 +109,19 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
     ));
-    let result = std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, path));
+    // create_new: never write through something already at the temp name
+    // (a stale file or a planted symlink); the final rename replaces `path`
+    // itself rather than following a symlink there.
+    let result = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut f| {
+            use std::io::Write;
+            f.write_all(bytes)?;
+            f.sync_all()
+        })
+        .and_then(|_| std::fs::rename(&tmp, path));
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }

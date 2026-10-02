@@ -132,6 +132,9 @@ pub fn shortcut(mode: CalcMode, kp: &KeyPress, shift_mode: ShiftMode) -> Option<
 
     // Control (+Shift) chords.
     if ctrl {
+        // Ctrl+Alt is never a calculator chord. (v0.1.0 ignored Alt here;
+        // rejecting it keeps AltGr-style Ctrl+Alt input from turning into
+        // memory or hyperbolic commands.)
         if kp.alt {
             return None;
         }
