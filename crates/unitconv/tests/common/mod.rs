@@ -43,8 +43,9 @@ pub fn snapshot_at(fetched_at: DateTime<Utc>) -> CurrencySnapshot {
     CurrencySnapshot::from_json(&json).unwrap()
 }
 
-/// The fictional planet currencies the open-source Windows Calculator ships
-/// (CurrencyHttpClient.cs), as a snapshot.
+/// The fictional planet currencies hard-coded in the open-source Windows
+/// Calculator's mock CurrencyHttpClient.cs (the ported tests expect them),
+/// as a snapshot.
 #[allow(clippy::excessive_precision)] // verbatim from CurrencyHttpClient.cs
 pub fn planet_snapshot(fetched_at: DateTime<Utc>) -> CurrencySnapshot {
     let currencies = [
