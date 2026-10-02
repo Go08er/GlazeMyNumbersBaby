@@ -124,8 +124,20 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         .and_then(|_| std::fs::rename(&tmp, path));
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
+        return result;
     }
-    result
+    // Make the rename itself durable: sync the directory entry (best
+    // effort; some filesystems refuse to sync a directory).
+    if let Some(dir) = path.parent()
+        && let Ok(d) = std::fs::File::open(if dir.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            dir
+        })
+    {
+        let _ = d.sync_all();
+    }
+    Ok(())
 }
 
 #[cfg(test)]
