@@ -102,6 +102,8 @@ pub enum Arg<'a> {
     U32(u32),
     /// An empty `a{sv}` (options dictionaries we have nothing to put in).
     EmptyDict,
+    /// An `a{sv}` whose values are all strings.
+    StrDict(&'a [(&'a str, &'a str)]),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -125,6 +127,8 @@ pub struct Connection {
     timeout: Option<Duration>,
     /// Messages read while waiting for a reply (signals, mostly).
     queued: VecDeque<Message>,
+    /// Our unique bus name (from `Hello`).
+    unique: Option<String>,
 }
 
 fn err(msg: impl Into<String>) -> io::Error {
@@ -171,22 +175,32 @@ fn read_exact_by(
     Ok(())
 }
 
+/// Write all of `data` before `deadline` (if any), re-checking the time
+/// before every partial write.
 fn write_all_by(stream: &mut UnixStream, data: &[u8], deadline: Option<Instant>) -> io::Result<()> {
-    let left = deadline.map(|d| d.saturating_duration_since(Instant::now()));
-    if left.is_some_and(|l| l.is_zero()) {
-        return Err(timed_out());
-    }
-    stream.set_write_timeout(left)?;
-    stream.write_all(data).map_err(|e| {
-        if matches!(
-            e.kind(),
-            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-        ) {
-            timed_out()
-        } else {
-            e
+    let mut done = 0;
+    while done < data.len() {
+        let left = deadline.map(|d| d.saturating_duration_since(Instant::now()));
+        if left.is_some_and(|l| l.is_zero()) {
+            return Err(timed_out());
         }
-    })
+        stream.set_write_timeout(left)?;
+        match stream.write(&data[done..]) {
+            Ok(0) => return Err(io::Error::new(io::ErrorKind::WriteZero, "bus closed")),
+            Ok(n) => done += n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Err(timed_out());
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 impl Connection {
@@ -217,9 +231,10 @@ impl Connection {
             serial: 0,
             timeout: Some(timeout),
             queued: VecDeque::new(),
+            unique: None,
         };
         conn.authenticate(deadline)?;
-        conn.call_by(
+        let hello = conn.call_by(
             "org.freedesktop.DBus",
             "/org/freedesktop/DBus",
             "org.freedesktop.DBus",
@@ -227,6 +242,7 @@ impl Connection {
             &[],
             deadline,
         )?;
+        conn.unique = hello.first().and_then(Value::as_str).map(str::to_string);
         Ok(conn)
     }
 
@@ -547,6 +563,21 @@ fn encode_call(
                 body.align(8);
                 sig.push_str("a{sv}");
             }
+            Arg::StrDict(entries) => {
+                body.u32(0);
+                let len_at = body.0.len() - 4;
+                body.align(8);
+                let start = body.0.len();
+                for (k, v) in entries.iter() {
+                    body.align(8);
+                    body.str(k);
+                    body.sig("s");
+                    body.str(v);
+                }
+                let len = (body.0.len() - start) as u32;
+                body.0[len_at..len_at + 4].copy_from_slice(&len.to_le_bytes());
+                sig.push_str("a{sv}");
+            }
         }
     }
     let mut fields = Writer(vec![0; 16]);
@@ -659,6 +690,9 @@ impl<'a> Reader<'a> {
             .as_bytes()
             .first()
             .ok_or_else(|| err("empty signature"))?;
+        if !c.is_ascii() {
+            return Err(err("invalid signature"));
+        }
         let rest = &sig[1..];
         let v = match c {
             b'y' => Value::Byte(self.take(1)?[0]),
@@ -797,12 +831,29 @@ fn decode(data: &[u8]) -> io::Result<Message> {
     r.pos = 16;
     r.end = fields_end;
     let mut body_sig = String::new();
+    let mut seen = [false; 10];
     while r.pos < fields_end {
         r.align(8)?;
         let code = r.take(1)?[0];
         let sig = r.signature()?;
         if !single_type(&sig) {
             return Err(err("bad header field"));
+        }
+        // Known fields must have their specified wire type and appear once.
+        let expected = match code {
+            1 => Some("o"),
+            2 | 3 | 4 | 6 | 7 => Some("s"),
+            5 | 9 => Some("u"),
+            8 => Some("g"),
+            _ => None,
+        };
+        if let Some(want) = expected {
+            if sig != want {
+                return Err(err("header field has the wrong type"));
+            }
+            if std::mem::replace(&mut seen[code as usize], true) {
+                return Err(err("duplicate header field"));
+            }
         }
         let (v, _) = r.value(&sig, 1)?;
         match (code, v) {
@@ -821,6 +872,9 @@ fn decode(data: &[u8]) -> io::Result<Message> {
     let body = &data[r.pos..];
     let mut br = Reader::new(body, big);
     br.values = r.values;
+    if !valid_signature(&body_sig) {
+        return Err(err("invalid body signature"));
+    }
     let mut sig = body_sig.as_str();
     while !sig.is_empty() {
         let (v, tail) = br.value(sig, 0)?;
@@ -900,17 +954,97 @@ pub fn system_timezone(timeout: Duration) -> Option<String> {
     body.first()?.as_str().map(str::to_string)
 }
 
-/// Ask the desktop (through the OpenURI portal) to open a web link.
-pub fn open_uri(uri: &str, timeout: Duration) -> io::Result<()> {
-    let mut conn = Connection::open(Bus::Session, timeout)?;
-    conn.call_args(
+/// What became of an [`open_uri`] request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Opened {
+    Yes,
+    /// The user dismissed the app chooser.
+    Cancelled,
+    /// The portal reported a failure.
+    Failed,
+    /// The portal took the request but hadn't answered when the wait ended
+    /// (an app chooser may still be open).
+    Unanswered,
+}
+
+/// Ask the desktop (through the OpenURI portal) to open a web link, and wait
+/// up to `wait` for the portal's answer. `Err` means the request itself
+/// failed (no portal, bus error).
+pub fn open_uri(uri: &str, wait: Duration) -> io::Result<Opened> {
+    open_uri_on(
+        Connection::open(Bus::Session, Duration::from_secs(2))?,
+        uri,
+        wait,
+    )
+}
+
+fn open_uri_on(mut conn: Connection, uri: &str, wait: Duration) -> io::Result<Opened> {
+    static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    // Subscribe to the request's Response before making it, using a
+    // handle_token so its object path is known in advance.
+    let token = format!(
+        "gmnb{}_{}",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let sender = conn
+        .unique
+        .as_deref()
+        .ok_or_else(|| err("no unique name"))?
+        .trim_start_matches(':')
+        .replace('.', "_");
+    let expected = format!("{PORTAL_PATH}/request/{sender}/{token}");
+    conn.add_match(&format!(
+        "type='signal',sender='{PORTAL}',interface='org.freedesktop.portal.Request',\
+         member='Response',path='{expected}'"
+    ))?;
+    let reply = conn.call_args(
         PORTAL,
         PORTAL_PATH,
         "org.freedesktop.portal.OpenURI",
         "OpenURI",
-        &[Arg::Str(""), Arg::Str(uri), Arg::EmptyDict],
-    )
-    .map(|_| ())
+        &[
+            Arg::Str(""),
+            Arg::Str(uri),
+            Arg::StrDict(&[("handle_token", &token)]),
+        ],
+    )?;
+    // Old portals may pick their own path; listen there too.
+    let handle = reply
+        .first()
+        .and_then(Value::as_str)
+        .unwrap_or(&expected)
+        .to_string();
+    if handle != expected {
+        conn.add_match(&format!(
+            "type='signal',sender='{PORTAL}',interface='org.freedesktop.portal.Request',\
+             member='Response',path='{handle}'"
+        ))?;
+    }
+    let owner = conn.name_owner(PORTAL);
+    let deadline = Instant::now() + wait;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Ok(Opened::Unanswered);
+        }
+        conn.set_timeout(Some(left));
+        let msg = match conn.next_message() {
+            Err(e) if e.kind() == io::ErrorKind::TimedOut => return Ok(Opened::Unanswered),
+            m => m?,
+        };
+        if msg.kind == SIGNAL
+            && msg.member.as_deref() == Some("Response")
+            && msg.path.as_deref() == Some(handle.as_str())
+            && (owner.is_none() || msg.sender == owner)
+        {
+            return Ok(match msg.body.first().and_then(Value::as_u32) {
+                Some(0) => Opened::Yes,
+                Some(1) => Opened::Cancelled,
+                _ => Opened::Failed,
+            });
+        }
+    }
 }
 
 /// Block, calling `f(namespace, key, value)` for every `SettingChanged`
@@ -929,10 +1063,28 @@ fn watch_settings_on(
         "type='signal',sender='{PORTAL}',path='{PORTAL_PATH}',\
          interface='org.freedesktop.portal.Settings',member='SettingChanged'"
     ))?;
+    // Follow ownership changes of the portal name, so a signal is checked
+    // against whoever owns it at the time it was sent (the bus delivers the
+    // NameOwnerChanged notice in order with the signals).
+    conn.add_match(&format!(
+        "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',\
+         member='NameOwnerChanged',arg0='{PORTAL}'"
+    ))?;
     let mut owner = conn.name_owner(PORTAL);
     loop {
         conn.set_timeout(None);
         let msg = conn.next_message()?;
+        if msg.kind == SIGNAL
+            && msg.member.as_deref() == Some("NameOwnerChanged")
+            && msg.sender.as_deref() == Some("org.freedesktop.DBus")
+        {
+            if let [name, _, new] = msg.body.as_slice()
+                && name.as_str() == Some(PORTAL)
+            {
+                owner = new.as_str().filter(|s| !s.is_empty()).map(str::to_string);
+            }
+            continue;
+        }
         if msg.kind != SIGNAL
             || msg.member.as_deref() != Some("SettingChanged")
             || msg.interface.as_deref() != Some("org.freedesktop.portal.Settings")
@@ -1227,20 +1379,25 @@ mod tests {
         bytes
     }
 
-    /// Real bus: signals from anyone but the portal's owner are ignored.
-    /// Needs `dbus-daemon` on PATH; skipped otherwise.
-    #[test]
-    fn watcher_ignores_impostors() {
-        use std::io::BufRead;
-        // A self-contained bus: its own socket and a permissive policy, so it
-        // doesn't depend on the host's session configuration.
-        let dir = std::env::temp_dir().join(format!("appcore-bus-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-        let conf = dir.join("bus.conf");
-        std::fs::write(
-            &conf,
-            format!(
-                r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+    /// A self-contained bus for a test: its own socket and a permissive
+    /// policy, so it doesn't depend on the host's session configuration.
+    struct PrivateBus {
+        daemon: std::process::Child,
+        dir: std::path::PathBuf,
+        addr: String,
+    }
+
+    impl PrivateBus {
+        /// `None` (and the test skips) without a working `dbus-daemon`.
+        fn start(name: &str) -> Option<PrivateBus> {
+            use std::io::BufRead;
+            let dir = std::env::temp_dir().join(format!("appcore-{name}-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            let conf = dir.join("bus.conf");
+            std::fs::write(
+                &conf,
+                format!(
+                    r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
 <busconfig>
   <type>session</type>
@@ -1252,31 +1409,54 @@ mod tests {
     <allow own="*"/>
   </policy>
 </busconfig>"#,
-                dir.join("bus").display()
-            ),
-        )
-        .unwrap();
-        let Ok(mut daemon) = std::process::Command::new("dbus-daemon")
-            .arg(format!("--config-file={}", conf.display()))
-            .args(["--nofork", "--print-address=1"])
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-        else {
-            eprintln!("no dbus-daemon; skipped");
+                    dir.join("bus").display()
+                ),
+            )
+            .ok()?;
+            let Ok(mut daemon) = std::process::Command::new("dbus-daemon")
+                .arg(format!("--config-file={}", conf.display()))
+                .args(["--nofork", "--print-address=1"])
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+            else {
+                eprintln!("no dbus-daemon; skipped");
+                return None;
+            };
+            let mut addr = String::new();
+            let _ = std::io::BufReader::new(daemon.stdout.take()?).read_line(&mut addr);
+            let bus = PrivateBus {
+                daemon,
+                dir,
+                addr: addr.trim().to_string(),
+            };
+            if bus.addr.is_empty() {
+                eprintln!("dbus-daemon didn't start; skipped");
+                return None;
+            }
+            Some(bus)
+        }
+    }
+
+    impl Drop for PrivateBus {
+        fn drop(&mut self) {
+            let _ = self.daemon.kill();
+            let _ = self.daemon.wait();
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// Real bus: signals from anyone but the portal's owner are ignored.
+    /// Needs `dbus-daemon` on PATH; skipped otherwise.
+    #[test]
+    fn watcher_ignores_impostors() {
+        let Some(bus) = PrivateBus::start("watch") else {
             return;
         };
-        let mut addr = String::new();
-        let _ = std::io::BufReader::new(daemon.stdout.take().unwrap()).read_line(&mut addr);
-        let addr = addr.trim().to_string();
-        if addr.is_empty() {
-            eprintln!("dbus-daemon didn't start; skipped");
-            let _ = daemon.kill();
-            return;
-        }
+        let addr = bus.addr.as_str();
         let t = Duration::from_secs(2);
 
         let (tx, rx) = std::sync::mpsc::channel();
-        let watcher = Connection::open_address(&addr, t).unwrap();
+        let watcher = Connection::open_address(addr, t).unwrap();
         std::thread::spawn(move || {
             let _ = watch_settings_on(watcher, |_, _, v| {
                 let _ = tx.send(v.as_u32());
@@ -1286,7 +1466,7 @@ mod tests {
 
         // An impostor: right interface, wrong path, then right path, but it
         // doesn't own the portal name.
-        let mut impostor = Connection::open_address(&addr, t).unwrap();
+        let mut impostor = Connection::open_address(addr, t).unwrap();
         impostor
             .stream
             .write_all(&settings_signal("/fake", 1))
@@ -1301,7 +1481,7 @@ mod tests {
         );
 
         // The real owner of org.freedesktop.portal.Desktop.
-        let mut portal = Connection::open_address(&addr, t).unwrap();
+        let mut portal = Connection::open_address(addr, t).unwrap();
         portal
             .call_args(
                 "org.freedesktop.DBus",
@@ -1316,9 +1496,323 @@ mod tests {
             .write_all(&settings_signal(PORTAL_PATH, 2))
             .unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), Some(2));
-        let _ = daemon.kill();
-        let _ = daemon.wait();
-        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Claim the portal's name on `addr`.
+    fn fake_portal(addr: &str) -> Connection {
+        let mut portal = Connection::open_address(addr, Duration::from_secs(2)).unwrap();
+        portal
+            .call_args(
+                "org.freedesktop.DBus",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus",
+                "RequestName",
+                &[Arg::Str(PORTAL), Arg::U32(4)],
+            )
+            .unwrap();
+        portal
+    }
+
+    /// Wait for the OpenURI call; returns it after checking its arguments.
+    fn take_open_uri(portal: &mut Connection, uri: &str) -> (Message, String) {
+        let call = loop {
+            let m = portal.next_message().unwrap();
+            if m.kind == METHOD_CALL && m.member.as_deref() == Some("OpenURI") {
+                break m;
+            }
+        };
+        assert_eq!(call.path.as_deref(), Some(PORTAL_PATH));
+        assert_eq!(
+            call.interface.as_deref(),
+            Some("org.freedesktop.portal.OpenURI")
+        );
+        let [Value::Str(parent), Value::Str(got), Value::Array(options)] = &call.body[..] else {
+            panic!("OpenURI(s, s, a{{sv}}) expected, got {:?}", call.body);
+        };
+        assert_eq!((parent.as_str(), got.as_str()), ("", uri));
+        let token = options
+            .iter()
+            .find_map(|e| match e {
+                Value::Struct(kv) => match &kv[..] {
+                    [Value::Str(k), Value::Variant(v)] if k == "handle_token" => {
+                        v.as_str().map(str::to_string)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("a handle_token option");
+        let sender = call.sender.clone().unwrap();
+        let path = format!(
+            "{PORTAL_PATH}/request/{}/{token}",
+            sender.trim_start_matches(':').replace('.', "_")
+        );
+        (call, path)
+    }
+
+    /// The portal's reply to `call`: the request's object path.
+    fn request_handle(call: &Message, path: &str) -> Vec<u8> {
+        let mut body = Writer(Vec::new());
+        body.str(path);
+        let sender = call.sender.clone().unwrap();
+        message(
+            METHOD_RETURN,
+            |f| {
+                f.field(5, "u", |w| w.u32(call.serial));
+                f.field(6, "s", |w| w.str(&sender));
+            },
+            "o",
+            &body.0,
+        )
+    }
+
+    /// `Request.Response(code, {})` on `path`.
+    fn response(path: &str, code: u32) -> Vec<u8> {
+        let mut body = Writer(Vec::new());
+        body.u32(code);
+        body.u32(0); // an empty a{sv}
+        body.align(8);
+        let mut bytes = message(
+            SIGNAL,
+            |f| {
+                f.field(1, "o", |w| w.str(path));
+                f.field(2, "s", |w| w.str("org.freedesktop.portal.Request"));
+                f.field(3, "s", |w| w.str("Response"));
+            },
+            "ua{sv}",
+            &body.0,
+        );
+        bytes[2] = 1; // NO_REPLY_EXPECTED
+        bytes
+    }
+
+    /// Real bus with a stand-in portal: the call is marshalled as the spec
+    /// says, the answer is read from the request object (only from the
+    /// portal), and silence or a missing portal are told apart.
+    /// Needs `dbus-daemon` on PATH; skipped otherwise.
+    #[test]
+    fn open_uri_follows_the_request() {
+        let Some(bus) = PrivateBus::start("openuri") else {
+            return;
+        };
+        let t = Duration::from_secs(2);
+        let uri = "https://example.org/a?b=c";
+        let open = |wait| {
+            let conn = Connection::open_address(&bus.addr, t).unwrap();
+            std::thread::spawn(move || open_uri_on(conn, uri, wait))
+        };
+
+        // No portal on the bus: the request itself fails.
+        assert!(open(t).join().unwrap().is_err());
+
+        let mut portal = fake_portal(&bus.addr);
+        let mut impostor = Connection::open_address(&bus.addr, t).unwrap();
+        for (code, outcome) in [
+            (0, Opened::Yes),
+            (1, Opened::Cancelled),
+            (2, Opened::Failed),
+        ] {
+            let opener = open(t);
+            let (call, path) = take_open_uri(&mut portal, uri);
+            portal
+                .stream
+                .write_all(&request_handle(&call, &path))
+                .unwrap();
+            // Someone else answering for the portal is ignored.
+            impostor.stream.write_all(&response(&path, 0)).unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+            portal.stream.write_all(&response(&path, code)).unwrap();
+            assert_eq!(opener.join().unwrap().unwrap(), outcome);
+        }
+
+        // The portal took the request but stays quiet.
+        let opener = open(Duration::from_millis(300));
+        let (call, path) = take_open_uri(&mut portal, uri);
+        portal
+            .stream
+            .write_all(&request_handle(&call, &path))
+            .unwrap();
+        assert_eq!(opener.join().unwrap().unwrap(), Opened::Unanswered);
+    }
+
+    /// The round-4 review's case: a body signature carried as a plain
+    /// string (`s`, not `g`), holding a non-ASCII character.
+    #[test]
+    fn header_fields_must_have_their_wire_type() {
+        let mut f = Writer(vec![0; 16]);
+        f.field(5, "u", |w| w.u32(3));
+        f.field(8, "s", |w| w.str("é"));
+        let n = (f.0.len() - 16) as u32;
+        f.0[0] = b'l';
+        f.0[1] = METHOD_RETURN;
+        f.0[3] = 1;
+        f.0[8..12].copy_from_slice(&9u32.to_le_bytes());
+        f.0[12..16].copy_from_slice(&n.to_le_bytes());
+        f.align(8);
+        assert!(decode(&f.0).is_err());
+
+        // Duplicate known fields are rejected too.
+        let dup = message(
+            METHOD_RETURN,
+            |f| {
+                f.field(5, "u", |w| w.u32(3));
+                f.field(5, "u", |w| w.u32(4));
+            },
+            "",
+            &[],
+        );
+        assert!(decode(&dup).is_err());
+        // A path must be an object path.
+        let bad = message(SIGNAL, |f| f.field(1, "s", |w| w.str("/x")), "", &[]);
+        assert!(decode(&bad).is_err());
+    }
+
+    #[test]
+    fn string_dicts_encode_per_spec() {
+        let bytes = encode_call(
+            1,
+            "d",
+            "/",
+            "i",
+            "m",
+            &[Arg::StrDict(&[("handle_token", "t1"), ("k", "v")])],
+        );
+        let msg = decode(&bytes).unwrap();
+        let Value::Array(items) = &msg.body[0] else {
+            panic!()
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items[0],
+            Value::Struct(vec![
+                Value::Str("handle_token".into()),
+                Value::Variant(Box::new(Value::Str("t1".into())))
+            ])
+        );
+    }
+
+    /// Seeded mutation fuzzing: no input may make the decoder panic.
+    #[test]
+    fn decoder_never_panics_on_mutated_messages() {
+        let mut seeds = vec![
+            encode_call(
+                7,
+                "org.example",
+                "/a/b",
+                "org.example.I",
+                "Do",
+                &[Arg::Str("x"), Arg::Str("yz")],
+            ),
+            encode_call(
+                1,
+                "d",
+                "/",
+                "i",
+                "m",
+                &[Arg::Str("a"), Arg::StrDict(&[("k", "v")])],
+            ),
+            variant("(ddd)", |w| {
+                w.align(8);
+                for c in [0.25f64, 0.5, 1.0] {
+                    w.0.extend_from_slice(&c.to_le_bytes());
+                }
+            }),
+            variant("s", |w| w.str("Europe/Paris")),
+            settings_signal(PORTAL_PATH, 1),
+        ];
+        let mut ay = Writer(Vec::new());
+        ay.u32(5);
+        ay.0.extend_from_slice(&[1, 2, 3, 4, 5]);
+        seeds.push(reply("ay", ay.0));
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut rnd = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for i in 0..200_000u32 {
+            let mut m = seeds[i as usize % seeds.len()].clone();
+            for _ in 0..1 + rnd() % 4 {
+                if m.is_empty() {
+                    break;
+                }
+                let at = (rnd() as usize) % m.len();
+                match rnd() % 6 {
+                    0 => m[at] ^= 1 << (rnd() % 8),
+                    1 => m[at] = rnd() as u8,
+                    2 => m.truncate(at),
+                    3 => m.insert(at, rnd() as u8),
+                    4 => {
+                        m.remove(at);
+                    }
+                    _ => {
+                        // Bend a length/count word.
+                        let at = at & !3;
+                        if at + 4 <= m.len() {
+                            let v = (rnd() % 600) as u32;
+                            m[at..at + 4].copy_from_slice(&v.to_le_bytes());
+                        }
+                    }
+                }
+            }
+            let r = std::panic::catch_unwind(|| decode(&m));
+            assert!(r.is_ok(), "decoder panicked on case {i}: {m:?}");
+        }
+    }
+
+    /// Structure-aware fuzzing: well-framed messages whose header fields
+    /// have random codes, (often wrong) wire types and hostile contents.
+    #[test]
+    fn decoder_never_panics_on_odd_headers() {
+        const TEXTS: [&str; 14] = [
+            "", "é", "aé", "a{sv}", "(", "ss", "/x", "s", "ay", "v", "(ddd)", "a{", "é(", "\u{7f}",
+        ];
+        const TYPES: [&str; 8] = ["o", "s", "g", "u", "y", "v", "b", "x"];
+        let mut x: u64 = 0xD1B5_4A32_D192_ED03;
+        let mut rnd = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for i in 0..100_000u32 {
+            let mut f = Writer(vec![0; 16]);
+            for _ in 0..rnd() % 6 {
+                let code = (rnd() % 11) as u8;
+                let ty = TYPES[(rnd() as usize) % TYPES.len()];
+                let text = TEXTS[(rnd() as usize) % TEXTS.len()];
+                f.field(code, ty, |w| match ty {
+                    "o" | "s" => w.str(text),
+                    "g" => w.sig(text),
+                    "u" | "b" => w.u32(rnd() as u32 % 3),
+                    "y" => w.u8(rnd() as u8),
+                    "x" => {
+                        w.align(8);
+                        w.0.extend_from_slice(&rnd().to_le_bytes());
+                    }
+                    _ => {
+                        w.sig("u");
+                        w.u32(rnd() as u32);
+                    }
+                });
+            }
+            let n = (f.0.len() - 16) as u32;
+            f.0[0] = if rnd() % 8 == 0 { b'B' } else { b'l' };
+            f.0[1] = (rnd() % 5) as u8;
+            f.0[3] = 1;
+            let body_len = (rnd() % 48) as usize;
+            f.0[4..8].copy_from_slice(&(body_len as u32).to_le_bytes());
+            f.0[8..12].copy_from_slice(&i.to_le_bytes());
+            f.0[12..16].copy_from_slice(&n.to_le_bytes());
+            f.align(8);
+            for _ in 0..body_len {
+                f.0.push(rnd() as u8);
+            }
+            let m = f.0;
+            let r = std::panic::catch_unwind(|| decode(&m));
+            assert!(r.is_ok(), "decoder panicked on case {i}: {m:?}");
+        }
     }
 
     #[test]
