@@ -30,6 +30,7 @@ sctk = { package = "smithay-client-toolkit", version = "0.19", default-features 
 wayland-backend = { version = "0.3", default-features = false, features = ["client_system"] }
 # X11 sessions (pure-Rust X connection; nothing loaded on Wayland).
 x11-clipboard = "0.9"
+x11rb = { version = "0.13", default-features = false }
 libc = "0.2"
 accesskit = "0.25"
 accesskit_winit = { version = "0.34", default-features = false, features = ["accesskit_unix", "async-io", "rwh_06"] }

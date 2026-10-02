@@ -108,6 +108,8 @@
             libxkbcommon
             # Runs appcore's private-bus D-Bus tests.
             dbus
+            # Runs DGMNB's X11 clipboard test.
+            xvfb
           ];
           RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
           # DGMNB loads the keymap library (and Xlib on X11) at run time.
