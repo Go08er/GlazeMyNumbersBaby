@@ -47,17 +47,19 @@ shares one (kept readable), no GPU, no animations, no idle CPU.
 
 ## Memory
 
-| App (760×700, idle) | RSS | PSS | Idle CPU |
+| App (760×700 at 1× scale, idle) | RSS | PSS | Idle CPU |
 | --- | --- | --- | --- |
 | GMNB, default (Vulkan) | 205 MB | 121 MB | 0.3% |
 | GMNB, software renderer (`GSK_RENDERER=cairo`) | 68 MB | 40 MB | 0% |
 | **DGMNB** | **12.6 MB** | **8.6 MB** | **0%** |
 | DGMNB, Graphing with three equations | 13.7 MB | 9.5 MB | 0% |
+| DGMNB at 2× scale (the window buffer quadruples) | 21.1 MB | 12.8 MB | 0% |
 | *KCalc 26.08.1, for reference (Qt 6)* | *79 MB* | *36 MB* | |
 
 DGMNB's toolkit was picked by measuring a bare window with keys in each
 candidate: winit + softbuffer + tiny-skia 9 MB, iced (tiny-skia) 14 MB,
-Slint (software) 21 MB, GTK 4 without libadwaita 50 MB. DGMNB draws
+Slint (software) 21 MB, GTK 4 without libadwaita 50 MB. Those prototypes
+and the measurement scripts are in [`tools/bench`](tools/bench). DGMNB draws
 straight into the compositor's shared-memory buffer and only redraws when
 something changes. Its figure includes AccessKit's screen-reader bridge
 (idle when no screen reader is running), the Wayland clipboard, and live
@@ -189,7 +191,7 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **589 tests** (counts include
+`nix develop -c cargo test --workspace` runs **603 tests** (counts include
 doctests; one more, a live currency fetch, is `#[ignore]`d). The heart of it
 is differential testing against the *real* C++ engine, compiled from the
 upstream sources with g++:
@@ -202,8 +204,8 @@ upstream sources with g++:
 | unitconv (138 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
 | datecalc (40), copypaste (40) | Ports of `DateCalculatorTests` and `CopyPasteManagerTests`, plus paste key-sequence tests |
 | graphing (119) | Parser, sampling and asymptotes, implicit/inequality plots, function analysis, frame-time budgets, and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis) |
-| appcore (27) | Keyboard map, key scripts, settings storage (huge/corrupt files), colour contrast, saved-equation sanitising, D-Bus wire format |
-| gmnb (3), dgmnb (13) | GDK key translation, palette contrast for extreme accents; DGMNB text shaping and font coverage, SVG icons, text editing, accessibility tree soundness |
+| appcore (36) | Keyboard map, key scripts, settings storage (huge/corrupt files), colour contrast, saved-equation sanitising, D-Bus wire format and hostile messages, portal signals from impostors on a private bus |
+| gmnb (3), dgmnb (18) | GDK key translation, palette contrast for extreme accents; DGMNB text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, scrolled-out controls, the display's spoken value, clipboard teardown and pipe deadlines |
 
 The oracles live in `tools/oracle/` and need the upstream repository checked
 out at `reference/calculator` to regenerate the golden files.
@@ -234,6 +236,10 @@ out at `reference/calculator` to regenerate the golden files.
   and runs sandboxes in UTC. Both twins ask systemd-timedated for the real
   zone (read-only `org.freedesktop.timedate1` access), so "Updated …" times
   and Date's "today" are local.
+- GMNB is a single-instance app; DGMNB isn't. Two DGMNB windows each keep
+  their own history and settings, and the last one closed saves them.
+- DGMNB's clipboard works on Wayland and X11; copied graphs are offered as
+  `image/png`.
 - NVIDIA's driver busy-waits on GPU fences by default, which costs ~20% of a
   core even for gentle animation; GMNB sets `__GL_YIELD=USLEEP` for its own
   process unless you've set it yourself. DGMNB doesn't touch the GPU.

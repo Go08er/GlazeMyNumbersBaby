@@ -1,0 +1,6 @@
+[package]
+name = "p-gtk"
+version = "0.1.0"
+edition = "2024"
+[dependencies]
+gtk = { package = "gtk4", version = "0.11" }

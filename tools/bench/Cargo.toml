@@ -1,0 +1,13 @@
+# Throwaway prototypes used to choose DGMNB's toolkit (not part of the main
+# workspace). Each draws a calculator-like window: a display, 24 keys and,
+# where the toolkit has one, a text field. See README.md.
+[workspace]
+resolver = "3"
+members = ["p-raw", "p-raw2", "p-slint", "p-iced", "p-fltk", "p-gtk"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+panic = "abort"
+strip = true

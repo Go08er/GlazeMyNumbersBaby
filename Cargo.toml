@@ -1,4 +1,5 @@
 [workspace]
+exclude = ["tools/bench"]
 resolver = "3"
 members = [
     "crates/ratpack",

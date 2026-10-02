@@ -106,6 +106,8 @@
             # DGMNB
             wayland
             libxkbcommon
+            # Runs appcore's private-bus D-Bus tests.
+            dbus
           ];
           RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
           # DGMNB loads the keymap library (and Xlib on X11) at run time.

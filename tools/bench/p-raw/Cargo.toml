@@ -1,0 +1,9 @@
+[package]
+name = "p-raw"
+version = "0.1.0"
+edition = "2024"
+[dependencies]
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "wayland", "wayland-dlopen", "wayland-csd-adwaita"] }
+softbuffer = { version = "0.4", default-features = false, features = ["wayland", "wayland-dlopen"] }
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
+fontdue = "0.9"

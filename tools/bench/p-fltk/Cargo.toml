@@ -1,0 +1,6 @@
+[package]
+name = "p-fltk"
+version = "0.1.0"
+edition = "2024"
+[dependencies]
+fltk = { version = "1.5", features = ["use-wayland"] }

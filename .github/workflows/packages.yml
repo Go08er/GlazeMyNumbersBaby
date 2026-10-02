@@ -105,7 +105,7 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           rpmdev-setuptree
           ver=$(rpmspec -q --qf '%{version}\n' packaging/fedora/gmnb.spec | head -1)
-          git archive --prefix="GlazeMyNumbersBaby-$ver/" -o ~/rpmbuild/SOURCES/GlazeMyNumbersBaby-$ver.tar.gz HEAD
+          git archive --prefix="GlazeMyNumbersBaby-$ver/" -o ~/rpmbuild/SOURCES/"GlazeMyNumbersBaby-$ver.tar.gz" HEAD
           rpmbuild -bb packaging/fedora/gmnb.spec
           mkdir -p out
           cp ~/rpmbuild/RPMS/*/*.rpm out/
@@ -121,6 +121,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # One publisher per tag at a time; a second run waits instead of
+    # interleaving with (or cancelling) the first.
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -129,14 +134,41 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
-          ls -la artifacts
-          # Re-runs refresh the assets of an existing release instead of failing.
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" artifacts/* --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" artifacts/* \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "GMNB & DGMNB $GITHUB_REF_NAME" \
+          set -euo pipefail
+          (cd artifacts && sha256sum -- * > ../SHA256SUMS)
+          cat SHA256SUMS
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            # SHA256SUMS goes first so even a partly uploaded release says
+            # which build it belongs to.
+            gh release create "$TAG" SHA256SUMS artifacts/* \
+              --repo "$REPO" \
+              --title "GMNB & DGMNB $TAG" \
+              --notes "Built from commit $GITHUB_SHA; see SHA256SUMS." \
               --generate-notes
+            exit 0
           fi
+          # The release exists (a re-run). Published files are never replaced:
+          # only missing ones are added, and only if what's there came from
+          # this exact build.
+          mkdir published
+          if ! gh release download "$TAG" --repo "$REPO" -p SHA256SUMS -D published; then
+            echo "::error::$TAG exists without SHA256SUMS; delete it by hand before publishing again."
+            exit 1
+          fi
+          if ! cmp -s published/SHA256SUMS SHA256SUMS; then
+            echo "::error::$TAG holds files from a different build (SHA256SUMS differs). Delete the release by hand to republish."
+            diff published/SHA256SUMS SHA256SUMS || true
+            exit 1
+          fi
+          existing=$(gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name')
+          for f in artifacts/*; do
+            name=$(basename "$f")
+            if grep -qxF "$name" <<<"$existing"; then
+              echo "already published: $name"
+            else
+              gh release upload "$TAG" "$f" --repo "$REPO"
+            fi
+          done
