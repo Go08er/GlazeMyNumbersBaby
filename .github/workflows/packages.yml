@@ -1,0 +1,125 @@
+name: Packages
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  flatpak:
+    name: Flatpak
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Let bubblewrap create user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Install flatpak
+        run: sudo apt-get update && sudo apt-get install -y flatpak
+      - uses: cachix/install-nix-action@v31
+      - name: Build bundle (nix run .#flatpak)
+        run: nix run .#flatpak
+      - uses: actions/upload-artifact@v7
+        with:
+          name: flatpak
+          path: dist/GMNB.flatpak
+
+  arch:
+    name: Arch Linux
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Toolchain and dependencies
+        run: pacman -Syu --noconfirm --needed base-devel git rust gtk4 libadwaita
+      - uses: actions/checkout@v7
+      - name: makepkg
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          ver=$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)
+          useradd -m builder
+          mkdir -p /home/builder/pkg
+          cp packaging/arch/PKGBUILD /home/builder/pkg/
+          # Same layout as the GitHub tag tarball the PKGBUILD downloads.
+          git archive --prefix="GlazeMyNumbersBaby-$ver/" -o "/home/builder/pkg/gmnb-$ver.tar.gz" HEAD
+          chown -R builder /home/builder/pkg
+          cd /home/builder/pkg
+          runuser -u builder -- makepkg --printsrcinfo > .SRCINFO
+          runuser -u builder -- makepkg -f --noconfirm
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cp ./*.pkg.tar.zst "$GITHUB_WORKSPACE/out/"
+          cp .SRCINFO "$GITHUB_WORKSPACE/out/gmnb.SRCINFO"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: arch
+          path: out/*
+
+  debian:
+    name: Debian 13
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates curl build-essential \
+            debhelper devscripts pkgconf libgtk-4-dev libadwaita-1-dev libpango1.0-dev libglib2.0-dev
+      - name: Rust (rustup; Debian 13's rustc is too old)
+        run: curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+      - uses: actions/checkout@v7
+      - name: dpkg-buildpackage
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cp -r packaging/debian debian
+          dpkg-buildpackage -b -us -uc
+          mkdir -p out
+          cp ../*.deb out/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: debian
+          path: out/*.deb
+
+  fedora:
+    name: Fedora
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Build dependencies
+        run: |
+          dnf install -y git rpm-build rpmdevtools cargo rust gcc gtk4-devel libadwaita-devel \
+            pango-devel desktop-file-utils libappstream-glib
+      - uses: actions/checkout@v7
+      - name: rpmbuild
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          rpmdev-setuptree
+          ver=$(rpmspec -q --qf '%{version}\n' packaging/fedora/gmnb.spec | head -1)
+          git archive --prefix="GlazeMyNumbersBaby-$ver/" -o ~/rpmbuild/SOURCES/GlazeMyNumbersBaby-$ver.tar.gz HEAD
+          rpmbuild -bb packaging/fedora/gmnb.spec
+          mkdir -p out
+          cp ~/rpmbuild/RPMS/*/*.rpm out/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fedora
+          path: out/*.rpm
+
+  release:
+    name: GitHub release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [flatpak, arch, debian, fedora]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la artifacts
+          gh release create "$GITHUB_REF_NAME" artifacts/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "GMNB $GITHUB_REF_NAME" \
+            --generate-notes

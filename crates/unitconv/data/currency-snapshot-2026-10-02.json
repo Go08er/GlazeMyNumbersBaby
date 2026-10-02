@@ -1,0 +1,1163 @@
+{
+ "version": 1,
+ "source": "https://api.frankfurter.dev/v2",
+ "base": "USD",
+ "rates_date": "2026-10-02",
+ "fetched_at": "2026-10-02T02:02:40Z",
+ "currencies": [
+  {
+   "code": "AED",
+   "name": "United Arab Emirates Dirham",
+   "symbol": "د.إ",
+   "rate": 3.6725,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "AFN",
+   "name": "Afghan Afghani",
+   "symbol": "؋",
+   "rate": 65.155,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "ALL",
+   "name": "Albanian Lek",
+   "symbol": "L",
+   "rate": 81.4,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "AMD",
+   "name": "Armenian Dram",
+   "symbol": "֏",
+   "rate": 363.56,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "ANG",
+   "name": "Netherlands Antillean Guilder",
+   "symbol": "ƒ",
+   "rate": 1.79,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "AOA",
+   "name": "Angolan Kwanza",
+   "symbol": "Kz",
+   "rate": 918.53,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "ARS",
+   "name": "Argentine Peso",
+   "symbol": "$",
+   "rate": 1524.94,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "AUD",
+   "name": "Australian Dollar",
+   "symbol": "$",
+   "rate": 1.4391,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "AWG",
+   "name": "Aruban Florin",
+   "symbol": "ƒ",
+   "rate": 1.7938,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "AZN",
+   "name": "Azerbaijani Manat",
+   "symbol": "₼",
+   "rate": 1.701,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "BAM",
+   "name": "Bosnia and Herzegovina Convertible Mark",
+   "symbol": "КМ",
+   "rate": 1.7281,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "BBD",
+   "name": "Barbadian Dollar",
+   "symbol": "$",
+   "rate": 2.0341,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "BDT",
+   "name": "Bangladeshi Taka",
+   "symbol": "৳",
+   "rate": 123.15,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "BHD",
+   "name": "Bahraini Dinar",
+   "symbol": "د.ب",
+   "rate": 0.376,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "BIF",
+   "name": "Burundian Franc",
+   "symbol": "Fr",
+   "rate": 3006.89,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "BMD",
+   "name": "Bermudian Dollar",
+   "symbol": "$",
+   "rate": 1.0,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "BND",
+   "name": "Brunei Dollar",
+   "symbol": "$",
+   "rate": 1.2791,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "BOB",
+   "name": "Bolivian Boliviano",
+   "symbol": "Bs.",
+   "rate": 12.0203,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "BRL",
+   "name": "Brazilian Real",
+   "symbol": "R$",
+   "rate": 5.1898,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "BSD",
+   "name": "Bahamian Dollar",
+   "symbol": "$",
+   "rate": 1.01,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "BTN",
+   "name": "Bhutanese Ngultrum",
+   "symbol": "Nu.",
+   "rate": 95.96,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "BWP",
+   "name": "Botswana Pula",
+   "symbol": "P",
+   "rate": 13.7347,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "BYN",
+   "name": "Belarusian Ruble",
+   "symbol": "Br",
+   "rate": 3.013,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "BZD",
+   "name": "Belize Dollar",
+   "symbol": "$",
+   "rate": 2.0301,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "CAD",
+   "name": "Canadian Dollar",
+   "symbol": "$",
+   "rate": 1.4226,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "CDF",
+   "name": "Congolese Franc",
+   "symbol": "Fr",
+   "rate": 2294.89,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "CHF",
+   "name": "Swiss Franc",
+   "symbol": "CHF",
+   "rate": 0.83451,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "CLP",
+   "name": "Chilean Peso",
+   "symbol": "$",
+   "rate": 977.56,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "CMD",
+   "name": "COMESA Dollar",
+   "rate": 1.0,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "CNH",
+   "name": "Chinese Renminbi Yuan Offshore",
+   "symbol": "¥",
+   "rate": 6.7099,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "CNY",
+   "name": "Chinese Renminbi Yuan",
+   "symbol": "¥",
+   "rate": 6.7003,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "COP",
+   "name": "Colombian Peso",
+   "symbol": "$",
+   "rate": 3317.47,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "CRC",
+   "name": "Costa Rican Colón",
+   "symbol": "₡",
+   "rate": 458.12,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "CUP",
+   "name": "Cuban Peso",
+   "symbol": "$",
+   "rate": 24.0,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "CVE",
+   "name": "Cape Verdean Escudo",
+   "symbol": "$",
+   "rate": 97.31,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "CZK",
+   "name": "Czech Koruna",
+   "symbol": "Kč",
+   "rate": 21.629,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "DJF",
+   "name": "Djiboutian Franc",
+   "symbol": "Fdj",
+   "rate": 178.01,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "DKK",
+   "name": "Danish Krone",
+   "symbol": "kr.",
+   "rate": 6.6104,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "DOP",
+   "name": "Dominican Peso",
+   "symbol": "$",
+   "rate": 60.182,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "DZD",
+   "name": "Algerian Dinar",
+   "symbol": "د.ج",
+   "rate": 134.04,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "EGP",
+   "name": "Egyptian Pound",
+   "symbol": "ج.م",
+   "rate": 52.12,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "ERN",
+   "name": "Eritrean Nakfa",
+   "symbol": "Nfk",
+   "rate": 15.2126,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "ETB",
+   "name": "Ethiopian Birr",
+   "symbol": "Br",
+   "rate": 161.92,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "EUR",
+   "name": "Euro",
+   "symbol": "€",
+   "rate": 0.88356,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "FJD",
+   "name": "Fijian Dollar",
+   "symbol": "$",
+   "rate": 2.2518,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "FKP",
+   "name": "Falkland Pound",
+   "symbol": "£",
+   "rate": 0.75405,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "GBP",
+   "name": "British Pound",
+   "symbol": "£",
+   "rate": 0.75463,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "GEL",
+   "name": "Georgian Lari",
+   "symbol": "₾",
+   "rate": 2.6021,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "GGP",
+   "name": "Guernsey Pound",
+   "symbol": "£",
+   "rate": 0.75463,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "GHS",
+   "name": "Ghanaian Cedi",
+   "symbol": "₵",
+   "rate": 11.7206,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "GIP",
+   "name": "Gibraltar Pound",
+   "symbol": "£",
+   "rate": 0.76398,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "GMD",
+   "name": "Gambian Dalasi",
+   "symbol": "D",
+   "rate": 73.873,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "GNF",
+   "name": "Guinean Franc",
+   "symbol": "Fr",
+   "rate": 8820,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "GTQ",
+   "name": "Guatemalan Quetzal",
+   "symbol": "Q",
+   "rate": 7.6574,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "GYD",
+   "name": "Guyanese Dollar",
+   "symbol": "$",
+   "rate": 211.01,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "HKD",
+   "name": "Hong Kong Dollar",
+   "symbol": "$",
+   "rate": 7.8525,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "HNL",
+   "name": "Honduran Lempira",
+   "symbol": "L",
+   "rate": 26.922,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "HTG",
+   "name": "Haitian Gourde",
+   "symbol": "G",
+   "rate": 131.08,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "HUF",
+   "name": "Hungarian Forint",
+   "symbol": "Ft",
+   "rate": 324.69,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "IDR",
+   "name": "Indonesian Rupiah",
+   "symbol": "Rp",
+   "rate": 17947,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "ILS",
+   "name": "Israeli New Shekel",
+   "symbol": "₪",
+   "rate": 3.0761,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "IMP",
+   "name": "Isle of Man Pound",
+   "symbol": "£",
+   "rate": 0.75463,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "INR",
+   "name": "Indian Rupee",
+   "symbol": "₹",
+   "rate": 96.05,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "IQD",
+   "name": "Iraqi Dinar",
+   "symbol": "ع.د",
+   "rate": 1311.53,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "IRR",
+   "name": "Iranian Rial",
+   "symbol": "﷼",
+   "rate": 1568175,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "ISK",
+   "name": "Icelandic Króna",
+   "symbol": "kr.",
+   "rate": 121.3,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "JEP",
+   "name": "Jersey Pound",
+   "symbol": "£",
+   "rate": 0.75463,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "JMD",
+   "name": "Jamaican Dollar",
+   "symbol": "$",
+   "rate": 158.08,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "JOD",
+   "name": "Jordanian Dinar",
+   "symbol": "د.ا",
+   "rate": 0.709,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "JPY",
+   "name": "Japanese Yen",
+   "symbol": "¥",
+   "rate": 157.94,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "KES",
+   "name": "Kenyan Shilling",
+   "symbol": "KSh",
+   "rate": 129.67,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "KGS",
+   "name": "Kyrgyzstani Som",
+   "symbol": "som",
+   "rate": 87.55,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "KHR",
+   "name": "Cambodian Riel",
+   "symbol": "៛",
+   "rate": 4063.21,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "KMF",
+   "name": "Comorian Franc",
+   "symbol": "Fr",
+   "rate": 435.97,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "KPW",
+   "name": "North Korean Won",
+   "symbol": "₩",
+   "rate": 129.99,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "KRW",
+   "name": "South Korean Won",
+   "symbol": "₩",
+   "rate": 1359.49,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "KWD",
+   "name": "Kuwaiti Dinar",
+   "symbol": "د.ك",
+   "rate": 0.30844,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "KYD",
+   "name": "Cayman Islands Dollar",
+   "symbol": "$",
+   "rate": 0.83719,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "KZT",
+   "name": "Kazakhstani Tenge",
+   "symbol": "₸",
+   "rate": 441.9,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "LAK",
+   "name": "Lao Kip",
+   "symbol": "₭",
+   "rate": 22335,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "LBP",
+   "name": "Lebanese Pound",
+   "symbol": "ل.ل",
+   "rate": 89805,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "LKR",
+   "name": "Sri Lankan Rupee",
+   "symbol": "₨",
+   "rate": 331.05,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "LRD",
+   "name": "Liberian Dollar",
+   "symbol": "$",
+   "rate": 171.81,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "LSL",
+   "name": "Lesotho Loti",
+   "symbol": "L",
+   "rate": 16.5018,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "LYD",
+   "name": "Libyan Dinar",
+   "symbol": "ل.د",
+   "rate": 6.4132,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "MAD",
+   "name": "Moroccan Dirham",
+   "symbol": "د.م.",
+   "rate": 9.7254,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "MDL",
+   "name": "Moldovan Leu",
+   "symbol": "L",
+   "rate": 17.7519,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "MGA",
+   "name": "Malagasy Ariary",
+   "symbol": "Ar",
+   "rate": 4412.31,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "MKD",
+   "name": "Macedonian Denar",
+   "symbol": "ден",
+   "rate": 54.549,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "MMK",
+   "name": "Myanmar Kyat",
+   "symbol": "K",
+   "rate": 2099.61,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "MNT",
+   "name": "Mongolian Tögrög",
+   "symbol": "₮",
+   "rate": 3599.56,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "MOP",
+   "name": "Macanese Pataca",
+   "symbol": "P",
+   "rate": 8.0879,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "MRU",
+   "name": "Mauritanian Ouguiya",
+   "symbol": "UM",
+   "rate": 39.999,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "MUR",
+   "name": "Mauritian Rupee",
+   "symbol": "₨",
+   "rate": 47.841,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "MVR",
+   "name": "Maldivian Rufiyaa",
+   "symbol": "MVR",
+   "rate": 15.4595,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "MWK",
+   "name": "Malawian Kwacha",
+   "symbol": "MK",
+   "rate": 1734.93,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "MXN",
+   "name": "Mexican Peso",
+   "symbol": "$",
+   "rate": 18.1845,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "MYR",
+   "name": "Malaysian Ringgit",
+   "symbol": "RM",
+   "rate": 4.0834,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "MZN",
+   "name": "Mozambican Metical",
+   "symbol": "MTn",
+   "rate": 63.922,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "NAD",
+   "name": "Namibian Dollar",
+   "symbol": "$",
+   "rate": 16.4881,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "NGN",
+   "name": "Nigerian Naira",
+   "symbol": "₦",
+   "rate": 1329.25,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "NIO",
+   "name": "Nicaraguan Córdoba",
+   "symbol": "C$",
+   "rate": 36.624,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "NOK",
+   "name": "Norwegian Krone",
+   "symbol": "kr",
+   "rate": 9.6229,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "NPR",
+   "name": "Nepalese Rupee",
+   "symbol": "Rs.",
+   "rate": 153.76,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "NZD",
+   "name": "New Zealand Dollar",
+   "symbol": "$",
+   "rate": 1.7778,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "OMR",
+   "name": "Omani Rial",
+   "symbol": "ر.ع.",
+   "rate": 0.3845,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "PAB",
+   "name": "Panamanian Balboa",
+   "symbol": "B/.",
+   "rate": 1.0032,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "PEN",
+   "name": "Peruvian Sol",
+   "symbol": "S/",
+   "rate": 3.4477,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "PGK",
+   "name": "Papua New Guinean Kina",
+   "symbol": "K",
+   "rate": 4.4806,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "PHP",
+   "name": "Philippine Peso",
+   "symbol": "₱",
+   "rate": 62.756,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "PKR",
+   "name": "Pakistani Rupee",
+   "symbol": "₨",
+   "rate": 277.69,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "PLN",
+   "name": "Polish Złoty",
+   "symbol": "zł",
+   "rate": 3.8672,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "PYG",
+   "name": "Paraguayan Guaraní",
+   "symbol": "₲",
+   "rate": 5842,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "QAR",
+   "name": "Qatari Riyal",
+   "symbol": "ر.ق",
+   "rate": 3.64,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "RON",
+   "name": "Romanian Leu",
+   "symbol": "Lei",
+   "rate": 4.6675,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "RSD",
+   "name": "Serbian Dinar",
+   "symbol": "RSD",
+   "rate": 103.95,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "RUB",
+   "name": "Russian Ruble",
+   "symbol": "₽",
+   "rate": 83.46,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "RWF",
+   "name": "Rwandan Franc",
+   "symbol": "FRw",
+   "rate": 1477.29,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "SAR",
+   "name": "Saudi Riyal",
+   "symbol": "ر.س",
+   "rate": 3.75,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "SBD",
+   "name": "Solomon Islands Dollar",
+   "symbol": "$",
+   "rate": 8.0254,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "SCR",
+   "name": "Seychellois Rupee",
+   "symbol": "₨",
+   "rate": 14.4012,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "SDG",
+   "name": "Sudanese Pound",
+   "symbol": "£",
+   "rate": 601.56,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "SEK",
+   "name": "Swedish Krona",
+   "symbol": "kr",
+   "rate": 10.0236,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "SGD",
+   "name": "Singapore Dollar",
+   "symbol": "$",
+   "rate": 1.2791,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "SHP",
+   "name": "Saint Helenian Pound",
+   "symbol": "£",
+   "rate": 0.75405,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "SLE",
+   "name": "New Leone",
+   "symbol": "Le",
+   "rate": 24.014,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "SOS",
+   "name": "Somali Shilling",
+   "symbol": "Sh",
+   "rate": 572.81,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "SRD",
+   "name": "Surinamese Dollar",
+   "symbol": "$",
+   "rate": 37.747,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "SSP",
+   "name": "South Sudanese Pound",
+   "symbol": "£",
+   "rate": 5753,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "STN",
+   "name": "São Tomé and Príncipe Second Dobra",
+   "symbol": "Db",
+   "rate": 21.677,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "SVC",
+   "name": "Salvadoran Colón",
+   "symbol": "₡",
+   "rate": 8.7735,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "SYP",
+   "name": "Syrian Pound",
+   "symbol": "£S",
+   "rate": 122.26,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "SZL",
+   "name": "Swazi Lilangeni",
+   "symbol": "E",
+   "rate": 16.5047,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "THB",
+   "name": "Thai Baht",
+   "symbol": "฿",
+   "rate": 33.633,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "TJS",
+   "name": "Tajikistani Somoni",
+   "symbol": "ЅМ",
+   "rate": 9.2296,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "TMT",
+   "name": "Turkmenistani Manat",
+   "symbol": "m",
+   "rate": 3.5,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "TND",
+   "name": "Tunisian Dinar",
+   "symbol": "د.ت",
+   "rate": 2.9822,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "TOP",
+   "name": "Tongan Paʻanga",
+   "symbol": "T$",
+   "rate": 2.3954,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "TRY",
+   "name": "Turkish Lira",
+   "symbol": "₺",
+   "rate": 49.039,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "TTD",
+   "name": "Trinidad and Tobago Dollar",
+   "symbol": "$",
+   "rate": 6.753,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "TWD",
+   "name": "New Taiwan Dollar",
+   "symbol": "$",
+   "rate": 31.918,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "TZS",
+   "name": "Tanzanian Shilling",
+   "symbol": "Sh",
+   "rate": 2640.27,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "UAH",
+   "name": "Ukrainian Hryvnia",
+   "symbol": "₴",
+   "rate": 44.845,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "UGX",
+   "name": "Ugandan Shilling",
+   "symbol": "USh",
+   "rate": 3928.39,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "USD",
+   "name": "United States Dollar",
+   "symbol": "$",
+   "rate": 1.0,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "UYU",
+   "name": "Uruguayan Peso",
+   "symbol": "$U",
+   "rate": 40.363,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "UZS",
+   "name": "Uzbekistan Som",
+   "symbol": "so'm",
+   "rate": 11821,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "VES",
+   "name": "Venezuelan Bolívar Soberano",
+   "symbol": "Bs",
+   "rate": 860.51,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "VND",
+   "name": "Vietnamese Đồng",
+   "symbol": "₫",
+   "rate": 25942,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "VUV",
+   "name": "Vanuatu Vatu",
+   "symbol": "Vt",
+   "rate": 119.39,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "WST",
+   "name": "Samoan Tala",
+   "symbol": "T",
+   "rate": 2.762,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "XAF",
+   "name": "Central African CFA Franc",
+   "symbol": "CFA",
+   "rate": 579.57,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "XAG",
+   "name": "Silver (Troy Ounce)",
+   "symbol": "oz t",
+   "rate": 0.01642,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "XAU",
+   "name": "Gold (Troy Ounce)",
+   "symbol": "oz t",
+   "rate": 0.00024,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "XCD",
+   "name": "East Caribbean Dollar",
+   "symbol": "$",
+   "rate": 2.7317,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "XCG",
+   "name": "Caribbean Guilder",
+   "symbol": "Cg",
+   "rate": 1.8058,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "XDR",
+   "name": "Special Drawing Rights",
+   "symbol": "SDR",
+   "rate": 0.73558,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "XOF",
+   "name": "West African CFA Franc",
+   "symbol": "Fr",
+   "rate": 578.88,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "XPD",
+   "name": "Palladium",
+   "symbol": "oz t",
+   "rate": 0.00083,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "XPF",
+   "name": "CFP Franc",
+   "symbol": "₣",
+   "rate": 105.77,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "XPT",
+   "name": "Platinum",
+   "symbol": "oz t",
+   "rate": 0.00058,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "YER",
+   "name": "Yemeni Rial",
+   "symbol": "﷼",
+   "rate": 236.96,
+   "date": "2026-10-01"
+  },
+  {
+   "code": "ZAR",
+   "name": "South African Rand",
+   "symbol": "R",
+   "rate": 16.4835,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "ZMW",
+   "name": "Zambian Kwacha",
+   "symbol": "K",
+   "rate": 19.6434,
+   "date": "2026-10-02"
+  },
+  {
+   "code": "ZWG",
+   "name": "Zimbabwe Gold",
+   "symbol": "ZiG",
+   "rate": 26.887,
+   "date": "2026-10-01"
+  }
+ ]
+}

@@ -1,0 +1,23 @@
+[package]
+name = "unitconv"
+description = "Unit converter (incl. currency) of Windows Calculator: the UnitConverter engine, its data loaders and the UI-agnostic view model, ported to Rust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[features]
+default = ["network"]
+# Blocking HTTP fetch of live exchange rates from the Frankfurter API.
+network = ["dep:ureq"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+ureq = { version = "3", optional = true, default-features = false, features = ["rustls"] }
+
+[[example]]
+name = "refresh_snapshot"
+required-features = ["network"]

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=GMNB
+GenericName=Calculator
+Comment=GlazeMyNumbers,Baby — a pointlessly beautiful calculator
+Exec=gmnb
+Icon=io.github.Go08er.GlazeMyNumbersBaby
+Terminal=false
+Categories=Utility;Calculator;GTK;
+Keywords=calculator;math;scientific;programmer;graphing;converter;currency;date;gmnb;glaze;
+StartupNotify=true

@@ -1,0 +1,10 @@
+[package]
+name = "calcmanager"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+ratpack.workspace = true

@@ -1,0 +1,29 @@
+Source: gmnb
+Section: math
+Priority: optional
+Maintainer: Go08er <Go08er@users.noreply.github.com>
+# Rust >= 1.92 is also required (newer than Debian 13 ships; use rustup).
+Build-Depends: debhelper-compat (= 13),
+               pkgconf,
+               libgtk-4-dev (>= 4.18),
+               libadwaita-1-dev (>= 1.7),
+               libpango1.0-dev (>= 1.56),
+               libglib2.0-dev
+Standards-Version: 4.7.2
+Homepage: https://github.com/Go08er/GlazeMyNumbersBaby
+Vcs-Browser: https://github.com/Go08er/GlazeMyNumbersBaby
+Vcs-Git: https://github.com/Go08er/GlazeMyNumbersBaby.git
+Rules-Requires-Root: no
+
+Package: gmnb
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: GlazeMyNumbers,Baby - a pointlessly beautiful calculator
+ GMNB is a Rust port of the open-source Windows Calculator with a GTK 4
+ interface: Standard, Scientific, Programmer, Graphing, Date calculation and
+ 13 unit converters including live currency rates, with history and memory.
+ .
+ The original arbitrary-precision engine was ported function-for-function
+ and is verified against the real C++ engine.
+ .
+ Not affiliated with or endorsed by Microsoft.

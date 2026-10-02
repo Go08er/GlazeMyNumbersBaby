@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Tests, Nix build, flake check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - name: Test suite (incl. golden tests against the C++ engine)
+        run: nix develop -c cargo test --workspace --locked
+      - name: Clippy
+        run: nix develop -c cargo clippy --workspace --locked
+      - name: Nix package
+        run: nix build -L
+      - name: Flake check
+        run: nix flake check

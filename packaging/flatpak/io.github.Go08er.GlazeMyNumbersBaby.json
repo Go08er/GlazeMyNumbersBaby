@@ -1,0 +1,51 @@
+{
+  "id": "io.github.Go08er.GlazeMyNumbersBaby",
+  "runtime": "org.gnome.Platform",
+  "runtime-version": "51",
+  "sdk": "org.gnome.Sdk",
+  "sdk-extensions": [
+    "org.freedesktop.Sdk.Extension.rust-stable"
+  ],
+  "command": "gmnb",
+  "finish-args": [
+    "--share=ipc",
+    "--socket=wayland",
+    "--socket=fallback-x11",
+    "--device=dri",
+    "--share=network",
+    "--system-talk-name=org.freedesktop.timedate1"
+  ],
+  "build-options": {
+    "append-path": "/usr/lib/sdk/rust-stable/bin",
+    "env": {
+      "CARGO_HOME": "/run/build/gmnb/cargo",
+      "CARGO_NET_OFFLINE": "true"
+    }
+  },
+  "cleanup": [
+    "/share/doc"
+  ],
+  "modules": [
+    {
+      "name": "gmnb",
+      "buildsystem": "simple",
+      "build-commands": [
+        "cargo --offline fetch --manifest-path Cargo.toml",
+        "cargo --offline build --release --locked -p gmnb",
+        "install -Dm755 target/release/gmnb -t /app/bin",
+        "install -Dm644 packaging/io.github.Go08er.GlazeMyNumbersBaby.desktop -t /app/share/applications",
+        "install -Dm644 packaging/io.github.Go08er.GlazeMyNumbersBaby.metainfo.xml -t /app/share/metainfo",
+        "install -Dm644 packaging/icons/io.github.Go08er.GlazeMyNumbersBaby.svg -t /app/share/icons/hicolor/scalable/apps",
+        "install -Dm644 LICENSE -t /app/share/licenses/io.github.Go08er.GlazeMyNumbersBaby"
+      ],
+      "sources": [
+        {
+          "type": "git",
+          "url": "https://github.com/Go08er/GlazeMyNumbersBaby.git",
+          "tag": "v0.1.0"
+        },
+        "cargo-sources.json"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/ratpack",
+    "crates/calcmanager",
+    "crates/unitconv",
+    "crates/datecalc",
+    "crates/copypaste",
+    "crates/graphing",
+    "crates/calcvm",
+    "app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.92"
+authors = ["Microsoft Corporation (original Windows Calculator)", "GMNB contributors (Rust port)"]
+repository = "https://github.com/Go08er/GlazeMyNumbersBaby"
+
+[workspace.dependencies]
+ratpack = { path = "crates/ratpack" }
+calcmanager = { path = "crates/calcmanager" }
+unitconv = { path = "crates/unitconv" }
+datecalc = { path = "crates/datecalc" }
+copypaste = { path = "crates/copypaste" }
+graphing = { path = "crates/graphing" }
+calcvm = { path = "crates/calcvm" }
+
+# Arbitrary-precision math is painfully slow unoptimised; keep tests usable.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+# Arbitrary-precision maths: keep debug builds and tests responsive.
+[profile.dev.package.ratpack]
+opt-level = 3
+
+[profile.dev.package.calcmanager]
+opt-level = 3
+
+[profile.dev.package.graphing]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+strip = true
+

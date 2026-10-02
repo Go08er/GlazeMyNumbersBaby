@@ -1,0 +1,11 @@
+[package]
+name = "datecalc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Date calculation mode of Windows Calculator (difference between dates, add/subtract days), ported to Rust"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }

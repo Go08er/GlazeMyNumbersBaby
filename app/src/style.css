@@ -1,0 +1,634 @@
+/* GMNB — static styles. Colour tokens (@wc_*) are generated per palette
+   in theme.rs and loaded by a separate provider. */
+
+window.gmnb {
+  background-color: @wc_base;
+  color: @wc_fg;
+}
+
+window.gmnb headerbar,
+window.gmnb toolbarview > .top-bar,
+window.gmnb toolbarview > .bottom-bar {
+  background: none;
+  box-shadow: none;
+  color: @wc_fg;
+}
+
+window.gmnb headerbar button {
+  color: @wc_fg;
+}
+
+.wc-title {
+  font-family: "Outfit";
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/* ---------------------------------------------------------------- keys */
+
+button.wc-key {
+  border-radius: 14px;
+  min-height: 38px;
+  min-width: 40px;
+  padding: 0 2px;
+  font-family: "Outfit";
+  font-size: 17px;
+  font-weight: 400;
+  color: @wc_fg;
+  background-color: transparent;
+  background-image: linear-gradient(to bottom, @wc_glass_hi, @wc_glass);
+  box-shadow:
+    inset 0 1px alpha(white, 0.10),
+    inset 0 0 0 1px @wc_glass_border,
+    0 6px 18px -12px @wc_shade;
+  transition:
+    background-image 160ms ease-out,
+    box-shadow 220ms ease-out,
+    transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    filter 160ms ease-out;
+}
+
+button.wc-key:hover {
+  filter: brightness(1.12);
+}
+
+button.wc-key:active,
+button.wc-key.wc-flash {
+  transform: scale(0.93);
+  filter: brightness(1.22);
+  transition: transform 70ms ease-out, filter 70ms ease-out;
+}
+
+button.wc-key:disabled {
+  opacity: 0.32;
+  filter: saturate(0.4);
+}
+
+button.wc-key label sup,
+button.wc-key label sub {
+  font-size: 70%;
+}
+
+button.wc-num {
+  font-size: 22px;
+  font-weight: 450;
+  background-image: linear-gradient(to bottom, @wc_glass_hi, @wc_glass_num);
+}
+
+button.wc-op {
+  font-size: 22px;
+  font-weight: 350;
+  color: @wc_accent;
+  background-image: linear-gradient(to bottom, alpha(@wc_accent, 0.20), alpha(@wc_accent, 0.07));
+  box-shadow:
+    inset 0 1px alpha(white, 0.10),
+    inset 0 0 0 1px alpha(@wc_accent, 0.22),
+    0 6px 18px -12px @wc_shade;
+}
+
+button.wc-fn {
+  font-size: 16px;
+  color: alpha(@wc_fg, 0.86);
+}
+
+button.wc-fn:checked,
+button.wc-key.wc-on {
+  color: @wc_on_hot;
+  background-image: linear-gradient(135deg, alpha(@wc_hot_a, 0.85), alpha(@wc_hot_b, 0.85));
+}
+
+button.wc-eq {
+  font-size: 26px;
+  font-weight: 400;
+  color: @wc_on_hot;
+  background-image: linear-gradient(135deg, @wc_hot_a, @wc_hot_b);
+  box-shadow:
+    inset 0 1px alpha(white, 0.35),
+    0 12px 32px -12px alpha(@wc_hot_b, 0.85),
+    0 2px 10px -4px alpha(@wc_hot_a, 0.6);
+}
+
+/* ------------------------------------------------------- flat text rows */
+
+button.wc-mem {
+  min-height: 30px;
+  min-width: 30px;
+  padding: 0 6px;
+  border-radius: 10px;
+  font-family: "Outfit";
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: alpha(@wc_fg, 0.78);
+  background: none;
+  box-shadow: none;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+
+button.wc-mem:hover {
+  background-color: alpha(@wc_fg, 0.07);
+  color: @wc_fg;
+}
+
+button.wc-mem:disabled {
+  color: alpha(@wc_fg, 0.26);
+}
+
+button.wc-mem:checked {
+  color: @wc_accent;
+  background-color: alpha(@wc_accent, 0.12);
+}
+
+/* -------------------------------------------------------- glass panels */
+
+.wc-glass-panel {
+  border-radius: 20px;
+  background-image: linear-gradient(to bottom, @wc_glass_hi, @wc_glass);
+  box-shadow:
+    inset 0 1px alpha(white, 0.10),
+    inset 0 0 0 1px @wc_glass_border,
+    0 18px 50px -28px @wc_shade;
+}
+
+/* ------------------------------------------------------------ sidebar */
+
+.wc-sidebar {
+  background-image: linear-gradient(to bottom, alpha(@wc_base, 0.94), alpha(@wc_base, 0.88));
+  box-shadow: inset -1px 0 alpha(@wc_fg, 0.08);
+}
+
+.wc-sidebar list,
+.wc-sidebar row {
+  background: none;
+}
+
+.wc-nav-header {
+  font-family: "Outfit";
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: alpha(@wc_fg, 0.5);
+  margin: 14px 18px 4px 18px;
+}
+
+.wc-nav row {
+  border-radius: 12px;
+  margin: 1px 8px;
+  padding: 9px 12px;
+  transition: background-color 160ms ease-out;
+}
+
+.wc-nav row:hover {
+  background-color: alpha(@wc_fg, 0.06);
+}
+
+.wc-nav row:selected {
+  background-image: linear-gradient(90deg, alpha(@wc_accent, 0.24), alpha(@wc_accent, 0.06));
+  box-shadow: inset 3px 0 @wc_accent;
+}
+
+.wc-nav row label {
+  font-size: 15px;
+}
+
+.wc-nav row image {
+  color: alpha(@wc_fg, 0.8);
+}
+
+.wc-nav row:selected image {
+  color: @wc_accent;
+}
+
+/* ------------------------------------------------------- calculator */
+
+.wc-side-panel {
+  padding: 10px 6px 6px 6px;
+}
+
+.wc-calc-panel {
+  padding: 2px;
+}
+
+.wc-sheet {
+  background-image: linear-gradient(to bottom, alpha(@wc_base, 0.97), alpha(@wc_base, 0.94));
+}
+
+.wc-panel-list,
+.wc-panel-list > row {
+  background: none;
+}
+
+.wc-panel-row {
+  border-radius: 14px;
+  margin: 2px 4px;
+  transition: background-color 150ms ease-out;
+}
+
+.wc-panel-row:hover {
+  background-color: alpha(@wc_fg, 0.06);
+}
+
+.wc-hist-expr {
+  font-family: "Outfit";
+  font-size: 13px;
+  color: alpha(@wc_fg, 0.55);
+}
+
+.wc-hist-result {
+  font-family: "Outfit";
+  font-size: 24px;
+  font-weight: 350;
+  color: @wc_fg;
+}
+
+.wc-mem-actions {
+  opacity: 0;
+  transition: opacity 160ms ease-out;
+}
+
+.wc-mem-row:hover .wc-mem-actions,
+.wc-mem-row:focus-within .wc-mem-actions {
+  opacity: 1;
+}
+
+button.wc-mem-small {
+  min-height: 24px;
+  font-size: 11px;
+  padding: 0 8px;
+  background-color: alpha(@wc_fg, 0.06);
+}
+
+.wc-empty {
+  font-size: 14px;
+  color: alpha(@wc_fg, 0.5);
+}
+
+.wc-toggle-group {
+  font-family: "Outfit";
+  font-weight: 500;
+}
+
+/* programmer */
+
+.wc-radix-list {
+  margin: 0 2px;
+}
+
+button.wc-radix-row {
+  border-radius: 10px;
+  padding: 3px 10px;
+  min-height: 26px;
+  box-shadow: none;
+  transition: background-color 180ms ease-out, box-shadow 220ms ease-out;
+}
+
+button.wc-radix-row:hover {
+  background-color: alpha(@wc_fg, 0.06);
+}
+
+button.wc-radix-row.wc-radix-active {
+  background-image: linear-gradient(90deg, alpha(@wc_accent, 0.22), alpha(@wc_accent, 0.0));
+  box-shadow: inset 3px 0 @wc_accent;
+}
+
+.wc-radix-name {
+  font-family: "Outfit";
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  color: alpha(@wc_fg, 0.6);
+}
+
+.wc-radix-active .wc-radix-name {
+  color: @wc_accent;
+}
+
+.wc-radix-value {
+  font-family: "Outfit";
+  font-size: 15px;
+  font-feature-settings: "tnum";
+  color: @wc_fg;
+}
+
+.wc-bitflip {
+  margin: 6px 4px;
+}
+
+togglebutton.wc-bit,
+button.wc-bit {
+  min-width: 14px;
+  min-height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  font-family: "Outfit";
+  font-size: 15px;
+  color: alpha(@wc_fg, 0.55);
+  background: alpha(@wc_fg, 0.04);
+  box-shadow: inset 0 0 0 1px alpha(@wc_fg, 0.06);
+  transition: all 200ms ease-out;
+}
+
+button.wc-bit:hover {
+  background: alpha(@wc_fg, 0.10);
+}
+
+button.wc-bit:checked {
+  color: @wc_on_hot;
+  background-image: linear-gradient(135deg, @wc_hot_a, @wc_hot_b);
+  box-shadow: 0 0 14px -2px alpha(@wc_hot_b, 0.75), inset 0 1px alpha(white, 0.3);
+}
+
+button.wc-bit:disabled {
+  opacity: 0.25;
+}
+
+.wc-bit-index {
+  font-family: "Outfit";
+  font-size: 10px;
+  color: alpha(@wc_fg, 0.4);
+  margin-left: 2px;
+}
+
+/* flyouts */
+
+popover.wc-flyout > contents {
+  padding: 8px;
+  border-radius: 18px;
+  background-image: linear-gradient(to bottom, alpha(@wc_base, 0.98), alpha(@wc_base, 0.95));
+  box-shadow: 0 18px 48px -16px alpha(black, 0.5), inset 0 0 0 1px @wc_glass_border;
+}
+
+button.wc-flyout-button {
+  padding: 0 10px;
+}
+
+/* fields (date page) */
+
+.wc-section {
+  font-family: "Outfit";
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: alpha(@wc_fg, 0.6);
+  margin-top: 6px;
+}
+
+menubutton.wc-field > button,
+button.wc-field {
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 14px;
+  font-family: "Outfit";
+  font-size: 16px;
+  background-image: linear-gradient(to bottom, @wc_glass_hi, @wc_glass);
+  box-shadow: inset 0 1px alpha(white, 0.10), inset 0 0 0 1px @wc_glass_border;
+}
+
+.wc-result-panel {
+  padding: 10px 6px 14px 6px;
+  margin-top: 10px;
+}
+
+.wc-result-panel .wc-section {
+  margin-left: 14px;
+}
+
+.wc-subresult {
+  font-family: "Outfit";
+  font-size: 17px;
+  color: alpha(@wc_fg, 0.65);
+  margin-left: 14px;
+}
+
+spinbutton.wc-spin {
+  border-radius: 12px;
+  font-family: "Outfit";
+  font-size: 16px;
+}
+
+/* nav settings button */
+
+button.wc-nav-settings {
+  padding: 10px 12px;
+  border-radius: 12px;
+}
+
+button.wc-icon-button {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 10px;
+}
+
+.wc-panel-title {
+  font-family: "Outfit";
+  font-size: 15px;
+  font-weight: 600;
+  margin: 6px 10px 2px 10px;
+}
+
+/* ------------------------------------------------------- converter */
+
+.wc-conv-field {
+  border-radius: 18px;
+  padding: 6px 4px 8px 4px;
+  transition: background-color 200ms ease-out, box-shadow 240ms ease-out;
+}
+
+.wc-conv-field.wc-active {
+  background-image: linear-gradient(90deg, alpha(@wc_accent, 0.14), alpha(@wc_accent, 0.02));
+  box-shadow: inset 3px 0 @wc_accent;
+}
+
+.wc-currency-symbol {
+  font-family: "Outfit";
+  font-size: 26px;
+  font-weight: 300;
+  color: alpha(@wc_fg, 0.6);
+  margin-left: 14px;
+}
+
+dropdown.wc-unit-dropdown > button {
+  margin-left: 8px;
+  border-radius: 12px;
+  padding: 2px 10px;
+  font-family: "Outfit";
+  font-size: 15px;
+  background: alpha(@wc_fg, 0.05);
+}
+
+button.wc-swap {
+  margin-left: 12px;
+  min-width: 36px;
+  min-height: 36px;
+  border-radius: 999px;
+  background-image: linear-gradient(135deg, alpha(@wc_hot_a, 0.25), alpha(@wc_hot_b, 0.25));
+  box-shadow: inset 0 0 0 1px @wc_glass_border;
+  transition: transform 380ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+button.wc-swap:active {
+  transform: rotate(180deg) scale(0.92);
+}
+
+.wc-supp {
+  margin: 0 8px;
+}
+
+.wc-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-family: "Outfit";
+  font-size: 13px;
+  background: alpha(@wc_fg, 0.06);
+  box-shadow: inset 0 0 0 1px alpha(@wc_fg, 0.06);
+}
+
+.wc-chip-whimsy {
+  color: @wc_on_hot;
+  background-image: linear-gradient(135deg, alpha(@wc_hot_a, 0.85), alpha(@wc_hot_b, 0.85));
+}
+
+.wc-ratio {
+  font-family: "Outfit";
+  font-size: 15px;
+  margin: 4px 14px 0 14px;
+}
+
+.wc-timestamp {
+  font-size: 12px;
+  color: alpha(@wc_fg, 0.6);
+  margin-left: 14px;
+}
+
+button.wc-link {
+  font-size: 12px;
+  padding: 0 6px;
+  min-height: 22px;
+  color: @wc_accent;
+}
+
+/* -------------------------------------------------------- graphing */
+
+.wc-graph-side {
+  padding: 10px;
+}
+
+.wc-graph-tools {
+  padding: 4px;
+  border-radius: 14px;
+  background: alpha(@wc_base, 0.72);
+  box-shadow: inset 0 0 0 1px @wc_glass_border, 0 8px 24px -10px alpha(black, 0.4);
+}
+
+button.wc-small,
+togglebutton.wc-small {
+  min-width: 30px;
+  min-height: 30px;
+}
+
+.wc-eq-row {
+  padding: 4px;
+  border-radius: 14px;
+}
+
+.wc-eq-row.wc-has-error {
+  background: alpha(@wc_hot_a, 0.08);
+}
+
+entry.wc-eq-entry {
+  min-height: 38px;
+  border-radius: 12px;
+  font-family: "Outfit";
+  font-size: 16px;
+  background: alpha(@wc_fg, 0.05);
+}
+
+.wc-eq-error {
+  font-size: 12px;
+  color: @wc_hot_a;
+  margin-left: 40px;
+}
+
+button.wc-swatch {
+  min-width: 18px;
+  min-height: 18px;
+  padding: 0;
+  margin: 0 4px;
+  border-radius: 999px;
+  transition: opacity 200ms ease-out, transform 300ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+button.wc-swatch:active {
+  transform: scale(0.8);
+}
+
+button.wc-add-eq {
+  min-height: 40px;
+  border-radius: 12px;
+  color: alpha(@wc_fg, 0.6);
+  background: none;
+  box-shadow: inset 0 0 0 1px alpha(@wc_fg, 0.12);
+}
+
+button.wc-add-eq:hover {
+  color: @wc_fg;
+  background: alpha(@wc_fg, 0.05);
+}
+
+.wc-var-row {
+  padding: 2px 6px;
+}
+
+.wc-var-name {
+  font-family: "Outfit";
+  font-size: 17px;
+  font-style: italic;
+  min-width: 18px;
+}
+
+.wc-graph-pad button.wc-pad-key {
+  min-height: 32px;
+  font-size: 15px;
+  border-radius: 10px;
+}
+
+.wc-analysis-title {
+  font-family: "Outfit";
+  font-size: 18px;
+  margin: 2px 8px 6px 8px;
+}
+
+.wc-kgf {
+  padding: 8px 12px;
+  border-radius: 14px;
+  background: alpha(@wc_fg, 0.04);
+}
+
+.wc-kgf-title {
+  font-family: "Outfit";
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: alpha(@wc_fg, 0.6);
+}
+
+.wc-kgf-value {
+  font-family: "Outfit";
+  font-size: 16px;
+}
+
+.wc-kgf-text {
+  font-size: 14px;
+  color: alpha(@wc_fg, 0.8);
+}
+
+entry.wc-range-entry {
+  font-family: "Outfit";
+}
+
+button.wc-swatch-pick {
+  min-width: 24px;
+  min-height: 24px;
+}
