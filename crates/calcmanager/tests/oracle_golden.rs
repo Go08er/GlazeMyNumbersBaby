@@ -39,7 +39,10 @@ fn esc(s: &str) -> String {
 }
 
 fn join_ints(v: &[i32]) -> String {
-    v.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+    v.iter()
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Operand command lists are mostly digit ops; encoded compactly:
@@ -80,11 +83,18 @@ fn serialize_command(cmd: &ExpressionCommand) -> String {
 }
 
 fn serialize_commands(cmds: &[ExpressionCommand]) -> String {
-    cmds.iter().map(serialize_command).collect::<Vec<_>>().join(";")
+    cmds.iter()
+        .map(serialize_command)
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 fn serialize_tokens(tokens: &[ExpressionToken]) -> String {
-    tokens.iter().map(|(t, i)| format!("{}@{}", esc(t), i)).collect::<Vec<_>>().join("|")
+    tokens
+        .iter()
+        .map(|(t, i)| format!("{}@{}", esc(t), i))
+        .collect::<Vec<_>>()
+        .join("|")
 }
 
 // ---------------------------------------------------------------------------
@@ -99,14 +109,28 @@ struct RecordingDisplay {
 
 impl CalcDisplay for RecordingDisplay {
     fn set_primary_display(&mut self, text: &str, is_error: bool) {
-        let _ = writeln!(self.out, "P\t{}\t{}", esc(text), if is_error { 1 } else { 0 });
+        let _ = writeln!(
+            self.out,
+            "P\t{}\t{}",
+            esc(text),
+            if is_error { 1 } else { 0 }
+        );
     }
     fn set_is_in_error(&mut self, is_in_error: bool) {
         self.is_in_error = is_in_error;
         let _ = writeln!(self.out, "E\t{}", if is_in_error { 1 } else { 0 });
     }
-    fn set_expression_display(&mut self, tokens: &[ExpressionToken], commands: &[ExpressionCommand]) {
-        let _ = writeln!(self.out, "X\t{}\t{}", serialize_tokens(tokens), serialize_commands(commands));
+    fn set_expression_display(
+        &mut self,
+        tokens: &[ExpressionToken],
+        commands: &[ExpressionCommand],
+    ) {
+        let _ = writeln!(
+            self.out,
+            "X\t{}\t{}",
+            serialize_tokens(tokens),
+            serialize_commands(commands)
+        );
     }
     fn set_parenthesis_number(&mut self, count: u32) {
         let _ = writeln!(self.out, "N\t{count}");
@@ -124,7 +148,11 @@ impl CalcDisplay for RecordingDisplay {
         let _ = writeln!(self.out, "H\t{added_item_index}");
     }
     fn set_memorized_numbers(&mut self, memorized_numbers: &[String]) {
-        let s = memorized_numbers.iter().map(|n| esc(n)).collect::<Vec<_>>().join("|");
+        let s = memorized_numbers
+            .iter()
+            .map(|n| esc(n))
+            .collect::<Vec<_>>()
+            .join("|");
         let _ = writeln!(self.out, "M\t{s}");
     }
     fn memory_item_changed(&mut self, index_of_memory: u32) {
@@ -207,7 +235,11 @@ impl Session {
             }
             "HCLR" => mgr.clear_history(),
             "HSET" => {
-                let mode = if arg(1) == 0 { CalculatorMode::Standard } else { CalculatorMode::Scientific };
+                let mode = if arg(1) == 0 {
+                    CalculatorMode::Standard
+                } else {
+                    CalculatorMode::Scientific
+                };
                 let items = mgr.get_history_items_for_mode(mode);
                 mgr.set_history_items(&items);
             }
@@ -219,7 +251,8 @@ impl Session {
             "PANEL" => {
                 // StandardCalculatorViewModel::UpdateProgrammerPanelDisplay
                 let precision = 64;
-                let (mut hex, mut dec, mut oct, mut bin) = (String::new(), String::new(), String::new(), String::new());
+                let (mut hex, mut dec, mut oct, mut bin) =
+                    (String::new(), String::new(), String::new(), String::new());
                 let in_error = self.display.borrow().is_in_error;
                 if !in_error {
                     hex = mgr.get_result_for_radix(16, precision, true)?;
@@ -230,7 +263,14 @@ impl Session {
                     }
                 }
                 let raw = mgr.get_result_for_radix(2, precision, false)?;
-                self.emit(&format!("=\t{}\t{}\t{}\t{}\t{}", esc(&hex), esc(&dec), esc(&oct), esc(&bin), esc(&raw)));
+                self.emit(&format!(
+                    "=\t{}\t{}\t{}\t{}\t{}",
+                    esc(&hex),
+                    esc(&dec),
+                    esc(&oct),
+                    esc(&bin),
+                    esc(&raw)
+                ));
             }
             "REC" => {
                 let v = mgr.is_engine_recording();
@@ -245,7 +285,11 @@ impl Session {
                 self.history_dump(&items);
             }
             "HISTM" => {
-                let mode = if arg(1) == 0 { CalculatorMode::Standard } else { CalculatorMode::Scientific };
+                let mode = if arg(1) == 0 {
+                    CalculatorMode::Standard
+                } else {
+                    CalculatorMode::Scientific
+                };
                 let items = mgr.get_history_items_for_mode(mode);
                 self.history_dump(&items);
             }
@@ -289,7 +333,10 @@ fn parse(text: &str) -> Vec<Sequence> {
     let mut seqs: Vec<Sequence> = Vec::new();
     for line in text.lines() {
         if line.starts_with("#S ") {
-            seqs.push(Sequence { header: line.to_string(), body: Vec::new() });
+            seqs.push(Sequence {
+                header: line.to_string(),
+                body: Vec::new(),
+            });
         } else if let Some(seq) = seqs.last_mut() {
             seq.body.push(line.to_string());
         }
@@ -311,10 +358,26 @@ fn replay(seq: &Sequence) -> Option<String> {
         return None;
     }
 
-    let first_diff = actual.iter().zip(expected.iter()).position(|(a, e)| a != e).unwrap_or(actual.len().min(expected.len()));
+    let first_diff = actual
+        .iter()
+        .zip(expected.iter())
+        .position(|(a, e)| a != e)
+        .unwrap_or(actual.len().min(expected.len()));
     // Context: the ops executed up to the mismatch, then a window of lines.
-    let ops_before: Vec<&str> = expected[..first_diff.min(expected.len())].iter().filter(|l| l.starts_with("> ")).copied().collect();
-    let mut report = format!("{}\n  ops: {}\n", seq.header, ops_before.iter().map(|o| &o[2..]).collect::<Vec<_>>().join(" ; "));
+    let ops_before: Vec<&str> = expected[..first_diff.min(expected.len())]
+        .iter()
+        .filter(|l| l.starts_with("> "))
+        .copied()
+        .collect();
+    let mut report = format!(
+        "{}\n  ops: {}\n",
+        seq.header,
+        ops_before
+            .iter()
+            .map(|o| &o[2..])
+            .collect::<Vec<_>>()
+            .join(" ; ")
+    );
     let lo = first_diff.saturating_sub(3);
     let hi = (first_diff + 4).min(expected.len().max(actual.len()));
     for i in lo..hi {
@@ -335,7 +398,10 @@ fn run_golden(name: &str) {
     let seqs = parse(&text);
     assert!(!seqs.is_empty(), "{path} contains no sequences");
 
-    let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 16);
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(1, 16);
     let mut failures: Vec<String> = Vec::new();
     for chunk in seqs.chunks(workers) {
         let results: Vec<Option<String>> = std::thread::scope(|scope| {
@@ -375,7 +441,11 @@ fn run_golden(name: &str) {
             name,
             failures.len(),
             seqs.len(),
-            shown.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
+            shown
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
         );
     }
     eprintln!("{name}: {} sequences match the C++ oracle", seqs.len());

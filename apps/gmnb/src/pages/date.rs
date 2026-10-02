@@ -9,9 +9,9 @@ use datecalc::{DateCalculatorState, strings as S};
 use gtk::glib;
 
 use super::{Ctx, Page};
-use appcore::modes::ViewMode;
 use crate::widgets::display::{Change, Display};
 use crate::widgets::icon::{PathIcon, paths};
+use appcore::modes::ViewMode;
 
 pub struct DatePage {
     root: gtk::Widget,
@@ -202,8 +202,10 @@ impl DatePage {
         });
 
         // Only while the displays live: the hub outlasts this page.
-        ctx.hub.subscribe_while(&diff_result, |d, s| d.set_scheme(*s));
-        ctx.hub.subscribe_while(&date_result, |d, s| d.set_scheme(*s));
+        ctx.hub
+            .subscribe_while(&diff_result, |d, s| d.set_scheme(*s));
+        ctx.hub
+            .subscribe_while(&date_result, |d, s| d.set_scheme(*s));
 
         let refresh = {
             let state = state.clone();

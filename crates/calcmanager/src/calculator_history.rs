@@ -48,7 +48,10 @@ pub struct CalculatorHistory {
 
 impl CalculatorHistory {
     pub fn new(max_size: usize) -> Self {
-        CalculatorHistory { history_items: Vec::new(), max_history_size: max_size }
+        CalculatorHistory {
+            history_items: Vec::new(),
+            max_history_size: max_size,
+        }
     }
 
     pub fn add_item(&mut self, sp_history_item: Rc<HistoryItem>) -> u32 {
@@ -91,10 +94,20 @@ impl CalculatorHistory {
 }
 
 impl HistoryDisplay for CalculatorHistory {
-    fn add_to_history(&mut self, tokens: Vec<ExpressionToken>, commands: Vec<ExpressionCommand>, result: &str) -> u32 {
+    fn add_to_history(
+        &mut self,
+        tokens: Vec<ExpressionToken>,
+        commands: Vec<ExpressionCommand>,
+        result: &str,
+    ) -> u32 {
         let expression = get_generated_expression(&tokens);
         let sp_history_item = Rc::new(HistoryItem {
-            history_item_vector: HistoryItemVector { tokens, commands, expression, result: result.to_string() },
+            history_item_vector: HistoryItemVector {
+                tokens,
+                commands,
+                expression,
+                result: result.to_string(),
+            },
         });
         self.add_item(sp_history_item)
     }

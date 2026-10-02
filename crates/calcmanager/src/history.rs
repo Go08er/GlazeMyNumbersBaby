@@ -15,7 +15,9 @@ use crate::calc_display::{CalcDisplayRef, ExpressionToken, HistoryDisplayRef};
 use crate::calc_engine::CalcEngine;
 use crate::ccommand::*;
 use crate::command::{Command, CommandType};
-use crate::expression_command::{BinaryCommand, ExpressionCommand, OpndCommand, Parentheses, UnaryCommand};
+use crate::expression_command::{
+    BinaryCommand, ExpressionCommand, OpndCommand, Parentheses, UnaryCommand,
+};
 
 const ASCII_0: i32 = 48;
 
@@ -42,11 +44,11 @@ pub struct HistoryCollector {
     i_cur_line_hist_start: i32, // index of the beginning of the current equation
     // a sort of state, set to the index before 2 after 2 in the expression 2 + 3 say. Useful for auto correct portion of history and for
     // attaching the unary op around the last operand
-    last_op_start_index: i32,     // index of the beginning of the last operand added to the history
+    last_op_start_index: i32, // index of the beginning of the last operand added to the history
     last_bin_op_start_index: i32, // index of the beginning of the last binary operator added to the history
     // Stack of index of opnd's beginning for each '('. A parallel array to m_hnoParNum, but abstracted independently of that
     operand_indices: [i32; MAXPRECDEPTH],
-    cur_operand_index: i32, // Stack index for the above stack
+    cur_operand_index: i32,  // Stack index for the above stack
     b_last_opnd_brace: bool, // iff the last opnd in history is already braced so we can avoid putting another one for unary operator
     decimal_symbol: char,
     tokens: Option<Vec<ExpressionToken>>,
@@ -54,7 +56,11 @@ pub struct HistoryCollector {
 }
 
 impl HistoryCollector {
-    pub fn new(calc_display: Option<CalcDisplayRef>, history_display: Option<HistoryDisplayRef>, decimal_symbol: char) -> Self {
+    pub fn new(
+        calc_display: Option<CalcDisplayRef>,
+        history_display: Option<HistoryDisplayRef>,
+        decimal_symbol: char,
+    ) -> Self {
         let mut hc = HistoryCollector {
             history_display,
             calc_display,
@@ -86,7 +92,9 @@ impl HistoryCollector {
     }
 
     pub fn add_opnd_to_history(&mut self, num_str: &str, rat: &Rational, f_repetition: bool) {
-        let i_command_end = self.add_command(ExpressionCommand::Operand(self.get_operand_commands_from_string_rat(num_str, rat)));
+        let i_command_end = self.add_command(ExpressionCommand::Operand(
+            self.get_operand_commands_from_string_rat(num_str, rat),
+        ));
         self.last_op_start_index = self.ich_add_sz_to_equation_sz(num_str, i_command_end);
 
         if f_repetition {
@@ -104,11 +112,20 @@ impl HistoryCollector {
         Ok(())
     }
 
-    pub fn add_bin_op_to_history(&mut self, n_op_code: i32, is_integer_mode: bool, f_no_repetition: bool) {
-        let i_command_end = self.add_command(ExpressionCommand::Binary(BinaryCommand::new(n_op_code)));
+    pub fn add_bin_op_to_history(
+        &mut self,
+        n_op_code: i32,
+        is_integer_mode: bool,
+        f_no_repetition: bool,
+    ) {
+        let i_command_end =
+            self.add_command(ExpressionCommand::Binary(BinaryCommand::new(n_op_code)));
         self.last_bin_op_start_index = self.ich_add_sz_to_equation_sz(" ", -1);
 
-        self.ich_add_sz_to_equation_sz(&CalcEngine::op_code_to_binary_string(n_op_code, is_integer_mode), i_command_end);
+        self.ich_add_sz_to_equation_sz(
+            &CalcEngine::op_code_to_binary_string(n_op_code, is_integer_mode),
+            i_command_end,
+        );
         self.ich_add_sz_to_equation_sz(" ", -1);
 
         if f_no_repetition {
@@ -120,7 +137,12 @@ impl HistoryCollector {
     /// This is expected to be called when a binary op in the last say 1+2+ is changing to another one say 1+2* (+ changed to *)
     /// It needs to know by this change a Precedence inversion happened. i.e. previous op was lower or equal to its previous op, but the new
     /// one isn't. (Eg. 1*2* to 1*2^). It can add explicit brackets to ensure the precedence is inverted. (Eg. (1*2) ^)
-    pub fn change_last_bin_op(&mut self, n_op_code: i32, f_prec_inv_to_higher: bool, is_integer_mode: bool) -> CalcResult<()> {
+    pub fn change_last_bin_op(
+        &mut self,
+        n_op_code: i32,
+        f_prec_inv_to_higher: bool,
+        is_integer_mode: bool,
+    ) -> CalcResult<()> {
         self.truncate_equation_sz_from_ich(self.last_bin_op_start_index)?;
         if f_prec_inv_to_higher {
             self.enclose_prec_inversion_brackets();
@@ -130,7 +152,11 @@ impl HistoryCollector {
     }
 
     pub fn push_last_opnd_start(&mut self, ich_opnd_start: i32) {
-        let ich = if ich_opnd_start == -1 { self.last_op_start_index } else { ich_opnd_start };
+        let ich = if ich_opnd_start == -1 {
+            self.last_op_start_index
+        } else {
+            ich_opnd_start
+        };
 
         if self.cur_operand_index < self.operand_indices.len() as i32 {
             self.operand_indices[self.cur_operand_index as usize] = ich;
@@ -147,7 +173,8 @@ impl HistoryCollector {
 
     pub fn add_open_brace_to_history(&mut self) {
         self.add_command(ExpressionCommand::Parentheses(Parentheses::new(IDC_OPENP)));
-        let ich_opnd_start = self.ich_add_sz_to_equation_sz(&CalcEngine::op_code_to_string(IDC_OPENP), -1);
+        let ich_opnd_start =
+            self.ich_add_sz_to_equation_sz(&CalcEngine::op_code_to_string(IDC_OPENP), -1);
         self.push_last_opnd_start(ich_opnd_start);
 
         self.set_expression_display();
@@ -166,7 +193,11 @@ impl HistoryCollector {
 
     pub fn enclose_prec_inversion_brackets(&mut self) {
         // Top of the Opnd starts index or 0 is nothing is in top
-        let ich_start = if self.cur_operand_index > 0 { self.operand_indices[(self.cur_operand_index - 1) as usize] } else { 0 };
+        let ich_start = if self.cur_operand_index > 0 {
+            self.operand_indices[(self.cur_operand_index - 1) as usize]
+        } else {
+            0
+        };
 
         self.insert_sz_in_equation_sz(&CalcEngine::op_code_to_string(IDC_OPENP), -1, ich_start);
         self.ich_add_sz_to_equation_sz(&CalcEngine::op_code_to_string(IDC_CLOSEP), -1);
@@ -184,8 +215,12 @@ impl HistoryCollector {
         // When successfully applying a unary op, there should be an opnd already
         // A very special case of % which is a funny post op unary op.
         if IDC_PERCENT == n_op_code {
-            let i_command_end = self.add_command(ExpressionCommand::Unary(UnaryCommand::new(n_op_code)));
-            self.ich_add_sz_to_equation_sz(&CalcEngine::op_code_to_string(n_op_code), i_command_end);
+            let i_command_end =
+                self.add_command(ExpressionCommand::Unary(UnaryCommand::new(n_op_code)));
+            self.ich_add_sz_to_equation_sz(
+                &CalcEngine::op_code_to_string(n_op_code),
+                i_command_end,
+            );
         } else {
             // all the other unary ops
             let sp_expression_command = if IDC_SIGN == n_op_code {
@@ -200,15 +235,27 @@ impl HistoryCollector {
 
                 let pick = |inverse: Command, plain: i32| if f_inv { inverse.0 } else { plain };
                 match n_op_code {
-                    IDC_SIN => UnaryCommand::new2(angle_op_code, pick(Command::CommandASIN, IDC_SIN)),
-                    IDC_COS => UnaryCommand::new2(angle_op_code, pick(Command::CommandACOS, IDC_COS)),
-                    IDC_TAN => UnaryCommand::new2(angle_op_code, pick(Command::CommandATAN, IDC_TAN)),
+                    IDC_SIN => {
+                        UnaryCommand::new2(angle_op_code, pick(Command::CommandASIN, IDC_SIN))
+                    }
+                    IDC_COS => {
+                        UnaryCommand::new2(angle_op_code, pick(Command::CommandACOS, IDC_COS))
+                    }
+                    IDC_TAN => {
+                        UnaryCommand::new2(angle_op_code, pick(Command::CommandATAN, IDC_TAN))
+                    }
                     IDC_SINH => UnaryCommand::new(pick(Command::CommandASINH, IDC_SINH)),
                     IDC_COSH => UnaryCommand::new(pick(Command::CommandACOSH, IDC_COSH)),
                     IDC_TANH => UnaryCommand::new(pick(Command::CommandATANH, IDC_TANH)),
-                    IDC_SEC => UnaryCommand::new2(angle_op_code, pick(Command::CommandASEC, IDC_SEC)),
-                    IDC_CSC => UnaryCommand::new2(angle_op_code, pick(Command::CommandACSC, IDC_CSC)),
-                    IDC_COT => UnaryCommand::new2(angle_op_code, pick(Command::CommandACOT, IDC_COT)),
+                    IDC_SEC => {
+                        UnaryCommand::new2(angle_op_code, pick(Command::CommandASEC, IDC_SEC))
+                    }
+                    IDC_CSC => {
+                        UnaryCommand::new2(angle_op_code, pick(Command::CommandACSC, IDC_CSC))
+                    }
+                    IDC_COT => {
+                        UnaryCommand::new2(angle_op_code, pick(Command::CommandACOT, IDC_COT))
+                    }
                     IDC_SECH => UnaryCommand::new(pick(Command::CommandASECH, IDC_SECH)),
                     IDC_CSCH => UnaryCommand::new(pick(Command::CommandACSCH, IDC_CSCH)),
                     IDC_COTH => UnaryCommand::new(pick(Command::CommandACOTH, IDC_COTH)),
@@ -244,7 +291,9 @@ impl HistoryCollector {
         if let Some(history_display) = self.history_display.clone() {
             let tokens = self.tokens.take().unwrap_or_default();
             let commands = self.commands.take().unwrap_or_default();
-            let added_item_index = history_display.borrow_mut().add_to_history(tokens, commands, num_str);
+            let added_item_index = history_display
+                .borrow_mut()
+                .add_to_history(tokens, commands, num_str);
             // C++ dereferences m_pCalcDisplay unconditionally here.
             if let Some(d) = &self.calc_display {
                 d.borrow_mut().on_history_item_added(added_item_index);
@@ -346,8 +395,14 @@ impl HistoryCollector {
             let command_position = self.tokens.as_ref().unwrap()[idx].1;
             if command_position != -1 {
                 // C++: m_spCommands->at(commandPosition)
-                let new_token = match self.commands.as_ref().and_then(|c| c.get(command_position as usize)) {
-                    Some(ExpressionCommand::Operand(opnd_command)) if opnd_command.get_command_type() == CommandType::OperandCommand => {
+                let new_token = match self
+                    .commands
+                    .as_ref()
+                    .and_then(|c| c.get(command_position as usize))
+                {
+                    Some(ExpressionCommand::Operand(opnd_command))
+                        if opnd_command.get_command_type() == CommandType::OperandCommand =>
+                    {
                         Some(opnd_command.get_string(radix, precision)?)
                     }
                     _ => None,
@@ -355,8 +410,10 @@ impl HistoryCollector {
                 if let Some(new_token) = new_token {
                     let new_commands = self.get_operand_commands_from_string(&new_token);
                     self.tokens.as_mut().unwrap()[idx].0 = new_token;
-                    if let Some(ExpressionCommand::Operand(opnd_command)) =
-                        self.commands.as_mut().and_then(|c| c.get_mut(command_position as usize))
+                    if let Some(ExpressionCommand::Operand(opnd_command)) = self
+                        .commands
+                        .as_mut()
+                        .and_then(|c| c.get_mut(command_position as usize))
                     {
                         opnd_command.set_commands(new_commands);
                     }
@@ -404,7 +461,11 @@ impl HistoryCollector {
     }
 
     /// `GetOperandCommandsFromString(numStr, rat)`
-    pub fn get_operand_commands_from_string_rat(&self, num_str: &str, rat: &Rational) -> OpndCommand {
+    pub fn get_operand_commands_from_string_rat(
+        &self,
+        num_str: &str,
+        rat: &Rational,
+    ) -> OpndCommand {
         let chars: Vec<char> = num_str.chars().collect();
         let mut commands = Vec::new();
         // Check for negate

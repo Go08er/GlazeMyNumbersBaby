@@ -296,7 +296,9 @@ pub fn window_shortcut(kp: &KeyPress) -> Option<WindowAction> {
     if kp.alt
         && !kp.ctrl
         && let Some(d) = kp.digit()
-        && let Some(mode) = ViewMode::ALL.into_iter().find(|m| m.alt_number() == Some(d))
+        && let Some(mode) = ViewMode::ALL
+            .into_iter()
+            .find(|m| m.alt_number() == Some(d))
     {
         return Some(WindowAction::SwitchMode(mode));
     }
@@ -432,15 +434,36 @@ mod tests {
     #[test]
     fn typed_characters_and_letters() {
         use CalcMode::*;
-        assert_eq!(sc(Standard, KeyPress::char('7')), Some(Action::Press(B::Seven)));
-        assert_eq!(sc(Standard, KeyPress::char('%')), Some(Action::Press(B::Percent)));
-        assert_eq!(sc(Scientific, KeyPress::char('%')), Some(Action::Press(B::Mod)));
-        assert_eq!(sc(Scientific, KeyPress::char('E')), Some(Action::Press(B::Euler)));
+        assert_eq!(
+            sc(Standard, KeyPress::char('7')),
+            Some(Action::Press(B::Seven))
+        );
+        assert_eq!(
+            sc(Standard, KeyPress::char('%')),
+            Some(Action::Press(B::Percent))
+        );
+        assert_eq!(
+            sc(Scientific, KeyPress::char('%')),
+            Some(Action::Press(B::Mod))
+        );
+        assert_eq!(
+            sc(Scientific, KeyPress::char('E')),
+            Some(Action::Press(B::Euler))
+        );
         assert_eq!(sc(Scientific, KeyPress::char('e')), None);
-        assert_eq!(sc(Programmer, KeyPress::char('e')), Some(Action::Press(B::E)));
-        assert_eq!(sc(Programmer, KeyPress::char('.')), Some(Action::Press(B::Nand)));
+        assert_eq!(
+            sc(Programmer, KeyPress::char('e')),
+            Some(Action::Press(B::E))
+        );
+        assert_eq!(
+            sc(Programmer, KeyPress::char('.')),
+            Some(Action::Press(B::Nand))
+        );
         assert_eq!(sc(Standard, KeyPress::char('(')), None);
-        assert_eq!(sc(Scientific, KeyPress::char('S')), Some(Action::Press(B::InvSin)));
+        assert_eq!(
+            sc(Scientific, KeyPress::char('S')),
+            Some(Action::Press(B::InvSin))
+        );
         assert_eq!(
             sc(Scientific, KeyPress::char('s').ctrl().shift()),
             Some(Action::Press(B::InvSinh))
@@ -449,7 +472,10 @@ mod tests {
             sc(Standard, KeyPress::char('D').ctrl()),
             Some(Action::ClearHistory)
         );
-        assert_eq!(sc(Standard, KeyPress::named(Named::Enter)), Some(Action::Press(B::Equals)));
+        assert_eq!(
+            sc(Standard, KeyPress::named(Named::Enter)),
+            Some(Action::Press(B::Equals))
+        );
         assert_eq!(
             sc(Programmer, KeyPress::named(Named::F(5))),
             Some(Action::Radix(R::Hex))
@@ -491,22 +517,40 @@ mod tests {
             window_shortcut(&KeyPress::char('3').alt()),
             Some(WindowAction::SwitchMode(ViewMode::Graphing))
         );
-        assert_eq!(window_shortcut(&KeyPress::char('v').ctrl()), Some(WindowAction::Paste));
+        assert_eq!(
+            window_shortcut(&KeyPress::char('v').ctrl()),
+            Some(WindowAction::Paste)
+        );
         assert_eq!(
             window_shortcut(&KeyPress::named(Named::Insert).shift()),
             Some(WindowAction::Paste)
         );
-        assert_eq!(graph_shortcut(&KeyPress::char('0').ctrl()), Some(GraphAction::ResetView));
-        assert_eq!(compact_shortcut(&KeyPress::named(Named::Up).alt()), Some(true));
-        assert_eq!(converter_shortcut(&KeyPress::char('4')), Some(crate::keys::conv::DIGIT0 + 4));
+        assert_eq!(
+            graph_shortcut(&KeyPress::char('0').ctrl()),
+            Some(GraphAction::ResetView)
+        );
+        assert_eq!(
+            compact_shortcut(&KeyPress::named(Named::Up).alt()),
+            Some(true)
+        );
+        assert_eq!(
+            converter_shortcut(&KeyPress::char('4')),
+            Some(crate::keys::conv::DIGIT0 + 4)
+        );
         assert_eq!(converter_shortcut(&KeyPress::char('x')), None);
     }
 
     #[test]
     fn chord_tokens_and_scripts_parse() {
         assert_eq!(parse_chord("alt+3"), Some(KeyPress::char('3').alt()));
-        assert_eq!(parse_chord("ctrl+home"), Some(KeyPress::named(Named::Home).ctrl()));
-        assert_eq!(parse_chord("ctrl+shift+d"), Some(KeyPress::new(Key::Char('d')).ctrl().shift()));
+        assert_eq!(
+            parse_chord("ctrl+home"),
+            Some(KeyPress::named(Named::Home).ctrl())
+        );
+        assert_eq!(
+            parse_chord("ctrl+shift+d"),
+            Some(KeyPress::new(Key::Char('d')).ctrl().shift())
+        );
         assert_eq!(parse_chord("f9"), Some(KeyPress::named(Named::F(9))));
         assert_eq!(parse_chord("ctrl+bogus"), None);
         let s = parse_key_script("1+2\n{alt+2}");

@@ -147,7 +147,11 @@ impl Connection {
     fn authenticate(&mut self) -> io::Result<()> {
         use std::os::unix::fs::MetadataExt;
         let uid = std::fs::metadata("/proc/self")?.uid();
-        let hex: String = uid.to_string().bytes().map(|b| format!("{b:02x}")).collect();
+        let hex: String = uid
+            .to_string()
+            .bytes()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         self.stream
             .write_all(format!("\0AUTH EXTERNAL {hex}\r\n").as_bytes())?;
         let line = self.read_line()?;
@@ -364,7 +368,10 @@ impl Reader<'_> {
     }
     fn take(&mut self, n: usize) -> io::Result<&[u8]> {
         let end = self.pos.checked_add(n).ok_or_else(|| err("overflow"))?;
-        let s = self.data.get(self.pos..end).ok_or_else(|| err("truncated message"))?;
+        let s = self
+            .data
+            .get(self.pos..end)
+            .ok_or_else(|| err("truncated message"))?;
         self.pos = end;
         Ok(s)
     }
@@ -500,7 +507,11 @@ fn read_message(stream: &mut impl Read) -> io::Result<Message> {
     };
     let word = |i: usize| {
         let b: [u8; 4] = fixed[i..i + 4].try_into().unwrap_or_default();
-        if big { u32::from_be_bytes(b) } else { u32::from_le_bytes(b) }
+        if big {
+            u32::from_be_bytes(b)
+        } else {
+            u32::from_le_bytes(b)
+        }
     };
     let (body_len, fields_len) = (word(4) as usize, word(12) as usize);
     if body_len + fields_len > MAX_MESSAGE {
@@ -515,11 +526,7 @@ fn read_message(stream: &mut impl Read) -> io::Result<Message> {
 
 fn decode(data: &[u8]) -> io::Result<Message> {
     let big = data.first() == Some(&b'B');
-    let mut r = Reader {
-        data,
-        pos: 12,
-        big,
-    };
+    let mut r = Reader { data, pos: 12, big };
     let fields_len = r.u32()? as usize;
     let fields_end = 16 + fields_len;
     let mut msg = Message {
@@ -655,13 +662,23 @@ mod tests {
 
     #[test]
     fn method_calls_round_trip_through_the_decoder() {
-        let bytes = encode_call(7, "org.example", "/a/b", "org.example.I", "Do", &["x", "yz"]);
+        let bytes = encode_call(
+            7,
+            "org.example",
+            "/a/b",
+            "org.example.I",
+            "Do",
+            &["x", "yz"],
+        );
         let msg = decode(&bytes).unwrap();
         assert_eq!(msg.kind, METHOD_CALL);
         assert_eq!(msg.serial, 7);
         assert_eq!(msg.path.as_deref(), Some("/a/b"));
         assert_eq!(msg.member.as_deref(), Some("Do"));
-        assert_eq!(msg.body, vec![Value::Str("x".into()), Value::Str("yz".into())]);
+        assert_eq!(
+            msg.body,
+            vec![Value::Str("x".into()), Value::Str("yz".into())]
+        );
     }
 
     /// Build a reply whose body is a single variant of `inner_sig`.
@@ -736,7 +753,10 @@ mod tests {
         assert!(rest.is_empty());
         let Value::Array(items) = v else { panic!() };
         assert_eq!(items.len(), 2);
-        assert_eq!(items[1], Value::Struct(vec![Value::Str("bb".into()), Value::U32(2)]));
+        assert_eq!(
+            items[1],
+            Value::Struct(vec![Value::Str("bb".into()), Value::U32(2)])
+        );
     }
 
     #[test]

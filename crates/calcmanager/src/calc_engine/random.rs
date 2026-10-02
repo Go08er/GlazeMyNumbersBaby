@@ -26,7 +26,9 @@ impl Mt19937 {
         let mut mt = [0u32; N];
         mt[0] = seed;
         for i in 1..N {
-            mt[i] = 1_812_433_253u32.wrapping_mul(mt[i - 1] ^ (mt[i - 1] >> 30)).wrapping_add(i as u32);
+            mt[i] = 1_812_433_253u32
+                .wrapping_mul(mt[i - 1] ^ (mt[i - 1] >> 30))
+                .wrapping_add(i as u32);
         }
         Mt19937 { mt, mti: N }
     }

@@ -8,10 +8,10 @@
 //! tests for the gmnb contract (programmer strings, bit flips,
 //! enablement, paste, persistence, events).
 
+mod gmnb;
 mod history;
 mod snapshot;
 mod standard;
-mod gmnb;
 
 use crate::{Button, CalcMode, CalculatorViewModel};
 
@@ -19,7 +19,11 @@ use crate::{Button, CalcMode, CalculatorViewModel};
 /// upstream's `ValidateViewModelByCommands`, only the display is checked;
 /// the expression column is kept from the upstream tables for reference
 /// (expressions are asserted separately where they matter).
-pub(super) struct TestItem(pub Button, pub &'static str, #[allow(dead_code)] pub &'static str);
+pub(super) struct TestItem(
+    pub Button,
+    pub &'static str,
+    #[allow(dead_code)] pub &'static str,
+);
 
 /// `InitializeViewModel()`: a new view model in Standard mode.
 pub(super) fn new_vm() -> CalculatorViewModel {
@@ -32,7 +36,11 @@ pub(super) fn change_mode(vm: &mut CalculatorViewModel, mode: CalcMode) {
 }
 
 /// `ValidateViewModelByCommands(viewModel, items, doReset)`.
-pub(super) fn validate_view_model_by_commands(vm: &mut CalculatorViewModel, items: &[TestItem], do_reset: bool) {
+pub(super) fn validate_view_model_by_commands(
+    vm: &mut CalculatorViewModel,
+    items: &[TestItem],
+    do_reset: bool,
+) {
     if do_reset {
         vm.press(Button::Clear);
         vm.press(Button::ClearEntry);
@@ -51,7 +59,11 @@ pub(super) fn validate_view_model_by_commands(vm: &mut CalculatorViewModel, item
 }
 
 /// `ValidateViewModelValueAndSecondaryExpression(value, expression)`.
-pub(super) fn validate_value_and_expression(vm: &CalculatorViewModel, value: Option<&str>, expression: Option<&str>) {
+pub(super) fn validate_value_and_expression(
+    vm: &CalculatorViewModel,
+    value: Option<&str>,
+    expression: Option<&str>,
+) {
     if let Some(value) = value {
         assert_eq!(vm.display_value(), value);
     }

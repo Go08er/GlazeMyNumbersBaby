@@ -9,7 +9,7 @@
 use ratpack::{AngleType, CalcResult, NumberFormat, Rational};
 
 use super::random::Mt19937;
-use super::{ratpack_pi, ratpack_two_pi, CalcEngine, NumWidth};
+use super::{CalcEngine, NumWidth, ratpack_pi, ratpack_two_pi};
 use crate::calc_utils::*;
 use crate::ccommand::*;
 use crate::engine_strings::*;
@@ -81,7 +81,10 @@ impl FunctionNameElement {
     }
 
     fn has_angle_strings(&self) -> bool {
-        !self.rad_string.is_empty() || !self.inverse_rad_string.is_empty() || !self.grad_string.is_empty() || !self.inverse_grad_string.is_empty()
+        !self.rad_string.is_empty()
+            || !self.inverse_rad_string.is_empty()
+            || !self.grad_string.is_empty()
+            || !self.inverse_grad_string.is_empty()
     }
 }
 
@@ -91,17 +94,29 @@ fn operator_string_table(op: i32) -> Option<FunctionNameElement> {
     Some(match op {
         IDC_CHOP => E::di("", SIDS_FRAC),
 
-        IDC_SIN => E::new(SIDS_SIND, SIDS_ASIND, SIDS_SINR, SIDS_ASINR, SIDS_SING, SIDS_ASING, ""),
-        IDC_COS => E::new(SIDS_COSD, SIDS_ACOSD, SIDS_COSR, SIDS_ACOSR, SIDS_COSG, SIDS_ACOSG, ""),
-        IDC_TAN => E::new(SIDS_TAND, SIDS_ATAND, SIDS_TANR, SIDS_ATANR, SIDS_TANG, SIDS_ATANG, ""),
+        IDC_SIN => E::new(
+            SIDS_SIND, SIDS_ASIND, SIDS_SINR, SIDS_ASINR, SIDS_SING, SIDS_ASING, "",
+        ),
+        IDC_COS => E::new(
+            SIDS_COSD, SIDS_ACOSD, SIDS_COSR, SIDS_ACOSR, SIDS_COSG, SIDS_ACOSG, "",
+        ),
+        IDC_TAN => E::new(
+            SIDS_TAND, SIDS_ATAND, SIDS_TANR, SIDS_ATANR, SIDS_TANG, SIDS_ATANG, "",
+        ),
 
         IDC_SINH => E::di("", SIDS_ASINH),
         IDC_COSH => E::di("", SIDS_ACOSH),
         IDC_TANH => E::di("", SIDS_ATANH),
 
-        IDC_SEC => E::new(SIDS_SECD, SIDS_ASECD, SIDS_SECR, SIDS_ASECR, SIDS_SECG, SIDS_ASECG, ""),
-        IDC_CSC => E::new(SIDS_CSCD, SIDS_ACSCD, SIDS_CSCR, SIDS_ACSCR, SIDS_CSCG, SIDS_ACSCG, ""),
-        IDC_COT => E::new(SIDS_COTD, SIDS_ACOTD, SIDS_COTR, SIDS_ACOTR, SIDS_COTG, SIDS_ACOTG, ""),
+        IDC_SEC => E::new(
+            SIDS_SECD, SIDS_ASECD, SIDS_SECR, SIDS_ASECR, SIDS_SECG, SIDS_ASECG, "",
+        ),
+        IDC_CSC => E::new(
+            SIDS_CSCD, SIDS_ACSCD, SIDS_CSCR, SIDS_ACSCR, SIDS_CSCG, SIDS_ACSCG, "",
+        ),
+        IDC_COT => E::new(
+            SIDS_COTD, SIDS_ACOTD, SIDS_COTR, SIDS_ACOTR, SIDS_COTG, SIDS_ACOTG, "",
+        ),
 
         IDC_SECH => E::di(SIDS_SECH, SIDS_ASECH),
         IDC_CSCH => E::di(SIDS_CSCH, SIDS_ACSCH),
@@ -190,12 +205,17 @@ impl CalcEngine {
         // Add the operand to history before adding the implicit multiplication
         if !self.history_collector.f_opnd_added_to_history() {
             self.history_collector.add_open_brace_to_history();
-            self.history_collector.add_opnd_to_history(&self.number_string, &self.current_val, false);
+            self.history_collector.add_opnd_to_history(
+                &self.number_string,
+                &self.current_val,
+                false,
+            );
             self.history_collector.add_close_brace_to_history();
         }
 
         // Add the implicit multiplication to history
-        self.history_collector.add_bin_op_to_history(self.n_op_code, self.f_integer_mode, true);
+        self.history_collector
+            .add_bin_op_to_history(self.n_op_code, self.f_integer_mode, true);
 
         self.b_change_op = true;
         self.n_prev_op_code = 0;
@@ -281,7 +301,14 @@ impl CalcEngine {
             }
 
             let max_str = self.get_max_decimal_value_string();
-            if !self.input.try_add_digit(i_value, self.radix, self.f_integer_mode, &max_str, self.dw_word_bit_width, self.c_int_digits_sav) {
+            if !self.input.try_add_digit(
+                i_value,
+                self.radix,
+                self.f_integer_mode,
+                &max_str,
+                self.dw_word_bit_width,
+                self.c_int_digits_sav,
+            ) {
                 self.handle_error_command(w_param);
                 self.handle_max_digits_reached();
                 return Ok(());
@@ -318,14 +345,22 @@ impl CalcEngine {
                         self.n_prev_op_code = 0; // Once the precedence inversion has put additional brackets, its no longer required
                     }
                 }
-                self.history_collector.change_last_bin_op(self.n_op_code, f_prec_inv_to_higher, self.f_integer_mode)?;
+                self.history_collector.change_last_bin_op(
+                    self.n_op_code,
+                    f_prec_inv_to_higher,
+                    self.f_integer_mode,
+                )?;
                 self.display_announce_binary_operator();
                 return Ok(());
             }
 
             if !self.history_collector.f_opnd_added_to_history() {
                 // if the prev command was ) or unop then it is already in history as a opnd form (...)
-                self.history_collector.add_opnd_to_history(&self.number_string, &self.current_val, false);
+                self.history_collector.add_opnd_to_history(
+                    &self.number_string,
+                    &self.current_val,
+                    false,
+                );
             }
 
             /* m_bChangeOp is true if there was an operation done and the   */
@@ -362,13 +397,20 @@ impl CalcEngine {
                         if !self.b_error {
                             self.display_num()?;
                             if !self.f_precedence {
-                                let grouped_string = self.group_digits_per_radix(&self.number_string, self.radix);
+                                let grouped_string =
+                                    self.group_digits_per_radix(&self.number_string, self.radix);
                                 self.history_collector.complete_equation(&grouped_string);
-                                self.history_collector.add_opnd_to_history(&self.number_string, &self.current_val, false);
+                                self.history_collector.add_opnd_to_history(
+                                    &self.number_string,
+                                    &self.current_val,
+                                    false,
+                                );
                             }
                         }
 
-                        if (self.precedence_op_count != 0) && (self.n_prec_op[self.precedence_op_count - 1] != 0) {
+                        if (self.precedence_op_count != 0)
+                            && (self.n_prec_op[self.precedence_op_count - 1] != 0)
+                        {
                             self.precedence_op_count -= 1;
                             self.n_op_code = self.n_prec_op[self.precedence_op_count];
 
@@ -394,7 +436,8 @@ impl CalcEngine {
             self.display_announce_binary_operator();
             self.last_val = self.current_val.clone();
             self.n_op_code = w_param;
-            self.history_collector.add_bin_op_to_history(self.n_op_code, self.f_integer_mode, true);
+            self.history_collector
+                .add_bin_op_to_history(self.n_op_code, self.f_integer_mode, true);
             self.b_no_prev_equ = true;
             self.b_change_op = true;
             return Ok(());
@@ -415,15 +458,31 @@ impl CalcEngine {
             // instead, we add the result of applying %.
             if w_param != IDC_PERCENT {
                 if !self.history_collector.f_opnd_added_to_history() {
-                    self.history_collector.add_opnd_to_history(&self.number_string, &self.current_val, false);
+                    self.history_collector.add_opnd_to_history(
+                        &self.number_string,
+                        &self.current_val,
+                        false,
+                    );
                 }
 
-                self.history_collector.add_unary_op_to_history(w_param, self.b_inv, self.angletype);
+                self.history_collector
+                    .add_unary_op_to_history(w_param, self.b_inv, self.angletype);
             }
 
             if matches!(
                 w_param,
-                IDC_SIN | IDC_COS | IDC_TAN | IDC_SINH | IDC_COSH | IDC_TANH | IDC_SEC | IDC_CSC | IDC_COT | IDC_SECH | IDC_CSCH | IDC_COTH
+                IDC_SIN
+                    | IDC_COS
+                    | IDC_TAN
+                    | IDC_SINH
+                    | IDC_COSH
+                    | IDC_TANH
+                    | IDC_SEC
+                    | IDC_CSC
+                    | IDC_COT
+                    | IDC_SECH
+                    | IDC_CSCH
+                    | IDC_COTH
             ) && self.is_current_too_big_for_trig()
             {
                 self.current_val = Rational::from(0);
@@ -442,7 +501,11 @@ impl CalcEngine {
 
             if w_param == IDC_PERCENT {
                 self.check_and_add_last_bin_op_to_history(true)?;
-                self.history_collector.add_opnd_to_history(&self.number_string, &self.current_val, true /* Add to primary and secondary display */);
+                self.history_collector.add_opnd_to_history(
+                    &self.number_string,
+                    &self.current_val,
+                    true, /* Add to primary and secondary display */
+                );
             }
 
             /* reset the m_bInv flag and indicators if it is set
@@ -576,7 +639,11 @@ impl CalcEngine {
                 }
 
                 if !self.history_collector.f_opnd_added_to_history() {
-                    self.history_collector.add_opnd_to_history(&self.number_string, &self.current_val, false);
+                    self.history_collector.add_opnd_to_history(
+                        &self.number_string,
+                        &self.current_val,
+                        false,
+                    );
                 }
 
                 // Evaluate the precedence stack.
@@ -600,7 +667,8 @@ impl CalcEngine {
                 }
 
                 if !self.b_error {
-                    let grouped_string = self.group_digits_per_radix(&self.number_string, self.radix);
+                    let grouped_string =
+                        self.group_digits_per_radix(&self.number_string, self.radix);
                     self.history_collector.complete_equation(&grouped_string);
 
                     self.last_val = self.current_val.clone();
@@ -618,7 +686,8 @@ impl CalcEngine {
                 // -OR- the precedence holding array is full
                 if (self.open_paren_count >= MAXPRECDEPTH && (w_param == IDC_OPENP))
                     || (self.open_paren_count == 0 && (w_param != IDC_OPENP))
-                    || (self.precedence_op_count >= MAXPRECDEPTH && self.n_prec_op[self.precedence_op_count - 1] != 0)
+                    || (self.precedence_op_count >= MAXPRECDEPTH
+                        && self.n_prec_op[self.precedence_op_count - 1] != 0)
                 {
                     if self.open_paren_count == 0
                         && (w_param != IDC_OPENP)
@@ -633,7 +702,11 @@ impl CalcEngine {
 
                 if w_param == IDC_OPENP {
                     // if there's an omitted multiplication sign
-                    if is_digit_op_code(self.n_last_com) || is_unary_op_code(self.n_last_com) || self.n_last_com == IDC_PNT || self.n_last_com == IDC_CLOSEP {
+                    if is_digit_op_code(self.n_last_com)
+                        || is_unary_op_code(self.n_last_com)
+                        || self.n_last_com == IDC_PNT
+                        || self.n_last_com == IDC_CLOSEP
+                    {
                         self.process_command(IDC_MUL)?;
                     }
 
@@ -643,7 +716,8 @@ impl CalcEngine {
                     // Open level of parentheses, save number and operation.
                     self.paren_vals[self.open_paren_count] = self.last_val.clone();
 
-                    self.n_op[self.open_paren_count] = if self.b_change_op { self.n_op_code } else { 0 };
+                    self.n_op[self.open_paren_count] =
+                        if self.b_change_op { self.n_op_code } else { 0 };
                     self.open_paren_count += 1;
 
                     /* save a special marker on the precedence array */
@@ -668,7 +742,11 @@ impl CalcEngine {
                     }
 
                     if !self.history_collector.f_opnd_added_to_history() {
-                        self.history_collector.add_opnd_to_history(&self.number_string, &self.current_val, false);
+                        self.history_collector.add_opnd_to_history(
+                            &self.number_string,
+                            &self.current_val,
+                            false,
+                        );
                     }
 
                     // Get the operation and number and return result.
@@ -721,7 +799,8 @@ impl CalcEngine {
 
                 // Set the "(=xx" indicator.
                 if let Some(d) = &self.calc_display {
-                    d.borrow_mut().set_parenthesis_number(self.open_paren_count as u32);
+                    d.borrow_mut()
+                        .set_parenthesis_number(self.open_paren_count as u32);
                 }
 
                 if !self.b_error {
@@ -732,7 +811,8 @@ impl CalcEngine {
             // BASE CHANGES:
             IDM_HEX | IDM_DEC | IDM_OCT | IDM_BIN => {
                 self.set_radix_type_and_num_width(RadixType::from_index(w_param - IDM_HEX), None)?;
-                self.history_collector.update_history_expression(self.radix, self.precision)?;
+                self.history_collector
+                    .update_history_expression(self.radix, self.precision)?;
             }
 
             IDM_QWORD | IDM_DWORD | IDM_WORD | IDM_BYTE => {
@@ -770,13 +850,21 @@ impl CalcEngine {
                 }
 
                 if !self.history_collector.f_opnd_added_to_history() {
-                    self.history_collector.add_opnd_to_history(&self.number_string, &self.current_val, false);
+                    self.history_collector.add_opnd_to_history(
+                        &self.number_string,
+                        &self.current_val,
+                        false,
+                    );
                 }
 
                 self.current_val = -&self.current_val;
 
                 self.display_num()?;
-                self.history_collector.add_unary_op_to_history(IDC_SIGN, self.b_inv, self.angletype);
+                self.history_collector.add_unary_op_to_history(
+                    IDC_SIGN,
+                    self.b_inv,
+                    self.angletype,
+                );
             }
 
             IDC_RECALL => {
@@ -795,23 +883,39 @@ impl CalcEngine {
             IDC_MPLUS => {
                 /* MPLUS adds m_currentVal to immediate memory and kills the "mem"   */
                 /* indicator if the result is zero.                           */
-                let result = self.memory_value.clone().unwrap_or_default().add(&self.current_val)?;
+                let result = self
+                    .memory_value
+                    .clone()
+                    .unwrap_or_default()
+                    .add(&self.current_val)?;
                 self.memory_value = Some(self.truncate_num_for_int_math(&result)?); // Memory should follow the current int mode
             }
             IDC_MMINUS => {
                 /* MMINUS subtracts m_currentVal to immediate memory and kills the "mem"   */
                 /* indicator if the result is zero.                           */
-                let result = self.memory_value.clone().unwrap_or_default().sub(&self.current_val)?;
+                let result = self
+                    .memory_value
+                    .clone()
+                    .unwrap_or_default()
+                    .sub(&self.current_val)?;
                 self.memory_value = Some(self.truncate_num_for_int_math(&result)?);
             }
             IDC_STORE | IDC_MCLEAR => {
-                let v = if w_param == IDC_STORE { self.truncate_num_for_int_math(&self.current_val)? } else { Rational::from(0) };
+                let v = if w_param == IDC_STORE {
+                    self.truncate_num_for_int_math(&self.current_val)?
+                } else {
+                    Rational::from(0)
+                };
                 self.memory_value = Some(v);
             }
             IDC_PI => {
                 if !self.f_integer_mode {
                     self.check_and_add_last_bin_op_to_history(true)?; // pi is like entering the number
-                    self.current_val = if self.b_inv { ratpack_two_pi()? } else { ratpack_pi()? };
+                    self.current_val = if self.b_inv {
+                        ratpack_two_pi()?
+                    } else {
+                        ratpack_pi()?
+                    };
 
                     self.display_num()?;
                     self.b_inv = false;
@@ -827,7 +931,8 @@ impl CalcEngine {
                     let prec = usize::try_from(self.precision).unwrap_or(6);
                     let s = format!("{:.*}", prec, self.generate_random_number());
 
-                    let rat = ratpack::string_to_rat(false, &s, false, "", self.radix, self.precision)?;
+                    let rat =
+                        ratpack::string_to_rat(false, &s, false, "", self.radix, self.precision)?;
                     self.current_val = match rat {
                         Some(r) => r,
                         None => Rational::from(0),
@@ -852,7 +957,11 @@ impl CalcEngine {
             }
             IDC_FE => {
                 // Toggle exponential notation display.
-                self.n_fe = if self.n_fe == NumberFormat::Float { NumberFormat::Scientific } else { NumberFormat::Float };
+                self.n_fe = if self.n_fe == NumberFormat::Float {
+                    NumberFormat::Scientific
+                } else {
+                    NumberFormat::Float
+                };
                 self.display_num()?;
             }
 
@@ -899,8 +1008,16 @@ impl CalcEngine {
             } else {
                 self.current_val = self.hold_val.clone();
                 self.display_num()?; // to update the m_numberString
-                self.history_collector.add_bin_op_to_history(self.n_op_code, self.f_integer_mode, false);
-                self.history_collector.add_opnd_to_history(&self.number_string, &self.current_val, false); // Adding the repeated last op to history
+                self.history_collector.add_bin_op_to_history(
+                    self.n_op_code,
+                    self.f_integer_mode,
+                    false,
+                );
+                self.history_collector.add_opnd_to_history(
+                    &self.number_string,
+                    &self.current_val,
+                    false,
+                ); // Adding the repeated last op to history
             }
 
             // Do the current or last operation.
@@ -931,7 +1048,10 @@ impl CalcEngine {
     /// effectively removing only it from the equation but still keeping the previous portion of the equation. Eg. 1 + 4 sqrt 5. The last
     /// 5 will remove sqrt(4) as it is not used anymore to participate in 1 + 5
     /// If you are messing with this, test cases like this CE, statistical functions, ( & MR buttons
-    pub(super) fn check_and_add_last_bin_op_to_history(&mut self, add_to_history: bool) -> CalcResult<()> {
+    pub(super) fn check_and_add_last_bin_op_to_history(
+        &mut self,
+        add_to_history: bool,
+    ) -> CalcResult<()> {
         if self.b_change_op {
             if self.history_collector.f_opnd_added_to_history() {
                 // if last time opnd was added but the last command was not a binary operator, then it must have come
@@ -946,7 +1066,11 @@ impl CalcEngine {
             // Let us make a current value =. So in case of 4 SQRT (or a equation under braces) and then a new equation is started, we can just form
             // a useful equation of sqrt(4) = 2 and continue a new equation from now on. But no point in doing this for things like
             // MR, SUM etc. All you will get is 5 = 5 kind of no useful equation.
-            if (is_unary_op_code(self.n_last_com) || IDC_SIGN == self.n_last_com || IDC_CLOSEP == self.n_last_com) && 0 == self.open_paren_count {
+            if (is_unary_op_code(self.n_last_com)
+                || IDC_SIGN == self.n_last_com
+                || IDC_CLOSEP == self.n_last_com)
+                && 0 == self.open_paren_count
+            {
                 if add_to_history {
                     let grouped = self.group_digits_per_radix(&self.number_string, self.radix);
                     self.history_collector.complete_history_line(&grouped);
@@ -1043,8 +1167,17 @@ impl CalcEngine {
         self.radix
     }
 
-    pub fn get_current_result_for_radix(&mut self, radix: u32, precision: i32, group_digits_per_radix: bool) -> CalcResult<String> {
-        let rat = if self.b_record { self.input.to_rational(self.radix, self.precision)? } else { self.current_val.clone() };
+    pub fn get_current_result_for_radix(
+        &mut self,
+        radix: u32,
+        precision: i32,
+        group_digits_per_radix: bool,
+    ) -> CalcResult<String> {
+        let rat = if self.b_record {
+            self.input.to_rational(self.radix, self.precision)?
+        } else {
+            self.current_val.clone()
+        };
 
         ratpack::change_constants(self.radix, precision);
 
@@ -1077,7 +1210,9 @@ impl CalcEngine {
             let f_msb = ((w64_bits >> (self.dw_word_bit_width - 1)) & 1) != 0;
             if (radix == 10) && f_msb {
                 // If high bit is set, then get the decimal number in negative 2's complement form.
-                temp_rat = -(temp_rat.bitxor(&self.get_chop_number())?.add(&Rational::from(1))?);
+                temp_rat = -(temp_rat
+                    .bitxor(&self.get_chop_number())?
+                    .add(&Rational::from(1))?);
             }
 
             temp_rat.to_string_radix(radix, self.n_fe, self.precision)
@@ -1088,6 +1223,8 @@ impl CalcEngine {
     }
 
     fn generate_random_number(&mut self) -> f64 {
-        self.random_generator.get_or_insert_with(Mt19937::from_entropy).uniform_01()
+        self.random_generator
+            .get_or_insert_with(Mt19937::from_entropy)
+            .uniform_01()
     }
 }

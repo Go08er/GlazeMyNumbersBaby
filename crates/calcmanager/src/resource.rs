@@ -141,7 +141,10 @@ pub const EN_US_ENGINE_STRINGS: &[(&str, &str)] = &[
 
 /// Looks a key up in [`EN_US_ENGINE_STRINGS`].
 pub fn en_us_engine_string(id: &str) -> Option<&'static str> {
-    EN_US_ENGINE_STRINGS.iter().find(|(k, _)| *k == id).map(|(_, v)| *v)
+    EN_US_ENGINE_STRINGS
+        .iter()
+        .find(|(k, _)| *k == id)
+        .map(|(_, v)| *v)
 }
 
 /// Default engine resource provider: en-US strings with configurable number

@@ -59,7 +59,11 @@ impl CalcEngine {
         let rat = &rat_value;
         match op as i32 {
             IDC_CHOP => {
-                result = if self.b_inv { frac(rat)? } else { integer(rat)? };
+                result = if self.b_inv {
+                    frac(rat)?
+                } else {
+                    integer(rat)?
+                };
             }
 
             /* Return complement. */
@@ -122,7 +126,11 @@ impl CalcEngine {
             IDC_SIN => {
                 /* Sine; normal and arc */
                 if !self.f_integer_mode {
-                    result = if self.b_inv { asin(rat, angletype)? } else { sin(rat, angletype)? };
+                    result = if self.b_inv {
+                        asin(rat, angletype)?
+                    } else {
+                        sin(rat, angletype)?
+                    };
                 }
             }
 
@@ -136,7 +144,11 @@ impl CalcEngine {
             IDC_COS => {
                 /* Cosine, follows convention of sine function. */
                 if !self.f_integer_mode {
-                    result = if self.b_inv { acos(rat, angletype)? } else { cos(rat, angletype)? };
+                    result = if self.b_inv {
+                        acos(rat, angletype)?
+                    } else {
+                        cos(rat, angletype)?
+                    };
                 }
             }
 
@@ -150,7 +162,11 @@ impl CalcEngine {
             IDC_TAN => {
                 /* Same as sine and cosine. */
                 if !self.f_integer_mode {
-                    result = if self.b_inv { atan(rat, angletype)? } else { tan(rat, angletype)? };
+                    result = if self.b_inv {
+                        atan(rat, angletype)?
+                    } else {
+                        tan(rat, angletype)?
+                    };
                 }
             }
 
@@ -163,37 +179,61 @@ impl CalcEngine {
 
             IDC_SEC => {
                 if !self.f_integer_mode {
-                    result = if self.b_inv { acos(&invert(rat)?, angletype)? } else { invert(&cos(rat, angletype)?)? };
+                    result = if self.b_inv {
+                        acos(&invert(rat)?, angletype)?
+                    } else {
+                        invert(&cos(rat, angletype)?)?
+                    };
                 }
             }
 
             IDC_CSC => {
                 if !self.f_integer_mode {
-                    result = if self.b_inv { asin(&invert(rat)?, angletype)? } else { invert(&sin(rat, angletype)?)? };
+                    result = if self.b_inv {
+                        asin(&invert(rat)?, angletype)?
+                    } else {
+                        invert(&sin(rat, angletype)?)?
+                    };
                 }
             }
 
             IDC_COT => {
                 if !self.f_integer_mode {
-                    result = if self.b_inv { atan(&invert(rat)?, angletype)? } else { invert(&tan(rat, angletype)?)? };
+                    result = if self.b_inv {
+                        atan(&invert(rat)?, angletype)?
+                    } else {
+                        invert(&tan(rat, angletype)?)?
+                    };
                 }
             }
 
             IDC_SECH => {
                 if !self.f_integer_mode {
-                    result = if self.b_inv { acosh(&invert(rat)?)? } else { invert(&cosh(rat)?)? };
+                    result = if self.b_inv {
+                        acosh(&invert(rat)?)?
+                    } else {
+                        invert(&cosh(rat)?)?
+                    };
                 }
             }
 
             IDC_CSCH => {
                 if !self.f_integer_mode {
-                    result = if self.b_inv { asinh(&invert(rat)?)? } else { invert(&sinh(rat)?)? };
+                    result = if self.b_inv {
+                        asinh(&invert(rat)?)?
+                    } else {
+                        invert(&sinh(rat)?)?
+                    };
                 }
             }
 
             IDC_COTH => {
                 if !self.f_integer_mode {
-                    result = if self.b_inv { atanh(&invert(rat)?)? } else { invert(&tanh(rat)?)? };
+                    result = if self.b_inv {
+                        atanh(&invert(rat)?)?
+                    } else {
+                        invert(&tanh(rat)?)?
+                    };
                 }
             }
 
@@ -214,7 +254,11 @@ impl CalcEngine {
 
             IDC_CUBEROOT | IDC_CUB => {
                 /* Cubing and cube root functions. */
-                result = if IDC_CUBEROOT == op as i32 { root(rat, &r(3))? } else { pow(rat, &r(3))? };
+                result = if IDC_CUBEROOT == op as i32 {
+                    root(rat, &r(3))?
+                } else {
+                    pow(rat, &r(3))?
+                };
             }
 
             IDC_LOG => {
@@ -278,11 +322,19 @@ impl CalcEngine {
                 }
             }
             IDC_CEIL => {
-                result = if frac(rat)? > r(0) { integer(&rat.add(&r(1))?)? } else { integer(rat)? };
+                result = if frac(rat)? > r(0) {
+                    integer(&rat.add(&r(1))?)?
+                } else {
+                    integer(rat)?
+                };
             }
 
             IDC_FLOOR => {
-                result = if frac(rat)? < r(0) { integer(&rat.sub(&r(1))?)? } else { integer(rat)? };
+                result = if frac(rat)? < r(0) {
+                    integer(&rat.sub(&r(1))?)?
+                } else {
+                    integer(rat)?
+                };
             }
 
             IDC_ABS => {

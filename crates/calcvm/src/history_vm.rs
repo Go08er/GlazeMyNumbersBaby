@@ -17,10 +17,12 @@
 //! `HistoryAnnouncement`) and the hide/clicked events, which only drive
 //! XAML.
 
-use calcmanager::{CalculatorManager, CalculatorMode, ExpressionCommand, ExpressionToken, HistoryItem};
+use calcmanager::{
+    CalculatorManager, CalculatorMode, ExpressionCommand, ExpressionToken, HistoryItem,
+};
 
-use crate::localization::LocalizationSettings;
 use crate::CalcMode;
+use crate::localization::LocalizationSettings;
 
 /// `HistoryItemViewModel`
 #[derive(Clone, Debug)]
@@ -32,8 +34,18 @@ pub(crate) struct HistoryItemViewModel {
 }
 
 impl HistoryItemViewModel {
-    pub(crate) fn new(expression: String, result: String, tokens: Vec<ExpressionToken>, commands: Vec<ExpressionCommand>) -> Self {
-        HistoryItemViewModel { expression, result, tokens, commands }
+    pub(crate) fn new(
+        expression: String,
+        result: String,
+        tokens: Vec<ExpressionToken>,
+        commands: Vec<ExpressionCommand>,
+    ) -> Self {
+        HistoryItemViewModel {
+            expression,
+            result,
+            tokens,
+            commands,
+        }
     }
 
     fn from_manager_item(item: &HistoryItem) -> Self {
@@ -71,7 +83,11 @@ pub(crate) struct HistoryViewModel {
 
 impl HistoryViewModel {
     pub(crate) fn new() -> Self {
-        HistoryViewModel { current_mode: CalculatorMode::Standard, items: Vec::new(), are_history_shortcuts_enabled: true }
+        HistoryViewModel {
+            current_mode: CalculatorMode::Standard,
+            items: Vec::new(),
+            are_history_shortcuts_enabled: true,
+        }
     }
 
     /// `Items` (newest first).
@@ -88,7 +104,11 @@ impl HistoryViewModel {
     }
 
     /// `IHistoryDisplayTarget.OnHistoryItemAdded`
-    pub(crate) fn on_history_item_added(&mut self, manager: &CalculatorManager, added_item_index: u32) {
+    pub(crate) fn on_history_item_added(
+        &mut self,
+        manager: &CalculatorManager,
+        added_item_index: u32,
+    ) {
         let Some(new_item) = manager.get_history_item(added_item_index) else {
             return;
         };
@@ -124,7 +144,11 @@ impl HistoryViewModel {
     /// oldest-first, so the engine drops a different entry than the one
     /// removed from the list (visible after the next `ReloadHistory`). The
     /// index is translated here so both lists lose the same item.
-    pub(crate) fn delete_item(&mut self, manager: &mut CalculatorManager, item_index: usize) -> bool {
+    pub(crate) fn delete_item(
+        &mut self,
+        manager: &mut CalculatorManager,
+        item_index: usize,
+    ) -> bool {
         if item_index >= self.items.len() {
             return false;
         }
@@ -150,7 +174,11 @@ impl HistoryViewModel {
 
         let history_list_model = manager.get_history_items_for_mode(self.current_mode);
         // Iterate in reverse order
-        self.items = history_list_model.iter().rev().map(|h| HistoryItemViewModel::from_manager_item(h)).collect();
+        self.items = history_list_model
+            .iter()
+            .rev()
+            .map(|h| HistoryItemViewModel::from_manager_item(h))
+            .collect();
     }
 
     /// `GetMaxItemSize`

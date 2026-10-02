@@ -294,6 +294,9 @@ impl Button {
 
     /// The digit value for `Zero..=Nine` and `A..=F`.
     pub fn digit_value(self) -> Option<u32> {
-        Self::DIGITS.iter().position(|&b| b == self).map(|i| i as u32)
+        Self::DIGITS
+            .iter()
+            .position(|&b| b == self)
+            .map(|i| i as u32)
     }
 }

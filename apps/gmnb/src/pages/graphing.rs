@@ -588,7 +588,9 @@ impl GraphingPage {
         for (_, name, label) in session::STYLES {
             styles.add(adw::Toggle::builder().name(name).label(label).build());
         }
-        styles.set_active_name(Some(session::style_key(self.graph.borrow().line_style(row.id))));
+        styles.set_active_name(Some(session::style_key(
+            self.graph.borrow().line_style(row.id),
+        )));
         let (weak, id) = (Rc::downgrade(self), row.id);
         styles.connect_active_name_notify(move |t| {
             if let Some(p) = weak.upgrade() {
@@ -916,9 +918,13 @@ impl GraphingPage {
                 ymax.downgrade(),
             );
             e.connect_activate(move |_| {
-                let (Some(gv), Some(a), Some(b), Some(c), Some(d)) =
-                    (gv.upgrade(), a.upgrade(), b.upgrade(), c.upgrade(), d.upgrade())
-                else {
+                let (Some(gv), Some(a), Some(b), Some(c), Some(d)) = (
+                    gv.upgrade(),
+                    a.upgrade(),
+                    b.upgrade(),
+                    c.upgrade(),
+                    d.upgrade(),
+                ) else {
                     return;
                 };
                 let p = |e: &gtk::Entry| e.text().replace('−', "-").trim().parse::<f64>().ok();

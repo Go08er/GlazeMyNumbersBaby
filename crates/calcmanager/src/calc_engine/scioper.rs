@@ -4,7 +4,7 @@
 //! Port of `CEngine/scioper.cpp`.
 
 use ratpack::rational_math::*;
-use ratpack::{CalcResult, Rational, CALC_E_NORESULT};
+use ratpack::{CALC_E_NORESULT, CalcResult, Rational};
 
 use super::CalcEngine;
 use crate::ccommand::*;
@@ -13,9 +13,18 @@ impl CalcEngine {
     /// Routines to perform standard operations &|^~<<>>+-/*% and pwr.
     ///
     /// Mirrors the C++ `try { ... } catch (uint32_t dwErrCode) { DisplayError(dwErrCode); result = lhs; }`.
-    pub(super) fn do_operation(&mut self, operation: i32, lhs: &Rational, rhs: &Rational) -> Rational {
+    pub(super) fn do_operation(
+        &mut self,
+        operation: i32,
+        lhs: &Rational,
+        rhs: &Rational,
+    ) -> Rational {
         // Remove any variance in how 0 could be represented in rat e.g. -0, 0/n, etc.
-        let result = if *lhs != Rational::from(0) { lhs.clone() } else { Rational::from(0) };
+        let result = if *lhs != Rational::from(0) {
+            lhs.clone()
+        } else {
+            Rational::from(0)
+        };
 
         match self.do_operation_try(operation, result, rhs) {
             Ok(r) => r,
@@ -28,7 +37,12 @@ impl CalcEngine {
         }
     }
 
-    fn do_operation_try(&mut self, operation: i32, mut result: Rational, rhs: &Rational) -> CalcResult<Rational> {
+    fn do_operation_try(
+        &mut self,
+        operation: i32,
+        mut result: Rational,
+        rhs: &Rational,
+    ) -> CalcResult<Rational> {
         match operation {
             IDC_AND => {
                 result = result.bitand(rhs)?;
@@ -111,7 +125,9 @@ impl CalcEngine {
                     let mut f_msb = ((w64_bits >> (self.dw_word_bit_width - 1)) & 1) != 0;
 
                     if f_msb {
-                        result = rhs.bitxor(&self.get_chop_number())?.add(&Rational::from(1))?;
+                        result = rhs
+                            .bitxor(&self.get_chop_number())?
+                            .add(&Rational::from(1))?;
 
                         i_numerator_sign = -1;
                     }
@@ -120,7 +136,9 @@ impl CalcEngine {
                     f_msb = ((w64_bits >> (self.dw_word_bit_width - 1)) & 1) != 0;
 
                     if f_msb {
-                        temp = temp.bitxor(&self.get_chop_number())?.add(&Rational::from(1))?;
+                        temp = temp
+                            .bitxor(&self.get_chop_number())?
+                            .add(&Rational::from(1))?;
 
                         i_denominator_sign = -1;
                     }

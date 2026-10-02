@@ -25,8 +25,8 @@
 use std::rc::Rc;
 
 use calcmanager::{
-    CalcDisplayRef, CalculatorManager, Command, CommandType, EngineResourceProvider, ExpressionCommand,
-    ExpressionToken, NumWidth, RadixType,
+    CalcDisplayRef, CalculatorManager, Command, CommandType, EngineResourceProvider,
+    ExpressionCommand, ExpressionToken, NumWidth, RadixType,
 };
 use copypaste::{BitLength, NumberBase, PasteCommand, ViewMode};
 
@@ -156,7 +156,8 @@ impl StandardCalculatorViewModel {
     pub(crate) fn new() -> Self {
         let calculator_display = CalculatorDisplay::new_shared();
         let display_ref: CalcDisplayRef = calculator_display.clone();
-        let manager = CalculatorManager::new(display_ref, Rc::new(EngineResourceProvider::default()));
+        let manager =
+            CalculatorManager::new(display_ref, Rc::new(EngineResourceProvider::default()));
 
         StandardCalculatorViewModel {
             calculator_display,
@@ -206,7 +207,9 @@ impl StandardCalculatorViewModel {
     pub(crate) fn send_command(&mut self, command: i32) {
         // The shipping app never catches engine exceptions; an `Err` leaves
         // the engine in the same state the C++ would be in.
-        let _ = self.standard_calculator_manager.send_command(Command(command));
+        let _ = self
+            .standard_calculator_manager
+            .send_command(Command(command));
         self.drain();
     }
 
@@ -229,18 +232,25 @@ impl StandardCalculatorViewModel {
             }
             for callback in callbacks {
                 match callback {
-                    DisplayCallback::PrimaryDisplay(text, is_error) => self.set_primary_display(&text, is_error),
+                    DisplayCallback::PrimaryDisplay(text, is_error) => {
+                        self.set_primary_display(&text, is_error)
+                    }
                     DisplayCallback::IsInError(is_error) => self.set_is_in_error(is_error),
-                    DisplayCallback::ExpressionDisplay(tokens, commands) => self.set_expression_display(tokens, commands),
+                    DisplayCallback::ExpressionDisplay(tokens, commands) => {
+                        self.set_expression_display(tokens, commands)
+                    }
                     DisplayCallback::ParenthesisNumber(count) => self.set_parenthesis_count(count),
                     DisplayCallback::NoRightParenAdded => self.on_no_right_paren_added(),
                     DisplayCallback::MaxDigitsReached => self.on_max_digits_reached(),
                     DisplayCallback::BinaryOperatorReceived => self.on_binary_operator_received(),
                     DisplayCallback::HistoryItemAdded(index) => {
-                        self.history_vm.on_history_item_added(&self.standard_calculator_manager, index);
+                        self.history_vm
+                            .on_history_item_added(&self.standard_calculator_manager, index);
                         self.trace.history_added = true;
                     }
-                    DisplayCallback::MemorizedNumbers(numbers) => self.set_memorized_numbers(&numbers),
+                    DisplayCallback::MemorizedNumbers(numbers) => {
+                        self.set_memorized_numbers(&numbers)
+                    }
                     DisplayCallback::MemoryItemChanged(index) => self.on_memory_item_changed(index),
                     DisplayCallback::InputChanged => self.on_input_changed(),
                 }
@@ -307,14 +317,18 @@ impl StandardCalculatorViewModel {
                         events.push(Event::Replace);
                     }
                 }
-                OpKind::Button { command, was_in_error } => {
+                OpKind::Button {
+                    command,
+                    was_in_error,
+                } => {
                     if was_in_error && !is_recoverable_command(command) {
                         events.push(Event::Replace);
                     } else if t.history_added || t.binary_operator {
                         events.push(Event::Result);
                     } else if display_changed {
                         let recording = self.standard_calculator_manager.is_engine_recording();
-                        if is_operand_entry_command(command) || (command == cmd::SIGN && recording) {
+                        if is_operand_entry_command(command) || (command == cmd::SIGN && recording)
+                        {
                             events.push(Event::Typing);
                         } else {
                             events.push(Event::Result);
@@ -511,7 +525,8 @@ impl StandardCalculatorViewModel {
         // the calculator shows — an engine error, a paste error or a restored
         // one — is still there; keep reporting it as an error instead of
         // presenting the error text as a normal value.
-        let same_mode = target_state == self.get_calculator_mode() && (self.is_standard || self.is_scientific || self.is_programmer);
+        let same_mode = target_state == self.get_calculator_mode()
+            && (self.is_standard || self.is_scientific || self.is_programmer);
         if !same_mode {
             self.set_is_in_error(false);
         }
@@ -545,7 +560,10 @@ impl StandardCalculatorViewModel {
     /// Re-send the view model's angle when entering Scientific mode if the
     /// engine disagrees.
     fn resync_scientific_engine(&mut self) {
-        let engine_angle = self.standard_calculator_manager.current_calculator_engine().map(|e| e.angle_type());
+        let engine_angle = self
+            .standard_calculator_manager
+            .current_calculator_engine()
+            .map(|e| e.angle_type());
         let wanted = match self.current_angle_type {
             cmd::RAD => calcmanager::AngleType::Radians,
             cmd::GRAD => calcmanager::AngleType::Gradians,
@@ -561,7 +579,10 @@ impl StandardCalculatorViewModel {
     /// `ValueBitLength` keeps the user's word size. Re-send it when entering
     /// Programmer mode if the engine disagrees.
     fn resync_programmer_engine(&mut self) {
-        let engine_width = self.standard_calculator_manager.current_calculator_engine().map(|e| e.num_width());
+        let engine_width = self
+            .standard_calculator_manager
+            .current_calculator_engine()
+            .map(|e| e.num_width());
         if engine_width.is_some_and(|w| w != num_width(self.value_bit_length)) {
             self.send_command(word_size_command(self.value_bit_length));
         }
@@ -581,16 +602,34 @@ impl StandardCalculatorViewModel {
     /// "Invalid input" error was shown.
     pub(crate) fn paste(&mut self, pasted_text: &str) -> bool {
         let (mode, number_base, bit_length_type) = if self.is_scientific {
-            (ViewMode::Scientific, NumberBase::Unknown, BitLength::BitLengthUnknown)
+            (
+                ViewMode::Scientific,
+                NumberBase::Unknown,
+                BitLength::BitLengthUnknown,
+            )
         } else if self.is_programmer {
-            (ViewMode::Programmer, number_base(self.current_radix_type), bit_length(self.value_bit_length))
+            (
+                ViewMode::Programmer,
+                number_base(self.current_radix_type),
+                bit_length(self.value_bit_length),
+            )
         } else {
-            (ViewMode::Standard, NumberBase::Unknown, BitLength::BitLengthUnknown)
+            (
+                ViewMode::Standard,
+                NumberBase::Unknown,
+                BitLength::BitLengthUnknown,
+            )
         };
 
         let localizer = LocalizationSettings::get_instance();
-        let pasted_string =
-            copypaste::validate_paste_expression_localized(pasted_text, mode, mode.group_type(), number_base, bit_length_type, &localizer.paste_locale());
+        let pasted_string = copypaste::validate_paste_expression_localized(
+            pasted_text,
+            mode,
+            mode.group_type(),
+            number_base,
+            bit_length_type,
+            &localizer.paste_locale(),
+        );
         self.on_paste(&pasted_string, mode)
     }
 
@@ -615,7 +654,8 @@ impl StandardCalculatorViewModel {
     fn display_paste_error(&mut self) {
         const IDS_ERRORS_FIRST: i32 = 99;
         const IDS_DOMAIN: i32 = IDS_ERRORS_FIRST + 1;
-        let error_string = calcmanager::en_us_engine_string(&IDS_DOMAIN.to_string()).unwrap_or("Invalid input");
+        let error_string =
+            calcmanager::en_us_engine_string(&IDS_DOMAIN.to_string()).unwrap_or("Invalid input");
         self.set_primary_display(error_string, true);
         self.drain();
     }
@@ -736,7 +776,8 @@ impl StandardCalculatorViewModel {
 
     /// `SetPrimaryDisplay(string displayStringValue, bool isError)`.
     pub(crate) fn set_primary_display(&mut self, display_string_value: &str, is_error: bool) {
-        let localized_display_string_value = self.localize_display_value(display_string_value, is_error);
+        let localized_display_string_value =
+            self.localize_display_value(display_string_value, is_error);
 
         if self.display_value != localized_display_string_value {
             self.display_value = localized_display_string_value;
@@ -753,7 +794,11 @@ impl StandardCalculatorViewModel {
     }
 
     /// `SetExpressionDisplay(tokens, commands)`.
-    pub(crate) fn set_expression_display(&mut self, tokens: Vec<ExpressionToken>, commands: Vec<ExpressionCommand>) {
+    pub(crate) fn set_expression_display(
+        &mut self,
+        tokens: Vec<ExpressionToken>,
+        commands: Vec<ExpressionCommand>,
+    ) {
         self.tokens = tokens;
         self.commands = commands;
         // `if (!IsEditingEnabled)` — editing is never enabled.
@@ -791,11 +836,14 @@ impl StandardCalculatorViewModel {
             self.is_memory_empty = true;
         } else if new_memorized_numbers.len() > self.memorized_numbers.len() {
             while new_memorized_numbers.len() > self.memorized_numbers.len() {
-                let new_value_position = new_memorized_numbers.len() - self.memorized_numbers.len() - 1;
+                let new_value_position =
+                    new_memorized_numbers.len() - self.memorized_numbers.len() - 1;
                 let string_value = &new_memorized_numbers[new_value_position];
 
-                let memory_slot =
-                    MemoryItemViewModel { position: 0, value: localizer.localize_display_value(string_value) };
+                let memory_slot = MemoryItemViewModel {
+                    position: 0,
+                    value: localizer.localize_display_value(string_value),
+                };
 
                 self.memorized_numbers.insert(0, memory_slot);
                 self.is_memory_empty = false; // `IsAlwaysOnTop` (never set here)
@@ -805,7 +853,9 @@ impl StandardCalculatorViewModel {
                 }
             }
         } else if new_memorized_numbers.len() == self.memorized_numbers.len() {
-            for (slot, new_string_value) in self.memorized_numbers.iter_mut().zip(new_memorized_numbers) {
+            for (slot, new_string_value) in
+                self.memorized_numbers.iter_mut().zip(new_memorized_numbers)
+            {
                 let new_string_value = localizer.localize_display_value(new_string_value);
                 if slot.value != new_string_value {
                     slot.value = new_string_value;
@@ -854,7 +904,11 @@ impl StandardCalculatorViewModel {
     }
 
     /// `SetHistoryExpressionDisplay(tokens, commands)`.
-    pub(crate) fn set_history_expression_display(&mut self, tokens: Vec<ExpressionToken>, commands: Vec<ExpressionCommand>) {
+    pub(crate) fn set_history_expression_display(
+        &mut self,
+        tokens: Vec<ExpressionToken>,
+        commands: Vec<ExpressionCommand>,
+    ) {
         self.tokens = tokens;
         self.commands = commands;
         // IsEditingEnabled = false;
@@ -868,7 +922,11 @@ impl StandardCalculatorViewModel {
     /// `SetTokens(tokens)`: `ExpressionTokens` from the engine tokens.
     fn set_tokens(&mut self) {
         let localizer = LocalizationSettings::get_instance();
-        self.expression_tokens = self.tokens.iter().map(|(token, _)| localizer.localize_display_value(token)).collect();
+        self.expression_tokens = self
+            .tokens
+            .iter()
+            .map(|(token, _)| localizer.localize_display_value(token))
+            .collect();
     }
 
     /// `OnButtonPressed(NumbersAndOperatorsEnum numOpEnum)`.
@@ -979,16 +1037,24 @@ impl StandardCalculatorViewModel {
 
         let m = &mut self.standard_calculator_manager;
         if !self.is_in_error {
-            hex_display_string = m.get_result_for_radix(16, PRECISION, true).unwrap_or_default();
+            hex_display_string = m
+                .get_result_for_radix(16, PRECISION, true)
+                .unwrap_or_default();
             if hex_display_string.is_empty() {
                 hex_display_string = self.display_value.clone();
                 decimal_display_string = self.display_value.clone();
                 octal_display_string = self.display_value.clone();
                 binary_display_string = self.display_value.clone();
             } else {
-                decimal_display_string = m.get_result_for_radix(10, PRECISION, true).unwrap_or_default();
-                octal_display_string = m.get_result_for_radix(8, PRECISION, true).unwrap_or_default();
-                binary_display_string = m.get_result_for_radix(2, PRECISION, true).unwrap_or_default();
+                decimal_display_string = m
+                    .get_result_for_radix(10, PRECISION, true)
+                    .unwrap_or_default();
+                octal_display_string = m
+                    .get_result_for_radix(8, PRECISION, true)
+                    .unwrap_or_default();
+                binary_display_string = m
+                    .get_result_for_radix(2, PRECISION, true)
+                    .unwrap_or_default();
             }
         }
 
@@ -1001,7 +1067,10 @@ impl StandardCalculatorViewModel {
         self.binary_display_value = localizer.localize_display_value(&binary_display_string);
 
         let mut binary_value_array = [false; 64];
-        let binary_value = self.standard_calculator_manager.get_result_for_radix(2, PRECISION, false).unwrap_or_default();
+        let binary_value = self
+            .standard_calculator_manager
+            .get_result_for_radix(2, PRECISION, false)
+            .unwrap_or_default();
         for (idx, c) in binary_value.chars().rev().take(64).enumerate() {
             binary_value_array[idx] = c == '1';
         }
@@ -1016,7 +1085,8 @@ pub(crate) fn add_padding(binary_string: &str) -> String {
         return binary_string.to_string();
     }
 
-    let english_value = LocalizationSettings::get_instance().get_english_value_from_localized_digits(binary_string);
+    let english_value =
+        LocalizationSettings::get_instance().get_english_value_from_localized_digits(binary_string);
     if english_value == "0" {
         return binary_string.to_string();
     }
@@ -1050,7 +1120,9 @@ pub(crate) fn is_recoverable_command(command: i32) -> bool {
 }
 
 /// `GetCommandsFromExpressionCommands(IList<ExpressionCommandWrapper>)`.
-pub(crate) fn get_commands_from_expression_commands(expression_commands: &[ExpressionCommand]) -> Vec<i32> {
+pub(crate) fn get_commands_from_expression_commands(
+    expression_commands: &[ExpressionCommand],
+) -> Vec<i32> {
     let mut commands = Vec::new();
     for command in expression_commands {
         match command.get_command_type() {

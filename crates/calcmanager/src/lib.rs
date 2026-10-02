@@ -80,16 +80,25 @@ pub mod number_formatting_utils;
 mod radix_type;
 mod resource;
 
-pub use calc_display::{CalcDisplay, CalcDisplayRef, ExpressionToken, HistoryDisplay, HistoryDisplayRef};
-pub use calc_engine::{CalcEngine, NumWidth, NUM_WIDTH_LENGTH};
+pub use calc_display::{
+    CalcDisplay, CalcDisplayRef, ExpressionToken, HistoryDisplay, HistoryDisplayRef,
+};
+pub use calc_engine::{CalcEngine, NUM_WIDTH_LENGTH, NumWidth};
 pub use calc_input::{CalcInput, CalcNumSec, MAX_STRLEN};
-pub use calc_utils::{is_bin_op_code, is_digit_op_code, is_gui_setting_op_code, is_op_in_range, is_unary_op_code};
+pub use calc_utils::{
+    is_bin_op_code, is_digit_op_code, is_gui_setting_op_code, is_op_in_range, is_unary_op_code,
+};
 pub use calculator_history::{CalculatorHistory, HistoryItem, HistoryItemVector};
 pub use calculator_manager::CalculatorManager;
 pub use command::{CalculatorMode, CalculatorPrecision, Command, CommandType, MemoryCommand};
-pub use expression_command::{BinaryCommand, ExpressionCommand, OpndCommand, Parentheses, SerializeCommandVisitor, UnaryCommand};
-pub use history::{HistoryCollector, E_BOUNDS, MAXPRECDEPTH};
+pub use expression_command::{
+    BinaryCommand, ExpressionCommand, OpndCommand, Parentheses, SerializeCommandVisitor,
+    UnaryCommand,
+};
+pub use history::{E_BOUNDS, HistoryCollector, MAXPRECDEPTH};
 pub use radix_type::RadixType;
-pub use resource::{en_us_engine_string, EngineResourceProvider, ResourceProvider, EN_US_ENGINE_STRINGS};
+pub use resource::{
+    EN_US_ENGINE_STRINGS, EngineResourceProvider, ResourceProvider, en_us_engine_string,
+};
 
 pub use ratpack::{AngleType, CalcErr, CalcResult, NumberFormat, Rational};

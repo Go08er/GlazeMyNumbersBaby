@@ -95,11 +95,15 @@ pub struct UnaryCommand {
 
 impl UnaryCommand {
     pub fn new(command: i32) -> Self {
-        UnaryCommand { command: vec![command] }
+        UnaryCommand {
+            command: vec![command],
+        }
     }
 
     pub fn new2(command1: i32, command2: i32) -> Self {
-        UnaryCommand { command: vec![command1, command2] }
+        UnaryCommand {
+            command: vec![command1, command2],
+        }
     }
 
     pub fn get_commands(&self) -> &[i32] {
@@ -314,7 +318,9 @@ impl OpndCommand {
     /// `COpndCommand::GetString`
     pub fn get_string(&self, radix: u32, precision: i32) -> CalcResult<String> {
         if self.f_initialized {
-            return self.value.to_string_radix(radix, NumberFormat::Float, precision);
+            return self
+                .value
+                .to_string_radix(radix, NumberFormat::Float, precision);
         }
 
         Ok(String::new())
@@ -322,7 +328,11 @@ impl OpndCommand {
 
     /// The operand's value (set by `Initialize`); `None` if not initialized.
     pub fn value(&self) -> Option<&Rational> {
-        if self.f_initialized { Some(&self.value) } else { None }
+        if self.f_initialized {
+            Some(&self.value)
+        } else {
+            None
+        }
     }
 
     pub fn accept(&mut self, command_visitor: &mut dyn SerializeCommandVisitor) {

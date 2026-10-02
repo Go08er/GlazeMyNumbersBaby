@@ -20,6 +20,9 @@ pub(crate) struct MemoryItemViewModel {
 
 impl Default for MemoryItemViewModel {
     fn default() -> Self {
-        MemoryItemViewModel { position: -1, value: String::new() }
+        MemoryItemViewModel {
+            position: -1,
+            value: String::new(),
+        }
     }
 }

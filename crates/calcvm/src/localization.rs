@@ -83,7 +83,10 @@ impl LocalizationSettings {
     }
 
     pub fn remove_group_separators(&self, source: &str) -> String {
-        source.chars().filter(|&c| c != ' ' && c != self.number_group_separator).collect()
+        source
+            .chars()
+            .filter(|&c| c != ' ' && c != self.number_group_separator)
+            .collect()
     }
 
     pub fn get_decimal_separator(&self) -> char {
@@ -124,7 +127,13 @@ impl LocalizationSettings {
         }
         string_to_localize
             .chars()
-            .map(|ch| if self.is_en_us_digit(ch) { self.get_digit_symbol_from_en_us_digit(ch) } else { ch })
+            .map(|ch| {
+                if self.is_en_us_digit(ch) {
+                    self.get_digit_symbol_from_en_us_digit(ch)
+                } else {
+                    ch
+                }
+            })
             .collect()
     }
 
@@ -167,7 +176,10 @@ mod tests {
     fn localize_is_identity_for_en_us() {
         let s = LocalizationSettings::get_instance();
         assert_eq!(s.localize_display_value("1,234.5"), "1,234.5");
-        assert_eq!(s.get_english_value_from_localized_digits("1,234.5"), "1,234.5");
+        assert_eq!(
+            s.get_english_value_from_localized_digits("1,234.5"),
+            "1,234.5"
+        );
         assert!(s.is_localized_digit('7'));
         assert!(s.is_localized_hex_digit('F'));
         assert!(!s.is_localized_hex_digit('G'));

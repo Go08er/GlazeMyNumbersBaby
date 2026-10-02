@@ -22,7 +22,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use ratpack::{rational_math, AngleType, CalcResult, NumberFormat, Rational};
+use ratpack::{AngleType, CalcResult, NumberFormat, Rational, rational_math};
 
 use crate::calc_display::{CalcDisplayRef, HistoryDisplayRef};
 use crate::calc_input::CalcInput;
@@ -32,7 +32,6 @@ use crate::expression_command::ExpressionCommand;
 use crate::history::{HistoryCollector, MAXPRECDEPTH};
 use crate::radix_type::RadixType;
 use crate::resource::ResourceProvider;
-
 
 /**************************************************************************/
 /*** Global variable declarations and initializations                   ***/
@@ -218,7 +217,8 @@ impl CalcEngine {
         calc_display: Option<CalcDisplayRef>,
         history_display: Option<HistoryDisplayRef>,
     ) -> CalcResult<CalcEngine> {
-        let history_collector = HistoryCollector::new(calc_display.clone(), history_display, DEFAULT_DEC_SEPARATOR);
+        let history_collector =
+            HistoryCollector::new(calc_display.clone(), history_display, DEFAULT_DEC_SEPARATOR);
         let mut engine = CalcEngine {
             f_precedence,
             f_integer_mode,
@@ -270,7 +270,8 @@ impl CalcEngine {
 
         engine.dw_word_bit_width = engine.dw_word_bit_width_from_num_width(engine.numwidth);
 
-        engine.max_trigonometric_num = rational_math::pow(&Rational::from(10), &Rational::from(100))?;
+        engine.max_trigonometric_num =
+            rational_math::pow(&Rational::from(10), &Rational::from(100))?;
 
         engine.set_radix_type_and_num_width(Some(RadixType::Decimal), Some(engine.numwidth))?;
         engine.settings_changed()?;
@@ -293,7 +294,8 @@ impl CalcEngine {
             let max_val = self.chop_numbers[i].div(&Rational::from(2))?;
             let max_val = rational_math::integer(&max_val)?;
 
-            self.max_decimal_value_strings[i] = max_val.to_string_radix(10, NumberFormat::Float, self.precision)?;
+            self.max_decimal_value_strings[i] =
+                max_val.to_string_radix(10, NumberFormat::Float, self.precision)?;
         }
         Ok(())
     }
@@ -343,7 +345,11 @@ impl CalcEngine {
 
         let last_dec_grouping = self.dec_grouping.clone();
         let grp_str = self.resource_provider.get_cengine_string("sGrouping");
-        self.dec_grouping = Self::digit_grouping_string_to_grouping_vector(if grp_str.is_empty() { DEFAULT_GRP_STR } else { &grp_str });
+        self.dec_grouping = Self::digit_grouping_string_to_grouping_vector(if grp_str.is_empty() {
+            DEFAULT_GRP_STR
+        } else {
+            &grp_str
+        });
 
         let mut num_changed = false;
 
@@ -356,11 +362,15 @@ impl CalcEngine {
         if self.decimal_separator != last_dec {
             // Re-initialize member variables' decimal point.
             self.input.set_decimal_symbol(self.decimal_separator);
-            self.history_collector.set_decimal_symbol(self.decimal_separator);
+            self.history_collector
+                .set_decimal_symbol(self.decimal_separator);
 
             // put the new decimal symbol into the table used to draw the decimal key
             let dec = self.decimal_separator.to_string();
-            S_ENGINE_STRINGS.with(|s| s.borrow_mut().insert(SIDS_DECIMAL_SEPARATOR.to_string(), dec));
+            S_ENGINE_STRINGS.with(|s| {
+                s.borrow_mut()
+                    .insert(SIDS_DECIMAL_SEPARATOR.to_string(), dec)
+            });
 
             // we need to redraw to update the decimal point button
             num_changed = true;
@@ -380,7 +390,8 @@ impl CalcEngine {
         let mut commands = self.history_collector.get_commands();
         if !self.history_collector.f_opnd_added_to_history() && self.b_record {
             commands.push(ExpressionCommand::Operand(
-                self.history_collector.get_operand_commands_from_string_rat(&self.number_string, &self.current_val),
+                self.history_collector
+                    .get_operand_commands_from_string_rat(&self.number_string, &self.current_val),
             ));
         }
         commands

@@ -5,7 +5,7 @@
 
 use std::cell::RefCell;
 
-use ratpack::{rational_math, CalcResult, NumberFormat, Rational};
+use ratpack::{CalcResult, NumberFormat, Rational, rational_math};
 
 use super::{CalcEngine, NumWidth};
 use crate::engine_strings::*;
@@ -77,7 +77,14 @@ fn wcstoul10(s: &[char], start: usize) -> (u64, usize) {
     if overflow {
         return (u64::MAX, i);
     }
-    (if negative { value.wrapping_neg() } else { value }, i)
+    (
+        if negative {
+            value.wrapping_neg()
+        } else {
+            value
+        },
+        i,
+    )
 }
 
 impl CalcEngine {
@@ -160,7 +167,14 @@ impl CalcEngine {
             let value = self.current_val.clone();
             GLD_PREVIOUS.with(|g| g.borrow_mut().value = value);
 
-            if (self.radix == 10) && self.is_number_invalid(&self.number_string, MAX_EXPONENT, self.precision, self.radix) != 0 {
+            if (self.radix == 10)
+                && self.is_number_invalid(
+                    &self.number_string,
+                    MAX_EXPONENT,
+                    self.precision,
+                    self.radix,
+                ) != 0
+            {
                 self.display_error(ratpack::CALC_E_OVERFLOW);
             } else {
                 // Display the string and return.
@@ -175,7 +189,13 @@ impl CalcEngine {
     ///
     /// For radix 10 this hand-implements the full match of
     /// `[+-]?(\d*)[<dec>]?(\d*)(?:e[+-]?(\d*))?$`.
-    pub fn is_number_invalid(&self, number_string: &str, i_max_exp: i32, i_max_mantissa: i32, radix: u32) -> i32 {
+    pub fn is_number_invalid(
+        &self,
+        number_string: &str,
+        i_max_exp: i32,
+        i_max_mantissa: i32,
+        radix: u32,
+    ) -> i32 {
         let mut i_error = 0;
 
         if radix == 10 {
@@ -332,7 +352,13 @@ impl CalcEngine {
     *   5,3,2    - group 5, then 3, then 2, then no grouping after
     *
     \***************************************************************************/
-    pub fn group_digits(&self, delimiter: &str, grouping: &[u32], display_string: &str, is_num_negative: bool) -> String {
+    pub fn group_digits(
+        &self,
+        delimiter: &str,
+        grouping: &[u32],
+        display_string: &str,
+        is_num_negative: bool,
+    ) -> String {
         // if there's nothing to do, bail
         if delimiter.is_empty() || grouping.is_empty() {
             return display_string.to_string();
@@ -374,7 +400,10 @@ impl CalcEngine {
             // Do not add a separator if:
             // - grouping size is 0
             // - we are at the end of the digit string
-            if curr_grouping != 0 && grouping_size.is_multiple_of(curr_grouping) && idx != reverse_end {
+            if curr_grouping != 0
+                && grouping_size.is_multiple_of(curr_grouping)
+                && idx != reverse_end
+            {
                 // (C++ appends the delimiter as-is and later reverses the whole
                 // result, so a multi-character delimiter ends up reversed.)
                 result.extend(delimiter.chars());

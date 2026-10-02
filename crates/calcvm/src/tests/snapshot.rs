@@ -11,19 +11,24 @@
 //! cases check that the calculator is left as it was. The cases about
 //! non-calculator modes (Date) do not apply.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::new_vm;
 use crate::snapshot::{
-    ApplicationSnapshot, CalcManagerHistoryItem, CalcManagerToken, ExpressionCommandDeserializer, ExpressionCommandSerializer,
-    ExpressionCommandWrapper, ExpressionDisplaySnapshot, SnapshotValidator, StandardCalculatorSnapshot,
+    ApplicationSnapshot, CalcManagerHistoryItem, CalcManagerToken, ExpressionCommandDeserializer,
+    ExpressionCommandSerializer, ExpressionCommandWrapper, ExpressionDisplaySnapshot,
+    SnapshotValidator, StandardCalculatorSnapshot,
 };
 use crate::{AngleUnit, Button, CalcMode, CalculatorViewModel, Radix, WordSize};
 
 const COMMAND_ADD: i32 = 93;
 
 fn create_application_snapshot() -> ApplicationSnapshot {
-    ApplicationSnapshot { mode: 0, standard_calculator: Some(StandardCalculatorSnapshot::default()), extension: None }
+    ApplicationSnapshot {
+        mode: 0,
+        standard_calculator: Some(StandardCalculatorSnapshot::default()),
+        extension: None,
+    }
 }
 
 /// `SnapshotLaunchArguments.FromJson(JsonSerializer.Serialize(alias))`:
@@ -54,7 +59,11 @@ fn invalid_mode_sets_launch_error() {
 #[test]
 fn calculator_mode_without_state_sets_launch_error() {
     for mode in [0, 1, 2] {
-        let s = ApplicationSnapshot { mode, standard_calculator: None, extension: None };
+        let s = ApplicationSnapshot {
+            mode,
+            standard_calculator: None,
+            extension: None,
+        };
         assert!(parse_snapshot(&s).is_err());
     }
 }
@@ -65,10 +74,17 @@ fn invalid_history_token_index_sets_launch_error() {
         let mut s = create_application_snapshot();
         let item = CalcManagerHistoryItem {
             commands: vec![ExpressionCommandWrapper::Binary(COMMAND_ADD)],
-            tokens: vec![CalcManagerToken { op_code_name: "+".into(), command_index }],
+            tokens: vec![CalcManagerToken {
+                op_code_name: "+".into(),
+                command_index,
+            }],
             ..Default::default()
         };
-        s.standard_calculator.as_mut().unwrap().calc_manager.history_items = Some(vec![item]);
+        s.standard_calculator
+            .as_mut()
+            .unwrap()
+            .calc_manager
+            .history_items = Some(vec![item]);
         assert!(parse_snapshot(&s).is_err());
     }
 }
@@ -77,10 +93,14 @@ fn invalid_history_token_index_sets_launch_error() {
 fn invalid_expression_token_index_sets_launch_error() {
     for command_index in [-2, 1] {
         let mut s = create_application_snapshot();
-        s.standard_calculator.as_mut().unwrap().expression_display = Some(ExpressionDisplaySnapshot {
-            commands: vec![ExpressionCommandWrapper::Binary(COMMAND_ADD)],
-            tokens: vec![CalcManagerToken { op_code_name: "+".into(), command_index }],
-        });
+        s.standard_calculator.as_mut().unwrap().expression_display =
+            Some(ExpressionDisplaySnapshot {
+                commands: vec![ExpressionCommandWrapper::Binary(COMMAND_ADD)],
+                tokens: vec![CalcManagerToken {
+                    op_code_name: "+".into(),
+                    command_index,
+                }],
+            });
         assert!(parse_snapshot(&s).is_err());
     }
 }
@@ -95,7 +115,11 @@ fn null_primary_display_value_sets_launch_error() {
 fn invalid_display_command_sets_launch_error() {
     for command in [209 /* ModeProgrammer */, i32::MAX] {
         let mut s = create_application_snapshot();
-        s.standard_calculator.as_mut().unwrap().display_commands.push(ExpressionCommandWrapper::Binary(command));
+        s.standard_calculator
+            .as_mut()
+            .unwrap()
+            .display_commands
+            .push(ExpressionCommandWrapper::Binary(command));
         assert!(parse_snapshot(&s).is_err());
     }
 }
@@ -104,7 +128,10 @@ fn invalid_display_command_sets_launch_error() {
 fn valid_display_commands_are_accepted() {
     let mut s = create_application_snapshot();
     let c = &mut s.standard_calculator.as_mut().unwrap().display_commands;
-    c.push(ExpressionCommandWrapper::Unary(vec![Button::Degree.id() as i32, 102 /* SIN */]));
+    c.push(ExpressionCommandWrapper::Unary(vec![
+        Button::Degree.id() as i32,
+        102, /* SIN */
+    ]));
     c.push(ExpressionCommandWrapper::Binary(COMMAND_ADD));
     c.push(ExpressionCommandWrapper::Operand {
         commands: vec![131, 84, 132],
@@ -119,22 +146,36 @@ fn valid_display_commands_are_accepted() {
 
 #[test]
 fn unary_command_survives_the_round_trip() {
-    assert_eq!(round_trip(ExpressionCommandWrapper::Unary(vec![91, 92])), ExpressionCommandWrapper::Unary(vec![91, 92]));
+    assert_eq!(
+        round_trip(ExpressionCommandWrapper::Unary(vec![91, 92])),
+        ExpressionCommandWrapper::Unary(vec![91, 92])
+    );
 }
 
 #[test]
 fn binary_command_survives_the_round_trip() {
-    assert_eq!(round_trip(ExpressionCommandWrapper::Binary(93)), ExpressionCommandWrapper::Binary(93));
+    assert_eq!(
+        round_trip(ExpressionCommandWrapper::Binary(93)),
+        ExpressionCommandWrapper::Binary(93)
+    );
 }
 
 #[test]
 fn parentheses_command_survives_the_round_trip() {
-    assert_eq!(round_trip(ExpressionCommandWrapper::Parentheses(106)), ExpressionCommandWrapper::Parentheses(106));
+    assert_eq!(
+        round_trip(ExpressionCommandWrapper::Parentheses(106)),
+        ExpressionCommandWrapper::Parentheses(106)
+    );
 }
 
 #[test]
 fn operand_command_carries_its_flags_through_the_round_trip() {
-    let c = ExpressionCommandWrapper::Operand { commands: vec![131, 132], is_negative: true, is_decimal_present: true, is_sci_fmt: true };
+    let c = ExpressionCommandWrapper::Operand {
+        commands: vec![131, 132],
+        is_negative: true,
+        is_decimal_present: true,
+        is_sci_fmt: true,
+    };
     assert_eq!(round_trip(c.clone()), c);
     // ... and through the engine type.
     assert_eq!(ExpressionCommandWrapper::from_command(&c.to_command()), c);
@@ -158,7 +199,10 @@ fn json_uses_the_upstream_property_names() {
     assert_eq!(v["s"]["p"], json!({ "d": "2", "e": false }));
     assert_eq!(v["s"]["m"]["h"], Value::Null);
     assert_eq!(v["s"]["e"]["t"][0], json!({ "t": "1", "c": 0 }));
-    assert_eq!(v["s"]["e"]["c"][0], json!({ "$t": 2, "n": false, "d": false, "s": false, "c": [131] }));
+    assert_eq!(
+        v["s"]["e"]["c"][0],
+        json!({ "$t": 2, "n": false, "d": false, "s": false, "c": [131] })
+    );
     assert_eq!(v["s"]["e"]["c"][1], json!({ "$t": 1, "c": 93 }));
     assert_eq!(v["s"]["c"][2]["c"], json!([132]));
 }
@@ -178,7 +222,14 @@ fn snapshot_restores_history() {
     evaluate(&mut source, &[131, 93, 132]);
     evaluate(&mut source, &[133, 92, 133]);
     let captured = source.vm.snapshot();
-    let history = captured.standard_calculator.as_ref().unwrap().calc_manager.history_items.clone().expect("history captured");
+    let history = captured
+        .standard_calculator
+        .as_ref()
+        .unwrap()
+        .calc_manager
+        .history_items
+        .clone()
+        .expect("history captured");
     assert_eq!(history.len(), 2);
 
     // Upstream format only (no gmnb extension).
@@ -187,12 +238,22 @@ fn snapshot_restores_history() {
 
     let mut restored = new_vm();
     restored.restore_state(&upstream_only.to_json().to_string());
-    let recaptured = restored.vm.snapshot().standard_calculator.unwrap().calc_manager.history_items.expect("restored history");
+    let recaptured = restored
+        .vm
+        .snapshot()
+        .standard_calculator
+        .unwrap()
+        .calc_manager
+        .history_items
+        .expect("restored history");
     assert_eq!(
         history.iter().map(|h| &h.expression).collect::<Vec<_>>(),
         recaptured.iter().map(|h| &h.expression).collect::<Vec<_>>()
     );
-    assert_eq!(history.iter().map(|h| &h.result).collect::<Vec<_>>(), recaptured.iter().map(|h| &h.result).collect::<Vec<_>>());
+    assert_eq!(
+        history.iter().map(|h| &h.result).collect::<Vec<_>>(),
+        recaptured.iter().map(|h| &h.result).collect::<Vec<_>>()
+    );
 
     // Display history is newest-first while the snapshot is oldest-first.
     let shown: Vec<_> = restored.history().into_iter().map(|h| h.result).collect();
@@ -205,7 +266,12 @@ fn captured_history_carries_its_tokens_and_commands() {
     let mut source = new_vm();
     evaluate(&mut source, &[131, 93, 132]);
     let snapshot = source.vm.snapshot();
-    let items = snapshot.standard_calculator.unwrap().calc_manager.history_items.unwrap();
+    let items = snapshot
+        .standard_calculator
+        .unwrap()
+        .calc_manager
+        .history_items
+        .unwrap();
     assert_eq!(items.len(), 1);
     assert!(!items[0].tokens.is_empty());
     assert!(!items[0].commands.is_empty());
@@ -223,9 +289,15 @@ fn restoring_a_snapshot_clears_memory() {
     let mut restored = new_vm();
     restored.press(Button::Three);
     restored.press(Button::Memory);
-    assert!(!restored.memory().is_empty(), "Memory was not set up, so the test proves nothing.");
+    assert!(
+        !restored.memory().is_empty(),
+        "Memory was not set up, so the test proves nothing."
+    );
     restored.restore_state(&captured.to_json().to_string());
-    assert!(restored.memory().is_empty(), "Restoring a snapshot left the previous session's memory behind.");
+    assert!(
+        restored.memory().is_empty(),
+        "Restoring a snapshot left the previous session's memory behind."
+    );
 }
 
 #[test]
@@ -237,14 +309,23 @@ fn restoring_a_malformed_history_command_is_rejected() {
         commands: vec![ExpressionCommandWrapper::Unary(vec![])],
         ..Default::default()
     };
-    snapshot.standard_calculator.as_mut().unwrap().calc_manager.history_items = Some(vec![item]);
+    snapshot
+        .standard_calculator
+        .as_mut()
+        .unwrap()
+        .calc_manager
+        .history_items = Some(vec![item]);
 
     let mut target = new_vm();
     target.press(Button::Seven);
     target.press(Button::Memory);
     let before = target.save_state();
     target.restore_state(&snapshot.to_json().to_string());
-    assert_eq!(target.save_state(), before, "an invalid snapshot must leave the calculator untouched");
+    assert_eq!(
+        target.save_state(),
+        before,
+        "an invalid snapshot must leave the calculator untouched"
+    );
     assert_eq!(target.display_value(), "7");
 }
 
@@ -252,7 +333,15 @@ fn restoring_a_malformed_history_command_is_rejected() {
 fn garbage_is_ignored() {
     let mut vm = new_vm();
     vm.press(Button::Four);
-    for state in ["", "{", "null", "[]", "{\"m\": 9}", "{\"m\": 0}", "{\"m\": \"x\", \"s\": {}}"] {
+    for state in [
+        "",
+        "{",
+        "null",
+        "[]",
+        "{\"m\": 9}",
+        "{\"m\": 0}",
+        "{\"m\": \"x\", \"s\": {}}",
+    ] {
         vm.restore_state(state);
         assert_eq!(vm.display_value(), "4", "{state:?}");
     }
@@ -272,7 +361,14 @@ fn successful_scientific_restore_keeps_the_scientific_engine() {
     assert_eq!(calculator.mode(), CalcMode::Scientific);
 
     // AssertScientificOrderOfOperations
-    for b in [Button::One, Button::Add, Button::Two, Button::Multiply, Button::Three, Button::Equals] {
+    for b in [
+        Button::One,
+        Button::Add,
+        Button::Two,
+        Button::Multiply,
+        Button::Three,
+        Button::Equals,
+    ] {
         calculator.press(b);
     }
     assert_eq!(calculator.display_value(), "7");
@@ -313,7 +409,14 @@ fn errored_programmer_calculator_restores_bit_length() {
     fresh.set_mode(CalcMode::Programmer);
     calculator.restore_state(&fresh.save_state());
     assert_eq!(calculator.word_size(), WordSize::Qword);
-    for b in [Button::Two, Button::Five, Button::Five, Button::Add, Button::One, Button::Equals] {
+    for b in [
+        Button::Two,
+        Button::Five,
+        Button::Five,
+        Button::Add,
+        Button::One,
+        Button::Equals,
+    ] {
         calculator.press(b);
     }
     assert_eq!(calculator.display_value(), "256");

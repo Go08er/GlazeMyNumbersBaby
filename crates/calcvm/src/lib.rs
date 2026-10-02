@@ -43,9 +43,9 @@ mod standard_vm;
 #[cfg(test)]
 mod tests;
 
-pub use buttons::{Button, BIN_END, BIN_START};
+pub use buttons::{BIN_END, BIN_START, Button};
 
-use standard_vm::{cmd, OpKind, StandardCalculatorViewModel};
+use standard_vm::{OpKind, StandardCalculatorViewModel, cmd};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CalcMode {
@@ -184,7 +184,6 @@ pub enum Event {
     HistoryChanged,
 }
 
-
 /// The calculator view-model shared by Standard, Scientific and Programmer.
 pub struct CalculatorViewModel {
     vm: StandardCalculatorViewModel,
@@ -207,7 +206,9 @@ fn angle_command(unit: AngleUnit) -> i32 {
 impl CalculatorViewModel {
     /// A calculator in Standard mode (`ApplicationViewModel.Initialize`).
     pub fn new() -> Self {
-        let mut this = CalculatorViewModel { vm: StandardCalculatorViewModel::new() };
+        let mut this = CalculatorViewModel {
+            vm: StandardCalculatorViewModel::new(),
+        };
         this.vm.begin_op();
         this.apply_mode(CalcMode::Standard);
         this.vm.end_op(OpKind::Quiet);
@@ -237,8 +238,10 @@ impl CalculatorViewModel {
     fn apply_mode(&mut self, mode: CalcMode) {
         self.vm.set_calculator_type(mode);
         let vm = &mut self.vm;
-        vm.history_vm.set_are_history_shortcuts_enabled(mode != CalcMode::Programmer);
-        vm.history_vm.reload_history(&vm.standard_calculator_manager, mode);
+        vm.history_vm
+            .set_are_history_shortcuts_enabled(mode != CalcMode::Programmer);
+        vm.history_vm
+            .reload_history(&vm.standard_calculator_manager, mode);
     }
 
     // ---- input
@@ -316,7 +319,10 @@ impl CalculatorViewModel {
         self.vm.begin_op();
         let was_in_error = self.vm.is_in_error();
         self.vm.on_button_pressed(command);
-        self.vm.end_op(OpKind::Button { command, was_in_error });
+        self.vm.end_op(OpKind::Button {
+            command,
+            was_in_error,
+        });
     }
 
     // ---- display
@@ -404,7 +410,11 @@ impl CalculatorViewModel {
     }
     /// Bit `index` (0 = LSB) of the current value (`BinaryDigits`).
     pub fn bit(&self, index: u32) -> bool {
-        self.vm.binary_digits().get(index as usize).copied().unwrap_or(false)
+        self.vm
+            .binary_digits()
+            .get(index as usize)
+            .copied()
+            .unwrap_or(false)
     }
     /// Toggles bit `index` through the engine (`BINPOS0 + index`, the bit-flip
     /// keypad). Only bits inside the word size can be flipped.
@@ -473,7 +483,11 @@ impl CalculatorViewModel {
 
     // ---- memory (index 0 = most recent, as displayed)
     pub fn memory(&self) -> Vec<String> {
-        self.vm.memorized_numbers.iter().map(|m| m.value.clone()).collect()
+        self.vm
+            .memorized_numbers
+            .iter()
+            .map(|m| m.value.clone())
+            .collect()
     }
     /// `OnMemoryItemPressed(index)`.
     pub fn memory_recall(&mut self, index: usize) {
@@ -512,7 +526,10 @@ impl CalculatorViewModel {
             .history_vm
             .items()
             .iter()
-            .map(|h| HistoryEntry { expression: h.expression().to_string(), result: h.result().to_string() })
+            .map(|h| HistoryEntry {
+                expression: h.expression().to_string(),
+                result: h.result().to_string(),
+            })
             .collect()
     }
     /// `SelectHistoryItem`: shows the item's expression and result and loads
@@ -536,7 +553,10 @@ impl CalculatorViewModel {
         }
         self.vm.begin_op();
         let vm = &mut self.vm;
-        if vm.history_vm.delete_item(&mut vm.standard_calculator_manager, index) {
+        if vm
+            .history_vm
+            .delete_item(&mut vm.standard_calculator_manager, index)
+        {
             vm.force_history_changed();
         }
         self.vm.end_op(OpKind::Quiet);
@@ -596,16 +616,20 @@ impl CalculatorViewModel {
         if snapshot::SnapshotValidator::validate_protocol(&snapshot).is_err() {
             return;
         }
-        let (Ok(mode), Some(standard)) = (snapshot::SnapshotValidator::mode(&snapshot), snapshot.standard_calculator.as_ref())
-        else {
+        let (Ok(mode), Some(standard)) = (
+            snapshot::SnapshotValidator::mode(&snapshot),
+            snapshot.standard_calculator.as_ref(),
+        ) else {
             return;
         };
 
         self.vm.begin_op();
         self.apply_mode(mode);
-        self.vm.restore_snapshot(standard, snapshot.extension.as_ref());
+        self.vm
+            .restore_snapshot(standard, snapshot.extension.as_ref());
         let vm = &mut self.vm;
-        vm.history_vm.reload_history(&vm.standard_calculator_manager, mode);
+        vm.history_vm
+            .reload_history(&vm.standard_calculator_manager, mode);
         vm.force_replace();
         vm.force_history_changed();
         vm.force_memory_changed();

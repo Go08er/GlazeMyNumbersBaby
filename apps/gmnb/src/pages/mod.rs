@@ -11,11 +11,11 @@ use gtk::gdk;
 use gtk::graphene;
 use gtk::prelude::*;
 
-use appcore::KeyPress;
-use appcore::modes::ViewMode;
 use crate::settings::Store;
 use crate::theme::Hub;
 use crate::widgets::aurora::Aurora;
+use appcore::KeyPress;
+use appcore::modes::ViewMode;
 
 /// Enter/leave the compact window chrome.
 pub type CompactHook = Box<dyn Fn(bool)>;

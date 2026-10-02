@@ -62,15 +62,23 @@ impl CalculatorDisplay {
 
 impl CalcDisplay for CalculatorDisplay {
     fn set_primary_display(&mut self, text: &str, is_error: bool) {
-        self.queue.push(DisplayCallback::PrimaryDisplay(text.to_string(), is_error));
+        self.queue
+            .push(DisplayCallback::PrimaryDisplay(text.to_string(), is_error));
     }
 
     fn set_is_in_error(&mut self, is_in_error: bool) {
         self.queue.push(DisplayCallback::IsInError(is_in_error));
     }
 
-    fn set_expression_display(&mut self, tokens: &[ExpressionToken], commands: &[ExpressionCommand]) {
-        self.queue.push(DisplayCallback::ExpressionDisplay(tokens.to_vec(), commands.to_vec()));
+    fn set_expression_display(
+        &mut self,
+        tokens: &[ExpressionToken],
+        commands: &[ExpressionCommand],
+    ) {
+        self.queue.push(DisplayCallback::ExpressionDisplay(
+            tokens.to_vec(),
+            commands.to_vec(),
+        ));
     }
 
     fn set_parenthesis_number(&mut self, count: u32) {
@@ -90,15 +98,19 @@ impl CalcDisplay for CalculatorDisplay {
     }
 
     fn on_history_item_added(&mut self, added_item_index: u32) {
-        self.queue.push(DisplayCallback::HistoryItemAdded(added_item_index));
+        self.queue
+            .push(DisplayCallback::HistoryItemAdded(added_item_index));
     }
 
     fn set_memorized_numbers(&mut self, memorized_numbers: &[String]) {
-        self.queue.push(DisplayCallback::MemorizedNumbers(memorized_numbers.to_vec()));
+        self.queue.push(DisplayCallback::MemorizedNumbers(
+            memorized_numbers.to_vec(),
+        ));
     }
 
     fn memory_item_changed(&mut self, index_of_memory: u32) {
-        self.queue.push(DisplayCallback::MemoryItemChanged(index_of_memory));
+        self.queue
+            .push(DisplayCallback::MemoryItemChanged(index_of_memory));
     }
 
     fn input_changed(&mut self) {

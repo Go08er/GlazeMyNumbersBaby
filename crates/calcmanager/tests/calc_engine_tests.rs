@@ -7,7 +7,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use calcmanager::engine_strings::{IDS_ERR_INPUT_OVERFLOW, IDS_ERR_UNK_CH};
-use calcmanager::{CalcEngine, CalculatorHistory, EngineResourceProvider, HistoryDisplayRef, ResourceProvider};
+use calcmanager::{
+    CalcEngine, CalculatorHistory, EngineResourceProvider, HistoryDisplayRef, ResourceProvider,
+};
 
 const MAX_HISTORY_SIZE: usize = 20;
 
@@ -29,7 +31,10 @@ fn common_setup() -> Fixture {
         Some(history),
     )
     .expect("CCalcEngine");
-    Fixture { m_calc_engine, _m_history: m_history }
+    Fixture {
+        m_calc_engine,
+        _m_history: m_history,
+    }
 }
 
 #[test]
@@ -37,25 +42,76 @@ fn test_group_digits_per_radix() {
     let f = common_setup();
     let e = &f.m_calc_engine;
     // Empty/Error cases
-    assert!(e.group_digits_per_radix("", 10).is_empty(), "Verify grouping empty string returns empty string.");
-    assert_eq!("12345678", e.group_digits_per_radix("12345678", 9), "Verify grouping on invalid base returns original string");
+    assert!(
+        e.group_digits_per_radix("", 10).is_empty(),
+        "Verify grouping empty string returns empty string."
+    );
+    assert_eq!(
+        "12345678",
+        e.group_digits_per_radix("12345678", 9),
+        "Verify grouping on invalid base returns original string"
+    );
 
     // Octal
-    assert_eq!("1 234 567", e.group_digits_per_radix("1234567", 8), "Verify grouping in octal.");
-    assert_eq!("123", e.group_digits_per_radix("123", 8), "Verify minimum grouping in octal.");
+    assert_eq!(
+        "1 234 567",
+        e.group_digits_per_radix("1234567", 8),
+        "Verify grouping in octal."
+    );
+    assert_eq!(
+        "123",
+        e.group_digits_per_radix("123", 8),
+        "Verify minimum grouping in octal."
+    );
 
     // Binary/Hexadecimal
-    assert_eq!("12 3456 7890", e.group_digits_per_radix("1234567890", 2), "Verify grouping in binary.");
-    assert_eq!("1234", e.group_digits_per_radix("1234", 2), "Verify minimum grouping in binary.");
-    assert_eq!("12 3456 7890", e.group_digits_per_radix("1234567890", 16), "Verify grouping in hexadecimal.");
-    assert_eq!("1234", e.group_digits_per_radix("1234", 16), "Verify minimum grouping in hexadecimal.");
+    assert_eq!(
+        "12 3456 7890",
+        e.group_digits_per_radix("1234567890", 2),
+        "Verify grouping in binary."
+    );
+    assert_eq!(
+        "1234",
+        e.group_digits_per_radix("1234", 2),
+        "Verify minimum grouping in binary."
+    );
+    assert_eq!(
+        "12 3456 7890",
+        e.group_digits_per_radix("1234567890", 16),
+        "Verify grouping in hexadecimal."
+    );
+    assert_eq!(
+        "1234",
+        e.group_digits_per_radix("1234", 16),
+        "Verify minimum grouping in hexadecimal."
+    );
 
     // Decimal
-    assert_eq!("1,234,567,890", e.group_digits_per_radix("1234567890", 10), "Verify grouping in base10.");
-    assert_eq!("1,234,567.89", e.group_digits_per_radix("1234567.89", 10), "Verify grouping in base10 with decimal.");
-    assert_eq!("1,234,567e89", e.group_digits_per_radix("1234567e89", 10), "Verify grouping in base10 with exponent.");
-    assert_eq!("1,234,567.89e5", e.group_digits_per_radix("1234567.89e5", 10), "Verify grouping in base10 with decimal and exponent.");
-    assert_eq!("-123,456,789", e.group_digits_per_radix("-123456789", 10), "Verify grouping in base10 with negative.");
+    assert_eq!(
+        "1,234,567,890",
+        e.group_digits_per_radix("1234567890", 10),
+        "Verify grouping in base10."
+    );
+    assert_eq!(
+        "1,234,567.89",
+        e.group_digits_per_radix("1234567.89", 10),
+        "Verify grouping in base10 with decimal."
+    );
+    assert_eq!(
+        "1,234,567e89",
+        e.group_digits_per_radix("1234567e89", 10),
+        "Verify grouping in base10 with exponent."
+    );
+    assert_eq!(
+        "1,234,567.89e5",
+        e.group_digits_per_radix("1234567.89e5", 10),
+        "Verify grouping in base10 with decimal and exponent."
+    );
+    assert_eq!(
+        "-123,456,789",
+        e.group_digits_per_radix("-123456789", 10),
+        "Verify grouping in base10 with negative."
+    );
 }
 
 #[test]
@@ -97,18 +153,50 @@ fn test_is_number_invalid() {
 
     // Special case errors: long exponent, long mantissa
     let long_exp = "1e12345";
-    assert_eq!(0, e.is_number_invalid(long_exp, 5 /* Max exp length */, 100, 10 /* Decimal */));
-    assert_eq!(IDS_ERR_INPUT_OVERFLOW, e.is_number_invalid(long_exp, 4 /* Max exp length */, 100, 10 /* Decimal */));
+    assert_eq!(
+        0,
+        e.is_number_invalid(
+            long_exp, 5, /* Max exp length */
+            100, 10 /* Decimal */
+        )
+    );
+    assert_eq!(
+        IDS_ERR_INPUT_OVERFLOW,
+        e.is_number_invalid(
+            long_exp, 4, /* Max exp length */
+            100, 10 /* Decimal */
+        )
+    );
     // Mantissa length is sum of:
     //  - digits before decimal separator, minus leading zeroes
     //  - digits after decimal separator, including trailing zeroes
     // Each of these mantissa values should calculate as a length of 5
-    let long_mant_strs = ["10000", "10.000", "0000012345", "123.45", "0.00123", "0.12345", "-123.45e678"];
+    let long_mant_strs = [
+        "10000",
+        "10.000",
+        "0000012345",
+        "123.45",
+        "0.00123",
+        "0.12345",
+        "-123.45e678",
+    ];
     for s in long_mant_strs {
-        assert_eq!(0, e.is_number_invalid(s, 100, 5 /* Max mantissa length */, 10 /* Decimal */));
+        assert_eq!(
+            0,
+            e.is_number_invalid(
+                s, 100, 5,  /* Max mantissa length */
+                10  /* Decimal */
+            )
+        );
     }
     for s in long_mant_strs {
-        assert_eq!(IDS_ERR_INPUT_OVERFLOW, e.is_number_invalid(s, 100, 4 /* Max mantissa length */, 10 /* Decimal */));
+        assert_eq!(
+            IDS_ERR_INPUT_OVERFLOW,
+            e.is_number_invalid(
+                s, 100, 4,  /* Max mantissa length */
+                10  /* Decimal */
+            )
+        );
     }
 
     // Regex matching (descriptions taken from CalcUtils.cpp)
@@ -146,7 +234,11 @@ fn test_is_number_invalid() {
         assert_eq!(0, e.is_number_invalid(s, 100, 100, 10 /* Dec */), "{s}");
     }
     for s in invalid_dec_strs {
-        assert_eq!(IDS_ERR_UNK_CH, e.is_number_invalid(s, 100, 100, 10 /* Dec */), "{s}");
+        assert_eq!(
+            IDS_ERR_UNK_CH,
+            e.is_number_invalid(s, 100, 100, 10 /* Dec */),
+            "{s}"
+        );
     }
 }
 
@@ -154,25 +246,53 @@ fn test_is_number_invalid() {
 fn test_digit_grouping_string_to_grouping_vector() {
     let _f = common_setup();
     let mut grouping_vector: Vec<u32> = vec![];
-    assert_eq!(grouping_vector, CalcEngine::digit_grouping_string_to_grouping_vector(""), "Verify empty grouping");
+    assert_eq!(
+        grouping_vector,
+        CalcEngine::digit_grouping_string_to_grouping_vector(""),
+        "Verify empty grouping"
+    );
 
     grouping_vector = vec![1];
-    assert_eq!(grouping_vector, CalcEngine::digit_grouping_string_to_grouping_vector("1"), "Verify simple grouping");
+    assert_eq!(
+        grouping_vector,
+        CalcEngine::digit_grouping_string_to_grouping_vector("1"),
+        "Verify simple grouping"
+    );
 
     grouping_vector = vec![3, 0];
-    assert_eq!(grouping_vector, CalcEngine::digit_grouping_string_to_grouping_vector("3;0"), "Verify standard grouping");
+    assert_eq!(
+        grouping_vector,
+        CalcEngine::digit_grouping_string_to_grouping_vector("3;0"),
+        "Verify standard grouping"
+    );
 
     grouping_vector = vec![3, 0, 0];
-    assert_eq!(grouping_vector, CalcEngine::digit_grouping_string_to_grouping_vector("3;0;0"), "Verify expanded non-repeating grouping");
+    assert_eq!(
+        grouping_vector,
+        CalcEngine::digit_grouping_string_to_grouping_vector("3;0;0"),
+        "Verify expanded non-repeating grouping"
+    );
 
     grouping_vector = vec![5, 3, 2, 4, 6];
-    assert_eq!(grouping_vector, CalcEngine::digit_grouping_string_to_grouping_vector("5;3;2;4;6"), "Verify long grouping");
+    assert_eq!(
+        grouping_vector,
+        CalcEngine::digit_grouping_string_to_grouping_vector("5;3;2;4;6"),
+        "Verify long grouping"
+    );
 
     grouping_vector = vec![15, 15, 15, 0];
-    assert_eq!(grouping_vector, CalcEngine::digit_grouping_string_to_grouping_vector("15;15;15;0"), "Verify large grouping");
+    assert_eq!(
+        grouping_vector,
+        CalcEngine::digit_grouping_string_to_grouping_vector("15;15;15;0"),
+        "Verify large grouping"
+    );
 
     grouping_vector = vec![4, 7, 0];
-    assert_eq!(grouping_vector, CalcEngine::digit_grouping_string_to_grouping_vector("4;16;7;25;0"), "Verify we ignore oversize grouping");
+    assert_eq!(
+        grouping_vector,
+        CalcEngine::digit_grouping_string_to_grouping_vector("4;16;7;25;0"),
+        "Verify we ignore oversize grouping"
+    );
 
     grouping_vector = vec![3, 0];
     let non_repeating_grouping = "3;0;0";
@@ -189,46 +309,106 @@ fn test_group_digits() {
     let f = common_setup();
     let e = &f.m_calc_engine;
     let mut result = "1234567";
-    assert_eq!(result, e.group_digits("", &[3, 0], "1234567", false), "Verify handling of empty delimiter.");
-    assert_eq!(result, e.group_digits(",", &[], "1234567", false), "Verify handling of empty grouping.");
+    assert_eq!(
+        result,
+        e.group_digits("", &[3, 0], "1234567", false),
+        "Verify handling of empty delimiter."
+    );
+    assert_eq!(
+        result,
+        e.group_digits(",", &[], "1234567", false),
+        "Verify handling of empty grouping."
+    );
 
     result = "1,234,567";
-    assert_eq!(result, e.group_digits(",", &[3, 0], "1234567", false), "Verify standard digit grouping.");
+    assert_eq!(
+        result,
+        e.group_digits(",", &[3, 0], "1234567", false),
+        "Verify standard digit grouping."
+    );
 
     result = "1 234 567";
-    assert_eq!(result, e.group_digits(" ", &[3, 0], "1234567", false), "Verify delimiter change.");
+    assert_eq!(
+        result,
+        e.group_digits(" ", &[3, 0], "1234567", false),
+        "Verify delimiter change."
+    );
 
     result = "1|||234|||567";
-    assert_eq!(result, e.group_digits("|||", &[3, 0], "1234567", false), "Verify long delimiter.");
+    assert_eq!(
+        result,
+        e.group_digits("|||", &[3, 0], "1234567", false),
+        "Verify long delimiter."
+    );
 
     result = "12,345e67";
-    assert_eq!(result, e.group_digits(",", &[3, 0], "12345e67", false), "Verify respect of exponent.");
+    assert_eq!(
+        result,
+        e.group_digits(",", &[3, 0], "12345e67", false),
+        "Verify respect of exponent."
+    );
 
     result = "12,345.67";
-    assert_eq!(result, e.group_digits(",", &[3, 0], "12345.67", false), "Verify respect of decimal.");
+    assert_eq!(
+        result,
+        e.group_digits(",", &[3, 0], "12345.67", false),
+        "Verify respect of decimal."
+    );
 
     result = "1,234.56e7";
-    assert_eq!(result, e.group_digits(",", &[3, 0], "1234.56e7", false), "Verify respect of exponent and decimal.");
+    assert_eq!(
+        result,
+        e.group_digits(",", &[3, 0], "1234.56e7", false),
+        "Verify respect of exponent and decimal."
+    );
 
     result = "-1,234,567";
-    assert_eq!(result, e.group_digits(",", &[3, 0], "-1234567", true), "Verify negative number grouping.");
+    assert_eq!(
+        result,
+        e.group_digits(",", &[3, 0], "-1234567", true),
+        "Verify negative number grouping."
+    );
 
     // Test various groupings
     result = "1234567890123456";
-    assert_eq!(result, e.group_digits(",", &[0, 0], "1234567890123456", false), "Verify no grouping.");
+    assert_eq!(
+        result,
+        e.group_digits(",", &[0, 0], "1234567890123456", false),
+        "Verify no grouping."
+    );
 
     result = "1234567890123,456";
-    assert_eq!(result, e.group_digits(",", &[3], "1234567890123456", false), "Verify non-repeating grouping.");
-    assert_eq!(result, e.group_digits(",", &[3, 0, 0], "1234567890123456", false), "Verify expanded form non-repeating grouping.");
+    assert_eq!(
+        result,
+        e.group_digits(",", &[3], "1234567890123456", false),
+        "Verify non-repeating grouping."
+    );
+    assert_eq!(
+        result,
+        e.group_digits(",", &[3, 0, 0], "1234567890123456", false),
+        "Verify expanded form non-repeating grouping."
+    );
 
     result = "12,34,56,78,901,23456";
-    assert_eq!(result, e.group_digits(",", &[5, 3, 2, 0], "1234567890123456", false), "Verify multigroup with repeating grouping.");
+    assert_eq!(
+        result,
+        e.group_digits(",", &[5, 3, 2, 0], "1234567890123456", false),
+        "Verify multigroup with repeating grouping."
+    );
 
     result = "1234,5678,9012,3456";
-    assert_eq!(result, e.group_digits(",", &[4, 0], "1234567890123456", false), "Verify repeating non-standard grouping.");
+    assert_eq!(
+        result,
+        e.group_digits(",", &[4, 0], "1234567890123456", false),
+        "Verify repeating non-standard grouping."
+    );
 
     result = "123456,78,901,23456";
-    assert_eq!(result, e.group_digits(",", &[5, 3, 2], "1234567890123456", false), "Verify multigroup non-repeating grouping.");
+    assert_eq!(
+        result,
+        e.group_digits(",", &[5, 3, 2], "1234567890123456", false),
+        "Verify multigroup non-repeating grouping."
+    );
     assert_eq!(
         result,
         e.group_digits(",", &[5, 3, 2, 0, 0], "1234567890123456", false),

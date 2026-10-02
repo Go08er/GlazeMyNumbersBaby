@@ -49,8 +49,14 @@ mod tests {
     #[test]
     fn gdk_keys_translate() {
         let none = gdk::ModifierType::empty();
-        assert_eq!(key_press(gdk::Key::Return, none), Some(KeyPress::named(Named::Enter)));
-        assert_eq!(key_press(gdk::Key::F9, none), Some(KeyPress::named(Named::F(9))));
+        assert_eq!(
+            key_press(gdk::Key::Return, none),
+            Some(KeyPress::named(Named::Enter))
+        );
+        assert_eq!(
+            key_press(gdk::Key::F9, none),
+            Some(KeyPress::named(Named::F(9)))
+        );
         assert_eq!(
             key_press(gdk::Key::R, gdk::ModifierType::SHIFT_MASK),
             Some(KeyPress::char('R'))

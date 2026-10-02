@@ -37,7 +37,11 @@ pub fn get_number_digits(value: &str) -> u32 {
 
 /// Get number of digits (whole number part only)
 pub fn get_number_digits_whole_number_part(value: f64) -> u32 {
-    if value == 0.0 { 1 } else { (1.0 + f64::max(0.0, value.abs().log10())) as u32 }
+    if value == 0.0 {
+        1
+    } else {
+        (1.0 + f64::max(0.0, value.abs().log10())) as u32
+    }
 }
 
 /// Rounds the given double to the given number of significant digits

@@ -1,0 +1,32 @@
+[package]
+name = "dgmnb"
+description = "Don't Glaze My Numbers, Baby: the lean twin of GMNB"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+appcore.workspace = true
+calcvm.workspace = true
+datecalc.workspace = true
+graphing.workspace = true
+unitconv.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Windowing and software rendering: Wayland first, X11 as a fallback.
+# libwayland-client is linked (not dlopened) so packages pick up the
+# dependency automatically; libxkbcommon is always loaded at runtime.
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "wayland", "x11"] }
+softbuffer = { version = "0.4", default-features = false, features = ["wayland", "x11", "x11-dlopen"] }
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd", "png-format"] }
+swash = "0.2"
+unicode-bidi = "0.3"
+# Clipboard: smithay-client-toolkit at winit's version (no duplicate copy).
+sctk = { package = "smithay-client-toolkit", version = "0.19", default-features = false, features = ["calloop"] }
+wayland-backend = { version = "0.3", default-features = false, features = ["client_system"] }
+accesskit = "0.25"
+accesskit_winit = { version = "0.34", default-features = false, features = ["accesskit_unix", "async-io", "rwh_06"] }

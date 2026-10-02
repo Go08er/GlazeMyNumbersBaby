@@ -39,7 +39,9 @@ impl CalcDisplay for ManagerDisplay {
     /// Used to set the primary display value on ViewModel
     fn set_primary_display(&mut self, display_string: &str, is_error: bool) {
         if !self.in_history_item_load_mode {
-            self.display_callback.borrow_mut().set_primary_display(display_string, is_error);
+            self.display_callback
+                .borrow_mut()
+                .set_primary_display(display_string, is_error);
         }
     }
 
@@ -48,14 +50,22 @@ impl CalcDisplay for ManagerDisplay {
     }
 
     /// Used to set the expression display value on ViewModel
-    fn set_expression_display(&mut self, tokens: &[ExpressionToken], commands: &[ExpressionCommand]) {
+    fn set_expression_display(
+        &mut self,
+        tokens: &[ExpressionToken],
+        commands: &[ExpressionCommand],
+    ) {
         if !self.in_history_item_load_mode {
-            self.display_callback.borrow_mut().set_expression_display(tokens, commands);
+            self.display_callback
+                .borrow_mut()
+                .set_expression_display(tokens, commands);
         }
     }
 
     fn set_parenthesis_number(&mut self, parenthesis_count: u32) {
-        self.display_callback.borrow_mut().set_parenthesis_number(parenthesis_count);
+        self.display_callback
+            .borrow_mut()
+            .set_parenthesis_number(parenthesis_count);
     }
 
     fn on_no_right_paren_added(&mut self) {
@@ -67,19 +77,27 @@ impl CalcDisplay for ManagerDisplay {
     }
 
     fn binary_operator_received(&mut self) {
-        self.display_callback.borrow_mut().binary_operator_received();
+        self.display_callback
+            .borrow_mut()
+            .binary_operator_received();
     }
 
     fn on_history_item_added(&mut self, added_item_index: u32) {
-        self.display_callback.borrow_mut().on_history_item_added(added_item_index);
+        self.display_callback
+            .borrow_mut()
+            .on_history_item_added(added_item_index);
     }
 
     fn set_memorized_numbers(&mut self, memorized_numbers: &[String]) {
-        self.display_callback.borrow_mut().set_memorized_numbers(memorized_numbers);
+        self.display_callback
+            .borrow_mut()
+            .set_memorized_numbers(memorized_numbers);
     }
 
     fn memory_item_changed(&mut self, index_of_memory: u32) {
-        self.display_callback.borrow_mut().memory_item_changed(index_of_memory);
+        self.display_callback
+            .borrow_mut()
+            .memory_item_changed(index_of_memory);
     }
 
     fn input_changed(&mut self) {
@@ -132,10 +150,16 @@ impl CalculatorManager {
     const MAXIMUM_MEMORY_SIZE: usize = 100;
 
     /// `CalculatorManager(ICalcDisplay* displayCallback, IResourceProvider* resourceProvider)`
-    pub fn new(display_callback: CalcDisplayRef, resource_provider: Rc<dyn ResourceProvider>) -> Self {
+    pub fn new(
+        display_callback: CalcDisplayRef,
+        resource_provider: Rc<dyn ResourceProvider>,
+    ) -> Self {
         CalcEngine::initial_one_time_only_setup(&*resource_provider);
 
-        let proxy = Rc::new(RefCell::new(ManagerDisplay { display_callback: display_callback.clone(), in_history_item_load_mode: false }));
+        let proxy = Rc::new(RefCell::new(ManagerDisplay {
+            display_callback: display_callback.clone(),
+            in_history_item_load_mode: false,
+        }));
 
         CalculatorManager {
             display_callback,
@@ -163,7 +187,9 @@ impl CalculatorManager {
     /// `m_currentCalculatorEngine` (dereferencing a null engine is a crash in
     /// C++; here it panics).
     fn current_engine(&mut self) -> &mut CalcEngine {
-        let slot = self.current_calculator_engine.expect("CalculatorManager: no current calculator engine (set a mode first)");
+        let slot = self
+            .current_calculator_engine
+            .expect("CalculatorManager: no current calculator engine (set a mode first)");
         self.engine_mut(slot)
     }
 
@@ -196,7 +222,9 @@ impl CalculatorManager {
     // ------------------------------------------------------------------
 
     pub fn display_paste_error(&mut self) {
-        self.current_engine().display_error(ratpack::CALC_E_DOMAIN /*code for "Invalid input" error*/);
+        self.current_engine().display_error(
+            ratpack::CALC_E_DOMAIN, /*code for "Invalid input" error*/
+        );
     }
 
     fn input_changed(&mut self) {
@@ -204,7 +232,9 @@ impl CalculatorManager {
     }
 
     fn on_history_item_added(&mut self, added_item_index: u32) {
-        self.display_callback.borrow_mut().on_history_item_added(added_item_index);
+        self.display_callback
+            .borrow_mut()
+            .on_history_item_added(added_item_index);
     }
 
     /// Reset CalculatorManager.
@@ -253,7 +283,8 @@ impl CalculatorManager {
         self.current_calculator_engine = Some(EngineSlot::Standard);
         self.current_engine().process_command(IDC_DEC)?;
         self.current_engine().process_command(IDC_CLEAR)?;
-        self.current_engine().change_precision(CalculatorPrecision::StandardModePrecision as i32);
+        self.current_engine()
+            .change_precision(CalculatorPrecision::StandardModePrecision as i32);
         self.update_max_int_digits();
         self.history = Some(HistorySlot::Standard);
         Ok(())
@@ -275,7 +306,8 @@ impl CalculatorManager {
         self.current_calculator_engine = Some(EngineSlot::Scientific);
         self.current_engine().process_command(IDC_DEC)?;
         self.current_engine().process_command(IDC_CLEAR)?;
-        self.current_engine().change_precision(CalculatorPrecision::ScientificModePrecision as i32);
+        self.current_engine()
+            .change_precision(CalculatorPrecision::ScientificModePrecision as i32);
         self.history = Some(HistorySlot::Scientific);
         Ok(())
     }
@@ -296,7 +328,8 @@ impl CalculatorManager {
         self.current_calculator_engine = Some(EngineSlot::Programmer);
         self.current_engine().process_command(IDC_DEC)?;
         self.current_engine().process_command(IDC_CLEAR)?;
-        self.current_engine().change_precision(CalculatorPrecision::ProgrammerModePrecision as i32);
+        self.current_engine()
+            .change_precision(CalculatorPrecision::ProgrammerModePrecision as i32);
         Ok(())
     }
 
@@ -323,7 +356,10 @@ impl CalculatorManager {
             return Ok(());
         }
 
-        if command == Command::CommandDEG || command == Command::CommandRAD || command == Command::CommandGRAD {
+        if command == Command::CommandDEG
+            || command == Command::CommandRAD
+            || command == Command::CommandGRAD
+        {
             self.current_degree_mode = command;
         }
 
@@ -347,7 +383,8 @@ impl CalculatorManager {
 
         match second {
             Some(op) => {
-                self.current_engine().process_command(Command::CommandINV.0)?;
+                self.current_engine()
+                    .process_command(Command::CommandINV.0)?;
                 self.current_engine().process_command(op)?;
             }
             None => {
@@ -423,7 +460,9 @@ impl CalculatorManager {
             self.set_memorized_numbers_string()?;
         }
 
-        self.display_callback.borrow_mut().memory_item_changed(index_of_memory);
+        self.display_callback
+            .borrow_mut()
+            .memory_item_changed(index_of_memory);
         Ok(())
     }
 
@@ -455,7 +494,9 @@ impl CalculatorManager {
             self.set_memorized_numbers_string()?;
         }
 
-        self.display_callback.borrow_mut().memory_item_changed(index_of_memory);
+        self.display_callback
+            .borrow_mut()
+            .memory_item_changed(index_of_memory);
         Ok(())
     }
 
@@ -476,8 +517,13 @@ impl CalculatorManager {
             return Ok(());
         }
 
-        let memory_object = self.memorized_numbers.get(index_of_memory as usize).cloned().ok_or(E_BOUNDS)?;
-        self.current_engine().set_persisted_mem_object(&memory_object);
+        let memory_object = self
+            .memorized_numbers
+            .get(index_of_memory as usize)
+            .cloned()
+            .ok_or(E_BOUNDS)?;
+        self.current_engine()
+            .set_persisted_mem_object(&memory_object);
         Ok(())
     }
 
@@ -489,7 +535,10 @@ impl CalculatorManager {
         }
 
         if let Some(memory_object) = self.current_engine().persisted_mem_object() {
-            let slot = self.memorized_numbers.get_mut(index_of_memory as usize).ok_or(E_BOUNDS)?;
+            let slot = self
+                .memorized_numbers
+                .get_mut(index_of_memory as usize)
+                .ok_or(E_BOUNDS)?;
             *slot = memory_object;
         }
         Ok(())
@@ -498,7 +547,9 @@ impl CalculatorManager {
     /// `GetHistoryItems()` — the history of the current standard/scientific
     /// mode (empty before any mode was set; C++ dereferences null there).
     pub fn get_history_items(&self) -> Vec<Rc<HistoryItem>> {
-        self.history_ref().map(|h| h.borrow().get_history().to_vec()).unwrap_or_default()
+        self.history_ref()
+            .map(|h| h.borrow().get_history().to_vec())
+            .unwrap_or_default()
     }
 
     /// `GetHistoryItems(CalculatorMode mode)`
@@ -521,11 +572,13 @@ impl CalculatorManager {
     }
 
     pub fn get_history_item(&self, u_idx: u32) -> Option<Rc<HistoryItem>> {
-        self.history_ref().and_then(|h| h.borrow().get_history_item(u_idx))
+        self.history_ref()
+            .and_then(|h| h.borrow().get_history_item(u_idx))
     }
 
     pub fn remove_history_item(&mut self, u_idx: u32) -> bool {
-        self.history_ref().is_some_and(|h| h.borrow_mut().remove_item(u_idx))
+        self.history_ref()
+            .is_some_and(|h| h.borrow_mut().remove_item(u_idx))
     }
 
     pub fn clear_history(&mut self) {
@@ -535,7 +588,8 @@ impl CalculatorManager {
     }
 
     pub fn max_history_size(&self) -> usize {
-        self.history_ref().map_or(MAX_HISTORY_ITEMS, |h| h.borrow().max_history_size())
+        self.history_ref()
+            .map_or(MAX_HISTORY_ITEMS, |h| h.borrow().max_history_size())
     }
 
     pub fn set_radix(&mut self, i_radix_type: RadixType) -> CalcResult<()> {
@@ -550,7 +604,9 @@ impl CalculatorManager {
 
     pub fn set_memorized_numbers_string(&mut self) -> CalcResult<()> {
         let mut result_vector: Vec<String> = Vec::new();
-        let engine = self.current_engine_ref().expect("CalculatorManager: no current calculator engine (set a mode first)");
+        let engine = self
+            .current_engine_ref()
+            .expect("CalculatorManager: no current calculator engine (set a mode first)");
         for memory_item in &self.memorized_numbers {
             let radix = engine.get_current_radix();
             let string_value = engine.get_string_for_display(memory_item, radix)?;
@@ -559,7 +615,9 @@ impl CalculatorManager {
                 result_vector.push(engine.group_digits_per_radix(&string_value, radix));
             }
         }
-        self.display_callback.borrow_mut().set_memorized_numbers(&result_vector);
+        self.display_callback
+            .borrow_mut()
+            .set_memorized_numbers(&result_vector);
         Ok(())
     }
 
@@ -570,9 +628,18 @@ impl CalculatorManager {
         self.current_degree_mode
     }
 
-    pub fn get_result_for_radix(&mut self, radix: u32, precision: i32, group_digits_per_radix: bool) -> CalcResult<String> {
+    pub fn get_result_for_radix(
+        &mut self,
+        radix: u32,
+        precision: i32,
+        group_digits_per_radix: bool,
+    ) -> CalcResult<String> {
         if self.current_calculator_engine.is_some() {
-            self.current_engine().get_current_result_for_radix(radix, precision, group_digits_per_radix)
+            self.current_engine().get_current_result_for_radix(
+                radix,
+                precision,
+                group_digits_per_radix,
+            )
         } else {
             Ok(String::new())
         }
@@ -589,7 +656,12 @@ impl CalculatorManager {
     pub fn decimal_separator(&self) -> char {
         match self.current_engine_ref() {
             Some(engine) => engine.decimal_separator(),
-            None => self.resource_provider.get_cengine_string("sDecimal").chars().next().unwrap_or('\0'),
+            None => self
+                .resource_provider
+                .get_cengine_string("sDecimal")
+                .chars()
+                .next()
+                .unwrap_or('\0'),
         }
     }
 

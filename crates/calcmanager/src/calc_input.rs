@@ -100,7 +100,9 @@ impl CalcInput {
                 // Decide if this additional digit will fit for the given bit width
                 // (C++: maxNumStr.back() on an empty string is undefined; treat as '\0'.)
                 let max_back = max.last().copied().unwrap_or('\0');
-                if self.base.value.len() >= max.len() && self.base.value.last().copied().unwrap_or('\0') > max_back {
+                if self.base.value.len() >= max.len()
+                    && self.base.value.last().copied().unwrap_or('\0') > max_back
+                {
                     // Last digit is more than the allowed positive number. Fail
                     return false;
                 }
@@ -200,7 +202,9 @@ impl CalcInput {
                         let last_char = max[len];
                         if ch_digit <= last_char {
                             allow_extra_digit = true;
-                        } else if p_num_sec.is_negative() && (ch_digit as u32) <= (last_char as u32) + 1 {
+                        } else if p_num_sec.is_negative()
+                            && (ch_digit as u32) <= (last_char as u32) + 1
+                        {
                             // Negative value case, eg. max is "127", and current number is "-12". Then 8 is also valid, as the range
                             // is always from -(max+1)...max in signed mode
                             allow_extra_digit = true;
@@ -303,7 +307,9 @@ impl CalcInput {
     /// `CalcInput::ToString`
     pub fn to_string(&self, radix: u32) -> String {
         // In theory both the base and exponent could be C_NUM_MAX_DIGITS long.
-        if (self.base.value.len() > MAX_STRLEN) || (self.has_exponent && self.exponent.value.len() > MAX_STRLEN) {
+        if (self.base.value.len() > MAX_STRLEN)
+            || (self.has_exponent && self.exponent.value.len() > MAX_STRLEN)
+        {
             return String::new();
         }
 
@@ -326,7 +332,11 @@ impl CalcInput {
             }
 
             result.push(if radix == 10 { 'e' } else { '^' });
-            result.push(if self.exponent.is_negative() { '-' } else { '+' });
+            result.push(if self.exponent.is_negative() {
+                '-'
+            } else {
+                '+'
+            });
 
             if self.exponent.is_empty() {
                 result.push('0');

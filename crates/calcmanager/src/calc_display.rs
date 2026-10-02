@@ -28,7 +28,11 @@ pub type ExpressionToken = (String, i32);
 pub trait CalcDisplay {
     fn set_primary_display(&mut self, text: &str, is_error: bool);
     fn set_is_in_error(&mut self, is_in_error: bool);
-    fn set_expression_display(&mut self, tokens: &[ExpressionToken], commands: &[ExpressionCommand]);
+    fn set_expression_display(
+        &mut self,
+        tokens: &[ExpressionToken],
+        commands: &[ExpressionCommand],
+    );
     fn set_parenthesis_number(&mut self, count: u32);
     fn on_no_right_paren_added(&mut self);
     /// not an error but still need to inform UI layer.
@@ -43,7 +47,12 @@ pub trait CalcDisplay {
 /// `IHistoryDisplay` — callback interface to be implemented by the clients of
 /// the engine if they require equation history.
 pub trait HistoryDisplay {
-    fn add_to_history(&mut self, tokens: Vec<ExpressionToken>, commands: Vec<ExpressionCommand>, result: &str) -> u32;
+    fn add_to_history(
+        &mut self,
+        tokens: Vec<ExpressionToken>,
+        commands: Vec<ExpressionCommand>,
+        result: &str,
+    ) -> u32;
 }
 
 /// Shared handle to a display (the C++ engine stores a raw `ICalcDisplay*`).

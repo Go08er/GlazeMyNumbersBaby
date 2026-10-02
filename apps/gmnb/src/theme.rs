@@ -383,7 +383,8 @@ pub fn generate(primary: [f32; 3], secondary: [f32; 3], dark: bool) -> Scheme {
 /// light or `dark_text` for the glyph; built-ins keep their glyph colour and
 /// only have their colours nudged.
 fn readable(s: Scheme, dark_text: Option<[f32; 3]>) -> Scheme {
-    let fix = |c, target| with_contrast(with_contrast(c, s.base_top, target), s.base_bottom, target);
+    let fix =
+        |c, target| with_contrast(with_contrast(c, s.base_top, target), s.base_bottom, target);
     let (on_hot, hot_a, hot_b) = match dark_text {
         Some(dark) => readable_gradient(s.hot_a, s.hot_b, WHITE, dark, UI_CONTRAST),
         None => {
@@ -785,8 +786,14 @@ mod tests {
         let mut bad = Vec::new();
         for (name, c) in inputs {
             for dark in [false, true] {
-                bad.extend(check(&generate(c, complement(c), dark), &format!("system {name} {dark}")));
-                bad.extend(check(&generate(c, c, dark), &format!("freestyle {name} {dark}")));
+                bad.extend(check(
+                    &generate(c, complement(c), dark),
+                    &format!("system {name} {dark}"),
+                ));
+                bad.extend(check(
+                    &generate(c, c, dark),
+                    &format!("freestyle {name} {dark}"),
+                ));
             }
         }
         assert!(bad.is_empty(), "{bad:#?}");

@@ -151,7 +151,10 @@ mod tests {
         store.save().unwrap();
         let again: Store<S> = Store::load_from(path.clone());
         assert_eq!(again.data.borrow().mode, "graphing");
-        assert_eq!(again.page_state("calculator"), Some(serde_json::json!({"a": 1})));
+        assert_eq!(
+            again.page_state("calculator"),
+            Some(serde_json::json!({"a": 1}))
+        );
         let files: Vec<_> = std::fs::read_dir(path.parent().unwrap()).unwrap().collect();
         assert_eq!(files.len(), 1);
     }
@@ -161,7 +164,10 @@ mod tests {
         let path = tmp("bad");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"{ not json").unwrap();
-        assert_eq!(*Store::<S>::load_from(path.clone()).data.borrow(), S::default());
+        assert_eq!(
+            *Store::<S>::load_from(path.clone()).data.borrow(),
+            S::default()
+        );
         let huge = vec![b' '; (MAX_SETTINGS_BYTES + 1) as usize];
         std::fs::write(&path, huge).unwrap();
         assert!(read_bounded(&path, MAX_SETTINGS_BYTES).is_none());

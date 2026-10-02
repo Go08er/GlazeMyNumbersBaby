@@ -242,7 +242,10 @@ mod tests {
             assert_eq!(n, 1, "{m:?}");
         }
         assert_eq!(
-            ViewMode::ALL.iter().filter(|m| m.converter_mode().is_some()).count(),
+            ViewMode::ALL
+                .iter()
+                .filter(|m| m.converter_mode().is_some())
+                .count(),
             unitconv::ConverterMode::ALL.len()
         );
     }

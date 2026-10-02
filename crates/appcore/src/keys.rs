@@ -336,10 +336,18 @@ impl SecondFlip {
         if second { self.second } else { self.normal }
     }
     pub fn label(&self, second: bool) -> &'static str {
-        if second { self.second_label } else { self.normal_label }
+        if second {
+            self.second_label
+        } else {
+            self.normal_label
+        }
     }
     pub fn tip(&self, second: bool) -> &'static str {
-        if second { self.second_tip } else { self.normal_tip }
+        if second {
+            self.second_tip
+        } else {
+            self.normal_tip
+        }
     }
 }
 
@@ -362,7 +370,14 @@ const fn flip(
 }
 
 pub const SECOND_FLIPS: [SecondFlip; 6] = [
-    flip(B::XPower2, B::Cube, "x<sup>2</sup>", "x<sup>3</sup>", "Square (Q)", "Cube (#)"),
+    flip(
+        B::XPower2,
+        B::Cube,
+        "x<sup>2</sup>",
+        "x<sup>3</sup>",
+        "Square (Q)",
+        "Cube (#)",
+    ),
     flip(
         B::Sqrt,
         B::CubeRoot,
@@ -496,7 +511,6 @@ pub fn shift_keys(mode: ShiftMode) -> ((B, &'static str), (B, &'static str)) {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Converter keypad
 // ---------------------------------------------------------------------------
@@ -533,7 +547,13 @@ pub fn converter() -> Vec<(Key, i32, i32, i32, i32)> {
     for d in 1..=9u32 {
         let r = 3 - ((d - 1) / 3) as i32;
         let c = ((d - 1) % 3) as i32;
-        out.push((Key::new(conv::DIGIT0 + d, &d.to_string(), KeyKind::Number), r, c, 1, 1));
+        out.push((
+            Key::new(conv::DIGIT0 + d, &d.to_string(), KeyKind::Number),
+            r,
+            c,
+            1,
+            1,
+        ));
     }
     out.push((
         Key::new(conv::NEGATE, "+/−", KeyKind::Number).tip("Positive negative (F9)"),
@@ -671,7 +691,14 @@ mod tests {
 
     #[test]
     fn layouts_have_unique_positions_and_ids() {
-        for layout in [standard(), scientific(), programmer(), trig(), functions(), bitwise()] {
+        for layout in [
+            standard(),
+            scientific(),
+            programmer(),
+            trig(),
+            functions(),
+            bitwise(),
+        ] {
             let mut pos: Vec<_> = layout.iter().map(|(_, r, c)| (*r, *c)).collect();
             pos.sort();
             pos.dedup();
@@ -690,7 +717,10 @@ mod tests {
             assert_ne!(f.tip(false), f.tip(true));
         }
         assert_eq!(trig_tip("sin", false, false), "Sine (S)");
-        assert_eq!(trig_tip("cos", true, true), "Inverse hyperbolic cosine (Ctrl+Shift+O)");
+        assert_eq!(
+            trig_tip("cos", true, true),
+            "Inverse hyperbolic cosine (Ctrl+Shift+O)"
+        );
     }
 
     #[test]

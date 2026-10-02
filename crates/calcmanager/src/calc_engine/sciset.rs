@@ -12,7 +12,11 @@ use crate::radix_type::RadixType;
 impl CalcEngine {
     /// To be called when either the radix or num width changes. You can use `None` in either of these values to mean
     /// dont change that.
-    pub(super) fn set_radix_type_and_num_width(&mut self, radixtype: Option<RadixType>, numwidth: Option<NumWidth>) -> CalcResult<()> {
+    pub(super) fn set_radix_type_and_num_width(
+        &mut self,
+        radixtype: Option<RadixType>,
+        numwidth: Option<NumWidth>,
+    ) -> CalcResult<()> {
         // When in integer mode, the number is represented in 2's complement form. When a bit width is changing, we can
         // change the number representation back to sign, abs num form in ratpak. Soon when display sees this, it will
         // convert to 2's complement form, but this time all high bits will be propagated. Eg. -127, in byte mode is
@@ -76,7 +80,11 @@ impl CalcEngine {
         let mut result = integer(rat)?;
 
         // Remove any variance in how 0 could be represented in rat e.g. -0, 0/n, etc.
-        result = if result != Rational::from(0) { result } else { Rational::from(0) };
+        result = if result != Rational::from(0) {
+            result
+        } else {
+            Rational::from(0)
+        };
 
         // XOR the result with 2^wbitno power
         *rat = result.bitxor(&pow(&Rational::from(2), &Rational::from(wbitno as i32))?)?;
@@ -127,7 +135,8 @@ impl CalcEngine {
         if self.radix == 10 {
             // if in integer mode you still have to honor the max digits you can enter based on bit width
             if self.f_integer_mode {
-                self.c_int_digits_sav = self.get_max_decimal_value_string().chars().count() as i32 - 1;
+                self.c_int_digits_sav =
+                    self.get_max_decimal_value_string().chars().count() as i32 - 1;
                 // This is the max digits you can enter a decimal in fixed width mode aka integer mode -1. The last digit
                 // has to be checked separately
             } else {
@@ -141,10 +150,10 @@ impl CalcEngine {
     pub(super) fn change_base_constants(radix: u32, max_int_digits: i32, precision: i32) {
         if 10 == radix {
             ratpack::change_constants(radix, precision); // Base 10 precision for internal computing still needs to be 32, to
-            // take care of decimals precisely. For eg. to get the HI word of a qword, we do a rsh, which depends on getting
-            // 18446744073709551615 / 4294967296 = 4294967295.9999917... This is important it works this and doesn't reduce
-            // the precision to number of digits allowed to enter. In other words, precision and # of allowed digits to be
-            // entered are different.
+        // take care of decimals precisely. For eg. to get the HI word of a qword, we do a rsh, which depends on getting
+        // 18446744073709551615 / 4294967296 = 4294967295.9999917... This is important it works this and doesn't reduce
+        // the precision to number of digits allowed to enter. In other words, precision and # of allowed digits to be
+        // entered are different.
         } else {
             ratpack::change_constants(radix, max_int_digits + 1);
         }

@@ -10,17 +10,17 @@ use calcvm::{
 };
 use gtk::{gdk, glib};
 
-use appcore::KeyPress;
-use appcore::input::{self, Action};
-use appcore::keys::{self, KEY_HYP, KEY_SECOND, KEY_TRIG_SECOND};
 use super::{Ctx, Page};
-use appcore::modes::ViewMode;
 use crate::widgets::bitflip::BitFlip;
 use crate::widgets::calc_panel::{CalcPanel, MemOp};
 use crate::widgets::display::{Change, Display};
 use crate::widgets::icon::{PathIcon, icon_toggle, paths};
 use crate::widgets::keypad::Keypad;
 use crate::widgets::width_bin::WidthBin;
+use appcore::KeyPress;
+use appcore::input::{self, Action};
+use appcore::keys::{self, KEY_HYP, KEY_SECOND, KEY_TRIG_SECOND};
+use appcore::modes::ViewMode;
 
 /// Width at which history/memory docks beside the keypad.
 const WIDE_PX: i32 = 620;

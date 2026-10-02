@@ -7,7 +7,9 @@
 //! event derivation.
 
 use super::new_vm;
-use crate::{AngleUnit, Button as B, CalcMode, CalculatorViewModel, Event, Radix, ShiftMode, WordSize};
+use crate::{
+    AngleUnit, Button as B, CalcMode, CalculatorViewModel, Event, Radix, ShiftMode, WordSize,
+};
 
 fn press_all(vm: &mut CalculatorViewModel, buttons: &[B]) {
     for &b in buttons {
@@ -22,7 +24,12 @@ fn programmer() -> CalculatorViewModel {
 }
 
 fn radix_values(vm: &CalculatorViewModel) -> [String; 4] {
-    [vm.radix_value(Radix::Hex), vm.radix_value(Radix::Dec), vm.radix_value(Radix::Oct), vm.radix_value(Radix::Bin)]
+    [
+        vm.radix_value(Radix::Hex),
+        vm.radix_value(Radix::Dec),
+        vm.radix_value(Radix::Oct),
+        vm.radix_value(Radix::Bin),
+    ]
 }
 
 // ---- Programmer radix strings
@@ -43,8 +50,19 @@ fn minus_one_in_every_word_size_and_radix() {
                 "1111 1111 1111 1111 1111 1111 1111 1111 1111 1111 1111 1111 1111 1111 1111 1111",
             ],
         ),
-        (WordSize::Dword, ["FFFF FFFF", "-1", "37 777 777 777", "1111 1111 1111 1111 1111 1111 1111 1111"]),
-        (WordSize::Word, ["FFFF", "-1", "177 777", "1111 1111 1111 1111"]),
+        (
+            WordSize::Dword,
+            [
+                "FFFF FFFF",
+                "-1",
+                "37 777 777 777",
+                "1111 1111 1111 1111 1111 1111 1111 1111",
+            ],
+        ),
+        (
+            WordSize::Word,
+            ["FFFF", "-1", "177 777", "1111 1111 1111 1111"],
+        ),
         (WordSize::Byte, ["FF", "-1", "377", "1111 1111"]),
     ];
     for (word, expected) in cases {
@@ -58,7 +76,12 @@ fn minus_one_in_every_word_size_and_radix() {
 
     // The primary display follows the selected radix.
     vm.set_word_size(WordSize::Word);
-    let displays = [(Radix::Hex, "FFFF"), (Radix::Oct, "177 777"), (Radix::Bin, "1111 1111 1111 1111"), (Radix::Dec, "-1")];
+    let displays = [
+        (Radix::Hex, "FFFF"),
+        (Radix::Oct, "177 777"),
+        (Radix::Bin, "1111 1111 1111 1111"),
+        (Radix::Dec, "-1"),
+    ];
     for (radix, display) in displays {
         vm.set_radix(radix);
         assert_eq!(vm.radix(), radix);
@@ -72,7 +95,10 @@ fn word_size_truncates_through_the_engine() {
     // 300 = 0x12C; as a BYTE that is 0x2C = 44.
     press_all(&mut vm, &[B::Three, B::Zero, B::Zero]);
     vm.set_word_size(WordSize::Byte);
-    assert_eq!(radix_values(&vm), ["2C", "44", "54", "0010 1100"].map(String::from));
+    assert_eq!(
+        radix_values(&vm),
+        ["2C", "44", "54", "0010 1100"].map(String::from)
+    );
     assert_eq!(vm.display_value(), "44");
     // Back to QWORD keeps the truncated value.
     vm.set_word_size(WordSize::Qword);
@@ -153,7 +179,12 @@ fn flip_bit_clears_an_error_first() {
 fn shift_modes() {
     let mut vm = programmer();
     assert_eq!(vm.shift_mode(), ShiftMode::Arithmetic);
-    for mode in [ShiftMode::Logical, ShiftMode::Rotate, ShiftMode::RotateThroughCarry, ShiftMode::Arithmetic] {
+    for mode in [
+        ShiftMode::Logical,
+        ShiftMode::Rotate,
+        ShiftMode::RotateThroughCarry,
+        ShiftMode::Arithmetic,
+    ] {
         vm.set_shift_mode(mode);
         assert_eq!(vm.shift_mode(), mode);
     }
@@ -223,14 +254,30 @@ fn digits_per_radix_and_mode() {
 
 #[test]
 fn error_state_disables_operators_but_not_operands() {
-    for mode in [CalcMode::Standard, CalcMode::Scientific, CalcMode::Programmer] {
+    for mode in [
+        CalcMode::Standard,
+        CalcMode::Scientific,
+        CalcMode::Programmer,
+    ] {
         let mut vm = new_vm();
         vm.set_mode(mode);
-        press_all(&mut vm, &[B::Five, B::Memory, B::One, B::Divide, B::Zero, B::Equals]);
+        press_all(
+            &mut vm,
+            &[B::Five, B::Memory, B::One, B::Divide, B::Zero, B::Equals],
+        );
         assert!(vm.is_error(), "{mode:?}");
         assert_eq!(vm.display_value(), "Cannot divide by zero");
 
-        for b in [B::Zero, B::One, B::Equals, B::Clear, B::ClearEntry, B::Backspace, B::DecButton, B::IsStandardMode] {
+        for b in [
+            B::Zero,
+            B::One,
+            B::Equals,
+            B::Clear,
+            B::ClearEntry,
+            B::Backspace,
+            B::DecButton,
+            B::IsStandardMode,
+        ] {
             assert!(vm.is_enabled(b), "{b:?} should stay enabled in {mode:?}");
         }
         for b in [
@@ -529,7 +576,10 @@ fn round_trip_pending_expression_history_and_memory() {
     let mut vm = new_vm();
     press_all(&mut vm, &[B::One, B::Add, B::Two, B::Equals, B::Memory]);
     press_all(&mut vm, &[B::Three, B::Add, B::Four, B::Equals]);
-    press_all(&mut vm, &[B::One, B::Decimal, B::Five, B::Negate, B::Memory]);
+    press_all(
+        &mut vm,
+        &[B::One, B::Decimal, B::Five, B::Negate, B::Memory],
+    );
     press_all(&mut vm, &[B::Five, B::Multiply, B::Six]);
     assert_eq!(vm.memory(), ["-1.5", "3"]);
     assert_eq!(vm.expression(), "5 × ");
@@ -581,7 +631,10 @@ fn round_trip_scientific_fe_and_angle() {
     vm.set_mode(CalcMode::Scientific);
     vm.set_angle_unit(AngleUnit::Gradians);
     press_all(&mut vm, &[B::Two, B::Multiply, B::Three, B::Equals]);
-    press_all(&mut vm, &[B::One, B::Two, B::Three, B::Four, B::Five, B::FToE]);
+    press_all(
+        &mut vm,
+        &[B::One, B::Two, B::Three, B::Four, B::Five, B::FToE],
+    );
     assert_eq!(vm.display_value(), "1.2345e+4");
     let mut restored = round_trip(&vm);
     assert!(restored.is_fe());
@@ -596,7 +649,20 @@ fn round_trip_programmer_hex_byte() {
     vm.set_word_size(WordSize::Byte);
     vm.set_radix(Radix::Hex);
     vm.set_shift_mode(ShiftMode::Rotate);
-    press_all(&mut vm, &[B::F, B::E, B::Memory, B::Clear, B::Seven, B::Memory, B::A, B::Or, B::Five]);
+    press_all(
+        &mut vm,
+        &[
+            B::F,
+            B::E,
+            B::Memory,
+            B::Clear,
+            B::Seven,
+            B::Memory,
+            B::A,
+            B::Or,
+            B::Five,
+        ],
+    );
     assert_eq!(vm.memory(), ["7", "FE"]);
     let mut restored = round_trip(&vm);
     assert_eq!(restored.display_value(), "5");
@@ -625,7 +691,10 @@ fn round_trip_keeps_both_histories() {
     let mut vm = new_vm();
     press_all(&mut vm, &[B::One, B::Add, B::One, B::Equals]);
     vm.set_mode(CalcMode::Scientific);
-    press_all(&mut vm, &[B::Two, B::Add, B::Two, B::Multiply, B::Two, B::Equals]);
+    press_all(
+        &mut vm,
+        &[B::Two, B::Add, B::Two, B::Multiply, B::Two, B::Equals],
+    );
     let mut restored = round_trip(&vm);
     assert_eq!(restored.history()[0].result, "6");
     restored.set_mode(CalcMode::Standard);
@@ -671,7 +740,10 @@ fn events_for_typical_inputs() {
     assert_eq!(step(&mut vm, B::Two), [Event::Typing]);
     assert_eq!(step(&mut vm, B::Multiply), [Event::Result]);
     assert_eq!(step(&mut vm, B::Three), [Event::Typing]);
-    assert_eq!(step(&mut vm, B::Add), [Event::Result, Event::HistoryChanged]);
+    assert_eq!(
+        step(&mut vm, B::Add),
+        [Event::Result, Event::HistoryChanged]
+    );
     // Unary function and percent are results; negating an operand is typing.
     assert_eq!(step(&mut vm, B::Nine), [Event::Typing]);
     assert_eq!(step(&mut vm, B::Sqrt), [Event::Result]);
@@ -682,26 +754,44 @@ fn events_for_typical_inputs() {
     assert_eq!(step(&mut vm, B::Decimal), [Event::Typing]);
     assert_eq!(step(&mut vm, B::Backspace), [Event::Typing]);
     // "-5 =" completes an equation of its own (history "-5 =").
-    assert_eq!(step(&mut vm, B::Equals), [Event::Result, Event::HistoryChanged]);
-    assert_eq!(step(&mut vm, B::Negate), [Event::Result], "negating a result is a unary operation");
+    assert_eq!(
+        step(&mut vm, B::Equals),
+        [Event::Result, Event::HistoryChanged]
+    );
+    assert_eq!(
+        step(&mut vm, B::Negate),
+        [Event::Result],
+        "negating a result is a unary operation"
+    );
     // Memory.
     assert_eq!(step(&mut vm, B::Memory), [Event::MemoryChanged]);
     assert_eq!(step(&mut vm, B::MemoryAdd), [Event::MemoryChanged]);
     // Recalling a number ends the unary-only line "negate(-5)", which
     // Standard mode records in history.
-    assert_eq!(step(&mut vm, B::MemoryRecall), [Event::Replace, Event::HistoryChanged]);
+    assert_eq!(
+        step(&mut vm, B::MemoryRecall),
+        [Event::Replace, Event::HistoryChanged]
+    );
     assert_eq!(step(&mut vm, B::MemoryClear), [Event::MemoryChanged]);
     // Errors.
     for b in [B::One, B::Divide, B::Zero] {
         step(&mut vm, b);
     }
     assert_eq!(step(&mut vm, B::Equals), [Event::Error]);
-    assert_eq!(step(&mut vm, B::Add), [Event::Replace], "an operator only clears the error");
+    assert_eq!(
+        step(&mut vm, B::Add),
+        [Event::Replace],
+        "an operator only clears the error"
+    );
     for b in [B::One, B::Divide, B::Zero] {
         step(&mut vm, b);
     }
     assert_eq!(step(&mut vm, B::Equals), [Event::Error]);
-    assert_eq!(step(&mut vm, B::Four), [Event::Typing], "a digit clears the error and is typed");
+    assert_eq!(
+        step(&mut vm, B::Four),
+        [Event::Typing],
+        "a digit clears the error and is typed"
+    );
 }
 
 #[test]
@@ -710,7 +800,10 @@ fn events_for_replacements() {
     vm.set_mode(CalcMode::Scientific);
     assert_eq!(vm.take_events(), [Event::Replace, Event::HistoryChanged]);
     vm.set_mode(CalcMode::Scientific);
-    assert!(!vm.take_events().contains(&Event::HistoryChanged), "same mode: nothing changes");
+    assert!(
+        !vm.take_events().contains(&Event::HistoryChanged),
+        "same mode: nothing changes"
+    );
 
     assert!(vm.paste("12"));
     assert_eq!(vm.take_events(), [Event::Replace]);
@@ -737,7 +830,11 @@ fn events_for_replacements() {
     vm.press(B::Memory);
     vm.take_events();
     vm.set_radix(Radix::Bin);
-    assert_eq!(vm.take_events(), [Event::Replace, Event::MemoryChanged], "memory is shown in the new radix");
+    assert_eq!(
+        vm.take_events(),
+        [Event::Replace, Event::MemoryChanged],
+        "memory is shown in the new radix"
+    );
     vm.set_word_size(WordSize::Word);
     assert_eq!(vm.take_events(), [Event::Replace]);
     vm.memory_clear(0);
@@ -746,9 +843,11 @@ fn events_for_replacements() {
     let state = vm.save_state();
     let mut other = new_vm();
     other.restore_state(&state);
-    assert_eq!(other.take_events(), [Event::Replace, Event::HistoryChanged, Event::MemoryChanged]);
+    assert_eq!(
+        other.take_events(),
+        [Event::Replace, Event::HistoryChanged, Event::MemoryChanged]
+    );
 }
-
 
 #[test]
 fn fe_is_disabled_after_a_history_recall_until_the_next_key() {
@@ -770,7 +869,17 @@ fn fe_is_disabled_after_a_history_recall_until_the_next_key() {
 fn scientific_expression_line() {
     let mut vm = new_vm();
     vm.set_mode(CalcMode::Scientific);
-    press_all(&mut vm, &[B::OpenParenthesis, B::One, B::Add, B::Two, B::CloseParenthesis, B::Multiply]);
+    press_all(
+        &mut vm,
+        &[
+            B::OpenParenthesis,
+            B::One,
+            B::Add,
+            B::Two,
+            B::CloseParenthesis,
+            B::Multiply,
+        ],
+    );
     assert_eq!(vm.expression(), "(1 + 2) × ");
     press_all(&mut vm, &[B::Three, B::Equals]);
     assert_eq!(vm.expression(), "(1 + 2) × 3=");
@@ -822,7 +931,10 @@ fn round_trip_recalled_value_is_not_lost() {
     // After MR the engine is not recording, so the display commands are empty;
     // the value is re-entered on restore.
     let mut vm = new_vm();
-    press_all(&mut vm, &[B::Four, B::Two, B::Memory, B::Clear, B::MemoryRecall]);
+    press_all(
+        &mut vm,
+        &[B::Four, B::Two, B::Memory, B::Clear, B::MemoryRecall],
+    );
     assert_eq!(vm.display_value(), "42");
     let mut restored = round_trip(&vm);
     press_all(&mut restored, &[B::Add, B::One, B::Equals]);
@@ -857,8 +969,14 @@ fn restored_error_survives_page_activation() {
 #[test]
 fn memory_round_trip_at_the_entry_limits() {
     let mut vm = new_vm();
-    press_all(&mut vm, &[B::One, B::Divide, B::Three, B::Equals, B::Memory]);
-    press_all(&mut vm, &[B::Two, B::Divide, B::Three, B::Equals, B::Negate, B::Memory]);
+    press_all(
+        &mut vm,
+        &[B::One, B::Divide, B::Three, B::Equals, B::Memory],
+    );
+    press_all(
+        &mut vm,
+        &[B::Two, B::Divide, B::Three, B::Equals, B::Negate, B::Memory],
+    );
     for _ in 0..2 {
         for _ in 0..8 {
             vm.press(B::Nine);
@@ -867,7 +985,23 @@ fn memory_round_trip_at_the_entry_limits() {
     }
     vm.press(B::Equals);
     vm.press(B::Memory);
-    press_all(&mut vm, &[B::One, B::Divide, B::Seven, B::Zero, B::Zero, B::Zero, B::Zero, B::Zero, B::Zero, B::Zero, B::Equals, B::Memory]);
+    press_all(
+        &mut vm,
+        &[
+            B::One,
+            B::Divide,
+            B::Seven,
+            B::Zero,
+            B::Zero,
+            B::Zero,
+            B::Zero,
+            B::Zero,
+            B::Zero,
+            B::Zero,
+            B::Equals,
+            B::Memory,
+        ],
+    );
     let memory = vm.memory();
     assert_eq!(memory.len(), 4, "{memory:?}");
     let restored = round_trip(&vm);

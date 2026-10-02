@@ -26,7 +26,11 @@ impl CalcDisplay for Ui {
     fn set_is_in_error(&mut self, is_in_error: bool) {
         self.is_error = is_in_error;
     }
-    fn set_expression_display(&mut self, tokens: &[ExpressionToken], _commands: &[ExpressionCommand]) {
+    fn set_expression_display(
+        &mut self,
+        tokens: &[ExpressionToken],
+        _commands: &[ExpressionCommand],
+    ) {
         self.expression = tokens.iter().map(|t| t.0.as_str()).collect();
     }
     fn set_parenthesis_number(&mut self, count: u32) {
@@ -62,7 +66,14 @@ fn close_paren_after_implicit_multiplication_does_not_underflow() {
     let (ui, mut mgr) = scientific();
     send_all(
         &mut mgr,
-        &[Command::CommandOPENP, Command::CommandOPENP, Command::Command8, Command::CommandCLOSEP, Command::Command2, Command::CommandCLOSEP],
+        &[
+            Command::CommandOPENP,
+            Command::CommandOPENP,
+            Command::Command8,
+            Command::CommandCLOSEP,
+            Command::Command2,
+            Command::CommandCLOSEP,
+        ],
     );
     assert_eq!(ui.borrow().paren, 0);
     assert_eq!(ui.borrow().primary, "16");
@@ -91,7 +102,16 @@ fn close_paren_after_implicit_multiplication_does_not_underflow() {
     assert!(!ui.borrow().is_error);
     assert_eq!(ui.borrow().paren, 0);
     // Calculator still works afterwards.
-    send_all(&mut mgr, &[Command::CommandCLEAR, Command::Command1, Command::CommandADD, Command::Command2, Command::CommandEQU]);
+    send_all(
+        &mut mgr,
+        &[
+            Command::CommandCLEAR,
+            Command::Command1,
+            Command::CommandADD,
+            Command::Command2,
+            Command::CommandEQU,
+        ],
+    );
     assert_eq!(ui.borrow().primary, "3");
 }
 
@@ -127,7 +147,16 @@ fn equals_with_full_precedence_stack_terminates() {
     mgr.send_command(Command::Command2).unwrap();
     mgr.send_command(Command::CommandEQU).unwrap();
     // Recovers normally.
-    send_all(&mut mgr, &[Command::CommandCLEAR, Command::Command6, Command::CommandDIV, Command::Command3, Command::CommandEQU]);
+    send_all(
+        &mut mgr,
+        &[
+            Command::CommandCLEAR,
+            Command::Command6,
+            Command::CommandDIV,
+            Command::Command3,
+            Command::CommandEQU,
+        ],
+    );
     assert_eq!(ui.borrow().primary, "2");
 }
 
@@ -171,7 +200,15 @@ fn history_queries_in_programmer_mode_without_history() {
     assert!(!mgr.remove_history_item(0));
     mgr.clear_history();
     assert_eq!(mgr.max_history_size(), 20);
-    send_all(&mut mgr, &[Command::CommandA, Command::CommandXor, Command::Command3, Command::CommandEQU]);
+    send_all(
+        &mut mgr,
+        &[
+            Command::CommandA,
+            Command::CommandXor,
+            Command::Command3,
+            Command::CommandEQU,
+        ],
+    );
     assert_eq!(ui.borrow().primary, "3");
 }
 

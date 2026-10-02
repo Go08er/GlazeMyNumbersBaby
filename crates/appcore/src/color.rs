@@ -165,7 +165,10 @@ pub fn readable_gradient(a: Rgb, b: Rgb, light: Rgb, dark: Rgb, target: f32) -> 
 /// `target` at both ends and the midpoint.
 pub fn gradient_for_text(text: Rgb, a: Rgb, b: Rgb, target: f32) -> (Rgb, Rgb) {
     let stops = |a, b| [a, b, mix(a, b, 0.5)];
-    let (mut a, mut b) = (with_contrast(a, text, target), with_contrast(b, text, target));
+    let (mut a, mut b) = (
+        with_contrast(a, text, target),
+        with_contrast(b, text, target),
+    );
     // The sRGB midpoint can be lighter than both stops; tighten until it passes.
     let mut extra = target;
     for _ in 0..40 {

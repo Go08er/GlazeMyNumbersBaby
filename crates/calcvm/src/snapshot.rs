@@ -41,12 +41,12 @@
 use std::rc::Rc;
 
 use calcmanager::{
-    BinaryCommand, CalculatorMode, ExpressionCommand, ExpressionToken, HistoryItem, HistoryItemVector, OpndCommand,
-    Parentheses, UnaryCommand,
+    BinaryCommand, CalculatorMode, ExpressionCommand, ExpressionToken, HistoryItem,
+    HistoryItemVector, OpndCommand, Parentheses, UnaryCommand,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
-use crate::standard_vm::{cmd, paste_command_id, StandardCalculatorViewModel};
+use crate::standard_vm::{StandardCalculatorViewModel, cmd, paste_command_id};
 use crate::{AngleUnit, CalcMode, Radix, ShiftMode, WordSize};
 
 // ---------------------------------------------------------------------------
@@ -58,22 +58,35 @@ use crate::{AngleUnit, CalcMode, Radix, ShiftMode, WordSize};
 pub(crate) enum ExpressionCommandWrapper {
     Unary(Vec<i32>),
     Binary(i32),
-    Operand { commands: Vec<i32>, is_negative: bool, is_decimal_present: bool, is_sci_fmt: bool },
+    Operand {
+        commands: Vec<i32>,
+        is_negative: bool,
+        is_decimal_present: bool,
+        is_sci_fmt: bool,
+    },
     Parentheses(i32),
 }
 
 impl ExpressionCommandWrapper {
     pub(crate) fn from_command(command: &ExpressionCommand) -> Self {
         match command {
-            ExpressionCommand::Unary(u) => ExpressionCommandWrapper::Unary(u.get_commands().to_vec()),
+            ExpressionCommand::Unary(u) => {
+                ExpressionCommandWrapper::Unary(u.get_commands().to_vec())
+            }
             ExpressionCommand::Binary(b) => ExpressionCommandWrapper::Binary(b.get_command()),
             ExpressionCommand::Operand(o) => ExpressionCommandWrapper::Operand {
-                commands: o.get_commands().iter().map(|&c| normalize_operand_digit(c)).collect(),
+                commands: o
+                    .get_commands()
+                    .iter()
+                    .map(|&c| normalize_operand_digit(c))
+                    .collect(),
                 is_negative: o.is_negative(),
                 is_decimal_present: o.is_decimal_present(),
                 is_sci_fmt: o.is_sci_fmt(),
             },
-            ExpressionCommand::Parentheses(p) => ExpressionCommandWrapper::Parentheses(p.get_command()),
+            ExpressionCommand::Parentheses(p) => {
+                ExpressionCommandWrapper::Parentheses(p.get_command())
+            }
         }
     }
 
@@ -88,11 +101,23 @@ impl ExpressionCommandWrapper {
                     ExpressionCommand::Unary(UnaryCommand::new(c.first().copied().unwrap_or(0)))
                 }
             }
-            ExpressionCommandWrapper::Binary(c) => ExpressionCommand::Binary(BinaryCommand::new(*c)),
-            ExpressionCommandWrapper::Operand { commands, is_negative, is_decimal_present, is_sci_fmt } => {
-                ExpressionCommand::Operand(OpndCommand::new(commands.clone(), *is_negative, *is_decimal_present, *is_sci_fmt))
+            ExpressionCommandWrapper::Binary(c) => {
+                ExpressionCommand::Binary(BinaryCommand::new(*c))
             }
-            ExpressionCommandWrapper::Parentheses(c) => ExpressionCommand::Parentheses(Parentheses::new(*c)),
+            ExpressionCommandWrapper::Operand {
+                commands,
+                is_negative,
+                is_decimal_present,
+                is_sci_fmt,
+            } => ExpressionCommand::Operand(OpndCommand::new(
+                commands.clone(),
+                *is_negative,
+                *is_decimal_present,
+                *is_sci_fmt,
+            )),
+            ExpressionCommandWrapper::Parentheses(c) => {
+                ExpressionCommand::Parentheses(Parentheses::new(*c))
+            }
         }
     }
 }
@@ -104,7 +129,11 @@ impl ExpressionCommandWrapper {
 fn normalize_operand_digit(command: i32) -> i32 {
     const BOGUS_A: i32 = cmd::ZERO + ('A' as i32 - '0' as i32);
     const BOGUS_F: i32 = cmd::ZERO + ('F' as i32 - '0' as i32);
-    if (BOGUS_A..=BOGUS_F).contains(&command) { command - BOGUS_A + cmd::A } else { command }
+    if (BOGUS_A..=BOGUS_F).contains(&command) {
+        command - BOGUS_A + cmd::A
+    } else {
+        command
+    }
 }
 
 /// `CalcManagerToken`
@@ -127,8 +156,19 @@ impl CalcManagerHistoryItem {
     fn from_history_item(item: &HistoryItem) -> Self {
         let v = &item.history_item_vector;
         CalcManagerHistoryItem {
-            tokens: v.tokens.iter().map(|(t, c)| CalcManagerToken { op_code_name: t.clone(), command_index: *c }).collect(),
-            commands: v.commands.iter().map(ExpressionCommandWrapper::from_command).collect(),
+            tokens: v
+                .tokens
+                .iter()
+                .map(|(t, c)| CalcManagerToken {
+                    op_code_name: t.clone(),
+                    command_index: *c,
+                })
+                .collect(),
+            commands: v
+                .commands
+                .iter()
+                .map(ExpressionCommandWrapper::from_command)
+                .collect(),
             expression: v.expression.clone(),
             result: v.result.clone(),
         }
@@ -138,7 +178,11 @@ impl CalcManagerHistoryItem {
         Rc::new(HistoryItem {
             history_item_vector: HistoryItemVector {
                 tokens: tokens_to_engine(&self.tokens),
-                commands: self.commands.iter().map(ExpressionCommandWrapper::to_command).collect(),
+                commands: self
+                    .commands
+                    .iter()
+                    .map(ExpressionCommandWrapper::to_command)
+                    .collect(),
                 expression: self.expression.clone(),
                 result: self.result.clone(),
             },
@@ -198,11 +242,20 @@ pub(crate) struct ApplicationSnapshot {
 }
 
 fn tokens_to_engine(tokens: &[CalcManagerToken]) -> Vec<ExpressionToken> {
-    tokens.iter().map(|t| (t.op_code_name.clone(), t.command_index)).collect()
+    tokens
+        .iter()
+        .map(|t| (t.op_code_name.clone(), t.command_index))
+        .collect()
 }
 
 fn tokens_from_engine(tokens: &[ExpressionToken]) -> Vec<CalcManagerToken> {
-    tokens.iter().map(|(t, c)| CalcManagerToken { op_code_name: t.clone(), command_index: *c }).collect()
+    tokens
+        .iter()
+        .map(|(t, c)| CalcManagerToken {
+            op_code_name: t.clone(),
+            command_index: *c,
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -214,7 +267,12 @@ fn tokens_from_engine(tokens: &[ExpressionToken]) -> Vec<CalcManagerToken> {
 pub(crate) struct ExpressionCommandSerializer;
 
 impl ExpressionCommandSerializer {
-    pub(crate) fn serialize_operand(is_negative: bool, is_decimal_present: bool, is_sci_fmt: bool, commands: &[i32]) -> Value {
+    pub(crate) fn serialize_operand(
+        is_negative: bool,
+        is_decimal_present: bool,
+        is_sci_fmt: bool,
+        commands: &[i32],
+    ) -> Value {
         json!({ "$t": 2, "n": is_negative, "d": is_decimal_present, "s": is_sci_fmt, "c": commands })
     }
 
@@ -234,9 +292,12 @@ impl ExpressionCommandSerializer {
         match command {
             ExpressionCommandWrapper::Unary(c) => Self::serialize_unary(c),
             ExpressionCommandWrapper::Binary(c) => Self::serialize_binary(*c),
-            ExpressionCommandWrapper::Operand { commands, is_negative, is_decimal_present, is_sci_fmt } => {
-                Self::serialize_operand(*is_negative, *is_decimal_present, *is_sci_fmt, commands)
-            }
+            ExpressionCommandWrapper::Operand {
+                commands,
+                is_negative,
+                is_decimal_present,
+                is_sci_fmt,
+            } => Self::serialize_operand(*is_negative, *is_decimal_present, *is_sci_fmt, commands),
             ExpressionCommandWrapper::Parentheses(c) => Self::serialize_parentheses(*c),
         }
     }
@@ -250,7 +311,10 @@ type SnapResult<T> = Result<T, String>;
 impl ExpressionCommandDeserializer {
     pub(crate) fn deserialize(value: &Value) -> SnapResult<ExpressionCommandWrapper> {
         let obj = value.as_object().ok_or("command is not an object")?;
-        let tag = obj.get("$t").and_then(Value::as_i64).ok_or("command has no type discriminator")?;
+        let tag = obj
+            .get("$t")
+            .and_then(Value::as_i64)
+            .ok_or("command has no type discriminator")?;
         match tag {
             0 => {
                 // Unary commands require one or two command codes.
@@ -276,7 +340,10 @@ impl ExpressionCommandDeserializer {
 fn int(v: Option<&Value>) -> SnapResult<i32> {
     match v {
         None => Ok(0),
-        Some(v) => v.as_i64().and_then(|i| i32::try_from(i).ok()).ok_or_else(|| "expected an int32".to_string()),
+        Some(v) => v
+            .as_i64()
+            .and_then(|i| i32::try_from(i).ok())
+            .ok_or_else(|| "expected an int32".to_string()),
     }
 }
 
@@ -312,7 +379,8 @@ fn list<T>(v: Option<&Value>, f: impl Fn(&Value) -> SnapResult<T>) -> SnapResult
 }
 
 fn object(v: &Value) -> SnapResult<&Map<String, Value>> {
-    v.as_object().ok_or_else(|| "expected an object".to_string())
+    v.as_object()
+        .ok_or_else(|| "expected an object".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -325,11 +393,18 @@ fn token_to_json(t: &CalcManagerToken) -> Value {
 
 fn token_from_json(v: &Value) -> SnapResult<CalcManagerToken> {
     let o = object(v)?;
-    Ok(CalcManagerToken { op_code_name: string(o.get("t"))?.unwrap_or_default(), command_index: int(o.get("c"))? })
+    Ok(CalcManagerToken {
+        op_code_name: string(o.get("t"))?.unwrap_or_default(),
+        command_index: int(o.get("c"))?,
+    })
 }
 
 fn commands_to_json(c: &[ExpressionCommandWrapper]) -> Value {
-    Value::Array(c.iter().map(ExpressionCommandSerializer::serialize).collect())
+    Value::Array(
+        c.iter()
+            .map(ExpressionCommandSerializer::serialize)
+            .collect(),
+    )
 }
 
 fn history_item_to_json(h: &CalcManagerHistoryItem) -> Value {
@@ -437,7 +512,11 @@ impl ApplicationSnapshot {
     pub(crate) fn from_json(text: &str) -> SnapResult<ApplicationSnapshot> {
         let v: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
         let root = object(&v)?;
-        let mode = root.get("m").map(|m| m.as_i64().ok_or("mode is not an integer")).transpose()?.unwrap_or(0);
+        let mode = root
+            .get("m")
+            .map(|m| m.as_i64().ok_or("mode is not an integer"))
+            .transpose()?
+            .unwrap_or(0);
 
         let standard_calculator = match root.get("s") {
             None | Some(Value::Null) => None,
@@ -445,14 +524,19 @@ impl ApplicationSnapshot {
                 let s = object(s)?;
                 let calc_manager = match s.get("m") {
                     None | Some(Value::Null) => CalcManagerSnapshot::default(),
-                    Some(m) => CalcManagerSnapshot { history_items: list(object(m)?.get("h"), history_item_from_json)? },
+                    Some(m) => CalcManagerSnapshot {
+                        history_items: list(object(m)?.get("h"), history_item_from_json)?,
+                    },
                 };
                 let primary_display = match s.get("p") {
-                    None | Some(Value::Null) => return Err("Primary display state is missing.".into()),
+                    None | Some(Value::Null) => {
+                        return Err("Primary display state is missing.".into());
+                    }
                     Some(p) => {
                         let p = object(p)?;
                         PrimaryDisplaySnapshot {
-                            display_value: string(p.get("d"))?.ok_or("Primary display state is missing.")?,
+                            display_value: string(p.get("d"))?
+                                .ok_or("Primary display state is missing.")?,
                             is_error: boolean(p.get("e"))?,
                         }
                     }
@@ -462,14 +546,22 @@ impl ApplicationSnapshot {
                     Some(e) => {
                         let e = object(e)?;
                         Some(ExpressionDisplaySnapshot {
-                            tokens: list(e.get("t"), token_from_json)?.ok_or("expression has no token list")?,
+                            tokens: list(e.get("t"), token_from_json)?
+                                .ok_or("expression has no token list")?,
                             commands: list(e.get("c"), ExpressionCommandDeserializer::deserialize)?
                                 .ok_or("expression has no command list")?,
                         })
                     }
                 };
-                let display_commands = list(s.get("c"), ExpressionCommandDeserializer::deserialize)?.unwrap_or_default();
-                Some(StandardCalculatorSnapshot { calc_manager, primary_display, expression_display, display_commands })
+                let display_commands =
+                    list(s.get("c"), ExpressionCommandDeserializer::deserialize)?
+                        .unwrap_or_default();
+                Some(StandardCalculatorSnapshot {
+                    calc_manager,
+                    primary_display,
+                    expression_display,
+                    display_commands,
+                })
             }
         };
 
@@ -477,8 +569,12 @@ impl ApplicationSnapshot {
             None | Some(Value::Null) => None,
             Some(x) => {
                 let x = object(x)?;
-                let memory = list(x.get("mem"), |v| v.as_str().map(str::to_string).ok_or_else(|| "memory entry is not a string".to_string()))?
-                    .unwrap_or_default();
+                let memory = list(x.get("mem"), |v| {
+                    v.as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| "memory entry is not a string".to_string())
+                })?
+                .unwrap_or_default();
                 let radix = match string(x.get("r"))?.as_deref() {
                     None => None,
                     Some("hex") => Some(Radix::Hex),
@@ -525,7 +621,11 @@ impl ApplicationSnapshot {
             }
         };
 
-        Ok(ApplicationSnapshot { mode, standard_calculator, extension })
+        Ok(ApplicationSnapshot {
+            mode,
+            standard_calculator,
+            extension,
+        })
     }
 }
 
@@ -560,7 +660,12 @@ impl SnapshotValidator {
             all_history.push(("history item", h));
         }
         if let Some(x) = &snapshot.extension {
-            for h in x.standard_history.iter().flatten().chain(x.scientific_history.iter().flatten()) {
+            for h in x
+                .standard_history
+                .iter()
+                .flatten()
+                .chain(x.scientific_history.iter().flatten())
+            {
                 all_history.push(("history item", h));
             }
         }
@@ -578,9 +683,17 @@ impl SnapshotValidator {
     /// input.
     pub(crate) fn validate_protocol(snapshot: &ApplicationSnapshot) -> SnapResult<()> {
         Self::validate(snapshot)?;
-        let standard = snapshot.standard_calculator.as_ref().ok_or("Calculator snapshot state is missing.")?;
+        let standard = snapshot
+            .standard_calculator
+            .as_ref()
+            .ok_or("Calculator snapshot state is missing.")?;
 
-        let mut histories: Vec<&CalcManagerHistoryItem> = standard.calc_manager.history_items.iter().flatten().collect();
+        let mut histories: Vec<&CalcManagerHistoryItem> = standard
+            .calc_manager
+            .history_items
+            .iter()
+            .flatten()
+            .collect();
         if let Some(x) = &snapshot.extension {
             histories.extend(x.standard_history.iter().flatten());
             histories.extend(x.scientific_history.iter().flatten());
@@ -596,10 +709,16 @@ impl SnapshotValidator {
         Self::validate_commands(&standard.display_commands, "display")
     }
 
-    fn validate_token_indexes(tokens: &[CalcManagerToken], commands: &[ExpressionCommandWrapper], location: &str) -> SnapResult<()> {
+    fn validate_token_indexes(
+        tokens: &[CalcManagerToken],
+        commands: &[ExpressionCommandWrapper],
+        location: &str,
+    ) -> SnapResult<()> {
         for (i, token) in tokens.iter().enumerate() {
             if token.command_index < -1 || token.command_index >= commands.len() as i32 {
-                return Err(format!("{location} token {i} does not reference a command."));
+                return Err(format!(
+                    "{location} token {i} does not reference a command."
+                ));
             }
         }
         Ok(())
@@ -610,7 +729,9 @@ impl SnapshotValidator {
             let is_valid = match command {
                 ExpressionCommandWrapper::Unary(c) => Self::is_valid_unary_command(c),
                 ExpressionCommandWrapper::Binary(c) => Self::is_valid_binary_command(*c),
-                ExpressionCommandWrapper::Operand { commands, .. } => Self::is_valid_operand_command(commands),
+                ExpressionCommandWrapper::Operand { commands, .. } => {
+                    Self::is_valid_operand_command(commands)
+                }
                 ExpressionCommandWrapper::Parentheses(c) => *c == cmd::OPENP || *c == cmd::CLOSEP,
             };
             if !is_valid {
@@ -648,9 +769,12 @@ impl SnapshotValidator {
 
     fn is_valid_operand_command(commands: &[i32]) -> bool {
         !commands.is_empty()
-            && commands
-                .iter()
-                .all(|&c| c == cmd::SIGN || c == cmd::PNT || c == cmd::EXP || (cmd::ZERO..=cmd::F).contains(&c))
+            && commands.iter().all(|&c| {
+                c == cmd::SIGN
+                    || c == cmd::PNT
+                    || c == cmd::EXP
+                    || (cmd::ZERO..=cmd::F).contains(&c)
+            })
     }
 }
 
@@ -673,7 +797,14 @@ impl StandardCalculatorViewModel {
         if items.is_empty() {
             return CalcManagerSnapshot::default();
         }
-        CalcManagerSnapshot { history_items: Some(items.iter().map(|h| CalcManagerHistoryItem::from_history_item(h)).collect()) }
+        CalcManagerSnapshot {
+            history_items: Some(
+                items
+                    .iter()
+                    .map(|h| CalcManagerHistoryItem::from_history_item(h))
+                    .collect(),
+            ),
+        }
     }
 
     /// `RestoreHistoryItems(CalcManagerSnapshot)`
@@ -681,7 +812,10 @@ impl StandardCalculatorViewModel {
         let Some(items) = items else {
             return;
         };
-        let restored: Vec<Rc<HistoryItem>> = items.iter().map(CalcManagerHistoryItem::to_history_item).collect();
+        let restored: Vec<Rc<HistoryItem>> = items
+            .iter()
+            .map(CalcManagerHistoryItem::to_history_item)
+            .collect();
         self.with_manager(|m| m.set_history_items(&restored));
     }
 
@@ -690,13 +824,20 @@ impl StandardCalculatorViewModel {
     pub(crate) fn snapshot(&self) -> ApplicationSnapshot {
         let mut result = StandardCalculatorSnapshot {
             calc_manager: self.capture_calc_manager_snapshot(),
-            primary_display: PrimaryDisplaySnapshot { display_value: self.display_value.clone(), is_error: self.is_in_error },
+            primary_display: PrimaryDisplaySnapshot {
+                display_value: self.display_value.clone(),
+                is_error: self.is_in_error,
+            },
             ..Default::default()
         };
         if !self.tokens.is_empty() && !self.commands.is_empty() {
             result.expression_display = Some(ExpressionDisplaySnapshot {
                 tokens: tokens_from_engine(&self.tokens),
-                commands: self.commands.iter().map(ExpressionCommandWrapper::from_command).collect(),
+                commands: self
+                    .commands
+                    .iter()
+                    .map(ExpressionCommandWrapper::from_command)
+                    .collect(),
             });
         }
         result.display_commands = self
@@ -707,13 +848,24 @@ impl StandardCalculatorViewModel {
             .collect();
 
         let history_for = |mode| {
-            let items = self.standard_calculator_manager.get_history_items_for_mode(mode);
-            Some(items.iter().map(|h| CalcManagerHistoryItem::from_history_item(h)).collect::<Vec<_>>())
+            let items = self
+                .standard_calculator_manager
+                .get_history_items_for_mode(mode);
+            Some(
+                items
+                    .iter()
+                    .map(|h| CalcManagerHistoryItem::from_history_item(h))
+                    .collect::<Vec<_>>(),
+            )
         };
         let extension = SnapshotExtension {
             standard_history: history_for(CalculatorMode::Standard),
             scientific_history: history_for(CalculatorMode::Scientific),
-            memory: self.memorized_numbers.iter().map(|m| m.value.clone()).collect(),
+            memory: self
+                .memorized_numbers
+                .iter()
+                .map(|m| m.value.clone())
+                .collect(),
             radix: Some(self.current_radix_type),
             word_size: Some(self.value_bit_length),
             angle: Some(self.angle_unit()),
@@ -731,7 +883,11 @@ impl StandardCalculatorViewModel {
     /// `Snapshot` setter, extended with the gmnb extension. The mode has
     /// already been switched to the snapshot's (`RestoreFromSnapshot` sets
     /// `Mode` first).
-    pub(crate) fn restore_snapshot(&mut self, snapshot: &StandardCalculatorSnapshot, extension: Option<&SnapshotExtension>) {
+    pub(crate) fn restore_snapshot(
+        &mut self,
+        snapshot: &StandardCalculatorSnapshot,
+        extension: Option<&SnapshotExtension>,
+    ) {
         // Recall starts a separate session, including empty memory.
         let mode = self.get_calculator_mode();
         let _ = self.with_manager(|m| m.reset(true));
@@ -766,7 +922,11 @@ impl StandardCalculatorViewModel {
 
         if let Some(expression_display) = &snapshot.expression_display {
             let tokens = tokens_to_engine(&expression_display.tokens);
-            let commands: Vec<ExpressionCommand> = expression_display.commands.iter().map(ExpressionCommandWrapper::to_command).collect();
+            let commands: Vec<ExpressionCommand> = expression_display
+                .commands
+                .iter()
+                .map(ExpressionCommandWrapper::to_command)
+                .collect();
             if snapshot.display_commands.is_empty() && mode == CalcMode::Programmer {
                 // Deviation: `Recalculate` (below) resets every engine and
                 // continues in the Standard one; upstream only ever uses it
@@ -844,7 +1004,10 @@ impl StandardCalculatorViewModel {
     }
 
     fn replay(&mut self, commands: &[ExpressionCommandWrapper]) {
-        let commands: Vec<ExpressionCommand> = commands.iter().map(ExpressionCommandWrapper::to_command).collect();
+        let commands: Vec<ExpressionCommand> = commands
+            .iter()
+            .map(ExpressionCommandWrapper::to_command)
+            .collect();
         for c in crate::standard_vm::get_commands_from_expression_commands(&commands) {
             self.send_command(c);
         }

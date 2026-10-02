@@ -9,7 +9,9 @@
 //! (a XAML command-parameter helper). `DisplayValue = "1001"` (a test-only
 //! setter upstream) is replaced by typing 1001.
 
-use super::{change_mode, new_vm, validate_value_and_expression, validate_view_model_by_commands, TestItem};
+use super::{
+    TestItem, change_mode, new_vm, validate_value_and_expression, validate_view_model_by_commands,
+};
 use crate::{Button as N, CalcMode, Radix};
 
 const DEC: &str = ".";
@@ -29,7 +31,12 @@ fn view_model_constructor_display_value_and_expression_initialized_test() {
 #[test]
 fn button_pressed_left_hand_operand_entered_test() {
     let mut vm = new_vm();
-    let items = [TestItem(N::One, "1", ""), TestItem(N::Three, "13", ""), TestItem(N::Five, "135", ""), TestItem(N::None, "", "")];
+    let items = [
+        TestItem(N::One, "1", ""),
+        TestItem(N::Three, "13", ""),
+        TestItem(N::Five, "135", ""),
+        TestItem(N::None, "", ""),
+    ];
     validate_view_model_by_commands(&mut vm, &items, true);
 }
 
@@ -37,7 +44,12 @@ fn button_pressed_left_hand_operand_entered_test() {
 #[test]
 fn button_pressed_left_hand_operand_and_decimal_entered_test() {
     let mut vm = new_vm();
-    let items = [TestItem(N::One, "1", ""), TestItem(N::Three, "13", ""), TestItem(N::Decimal, "13.", ""), TestItem(N::None, "", "")];
+    let items = [
+        TestItem(N::One, "1", ""),
+        TestItem(N::Three, "13", ""),
+        TestItem(N::Decimal, "13.", ""),
+        TestItem(N::None, "", ""),
+    ];
     validate_view_model_by_commands(&mut vm, &items, true);
     assert_eq!(DEC, ".");
 }
@@ -60,7 +72,12 @@ fn button_pressed_left_hand_operand_and_equals_entered_test() {
 #[test]
 fn button_pressed_left_hand_operand_and_operation_entered_test() {
     let mut vm = new_vm();
-    let items = [TestItem(N::One, "1", ""), TestItem(N::Three, "13", ""), TestItem(N::Add, "13", "13 + "), TestItem(N::None, "", "")];
+    let items = [
+        TestItem(N::One, "1", ""),
+        TestItem(N::Three, "13", ""),
+        TestItem(N::Add, "13", "13 + "),
+        TestItem(N::None, "", ""),
+    ];
     validate_view_model_by_commands(&mut vm, &items, true);
     validate_value_and_expression(&vm, Some("13"), Some("13 + "));
 }
@@ -260,7 +277,7 @@ fn button_pressed_expression_with_clear_test() {
 // copypaste crate, which `paste` uses).
 #[test]
 fn verify_correct_character_mapping() {
-    use copypaste::{map_character_to_button_id, PasteCommand, PasteLocale, ViewMode};
+    use copypaste::{PasteCommand, PasteLocale, ViewMode, map_character_to_button_id};
     let map = |c| map_character_to_button_id(c, ViewMode::Standard, &PasteLocale::EN_US).button_id;
     assert_eq!(map('0'), Some(PasteCommand::Digit(0)));
     assert_eq!(map('1'), Some(PasteCommand::Digit(1)));
@@ -417,7 +434,11 @@ fn programmer_mode_auto_converted_value() {
     validate_view_model_by_commands(&mut vm, &[TestItem(N::None, "", "")], true);
     vm.set_mode(CalcMode::Programmer);
 
-    let items = [TestItem(N::HexButton, "0", ""), TestItem(N::F, "F", ""), TestItem(N::None, "", "")];
+    let items = [
+        TestItem(N::HexButton, "0", ""),
+        TestItem(N::F, "F", ""),
+        TestItem(N::None, "", ""),
+    ];
     validate_view_model_by_commands(&mut vm, &items, false);
     assert_eq!(vm.radix_value(Radix::Hex), "F");
     assert_eq!(vm.radix_value(Radix::Dec), "15");
@@ -436,16 +457,28 @@ fn programmer_mode_buttons_disable() {
 
     // Hex accepts A-F; the other radices do not, and the keypad reflects that.
     vm.set_radix(Radix::Hex);
-    assert!(vm.is_enabled(N::A), "Hex digits should be available in hex.");
+    assert!(
+        vm.is_enabled(N::A),
+        "Hex digits should be available in hex."
+    );
 
     vm.set_radix(Radix::Dec);
-    assert!(!vm.is_enabled(N::A), "Hex digits should be unavailable in decimal.");
+    assert!(
+        !vm.is_enabled(N::A),
+        "Hex digits should be unavailable in decimal."
+    );
 
     vm.set_radix(Radix::Oct);
-    assert!(!vm.is_enabled(N::A), "Hex digits should be unavailable in octal.");
+    assert!(
+        !vm.is_enabled(N::A),
+        "Hex digits should be unavailable in octal."
+    );
 
     vm.set_radix(Radix::Bin);
-    assert!(!vm.is_enabled(N::A), "Hex digits should be unavailable in binary.");
+    assert!(
+        !vm.is_enabled(N::A),
+        "Hex digits should be unavailable in binary."
+    );
 }
 
 #[test]
@@ -470,7 +503,10 @@ fn programmer_mode_radix_grouping() {
     assert_eq!(vm.radix_value(Radix::Hex), "75B CD15");
     assert_eq!(vm.radix_value(Radix::Dec), "123,456,789");
     assert_eq!(vm.radix_value(Radix::Oct), "726 746 425");
-    assert_eq!(vm.radix_value(Radix::Bin), "0111 0101 1011 1100 1101 0001 0101");
+    assert_eq!(
+        vm.radix_value(Radix::Bin),
+        "0111 0101 1011 1100 1101 0001 0101"
+    );
 
     let mut val = vec![false; 64];
     for i in [0, 2, 4, 8, 10, 11, 14, 15, 16, 17, 19, 20, 22, 24, 25, 26] {
@@ -485,7 +521,11 @@ fn programmer_mode_not() {
     validate_view_model_by_commands(&mut vm, &[TestItem(N::None, "", "")], true);
     vm.set_mode(CalcMode::Programmer);
 
-    let items = [TestItem(N::One, "1", ""), TestItem(N::Not, "-2", "~(1)"), TestItem(N::None, "N/A", "N/A")];
+    let items = [
+        TestItem(N::One, "1", ""),
+        TestItem(N::Not, "-2", "~(1)"),
+        TestItem(N::None, "N/A", "N/A"),
+    ];
     validate_view_model_by_commands(&mut vm, &items, false);
     assert_eq!(vm.radix_value(Radix::Hex), "FFFF FFFF FFFF FFFE");
     assert_eq!(vm.radix_value(Radix::Dec), "-2");
@@ -567,11 +607,21 @@ fn button_pressed_unary_operator_test() {
     ];
     validate_view_model_by_commands(&mut vm, &items, true);
 
-    let items2 = [TestItem(N::One, "1", ""), TestItem(N::Six, "16", ""), TestItem(N::Sqrt, "4", "sqrt(16)"), TestItem(N::None, "", "")];
+    let items2 = [
+        TestItem(N::One, "1", ""),
+        TestItem(N::Six, "16", ""),
+        TestItem(N::Sqrt, "4", "sqrt(16)"),
+        TestItem(N::None, "", ""),
+    ];
     validate_view_model_by_commands(&mut vm, &items2, false);
     assert_eq!(vm.expression(), "√(16)");
 
-    let items3 = [TestItem(N::Six, "6", ""), TestItem(N::Negate, "-6", ""), TestItem(N::Nine, "-69", ""), TestItem(N::None, "", "")];
+    let items3 = [
+        TestItem(N::Six, "6", ""),
+        TestItem(N::Negate, "-6", ""),
+        TestItem(N::Nine, "-69", ""),
+        TestItem(N::None, "", ""),
+    ];
     validate_view_model_by_commands(&mut vm, &items3, false);
 
     let items4 = [
@@ -583,7 +633,12 @@ fn button_pressed_unary_operator_test() {
     ];
     validate_view_model_by_commands(&mut vm, &items4, false);
 
-    let items5 = [TestItem(N::Clear, "0", ""), TestItem(N::Four, "4", ""), TestItem(N::Factorial, "24", "fact(4)"), TestItem(N::None, "", "")];
+    let items5 = [
+        TestItem(N::Clear, "0", ""),
+        TestItem(N::Four, "4", ""),
+        TestItem(N::Factorial, "24", "fact(4)"),
+        TestItem(N::None, "", ""),
+    ];
     validate_view_model_by_commands(&mut vm, &items5, false);
     assert_eq!(vm.expression(), "fact(4)");
 }
@@ -621,7 +676,19 @@ fn is_operator_command_test() {
         vm.press(b);
         assert_eq!(vm.vm.is_operator_command(), expected, "{b:?}");
     };
-    for b in [N::One, N::Two, N::Three, N::Four, N::Five, N::Six, N::Seven, N::Eight, N::Nine, N::Decimal, N::Zero] {
+    for b in [
+        N::One,
+        N::Two,
+        N::Three,
+        N::Four,
+        N::Five,
+        N::Six,
+        N::Seven,
+        N::Eight,
+        N::Nine,
+        N::Decimal,
+        N::Zero,
+    ] {
         check(&mut vm, b, false);
     }
     check(&mut vm, N::Multiply, true);
@@ -734,7 +801,12 @@ fn on_decimal_added_to_memory() {
 fn on_memory_saved_in_hex_radix_and_switched_to_standard_mode() {
     let mut vm = new_vm();
     change_mode(&mut vm, CalcMode::Programmer);
-    let items = [TestItem(N::HexButton, "0", ""), TestItem(N::F, "F", ""), TestItem(N::F, "FF", ""), TestItem(N::None, "FF", "")];
+    let items = [
+        TestItem(N::HexButton, "0", ""),
+        TestItem(N::F, "F", ""),
+        TestItem(N::F, "FF", ""),
+        TestItem(N::None, "FF", ""),
+    ];
     validate_view_model_by_commands(&mut vm, &items, true);
     vm.press(N::Memory);
     change_mode(&mut vm, CalcMode::Scientific);
@@ -747,7 +819,12 @@ fn on_memory_saved_in_hex_radix_and_switched_to_standard_mode() {
 fn on_memory_saved_in_hex_radix_and_radix_changes() {
     let mut vm = new_vm();
     change_mode(&mut vm, CalcMode::Programmer);
-    let items = [TestItem(N::HexButton, "0", ""), TestItem(N::F, "F", ""), TestItem(N::F, "FF", ""), TestItem(N::None, "FF", "")];
+    let items = [
+        TestItem(N::HexButton, "0", ""),
+        TestItem(N::F, "F", ""),
+        TestItem(N::F, "FF", ""),
+        TestItem(N::None, "FF", ""),
+    ];
     validate_view_model_by_commands(&mut vm, &items, true);
     vm.press(N::Memory);
 
@@ -794,7 +871,11 @@ fn on_memory_item_pressed() {
 #[test]
 fn on_memory_item_pressed_no_memory() {
     let mut vm = new_vm();
-    let items = [TestItem(N::One, "1", ""), TestItem(N::Two, "12", ""), TestItem(N::None, "", "")];
+    let items = [
+        TestItem(N::One, "1", ""),
+        TestItem(N::Two, "12", ""),
+        TestItem(N::None, "", ""),
+    ];
     validate_view_model_by_commands(&mut vm, &items, true);
     vm.memory_recall(0);
     assert_eq!(vm.display_value(), "12");
