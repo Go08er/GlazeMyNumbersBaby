@@ -2,10 +2,10 @@
 // Licensed under the MIT License.
 //
 // Replacement for Calculator.ViewModels/DataLoaders/CurrencyHttpClient.cs.
-// The shipped Windows Calculator gets rates from a Microsoft service that
-// isn't in the public source; the open-source file returns hard-coded mock
-// data (fictional planet currencies) and its fwlink URLs are dead. This
-// client fetches real reference rates from the free, keyless Frankfurter API.
+// Windows Calculator's currency conversion is closed source: the open
+// repository's version of this file returns only placeholder data (fictional
+// planet currencies). This client fetches real reference rates from the
+// free, keyless Frankfurter API.
 
 //! Blocking HTTP client for the Frankfurter exchange rate API.
 //!

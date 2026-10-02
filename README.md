@@ -215,13 +215,12 @@ out at `reference/calculator` to regenerate the golden files.
 
 ## Deliberate differences from the original
 
-- **Currency rates are real.** The Calculator that ships with Windows gets
-  its rates from a Microsoft service that isn't part of the public source.
-  Built from that source, the converter has only hard-coded test data:
-  fictional planet currencies (Martian Dollars, Moon Bucks…). Both twins fetch
-  central-bank reference rates (158 currencies) via the keyless
-  [Frankfurter](https://frankfurter.dev) API, cache them, and fall back to
-  a bundled snapshot when offline.
+- **Currency rates come from a public source.** Windows Calculator's
+  currency conversion is closed source: the code that fetches rates isn't in
+  Microsoft's open repository, which has only placeholder data (fictional
+  planet currencies). Both twins fetch central-bank reference rates (158
+  currencies) from the keyless [Frankfurter](https://frankfurter.dev) API,
+  cache them, and fall back to a bundled snapshot when offline.
 - **Graphing uses a new numeric engine.** The original graphing engine is
   proprietary (open-source builds contain only a mock). This engine was
   written against the original's interfaces and reproduces its features
