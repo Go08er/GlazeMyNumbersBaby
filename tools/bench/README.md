@@ -15,7 +15,14 @@ display, 24 calculator keys and (where the toolkit has one) a text field:
 
 These are bare windows, not finished apps: DGMNB itself (every mode,
 accessibility, clipboard, desktop colours) measures a few MB more than
-`p-raw2` with all features.
+`p-raw2` with all features. They're measurement fixtures, not examples to
+copy: `p-raw2`'s `clip` feature hands winit's Wayland display to
+smithay-clipboard without the orderly shutdown DGMNB does before the event
+loop closes that display.
+
+`mem.sh` measures the process it launches (and checks it's still the named
+app throughout), so an already running copy of an app is never measured or
+stopped.
 
 ```sh
 nix develop -f tools/bench/shell.nix

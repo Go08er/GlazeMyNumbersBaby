@@ -191,8 +191,11 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **603 tests** (counts include
-doctests; one more, a live currency fetch, is `#[ignore]`d). The heart of it
+`nix develop -c cargo test --workspace` runs **616 tests** (counts include
+doctests; one more, a live currency fetch, is `#[ignore]`d). The D-Bus and
+X11 tests start their own `dbus-daemon` and `Xvfb` from the dev shell (and
+skip without them); DGMNB's Wayland clipboard test needs `WAYLAND_DISPLAY`,
+for example a headless weston. The heart of it
 is differential testing against the *real* C++ engine, compiled from the
 upstream sources with g++:
 
@@ -204,8 +207,8 @@ upstream sources with g++:
 | unitconv (138 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
 | datecalc (40), copypaste (40) | Ports of `DateCalculatorTests` and `CopyPasteManagerTests`, plus paste key-sequence tests |
 | graphing (119) | Parser, sampling and asymptotes, implicit/inequality plots, function analysis, frame-time budgets, and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis) |
-| appcore (36) | Keyboard map, key scripts, settings storage (huge/corrupt files), colour contrast, saved-equation sanitising, D-Bus wire format and hostile messages, portal signals from impostors on a private bus |
-| gmnb (3), dgmnb (18) | GDK key translation, palette contrast for extreme accents; DGMNB text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, scrolled-out controls, the display's spoken value, clipboard teardown and pipe deadlines |
+| appcore (41) | Keyboard map, key scripts, settings storage (huge/corrupt files), colour contrast, saved-equation sanitising, D-Bus wire format, hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
+| gmnb (3), dgmnb (26) | GDK key translation, palette contrast for extreme accents; DGMNB text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown, pipe deadlines, and X11 paste (formats and size caps) against a private Xvfb |
 
 The oracles live in `tools/oracle/` and need the upstream repository checked
 out at `reference/calculator` to regenerate the golden files.
@@ -239,7 +242,9 @@ out at `reference/calculator` to regenerate the golden files.
 - GMNB is a single-instance app; DGMNB isn't. Two DGMNB windows each keep
   their own history and settings, and the last one closed saves them.
 - DGMNB's clipboard works on Wayland and X11; copied graphs are offered as
-  `image/png`.
+  `image/png`. On X11 it pastes `UTF8_STRING`, `text/plain;charset=utf-8`,
+  `TEXT` or Latin-1 `STRING`, whichever the owner offers first in that order.
+  Pastes over 1 MiB are refused on both.
 - NVIDIA's driver busy-waits on GPU fences by default, which costs ~20% of a
   core even for gentle animation; GMNB sets `__GL_YIELD=USLEEP` for its own
   process unless you've set it yourself. DGMNB doesn't touch the GPU.
