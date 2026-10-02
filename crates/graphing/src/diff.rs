@@ -5,17 +5,58 @@
 //! Piecewise-constant functions (floor, ceiling, round, sign) differentiate
 //! to 0 almost everywhere; `|u|` to `sign(u)·u'`. Returns `None` for the few
 //! functions without an elementary derivative (factorials, nCr, nPr).
+//!
+//! Derivatives can be much larger than their input (nested compositions
+//! repeat inner subtrees; `max(a, b, …)` doubles per argument), so building
+//! one is bounded by a node budget; over budget is `None` as well.
 
 use crate::ast::{BinOp, Constant, Expr, Func};
 use crate::compile::syntactic_rational;
 use crate::functions::TrigUnit;
 use crate::simplify::{add, call, div, is_num, mul, neg, num, pow, pow_rat, sub};
 
+/// Node budget of [`derivative`]: generous for anything typed by hand,
+/// small enough that a pathological input fails fast instead of exhausting
+/// memory.
+pub const DEFAULT_MAX_NODES: usize = 1 << 16;
+
 /// d/dx of `e`. Trig derivatives include the chain factor for the angle
 /// unit (e.g. d/dx sin x = (π/180)·cos x in degrees mode).
+///
+/// `None` if a function has no elementary derivative or the result would
+/// exceed [`DEFAULT_MAX_NODES`] (see [`derivative_bounded`]).
 pub fn derivative(e: &Expr, unit: TrigUnit) -> Option<Expr> {
-    let k = unit.to_radians_factor();
-    d(e, k)
+    derivative_bounded(e, unit, DEFAULT_MAX_NODES)
+}
+
+/// Like [`derivative`], giving up (`None`) once building the result has
+/// cost about `max_nodes` nodes. The count is an over-estimate, so the
+/// returned tree never has more than `max_nodes` nodes.
+pub fn derivative_bounded(e: &Expr, unit: TrigUnit, max_nodes: usize) -> Option<Expr> {
+    let mut cx = Cx {
+        k: unit.to_radians_factor(),
+        left: max_nodes,
+    };
+    d(e, &mut cx)
+}
+
+/// Differentiation context: the angle-unit factor and the remaining budget.
+struct Cx {
+    k: f64,
+    left: usize,
+}
+
+impl Cx {
+    /// Pays for `n` new nodes; `None` once the budget is spent.
+    fn charge(&mut self, n: usize) -> Option<()> {
+        self.left = self.left.checked_sub(n)?;
+        Some(())
+    }
+
+    /// Pays for copying `e` (and building around it) `times` times.
+    fn charge_copies(&mut self, e: &Expr, times: usize) -> Option<()> {
+        self.charge(times.saturating_mul(e.depth_and_size().1))
+    }
 }
 
 fn free(e: &Expr) -> bool {
@@ -30,45 +71,48 @@ fn sq(e: Expr) -> Expr {
     pow_rat(e, 2, 1)
 }
 
-fn d(e: &Expr, k: f64) -> Option<Expr> {
+fn d(e: &Expr, cx: &mut Cx) -> Option<Expr> {
+    cx.charge(1)?;
     if free(e) {
         return Some(Expr::Num(0.0));
     }
     Some(match e {
         Expr::X => Expr::Num(1.0),
         Expr::Num(_) | Expr::Const(_) | Expr::Y | Expr::Var(_) => Expr::Num(0.0),
-        Expr::Neg(a) => neg(d(a, k)?),
-        Expr::Degrees(a) => d(a, k)?,
+        Expr::Neg(a) => neg(d(a, cx)?),
+        Expr::Degrees(a) => d(a, cx)?,
         Expr::Bin(op, a, b) => {
             let (a, b) = (&**a, &**b);
+            // Each rule copies a, b and e at most twice in total.
+            cx.charge_copies(e, 2)?;
             match op {
-                BinOp::Add => add(d(a, k)?, d(b, k)?),
-                BinOp::Sub => sub(d(a, k)?, d(b, k)?),
+                BinOp::Add => add(d(a, cx)?, d(b, cx)?),
+                BinOp::Sub => sub(d(a, cx)?, d(b, cx)?),
                 BinOp::Mul => {
                     if free(a) {
-                        mul(a.clone(), d(b, k)?)
+                        mul(a.clone(), d(b, cx)?)
                     } else if free(b) {
-                        mul(d(a, k)?, b.clone())
+                        mul(d(a, cx)?, b.clone())
                     } else {
-                        add(mul(d(a, k)?, b.clone()), mul(a.clone(), d(b, k)?))
+                        add(mul(d(a, cx)?, b.clone()), mul(a.clone(), d(b, cx)?))
                     }
                 }
                 BinOp::Div => {
                     if free(b) {
-                        div(d(a, k)?, b.clone())
+                        div(d(a, cx)?, b.clone())
                     } else if free(a) {
                         // (c/b)' = -c·b'/b²
-                        neg(div(mul(a.clone(), d(b, k)?), sq(b.clone())))
+                        neg(div(mul(a.clone(), d(b, cx)?), sq(b.clone())))
                     } else {
                         div(
-                            sub(mul(d(a, k)?, b.clone()), mul(a.clone(), d(b, k)?)),
+                            sub(mul(d(a, cx)?, b.clone()), mul(a.clone(), d(b, cx)?)),
                             sq(b.clone()),
                         )
                     }
                 }
                 BinOp::Pow => {
                     if free(b) {
-                        let da = d(a, k)?;
+                        let da = d(a, cx)?;
                         if let Some((p, q)) = syntactic_rational(b) {
                             // (p/q)·a^((p-q)/q)·a'
                             let coef = if q == 1 {
@@ -92,17 +136,17 @@ fn d(e: &Expr, k: f64) -> Option<Expr> {
                         } else {
                             call(Func::Ln, a.clone())
                         };
-                        mul(mul(e.clone(), lna), d(b, k)?)
+                        mul(mul(e.clone(), lna), d(b, cx)?)
                     } else {
                         // a^b·(b'·ln a + b·a'/a)
-                        let t1 = mul(d(b, k)?, call(Func::Ln, a.clone()));
-                        let t2 = div(mul(b.clone(), d(a, k)?), a.clone());
+                        let t1 = mul(d(b, cx)?, call(Func::Ln, a.clone()));
+                        let t2 = div(mul(b.clone(), d(a, cx)?), a.clone());
                         mul(e.clone(), add(t1, t2))
                     }
                 }
             }
         }
-        Expr::Call(f, args) => return d_call(*f, args, k),
+        Expr::Call(f, args) => return d_call(*f, args, cx),
     })
 }
 
@@ -114,14 +158,17 @@ fn reduce(p: i64, q: i64) -> (i64, i64) {
     (p / g, q / g)
 }
 
-fn d_call(f: Func, args: &[Expr], k: f64) -> Option<Expr> {
+fn d_call(f: Func, args: &[Expr], cx: &mut Cx) -> Option<Expr> {
     use Func::*;
+    let k = cx.k;
     if args.len() == 1 {
         let u = &args[0];
-        let du = d(u, k)?;
+        let du = d(u, cx)?;
         if is_num(&du, 0.0) {
             return Some(Expr::Num(0.0));
         }
+        // Every rule below copies u at most three times.
+        cx.charge_copies(u, 3)?;
         let c = |f: Func| call(f, u.clone());
         let one = || Expr::Num(1.0);
         let inner = match f {
@@ -183,7 +230,9 @@ fn d_call(f: Func, args: &[Expr], k: f64) -> Option<Expr> {
                 return None;
             }
             // root(u, n)' = root(u, n) / (n·u) · u'
-            let du = d(u, k)?;
+            let du = d(u, cx)?;
+            cx.charge_copies(u, 2)?;
+            cx.charge_copies(n, 2)?;
             Some(mul(
                 div(Expr::Call(Root, args.to_vec()), mul(n.clone(), u.clone())),
                 du,
@@ -192,17 +241,21 @@ fn d_call(f: Func, args: &[Expr], k: f64) -> Option<Expr> {
         LogBase if args.len() == 2 => {
             let (b, u) = (&args[0], &args[1]);
             // ln(u)/ln(b)
+            cx.charge_copies(u, 1)?;
+            cx.charge_copies(b, 1)?;
             let q = div(call(Func::Ln, u.clone()), call(Func::Ln, b.clone()));
-            d(&q, k)
+            d(&q, cx)
         }
         Mod if args.len() == 2 => {
             let (u, v) = (&args[0], &args[1]);
             // u − v·floor(u/v)
-            let du = d(u, k)?;
+            let du = d(u, cx)?;
             if free(v) {
                 return Some(du);
             }
-            let dv = d(v, k)?;
+            let dv = d(v, cx)?;
+            cx.charge_copies(u, 1)?;
+            cx.charge_copies(v, 1)?;
             Some(sub(
                 du,
                 mul(dv, call(Func::Floor, div(u.clone(), v.clone()))),
@@ -211,10 +264,17 @@ fn d_call(f: Func, args: &[Expr], k: f64) -> Option<Expr> {
         Min | Max => {
             // Fold pairwise: max(a,b)' = (a'+b')/2 + sign(a−b)·(a'−b')/2,
             // min(a,b)' = (a'+b')/2 − sign(a−b)·(a'−b')/2.
+            cx.charge_copies(&args[0], 1)?;
             let mut acc = args[0].clone();
-            let mut dacc = d(&args[0], k)?;
+            let mut dacc = d(&args[0], cx)?;
             for b in &args[1..] {
-                let db = d(b, k)?;
+                let db = d(b, cx)?;
+                // The accumulated derivative is copied every step: without
+                // this charge the result doubles per argument.
+                cx.charge_copies(&dacc, 1)?;
+                cx.charge_copies(&db, 1)?;
+                cx.charge_copies(&acc, 1)?;
+                cx.charge_copies(b, 2)?;
                 let half_sum = div(add(dacc.clone(), db.clone()), Expr::Num(2.0));
                 let half_diff = div(
                     mul(call(Func::Sign, sub(acc.clone(), b.clone())), sub(dacc, db)),

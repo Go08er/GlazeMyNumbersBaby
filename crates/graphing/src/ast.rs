@@ -298,6 +298,27 @@ impl Expr {
         Expr::Call(f, vec![a])
     }
 
+    /// Depth (a leaf is 1) and number of nodes, computed without recursion
+    /// so it is safe on trees of any shape.
+    pub fn depth_and_size(&self) -> (usize, usize) {
+        let mut stack = vec![(self, 1usize)];
+        let (mut depth, mut size) = (0, 0);
+        while let Some((e, d)) = stack.pop() {
+            size += 1;
+            depth = depth.max(d);
+            match e {
+                Expr::Num(_) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => {}
+                Expr::Neg(a) | Expr::Degrees(a) => stack.push((a, d + 1)),
+                Expr::Bin(_, a, b) => {
+                    stack.push((a, d + 1));
+                    stack.push((b, d + 1));
+                }
+                Expr::Call(_, args) => stack.extend(args.iter().map(|a| (a, d + 1))),
+            }
+        }
+        (depth, size)
+    }
+
     /// True if `x` occurs anywhere.
     pub fn contains_x(&self) -> bool {
         self.any(&|e| matches!(e, Expr::X))

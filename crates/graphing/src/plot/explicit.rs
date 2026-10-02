@@ -1,6 +1,6 @@
 //! Adaptive sampling of explicit curves with discontinuity detection.
 
-use super::{PlotOptions, Polyline, axis_point, signed_area};
+use super::{Cancel, PlotOptions, Polyline, axis_point, signed_area};
 use crate::compile::{Input, Program};
 use crate::equation::Axis;
 use crate::viewport::Viewport;
@@ -23,6 +23,7 @@ pub(crate) struct ExplicitSampler<'a> {
     opts: PlotOptions,
     evals: usize,
     exhausted: bool,
+    cancel: Cancel<'a>,
     pieces: Vec<Vec<(f64, f64)>>,
     cur: Vec<(f64, f64)>,
 }
@@ -65,15 +66,23 @@ impl<'a> ExplicitSampler<'a> {
             opts: *opts,
             evals: 0,
             exhausted: false,
+            cancel: Cancel(None),
             pieces: Vec::new(),
             cur: Vec::new(),
         }
     }
 
+    /// Stops refining (as if out of budget) once `cancel` is set.
+    pub(crate) fn set_cancel(&mut self, cancel: Cancel<'a>) {
+        self.cancel = cancel;
+    }
+
     #[inline]
     fn eval(&mut self, t: f64) -> f64 {
         self.evals += 1;
-        if self.evals >= self.opts.max_evals {
+        if self.evals >= self.opts.max_evals
+            || (self.evals.is_multiple_of(1024) && self.cancel.is_set())
+        {
             self.exhausted = true;
         }
         self.f.eval(t, 0.0)

@@ -12,6 +12,11 @@
 //!    f′), inflection points (sign changes of f″), monotone intervals and
 //!    the range (extrema, endpoint values and limits).
 //! 5. Limits at ±∞ give horizontal/oblique asymptotes.
+//!
+//! Every evaluation is charged to a work budget (bytecode instructions):
+//! a function too expensive to analyze reports `TooComplex` instead of
+//! blocking its caller for seconds, and a caller can cancel from another
+//! thread.
 
 use super::format::{
     Bound, Interval, MINUS, Nice, format_family, format_number, format_number_tol,
@@ -27,8 +32,10 @@ use super::{
 };
 use crate::ast::{BinOp, Expr, Func};
 use crate::compile::{CompileOptions, Input, Program, syntactic_rational};
-use crate::diff::derivative;
+use crate::diff::derivative_bounded;
 use crate::simplify::linear_in;
+use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Half-width of the analysis window for non-periodic functions.
 const WINDOW: f64 = 1e6;
@@ -37,22 +44,96 @@ const PERIOD_STEPS: usize = 6_000;
 /// More features than this (without periodicity) are reported as too complex.
 const MAX_LISTED: usize = 24;
 const MAX_EVENTS: usize = 400;
+/// Most work one analysis may do, in [`Program::cost`] units over all
+/// evaluations of f, f′, f″ and the candidate generators: a few hundred
+/// milliseconds. Ordinary functions use up to about a tenth of it.
+const WORK_BUDGET: u64 = 150_000_000;
+/// Largest symbolic derivative used (nodes); a bigger one would cost more
+/// per evaluation than finite differences of f, which are used instead.
+const MAX_DERIVATIVE_NODES: usize = 4096;
 
-struct Fun {
+/// Why an analysis stopped without a result.
+pub(crate) enum Stop {
+    /// The caller's cancel flag was set.
+    Cancelled,
+    /// A reportable failure.
+    Error(AnalysisError),
+}
+
+impl From<AnalysisError> for Stop {
+    fn from(e: AnalysisError) -> Stop {
+        Stop::Error(e)
+    }
+}
+
+struct Fun<'a> {
     f: Program,
     df: Option<Program>,
     d2f: Option<Program>,
+    /// Instructions executed so far.
+    work: Cell<u64>,
+    budget: u64,
+    cancel: Option<&'a AtomicBool>,
+    cancelled: Cell<bool>,
 }
 
-impl Fun {
+impl Fun<'_> {
+    /// Charges `n` work units. False once the budget is spent or the
+    /// caller cancelled; evaluations then return NaN, which every stage
+    /// already treats as "undefined", so the analysis winds down quickly.
+    #[inline]
+    fn spend(&self, n: usize) -> bool {
+        let w = self.work.get().saturating_add(n.max(1) as u64);
+        self.work.set(w);
+        if w > self.budget {
+            return false;
+        }
+        if self.cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            self.cancelled.set(true);
+            self.work.set(u64::MAX);
+            return false;
+        }
+        true
+    }
+
+    /// Whether the analysis must be abandoned, and how to report it.
+    fn stopped(&self) -> Option<Stop> {
+        if self.cancelled.get() {
+            Some(Stop::Cancelled)
+        } else if self.work.get() > self.budget {
+            Some(Stop::Error(AnalysisError::TooComplex))
+        } else {
+            None
+        }
+    }
+
+    /// Evaluates `p` at `x`, charged to the budget.
+    #[inline]
+    fn eval(&self, p: &Program, x: f64) -> f64 {
+        if self.spend(p.cost()) {
+            p.eval_x(x)
+        } else {
+            f64::NAN
+        }
+    }
+
+    /// Evaluates `p` on a grid, charged to the budget.
+    fn eval_batch(&self, p: &Program, xs: &[f64], out: &mut [f64]) {
+        if self.spend(p.cost().saturating_mul(xs.len())) {
+            p.eval_batch(Input::Slice(xs), Input::Scalar(0.0), out);
+        } else {
+            out.fill(f64::NAN);
+        }
+    }
+
     #[inline]
     fn f(&self, x: f64) -> f64 {
-        self.f.eval_x(x)
+        self.eval(&self.f, x)
     }
 
     fn df(&self, x: f64) -> f64 {
         match &self.df {
-            Some(p) => p.eval_x(x),
+            Some(p) => self.eval(p, x),
             None => {
                 let h = 1e-6 * x.abs().max(1.0);
                 (self.f(x + h) - self.f(x - h)) / (2.0 * h)
@@ -62,7 +143,7 @@ impl Fun {
 
     fn d2f(&self, x: f64) -> f64 {
         match &self.d2f {
-            Some(p) => p.eval_x(x),
+            Some(p) => self.eval(p, x),
             None => {
                 let h = 1e-4 * x.abs().max(1.0);
                 (self.df(x + h) - self.df(x - h)) / (2.0 * h)
@@ -78,7 +159,7 @@ impl Fun {
             _ => self.d2f.as_ref(),
         };
         match prog {
-            Some(p) => p.eval_batch(Input::Slice(xs), Input::Scalar(0.0), &mut out),
+            Some(p) => self.eval_batch(p, xs, &mut out),
             None => {
                 for (o, &x) in out.iter_mut().zip(xs) {
                     *o = if which == 1 { self.df(x) } else { self.d2f(x) };
@@ -92,31 +173,59 @@ impl Fun {
 pub(crate) fn analyze_expr(
     expr: &Expr,
     opts: &CompileOptions<'_>,
-) -> Result<KeyGraphFeatures, AnalysisError> {
+    cancel: Option<&AtomicBool>,
+) -> Result<KeyGraphFeatures, Stop> {
+    analyze_with_budget(expr, opts, cancel, WORK_BUDGET)
+}
+
+fn analyze_with_budget(
+    expr: &Expr,
+    opts: &CompileOptions<'_>,
+    cancel: Option<&AtomicBool>,
+    budget: u64,
+) -> Result<KeyGraphFeatures, Stop> {
     let f = Program::compile(expr, opts).map_err(|_| AnalysisError::AnalysisCouldNotBePerformed)?;
     let unit = opts.trig_unit;
-    let d1 = derivative(expr, unit);
-    let d2 = d1.as_ref().and_then(|d| derivative(d, unit));
+    let d1 = derivative_bounded(expr, unit, MAX_DERIVATIVE_NODES);
+    let d2 = d1
+        .as_ref()
+        .and_then(|d| derivative_bounded(d, unit, MAX_DERIVATIVE_NODES));
     let df = d1.and_then(|e| Program::compile(&e, opts).ok());
     let d2f = d2.and_then(|e| Program::compile(&e, opts).ok());
-    let fun = Fun { f, df, d2f };
+    let fun = Fun {
+        f,
+        df,
+        d2f,
+        work: Cell::new(0),
+        budget,
+        cancel,
+        cancelled: Cell::new(false),
+    };
 
     if let Some(c) = fun.f.as_constant() {
         return if c.is_finite() {
             Ok(constant_features(c))
         } else {
-            Err(AnalysisError::AnalysisCouldNotBePerformed)
+            Err(AnalysisError::AnalysisCouldNotBePerformed.into())
         };
     }
 
     let gens = generator_programs(expr, opts);
     let scale = typical_scale(&fun);
     let period = detect_period(expr, &fun, opts, scale);
+    if let Some(stop) = fun.stopped() {
+        return Err(stop);
+    }
 
-    let mut k = match period {
-        Some(p) => analyze_periodic(&fun, &gens, p, scale)?,
-        None => analyze_aperiodic(&fun, &gens, scale)?,
+    let k = match period {
+        Some(p) => analyze_periodic(&fun, &gens, p, scale),
+        None => analyze_aperiodic(&fun, &gens, scale),
     };
+    // Running out of budget can surface as any failure downstream.
+    if let Some(stop) = fun.stopped() {
+        return Err(stop);
+    }
+    let mut k = k?;
     // Γ-based functions have poles at every negative integer: a numeric
     // scan cannot list them.
     let gamma_like = expr.any(&|e| {
@@ -139,6 +248,9 @@ pub(crate) fn analyze_expr(
         k.inflection_points.clear();
     }
     k.parity = parity(&fun, scale);
+    if let Some(stop) = fun.stopped() {
+        return Err(stop);
+    }
     match period {
         Some(p) => {
             k.periodicity_direction = Periodicity::Periodic;
@@ -264,10 +376,10 @@ fn generator_programs(expr: &Expr, opts: &CompileOptions<'_>) -> Vec<Program> {
 
 /// Zeros of `g` on a grid: sign changes (Brent), exact zeros, and
 /// even-order zeros found as tiny local minima of |g|.
-fn program_zeros(g: &Program, xs: &[f64], out: &mut Vec<f64>) {
+fn program_zeros(fun: &Fun, g: &Program, xs: &[f64], out: &mut Vec<f64>) {
     let mut gs = vec![0.0; xs.len()];
-    g.eval_batch(Input::Slice(xs), Input::Scalar(0.0), &mut gs);
-    let mut ge = |x: f64| g.eval_x(x);
+    fun.eval_batch(g, xs, &mut gs);
+    let mut ge = |x: f64| fun.eval(g, x);
     let gscale = {
         let mut v: Vec<f64> = gs
             .iter()
@@ -671,7 +783,7 @@ fn scan(
     // Candidate points from the expression structure.
     let mut cands: Vec<f64> = extra_candidates.to_vec();
     for g in gens {
-        program_zeros(g, xs, &mut cands);
+        program_zeros(fun, g, xs, &mut cands);
     }
     let mut cands: Vec<f64> = cands
         .into_iter()
@@ -2118,6 +2230,56 @@ fn analyze_periodic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ORDINARY: [&str; 14] = [
+        "x^3 - 2x + 1",
+        "sin(x)",
+        "tan(x)",
+        "1/x",
+        "e^x / (1 + x^2)",
+        "ln(x^2 - 1)",
+        "sqrt(4 - x^2)",
+        "|x - 2| + floor(x)",
+        "x sin(1/x)",
+        "sec(x) + csc(2x)",
+        "arctan(x) + arcsin(x/3)",
+        "x^x",
+        "(x^2 + 1)/(x - 3)",
+        "sin(x) cos(3x) + sin(5x)/x",
+    ];
+
+    fn run(src: &str, budget: u64) -> Result<KeyGraphFeatures, Stop> {
+        let e = crate::parser::parse_expression(src).unwrap();
+        analyze_with_budget(&e, &CompileOptions::default(), None, budget)
+    }
+
+    #[test]
+    fn ordinary_functions_use_a_small_part_of_the_budget() {
+        for src in ORDINARY {
+            assert!(
+                !matches!(
+                    run(src, WORK_BUDGET / 5),
+                    Err(Stop::Error(AnalysisError::TooComplex))
+                ),
+                "{src}"
+            );
+        }
+    }
+
+    #[test]
+    fn running_out_of_budget_is_reported_not_a_panic() {
+        // Evaluations return NaN once the budget is spent; every stage must
+        // cope wherever that happens.
+        for src in ORDINARY {
+            for budget in [1, 1_000, 100_000, 1_000_000] {
+                match run(src, budget) {
+                    Ok(_) | Err(Stop::Error(AnalysisError::TooComplex)) => {}
+                    Err(Stop::Error(e)) => panic!("{src} at {budget}: {e:?}"),
+                    Err(Stop::Cancelled) => panic!("{src}: cancelled"),
+                }
+            }
+        }
+    }
 
     #[test]
     fn periods() {

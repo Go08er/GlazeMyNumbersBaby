@@ -218,6 +218,23 @@ pub(crate) enum Op {
     F2(Fn2),
 }
 
+impl Op {
+    /// Rough relative evaluation cost (an addition is 1).
+    fn cost(&self) -> usize {
+        match self {
+            Op::Const(_) | Op::X | Op::Y | Op::Add | Op::Sub | Op::Mul | Op::Neg => 1,
+            Op::Div | Op::PowI(_) => 2,
+            Op::Pow | Op::PowRat(..) => 8,
+            Op::F1(Fn1::Factorial | Fn1::DoubleFactorial) => 60,
+            Op::F1(Fn1::Abs | Fn1::Floor | Fn1::Ceil | Fn1::Round | Fn1::Sign) => 1,
+            Op::F1(_) => 8,
+            Op::F2(Fn2::NCr | Fn2::NPr) => 300,
+            Op::F2(Fn2::Min | Fn2::Max | Fn2::Mod) => 2,
+            Op::F2(_) => 8,
+        }
+    }
+}
+
 #[inline(always)]
 fn powi(b: f64, n: i32) -> f64 {
     match n {
@@ -234,6 +251,7 @@ pub struct Program {
     max_stack: usize,
     uses_x: bool,
     uses_y: bool,
+    cost: usize,
 }
 
 /// Evaluation input for one coordinate of a batch: either one value for all
@@ -287,12 +305,21 @@ impl Program {
             max_stack = max_stack.max(depth);
         }
         debug_assert_eq!(depth, 1);
+        let cost = ops.iter().map(Op::cost).sum();
         Program {
             ops,
             max_stack,
             uses_x,
             uses_y,
+            cost,
         }
+    }
+
+    /// Estimated cost of one evaluation, in units of about one arithmetic
+    /// instruction (a sine is ~8, Γ ~60, nCr up to a few hundred). Used to
+    /// bound analysis and plotting work.
+    pub fn cost(&self) -> usize {
+        self.cost
     }
 
     /// True if the program reads `x`.

@@ -37,6 +37,9 @@ pub enum AnalysisError {
     AnalysisNotSupported = 2,
     /// "Analysis is only supported for functions in the f(x) format." (x = g(y))
     VariableIsNotX = 3,
+    /// The function needs more work to analyze than one analysis may spend
+    /// (not in the original, whose engine has its own limits).
+    TooComplex = 4,
 }
 
 impl AnalysisError {
@@ -49,6 +52,7 @@ impl AnalysisError {
             }
             AnalysisError::AnalysisNotSupported => Some(s::KGF_ANALYSIS_NOT_SUPPORTED),
             AnalysisError::VariableIsNotX => Some(s::KGF_VARIABLE_IS_NOT_X),
+            AnalysisError::TooComplex => Some(s::KGF_ANALYSIS_TOO_COMPLEX),
         }
     }
 }
@@ -407,21 +411,34 @@ impl KeyGraphFeatures {
 /// [`AnalysisError::AnalysisNotSupported`]; failures give
 /// [`AnalysisError::AnalysisCouldNotBePerformed`].
 pub fn analyze(eq: &Equation, opts: &CompileOptions<'_>) -> KeyGraphFeatures {
+    analyze_cancellable(eq, opts, None)
+        .unwrap_or_else(|| unreachable!("analysis without a cancel flag is never cancelled"))
+}
+
+/// [`analyze`], polling `cancel` while it works: returns `None` soon after
+/// the flag becomes true. Analysis is bounded either way (an over-budget
+/// function reports [`AnalysisError::TooComplex`]); the flag lets a caller
+/// running it on a worker thread abandon a result it no longer needs.
+pub fn analyze_cancellable(
+    eq: &Equation,
+    opts: &CompileOptions<'_>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Option<KeyGraphFeatures> {
+    let error = |e| Some(KeyGraphFeatures::error(e));
     match eq.kind() {
         EquationKind::Function => {}
-        EquationKind::InverseFunction => {
-            return KeyGraphFeatures::error(AnalysisError::VariableIsNotX);
-        }
+        EquationKind::InverseFunction => return error(AnalysisError::VariableIsNotX),
         EquationKind::Implicit | EquationKind::Inequality => {
-            return KeyGraphFeatures::error(AnalysisError::AnalysisNotSupported);
+            return error(AnalysisError::AnalysisNotSupported);
         }
     }
     let Some((Axis::X, f)) = eq.explicit() else {
-        return KeyGraphFeatures::error(AnalysisError::AnalysisCouldNotBePerformed);
+        return error(AnalysisError::AnalysisCouldNotBePerformed);
     };
-    match engine::analyze_expr(f, opts) {
-        Ok(k) => k,
-        Err(e) => KeyGraphFeatures::error(e),
+    match engine::analyze_expr(f, opts, cancel) {
+        Ok(k) => Some(k),
+        Err(engine::Stop::Cancelled) => None,
+        Err(engine::Stop::Error(e)) => error(e),
     }
 }
 

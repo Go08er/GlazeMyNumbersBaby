@@ -24,7 +24,7 @@
 //! `sin^2 x` / `sin²x` is `(sin x)²` and `sin^-1 x` / `sin⁻¹x` is `arcsin x`.
 
 use crate::ast::{BinOp, Expr, Func};
-use crate::error::{EquationError, SyntaxErrorCode};
+use crate::error::{EquationError, EvaluationErrorCode, SyntaxErrorCode};
 use crate::lexer::{ParseOptions, RelOp, Tok, Token, tokenize};
 use std::ops::Range;
 
@@ -55,10 +55,30 @@ pub fn parse_expression(input: &str) -> Result<Expr, EquationError> {
     Ok(parsed.sides.into_iter().next().expect("at least one side"))
 }
 
+/// Longest equation text accepted, in characters (the equation box's
+/// limit). Longer input is an equation error rather than unbounded work.
+pub const MAX_EXPRESSION_LEN: usize = 1000;
+
+/// Deepest expression tree accepted. Everything downstream (compilation,
+/// differentiation, analysis, `Drop`) walks trees recursively; this keeps
+/// them far inside a 2 MiB thread stack.
+pub const MAX_TREE_DEPTH: usize = 256;
+
+fn too_complex(span: Range<usize>) -> EquationError {
+    EquationError::eval(EvaluationErrorCode::EquationTooComplexToPlot, span)
+}
+
 /// Parses an input line into sides and relation operators.
+///
+/// Input longer than [`MAX_EXPRESSION_LEN`], nested deeper than the parser
+/// allows, or producing a tree deeper than [`MAX_TREE_DEPTH`] is rejected
+/// with `EquationTooComplexToPlot`.
 pub fn parse_input(input: &str, opts: ParseOptions) -> Result<ParsedInput, EquationError> {
-    let mut toks = tokenize(input, opts)?;
     let len = input.chars().count();
+    if len > MAX_EXPRESSION_LEN {
+        return Err(too_complex(0..len));
+    }
+    let mut toks = tokenize(input, opts)?;
     if toks.is_empty() {
         return Err(EquationError::syntax(
             SyntaxErrorCode::EmptyExpression,
@@ -106,11 +126,20 @@ pub fn parse_input(input: &str, opts: ParseOptions) -> Result<ParsedInput, Equat
     };
     let mut parsed = p.parse_input()?;
     parsed.function_name = function_name;
+    // Sums, products, implicit products and postfix operators are parsed
+    // iteratively, so the recursion limit alone does not bound tree depth.
+    for (side, span) in parsed.sides.iter().zip(&parsed.side_spans) {
+        if side.depth_and_size().0 > MAX_TREE_DEPTH {
+            return Err(too_complex(span.clone()));
+        }
+    }
     Ok(parsed)
 }
 
-/// Deepest nesting accepted (parentheses, signs and exponent chains each
-/// count). Far beyond anything typed by hand, far below stack limits.
+/// Deepest parser recursion accepted. Every recursive grammar edge passes
+/// through a counted rule: each primary (so each group, `|…|`, radical and
+/// function), each prefix sign and each exponent. Far beyond anything typed
+/// by hand, far below stack limits.
 const MAX_DEPTH: usize = 200;
 
 struct Parser<'a> {
@@ -223,8 +252,11 @@ impl<'a> Parser<'a> {
     /// equation error instead of a stack overflow.
     fn nested<T>(&mut self, f: impl FnOnce(&mut Self) -> PResult<T>) -> PResult<T> {
         if self.depth >= MAX_DEPTH {
-            let span = self.peek_token().map(|t| t.span.clone()).unwrap_or(0..0);
-            return err(SyntaxErrorCode::GeneralError, span);
+            let span = self
+                .peek_token()
+                .map(|t| t.span.clone())
+                .unwrap_or(0..self.len);
+            return Err(too_complex(span));
         }
         self.depth += 1;
         let r = f(self);
@@ -232,11 +264,9 @@ impl<'a> Parser<'a> {
         r
     }
 
+    /// Sums are reached recursively only through primaries (groups, `|…|`,
+    /// function arguments), which are counted.
     fn parse_sum(&mut self) -> PResult<Expr> {
-        self.nested(|p| p.parse_sum_inner())
-    }
-
-    fn parse_sum_inner(&mut self) -> PResult<Expr> {
         let mut lhs = self.parse_product()?;
         loop {
             let op = match self.peek() {
@@ -283,6 +313,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_denominator(&mut self) -> PResult<Expr> {
+        self.nested(|p| p.parse_denominator_inner())
+    }
+
+    fn parse_denominator_inner(&mut self) -> PResult<Expr> {
         match self.peek() {
             Some(Tok::Minus) => {
                 self.pos += 1;
@@ -416,6 +450,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_primary(&mut self) -> PResult<Expr> {
+        self.nested(|p| p.parse_primary_inner())
+    }
+
+    fn parse_primary_inner(&mut self) -> PResult<Expr> {
         let Some(t) = self.bump() else {
             return err(SyntaxErrorCode::UnexpectedEndOfExpression, self.eof_span());
         };

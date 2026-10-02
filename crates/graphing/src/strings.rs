@@ -24,6 +24,9 @@ pub const MONOTONICITY: &str = "Monotonicity";
 pub const KGF_ANALYSIS_COULD_NOT_BE_PERFORMED: &str =
     "Analysis could not be performed for the function.";
 pub const KGF_ANALYSIS_NOT_SUPPORTED: &str = "Analysis is not supported for this function.";
+/// Not an upstream string: GMNB bounds the work one analysis may do.
+pub const KGF_ANALYSIS_TOO_COMPLEX: &str =
+    "This function is too complex for Calculator to analyze.";
 pub const KGF_VARIABLE_IS_NOT_X: &str =
     "Analysis is only supported for functions in the f(x) format. Example: y=x";
 pub const KGF_DOMAIN_NONE: &str = "Unable to calculate the domain for this function.";

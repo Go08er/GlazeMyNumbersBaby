@@ -8,7 +8,7 @@
 //! lattice edge from node values only, so neighbouring cells agree exactly
 //! and segments can be joined into polylines by edge identity.
 
-use super::{PlotOptions, Point, Polyline};
+use super::{Cancel, PlotOptions, Point, Polyline};
 use crate::compile::{Input, Program};
 use crate::viewport::Viewport;
 use std::collections::{HashMap, HashSet};
@@ -23,6 +23,7 @@ pub(crate) struct ContourResult {
 /// dir 0, vertical edge from (i, j) to (i, j+1) has dir 1.
 type EdgeKey = (i64, i64, u8);
 
+/// Most fine cells in the lattice, whatever the window size.
 const MAX_FINE_CELLS: f64 = 4.0e6;
 
 struct Lattice<'a> {
@@ -76,24 +77,28 @@ impl Lattice<'_> {
     }
 }
 
-pub(crate) fn contour(
-    f: &Program,
-    vp: &Viewport,
-    opts: &PlotOptions,
-    want_fill: bool,
-    strict: bool,
-) -> ContourResult {
-    let mut cell_px = opts.implicit_cell_px.max(0.25);
-    let cells = |c: f64| (vp.width / c) * (vp.height / c);
-    while cells(cell_px) > MAX_FINE_CELLS {
-        cell_px *= 1.5;
-    }
+/// The coarse stage of [`contour`]: lattice, block corner and centre
+/// values, and the blocks to refine (where the sign changes, dilated).
+struct Coarse<'a> {
+    lat: Lattice<'a>,
+    i0: i64,
+    j0: i64,
+    nbx_u: usize,
+    nby_u: usize,
+    corners: Vec<f64>,
+    centres: Vec<f64>,
+    marked: Vec<bool>,
+}
+
+/// Coarsest fine-cell size the refinement budget may push the lattice to.
+const MAX_CELL_PX: f64 = 32.0;
+
+fn coarse_pass<'a>(f: &'a Program, vp: &Viewport, b: i64, cell_px: f64) -> Option<Coarse<'a>> {
     let lat = Lattice {
         f,
         hx: cell_px * vp.x_per_px(),
         hy: cell_px * vp.y_per_px(),
     };
-    let b = opts.implicit_block.max(1) as i64;
     let i0 = (vp.x_min / lat.hx).floor() as i64 - 1;
     let j0 = (vp.y_min / lat.hy).floor() as i64 - 1;
     let i1 = (vp.x_max / lat.hx).ceil() as i64 + 1;
@@ -101,11 +106,7 @@ pub(crate) fn contour(
     let nbx = ((i1 - i0) + b - 1) / b;
     let nby = ((j1 - j0) + b - 1) / b;
     if nbx <= 0 || nby <= 0 || nbx * nby > 10_000_000 {
-        return ContourResult {
-            curves: Vec::new(),
-            fill: Vec::new(),
-            missing: true,
-        };
+        return None;
     }
     let (nbx_u, nby_u) = (nbx as usize, nby as usize);
 
@@ -180,6 +181,69 @@ pub(crate) fn contour(
             }
         }
     }
+    Some(Coarse {
+        lat,
+        i0,
+        j0,
+        nbx_u,
+        nby_u,
+        corners,
+        centres,
+        marked,
+    })
+}
+
+pub(crate) fn contour(
+    f: &Program,
+    vp: &Viewport,
+    opts: &PlotOptions,
+    want_fill: bool,
+    strict: bool,
+    cancel: &Cancel<'_>,
+) -> ContourResult {
+    let mut cell_px = opts.implicit_cell_px.max(0.25);
+    let cells = |c: f64| (vp.width / c) * (vp.height / c);
+    while cells(cell_px) > MAX_FINE_CELLS {
+        cell_px *= 1.5;
+    }
+    let b = opts.implicit_block.max(1) as i64;
+    // Refining every block of a relation that oscillates everywhere costs
+    // the whole fine lattice; past the budget, a coarser lattice is used.
+    let coarse = loop {
+        let Some(c) = coarse_pass(f, vp, b, cell_px) else {
+            return ContourResult {
+                curves: Vec::new(),
+                fill: Vec::new(),
+                missing: true,
+            };
+        };
+        let refined = c.marked.iter().filter(|m| **m).count() as f64 * (b * b) as f64;
+        if refined > opts.implicit_max_refined.max(1.0) && cell_px < MAX_CELL_PX {
+            cell_px *= 1.5;
+            continue;
+        }
+        break c;
+    };
+    let Coarse {
+        lat,
+        i0,
+        j0,
+        nbx_u,
+        nby_u,
+        corners,
+        centres,
+        marked,
+    } = coarse;
+    let cw = nbx_u + 1;
+    let block_vals = |bx: usize, by: usize| -> [f64; 5] {
+        [
+            corners[by * cw + bx],
+            corners[by * cw + bx + 1],
+            corners[(by + 1) * cw + bx + 1],
+            corners[(by + 1) * cw + bx],
+            centres[by * nbx_u + bx],
+        ]
+    };
 
     let inside = |v: f64| if strict { v < 0.0 } else { v <= 0.0 };
     let mut segments: Vec<(EdgeKey, EdgeKey, Point, Point)> = Vec::new();
@@ -216,7 +280,12 @@ pub(crate) fn contour(
     let mut vals = vec![0.0; n * n];
     let mut hcache: Vec<Option<Option<Point>>> = vec![None; n * n];
     let mut vcache: Vec<Option<Option<Point>>> = vec![None; n * n];
-    for by in 0..nby_u {
+    let mut cancelled = false;
+    'rows: for by in 0..nby_u {
+        if cancel.is_set() {
+            cancelled = true;
+            break 'rows;
+        }
         for bx in 0..nbx_u {
             if !marked[by * nbx_u + bx] {
                 continue;
@@ -367,6 +436,13 @@ pub(crate) fn contour(
         }
     }
 
+    if cancelled {
+        return ContourResult {
+            curves: Vec::new(),
+            fill: Vec::new(),
+            missing: true,
+        };
+    }
     ContourResult {
         curves: join_segments(segments),
         fill,
@@ -518,7 +594,14 @@ mod tests {
     #[test]
     fn circle_contour() {
         let f = compile_str("x^2 + y^2 - 25", TrigUnit::Radians).unwrap();
-        let r = contour(&f, &vp(), &PlotOptions::default(), false, false);
+        let r = contour(
+            &f,
+            &vp(),
+            &PlotOptions::default(),
+            false,
+            false,
+            &Cancel(None),
+        );
         assert_eq!(r.curves.len(), 1, "one closed loop");
         let c = &r.curves[0];
         assert_eq!(c.first(), c.last());
@@ -532,7 +615,14 @@ mod tests {
     #[test]
     fn disc_fill_area() {
         let f = compile_str("x^2 + y^2 - 25", TrigUnit::Radians).unwrap();
-        let r = contour(&f, &vp(), &PlotOptions::default(), true, true);
+        let r = contour(
+            &f,
+            &vp(),
+            &PlotOptions::default(),
+            true,
+            true,
+            &Cancel(None),
+        );
         let area = total_area(&r.fill);
         assert!(
             (area - 25.0 * std::f64::consts::PI).abs() / (25.0 * std::f64::consts::PI) < 0.005,
@@ -547,7 +637,14 @@ mod tests {
     fn poles_are_not_contours() {
         // tan(x·y) = 1 changes sign across its poles too.
         let f = compile_str("tan(x) - y", TrigUnit::Radians).unwrap();
-        let r = contour(&f, &vp(), &PlotOptions::default(), false, false);
+        let r = contour(
+            &f,
+            &vp(),
+            &PlotOptions::default(),
+            false,
+            false,
+            &Cancel(None),
+        );
         let v = vp();
         for l in &r.curves {
             for w in l.windows(2) {
@@ -561,7 +658,14 @@ mod tests {
         }
         // y = floor(x) + 0.5 is a staircase of horizontal steps without risers.
         let f = compile_str("floor(x) - y + 0.5", TrigUnit::Radians).unwrap();
-        let r = contour(&f, &vp(), &PlotOptions::default(), false, false);
+        let r = contour(
+            &f,
+            &vp(),
+            &PlotOptions::default(),
+            false,
+            false,
+            &Cancel(None),
+        );
         assert!(r.curves.len() >= 20, "{}", r.curves.len());
         for l in &r.curves {
             for w in l.windows(2) {
@@ -574,7 +678,14 @@ mod tests {
     fn lines_from_products() {
         // x^2 = y^2 is two crossing lines; measure inside the viewport only.
         let f = compile_str("x^2 - y^2", TrigUnit::Radians).unwrap();
-        let r = contour(&f, &vp(), &PlotOptions::default(), false, false);
+        let r = contour(
+            &f,
+            &vp(),
+            &PlotOptions::default(),
+            false,
+            false,
+            &Cancel(None),
+        );
         let mut len = 0.0;
         for l in &r.curves {
             for w in l.windows(2) {

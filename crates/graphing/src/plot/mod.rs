@@ -17,6 +17,7 @@ mod implicit;
 
 use crate::equation::{Axis, CompiledEquation, CompiledForm, EquationKind};
 use crate::viewport::Viewport;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) use explicit::ExplicitSampler;
 
@@ -53,6 +54,12 @@ pub struct PlotOptions {
     pub implicit_cell_px: f64,
     /// Number of fine cells per coarse block side.
     pub implicit_block: usize,
+    /// Most fine cells refined for one implicit relation (where its sign
+    /// changes). A relation that changes sign nearly everywhere would need
+    /// the whole lattice; past this the cells grow coarser instead.
+    /// [`crate::Graph`] lowers it to share [`crate::graph::MAX_IMPLICIT_WORK`]
+    /// between the relations plotted together.
+    pub implicit_max_refined: f64,
 }
 
 impl Default for PlotOptions {
@@ -64,6 +71,7 @@ impl Default for PlotOptions {
             max_evals: 200_000,
             implicit_cell_px: 2.0,
             implicit_block: 8,
+            implicit_max_refined: 4.0e6,
         }
     }
 }
@@ -93,9 +101,54 @@ impl Plot {
 
 /// Computes the geometry of a compiled equation for a viewport.
 pub fn plot(eq: &CompiledEquation, vp: &Viewport, opts: &PlotOptions) -> Plot {
+    plot_with(eq, vp, opts, &Cancel(None))
+}
+
+/// [`plot`], polling `cancel`: returns `None` soon after the flag becomes
+/// true, so a worker thread can drop work for a viewport that is gone.
+pub fn plot_cancellable(
+    eq: &CompiledEquation,
+    vp: &Viewport,
+    opts: &PlotOptions,
+    cancel: &AtomicBool,
+) -> Option<Plot> {
+    let c = Cancel(Some(cancel));
+    let p = plot_with(eq, vp, opts, &c);
+    (!c.is_set()).then_some(p)
+}
+
+/// An optional cancel flag, polled by the samplers.
+#[derive(Clone, Copy)]
+pub(crate) struct Cancel<'a>(pub(crate) Option<&'a AtomicBool>);
+
+impl Cancel<'_> {
+    #[inline]
+    pub(crate) fn is_set(&self) -> bool {
+        self.0.is_some_and(|c| c.load(Ordering::Relaxed))
+    }
+}
+
+/// For an equation plotted by contouring a scalar field (marching squares)
+/// rather than by sampling an explicit curve: the field's evaluation cost.
+pub(crate) fn contour_cost(eq: &CompiledEquation) -> Option<usize> {
+    match &eq.form {
+        CompiledForm::Explicit { .. } => None,
+        CompiledForm::Implicit { f } => Some(f.cost()),
+        CompiledForm::Inequality { bound: Some(_), .. } => None,
+        CompiledForm::Inequality { field, .. } => Some(field.cost()),
+    }
+}
+
+pub(crate) fn plot_with(
+    eq: &CompiledEquation,
+    vp: &Viewport,
+    opts: &PlotOptions,
+    cancel: &Cancel<'_>,
+) -> Plot {
     match &eq.form {
         CompiledForm::Explicit { axis, f } => {
             let mut s = ExplicitSampler::new(f, *axis, vp, opts);
+            s.set_cancel(*cancel);
             s.run();
             Plot {
                 curves: s.stroke_polylines(),
@@ -105,7 +158,7 @@ pub fn plot(eq: &CompiledEquation, vp: &Viewport, opts: &PlotOptions) -> Plot {
             }
         }
         CompiledForm::Implicit { f } => {
-            let r = implicit::contour(f, vp, opts, false, false);
+            let r = implicit::contour(f, vp, opts, false, false, cancel);
             Plot {
                 curves: r.curves,
                 fill: Vec::new(),
@@ -121,6 +174,7 @@ pub fn plot(eq: &CompiledEquation, vp: &Viewport, opts: &PlotOptions) -> Plot {
         } => {
             if let Some(b) = bound {
                 let mut s = ExplicitSampler::new(&b.f, b.axis, vp, opts);
+                s.set_cancel(*cancel);
                 s.run();
                 Plot {
                     curves: s.stroke_polylines(),
@@ -129,7 +183,7 @@ pub fn plot(eq: &CompiledEquation, vp: &Viewport, opts: &PlotOptions) -> Plot {
                     has_missing_data: s.exhausted(),
                 }
             } else {
-                let r = implicit::contour(field, vp, opts, true, *strict);
+                let r = implicit::contour(field, vp, opts, true, *strict, cancel);
                 Plot {
                     curves: r.curves,
                     fill: r.fill,

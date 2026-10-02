@@ -332,6 +332,22 @@ pub fn gamma(x: f64) -> f64 {
     (2.0 * PI).sqrt() * half * ((-t).exp() * half) * a
 }
 
+/// ln Γ(x) for x > 0, computed in log space so it never overflows (Γ
+/// itself does beyond x ≈ 171.6).
+fn ln_gamma(x: f64) -> f64 {
+    if x < 0.5 {
+        // Reflection; sin(πx) > 0 on (0, ½).
+        return (PI / (PI * x).sin()).ln() - ln_gamma(1.0 - x);
+    }
+    let x = x - 1.0;
+    let mut a = LANCZOS[0];
+    let t = x + LANCZOS_G + 0.5;
+    for (i, c) in LANCZOS.iter().enumerate().skip(1) {
+        a += c / (x + i as f64);
+    }
+    0.5 * (2.0 * PI).ln() + (x + 0.5) * t.ln() - t + a.ln()
+}
+
 /// `n!` extended to the reals as Γ(n+1).
 #[inline]
 pub fn factorial(n: f64) -> f64 {
@@ -374,7 +390,15 @@ pub fn ncr(n: f64, r: f64) -> f64 {
         let mut acc = 1.0;
         let mut i = 1.0;
         while i <= r {
-            acc = acc * (n - r + i) / i;
+            // acc = C(n−r+i−1, i−1). Multiplying first keeps small results
+            // exact; when that product alone overflows, divide first, since
+            // the coefficient itself may still fit (nCr(1021, 510) ≈ 5.6e305).
+            let wide = acc * (n - r + i);
+            acc = if wide.is_finite() {
+                wide / i
+            } else {
+                acc / i * (n - r + i)
+            };
             // C(n, r) ≥ 2^r here, so a long loop overflows within ~1100
             // steps; stop there instead of iterating up to r (≤ 10^19…).
             if !acc.is_finite() {
@@ -384,7 +408,12 @@ pub fn ncr(n: f64, r: f64) -> f64 {
         }
         return acc.round();
     }
-    factorial(n) / (factorial(r) * factorial(n - r))
+    let direct = factorial(n) / (factorial(r) * factorial(n - r));
+    if direct.is_finite() || n + 1.0 <= 0.0 || r + 1.0 <= 0.0 || n - r + 1.0 <= 0.0 {
+        return direct;
+    }
+    // Γ(n+1) overflows long before the quotient does.
+    (ln_gamma(n + 1.0) - ln_gamma(r + 1.0) - ln_gamma(n - r + 1.0)).exp()
 }
 
 /// Number of permutations `nPr(n, r)` (generalised through Γ).
@@ -409,7 +438,11 @@ pub fn npr(n: f64, r: f64) -> f64 {
         }
         return acc;
     }
-    factorial(n) / factorial(n - r)
+    let direct = factorial(n) / factorial(n - r);
+    if direct.is_finite() || n + 1.0 <= 0.0 || n - r + 1.0 <= 0.0 {
+        return direct;
+    }
+    (ln_gamma(n + 1.0) - ln_gamma(n - r + 1.0)).exp()
 }
 
 /// `b^(p/q)` with real-root semantics: a negative base is allowed when q is
