@@ -1621,6 +1621,10 @@ impl ApplicationHandler<UserEvent> for App {
             eprintln!("dgmnb: clipboard worker did not stop; exiting now");
             std::process::exit(0);
         }
+        // Likewise the drawing surface, window and accessibility adapter:
+        // released while the event loop and its display are still alive
+        // rather than after `run_app` returns.
+        self.gfx = None;
     }
 
     fn user_event(&mut self, el: &ActiveEventLoop, event: UserEvent) {
