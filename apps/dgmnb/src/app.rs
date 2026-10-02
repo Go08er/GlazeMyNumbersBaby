@@ -92,6 +92,30 @@ impl HasPages for Settings {
 
 pub type Store = appcore::settings::Store<Settings>;
 
+/// Ask the desktop to open `url` through the OpenURI portal, off the UI
+/// thread and one request at a time. It waits out an app chooser; only a
+/// refused or failed request falls back to copying the link.
+fn open_link(proxy: EventLoopProxy<UserEvent>, url: &'static str) {
+    use appcore::dbus::{Opened, open_uri};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static OPENING: AtomicBool = AtomicBool::new(false);
+    if OPENING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("open-uri".into())
+        .spawn(move || {
+            let outcome = open_uri(url, Duration::from_secs(120));
+            OPENING.store(false, Ordering::Release);
+            if matches!(outcome, Ok(Opened::Failed) | Err(_)) {
+                let _ = proxy.send_event(UserEvent::OpenFailed(url));
+            }
+        });
+    if spawned.is_err() {
+        OPENING.store(false, Ordering::Release);
+    }
+}
+
 fn persist(store: &Store) {
     if let Err(e) = store.save() {
         eprintln!("dgmnb: {e}");
@@ -496,32 +520,7 @@ impl App {
                 self.retheme();
                 persist(&self.store);
             }
-            Msg::OpenLink(url) => {
-                // Ask the desktop via the OpenURI portal, off the UI thread;
-                // one request at a time.
-                use std::sync::atomic::{AtomicBool, Ordering};
-                static OPENING: AtomicBool = AtomicBool::new(false);
-                if OPENING.swap(true, Ordering::AcqRel) {
-                    return;
-                }
-                let proxy = self.proxy.clone();
-                let spawned =
-                    std::thread::Builder::new()
-                        .name("open-uri".into())
-                        .spawn(move || {
-                            // Wait out an app chooser; only a refused or failed
-                            // request falls back to copying the link.
-                            use appcore::dbus::{Opened, open_uri};
-                            let outcome = open_uri(url, Duration::from_secs(120));
-                            OPENING.store(false, Ordering::Release);
-                            if matches!(outcome, Ok(Opened::Failed) | Err(_)) {
-                                let _ = proxy.send_event(UserEvent::OpenFailed(url));
-                            }
-                        });
-                if spawned.is_err() {
-                    OPENING.store(false, Ordering::Release);
-                }
-            }
+            Msg::OpenLink(url) => open_link(self.proxy.clone(), url),
             Msg::CopyLink(url) => {
                 let (mut cx, ..) = self.cx_parts();
                 cx.copy(url);

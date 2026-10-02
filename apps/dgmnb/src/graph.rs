@@ -1499,3 +1499,56 @@ fn format_value(v: f64) -> String {
     let r = (v * 1000.0).round() / 1000.0;
     if r == 0.0 { "0".into() } else { format!("{r}") }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R4-M-04: function analysis results (labels only, nothing focusable)
+    /// are a keyboard scroll target once they overflow their panel.
+    #[test]
+    fn analysis_results_are_a_keyboard_scroll_target() {
+        let mut g = GraphPage::for_test(session::from_list("y=x^3-2x+1/(x-1)"));
+        let eq = g.rows[0].id;
+        let (mut toasts, mut focus) = (Vec::new(), None);
+        let mut cx = Cx {
+            toasts: &mut toasts,
+            clipboard: None,
+            wide: true,
+            focus: &mut focus,
+        };
+        g.update(Msg::Analyze(eq), &mut cx);
+        let features = g.graph.analyze(eq);
+        g.analysis_done(g.analysis_seq, features);
+
+        let mut pm = tiny_skia::Pixmap::new(760, 500).unwrap();
+        let (mut text, mut icons, input) = (
+            crate::text::Text::new(),
+            ui::Icons::default(),
+            ui::Input::default(),
+        );
+        let mut scrolls = std::collections::HashMap::new();
+        let mut f = Frame::new(
+            crate::gfx::Canvas::new(pm.as_mut(), 1.0, false),
+            &mut text,
+            &mut icons,
+            crate::theme::Theme::new(false, None),
+            &input,
+            &mut scrolls,
+            true,
+        );
+        g.view(&mut f, Rect::new(0.0, 46.0, 760.0, 454.0));
+        let sid = id("an-scroll");
+        let hit = f.hits.iter().find(|h| h.id == sid).expect("panel drawn");
+        assert!(hit.focusable, "overflowing results can't take focus");
+        let node = f
+            .nodes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|n| n.id == sid)
+            .unwrap();
+        assert!(node.focusable && node.scrollable);
+        assert!(scrolls[&sid].max() > 0.0);
+    }
+}
