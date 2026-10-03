@@ -287,9 +287,14 @@ pub fn show(win: &Rc<Window>) {
         shown.add_css_class("numeric");
         shown.set_width_chars(4);
         shown.set_xalign(1.0);
+        let composited = WidgetExt::display(&win.widget()).is_composited();
         let opacity = adw::ActionRow::builder()
             .title("Background opacity")
-            .subtitle("Lower lets your desktop show through, frosted if your compositor blurs translucent windows")
+            .subtitle(if composited {
+                "Lower lets your desktop show through, frosted if your compositor blurs translucent windows"
+            } else {
+                "Your display isn't compositing windows, so GMNB stays opaque until it does"
+            })
             .build();
         opacity.add_suffix(&scale);
         opacity.add_suffix(&shown);
