@@ -28,8 +28,21 @@ struct Row {
     root: gtk::Box,
     entry: gtk::Entry,
     swatch: gtk::Button,
+    /// The swatch's colour, reloaded on change (one provider per row).
+    swatch_css: gtk::CssProvider,
     error: gtk::Label,
     color: Cell<usize>,
+}
+
+/// A style provider for a swatch's colour, attached once and reloaded on
+/// change (adding a new one each time would pile them up).
+fn colour_provider(button: &gtk::Button) -> gtk::CssProvider {
+    let css = gtk::CssProvider::new();
+    #[allow(deprecated)]
+    button
+        .style_context()
+        .add_provider(&css, gtk::STYLE_PROVIDER_PRIORITY_USER + 5);
+    css
 }
 
 pub struct GraphingPage {
@@ -424,14 +437,9 @@ impl GraphingPage {
             (c[1] * 255.0) as u8,
             (c[2] * 255.0) as u8
         );
-        let provider = gtk::CssProvider::new();
-        provider.load_from_string(&format!(
+        row.swatch_css.load_from_string(&format!(
             "button {{ background: {css}; box-shadow: 0 0 12px -2px {css}; }}"
         ));
-        #[allow(deprecated)]
-        row.swatch
-            .style_context()
-            .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_USER + 5);
     }
 
     fn add_equation(self: &Rc<Self>, text: &str) -> Option<Rc<Row>> {
@@ -481,11 +489,13 @@ impl GraphingPage {
         root.add_css_class("wc-eq-row");
         root.append(&line);
         root.append(&error);
+        let swatch_css = colour_provider(&swatch);
         let row = Rc::new(Row {
             id,
             root: root.clone(),
             entry: entry.clone(),
             swatch: swatch.clone(),
+            swatch_css,
             error,
             color: Cell::new(color),
         });
@@ -562,6 +572,7 @@ impl GraphingPage {
             };
             p.graph.borrow_mut().remove_equation(id);
             p.rows.borrow_mut().retain(|r| r.id != id);
+            p.graph_view.forget_color(id);
             rev.set_reveal_child(false);
             let (list, rev2) = (p.list.clone(), rev.clone());
             glib::timeout_add_local_once(std::time::Duration::from_millis(280), move || {
@@ -591,6 +602,7 @@ impl GraphingPage {
                 root: row.root.clone(),
                 entry: row.entry.clone(),
                 swatch: b.clone(),
+                swatch_css: colour_provider(&b),
                 error: row.error.clone(),
                 color: Cell::new(i),
             };

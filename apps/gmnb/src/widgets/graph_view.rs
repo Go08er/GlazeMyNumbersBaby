@@ -193,6 +193,11 @@ impl GraphView {
         self.queue_draw();
     }
 
+    /// Drop a removed equation's colour.
+    pub fn forget_color(&self, id: EquationId) {
+        self.imp().colors.borrow_mut().remove(&id);
+    }
+
     pub fn set_line_width(&self, w: f64) {
         self.imp().line_width.set(w);
         self.queue_draw();
