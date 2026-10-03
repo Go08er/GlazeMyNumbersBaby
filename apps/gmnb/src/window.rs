@@ -180,8 +180,8 @@ impl Window {
 
         toasts.set_child(Some(&split));
         {
+            // The window gets its content in `present`.
             aurora.set_child(Some(&toasts));
-            win.set_content(Some(&aurora));
             let aurora = aurora.clone();
             hub.subscribe(move |s| aurora.set_scheme(*s));
         }
@@ -287,6 +287,18 @@ impl Window {
 
     pub fn widget(&self) -> adw::ApplicationWindow {
         self.win.clone()
+    }
+
+    /// Show the window. Its content goes in right after the window is
+    /// realized, still before the first frame: realizing creates the GPU
+    /// renderer, which takes a while, and GTK meanwhile finishes loading the
+    /// icon theme on its own thread. Attached any earlier, the header bar's
+    /// window controls would wait for that theme on the main thread.
+    pub fn present(&self) {
+        self.win.present();
+        if self.win.content().is_none() {
+            self.win.set_content(Some(&self.ctx.aurora));
+        }
     }
 
     pub fn ctx(&self) -> &Rc<Ctx> {

@@ -1,4 +1,5 @@
 mod keymap;
+mod launch;
 mod pages;
 mod prefs;
 mod settings;
@@ -23,6 +24,7 @@ pub const DATA_DIR: &str = "gmnb";
 static OUTFIT: &[u8] = include_bytes!("../assets/fonts/Outfit-Variable.ttf");
 
 fn main() -> glib::ExitCode {
+    launch::mark("main");
     // SAFETY: first thing in main, before GTK or any other thread starts.
     unsafe { appcore::tz::fix_sandbox_timezone() };
     // NVIDIA's driver busy-waits on GPU fences by default, which turned the
@@ -32,18 +34,41 @@ fn main() -> glib::ExitCode {
         // SAFETY: first thing in main, before GTK or any other thread starts.
         unsafe { std::env::set_var("__GL_YIELD", "USLEEP") };
     }
+    // Initialise libadwaita before the application starts up. AdwApplication
+    // would do it after GtkApplication's startup, which has already loaded
+    // the icon theme; libadwaita then adds its own icon path, and GTK loads
+    // the whole theme a second time on the first icon lookup. (If there's
+    // no display this fails quietly and startup reports it as before.)
+    if adw::init().is_ok() && icon_installed() {
+        // What GtkApplication's startup would conclude, without loading the
+        // whole icon theme on the main thread to find out: GTK then loads it
+        // on its own thread while the window is being set up.
+        gtk::Window::set_default_icon_name(APP_ID);
+    }
+    launch::mark("adw-init");
     let app = adw::Application::builder().application_id(APP_ID).build();
+    // GMNB ships no GResources. Without this, GtkApplication's startup adds
+    // "<base path>/icons/" to the icon theme, which makes GTK throw away and
+    // reload the whole theme a second time.
+    app.set_resource_base_path(None);
     app.connect_startup(|_| {
+        launch::mark("startup");
         register_fonts();
+        launch::mark("fonts");
         load_static_css();
+        launch::mark("css");
     });
     app.connect_activate(|app| {
         if let Some(win) = app.active_window() {
             win.present();
             return;
         }
+        launch::mark("activate");
         let win = window::Window::new(app);
-        win.widget().present();
+        launch::mark("window-built");
+        launch::exit_after_first_frame(&win.widget());
+        win.present();
+        launch::mark("presented");
         if let Some(ms) = std::env::var("GMNB_AUTOCLOSE_MS")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -72,6 +97,16 @@ fn main() -> glib::ExitCode {
         }
     });
     app.run()
+}
+
+/// Whether the app icon is installed where every package puts it (the
+/// hicolor theme, which every icon theme falls back to). If it's only
+/// somewhere else, GtkApplication's own check still finds it.
+fn icon_installed() -> bool {
+    let file = format!("icons/hicolor/scalable/apps/{APP_ID}.svg");
+    std::iter::once(glib::user_data_dir())
+        .chain(glib::system_data_dirs())
+        .any(|dir| dir.join(&file).is_file())
 }
 
 /// Make the bundled display font available to Pango without installing it.
