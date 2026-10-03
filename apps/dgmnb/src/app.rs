@@ -2275,7 +2275,7 @@ const LICENCES: &str = concat!(
     "\n\nExchange rates: Frankfurter (central bank reference rates)."
 );
 
-fn draw_licences(f: &mut Frame, full: Rect) {
+pub(crate) fn draw_licences(f: &mut Frame, full: Rect) {
     let t = f.t;
     f.scrim(Msg::Licences(false), true);
     let r = full.inset(18.0);

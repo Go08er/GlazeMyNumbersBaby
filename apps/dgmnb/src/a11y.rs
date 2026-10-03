@@ -50,34 +50,48 @@ pub fn tree(nodes: &[Node], title: &str, focus: Option<Id>, scale: f64) -> TreeU
         // here are odd (`ui::id`), so `id - 1` is free for a node's one
         // synthetic child.
         let child = NodeId(n.id - 1);
-        let mut extra = None;
+        // Synthetic children: (id, node). Ids `id - 1`, `id - 3`, … are even,
+        // so they can't collide with real (odd) ids.
+        let mut extra: Vec<(NodeId, AkNode)> = Vec::new();
         match (n.role, &n.value) {
-            _ if n.id <= 1 => {}
+            _ if n.id < 1 << 20 => {} // too small to step down from safely
             (Role::Label, None) => node.set_value(n.label.as_str()),
-            (Role::TextInput, Some(text)) => {
-                let mut run = AkNode::new(Role::TextRun);
-                run.set_value(text.as_str());
-                run.set_character_lengths(
-                    text.chars()
-                        .map(|c| c.len_utf8() as u8)
-                        .collect::<Vec<u8>>(),
-                );
-                run.set_bounds(bounds);
-                node.push_child(child);
-                if let Some((anchor, caret)) = n.text_selection {
-                    let at = |i: usize| TextPosition {
-                        node: child,
-                        character_index: i,
-                    };
-                    node.set_text_selection(TextSelection {
-                        anchor: at(anchor),
-                        focus: at(caret),
-                    });
+            (Role::TextInput | Role::Document, Some(text)) => {
+                // One run per line (a field has one); each covers its line
+                // including the line break.
+                let lines: Vec<&str> = if n.role == Role::Document {
+                    text.split_inclusive('\n').collect()
+                } else {
+                    vec![text.as_str()]
+                };
+                for (k, line) in lines.iter().enumerate() {
+                    let mut run = AkNode::new(Role::TextRun);
+                    run.set_value(*line);
+                    run.set_character_lengths(
+                        line.chars()
+                            .map(|c| c.len_utf8() as u8)
+                            .collect::<Vec<u8>>(),
+                    );
+                    run.set_bounds(bounds);
+                    let rid = NodeId(n.id - 1 - 2 * k as u64);
+                    node.push_child(rid);
+                    extra.push((rid, run));
                 }
-                node.add_action(Action::SetTextSelection);
-                node.add_action(Action::ReplaceSelectedText);
-                node.add_action(Action::SetValue);
-                extra = Some(run);
+                if n.role == Role::TextInput {
+                    if let Some((anchor, caret)) = n.text_selection {
+                        let at = |i: usize| TextPosition {
+                            node: child,
+                            character_index: i,
+                        };
+                        node.set_text_selection(TextSelection {
+                            anchor: at(anchor),
+                            focus: at(caret),
+                        });
+                    }
+                    node.add_action(Action::SetTextSelection);
+                    node.add_action(Action::ReplaceSelectedText);
+                    node.add_action(Action::SetValue);
+                }
             }
             (Role::Group, Some(text)) if !children.contains_key(&n.id) => {
                 // Results held as a group's value (function analysis):
@@ -86,7 +100,7 @@ pub fn tree(nodes: &[Node], title: &str, focus: Option<Id>, scale: f64) -> TreeU
                 label.set_value(text.as_str());
                 label.set_bounds(bounds);
                 node.push_child(child);
-                extra = Some(label);
+                extra.push((child, label));
             }
             _ => {}
         }
@@ -114,15 +128,11 @@ pub fn tree(nodes: &[Node], title: &str, focus: Option<Id>, scale: f64) -> TreeU
             node.add_action(Action::ScrollDown);
         }
         if let Some(mut kids) = children.remove(&n.id) {
-            if extra.is_some() {
-                kids.push(child);
-            }
+            kids.extend(extra.iter().map(|(id, _)| *id));
             node.set_children(kids);
         }
         out.push((NodeId(n.id), node));
-        if let Some(extra) = extra {
-            out.push((child, extra));
-        }
+        out.extend(extra);
     }
     let focus = focus.filter(|f| seen.contains(f)).map_or(NodeId(0), NodeId);
     TreeUpdate {
@@ -426,6 +436,36 @@ mod tests {
                 .iter()
                 .any(|(_, _, text)| text.as_deref() == Some("x^2"))
         );
+    }
+
+    /// Pre-review: the licence viewer's text reaches screen readers (a
+    /// Document offers text only through text runs), and the open
+    /// calendar says which day is chosen.
+    #[test]
+    fn licences_are_readable_and_the_chosen_day_is_selected() {
+        let (nodes, _) = frame_nodes(crate::app::draw_licences);
+        let doc = exported(&nodes)
+            .into_iter()
+            .find(|(r, ..)| *r == Role::Document)
+            .and_then(|(_, _, text)| text)
+            .expect("licence text exported");
+        assert!(doc.contains("MIT License") && doc.contains("SIL Open Font License"));
+
+        let mut d = crate::date::DatePage::new();
+        let (mut toasts, mut focus) = (Vec::new(), None);
+        let mut cx = crate::app::Cx {
+            toasts: &mut toasts,
+            clipboard: None,
+            wide: true,
+            focus: &mut focus,
+        };
+        d.update(crate::date::Msg::Calendar(Some(0)), &mut cx);
+        let (nodes, _) = frame_nodes(|f, r| d.overlay(f, r));
+        let chosen: Vec<_> = nodes
+            .iter()
+            .filter(|n| n.role == Role::ListBoxOption && n.selected == Some(true))
+            .collect();
+        assert_eq!(chosen.len(), 1, "exactly one day is the chosen one");
     }
 
     #[test]

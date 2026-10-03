@@ -454,6 +454,10 @@ impl DatePage {
                     false,
                     &datecalc::format_long_date(&datecalc::utc_midnight(d)),
                 );
+                // Drawn as the accent circle above; tell AT which it is.
+                if let Some(n) = f.nodes.as_mut().and_then(|v| v.last_mut()) {
+                    n.selected = Some(sel);
+                }
             }
             let color = if sel {
                 t.on_accent
