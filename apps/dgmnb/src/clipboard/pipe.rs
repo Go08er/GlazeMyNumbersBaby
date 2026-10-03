@@ -109,8 +109,11 @@ mod tests {
 
     fn pipe() -> (OwnedFd, OwnedFd) {
         let mut fds = [0; 2];
+        // Close-on-exec, as real clipboard pipes are: other tests start
+        // processes (Xvfb, dbus-daemon) that would otherwise inherit the
+        // write end and keep the reader from ever seeing end of file.
         // SAFETY: fds has room for two descriptors.
-        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
         // SAFETY: both were just returned by pipe() and are owned here.
         unsafe {
             use std::os::fd::FromRawFd;
