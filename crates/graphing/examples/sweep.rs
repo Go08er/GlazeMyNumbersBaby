@@ -1725,6 +1725,18 @@ impl Analysed {
     fn zero_set(&self) -> bool {
         self.k.x_intercept.starts_with("x ∈")
     }
+    /// An x-intercept set this checker reads: ℝ, or ℝ without some points
+    /// ("x ∈ ℝ \ {0}"); the points left out. None for any other set.
+    fn zero_set_except(&self) -> Option<Vec<f64>> {
+        let t = self.k.x_intercept.as_str();
+        if t == "x ∈ ℝ" {
+            return Some(Vec::new());
+        }
+        let list = t.strip_prefix("x ∈ ℝ \\ {")?.strip_suffix('}')?;
+        list.split(", ")
+            .map(|v| v.replace('−', "-").parse::<f64>().ok())
+            .collect()
+    }
     /// Copies of a feature to test: the point, or a few of its family.
     fn copies(&self, f: &Family) -> Vec<f64> {
         match f.period {
@@ -2490,18 +2502,43 @@ fn check_missing_zeros(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
         }
     }
     if !a.unknown(flags::ZEROS) {
-        if a.zero_everywhere() {
-            // Every defined sample is 0.
-            if let Some(i) =
-                (0..n).find(|&i| ys[i].is_finite() && ys[i] != 0.0 && ys[i].abs() > a.noise(xs[i]))
-            {
-                r.fail(
-                    "zero-everywhere-wrong",
-                    e,
-                    format!("x-intercepts x ∈ ℝ but f({})={}", xs[i], ys[i]),
-                );
+        if a.zero_set() {
+            // A set of x-intercepts (the zeros list can't hold one) is
+            // checked as a set: f is 0 at every sample in it, and not 0
+            // (undefined, or resolvably nonzero) at the points it leaves
+            // out. A set this checker doesn't read is only checked to be
+            // 0 somewhere, by the 0 ∈ range rule.
+            if let Some(except) = a.zero_set_except() {
+                let inside = |x: f64| !except.iter().any(|p| floats_between(*p, x) <= 4);
+                if let Some(i) = (0..n).find(|&i| {
+                    inside(xs[i])
+                        && ys[i].is_finite()
+                        && ys[i] != 0.0
+                        && ys[i].abs() > a.noise(xs[i])
+                }) {
+                    r.fail(
+                        "zero-set-wrong",
+                        e,
+                        format!(
+                            "x-intercepts \"{}\" but f({:?})={:?}",
+                            a.k.x_intercept, xs[i], ys[i]
+                        ),
+                    );
+                } else if let Some(p) = except
+                    .iter()
+                    .find(|&&p| a.eval(p) == 0.0 && a.exact_zero(p))
+                {
+                    r.fail(
+                        "zero-set-wrong",
+                        e,
+                        format!(
+                            "x-intercepts \"{}\" leave out {p:?}, but f({p:?})=0",
+                            a.k.x_intercept
+                        ),
+                    );
+                }
             }
-        } else if !a.zero_set() {
+        } else {
             if let Some(&(p, q)) = runs.first() {
                 r.fail(
                     "missing-zero-interval",
