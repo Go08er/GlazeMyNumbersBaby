@@ -341,8 +341,16 @@ pub(crate) fn sequence_limit_noisy(v: &[f64], noise_in: &[f64]) -> (SeqLimit, f6
         return (SeqLimit::Unknown, NONE);
     };
     let l = fin[k + 1];
-    let scale = l.abs().max(1.0);
-    if d[k] > 1e-6 * scale {
+    // Settled against how far the sequence has moved, not against its size
+    // or 1: x^−0.0001 − 10⁶ still moves by 2·10⁻⁴ per decade, 10⁻¹²/ln x by
+    // 10⁻¹⁵, and neither has arrived.
+    // Or within the values' own noise: f(10⁸) − 10⁸ is rounding beyond
+    // 10⁻⁸ when f = 1/acsch(x) ≈ x + 1/(6x).
+    let spread = fin.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+        - fin.iter().copied().fold(f64::INFINITY, f64::min);
+    let nk = noise_in.get(k + 1).copied().unwrap_or(0.0);
+    // (Noise that is all there is, as in sin(x²) far out, settles nothing.)
+    if d[k] > 1e-6 * spread && (d[k] > 4.0 * nk || nk > 1e-3 * spread) {
         return (SeqLimit::Unknown, NONE);
     }
     // Aitken Δ² on (v_{k-1}, v_k, v_{k+1}).
@@ -353,7 +361,6 @@ pub(crate) fn sequence_limit_noisy(v: &[f64], noise_in: &[f64]) -> (SeqLimit, f6
         lim = acc;
     }
     let all = fin.iter().fold(0.0f64, |m, x| m.max(x.abs()));
-    let nk = noise_in.get(k + 1).copied().unwrap_or(0.0);
     (
         SeqLimit::Converges(lim),
         10.0 * d[k] + 64.0 * f64::EPSILON * all + 4.0 * nk,

@@ -29,7 +29,7 @@ use super::format::{
 };
 use super::numeric::{
     SeqLimit, bisect_finite, brent, diverges_near, limit_at_infinity_beyond_err, one_sided_limit,
-    one_sided_limit_err, sequence_limit_err, sinh_grid, uniform_grid,
+    one_sided_limit_err, sample, sequence_limit_noisy, sinh_grid, uniform_grid,
 };
 use super::{
     AnalysisData, AnalysisError, AsymptoteSide, Family, KeyGraphFeatures, Monotonicity, Parity,
@@ -830,6 +830,49 @@ fn clean(v: f64, noise: f64) -> f64 {
         s
     } else {
         v
+    }
+}
+
+/// `c`, a root of `g`, moved to a recognised closed form (or 0) when that
+/// lies within c's own uncertainty, the stretch around c where g can't be
+/// told from 0 for rounding. x⁴ − 4x³ + 6x² − 4x + 1 turns at 1, but its
+/// f′ is rounding noise for |x − 1| ≲ 2·10⁻⁵: its minimum is at 1, not at
+/// 1.0000052. The zero of sin x − 10⁻⁹ at 10⁻⁹ is resolved and stays.
+/// Never moved where `ok` is false (outside the domain).
+fn snap_root(c: f64, g: &dyn Fn(f64) -> f64, ok: &dyn Fn(f64) -> bool) -> f64 {
+    if !c.is_finite() || c == 0.0 {
+        return c;
+    }
+    let unit = c.abs();
+    let h = 64.0 * f64::EPSILON * unit;
+    let w = [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0].map(|k| g(c + k * h));
+    if w.iter().any(|v| !v.is_finite()) {
+        return c;
+    }
+    let big = w.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    let noise = (0..4)
+        .map(|i| (w[i + 3] - 3.0 * w[i + 2] + 3.0 * w[i + 1] - w[i]).abs())
+        .fold(0.0f64, f64::max)
+        + 64.0 * f64::EPSILON * big;
+    let flat = |x: f64| {
+        let v = g(x);
+        v.is_finite() && v.abs() <= 8.0 * noise
+    };
+    let mut delta = h;
+    for _ in 0..48 {
+        if delta > 1e-3 * unit || !flat(c - 2.0 * delta) || !flat(c + 2.0 * delta) {
+            break;
+        }
+        delta *= 2.0;
+    }
+    if c.abs() <= delta && ok(0.0) && flat(0.0) {
+        return 0.0;
+    }
+    let s = snap(c, (delta / unit).clamp(1e-13, 1e-4));
+    if s != c && (s - c).abs() <= delta.max(1e-13 * unit) && ok(s) && flat(s) {
+        s
+    } else {
+        c
     }
 }
 
@@ -2503,15 +2546,32 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
         // disguise) must not count as concavity changes: zero out values
         // below a per-sample noise floor relative to f′. Not to f: an
         // offset (x³ + 10⁶) changes nothing about how f bends.
-        let d2floor = |x: f64, d1: f64| {
+        // And to f's size nearby, not over the whole grid: ((x − 2·10⁶)(x −
+        // 2·10⁶ − 1))² is 10²⁵ at 0 but bends at 2·10⁶ + 0.21 by 0.04.
+        let d2floor = |x: f64, d1: f64, fl: f64| {
             let x1 = 1.0 + x.abs();
-            1e-9 * d1.abs() / x1 + 1e-14 * scale / (x1 * x1)
+            1e-9 * d1.abs() / x1 + 1e-14 * fl / (x1 * x1)
         };
+        let on_grid0: Vec<bool> = ixs
+            .iter()
+            .map(|x| grid.binary_search_by(|g| g.total_cmp(x)).is_ok())
+            .collect();
+        let fnear: Vec<f64> = (0..ixs.len())
+            .map(|i| {
+                let (a, b) = (i.saturating_sub(32), (i + 33).min(ixs.len()));
+                (a..b)
+                    .filter(|&j| j == i || on_grid0[j])
+                    .map(|j| ifs[j])
+                    .filter(|v| v.is_finite())
+                    .fold(0.0f64, |m, v| m.max(v.abs()))
+            })
+            .collect();
+        let _ = scale;
         let d2c: Vec<f64> = d2s
             .iter()
             .enumerate()
             .map(|(i, &v)| {
-                if v.abs() <= d2floor(ixs[i], dfs0[i]) {
+                if v.abs() <= d2floor(ixs[i], dfs0[i], fnear[i]) {
                     0.0
                 } else {
                     v
@@ -2565,7 +2625,31 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
                 .collect();
             let mut df = |x: f64| fun.df(x);
             let (c, erratic1) = sign_changes(&ixs, &dfs_c, &mut df, 0.0);
-            crit = c;
+            let inside = |x: f64| x > p.lo.value && x < p.hi.value && fun.f(x).is_finite();
+            // A turn found next to a kink, closer than its ladders reach
+            // (10⁻¹¹ of the grid gap there), is the kink: max(x, 0) turns
+            // at 0, not at −7·10⁻¹⁵.
+            let at_kink = |x: f64| {
+                kinks.iter().copied().find(|&kx| {
+                    let i = grid.partition_point(|&g| g < kx);
+                    let after = grid[i.min(grid.len() - 1)..]
+                        .iter()
+                        .find(|&&g| g > kx)
+                        .map_or(f64::INFINITY, |&g| g - kx);
+                    let before = grid[..i].last().map_or(f64::INFINITY, |&g| kx - g);
+                    (x - kx).abs() <= 1e-11 * after.min(before)
+                })
+            };
+            crit = if erratic1 {
+                c
+            } else {
+                c.into_iter()
+                    .map(|(x, b, a)| {
+                        let x = at_kink(x).unwrap_or_else(|| snap_root(x, &|t| fun.df(t), &inside));
+                        (x, b, a)
+                    })
+                    .collect()
+            };
             out.erratic |= erratic1;
             if round == 1 || crit.is_empty() {
                 break;
@@ -2577,7 +2661,7 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
             let crit_xs: Vec<f64> = crit.iter().map(|c| c.0).collect();
             let (d2x, d2v) = merged(&base_xs, &d2c, &crit_xs, &|x| {
                 let v = fun.d2f(x);
-                if v.abs() <= d2floor(x, fun.df(x)) {
+                if v.abs() <= d2floor(x, fun.df(x), fun.f(x).abs()) {
                     0.0
                 } else {
                     v
@@ -2613,18 +2697,24 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
         }
         // Inflection points, each confirmed by how f itself bends within a
         // third of the way to the nearest other candidate, kink or end.
-        for &c in &infl_xs {
+        for (i, &c0) in infl_xs.iter().enumerate() {
+            let mut near = (c0 - p.lo.value).min(p.hi.value - c0);
+            for (j, &o) in infl_xs.iter().enumerate() {
+                if j != i {
+                    near = near.min((o - c0).abs());
+                }
+            }
+            for &o in &kinks {
+                near = near.min((o - c0).abs());
+            }
+            let room = near / 3.0;
+            let c = snap_root(c0, &|t| fun.d2f(t), &|t| {
+                t > p.lo.value && t < p.hi.value && fun.f(t).is_finite()
+            });
             let v = fun.f(c);
             if !v.is_finite() {
                 continue;
             }
-            let mut near = (c - p.lo.value).min(p.hi.value - c);
-            for &o in infl_xs.iter().chain(&kinks) {
-                if o != c {
-                    near = near.min((o - c).abs());
-                }
-            }
-            let room = near / 3.0;
             // Not at a corner of f (f′ continuous or a vertical tangent).
             let h = (1e-4 * room)
                 .min(1e-7 * c.abs().max(1.0))
@@ -2646,7 +2736,17 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
     let (zx, zf) = merged(&xs, &fs, &crit_xs, &|x| fun.f(x));
     let (zero_crossings, erratic0) = sign_changes(&zx, &zf, &mut f, 0.0);
     out.erratic |= erratic0;
+    let in_piece = |x: f64| {
+        (x > p.lo.value || (p.lo.closed && x == p.lo.value))
+            && (x < p.hi.value || (p.hi.closed && x == p.hi.value))
+            && fun.f(x).is_finite()
+    };
     for (x, _, _) in zero_crossings {
+        let x = if erratic0 {
+            x
+        } else {
+            snap_root(x, &|t| fun.f(t), &in_piece)
+        };
         // A crossing reported at a zero sample that is part of a zero run
         // is the middle of a vanishing stretch, not an intercept.
         let through_run = inner_zero_run && {
@@ -3150,15 +3250,33 @@ fn asymptotes_at_infinity(
             (SeqLimit::PosInf | SeqLimit::NegInf, _) => {
                 let first = ((2.0 * from.abs()).max(10.0).log10().ceil() as i32).max(1);
                 let xs: Vec<f64> = (first..first + 15).map(|k| sign * 10f64.powi(k)).collect();
-                let ms: Vec<f64> = xs.iter().map(|&x| f(x) / x).collect();
-                if let (SeqLimit::Converges(m), em) = sequence_limit_err(&ms) {
+                // With each value's rounding: f(x) − m·x cancels.
+                let (fv, fnoise) = sample(&mut f, &xs);
+                let ms: Vec<f64> = xs.iter().zip(&fv).map(|(&x, &v)| v / x).collect();
+                let msn: Vec<f64> = xs.iter().zip(&fnoise).map(|(&x, &n)| n / x.abs()).collect();
+                if let (SeqLimit::Converges(m), em) = sequence_limit_noisy(&ms, &msn) {
                     let m = clean(m, em.max(1e-12 * m.abs()));
                     if m != 0.0 {
-                        let bs: Vec<f64> = xs[..10].iter().map(|&x| f(x) - m * x).collect();
-                        if let (SeqLimit::Converges(b), eb) = sequence_limit_err(&bs) {
-                            let b = clean(b, eb);
-                            if !coincides(&mut f, m, b) {
-                                obl.push((m, b, side));
+                        let bs: Vec<f64> = (0..10).map(|i| fv[i] - m * xs[i]).collect();
+                        let bsn: Vec<f64> = (0..10)
+                            .map(|i| fnoise[i] + 4.0 * f64::EPSILON * (m * xs[i]).abs())
+                            .collect();
+                        match sequence_limit_noisy(&bs, &bsn) {
+                            (SeqLimit::Converges(b), eb) => {
+                                let b = clean(b, eb);
+                                if !coincides(&mut f, m, b) {
+                                    obl.push((m, b, side));
+                                }
+                            }
+                            // Growing like m·x with an offset that creeps
+                            // (x + ln x would): unknown. One that swings
+                            // (x + sin x) has no asymptote.
+                            _ => {
+                                let fin: Vec<f64> =
+                                    bs.iter().copied().filter(|v| v.is_finite()).collect();
+                                if monotone(&fin) {
+                                    unsure = true;
+                                }
                             }
                         }
                     }
@@ -3342,7 +3460,9 @@ fn analyze_aperiodic(
     {
         p.1 = clean(p.1, value_noise(fun, p.0, p.1));
     }
-    let zeros: Vec<f64> = zeros.into_iter().map(|z| snap(z, 1e-9)).collect();
+    // Already moved to closed forms within their own uncertainty (see
+    // `snap_root`): a zero at 10⁻⁹ (sin x − 10⁻⁹) is not 0.
+    let zeros: Vec<f64> = zeros;
 
     if zeros.len() > MAX_LISTED || too & flags::ZEROS != 0 {
         too |= flags::ZEROS;
@@ -3452,14 +3572,23 @@ fn analyze_aperiodic(
 /// Representative of `x` modulo `p` in (−p/2, p/2].
 fn normalize(x: f64, p: f64) -> f64 {
     let r = x - (x / p - 0.5).ceil() * p;
-    let r = snap(r, 1e-9);
+    // Reducing x leaves rounding of order p·ε, nothing more: a zero at
+    // 10⁻⁹ (sin x − 10⁻⁹) is not kπ.
+    let s = snap(r, 1e-9);
+    let r = if (s - r).abs() <= 1e-12 * r.abs().max(p) {
+        s
+    } else {
+        r
+    };
     if r <= -p / 2.0 + 1e-12 * p { r + p } else { r }
 }
 
 /// Groups representatives (mod p) into families, merging evenly spaced
 /// ones into a finer family (sin x zeros 0 and π → kπ).
 fn families(mut reps: Vec<f64>, p: f64) -> Vec<Family> {
-    let tol = 1e-7 * p;
+    // Positions are found to rounding: zeros of sin(x) + 10⁻⁷ at −10⁻⁷ and
+    // π + 10⁻⁷ are not one family kπ − 10⁻⁷.
+    let tol = 1e-10 * p;
     reps = reps.into_iter().map(|x| normalize(x, p)).collect();
     reps.sort_by(|a, b| a.total_cmp(b));
     reps.dedup_by(|a, b| (*a - *b).abs() <= tol);
