@@ -59,6 +59,10 @@ fn main() {
             for (f, w, refuted) in &r.work {
                 println!("   step {f:#06x}: {w} units (refuted so far {refuted:#06x})");
             }
+            println!(
+                "   dropped: refuted {:#06x}, unverified {:#06x}, by rule {:#06x}",
+                r.dropped.0, r.dropped.1, r.dropped.2
+            );
             for (check, lines) in &r.failures {
                 for l in lines {
                     println!("   {check}: {l}");
