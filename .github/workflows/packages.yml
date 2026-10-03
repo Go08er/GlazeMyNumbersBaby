@@ -140,6 +140,27 @@ jobs:
           set -euo pipefail
           (cd artifacts && sha256sum -- * > ../SHA256SUMS)
           cat SHA256SUMS
+          # The tag must still name the commit these packages were built
+          # from (annotated tags are peeled); checked before anything is
+          # created or uploaded, and again right before publishing.
+          tag_commit() {
+            local kind sha hops=0
+            read -r kind sha < <(gh api "repos/$REPO/git/ref/tags/$TAG" -q '"\(.object.type) \(.object.sha)"') || true
+            while [ "${kind:-}" = tag ] && [ "$hops" -lt 5 ]; do
+              read -r kind sha < <(gh api "repos/$REPO/git/tags/$sha" -q '"\(.object.type) \(.object.sha)"') || true
+              hops=$((hops + 1))
+            done
+            [ "${kind:-}" = commit ] && echo "$sha"
+          }
+          same_source() {
+            local now
+            now=$(tag_commit || true)
+            if [ "$now" != "$GITHUB_SHA" ]; then
+              echo "::error::$TAG points at ${now:-nothing readable}, but these packages were built from $GITHUB_SHA. Not publishing."
+              exit 1
+            fi
+          }
+          same_source
           # Does the release exist? "Not found" is the only failure that
           # means no; anything else stops the job.
           if out=$(gh release view "$TAG" --repo "$REPO" --json tagName 2>&1); then
@@ -150,52 +171,85 @@ jobs:
             echo "::error::Couldn't look up release $TAG: $out"
             exit 1
           fi
+          # Name, upload state, size and digest of every asset.
+          listing() {
+            gh release view "$TAG" --repo "$REPO" --json assets \
+              -q '.assets[] | [.name, .state, (.size | tostring), (.digest // "")] | @tsv'
+          }
+          # check FILE: 0 if the release has it complete and byte for byte,
+          # 1 if it hasn't got it, 2 if what it has is unfinished or differs.
+          check() {
+            local name line state size digest
+            name=$(basename "$1")
+            line=$(awk -F'\t' -v n="$name" '$1 == n' <<<"$assets")
+            [ -n "$line" ] || return 1
+            IFS=$'\t' read -r _ state size digest <<<"$line"
+            [ "$state" = uploaded ] && [ "$size" = "$(stat -c %s "$1")" ] || return 2
+            [ -z "$digest" ] || [ "$digest" = "sha256:$(sha256sum "$1" | cut -d' ' -f1)" ] || return 2
+          }
           if [ "$existed" = false ]; then
             # Start as a draft holding just the manifest, so whatever state
             # an interruption leaves says which build it belongs to; it's
-            # published only once every file is there.
+            # published only once every file is there and complete.
             gh release create "$TAG" SHA256SUMS --draft \
               --repo "$REPO" \
               --title "GMNB & DGMNB $TAG" \
               --notes "Built from commit $GITHUB_SHA; see SHA256SUMS." \
               --generate-notes
           else
-            # A re-run, or a draft an earlier run left behind. Files already
-            # there are never replaced, and only added to if what's there
-            # came from this exact build.
+            # A re-run, or a draft an earlier run left behind. Only added to
+            # if what's there came from this exact build.
+            assets=$(listing)
+            rc=0
+            check SHA256SUMS || rc=$?
             mkdir published
-            if ! gh release download "$TAG" --repo "$REPO" -p SHA256SUMS -D published; then
-              echo "::error::$TAG exists without SHA256SUMS; delete it by hand before publishing again."
-              exit 1
+            if [ "$rc" = 0 ] && gh release download "$TAG" --repo "$REPO" -p SHA256SUMS -D published; then
+              cmp -s published/SHA256SUMS SHA256SUMS || rc=2
+            else
+              rc=2
             fi
-            if ! cmp -s published/SHA256SUMS SHA256SUMS; then
-              echo "::error::$TAG holds files from a different build (SHA256SUMS differs). Delete the release by hand to republish."
-              diff published/SHA256SUMS SHA256SUMS || true
+            if [ "$rc" != 0 ]; then
+              echo "::error::$TAG has no complete SHA256SUMS from this build; delete the release by hand before publishing again."
+              [ -f published/SHA256SUMS ] && { diff published/SHA256SUMS SHA256SUMS || true; }
               exit 1
             fi
           fi
-          assets() { gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name'; }
-          existing=$(assets)
+          draft=$(gh release view "$TAG" --repo "$REPO" --json isDraft -q .isDraft)
+          assets=$(listing)
           for f in artifacts/*; do
             name=$(basename "$f")
-            if grep -qxF "$name" <<<"$existing"; then
-              echo "already there: $name"
-            else
-              gh release upload "$TAG" "$f" --repo "$REPO"
-            fi
+            rc=0
+            check "$f" || rc=$?
+            case $rc in
+              0) echo "already there: $name" ;;
+              1) gh release upload "$TAG" "$f" --repo "$REPO" ;;
+              *)
+                if [ "$draft" != true ]; then
+                  echo "::error::$name on the published $TAG is unfinished or differs from this build; fix it by hand."
+                  exit 1
+                fi
+                # An unfinished upload in a release nobody can see yet.
+                echo "redoing an unfinished upload: $name"
+                gh release delete-asset "$TAG" "$name" --repo "$REPO" --yes
+                gh release upload "$TAG" "$f" --repo "$REPO"
+                ;;
+            esac
           done
-          # Every file must be there before the release goes public.
-          existing=$(assets)
-          missing=0
+          # Every file must be there and complete before the release goes
+          # public.
+          assets=$(listing)
+          bad=0
           for f in SHA256SUMS artifacts/*; do
-            name=$(basename "$f")
-            if ! grep -qxF "$name" <<<"$existing"; then
-              echo "::error::$name is missing from $TAG"
-              missing=1
+            rc=0
+            check "$f" || rc=$?
+            if [ "$rc" != 0 ]; then
+              echo "::error::$(basename "$f") is missing or incomplete on $TAG"
+              bad=1
             fi
           done
-          [ "$missing" = 0 ] || exit 1
-          if [ "$(gh release view "$TAG" --repo "$REPO" --json isDraft -q .isDraft)" = true ]; then
+          [ "$bad" = 0 ] || exit 1
+          if [ "$draft" = true ]; then
+            same_source
             gh release edit "$TAG" --repo "$REPO" --draft=false
           fi
           state=$(gh release view "$TAG" --repo "$REPO" --json isDraft,tagName -q '"\(.tagName) \(.isDraft)"')
@@ -203,4 +257,4 @@ jobs:
             echo "::error::$TAG didn't end up published ($state)."
             exit 1
           fi
-          echo "$TAG is published with every file."
+          echo "$TAG is published with every file, built from $GITHUB_SHA."
