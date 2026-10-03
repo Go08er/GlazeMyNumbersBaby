@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use std::os::fd::OwnedFd;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -53,8 +54,41 @@ const TEXT_MIMES: [&str; 4] = [
 /// How long closing the app waits for the worker to let go of the display.
 const SHUTDOWN_WAIT: Duration = Duration::from_millis(500);
 
+/// Pipe transfers running at once. Past this a request is refused (its
+/// pipe just closes) rather than piling up threads.
+const MAX_TRANSFERS: usize = 8;
+static TRANSFERS: AtomicUsize = AtomicUsize::new(0);
+
+/// Run one pipe transfer on its own thread, within `MAX_TRANSFERS`. If it
+/// can't run, `job` is dropped, which closes its pipe (and any reply
+/// channel it holds).
+fn transfer(job: impl FnOnce() + Send + 'static) {
+    if TRANSFERS.fetch_add(1, Ordering::AcqRel) >= MAX_TRANSFERS {
+        TRANSFERS.fetch_sub(1, Ordering::AcqRel);
+        return;
+    }
+    struct Done;
+    impl Drop for Done {
+        fn drop(&mut self) {
+            TRANSFERS.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+    let spawned = std::thread::Builder::new()
+        .name("clipboard-pipe".into())
+        .spawn(move || {
+            let _done = Done;
+            job();
+        });
+    if spawned.is_err() {
+        TRANSFERS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Data on offer: (MIME type, bytes).
+type Offers = Vec<(String, Arc<[u8]>)>;
+
 enum Command {
-    Store(Vec<(String, Arc<[u8]>)>),
+    Store(Offers),
     LoadText(Sender<Option<String>>),
     Exit,
 }
@@ -109,10 +143,19 @@ impl Clipboard {
 
     pub fn copy_text(&self, text: &str) {
         let data: Arc<[u8]> = Arc::from(text.as_bytes());
-        let offers = TEXT_MIMES
+        let mut offers: Offers = TEXT_MIMES
             .iter()
+            .filter(|m| **m != "STRING")
             .map(|m| (m.to_string(), data.clone()))
             .collect();
+        // STRING is Latin-1: offered only when the text fits it.
+        if let Some(latin1) = text
+            .chars()
+            .map(|c| u8::try_from(u32::from(c)).ok())
+            .collect::<Option<Vec<u8>>>()
+        {
+            offers.push(("STRING".into(), Arc::from(latin1)));
+        }
         let _ = self.tx.send(Command::Store(offers));
     }
 
@@ -177,8 +220,9 @@ struct State {
     seats: HashMap<ObjectId, SeatData>,
     latest: Option<ObjectId>,
     qh: QueueHandle<State>,
-    sources: Vec<CopyPasteSource>,
-    offers: Vec<(String, Arc<[u8]>)>,
+    /// What we've put on the clipboard: each source with its data, so a
+    /// request is answered from the source it names.
+    sources: Vec<(CopyPasteSource, Offers)>,
     exit: bool,
 }
 
@@ -199,7 +243,6 @@ impl State {
             latest: None,
             qh: qh.clone(),
             sources: Vec::new(),
-            offers: Vec::new(),
             exit: false,
         })
     }
@@ -208,7 +251,7 @@ impl State {
         self.seats.get(self.latest.as_ref()?)
     }
 
-    fn store(&mut self, offers: Vec<(String, Arc<[u8]>)>) {
+    fn store(&mut self, offers: Offers) {
         let Some(seat) = self.seat() else { return };
         let (Some(device), serial) = (seat.device.as_ref(), seat.serial) else {
             return;
@@ -217,8 +260,7 @@ impl State {
             .manager
             .create_copy_paste_source(&self.qh, offers.iter().map(|o| o.0.clone()));
         source.set_selection(device, serial);
-        self.offers = offers;
-        self.sources.push(source);
+        self.sources.push((source, offers));
     }
 
     fn load_text(&mut self, reply: Sender<Option<String>>) {
@@ -236,22 +278,35 @@ impl State {
                 .find(|m| mimes.iter().any(|o| o == *m))
                 .map(|m| m.to_string())
         });
+        let latin1 = mime.as_deref() == Some("STRING");
         let Some(pipe) = mime.and_then(|m| offer.receive(m).ok()) else {
             let _ = reply.send(None);
             return;
         };
-        std::thread::spawn(move || {
-            let text = pipe::read_all(OwnedFd::from(pipe), MAX_PASTE)
-                .map(|buf| String::from_utf8_lossy(&buf).replace("\r\n", "\n"));
+        transfer(move || {
+            let text = pipe::read_all(OwnedFd::from(pipe), MAX_PASTE).map(|buf| {
+                let text = if latin1 {
+                    buf.iter().map(|&b| char::from(b)).collect()
+                } else {
+                    String::from_utf8_lossy(&buf).into_owned()
+                };
+                text.replace("\r\n", "\n")
+            });
             let _ = reply.send(text);
         });
     }
 
-    fn send(&mut self, mime: String, pipe: WritePipe) {
-        let Some((_, data)) = self.offers.iter().find(|o| o.0 == mime).cloned() else {
-            return;
+    fn send(&mut self, source: &WlDataSource, mime: String, pipe: WritePipe) {
+        let data = self
+            .sources
+            .iter()
+            .find(|(s, _)| s.inner() == source)
+            .and_then(|(_, offers)| offers.iter().find(|o| o.0 == mime))
+            .map(|o| o.1.clone());
+        let Some(data) = data else {
+            return; // dropping the pipe tells the reader there's nothing
         };
-        std::thread::spawn(move || {
+        transfer(move || {
             pipe::write_all(OwnedFd::from(pipe), &data);
         });
     }
@@ -409,14 +464,14 @@ impl DataSourceHandler for State {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &WlDataSource,
+        source: &WlDataSource,
         mime: String,
         pipe: WritePipe,
     ) {
-        self.send(mime, pipe);
+        self.send(source, mime, pipe);
     }
     fn cancelled(&mut self, _: &Connection, _: &QueueHandle<Self>, source: &WlDataSource) {
-        self.sources.retain(|s| s.inner() != source);
+        self.sources.retain(|(s, _)| s.inner() != source);
     }
     fn dnd_dropped(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {}
     fn dnd_finished(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {}
