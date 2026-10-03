@@ -268,7 +268,10 @@ jobs:
           for f in SHA256SUMS artifacts/*; do
             rc=0
             check "$f" || rc=$?
-            if [ "$rc" != 0 ]; then
+            if [ "$rc" = 3 ]; then
+              echo "::error::Couldn't download $(basename "$f") from $TAG to verify it; the release stays unpublished. Run the job again."
+              bad=1
+            elif [ "$rc" != 0 ]; then
               echo "::error::$(basename "$f") is missing or incomplete on $TAG"
               bad=1
             fi
