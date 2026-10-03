@@ -19,7 +19,7 @@ use graphing::trace::TracePoint;
 use graphing::{EquationId, Graph, Viewport};
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
-use gtk::{gio, glib, graphene, gsk, pango};
+use gtk::{gdk, gio, glib, graphene, gsk, pango};
 
 use super::animations_enabled;
 use super::display::display_font;
@@ -47,6 +47,8 @@ mod imp {
         pub scheme: Cell<Option<Scheme>>,
         pub line_width: Cell<f64>,
         pub trace_on: Cell<bool>,
+        /// Asks the page to switch tracing on (keeps its toggle in step).
+        pub trace_wanted: RefCell<Option<Box<dyn Fn()>>>,
         pub pointer: Cell<Option<(f64, f64)>>,
         pub trace: RefCell<Option<(EquationId, TracePoint)>>,
         pub draw_in: RefCell<HashMap<EquationId, Instant>>,
@@ -76,6 +78,7 @@ mod imp {
                 scheme: Cell::new(None),
                 line_width: Cell::new(graphing::graph::DEFAULT_LINE_WIDTH),
                 trace_on: Cell::new(false),
+                trace_wanted: RefCell::default(),
                 pointer: Cell::new(None),
                 trace: RefCell::new(None),
                 draw_in: RefCell::default(),
@@ -219,6 +222,46 @@ impl GraphView {
             self.imp().draw_in.borrow_mut().insert(id, Instant::now());
             self.ensure_ticking();
         }
+    }
+
+    /// Called when keyboard tracing needs tracing switched on.
+    pub fn connect_trace_wanted(&self, f: impl Fn() + 'static) {
+        self.imp().trace_wanted.replace(Some(Box::new(f)));
+    }
+
+    /// Move the trace cursor by keyboard, following the curve it lands on,
+    /// and announce the traced value.
+    fn trace_key(&self, dx: f64, dy: f64) {
+        let imp = self.imp();
+        if !imp.trace_on.get() {
+            if let Some(f) = imp.trace_wanted.borrow().as_ref() {
+                f();
+            }
+            if !imp.trace_on.get() {
+                self.set_trace(true);
+            }
+        }
+        let (w, h) = (self.width() as f64, self.height() as f64);
+        if w <= 1.0 || h <= 1.0 {
+            return;
+        }
+        let (x, y) = imp
+            .pointer
+            .get()
+            .filter(|&(x, y)| (0.0..w).contains(&x) && (0.0..h).contains(&y))
+            .unwrap_or((w / 2.0, h / 2.0));
+        imp.pointer.set(Some((
+            (x + dx).clamp(0.0, w - 1.0),
+            (y + dy).clamp(0.0, h - 1.0),
+        )));
+        self.update_trace();
+        let traced = imp.trace.borrow().as_ref().map(|(_, t)| *t);
+        if let (Some(t), Some(vp)) = (traced, imp.vp.get()) {
+            imp.pointer.set(Some((t.screen_x, t.screen_y)));
+            let text = graphing::trace::format_trace_value(t.x, t.y, vp.precision());
+            self.announce(&text, gtk::AccessibleAnnouncementPriority::Medium);
+        }
+        self.queue_draw();
     }
 
     pub fn set_trace(&self, on: bool) {
@@ -401,6 +444,34 @@ impl GraphView {
             }
         });
         self.add_controller(zoom);
+
+        // Keyboard tracing, as the original's Grapher: with the graph
+        // focused, the arrows move the trace cursor (5 px, 1 px with Shift).
+        let keys = gtk::EventControllerKey::new();
+        let weak = self.downgrade();
+        keys.connect_key_pressed(move |_, key, _, state| {
+            let Some(g) = weak.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            if state.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK) {
+                return glib::Propagation::Proceed;
+            }
+            let d = if state.contains(gdk::ModifierType::SHIFT_MASK) {
+                1.0
+            } else {
+                5.0
+            };
+            let (dx, dy) = match key {
+                gdk::Key::Left => (-d, 0.0),
+                gdk::Key::Right => (d, 0.0),
+                gdk::Key::Up => (0.0, -d),
+                gdk::Key::Down => (0.0, d),
+                _ => return glib::Propagation::Proceed,
+            };
+            g.trace_key(dx, dy);
+            glib::Propagation::Stop
+        });
+        self.add_controller(keys);
 
         let motion = gtk::EventControllerMotion::new();
         let weak = self.downgrade();

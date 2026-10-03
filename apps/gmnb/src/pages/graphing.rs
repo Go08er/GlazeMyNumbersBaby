@@ -295,6 +295,12 @@ impl GraphingPage {
             reset.connect_clicked(move |_| gv.reset_view());
             let gv = graph_view.clone();
             trace_btn.connect_toggled(move |b| gv.set_trace(b.is_active()));
+            let tb = trace_btn.downgrade();
+            graph_view.connect_trace_wanted(move || {
+                if let Some(tb) = tb.upgrade() {
+                    tb.set_active(true);
+                }
+            });
             let weak = Rc::downgrade(&page);
             copy.connect_clicked(move |_| {
                 if let Some(p) = weak.upgrade()
