@@ -1664,13 +1664,32 @@ pub fn certainly_blows_up(a: &Analysed, c: f64) -> bool {
         // (Growth beyond f's noise: rounding beside a hole, (x/3 + 1)/(x + 3)
         // at −3, also swells nearer.)
         let (n0, n1) = (a.noise(c + s * q), a.noise(c + s * q * 10.0));
-        near.abs() - mid.abs() > n0 + n1
-            && mid.abs() > far.abs()
-            && (near.abs() > 1.2 * mid.abs()
-                || (d1.signum() == d2.signum()
-                    && d1.abs() >= 0.5 * d2.abs()
-                    && d1.abs() <= 2.0 * d2.abs()
-                    && d2 != 0.0))
+        if !(near.abs() - mid.abs() > n0 + n1 && mid.abs() > far.abs()) {
+            return false;
+        }
+        if near.abs() > 1.2 * mid.abs() {
+            return true;
+        }
+        // A log pole: the same step per decade, and still the same many
+        // decades further out (atan(ln|x|) tends to −π/2 with steps that
+        // only slowly shrink).
+        let same = |p: f64, q: f64| {
+            p.signum() == q.signum() && p.abs() >= 0.8 * q.abs() && p.abs() <= 1.25 * q.abs()
+        };
+        if !(d2 != 0.0 && same(d1, d2)) {
+            return false;
+        }
+        let mut t = q * 1000.0;
+        let mut checked = false;
+        while t * 100.0 < limit {
+            t *= 10.0;
+            checked = true;
+        }
+        if !checked {
+            return false;
+        }
+        let (u, w) = (a.eval(c + s * t), a.eval(c + s * t * 10.0));
+        u.is_finite() && w.is_finite() && same(u - w, d1)
     })
 }
 
@@ -2594,6 +2613,7 @@ fn unjustified(a: &Analysed, xs: &[f64], ys: &[f64], centres: &[f64]) -> u32 {
                     .take(64)
                     .any(|(&x, _)| a.rounding(x) == 0.0)
                 || damped_turn(a, xs, ys, v, lower)
+                || bounded_turn(a, xs, ys, v, lower)
         };
         let bad = d.range.iter().any(|iv| {
             iv.lo.value != iv.hi.value
@@ -2647,10 +2667,118 @@ fn unjustified(a: &Analysed, xs: &[f64], ys: &[f64], centres: &[f64]) -> u32 {
         && !constant
         && periodic_capable(&a.ast)
         && !grows(a)
+        && !dies_away(a)
     {
         out |= flags::PERIODICITY;
     }
     out
+}
+
+/// Bounds f can't pass whatever x is, from its form alone (interval
+/// arithmetic: sin of anything is in [−1, 1], a sum within the sum of its
+/// terms' bounds, …), in exact arithmetic. (−∞, ∞) where the form says
+/// nothing.
+pub fn enclosure(e: &Expr, unit: TrigUnit) -> (f64, f64) {
+    use crate::ast::{BinOp, Func};
+    const ALL: (f64, f64) = (f64::NEG_INFINITY, f64::INFINITY);
+    let ok = |(l, h): (f64, f64)| {
+        if l.is_nan() || h.is_nan() || l > h {
+            ALL
+        } else {
+            (l, h)
+        }
+    };
+    let quarter = unit.full_turn() / 4.0;
+    match e {
+        Expr::Num(v) => (*v, *v),
+        Expr::Const(c) => (c.value(), c.value()),
+        Expr::Neg(x) => {
+            let (l, h) = enclosure(x, unit);
+            (-h, -l)
+        }
+        Expr::Bin(op, x, y) => {
+            let ((a, b), (c, d)) = (enclosure(x, unit), enclosure(y, unit));
+            match op {
+                BinOp::Add => ok((a + c, b + d)),
+                BinOp::Sub => ok((a - d, b - c)),
+                BinOp::Mul => {
+                    let p = [a * c, a * d, b * c, b * d];
+                    if p.iter().any(|v| v.is_nan()) {
+                        ALL
+                    } else {
+                        ok((
+                            p.iter().copied().fold(f64::INFINITY, f64::min),
+                            p.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                        ))
+                    }
+                }
+                BinOp::Div if c > 0.0 || d < 0.0 => {
+                    let p = [a / c, a / d, b / c, b / d];
+                    if p.iter().any(|v| v.is_nan()) {
+                        ALL
+                    } else {
+                        ok((
+                            p.iter().copied().fold(f64::INFINITY, f64::min),
+                            p.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                        ))
+                    }
+                }
+                BinOp::Pow if c == d && c > 0.0 && c.fract() == 0.0 && c % 2.0 == 0.0 => {
+                    let m = a.abs().max(b.abs()).powf(c);
+                    if a <= 0.0 && b >= 0.0 {
+                        (0.0, m)
+                    } else {
+                        ok((a.abs().min(b.abs()).powf(c), m))
+                    }
+                }
+                _ => ALL,
+            }
+        }
+        Expr::Call(f, args) if args.len() == 1 => {
+            let (l, h) = enclosure(&args[0], unit);
+            match f {
+                Func::Sin | Func::Cos => (-1.0, 1.0),
+                Func::Tanh | Func::Sign => (-1.0, 1.0),
+                Func::Sech => (0.0, 1.0),
+                Func::Atan => (-quarter, quarter),
+                Func::Acot => (-quarter, quarter),
+                Func::Asin => (-quarter, quarter),
+                Func::Acos => (0.0, 2.0 * quarter),
+                Func::Abs => (
+                    if l <= 0.0 && h >= 0.0 {
+                        0.0
+                    } else {
+                        l.abs().min(h.abs())
+                    },
+                    l.abs().max(h.abs()),
+                ),
+                Func::Sqrt => (l.max(0.0).sqrt(), h.sqrt()),
+                Func::Exp => (l.exp(), h.exp()),
+                Func::Floor => (l.floor(), h.floor()),
+                Func::Ceil => (l.ceil(), h.ceil()),
+                _ => ALL,
+            }
+        }
+        _ => ALL,
+    }
+}
+
+/// A closed range bound v (a lower one if `lower`) that is both a bound
+/// f's form can't pass ([`enclosure`]) and the value of a turn of f, to
+/// within its noise: sin(x²) reaches 1 at √(π/2), and nothing reaches
+/// further. (A turn's value short of the form's bound, sin x + sin(√2·x)
+/// at 1.99994, says nothing about turns further out.)
+fn bounded_turn(a: &Analysed, xs: &[f64], ys: &[f64], v: f64, lower: bool) -> bool {
+    let (lo, hi) = enclosure(&a.ast, a.unit);
+    let bound = if lower { lo } else { hi };
+    if !bound.is_finite() {
+        return false;
+    }
+    let sign = if lower { 1.0 } else { -1.0 };
+    refine_extremes(a, xs, ys, sign, 8).iter().any(|&(x, y)| {
+        let n = a.noise(x) + 4.0 * ulp(v);
+        (y - v).abs() <= n && (bound - v).abs() <= n
+    })
 }
 
 /// A closed range bound v (a lower one if `lower`) taken at a turn of a
@@ -2941,12 +3069,52 @@ fn range_supported(a: &Analysed, xs: &[f64], ys: &[f64], centres: &[f64]) -> boo
     true
 }
 
+/// f's swings about a claimed horizontal asymptote shrink decade after
+/// decade (sin(x)/x about 0) while f isn't that constant: f has a limit,
+/// and a periodic function with one is constant, so f is not periodic.
+fn dies_away(a: &Analysed) -> bool {
+    use super::AsymptoteSide::*;
+    a.d().horizontal_asymptotes.iter().any(|&(l, side)| {
+        let sides: &[f64] = match side {
+            PositiveInfinity => &[1.0],
+            NegativeInfinity => &[-1.0],
+            AnyInfinity => &[1.0, -1.0],
+            Unknown => &[],
+        };
+        sides.iter().any(|&s| {
+            let mut prev = f64::INFINITY;
+            let mut run = 0;
+            for k in 1..=14 {
+                let m = (0..40)
+                    .map(|j| {
+                        let x = s
+                            * 10f64.powf(k as f64 + j as f64 / 40.0)
+                            * (1.0 + 0.0137 * (j % 3) as f64);
+                        (a.eval(x) - l).abs()
+                    })
+                    .filter(|d| d.is_finite())
+                    .fold(0.0f64, f64::max);
+                if m > 0.0 && m < prev {
+                    run += 1;
+                    if run >= 4 {
+                        return true;
+                    }
+                } else {
+                    run = 0;
+                }
+                prev = m;
+            }
+            false
+        })
+    })
+}
+
 /// |f| over a decade (40 points), median, keeps growing at least twofold
 /// for three decades running on one side.
 fn grows(a: &Analysed) -> bool {
     [1.0, -1.0].iter().any(|&s| {
         let mut medians = Vec::new();
-        for k in 2..=14 {
+        for k in 0..=14 {
             let mut v: Vec<f64> = (0..40)
                 .map(|j| {
                     a.eval(
@@ -2966,9 +3134,10 @@ fn grows(a: &Analysed) -> bool {
         }
         let mut run = 0;
         for w in medians.windows(2) {
-            if w[0] > 0.0 && w[1] >= 2.0 * w[0] {
+            // (Growth that leaves the doubles, e^(x/10)·sin x, has grown.)
+            if w[0] > 0.0 && w[0] < f64::MAX && w[1] >= 2.0 * w[0] {
                 run += 1;
-                if run >= 3 {
+                if run >= 3 || (run >= 2 && w[1] == f64::MAX) {
                     return true;
                 }
             } else {
