@@ -35,6 +35,11 @@ fn rational(v: f64, max_den: i64, max_num: f64, tol: f64) -> Option<(i64, i64)> 
         if p.abs() > max_num {
             return None;
         }
+        // A fraction with a numerator in the millions (30994059/7) is no
+        // closed form anyone would recognise; whole numbers can be large.
+        if q > 1 && p.abs() > 1e6 {
+            return None;
+        }
         if (v - p / q as f64).abs() <= tol * scale {
             let g = gcd(p as i64, q).max(1);
             return Some((p as i64 / g, q / g));
@@ -352,12 +357,17 @@ impl Interval {
 
     /// `(a, b]`-style text.
     pub fn format(&self) -> String {
+        self.format_with(&format_number)
+    }
+
+    /// `(a, b]`-style text, finite ends written by `num`.
+    pub fn format_with(&self, num: &dyn Fn(f64) -> String) -> String {
         let l = if self.lo.closed { "[" } else { "(" };
         let r = if self.hi.closed { "]" } else { ")" };
         format!(
             "{l}{}, {}{r}",
-            fmt_end(self.lo.value),
-            fmt_end(self.hi.value)
+            fmt_end(self.lo.value, num),
+            fmt_end(self.hi.value, num)
         )
     }
 
@@ -373,19 +383,36 @@ impl Interval {
     }
 }
 
-fn fmt_end(v: f64) -> String {
+fn fmt_end(v: f64, num: &dyn Fn(f64) -> String) -> String {
     if v == f64::INFINITY {
         "∞".into()
     } else if v == f64::NEG_INFINITY {
         format!("{MINUS}∞")
     } else {
-        format_number(v)
+        num(v)
+    }
+}
+
+/// Like [`format_number`], but never writes a nonzero value as 0: for
+/// values already cleared of rounding noise, where a tiny bound (the
+/// maximum of 1/(x² − 4·10⁸) at −2.5·10⁻⁹, or far smaller) is genuine.
+pub fn format_nonzero(v: f64) -> String {
+    let n = Nice::of(v);
+    if v != 0.0 && n.value() == 0.0 {
+        format_decimal(v)
+    } else {
+        n.to_string()
     }
 }
 
 /// Formats a union of disjoint, sorted intervals as `var ∈ …`:
 /// `x ∈ ℝ`, `x ∈ ℝ \ {0}`, `y ∈ [0, ∞)`, `x ∈ (−∞, −1] ∪ [1, ∞)`, `y ∈ {5}`.
 pub fn format_set(var: &str, parts: &[Interval]) -> String {
+    format_set_with(var, parts, &format_number)
+}
+
+/// [`format_set`] with finite numbers written by `num`.
+pub fn format_set_with(var: &str, parts: &[Interval], num: &dyn Fn(f64) -> String) -> String {
     if parts.is_empty() {
         return format!("{var} ∈ ∅");
     }
@@ -402,21 +429,21 @@ pub fn format_set(var: &str, parts: &[Interval]) -> String {
         }
         let pts: Vec<String> = parts[..parts.len() - 1]
             .iter()
-            .map(|p| format_number(p.hi.value))
+            .map(|p| num(p.hi.value))
             .collect();
         return format!("{var} ∈ ℝ \\ {{{}}}", pts.join(", "));
     }
     if parts.iter().all(|p| p.is_point()) {
-        let pts: Vec<String> = parts.iter().map(|p| format_number(p.lo.value)).collect();
+        let pts: Vec<String> = parts.iter().map(|p| num(p.lo.value)).collect();
         return format!("{var} ∈ {{{}}}", pts.join(", "));
     }
     let items: Vec<String> = parts
         .iter()
         .map(|p| {
             if p.is_point() {
-                format!("{{{}}}", format_number(p.lo.value))
+                format!("{{{}}}", num(p.lo.value))
             } else {
-                p.format()
+                p.format_with(num)
             }
         })
         .collect();

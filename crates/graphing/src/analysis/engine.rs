@@ -24,8 +24,8 @@
 //! thread.
 
 use super::format::{
-    Bound, Interval, MINUS, Nice, format_family, format_number, format_number_tol,
-    format_periodic_set, format_point, format_set,
+    Bound, Interval, MINUS, Nice, format_family, format_nonzero, format_number, format_number_tol,
+    format_periodic_set, format_set, format_set_with,
 };
 use super::numeric::{
     SeqLimit, bisect_finite, brent, diverges_near, limit_at_infinity, limit_at_infinity_beyond,
@@ -240,8 +240,11 @@ fn analyze_with_budget(
     }
     let mut k = k?;
     // Features that may also lie beyond the farthest search are unknown,
-    // not extrapolated.
+    // not extrapolated; so are those too many to follow out there, unless
+    // the analysis already marked them.
     forget(&mut k, beyond.unknown);
+    let lost = beyond.lost & !k.too_complex_features;
+    forget(&mut k, lost);
     // Γ-based functions have poles at every negative integer: a numeric
     // scan cannot list them.
     let gamma_like = expr.any(&|e| {
@@ -343,7 +346,9 @@ fn constant_features(c: f64) -> KeyGraphFeatures {
 }
 
 /// Median |f| over a sample of moderate x values: a magnitude for
-/// tolerances.
+/// tolerances. A function that is tiny everywhere (1/((x − 10³)…(x − 9·10³))
+/// is about 10⁻³³ near 0) keeps its own size, so its extrema aren't taken
+/// for zeros; 10⁻¹² stands in only when f is mostly exactly 0 there.
 fn typical_scale(fun: &Fun) -> f64 {
     let mut v: Vec<f64> = (0..200)
         .map(|i| -10.0 + 20.0 * (i as f64 + 0.37) / 200.0)
@@ -354,7 +359,10 @@ fn typical_scale(fun: &Fun) -> f64 {
         return 1.0;
     }
     v.sort_by(|a, b| a.total_cmp(b));
-    v[v.len() / 2].max(1e-12)
+    match v[v.len() / 2] {
+        0.0 => 1e-12,
+        m => m.max(1e-280),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -507,8 +515,12 @@ const REACH: f64 = 1e15;
 /// Probe points per side between `WINDOW` and `REACH` (geometric).
 const PROBE_STEPS: usize = 800;
 /// More features than this on one side of the probe is oscillation (as in
-/// sin(x)/x), not structure worth widening the window for.
+/// sin(x)/x), not structure worth widening the window for: those features
+/// are reported as unknown beyond the window.
 const MAX_PROBED: usize = 8;
+/// A polynomial's probe has no such cap short of its degree bound (the
+/// roots of f, f′ and f″ of degree ≤ 64).
+const MAX_POLY_PROBED: usize = 3 * 64;
 
 /// Features a singular point beyond the search would change.
 const SINGULAR: u32 =
@@ -524,6 +536,10 @@ const OF_F: u32 = flags::ZEROS
 /// Sample points per side of the dense grid laid around each feature
 /// found beyond the window (features cluster there as they do near 0).
 const LOCAL_HALF: usize = 4000;
+/// The same for a polynomial, whose (many, double, well separated) far
+/// features each get one: still dense enough at the centre (≈ 0.02 at
+/// 10⁷) to split roots a unit apart.
+const LOCAL_HALF_POLY: usize = 800;
 
 /// What lies beyond the base window.
 #[derive(Default)]
@@ -537,6 +553,12 @@ struct Beyond {
     /// Features that may also lie beyond `REACH`, where nothing is
     /// searched (flags): reported as unknown rather than extrapolated.
     unknown: u32,
+    /// Features the probe found too many of to follow (oscillation, as in
+    /// sin(x)/x): unknown beyond the window, unless the analysis already
+    /// said so. Unlike `unknown`, they don't put a symmetry in doubt.
+    lost: u32,
+    /// Points per side of the local grid around each feature.
+    local_half: usize,
 }
 
 /// Look past the base window for zeros (and sign changes) of f, f′, f″ and
@@ -555,42 +577,85 @@ fn beyond_window(fun: &Fun, expr: &Expr, opts: &CompileOptions<'_>) -> Beyond {
             p.as_constant().is_none().then_some((g, p))
         })
         .collect();
-    let mut out = Beyond::default();
+    // A polynomial has a few roots, all of which matter: its probe isn't
+    // capped (nine double roots between 2·10⁶ and 10⁷ are not oscillation).
+    let f_poly = poly_coeffs(expr, opts).is_some();
+    let mut out = Beyond {
+        local_half: if f_poly { LOCAL_HALF_POLY } else { LOCAL_HALF },
+        ..Beyond::default()
+    };
     let note = |out: &mut Beyond, pts: &[f64]| {
-        if pts.len() <= MAX_PROBED {
-            for &x in pts {
-                out.extent = out.extent.max(x.abs());
-                // One local grid serves features within 1% of each other.
-                if !out
-                    .features
-                    .iter()
-                    .any(|&c| (c - x).abs() <= 1e-2 * c.abs())
-                {
-                    out.features.push(x);
-                }
+        for &x in pts {
+            out.extent = out.extent.max(x.abs());
+            // One local grid serves features within 1% of each other.
+            if !out
+                .features
+                .iter()
+                .any(|&c| (c - x).abs() <= 1e-2 * c.abs())
+            {
+                out.features.push(x);
             }
-            true
-        } else {
-            false
         }
     };
+    // Features a probe found too many of to follow are unknown beyond the
+    // window, not absent.
+    let lost = [
+        flags::ZEROS,
+        flags::MINIMA | flags::MAXIMA | flags::MONOTONE_INTERVALS,
+        flags::INFLECTION_POINTS,
+    ];
     for xs in [&neg, &pos] {
+        let fs = fun.batch(0, xs);
+        let dfs = fun.batch(1, xs);
         for which in 0..3u8 {
-            let vs = fun.batch(which, xs);
+            let vs = match which {
+                0 => fs.clone(),
+                1 => dfs.clone(),
+                _ => fun.batch(2, xs),
+            };
+            // Rounding noise in f′ and f″ (of a function linear in disguise,
+            // like (x² − 1)/(x − 1)) is no sign change: values below this
+            // floor, relative to f, don't count.
+            let floor: Vec<f64> = (0..xs.len())
+                .map(|i| {
+                    let x1 = 1.0 + xs[i].abs();
+                    let (f0, f1) = (fs[i].abs(), dfs[i].abs());
+                    match which {
+                        0 => 0.0,
+                        1 => 1e-9 * f0 / x1,
+                        _ => 1e-9 * (f1 / x1 + f0 / (x1 * x1)),
+                    }
+                })
+                .map(|v| if v.is_finite() { v } else { 0.0 })
+                .collect();
             let mut g = |x: f64| match which {
                 0 => fun.f(x),
                 1 => fun.df(x),
                 _ => fun.d2f(x),
             };
-            let pts = probe_points(xs, &vs, &mut g);
-            note(&mut out, &pts);
+            let cap = if f_poly { MAX_POLY_PROBED } else { MAX_PROBED };
+            let pts = probe_points(xs, &vs, &floor, &mut g, cap, true);
+            if pts.len() <= cap {
+                note(&mut out, &pts);
+            } else {
+                out.lost |= lost[which as usize];
+            }
         }
-        for (_, p) in &gens {
+        for (e, p) in &gens {
             let mut vs = vec![0.0; xs.len()];
             fun.eval_batch(p, xs, &mut vs);
-            let pts = probe_points(xs, &vs, &mut |x| fun.eval(p, x));
-            if note(&mut out, &pts) {
+            let cap = if poly_coeffs(e, opts).is_some() {
+                MAX_POLY_PROBED
+            } else {
+                MAX_PROBED
+            };
+            let none = vec![0.0; xs.len()];
+            let pts = probe_points(xs, &vs, &none, &mut |x| fun.eval(p, x), cap, false);
+            if pts.len() <= cap {
+                note(&mut out, &pts);
                 out.candidates.extend(pts);
+            } else {
+                out.lost |= SINGULAR;
             }
         }
     }
@@ -611,6 +676,21 @@ fn beyond_window(fun: &Fun, expr: &Expr, opts: &CompileOptions<'_>) -> Beyond {
     if poly_coeffs(expr, opts).is_some_and(|c| root_bound(&c) > REACH) {
         out.unknown |= OF_F;
     }
+    // A non-polynomial f may still cross 0 beyond the search (ln x − 40 at
+    // e⁴⁰ ≈ 2.4·10¹⁷), which would add a zero and change its range: f is
+    // sampled once per decade out to the largest x there is.
+    if !f_poly {
+        for s in [-1.0, 1.0] {
+            match zeros_beyond_reach(fun, s) {
+                // Crossing once (ln x − 40) only adds a zero: the range
+                // already follows the limit at infinity.
+                FarZeros::One | FarZeros::Many => out.lost |= flags::ZEROS,
+                // Out and back again: an extremum out there the range missed.
+                FarZeros::Two => out.lost |= flags::ZEROS | flags::RANGE,
+                FarZeros::None => {}
+            }
+        }
+    }
     for (e, p) in &gens {
         let unknown = match poly_coeffs(e, opts).map(|c| root_bound(&c)) {
             Some(b) => b > REACH,
@@ -625,20 +705,47 @@ fn beyond_window(fun: &Fun, expr: &Expr, opts: &CompileOptions<'_>) -> Beyond {
 }
 
 /// Sign changes (refined: zeros, or poles of g) and even-order zeros of g
-/// on an ascending grid, ignoring exact zeros (underflow tails such as e^x
-/// far left are not roots).
-fn probe_points(xs: &[f64], vs: &[f64], g: &mut dyn FnMut(f64) -> f64) -> Vec<f64> {
+/// on an ascending grid; stops once there are more than `cap`. Values at
+/// or below `floor` (rounding noise) don't count as either sign. An exact
+/// zero sample counts when its neighbours are of normal size (x − 10¹⁵ is
+/// exactly 0 at the last sample, with nothing beyond to bracket it); runs
+/// of zeros and underflowed neighbours (e^x far left) are not roots.
+fn probe_points(
+    xs: &[f64],
+    vs: &[f64],
+    floor: &[f64],
+    g: &mut dyn FnMut(f64) -> f64,
+    cap: usize,
+    zeros_only: bool,
+) -> Vec<f64> {
     let mut out = Vec::new();
-    let ok = |v: f64| v.is_finite() && v != 0.0;
-    for i in 0..xs.len().saturating_sub(1) {
-        if out.len() > MAX_PROBED {
+    let ok = |i: usize| vs[i].is_finite() && vs[i] != 0.0 && vs[i].abs() > floor[i];
+    let normal = |i: usize| ok(i) && vs[i].abs() > 1e-250;
+    for i in 0..xs.len() {
+        if out.len() > cap {
+            break;
+        }
+        if vs[i] == 0.0 {
+            let before = i.checked_sub(1);
+            let after = (i + 1 < xs.len()).then_some(i + 1);
+            let isolated = before.is_none_or(normal) && after.is_none_or(normal);
+            if isolated && (before.is_some() || after.is_some()) {
+                out.push(xs[i]);
+            }
+            continue;
+        }
+        if i + 1 == xs.len() {
             break;
         }
         let (a, b) = (vs[i], vs[i + 1]);
-        if ok(a) && ok(b) && (a < 0.0) != (b < 0.0) {
-            out.push(brent(g, xs[i], a, xs[i + 1], b));
+        if ok(i) && ok(i + 1) && (a < 0.0) != (b < 0.0) {
+            let r = brent(g, xs[i], a, xs[i + 1], b);
+            // A sign change through a pole of g is no zero of it.
+            if !zeros_only || g(r).abs() <= 1e-6 * a.abs().max(b.abs()) {
+                out.push(r);
+            }
         }
-        if i > 0 && ok(vs[i - 1]) && ok(a) && ok(b) && (vs[i - 1] < 0.0) == (b < 0.0) {
+        if i > 0 && ok(i - 1) && ok(i) && ok(i + 1) && (vs[i - 1] < 0.0) == (b < 0.0) {
             let (p, c, n) = (vs[i - 1].abs(), a.abs(), b.abs());
             if c < p && c <= n {
                 let m = golden_min_abs(g, xs[i - 1], xs[i + 1]);
@@ -664,6 +771,61 @@ fn heading_to_zero(v: [f64; 3]) -> bool {
     }
     let [a, b, c] = v.map(f64::abs);
     a > b && b > c && a - c > 1e-9 * a && b - c >= 0.66 * (a - b)
+}
+
+enum FarZeros {
+    None,
+    One,
+    Two,
+    /// Oscillation, as in sin(x)/x.
+    Many,
+}
+
+/// Zeros of f beyond the search on the side `s`: f is sampled at ±10ᵗ for
+/// t = 15 … 307 and each sign change refined, keeping only genuine zeros
+/// (the pole of 1/(x − 10²⁰) flips the sign too). Also one when f is still
+/// closing in on 0 at a steady pace where the samples end (ln x − 800,
+/// whose zero is past the largest double). A decay that only approaches 0
+/// (1/(x − 10¹⁵) on the left, 1/ln x, x^−0.01) has none.
+fn zeros_beyond_reach(fun: &Fun, s: f64) -> FarZeros {
+    let pts: Vec<(f64, f64)> = (15..=307)
+        .map(|t| s * 10f64.powi(t))
+        .map(|x| (x, fun.f(x)))
+        .filter(|(_, v)| v.is_finite() && *v != 0.0)
+        .collect();
+    let mut f = |x: f64| fun.f(x);
+    let mut zeros = 0;
+    for w in pts.windows(2) {
+        let ((xa, a), (xb, b)) = (w[0], w[1]);
+        if (a < 0.0) != (b < 0.0) {
+            let r = brent(&mut f, xa, a, xb, b);
+            if f(r).abs() <= 1e-6 * a.abs().max(b.abs()) {
+                zeros += 1;
+            }
+        }
+    }
+    let n = pts.len();
+    let steady =
+        n >= 4 && steady_toward_zero([pts[n - 4].1, pts[n - 3].1, pts[n - 2].1, pts[n - 1].1]);
+    match zeros {
+        0 if !steady => FarZeros::None,
+        0 | 1 => FarZeros::One,
+        2 => FarZeros::Two,
+        _ => FarZeros::Many,
+    }
+}
+
+/// Whether four successive decade samples of one sign close in on 0 by
+/// steps that don't ease off (ratio ≥ 0.999): ln x − c moves by exactly
+/// ln 10 per decade, while near 10³⁰⁷ x^−0.01 eases off by 0.977 and
+/// 1/ln x by 0.9935.
+fn steady_toward_zero(v: [f64; 4]) -> bool {
+    if !v.iter().all(|x| x.signum() == v[0].signum()) {
+        return false;
+    }
+    let a = v.map(f64::abs);
+    let steps = [a[0] - a[1], a[1] - a[2], a[2] - a[3]];
+    steps.iter().all(|&d| d > 1e-12 * a[0]) && steps.windows(2).all(|w| w[1] >= 0.999 * w[0])
 }
 
 /// Coefficients (constant term first) of `e` as a polynomial in x with
@@ -723,8 +885,12 @@ fn poly_coeffs(e: &Expr, opts: &CompileOptions<'_>) -> Option<Vec<f64>> {
     }
 }
 
-/// A bound on the magnitude of every root of the polynomial (Fujiwara's,
-/// within a factor 2 of the largest root); 0 for a constant.
+/// An upper bound on the magnitude of every (real or complex) root of the
+/// polynomial with coefficients `c` (constant term first); 0 for a
+/// constant. This is Fujiwara's bound,
+/// 2·max(|a₍ₙ₋₁₎/aₙ|, |a₍ₙ₋₂₎/aₙ|^(1/2), …, |a₁/aₙ|^(1/(n−1)), |a₀/(2aₙ)|^(1/n)),
+/// which holds for every polynomial; it can overestimate the largest root,
+/// by more than a factor 2 for some, so it is only used to rule roots out.
 fn root_bound(c: &[f64]) -> f64 {
     let n = match c.iter().rposition(|&a| a != 0.0) {
         Some(n) if n > 0 => n,
@@ -1483,6 +1649,13 @@ struct PieceFeatures {
     /// Critical points (x, kind) in order, for monotonicity.
     monotone: Vec<(Interval, Monotonicity)>,
     range: Option<Interval>,
+    /// An end of the range can't be determined (see `piece_features`).
+    range_unsure: bool,
+}
+
+/// Whether `v` never turns: all steps of one sign (or zero).
+fn monotone(v: &[f64]) -> bool {
+    v.len() > 2 && (v.windows(2).all(|w| w[1] >= w[0]) || v.windows(2).all(|w| w[1] <= w[0]))
 }
 
 fn sign_of(v: f64, eps: f64) -> i8 {
@@ -1613,6 +1786,8 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
         .collect();
     let ixs: Vec<f64> = interior.iter().map(|&i| xs[i]).collect();
     let mut crit: Vec<(f64, i8, i8)> = Vec::new();
+    // f′ at the interior samples, kept for the monotonicity pass below.
+    let mut dfs_kept: Option<Vec<f64>> = None;
     if !ixs.is_empty() {
         let dfs = fun.batch(1, &ixs);
         let dscale = {
@@ -1701,15 +1876,12 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
                 out.inflections.push((c, v));
             }
         }
+        dfs_kept = Some(dfs);
     }
 
     // Monotonicity: split at critical points; directions from the f′
     // samples inside each sub-interval (found by binary search).
-    let dvals: Vec<f64> = if ixs.is_empty() {
-        Vec::new()
-    } else {
-        fun.batch(1, &ixs)
-    };
+    let dvals: Vec<f64> = dfs_kept.unwrap_or_default();
     let ivals: Vec<f64> = interior.iter().map(|&i| fs[i]).collect();
     let mut cuts: Vec<f64> = vec![p.lo.value];
     cuts.extend(crit.iter().map(|c| c.0));
@@ -1797,6 +1969,13 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
                     let near: Vec<f64> = (0..400)
                         .map(|i| f(sgn * (1e2 + i as f64 * 2.4937e2)))
                         .collect();
+                    // A steady tail whose limit couldn't be pinned down (1/ln x
+                    // creeps to 0): that end of the range is unknown, not the
+                    // last sample's value.
+                    let fin: Vec<f64> = far.iter().copied().filter(|v| v.is_finite()).collect();
+                    if monotone(&fin) {
+                        out.range_unsure = true;
+                    }
                     let mx = |v: &[f64]| {
                         v.iter()
                             .copied()
@@ -1923,9 +2102,14 @@ impl RangeAcc {
     }
 }
 
-/// Union of intervals (sorted, merging overlaps and touching ends).
+/// Union of intervals (sorted, merging overlaps and touching ends). Empty
+/// ones, such as (∞, ∞) from a piece whose ends both diverge upwards, are
+/// dropped.
 fn union(mut parts: Vec<Interval>) -> Vec<Interval> {
-    parts.retain(|p| p.lo.value <= p.hi.value);
+    parts.retain(|p| {
+        p.lo.value < p.hi.value
+            || (p.lo.value == p.hi.value && p.lo.closed && p.hi.closed && p.lo.value.is_finite())
+    });
     parts.sort_by(|a, b| {
         a.lo.value
             .total_cmp(&b.lo.value)
@@ -1967,6 +2151,58 @@ fn snap_interval(i: Interval, tol: f64) -> Interval {
     }
 }
 
+/// Snaps a value of f to a closed form (within `tol`) only when the snap is
+/// within rounding of f's size: a genuinely tiny value (−2.5·10⁻⁹ against
+/// values of that size) is kept, rounding noise on a value of 0 isn't.
+fn snap_y(v: f64, tol: f64, scale: f64) -> f64 {
+    if !v.is_finite() {
+        return v;
+    }
+    // Negligible against f's size (10⁸⁶ at a double root of a polynomial
+    // of size 10¹²¹): zero.
+    if v.abs() <= tol * scale {
+        return 0.0;
+    }
+    let s = snap(v, tol);
+    if (s - v).abs() <= tol * v.abs().max(scale) {
+        s
+    } else {
+        v
+    }
+}
+
+/// The range as a set: the pieces' ranges with their bounds cleared of
+/// rounding noise (relative to f's own size, [`snap_y`]), then joined. A
+/// genuinely tiny bound keeps its value and sign, so the gap between a
+/// negative maximum of −2.5·10⁻⁹ and a positive branch stays open; an
+/// absolute tolerance used to turn that maximum into 0 and close the gap.
+fn range_set(parts: Vec<Interval>, scale: f64) -> Vec<Interval> {
+    let tidy = |b: Bound| Bound {
+        value: snap_y(b.value, 1e-8, scale),
+        closed: b.closed,
+    };
+    union(
+        parts
+            .into_iter()
+            .map(|i| Interval {
+                lo: tidy(i.lo),
+                hi: tidy(i.hi),
+            })
+            .collect(),
+    )
+}
+
+/// A value of f for display: noise already gone (see [`snap_y`]), so a
+/// tiny remaining value is genuine and isn't shown as 0.
+fn fmt_y(v: f64) -> String {
+    format_nonzero(v)
+}
+
+/// `(x, y)` for an extremum or inflection point; y as [`fmt_y`].
+fn fmt_point(x: f64, y: f64) -> String {
+    format!("({}, {})", format_number(x), fmt_y(y))
+}
+
 fn dedup_sorted(v: &mut Vec<f64>) {
     v.sort_by(|a, b| a.total_cmp(b));
     v.dedup_by(|a, b| (*a - *b).abs() <= 1e-9 * a.abs().max(1.0));
@@ -1983,9 +2219,12 @@ fn dedup_points(v: &mut Vec<(f64, f64)>) {
 type Horizontal = Vec<(f64, AsymptoteSide)>;
 type Oblique = Vec<(f64, f64, AsymptoteSide)>;
 
-fn asymptotes_at_infinity(fun: &Fun, to_neg: bool, to_pos: bool) -> (Horizontal, Oblique) {
+/// Horizontal and oblique asymptotes at the enabled ends, and whether an
+/// end's behaviour couldn't be determined (then they are unknown).
+fn asymptotes_at_infinity(fun: &Fun, to_neg: bool, to_pos: bool) -> (Horizontal, Oblique, bool) {
     let mut horiz: Vec<(f64, AsymptoteSide)> = Vec::new();
     let mut obl: Vec<(f64, f64, AsymptoteSide)> = Vec::new();
+    let mut unsure = false;
     let mut f = |x: f64| fun.f(x);
     for (enabled, sign, side) in [
         (to_pos, 1.0, AsymptoteSide::PositiveInfinity),
@@ -2027,7 +2266,17 @@ fn asymptotes_at_infinity(fun: &Fun, to_neg: bool, to_pos: bool) -> (Horizontal,
                     }
                 }
             }
-            SeqLimit::Unknown => {}
+            SeqLimit::Unknown => {
+                // A steady tail whose limit couldn't be pinned down (1/ln x):
+                // whether it levels off is unknown, not "no asymptote".
+                let tail: Vec<f64> = (1..=17)
+                    .map(|k| f(sign * 10f64.powi(k)))
+                    .filter(|v| v.is_finite())
+                    .collect();
+                if monotone(&tail) {
+                    unsure = true;
+                }
+            }
         }
     }
     // Merge identical asymptotes on both sides.
@@ -2040,7 +2289,7 @@ fn asymptotes_at_infinity(fun: &Fun, to_neg: bool, to_pos: bool) -> (Horizontal,
     {
         obl = vec![(obl[0].0, obl[0].1, AsymptoteSide::AnyInfinity)];
     }
-    (horiz, obl)
+    (horiz, obl, unsure)
 }
 
 /// `m·x` text: `x`, `−x`, `2x`, `x/2`, `3x/4`, `πx`, `1.5x`.
@@ -2092,7 +2341,7 @@ fn analyze_aperiodic(
         let mut xs = sinh_grid(w, n);
         for &c in &beyond.features {
             xs.extend(
-                sinh_grid(0.5 * c.abs(), LOCAL_HALF)
+                sinh_grid(0.5 * c.abs(), beyond.local_half)
                     .into_iter()
                     .map(|d| c + d),
             );
@@ -2147,6 +2396,9 @@ fn analyze_aperiodic(
         if pf.zero_interval {
             too |= flags::ZEROS;
         }
+        if pf.range_unsure {
+            too |= flags::RANGE;
+        }
         if pf.erratic {
             too |= flags::ZEROS
                 | flags::MINIMA
@@ -2181,6 +2433,13 @@ fn analyze_aperiodic(
     dedup_points(&mut minima);
     dedup_points(&mut maxima);
     dedup_points(&mut infl);
+    for p in minima
+        .iter_mut()
+        .chain(maxima.iter_mut())
+        .chain(infl.iter_mut())
+    {
+        p.1 = snap_y(p.1, 1e-9, scale);
+    }
     let zeros: Vec<f64> = zeros.into_iter().map(|z| snap(z, 1e-9)).collect();
 
     if zeros.len() > MAX_LISTED || too & flags::ZEROS != 0 {
@@ -2195,17 +2454,17 @@ fn analyze_aperiodic(
     if minima.len() > MAX_LISTED {
         too |= flags::MINIMA;
     } else {
-        k.minima = minima.iter().map(|&(x, y)| format_point(x, y)).collect();
+        k.minima = minima.iter().map(|&(x, y)| fmt_point(x, y)).collect();
     }
     if maxima.len() > MAX_LISTED {
         too |= flags::MAXIMA;
     } else {
-        k.maxima = maxima.iter().map(|&(x, y)| format_point(x, y)).collect();
+        k.maxima = maxima.iter().map(|&(x, y)| fmt_point(x, y)).collect();
     }
     if infl.len() > MAX_LISTED {
         too |= flags::INFLECTION_POINTS;
     } else {
-        k.inflection_points = infl.iter().map(|&(x, y)| format_point(x, y)).collect();
+        k.inflection_points = infl.iter().map(|&(x, y)| fmt_point(x, y)).collect();
     }
     if sc.poles.len() > MAX_LISTED {
         too |= flags::VERTICAL_ASYMPTOTES;
@@ -2225,23 +2484,23 @@ fn analyze_aperiodic(
             .collect();
     }
 
-    let range = union(ranges.into_iter().map(|r| snap_interval(r, 1e-8)).collect());
+    let range = range_set(ranges, scale);
     if range.len() > 8 || too & flags::RANGE != 0 {
         too |= flags::RANGE;
     } else {
-        k.range = format_set("y", &range);
+        k.range = format_set_with("y", &range, &fmt_y);
     }
 
     // y-intercept.
     let y0 = fun.f(0.0);
     let zero_excluded = sc.excluded.contains(&0.0) || sc.poles.contains(&0.0);
     let y_intercept = if y0.is_finite() && !zero_excluded {
-        Some(snap(y0, 1e-9))
+        Some(snap_y(y0, 1e-9, scale))
     } else {
         None
     };
     if let Some(y) = y_intercept {
-        k.y_intercept = format_number(y);
+        k.y_intercept = fmt_y(y);
     }
 
     // Asymptotes at infinity.
@@ -2249,7 +2508,10 @@ fn analyze_aperiodic(
         .first()
         .is_some_and(|d| d.lo.value == f64::NEG_INFINITY);
     let to_pos = domain.last().is_some_and(|d| d.hi.value == f64::INFINITY);
-    let (horiz, obl) = asymptotes_at_infinity(fun, to_neg, to_pos);
+    let (horiz, obl, unsure) = asymptotes_at_infinity(fun, to_neg, to_pos);
+    if unsure {
+        too |= flags::HORIZONTAL_ASYMPTOTES | flags::OBLIQUE_ASYMPTOTES;
+    }
     k.horizontal_asymptotes = horiz
         .iter()
         .map(|(v, _)| format!("y = {}", format_number_tol(*v, 1e-8)))
@@ -2466,7 +2728,7 @@ fn analyze_periodic(
         // Points with the same y share a family.
         let mut groups: Vec<(f64, Vec<f64>)> = Vec::new();
         for &(x, y) in pts {
-            let y = snap(y, 1e-9);
+            let y = snap_y(y, 1e-9, scale);
             match groups
                 .iter_mut()
                 .find(|g| (g.0 - y).abs() <= 1e-9 * y.abs().max(scale))
@@ -2493,7 +2755,7 @@ fn analyze_periodic(
 
     let fmt_pts = |v: &[(Family, f64)]| -> Vec<String> {
         v.iter()
-            .map(|(f, y)| format!("({}, {}), k ∈ ℤ", fmt_family(f), format_number(*y)))
+            .map(|(f, y)| format!("({}, {}), k ∈ ℤ", fmt_family(f), fmt_y(*y)))
             .collect()
     };
     if !zero_f.is_empty() {
@@ -2522,11 +2784,11 @@ fn analyze_periodic(
             })
             .collect();
     }
-    let range = union(ranges.into_iter().map(|r| snap_interval(r, 1e-8)).collect());
+    let range = range_set(ranges, scale);
     if range.len() > 8 || too & flags::RANGE != 0 {
         too |= flags::RANGE;
     } else {
-        k.range = format_set("y", &range);
+        k.range = format_set_with("y", &range, &fmt_y);
     }
 
     let y0 = fun.f(0.0);
@@ -2535,12 +2797,12 @@ fn analyze_periodic(
         .chain(pole_f.iter())
         .any(|f| f.contains(0.0, 1e-9));
     let y_intercept = if y0.is_finite() && !zero_excluded {
-        Some(snap(y0, 1e-9))
+        Some(snap_y(y0, 1e-9, scale))
     } else {
         None
     };
     if let Some(y) = y_intercept {
-        k.y_intercept = format_number(y);
+        k.y_intercept = fmt_y(y);
     }
     k.too_complex_features = too;
     k.data = AnalysisData {

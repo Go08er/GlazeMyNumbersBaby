@@ -201,12 +201,45 @@ pub(crate) fn sequence_limit(v: &[f64]) -> SeqLimit {
     let down = steps.iter().all(|&d| d < 0.0);
     let steady = steps.windows(2).all(|w| w[1].abs() >= 0.9 * w[0].abs());
     let (last, before) = (tail[tail.len() - 1], tail[tail.len() - 2]);
+    // Steps that don't shrink at all (ln x − 40 moves by ln 10 per decade
+    // on either side of 0) are unbounded growth wherever they are.
+    let constant = steps
+        .windows(2)
+        .all(|w| (w[1].abs() - w[0].abs()).abs() <= 1e-3 * w[0].abs());
+    if (up || down) && constant && steps[0] != 0.0 {
+        return if up {
+            SeqLimit::PosInf
+        } else {
+            SeqLimit::NegInf
+        };
+    }
     if steady && (up && last > 0.0 || down && last < 0.0) && last.abs() > before.abs() {
         return if up {
             SeqLimit::PosInf
         } else {
             SeqLimit::NegInf
         };
+    }
+    // A geometric approach, steps shrinking by one constant ratio (every
+    // power tail: x^−0.1 shrinks by 10^−0.1 per decade), has its limit given
+    // exactly by Aitken's Δ² even while the steps are still large.
+    let signed: Vec<f64> = tail.windows(2).map(|w| w[1] - w[0]).collect();
+    let ratios: Vec<f64> = signed.windows(2).map(|w| w[1] / w[0]).collect();
+    let r = ratios[ratios.len() - 1];
+    if ratios.len() >= 3 && r > 0.0 && r < 0.99 && ratios.iter().all(|q| (q - r).abs() <= 1e-6 * r)
+    {
+        let (a, b, c) = (
+            tail[tail.len() - 3],
+            tail[tail.len() - 2],
+            tail[tail.len() - 1],
+        );
+        let denom = (c - b) - (b - a);
+        if denom != 0.0 {
+            let acc = c - (c - b) * (c - b) / denom;
+            if acc.is_finite() {
+                return SeqLimit::Converges(acc);
+            }
+        }
     }
     // Convergence: pick the index with the smallest increment, requiring the
     // increments to shrink for a few steps before it.
