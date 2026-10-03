@@ -389,7 +389,9 @@ impl GraphingPage {
         let entry = match focused {
             Some(e) if e.is_mapped() => e,
             _ => {
-                let e = match self.rows.borrow().last().map(|r| r.entry.clone()) {
+                // End the rows borrow before add_equation needs it mutably.
+                let last = self.rows.borrow().last().map(|r| r.entry.clone());
+                let e = match last {
                     Some(e) => e,
                     None => match self.add_equation("") {
                         Some(r) => r.entry.clone(),
