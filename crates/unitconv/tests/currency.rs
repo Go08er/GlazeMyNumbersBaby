@@ -752,6 +752,21 @@ fn implausible_snapshots_are_refused() {
     let tiny = s.currencies[1].code.clone();
     assert!(loader.currency_unit_by_code(&tiny).is_none());
 
+    // Nothing the converter would show (only an excluded metal): refused.
+    let mut s = fixture_snapshot();
+    let mut gold = s.currencies[0].clone();
+    gold.code = "XAU".into();
+    s.currencies = vec![gold];
+    assert!(matches!(s.validate(), Err(CurrencyError::NoData)));
+    // An unusable duplicate listed first doesn't hide the usable one.
+    let mut s = fixture_snapshot();
+    let mut bad = s.currencies[1].clone();
+    bad.rate = 1e300;
+    s.currencies.insert(0, bad.clone());
+    let mut loader = loader_with_cache(Some(prime_cache(&s)), TimeDelta::minutes(5));
+    assert!(loader.try_load_data_from_cache());
+    assert!(loader.currency_unit_by_code(&bad.code).is_some());
+
     // A cache dated a month ahead isn't used.
     let mut future = fixture_snapshot();
     future.fetched_at = fixture_time() + TimeDelta::days(30);

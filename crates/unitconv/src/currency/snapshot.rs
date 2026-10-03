@@ -141,7 +141,13 @@ impl CurrencySnapshot {
         if self.fetched_at.year() > 9999 {
             return Err(CurrencyError::Parse("implausible timestamp".into()));
         }
-        if self.currencies.iter().any(|c| plausible_rate(c.rate)) {
+        // At least one currency the converter will show: a plausible rate,
+        // and not a metal or accounting unit.
+        if self
+            .currencies
+            .iter()
+            .any(|c| plausible_rate(c.rate) && !super::info::is_excluded(&c.code))
+        {
             Ok(())
         } else {
             Err(CurrencyError::NoData)

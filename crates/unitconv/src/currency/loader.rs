@@ -552,7 +552,13 @@ impl CurrencyDataLoader {
         let mut static_data: Vec<(CurrencyStaticData, f64)> = snapshot
             .currencies
             .iter()
-            .filter(|c| !is_excluded(&c.code) && seen.insert(c.code.clone()))
+            // The first usable row for each code: an unusable one listed
+            // earlier doesn't shadow it.
+            .filter(|c| {
+                super::snapshot::plausible_rate(c.rate)
+                    && !is_excluded(&c.code)
+                    && seen.insert(c.code.clone())
+            })
             .map(|c| (static_data_for(c), c.rate))
             .collect();
         static_data.sort_by(|(a, _), (b, _)| {
