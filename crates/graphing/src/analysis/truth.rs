@@ -13,7 +13,7 @@
 //! Nothing here depends on what the analysis engine estimates (its scales,
 //! noise levels or tolerances): a claim is judged by the function alone.
 
-#![allow(missing_docs)]
+#![allow(missing_docs, clippy::should_implement_trait)]
 
 use std::f64::consts::{LN_2, LN_10};
 

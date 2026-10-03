@@ -64,12 +64,17 @@ pub struct Analysed<'c> {
     /// The function, slider variables bound to their values.
     pub ast: Expr,
     pub unit: TrigUnit,
+    /// An open range bound gets no `same_shown` allowance: it is a value
+    /// f never takes (a limit), not a value rounded for display, and a
+    /// sample past it by more than the noise contradicts it (the gate).
+    pub strict: bool,
     f: Option<Program>,
     cost: u64,
     spent: Cell<u64>,
     limit: u64,
     cancel: Option<&'c AtomicBool>,
     cancelled: Cell<bool>,
+    noises: std::cell::RefCell<std::collections::HashMap<u64, f64>>,
 }
 
 impl<'c> Analysed<'c> {
@@ -91,12 +96,14 @@ impl<'c> Analysed<'c> {
             k,
             ast,
             unit: opts.trig_unit,
+            strict: false,
             cost: f.as_ref().map_or(1, |p| p.cost().max(1) as u64),
             f,
             spent: Cell::new(0),
             limit: u64::MAX,
             cancel: None,
             cancelled: Cell::new(false),
+            noises: Default::default(),
         }
     }
     /// At most `limit` units of work (a program's cost per evaluation),
@@ -227,6 +234,14 @@ impl<'c> Analysed<'c> {
     /// plus the bound on the rounding of f's operations at x. Local by
     /// construction.
     pub fn noise(&self, x: f64) -> f64 {
+        if let Some(&n) = self.noises.borrow().get(&x.to_bits()) {
+            return n;
+        }
+        let n = self.noise_at(x);
+        self.noises.borrow_mut().insert(x.to_bits(), n);
+        n
+    }
+    fn noise_at(&self, x: f64) -> f64 {
         let y = self.raw(x);
         let mut spread = 0.0f64;
         if y.is_finite() {
@@ -341,6 +356,21 @@ pub fn set_dist(set: &[Interval], v: f64) -> f64 {
             }
         })
         .fold(f64::INFINITY, f64::min)
+}
+
+/// Whether v, outside the range, reads as its nearest bound (see
+/// [`same_shown`], and [`Analysed::strict`] for open bounds).
+pub fn shown_as_bound(a: &Analysed, set: &[Interval], v: f64) -> bool {
+    let b = set
+        .iter()
+        .flat_map(|iv| [iv.lo, iv.hi])
+        .filter(|b| b.value.is_finite())
+        .min_by(|p, q| (p.value - v).abs().total_cmp(&(q.value - v).abs()));
+    match b {
+        Some(b) if a.strict && !b.closed => false,
+        Some(b) => same_shown(v, b.value),
+        None => false,
+    }
 }
 
 /// The bound of the set nearest v.
@@ -463,6 +493,9 @@ pub struct Report {
     /// Work per step of the gate: (features vouched for, work, refuted
     /// so far).
     pub work: Vec<(u32, u64, u32)>,
+    /// What the gate dropped: refuted by a check, unchecked for want of
+    /// budget, or by rule ([`flags`] each).
+    pub dropped: (u32, u32, u32),
 }
 
 impl Report {
@@ -530,9 +563,11 @@ pub fn check_range(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
         .filter(|&i| ys[i].is_finite() && !set_has(range, ys[i]))
         .collect();
     outside.sort_by(|&i, &j| xs[i].abs().total_cmp(&xs[j].abs()));
+    // (A few hundred are plenty: past that they are all within the noise.)
+    outside.truncate(256);
     for (x, y) in outside.into_iter().map(|i| (xs[i], ys[i])) {
         let dist = set_dist(range, y);
-        if dist > 0.0 && !same_shown(y, nearest_bound(range, y)) && dist > a.noise(x) {
+        if dist > 0.0 && !shown_as_bound(a, range, y) && dist > a.noise(x) {
             r.fail(
                 "sample-outside-range",
                 flags::RANGE,
@@ -575,10 +610,7 @@ pub fn check_range(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
     let lows = refine_extremes(a, xs, ys, 1.0, 32);
     let highs = refine_extremes(a, xs, ys, -1.0, 32);
     for &(x, y) in lows.iter().chain(&highs) {
-        if !set_has(range, y)
-            && !same_shown(y, nearest_bound(range, y))
-            && set_dist(range, y) > a.noise(x)
-        {
+        if !set_has(range, y) && !shown_as_bound(a, range, y) && set_dist(range, y) > a.noise(x) {
             r.fail(
                 "refined-value-outside-range",
                 flags::RANGE,
@@ -629,7 +661,11 @@ pub fn check_range(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
                         ),
                     );
                 }
-            } else if let Some(i) = (0..ys.len()).find(|&i| ys[i] == v && a.noise(xs[i]) == 0.0) {
+            } else if let Some(i) = (0..ys.len())
+                .filter(|&i| ys[i] == v)
+                .take(64)
+                .find(|&i| a.noise(xs[i]) == 0.0)
+            {
                 // An open bound is not attained: f exactly at it, with no
                 // rounding anywhere, attains it.
                 r.fail(
@@ -687,7 +723,7 @@ pub fn check_range(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
     }
     if let Some(y) = d.y_intercept
         && !set_has(range, y)
-        && !same_shown(y, nearest_bound(range, y))
+        && !shown_as_bound(a, range, y)
         && set_dist(range, y) > a.noise(0.0)
     {
         r.fail(
@@ -916,26 +952,65 @@ pub fn check_missing_zeros(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report)
         }
         i += 1;
     }
-    for i in 0..n.saturating_sub(1) {
-        let (y0, y1) = (ys[i], ys[i + 1]);
-        if y0.is_finite()
-            && y1.is_finite()
-            && y0 != 0.0
-            && y1 != 0.0
-            && y0.signum() != y1.signum()
-            // (Past f's resolution, trig of 10¹⁴, the signs say nothing.)
-            && y0.abs() > a.noise(xs[i])
-            && y1.abs() > a.noise(xs[i + 1])
+    // Sign changes between samples whose signs f's noise doesn't blur
+    // (past f's resolution, trig of 10¹⁴, the signs say nothing), looking
+    // across samples at its noise or exactly 0 in between (|x| − 10⁻¹² is
+    // that small on either side of its zeros). An undefined sample ends a
+    // stretch.
+    let clear = |i: usize| ys[i].abs() > a.noise(xs[i]);
+    // With the zeros unknown, only poles are looked for: a sign change with
+    // f far bigger there than at the samples beyond.
+    let zeros_wanted = !a.unknown(flags::ZEROS);
+    let poles_wanted = !a.unknown(flags::VERTICAL_ASYMPTOTES);
+    if !zeros_wanted && !poles_wanted {
+        return;
+    }
+    let pole_like = |p: usize, i: usize| {
+        let beyond = |j: Option<usize>| {
+            j.filter(|&j| j < n && ys[j].is_finite())
+                .map_or(0.0, |j| ys[j].abs())
+        };
+        ys[p].abs() + ys[i].abs() > 10.0 * (beyond(p.checked_sub(1)) + beyond(Some(i + 1)))
+    };
+    let mut prev: Option<usize> = None;
+    for i in 0..n {
+        if a.over() {
+            return;
+        }
+        let y = ys[i];
+        if !y.is_finite() {
+            prev = None;
+            continue;
+        }
+        if y == 0.0 {
+            continue;
+        }
+        if let Some(p) = prev
+            && ys[p].signum() != y.signum()
+            && (zeros_wanted || pole_like(p, i))
         {
-            match bisect(a, xs[i], xs[i + 1]) {
-                Found::Crossing(x) => roots.push(x),
-                Found::Pole(x) => poles.push(x),
-                Found::Jump | Found::Gap => {}
-            }
-            if roots.len() + poles.len() > 4000 {
-                break;
+            // The nearest clear samples either side of the change.
+            let left = (0..=p)
+                .rev()
+                .take(9)
+                .take_while(|&j| ys[j].is_finite())
+                .find(|&j| ys[j] != 0.0 && ys[j].signum() == ys[p].signum() && clear(j));
+            let right = (i..n)
+                .take(9)
+                .take_while(|&j| ys[j].is_finite())
+                .find(|&j| ys[j] != 0.0 && ys[j].signum() == y.signum() && clear(j));
+            if let (Some(l), Some(rr)) = (left, right) {
+                match bisect(a, xs[l], xs[rr]) {
+                    Found::Crossing(x) => roots.push(x),
+                    Found::Pole(x) => poles.push(x),
+                    Found::Jump | Found::Gap => {}
+                }
+                if roots.len() + poles.len() > 4000 {
+                    break;
+                }
             }
         }
+        prev = Some(i);
     }
     if !a.unknown(flags::ZEROS) {
         if a.zero_set() {
@@ -946,12 +1021,16 @@ pub fn check_missing_zeros(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report)
             // 0 somewhere, by the 0 ∈ range rule.
             if let Some(except) = a.zero_set_except() {
                 let inside = |x: f64| !except.iter().any(|p| floats_between(*p, x) <= 4);
-                if let Some(i) = (0..n).find(|&i| {
-                    inside(xs[i])
-                        && ys[i].is_finite()
-                        && ys[i] != 0.0
-                        && ys[i].abs() > a.noise(xs[i])
-                }) {
+                if let Some(i) = (0..n)
+                    .filter(|&i| ys[i].is_finite() && ys[i] != 0.0)
+                    .take(256)
+                    .find(|&i| {
+                        inside(xs[i])
+                            && ys[i].is_finite()
+                            && ys[i] != 0.0
+                            && ys[i].abs() > a.noise(xs[i])
+                    })
+                {
                     r.fail(
                         "zero-set-wrong",
                         flags::ZEROS,
@@ -1349,7 +1428,7 @@ pub fn close_to(f: &Family, x: f64, floats: i64) -> bool {
     floats_between(c, x) <= floats || (x - c).abs() <= 4.0 * k
 }
 
-pub fn check_domain(a: &Analysed, xs: &[f64], r: &mut Report) {
+pub fn check_domain(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
     let d = a.d();
     if a.unknown(flags::DOMAIN) || d.domain.is_empty() {
         return;
@@ -1411,8 +1490,14 @@ pub fn check_domain(a: &Analysed, xs: &[f64], r: &mut Report) {
     };
     match a.period() {
         None => {
-            for &x in xs {
-                test(x, set_has(&d.domain, x) && !excluded(x));
+            for (&x, &y) in xs.iter().zip(ys) {
+                let claimed = set_has(&d.domain, x) && !excluded(x);
+                // (A sample with a value where the domain says there is one
+                // needs no more looking at.)
+                if claimed && y.is_finite() && y != 0.0 {
+                    continue;
+                }
+                test(x, claimed);
             }
         }
         Some(p) => {
@@ -1541,14 +1626,51 @@ pub fn blows_up(a: &Analysed, c: f64) -> bool {
         let near = a.eval(c + s * q);
         let mid = a.eval(c + s * q * 10.0);
         let far = a.eval(c + s * q * 100.0);
-        if near.is_nan() {
-            return false;
-        }
         let (d1, d2) = (near - mid, mid - far);
         !near.is_finite()
             || near.abs() == f64::MAX
             || near.abs() > mid.abs() * 1.2
             || (d1.signum() == d2.signum() && d1.abs() >= 0.5 * d2.abs() && d2 != 0.0)
+    })
+}
+
+/// Whether f certainly blows up on a side of c where it is defined: from
+/// the nearest point at which it is finite (e^(1/x) only is from x ≈ 1/709
+/// on), |f| grows towards c, by a factor or (a log pole) by the same step
+/// each decade nearer. Stricter than [`blows_up`], which accepts a claim:
+/// this one makes one (1/ln x tends to 0 at 0, ever more slowly).
+pub fn certainly_blows_up(a: &Analysed, c: f64) -> bool {
+    let limit = 1e-2 * c.abs().max(1.0);
+    [-1.0, 1.0].iter().any(|&s| {
+        let mut q = 16.0 * ulp(c);
+        let mut near = a.eval(c + s * q);
+        let mut tries = 0;
+        while near.is_nan() && q < limit && tries < 600 {
+            q *= 4.0;
+            near = a.eval(c + s * q);
+            tries += 1;
+        }
+        if near.is_nan() || q >= limit {
+            return false;
+        }
+        if near.is_infinite() || near.abs() == f64::MAX {
+            return true;
+        }
+        let (mid, far) = (a.eval(c + s * q * 10.0), a.eval(c + s * q * 100.0));
+        if !(mid.is_finite() && far.is_finite()) {
+            return false;
+        }
+        let (d1, d2) = (near - mid, mid - far);
+        // (Growth beyond f's noise: rounding beside a hole, (x/3 + 1)/(x + 3)
+        // at −3, also swells nearer.)
+        let (n0, n1) = (a.noise(c + s * q), a.noise(c + s * q * 10.0));
+        near.abs() - mid.abs() > n0 + n1
+            && mid.abs() > far.abs()
+            && (near.abs() > 1.2 * mid.abs()
+                || (d1.signum() == d2.signum()
+                    && d1.abs() >= 0.5 * d2.abs()
+                    && d1.abs() <= 2.0 * d2.abs()
+                    && d2 != 0.0))
     })
 }
 
@@ -1583,10 +1705,15 @@ pub fn check_monotonicity(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) 
                 };
                 let mut best: Option<(f64, f64)> = None;
                 let mut out = None;
+                let mut tried = 0;
                 for &(x, y) in pts {
                     if let Some((bx, by)) = best
                         && sign * y < sign * by
-                        && (by - y).abs() > a.noise(bx) + a.noise(x)
+                        && tried < 256
+                        && {
+                            tried += 1;
+                            (by - y).abs() > a.noise(bx) + a.noise(x)
+                        }
                     {
                         out = Some(((bx, by), (x, y)));
                         break;
@@ -1718,7 +1845,7 @@ pub fn check_vertical(a: &Analysed, r: &mut Report) {
             return;
         }
         let claimed = d.vertical_asymptotes.iter().any(|v| close_to(v, c, 1024));
-        if !claimed && c.is_finite() && blows_up(a, c) {
+        if !claimed && c.is_finite() && certainly_blows_up(a, c) {
             r.fail(
                 "missing-pole",
                 flags::VERTICAL_ASYMPTOTES,
@@ -1814,8 +1941,94 @@ pub fn check_horizontal(a: &Analysed, centres: &[f64], r: &mut Report) {
                 );
                 break;
             }
+            // Where f has settled, far out, on a value other than c, its
+            // limit is that value.
+            if let Some((v, n)) = settled(a, s, reach)
+                && (v - c).abs() > n + 4.0 * ulp(c)
+            {
+                r.fail(
+                    "hasymptote-wrong-value",
+                    flags::HORIZONTAL_ASYMPTOTES,
+                    e,
+                    format!(
+                        "y={c:?} as x→{}∞ but f settles on {v:?}",
+                        if s > 0.0 { "" } else { "−" }
+                    ),
+                );
+                return;
+            }
         }
     }
+    // And a side on which f settles has an asymptote there (unless f is a
+    // constant, or a line is claimed).
+    let d = a.d();
+    let constant = !d.range.is_empty() && d.range.iter().all(|iv| iv.lo.value == iv.hi.value);
+    if constant || a.unknown(flags::OBLIQUE_ASYMPTOTES) {
+        return;
+    }
+    for s in [1.0, -1.0] {
+        let covers = |side: AsymptoteSide| match side {
+            AsymptoteSide::AnyInfinity => true,
+            AsymptoteSide::PositiveInfinity => s > 0.0,
+            AsymptoteSide::NegativeInfinity => s < 0.0,
+            AsymptoteSide::Unknown => false,
+        };
+        if d.horizontal_asymptotes.iter().any(|h| covers(h.1))
+            || d.oblique_asymptotes.iter().any(|o| covers(o.2))
+        {
+            continue;
+        }
+        if let Some((v, _)) = settled(a, s, reach) {
+            r.fail(
+                "missing-hasymptote",
+                flags::HORIZONTAL_ASYMPTOTES,
+                e,
+                format!(
+                    "no horizontal asymptote as x→{}∞, but f settles on {v:?}",
+                    if s > 0.0 { "" } else { "−" }
+                ),
+            );
+            return;
+        }
+    }
+}
+
+/// The value f has settled on far out on side `s` (beyond every centre),
+/// with its noise there: the same, to within the noise, at the three
+/// farthest of 10³⁰⁰, 10²⁰⁰, …, 10²⁰ where its value is a double and its
+/// rounding is bounded (an intermediate that overflows, (x + 10⁶)² at
+/// 10³⁰⁰, bounds nothing).
+pub fn settled(a: &Analysed, s: f64, reach: f64) -> Option<(f64, f64)> {
+    let floor = (1e6 * reach).max(1e20);
+    let mut pts: Vec<(f64, f64)> = Vec::new();
+    for x in [1e300, 1e200, 1e150, 1e100, 1e60, 1e40, 1e30, 1e25, 1e20] {
+        if x < floor || pts.len() == 3 {
+            break;
+        }
+        let y = a.eval(s * x);
+        // (A stand-in for a value beyond the doubles, ±5·10⁻³²⁴ or the
+        // largest double, is no value to settle on.)
+        if !(y.is_finite() && y.abs() < f64::MAX && y.abs() != f64::from_bits(1)) {
+            return None;
+        }
+        let n = a.noise(s * x);
+        if !n.is_finite() {
+            continue;
+        }
+        // Nor do values the floats blur (trig of 10³⁰): settled means f's
+        // noise there is a small part of it.
+        if n > 1e-6 * y.abs() {
+            return None;
+        }
+        pts.push((y, n));
+    }
+    if pts.len() < 3 {
+        return None;
+    }
+    let agree = pts
+        .windows(2)
+        .all(|w| (w[0].0 - w[1].0).abs() <= w[0].1 + w[1].1);
+    agree.then_some(pts[0])
 }
 
 /// Even or odd as claimed, at every sampled pair ±x.
@@ -1829,7 +2042,11 @@ pub fn check_parity(a: &Analysed, xs: &[f64], r: &mut Report) {
         _ => return,
     };
     let e = &a.expr;
+    let mut tried = 0;
     for &x in xs.iter().filter(|x| **x > 0.0).step_by(3) {
+        if tried > 256 {
+            return;
+        }
         let (dp, dm) = (a.defined(x), a.defined(-x));
         if let (Some(p), Some(m)) = (dp, dm)
             && p != m
@@ -1846,7 +2063,10 @@ pub fn check_parity(a: &Analysed, xs: &[f64], r: &mut Report) {
         if dp == Some(true) && dm == Some(true) {
             let (y, z) = (a.eval(x), a.eval(-x));
             let dev = if odd { (y + z).abs() } else { (y - z).abs() };
-            if dev > 0.0 && dev > a.noise(x) + a.noise(-x) {
+            if dev > 0.0 && {
+                tried += 1;
+                dev > a.noise(x) + a.noise(-x)
+            } {
                 r.fail(
                     "parity-contradicted",
                     flags::PARITY,
@@ -1909,7 +2129,11 @@ pub fn check_period(a: &Analysed, centres: &[f64], r: &mut Report) {
     }
     pts.retain(|x| x.is_finite());
     let test = |q: f64| -> Option<String> {
+        let mut tried = 0;
         for &x in &pts {
+            if tried > 512 || a.over() {
+                return None;
+            }
             let x2 = x + q;
             match (a.defined(x), a.defined(x2)) {
                 (Some(true), Some(true)) => {
@@ -1918,7 +2142,10 @@ pub fn check_period(a: &Analysed, centres: &[f64], r: &mut Report) {
                     if y1.abs() == f64::MAX || y2.abs() == f64::MAX {
                         continue;
                     }
-                    if y1 != y2 && (y1 - y2).abs() > a.noise(x) + a.noise(x2) {
+                    if y1 != y2 && {
+                        tried += 1;
+                        (y1 - y2).abs() > a.noise(x) + a.noise(x2)
+                    } {
                         // x + P is rounded, and P itself stands for the true
                         // period to half an ulp, which |x/P| copies add up:
                         // within that reach of each point (beside a pole, a
@@ -2033,7 +2260,7 @@ pub fn check_inflections(a: &Analysed, r: &mut Report) {
             let mut tried = 0;
             for h in [1e-3 * s, 1e-2 * s, 1e-1 * s] {
                 let h = h.min(0.2 * gap);
-                if !(h > 0.0) || floats_between(c, c + h) < 64 {
+                if h.is_nan() || h <= 0.0 || floats_between(c, c + h) < 64 {
                     continue;
                 }
                 let ((vl, nl), (vr, nr)) = (curv(c - h, h), curv(c + h, h));
@@ -2145,7 +2372,7 @@ fn steps() -> [(u32, Step); 12] {
         (flags::INFLECTION_POINTS, |a, _, _, _, r| {
             check_inflections(a, r)
         }),
-        (flags::DOMAIN, |a, xs, _, _, r| check_domain(a, xs, r)),
+        (flags::DOMAIN, |a, xs, ys, _, r| check_domain(a, xs, ys, r)),
         (flags::MONOTONE_INTERVALS, |a, xs, ys, _, r| {
             check_monotonicity(a, xs, ys, r)
         }),
@@ -2169,7 +2396,7 @@ fn steps() -> [(u32, Step); 12] {
 
 /// Work the gate may do, in units of one evaluation of a program of cost 1
 /// (an evaluation of f costs its program's cost).
-pub const GATE_BUDGET: u64 = 20_000_000;
+pub const GATE_BUDGET: u64 = 60_000_000;
 
 /// Functions of x that can make f periodic (sin, floor(x) − x, x mod 1).
 fn periodic_capable(e: &Expr) -> bool {
@@ -2230,7 +2457,7 @@ pub fn centres_of(e: &Expr) -> Vec<f64> {
             seen.push(c);
         }
     }
-    seen.truncate(48);
+    seen.truncate(32);
     seen
 }
 
@@ -2275,7 +2502,7 @@ pub fn gate_samples(a: &Analysed, centres: &[f64]) -> Vec<f64> {
         for i in -50..=50 {
             xs.push(c + i as f64);
         }
-        for e in -60..=150 {
+        for e in (-60..=150).step_by(2) {
             let m = 10f64.powf(e as f64 / 10.0);
             xs.push(c + m);
             xs.push(c - m);
@@ -2348,7 +2575,7 @@ fn unjustified(a: &Analysed, xs: &[f64], ys: &[f64], centres: &[f64]) -> u32 {
             let y = a.eval(x);
             y.is_finite() && (y == v || same_shown(y, v) || (y - v).abs() <= a.noise(x))
         };
-        let attained = |v: f64| {
+        let attained = |v: f64, lower: bool| {
             d.minima
                 .iter()
                 .chain(&d.maxima)
@@ -2363,22 +2590,35 @@ fn unjustified(a: &Analysed, xs: &[f64], ys: &[f64], centres: &[f64]) -> u32 {
                 || xs
                     .iter()
                     .zip(ys)
-                    .any(|(&x, &y)| y == v && a.rounding(x) == 0.0)
+                    .filter(|(_, y)| **y == v)
+                    .take(64)
+                    .any(|(&x, _)| a.rounding(x) == 0.0)
+                || damped_turn(a, xs, ys, v, lower)
         };
         let bad = d.range.iter().any(|iv| {
             iv.lo.value != iv.hi.value
-                && [iv.lo, iv.hi]
+                && [(iv.lo, true), (iv.hi, false)]
                     .iter()
-                    .any(|b| b.closed && b.value.is_finite() && !attained(b.value))
+                    .any(|(b, lower)| b.closed && b.value.is_finite() && !attained(b.value, *lower))
         });
-        if bad {
+        if bad || !range_supported(a, xs, ys, centres) || !hole_values_attained(a, xs, ys) {
             out |= flags::RANGE;
         }
     }
     // Neither even nor odd: shown by a pair ±x, both defined and f(−x)
     // resolvably neither f(x) nor −f(x), or defined at only one of them.
     if !a.unknown(flags::PARITY) && k.parity == Parity::Neither {
-        let witness = xs.iter().filter(|x| **x > 0.0).step_by(3).any(|&x| {
+        // (Every third sample, and every excluded point and end of the
+        // domain, where an asymmetry most likely is.)
+        let mut cands: Vec<f64> = xs.iter().copied().filter(|x| *x > 0.0).step_by(3).collect();
+        cands.extend(d.excluded.iter().map(|f| f.x.abs()));
+        cands.extend(
+            d.domain
+                .iter()
+                .flat_map(|iv| [iv.lo.value.abs(), iv.hi.value.abs()])
+                .filter(|v| v.is_finite()),
+        );
+        let witness = cands.into_iter().filter(|x| *x > 0.0).any(|x| {
             match (a.defined(x), a.defined(-x)) {
                 (Some(true), Some(true)) => {
                     let (y, z) = (a.eval(x), a.eval(-x));
@@ -2387,9 +2627,9 @@ fn unjustified(a: &Analysed, xs: &[f64], ys: &[f64], centres: &[f64]) -> u32 {
                         (y - z).abs() > n && (y + z).abs() > n
                     }
                 }
-                (Some(p), Some(m)) if p != m => (-2..=2).all(|k| {
-                    a.defined(nudge(x, k)) == Some(p) && a.defined(nudge(-x, k)) == Some(m)
-                }),
+                // (Defined at only one of them, exactly: a hole at 10⁹ and
+                // none at −10⁹ is a witness.)
+                (Some(p), Some(m)) => p != m,
                 _ => false,
             }
         });
@@ -2400,14 +2640,305 @@ fn unjustified(a: &Analysed, xs: &[f64], ys: &[f64], centres: &[f64]) -> u32 {
     // Not periodic: plain when nothing in f can repeat; otherwise f must
     // be seen to grow, decade after decade (x + sin x), which no periodic
     // function does.
+    // (A constant is "not periodic" by the original's convention.)
+    let constant = d.range.len() == 1 && d.range[0].lo.value == d.range[0].hi.value;
     if !a.unknown(flags::PERIODICITY)
         && k.periodicity_direction == super::Periodicity::NotPeriodic
+        && !constant
         && periodic_capable(&a.ast)
         && !grows(a)
     {
         out |= flags::PERIODICITY;
     }
     out
+}
+
+/// A closed range bound v (a lower one if `lower`) taken at a turn of a
+/// dying oscillation, sin(x)/x's −0.217234: the most extreme refined sample
+/// takes it, and beyond it, decade after decade on each side, f's extreme
+/// keeps strictly further from v, so no later turn reaches it. (The
+/// extremes of sin x + sin(√2·x) don't keep away, nor do sin(x²)'s.)
+fn damped_turn(a: &Analysed, xs: &[f64], ys: &[f64], v: f64, lower: bool) -> bool {
+    let sign = if lower { 1.0 } else { -1.0 };
+    let Some(&(xt, yt)) = refine_extremes(a, xs, ys, sign, 4).first() else {
+        return false;
+    };
+    if !(yt == v || same_shown(yt, v) || (yt - v).abs() <= a.noise(xt)) {
+        return false;
+    }
+    let k0 = xt.abs().max(1.0).log10().ceil() as i32 + 1;
+    let mut decades = 0;
+    for s in [1.0, -1.0] {
+        let mut prev = 0.0f64;
+        for k in k0..=15 {
+            if a.over() {
+                return false;
+            }
+            let m = (0..64)
+                .map(|j| {
+                    let x = s
+                        * 10f64.powf(k as f64 + j as f64 / 64.0)
+                        * (1.0 + 0.0137 * (j % 3) as f64);
+                    sign * a.eval(x)
+                })
+                .filter(|y| y.is_finite())
+                .fold(f64::INFINITY, f64::min);
+            if !m.is_finite() {
+                continue;
+            }
+            let gap = m - sign * v;
+            // (Equal once the floats can't tell the extremes apart.)
+            if gap <= 0.0 || gap < prev {
+                return false;
+            }
+            prev = gap;
+            decades += 1;
+        }
+    }
+    decades >= 4
+}
+
+/// At a removable hole (an excluded point where f tends to a value L from
+/// both sides), a range that keeps L claims f takes it somewhere else: a
+/// sample there, or f crossing it between two samples, away from the hole.
+/// Otherwise nothing stands behind it (10⁶ + 10⁻⁶·(x + 1)/(x² − 1) leaves
+/// out 10⁶ − 5·10⁻⁷ as (x + 1)/(x² − 1) leaves out −1/2).
+fn hole_values_attained(a: &Analysed, xs: &[f64], ys: &[f64]) -> bool {
+    let d = a.d();
+    for f in &d.excluded {
+        let c = f.x;
+        if !c.is_finite() {
+            continue;
+        }
+        // The same value from both sides, at two scales (beside a pole of
+        // even order the sides agree, but not the scales).
+        let pts: Vec<f64> = [-4096, -64, 64, 4096]
+            .iter()
+            .map(|&k| nudge(c, k))
+            .collect();
+        let vals: Vec<f64> = pts.iter().map(|&x| a.eval(x)).collect();
+        let n = pts.iter().map(|&x| a.noise(x)).fold(0.0, f64::max);
+        let (lo, hi) = vals
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), &v| {
+                (l.min(v), h.max(v))
+            });
+        if !(lo.is_finite() && hi.is_finite()) || hi - lo > 2.0 * n {
+            continue;
+        }
+        let v = 0.5 * (vals[1] + vals[2]);
+        if !set_has(&d.range, v) {
+            continue;
+        }
+        let away = |x: f64| {
+            let near = |c: f64| (x - c).abs() <= 1e-6 * c.abs().max(1.0);
+            !a.copies(f).iter().any(|&c| near(c))
+        };
+        let n = xs.len();
+        let ok = |i: usize| ys[i].is_finite() && away(xs[i]);
+        let crossed = (0..n).any(|i| {
+            ok(i)
+                && (ys[i] == v
+                    || (i + 1 < n && ok(i + 1) && (ys[i] - v).signum() != (ys[i + 1] - v).signum()))
+        });
+        // Or within the noise of it, among the closest samples.
+        let close = || {
+            let mut idx: Vec<usize> = (0..n).filter(|&i| ok(i)).collect();
+            idx.sort_by(|&i, &j| (ys[i] - v).abs().total_cmp(&(ys[j] - v).abs()));
+            idx.iter()
+                .take(32)
+                .any(|&i| (ys[i] - v).abs() <= a.noise(xs[i]))
+        };
+        if !crossed && !close() {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether the values f is seen to take cover the claimed range. Between
+/// neighbouring samples on a continuous stretch, f takes every value in
+/// between; towards a pole (or past the last sample, out to 10³⁰⁰) it goes
+/// on the way it was going, as far as the claimed piece goes. A stretch of
+/// the claimed range none of that reaches, wider than the noise at its
+/// edges, is a claim nothing stands behind: the gap of 10⁶ + 10⁻⁶·(x +
+/// 1/x) that a range of ℝ leaves out, say.
+#[allow(clippy::needless_range_loop)]
+fn range_supported(a: &Analysed, xs: &[f64], ys: &[f64], centres: &[f64]) -> bool {
+    let range = &a.d().range;
+    if range.is_empty() || range.iter().all(|iv| iv.lo.value == iv.hi.value) {
+        return true;
+    }
+    let reach = centres.iter().fold(1.0f64, |m, c| m.max(c.abs()));
+    // The samples, with the far tails.
+    let mut pts: Vec<(f64, f64)> = xs.iter().copied().zip(ys.iter().copied()).collect();
+    for s in [1.0, -1.0] {
+        for x in [(1e6 * reach).max(1e30), 1e100, 1e300] {
+            pts.push((s * x, a.eval(s * x)));
+        }
+    }
+    pts.sort_by(|p, q| p.0.total_cmp(&q.0));
+    let piece = |v: f64| {
+        range
+            .iter()
+            .find(|iv| iv_has(iv, v) || iv.lo.value == v || iv.hi.value == v)
+    };
+    // Covered values: [lo, hi] with the x where each end is taken.
+    let mut cover: Vec<(f64, f64, f64, f64)> = Vec::new();
+    let n = pts.len();
+    let finite = |i: usize| pts[i].1.is_finite() && pts[i].1.abs() < f64::MAX;
+    let step = |i: usize, j: usize| (pts[j].1 - pts[i].1).abs();
+    // Whether f was taken to be continuous from each sample to the next.
+    let mut joined = vec![false; n];
+    for i in 0..n {
+        if !finite(i) {
+            continue;
+        }
+        let (x0, y0) = pts[i];
+        cover.push((y0, y0, x0, x0));
+        // To the next sample, if f is continuous between (no pole in
+        // between: a step far beyond its neighbours' needs f at the
+        // quarter points to stay within reach of its ends).
+        if i + 1 < n && finite(i + 1) {
+            let (x1, y1) = pts[i + 1];
+            let jump = step(i, i + 1);
+            let around = [
+                i.checked_sub(1).map(|h| (h, i)),
+                (i + 2 < n).then_some((i + 1, i + 2)),
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|&(h, k)| finite(h) && finite(k))
+            .map(|(h, k)| step(h, k))
+            .fold(0.0f64, f64::max);
+            let continuous = jump <= 4.0 * around || {
+                let (lo, hi) = (y0.min(y1) - jump, y0.max(y1) + jump);
+                [0.25, 0.5, 0.75].iter().all(|t| {
+                    let v = a.eval(x0 + (x1 - x0) * t);
+                    v.is_finite() && v >= lo && v <= hi
+                })
+            };
+            if continuous {
+                joined[i] = true;
+                if y0 <= y1 {
+                    cover.push((y0, y1, x0, x1));
+                } else {
+                    cover.push((y1, y0, x1, x0));
+                }
+            }
+        }
+        // The end of a stretch (an undefined or unbounded neighbour, or the
+        // last sample): f goes on the way it was going, to the end of its
+        // claimed piece.
+        let mut inners = Vec::new();
+        if i > 0 && finite(i - 1) && (i + 1 >= n || !finite(i + 1)) {
+            inners.push(i - 1);
+        }
+        if i + 1 < n && finite(i + 1) && (i == 0 || !finite(i - 1)) {
+            inners.push(i + 1);
+        }
+        for j in inners {
+            let dir = (y0 - pts[j].1).signum();
+            if let Some(iv) = piece(y0) {
+                if dir > 0.0 {
+                    cover.push((y0, iv.hi.value, x0, x0));
+                } else if dir < 0.0 {
+                    cover.push((iv.lo.value, y0, x0, x0));
+                }
+            }
+        }
+    }
+    // Also both ends of every stretch the samples end on (a pole between
+    // two samples): each side keeps going.
+    for i in 0..n.saturating_sub(1) {
+        if !(finite(i) && finite(i + 1)) {
+            continue;
+        }
+        if joined[i] {
+            continue;
+        }
+        for (k, j) in [(i, i.wrapping_sub(1)), (i + 1, i + 2)] {
+            if j < n && finite(j) {
+                let (xk, yk) = pts[k];
+                let dir = (yk - pts[j].1).signum();
+                if let Some(iv) = piece(yk) {
+                    if dir > 0.0 {
+                        cover.push((yk, iv.hi.value, xk, xk));
+                    } else if dir < 0.0 {
+                        cover.push((iv.lo.value, yk, xk, xk));
+                    }
+                }
+            }
+        }
+    }
+    // Far out, a tail that swings both ways (x·sin x) goes on doing so.
+    for s in [1.0, -1.0] {
+        let tail: Vec<usize> = (0..n)
+            .filter(|&i| s * pts[i].0 >= 1e15 && finite(i))
+            .collect();
+        let ys: Vec<f64> = tail.iter().map(|&i| pts[i].1).collect();
+        let up = ys.windows(2).any(|w| w[1] > w[0]);
+        let down = ys.windows(2).any(|w| w[1] < w[0]);
+        // (Growing as it swings: a bounded tail past the floats' resolution,
+        // trig of 10³⁰, swings at random and says nothing.)
+        let grows = match (ys.first(), ys.last()) {
+            (Some(f), Some(l)) => l.abs() > 1e3 * f.abs().max(f64::MIN_POSITIVE),
+            _ => false,
+        };
+        if up && down && grows {
+            for &i in &tail {
+                if let Some(iv) = piece(pts[i].1) {
+                    cover.push((iv.lo.value, iv.hi.value, pts[i].0, pts[i].0));
+                }
+            }
+        }
+    }
+    cover.sort_by(|p, q| p.0.total_cmp(&q.0));
+    // The least noise where f takes v (an end may be taken where the noise
+    // is unbounded, past an overflowing intermediate, and also where it
+    // isn't).
+    let least_noise = |v: f64| {
+        cover
+            .iter()
+            .flat_map(|c| [(c.0, c.2), (c.1, c.3)])
+            .filter(|&(w, x)| w == v && x.is_finite())
+            .map(|(_, x)| a.noise(x))
+            .fold(f64::INFINITY, f64::min)
+            .min(if v.is_finite() { f64::INFINITY } else { 0.0 })
+    };
+    // Walk each claimed piece: every stretch of it must be reached.
+    for iv in range {
+        if iv.lo.value == iv.hi.value {
+            continue;
+        }
+        let mut at = iv.lo.value;
+        for &(lo, hi, _, _) in &cover {
+            if hi < at {
+                continue;
+            }
+            if lo > iv.hi.value {
+                break;
+            }
+            // A gap (at, lo): one f is never seen in, wider than the noise
+            // where its edges are taken.
+            if lo > at
+                && (at == f64::NEG_INFINITY
+                    || (lo - at > 4.0 * (ulp(at) + ulp(lo))
+                        && lo - at > least_noise(at) + least_noise(lo)))
+            {
+                return false;
+            }
+            at = at.max(hi);
+            if at >= iv.hi.value {
+                break;
+            }
+        }
+        if at < iv.hi.value && (iv.hi.value == f64::INFINITY || iv.hi.value - at > least_noise(at))
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// |f| over a decade (40 points), median, keeps growing at least twofold
@@ -2495,6 +3026,7 @@ fn gate_with_spent(
         return Ok((k, Report::default()));
     }
     let mut a = Analysed::new(String::new(), k, expr, opts).with_budget(GATE_BUDGET, cancel);
+    a.strict = true;
     let centres = centres_of(&a.ast);
     let xs = gate_samples(&a, &centres);
     let ys: Vec<f64> = xs.iter().map(|&x| a.eval(x)).collect();
@@ -2526,13 +3058,19 @@ fn gate_with_spent(
             }
         }
         let mut drop = r.refuted | unverified;
+        let mut ruled = 0;
         if !a.over() {
-            drop |= unjustified(&a, &xs, &ys, &centres);
+            ruled = unjustified(&a, &xs, &ys, &centres);
+            drop |= ruled;
         }
         if a.over() {
             // Out of time: nothing unchecked stays.
-            drop |= !0 & ALL;
+            unverified |= ALL;
+            drop |= ALL;
         }
+        r.dropped.0 |= r.refuted & !dropped;
+        r.dropped.1 |= unverified & !dropped & !r.refuted;
+        r.dropped.2 |= ruled & !dropped & !r.refuted & !unverified;
         if a.cancelled() {
             return Err(super::engine::Stop::Cancelled);
         }

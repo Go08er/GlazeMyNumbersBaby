@@ -248,7 +248,9 @@ fn unresolvable_values_are_unknown_not_a_gap() {
     // Far beyond the search it changes nothing.
     let r = k("y=sin(x^2)");
     assert_eq!(r.domain, "x ∈ ℝ");
-    assert_eq!(r.range, "y ∈ [−1, 1]");
+    // (Right, but sampling can't show its bounds are global: the gate
+    // leaves it unknown; see tests/analysis.rs.)
+    assert!(r.range == "y ∈ [−1, 1]" || r.too_complex_features & flags::RANGE != 0);
 }
 
 #[test]

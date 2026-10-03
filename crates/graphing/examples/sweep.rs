@@ -1,8 +1,10 @@
 //! Adversarial invariant sweep over function analysis (not run in CI).
 //!
-//! `cargo run --release -p graphing --example sweep [-- FILTER] [--all] [--check-ref]`
+//! `cargo run --release -p graphing --example sweep [-- FILTER] [--all] [--check-ref] [--ungated]`
 //! (`--check-ref` also checks the reference evaluator against the compiled
-//! program; `-- --at EXPR X [deg|grad]` shows one function at one point.)
+//! program; `--ungated` checks the engine's own answers, before the
+//! gate in `analysis::verify`; `-- --at EXPR X [deg|grad]` shows one
+//! function at one point.)
 //!
 //! For a set of base functions it analyses shifted, offset, scaled and
 //! stretched variants (alone and combined), plus hand-written families
@@ -63,8 +65,8 @@ use std::collections::BTreeMap;
 use std::f64::consts::PI;
 
 use graphing::analysis::truth::*;
-use graphing::analysis::verify::*;
-use graphing::analysis::{Family, Interval, Periodicity, analyze, flags};
+use graphing::analysis::verify::{self, *};
+use graphing::analysis::{Family, Interval, Periodicity, analyze, analyze_ungated, flags};
 use graphing::compile::CompileOptions;
 use graphing::{Equation, TrigUnit};
 
@@ -796,9 +798,51 @@ fn analysed(expr: &str, unit: TrigUnit) -> Option<Analysed<'static>> {
     };
     let eq = Equation::parse(&format!("y={expr}")).ok()?;
     let ast = eq.explicit()?.1.clone();
-    let k = analyze(&eq, &opts);
+    let k = if UNGATED.load(std::sync::atomic::Ordering::Relaxed) {
+        analyze_ungated(&eq, &opts)
+    } else {
+        analyze(&eq, &opts)
+    };
     Some(Analysed::new(expr, k, &ast, &opts))
 }
+
+/// `--why`: tally why the gate dropped what it dropped.
+static WHY: std::sync::Mutex<BTreeMap<String, usize>> = std::sync::Mutex::new(BTreeMap::new());
+
+fn tally(expr: &str, unit: TrigUnit) {
+    let opts = CompileOptions {
+        trig_unit: unit,
+        ..CompileOptions::default()
+    };
+    let Ok(eq) = Equation::parse(&format!("y={expr}")) else {
+        return;
+    };
+    let Some((_, ast)) = eq.explicit() else {
+        return;
+    };
+    let raw = analyze_ungated(&eq, &opts);
+    let (_, r, _) = verify::gate_report(raw, ast, &opts);
+    let mut why = WHY.lock().unwrap();
+    for (check, lines) in &r.failures {
+        *why.entry(format!("refuted by {check}")).or_default() += lines.len();
+    }
+    for (i, (flag, name)) in FEATURES.iter().enumerate() {
+        let _ = i;
+        for (k, label) in [
+            (r.dropped.0, "refuted"),
+            (r.dropped.1, "budget"),
+            (r.dropped.2, "rule"),
+        ] {
+            if k & flag != 0 {
+                *why.entry(format!("{name}: {label}")).or_default() += 1;
+            }
+        }
+    }
+}
+
+/// `--ungated`: check what the engine alone says (`analyze_ungated`), not
+/// what the gate lets through.
+static UNGATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Known undefined points must be outside the domain and never intercepts.
 /// `policy`: the calculator defines these points (0⁰ = 1), so a
@@ -1664,6 +1708,10 @@ fn main() {
     }
     let filter = args.iter().find(|a| !a.starts_with("--")).cloned();
     let check_ref = args.iter().any(|a| a == "--check-ref");
+    if args.iter().any(|a| a == "--ungated") {
+        UNGATED.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    let why = args.iter().any(|a| a == "--why");
     let wanted = |e: &str| filter.as_ref().is_none_or(|f| e.contains(f.as_str()));
     let mut r = Report::default();
     let started = std::time::Instant::now();
@@ -1678,6 +1726,9 @@ fn main() {
                        cov: &mut Coverage|
      -> Option<Analysed> {
         let t0 = std::time::Instant::now();
+        if why {
+            tally(expr, unit);
+        }
         let Some(a) = analysed(expr, unit) else {
             fail(r, "does-not-parse", expr, String::new());
             return None;
@@ -1902,6 +1953,12 @@ fn main() {
         println!("\n## hand-written functions with unknown answers");
         for l in &special_unknown {
             println!("  {l}");
+        }
+    }
+    if why {
+        println!("\n## why the gate dropped features (functions)");
+        for (k, n) in WHY.lock().unwrap().iter() {
+            println!("  {k:<48} {n}");
         }
     }
     if real > 0 {

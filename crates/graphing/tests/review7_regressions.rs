@@ -188,7 +188,9 @@ fn ordinary_results_survive() {
     assert_eq!(r.range, "y ∈ [−0.217234, 1)");
     let r = k("y = sin(x^2)");
     assert_eq!(r.parity, Parity::Even);
-    assert_eq!(r.range, "y ∈ [−1, 1]");
+    // (Round 9: right, but sampling can't show its bounds are global, so
+    // the gate leaves it unknown; see tests/analysis.rs.)
+    assert!(r.range == "y ∈ [−1, 1]" || r.too_complex_features & flags::RANGE != 0);
     let r = k("y = x*sin(x)");
     assert_eq!(r.parity, Parity::Even);
     assert_eq!(r.range, "y ∈ ℝ");
