@@ -814,6 +814,9 @@ mod tests {
         // reach a later conversion.
         let target = stubborn.join().unwrap().expect("it was asked for text");
         let window = cx.connection.get_window_attributes(target).unwrap().reply();
-        assert!(window.is_err(), "the abandoned conversion's window still exists");
+        assert!(
+            window.is_err(),
+            "the abandoned conversion's window still exists"
+        );
     }
 }

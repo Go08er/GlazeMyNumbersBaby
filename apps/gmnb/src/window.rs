@@ -85,7 +85,11 @@ impl Window {
         // can be. GTK aborts on anything below -1.
         let defaults = crate::settings::Settings::default();
         let fit = |v: i32, min: i32, fallback: i32| {
-            if v <= 0 { fallback } else { v.clamp(min, 16384) }
+            if v <= 0 {
+                fallback
+            } else {
+                v.clamp(min, 16384)
+            }
         };
         let win = adw::ApplicationWindow::builder()
             .application(app)
