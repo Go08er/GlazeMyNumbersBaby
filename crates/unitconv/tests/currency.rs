@@ -737,6 +737,21 @@ fn implausible_snapshots_are_refused() {
     assert!(refused(&s));
     assert!(!refused(&fixture_snapshot()));
 
+    // Rates whose pair ratios could overflow are left out; a snapshot with
+    // nothing else usable is refused.
+    let mut s = fixture_snapshot();
+    for c in &mut s.currencies {
+        c.rate = 1e300;
+    }
+    assert!(matches!(s.validate(), Err(CurrencyError::NoData)));
+    let mut s = fixture_snapshot();
+    s.currencies[1].rate = 1e-300;
+    assert!(!refused(&s));
+    let mut loader = loader_with_cache(Some(prime_cache(&s)), TimeDelta::minutes(5));
+    assert!(loader.try_load_data_from_cache());
+    let tiny = s.currencies[1].code.clone();
+    assert!(loader.currency_unit_by_code(&tiny).is_none());
+
     // A cache dated a month ahead isn't used.
     let mut future = fixture_snapshot();
     future.fetched_at = fixture_time() + TimeDelta::days(30);

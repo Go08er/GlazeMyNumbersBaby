@@ -80,6 +80,14 @@ fn default_version() -> u32 {
 /// that table, whatever a cache file or a response contains.
 pub const MAX_CURRENCIES: usize = 400;
 
+/// Whether a rate (units per one base unit) is usable. Real ones lie
+/// between about 10⁻⁴ and 2·10⁶ (the bundled data: 0.00024 to 1,568,175);
+/// outside 10⁻⁹..10⁹ a pair's ratio could overflow or vanish, so such a
+/// currency is left out.
+pub fn plausible_rate(rate: f64) -> bool {
+    (1e-9..=1e9).contains(&rate)
+}
+
 /// A currency code as providers write them: a few ASCII letters or digits.
 fn plausible_code(code: &str) -> bool {
     (1..=8).contains(&code.len()) && code.bytes().all(|b| b.is_ascii_alphanumeric())
@@ -133,11 +141,7 @@ impl CurrencySnapshot {
         if self.fetched_at.year() > 9999 {
             return Err(CurrencyError::Parse("implausible timestamp".into()));
         }
-        if self
-            .currencies
-            .iter()
-            .any(|c| c.rate.is_finite() && c.rate > 0.0)
-        {
+        if self.currencies.iter().any(|c| plausible_rate(c.rate)) {
             Ok(())
         } else {
             Err(CurrencyError::NoData)

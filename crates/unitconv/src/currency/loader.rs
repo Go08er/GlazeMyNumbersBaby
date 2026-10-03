@@ -415,7 +415,9 @@ impl CurrencyDataLoader {
     /// rates looking fresh indefinitely; it's treated as unusable. (Fresh
     /// rates are stamped by our own client when fetched.)
     fn is_from_the_future(&self, ts: DateTime<Utc>) -> bool {
-        ts > self.now() + TimeDelta::days(1)
+        self.now()
+            .checked_add_signed(TimeDelta::days(1))
+            .is_some_and(|limit| ts > limit)
     }
 
     /// The current network access behaviour.
@@ -567,7 +569,7 @@ impl CurrencyDataLoader {
         let mut is_conversion_target_set = false;
         let mut i = 1;
         for (currency_unit, ratio) in static_data {
-            if ratio.is_finite() && ratio > 0.0 {
+            if super::snapshot::plausible_rate(ratio) {
                 let id = UNIT_END + i;
 
                 let is_conversion_source = from_currency == currency_unit.currency_code;
