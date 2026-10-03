@@ -1,9 +1,12 @@
 //! User-facing en-US strings used by the graphing feature.
 //!
-//! These are copied verbatim (typos included, e.g. "aysmptotes") from the
-//! original application's `Calculator/Resources/en-US/Resources.resw` so that
-//! the port shows exactly the same text. Each constant is named after its
-//! resource key; [`resource`] looks a key up at runtime.
+//! The strings listed in [`RESOURCES`] are copied verbatim (typos included,
+//! e.g. "aysmptotes") from the original application's
+//! `Calculator/Resources/en-US/Resources.resw` so that the port shows exactly
+//! the same text. Each of those constants is named after its resource key;
+//! [`resource`] looks a key up at runtime. The few strings GMNB adds (marked
+//! below: the analysis budget, and what is shown for a feature too complex
+//! to determine in full) are its own and have no resource key.
 
 /// Key graph feature panel titles.
 pub const DOMAIN: &str = "Domain";
@@ -53,9 +56,9 @@ pub const KGF_MONOTONICITY_DECREASING: &str = "Decreasing";
 pub const KGF_MONOTONICITY_CONSTANT: &str = "Constant";
 pub const KGF_MONOTONICITY_UNKNOWN: &str = "The monotonicity of the function is unknown.";
 pub const KGF_MONOTONICITY_ERROR: &str = "Unable to determine the monotonicity of the function.";
-// Shown in place of the "none" text when a feature was too complex to
-// determine (the original shows "none" there, alongside the too-complex
-// footer, which reads as a contradiction).
+// Not upstream strings: shown in place of the "none" text when a feature was
+// too complex to determine (the original shows "none" there, alongside the
+// too-complex footer, which reads as a contradiction).
 pub const KGF_X_INTERCEPT_UNKNOWN: &str = "Unable to calculate the x-intercepts for this function.";
 pub const KGF_Y_INTERCEPT_UNKNOWN: &str = "Unable to calculate the y-intercept for this function.";
 pub const KGF_MINIMA_UNKNOWN: &str = "Unable to calculate the minima for this function.";
@@ -68,6 +71,11 @@ pub const KGF_HORIZONTAL_ASYMPTOTES_UNKNOWN: &str =
     "Unable to calculate the horizontal asymptotes for this function.";
 pub const KGF_OBLIQUE_ASYMPTOTES_UNKNOWN: &str =
     "Unable to calculate the oblique asymptotes for this function.";
+/// Not an upstream string: follows the values of a feature only partly
+/// determined (one horizontal asymptote established, the other side's limit
+/// not), which the original shows unqualified.
+pub const KGF_FEATURE_PARTIAL: &str =
+    "Partial result: Calculator could not calculate the rest of this feature.";
 pub const KGF_TOO_COMPLEX_FEATURES_ERROR: &str =
     "These features are too complex for Calculator to calculate:";
 
