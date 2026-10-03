@@ -80,6 +80,7 @@
 pub mod analysis;
 pub mod ast;
 pub mod compile;
+pub(crate) mod dd;
 pub mod diff;
 pub mod equation;
 pub mod error;

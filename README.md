@@ -67,13 +67,19 @@ desktop colours.
 
 GMNB renders on the GPU so the aurora, blur and glow stay cheap on the CPU;
 nearly all of its extra memory is the GPU driver (here NVIDIA's Vulkan
-stack) loaded into the process. To trade animation smoothness for memory:
+stack) loaded into the process. To trade animation smoothness for memory,
+turn off **Settings → Window → Vulkan acceleration** (it applies from the
+next launch), or for one run:
 
 ```sh
-flatpak override --user --env=GSK_RENDERER=cairo io.github.Go08er.GlazeMyNumbersBaby
-# or, for one run / native installs:
 GSK_RENDERER=cairo gmnb
 ```
+
+An explicit `GSK_RENDERER` always wins over the setting. The same group's
+**Background opacity** slider makes the backdrop see-through, so the desktop
+shows through the window; whether it's blurred into frosted glass is up to
+your compositor (most blur translucent windows only when told to, e.g. a
+window rule for GMNB's app ID).
 
 Measured on NixOS with an RTX 3070 (driver 595), in a headless Wayland
 session (weston) at 760×700, idle in Standard mode unless noted. RSS counts

@@ -41,6 +41,17 @@ pub fn apply_theme_setting(theme: &str) {
     });
 }
 
+/// Show the backdrop at `alpha`: below 1 it, and the window under it, are
+/// see-through.
+pub fn apply_backdrop(win: &adw::ApplicationWindow, aurora: &Aurora, alpha: f32) {
+    aurora.set_backdrop_alpha(alpha);
+    if alpha < 1.0 {
+        win.add_css_class("wc-see-through");
+    } else {
+        win.remove_css_class("wc-see-through");
+    }
+}
+
 impl Window {
     pub fn new(app: &adw::Application) -> Rc<Self> {
         let screenshot = std::env::var_os("GMNB_SCREENSHOT").is_some();
@@ -53,6 +64,12 @@ impl Window {
         });
         if let Ok(p) = std::env::var("GMNB_PALETTE") {
             store.data.borrow_mut().palette = p;
+        }
+        if let Some(v) = std::env::var("GMNB_OPACITY")
+            .ok()
+            .and_then(|v| v.parse().ok())
+        {
+            store.data.borrow_mut().background_opacity = v;
         }
         match std::env::var("GMNB_DARK").as_deref() {
             Ok("1") => store.data.borrow_mut().theme = "dark".into(),
@@ -103,6 +120,11 @@ impl Window {
 
         let aurora = Aurora::default();
         aurora.set_animated(settings.animated_background && std::env::var("GMNB_STILL").is_err());
+        apply_backdrop(
+            &win,
+            &aurora,
+            crate::settings::backdrop_alpha(settings.background_opacity),
+        );
         let toasts = adw::ToastOverlay::new();
         let ctx = Rc::new(Ctx {
             hub: hub.clone(),

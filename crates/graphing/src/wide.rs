@@ -14,12 +14,17 @@
 //! rounds exactly as the double one does.
 
 use crate::compile::{Fn1, Fn2};
+use crate::dd;
 use crate::functions as fns;
 use std::cmp::Ordering;
 use std::f64::consts::{LN_2, LN_10};
 
 /// ln 2 − `LN_2`, for exact argument reduction.
 const LN2_LO: f64 = 2.319_046_813_846_299_6e-17;
+
+/// 2⁵²: below it, an integer-valued double times ln 2 reduces exactly by
+/// fused multiply-adds, and exponents keep their parity and remainders.
+const TWO52: f64 = 4_503_599_627_370_496.0;
 
 /// Exponents within which m·2^e is an ordinary double, with room for a
 /// simple result of it to stay one.
@@ -94,29 +99,36 @@ fn ln_abs(m: f64, e: f64) -> f64 {
     if e.abs() <= NORMAL {
         ldexp(m.abs(), e).ln()
     } else {
-        e.mul_add(LN_2, m.abs().ln()) + e * LN2_LO
+        ln_dd(m, e).hi
     }
 }
 
-/// |m·2^e|^t for m ≠ 0, through logarithms: the result's binary exponent is
-/// t·(e + log₂|m|), split into an integer and a fraction.
-fn pow_mag(m: f64, e: f64, t: f64) -> Wide {
-    let l = m.abs().log2();
-    let p = t * e;
-    if !p.is_finite() || p.abs() > 1e15 {
+/// ln|v| for v = m·2^e ≠ 0, in double-double (±∞ for an infinite e).
+fn ln_dd(m: f64, e: f64) -> dd::Dd {
+    if e.is_finite() {
+        dd::ln(m.abs()).add(dd::LN2.mul_f(e))
+    } else {
+        dd::Dd::of(e)
+    }
+}
+
+/// |m·2^e|^t for m ≠ 0, through logarithms: e^(t·ln|m·2^e|), with that
+/// exponent in double-double (see [`crate::dd`]) so the result keeps a
+/// double's precision however far out of range it is.
+fn pow_mag(m: f64, e: f64, t: dd::Dd) -> Wide {
+    let p = t.hi * e;
+    if !p.is_finite() || p.abs() > TWO52 {
         // The exponent's fraction is lost to rounding this far out.
-        let n = p + t * l;
+        let n = p + t.hi * m.abs().log2();
         return if n.is_nan() {
             Wide::Unknown
         } else {
             Wide::Val(1.0, n.round())
         };
     }
-    let rest = t.mul_add(e, -p) + t * l;
-    let n = p.floor();
-    let f = (p - n) + rest;
-    let k = f.floor();
-    Wide::norm((f - k).exp2(), n + k)
+    let l = dd::ln(m.abs()).add(dd::LN2.mul_f(e));
+    let (r, n) = dd::exp(l.mul(t));
+    Wide::norm(r, n)
 }
 
 impl Wide {
@@ -264,9 +276,9 @@ impl Wide {
             return Wide::new(v.exp());
         }
         let n = (v / LN_2).round();
-        if n.abs() > 1e15 {
-            // The exponent's fraction is lost to rounding (or v is beyond a
-            // double, and so is n).
+        if n.abs() > TWO52 {
+            // The reduction below is no longer exact (or v is beyond a
+            // double, and so is n): only the size is kept.
             return Wide::Val(1.0, n);
         }
         let r = (-n).mul_add(LN_2, v);
@@ -302,7 +314,8 @@ impl Wide {
                 if m == 0.0 || e.abs() <= NORMAL {
                     return Wide::new(ldexp(m, e).sqrt());
                 }
-                if e.abs() < 1e15 && e % 2.0 != 0.0 {
+                // (Every double from 2⁵³ on is even.)
+                if e.is_finite() && e % 2.0 != 0.0 {
                     Wide::norm((2.0 * m).sqrt(), (e - 1.0) / 2.0)
                 } else {
                     Wide::norm(m.sqrt(), e / 2.0)
@@ -318,7 +331,7 @@ impl Wide {
                 if m == 0.0 || e.abs() <= NORMAL {
                     return Wide::new(ldexp(m, e).cbrt());
                 }
-                if e.abs() < 1e15 {
+                if e.abs() < TWO52 {
                     let r = e.rem_euclid(3.0);
                     Wide::norm((m * f64::from(1 << r as i32)).cbrt(), (e - r) / 3.0)
                 } else {
@@ -374,7 +387,7 @@ pub(crate) fn pow(b: Wide, t: Wide) -> Wide {
             Wide::Val(1.0, (lb * tm).signum() * f64::INFINITY)
         };
     }
-    let r = pow_mag(bm, be, tv);
+    let r = pow_mag(bm, be, dd::Dd::of(tv));
     if odd { r.neg() } else { r }
 }
 
@@ -398,7 +411,7 @@ pub(crate) fn powi(b: Wide, n: i32) -> Wide {
     {
         return w;
     }
-    let r = pow_mag(m, e, f64::from(n));
+    let r = pow_mag(m, e, dd::Dd::of(f64::from(n)));
     if m < 0.0 && n % 2 != 0 { r.neg() } else { r }
 }
 
@@ -426,7 +439,9 @@ pub(crate) fn pow_rational(b: Wide, p: i32, q: i32) -> Wide {
     if m < 0.0 && q % 2 == 0 {
         return Wide::Undef;
     }
-    let r = pow_mag(m, e, f64::from(p) / f64::from(q));
+    // (p/q itself in double-double: 1/3 as a double is off by 2⁻⁵⁶, which
+    // times an exponent of hundreds is many ulps.)
+    let r = pow_mag(m, e, dd::Dd::of(f64::from(p)).div_f(f64::from(q)));
     if m < 0.0 && p % 2 != 0 { r.neg() } else { r }
 }
 
@@ -558,7 +573,7 @@ pub(crate) fn apply2(f: Fn2, a: Wide, b: Wide) -> Wide {
             if am < 0.0 && !odd {
                 return Wide::Undef;
             }
-            let r = pow_mag(am, ae, 1.0 / n);
+            let r = pow_mag(am, ae, dd::Dd::of(1.0).div_f(n));
             if am < 0.0 { r.neg() } else { r }
         }
         Fn2::LogBase => {
@@ -568,7 +583,12 @@ pub(crate) fn apply2(f: Fn2, a: Wide, b: Wide) -> Wide {
             if am <= 0.0 || bm <= 0.0 || a == Wide::ONE {
                 return Wide::Undef;
             }
-            let r = ln_abs(bm, be) / ln_abs(am, ae);
+            let (lx, lb) = (ln_dd(bm, be), ln_dd(am, ae));
+            let r = if lx.hi.is_finite() && lb.hi.is_finite() {
+                lx.div(lb).hi
+            } else {
+                lx.hi / lb.hi
+            };
             if r.is_nan() {
                 Wide::Unknown
             } else {

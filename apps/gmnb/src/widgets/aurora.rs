@@ -46,6 +46,9 @@ mod imp {
         pub pulses: RefCell<Vec<Pulse>>,
         pub grain: RefCell<Option<gdk::Texture>>,
         pub intensity: Cell<f32>,
+        /// How opaque the whole backdrop is (below 1 the desktop shows
+        /// through).
+        pub alpha: Cell<f32>,
         pub last_activity: Cell<Instant>,
         pub settled_at: Cell<f32>,
     }
@@ -64,6 +67,7 @@ mod imp {
                 pulses: RefCell::new(Vec::new()),
                 grain: RefCell::new(None),
                 intensity: Cell::new(1.0),
+                alpha: Cell::new(1.0),
                 last_activity: Cell::new(Instant::now()),
                 settled_at: Cell::new(0.0),
             }
@@ -190,6 +194,18 @@ impl Aurora {
     pub fn set_intensity(&self, v: f32) {
         self.imp().intensity.set(v.clamp(0.0, 1.0));
         self.queue_draw();
+    }
+
+    /// How opaque the backdrop is, 0..=1 (the content on it is unaffected).
+    pub fn set_backdrop_alpha(&self, v: f32) {
+        let v = if v.is_finite() {
+            v.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        if self.imp().alpha.replace(v) != v {
+            self.queue_draw();
+        }
     }
 
     /// Note user activity: wakes the drift if it had settled.
@@ -361,6 +377,19 @@ impl Aurora {
     }
 
     fn paint_background(&self, s: &gtk::Snapshot, scheme: &Scheme, w: f32, h: f32) {
+        // A see-through backdrop: everything below is drawn into one layer
+        // and that layer faded, so the colours keep their balance.
+        let alpha = self.imp().alpha.get();
+        if alpha < 1.0 {
+            s.push_opacity(alpha as f64);
+        }
+        self.paint_layers(s, scheme, w, h);
+        if alpha < 1.0 {
+            s.pop();
+        }
+    }
+
+    fn paint_layers(&self, s: &gtk::Snapshot, scheme: &Scheme, w: f32, h: f32) {
         let bounds = graphene::Rect::new(0.0, 0.0, w, h);
         s.append_linear_gradient(
             &bounds,

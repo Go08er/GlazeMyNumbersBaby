@@ -6,6 +6,11 @@ window.gmnb {
   color: @wc_fg;
 }
 
+/* The backdrop (the aurora) is see-through: so is the window under it. */
+window.gmnb.wc-see-through {
+  background-color: transparent;
+}
+
 window.gmnb headerbar,
 window.gmnb toolbarview > .top-bar,
 window.gmnb toolbarview > .bottom-bar {

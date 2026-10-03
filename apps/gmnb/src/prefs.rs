@@ -8,7 +8,7 @@ use std::cell::{Cell, RefCell};
 
 use crate::settings::Persist;
 use crate::theme::{PaletteId, Scheme, complement, rgba, to_hex};
-use crate::window::{Window, apply_theme_setting};
+use crate::window::{Window, apply_backdrop, apply_theme_setting};
 
 /// A palette preview: which palette, its current scheme, and its swatch.
 type Tile = (PaletteId, Rc<Cell<Scheme>>, gtk::DrawingArea);
@@ -263,6 +263,78 @@ pub fn show(win: &Rc<Window>) {
         hint.set_margin_top(8);
         hint.set_wrap(true);
         group.add(&hint);
+        page.add(&group);
+
+        // Window.
+        let group = adw::PreferencesGroup::builder().title("Window").build();
+        let percent = |v: f64| format!("{}%", (v * 100.0).round());
+        let saved = f64::from(crate::settings::backdrop_alpha(
+            ctx.store.data.borrow().background_opacity,
+        ));
+        let scale = gtk::Scale::with_range(
+            gtk::Orientation::Horizontal,
+            crate::settings::MIN_BACKGROUND_OPACITY,
+            1.0,
+            0.05,
+        );
+        scale.set_value(saved);
+        scale.set_draw_value(false);
+        scale.set_hexpand(true);
+        scale.set_valign(gtk::Align::Center);
+        scale.set_width_request(160);
+        scale.update_property(&[gtk::accessible::Property::Label("Background opacity")]);
+        let shown = gtk::Label::new(Some(&percent(saved)));
+        shown.add_css_class("numeric");
+        shown.set_width_chars(4);
+        shown.set_xalign(1.0);
+        let opacity = adw::ActionRow::builder()
+            .title("Background opacity")
+            .subtitle("Lower lets your desktop show through, frosted if your compositor blurs translucent windows")
+            .build();
+        opacity.add_suffix(&scale);
+        opacity.add_suffix(&shown);
+        {
+            let (ctx, win, shown) = (ctx.clone(), win.widget(), shown.clone());
+            // Saved once the slider rests, not on every step of a drag.
+            let pending: Rc<RefCell<Option<gtk::glib::SourceId>>> = Rc::default();
+            scale.connect_value_changed(move |s| {
+                let v = s.value();
+                shown.set_text(&percent(v));
+                apply_backdrop(&win, &ctx.aurora, crate::settings::backdrop_alpha(v));
+                ctx.store.data.borrow_mut().background_opacity = v;
+                if let Some(id) = pending.borrow_mut().take() {
+                    id.remove();
+                }
+                let (ctx, pending2) = (ctx.clone(), pending.clone());
+                let id = gtk::glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(400),
+                    move || {
+                        pending2.borrow_mut().take();
+                        ctx.store.persist();
+                    },
+                );
+                *pending.borrow_mut() = Some(id);
+            });
+        }
+        group.add(&opacity);
+        let from_env = crate::RENDERER_FROM_ENV.get().copied().unwrap_or(false);
+        let vulkan = adw::SwitchRow::builder()
+            .title("Vulkan acceleration")
+            .subtitle(if from_env {
+                "GSK_RENDERER is set where GMNB was started, and decides instead"
+            } else {
+                "Off draws in software: far less memory, plainer motion. Takes effect the next time GMNB starts"
+            })
+            .active(ctx.store.data.borrow().vulkan)
+            .build();
+        {
+            let ctx = ctx.clone();
+            vulkan.connect_active_notify(move |r| {
+                ctx.store.data.borrow_mut().vulkan = r.is_active();
+                ctx.store.persist();
+            });
+        }
+        group.add(&vulkan);
         page.add(&group);
     }
 
