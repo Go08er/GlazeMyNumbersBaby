@@ -177,9 +177,9 @@ jobs:
               -q '.assets[] | [.name, .state, (.size | tostring), (.digest // "")] | @tsv'
           }
           # check FILE: 0 if the release has it complete and byte for byte,
-          # 1 if it hasn't got it, 2 if what it has is unfinished or differs.
-          # (Without a digest from the API, the asset is downloaded and
-          # hashed.)
+          # 1 if it hasn't got it, 2 if what it has is unfinished or differs,
+          # 3 if it couldn't be checked. (Without a digest from the API, the
+          # asset is downloaded and hashed.)
           check() {
             local name line state size digest sum got
             name=$(basename "$1")
@@ -192,7 +192,7 @@ jobs:
               [ "$digest" = "sha256:$sum" ] || return 2
             else
               rm -rf fetched && mkdir fetched
-              gh release download "$TAG" --repo "$REPO" -p "$name" -D fetched || return 2
+              gh release download "$TAG" --repo "$REPO" -p "$name" -D fetched || return 3
               got=$(sha256sum "fetched/$name" | cut -d' ' -f1)
               [ "$got" = "$sum" ] || return 2
             fi
@@ -213,10 +213,16 @@ jobs:
             rc=0
             check SHA256SUMS || rc=$?
             mkdir published
-            if [ "$rc" = 0 ] && gh release download "$TAG" --repo "$REPO" -p SHA256SUMS -D published; then
-              cmp -s published/SHA256SUMS SHA256SUMS || rc=2
-            else
-              rc=2
+            if [ "$rc" = 0 ]; then
+              if gh release download "$TAG" --repo "$REPO" -p SHA256SUMS -D published; then
+                cmp -s published/SHA256SUMS SHA256SUMS || rc=2
+              else
+                rc=3
+              fi
+            fi
+            if [ "$rc" = 3 ]; then
+              echo "::error::Couldn't download SHA256SUMS from $TAG to check it; nothing was changed. Run the job again."
+              exit 1
             fi
             if [ "$rc" != 0 ]; then
               echo "::error::$TAG has no complete SHA256SUMS from this build; delete the release by hand before publishing again."
@@ -233,6 +239,10 @@ jobs:
             rc=0
             check "$f" || rc=$?
             found[$f]=$rc
+            if [ "$rc" = 3 ]; then
+              echo "::error::Couldn't download $(basename "$f") from $TAG to check it; nothing was changed. Run the job again."
+              exit 1
+            fi
             if [ "$rc" = 2 ] && [ "$draft" != true ]; then
               echo "::error::$(basename "$f") on the published $TAG is unfinished or differs from this build; fix it by hand."
               exit 1
