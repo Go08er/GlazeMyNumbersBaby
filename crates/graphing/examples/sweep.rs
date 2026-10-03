@@ -639,7 +639,9 @@ fn ulp(x: f64) -> f64 {
 
 /// Floats strictly between a and b, roughly (saturating).
 fn floats_between(a: f64, b: f64) -> i64 {
-    (to_ord(b) - to_ord(a)).abs()
+    (to_ord(b) as i128 - to_ord(a) as i128)
+        .unsigned_abs()
+        .min(i64::MAX as u128) as i64
 }
 
 // ---------------------------------------------------------------------------
@@ -770,7 +772,7 @@ impl Xf {
             return R::V(Xf::of(t.exp()));
         }
         let k = (t / LN_2).floor();
-        if !k.is_finite() || k.abs() > 1e15 {
+        if !k.is_finite() || k.abs() > 4e18 {
             return R::Unknown;
         }
         R::V(Xf::norm((t - k * LN_2).exp(), k as i64))
@@ -1275,7 +1277,12 @@ fn unary_err(
     if !r.is_finite() || !ea.is_finite() {
         return (r, f64::INFINITY);
     }
-    let round = if exact { 0.0 } else { k * ulp(r) };
+    // (Never rounded away: half the least subnormal is 0.)
+    let round = if exact {
+        0.0
+    } else {
+        (k * ulp(r)).max(f64::from_bits(1))
+    };
     (r, change(g, a, ea, r, jumps) + round)
 }
 
@@ -1290,7 +1297,7 @@ fn binary_err(
         return (r, f64::INFINITY);
     }
     let d = change(&|s| g(s, b), a, ea, r, false) + change(&|t| g(a, t), b, eb, r, false);
-    (r, d + k * ulp(r))
+    (r, d + (k * ulp(r)).max(if k > 0.0 { f64::from_bits(1) } else { 0.0 }))
 }
 
 /// The compiled program's unary function (`compile::Fn1::apply`).
@@ -1431,7 +1438,14 @@ fn eb(e: &Expr, x: f64, u: TrigUnit) -> (f64, f64) {
                     } else {
                         0.0
                     };
-                    va.abs() * ebb + vb.abs() * ea + ea * ebb + va.mul_add(vb, -r).abs() + under
+                    let e = va.abs() * ebb + vb.abs() * ea + ea * ebb + va.mul_add(vb, -r).abs() + under;
+                    // (Nor does the bound itself: 10⁻⁶ times an underflowed
+                    // e⁻¹⁰⁰⁰'s error is no reason to call the product exact.)
+                    if e == 0.0 && ((ea > 0.0 && vb != 0.0) || (ebb > 0.0 && va != 0.0)) {
+                        f64::from_bits(1)
+                    } else {
+                        e
+                    }
                 }
                 _ => {
                     if ebb >= vb.abs() {
@@ -1442,9 +1456,14 @@ fn eb(e: &Expr, x: f64, u: TrigUnit) -> (f64, f64) {
                     } else {
                         0.0
                     };
-                    (va.abs() * ebb + vb.abs() * ea) / (vb.abs() * (vb.abs() - ebb))
+                    let e = (va.abs() * ebb + vb.abs() * ea) / (vb.abs() * (vb.abs() - ebb))
                         + ((-r).mul_add(vb, va) / vb).abs()
-                        + under
+                        + under;
+                    if e == 0.0 && (ea > 0.0 || (ebb > 0.0 && va != 0.0)) {
+                        f64::from_bits(1)
+                    } else {
+                        e
+                    }
                 }
             };
             (r, err)
@@ -1541,41 +1560,77 @@ impl Analysed {
             R::V(v) if v.is_zero() => 0.0,
             R::V(v) => v.proxy(),
             R::Undef => f64::NAN,
-            R::Unknown if y.is_finite() => y,
+            // (A 0 the reference can't vouch for may be underflow.)
+            R::Unknown if y.is_finite() && y != 0.0 => y,
             R::Unknown => f64::NAN,
         }
     }
     /// Whether f is defined at x (None: the reference can't tell).
     fn defined(&self, x: f64) -> Option<bool> {
-        if self.raw(x).is_finite() {
+        // (A 0 can be underflow of an undefined operand: √(x/1000) at
+        // x = −3·10⁻³²².)
+        let y = self.raw(x);
+        if y.is_finite() && y != 0.0 {
             return Some(true);
         }
         match self.reference(x) {
             R::V(_) => Some(true),
             R::Undef => Some(false),
+            R::Unknown if y.is_finite() => Some(true),
             R::Unknown => None,
         }
+    }
+    /// How far from x f first takes another value, or changes between
+    /// defined and undefined, at least two floats out: the resolution of
+    /// f's argument at x. Coarser than x's own spacing in a shifted frame
+    /// ((x − 1)² − 1 is the same for every x below 10⁻¹⁶).
+    fn resolution(&self, x: f64) -> f64 {
+        let (y, d) = (self.raw(x), self.defined(x));
+        let mut res = f64::INFINITY;
+        for dir in [-1i64, 1] {
+            let mut k = 2i64;
+            while k <= 1 << 52 {
+                let t = nudge(x, dir * k);
+                let v = self.raw(t);
+                if (v != y && !(v.is_nan() && y.is_nan())) || self.defined(t) != d {
+                    res = res.min((t - x).abs());
+                    break;
+                }
+                k *= 2;
+            }
+        }
+        res
     }
     /// Certainly exactly 0 at x: no operation on the way rounded.
     fn exact_zero(&self, x: f64) -> bool {
         self.eval(x) == 0.0 && eb(&self.ast, x, self.unit).1 == 0.0
     }
     /// How far f's double value at x can be from the function's value
-    /// there, as far as a claim can tell: f's spread over the floats two
-    /// steps either side (a feature placed at a neighbouring float is as
-    /// good as the floats allow), plus the bound on the rounding of f's
-    /// operations at x. Local by construction.
+    /// there, as far as a claim can tell: f's change to its nearest other
+    /// values either side, at least two floats out (a feature placed at a
+    /// neighbouring float is as good as the floats allow; in a shifted
+    /// frame, sin(x − 1000), f only changes every thousand floats of x),
+    /// plus the bound on the rounding of f's operations at x. Local by
+    /// construction.
     fn noise(&self, x: f64) -> f64 {
         let y = self.raw(x);
-        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-        for k in -2..=2 {
-            let v = self.raw(nudge(x, k));
-            if v.is_finite() {
-                lo = lo.min(v);
-                hi = hi.max(v);
+        let mut spread = 0.0f64;
+        if y.is_finite() {
+            for dir in [-1i64, 1] {
+                let mut k = 1i64;
+                while k <= 1 << 40 {
+                    let v = self.raw(nudge(x, dir * k));
+                    if !v.is_finite() {
+                        break;
+                    }
+                    if v != y && k >= 2 {
+                        spread = spread.max((v - y).abs());
+                        break;
+                    }
+                    k *= 2;
+                }
             }
         }
-        let spread = if hi >= lo { hi - lo } else { 0.0 };
         // Where only the reference's extended arithmetic gives a value,
         // nothing bounds its rounding here: unknown.
         if !y.is_finite() {
@@ -1990,8 +2045,13 @@ fn check_range(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
     // panel shows. A set of points is a shape: any resolvable value off
     // them contradicts it, however it reads.
     let points = range.iter().all(|iv| iv.lo.value == iv.hi.value);
-    for (&x, &y) in xs.iter().zip(ys) {
-        if y.is_finite() && !set_has(range, y) {
+    // (Nearest the origin first: the plainest counterexample.)
+    let mut outside: Vec<usize> = (0..xs.len())
+        .filter(|&i| ys[i].is_finite() && !set_has(range, ys[i]))
+        .collect();
+    outside.sort_by(|&i, &j| xs[i].abs().total_cmp(&xs[j].abs()));
+    for (x, y) in outside.into_iter().map(|i| (xs[i], ys[i])) {
+        {
             let dist = set_dist(range, y);
             if dist > 0.0 && dist > a.noise(x) {
                 let (check, why) = if !same_shown(y, nearest_bound(range, y)) {
@@ -2125,32 +2185,43 @@ fn check_range(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
     }
 }
 
-/// Is f indistinguishable from 0 at z or a few floats from it, without
-/// blowing up there (a pole is no zero)?
-fn zero_ok(a: &Analysed, z: f64) -> bool {
+/// What evaluation says about a claimed zero.
+#[derive(PartialEq)]
+enum Verdict {
+    Holds,
+    Fails,
+    /// At or beside a pole, closer than f's resolution: 10⁶ + 10⁻⁶/(x + 10⁶)
+    /// is 0 at −10⁶ − 10⁻¹², which no float can show.
+    Unverifiable,
+}
+
+/// Is f indistinguishable from 0 at z or within a few steps of its own
+/// resolution (f in a shifted frame changes only every so many floats),
+/// without blowing up there (a pole is no zero)?
+fn zero_ok(a: &Analysed, z: f64) -> Verdict {
     let y = a.eval(z);
-    if !y.is_finite() {
-        return false;
-    }
     if y == 0.0 {
-        return true;
+        return Verdict::Holds;
     }
-    let side = a
-        .eval(nudge(z, -4096))
-        .abs()
-        .max(a.eval(nudge(z, 4096)).abs());
-    if side.is_finite() && y.abs() > side {
-        return false;
+    let res = a.resolution(z);
+    let step = if res.is_finite() { res } else { ulp(z) };
+    let h = (4096.0 * ulp(z)).max(64.0 * step);
+    let side = a.eval(z - h).abs().max(a.eval(z + h).abs());
+    if !y.is_finite() || (side.is_finite() && y.abs() > side) {
+        return Verdict::Unverifiable;
     }
-    let (l, h) = (a.eval(nudge(z, -16)), a.eval(nudge(z, 16)));
-    if l.is_finite() && h.is_finite() && l.signum() != h.signum() {
-        return true;
+    for m in [1.0, 2.0, 4.0, 16.0] {
+        let (l, r) = (a.eval(z - m * step), a.eval(z + m * step));
+        if l.is_finite() && r.is_finite() && (l == 0.0 || r == 0.0 || l.signum() != r.signum()) {
+            return Verdict::Holds;
+        }
     }
-    [0, -1, 1, -2, 2, -4, 4, -8, 8, -16, 16].iter().any(|&k| {
-        let t = nudge(z, k);
+    let near = (-4..=4).any(|k| {
+        let t = z + k as f64 * step;
         let v = a.eval(t);
         v.is_finite() && v.abs() <= a.noise(t)
-    })
+    });
+    if near { Verdict::Holds } else { Verdict::Fails }
 }
 
 /// Are p and q the same zero: a few floats apart, or with f
@@ -2173,14 +2244,17 @@ fn check_zero_claims(a: &Analysed, r: &mut Report) {
     let d = a.d();
     'z: for z in &d.zeros {
         for c in a.copies(z) {
-            if !zero_ok(a, c) {
-                r.fail(
-                    "zero-not-a-zero",
-                    &a.expr,
-                    format!("x-intercept {c:?} but f={:?} (noise {:?})", a.eval(c), a.noise(c)),
-                );
-                break 'z;
-            }
+            let (check, v) = match zero_ok(a, c) {
+                Verdict::Holds => continue,
+                Verdict::Fails => ("zero-not-a-zero", a.eval(c)),
+                Verdict::Unverifiable => ("unverifiable-zero-beside-pole", a.eval(c)),
+            };
+            r.fail(
+                check,
+                &a.expr,
+                format!("x-intercept {c:?} but f={v:?} (noise {:?})", a.noise(c)),
+            );
+            break 'z;
         }
     }
     // One zero reported once.
@@ -2284,7 +2358,15 @@ fn check_missing_zeros(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
     }
     for i in 0..n.saturating_sub(1) {
         let (y0, y1) = (ys[i], ys[i + 1]);
-        if y0.is_finite() && y1.is_finite() && y0 != 0.0 && y1 != 0.0 && y0.signum() != y1.signum() {
+        if y0.is_finite()
+            && y1.is_finite()
+            && y0 != 0.0
+            && y1 != 0.0
+            && y0.signum() != y1.signum()
+            // (Past f's resolution, trig of 10¹⁴, the signs say nothing.)
+            && y0.abs() > a.noise(xs[i])
+            && y1.abs() > a.noise(xs[i + 1])
+        {
             match bisect(a, xs[i], xs[i + 1]) {
                 Found::Crossing(x) => roots.push(x),
                 Found::Pole(x) => poles.push(x),
@@ -2326,7 +2408,8 @@ fn check_missing_zeros(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
                 let mut hit = false;
                 for (j, z) in d.zeros.iter().enumerate() {
                     let c = nearest(z, x);
-                    if !same_root(a, c, x) {
+                    // (A family's far copies carry its period's rounding.)
+                    if !same_root(a, c, x) && !(z.period.is_some() && close_to(z, x, 16)) {
                         continue;
                     }
                     // One to one: a reported point zero stands for one root.
@@ -2595,7 +2678,12 @@ fn check_y_intercept(a: &Analysed, r: &mut Report) {
             )
         }
         (None, Some(true)) => r.fail(
-            "missing-y-intercept",
+            // (Beyond the doubles, "unable to calculate" would be honest.)
+            if f0.abs() == f64::MAX {
+                "missing-y-intercept-beyond-doubles"
+            } else {
+                "missing-y-intercept"
+            },
             e,
             format!("no y-intercept but f(0)={f0:?}"),
         ),
@@ -2657,7 +2745,16 @@ fn check_domain(a: &Analysed, xs: &[f64], r: &mut Report) {
         if near(x) {
             return;
         }
+        // Which side of a boundary x is on can't be told closer than f's
+        // own resolution there.
+        let edge = |x: f64| {
+            let d = a.defined(x);
+            let res = a.resolution(x);
+            !res.is_finite() || a.defined(x - 4.0 * res) != d || a.defined(x + 4.0 * res) != d
+        };
         match a.defined(x) {
+            Some(true) if !claimed && edge(x) => {}
+            Some(false) if claimed && edge(x) => {}
             Some(true) if !claimed => {
                 bad_out.get_or_insert(x);
             }
@@ -2774,10 +2871,19 @@ fn check_monotonicity(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
     };
     match a.period() {
         None => {
+            // (Over the claimed domain: whether that is right is the
+            // domain check's business.)
             let mut gap = None;
-            for (&x, &y) in xs.iter().zip(ys) {
-                if y.is_finite() && !near(x) && !d.monotonicity.iter().any(|(iv, _)| iv_has(iv, x)) {
-                    gap.get_or_insert(x);
+            if !a.unknown(flags::DOMAIN) {
+                for (&x, &y) in xs.iter().zip(ys) {
+                    if y.is_finite()
+                        && !near(x)
+                        && set_has(&d.domain, x)
+                        && !d.excluded.iter().any(|f| in_family(f, x))
+                        && !d.monotonicity.iter().any(|(iv, _)| iv_has(iv, x))
+                    {
+                        gap.get_or_insert(x);
+                    }
                 }
             }
             if let Some(x) = gap {
@@ -3050,7 +3156,23 @@ fn check_period(a: &Analysed, centres: &[f64], r: &mut Report) {
                         continue;
                     }
                     if y1 != y2 && (y1 - y2).abs() > a.noise(x) + a.noise(x2) {
-                        return Some(format!("f({x:?})={y1:?} but f({x2:?})={y2:?}"));
+                        // Within a few steps of f's resolution either side
+                        // (P is itself rounded; beside a pole that moves f
+                        // a lot), do f's values around the two overlap?
+                        let around = |t: f64| {
+                            let res = a.resolution(t);
+                            let step = if res.is_finite() { res } else { ulp(t) };
+                            (-4..=4)
+                                .map(|k| a.eval(t + k as f64 * step))
+                                .filter(|v| v.is_finite())
+                                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+                                    (lo.min(v), hi.max(v))
+                                })
+                        };
+                        let ((l1, h1), (l2, h2)) = (around(x), around(x2));
+                        if h1 < l2 || h2 < l1 {
+                            return Some(format!("f({x:?})={y1:?} but f({x2:?})={y2:?}"));
+                        }
                     }
                 }
                 (Some(u), Some(v))
@@ -3832,6 +3954,26 @@ fn check_reference(a: &Analysed, centres: &[f64], r: &mut Report) {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // `--at EXPR X`: one function at one point, for looking into a report.
+    if args.first().is_some_and(|a| a == "--at") && args.len() >= 3 {
+        let unit = match args.get(3).map(String::as_str) {
+            Some("deg") => TrigUnit::Degrees,
+            Some("grad") => TrigUnit::Grads,
+            _ => TrigUnit::Radians,
+        };
+        let a = Analysed::new(&args[1], unit).expect("parses");
+        let x: f64 = args[2].parse().expect("a number");
+        println!("ast {:?}", a.ast);
+        println!(
+            "raw {:?} eval {:?} reference {:?} bound {:?} noise {:?}",
+            a.raw(x),
+            a.eval(x),
+            a.reference(x),
+            eb(&a.ast, x, a.unit),
+            a.noise(x)
+        );
+        return;
+    }
     let filter = args.iter().find(|a| !a.starts_with("--")).cloned();
     let check_ref = args.iter().any(|a| a == "--check-ref");
     let wanted = |e: &str| filter.as_ref().is_none_or(|f| e.contains(f.as_str()));
@@ -3999,11 +4141,11 @@ fn main() {
     let real: usize = r
         .failures
         .iter()
-        .filter(|(c, _)| !c.starts_with("policy-"))
+        .filter(|(c, _)| !c.starts_with("policy-") && !c.starts_with("unverifiable-"))
         .map(|(_, v)| v.len())
         .sum();
     println!(
-        "{count} functions analysed in {:.1} s (slowest {:.0} ms: y={}); {total} failures, {} of them policy",
+        "{count} functions analysed in {:.1} s (slowest {:.0} ms: y={}); {total} failures, {} of them policy or unverifiable",
         started.elapsed().as_secs_f64(),
         slowest.0,
         slowest.1,
@@ -4012,7 +4154,7 @@ fn main() {
     // One line per (check, expression), with a count, unless --all.
     let all = args.iter().any(|a| a == "--all");
     let mut checks: Vec<(&&str, &Vec<String>)> = r.failures.iter().collect();
-    checks.sort_by_key(|(c, _)| c.starts_with("policy-"));
+    checks.sort_by_key(|(c, _)| (c.starts_with("unverifiable-"), c.starts_with("policy-")));
     for (check, list) in checks {
         let mut by_expr: Vec<(&str, &str, usize)> = Vec::new();
         for line in list {
