@@ -1682,15 +1682,40 @@ fn per(e: &Expr, opts: &CompileOptions<'_>) -> Per {
 }
 
 fn verify_period(fun: &Fun, p: f64, scale: f64) -> bool {
+    let pairs: Vec<(f64, f64)> = (0..64)
+        .map(|i| {
+            let t = -3.1 * p + i as f64 * 0.1037 * p + 0.012_345 * p;
+            (fun.f(t), fun.f(t + p))
+        })
+        .collect();
+    // f must repeat to within rounding of how much it varies here, not of
+    // its own size: tan x + 10⁶ agrees with itself shifted by π/24 to
+    // 10⁻⁷ of 10⁶, yet that is no period. The median deviation keeps a
+    // pole's huge values from widening the tolerance.
+    let mut vals: Vec<f64> = pairs
+        .iter()
+        .flat_map(|&(a, b)| [a, b])
+        .filter(|v| v.is_finite())
+        .collect();
+    if vals.is_empty() {
+        return false;
+    }
+    vals.sort_by(f64::total_cmp);
+    let med = vals[vals.len() / 2];
+    let mut dev: Vec<f64> = vals.iter().map(|v| (v - med).abs()).collect();
+    dev.sort_by(f64::total_cmp);
+    let spread = match dev[dev.len() / 2] {
+        0.0 => dev[dev.len() - 1],
+        m => m,
+    };
+    let floor = if spread > 0.0 { 0.0 } else { 1e-9 * scale };
     let mut ok = 0;
     let mut bad = 0;
-    for i in 0..64 {
-        let t = -3.1 * p + i as f64 * 0.1037 * p + 0.012_345 * p;
-        let a = fun.f(t);
-        let b = fun.f(t + p);
+    for (a, b) in pairs {
         match (a.is_finite(), b.is_finite()) {
             (true, true) => {
-                if (a - b).abs() <= 1e-7 * (a.abs() + b.abs()) + 1e-9 * scale {
+                let tol = 1e-7 * spread + 64.0 * f64::EPSILON * (a.abs() + b.abs()) + floor;
+                if (a - b).abs() <= tol {
                     ok += 1;
                 } else {
                     bad += 1;
