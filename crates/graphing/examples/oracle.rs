@@ -119,7 +119,7 @@ fn show(v: &Val) -> String {
     match v.k {
         K::Def if v.v.is_finite() && (v.v != 0.0 || v.xf.is_zero()) => format!("{:e}", v.v),
         K::Def if v.sat => format!(
-            "{}(below 2^-2^40)",
+            "{}(nonzero, too small to size)",
             if v.xf.sign() > 0.0 { "+" } else { "-" }
         ),
         K::Def => format!("{}·2^{}", v.xf.m * 2.0, v.xf.e - 1),
@@ -148,8 +148,8 @@ struct Val {
     xf: Xf,
     /// The compiled program's value.
     c: f64,
-    /// The reference's magnitude saturated (e^t for t below about −10¹⁸
-    /// is one sentinel): its sign holds, its size can't be compared.
+    /// The reference's value is nonzero but too small to size (`Xf::lost`):
+    /// its sign holds, its size can't be compared.
     sat: bool,
 }
 
@@ -180,7 +180,7 @@ impl F {
             v,
             xf,
             c,
-            sat: xf.e.unsigned_abs() > 1 << 40,
+            sat: xf.lost(),
         };
         match r {
             R::V(xf) => {
@@ -194,13 +194,21 @@ impl F {
                     } else {
                         mk(K::Unknown, p, xf)
                     }
-                } else if p == c
-                    || (c.is_finite() && p.is_finite() && (c - p).abs() <= 8.0 * ulp(m) + 1e-9 * m)
-                    // Below the normal doubles either way: the reference's
-                    // exact value is what the comparisons use.
-                    || (c.abs() < f64::MIN_POSITIVE && p.abs() < f64::MIN_POSITIVE)
-                    || (c.is_infinite() && (p == c || xf.huge() && xf.sign() == c.signum()))
-                {
+                } else if c.is_infinite() {
+                    // ±∞ only for a value beyond the largest double.
+                    if p == c || (xf.huge() && xf.sign() == c.signum()) {
+                        mk(K::Def, c, xf)
+                    } else {
+                        mk(K::Disagree, p, xf)
+                    }
+                } else if (c == 0.0) != (p == 0.0) || c * p < 0.0 || !p.is_finite() {
+                    // 0 against a nonzero double, opposite signs, or a finite
+                    // double against a value beyond the largest one: never
+                    // rounding.
+                    mk(K::Disagree, p, xf)
+                } else if (c - p).abs() <= 8.0 * ulp(m) {
+                    // Within 8 ulp of the reference's value rounded to a
+                    // double (subnormals by their own spacing).
                     mk(K::Def, c, xf)
                 } else {
                     mk(K::Disagree, p, xf)
@@ -213,13 +221,9 @@ impl F {
                     mk(K::Disagree, c, Xf::of(c))
                 }
             }
-            R::Unknown => {
-                if c.is_finite() {
-                    mk(K::Def, c, Xf::of(c))
-                } else {
-                    mk(K::Unknown, c, Xf::ZERO)
-                }
-            }
+            // The reference can't tell: the point can't be checked (the
+            // compiled value is not taken for the truth).
+            R::Unknown => mk(K::Unknown, c, Xf::ZERO),
         }
     }
 
@@ -555,6 +559,108 @@ fn defined_nearby(f: &F, y: f64) -> bool {
             .any(|&d| d > 0.0 && (f.at(y - d).def() || f.at(y + d).def()))
 }
 
+/// The operands at which f can be undefined at an isolated point (where
+/// one is 0): every divisor, every function's argument, the cosine (tan,
+/// sec) or sine (cot, csc) of a circular function's argument, a log base
+/// less 1, and the base of a power whose exponent isn't a positive whole
+/// number (a square is defined where its base is 0).
+fn guarded(e: &Expr, out: &mut Vec<Expr>) {
+    use graphing::ast::{BinOp, Func};
+    if let Expr::Call(func, args) = e
+        && let Some(a) = args.first()
+    {
+        match func {
+            Func::Tan | Func::Sec => out.push(Expr::Call(Func::Cos, vec![a.clone()])),
+            Func::Cot | Func::Csc => out.push(Expr::Call(Func::Sin, vec![a.clone()])),
+            Func::LogBase => out.push(Expr::bin(BinOp::Sub, a.clone(), Expr::Num(1.0))),
+            _ => {}
+        }
+    }
+    if !e.contains_x() {
+        return;
+    }
+    match e {
+        Expr::Neg(a) | Expr::Degrees(a) => guarded(a, out),
+        Expr::Bin(op, a, b) => {
+            match op {
+                BinOp::Div => out.push((**b).clone()),
+                BinOp::Pow => {
+                    let whole = matches!(**b, Expr::Num(n) if n >= 1.0 && n.fract() == 0.0);
+                    if !whole {
+                        out.push((**a).clone());
+                    }
+                }
+                _ => {}
+            }
+            guarded(a, out);
+            guarded(b, out);
+        }
+        Expr::Call(_, args) => {
+            for a in args {
+                out.push(a.clone());
+                guarded(a, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Points at and around x: x, the 8 floats either side, and floats at
+/// doubling distances out to `n`.
+fn around(x: f64, n: i64) -> Vec<f64> {
+    let mut v: Vec<f64> = (-8..=8).map(|j| step(x, j)).collect();
+    let mut k = 16;
+    while k <= n {
+        v.push(step(x, k));
+        v.push(step(x, -k));
+        k *= 2;
+    }
+    v
+}
+
+/// Whether a claimed isolated exclusion at e is contradicted: f is defined
+/// at e and all around it, changing smoothly there (by less than 10⁻³ of
+/// itself: no pole or jump between floats), and nothing f could be
+/// undefined through (`guarded`) is 0, undefined or changes sign there.
+/// Around means out to `slack` floats (where e is, given its rounding),
+/// and to four of f's resolution steps (a shifted frame changes only
+/// every so many floats).
+fn exclusion_unsupported(f: &F, e: f64, slack: i64) -> Option<Val> {
+    let v = f.at(e);
+    if !v.def() || !v.v.is_finite() || v.sat {
+        return None;
+    }
+    let res = (4.0 * f.res(e) / ulp(e).max(f64::MIN_POSITIVE)).min(1e15) as i64;
+    let pts = around(e, slack.max(res).max(8));
+    for &y in &pts {
+        let w = f.at(y);
+        if !w.def() || !w.v.is_finite() || w.sat {
+            return None;
+        }
+        if (w.v - v.v).abs() > 1e-3 * w.v.abs().max(v.v.abs()) {
+            return None;
+        }
+    }
+    let mut g = Vec::new();
+    guarded(&f.ast, &mut g);
+    for sub in &g {
+        let mut sign = None;
+        for &y in &pts {
+            match reval(sub, y, f.unit) {
+                R::V(xf) if !xf.is_zero() => {
+                    let s = xf.sign();
+                    if sign.is_some_and(|t| t != s) {
+                        return None;
+                    }
+                    sign = Some(s);
+                }
+                _ => return None,
+            }
+        }
+    }
+    Some(v)
+}
+
 struct Finding {
     class: &'static str,
     expr: String,
@@ -836,6 +942,30 @@ fn check(expr: &str, unit: TrigUnit, extra: &[f64], wide: bool) -> Vec<Finding> 
                     *x,
                     format!("{}: f({x:e}) = {:e}", k.domain, v.v),
                 );
+            }
+        }
+        // Each claimed isolated exclusion: f at the point itself (the
+        // samples above step around it).
+        for fam in &d.excluded {
+            let p = fam.period.unwrap_or(0.0);
+            for (j, e) in members(fam).into_iter().enumerate() {
+                if !e.is_finite() || e.abs() > 1e15 {
+                    continue;
+                }
+                // A copy k periods out is rounded by about k·ulp(P).
+                let kp = (j as f64 - 2.0).abs() * if fam.period.is_some() { 1.0 } else { 0.0 };
+                let slack = ((kp * 4.0 * ulp(p)) / ulp(e).max(f64::MIN_POSITIVE)).min(1e6) as i64;
+                if let Some(v) = exclusion_unsupported(&f, e, slack) {
+                    cx.fail_at(
+                        "excluded-point-defined",
+                        e,
+                        format!(
+                            "{}: f({e:e}) = {}, defined and bounded around it, nothing undefined there",
+                            k.domain,
+                            show(&v)
+                        ),
+                    );
+                }
             }
         }
     }
@@ -1397,9 +1527,14 @@ fn check(expr: &str, unit: TrigUnit, extra: &[f64], wide: bool) -> Vec<Finding> 
             // within reach of the floats' meaning (beyond 10⁷, jumps of a
             // sawtooth are a few hundred floats apart), with f defined
             // around it (not an isolated point of a sparse domain).
-            let xm = a + (b - a) / 2.0;
-            let vm = f.at(xm);
-            if !vm.cmp_ok() || higher(&cv, &vm) || xm.abs() > 1e7 {
+            // A search that ends below the sampled value (it can stop a few
+            // floats off a narrow top) leaves the sampled top: never a
+            // poorer point, and never nothing.
+            let (mut xm, mut vm) = (a + (b - a) / 2.0, f.at(a + (b - a) / 2.0));
+            if !vm.cmp_ok() || higher(&cv, &vm) {
+                (xm, vm) = (xs[c], cv);
+            }
+            if xm.abs() > 1e7 && !centres.iter().any(|c| (xm - c).abs() <= 1e4) {
                 continue;
             }
             if !(f.at(xm - (xr - xl) / 8.0).cmp_ok() && f.at(xm + (xr - xl) / 8.0).cmp_ok()) {
@@ -1490,6 +1625,236 @@ fn check(expr: &str, unit: TrigUnit, extra: &[f64], wide: bool) -> Vec<Finding> 
     cx.out
 }
 
+/// Two numbers the panel would show as the same claim.
+fn same(a: f64, b: f64) -> bool {
+    a == b || fmt(a) == fmt(b) || (a - b).abs() <= 1e-9 * a.abs().max(b.abs())
+}
+
+fn same_intervals(a: &[Interval], b: &[Interval]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(p, q)| {
+            p.lo.closed == q.lo.closed
+                && p.hi.closed == q.hi.closed
+                && same(p.lo.value, q.lo.value)
+                && same(p.hi.value, q.hi.value)
+        })
+}
+
+fn same_families(a: &[Family], b: &[Family]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(p, q)| {
+            same(p.x, q.x)
+                && match (p.period, q.period) {
+                    (Some(s), Some(t)) => same(s, t),
+                    (None, None) => true,
+                    _ => false,
+                }
+        })
+}
+
+/// Two spellings of one function: `lhs`'s compiled value (what the app
+/// plots and analyses) against `rhs`'s reference value, where `x > 0` if
+/// `positive` (else everywhere); and, for spellings equal everywhere, every
+/// answer both analyses give: one function can't have two.
+fn check_pair(lhs: &str, rhs: &str, positive: bool) -> Vec<Finding> {
+    let name = format!("{lhs}  ≡  {rhs}");
+    let mut cx = Ctx {
+        expr: &name,
+        out: Vec::new(),
+    };
+    let opts = CompileOptions::default();
+    let load = |s: &str| -> Option<(Equation, F)> {
+        let eq = Equation::parse(&format!("y={s}")).ok()?;
+        let (_, ast) = eq.explicit()?;
+        let prog = Program::compile(ast, &opts).ok()?;
+        let f = F {
+            ast: ast.clone(),
+            prog,
+            unit: TrigUnit::Radians,
+            memo: Default::default(),
+        };
+        Some((eq, f))
+    };
+    let (Some((el, fl)), Some((er, fr))) = (load(lhs), load(rhs)) else {
+        cx.fail("does-not-parse", String::new());
+        return cx.out;
+    };
+    let (kl, kr) = (analyze(&el, &opts), analyze(&er, &opts));
+
+    // Values.
+    let mut xs = samples(&fl, &kl, &[], false);
+    xs.extend(samples(&fr, &kr, &[], false));
+    xs.sort_by(f64::total_cmp);
+    xs.dedup();
+    for x in xs {
+        if positive && x <= 0.0 {
+            continue;
+        }
+        let t = fr.at(x);
+        if !t.cmp_ok() || !t.v.is_finite() {
+            continue;
+        }
+        let c = fl.prog.eval(x, 0.0);
+        if c.is_nan() {
+            cx.fail_at(
+                "spelling-value-differs",
+                x,
+                format!(
+                    "x={x:e}: the app's {lhs} is undefined, {rhs} = {}",
+                    show(&t)
+                ),
+            );
+            continue;
+        }
+        // The app's own rounding at x; where it can't be bounded (the
+        // reference can't evaluate that spelling), the point can't be told.
+        let (ev, el) = fl.error(&fl.ast, x);
+        if ev.is_nan() || !el.is_finite() {
+            continue;
+        }
+        let allow = fr.tol(x) + 8.0 * ulp(c.abs().max(t.v.abs())) + 2.0 * el;
+        if (c - t.v).abs() > allow && fmt(c) != fmt(t.v) {
+            cx.fail_at(
+                "spelling-value-differs",
+                x,
+                format!(
+                    "x={x:e}: the app's {lhs} = {c:e}, {rhs} = {} (allowance {allow:e})",
+                    show(&t)
+                ),
+            );
+        }
+    }
+
+    // Answers (equal everywhere only).
+    if positive
+        || kl.analysis_error != AnalysisError::NoError
+        || kr.analysis_error != AnalysisError::NoError
+    {
+        return cx.out;
+    }
+    let (dl, dr) = (&kl.data, &kr.data);
+    let both = |flag: u32| definite(&kl, flag) && definite(&kr, flag);
+    let mut differ = |what: &str, a: String, b: String| {
+        cx.fail(
+            "equivalent-answers-differ",
+            format!("{what}: {lhs} says {a}, {rhs} says {b}"),
+        );
+    };
+    if both(flags::Y_INTERCEPT) {
+        let ok = match (dl.y_intercept, dr.y_intercept) {
+            (Some(a), Some(b)) => same(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        if !ok {
+            differ(
+                "y-intercept",
+                kl.y_intercept.clone(),
+                kr.y_intercept.clone(),
+            );
+        }
+    }
+    if both(flags::RANGE) && !same_intervals(&dl.range, &dr.range) {
+        differ("range", kl.range.clone(), kr.range.clone());
+    }
+    if both(flags::DOMAIN)
+        && !(same_intervals(&dl.domain, &dr.domain) && same_families(&dl.excluded, &dr.excluded))
+    {
+        differ("domain", kl.domain.clone(), kr.domain.clone());
+    }
+    if both(flags::ZEROS)
+        && kl.x_intercept != kr.x_intercept
+        && !same_families(&dl.zeros, &dr.zeros)
+    {
+        differ(
+            "x-intercepts",
+            kl.x_intercept.clone(),
+            kr.x_intercept.clone(),
+        );
+    }
+    if both(flags::PARITY) && kl.parity != kr.parity {
+        differ(
+            "parity",
+            format!("{:?}", kl.parity),
+            format!("{:?}", kr.parity),
+        );
+    }
+    if both(flags::PERIODICITY) {
+        let ok = match (dl.period, dr.period) {
+            (Some(a), Some(b)) => same(a, b),
+            (None, None) => kl.periodicity_direction == kr.periodicity_direction,
+            _ => false,
+        };
+        if !ok {
+            differ(
+                "period",
+                kl.periodicity_expression.clone(),
+                kr.periodicity_expression.clone(),
+            );
+        }
+    }
+    for (flag, a, b, what) in [
+        (flags::MINIMA, &dl.minima, &dr.minima, "minima"),
+        (flags::MAXIMA, &dl.maxima, &dr.maxima, "maxima"),
+        (
+            flags::INFLECTION_POINTS,
+            &dl.inflection_points,
+            &dr.inflection_points,
+            "inflection points",
+        ),
+    ] {
+        let ok = a.len() == b.len()
+            && a.iter().zip(b.iter()).all(|(p, q)| {
+                same_families(std::slice::from_ref(&p.0), std::slice::from_ref(&q.0))
+                    && same(p.1, q.1)
+            });
+        if both(flag) && !ok {
+            differ(what, format!("{a:?}"), format!("{b:?}"));
+        }
+    }
+    if both(flags::VERTICAL_ASYMPTOTES)
+        && !same_families(&dl.vertical_asymptotes, &dr.vertical_asymptotes)
+    {
+        differ(
+            "vertical asymptotes",
+            format!("{:?}", kl.vertical_asymptotes),
+            format!("{:?}", kr.vertical_asymptotes),
+        );
+    }
+    // Whether a constant has its own value as an asymptote is a convention
+    // (the panel gives a literal constant none): not compared.
+    let point = |d: &graphing::analysis::AnalysisData| {
+        d.range.len() == 1 && d.range[0].lo.value == d.range[0].hi.value
+    };
+    let constant = point(dl) || point(dr);
+    if both(flags::HORIZONTAL_ASYMPTOTES) && !constant {
+        let (a, b) = (&dl.horizontal_asymptotes, &dr.horizontal_asymptotes);
+        let ok = a.len() == b.len() && a.iter().zip(b).all(|(p, q)| same(p.0, q.0) && p.1 == q.1);
+        if !ok {
+            differ(
+                "horizontal asymptotes",
+                format!("{:?}", kl.horizontal_asymptotes),
+                format!("{:?}", kr.horizontal_asymptotes),
+            );
+        }
+    }
+    if both(flags::OBLIQUE_ASYMPTOTES) && !constant {
+        let (a, b) = (&dl.oblique_asymptotes, &dr.oblique_asymptotes);
+        let ok = a.len() == b.len()
+            && a.iter()
+                .zip(b)
+                .all(|(p, q)| same(p.0, q.0) && same(p.1, q.1) && p.2 == q.2);
+        if !ok {
+            differ(
+                "oblique asymptotes",
+                format!("{:?}", kl.oblique_asymptotes),
+                format!("{:?}", kr.oblique_asymptotes),
+            );
+        }
+    }
+    cx.out
+}
+
 // ---------------------------------------------------------------- the pool
 
 /// Review 10's cases and more of their shapes.
@@ -1547,26 +1912,81 @@ fn adversarial() -> Vec<String> {
         v.push(format!("exp(-(x-{c})^2)+exp(-x^2)"));
         v.push(format!("exp(-(x-{c})^2)+exp(-(x+{c})^2)"));
     }
+    // Review 11: narrow peaks far out (widths √w), Gaussian and rational,
+    // beside an ordinary one at 0; a rational peak's centre is defined.
+    for c in ["1234", "1522756", "1234*1234"] {
+        for w in ["0.001", "0.000001", "0.000000001", "0.000000000001"] {
+            v.push(format!("2*exp(-(x-{c})^2/{w})+exp(-x^2)"));
+            v.push(format!("1/(1+(x-{c})^2/{w})+exp(-x^2)"));
+            v.push(format!("2/(1+(x-{c})^2/{w})+1/(1+x^2)"));
+        }
+    }
+    // Review 11's arithmetic cases (and see `spellings`).
+    for e in [
+        "acot(1000000000000000)*1000000000000000",
+        "acot(10^17)*10^17",
+        "acot(x)*1000000000000000",
+        "ln(exp(1000000000000000)^4)-4000000000000000",
+        "ln(exp(1000000000000000)*exp(1000000000000000)*exp(1000000000000000)*exp(1000000000000000))-4000000000000000",
+    ] {
+        v.push(e.to_string());
+    }
     v
+}
+
+/// Review 11's case in degrees.
+const DEGREES: &[&str] = &["sin(x+2^-1074)/(x+2^-1074)", "sin(x)/x", "tan(x)", "cot(x)"];
+
+/// Expressions equal to each other where `x > 0` (or everywhere, `false`):
+/// the first's compiled value, which the app plots and analyses, against
+/// the second's reference value (the truth by another route, where the
+/// first's own reference shares the same arithmetic).
+fn spellings() -> Vec<(&'static str, &'static str, bool)> {
+    vec![
+        ("acot(x)", "atan(1/x)", true),
+        ("acot(x)*x", "atan(1/x)*x", true),
+        (
+            "acot(1000000000000000)*1000000000000000",
+            "atan(1/1000000000000000)*1000000000000000",
+            false,
+        ),
+        ("acot(10^17)*10^17", "atan(1/10^17)*10^17", false),
+        ("ln(exp(1000000000000000)^4)-4000000000000000", "0", false),
+        ("ln(exp(x)^4)", "4*x", false),
+        ("ln(exp(x)^3)-3*x", "0", false),
+        ("ln(exp(x)^2)", "2*x", false),
+        ("sqrt(exp(x)^2)", "exp(x)", false),
+        ("exp(x)^2/exp(x)", "exp(x)", false),
+        ("1/(1+exp(-x))", "exp(x)/(exp(x)+1)", false),
+    ]
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "--dump") && args.len() >= 2 {
+        // One function: its analysis and what the checks find; the exit
+        // status is 1 if they find anything, as for a whole run.
         let opts = CompileOptions::default();
         let eq = Equation::parse(&format!("y={}", args[1])).expect("parses");
         let k = analyze(&eq, &opts);
         println!("{k:#?}");
-        for f in check(&args[1], TrigUnit::Radians, &[], false) {
+        let found = check(&args[1], TrigUnit::Radians, &[], false);
+        for f in &found {
             println!("{}: {}", f.class, f.detail);
+        }
+        if !found.is_empty() {
+            std::process::exit(1);
         }
         return;
     }
     let filter = args.iter().find(|a| !a.starts_with("--")).cloned();
-    let mut pool: Vec<(String, TrigUnit, Vec<f64>, bool)> = Vec::new();
+    // (expression, unit, centres, wide grid, the other spelling and whether
+    // only x > 0 is compared).
+    type Job = (String, TrigUnit, Vec<f64>, bool, Option<(String, bool)>);
+    let mut pool: Vec<Job> = Vec::new();
     let mut push = |e: String, u: TrigUnit, c: Vec<f64>, w: bool| {
         if filter.as_ref().is_none_or(|f| e.contains(f.as_str())) {
-            pool.push((e, u, c, w));
+            pool.push((e, u, c, w, None));
         }
     };
     let transforms = transforms();
@@ -1589,8 +2009,28 @@ fn main() {
     for e in adversarial() {
         push(e, TrigUnit::Radians, vec![], false);
     }
+    for e in DEGREES {
+        push(e.to_string(), TrigUnit::Degrees, vec![], false);
+    }
     pool.sort_by(|a, b| a.0.cmp(&b.0).then((a.1 as u8).cmp(&(b.1 as u8))));
     pool.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+    let mut pairs: Vec<(String, String, bool)> = equivalent()
+        .into_iter()
+        .map(|(p, q)| (p, q, false))
+        .collect();
+    pairs.extend(
+        spellings()
+            .into_iter()
+            .map(|(p, q, pos)| (p.to_string(), q.to_string(), pos)),
+    );
+    for (p, q, pos) in pairs {
+        if filter
+            .as_ref()
+            .is_none_or(|f| p.contains(f.as_str()) || q.contains(f.as_str()))
+        {
+            pool.push((p, TrigUnit::Radians, vec![], false, Some((q, pos))));
+        }
+    }
 
     let started = std::time::Instant::now();
     let next = AtomicUsize::new(0);
@@ -1601,10 +2041,13 @@ fn main() {
             s.spawn(|| {
                 loop {
                     let i = next.fetch_add(1, AtOrd::Relaxed);
-                    let Some((e, u, c, w)) = pool.get(i) else {
+                    let Some((e, u, c, w, other)) = pool.get(i) else {
                         break;
                     };
-                    let mut r = check(e, *u, c, *w);
+                    let mut r = match other {
+                        Some((q, pos)) => check_pair(e, q, *pos),
+                        None => check(e, *u, c, *w),
+                    };
                     if *u != TrigUnit::Radians {
                         for f in &mut r {
                             f.expr = format!("{} [{u:?}]", f.expr);
