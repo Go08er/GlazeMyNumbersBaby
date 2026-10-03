@@ -2103,31 +2103,57 @@ fn check_range(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
     let e = &a.expr;
     let range = &d.range;
     // Every value lies in the range, give or take its noise or what the
-    // panel shows. A set of points is a shape: any resolvable value off
-    // them contradicts it, however it reads.
-    let points = range.iter().all(|iv| iv.lo.value == iv.hi.value);
+    // panel shows.
     // (Nearest the origin first: the plainest counterexample.)
     let mut outside: Vec<usize> = (0..xs.len())
         .filter(|&i| ys[i].is_finite() && !set_has(range, ys[i]))
         .collect();
     outside.sort_by(|&i, &j| xs[i].abs().total_cmp(&xs[j].abs()));
     for (x, y) in outside.into_iter().map(|i| (xs[i], ys[i])) {
-        {
-            let dist = set_dist(range, y);
-            if dist > 0.0 && dist > a.noise(x) {
-                let (check, why) = if !same_shown(y, nearest_bound(range, y)) {
-                    ("sample-outside-range", "not in claimed range")
-                } else if points {
-                    (
-                        "range-points-but-varies",
-                        "is not one of the claimed values",
-                    )
-                } else {
-                    continue;
-                };
-                r.fail(check, e, format!("f({x:?})={y:?} {why} {}", fmt_set(range)));
-                break;
+        let dist = set_dist(range, y);
+        if dist > 0.0 && dist > a.noise(x) && !same_shown(y, nearest_bound(range, y)) {
+            r.fail(
+                "sample-outside-range",
+                e,
+                format!("f({x:?})={y:?} not in claimed range {}", fmt_set(range)),
+            );
+            break;
+        }
+    }
+    // A set of points is a shape: f taking resolvably different values
+    // that all read as one claimed point contradicts it (a constant claimed
+    // for 10⁶ + 10⁻⁶·sin x), however they read. (An offset that reads the
+    // same, x/x + 10⁻¹² for {1}, is the same claim.)
+    if range.iter().all(|iv| iv.lo.value == iv.hi.value) {
+        let mut seen: Vec<Option<((f64, f64), (f64, f64))>> = vec![None; range.len()];
+        for (&x, &y) in xs.iter().zip(ys) {
+            if !y.is_finite() {
+                continue;
             }
+            let Some(j) = (0..range.len()).find(|&j| same_shown(y, range[j].lo.value)) else {
+                continue;
+            };
+            let s = seen[j].get_or_insert(((x, y), (x, y)));
+            if y < s.0.1 {
+                s.0 = (x, y);
+            }
+            if y > s.1.1 {
+                s.1 = (x, y);
+            }
+        }
+        if let Some(((x1, y1), (x2, y2))) = seen
+            .into_iter()
+            .flatten()
+            .find(|((x1, y1), (x2, y2))| y2 - y1 > a.noise(*x1) + a.noise(*x2))
+        {
+            r.fail(
+                "range-points-but-varies",
+                e,
+                format!(
+                    "f({x1:?})={y1:?} and f({x2:?})={y2:?} both read as one of {}",
+                    fmt_set(range)
+                ),
+            );
         }
     }
     // So do the most extreme values, refined: a sample rarely lands on the
@@ -3839,7 +3865,11 @@ fn check_equiv(p: &Analysed, q: &Analysed, r: &mut Report) {
     let mut differ = |what: &'static str, a: String, b: String| {
         r.fail(what, &e, format!("{a} vs {b}"));
     };
+    // (A periodic domain is given within one window: compare sets only
+    // when neither is; the samples check each against f.)
     if both(flags::DOMAIN)
+        && p.period().is_none()
+        && q.period().is_none()
         && (fmt_set(&pd.domain) != fmt_set(&qd.domain)
             || !match_families(&pd.excluded, &qd.excluded, &|m, z| {
                 floats_between(m, z) <= 64
@@ -3927,7 +3957,12 @@ fn check_equiv(p: &Analysed, q: &Analysed, r: &mut Report) {
             format!("{:?}", q.k.parity),
         );
     }
+    // (Every number is a period of a constant.)
+    let constant = |a: &Analysed| {
+        !a.unknown(flags::RANGE) && a.d().range.iter().all(|iv| iv.lo.value == iv.hi.value)
+    };
     if both(flags::PERIODICITY)
+        && !(constant(p) || constant(q))
         && match (p.period(), q.period()) {
             (Some(a), Some(b)) => floats_between(a, b) > 64,
             (None, None) => false,
