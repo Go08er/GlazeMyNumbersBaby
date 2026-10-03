@@ -653,8 +653,10 @@ impl Hub {
             Some("org.freedesktop.appearance"),
             gio::DBusSignalFlags::NONE,
             |signal| {
-                let key = signal.parameters.child_value(1);
-                if key.str() == Some("accent-color") {
+                // Signal bodies aren't type-checked: a malformed one is
+                // ignored, not indexed into.
+                let key = signal.parameters.try_child_value(1);
+                if key.as_ref().and_then(|k| k.str()) == Some("accent-color") {
                     PORTAL_ACCENT_CHANGED.with(|f| {
                         if let Some(f) = f.borrow().as_ref() {
                             f();

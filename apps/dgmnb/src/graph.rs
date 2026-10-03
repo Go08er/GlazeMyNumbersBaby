@@ -654,13 +654,18 @@ impl GraphPage {
         let Some(proxy) = self.proxy.clone() else {
             return;
         };
-        let _ = std::thread::Builder::new()
+        let spawned = std::thread::Builder::new()
             .name("analysis".into())
             .spawn(move || {
                 if let Some(f) = graph.analyze_cancellable(id, &cancel) {
                     let _ = proxy.send_event(UserEvent::Analysis(seq, Box::new(f)));
                 }
             });
+        if spawned.is_err() {
+            // No thread to be had: analyse here rather than spin forever.
+            let features = self.graph.analyze(id);
+            self.analysis_done(seq, features);
+        }
     }
 
     fn cancel_analysis(&mut self) {
@@ -772,7 +777,7 @@ impl GraphPage {
         let Some(proxy) = self.proxy.clone() else {
             return;
         };
-        let _ = std::thread::Builder::new()
+        let spawned = std::thread::Builder::new()
             .name("plot".into())
             .spawn(move || {
                 let t = Instant::now();
@@ -780,6 +785,13 @@ impl GraphPage {
                 let ms = t.elapsed().as_secs_f64() * 1e3;
                 let _ = proxy.send_event(UserEvent::Plot(seq, plots, ms));
             });
+        if spawned.is_err() {
+            // No thread to be had: plot here rather than wait forever.
+            self.busy = false;
+            self.plot_cancel = None;
+            self.plots = self.graph.plot_parallel(&vp);
+            self.update_trace();
+        }
     }
 
     // ------------------------------------------------------------ view
