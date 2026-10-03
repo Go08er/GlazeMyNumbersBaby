@@ -23,6 +23,10 @@ pub const DATA_DIR: &str = "gmnb";
 
 static OUTFIT: &[u8] = include_bytes!("../assets/fonts/Outfit-Variable.ttf");
 
+/// Whether GSK_RENDERER came from the environment GMNB was started in (so
+/// the "Vulkan acceleration" setting doesn't decide the renderer).
+pub static RENDERER_FROM_ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
 fn main() -> glib::ExitCode {
     launch::mark("main");
     // SAFETY: first thing in main, before GTK or any other thread starts.
@@ -33,6 +37,15 @@ fn main() -> glib::ExitCode {
     if std::env::var_os("__GL_YIELD").is_none() {
         // SAFETY: first thing in main, before GTK or any other thread starts.
         unsafe { std::env::set_var("__GL_YIELD", "USLEEP") };
+    }
+    // "Vulkan acceleration" off: GSK's software renderer, from this launch
+    // on (the renderer is picked when the first window is realised). An
+    // explicit GSK_RENDERER wins.
+    let from_env = std::env::var_os("GSK_RENDERER").is_some();
+    let _ = RENDERER_FROM_ENV.set(from_env);
+    if !from_env && !settings::wants_vulkan() {
+        // SAFETY: first thing in main, before GTK or any other thread starts.
+        unsafe { std::env::set_var("GSK_RENDERER", "cairo") };
     }
     // Initialise libadwaita before the application starts up. AdwApplication
     // would do it after GtkApplication's startup, which has already loaded
