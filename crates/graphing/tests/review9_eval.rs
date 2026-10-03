@@ -284,3 +284,103 @@ fn a_y_intercept_beyond_a_double_is_unknown_not_none() {
     let r = k("y=1/x");
     assert!(known(&r, flags::Y_INTERCEPT) && r.y_intercept.is_empty());
 }
+
+#[test]
+fn tiny_angles_of_either_sign_in_every_unit() {
+    // Reducing a tiny negative angle into [0, 360) rounded it to a whole
+    // turn: a zero sine, so csc and cot were undefined at −2·10⁻³²⁰°, though
+    // defined at +2·10⁻³²⁰°.
+    use graphing::functions::{cot_u, csc_u, sin_cos, sin_u};
+    for unit in [TrigUnit::Radians, TrigUnit::Degrees, TrigUnit::Grads] {
+        for x in [2.0237e-320, 1e-323, 5e-324, 1e-300, 1e-20] {
+            for x in [x, -x] {
+                let s = sin_u(x, unit);
+                assert!(
+                    s != 0.0 && s.signum() == x.signum(),
+                    "{unit:?} sin({x}) = {s}"
+                );
+                for v in [csc_u(x, unit), cot_u(x, unit)] {
+                    assert!(
+                        !v.is_nan() && v.signum() == x.signum(),
+                        "{unit:?} at {x}: {v}"
+                    );
+                }
+                for src in [
+                    "atan(csc(x))",
+                    "atan(cot(x))",
+                    "atan(tan(x))",
+                    "atan(sec(x))",
+                ] {
+                    let v = compile_str(src, unit).unwrap().eval_x(x);
+                    assert!(v.is_finite(), "{unit:?} {src} at {x}: {v}");
+                }
+            }
+        }
+        // Exact quarter turns stay exact, on both sides.
+        if unit != TrigUnit::Radians {
+            let q = unit.full_turn() / 4.0;
+            for (x, s, c) in [(q, 1.0, 0.0), (-q, -1.0, 0.0), (-2.0 * q, 0.0, -1.0)] {
+                assert_eq!(sin_cos(x, unit), (s, c), "{unit:?} {x}");
+            }
+            assert!(csc_u(-2.0 * q, unit).is_nan());
+            assert!(cot_u(-4.0 * q, unit).is_nan());
+        }
+    }
+    for src in ["y=atan(csc(x))", "y=atan(cot(x))"] {
+        let mut g = graphing::Graph::new();
+        g.set_trig_unit(TrigUnit::Degrees);
+        let id = g.add_equation(src);
+        let r = g.analyze(id);
+        assert_ne!(r.parity, graphing::analysis::Parity::Even, "{src}");
+    }
+}
+
+#[test]
+fn scalings_of_one_expression_in_proportion() {
+    for (src, domain, range, zeros) in [
+        (
+            "y=((x-1000000000)/1000)/((x-1000000000)/1000)-1",
+            "x ∈ ℝ \\ {1000000000}",
+            "y ∈ {0}",
+            "x ∈ ℝ \\ {1000000000}",
+        ),
+        ("y=((x-5)/3)/(x-5)", "x ∈ ℝ \\ {5}", "y ∈ {1/3}", ""),
+        ("y=(2x+2)/(x+1)", "x ∈ ℝ \\ {−1}", "y ∈ {2}", ""),
+        ("y=(x/3+1)/(x+3)", "x ∈ ℝ \\ {−3}", "y ∈ {1/3}", ""),
+        ("y=(3-x)/(x-3)", "x ∈ ℝ \\ {3}", "y ∈ {−1}", ""),
+        (
+            "y=((x-1000000000)/1000)/(x-1000000000)",
+            "x ∈ ℝ \\ {1000000000}",
+            "y ∈ {0.001}",
+            "",
+        ),
+        ("y=(x+1)-x", "x ∈ ℝ", "y ∈ {1}", ""),
+        ("y=(x-5)/3-(x-5)/3", "x ∈ ℝ", "y ∈ {0}", "x ∈ ℝ"),
+    ] {
+        let r = k(src);
+        assert_eq!(r.domain, domain, "{src}");
+        assert_eq!(r.range, range, "{src}");
+        assert_eq!(r.x_intercept, zeros, "{src}");
+        assert_eq!(r.too_complex_features, 0, "{src}");
+    }
+    // Not in proportion: not constant.
+    for src in ["y=(x+2)/(x+1)", "y=(2x+1)/(x+1)", "y=(x+1)-2x"] {
+        assert!(!k(src).range.starts_with("y ∈ {"), "{src}");
+    }
+}
+
+#[test]
+fn large_values_keep_the_digits_they_show() {
+    // 545843449.4 is shown to one decimal; snapping it to the integer
+    // 545843449 was more than its rounding.
+    let r = k("y=(x-1000000000)*sin((x-1000000000))");
+    assert_eq!(r.y_intercept, "545843449.4");
+    let r = k("y=(x-1000000000)-sin((x-1000000000))");
+    assert_eq!(r.y_intercept, "−999999999.5");
+    let r = k("y=(x-1000000000000)^2*(x-1000000001000)");
+    assert_eq!(r.minima.len(), 1);
+    assert!(r.minima[0].ends_with("−148148148.1)"), "{:?}", r.minima);
+    // Values that are integers to within their rounding still are.
+    assert_eq!(k("y=x^2-1000000000").range, "y ∈ [−1000000000, ∞)");
+    assert_eq!(k("y=(x-3)^2+123456789").minima, ["(3, 123456789)"]);
+}
