@@ -1,0 +1,73 @@
+//! Follow-up to round 8: the remaining false-claim classes the adversarial
+//! sweep found, as shown in the analysis panel.
+
+use graphing::Graph;
+use graphing::strings as s;
+
+/// The panel's text for each feature title.
+fn panel(expr: &str) -> std::collections::HashMap<String, String> {
+    let mut g = Graph::new();
+    let id = g.add_equation(expr);
+    g.analyze(id)
+        .items()
+        .into_iter()
+        .map(|i| {
+            let mut text = i.display_items.join(" | ");
+            for row in &i.grid_items {
+                text.push_str(&format!(" | {} {}", row.expression, row.direction));
+            }
+            (i.title, text)
+        })
+        .collect()
+}
+
+#[test]
+fn a_large_offset_keeps_tans_period_and_range() {
+    let p = panel("y=tan(x)+1000000");
+    assert_eq!(p[s::PERIODICITY], "π");
+    assert_eq!(p[s::RANGE], "y ∈ ℝ");
+    assert_eq!(p[s::DOMAIN], "x ∈ ℝ \\ {π/2 + kπ | k ∈ ℤ}");
+}
+
+#[test]
+fn a_flat_minimum_is_found_exactly() {
+    let p = panel("y=x^4-4x^3+6x^2-4x+1");
+    assert_eq!(p[s::X_INTERCEPT], "1");
+    assert_eq!(p[s::MINIMA], "(1, 0)");
+    assert_eq!(p[s::RANGE], "y ∈ [0, ∞)");
+}
+
+#[test]
+fn an_unrepresentable_zero_is_unknown_not_absent() {
+    let p = panel("y=ln(x)+1000000");
+    assert_eq!(p[s::RANGE], "y ∈ ℝ");
+    assert_eq!(p[s::X_INTERCEPT], s::KGF_X_INTERCEPT_UNKNOWN);
+}
+
+#[test]
+fn a_slow_power_tail_keeps_its_offset() {
+    let p = panel("y=x^-0.0001+1000000");
+    assert_eq!(p[s::RANGE], "y ∈ (1000000, ∞)");
+    assert_eq!(p[s::HORIZONTAL_ASYMPTOTES], "y = 1000000");
+}
+
+#[test]
+fn overflow_is_unbounded_not_a_closed_bound() {
+    let p = panel("y=1/e^(1/x)");
+    assert_eq!(p[s::DOMAIN], "x ∈ ℝ \\ {0}");
+    assert_eq!(p[s::RANGE], "y ∈ (0, 1) ∪ (1, ∞)");
+}
+
+#[test]
+fn a_zero_beside_a_pole_is_shown_apart_from_it() {
+    let p = panel("y=1/(x-2)+1000000");
+    assert_eq!(p[s::X_INTERCEPT], "1.999999");
+    assert_eq!(p[s::DOMAIN], "x ∈ ℝ \\ {2}");
+}
+
+#[test]
+fn zero_to_a_negative_power_has_no_values_there() {
+    let p = panel("y=0^(-x)");
+    assert_eq!(p[s::DOMAIN], "x ∈ (−∞, 0]");
+    assert_eq!(p[s::RANGE], "y ∈ {0, 1}");
+}
