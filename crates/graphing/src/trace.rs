@@ -31,6 +31,21 @@ pub struct TracePoint {
     pub screen_y: f64,
     /// Distance from the pointer in pixels.
     pub distance_px: f64,
+    /// The steps `x` and `y` are shown to (see [`TracePoint::text`]).
+    pub x_step: f64,
+    pub y_step: f64,
+}
+
+impl TracePoint {
+    /// `(x, y)` as shown: each coordinate to its step, which is the
+    /// tracing precision unless the curve is too steep for it.
+    pub fn text(&self) -> String {
+        format!(
+            "({}, {})",
+            format_coordinate(self.x, self.x_step),
+            format_coordinate(self.y, self.y_step)
+        )
+    }
 }
 
 fn project(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> (f64, (f64, f64)) {
@@ -132,42 +147,73 @@ pub fn nearest_point(
 ) -> Option<TracePoint> {
     let precision = vp.precision();
     let mut best: Option<TracePoint> = None;
-    let offer = |index: usize, x: f64, y: f64, best: &mut Option<TracePoint>| {
-        if !(x.is_finite() && y.is_finite()) {
-            return;
-        }
-        let (sx, sy) = vp.to_screen(x, y);
-        let d = ((sx - px).powi(2) + (sy - py).powi(2)).sqrt();
-        if d <= radius_px && best.is_none_or(|b| d < b.distance_px) {
-            *best = Some(TracePoint {
-                index,
-                x,
-                y,
-                screen_x: sx,
-                screen_y: sy,
-                distance_px: d,
-            });
-        }
-    };
+    let offer =
+        |index: usize, (x, y): (f64, f64), steps: (f64, f64), best: &mut Option<TracePoint>| {
+            if !(x.is_finite() && y.is_finite()) {
+                return;
+            }
+            let (sx, sy) = vp.to_screen(x, y);
+            let d = ((sx - px).powi(2) + (sy - py).powi(2)).sqrt();
+            if d <= radius_px && best.is_none_or(|b| d < b.distance_px) {
+                *best = Some(TracePoint {
+                    index,
+                    x,
+                    y,
+                    screen_x: sx,
+                    screen_y: sy,
+                    distance_px: d,
+                    x_step: steps.0,
+                    y_step: steps.1,
+                });
+            }
+        };
     for (index, (eq, plot)) in curves.iter().enumerate() {
         match &eq.form {
             CompiledForm::Explicit { axis, f } => {
                 let (cx, cy) = vp.to_world(px, py);
+                let point = |t: f64, d: f64| match axis {
+                    Axis::X => (t, d),
+                    Axis::Y => (d, t),
+                };
+                // The independent coordinate is rounded to the tracing
+                // precision, as in the original, unless one step of it moves
+                // the point more than a pixel (a steep curve): then to a
+                // finer step, up to a millionth, so tracing can still move
+                // along it pixel by pixel. A jump only counts on one side.
                 let snap_eval = |t: f64| {
-                    let t = round_to(t, precision);
-                    let d = f.eval(t, 0.0);
-                    match axis {
-                        Axis::X => (t, d),
-                        Axis::Y => (d, t),
+                    let at = |t: f64| {
+                        let p = point(t, f.eval(t, 0.0));
+                        (p, vp.to_screen(p.0, p.1))
+                    };
+                    let mut step = precision;
+                    for _ in 0..6 {
+                        let (_, s) = at(round_to(t, step));
+                        let quantum = [step, -step]
+                            .map(|d| {
+                                let (_, n) = at(round_to(t, step) + d);
+                                ((n.0 - s.0).powi(2) + (n.1 - s.1).powi(2)).sqrt()
+                            })
+                            .into_iter()
+                            .fold(f64::NAN, f64::min);
+                        if quantum.is_nan() || quantum <= 1.0 {
+                            break;
+                        }
+                        step /= 10.0;
                     }
+                    let (p, _) = at(round_to(t, step));
+                    let steps = match axis {
+                        Axis::X => (step, precision),
+                        Axis::Y => (precision, step),
+                    };
+                    (p, steps)
                 };
                 // Directly above/below (or beside) the pointer.
-                let (x, y) = snap_eval(if *axis == Axis::X { cx } else { cy });
-                offer(index, x, y, &mut best);
+                let (p, steps) = snap_eval(if *axis == Axis::X { cx } else { cy });
+                offer(index, p, steps, &mut best);
                 // Nearest along the drawn curve (steep parts, asymptotes).
                 if let Some((_, q)) = nearest_on_polylines(vp, &plot.curves, px, py) {
-                    let (x, y) = snap_eval(if *axis == Axis::X { q.x } else { q.y });
-                    offer(index, x, y, &mut best);
+                    let (p, steps) = snap_eval(if *axis == Axis::X { q.x } else { q.y });
+                    offer(index, p, steps, &mut best);
                 }
             }
             CompiledForm::Implicit { .. } | CompiledForm::Inequality { .. } => {
@@ -175,7 +221,7 @@ pub fn nearest_point(
                     && d <= radius_px + 3.0
                     && let Some(r) = newton_project(eq, q, vp)
                 {
-                    offer(index, r.x, r.y, &mut best);
+                    offer(index, (r.x, r.y), (precision, precision), &mut best);
                 }
             }
         }
@@ -186,23 +232,29 @@ pub fn nearest_point(
 /// Formats a traced point as `(x, y)` with as many decimals as the tracing
 /// precision (`10^(floor(log10(xMax − xMin)) − 3)`), e.g. `(1.25, -0.84)`.
 pub fn format_trace_value(x: f64, y: f64, precision: f64) -> String {
-    let decimals = if precision > 0.0 && precision.is_finite() {
-        (-precision.log10().floor()).clamp(0.0, 15.0) as usize
+    format!(
+        "({}, {})",
+        format_coordinate(x, precision),
+        format_coordinate(y, precision)
+    )
+}
+
+/// `v` rounded to `step`, with as many decimals as the step has.
+fn format_coordinate(v: f64, step: f64) -> String {
+    let decimals = if step > 0.0 && step.is_finite() {
+        (-step.log10().floor()).clamp(0.0, 15.0) as usize
     } else {
         6
     };
-    let f = |v: f64| {
-        let s = format!("{:.*}", decimals, round_to(v, precision));
-        if s.trim_start_matches('-')
-            .chars()
-            .all(|c| c == '0' || c == '.')
-        {
-            s.trim_start_matches('-').to_string()
-        } else {
-            s
-        }
-    };
-    format!("({}, {})", f(x), f(y))
+    let s = format!("{:.*}", decimals, round_to(v, step));
+    if s.trim_start_matches('-')
+        .chars()
+        .all(|c| c == '0' || c == '.')
+    {
+        s.trim_start_matches('-').to_string()
+    } else {
+        s
+    }
 }
 
 #[cfg(test)]
@@ -242,6 +294,23 @@ mod tests {
         let (px, py) = vp.to_screen(x0 + 0.02, 1.5f64.tan());
         let t = nearest_point(&vp, &[(&eq, &p)], px, py, 30.0).unwrap();
         assert!(t.distance_px < 2.0, "{t:?}");
+    }
+
+    #[test]
+    fn steep_curves_trace_finer_than_the_precision() {
+        // At this scale x rounds to 0.01, a 400 px jump in y on this line;
+        // tracing uses a finer step instead, and shows it.
+        let vp = Viewport::new(-10.0, 10.0, -10.0, 10.0, 800.0, 800.0);
+        let (eq, p) = setup("y = 1000*x", &vp);
+        let (px, py) = vp.to_screen(0.0, 0.25);
+        let t = nearest_point(&vp, &[(&eq, &p)], px, py, 50.0).unwrap();
+        assert!(t.distance_px < 2.0, "{t:?}");
+        assert_eq!(t.text(), "(0.00025, 0.25)");
+        // Shallow curves keep the original's rounding.
+        let (eq, p) = setup("y = x^2/4", &vp);
+        let (px, py) = vp.to_screen(3.004, 2.2534);
+        let t = nearest_point(&vp, &[(&eq, &p)], px, py, 100.0).unwrap();
+        assert_eq!((t.x_step, t.text().as_str()), (0.01, "(3.00, 2.25)"));
     }
 
     #[test]

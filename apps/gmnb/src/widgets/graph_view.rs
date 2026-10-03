@@ -229,8 +229,9 @@ impl GraphView {
         self.imp().trace_wanted.replace(Some(Box::new(f)));
     }
 
-    /// Move the trace cursor by keyboard, following the curve it lands on,
-    /// and announce the traced value.
+    /// Move the trace cursor by keyboard and announce the traced value. The
+    /// cursor keeps every step along the arrow's axis, even one too small to
+    /// move the traced point, and moves to the curve across it.
     fn trace_key(&self, dx: f64, dy: f64) {
         let imp = self.imp();
         if !imp.trace_on.get() {
@@ -250,16 +251,17 @@ impl GraphView {
             .get()
             .filter(|&(x, y)| (0.0..w).contains(&x) && (0.0..h).contains(&y))
             .unwrap_or((w / 2.0, h / 2.0));
-        imp.pointer.set(Some((
-            (x + dx).clamp(0.0, w - 1.0),
-            (y + dy).clamp(0.0, h - 1.0),
-        )));
+        let (x, y) = ((x + dx).clamp(0.0, w - 1.0), (y + dy).clamp(0.0, h - 1.0));
+        imp.pointer.set(Some((x, y)));
         self.update_trace();
         let traced = imp.trace.borrow().as_ref().map(|(_, t)| *t);
-        if let (Some(t), Some(vp)) = (traced, imp.vp.get()) {
-            imp.pointer.set(Some((t.screen_x, t.screen_y)));
-            let text = graphing::trace::format_trace_value(t.x, t.y, vp.precision());
-            self.announce(&text, gtk::AccessibleAnnouncementPriority::Medium);
+        if let Some(t) = traced {
+            imp.pointer.set(Some(if dx != 0.0 {
+                (x, t.screen_y)
+            } else {
+                (t.screen_x, y)
+            }));
+            self.announce(&t.text(), gtk::AccessibleAnnouncementPriority::Medium);
         }
         self.queue_draw();
     }
@@ -829,7 +831,7 @@ impl GraphView {
                 &rgba([1.0, 1.0, 1.0], 0.9),
             );
 
-            let text = graphing::trace::format_trace_value(tp.x, tp.y, vp.precision());
+            let text = tp.text();
             let layout = self.label_layout(&text, 13.0);
             let (lw2, lh) = layout.pixel_size();
             let (bw, bh) = (lw2 as f32 + 18.0, lh as f32 + 10.0);
