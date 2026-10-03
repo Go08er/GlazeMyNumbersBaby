@@ -49,7 +49,7 @@ use super::{
     Parity, flags,
 };
 use crate::ast::Expr;
-use crate::compile::{CompileOptions, Program};
+use crate::compile::{CompileOptions, Program, Redo};
 use crate::functions::TrigUnit;
 
 /// A function and what its analysis claims, with the means to check one
@@ -77,10 +77,10 @@ pub struct Analysed<'c> {
     limit: u64,
     cancel: Option<&'c AtomicBool>,
     cancelled: Cell<bool>,
-    noises: RefCell<HashMap<u64, f64>>,
-    rels: RefCell<HashMap<u64, f64>>,
-    refs: RefCell<HashMap<u64, R>>,
-    vals: RefCell<HashMap<u64, f64>>,
+    noises: RefCell<Memo<f64>>,
+    rels: RefCell<Memo<f64>>,
+    refs: RefCell<Memo<R>>,
+    vals: RefCell<Memo<f64>>,
     /// Some discrepancy was let pass only because the noise where it was
     /// seen is unbounded ([`Analysed::forgives`]): what it was checked for
     /// is unverified.
@@ -172,6 +172,16 @@ impl<'c> Analysed<'c> {
         }
         d <= n
     }
+    /// Whether `d` at x is within f's noise there, as evidence for a claim
+    /// (a value attained, a zero, the same turn): unbounded noise is no
+    /// evidence of anything.
+    pub fn within(&self, x: f64, d: f64) -> bool {
+        self.within_n(self.noise(x), d)
+    }
+    /// [`Analysed::within`] against a noise already worked out.
+    pub fn within_n(&self, n: f64, d: f64) -> bool {
+        n.is_finite() && d <= n
+    }
     /// Whether some discrepancy was forgiven only by unbounded noise since
     /// the last call.
     pub fn take_unbounded(&self) -> bool {
@@ -184,6 +194,16 @@ impl<'c> Analysed<'c> {
             Some(f) => f.eval(x, 0.0),
             None => f64::NAN,
         }
+    }
+    /// The compiled program's value where it is certainly f's: a normal
+    /// double reached without any intermediate leaving the doubles (no
+    /// overflow, no underflow, nothing re-evaluated in extended range), by
+    /// the same operations the reference does. Elsewhere the reference
+    /// decides ([`Analysed::eval`]).
+    fn faithful(&self, x: f64) -> Option<f64> {
+        self.charge(self.cost);
+        let (v, how) = self.f.as_ref()?.eval_tagged(x, 0.0);
+        (how == Redo::No && v.is_normal()).then_some(v)
     }
     /// The reference's value at x (remembered: it is the slowest step).
     pub fn reference(&self, x: f64) -> R {
@@ -214,6 +234,9 @@ impl<'c> Analysed<'c> {
     /// the doubles (then the smallest or largest double of its sign,
     /// [`Xf::proxy`]; [`Analysed::beyond`] has the value).
     pub fn eval(&self, x: f64) -> f64 {
+        if let Some(v) = self.faithful(x) {
+            return v;
+        }
         if let Some(&v) = self.vals.borrow().get(&x.to_bits()) {
             return v;
         }
@@ -243,6 +266,9 @@ impl<'c> Analysed<'c> {
     /// f(x) when it is a nonzero value beyond the doubles (whose double
     /// stand-in, [`Analysed::eval`], keeps only its sign and side).
     pub fn beyond(&self, x: f64) -> Option<Xf> {
+        if !is_stand_in(self.eval(x)) {
+            return None;
+        }
         match self.reference(x) {
             R::V(v) if !v.is_zero() && !v.normal() => Some(v),
             _ => None,
@@ -250,6 +276,9 @@ impl<'c> Analysed<'c> {
     }
     /// Whether f is defined at x (None: the reference can't tell).
     pub fn defined(&self, x: f64) -> Option<bool> {
+        if self.eval(x).is_normal() {
+            return Some(true);
+        }
         match self.reference(x) {
             R::V(_) => Some(true),
             R::Undef => Some(false),
@@ -329,16 +358,24 @@ impl<'c> Analysed<'c> {
                 }
             }
         }
-        // Where only the reference's extended arithmetic gives a value,
-        // nothing bounds its rounding here: unknown.
-        if !y.is_finite() {
-            return f64::INFINITY;
-        }
         let (r, err) = self.bound(x);
+        if !(y.is_finite() && r.is_finite() && err.is_finite()) {
+            // The plain tree leaves the doubles on the way (e^718 in
+            // 1/(1 + e^718)), so its rounding bound says nothing: where the
+            // reference has the value, its own rounding and its change to
+            // its neighbours bound it, relative to it. Elsewhere nothing
+            // does.
+            // (A value in the subnormal range is also rounded to them.)
+            return match self.reference(x) {
+                R::V(v) if !v.is_zero() && y.is_finite() && y != 0.0 => {
+                    spread + y.abs() * self.rel_beyond(x, v).min(1.0) + ulp(y)
+                }
+                _ => f64::INFINITY,
+            };
+        }
         // The compiler folds and rewrites (a/bᵏ as a·b⁻ᵏ): its double can
         // differ from the plain tree's by their roundings.
-        let lowering = if r.is_finite() { (r - y).abs() } else { 0.0 };
-        spread + err + lowering
+        spread + err + (r - y).abs()
     }
     /// The noise of a value beyond the doubles, in units of its double
     /// stand-in: the stand-in itself where f is indistinguishable from 0
@@ -426,6 +463,34 @@ impl<'c> Analysed<'c> {
             }
             _ => vec![f.x],
         }
+    }
+}
+
+/// Whether a value of [`Analysed::eval`] may stand in for one beyond the
+/// doubles ([`Xf::proxy`]).
+fn is_stand_in(y: f64) -> bool {
+    y.abs() == f64::from_bits(1) || y.abs() == f64::MAX
+}
+
+/// What was worked out at each x (by the bits of x).
+type Memo<T> = HashMap<u64, T, std::hash::BuildHasherDefault<BitsHasher>>;
+
+/// A hasher for the bits of a double: one multiplication (the keys are
+/// already spread, a cryptographic hash would cost more than the values).
+#[derive(Default)]
+struct BitsHasher(u64);
+
+impl std::hash::Hasher for BitsHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0.rotate_left(8) ^ b as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        }
+    }
+    fn write_u64(&mut self, v: u64) {
+        self.0 = (v ^ (v >> 29)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
     }
 }
 
@@ -776,7 +841,7 @@ pub fn check_range(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
         }
     }
     let near = |x: f64, y: f64, v: f64| {
-        y.is_finite() && (y == v || same_shown(y, v) || a.forgives(x, (y - v).abs()))
+        y.is_finite() && (y == v || same_shown(y, v) || a.within(x, (y - v).abs()))
     };
     for iv in range {
         for (b, is_lo) in [(iv.lo, true), (iv.hi, false)] {
@@ -950,7 +1015,7 @@ pub fn zero_ok(a: &Analysed, z: f64) -> Verdict {
     let near = (-4..=4).any(|k| {
         let t = z + k as f64 * step;
         let v = a.eval(t);
-        v.is_finite() && a.forgives(t, v.abs())
+        v.is_finite() && a.within(t, v.abs())
     });
     if near { Verdict::Holds } else { Verdict::Fails }
 }
@@ -965,7 +1030,7 @@ pub fn same_root(a: &Analysed, p: f64, q: f64) -> bool {
     (1..8).all(|i| {
         let t = p + (q - p) * i as f64 / 8.0;
         let y = a.eval(t);
-        y.is_finite() && (y == 0.0 || a.forgives(t, y.abs()))
+        y.is_finite() && (y == 0.0 || a.within(t, y.abs()))
     })
 }
 
@@ -1375,15 +1440,14 @@ pub fn same_turn(a: &Analysed, p: f64, q: f64, sign: f64) -> bool {
         return true;
     }
     let (fp, fq) = (a.eval(p), a.eval(q));
-    if !fp.is_finite() || !fq.is_finite() || !a.forgives_n(a.noise(p) + a.noise(q), (fp - fq).abs())
-    {
+    if !fp.is_finite() || !fq.is_finite() || !a.within_n(a.noise(p) + a.noise(q), (fp - fq).abs()) {
         return false;
     }
     let top = (sign * fp).max(sign * fq);
     (1..8).all(|i| {
         let t = p + (q - p) * i as f64 / 8.0;
         let y = a.eval(t);
-        y.is_finite() && (sign * y <= top || a.forgives(t, sign * y - top))
+        y.is_finite() && (sign * y <= top || a.within(t, sign * y - top))
     })
 }
 
@@ -2669,6 +2733,23 @@ fn compare_beyond(a: &Analysed, x1: f64, x2: f64) -> Option<std::cmp::Ordering> 
     })
 }
 
+/// Which of f(x1) and f(x2) is larger in the reference's arithmetic, noise
+/// aside (None where either is undefined or unknown): the cheap test before
+/// [`compare_beyond`].
+fn order_beyond(a: &Analysed, x1: f64, x2: f64) -> Option<std::cmp::Ordering> {
+    let (R::V(v1), R::V(v2)) = (a.reference(x1), a.reference(x2)) else {
+        return None;
+    };
+    let d = v1.add(v2.neg());
+    Some(if d.is_zero() {
+        std::cmp::Ordering::Equal
+    } else if d.sign() > 0.0 {
+        std::cmp::Ordering::Greater
+    } else {
+        std::cmp::Ordering::Less
+    })
+}
+
 /// Where f is beyond the doubles (the far tails of e^(−x²), the dip
 /// between two far-apart Gaussians), its double stand-ins are all alike,
 /// so its shape there is checked on the reference's values: a monotone
@@ -2679,7 +2760,7 @@ pub fn check_beyond(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
     let d = a.d();
     let n = xs.len();
     let beyond: Vec<bool> = (0..n)
-        .map(|i| ys[i].is_finite() && a.beyond(xs[i]).is_some())
+        .map(|i| is_stand_in(ys[i]) && a.beyond(xs[i]).is_some())
         .collect();
     if !beyond.iter().any(|b| *b) {
         return;
@@ -2703,6 +2784,12 @@ pub fn check_beyond(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
                 }
                 if a.over() {
                     return;
+                }
+                // (Only a step the wrong way needs its noise.)
+                if matches!(order_beyond(a, xs[i], xs[j]), None | Some(Equal))
+                    || order_beyond(a, xs[i], xs[j]) == Some(want)
+                {
+                    continue;
                 }
                 if let Some(o) = compare_beyond(a, xs[i], xs[j])
                     && o != want
@@ -2737,7 +2824,16 @@ pub fn check_beyond(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
             {
                 continue;
             }
-            if tried >= 256 || a.over() {
+            if a.over() {
+                break;
+            }
+            // (Only a turn by the reference's values needs its noise.)
+            if order_beyond(a, xs[i], xs[i - 1]) != Some(want)
+                || order_beyond(a, xs[i], xs[i + 1]) != Some(want)
+            {
+                continue;
+            }
+            if tried >= 256 {
                 break;
             }
             tried += 1;
@@ -3037,7 +3133,7 @@ fn unjustified(a: &Analysed, xs: &[f64], ys: &[f64], centres: &[f64]) -> u32 {
     if !a.unknown(flags::RANGE) {
         let at = |x: f64, v: f64| {
             let y = a.eval(x);
-            y.is_finite() && (y == v || same_shown(y, v) || a.forgives(x, (y - v).abs()))
+            y.is_finite() && (y == v || same_shown(y, v) || a.within(x, (y - v).abs()))
         };
         let attained = |v: f64, lower: bool| {
             d.minima
@@ -3226,7 +3322,7 @@ fn bounded_turn(a: &Analysed, xs: &[f64], ys: &[f64], v: f64, lower: bool) -> bo
     let sign = if lower { 1.0 } else { -1.0 };
     refine_extremes(a, xs, ys, sign, 8).iter().any(|&(x, y)| {
         let n = a.noise(x) + slack(v);
-        a.forgives_n(n, (y - v).abs()) && a.forgives_n(n, (bound - v).abs())
+        a.within_n(n, (y - v).abs()) && a.within_n(n, (bound - v).abs())
     })
 }
 
@@ -3240,7 +3336,7 @@ fn damped_turn(a: &Analysed, xs: &[f64], ys: &[f64], v: f64, lower: bool) -> boo
     let Some(&(xt, yt)) = refine_extremes(a, xs, ys, sign, 4).first() else {
         return false;
     };
-    if !(yt == v || same_shown(yt, v) || a.forgives(xt, (yt - v).abs())) {
+    if !(yt == v || same_shown(yt, v) || a.within(xt, (yt - v).abs())) {
         return false;
     }
     let k0 = xt.abs().max(1.0).log10().ceil() as i32 + 1;
@@ -3324,7 +3420,7 @@ fn hole_values_attained(a: &Analysed, xs: &[f64], ys: &[f64]) -> bool {
             idx.sort_by(|&i, &j| (ys[i] - v).abs().total_cmp(&(ys[j] - v).abs()));
             idx.iter()
                 .take(32)
-                .any(|&i| a.forgives(xs[i], (ys[i] - v).abs()))
+                .any(|&i| a.within(xs[i], (ys[i] - v).abs()))
         };
         if !crossed && !close() {
             return false;

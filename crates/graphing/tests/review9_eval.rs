@@ -229,9 +229,13 @@ fn genuine_holes_and_controls_are_unchanged() {
     let r = k("y=exp(1/x)");
     assert_eq!(r.domain, "x ∈ ℝ \\ {0}");
     assert_eq!(r.vertical_asymptotes, ["x = 0"]);
+    // Its double is 0 (plotted as 0), but the function is e^−1000-ish, a
+    // positive number below the doubles: never 0, so not "every x" an
+    // intercept, nor a range of {0} (R10: the gate drops both).
     let r = k("y=1/(1+e^1000)");
-    assert_eq!(r.range, "y ∈ {0}");
-    assert_eq!(r.x_intercept, "x ∈ ℝ");
+    assert_ne!(r.range, "y ∈ {0}");
+    assert_ne!(r.x_intercept, "x ∈ ℝ");
+    assert_eq!(at("1/(1+e^1000)", 3.0), 0.0);
     let r = k("y=1/exp(1/x)");
     assert_eq!(r.domain, "x ∈ ℝ \\ {0}");
     assert_eq!(r.range, "y ∈ (0, 1) ∪ (1, ∞)");
