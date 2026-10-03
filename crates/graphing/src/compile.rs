@@ -235,6 +235,9 @@ impl Op {
         match self {
             Op::Mul | Op::Div | Op::DivNz | Op::Pow | Op::PowRat(..) => true,
             Op::PowI(n) => !matches!(n, 0 | 1),
+            // A tiny angle in degrees or grads: its sine is the angle times
+            // π/180 (or π/200), which can fall below the doubles.
+            Op::F1(Sin(u) | Tan(u)) => *u != TrigUnit::Radians,
             Op::F1(f) => matches!(
                 f,
                 Sec(_)

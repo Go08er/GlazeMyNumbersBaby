@@ -22,9 +22,12 @@ use std::f64::consts::{LN_2, LN_10};
 /// ln 2 − `LN_2`, for exact argument reduction.
 const LN2_LO: f64 = 2.319_046_813_846_299_6e-17;
 
-/// 2⁵²: below it, an integer-valued double times ln 2 reduces exactly by
-/// fused multiply-adds, and exponents keep their parity and remainders.
-const TWO52: f64 = 4_503_599_627_370_496.0;
+/// 2⁵³: up to it every integer is a double, so a binary exponent is exact.
+/// Beyond it a value's exponent is itself rounded and its mantissa
+/// meaningless: such a value is "lost" (see [`Wide::lost`]). It is still
+/// certainly beyond a double's range, but nothing that would bring it back
+/// into range (a logarithm, a root, a ratio of two of them) can be known.
+const TWO53: f64 = 9_007_199_254_740_992.0;
 
 /// Exponents within which m·2^e is an ordinary double, with room for a
 /// simple result of it to stay one.
@@ -114,21 +117,35 @@ fn ln_dd(m: f64, e: f64) -> dd::Dd {
 
 /// |m·2^e|^t for m ≠ 0, through logarithms: e^(t·ln|m·2^e|), with that
 /// exponent in double-double (see [`crate::dd`]) so the result keeps a
-/// double's precision however far out of range it is.
+/// double's precision however far out of range it is, up to 2⁵³ binades.
+/// Beyond, only its size is kept (a lost value); and a lost base gives
+/// nothing that would land back within 2⁵³ binades.
 fn pow_mag(m: f64, e: f64, t: dd::Dd) -> Wide {
     let p = t.hi * e;
-    if !p.is_finite() || p.abs() > TWO52 {
-        // The exponent's fraction is lost to rounding this far out.
+    if !p.is_finite() || p.abs() >= TWO53 || !e.is_finite() || e.abs() > TWO53 {
         let n = p + t.hi * m.abs().log2();
         return if n.is_nan() {
             Wide::Unknown
-        } else {
+        } else if n.is_infinite() || n.abs() > TWO53 {
             Wide::Val(1.0, n.round())
+        } else {
+            Wide::Unknown
         };
     }
     let l = dd::ln(m.abs()).add(dd::LN2.mul_f(e));
     let (r, n) = dd::exp(l.mul(t));
     Wide::norm(r, n)
+}
+
+/// `out`, unless one of `inputs` is lost (beyond 2⁵³ binades, see
+/// [`TWO53`]) and `out` is not: a result back within reach would carry the
+/// lost value's meaningless mantissa or exponent, so it is unknown.
+fn unless_lost(inputs: &[Wide], out: Wide) -> Wide {
+    if inputs.iter().any(|w| w.lost()) && !out.lost() && !out.beyond() && !out.is_zero() {
+        Wide::Unknown
+    } else {
+        out
+    }
 }
 
 impl Wide {
@@ -178,6 +195,17 @@ impl Wide {
         matches!(self, Wide::Val(m, _) if m == 0.0)
     }
 
+    /// A value beyond 2⁵³ binades: its size is known to be beyond a
+    /// double, but its exponent is rounded and its mantissa made up.
+    pub(crate) fn lost(self) -> bool {
+        matches!(self, Wide::Val(m, e) if m != 0.0 && e.is_finite() && e.abs() > TWO53)
+    }
+
+    /// A magnitude beyond even the extended range (an infinite exponent).
+    fn beyond(self) -> bool {
+        matches!(self, Wide::Val(m, e) if m != 0.0 && e.is_infinite())
+    }
+
     /// The double, when it is an ordinary one with room to spare.
     fn normal(self) -> Option<f64> {
         match self {
@@ -194,6 +222,19 @@ impl Wide {
     }
 
     pub(crate) fn add(self, o: Wide) -> Wide {
+        // A lost value far below a known one doesn't change it (e^(−10¹⁶)
+        // + 1 is 1); otherwise a sum back in range depends on what was lost.
+        if let (Wide::Val(a, ea), Wide::Val(b, eb)) = (self, o) {
+            match (self.lost(), o.lost()) {
+                (true, false) if b != 0.0 && ea < eb - 64.0 => return o,
+                (false, true) if a != 0.0 && eb < ea - 64.0 => return self,
+                _ => {}
+            }
+        }
+        unless_lost(&[self, o], self.add_inner(o))
+    }
+
+    fn add_inner(self, o: Wide) -> Wide {
         let (Wide::Val(a, ea), Wide::Val(b, eb)) = (self, o) else {
             return other(self, o);
         };
@@ -237,11 +278,15 @@ impl Wide {
             // Exactly 0, even beside a magnitude beyond the range.
             return Wide::Val(a * b, 0.0);
         }
-        Wide::norm(a * b, ea + eb)
+        unless_lost(&[self, o], Wide::norm(a * b, ea + eb))
     }
 
     /// Division, undefined by an exact 0 (as `functions::div`).
     pub(crate) fn div(self, o: Wide) -> Wide {
+        unless_lost(&[self, o], self.div_inner(o))
+    }
+
+    fn div_inner(self, o: Wide) -> Wide {
         match (self, o) {
             (_, Wide::Val(b, _)) if b == 0.0 => Wide::Undef,
             (Wide::Val(a, ea), Wide::Val(b, eb)) => {
@@ -276,9 +321,9 @@ impl Wide {
             return Wide::new(v.exp());
         }
         let n = (v / LN_2).round();
-        if n.abs() > TWO52 {
-            // The reduction below is no longer exact (or v is beyond a
-            // double, and so is n): only the size is kept.
+        if !(n.abs() < TWO53) {
+            // Beyond 2⁵³ binades (or v beyond a double, and so n): only the
+            // size is kept, a lost value.
             return Wide::Val(1.0, n);
         }
         let r = (-n).mul_add(LN_2, v);
@@ -288,14 +333,21 @@ impl Wide {
 
     /// ln, undefined at 0 (as `functions::ln`) and for negative numbers.
     pub(crate) fn ln(self) -> Wide {
-        match self {
-            Wide::Val(m, e) if m > 0.0 => Wide::new(ln_abs(m, e)),
-            Wide::Val(..) => Wide::Undef,
-            w => w,
-        }
+        unless_lost(
+            &[self],
+            match self {
+                Wide::Val(m, e) if m > 0.0 => Wide::new(ln_abs(m, e)),
+                Wide::Val(..) => Wide::Undef,
+                w => w,
+            },
+        )
     }
 
     pub(crate) fn log10(self) -> Wide {
+        unless_lost(&[self], self.log10_inner())
+    }
+
+    fn log10_inner(self) -> Wide {
         match self {
             Wide::Val(m, e) if m > 0.0 => Wide::new(if e.abs() <= NORMAL {
                 ldexp(m, e).log10()
@@ -308,6 +360,10 @@ impl Wide {
     }
 
     pub(crate) fn sqrt(self) -> Wide {
+        unless_lost(&[self], self.sqrt_inner())
+    }
+
+    fn sqrt_inner(self) -> Wide {
         match self {
             Wide::Val(m, _) if m < 0.0 => Wide::Undef,
             Wide::Val(m, e) => {
@@ -326,12 +382,16 @@ impl Wide {
     }
 
     pub(crate) fn cbrt(self) -> Wide {
+        unless_lost(&[self], self.cbrt_inner())
+    }
+
+    fn cbrt_inner(self) -> Wide {
         match self {
             Wide::Val(m, e) => {
                 if m == 0.0 || e.abs() <= NORMAL {
                     return Wide::new(ldexp(m, e).cbrt());
                 }
-                if e.abs() < TWO52 {
+                if e.abs() <= TWO53 {
                     let r = e.rem_euclid(3.0);
                     Wide::norm((m * f64::from(1 << r as i32)).cbrt(), (e - r) / 3.0)
                 } else {
@@ -459,8 +519,22 @@ pub(crate) fn apply1(f: Fn1, w: Wide) -> Wide {
     let huge = e > NORMAL;
     let v = ldexp(m, e);
     let k = |u: crate::TrigUnit| Wide::new(u.to_radians_factor());
-    let ln2w = |s: f64| Wide::new(s * (LN_2 + ln_abs(m, e)));
-    let ln2_w = |s: f64| Wide::new(s * (LN_2 - ln_abs(m, e)));
+    // (Logarithmic in w: nothing to be known of a lost w.)
+    let lost = w.lost();
+    let ln2w = |s: f64| {
+        if lost {
+            Wide::Unknown
+        } else {
+            Wide::new(s * (LN_2 + ln_abs(m, e)))
+        }
+    };
+    let ln2_w = |s: f64| {
+        if lost {
+            Wide::Unknown
+        } else {
+            Wide::new(s * (LN_2 - ln_abs(m, e)))
+        }
+    };
     match f {
         Sin(u) | Tan(u) if tiny => w.mul(k(u)),
         Csc(u) | Cot(u) if tiny => Wide::ONE.div(w.mul(k(u))),
@@ -582,6 +656,9 @@ pub(crate) fn apply2(f: Fn2, a: Wide, b: Wide) -> Wide {
             }
             if am <= 0.0 || bm <= 0.0 || a == Wide::ONE {
                 return Wide::Undef;
+            }
+            if a.lost() || b.lost() {
+                return Wide::Unknown;
             }
             let (lx, lb) = (ln_dd(bm, be), ln_dd(am, ae));
             let r = if lx.hi.is_finite() && lb.hi.is_finite() {

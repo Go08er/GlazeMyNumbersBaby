@@ -54,10 +54,14 @@ fn values_beyond_a_double_are_values() {
     }
     // A batch gives the same values.
     let p = compile_str("exp(x)/exp(x)", TrigUnit::Radians).unwrap();
-    let xs = [-1e6, -800.0, 0.0, 800.0, 1e300];
+    let xs = [-1e6, -800.0, 0.0, 800.0, 1e15];
     let mut out = [0.0; 5];
     p.eval_batch(Input::Slice(&xs), Input::Scalar(0.0), &mut out);
     assert_eq!(out, [1.0; 5]);
+    // Beyond 2⁵³ binades (x past about 6.2·10¹⁵) e^x is only known to be
+    // beyond the doubles: a ratio of two such values is unknown (R11-M-02),
+    // not a 1 that two equally made-up mantissas happened to give.
+    assert!(at("exp(x)/exp(x)", 1e300).is_nan());
 }
 
 #[test]
