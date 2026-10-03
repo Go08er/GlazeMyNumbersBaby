@@ -141,7 +141,7 @@ impl Fn1 {
             Coth => fns::coth(x),
             Asinh => x.asinh(),
             Acosh => x.acosh(),
-            Atanh => x.atanh(),
+            Atanh => fns::atanh(x),
             Asech => fns::asech(x),
             Acsch => fns::acsch(x),
             Acoth => fns::acoth(x),
@@ -237,11 +237,7 @@ impl Op {
 
 #[inline(always)]
 fn powi(b: f64, n: i32) -> f64 {
-    match n {
-        2 => b * b,
-        3 => b * b * b,
-        _ => b.powi(n),
-    }
+    fns::pow_int(b, n)
 }
 
 /// A compiled expression of `x` and `y`.
@@ -397,7 +393,7 @@ impl Program {
                 }
                 Op::Pow => {
                     sp -= 1;
-                    stack[sp - 1] = stack[sp - 1].powf(stack[sp]);
+                    stack[sp - 1] = fns::pow(stack[sp - 1], stack[sp]);
                 }
                 Op::PowI(n) => stack[sp - 1] = powi(stack[sp - 1], n),
                 Op::PowRat(p, q) => stack[sp - 1] = fns::pow_rational(stack[sp - 1], p, q),
@@ -480,7 +476,7 @@ impl Program {
                         Op::Sub => a.iter_mut().zip(b).for_each(|(a, b)| *a -= b),
                         Op::Mul => a.iter_mut().zip(b).for_each(|(a, b)| *a *= b),
                         Op::Div => a.iter_mut().zip(b).for_each(|(a, b)| *a = fns::div(*a, *b)),
-                        Op::Pow => a.iter_mut().zip(b).for_each(|(a, b)| *a = a.powf(*b)),
+                        Op::Pow => a.iter_mut().zip(b).for_each(|(a, b)| *a = fns::pow(*a, *b)),
                         Op::F2(f) => a.iter_mut().zip(b).for_each(|(a, b)| *a = f.apply(*a, *b)),
                         _ => unreachable!(),
                     }
@@ -653,10 +649,14 @@ fn lower(e: &Expr, opts: &CompileOptions<'_>) -> Result<Piece, EquationError> {
             if *op == BinOp::Pow
                 && let Some((p, q)) = syntactic_rational(b)
             {
+                // A literal 0 to a negative power is a division by zero.
+                if p < 0 && matches!(la, Piece::Const(v, false) if v == 0.0) {
+                    return Err(EquationError::eval(EvaluationErrorCode::DivideByZero, 0..0));
+                }
                 return Ok(match la {
                     Piece::Const(v, var) => Piece::Const(
                         if q == 1 {
-                            v.powi(p)
+                            fns::pow_int(v, p)
                         } else {
                             fns::pow_rational(v, p, q)
                         },
@@ -679,6 +679,9 @@ fn lower(e: &Expr, opts: &CompileOptions<'_>) -> Result<Piece, EquationError> {
             match (la, lb) {
                 (Piece::Const(x, va), Piece::Const(y, vb)) => {
                     if *op == BinOp::Div && y == 0.0 && !vb {
+                        return Err(EquationError::eval(EvaluationErrorCode::DivideByZero, 0..0));
+                    }
+                    if *op == BinOp::Pow && x == 0.0 && y < 0.0 && !va && !vb {
                         return Err(EquationError::eval(EvaluationErrorCode::DivideByZero, 0..0));
                     }
                     Piece::Const(apply_bin(*op, x, y), va || vb)
@@ -746,7 +749,7 @@ fn apply_bin(op: BinOp, a: f64, b: f64) -> f64 {
         BinOp::Sub => a - b,
         BinOp::Mul => a * b,
         BinOp::Div => fns::div(a, b),
-        BinOp::Pow => a.powf(b),
+        BinOp::Pow => fns::pow(a, b),
     }
 }
 

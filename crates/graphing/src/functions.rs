@@ -107,11 +107,7 @@ pub fn tan_u(x: f64, unit: TrigUnit) -> f64 {
         x.tan()
     } else {
         let (s, c) = sin_cos(x, unit);
-        if c == 0.0 {
-            f64::INFINITY.copysign(s)
-        } else {
-            s / c
-        }
+        div(s, c)
     }
 }
 
@@ -134,6 +130,37 @@ pub fn ln(x: f64) -> f64 {
 #[inline]
 pub fn log10(x: f64) -> f64 {
     if x == 0.0 { f64::NAN } else { x.log10() }
+}
+
+/// b^e, where 0 to a negative power is undefined (NaN, not ∞) and an
+/// undefined operand stays undefined: IEEE makes 1^NaN and NaN^0 equal 1,
+/// which would turn 1^(1/0) or (1/0)^0 into a defined value.
+#[inline]
+pub fn pow(b: f64, e: f64) -> f64 {
+    if b.is_nan() || e.is_nan() || (b == 0.0 && e < 0.0) {
+        f64::NAN
+    } else {
+        b.powf(e)
+    }
+}
+
+/// [`pow`] for an integer exponent.
+#[inline]
+pub fn pow_int(b: f64, n: i32) -> f64 {
+    if b.is_nan() || (b == 0.0 && n < 0) {
+        return f64::NAN;
+    }
+    match n {
+        2 => b * b,
+        3 => b * b * b,
+        _ => b.powi(n),
+    }
+}
+
+/// atanh, undefined (NaN rather than ±∞) at its poles ±1.
+#[inline]
+pub fn atanh(x: f64) -> f64 {
+    if x.abs() == 1.0 { f64::NAN } else { x.atanh() }
 }
 
 #[inline]
@@ -212,23 +239,24 @@ pub fn coth(x: f64) -> f64 {
 
 #[inline]
 pub fn asech(x: f64) -> f64 {
-    (1.0 / x).acosh()
+    div(1.0, x).acosh()
 }
 
 #[inline]
 pub fn acsch(x: f64) -> f64 {
-    (1.0 / x).asinh()
+    div(1.0, x).asinh()
 }
 
 #[inline]
 pub fn acoth(x: f64) -> f64 {
-    (1.0 / x).atanh()
+    atanh(div(1.0, x))
 }
 
 /// `root(x, n)`: real n-th root. Odd integer n accepts negative x.
 #[inline]
 pub fn root(x: f64, n: f64) -> f64 {
-    if n == 0.0 || !n.is_finite() {
+    // A negative degree at 0 is 1/0: undefined.
+    if n == 0.0 || !n.is_finite() || x.is_nan() || (x == 0.0 && n < 0.0) {
         return f64::NAN;
     }
     if is_odd_integer(n) {
@@ -466,6 +494,9 @@ pub fn npr(n: f64, r: f64) -> f64 {
 /// odd (e.g. `(-8)^(1/3) = -2`, `(-8)^(2/3) = 4`).
 #[inline]
 pub fn pow_rational(b: f64, p: i32, q: i32) -> f64 {
+    if b.is_nan() || (b == 0.0 && p < 0) {
+        return f64::NAN;
+    }
     if b >= 0.0 || q % 2 == 0 {
         if q == 2 && p == 1 {
             return b.sqrt();
@@ -493,7 +524,8 @@ mod tests {
         assert_eq!(sin_u(180.0, TrigUnit::Degrees), 0.0);
         assert_eq!(cos_u(90.0, TrigUnit::Degrees), 0.0);
         assert!(close(sin_u(30.0, TrigUnit::Degrees), 0.5));
-        assert!(tan_u(90.0, TrigUnit::Degrees).is_infinite());
+        // A pole: undefined, not ±∞ (see `div`).
+        assert!(tan_u(90.0, TrigUnit::Degrees).is_nan());
         assert_eq!(sin_u(100.0, TrigUnit::Grads), 1.0);
         assert!(close(asin_u(0.5, TrigUnit::Degrees), 30.0));
         assert!(close(acos_u(0.0, TrigUnit::Grads), 100.0));
