@@ -85,6 +85,10 @@ struct Fun<'a> {
     /// constant plus terms that vanish there (x^−0.0001 + 10⁻⁹ tends to
     /// 10⁻⁹, a value no sampling of so slow a tail can pin down).
     tails: [Option<f64>; 2],
+    /// Bases of powers whose exponent varies with x (x^x, (−2)^x): where
+    /// one is negative, the power is undefined except where the exponent
+    /// is an integer, isolated points no sampling finds.
+    power_bases: Vec<Program>,
     /// Instructions executed so far.
     work: Cell<u64>,
     budget: u64,
@@ -411,8 +415,14 @@ fn map_affine(kg: KeyGraphFeatures, fun: &Fun, a: f64, b: f64) -> KeyGraphFeatur
                 .chain(&dd.vertical_asymptotes)
                 .any(|f| f.contains(x, 1e-12))
     };
+    // With the domain unknown (isolated points of (x − 1)^(x − 1)), a value
+    // at 0 is still a point of the graph.
     let y0 = fun.f(0.0);
-    if y0.is_finite() && in_domain(0.0) && k.too_complex_features & flags::Y_INTERCEPT == 0 {
+    let domain_known = k.too_complex_features & flags::DOMAIN == 0;
+    if y0.is_finite()
+        && (in_domain(0.0) || !domain_known)
+        && k.too_complex_features & flags::Y_INTERCEPT == 0
+    {
         k.data.y_intercept = Some(clean(y0, value_noise(fun, 0.0, y0)));
     }
     // Parity: f's own, tested also around the root of the form and at
@@ -579,6 +589,16 @@ fn make_fun<'a>(
         )
     });
     let tails = [-1.0, 1.0].map(|side| exact_tail(expr, opts, side));
+    let mut power_bases = Vec::new();
+    expr.visit(&mut |e| {
+        if let Expr::Bin(BinOp::Pow, b, g) = e
+            && g.contains_x()
+            && let Ok(p) = Program::compile(b, opts)
+            && p.as_constant().is_none_or(|c| c < 0.0)
+        {
+            power_bases.push(p);
+        }
+    });
     Ok(Fun {
         f,
         df,
@@ -586,6 +606,7 @@ fn make_fun<'a>(
         piecewise,
         kinks: kink_programs(expr, opts),
         tails,
+        power_bases,
         work: Cell::new(0),
         budget,
         cancel,
@@ -2552,6 +2573,9 @@ struct PieceFeatures {
     range_noise: (f64, f64),
     /// An end of the range can't be determined (see `piece_features`).
     range_unsure: bool,
+    /// Values at closed ends that f jumps to from inside (0^x is 0 for
+    /// x > 0 but 1 at 0): points of the range apart from `range`.
+    range_points: Vec<f64>,
 }
 
 /// Whether `v` never turns: all steps of one sign (or zero).
@@ -3103,6 +3127,7 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
 
     // Range of the piece.
     let mut acc = RangeAcc::new();
+    let mut isolated_ends: Vec<f64> = Vec::new();
     for &(x, v) in out.minima.iter().chain(out.maxima.iter()) {
         acc.consider(v, Src::At(x));
     }
@@ -3162,7 +3187,24 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
             } else {
                 f64::NAN
             };
-            if v.is_finite() {
+            // f jumps at a closed end (0^x at 0): that value is a point of
+            // the range of its own; the piece's values approach the limit.
+            let width = p.hi.value - p.lo.value;
+            let jump = (v.is_finite() && end.closed && !wrap_periodic && width > 0.0)
+                .then(|| one_sided_limit_err(&mut f, end.value, side, width))
+                .and_then(|(l, err, _)| match l {
+                    SeqLimit::Converges(l)
+                        if (l - v).abs() > 1e-6 * v.abs().max(l.abs()).max(scale) + 16.0 * err =>
+                    {
+                        Some((l, err))
+                    }
+                    _ => None,
+                });
+            if let Some((l, err)) = jump {
+                out.range_points.push(v);
+                isolated_ends.push(end.value);
+                acc.consider(l, Src::Limit(err));
+            } else if v.is_finite() {
                 acc.consider(v, Src::At(end.value));
             } else {
                 match one_sided_limit_err(&mut f, end.value, side, p.hi.value - p.lo.value) {
@@ -3185,6 +3227,10 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
     }
     // Samples catch anything the candidates missed (strictly beyond only).
     let tol = 1e-9 * scale;
+    let samples: Vec<(f64, f64)> = samples
+        .into_iter()
+        .filter(|q| !isolated_ends.contains(&q.0))
+        .collect();
     for &(x, v) in &samples {
         if v.is_finite() && (v < acc.lo.value - tol || v > acc.hi.value + tol) && x.abs() < 1e4 {
             acc.consider(v, Src::At(x));
@@ -3195,16 +3241,20 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
     // one constant throughout ((1/x)⁰, 1^(1/x)): an analytic one that
     // underflows onto its limit (e^(x − 1000) − 2) never attains it. Only moderate x count: far out, rounding makes
     // max(1 − e^(−x), 0) equal its limit 1.
+    let all_same = samples.iter().all(|q| q.1 == samples[0].1);
     let flat_capable = fun.piecewise
         || fun
             .df
             .as_ref()
             .is_some_and(|p| p.as_constant() == Some(0.0))
-        || samples.iter().all(|q| q.1 == samples[0].1);
+        || all_same;
     for &(x, v) in samples.iter().filter(|_| flat_capable) {
         // Constant stretches have f′ exactly 0 (tanh(20) rounds to 1 but
-        // its derivative does not vanish).
-        if x.abs() > 20.0 || fun.df(x) != 0.0 {
+        // its derivative does not vanish), or one undefined by its form
+        // when f is the same throughout (0^(−x) = 0 for x < 0, but its
+        // f′ involves ln 0).
+        let d = fun.df(x);
+        if x.abs() > 20.0 || !(d == 0.0 || (d.is_nan() && all_same)) {
             continue;
         }
         let genuine = v != 0.0 || out.zero_interval;
@@ -3640,6 +3690,9 @@ fn analyze_aperiodic(
     if sc.too_complex {
         too |= flags::RANGE | flags::MONOTONE_INTERVALS;
     }
+    if isolated_powers(fun, &xs) {
+        too |= flags::DOMAIN | flags::RANGE | flags::ZEROS;
+    }
     if sc.overflow {
         too |= flags::ZEROS
             | flags::MINIMA
@@ -3699,6 +3752,13 @@ fn analyze_aperiodic(
         infl.extend(pf.inflections);
         if let Some(r) = pf.range {
             ranges.push((r, pf.range_noise));
+        }
+        for &v in &pf.range_points {
+            let at = Bound {
+                value: v,
+                closed: true,
+            };
+            ranges.push((Interval { lo: at, hi: at }, (0.0, 0.0)));
         }
         // Merge monotone runs across points where f stays continuous.
         for (j, (iv, dir)) in pf.monotone.into_iter().enumerate() {
@@ -3895,6 +3955,22 @@ fn families(mut reps: Vec<f64>, p: f64) -> Vec<Family> {
 
 /// Zeros as a list, each with the digits that tell it apart from the
 /// other zeros and from `others` (poles, excluded points).
+/// Whether f is undefined somewhere a power with a varying exponent has a
+/// negative base: x^x is defined at x = −1, −2, … (and wherever x is a
+/// fraction with an odd denominator) between the samples, so its domain,
+/// range and zeros aren't what the samples show.
+fn isolated_powers(fun: &Fun, xs: &[f64]) -> bool {
+    if fun.power_bases.is_empty() {
+        return false;
+    }
+    let fs = fun.batch(0, xs);
+    let mut bs = vec![0.0; xs.len()];
+    fun.power_bases.iter().any(|b| {
+        fun.eval_batch(b, xs, &mut bs);
+        bs.iter().zip(&fs).any(|(b, f)| *b < 0.0 && f.is_nan())
+    })
+}
+
 fn fmt_zero_families(zeros: &[Family], others: &[Family]) -> String {
     let near: Vec<f64> = zeros.iter().chain(others).map(|f| f.x).collect();
     zeros
@@ -3987,6 +4063,9 @@ fn analyze_periodic(
     if sc.too_complex || sa.too_complex {
         too |= flags::DOMAIN | flags::RANGE;
     }
+    if isolated_powers(fun, &xs) {
+        too |= flags::DOMAIN | flags::RANGE | flags::ZEROS;
+    }
     if sc.overflow {
         too |= flags::ZEROS
             | flags::MINIMA
@@ -4040,6 +4119,13 @@ fn analyze_periodic(
         }
         if let Some(r) = pf.range {
             ranges.push((r, pf.range_noise));
+        }
+        for &v in &pf.range_points {
+            let at = Bound {
+                value: v,
+                closed: true,
+            };
+            ranges.push((Interval { lo: at, hi: at }, (0.0, 0.0)));
         }
         for (iv, dir) in pf.monotone {
             if let Some(last) = mono.last_mut()
