@@ -121,6 +121,8 @@ pub struct Node {
     pub scrollable: bool,
     /// Text fields: the selection as (anchor, caret), in characters.
     pub text_selection: Option<(usize, usize)>,
+    /// Sliders: [value, min, max, step].
+    pub numeric: Option<[f64; 4]>,
 }
 
 #[derive(Default)]
@@ -283,6 +285,7 @@ impl<'a, 'p> Frame<'a, 'p> {
             focusable: false,
             scrollable: false,
             text_selection: None,
+            numeric: None,
         });
         nodes.last_mut()
     }
@@ -668,7 +671,8 @@ impl<'a, 'p> Frame<'a, 'p> {
     }
 
     /// A horizontal slider; dragging is handled by the app via its id.
-    pub fn slider(&mut self, id: Id, r: Rect, frac: f32, name: &str, value: &str) {
+    /// `range` is [value, min, max, step] for assistive technology.
+    pub fn slider(&mut self, id: Id, r: Rect, frac: f32, name: &str, value: &str, range: [f64; 4]) {
         let t = self.t;
         let frac = frac.clamp(0.0, 1.0);
         let track = Rect::new(r.x + 8.0, r.cy() - 2.0, r.w - 16.0, 4.0);
@@ -689,6 +693,7 @@ impl<'a, 'p> Frame<'a, 'p> {
         self.hit(id, r, Sense::Drag, None, true);
         if let Some(n) = self.node(id, Role::Slider, name, r) {
             n.value = Some(value.to_string());
+            n.numeric = Some(range);
             n.focusable = true;
         }
     }

@@ -617,7 +617,10 @@ mod tests {
             .filter(|(r, ..)| *r == accesskit::Role::Label)
             .map(|(_, n, _)| n)
             .collect();
-        assert!(labels.iter().any(|l| l.contains("United States Dollar")), "{labels:?}");
+        assert!(
+            labels.iter().any(|l| l.contains("United States Dollar")),
+            "{labels:?}"
+        );
         assert!(
             labels.iter().any(|l| l.starts_with("Updated")),
             "{labels:?}"

@@ -132,6 +132,28 @@ fn var_slider(name: &str) -> ui::Id {
     id(("var-slider", name))
 }
 
+/// How a variable slider moves.
+#[derive(Clone, Copy, Debug)]
+pub enum Adjust {
+    /// To this fraction of its range (pointer).
+    Fraction(f64),
+    /// By this many steps (keyboard, AT increment/decrement).
+    Steps(f64),
+    Min,
+    Max,
+    /// To this value (AT set value).
+    To(f64),
+}
+
+/// A variable's keyboard step: its own step, or a hundredth of its range.
+fn var_step(v: &graphing::variable::Variable) -> f64 {
+    if v.step() > 0.0 {
+        v.step()
+    } else {
+        ((v.max() - v.min()) / 100.0).max(f64::MIN_POSITIVE)
+    }
+}
+
 fn canvas_id() -> ui::Id {
     id("graph-canvas")
 }
@@ -488,7 +510,40 @@ impl GraphPage {
         }
     }
 
-    pub fn key(&mut self, kp: &KeyPress, _cx: &mut Cx) -> bool {
+    pub fn key(&mut self, kp: &KeyPress, cx: &mut Cx) -> bool {
+        use appcore::{Key, Named};
+        if let (Key::Named(n), false, false) = (kp.key, kp.ctrl, kp.alt) {
+            let focus = *cx.focus;
+            if focus == Some(canvas_id()) {
+                let d = if kp.shift { 1.0 } else { 5.0 };
+                let moved = match n {
+                    Named::Left => self.trace_key(-d, 0.0),
+                    Named::Right => self.trace_key(d, 0.0),
+                    Named::Up => self.trace_key(0.0, -d),
+                    Named::Down => self.trace_key(0.0, d),
+                    _ => false,
+                };
+                if moved {
+                    return true;
+                }
+            }
+            if let Some(f) = focus {
+                let change = match n {
+                    Named::Left | Named::Down => Some(Adjust::Steps(-1.0)),
+                    Named::Right | Named::Up => Some(Adjust::Steps(1.0)),
+                    Named::PageDown => Some(Adjust::Steps(-10.0)),
+                    Named::PageUp => Some(Adjust::Steps(10.0)),
+                    Named::Home => Some(Adjust::Min),
+                    Named::End => Some(Adjust::Max),
+                    _ => None,
+                };
+                if let Some(change) = change
+                    && self.adjust_slider(f, change)
+                {
+                    return true;
+                }
+            }
+        }
         match input::graph_shortcut(kp) {
             Some(GraphAction::ZoomIn) => self.zoom(|vp| vp.zoom_in()),
             Some(GraphAction::ZoomOut) => self.zoom(|vp| vp.zoom_out()),
@@ -532,24 +587,67 @@ impl GraphPage {
         if !active {
             return;
         }
-        let name = self.vars.keys().find(|k| var_slider(k) == hid).cloned();
-        if let Some(name) = name
-            && let Some(v) = self.graph.variable(&name).copied()
-        {
-            let track = rect.inset_xy(8.0, 0.0);
-            let frac = ((x - track.x) / track.w.max(1.0)).clamp(0.0, 1.0) as f64;
-            let mut value = v.min() + frac * (v.max() - v.min());
-            let step = v.step();
-            if step > 0.0 {
-                value = (value / step).round() * step;
-            }
-            self.graph.set_variable(&name, value);
-            if let Some(e) = self.vars.get_mut(&name) {
-                e.set_text(&format_value(value));
-            }
-            self.dirty = true;
-            self.analysis_inputs_changed();
+        let track = rect.inset_xy(8.0, 0.0);
+        let frac = ((x - track.x) / track.w.max(1.0)).clamp(0.0, 1.0) as f64;
+        self.adjust_slider(hid, Adjust::Fraction(frac));
+    }
+
+    /// Move a variable's slider (`hid`), by pointer, keyboard or assistive
+    /// technology. False if `hid` isn't a variable slider.
+    pub fn adjust_slider(&mut self, hid: ui::Id, change: Adjust) -> bool {
+        let Some(name) = self.vars.keys().find(|k| var_slider(k) == hid).cloned() else {
+            return false;
+        };
+        let Some(v) = self.graph.variable(&name).copied() else {
+            return false;
+        };
+        let step = var_step(&v);
+        let mut value = match change {
+            Adjust::Fraction(f) => v.min() + f * (v.max() - v.min()),
+            Adjust::Steps(n) => v.value() + n * step,
+            Adjust::Min => v.min(),
+            Adjust::Max => v.max(),
+            Adjust::To(x) => x,
+        };
+        if !value.is_finite() {
+            return true;
         }
+        value = value.clamp(v.min(), v.max());
+        if v.step() > 0.0 {
+            value = (value / v.step()).round() * v.step();
+        }
+        self.graph.set_variable(&name, value);
+        if let Some(e) = self.vars.get_mut(&name) {
+            e.set_text(&format_value(value));
+        }
+        self.dirty = true;
+        self.analysis_inputs_changed();
+        true
+    }
+
+    /// Keyboard tracing, as the original's Grapher does: with the graph
+    /// focused, the arrows move the trace point (5 px, or 1 px with Shift),
+    /// following the curve it lands on.
+    fn trace_key(&mut self, dx: f32, dy: f32) -> bool {
+        let c = self.canvas;
+        if c.w <= 1.0 || c.h <= 1.0 {
+            return false;
+        }
+        self.trace_on = true;
+        let (x, y) = self
+            .pointer
+            .filter(|&(x, y)| c.contains(x, y))
+            .unwrap_or((c.cx(), c.cy()));
+        let (x, y) = (
+            (x + dx).clamp(c.x, c.right() - 1.0),
+            (y + dy).clamp(c.y, c.bottom() - 1.0),
+        );
+        self.pointer = Some((x, y));
+        self.update_trace();
+        if let Some((_, t)) = &self.trace {
+            self.pointer = Some((c.x + t.screen_x as f32, c.y + t.screen_y as f32));
+        }
+        true
     }
 
     pub fn wheel(&mut self, x: f32, y: f32, dy: f32, hits: &[Hit]) -> bool {
@@ -948,6 +1046,7 @@ impl GraphPage {
                     frac,
                     &format!("Variable {name}"),
                     &format_value(v.value()),
+                    [v.value(), v.min(), v.max(), var_step(&v)],
                 );
                 if let Some(e) = self.vars.get(&name) {
                     f.text_field(
@@ -1530,6 +1629,65 @@ fn format_value(v: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pre-review: a variable's slider works from the keyboard (and says
+    /// its number), and arrows on the focused graph trace it.
+    #[test]
+    fn sliders_and_tracing_work_from_the_keyboard() {
+        use appcore::Named;
+        let mut g = GraphPage::for_test(session::from_list("y=a*x"));
+        let mut pm = tiny_skia::Pixmap::new(760, 700).unwrap();
+        let (mut text, mut icons, input) = (
+            crate::text::Text::new(),
+            ui::Icons::default(),
+            ui::Input::default(),
+        );
+        let mut scrolls = std::collections::HashMap::new();
+        let mut f = Frame::new(
+            crate::gfx::Canvas::new(pm.as_mut(), 1.0, false),
+            &mut text,
+            &mut icons,
+            crate::theme::Theme::new(false, None),
+            &input,
+            &mut scrolls,
+            true,
+        );
+        g.view(&mut f, Rect::new(0.0, 46.0, 760.0, 654.0));
+        let node = f
+            .nodes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|n| n.id == var_slider("a"))
+            .expect("slider drawn")
+            .clone();
+        drop(f);
+        let v = *g.graph.variable("a").unwrap();
+        assert_eq!(
+            node.numeric,
+            Some([v.value(), v.min(), v.max(), var_step(&v)])
+        );
+
+        let (mut toasts, mut focus) = (Vec::new(), Some(var_slider("a")));
+        let mut cx = Cx {
+            toasts: &mut toasts,
+            clipboard: None,
+            wide: true,
+            focus: &mut focus,
+        };
+        let value = |g: &GraphPage| g.graph.variable("a").unwrap().value();
+        assert!(g.key(&KeyPress::named(Named::Right), &mut cx));
+        assert!(value(&g) > v.value());
+        assert!(g.key(&KeyPress::named(Named::End), &mut cx));
+        assert_eq!(value(&g), v.max());
+        assert!(g.key(&KeyPress::named(Named::Home), &mut cx));
+        assert_eq!(value(&g), v.min());
+
+        *cx.focus = Some(canvas_id());
+        assert!(!g.trace_on);
+        assert!(g.key(&KeyPress::named(Named::Right), &mut cx));
+        assert!(g.trace_on && g.pointer.is_some());
+    }
 
     /// R4-M-04: function analysis results (labels only, nothing focusable)
     /// are a keyboard scroll target once they overflow their panel.

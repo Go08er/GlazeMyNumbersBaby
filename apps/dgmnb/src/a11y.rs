@@ -104,6 +104,17 @@ pub fn tree(nodes: &[Node], title: &str, focus: Option<Id>, scale: f64) -> TreeU
             }
             _ => {}
         }
+        if let Some([value, min, max, step]) = n.numeric {
+            // The Value interface reads these (a string value isn't enough).
+            node.set_numeric_value(value);
+            node.set_min_numeric_value(min);
+            node.set_max_numeric_value(max);
+            node.set_numeric_value_step(step);
+            node.set_numeric_value_jump(step * 10.0);
+            node.add_action(Action::Increment);
+            node.add_action(Action::Decrement);
+            node.add_action(Action::SetValue);
+        }
         if let Some(t) = n.toggled {
             node.set_toggled(if t { Toggled::True } else { Toggled::False });
         }

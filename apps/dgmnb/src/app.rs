@@ -1276,6 +1276,25 @@ impl App {
             }
             _ => {}
         }
+        // A focused slider or graph canvas takes the arrow, page and
+        // Home/End keys (trace, step) before anything scrolls.
+        if self.mode.page() == PageKind::Graphing
+            && let Key::Named(_) = kp.key
+            && let Some(f) = self.input.focus
+            && self
+                .hits
+                .iter()
+                .any(|h| h.id == f && h.sense == Sense::Drag)
+        {
+            let handled = {
+                let (mut cx, _, _, _, graph) = self.cx_parts();
+                graph.as_mut().is_some_and(|g| g.key(&kp, &mut cx))
+            };
+            if handled {
+                self.redraw();
+                return;
+            }
+        }
         if let Key::Named(n @ (Named::PageUp | Named::PageDown)) = kp.key
             && !kp.ctrl
             && !kp.alt
@@ -1421,6 +1440,25 @@ impl App {
         }
     }
 
+    /// An assistive-technology request on a graph variable's slider. False
+    /// if `target` isn't one (or the request doesn't apply).
+    fn adjust_slider(
+        &mut self,
+        target: ui::Id,
+        action: accesskit::Action,
+        data: &Option<accesskit::ActionData>,
+    ) -> bool {
+        let change = match (action, data) {
+            (accesskit::Action::Increment, _) => graph::Adjust::Steps(1.0),
+            (accesskit::Action::Decrement, _) => graph::Adjust::Steps(-1.0),
+            (_, Some(accesskit::ActionData::NumericValue(v))) => graph::Adjust::To(*v),
+            _ => return false,
+        };
+        self.graph
+            .as_mut()
+            .is_some_and(|g| g.adjust_slider(target, change))
+    }
+
     fn a11y_action(&mut self, el: &ActiveEventLoop, req: accesskit::ActionRequest) {
         let target = req.target_node.0;
         match req.action {
@@ -1465,6 +1503,11 @@ impl App {
                     self.sync_ime();
                 }
             }
+            // Sliders (graph variables) first; SetValue may also be a text field's.
+            accesskit::Action::Increment
+            | accesskit::Action::Decrement
+            | accesskit::Action::SetValue
+                if self.adjust_slider(target, req.action, &req.data) => {}
             accesskit::Action::ReplaceSelectedText | accesskit::Action::SetValue => {
                 if let Some(accesskit::ActionData::Value(text)) = &req.data
                     && let Some(e) = self.field(target)
