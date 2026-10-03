@@ -115,24 +115,41 @@ pub fn tan_u(x: f64, unit: TrigUnit) -> f64 {
     }
 }
 
+/// Division where dividing by exactly zero is undefined (NaN) rather than
+/// ±∞. An infinite intermediate would otherwise carry on as if the
+/// expression were defined there: atan(1/0) = π/2, e^(−1/0²) = 0.
+/// (Overflow of a finite value still gives ±∞: 1/(1+e^1000) is 0.)
+#[inline]
+pub fn div(a: f64, b: f64) -> f64 {
+    if b == 0.0 { f64::NAN } else { a / b }
+}
+
+/// ln, with ln 0 undefined (NaN) rather than −∞, for the same reason:
+/// 1/ln(0) would otherwise be a finite −0.
+#[inline]
+pub fn ln(x: f64) -> f64 {
+    if x == 0.0 { f64::NAN } else { x.ln() }
+}
+
+#[inline]
+pub fn log10(x: f64) -> f64 {
+    if x == 0.0 { f64::NAN } else { x.log10() }
+}
+
 #[inline]
 pub fn cot_u(x: f64, unit: TrigUnit) -> f64 {
     let (s, c) = sin_cos(x, unit);
-    if s == 0.0 {
-        f64::INFINITY.copysign(c)
-    } else {
-        c / s
-    }
+    div(c, s)
 }
 
 #[inline]
 pub fn sec_u(x: f64, unit: TrigUnit) -> f64 {
-    1.0 / cos_u(x, unit)
+    div(1.0, cos_u(x, unit))
 }
 
 #[inline]
 pub fn csc_u(x: f64, unit: TrigUnit) -> f64 {
-    1.0 / sin_u(x, unit)
+    div(1.0, sin_u(x, unit))
 }
 
 #[inline]
@@ -184,13 +201,13 @@ pub fn sech(x: f64) -> f64 {
 
 #[inline]
 pub fn csch(x: f64) -> f64 {
-    1.0 / x.sinh()
+    div(1.0, x.sinh())
 }
 
 #[inline]
 pub fn coth(x: f64) -> f64 {
     // Not cosh/sinh: both overflow for |x| ≳ 710 and the ratio becomes NaN.
-    1.0 / x.tanh()
+    div(1.0, x.tanh())
 }
 
 #[inline]
@@ -233,7 +250,7 @@ pub fn root(x: f64, n: f64) -> f64 {
 /// Logarithm of `x` in base `b` (`log(b, x)`).
 #[inline]
 pub fn log_base(b: f64, x: f64) -> f64 {
-    if b <= 0.0 || b == 1.0 {
+    if b <= 0.0 || b == 1.0 || x == 0.0 {
         return f64::NAN;
     }
     if b == 10.0 {

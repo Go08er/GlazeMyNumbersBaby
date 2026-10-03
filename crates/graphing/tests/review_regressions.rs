@@ -65,7 +65,8 @@ fn coth_large_arguments() {
     assert!((functions::coth(1000.0) - 1.0).abs() < 1e-12);
     assert!((functions::coth(-1000.0) + 1.0).abs() < 1e-12);
     assert!((functions::coth(1.0) - 1.0_f64.cosh() / 1.0_f64.sinh()).abs() < 1e-12);
-    assert!(functions::coth(0.0).is_infinite());
+    // Undefined at its pole (NaN), not ±∞: see `functions::div`.
+    assert!(functions::coth(0.0).is_nan());
 }
 
 /// M-07: huge even root degrees are even (no negative radicands).

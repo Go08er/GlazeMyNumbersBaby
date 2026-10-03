@@ -147,8 +147,8 @@ impl Fn1 {
             Acoth => fns::acoth(x),
             Sqrt => x.sqrt(),
             Cbrt => x.cbrt(),
-            Log10 => x.log10(),
-            Ln => x.ln(),
+            Log10 => fns::log10(x),
+            Ln => fns::ln(x),
             Exp => x.exp(),
             Abs => x.abs(),
             Floor => x.floor(),
@@ -393,7 +393,7 @@ impl Program {
                 }
                 Op::Div => {
                     sp -= 1;
-                    stack[sp - 1] /= stack[sp];
+                    stack[sp - 1] = fns::div(stack[sp - 1], stack[sp]);
                 }
                 Op::Pow => {
                     sp -= 1;
@@ -479,7 +479,7 @@ impl Program {
                         Op::Add => a.iter_mut().zip(b).for_each(|(a, b)| *a += b),
                         Op::Sub => a.iter_mut().zip(b).for_each(|(a, b)| *a -= b),
                         Op::Mul => a.iter_mut().zip(b).for_each(|(a, b)| *a *= b),
-                        Op::Div => a.iter_mut().zip(b).for_each(|(a, b)| *a /= b),
+                        Op::Div => a.iter_mut().zip(b).for_each(|(a, b)| *a = fns::div(*a, *b)),
                         Op::Pow => a.iter_mut().zip(b).for_each(|(a, b)| *a = a.powf(*b)),
                         Op::F2(f) => a.iter_mut().zip(b).for_each(|(a, b)| *a = f.apply(*a, *b)),
                         _ => unreachable!(),
@@ -500,7 +500,7 @@ impl Program {
                         Fn1::Exp => s.iter_mut().for_each(|a| *a = a.exp()),
                         Fn1::Sqrt => s.iter_mut().for_each(|a| *a = a.sqrt()),
                         Fn1::Abs => s.iter_mut().for_each(|a| *a = a.abs()),
-                        Fn1::Ln => s.iter_mut().for_each(|a| *a = a.ln()),
+                        Fn1::Ln => s.iter_mut().for_each(|a| *a = fns::ln(*a)),
                         _ => s.iter_mut().for_each(|a| *a = f.apply(*a)),
                     }
                 }
@@ -745,7 +745,7 @@ fn apply_bin(op: BinOp, a: f64, b: f64) -> f64 {
         BinOp::Add => a + b,
         BinOp::Sub => a - b,
         BinOp::Mul => a * b,
-        BinOp::Div => a / b,
+        BinOp::Div => fns::div(a, b),
         BinOp::Pow => a.powf(b),
     }
 }

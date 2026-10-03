@@ -193,3 +193,41 @@ fn ordinary_results_survive() {
     assert_eq!(r.range, "y ∈ ℝ \\ {2}");
     assert_eq!(r.too_complex_features, 0);
 }
+
+/// A point where an intermediate is undefined (division by exactly zero,
+/// the log of zero) is outside the domain even if an outer function would
+/// turn the resulting ±∞ into a finite value.
+#[test]
+fn undefined_intermediates_stay_undefined() {
+    use graphing::functions;
+    assert!(functions::div(1.0, 0.0).is_nan());
+    assert!(functions::ln(0.0).is_nan());
+    assert!(functions::log10(-0.0).is_nan());
+    assert!(functions::log_base(2.0, 0.0).is_nan());
+    // Overflow of a finite value still gives ∞: 1/(1 + e^1000) is 0.
+    assert_eq!(functions::div(1.0, 1.0 + 1000f64.exp()), 0.0);
+
+    for (expr, domain) in [
+        ("y=atan(1/x)", "x ∈ ℝ \\ {0}"),
+        ("y=e^(-1/x^2)", "x ∈ ℝ \\ {0}"),
+        ("y=e^(ln(x))", "x ∈ (0, ∞)"),
+        ("y=1/ln(x)", "x ∈ (0, 1) ∪ (1, ∞)"),
+    ] {
+        let mut g = graphing::Graph::new();
+        let id = g.add_equation(expr);
+        let k = g.analyze(id);
+        let items = k.items();
+        let shown = items
+            .iter()
+            .find(|i| i.title == graphing::strings::DOMAIN)
+            .map(|i| i.display_items.join(" "))
+            .unwrap_or_default();
+        assert_eq!(shown, domain, "{expr}");
+        let y = items
+            .iter()
+            .find(|i| i.title == graphing::strings::Y_INTERCEPT)
+            .map(|i| i.display_items.join(" "))
+            .unwrap_or_default();
+        assert_eq!(y, graphing::strings::KGF_Y_INTERCEPT_NONE, "{expr}");
+    }
+}
