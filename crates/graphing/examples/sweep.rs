@@ -1,6 +1,8 @@
 //! Adversarial invariant sweep over function analysis (not run in CI).
 //!
 //! `cargo run --release -p graphing --example sweep [-- FILTER] [--all] [--check-ref]`
+//! (`--check-ref` also checks the reference evaluator against the compiled
+//! program; `-- --at EXPR X [deg|grad]` shows one function at one point.)
 //!
 //! For a set of base functions it analyses shifted, offset, scaled and
 //! stretched variants (alone and combined), plus hand-written families
@@ -807,7 +809,15 @@ impl Xf {
             return R::V(Xf::of(t.exp()));
         }
         let k = (t / LN_2).floor();
-        if !k.is_finite() || k.abs() > 4e18 {
+        // (Below even this exponent range, e^t is still a positive number:
+        // smaller than anything it meets.)
+        if k < -4e18 {
+            return R::V(Xf {
+                m: 0.5,
+                e: -(1 << 61),
+            });
+        }
+        if !k.is_finite() || k > 4e18 {
             return R::Unknown;
         }
         R::V(Xf::norm((t - k * LN_2).exp(), k as i64))
@@ -4225,6 +4235,14 @@ fn check_reference(a: &Analysed, centres: &[f64], r: &mut Report) {
         match a.reference(x) {
             R::V(v) if v.f() == y => {}
             R::V(v) if (v.f() - y).abs() <= 4.0 * ulp(y) => {}
+            // (Where the plain doubles overflow, both evaluate through an
+            // extended exponent: e^t at t ≈ 700 is good to 10⁻¹³ there.)
+            R::V(v)
+                if !eb(&a.ast, x, a.unit).0.is_finite() && (v.f() - y).abs() <= 1e-12 * y.abs() => {
+            }
+            // (The reference abstaining is no disagreement: f falls back to
+            // the compiled value.)
+            R::Unknown => {}
             other => {
                 r.fail(
                     "reference-disagrees",
