@@ -208,6 +208,10 @@ pub(crate) enum Op {
     Sub,
     Mul,
     Div,
+    /// Division by something never exactly 0 where defined (e^g, 2^g, …):
+    /// a 0 there is underflow, so the quotient overflows to ±∞ instead of
+    /// being undefined (1/e^(1/x) just left of 0).
+    DivNz,
     Pow,
     /// Integer power (exact for negative bases).
     PowI(i32),
@@ -223,7 +227,7 @@ impl Op {
     fn cost(&self) -> usize {
         match self {
             Op::Const(_) | Op::X | Op::Y | Op::Add | Op::Sub | Op::Mul | Op::Neg => 1,
-            Op::Div | Op::PowI(_) => 2,
+            Op::Div | Op::DivNz | Op::PowI(_) => 2,
             Op::Pow | Op::PowRat(..) => 8,
             Op::F1(Fn1::Factorial | Fn1::DoubleFactorial) => 60,
             Op::F1(Fn1::Abs | Fn1::Floor | Fn1::Ceil | Fn1::Round | Fn1::Sign) => 1,
@@ -295,7 +299,9 @@ impl Program {
                     uses_y = true;
                     depth += 1
                 }
-                Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Pow | Op::F2(_) => depth -= 1,
+                Op::Add | Op::Sub | Op::Mul | Op::Div | Op::DivNz | Op::Pow | Op::F2(_) => {
+                    depth -= 1
+                }
                 Op::PowI(_) | Op::PowRat(..) | Op::Neg | Op::F1(_) => {}
             }
             max_stack = max_stack.max(depth);
@@ -391,6 +397,10 @@ impl Program {
                     sp -= 1;
                     stack[sp - 1] = fns::div(stack[sp - 1], stack[sp]);
                 }
+                Op::DivNz => {
+                    sp -= 1;
+                    stack[sp - 1] /= stack[sp];
+                }
                 Op::Pow => {
                     sp -= 1;
                     stack[sp - 1] = fns::pow(stack[sp - 1], stack[sp]);
@@ -466,7 +476,7 @@ impl Program {
                     load(&mut stack[sp], ys);
                     sp += 1;
                 }
-                Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Pow | Op::F2(_) => {
+                Op::Add | Op::Sub | Op::Mul | Op::Div | Op::DivNz | Op::Pow | Op::F2(_) => {
                     sp -= 1;
                     let (lo, hi) = stack.split_at_mut(sp);
                     let a = &mut lo[sp - 1][..len];
@@ -476,6 +486,7 @@ impl Program {
                         Op::Sub => a.iter_mut().zip(b).for_each(|(a, b)| *a -= b),
                         Op::Mul => a.iter_mut().zip(b).for_each(|(a, b)| *a *= b),
                         Op::Div => a.iter_mut().zip(b).for_each(|(a, b)| *a = fns::div(*a, *b)),
+                        Op::DivNz => a.iter_mut().zip(b).for_each(|(a, b)| *a /= b),
                         Op::Pow => a.iter_mut().zip(b).for_each(|(a, b)| *a = fns::pow(*a, *b)),
                         Op::F2(f) => a.iter_mut().zip(b).for_each(|(a, b)| *a = f.apply(*a, *b)),
                         _ => unreachable!(),
@@ -617,6 +628,19 @@ fn fn2_for(f: Func) -> Option<Fn2> {
     })
 }
 
+/// Never exactly 0 where defined, so a 0 it evaluates to is underflow
+/// (e^(1/x) just left of 0, (2e^x)² far left), not a zero.
+fn never_zero(e: &Expr) -> bool {
+    match e {
+        Expr::Num(v) => *v != 0.0,
+        Expr::Const(_) => true,
+        Expr::Neg(a) | Expr::Bin(BinOp::Div | BinOp::Pow, a, _) => never_zero(a),
+        Expr::Bin(BinOp::Mul, a, b) => never_zero(a) && never_zero(b),
+        Expr::Call(Func::Exp, _) => true,
+        _ => false,
+    }
+}
+
 fn lower(e: &Expr, opts: &CompileOptions<'_>) -> Result<Piece, EquationError> {
     Ok(match e {
         Expr::Num(v) => Piece::Const(*v, false),
@@ -644,6 +668,18 @@ fn lower(e: &Expr, opts: &CompileOptions<'_>) -> Result<Piece, EquationError> {
                 Piece::Code(c)
             }
         },
+        Expr::Bin(BinOp::Div, a, b)
+            if let Expr::Bin(BinOp::Pow, base, k) = &**b
+                && syntactic_rational(k).is_some_and(|(p, _)| p > 0)
+                && !never_zero(base) =>
+        {
+            // a/b^k as a·b^(−k): the same where b = 0 (undefined), but where
+            // b^k underflows (1/x^400 near 0) the power overflows to ∞
+            // instead of a division by an underflowed 0.
+            let neg = Expr::Neg(k.clone());
+            let r = Expr::Bin(BinOp::Pow, base.clone(), Box::new(neg));
+            lower(&Expr::Bin(BinOp::Mul, a.clone(), Box::new(r)), opts)?
+        }
         Expr::Bin(op, a, b) => {
             let la = lower(a, opts)?;
             if *op == BinOp::Pow
@@ -698,6 +734,7 @@ fn lower(e: &Expr, opts: &CompileOptions<'_>) -> Result<Piece, EquationError> {
                         BinOp::Add => Op::Add,
                         BinOp::Sub => Op::Sub,
                         BinOp::Mul => Op::Mul,
+                        BinOp::Div if never_zero(b) => Op::DivNz,
                         BinOp::Div => Op::Div,
                         BinOp::Pow => Op::Pow,
                     });

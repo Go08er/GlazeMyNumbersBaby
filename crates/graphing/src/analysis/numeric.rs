@@ -113,18 +113,19 @@ pub(crate) fn bisect_sign(
     0.5 * (a + b)
 }
 
-/// Bisects between a point where `f` is finite and one where it is not;
-/// returns the finite-side point closest to the transition.
-pub(crate) fn bisect_finite(f: &mut dyn FnMut(f64) -> f64, mut good: f64, mut bad: f64) -> f64 {
+/// Bisects between a point where `f` is defined and one where it is NaN;
+/// returns the defined-side point closest to the transition. ±∞ counts as
+/// defined: it is a value that overflowed.
+pub(crate) fn bisect_defined(f: &mut dyn FnMut(f64) -> f64, mut good: f64, mut bad: f64) -> f64 {
     for _ in 0..200 {
         let m = 0.5 * (good + bad);
         if m == good || m == bad {
             break;
         }
-        if f(m).is_finite() {
-            good = m;
-        } else {
+        if f(m).is_nan() {
             bad = m;
+        } else {
+            good = m;
         }
     }
     good
@@ -312,11 +313,13 @@ pub(crate) fn sequence_limit_noisy(v: &[f64], noise_in: &[f64]) -> (SeqLimit, f6
         // Aitken on the steps means something only if their second
         // difference stands out of their noise.
         let second = ((steps[k - 1] - steps[k - 2]) - (steps[k - 2] - steps[k - 3])).abs();
-        let resolved = second > 4.0 * (step_noise[k - 1] + 2.0 * step_noise[k - 2] + step_noise[k - 3]);
+        let resolved =
+            second > 4.0 * (step_noise[k - 1] + 2.0 * step_noise[k - 2] + step_noise[k - 3]);
         let settled = settles.is_finite()
             && (settles > 0.0) == (steps[0] > 0.0)
             && (settles - steps[k - 1]).abs() <= 1e-2 * steps[k - 1].abs()
-            && (resolved || (steps[k - 1] - steps[k - 2]).abs() <= step_noise[k - 1] + step_noise[k - 2]);
+            && (resolved
+                || (steps[k - 1] - steps[k - 2]).abs() <= step_noise[k - 1] + step_noise[k - 2]);
         // Steps measured shrinking, if only within their noise (x^−0.0001 +
         // 10⁶ shrinks by 0.023% per decade under rounding of 10⁶): neither
         // growth nor a limit can be told, so unknown, not ±∞.
@@ -449,8 +452,44 @@ pub(crate) fn diverges_within(
     match sequence_limit_noisy(&v, &noise).0 {
         SeqLimit::PosInf => Some(1.0),
         SeqLimit::NegInf => Some(-1.0),
-        _ => None,
+        _ => overflows_into(f, c, side, base, &v),
     }
+}
+
+/// Every sample towards `c` overflowed to the same ±∞ (1/x^400 at 0 is
+/// beyond 10³⁰⁸ from x ≈ 0.15 in): diverging if, halving the distance
+/// from `base`, f grows steadily into that overflow.
+fn overflows_into(
+    f: &mut dyn FnMut(f64) -> f64,
+    c: f64,
+    side: f64,
+    base: f64,
+    v: &[f64],
+) -> Option<f64> {
+    let sign = v.first()?.signum();
+    if !v.iter().all(|y| y.is_infinite() && y.signum() == sign) {
+        return None;
+    }
+    let mut run: Vec<f64> = Vec::new();
+    let mut d = base;
+    for _ in 0..1100 {
+        let y = f(c + side * d);
+        if y.is_infinite() && y.signum() == sign {
+            let growing = run.len() >= 3
+                && run.iter().all(|r| r.signum() == sign)
+                && run.windows(2).all(|w| w[1].abs() > w[0].abs());
+            return growing.then_some(sign);
+        }
+        if !y.is_finite() {
+            return None;
+        }
+        run.push(y);
+        d *= 0.5;
+        if c + side * d == c {
+            return None;
+        }
+    }
+    None
 }
 
 /// One-sided limit of f at `c` from the side `side` (±1), for the range:

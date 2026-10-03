@@ -28,7 +28,7 @@ use super::format::{
     format_periodic_set, format_set, format_set_with,
 };
 use super::numeric::{
-    SeqLimit, bisect_finite, brent, diverges_near, limit_at_infinity_beyond_err, one_sided_limit,
+    SeqLimit, bisect_defined, brent, diverges_near, limit_at_infinity_beyond_err, one_sided_limit,
     one_sided_limit_err, sample, sequence_limit_noisy, sinh_grid, uniform_grid,
 };
 use super::{
@@ -642,7 +642,9 @@ fn vanishes(e: &Expr, opts: &CompileOptions<'_>, side: f64) -> bool {
             num(k).is_some_and(|k| k < 0.0 && k.is_finite()) && grows(g, opts, side).is_some()
         }
         Expr::Bin(BinOp::Div, n, d) => {
-            (!n.contains_x() && num(n).is_some_and(f64::is_finite) && grows(d, opts, side).is_some())
+            (!n.contains_x()
+                && num(n).is_some_and(f64::is_finite)
+                && grows(d, opts, side).is_some())
                 || (vanishes(n, opts, side)
                     && !d.contains_x()
                     && num(d).is_some_and(|k| k != 0.0 && k.is_finite()))
@@ -2056,34 +2058,18 @@ struct Scan {
     poles: Vec<f64>,
     excluded: Vec<f64>,
     too_complex: bool,
+    /// Values beyond the floating-point range that no pole or infinite end
+    /// explains (e^(1000 − x²) near 0): f's size, and so its extrema,
+    /// bends and range, can't be measured there.
+    overflow: bool,
 }
 
-/// Which samples are in the domain: finite values, plus runs of ±∞ that
-/// continue from huge finite values (floating-point overflow such as e^x
-/// for x > 709.8, not poles).
+/// Which samples are in the domain: everything but NaN. Undefined points
+/// (division by exactly zero, logs of zero, poles of Γ…) evaluate to NaN,
+/// so ±∞ only comes from floating-point overflow of a defined value: e^x
+/// for x > 709.8, or 1/x^400 near 0 where x^400 is subnormal.
 fn defined_mask(fs: &[f64]) -> Vec<bool> {
-    let n = fs.len();
-    let mut def: Vec<bool> = fs.iter().map(|v| v.is_finite()).collect();
-    let mut i = 0;
-    while i < n {
-        if fs[i].is_infinite() {
-            let mut j = i;
-            while j + 1 < n && fs[j + 1].is_infinite() {
-                j += 1;
-            }
-            let huge =
-                |k: Option<usize>| k.is_some_and(|k| fs[k].is_finite() && fs[k].abs() > 1e250);
-            let left = if i > 0 { Some(i - 1) } else { None };
-            let right = if j + 1 < n { Some(j + 1) } else { None };
-            if huge(left) || huge(right) {
-                def[i..=j].iter_mut().for_each(|d| *d = true);
-            }
-            i = j + 1;
-        } else {
-            i += 1;
-        }
-    }
-    def
+    fs.iter().map(|v| !v.is_nan()).collect()
 }
 
 /// Bisects a large step between two finite samples towards the jump; a
@@ -2170,10 +2156,12 @@ fn scan(
         let (dl, dr) = (!fl.is_nan(), !fr.is_nan());
         let pole_l = dl && diverges_near(&mut f, c, -1.0).is_some();
         let pole_r = dr && diverges_near(&mut f, c, 1.0).is_some();
-        if !dl && !dr {
+        // Neither undefined nor a pole where f is defined but overflows
+        // (1/x^400 where x^400 is subnormal).
+        if (!dl && !dr) || fc.is_infinite() {
             continue;
         }
-        if !fc.is_finite() || pole_l || pole_r {
+        if fc.is_nan() || pole_l || pole_r {
             if pole_l || pole_r {
                 poles.push(c);
             }
@@ -2212,7 +2200,7 @@ fn scan(
         } else {
             (xs[i + 1], xs[i])
         };
-        let edge = bisect_finite(&mut f, good, bad);
+        let edge = bisect_defined(&mut f, good, bad);
         let s = snap(edge, 1e-9);
         let (x, closed) = if f(s).is_finite() {
             (s, true)
@@ -2513,11 +2501,30 @@ fn scan(
     poles.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * a.abs().max(1.0));
     excluded.sort_by(|a, b| a.total_cmp(b));
     excluded.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * a.abs().max(1.0));
+    let mut overflow = false;
+    let mut i = 0;
+    while i < n {
+        if !fs[i].is_infinite() {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j + 1 < n && fs[j + 1].is_infinite() {
+            j += 1;
+        }
+        let (a, b) = (xs[i.saturating_sub(1)], xs[(j + 1).min(n - 1)]);
+        let at_end = (i == 0 && lo_inf) || (j == n - 1 && hi_inf);
+        if !at_end && !poles.iter().any(|&p| p >= a && p <= b) {
+            overflow = true;
+        }
+        i = j + 1;
+    }
     Scan {
         pieces,
         poles,
         excluded,
         too_complex,
+        overflow,
     }
 }
 
@@ -3204,6 +3211,14 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
             acc.hi.closed = true;
         }
     }
+    // A piece of the domain has values: nothing found, or a single value
+    // that isn't attained, means they couldn't be measured (1/x^400 is
+    // beyond 10³⁰⁸ or below 10⁻³⁰⁸ almost everywhere), not that there are
+    // none.
+    let attained_point = acc.lo.value == acc.hi.value && acc.lo.closed && acc.hi.closed;
+    if p.lo.value < p.hi.value && !(acc.lo.value < acc.hi.value || attained_point) {
+        out.range_unsure = true;
+    }
     if acc.lo.value <= acc.hi.value {
         out.range = Some(Interval {
             lo: acc.lo,
@@ -3621,6 +3636,14 @@ fn analyze_aperiodic(
     if sc.too_complex {
         too |= flags::RANGE | flags::MONOTONE_INTERVALS;
     }
+    if sc.overflow {
+        too |= flags::ZEROS
+            | flags::MINIMA
+            | flags::MAXIMA
+            | flags::INFLECTION_POINTS
+            | flags::MONOTONE_INTERVALS
+            | flags::RANGE;
+    }
 
     // Domain: pieces joined across jumps.
     let mut domain: Vec<Interval> = Vec::new();
@@ -3939,6 +3962,14 @@ fn analyze_periodic(
     if sc.too_complex || sa.too_complex {
         too |= flags::DOMAIN | flags::RANGE;
     }
+    if sc.overflow {
+        too |= flags::ZEROS
+            | flags::MINIMA
+            | flags::MAXIMA
+            | flags::INFLECTION_POINTS
+            | flags::MONOTONE_INTERVALS
+            | flags::RANGE;
+    }
 
     let mut domain: Vec<Interval> = Vec::new();
     let mut i = 0;
@@ -3979,6 +4010,9 @@ fn analyze_periodic(
     let mut ranges = Vec::new();
     for pc in &sc.pieces {
         let pf = piece_features(fun, pc, scale, !domain_events);
+        if pf.range_unsure {
+            too |= flags::RANGE;
+        }
         if let Some(r) = pf.range {
             ranges.push((r, pf.range_noise));
         }
