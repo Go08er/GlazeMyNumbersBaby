@@ -253,7 +253,14 @@ pub fn format_decimal(v: f64) -> String {
         let ms = trim(&format!("{m:.5}"));
         return format!("{sign}{ms}×10{}", superscript(e));
     }
-    let decimals = (5 - e).clamp(0, 12) as usize;
+    // Six significant digits, but large values keep a few decimals so
+    // nearby points stay apart (a maximum at 2000000.5 between zeros at
+    // 2000000 and 2000001).
+    let decimals = if e >= 5 {
+        (9 - e).max(0)
+    } else {
+        (5 - e).min(12)
+    } as usize;
     let s = trim(&format!("{a:.decimals$}"));
     if s == "0" {
         "0".into()

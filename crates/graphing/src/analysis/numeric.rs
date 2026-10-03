@@ -139,11 +139,71 @@ pub(crate) enum SeqLimit {
 }
 
 /// Limit of `v_k` (values at geometrically spaced arguments, e.g. f(10^k)).
-/// Divergence: the tail grows monotonically without the increments
-/// shrinking (catches logarithmic growth) or overflows. Convergence: the
-/// increments shrink steadily down to a tiny value; the limit is refined
-/// with Aitken's Δ² extrapolation.
 pub(crate) fn sequence_limit(v: &[f64]) -> SeqLimit {
+    sequence_limit_err(v).0
+}
+
+/// Aitken's Δ² extrapolation of three successive values.
+fn aitken(a: f64, b: f64, c: f64) -> f64 {
+    let denom = (c - b) - (b - a);
+    if denom == 0.0 {
+        c
+    } else {
+        c - (c - b) * (c - b) / denom
+    }
+}
+
+/// [`sequence_limit`] with an estimate of how far a finite limit may be
+/// from the true one (∞ when there's none).
+///
+/// - A geometric approach, steps of one sign shrinking by one ratio r < 1
+///   (every power tail x^p + L with p < 0 shrinks by 10^p per decade, however
+///   close to 1 that is), has its limit given by Aitken's Δ². The ratios must
+///   agree to a small part of their distance from 1, so a slow power tail is
+///   never taken for growth, nor growth for one.
+/// - Unbounded growth: steps of one sign that don't shrink at all (ln x moves
+///   by ln 10 per decade; x^p with p > 0 and e^x by growing steps), or
+///   overflow after growing.
+/// - Otherwise convergence only when the steps shrink steadily to a tiny
+///   value. Anything else (1/ln x and ln ln x creep, their steps shrinking
+///   like 1/k) is unknown rather than guessed.
+pub(crate) fn sequence_limit_err(v: &[f64]) -> (SeqLimit, f64) {
+    let noise: Vec<f64> = v.iter().map(|x| 64.0 * f64::EPSILON * x.abs()).collect();
+    sequence_limit_noisy(v, &noise)
+}
+
+/// f at each x, with how far each value may be off: f's change across the
+/// floats next to x (the sample point is itself rounded: 1 + 10⁻¹³ is off by
+/// 0.2% of 10⁻¹³) plus the rounding of the value.
+pub(crate) fn sample(f: &mut dyn FnMut(f64) -> f64, xs: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    let mut v = Vec::with_capacity(xs.len());
+    let mut noise = Vec::with_capacity(xs.len());
+    for &x in xs {
+        let y = f(x);
+        let (a, b) = (f(x.next_down()), f(x.next_up()));
+        let mut n = 64.0 * f64::EPSILON * y.abs();
+        for z in [a, b] {
+            if z.is_finite() && y.is_finite() {
+                n += (z - y).abs();
+            }
+        }
+        v.push(y);
+        noise.push(n);
+    }
+    (v, noise)
+}
+
+/// [`sequence_limit_err`] with each value's own uncertainty `noise_k`.
+pub(crate) fn sequence_limit_noisy(v: &[f64], noise_in: &[f64]) -> (SeqLimit, f64) {
+    const NONE: f64 = f64::INFINITY;
+    // Undefined or infinite values before any finite one are the far
+    // samples (another pole on the way to this one, 10⁶ away from a pole at
+    // 10⁷): the limit is about the finite run that follows.
+    let start = v.iter().position(|x| x.is_finite()).unwrap_or(v.len());
+    if start > 0 && start < v.len() {
+        let rest = noise_in.get(start..).unwrap_or(&[]);
+        return sequence_limit_noisy(&v[start..], rest);
+    }
     // Overflow to ±∞ after finite growth.
     let first_nonfinite = v.iter().position(|x| !x.is_finite());
     let fin: &[f64] = match first_nonfinite {
@@ -158,15 +218,16 @@ pub(crate) fn sequence_limit(v: &[f64]) -> SeqLimit {
                 let growing =
                     tail.len() < 2 || tail[tail.len() - 1].abs() > tail[tail.len() - 2].abs();
                 if growing && tail[tail.len() - 1].signum() == v[i].signum() {
-                    return if v[i] > 0.0 {
+                    let l = if v[i] > 0.0 {
                         SeqLimit::PosInf
                     } else {
                         SeqLimit::NegInf
                     };
+                    return (l, 0.0);
                 }
             }
             if i < 4 {
-                return SeqLimit::Unknown;
+                return (SeqLimit::Unknown, NONE);
             }
             &v[..i]
         }
@@ -174,75 +235,75 @@ pub(crate) fn sequence_limit(v: &[f64]) -> SeqLimit {
     };
     let n = fin.len();
     if n < 4 {
-        return SeqLimit::Unknown;
+        return (SeqLimit::Unknown, NONE);
     }
-    // Divergence test on the last 6 values.
-    let tail = &fin[n.saturating_sub(6)..];
-    let same_sign = tail
-        .iter()
-        .all(|x| x.signum() == tail[0].signum() && *x != 0.0);
-    let growing = tail.windows(2).all(|w| w[1].abs() > w[0].abs());
-    if same_sign && growing {
-        let incs: Vec<f64> = tail.windows(2).map(|w| w[1].abs() - w[0].abs()).collect();
-        let not_shrinking = incs.windows(2).all(|w| w[1] >= 0.5 * w[0]);
-        if not_shrinking {
-            return if tail[0] > 0.0 {
+    let t0 = n.saturating_sub(6);
+    let tail = &fin[t0..];
+    let tnoise: Vec<f64> = (t0..n)
+        .map(|i| noise_in.get(i).copied().unwrap_or(0.0))
+        .collect();
+    let noise = tnoise.iter().fold(0.0f64, |m, &x| m.max(x));
+    let steps: Vec<f64> = tail.windows(2).map(|w| w[1] - w[0]).collect();
+    // How far each step may be off.
+    let step_noise: Vec<f64> = tnoise.windows(2).map(|w| w[0] + w[1]).collect();
+    let one_way = steps.iter().all(|&d| d > 0.0) || steps.iter().all(|&d| d < 0.0);
+    if one_way {
+        let ratios: Vec<f64> = steps.windows(2).map(|w| w[1] / w[0]).collect();
+        // How far each ratio may be off through the steps' uncertainty.
+        let slack: Vec<f64> = (0..ratios.len())
+            .map(|i| {
+                let (a, b) = (steps[i].abs(), steps[i + 1].abs());
+                (step_noise[i + 1] + ratios[i].abs() * step_noise[i]) / a.min(b).max(1e-300)
+                    + 1e-300
+            })
+            .collect();
+        let r = ratios[ratios.len() - 1];
+        let spread = ratios.iter().fold(0.0f64, |m, q| m.max((q - r).abs()));
+        let fuzz = slack.iter().fold(0.0f64, |m, &q| m.max(q));
+        // 1. Geometric.
+        if r > 0.0
+            && 1.0 - r > 1e-9
+            && 1.0 - r > 4.0 * fuzz
+            && ratios
+                .iter()
+                .zip(&slack)
+                .all(|(q, sl)| (q - r).abs() <= 1e-3 * (1.0 - r) + sl)
+        {
+            let k = tail.len();
+            let acc1 = aitken(tail[k - 3], tail[k - 2], tail[k - 1]);
+            let acc2 = aitken(tail[k - 4], tail[k - 3], tail[k - 2]);
+            if acc1.is_finite() && acc2.is_finite() {
+                let rest = (tail[k - 1] - acc1).abs();
+                let err =
+                    (acc1 - acc2).abs() + (spread + fuzz) / (1.0 - r) * rest + noise / (1.0 - r);
+                return (SeqLimit::Converges(acc1), err);
+            }
+        }
+        // 2. Steps that don't shrink, or settle on a size that isn't 0
+        // (log₁₀(x − 5·10⁶) moves by ever closer to 1 per decade): unbounded,
+        // in their direction. A power tail's steps head for 0 instead.
+        let k = steps.len();
+        let settles = aitken(steps[k - 3], steps[k - 2], steps[k - 1]);
+        let settled = settles.is_finite()
+            && (settles > 0.0) == (steps[0] > 0.0)
+            && (settles - steps[k - 1]).abs() <= 1e-2 * steps[k - 1].abs();
+        if settled
+            || ratios
+                .iter()
+                .zip(&slack)
+                .all(|(q, sl)| *q >= 1.0 - 1e-9 - sl)
+                && ratios.iter().all(|q| *q > 0.0)
+        {
+            let l = if steps[0] > 0.0 {
                 SeqLimit::PosInf
             } else {
                 SeqLimit::NegInf
             };
+            return (l, 0.0);
         }
     }
-    // Steady growth through zero (ln x − 30 at x = 10^k): steps of one
-    // sign that don't shrink (slow convergence like 1/ln x shrinks them
-    // faster than this), ending on the far side of 0 and moving away.
-    let steps: Vec<f64> = tail.windows(2).map(|w| w[1] - w[0]).collect();
-    let up = steps.iter().all(|&d| d > 0.0);
-    let down = steps.iter().all(|&d| d < 0.0);
-    let steady = steps.windows(2).all(|w| w[1].abs() >= 0.9 * w[0].abs());
-    let (last, before) = (tail[tail.len() - 1], tail[tail.len() - 2]);
-    // Steps that don't shrink at all (ln x − 40 moves by ln 10 per decade
-    // on either side of 0) are unbounded growth wherever they are.
-    let constant = steps
-        .windows(2)
-        .all(|w| (w[1].abs() - w[0].abs()).abs() <= 1e-3 * w[0].abs());
-    if (up || down) && constant && steps[0] != 0.0 {
-        return if up {
-            SeqLimit::PosInf
-        } else {
-            SeqLimit::NegInf
-        };
-    }
-    if steady && (up && last > 0.0 || down && last < 0.0) && last.abs() > before.abs() {
-        return if up {
-            SeqLimit::PosInf
-        } else {
-            SeqLimit::NegInf
-        };
-    }
-    // A geometric approach, steps shrinking by one constant ratio (every
-    // power tail: x^−0.1 shrinks by 10^−0.1 per decade), has its limit given
-    // exactly by Aitken's Δ² even while the steps are still large.
-    let signed: Vec<f64> = tail.windows(2).map(|w| w[1] - w[0]).collect();
-    let ratios: Vec<f64> = signed.windows(2).map(|w| w[1] / w[0]).collect();
-    let r = ratios[ratios.len() - 1];
-    if ratios.len() >= 3 && r > 0.0 && r < 0.99 && ratios.iter().all(|q| (q - r).abs() <= 1e-6 * r)
-    {
-        let (a, b, c) = (
-            tail[tail.len() - 3],
-            tail[tail.len() - 2],
-            tail[tail.len() - 1],
-        );
-        let denom = (c - b) - (b - a);
-        if denom != 0.0 {
-            let acc = c - (c - b) * (c - b) / denom;
-            if acc.is_finite() {
-                return SeqLimit::Converges(acc);
-            }
-        }
-    }
-    // Convergence: pick the index with the smallest increment, requiring the
-    // increments to shrink for a few steps before it.
+    // 3. Convergence: pick the index with the smallest increment, requiring
+    // the increments to shrink for a few steps before it.
     let d: Vec<f64> = fin.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
     // Prefer indices reached by a clean geometric decrease (rounding noise
     // breaks the pattern), falling back to plain monotone decrease.
@@ -260,50 +321,53 @@ pub(crate) fn sequence_limit(v: &[f64]) -> SeqLimit {
     };
     let best = pick(0.5).or_else(|| pick(1.0));
     let Some(k) = best else {
-        return SeqLimit::Unknown;
+        return (SeqLimit::Unknown, NONE);
     };
     let l = fin[k + 1];
     let scale = l.abs().max(1.0);
     if d[k] > 1e-6 * scale {
-        return SeqLimit::Unknown;
+        return (SeqLimit::Unknown, NONE);
     }
     // Aitken Δ² on (v_{k-1}, v_k, v_{k+1}).
     let (a, b, c) = (fin[k - 1], fin[k], fin[k + 1]);
-    let denom = (c - b) - (b - a);
     let mut lim = l;
-    if denom != 0.0 {
-        let acc = c - (c - b) * (c - b) / denom;
-        if acc.is_finite() && (acc - l).abs() <= 10.0 * d[k] + 1e-300 {
-            lim = acc;
-        }
+    let acc = aitken(a, b, c);
+    if acc.is_finite() && (acc - l).abs() <= 10.0 * d[k] + 1e-300 {
+        lim = acc;
     }
-    SeqLimit::Converges(lim)
+    let all = fin.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+    let nk = noise_in.get(k + 1).copied().unwrap_or(0.0);
+    (
+        SeqLimit::Converges(lim),
+        10.0 * d[k] + 64.0 * f64::EPSILON * all + 4.0 * nk,
+    )
 }
 
 /// Limit of f(x) as x → +∞ (`sign > 0`) or −∞.
-pub(crate) fn limit_at_infinity(f: &mut dyn FnMut(f64) -> f64, sign: f64) -> SeqLimit {
-    limit_at_infinity_beyond(f, sign, 0.0)
+#[cfg(test)]
+fn limit_at_infinity(f: &mut dyn FnMut(f64) -> f64, sign: f64) -> SeqLimit {
+    limit_at_infinity_beyond_err(f, sign, 0.0).0
 }
 
-/// Limit at ±∞ of a function defined on (or a piece starting at) `from`:
+/// Limit at ±∞ of a function defined on (or a piece starting at) `from`,
+/// with an error estimate for a finite limit (see [`sequence_limit_err`]):
 /// sampled at powers of 10 well past it, skipping any where f isn't yet
 /// defined (log(x − 5·10⁶) at x = 10).
-pub(crate) fn limit_at_infinity_beyond(
+pub(crate) fn limit_at_infinity_beyond_err(
     f: &mut dyn FnMut(f64) -> f64,
     sign: f64,
     from: f64,
-) -> SeqLimit {
+) -> (SeqLimit, f64) {
     let start = if from.is_finite() {
         2.0 * from.abs()
     } else {
         0.0
     };
     let first = (start.max(10.0).log10().ceil() as i32).max(1);
-    let v: Vec<f64> = (first..first + 17)
-        .map(|k| f(sign * 10f64.powi(k)))
-        .collect();
+    let xs: Vec<f64> = (first..first + 17).map(|k| sign * 10f64.powi(k)).collect();
+    let (v, noise) = sample(f, &xs);
     let defined = v.iter().position(|x| !x.is_nan()).unwrap_or(v.len());
-    sequence_limit(&v[defined..])
+    sequence_limit_noisy(&v[defined..], &noise[defined..])
 }
 
 /// Whether |f| diverges approaching `c` from the side `side` (±1).
@@ -312,21 +376,52 @@ pub(crate) fn diverges_near(f: &mut dyn FnMut(f64) -> f64, c: f64, side: f64) ->
     let base = c.abs().max(1.0);
     let kmax = if c == 0.0 { 150 } else { 13 };
     let step = if c == 0.0 { 5 } else { 1 };
-    let mut v = Vec::new();
+    let mut xs = Vec::new();
     let mut k = 1;
     while k <= kmax {
         let x = c + side * base * 10f64.powi(-k);
         if x == c {
             break;
         }
-        v.push(f(x));
+        xs.push(x);
         k += step;
     }
-    match sequence_limit(&v) {
+    let (v, noise) = sample(f, &xs);
+    match sequence_limit_noisy(&v, &noise).0 {
         SeqLimit::PosInf => Some(1.0),
         SeqLimit::NegInf => Some(-1.0),
         _ => None,
     }
+}
+
+/// One-sided limit of f at `c` from the side `side` (±1), for the range:
+/// `Converges` with an error estimate, ±∞, or `Unknown` (with whether the
+/// approach is monotone, i.e. creeps towards a limit the samples can't pin
+/// down, such as 1/ln(2/x) at 0, rather than oscillating).
+pub(crate) fn one_sided_limit_err(
+    f: &mut dyn FnMut(f64) -> f64,
+    c: f64,
+    side: f64,
+) -> (SeqLimit, f64, bool) {
+    if let Some(s) = diverges_near(f, c, side) {
+        let l = if s > 0.0 {
+            SeqLimit::PosInf
+        } else {
+            SeqLimit::NegInf
+        };
+        return (l, 0.0, false);
+    }
+    let base = c.abs().max(1.0);
+    let kmax = if c == 0.0 { 40 } else { 12 };
+    let xs: Vec<f64> = (1..=kmax)
+        .map(|k| c + side * base * 10f64.powi(-k))
+        .collect();
+    let (v, noise) = sample(f, &xs);
+    let (l, err) = sequence_limit_noisy(&v, &noise);
+    let fin: Vec<f64> = v.iter().copied().filter(|x| x.is_finite()).collect();
+    let monotone = fin.len() > 2
+        && (fin.windows(2).all(|w| w[1] >= w[0]) || fin.windows(2).all(|w| w[1] <= w[0]));
+    (l, err, monotone)
 }
 
 /// One-sided limit of f at `c` (approximate): converged value, ±∞, or the
