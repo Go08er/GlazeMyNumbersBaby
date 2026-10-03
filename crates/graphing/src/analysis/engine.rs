@@ -7,7 +7,12 @@
 //! 3. Scan a window — one period, or [−10⁶, 10⁶] on a grid that is dense
 //!    near 0 — for domain boundaries, excluded points (zeros of
 //!    denominators, `cos` of `tan`'s argument, …), poles and jumps, which
-//!    split the window into continuity pieces.
+//!    split the window into continuity pieces. A non-periodic function is
+//!    first probed out to ±10¹⁵ for zeros of f, f′, f″ and of those
+//!    singularity generators; the window widens to take in what is found
+//!    (with a dense grid around it too). What may lie beyond 10¹⁵ (by a
+//!    polynomial's root bound, or a generator still heading for zero)
+//!    is reported as unknown rather than extrapolated.
 //! 4. On each piece: zeros (sign changes + Brent), extrema (sign changes of
 //!    f′), inflection points (sign changes of f″), monotone intervals and
 //!    the range (extrema, endpoint values and limits).
@@ -23,8 +28,8 @@ use super::format::{
     format_periodic_set, format_point, format_set,
 };
 use super::numeric::{
-    SeqLimit, bisect_finite, brent, diverges_near, limit_at_infinity, one_sided_limit,
-    sequence_limit, sinh_grid, uniform_grid,
+    SeqLimit, bisect_finite, brent, diverges_near, limit_at_infinity, limit_at_infinity_beyond,
+    one_sided_limit, sequence_limit, sinh_grid, uniform_grid,
 };
 use super::{
     AnalysisData, AnalysisError, AsymptoteSide, Family, KeyGraphFeatures, Monotonicity, Parity,
@@ -217,37 +222,49 @@ fn analyze_with_budget(
         return Err(stop);
     }
 
+    // A non-periodic function's features may lie beyond the base window.
+    let beyond = match period {
+        Some(_) => Beyond::default(),
+        None => beyond_window(&fun, expr, opts),
+    };
+    if let Some(stop) = fun.stopped() {
+        return Err(stop);
+    }
     let k = match period {
         Some(p) => analyze_periodic(&fun, &gens, p, scale),
-        None => analyze_aperiodic(&fun, &gens, scale),
+        None => analyze_aperiodic(&fun, &gens, &beyond, scale),
     };
     // Running out of budget can surface as any failure downstream.
     if let Some(stop) = fun.stopped() {
         return Err(stop);
     }
     let mut k = k?;
+    // Features that may also lie beyond the farthest search are unknown,
+    // not extrapolated.
+    forget(&mut k, beyond.unknown);
     // Γ-based functions have poles at every negative integer: a numeric
     // scan cannot list them.
     let gamma_like = expr.any(&|e| {
         matches!(e, Expr::Call(Func::Factorial | Func::DoubleFactorial | Func::NCr | Func::NPr, args) if args.iter().any(|a| a.contains_x()))
     });
     if gamma_like {
-        k.too_complex_features |= flags::DOMAIN
-            | flags::RANGE
-            | flags::VERTICAL_ASYMPTOTES
-            | flags::MONOTONE_INTERVALS
-            | flags::MINIMA
-            | flags::MAXIMA
-            | flags::INFLECTION_POINTS;
-        k.domain.clear();
-        k.range.clear();
-        k.vertical_asymptotes.clear();
-        k.monotonicity.clear();
-        k.minima.clear();
-        k.maxima.clear();
-        k.inflection_points.clear();
+        forget(
+            &mut k,
+            flags::DOMAIN
+                | flags::RANGE
+                | flags::VERTICAL_ASYMPTOTES
+                | flags::MONOTONE_INTERVALS
+                | flags::MINIMA
+                | flags::MAXIMA
+                | flags::INFLECTION_POINTS,
+        );
     }
-    k.parity = parity(&fun, scale);
+    k.parity = parity(&fun, scale, beyond.extent);
+    // Something unknown beyond the search could break a symmetry seen
+    // inside it.
+    if beyond.unknown != 0 && matches!(k.parity, Parity::Even | Parity::Odd) {
+        k.parity = Parity::Unknown;
+    }
     if let Some(stop) = fun.stopped() {
         return Err(stop);
     }
@@ -259,6 +276,46 @@ fn analyze_with_budget(
         None => k.periodicity_direction = Periodicity::NotPeriodic,
     }
     Ok(k)
+}
+
+/// Mark `which` features as too complex to determine, dropping whatever
+/// was found for them.
+fn forget(k: &mut KeyGraphFeatures, which: u32) {
+    k.too_complex_features |= which;
+    let d = &mut k.data;
+    if which & flags::DOMAIN != 0 {
+        k.domain.clear();
+        d.domain.clear();
+        d.excluded.clear();
+    }
+    if which & flags::RANGE != 0 {
+        k.range.clear();
+        d.range.clear();
+    }
+    if which & flags::ZEROS != 0 {
+        k.x_intercept.clear();
+        d.zeros.clear();
+    }
+    if which & flags::MINIMA != 0 {
+        k.minima.clear();
+        d.minima.clear();
+    }
+    if which & flags::MAXIMA != 0 {
+        k.maxima.clear();
+        d.maxima.clear();
+    }
+    if which & flags::INFLECTION_POINTS != 0 {
+        k.inflection_points.clear();
+        d.inflection_points.clear();
+    }
+    if which & flags::VERTICAL_ASYMPTOTES != 0 {
+        k.vertical_asymptotes.clear();
+        d.vertical_asymptotes.clear();
+    }
+    if which & flags::MONOTONE_INTERVALS != 0 {
+        k.monotonicity.clear();
+        d.monotonicity.clear();
+    }
 }
 
 fn constant_features(c: f64) -> KeyGraphFeatures {
@@ -439,6 +496,247 @@ fn program_zeros(fun: &Fun, g: &Program, xs: &[f64], out: &mut Vec<f64>) {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Beyond the base window. Its grid covers [−10⁶, 10⁶]; a pole at 2·10⁶ or
+// the zero of x − 2·10⁶ lies outside it and must not be extrapolated away.
+
+/// How far out features are looked for.
+const REACH: f64 = 1e15;
+/// Probe points per side between `WINDOW` and `REACH` (geometric).
+const PROBE_STEPS: usize = 800;
+/// More features than this on one side of the probe is oscillation (as in
+/// sin(x)/x), not structure worth widening the window for.
+const MAX_PROBED: usize = 8;
+
+/// Features a singular point beyond the search would change.
+const SINGULAR: u32 =
+    flags::DOMAIN | flags::VERTICAL_ASYMPTOTES | flags::RANGE | flags::MONOTONE_INTERVALS;
+/// Features a zero of f, f′ or f″ beyond the search would change.
+const OF_F: u32 = flags::ZEROS
+    | flags::RANGE
+    | flags::MINIMA
+    | flags::MAXIMA
+    | flags::MONOTONE_INTERVALS
+    | flags::INFLECTION_POINTS;
+
+/// Sample points per side of the dense grid laid around each feature
+/// found beyond the window (features cluster there as they do near 0).
+const LOCAL_HALF: usize = 4000;
+
+/// What lies beyond the base window.
+#[derive(Default)]
+struct Beyond {
+    /// Largest |x| of anything found between `WINDOW` and `REACH`, or 0.
+    extent: f64,
+    /// Where those things are (a few, clustered).
+    features: Vec<f64>,
+    /// Zeros of the generators found there: candidate singular points.
+    candidates: Vec<f64>,
+    /// Features that may also lie beyond `REACH`, where nothing is
+    /// searched (flags): reported as unknown rather than extrapolated.
+    unknown: u32,
+}
+
+/// Look past the base window for zeros (and sign changes) of f, f′, f″ and
+/// the singularity generators, and for signs of more beyond `REACH`.
+fn beyond_window(fun: &Fun, expr: &Expr, opts: &CompileOptions<'_>) -> Beyond {
+    let pos: Vec<f64> = (0..=PROBE_STEPS)
+        .map(|i| WINDOW * (REACH / WINDOW).powf(i as f64 / PROBE_STEPS as f64))
+        .collect();
+    let neg: Vec<f64> = pos.iter().rev().map(|x| -x).collect();
+    let mut gen_exprs = Vec::new();
+    generators(expr, &mut gen_exprs);
+    let gens: Vec<(Expr, Program)> = gen_exprs
+        .into_iter()
+        .filter_map(|g| {
+            let p = Program::compile(&g, opts).ok()?;
+            p.as_constant().is_none().then_some((g, p))
+        })
+        .collect();
+    let mut out = Beyond::default();
+    let note = |out: &mut Beyond, pts: &[f64]| {
+        if pts.len() <= MAX_PROBED {
+            for &x in pts {
+                out.extent = out.extent.max(x.abs());
+                // One local grid serves features within 1% of each other.
+                if !out
+                    .features
+                    .iter()
+                    .any(|&c| (c - x).abs() <= 1e-2 * c.abs())
+                {
+                    out.features.push(x);
+                }
+            }
+            true
+        } else {
+            false
+        }
+    };
+    for xs in [&neg, &pos] {
+        for which in 0..3u8 {
+            let vs = fun.batch(which, xs);
+            let mut g = |x: f64| match which {
+                0 => fun.f(x),
+                1 => fun.df(x),
+                _ => fun.d2f(x),
+            };
+            let pts = probe_points(xs, &vs, &mut g);
+            note(&mut out, &pts);
+        }
+        for (_, p) in &gens {
+            let mut vs = vec![0.0; xs.len()];
+            fun.eval_batch(p, xs, &mut vs);
+            let pts = probe_points(xs, &vs, &mut |x| fun.eval(p, x));
+            if note(&mut out, &pts) {
+                out.candidates.extend(pts);
+            }
+        }
+    }
+
+    // Beyond REACH nothing is searched. A polynomial's real roots (and
+    // those of its derivatives) are bounded, so it is either known to have
+    // none out there or flagged. A singularity generator of any other kind
+    // is flagged if it is still heading for zero at the end of the search
+    // (1/(ln x − 100)). For f itself that test can't tell a far zero from
+    // a slow decay (x^0.9′ = 0.9·x^−0.1, 1/ln x), so a non-polynomial f's
+    // zeros, extrema and inflections are only searched out to REACH.
+    let far = [0.5 * REACH, 0.75 * REACH, REACH];
+    let heading = |g: &dyn Fn(f64) -> f64| {
+        [-1.0, 1.0]
+            .iter()
+            .any(|&s| heading_to_zero(far.map(|x| g(s * x))))
+    };
+    if poly_coeffs(expr, opts).is_some_and(|c| root_bound(&c) > REACH) {
+        out.unknown |= OF_F;
+    }
+    for (e, p) in &gens {
+        let unknown = match poly_coeffs(e, opts).map(|c| root_bound(&c)) {
+            Some(b) => b > REACH,
+            None => heading(&|x| fun.eval(p, x)),
+        };
+        if unknown {
+            out.unknown |= SINGULAR;
+        }
+    }
+    out.candidates.sort_by(|a, b| a.total_cmp(b));
+    out
+}
+
+/// Sign changes (refined: zeros, or poles of g) and even-order zeros of g
+/// on an ascending grid, ignoring exact zeros (underflow tails such as e^x
+/// far left are not roots).
+fn probe_points(xs: &[f64], vs: &[f64], g: &mut dyn FnMut(f64) -> f64) -> Vec<f64> {
+    let mut out = Vec::new();
+    let ok = |v: f64| v.is_finite() && v != 0.0;
+    for i in 0..xs.len().saturating_sub(1) {
+        if out.len() > MAX_PROBED {
+            break;
+        }
+        let (a, b) = (vs[i], vs[i + 1]);
+        if ok(a) && ok(b) && (a < 0.0) != (b < 0.0) {
+            out.push(brent(g, xs[i], a, xs[i + 1], b));
+        }
+        if i > 0 && ok(vs[i - 1]) && ok(a) && ok(b) && (vs[i - 1] < 0.0) == (b < 0.0) {
+            let (p, c, n) = (vs[i - 1].abs(), a.abs(), b.abs());
+            if c < p && c <= n {
+                let m = golden_min_abs(g, xs[i - 1], xs[i + 1]);
+                if g(m).abs() <= 1e-10 * c {
+                    out.push(m);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether g, sampled at three evenly spaced far points, is still heading
+/// for zero about linearly, so a zero may lie further out. Decays that only
+/// approach 0 (1/x, x^(−1/2)) slow down faster than this, and a value
+/// settling on a constant barely moves.
+fn heading_to_zero(v: [f64; 3]) -> bool {
+    if !v.iter().all(|x| x.is_finite() && x.abs() > 1e-250) {
+        return false;
+    }
+    if (v[0] < 0.0) != (v[1] < 0.0) || (v[1] < 0.0) != (v[2] < 0.0) {
+        return false;
+    }
+    let [a, b, c] = v.map(f64::abs);
+    a > b && b > c && a - c > 1e-9 * a && b - c >= 0.66 * (a - b)
+}
+
+/// Coefficients (constant term first) of `e` as a polynomial in x with
+/// constant coefficients, if it is one of modest degree.
+fn poly_coeffs(e: &Expr, opts: &CompileOptions<'_>) -> Option<Vec<f64>> {
+    const MAX_DEGREE: usize = 64;
+    if !e.contains_x() {
+        let c = Program::compile(e, opts).ok()?.as_constant()?;
+        return c.is_finite().then(|| vec![c]);
+    }
+    let mul = |a: &[f64], b: &[f64]| -> Option<Vec<f64>> {
+        if a.len() + b.len() - 2 > MAX_DEGREE {
+            return None;
+        }
+        let mut r = vec![0.0; a.len() + b.len() - 1];
+        for (i, x) in a.iter().enumerate() {
+            for (j, y) in b.iter().enumerate() {
+                r[i + j] += x * y;
+            }
+        }
+        Some(r)
+    };
+    match e {
+        Expr::X => Some(vec![0.0, 1.0]),
+        Expr::Neg(a) => Some(poly_coeffs(a, opts)?.iter().map(|c| -c).collect()),
+        Expr::Bin(op @ (BinOp::Add | BinOp::Sub), a, b) => {
+            let (a, b) = (poly_coeffs(a, opts)?, poly_coeffs(b, opts)?);
+            let s = if *op == BinOp::Add { 1.0 } else { -1.0 };
+            let mut r = vec![0.0; a.len().max(b.len())];
+            for (i, x) in a.iter().enumerate() {
+                r[i] += x;
+            }
+            for (i, y) in b.iter().enumerate() {
+                r[i] += s * y;
+            }
+            Some(r)
+        }
+        Expr::Bin(BinOp::Mul, a, b) => mul(&poly_coeffs(a, opts)?, &poly_coeffs(b, opts)?),
+        Expr::Bin(BinOp::Div, a, b) if !b.contains_x() => {
+            let d = poly_coeffs(b, opts)?[0];
+            (d != 0.0).then_some(())?;
+            Some(poly_coeffs(a, opts)?.iter().map(|c| c / d).collect())
+        }
+        Expr::Bin(BinOp::Pow, a, b) => {
+            let (n, 1) = syntactic_rational(b)? else {
+                return None;
+            };
+            let n = usize::try_from(n).ok().filter(|&n| n <= MAX_DEGREE)?;
+            let base = poly_coeffs(a, opts)?;
+            let mut r = vec![1.0];
+            for _ in 0..n {
+                r = mul(&r, &base)?;
+            }
+            Some(r)
+        }
+        _ => None,
+    }
+}
+
+/// A bound on the magnitude of every root of the polynomial (Fujiwara's,
+/// within a factor 2 of the largest root); 0 for a constant.
+fn root_bound(c: &[f64]) -> f64 {
+    let n = match c.iter().rposition(|&a| a != 0.0) {
+        Some(n) if n > 0 => n,
+        _ => return 0.0,
+    };
+    let an = c[n];
+    let mut m: f64 = 0.0;
+    for k in 1..=n {
+        let a = if k == n { c[0] / 2.0 } else { c[n - k] };
+        m = m.max((a / an).abs().powf(1.0 / k as f64));
+    }
+    2.0 * m
 }
 
 fn golden_min_abs(f: &mut dyn FnMut(f64) -> f64, mut a: f64, mut b: f64) -> f64 {
@@ -622,12 +920,22 @@ fn detect_period(expr: &Expr, fun: &Fun, opts: &CompileOptions<'_>, scale: f64) 
 // ---------------------------------------------------------------------------
 // Parity
 
-fn parity(fun: &Fun, scale: f64) -> Parity {
+/// Even, odd or neither, from samples out to the base window and, where
+/// features were found beyond it, out to them too (1/(x³ − 10³⁰) looks
+/// even until x nears 10¹⁰).
+fn parity(fun: &Fun, scale: f64, extent: f64) -> Parity {
     let mut even = true;
     let mut odd = true;
     let mut any = false;
-    for i in 0..60 {
-        let x = 0.0371 * 1.31f64.powi(i) + 1e-3 * i as f64;
+    let near = (0..60).map(|i| (0.0371 * 1.31f64.powi(i) + 1e-3 * i as f64, true));
+    // Out there values can be far below the typical scale (≈10⁻³⁰ for
+    // 1/(x³ − 10³⁰)), so only a relative tolerance means anything.
+    let far = (0..=12)
+        .map(|i| WINDOW * (3.0 * extent / WINDOW).powf(i as f64 / 12.0))
+        .chain([0.3, 0.5, 0.7, 0.9, 1.3, 2.0].map(|t| t * extent))
+        .filter(|_| extent > WINDOW)
+        .map(|x| (x, false));
+    for (x, near) in near.chain(far) {
         let (a, b) = (fun.f(x), fun.f(-x));
         match (a.is_finite(), b.is_finite()) {
             (false, false) => continue,
@@ -635,7 +943,7 @@ fn parity(fun: &Fun, scale: f64) -> Parity {
             _ => return Parity::Neither,
         }
         any = true;
-        let tol = 1e-9 * (a.abs() + b.abs()) + 1e-13 * scale;
+        let tol = 1e-9 * (a.abs() + b.abs()) + if near { 1e-13 * scale } else { 0.0 };
         if (a - b).abs() > tol {
             even = false;
         }
@@ -1436,7 +1744,11 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
             - fin.iter().copied().fold(f64::INFINITY, f64::min);
         let pos = ds.iter().filter(|&&v| v > 0.0).count();
         let neg = ds.iter().filter(|&&v| v < 0.0).count();
-        let dir = if dmax <= 1e-12 * scale.max(1e-300) || (fspan <= 1e-12 * scale && ds.len() > 2) {
+        // Flat against the function's typical size, and against its own
+        // size here: 1/(x³ − 10³⁰) is tiny everywhere but not constant.
+        let fmag = fin.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        let flat = dmax <= 1e-12 * scale.max(1e-300) || (fspan <= 1e-12 * scale && ds.len() > 2);
+        let dir = if flat && fspan <= 1e-9 * fmag {
             Monotonicity::Constant
         } else if neg == 0 && pos > 0 {
             Monotonicity::Increasing
@@ -1470,7 +1782,9 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
     }
     for (end, side) in [(p.lo, 1.0), (p.hi, -1.0)] {
         if end.value.is_infinite() {
-            match limit_at_infinity(&mut f, end.value.signum()) {
+            // Sample past the piece's other end, inside the piece.
+            let other = if side > 0.0 { p.hi.value } else { p.lo.value };
+            match limit_at_infinity_beyond(&mut f, end.value.signum(), other) {
                 SeqLimit::Converges(l) => acc.consider(l, false),
                 SeqLimit::PosInf => acc.consider(f64::INFINITY, false),
                 SeqLimit::NegInf => acc.consider(f64::NEG_INFINITY, false),
@@ -1766,10 +2080,30 @@ fn format_line(m: f64, b: f64) -> String {
 fn analyze_aperiodic(
     fun: &Fun,
     gens: &[Program],
+    beyond: &Beyond,
     scale: f64,
 ) -> Result<KeyGraphFeatures, AnalysisError> {
-    let xs = sinh_grid(WINDOW, N_HALF);
-    let sc = scan(fun, &xs, &[], gens, true, true, scale);
+    // Widen the window to take in whatever lies beyond it, keeping the
+    // grid as dense near 0, and as dense again around each feature out
+    // there (x + 1/(x − 2·10⁶) turns at 2·10⁶ ± 1).
+    let xs = if beyond.extent > WINDOW {
+        let w = (4.0 * beyond.extent).min(4.0 * REACH);
+        let n = (N_HALF as f64 * w.asinh() / WINDOW.asinh()).ceil() as usize;
+        let mut xs = sinh_grid(w, n);
+        for &c in &beyond.features {
+            xs.extend(
+                sinh_grid(0.5 * c.abs(), LOCAL_HALF)
+                    .into_iter()
+                    .map(|d| c + d),
+            );
+        }
+        xs.sort_by(|a, b| a.total_cmp(b));
+        xs.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * a.abs().max(1.0));
+        xs
+    } else {
+        sinh_grid(WINDOW, N_HALF)
+    };
+    let sc = scan(fun, &xs, &beyond.candidates, gens, true, true, scale);
     if sc.pieces.is_empty() {
         return Err(AnalysisError::AnalysisCouldNotBePerformed);
     }

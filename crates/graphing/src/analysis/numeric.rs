@@ -193,6 +193,21 @@ pub(crate) fn sequence_limit(v: &[f64]) -> SeqLimit {
             };
         }
     }
+    // Steady growth through zero (ln x − 30 at x = 10^k): steps of one
+    // sign that don't shrink (slow convergence like 1/ln x shrinks them
+    // faster than this), ending on the far side of 0 and moving away.
+    let steps: Vec<f64> = tail.windows(2).map(|w| w[1] - w[0]).collect();
+    let up = steps.iter().all(|&d| d > 0.0);
+    let down = steps.iter().all(|&d| d < 0.0);
+    let steady = steps.windows(2).all(|w| w[1].abs() >= 0.9 * w[0].abs());
+    let (last, before) = (tail[tail.len() - 1], tail[tail.len() - 2]);
+    if steady && (up && last > 0.0 || down && last < 0.0) && last.abs() > before.abs() {
+        return if up {
+            SeqLimit::PosInf
+        } else {
+            SeqLimit::NegInf
+        };
+    }
     // Convergence: pick the index with the smallest increment, requiring the
     // increments to shrink for a few steps before it.
     let d: Vec<f64> = fin.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
@@ -234,8 +249,28 @@ pub(crate) fn sequence_limit(v: &[f64]) -> SeqLimit {
 
 /// Limit of f(x) as x → +∞ (`sign > 0`) or −∞.
 pub(crate) fn limit_at_infinity(f: &mut dyn FnMut(f64) -> f64, sign: f64) -> SeqLimit {
-    let v: Vec<f64> = (1..=17).map(|k| f(sign * 10f64.powi(k))).collect();
-    sequence_limit(&v)
+    limit_at_infinity_beyond(f, sign, 0.0)
+}
+
+/// Limit at ±∞ of a function defined on (or a piece starting at) `from`:
+/// sampled at powers of 10 well past it, skipping any where f isn't yet
+/// defined (log(x − 5·10⁶) at x = 10).
+pub(crate) fn limit_at_infinity_beyond(
+    f: &mut dyn FnMut(f64) -> f64,
+    sign: f64,
+    from: f64,
+) -> SeqLimit {
+    let start = if from.is_finite() {
+        2.0 * from.abs()
+    } else {
+        0.0
+    };
+    let first = (start.max(10.0).log10().ceil() as i32).max(1);
+    let v: Vec<f64> = (first..first + 17)
+        .map(|k| f(sign * 10f64.powi(k)))
+        .collect();
+    let defined = v.iter().position(|x| !x.is_nan()).unwrap_or(v.len());
+    sequence_limit(&v[defined..])
 }
 
 /// Whether |f| diverges approaching `c` from the side `side` (±1).
