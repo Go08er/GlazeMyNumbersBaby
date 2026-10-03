@@ -22,7 +22,9 @@ loop closes that display.
 
 `mem.sh` measures the process it launches (and checks it's still the named
 app throughout), so an already running copy of an app is never measured or
-stopped.
+stopped. The command must exec the app (an `env ...` prefix does); a
+wrapper that forks instead is reported, and everything it started is
+stopped with it. A successful run exits 0.
 
 ```sh
 nix develop -f tools/bench/shell.nix
