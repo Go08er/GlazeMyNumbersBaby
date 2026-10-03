@@ -8,15 +8,16 @@
 
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use x11_clipboard::{Atom, Context, RustConnection};
 use x11rb::connection::Connection as _;
 use x11rb::protocol::Event;
-use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, Property};
-use x11rb::wrapper::ConnectionExt as _;
+use x11rb::protocol::xproto::{
+    AtomEnum, ConnectionExt as _, CreateWindowAux, EventMask, Property, Window, WindowClass,
+};
 
 use super::MAX_PASTE;
 
@@ -83,38 +84,22 @@ impl Clipboard {
     }
 }
 
-/// What the reader needs from the X server: the text formats we ask for,
-/// best first, and a ring of properties to receive into. Each conversion
-/// uses the next one, so an owner still writing into an abandoned
-/// transfer's property can't land in a later paste.
+/// The text formats we ask for, best first.
 struct Reader {
     utf8: Atom,
     plain: Atom,
     text: Atom,
     string: Atom,
-    props: [Atom; 4],
-    next: AtomicUsize,
 }
 
 impl Reader {
     fn new(cx: &Context) -> Option<Reader> {
-        let mut props = [0; 4];
-        for (i, p) in props.iter_mut().enumerate() {
-            *p = cx.get_atom(&format!("DGMNB_PASTE_{i}")).ok()?;
-        }
         Some(Reader {
             utf8: cx.atoms.utf8_string,
             plain: cx.get_atom("text/plain;charset=utf-8").ok()?,
             text: cx.get_atom("TEXT").ok()?,
             string: cx.atoms.string,
-            props,
-            next: AtomicUsize::new(0),
         })
-    }
-
-    /// The property for the next conversion.
-    fn prop(&self) -> Atom {
-        self.props[self.next.fetch_add(1, Ordering::Relaxed) % self.props.len()]
     }
 
     fn decode(&self, kind: Atom, data: &[u8]) -> String {
@@ -136,18 +121,17 @@ fn read_text(cx: &Context, r: &Reader, timeout: Duration) -> Option<String> {
     let clipboard = cx.atoms.clipboard;
     // Which formats does the owner offer? (Some owners don't answer
     // TARGETS; then just try each in turn.)
-    let offered: Option<Vec<Atom>> =
-        fetch(cx, r, clipboard, cx.atoms.targets, deadline, MAX_TARGETS)
-            .filter(|f| f.format == 32)
-            .map(|f| {
-                let (words, _) = f.data.as_chunks::<4>();
-                words.iter().map(|w| u32::from_ne_bytes(*w)).collect()
-            });
+    let offered: Option<Vec<Atom>> = fetch(cx, clipboard, cx.atoms.targets, deadline, MAX_TARGETS)
+        .filter(|f| f.format == 32)
+        .map(|f| {
+            let (words, _) = f.data.as_chunks::<4>();
+            words.iter().map(|w| u32::from_ne_bytes(*w)).collect()
+        });
     for target in [r.utf8, r.plain, r.text, r.string] {
         if offered.as_ref().is_some_and(|o| !o.contains(&target)) {
             continue;
         }
-        if let Some(f) = fetch(cx, r, clipboard, target, deadline, MAX_PASTE)
+        if let Some(f) = fetch(cx, clipboard, target, deadline, MAX_PASTE)
             && f.format == 8
         {
             return Some(r.decode(f.kind, &f.data).replace("\r\n", "\n"));
@@ -169,16 +153,16 @@ struct Fetched {
 /// larger than `max` bytes before allocating for it.
 fn fetch(
     cx: &Context,
-    r: &Reader,
     selection: Atom,
     target: Atom,
     deadline: Instant,
     max: usize,
 ) -> Option<Fetched> {
-    let (c, win, prop) = (&cx.connection, cx.window, r.prop());
-    // Start from an empty property and an empty event queue.
-    c.delete_property(win, prop).ok()?;
-    c.sync().ok()?;
+    // A window of its own for this conversion, destroyed when it ends: an
+    // owner still writing to an abandoned one, or refusing it late, can't
+    // reach a later conversion.
+    let requestor = Requestor::new(cx)?;
+    let (c, win, prop) = (&cx.connection, requestor.0, cx.atoms.property);
     drain(c, deadline)?;
     c.convert_selection(win, selection, target, prop, x11rb::CURRENT_TIME)
         .ok()?;
@@ -205,7 +189,7 @@ fn fetch(
         .reply()
         .ok()?;
     if head.type_ == cx.atoms.incr {
-        return fetch_incr(cx, prop, deadline, max);
+        return fetch_incr(cx, win, prop, deadline, max);
     }
     let size = head.bytes_after as usize;
     if size > max {
@@ -232,8 +216,14 @@ fn fetch(
 /// The INCR protocol: the owner sends chunks as property updates and an
 /// empty chunk ends the transfer. Its advertised total is ignored, and every
 /// chunk must have the first one's type and format.
-fn fetch_incr(cx: &Context, prop: Atom, deadline: Instant, max: usize) -> Option<Fetched> {
-    let (c, win) = (&cx.connection, cx.window);
+fn fetch_incr(
+    cx: &Context,
+    win: Window,
+    prop: Atom,
+    deadline: Instant,
+    max: usize,
+) -> Option<Fetched> {
+    let c = &cx.connection;
     // Deleting the INCR property tells the owner to start.
     c.delete_property(win, prop).ok()?;
     c.flush().ok()?;
@@ -249,6 +239,11 @@ fn fetch_incr(cx: &Context, prop: Atom, deadline: Instant, max: usize) -> Option
             .ok()?
             .reply()
             .ok()?;
+        if head.type_ == x11rb::NONE {
+            // Gone already: a notice for a chunk we've read. (The end of the
+            // transfer is an empty property, not a missing one.)
+            continue;
+        }
         let chunk = head.bytes_after as usize;
         let have = out.as_ref().map_or(0, |o| o.data.len());
         if have.saturating_add(chunk) > max {
@@ -284,6 +279,40 @@ fn fetch_incr(cx: &Context, prop: Atom, deadline: Instant, max: usize) -> Option
             }
             Some(_) => return None, // the owner changed format mid-transfer
         }
+    }
+}
+
+/// An input-only window that receives one conversion, destroyed on drop.
+struct Requestor<'a>(Window, &'a RustConnection);
+
+impl<'a> Requestor<'a> {
+    fn new(cx: &'a Context) -> Option<Requestor<'a>> {
+        let c = &cx.connection;
+        let root = c.setup().roots.get(cx.screen)?.root;
+        let win = c.generate_id().ok()?;
+        let watch = CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE);
+        c.create_window(
+            0,
+            win,
+            root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_ONLY,
+            0,
+            &watch,
+        )
+        .ok()?;
+        Some(Requestor(win, c))
+    }
+}
+
+impl Drop for Requestor<'_> {
+    fn drop(&mut self) {
+        let _ = self.1.destroy_window(self.0);
+        let _ = self.1.flush();
     }
 }
 
@@ -333,6 +362,7 @@ mod tests {
         ChangeWindowAttributesAux, CreateWindowAux, EventMask, PropMode, SELECTION_NOTIFY_EVENT,
         SelectionNotifyEvent, WindowClass,
     };
+    use x11rb::wrapper::ConnectionExt as _;
 
     /// A private X server for the test.
     struct Xvfb {
@@ -517,6 +547,99 @@ mod tests {
         owner
     }
 
+    /// A misbehaving owner: answers UTF8_STRING with INCR, then keeps writing
+    /// "stale" into the requestor's property for a second, whatever the
+    /// requestor does. Yields the window it was writing to.
+    fn keep_writing(display: &str) -> JoinHandle<Option<u32>> {
+        let (ready, wait) = mpsc::channel();
+        let display = display.to_string();
+        let owner = thread::spawn(move || {
+            let (c, screen) = RustConnection::connect(Some(&display)).unwrap();
+            let root = c.setup().roots[screen].root;
+            let win = c.generate_id().unwrap();
+            c.create_window(
+                0,
+                win,
+                root,
+                0,
+                0,
+                1,
+                1,
+                0,
+                WindowClass::INPUT_ONLY,
+                0,
+                &CreateWindowAux::new(),
+            )
+            .unwrap();
+            let atom = |n: &str| {
+                c.intern_atom(false, n.as_bytes())
+                    .unwrap()
+                    .reply()
+                    .unwrap()
+                    .atom
+            };
+            let (clipboard, targets, utf8, incr) = (
+                atom("CLIPBOARD"),
+                atom("TARGETS"),
+                atom("UTF8_STRING"),
+                atom("INCR"),
+            );
+            c.set_selection_owner(win, clipboard, x11rb::CURRENT_TIME)
+                .unwrap();
+            c.get_selection_owner(clipboard).unwrap().reply().unwrap();
+            ready.send(()).unwrap();
+            let until = Instant::now() + Duration::from_secs(1);
+            let mut victim = None;
+            while Instant::now() < until {
+                while let Ok(Some(ev)) = c.poll_for_event() {
+                    let Event::SelectionRequest(r) = ev else {
+                        continue;
+                    };
+                    let notify = |property: u32| {
+                        let e = SelectionNotifyEvent {
+                            response_type: SELECTION_NOTIFY_EVENT,
+                            sequence: 0,
+                            time: r.time,
+                            requestor: r.requestor,
+                            selection: r.selection,
+                            target: r.target,
+                            property,
+                        };
+                        let _ = c.send_event(false, r.requestor, EventMask::NO_EVENT, e);
+                    };
+                    if r.target == targets {
+                        let _ = c.change_property32(
+                            PropMode::REPLACE,
+                            r.requestor,
+                            r.property,
+                            AtomEnum::ATOM,
+                            &[targets, utf8],
+                        );
+                        notify(r.property);
+                    } else if r.target == utf8 && victim.is_none() {
+                        let _ = c.change_property32(
+                            PropMode::REPLACE,
+                            r.requestor,
+                            r.property,
+                            incr,
+                            &[1],
+                        );
+                        notify(r.property);
+                        victim = Some((r.requestor, r.property));
+                    }
+                }
+                if let Some((w, p)) = victim {
+                    let _ = c.change_property8(PropMode::REPLACE, w, p, utf8, b"stale");
+                }
+                let _ = c.flush();
+                thread::sleep(Duration::from_micros(100));
+            }
+            victim.map(|(w, _)| w)
+        });
+        wait.recv().unwrap();
+        owner
+    }
+
     /// R5-M-01: an owner that never answers while property changes keep
     /// hitting our window (spam, or an abandoned transfer) can't stretch the
     /// deadline. Needs `Xvfb`; skipped otherwise.
@@ -666,5 +789,31 @@ mod tests {
         let (text, taken) = paste_counting(flood);
         assert_eq!(text, None);
         assert_eq!(taken, 17);
+
+        // R6-M-04: an owner that keeps writing into the property it was
+        // given for an abandoned transfer can't land in the pastes that
+        // follow, however many there are (the old four-property ring
+        // wrapped after four).
+        let stubborn = keep_writing(&x.display);
+        // (Whatever it answers this paste with is its own business.)
+        let _ = read_text(&cx, &t, Duration::from_millis(200));
+        for i in 0..6 {
+            let fresh = format!("fresh {i}");
+            let owner = own(
+                &x.display,
+                plain(
+                    Some(&["TARGETS", "UTF8_STRING"]),
+                    vec![("UTF8_STRING", "UTF8_STRING", fresh.clone().into_bytes())],
+                ),
+            );
+            let got = read_text(&cx, &t, Duration::from_secs(2));
+            owner.join().unwrap();
+            assert_eq!(got.as_deref(), Some(fresh.as_str()));
+        }
+        // The window it was told to write to is gone: nothing it writes can
+        // reach a later conversion.
+        let target = stubborn.join().unwrap().expect("it was asked for text");
+        let window = cx.connection.get_window_attributes(target).unwrap().reply();
+        assert!(window.is_err(), "the abandoned conversion's window still exists");
     }
 }
