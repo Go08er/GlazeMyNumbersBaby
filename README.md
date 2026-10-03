@@ -191,7 +191,7 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **621 tests** (counts include
+`nix develop -c cargo test --workspace` runs **631 tests** (counts include
 doctests; one more, a live currency fetch, is `#[ignore]`d). The D-Bus and
 X11 tests start their own `dbus-daemon` and `Xvfb` from the dev shell (and
 skip without them). DGMNB's Wayland clipboard test copies text, so it only
@@ -205,10 +205,10 @@ upstream sources with g++:
 | ratpack (11) | 13,628 golden cases from the C++ Ratpack (every op and function, all angle types, radixes 2–36, formats, precisions, error codes), byte-for-byte; port of `RationalTest.cpp` |
 | calcmanager (77) | 3,500 golden command sequences replayed against the C++ `CalculatorManager` (every display callback, expression token, history and memory state); ports of `CalcEngineTests`, `CalcInputTest`, `CalculatorManagerTest` |
 | calcvm (121) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage |
-| unitconv (138 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
+| unitconv (139 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
 | datecalc (40), copypaste (40) | Ports of `DateCalculatorTests` and `CopyPasteManagerTests`, plus paste key-sequence tests |
-| graphing (120) | Parser, sampling and asymptotes, implicit/inequality plots, function analysis, frame-time budgets, prompt cancellation of running plots and analyses, and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis) |
-| appcore (42) | Keyboard map, key scripts, settings storage (huge/corrupt files), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
+| graphing (128) | Parser, sampling and asymptotes, implicit/inequality plots, function analysis (including poles, zeros and domains far outside the scanned window), frame-time budgets, prompt cancellation of running plots and analyses, and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis) |
+| appcore (43) | Keyboard map, key scripts, converter paste validation, settings storage (huge/corrupt files), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
 | gmnb (3), dgmnb (29) | GDK key translation, palette contrast for extreme accents; DGMNB text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown, pipe deadlines, and X11 paste (formats, size caps, deadlines under event floods) against a private Xvfb |
 
 The oracles live in `tools/oracle/` and need the upstream repository checked
