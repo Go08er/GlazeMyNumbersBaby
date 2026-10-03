@@ -36,7 +36,9 @@ use super::{
     Periodicity, flags,
 };
 use crate::ast::{BinOp, Expr, Func};
-use crate::compile::{CompileOptions, Input, Program, syntactic_rational};
+use crate::compile::{
+    CompileOptions, Input, Program, Redo, constant_where_defined, syntactic_rational,
+};
 use crate::diff::derivative_bounded;
 use crate::functions::TrigUnit;
 use crate::simplify::linear_in;
@@ -90,6 +92,9 @@ struct Fun<'a> {
     /// one is negative, the power is undefined except where the exponent
     /// is an integer, isolated points no sampling finds.
     power_bases: Vec<Program>,
+    /// Whether f was beyond even extended range somewhere within the search
+    /// (the sine of e^1000): NaN there, but not known to be undefined.
+    unresolved: Cell<bool>,
     /// Instructions executed so far.
     work: Cell<u64>,
     budget: u64,
@@ -127,28 +132,66 @@ impl Fun<'_> {
         }
     }
 
-    /// Evaluates `p` at `x`, charged to the budget.
+    /// Evaluates `p` at `x`, charged to the budget. Only f's own values are
+    /// re-evaluated in extended range where a double can't hold them (see
+    /// `Program::eval`); its derivatives' and helpers' are kept as doubles
+    /// give them, as the rest of the analysis expects.
     #[inline]
     fn eval(&self, p: &Program, x: f64) -> f64 {
-        if self.spend(p.cost()) {
-            p.eval_x(x)
-        } else {
-            f64::NAN
+        if !self.spend(p.cost()) {
+            return f64::NAN;
         }
+        if !std::ptr::eq(p, &self.f) {
+            return p.eval_plain(x, 0.0);
+        }
+        let (v, redo) = p.eval_tagged(x, 0.0);
+        if redo != Redo::No {
+            self.redone(p, x, redo);
+        }
+        v
     }
 
     /// Evaluates `p` on a grid, charged to the budget.
     fn eval_batch(&self, p: &Program, xs: &[f64], out: &mut [f64]) {
-        if self.spend(p.cost().saturating_mul(xs.len())) {
-            p.eval_batch(Input::Slice(xs), Input::Scalar(0.0), out);
-        } else {
+        if !self.spend(p.cost().saturating_mul(xs.len())) {
             out.fill(f64::NAN);
+            return;
+        }
+        p.eval_batch_plain(Input::Slice(xs), Input::Scalar(0.0), out);
+        if !std::ptr::eq(p, &self.f) || !p.may_redo() {
+            return;
+        }
+        for (o, &x) in out.iter_mut().zip(xs) {
+            if !o.is_finite() {
+                let (v, redo) = p.redo(x, 0.0);
+                *o = v;
+                if redo != Redo::No {
+                    self.redone(p, x, redo);
+                }
+            }
+        }
+    }
+
+    /// Charges a re-evaluation of f at `x` in extended range (several times
+    /// the cost of the double one), and notes a value even that couldn't
+    /// resolve within the search. Beyond it f is only probed for its trend,
+    /// where such a NaN reads as before.
+    #[cold]
+    fn redone(&self, p: &Program, x: f64, redo: Redo) {
+        self.spend(p.cost().saturating_mul(8));
+        if redo == Redo::Unknown && x.abs() <= REACH {
+            self.unresolved.set(true);
         }
     }
 
     #[inline]
     fn f(&self, x: f64) -> f64 {
         self.eval(&self.f, x)
+    }
+
+    /// Whether f is exactly 0 at `x`, not a value too small for a double.
+    fn exact_zero(&self, x: f64) -> bool {
+        self.spend(self.f.cost().saturating_mul(8)) && self.f.is_exact_zero(x, 0.0)
     }
 
     fn df(&self, x: f64) -> f64 {
@@ -195,6 +238,18 @@ pub(crate) fn analyze_expr(
     opts: &CompileOptions<'_>,
     cancel: Option<&AtomicBool>,
 ) -> Result<KeyGraphFeatures, Stop> {
+    let k = analyze_framed(expr, opts, cancel)?;
+    Ok(match constant_where_defined(expr, opts) {
+        Some(c) => constant_where(k, c),
+        None => k,
+    })
+}
+
+fn analyze_framed(
+    expr: &Expr,
+    opts: &CompileOptions<'_>,
+    cancel: Option<&AtomicBool>,
+) -> Result<KeyGraphFeatures, Stop> {
     // f(x) = g(s·x + t), every x inside the same affine form up to scale:
     // analyse g around its own origin and map what it finds back, so that
     // (x − 10⁶)² + 1, sin(x − 1000)/(x − 1000) or (x/0.001)³ − 3(x/0.001)
@@ -233,6 +288,9 @@ pub(crate) fn analyze_expr(
             } else {
                 String::new()
             };
+            if y0.is_infinite() {
+                which |= flags::Y_INTERCEPT;
+            }
             forget(&mut k, which);
         }
         return Ok(k);
@@ -473,6 +531,10 @@ fn map_affine(kg: KeyGraphFeatures, fun: &Fun, a: f64, b: f64) -> KeyGraphFeatur
     {
         k.data.y_intercept = Some(clean(y0, value_noise(fun, 0.0, y0)));
     }
+    // f(0) exists but is beyond a double's range ((x − 1000)e^(1000 − x)).
+    if y0.is_infinite() {
+        k.too_complex_features |= flags::Y_INTERCEPT;
+    }
     // Parity: f's own, tested also around the root of the form and at
     // what was found, where a shifted f lives (e^(x − 10⁶) is 0 near 0).
     let r = -b / a;
@@ -655,6 +717,7 @@ fn make_fun<'a>(
         kinks: kink_programs(expr, opts),
         tails,
         power_bases,
+        unresolved: Cell::new(false),
         work: Cell::new(0),
         budget,
         cancel,
@@ -898,12 +961,63 @@ fn analyze_with_budget(
     {
         k.too_complex_features |= flags::ZEROS;
     }
+    // Somewhere f is beyond even extended range (sin(e^x) for x > 709.8):
+    // whether it is defined there, and what it does, are unknown, not a gap
+    // in its domain.
+    if fun.unresolved.get() {
+        forget(&mut k, VALUES);
+        k.parity = Parity::Unknown;
+    }
     // A feature that couldn't be determined in full keeps none of its
     // values: the ones found (the asymptote on one side, the extrema near
     // the origin of sin(x)/x) would read as all there is.
     let unknown = k.too_complex_features;
     forget(&mut k, unknown);
     Ok(k)
+}
+
+/// Every feature that depends on f's values rather than only its form.
+const VALUES: u32 = flags::DOMAIN
+    | flags::RANGE
+    | flags::ZEROS
+    | flags::MINIMA
+    | flags::MAXIMA
+    | flags::INFLECTION_POINTS
+    | flags::VERTICAL_ASYMPTOTES
+    | flags::HORIZONTAL_ASYMPTOTES
+    | flags::OBLIQUE_ASYMPTOTES
+    | flags::MONOTONE_INTERVALS;
+
+/// The features of f = c wherever it is defined (0·x, 0/x, 0/e^(1/x), x/x,
+/// e^x/e^x), given those found for its domain: c on each piece of it, every
+/// point of it an x-intercept if c = 0, and nothing else to find. Sampling
+/// alone can't tell a stretch of zeros from underflow, nor 1 from rounding.
+fn constant_where(mut k: KeyGraphFeatures, c: f64) -> KeyGraphFeatures {
+    if k.too_complex_features & flags::DOMAIN != 0 || k.data.domain.is_empty() {
+        return k;
+    }
+    if k.domain == format_set("x", &[Interval::all()]) {
+        return constant_features(c);
+    }
+    let c = if c.abs() <= 1e-15 { 0.0 } else { c };
+    let derived = VALUES & !(flags::DOMAIN | flags::MONOTONE_INTERVALS);
+    forget(&mut k, derived);
+    k.too_complex_features &= !derived;
+    if c == 0.0 {
+        k.x_intercept = k.domain.clone();
+    }
+    k.range = format_set_with("y", &[Interval::closed(c, c)], &fmt_y);
+    k.data.range = vec![Interval::closed(c, c)];
+    if k.data.period.is_none() {
+        k.too_complex_features &= !flags::MONOTONE_INTERVALS;
+        k.data.monotonicity = (k.data.domain.iter())
+            .map(|&i| (i, Monotonicity::Constant))
+            .collect();
+        k.monotonicity = (k.data.monotonicity.iter())
+            .map(|(i, m)| (i.format(), *m))
+            .collect();
+    }
+    k
 }
 
 /// Mark `which` features as too complex to determine, dropping whatever
@@ -2881,7 +2995,9 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
     // Zeros. A run of several exact-zero samples is a stretch where f
     // vanishes identically (or underflows): not a list of intercepts.
     // A run is genuine (not underflow) when a sample next to it is of
-    // normal magnitude, e.g. floor(x) = 0 on [0, 1) next to ±1.
+    // normal magnitude, e.g. max(x, 0) = 0 for x ≤ 0 next to x, or when f
+    // is exactly 0 there in extended range, as floor(x) is on [0, 1), a
+    // piece of its own between jumps.
     let normal = |v: f64| v.is_finite() && v.abs() > 1e-250;
     let mut inner_zero_run = false;
     let mut i = 0;
@@ -2891,7 +3007,11 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
             while j + 1 < fs.len() && fs[j + 1] == 0.0 {
                 j += 1;
             }
-            if j > i && ((i > 0 && normal(fs[i - 1])) || (j + 1 < fs.len() && normal(fs[j + 1]))) {
+            if j > i
+                && ((i > 0 && normal(fs[i - 1]))
+                    || (j + 1 < fs.len() && normal(fs[j + 1]))
+                    || fun.exact_zero(xs[(i + j) / 2]))
+            {
                 inner_zero_run = true;
             }
             i = j + 1;
@@ -3969,6 +4089,10 @@ fn analyze_aperiodic(
     } else {
         None
     };
+    // f(0) exists but is beyond a double's range ((x − 1000)e^(1000 − x)).
+    if y0.is_infinite() && !zero_excluded {
+        too |= flags::Y_INTERCEPT;
+    }
     if let Some(y) = y_intercept {
         k.y_intercept = fmt_y(y);
     }
@@ -4125,9 +4249,11 @@ fn analyze_periodic(
     let mut maxima = Vec::new();
     let mut infl = Vec::new();
     let mut starts: Vec<f64> = Vec::new();
+    let mut zero_interval = false;
     for pc in &sa.pieces {
         // Only interior features of pieces count (window cuts are artificial).
         let pf = piece_features(fun, pc, scale, false);
+        zero_interval |= pf.zero_interval;
         let inside = |x: f64| {
             x > pc.lo.value && x < pc.hi.value
                 || (pc.lo.closed && x == pc.lo.value && pc.lo.value > wa[0])
@@ -4176,6 +4302,10 @@ fn analyze_periodic(
     let mut too = 0u32;
     if sc.too_complex || sa.too_complex {
         too |= flags::DOMAIN | flags::RANGE;
+    }
+    // A stretch where f is 0 isn't a list of intercepts.
+    if zero_interval {
+        too |= flags::ZEROS;
     }
     if isolated_powers(fun, &xs) {
         too |= flags::DOMAIN | flags::RANGE | flags::ZEROS;
@@ -4330,6 +4460,9 @@ fn analyze_periodic(
     } else {
         None
     };
+    if y0.is_infinite() && !zero_excluded {
+        too |= flags::Y_INTERCEPT;
+    }
     if let Some(y) = y_intercept {
         k.y_intercept = fmt_y(y);
     }
