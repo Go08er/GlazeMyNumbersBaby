@@ -24,18 +24,38 @@
 //! program, but an intermediate that underflows or overflows a double stays
 //! a nonzero, finite number (e^(−800) is not 0, and 1/e^(−800) is defined).
 //!
-//! Every tolerance is local: what f does across the neighbouring floats of
-//! x (the rounding of x itself) plus a bound on the rounding of f's own
-//! operations at x, propagated through the tree. Nothing is relative to the
-//! function's size elsewhere, to a shift or offset, or to anything the
-//! analysis engine estimates.
+//! Every tolerance is local, and these are all of them:
+//!
+//! * `noise(x)`: f's change to its nearest other value at least two floats
+//!   either side of x (a feature at the neighbouring float is as good as the
+//!   floats allow; in a shifted frame f only changes every so many floats),
+//!   plus `rounding(x)`, a first-order bound on the rounding of each of f's
+//!   operations at x, propagated through the tree (the expanded (x − 1)⁴ is
+//!   ±4·10⁻¹⁶ beside its zero though neighbouring floats agree). Values
+//!   closer than that can't be told apart.
+//! * `resolution(x)`: how far f's argument must move for f to change. Which
+//!   side of a domain boundary x is on, and whether a sign change is a
+//!   crossing, a pole or a jump, are judged at that scale.
+//! * Points within four floats (or the rounding of a periodic family's
+//!   copies, |k|·ulp(P)) of a reported end or excluded point: the precision
+//!   of that end, not a claim about the point.
+//! * `same_shown`: a value that reads the same in the panel's 6 significant
+//!   digits is the same claim (the engine rounds values to what it shows).
+//!   Only for values; shapes (pieces, open or closed, a point or an interval,
+//!   constant or not) and positions get no such allowance.
+//! * x + P is rounded and P stands for the true period to half an ulp: the
+//!   period check compares f across that reach.
+//!
+//! Nothing is relative to the function's size elsewhere, to a shift or
+//! offset, or to anything the analysis engine estimates.
 //!
 //! A feature the analysis marks as unknown is never counted as a failure; a
 //! definite claim that contradicts the function is. A coverage table says
 //! how many features were definite. Checks named `policy-…` are deliberate
 //! choices of the calculator (0⁰ = 1, refusing to analyse a function that
-//! is nowhere defined) rather than false claims. Exits with status 1 if any
-//! other check fails.
+//! is nowhere defined) rather than false claims; `unverifiable-…` ones are
+//! claims no float can confirm or refute (a zero closer to a pole than f's
+//! resolution). Exits with status 1 if any other check fails.
 
 use std::collections::BTreeMap;
 use std::f64::consts::{LN_2, LN_10, PI};
@@ -2272,10 +2292,11 @@ fn zero_ok(a: &Analysed, z: f64) -> Verdict {
     if near { Verdict::Holds } else { Verdict::Fails }
 }
 
-/// Are p and q the same zero: a few floats apart, or with f
-/// indistinguishable from 0 all the way between?
+/// Are p and q the same zero: a few dozen floats apart (where a root
+/// finder stops; 10⁷·(1 − 3·10⁻¹⁵) for 10⁷ is no claim anyone can see), or
+/// with f indistinguishable from 0 all the way between?
 fn same_root(a: &Analysed, p: f64, q: f64) -> bool {
-    if floats_between(p, q) <= 16 {
+    if floats_between(p, q) <= 64 {
         return true;
     }
     (1..8).all(|i| {
@@ -2677,16 +2698,48 @@ fn check_missing_extrema(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
             if !local {
                 continue;
             }
-            // The edge of a jump is no turn: there f falls away much
-            // further on one side than the other, a few steps of its
-            // resolution out (the top of atan(tan(x)) − 10⁶ is a staircase).
+            // The edge of a jump or a pole is no turn: there f falls away,
+            // a few steps of its resolution out, by more than it does
+            // across the whole bracket (the top of atan(tan(x)) − 10⁶ is a
+            // staircase; tan beside its pole).
             let res = a.resolution(xm);
             let h = 4.0 * if res.is_finite() { res } else { 16.0 * ulp(xm) };
             let (d1, d2) = ((a.eval(xm - h) - ym).abs(), (a.eval(xm + h) - ym).abs());
-            if !(d1.is_finite() && d2.is_finite())
-                || d1.max(d2)
-                    > 64.0 * d1.min(d2) + a.noise(xm) + a.rounding(xm - h).min(a.rounding(xm + h))
-            {
+            if !(d1.is_finite() && d2.is_finite()) || d1.max(d2) > p + a.rounding(xm) {
+                continue;
+            }
+            // Nor where f moves, within a few dozen floats, by a good part
+            // of its swing over the bracket (a sawtooth's top between far
+            // samples).
+            let swing = (1..8)
+                .map(|j| a.eval(xs[i - 1] + (xs[i + 1] - xs[i - 1]) * j as f64 / 8.0) - ym)
+                .filter(|v| v.is_finite())
+                .fold(0.0f64, |m, v| m.max(v.abs()));
+            let mut near: Vec<f64> = [2, 4, 8, 16, 32, 64]
+                .iter()
+                .flat_map(|&k| [nudge(xm, -k), nudge(xm, k)])
+                .collect();
+            let delta = (xs[i + 1] - xs[i - 1]) / 128.0;
+            near.extend((-8..=8).map(|j| xm + j as f64 * delta));
+            near.sort_by(f64::total_cmp);
+            let vals: Vec<f64> = near.iter().map(|&t| a.eval(t)).collect();
+            let step = vals
+                .windows(2)
+                .map(|w| (w[1] - w[0]).abs())
+                .fold(
+                    0.0f64,
+                    |m, v| if v.is_nan() { f64::INFINITY } else { m.max(v) },
+                );
+            if !(step <= 0.25 * swing + a.rounding(xm)) {
+                continue;
+            }
+            // Nor is the top of the climb to a reported pole (a missing
+            // pole is the missing-pole check's business).
+            let (lo, hi) = (xs[i - 1].min(xm - h), xs[i + 1].max(xm + h));
+            if d.vertical_asymptotes.iter().chain(&d.excluded).any(|v| {
+                let c = nearest(v, xm);
+                c >= lo && c <= hi || close_to(v, xm, 64)
+            }) {
                 continue;
             }
             let mut hit = false;
