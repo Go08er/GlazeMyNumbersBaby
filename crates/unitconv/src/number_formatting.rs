@@ -19,8 +19,9 @@ pub fn trim_trailing_zeros(number: &mut String) {
         return;
     }
 
-    if let Some(i) = number.rfind(|c| c != '0') {
-        number.truncate(i + 1);
+    // After the last character that isn't a zero, whatever its width.
+    if let Some((i, c)) = number.char_indices().rfind(|&(_, c)| c != '0') {
+        number.truncate(i + c.len_utf8());
     }
 
     if number.ends_with('.') {
@@ -160,6 +161,10 @@ mod tests {
             ("0.0", "0"),
             ("-0.50", "-0.5"),
             ("30.", "30"),
+            // R10-L-02: a multibyte character before the zeros is kept
+            // whole.
+            ("1.5\u{00b0}00", "1.5\u{00b0}"),
+            ("2.\u{0663}0", "2.\u{0663}"),
         ];
         for (input, expected) in cases {
             assert_eq!(trimmed(input), expected, "{input}");

@@ -158,19 +158,13 @@ impl Fun<'_> {
             out.fill(f64::NAN);
             return;
         }
-        p.eval_batch_plain(Input::Slice(xs), Input::Scalar(0.0), out);
         if !std::ptr::eq(p, &self.f) || !p.may_redo() {
+            p.eval_batch_plain(Input::Slice(xs), Input::Scalar(0.0), out);
             return;
         }
-        for (o, &x) in out.iter_mut().zip(xs) {
-            if !o.is_finite() {
-                let (v, redo) = p.redo(x, 0.0);
-                *o = v;
-                if redo != Redo::No {
-                    self.redone(p, x, redo);
-                }
-            }
-        }
+        p.eval_batch_tagged(Input::Slice(xs), Input::Scalar(0.0), out, |i, redo| {
+            self.redone(p, xs[i], redo)
+        });
     }
 
     /// Charges a re-evaluation of f at `x` in extended range (several times

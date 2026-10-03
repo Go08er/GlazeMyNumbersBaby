@@ -90,6 +90,22 @@ fn nearest_on_polylines(
     best
 }
 
+/// The spacing of floats at `v`.
+fn ulp(v: f64) -> f64 {
+    let a = v.abs();
+    if a.is_finite() {
+        f64::from_bits(a.to_bits() + 1) - a
+    } else {
+        f64::NAN
+    }
+}
+
+/// The smallest power of ten at least `v` (`v` > 0).
+fn decade_at_least(v: f64) -> f64 {
+    let p = 10f64.powi(v.log10().ceil().clamp(-320.0, 300.0) as i32);
+    if p < v { p * 10.0 } else { p }
+}
+
 fn round_to(v: f64, precision: f64) -> f64 {
     if precision > 0.0 && precision.is_finite() {
         let r = (v / precision).round() * precision;
@@ -178,15 +194,19 @@ pub fn nearest_point(
                 // The independent coordinate is rounded to the tracing
                 // precision, as in the original, unless one step of it moves
                 // the point more than a pixel (a steep curve): then to a
-                // finer step, up to a millionth, so tracing can still move
-                // along it pixel by pixel. A jump only counts on one side.
+                // finer step, so tracing can still move along it pixel by
+                // pixel. On a smooth curve a step's movement shrinks with
+                // the step, so the step drops by as many decades as that
+                // movement is over a pixel, down to a few floats of the
+                // coordinate itself. A jump only counts on one side.
                 let snap_eval = |t: f64| {
                     let at = |t: f64| {
                         let p = point(t, f.eval(t, 0.0));
                         (p, vp.to_screen(p.0, p.1))
                     };
+                    let finest = 4.0 * ulp(t);
                     let mut step = precision;
-                    for _ in 0..6 {
+                    for _ in 0..8 {
                         let (_, s) = at(round_to(t, step));
                         let quantum = [step, -step]
                             .map(|d| {
@@ -195,10 +215,11 @@ pub fn nearest_point(
                             })
                             .into_iter()
                             .fold(f64::NAN, f64::min);
-                        if quantum.is_nan() || quantum <= 1.0 {
+                        if quantum.is_nan() || quantum <= 1.0 || step <= finest {
                             break;
                         }
-                        step /= 10.0;
+                        let decades = quantum.log10().ceil().clamp(1.0, 300.0) as i32;
+                        step = (step / 10f64.powi(decades)).max(decade_at_least(finest));
                     }
                     let (p, _) = at(round_to(t, step));
                     let steps = match axis {
@@ -306,6 +327,17 @@ mod tests {
         let t = nearest_point(&vp, &[(&eq, &p)], px, py, 50.0).unwrap();
         assert!(t.distance_px < 2.0, "{t:?}");
         assert_eq!(t.text(), "(0.00025, 0.25)");
+        // R10-M-06: as steep as the floats allow, not a fixed number of
+        // decades finer.
+        for (src, text) in [
+            ("y = 1000000000*x", "(0.00000000025, 0.25)"),
+            ("y = 1000000000000*x", "(0.00000000000025, 0.25)"),
+        ] {
+            let (eq, p) = setup(src, &vp);
+            let t = nearest_point(&vp, &[(&eq, &p)], px, py, 50.0).unwrap();
+            assert!(t.distance_px < 2.0, "{src}: {t:?}");
+            assert_eq!(t.text(), text, "{src}");
+        }
         // Shallow curves keep the original's rounding.
         let (eq, p) = setup("y = x^2/4", &vp);
         let (px, py) = vp.to_screen(3.004, 2.2534);
