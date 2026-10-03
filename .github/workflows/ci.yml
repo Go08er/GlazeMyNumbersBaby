@@ -17,6 +17,22 @@ jobs:
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
       - name: Test suite (incl. golden tests against the C++ engine)
         run: nix develop -c cargo test --workspace --locked
+      - name: DGMNB Wayland clipboard test (private headless weston)
+        run: |
+          export XDG_RUNTIME_DIR
+          XDG_RUNTIME_DIR=$(mktemp -d)
+          nix shell --inputs-from . nixpkgs#weston -c weston --backend=headless \
+            --renderer=pixman --socket=ci-wayland --idle-time=0 &
+          weston=$!
+          for _ in $(seq 150); do [ -S "$XDG_RUNTIME_DIR/ci-wayland" ] && break; sleep 0.2; done
+          sleep 1
+          DGMNB_TEST_WAYLAND_DISPLAY=ci-wayland nix develop -c \
+            cargo test -p dgmnb --locked worker_stops_before_the_display_goes -- --nocapture 2>&1 \
+            | tee wayland-test.log
+          kill "$weston"
+          # It must have run, not skipped.
+          grep -q "1 passed" wayland-test.log
+          ! grep -q "skipped" wayland-test.log
       - name: Clippy
         run: nix develop -c cargo clippy --workspace --locked
       - name: Nix packages
