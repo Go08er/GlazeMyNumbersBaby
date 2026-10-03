@@ -191,8 +191,12 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **640 tests** (counts include
-doctests; one more, a live currency fetch, is `#[ignore]`d). The D-Bus and
+`nix develop -c cargo test --workspace` runs **664 tests** (counts include
+doctests; two more, a live currency fetch and the full metamorphic graph
+sweep, are `#[ignore]`d). `cargo run --release -p graphing --example sweep`
+checks graph analysis against about 2,900 generated functions (shifted,
+offset, scaled and stretched variants, sampled densely) for claims that
+contradict the function. The D-Bus and
 X11 tests start their own `dbus-daemon` and `Xvfb` from the dev shell (and
 skip without them). DGMNB's Wayland clipboard test copies text, so it only
 runs against a compositor named in `DGMNB_TEST_WAYLAND_DISPLAY` (a headless
@@ -207,9 +211,9 @@ upstream sources with g++:
 | calcvm (121) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage |
 | unitconv (139 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
 | datecalc (40), copypaste (40) | Ports of `DateCalculatorTests` and `CopyPasteManagerTests`, plus paste key-sequence tests |
-| graphing (137) | Parser, sampling and asymptotes, implicit/inequality plots, function analysis (including poles, zeros and domains far outside the scanned window, tiny bounds, and points where an intermediate is undefined), frame-time budgets, prompt cancellation of running plots and analyses, and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis) |
+| graphing (157 + 1 ignored) | Parser, sampling and asymptotes, implicit/inequality plots, function analysis (including poles, zeros and domains far outside the scanned window, tiny bounds, and points where an intermediate is undefined), frame-time budgets, prompt cancellation of running plots and analyses, and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis) |
 | appcore (43) | Keyboard map, key scripts, converter paste validation, settings storage (huge/corrupt files), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
-| gmnb (3), dgmnb (29) | GDK key translation, palette contrast for extreme accents; DGMNB text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown, pipe deadlines, and X11 paste (formats, size caps, deadlines under event floods) against a private Xvfb |
+| gmnb (3), dgmnb (33) | GDK key translation, palette contrast for extreme accents; DGMNB text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown, pipe deadlines, and X11 paste (formats, size caps, deadlines under event floods) against a private Xvfb |
 
 The oracles live in `tools/oracle/` and need the upstream repository checked
 out at `reference/calculator` to regenerate the golden files.
