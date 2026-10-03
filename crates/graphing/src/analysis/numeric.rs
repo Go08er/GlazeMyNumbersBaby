@@ -322,8 +322,13 @@ pub(crate) fn sequence_limit_noisy(v: &[f64], noise_in: &[f64]) -> (SeqLimit, f6
                 || (steps[k - 1] - steps[k - 2]).abs() <= step_noise[k - 1] + step_noise[k - 2]);
         // Steps measured shrinking, if only within their noise (x^−0.0001 +
         // 10⁶ shrinks by 0.023% per decade under rounding of 10⁶): neither
-        // growth nor a limit can be told, so unknown, not ±∞.
+        // growth nor a limit can be told, so unknown, not ±∞. Steps that
+        // shrink by more than their noise (ln(x)/x) converge, below.
         let shrinking = ratios.iter().all(|q| *q < 1.0 - 1e-9)
+            && ratios
+                .iter()
+                .zip(&slack)
+                .all(|(q, sl)| *q >= 1.0 - 1e-9 - sl)
             && steps
                 .iter()
                 .zip(&step_noise)

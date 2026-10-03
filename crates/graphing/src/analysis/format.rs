@@ -49,10 +49,20 @@ fn rational(v: f64, max_den: i64, max_num: f64, tol: f64) -> Option<(i64, i64)> 
 }
 
 impl Nice {
-    /// Recognises `v` with the default tolerance (1e-9 relative, and no
-    /// more than 10⁻⁶ off: 999999998.7 is not the integer 999999999).
+    /// Recognises `v` for display: within 1e-9 of it relative to its own
+    /// size, and no more than 10⁻⁶ off. So 999999998.7 is not shown as
+    /// the integer 999999999, nor 10⁻¹⁰ as 0 (values reaching display are
+    /// already cleared of noise).
     pub fn of(v: f64) -> Nice {
-        Nice::with_tol(v, REL_TOL.min(1e-6 / v.abs().max(1.0)))
+        let a = v.abs();
+        Nice::with_tol(
+            v,
+            if a < 1.0 {
+                REL_TOL * a
+            } else {
+                REL_TOL.min(1e-6 / a)
+            },
+        )
     }
 
     /// Recognises `v` with a relative tolerance.
@@ -545,7 +555,12 @@ mod tests {
         assert_eq!(format_number(E), "e");
         assert_eq!(format_number(-1.0 / E), "−1/e");
         assert_eq!(format_number(19.0 / 36.0), "19/36");
-        assert_eq!(format_number(1e-17), "0");
+        // Noise is cleared before display; what reaches it is a value
+        // (the zero of x − 10⁻¹⁰, the period of sin(10¹²x)).
+        assert_eq!(format_number(1e-17), "1×10⁻¹⁷");
+        assert_eq!(format_number(1e-10), "1×10⁻¹⁰");
+        assert_eq!(format_number(2.0 * PI * 1e-12), "6.28319×10⁻¹²");
+        assert_eq!(format_number(999999998.7), "999999998.7");
         assert_eq!(format_number(1.23456789), "1.23457");
         assert_eq!(format_number(-0.000123456), "−0.000123456");
         assert_eq!(format_number(1.5e12), "1500000000000");

@@ -38,6 +38,7 @@ use super::{
 use crate::ast::{BinOp, Expr, Func};
 use crate::compile::{CompileOptions, Input, Program, syntactic_rational};
 use crate::diff::derivative_bounded;
+use crate::functions::TrigUnit;
 use crate::simplify::linear_in;
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -198,12 +199,41 @@ pub(crate) fn analyze_expr(
     // analyse g around its own origin and map what it finds back, so that
     // (x − 10⁶)² + 1, sin(x − 1000)/(x − 1000) or (x/0.001)³ − 3(x/0.001)
     // get the same search, grid and tolerances as x² + 1, sin(x)/x, x³ − 3x.
-    if let Some((g, a, b)) = affine_argument(expr, opts) {
+    if let Some((g, a, b, lost)) = affine_argument(expr, opts) {
         let kg = analyze_with_budget(&g, opts, cancel, WORK_BUDGET)?;
         let fun = make_fun(expr, opts, cancel, WORK_BUDGET)?;
-        let k = map_affine(kg, &fun, a, b);
+        let everywhere = kg.too_complex_features & flags::DOMAIN == 0
+            && kg.domain == format_set("x", &[Interval::all()])
+            && kg.data.vertical_asymptotes.is_empty();
+        let mut k = map_affine(kg, &fun, a, b);
         if let Some(stop) = fun.stopped() {
             return Err(stop);
+        }
+        if lost {
+            // sin(x + 10¹⁸): its period and values are sin's, but where its
+            // zeros, turns and poles fall is b mod 2π, which rounding lost.
+            // f(0) is still sin(10¹⁸), exactly reduced.
+            let mut which = flags::ZEROS
+                | flags::MINIMA
+                | flags::MAXIMA
+                | flags::INFLECTION_POINTS
+                | flags::MONOTONE_INTERVALS
+                | flags::PARITY;
+            if everywhere {
+                k.domain = format_set("x", &[Interval::all()]);
+                k.data.domain = vec![Interval::all()];
+            } else {
+                which |= flags::DOMAIN | flags::VERTICAL_ASYMPTOTES;
+            }
+            k.parity = Parity::Unknown;
+            let y0 = fun.f(0.0);
+            k.data.y_intercept = y0.is_finite().then_some(y0);
+            k.y_intercept = if y0.is_finite() {
+                fmt_y(y0)
+            } else {
+                String::new()
+            };
+            forget(&mut k, which);
         }
         return Ok(k);
     }
@@ -217,7 +247,11 @@ pub(crate) fn analyze_expr(
 /// built on x − 10⁹. Not when the root is beyond the search (its features
 /// couldn't be told apart in floating point there), nor for a periodic g so
 /// far out that b modulo the period is lost.
-fn affine_argument(expr: &Expr, opts: &CompileOptions<'_>) -> Option<(Expr, f64, f64)> {
+///
+/// The last element says where g's features fall in x is lost: a periodic g
+/// whose b is so far out that b modulo the period is rounding (or beyond the
+/// search) keeps its period and values only.
+fn affine_argument(expr: &Expr, opts: &CompileOptions<'_>) -> Option<(Expr, f64, f64, bool)> {
     let num = |e: &Expr| Program::compile(e, opts).ok()?.as_constant();
     let affine = |e: &Expr| -> Option<(f64, f64)> {
         let (c, r) = linear_in(e, &|n| matches!(n, Expr::X))?;
@@ -276,16 +310,19 @@ fn affine_argument(expr: &Expr, opts: &CompileOptions<'_>) -> Option<(Expr, f64,
         Some((g, base?))
     })?;
     let r = -b / a;
-    if (r == 0.0 && a.abs() == 1.0) || r.abs() > REACH {
+    if r == 0.0 && a.abs() == 1.0 {
         return None;
     }
     // A periodic g with b far beyond its period: b mod P is rounding.
     if let Per::Periodic(pg) = per(&g, opts)
-        && b.abs() > 1e9 * pg
+        && (b.abs() > 1e9 * pg || r.abs() > REACH)
     {
+        return Some((g, a, b, true));
+    }
+    if r.abs() > REACH {
         return None;
     }
-    Some((g, a, b))
+    Some((g, a, b, false))
 }
 
 /// The analysis of g mapped to f(x) = g(a·x + b): positions x = (u − b)/a,
@@ -736,6 +773,9 @@ fn analyze_with_budget(
     budget: u64,
 ) -> Result<KeyGraphFeatures, Stop> {
     let fun = make_fun(expr, opts, cancel, budget)?;
+    if trig_unresolved(expr, opts) {
+        return Ok(unresolved_features(&fun));
+    }
 
     if let Some(c) = fun.f.as_constant() {
         return if c.is_finite() {
@@ -916,6 +956,64 @@ fn forget(k: &mut KeyGraphFeatures, which: u32) {
         k.oblique_asymptotes.clear();
         d.oblique_asymptotes.clear();
     }
+}
+
+/// Whether a circular function's argument is beyond 2⁴⁸ periods at every
+/// moderate x (sin(x + 10¹⁸) + x): consecutive floats there are more than
+/// 1/16 of a period apart, so the computed values say nothing about the
+/// function's shape near the origin.
+fn trig_unresolved(expr: &Expr, opts: &CompileOptions<'_>) -> bool {
+    let period = match opts.trig_unit {
+        TrigUnit::Radians => std::f64::consts::TAU,
+        TrigUnit::Degrees => 360.0,
+        TrigUnit::Grads => 400.0,
+    };
+    let limit = period * 2f64.powi(48);
+    let xs = [-10.0, -3.0, -1.0, -0.3, 0.0, 0.3, 1.0, 3.0, 10.0];
+    let mut unresolved = false;
+    expr.visit(&mut |e| {
+        if let Expr::Call(
+            Func::Sin | Func::Cos | Func::Tan | Func::Sec | Func::Csc | Func::Cot,
+            args,
+        ) = e
+            && let Some(arg) = args.first().filter(|a| a.contains_x())
+            && let Ok(p) = Program::compile(arg, opts)
+            && xs.iter().all(|&x| {
+                let v = p.eval(x, 0.0);
+                v.is_nan() || v.abs() > limit
+            })
+        {
+            unresolved = true;
+        }
+    });
+    unresolved
+}
+
+/// Everything unknown but the value at 0 (see [`trig_unresolved`]).
+fn unresolved_features(fun: &Fun) -> KeyGraphFeatures {
+    let mut k = KeyGraphFeatures {
+        parity: Parity::Unknown,
+        periodicity_direction: Periodicity::Unknown,
+        ..Default::default()
+    };
+    let y0 = fun.f(0.0);
+    if y0.is_finite() {
+        k.y_intercept = fmt_y(y0);
+        k.data.y_intercept = Some(y0);
+    }
+    k.too_complex_features = flags::DOMAIN
+        | flags::RANGE
+        | flags::PARITY
+        | flags::PERIODICITY
+        | flags::ZEROS
+        | flags::MINIMA
+        | flags::MAXIMA
+        | flags::INFLECTION_POINTS
+        | flags::VERTICAL_ASYMPTOTES
+        | flags::HORIZONTAL_ASYMPTOTES
+        | flags::OBLIQUE_ASYMPTOTES
+        | flags::MONOTONE_INTERVALS;
+    k
 }
 
 fn constant_features(c: f64) -> KeyGraphFeatures {
