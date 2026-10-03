@@ -904,9 +904,23 @@ fn constant_wide(e: &Expr, opts: &CompileOptions<'_>) -> Option<Wide> {
             if a == b {
                 return Some(Wide::ONE);
             }
+            // Two scalings of one expression, in proportion: ((x − 5)/3)/(x − 5)
+            // is 1/3, (2x + 2)/(x + 1) is 2.
+            if let (Some(sa), Some(sb)) = (Scaled::of(a, opts), Scaled::of(b, opts))
+                && let Some(r) = sa.ratio(&sb)
+            {
+                return value(r);
+            }
             value(ca?.div(c(b)?))
         }
         Expr::Bin(BinOp::Sub, a, b) if a == b => Some(zero),
+        // Shifts of one expression that cancel: (x + 1) − x is 1.
+        Expr::Bin(BinOp::Add | BinOp::Sub, ..)
+            if let Some(s) = Scaled::of(e, opts)
+                && s.k == 0.0 =>
+        {
+            value(Wide::new(s.c).div(Wide::new(s.d)))
+        }
         Expr::Bin(op, a, b) => value(apply_bin(*op, c(a)?, c(b)?)),
         Expr::Call(f, args) => {
             let mut it = args.iter().map(c);
@@ -918,6 +932,149 @@ fn constant_wide(e: &Expr, opts: &CompileOptions<'_>) -> Option<Wide> {
             it.try_fold(first, |acc, w| value(wide::apply2(f2, acc, w?)))
         }
         _ => None,
+    }
+}
+
+/// An expression as (k·b + c)/d: an expression b with x, scaled and shifted
+/// by constants. Every constant is exact: an operation whose result a double
+/// can't hold exactly isn't followed (division only multiplies d), so that
+/// equal coefficients mean equal real numbers.
+#[derive(Clone, Copy, Debug)]
+struct Scaled<'e> {
+    k: f64,
+    b: &'e Expr,
+    c: f64,
+    d: f64,
+}
+
+/// a·b, if a double holds it exactly.
+fn mul_exact(a: f64, b: f64) -> Option<f64> {
+    let p = a * b;
+    (p.is_finite() && a.mul_add(b, -p) == 0.0).then_some(p)
+}
+
+/// a + b, if a double holds it exactly.
+fn add_exact(a: f64, b: f64) -> Option<f64> {
+    let s = a + b;
+    let bb = s - a;
+    (s.is_finite() && (a - (s - bb)) + (b - bb) == 0.0).then_some(s)
+}
+
+impl<'e> Scaled<'e> {
+    fn of(e: &'e Expr, opts: &CompileOptions<'_>) -> Option<Scaled<'e>> {
+        // A constant that is exactly a double.
+        let konst = |a: &Expr| -> Option<f64> {
+            if a.any(&|n| matches!(n, Expr::X | Expr::Y)) {
+                return None;
+            }
+            match lower(a, opts) {
+                Ok(Piece::Const(w, _)) => {
+                    let v = w.to_f64();
+                    (v.is_finite() && Wide::new(v) == w).then_some(v)
+                }
+                _ => None,
+            }
+        };
+        let whole = Scaled {
+            k: 1.0,
+            b: e,
+            c: 0.0,
+            d: 1.0,
+        };
+        if konst(e).is_some() {
+            return None;
+        }
+        let s = match e {
+            Expr::Neg(a) => {
+                let s = Scaled::of(a, opts)?;
+                Scaled {
+                    k: -s.k,
+                    c: -s.c,
+                    ..s
+                }
+            }
+            Expr::Bin(BinOp::Mul, a, b) => match (konst(a), konst(b)) {
+                (Some(m), None) | (None, Some(m)) => {
+                    let s = Scaled::of(if konst(a).is_some() { b } else { a }, opts)?;
+                    Scaled {
+                        k: mul_exact(s.k, m)?,
+                        c: mul_exact(s.c, m)?,
+                        ..s
+                    }
+                }
+                _ => whole,
+            },
+            Expr::Bin(BinOp::Div, a, b) => match konst(b) {
+                Some(m) if m != 0.0 => {
+                    let s = Scaled::of(a, opts)?;
+                    Scaled {
+                        d: mul_exact(s.d, m)?,
+                        ..s
+                    }
+                }
+                _ => whole,
+            },
+            Expr::Bin(op @ (BinOp::Add | BinOp::Sub), a, b) => {
+                let sign = if *op == BinOp::Sub { -1.0 } else { 1.0 };
+                // A constant m is 0·b + m over 1.
+                let lone = |m: f64, s: Scaled<'e>| Scaled {
+                    k: 0.0,
+                    c: m,
+                    d: 1.0,
+                    ..s
+                };
+                let (sa, sb) = match (konst(a), konst(b)) {
+                    (Some(m), None) => {
+                        let sb = Scaled::of(b, opts)?;
+                        (lone(m, sb), sb)
+                    }
+                    (None, Some(m)) => {
+                        let sa = Scaled::of(a, opts)?;
+                        (sa, lone(m, sa))
+                    }
+                    _ => (Scaled::of(a, opts)?, Scaled::of(b, opts)?),
+                };
+                // (ka·b + ca)/da ± (kb·b + cb)/db over the common da·db.
+                if sa.b != sb.b {
+                    return Some(whole);
+                }
+                let (sb_k, sb_c) = (sign * sb.k, sign * sb.c);
+                if sa.d == sb.d {
+                    Scaled {
+                        k: add_exact(sa.k, sb_k)?,
+                        c: add_exact(sa.c, sb_c)?,
+                        ..sa
+                    }
+                } else {
+                    Scaled {
+                        k: add_exact(mul_exact(sa.k, sb.d)?, mul_exact(sb_k, sa.d)?)?,
+                        c: add_exact(mul_exact(sa.c, sb.d)?, mul_exact(sb_c, sa.d)?)?,
+                        d: mul_exact(sa.d, sb.d)?,
+                        b: sa.b,
+                    }
+                }
+            }
+            _ => whole,
+        };
+        Some(s)
+    }
+
+    /// self/other where both scale the same expression in proportion
+    /// (k₁c₂ = k₂c₁, exactly): (k₁d₂)/(k₂d₁) wherever the divisor isn't 0.
+    fn ratio(&self, o: &Scaled<'_>) -> Option<Wide> {
+        if self.b != o.b || o.k == 0.0 {
+            return None;
+        }
+        // Exact products as a double and its rounding error.
+        let two = |a: f64, b: f64| {
+            let p = a * b;
+            (p, a.mul_add(b, -p))
+        };
+        if two(self.k, o.c) != two(o.k, self.c) {
+            return None;
+        }
+        let w = |v: f64| Wide::new(v);
+        Some(w(self.k).mul(w(o.d)).div(w(o.k).mul(w(self.d))))
     }
 }
 
