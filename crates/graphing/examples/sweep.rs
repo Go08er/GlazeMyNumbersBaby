@@ -1601,6 +1601,16 @@ impl Analysed {
         }
         res
     }
+    /// The bound on the rounding of f's operations at x alone (no
+    /// neighbouring floats: across a jump they say nothing).
+    fn rounding(&self, x: f64) -> f64 {
+        let y = self.raw(x);
+        if !y.is_finite() {
+            return f64::INFINITY;
+        }
+        let (r, err) = eb(&self.ast, x, self.unit);
+        err + if r.is_finite() { (r - y).abs() } else { 0.0 }
+    }
     /// Certainly exactly 0 at x: no operation on the way rounded.
     fn exact_zero(&self, x: f64) -> bool {
         self.eval(x) == 0.0 && eb(&self.ast, x, self.unit).1 == 0.0
@@ -2308,16 +2318,28 @@ fn bisect(a: &Analysed, mut lo: f64, mut hi: f64) -> Found {
             yhi = ym;
         }
     }
-    let (l2, h2) = (a.eval(nudge(lo, -16)), a.eval(nudge(hi, 16)));
+    // Sixteen steps of f's own resolution out (in a shifted frame f is a
+    // staircase over the floats of x).
+    let step = |t: f64| {
+        let res = a.resolution(t);
+        if res.is_finite() { res } else { ulp(t) }
+    };
+    let (l2, h2) = (a.eval(lo - 16.0 * step(lo)), a.eval(hi + 16.0 * step(hi)));
     if !l2.is_finite() || !h2.is_finite() {
         return Found::Gap;
     }
     if ylo.abs() > l2.abs() && yhi.abs() > h2.abs() && ylo.abs().min(yhi.abs()) > 1e3 * scale {
         return Found::Pole(lo);
     }
+    // A crossing: f beside it is small against its change across those
+    // steps, steps no more than that, and goes one way through it. (Beside
+    // a pole |f| is as big as that change and turns back; across a jump the
+    // step is the jump.)
     let jump = (yhi - ylo).abs();
     let sides = (ylo - l2).abs().max((h2 - yhi).abs());
-    if jump <= 2.0 * sides + a.noise(lo) + a.noise(hi) {
+    let s = (yhi - ylo).signum();
+    let through = l2 != ylo && h2 != yhi && (ylo - l2).signum() == s && (h2 - yhi).signum() == s;
+    if through && ylo.abs().min(yhi.abs()) <= 0.25 * sides && jump <= 2.0 * sides {
         Found::Crossing(if ylo.abs() <= yhi.abs() { lo } else { hi })
     } else {
         Found::Jump
@@ -2428,9 +2450,10 @@ fn check_missing_zeros(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
                         "missing-zero",
                         e,
                         format!(
-                            "f({x:?})={:?} changes sign or is 0 there; x-intercepts {}",
+                            "f({x:?})={:?} changes sign or is 0 there; x-intercepts {} (nearest {:?})",
                             a.eval(x),
-                            fmt_fams(&d.zeros)
+                            fmt_fams(&d.zeros),
+                            d.zeros.iter().map(|z| nearest(z, x)).collect::<Vec<_>>()
                         ),
                     );
                     break;
@@ -2611,11 +2634,15 @@ fn check_missing_extrema(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
             if !local {
                 continue;
             }
-            // The edge of a jump is no turn.
-            let side = (a.eval(nudge(xm, -16)) - ym)
-                .abs()
-                .max((a.eval(nudge(xm, 16)) - ym).abs());
-            if !(side <= 0.25 * p) {
+            // The edge of a jump is no turn: there f falls away much
+            // further on one side than the other, a few steps of its
+            // resolution out (the top of atan(tan(x)) − 10⁶ is a staircase).
+            let res = a.resolution(xm);
+            let h = 4.0 * if res.is_finite() { res } else { 16.0 * ulp(xm) };
+            let (d1, d2) = ((a.eval(xm - h) - ym).abs(), (a.eval(xm + h) - ym).abs());
+            if !(d1.is_finite() && d2.is_finite())
+                || d1.max(d2) > 64.0 * d1.min(d2) + a.noise(xm) + a.rounding(xm - h).min(a.rounding(xm + h))
+            {
                 continue;
             }
             let mut hit = false;
