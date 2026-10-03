@@ -32,7 +32,7 @@ struct Row {
     swatch_css: gtk::CssProvider,
     /// The colour picker's buttons, one per series colour; repainted with
     /// the swatch so they follow palette and theme changes.
-    pickers: RefCell<Vec<gtk::CssProvider>>,
+    pickers: RefCell<Vec<(gtk::Button, gtk::CssProvider)>>,
     error: gtk::Label,
     color: Cell<usize>,
 }
@@ -451,8 +451,14 @@ impl GraphingPage {
         let s = self.ctx.hub.scheme();
         let n = s.series.len();
         load_colour(&row.swatch_css, s.series[row.color.get() % n]);
-        for (i, css) in row.pickers.borrow().iter().enumerate() {
+        for (i, (button, css)) in row.pickers.borrow().iter().enumerate() {
             load_colour(css, s.series[i % n]);
+            let checked = if i == row.color.get() {
+                gtk::AccessibleTristate::True
+            } else {
+                gtk::AccessibleTristate::False
+            };
+            button.update_state(&[gtk::accessible::State::Checked(checked)]);
         }
     }
 
@@ -608,11 +614,18 @@ impl GraphingPage {
         let colors = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let n = self.ctx.hub.scheme().series.len();
         for i in 0..n {
+            let name = format!("Color {}", i + 1);
+            // A radio choice for assistive technology: named (a tooltip is
+            // only the description) and checked when it's the row's colour.
             let b = gtk::Button::builder()
                 .css_classes(["wc-swatch", "wc-swatch-pick"])
-                .tooltip_text(format!("Color {}", i + 1))
+                .tooltip_text(&name)
+                .accessible_role(gtk::AccessibleRole::Radio)
                 .build();
-            row.pickers.borrow_mut().push(colour_provider(&b));
+            b.update_property(&[gtk::accessible::Property::Label(&name)]);
+            row.pickers
+                .borrow_mut()
+                .push((b.clone(), colour_provider(&b)));
             // Weak row: the row's widgets own this popover and its buttons.
             let (weak, r) = (Rc::downgrade(self), Rc::downgrade(row));
             b.connect_clicked(move |_| {
