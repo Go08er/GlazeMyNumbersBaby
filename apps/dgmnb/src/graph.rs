@@ -1718,7 +1718,13 @@ mod tests {
     #[test]
     fn keyboard_tracing_follows_steep_curves() {
         use appcore::Named;
-        for (src, shift) in [("y=1000*x", false), ("y=1000*x", true), ("y=x", false)] {
+        for (src, shift) in [
+            ("y=1000*x", false),
+            ("y=1000*x", true),
+            ("y=1000000000*x", false),
+            ("y=1000000000*x", true),
+            ("y=x", false),
+        ] {
             let mut g = GraphPage::for_test(session::from_list(src));
             let mut pm = tiny_skia::Pixmap::new(760, 700).unwrap();
             let (mut text, mut icons, input) = (
