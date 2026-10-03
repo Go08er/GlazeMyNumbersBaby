@@ -17,6 +17,10 @@
 mod engine;
 pub mod format;
 pub(crate) mod numeric;
+#[doc(hidden)]
+pub mod truth;
+#[doc(hidden)]
+pub mod verify;
 
 use crate::compile::CompileOptions;
 use crate::equation::{Axis, Equation, EquationKind};
@@ -480,6 +484,22 @@ pub fn analyze_cancellable(
         Ok(k) => Some(k),
         Err(engine::Stop::Cancelled) => None,
         Err(engine::Stop::Error(e)) => error(e),
+    }
+}
+
+/// [`analyze`] without the check of its claims against the function
+/// ([`verify`]): what the engine alone says. For tests and the sweep.
+#[doc(hidden)]
+pub fn analyze_ungated(eq: &Equation, opts: &CompileOptions<'_>) -> KeyGraphFeatures {
+    match eq.explicit() {
+        Some((Axis::X, f)) if eq.kind() == EquationKind::Function => {
+            match engine::analyze_expr_ungated(f, opts, None) {
+                Ok(k) => k,
+                Err(engine::Stop::Error(e)) => KeyGraphFeatures::error(e),
+                Err(engine::Stop::Cancelled) => unreachable!("not cancellable"),
+            }
+        }
+        _ => analyze(eq, opts),
     }
 }
 

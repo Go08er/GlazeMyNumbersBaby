@@ -60,17 +60,12 @@
 //! resolution). Exits with status 1 if any other check fails.
 
 use std::collections::BTreeMap;
-use std::f64::consts::{LN_2, LN_10, PI};
+use std::f64::consts::PI;
 
-use graphing::analysis::format::format_decimal;
-use graphing::analysis::{
-    AnalysisData, AnalysisError, Family, Interval, KeyGraphFeatures, Monotonicity, Parity,
-    Periodicity, analyze, flags,
-};
-use graphing::ast::{BinOp, Expr, Func};
-use graphing::compile::{CompileOptions, DEFAULT_VARIABLE_VALUE};
-use graphing::equation::CompiledEquation;
-use graphing::functions as fns;
+use graphing::analysis::truth::*;
+use graphing::analysis::verify::*;
+use graphing::analysis::{Family, Interval, Periodicity, analyze, flags};
+use graphing::compile::CompileOptions;
 use graphing::{Equation, TrigUnit};
 
 /// Base functions (the right-hand side of `y=`).
@@ -482,10 +477,10 @@ fn known_cases() -> Vec<Known> {
             period: Some(Some(PI)),
             ..known("atan(tan(x))")
         },
+        // (Its range holds 0: zeros at −1 + kπ.)
         Known {
             range: Some(vec![(1.0 - PI / 2.0, false, 1.0 + PI / 2.0, false)]),
             period: Some(Some(PI)),
-            zeros: Some(Zs::No),
             ..known("atan(tan(x))+1")
         },
         Known {
@@ -635,1242 +630,6 @@ fn known_cases() -> Vec<Known> {
 }
 
 // ---------------------------------------------------------------------------
-// Floats.
-
-/// Floats in order as integers (−0 and +0 coincide).
-fn to_ord(x: f64) -> i64 {
-    let b = x.to_bits() as i64;
-    if b < 0 { -(b & i64::MAX) } else { b }
-}
-
-fn from_ord(o: i64) -> f64 {
-    if o < 0 {
-        f64::from_bits(o.unsigned_abs() | (1 << 63))
-    } else {
-        f64::from_bits(o as u64)
-    }
-}
-
-/// The float `k` representable steps from x.
-fn nudge(x: f64, k: i64) -> f64 {
-    if !x.is_finite() {
-        return x;
-    }
-    let y = from_ord(to_ord(x).saturating_add(k));
-    if y.is_finite() { y } else { x }
-}
-
-/// The spacing of the floats at x.
-fn ulp(x: f64) -> f64 {
-    let a = x.abs();
-    if !a.is_finite() {
-        return f64::INFINITY;
-    }
-    let n = f64::from_bits(a.to_bits() + 1);
-    if n.is_finite() {
-        n - a
-    } else {
-        a - f64::from_bits(a.to_bits() - 1)
-    }
-}
-
-/// Floats strictly between a and b, roughly (saturating).
-fn floats_between(a: f64, b: f64) -> i64 {
-    (to_ord(b) as i128 - to_ord(a) as i128)
-        .unsigned_abs()
-        .min(i64::MAX as u128) as i64
-}
-
-// ---------------------------------------------------------------------------
-// The reference evaluator.
-
-/// m · 2ᵉ with ½ ≤ |m| < 1 (or m = 0): a double with an unbounded exponent.
-#[derive(Clone, Copy, Debug)]
-struct Xf {
-    m: f64,
-    e: i64,
-}
-
-fn frexp(v: f64) -> (f64, i64) {
-    if v == 0.0 || !v.is_finite() {
-        return (v, 0);
-    }
-    let bits = v.to_bits();
-    let ex = ((bits >> 52) & 0x7ff) as i64;
-    if ex == 0 {
-        let (m, e) = frexp(v * 18446744073709551616.0);
-        return (m, e - 64);
-    }
-    (
-        f64::from_bits((bits & !(0x7ffu64 << 52)) | (1022u64 << 52)),
-        ex - 1022,
-    )
-}
-
-fn ldexp(m: f64, e: i64) -> f64 {
-    if m == 0.0 {
-        return m;
-    }
-    if e > 2200 {
-        return m.signum() * f64::INFINITY;
-    }
-    if e < -2200 {
-        return m.signum() * 0.0;
-    }
-    let e = e as i32;
-    let h = e / 2;
-    m * 2f64.powi(h) * 2f64.powi(e - h)
-}
-
-impl Xf {
-    const ZERO: Xf = Xf { m: 0.0, e: 0 };
-
-    fn of(v: f64) -> Xf {
-        let (m, e) = frexp(v);
-        Xf { m, e }
-    }
-    fn norm(m: f64, e: i64) -> Xf {
-        let (mm, ee) = frexp(m);
-        Xf {
-            m: mm,
-            e: if mm == 0.0 { 0 } else { e + ee },
-        }
-    }
-    fn f(self) -> f64 {
-        ldexp(self.m, self.e)
-    }
-    fn is_zero(self) -> bool {
-        self.m == 0.0
-    }
-    fn sign(self) -> f64 {
-        if self.m == 0.0 { 0.0 } else { self.m.signum() }
-    }
-    /// Exactly a double (subnormals included): the compiled program's
-    /// arithmetic applies, rounding and all.
-    fn normal(self) -> bool {
-        if self.m == 0.0 {
-            return true;
-        }
-        let f = self.f();
-        f.is_finite() && f != 0.0 && {
-            let b = Xf::of(f);
-            b.m == self.m && b.e == self.e
-        }
-    }
-    /// Nonzero but below the doubles (or between subnormals).
-    fn tiny(self) -> bool {
-        self.m != 0.0 && self.e < 0 && !self.normal()
-    }
-    /// Beyond the largest double.
-    fn huge(self) -> bool {
-        self.e > 1024
-    }
-    fn neg(self) -> Xf {
-        Xf {
-            m: -self.m,
-            e: self.e,
-        }
-    }
-    fn abs(self) -> Xf {
-        Xf {
-            m: self.m.abs(),
-            e: self.e,
-        }
-    }
-    fn mul(self, o: Xf) -> Xf {
-        Xf::norm(self.m * o.m, self.e + o.e)
-    }
-    fn div(self, o: Xf) -> Xf {
-        Xf::norm(self.m / o.m, self.e - o.e)
-    }
-    fn add(self, o: Xf) -> Xf {
-        if self.m == 0.0 {
-            return o;
-        }
-        if o.m == 0.0 {
-            return self;
-        }
-        let (a, b) = if self.e >= o.e { (self, o) } else { (o, self) };
-        let d = a.e - b.e;
-        if d > 1100 {
-            return a;
-        }
-        Xf::norm(a.m + ldexp(b.m, -d), a.e)
-    }
-    /// ln of a positive number.
-    fn ln(self) -> f64 {
-        self.m.ln() + self.e as f64 * LN_2
-    }
-    fn exp(t: f64) -> R {
-        if t.is_nan() {
-            return R::Undef;
-        }
-        if (-700.0..=700.0).contains(&t) {
-            return R::V(Xf::of(t.exp()));
-        }
-        let k = (t / LN_2).floor();
-        // (Below even this exponent range, e^t is still a positive number:
-        // smaller than anything it meets.)
-        if k < -4e18 {
-            return R::V(Xf {
-                m: 0.5,
-                e: -(1 << 61),
-            });
-        }
-        if !k.is_finite() || k > 4e18 {
-            return R::Unknown;
-        }
-        R::V(Xf::norm((t - k * LN_2).exp(), k as i64))
-    }
-    /// A double standing in for it: itself, or the smallest or largest
-    /// double of its sign when it is beyond them.
-    fn proxy(self) -> f64 {
-        if self.normal() {
-            return self.f();
-        }
-        if self.e < 0 {
-            let f = self.f();
-            return if f == 0.0 { self.sign() * 5e-324 } else { f };
-        }
-        self.sign() * f64::MAX
-    }
-}
-
-/// The value of an expression at a point: a number (possibly beyond the
-/// doubles), undefined there, or not something the reference can tell.
-#[derive(Clone, Copy, Debug)]
-enum R {
-    V(Xf),
-    Undef,
-    Unknown,
-}
-
-/// An exponent written as an integer or a ratio of integers, as the
-/// compiler reads it (`syntactic_rational`): real-root semantics apply.
-fn rational(e: &Expr) -> Option<(i32, i32)> {
-    fn int(e: &Expr) -> Option<i64> {
-        match e {
-            Expr::Num(v) if *v == v.trunc() && v.abs() < 1e6 => Some(*v as i64),
-            Expr::Neg(a) => int(a).map(|v| -v),
-            _ => None,
-        }
-    }
-    let (p, q) = match e {
-        Expr::Neg(a) => {
-            let (p, q) = rational(a)?;
-            return Some((-p, q));
-        }
-        Expr::Bin(BinOp::Div, a, b) => (int(a)?, int(b)?),
-        _ => (int(e)?, 1),
-    };
-    if q == 0 {
-        return None;
-    }
-    let mut g = (p.unsigned_abs(), q.unsigned_abs());
-    while g.1 != 0 {
-        g = (g.1, g.0 % g.1);
-    }
-    let g = g.0.max(1) as i64;
-    let (mut p, mut q) = (p / g, q / g);
-    if q < 0 {
-        p = -p;
-        q = -q;
-    }
-    Some((i32::try_from(p).ok()?, i32::try_from(q).ok()?))
-}
-
-fn one(r: f64) -> R {
-    if r.is_nan() {
-        R::Undef
-    } else if r.is_infinite() {
-        R::Unknown
-    } else {
-        R::V(Xf::of(r))
-    }
-}
-
-fn reval(e: &Expr, x: f64, u: TrigUnit) -> R {
-    match e {
-        Expr::Num(v) => R::V(Xf::of(*v)),
-        Expr::Const(c) => R::V(Xf::of(c.value())),
-        Expr::X => R::V(Xf::of(x)),
-        Expr::Y => R::Unknown,
-        Expr::Var(_) => R::V(Xf::of(DEFAULT_VARIABLE_VALUE)),
-        Expr::Degrees(a) => reval(a, x, u),
-        Expr::Neg(a) => match reval(a, x, u) {
-            R::V(v) => R::V(v.neg()),
-            r => r,
-        },
-        Expr::Bin(BinOp::Pow, a, b) if let Some((p, q)) = rational(b) => {
-            pow_rat(reval(a, x, u), p, q)
-        }
-        Expr::Bin(op, a, b) => match (reval(a, x, u), reval(b, x, u)) {
-            (R::Undef, _) | (_, R::Undef) => R::Undef,
-            (R::V(va), R::V(vb)) => bin(*op, va, vb),
-            _ => R::Unknown,
-        },
-        Expr::Call(f, args) => {
-            let mut vs = Vec::with_capacity(args.len());
-            let mut unknown = false;
-            for a in args {
-                match reval(a, x, u) {
-                    R::Undef => return R::Undef,
-                    R::Unknown => unknown = true,
-                    R::V(v) => vs.push(v),
-                }
-            }
-            if unknown {
-                R::Unknown
-            } else {
-                call(*f, &vs, u)
-            }
-        }
-    }
-}
-
-fn bin(op: BinOp, a: Xf, b: Xf) -> R {
-    match op {
-        BinOp::Pow => return pow_real(a, b),
-        BinOp::Div if b.is_zero() => return R::Undef,
-        _ => {}
-    }
-    if a.normal() && b.normal() {
-        let (x, y) = (a.f(), b.f());
-        let r = match op {
-            BinOp::Add => x + y,
-            BinOp::Sub => x - y,
-            BinOp::Mul => x * y,
-            _ => x / y,
-        };
-        let exact0 = r == 0.0 && (matches!(op, BinOp::Add | BinOp::Sub) || x == 0.0 || y == 0.0);
-        if r.is_finite() && (r != 0.0 || exact0) {
-            return R::V(Xf::of(r));
-        }
-    }
-    R::V(match op {
-        BinOp::Add => a.add(b),
-        BinOp::Sub => a.add(b.neg()),
-        BinOp::Mul => a.mul(b),
-        _ => a.div(b),
-    })
-}
-
-/// b^(p/q), with the compiler's integer and real-root powers.
-fn pow_rat(b: R, p: i32, q: i32) -> R {
-    let b = match b {
-        R::V(b) => b,
-        r => return r,
-    };
-    if b.is_zero() {
-        return match p {
-            ..0 => R::Undef,
-            0 => R::V(Xf::of(1.0)),
-            _ => R::V(Xf::ZERO),
-        };
-    }
-    if b.normal() {
-        let bf = b.f();
-        let r = if q == 1 {
-            fns::pow_int(bf, p)
-        } else {
-            fns::pow_rational(bf, p, q)
-        };
-        if r.is_nan() {
-            return R::Undef;
-        }
-        if r.is_finite() && r != 0.0 {
-            return R::V(Xf::of(r));
-        }
-    }
-    if b.sign() < 0.0 && q % 2 == 0 {
-        return R::Undef;
-    }
-    let t = (p as f64 / q as f64) * b.abs().ln();
-    match Xf::exp(t) {
-        R::V(m) if b.sign() < 0.0 && p % 2 != 0 => R::V(m.neg()),
-        r => r,
-    }
-}
-
-/// a^b for a computed exponent (`fns::pow`, so 0⁰ = 1).
-fn pow_real(a: Xf, b: Xf) -> R {
-    if a.normal() && b.normal() {
-        let (x, y) = (a.f(), b.f());
-        let r = fns::pow(x, y);
-        if r.is_nan() {
-            return R::Undef;
-        }
-        if r.is_finite() && (r != 0.0 || x == 0.0) {
-            return R::V(Xf::of(r));
-        }
-    }
-    if a.is_zero() {
-        return if b.sign() < 0.0 {
-            R::Undef
-        } else if b.is_zero() {
-            R::V(Xf::of(1.0))
-        } else {
-            R::V(Xf::ZERO)
-        };
-    }
-    let y = b.f();
-    if !y.is_finite() {
-        return R::Unknown;
-    }
-    if a.sign() < 0.0 {
-        if y != y.trunc() {
-            return R::Undef;
-        }
-        let odd = y.abs() < 9007199254740992.0 && y % 2.0 != 0.0;
-        return match Xf::exp(y * a.abs().ln()) {
-            R::V(m) if odd => R::V(m.neg()),
-            r => r,
-        };
-    }
-    Xf::exp(y * a.ln())
-}
-
-fn root_x(x: Xf, n: Xf) -> R {
-    if x.normal() && n.normal() {
-        let r = fns::root(x.f(), n.f());
-        if r.is_nan() {
-            return R::Undef;
-        }
-        if r.is_finite() && (r != 0.0 || x.is_zero()) {
-            return R::V(Xf::of(r));
-        }
-    }
-    let nf = n.f();
-    if nf == 0.0 || !nf.is_finite() {
-        return R::Undef;
-    }
-    if x.is_zero() {
-        return if nf < 0.0 { R::Undef } else { R::V(Xf::ZERO) };
-    }
-    let odd = nf.fract() == 0.0 && nf.abs() < 9e15 && (nf % 2.0).abs() == 1.0;
-    if x.sign() < 0.0 && !odd {
-        return R::Undef;
-    }
-    match Xf::exp(x.abs().ln() / nf) {
-        R::V(m) if x.sign() < 0.0 => R::V(m.neg()),
-        r => r,
-    }
-}
-
-fn trig_factor(u: TrigUnit) -> f64 {
-    u.to_radians_factor()
-}
-
-fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
-    use Func::*;
-    let a = v[0];
-    let c = trig_factor(u);
-    match f {
-        Exp => {
-            let t = a.f();
-            if t.is_finite() {
-                Xf::exp(t)
-            } else {
-                R::Unknown
-            }
-        }
-        Ln | Log => {
-            if a.sign() <= 0.0 {
-                return R::Undef;
-            }
-            if a.normal() {
-                return one(if f == Ln {
-                    fns::ln(a.f())
-                } else {
-                    fns::log10(a.f())
-                });
-            }
-            let l = a.ln();
-            R::V(Xf::of(if f == Ln { l } else { l / LN_10 }))
-        }
-        Sqrt => {
-            if a.sign() < 0.0 {
-                R::Undef
-            } else if a.normal() {
-                one(a.f().sqrt())
-            } else {
-                let (m, e) = if a.e % 2 != 0 {
-                    (a.m * 2.0, a.e - 1)
-                } else {
-                    (a.m, a.e)
-                };
-                R::V(Xf::norm(m.sqrt(), e / 2))
-            }
-        }
-        Cbrt => {
-            if a.normal() {
-                one(a.f().cbrt())
-            } else {
-                let r = a.e.rem_euclid(3);
-                R::V(Xf::norm((a.m * 2f64.powi(r as i32)).cbrt(), (a.e - r) / 3))
-            }
-        }
-        Abs => R::V(a.abs()),
-        Sign => R::V(Xf::of(a.sign())),
-        Floor | Ceil | Round => {
-            if a.normal() {
-                let t = a.f();
-                return one(match f {
-                    Floor => t.floor(),
-                    Ceil => t.ceil(),
-                    _ => fns::round(t),
-                });
-            }
-            if a.huge() {
-                return R::V(a);
-            }
-            R::V(Xf::of(match f {
-                Floor if a.sign() < 0.0 => -1.0,
-                Ceil if a.sign() > 0.0 => 1.0,
-                _ => 0.0,
-            }))
-        }
-        Sin | Tan | Cos | Sec | Csc | Cot => {
-            if a.huge() {
-                return R::Unknown;
-            }
-            if a.tiny() {
-                let t = a.mul(Xf::of(c));
-                return R::V(match f {
-                    Sin | Tan => t,
-                    Cos | Sec => Xf::of(1.0),
-                    _ => Xf::of(1.0).div(t),
-                });
-            }
-            let t = a.f();
-            one(match f {
-                Sin => fns::sin_u(t, u),
-                Cos => fns::cos_u(t, u),
-                Tan => fns::tan_u(t, u),
-                Sec => fns::sec_u(t, u),
-                Csc => fns::csc_u(t, u),
-                _ => fns::cot_u(t, u),
-            })
-        }
-        Sinh | Cosh | Tanh => {
-            if a.tiny() {
-                return R::V(if f == Cosh { Xf::of(1.0) } else { a });
-            }
-            let t = a.f();
-            if t.abs() > 700.0 {
-                if f == Tanh {
-                    return R::V(Xf::of(a.sign()));
-                }
-                if !t.is_finite() {
-                    return R::Unknown;
-                }
-                return match Xf::exp(t.abs()) {
-                    R::V(m) => {
-                        let h = Xf { m: m.m, e: m.e - 1 };
-                        R::V(if f == Sinh && t < 0.0 { h.neg() } else { h })
-                    }
-                    r => r,
-                };
-            }
-            one(match f {
-                Sinh => t.sinh(),
-                Cosh => t.cosh(),
-                _ => t.tanh(),
-            })
-        }
-        Sech | Csch => {
-            if f == Csch && a.is_zero() {
-                return R::Undef;
-            }
-            if a.tiny() {
-                return R::V(if f == Sech {
-                    Xf::of(1.0)
-                } else {
-                    Xf::of(1.0).div(a)
-                });
-            }
-            let t = a.f();
-            if t.abs() > 700.0 {
-                if !t.is_finite() {
-                    return R::Unknown;
-                }
-                return match Xf::exp(-t.abs()) {
-                    R::V(m) => {
-                        let d = Xf { m: m.m, e: m.e + 1 };
-                        R::V(if f == Csch && t < 0.0 { d.neg() } else { d })
-                    }
-                    r => r,
-                };
-            }
-            one(if f == Sech {
-                fns::sech(t)
-            } else {
-                fns::csch(t)
-            })
-        }
-        Coth => {
-            if a.is_zero() {
-                R::Undef
-            } else if a.tiny() {
-                R::V(Xf::of(1.0).div(a))
-            } else {
-                one(fns::coth(a.proxy()))
-            }
-        }
-        Asinh | Acosh if a.huge() => {
-            if f == Acosh && a.sign() < 0.0 {
-                return R::Undef;
-            }
-            let l = LN_2 + a.abs().ln();
-            R::V(Xf::of(if a.sign() < 0.0 { -l } else { l }))
-        }
-        Asin | Acos | Atan | Asec | Acsc | Acot | Asinh | Acosh | Atanh | Asech | Acsch | Acoth => {
-            let p = a.proxy();
-            one(match f {
-                Asin => fns::asin_u(p, u),
-                Acos => fns::acos_u(p, u),
-                Atan => fns::atan_u(p, u),
-                Asec => fns::asec_u(p, u),
-                Acsc => fns::acsc_u(p, u),
-                Acot => fns::acot_u(p, u),
-                Asinh => p.asinh(),
-                Acosh => p.acosh(),
-                Atanh => fns::atanh(p),
-                Asech => fns::asech(p),
-                Acsch => fns::acsch(p),
-                _ => fns::acoth(p),
-            })
-        }
-        Factorial | DoubleFactorial => {
-            if !a.normal() {
-                return R::Unknown;
-            }
-            one(if f == Factorial {
-                fns::factorial(a.f())
-            } else {
-                fns::double_factorial(a.f())
-            })
-        }
-        Root => root_x(a, v[1]),
-        LogBase => {
-            let (b, t) = (a, v[1]);
-            if b.normal() && t.normal() {
-                one(fns::log_base(b.f(), t.f()))
-            } else if b.sign() <= 0.0 || t.sign() <= 0.0 || (b.normal() && b.f() == 1.0) {
-                R::Undef
-            } else {
-                R::V(Xf::of(t.ln() / b.ln()))
-            }
-        }
-        Mod | NCr | NPr => {
-            if !v.iter().all(|t| t.normal()) {
-                return R::Unknown;
-            }
-            let (p, q) = (a.f(), v[1].f());
-            one(match f {
-                Mod => fns::modulo(p, q),
-                NCr => fns::ncr(p, q),
-                _ => fns::npr(p, q),
-            })
-        }
-        Min | Max => {
-            let mut best = v[0];
-            for &t in &v[1..] {
-                let (bp, tp) = (best.proxy(), t.proxy());
-                if (f == Min && tp < bp) || (f == Max && tp > bp) {
-                    best = t;
-                }
-            }
-            R::V(best)
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Rounding bound.
-
-/// The exact rounding error of the double sum s = a ⊕ b (Knuth's TwoSum).
-fn two_sum_err(a: f64, b: f64, s: f64) -> f64 {
-    let bv = s - a;
-    let av = s - bv;
-    ((a - av) + (b - bv)).abs()
-}
-
-/// g's change when its argument a moves by up to ea. a ± ea can round
-/// back to a when ea is below a's own spacing (x − 1000 is off by
-/// 5·10⁻¹⁴ but x ± that is x): then step a few floats and scale, which is
-/// g′·ea for a smooth g. A jump (floor) is taken whole if within reach.
-fn change(g: &dyn Fn(f64) -> f64, a: f64, ea: f64, r: f64, jumps: bool) -> f64 {
-    if ea == 0.0 {
-        return 0.0;
-    }
-    let h = ea.max(2.0 * ulp(a));
-    let mut d = 0.0f64;
-    for t in [a - h, a + h] {
-        let v = g(t);
-        if !v.is_finite() {
-            return f64::INFINITY;
-        }
-        d = d.max((v - r).abs());
-    }
-    if jumps {
-        return d;
-    }
-    // (An uncertain argument never makes a smooth result certain: the
-    // change can underflow, (x − 1) + 1 squared beside 0, but is not 0.)
-    let s = d * (ea / h);
-    if s == 0.0 && (d > 0.0 || r == 0.0) {
-        f64::from_bits(1)
-    } else {
-        s
-    }
-}
-
-/// g(a) where a is known to within ea, and how far the double result can
-/// be from g at the exact a: g's change across [a − ea, a + ea] plus the
-/// rounding of g itself (k units in the last place, none if `exact`).
-fn unary_err(
-    g: &dyn Fn(f64) -> f64,
-    a: f64,
-    ea: f64,
-    k: f64,
-    exact: bool,
-    jumps: bool,
-) -> (f64, f64) {
-    let r = g(a);
-    if !r.is_finite() || !ea.is_finite() {
-        return (r, f64::INFINITY);
-    }
-    // (Never rounded away: half the least subnormal is 0.)
-    let round = if exact {
-        0.0
-    } else {
-        (k * ulp(r)).max(f64::from_bits(1))
-    };
-    (r, change(g, a, ea, r, jumps) + round)
-}
-
-fn binary_err(
-    g: &dyn Fn(f64, f64) -> f64,
-    (a, ea): (f64, f64),
-    (b, eb): (f64, f64),
-    k: f64,
-) -> (f64, f64) {
-    let r = g(a, b);
-    if !r.is_finite() || !ea.is_finite() || !eb.is_finite() {
-        return (r, f64::INFINITY);
-    }
-    let d = change(&|s| g(s, b), a, ea, r, false) + change(&|t| g(a, t), b, eb, r, false);
-    (
-        r,
-        d + (k * ulp(r)).max(if k > 0.0 { f64::from_bits(1) } else { 0.0 }),
-    )
-}
-
-/// The compiled program's unary function (`compile::Fn1::apply`).
-fn fn1(f: Func, u: TrigUnit) -> impl Fn(f64) -> f64 {
-    use Func::*;
-    move |x: f64| match f {
-        Sin => fns::sin_u(x, u),
-        Cos => fns::cos_u(x, u),
-        Tan => fns::tan_u(x, u),
-        Sec => fns::sec_u(x, u),
-        Csc => fns::csc_u(x, u),
-        Cot => fns::cot_u(x, u),
-        Asin => fns::asin_u(x, u),
-        Acos => fns::acos_u(x, u),
-        Atan => fns::atan_u(x, u),
-        Asec => fns::asec_u(x, u),
-        Acsc => fns::acsc_u(x, u),
-        Acot => fns::acot_u(x, u),
-        Sinh => x.sinh(),
-        Cosh => x.cosh(),
-        Tanh => x.tanh(),
-        Sech => fns::sech(x),
-        Csch => fns::csch(x),
-        Coth => fns::coth(x),
-        Asinh => x.asinh(),
-        Acosh => x.acosh(),
-        Atanh => fns::atanh(x),
-        Asech => fns::asech(x),
-        Acsch => fns::acsch(x),
-        Acoth => fns::acoth(x),
-        Sqrt => x.sqrt(),
-        Cbrt => x.cbrt(),
-        Log => fns::log10(x),
-        Ln => fns::ln(x),
-        Exp => x.exp(),
-        Abs => x.abs(),
-        Floor => x.floor(),
-        Ceil => x.ceil(),
-        Round => fns::round(x),
-        Sign => fns::sign(x),
-        Factorial => fns::factorial(x),
-        DoubleFactorial => fns::double_factorial(x),
-        _ => f64::NAN,
-    }
-}
-
-fn fn2(f: Func) -> impl Fn(f64, f64) -> f64 {
-    move |a: f64, b: f64| match f {
-        Func::Root => fns::root(a, b),
-        Func::LogBase => fns::log_base(a, b),
-        Func::Mod => fns::modulo(a, b),
-        Func::NCr => fns::ncr(a, b),
-        Func::NPr => fns::npr(a, b),
-        Func::Min if !a.is_nan() && !b.is_nan() => a.min(b),
-        Func::Max if !a.is_nan() && !b.is_nan() => a.max(b),
-        _ => f64::NAN,
-    }
-}
-
-/// Is the library result exact here (no rounding at all)? Special values
-/// the functions return exactly (sin 0, cos 0, ln 1, quarter turns in
-/// degrees and grads) and the functions that never round.
-fn exact_at(f: Func, a: f64, r: f64, u: TrigUnit) -> bool {
-    use Func::*;
-    match f {
-        Abs | Floor | Ceil | Round | Sign => true,
-        Sqrt => r.mul_add(r, -a) == 0.0,
-        Cbrt => r * r * r == a,
-        Sin | Tan | Cos | Sec | Csc | Cot if u != TrigUnit::Radians => {
-            a.rem_euclid(u.full_turn() / 4.0) == 0.0
-        }
-        Sin | Tan | Asin | Atan | Sinh | Tanh | Asinh | Atanh => a == 0.0 && r == 0.0,
-        Cos | Cosh | Exp => a == 0.0 && r == 1.0,
-        Ln | Log => a == 1.0 && r == 0.0,
-        Acos => a == 1.0 && r == 0.0,
-        _ => false,
-    }
-}
-
-/// f's value at the float x as the compiled program computes it, and a
-/// bound on how far that is from the expression's exact value at x: each
-/// operation's rounding, propagated to first order through the tree. This
-/// is what the rounding of f's terms can do at x (the expanded (x − 1)⁴ is
-/// ±4·10⁻¹⁶ beside its zero though neighbouring floats all agree).
-fn eb(e: &Expr, x: f64, u: TrigUnit) -> (f64, f64) {
-    const INF: f64 = f64::INFINITY;
-    match e {
-        Expr::Num(v) => (*v, if v.fract() == 0.0 { 0.0 } else { 0.5 * ulp(*v) }),
-        Expr::Const(c) => (c.value(), 0.5 * ulp(c.value())),
-        Expr::X => (x, 0.0),
-        Expr::Y => (f64::NAN, INF),
-        Expr::Var(_) => (DEFAULT_VARIABLE_VALUE, 0.0),
-        Expr::Degrees(a) => eb(a, x, u),
-        Expr::Neg(a) => {
-            let (v, err) = eb(a, x, u);
-            (-v, err)
-        }
-        Expr::Bin(BinOp::Pow, a, b) if let Some((p, q)) = rational(b) => {
-            let (va, ea) = eb(a, x, u);
-            let g = move |t: f64| {
-                if q == 1 {
-                    fns::pow_int(t, p)
-                } else {
-                    fns::pow_rational(t, p, q)
-                }
-            };
-            let r = g(va);
-            // (An underflowed square is not exact, whatever fma says.)
-            let exact = q == 1
-                && (p == 0
-                    || p == 1
-                    || (p == 2 && (r != 0.0 || va == 0.0) && va.mul_add(va, -r) == 0.0));
-            let k = if q == 1 && p.abs() <= 2 {
-                0.5
-            } else {
-                p.unsigned_abs().max(2) as f64
-            };
-            let (r, err) = unary_err(&g, va, ea, k, exact, false);
-            // b^(p/q) for q > 1 raises to the rounded p/q: |r·ln b| times
-            // that rounding (5 ulps of x^(2/3) at 3·10¹²).
-            let expo = if q == 1 || va == 0.0 {
-                0.0
-            } else {
-                (r * va.abs().ln()).abs() * ulp(p as f64 / q as f64)
-            };
-            (r, err + expo)
-        }
-        Expr::Bin(op, a, b) => {
-            let ((va, ea), (vb, ebb)) = (eb(a, x, u), eb(b, x, u));
-            if *op == BinOp::Pow {
-                return binary_err(&|s, t| fns::pow(s, t), (va, ea), (vb, ebb), 2.0);
-            }
-            let r = match op {
-                BinOp::Add => va + vb,
-                BinOp::Sub => va - vb,
-                BinOp::Mul => va * vb,
-                _ => fns::div(va, vb),
-            };
-            if !r.is_finite() || !ea.is_finite() || !ebb.is_finite() {
-                return (r, INF);
-            }
-            let err = match op {
-                BinOp::Add => ea + ebb + two_sum_err(va, vb, r),
-                BinOp::Sub => ea + ebb + two_sum_err(va, -vb, r),
-                BinOp::Mul => {
-                    let under = if r == 0.0 && va != 0.0 && vb != 0.0 {
-                        f64::from_bits(1)
-                    } else {
-                        0.0
-                    };
-                    let e = va.abs() * ebb
-                        + vb.abs() * ea
-                        + ea * ebb
-                        + va.mul_add(vb, -r).abs()
-                        + under;
-                    // (Nor does the bound itself: 10⁻⁶ times an underflowed
-                    // e⁻¹⁰⁰⁰'s error is no reason to call the product exact.)
-                    if e == 0.0 && ((ea > 0.0 && vb != 0.0) || (ebb > 0.0 && va != 0.0)) {
-                        f64::from_bits(1)
-                    } else {
-                        e
-                    }
-                }
-                _ => {
-                    if ebb >= vb.abs() {
-                        return (r, INF);
-                    }
-                    let under = if r == 0.0 && va != 0.0 {
-                        f64::from_bits(1)
-                    } else {
-                        0.0
-                    };
-                    let e = (va.abs() * ebb + vb.abs() * ea) / (vb.abs() * (vb.abs() - ebb))
-                        + ((-r).mul_add(vb, va) / vb).abs()
-                        + under;
-                    if e == 0.0 && (ea > 0.0 || (ebb > 0.0 && va != 0.0)) {
-                        f64::from_bits(1)
-                    } else {
-                        e
-                    }
-                }
-            };
-            (r, err)
-        }
-        Expr::Call(f, args) => {
-            let vs: Vec<(f64, f64)> = args.iter().map(|a| eb(a, x, u)).collect();
-            match f {
-                Func::Root
-                | Func::LogBase
-                | Func::Mod
-                | Func::NCr
-                | Func::NPr
-                | Func::Min
-                | Func::Max => {
-                    let k = if matches!(f, Func::Min | Func::Max) {
-                        0.0
-                    } else if matches!(f, Func::NCr | Func::NPr) {
-                        64.0
-                    } else {
-                        2.0
-                    };
-                    let g = fn2(*f);
-                    let mut acc = vs[0];
-                    for &next in &vs[1..] {
-                        acc = binary_err(&g, acc, next, k);
-                    }
-                    acc
-                }
-                _ => {
-                    let (a, ea) = vs[0];
-                    let g = fn1(*f, u);
-                    let r = g(a);
-                    let k = if matches!(f, Func::Factorial | Func::DoubleFactorial) {
-                        64.0
-                    } else {
-                        1.0
-                    };
-                    let jumps = matches!(f, Func::Floor | Func::Ceil | Func::Round | Func::Sign);
-                    unary_err(&g, a, ea, k, exact_at(*f, a, r, u), jumps)
-                }
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// An analysed function.
-
-struct Analysed {
-    expr: String,
-    k: KeyGraphFeatures,
-    f: Option<CompiledEquation>,
-    ast: Expr,
-    unit: TrigUnit,
-}
-
-impl Analysed {
-    fn new(expr: &str, unit: TrigUnit) -> Option<Analysed> {
-        let opts = CompileOptions {
-            trig_unit: unit,
-            ..CompileOptions::default()
-        };
-        let eq = Equation::parse(&format!("y={expr}")).ok()?;
-        let ast = eq.explicit()?.1.clone();
-        let f = eq.compile(&opts).ok();
-        let k = analyze(&eq, &opts);
-        Some(Analysed {
-            expr: expr.to_string(),
-            k,
-            f,
-            ast,
-            unit,
-        })
-    }
-    /// The compiled program's value.
-    fn raw(&self, x: f64) -> f64 {
-        match &self.f {
-            Some(f) => f.eval_explicit(x).unwrap_or(f64::NAN),
-            None => f64::NAN,
-        }
-    }
-    fn reference(&self, x: f64) -> R {
-        reval(&self.ast, x, self.unit)
-    }
-    /// f(x): the compiled value, unless that is 0 or not finite, where the
-    /// reference decides: undefined (NaN), exactly 0, or a nonzero value
-    /// beyond the doubles (then the smallest or largest double of its sign).
-    fn eval(&self, x: f64) -> f64 {
-        let y = self.raw(x);
-        if y.is_finite() && y != 0.0 {
-            return y;
-        }
-        match self.reference(x) {
-            R::V(v) if v.is_zero() => 0.0,
-            R::V(v) => v.proxy(),
-            R::Undef => f64::NAN,
-            // (A 0 the reference can't vouch for may be underflow.)
-            R::Unknown if y.is_finite() && y != 0.0 => y,
-            R::Unknown => f64::NAN,
-        }
-    }
-    /// Whether f is defined at x (None: the reference can't tell).
-    fn defined(&self, x: f64) -> Option<bool> {
-        // (A 0 can be underflow of an undefined operand: √(x/1000) at
-        // x = −3·10⁻³²².)
-        let y = self.raw(x);
-        if y.is_finite() && y != 0.0 {
-            return Some(true);
-        }
-        match self.reference(x) {
-            R::V(_) => Some(true),
-            R::Undef => Some(false),
-            R::Unknown if y.is_finite() => Some(true),
-            R::Unknown => None,
-        }
-    }
-    /// How far from x f first takes another value, or changes between
-    /// defined and undefined, at least two floats out: the resolution of
-    /// f's argument at x. Coarser than x's own spacing in a shifted frame
-    /// ((x − 1)² − 1 is the same for every x below 10⁻¹⁶).
-    fn resolution(&self, x: f64) -> f64 {
-        let (y, d) = (self.raw(x), self.defined(x));
-        let mut res = f64::INFINITY;
-        for dir in [-1i64, 1] {
-            let mut k = 2i64;
-            while k <= 1 << 52 {
-                let t = nudge(x, dir * k);
-                let v = self.raw(t);
-                if (v != y && !(v.is_nan() && y.is_nan())) || self.defined(t) != d {
-                    res = res.min((t - x).abs());
-                    break;
-                }
-                k *= 2;
-            }
-        }
-        res
-    }
-    /// The bound on the rounding of f's operations at x alone (no
-    /// neighbouring floats: across a jump they say nothing).
-    fn rounding(&self, x: f64) -> f64 {
-        let y = self.raw(x);
-        if !y.is_finite() {
-            return f64::INFINITY;
-        }
-        let (r, err) = eb(&self.ast, x, self.unit);
-        err + if r.is_finite() { (r - y).abs() } else { 0.0 }
-    }
-    /// Certainly exactly 0 at x: no operation on the way rounded.
-    fn exact_zero(&self, x: f64) -> bool {
-        self.eval(x) == 0.0 && eb(&self.ast, x, self.unit).1 == 0.0
-    }
-    /// How far f's double value at x can be from the function's value
-    /// there, as far as a claim can tell: f's change to its nearest other
-    /// values either side, at least two floats out (a feature placed at a
-    /// neighbouring float is as good as the floats allow; in a shifted
-    /// frame, sin(x − 1000), f only changes every thousand floats of x),
-    /// plus the bound on the rounding of f's operations at x. Local by
-    /// construction.
-    fn noise(&self, x: f64) -> f64 {
-        let y = self.raw(x);
-        let mut spread = 0.0f64;
-        if y.is_finite() {
-            for dir in [-1i64, 1] {
-                let mut k = 1i64;
-                while k <= 1 << 40 {
-                    let v = self.raw(nudge(x, dir * k));
-                    if !v.is_finite() {
-                        break;
-                    }
-                    if v != y && k >= 2 {
-                        spread = spread.max((v - y).abs());
-                        break;
-                    }
-                    k *= 2;
-                }
-            }
-        }
-        // Where only the reference's extended arithmetic gives a value,
-        // nothing bounds its rounding here: unknown.
-        if !y.is_finite() {
-            return f64::INFINITY;
-        }
-        let (r, err) = eb(&self.ast, x, self.unit);
-        // The compiler folds and rewrites (a/bᵏ as a·b⁻ᵏ): its double can
-        // differ from the plain tree's by their roundings.
-        let lowering = if r.is_finite() { (r - y).abs() } else { 0.0 };
-        spread + err + lowering
-    }
-    fn ok(&self) -> bool {
-        self.k.analysis_error == AnalysisError::NoError
-    }
-    fn unknown(&self, flag: u32) -> bool {
-        self.k.too_complex_features & flag != 0
-    }
-    fn d(&self) -> &AnalysisData {
-        &self.k.data
-    }
-    fn period(&self) -> Option<f64> {
-        self.d().period.filter(|p| p.is_finite() && *p > 0.0)
-    }
-    /// The x-intercepts are every x of the domain ("x ∈ ℝ").
-    fn zero_everywhere(&self) -> bool {
-        self.k.x_intercept == "x ∈ ℝ"
-    }
-    /// The x-intercepts are given as a set of intervals, not points.
-    fn zero_set(&self) -> bool {
-        self.k.x_intercept.starts_with("x ∈")
-    }
-    /// An x-intercept set this checker reads: ℝ, or ℝ without some points
-    /// ("x ∈ ℝ \ {0}"); the points left out. None for any other set.
-    fn zero_set_except(&self) -> Option<Vec<f64>> {
-        let t = self.k.x_intercept.as_str();
-        if t == "x ∈ ℝ" {
-            return Some(Vec::new());
-        }
-        let list = t.strip_prefix("x ∈ ℝ \\ {")?.strip_suffix('}')?;
-        list.split(", ")
-            .map(|v| v.replace('−', "-").parse::<f64>().ok())
-            .collect()
-    }
-    /// Copies of a feature to test: the point, or a few of its family.
-    fn copies(&self, f: &Family) -> Vec<f64> {
-        match f.period {
-            Some(p) if p.is_finite() && p > 0.0 => {
-                vec![f.x, f.x + p, f.x - p, f.x + 7.0 * p]
-            }
-            _ => vec![f.x],
-        }
-    }
-}
-
-/// The member of a family nearest v.
-fn nearest(f: &Family, v: f64) -> f64 {
-    match f.period {
-        Some(p) if p.is_finite() && p > 0.0 => f.x + ((v - f.x) / p).round() * p,
-        _ => f.x,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Sets.
-
-fn iv_has(iv: &Interval, v: f64) -> bool {
-    let lo = if iv.lo.closed {
-        v >= iv.lo.value
-    } else {
-        v > iv.lo.value
-    };
-    let hi = if iv.hi.closed {
-        v <= iv.hi.value
-    } else {
-        v < iv.hi.value
-    };
-    lo && hi
-}
-
-fn set_has(set: &[Interval], v: f64) -> bool {
-    set.iter().any(|iv| iv_has(iv, v))
-}
-
-/// Distance from v to the set's closure.
-fn set_dist(set: &[Interval], v: f64) -> f64 {
-    set.iter()
-        .map(|iv| {
-            if v < iv.lo.value {
-                iv.lo.value - v
-            } else if v > iv.hi.value {
-                v - iv.hi.value
-            } else {
-                0.0
-            }
-        })
-        .fold(f64::INFINITY, f64::min)
-}
-
-/// The bound of the set nearest v.
-fn nearest_bound(set: &[Interval], v: f64) -> f64 {
-    set.iter()
-        .flat_map(|iv| [iv.lo.value, iv.hi.value])
-        .filter(|b| b.is_finite())
-        .min_by(|p, q| (p - v).abs().total_cmp(&(q - v).abs()))
-        .unwrap_or(f64::NAN)
-}
-
-/// The panel shows values to 6 significant digits (`format_decimal`): a
-/// value that reads the same is the same claim. The engine rounds values
-/// to what it shows (545843449.45 is reported as 545843449). Positions and
-/// shapes (how many pieces, open or closed, constant or not, a point or an
-/// interval) get no such allowance.
-fn same_shown(a: f64, b: f64) -> bool {
-    a == b || (a.is_finite() && b.is_finite() && format_decimal(a) == format_decimal(b))
-}
-
-fn fmt_set(set: &[Interval]) -> String {
-    set.iter()
-        .map(|iv| {
-            format!(
-                "{}{:?},{:?}{}",
-                if iv.lo.closed { "[" } else { "(" },
-                iv.lo.value,
-                iv.hi.value,
-                if iv.hi.closed { "]" } else { ")" }
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("∪")
-}
-
-fn fmt_fams(f: &[Family]) -> String {
-    let v: Vec<String> = f
-        .iter()
-        .take(6)
-        .map(|f| match f.period {
-            Some(p) => format!("{:?}+k·{p:?}", f.x),
-            None => format!("{:?}", f.x),
-        })
-        .collect();
-    let more = if f.len() > 6 {
-        format!(" … ({} in all)", f.len())
-    } else {
-        String::new()
-    };
-    format!("[{}]{more}", v.join(", "))
-}
-
-// ---------------------------------------------------------------------------
 // Sampling.
 
 fn has_trig(expr: &str) -> bool {
@@ -1957,71 +716,8 @@ fn samples(a: &Analysed, centres: &[f64], wide: bool) -> Vec<f64> {
     xs
 }
 
-/// Golden-section search for the smallest (sign 1) or largest (sign −1)
-/// value on [lo, hi]; undefined points count as worst.
-fn golden(a: &Analysed, mut lo: f64, mut hi: f64, sign: f64) -> (f64, f64) {
-    let g = |x: f64| {
-        let y = a.eval(x);
-        if y.is_finite() {
-            sign * y
-        } else {
-            f64::INFINITY
-        }
-    };
-    let phi = 0.5 * (5f64.sqrt() - 1.0);
-    let (mut m1, mut m2) = (hi - phi * (hi - lo), lo + phi * (hi - lo));
-    let (mut g1, mut g2) = (g(m1), g(m2));
-    for _ in 0..160 {
-        if floats_between(lo, hi) <= 2 {
-            break;
-        }
-        if g1 <= g2 {
-            hi = m2;
-            m2 = m1;
-            g2 = g1;
-            m1 = hi - phi * (hi - lo);
-            g1 = g(m1);
-        } else {
-            lo = m1;
-            m1 = m2;
-            g1 = g2;
-            m2 = lo + phi * (hi - lo);
-            g2 = g(m2);
-        }
-    }
-    let x = if g1 <= g2 { m1 } else { m2 };
-    (x, a.eval(x))
-}
-
-/// The k most extreme samples (smallest for sign 1), each refined between
-/// its neighbours.
-fn refine_extremes(a: &Analysed, xs: &[f64], ys: &[f64], sign: f64, k: usize) -> Vec<(f64, f64)> {
-    let mut idx: Vec<usize> = (1..ys.len().saturating_sub(1))
-        .filter(|&i| ys[i].is_finite())
-        .collect();
-    idx.sort_by(|&i, &j| (sign * ys[i]).total_cmp(&(sign * ys[j])));
-    idx.truncate(k);
-    idx.iter()
-        .map(|&i| golden(a, xs[i - 1], xs[i + 1], sign))
-        .filter(|(_, y)| y.is_finite())
-        .collect()
-}
-
 // ---------------------------------------------------------------------------
 // Report and coverage.
-
-struct Report {
-    failures: BTreeMap<&'static str, Vec<String>>,
-}
-
-impl Report {
-    fn fail(&mut self, check: &'static str, expr: &str, detail: String) {
-        self.failures
-            .entry(check)
-            .or_default()
-            .push(format!("y={expr}    {detail}"));
-    }
-}
 
 const FEATURES: [(u32, &str); 13] = [
     (flags::DOMAIN, "domain"),
@@ -2076,1371 +772,32 @@ impl Coverage {
 // ---------------------------------------------------------------------------
 // Checks on one function.
 
-/// Checks on one analysed function on its own.
+/// Every check on one analysed function on its own, at the sweep's
+/// samples.
 fn check_one(a: &Analysed, centres: &[f64], wide: bool, r: &mut Report) {
     if !a.ok() {
         return;
     }
-    check_flagged(a, r);
     let xs = samples(a, centres, wide);
     let ys: Vec<f64> = xs.iter().map(|&x| a.eval(x)).collect();
-    if !a.unknown(flags::RANGE) && !a.d().range.is_empty() {
-        check_range(a, &xs, &ys, r);
-    }
-    check_zero_claims(a, r);
-    check_missing_zeros(a, &xs, &ys, r);
-    check_extremum_claims(a, r);
-    check_missing_extrema(a, &xs, &ys, r);
-    check_y_intercept(a, r);
-    check_domain(a, &xs, r);
-    check_monotonicity(a, &xs, &ys, r);
-    check_vertical(a, r);
-    check_horizontal(a, centres, r);
-    check_parity(a, &xs, r);
-    check_period(a, centres, r);
+    check_all(a, &xs, &ys, centres, r);
 }
 
-/// Rows flagged unknown keep no values.
-fn check_flagged(a: &Analysed, r: &mut Report) {
-    let d = a.d();
-    for (flag, name, n) in [
-        (flags::ZEROS, "zeros", d.zeros.len()),
-        (flags::MINIMA, "minima", d.minima.len()),
-        (flags::MAXIMA, "maxima", d.maxima.len()),
-        (
-            flags::INFLECTION_POINTS,
-            "inflections",
-            d.inflection_points.len(),
-        ),
-        (
-            flags::VERTICAL_ASYMPTOTES,
-            "vertical asymptotes",
-            d.vertical_asymptotes.len(),
-        ),
-        (
-            flags::HORIZONTAL_ASYMPTOTES,
-            "horizontal asymptotes",
-            d.horizontal_asymptotes.len(),
-        ),
-        (
-            flags::OBLIQUE_ASYMPTOTES,
-            "oblique asymptotes",
-            d.oblique_asymptotes.len(),
-        ),
-    ] {
-        if a.unknown(flag) && n > 0 {
-            r.fail(
-                "flagged-unknown-but-has-values",
-                &a.expr,
-                format!("{name}: {n} values kept"),
-            );
-        }
-    }
+/// A failure of a sweep-only check (no feature to forget).
+fn fail(r: &mut Report, check: &'static str, expr: &str, detail: String) {
+    r.fail(check, 0, expr, detail);
 }
 
-fn check_range(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
-    let d = a.d();
-    let e = &a.expr;
-    let range = &d.range;
-    // Every value lies in the range, give or take its noise or what the
-    // panel shows.
-    // (Nearest the origin first: the plainest counterexample.)
-    let mut outside: Vec<usize> = (0..xs.len())
-        .filter(|&i| ys[i].is_finite() && !set_has(range, ys[i]))
-        .collect();
-    outside.sort_by(|&i, &j| xs[i].abs().total_cmp(&xs[j].abs()));
-    for (x, y) in outside.into_iter().map(|i| (xs[i], ys[i])) {
-        let dist = set_dist(range, y);
-        if dist > 0.0 && dist > a.noise(x) && !same_shown(y, nearest_bound(range, y)) {
-            r.fail(
-                "sample-outside-range",
-                e,
-                format!("f({x:?})={y:?} not in claimed range {}", fmt_set(range)),
-            );
-            break;
-        }
-    }
-    // A set of points is a shape: f taking resolvably different values
-    // that all read as one claimed point contradicts it (a constant claimed
-    // for 10⁶ + 10⁻⁶·sin x), however they read. (An offset that reads the
-    // same, x/x + 10⁻¹² for {1}, is the same claim.)
-    if range.iter().all(|iv| iv.lo.value == iv.hi.value) {
-        // The lowest and highest (x, f(x)) reading as each claimed point.
-        type Span = ((f64, f64), (f64, f64));
-        let mut seen: Vec<Option<Span>> = vec![None; range.len()];
-        for (&x, &y) in xs.iter().zip(ys) {
-            if !y.is_finite() {
-                continue;
-            }
-            let Some(j) = (0..range.len()).find(|&j| same_shown(y, range[j].lo.value)) else {
-                continue;
-            };
-            let s = seen[j].get_or_insert(((x, y), (x, y)));
-            if y < s.0.1 {
-                s.0 = (x, y);
-            }
-            if y > s.1.1 {
-                s.1 = (x, y);
-            }
-        }
-        if let Some(((x1, y1), (x2, y2))) = seen
-            .into_iter()
-            .flatten()
-            .find(|((x1, y1), (x2, y2))| y2 - y1 > a.noise(*x1) + a.noise(*x2))
-        {
-            r.fail(
-                "range-points-but-varies",
-                e,
-                format!(
-                    "f({x1:?})={y1:?} and f({x2:?})={y2:?} both read as one of {}",
-                    fmt_set(range)
-                ),
-            );
-        }
-    }
-    // So do the most extreme values, refined: a sample rarely lands on the
-    // top of a peak.
-    let lows = refine_extremes(a, xs, ys, 1.0, 32);
-    let highs = refine_extremes(a, xs, ys, -1.0, 32);
-    for &(x, y) in lows.iter().chain(&highs) {
-        if !set_has(range, y)
-            && set_dist(range, y) > a.noise(x)
-            && !same_shown(y, nearest_bound(range, y))
-        {
-            r.fail(
-                "refined-value-outside-range",
-                e,
-                format!("f({x:?})={y:?} not in claimed range {}", fmt_set(range)),
-            );
-            break;
-        }
-    }
-    let near = |x: f64, y: f64, v: f64| {
-        y.is_finite() && (y == v || same_shown(y, v) || (y - v).abs() <= a.noise(x))
+/// Parses and analyses `y = expr`.
+fn analysed(expr: &str, unit: TrigUnit) -> Option<Analysed<'static>> {
+    let opts = CompileOptions {
+        trig_unit: unit,
+        ..CompileOptions::default()
     };
-    for iv in range {
-        for (b, is_lo) in [(iv.lo, true), (iv.hi, false)] {
-            let v = b.value;
-            if !v.is_finite() {
-                continue;
-            }
-            if b.closed {
-                // A closed bound is attained: at a reported point, a sample
-                // or a refined extreme, to within the noise there.
-                let claimed = d
-                    .minima
-                    .iter()
-                    .chain(&d.maxima)
-                    .chain(&d.inflection_points)
-                    .any(|(fx, y)| *y == v && near(fx.x, a.eval(fx.x), v))
-                    || d.y_intercept
-                        .is_some_and(|y| y == v && near(0.0, a.eval(0.0), v));
-                let refined = if is_lo { &lows } else { &highs };
-                let mut closest: Vec<usize> =
-                    (0..ys.len()).filter(|&i| ys[i].is_finite()).collect();
-                closest.sort_by(|&i, &j| (ys[i] - v).abs().total_cmp(&(ys[j] - v).abs()));
-                closest.truncate(64);
-                let hit = claimed
-                    || refined.iter().any(|&(x, y)| near(x, y, v))
-                    || closest.iter().any(|&i| near(xs[i], ys[i], v));
-                if !hit {
-                    let best = refined.first().copied().unwrap_or((f64::NAN, f64::NAN));
-                    r.fail(
-                        "closed-range-bound-not-attained",
-                        e,
-                        format!(
-                            "range {} has closed bound {v:?}; most extreme value found f({:?})={:?}",
-                            fmt_set(range),
-                            best.0,
-                            best.1
-                        ),
-                    );
-                }
-            } else if let Some(i) = (0..ys.len()).find(|&i| ys[i] == v && a.noise(xs[i]) == 0.0) {
-                // An open bound is not attained: f exactly at it, with no
-                // rounding anywhere, attains it.
-                r.fail(
-                    "open-range-bound-attained",
-                    e,
-                    format!("range {} but f({:?})={v:?} exactly", fmt_set(range), xs[i]),
-                );
-            }
-        }
-    }
-    // 0 attained ⟺ x-intercepts.
-    if !a.unknown(flags::ZEROS) {
-        let attains0 = set_has(range, 0.0);
-        let zeros = !d.zeros.is_empty() || a.zero_set();
-        if attains0 && !zeros {
-            r.fail(
-                "range-has-0-but-no-zeros",
-                e,
-                format!("range {} attains 0, no x-intercepts", fmt_set(range)),
-            );
-        }
-        if zeros && !attains0 {
-            r.fail(
-                "zeros-but-range-lacks-0",
-                e,
-                format!(
-                    "x-intercepts {}, range {}",
-                    fmt_fams(&d.zeros),
-                    fmt_set(range)
-                ),
-            );
-        }
-    }
-    for (what, list) in [
-        ("minimum", &d.minima),
-        ("maximum", &d.maxima),
-        ("inflection", &d.inflection_points),
-    ] {
-        for (fx, y) in list {
-            if !set_has(range, *y)
-                && set_dist(range, *y) > a.noise(fx.x)
-                && !same_shown(*y, nearest_bound(range, *y))
-            {
-                r.fail(
-                    "extremum-y-outside-range",
-                    e,
-                    format!("{what} ({:?}, {y:?}) but range {}", fx.x, fmt_set(range)),
-                );
-            }
-        }
-    }
-    if let Some(y) = d.y_intercept
-        && !set_has(range, y)
-        && set_dist(range, y) > a.noise(0.0)
-        && !same_shown(y, nearest_bound(range, y))
-    {
-        r.fail(
-            "y-intercept-outside-range",
-            e,
-            format!("y-intercept {y:?}, range {}", fmt_set(range)),
-        );
-    }
-}
-
-/// What evaluation says about a claimed zero.
-#[derive(PartialEq)]
-enum Verdict {
-    Holds,
-    Fails,
-    /// At or beside a pole, closer than f's resolution: 10⁶ + 10⁻⁶/(x + 10⁶)
-    /// is 0 at −10⁶ − 10⁻¹², which no float can show.
-    Unverifiable,
-}
-
-/// Is f indistinguishable from 0 at z or within a few steps of its own
-/// resolution (f in a shifted frame changes only every so many floats),
-/// without blowing up there (a pole is no zero)?
-fn zero_ok(a: &Analysed, z: f64) -> Verdict {
-    let y = a.eval(z);
-    if y == 0.0 {
-        return Verdict::Holds;
-    }
-    let res = a.resolution(z);
-    let step = if res.is_finite() { res } else { ulp(z) };
-    let h = (4096.0 * ulp(z)).max(64.0 * step);
-    let side = a.eval(z - h).abs().max(a.eval(z + h).abs());
-    if !y.is_finite() || (side.is_finite() && y.abs() > side) {
-        return Verdict::Unverifiable;
-    }
-    for m in [1.0, 2.0, 4.0, 16.0] {
-        let (l, r) = (a.eval(z - m * step), a.eval(z + m * step));
-        if l.is_finite() && r.is_finite() && (l == 0.0 || r == 0.0 || l.signum() != r.signum()) {
-            return Verdict::Holds;
-        }
-    }
-    let near = (-4..=4).any(|k| {
-        let t = z + k as f64 * step;
-        let v = a.eval(t);
-        v.is_finite() && v.abs() <= a.noise(t)
-    });
-    if near { Verdict::Holds } else { Verdict::Fails }
-}
-
-/// Are p and q the same zero: a few dozen floats apart (where a root
-/// finder stops; 10⁷·(1 − 3·10⁻¹⁵) for 10⁷ is no claim anyone can see), or
-/// with f indistinguishable from 0 all the way between?
-fn same_root(a: &Analysed, p: f64, q: f64) -> bool {
-    if floats_between(p, q) <= 64 {
-        return true;
-    }
-    (1..8).all(|i| {
-        let t = p + (q - p) * i as f64 / 8.0;
-        let y = a.eval(t);
-        y.is_finite() && (y == 0.0 || y.abs() <= a.noise(t))
-    })
-}
-
-fn check_zero_claims(a: &Analysed, r: &mut Report) {
-    if a.unknown(flags::ZEROS) {
-        return;
-    }
-    let d = a.d();
-    'z: for z in &d.zeros {
-        for c in a.copies(z) {
-            let (check, v) = match zero_ok(a, c) {
-                Verdict::Holds => continue,
-                Verdict::Fails => ("zero-not-a-zero", a.eval(c)),
-                Verdict::Unverifiable => ("unverifiable-zero-beside-pole", a.eval(c)),
-            };
-            r.fail(
-                check,
-                &a.expr,
-                format!("x-intercept {c:?} but f={v:?} (noise {:?})", a.noise(c)),
-            );
-            break 'z;
-        }
-    }
-    // One zero reported once.
-    let mut xs: Vec<f64> = d
-        .zeros
-        .iter()
-        .filter(|z| z.period.is_none())
-        .map(|z| z.x)
-        .collect();
-    xs.sort_by(f64::total_cmp);
-    for w in xs.windows(2) {
-        if same_root(a, w[0], w[1]) {
-            r.fail(
-                "zeros-duplicate",
-                &a.expr,
-                format!("x-intercepts {} and {} are one zero", w[0], w[1]),
-            );
-            break;
-        }
-    }
-}
-
-/// What a sign change between two samples turns out to be.
-enum Found {
-    Crossing(f64),
-    Pole(f64),
-    Jump,
-    Gap,
-}
-
-/// Bisect a sign change down to neighbouring floats and say what is there:
-/// a zero crossing (f there is as small as its change across a few floats),
-/// a pole (|f| grows towards it, far beyond the samples), a jump, or an
-/// undefined point (gap).
-fn bisect(a: &Analysed, mut lo: f64, mut hi: f64) -> Found {
-    let (mut ylo, mut yhi) = (a.eval(lo), a.eval(hi));
-    let scale = ylo.abs().max(yhi.abs());
-    let s = ylo.signum();
-    for _ in 0..80 {
-        if floats_between(lo, hi) <= 1 {
-            break;
-        }
-        let mid = from_ord(to_ord(lo) + (to_ord(hi) - to_ord(lo)) / 2);
-        let ym = a.eval(mid);
-        if ym.is_nan() {
-            return Found::Gap;
-        }
-        if ym == 0.0 {
-            return Found::Crossing(mid);
-        }
-        if ym.signum() == s {
-            lo = mid;
-            ylo = ym;
-        } else {
-            hi = mid;
-            yhi = ym;
-        }
-    }
-    // Sixteen steps of f's own resolution out (in a shifted frame f is a
-    // staircase over the floats of x).
-    let step = |t: f64| {
-        let res = a.resolution(t);
-        if res.is_finite() { res } else { ulp(t) }
-    };
-    let (l2, h2) = (a.eval(lo - 16.0 * step(lo)), a.eval(hi + 16.0 * step(hi)));
-    if !l2.is_finite() || !h2.is_finite() {
-        return Found::Gap;
-    }
-    if ylo.abs() > l2.abs() && yhi.abs() > h2.abs() && ylo.abs().min(yhi.abs()) > 1e3 * scale {
-        return Found::Pole(lo);
-    }
-    // A crossing: f beside it is small against its change across those
-    // steps, steps no more than that, and goes one way through it. (Beside
-    // a pole |f| is as big as that change and turns back; across a jump the
-    // step is the jump.)
-    let jump = (yhi - ylo).abs();
-    let sides = (ylo - l2).abs().max((h2 - yhi).abs());
-    let s = (yhi - ylo).signum();
-    let through = l2 != ylo && h2 != yhi && (ylo - l2).signum() == s && (h2 - yhi).signum() == s;
-    if through && ylo.abs().min(yhi.abs()) <= 0.25 * sides && jump <= 2.0 * sides {
-        Found::Crossing(if ylo.abs() <= yhi.abs() { lo } else { hi })
-    } else {
-        Found::Jump
-    }
-}
-
-/// Zeros the analysis didn't report: sign changes bisected to a crossing,
-/// and exactly-zero samples (a run of them is an interval of zeros). Each
-/// must match a distinct reported zero. Poles found the same way must be
-/// reported too.
-fn check_missing_zeros(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
-    let d = a.d();
-    let e = &a.expr;
-    let n = xs.len();
-    let mut roots: Vec<f64> = Vec::new();
-    let mut runs: Vec<(f64, f64)> = Vec::new();
-    let mut poles: Vec<f64> = Vec::new();
-    let mut i = 0;
-    while i < n {
-        if ys[i] == 0.0 && a.exact_zero(xs[i]) {
-            let start = i;
-            // A run is an interval of zeros only if f is 0 between the
-            // samples too (far, sparse samples can all happen to be 0).
-            while i + 1 < n
-                && ys[i + 1] == 0.0
-                && a.exact_zero(xs[i + 1])
-                && a.exact_zero(0.5 * (xs[i] + xs[i + 1]))
-            {
-                i += 1;
-            }
-            if i - start >= 2 {
-                runs.push((xs[start], xs[i]));
-            } else {
-                roots.extend(&xs[start..=i]);
-            }
-        }
-        i += 1;
-    }
-    for i in 0..n.saturating_sub(1) {
-        let (y0, y1) = (ys[i], ys[i + 1]);
-        if y0.is_finite()
-            && y1.is_finite()
-            && y0 != 0.0
-            && y1 != 0.0
-            && y0.signum() != y1.signum()
-            // (Past f's resolution, trig of 10¹⁴, the signs say nothing.)
-            && y0.abs() > a.noise(xs[i])
-            && y1.abs() > a.noise(xs[i + 1])
-        {
-            match bisect(a, xs[i], xs[i + 1]) {
-                Found::Crossing(x) => roots.push(x),
-                Found::Pole(x) => poles.push(x),
-                Found::Jump | Found::Gap => {}
-            }
-            if roots.len() + poles.len() > 4000 {
-                break;
-            }
-        }
-    }
-    if !a.unknown(flags::ZEROS) {
-        if a.zero_set() {
-            // A set of x-intercepts (the zeros list can't hold one) is
-            // checked as a set: f is 0 at every sample in it, and not 0
-            // (undefined, or resolvably nonzero) at the points it leaves
-            // out. A set this checker doesn't read is only checked to be
-            // 0 somewhere, by the 0 ∈ range rule.
-            if let Some(except) = a.zero_set_except() {
-                let inside = |x: f64| !except.iter().any(|p| floats_between(*p, x) <= 4);
-                if let Some(i) = (0..n).find(|&i| {
-                    inside(xs[i])
-                        && ys[i].is_finite()
-                        && ys[i] != 0.0
-                        && ys[i].abs() > a.noise(xs[i])
-                }) {
-                    r.fail(
-                        "zero-set-wrong",
-                        e,
-                        format!(
-                            "x-intercepts \"{}\" but f({:?})={:?}",
-                            a.k.x_intercept, xs[i], ys[i]
-                        ),
-                    );
-                } else if let Some(p) = except
-                    .iter()
-                    .find(|&&p| a.eval(p) == 0.0 && a.exact_zero(p))
-                {
-                    r.fail(
-                        "zero-set-wrong",
-                        e,
-                        format!(
-                            "x-intercepts \"{}\" leave out {p:?}, but f({p:?})=0",
-                            a.k.x_intercept
-                        ),
-                    );
-                }
-            }
-        } else {
-            if let Some(&(p, q)) = runs.first() {
-                r.fail(
-                    "missing-zero-interval",
-                    e,
-                    format!(
-                        "f is exactly 0 on [{p:?}, {q:?}] (and {} more runs); x-intercepts {}",
-                        runs.len() - 1,
-                        fmt_fams(&d.zeros)
-                    ),
-                );
-            }
-            roots.sort_by(f64::total_cmp);
-            roots.dedup();
-            let mut used: Vec<Option<f64>> = vec![None; d.zeros.len()];
-            for &x in &roots {
-                let mut hit = false;
-                for (j, z) in d.zeros.iter().enumerate() {
-                    let c = nearest(z, x);
-                    // (A family's far copies carry its period's rounding.)
-                    if !same_root(a, c, x) && !(z.period.is_some() && close_to(z, x, 16)) {
-                        continue;
-                    }
-                    // One to one: a reported point zero stands for one root.
-                    if z.period.is_none()
-                        && let Some(prev) = used[j]
-                        && !same_root(a, prev, x)
-                    {
-                        continue;
-                    }
-                    used[j] = Some(x);
-                    hit = true;
-                    break;
-                }
-                if !hit {
-                    r.fail(
-                        "missing-zero",
-                        e,
-                        format!(
-                            "f({x:?})={:?} changes sign or is 0 there; x-intercepts {} (nearest {:?})",
-                            a.eval(x),
-                            fmt_fams(&d.zeros),
-                            d.zeros.iter().map(|z| nearest(z, x)).collect::<Vec<_>>()
-                        ),
-                    );
-                    break;
-                }
-            }
-        }
-    }
-    if !a.unknown(flags::VERTICAL_ASYMPTOTES) {
-        for &x in &poles {
-            let claimed = d
-                .vertical_asymptotes
-                .iter()
-                .chain(&d.excluded)
-                .any(|v| floats_between(nearest(v, x), x) <= 1024);
-            let edge = d.domain.iter().any(|iv| {
-                [iv.lo.value, iv.hi.value]
-                    .iter()
-                    .any(|b| b.is_finite() && floats_between(*b, x) <= 1024)
-            });
-            if !claimed && !edge {
-                r.fail(
-                    "missing-pole",
-                    e,
-                    format!(
-                        "|f| grows without bound at {x:?}; vertical asymptotes {}",
-                        fmt_fams(&d.vertical_asymptotes)
-                    ),
-                );
-                break;
-            }
-        }
-    }
-}
-
-/// Places a reported extremum's neighbourhood mustn't reach past.
-fn marks(a: &Analysed) -> Vec<f64> {
-    let d = a.d();
-    let mut m = Vec::new();
-    for (f, _) in d.minima.iter().chain(&d.maxima) {
-        m.extend(a.copies(f));
-    }
-    for f in d.vertical_asymptotes.iter().chain(&d.excluded) {
-        m.extend(a.copies(f));
-    }
-    for iv in &d.domain {
-        for v in [iv.lo.value, iv.hi.value] {
-            if v.is_finite() {
-                m.push(v);
-            }
-        }
-    }
-    m
-}
-
-/// A reported extremum is where it says, with the value it says, and
-/// nothing near it (short of the next reported feature) is beyond it by
-/// more than the noise at both places.
-fn check_extremum_claims(a: &Analysed, r: &mut Report) {
-    let d = a.d();
-    let e = &a.expr;
-    let marks = marks(a);
-    for (list, sign, flag, name) in [
-        (&d.minima, 1.0, flags::MINIMA, "minimum"),
-        (&d.maxima, -1.0, flags::MAXIMA, "maximum"),
-    ] {
-        if a.unknown(flag) {
-            continue;
-        }
-        'claims: for (fx, y) in list {
-            for c in a.copies(fx) {
-                let fv = a.eval(c);
-                let n0 = a.noise(c);
-                if !fv.is_finite() || ((fv - y).abs() > n0 + 4.0 * ulp(*y) && !same_shown(fv, *y)) {
-                    r.fail(
-                        "extremum-value-wrong",
-                        e,
-                        format!("{name} at {c:?} reported {y:?}, f={fv:?}"),
-                    );
-                    continue 'claims;
-                }
-                let gap = marks
-                    .iter()
-                    .filter(|&&m| floats_between(m, c) > 16)
-                    .map(|m| (m - c).abs())
-                    .fold(f64::INFINITY, f64::min);
-                let s = c.abs().max(1.0);
-                for h in [64.0 * ulp(c), 4096.0 * ulp(c), 1e-6 * s, 1e-3 * s] {
-                    let h = h.min(0.5 * gap);
-                    if h.is_nan() || h <= 0.0 {
-                        continue;
-                    }
-                    let (xb, yb) = golden(a, c - h, c + h, sign);
-                    if yb.is_finite() && sign * (yb - fv) < -(a.noise(xb) + n0) {
-                        r.fail(
-                            "extremum-not-extreme",
-                            e,
-                            format!("{name} ({c:?}, {y:?}) but f({xb:?})={yb:?}"),
-                        );
-                        continue 'claims;
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Are p and q the same turn (minimum for sign 1): a few floats apart, or
-/// the same value with no hill (valley) between, to within noise?
-fn same_turn(a: &Analysed, p: f64, q: f64, sign: f64) -> bool {
-    if floats_between(p, q) <= 16 {
-        return true;
-    }
-    let (fp, fq) = (a.eval(p), a.eval(q));
-    if !fp.is_finite() || !fq.is_finite() || (fp - fq).abs() > a.noise(p) + a.noise(q) {
-        return false;
-    }
-    let top = (sign * fp).max(sign * fq);
-    (1..8).all(|i| {
-        let t = p + (q - p) * i as f64 / 8.0;
-        let y = a.eval(t);
-        y.is_finite() && sign * y <= top + a.noise(t)
-    })
-}
-
-/// Turns the analysis didn't report: a sample beyond both neighbours by
-/// more than the noise, refined, on a continuous stretch (not the edge of a
-/// jump), must match a distinct reported extremum of its kind.
-fn check_missing_extrema(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
-    let d = a.d();
-    let e = &a.expr;
-    let n = xs.len();
-    for (list, sign, flag, name) in [
-        (&d.minima, 1.0, flags::MINIMA, "missing-minimum"),
-        (&d.maxima, -1.0, flags::MAXIMA, "missing-maximum"),
-    ] {
-        if a.unknown(flag) {
-            continue;
-        }
-        let mut cand: Vec<(usize, f64)> = (1..n.saturating_sub(1))
-            .filter(|&i| ys[i - 1].is_finite() && ys[i].is_finite() && ys[i + 1].is_finite())
-            .filter_map(|i| {
-                let p = (sign * (ys[i - 1] - ys[i])).min(sign * (ys[i + 1] - ys[i]));
-                (p > 0.0).then_some((i, p))
-            })
-            .collect();
-        cand.sort_by(|x, y| y.1.total_cmp(&x.1));
-        cand.truncate(48);
-        let mut used: Vec<Option<f64>> = vec![None; list.len()];
-        for (i, p) in cand {
-            if p <= a.noise(xs[i]) + a.noise(xs[i - 1]).max(a.noise(xs[i + 1])) {
-                continue;
-            }
-            let (m1, m2) = (0.5 * (xs[i - 1] + xs[i]), 0.5 * (xs[i] + xs[i + 1]));
-            if a.defined(m1) != Some(true) || a.defined(m2) != Some(true) {
-                continue;
-            }
-            // A turn of f, not a pole between the samples: f stays within
-            // their size across the bracket.
-            let span = ys[i - 1].abs().max(ys[i].abs()).max(ys[i + 1].abs());
-            if (1..8).any(|j| {
-                let t = xs[i - 1] + (xs[i + 1] - xs[i - 1]) * j as f64 / 8.0;
-                let v = a.eval(t);
-                !v.is_finite() || v.abs() > 4.0 * span
-            }) {
-                continue;
-            }
-            let (xm, ym) = golden(a, xs[i - 1], xs[i + 1], sign);
-            // (Nor one whose own value is as uncertain as its height: the
-            // floor of a cosine that rounds about 0.)
-            if !ym.is_finite() || sign * ym > sign * ys[i] || a.rounding(xm) >= p {
-                continue;
-            }
-            // Beyond both its near sides (golden section can end on an edge).
-            let local = [64.0 * ulp(xm), 1e-6 * xm.abs().max(1.0)].iter().all(|&h| {
-                [xm - h, xm + h].iter().all(|&t| {
-                    let v = a.eval(t);
-                    v.is_finite() && sign * (v - ym) >= -(a.noise(t) + a.noise(xm))
-                })
-            });
-            if !local {
-                continue;
-            }
-            // The edge of a jump or a pole, or a plateau, is no turn: there
-            // f moves, a few steps of its resolution out, by as much as it
-            // does across the whole bracket (the top of atan(tan(x)) − 10⁶
-            // is a staircase; tan beside its pole; floor(cos x) between far
-            // samples). At a turn that is a small part of it.
-            let res = a.resolution(xm);
-            let h = 4.0 * if res.is_finite() { res } else { 16.0 * ulp(xm) };
-            let (d1, d2) = ((a.eval(xm - h) - ym).abs(), (a.eval(xm + h) - ym).abs());
-            if !(d1.is_finite() && d2.is_finite()) || d1.max(d2) > 0.5 * p + a.rounding(xm) {
-                continue;
-            }
-            // Nor where f moves, within a few dozen floats, by a good part
-            // of its swing over the bracket (a sawtooth's top between far
-            // samples).
-            let swing = (1..8)
-                .map(|j| a.eval(xs[i - 1] + (xs[i + 1] - xs[i - 1]) * j as f64 / 8.0) - ym)
-                .filter(|v| v.is_finite())
-                .fold(0.0f64, |m, v| m.max(v.abs()));
-            let mut near: Vec<f64> = [2, 4, 8, 16, 32, 64]
-                .iter()
-                .flat_map(|&k| [nudge(xm, -k), nudge(xm, k)])
-                .collect();
-            let delta = (xs[i + 1] - xs[i - 1]) / 128.0;
-            near.extend((-8..=8).map(|j| xm + j as f64 * delta));
-            near.sort_by(f64::total_cmp);
-            let vals: Vec<f64> = near.iter().map(|&t| a.eval(t)).collect();
-            let step = vals
-                .windows(2)
-                .map(|w| (w[1] - w[0]).abs())
-                .fold(
-                    0.0f64,
-                    |m, v| if v.is_nan() { f64::INFINITY } else { m.max(v) },
-                );
-            if step.is_nan() || step > 0.25 * swing + a.rounding(xm) {
-                continue;
-            }
-            // Nor is the top of the climb to a reported pole (a missing
-            // pole is the missing-pole check's business).
-            let (lo, hi) = (xs[i - 1].min(xm - h), xs[i + 1].max(xm + h));
-            if d.vertical_asymptotes.iter().chain(&d.excluded).any(|v| {
-                let c = nearest(v, xm);
-                c >= lo && c <= hi || close_to(v, xm, 64)
-            }) {
-                continue;
-            }
-            let mut hit = false;
-            for (j, (fx, _)) in list.iter().enumerate() {
-                let c = nearest(fx, xm);
-                if !same_turn(a, c, xm, sign) {
-                    continue;
-                }
-                if fx.period.is_none()
-                    && let Some(prev) = used[j]
-                    && !same_turn(a, prev, xm, sign)
-                {
-                    r.fail(
-                        "extrema-merged",
-                        e,
-                        format!(
-                            "turns at {prev:?} and {xm:?} both matched to the reported one at {:?}",
-                            fx.x
-                        ),
-                    );
-                    hit = true;
-                    break;
-                }
-                used[j] = Some(xm);
-                hit = true;
-                break;
-            }
-            if !hit {
-                let reported: Vec<(f64, f64)> =
-                    list.iter().take(6).map(|(f, y)| (f.x, *y)).collect();
-                r.fail(
-                    name,
-                    e,
-                    format!("turn at ({xm:?}, {ym:?}); reported {reported:?}"),
-                );
-                break;
-            }
-        }
-    }
-}
-
-fn check_y_intercept(a: &Analysed, r: &mut Report) {
-    if a.unknown(flags::Y_INTERCEPT) {
-        return;
-    }
-    let e = &a.expr;
-    let f0 = a.eval(0.0);
-    match (a.d().y_intercept, a.defined(0.0)) {
-        (Some(y), Some(false)) => r.fail(
-            "y-intercept-where-undefined",
-            e,
-            format!("y-intercept {y:?} but f(0) is undefined"),
-        ),
-        (Some(y), Some(true))
-            if (y - f0).abs() > a.noise(0.0) + 4.0 * ulp(y) && !same_shown(y, f0) =>
-        {
-            r.fail(
-                "y-intercept-wrong",
-                e,
-                format!("y-intercept {y:?} but f(0)={f0:?}"),
-            )
-        }
-        (None, Some(true)) => r.fail(
-            // (Beyond the doubles, "unable to calculate" would be honest.)
-            if f0.abs() == f64::MAX {
-                "missing-y-intercept-beyond-doubles"
-            } else {
-                "missing-y-intercept"
-            },
-            e,
-            format!("no y-intercept but f(0)={f0:?}"),
-        ),
-        _ => {}
-    }
-}
-
-/// Is x a member of the family, to the rounding of its copies?
-fn in_family(f: &Family, x: f64) -> bool {
-    let c = nearest(f, x);
-    let k = match f.period {
-        Some(p) if p > 0.0 => ((x - f.x) / p).round().abs() * ulp(p),
-        _ => 0.0,
-    };
-    (x - c).abs() <= 0.5 * ulp(x) + 2.0 * k
-}
-
-/// Is x within a few floats (or the rounding of a family's copies) of v?
-fn close_to(f: &Family, x: f64, floats: i64) -> bool {
-    let c = nearest(f, x);
-    let k = match f.period {
-        Some(p) if p > 0.0 => ((x - f.x) / p).round().abs() * ulp(p),
-        _ => 0.0,
-    };
-    floats_between(c, x) <= floats || (x - c).abs() <= 4.0 * k
-}
-
-fn check_domain(a: &Analysed, xs: &[f64], r: &mut Report) {
-    let d = a.d();
-    if a.unknown(flags::DOMAIN) || d.domain.is_empty() {
-        return;
-    }
-    let e = &a.expr;
-    let ends: Vec<Family> = d
-        .domain
-        .iter()
-        .flat_map(|iv| [iv.lo.value, iv.hi.value])
-        .filter(|v| v.is_finite())
-        .map(|v| Family {
-            x: v,
-            period: a.period(),
-        })
-        .chain(d.excluded.iter().copied())
-        .collect();
-    // Within a few floats of an end or an excluded point, which side is
-    // which is the precision of the end, not a false claim.
-    let near = |x: f64| ends.iter().any(|f| close_to(f, x, 4));
-    let excluded = |x: f64| d.excluded.iter().any(|f| in_family(f, x));
-    let detail = |x: f64| {
-        format!(
-            "x={x:?}: domain {} excl {}",
-            fmt_set(&d.domain),
-            fmt_fams(&d.excluded)
-        )
-    };
-    let mut bad_in = None;
-    let mut bad_out = None;
-    let mut test = |x: f64, claimed: bool| {
-        if near(x) {
-            return;
-        }
-        // Which side of a boundary x is on can't be told closer than f's
-        // own resolution there.
-        let edge = |x: f64| {
-            let d = a.defined(x);
-            let res = a.resolution(x);
-            !res.is_finite() || a.defined(x - 4.0 * res) != d || a.defined(x + 4.0 * res) != d
-        };
-        match a.defined(x) {
-            Some(true) if !claimed && edge(x) => {}
-            Some(false) if claimed && edge(x) => {}
-            Some(true) if !claimed => {
-                bad_out.get_or_insert(x);
-            }
-            Some(false) if claimed => {
-                bad_in.get_or_insert(x);
-            }
-            _ => {}
-        }
-    };
-    match a.period() {
-        None => {
-            for &x in xs {
-                test(x, set_has(&d.domain, x) && !excluded(x));
-            }
-        }
-        Some(p) => {
-            // Given within one period [w, w + p]: a grid of that window,
-            // and its copies many periods away.
-            let w = d
-                .domain
-                .iter()
-                .map(|iv| iv.lo.value)
-                .filter(|v| v.is_finite())
-                .fold(f64::INFINITY, f64::min);
-            let whole = d
-                .domain
-                .iter()
-                .any(|iv| iv.lo.value == f64::NEG_INFINITY && iv.hi.value == f64::INFINITY);
-            let w = if w.is_finite() { w } else { 0.0 };
-            for i in 0..2048 {
-                let t = w + p * (i as f64 + 0.5) / 2048.0;
-                let claimed = (whole || set_has(&d.domain, t)) && !excluded(t);
-                for k in [0.0, 1.0, -1.0, 5.0, -17.0, 1000.0] {
-                    test(t + k * p, claimed);
-                }
-            }
-            for &x in xs.iter().step_by(7) {
-                if whole {
-                    test(x, !excluded(x));
-                }
-            }
-        }
-    }
-    if let Some(x) = bad_in {
-        r.fail("domain-includes-undefined", e, detail(x));
-    }
-    if let Some(x) = bad_out {
-        r.fail("domain-excludes-defined", e, detail(x));
-    }
-}
-
-fn check_monotonicity(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
-    let d = a.d();
-    if a.unknown(flags::MONOTONE_INTERVALS) || d.monotonicity.is_empty() {
-        return;
-    }
-    let e = &a.expr;
-    let ends: Vec<Family> = d
-        .monotonicity
-        .iter()
-        .flat_map(|(iv, _)| [iv.lo.value, iv.hi.value])
-        .filter(|v| v.is_finite())
-        .map(|v| Family {
-            x: v,
-            period: a.period(),
-        })
-        .collect();
-    let near = |x: f64| ends.iter().any(|f| close_to(f, x, 4));
-    // Each interval: points inside move the claimed way, by more than the
-    // noise at both. Against the running extreme, not the last point: many
-    // steps each within the noise add up to a resolvable change.
-    let contradict = |iv: &Interval, dir: Monotonicity, pts: &[(f64, f64)], r: &mut Report| {
-        let found = match dir {
-            Monotonicity::Constant => {
-                let lo = pts.iter().min_by(|p, q| p.1.total_cmp(&q.1)).copied();
-                let hi = pts.iter().max_by(|p, q| p.1.total_cmp(&q.1)).copied();
-                match (lo, hi) {
-                    (Some(l), Some(h)) if h.1 - l.1 > a.noise(l.0) + a.noise(h.0) => Some((l, h)),
-                    _ => None,
-                }
-            }
-            Monotonicity::Increasing | Monotonicity::Decreasing => {
-                let sign = if dir == Monotonicity::Increasing {
-                    1.0
-                } else {
-                    -1.0
-                };
-                let mut best: Option<(f64, f64)> = None;
-                let mut out = None;
-                for &(x, y) in pts {
-                    if let Some((bx, by)) = best
-                        && sign * y < sign * by
-                        && (by - y).abs() > a.noise(bx) + a.noise(x)
-                    {
-                        out = Some(((bx, by), (x, y)));
-                        break;
-                    }
-                    if best.is_none_or(|(_, by)| sign * y > sign * by) {
-                        best = Some((x, y));
-                    }
-                }
-                out
-            }
-            Monotonicity::Unknown => None,
-        };
-        let Some(((x1, y1), (x2, y2))) = found else {
-            return false;
-        };
-        r.fail(
-            "monotonicity-contradicted",
-            e,
-            format!(
-                "{dir:?} on ({:?},{:?}) but f({x1:?})={y1:?}, f({x2:?})={y2:?}",
-                iv.lo.value, iv.hi.value
-            ),
-        );
-        true
-    };
-    match a.period() {
-        None => {
-            // (Over the claimed domain: whether that is right is the
-            // domain check's business.)
-            let mut gap = None;
-            if !a.unknown(flags::DOMAIN) {
-                for (&x, &y) in xs.iter().zip(ys) {
-                    if y.is_finite()
-                        && !near(x)
-                        && set_has(&d.domain, x)
-                        && !d.excluded.iter().any(|f| in_family(f, x))
-                        && !d.monotonicity.iter().any(|(iv, _)| iv_has(iv, x))
-                    {
-                        gap.get_or_insert(x);
-                    }
-                }
-            }
-            if let Some(x) = gap {
-                r.fail(
-                    "monotonicity-misses-domain",
-                    e,
-                    format!("x={x:?} in domain but in no monotone interval"),
-                );
-            }
-            for (iv, dir) in &d.monotonicity {
-                let pts: Vec<(f64, f64)> = xs
-                    .iter()
-                    .zip(ys)
-                    .filter(|(x, y)| y.is_finite() && iv_has(iv, **x) && !near(**x))
-                    .map(|(x, y)| (*x, *y))
-                    .collect();
-                if contradict(iv, *dir, &pts, r) {
-                    break;
-                }
-            }
-        }
-        Some(p) => {
-            'iv: for (iv, dir) in &d.monotonicity {
-                let (lo, hi) = (iv.lo.value, iv.hi.value);
-                if !lo.is_finite() || !hi.is_finite() || hi <= lo {
-                    continue;
-                }
-                for k in [0.0, 1.0, -3.0, 1000.0] {
-                    let pts: Vec<(f64, f64)> = (0..128)
-                        .map(|i| lo + (hi - lo) * (i as f64 + 0.5) / 128.0 + k * p)
-                        .filter(|&x| !near(x))
-                        .map(|x| (x, a.eval(x)))
-                        .filter(|(_, y)| y.is_finite())
-                        .collect();
-                    if contradict(iv, *dir, &pts, r) {
-                        break 'iv;
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Vertical asymptotes are where f blows up (or is undefined nearby).
-fn check_vertical(a: &Analysed, r: &mut Report) {
-    if a.unknown(flags::VERTICAL_ASYMPTOTES) {
-        return;
-    }
-    for v in &a.d().vertical_asymptotes {
-        for c in a.copies(v) {
-            // A few floats out, then ten and a hundred times as far: either
-            // side's |f| grows towards x, or f keeps changing by as much
-            // per decade nearer (a log pole: ln|x| + 10⁶ shrinks in size
-            // towards 0 until e^(−10⁶), but steadily).
-            let q = 16.0 * ulp(c);
-            let grows = [-1.0, 1.0].iter().any(|&s| {
-                // From the first step at which f changes at all: in a
-                // shifted frame (1/sin(x − 1000)) f is flat across many
-                // floats of x.
-                let mut q = q;
-                for _ in 0..64 {
-                    if a.eval(c + s * q) != a.eval(c + s * 2.0 * q) {
-                        break;
-                    }
-                    q *= 2.0;
-                }
-                let near = a.eval(c + s * q);
-                let mid = a.eval(c + s * q * 10.0);
-                let far = a.eval(c + s * q * 100.0);
-                let (d1, d2) = (near - mid, mid - far);
-                !near.is_finite()
-                    || near.abs() == f64::MAX
-                    || near.abs() > mid.abs() * 1.2
-                    || (d1.signum() == d2.signum() && d1.abs() >= 0.5 * d2.abs() && d2 != 0.0)
-            });
-            if !grows {
-                r.fail(
-                    "asymptote-without-blowup",
-                    &a.expr,
-                    format!(
-                        "x={c:?} but f there {:?} and {:?}",
-                        a.eval(c - q),
-                        a.eval(c + q)
-                    ),
-                );
-                return;
-            }
-        }
-    }
-}
-
-/// A horizontal asymptote c on a side: f − c must die away there. One that
-/// keeps oscillating at the same size decade after decade, or grows,
-/// contradicts it. (Deviations within the noise say nothing.)
-fn check_horizontal(a: &Analysed, centres: &[f64], r: &mut Report) {
-    use graphing::analysis::AsymptoteSide;
-    if a.unknown(flags::HORIZONTAL_ASYMPTOTES) {
-        return;
-    }
-    let e = &a.expr;
-    // Far beyond every centre: a function shifted by 10⁹ is only in its
-    // tail beyond that.
-    let reach = centres.iter().fold(1.0f64, |m, c| m.max(c.abs()));
-    let k0 = (10.0 * reach).log10().ceil().max(1.0) as i32;
-    for &(c, side) in &a.d().horizontal_asymptotes {
-        let sides: &[f64] = match side {
-            AsymptoteSide::PositiveInfinity => &[1.0],
-            AsymptoteSide::NegativeInfinity => &[-1.0],
-            AsymptoteSide::AnyInfinity => &[1.0, -1.0],
-            AsymptoteSide::Unknown => &[],
-        };
-        for &s in sides {
-            let mut decades: Vec<(f64, usize)> = Vec::new();
-            for k in k0..=(k0 + 8).min(15) {
-                let (mut m, mut flips, mut last) = (0.0f64, 0usize, 0.0f64);
-                for j in 0..40 {
-                    let x = s
-                        * 10f64.powf(k as f64 + j as f64 / 40.0)
-                        * (1.0 + 0.0137 * (j % 3) as f64);
-                    let y = a.eval(x);
-                    if !y.is_finite() {
-                        continue;
-                    }
-                    let dev = y - c;
-                    if dev.abs() <= a.noise(x) {
-                        continue;
-                    }
-                    m = m.max(dev.abs());
-                    if last != 0.0 && dev.signum() != last {
-                        flips += 1;
-                    }
-                    last = dev.signum();
-                }
-                decades.push((m, flips));
-            }
-            let live: Vec<(f64, usize)> = decades
-                .iter()
-                .copied()
-                .skip_while(|d| d.0 == 0.0)
-                .take_while(|d| d.0 > 0.0)
-                .collect();
-            if live.len() >= 3
-                && live.iter().all(|d| d.1 >= 3)
-                && live.last().unwrap().0 >= 0.5 * live[0].0
-            {
-                r.fail(
-                    "hasymptote-oscillation-persists",
-                    e,
-                    format!(
-                        "y={c:?} as x→{}∞ but f−c keeps swinging by {:e} over {} decades",
-                        if s > 0.0 { "" } else { "−" },
-                        live.last().unwrap().0,
-                        live.len()
-                    ),
-                );
-                break;
-            }
-            let (xm, xf) = (s * (100.0 * reach).max(1e8), s * (1e7 * reach).max(1e15));
-            let (mid, far) = (a.eval(xm), a.eval(xf));
-            if xf.abs() <= 1e300
-                && mid.is_finite()
-                && far.is_finite()
-                && (far - c).abs() > a.noise(xf) + 2.0 * (mid - c).abs() + a.noise(xm)
-            {
-                r.fail(
-                    "hasymptote-not-approached",
-                    e,
-                    format!("y={c:?} but f({xm:?})={mid:?}, f({xf:?})={far:?}"),
-                );
-                break;
-            }
-        }
-    }
-}
-
-/// Even or odd as claimed, at every sampled pair ±x.
-fn check_parity(a: &Analysed, xs: &[f64], r: &mut Report) {
-    if a.unknown(flags::PARITY) {
-        return;
-    }
-    let odd = match a.k.parity {
-        Parity::Even => false,
-        Parity::Odd => true,
-        _ => return,
-    };
-    let e = &a.expr;
-    for &x in xs.iter().filter(|x| **x > 0.0).step_by(3) {
-        let (dp, dm) = (a.defined(x), a.defined(-x));
-        if let (Some(p), Some(m)) = (dp, dm)
-            && p != m
-            && (-2..=2).all(|k| a.defined(nudge(x, k)) == dp && a.defined(nudge(-x, k)) == dm)
-        {
-            r.fail(
-                "parity-domain-asymmetric",
-                e,
-                format!("{:?} but f is defined at only one of ±{x:?}", a.k.parity),
-            );
-            return;
-        }
-        if dp == Some(true) && dm == Some(true) {
-            let (y, z) = (a.eval(x), a.eval(-x));
-            let dev = if odd { (y + z).abs() } else { (y - z).abs() };
-            if dev > 0.0 && dev > a.noise(x) + a.noise(-x) {
-                r.fail(
-                    "parity-contradicted",
-                    e,
-                    format!("{:?} but f({x:?})={y:?}, f({:?})={z:?}", a.k.parity, -x),
-                );
-                return;
-            }
-        }
-    }
-}
-
-/// A claimed period P: f(x + P) = f(x) wherever either is defined, to
-/// within the noise at both, at exact 0, the window's start, every reported
-/// point and a few floats round it, a grid over [−100, 100], and a grid
-/// over ±64 periods around each centre. One resolvable disagreement
-/// disproves P. And P is the smallest: if P/2 or P/3 passed the same test
-/// too (f not being constant), P is not the fundamental period.
-fn check_period(a: &Analysed, centres: &[f64], r: &mut Report) {
-    if a.unknown(flags::PERIODICITY) {
-        return;
-    }
-    let Some(p) = a.period() else {
-        return;
-    };
-    let d = a.d();
-    let e = &a.expr;
-    let mut pts = vec![0.0];
-    let mut fams: Vec<Family> = Vec::new();
-    fams.extend(d.zeros.iter().copied());
-    fams.extend(
-        d.minima
-            .iter()
-            .chain(&d.maxima)
-            .chain(&d.inflection_points)
-            .map(|m| m.0),
-    );
-    fams.extend(d.vertical_asymptotes.iter().chain(&d.excluded).copied());
-    for iv in d.domain.iter().chain(d.monotonicity.iter().map(|m| &m.0)) {
-        for v in [iv.lo.value, iv.hi.value] {
-            if v.is_finite() {
-                fams.push(Family::single(v));
-            }
-        }
-    }
-    for f in &fams {
-        for k in [-64, -2, -1, 0, 1, 2, 64] {
-            pts.push(nudge(f.x, k));
-        }
-    }
-    for i in 0..4000 {
-        pts.push(-100.0 + 200.0 * (i as f64 + 0.371) / 4000.0);
-    }
-    let mut cs = vec![0.0];
-    cs.extend(centres);
-    for c in cs {
-        for i in 0..1024 {
-            pts.push(c + p * (-64.0 + 128.0 * (i as f64 + 0.5) / 1024.0));
-        }
-    }
-    pts.retain(|x| x.is_finite());
-    let test = |q: f64| -> Option<String> {
-        for &x in &pts {
-            let x2 = x + q;
-            match (a.defined(x), a.defined(x2)) {
-                (Some(true), Some(true)) => {
-                    let (y1, y2) = (a.eval(x), a.eval(x2));
-                    // (Beyond the doubles, beside a pole: nothing to compare.)
-                    if y1.abs() == f64::MAX || y2.abs() == f64::MAX {
-                        continue;
-                    }
-                    if y1 != y2 && (y1 - y2).abs() > a.noise(x) + a.noise(x2) {
-                        // x + P is rounded, and P itself stands for the true
-                        // period to half an ulp, which |x/P| copies add up:
-                        // within that reach of each point (beside a pole, a
-                        // lot of f), do f's values overlap?
-                        let reach = 2.0 * (ulp(x2) + ulp(q) * (x2 / q).abs().max(1.0));
-                        let around = |t: f64| {
-                            (-4..=4)
-                                .map(|k| a.eval(t + k as f64 * reach / 4.0))
-                                .filter(|v| v.is_finite())
-                                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
-                                    (lo.min(v), hi.max(v))
-                                })
-                        };
-                        let ((l1, h1), (l2, h2)) = (around(x), around(x2));
-                        if h1 < l2 || h2 < l1 {
-                            return Some(format!("f({x:?})={y1:?} but f({x2:?})={y2:?}"));
-                        }
-                    }
-                }
-                (Some(u), Some(v))
-                    if u != v
-                        && (-2..=2).all(|k| {
-                            a.defined(nudge(x2, k)) == Some(v) && a.defined(nudge(x, k)) == Some(u)
-                        }) =>
-                {
-                    return Some(format!(
-                        "f is {} at {x:?} but {} at {x2:?}",
-                        if u { "defined" } else { "undefined" },
-                        if v { "defined" } else { "undefined" }
-                    ));
-                }
-                _ => {}
-            }
-        }
-        None
-    };
-    if let Some(why) = test(p) {
-        r.fail("period-wrong", e, format!("period {p:?}: {why}"));
-        return;
-    }
-    let ys: Vec<f64> = pts
-        .iter()
-        .map(|&x| a.eval(x))
-        .filter(|y| y.is_finite())
-        .collect();
-    let constant = ys.windows(2).all(|w| w[0] == w[1]);
-    if !constant {
-        for n in [2.0, 3.0] {
-            if test(p / n).is_none() {
-                r.fail(
-                    "period-not-fundamental",
-                    e,
-                    format!("period {p:?}, but {:?} is one too", p / n),
-                );
-                return;
-            }
-        }
-    }
+    let eq = Equation::parse(&format!("y={expr}")).ok()?;
+    let ast = eq.explicit()?.1.clone();
+    let k = analyze(&eq, &opts);
+    Some(Analysed::new(expr, k, &ast, &opts))
 }
 
 /// Known undefined points must be outside the domain and never intercepts.
@@ -3461,7 +818,8 @@ fn check_undefined(a: &Analysed, points: &[f64], policy: bool, r: &mut Report) {
     if !a.ok() {
         // Refusing a function defined nowhere is the safe answer.
         let nowhere = (-200..=200).all(|i| a.defined(i as f64 * 0.37 + 0.01) != Some(true));
-        r.fail(
+        fail(
+            r,
             if nowhere {
                 "policy-refused-nowhere-defined"
             } else {
@@ -3492,7 +850,8 @@ fn check_undefined(a: &Analysed, points: &[f64], policy: bool, r: &mut Report) {
             None => set_has(&d.domain, p) && !d.excluded.iter().any(|e| in_family(e, p)),
         };
         if in_dom && !a.unknown(flags::DOMAIN) {
-            r.fail(
+            fail(
+                r,
                 name("undefined-point-in-domain"),
                 &a.expr,
                 format!(
@@ -3503,14 +862,16 @@ fn check_undefined(a: &Analysed, points: &[f64], policy: bool, r: &mut Report) {
             );
         }
         if p == 0.0 && d.y_intercept.is_some() {
-            r.fail(
+            fail(
+                r,
                 name("undefined-y-intercept"),
                 &a.expr,
                 format!("y-intercept {:?} at undefined x=0", d.y_intercept),
             );
         }
         if d.zeros.iter().any(|z| close_to(z, p, 4)) {
-            r.fail(
+            fail(
+                r,
                 name("undefined-zero"),
                 &a.expr,
                 format!("x-intercept at undefined x={p:?}"),
@@ -3518,7 +879,8 @@ fn check_undefined(a: &Analysed, points: &[f64], policy: bool, r: &mut Report) {
         }
         for (fx, y) in d.minima.iter().chain(&d.maxima) {
             if close_to(fx, p, 4) {
-                r.fail(
+                fail(
+                    r,
                     name("undefined-extremum"),
                     &a.expr,
                     format!("extremum ({p:?}, {y:?}) at an undefined point"),
@@ -3684,12 +1046,14 @@ fn check_pair(b: &Analysed, o: &Analysed, t: Aff, r: &mut Report) {
     let flip = t.k < 0.0;
     if both(flags::PERIODICITY) {
         match (b.period(), o.period()) {
-            (Some(pb), Some(po)) if (pb * t.s.abs() - po).abs() > 64.0 * ulp(po) => r.fail(
+            (Some(pb), Some(po)) if (pb * t.s.abs() - po).abs() > 64.0 * ulp(po) => fail(
+                r,
                 "transform-period-differs",
                 e,
                 format!("{}: base period {pb:?}, got {po:?}", t.label()),
             ),
-            (Some(_), None) | (None, Some(_)) => r.fail(
+            (Some(_), None) | (None, Some(_)) => fail(
+                r,
                 "transform-periodicity-differs",
                 e,
                 format!(
@@ -3705,7 +1069,8 @@ fn check_pair(b: &Analysed, o: &Analysed, t: Aff, r: &mut Report) {
     let mapped = |v: &[Family]| v.iter().map(|f| t.mfam(f)).collect::<Vec<_>>();
     if both(flags::ZEROS) && t.c == 0.0 {
         if b.zero_set() != o.zero_set() || b.zero_everywhere() != o.zero_everywhere() {
-            r.fail(
+            fail(
+                r,
                 "transform-zeros-differ",
                 e,
                 format!(
@@ -3716,7 +1081,8 @@ fn check_pair(b: &Analysed, o: &Analysed, t: Aff, r: &mut Report) {
                 ),
             );
         } else if !match_families(&mapped(&bd.zeros), &od.zeros, &|m, z| same_root(o, m, z)) {
-            r.fail(
+            fail(
+                r,
                 "transform-zeros-differ",
                 e,
                 format!(
@@ -3736,7 +1102,8 @@ fn check_pair(b: &Analysed, o: &Analysed, t: Aff, r: &mut Report) {
             &|m, z| floats_between(m, z) <= 64 || (m - z).abs() <= 4.0 * ulp(t.a),
         )
     {
-        r.fail(
+        fail(
+            r,
             "transform-poles-differ",
             e,
             format!(
@@ -3773,7 +1140,8 @@ fn check_pair(b: &Analysed, o: &Analysed, t: Aff, r: &mut Report) {
         let bfam: Vec<Family> = bl.iter().map(|m| t.mfam(&m.0)).collect();
         let ofam: Vec<Family> = ol.iter().map(|m| m.0).collect();
         if !match_families(&bfam, &ofam, &|m, z| same_turn(o, m, z, sign)) {
-            r.fail(
+            fail(
+                r,
                 "transform-extrema-differ",
                 e,
                 format!(
@@ -3797,7 +1165,8 @@ fn check_pair(b: &Analysed, o: &Analysed, t: Aff, r: &mut Report) {
             };
             let tol = t.k.abs() * b.noise(bm.0.x) + o.noise(om.0.x) + 8.0 * ulp(want);
             if (want - om.1).abs() > tol && !same_shown(want, om.1) {
-                r.fail(
+                fail(
+                    r,
                     "transform-extremum-y-differs",
                     e,
                     format!("{}: {name} y want {want}, got {}", t.label(), om.1),
@@ -3845,7 +1214,8 @@ fn check_pair(b: &Analysed, o: &Analysed, t: Aff, r: &mut Report) {
                     })
                 });
         if !ok {
-            r.fail(
+            fail(
+                r,
                 "transform-range-differs",
                 e,
                 format!(
@@ -3866,7 +1236,8 @@ fn check_pair(b: &Analysed, o: &Analysed, t: Aff, r: &mut Report) {
                     .any(|g| same_shown(*w, *g) || (w - g).abs() <= 8.0 * ulp(w.abs().max(g.abs())))
             });
         if !ok {
-            r.fail(
+            fail(
+                r,
                 "transform-hasymptotes-differ",
                 e,
                 format!("{}: want {want:?}, got {got:?}", t.label()),
@@ -3900,7 +1271,8 @@ fn check_pair(b: &Analysed, o: &Analysed, t: Aff, r: &mut Report) {
                 floats_between(m, z) <= 64
             });
         if !ok {
-            r.fail(
+            fail(
+                r,
                 "transform-domain-differs",
                 e,
                 format!(
@@ -3920,7 +1292,8 @@ fn check_pair(b: &Analysed, o: &Analysed, t: Aff, r: &mut Report) {
 fn check_equiv(p: &Analysed, q: &Analysed, r: &mut Report) {
     let e = format!("{}  ≡  y={}", p.expr, q.expr);
     if p.ok() != q.ok() {
-        r.fail(
+        fail(
+            r,
             "equivalent-refused-differ",
             &e,
             format!("{:?} vs {:?}", p.k.analysis_error, q.k.analysis_error),
@@ -3933,7 +1306,7 @@ fn check_equiv(p: &Analysed, q: &Analysed, r: &mut Report) {
     let (pd, qd) = (p.d(), q.d());
     let both = |flag: u32| !p.unknown(flag) && !q.unknown(flag);
     let mut differ = |what: &'static str, a: String, b: String| {
-        r.fail(what, &e, format!("{a} vs {b}"));
+        fail(r, what, &e, format!("{a} vs {b}"));
     };
     // (A periodic domain is given within one window: compare sets only
     // when neither is; the samples check each against f.)
@@ -4066,7 +1439,7 @@ fn check_equiv(p: &Analysed, q: &Analysed, r: &mut Report) {
 fn check_known(a: &Analysed, k: &Known, r: &mut Report) {
     let e = &a.expr;
     if !a.ok() {
-        r.fail("known-refused", e, format!("{:?}", a.k.analysis_error));
+        fail(r, "known-refused", e, format!("{:?}", a.k.analysis_error));
         return;
     }
     let d = a.d();
@@ -4090,7 +1463,8 @@ fn check_known(a: &Analysed, k: &Known, r: &mut Report) {
             .iter()
             .find(|&&x| !except.contains(&x) && !claimed(x));
         if let Some(p) = wrong_in {
-            r.fail(
+            fail(
+                r,
                 "known-domain-wrong",
                 e,
                 format!(
@@ -4100,7 +1474,8 @@ fn check_known(a: &Analysed, k: &Known, r: &mut Report) {
                 ),
             );
         } else if let Some(x) = wrong_out {
-            r.fail(
+            fail(
+                r,
                 "known-domain-wrong",
                 e,
                 format!(
@@ -4142,7 +1517,8 @@ fn check_known(a: &Analysed, k: &Known, r: &mut Report) {
                     },
                 })
                 .collect();
-            r.fail(
+            fail(
+                r,
                 "known-range-wrong",
                 e,
                 format!("range is {}, claimed {}", fmt_set(&want), fmt_set(&d.range)),
@@ -4158,7 +1534,8 @@ fn check_known(a: &Analysed, k: &Known, r: &mut Report) {
             _ => false,
         };
         if !ok {
-            r.fail(
+            fail(
+                r,
                 "known-period-wrong",
                 e,
                 format!("period is {per:?}, claimed {:?}", a.period()),
@@ -4187,7 +1564,8 @@ fn check_known(a: &Analysed, k: &Known, r: &mut Report) {
                 Zs::All => "every x of the domain".to_string(),
                 Zs::At(v) => format!("{v:?}"),
             };
-            r.fail(
+            fail(
+                r,
                 "known-zeros-wrong",
                 e,
                 format!(
@@ -4199,7 +1577,8 @@ fn check_known(a: &Analysed, k: &Known, r: &mut Report) {
         }
     }
     if k.no_poles && !a.unknown(flags::VERTICAL_ASYMPTOTES) && !d.vertical_asymptotes.is_empty() {
-        r.fail(
+        fail(
+            r,
             "known-poles-wrong",
             e,
             format!(
@@ -4215,7 +1594,8 @@ fn check_known(a: &Analysed, k: &Known, r: &mut Report) {
         let ok = h.iter().all(|w| got.iter().any(|g| same_shown(*w, *g)))
             && got.iter().all(|g| h.iter().any(|w| same_shown(*w, *g)));
         if !ok {
-            r.fail(
+            fail(
+                r,
                 "known-hasymptotes-wrong",
                 e,
                 format!("horizontal asymptotes are {h:?}, claimed {got:?}"),
@@ -4246,7 +1626,8 @@ fn check_reference(a: &Analysed, centres: &[f64], r: &mut Report) {
             // the compiled value.)
             R::Unknown => {}
             other => {
-                r.fail(
+                fail(
+                    r,
                     "reference-disagrees",
                     &a.expr,
                     format!("f({x:?}) compiled {y:?}, reference {other:?}"),
@@ -4268,7 +1649,7 @@ fn main() {
             Some("grad") => TrigUnit::Grads,
             _ => TrigUnit::Radians,
         };
-        let a = Analysed::new(&args[1], unit).expect("parses");
+        let a = analysed(&args[1], unit).expect("parses");
         let x: f64 = args[2].parse().expect("a number");
         println!("ast {:?}", a.ast);
         println!(
@@ -4284,9 +1665,7 @@ fn main() {
     let filter = args.iter().find(|a| !a.starts_with("--")).cloned();
     let check_ref = args.iter().any(|a| a == "--check-ref");
     let wanted = |e: &str| filter.as_ref().is_none_or(|f| e.contains(f.as_str()));
-    let mut r = Report {
-        failures: BTreeMap::new(),
-    };
+    let mut r = Report::default();
     let started = std::time::Instant::now();
     let mut count = 0usize;
     let mut slowest = (0.0f64, String::new());
@@ -4299,8 +1678,8 @@ fn main() {
                        cov: &mut Coverage|
      -> Option<Analysed> {
         let t0 = std::time::Instant::now();
-        let Some(a) = Analysed::new(expr, unit) else {
-            r.fail("does-not-parse", expr, String::new());
+        let Some(a) = analysed(expr, unit) else {
+            fail(r, "does-not-parse", expr, String::new());
             return None;
         };
         let dt = t0.elapsed().as_secs_f64() * 1e3;
@@ -4376,10 +1755,8 @@ fn main() {
             continue;
         }
         if let Some(a) = analyse(expr, *unit, &mut r, &mut count, &mut cov) {
-            let tagged = Analysed {
-                expr: format!("{expr}  [{unit:?}]"),
-                ..a
-            };
+            let mut tagged = a;
+            tagged.expr = format!("{expr}  [{unit:?}]");
             check_one(&tagged, &[0.0], false, &mut r);
             check_undefined(&tagged, points, *policy, &mut r);
         }

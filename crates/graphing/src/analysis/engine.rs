@@ -238,6 +238,17 @@ pub(crate) fn analyze_expr(
     opts: &CompileOptions<'_>,
     cancel: Option<&AtomicBool>,
 ) -> Result<KeyGraphFeatures, Stop> {
+    let k = analyze_expr_ungated(expr, opts, cancel)?;
+    // Nothing the function's own values contradict is shown.
+    super::verify::gate(k, expr, opts, cancel)
+}
+
+/// [`analyze_expr`] without the gate.
+pub(crate) fn analyze_expr_ungated(
+    expr: &Expr,
+    opts: &CompileOptions<'_>,
+    cancel: Option<&AtomicBool>,
+) -> Result<KeyGraphFeatures, Stop> {
     let k = analyze_framed(expr, opts, cancel)?;
     Ok(match constant_where_defined(expr, opts) {
         Some(c) => constant_where(k, c),
@@ -1022,7 +1033,7 @@ fn constant_where(mut k: KeyGraphFeatures, c: f64) -> KeyGraphFeatures {
 
 /// Mark `which` features as too complex to determine, dropping whatever
 /// was found for them.
-fn forget(k: &mut KeyGraphFeatures, which: u32) {
+pub(super) fn forget(k: &mut KeyGraphFeatures, which: u32) {
     k.too_complex_features |= which;
     let d = &mut k.data;
     if which & flags::DOMAIN != 0 {
