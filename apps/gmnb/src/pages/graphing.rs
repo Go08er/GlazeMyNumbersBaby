@@ -30,6 +30,9 @@ struct Row {
     swatch: gtk::Button,
     /// The swatch's colour, reloaded on change (one provider per row).
     swatch_css: gtk::CssProvider,
+    /// The colour picker's buttons, one per series colour; repainted with
+    /// the swatch so they follow palette and theme changes.
+    pickers: RefCell<Vec<gtk::CssProvider>>,
     error: gtk::Label,
     color: Cell<usize>,
 }
@@ -43,6 +46,18 @@ fn colour_provider(button: &gtk::Button) -> gtk::CssProvider {
         .style_context()
         .add_provider(&css, gtk::STYLE_PROVIDER_PRIORITY_USER + 5);
     css
+}
+
+fn load_colour(css: &gtk::CssProvider, c: [f32; 3]) {
+    let rgb = format!(
+        "rgb({},{},{})",
+        (c[0] * 255.0) as u8,
+        (c[1] * 255.0) as u8,
+        (c[2] * 255.0) as u8
+    );
+    css.load_from_string(&format!(
+        "button {{ background: {rgb}; box-shadow: 0 0 12px -2px {rgb}; }}"
+    ));
 }
 
 pub struct GraphingPage {
@@ -399,8 +414,11 @@ impl GraphingPage {
     /// Type into the focused equation (or a new one) at its cursor.
     fn insert_text(self: &Rc<Self>, text: &str) {
         let focused = self.focused.borrow().as_ref().and_then(|w| w.upgrade());
+        // Only a live row's entry: a removed one stays mapped while it
+        // animates away.
+        let live = |e: &gtk::Entry| self.rows.borrow().iter().any(|r| &r.entry == e);
         let entry = match focused {
-            Some(e) if e.is_mapped() => e,
+            Some(e) if e.is_mapped() && live(&e) => e,
             _ => {
                 // End the rows borrow before add_equation needs it mutably.
                 let last = self.rows.borrow().last().map(|r| r.entry.clone());
@@ -428,18 +446,14 @@ impl GraphingPage {
         entry.grab_focus_without_selecting();
     }
 
+    /// Paint a row's swatch and its colour picker in the current scheme.
     fn paint_swatch(&self, row: &Row) {
         let s = self.ctx.hub.scheme();
-        let c = s.series[row.color.get() % s.series.len()];
-        let css = format!(
-            "rgb({},{},{})",
-            (c[0] * 255.0) as u8,
-            (c[1] * 255.0) as u8,
-            (c[2] * 255.0) as u8
-        );
-        row.swatch_css.load_from_string(&format!(
-            "button {{ background: {css}; box-shadow: 0 0 12px -2px {css}; }}"
-        ));
+        let n = s.series.len();
+        load_colour(&row.swatch_css, s.series[row.color.get() % n]);
+        for (i, css) in row.pickers.borrow().iter().enumerate() {
+            load_colour(css, s.series[i % n]);
+        }
     }
 
     fn add_equation(self: &Rc<Self>, text: &str) -> Option<Rc<Row>> {
@@ -496,6 +510,7 @@ impl GraphingPage {
             entry: entry.clone(),
             swatch: swatch.clone(),
             swatch_css,
+            pickers: RefCell::default(),
             error,
             color: Cell::new(color),
         });
@@ -597,16 +612,7 @@ impl GraphingPage {
                 .css_classes(["wc-swatch", "wc-swatch-pick"])
                 .tooltip_text(format!("Color {}", i + 1))
                 .build();
-            let probe = Row {
-                id: row.id,
-                root: row.root.clone(),
-                entry: row.entry.clone(),
-                swatch: b.clone(),
-                swatch_css: colour_provider(&b),
-                error: row.error.clone(),
-                color: Cell::new(i),
-            };
-            self.paint_swatch(&probe);
+            row.pickers.borrow_mut().push(colour_provider(&b));
             // Weak row: the row's widgets own this popover and its buttons.
             let (weak, r) = (Rc::downgrade(self), Rc::downgrade(row));
             b.connect_clicked(move |_| {
