@@ -69,24 +69,38 @@ pub fn sin_cos(x: f64, unit: TrigUnit) -> (f64, f64) {
             // Reduced as |x| mod a turn, which `%` does exactly, and the
             // sign put back (sin is odd, cos even): reducing a tiny negative
             // x into [0, turn) would round it up to a whole turn, a zero sine.
+            // Then to the nearest quarter turn, also exactly (|d| ≤ ⅛ turn,
+            // on r's grid): converting r itself to radians would round away
+            // the small sine of an angle just short of 180° or the cosine
+            // near 90° (sin 179.99999999999997° is 4.96·10⁻¹⁶, not 5.67).
             let turn = unit.full_turn();
-            let r = x.abs() % turn;
             let quarter = turn / 4.0;
-            let q = r / quarter;
-            // (q underflows to 0 for a subnormal r: not a quarter turn.)
-            let (s, c) = if q == q.trunc() && (q != 0.0 || r == 0.0) {
-                match q as i64 {
+            let r = x.abs() % turn;
+            let q = (r / quarter).round();
+            let d = r - q * quarter;
+            let (s, c) = if d == 0.0 {
+                match q as i64 % 4 {
                     0 => (0.0, 1.0),
                     1 => (1.0, 0.0),
                     2 => (0.0, -1.0),
                     _ => (-1.0, 0.0),
                 }
             } else {
-                let (s, c) = (r * unit.to_radians_factor()).sin_cos();
-                // Not a multiple of a half turn, so not a zero, even where
+                let (sd, cd) = (d * unit.to_radians_factor()).sin_cos();
+                // Not a multiple of a quarter turn, so not a zero, even where
                 // the sine is below the smallest double (10⁻³²³ degrees):
                 // its reciprocal overflows rather than being undefined.
-                (if s == 0.0 { f64::from_bits(1) } else { s }, c)
+                let sd = if sd == 0.0 {
+                    f64::from_bits(1).copysign(d)
+                } else {
+                    sd
+                };
+                match q as i64 % 4 {
+                    0 => (sd, cd),
+                    1 => (cd, -sd),
+                    2 => (-sd, -cd),
+                    _ => (-cd, sd),
+                }
             };
             if x < 0.0 { (-s, c) } else { (s, c) }
         }
@@ -167,10 +181,17 @@ pub fn pow_int(b: f64, n: i32) -> f64 {
     }
 }
 
-/// atanh, undefined (NaN rather than ±∞) at its poles ±1.
+/// atanh, undefined (NaN rather than ±∞) at its poles ±1: ±½ ln(1 +
+/// 2|x|/(1 − |x|)). (`f64::atanh` isn't symmetric: near −1 it takes the
+/// logarithm of a number near 0 that it has already rounded, and is off in
+/// the sixth digit at −0.9999999999999999.)
 #[inline]
 pub fn atanh(x: f64) -> f64 {
-    if x.abs() == 1.0 { f64::NAN } else { x.atanh() }
+    let a = x.abs();
+    if a == 1.0 {
+        return f64::NAN;
+    }
+    (0.5 * (2.0 * a / (1.0 - a)).ln_1p()).copysign(x)
 }
 
 #[inline]
@@ -213,32 +234,81 @@ pub fn atan_u(x: f64, unit: TrigUnit) -> f64 {
     from_rad(x.atan(), unit)
 }
 
-/// arcsec(x) = arccos(1/x).
+/// √(x² − 1) for |x| ≥ 1, as √((|x| − 1)(|x| + 1)): near ±1 that keeps the
+/// small difference exact (|x| − 1 is exact there), where 1/x or x² − 1
+/// would round it away. NaN for |x| < 1.
+#[inline]
+fn sqrt_x2_minus_1(x: f64) -> f64 {
+    let a = x.abs();
+    ((a - 1.0) * (a + 1.0)).sqrt()
+}
+
+/// arcsec(x) = arccos(1/x), range [0, π]. Near ±1, where arccos is steep
+/// and 1/x's rounding would be magnified, as arctan √(x² − 1) instead.
 #[inline]
 pub fn asec_u(x: f64, unit: TrigUnit) -> f64 {
-    from_rad((1.0 / x).acos(), unit)
+    let r = if x.abs() >= 2.0 || x.is_nan() {
+        (1.0 / x).acos()
+    } else {
+        let t = sqrt_x2_minus_1(x).atan();
+        if x < 0.0 { PI - t } else { t }
+    };
+    from_rad(r, unit)
 }
 
-/// arccsc(x) = arcsin(1/x).
+/// arccsc(x) = arcsin(1/x), range [−π/2, π/2]. Near ±1, as
+/// arctan(1/√(x² − 1)) instead (see [`asec_u`]).
 #[inline]
 pub fn acsc_u(x: f64, unit: TrigUnit) -> f64 {
-    from_rad((1.0 / x).asin(), unit)
+    let r = if x.abs() >= 2.0 || x.is_nan() {
+        (1.0 / x).asin()
+    } else {
+        (1.0 / sqrt_x2_minus_1(x)).atan().copysign(x)
+    };
+    from_rad(r, unit)
 }
 
-/// arccot(x) = π/2 − arctan(x) (continuous, range (0, π)).
+/// arccot(x), continuous with range (0, π): arctan(1/x) for x > 0 and
+/// π + arctan(1/x) for x < 0. Not π/2 − arctan(x), which cancels to 0 for
+/// large x (arccot(10¹⁵) is 10⁻¹⁵, not 0.888·10⁻¹⁵).
 #[inline]
 pub fn acot_u(x: f64, unit: TrigUnit) -> f64 {
-    from_rad(PI / 2.0 - x.atan(), unit)
+    let r = if x > 0.0 {
+        (1.0 / x).atan()
+    } else if x < 0.0 {
+        PI + (1.0 / x).atan()
+    } else if x == 0.0 {
+        PI / 2.0
+    } else {
+        f64::NAN
+    };
+    from_rad(r, unit)
 }
 
+/// sech x = 2e^−|x| / (1 + e^−2|x|): no cosh to overflow, so it stays
+/// right (subnormal) out to |x| ≈ 745 instead of becoming 0 past 710.
 #[inline]
 pub fn sech(x: f64) -> f64 {
-    1.0 / x.cosh()
+    let a = x.abs();
+    if a < 1.0 {
+        1.0 / x.cosh()
+    } else {
+        let e = (-a).exp();
+        2.0 * e / (1.0 + e * e)
+    }
 }
 
+/// csch x, as 2e^−|x| / (1 − e^−2|x|) beyond |x| = 1 (no sinh to
+/// overflow; see [`sech`]). Undefined at 0.
 #[inline]
 pub fn csch(x: f64) -> f64 {
-    div(1.0, x.sinh())
+    let a = x.abs();
+    if a < 1.0 {
+        div(1.0, x.sinh())
+    } else {
+        let e = (-a).exp();
+        (2.0 * e / -(-2.0 * a).exp_m1()).copysign(x)
+    }
 }
 
 #[inline]
@@ -247,19 +317,45 @@ pub fn coth(x: f64) -> f64 {
     div(1.0, x.tanh())
 }
 
+/// arsech x = ln((1 + √(1 − x²)) / x) on (0, 1], undefined elsewhere:
+/// computed as ln(1 + √((1 − x)(1 + x))) − ln x, so neither 1/x overflows
+/// near 0 (arsech 10⁻³¹⁰ is 714.5, not ∞) nor its rounding is magnified
+/// near 1, where the result is small.
 #[inline]
 pub fn asech(x: f64) -> f64 {
-    div(1.0, x).acosh()
+    if !(x > 0.0 && x <= 1.0) {
+        return f64::NAN;
+    }
+    let ln_x = if x > 0.5 { (x - 1.0).ln_1p() } else { x.ln() };
+    ((1.0 - x) * (1.0 + x)).sqrt().ln_1p() - ln_x
 }
 
+/// arcsch x = arsinh(1/x), undefined at 0. For |x| ≤ 1 as
+/// ±(ln(1 + √(1 + x²)) − ln|x|), so 1/x can't overflow near 0.
 #[inline]
 pub fn acsch(x: f64) -> f64 {
-    div(1.0, x).asinh()
+    if x == 0.0 || x.is_nan() {
+        return f64::NAN;
+    }
+    let a = x.abs();
+    if a > 1.0 {
+        (1.0 / x).asinh()
+    } else {
+        ((1.0 + a * a).sqrt().ln_1p() - a.ln()).copysign(x)
+    }
 }
 
+/// arcoth x = ½ ln((x + 1)/(x − 1)) for |x| > 1, undefined at ±1 and
+/// between. As ±½ ln(1 + 2/(|x| − 1)): |x| − 1 is exact near 1, and the
+/// logarithm stays accurate (≈ 1/x) far out, where atanh(1/x) would
+/// magnify 1/x's rounding near ±1.
 #[inline]
 pub fn acoth(x: f64) -> f64 {
-    atanh(div(1.0, x))
+    let a = x.abs();
+    if !(a > 1.0) {
+        return f64::NAN;
+    }
+    (0.5 * (2.0 / (a - 1.0)).ln_1p()).copysign(x)
 }
 
 /// `root(x, n)`: real n-th root. Odd integer n accepts negative x.
@@ -370,8 +466,7 @@ pub fn gamma(x: f64) -> f64 {
     }
     if x < 0.5 {
         // Reflection formula.
-        let s = (PI * x).sin();
-        return PI / (s * gamma(1.0 - x));
+        return PI / (sin_pi(x) * gamma(1.0 - x));
     }
     if x > 171.7 {
         return f64::INFINITY;
@@ -385,6 +480,14 @@ pub fn gamma(x: f64) -> f64 {
     // t^(x+½) overflows before Γ does: split it around e^(−t).
     let half = t.powf(0.5 * (x + 0.5));
     (2.0 * PI).sqrt() * half * ((-t).exp() * half) * a
+}
+
+/// sin(πx), exact near the integers: π·x's rounding would otherwise swamp
+/// the small sine near them (Γ near its poles).
+fn sin_pi(x: f64) -> f64 {
+    let n = x.round();
+    let s = (PI * (x - n)).sin();
+    if n % 2.0 == 0.0 { s } else { -s }
 }
 
 /// ln Γ(x) for x > 0, computed in log space so it never overflows (Γ
