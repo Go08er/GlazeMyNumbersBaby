@@ -15,10 +15,11 @@
 
 #![allow(missing_docs, clippy::should_implement_trait)]
 
-use std::f64::consts::{LN_2, LN_10};
+use std::f64::consts::LN_2;
 
 use crate::ast::{BinOp, Expr, Func};
 use crate::compile::{CompileOptions, DEFAULT_VARIABLE_VALUE};
+use crate::dd::{self, Dd};
 use crate::functions::{self as fns, TrigUnit};
 
 /// `e` with every slider variable replaced by its value in `opts`.
@@ -241,16 +242,26 @@ impl Xf {
     }
     /// ln of a positive number.
     pub fn ln(self) -> f64 {
-        self.m.ln() + self.e as f64 * LN_2
+        self.ln_dd().hi
+    }
+    /// ln of a positive number, to about 106 bits: a power or exponential
+    /// of it beyond the doubles needs that much to come out right to a
+    /// double's last bit.
+    pub(crate) fn ln_dd(self) -> Dd {
+        dd::ln(self.m.abs()).add(dd::LN2.mul_f(self.e as f64))
     }
     pub fn exp(t: f64) -> R {
-        if t.is_nan() {
+        Xf::exp_dd(Dd::of(t))
+    }
+    /// e^t for t in double-double (see [`Xf::ln_dd`]).
+    pub(crate) fn exp_dd(t: Dd) -> R {
+        if t.hi.is_nan() {
             return R::Undef;
         }
-        if (-700.0..=700.0).contains(&t) {
-            return R::V(Xf::of(t.exp()));
+        if (-700.0..=700.0).contains(&t.hi) && t.lo == 0.0 {
+            return R::V(Xf::of(t.hi.exp()));
         }
-        let k = (t / LN_2).floor();
+        let k = (t.hi / LN_2).round();
         // (Below even this exponent range, e^t is still a positive number,
         // smaller than anything held exactly: lost.)
         if k <= -(EXACT_E as f64) {
@@ -259,7 +270,18 @@ impl Xf {
         if !k.is_finite() || k >= EXACT_E as f64 {
             return R::Unknown;
         }
-        R::V(Xf::norm((t - k * LN_2).exp(), k as i64))
+        if k.abs() > 2f64.powi(52) {
+            // Not even double-double holds t to a fraction of an ulp of the
+            // result this far out: its mantissa can't be told. Tiny, it is
+            // still a positive number far below anything a double holds.
+            return if k < 0.0 {
+                R::V(Xf::lost_of(1.0))
+            } else {
+                R::Unknown
+            };
+        }
+        let (r, n) = dd::exp(t);
+        settle(Xf::norm(r, n as i64))
     }
     /// A double standing in for it: itself, or the smallest or largest
     /// double of its sign when it is beyond them.
@@ -429,14 +451,18 @@ pub fn bin(op: BinOp, a: Xf, b: Xf) -> R {
     }
     if a.normal() && b.normal() {
         let (x, y) = (a.f(), b.f());
+        let sum = matches!(op, BinOp::Add | BinOp::Sub);
         let r = match op {
             BinOp::Add => x + y,
             BinOp::Sub => x - y,
             BinOp::Mul => x * y,
             _ => x / y,
         };
-        let exact0 = r == 0.0 && (matches!(op, BinOp::Add | BinOp::Sub) || x == 0.0 || y == 0.0);
-        if r.is_finite() && (r != 0.0 || exact0) {
+        let exact0 = r == 0.0 && (sum || x == 0.0 || y == 0.0);
+        // A sum below the normal doubles is exact; a product or quotient
+        // there is rounded to the coarse subnormal grid, which the true
+        // value isn't on: that one is worked out below instead.
+        if r.is_finite() && (r.abs() >= f64::MIN_POSITIVE || exact0 || (sum && r != 0.0)) {
             return R::V(Xf::of(r));
         }
     }
@@ -478,15 +504,17 @@ pub fn pow_rat(b: R, p: i32, q: i32) -> R {
         if r.is_nan() {
             return R::Undef;
         }
-        if r.is_finite() && r != 0.0 {
+        // (Not a subnormal: that is the true value rounded to the coarse
+        // subnormal grid.)
+        if r.is_finite() && r.abs() >= f64::MIN_POSITIVE {
             return R::V(Xf::of(r));
         }
     }
     if b.sign() < 0.0 && q % 2 == 0 {
         return R::Undef;
     }
-    let t = (p as f64 / q as f64) * b.abs().ln();
-    match Xf::exp(t) {
+    let t = b.abs().ln_dd().mul_f(f64::from(p)).div_f(f64::from(q));
+    match Xf::exp_dd(t) {
         R::V(m) if b.sign() < 0.0 && p % 2 != 0 => R::V(m.neg()),
         r => r,
     }
@@ -500,7 +528,9 @@ pub fn pow_real(a: Xf, b: Xf) -> R {
         if r.is_nan() {
             return R::Undef;
         }
-        if r.is_finite() && (r != 0.0 || x == 0.0) {
+        // (Not a subnormal: that is the true value rounded to the coarse
+        // subnormal grid.)
+        if r.is_finite() && (r.abs() >= f64::MIN_POSITIVE || (r == 0.0 && x == 0.0)) {
             return R::V(Xf::of(r));
         }
     }
@@ -520,6 +550,16 @@ pub fn pow_real(a: Xf, b: Xf) -> R {
             R::Unknown
         };
     }
+    if b.tiny() {
+        // A nonzero exponent below the doubles is no integer (so a negative
+        // base has no real power), and moves a positive base's power from
+        // 1 by less than any double can show (|b·ln a| < 2⁻¹⁰⁰⁰).
+        return if a.sign() < 0.0 {
+            R::Undef
+        } else {
+            R::V(Xf::of(1.0))
+        };
+    }
     let y = b.f();
     if !y.is_finite() {
         return R::Unknown;
@@ -529,12 +569,12 @@ pub fn pow_real(a: Xf, b: Xf) -> R {
             return R::Undef;
         }
         let odd = y.abs() < 9007199254740992.0 && y % 2.0 != 0.0;
-        return match Xf::exp(y * a.abs().ln()) {
+        return match Xf::exp_dd(a.abs().ln_dd().mul_f(y)) {
             R::V(m) if odd => R::V(m.neg()),
             r => r,
         };
     }
-    Xf::exp(y * a.ln())
+    Xf::exp_dd(a.ln_dd().mul_f(y))
 }
 
 pub fn root_x(x: Xf, n: Xf) -> R {
@@ -543,7 +583,7 @@ pub fn root_x(x: Xf, n: Xf) -> R {
         if r.is_nan() {
             return R::Undef;
         }
-        if r.is_finite() && (r != 0.0 || x.is_zero()) {
+        if r.is_finite() && (r.abs() >= f64::MIN_POSITIVE || (r == 0.0 && x.is_zero())) {
             return R::V(Xf::of(r));
         }
     }
@@ -561,7 +601,7 @@ pub fn root_x(x: Xf, n: Xf) -> R {
     if x.lost() {
         return R::Unknown;
     }
-    match Xf::exp(x.abs().ln() / nf) {
+    match Xf::exp_dd(x.abs().ln_dd().div_f(nf)) {
         R::V(m) if x.sign() < 0.0 => R::V(m.neg()),
         r => r,
     }
@@ -598,8 +638,8 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
                     fns::log10(a.f())
                 });
             }
-            let l = a.ln();
-            R::V(Xf::of(if f == Ln { l } else { l / LN_10 }))
+            let l = a.ln_dd();
+            R::V(Xf::of(if f == Ln { l.hi } else { l.div(dd::LN10).hi }))
         }
         Sqrt => {
             if a.sign() < 0.0 {
@@ -743,7 +783,7 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
             if f == Acosh && a.sign() < 0.0 {
                 return R::Undef;
             }
-            let l = LN_2 + a.abs().ln();
+            let l = dd::LN2.add(a.abs().ln_dd()).hi;
             R::V(Xf::of(if a.sign() < 0.0 { -l } else { l }))
         }
         // Below or beyond the doubles, where the double standing in for the
@@ -760,7 +800,7 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
             if a.lost() {
                 return R::Unknown;
             }
-            let l = LN_2 - a.abs().ln();
+            let l = dd::LN2.add(a.abs().ln_dd().neg()).hi;
             R::V(Xf::of(if a.sign() < 0.0 { -l } else { l }))
         }
         Acsc | Acsch | Acoth if a.huge() => {
@@ -810,7 +850,7 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
             } else if b.sign() <= 0.0 || t.sign() <= 0.0 || (b.normal() && b.f() == 1.0) {
                 R::Undef
             } else {
-                R::V(Xf::of(t.ln() / b.ln()))
+                R::V(Xf::of(t.ln_dd().div(b.ln_dd()).hi))
             }
         }
         Mod | NCr | NPr => {
