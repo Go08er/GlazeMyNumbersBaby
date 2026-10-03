@@ -48,7 +48,9 @@ impl TracePoint {
     }
 }
 
-fn project(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> (f64, (f64, f64)) {
+/// The point of segment a–b nearest to p: its distance from p and its
+/// position along the segment (0 at a, 1 at b).
+fn project(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let len2 = dx * dx + dy * dy;
     let t = if len2 > 0.0 {
@@ -58,7 +60,7 @@ fn project(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> (f64, (f64, f64)) {
     };
     let q = (a.0 + t * dx, a.1 + t * dy);
     let d = ((p.0 - q.0).powi(2) + (p.1 - q.1).powi(2)).sqrt();
-    (d, q)
+    (d, t)
 }
 
 /// Nearest point on any of the polylines, in screen space.
@@ -73,10 +75,14 @@ fn nearest_on_polylines(
         for w in l.windows(2) {
             let a = vp.to_screen(w[0].x, w[0].y);
             let b = vp.to_screen(w[1].x, w[1].y);
-            let (d, q) = project((px, py), a, b);
+            let (d, t) = project((px, py), a, b);
             if best.is_none_or(|(bd, _)| d < bd) {
-                let (wx, wy) = vp.to_world(q.0, q.1);
-                best = Some((d, Point::new(wx, wy)));
+                // Along the segment in graph coordinates: going back from
+                // the screen would round x to the view's own float spacing
+                // (about 2×10⁻¹⁵ in a ±10 view), far coarser than a steep
+                // curve's.
+                let (p, q) = (w[0], w[1]);
+                best = Some((d, Point::new(p.x + t * (q.x - p.x), p.y + t * (q.y - p.y))));
             }
         }
         if l.len() == 1 {
@@ -260,14 +266,31 @@ pub fn format_trace_value(x: f64, y: f64, precision: f64) -> String {
     )
 }
 
-/// `v` rounded to `step`, with as many decimals as the step has.
+/// `v` rounded to `step`, with as many decimals as the step has; past 15
+/// decimals, as m×10ⁿ with the digits the step gives it.
 fn format_coordinate(v: f64, step: f64) -> String {
     let decimals = if step > 0.0 && step.is_finite() {
-        (-step.log10().floor()).clamp(0.0, 15.0) as usize
+        (-step.log10().floor()).max(0.0)
     } else {
-        6
+        6.0
     };
-    let s = format!("{:.*}", decimals, round_to(v, step));
+    let r = round_to(v, step);
+    if decimals > 15.0 && r == 0.0 {
+        return "0".into();
+    }
+    if decimals > 15.0 && r.is_finite() {
+        let e = r.abs().log10().floor();
+        let digits = (decimals + e).clamp(0.0, 16.0) as usize;
+        let s = format!("{:.*e}", digits, r);
+        if let Some((m, e)) = s.split_once('e')
+            && let Ok(e) = e.parse::<i32>()
+        {
+            let m = m.trim_end_matches('0').trim_end_matches('.');
+            return format!("{}×10{}", m, crate::analysis::format::superscript(e));
+        }
+    }
+    let decimals = decimals.min(15.0) as usize;
+    let s = format!("{:.*}", decimals, r);
     if s.trim_start_matches('-')
         .chars()
         .all(|c| c == '0' || c == '.')
@@ -332,6 +355,10 @@ mod tests {
         for (src, text) in [
             ("y = 1000000000*x", "(0.00000000025, 0.25)"),
             ("y = 1000000000000*x", "(0.00000000000025, 0.25)"),
+            // R11-M-05/L-02: past what the view's own coordinates resolve,
+            // and past 15 decimals.
+            ("y = 1000000000000000*x", "(2.5×10⁻¹⁶, 0.25)"),
+            ("y = 100000000000000000000*x", "(2.5×10⁻²¹, 0.25)"),
         ] {
             let (eq, p) = setup(src, &vp);
             let t = nearest_point(&vp, &[(&eq, &p)], px, py, 50.0).unwrap();
@@ -371,5 +398,8 @@ mod tests {
         assert_eq!(format_trace_value(1.23456, -0.5, 0.01), "(1.23, -0.50)");
         assert_eq!(format_trace_value(-0.0001, 2.0, 0.01), "(0.00, 2.00)");
         assert_eq!(format_trace_value(1234.5, 2.0, 1.0), "(1235, 2)");
+        assert_eq!(format_coordinate(3.55e-15, 1e-17), "3.55×10⁻¹⁵");
+        assert_eq!(format_coordinate(-3.5e-15, 1e-17), "-3.5×10⁻¹⁵");
+        assert_eq!(format_coordinate(1e-20, 1e-17), "0");
     }
 }

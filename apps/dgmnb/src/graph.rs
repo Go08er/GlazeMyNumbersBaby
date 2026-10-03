@@ -1723,6 +1723,8 @@ mod tests {
             ("y=1000*x", true),
             ("y=1000000000*x", false),
             ("y=1000000000*x", true),
+            ("y=1000000000000000*x", false),
+            ("y=1000000000000000*x", true),
             ("y=x", false),
         ] {
             let mut g = GraphPage::for_test(session::from_list(src));
