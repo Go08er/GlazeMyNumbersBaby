@@ -1380,6 +1380,8 @@ impl GraphPage {
                         &format!("Color {}", i + 1),
                         b,
                     ) {
+                        // Radio buttons report "checked" from toggled.
+                        n.toggled = Some(i == cur);
                         n.selected = Some(i == cur);
                         n.clickable = true;
                         n.focusable = true;

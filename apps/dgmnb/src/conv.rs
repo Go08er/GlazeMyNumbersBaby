@@ -360,31 +360,41 @@ impl ConvPage {
         }
         y += 6.0;
         if self.vm.is_currency_current_category() {
+            // Each line is also a label for assistive technology (as the
+            // original's text blocks are), the changing ones live.
+            let spoken = |f: &mut Frame, key: &str, text: &str, r: Rect, live: bool| {
+                if !text.is_empty()
+                    && let Some(n) =
+                        f.node(id(("currency-line", key)), accesskit::Role::Label, text, r)
+                {
+                    n.live = live;
+                }
+            };
+            let line = Rect::new(r.x, y, r.w, 22.0);
             f.label(
-                Rect::new(r.x, y, r.w, 22.0),
+                line,
                 self.vm.currency_ratio_equality(),
                 SMALL,
                 t.fg,
                 Align::Start,
             );
+            spoken(
+                f,
+                "ratio",
+                self.vm.currency_ratio_equality_automation_name(),
+                line,
+                false,
+            );
             y += 22.0;
             let ts = self.vm.currency_timestamp().to_string();
-            let w = f.label(
-                Rect::new(r.x, y, r.w, 26.0),
-                &ts,
-                SMALL,
-                t.fg_dim,
-                Align::Start,
-            );
+            let line = Rect::new(r.x, y, r.w, 26.0);
+            let w = f.label(line, &ts, SMALL, t.fg_dim, Align::Start);
+            spoken(f, "updated", &ts, line, true);
             let status = self.vm.currency_status();
             if self.fetching {
-                f.label(
-                    Rect::new(r.x + w + 10.0, y, 120.0, 26.0),
-                    "Updating…",
-                    SMALL,
-                    t.fg_dim,
-                    Align::Start,
-                );
+                let line = Rect::new(r.x + w + 10.0, y, 120.0, 26.0);
+                f.label(line, "Updating…", SMALL, t.fg_dim, Align::Start);
+                spoken(f, "updating", "Updating rates", line, true);
             } else if status.refresh_visible() || !self.vm.is_currency_fetch_in_flight() {
                 let b = Rect::new(r.x + w + 6.0, y, 116.0, 26.0);
                 f.button(
@@ -401,14 +411,9 @@ impl ConvPage {
             y += 28.0;
             let text = status.text();
             if !text.is_empty() {
-                f.label_fit(
-                    Rect::new(r.x, y, r.w, 20.0),
-                    &text,
-                    CAPTION,
-                    9.0,
-                    t.fg_dim,
-                    Align::Start,
-                );
+                let line = Rect::new(r.x, y, r.w, 20.0);
+                f.label_fit(line, &text, CAPTION, 9.0, t.fg_dim, Align::Start);
+                spoken(f, "status", &text, line, true);
                 y += 22.0;
             }
         }
@@ -572,5 +577,51 @@ impl ConvPage {
             }
             self.picker = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::{Frame, Icons, Input};
+
+    /// Pre-review: the currency rate line, its age and status reach screen
+    /// readers (they were drawn only). Uses the bundled rates, not a cache.
+    #[test]
+    fn currency_lines_are_exported() {
+        let mut page = ConvPage {
+            vm: UnitConverterViewModel::new(unitconv::ViewModelConfig::default()),
+            picker: None,
+            search: TextEdit::new("", 60),
+            fetching: true,
+            checking: false,
+            proxy: None,
+        };
+        page.vm.set_current_mode(ConverterMode::Currency);
+        let mut pm = tiny_skia::Pixmap::new(760, 700).unwrap();
+        let (mut text, mut icons, input) =
+            (crate::text::Text::new(), Icons::default(), Input::default());
+        let mut scrolls = std::collections::HashMap::new();
+        let mut f = Frame::new(
+            crate::gfx::Canvas::new(pm.as_mut(), 1.0, false),
+            &mut text,
+            &mut icons,
+            crate::theme::Theme::new(false, None),
+            &input,
+            &mut scrolls,
+            true,
+        );
+        page.view(&mut f, Rect::new(0.0, 46.0, 760.0, 654.0));
+        let labels: Vec<String> = crate::a11y::exported(f.nodes.as_ref().unwrap())
+            .into_iter()
+            .filter(|(r, ..)| *r == accesskit::Role::Label)
+            .map(|(_, n, _)| n)
+            .collect();
+        assert!(labels.iter().any(|l| l.contains("United States Dollar")), "{labels:?}");
+        assert!(
+            labels.iter().any(|l| l.starts_with("Updated")),
+            "{labels:?}"
+        );
+        assert!(labels.iter().any(|l| l == "Updating rates"), "{labels:?}");
     }
 }

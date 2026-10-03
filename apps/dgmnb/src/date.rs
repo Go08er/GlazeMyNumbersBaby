@@ -254,13 +254,12 @@ impl DatePage {
             }
             y += 46.0;
             if !self.state.is_diff_in_days() {
-                f.label(
-                    Rect::new(col.x, y, col.w, 24.0),
-                    self.state.str_date_diff_result_in_days(),
-                    BODY,
-                    t.fg_dim,
-                    Align::Start,
-                );
+                let line = Rect::new(col.x, y, col.w, 24.0);
+                let days = self.state.str_date_diff_result_in_days();
+                f.label(line, days, BODY, t.fg_dim, Align::Start);
+                if let Some(n) = f.node(id("date-diff-days"), accesskit::Role::Label, days, line) {
+                    n.live = true;
+                }
             }
         } else {
             self.date_button(
