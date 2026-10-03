@@ -197,15 +197,17 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **694 tests** (counts include
+`nix develop -c cargo test --workspace` runs **714 tests** (counts include
 doctests; two more, a live currency fetch and the full metamorphic graph
 sweep, are `#[ignore]`d). `cargo run --release -p graphing --example sweep`
 checks graph analysis against about 3,400 generated functions (shifted,
 offset, scaled and stretched variants, close and far centres, jumps,
 incommensurate sums, values beyond a double's range) for claims the
 function's own values contradict, and exits with an error if it finds one;
-`--ungated` checks the engine without the app's own check (below). The
-D-Bus and
+`--ungated` checks the engine without the app's own check (below).
+`cargo run --release -p graphing --example oracle` is a second, deliberately
+independent check of the same answers (it shares none of the app's checking
+code, only its formatter and reference evaluator). The D-Bus and
 X11 tests start their own `dbus-daemon` and `Xvfb` from the dev shell (and
 skip without them). DGMNB's Wayland clipboard test copies text, so it only
 runs against a compositor named in `DGMNB_TEST_WAYLAND_DISPLAY` (a headless
@@ -220,9 +222,9 @@ upstream sources with g++:
 | calcvm (121) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage |
 | unitconv (139 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
 | datecalc (40), copypaste (40) | Ports of `DateCalculatorTests` and `CopyPasteManagerTests`, plus paste key-sequence tests |
-| graphing (186 + 1 ignored) | Parser, sampling and asymptotes, implicit/inequality plots, function analysis (including poles, zeros and domains far outside the scanned window, tiny bounds, points where an intermediate is undefined, values beyond a double's range, and the check of every answer against the function), frame-time budgets, prompt cancellation of running plots and analyses, and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis) |
+| graphing (204 + 1 ignored) | Parser, sampling and asymptotes, implicit/inequality plots, function analysis (including poles, zeros and domains far outside the scanned window, tiny bounds, points where an intermediate is undefined, values beyond a double's range, and the check of every answer against the function), frame-time budgets, prompt cancellation of running plots and analyses, and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis) |
 | appcore (43) | Keyboard map, key scripts, converter paste validation, settings storage (huge/corrupt files), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
-| gmnb (3), dgmnb (34) | GDK key translation, palette contrast for extreme accents; DGMNB text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown, pipe deadlines, and X11 paste (formats, size caps, deadlines under event floods) against a private Xvfb |
+| gmnb (5), dgmnb (34) | GDK key translation, palette contrast for extreme accents, settings compatibility; DGMNB text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown, pipe deadlines, and X11 paste (formats, size caps, deadlines under event floods) against a private Xvfb |
 
 The oracles live in `tools/oracle/` and need the upstream repository checked
 out at `reference/calculator` to regenerate the golden files.
@@ -241,11 +243,13 @@ out at `reference/calculator` to regenerate the golden files.
   numerically: explicit, implicit and inequality plots, variables with
   sliders, tracing, and key-graph-feature analysis. Being numeric, the
   analysis checks each of its answers against the function's own values
-  (sampled near the origin, far out, around every number in the
-  expression and around each feature it reports) before showing it, and
-  says "Unable to calculate …" for any answer those values contradict or
-  that sampling can't stand behind. That is not a proof: a feature can
-  still hide between samples.
+  before showing it (sampled near the origin, far out to 10¹⁵, around up
+  to 64 centres taken from the numbers and constant parts of the
+  expression, and around each feature it reports), and says "Unable to
+  calculate …" for any answer those values contradict or that sampling
+  can't stand behind. No answer shown is contradicted by a value the check
+  computed; that is not a proof, since a feature can still hide between
+  samples.
 - **Keep on top** switches to the original's compact overlay, but Wayland
   has no client-side "always on top": pin it with your compositor (e.g. a
   niri window rule for the app ID).
