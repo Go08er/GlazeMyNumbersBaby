@@ -279,39 +279,80 @@ impl KeyGraphFeatures {
                 }
             }
         };
+        // A feature too complex to determine has no values; say so rather
+        // than "none".
+        let none = |flag: u32, none: &'static str, unknown: &'static str| {
+            if self.too_complex_features & flag != 0 {
+                unknown
+            } else {
+                none
+            }
+        };
         items.push(text(s::DOMAIN, &self.domain, s::KGF_DOMAIN_NONE));
         items.push(text(s::RANGE, &self.range, s::KGF_RANGE_NONE));
         items.push(text(
             s::X_INTERCEPT,
             &self.x_intercept,
-            s::KGF_X_INTERCEPT_NONE,
+            none(
+                flags::ZEROS,
+                s::KGF_X_INTERCEPT_NONE,
+                s::KGF_X_INTERCEPT_UNKNOWN,
+            ),
         ));
         items.push(text(
             s::Y_INTERCEPT,
             &self.y_intercept,
-            s::KGF_Y_INTERCEPT_NONE,
+            none(
+                flags::Y_INTERCEPT,
+                s::KGF_Y_INTERCEPT_NONE,
+                s::KGF_Y_INTERCEPT_UNKNOWN,
+            ),
         ));
-        items.push(list(s::MINIMA, &self.minima, s::KGF_MINIMA_NONE));
-        items.push(list(s::MAXIMA, &self.maxima, s::KGF_MAXIMA_NONE));
+        items.push(list(
+            s::MINIMA,
+            &self.minima,
+            none(flags::MINIMA, s::KGF_MINIMA_NONE, s::KGF_MINIMA_UNKNOWN),
+        ));
+        items.push(list(
+            s::MAXIMA,
+            &self.maxima,
+            none(flags::MAXIMA, s::KGF_MAXIMA_NONE, s::KGF_MAXIMA_UNKNOWN),
+        ));
         items.push(list(
             s::INFLECTION_POINTS,
             &self.inflection_points,
-            s::KGF_INFLECTION_POINTS_NONE,
+            none(
+                flags::INFLECTION_POINTS,
+                s::KGF_INFLECTION_POINTS_NONE,
+                s::KGF_INFLECTION_POINTS_UNKNOWN,
+            ),
         ));
         items.push(list(
             s::VERTICAL_ASYMPTOTES,
             &self.vertical_asymptotes,
-            s::KGF_VERTICAL_ASYMPTOTES_NONE,
+            none(
+                flags::VERTICAL_ASYMPTOTES,
+                s::KGF_VERTICAL_ASYMPTOTES_NONE,
+                s::KGF_VERTICAL_ASYMPTOTES_UNKNOWN,
+            ),
         ));
         items.push(list(
             s::HORIZONTAL_ASYMPTOTES,
             &self.horizontal_asymptotes,
-            s::KGF_HORIZONTAL_ASYMPTOTES_NONE,
+            none(
+                flags::HORIZONTAL_ASYMPTOTES,
+                s::KGF_HORIZONTAL_ASYMPTOTES_NONE,
+                s::KGF_HORIZONTAL_ASYMPTOTES_UNKNOWN,
+            ),
         ));
         items.push(list(
             s::OBLIQUE_ASYMPTOTES,
             &self.oblique_asymptotes,
-            s::KGF_OBLIQUE_ASYMPTOTES_NONE,
+            none(
+                flags::OBLIQUE_ASYMPTOTES,
+                s::KGF_OBLIQUE_ASYMPTOTES_NONE,
+                s::KGF_OBLIQUE_ASYMPTOTES_UNKNOWN,
+            ),
         ));
         let parity = match self.parity {
             Parity::Odd => s::KGF_PARITY_ODD,

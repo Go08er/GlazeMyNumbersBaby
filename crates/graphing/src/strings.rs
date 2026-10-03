@@ -53,6 +53,21 @@ pub const KGF_MONOTONICITY_DECREASING: &str = "Decreasing";
 pub const KGF_MONOTONICITY_CONSTANT: &str = "Constant";
 pub const KGF_MONOTONICITY_UNKNOWN: &str = "The monotonicity of the function is unknown.";
 pub const KGF_MONOTONICITY_ERROR: &str = "Unable to determine the monotonicity of the function.";
+// Shown in place of the "none" text when a feature was too complex to
+// determine (the original shows "none" there, alongside the too-complex
+// footer, which reads as a contradiction).
+pub const KGF_X_INTERCEPT_UNKNOWN: &str = "Unable to calculate the x-intercepts for this function.";
+pub const KGF_Y_INTERCEPT_UNKNOWN: &str = "Unable to calculate the y-intercept for this function.";
+pub const KGF_MINIMA_UNKNOWN: &str = "Unable to calculate the minima for this function.";
+pub const KGF_MAXIMA_UNKNOWN: &str = "Unable to calculate the maxima for this function.";
+pub const KGF_INFLECTION_POINTS_UNKNOWN: &str =
+    "Unable to calculate the inflection points for this function.";
+pub const KGF_VERTICAL_ASYMPTOTES_UNKNOWN: &str =
+    "Unable to calculate the vertical asymptotes for this function.";
+pub const KGF_HORIZONTAL_ASYMPTOTES_UNKNOWN: &str =
+    "Unable to calculate the horizontal asymptotes for this function.";
+pub const KGF_OBLIQUE_ASYMPTOTES_UNKNOWN: &str =
+    "Unable to calculate the oblique asymptotes for this function.";
 pub const KGF_TOO_COMPLEX_FEATURES_ERROR: &str =
     "These features are too complex for Calculator to calculate:";
 
