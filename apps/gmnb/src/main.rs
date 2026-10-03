@@ -37,9 +37,16 @@ fn main() -> glib::ExitCode {
     // Initialise libadwaita before the application starts up. AdwApplication
     // would do it after GtkApplication's startup, which has already loaded
     // the icon theme; libadwaita then adds its own icon path, and GTK loads
-    // the whole theme a second time on the first icon lookup. (If there's
-    // no display this fails quietly and startup reports it as before.)
-    if adw::init().is_ok() && icon_installed() {
+    // the whole theme a second time on the first icon lookup.
+    let display = adw::init().is_ok();
+    // Without a display, only a second instance can do anything: hand
+    // activation to the running GMNB, which needs no display. Otherwise
+    // fail as GTK would, before any startup code runs without one.
+    if !display && !already_running() {
+        eprintln!("gmnb: cannot open a display");
+        return glib::ExitCode::FAILURE;
+    }
+    if display && icon_installed() {
         // What GtkApplication's startup would conclude, without loading the
         // whole icon theme on the main thread to find out: GTK then loads it
         // on its own thread while the window is being set up.
@@ -51,52 +58,86 @@ fn main() -> glib::ExitCode {
     // "<base path>/icons/" to the icon theme, which makes GTK throw away and
     // reload the whole theme a second time.
     app.set_resource_base_path(None);
-    app.connect_startup(|_| {
-        launch::mark("startup");
-        register_fonts();
-        launch::mark("fonts");
-        load_static_css();
-        launch::mark("css");
+    let no_display = std::rc::Rc::new(std::cell::Cell::new(false));
+    app.connect_startup({
+        let no_display = no_display.clone();
+        move |app| {
+            launch::mark("startup");
+            // Only reachable if the running instance quit in the meantime.
+            if !display || gdk::Display::default().is_none() {
+                eprintln!("gmnb: cannot open a display");
+                no_display.set(true);
+                app.quit();
+                return;
+            }
+            started_up();
+        }
     });
-    app.connect_activate(|app| {
-        if let Some(win) = app.active_window() {
-            win.present();
+    let failed = no_display.clone();
+    app.connect_activate(move |app| {
+        if failed.get() {
             return;
         }
-        launch::mark("activate");
-        let win = window::Window::new(app);
-        launch::mark("window-built");
-        launch::exit_after_first_frame(&win.widget());
-        win.present();
-        launch::mark("presented");
-        if let Some(ms) = std::env::var("GMNB_AUTOCLOSE_MS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-        {
-            let w = win.widget();
-            glib::timeout_add_local_once(Duration::from_millis(ms), move || w.close());
-        }
-        if std::env::var("GMNB_PREFS").as_deref() == Ok("1") {
-            let w = win.clone();
-            glib::timeout_add_local_once(Duration::from_millis(300), move || prefs::show(&w));
-        }
-        if std::env::var("GMNB_COMPACT").as_deref() == Ok("1") {
-            let w = win.clone();
-            glib::timeout_add_local_once(Duration::from_millis(300), move || {
-                w.handle_key(&appcore::KeyPress::named(appcore::Named::Up).alt());
-            });
-        }
-        if let Ok(keys) = std::env::var("GMNB_KEYS") {
-            let w = win.clone();
-            glib::timeout_add_local_once(Duration::from_millis(400), move || {
-                w.simulate_keys(&keys.replace("\\n", "\n"))
-            });
-        }
-        if let Ok(path) = std::env::var("GMNB_SCREENSHOT") {
-            schedule_screenshot(win.widget(), PathBuf::from(path));
-        }
+        activate(app);
     });
-    app.run()
+    let code = app.run();
+    if no_display.get() {
+        glib::ExitCode::FAILURE
+    } else {
+        code
+    }
+}
+
+fn started_up() {
+    register_fonts();
+    launch::mark("fonts");
+    load_static_css();
+    launch::mark("css");
+}
+
+fn activate(app: &adw::Application) {
+    if let Some(win) = app.active_window() {
+        win.present();
+        return;
+    }
+    launch::mark("activate");
+    let win = window::Window::new(app);
+    launch::mark("window-built");
+    launch::exit_after_first_frame(&win.widget());
+    win.present();
+    launch::mark("presented");
+    if let Some(ms) = std::env::var("GMNB_AUTOCLOSE_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        let w = win.widget();
+        glib::timeout_add_local_once(Duration::from_millis(ms), move || w.close());
+    }
+    if std::env::var("GMNB_PREFS").as_deref() == Ok("1") {
+        let w = win.clone();
+        glib::timeout_add_local_once(Duration::from_millis(300), move || prefs::show(&w));
+    }
+    if std::env::var("GMNB_COMPACT").as_deref() == Ok("1") {
+        let w = win.clone();
+        glib::timeout_add_local_once(Duration::from_millis(300), move || {
+            w.handle_key(&appcore::KeyPress::named(appcore::Named::Up).alt());
+        });
+    }
+    if let Ok(keys) = std::env::var("GMNB_KEYS") {
+        let w = win.clone();
+        glib::timeout_add_local_once(Duration::from_millis(400), move || {
+            w.simulate_keys(&keys.replace("\\n", "\n"))
+        });
+    }
+    if let Ok(path) = std::env::var("GMNB_SCREENSHOT") {
+        schedule_screenshot(win.widget(), PathBuf::from(path));
+    }
+}
+
+/// Whether another GMNB owns the application's bus name.
+fn already_running() -> bool {
+    appcore::dbus::Connection::open(appcore::dbus::Bus::Session, Duration::from_secs(1))
+        .is_ok_and(|mut c| c.name_owner(APP_ID).is_some())
 }
 
 /// Whether the app icon is installed where every package puts it (the
@@ -136,8 +177,11 @@ fn load_static_css() {
         eprintln!("stylesheet error at {}: {err}", section.to_str());
     });
     provider.load_from_string(include_str!("style.css"));
+    let Some(display) = gdk::Display::default() else {
+        return;
+    };
     gtk::style_context_add_provider_for_display(
-        &gdk::Display::default().expect("display"),
+        &display,
         &provider,
         // Above USER so a desktop's gtk.css can't repaint the app's design.
         gtk::STYLE_PROVIDER_PRIORITY_USER + 1,
