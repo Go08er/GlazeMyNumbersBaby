@@ -9,6 +9,7 @@ authors.workspace = true
 
 [dependencies]
 calcvm.workspace = true
+copypaste.workspace = true
 graphing.workspace = true
 unitconv.workspace = true
 serde = { version = "1", features = ["derive"] }

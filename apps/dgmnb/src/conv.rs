@@ -171,7 +171,7 @@ impl ConvPage {
     }
 
     pub fn paste(&mut self, text: &str) {
-        self.vm.paste(text);
+        appcore::converter::paste(&mut self.vm, text);
     }
 
     pub fn field(&mut self, fid: crate::ui::Id) -> Option<&mut TextEdit> {

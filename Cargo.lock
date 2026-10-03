@@ -177,6 +177,7 @@ name = "appcore"
 version = "0.2.0"
 dependencies = [
  "calcvm",
+ "copypaste",
  "graphing",
  "serde",
  "serde_json",

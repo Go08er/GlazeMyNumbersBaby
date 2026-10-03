@@ -506,7 +506,7 @@ impl Page for ConverterHandle {
     }
 
     fn paste(&self, text: &str) {
-        self.0.vm.borrow_mut().paste(text);
+        appcore::converter::paste(&mut self.0.vm.borrow_mut(), text);
         self.0.sync(Change::Replace, Change::Result);
     }
 
