@@ -285,8 +285,9 @@ pub struct Program {
     uses_x: bool,
     uses_y: bool,
     cost: usize,
-    /// Whether an operation can overflow or underflow, so that a NaN result
-    /// may be rounding rather than an undefined point (see [`Wide`]).
+    /// Whether an operation before the last can overflow or underflow, or a
+    /// constant is beyond a double, so that a NaN or ±∞ result may come from
+    /// rounding rather than an undefined point (see [`Wide`]).
     wide: bool,
 }
 

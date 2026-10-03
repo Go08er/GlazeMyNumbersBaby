@@ -155,28 +155,27 @@ impl Fun<'_> {
     fn eval_batch(&self, p: &Program, xs: &[f64], out: &mut [f64]) {
         if !self.spend(p.cost().saturating_mul(xs.len())) {
             out.fill(f64::NAN);
-        } else if !std::ptr::eq(p, &self.f) {
-            p.eval_batch_plain(Input::Slice(xs), Input::Scalar(0.0), out);
-        } else {
-            p.eval_batch_plain(Input::Slice(xs), Input::Scalar(0.0), out);
-            if p.may_redo() {
-                for (o, &x) in out.iter_mut().zip(xs) {
-                    if !o.is_finite() {
-                        let (v, redo) = p.redo(x, 0.0);
-                        *o = v;
-                        if redo != Redo::No {
-                            self.redone(p, x, redo);
-                        }
-                    }
+            return;
+        }
+        p.eval_batch_plain(Input::Slice(xs), Input::Scalar(0.0), out);
+        if !std::ptr::eq(p, &self.f) || !p.may_redo() {
+            return;
+        }
+        for (o, &x) in out.iter_mut().zip(xs) {
+            if !o.is_finite() {
+                let (v, redo) = p.redo(x, 0.0);
+                *o = v;
+                if redo != Redo::No {
+                    self.redone(p, x, redo);
                 }
             }
         }
     }
 
     /// Charges a re-evaluation of f at `x` in extended range (several times
-    /// the cost of the double one), and notes where the search reaches if
-    /// even that couldn't resolve it. Beyond the search, f's values are
-    /// only probed for its trend, as before.
+    /// the cost of the double one), and notes a value even that couldn't
+    /// resolve within the search. Beyond it f is only probed for its trend,
+    /// where such a NaN reads as before.
     #[cold]
     fn redone(&self, p: &Program, x: f64, redo: Redo) {
         self.spend(p.cost().saturating_mul(8));
