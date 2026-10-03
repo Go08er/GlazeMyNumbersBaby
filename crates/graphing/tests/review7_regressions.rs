@@ -151,9 +151,10 @@ fn a_zero_beyond_the_search_is_not_denied() {
         assert_eq!(r.range, range, "{src}");
         assert_eq!(r.horizontal_asymptotes, Vec::<String>::new(), "{src}");
     }
-    // Crossing inside the search: listed.
+    // Crossing inside the search: listed (e³⁰ = 10686474581524.46, to six
+    // digits; not as the integer it is 0.46 from).
     let r = k("y = ln(x) - 30");
-    assert_eq!(r.x_intercept, "10686474581524");
+    assert_eq!(r.x_intercept, "1.06865×10¹³");
     assert_eq!(r.range, "y ∈ ℝ");
     assert_eq!(r.too_complex_features, 0);
 }

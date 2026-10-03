@@ -491,6 +491,37 @@ fn check_one(a: &Analysed, centre: f64, r: &mut Report) {
     // Reported points are where they say.
     // Resolution of x near a point: the shift's rounding dominates far out.
     let quantum = |x: f64| 1e-14 * (x.abs() + centre.abs()).max(1.0);
+    // How far x is from the base function's origin (or from 0, for a
+    // periodic family's representative): a shift by 10⁹ moves the
+    // features, not their size, so probes scale with x − centre (a step of
+    // 10⁻⁷·10⁹ = 100 jumps over every turn of a cubic).
+    let size = |x: f64| (x - centre).abs().min(x.abs());
+    // f's rounding spread at x: what neighbouring floats give. A value
+    // below a minimum by less than this is noise of the expanded form
+    // (x⁴ − 4x³ + 6x² − 4x + 1 is ±4·10⁻¹⁶ beside its exact minimum at 1).
+    let spread = |x: f64| {
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for k in -8..=8 {
+            let v = a.eval(x + k as f64 * f64::EPSILON * x.abs().max(f64::MIN_POSITIVE));
+            if v.is_finite() {
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+        }
+        if hi >= lo { hi - lo } else { 0.0 }
+    };
+    // Rounding of f's terms, which can be far larger than f: 10⁻¹⁴ of f a
+    // unit away. Neighbouring floats can all give the same rounded value
+    // (−4·10⁻¹⁶ beside the minimum of the expanded (x − 2)⁴), so the spread
+    // alone misses it.
+    let terms = |x: f64| {
+        let u = size(x).max(1.0);
+        1e-14
+            * [a.eval(x - u), a.eval(x + u)]
+                .iter()
+                .filter(|v| v.is_finite())
+                .fold(0.0f64, |m, v| m.max(v.abs()))
+    };
     for z in &d.zeros {
         let fz = a.eval(z.x);
         let h = 1e-3 * z.x.abs().max(1.0);
@@ -518,10 +549,12 @@ fn check_one(a: &Analysed, centre: f64, r: &mut Report) {
                 continue;
             }
             {
-                let step = (1e-7 * fx.x.abs().max(1.0)).max(1e3 * quantum(fx.x));
+                let step = (1e-7 * size(fx.x).max(1.0)).max(4.0 * quantum(fx.x));
                 for s in [step, -step] {
                     let g = a.eval(fx.x + s);
-                    if g.is_finite() && sign * (g - fv) < -1e-7 * fv.abs().max(g.abs()).max(1e-300)
+                    let noise = spread(fx.x) + spread(fx.x + s) + terms(fx.x);
+                    if g.is_finite()
+                        && sign * (g - fv) < -1e-7 * fv.abs().max(g.abs()).max(1e-300) - noise
                     {
                         r.fail(
                             "extremum-not-local",
@@ -534,21 +567,27 @@ fn check_one(a: &Analysed, centre: f64, r: &mut Report) {
         }
     }
     // Positions are accurate to the panel's precision (6 significant
-    // digits): a parabola through f(x-h), f(x), f(x+h) puts the vertex at x.
+    // digits of x − centre, and no finer than the floats there allow): the
+    // vertex from f′ ≈ (f(x−2h) − 8f(x−h) + 8f(x+h) − f(x+2h))/12h and
+    // f″ ≈ (f(x−h) − 2f(x) + f(x+h))/h² is at x. Five points, as three
+    // put a cubic's vertex h²·f‴/(6f″) off: more than 6 digits at the h
+    // that rounding at 10⁹ needs.
     for (what, list) in [("minimum", &d.minima), ("maximum", &d.maxima)] {
         for (fx, _) in list {
             let x = fx.x;
-            let h = (1e-5 * x.abs().max(1e-3)).max(1e3 * quantum(x));
-            let (l, m, rr) = (a.eval(x - h), a.eval(x), a.eval(x + h));
-            let curv = l + rr - 2.0 * m;
-            if !(l.is_finite() && m.is_finite() && rr.is_finite())
-                || curv.abs() <= 1e-12 * m.abs().max(1e-300)
+            let h = (1e-5 * size(x).max(1e-3)).max(4.0 * quantum(x));
+            let w = [-2.0, -1.0, 0.0, 1.0, 2.0].map(|k| a.eval(x + k * h));
+            let curv = w[1] + w[3] - 2.0 * w[2];
+            // A bend within rounding (a flat quartic minimum) places no vertex.
+            let noise = 4.0 * (spread(x - h) + spread(x) + spread(x + h)) + terms(x);
+            if w.iter().any(|v| !v.is_finite())
+                || curv.abs() <= (1e-12 * w[2].abs()).max(noise).max(1e-300)
             {
                 continue;
             }
-            let delta = h * (l - rr) / (2.0 * curv);
-            if delta.abs() > 5e-6 * x.abs().max(1e-3).max(1e3 * quantum(x)) && delta.abs() < 1e3 * h
-            {
+            let slope_h = (w[0] - 8.0 * w[1] + 8.0 * w[3] - w[4]) / 12.0;
+            let delta = -h * slope_h / curv;
+            if delta.abs() > (5e-6 * size(x).max(1e-3)).max(quantum(x)) && delta.abs() < 1e3 * h {
                 r.fail(
                     "extremum-imprecise",
                     e,
@@ -602,9 +641,14 @@ fn check_one(a: &Analysed, centre: f64, r: &mut Report) {
     }
     // Domain vs samples.
     if domain_known {
+        // An excluded point is that float (999999999.999999 is not 10⁹, nor
+        // 3·10⁻¹⁹ the 0 of coth); a family's copies, a few ulps.
         let in_dom = |x: f64| {
             d.domain.iter().any(|iv| interval_contains(iv, x, 0.0))
-                && !d.excluded.iter().any(|p| p.contains(x, 1e-15))
+                && !d.excluded.iter().any(|p| match p.period {
+                    None => p.x == x,
+                    Some(_) => p.contains(x, 4.0 * f64::EPSILON),
+                })
         };
         let interior = |x: f64| {
             let tol = 1e-9 * x.abs().max(1.0);

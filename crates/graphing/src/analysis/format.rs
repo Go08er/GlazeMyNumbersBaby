@@ -49,9 +49,10 @@ fn rational(v: f64, max_den: i64, max_num: f64, tol: f64) -> Option<(i64, i64)> 
 }
 
 impl Nice {
-    /// Recognises `v` with the default tolerance (1e-9 relative).
+    /// Recognises `v` with the default tolerance (1e-9 relative, and no
+    /// more than 10⁻⁶ off: 999999998.7 is not the integer 999999999).
     pub fn of(v: f64) -> Nice {
-        Nice::with_tol(v, REL_TOL)
+        Nice::with_tol(v, REL_TOL.min(1e-6 / v.abs().max(1.0)))
     }
 
     /// Recognises `v` with a relative tolerance.
@@ -248,9 +249,8 @@ pub fn format_number_apart(v: f64, others: &[f64]) -> String {
 /// Distinct values that read the same, as closed forms or as decimals
 /// (π/2 and 1.5708 both).
 fn looks_same(v: f64, o: f64) -> bool {
-    o != v
-        && o.is_finite()
-        && (format_number(o) == format_number(v) || format_decimal(o) == format_decimal(v))
+    let shown = format_number(v);
+    o != v && o.is_finite() && (format_number(o) == shown || format_decimal(o) == shown)
 }
 
 /// Decimal formatting with 6 significant digits, trailing zeros trimmed;
@@ -277,7 +277,9 @@ fn format_decimal_digits(v: f64, sig: i32) -> String {
     let sign = if v < 0.0 { MINUS } else { "" };
     let a = v.abs();
     let e = a.log10().floor() as i32;
-    if !(-5..9).contains(&e) {
+    // Beyond 6 digits (telling points apart), whole numbers up to 10¹⁶
+    // stay whole: 1000000000002, not 1.000000000002×10¹².
+    if !(-5..9).contains(&e) && !(sig > 6 && (9..16).contains(&e)) {
         let digits = (sig - 1) as usize;
         let mut m = a / 10f64.powi(e);
         let mut e = e;

@@ -211,10 +211,12 @@ pub(crate) fn analyze_expr(
 }
 
 /// `expr` as g(a·x + b) when every x in it sits in an affine form with one
-/// common root −b/a, other than x itself: g (in x) and (a, b). Not when the
-/// root is beyond the search (its features couldn't be told apart in
-/// floating point there), nor for a periodic g so far out that b modulo
-/// the period is lost.
+/// common root −b/a, other than x itself: g (in x) and (a, b). The largest
+/// affine forms are tried first, then the smallest: ((x − 10⁹) − 1)·
+/// ((x − 10⁹) − 2) has forms with roots 10⁹ + 1 and 10⁹ + 2, but both are
+/// built on x − 10⁹. Not when the root is beyond the search (its features
+/// couldn't be told apart in floating point there), nor for a periodic g so
+/// far out that b modulo the period is lost.
 fn affine_argument(expr: &Expr, opts: &CompileOptions<'_>) -> Option<(Expr, f64, f64)> {
     let num = |e: &Expr| Program::compile(e, opts).ok()?.as_constant();
     let affine = |e: &Expr| -> Option<(f64, f64)> {
@@ -225,15 +227,28 @@ fn affine_argument(expr: &Expr, opts: &CompileOptions<'_>) -> Option<(Expr, f64,
     if !expr.contains_x() || affine(expr).is_some() {
         return None;
     }
+    // An affine form built on a smaller one that isn't x alone.
+    fn has_inner(e: &Expr, affine: &dyn Fn(&Expr) -> Option<(f64, f64)>) -> bool {
+        let inner = |c: &Expr| {
+            c.contains_x() && (!matches!(c, Expr::X) && affine(c).is_some() || has_inner(c, affine))
+        };
+        match e {
+            Expr::Neg(x) | Expr::Degrees(x) => inner(x),
+            Expr::Bin(_, x, y) => inner(x) || inner(y),
+            Expr::Call(_, args) => args.iter().any(inner),
+            _ => false,
+        }
+    }
     fn rewrite(
         e: &Expr,
         affine: &dyn Fn(&Expr) -> Option<(f64, f64)>,
         base: &mut Option<(f64, f64)>,
+        smallest: bool,
     ) -> Option<Expr> {
         if !e.contains_x() {
             return Some(e.clone());
         }
-        if let Some((ai, bi)) = affine(e) {
+        if let Some((ai, bi)) = affine(e).filter(|_| !(smallest && has_inner(e, affine))) {
             let (a, b) = *base.get_or_insert((ai, bi));
             let (r, ri) = (-b / a, -bi / ai);
             if (r - ri).abs() > 1e-13 * r.abs().max(ri.abs()) {
@@ -246,24 +261,20 @@ fn affine_argument(expr: &Expr, opts: &CompileOptions<'_>) -> Option<(Expr, f64,
                 Expr::bin(BinOp::Mul, Expr::Num(k), Expr::X)
             });
         }
+        let mut go = |x: &Expr| rewrite(x, affine, base, smallest);
         Some(match e {
-            Expr::Neg(x) => Expr::Neg(Box::new(rewrite(x, affine, base)?)),
-            Expr::Degrees(x) => Expr::Degrees(Box::new(rewrite(x, affine, base)?)),
-            Expr::Bin(op, x, y) => {
-                Expr::bin(*op, rewrite(x, affine, base)?, rewrite(y, affine, base)?)
-            }
-            Expr::Call(f, args) => Expr::Call(
-                *f,
-                args.iter()
-                    .map(|x| rewrite(x, affine, base))
-                    .collect::<Option<Vec<_>>>()?,
-            ),
+            Expr::Neg(x) => Expr::Neg(Box::new(go(x)?)),
+            Expr::Degrees(x) => Expr::Degrees(Box::new(go(x)?)),
+            Expr::Bin(op, x, y) => Expr::bin(*op, go(x)?, go(y)?),
+            Expr::Call(f, args) => Expr::Call(*f, args.iter().map(go).collect::<Option<Vec<_>>>()?),
             _ => e.clone(),
         })
     }
-    let mut base = None;
-    let g = rewrite(expr, &affine, &mut base)?;
-    let (a, b) = base?;
+    let (g, (a, b)) = [false, true].into_iter().find_map(|smallest| {
+        let mut base = None;
+        let g = rewrite(expr, &affine, &mut base, smallest)?;
+        Some((g, base?))
+    })?;
     let r = -b / a;
     if (r == 0.0 && a.abs() == 1.0) || r.abs() > REACH {
         return None;
@@ -997,28 +1008,33 @@ fn snap_root(c: f64, g: &dyn Fn(f64) -> f64, ok: &dyn Fn(f64) -> bool) -> f64 {
     // values, over several spacings. Rounded values are quantised: right at
     // a flat root they can all come out exactly 0 over a few ulps (the f′ of
     // x⁴ − 4x³ + 6x² − 4x + 1 near 1), and only a wider look shows the noise.
-    let roughness = |step: f64| -> Option<f64> {
+    // Wider only while g is still noise across the look: beyond, the
+    // roughness is g's own change between rounded arguments (far from 0
+    // at 10¹², whole units apart are a wide look).
+    let roughness = |step: f64| -> Option<(f64, f64)> {
         let w = [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0].map(|k| g(c + k * step));
         if w.iter().any(|v| !v.is_finite()) {
             return None;
         }
         let big = w.iter().fold(0.0f64, |m, v| m.max(v.abs()));
-        Some(
-            (0..4)
-                .map(|i| (w[i + 3] - 3.0 * w[i + 2] + 3.0 * w[i + 1] - w[i]).abs())
-                .fold(0.0f64, f64::max)
-                + 64.0 * f64::EPSILON * big,
-        )
+        let n = (0..4)
+            .map(|i| (w[i + 3] - 3.0 * w[i + 2] + 3.0 * w[i + 1] - w[i]).abs())
+            .fold(0.0f64, f64::max)
+            + 64.0 * f64::EPSILON * big;
+        Some((n, big))
     };
-    let Some(mut noise) = roughness(h) else {
+    let Some((mut noise, mut big)) = roughness(h) else {
         return c;
     };
     for scale in [16.0, 256.0, 4096.0, 65536.0] {
-        if h * scale > 1e-6 * unit {
+        if h * scale > 1e-6 * unit || big > 64.0 * noise {
             break;
         }
         match roughness(h * scale) {
-            Some(n) => noise = noise.max(n),
+            Some((n, b)) => {
+                noise = noise.max(n);
+                big = b;
+            }
             None => break,
         }
     }
