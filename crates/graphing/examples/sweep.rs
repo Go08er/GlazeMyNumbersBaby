@@ -1303,7 +1303,17 @@ fn change(g: &dyn Fn(f64) -> f64, a: f64, ea: f64, r: f64, jumps: bool) -> f64 {
         }
         d = d.max((v - r).abs());
     }
-    if jumps { d } else { d * (ea / h) }
+    if jumps {
+        return d;
+    }
+    // (An uncertain argument never makes a smooth result certain: the
+    // change can underflow, (x − 1) + 1 squared beside 0, but is not 0.)
+    let s = d * (ea / h);
+    if s == 0.0 && (d > 0.0 || r == 0.0) {
+        f64::from_bits(1)
+    } else {
+        s
+    }
 }
 
 /// g(a) where a is known to within ea, and how far the double result can
