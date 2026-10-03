@@ -365,10 +365,12 @@ impl<'c> Analysed<'c> {
             // reference has the value, its own rounding and its change to
             // its neighbours bound it, relative to it. Elsewhere nothing
             // does.
-            // (A value in the subnormal range is also rounded to them.)
+            // (Its own rounding: 64 ulps of it, a few an operation; a value
+            // in the subnormal range is rounded to them too.)
             return match self.reference(x) {
                 R::V(v) if !v.is_zero() && y.is_finite() && y != 0.0 => {
-                    spread + y.abs() * self.rel_beyond(x, v).min(1.0) + ulp(y)
+                    let change = (self.rel_beyond(x, v) - REFERENCE_ROUNDING).clamp(0.0, 1.0);
+                    spread + y.abs() * change + 64.0 * ulp(y)
                 }
                 _ => f64::INFINITY,
             };
@@ -1543,10 +1545,15 @@ pub fn check_missing_extrema(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Repor
             }) {
                 continue;
             }
-            let (xm, ym) = golden(a, xs[l], xs[h], sign);
+            // (The sample itself if refining ends short of it, a float off
+            // the flat top.)
+            let (xm, ym) = match golden(a, xs[l], xs[h], sign) {
+                (xm, ym) if ym.is_finite() && sign * ym <= sign * ys[i] => (xm, ym),
+                _ => (xs[i], ys[i]),
+            };
             // (Nor one whose own value is as uncertain as its height: the
             // floor of a cosine that rounds about 0.)
-            if !ym.is_finite() || sign * ym > sign * ys[i] || a.rounding(xm) >= p {
+            if a.rounding(xm) >= p {
                 continue;
             }
             // Beyond both its near sides (golden section can end on an edge).
@@ -1654,6 +1661,22 @@ pub fn check_y_intercept(a: &Analysed, r: &mut Report) {
     }
     let e = &a.expr;
     let f0 = a.eval(0.0);
+    // A 0 where f(0) is certainly not 0 (beyond the doubles, e^(−10⁸), or
+    // larger than its own rounding): the intercept is at exactly x = 0, so
+    // no neighbouring value excuses it.
+    if a.d().y_intercept == Some(0.0)
+        && let R::V(v) = a.reference(0.0)
+        && !v.is_zero()
+        && (!v.normal() || v.f().abs() > a.rounding(0.0))
+    {
+        r.fail(
+            "y-intercept-wrong",
+            flags::Y_INTERCEPT,
+            e,
+            format!("y-intercept 0 but f(0)={v:?}, not 0"),
+        );
+        return;
+    }
     match (a.d().y_intercept, a.defined(0.0)) {
         (Some(y), Some(false)) => r.fail(
             "y-intercept-where-undefined",
