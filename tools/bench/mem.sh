@@ -14,6 +14,9 @@ label=$1; name=$2; shift 2
 setsid env WAYLAND_DISPLAY="${BENCH_SOCKET:-bench}" "$@" >/dev/null 2>&1 &
 P=$!
 stop() { kill -- -"$P" 2>/dev/null; wait "$P" 2>/dev/null || true; }
+# Interrupted (Ctrl-C, kill) or not, the launched group doesn't outlive us.
+trap 'stop' EXIT
+trap 'exit 130' INT TERM
 alive() { [ "$(cat "/proc/$P/comm" 2>/dev/null)" = "$name" ]; }
 for _ in $(seq 80); do alive && break; sleep 0.25; done
 alive || { echo "$label: PID $P never became $name (does CMD exec it?)"; stop; exit 1; }
@@ -27,5 +30,4 @@ alive || { echo "$label: $name (PID $P) exited while measuring"; stop; exit 1; }
 cpu=$(awk -v a="$t0" -v b="$t1" -v hz="$(getconf CLK_TCK)" -v s="${CPU:-10}" 'BEGIN{printf "%.2f", (b-a)/hz/s*100}')
 printf "%-28s RSS %6s  PSS %6s  anon %5s  shmem %5s  idleCPU %s%%  threads %s\n" "$label" \
   "$(mib "$rss")" "$(mib "$(kb Pss)")" "$(mib "$(kb Pss_Anon)")" "$(mib "$(kb Pss_Shmem)")" "$cpu" "$(ls /proc/$P/task | wc -l)"
-stop
 exit 0
