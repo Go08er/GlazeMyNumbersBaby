@@ -178,20 +178,30 @@ jobs:
           }
           # check FILE: 0 if the release has it complete and byte for byte,
           # 1 if it hasn't got it, 2 if what it has is unfinished or differs.
+          # (Without a digest from the API, the asset is downloaded and
+          # hashed.)
           check() {
-            local name line state size digest
+            local name line state size digest sum got
             name=$(basename "$1")
             line=$(awk -F'\t' -v n="$name" '$1 == n' <<<"$assets")
             [ -n "$line" ] || return 1
             IFS=$'\t' read -r _ state size digest <<<"$line"
             [ "$state" = uploaded ] && [ "$size" = "$(stat -c %s "$1")" ] || return 2
-            [ -z "$digest" ] || [ "$digest" = "sha256:$(sha256sum "$1" | cut -d' ' -f1)" ] || return 2
+            sum=$(sha256sum "$1" | cut -d' ' -f1)
+            if [ -n "$digest" ]; then
+              [ "$digest" = "sha256:$sum" ] || return 2
+            else
+              rm -rf fetched && mkdir fetched
+              gh release download "$TAG" --repo "$REPO" -p "$name" -D fetched || return 2
+              got=$(sha256sum "fetched/$name" | cut -d' ' -f1)
+              [ "$got" = "$sum" ] || return 2
+            fi
           }
           if [ "$existed" = false ]; then
             # Start as a draft holding just the manifest, so whatever state
             # an interruption leaves says which build it belongs to; it's
             # published only once every file is there and complete.
-            gh release create "$TAG" SHA256SUMS --draft \
+            gh release create "$TAG" SHA256SUMS --draft --verify-tag \
               --repo "$REPO" \
               --title "GMNB & DGMNB $TAG" \
               --notes "Built from commit $GITHUB_SHA; see SHA256SUMS." \
@@ -216,18 +226,24 @@ jobs:
           fi
           draft=$(gh release view "$TAG" --repo "$REPO" --json isDraft -q .isDraft)
           assets=$(listing)
+          # Look at everything before changing anything: a published release
+          # with a bad file is left exactly as it is.
+          declare -A found
           for f in artifacts/*; do
-            name=$(basename "$f")
             rc=0
             check "$f" || rc=$?
-            case $rc in
+            found[$f]=$rc
+            if [ "$rc" = 2 ] && [ "$draft" != true ]; then
+              echo "::error::$(basename "$f") on the published $TAG is unfinished or differs from this build; fix it by hand."
+              exit 1
+            fi
+          done
+          for f in artifacts/*; do
+            name=$(basename "$f")
+            case ${found[$f]} in
               0) echo "already there: $name" ;;
               1) gh release upload "$TAG" "$f" --repo "$REPO" ;;
               *)
-                if [ "$draft" != true ]; then
-                  echo "::error::$name on the published $TAG is unfinished or differs from this build; fix it by hand."
-                  exit 1
-                fi
                 # An unfinished upload in a release nobody can see yet.
                 echo "redoing an unfinished upload: $name"
                 gh release delete-asset "$TAG" "$name" --repo "$REPO" --yes
