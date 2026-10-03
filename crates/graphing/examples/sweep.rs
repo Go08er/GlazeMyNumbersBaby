@@ -179,8 +179,18 @@ const UNDEFINED: &[(&str, TrigUnit, &[f64], bool)] = &[
     ("1/asech(x)", TrigUnit::Radians, &[0.0], false),
     ("1/acoth(x)", TrigUnit::Radians, &[1.0, -1.0], false),
     ("exp(-atanh(x))", TrigUnit::Radians, &[1.0, -1.0], false),
-    ("atan(tan(x))", TrigUnit::Degrees, &[90.0, -90.0, 270.0], false),
-    ("atan(tan(x))", TrigUnit::Grads, &[100.0, -100.0, 300.0], false),
+    (
+        "atan(tan(x))",
+        TrigUnit::Degrees,
+        &[90.0, -90.0, 270.0],
+        false,
+    ),
+    (
+        "atan(tan(x))",
+        TrigUnit::Grads,
+        &[100.0, -100.0, 300.0],
+        false,
+    ),
     ("atan(sec(x))", TrigUnit::Degrees, &[90.0, 270.0], false),
     ("atan(csc(x))", TrigUnit::Degrees, &[0.0, 180.0], false),
     ("atan(cot(x))", TrigUnit::Degrees, &[0.0, 180.0], false),
@@ -504,7 +514,12 @@ fn known_cases() -> Vec<Known> {
             ..known("sin(x)+1000000000000")
         },
         Known {
-            range: Some(vec![(-2.0 * 5e-10f64.sin(), true, 2.0 * 5e-10f64.sin(), true)]),
+            range: Some(vec![(
+                -2.0 * 5e-10f64.sin(),
+                true,
+                2.0 * 5e-10f64.sin(),
+                true,
+            )]),
             period: Some(Some(2.0 * PI)),
             hasymptotes: Some(vec![]),
             ..known("sin(x)-sin(x+0.000000001)")
@@ -874,7 +889,11 @@ fn reval(e: &Expr, x: f64, u: TrigUnit) -> R {
                     R::V(v) => vs.push(v),
                 }
             }
-            if unknown { R::Unknown } else { call(*f, &vs, u) }
+            if unknown {
+                R::Unknown
+            } else {
+                call(*f, &vs, u)
+            }
         }
     }
 }
@@ -1019,7 +1038,11 @@ fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
     match f {
         Exp => {
             let t = a.f();
-            if t.is_finite() { Xf::exp(t) } else { R::Unknown }
+            if t.is_finite() {
+                Xf::exp(t)
+            } else {
+                R::Unknown
+            }
         }
         Ln | Log => {
             if a.sign() <= 0.0 {
@@ -1054,10 +1077,7 @@ fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
                 one(a.f().cbrt())
             } else {
                 let r = a.e.rem_euclid(3);
-                R::V(Xf::norm(
-                    (a.m * 2f64.powi(r as i32)).cbrt(),
-                    (a.e - r) / 3,
-                ))
+                R::V(Xf::norm((a.m * 2f64.powi(r as i32)).cbrt(), (a.e - r) / 3))
             }
         }
         Abs => R::V(a.abs()),
@@ -1152,7 +1172,11 @@ fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
                     r => r,
                 };
             }
-            one(if f == Sech { fns::sech(t) } else { fns::csch(t) })
+            one(if f == Sech {
+                fns::sech(t)
+            } else {
+                fns::csch(t)
+            })
         }
         Coth => {
             if a.is_zero() {
@@ -1297,7 +1321,10 @@ fn binary_err(
         return (r, f64::INFINITY);
     }
     let d = change(&|s| g(s, b), a, ea, r, false) + change(&|t| g(a, t), b, eb, r, false);
-    (r, d + (k * ulp(r)).max(if k > 0.0 { f64::from_bits(1) } else { 0.0 }))
+    (
+        r,
+        d + (k * ulp(r)).max(if k > 0.0 { f64::from_bits(1) } else { 0.0 }),
+    )
 }
 
 /// The compiled program's unary function (`compile::Fn1::apply`).
@@ -1407,7 +1434,9 @@ fn eb(e: &Expr, x: f64, u: TrigUnit) -> (f64, f64) {
             let r = g(va);
             // (An underflowed square is not exact, whatever fma says.)
             let exact = q == 1
-                && (p == 0 || p == 1 || (p == 2 && (r != 0.0 || va == 0.0) && va.mul_add(va, -r) == 0.0));
+                && (p == 0
+                    || p == 1
+                    || (p == 2 && (r != 0.0 || va == 0.0) && va.mul_add(va, -r) == 0.0));
             let k = if q == 1 && p.abs() <= 2 {
                 0.5
             } else {
@@ -1438,7 +1467,11 @@ fn eb(e: &Expr, x: f64, u: TrigUnit) -> (f64, f64) {
                     } else {
                         0.0
                     };
-                    let e = va.abs() * ebb + vb.abs() * ea + ea * ebb + va.mul_add(vb, -r).abs() + under;
+                    let e = va.abs() * ebb
+                        + vb.abs() * ea
+                        + ea * ebb
+                        + va.mul_add(vb, -r).abs()
+                        + under;
                     // (Nor does the bound itself: 10⁻⁶ times an underflowed
                     // e⁻¹⁰⁰⁰'s error is no reason to call the product exact.)
                     if e == 0.0 && ((ea > 0.0 && vb != 0.0) || (ebb > 0.0 && va != 0.0)) {
@@ -1869,7 +1902,11 @@ fn samples(a: &Analysed, centres: &[f64], wide: bool) -> Vec<f64> {
 fn golden(a: &Analysed, mut lo: f64, mut hi: f64, sign: f64) -> (f64, f64) {
     let g = |x: f64| {
         let y = a.eval(x);
-        if y.is_finite() { sign * y } else { f64::INFINITY }
+        if y.is_finite() {
+            sign * y
+        } else {
+            f64::INFINITY
+        }
     };
     let phi = 0.5 * (5f64.sqrt() - 1.0);
     let (mut m1, mut m2) = (hi - phi * (hi - lo), lo + phi * (hi - lo));
@@ -1898,13 +1935,7 @@ fn golden(a: &Analysed, mut lo: f64, mut hi: f64, sign: f64) -> (f64, f64) {
 
 /// The k most extreme samples (smallest for sign 1), each refined between
 /// its neighbours.
-fn refine_extremes(
-    a: &Analysed,
-    xs: &[f64],
-    ys: &[f64],
-    sign: f64,
-    k: usize,
-) -> Vec<(f64, f64)> {
+fn refine_extremes(a: &Analysed, xs: &[f64], ys: &[f64], sign: f64, k: usize) -> Vec<(f64, f64)> {
     let mut idx: Vec<usize> = (1..ys.len().saturating_sub(1))
         .filter(|&i| ys[i].is_finite())
         .collect();
@@ -2067,7 +2098,10 @@ fn check_range(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
                 let (check, why) = if !same_shown(y, nearest_bound(range, y)) {
                     ("sample-outside-range", "not in claimed range")
                 } else if points {
-                    ("range-points-but-varies", "is not one of the claimed values")
+                    (
+                        "range-points-but-varies",
+                        "is not one of the claimed values",
+                    )
                 } else {
                     continue;
                 };
@@ -2111,11 +2145,11 @@ fn check_range(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
                     .chain(&d.maxima)
                     .chain(&d.inflection_points)
                     .any(|(fx, y)| *y == v && near(fx.x, a.eval(fx.x), v))
-                    || d
-                        .y_intercept
+                    || d.y_intercept
                         .is_some_and(|y| y == v && near(0.0, a.eval(0.0), v));
                 let refined = if is_lo { &lows } else { &highs };
-                let mut closest: Vec<usize> = (0..ys.len()).filter(|&i| ys[i].is_finite()).collect();
+                let mut closest: Vec<usize> =
+                    (0..ys.len()).filter(|&i| ys[i].is_finite()).collect();
                 closest.sort_by(|&i, &j| (ys[i] - v).abs().total_cmp(&(ys[j] - v).abs()));
                 closest.truncate(64);
                 let hit = claimed
@@ -2160,7 +2194,11 @@ fn check_range(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
             r.fail(
                 "zeros-but-range-lacks-0",
                 e,
-                format!("x-intercepts {}, range {}", fmt_fams(&d.zeros), fmt_set(range)),
+                format!(
+                    "x-intercepts {}, range {}",
+                    fmt_fams(&d.zeros),
+                    fmt_set(range)
+                ),
             );
         }
     }
@@ -2268,7 +2306,12 @@ fn check_zero_claims(a: &Analysed, r: &mut Report) {
         }
     }
     // One zero reported once.
-    let mut xs: Vec<f64> = d.zeros.iter().filter(|z| z.period.is_none()).map(|z| z.x).collect();
+    let mut xs: Vec<f64> = d
+        .zeros
+        .iter()
+        .filter(|z| z.period.is_none())
+        .map(|z| z.x)
+        .collect();
     xs.sort_by(f64::total_cmp);
     for w in xs.windows(2) {
         if same_root(a, w[0], w[1]) {
@@ -2402,9 +2445,9 @@ fn check_missing_zeros(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
     if !a.unknown(flags::ZEROS) {
         if a.zero_everywhere() {
             // Every defined sample is 0.
-            if let Some(i) = (0..n).find(|&i| {
-                ys[i].is_finite() && ys[i] != 0.0 && ys[i].abs() > a.noise(xs[i])
-            }) {
+            if let Some(i) =
+                (0..n).find(|&i| ys[i].is_finite() && ys[i] != 0.0 && ys[i].abs() > a.noise(xs[i]))
+            {
                 r.fail(
                     "zero-everywhere-wrong",
                     e,
@@ -2641,7 +2684,8 @@ fn check_missing_extrema(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
             let h = 4.0 * if res.is_finite() { res } else { 16.0 * ulp(xm) };
             let (d1, d2) = ((a.eval(xm - h) - ym).abs(), (a.eval(xm + h) - ym).abs());
             if !(d1.is_finite() && d2.is_finite())
-                || d1.max(d2) > 64.0 * d1.min(d2) + a.noise(xm) + a.rounding(xm - h).min(a.rounding(xm + h))
+                || d1.max(d2)
+                    > 64.0 * d1.min(d2) + a.noise(xm) + a.rounding(xm - h).min(a.rounding(xm + h))
             {
                 continue;
             }
@@ -2671,7 +2715,8 @@ fn check_missing_extrema(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
                 break;
             }
             if !hit {
-                let reported: Vec<(f64, f64)> = list.iter().take(6).map(|(f, y)| (f.x, *y)).collect();
+                let reported: Vec<(f64, f64)> =
+                    list.iter().take(6).map(|(f, y)| (f.x, *y)).collect();
                 r.fail(
                     name,
                     e,
@@ -2864,7 +2909,11 @@ fn check_monotonicity(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
                 }
             }
             Monotonicity::Increasing | Monotonicity::Decreasing => {
-                let sign = if dir == Monotonicity::Increasing { 1.0 } else { -1.0 };
+                let sign = if dir == Monotonicity::Increasing {
+                    1.0
+                } else {
+                    -1.0
+                };
                 let mut best: Option<(f64, f64)> = None;
                 let mut out = None;
                 for &(x, y) in pts {
@@ -3027,7 +3076,9 @@ fn check_horizontal(a: &Analysed, centres: &[f64], r: &mut Report) {
             for k in k0..=(k0 + 8).min(15) {
                 let (mut m, mut flips, mut last) = (0.0f64, 0usize, 0.0f64);
                 for j in 0..40 {
-                    let x = s * 10f64.powf(k as f64 + j as f64 / 40.0) * (1.0 + 0.0137 * (j % 3) as f64);
+                    let x = s
+                        * 10f64.powf(k as f64 + j as f64 / 40.0)
+                        * (1.0 + 0.0137 * (j % 3) as f64);
                     let y = a.eval(x);
                     if !y.is_finite() {
                         continue;
@@ -3183,14 +3234,14 @@ fn check_period(a: &Analysed, centres: &[f64], r: &mut Report) {
                         continue;
                     }
                     if y1 != y2 && (y1 - y2).abs() > a.noise(x) + a.noise(x2) {
-                        // Within a few steps of f's resolution either side
-                        // (P is itself rounded; beside a pole that moves f
-                        // a lot), do f's values around the two overlap?
+                        // x + P is rounded, and P itself stands for the true
+                        // period to half an ulp, which |x/P| copies add up:
+                        // within that reach of each point (beside a pole, a
+                        // lot of f), do f's values overlap?
+                        let reach = 2.0 * (ulp(x2) + ulp(q) * (x2 / q).abs().max(1.0));
                         let around = |t: f64| {
-                            let res = a.resolution(t);
-                            let step = if res.is_finite() { res } else { ulp(t) };
                             (-4..=4)
-                                .map(|k| a.eval(t + k as f64 * step))
+                                .map(|k| a.eval(t + k as f64 * reach / 4.0))
                                 .filter(|v| v.is_finite())
                                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
                                     (lo.min(v), hi.max(v))
@@ -3223,7 +3274,11 @@ fn check_period(a: &Analysed, centres: &[f64], r: &mut Report) {
         r.fail("period-wrong", e, format!("period {p:?}: {why}"));
         return;
     }
-    let ys: Vec<f64> = pts.iter().map(|&x| a.eval(x)).filter(|y| y.is_finite()).collect();
+    let ys: Vec<f64> = pts
+        .iter()
+        .map(|&x| a.eval(x))
+        .filter(|y| y.is_finite())
+        .collect();
     let constant = ys.windows(2).all(|w| w[0] == w[1]);
     if !constant {
         for n in [2.0, 3.0] {
@@ -3504,7 +3559,12 @@ fn check_pair(b: &Analysed, o: &Analysed, t: Aff, r: &mut Report) {
             r.fail(
                 "transform-zeros-differ",
                 e,
-                format!("{}: base \"{}\", got \"{}\"", t.label(), b.k.x_intercept, o.k.x_intercept),
+                format!(
+                    "{}: base \"{}\", got \"{}\"",
+                    t.label(),
+                    b.k.x_intercept,
+                    o.k.x_intercept
+                ),
             );
         } else if !match_families(&mapped(&bd.zeros), &od.zeros, &|m, z| same_root(o, m, z)) {
             r.fail(
@@ -3580,7 +3640,10 @@ fn check_pair(b: &Analysed, o: &Analysed, t: Aff, r: &mut Report) {
         // Values: the mapped base value, to within the noise at both.
         for (bm, mf) in bl.iter().zip(&bfam) {
             let want = t.my(bm.1);
-            let Some(om) = ol.iter().find(|om| same_turn(o, mf.x, nearest(&om.0, mf.x), sign)) else {
+            let Some(om) = ol
+                .iter()
+                .find(|om| same_turn(o, mf.x, nearest(&om.0, mf.x), sign))
+            else {
                 continue;
             };
             let tol = t.k.abs() * b.noise(bm.0.x) + o.noise(om.0.x) + 8.0 * ulp(want);
@@ -3614,19 +3677,24 @@ fn check_pair(b: &Analysed, o: &Analysed, t: Aff, r: &mut Report) {
         // The base's bound noise, scaled: compare against the base's own
         // reported points.
         let ok = want.len() == od.range.len()
-            && want.iter().zip(&bd.range.iter().rev().collect::<Vec<_>>()).zip(&od.range).all(|((w, _), g)| {
-                [(w.lo, g.lo), (w.hi, g.hi)].iter().all(|(bw, bg)| {
-                    if bw.value.is_infinite() || bg.value.is_infinite() {
-                        return bw.value == bg.value;
-                    }
-                    let base_v = (bw.value - t.c) / t.k;
-                    bw.closed == bg.closed
-                        && (same_shown(bw.value, bg.value) || (bw.value - bg.value).abs()
-                            <= t.k.abs() * bound_noise(b, base_v)
-                                + bound_noise(o, bg.value)
-                                + 8.0 * ulp(bw.value.abs().max(bg.value.abs())))
-                })
-            });
+            && want
+                .iter()
+                .zip(&bd.range.iter().rev().collect::<Vec<_>>())
+                .zip(&od.range)
+                .all(|((w, _), g)| {
+                    [(w.lo, g.lo), (w.hi, g.hi)].iter().all(|(bw, bg)| {
+                        if bw.value.is_infinite() || bg.value.is_infinite() {
+                            return bw.value == bg.value;
+                        }
+                        let base_v = (bw.value - t.c) / t.k;
+                        bw.closed == bg.closed
+                            && (same_shown(bw.value, bg.value)
+                                || (bw.value - bg.value).abs()
+                                    <= t.k.abs() * bound_noise(b, base_v)
+                                        + bound_noise(o, bg.value)
+                                        + 8.0 * ulp(bw.value.abs().max(bg.value.abs())))
+                    })
+                });
         if !ok {
             r.fail(
                 "transform-range-differs",
@@ -3660,7 +3728,14 @@ fn check_pair(b: &Analysed, o: &Analysed, t: Aff, r: &mut Report) {
         let want: Vec<(f64, bool, f64, bool)> = bd
             .domain
             .iter()
-            .map(|iv| (t.mx(iv.lo.value), iv.lo.closed, t.mx(iv.hi.value), iv.hi.closed))
+            .map(|iv| {
+                (
+                    t.mx(iv.lo.value),
+                    iv.lo.closed,
+                    t.mx(iv.hi.value),
+                    iv.hi.closed,
+                )
+            })
             .collect();
         let ok = want.len() == od.domain.len()
             && want.iter().zip(&od.domain).all(|(w, g)| {
@@ -3713,7 +3788,9 @@ fn check_equiv(p: &Analysed, q: &Analysed, r: &mut Report) {
     };
     if both(flags::DOMAIN)
         && (fmt_set(&pd.domain) != fmt_set(&qd.domain)
-            || !match_families(&pd.excluded, &qd.excluded, &|m, z| floats_between(m, z) <= 64))
+            || !match_families(&pd.excluded, &qd.excluded, &|m, z| {
+                floats_between(m, z) <= 64
+            }))
     {
         differ(
             "equivalent-domain-differ",
@@ -3740,8 +3817,20 @@ fn check_equiv(p: &Analysed, q: &Analysed, r: &mut Report) {
         );
     }
     for (pl, ql, flag, sign, what) in [
-        (&pd.minima, &qd.minima, flags::MINIMA, 1.0, "equivalent-minima-differ"),
-        (&pd.maxima, &qd.maxima, flags::MAXIMA, -1.0, "equivalent-maxima-differ"),
+        (
+            &pd.minima,
+            &qd.minima,
+            flags::MINIMA,
+            1.0,
+            "equivalent-minima-differ",
+        ),
+        (
+            &pd.maxima,
+            &qd.maxima,
+            flags::MAXIMA,
+            -1.0,
+            "equivalent-maxima-differ",
+        ),
     ] {
         let pf: Vec<Family> = pl.iter().map(|m| m.0).collect();
         let qf: Vec<Family> = ql.iter().map(|m| m.0).collect();
@@ -3766,11 +3855,16 @@ fn check_equiv(p: &Analysed, q: &Analysed, r: &mut Report) {
             qd.horizontal_asymptotes.iter().map(|h| h.0).collect(),
         );
         if ph.len() != qh.len()
-            || !ph
-                .iter()
-                .all(|a| qh.iter().any(|b| same_shown(*a, *b) || (a - b).abs() <= 8.0 * ulp(a.abs().max(b.abs()))))
+            || !ph.iter().all(|a| {
+                qh.iter()
+                    .any(|b| same_shown(*a, *b) || (a - b).abs() <= 8.0 * ulp(a.abs().max(b.abs())))
+            })
         {
-            differ("equivalent-hasymptotes-differ", format!("{ph:?}"), format!("{qh:?}"));
+            differ(
+                "equivalent-hasymptotes-differ",
+                format!("{ph:?}"),
+                format!("{qh:?}"),
+            );
         }
     }
     if both(flags::PARITY) && p.k.parity != q.k.parity {
@@ -3841,13 +3935,21 @@ fn check_known(a: &Analysed, k: &Known, r: &mut Report) {
             r.fail(
                 "known-domain-wrong",
                 e,
-                format!("{p:?} is excluded, but domain {} excl {}", fmt_set(&d.domain), fmt_fams(&d.excluded)),
+                format!(
+                    "{p:?} is excluded, but domain {} excl {}",
+                    fmt_set(&d.domain),
+                    fmt_fams(&d.excluded)
+                ),
             );
         } else if let Some(x) = wrong_out {
             r.fail(
                 "known-domain-wrong",
                 e,
-                format!("{x:?} is in the domain, but domain {} excl {}", fmt_set(&d.domain), fmt_fams(&d.excluded)),
+                format!(
+                    "{x:?} is in the domain, but domain {} excl {}",
+                    fmt_set(&d.domain),
+                    fmt_fams(&d.excluded)
+                ),
             );
         }
     }
@@ -3872,8 +3974,14 @@ fn check_known(a: &Analysed, k: &Known, r: &mut Report) {
             let want: Vec<Interval> = range
                 .iter()
                 .map(|w| Interval {
-                    lo: graphing::analysis::Bound { value: w.0, closed: w.1 },
-                    hi: graphing::analysis::Bound { value: w.2, closed: w.3 },
+                    lo: graphing::analysis::Bound {
+                        value: w.0,
+                        closed: w.1,
+                    },
+                    hi: graphing::analysis::Bound {
+                        value: w.2,
+                        closed: w.3,
+                    },
                 })
                 .collect();
             r.fail(
@@ -3908,8 +4016,11 @@ fn check_known(a: &Analysed, k: &Known, r: &mut Report) {
             Zs::At(v) => {
                 !a.zero_set()
                     && d.zeros.len() == v.len()
-                    && v.iter()
-                        .all(|x| d.zeros.iter().any(|z| floats_between(nearest(z, *x), *x) <= 64))
+                    && v.iter().all(|x| {
+                        d.zeros
+                            .iter()
+                            .any(|z| floats_between(nearest(z, *x), *x) <= 64)
+                    })
             }
         };
         if !ok {
@@ -3933,7 +4044,10 @@ fn check_known(a: &Analysed, k: &Known, r: &mut Report) {
         r.fail(
             "known-poles-wrong",
             e,
-            format!("no vertical asymptotes, claimed {}", fmt_fams(&d.vertical_asymptotes)),
+            format!(
+                "no vertical asymptotes, claimed {}",
+                fmt_fams(&d.vertical_asymptotes)
+            ),
         );
     }
     if let Some(h) = &k.hasymptotes
