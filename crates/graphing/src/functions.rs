@@ -66,20 +66,29 @@ pub fn sin_cos(x: f64, unit: TrigUnit) -> (f64, f64) {
             if !x.is_finite() {
                 return (f64::NAN, f64::NAN);
             }
+            // Reduced as |x| mod a turn, which `%` does exactly, and the
+            // sign put back (sin is odd, cos even): reducing a tiny negative
+            // x into [0, turn) would round it up to a whole turn, a zero sine.
             let turn = unit.full_turn();
-            let r = x.rem_euclid(turn);
+            let r = x.abs() % turn;
             let quarter = turn / 4.0;
             let q = r / quarter;
-            if q == q.trunc() {
-                // r can round up to a whole turn (−10⁻²⁰ mod 360 is 360).
-                return match q as i64 % 4 {
+            // (q underflows to 0 for a subnormal r: not a quarter turn.)
+            let (s, c) = if q == q.trunc() && (q != 0.0 || r == 0.0) {
+                match q as i64 {
                     0 => (0.0, 1.0),
                     1 => (1.0, 0.0),
                     2 => (0.0, -1.0),
                     _ => (-1.0, 0.0),
-                };
-            }
-            (r * unit.to_radians_factor()).sin_cos()
+                }
+            } else {
+                let (s, c) = (r * unit.to_radians_factor()).sin_cos();
+                // Not a multiple of a half turn, so not a zero, even where
+                // the sine is below the smallest double (10⁻³²³ degrees):
+                // its reciprocal overflows rather than being undefined.
+                (if s == 0.0 { f64::from_bits(1) } else { s }, c)
+            };
+            if x < 0.0 { (-s, c) } else { (s, c) }
         }
     }
 }
