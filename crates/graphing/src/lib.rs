@@ -94,6 +94,7 @@ pub mod strings;
 pub mod trace;
 pub mod variable;
 pub mod viewport;
+pub(crate) mod wide;
 
 pub use equation::{Equation, EquationKind};
 pub use error::EquationError;

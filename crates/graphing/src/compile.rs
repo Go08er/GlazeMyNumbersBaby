@@ -8,6 +8,7 @@
 use crate::ast::{BinOp, Constant, Expr, Func};
 use crate::error::{EquationError, EvaluationErrorCode};
 use crate::functions::{self as fns, TrigUnit};
+use crate::wide::{self, Wide};
 
 /// Values for parameter variables used while compiling.
 pub trait VariableValues {
@@ -118,7 +119,7 @@ pub(crate) enum Fn1 {
 
 impl Fn1 {
     #[inline(always)]
-    fn apply(self, x: f64) -> f64 {
+    pub(crate) fn apply(self, x: f64) -> f64 {
         use Fn1::*;
         match self {
             Sin(u) => fns::sin_u(x, u),
@@ -174,7 +175,7 @@ pub(crate) enum Fn2 {
 
 impl Fn2 {
     #[inline(always)]
-    fn apply(self, a: f64, b: f64) -> f64 {
+    pub(crate) fn apply(self, a: f64, b: f64) -> f64 {
         match self {
             Fn2::Root => fns::root(a, b),
             Fn2::LogBase => fns::log_base(a, b),
@@ -202,6 +203,9 @@ impl Fn2 {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Op {
     Const(f64),
+    /// A constant beyond the range of a double (e^−1000 inside x/e^−1000):
+    /// its rounding, and its value for the extended-range evaluation.
+    Big(f64, Wide),
     X,
     Y,
     Add,
@@ -226,7 +230,7 @@ impl Op {
     /// Rough relative evaluation cost (an addition is 1).
     fn cost(&self) -> usize {
         match self {
-            Op::Const(_) | Op::X | Op::Y | Op::Add | Op::Sub | Op::Mul | Op::Neg => 1,
+            Op::Const(_) | Op::Big(..) | Op::X | Op::Y | Op::Add | Op::Sub | Op::Mul | Op::Neg => 1,
             Op::Div | Op::DivNz | Op::PowI(_) => 2,
             Op::Pow | Op::PowRat(..) => 8,
             Op::F1(Fn1::Factorial | Fn1::DoubleFactorial) => 60,
@@ -252,6 +256,9 @@ pub struct Program {
     uses_x: bool,
     uses_y: bool,
     cost: usize,
+    /// Whether an operation can overflow or underflow, so that a NaN result
+    /// may be rounding rather than an undefined point (see [`Wide`]).
+    wide: bool,
 }
 
 /// Evaluation input for one coordinate of a batch: either one value for all
@@ -271,10 +278,7 @@ impl Program {
     /// Compiles an expression.
     pub fn compile(expr: &Expr, opts: &CompileOptions<'_>) -> Result<Program, EquationError> {
         let piece = lower(expr, opts)?;
-        let ops = match piece {
-            Piece::Const(v, _) => vec![Op::Const(v)],
-            Piece::Code(c) => c,
-        };
+        let ops = piece.into_code();
         Ok(Program::from_ops(ops))
     }
 
@@ -290,7 +294,7 @@ impl Program {
         let mut uses_y = false;
         for op in &ops {
             match op {
-                Op::Const(_) => depth += 1,
+                Op::Const(_) | Op::Big(..) => depth += 1,
                 Op::X => {
                     uses_x = true;
                     depth += 1
@@ -308,12 +312,38 @@ impl Program {
         }
         debug_assert_eq!(depth, 1);
         let cost = ops.iter().map(Op::cost).sum();
+        let wide = ops.iter().any(|op| {
+            use Fn1::*;
+            match op {
+                Op::Mul | Op::Div | Op::DivNz | Op::Pow | Op::PowRat(..) | Op::Big(..) => true,
+                Op::PowI(n) => !matches!(n, 0 | 1),
+                Op::F1(f) => matches!(
+                    f,
+                    Sec(_)
+                        | Csc(_)
+                        | Cot(_)
+                        | Sinh
+                        | Cosh
+                        | Sech
+                        | Csch
+                        | Coth
+                        | Asech
+                        | Acsch
+                        | Exp
+                        | Factorial
+                        | DoubleFactorial
+                ),
+                Op::F2(f) => matches!(f, Fn2::Root | Fn2::NCr | Fn2::NPr),
+                _ => false,
+            }
+        });
         Program {
             ops,
             max_stack,
             uses_x,
             uses_y,
             cost,
+            wide,
         }
     }
 
@@ -337,7 +367,7 @@ impl Program {
     /// `Some(value)` if the program is a constant.
     pub fn as_constant(&self) -> Option<f64> {
         match self.ops.as_slice() {
-            [Op::Const(v)] => Some(*v),
+            [Op::Const(v) | Op::Big(v, _)] => Some(*v),
             _ => None,
         }
     }
@@ -352,9 +382,50 @@ impl Program {
         self.ops.is_empty()
     }
 
-    /// Evaluates at one point.
+    /// Evaluates at one point. Undefined points give NaN; a defined value
+    /// beyond the range of a double gives ±∞ or 0, never NaN, and ±∞ only
+    /// for such a value (e^x/e^x is 1 for x > 709.8, not ∞/∞, and ln(e^x)
+    /// is x, not ∞).
     #[inline]
     pub fn eval(&self, x: f64, y: f64) -> f64 {
+        self.eval_tagged(x, y).0
+    }
+
+    /// [`Program::eval`], and whether the value needed re-evaluating in
+    /// extended range, where the double result was NaN or ±∞.
+    #[inline]
+    pub(crate) fn eval_tagged(&self, x: f64, y: f64) -> (f64, Redo) {
+        let v = self.eval_plain(x, y);
+        if !v.is_finite() && self.wide {
+            self.redo(x, y)
+        } else {
+            (v, Redo::No)
+        }
+    }
+
+    /// Whether a NaN or ±∞ from [`Program::eval_plain`] may stand for a
+    /// value beyond a double's range, to get with [`Program::redo`].
+    pub(crate) fn may_redo(&self) -> bool {
+        self.wide
+    }
+
+    /// The value at a point where the double one is NaN or ±∞, in extended
+    /// range.
+    #[cold]
+    pub(crate) fn redo(&self, x: f64, y: f64) -> (f64, Redo) {
+        let w = self.eval_wide(x, y);
+        let tag = if w == Wide::Unknown {
+            Redo::Unknown
+        } else {
+            Redo::Wide
+        };
+        (w.to_f64(), tag)
+    }
+
+    /// Evaluates in double arithmetic only: NaN or ±∞ may then also be a
+    /// value beyond a double's range.
+    #[inline]
+    pub(crate) fn eval_plain(&self, x: f64, y: f64) -> f64 {
         if self.max_stack <= SCALAR_STACK {
             let mut stack = [0.0f64; SCALAR_STACK];
             self.eval_with(&mut stack, x, y)
@@ -369,7 +440,7 @@ impl Program {
         let mut sp = 0usize;
         for op in &self.ops {
             match *op {
-                Op::Const(v) => {
+                Op::Const(v) | Op::Big(v, _) => {
                     stack[sp] = v;
                     sp += 1;
                 }
@@ -428,6 +499,23 @@ impl Program {
     /// slice inputs must be at least that long. Instructions are applied to
     /// chunks of points at a time, amortising dispatch.
     pub fn eval_batch(&self, xs: Input<'_>, ys: Input<'_>, out: &mut [f64]) {
+        self.eval_batch_plain(xs, ys, out);
+        if !self.wide {
+            return;
+        }
+        let at = |i: usize, s: Input<'_>| match s {
+            Input::Scalar(v) => v,
+            Input::Slice(s) => s[i],
+        };
+        for (i, o) in out.iter_mut().enumerate() {
+            if !o.is_finite() {
+                *o = self.redo(at(i, xs), at(i, ys)).0;
+            }
+        }
+    }
+
+    /// [`Program::eval_plain`] on many points.
+    pub(crate) fn eval_batch_plain(&self, xs: Input<'_>, ys: Input<'_>, out: &mut [f64]) {
         let n = out.len();
         if let Input::Slice(s) = xs {
             assert!(s.len() >= n, "x slice too short");
@@ -464,7 +552,7 @@ impl Program {
         };
         for op in &self.ops {
             match *op {
-                Op::Const(v) => {
+                Op::Const(v) | Op::Big(v, _) => {
                     stack[sp][..len].fill(v);
                     sp += 1;
                 }
@@ -516,18 +604,86 @@ impl Program {
     }
 }
 
+/// How [`Program::eval_tagged`] came by a value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Redo {
+    /// In double arithmetic.
+    No,
+    /// Re-evaluated in extended range: the double result was NaN or ±∞.
+    Wide,
+    /// Re-evaluated, and even that couldn't tell whether the program is
+    /// defined there (the sine of e^1000): NaN, but not known undefined.
+    Unknown,
+}
+
+impl Program {
+    /// Evaluates in extended range (see [`Wide`]).
+    pub(crate) fn eval_wide(&self, x: f64, y: f64) -> Wide {
+        let mut stack: Vec<Wide> = Vec::with_capacity(self.max_stack);
+        for op in &self.ops {
+            let v = match *op {
+                Op::Const(v) => Wide::new(v),
+                Op::Big(_, w) => w,
+                Op::X => Wide::new(x),
+                Op::Y => Wide::new(y),
+                Op::PowI(n) => wide::powi(pop(&mut stack), n),
+                Op::PowRat(p, q) => wide::pow_rational(pop(&mut stack), p, q),
+                Op::Neg => pop(&mut stack).neg(),
+                Op::F1(f) => wide::apply1(f, pop(&mut stack)),
+                _ => {
+                    let b = pop(&mut stack);
+                    let a = pop(&mut stack);
+                    wide_bin(op, a, b)
+                }
+            };
+            stack.push(v);
+        }
+        stack[0]
+    }
+}
+
+fn pop(stack: &mut Vec<Wide>) -> Wide {
+    stack.pop().expect("stack depth is checked when compiling")
+}
+
+/// A binary instruction on extended-range values.
+fn wide_bin(op: &Op, a: Wide, b: Wide) -> Wide {
+    match *op {
+        Op::Add => a.add(b),
+        Op::Sub => a.sub(b),
+        Op::Mul => a.mul(b),
+        // A never-zero divisor is never an exact 0 here, where nothing
+        // underflows: plain division.
+        Op::Div | Op::DivNz => a.div(b),
+        Op::Pow => wide::pow(a, b),
+        Op::F2(f) => wide::apply2(f, a, b),
+        _ => unreachable!("not a binary instruction"),
+    }
+}
+
 enum Piece {
-    /// A folded constant; the flag records whether a parameter variable was
-    /// involved (so that e.g. `x/a` with `a = 0` is not a syntax-level
-    /// "divide by zero" error).
-    Const(f64, bool),
+    /// A folded constant, in extended range so that a value beyond a
+    /// double's (e^−1000) is not taken for 0 or ∞. The flag records whether
+    /// a parameter variable was involved (so that e.g. `x/a` with `a = 0` is
+    /// not a syntax-level "divide by zero" error).
+    Const(Wide, bool),
     Code(Vec<Op>),
+}
+
+/// The instruction pushing a folded constant.
+fn const_op(w: Wide) -> Op {
+    let v = w.to_f64();
+    if Wide::new(v) == w {
+        Op::Const(v)
+    } else {
+        Op::Big(v, w)
+    }
 }
 
 impl Piece {
     fn into_code(self) -> Vec<Op> {
         match self {
-            Piece::Const(v, _) => vec![Op::Const(v)],
+            Piece::Const(w, _) => vec![const_op(w)],
             Piece::Code(c) => c,
         }
     }
@@ -641,15 +797,72 @@ fn never_zero(e: &Expr) -> bool {
     }
 }
 
+/// The value `e` takes wherever it is defined, when its form shows that it
+/// is the same everywhere: 0·x, 0/x and x − x are 0, x/x and e^x/e^x are 1,
+/// x·a is 0 for a = 0. Where an operand is undefined so is the whole (0·ln x
+/// for x ≤ 0, x/x at 0): this says nothing about the domain.
+pub(crate) fn constant_where_defined(e: &Expr, opts: &CompileOptions<'_>) -> Option<f64> {
+    let w = constant_wide(e, opts)?;
+    let v = w.to_f64();
+    // Not a value beyond a double's range, which would round to 0 or ∞.
+    (Wide::new(v) == w).then_some(v)
+}
+
+fn constant_wide(e: &Expr, opts: &CompileOptions<'_>) -> Option<Wide> {
+    let c = |a: &Expr| constant_wide(a, opts);
+    let value = |w: Wide| matches!(w, Wide::Val(..)).then_some(w);
+    let zero = Wide::Val(0.0, 0.0);
+    if !e.any(&|n| matches!(n, Expr::X | Expr::Y)) {
+        return match lower(e, opts) {
+            Ok(Piece::Const(w, _)) => value(w),
+            _ => None,
+        };
+    }
+    match e {
+        Expr::Neg(a) => c(a).map(Wide::neg),
+        Expr::Degrees(a) => c(a),
+        // 0 times, or 0 divided by, anything defined is 0.
+        Expr::Bin(BinOp::Mul, a, b) => {
+            let (ca, cb) = (c(a), c(b));
+            if ca.is_some_and(Wide::is_zero) || cb.is_some_and(Wide::is_zero) {
+                return Some(zero);
+            }
+            value(ca?.mul(cb?))
+        }
+        Expr::Bin(BinOp::Div, a, b) => {
+            let ca = c(a);
+            if ca.is_some_and(Wide::is_zero) {
+                return Some(zero);
+            }
+            if a == b {
+                return Some(Wide::ONE);
+            }
+            value(ca?.div(c(b)?))
+        }
+        Expr::Bin(BinOp::Sub, a, b) if a == b => Some(zero),
+        Expr::Bin(op, a, b) => value(apply_bin(*op, c(a)?, c(b)?)),
+        Expr::Call(f, args) => {
+            let mut it = args.iter().map(c);
+            let first = it.next()??;
+            if let Some(f1) = fn1_for(*f, opts.trig_unit) {
+                return value(wide::apply1(f1, first));
+            }
+            let f2 = fn2_for(*f)?;
+            it.try_fold(first, |acc, w| value(wide::apply2(f2, acc, w?)))
+        }
+        _ => None,
+    }
+}
+
 fn lower(e: &Expr, opts: &CompileOptions<'_>) -> Result<Piece, EquationError> {
     Ok(match e {
-        Expr::Num(v) => Piece::Const(*v, false),
-        Expr::Const(Constant::Pi) => Piece::Const(std::f64::consts::PI, false),
-        Expr::Const(Constant::E) => Piece::Const(std::f64::consts::E, false),
+        Expr::Num(v) => Piece::Const(Wide::new(*v), false),
+        Expr::Const(Constant::Pi) => Piece::Const(Wide::new(std::f64::consts::PI), false),
+        Expr::Const(Constant::E) => Piece::Const(Wide::new(std::f64::consts::E), false),
         Expr::X => Piece::Code(vec![Op::X]),
         Expr::Y => Piece::Code(vec![Op::Y]),
         Expr::Var(n) => Piece::Const(
-            opts.variables.value(n).unwrap_or(DEFAULT_VARIABLE_VALUE),
+            Wide::new(opts.variables.value(n).unwrap_or(DEFAULT_VARIABLE_VALUE)),
             true,
         ),
         Expr::Degrees(a) => {
@@ -662,7 +875,7 @@ fn lower(e: &Expr, opts: &CompileOptions<'_>) -> Result<Piece, EquationError> {
             lower(a, opts)?
         }
         Expr::Neg(a) => match lower(a, opts)? {
-            Piece::Const(v, var) => Piece::Const(-v, var),
+            Piece::Const(v, var) => Piece::Const(v.neg(), var),
             Piece::Code(mut c) => {
                 c.push(Op::Neg);
                 Piece::Code(c)
@@ -686,15 +899,15 @@ fn lower(e: &Expr, opts: &CompileOptions<'_>) -> Result<Piece, EquationError> {
                 && let Some((p, q)) = syntactic_rational(b)
             {
                 // A literal 0 to a negative power is a division by zero.
-                if p < 0 && matches!(la, Piece::Const(v, false) if v == 0.0) {
+                if p < 0 && matches!(la, Piece::Const(v, false) if v.is_zero()) {
                     return Err(EquationError::eval(EvaluationErrorCode::DivideByZero, 0..0));
                 }
                 return Ok(match la {
                     Piece::Const(v, var) => Piece::Const(
                         if q == 1 {
-                            fns::pow_int(v, p)
+                            wide::powi(v, p)
                         } else {
-                            fns::pow_rational(v, p, q)
+                            wide::pow_rational(v, p, q)
                         },
                         var,
                     ),
@@ -714,17 +927,19 @@ fn lower(e: &Expr, opts: &CompileOptions<'_>) -> Result<Piece, EquationError> {
             let lb = lower(b, opts)?;
             match (la, lb) {
                 (Piece::Const(x, va), Piece::Const(y, vb)) => {
-                    if *op == BinOp::Div && y == 0.0 && !vb {
+                    // Exact zeros only: e^−1000 is not 0, so 1/e^−1000 is
+                    // e^1000, not a division by zero.
+                    if *op == BinOp::Div && y.is_zero() && !vb {
                         return Err(EquationError::eval(EvaluationErrorCode::DivideByZero, 0..0));
                     }
-                    if *op == BinOp::Pow && x == 0.0 && y < 0.0 && !va && !vb {
+                    if *op == BinOp::Pow && x.is_zero() && y.to_f64() < 0.0 && !va && !vb {
                         return Err(EquationError::eval(EvaluationErrorCode::DivideByZero, 0..0));
                     }
                     Piece::Const(apply_bin(*op, x, y), va || vb)
                 }
                 (la, lb) => {
                     if let (BinOp::Div, Piece::Const(y, false)) = (op, &lb)
-                        && *y == 0.0
+                        && y.is_zero()
                     {
                         return Err(EquationError::eval(EvaluationErrorCode::DivideByZero, 0..0));
                     }
@@ -750,7 +965,7 @@ fn lower(e: &Expr, opts: &CompileOptions<'_>) -> Result<Piece, EquationError> {
             if let Some(f1) = fn1_for(*f, opts.trig_unit) {
                 let arg = lowered.into_iter().next().expect("arity checked by parser");
                 match arg {
-                    Piece::Const(v, var) => Piece::Const(f1.apply(v), var),
+                    Piece::Const(v, var) => Piece::Const(wide::apply1(f1, v), var),
                     Piece::Code(mut c) => {
                         c.push(Op::F1(f1));
                         Piece::Code(c)
@@ -764,7 +979,7 @@ fn lower(e: &Expr, opts: &CompileOptions<'_>) -> Result<Piece, EquationError> {
                 for next in it {
                     acc = match (acc, next) {
                         (Piece::Const(a, va), Piece::Const(b, vb)) => {
-                            Piece::Const(f2.apply(a, b), va || vb)
+                            Piece::Const(wide::apply2(f2, a, b), va || vb)
                         }
                         (a, b) => {
                             let mut c = a.into_code();
@@ -780,13 +995,13 @@ fn lower(e: &Expr, opts: &CompileOptions<'_>) -> Result<Piece, EquationError> {
     })
 }
 
-fn apply_bin(op: BinOp, a: f64, b: f64) -> f64 {
+fn apply_bin(op: BinOp, a: Wide, b: Wide) -> Wide {
     match op {
-        BinOp::Add => a + b,
-        BinOp::Sub => a - b,
-        BinOp::Mul => a * b,
-        BinOp::Div => fns::div(a, b),
-        BinOp::Pow => fns::pow(a, b),
+        BinOp::Add => a.add(b),
+        BinOp::Sub => a.sub(b),
+        BinOp::Mul => a.mul(b),
+        BinOp::Div => a.div(b),
+        BinOp::Pow => wide::pow(a, b),
     }
 }
 
