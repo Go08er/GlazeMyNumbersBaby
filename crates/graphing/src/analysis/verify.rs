@@ -781,7 +781,9 @@ pub fn check_range(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
     let mut outside: Vec<usize> = (0..xs.len())
         .filter(|&i| ys[i].is_finite() && !set_has(range, ys[i]))
         .collect();
-    outside.sort_by(|&i, &j| xs[i].abs().total_cmp(&xs[j].abs()));
+    // (The farthest out of the range first: a few hundred are plenty, and
+    // the first ones would otherwise be the rounding nearest the origin.)
+    outside.sort_by(|&i, &j| set_dist(range, ys[j]).total_cmp(&set_dist(range, ys[i])));
     // (A few hundred are plenty: past that they are all within the noise.)
     outside.truncate(256);
     for (x, y) in outside.into_iter().map(|i| (xs[i], ys[i])) {
@@ -2371,9 +2373,13 @@ pub fn check_parity(a: &Analysed, xs: &[f64], r: &mut Report) {
         _ => return,
     };
     let e = &a.expr;
-    let mut tried = 0;
-    for &x in xs.iter().filter(|x| **x > 0.0).step_by(3) {
-        if tried > 256 {
+    // Every pair ±x of samples: one defined and the other not, or their
+    // values apart from what the claim says, the largest first (an
+    // asymmetry far out, 10⁶ − 1/(1 + e^(x + 10⁶)) beyond 10⁶, mustn't wait
+    // behind rounding near 0).
+    let mut devs: Vec<(f64, f64)> = Vec::new();
+    for &x in xs.iter().filter(|x| **x > 0.0) {
+        if a.over() {
             return;
         }
         let (dp, dm) = (a.defined(x), a.defined(-x));
@@ -2392,18 +2398,27 @@ pub fn check_parity(a: &Analysed, xs: &[f64], r: &mut Report) {
         if dp == Some(true) && dm == Some(true) {
             let (y, z) = (a.eval(x), a.eval(-x));
             let dev = if odd { (y + z).abs() } else { (y - z).abs() };
-            if dev > 0.0 && {
-                tried += 1;
-                !a.forgives_n(a.noise(x) + a.noise(-x), dev)
-            } {
-                r.fail(
-                    "parity-contradicted",
-                    flags::PARITY,
-                    e,
-                    format!("{:?} but f({x:?})={y:?}, f({:?})={z:?}", a.k.parity, -x),
-                );
-                return;
+            if dev > 0.0 {
+                devs.push((x, dev));
             }
+        }
+    }
+    devs.sort_by(|p, q| q.1.total_cmp(&p.1));
+    for &(x, dev) in devs.iter().take(256) {
+        if !a.forgives_n(a.noise(x) + a.noise(-x), dev) {
+            r.fail(
+                "parity-contradicted",
+                flags::PARITY,
+                e,
+                format!(
+                    "{:?} but f({x:?})={:?}, f({:?})={:?}",
+                    a.k.parity,
+                    a.eval(x),
+                    -x,
+                    a.eval(-x)
+                ),
+            );
+            return;
         }
     }
 }
@@ -3443,14 +3458,17 @@ fn range_supported(a: &Analysed, xs: &[f64], ys: &[f64], centres: &[f64]) -> boo
         return true;
     }
     let reach = centres.iter().fold(1.0f64, |m, c| m.max(c.abs()));
-    // The samples, with the far tails.
+    // The samples, with the far tails and the most extreme turns refined
+    // (a sample rarely lands on the top of a peak).
     let mut pts: Vec<(f64, f64)> = xs.iter().copied().zip(ys.iter().copied()).collect();
     for s in [1.0, -1.0] {
         for x in [(1e6 * reach).max(1e30), 1e100, 1e300] {
             pts.push((s * x, a.eval(s * x)));
         }
+        pts.extend(refine_extremes(a, xs, ys, s, 8));
     }
     pts.sort_by(|p, q| p.0.total_cmp(&q.0));
+    pts.dedup_by(|p, q| p.0 == q.0);
     let piece = |v: f64| {
         range
             .iter()
@@ -3500,34 +3518,45 @@ fn range_supported(a: &Analysed, xs: &[f64], ys: &[f64], centres: &[f64]) -> boo
                 }
             }
         }
-        // The end of a stretch (an undefined or unbounded neighbour, or the
-        // last sample): f goes on the way it was going, to the end of its
-        // claimed piece.
+        // The end of a stretch: f goes on the way it was going, to the end
+        // of its claimed piece, if it is seen to: towards a value beyond
+        // the doubles, a pole, or (past the last sample) growing at least
+        // as fast as a logarithm. (Towards a limit, e^x/(e^x + 1) at 10³⁰⁰
+        // or 10¹²·atan(1/x) beside 0, it doesn't.)
+        let goes_on = |k: Option<usize>, end: f64| match k {
+            None if end.is_infinite() => unbounded_tail(a, x0.signum(), reach),
+            None => tail_approaches(a, x0.signum(), reach, end),
+            Some(k) if pts[k].1.is_nan() && end.is_infinite() => {
+                certainly_blows_up(a, pts[k].0) || unbounded_at_edge(a, x0, pts[k].0)
+            }
+            Some(k) if pts[k].1.is_nan() => edge_approaches(a, x0, pts[k].0, end),
+            Some(_) => true,
+        };
         let mut inners = Vec::new();
         if i > 0 && finite(i - 1) && (i + 1 >= n || !finite(i + 1)) {
-            inners.push(i - 1);
+            inners.push((i - 1, (i + 1 < n).then_some(i + 1)));
         }
         if i + 1 < n && finite(i + 1) && (i == 0 || !finite(i - 1)) {
-            inners.push(i + 1);
+            inners.push((i + 1, i.checked_sub(1)));
         }
-        for j in inners {
+        for (j, beyond) in inners {
             let dir = (y0 - pts[j].1).signum();
             if let Some(iv) = piece(y0) {
-                if dir > 0.0 {
+                if dir > 0.0 && goes_on(beyond, iv.hi.value) {
                     cover.push((y0, iv.hi.value, x0, x0));
-                } else if dir < 0.0 {
+                } else if dir < 0.0 && goes_on(beyond, iv.lo.value) {
                     cover.push((iv.lo.value, y0, x0, x0));
                 }
             }
         }
     }
-    // Also both ends of every stretch the samples end on (a pole between
-    // two samples): each side keeps going.
+    // Also both ends of every stretch the samples end on, where there is a
+    // pole between two samples: each side keeps going. (Not across a jump.)
     for i in 0..n.saturating_sub(1) {
         if !(finite(i) && finite(i + 1)) {
             continue;
         }
-        if joined[i] {
+        if joined[i] || a.over() || !pole_between(a, pts[i].0, pts[i + 1].0) {
             continue;
         }
         for (k, j) in [(i, i.wrapping_sub(1)), (i + 1, i + 2)] {
@@ -3608,12 +3637,174 @@ fn range_supported(a: &Analysed, xs: &[f64], ys: &[f64], centres: &[f64]) -> boo
             }
         }
         if at < iv.hi.value
-            && (iv.hi.value == f64::INFINITY || !a.forgives_n(least_noise(at), iv.hi.value - at))
+            && (iv.hi.value == f64::INFINITY
+                || (iv.hi.value - at > 4.0 * (ulp(at) + ulp(iv.hi.value))
+                    && !a.forgives_n(least_noise(at), iv.hi.value - at)))
         {
             return false;
         }
     }
     true
+}
+
+/// f towards the edge of its domain between `inside` (defined) and
+/// `outside` (not): its values from 1/100 of the way (or of the edge's
+/// size) out, each a hundredfold nearer, down to a few floats from it (the
+/// nearest stretch where it is defined all the way).
+fn edge_profile(a: &Analysed, inside: f64, outside: f64) -> Option<(f64, Vec<f64>)> {
+    if a.defined(inside) != Some(true) {
+        return None;
+    }
+    let (mut lo, mut hi) = (inside, outside);
+    for _ in 0..100 {
+        if floats_between(lo, hi) <= 1 {
+            break;
+        }
+        let mid = from_ord(to_ord(lo) + (to_ord(hi) - to_ord(lo)) / 2);
+        if a.defined(mid) == Some(true) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let (edge, s) = (lo, (inside - outside).signum());
+    let mut d = 0.01 * edge.abs().max(1.0);
+    let mut vals = Vec::new();
+    while d > 16.0 * ulp(edge) && vals.len() < 200 {
+        let y = a.eval(edge + s * d);
+        if y.is_finite() {
+            vals.push(y);
+        } else {
+            vals.clear();
+        }
+        d /= 100.0;
+    }
+    (vals.len() >= 6).then_some((edge + s * d * 100.0, vals))
+}
+
+/// Whether f grows without bound towards the edge of its domain between
+/// `inside` and `outside`: nearer and nearer it, its steps keep one
+/// direction and don't shrink (ln x, x^(−0.01) at 0, whose growth the
+/// doubles cut short at 744 or 1744; not atan(1/x), whose steps shrink to
+/// its limit).
+fn unbounded_at_edge(a: &Analysed, inside: f64, outside: f64) -> bool {
+    let Some((near, vals)) = edge_profile(a, inside, outside) else {
+        return false;
+    };
+    let steps: Vec<f64> = vals.windows(2).map(|w| w[1] - w[0]).collect();
+    let last = &steps[steps.len() - 4..];
+    let one_way = last.iter().all(|&d| d > 0.0) || last.iter().all(|&d| d < 0.0);
+    one_way
+        && last.windows(2).all(|w| w[1].abs() >= 0.8 * w[0].abs())
+        && !a.within(near, (vals[vals.len() - 1] - vals[vals.len() - 5]).abs())
+}
+
+/// Whether f approaches the value `end` towards the edge of its domain
+/// between `inside` and `outside` ([`approaches`]: e^(−atanh x) to 0 at 1).
+fn edge_approaches(a: &Analysed, inside: f64, outside: f64, end: f64) -> bool {
+    let Some((near, vals)) = edge_profile(a, inside, outside) else {
+        return false;
+    };
+    let tail = &vals[vals.len() - 5..];
+    let dists: Vec<f64> = tail.iter().map(|y| (y - end).abs()).collect();
+    a.within(near, dists[dists.len() - 1]) || approaches(&dists, &[2.0; 4])
+}
+
+/// Whether distances from a value, at points `decades[k]` decades apart,
+/// show f tending to it: they shrink by the same factor a decade (to 2%: f
+/// is that value plus a power of the distance, x^(−0.001) to 0 at ∞, √(1 −
+/// x) to 0 at 1), or by at least half over the last step. (1 − 1/ln x does
+/// tend to 1, but nothing in its values says so; 2 + x^(−1) doesn't tend to
+/// 1, and its distances from 1 shrink ever more slowly.)
+fn approaches(dists: &[f64], decades: &[f64]) -> bool {
+    if dists.len() < 3 || dists.iter().any(|d| !(d.is_finite() && *d > 0.0)) {
+        return false;
+    }
+    let per: Vec<f64> = dists
+        .windows(2)
+        .zip(decades)
+        .map(|(w, n)| (w[1] / w[0]).ln() / n)
+        .collect();
+    let (lo, hi) = per
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), &v| {
+            (l.min(v), h.max(v))
+        });
+    let n = dists.len();
+    (hi < 0.0 && lo / hi <= 1.02)
+        || (per.iter().all(|&v| v < 0.0) && dists[n - 1] <= 0.5 * dists[n - 2])
+}
+
+/// Whether f has a pole between lo and hi: zooming in on where |f| is
+/// largest (or f undefined), f blows up there.
+fn pole_between(a: &Analysed, mut lo: f64, mut hi: f64) -> bool {
+    for _ in 0..40 {
+        let mut best = (f64::NEG_INFINITY, lo);
+        for j in 1..16 {
+            let t = lo + (hi - lo) * j as f64 / 16.0;
+            let v = a.eval(t);
+            let m = if v.is_nan() { f64::INFINITY } else { v.abs() };
+            if m > best.0 {
+                best = (m, t);
+            }
+        }
+        let w = (hi - lo) / 16.0;
+        (lo, hi) = (best.1 - w, best.1 + w);
+        if best.0 == f64::INFINITY || floats_between(lo, hi) < 64 || a.over() {
+            break;
+        }
+    }
+    let c = 0.5 * (lo + hi);
+    (-64..=64)
+        .step_by(16)
+        .any(|k| certainly_blows_up(a, nudge(c, k)))
+        || certainly_blows_up(a, lo)
+        || certainly_blows_up(a, hi)
+}
+
+/// Whether f, far out on side s, approaches the finite value `end`: its
+/// distance from it, from beyond every centre out to 10³⁰⁰, shrinks, by at
+/// least half over the last two hundred decades, or ends within the noise
+/// (1/x to 0, e^x/(e^x + 1) to 1; not 1 − 1/ln x to 1, nor sin x to
+/// anything).
+fn tail_approaches(a: &Analysed, s: f64, reach: f64, end: f64) -> bool {
+    let t0 = (1e6 * reach).max(1e30);
+    let ts: Vec<f64> = [t0, 1e100, 1e200, 1e300]
+        .iter()
+        .copied()
+        .filter(|&t| t >= t0)
+        .collect();
+    let d: Vec<f64> = ts.iter().map(|&t| (a.eval(s * t) - end).abs()).collect();
+    if d.len() < 2 || d.iter().any(|v| !v.is_finite()) {
+        return false;
+    }
+    let decades: Vec<f64> = ts.windows(2).map(|w| (w[1] / w[0]).log10()).collect();
+    a.within(s * 1e300, d[d.len() - 1]) || approaches(&d, &decades)
+}
+
+/// Whether f keeps growing far out on side s, at least as fast as a
+/// logarithm: its step per decade, from beyond every centre out to 10³⁰⁰,
+/// doesn't shrink, and is beyond its noise.
+fn unbounded_tail(a: &Analysed, s: f64, reach: f64) -> bool {
+    let t0 = (1e6 * reach).max(1e30);
+    let pts: Vec<(f64, f64)> = [t0, 1e100, 1e200, 1e300]
+        .iter()
+        .filter(|&&t| t >= t0)
+        .map(|&t| (t.log10(), a.eval(s * t)))
+        .collect();
+    if pts.len() < 3 || pts.iter().any(|p| !p.1.is_finite()) {
+        // (Beyond the doubles out there, growing: it has.)
+        return pts
+            .last()
+            .is_some_and(|p| p.1.is_infinite() || p.1.abs() == f64::MAX);
+    }
+    let steps: Vec<f64> = pts
+        .windows(2)
+        .map(|w| (w[1].1 - w[0].1) / (w[1].0 - w[0].0))
+        .collect();
+    let up = steps.iter().all(|&d| d > 0.0) || steps.iter().all(|&d| d < 0.0);
+    up && steps.windows(2).all(|w| w[1].abs() >= 0.8 * w[0].abs())
+        && (pts[pts.len() - 1].1 - pts[0].1).abs() > a.noise(s * 1e300) + a.noise(s * t0)
 }
 
 /// f's swings about a claimed horizontal asymptote shrink decade after
