@@ -2165,7 +2165,9 @@ fn check_range(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
     // for 10⁶ + 10⁻⁶·sin x), however they read. (An offset that reads the
     // same, x/x + 10⁻¹² for {1}, is the same claim.)
     if range.iter().all(|iv| iv.lo.value == iv.hi.value) {
-        let mut seen: Vec<Option<((f64, f64), (f64, f64))>> = vec![None; range.len()];
+        // The lowest and highest (x, f(x)) reading as each claimed point.
+        type Span = ((f64, f64), (f64, f64));
+        let mut seen: Vec<Option<Span>> = vec![None; range.len()];
         for (&x, &y) in xs.iter().zip(ys) {
             if !y.is_finite() {
                 continue;
@@ -2824,7 +2826,7 @@ fn check_missing_extrema(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
                     0.0f64,
                     |m, v| if v.is_nan() { f64::INFINITY } else { m.max(v) },
                 );
-            if !(step <= 0.25 * swing + a.rounding(xm)) {
+            if step.is_nan() || step > 0.25 * swing + a.rounding(xm) {
                 continue;
             }
             // Nor is the top of the climb to a reported pole (a missing
