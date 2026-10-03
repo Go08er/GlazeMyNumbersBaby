@@ -2,29 +2,46 @@
 //! on them: a claim the function's own values contradict is not shown; its
 //! row says "Unable to calculate …" instead.
 //!
-//! The truth is the function itself ([`super::truth`]): the compiled program,
-//! with the reference evaluator deciding where that gives 0, ±∞ or NaN
-//! (undefined, exactly 0, or a value beyond the doubles). Every tolerance is
+//! The truth is the function itself ([`super::truth`]): the compiled
+//! program's double where no intermediate left the doubles on the way
+//! (`Redo::No` and a normal result: then it is the same operations the
+//! reference does), and everywhere else the reference evaluator: undefined
+//! (NaN), exactly 0, a double, or a nonzero value beyond the doubles (whose
+//! double stand-in, ±5·10⁻³²⁴ or ±the largest double, keeps only its sign
+//! and side; claims about such values are checked on the reference's own
+//! numbers, in logarithms of their sizes where needed). Every tolerance is
 //! local, and these are all of them:
 //!
 //! * `noise(x)`: f's change to its nearest other value at least two floats
 //!   either side of x (a feature at the neighbouring float is as good as the
 //!   floats allow; in a shifted frame f only changes every so many floats),
 //!   plus a first-order bound on the rounding of each of f's operations at
-//!   x, propagated through the tree. Values closer than that can't be told
-//!   apart.
+//!   x, propagated through the tree. Where that bound can't be had (the
+//!   plain tree leaves the doubles: e^718 in 1/(1 + e^718)), the
+//!   reference's change to its neighbours and 64 ulps of the value. Beyond
+//!   the doubles, the same in the reference's arithmetic, relative, plus
+//!   2⁻⁴⁰ of the value for its own rounding (exp of a large argument): no
+//!   double other than the stand-in is within it, unless f's neighbours
+//!   differ from it by as much as it is. Values closer than the noise can't
+//!   be told apart.
+//! * A discrepancy let pass only because the noise there is unbounded
+//!   (`Analysed::forgives`) leaves what it was checked for unverified, and
+//!   the gate drops it; unbounded noise is never evidence for a claim
+//!   (`Analysed::within`).
 //! * `resolution(x)`: how far f's argument must move for f to change. Which
 //!   side of a domain boundary x is on, and whether a sign change is a
 //!   crossing, a pole or a jump, are judged at that scale.
 //! * Points within four floats (or the rounding of a periodic family's
 //!   copies) of a reported end or excluded point: the precision of that
 //!   end, not a claim about the point.
-//! * `same_shown`: a value that reads the same in the panel's 6 significant
-//!   digits is the same claim, because the panel shows exactly that text
-//!   (545843449.45 reported as 545843449 reads "545843449" either way).
-//!   Only for values (range bounds, extremum values, y-intercepts,
-//!   asymptote values); shapes (pieces, open or closed, constant or not, a
-//!   point or an interval) and positions get no such allowance.
+//! * `same_shown`: a value the panel writes the same way is the same claim
+//!   (its own formatters: whole numbers in full to 10¹⁵, others to 6
+//!   significant digits; 545843449.45 reported as 545843449 reads
+//!   "545843449" either way, 9999999999999 and 10¹³ don't). Only for values
+//!   (range bounds, extremum values, y-intercepts, asymptote values);
+//!   shapes (pieces, open or closed, constant or not, a point or an
+//!   interval) and positions get no such allowance, and a claimed 0 none at
+//!   all.
 //! * x + P is rounded and P stands for the true period to half an ulp: the
 //!   period check compares f across that reach.
 //!
@@ -34,7 +51,19 @@
 //! The checks sample where they are told to ([`gate`] picks points for the
 //! app; the sweep, `examples/sweep.rs`, many more) and can only refute: a
 //! claim that passes is not thereby proved. What sampling can't refute,
-//! [`gate`] makes unknown by rule.
+//! [`gate`] makes unknown by rule. The gate's samples ([`gate_samples`]):
+//! 0.005 apart to ±10, the integers to ±400, ten a decade out to ±10¹⁵, a
+//! 0.05 grid to ±200 for f with trig, floor, ceil, round or mod, and around
+//! each centre ([`centres_in`]: ± every part of the expression without x,
+//! evaluated, and their pairwise sums, differences, products and
+//! quotients; the [`MAX_NUMBERS`] largest numbers, at most [`MAX_CENTRES`]
+//! centres, none beyond 10¹⁵) the same grids again plus its neighbouring
+//! floats, and the floats around each reported feature (at most 256
+//! features). Where a check tests a few hundred points of many, it tests
+//! the largest deviations first. It runs the checks up to three times
+//! (dropping a claim changes what the others are checked against), within
+//! [`GATE_BUDGET`] units of work, polling cancellation as it goes; what it
+//! couldn't finish is dropped, never kept.
 
 #![allow(missing_docs)]
 
@@ -2761,7 +2790,8 @@ fn compare_beyond(a: &Analysed, x1: f64, x2: f64) -> Option<std::cmp::Ordering> 
         return None;
     }
     let d = v1.abs().ln() - v2.abs().ln();
-    if !(d.abs() > l1 + l2) {
+    // (NaN noise decides nothing either.)
+    if d.abs().partial_cmp(&(l1 + l2)) != Some(std::cmp::Ordering::Greater) {
         return undecided();
     }
     Some(if (s1 > 0.0) == (d > 0.0) {
@@ -2995,13 +3025,13 @@ fn periodic_capable(e: &Expr) -> bool {
 /// (π, e, a literal, and 1234·1234 = 1522756 or 2¹⁰ or √2 as a whole), the
 /// largest such parts first.
 fn literals(e: &Expr, unit: TrigUnit, out: &mut Vec<f64>) {
-    if !e.contains_x() && !matches!(e, Expr::Y) {
-        if let R::V(v) = reval(e, 0.0, unit)
-            && v.normal()
-        {
-            out.push(v.f());
-        }
-        // (Its parts too: the 1234 in 1234·1234.)
+    // (Its parts too, below: the 1234 in 1234·1234.)
+    if !e.contains_x()
+        && !matches!(e, Expr::Y)
+        && let R::V(v) = reval(e, 0.0, unit)
+        && v.normal()
+    {
+        out.push(v.f());
     }
     match e {
         Expr::Neg(a) | Expr::Degrees(a) => literals(a, unit, out),
@@ -3200,7 +3230,16 @@ fn unjustified(a: &Analysed, xs: &[f64], ys: &[f64], centres: &[f64]) -> u32 {
                     .iter()
                     .any(|(b, lower)| b.closed && b.value.is_finite() && !attained(b.value, *lower))
         });
+        // A piece whose different ends the panel writes alike reads as
+        // another shape: (10⁶, 10⁶ + 10⁻⁶) shown as "(1000000, 1000000)".
+        let collapsed = d.range.iter().any(|iv| {
+            iv.lo.value != iv.hi.value
+                && iv.lo.value.is_finite()
+                && iv.hi.value.is_finite()
+                && same_shown(iv.lo.value, iv.hi.value)
+        });
         if bad
+            || collapsed
             || !range_supported(a, xs, ys, centres)
             || !hole_values_attained(a, xs, ys)
             || a.take_unbounded()
@@ -3563,6 +3602,19 @@ fn range_supported(a: &Analysed, xs: &[f64], ys: &[f64], centres: &[f64]) -> boo
             inners.push((i + 1, i.checked_sub(1)));
         }
         for (j, beyond) in inners {
+            // (Which way f goes: from the nearest sample inwards with another
+            // value; beside a pole the floats make f a staircase.)
+            let mut j = j;
+            for _ in 0..64 {
+                if pts[j].1 != y0 {
+                    break;
+                }
+                let next = if j < i { j.checked_sub(1) } else { Some(j + 1) };
+                match next {
+                    Some(t) if t < n && finite(t) => j = t,
+                    _ => break,
+                }
+            }
             let dir = (y0 - pts[j].1).signum();
             if let Some(iv) = piece(y0) {
                 if dir > 0.0 && goes_on(beyond, iv.hi.value) {
