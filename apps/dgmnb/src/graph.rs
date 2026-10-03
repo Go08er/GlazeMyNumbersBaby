@@ -602,20 +602,27 @@ impl GraphPage {
             return false;
         };
         let step = var_step(&v);
-        let mut value = match change {
-            Adjust::Fraction(f) => v.min() + f * (v.max() - v.min()),
-            Adjust::Steps(n) => v.value() + n * step,
+        // On the step grid (to 15 digits, so 71 × 0.1 is 7.1), then within
+        // the range: the ends themselves needn't be on the grid.
+        let quantized = |x: f64| {
+            if v.step() > 0.0 {
+                let q = (x / v.step()).round() * v.step();
+                format!("{q:.14e}").parse().unwrap_or(q)
+            } else {
+                x
+            }
+        };
+        let value = match change {
+            Adjust::Fraction(f) => quantized(v.min() + f * (v.max() - v.min())),
+            Adjust::Steps(n) => quantized(v.value() + n * step),
             Adjust::Min => v.min(),
             Adjust::Max => v.max(),
-            Adjust::To(x) => x,
+            Adjust::To(x) => quantized(x),
         };
         if !value.is_finite() {
             return true;
         }
-        value = value.clamp(v.min(), v.max());
-        if v.step() > 0.0 {
-            value = (value / v.step()).round() * v.step();
-        }
+        let value = value.clamp(v.min(), v.max());
         self.graph.set_variable(&name, value);
         if let Some(e) = self.vars.get_mut(&name) {
             e.set_text(&format_value(value));
@@ -626,8 +633,10 @@ impl GraphPage {
     }
 
     /// Keyboard tracing, as the original's Grapher does: with the graph
-    /// focused, the arrows move the trace point (5 px, or 1 px with Shift),
-    /// following the curve it lands on.
+    /// focused, the arrows move the trace cursor (5 px, or 1 px with Shift)
+    /// and the traced point follows. The cursor keeps every step along the
+    /// arrow's axis, even one too small to move the traced point, and
+    /// moves to the curve across it.
     fn trace_key(&mut self, dx: f32, dy: f32) -> bool {
         let c = self.canvas;
         if c.w <= 1.0 || c.h <= 1.0 {
@@ -645,7 +654,8 @@ impl GraphPage {
         self.pointer = Some((x, y));
         self.update_trace();
         if let Some((_, t)) = &self.trace {
-            self.pointer = Some((c.x + t.screen_x as f32, c.y + t.screen_y as f32));
+            let (tx, ty) = (c.x + t.screen_x as f32, c.y + t.screen_y as f32);
+            self.pointer = Some(if dx != 0.0 { (x, ty) } else { (tx, y) });
         }
         true
     }
@@ -1361,7 +1371,7 @@ impl GraphPage {
             let rad = graphing::graph::trace_point_radius(self.line_width) as f32 + 2.0;
             f.cv.circle(sx, sy, rad + 1.5, t.surface);
             f.cv.circle(sx, sy, rad, color);
-            let text = graphing::trace::format_trace_value(tp.x, tp.y, vp.precision());
+            let text = tp.text();
             let line = f.layout(&text, SMALL);
             let (bw, bh) = (line.width + 18.0, 28.0);
             let mut bx = sx + 14.0;
@@ -1682,11 +1692,80 @@ mod tests {
         assert_eq!(value(&g), v.max());
         assert!(g.key(&KeyPress::named(Named::Home), &mut cx));
         assert_eq!(value(&g), v.min());
+        // R9-L-01: an end off the step grid is reached exactly, and the
+        // grid never carries the value past it.
+        g.graph.set_variable("a", 7.06);
+        for change in [Adjust::To(7.06), Adjust::Max, Adjust::Steps(1.0)] {
+            assert!(g.adjust_slider(var_slider("a"), change));
+            let v = g.graph.variable("a").unwrap();
+            assert_eq!((v.value(), v.max()), (7.06, 7.06));
+        }
+        assert!(g.adjust_slider(var_slider("a"), Adjust::Steps(-1.0)));
+        assert_eq!(value(&g), 7.0);
+        assert!(g.adjust_slider(var_slider("a"), Adjust::Steps(1.0)));
+        assert_eq!(value(&g), 7.06);
+        assert!(g.adjust_slider(var_slider("a"), Adjust::Fraction(1.0)));
+        assert_eq!(value(&g), 7.06);
 
         *cx.focus = Some(canvas_id());
         assert!(!g.trace_on);
         assert!(g.key(&KeyPress::named(Named::Right), &mut cx));
         assert!(g.trace_on && g.pointer.is_some());
+    }
+
+    /// R9-M-05: repeated arrows keep moving the traced point along a steep
+    /// line as along a shallow one, with and without Shift.
+    #[test]
+    fn keyboard_tracing_follows_steep_curves() {
+        use appcore::Named;
+        for (src, shift) in [("y=1000*x", false), ("y=1000*x", true), ("y=x", false)] {
+            let mut g = GraphPage::for_test(session::from_list(src));
+            let mut pm = tiny_skia::Pixmap::new(760, 700).unwrap();
+            let (mut text, mut icons, input) = (
+                crate::text::Text::new(),
+                ui::Icons::default(),
+                ui::Input::default(),
+            );
+            let mut scrolls = std::collections::HashMap::new();
+            let mut f = Frame::new(
+                crate::gfx::Canvas::new(pm.as_mut(), 1.0, false),
+                &mut text,
+                &mut icons,
+                crate::theme::Theme::new(false, None),
+                &input,
+                &mut scrolls,
+                true,
+            );
+            g.view(&mut f, Rect::new(0.0, 46.0, 760.0, 654.0));
+            drop(f);
+            let (mut toasts, mut focus) = (Vec::new(), Some(canvas_id()));
+            let mut cx = Cx {
+                toasts: &mut toasts,
+                clipboard: None,
+                wide: true,
+                focus: &mut focus,
+            };
+            let up = KeyPress {
+                shift,
+                ..KeyPress::named(Named::Up)
+            };
+            let mut ys = Vec::new();
+            for _ in 0..21 {
+                assert!(g.key(&up, &mut cx));
+                let (_, t) = g.trace.expect("still on the curve");
+                ys.push(t.y);
+            }
+            let vp = g.vp.unwrap();
+            let px = if shift { 1.0 } else { 5.0 };
+            assert!(ys.windows(2).all(|w| w[1] > w[0]), "{src} {shift}: {ys:?}");
+            // Up moves the cursor by `px` each time; the traced point keeps
+            // within a few pixels of it.
+            let travelled = (ys[20] - ys[0]) / vp.y_per_px();
+            assert!(
+                (travelled - 20.0 * px).abs() < 3.0,
+                "{src} {shift}: {travelled}"
+            );
+        }
     }
 
     /// R4-M-04: function analysis results (labels only, nothing focusable)

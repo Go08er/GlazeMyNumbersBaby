@@ -269,7 +269,11 @@ jobs:
             rc=0
             check "$f" || rc=$?
             if [ "$rc" = 3 ]; then
-              echo "::error::Couldn't download $(basename "$f") from $TAG to verify it; the release stays unpublished. Run the job again."
+              if [ "$draft" = true ]; then
+                echo "::error::Couldn't download $(basename "$f") from $TAG to verify it; the release stays unpublished. Run the job again."
+              else
+                echo "::error::Couldn't download $(basename "$f") from the published $TAG to verify it. Run the job again."
+              fi
               bad=1
             elif [ "$rc" != 0 ]; then
               echo "::error::$(basename "$f") is missing or incomplete on $TAG"

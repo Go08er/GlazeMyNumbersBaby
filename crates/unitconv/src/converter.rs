@@ -521,11 +521,15 @@ impl UnitConverter {
     }
 
     /// Splits `w` on `delimiter`. The text after the last delimiter is only
-    /// included when `add_remainder` is set.
+    /// included when `add_remainder` is set. An empty delimiter splits
+    /// nothing (all of `w` is the remainder).
     pub fn string_to_vector(w: &str, delimiter: &str, add_remainder: bool) -> Vec<String> {
         let mut serialized_tokens = Vec::new();
         let mut start_index = 0;
-        while let Some(pos) = w[start_index..].find(delimiter) {
+        while let Some(pos) = w[start_index..]
+            .find(delimiter)
+            .filter(|_| !delimiter.is_empty())
+        {
             let delimiter_index = start_index + pos;
             serialized_tokens.push(w[start_index..delimiter_index].to_owned());
             start_index = delimiter_index + delimiter.len();
@@ -1208,6 +1212,12 @@ mod tests {
         assert_eq!(
             UnitConverter::string_to_vector("a||b|", "||", true),
             vec!["a", "b|"]
+        );
+        // R9-L-02: an empty delimiter ends rather than looping.
+        assert!(UnitConverter::string_to_vector("a;b", "", false).is_empty());
+        assert_eq!(
+            UnitConverter::string_to_vector("a;b", "", true),
+            vec!["a;b"]
         );
     }
 

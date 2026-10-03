@@ -71,7 +71,8 @@ pub fn sin_cos(x: f64, unit: TrigUnit) -> (f64, f64) {
             let quarter = turn / 4.0;
             let q = r / quarter;
             if q == q.trunc() {
-                return match q as i64 {
+                // r can round up to a whole turn (−10⁻²⁰ mod 360 is 360).
+                return match q as i64 % 4 {
                     0 => (0.0, 1.0),
                     1 => (1.0, 0.0),
                     2 => (0.0, -1.0),
@@ -379,7 +380,7 @@ pub fn gamma(x: f64) -> f64 {
 
 /// ln Γ(x) for x > 0, computed in log space so it never overflows (Γ
 /// itself does beyond x ≈ 171.6).
-fn ln_gamma(x: f64) -> f64 {
+pub(crate) fn ln_gamma(x: f64) -> f64 {
     if x < 0.5 {
         // Reflection; sin(πx) > 0 on (0, ½).
         return (PI / (PI * x).sin()).ln() - ln_gamma(1.0 - x);
@@ -418,7 +419,7 @@ pub fn double_factorial(n: f64) -> f64 {
 
 /// True for odd integers. Every `f64` at or beyond 2^53 is an even integer
 /// (a saturating `as i64` cast would wrongly report `i64::MAX`, i.e. odd).
-fn is_odd_integer(n: f64) -> bool {
+pub(crate) fn is_odd_integer(n: f64) -> bool {
     n == n.trunc() && n.abs() < 9_007_199_254_740_992.0 && n % 2.0 != 0.0
 }
 
