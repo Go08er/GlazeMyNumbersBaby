@@ -6,7 +6,7 @@
 //! the same text. Each of those constants is named after its resource key;
 //! [`resource`] looks a key up at runtime. The few strings GMNB adds (marked
 //! below: the analysis budget, and what is shown for a feature too complex
-//! to determine in full) are its own and have no resource key.
+//! to determine) are its own and have no resource key.
 
 /// Key graph feature panel titles.
 pub const DOMAIN: &str = "Domain";
@@ -71,11 +71,6 @@ pub const KGF_HORIZONTAL_ASYMPTOTES_UNKNOWN: &str =
     "Unable to calculate the horizontal asymptotes for this function.";
 pub const KGF_OBLIQUE_ASYMPTOTES_UNKNOWN: &str =
     "Unable to calculate the oblique asymptotes for this function.";
-/// Not an upstream string: follows the values of a feature only partly
-/// determined (one horizontal asymptote established, the other side's limit
-/// not), which the original shows unqualified.
-pub const KGF_FEATURE_PARTIAL: &str =
-    "Partial result: Calculator could not calculate the rest of this feature.";
 pub const KGF_TOO_COMPLEX_FEATURES_ERROR: &str =
     "These features are too complex for Calculator to calculate:";
 

@@ -245,14 +245,6 @@ impl KeyGraphFeatures {
             return Vec::new();
         }
         let mut items = Vec::new();
-        // A feature too complex to determine in full may still have some
-        // values established (the horizontal asymptote on the one side whose
-        // limit is known): they are shown labelled partial.
-        let partial = |item: &mut KeyGraphFeaturesItem, flag: u32| {
-            if self.too_complex_features & flag != 0 && !item.is_text {
-                item.display_items.push(s::KGF_FEATURE_PARTIAL.into());
-            }
-        };
         let text = |title: &str, value: &str, none: &str| {
             if value.is_empty() {
                 KeyGraphFeaturesItem {
@@ -296,105 +288,72 @@ impl KeyGraphFeatures {
                 none
             }
         };
-        let rows = [
-            (
-                text(s::DOMAIN, &self.domain, s::KGF_DOMAIN_NONE),
-                flags::DOMAIN,
-            ),
-            (text(s::RANGE, &self.range, s::KGF_RANGE_NONE), flags::RANGE),
-            (
-                text(
-                    s::X_INTERCEPT,
-                    &self.x_intercept,
-                    none(
-                        flags::ZEROS,
-                        s::KGF_X_INTERCEPT_NONE,
-                        s::KGF_X_INTERCEPT_UNKNOWN,
-                    ),
-                ),
+        items.push(text(s::DOMAIN, &self.domain, s::KGF_DOMAIN_NONE));
+        items.push(text(s::RANGE, &self.range, s::KGF_RANGE_NONE));
+        items.push(text(
+            s::X_INTERCEPT,
+            &self.x_intercept,
+            none(
                 flags::ZEROS,
+                s::KGF_X_INTERCEPT_NONE,
+                s::KGF_X_INTERCEPT_UNKNOWN,
             ),
-            (
-                text(
-                    s::Y_INTERCEPT,
-                    &self.y_intercept,
-                    none(
-                        flags::Y_INTERCEPT,
-                        s::KGF_Y_INTERCEPT_NONE,
-                        s::KGF_Y_INTERCEPT_UNKNOWN,
-                    ),
-                ),
+        ));
+        items.push(text(
+            s::Y_INTERCEPT,
+            &self.y_intercept,
+            none(
                 flags::Y_INTERCEPT,
+                s::KGF_Y_INTERCEPT_NONE,
+                s::KGF_Y_INTERCEPT_UNKNOWN,
             ),
-            (
-                list(
-                    s::MINIMA,
-                    &self.minima,
-                    none(flags::MINIMA, s::KGF_MINIMA_NONE, s::KGF_MINIMA_UNKNOWN),
-                ),
-                flags::MINIMA,
-            ),
-            (
-                list(
-                    s::MAXIMA,
-                    &self.maxima,
-                    none(flags::MAXIMA, s::KGF_MAXIMA_NONE, s::KGF_MAXIMA_UNKNOWN),
-                ),
-                flags::MAXIMA,
-            ),
-            (
-                list(
-                    s::INFLECTION_POINTS,
-                    &self.inflection_points,
-                    none(
-                        flags::INFLECTION_POINTS,
-                        s::KGF_INFLECTION_POINTS_NONE,
-                        s::KGF_INFLECTION_POINTS_UNKNOWN,
-                    ),
-                ),
+        ));
+        items.push(list(
+            s::MINIMA,
+            &self.minima,
+            none(flags::MINIMA, s::KGF_MINIMA_NONE, s::KGF_MINIMA_UNKNOWN),
+        ));
+        items.push(list(
+            s::MAXIMA,
+            &self.maxima,
+            none(flags::MAXIMA, s::KGF_MAXIMA_NONE, s::KGF_MAXIMA_UNKNOWN),
+        ));
+        items.push(list(
+            s::INFLECTION_POINTS,
+            &self.inflection_points,
+            none(
                 flags::INFLECTION_POINTS,
+                s::KGF_INFLECTION_POINTS_NONE,
+                s::KGF_INFLECTION_POINTS_UNKNOWN,
             ),
-            (
-                list(
-                    s::VERTICAL_ASYMPTOTES,
-                    &self.vertical_asymptotes,
-                    none(
-                        flags::VERTICAL_ASYMPTOTES,
-                        s::KGF_VERTICAL_ASYMPTOTES_NONE,
-                        s::KGF_VERTICAL_ASYMPTOTES_UNKNOWN,
-                    ),
-                ),
+        ));
+        items.push(list(
+            s::VERTICAL_ASYMPTOTES,
+            &self.vertical_asymptotes,
+            none(
                 flags::VERTICAL_ASYMPTOTES,
+                s::KGF_VERTICAL_ASYMPTOTES_NONE,
+                s::KGF_VERTICAL_ASYMPTOTES_UNKNOWN,
             ),
-            (
-                list(
-                    s::HORIZONTAL_ASYMPTOTES,
-                    &self.horizontal_asymptotes,
-                    none(
-                        flags::HORIZONTAL_ASYMPTOTES,
-                        s::KGF_HORIZONTAL_ASYMPTOTES_NONE,
-                        s::KGF_HORIZONTAL_ASYMPTOTES_UNKNOWN,
-                    ),
-                ),
+        ));
+        items.push(list(
+            s::HORIZONTAL_ASYMPTOTES,
+            &self.horizontal_asymptotes,
+            none(
                 flags::HORIZONTAL_ASYMPTOTES,
+                s::KGF_HORIZONTAL_ASYMPTOTES_NONE,
+                s::KGF_HORIZONTAL_ASYMPTOTES_UNKNOWN,
             ),
-            (
-                list(
-                    s::OBLIQUE_ASYMPTOTES,
-                    &self.oblique_asymptotes,
-                    none(
-                        flags::OBLIQUE_ASYMPTOTES,
-                        s::KGF_OBLIQUE_ASYMPTOTES_NONE,
-                        s::KGF_OBLIQUE_ASYMPTOTES_UNKNOWN,
-                    ),
-                ),
+        ));
+        items.push(list(
+            s::OBLIQUE_ASYMPTOTES,
+            &self.oblique_asymptotes,
+            none(
                 flags::OBLIQUE_ASYMPTOTES,
+                s::KGF_OBLIQUE_ASYMPTOTES_NONE,
+                s::KGF_OBLIQUE_ASYMPTOTES_UNKNOWN,
             ),
-        ];
-        for (mut item, flag) in rows {
-            partial(&mut item, flag);
-            items.push(item);
-        }
+        ));
         let parity = match self.parity {
             Parity::Odd => s::KGF_PARITY_ODD,
             Parity::Even => s::KGF_PARITY_EVEN,
@@ -453,8 +412,6 @@ impl KeyGraphFeatures {
         if mono.grid_items.is_empty() {
             mono.display_items.push(s::KGF_MONOTONICITY_ERROR.into());
             mono.is_text = true;
-        } else {
-            partial(&mut mono, flags::MONOTONE_INTERVALS);
         }
         items.push(mono);
         if self.too_complex_features != 0 {

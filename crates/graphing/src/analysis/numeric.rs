@@ -36,7 +36,8 @@ pub(crate) fn brent(
             fb = fc;
             fc = fa;
         }
-        let tol = 2.0 * f64::EPSILON * b.abs() + 1e-300;
+        // Down to a float or two: a root at 10⁹ is found to 10⁻⁷, not 4·10⁻⁷.
+        let tol = 0.5 * f64::EPSILON * b.abs() + 1e-300;
         let m = 0.5 * (c - b);
         if m.abs() <= tol || fb == 0.0 {
             return b;
@@ -226,6 +227,22 @@ pub(crate) fn sequence_limit_noisy(v: &[f64], noise_in: &[f64]) -> (SeqLimit, f6
                     return (l, 0.0);
                 }
             }
+            // An undefined value on the way (another pole crossed before
+            // 10⁶ on the way out from 1/(√(x/10⁶) − 1)): the limit is about
+            // the last finite run, if there is one beyond the trailing
+            // undefined values (the point itself, reached by rounding).
+            let mut end = v.len();
+            while end > 0 && v[end - 1].is_nan() {
+                end -= 1;
+            }
+            let from = v[..end]
+                .iter()
+                .rposition(|x| !x.is_finite())
+                .map_or(0, |p| p + 1);
+            if from > 0 && end - from >= 4 {
+                let rest = noise_in.get(from..end).unwrap_or(&[]);
+                return sequence_limit_noisy(&v[from..end], rest);
+            }
             if i < 4 {
                 return (SeqLimit::Unknown, NONE);
             }
@@ -373,7 +390,18 @@ pub(crate) fn limit_at_infinity_beyond_err(
 /// Whether |f| diverges approaching `c` from the side `side` (±1).
 /// Returns the sign of the divergence.
 pub(crate) fn diverges_near(f: &mut dyn FnMut(f64) -> f64, c: f64, side: f64) -> Option<f64> {
-    let base = c.abs().max(1.0);
+    diverges_within(f, c, side, f64::INFINITY)
+}
+
+/// [`diverges_near`], sampling no further than `reach` from `c` (the width
+/// of the piece it ends: (x − 1000)/ln(x − 1000) has a pole at 1001).
+pub(crate) fn diverges_within(
+    f: &mut dyn FnMut(f64) -> f64,
+    c: f64,
+    side: f64,
+    reach: f64,
+) -> Option<f64> {
+    let base = c.abs().max(1.0).min(reach);
     let kmax = if c == 0.0 { 150 } else { 13 };
     let step = if c == 0.0 { 5 } else { 1 };
     let mut xs = Vec::new();
@@ -402,8 +430,9 @@ pub(crate) fn one_sided_limit_err(
     f: &mut dyn FnMut(f64) -> f64,
     c: f64,
     side: f64,
+    reach: f64,
 ) -> (SeqLimit, f64, bool) {
-    if let Some(s) = diverges_near(f, c, side) {
+    if let Some(s) = diverges_within(f, c, side, reach) {
         let l = if s > 0.0 {
             SeqLimit::PosInf
         } else {
@@ -411,10 +440,11 @@ pub(crate) fn one_sided_limit_err(
         };
         return (l, 0.0, false);
     }
-    let base = c.abs().max(1.0);
+    let base = c.abs().max(1.0).min(reach);
     let kmax = if c == 0.0 { 40 } else { 12 };
     let xs: Vec<f64> = (1..=kmax)
         .map(|k| c + side * base * 10f64.powi(-k))
+        .take_while(|&x| x != c)
         .collect();
     let (v, noise) = sample(f, &xs);
     let (l, err) = sequence_limit_noisy(&v, &noise);

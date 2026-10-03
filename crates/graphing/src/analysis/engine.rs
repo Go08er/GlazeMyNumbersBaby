@@ -75,6 +75,12 @@ struct Fun<'a> {
     f: Program,
     df: Option<Program>,
     d2f: Option<Program>,
+    /// Whether f is built with abs, max, min, floor, … of x: only then can
+    /// it equal a constant or a line on a stretch without being that
+    /// everywhere (a tail that underflows onto a line is not that line).
+    piecewise: bool,
+    /// Expressions whose zeros are kinks of f, where f′ may jump.
+    kinks: Vec<Program>,
     /// Instructions executed so far.
     work: Cell<u64>,
     budget: u64,
@@ -180,15 +186,366 @@ pub(crate) fn analyze_expr(
     opts: &CompileOptions<'_>,
     cancel: Option<&AtomicBool>,
 ) -> Result<KeyGraphFeatures, Stop> {
+    // f(x) = g(s·x + t), every x inside the same affine form up to scale:
+    // analyse g around its own origin and map what it finds back, so that
+    // (x − 10⁶)² + 1, sin(x − 1000)/(x − 1000) or (x/0.001)³ − 3(x/0.001)
+    // get the same search, grid and tolerances as x² + 1, sin(x)/x, x³ − 3x.
+    if let Some((g, a, b)) = affine_argument(expr, opts) {
+        let kg = analyze_with_budget(&g, opts, cancel, WORK_BUDGET)?;
+        let fun = make_fun(expr, opts, cancel, WORK_BUDGET)?;
+        let k = map_affine(kg, &fun, a, b);
+        if let Some(stop) = fun.stopped() {
+            return Err(stop);
+        }
+        return Ok(k);
+    }
     analyze_with_budget(expr, opts, cancel, WORK_BUDGET)
 }
 
-fn analyze_with_budget(
+/// `expr` as g(a·x + b) when every x in it sits in an affine form with one
+/// common root −b/a, other than x itself: g (in x) and (a, b). Not when the
+/// root is beyond the search (its features couldn't be told apart in
+/// floating point there), nor for a periodic g so far out that b modulo
+/// the period is lost.
+fn affine_argument(expr: &Expr, opts: &CompileOptions<'_>) -> Option<(Expr, f64, f64)> {
+    let num = |e: &Expr| Program::compile(e, opts).ok()?.as_constant();
+    let affine = |e: &Expr| -> Option<(f64, f64)> {
+        let (c, r) = linear_in(e, &|n| matches!(n, Expr::X))?;
+        let (a, b) = (num(&c)?, num(&r)?);
+        (a != 0.0 && a.is_finite() && b.is_finite()).then_some((a, b))
+    };
+    if !expr.contains_x() || affine(expr).is_some() {
+        return None;
+    }
+    fn rewrite(
+        e: &Expr,
+        affine: &dyn Fn(&Expr) -> Option<(f64, f64)>,
+        base: &mut Option<(f64, f64)>,
+    ) -> Option<Expr> {
+        if !e.contains_x() {
+            return Some(e.clone());
+        }
+        if let Some((ai, bi)) = affine(e) {
+            let (a, b) = *base.get_or_insert((ai, bi));
+            let (r, ri) = (-b / a, -bi / ai);
+            if (r - ri).abs() > 1e-13 * r.abs().max(ri.abs()) {
+                return None;
+            }
+            let k = ai / a;
+            return Some(if k == 1.0 {
+                Expr::X
+            } else {
+                Expr::bin(BinOp::Mul, Expr::Num(k), Expr::X)
+            });
+        }
+        Some(match e {
+            Expr::Neg(x) => Expr::Neg(Box::new(rewrite(x, affine, base)?)),
+            Expr::Degrees(x) => Expr::Degrees(Box::new(rewrite(x, affine, base)?)),
+            Expr::Bin(op, x, y) => {
+                Expr::bin(*op, rewrite(x, affine, base)?, rewrite(y, affine, base)?)
+            }
+            Expr::Call(f, args) => Expr::Call(
+                *f,
+                args.iter()
+                    .map(|x| rewrite(x, affine, base))
+                    .collect::<Option<Vec<_>>>()?,
+            ),
+            _ => e.clone(),
+        })
+    }
+    let mut base = None;
+    let g = rewrite(expr, &affine, &mut base)?;
+    let (a, b) = base?;
+    let r = -b / a;
+    if (r == 0.0 && a.abs() == 1.0) || r.abs() > REACH {
+        return None;
+    }
+    // A periodic g with b far beyond its period: b mod P is rounding.
+    if let Per::Periodic(pg) = per(&g, opts)
+        && b.abs() > 1e9 * pg
+    {
+        return None;
+    }
+    Some((g, a, b))
+}
+
+/// The analysis of g mapped to f(x) = g(a·x + b): positions x = (u − b)/a,
+/// directions and sides flipped for a < 0, oblique asymptotes rewritten in
+/// x; values, the range and horizontal asymptotes unchanged. The
+/// y-intercept and parity are f's own.
+fn map_affine(kg: KeyGraphFeatures, fun: &Fun, a: f64, b: f64) -> KeyGraphFeatures {
+    let flip = a < 0.0;
+    let mx = |u: f64| (u - b) / a;
+    let d = &kg.data;
+    let period = d.period.map(|p| p / a.abs());
+    let fam = |f: &Family| match f.period {
+        Some(pu) => {
+            let pf = pu / a.abs();
+            Family {
+                x: normalize(mx(f.x), pf),
+                period: Some(pf),
+            }
+        }
+        None => Family::single(mx(f.x)),
+    };
+    let bound = |bd: Bound| Bound {
+        value: mx(bd.value),
+        closed: bd.closed,
+    };
+    let iv = |i: &Interval| {
+        let (lo, hi) = (bound(i.lo), bound(i.hi));
+        if flip {
+            Interval { lo: hi, hi: lo }
+        } else {
+            Interval { lo, hi }
+        }
+    };
+    // Intervals within one period, moved together next to 0.
+    let ivs = |v: &[Interval]| -> Vec<Interval> {
+        let mut out: Vec<Interval> = v.iter().map(iv).collect();
+        if flip {
+            out.reverse();
+        }
+        if let (Some(p), Some(first)) = (period, out.first())
+            && first.lo.value.is_finite()
+        {
+            let shift = (first.lo.value / p).floor() * p;
+            for i in &mut out {
+                i.lo.value -= shift;
+                i.hi.value -= shift;
+            }
+        }
+        out
+    };
+    let points = |v: &[(Family, f64)]| -> Vec<(Family, f64)> {
+        let mut out: Vec<(Family, f64)> = v.iter().map(|(f, y)| (fam(f), *y)).collect();
+        out.sort_by(|p, q| p.0.x.total_cmp(&q.0.x));
+        out
+    };
+    let fams = |v: &[Family]| -> Vec<Family> {
+        let mut out: Vec<Family> = v.iter().map(fam).collect();
+        out.sort_by(|p, q| p.x.total_cmp(&q.x));
+        out
+    };
+    let side = |s: AsymptoteSide| match (flip, s) {
+        (true, AsymptoteSide::PositiveInfinity) => AsymptoteSide::NegativeInfinity,
+        (true, AsymptoteSide::NegativeInfinity) => AsymptoteSide::PositiveInfinity,
+        (_, s) => s,
+    };
+    let mut mono: Vec<(Interval, Monotonicity)> = d
+        .monotonicity
+        .iter()
+        .map(|(i, m)| {
+            let m = match (flip, *m) {
+                (true, Monotonicity::Increasing) => Monotonicity::Decreasing,
+                (true, Monotonicity::Decreasing) => Monotonicity::Increasing,
+                (_, m) => m,
+            };
+            (iv(i), m)
+        })
+        .collect();
+    if flip {
+        mono.reverse();
+    }
+    if let (Some(p), Some(first)) = (period, mono.first())
+        && first.0.lo.value.is_finite()
+    {
+        let shift = (first.0.lo.value / p).floor() * p;
+        for (i, _) in &mut mono {
+            i.lo.value -= shift;
+            i.hi.value -= shift;
+        }
+    }
+    let data = AnalysisData {
+        period,
+        domain: ivs(&d.domain),
+        excluded: fams(&d.excluded),
+        range: d.range.clone(),
+        zeros: fams(&d.zeros),
+        y_intercept: None,
+        minima: points(&d.minima),
+        maxima: points(&d.maxima),
+        inflection_points: points(&d.inflection_points),
+        vertical_asymptotes: fams(&d.vertical_asymptotes),
+        horizontal_asymptotes: d
+            .horizontal_asymptotes
+            .iter()
+            .map(|&(v, s)| (v, side(s)))
+            .collect(),
+        oblique_asymptotes: d
+            .oblique_asymptotes
+            .iter()
+            .map(|&(m, c, s)| (clean(m * a, 1e-15 * (m * a).abs()), m * b + c, side(s)))
+            .collect(),
+        monotonicity: mono,
+    };
+    let mut k = KeyGraphFeatures {
+        range: kg.range.clone(),
+        too_complex_features: kg.too_complex_features,
+        data,
+        ..Default::default()
+    };
+    // y-intercept: f(0), where f is defined.
+    let in_domain = |x: f64| {
+        let dd = &k.data;
+        let inside = match period {
+            Some(p) => {
+                let w = dd.domain.first().map_or(0.0, |i| i.lo.value);
+                let q = if w.is_finite() {
+                    w + (x - w).rem_euclid(p)
+                } else {
+                    x
+                };
+                dd.domain.iter().any(|i| i.contains(q))
+            }
+            None => dd.domain.iter().any(|i| i.contains(x)),
+        };
+        inside
+            && !dd
+                .excluded
+                .iter()
+                .chain(&dd.vertical_asymptotes)
+                .any(|f| f.contains(x, 1e-12))
+    };
+    let y0 = fun.f(0.0);
+    if y0.is_finite() && in_domain(0.0) && k.too_complex_features & flags::Y_INTERCEPT == 0 {
+        k.data.y_intercept = Some(clean(y0, value_noise(fun, 0.0, y0)));
+    }
+    // Parity: f's own, tested also around the root of the form and at
+    // what was found, where a shifted f lives (e^(x − 10⁶) is 0 near 0).
+    let r = -b / a;
+    let mut extra: Vec<f64> = [0.25, 0.5, 1.0, 2.0, 5.0]
+        .iter()
+        .flat_map(|&d| [r + d / a.abs(), r - d / a.abs()])
+        .collect();
+    extra.push(r);
+    extra.extend(k.data.zeros.iter().map(|z| z.x));
+    extra.extend(
+        k.data
+            .minima
+            .iter()
+            .chain(&k.data.maxima)
+            .chain(&k.data.inflection_points)
+            .map(|m| m.0.x),
+    );
+    k.parity = parity(fun, typical_scale(fun), 0.0, &extra);
+    if kg.parity == Parity::Unknown && matches!(k.parity, Parity::Even | Parity::Odd) {
+        k.parity = Parity::Unknown;
+    }
+    k.periodicity_direction = kg.periodicity_direction;
+    if let Some(p) = period {
+        k.periodicity_expression = format_number(p);
+    }
+    render(&mut k);
+    k
+}
+
+/// The display strings of `k` from its data (as the analyses write them).
+fn render(k: &mut KeyGraphFeatures) {
+    let d = &k.data;
+    let too = k.too_complex_features;
+    let known = |f: u32| too & f == 0;
+    match d.period {
+        None => {
+            if known(flags::DOMAIN) {
+                k.domain = format_set("x", &d.domain);
+            }
+            if known(flags::ZEROS) {
+                k.x_intercept = d
+                    .zeros
+                    .iter()
+                    .map(|z| format_number(z.x))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+            }
+            let pts = |v: &[(Family, f64)]| -> Vec<String> {
+                v.iter().map(|(f, y)| fmt_point(f.x, *y)).collect()
+            };
+            k.minima = pts(&d.minima);
+            k.maxima = pts(&d.maxima);
+            k.inflection_points = pts(&d.inflection_points);
+            k.vertical_asymptotes = d
+                .vertical_asymptotes
+                .iter()
+                .map(|f| format!("x = {}", format_number(f.x)))
+                .collect();
+            k.monotonicity = d
+                .monotonicity
+                .iter()
+                .map(|(iv, m)| (snap_interval(*iv, 1e-9).format(), *m))
+                .collect();
+        }
+        Some(p) => {
+            if known(flags::DOMAIN) {
+                let covered: f64 = d.domain.iter().map(|i| i.hi.value - i.lo.value).sum();
+                let full_cover = (covered - p).abs() <= 1e-9 * p;
+                k.domain = if full_cover && d.excluded.is_empty() {
+                    format_set("x", &[Interval::all()])
+                } else if full_cover {
+                    let reps: Vec<f64> = d.excluded.iter().map(|f| f.x).collect();
+                    let per = d.excluded.first().and_then(|f| f.period).unwrap_or(p);
+                    format_periodic_set("x", &[], &reps, per)
+                } else {
+                    format_periodic_set("x", &d.domain, &[], p)
+                };
+            }
+            if known(flags::ZEROS) && !d.zeros.is_empty() {
+                k.x_intercept = format!(
+                    "{}, k ∈ ℤ",
+                    d.zeros
+                        .iter()
+                        .map(fmt_family)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            let pts = |v: &[(Family, f64)]| -> Vec<String> {
+                v.iter()
+                    .map(|(f, y)| format!("({}, {}), k ∈ ℤ", fmt_family(f), fmt_y(*y)))
+                    .collect()
+            };
+            k.minima = pts(&d.minima);
+            k.maxima = pts(&d.maxima);
+            k.inflection_points = pts(&d.inflection_points);
+            k.vertical_asymptotes = d
+                .vertical_asymptotes
+                .iter()
+                .map(|f| format!("x = {}, k ∈ ℤ", fmt_family(f)))
+                .collect();
+            k.monotonicity = d
+                .monotonicity
+                .iter()
+                .map(|(iv, m)| {
+                    (
+                        format!("{}, k ∈ ℤ", snap_interval(*iv, 1e-9).format_periodic(p)),
+                        *m,
+                    )
+                })
+                .collect();
+        }
+    }
+    if let Some(y) = d.y_intercept {
+        k.y_intercept = fmt_y(y);
+    }
+    k.horizontal_asymptotes = d
+        .horizontal_asymptotes
+        .iter()
+        .map(|(v, _)| format!("y = {}", fmt_y(*v)))
+        .collect();
+    k.oblique_asymptotes = d
+        .oblique_asymptotes
+        .iter()
+        .map(|&(m, c, _)| format_line(m, c))
+        .collect();
+}
+
+/// The function `expr` evaluates, with its derivatives, under a budget.
+fn make_fun<'a>(
     expr: &Expr,
     opts: &CompileOptions<'_>,
-    cancel: Option<&AtomicBool>,
+    cancel: Option<&'a AtomicBool>,
     budget: u64,
-) -> Result<KeyGraphFeatures, Stop> {
+) -> Result<Fun<'a>, Stop> {
     let f = Program::compile(expr, opts).map_err(|_| AnalysisError::AnalysisCouldNotBePerformed)?;
     let unit = opts.trig_unit;
     let d1 = derivative_bounded(expr, unit, MAX_DERIVATIVE_NODES);
@@ -197,15 +554,42 @@ fn analyze_with_budget(
         .and_then(|d| derivative_bounded(d, unit, MAX_DERIVATIVE_NODES));
     let df = d1.and_then(|e| Program::compile(&e, opts).ok());
     let d2f = d2.and_then(|e| Program::compile(&e, opts).ok());
-    let fun = Fun {
+    let piecewise = expr.any(&|e| {
+        matches!(
+            e,
+            Expr::Call(
+                Func::Abs
+                    | Func::Floor
+                    | Func::Ceil
+                    | Func::Round
+                    | Func::Sign
+                    | Func::Mod
+                    | Func::Min
+                    | Func::Max,
+                args
+            ) if args.iter().any(|a| a.contains_x())
+        )
+    });
+    Ok(Fun {
         f,
         df,
         d2f,
+        piecewise,
+        kinks: kink_programs(expr, opts),
         work: Cell::new(0),
         budget,
         cancel,
         cancelled: Cell::new(false),
-    };
+    })
+}
+
+fn analyze_with_budget(
+    expr: &Expr,
+    opts: &CompileOptions<'_>,
+    cancel: Option<&AtomicBool>,
+    budget: u64,
+) -> Result<KeyGraphFeatures, Stop> {
+    let fun = make_fun(expr, opts, cancel, budget)?;
 
     if let Some(c) = fun.f.as_constant() {
         return if c.is_finite() {
@@ -284,7 +668,22 @@ fn analyze_with_budget(
                 | flags::INFLECTION_POINTS,
         );
     }
-    k.parity = parity(&fun, scale, beyond.extent);
+    let found: Vec<f64> = k
+        .data
+        .zeros
+        .iter()
+        .map(|z| z.x)
+        .chain(
+            k.data
+                .minima
+                .iter()
+                .chain(&k.data.maxima)
+                .chain(&k.data.inflection_points)
+                .map(|m| m.0.x),
+        )
+        .chain(k.data.vertical_asymptotes.iter().map(|v| v.x))
+        .collect();
+    k.parity = parity(&fun, scale, beyond.extent, &found);
     // Something unknown beyond the search could break a symmetry seen
     // inside it.
     if beyond.unknown != 0 && matches!(k.parity, Parity::Even | Parity::Odd) {
@@ -300,6 +699,11 @@ fn analyze_with_budget(
         }
         None => k.periodicity_direction = Periodicity::NotPeriodic,
     }
+    // A feature that couldn't be determined in full keeps none of its
+    // values: the ones found (the asymptote on one side, the extrema near
+    // the origin of sin(x)/x) would read as all there is.
+    let unknown = k.too_complex_features;
+    forget(&mut k, unknown);
     Ok(k)
 }
 
@@ -340,6 +744,10 @@ fn forget(k: &mut KeyGraphFeatures, which: u32) {
     if which & flags::MONOTONE_INTERVALS != 0 {
         k.monotonicity.clear();
         d.monotonicity.clear();
+    }
+    if which & flags::Y_INTERCEPT != 0 {
+        k.y_intercept.clear();
+        d.y_intercept = None;
     }
     if which & flags::HORIZONTAL_ASYMPTOTES != 0 {
         k.horizontal_asymptotes.clear();
@@ -414,8 +822,11 @@ fn clean(v: f64, noise: f64) -> f64 {
     if v.abs() <= noise {
         return 0.0;
     }
-    let s = snap(v, 1e-9);
-    if s != 0.0 && (s - v).abs() <= (1e-9 * v.abs()).max(noise).min(1e-6 * v.abs()) {
+    // Within the value's noise (a limit known to 10⁻⁸ is 3, not
+    // 3.0000000051), or 10⁻⁹ of it for display; never more than 10⁻⁶.
+    let tol = (noise / v.abs()).clamp(1e-9, 1e-6);
+    let s = snap(v, tol);
+    if s != 0.0 && (s - v).abs() <= tol * v.abs() {
         s
     } else {
         v
@@ -505,6 +916,51 @@ fn generators(e: &Expr, out: &mut Vec<Expr>) {
         }
         _ => {}
     }
+}
+
+/// Sub-expressions whose zeros are kinks of f, where f′ may jump: the
+/// arguments of abs, and differences of the arguments of max and min.
+fn kink_exprs(e: &Expr, out: &mut Vec<Expr>) {
+    let push = |g: Expr, out: &mut Vec<Expr>| {
+        if g.contains_x() && !out.contains(&g) {
+            out.push(g);
+        }
+    };
+    match e {
+        Expr::Bin(_, a, b) => {
+            kink_exprs(a, out);
+            kink_exprs(b, out);
+        }
+        Expr::Neg(a) | Expr::Degrees(a) => kink_exprs(a, out),
+        Expr::Call(f, args) => {
+            match f {
+                Func::Abs => push(args[0].clone(), out),
+                Func::Max | Func::Min => {
+                    let n = args.len().min(6);
+                    for i in 0..n {
+                        for j in i + 1..n {
+                            push(Expr::bin(BinOp::Sub, args[i].clone(), args[j].clone()), out);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            for a in args {
+                kink_exprs(a, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn kink_programs(expr: &Expr, opts: &CompileOptions<'_>) -> Vec<Program> {
+    let mut kinks = Vec::new();
+    kink_exprs(expr, &mut kinks);
+    kinks
+        .iter()
+        .filter_map(|g| Program::compile(g, opts).ok())
+        .filter(|p| p.as_constant().is_none())
+        .collect()
 }
 
 fn generator_programs(expr: &Expr, opts: &CompileOptions<'_>) -> Vec<Program> {
@@ -1242,7 +1698,7 @@ fn detect_period(expr: &Expr, fun: &Fun, opts: &CompileOptions<'_>, scale: f64) 
 /// Even, odd or neither, from samples out to the base window and, where
 /// features were found beyond it, out to them too (1/(x³ − 10³⁰) looks
 /// even until x nears 10¹⁰).
-fn parity(fun: &Fun, scale: f64, extent: f64) -> Parity {
+fn parity(fun: &Fun, scale: f64, extent: f64, extra: &[f64]) -> Parity {
     let mut even = true;
     let mut odd = true;
     let mut any = false;
@@ -1254,7 +1710,13 @@ fn parity(fun: &Fun, scale: f64, extent: f64) -> Parity {
         .chain([0.3, 0.5, 0.7, 0.9, 1.3, 2.0].map(|t| t * extent))
         .filter(|_| extent > WINDOW)
         .map(|x| (x, false));
-    for (x, near) in near.chain(far) {
+    // And where something was found: e^(−(x − 1000)²) is 0 at every point
+    // above but 1 at 1000 and 0 at −1000.
+    let found = extra
+        .iter()
+        .filter(|x| x.is_finite() && **x != 0.0)
+        .map(|&x| (x.abs(), false));
+    for (x, near) in near.chain(far).chain(found) {
         let (a, b) = (fun.f(x), fun.f(-x));
         match (a.is_finite(), b.is_finite()) {
             (false, false) => continue,
@@ -1872,13 +2334,126 @@ fn sign_changes(
     (out, erratic)
 }
 
+/// Points closing in on `e` from the side `side` (±1) by decades, from
+/// `gap` (the distance to the nearest sample there), while f stays well
+/// conditioned: its change over a step a thousandth of the distance to `e`
+/// must agree with f′ and f″ there. Cancellation near a removable
+/// singularity ((1 − cos x)/x² at 0) fails that and ends the ladder, as
+/// does a flat or underflowed stretch, where there is nothing to find.
+fn ladder(fun: &Fun, e: f64, side: f64, gap: f64) -> Vec<(f64, f64)> {
+    let mut out = Vec::new();
+    if gap.is_nan() || gap <= 0.0 || gap.is_infinite() {
+        return out;
+    }
+    for k in 1..=12 {
+        let d = gap * 10f64.powi(-k);
+        let x = e + side * d;
+        let x2 = x + side * 1e-3 * d;
+        if (x - e) * side <= 0.0 || (x2 - x).abs() < 64.0 * f64::EPSILON * x.abs() {
+            break;
+        }
+        let (v, v2) = (fun.f(x), fun.f(x2));
+        if !v.is_finite() || !v2.is_finite() {
+            break;
+        }
+        let (d1, d2) = (fun.df(x), fun.d2f(x));
+        if v == v2 && d1 == 0.0 {
+            break;
+        }
+        let dx = x2 - x;
+        let lin = d1 * dx;
+        let quad = if d2.is_finite() {
+            0.5 * d2 * dx * dx
+        } else {
+            0.0
+        };
+        let tol = 1e-2 * (lin.abs() + quad.abs()) + 64.0 * f64::EPSILON * (v.abs() + v2.abs());
+        if !lin.is_finite() || (v2 - v - lin - quad).abs() > tol {
+            break;
+        }
+        out.push((x, v));
+    }
+    out
+}
+
+/// The piece's samples, with ladders added closing in on its finite ends
+/// and on both sides of each kink inside it, so that what lies between
+/// them and the nearest grid sample is seen: the maximum of √x − 1000x at
+/// 2.5·10⁻⁷, the minima of x² − 0.001|x| at ±0.0005.
+fn refined_samples(fun: &Fun, p: &Piece, kinks: &[f64]) -> Vec<(f64, f64)> {
+    let s = &p.samples;
+    let first_after = |c: f64| s.iter().find(|q| q.0 > c).map(|q| q.0);
+    let last_before = |c: f64| s.iter().rev().find(|q| q.0 < c).map(|q| q.0);
+    let mut extra: Vec<(f64, f64)> = Vec::new();
+    if p.lo.value.is_finite()
+        && let Some(a) = first_after(p.lo.value)
+    {
+        extra.extend(ladder(fun, p.lo.value, 1.0, a - p.lo.value));
+    }
+    if p.hi.value.is_finite()
+        && let Some(b) = last_before(p.hi.value)
+    {
+        extra.extend(ladder(fun, p.hi.value, -1.0, p.hi.value - b));
+    }
+    for &c in kinks {
+        let v = fun.f(c);
+        if v.is_finite() {
+            extra.push((c, v));
+        }
+        if let Some(b) = last_before(c) {
+            extra.extend(ladder(fun, c, -1.0, c - b));
+        }
+        if let Some(a) = first_after(c) {
+            extra.extend(ladder(fun, c, 1.0, a - c));
+        }
+    }
+    if extra.is_empty() {
+        return s.clone();
+    }
+    let mut all = s.clone();
+    all.extend(
+        extra
+            .into_iter()
+            .filter(|q| q.0 > p.lo.value && q.0 < p.hi.value),
+    );
+    all.sort_by(|a, b| a.0.total_cmp(&b.0));
+    all.dedup_by(|a, b| a.0 == b.0);
+    all
+}
+
+/// `xs`/`vs` with the points `at` (strictly inside, not already there)
+/// merged in, valued by `g`.
+fn merged(xs: &[f64], vs: &[f64], at: &[f64], g: &dyn Fn(f64) -> f64) -> (Vec<f64>, Vec<f64>) {
+    let (Some(&lo), Some(&hi)) = (xs.first(), xs.last()) else {
+        return (xs.to_vec(), vs.to_vec());
+    };
+    let mut pts: Vec<(f64, f64)> = xs.iter().copied().zip(vs.iter().copied()).collect();
+    for &c in at {
+        if c > lo && c < hi && xs.binary_search_by(|x| x.total_cmp(&c)).is_err() {
+            pts.push((c, g(c)));
+        }
+    }
+    pts.sort_by(|a, b| a.0.total_cmp(&b.0));
+    pts.dedup_by(|a, b| a.0 == b.0);
+    pts.into_iter().unzip()
+}
+
 fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> PieceFeatures {
     let mut out = PieceFeatures::default();
     if p.samples.is_empty() {
         return out;
     }
-    let xs: Vec<f64> = p.samples.iter().map(|s| s.0).collect();
-    let fs: Vec<f64> = p.samples.iter().map(|s| s.1).collect();
+    let grid: Vec<f64> = p.samples.iter().map(|s| s.0).collect();
+    let mut kinks = Vec::new();
+    for g in &fun.kinks {
+        program_zeros(fun, g, &grid, &mut kinks);
+    }
+    kinks.retain(|&c| c > p.lo.value && c < p.hi.value);
+    dedup_sorted(&mut kinks);
+    kinks.truncate(4 * MAX_LISTED);
+    let samples = refined_samples(fun, p, &kinks);
+    let xs: Vec<f64> = samples.iter().map(|s| s.0).collect();
+    let fs: Vec<f64> = samples.iter().map(|s| s.1).collect();
     let mut f = |x: f64| fun.f(x);
 
     // Zeros. A run of several exact-zero samples is a stretch where f
@@ -1905,7 +2480,171 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
     if inner_zero_run {
         out.zero_interval = true;
     }
-    let (zero_crossings, erratic0) = sign_changes(&xs, &fs, &mut f, 0.0);
+
+    // Critical points and inflections. Each order is searched through the
+    // turning points of the next: f″'s sign changes are where f′ turns, so
+    // f′ is sampled there too (x³/3 − 0.00015x² + 2·10⁻⁸x turns at 10⁻⁴
+    // and 2·10⁻⁴, both between two grid samples, either side of its
+    // inflection), and f is sampled at its extrema before its zeros are
+    // searched ((x − 0.0001)(x − 0.0002) is positive at every grid sample).
+    let interior: Vec<usize> = (0..xs.len())
+        .filter(|&i| xs[i] > p.lo.value && xs[i] < p.hi.value)
+        .collect();
+    let mut ixs: Vec<f64> = interior.iter().map(|&i| xs[i]).collect();
+    let mut ifs: Vec<f64> = interior.iter().map(|&i| fs[i]).collect();
+    let mut crit: Vec<(f64, i8, i8)> = Vec::new();
+    let mut crit_v: Vec<(f64, f64)> = Vec::new();
+    // f′ at the interior samples, kept for the monotonicity pass below.
+    let mut dfs_kept: Option<Vec<f64>> = None;
+    if !ixs.is_empty() {
+        let dfs0 = fun.batch(1, &ixs);
+        let d2s = fun.batch(2, &ixs);
+        // Rounding noise in f″ (e.g. for a function that is linear in
+        // disguise) must not count as concavity changes: zero out values
+        // below a per-sample noise floor relative to f′. Not to f: an
+        // offset (x³ + 10⁶) changes nothing about how f bends.
+        let d2floor = |x: f64, d1: f64| {
+            let x1 = 1.0 + x.abs();
+            1e-9 * d1.abs() / x1 + 1e-14 * scale / (x1 * x1)
+        };
+        let d2c: Vec<f64> = d2s
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| {
+                if v.abs() <= d2floor(ixs[i], dfs0[i]) {
+                    0.0
+                } else {
+                    v
+                }
+            })
+            .collect();
+        let mut d2 = |x: f64| fun.d2f(x);
+        let (infl_c, erratic2) = sign_changes(&ixs, &d2c, &mut d2, 0.0);
+        out.erratic |= erratic2;
+        let mut infl_xs: Vec<f64> = infl_c.iter().map(|c| c.0).collect();
+
+        // Neighbours are grid samples only: the ladders closing in on a pole
+        // (x − 1000 + 1/(x − 1000)) have huge f′ that says nothing about
+        // the noise of f′ a unit away.
+        let (base_xs, base_fs) = (ixs.clone(), ifs.clone());
+        let mut dfs = dfs0.clone();
+        for round in 0..2 {
+            let (mx, mf) = merged(&base_xs, &base_fs, &infl_xs, &|x| fun.f(x));
+            dfs = if mx.len() == base_xs.len() {
+                dfs0.clone()
+            } else {
+                fun.batch(1, &mx)
+            };
+            (ixs, ifs) = (mx, mf);
+            // Rounding noise in f′ is judged locally, against f′ and f
+            // nearby: a floor set by f′'s size over the whole grid (10³⁰ far
+            // out) would erase genuine sign changes where f′ is small, as
+            // between roots of ((x − 2·10⁶)(x − 2·10⁶ − 1))² a unit apart.
+            const W: usize = 32;
+            let on_grid: Vec<bool> = ixs
+                .iter()
+                .map(|x| grid.binary_search_by(|g| g.total_cmp(x)).is_ok())
+                .collect();
+            let biggest = |v: &[f64], a: usize, b: usize, i: usize| {
+                (a..b)
+                    .filter(|&j| j == i || on_grid[j])
+                    .map(|j| v[j])
+                    .filter(|v| v.is_finite())
+                    .fold(0.0f64, |m, v| m.max(v.abs()))
+            };
+            let dfloor: Vec<f64> = (0..dfs.len())
+                .map(|i| {
+                    let (a, b) = (i.saturating_sub(W), (i + W + 1).min(dfs.len()));
+                    1e-13 * biggest(&dfs, a, b, i) + 1e-18 * biggest(&ifs, a, b, i)
+                })
+                .collect();
+            let dfs_c: Vec<f64> = dfs
+                .iter()
+                .zip(&dfloor)
+                .map(|(&v, &fl)| if v.abs() <= fl { 0.0 } else { v })
+                .collect();
+            let mut df = |x: f64| fun.df(x);
+            let (c, erratic1) = sign_changes(&ixs, &dfs_c, &mut df, 0.0);
+            crit = c;
+            out.erratic |= erratic1;
+            if round == 1 || crit.is_empty() {
+                break;
+            }
+            // And f″ is sampled at the extrema: two inflections between grid
+            // samples straddle the extremum between them
+            // (((x − 1000)(x − 1001))² bends at 1000.21 and 1000.79, either
+            // side of its maximum at 1000.5).
+            let crit_xs: Vec<f64> = crit.iter().map(|c| c.0).collect();
+            let (d2x, d2v) = merged(&base_xs, &d2c, &crit_xs, &|x| {
+                let v = fun.d2f(x);
+                if v.abs() <= d2floor(x, fun.df(x)) {
+                    0.0
+                } else {
+                    v
+                }
+            });
+            let (more, _) = sign_changes(&d2x, &d2v, &mut d2, 0.0);
+            let more: Vec<f64> = more
+                .into_iter()
+                .map(|c| c.0)
+                .filter(|c| {
+                    !infl_xs
+                        .iter()
+                        .any(|o| (o - c).abs() <= 1e-9 * c.abs().max(1.0))
+                })
+                .collect();
+            if more.is_empty() {
+                break;
+            }
+            infl_xs.extend(more);
+            infl_xs.sort_by(|a, b| a.total_cmp(b));
+        }
+        for &(c, before, after) in &crit {
+            let v = fun.f(c);
+            if !v.is_finite() {
+                continue;
+            }
+            if before > 0 && after < 0 {
+                out.maxima.push((c, v));
+            } else {
+                out.minima.push((c, v));
+            }
+            crit_v.push((c, v));
+        }
+        // Inflection points, each confirmed by how f itself bends within a
+        // third of the way to the nearest other candidate, kink or end.
+        for &c in &infl_xs {
+            let v = fun.f(c);
+            if !v.is_finite() {
+                continue;
+            }
+            let mut near = (c - p.lo.value).min(p.hi.value - c);
+            for &o in infl_xs.iter().chain(&kinks) {
+                if o != c {
+                    near = near.min((o - c).abs());
+                }
+            }
+            let room = near / 3.0;
+            // Not at a corner of f (f′ continuous or a vertical tangent).
+            let h = (1e-4 * room)
+                .min(1e-7 * c.abs().max(1.0))
+                .max(16.0 * f64::EPSILON * c.abs());
+            let (l, r) = (fun.df(c - h), fun.df(c + h));
+            let corner = l.is_finite()
+                && r.is_finite()
+                && (l - r).abs() > 1e-3 * (1.0 + l.abs().max(r.abs()))
+                && l.abs().max(r.abs()) < 1e6;
+            if !corner && concavity_changes(fun, c, room) {
+                out.inflections.push((c, v));
+            }
+        }
+        dfs_kept = Some(dfs);
+    }
+
+    // Zeros: sign changes over the samples and the extrema.
+    let crit_xs: Vec<f64> = crit_v.iter().map(|c| c.0).collect();
+    let (zx, zf) = merged(&xs, &fs, &crit_xs, &|x| fun.f(x));
+    let (zero_crossings, erratic0) = sign_changes(&zx, &zf, &mut f, 0.0);
     out.erratic |= erratic0;
     for (x, _, _) in zero_crossings {
         // A crossing reported at a zero sample that is part of a zero run
@@ -1934,123 +2673,23 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
             out.zeros.push(xs[i]);
         }
     }
-
-    // Critical points.
-    let interior: Vec<usize> = (0..xs.len())
-        .filter(|&i| xs[i] > p.lo.value && xs[i] < p.hi.value)
-        .collect();
-    let ixs: Vec<f64> = interior.iter().map(|&i| xs[i]).collect();
-    let mut crit: Vec<(f64, i8, i8)> = Vec::new();
-    // f′ at the interior samples, kept for the monotonicity pass below.
-    let mut dfs_kept: Option<Vec<f64>> = None;
-    if !ixs.is_empty() {
-        let dfs = fun.batch(1, &ixs);
-        // Rounding noise in f′ is judged locally, against f′ and f nearby:
-        // a floor set by f′'s size over the whole grid (10³⁰ far out) would
-        // erase genuine sign changes where f′ is small, as between roots of
-        // ((x − 2·10⁶)(x − 2·10⁶ − 1))² a unit apart.
-        let ifs0: Vec<f64> = interior.iter().map(|&i| fs[i]).collect();
-        const W: usize = 32;
-        let dfloor: Vec<f64> = (0..dfs.len())
-            .map(|i| {
-                let (a, b) = (i.saturating_sub(W), (i + W + 1).min(dfs.len()));
-                let dmax = dfs[a..b]
-                    .iter()
-                    .filter(|v| v.is_finite())
-                    .fold(0.0f64, |m, v| m.max(v.abs()));
-                let fmax = ifs0[a..b]
-                    .iter()
-                    .filter(|v| v.is_finite())
-                    .fold(0.0f64, |m, v| m.max(v.abs()));
-                1e-13 * dmax + 1e-18 * fmax
-            })
-            .collect();
-        let dfs_c: Vec<f64> = dfs
-            .iter()
-            .zip(&dfloor)
-            .map(|(&v, &fl)| if v.abs() <= fl { 0.0 } else { v })
-            .collect();
-        let mut df = |x: f64| fun.df(x);
-        let (c, erratic1) = sign_changes(&ixs, &dfs_c, &mut df, 0.0);
-        crit = c;
-        out.erratic |= erratic1;
-        for &(c, before, after) in &crit {
-            let v = fun.f(c);
-            if !v.is_finite() {
-                continue;
-            }
-            if before > 0 && after < 0 {
-                out.maxima.push((c, v));
-            } else {
-                out.minima.push((c, v));
-            }
-            // An extremum whose value is 0 to within noise touches the axis
-            // (a double root).
-            if v.abs() <= value_noise(fun, c, v)
-                && !out
-                    .zeros
-                    .iter()
-                    .any(|z| (z - c).abs() <= 1e-7 * c.abs().max(1.0))
-            {
-                out.zeros.push(c);
-            }
-        }
-        // Inflection points.
-        let d2s = fun.batch(2, &ixs);
-        let d2scale = {
-            let mut v: Vec<f64> = d2s
+    // An extremum whose value is 0 to within noise touches the axis (a
+    // double root).
+    for &(c, v) in &crit_v {
+        if v.abs() <= value_noise(fun, c, v)
+            && !out
+                .zeros
                 .iter()
-                .map(|v| v.abs())
-                .filter(|v| v.is_finite())
-                .collect();
-            v.sort_by(|a, b| a.total_cmp(b));
-            if v.is_empty() {
-                1.0
-            } else {
-                v[v.len() / 2].max(1e-300)
-            }
-        };
-        let _ = d2scale;
-        // Rounding noise in f″ (e.g. for a function that is linear in
-        // disguise) must not count as concavity changes: zero out values
-        // below a per-sample noise floor relative to f′ and f.
-        let ifs: Vec<f64> = interior.iter().map(|&i| fs[i]).collect();
-        let d2c: Vec<f64> = d2s
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| {
-                let x1 = 1.0 + ixs[i].abs();
-                let floor = 1e-9 * (dfs[i].abs() / x1 + ifs[i].abs() / (x1 * x1))
-                    + 1e-14 * scale / (x1 * x1);
-                if v.abs() <= floor { 0.0 } else { v }
-            })
-            .collect();
-        let mut d2 = |x: f64| fun.d2f(x);
-        let (infl_c, erratic2) = sign_changes(&ixs, &d2c, &mut d2, 0.0);
-        out.erratic |= erratic2;
-        for (c, _, _) in infl_c {
-            let v = fun.f(c);
-            if !v.is_finite() {
-                continue;
-            }
-            // Not at a corner of f (f′ continuous or a vertical tangent).
-            let h = 1e-7 * c.abs().max(1.0);
-            let (l, r) = (fun.df(c - h), fun.df(c + h));
-            let corner = l.is_finite()
-                && r.is_finite()
-                && (l - r).abs() > 1e-3 * (1.0 + l.abs().max(r.abs()))
-                && l.abs().max(r.abs()) < 1e6;
-            if !corner && concavity_changes(fun, c, p, scale) {
-                out.inflections.push((c, v));
-            }
+                .any(|z| (z - c).abs() <= 1e-7 * c.abs().max(1.0))
+        {
+            out.zeros.push(c);
         }
-        dfs_kept = Some(dfs);
     }
 
     // Monotonicity: split at critical points; directions from the f′
     // samples inside each sub-interval (found by binary search).
     let dvals: Vec<f64> = dfs_kept.unwrap_or_default();
-    let ivals: Vec<f64> = interior.iter().map(|&i| fs[i]).collect();
+    let ivals: Vec<f64> = ifs;
     let mut cuts: Vec<f64> = vec![p.lo.value];
     cuts.extend(crit.iter().map(|c| c.0));
     cuts.push(p.hi.value);
@@ -2064,16 +2703,19 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
         let (ds, vs): (Vec<f64>, Vec<f64>) = if i1 > i0 {
             (dvals[i0..i1].to_vec(), ivals[i0..i1].to_vec())
         } else {
-            let m = if a.is_finite() && b.is_finite() {
-                0.5 * (a + b)
+            let ms: Vec<f64> = if a.is_finite() && b.is_finite() {
+                (1..=5).map(|k| a + (b - a) * k as f64 / 6.0).collect()
             } else if a.is_finite() {
-                a + 1.0
+                vec![a + 1.0]
             } else if b.is_finite() {
-                b - 1.0
+                vec![b - 1.0]
             } else {
-                0.0
+                vec![0.0]
             };
-            (vec![fun.df(m)], vec![fun.f(m)])
+            (
+                ms.iter().map(|&m| fun.df(m)).collect(),
+                ms.iter().map(|&m| fun.f(m)).collect(),
+            )
         };
         let dmax = ds
             .iter()
@@ -2084,10 +2726,13 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
             - fin.iter().copied().fold(f64::INFINITY, f64::min);
         let pos = ds.iter().filter(|&&v| v > 0.0).count();
         let neg = ds.iter().filter(|&&v| v < 0.0).count();
-        // Flat against the function's typical size, and against its own
-        // size here: 1/(x³ − 10³⁰) is tiny everywhere but not constant.
+        // Flat where f′ can't move f by more than rounding across the
+        // stretch (f′ exactly 0, as for floor(x), or the noise of a
+        // constant in disguise), judged against f here: 1/(x³ − 10³⁰) is
+        // tiny everywhere but not constant, and ((x − 1000)(x − 1001))²
+        // isn't constant between its roots however small next to f(0).
         let fmag = fin.iter().fold(0.0f64, |m, v| m.max(v.abs()));
-        let flat = dmax <= 1e-12 * scale.max(1e-300) || (fspan <= 1e-12 * scale && ds.len() > 2);
+        let flat = dmax == 0.0 || dmax * (b - a) <= 1e-9 * fmag;
         let dir = if flat && fspan <= 1e-9 * fmag {
             Monotonicity::Constant
         } else if neg == 0 && pos > 0 {
@@ -2174,7 +2819,7 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
             if v.is_finite() {
                 acc.consider(v, Src::At(end.value));
             } else {
-                match one_sided_limit_err(&mut f, end.value, side) {
+                match one_sided_limit_err(&mut f, end.value, side, p.hi.value - p.lo.value) {
                     (SeqLimit::Converges(l), err, _) => acc.consider(l, Src::Limit(err)),
                     (SeqLimit::PosInf, ..) => acc.consider(f64::INFINITY, Src::Limit(0.0)),
                     (SeqLimit::NegInf, ..) => acc.consider(f64::NEG_INFINITY, Src::Limit(0.0)),
@@ -2194,15 +2839,23 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
     }
     // Samples catch anything the candidates missed (strictly beyond only).
     let tol = 1e-9 * scale;
-    for &(x, v) in &p.samples {
+    for &(x, v) in &samples {
         if v.is_finite() && (v < acc.lo.value - tol || v > acc.hi.value + tol) && x.abs() < 1e4 {
             acc.consider(v, Src::At(x));
         }
     }
     // A bound that is only a limit can still be attained on a constant
-    // stretch (max(x, 0) = 0 for x ≤ 0). Only moderate x count: far out,
-    // rounding makes 1 − e^(−x) equal its limit 1.
-    for &(x, v) in &p.samples {
+    // stretch (max(x, 0) = 0 for x ≤ 0), which only a piecewise f has, or
+    // one constant throughout ((1/x)⁰, 1^(1/x)): an analytic one that
+    // underflows onto its limit (e^(x − 1000) − 2) never attains it. Only moderate x count: far out, rounding makes
+    // max(1 − e^(−x), 0) equal its limit 1.
+    let flat_capable = fun.piecewise
+        || fun
+            .df
+            .as_ref()
+            .is_some_and(|p| p.as_constant() == Some(0.0))
+        || samples.iter().all(|q| q.1 == samples[0].1);
+    for &(x, v) in samples.iter().filter(|_| flat_capable) {
         // Constant stretches have f′ exactly 0 (tanh(20) rounds to 1 but
         // its derivative does not vanish).
         if x.abs() > 20.0 || fun.df(x) != 0.0 {
@@ -2234,26 +2887,51 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
 }
 
 /// Confirms an inflection candidate with second differences of f itself
-/// (rejects sign changes of f″ that are only rounding noise).
-fn concavity_changes(fun: &Fun, c: f64, p: &Piece, scale: f64) -> bool {
-    let room = (c - p.lo.value).min(p.hi.value - c);
-    let mut h = 1e-2 * c.abs().max(1.0);
-    if room.is_finite() {
-        h = h.min(room / 3.0);
-    }
-    if h.is_nan() || h <= 0.0 {
-        return false;
-    }
+/// (rejects sign changes of f″ that are only rounding noise): f bends
+/// opposite ways either side of `c`, by more than f's own rounding noise
+/// there, at some step no wider than `room`. Judged locally, so an offset
+/// (x³ + 10⁶) or a shift ((x − 1000)·e^(−(x−1000)²)) changes nothing.
+fn concavity_changes(fun: &Fun, c: f64, room: f64) -> bool {
+    let mut h = room.min(1e-2 * c.abs().max(1.0));
     let f = |x: f64| fun.f(x);
     let f0 = f(c);
-    let left = f0 - 2.0 * f(c - h) + f(c - 2.0 * h);
-    let right = f(c + 2.0 * h) - 2.0 * f(c + h) + f0;
-    let noise = 1e-11 * (f0.abs() + scale) + 1e-13 * (f(c - 2.0 * h).abs() + f(c + 2.0 * h).abs());
-    left.is_finite()
-        && right.is_finite()
-        && (left < 0.0) != (right < 0.0)
-        && left.abs() > noise
-        && right.abs() > noise
+    // How rough f's evaluation is here: third differences at a step far
+    // below h, where a smooth f moves by f‴·(h/64)³ only but rounding
+    // (cancellation in (x² − 1)/(x − 1) next to 1) as much as at any
+    // step. Measured at the first, widest step too: at a tiny one,
+    // neighbouring roundings agree and hide it.
+    let rough_at = |d: f64| {
+        let w = [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0].map(|k| f(c + k * d));
+        (0..4)
+            .map(|i| (w[i + 3] - 3.0 * w[i + 2] + 3.0 * w[i + 1] - w[i]).abs())
+            .fold(0.0f64, f64::max)
+    };
+    let rough0 = rough_at(h / 64.0);
+    for _ in 0..12 {
+        if h.is_nan() || h <= 0.0 || c - h == c || c + h == c {
+            return false;
+        }
+        let (l2, l1, r1, r2) = (f(c - 2.0 * h), f(c - h), f(c + h), f(c + 2.0 * h));
+        let left = f0 - 2.0 * l1 + l2;
+        let right = r2 - 2.0 * r1 + f0;
+        let rough = rough0.max(rough_at(h / 64.0));
+        let noise = 4.0 * value_noise(fun, c, f0)
+            + 2.0 * rough
+            + 16.0
+                * f64::EPSILON
+                * (l2.abs() + 2.0 * l1.abs() + 2.0 * f0.abs() + 2.0 * r1.abs() + r2.abs());
+        if left.is_finite()
+            && right.is_finite()
+            && noise.is_finite()
+            && (left < 0.0) != (right < 0.0)
+            && left.abs() > noise
+            && right.abs() > noise
+        {
+            return true;
+        }
+        h /= 4.0;
+    }
+    false
 }
 
 /// Where a range bound comes from: a value attained at x, or a limit known
@@ -2408,7 +3086,25 @@ type Oblique = Vec<(f64, f64, AsymptoteSide)>;
 
 /// Horizontal and oblique asymptotes at the enabled ends, and whether an
 /// end's behaviour couldn't be determined (then they are unknown).
-fn asymptotes_at_infinity(fun: &Fun, to_neg: bool, to_pos: bool) -> (Horizontal, Oblique, bool) {
+fn asymptotes_at_infinity(
+    fun: &Fun,
+    domain: &[Interval],
+    samples: &[(f64, f64)],
+) -> (Horizontal, Oblique, bool) {
+    let to_neg = domain
+        .first()
+        .is_some_and(|d| d.lo.value == f64::NEG_INFINITY);
+    let to_pos = domain.last().is_some_and(|d| d.hi.value == f64::INFINITY);
+    // Where the last stretch of the domain towards each end starts: the
+    // tail is sampled beyond it (1/(√(x/10⁶) − 1) has a pole at 10⁶).
+    let start = |sign: f64| {
+        let b = if sign > 0.0 {
+            domain.last().map(|d| d.lo.value)
+        } else {
+            domain.first().map(|d| d.hi.value)
+        };
+        b.filter(|v| v.is_finite()).unwrap_or(0.0)
+    };
     let mut horiz: Vec<(f64, AsymptoteSide)> = Vec::new();
     let mut obl: Vec<(f64, f64, AsymptoteSide)> = Vec::new();
     let mut unsure = false;
@@ -2422,15 +3118,29 @@ fn asymptotes_at_infinity(fun: &Fun, to_neg: bool, to_pos: bool) -> (Horizontal,
         }
         // A line the function equals on its tail (|x| for y = x) is not an
         // asymptote. Compare to rounding level only: e^(−x²) is tiny, not 0.
-        let coincides = |f: &mut dyn FnMut(f64) -> f64, m: f64, b: f64| {
-            [10.0, 100.0, 1000.0].iter().all(|&t| {
-                let x = sign * t;
-                let v = f(x);
-                let line = m * x + b;
-                (v - line).abs() <= 64.0 * f64::EPSILON * v.abs().max((m * x).abs()).max(b.abs())
-            })
+        // Only a piecewise f can equal a line on its tail without being
+        // that line everywhere, so an analytic one must be on it at every
+        // sample: x + e^(−x²) and (x − 1000)·e^(−(x−1000)²) merely round or
+        // underflow onto theirs, x/x and (x² − 1)/(x − 1) are theirs.
+        let everywhere = |m: f64, b: f64| {
+            fun.piecewise
+                || samples.iter().all(|&(x, v)| {
+                    let line = m * x + b;
+                    (v - line).abs() <= 1e-9 * v.abs().max((m * x).abs()).max(b.abs())
+                })
         };
-        match limit_at_infinity_beyond_err(&mut f, sign, 0.0) {
+        let coincides = |f: &mut dyn FnMut(f64) -> f64, m: f64, b: f64| {
+            everywhere(m, b)
+                && [10.0, 100.0, 1000.0].iter().all(|&t| {
+                    let x = sign * t;
+                    let v = f(x);
+                    let line = m * x + b;
+                    (v - line).abs()
+                        <= 64.0 * f64::EPSILON * v.abs().max((m * x).abs()).max(b.abs())
+                })
+        };
+        let from = start(sign);
+        match limit_at_infinity_beyond_err(&mut f, sign, from) {
             (SeqLimit::Converges(l), err) => {
                 let l = clean(l, err);
                 if !coincides(&mut f, 0.0, l) {
@@ -2438,7 +3148,8 @@ fn asymptotes_at_infinity(fun: &Fun, to_neg: bool, to_pos: bool) -> (Horizontal,
                 }
             }
             (SeqLimit::PosInf | SeqLimit::NegInf, _) => {
-                let xs: Vec<f64> = (1..=15).map(|k| sign * 10f64.powi(k)).collect();
+                let first = ((2.0 * from.abs()).max(10.0).log10().ceil() as i32).max(1);
+                let xs: Vec<f64> = (first..first + 15).map(|k| sign * 10f64.powi(k)).collect();
                 let ms: Vec<f64> = xs.iter().map(|&x| f(x) / x).collect();
                 if let (SeqLimit::Converges(m), em) = sequence_limit_err(&ms) {
                     let m = clean(m, em.max(1e-12 * m.abs()));
@@ -2695,11 +3406,12 @@ fn analyze_aperiodic(
     }
 
     // Asymptotes at infinity.
-    let to_neg = domain
-        .first()
-        .is_some_and(|d| d.lo.value == f64::NEG_INFINITY);
-    let to_pos = domain.last().is_some_and(|d| d.hi.value == f64::INFINITY);
-    let (horiz, obl, unsure) = asymptotes_at_infinity(fun, to_neg, to_pos);
+    let samples: Vec<(f64, f64)> = sc
+        .pieces
+        .iter()
+        .flat_map(|p| p.samples.iter().copied())
+        .collect();
+    let (horiz, obl, unsure) = asymptotes_at_infinity(fun, &domain, &samples);
     if unsure {
         too |= flags::HORIZONTAL_ASYMPTOTES | flags::OBLIQUE_ASYMPTOTES;
     }
