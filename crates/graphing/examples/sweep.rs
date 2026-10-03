@@ -2711,7 +2711,9 @@ fn check_missing_extrema(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
                 continue;
             }
             let (xm, ym) = golden(a, xs[i - 1], xs[i + 1], sign);
-            if !ym.is_finite() || sign * ym > sign * ys[i] {
+            // (Nor one whose own value is as uncertain as its height: the
+            // floor of a cosine that rounds about 0.)
+            if !ym.is_finite() || sign * ym > sign * ys[i] || a.rounding(xm) >= p {
                 continue;
             }
             // Beyond both its near sides (golden section can end on an edge).
@@ -2724,14 +2726,15 @@ fn check_missing_extrema(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
             if !local {
                 continue;
             }
-            // The edge of a jump or a pole is no turn: there f falls away,
-            // a few steps of its resolution out, by more than it does
-            // across the whole bracket (the top of atan(tan(x)) − 10⁶ is a
-            // staircase; tan beside its pole).
+            // The edge of a jump or a pole, or a plateau, is no turn: there
+            // f moves, a few steps of its resolution out, by as much as it
+            // does across the whole bracket (the top of atan(tan(x)) − 10⁶
+            // is a staircase; tan beside its pole; floor(cos x) between far
+            // samples). At a turn that is a small part of it.
             let res = a.resolution(xm);
             let h = 4.0 * if res.is_finite() { res } else { 16.0 * ulp(xm) };
             let (d1, d2) = ((a.eval(xm - h) - ym).abs(), (a.eval(xm + h) - ym).abs());
-            if !(d1.is_finite() && d2.is_finite()) || d1.max(d2) > p + a.rounding(xm) {
+            if !(d1.is_finite() && d2.is_finite()) || d1.max(d2) > 0.5 * p + a.rounding(xm) {
                 continue;
             }
             // Nor where f moves, within a few dozen floats, by a good part
