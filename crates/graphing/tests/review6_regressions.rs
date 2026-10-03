@@ -43,6 +43,10 @@ fn poles_of_a_polynomial_denominator_beyond_the_window() {
     assert_eq!(r.domain, "x ∈ ℝ \\ {−2000000, 2000000}");
     assert_eq!(r.vertical_asymptotes, ["x = −2000000", "x = 2000000"]);
     assert_eq!(r.parity, Parity::Even);
+    // (Round 7: the range keeps the gap between the maximum −2.5·10⁻¹³
+    // and the positive branches.)
+    assert_eq!(r.range, "y ∈ (−∞, −2.5×10⁻¹³] ∪ (0, ∞)");
+    assert_eq!(r.maxima, ["(0, −2.5×10⁻¹³)"]);
     let r = k("y = 1/(x - 2000000)^2");
     assert_eq!(r.domain, "x ∈ ℝ \\ {2000000}");
     assert_eq!(r.range, "y ∈ (0, ∞)");
