@@ -480,14 +480,24 @@ mod tests {
     }
 
     /// The worker must be gone (and its Wayland objects destroyed) before
-    /// the display connection it borrows is dropped. Needs a compositor:
-    /// skipped unless WAYLAND_DISPLAY points at one.
+    /// the display connection it borrows is dropped. It copies text, so it
+    /// never uses your session's display: it runs only against the socket
+    /// in DGMNB_TEST_WAYLAND_DISPLAY (say, a headless weston's), and is
+    /// skipped otherwise.
     #[test]
     fn worker_stops_before_the_display_goes() {
-        let Ok(conn) = Connection::connect_to_env() else {
-            eprintln!("no Wayland compositor; skipped");
+        let Some(name) = std::env::var_os("DGMNB_TEST_WAYLAND_DISPLAY") else {
+            eprintln!("DGMNB_TEST_WAYLAND_DISPLAY not set; skipped");
             return;
         };
+        let path = match std::env::var_os("XDG_RUNTIME_DIR") {
+            Some(dir) => std::path::Path::new(&dir).join(&name),
+            None => std::path::PathBuf::from(&name),
+        };
+        let conn = std::os::unix::net::UnixStream::connect(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|s| Connection::from_socket(s).map_err(|e| e.to_string()))
+            .unwrap_or_else(|e| panic!("no compositor at {}: {e}", path.display()));
         let before = clipboard_threads();
         let display = conn.backend().display_ptr();
         // SAFETY: `conn` outlives the clipboard; we shut it down first.

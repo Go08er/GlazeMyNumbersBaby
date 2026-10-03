@@ -194,8 +194,9 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 `nix develop -c cargo test --workspace` runs **618 tests** (counts include
 doctests; one more, a live currency fetch, is `#[ignore]`d). The D-Bus and
 X11 tests start their own `dbus-daemon` and `Xvfb` from the dev shell (and
-skip without them); DGMNB's Wayland clipboard test needs `WAYLAND_DISPLAY`,
-for example a headless weston. The heart of it
+skip without them). DGMNB's Wayland clipboard test copies text, so it only
+runs against a compositor named in `DGMNB_TEST_WAYLAND_DISPLAY` (a headless
+weston's socket, say), never your session's. The heart of it
 is differential testing against the *real* C++ engine, compiled from the
 upstream sources with g++:
 
