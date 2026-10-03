@@ -46,6 +46,9 @@ pub struct ConverterPage {
     syncing: Cell<bool>,
     unit_ids: RefCell<Vec<i32>>,
     wide: Cell<bool>,
+    /// The converter is the page on screen (between activate and
+    /// deactivate).
+    showing: Cell<bool>,
 }
 
 fn field(label: &str) -> Field {
@@ -186,6 +189,7 @@ impl ConverterPage {
             syncing: Cell::new(false),
             unit_ids: RefCell::default(),
             wide: Cell::new(false),
+            showing: Cell::new(false),
         });
 
         {
@@ -285,7 +289,9 @@ impl ConverterPage {
                 let Some(p) = weak.upgrade() else { return };
                 let behavior = network_behavior(m);
                 p.vm.borrow_mut().set_network_behavior(behavior);
-                let in_currency = p.vm.borrow().is_currency_current_category();
+                // Only for Currency on screen, as DGMNB does: going back to
+                // it fetches anyway.
+                let in_currency = p.showing.get() && p.vm.borrow().is_currency_current_category();
                 if behavior == NetworkAccessBehavior::Normal && in_currency {
                     let started = p.vm.borrow_mut().start_automatic_currency_fetch();
                     if started {
@@ -469,6 +475,7 @@ impl Page for ConverterHandle {
         let Some(cm) = mode.converter_mode() else {
             return;
         };
+        p.showing.set(true);
         p.vm.borrow_mut().set_current_mode(cm);
         p.rebuild_units();
         p.sync(Change::Replace, Change::Replace);
@@ -479,6 +486,10 @@ impl Page for ConverterHandle {
                 p.fetch_currency();
             }
         }
+    }
+
+    fn deactivate(&self) {
+        self.0.showing.set(false);
     }
 
     fn key_pressed(&self, kp: &KeyPress) -> bool {
