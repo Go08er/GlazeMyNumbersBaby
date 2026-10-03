@@ -1009,7 +1009,9 @@ fn open_uri_on(mut conn: Connection, uri: &str, wait: Duration) -> io::Result<Op
             Arg::StrDict(&[("handle_token", &token)]),
         ],
     )?;
-    // Old portals may pick their own path; listen there too.
+    // Portals older than 0.9 (2017) ignore handle_token and pick their own
+    // path; listen there too. (One that answered before this subscription
+    // would be missed, and the wait ends Unanswered rather than wrongly.)
     let handle = reply
         .first()
         .and_then(Value::as_str)
@@ -1021,7 +1023,11 @@ fn open_uri_on(mut conn: Connection, uri: &str, wait: Duration) -> io::Result<Op
              member='Response',path='{handle}'"
         ))?;
     }
-    let owner = conn.name_owner(PORTAL);
+    // Only the portal's owner may answer; if it can't be named, the answer
+    // can't be trusted either.
+    let owner = conn
+        .name_owner(PORTAL)
+        .ok_or_else(|| err("the portal has no owner"))?;
     let deadline = Instant::now() + wait;
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
@@ -1034,9 +1040,10 @@ fn open_uri_on(mut conn: Connection, uri: &str, wait: Duration) -> io::Result<Op
             m => m?,
         };
         if msg.kind == SIGNAL
+            && msg.interface.as_deref() == Some("org.freedesktop.portal.Request")
             && msg.member.as_deref() == Some("Response")
             && msg.path.as_deref() == Some(handle.as_str())
-            && (owner.is_none() || msg.sender == owner)
+            && msg.sender.as_deref() == Some(owner.as_str())
         {
             return Ok(match msg.body.first().and_then(Value::as_u32) {
                 Some(0) => Opened::Yes,
@@ -1199,6 +1206,118 @@ mod tests {
             }
         });
         assert_eq!(accent_color(&decode(&bytes).unwrap().body[0]), None);
+    }
+
+    /// A big-endian writer, for valid `B` messages (the shared one is
+    /// little-endian only).
+    struct Be(Vec<u8>);
+
+    impl Be {
+        fn align(&mut self, n: usize) {
+            while !self.0.len().is_multiple_of(n) {
+                self.0.push(0);
+            }
+        }
+        fn u32(&mut self, v: u32) {
+            self.align(4);
+            self.0.extend_from_slice(&v.to_be_bytes());
+        }
+        fn f64(&mut self, v: f64) {
+            self.align(8);
+            self.0.extend_from_slice(&v.to_be_bytes());
+        }
+        fn str(&mut self, s: &str) {
+            self.u32(s.len() as u32);
+            self.0.extend_from_slice(s.as_bytes());
+            self.0.push(0);
+        }
+        fn sig(&mut self, s: &str) {
+            self.0.push(s.len() as u8);
+            self.0.extend_from_slice(s.as_bytes());
+            self.0.push(0);
+        }
+        /// An array whose elements align to `elem`; its length is patched in.
+        fn array(&mut self, elem: usize, items: impl FnOnce(&mut Be)) {
+            self.u32(0);
+            let at = self.0.len() - 4;
+            self.align(elem);
+            let start = self.0.len();
+            items(self);
+            let len = (self.0.len() - start) as u32;
+            self.0[at..at + 4].copy_from_slice(&len.to_be_bytes());
+        }
+        /// A method return to serial 3 with this body.
+        fn reply(body_sig: &str, body: Be) -> Vec<u8> {
+            let mut m = Be(vec![b'B', METHOD_RETURN, 0, 1]);
+            m.u32(body.0.len() as u32);
+            m.u32(9);
+            m.array(8, |f| {
+                f.align(8);
+                f.0.push(5);
+                f.sig("u");
+                f.u32(3);
+                f.align(8);
+                f.0.push(8);
+                f.sig("g");
+                f.sig(body_sig);
+            });
+            m.align(8);
+            m.0.extend_from_slice(&body.0);
+            m.0
+        }
+    }
+
+    /// Valid big-endian replies of the shapes we rely on: the settings
+    /// portal's ReadAll (`a{sa{sv}}`) and timedated's Timezone (`v` of `s`).
+    #[test]
+    fn decodes_big_endian_replies() {
+        let mut body = Be(Vec::new());
+        body.array(8, |b| {
+            b.align(8);
+            b.str("org.freedesktop.appearance");
+            b.array(8, |b| {
+                b.align(8);
+                b.str("color-scheme");
+                b.sig("u");
+                b.u32(1);
+                b.align(8);
+                b.str("accent-color");
+                b.sig("(ddd)");
+                b.align(8);
+                for c in [0.25, 0.5, 1.0] {
+                    b.f64(c);
+                }
+            });
+        });
+        let msg = decode(&Be::reply("a{sa{sv}}", body)).unwrap();
+        assert_eq!(msg.reply_serial, Some(3));
+        let Value::Array(namespaces) = &msg.body[0] else {
+            panic!("{:?}", msg.body)
+        };
+        let Value::Struct(ns) = &namespaces[0] else {
+            panic!()
+        };
+        assert_eq!(ns[0].as_str(), Some("org.freedesktop.appearance"));
+        let Value::Array(settings) = &ns[1] else {
+            panic!()
+        };
+        let value = |key: &str| {
+            settings.iter().find_map(|e| match e {
+                Value::Struct(kv) if kv[0].as_str() == Some(key) => Some(kv[1].clone()),
+                _ => None,
+            })
+        };
+        assert_eq!(prefers_dark(&value("color-scheme").unwrap()), Some(true));
+        assert_eq!(
+            accent_color(&value("accent-color").unwrap()),
+            Some([0.25, 0.5, 1.0])
+        );
+
+        let mut body = Be(Vec::new());
+        body.sig("s");
+        body.str("Europe/Paris");
+        let msg = decode(&Be::reply("v", body)).unwrap();
+        assert_eq!(msg.body[0].as_str(), Some("Europe/Paris"));
     }
 
     #[test]
