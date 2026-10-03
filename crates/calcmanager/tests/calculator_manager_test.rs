@@ -2668,6 +2668,10 @@ fn unit_conversion_manager_number_formatting_utils_trim_trailing_zeros() {
     number = String::from("322423");
     trim_trailing_zeros(&mut number);
     assert_eq!(number, "322423");
+    // R11-L-01: a multibyte character before the zeros is kept whole.
+    number = String::from("1.5\u{00b0}00");
+    trim_trailing_zeros(&mut number);
+    assert_eq!(number, "1.5\u{00b0}");
 }
 
 #[test]
