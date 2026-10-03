@@ -786,10 +786,11 @@ impl GraphPage {
                 let _ = proxy.send_event(UserEvent::Plot(seq, plots, ms));
             });
         if spawned.is_err() {
-            // No thread to be had: plot here rather than wait forever.
+            // No thread to be had: plot here, one equation after another
+            // (plot_parallel would need threads too), rather than wait.
             self.busy = false;
             self.plot_cancel = None;
-            self.plots = self.graph.plot_parallel(&vp);
+            self.plots = self.graph.plot(&vp);
             self.update_trace();
         }
     }

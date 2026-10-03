@@ -1672,8 +1672,9 @@ impl ApplicationHandler<UserEvent> for App {
                 self.redraw();
             }
             UserEvent::Network(status) => {
+                let showing = self.mode == ViewMode::Currency;
                 if let Some(c) = self.conv.as_mut() {
-                    c.network(status);
+                    c.network(status, showing);
                 }
                 self.redraw();
             }

@@ -106,19 +106,21 @@ impl ConvPage {
                 let _ = proxy.send_event(UserEvent::Network(network_status()));
             });
         if spawned.is_err() {
-            self.network(None);
+            self.network(None, true);
         }
     }
 
     /// The portal's answer (`None`: no portal), then the automatic fetch if
-    /// Currency is still showing and the policy allows it.
-    pub fn network(&mut self, status: Option<(bool, bool)>) {
+    /// Currency is still `showing` and the policy allows it. (The view model
+    /// keeps its Currency mode while another page is open, so the app says.)
+    pub fn network(&mut self, status: Option<(bool, bool)>, showing: bool) {
         self.checking = false;
         if let Some((available, metered)) = status {
             self.vm
                 .set_network_behavior(appcore::converter::network_behavior(available, metered));
         }
-        if self.vm.current_mode() == Some(ConverterMode::Currency)
+        if showing
+            && self.vm.current_mode() == Some(ConverterMode::Currency)
             && self.vm.start_automatic_currency_fetch()
         {
             self.fetch();
