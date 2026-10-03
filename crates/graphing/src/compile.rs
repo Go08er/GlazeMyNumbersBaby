@@ -277,6 +277,14 @@ fn powi(b: f64, n: i32) -> f64 {
     fns::pow_int(b, n)
 }
 
+/// Whether `v` may be the rounding of a value beyond a double's range: ±∞,
+/// 0 or subnormal. NaN is not. (Branch-free, for batches.)
+#[inline(always)]
+fn left_range(v: f64) -> bool {
+    let b = v.to_bits() & !(1u64 << 63);
+    (b == f64::INFINITY.to_bits()) | (b < 1u64 << 52)
+}
+
 /// A compiled expression of `x` and `y`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Program {
@@ -286,9 +294,16 @@ pub struct Program {
     uses_y: bool,
     cost: usize,
     /// Whether an operation before the last can overflow or underflow, or a
-    /// constant is beyond a double, so that a NaN or ±∞ result may come from
-    /// rounding rather than an undefined point (see [`Wide`]).
+    /// constant is beyond a double, so that the result (finite or not) may
+    /// come from rounding out of a double's range (see [`Wide`]).
     wide: bool,
+    /// Per instruction, whether its value can be the rounding of one beyond
+    /// a double's range when its operands are normal: ±∞, 0 or subnormal
+    /// after a product, quotient, power, e^x, … other than the last (see
+    /// [`Program::eval_tagged`]). A sum overflows only to ±∞, which every
+    /// later operation keeps (as ±∞ or NaN) or turns into a 0 that is
+    /// itself checked: so only the result is checked for that.
+    scan: Box<[bool]>,
 }
 
 /// Evaluation input for one coordinate of a batch: either one value for all
@@ -344,9 +359,14 @@ impl Program {
         let cost = ops.iter().map(Op::cost).sum();
         // Only a rounded intermediate can mislead a later operation; the
         // last one's own overflow or underflow is what extended range gives.
-        let wide = ops.iter().enumerate().any(|(i, op)| {
-            matches!(op, Op::Big(..)) || (i + 1 < ops.len() && op.may_leave_range())
-        });
+        let last = ops.len() - 1;
+        let scan: Box<[bool]> = ops
+            .iter()
+            .enumerate()
+            .map(|(i, op)| matches!(op, Op::Big(..)) || (i != last && op.may_leave_range()))
+            .collect();
+        let wide =
+            scan.iter().any(|&s| s) || ops[..last].iter().any(|op| matches!(op, Op::Add | Op::Sub));
         Program {
             ops,
             max_stack,
@@ -354,6 +374,7 @@ impl Program {
             uses_y,
             cost,
             wide,
+            scan,
         }
     }
 
@@ -402,37 +423,47 @@ impl Program {
     }
 
     /// [`Program::eval`], and whether the value needed re-evaluating in
-    /// extended range, where the double result was NaN or ±∞.
+    /// extended range: where an intermediate overflowed to ±∞ or underflowed
+    /// to 0 or a subnormal, whether or not the double result is finite
+    /// (1 + √(−e^(−800)) is undefined, not 1; √(e^(−800))·e^400 is 1, not 0).
     #[inline]
     pub(crate) fn eval_tagged(&self, x: f64, y: f64) -> (f64, Redo) {
-        let v = self.eval_plain(x, y);
-        if !v.is_finite() && self.wide {
+        if !self.wide {
+            return (self.eval_plain(x, y), Redo::No);
+        }
+        let (v, rounded) = if self.max_stack <= SCALAR_STACK {
+            let mut stack = [0.0f64; SCALAR_STACK];
+            self.eval_with::<false, true>(&mut stack, x, y)
+        } else {
+            let mut stack = vec![0.0f64; self.max_stack];
+            self.eval_with::<false, true>(&mut stack, x, y)
+        };
+        if rounded || !v.is_normal() {
             self.redo(x, y)
         } else {
             (v, Redo::No)
         }
     }
 
-    /// Whether a NaN or ±∞ from [`Program::eval_plain`] may stand for a
-    /// value beyond a double's range, to get with [`Program::redo`].
+    /// Whether a value from [`Program::eval_plain`] may be the rounding of
+    /// one beyond a double's range, to get with [`Program::redo`].
     pub(crate) fn may_redo(&self) -> bool {
         self.wide
     }
 
-    /// The value at a point where the double one is NaN or ±∞, in extended
-    /// range if the double one may be the rounding of something beyond
-    /// it.
+    /// The value at a point where an intermediate double may have left the
+    /// range, in extended range if one did before any undefined operation.
     #[cold]
     pub(crate) fn redo(&self, x: f64, y: f64) -> (f64, Redo) {
         let (v, off) = if self.max_stack <= 8 {
             let mut stack = [0.0f64; 8];
-            self.eval_with::<true>(&mut stack, x, y)
+            self.eval_with::<true, false>(&mut stack, x, y)
         } else if self.max_stack <= SCALAR_STACK {
             let mut stack = [0.0f64; SCALAR_STACK];
-            self.eval_with::<true>(&mut stack, x, y)
+            self.eval_with::<true, false>(&mut stack, x, y)
         } else {
             let mut stack = vec![0.0f64; self.max_stack];
-            self.eval_with::<true>(&mut stack, x, y)
+            self.eval_with::<true, false>(&mut stack, x, y)
         };
         if !off {
             return (v, Redo::No);
@@ -458,24 +489,32 @@ impl Program {
     pub(crate) fn eval_plain(&self, x: f64, y: f64) -> f64 {
         if self.max_stack <= SCALAR_STACK {
             let mut stack = [0.0f64; SCALAR_STACK];
-            self.eval_with::<false>(&mut stack, x, y).0
+            self.eval_with::<false, false>(&mut stack, x, y).0
         } else {
             let mut stack = vec![0.0f64; self.max_stack];
-            self.eval_with::<false>(&mut stack, x, y).0
+            self.eval_with::<false, false>(&mut stack, x, y).0
         }
     }
 
     /// Evaluates in doubles; with `CHECK`, also whether the result may be
     /// the rounding of a value beyond their range: whether, before any
     /// undefined operation, an intermediate result overflowed or underflowed
-    /// (to 0 or a subnormal), so that later operations may have made NaN or
-    /// ±∞ of it. Where operands are normal or exact, extended range gives
-    /// what a double does (both NaN for √−1, both overflow for e^800).
+    /// (to 0 or a subnormal), so that later operations may have made
+    /// something else of it. Where operands are normal or exact, extended
+    /// range gives what a double does (both NaN for √−1, both overflow for
+    /// e^800). With `FLAG` (cheaper, and not stopping early), whether any
+    /// intermediate may have left the range at all (see `scan`).
     #[inline(always)]
-    fn eval_with<const CHECK: bool>(&self, stack: &mut [f64], x: f64, y: f64) -> (f64, bool) {
+    fn eval_with<const CHECK: bool, const FLAG: bool>(
+        &self,
+        stack: &mut [f64],
+        x: f64,
+        y: f64,
+    ) -> (f64, bool) {
         let mut sp = 0usize;
         let last = self.ops.len() - 1;
-        for (i, op) in self.ops.iter().enumerate() {
+        let mut rounded = false;
+        for (i, (op, &scan)) in self.ops.iter().zip(self.scan.iter()).enumerate() {
             match *op {
                 Op::Const(v) | Op::Big(v, _) => {
                     stack[sp] = v;
@@ -522,6 +561,9 @@ impl Program {
                     stack[sp - 1] = f.apply(stack[sp - 1], stack[sp]);
                 }
             }
+            if FLAG {
+                rounded |= scan & left_range(stack[sp - 1]);
+            }
             if CHECK {
                 let v = stack[sp - 1];
                 match op {
@@ -541,7 +583,7 @@ impl Program {
                 }
             }
         }
-        (stack[0], false)
+        (stack[0], rounded)
     }
 
     /// Evaluates `f(x)` with `y = 0`.
@@ -554,18 +596,54 @@ impl Program {
     /// slice inputs must be at least that long. Instructions are applied to
     /// chunks of points at a time, amortising dispatch.
     pub fn eval_batch(&self, xs: Input<'_>, ys: Input<'_>, out: &mut [f64]) {
-        self.eval_batch_plain(xs, ys, out);
+        self.eval_batch_tagged(xs, ys, out, |_, _| {});
+    }
+
+    /// [`Program::eval_batch`], calling `redone(i, how)` for each point `i`
+    /// that needed re-evaluating in extended range (see
+    /// [`Program::eval_tagged`]).
+    pub(crate) fn eval_batch_tagged(
+        &self,
+        xs: Input<'_>,
+        ys: Input<'_>,
+        out: &mut [f64],
+        mut redone: impl FnMut(usize, Redo),
+    ) {
         if !self.wide {
+            self.eval_batch_plain(xs, ys, out);
             return;
+        }
+        let n = out.len();
+        if let Input::Slice(s) = xs {
+            assert!(s.len() >= n, "x slice too short");
+        }
+        if let Input::Slice(s) = ys {
+            assert!(s.len() >= n, "y slice too short");
         }
         let at = |i: usize, s: Input<'_>| match s {
             Input::Scalar(v) => v,
             Input::Slice(s) => s[i],
         };
-        for (i, o) in out.iter_mut().enumerate() {
-            if !o.is_finite() {
-                *o = self.redo(at(i, xs), at(i, ys)).0;
+        let mut stack = vec![[0.0f64; CHUNK]; self.max_stack.max(1)];
+        let mut rounded = [false; CHUNK];
+        let mut start = 0;
+        while start < n {
+            let len = CHUNK.min(n - start);
+            rounded[..len].fill(false);
+            self.eval_chunk::<true>(&mut stack, &mut rounded, xs, ys, start, len);
+            out[start..start + len].copy_from_slice(&stack[0][..len]);
+            for (r, v) in rounded[..len].iter_mut().zip(&out[start..start + len]) {
+                *r |= !v.is_normal();
             }
+            for k in (0..len).filter(|&k| rounded[k]) {
+                let i = start + k;
+                let (v, how) = self.redo(at(i, xs), at(i, ys));
+                out[i] = v;
+                if how != Redo::No {
+                    redone(i, how);
+                }
+            }
+            start += len;
         }
     }
 
@@ -583,18 +661,22 @@ impl Program {
             return;
         }
         let mut stack = vec![[0.0f64; CHUNK]; self.max_stack.max(1)];
+        let mut unused = [false; CHUNK];
         let mut start = 0;
         while start < n {
             let len = CHUNK.min(n - start);
-            self.eval_chunk(&mut stack, xs, ys, start, len);
+            self.eval_chunk::<false>(&mut stack, &mut unused, xs, ys, start, len);
             out[start..start + len].copy_from_slice(&stack[0][..len]);
             start += len;
         }
     }
 
-    fn eval_chunk(
+    /// One chunk of points; with `FLAG`, marks in `rounded` the points where
+    /// an intermediate may have left a double's range (see `scan`).
+    fn eval_chunk<const FLAG: bool>(
         &self,
         stack: &mut [[f64; CHUNK]],
+        rounded: &mut [bool; CHUNK],
         xs: Input<'_>,
         ys: Input<'_>,
         start: usize,
@@ -605,7 +687,7 @@ impl Program {
             Input::Scalar(v) => dst[..len].fill(v),
             Input::Slice(s) => dst[..len].copy_from_slice(&s[start..start + len]),
         };
-        for op in &self.ops {
+        for (i, op) in self.ops.iter().enumerate() {
             match *op {
                 Op::Const(v) | Op::Big(v, _) => {
                     stack[sp][..len].fill(v);
@@ -653,6 +735,11 @@ impl Program {
                         Fn1::Ln => s.iter_mut().for_each(|a| *a = fns::ln(*a)),
                         _ => s.iter_mut().for_each(|a| *a = f.apply(*a)),
                     }
+                }
+            }
+            if FLAG && self.scan[i] {
+                for (r, &v) in rounded[..len].iter_mut().zip(&stack[sp - 1][..len]) {
+                    *r |= left_range(v);
                 }
             }
         }

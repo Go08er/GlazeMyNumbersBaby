@@ -165,7 +165,13 @@ fn quotients_and_logs_of_exp_have_no_cutoff() {
         assert_eq!(r.domain, "x ∈ ℝ", "{src}");
         assert_eq!(r.x_intercept, "0", "{src}");
     }
-    assert_eq!(k("y=ln(exp(x))").oblique_asymptotes, ["y = x"]);
+    // ln(e^x) is the line y = x, and is analysed as that line (which has
+    // no asymptote of its own). Before R10-M-01 the subnormal band of e^x
+    // left rounding noise that read as an asymptote.
+    assert_eq!(
+        k("y=ln(exp(x))").oblique_asymptotes,
+        k("y=x").oblique_asymptotes
+    );
     let r = k("y=exp(x)*exp(-x)");
     assert_eq!(r.domain, "x ∈ ℝ");
     assert!(r.vertical_asymptotes.is_empty() && known(&r, flags::VERTICAL_ASYMPTOTES));

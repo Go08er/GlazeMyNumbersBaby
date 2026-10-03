@@ -86,11 +86,23 @@ pub fn floats_between(a: f64, b: f64) -> i64 {
 // The reference evaluator.
 
 /// m · 2ᵉ with ½ ≤ |m| < 1 (or m = 0): a double with an unbounded exponent.
+///
+/// Exponents are held exactly while |e| < [`EXACT_E`]. A nonzero value below
+/// that is *lost*: known to be smaller than every value held exactly (and
+/// its sign known), but not how small (e^(−x²) at x = 10¹⁰). Operations
+/// that would need its size give [`R::Unknown`]; ones that don't (adding it
+/// to a larger value, its sign, its cosine) keep it. A value above that
+/// range is [`R::Unknown`].
 #[derive(Clone, Copy, Debug)]
 pub struct Xf {
     pub m: f64,
     pub e: i64,
 }
+
+/// See [`Xf`].
+pub const EXACT_E: i64 = 1 << 61;
+/// The exponent of a lost value (see [`Xf`]).
+const LOST_E: i64 = -(1 << 62);
 
 pub fn frexp(v: f64) -> (f64, i64) {
     if v == 0.0 || !v.is_finite() {
@@ -134,8 +146,37 @@ impl Xf {
         let (mm, ee) = frexp(m);
         Xf {
             m: mm,
-            e: if mm == 0.0 { 0 } else { e + ee },
+            e: if mm == 0.0 { 0 } else { e.saturating_add(ee) },
         }
+    }
+    /// A lost value of the given sign (see [`Xf`]).
+    fn lost_of(sign: f64) -> Xf {
+        Xf {
+            m: 0.5 * sign,
+            e: LOST_E,
+        }
+    }
+    /// Nonzero, but too small for its size to be held (see [`Xf`]).
+    pub fn lost(self) -> bool {
+        self.m != 0.0 && self.e <= -EXACT_E
+    }
+    /// Its order against `o` as numbers, exactly (beyond the doubles too).
+    pub fn cmp(self, o: Xf) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        let (sa, sb) = (self.sign(), o.sign());
+        if sa != sb {
+            return sa.partial_cmp(&sb).unwrap_or(Ordering::Equal);
+        }
+        if sa == 0.0 {
+            return Ordering::Equal;
+        }
+        let mag = self.e.cmp(&o.e).then(
+            self.m
+                .abs()
+                .partial_cmp(&o.m.abs())
+                .unwrap_or(Ordering::Equal),
+        );
+        if sa > 0.0 { mag } else { mag.reverse() }
     }
     pub fn f(self) -> f64 {
         ldexp(self.m, self.e)
@@ -179,10 +220,10 @@ impl Xf {
         }
     }
     pub fn mul(self, o: Xf) -> Xf {
-        Xf::norm(self.m * o.m, self.e + o.e)
+        Xf::norm(self.m * o.m, self.e.saturating_add(o.e))
     }
     pub fn div(self, o: Xf) -> Xf {
-        Xf::norm(self.m / o.m, self.e - o.e)
+        Xf::norm(self.m / o.m, self.e.saturating_sub(o.e))
     }
     pub fn add(self, o: Xf) -> Xf {
         if self.m == 0.0 {
@@ -210,15 +251,12 @@ impl Xf {
             return R::V(Xf::of(t.exp()));
         }
         let k = (t / LN_2).floor();
-        // (Below even this exponent range, e^t is still a positive number:
-        // smaller than anything it meets.)
-        if k < -4e18 {
-            return R::V(Xf {
-                m: 0.5,
-                e: -(1 << 61),
-            });
+        // (Below even this exponent range, e^t is still a positive number,
+        // smaller than anything held exactly: lost.)
+        if k <= -(EXACT_E as f64) {
+            return R::V(Xf::lost_of(1.0));
         }
-        if !k.is_finite() || k > 4e18 {
+        if !k.is_finite() || k >= EXACT_E as f64 {
             return R::Unknown;
         }
         R::V(Xf::norm((t - k * LN_2).exp(), k as i64))
@@ -244,6 +282,57 @@ pub enum R {
     V(Xf),
     Undef,
     Unknown,
+}
+
+/// A computed value as a result: beyond the exact exponents, lost if tiny
+/// and unknown if huge (see [`Xf`]).
+fn settle(v: Xf) -> R {
+    if v.m == 0.0 || v.e.abs() < EXACT_E {
+        R::V(v)
+    } else if v.e < 0 {
+        R::V(Xf::lost_of(v.sign()))
+    } else {
+        R::Unknown
+    }
+}
+
+/// a op b where a or b is lost (see [`Xf`]): only what doesn't need the
+/// lost value's size.
+fn lost_bin(op: BinOp, a: Xf, b: Xf) -> R {
+    // A double-sized factor keeps a lost value below everything held
+    // exactly (the exact range ends 2⁶¹ binades before the lost ones).
+    let moderate = |v: Xf| !v.lost() && v.e.abs() <= 2048;
+    match op {
+        BinOp::Add | BinOp::Sub => {
+            let b = if op == BinOp::Sub { b.neg() } else { b };
+            match (a.lost(), b.lost()) {
+                (true, true) if a.sign() == b.sign() => R::V(a),
+                (true, true) => R::Unknown,
+                (true, false) if b.is_zero() => R::V(a),
+                (true, false) => R::V(b),
+                _ if a.is_zero() => R::V(b),
+                _ => R::V(a),
+            }
+        }
+        BinOp::Mul => {
+            if a.is_zero() || b.is_zero() {
+                R::V(Xf::ZERO)
+            } else if (a.lost() || moderate(a)) && (b.lost() || moderate(b)) {
+                R::V(Xf::lost_of(a.sign() * b.sign()))
+            } else {
+                R::Unknown
+            }
+        }
+        _ => {
+            if a.is_zero() {
+                R::V(Xf::ZERO)
+            } else if a.lost() && moderate(b) {
+                R::V(Xf::lost_of(a.sign() * b.sign()))
+            } else {
+                R::Unknown
+            }
+        }
+    }
 }
 
 /// An exponent written as an integer or a ratio of integers, as the
@@ -335,6 +424,9 @@ pub fn bin(op: BinOp, a: Xf, b: Xf) -> R {
         BinOp::Div if b.is_zero() => return R::Undef,
         _ => {}
     }
+    if a.lost() || b.lost() {
+        return lost_bin(op, a, b);
+    }
     if a.normal() && b.normal() {
         let (x, y) = (a.f(), b.f());
         let r = match op {
@@ -348,7 +440,7 @@ pub fn bin(op: BinOp, a: Xf, b: Xf) -> R {
             return R::V(Xf::of(r));
         }
     }
-    R::V(match op {
+    settle(match op {
         BinOp::Add => a.add(b),
         BinOp::Sub => a.add(b.neg()),
         BinOp::Mul => a.mul(b),
@@ -367,6 +459,13 @@ pub fn pow_rat(b: R, p: i32, q: i32) -> R {
             ..0 => R::Undef,
             0 => R::V(Xf::of(1.0)),
             _ => R::V(Xf::ZERO),
+        };
+    }
+    if b.lost() {
+        return match p {
+            0 => R::V(Xf::of(1.0)),
+            _ if b.sign() < 0.0 && q % 2 == 0 => R::Undef,
+            _ => R::Unknown,
         };
     }
     if b.normal() {
@@ -414,6 +513,13 @@ pub fn pow_real(a: Xf, b: Xf) -> R {
             R::V(Xf::ZERO)
         };
     }
+    if a.lost() {
+        return if b.is_zero() {
+            R::V(Xf::of(1.0))
+        } else {
+            R::Unknown
+        };
+    }
     let y = b.f();
     if !y.is_finite() {
         return R::Unknown;
@@ -452,6 +558,9 @@ pub fn root_x(x: Xf, n: Xf) -> R {
     if x.sign() < 0.0 && !odd {
         return R::Undef;
     }
+    if x.lost() {
+        return R::Unknown;
+    }
     match Xf::exp(x.abs().ln() / nf) {
         R::V(m) if x.sign() < 0.0 => R::V(m.neg()),
         r => r,
@@ -479,6 +588,9 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
             if a.sign() <= 0.0 {
                 return R::Undef;
             }
+            if a.lost() {
+                return R::Unknown;
+            }
             if a.normal() {
                 return one(if f == Ln {
                     fns::ln(a.f())
@@ -492,6 +604,8 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
         Sqrt => {
             if a.sign() < 0.0 {
                 R::Undef
+            } else if a.lost() {
+                R::Unknown
             } else if a.normal() {
                 one(a.f().sqrt())
             } else {
@@ -504,7 +618,9 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
             }
         }
         Cbrt => {
-            if a.normal() {
+            if a.lost() {
+                R::Unknown
+            } else if a.normal() {
                 one(a.f().cbrt())
             } else {
                 let r = a.e.rem_euclid(3);
@@ -537,11 +653,12 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
             }
             if a.tiny() {
                 let t = a.mul(Xf::of(c));
-                return R::V(match f {
-                    Sin | Tan => t,
-                    Cos | Sec => Xf::of(1.0),
-                    _ => Xf::of(1.0).div(t),
-                });
+                return match f {
+                    Sin | Tan => R::V(t),
+                    Cos | Sec => R::V(Xf::of(1.0)),
+                    _ if t.lost() => R::Unknown,
+                    _ => settle(Xf::of(1.0).div(t)),
+                };
             }
             let t = a.f();
             one(match f {
@@ -584,11 +701,13 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
                 return R::Undef;
             }
             if a.tiny() {
-                return R::V(if f == Sech {
-                    Xf::of(1.0)
+                return if f == Sech {
+                    R::V(Xf::of(1.0))
+                } else if a.lost() {
+                    R::Unknown
                 } else {
-                    Xf::of(1.0).div(a)
-                });
+                    settle(Xf::of(1.0).div(a))
+                };
             }
             let t = a.f();
             if t.abs() > 700.0 {
@@ -612,8 +731,10 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
         Coth => {
             if a.is_zero() {
                 R::Undef
+            } else if a.lost() {
+                R::Unknown
             } else if a.tiny() {
-                R::V(Xf::of(1.0).div(a))
+                settle(Xf::of(1.0).div(a))
             } else {
                 one(fns::coth(a.proxy()))
             }
@@ -625,6 +746,28 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
             let l = LN_2 + a.abs().ln();
             R::V(Xf::of(if a.sign() < 0.0 { -l } else { l }))
         }
+        // Below or beyond the doubles, where the double standing in for the
+        // argument would give a wrong size: f(t) ≈ t, ln(2/|t|) or 1/t.
+        Asin | Atan | Asinh | Atanh if a.tiny() => {
+            let s = if matches!(f, Asin | Atan) {
+                1.0 / c
+            } else {
+                1.0
+            };
+            R::V(a.mul(Xf::of(s)))
+        }
+        Asech | Acsch if a.tiny() && (f == Acsch || a.sign() > 0.0) => {
+            if a.lost() {
+                return R::Unknown;
+            }
+            let l = LN_2 - a.abs().ln();
+            R::V(Xf::of(if a.sign() < 0.0 { -l } else { l }))
+        }
+        Acsc | Acsch | Acoth if a.huge() => {
+            let s = if f == Acsc { 1.0 / c } else { 1.0 };
+            settle(Xf::of(1.0).div(a).mul(Xf::of(s)))
+        }
+        Acot if a.huge() && a.sign() > 0.0 => settle(Xf::of(1.0).div(a).mul(Xf::of(1.0 / c))),
         Asin | Acos | Atan | Asec | Acsc | Acot | Asinh | Acosh | Atanh | Asech | Acsch | Acoth => {
             let p = a.proxy();
             one(match f {
@@ -655,6 +798,13 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
         Root => root_x(a, v[1]),
         LogBase => {
             let (b, t) = (a, v[1]);
+            if b.lost() || t.lost() {
+                return if b.sign() <= 0.0 || t.sign() <= 0.0 {
+                    R::Undef
+                } else {
+                    R::Unknown
+                };
+            }
             if b.normal() && t.normal() {
                 one(fns::log_base(b.f(), t.f()))
             } else if b.sign() <= 0.0 || t.sign() <= 0.0 || (b.normal() && b.f() == 1.0) {
@@ -675,10 +825,12 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
             })
         }
         Min | Max => {
+            // (Compared as numbers, not as the doubles standing in for them:
+            // e^1000 < e^2000.)
             let mut best = v[0];
             for &t in &v[1..] {
-                let (bp, tp) = (best.proxy(), t.proxy());
-                if (f == Min && tp < bp) || (f == Max && tp > bp) {
+                let o = t.cmp(best);
+                if (f == Min && o.is_lt()) || (f == Max && o.is_gt()) {
                     best = t;
                 }
             }
