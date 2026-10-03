@@ -24,8 +24,8 @@
 //! thread.
 
 use super::format::{
-    Bound, Interval, MINUS, Nice, format_family, format_nonzero, format_number,
-    format_periodic_set, format_set, format_set_with,
+    Bound, Interval, MINUS, Nice, format_family, format_family_apart, format_nonzero,
+    format_number, format_number_apart, format_periodic_set, format_set, format_set_with,
 };
 use super::numeric::{
     SeqLimit, bisect_defined, brent, diverges_near, limit_at_infinity_beyond_err, one_sided_limit,
@@ -455,10 +455,15 @@ fn render(k: &mut KeyGraphFeatures) {
                 k.domain = format_set("x", &d.domain);
             }
             if known(flags::ZEROS) {
+                let near: Vec<f64> = (d.zeros.iter())
+                    .chain(&d.excluded)
+                    .chain(&d.vertical_asymptotes)
+                    .map(|f| f.x)
+                    .collect();
                 k.x_intercept = d
                     .zeros
                     .iter()
-                    .map(|z| format_number(z.x))
+                    .map(|z| format_number_apart(z.x, &near))
                     .collect::<Vec<_>>()
                     .join(", ");
             }
@@ -494,14 +499,13 @@ fn render(k: &mut KeyGraphFeatures) {
                 };
             }
             if known(flags::ZEROS) && !d.zeros.is_empty() {
-                k.x_intercept = format!(
-                    "{}, k ∈ ℤ",
-                    d.zeros
-                        .iter()
-                        .map(fmt_family)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
+                let others: Vec<Family> = d
+                    .excluded
+                    .iter()
+                    .chain(&d.vertical_asymptotes)
+                    .copied()
+                    .collect();
+                k.x_intercept = format!("{}, k ∈ ℤ", fmt_zero_families(&d.zeros, &others));
             }
             let pts = |v: &[(Family, f64)]| -> Vec<String> {
                 v.iter()
@@ -3730,9 +3734,16 @@ fn analyze_aperiodic(
     if zeros.len() > MAX_LISTED || too & flags::ZEROS != 0 {
         too |= flags::ZEROS;
     } else {
+        // A zero beside a pole (1/(x − 2) + 10⁶ at 1.999999) or another
+        // zero keeps the digits that tell them apart.
+        let near: Vec<f64> = (zeros.iter())
+            .chain(&sc.poles)
+            .chain(&sc.excluded)
+            .copied()
+            .collect();
         k.x_intercept = zeros
             .iter()
-            .map(|&z| format_number(z))
+            .map(|&z| format_number_apart(z, &near))
             .collect::<Vec<_>>()
             .join(", ");
     }
@@ -3880,6 +3891,20 @@ fn families(mut reps: Vec<f64>, p: f64) -> Vec<Family> {
     reps.into_iter()
         .map(|x| Family { x, period: Some(p) })
         .collect()
+}
+
+/// Zeros as a list, each with the digits that tell it apart from the
+/// other zeros and from `others` (poles, excluded points).
+fn fmt_zero_families(zeros: &[Family], others: &[Family]) -> String {
+    let near: Vec<f64> = zeros.iter().chain(others).map(|f| f.x).collect();
+    zeros
+        .iter()
+        .map(|z| match z.period {
+            Some(p) => format_family_apart(z.x, p, &near),
+            None => format_number_apart(z.x, &near),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn fmt_family(f: &Family) -> String {
@@ -4065,10 +4090,8 @@ fn analyze_periodic(
             .collect()
     };
     if !zero_f.is_empty() {
-        k.x_intercept = format!(
-            "{}, k ∈ ℤ",
-            zero_f.iter().map(fmt_family).collect::<Vec<_>>().join(", ")
-        );
+        let others: Vec<Family> = pole_f.iter().chain(&excluded_fam).copied().collect();
+        k.x_intercept = format!("{}, k ∈ ℤ", fmt_zero_families(&zero_f, &others));
     }
     k.minima = fmt_pts(&min_f);
     k.maxima = fmt_pts(&max_f);

@@ -224,9 +224,43 @@ fn superscript(n: i32) -> String {
         .collect()
 }
 
+/// Formats `v` like [`format_number`], with as many more significant
+/// digits as it takes to tell it apart from each of `others`: a zero 10⁻⁶
+/// beside a pole at 2 shows as 1.999999, not as 2.
+pub fn format_number_apart(v: f64, others: &[f64]) -> String {
+    let s = format_number(v);
+    if !others.iter().any(|&o| looks_same(v, o)) {
+        return s;
+    }
+    let mut out = String::new();
+    for sig in 7..=17 {
+        out = format_decimal_digits(v, sig);
+        if others
+            .iter()
+            .all(|&o| o == v || format_decimal_digits(o, sig) != out)
+        {
+            break;
+        }
+    }
+    out
+}
+
+/// Distinct values that read the same, as closed forms or as decimals
+/// (π/2 and 1.5708 both).
+fn looks_same(v: f64, o: f64) -> bool {
+    o != v
+        && o.is_finite()
+        && (format_number(o) == format_number(v) || format_decimal(o) == format_decimal(v))
+}
+
 /// Decimal formatting with 6 significant digits, trailing zeros trimmed;
 /// `m×10ⁿ` for very large/small magnitudes; `∞` for infinities.
 pub fn format_decimal(v: f64) -> String {
+    format_decimal_digits(v, 6)
+}
+
+/// [`format_decimal`] with `sig` significant digits.
+fn format_decimal_digits(v: f64, sig: i32) -> String {
     if v.is_nan() {
         return "NaN".into();
     }
@@ -244,22 +278,23 @@ pub fn format_decimal(v: f64) -> String {
     let a = v.abs();
     let e = a.log10().floor() as i32;
     if !(-5..9).contains(&e) {
+        let digits = (sig - 1) as usize;
         let mut m = a / 10f64.powi(e);
         let mut e = e;
-        if format!("{m:.5}").starts_with("10") {
+        if format!("{m:.digits$}").starts_with("10") {
             m /= 10.0;
             e += 1;
         }
-        let ms = trim(&format!("{m:.5}"));
+        let ms = trim(&format!("{m:.digits$}"));
         return format!("{sign}{ms}×10{}", superscript(e));
     }
-    // Six significant digits, but large values keep a few decimals so
+    // `sig` significant digits, but large values keep a few decimals so
     // nearby points stay apart (a maximum at 2000000.5 between zeros at
     // 2000000 and 2000001).
     let decimals = if e >= 5 {
-        (9 - e).max(0)
+        (sig + 3 - e).max(0)
     } else {
-        (5 - e).min(12)
+        (sig - 1 - e).min(sig + 6)
     } as usize;
     let s = trim(&format!("{a:.decimals$}"));
     if s == "0" {
@@ -290,6 +325,25 @@ pub fn format_family(rep: f64, period: f64) -> String {
         return p;
     }
     format!("{} + {}", r, p)
+}
+
+/// [`format_family`], with the digits that tell `rep` apart from each of
+/// `others` (other points, compared at their copies nearest `rep`): the
+/// zeros of tan x − 10⁹ sit 10⁻⁹ before the poles at π/2 + kπ.
+pub fn format_family_apart(rep: f64, period: f64, others: &[f64]) -> String {
+    let s = format_family(rep, period);
+    let near: Vec<f64> = others
+        .iter()
+        .map(|&o| o + ((rep - o) / period).round() * period)
+        .collect();
+    if !near.iter().any(|&o| looks_same(rep, o)) {
+        return s;
+    }
+    format!(
+        "{} + {}",
+        format_number_apart(rep, &near),
+        Nice::of(period).times_k()
+    )
 }
 
 /// One end of an interval.
