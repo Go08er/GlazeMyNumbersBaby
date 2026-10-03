@@ -733,6 +733,16 @@ impl App {
         if let Some((hits, nodes, stale)) = drawn {
             self.hits = hits;
             again = stale;
+            // A focused scroll view whose content now fits isn't a stop
+            // any more: let go of it.
+            if let Some(f) = self.input.focus
+                && self
+                    .hits
+                    .iter()
+                    .any(|h| h.id == f && h.sense == Sense::Scroll && !h.focusable)
+            {
+                self.input.focus = None;
+            }
             self.dev.frames += 1;
             if let Some(nodes) = nodes {
                 let title = format!("{} — {}", APP_NAME, self.mode.title());
@@ -2066,7 +2076,17 @@ fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: Desktop) {
         *y += 34.0;
     };
     heading(f, &mut y, "Appearance");
-    let card = Rect::new(x, y, col_w, 116.0);
+    let accent_ok = desktop.accent.is_some();
+    let label = if accent_ok {
+        "Use the desktop's accent colour"
+    } else {
+        "Use the desktop's accent colour (none shared)"
+    };
+    // The label gets the row less the switch, wrapping if it must.
+    let lines = f.wrap(label, col_w - 24.0 - 4.0 - 60.0, BODY);
+    let line_h = 20.0;
+    let row_h = (lines.len() as f32 * line_h + 14.0).max(34.0);
+    let card = Rect::new(x, y, col_w, 82.0 + row_h);
     f.cv.rounded(card, 12.0, t.surface);
     f.label(
         Rect::new(x + 14.0, y + 8.0, col_w, 24.0),
@@ -2092,21 +2112,18 @@ fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: Desktop) {
             true,
         );
     }
-    let row = Rect::new(x + 12.0, y + 76.0, col_w - 24.0, 34.0);
-    let accent_ok = desktop.accent.is_some();
-    let label = if accent_ok {
-        "Use the desktop's accent colour"
-    } else {
-        "Use the desktop's accent colour (none shared)"
-    };
-    f.label(
-        row.inset_xy(2.0, 0.0),
-        label,
-        BODY,
-        if accent_ok { t.fg } else { t.fg_dim },
-        Align::Start,
-    );
-    let sw = Rect::new(row.right() - 52.0, row.y + 5.0, 46.0, 24.0);
+    let row = Rect::new(x + 12.0, y + 76.0, col_w - 24.0, row_h);
+    let top = row.y + (row_h - lines.len() as f32 * line_h) / 2.0;
+    for (i, l) in lines.iter().enumerate() {
+        f.label(
+            Rect::new(row.x + 2.0, top + i as f32 * line_h, row.w - 64.0, line_h),
+            l,
+            BODY,
+            if accent_ok { t.fg } else { t.fg_dim },
+            Align::Start,
+        );
+    }
+    let sw = Rect::new(row.right() - 52.0, row.cy() - 12.0, 46.0, 24.0);
     let on = s.system_accent && accent_ok;
     f.cv.rounded(sw, 12.0, if on { t.accent } else { t.border });
     f.cv.circle(
@@ -2135,7 +2152,7 @@ fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: Desktop) {
             n.focusable = true;
         }
     }
-    y += 116.0 + 20.0;
+    y += card.h + 20.0;
 
     heading(f, &mut y, "About");
     const ABOUT: &str = "The lean twin of GMNB: the Windows Calculator engine ported to Rust, drawn in software with nothing running while it waits. Not affiliated with or endorsed by Microsoft.";

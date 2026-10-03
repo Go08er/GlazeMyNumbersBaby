@@ -51,7 +51,13 @@ impl Touches {
             1 => Gesture::Press(x, y),
             2 => {
                 let (d, (mx, my)) = self.spread();
-                self.pinch = Some((d, on_canvas(mx, my)));
+                // A replacement finger rebases the spread but keeps the
+                // gesture's canvas decision until every finger has lifted.
+                let latched = match self.pinch {
+                    Some((_, latched)) => latched,
+                    None => on_canvas(mx, my),
+                };
+                self.pinch = Some((d, latched));
                 Gesture::PinchStart
             }
             _ => Gesture::None,
@@ -189,6 +195,26 @@ mod tests {
         assert_eq!(t.up(1, false), Gesture::None);
         let (bx, by) = (500.0 + 2.0 * (50.0 - 500.0), 2.0 * 300.0);
         assert!((zoom(t.moved(3, bx, by)) - 0.5).abs() < 1e-6);
+    }
+
+    /// R5-L-03: lifting one finger and putting another down doesn't make a
+    /// fresh canvas decision, in either direction.
+    #[test]
+    fn a_replacement_finger_keeps_the_latch() {
+        let mut t = Touches::default();
+        t.down(1, 0.0, 0.0, |_, _| false);
+        t.down(2, 100.0, 0.0, |_, _| false);
+        t.up(1, false);
+        t.down(3, 300.0, 0.0, |_, _| true);
+        assert_eq!(t.moved(3, 500.0, 0.0), Gesture::None);
+
+        let mut t = Touches::default();
+        t.down(1, 0.0, 0.0, |_, _| true);
+        t.down(2, 100.0, 0.0, |_, _| true);
+        t.up(1, false);
+        t.down(3, 300.0, 0.0, |_, _| false);
+        // Spread rebased to the new pair (200), then doubled: 2× out.
+        assert_eq!(zoom(t.moved(3, 500.0, 0.0)), 0.5);
     }
 
     #[test]

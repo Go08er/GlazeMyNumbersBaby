@@ -592,7 +592,10 @@ mod tests {
         let gone = Instant::now() - Duration::from_millis(1);
         assert!(next_event(&cx.connection, gone).is_none());
         assert!(drain(&cx.connection, gone).is_none());
-        assert!(cx.connection.poll_for_event().unwrap().is_some(), "events were waiting");
+        assert!(
+            cx.connection.poll_for_event().unwrap().is_some(),
+            "events were waiting"
+        );
     }
 
     /// Needs `Xvfb` on PATH; skipped otherwise.
