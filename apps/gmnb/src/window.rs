@@ -81,11 +81,17 @@ impl Window {
         );
         crate::theme::follow_portal_accent(&hub);
 
+        // Saved (or overridden) sizes are hints: keep them to what a window
+        // can be. GTK aborts on anything below -1.
+        let defaults = crate::settings::Settings::default();
+        let fit = |v: i32, min: i32, fallback: i32| {
+            if v <= 0 { fallback } else { v.clamp(min, 16384) }
+        };
         let win = adw::ApplicationWindow::builder()
             .application(app)
             .title(crate::APP_NAME)
-            .default_width(settings.width)
-            .default_height(settings.height)
+            .default_width(fit(settings.width, 320, defaults.width))
+            .default_height(fit(settings.height, 480, defaults.height))
             .width_request(320)
             .height_request(480)
             .css_classes(["gmnb"])
