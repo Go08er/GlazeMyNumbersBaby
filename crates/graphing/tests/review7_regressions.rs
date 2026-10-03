@@ -169,10 +169,12 @@ fn slow_tails() {
         assert_eq!(r.horizontal_asymptotes, ["y = 0"], "{src}");
         assert_eq!(r.too_complex_features, 0, "{src}");
     }
+    // Its range creeps (toward 0 from below as x → 0⁺), so stays unknown;
+    // its form shows the limit at +∞ exactly (ln x grows without bound).
     let r = k("y = 1/ln(x)");
     assert_ne!(r.too_complex_features & flags::RANGE, 0);
-    assert_ne!(r.too_complex_features & flags::HORIZONTAL_ASYMPTOTES, 0);
     assert_eq!(r.range, "");
+    assert_eq!(r.horizontal_asymptotes, ["y = 0"]);
 }
 
 /// What was right stays right: oscillation beyond the window doesn't

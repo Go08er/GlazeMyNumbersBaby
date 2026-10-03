@@ -81,6 +81,10 @@ struct Fun<'a> {
     piecewise: bool,
     /// Expressions whose zeros are kinks of f, where f′ may jump.
     kinks: Vec<Program>,
+    /// f's limits at −∞ and +∞ when its form shows them exactly: a
+    /// constant plus terms that vanish there (x^−0.0001 + 10⁻⁹ tends to
+    /// 10⁻⁹, a value no sampling of so slow a tail can pin down).
+    tails: [Option<f64>; 2],
     /// Instructions executed so far.
     work: Cell<u64>,
     budget: u64,
@@ -570,17 +574,121 @@ fn make_fun<'a>(
             ) if args.iter().any(|a| a.contains_x())
         )
     });
+    let tails = [-1.0, 1.0].map(|side| exact_tail(expr, opts, side));
     Ok(Fun {
         f,
         df,
         d2f,
         piecewise,
         kinks: kink_programs(expr, opts),
+        tails,
         work: Cell::new(0),
         budget,
         cancel,
         cancelled: Cell::new(false),
     })
+}
+
+/// How `e` behaves as x → side·∞ when its form makes that certain: Some(±1)
+/// if it grows without bound to ±∞.
+fn grows(e: &Expr, opts: &CompileOptions<'_>, side: f64) -> Option<f64> {
+    let num = |e: &Expr| Program::compile(e, opts).ok()?.as_constant();
+    if !e.contains_x() {
+        return None;
+    }
+    if let Some((c, _)) = linear_in(e, &|n| matches!(n, Expr::X))
+        && let Some(a) = num(&c)
+        && a != 0.0
+        && a.is_finite()
+    {
+        return Some(a.signum() * side);
+    }
+    match e {
+        Expr::Neg(g) => grows(g, opts, side).map(|s| -s),
+        Expr::Bin(BinOp::Add | BinOp::Sub, a, b) if !b.contains_x() => grows(a, opts, side),
+        Expr::Bin(BinOp::Add, a, b) if !a.contains_x() => grows(b, opts, side),
+        Expr::Bin(BinOp::Mul, a, b) => {
+            let (c, g) = if a.contains_x() { (b, a) } else { (a, b) };
+            let k = num(c)?;
+            (k != 0.0 && k.is_finite()).then_some(())?;
+            grows(g, opts, side).map(|s| s * k.signum())
+        }
+        Expr::Bin(BinOp::Pow, g, k) => {
+            let k = num(k)?;
+            let s = grows(g, opts, side)?;
+            if k <= 0.0 || !k.is_finite() {
+                None
+            } else if s > 0.0 {
+                Some(1.0)
+            } else if k.fract() == 0.0 {
+                Some(if (k as i64) % 2 == 0 { 1.0 } else { -1.0 })
+            } else {
+                None
+            }
+        }
+        Expr::Call(Func::Exp | Func::Ln | Func::Log | Func::Sqrt, args) => {
+            (grows(&args[0], opts, side)? > 0.0).then_some(1.0)
+        }
+        _ => None,
+    }
+}
+
+/// Whether `e` certainly tends to 0 as x → side·∞.
+fn vanishes(e: &Expr, opts: &CompileOptions<'_>, side: f64) -> bool {
+    let num = |e: &Expr| Program::compile(e, opts).ok().and_then(|p| p.as_constant());
+    match e {
+        Expr::Neg(v) => vanishes(v, opts, side),
+        Expr::Bin(BinOp::Pow, g, k) => {
+            num(k).is_some_and(|k| k < 0.0 && k.is_finite()) && grows(g, opts, side).is_some()
+        }
+        Expr::Bin(BinOp::Div, n, d) => {
+            (!n.contains_x() && num(n).is_some_and(f64::is_finite) && grows(d, opts, side).is_some())
+                || (vanishes(n, opts, side)
+                    && !d.contains_x()
+                    && num(d).is_some_and(|k| k != 0.0 && k.is_finite()))
+        }
+        Expr::Bin(BinOp::Mul, a, b) => {
+            let (c, v) = if a.contains_x() { (b, a) } else { (a, b) };
+            !c.contains_x() && num(c).is_some_and(f64::is_finite) && vanishes(v, opts, side)
+        }
+        Expr::Call(Func::Exp, args) => grows(&args[0], opts, side).is_some_and(|s| s < 0.0),
+        _ => false,
+    }
+}
+
+/// f's limit as x → side·∞ when f is a constant plus terms that certainly
+/// vanish there; that constant.
+fn exact_tail(expr: &Expr, opts: &CompileOptions<'_>, side: f64) -> Option<f64> {
+    fn terms<'e>(e: &'e Expr, sign: f64, out: &mut Vec<(f64, &'e Expr)>) {
+        match e {
+            Expr::Bin(BinOp::Add, a, b) => {
+                terms(a, sign, out);
+                terms(b, sign, out);
+            }
+            Expr::Bin(BinOp::Sub, a, b) => {
+                terms(a, sign, out);
+                terms(b, -sign, out);
+            }
+            Expr::Neg(a) => terms(a, -sign, out),
+            _ => out.push((sign, e)),
+        }
+    }
+    if !expr.contains_x() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    terms(expr, 1.0, &mut parts);
+    let mut c = 0.0;
+    for (sign, t) in parts {
+        if t.contains_x() {
+            if !vanishes(t, opts, side) {
+                return None;
+            }
+        } else {
+            c += sign * Program::compile(t, opts).ok()?.as_constant()?;
+        }
+    }
+    c.is_finite().then_some(c)
 }
 
 fn analyze_with_budget(
@@ -698,6 +806,19 @@ fn analyze_with_budget(
             k.periodicity_expression = format_number(p);
         }
         None => k.periodicity_direction = Periodicity::NotPeriodic,
+    }
+    // The range holds 0 yet no zero was located: f does cross 0, just where
+    // doubles can't place it apart from an edge (ln x + 10⁶ at e^(−10⁶)).
+    // That's unknown, not "none".
+    let holds_zero = |i: &Interval| {
+        (i.lo.value < 0.0 || (i.lo.closed && i.lo.value == 0.0))
+            && (i.hi.value > 0.0 || (i.hi.closed && i.hi.value == 0.0))
+    };
+    if k.too_complex_features & (flags::ZEROS | flags::RANGE) == 0
+        && k.data.zeros.is_empty()
+        && k.data.range.iter().any(holds_zero)
+    {
+        k.too_complex_features |= flags::ZEROS;
     }
     // A feature that couldn't be determined in full keeps none of its
     // values: the ones found (the asymptote on one side, the extrema near
@@ -2978,7 +3099,12 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
         if end.value.is_infinite() {
             // Sample past the piece's other end, inside the piece.
             let other = if side > 0.0 { p.hi.value } else { p.lo.value };
-            match limit_at_infinity_beyond_err(&mut f, end.value.signum(), other) {
+            let exact = fun.tails[usize::from(end.value > 0.0)];
+            let limit = match exact {
+                Some(c) => (SeqLimit::Converges(c), 0.0),
+                None => limit_at_infinity_beyond_err(&mut f, end.value.signum(), other),
+            };
+            match limit {
                 (SeqLimit::Converges(l), err) => acc.consider(l, Src::Limit(err)),
                 (SeqLimit::PosInf, _) => acc.consider(f64::INFINITY, Src::Limit(0.0)),
                 (SeqLimit::NegInf, _) => acc.consider(f64::NEG_INFINITY, Src::Limit(0.0)),
@@ -3349,9 +3475,14 @@ fn asymptotes_at_infinity(
                 })
         };
         let from = start(sign);
-        match limit_at_infinity_beyond_err(&mut f, sign, from) {
+        let exact = fun.tails[usize::from(sign > 0.0)];
+        let limit = match exact {
+            Some(c) => (SeqLimit::Converges(c), 0.0),
+            None => limit_at_infinity_beyond_err(&mut f, sign, from),
+        };
+        match limit {
             (SeqLimit::Converges(l), err) => {
-                let l = clean(l, err);
+                let l = if exact.is_some() { l } else { clean(l, err) };
                 if !coincides(&mut f, 0.0, l) {
                     horiz.push((l, side));
                 }

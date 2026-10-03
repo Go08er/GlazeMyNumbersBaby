@@ -277,10 +277,14 @@ pub(crate) fn sequence_limit_noisy(v: &[f64], noise_in: &[f64]) -> (SeqLimit, f6
         let r = ratios[ratios.len() - 1];
         let spread = ratios.iter().fold(0.0f64, |m, q| m.max((q - r).abs()));
         let fuzz = slack.iter().fold(0.0f64, |m, &q| m.max(q));
-        // 1. Geometric.
+        // 1. Geometric. The slack is a worst case; ratios that agree among
+        // themselves far better than it (x^−0.0001 + 10⁶: within 10⁻⁶ while
+        // 1 − r = 2.3·10⁻⁴) show the noise is smaller, and that agreement
+        // is the evidence.
+        let consistent = spread <= 0.05 * (1.0 - r);
         if r > 0.0
             && 1.0 - r > 1e-9
-            && 1.0 - r > 4.0 * fuzz
+            && (1.0 - r > 4.0 * fuzz || consistent)
             && ratios
                 .iter()
                 .zip(&slack)
@@ -291,8 +295,12 @@ pub(crate) fn sequence_limit_noisy(v: &[f64], noise_in: &[f64]) -> (SeqLimit, f6
             let acc2 = aitken(tail[k - 4], tail[k - 3], tail[k - 2]);
             if acc1.is_finite() && acc2.is_finite() {
                 let rest = (tail[k - 1] - acc1).abs();
-                let err =
-                    (acc1 - acc2).abs() + (spread + fuzz) / (1.0 - r) * rest + noise / (1.0 - r);
+                let jitter = if 1.0 - r > 4.0 * fuzz {
+                    spread + fuzz
+                } else {
+                    spread
+                };
+                let err = (acc1 - acc2).abs() + jitter / (1.0 - r) * rest + noise / (1.0 - r);
                 return (SeqLimit::Converges(acc1), err);
             }
         }
@@ -301,9 +309,25 @@ pub(crate) fn sequence_limit_noisy(v: &[f64], noise_in: &[f64]) -> (SeqLimit, f6
         // in their direction. A power tail's steps head for 0 instead.
         let k = steps.len();
         let settles = aitken(steps[k - 3], steps[k - 2], steps[k - 1]);
+        // Aitken on the steps means something only if their second
+        // difference stands out of their noise.
+        let second = ((steps[k - 1] - steps[k - 2]) - (steps[k - 2] - steps[k - 3])).abs();
+        let resolved = second > 4.0 * (step_noise[k - 1] + 2.0 * step_noise[k - 2] + step_noise[k - 3]);
         let settled = settles.is_finite()
             && (settles > 0.0) == (steps[0] > 0.0)
-            && (settles - steps[k - 1]).abs() <= 1e-2 * steps[k - 1].abs();
+            && (settles - steps[k - 1]).abs() <= 1e-2 * steps[k - 1].abs()
+            && (resolved || (steps[k - 1] - steps[k - 2]).abs() <= step_noise[k - 1] + step_noise[k - 2]);
+        // Steps measured shrinking, if only within their noise (x^−0.0001 +
+        // 10⁶ shrinks by 0.023% per decade under rounding of 10⁶): neither
+        // growth nor a limit can be told, so unknown, not ±∞.
+        let shrinking = ratios.iter().all(|q| *q < 1.0 - 1e-9)
+            && steps
+                .iter()
+                .zip(&step_noise)
+                .all(|(d, n)| d.abs() > 4.0 * n);
+        if !settled && shrinking {
+            return (SeqLimit::Unknown, NONE);
+        }
         if settled
             || ratios
                 .iter()
