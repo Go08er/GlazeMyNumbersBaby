@@ -411,8 +411,9 @@ impl CurrencyDataLoader {
         })
     }
 
-    /// A timestamp from the future (beyond clock skew) would keep stale rates
-    /// looking fresh indefinitely; such data is treated as unusable.
+    /// A cache stamped in the future (beyond clock skew) would keep stale
+    /// rates looking fresh indefinitely; it's treated as unusable. (Fresh
+    /// rates are stamped by our own client when fetched.)
     fn is_from_the_future(&self, ts: DateTime<Utc>) -> bool {
         ts > self.now() + TimeDelta::days(1)
     }
@@ -474,7 +475,9 @@ impl CurrencyDataLoader {
         snapshot: CurrencySnapshot,
         source: CurrencyDataSource,
     ) -> bool {
-        if snapshot.validate().is_err() || self.is_from_the_future(snapshot.fetched_at) {
+        if snapshot.validate().is_err()
+            || (source == CurrencyDataSource::Cache && self.is_from_the_future(snapshot.fetched_at))
+        {
             return false;
         }
         self.cache_timestamp = Some(snapshot.fetched_at);
@@ -819,11 +822,7 @@ impl CurrencyDataLoader {
         }
 
         let snapshot = match fetched {
-            Ok(snapshot)
-                if snapshot.validate().is_ok() && !self.is_from_the_future(snapshot.fetched_at) =>
-            {
-                snapshot
-            }
+            Ok(snapshot) if snapshot.validate().is_ok() => snapshot,
             _ => return false,
         };
 
