@@ -153,6 +153,8 @@ pub enum UserEvent {
     /// Desktop setting changed: (key, prefers dark, accent).
     Desktop(Desktop),
     Currency(Box<Result<unitconv::CurrencySnapshot, unitconv::CurrencyError>>),
+    /// The network portal's (available, metered), or `None` without one.
+    Network(Option<(bool, bool)>),
     Analysis(u64, Box<graphing::analysis::KeyGraphFeatures>),
     /// A worker plot: `None` if it was cancelled for a newer one.
     Plot(u64, Option<Vec<graphing::graph::EquationPlot>>, f64),
@@ -1666,6 +1668,12 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Currency(result) => {
                 if let Some(c) = self.conv.as_mut() {
                     c.currency_fetched(*result);
+                }
+                self.redraw();
+            }
+            UserEvent::Network(status) => {
+                if let Some(c) = self.conv.as_mut() {
+                    c.network(status);
                 }
                 self.redraw();
             }

@@ -32,6 +32,8 @@ pub struct ConvPage {
     picker: Option<u8>,
     search: TextEdit,
     fetching: bool,
+    /// A network-status query is under way.
+    checking: bool,
     proxy: Option<EventLoopProxy<UserEvent>>,
 }
 
@@ -63,15 +65,12 @@ pub fn search_id() -> crate::ui::Id {
 
 impl ConvPage {
     pub fn new(saved: Option<serde_json::Value>) -> ConvPage {
-        let mut vm = appcore::converter::view_model(DATA_DIR, saved);
-        if let Some((available, metered)) = network_status() {
-            vm.set_network_behavior(appcore::converter::network_behavior(available, metered));
-        }
         ConvPage {
-            vm,
+            vm: appcore::converter::view_model(DATA_DIR, saved),
             picker: None,
             search: TextEdit::new("", 60),
             fetching: false,
+            checking: false,
             proxy: None,
         }
     }
@@ -84,7 +83,44 @@ impl ConvPage {
         self.proxy = Some(proxy.clone());
         self.picker = None;
         self.vm.set_current_mode(mode);
-        if mode == ConverterMode::Currency && self.vm.start_automatic_currency_fetch() {
+        if mode == ConverterMode::Currency {
+            self.check_network();
+        }
+    }
+
+    /// Ask the network portal (off the UI thread) whether we're online and
+    /// metered; the answer comes back as `UserEvent::Network`, and decides
+    /// whether rates may be fetched without asking. Done each time Currency
+    /// opens, so the policy follows connection changes.
+    fn check_network(&mut self) {
+        let Some(proxy) = self.proxy.clone() else {
+            return;
+        };
+        if self.checking {
+            return;
+        }
+        self.checking = true;
+        let spawned = std::thread::Builder::new()
+            .name("network".into())
+            .spawn(move || {
+                let _ = proxy.send_event(UserEvent::Network(network_status()));
+            });
+        if spawned.is_err() {
+            self.network(None);
+        }
+    }
+
+    /// The portal's answer (`None`: no portal), then the automatic fetch if
+    /// Currency is still showing and the policy allows it.
+    pub fn network(&mut self, status: Option<(bool, bool)>) {
+        self.checking = false;
+        if let Some((available, metered)) = status {
+            self.vm
+                .set_network_behavior(appcore::converter::network_behavior(available, metered));
+        }
+        if self.vm.current_mode() == Some(ConverterMode::Currency)
+            && self.vm.start_automatic_currency_fetch()
+        {
             self.fetch();
         }
     }
@@ -94,13 +130,16 @@ impl ConvPage {
             return;
         };
         self.fetching = true;
-        let _ = std::thread::Builder::new()
+        let spawned = std::thread::Builder::new()
             .name("currency".into())
             .spawn(move || {
                 let _ = proxy.send_event(UserEvent::Currency(Box::new(
                     unitconv::currency::fetch_latest(),
                 )));
             });
+        if let Err(e) = spawned {
+            self.currency_fetched(Err(unitconv::CurrencyError::Http(e.to_string())));
+        }
     }
 
     pub fn currency_fetched(
