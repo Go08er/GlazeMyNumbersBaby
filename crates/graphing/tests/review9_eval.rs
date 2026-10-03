@@ -308,11 +308,11 @@ fn tiny_angles_of_either_sign_in_every_unit() {
     for unit in [TrigUnit::Radians, TrigUnit::Degrees, TrigUnit::Grads] {
         for x in [2.0237e-320, 1e-323, 5e-324, 1e-300, 1e-20] {
             for x in [x, -x] {
+                // (Below the doubles the sine rounds to ±0, with the
+                // angle's sign: 5·10⁻³²⁴° is 8.6·10⁻³²⁶. Its reciprocals
+                // are then ±∞, not undefined.)
                 let s = sin_u(x, unit);
-                assert!(
-                    s != 0.0 && s.signum() == x.signum(),
-                    "{unit:?} sin({x}) = {s}"
-                );
+                assert!(s.is_sign_negative() == (x < 0.0), "{unit:?} sin({x}) = {s}");
                 for v in [csc_u(x, unit), cot_u(x, unit)] {
                     assert!(
                         !v.is_nan() && v.signum() == x.signum(),

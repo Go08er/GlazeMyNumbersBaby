@@ -321,7 +321,7 @@ impl Wide {
             return Wide::new(v.exp());
         }
         let n = (v / LN_2).round();
-        if !(n.abs() < TWO53) {
+        if n.is_nan() || n.abs() >= TWO53 {
             // Beyond 2⁵³ binades (or v beyond a double, and so n): only the
             // size is kept, a lost value.
             return Wide::Val(1.0, n);

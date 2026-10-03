@@ -560,6 +560,21 @@ pub fn pow_real(a: Xf, b: Xf) -> R {
             R::V(Xf::of(1.0))
         };
     }
+    if b.huge() {
+        // An exponent beyond the doubles is an even integer (every number
+        // from 2⁵³ on held here is): a base of ±1 gives exactly 1 (1^(1/x)
+        // at a subnormal x), and any other base leaves the range, below it
+        // (a lost value) or above (unknown).
+        let o = a.abs().cmp(Xf::of(1.0));
+        if o.is_eq() {
+            return R::V(Xf::of(1.0));
+        }
+        return if o.is_gt() == (b.sign() > 0.0) {
+            R::Unknown
+        } else {
+            R::V(Xf::lost_of(1.0))
+        };
+    }
     let y = b.f();
     if !y.is_finite() {
         return R::Unknown;

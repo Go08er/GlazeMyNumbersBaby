@@ -119,3 +119,91 @@ fn a_tiny_angle_in_degrees_keeps_its_sine() {
     let k = analyze_str("y=sin(x)");
     assert_eq!(k.parity, Parity::Odd);
 }
+
+/// Distance in ulps (subnormal spacing below the normals).
+fn ulps(got: f64, want: f64) -> f64 {
+    let u = (f64::from_bits(want.abs().to_bits() + 1) - want.abs()).max(f64::from_bits(1));
+    (got - want).abs() / u
+}
+
+#[test]
+fn reciprocal_hyperbolics_stay_right_where_cosh_and_sinh_overflow() {
+    // csch x = 2e^−|x|/(1 − e^−2|x|): a subnormal of the right sign, not −0
+    // from 1/sinh(x) = 1/−∞. Exact values from mpmath.
+    for (src, x, want) in [
+        ("csch(x)", -712.0, -1.211_598_928_399_783e-309),
+        ("csch(x-1)", -711.0, -1.211_598_928_399_783e-309),
+        ("csch(x-1000)", 288.0, -1.211_598_928_399_783e-309),
+        ("sech(x)", 712.0, 1.211_598_928_399_783e-309),
+    ] {
+        let v = at(src, x);
+        assert!(
+            v != 0.0 && ulps(v, want) <= 2.0,
+            "{src} at {x}: {v:e} vs {want:e}"
+        );
+    }
+    // And in their ordinary range, to a few ulps.
+    assert!(ulps(at("csch(x)", 2.0), 0.2757205647717832) <= 2.0);
+    assert!(ulps(at("sech(x)", 2.0), 0.2658022288340797) <= 2.0);
+}
+
+#[test]
+fn arccot_agrees_with_its_reciprocal_form() {
+    for x in [2.37e8, 4.2e9, 1e15, 3.0, 0.5, 1e-300] {
+        assert_eq!(at("acot(x)", x), at("atan(1/x)", x), "{x}");
+    }
+    assert!((at("acot(x)*x", 4.2e9) - 1.0).abs() < 1e-15);
+}
+
+#[test]
+fn the_reference_keeps_what_a_huge_exponent_leaves_known() {
+    use graphing::analysis::truth::{R, reval};
+    let eval = |src: &str, x: f64| {
+        let eq = Equation::parse(&format!("y={src}")).unwrap();
+        let (_, ast) = eq.explicit().unwrap();
+        reval(ast, x, TrigUnit::Radians)
+    };
+    // 1 to a power beyond the doubles is exactly 1 (1/x at a subnormal x).
+    for x in [5e-324, -5e-324, -2e-320, 1e-310] {
+        match eval("1^(1/x)", x) {
+            R::V(v) => assert_eq!(v.f(), 1.0, "{x}"),
+            r => panic!("1^(1/x) at {x:e}: {r:?}"),
+        }
+        assert_eq!(at("1^(1/x)", x), 1.0, "{x}");
+    }
+    // ½ to it is a positive value below every double, not unknown.
+    match eval("0.5^(1/x)", 5e-324) {
+        R::V(v) => assert!(v.sign() > 0.0 && v.f() == 0.0),
+        r => panic!("{r:?}"),
+    }
+    // A rational power of a quotient below the normals, to the last bit.
+    for (src, want) in [
+        ("(x/0.001)^(1/3)", 1.7031839360032603e-107),
+        ("(x/0.001)^(2/3)", 2.900835519859558e-214),
+    ] {
+        match eval(src, 5e-324) {
+            R::V(v) => assert!(ulps(v.f(), want) <= 1.0, "{src}: {:e}", v.f()),
+            r => panic!("{src}: {r:?}"),
+        }
+        assert!(ulps(at(src, 5e-324), want) <= 1.0, "{src} compiled");
+    }
+}
+
+#[test]
+fn reciprocals_of_an_underflowing_sine_overflow_rather_than_vanish() {
+    // In degrees the sine of 5·10⁻³²⁴ is 8.6·10⁻³²⁶, below every double:
+    // it rounds to 0, but it is no zero of the sine, so its reciprocal is
+    // ∞, and only a whole multiple of a half turn is a pole.
+    let deg = |src: &str, x: f64| prog(src, TrigUnit::Degrees).eval(x, 0.0);
+    assert_eq!(deg("sin(x)", 5e-324), 0.0);
+    assert_eq!(deg("csc(x)", 5e-324), f64::INFINITY);
+    assert_eq!(deg("csc(x)", -5e-324), f64::NEG_INFINITY);
+    assert_eq!(deg("cot(x)", 5e-324), f64::INFINITY);
+    assert_eq!(deg("1/sin(x)", 5e-324), f64::INFINITY);
+    assert!(deg("csc(x)", 0.0).is_nan());
+    assert!(deg("csc(x)", 180.0).is_nan());
+    assert!(deg("tan(x)", 90.0).is_nan());
+    assert!(deg("sec(x)", 90.0).is_nan());
+    // Just off 90° the cosine is small but no zero: tan is finite.
+    assert!(deg("tan(x)", 90.00000000000001).is_finite());
+}

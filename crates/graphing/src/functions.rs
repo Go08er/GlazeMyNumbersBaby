@@ -55,16 +55,29 @@ impl TrigUnit {
     }
 }
 
-/// sin and cos of an angle in the given unit. For degrees/grads, exact
-/// quarter turns give exact 0/±1 so that e.g. `tan(90)` is a pole and
-/// `sin(180)` is exactly 0.
+/// sin and cos of an angle in the given unit, each rounded to a double. For
+/// degrees/grads, exact quarter turns give exact 0/±1 so that e.g.
+/// `tan(90)` is a pole and `sin(180)` is exactly 0.
 #[inline]
 pub fn sin_cos(x: f64, unit: TrigUnit) -> (f64, f64) {
+    let (s, c, _, _) = sin_cos_zeros(x, unit);
+    (s, c)
+}
+
+/// [`sin_cos`], and whether the sine and the cosine are exactly zero
+/// rather than values too small for a double: only then is a reciprocal
+/// undefined; otherwise it overflows to ±∞ (csc of 10⁻³²³ degrees).
+#[inline]
+fn sin_cos_zeros(x: f64, unit: TrigUnit) -> (f64, f64, bool, bool) {
     match unit {
-        TrigUnit::Radians => x.sin_cos(),
+        TrigUnit::Radians => {
+            // No double but 0 is a multiple of π/2.
+            let (s, c) = x.sin_cos();
+            (s, c, x == 0.0, false)
+        }
         _ => {
             if !x.is_finite() {
-                return (f64::NAN, f64::NAN);
+                return (f64::NAN, f64::NAN, false, false);
             }
             // Reduced as |x| mod a turn, which `%` does exactly, and the
             // sign put back (sin is odd, cos even): reducing a tiny negative
@@ -78,32 +91,44 @@ pub fn sin_cos(x: f64, unit: TrigUnit) -> (f64, f64) {
             let r = x.abs() % turn;
             let q = (r / quarter).round();
             let d = r - q * quarter;
-            let (s, c) = if d == 0.0 {
-                match q as i64 % 4 {
+            let odd = q as i64 % 2 == 1;
+            let (s, c, sz, cz) = if d == 0.0 {
+                let (s, c) = match q as i64 % 4 {
                     0 => (0.0, 1.0),
                     1 => (1.0, 0.0),
                     2 => (0.0, -1.0),
                     _ => (-1.0, 0.0),
-                }
-            } else {
-                let (sd, cd) = (d * unit.to_radians_factor()).sin_cos();
-                // Not a multiple of a quarter turn, so not a zero, even where
-                // the sine is below the smallest double (10⁻³²³ degrees):
-                // its reciprocal overflows rather than being undefined.
-                let sd = if sd == 0.0 {
-                    f64::from_bits(1).copysign(d)
-                } else {
-                    sd
                 };
-                match q as i64 % 4 {
+                (s, c, !odd, odd)
+            } else {
+                // (An angle so small that its sine underflows gives ±0 here,
+                // with the angle's sign; not an exact zero.)
+                let (sd, cd) = (d * unit.to_radians_factor()).sin_cos();
+                let (s, c) = match q as i64 % 4 {
                     0 => (sd, cd),
                     1 => (cd, -sd),
                     2 => (-sd, -cd),
                     _ => (-cd, sd),
-                }
+                };
+                (s, c, false, false)
             };
-            if x < 0.0 { (-s, c) } else { (s, c) }
+            if x < 0.0 {
+                (-s, c, sz, cz)
+            } else {
+                (s, c, sz, cz)
+            }
         }
+    }
+}
+
+/// a/b where b is a sine or cosine: undefined where b is exactly 0, and
+/// ±∞ where b is only a value too small for a double.
+#[inline]
+fn over(a: f64, b: f64, exact_zero: bool) -> f64 {
+    if b == 0.0 && !exact_zero {
+        a / b
+    } else {
+        div(a, b)
     }
 }
 
@@ -130,8 +155,8 @@ pub fn tan_u(x: f64, unit: TrigUnit) -> f64 {
     if unit == TrigUnit::Radians {
         x.tan()
     } else {
-        let (s, c) = sin_cos(x, unit);
-        div(s, c)
+        let (s, c, _, cz) = sin_cos_zeros(x, unit);
+        over(s, c, cz)
     }
 }
 
@@ -196,18 +221,20 @@ pub fn atanh(x: f64) -> f64 {
 
 #[inline]
 pub fn cot_u(x: f64, unit: TrigUnit) -> f64 {
-    let (s, c) = sin_cos(x, unit);
-    div(c, s)
+    let (s, c, sz, _) = sin_cos_zeros(x, unit);
+    over(c, s, sz)
 }
 
 #[inline]
 pub fn sec_u(x: f64, unit: TrigUnit) -> f64 {
-    div(1.0, cos_u(x, unit))
+    let (_, c, _, cz) = sin_cos_zeros(x, unit);
+    over(1.0, c, cz)
 }
 
 #[inline]
 pub fn csc_u(x: f64, unit: TrigUnit) -> f64 {
-    div(1.0, sin_u(x, unit))
+    let (s, _, sz, _) = sin_cos_zeros(x, unit);
+    over(1.0, s, sz)
 }
 
 #[inline]
@@ -352,7 +379,7 @@ pub fn acsch(x: f64) -> f64 {
 #[inline]
 pub fn acoth(x: f64) -> f64 {
     let a = x.abs();
-    if !(a > 1.0) {
+    if a.is_nan() || a <= 1.0 {
         return f64::NAN;
     }
     (0.5 * (2.0 / (a - 1.0)).ln_1p()).copysign(x)
@@ -614,14 +641,41 @@ pub fn pow_rational(b: f64, p: i32, q: i32) -> f64 {
         if q == 2 && p == 1 {
             return b.sqrt();
         }
-        return b.powf(p as f64 / q as f64);
+        if b < 0.0 {
+            return f64::NAN;
+        }
+        return root_power(b, p, q);
     }
-    let m = if q == 3 {
-        (-b).cbrt().powi(p)
-    } else {
-        (-b).powf(p as f64 / q as f64)
-    };
+    let m = root_power(-b, p, q);
     if p % 2 == 0 { m } else { -m }
+}
+
+/// a^(p/q) for a ≥ 0. p/q as a double is rounded (1/3 by 2⁻⁵⁶), and powf
+/// magnifies that by |ln a·p/q|: x^(1/3) at 10⁴⁵ was 17 ulps off. Square
+/// and cube roots of small powers go through sqrt/cbrt; otherwise, where
+/// the magnification is more than an ulp's worth, the exponent is kept in
+/// double-double.
+fn root_power(a: f64, p: i32, q: i32) -> f64 {
+    if p.abs() <= 4 && (q == 2 || q == 3) {
+        let r = if q == 2 { a.sqrt() } else { a.cbrt() };
+        return r.powi(p);
+    }
+    let t = p as f64 / q as f64;
+    if !(a > 0.0 && a.is_finite()) || (a.ln() * t).abs() <= 1.0 {
+        return a.powf(t);
+    }
+    let l = crate::dd::ln(a).mul_f(p as f64).div_f(q as f64);
+    let (r, n) = crate::dd::exp(l);
+    scale2(r, n)
+}
+
+/// r·2ⁿ for an integer-valued n, rounded once (to 0 or ±∞ beyond the
+/// doubles).
+fn scale2(r: f64, n: f64) -> f64 {
+    let n = n.clamp(-2200.0, 2200.0) as i32;
+    let h = n / 2;
+    // Two halves: each is a power of two a double holds (or its overflow).
+    r * 2f64.powi(h) * 2f64.powi(n - h)
 }
 
 #[cfg(test)]
