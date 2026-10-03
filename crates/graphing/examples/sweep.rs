@@ -386,6 +386,39 @@ fn check_one(a: &Analysed, centre: f64, r: &mut Report) {
         .iter()
         .filter(|y| y.is_finite())
         .fold(0f64, |m, y| m.max(y.abs()));
+    // Resolution of x near a point: the shift's rounding dominates far out.
+    let quantum = |x: f64| 1e-14 * (x.abs() + centre.abs()).max(1.0);
+    // How far x is from the base function's origin (or from 0, for a
+    // periodic family's representative): a shift by 10⁹ moves the
+    // features, not their size, so probes scale with x − centre (a step of
+    // 10⁻⁷·10⁹ = 100 jumps over every turn of a cubic).
+    let size = |x: f64| (x - centre).abs().min(x.abs());
+    // f's rounding spread at x: what neighbouring floats give. A value
+    // below a minimum by less than this is noise of the expanded form
+    // (x⁴ − 4x³ + 6x² − 4x + 1 is ±4·10⁻¹⁶ beside its exact minimum at 1).
+    let spread = |x: f64| {
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for k in -8..=8 {
+            let v = a.eval(x + k as f64 * f64::EPSILON * x.abs().max(f64::MIN_POSITIVE));
+            if v.is_finite() {
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+        }
+        if hi >= lo { hi - lo } else { 0.0 }
+    };
+    // Rounding of f's terms, which can be far larger than f: 10⁻¹⁴ of f a
+    // unit away. Neighbouring floats can all give the same rounded value
+    // (−4·10⁻¹⁶ beside the minimum of the expanded (x − 2)⁴), so the spread
+    // alone misses it.
+    let terms = |x: f64| {
+        let u = size(x).max(1.0);
+        1e-14
+            * [a.eval(x - u), a.eval(x + u)]
+                .iter()
+                .filter(|v| v.is_finite())
+                .fold(0.0f64, |m, v| m.max(v.abs()))
+    };
     // Range vs samples.
     if range_known {
         let mut worst: Option<(f64, f64)> = None;
@@ -401,7 +434,45 @@ fn check_one(a: &Analysed, centre: f64, r: &mut Report) {
                 format!("f({x})={y} not in claimed range {}", fmt_set(&d.range)),
             );
         }
-        // A closed finite bound must be attained.
+        // A closed finite bound must be attained. Sparse samples of a
+        // stretched or fast function (sin((x/1000)²), sinc(x/1000)) can
+        // miss the turn: refine the most extreme sample by golden-section
+        // search between its neighbours, and accept the bound to within
+        // f's change across the floats there (cos²(x − 10¹²) is 0 only
+        // between floats 1.2·10⁻⁴ apart).
+        let attained_near_extreme = |v: f64, is_lo: bool| {
+            let sign = if is_lo { 1.0 } else { -1.0 };
+            let Some(i) = (0..ys.len())
+                .filter(|&i| ys[i].is_finite())
+                .min_by(|&i, &j| (sign * ys[i]).total_cmp(&(sign * ys[j])))
+            else {
+                return false;
+            };
+            let (mut lo, mut hi) = (xs[i.saturating_sub(1)], xs[(i + 1).min(xs.len() - 1)]);
+            let g = |x: f64| {
+                let y = a.eval(x);
+                if y.is_finite() {
+                    sign * y
+                } else {
+                    f64::INFINITY
+                }
+            };
+            let phi = 0.5 * (5f64.sqrt() - 1.0);
+            for _ in 0..100 {
+                let (m1, m2) = (hi - phi * (hi - lo), lo + phi * (hi - lo));
+                if g(m1) <= g(m2) {
+                    hi = m2;
+                } else {
+                    lo = m1;
+                }
+            }
+            let x = 0.5 * (lo + hi);
+            let y = a.eval(x);
+            let q = quantum(x);
+            let step = (a.eval(x - q) - y).abs().max((a.eval(x + q) - y).abs());
+            y.is_finite()
+                && (close(y, v, 1e-6, 1e-6 * v.abs().max(1e-300)) || (y - v).abs() <= step)
+        };
         let smin = ys
             .iter()
             .filter(|y| y.is_finite())
@@ -427,7 +498,8 @@ fn check_one(a: &Analysed, centre: f64, r: &mut Report) {
                     || (v == 0.0 && !d.zeros.is_empty())
                     || ys.iter().any(|y| close(*y, v, 1e-6, tol))
                     || (is_lo && close(smin, v, 1e-6, tol))
-                    || (!is_lo && close(smax, v, 1e-6, tol));
+                    || (!is_lo && close(smax, v, 1e-6, tol))
+                    || attained_near_extreme(v, is_lo);
                 if !hit {
                     r.fail(
                         "closed-range-bound-not-attained",
@@ -489,39 +561,6 @@ fn check_one(a: &Analysed, centre: f64, r: &mut Report) {
         }
     }
     // Reported points are where they say.
-    // Resolution of x near a point: the shift's rounding dominates far out.
-    let quantum = |x: f64| 1e-14 * (x.abs() + centre.abs()).max(1.0);
-    // How far x is from the base function's origin (or from 0, for a
-    // periodic family's representative): a shift by 10⁹ moves the
-    // features, not their size, so probes scale with x − centre (a step of
-    // 10⁻⁷·10⁹ = 100 jumps over every turn of a cubic).
-    let size = |x: f64| (x - centre).abs().min(x.abs());
-    // f's rounding spread at x: what neighbouring floats give. A value
-    // below a minimum by less than this is noise of the expanded form
-    // (x⁴ − 4x³ + 6x² − 4x + 1 is ±4·10⁻¹⁶ beside its exact minimum at 1).
-    let spread = |x: f64| {
-        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-        for k in -8..=8 {
-            let v = a.eval(x + k as f64 * f64::EPSILON * x.abs().max(f64::MIN_POSITIVE));
-            if v.is_finite() {
-                lo = lo.min(v);
-                hi = hi.max(v);
-            }
-        }
-        if hi >= lo { hi - lo } else { 0.0 }
-    };
-    // Rounding of f's terms, which can be far larger than f: 10⁻¹⁴ of f a
-    // unit away. Neighbouring floats can all give the same rounded value
-    // (−4·10⁻¹⁶ beside the minimum of the expanded (x − 2)⁴), so the spread
-    // alone misses it.
-    let terms = |x: f64| {
-        let u = size(x).max(1.0);
-        1e-14
-            * [a.eval(x - u), a.eval(x + u)]
-                .iter()
-                .filter(|v| v.is_finite())
-                .fold(0.0f64, |m, v| m.max(v.abs()))
-    };
     for z in &d.zeros {
         let fz = a.eval(z.x);
         let h = 1e-3 * z.x.abs().max(1.0);
@@ -529,7 +568,10 @@ fn check_one(a: &Analysed, centre: f64, r: &mut Report) {
         let q = quantum(z.x);
         let (l, rr) = (a.eval(z.x - q), a.eval(z.x + q));
         let nearby = l.signum() != rr.signum() || l.abs().min(rr.abs()) <= 1e-6 * around;
-        if !fz.is_finite() || (fz.abs() > 1e-6 * around.max(1e-300) && !nearby) {
+        // Within the rounding of f's terms (the expanded (x − 1)⁴ − 10⁻¹²).
+        if !fz.is_finite()
+            || (fz.abs() > 1e-6 * around.max(1e-300) && !nearby && fz.abs() > terms(z.x))
+        {
             r.fail(
                 "zero-not-a-zero",
                 e,
@@ -726,7 +768,10 @@ fn check_one(a: &Analysed, centre: f64, r: &mut Report) {
                         Monotonicity::Constant => (y2 - y1).abs() > tol,
                         Monotonicity::Unknown => false,
                     };
-                    if bad {
+                    // Not by less than f's rounding (the expanded (x − 1)⁴
+                    // wobbles by 10⁻¹⁵ beside 2).
+                    let noise = || spread(x1) + spread(x2) + terms(x1).max(terms(x2));
+                    if bad && (y2 - y1).abs() > tol + noise() {
                         r.fail(
                             "monotonicity-contradicted",
                             e,
@@ -747,12 +792,20 @@ fn check_one(a: &Analysed, centre: f64, r: &mut Report) {
             continue;
         }
         // |f| grows without bound approaching x (from at least one side).
-        let q = (1e3 * quantum(v.x)).max(1e-9);
-        // Either side's |f| grows as x approaches (slowly, for a log).
+        // Probes a few float spacings out (20 units out at 10¹² was beside
+        // the pole of a cubic whose features are 1 apart).
+        let q = (4.0 * quantum(v.x)).max(1e-9);
+        // Either side's |f| grows as x approaches, or f keeps changing by
+        // as much per decade nearer (a log pole: ln|x| + 10⁶ shrinks in
+        // size towards 0 until e^(−10⁶), but steadily).
         let grows = [-1.0, 1.0].iter().any(|s| {
-            let near = a.eval(v.x + s * q).abs();
-            let mid = a.eval(v.x + s * q * 1e3).abs();
-            !near.is_finite() || near > mid * 1.2
+            let near = a.eval(v.x + s * q);
+            let mid = a.eval(v.x + s * q * 10.0);
+            let far = a.eval(v.x + s * q * 100.0);
+            let (d1, d2) = (near - mid, mid - far);
+            !near.is_finite()
+                || near.abs() > mid.abs() * 1.2
+                || (d1.signum() == d2.signum() && d1.abs() >= 0.5 * d2.abs() && d2 != 0.0)
         });
         let near = a.eval(v.x - q).abs().max(a.eval(v.x + q).abs());
         let far = a.eval(v.x - q * 1e3).abs().max(a.eval(v.x + q * 1e3).abs());
