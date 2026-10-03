@@ -845,35 +845,119 @@ fn snap_root(c: f64, g: &dyn Fn(f64) -> f64, ok: &dyn Fn(f64) -> bool) -> f64 {
     }
     let unit = c.abs();
     let h = 64.0 * f64::EPSILON * unit;
-    let w = [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0].map(|k| g(c + k * h));
-    if w.iter().any(|v| !v.is_finite()) {
+    // g's rounding noise near c: the roughness (third differences) of its
+    // values, over several spacings. Rounded values are quantised: right at
+    // a flat root they can all come out exactly 0 over a few ulps (the f′ of
+    // x⁴ − 4x³ + 6x² − 4x + 1 near 1), and only a wider look shows the noise.
+    let roughness = |step: f64| -> Option<f64> {
+        let w = [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0].map(|k| g(c + k * step));
+        if w.iter().any(|v| !v.is_finite()) {
+            return None;
+        }
+        let big = w.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        Some(
+            (0..4)
+                .map(|i| (w[i + 3] - 3.0 * w[i + 2] + 3.0 * w[i + 1] - w[i]).abs())
+                .fold(0.0f64, f64::max)
+                + 64.0 * f64::EPSILON * big,
+        )
+    };
+    let Some(mut noise) = roughness(h) else {
         return c;
+    };
+    for scale in [16.0, 256.0, 4096.0, 65536.0] {
+        if h * scale > 1e-6 * unit {
+            break;
+        }
+        match roughness(h * scale) {
+            Some(n) => noise = noise.max(n),
+            None => break,
+        }
     }
-    let big = w.iter().fold(0.0f64, |m, v| m.max(v.abs()));
-    let noise = (0..4)
-        .map(|i| (w[i + 3] - 3.0 * w[i + 2] + 3.0 * w[i + 1] - w[i]).abs())
-        .fold(0.0f64, f64::max)
-        + 64.0 * f64::EPSILON * big;
     let flat = |x: f64| {
         let v = g(x);
         v.is_finite() && v.abs() <= 8.0 * noise
     };
-    let mut delta = h;
-    for _ in 0..48 {
-        if delta > 1e-3 * unit || !flat(c - 2.0 * delta) || !flat(c + 2.0 * delta) {
-            break;
+    // A root reported where g is plainly not 0 (picked from a stretch the
+    // detection floored to 0, as for x⁴ − 4x³ + 6x² − 4x + 1 + 10⁶): move
+    // to the nearest place g is noise or changes sign, and work from there.
+    let gc = g(c);
+    let mut c = c;
+    if gc.is_finite() && !flat(c) {
+        let mut d = h;
+        'out: for _ in 0..48 {
+            if d > 1e-3 * unit {
+                break;
+            }
+            for dir in [-1.0, 1.0] {
+                let x = c + dir * d;
+                let v = g(x);
+                if !v.is_finite() || !ok(x) {
+                    continue;
+                }
+                if flat(x) {
+                    c = x;
+                    break 'out;
+                }
+                if v.signum() != gc.signum() {
+                    let (mut a, mut b) = (c, x);
+                    for _ in 0..80 {
+                        let m = 0.5 * (a + b);
+                        if m == a || m == b {
+                            break;
+                        }
+                        let vm = g(m);
+                        if vm.is_finite() && vm.signum() == gc.signum() && !flat(m) {
+                            a = m;
+                        } else {
+                            b = m;
+                        }
+                    }
+                    c = b;
+                    break 'out;
+                }
+            }
+            d *= 2.0;
         }
-        delta *= 2.0;
     }
-    if c.abs() <= delta && ok(0.0) && flat(0.0) {
+    // How far g stays indistinguishable from 0 on each side of c. The two
+    // sides are measured apart: bisection lands anywhere in the band, often
+    // near one edge (1.0000052 in a band of ±1.3·10⁻⁵ around 1), so a
+    // symmetric reach would stop at the near edge.
+    let reach = |dir: f64| {
+        let mut d = h;
+        for _ in 0..48 {
+            if 2.0 * d > 1e-3 * unit || !flat(c + dir * 2.0 * d) {
+                break;
+            }
+            d *= 2.0;
+        }
+        d
+    };
+    let (lo, hi) = (c - reach(-1.0), c + reach(1.0));
+    let delta = (hi - lo) / 2.0;
+    if lo <= 0.0 && 0.0 <= hi && ok(0.0) && flat(0.0) {
         return 0.0;
     }
-    let s = snap(c, (delta / unit).clamp(1e-13, 1e-4));
-    if s != c && (s - c).abs() <= delta.max(1e-13 * unit) && ok(s) && flat(s) {
-        s
-    } else {
-        c
+    let within = |s: f64| s >= lo && s <= hi && ok(s) && flat(s);
+    let tol = (delta / unit).clamp(1e-13, 1e-4);
+    let s = snap(c, tol);
+    if s != c && within(s) {
+        return s;
     }
+    // No closed form: the middle of the band is the better estimate when
+    // the band is wide (the root of a flat g is where it is symmetric).
+    if delta > 16.0 * h {
+        let m = 0.5 * (lo + hi);
+        let sm = snap(m, tol);
+        if sm != m && within(sm) {
+            return sm;
+        }
+        if within(m) {
+            return m;
+        }
+    }
+    c
 }
 
 /// Median |f| over a sample of moderate x values: a magnitude for
