@@ -227,6 +227,35 @@ pub(crate) enum Op {
 }
 
 impl Op {
+    /// Whether the result of normal operands can overflow, or underflow to
+    /// 0 or a subnormal, rather than be exact there. (A sum overflows only
+    /// beyond 10³⁰⁸; a difference that is 0 or subnormal is exact.)
+    fn may_leave_range(&self) -> bool {
+        use Fn1::*;
+        match self {
+            Op::Mul | Op::Div | Op::DivNz | Op::Pow | Op::PowRat(..) => true,
+            Op::PowI(n) => !matches!(n, 0 | 1),
+            Op::F1(f) => matches!(
+                f,
+                Sec(_)
+                    | Csc(_)
+                    | Cot(_)
+                    | Sinh
+                    | Cosh
+                    | Sech
+                    | Csch
+                    | Coth
+                    | Asech
+                    | Acsch
+                    | Exp
+                    | Factorial
+                    | DoubleFactorial
+            ),
+            Op::F2(f) => matches!(f, Fn2::Root | Fn2::NCr | Fn2::NPr),
+            _ => false,
+        }
+    }
+
     /// Rough relative evaluation cost (an addition is 1).
     fn cost(&self) -> usize {
         match self {
@@ -312,30 +341,10 @@ impl Program {
         }
         debug_assert_eq!(depth, 1);
         let cost = ops.iter().map(Op::cost).sum();
-        let wide = ops.iter().any(|op| {
-            use Fn1::*;
-            match op {
-                Op::Mul | Op::Div | Op::DivNz | Op::Pow | Op::PowRat(..) | Op::Big(..) => true,
-                Op::PowI(n) => !matches!(n, 0 | 1),
-                Op::F1(f) => matches!(
-                    f,
-                    Sec(_)
-                        | Csc(_)
-                        | Cot(_)
-                        | Sinh
-                        | Cosh
-                        | Sech
-                        | Csch
-                        | Coth
-                        | Asech
-                        | Acsch
-                        | Exp
-                        | Factorial
-                        | DoubleFactorial
-                ),
-                Op::F2(f) => matches!(f, Fn2::Root | Fn2::NCr | Fn2::NPr),
-                _ => false,
-            }
+        // Only a rounded intermediate can mislead a later operation; the
+        // last one's own overflow or underflow is what extended range gives.
+        let wide = ops.iter().enumerate().any(|(i, op)| {
+            matches!(op, Op::Big(..)) || (i + 1 < ops.len() && op.may_leave_range())
         });
         Program {
             ops,
@@ -410,9 +419,23 @@ impl Program {
     }
 
     /// The value at a point where the double one is NaN or ±∞, in extended
-    /// range.
+    /// range if the double one may be the rounding of something beyond
+    /// it.
     #[cold]
     pub(crate) fn redo(&self, x: f64, y: f64) -> (f64, Redo) {
+        let (v, off) = if self.max_stack <= 8 {
+            let mut stack = [0.0f64; 8];
+            self.eval_with::<true>(&mut stack, x, y)
+        } else if self.max_stack <= SCALAR_STACK {
+            let mut stack = [0.0f64; SCALAR_STACK];
+            self.eval_with::<true>(&mut stack, x, y)
+        } else {
+            let mut stack = vec![0.0f64; self.max_stack];
+            self.eval_with::<true>(&mut stack, x, y)
+        };
+        if !off {
+            return (v, Redo::No);
+        }
         let w = self.eval_wide(x, y);
         let tag = if w == Wide::Unknown {
             Redo::Unknown
@@ -422,23 +445,36 @@ impl Program {
         (w.to_f64(), tag)
     }
 
+    /// Whether the value at a point is exactly 0, rather than a nonzero value
+    /// below a double's range (e^x for x < −745.1).
+    pub(crate) fn is_exact_zero(&self, x: f64, y: f64) -> bool {
+        self.eval_wide(x, y).is_zero()
+    }
+
     /// Evaluates in double arithmetic only: NaN or ±∞ may then also be a
     /// value beyond a double's range.
     #[inline]
     pub(crate) fn eval_plain(&self, x: f64, y: f64) -> f64 {
         if self.max_stack <= SCALAR_STACK {
             let mut stack = [0.0f64; SCALAR_STACK];
-            self.eval_with(&mut stack, x, y)
+            self.eval_with::<false>(&mut stack, x, y).0
         } else {
             let mut stack = vec![0.0f64; self.max_stack];
-            self.eval_with(&mut stack, x, y)
+            self.eval_with::<false>(&mut stack, x, y).0
         }
     }
 
+    /// Evaluates in doubles; with `CHECK`, also whether the result may be
+    /// the rounding of a value beyond their range: whether, before any
+    /// undefined operation, an intermediate result overflowed or underflowed
+    /// (to 0 or a subnormal), so that later operations may have made NaN or
+    /// ±∞ of it. Where operands are normal or exact, extended range gives
+    /// what a double does (both NaN for √−1, both overflow for e^800).
     #[inline(always)]
-    fn eval_with(&self, stack: &mut [f64], x: f64, y: f64) -> f64 {
+    fn eval_with<const CHECK: bool>(&self, stack: &mut [f64], x: f64, y: f64) -> (f64, bool) {
         let mut sp = 0usize;
-        for op in &self.ops {
+        let last = self.ops.len() - 1;
+        for (i, op) in self.ops.iter().enumerate() {
             match *op {
                 Op::Const(v) | Op::Big(v, _) => {
                     stack[sp] = v;
@@ -485,8 +521,26 @@ impl Program {
                     stack[sp - 1] = f.apply(stack[sp - 1], stack[sp]);
                 }
             }
+            if CHECK {
+                let v = stack[sp - 1];
+                match op {
+                    // Exact.
+                    Op::Const(_) | Op::X | Op::Y => {}
+                    Op::Big(..) => return (v, true),
+                    // Undefined, with nothing rounded before it: so is the
+                    // result, as every operation keeps NaN.
+                    _ if v.is_nan() => return (v, false),
+                    _ if !v.is_normal()
+                        && i != last
+                        && (v.is_infinite() || op.may_leave_range()) =>
+                    {
+                        return (v, true);
+                    }
+                    _ => {}
+                }
+            }
         }
-        stack[0]
+        (stack[0], false)
     }
 
     /// Evaluates `f(x)` with `y = 0`.
@@ -619,31 +673,43 @@ pub(crate) enum Redo {
 impl Program {
     /// Evaluates in extended range (see [`Wide`]).
     pub(crate) fn eval_wide(&self, x: f64, y: f64) -> Wide {
-        let mut stack: Vec<Wide> = Vec::with_capacity(self.max_stack);
+        if self.max_stack <= 8 {
+            let mut stack = [Wide::Undef; 8];
+            self.eval_wide_with(&mut stack, x, y)
+        } else {
+            let mut stack = vec![Wide::Undef; self.max_stack];
+            self.eval_wide_with(&mut stack, x, y)
+        }
+    }
+
+    fn eval_wide_with(&self, stack: &mut [Wide], x: f64, y: f64) -> Wide {
+        let mut sp = 0usize;
         for op in &self.ops {
             let v = match *op {
                 Op::Const(v) => Wide::new(v),
                 Op::Big(_, w) => w,
                 Op::X => Wide::new(x),
                 Op::Y => Wide::new(y),
-                Op::PowI(n) => wide::powi(pop(&mut stack), n),
-                Op::PowRat(p, q) => wide::pow_rational(pop(&mut stack), p, q),
-                Op::Neg => pop(&mut stack).neg(),
-                Op::F1(f) => wide::apply1(f, pop(&mut stack)),
+                Op::PowI(n) => wide::powi(stack[sp - 1], n),
+                Op::PowRat(p, q) => wide::pow_rational(stack[sp - 1], p, q),
+                Op::Neg => stack[sp - 1].neg(),
+                Op::F1(f) => wide::apply1(f, stack[sp - 1]),
                 _ => {
-                    let b = pop(&mut stack);
-                    let a = pop(&mut stack);
-                    wide_bin(op, a, b)
+                    sp -= 1;
+                    wide_bin(op, stack[sp - 1], stack[sp])
                 }
             };
-            stack.push(v);
+            // Undefined operands make the whole undefined.
+            if v == Wide::Undef {
+                return v;
+            }
+            if matches!(op, Op::Const(_) | Op::Big(..) | Op::X | Op::Y) {
+                sp += 1;
+            }
+            stack[sp - 1] = v;
         }
         stack[0]
     }
-}
-
-fn pop(stack: &mut Vec<Wide>) -> Wide {
-    stack.pop().expect("stack depth is checked when compiling")
 }
 
 /// A binary instruction on extended-range values.

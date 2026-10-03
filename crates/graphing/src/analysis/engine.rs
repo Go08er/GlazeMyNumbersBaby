@@ -164,7 +164,9 @@ impl Fun<'_> {
                     if !o.is_finite() {
                         let (v, redo) = p.redo(x, 0.0);
                         *o = v;
-                        self.redone(p, x, redo);
+                        if redo != Redo::No {
+                            self.redone(p, x, redo);
+                        }
                     }
                 }
             }
@@ -186,6 +188,11 @@ impl Fun<'_> {
     #[inline]
     fn f(&self, x: f64) -> f64 {
         self.eval(&self.f, x)
+    }
+
+    /// Whether f is exactly 0 at `x`, not a value too small for a double.
+    fn exact_zero(&self, x: f64) -> bool {
+        self.spend(self.f.cost().saturating_mul(8)) && self.f.is_exact_zero(x, 0.0)
     }
 
     fn df(&self, x: f64) -> f64 {
@@ -282,6 +289,9 @@ fn analyze_framed(
             } else {
                 String::new()
             };
+            if y0.is_infinite() {
+                which |= flags::Y_INTERCEPT;
+            }
             forget(&mut k, which);
         }
         return Ok(k);
@@ -521,6 +531,10 @@ fn map_affine(kg: KeyGraphFeatures, fun: &Fun, a: f64, b: f64) -> KeyGraphFeatur
         && k.too_complex_features & flags::Y_INTERCEPT == 0
     {
         k.data.y_intercept = Some(clean(y0, value_noise(fun, 0.0, y0)));
+    }
+    // f(0) exists but is beyond a double's range ((x − 1000)e^(1000 − x)).
+    if y0.is_infinite() {
+        k.too_complex_features |= flags::Y_INTERCEPT;
     }
     // Parity: f's own, tested also around the root of the form and at
     // what was found, where a shifted f lives (e^(x − 10⁶) is 0 near 0).
@@ -2982,7 +2996,9 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
     // Zeros. A run of several exact-zero samples is a stretch where f
     // vanishes identically (or underflows): not a list of intercepts.
     // A run is genuine (not underflow) when a sample next to it is of
-    // normal magnitude, e.g. floor(x) = 0 on [0, 1) next to ±1.
+    // normal magnitude, e.g. max(x, 0) = 0 for x ≤ 0 next to x, or when f
+    // is exactly 0 there in extended range, as floor(x) is on [0, 1), a
+    // piece of its own between jumps.
     let normal = |v: f64| v.is_finite() && v.abs() > 1e-250;
     let mut inner_zero_run = false;
     let mut i = 0;
@@ -2992,7 +3008,11 @@ fn piece_features(fun: &Fun, p: &Piece, scale: f64, wrap_periodic: bool) -> Piec
             while j + 1 < fs.len() && fs[j + 1] == 0.0 {
                 j += 1;
             }
-            if j > i && ((i > 0 && normal(fs[i - 1])) || (j + 1 < fs.len() && normal(fs[j + 1]))) {
+            if j > i
+                && ((i > 0 && normal(fs[i - 1]))
+                    || (j + 1 < fs.len() && normal(fs[j + 1]))
+                    || fun.exact_zero(xs[(i + j) / 2]))
+            {
                 inner_zero_run = true;
             }
             i = j + 1;
@@ -4070,6 +4090,10 @@ fn analyze_aperiodic(
     } else {
         None
     };
+    // f(0) exists but is beyond a double's range ((x − 1000)e^(1000 − x)).
+    if y0.is_infinite() && !zero_excluded {
+        too |= flags::Y_INTERCEPT;
+    }
     if let Some(y) = y_intercept {
         k.y_intercept = fmt_y(y);
     }
@@ -4226,9 +4250,11 @@ fn analyze_periodic(
     let mut maxima = Vec::new();
     let mut infl = Vec::new();
     let mut starts: Vec<f64> = Vec::new();
+    let mut zero_interval = false;
     for pc in &sa.pieces {
         // Only interior features of pieces count (window cuts are artificial).
         let pf = piece_features(fun, pc, scale, false);
+        zero_interval |= pf.zero_interval;
         let inside = |x: f64| {
             x > pc.lo.value && x < pc.hi.value
                 || (pc.lo.closed && x == pc.lo.value && pc.lo.value > wa[0])
@@ -4277,6 +4303,10 @@ fn analyze_periodic(
     let mut too = 0u32;
     if sc.too_complex || sa.too_complex {
         too |= flags::DOMAIN | flags::RANGE;
+    }
+    // A stretch where f is 0 isn't a list of intercepts.
+    if zero_interval {
+        too |= flags::ZEROS;
     }
     if isolated_powers(fun, &xs) {
         too |= flags::DOMAIN | flags::RANGE | flags::ZEROS;
@@ -4431,6 +4461,9 @@ fn analyze_periodic(
     } else {
         None
     };
+    if y0.is_infinite() && !zero_excluded {
+        too |= flags::Y_INTERCEPT;
+    }
     if let Some(y) = y_intercept {
         k.y_intercept = fmt_y(y);
     }
