@@ -119,6 +119,8 @@ pub struct Node {
     pub focusable: bool,
     /// A scroll view whose content overflows (gets scroll actions).
     pub scrollable: bool,
+    /// Text fields: the selection as (anchor, caret), in characters.
+    pub text_selection: Option<(usize, usize)>,
 }
 
 #[derive(Default)]
@@ -280,6 +282,7 @@ impl<'a, 'p> Frame<'a, 'p> {
             clickable: false,
             focusable: false,
             scrollable: false,
+            text_selection: None,
         });
         nodes.last_mut()
     }
@@ -659,6 +662,8 @@ impl<'a, 'p> Frame<'a, 'p> {
             n.value = Some(e.text.clone());
             n.focusable = true;
             n.clickable = true;
+            let chars = |byte: usize| e.text[..byte].chars().count();
+            n.text_selection = Some((chars(e.anchor), chars(e.cursor)));
         }
     }
 

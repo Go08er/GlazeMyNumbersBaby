@@ -1,8 +1,8 @@
 //! The frame's accessibility nodes → an AccessKit tree.
 
 use accesskit::{
-    Action, Live, Node as AkNode, NodeId, Rect as AkRect, Role, Toggled, TreeId, TreeInfo,
-    TreeUpdate,
+    Action, Live, Node as AkNode, NodeId, Rect as AkRect, Role, TextPosition, TextSelection,
+    Toggled, TreeId, TreeInfo, TreeUpdate,
 };
 
 use crate::ui::{Id, Node};
@@ -37,12 +37,59 @@ pub fn tree(nodes: &[Node], title: &str, focus: Option<Id>, scale: f64) -> TreeU
             node.set_value(v.as_str());
         }
         let s = scale;
-        node.set_bounds(AkRect {
+        let bounds = AkRect {
             x0: n.rect.x as f64 * s,
             y0: n.rect.y as f64 * s,
             x1: n.rect.right() as f64 * s,
             y1: n.rect.bottom() as f64 * s,
-        });
+        };
+        node.set_bounds(bounds);
+        // What the Linux adapter actually exports (AT-SPI): a Label's name
+        // is its value; a Group shows only its label; a text field offers
+        // its text only through text runs. Shape the nodes for that. Ids
+        // here are odd (`ui::id`), so `id - 1` is free for a node's one
+        // synthetic child.
+        let child = NodeId(n.id - 1);
+        let mut extra = None;
+        match (n.role, &n.value) {
+            _ if n.id <= 1 => {}
+            (Role::Label, None) => node.set_value(n.label.as_str()),
+            (Role::TextInput, Some(text)) => {
+                let mut run = AkNode::new(Role::TextRun);
+                run.set_value(text.as_str());
+                run.set_character_lengths(
+                    text.chars()
+                        .map(|c| c.len_utf8() as u8)
+                        .collect::<Vec<u8>>(),
+                );
+                run.set_bounds(bounds);
+                node.push_child(child);
+                if let Some((anchor, caret)) = n.text_selection {
+                    let at = |i: usize| TextPosition {
+                        node: child,
+                        character_index: i,
+                    };
+                    node.set_text_selection(TextSelection {
+                        anchor: at(anchor),
+                        focus: at(caret),
+                    });
+                }
+                node.add_action(Action::SetTextSelection);
+                node.add_action(Action::ReplaceSelectedText);
+                node.add_action(Action::SetValue);
+                extra = Some(run);
+            }
+            (Role::Group, Some(text)) if !children.contains_key(&n.id) => {
+                // Results held as a group's value (function analysis):
+                // the text goes in a label inside it.
+                let mut label = AkNode::new(Role::Label);
+                label.set_value(text.as_str());
+                label.set_bounds(bounds);
+                node.push_child(child);
+                extra = Some(label);
+            }
+            _ => {}
+        }
         if let Some(t) = n.toggled {
             node.set_toggled(if t { Toggled::True } else { Toggled::False });
         }
@@ -66,10 +113,16 @@ pub fn tree(nodes: &[Node], title: &str, focus: Option<Id>, scale: f64) -> TreeU
             node.add_action(Action::ScrollUp);
             node.add_action(Action::ScrollDown);
         }
-        if let Some(kids) = children.remove(&n.id) {
+        if let Some(mut kids) = children.remove(&n.id) {
+            if extra.is_some() {
+                kids.push(child);
+            }
             node.set_children(kids);
         }
         out.push((NodeId(n.id), node));
+        if let Some(extra) = extra {
+            out.push((child, extra));
+        }
     }
     let focus = focus.filter(|f| seen.contains(f)).map_or(NodeId(0), NodeId);
     TreeUpdate {
@@ -78,6 +131,30 @@ pub fn tree(nodes: &[Node], title: &str, focus: Option<Id>, scale: f64) -> TreeU
         tree_id: TreeId::ROOT,
         focus,
     }
+}
+
+/// For tests: what the Linux adapter exports for each node, as
+/// (role, name, text). The name follows accesskit_atspi_common's rule (a
+/// Label's name is its value, others use the label); `text` is what the
+/// Text interface offers, if the node supports it.
+#[cfg(test)]
+pub fn exported(nodes: &[Node]) -> Vec<(Role, String, Option<String>)> {
+    fn walk(n: accesskit_consumer::NodeRef, out: &mut Vec<(Role, String, Option<String>)>) {
+        let name = if n.label_comes_from_value() {
+            n.value()
+        } else {
+            n.label()
+        };
+        let text = n.supports_text_ranges().then(|| n.document_range().text());
+        out.push((n.role(), name.unwrap_or_default(), text));
+        for c in n.children() {
+            walk(c, out);
+        }
+    }
+    let tree = accesskit_consumer::Tree::new(tree(nodes, "test", None, 1.0), false);
+    let mut out = Vec::new();
+    walk(tree.state().root(), &mut out);
+    out
 }
 
 #[cfg(test)]
@@ -318,6 +395,37 @@ mod tests {
         assert!(again);
         let (_, _, again) = panel(&mut scrolls, 6, false);
         assert!(!again);
+    }
+
+    /// R8-M-05: what Linux assistive technology receives, not just the raw
+    /// tree: every label has a name (the date result was nameless), and
+    /// text fields offer their text.
+    #[test]
+    fn linux_export_names_labels_and_offers_field_text() {
+        let mut d = crate::date::DatePage::new();
+        let (nodes, _) = frame_nodes(|f, r| d.view(f, r));
+        let out = exported(&nodes);
+        // Today minus today: the result label used to export no name.
+        assert!(
+            out.iter()
+                .any(|(r, n, _)| *r == Role::Label && n.contains("Same dates"))
+        );
+        for (role, name, _) in &out {
+            if *role == Role::Label {
+                assert!(!name.is_empty(), "a nameless label");
+            }
+        }
+        let mut g = crate::graph::GraphPage::for_test(appcore::graph::from_list("x^2"));
+        let (nodes, _) = frame_nodes(|f, r| g.view(f, r));
+        let fields: Vec<_> = exported(&nodes)
+            .into_iter()
+            .filter(|(r, ..)| *r == Role::TextInput)
+            .collect();
+        assert!(
+            fields
+                .iter()
+                .any(|(_, _, text)| text.as_deref() == Some("x^2"))
+        );
     }
 
     #[test]

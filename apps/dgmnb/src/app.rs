@@ -1444,6 +1444,39 @@ impl App {
                 self.sync_ime();
             }
             accesskit::Action::ScrollIntoView => self.reveal(target),
+            // Text fields, as the AT-SPI Text/EditableText interfaces drive
+            // them (positions are in characters).
+            accesskit::Action::SetTextSelection => {
+                if let Some(accesskit::ActionData::SetTextSelection(sel)) = req.data
+                    && let Some(e) = self.field(target)
+                {
+                    let byte = |chars: usize| {
+                        e.text
+                            .char_indices()
+                            .nth(chars)
+                            .map_or(e.text.len(), |(i, _)| i)
+                    };
+                    let (anchor, cursor) = (
+                        byte(sel.anchor.character_index),
+                        byte(sel.focus.character_index),
+                    );
+                    (e.anchor, e.cursor) = (anchor, cursor);
+                    self.input.focus = Some(target);
+                    self.sync_ime();
+                }
+            }
+            accesskit::Action::ReplaceSelectedText | accesskit::Action::SetValue => {
+                if let Some(accesskit::ActionData::Value(text)) = &req.data
+                    && let Some(e) = self.field(target)
+                {
+                    if req.action == accesskit::Action::SetValue {
+                        e.set_text(text);
+                    } else {
+                        e.insert(text);
+                    }
+                    self.field_changed(target);
+                }
+            }
             accesskit::Action::ScrollDown => self.scroll_by(target, 1.0),
             accesskit::Action::ScrollUp => self.scroll_by(target, -1.0),
             _ => {}

@@ -675,6 +675,7 @@ name = "dgmnb"
 version = "0.2.0"
 dependencies = [
  "accesskit",
+ "accesskit_consumer",
  "accesskit_winit",
  "appcore",
  "calcvm",

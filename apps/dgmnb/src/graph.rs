@@ -1051,10 +1051,22 @@ impl GraphPage {
                         y += 8.0;
                         let card = Rect::new(body.x + 4.0, top, body.w - 8.0, y - top);
                         f.cv.rounded_border(card, 8.0, t.border, 1.0);
-                        if let Some(n) =
-                            f.node(id(("kgf", k)), accesskit::Role::Group, &item.title, card)
+                        // Everything the card shows, monotonicity rows
+                        // included; the untitled footer card is a note.
+                        let title = if item.title.is_empty() {
+                            "Note"
+                        } else {
+                            &item.title
+                        };
+                        if let Some(n) = f.node(id(("kgf", k)), accesskit::Role::Group, title, card)
                         {
-                            n.value = Some(item.display_items.join(", "));
+                            let rows = item
+                                .grid_items
+                                .iter()
+                                .map(|g| format!("{} {}", g.expression, g.direction));
+                            let text: Vec<String> =
+                                item.display_items.iter().cloned().chain(rows).collect();
+                            n.value = Some(text.join(", "));
                         }
                         y += 6.0;
                     }
@@ -1562,6 +1574,21 @@ mod tests {
             .find(|n| n.id == sid)
             .unwrap();
         assert!(node.focusable && node.scrollable);
+
+        // R8-M-05: the results reach Linux assistive technology, as labels
+        // inside each card, monotonicity rows included.
+        let out = crate::a11y::exported(f.nodes.as_ref().unwrap());
+        drop(f);
         assert!(scrolls[&sid].max() > 0.0);
+        let labels: Vec<&str> = out
+            .iter()
+            .filter(|(r, ..)| *r == accesskit::Role::Label)
+            .map(|(_, n, _)| n.as_str())
+            .collect();
+        assert!(labels.iter().any(|l| l.contains("x = 1")), "{labels:?}");
+        assert!(
+            labels.iter().any(|l| l.contains("Increasing")),
+            "{labels:?}"
+        );
     }
 }

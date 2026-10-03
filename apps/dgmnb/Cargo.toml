@@ -34,3 +34,7 @@ x11rb = { version = "0.13", default-features = false }
 libc = "0.2"
 accesskit = "0.25"
 accesskit_winit = { version = "0.34", default-features = false, features = ["accesskit_unix", "async-io", "rwh_06"] }
+
+[dev-dependencies]
+# The tree the Linux adapter reads, to test what AT-SPI actually gets.
+accesskit_consumer = "0.39"
