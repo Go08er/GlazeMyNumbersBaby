@@ -3,9 +3,13 @@
 //! (dropping it stops both). Pasting uses our own bounded reader on its
 //! "getter" connection: it asks which formats the owner offers, learns each
 //! size before fetching, treats INCR size hints as untrusted, caps the total
-//! and gives up after a deadline.
+//! and gives up after a deadline. It runs on a short-lived worker, so the UI
+//! waits at most `PASTE_TIMEOUT` whatever the owner or the X server does.
 
 use std::os::fd::AsRawFd;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use x11_clipboard::{Atom, Context, RustConnection};
@@ -20,19 +24,28 @@ use super::MAX_PASTE;
 const PASTE_TIMEOUT: Duration = Duration::from_secs(1);
 /// Largest TARGETS list we'll read.
 const MAX_TARGETS: usize = 64 * 1024;
+/// Most queued events discarded before a conversion.
+const MAX_DRAIN: usize = 1024;
 
 pub struct Clipboard {
-    inner: x11_clipboard::Clipboard,
+    inner: Arc<x11_clipboard::Clipboard>,
     png: Atom,
-    text: TextAtoms,
+    reader: Arc<Reader>,
+    /// A paste is still running: only one uses the reader at a time.
+    busy: Arc<AtomicBool>,
 }
 
 impl Clipboard {
     pub fn new() -> Option<Clipboard> {
         let inner = x11_clipboard::Clipboard::new().ok()?;
         let png = inner.setter.get_atom("image/png").ok()?;
-        let text = TextAtoms::new(&inner.getter)?;
-        Some(Clipboard { inner, png, text })
+        let reader = Reader::new(&inner.getter)?;
+        Some(Clipboard {
+            inner: Arc::new(inner),
+            png,
+            reader: Arc::new(reader),
+            busy: Arc::new(AtomicBool::new(false)),
+        })
     }
 
     pub fn copy_text(&self, text: &str) {
@@ -48,26 +61,60 @@ impl Clipboard {
     }
 
     pub fn paste_text(&self) -> Option<String> {
-        read_text(&self.inner.getter, &self.text, PASTE_TIMEOUT)
+        if self.busy.swap(true, Ordering::AcqRel) {
+            return None; // the last paste is still stuck
+        }
+        let (tx, rx) = mpsc::sync_channel(1);
+        let (inner, reader, busy) = (self.inner.clone(), self.reader.clone(), self.busy.clone());
+        let spawned = std::thread::Builder::new()
+            .name("x11-paste".into())
+            .spawn(move || {
+                let text = read_text(&inner.getter, &reader, PASTE_TIMEOUT);
+                busy.store(false, Ordering::Release);
+                let _ = tx.send(text);
+            });
+        if spawned.is_err() {
+            self.busy.store(false, Ordering::Release);
+            return None;
+        }
+        rx.recv_timeout(PASTE_TIMEOUT + Duration::from_millis(100))
+            .ok()
+            .flatten()
     }
 }
 
-/// The text formats we ask for, best first.
-struct TextAtoms {
+/// What the reader needs from the X server: the text formats we ask for,
+/// best first, and a ring of properties to receive into. Each conversion
+/// uses the next one, so an owner still writing into an abandoned
+/// transfer's property can't land in a later paste.
+struct Reader {
     utf8: Atom,
     plain: Atom,
     text: Atom,
     string: Atom,
+    props: [Atom; 4],
+    next: AtomicUsize,
 }
 
-impl TextAtoms {
-    fn new(cx: &Context) -> Option<TextAtoms> {
-        Some(TextAtoms {
+impl Reader {
+    fn new(cx: &Context) -> Option<Reader> {
+        let mut props = [0; 4];
+        for (i, p) in props.iter_mut().enumerate() {
+            *p = cx.get_atom(&format!("DGMNB_PASTE_{i}")).ok()?;
+        }
+        Some(Reader {
             utf8: cx.atoms.utf8_string,
             plain: cx.get_atom("text/plain;charset=utf-8").ok()?,
             text: cx.get_atom("TEXT").ok()?,
             string: cx.atoms.string,
+            props,
+            next: AtomicUsize::new(0),
         })
+    }
+
+    /// The property for the next conversion.
+    fn prop(&self) -> Atom {
+        self.props[self.next.fetch_add(1, Ordering::Relaxed) % self.props.len()]
     }
 
     fn decode(&self, kind: Atom, data: &[u8]) -> String {
@@ -84,25 +131,26 @@ impl TextAtoms {
     }
 }
 
-fn read_text(cx: &Context, t: &TextAtoms, timeout: Duration) -> Option<String> {
+fn read_text(cx: &Context, r: &Reader, timeout: Duration) -> Option<String> {
     let deadline = Instant::now() + timeout;
     let clipboard = cx.atoms.clipboard;
     // Which formats does the owner offer? (Some owners don't answer
     // TARGETS; then just try each in turn.)
-    let offered: Option<Vec<Atom>> = fetch(cx, clipboard, cx.atoms.targets, deadline, MAX_TARGETS)
-        .filter(|f| f.format == 32)
-        .map(|f| {
-            let (words, _) = f.data.as_chunks::<4>();
-            words.iter().map(|w| u32::from_ne_bytes(*w)).collect()
-        });
-    for target in [t.utf8, t.plain, t.text, t.string] {
+    let offered: Option<Vec<Atom>> =
+        fetch(cx, r, clipboard, cx.atoms.targets, deadline, MAX_TARGETS)
+            .filter(|f| f.format == 32)
+            .map(|f| {
+                let (words, _) = f.data.as_chunks::<4>();
+                words.iter().map(|w| u32::from_ne_bytes(*w)).collect()
+            });
+    for target in [r.utf8, r.plain, r.text, r.string] {
         if offered.as_ref().is_some_and(|o| !o.contains(&target)) {
             continue;
         }
-        if let Some(f) = fetch(cx, clipboard, target, deadline, MAX_PASTE)
+        if let Some(f) = fetch(cx, r, clipboard, target, deadline, MAX_PASTE)
             && f.format == 8
         {
-            return Some(t.decode(f.kind, &f.data).replace("\r\n", "\n"));
+            return Some(r.decode(f.kind, &f.data).replace("\r\n", "\n"));
         }
         if Instant::now() >= deadline {
             break;
@@ -121,16 +169,17 @@ struct Fetched {
 /// larger than `max` bytes before allocating for it.
 fn fetch(
     cx: &Context,
+    r: &Reader,
     selection: Atom,
     target: Atom,
     deadline: Instant,
     max: usize,
 ) -> Option<Fetched> {
-    let (c, win, prop) = (&cx.connection, cx.window, cx.atoms.property);
-    // Forget whatever an earlier, abandoned transfer left behind.
+    let (c, win, prop) = (&cx.connection, cx.window, r.prop());
+    // Start from an empty property and an empty event queue.
     c.delete_property(win, prop).ok()?;
     c.sync().ok()?;
-    while let Ok(Some(_)) = c.poll_for_event() {}
+    drain(c, deadline)?;
     c.convert_selection(win, selection, target, prop, x11rb::CURRENT_TIME)
         .ok()?;
     c.flush().ok()?;
@@ -140,10 +189,13 @@ fn fetch(
             && e.selection == selection
             && e.target == target
         {
-            if e.property != prop {
+            if e.property == prop {
+                break;
+            }
+            if e.property == x11rb::NONE {
                 return None; // refused
             }
-            break;
+            // Otherwise it answers an earlier request: not ours.
         }
     }
     // Learn the type and size without transferring anything.
@@ -153,7 +205,7 @@ fn fetch(
         .reply()
         .ok()?;
     if head.type_ == cx.atoms.incr {
-        return fetch_incr(cx, deadline, max);
+        return fetch_incr(cx, prop, deadline, max);
     }
     let size = head.bytes_after as usize;
     if size > max {
@@ -166,6 +218,10 @@ fn fetch(
         .ok()?
         .reply()
         .ok()?;
+    // It grew between the two reads: someone is still writing into it.
+    if reply.bytes_after != 0 {
+        return None;
+    }
     Some(Fetched {
         kind: reply.type_,
         format: reply.format,
@@ -174,17 +230,14 @@ fn fetch(
 }
 
 /// The INCR protocol: the owner sends chunks as property updates and an
-/// empty chunk ends the transfer. Its advertised total is ignored.
-fn fetch_incr(cx: &Context, deadline: Instant, max: usize) -> Option<Fetched> {
-    let (c, win, prop) = (&cx.connection, cx.window, cx.atoms.property);
+/// empty chunk ends the transfer. Its advertised total is ignored, and every
+/// chunk must have the first one's type and format.
+fn fetch_incr(cx: &Context, prop: Atom, deadline: Instant, max: usize) -> Option<Fetched> {
+    let (c, win) = (&cx.connection, cx.window);
     // Deleting the INCR property tells the owner to start.
     c.delete_property(win, prop).ok()?;
     c.flush().ok()?;
-    let mut out = Fetched {
-        kind: 0,
-        format: 8,
-        data: Vec::new(),
-    };
+    let mut out: Option<Fetched> = None;
     loop {
         match next_event(c, deadline)? {
             Event::PropertyNotify(e)
@@ -197,7 +250,8 @@ fn fetch_incr(cx: &Context, deadline: Instant, max: usize) -> Option<Fetched> {
             .reply()
             .ok()?;
         let chunk = head.bytes_after as usize;
-        if out.data.len().saturating_add(chunk) > max {
+        let have = out.as_ref().map_or(0, |o| o.data.len());
+        if have.saturating_add(chunk) > max {
             // Leave the chunk there: deleting it would only ask for more.
             return None;
         }
@@ -207,22 +261,55 @@ fn fetch_incr(cx: &Context, deadline: Instant, max: usize) -> Option<Fetched> {
             .reply()
             .ok()?;
         c.flush().ok()?;
-        if reply.value.is_empty() {
-            return Some(out);
+        if reply.bytes_after != 0 {
+            return None;
         }
-        out.kind = reply.type_;
-        out.format = reply.format;
-        out.data.extend_from_slice(&reply.value);
+        if reply.value.is_empty() {
+            return out.or(Some(Fetched {
+                kind: reply.type_,
+                format: 8,
+                data: Vec::new(),
+            }));
+        }
+        match &mut out {
+            None => {
+                out = Some(Fetched {
+                    kind: reply.type_,
+                    format: reply.format,
+                    data: reply.value,
+                })
+            }
+            Some(o) if o.kind == reply.type_ && o.format == reply.format => {
+                o.data.extend_from_slice(&reply.value)
+            }
+            Some(_) => return None, // the owner changed format mid-transfer
+        }
     }
 }
 
-/// The next X event, or `None` once `deadline` passes.
+/// Discard queued events: a bounded number, and never past `deadline`.
+fn drain(c: &RustConnection, deadline: Instant) -> Option<()> {
+    for _ in 0..MAX_DRAIN {
+        if Instant::now() >= deadline {
+            return None;
+        }
+        if c.poll_for_event().ok()?.is_none() {
+            break;
+        }
+    }
+    Some(())
+}
+
+/// The next X event, or `None` once `deadline` passes, even while events
+/// keep arriving.
 fn next_event(c: &RustConnection, deadline: Instant) -> Option<Event> {
     loop {
+        let left = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|l| !l.is_zero())?;
         if let Some(e) = c.poll_for_event().ok()? {
             return Some(e);
         }
-        let left = deadline.checked_duration_since(Instant::now())?;
         let mut fd = libc::pollfd {
             fd: c.stream().as_raw_fd(),
             events: libc::POLLIN,
@@ -430,6 +517,84 @@ mod tests {
         owner
     }
 
+    /// R5-M-01: an owner that never answers while property changes keep
+    /// hitting our window (spam, or an abandoned transfer) can't stretch the
+    /// deadline. Needs `Xvfb`; skipped otherwise.
+    #[test]
+    fn a_flood_of_events_cannot_stretch_the_deadline() {
+        let Some(x) = Xvfb::start() else {
+            eprintln!("no Xvfb; skipped");
+            return;
+        };
+        let cx = Context::new(Some(&x.display)).unwrap();
+        let r = Reader::new(&cx).unwrap();
+        let (owning, owned) = mpsc::channel();
+        let spammer = {
+            let (display, ours) = (x.display.clone(), cx.window);
+            thread::spawn(move || {
+                let (c, screen) = RustConnection::connect(Some(&display)).unwrap();
+                let root = c.setup().roots[screen].root;
+                let win = c.generate_id().unwrap();
+                c.create_window(
+                    0,
+                    win,
+                    root,
+                    0,
+                    0,
+                    1,
+                    1,
+                    0,
+                    WindowClass::INPUT_ONLY,
+                    0,
+                    &CreateWindowAux::new(),
+                )
+                .unwrap();
+                let atom = |n: &str| {
+                    c.intern_atom(false, n.as_bytes())
+                        .unwrap()
+                        .reply()
+                        .unwrap()
+                        .atom
+                };
+                c.set_selection_owner(win, atom("CLIPBOARD"), x11rb::CURRENT_TIME)
+                    .unwrap();
+                c.get_selection_owner(atom("CLIPBOARD"))
+                    .unwrap()
+                    .reply()
+                    .unwrap();
+                owning.send(()).unwrap();
+                // Never answer; keep touching the reader's window for a while.
+                let (junk, until) = (atom("JUNK"), Instant::now() + Duration::from_millis(1200));
+                while Instant::now() < until {
+                    let _ =
+                        c.change_property8(PropMode::REPLACE, ours, junk, AtomEnum::STRING, b"x");
+                    let _ = c.flush();
+                }
+            })
+        };
+        owned.recv().unwrap();
+        let start = Instant::now();
+        assert_eq!(read_text(&cx, &r, Duration::from_millis(300)), None);
+        let took = start.elapsed();
+        spammer.join().unwrap();
+        assert!(took < Duration::from_millis(900), "paste took {took:?}");
+
+        // The reason it holds even when the queue never empties: with events
+        // waiting and the deadline gone, nothing more is consumed.
+        let (c, _) = RustConnection::connect(Some(&x.display)).unwrap();
+        let junk = c.intern_atom(false, b"JUNK").unwrap().reply().unwrap().atom;
+        for _ in 0..50 {
+            c.change_property8(PropMode::REPLACE, cx.window, junk, AtomEnum::STRING, b"y")
+                .unwrap();
+        }
+        c.sync().unwrap();
+        cx.connection.sync().unwrap();
+        let gone = Instant::now() - Duration::from_millis(1);
+        assert!(next_event(&cx.connection, gone).is_none());
+        assert!(drain(&cx.connection, gone).is_none());
+        assert!(cx.connection.poll_for_event().unwrap().is_some(), "events were waiting");
+    }
+
     /// Needs `Xvfb` on PATH; skipped otherwise.
     #[test]
     fn paste_negotiates_formats_and_stays_bounded() {
@@ -438,7 +603,7 @@ mod tests {
             return;
         };
         let cx = Context::new(Some(&x.display)).unwrap();
-        let t = TextAtoms::new(&cx).unwrap();
+        let t = Reader::new(&cx).unwrap();
         let paste_counting = |offer: Offer| {
             let owner = own(&x.display, offer);
             let start = Instant::now();
