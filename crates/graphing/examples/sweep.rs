@@ -1472,7 +1472,15 @@ fn eb(e: &Expr, x: f64, u: TrigUnit) -> (f64, f64) {
             } else {
                 p.unsigned_abs().max(2) as f64
             };
-            unary_err(&g, va, ea, k, exact, false)
+            let (r, err) = unary_err(&g, va, ea, k, exact, false);
+            // b^(p/q) for q > 1 raises to the rounded p/q: |r·ln b| times
+            // that rounding (5 ulps of x^(2/3) at 3·10¹²).
+            let expo = if q == 1 || va == 0.0 {
+                0.0
+            } else {
+                (r * va.abs().ln()).abs() * ulp(p as f64 / q as f64)
+            };
+            (r, err + expo)
         }
         Expr::Bin(op, a, b) => {
             let ((va, ea), (vb, ebb)) = (eb(a, x, u), eb(b, x, u));
