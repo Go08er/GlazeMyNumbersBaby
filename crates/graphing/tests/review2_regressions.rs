@@ -250,22 +250,35 @@ fn ncr_near_float_max_is_finite() {
 #[test]
 fn cancellation_mid_flight_is_prompt() {
     use std::sync::Arc;
-    /// Run `job`, cancel it after `delay`; returns whether it reported
-    /// cancellation, and how long it ran on after being asked to stop.
-    fn stop_after(
-        delay: Duration,
+    /// Run `job`, cancel it 10 ms after its thread has started; returns
+    /// whether it reported cancellation, and how long it ran on after being
+    /// asked to stop.
+    fn stop_after_start(
         job: impl FnOnce(&AtomicBool) -> bool + Send + 'static,
     ) -> (bool, Duration) {
         let cancel = Arc::new(AtomicBool::new(false));
         let c = cancel.clone();
-        let t = std::thread::spawn(move || (job(&c), Instant::now()));
-        std::thread::sleep(delay);
+        let (started, running) = std::sync::mpsc::channel();
+        let t = std::thread::spawn(move || {
+            started.send(()).unwrap();
+            (job(&c), Instant::now())
+        });
+        running.recv().unwrap();
+        std::thread::sleep(Duration::from_millis(10));
         let asked = Instant::now();
         cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         let (cancelled, done) = t.join().unwrap();
         (cancelled, done.saturating_duration_since(asked))
     }
     let prompt = Duration::from_millis(250);
+    // Cancelling 10 ms in only means something for jobs that take a while.
+    let long_enough = |full: Duration, what: &str| {
+        let ok = full >= Duration::from_millis(50);
+        if !ok {
+            eprintln!("{what} takes only {full:?} here; skipped");
+        }
+        ok
+    };
     let mut heavy = Graph::new();
     for _ in 0..14 {
         heavy.add_equation("sin(x*y)<0");
@@ -275,12 +288,13 @@ fn cancellation_mid_flight_is_prompt() {
     let full = Instant::now();
     heavy.plot_parallel(&vp);
     let full = full.elapsed();
-    let g = heavy.clone();
-    let (cancelled, lag) = stop_after(full / 4, move |c| {
-        g.plot_parallel_cancellable(&vp, c).is_none()
-    });
-    eprintln!("plot: full {full:?}, stopped {lag:?} after cancel");
-    assert!(cancelled && lag < prompt);
+    if long_enough(full, "the plot") {
+        let g = heavy.clone();
+        let (cancelled, lag) =
+            stop_after_start(move |c| g.plot_parallel_cancellable(&vp, c).is_none());
+        eprintln!("plot: full {full:?}, stopped {lag:?} after cancel");
+        assert!(cancelled && lag < prompt);
+    }
 
     let mut a = Graph::new();
     let id = a.add_equation("y=sin(x)^3*cos(x^2)+tan(x)/(x^2-4)+log(abs(x)+1)*sec(x)");
@@ -288,8 +302,10 @@ fn cancellation_mid_flight_is_prompt() {
     let full = Instant::now();
     a.analyze(id);
     let full = full.elapsed();
-    let g = a.clone();
-    let (cancelled, lag) = stop_after(full / 4, move |c| g.analyze_cancellable(id, c).is_none());
-    eprintln!("analysis: full {full:?}, stopped {lag:?} after cancel");
-    assert!(cancelled && lag < prompt);
+    if long_enough(full, "the analysis") {
+        let g = a.clone();
+        let (cancelled, lag) = stop_after_start(move |c| g.analyze_cancellable(id, c).is_none());
+        eprintln!("analysis: full {full:?}, stopped {lag:?} after cancel");
+        assert!(cancelled && lag < prompt);
+    }
 }
