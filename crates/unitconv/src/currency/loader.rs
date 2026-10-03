@@ -405,8 +405,16 @@ impl CurrencyDataLoader {
     }
 
     fn is_older_than(&self, duration: TimeDelta) -> bool {
-        self.cache_timestamp
-            .is_none_or(|ts| ts + duration < self.now())
+        self.cache_timestamp.is_none_or(|ts| {
+            ts.checked_add_signed(duration)
+                .is_some_and(|t| t < self.now())
+        })
+    }
+
+    /// A timestamp from the future (beyond clock skew) would keep stale rates
+    /// looking fresh indefinitely; such data is treated as unusable.
+    fn is_from_the_future(&self, ts: DateTime<Utc>) -> bool {
+        ts > self.now() + TimeDelta::days(1)
     }
 
     /// The current network access behaviour.
@@ -466,7 +474,7 @@ impl CurrencyDataLoader {
         snapshot: CurrencySnapshot,
         source: CurrencyDataSource,
     ) -> bool {
-        if snapshot.validate().is_err() {
+        if snapshot.validate().is_err() || self.is_from_the_future(snapshot.fetched_at) {
             return false;
         }
         self.cache_timestamp = Some(snapshot.fetched_at);
@@ -757,6 +765,9 @@ impl CurrencyConverterDataLoader for CurrencyDataLoader {
         let Ok(snapshot) = load_cache(path) else {
             return false;
         };
+        if self.is_from_the_future(snapshot.fetched_at) {
+            return false;
+        }
 
         // (The original also rejected caches written for another response
         // language; names now come from a built-in table, so that is moot.)
@@ -808,7 +819,11 @@ impl CurrencyDataLoader {
         }
 
         let snapshot = match fetched {
-            Ok(snapshot) if snapshot.validate().is_ok() => snapshot,
+            Ok(snapshot)
+                if snapshot.validate().is_ok() && !self.is_from_the_future(snapshot.fetched_at) =>
+            {
+                snapshot
+            }
             _ => return false,
         };
 

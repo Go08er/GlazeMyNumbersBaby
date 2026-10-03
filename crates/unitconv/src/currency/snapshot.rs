@@ -17,7 +17,7 @@ use std::io::{self, Read};
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::CurrencyError;
@@ -75,6 +75,16 @@ fn default_version() -> u32 {
     SNAPSHOT_FORMAT_VERSION
 }
 
+/// Most currencies a snapshot may hold (the real data has about 165). The
+/// converter builds a table over every pair of them, so this also bounds
+/// that table, whatever a cache file or a response contains.
+pub const MAX_CURRENCIES: usize = 400;
+
+/// A currency code as providers write them: a few ASCII letters or digits.
+fn plausible_code(code: &str) -> bool {
+    (1..=8).contains(&code.len()) && code.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
 impl CurrencySnapshot {
     /// Parses a snapshot from its JSON representation (cache / bundled format).
     pub fn from_json(json: &str) -> Result<Self, CurrencyError> {
@@ -89,13 +99,39 @@ impl CurrencySnapshot {
         serde_json::to_string_pretty(self).expect("snapshot serialization cannot fail")
     }
 
-    /// Checks that the snapshot contains at least one usable rate.
+    /// Checks that the snapshot is of plausible size and shape and contains
+    /// at least one usable rate.
     pub fn validate(&self) -> Result<(), CurrencyError> {
         if self.version > SNAPSHOT_FORMAT_VERSION {
             return Err(CurrencyError::Parse(format!(
                 "unsupported snapshot version {}",
                 self.version
             )));
+        }
+        if self.currencies.len() > MAX_CURRENCIES {
+            return Err(CurrencyError::Parse(format!(
+                "{} currencies is more than {MAX_CURRENCIES}",
+                self.currencies.len()
+            )));
+        }
+        let short = |s: &str, max: usize| s.len() <= max;
+        let odd = |c: &CurrencyRate| {
+            !plausible_code(&c.code)
+                || !short(&c.name, 128)
+                || c.symbol.as_deref().is_some_and(|s| !short(s, 32))
+                || c.date.as_deref().is_some_and(|d| !short(d, 32))
+        };
+        if !plausible_code(&self.base)
+            || !short(&self.rates_date, 32)
+            || !short(&self.source, 512)
+            || self.currencies.iter().any(odd)
+        {
+            return Err(CurrencyError::Parse("implausible currency metadata".into()));
+        }
+        // Far beyond any real date (and near chrono's limits, where date
+        // arithmetic overflows).
+        if self.fetched_at.year() > 9999 {
+            return Err(CurrencyError::Parse("implausible timestamp".into()));
         }
         if self
             .currencies

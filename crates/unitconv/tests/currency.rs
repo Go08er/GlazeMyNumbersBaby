@@ -11,8 +11,8 @@ use common::*;
 use unitconv::converter::{ConverterDataLoader, CurrencyConverterDataLoader};
 use unitconv::currency::{
     BUNDLED_SNAPSHOT_DATE, CurrencyDataLoader, CurrencyDataLoaderConfig, CurrencyDataSource,
-    CurrencyError, CurrencyLoadStatus, CurrencySnapshot, NetworkAccessBehavior, format_timestamp,
-    info, load_cache, parse_frankfurter_v1, parse_frankfurter_v2, save_cache,
+    CurrencyError, CurrencyLoadStatus, CurrencyRate, CurrencySnapshot, NetworkAccessBehavior,
+    format_timestamp, info, load_cache, parse_frankfurter_v1, parse_frankfurter_v2, save_cache,
 };
 
 fn loader_with_cache(
@@ -709,4 +709,37 @@ fn live_fetch_latest() {
     })
     .expect("ECB-only fetch");
     assert!(ecb.rate("EUR").is_some());
+}
+
+/// R6-M-03 / R6-M-06: a cache or response can't make the converter build
+/// an outsized table, and an extreme or future timestamp is refused rather
+/// than trusted (or overflowing date arithmetic).
+#[test]
+fn implausible_snapshots_are_refused() {
+    let refused = |s: &CurrencySnapshot| matches!(s.validate(), Err(CurrencyError::Parse(_)));
+    let mut s = fixture_snapshot();
+    let template = s.currencies[0].clone();
+    s.currencies = (0..unitconv::currency::MAX_CURRENCIES + 1)
+        .map(|i| CurrencyRate {
+            code: format!("C{i}"),
+            ..template.clone()
+        })
+        .collect();
+    assert!(refused(&s));
+    let mut s = fixture_snapshot();
+    s.currencies[0].code = "X".repeat(9);
+    assert!(refused(&s));
+    let mut s = fixture_snapshot();
+    s.currencies[0].name = "n".repeat(129);
+    assert!(refused(&s));
+    let mut s = fixture_snapshot();
+    s.fetched_at = chrono::DateTime::<Utc>::MAX_UTC - TimeDelta::days(3);
+    assert!(refused(&s));
+    assert!(!refused(&fixture_snapshot()));
+
+    // A cache dated a month ahead isn't used.
+    let mut future = fixture_snapshot();
+    future.fetched_at = fixture_time() + TimeDelta::days(30);
+    let mut loader = loader_with_cache(Some(prime_cache(&future)), TimeDelta::minutes(5));
+    assert!(!loader.try_load_data_from_cache());
 }

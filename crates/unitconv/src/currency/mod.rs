@@ -34,7 +34,8 @@ pub use loader::{
 };
 pub use snapshot::{
     BUNDLED_SNAPSHOT_DATE, CurrencyRate, CurrencySnapshot, DEFAULT_BASE_CURRENCY, MAX_CACHE_BYTES,
-    SNAPSHOT_FORMAT_VERSION, load_cache, parse_frankfurter_v1, parse_frankfurter_v2, save_cache,
+    MAX_CURRENCIES, SNAPSHOT_FORMAT_VERSION, load_cache, parse_frankfurter_v1,
+    parse_frankfurter_v2, save_cache,
 };
 
 /// Whether the app may use the network for currency rates
