@@ -24,8 +24,9 @@
 //! thread.
 
 use super::format::{
-    Bound, Interval, MINUS, Nice, format_family, format_family_apart, format_nonzero,
-    format_number, format_number_apart, format_periodic_set, format_set, format_set_with,
+    Bound, Interval, MINUS, Nice, format_decimal, format_family, format_family_apart,
+    format_nonzero, format_number, format_number_apart, format_periodic_set, format_set,
+    format_set_with,
 };
 use super::numeric::{
     SeqLimit, bisect_defined, brent, diverges_near, limit_at_infinity_beyond_err, one_sided_limit,
@@ -1198,6 +1199,17 @@ fn value_noise(fun: &Fun, x: f64, v: f64) -> f64 {
 /// recognised closed form if it is that close to one, otherwise itself. A
 /// genuine tiny value is never turned into 0 by closed-form recognition.
 fn clean(v: f64, noise: f64) -> f64 {
+    clean_within(v, noise, false)
+}
+
+/// [`clean`] for a level f only tends to (a horizontal asymptote): also
+/// moved within 10⁻⁹ of it where that changes no digit the panel shows, as
+/// telling f's tail from that level is no finer.
+fn clean_level(v: f64, noise: f64) -> f64 {
+    clean_within(v, noise, true)
+}
+
+fn clean_within(v: f64, noise: f64, shown: bool) -> f64 {
     if !v.is_finite() {
         return v;
     }
@@ -1205,10 +1217,14 @@ fn clean(v: f64, noise: f64) -> f64 {
         return 0.0;
     }
     // Within the value's noise (a limit known to 10⁻⁸ is 3, not
-    // 3.0000000051), or 10⁻⁹ of it for display; never more than 10⁻⁶.
+    // 3.0000000051), or 10⁻⁹ of it but no more than 10⁻⁶ in all
+    // (545843449.4 is not the integer 545843449, nor 10⁶ + 10⁻⁶ just 10⁶);
+    // never more than 10⁻⁶ of it.
     let tol = (noise / v.abs()).clamp(1e-9, 1e-6);
     let s = snap(v, tol);
-    if s != 0.0 && (s - v).abs() <= tol * v.abs() {
+    let d = (s - v).abs();
+    let near = d <= noise || d <= 1e-6 || (shown && format_decimal(s) == format_decimal(v));
+    if s != 0.0 && d <= tol * v.abs() && near {
         s
     } else {
         v
@@ -3796,7 +3812,11 @@ fn asymptotes_at_infinity(
         };
         match limit {
             (SeqLimit::Converges(l), err) => {
-                let l = if exact.is_some() { l } else { clean(l, err) };
+                let l = if exact.is_some() {
+                    l
+                } else {
+                    clean_level(l, err)
+                };
                 if !coincides(&mut f, 0.0, l) {
                     horiz.push((l, side));
                 }
