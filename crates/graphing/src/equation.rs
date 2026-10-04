@@ -347,6 +347,19 @@ pub struct CompiledEquation {
 }
 
 impl CompiledEquation {
+    /// [`crate::plot::IntervalFn::cost`] of an explicit curve or an
+    /// inequality's explicit bound (the program's cost without one).
+    pub(crate) fn interval_cost(&self) -> usize {
+        match &self.form {
+            CompiledForm::Explicit { f, iv, .. } => iv.as_ref().map_or(f.cost(), |iv| iv.cost()),
+            CompiledForm::Inequality { bound: Some(b), .. } => {
+                b.iv.as_ref().map_or(b.f.cost(), |iv| iv.cost())
+            }
+            CompiledForm::Implicit { f } => f.cost(),
+            CompiledForm::Inequality { field, .. } => field.cost(),
+        }
+    }
+
     /// For explicit curves, evaluates the dependent coordinate for a value
     /// of the independent one (`f(x)` for `y = f(x)`, `g(y)` for
     /// `x = g(y)`).

@@ -468,3 +468,38 @@ fn keyboard_tracing_reaches_domain_ends_and_texts_are_exact() {
         assert_eq!(t.spoken_text(), spoken, "{src}");
     }
 }
+
+/// PREREVIEW_C Low: an edit that makes the graph much heavier is predicted
+/// slow (so the apps plot it on a worker, not the UI thread), a light one
+/// quick.
+#[test]
+fn heavy_edits_are_predicted_slow() {
+    use graphing::graph::predicted_plot_ms;
+    let mut g = Graph::new();
+    let id = g.add_equation("y=x");
+    let light = g.plot_weight();
+    // The light graph plotted in well under a millisecond.
+    let last_ms = 0.3;
+    g.set_equation_text(id, "y=x^2-3");
+    assert!(predicted_plot_ms(last_ms, light, g.plot_weight()) < 2.0);
+    let heavy = format!(
+        "y={}",
+        (1..70)
+            .map(|k| format!("{k}*sin({k}*x)"))
+            .collect::<Vec<_>>()
+            .join("+")
+    );
+    g.set_equation_text(id, &heavy);
+    assert!(predicted_plot_ms(last_ms, light, g.plot_weight()) > 12.0);
+    // 14 such rows.
+    let ids: Vec<_> = (0..13).map(|_| g.add_equation(&heavy)).collect();
+    assert!(predicted_plot_ms(last_ms, light, g.plot_weight()) > 100.0);
+    for id in ids {
+        g.remove_equation(id);
+    }
+    g.set_equation_text(id, "sin(x*y)<0");
+    assert!(predicted_plot_ms(last_ms, light, g.plot_weight()) > 2.0);
+    // With no plot to scale from: an absolute guess.
+    assert!(predicted_plot_ms(0.0, 0.0, Graph::new().plot_weight()) < 1.0);
+    assert!(predicted_plot_ms(0.0, 0.0, g.plot_weight()) > 1.0);
+}

@@ -31,6 +31,22 @@ pub const LINE_WIDTHS: [f64; 4] = [1.0, 2.0, 3.0, 4.0];
 /// fine one; 14 of them together then cost about what a few did alone.
 pub const MAX_IMPLICIT_WORK: f64 = 1.2e7;
 
+/// The predicted time (ms) of plotting a graph of [`Graph::plot_weight`]
+/// `weight`, from the last plot's time and weight (an absolute guess,
+/// 0.05 ms a unit, when there was none): the apps plot on the UI thread
+/// only when this is short, so an edit that makes the graph much heavier
+/// goes to a worker instead of freezing the window. The time grows faster
+/// than the weight (a long expression also wiggles more: more boxes), so
+/// it is scaled by the ratio to the power 1.5, with a fixed overhead.
+pub fn predicted_plot_ms(last_ms: f64, last_weight: f64, weight: f64) -> f64 {
+    const OVERHEAD: f64 = 32.0;
+    if last_weight > 0.0 {
+        last_ms * ((weight + OVERHEAD) / (last_weight + OVERHEAD)).powf(1.5)
+    } else {
+        weight * 0.05
+    }
+}
+
 /// Line width of the selected equation (`Grapher::UpdateGraphOptions`).
 pub fn selected_line_width(width: f64) -> f64 {
     width + if width <= 2.0 { 1.0 } else { 2.0 }
@@ -379,6 +395,21 @@ impl Graph {
                 .min(MAX_IMPLICIT_WORK / cost as f64);
         }
         opts
+    }
+
+    /// A rough, deterministic measure of the work of plotting the drawn
+    /// equations (the size of each curve's expression; a contoured
+    /// relation's ×16, as it is evaluated over an area). Only ratios mean
+    /// anything: the apps scale the time of their last plot by it to
+    /// predict whether the next, after an edit, can run on the UI thread.
+    pub fn plot_weight(&self) -> f64 {
+        self.plot_work()
+            .iter()
+            .map(|(_, c)| match contour_cost(c) {
+                Some(cost) => 16.0 * cost as f64,
+                None => c.interval_cost() as f64,
+            })
+            .sum()
     }
 
     /// Geometry of every drawn equation for a viewport.

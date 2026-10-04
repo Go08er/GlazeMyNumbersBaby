@@ -83,7 +83,11 @@ pub struct GraphPage {
     next_color: usize,
     vp: Option<Viewport>,
     plots: Vec<EquationPlot>,
+    /// How long the last plot took, its `Graph::plot_weight`, and that of
+    /// the plot running on the worker.
     plot_ms: f64,
+    plot_weight: f64,
+    pending_weight: f64,
     dirty: bool,
     busy: bool,
     again: bool,
@@ -176,6 +180,8 @@ impl GraphPage {
             vp: None,
             plots: Vec::new(),
             plot_ms: 0.0,
+            plot_weight: 0.0,
+            pending_weight: 0.0,
             dirty: true,
             busy: false,
             again: false,
@@ -846,6 +852,7 @@ impl GraphPage {
         self.plot_cancel = None;
         if let Some(plots) = plots {
             self.plot_ms = ms;
+            self.plot_weight = self.pending_weight;
             self.plots = plots;
         }
         if self.again {
@@ -860,11 +867,17 @@ impl GraphPage {
         if !self.dirty {
             return;
         }
-        if self.plot_ms < INLINE_PLOT_MS || self.proxy.is_none() {
+        // Inline only if this plot, scaled from the last by the graph's
+        // weight, is quick: an edit to a heavy row goes to the worker.
+        let weight = self.graph.plot_weight();
+        let predicted =
+            graphing::graph::predicted_plot_ms(self.plot_ms, self.plot_weight, weight);
+        if predicted < INLINE_PLOT_MS || self.proxy.is_none() {
             self.dirty = false;
             let t = Instant::now();
             self.plots = self.graph.plot_parallel(&vp);
             self.plot_ms = t.elapsed().as_secs_f64() * 1e3;
+            self.plot_weight = weight;
             self.update_trace();
             return;
         }
@@ -881,6 +894,7 @@ impl GraphPage {
             return;
         }
         self.busy = true;
+        self.pending_weight = weight;
         self.plot_seq += 1;
         let cancel = Arc::new(AtomicBool::new(false));
         self.plot_cancel = Some(cancel.clone());

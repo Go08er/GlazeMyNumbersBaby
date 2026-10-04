@@ -57,8 +57,9 @@ mod imp {
         pub tick: RefCell<Option<gtk::TickCallbackId>>,
         pub on_viewport: RefCell<Vec<ViewportFn>>,
         pub fitted: Cell<bool>,
-        /// How long the last plot took.
+        /// How long the last plot took, and its `Graph::plot_weight`.
         pub plot_ms: Cell<f64>,
+        pub plot_weight: Cell<f64>,
         /// A worker plot is running / another was requested meanwhile.
         pub plot_busy: Cell<bool>,
         pub plot_again: Cell<bool>,
@@ -88,6 +89,7 @@ mod imp {
                 on_viewport: RefCell::default(),
                 fitted: Cell::new(false),
                 plot_ms: Cell::new(0.0),
+                plot_weight: Cell::new(0.0),
                 plot_busy: Cell::new(false),
                 plot_again: Cell::new(false),
                 plot_cancel: RefCell::new(None),
@@ -505,10 +507,19 @@ impl GraphView {
         let (Some(vp), Some(graph)) = (imp.vp.get(), imp.graph.borrow().clone()) else {
             return;
         };
-        if imp.plot_ms.get() < INLINE_PLOT_MS {
+        // Inline only if this plot, scaled from the last by the graph's
+        // weight, is quick: an edit to a heavy row goes to the worker.
+        let weight = graph.borrow().plot_weight();
+        let predicted = graphing::graph::predicted_plot_ms(
+            imp.plot_ms.get(),
+            imp.plot_weight.get(),
+            weight,
+        );
+        if predicted < INLINE_PLOT_MS {
             let started = Instant::now();
             let plots = graph.borrow().plot_parallel(&vp);
             imp.plot_ms.set(started.elapsed().as_secs_f64() * 1e3);
+            imp.plot_weight.set(weight);
             imp.plots.replace(plots);
             return;
         }
@@ -537,6 +548,7 @@ impl GraphView {
             imp.plot_cancel.replace(None);
             if let Ok(Some(plots)) = plots {
                 imp.plot_ms.set(started.elapsed().as_secs_f64() * 1e3);
+                imp.plot_weight.set(weight);
                 imp.plots.replace(plots);
             }
             if imp.plot_again.replace(false) {
