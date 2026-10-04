@@ -187,7 +187,8 @@ pub fn y_intercept(f: &Fun<'_>, dom: &Domain) -> Result<Row<Option<Enc>>, Stop> 
         let zero = Enc::point(0.0);
         let in_family = dom.families.iter().any(|fam| {
             fam.members(0.0, 0.0)
-                .iter()
+                .into_iter()
+                .flatten()
                 .any(|m| m.is_point() && m.lo() == 0.0)
         });
         let outside = !dom.pieces.iter().any(|p| {

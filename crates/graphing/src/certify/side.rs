@@ -493,15 +493,19 @@ pub struct XFamily {
     pub subject: Subject,
 }
 
+/// The most members [`XFamily::members`] lists.
+pub const MAX_MEMBERS: f64 = 1e5;
+
 impl XFamily {
-    /// The members within `[lo, hi]`, enclosed.
-    pub fn members(&self, lo: f64, hi: f64) -> Vec<Interval> {
+    /// The members within `[lo, hi]`, enclosed; `None` when there are too
+    /// many to list (more than [`MAX_MEMBERS`]).
+    pub fn members(&self, lo: f64, hi: f64) -> Option<Vec<Interval>> {
         let p = self.period;
         let k0 = ((lo - self.x0.hi()) / p.lo()).floor() - 1.0;
         let k1 = ((hi - self.x0.lo()) / p.lo()).ceil() + 1.0;
         let mut out = Vec::new();
-        if !(k0.is_finite() && k1.is_finite()) || k1 - k0 > 1e5 {
-            return out;
+        if !(k0.is_finite() && k1.is_finite()) || k1 - k0 > MAX_MEMBERS {
+            return None;
         }
         let mut k = k0;
         while k <= k1 {
@@ -511,7 +515,7 @@ impl XFamily {
             }
             k += 1.0;
         }
-        out
+        Some(out)
     }
 }
 
@@ -959,12 +963,20 @@ pub fn interior(d: &Domain, window: Option<(f64, f64)>) -> (Vec<IBox>, Vec<Claim
         }
         let (blo, bhi) = piece_box(p);
         end_gaps(p, blo, bhi, &mut gaps);
-        // Cut out the family members in [lo, hi].
-        let mut cuts: Vec<Interval> = d
+        // Cut out the family members in [lo, hi]. (Too many to list: no
+        // boxes there, the whole stretch a gap no row can call clear.)
+        let Some(cuts) = d
             .families
             .iter()
-            .flat_map(|fam| fam.members(lo, hi))
-            .collect();
+            .map(|fam| fam.members(lo, hi))
+            .collect::<Option<Vec<Vec<Interval>>>>()
+        else {
+            gaps.push(Claim::Gap {
+                x: XBox::new(lo, hi),
+            });
+            continue;
+        };
+        let mut cuts: Vec<Interval> = cuts.into_iter().flatten().collect();
         cuts.sort_by(|a, b| a.lo().total_cmp(&b.lo()));
         let (mut start, mut start_b, mut start_c) = (lo, lo_b, lo_c);
         for c in cuts {

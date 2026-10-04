@@ -731,6 +731,20 @@ const REVIEW: &[(&str, &str)] = &[
         "tan(2*pi*10^12*x)",
         "D=fam(1/4*10^-12,1/2*10^-12) | XI=fam(0,1/2*10^-12) | YI=0 | P=odd | T=1/2*10^-12 | MIN=none | MAX=none | INF=fam(0,1/2*10^-12,0) | VA=fam(1/4*10^-12,1/2*10^-12) | HA=none | R=R",
     ),
+    // Pre-review D, M1: a non-periodic f with a dense family of poles
+    // (the window narrowed to a thousand members, none left uncut).
+    (
+        "x+tan(200x)",
+        "D=fam(pi/400,pi/200) | XI=inf | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=inf | VA=fam(pi/400,pi/200) | HA=none | R=R",
+    ),
+    (
+        "x+tan(1000x)",
+        "D=fam(pi/2000,pi/1000) | XI=inf | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=inf | VA=fam(pi/2000,pi/1000) | HA=none | R=R",
+    ),
+    (
+        "x+tan(x)-30000",
+        "D=fam(pi/2,pi) | XI=inf | P=neither | T=none | MIN=none | MAX=none | INF=inf | VA=fam(pi/2,pi) | HA=none | R=R",
+    ),
 ];
 
 // ---------------------------------------------------------------- values

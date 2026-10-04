@@ -96,6 +96,27 @@ fn window(f: &Fun<'_>, d: &side::Domain) -> f64 {
     (4.0 * c).max(16.0).max(4.0 * p)
 }
 
+/// The most family members the boxes over a window cut out (each a box, a
+/// gap and their claims, through every cover and row).
+const CUT_MEMBERS: f64 = 1000.0;
+
+/// The half-width of the window for the boxes when excluded families cut
+/// them: `w`, narrowed until the families have at most [`CUT_MEMBERS`]
+/// members in it (x + tan(190x) over [−760, 760] would cut 92 000).
+fn cut_window(dom: &side::Domain, w: f64) -> f64 {
+    let per_unit: f64 = dom
+        .families
+        .iter()
+        .map(|fam| 1.0 / fam.period.lo())
+        .filter(|d| d.is_finite())
+        .sum();
+    if per_unit > 0.0 {
+        w.min(CUT_MEMBERS / (2.0 * per_unit))
+    } else {
+        w
+    }
+}
+
 /// One period `[s, s + P]` of f to analyse instead of the line, when the
 /// simplifier proves f periodic with period P and f's domain is the line
 /// (less excluded families): its start s is no family member, and f, f′
@@ -115,11 +136,10 @@ fn periodic_window(f: &Fun<'_>, dom: &side::Domain) -> Option<(f64, Enc)> {
     for c in [-0.5, -0.37, -0.29, -0.41, -0.23, -0.47, -0.31] {
         let start = c * p;
         let margin = 1e-9 * p;
-        if dom
-            .families
-            .iter()
-            .any(|fam| !fam.members(start - margin, start + margin).is_empty())
-        {
+        if dom.families.iter().any(|fam| {
+            fam.members(start - margin, start + margin)
+                .is_none_or(|m| !m.is_empty())
+        }) {
             continue;
         }
         let d = 1e-6 * p;
@@ -394,7 +414,10 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     let decided = dom.row.is_certified();
     let (win, period) = match periodic {
         Some((s, p)) => (Some((s, s + p.hi.0)), Some(p)),
-        None if !dom.families.is_empty() || !decided => (Some((-w, w)), None),
+        None if !dom.families.is_empty() || !decided => {
+            let c = cut_window(&dom, w);
+            (Some((-c, c)), None)
+        }
         None => (None, None),
     };
     f.allow(phase);
@@ -704,12 +727,10 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             out.extend(kink_claims[k - 1].iter().cloned());
         }
         out.extend(gc);
-        let mut seen = Vec::new();
-        out.retain(|c| {
-            let new = !seen.contains(c);
-            seen.push(c.clone());
-            new
-        });
+        // (Each once, in linear time: a window cut by families holds
+        // thousands.)
+        let mut seen = std::collections::HashSet::new();
+        out.retain(|c| seen.insert(format!("{c:?}")));
         out
     };
     let (claims0, claims1, claims2) = (order(0, gc0), order(1, gc1), order(2, gc2));
