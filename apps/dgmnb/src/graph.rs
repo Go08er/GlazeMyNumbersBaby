@@ -1191,7 +1191,7 @@ impl GraphPage {
                                 item.display_items.iter().cloned().chain(rows).collect();
                             // "≈" (known to its digits only) read as
                             // "approximately".
-                            let mut value = text.join(", ").replace('≈', "approximately ");
+                            let mut value = graphing::trace::spoken(&text.join(", "));
                             if !item.note.is_empty() {
                                 value.push_str(". ");
                                 value.push_str(&item.note);
@@ -1417,7 +1417,9 @@ impl GraphPage {
             let bubble = Rect::new(bx, by, bw, bh);
             f.surface(bubble, 8.0);
             f.draw_line(&line, bubble, Align::Center, t.fg);
-            if let Some(n) = f.node(id("trace"), accesskit::Role::Label, &text, bubble) {
+            // Read as a screen reader should: "≈" as "approximately".
+            let spoken = graphing::trace::spoken(&text);
+            if let Some(n) = f.node(id("trace"), accesskit::Role::Label, &spoken, bubble) {
                 n.live = true;
             }
         }
@@ -1822,6 +1824,59 @@ mod tests {
                 "{src} {shift}: {travelled}"
             );
         }
+    }
+
+    /// PREREVIEW_B B-M4: the traced value reaches screen readers with "≈"
+    /// read as "approximately" (the bubble itself shows "≈").
+    #[test]
+    fn traced_values_are_spoken_as_approximately() {
+        use appcore::Named;
+        let mut g = GraphPage::for_test(session::from_list("y=sin(x)"));
+        let mut pm = tiny_skia::Pixmap::new(760, 700).unwrap();
+        let (mut text, mut icons, input) = (
+            crate::text::Text::new(),
+            ui::Icons::default(),
+            ui::Input::default(),
+        );
+        let mut scrolls = std::collections::HashMap::new();
+        let frame = |g: &mut GraphPage,
+                     pm: &mut tiny_skia::Pixmap,
+                     text: &mut crate::text::Text,
+                     icons: &mut ui::Icons,
+                     scrolls: &mut std::collections::HashMap<_, _>| {
+            let mut f = Frame::new(
+                crate::gfx::Canvas::new(pm.as_mut(), 1.0, false),
+                text,
+                icons,
+                crate::theme::Theme::new(false, None),
+                &input,
+                scrolls,
+                true,
+            );
+            g.view(&mut f, Rect::new(0.0, 46.0, 760.0, 654.0));
+            f.nodes.take().unwrap()
+        };
+        frame(&mut g, &mut pm, &mut text, &mut icons, &mut scrolls);
+        let (mut toasts, mut focus) = (Vec::new(), Some(canvas_id()));
+        let mut cx = Cx {
+            toasts: &mut toasts,
+            clipboard: None,
+            wide: true,
+            focus: &mut focus,
+        };
+        assert!(g.key(&KeyPress::named(Named::Right), &mut cx));
+        let (_, t) = g.trace.expect("tracing");
+        assert!(t.text().contains('≈'), "{}", t.text());
+        let nodes = frame(&mut g, &mut pm, &mut text, &mut icons, &mut scrolls);
+        let label = &nodes
+            .iter()
+            .find(|n| n.id == id("trace"))
+            .expect("trace label")
+            .label;
+        assert!(
+            label.contains("approximately ") && !label.contains('≈'),
+            "{label}"
+        );
     }
 
     /// A proven hole is drawn as an open circle: the curve is stroked up

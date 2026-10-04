@@ -261,7 +261,7 @@ impl GraphView {
             } else {
                 (t.screen_x, y)
             }));
-            self.announce(&t.text(), gtk::AccessibleAnnouncementPriority::Medium);
+            self.announce(&t.spoken_text(), gtk::AccessibleAnnouncementPriority::Medium);
         }
         self.queue_draw();
     }

@@ -1219,7 +1219,7 @@ impl GraphingPage {
 fn spoken(l: &gtk::Label, text: &str) {
     if text.contains('≈') {
         l.update_property(&[gtk::accessible::Property::Label(
-            &text.replace('≈', "approximately "),
+            &graphing::trace::spoken(text),
         )]);
     }
 }
