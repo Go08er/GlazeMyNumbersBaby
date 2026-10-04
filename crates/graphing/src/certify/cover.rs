@@ -21,10 +21,17 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
-use super::cert::{Claim, Order, R, Sign, Tail, XBox};
-use super::fun::{Fun, REACH, Stop, atomic, split};
+use super::cert::{Claim, R, Subject, Tail, XBox};
+use super::fun::{Fun, REACH, Stop, atomic, split, usable};
 use crate::ast::Expr;
-use crate::interval::{Dec, DecInterval, Interval, Series, derivs_valid};
+use crate::interval::{Dec, DecInterval, Interval, Series};
+
+/// The most crossings a cover lists before leaving the rest undecided.
+pub const MAX_FEATURES: usize = 64;
+
+/// Below this (relative to the threshold) a value that hasn't been decided
+/// is lost to underflow: splitting further can't help.
+const TINY: f64 = 1e-290;
 
 /// What a cover is about.
 #[derive(Clone)]
@@ -39,12 +46,16 @@ pub struct Target<'e> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Leaf {
     /// h is strictly inside band `band` on `[a, b]` (an end may be ±∞: a
-    /// tail); `mono`: decided from monotonicity and the ends' signs.
+    /// tail); `mono`: the enclosure reached threshold `mono`, which h is
+    /// shown not to cross from monotonicity and the ends' signs; `cont`:
+    /// the function is also continuous on the box (and so bounded on a
+    /// finite one).
     Band {
         a: f64,
         b: f64,
         band: usize,
-        mono: bool,
+        mono: Option<usize>,
+        cont: bool,
     },
     /// h is continuous and strictly monotone on `[a, b]` (rising or not)
     /// and passes threshold `j` exactly once there: in `[l, r]`, or at the
@@ -60,8 +71,13 @@ pub enum Leaf {
     },
     /// h(p) = cⱼ exactly.
     At { p: f64, j: usize },
-    /// h ≡ cⱼ on `[a, b]`.
-    Equal { a: f64, b: f64, j: usize },
+    /// h ≡ cⱼ on `[a, b]` (continuous there when `cont`).
+    Equal {
+        a: f64,
+        b: f64,
+        j: usize,
+        cont: bool,
+    },
     /// h is defined nowhere on `[a, b]`.
     Undefined { a: f64, b: f64 },
     /// Not decided.
@@ -179,6 +195,7 @@ impl Cover {
             .collect();
         let mut leaves = Vec::new();
         let mut stopped = None;
+        let mut found = 0;
         while let Some(Item { a, b, .. }) = heap.pop() {
             if stopped.is_some() {
                 leaves.push(Leaf::Flag {
@@ -188,9 +205,27 @@ impl Cover {
                 });
                 continue;
             }
+            // A function with this many crossings near the origin has
+            // more further out than a list can show (sin x): what's left,
+            // furthest out, stays undecided.
+            if found >= MAX_FEATURES {
+                leaves.push(Leaf::Flag {
+                    a,
+                    b,
+                    why: "too many features",
+                });
+                continue;
+            }
             match step(fun, t, cs, a, b) {
-                Ok(Step::Leaves(ls)) => leaves.extend(ls),
+                Ok(Step::Leaves(ls)) => {
+                    found += ls
+                        .iter()
+                        .filter(|l| matches!(l, Leaf::Cross { .. } | Leaf::At { .. }))
+                        .count();
+                    leaves.extend(ls);
+                }
                 Ok(Step::Split(parts, points)) => {
+                    found += points.len();
                     leaves.extend(points);
                     for (l, h) in parts {
                         heap.push(item(l, h));
@@ -236,7 +271,7 @@ pub fn point(fun: &Fun<'_>, t: &Target<'_>, p: f64) -> Result<Option<DecInterval
     let ok = if t.k == 0 {
         !s[0].is_empty() && s[0].dec >= Dec::Def
     } else {
-        derivs_valid(&s, t.k)
+        usable(&s, t.k)
     };
     Ok(ok.then(|| kth(&s, t.k)))
 }
@@ -265,31 +300,71 @@ fn step(fun: &Fun<'_>, t: &Target<'_>, cs: &[f64], a: f64, b: f64) -> Result<Ste
     let valid = if k == 0 {
         s[0].dec >= Dec::Def
     } else {
-        derivs_valid(&s, k)
+        usable(&s, k)
     };
     if !valid {
         return split_or_flag("not defined or not smooth throughout");
     }
     let h = kth(&s, k);
+    let cont = s[0].dec >= Dec::Dac && usable(&s, k);
     let j = match place(&h, cs) {
         Place::Band(i) => {
             return Ok(Step::Leaves(vec![Leaf::Band {
                 a,
                 b,
                 band: i,
-                mono: false,
+                mono: None,
+                cont,
             }]));
         }
-        Place::Exactly(j) => return Ok(Step::Leaves(vec![Leaf::Equal { a, b, j }])),
+        Place::Exactly(j) if a == b => {
+            return Ok(Step::Leaves(vec![Leaf::At { p: a, j }]));
+        }
+        Place::Exactly(j) => {
+            return Ok(Step::Leaves(vec![Leaf::Equal { a, b, j, cont }]));
+        }
         Place::Many => return split_with_points(fun, t, cs, a, b, &split_or_flag),
         Place::Touches(j) => j,
     };
     let c = cs[j];
     // A crossing of cⱼ: unique when h is continuous and strictly monotone
     // on the box.
-    let cont = s[0].dec >= Dec::Dac && derivs_valid(&s, k);
     let d = kth(&s, k + 1);
-    let mono = cont && derivs_valid(&s, k + 1) && d.ne0();
+    let mono = cont && usable(&s, k + 1) && d.ne0();
+    let band_of = |above: bool| cs.iter().filter(|&&cc| cc < c).count() + usize::from(above);
+    if mono && !finite && (a.is_finite() || b.is_finite()) {
+        // A tail moving away from cⱼ from where it starts never reaches it.
+        let rising = d.gt0();
+        let start = if a.is_finite() { a } else { b };
+        if let Some(p) = point(fun, t, start)?
+            && let Some(above) = side(&p, c)
+        {
+            let away = if a.is_finite() {
+                above == rising
+            } else {
+                above != rising
+            };
+            if away {
+                return Ok(Step::Leaves(vec![Leaf::Band {
+                    a,
+                    b,
+                    band: band_of(above),
+                    mono: Some(j),
+                    cont: true,
+                }]));
+            }
+        }
+    }
+    if !mono && c == 0.0 && h.iv.mig_mag().1 <= TINY {
+        // Underflow: below anything a double can tell apart here.
+        if !atomic(a, b) && finite {
+            return Ok(Step::Leaves(vec![Leaf::Flag {
+                a,
+                b,
+                why: "underflow",
+            }]));
+        }
+    }
     if mono && finite {
         let rising = d.gt0();
         if let (Some(pa), Some(pb)) = (point(fun, t, a)?, point(fun, t, b)?) {
@@ -313,12 +388,12 @@ fn step(fun: &Fun<'_>, t: &Target<'_>, cs: &[f64], a: f64, b: f64) -> Result<Ste
                 (Some(sa), Some(_)) => {
                     // Monotone with both ends on one side of cⱼ: no
                     // crossing, and no other threshold is reached.
-                    let band = cs.iter().filter(|&&cc| cc < c).count() + usize::from(sa);
                     return Ok(Step::Leaves(vec![Leaf::Band {
                         a,
                         b,
-                        band,
-                        mono: true,
+                        band: band_of(sa),
+                        mono: Some(j),
+                        cont: true,
                     }]));
                 }
                 _ => {}
@@ -405,79 +480,111 @@ fn refine(
     })
 }
 
-fn tail_or_box(a: f64, b: f64, of: Order, sign: Sign) -> Claim {
+/// "Strictly above or below `c` on `[a, b]`", as a box or a tail claim.
+fn beyond(a: f64, b: f64, of: &Subject, c: f64, above: bool) -> Claim {
     if a.is_finite() && b.is_finite() {
-        Claim::Sign {
+        Claim::Beyond {
             x: XBox::new(a, b),
-            of,
-            sign,
+            of: of.clone(),
+            c: R(c),
+            above,
         }
     } else if !b.is_finite() {
-        Claim::TailSign {
+        Claim::TailBeyond {
             side: Tail::Right,
             from: R(a),
-            of,
-            sign,
+            of: of.clone(),
+            c: R(c),
+            above,
         }
     } else {
-        Claim::TailSign {
+        Claim::TailBeyond {
             side: Tail::Left,
             from: R(b),
-            of,
-            sign,
+            of: of.clone(),
+            c: R(c),
+            above,
         }
     }
 }
 
-/// The claims behind a cover of f⁽ᵏ⁾ against 0 (band 0: negative, band 1:
-/// positive), for a certificate.
-pub fn sign_claims(cover: &Cover, k: usize) -> Vec<Claim> {
-    let of = Order::of(k);
+/// The claims behind a cover of `of` against the thresholds `cs`, for a
+/// certificate.
+pub fn claims(cover: &Cover, of: &Subject, cs: &[f64]) -> Vec<Claim> {
     let mut out = Vec::new();
     for l in &cover.leaves {
         match *l {
-            Leaf::Band { a, b, band, mono } => {
-                let sign = if band == 0 { Sign::Neg } else { Sign::Pos };
-                if mono {
-                    out.push(Claim::NoCrossing {
-                        x: XBox::new(a, b),
-                        of,
-                        sign,
-                    });
-                } else {
-                    out.push(tail_or_box(a, b, of, sign));
+            Leaf::Band {
+                a, b, band, mono, ..
+            } => {
+                // Above every threshold below the band, below every one
+                // above it; the one reached by the enclosure (if any) by
+                // monotonicity.
+                for (j, &c) in cs.iter().enumerate() {
+                    let above = j < band;
+                    if mono == Some(j) && a.is_finite() && b.is_finite() {
+                        out.push(Claim::NoCross {
+                            x: XBox::new(a, b),
+                            of: of.clone(),
+                            c: R(c),
+                            above,
+                        });
+                    } else if mono == Some(j) {
+                        out.push(Claim::TailNoCross {
+                            side: if a.is_finite() {
+                                Tail::Right
+                            } else {
+                                Tail::Left
+                            },
+                            from: R(if a.is_finite() { a } else { b }),
+                            of: of.clone(),
+                            c: R(c),
+                            above,
+                        });
+                    } else {
+                        out.push(beyond(a, b, of, c, above));
+                    }
                 }
             }
             Leaf::Cross {
-                a, b, l, r, exact, ..
+                a,
+                b,
+                l,
+                r,
+                j,
+                exact,
+                ..
             } => match exact {
-                Some(p) => out.push(Claim::ExactZero {
+                Some(p) => out.push(Claim::ExactAt {
                     x: XBox::new(a, b),
+                    of: of.clone(),
+                    c: R(cs[j]),
                     at: R(p),
-                    of,
                 }),
                 None => {
-                    out.push(Claim::OneCrossing {
+                    out.push(Claim::OneCross {
                         x: XBox::new(a, b),
-                        of,
+                        of: of.clone(),
+                        c: R(cs[j]),
                     });
-                    out.push(Claim::OneCrossing {
+                    out.push(Claim::OneCross {
                         x: XBox::new(l, r),
-                        of,
+                        of: of.clone(),
+                        c: R(cs[j]),
                     });
                 }
             },
-            Leaf::At { p, .. } => out.push(Claim::Value {
+            Leaf::At { p, j } => out.push(Claim::Value {
                 x: XBox::point(p),
-                of,
-                lo: R(0.0),
-                hi: R(0.0),
+                of: of.clone(),
+                lo: R(cs[j]),
+                hi: R(cs[j]),
             }),
-            Leaf::Equal { a, b, .. } => out.push(Claim::Value {
+            Leaf::Equal { a, b, j, .. } => out.push(Claim::Value {
                 x: XBox::new(a, b),
-                of,
-                lo: R(0.0),
-                hi: R(0.0),
+                of: of.clone(),
+                lo: R(cs[j]),
+                hi: R(cs[j]),
             }),
             Leaf::Undefined { a, b } => out.push(Claim::Undefined {
                 x: XBox::new(a, b),

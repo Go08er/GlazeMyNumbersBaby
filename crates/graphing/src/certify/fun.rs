@@ -59,7 +59,10 @@ pub struct Fun<'a> {
     pub lits: &'a Literals,
     pub opts: CompileOptions<'a>,
     evals: Cell<u64>,
+    /// The current phase's limit.
     budget: Cell<u64>,
+    /// The overall limit.
+    total: Cell<u64>,
     cancel: Option<&'a AtomicBool>,
 }
 
@@ -77,6 +80,7 @@ impl<'a> Fun<'a> {
             opts,
             evals: Cell::new(0),
             budget: Cell::new(budget),
+            total: Cell::new(budget),
             cancel,
         }
     }
@@ -89,6 +93,13 @@ impl<'a> Fun<'a> {
     /// Evaluations left.
     pub fn left(&self) -> u64 {
         self.budget.get().saturating_sub(self.evals.get())
+    }
+
+    /// Allows `n` more evaluations from now (one phase's share), never
+    /// beyond `total` overall.
+    pub fn allow(&self, n: u64) {
+        let cap = self.total.get();
+        self.budget.set((self.evals.get() + n).min(cap));
     }
 
     fn charge(&self) -> Result<(), Stop> {
@@ -158,6 +169,21 @@ pub fn centres(f: &Fun<'_>) -> Vec<f64> {
     }
     walk(&f.expr, f, &mut out);
     out
+}
+
+/// The Taylor coefficients up to `k` are usable on the box: f is defined
+/// and continuous there and each coefficient comes from defined
+/// operations. Unlike `interval::derivs_valid` an enclosure may be
+/// unbounded (on a tail f′ = 2x is, and e^x overflows past 709.8): a
+/// derivative that doesn't exist (a kink, a vertical tangent, a divisor
+/// reaching 0) comes out undefined (*trv*) from the interval core, never
+/// as a defined unbounded value.
+pub fn usable(s: &crate::interval::Series, k: usize) -> bool {
+    use crate::interval::Dec;
+    s[0].dec >= Dec::Dac
+        && s[1..=k.min(s.len() - 1)]
+            .iter()
+            .all(|c| !c.is_empty() && c.dec >= Dec::Def)
 }
 
 /// The spacing of doubles at `x` (∞ for ±∞).

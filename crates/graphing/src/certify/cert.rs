@@ -101,13 +101,6 @@ impl Order {
     }
 }
 
-/// A strict sign.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Sign {
-    Pos,
-    Neg,
-}
-
 /// Which tail: `(−∞, from]` or `[from, ∞)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Tail {
@@ -115,70 +108,115 @@ pub enum Tail {
     Right,
 }
 
-/// One fact about a box (or a tail) of x.
+/// How a side expression g is read off the node at its path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Via {
+    /// g is the node itself.
+    Itself,
+    /// g = cos(u) for the node's argument u (the node is tan or sec), in
+    /// the analysis' unit.
+    CosOfArg,
+    /// g = sin(u) for the node's argument u (the node is cot or csc).
+    SinOfArg,
+}
+
+/// What a claim is about: f, f′ or f″, or a side expression g whose value
+/// decides where f is defined.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Subject {
+    F(Order),
+    G { path: Vec<u8>, via: Via },
+}
+
+impl Subject {
+    pub fn f(k: usize) -> Subject {
+        Subject::F(Order::of(k))
+    }
+
+    /// The derivative order the claim needs (0 for a side expression).
+    pub fn k(&self) -> usize {
+        match self {
+            Subject::F(o) => o.k(),
+            Subject::G { .. } => 0,
+        }
+    }
+}
+
+/// One fact about a box (or a tail) of x. "s is valid on the box" means:
+/// for f⁽ᵏ⁾, f is defined and continuous there and its derivatives up to
+/// k exist (for k = 0: f is defined); for a side expression g, g is
+/// defined there.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Claim {
     /// f is defined everywhere on the box (decoration at least *def*).
     Defined { x: XBox },
-    /// f is defined and continuous on the box (at least *dac*).
-    Continuous { x: XBox },
     /// f is defined nowhere on the box (empty enclosure).
     Undefined { x: XBox },
-    /// f⁽ᵏ⁾ exists (f is defined and continuous, the derivatives up to k
-    /// are valid) and is strictly of one sign on the box. For k = 0 only
-    /// "defined" is needed.
-    Sign { x: XBox, of: Order, sign: Sign },
-    /// f⁽ᵏ⁾ has exactly one zero in the box: valid there, f⁽ᵏ⁺¹⁾ ≠ 0 on
-    /// the box, and strict opposite signs at its two ends.
-    OneCrossing { x: XBox, of: Order },
-    /// f⁽ᵏ⁾ has no zero in the box: valid there, f⁽ᵏ⁺¹⁾ ≠ 0 on the box,
-    /// and the same strict sign `sign` at its two ends.
-    NoCrossing { x: XBox, of: Order, sign: Sign },
-    /// f⁽ᵏ⁾(at) = 0 exactly at the double `at` in the box, and f⁽ᵏ⁺¹⁾ ≠ 0
-    /// on the box: `at` is its only zero there.
-    ExactZero { x: XBox, at: R, of: Order },
-    /// f⁽ᵏ⁾ is defined on the box with values in `[lo, hi]`.
+    /// The subject is valid on the box and strictly above `c` (`above`) or
+    /// strictly below it, from its enclosure there.
+    Beyond {
+        x: XBox,
+        of: Subject,
+        c: R,
+        above: bool,
+    },
+    /// The subject is continuous and strictly monotone on the box (its
+    /// derivative excludes 0) and strictly on the same side of `c` at both
+    /// ends: it never reaches `c` there.
+    NoCross {
+        x: XBox,
+        of: Subject,
+        c: R,
+        above: bool,
+    },
+    /// The subject is continuous and strictly monotone on the box and
+    /// strictly on opposite sides of `c` at its two ends: it equals `c`
+    /// exactly once there.
+    OneCross { x: XBox, of: Subject, c: R },
+    /// The subject equals `c` exactly at the double `at`, and is
+    /// continuous and strictly monotone on the box: `at` is the only
+    /// place in the box where it equals `c`.
+    ExactAt {
+        x: XBox,
+        of: Subject,
+        c: R,
+        at: R,
+    },
+    /// The subject is valid on the box with values in `[lo, hi]`.
     Value {
         x: XBox,
-        of: Order,
+        of: Subject,
         lo: R,
         hi: R,
     },
-    /// The sub-expression at `path`, minus `c`, has exactly one zero in
-    /// the box (continuous there, its derivative ≠ 0, strict opposite
-    /// signs at the ends), or is exactly 0 at the double `at`, with
-    /// strict opposite signs (or a nonzero derivative) around it.
-    SideZero {
-        x: XBox,
-        path: Vec<u8>,
-        c: R,
-        at: Option<R>,
-    },
-    /// The sub-expression at `path` is defined and continuous on the box
-    /// with values in `[lo, hi]` (an empty `lo > hi` meaning: defined
-    /// nowhere on the box).
-    SideValue {
-        x: XBox,
-        path: Vec<u8>,
-        lo: R,
-        hi: R,
-    },
-    /// Table fact: the sub-expression at `path` is `s(a·x + b)` for s one
-    /// of sin, cos, 1 ± sin, 1 ± cos (in the analysis' unit), whose zeros
-    /// in x are exactly `x0 + k·period`, k ∈ ℤ; `x0` and `period` are
-    /// enclosed. The replay checks the form, the enclosures, and that the
-    /// sub-expression changes sign or vanishes at the members it samples.
+    /// Table fact: the side expression (`of` is a `G`) is s(a·x + b) for s
+    /// one of sin, cos, tan, cot, 1 ± sin, 1 ± cos, cos − 1, sin − 1 (in
+    /// the analysis' unit), and is 0 exactly at `x0 + k·period`, k ∈ ℤ
+    /// (both enclosed).
     Family {
-        path: Vec<u8>,
+        of: Subject,
         x0: XBox,
         period: XBox,
     },
-    /// f⁽ᵏ⁾ is valid and strictly of one sign on the whole tail.
-    TailSign {
+    /// The subject is valid and strictly on one side of `c` on the whole
+    /// tail.
+    TailBeyond {
         side: Tail,
         from: R,
-        of: Order,
-        sign: Sign,
+        of: Subject,
+        c: R,
+        above: bool,
+    },
+    /// On the tail the subject is continuous and strictly monotone, moving
+    /// away from `c` as x goes out (its derivative's sign says which way),
+    /// and strictly on side `above` of `c` at `from`: it never reaches `c`
+    /// on the tail.
+    TailNoCross {
+        side: Tail,
+        from: R,
+        of: Subject,
+        c: R,
+        above: bool,
     },
     /// f is defined on the whole tail with values in `[lo, hi]`.
     TailValue {
@@ -187,8 +225,16 @@ pub enum Claim {
         lo: R,
         hi: R,
     },
+    /// |f| → ∞ at the one excluded point enclosed by `at`, approached
+    /// inside `near` (from both sides, or only from the side of `near`
+    /// that `at` doesn't end). Proven from the tree's structure: a divisor
+    /// with a simple zero there and a numerator away from 0, tan/sec at a
+    /// simple zero of their cosine, a logarithm of an argument falling to
+    /// 0, combined with factors bounded (and away from 0) on `near`.
+    Unbounded { near: XBox, at: XBox },
     /// Nothing is claimed inside this box: it holds an excluded point that
-    /// is not a double, and is one ulp wide either side of it.
+    /// is not a double (the box encloses it), or it is the last few doubles
+    /// next to an excluded point or a domain end.
     Gap { x: XBox },
 }
 
@@ -343,11 +389,16 @@ pub enum Parity {
     Neither,
 }
 
-/// A horizontal asymptote: f → `y` as x → ±∞ on `side`.
+/// A horizontal asymptote: f → a limit in `y` as x → ±∞ on `side`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Horizontal {
     pub side: Tail,
+    /// The proven enclosure of the limit ("y ∈ [lo, hi]").
     pub y: Enc,
+    /// A recognised closed form (0, a fraction, a multiple of π or e, a
+    /// surd) inside `y`, when `y` is narrower than anything the panel
+    /// shows. Recognised, not proven: the limit is only known to lie in `y`.
+    pub looks_like: Option<R>,
 }
 
 /// The outcome of certifying one row.
