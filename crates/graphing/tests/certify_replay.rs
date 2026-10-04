@@ -399,3 +399,212 @@ fn pool_certificates_replay() {
     let fails = run(fs);
     assert!(fails.is_empty(), "{} failures", fails.len());
 }
+
+// ------------------------------------------------------------ self-test
+
+/// The certificate of `src` as JSON.
+fn certificate(src: &str) -> serde_json::Value {
+    let a = certify_text(src, CompileOptions::default(), DEFAULT_BUDGET, None).expect("certified");
+    serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap()
+}
+
+/// Whether the replay rejects a certificate: a claim refuted or left
+/// unproven, a row that doesn't follow, a broken binding.
+fn rejected(v: &serde_json::Value) -> Option<String> {
+    match replay::replay(v) {
+        Err(e) => Some(e),
+        Ok(r) => {
+            if let Some(c) = r
+                .claims
+                .iter()
+                .find(|c| matches!(c.outcome.class, Class::Refuted | Class::Unconfirmed))
+            {
+                return Some(format!(
+                    "{} {:?}: {}",
+                    c.outcome.class.name(),
+                    c.claim,
+                    c.outcome.note
+                ));
+            }
+            r.row_problems().into_iter().next()
+        }
+    }
+}
+
+/// The claims of a row (mutable).
+fn claims_of<'v>(v: &'v mut serde_json::Value, row: &str) -> &'v mut Vec<serde_json::Value> {
+    let r = v[row].as_object_mut().unwrap();
+    let body = r.values_mut().next().unwrap();
+    body["cert"]["claims"].as_array_mut().unwrap()
+}
+
+fn value_of<'v>(v: &'v mut serde_json::Value, row: &str) -> &'v mut serde_json::Value {
+    let r = v[row].as_object_mut().unwrap();
+    &mut r.values_mut().next().unwrap()["value"]
+}
+
+/// The first claim of a kind in a row.
+fn first<'v>(v: &'v mut serde_json::Value, row: &str, kind: &str) -> &'v mut serde_json::Value {
+    claims_of(v, row)
+        .iter_mut()
+        .find(|c| c.get(kind).is_some())
+        .unwrap_or_else(|| panic!("no {kind} in {row}"))
+        .get_mut(kind)
+        .unwrap()
+}
+
+type Plant = (&'static str, &'static str, fn(&mut serde_json::Value));
+
+/// False facts planted into real certificates: each must be caught.
+const PLANTS: &[Plant] = &[
+    ("x^3-2x+1/(x-1)", "an x-intercept left out", |v| {
+        value_of(v, "x_intercepts")
+            .as_array_mut()
+            .unwrap()
+            .remove(0);
+    }),
+    ("x^3-2x+1/(x-1)", "an x-intercept made up", |v| {
+        value_of(v, "x_intercepts")
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"At": {"lo": 3.5, "hi": 3.5}}));
+    }),
+    ("x^3-2x+1/(x-1)", "a maximum called a minimum", |v| {
+        let e = &mut value_of(v, "extrema")[0]["kind"];
+        *e = serde_json::json!(if e == "Max" { "Min" } else { "Max" });
+    }),
+    ("x^3-2x+1/(x-1)", "a sign flipped", |v| {
+        let b = first(v, "x_intercepts", "Beyond");
+        b["above"] = serde_json::json!(!b["above"].as_bool().unwrap());
+    }),
+    ("x^3-2x+1/(x-1)", "a value moved", |v| {
+        let c = first(v, "extrema", "Value");
+        c["lo"] = serde_json::json!(c["lo"].as_f64().unwrap() + 1.0);
+        c["hi"] = serde_json::json!(c["hi"].as_f64().unwrap() + 1.0);
+    }),
+    ("x^3-2x+1/(x-1)", "a box taken out of the cover", |v| {
+        let cs = claims_of(v, "x_intercepts");
+        let i = cs.iter().position(|c| c.get("Beyond").is_some()).unwrap();
+        cs.remove(i);
+    }),
+    (
+        "x^3-2x+1/(x-1)",
+        "a crossing's box moved off its zero",
+        |v| {
+            let e = first(v, "x_intercepts", "OneCross");
+            let a = e["x"]["a"].as_f64().unwrap();
+            let b = e["x"]["b"].as_f64().unwrap();
+            e["x"]["b"] = serde_json::json!(a + (b - a) * 1e-3);
+        },
+    ),
+    ("x^3-2x+1/(x-1)", "the y-intercept moved", |v| {
+        let y = value_of(v, "y_intercept");
+        y["lo"] = serde_json::json!(-2.0);
+        y["hi"] = serde_json::json!(-2.0);
+    }),
+    ("x^3-2x+1/(x-1)", "a monotone piece reversed", |v| {
+        let d = &mut value_of(v, "monotonicity")[0]["dir"];
+        *d = serde_json::json!(if d == "Increasing" {
+            "Decreasing"
+        } else {
+            "Increasing"
+        });
+    }),
+    ("x^3-2x+1/(x-1)", "a vertical asymptote made up", |v| {
+        value_of(v, "vertical")
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"At": {"lo": 5.5, "hi": 5.5}}));
+    }),
+    ("x^3-2x+1/(x-1)", "the pole moved", |v| {
+        let u = first(v, "vertical", "Unbounded");
+        u["at"] = serde_json::json!({"a": 1.25, "b": 1.25});
+        u["near"] = serde_json::json!({"a": 1.2, "b": 1.3});
+    }),
+    (
+        "x^3-2x+1/(x-1)",
+        "the excluded point dropped from the domain",
+        |v| {
+            *value_of(v, "domain") = serde_json::json!({
+                "pieces": [{"lo": "NegInf", "hi": "PosInf"}], "excluded": []
+            });
+        },
+    ),
+    ("x^3-2x+1/(x-1)", "another formula", |v| {
+        v["formula"] = serde_json::json!("Add(Pow(x,3),Div(1,Sub(x,2)))");
+    }),
+    ("x^3-2x+1/(x-1)", "a tail's sign flipped", |v| {
+        let t = first(v, "x_intercepts", "TailChain");
+        t["above"] = serde_json::json!(!t["above"].as_bool().unwrap());
+    }),
+    ("1/x", "a tail's sign flipped", |v| {
+        let t = first(v, "x_intercepts", "TailBeyond");
+        t["above"] = serde_json::json!(!t["above"].as_bool().unwrap());
+    }),
+    ("sqrt(x)", "a closed end opened", |v| {
+        value_of(v, "domain")["pieces"][0]["lo"]["At"]["closed"] = serde_json::json!(false);
+    }),
+    ("sqrt(x)", "the domain extended", |v| {
+        value_of(v, "domain")["pieces"][0]["lo"] = serde_json::json!("NegInf");
+    }),
+    ("x^2-1", "parity changed", |v| {
+        *value_of(v, "parity") = serde_json::json!("Odd");
+    }),
+    ("x^2-1", "a value at a point moved", |v| {
+        let c = first(v, "y_intercept", "Value");
+        c["lo"] = serde_json::json!(0.0);
+        c["hi"] = serde_json::json!(0.0);
+    }),
+    ("x^2-1", "the minimum's value moved", |v| {
+        let y = &mut value_of(v, "extrema")[0]["y"];
+        y["lo"] = serde_json::json!(0.0);
+        y["hi"] = serde_json::json!(0.0);
+    }),
+    ("sin(x)", "the period halved", |v| {
+        let p = value_of(v, "period");
+        p["lo"] = serde_json::json!(std::f64::consts::PI);
+        p["hi"] = serde_json::json!(std::f64::consts::PI);
+    }),
+    ("sin(x)", "an inflection left out", |v| {
+        value_of(v, "inflections").as_array_mut().unwrap().clear();
+    }),
+    ("tan(x)", "the excluded family moved", |v| {
+        let f = &mut value_of(v, "domain")["excluded"][0]["x0"];
+        f["lo"] = serde_json::json!(1.0);
+        f["hi"] = serde_json::json!(1.0);
+    }),
+    ("tan(x)", "the family claim's period doubled", |v| {
+        let f = first(v, "domain", "Family");
+        f["period"]["a"] = serde_json::json!(6.283185307179586);
+        f["period"]["b"] = serde_json::json!(6.283185307179587);
+    }),
+    ("1/(1+x^2)", "the horizontal asymptote moved", |v| {
+        let y = &mut value_of(v, "horizontal")[0]["y"];
+        y["lo"] = serde_json::json!(1.0);
+        y["hi"] = serde_json::json!(1.0);
+    }),
+    ("1/(1+x^2)", "the range's top end moved", |v| {
+        let hi = &mut value_of(v, "range")[0]["hi"]["At"]["x"];
+        hi["lo"] = serde_json::json!(2.0);
+        hi["hi"] = serde_json::json!(2.0);
+    }),
+];
+
+#[test]
+fn replay_catches_planted_errors() {
+    let mut missed = Vec::new();
+    let mut cache: BTreeMap<&str, serde_json::Value> = BTreeMap::new();
+    for (src, what, plant) in PLANTS {
+        let base = cache.entry(src).or_insert_with(|| certificate(src)).clone();
+        if let Some(why) = rejected(&base) {
+            panic!("{src}: the true certificate is rejected: {why}");
+        }
+        let mut v = base.clone();
+        plant(&mut v);
+        match rejected(&v) {
+            Some(why) => println!("{src}: {what}: caught ({why})"),
+            None => missed.push(format!("{src}: {what}")),
+        }
+    }
+    assert!(missed.is_empty(), "planted errors not caught: {missed:#?}");
+}

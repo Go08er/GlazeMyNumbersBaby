@@ -560,6 +560,7 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
         "period" => period(fx, rc, all, &mut out),
         "vertical" => vertical(rc, all, &mut out),
         "horizontal" => horizontal(rc, all, &mut out),
+        "oblique" => oblique(rc, all, &mut out),
         "range" => range(fx, rc, all, &mut out),
         _ => Ok(()),
     };
@@ -604,7 +605,13 @@ fn turns(
     if let Some(n) = holes_note(&w, k) {
         out.notes.push(n);
     }
-    let ch = changes(&w);
+    let mut ch = changes(&w);
+    if k == 1 {
+        // Extrema at closed domain ends (a maximum is "from positive").
+        for (x, min) in end_extrema(rc, all, &w) {
+            ch.push((x, !min));
+        }
+    }
     let mut listed = Vec::new();
     for item in list(&rc.value)? {
         let x = enc(item.get("x").ok_or("x")?)?;
@@ -647,6 +654,81 @@ fn turns(
     };
     match_items(what, &derived, &listed, complete(rc), out);
     Ok(())
+}
+
+/// The domain's pieces, from its row (when certified).
+fn domain_pieces(all: &[RowCert]) -> Option<Vec<Piece>> {
+    let d = all
+        .iter()
+        .find(|r| r.name == "domain" && r.status == "Certified")?;
+    let ps = d.value.get("pieces")?.as_array()?;
+    ps.iter().map(|p| piece(p).ok()).collect()
+}
+
+/// Local extrema at closed ends of the domain (√x's minimum at 0): f is
+/// continuous from the end over the first stretch where f′ has a strict
+/// sign (a Continuous claim), and nothing else lies between; rising away
+/// from a low end (or falling toward a high one) makes it a minimum.
+/// (f′ must also have no zero in the gap beside the end, which the
+/// certificate doesn't record.) Returns (where, is a minimum).
+fn end_extrema(rc: &RowCert, all: &[RowCert], w: &Walk) -> Vec<(Enc, bool)> {
+    let Some(pieces) = domain_pieces(all) else {
+        return Vec::new();
+    };
+    let conts: Vec<B> = rc
+        .claims
+        .iter()
+        .filter_map(|c| match c {
+            Claim::Continuous(x) => Some(*x),
+            _ => None,
+        })
+        .collect();
+    let mut out = Vec::new();
+    for p in &pieces {
+        if p.lo == p.hi {
+            continue;
+        }
+        for (b, low) in [(p.lo, true), (p.hi, false)] {
+            let Bound::At { x, closed: true } = b else {
+                continue;
+            };
+            // The first strict sign of f′ inward from the end.
+            let stretch = if low {
+                w.signs
+                    .iter()
+                    .filter(|s| s.0 >= x.lo)
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+            } else {
+                w.signs
+                    .iter()
+                    .filter(|s| s.1 <= x.hi)
+                    .max_by(|a, b| a.1.total_cmp(&b.1))
+            };
+            let Some(&(sa, sb, sign)) = stretch else {
+                continue;
+            };
+            // f continuous from the end into that stretch.
+            let joined = conts.iter().any(|c| {
+                if low {
+                    c.0 <= x.lo && c.1 >= sa
+                } else {
+                    c.1 >= x.hi && c.0 <= sb
+                }
+            });
+            // Nothing between but a zero at the end itself.
+            let between = |z: &Zero| {
+                if low {
+                    z.at.lo > x.hi && z.at.hi < sa
+                } else {
+                    z.at.hi < x.lo && z.at.lo > sb
+                }
+            };
+            if joined && !w.zeros.iter().any(between) {
+                out.push((x, sign == low));
+            }
+        }
+    }
+    out
 }
 
 fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
@@ -849,15 +931,9 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
         match via {
             super::Via::CosOfArg | super::Via::SinOfArg => stand_ins.push((path, false)),
             super::Via::Itself => {
-                // g itself must be a divisor (its parent a division by it)
-                // or under coth/csch-like nodes: only divisors are read.
-                let parent_div = path.split_last().is_some_and(|(last, up)| {
-                    *last == 1
-                        && matches!(
-                            super::eval::at_path(&fx.f, up),
-                            Some(graphing::ast::Expr::Bin(graphing::ast::BinOp::Div, ..))
-                        )
-                });
+                // g itself must be a divisor, or the base of a positive
+                // power that is (g ≠ 0 ⟺ gⁿ ≠ 0): only those are read.
+                let parent_div = divisor(&fx.f, &path);
                 if parent_div {
                     stand_ins.push((path, true));
                 } else {
@@ -1021,6 +1097,22 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether the node at `path` is a divisor of `f`, or the base of a
+/// positive power (a chain of them) that is one.
+fn divisor(f: &graphing::ast::Expr, path: &[u8]) -> bool {
+    use graphing::ast::{BinOp, Expr};
+    let Some((last, up)) = path.split_last() else {
+        return false;
+    };
+    match super::eval::at_path(f, up) {
+        Some(Expr::Bin(BinOp::Div, ..)) => *last == 1,
+        Some(Expr::Bin(BinOp::Pow, _, k)) if *last == 0 => {
+            super::eval::written_rational(k).is_some_and(|(p, _)| p > 0) && divisor(f, up)
+        }
+        _ => false,
+    }
+}
+
 /// `t` with the node at `path` replaced by a stand-in variable.
 fn replace(t: &graphing::ast::Expr, path: &[u8], name: &str) -> graphing::ast::Expr {
     use graphing::ast::Expr;
@@ -1135,14 +1227,28 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
     let p = enc(&rc.value)?;
     // A period: the simplifier's fact (weak), then the least: every
     // P/q for a prime q up to the bound n shown no period.
-    let fact = rc
-        .claims
-        .iter()
-        .any(|c| matches!(c, Claim::Simplifier(f) if f.starts_with("f(x + ")));
-    if !fact {
+    let fact = rc.claims.iter().find_map(|c| match c {
+        Claim::Simplifier(f) if f.starts_with("f(x + ") => Some(f.clone()),
+        _ => None,
+    });
+    let Some(fact) = fact else {
         out.problems
             .push("a period with no fact that it is one".into());
         return Ok(());
+    };
+    // The listed period is the fact's.
+    iv::set_prec(160);
+    let stated = fact
+        .strip_prefix("f(x + ")
+        .and_then(|r| r.split_once(") = f(x)"))
+        .and_then(|(q, _)| claims::pi_q(q));
+    match stated {
+        Some(v) if v.ge(p.lo) && v.le(p.hi) => {}
+        Some(v) => out.problems.push(format!(
+            "the period is listed in [{:e}, {:e}], the fact says {v:?}",
+            p.lo, p.hi
+        )),
+        None => out.problems.push(format!("unread period fact: {fact}")),
     }
     out.notes
         .push("P is a period: the simplifier's fact, tested at points".into());
@@ -1367,31 +1473,86 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
         .iter()
         .map(piece)
         .collect::<Result<_, _>>()?;
-    let ends_proven = |e: &Enc| -> bool {
-        rc.claims.iter().any(|c| match c {
-            Claim::Value {
-                lo,
-                hi,
-                of: Subject::F(0),
-                ..
-            }
-            | Claim::Removable { lo, hi, .. }
-            | Claim::TailValue { lo, hi, .. } => {
-                e.lo <= *lo && *hi <= e.hi || (*lo == e.lo && *hi == e.hi)
-            }
-            Claim::Simplifier(_) => true,
-            _ => false,
-        })
-    };
-    for p in &pieces {
-        for b in [p.lo, p.hi] {
-            if let Bound::At { x, .. } = b
-                && !ends_proven(&x)
-            {
-                out.problems.push(format!(
-                    "a range end [{:e}, {:e}] no claim gives",
-                    x.lo, x.hi
-                ));
+    // Each finite end: the value its source's claims give (one source, or
+    // several whose hull the end is) lies in the end's enclosure; an
+    // attained (closed) end is a value taken. An infinite end: f
+    // unbounded somewhere, by a claim.
+    let ends = rc.extra.as_array();
+    if let Some(e) = ends
+        && e.len() != pieces.len()
+    {
+        out.problems.push(format!(
+            "{} range pieces but {} pairs of end sources",
+            pieces.len(),
+            e.len()
+        ));
+    }
+    let unbounded = rc.claims.iter().any(|c| {
+        matches!(c, Claim::Unbounded { .. })
+            || matches!(c, Claim::TailBeyond { of: Subject::F(1), c, .. } if *c != 0.0)
+            || matches!(c, Claim::TailChain { of: Subject::F(1), .. })
+            || matches!(c, Claim::Simplifier(f) if f.starts_with("f → +∞") || f.starts_with("f → −∞"))
+    });
+    for (i, p) in pieces.iter().enumerate() {
+        for (j, b) in [p.lo, p.hi].into_iter().enumerate() {
+            let x = match b {
+                Bound::NegInf | Bound::PosInf => {
+                    if !unbounded {
+                        out.problems
+                            .push("an infinite range end with no claim f is unbounded".into());
+                    }
+                    continue;
+                }
+                Bound::At { x, closed } => {
+                    let srcs: Vec<&Value> = ends
+                        .and_then(|e| e.get(i))
+                        .and_then(|pair| pair.get(j))
+                        .and_then(Value::as_array)
+                        .map(|s| s.iter().collect())
+                        .unwrap_or_default();
+                    if srcs.iter().any(|s| s.get("At").is_some()) != closed
+                        && !srcs.is_empty()
+                        && srcs.iter().all(|s| s.as_str() != Some("Other"))
+                    {
+                        out.problems.push(format!(
+                            "a range end at {:e} {} but its sources say otherwise",
+                            x.mid(),
+                            if closed { "closed" } else { "open" }
+                        ));
+                    }
+                    if srcs.is_empty() || srcs.iter().any(|s| s.as_str() == Some("Other")) {
+                        // No single source named: some claim must give it.
+                        if !end_given(rc, &x) {
+                            out.problems.push(format!(
+                                "a range end [{:e}, {:e}] no claim gives",
+                                x.lo, x.hi
+                            ));
+                        }
+                        continue;
+                    }
+                    x
+                }
+            };
+            let srcs = ends
+                .and_then(|e| e.get(i))
+                .and_then(|pair| pair.get(j))
+                .and_then(Value::as_array);
+            for src in srcs.into_iter().flatten() {
+                match source_value(rc, src) {
+                    Err(why) => out.problems.push(why),
+                    Ok(v) => {
+                        if !(x.lo <= v.hi && v.lo <= x.hi)
+                            || (srcs.is_some_and(|s| s.len() == 1)
+                                && !x.contains(&v)
+                                && !v.contains(&x))
+                        {
+                            out.problems.push(format!(
+                                "a range end [{:e}, {:e}], but its source gives [{:e}, {:e}]",
+                                x.lo, x.hi, v.lo, v.hi
+                            ));
+                        }
+                    }
+                }
             }
         }
     }
@@ -1420,5 +1581,209 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
         }
     }
     let _ = (all, split);
+    Ok(())
+}
+
+/// Some claim's value (or a fact's limit) lies in `e`.
+fn end_given(rc: &RowCert, e: &Enc) -> bool {
+    rc.claims.iter().any(|c| match c {
+        Claim::Value {
+            lo,
+            hi,
+            of: Subject::F(0),
+            ..
+        }
+        | Claim::Removable { lo, hi, .. }
+        | Claim::TailValue { lo, hi, .. } => e.lo <= *lo && *hi <= e.hi,
+        Claim::Simplifier(f) => fact_limit(f).is_some_and(|v| e.contains(&v) || v.contains(e)),
+        _ => false,
+    })
+}
+
+/// The finite limit a "f → L as x → …" fact states, enclosed.
+fn fact_limit(f: &str) -> Option<Enc> {
+    let rest = f.strip_prefix("f → ")?;
+    let (l, _) = rest.split_once(" as x → ")?;
+    iv::set_prec(160);
+    let v = if let Some(b) = l.strip_prefix("in [") {
+        let (a, b) = b.strip_suffix(']')?.split_once(", ")?;
+        return Some(Enc {
+            lo: a.trim().parse().ok()?,
+            hi: b.trim().parse().ok()?,
+        });
+    } else {
+        claims::pi_q(l)?
+    };
+    let (lo, hi) = claims::outward(&v);
+    Some(Enc { lo, hi })
+}
+
+/// The value a range end's source gives, from the row's claims.
+fn source_value(rc: &RowCert, src: &Value) -> Result<Enc, String> {
+    let fact_at = |at: &str| -> Option<Enc> {
+        rc.claims.iter().find_map(|c| match c {
+            Claim::Simplifier(f)
+                if f.starts_with("f → ") && f.ends_with(&format!("as x → {at}")) =>
+            {
+                fact_limit(f)
+            }
+            _ => None,
+        })
+    };
+    if let Some(x) = src.get("At") {
+        let x = enc(x)?;
+        return rc
+            .claims
+            .iter()
+            .find_map(|c| match c {
+                Claim::Value {
+                    x: bx,
+                    of: Subject::F(0),
+                    lo,
+                    hi,
+                } if bx.0 == x.lo && bx.1 == x.hi => Some(Enc { lo: *lo, hi: *hi }),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                format!(
+                    "a range end taken at {:e} with no value claim there",
+                    x.mid()
+                )
+            });
+    }
+    if let Some(side) = src.get("Tail").and_then(Value::as_str) {
+        let s = if side == "Right" {
+            Side::Right
+        } else {
+            Side::Left
+        };
+        let tv = rc
+            .claims
+            .iter()
+            .filter_map(|c| match c {
+                Claim::TailValue {
+                    side: t, lo, hi, ..
+                } if *t == s => Some((*lo, *hi)),
+                _ => None,
+            })
+            .reduce(|a, b| (a.0.max(b.0), a.1.min(b.1)))
+            .map(|(lo, hi)| Enc { lo, hi });
+        let fact = fact_at(if s == Side::Right { "+∞" } else { "−∞" });
+        return match (tv, fact) {
+            (Some(t), Some(f)) => Ok(Enc {
+                lo: t.lo.max(f.lo),
+                hi: t.hi.min(f.hi),
+            }),
+            (Some(t), None) => Ok(t),
+            (None, Some(f)) => Ok(f),
+            (None, None) => Err(format!(
+                "a range end from the {side} tail with no claim there"
+            )),
+        };
+    }
+    if let Some(x) = src.get("Hole") {
+        let x = enc(x)?;
+        return rc
+            .claims
+            .iter()
+            .find_map(|c| match c {
+                Claim::Removable { at, lo, hi, .. } if at.0 == x.lo && at.1 == x.hi => {
+                    Some(Enc { lo: *lo, hi: *hi })
+                }
+                _ => None,
+            })
+            .ok_or_else(|| {
+                format!(
+                    "a range end from a hole at {:e} with no claim there",
+                    x.mid()
+                )
+            });
+    }
+    if let Some(sd) = src.get("Side") {
+        let at = sd.get("at").and_then(|v| r(v).ok()).ok_or("side at")?;
+        let right = sd
+            .get("right")
+            .and_then(Value::as_bool)
+            .ok_or("side right")?;
+        return fact_at(&format!("{at}{}", if right { "⁺" } else { "⁻" }))
+            .ok_or_else(|| format!("a range end from a one-sided limit at {at:e} with no fact"));
+    }
+    Err(format!("an unread range end source {src}"))
+}
+
+/// Oblique asymptotes: each listed line from the simplifier's facts
+/// (weak), each tail without one ruled out by a fact, a horizontal
+/// asymptote there, or the domain not reaching it.
+fn oblique(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
+    let facts: Vec<&String> = rc
+        .claims
+        .iter()
+        .filter_map(|c| match c {
+            Claim::Simplifier(f) => Some(f),
+            _ => None,
+        })
+        .collect();
+    let rational_line = facts
+        .iter()
+        .any(|f| f.starts_with("f = N/D exactly and N/D − ("));
+    let rational_none = facts
+        .iter()
+        .any(|f| f.starts_with("f = N/D exactly with deg N ≠ deg D + 1"));
+    let periodic = facts.iter().any(|f| f.starts_with("f is periodic"));
+    let mut sides = Vec::new();
+    for item in list(&rc.value)? {
+        let side = item.get("side").and_then(Value::as_str).ok_or("side")?;
+        let at = if side == "Right" { "+∞" } else { "−∞" };
+        let backed = rational_line
+            || facts.iter().any(|f| {
+                f.starts_with("f/x → ")
+                    && f.contains(" and f − m·x → ")
+                    && f.ends_with(&format!("as x → {at}"))
+            });
+        if !backed {
+            out.problems
+                .push(format!("an oblique asymptote at {at} with no fact for it"));
+        }
+        sides.push(side.to_string());
+    }
+    let horizontal: Vec<String> = all
+        .iter()
+        .find(|r| r.name == "horizontal" && r.status == "Certified")
+        .and_then(|h| h.value.as_array())
+        .map(|hs| {
+            hs.iter()
+                .filter_map(|h| h.get("side").and_then(Value::as_str).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let pieces = domain_pieces(all).unwrap_or_default();
+    for (side, at) in [("Left", "−∞"), ("Right", "+∞")] {
+        if sides.iter().any(|s| s == side) {
+            continue;
+        }
+        let reaches = pieces.iter().any(|p| {
+            if side == "Right" {
+                p.hi == Bound::PosInf
+            } else {
+                p.lo == Bound::NegInf
+            }
+        });
+        let ruled_out = !reaches
+            || rational_line
+            || rational_none
+            || periodic
+            || horizontal.iter().any(|h| h == side)
+            || facts
+                .iter()
+                .any(|f| f.starts_with("f/x → ") && f.contains(&format!("as x → {at}")));
+        if !ruled_out {
+            out.problems.push(format!(
+                "no oblique asymptote at {at}, but nothing rules one out"
+            ));
+        }
+    }
+    if !facts.is_empty() {
+        out.notes.push("rests on the simplifier's limits".into());
+    }
     Ok(())
 }

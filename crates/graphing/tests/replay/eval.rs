@@ -49,8 +49,15 @@ fn superscript_digit(c: char) -> Option<char> {
 impl Lits {
     /// Every run of digits and `.` (and of superscript digits) in `text`.
     pub fn of(text: &str) -> Lits {
+        Lits::of_with(text, false)
+    }
+
+    /// The same with `,` as the decimal separator (`comma`).
+    pub fn of_with(text: &str, comma: bool) -> Lits {
+        let sep = if comma { ',' } else { '.' };
         let mut by_bits: HashMap<u64, Vec<String>> = HashMap::new();
         let mut add = |s: &str| {
+            let s = &s.replace(sep, ".");
             if s.chars().any(|c| c.is_ascii_digit())
                 && let Ok(v) = s.parse::<f64>()
             {
@@ -63,7 +70,7 @@ impl Lits {
         let mut cur = String::new();
         let mut sup = String::new();
         for c in text.chars() {
-            if c.is_ascii_digit() || c == '.' {
+            if c.is_ascii_digit() || c == sep {
                 cur.push(c);
             } else if !cur.is_empty() {
                 add(&cur);

@@ -67,6 +67,7 @@ pub type B = (f64, f64);
 #[derive(Clone, Debug, PartialEq)]
 pub enum Claim {
     Defined(B),
+    Continuous(B),
     Undefined(B),
     Beyond {
         x: B,
@@ -155,6 +156,7 @@ impl Claim {
     pub fn kind(&self) -> &'static str {
         match self {
             Claim::Defined(_) => "Defined",
+            Claim::Continuous(_) => "Continuous",
             Claim::Undefined(_) => "Undefined",
             Claim::Beyond { .. } => "Beyond",
             Claim::NoCross { .. } => "NoCross",
@@ -192,9 +194,12 @@ pub struct RowCert {
     pub value: Value,
     pub region: Option<Region>,
     pub claims: Vec<Claim>,
+    /// What else the analysis says about the row (the range's
+    /// `range_ends`).
+    pub extra: Value,
 }
 
-pub const ROWS: [&str; 11] = [
+pub const ROWS: [&str; 12] = [
     "domain",
     "x_intercepts",
     "y_intercept",
@@ -206,6 +211,7 @@ pub const ROWS: [&str; 11] = [
     "range",
     "vertical",
     "horizontal",
+    "oblique",
 ];
 
 /// A double written by the certificate (`"inf"`, `"-inf"`, `"nan"` for
@@ -285,6 +291,7 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
     let x = || xbox(field(b, "x")?);
     Ok(match kind.as_str() {
         "Defined" => Claim::Defined(x()?),
+        "Continuous" => Claim::Continuous(x()?),
         "Undefined" => Claim::Undefined(x()?),
         "Beyond" => Claim::Beyond {
             x: x()?,
@@ -403,6 +410,7 @@ fn row(name: &str, v: &Value) -> Result<RowCert, String> {
             value: b.get("reason").cloned().unwrap_or(Value::Null),
             region: None,
             claims: Vec::new(),
+            extra: Value::Null,
         });
     }
     let cert = field(b, "cert")?;
@@ -417,6 +425,7 @@ fn row(name: &str, v: &Value) -> Result<RowCert, String> {
             .iter()
             .map(claim)
             .collect::<Result<_, _>>()?,
+        extra: Value::Null,
     })
 }
 
@@ -462,7 +471,17 @@ pub fn function(a: &Value) -> Result<Fx, String> {
     } else {
         format!("y={source}")
     };
-    let eq = graphing::Equation::parse(&text).map_err(|e| format!("parse: {e:?}"))?;
+    // The source read as it was typed (a decimal comma, if the binding
+    // says so).
+    let comma = a
+        .get("binding")
+        .and_then(|b| b.get("decimal_comma"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let po = graphing::lexer::ParseOptions {
+        decimal_comma: comma,
+    };
+    let eq = graphing::Equation::parse_with(&text, po).map_err(|e| format!("parse: {e:?}"))?;
     let Some((graphing::equation::Axis::X, expr)) = eq.explicit() else {
         return Err("the source is not y = f(x)".into());
     };
@@ -496,7 +515,7 @@ pub fn function(a: &Value) -> Result<Fx, String> {
         _ => Vec::new(),
     };
     Ok(Fx {
-        lits: Lits::of(&text),
+        lits: Lits::of_with(&text, comma),
         source,
         f,
         f_eval,
@@ -606,8 +625,18 @@ pub fn replay(a: &Value) -> Result<Report, String> {
     rep.binding = binding(a);
     let mut rows_in = Vec::new();
     for name in ROWS {
-        let v = field(a, name)?;
-        rows_in.push(row(name, v)?);
+        // (A row an older certifier didn't write is unknown.)
+        let mut rc = match a.get(name) {
+            Some(v) => row(name, v)?,
+            None => row(
+                name,
+                &serde_json::json!({"Unknown": {"reason": "not in the certificate"}}),
+            )?,
+        };
+        if name == "range" {
+            rc.extra = a.get("range_ends").cloned().unwrap_or(Value::Null);
+        }
+        rows_in.push(rc);
     }
     // Each distinct claim once (the gaps go with every row).
     let mut seen: Vec<(Claim, usize)> = Vec::new();

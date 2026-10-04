@@ -465,8 +465,9 @@ fn all(vs: impl IntoIterator<Item = V>) -> V {
 
 pub fn check(fx: &Fx, c: &Claim) -> Outcome {
     match c {
-        Claim::Defined(x) => defined(fx, *x, true),
-        Claim::Undefined(x) => defined(fx, *x, false),
+        Claim::Defined(x) => defined(fx, *x, Some(false)),
+        Claim::Continuous(x) => defined(fx, *x, Some(true)),
+        Claim::Undefined(x) => defined(fx, *x, None),
         Claim::Beyond { x, of, c, above } => by_trees(fx, of, |s| beyond(s, *x, *c, *above, false)),
         Claim::NoCross { x, of, c, above } => by_trees(fx, of, |s| {
             all([
@@ -541,7 +542,9 @@ pub fn check(fx: &Fx, c: &Claim) -> Outcome {
     }
 }
 
-fn defined(fx: &Fx, x: B, want: bool) -> Outcome {
+/// f defined on the box (`Some(false)`), defined and continuous there
+/// (`Some(true)`), or defined nowhere on it (`None`).
+fn defined(fx: &Fx, x: B, want: Option<bool>) -> Outcome {
     if unmodelled(&fx.f) {
         return Outcome::new(
             Class::Unsupported,
@@ -552,11 +555,26 @@ fn defined(fx: &Fx, x: B, want: bool) -> Outcome {
         on(x, &mut |lo, hi| {
             let s = fx.series(&fx.f, lo, hi, 0);
             let v = &s[0];
-            match (want, v.empty, v.def) {
-                (true, false, true) | (false, true, _) => V::Yes,
-                (true, true, _) => V::No(format!("undefined on [{lo:e}, {hi:e}]")),
-                (false, false, true) => V::No(format!("defined on [{lo:e}, {hi:e}]")),
-                _ => unknown(format!("{} on [{lo:e}, {hi:e}]", show(v))),
+            let at = format!("on [{lo:e}, {hi:e}]");
+            match want {
+                Some(cont) => {
+                    if !v.empty && v.def && (!cont || v.cont) {
+                        V::Yes
+                    } else if v.empty {
+                        V::No(format!("undefined {at}"))
+                    } else {
+                        unknown(format!("{} {at}", show(v)))
+                    }
+                }
+                None => {
+                    if v.empty {
+                        V::Yes
+                    } else if v.def {
+                        V::No(format!("defined {at}"))
+                    } else {
+                        unknown(format!("{} {at}", show(v)))
+                    }
+                }
             }
         })
     });
@@ -687,7 +705,51 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
                     _ => out.push(e.clone()),
                 }
             }
+            // a·c ± b·c = c·(a ± b): the shared factors (as multisets),
+            // then what is left.
+            Expr::Bin(op @ (BinOp::Add | BinOp::Sub), a, b) => {
+                let (fa, fb) = (product(a), product(b));
+                let mut pool = fb.clone();
+                let mut common = Vec::new();
+                let mut rest_a = Vec::new();
+                for f in fa {
+                    match pool.iter().position(|g| *g == f) {
+                        Some(i) if contains_x(&f) => common.push(pool.remove(i)),
+                        _ => rest_a.push(f),
+                    }
+                }
+                if common.is_empty() {
+                    out.push(e.clone());
+                    return;
+                }
+                for c in &common {
+                    go(c, out);
+                }
+                let join = |fs: Vec<Expr>| {
+                    fs.into_iter()
+                        .reduce(|x, y| Expr::Bin(BinOp::Mul, Box::new(x), Box::new(y)))
+                        .unwrap_or(Expr::Num(1.0))
+                };
+                out.push(Expr::Bin(*op, Box::new(join(rest_a)), Box::new(join(pool))));
+            }
             _ => out.push(e.clone()),
+        }
+    }
+    /// The factors of a product (a negation's operand counts as itself:
+    /// −u's zeros are u's).
+    fn product(e: &Expr) -> Vec<Expr> {
+        match e {
+            Expr::Bin(BinOp::Mul, a, b) => {
+                let mut v = product(a);
+                v.extend(product(b));
+                v
+            }
+            Expr::Neg(a) => {
+                let mut v = product(a);
+                v.push(Expr::Num(-1.0));
+                v
+            }
+            _ => vec![e.clone()],
         }
     }
     go(e, &mut out);
@@ -1427,7 +1489,7 @@ fn removable(fx: &Fx, near: B, at: B, lo: f64, hi: f64) -> Outcome {
 
 /// A number written `q`, `p/q`, `q·π`, `q·π^k` (the certifier's `pi_q`),
 /// or `+∞`/`−∞` (as None with the sign).
-fn pi_q(text: &str) -> Option<Iv> {
+pub fn pi_q(text: &str) -> Option<Iv> {
     let (q, k) = match text.split_once('·') {
         Some((q, rest)) => {
             let k = if rest == "π" {
@@ -1556,11 +1618,10 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
             "the tree uses a function the replay doesn't model",
         );
     }
-    if let Some(rest) = fact.strip_prefix("f is ") {
+    if let Some(rest) = fact.strip_prefix("f is ")
+        && (rest.starts_with("even") || rest.starts_with("odd"))
+    {
         let even = rest.starts_with("even");
-        if !even && !rest.starts_with("odd") {
-            return Outcome::new(Class::Unconfirmed, format!("unread fact: {fact}"));
-        }
         // The structural rules are the replay's own: a proof.
         if tree_parity(&fx.f) == Some(even) {
             return Outcome::new(Class::Strong, "by the tree's structure");
@@ -1608,81 +1669,199 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
         }
         return Outcome::new(Class::Weak, "agrees at sample points");
     }
+    let weak = |ok: Result<bool, String>, what: &str| match ok {
+        Ok(true) => Outcome::new(Class::Weak, format!("agrees at points approaching {what}")),
+        Ok(false) => Outcome::new(
+            Class::Unconfirmed,
+            format!("points approaching {what} don't show it"),
+        ),
+        Err(e) => Outcome::new(Class::Unconfirmed, e),
+    };
     if let Some(rest) = fact.strip_prefix("f → ") {
         let Some((lim, at)) = rest.split_once(" as x → ") else {
             return Outcome::new(Class::Unconfirmed, format!("unread fact: {fact}"));
         };
-        // Points approaching `at`, nearer each time.
-        let xs: Vec<f64> = match at {
-            "+∞" => [1e3, 1e6, 1e12, 1e24, 1e48, 1e96, 1e192, 1e300].to_vec(),
-            "−∞" => [-1e3, -1e6, -1e12, -1e24, -1e48, -1e96, -1e192, -1e300].to_vec(),
-            other => {
-                let (p, right) = if let Some(p) = other.strip_suffix('⁺') {
-                    (p, true)
-                } else if let Some(p) = other.strip_suffix('⁻') {
-                    (p, false)
-                } else {
-                    return Outcome::new(Class::Unconfirmed, format!("unread fact: {fact}"));
-                };
-                let Ok(p) = p.parse::<f64>() else {
-                    return Outcome::new(Class::Unconfirmed, format!("unread point: {fact}"));
-                };
-                let s = p.abs().max(1.0);
-                let ulp = p.abs().next_up() - p.abs();
-                let mut ds: Vec<f64> = [1e-2, 1e-4, 1e-6, 1e-8, 1e-10, 1e-12]
-                    .iter()
-                    .map(|d| d * s)
-                    .chain([4096.0 * ulp, 64.0 * ulp, 4.0 * ulp])
-                    .filter(|d| *d >= ulp)
-                    .collect();
-                ds.sort_by(|a, b| b.total_cmp(a));
-                ds.dedup();
-                ds.iter()
-                    .map(|d| if right { p + d } else { p - d })
-                    .filter(|x| *x != p)
-                    .collect()
-            }
+        return weak(approaches(fx, at, &|_, v| v, lim), "the limit");
+    }
+    // Oblique asymptotes (and their absence).
+    if fact.starts_with("f is periodic: f − (m·x + b) does not tend to 0") {
+        return Outcome::new(Class::Weak, "follows from f's period (the simplifier's)");
+    }
+    let over_x = |x: f64, v: Iv| iv::div(&v, &Iv::of(x));
+    if let Some(rest) = fact.strip_prefix("f/x → ±∞ as x → ") {
+        let at = rest.split_once(':').map_or(rest, |(a, _)| a);
+        let abs_over_x = |x: f64, v: Iv| iv::abs(&over_x(x, v));
+        return weak(approaches(fx, at, &abs_over_x, "+∞"), "f/x → ±∞");
+    }
+    if let Some(rest) = fact.strip_prefix("f/x → 0 as x → ") {
+        let at = rest.split_once(' ').map_or(rest, |(a, _)| a);
+        return weak(approaches(fx, at, &over_x, "0"), "f/x → 0");
+    }
+    if let Some(rest) = fact.strip_prefix("f/x → ") {
+        // f/x → m and f − m·x → b as x → at.
+        let parse = || -> Option<(String, String, String)> {
+            let (m, rest) = rest.split_once(" and f − m·x → ")?;
+            let (b, at) = rest.split_once(" as x → ")?;
+            Some((m.to_string(), b.to_string(), at.to_string()))
         };
-        // The values decided there (f defined, bounded).
-        let vals: Vec<Iv> = xs
-            .iter()
-            .map(|&x| f_at(fx, &Iv::of(x)))
-            .filter(|v| !v.empty && v.def && v.bounded())
-            .collect();
-        if vals.len() < 3 {
-            return Outcome::new(Class::Unconfirmed, "f not decided near the limit");
+        let Some((m, b, at)) = parse() else {
+            return Outcome::new(Class::Unconfirmed, format!("unread fact: {fact}"));
+        };
+        let Some(mv) = pi_q(&m) else {
+            return Outcome::new(Class::Unconfirmed, format!("unread slope: {fact}"));
+        };
+        let slope = weak(approaches(fx, &at, &over_x, &m), "the slope");
+        if slope.class != Class::Weak {
+            return slope;
         }
-        // Weak evidence: f moves monotonically toward the limit along the
-        // points (rising without bound, falling, or ever closer to L).
-        let ok = match lim {
-            "+∞" => vals.windows(2).all(|w| w[1].lo > w[0].hi),
-            "−∞" => vals.windows(2).all(|w| w[1].hi < w[0].lo),
-            l => {
-                let target = if let Some(b) = l.strip_prefix("in ") {
-                    bracket(b)
-                } else {
-                    pi_q(l)
-                };
-                let Some(t) = target else {
-                    return Outcome::new(Class::Unconfirmed, format!("unread limit: {fact}"));
-                };
-                let d = |v: &Iv| iv::abs(&iv::sub(v, &t)).hi.to_f64();
-                let ds: Vec<f64> = vals.iter().map(d).collect();
-                let scale = t.hi.to_f64().abs().max(1.0);
-                ds.windows(2).all(|w| w[1] <= w[0])
-                    && (ds[ds.len() - 1] < ds[0] || ds[0] <= 1e-12 * scale)
+        let minus_mx = |x: f64, v: Iv| iv::sub(&v, &iv::mul(&mv, &Iv::of(x)));
+        return weak(approaches(fx, &at, &minus_mx, &b), "the intercept");
+    }
+    if let Some(rest) = fact.strip_prefix("f = N/D exactly and N/D − (") {
+        // m·x + b) → 0 as x → ±∞
+        let Some((mb, _)) = rest.split_once(") → 0") else {
+            return Outcome::new(Class::Unconfirmed, format!("unread fact: {fact}"));
+        };
+        let Some((m, b)) = mb.split_once("·x + ") else {
+            return Outcome::new(Class::Unconfirmed, format!("unread fact: {fact}"));
+        };
+        let (Some(mv), Some(bv)) = (pi_q(m), pi_q(b)) else {
+            return Outcome::new(Class::Unconfirmed, format!("unread line: {fact}"));
+        };
+        for at in ["+∞", "−∞"] {
+            let gap = |x: f64, v: Iv| iv::sub(&v, &iv::add(&iv::mul(&mv, &Iv::of(x)), &bv));
+            let o = weak(approaches(fx, at, &gap, "0"), "the line");
+            if o.class != Class::Weak {
+                return o;
+            }
+        }
+        return Outcome::new(Class::Weak, "agrees at points approaching ±∞");
+    }
+    if fact.starts_with("f = N/D exactly with deg N ≠ deg D + 1") {
+        // No line: f/x doesn't settle on a nonzero slope far out.
+        let mut scale: f64 = 1.0;
+        fx.f.visit(&mut |n| {
+            if let graphing::ast::Expr::Num(v) = n
+                && v.is_finite()
+            {
+                scale = scale.max(v.abs());
+            }
+        });
+        iv::set_prec(2400);
+        let r = |x: f64| over_x(x, f_at(fx, &Iv::of(x)));
+        let close = |a: &Iv, b: &Iv| {
+            a.bounded() && b.bounded() && b.ne0() && {
+                let d = iv::abs(&iv::sub(a, b));
+                d.hi.to_f64() <= 1e-6 * iv::abs(b).lo.to_f64()
             }
         };
-        return if ok {
-            Outcome::new(Class::Weak, "agrees at points approaching the limit")
+        let mut settles = false;
+        for sign in [1.0, -1.0] {
+            let v: Vec<Iv> = [1.6e5, 1.6e13, 1.6e25]
+                .iter()
+                .map(|k| r(sign * k * scale))
+                .collect();
+            settles |= close(&v[0], &v[1]) && close(&v[1], &v[2]);
+        }
+        iv::set_prec(PRECS[0]);
+        return if settles {
+            Outcome::new(Class::Unconfirmed, "f/x settles on a nonzero slope far out")
         } else {
-            Outcome::new(
-                Class::Unconfirmed,
-                "points approaching the limit don't show it",
-            )
+            Outcome::new(Class::Weak, "f/x settles on no nonzero slope far out")
         };
     }
     Outcome::new(Class::Unconfirmed, format!("unread fact: {fact}"))
+}
+
+/// Weak evidence that `g(x, f(x))` tends to `lim` ("+∞", "−∞", a number
+/// in the certifier's notation, or "in [lo, hi]") as x → `at` ("+∞",
+/// "−∞", "p⁺", "p⁻"): along points ever nearer `at`, the values decided
+/// there move monotonically (rising, falling, ever closer).
+fn approaches(fx: &Fx, at: &str, g: &dyn Fn(f64, Iv) -> Iv, lim: &str) -> Result<bool, String> {
+    // Far out: beyond every constant in f (where its features are), and
+    // at a precision that keeps x² exact out to 10³⁰⁰.
+    let mut scale: f64 = 1.0;
+    fx.f.visit(&mut |n| {
+        if let Expr::Num(v) = n
+            && v.is_finite()
+        {
+            scale = scale.max(v.abs());
+        }
+    });
+    let far: Vec<f64> = [16.0, 1.6e4, 1.6e7, 1.6e13, 1.6e25, 1.6e49, 1.6e97, 1.6e193]
+        .iter()
+        .map(|k| k * scale)
+        .filter(|x| *x <= 1e300)
+        .collect();
+    iv::set_prec(2400);
+    let r = approaches_at(fx, at, g, lim, &far);
+    iv::set_prec(PRECS[0]);
+    r
+}
+
+fn approaches_at(
+    fx: &Fx,
+    at: &str,
+    g: &dyn Fn(f64, Iv) -> Iv,
+    lim: &str,
+    far: &[f64],
+) -> Result<bool, String> {
+    let xs: Vec<f64> = match at {
+        "+∞" => far.to_vec(),
+        "−∞" => far.iter().map(|x| -x).collect(),
+        other => {
+            let (p, right) = if let Some(p) = other.strip_suffix('⁺') {
+                (p, true)
+            } else if let Some(p) = other.strip_suffix('⁻') {
+                (p, false)
+            } else {
+                return Err(format!("unread point {other}"));
+            };
+            let p: f64 = p.parse().map_err(|_| format!("unread point {other}"))?;
+            let s = p.abs().max(1.0);
+            let ulp = p.abs().next_up() - p.abs();
+            let mut ds: Vec<f64> = [1e-2, 1e-4, 1e-6, 1e-8, 1e-10, 1e-12]
+                .iter()
+                .map(|d| d * s)
+                .chain([4096.0 * ulp, 64.0 * ulp, 4.0 * ulp])
+                .filter(|d| *d >= ulp)
+                .collect();
+            ds.sort_by(|a, b| b.total_cmp(a));
+            ds.dedup();
+            ds.iter()
+                .map(|d| if right { p + d } else { p - d })
+                .filter(|x| *x != p)
+                .collect()
+        }
+    };
+    let vals: Vec<Iv> = xs
+        .iter()
+        .map(|&x| (x, f_at(fx, &Iv::of(x))))
+        .filter(|(_, v)| !v.empty && v.def && v.bounded())
+        .map(|(x, v)| g(x, v))
+        .filter(|v| !v.empty && v.bounded())
+        .collect();
+    if vals.len() < 3 {
+        return Err("f not decided near the limit".into());
+    }
+    Ok(match lim {
+        "+∞" => vals.windows(2).all(|w| w[1].lo > w[0].hi),
+        "−∞" => vals.windows(2).all(|w| w[1].hi < w[0].lo),
+        l => {
+            let target = if let Some(b) = l.strip_prefix("in ") {
+                bracket(b)
+            } else {
+                pi_q(l)
+            };
+            let t = target.ok_or_else(|| format!("unread limit {l}"))?;
+            let d = |v: &Iv| iv::abs(&iv::sub(v, &t)).hi.to_f64();
+            let ds: Vec<f64> = vals.iter().map(d).collect();
+            let scale = t.hi.to_f64().abs().max(1.0);
+            // Already there to 10⁻¹² everywhere, or ever closer.
+            ds.iter().all(|d| *d <= 1e-12 * scale)
+                || (ds.windows(2).all(|w| w[1] <= w[0]) && ds[ds.len() - 1] < ds[0])
+        }
+    })
 }
 
 /// A gap claims nothing; it must be a few doubles wide at most.
