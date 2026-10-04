@@ -1278,6 +1278,12 @@ pub fn check_missing_zeros(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report)
             } else {
                 roots.extend(&xs[start..=i]);
             }
+        } else if ys[i] == 0.0 && matches!(a.reference(xs[i]), R::V(v) if v.is_zero()) {
+            // 0 by the compiled program and the reference both, though
+            // the rounding bound can't vouch for it ((x − 2⁴⁰)/(x − 2⁴⁰ −
+            // 1/16) at 2⁴⁰, the bound charging 2⁴⁰ an ulp): a root to
+            // account for. (If it isn't one, "none" only goes unknown.)
+            roots.push(xs[i]);
         }
         i += 1;
     }
@@ -4563,12 +4569,42 @@ fn gate_with_spent(
             drop |= PER_PERIOD;
         }
         // Where f is defined isn't known: nor is where it has poles (an
-        // undefined point the domain was wrong about may be one).
-        if (drop & flags::DOMAIN != 0 || a.unknown(flags::DOMAIN))
-            && !a.unknown(flags::VERTICAL_ASYMPTOTES)
-        {
-            drop |= flags::VERTICAL_ASYMPTOTES;
-            r.dropped.2 |= flags::VERTICAL_ASYMPTOTES & !dropped & !r.refuted & !unverified;
+        // undefined point the domain was wrong about may be one), nor any
+        // "none" found by scanning where it was said to be defined (the
+        // zero at 2⁴⁰ of (x − 2⁴⁰)/(x − 2⁴⁰ − 1/16), claimed excluded).
+        if drop & flags::DOMAIN != 0 || a.unknown(flags::DOMAIN) {
+            let k = &a.k;
+            let mut deps = flags::VERTICAL_ASYMPTOTES;
+            for (flag, none) in [
+                (
+                    flags::ZEROS,
+                    k.x_intercept.is_empty() && k.data.zeros.is_empty(),
+                ),
+                (flags::MINIMA, k.data.minima.is_empty()),
+                (flags::MAXIMA, k.data.maxima.is_empty()),
+                (
+                    flags::INFLECTION_POINTS,
+                    k.data.inflection_points.is_empty(),
+                ),
+                (
+                    flags::HORIZONTAL_ASYMPTOTES,
+                    k.data.horizontal_asymptotes.is_empty(),
+                ),
+                (
+                    flags::OBLIQUE_ASYMPTOTES,
+                    k.data.oblique_asymptotes.is_empty(),
+                ),
+            ] {
+                if none {
+                    deps |= flag;
+                }
+            }
+            let deps = (0..13)
+                .map(|b| 1u32 << b)
+                .filter(|&f| deps & f != 0 && !a.unknown(f))
+                .fold(0, |m, f| m | f);
+            drop |= deps;
+            r.dropped.2 |= deps & !dropped & !r.refuted & !unverified;
         }
         let new = drop & !dropped;
         if new == 0 {

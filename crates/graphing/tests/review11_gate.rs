@@ -83,11 +83,7 @@ fn narrow_far_peaks_are_reported_or_unknown() {
     let src = "y=(x-1000000)^2+0.0000001+(x/1000000000)^2";
     let r = k(src);
     assert!(
-        unknown(&r, flags::MINIMA)
-            || r.data
-                .minima
-                .iter()
-                .any(|(f, _)| (f.x - 1e6).abs() < 1.0),
+        unknown(&r, flags::MINIMA) || r.data.minima.iter().any(|(f, _)| (f.x - 1e6).abs() < 1.0),
         "{src}: minima {:?}",
         r.minima
     );
@@ -112,10 +108,35 @@ fn a_positive_power_of_zero_is_no_hole() {
             r.domain
         );
         assert!(
-            r.data.excluded.iter().all(|f| (f.x - 1522756.0).abs() > 1.0
-                && (f.x - 1234.0).abs() > 1.0),
+            r.data
+                .excluded
+                .iter()
+                .all(|f| (f.x - 1522756.0).abs() > 1.0 && (f.x - 1234.0).abs() > 1.0),
             "{src}: excluded {:?}",
             r.data.excluded
+        );
+    }
+}
+
+/// A "none" found by scanning where f was said to be defined goes with the
+/// domain: (x − 2⁴⁰)/(x − 2⁴⁰ − 1/16) was claimed undefined at 2⁴⁰, where
+/// it is exactly 0, and said it had no x-intercepts.
+#[test]
+fn none_answers_go_with_the_domain() {
+    for src in [
+        "y=(x-2^40)/(x-2^40-1/16)",
+        "y=(x-1000000000000)/(x-1000000000000.0625)",
+    ] {
+        let r = k(src);
+        assert!(
+            unknown(&r, flags::ZEROS) || !r.x_intercept.is_empty(),
+            "{src}: x-intercepts \"{}\"",
+            r.x_intercept
+        );
+        assert!(
+            unknown(&r, flags::VERTICAL_ASYMPTOTES) || !r.vertical_asymptotes.is_empty(),
+            "{src}: vertical asymptotes {:?}",
+            r.vertical_asymptotes
         );
     }
 }
@@ -131,7 +152,11 @@ fn a_constant_only_the_compiler_has_is_no_answer() {
         return;
     }
     assert!(!r.range.contains("1/2"), "range {}", r.range);
-    assert!(!r.y_intercept.contains("1/2"), "y-intercept {}", r.y_intercept);
+    assert!(
+        !r.y_intercept.contains("1/2"),
+        "y-intercept {}",
+        r.y_intercept
+    );
     assert!(
         unknown(&r, flags::ZEROS) || !r.x_intercept.is_empty(),
         "every x is an intercept, not none"
