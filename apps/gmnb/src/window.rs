@@ -507,13 +507,35 @@ impl Window {
         let Some(display) = gdk::Display::default() else {
             return;
         };
+        // Every page's own limit is far below this (an equation is at most
+        // 1000 characters); a longer clipboard is cut here, while reading,
+        // instead of being read whole first.
+        const MAX_PASTE_BYTES: usize = 64 * 1024;
         let weak = Rc::downgrade(self);
         let clipboard = display.clipboard();
         glib::spawn_future_local(async move {
-            if let Ok(Some(text)) = clipboard.read_text_future().await
-                && let Some(w) = weak.upgrade()
-            {
-                w.current_page().paste(&text);
+            let Ok((stream, _)) = clipboard
+                .read_future(
+                    &["text/plain;charset=utf-8", "text/plain"],
+                    glib::Priority::DEFAULT,
+                )
+                .await
+            else {
+                return;
+            };
+            let mut bytes = Vec::new();
+            while bytes.len() <= MAX_PASTE_BYTES {
+                match stream
+                    .read_bytes_future(MAX_PASTE_BYTES + 1 - bytes.len(), glib::Priority::DEFAULT)
+                    .await
+                {
+                    Ok(chunk) if !chunk.is_empty() => bytes.extend_from_slice(&chunk),
+                    _ => break,
+                }
+            }
+            let _ = stream.close_future(glib::Priority::DEFAULT).await;
+            if let Some(w) = weak.upgrade() {
+                w.current_page().paste(&String::from_utf8_lossy(&bytes));
             }
         });
     }
