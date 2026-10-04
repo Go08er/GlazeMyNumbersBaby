@@ -2529,6 +2529,7 @@ pub fn oblique(
     let Some(settings) = f.settings() else {
         return Ok(Row::unknown("the tails are not decided"));
     };
+    let mut lines = Vec::new();
     for right in [false, true] {
         if !reaches(right) {
             continue;
@@ -2576,6 +2577,13 @@ pub fn oblique(
             }
             _ => {}
         }
+        // A line from f's expansion in 1/x, f − (m·x + b) enclosed on the
+        // tails of the far sequence.
+        if let Some((line, claims)) = expanded_line(f, right, start)? {
+            c.extend(claims);
+            lines.push(line);
+            continue;
+        }
         match limit_at(&over_x, dir, &settings) {
             // (Each with f′'s enclosures far out bearing it out.)
             Limit::PosInf | Limit::NegInf => {
@@ -2602,11 +2610,58 @@ pub fn oblique(
             _ => return Ok(Row::unknown("a tail's slope is not decided")),
         }
     }
-    // (Only a rational f's line is shown, above.)
     Ok(Row::Certified {
-        value: Vec::new(),
+        value: lines,
         cert: c,
     })
+}
+
+/// An oblique line on one tail from f's expansions in t = 1/x
+/// ([`super::expand`]) over tails of the far sequence: f = m·x + b + O(1/x)
+/// with the same m (≠ 0) and b on each, f − (m·x + b)'s range on each a
+/// `TailLine` claim — bands around 0, settling.
+fn expanded_line(
+    f: &Fun<'_>,
+    right: bool,
+    start: f64,
+) -> Result<Option<(Oblique, Vec<Claim>)>, Stop> {
+    let side = if right { Tail::Right } else { Tail::Left };
+    let mut claims = Vec::new();
+    let mut mb: Option<(Interval, Interval)> = None;
+    for m in thin(&far_points(f, right, start), 8) {
+        if f.cancelled() {
+            return Err(Stop::Cancelled);
+        }
+        let Some((slope, b, band)) = super::expand::line(f, right, m) else {
+            continue;
+        };
+        mb = Some(match mb {
+            None => (slope, b),
+            Some((s, c)) => (s.intersect(slope), c.intersect(b)),
+        });
+        claims.push(Claim::TailLine {
+            side,
+            from: R(if right { m } else { -m }),
+            m: Enc::new(slope.lo(), slope.hi()),
+            b: Enc::new(b.lo(), b.hi()),
+            lo: R(band.lo()),
+            hi: R(band.hi()),
+        });
+    }
+    let Some((slope, b)) = mb else {
+        return Ok(None);
+    };
+    if slope.is_empty() || b.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some((
+        Oblique {
+            side,
+            m: Enc::new(slope.lo(), slope.hi()),
+            b: Enc::new(b.lo(), b.hi()),
+        },
+        claims,
+    )))
 }
 
 // ---------------------------------------------------------- range

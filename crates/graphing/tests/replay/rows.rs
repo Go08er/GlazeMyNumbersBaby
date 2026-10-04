@@ -2620,8 +2620,36 @@ fn oblique(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), Str
     for item in list(&rc.value)? {
         let side = item.get("side").and_then(Value::as_str).ok_or("side")?;
         let at = if side == "Right" { "+∞" } else { "−∞" };
-        // (A line from the simplifier's limits alone isn't borne out.)
-        let backed = rational_line;
+        // (A line from the simplifier's limits alone isn't borne out.) Or
+        // f's expansion on a tail there (its claims checked so), the
+        // listed slope and intercept holding the proven ones.
+        let s = if side == "Right" {
+            Side::Right
+        } else {
+            Side::Left
+        };
+        let (m, b) = (
+            enc(item.get("m").ok_or("m")?)?,
+            enc(item.get("b").ok_or("b")?)?,
+        );
+        let lines: Vec<(B, B)> = rc
+            .claims
+            .iter()
+            .filter_map(|c| match c {
+                Claim::TailLine { side: t, m, b, .. } if *t == s => Some((*m, *b)),
+                _ => None,
+            })
+            .collect();
+        let expanded = !lines.is_empty()
+            && lines
+                .iter()
+                .all(|(lm, lb)| m.lo <= lm.0 && lm.1 <= m.hi && b.lo <= lb.0 && lb.1 <= b.hi);
+        if !lines.is_empty() && !expanded {
+            out.problems.push(format!(
+                "the oblique asymptote at {at} is listed outside its expansion's slope or intercept"
+            ));
+        }
+        let backed = rational_line || expanded;
         if !backed {
             out.problems
                 .push(format!("an oblique asymptote at {at} with no fact for it"));

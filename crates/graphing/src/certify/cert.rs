@@ -269,6 +269,21 @@ pub enum Claim {
     /// the ends of their domains and where they are continuous. An exact
     /// a·x + b is read as one term (x − p beside p is ±1/u exactly).
     Limit { at: Toward, over_x: bool, to: To },
+    /// On the tail, f − (m·x + b) is valid with values in `[lo, hi]` and
+    /// tends to 0, for the fixed reals m in `m` (≠ 0) and b in `b`: y =
+    /// m·x + b is f's oblique asymptote there. From f's expansion in t =
+    /// 1/x over the tail (`certify::expand`): a Laurent polynomial whose
+    /// coefficients enclose fixed reals, and a remainder tᵖ·ρ(t) with ρ
+    /// enclosed over the tail — f = m/t + b + O(t), the rest's range
+    /// over the tail [lo, hi].
+    TailLine {
+        side: Tail,
+        from: R,
+        m: Enc,
+        b: Enc,
+        lo: R,
+        hi: R,
+    },
     /// |f| → ∞ at the one excluded point enclosed by `at`, approached
     /// inside `near` (from both sides, or only from the side of `near`
     /// that `at` doesn't end). Proven from the tree's structure: a divisor

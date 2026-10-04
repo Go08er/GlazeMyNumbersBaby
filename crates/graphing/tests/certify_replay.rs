@@ -784,6 +784,50 @@ const PLANTS: &[Plant] = &[
             }});
         },
     ),
+    // Lines from expansions in 1/x.
+    ("sqrt(x^2+1)", "a line's slope moved by 10⁻⁹", |v| {
+        for c in claims_of(v, "oblique").iter_mut() {
+            if let Some(l) = c.get_mut("TailLine") {
+                for k in ["lo", "hi"] {
+                    let m = l["m"][k].as_f64().unwrap();
+                    l["m"][k] = serde_json::json!(m * (1.0 + 1e-9));
+                }
+            }
+        }
+        for o in value_of(v, "oblique").as_array_mut().unwrap() {
+            for k in ["lo", "hi"] {
+                let m = o["m"][k].as_f64().unwrap();
+                o["m"][k] = serde_json::json!(m * (1.0 + 1e-9));
+            }
+        }
+    }),
+    ("x*atan(x)", "a line's band moved off 0", |v| {
+        let l = first(v, "oblique", "TailLine");
+        l["lo"] = serde_json::json!(1.0);
+        l["hi"] = serde_json::json!(2.0);
+    }),
+    ("x*e^(1/x)", "a line's tail started too near", |v| {
+        let l = first(v, "oblique", "TailLine");
+        let s = l["from"].as_f64().unwrap().signum();
+        l["from"] = serde_json::json!(s * 1e-3);
+    }),
+    (
+        "x*atan(x)",
+        "a line's expansion taken on the other tail",
+        |v| {
+            for c in claims_of(v, "oblique").iter_mut() {
+                if let Some(l) = c.get_mut("TailLine")
+                    && l["side"] == "Right"
+                {
+                    l["side"] = serde_json::json!("Left");
+                    l["from"] = serde_json::json!(-l["from"].as_f64().unwrap());
+                }
+            }
+        },
+    ),
+    ("sqrt(x^2+1)", "a line's expansion dropped", |v| {
+        claims_of(v, "oblique").retain(|c| c.get("TailLine").is_none());
+    }),
     ("x/ln(x)", "f/x's limit called infinite", |v| {
         first(v, "oblique", "Limit")["to"] = serde_json::json!("PosInf");
     }),

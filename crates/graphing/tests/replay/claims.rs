@@ -643,6 +643,14 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
         Claim::Removable { near, at, lo, hi } => removable(fx, *near, *at, *lo, *hi),
         Claim::Simplifier(fact) => simplifier(fx, fact),
         Claim::Limit { at, over_x, to } => limit(fx, *at, *over_x, *to),
+        Claim::TailLine {
+            side,
+            from,
+            m,
+            b,
+            lo,
+            hi,
+        } => tail_line(fx, *side, *from, *m, *b, *lo, *hi),
         Claim::Gap(x) => gap(*x, cert),
         Claim::GapClear { x, of } => match of {
             Subject::F(k) if *k <= 2 => {
@@ -1917,6 +1925,56 @@ fn limit(fx: &Fx, at: growth::At, over_x: bool, to: super::Toward) -> Outcome {
             format!("the limit is {got:?} by the tree's structure, not {to:?}"),
         ),
     }
+}
+
+/// A line on a tail, f − (m·x + b) in [lo, hi] there: f expanded again
+/// in 1/x by the replay's own rules (`expand`), a proof when its slope,
+/// intercept and rest lie in the claimed enclosures.
+fn tail_line(fx: &Fx, side: Side, from: f64, m: B, b: B, lo: f64, hi: f64) -> Outcome {
+    if unmodelled(&fx.f) {
+        return Outcome::new(
+            Class::Unsupported,
+            "the tree uses a function the replay doesn't model",
+        );
+    }
+    if (from > 0.0) != (side == Side::Right) || from == 0.0 {
+        return Outcome::new(Class::Refuted, "the tail starts on the other side of 0");
+    }
+    let Some((ms, bs, band)) = super::expand::line(fx, from) else {
+        return Outcome::new(
+            Class::Unconfirmed,
+            "f doesn't expand to a line in 1/x on the tail",
+        );
+    };
+    let within = |v: &Iv, e: B| v.ge(e.0) && v.le(e.1);
+    let apart = |v: &Iv, e: B| v.hi < e.0 || v.lo > e.1;
+    let parts = [
+        (&ms, m, "slope"),
+        (&bs, b, "intercept"),
+        (&band, (lo, hi), "rest"),
+    ];
+    for (v, e, what) in parts {
+        if apart(v, e) {
+            return Outcome::new(
+                Class::Refuted,
+                format!("the {what} is {}, outside [{:e}, {:e}]", show(v), e.0, e.1),
+            );
+        }
+    }
+    for (v, e, what) in parts {
+        if !within(v, e) {
+            return Outcome::new(
+                Class::Unconfirmed,
+                format!(
+                    "the {what} {} is not inside [{:e}, {:e}]",
+                    show(v),
+                    e.0,
+                    e.1
+                ),
+            );
+        }
+    }
+    Outcome::new(Class::Strong, "by f's expansion in 1/x")
 }
 
 fn removable(fx: &Fx, near: B, at: B, lo: f64, hi: f64) -> Outcome {

@@ -14,6 +14,7 @@
 
 pub mod cert;
 pub mod cover;
+pub mod expand;
 pub mod fun;
 pub mod growth;
 pub mod pole;

@@ -30,6 +30,7 @@ pub mod algebra;
 pub mod claims;
 pub mod eval;
 pub mod exact;
+pub mod expand;
 pub mod growth;
 pub mod iv;
 pub mod rows;
@@ -185,6 +186,16 @@ pub enum Claim {
         over_x: bool,
         to: Toward,
     },
+    /// On the tail, f − (m·x + b) lies in [lo, hi] and tends to 0, for the
+    /// fixed m in `m` (≠ 0) and b in `b` (`expand`).
+    TailLine {
+        side: Side,
+        from: f64,
+        m: B,
+        b: B,
+        lo: f64,
+        hi: f64,
+    },
 }
 
 /// Where a limit claim says f goes.
@@ -221,6 +232,7 @@ impl Claim {
             Claim::Gap(_) => "Gap",
             Claim::GapClear { .. } => "GapClear",
             Claim::Limit { .. } => "Limit",
+            Claim::TailLine { .. } => "TailLine",
         }
     }
 }
@@ -441,6 +453,20 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
         ),
         "Gap" => Claim::Gap(x()?),
         "GapClear" => Claim::GapClear { x: x()?, of: of()? },
+        "TailLine" => {
+            let pair = |k: &str| -> Result<B, String> {
+                let e = field(b, k)?;
+                Ok((rf(e, "lo")?, rf(e, "hi")?))
+            };
+            Claim::TailLine {
+                side: side(field(b, "side")?)?,
+                from: rf(b, "from")?,
+                m: pair("m")?,
+                b: pair("b")?,
+                lo: rf(b, "lo")?,
+                hi: rf(b, "hi")?,
+            }
+        }
         "Limit" => {
             let at = field(b, "at")?;
             let at = match at.as_str() {
