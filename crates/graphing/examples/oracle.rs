@@ -1,45 +1,132 @@
 //! An independent consistency check of what function analysis shows (not
 //! run in CI).
 //!
-//! `cargo run --release -p graphing --example oracle [-- FILTER] [--dump EXPR]`
+//! `cargo run --release -p graphing --example oracle [-- FILTER] [--all]`
+//! checks the pool (or the functions whose text contains FILTER) and exits
+//! with status 1 if it finds a contradiction. `-- --dump EXPR` prints one
+//! function's analysis and findings, with the same exit status. `--
+//! --selftest` plants known false answers into real analyses and exits
+//! with status 1 unless every check catches its own.
 //!
 //! The sweep (`examples/sweep.rs`) runs the runtime gate's own checks, so a
 //! clean sweep can't vouch for those checks. This one shares none of them:
 //! it reads only the public analysis result (what the panel shows, and the
-//! numbers behind it), the compiled program, and the reference evaluator
-//! `analysis::truth::reval` for its *values* (a double with an unbounded
-//! exponent where an intermediate leaves the doubles). Nothing from
-//! `analysis::verify` is used: no noise estimate, rounding bound, sample
-//! set, rule or tolerance of the gate's.
+//! numbers behind it), the panel's formatter (`format_nonzero`), the
+//! compiled program, and the reference evaluator `analysis::truth::reval`
+//! for *values* (a double with an unbounded exponent where an intermediate
+//! leaves the doubles). Nothing from `analysis::verify` is used: no noise
+//! estimate, rounding bound, sample set, rule or tolerance of the gate's.
+//! What it does share with the app is arithmetic: libm and `dd.rs` under
+//! both evaluators. A wrong primitive both use agrees with itself, so the
+//! pool also compares equivalent spellings (below).
 //!
-//! The pool is the sweep's (its bases under the same transforms, its
-//! hand-written families, undefined points and equivalence partners), the
-//! cases of review 10, and more of their shapes. Each *definite* answer is
-//! checked against f sampled densely near 0, log-spaced out to 10¹⁵,
-//! around the value of every x-free subtree of the expression (and its
-//! negative), and around every reported feature. A contradiction is
-//! reported by class; the example exits with status 1 if there is one.
+//! # What is checked
 //!
-//! Tolerances, all of them:
+//! Every *definite* answer, against f sampled densely near 0 (steps of
+//! 1/64 to ±10, 1/4 to ±100, integers to ±2000), log-spaced (24 a decade)
+//! from 10⁻⁸ out to 10¹⁵, around the value of every x-free subtree of the
+//! expression and its negative (at most 64, each with ±1 … 2²⁰ floats,
+//! 10⁻¹² … 0.5 relative and 0.01 … 100 absolute steps, and a 1/16 grid
+//! over ±8), and around every reported feature (at most 256). A
+//! contradiction is reported by class:
 //!
-//! * `tol(x)`: 4 ulp of f(x) plus the largest change of f over the four
-//!   floats either side of x. Values closer than that are the same.
-//! * A point within 8 ulp of a reported end, excluded point or pole is the
+//! * the y-intercept, range (a sample outside it), domain (an undefined
+//!   sample inside it or a defined one outside), each claimed isolated
+//!   exclusion (f defined there and around it, changing by less than 10⁻³
+//!   of itself out to four resolution steps, and nothing it could be
+//!   undefined through — a divisor, a function's argument, the cos/sin of a
+//!   tan/sec/cot/csc argument, a log base less 1, a power's base unless the
+//!   exponent is a positive whole number — at 0, undefined or changing sign
+//!   there), zeros (each reported one, and sign changes or exact zeros
+//!   between samples that none matches), extremum values and their
+//!   locality, turns between samples that no reported extremum matches,
+//!   parity (a witness against Odd or Even), the period (f(x + P) against
+//!   f(x)), monotonicity (a reversal inside a claimed interval), vertical
+//!   asymptotes (a pole between samples, or an undefined sample with
+//!   growth beside it, that none matches);
+//! * one to one: two crossings, or two turns of a kind, both matched to one
+//!   reported point and told apart by something resolvably different
+//!   between them (f away from 0; f below or above both);
+//! * an open range bound reached at a turn, to within f's tolerance;
+//! * horizontal and oblique asymptotes: |f − line| no smaller at all three
+//!   decades further out (the largest over nine points a decade: 10¹² and
+//!   10¹⁵ for a horizontal line, 10⁶ and 10⁹ for an oblique one, or from
+//!   100× the expression's largest number if further), beyond tolerance and
+//!   moving the line as the panel shows it;
+//! * inflection points: f's value there, and the second difference at
+//!   x ∓ 2h keeping its sign across x at every resolvable scale (at least
+//!   three; h = 10⁻¹⁵ … 10³ and 10⁻⁶ … 10⁻² of |x|, at least 1000 floats,
+//!   at most a quarter of the way to another reported inflection;
+//!   resolvable means beyond 64× the rounding bounds of the three values);
+//! * the period's being the least: f(x + P/2) or f(x + P/3) equal to f(x)
+//!   within tolerance at every one of at least 200 samples (|x| ≤ 100) over
+//!   which f varies by 10⁶ times that tolerance;
+//! * the evaluators: the compiled value and the reference's within 8 ulp
+//!   of the reference rounded to a double (subnormals by their own
+//!   spacing); 0 against a nonzero double, opposite signs, undefined
+//!   against defined and a finite double against a value beyond the
+//!   largest are never within it. Such a point is used for nothing else;
+//! * equivalent spellings (`check_pair`): one spelling's compiled value (what
+//!   the app plots and analyses) against the other's reference value,
+//!   beyond the second's tolerance, 8 ulp and twice the first's rounding
+//!   bound, where the panel writes them differently (skipped where the
+//!   first's bound can't be computed); and, for spellings equal
+//!   everywhere, every pair of definite answers (one function can't have
+//!   two; values compared as the panel writes them or to 10⁻⁹, asymptotes
+//!   not compared for a constant, whose own line is a convention).
+//!
+//! Notes, listed but not failures (sampling can neither confirm nor refute
+//! them): a closed range bound no sample, turn or reported value comes to;
+//! "neither" parity with no sample against even or odd (beyond the doubles
+//! compared exactly; a one-sided undefined point counts); "not periodic"
+//! for an f that keeps a circular period at every sample; and how many
+//! samples the reference can't evaluate (Unknown: nothing there is checked,
+//! and the compiled value is not taken for the truth).
+//!
+//! # Tolerances, all of them
+//!
+//! * `tol(x)`: 4 ulp of f(x), plus twice a first-order bound on the
+//!   rounding of each of f's operations at x (`F::error`, written here),
+//!   plus f's largest change over ±1…4, ±16…64 and ±256…1024 floats and
+//!   over two of its resolution steps (`F::res`: how far x must move, up to
+//!   2⁴² floats, for f to change; a shifted frame is a staircase). Values
+//!   closer than that are the same.
+//! * A point within 8 ulp of a reported end, excluded point or pole (plus
+//!   10⁻¹² of x and four resolution steps for interval ends) is the
 //!   precision of that point, not a claim about it.
 //! * Values (range bounds, extremum values, the y-intercept) are only
-//!   different if the panel's own formatter (`format_nonzero`) also writes
-//!   them differently. Shapes (domain, zeros, parity, period,
-//!   monotonicity, asymptotes) get no such allowance.
+//!   different if the panel's formatter also writes them differently.
+//!   Shapes (domain, zeros, parity, period, monotonicity, asymptotes) get
+//!   no such allowance.
 //! * A reported zero or zero value holds if f is exactly 0 there, changes
-//!   sign within four floats, or is no bigger than four times its own change
-//!   over those floats (a zero between floats). Beyond the doubles this is
-//!   judged on the reference's exact sign and magnitude.
+//!   sign within eight resolution steps, or is no bigger than four times
+//!   its change over those (a zero between floats), or a crossing within
+//!   10⁻⁶ relative is written the same; beside a reported pole, closer
+//!   than f resolves, it can't be told. Beyond the doubles this is judged
+//!   on the reference's exact sign and magnitude.
 //! * A found crossing, turn or pole matches a reported one within 10⁻⁶
 //!   relative (the panel's 6 digits), or anywhere between the samples that
-//!   bracket it.
-//! * A compiled value and the reference's agree within 8 ulp; where they
-//!   don't (or one is undefined and the other not) that is reported as
-//!   `evaluator-disagrees`, and the point is used for nothing else.
+//!   bracket it; for one-to-one, the nearest reported point within 10⁻⁶ of
+//!   the found position. Crossings in a reported zero's rounding noise (f
+//!   within tolerance all the way to it) are not reported missing.
+//! * Beyond 10⁷ from 0 and 10⁴ from the expression's numbers, sign
+//!   changes and turns are not classified (floats there are too sparse
+//!   against sawtooth and plateau features).
+//! * Caps: 400 bisected sign changes, 500 undefined samples tested for a
+//!   pole, 300 refined turns per kind (nearest the origin first), 4000
+//!   samples per period comparison.
+//!
+//! # Known false alarms
+//!
+//! * `evaluator-disagrees` at `(x/0.001)^(1/3)` and `^(2/3)`, x = 5e-324:
+//!   the reference's `pow_rat` on that near-subnormal quotient is about 60
+//!   ulp off (the compiled value is right to the last bit, by 80-digit
+//!   decimal). Reported so it is seen until the reference is fixed.
+//! * In principle: a part of f below the doubles' resolution with a longer
+//!   period (`period-not-fundamental`), a residual approaching a horizontal
+//!   line more slowly than any power of log log x (`asymptote-not-approached`),
+//!   and an inflection whose sign change only shows below 1000 floats of x.
+//!   None occurs in the pool.
 
 use std::cmp::Ordering;
 use std::sync::Mutex;
@@ -485,9 +572,85 @@ fn family_in(f: &Family, a: f64, b: f64) -> bool {
 }
 
 fn near(fams: &[Family], x: f64, lo: f64, hi: f64) -> bool {
+    member_key(fams, x, lo, hi).is_some()
+}
+
+/// Which reported point (family, copy) a feature found at x (between lo and
+/// hi) matches, as `near` decides: of those, the one nearest x.
+fn member_key(fams: &[Family], x: f64, lo: f64, hi: f64) -> Option<(usize, i64)> {
     let w = 1e-6 * x.abs().max(1.0);
-    fams.iter()
-        .any(|f| family_in(f, lo.min(x - w), hi.max(x + w)))
+    let mut best: Option<((usize, i64), f64)> = None;
+    for (i, f) in fams.iter().enumerate() {
+        if !family_in(f, lo.min(x - w), hi.max(x + w)) {
+            continue;
+        }
+        let (k, m) = match f.period {
+            Some(p) if p > 0.0 && p.is_finite() => {
+                let k = ((x - f.x) / p).round();
+                (k as i64, f.x + k * p)
+            }
+            _ => (0, f.x),
+        };
+        let dist = (x - m).abs();
+        if best.is_none_or(|b| dist < b.1) {
+            best = Some(((i, k), dist));
+        }
+    }
+    best.map(|b| b.0)
+}
+
+/// What two found features of one kind are told apart by: something
+/// resolvably different from both between them.
+#[derive(Clone, Copy)]
+enum Kind {
+    /// Crossings: f resolvably away from 0 between them.
+    Zero,
+    /// Maxima (minima): f resolvably below (above) both between them.
+    Turn(f64),
+}
+
+/// Found positions matched to one reported point (`member_key`, by
+/// position within the panel's precision): two told apart (`Kind`) are two
+/// features where one is reported.
+fn merged(f: &F, found: &[((usize, i64), f64)], kind: Kind) -> Vec<(f64, f64)> {
+    let mut by: std::collections::BTreeMap<(usize, i64), Vec<f64>> = Default::default();
+    for (key, x) in found {
+        by.entry(*key).or_default().push(*x);
+    }
+    let mut out = Vec::new();
+    for (_, mut xs) in by {
+        xs.sort_by(f64::total_cmp);
+        xs.dedup();
+        'pairs: for w in xs.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let (va, vb) = (f.at(a), f.at(b));
+            if !(in_doubles(&va) && in_doubles(&vb)) {
+                continue;
+            }
+            let t = 8.0 * (f.tol(a) + f.tol(b));
+            for j in 1..32 {
+                let y = a + (b - a) * j as f64 / 32.0;
+                let v = f.at(y);
+                if !in_doubles(&v) {
+                    continue;
+                }
+                let apart = match kind {
+                    Kind::Zero => v.v.abs() > t.max(8.0 * f.tol(y)),
+                    Kind::Turn(s) => {
+                        s * (va.v.min(vb.v) * (s > 0.0) as u8 as f64
+                            + va.v.max(vb.v) * (s < 0.0) as u8 as f64
+                            - v.v)
+                            > t + 8.0 * f.tol(y)
+                    }
+                };
+                if apart {
+                    out.push((a, b));
+                    break 'pairs;
+                }
+            }
+        }
+    }
+    out
 }
 
 fn in_interval(i: &Interval, v: f64) -> bool {
@@ -666,6 +829,10 @@ struct Finding {
     expr: String,
     detail: String,
     rank: f64,
+    /// Not a contradiction: an answer sampling can neither confirm nor
+    /// refute, or points the reference can't evaluate (listed, not
+    /// failed).
+    note: bool,
 }
 
 struct Ctx<'a> {
@@ -678,13 +845,22 @@ impl Ctx<'_> {
         self.fail_at(class, 0.0, detail);
     }
 
-    /// Keeps the three witnesses per class and function nearest the origin.
     fn fail_at(&mut self, class: &'static str, x: f64, detail: String) {
+        self.push(class, x, detail, false);
+    }
+
+    fn note(&mut self, class: &'static str, x: f64, detail: String) {
+        self.push(class, x, detail, true);
+    }
+
+    /// Keeps the three witnesses per class and function nearest the origin.
+    fn push(&mut self, class: &'static str, x: f64, detail: String, note: bool) {
         self.out.push(Finding {
             class,
             expr: self.expr.to_string(),
             detail,
             rank: x.abs(),
+            note,
         });
         let mut mine: Vec<usize> = (0..self.out.len())
             .filter(|&i| self.out[i].class == class)
@@ -805,6 +981,18 @@ fn samples(f: &F, k: &KeyGraphFeatures, extra: &[f64], wide: bool) -> Vec<f64> {
 }
 
 fn check(expr: &str, unit: TrigUnit, extra: &[f64], wide: bool) -> Vec<Finding> {
+    check_with(expr, unit, extra, wide, &|_| {})
+}
+
+/// `check`, with the analysis changed by `plant` first (the self-test
+/// plants known false answers).
+fn check_with(
+    expr: &str,
+    unit: TrigUnit,
+    extra: &[f64],
+    wide: bool,
+    plant: &dyn Fn(&mut KeyGraphFeatures),
+) -> Vec<Finding> {
     let mut cx = Ctx {
         expr,
         out: Vec::new(),
@@ -829,7 +1017,8 @@ fn check(expr: &str, unit: TrigUnit, extra: &[f64], wide: bool) -> Vec<Finding> 
         unit,
         memo: Default::default(),
     };
-    let k = analyze(&eq, &opts);
+    let mut k = analyze(&eq, &opts);
+    plant(&mut k);
     if k.analysis_error != AnalysisError::NoError {
         return cx.out;
     }
@@ -852,6 +1041,19 @@ fn check(expr: &str, unit: TrigUnit, extra: &[f64], wide: bool) -> Vec<Finding> 
                 ),
             );
         }
+    }
+    // Where the reference can't tell, nothing is checked (the compiled value
+    // is not taken for the truth): how many such points.
+    let unverifiable = vals.iter().filter(|v| v.k == K::Unknown).count();
+    if unverifiable > 0 {
+        cx.note(
+            "unverifiable-points",
+            0.0,
+            format!(
+                "{unverifiable} of {} samples: the reference can't evaluate f there",
+                xs.len()
+            ),
+        );
     }
 
     // Y-intercept.
@@ -1236,6 +1438,288 @@ fn check(expr: &str, unit: TrigUnit, extra: &[f64], wide: bool) -> Vec<Finding> 
         }
     }
 
+    let mut poles_all: Vec<Family> = d.vertical_asymptotes.clone();
+    poles_all.extend(d.excluded.iter().copied());
+
+    // Horizontal and oblique asymptotes, by the far tails: f − (m·x + b)
+    // must shrink there. Reported where its largest size over a decade (nine
+    // points) is no smaller at all three decades further out, is beyond f's
+    // tolerance there, and moves the line as the panel shows it. The
+    // decades are 10¹² and 10¹⁵ for a horizontal line, 10⁶ and 10⁹ for an
+    // oblique one (whose m·x rounds coarsely further out), or from 100× the
+    // expression's largest number if that is further (a shifted function's
+    // tail starts beyond its shift).
+    {
+        use graphing::analysis::AsymptoteSide;
+        let reach = centres
+            .iter()
+            .fold(0.0f64, |m, c| m.max(c.abs()))
+            .max(1.0)
+            .log10()
+            .ceil() as i32
+            + 2;
+        let mut lines: Vec<(f64, f64, AsymptoteSide, &str, i32)> = Vec::new();
+        if definite(&k, flags::HORIZONTAL_ASYMPTOTES) {
+            for &(c, side) in &d.horizontal_asymptotes {
+                lines.push((0.0, c, side, "horizontal", 12.max(reach)));
+            }
+        }
+        if definite(&k, flags::OBLIQUE_ASYMPTOTES) {
+            for &(m, b, side) in &d.oblique_asymptotes {
+                lines.push((m, b, side, "oblique", 6.max(reach)));
+            }
+        }
+        for (m, b, side, what, k1) in lines {
+            let sides: &[f64] = match side {
+                AsymptoteSide::PositiveInfinity => &[1.0],
+                AsymptoteSide::NegativeInfinity => &[-1.0],
+                _ => &[1.0, -1.0],
+            };
+            for &s in sides {
+                let resid = |k: i32| -> Option<(f64, f64)> {
+                    let (mut r, mut t) = (0.0f64, 0.0f64);
+                    for j in 0..=8 {
+                        let x = s * 10f64.powi(k) * (1.0 + j as f64 / 8.0);
+                        // A value too small to size is its double, 0.
+                        let v = f.at(x);
+                        if !v.def() || !v.v.is_finite() {
+                            return None;
+                        }
+                        let line = m * x + b;
+                        r = r.max((v.v - line).abs());
+                        t = t.max(f.tol(x) + 8.0 * ulp(line) + 8.0 * ulp(m * x));
+                    }
+                    Some((r, t))
+                };
+                let (Some((r1, _)), Some((r2, t2))) = (resid(k1), resid(k1 + 3)) else {
+                    continue;
+                };
+                if r2 > 8.0 * t2 && r2 >= r1 && !same(b, b + r2) && !same(b, b - r2) {
+                    cx.fail(
+                        "asymptote-not-approached",
+                        format!(
+                            "{what} y = {}{} as x → {}∞: |f − line| is {r1:e} near 10^{k1}, {r2:e} near 10^{}",
+                            if m != 0.0 { format!("{m}·x + ") } else { String::new() },
+                            fmt(b),
+                            if s > 0.0 { "+" } else { "−" },
+                            k1 + 3
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    // Inflection points: f's value there, and a change of concavity. The
+    // second difference f(t + h) − 2f(t) + f(t − h) at t = x ∓ 2h, at
+    // scales h = 10⁻¹⁵ … 10³ and 10⁻⁶ … 10⁻² of |x| (each at least 1000
+    // floats of x, and a quarter of the way to any other reported
+    // inflection), where it is told from rounding (64× the rounding bounds
+    // of the three values): the same sign on both sides at every such
+    // scale, at least three of them, is no inflection.
+    if definite(&k, flags::INFLECTION_POINTS) {
+        for (fam, y) in &d.inflection_points {
+            for x in members(fam) {
+                let v = f.at(x);
+                if v.k == K::Undef {
+                    cx.fail("inflection-undefined", format!("({x:e}, {y})"));
+                    continue;
+                }
+                if !v.cmp_ok() || !v.v.is_finite() {
+                    continue;
+                }
+                if (y - v.v).abs() > f.tol(x) && fmt(*y) != fmt(v.v) {
+                    cx.fail(
+                        "inflection-value-wrong",
+                        format!("({x:e}, {}) but f there = {}", fmt(*y), show(&v)),
+                    );
+                }
+                let s = x.abs().max(1.0);
+                // Rounding only (4 ulp plus twice the bound), not f's change
+                // over nearby floats: that is the signal here.
+                let rounding = |t: f64, v: &Val| 4.0 * ulp(v.v) + 2.0 * f.error(&f.ast, t).1;
+                let d2 = |t: f64, h: f64| -> Option<f64> {
+                    let (a, c, e) = (f.at(t - h), f.at(t), f.at(t + h));
+                    if !(in_doubles(&a) && in_doubles(&c) && in_doubles(&e)) {
+                        return None;
+                    }
+                    let q = a.v - 2.0 * c.v + e.v;
+                    let noise =
+                        64.0 * (rounding(t - h, &a) + 2.0 * rounding(t, &c) + rounding(t + h, &e));
+                    (noise.is_finite() && q.abs() > noise).then_some(q)
+                };
+                let mut scales: Vec<f64> = (-15..=3).map(|e| 10f64.powi(e)).collect();
+                scales.extend((-6..=-2).map(|e| 10f64.powi(e) * s));
+                // Only scales with no other reported inflection within
+                // reach (two between x ∓ 2h would leave the same concavity).
+                let other = d
+                    .inflection_points
+                    .iter()
+                    .flat_map(|p| members(&p.0))
+                    .map(|m| (m - x).abs())
+                    .filter(|&g| g > 0.0)
+                    .fold(f64::INFINITY, f64::min);
+                let (mut told, mut same_side) = (0, true);
+                for h in scales {
+                    if h < 1e3 * ulp(x)
+                        || 4.0 * h > other
+                        || near(&poles_all, x, x - 4.0 * h, x + 4.0 * h)
+                    {
+                        continue;
+                    }
+                    if let (Some(l), Some(r)) = (d2(x - 2.0 * h, h), d2(x + 2.0 * h, h)) {
+                        told += 1;
+                        same_side &= l.signum() == r.signum();
+                    }
+                }
+                if told >= 3 && same_side {
+                    cx.fail(
+                        "inflection-not-inflection",
+                        format!(
+                            "({x:e}, {}): f is concave the same way on both sides",
+                            fmt(*y)
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    // A periodic f's period is the least one: P/2 and P/3 must not be
+    // periods too. Reported where f(x + P/n) equals f(x) within tolerance
+    // at every one of at least 200 samples (|x| ≤ 100) over which f varies
+    // by 10⁶ times that tolerance (an invisible part of f with the longer period, below the
+    // doubles' resolution, would make this a false alarm: none is known in
+    // the pool).
+    if definite(&k, flags::PERIODICITY)
+        && k.periodicity_direction == Periodicity::Periodic
+        && let Some(p) = d.period
+    {
+        for n in [2.0, 3.0] {
+            let q = p / n;
+            let (mut compared, mut lo, mut hi) = (0, f64::INFINITY, f64::NEG_INFINITY);
+            let mut differs = false;
+            let mut tmax: f64 = 0.0;
+            for (x, v) in xs.iter().zip(&vals) {
+                if x.abs() > 100.0 || !in_doubles(v) || compared > 4000 {
+                    continue;
+                }
+                let w = f.at(x + q);
+                if !in_doubles(&w) {
+                    continue;
+                }
+                compared += 1;
+                lo = lo.min(v.v);
+                hi = hi.max(v.v);
+                let t = f.tol(*x) + f.tol(x + q);
+                tmax = tmax.max(t);
+                if (w.v - v.v).abs() > t {
+                    differs = true;
+                    break;
+                }
+            }
+            if !differs && compared >= 200 && hi - lo > 1e6 * tmax {
+                cx.fail(
+                    "period-not-fundamental",
+                    format!(
+                        "period {} claimed, but f(x + {}) = f(x) at {compared} samples (f varies by {:e})",
+                        k.periodicity_expression,
+                        fmt(q),
+                        hi - lo
+                    ),
+                );
+                break;
+            }
+        }
+    }
+
+    // What sampling can't refute, noted when it isn't even supported:
+    // "neither" parity without a witness against each of even and odd, and
+    // "not periodic" for an f that keeps a circular period at every sample.
+    if definite(&k, flags::PARITY) && k.parity == Parity::Neither {
+        let (mut not_even, mut not_odd) = (false, false);
+        for (x, v) in xs.iter().zip(&vals) {
+            if *x <= 0.0 || (not_even && not_odd) {
+                continue;
+            }
+            let w = f.at(-x);
+            if in_doubles(v) && in_doubles(&w) {
+                let t = f.tol(*x) + f.tol(-x);
+                not_even |= (v.v - w.v).abs() > t;
+                not_odd |= (v.v + w.v).abs() > t;
+            } else if v.cmp_ok() && w.cmp_ok() {
+                // Beyond the doubles: exactly, relatively.
+                let big = if cmp_xf(v.xf.abs(), w.xf.abs()) == Ordering::Greater {
+                    v.xf.abs()
+                } else {
+                    w.xf.abs()
+                };
+                let apart = |d: Xf| cmp_xf(d.abs(), big.mul(Xf::of(1e-9))) == Ordering::Greater;
+                not_even |= apart(v.xf.add(w.xf.neg()));
+                not_odd |= apart(v.xf.add(w.xf));
+            } else if v.def() != w.def()
+                && (v.def() || v.k == K::Undef)
+                && (w.def() || w.k == K::Undef)
+            {
+                // Defined on one side only: the domain isn't symmetric (an
+                // isolated hole is enough).
+                not_even = true;
+                not_odd = true;
+            }
+        }
+        if !(not_even && not_odd) {
+            cx.note(
+                "neither-unwitnessed",
+                0.0,
+                format!(
+                    "parity Neither, but no sample shows f {}",
+                    if !not_even { "isn't even" } else { "isn't odd" }
+                ),
+            );
+        }
+    }
+    if definite(&k, flags::PERIODICITY) && k.periodicity_direction == Periodicity::NotPeriodic {
+        let turn = match unit {
+            TrigUnit::Radians => std::f64::consts::TAU,
+            TrigUnit::Degrees => 360.0,
+            TrigUnit::Grads => 400.0,
+        };
+        for q in [turn, turn / 2.0] {
+            let (mut compared, mut lo, mut hi, mut tmax) =
+                (0, f64::INFINITY, f64::NEG_INFINITY, 0.0f64);
+            let mut differs = false;
+            for (x, v) in xs.iter().zip(&vals) {
+                if x.abs() > 100.0 || !in_doubles(v) || compared > 4000 {
+                    continue;
+                }
+                let w = f.at(x + q);
+                if !in_doubles(&w) {
+                    continue;
+                }
+                compared += 1;
+                lo = lo.min(v.v);
+                hi = hi.max(v.v);
+                let t = f.tol(*x) + f.tol(x + q);
+                tmax = tmax.max(t);
+                if (w.v - v.v).abs() > t {
+                    differs = true;
+                    break;
+                }
+            }
+            if !differs && compared >= 200 && hi - lo > 1e6 * tmax {
+                cx.note(
+                    "not-periodic-looks-periodic",
+                    0.0,
+                    format!(
+                        "not periodic, but f(x + {}) = f(x) at {compared} samples",
+                        fmt(q)
+                    ),
+                );
+                break;
+            }
+        }
+    }
+
     // Poles, crossings and turns between the samples.
     let va_definite = definite(&k, flags::VERTICAL_ASYMPTOTES);
     let pole_at = |xu: f64| -> bool {
@@ -1292,6 +1776,50 @@ fn check(expr: &str, unit: TrigUnit, extra: &[f64], wide: bool) -> Vec<Finding> 
     // or a jump, told apart at adjacent floats.
     let zeros_definite = zero_points;
     let mut bisected = 0;
+    // Crossings matched to a reported zero, to tell two from one.
+    let mut matched: Vec<((usize, i64), f64)> = Vec::new();
+    let zero_fams: Vec<Family> = d.zeros.clone();
+    // Within the noise of a reported zero: f stays within its tolerance of 0
+    // all the way to it (an expanded (x − 1)⁴ is ±10⁻¹⁶ for a while).
+    let in_noise_of_reported = |x: f64| {
+        d.zeros.iter().flat_map(members).any(|z| {
+            (z - x).abs() <= 1e-2 * x.abs().max(1.0)
+                && (0..=32).all(|j| {
+                    let y = x + (z - x) * j as f64 / 32.0;
+                    let w = f.at(y);
+                    w.def() && w.v.is_finite() && w.v.abs() <= f.tol(y)
+                })
+        })
+    };
+    // A sample where f is exactly 0, with nonzero samples either side: a
+    // zero there (a crossing on a sample has no sign change beside it).
+    if zeros_definite {
+        for i in 1..xs.len().saturating_sub(1) {
+            let (a, v, b) = (&vals[i - 1], &vals[i], &vals[i + 1]);
+            if !(v.cmp_ok() && v.xf.is_zero() && a.cmp_ok() && b.cmp_ok())
+                || a.xf.is_zero()
+                || b.xf.is_zero()
+            {
+                continue;
+            }
+            let x = xs[i];
+            let resolved = x.abs() <= 1e7 || centres.iter().any(|c| (x - c).abs() <= 1e4);
+            if !resolved || near(&poles, x, x, x) {
+                continue;
+            }
+            if near(&zero_fams, x, x, x) {
+                if let Some(key) = member_key(&zero_fams, x, x, x) {
+                    matched.push((key, x));
+                }
+            } else if !in_noise_of_reported(x) {
+                cx.fail_at(
+                    "zero-missing",
+                    x,
+                    format!("f({x:e}) = 0 exactly; claimed: {}", k.x_intercept),
+                );
+            }
+        }
+    }
     for i in 1..xs.len() {
         let (a, b) = (&vals[i - 1], &vals[i]);
         if !(a.def() && b.def()) || a.xf.sign() * b.xf.sign() >= 0.0 || bisected > 400 {
@@ -1325,26 +1853,18 @@ fn check(expr: &str, unit: TrigUnit, extra: &[f64], wide: bool) -> Vec<Finding> 
             continue;
         }
         let (vl, vr) = (f.at(l), f.at(r));
-        // Within the noise of a reported zero: f stays within its tolerance
-        // of 0 all the way to it (an expanded (x − 1)⁴ is ±10⁻¹⁶ for a while).
-        let in_noise_of_reported = |x: f64| {
-            d.zeros.iter().flat_map(members).any(|z| {
-                (z - x).abs() <= 1e-2 * x.abs().max(1.0)
-                    && (0..=32).all(|j| {
-                        let y = x + (z - x) * j as f64 / 32.0;
-                        let w = f.at(y);
-                        w.def() && w.v.is_finite() && w.v.abs() <= f.tol(y)
-                    })
-            })
-        };
         if l == r {
             // An exact zero.
-            if zeros_definite && !near(&d.zeros, l, l, l) && !in_noise_of_reported(l) {
-                cx.fail_at(
-                    "zero-missing",
-                    l,
-                    format!("f({l:e}) = 0; claimed: {}", k.x_intercept),
-                );
+            if zeros_definite {
+                match member_key(&zero_fams, l, l, l) {
+                    Some(key) => matched.push((key, l)),
+                    None if !in_noise_of_reported(l) => cx.fail_at(
+                        "zero-missing",
+                        l,
+                        format!("f({l:e}) = 0; claimed: {}", k.x_intercept),
+                    ),
+                    None => {}
+                }
             }
             continue;
         }
@@ -1399,19 +1919,28 @@ fn check(expr: &str, unit: TrigUnit, extra: &[f64], wide: bool) -> Vec<Finding> 
             continue;
         }
         if crossing {
-            if zeros_definite && !near(&d.zeros, l, xs[i - 1], xs[i]) && !in_noise_of_reported(l) {
-                cx.fail_at(
-                    "zero-missing",
-                    l,
-                    format!(
-                        "sign change at {l:e}; claimed: {}",
-                        if k.x_intercept.is_empty() {
-                            "none"
-                        } else {
-                            &k.x_intercept
-                        }
-                    ),
-                );
+            if zeros_definite {
+                if near(&zero_fams, l, xs[i - 1], xs[i]) {
+                    // Matched; by position (not the samples' bracket) for
+                    // telling two from one (crossings in rounding noise are
+                    // not told apart there).
+                    if let Some(key) = member_key(&zero_fams, l, l, l) {
+                        matched.push((key, l));
+                    }
+                } else if !in_noise_of_reported(l) {
+                    cx.fail_at(
+                        "zero-missing",
+                        l,
+                        format!(
+                            "sign change at {l:e}; claimed: {}",
+                            if k.x_intercept.is_empty() {
+                                "none"
+                            } else {
+                                &k.x_intercept
+                            }
+                        ),
+                    );
+                }
             }
         } else if va_definite && pole && !near(&d.vertical_asymptotes, l, xs[i - 1], xs[i]) {
             cx.fail_at(
@@ -1424,15 +1953,33 @@ fn check(expr: &str, unit: TrigUnit, extra: &[f64], wide: bool) -> Vec<Finding> 
             );
         }
     }
+    for (a, b) in merged(&f, &matched, Kind::Zero) {
+        cx.fail_at(
+            "zeros-merged",
+            a,
+            format!(
+                "crossings at {a:e} and {b:e} are both matched to one reported zero; claimed: {}",
+                k.x_intercept
+            ),
+        );
+    }
     // Turns: a sample with no higher (lower) one between it and samples
-    // beyond f's tolerance below (above) it on either side.
+    // beyond f's tolerance below (above) it on either side. Each is refined
+    // and must be a continuous turn; then it is a reported extremum (one
+    // per reported point), and it tells whether an open range bound is
+    // reached.
+    let range_definite = definite(&k, flags::RANGE) && !d.range.is_empty();
+    // Values of found turns, for the range's closed bounds.
+    let mut turn_values: Vec<(f64, f64)> = Vec::new();
     for (flag, list, sign, name) in [
         (flags::MAXIMA, &d.maxima, 1.0, "maximum"),
         (flags::MINIMA, &d.minima, -1.0, "minimum"),
     ] {
-        if !definite(&k, flag) {
+        let ext_definite = definite(&k, flag);
+        if !(ext_definite || range_definite) {
             continue;
         }
+        let mut matched: Vec<((usize, i64), f64)> = Vec::new();
         let fams: Vec<Family> = list.iter().map(|m| m.0).collect();
         let mut poles: Vec<Family> = d.vertical_asymptotes.clone();
         poles.extend(d.excluded.iter().copied());
@@ -1463,20 +2010,29 @@ fn check(expr: &str, unit: TrigUnit, extra: &[f64], wide: bool) -> Vec<Finding> 
                 cmp_xf(dif, big.mul(Xf::of(1e-6))) == Ordering::Greater
             }
         };
-        let mut refined = 0;
+        // Runs of equal values (start, end), nearest the origin first: the
+        // refinements are capped, and features near 0 matter most.
+        let mut runs: Vec<(usize, usize)> = Vec::new();
         let mut i = 0;
         while i < xs.len() {
             let c = i;
             i += 1;
-            if !vals[c].cmp_ok() || !vals[c].v.is_finite() || refined > 300 {
+            if !vals[c].cmp_ok() || !vals[c].v.is_finite() {
                 continue;
             }
-            // Skip the rest of a run of equal values.
             while i < xs.len()
                 && vals[i].cmp_ok()
                 && cmp_xf(vals[i].xf, vals[c].xf) == Ordering::Equal
             {
                 i += 1;
+            }
+            runs.push((c, i));
+        }
+        runs.sort_by(|a, b| xs[a.0].abs().total_cmp(&xs[b.0].abs()));
+        let mut refined = 0;
+        for (c, i) in runs {
+            if refined > 300 {
+                break;
             }
             let cv = vals[c];
             // Outward, until a value well below; nothing above on the way.
@@ -1500,9 +2056,10 @@ fn check(expr: &str, unit: TrigUnit, extra: &[f64], wide: bool) -> Vec<Finding> 
                 continue;
             };
             let (xl, xr) = (xs[l], xs[r]);
-            if near(&fams, xs[c], xl, xr) || near(&poles, xs[c], xl, xr) {
+            if near(&poles, xs[c], xl, xr) {
                 continue;
             }
+            let bracketed = ext_definite && near(&fams, xs[c], xl, xr);
             // A plateau (ceil(sin x) = 1 on a whole stretch) is no turn; a
             // top flattened by rounding is narrow against its bracket.
             if xs[i - 1] - xs[c] > 0.25 * (xr - xl) {
@@ -1603,23 +2160,101 @@ fn check(expr: &str, unit: TrigUnit, extra: &[f64], wide: bool) -> Vec<Finding> 
                 });
                 dd *= 2.0;
             }
-            if slope {
+            if slope || near(&poles, xm, xm, xm) {
                 continue;
             }
-            if near(&fams, xm, xm, xm) || near(&poles, xm, xm, xm) {
+            // A turn: f reaches vm there (a continuous function attains its
+            // local extremes).
+            if in_doubles(&vm) {
+                turn_values.push((xm, vm.v));
+            }
+            // An open range bound reached at a turn, to within f's
+            // tolerance there.
+            if range_definite && in_doubles(&vm) {
+                for i in &d.range {
+                    let end = if sign > 0.0 { i.hi } else { i.lo };
+                    if !end.closed && end.value.is_finite() && (vm.v - end.value).abs() <= f.tol(xm)
+                    {
+                        cx.fail_at(
+                            "range-open-bound-reached",
+                            xm,
+                            format!(
+                                "{}: the {name} at {xm:e} is {} (f = {:e}), the open bound",
+                                k.range,
+                                fmt(end.value),
+                                vm.v
+                            ),
+                        );
+                    }
+                }
+            }
+            if !ext_definite {
                 continue;
             }
+            // Matched (generously, as for crossings); by position for telling
+            // two from one.
+            match (bracketed || near(&fams, xm, xm, xm), member_key(&fams, xm, xm, xm)) {
+                (true, Some(key)) => matched.push((key, xm)),
+                (true, None) => {}
+                (false, _) => cx.fail_at(
+                    "extremum-missing",
+                    xm,
+                    format!(
+                        "{name} near {xm:e} (f = {}; {} and {} at {xl:e} and {xr:e}); claimed: {:?}",
+                        show(&vm),
+                        show(&vals[l]),
+                        show(&vals[r]),
+                        list.iter().map(|m| (m.0.x, m.1)).collect::<Vec<_>>()
+                    ),
+                ),
+            }
+        }
+        for (a, b) in merged(&f, &matched, Kind::Turn(sign)) {
             cx.fail_at(
-                "extremum-missing",
-                xm,
+                "extrema-merged",
+                a,
                 format!(
-                    "{name} near {xm:e} (f = {}; {} and {} at {xl:e} and {xr:e}); claimed: {:?}",
-                    show(&vm),
-                    show(&vals[l]),
-                    show(&vals[r]),
+                    "{name}s at {a:e} and {b:e} are both matched to one reported {name}; claimed: {:?}",
                     list.iter().map(|m| (m.0.x, m.1)).collect::<Vec<_>>()
                 ),
             );
+        }
+    }
+
+    // A closed range bound no sample, turn or reported value comes to: not
+    // a contradiction (it may be reached between samples), a note.
+    if range_definite {
+        let reported: Vec<f64> = d
+            .minima
+            .iter()
+            .chain(&d.maxima)
+            .map(|m| m.1)
+            .chain(d.y_intercept)
+            .collect();
+        for i in &d.range {
+            for end in [i.lo, i.hi] {
+                if !end.closed || !end.value.is_finite() {
+                    continue;
+                }
+                let b = end.value;
+                let reached = reported.iter().any(|&v| same(v, b))
+                    || turn_values
+                        .iter()
+                        .any(|&(x, v)| (v - b).abs() <= f.tol(x) || same(v, b))
+                    || xs.iter().zip(&vals).any(|(x, v)| {
+                        v.cmp_ok()
+                            && v.v.is_finite()
+                            && (v.v - b).abs() <= 1e-5 * b.abs().max(1e-300)
+                            && (fmt(v.v) == fmt(b) || (v.v - b).abs() <= f.tol(*x))
+                    });
+                if !reached {
+                    cx.note(
+                        "closed-bound-unreached",
+                        0.0,
+                        format!("{}: no sample or turn comes to {}", k.range, fmt(b)),
+                    );
+                }
+            }
         }
     }
     cx.out
@@ -1934,6 +2569,122 @@ fn adversarial() -> Vec<String> {
     v
 }
 
+/// Planted false answers: each must be caught by the named check (the
+/// checks' own discrimination test). Returns whether all were.
+fn selftest() -> bool {
+    use graphing::analysis::{AsymptoteSide, Bound};
+    type Plant = Box<dyn Fn(&mut KeyGraphFeatures)>;
+    let one = |x: f64| Family::single(x);
+    let cases: Vec<(&str, &str, Plant)> = vec![
+        (
+            "x^3",
+            "inflection-not-inflection",
+            Box::new(move |k| k.data.inflection_points.push((one(1.0), 1.0))),
+        ),
+        (
+            "x^3",
+            "inflection-value-wrong",
+            Box::new(|k| {
+                for p in &mut k.data.inflection_points {
+                    p.1 += 0.5;
+                }
+            }),
+        ),
+        (
+            "atan(x)",
+            "asymptote-not-approached",
+            Box::new(|k| {
+                for a in &mut k.data.horizontal_asymptotes {
+                    a.0 *= 0.99;
+                }
+            }),
+        ),
+        (
+            "x+1/x",
+            "asymptote-not-approached",
+            Box::new(|k| {
+                for a in &mut k.data.oblique_asymptotes {
+                    a.1 += 1.0;
+                }
+            }),
+        ),
+        (
+            "sin(x)",
+            "period-not-fundamental",
+            Box::new(|k| {
+                k.data.period = k.data.period.map(|p| 2.0 * p);
+            }),
+        ),
+        (
+            "sin(x)",
+            "range-open-bound-reached",
+            Box::new(|k| {
+                for i in &mut k.data.range {
+                    i.hi = Bound {
+                        value: i.hi.value,
+                        closed: false,
+                    };
+                }
+            }),
+        ),
+        (
+            "(x-1.1)*(x-1.1000003)",
+            "zeros-merged",
+            Box::new(move |k| k.data.zeros = vec![one(1.1)]),
+        ),
+        (
+            "(x-1)^2*(x-1.000001)^2",
+            "extrema-merged",
+            Box::new(move |k| k.data.minima = vec![(one(1.0), 0.0)]),
+        ),
+        (
+            "x^2+1",
+            "excluded-point-defined",
+            Box::new(move |k| k.data.excluded.push(one(2.0))),
+        ),
+        (
+            "x^2",
+            "zero-missing",
+            Box::new(|k| {
+                k.data.zeros.clear();
+                k.x_intercept.clear();
+            }),
+        ),
+        (
+            "x^2",
+            "neither-unwitnessed",
+            Box::new(|k| k.parity = Parity::Neither),
+        ),
+        (
+            "1/x",
+            "vertical-asymptote-missing",
+            Box::new(|k| {
+                k.data.vertical_asymptotes.clear();
+                k.data.excluded.clear();
+            }),
+        ),
+        (
+            "exp(-x^2)",
+            "asymptote-not-approached",
+            Box::new(|k| {
+                k.data.horizontal_asymptotes = vec![(0.5, AsymptoteSide::AnyInfinity)];
+            }),
+        ),
+    ];
+    let mut ok = true;
+    for (expr, want, plant) in &cases {
+        let found = check_with(expr, TrigUnit::Radians, &[], false, plant.as_ref());
+        let hit = found.iter().any(|f| f.class == *want);
+        ok &= hit;
+        println!(
+            "{} y={expr}: planted, expecting {want}: {}",
+            if hit { "ok  " } else { "MISS" },
+            found.iter().map(|f| f.class).collect::<Vec<_>>().join(", ")
+        );
+    }
+    ok
+}
+
 /// Review 11's case in degrees.
 const DEGREES: &[&str] = &["sin(x+2^-1074)/(x+2^-1074)", "sin(x)/x", "tan(x)", "cot(x)"];
 
@@ -1963,6 +2714,9 @@ fn spellings() -> Vec<(&'static str, &'static str, bool)> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "--selftest") {
+        std::process::exit(if selftest() { 0 } else { 1 });
+    }
     if args.first().is_some_and(|a| a == "--dump") && args.len() >= 2 {
         // One function: its analysis and what the checks find; the exit
         // status is 1 if they find anything, as for a whole run.
@@ -1972,9 +2726,14 @@ fn main() {
         println!("{k:#?}");
         let found = check(&args[1], TrigUnit::Radians, &[], false);
         for f in &found {
-            println!("{}: {}", f.class, f.detail);
+            println!(
+                "{}{}: {}",
+                if f.note { "note: " } else { "" },
+                f.class,
+                f.detail
+            );
         }
-        if !found.is_empty() {
+        if found.iter().any(|f| !f.note) {
             std::process::exit(1);
         }
         return;
@@ -2059,43 +2818,51 @@ fn main() {
         }
     });
     let found = found.into_inner().unwrap();
-    let mut by: std::collections::BTreeMap<&str, Vec<&Finding>> = Default::default();
-    for f in &found {
-        by.entry(f.class).or_default().push(f);
-    }
+    let (notes, fails): (Vec<&Finding>, Vec<&Finding>) = found.iter().partition(|f| f.note);
+    let functions = |fs: &[&Finding]| {
+        let mut e: Vec<&str> = fs.iter().map(|f| f.expr.as_str()).collect();
+        e.sort();
+        e.dedup();
+        e.len()
+    };
     println!(
-        "{} functions in {:.1} s; {} contradictions in {} functions",
+        "{} functions in {:.1} s; {} contradictions in {} functions ({} notes in {} functions: not contradictions)",
         pool.len(),
         started.elapsed().as_secs_f64(),
-        found.len(),
-        {
-            let mut e: Vec<&str> = found.iter().map(|f| f.expr.as_str()).collect();
-            e.sort();
-            e.dedup();
-            e.len()
-        }
+        fails.len(),
+        functions(&fails),
+        notes.len(),
+        functions(&notes),
     );
-    for (class, fs) in &by {
-        let mut exprs: Vec<&str> = fs.iter().map(|f| f.expr.as_str()).collect();
-        exprs.sort();
-        exprs.dedup();
-        println!("\n## {class}: {} in {} functions", fs.len(), exprs.len());
-        let mut shown = 0;
-        let mut last = "";
-        for f in fs.iter() {
-            if f.expr == last {
-                continue;
-            }
-            last = &f.expr;
-            println!("  y={}: {}", f.expr, f.detail);
-            shown += 1;
-            if shown >= 60 && !args.iter().any(|a| a == "--all") {
-                println!("  … (--all for every one)");
-                break;
+    let all = args.iter().any(|a| a == "--all");
+    for (title, list) in [("", &fails), ("note: ", &notes)] {
+        let mut by: std::collections::BTreeMap<&str, Vec<&Finding>> = Default::default();
+        for f in list.iter() {
+            by.entry(f.class).or_default().push(f);
+        }
+        for (class, fs) in &by {
+            println!(
+                "\n## {title}{class}: {} in {} functions",
+                fs.len(),
+                functions(fs)
+            );
+            let mut shown = 0;
+            let mut last = "";
+            for f in fs.iter() {
+                if f.expr == last {
+                    continue;
+                }
+                last = &f.expr;
+                println!("  y={}: {}", f.expr, f.detail);
+                shown += 1;
+                if shown >= 60 && !all {
+                    println!("  … (--all for every one)");
+                    break;
+                }
             }
         }
     }
-    if !found.is_empty() {
+    if !fails.is_empty() {
         std::process::exit(1);
     }
 }
