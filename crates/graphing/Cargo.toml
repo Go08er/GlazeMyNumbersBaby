@@ -7,3 +7,13 @@ rust-version.workspace = true
 authors.workspace = true
 
 [dependencies]
+# Correctly rounded binary64 elementary functions (CORE-MATH, MIT): the
+# interval core's point evaluations.
+core-math = "1.4"
+# Development only (`--features mpfr-oracle`): MPFR, to check the interval
+# core's enclosures against 256-bit values. LGPL; never in a release build.
+rug = { version = "1.28", default-features = false, features = ["float", "std"], optional = true }
+gmp-mpfr-sys = { version = "1.6", default-features = false, features = ["mpfr", "use-system-libs"], optional = true }
+
+[features]
+mpfr-oracle = ["dep:rug", "dep:gmp-mpfr-sys"]

@@ -110,6 +110,9 @@
             dbus
             # Runs DGMNB's X11 clipboard test.
             xvfb
+            # The graphing crate's `mpfr-oracle` feature (development only).
+            gmp
+            mpfr
           ];
           RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
           # DGMNB loads the keymap library (and Xlib on X11) at run time.

@@ -1,0 +1,8 @@
+[env]
+# core-math-sys compiles the vendored CORE-MATH C with `-march=$TARGET_CPU`
+# and defaults to `native`, which would tie a build to the CPU it was made
+# on. Baseline x86-64 unless the environment says otherwise (GMNB's packages
+# may set x86-64-v3). The flag is dropped where the compiler doesn't know it
+# (aarch64). Its build script doesn't watch the variable: run
+# `cargo clean -p core-math-sys` after changing it.
+TARGET_CPU = { value = "x86-64", force = false }
