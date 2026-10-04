@@ -704,6 +704,31 @@ const PLANTS: &[Plant] = &[
             "cert": {"covers": "Line", "claims": [{"Simplifier": {"fact": "f → 50 as x → +∞"}}]}
         }});
     }),
+    // No line: f″ away from 0 on a tail (|f/x| → ∞), and f′ monotone,
+    // its values far out within 10⁻¹² of 0 (f/x → 0).
+    ("x*abs(x)", "f″'s bound on a tail flipped", |v| {
+        let t = first(v, "oblique", "TailBeyond");
+        t["above"] = serde_json::json!(!t["above"].as_bool().unwrap());
+    }),
+    ("x*abs(x)", "f″'s bound given to f′", |v| {
+        for c in claims_of(v, "oblique") {
+            c["TailBeyond"]["of"] = serde_json::json!({"F": "F1"});
+        }
+    }),
+    ("ln(x)^2", "f′'s value far out moved off 0", |v| {
+        for c in claims_of(v, "oblique").iter_mut() {
+            if let Some(b) = c.get_mut("Value") {
+                b["lo"] = serde_json::json!(1e-3);
+                b["hi"] = serde_json::json!(2e-3);
+            }
+        }
+    }),
+    ("ln(x)^2", "f′'s monotonicity dropped", |v| {
+        claims_of(v, "oblique").retain(|c| {
+            !(c.get("TailBeyond")
+                .is_some_and(|t| t["of"] == serde_json::json!({"F": "F2"})))
+        });
+    }),
     ("abs(x-3)", "a kink's slope flipped on one side", |v| {
         let k = first(v, "extrema", "KinkAt");
         k["left"] = serde_json::json!(!k["left"].as_bool().unwrap());

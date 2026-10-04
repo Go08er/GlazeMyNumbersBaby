@@ -1673,6 +1673,12 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
 
 /// f′'s strict sign on the tail (`Some(true)`: rising), and from where.
 fn tail_mono(claims: &[Claim], side: Side) -> Option<(bool, f64)> {
+    tail_mono_of(claims, side, 1)
+}
+
+/// f⁽ᵏ⁾'s strict sign on the tail (`Some(true)`: positive), and from
+/// where: f⁽ᵏ⁻¹⁾ is strictly monotone there.
+fn tail_mono_of(claims: &[Claim], side: Side, k: usize) -> Option<(bool, f64)> {
     // The widest such tail (from −∞ on the right: the whole line).
     let right = side == Side::Right;
     claims
@@ -1681,10 +1687,10 @@ fn tail_mono(claims: &[Claim], side: Side) -> Option<(bool, f64)> {
             Claim::TailBeyond {
                 side: s,
                 from,
-                of: Subject::F(1),
+                of: Subject::F(o),
                 c,
                 above,
-            } if *s == side && *c == 0.0 => Some((*above, *from)),
+            } if *s == side && *c == 0.0 && *o == k => Some((*above, *from)),
             _ => None,
         })
         .reduce(|a, b| {
@@ -1959,8 +1965,11 @@ fn borne_out(bands: &[(f64, f64, f64)], y: &Enc, what: &str) -> Result<Enc, Stri
 
 /// f′ on the tail shown beyond bounds growing in size (`to_zero` false:
 /// f′ → ±∞, so f/x → ±∞) or within bands about 0 narrowing to 10⁻¹²
-/// (f′ → 0, so f/x → 0).
+/// (f′ → 0, so f/x → 0): from bounds on f′ over tails, or, f′ monotone
+/// there (f″ of one sign), from its values at points of the tail, beyond
+/// which it moves.
 fn slope_shown(claims: &[Claim], side: Side, to_zero: bool) -> bool {
+    let right = side == Side::Right;
     let bs: Vec<(f64, f64, bool)> = claims
         .iter()
         .filter_map(|c| match c {
@@ -1974,15 +1983,91 @@ fn slope_shown(claims: &[Claim], side: Side, to_zero: bool) -> bool {
             _ => None,
         })
         .collect();
+    // f′'s values at points of the tail where f′ is monotone, as (|x|,
+    // lo, hi), and whether it moves up out along the tail.
+    let (points, away_up) = match tail_mono_of(claims, side, 2) {
+        Some((rising, start)) => (
+            claims
+                .iter()
+                .filter_map(|c| match c {
+                    Claim::Value {
+                        x,
+                        of: Subject::F(1),
+                        lo,
+                        hi,
+                    } if x.0 == x.1 && (x.0 > 0.0) == right && on_tail(x.0, start, right) => {
+                        Some((x.0.abs(), *lo, *hi))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            rising == right,
+        ),
+        None => (Vec::new(), false),
+    };
     if to_zero {
-        let far = bs.iter().map(|b| b.0).fold(0.0, f64::max);
-        let at_far: Vec<&(f64, f64, bool)> = bs.iter().filter(|b| b.0 == far).collect();
-        at_far.iter().any(|b| b.2 && b.1 >= -1e-12) && at_far.iter().any(|b| !b.2 && b.1 <= 1e-12)
+        // The farthest tail with a bound each way: two bounds there, or
+        // one and f′'s value at its start, moving towards it.
+        let mut bands: Vec<(f64, f64, f64)> = Vec::new();
+        for &(m, _, _) in &bs {
+            let above = bs
+                .iter()
+                .filter(|b| b.0 == m && b.2)
+                .map(|b| b.1)
+                .fold(f64::NEG_INFINITY, f64::max);
+            let below = bs
+                .iter()
+                .filter(|b| b.0 == m && !b.2)
+                .map(|b| b.1)
+                .fold(f64::INFINITY, f64::min);
+            let at = points.iter().find(|p| p.0 == m);
+            let lo = match at {
+                Some(p) if away_up => above.max(p.1),
+                _ => above,
+            };
+            let hi = match at {
+                Some(p) if !away_up => below.min(p.2),
+                _ => below,
+            };
+            bands.push((m, lo, hi));
+        }
+        bands
+            .iter()
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+            .is_some_and(|b| b.1 >= -1e-12 && b.2 <= 1e-12)
     } else {
         let up: Vec<(f64, f64)> = bs.iter().filter(|b| b.2).map(|b| (b.0, b.1)).collect();
         let down: Vec<(f64, f64)> = bs.iter().filter(|b| !b.2).map(|b| (b.0, b.1)).collect();
-        growing(up, true) || growing(down, false)
+        // f′ monotone, moving away from values that grow past 0.
+        let moving: Vec<(f64, f64)> = points
+            .iter()
+            .map(|p| (p.0, if away_up { p.1 } else { p.2 }))
+            .collect();
+        growing(up, true) || growing(down, false) || growing(moving, away_up)
     }
+}
+
+/// f″ beyond a nonzero bound on the tail (a `TailBeyond` or a sign chain
+/// on f″ past c ≠ 0 of c's sign): f′ moves past f′(M) + c·(x − M), so
+/// |f/x| → ∞ and no line is approached.
+fn bends_away(claims: &[Claim], side: Side) -> bool {
+    claims.iter().any(|c| match c {
+        Claim::TailBeyond {
+            side: s,
+            of: Subject::F(2),
+            c,
+            above,
+            ..
+        }
+        | Claim::TailChain {
+            side: s,
+            of: Subject::F(2),
+            c,
+            above,
+            ..
+        } if *s == side => (*above && *c > 0.0) || (!*above && *c < 0.0),
+        _ => false,
+    })
 }
 
 // ------------------------------------------------------------ asymptotes
@@ -2485,6 +2570,7 @@ fn oblique(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), Str
             || rational_none
             || periodic
             || horizontal.iter().any(|h| h == side)
+            || bends_away(&rc.claims, s)
             || (fact("f/x → ±∞") && slope_shown(&rc.claims, s, false))
             || (fact("f/x → 0") && slope_shown(&rc.claims, s, true));
         if !ruled_out {

@@ -138,6 +138,11 @@ fn print(a: &Analysis, ms: f64) {
             (None, None) => format!("y ∈ {} ({:?})", enc(&h.y), h.side),
         })
     });
+    row("oblique", &a.oblique, |v| {
+        list(v, |o| {
+            format!("y = {}·x + {} ({:?})", enc(&o.m), enc(&o.b), o.side)
+        })
+    });
     if let Some(s) = &a.stopped {
         println!("  stopped: {s}");
     }

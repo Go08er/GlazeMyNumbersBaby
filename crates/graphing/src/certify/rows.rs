@@ -1269,26 +1269,40 @@ fn tail_box(right: bool, m: f64) -> Interval {
 }
 
 /// f′'s strict sign on the tail beyond `start` (rising: `true`), with
-/// f′'s enclosure there: from that enclosure, or from f′'s own tree,
-/// continuous on the tail with no factor reaching 0 there (−csch² for
-/// coth), so of the sign it has at the start.
+/// f′'s enclosure there ([`tail_sign_k`]).
 fn tail_sign(f: &Fun<'_>, right: bool, start: f64) -> Result<Option<(bool, DecInterval)>, Stop> {
-    let s = f.ser(tail_box(right, start), 1)?;
-    // (f′'s enclosure, or none: 0 · ∞ in x²·e⁻ˣ.)
-    let d = if usable(&s, 1) {
-        s[1]
+    tail_sign_k(f, 1, right, start)
+}
+
+/// f⁽ᵏ⁾'s strict sign on the tail beyond `start` (k = 1 or 2; positive:
+/// `true`), with f⁽ᵏ⁾'s enclosure there: from that enclosure, or from
+/// f⁽ᵏ⁾'s own tree, continuous on the tail with no factor reaching 0
+/// there (−csch² for coth), so of the sign it has at the start.
+fn tail_sign_k(
+    f: &Fun<'_>,
+    k: usize,
+    right: bool,
+    start: f64,
+) -> Result<Option<(bool, DecInterval)>, Stop> {
+    let s = f.ser(tail_box(right, start), k)?;
+    // (f⁽ᵏ⁾'s enclosure, k!·s[k], or none: 0 · ∞ in x²·e⁻ˣ.)
+    let d = if usable(&s, k) {
+        DecInterval {
+            iv: s[k].iv * Interval::point(if k == 2 { 2.0 } else { 1.0 }),
+            ..s[k]
+        }
     } else {
         DecInterval::new(Interval::ENTIRE)
     };
-    if usable(&s, 1) && d.ne0() {
+    if usable(&s, k) && d.ne0() {
         return Ok(Some((d.gt0(), d)));
     }
     // Without f's own series, its tree must be smooth (no jumps, kinks)
-    // and f defined on the tail: its derivative's tree is f′ there.
-    if !usable(&s, 1) && !(f.smooth_tree && !s[0].is_empty() && s[0].dec >= Dec::Def) {
+    // and f defined on the tail: its derivative's tree is f⁽ᵏ⁾ there.
+    if !usable(&s, k) && !(f.smooth_tree && !s[0].is_empty() && s[0].dec >= Dec::Def) {
         return Ok(None);
     }
-    let Some(t) = f.derivs().map(|d| &d[0]) else {
+    let Some(t) = f.derivs().map(|d| &d[k - 1]) else {
         return Ok(None);
     };
     let whole = f.ser_of(t, tail_box(right, start), 0)?[0];
@@ -2134,8 +2148,162 @@ pub fn horizontal(f: &Fun<'_>, dom: &Domain, scope: &Scope) -> Result<Row<Vec<Ho
 /// (`grow`: f′ beyond bounds growing in size, so f′ → ±∞ and f/x with it)
 /// or f/x → 0 (f′ within bands about 0 narrowing to 10⁻¹², so f′ → 0 and
 /// f/x with it): `TailBeyond` claims on f′ at each tail of the far
-/// sequence. `None` when f′'s enclosures don't bear it out.
+/// sequence, or, f′ monotone on the tail, its values at points
+/// ([`slope_monotone`]). `None` when neither bears it out.
 fn slope_evidence(
+    f: &Fun<'_>,
+    right: bool,
+    start: f64,
+    grow: bool,
+) -> Result<Option<Vec<Claim>>, Stop> {
+    if let Some(ev) = slope_bounds(f, right, start, grow)? {
+        return Ok(Some(ev));
+    }
+    slope_monotone(f, right, start, grow)
+}
+
+/// f′ monotone on the tail (f″ strictly signed there), moving away from
+/// its value at each M out along it: for `grow`, those values growing in
+/// size (e^x/x, whose f′ on [M, ∞) is e^x/x − e^x/x², ∞ − ∞); else its
+/// bands between its value at M and its enclosure's bound on [M, ∞) the
+/// other way, the farthest within 10⁻¹² of 0 (√x·ln x).
+fn slope_monotone(
+    f: &Fun<'_>,
+    right: bool,
+    start: f64,
+    grow: bool,
+) -> Result<Option<Vec<Claim>>, Stop> {
+    let side = if right { Tail::Right } else { Tail::Left };
+    let Some((rising, _)) = tail_sign_k(f, 2, right, start)? else {
+        return Ok(None);
+    };
+    let away_up = rising == right;
+    let mut claims = vec![Claim::TailBeyond {
+        side,
+        from: R(if right { start } else { -start }),
+        of: Subject::f(2),
+        c: R(0.0),
+        above: rising,
+    }];
+    // f′ at the point x, valid there.
+    let at = |x: f64| -> Result<Option<DecInterval>, Stop> {
+        let s = f.ser(Interval::point(x), 1)?;
+        Ok((usable(&s, 1) && s[1].iv.is_bounded()).then_some(s[1]))
+    };
+    if grow {
+        let mut pts: Vec<(f64, f64, f64)> = Vec::new();
+        for m in far_points(f, right, start) {
+            let x = if right { m } else { -m };
+            if let Some(v) = at(x)? {
+                pts.push((x, v.lo(), v.hi()));
+            }
+        }
+        let cs: Vec<f64> = pts
+            .iter()
+            .map(|p| if away_up { p.1 } else { p.2 })
+            .collect();
+        let rec = records(&cs, away_up);
+        if !grows_enough(&rec.iter().map(|&i| cs[i]).collect::<Vec<_>>()) {
+            return Ok(None);
+        }
+        let kept: Vec<(f64, f64, f64)> = rec.iter().map(|&i| pts[i]).collect();
+        for &(x, lo, hi) in &thin(&kept, KEEP) {
+            claims.push(Claim::Value {
+                x: XBox::point(x),
+                of: Subject::f(1),
+                lo: R(lo),
+                hi: R(hi),
+            });
+        }
+        return Ok(Some(claims));
+    }
+    // Bands about 0: f′(M) one way, f′'s enclosure on [M, ∞) the other.
+    let mut last = f64::INFINITY;
+    let ms = far_points(f, right, start);
+    for &m in &ms[ms.len().saturating_sub(3)..] {
+        let x = if right { m } else { -m };
+        let Some(p) = at(x)? else { continue };
+        let s = f.ser(tail_box(right, m), 1)?;
+        if !usable(&s, 1) {
+            continue;
+        }
+        let (c, band) = if away_up {
+            let c = s[1].hi().next_up();
+            (c, (p.lo(), c))
+        } else {
+            let c = s[1].lo().next_down();
+            (c, (c, p.hi()))
+        };
+        if !c.is_finite() {
+            continue;
+        }
+        last = band.0.abs().max(band.1.abs());
+        claims.push(Claim::Value {
+            x: XBox::point(x),
+            of: Subject::f(1),
+            lo: R(p.lo()),
+            hi: R(p.hi()),
+        });
+        claims.push(Claim::TailBeyond {
+            side,
+            from: R(x),
+            of: Subject::f(1),
+            c: R(c),
+            above: !away_up,
+        });
+    }
+    Ok((last <= 1e-12).then_some(claims))
+}
+
+/// f″ beyond a nonzero bound c on a tail (a `TailBeyond` on f″): f′ moves
+/// past f′(M) + c·(x − M) out along it, so |f′| → ∞ and |f/x| with it,
+/// and no line is approached (x·|x|, xˣ, 2ˣ). The first tail of the far
+/// sequence where f″'s enclosure is away from 0.
+fn bends_away(f: &Fun<'_>, right: bool, start: f64) -> Result<Option<Claim>, Stop> {
+    let side = if right { Tail::Right } else { Tail::Left };
+    for m in thin(&far_points(f, right, start), 12) {
+        let s = f.ser(tail_box(right, m), 2)?;
+        // s[2] = f″/2: f″ is beyond s[2]'s bound when that is past 0.
+        // Else (xˣ's series: ∞/∞) f″'s own tree, f smooth and continuous
+        // on the tail: f″ beyond half its bound.
+        let d = if usable(&s, 2) && (s[2].lo() > 0.0 || s[2].hi() < 0.0) {
+            s[2]
+        } else if f.smooth_tree
+            && !s[0].is_empty()
+            && s[0].dec >= Dec::Dac
+            && let Some(t) = f.derivs().map(|d| d[1].clone())
+        {
+            let v = f.ser_of(&t, tail_box(right, m), 0)?[0];
+            if v.is_empty() || v.dec < Dec::Dac {
+                continue;
+            }
+            DecInterval {
+                iv: v.iv * Interval::point(0.5),
+                ..v
+            }
+        } else {
+            continue;
+        };
+        let c = if d.lo() > 0.0 {
+            d.lo()
+        } else if d.hi() < 0.0 {
+            d.hi()
+        } else {
+            continue;
+        };
+        return Ok(Some(Claim::TailBeyond {
+            side,
+            from: R(if right { m } else { -m }),
+            of: Subject::f(2),
+            c: R(c),
+            above: c > 0.0,
+        }));
+    }
+    Ok(None)
+}
+
+/// f′ beyond bounds on the tails of the far sequence ([`slope_evidence`]).
+fn slope_bounds(
     f: &Fun<'_>,
     right: bool,
     start: f64,
@@ -2147,9 +2315,10 @@ fn slope_evidence(
     let mut last = f64::INFINITY;
     for m in far_points(f, right, start) {
         let s = f.ser(tail_box(right, m), 1)?;
-        // f′ on the tail: its Taylor coefficient, or where that is ∞/∞
-        // (x^0.9: 0.9·x^0.9/x) its own tree (f smooth and defined there).
-        let d = if usable(&s, 1) && s[1].iv.is_bounded() {
+        // f′ on the tail: its Taylor coefficient (unbounded will do for a
+        // bound one way: 2|x| on [M, ∞)), or where that is ∞/∞ (x^0.9:
+        // 0.9·x^0.9/x) its own tree (f smooth and defined there).
+        let d = if usable(&s, 1) && (grow || s[1].iv.is_bounded()) {
             s[1]
         } else if f.smooth_tree
             && !s[0].is_empty()
@@ -2318,6 +2487,11 @@ pub fn oblique(
         let at = if right { "+∞" } else { "−∞" };
         let over_x = Expr::bin(BinOp::Div, f.expr.clone(), Expr::X);
         let start = scope.w.abs().max(1.0);
+        // f″ away from 0 on the tail: no line, by intervals alone.
+        if let Some(bend) = bends_away(f, right, start)? {
+            c.push(bend);
+            continue;
+        }
         match limit_at(&over_x, dir, &settings) {
             // (Each with f′'s enclosures far out bearing it out.)
             Limit::PosInf | Limit::NegInf => {
