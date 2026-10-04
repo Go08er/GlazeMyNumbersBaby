@@ -35,7 +35,8 @@ calculator modes are unchanged (see 0⁰ below).
 | `x^x`, `(x−1)^x`, `2^x` (exponent varies with x) | graphing engine closed source | defined only for a positive base (a negative base gives a non-real answer, which isn't plotted) | **Chosen:** positive base only, or 0 to a positive power. `x^x` has domain x > 0 and no y-intercept |
 | `(−2)^x` | — | non-real, nothing plotted, even at whole x | **Chosen:** undefined everywhere |
 | `0^0`, so `x^0` at x = 0 | 1 in the calculator modes | not documented for the CE (DOMAIN on the 82/83/85) | **Chosen:** undefined, so `x^0` is 1 with a hole at 0 |
-| `x^3`, `x^(1/3)`, `(−8)^(1/3)` (constant exponent) | real powers | real powers and odd roots | unchanged: real powers and odd roots (`(−8)^(1/3)` = −2) |
+| `x^3`, `x^(1/3)`, `x^(−2/5)`, `(−8)^(1/3)` (exponent written as an integer or a ratio of integers) | real powers | real powers and odd roots | unchanged: real powers and odd roots (`x^(1/5)` is defined on all of ℝ; `(−8)^(1/3)` = −2) |
+| `x^0.2`, `x^a` with a slider at 0.2, `x^(0.5·2)` (any other constant exponent) | — | not established | **Chosen:** the rule for an exponent that varies with x: `x^0.2` has domain [0, ∞), and a slider set to 0.2 behaves the same |
 | `x^0.5`, `x^π` at x < 0 | — | non-real | undefined (unchanged) |
 
 Why: a power whose exponent varies with x is `e^(exponent·ln base)` in real
@@ -44,9 +45,15 @@ analysis. It has no real value for a negative base except at isolated points
 analysis can show faithfully. Treating it as defined there made the analysis
 claim points no curve has (x^x at −1, −2, …). The rule is IEEE 1788's
 `pow` (a positive base, or 0 to a positive power): simple, standard and
-exactly what gets plotted. A constant exponent is different and follows IEEE
-1788's `pown`/`rootn`: `x^3` and `x^(1/3)` are polynomial and root functions,
-defined for negative x, and both calculators graph them on both sides.
+exactly what gets plotted. An exponent written as an integer or a ratio of
+integers (`3`, `−2`, `1/3`, `(2/3)`, `−1/3`; taken in lowest terms) is
+different and follows IEEE 1788's `pown`/`rootn`: `x^3` and `x^(1/3)` are
+polynomial and root functions, defined for negative x, and both calculators
+graph them on both sides. Only that written form gets odd roots (the
+compiler's `syntactic_rational`): any other constant exponent, a decimal, a
+slider or an expression, takes the positive-base rule even when its value
+is a fraction with an odd denominator, so `x^0.2` has domain [0, ∞) while
+`x^(1/5)` is defined everywhere.
 
 0⁰: the limit of x^y at (0, 0) doesn't exist, so a function graphed through
 it has no value there (x⁰ approaches 1 but 0^x approaches 0). The TI reports a
@@ -71,27 +78,33 @@ otherwise the mathematically clearest choice, as below.
 | Period of a constant function | "constant: it has no fundamental period" | every number is a period and none is the least; "not periodic" would be false |
 | Asymptotes of a line (a constant, m·x + b, holes aside) | none | its graph is the line itself, not something it approaches |
 | Features of a periodic function | one family `x₀ + k·P` per feature (families evenly spaced by P/n merged: `kπ`) | Windows' panel shows families; P is the period the simplifier proves |
+| Horizontal asymptotes | one line `y = c` (for both ends) when f approaches the same c at −∞ and +∞, exactly or alike to fifteen digits; otherwise one per end, +∞ first | one asymptote is one line; the original lists +∞ first |
 | A list proven correct but not complete | shown, with a note: "Complete for a ≤ x ≤ b; there may be more outside." or "These are some of them; there may be more." (none found in the window: "Unable to calculate …" with "None for a ≤ x ≤ b; …") | the items are proven; claiming "that's all" isn't |
-| A row not proven | "Unable to calculate …", listed in the too-complex footer, never "none" | "none" is a claim; an unfinished proof (budget, cancellation) is not one |
+| A row not proven | "Unable to calculate …" (parity, periodicity and monotonicity: "… is unknown"), listed in the too-complex footer, never "none" | "none" is a claim; an unfinished proof (budget, cancellation) is not one |
 
 How numbers are written:
 
 * **Exactly**, only when proven exact: a double the certifier pinned, or a
-  closed form (a rational, a + b√c, a rational multiple of π, the special
-  values of sin, cos, tan and their inverses) that exact arithmetic checks
+  closed form (`crates/graphing/src/analysis/exact.rs`: a rational, a + b√c,
+  a rational multiple of π, q·eᵏ and a + b·ln c with q, k, a, b, c rational,
+  and the values of sin, cos, tan and their inverses at multiples of π/6
+  and π/4) that exact arithmetic checks
   against the claim pinning the point down (f, f′ or f″ is 0 there exactly,
   or a side expression takes its level, on a box where that crossing is
   proven unique); excluded families from the trigonometric table; a value
   f takes at an exact point; an exact limit (rational functions, the
   simplifier's limits and periods). A rounded pole or hole is never shown
   as exact.
-* **Otherwise to as many significant digits as the enclosure fixes, up to
-  six and at least three** (every value in it rounds alike to that many),
-  marked "≈" when the text has fewer than six (`≈1`, `≈0.5`, `≈1.414`:
-  trailing zeros trimmed). Accessibility reads "≈" as "approximately". The
-  minimum is one switch, `MIN_SHOWN_DIGITS` in
-  `crates/graphing/src/analysis/certified.rs`: 6 restores the strict rule
-  (all six digits fixed, or the row is unknown).
+* **Otherwise to as many significant digits as the enclosure fixes, from
+  three to six** (every value in it rounds alike to that many; large values
+  too get no more than six), marked "≈" because the value isn't exact
+  (`≈1`, `≈0.5`, `≈1.41421`: trailing zeros trimmed). Accessibility reads
+  "≈" as "approximately". Two items of a row that would read alike get up
+  to fifteen digits, to tell them apart. The minimum is one switch,
+  `MIN_SHOWN_DIGITS` in `crates/graphing/src/analysis/certified.rs`: 6
+  restores the strict rule (all six digits fixed, or the row is unknown).
+  Tracing shares it (`crates/graphing/src/trace.rs`): a traced value with
+  fewer digits fixed reads "unknown".
 * **Not at all** when fewer than three digits are fixed: the row is
   unknown. Two points or lines of a row that still read alike at fifteen
   digits leave it unknown too (they can't be told apart). A value
