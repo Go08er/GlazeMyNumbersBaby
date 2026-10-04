@@ -3,8 +3,17 @@
 //! Everything works on the real number field (like the original graphing
 //! engine's `EvalNumberField::Real`): out-of-domain inputs produce NaN and
 //! poles produce ±∞, which the plotter treats as gaps.
+//!
+//! The elementary functions underneath are CORE-MATH's (`core_math`):
+//! correctly rounded for every double, with no hardware-specific paths, so
+//! a plot, a trace and the analysis panel compute the same bits on every
+//! machine. Functions it lacks (sec, csc, cot, the reciprocal hyperbolics
+//! and their inverses, degree and grad trigonometry) are built from its
+//! functions here.
 
 use std::f64::consts::PI;
+
+use core_math as cm;
 
 /// Angle unit used by trigonometric functions
 /// (`Graphing::EvalTrigUnitMode`). Hyperbolic functions are not affected.
@@ -72,7 +81,7 @@ fn sin_cos_zeros(x: f64, unit: TrigUnit) -> (f64, f64, bool, bool) {
     match unit {
         TrigUnit::Radians => {
             // No double but 0 is a multiple of π/2.
-            let (s, c) = x.sin_cos();
+            let (s, c) = cm::sincos(x);
             (s, c, x == 0.0, false)
         }
         _ => {
@@ -88,6 +97,7 @@ fn sin_cos_zeros(x: f64, unit: TrigUnit) -> (f64, f64, bool, bool) {
             // near 90° (sin 179.99999999999997° is 4.96·10⁻¹⁶, not 5.67).
             let turn = unit.full_turn();
             let quarter = turn / 4.0;
+            let half = turn / 2.0;
             let r = x.abs() % turn;
             // (r ≥ 0: adding ½ and truncating rounds, without a libm call.)
             let qi = (r / quarter + 0.5) as i64;
@@ -102,9 +112,19 @@ fn sin_cos_zeros(x: f64, unit: TrigUnit) -> (f64, f64, bool, bool) {
                 };
                 (s, c, !odd, odd)
             } else {
-                // (An angle so small that its sine underflows gives ±0 here,
-                // with the angle's sign; not an exact zero.)
-                let (sd, cd) = (d * unit.to_radians_factor()).sin_cos();
+                // In half turns (d/half, one rounding; π itself is never
+                // rounded), then sinπ and cosπ, correctly rounded. Below the
+                // normal doubles d/half has lost precision (it is 0 for the
+                // smallest angles), so there in radians instead, the sine
+                // being the angle itself. (An angle so small that its sine
+                // underflows gives ±0, with the angle's sign; not an exact
+                // zero.)
+                let h = d / half;
+                let (sd, cd) = if h.abs() >= f64::MIN_POSITIVE {
+                    (cm::sinpi(h), cm::cospi(h))
+                } else {
+                    cm::sincos(d * unit.to_radians_factor())
+                };
                 // A quarter turn swaps them (and negates the new cosine), a
                 // half turn negates both.
                 let (s, c) = if odd { (cd, -sd) } else { (sd, cd) };
@@ -134,7 +154,7 @@ fn over(a: f64, b: f64, exact_zero: bool) -> f64 {
 #[inline]
 pub fn sin_u(x: f64, unit: TrigUnit) -> f64 {
     if unit == TrigUnit::Radians {
-        x.sin()
+        cm::sin(x)
     } else {
         sin_cos(x, unit).0
     }
@@ -143,7 +163,7 @@ pub fn sin_u(x: f64, unit: TrigUnit) -> f64 {
 #[inline]
 pub fn cos_u(x: f64, unit: TrigUnit) -> f64 {
     if unit == TrigUnit::Radians {
-        x.cos()
+        cm::cos(x)
     } else {
         sin_cos(x, unit).1
     }
@@ -152,7 +172,7 @@ pub fn cos_u(x: f64, unit: TrigUnit) -> f64 {
 #[inline]
 pub fn tan_u(x: f64, unit: TrigUnit) -> f64 {
     if unit == TrigUnit::Radians {
-        x.tan()
+        cm::tan(x)
     } else {
         let (s, c, _, cz) = sin_cos_zeros(x, unit);
         over(s, c, cz)
@@ -172,12 +192,12 @@ pub fn div(a: f64, b: f64) -> f64 {
 /// 1/ln(0) would otherwise be a finite −0.
 #[inline]
 pub fn ln(x: f64) -> f64 {
-    if x == 0.0 { f64::NAN } else { x.ln() }
+    if x == 0.0 { f64::NAN } else { cm::log(x) }
 }
 
 #[inline]
 pub fn log10(x: f64) -> f64 {
-    if x == 0.0 { f64::NAN } else { x.log10() }
+    if x == 0.0 { f64::NAN } else { cm::log10(x) }
 }
 
 /// b^e for an exponent that doesn't depend on x (a constant, or a slider):
@@ -190,7 +210,7 @@ pub fn pow(b: f64, e: f64) -> f64 {
     if b.is_nan() || e.is_nan() || (b == 0.0 && e <= 0.0) {
         f64::NAN
     } else {
-        b.powf(e)
+        cm::pow(b, e)
     }
 }
 
@@ -201,7 +221,7 @@ pub fn pow(b: f64, e: f64) -> f64 {
 #[inline]
 pub fn pow_var(b: f64, e: f64) -> f64 {
     if b > 0.0 {
-        if e.is_nan() { f64::NAN } else { b.powf(e) }
+        if e.is_nan() { f64::NAN } else { cm::pow(b, e) }
     } else if b == 0.0 && e > 0.0 {
         0.0
     } else {
@@ -209,30 +229,75 @@ pub fn pow_var(b: f64, e: f64) -> f64 {
     }
 }
 
-/// [`pow`] for an integer exponent (0⁰ undefined, as for [`pow`]).
+/// [`pow`] for an integer exponent (0⁰ undefined, as for [`pow`]). A square
+/// is one multiplication (correctly rounded) and a cube two (within 2 ulps,
+/// as it always was: the most common power in a plot stays a pair of
+/// multiplications, and the analysis's numbers near a cancelling hole such
+/// as (x³ − 1)/(x − 1)'s stay what they were); any higher power is
+/// CORE-MATH's pow, correctly rounded, where repeated squaring rounded at
+/// every step. A negative power is 1/bⁿ, one rounding more: the compiler
+/// turns a/bⁿ into a·b⁻ⁿ (see `compile::lower`), and this keeps 1/x² bit
+/// for bit the division it was written as, so the analysis's reference
+/// evaluation of the written expression agrees with the compiled one.
 #[inline]
 pub fn pow_int(b: f64, n: i32) -> f64 {
     if b.is_nan() || (b == 0.0 && n <= 0) {
         return f64::NAN;
     }
-    match n {
+    let m = n.unsigned_abs();
+    let p = match m {
+        1 => b,
         2 => b * b,
         3 => b * b * b,
-        _ => b.powi(n),
-    }
+        _ => cm::pow(b, f64::from(m)),
+    };
+    if n < 0 { 1.0 / p } else { p }
 }
 
-/// atanh, undefined (NaN rather than ±∞) at its poles ±1: ±½ ln(1 +
-/// 2|x|/(1 − |x|)). (`f64::atanh` isn't symmetric: near −1 it takes the
-/// logarithm of a number near 0 that it has already rounded, and is off in
-/// the sixth digit at −0.9999999999999999.)
+/// atanh, undefined (NaN rather than ±∞) at its poles ±1.
 #[inline]
 pub fn atanh(x: f64) -> f64 {
-    let a = x.abs();
-    if a == 1.0 {
+    if x.abs() == 1.0 {
         return f64::NAN;
     }
-    (0.5 * (2.0 * a / (1.0 - a)).ln_1p()).copysign(x)
+    cm::atanh(x)
+}
+
+/// The plain hyperbolic functions and their inverses, the exponential and
+/// the cube root: CORE-MATH's, correctly rounded.
+#[inline]
+pub fn sinh(x: f64) -> f64 {
+    cm::sinh(x)
+}
+
+#[inline]
+pub fn cosh(x: f64) -> f64 {
+    cm::cosh(x)
+}
+
+#[inline]
+pub fn tanh(x: f64) -> f64 {
+    cm::tanh(x)
+}
+
+#[inline]
+pub fn asinh(x: f64) -> f64 {
+    cm::asinh(x)
+}
+
+#[inline]
+pub fn acosh(x: f64) -> f64 {
+    cm::acosh(x)
+}
+
+#[inline]
+pub fn exp(x: f64) -> f64 {
+    cm::exp(x)
+}
+
+#[inline]
+pub fn cbrt(x: f64) -> f64 {
+    cm::cbrt(x)
 }
 
 #[inline]
@@ -253,28 +318,38 @@ pub fn csc_u(x: f64, unit: TrigUnit) -> f64 {
     over(1.0, s, sz)
 }
 
+/// An inverse trigonometric result in `unit`: in radians the correctly
+/// rounded `rad`; in degrees or grads `half` (the same angle in half turns,
+/// correctly rounded) times the unit's half turn: one more rounding, and π
+/// never rounded on the way. Below the normal doubles the half turns have
+/// lost precision (asinπ(5·10⁻³²⁴) is 0), so there it is the radians over
+/// the unit's size instead (two roundings).
 #[inline]
-fn from_rad(r: f64, unit: TrigUnit) -> f64 {
+fn angle(unit: TrigUnit, rad: impl FnOnce() -> f64, half: impl FnOnce() -> f64) -> f64 {
     if unit == TrigUnit::Radians {
-        r
+        return rad();
+    }
+    let h = half();
+    if h.abs() >= f64::MIN_POSITIVE || h.is_nan() {
+        h * (unit.full_turn() / 2.0)
     } else {
-        r / unit.to_radians_factor()
+        rad() / unit.to_radians_factor()
     }
 }
 
 #[inline]
 pub fn asin_u(x: f64, unit: TrigUnit) -> f64 {
-    from_rad(x.asin(), unit)
+    angle(unit, || cm::asin(x), || cm::asinpi(x))
 }
 
 #[inline]
 pub fn acos_u(x: f64, unit: TrigUnit) -> f64 {
-    from_rad(x.acos(), unit)
+    angle(unit, || cm::acos(x), || cm::acospi(x))
 }
 
 #[inline]
 pub fn atan_u(x: f64, unit: TrigUnit) -> f64 {
-    from_rad(x.atan(), unit)
+    angle(unit, || cm::atan(x), || cm::atanpi(x))
 }
 
 /// √(x² − 1) for |x| ≥ 1, as √((|x| − 1)(|x| + 1)): near ±1 that keeps the
@@ -290,25 +365,38 @@ fn sqrt_x2_minus_1(x: f64) -> f64 {
 /// and 1/x's rounding would be magnified, as arctan √(x² − 1) instead.
 #[inline]
 pub fn asec_u(x: f64, unit: TrigUnit) -> f64 {
-    let r = if x.abs() >= 2.0 || x.is_nan() {
-        (1.0 / x).acos()
+    if x.abs() >= 2.0 || x.is_nan() {
+        angle(unit, || cm::acos(1.0 / x), || cm::acospi(1.0 / x))
     } else {
-        let t = sqrt_x2_minus_1(x).atan();
-        if x < 0.0 { PI - t } else { t }
-    };
-    from_rad(r, unit)
+        let s = sqrt_x2_minus_1(x);
+        angle(
+            unit,
+            || {
+                let t = cm::atan(s);
+                if x < 0.0 { PI - t } else { t }
+            },
+            || {
+                let t = cm::atanpi(s);
+                if x < 0.0 { 1.0 - t } else { t }
+            },
+        )
+    }
 }
 
 /// arccsc(x) = arcsin(1/x), range [−π/2, π/2]. Near ±1, as
 /// arctan(1/√(x² − 1)) instead (see [`asec_u`]).
 #[inline]
 pub fn acsc_u(x: f64, unit: TrigUnit) -> f64 {
-    let r = if x.abs() >= 2.0 || x.is_nan() {
-        (1.0 / x).asin()
+    if x.abs() >= 2.0 || x.is_nan() {
+        angle(unit, || cm::asin(1.0 / x), || cm::asinpi(1.0 / x))
     } else {
-        (1.0 / sqrt_x2_minus_1(x)).atan().copysign(x)
-    };
-    from_rad(r, unit)
+        let r = 1.0 / sqrt_x2_minus_1(x);
+        angle(
+            unit,
+            || cm::atan(r).copysign(x),
+            || cm::atanpi(r).copysign(x),
+        )
+    }
 }
 
 /// arccot(x), continuous with range (0, π): arctan(1/x) for x > 0 and
@@ -316,16 +404,19 @@ pub fn acsc_u(x: f64, unit: TrigUnit) -> f64 {
 /// large x (arccot(10¹⁵) is 10⁻¹⁵, not 0.888·10⁻¹⁵).
 #[inline]
 pub fn acot_u(x: f64, unit: TrigUnit) -> f64 {
-    let r = if x > 0.0 {
-        (1.0 / x).atan()
+    if x > 0.0 {
+        angle(unit, || cm::atan(1.0 / x), || cm::atanpi(1.0 / x))
     } else if x < 0.0 {
-        PI + (1.0 / x).atan()
+        angle(
+            unit,
+            || PI + cm::atan(1.0 / x),
+            || 1.0 + cm::atanpi(1.0 / x),
+        )
     } else if x == 0.0 {
-        PI / 2.0
+        angle(unit, || PI / 2.0, || 0.5)
     } else {
         f64::NAN
-    };
-    from_rad(r, unit)
+    }
 }
 
 /// sech x = 2e^−|x| / (1 + e^−2|x|): no cosh to overflow, so it stays
@@ -334,9 +425,9 @@ pub fn acot_u(x: f64, unit: TrigUnit) -> f64 {
 pub fn sech(x: f64) -> f64 {
     let a = x.abs();
     if a < 1.0 {
-        1.0 / x.cosh()
+        1.0 / cm::cosh(x)
     } else {
-        let e = (-a).exp();
+        let e = cm::exp(-a);
         2.0 * e / (1.0 + e * e)
     }
 }
@@ -347,10 +438,10 @@ pub fn sech(x: f64) -> f64 {
 pub fn csch(x: f64) -> f64 {
     let a = x.abs();
     if a < 1.0 {
-        div(1.0, x.sinh())
+        div(1.0, cm::sinh(x))
     } else {
         // (e ≤ 1/e here, so 1 − e² doesn't cancel.)
-        let e = (-a).exp();
+        let e = cm::exp(-a);
         (2.0 * e / (1.0 - e * e)).copysign(x)
     }
 }
@@ -358,7 +449,7 @@ pub fn csch(x: f64) -> f64 {
 #[inline]
 pub fn coth(x: f64) -> f64 {
     // Not cosh/sinh: both overflow for |x| ≳ 710 and the ratio becomes NaN.
-    div(1.0, x.tanh())
+    div(1.0, cm::tanh(x))
 }
 
 /// arsech x = ln((1 + √(1 − x²)) / x) on (0, 1], undefined elsewhere:
@@ -370,8 +461,12 @@ pub fn asech(x: f64) -> f64 {
     if !(x > 0.0 && x <= 1.0) {
         return f64::NAN;
     }
-    let ln_x = if x > 0.5 { (x - 1.0).ln_1p() } else { x.ln() };
-    ((1.0 - x) * (1.0 + x)).sqrt().ln_1p() - ln_x
+    let ln_x = if x > 0.5 {
+        cm::log1p(x - 1.0)
+    } else {
+        cm::log(x)
+    };
+    cm::log1p(((1.0 - x) * (1.0 + x)).sqrt()) - ln_x
 }
 
 /// arcsch x = arsinh(1/x), undefined at 0. For |x| ≤ 1 as
@@ -383,9 +478,9 @@ pub fn acsch(x: f64) -> f64 {
     }
     let a = x.abs();
     if a > 1.0 {
-        (1.0 / x).asinh()
+        cm::asinh(1.0 / x)
     } else {
-        ((1.0 + a * a).sqrt().ln_1p() - a.ln()).copysign(x)
+        (cm::log1p((1.0 + a * a).sqrt()) - cm::log(a)).copysign(x)
     }
 }
 
@@ -399,7 +494,7 @@ pub fn acoth(x: f64) -> f64 {
     if a.is_nan() || a <= 1.0 {
         return f64::NAN;
     }
-    (0.5 * (2.0 / (a - 1.0)).ln_1p()).copysign(x)
+    (0.5 * cm::log1p(2.0 / (a - 1.0))).copysign(x)
 }
 
 /// `root(x, n)`: real n-th root. Odd integer n accepts negative x.
@@ -411,9 +506,9 @@ pub fn root(x: f64, n: f64) -> f64 {
     }
     if is_odd_integer(n) {
         if n == 3.0 {
-            return x.cbrt();
+            return cm::cbrt(x);
         }
-        let r = x.abs().powf(1.0 / n);
+        let r = cm::pow(x.abs(), 1.0 / n);
         return if x < 0.0 { -r } else { r };
     }
     if x < 0.0 {
@@ -422,7 +517,7 @@ pub fn root(x: f64, n: f64) -> f64 {
     if n == 2.0 {
         return x.sqrt();
     }
-    x.powf(1.0 / n)
+    cm::pow(x, 1.0 / n)
 }
 
 /// Logarithm of `x` in base `b` (`log(b, x)`).
@@ -432,12 +527,12 @@ pub fn log_base(b: f64, x: f64) -> f64 {
         return f64::NAN;
     }
     if b == 10.0 {
-        return x.log10();
+        return cm::log10(x);
     }
     if b == 2.0 {
-        return x.log2();
+        return cm::log2(x);
     }
-    x.ln() / b.ln()
+    cm::log(x) / cm::log(b)
 }
 
 /// Floored modulo: `a - b·floor(a/b)`; the result has the sign of `b`.
@@ -474,80 +569,23 @@ pub fn round(x: f64) -> f64 {
     x.round()
 }
 
-const LANCZOS_G: f64 = 7.0;
-const LANCZOS: [f64; 9] = [
-    0.999_999_999_999_809_9,
-    676.520_368_121_885_1,
-    -1_259.139_216_722_402_8,
-    771.323_428_777_653_1,
-    -176.615_029_162_140_6,
-    12.507_343_278_686_905,
-    -0.138_571_095_265_720_12,
-    9.984_369_578_019_572e-6,
-    1.505_632_735_149_311_6e-7,
-];
-
-/// The gamma function Γ(x). Poles (0, −1, −2, …) give NaN.
+/// The gamma function Γ(x), correctly rounded (CORE-MATH). Poles (0, −1,
+/// −2, …) give NaN.
 pub fn gamma(x: f64) -> f64 {
-    if x.is_nan() {
+    if x.is_nan() || (x <= 0.0 && x == x.trunc()) {
         return f64::NAN;
     }
-    if x == x.trunc() {
-        if x <= 0.0 {
-            return f64::NAN;
-        }
-        if x <= 171.0 {
-            // Exact for integers (up to f64 rounding).
-            let mut r = 1.0;
-            let mut k = 2.0;
-            while k < x {
-                r *= k;
-                k += 1.0;
-            }
-            return r;
-        }
-        return f64::INFINITY;
-    }
-    if x < 0.5 {
-        // Reflection formula.
-        return PI / (sin_pi(x) * gamma(1.0 - x));
-    }
-    if x > 171.7 {
-        return f64::INFINITY;
-    }
-    let x = x - 1.0;
-    let mut a = LANCZOS[0];
-    let t = x + LANCZOS_G + 0.5;
-    for (i, c) in LANCZOS.iter().enumerate().skip(1) {
-        a += c / (x + i as f64);
-    }
-    // t^(x+½) overflows before Γ does: split it around e^(−t).
-    let half = t.powf(0.5 * (x + 0.5));
-    (2.0 * PI).sqrt() * half * ((-t).exp() * half) * a
+    cm::tgamma(x)
 }
 
-/// sin(πx), exact near the integers: π·x's rounding would otherwise swamp
-/// the small sine near them (Γ near its poles).
-fn sin_pi(x: f64) -> f64 {
-    let n = x.round();
-    let s = (PI * (x - n)).sin();
-    if n % 2.0 == 0.0 { s } else { -s }
-}
-
-/// ln Γ(x) for x > 0, computed in log space so it never overflows (Γ
-/// itself does beyond x ≈ 171.6).
+/// ln Γ(x), correctly rounded (CORE-MATH), where Γ(x) > 0; NaN where it is
+/// negative or at a pole. It never overflows where Γ itself does (beyond
+/// x ≈ 171.6).
 pub(crate) fn ln_gamma(x: f64) -> f64 {
-    if x < 0.5 {
-        // Reflection; sin(πx) > 0 on (0, ½).
-        return (PI / (PI * x).sin()).ln() - ln_gamma(1.0 - x);
+    if x.is_nan() || (x <= 0.0 && (x == x.trunc() || x.floor() % 2.0 != 0.0)) {
+        return f64::NAN;
     }
-    let x = x - 1.0;
-    let mut a = LANCZOS[0];
-    let t = x + LANCZOS_G + 0.5;
-    for (i, c) in LANCZOS.iter().enumerate().skip(1) {
-        a += c / (x + i as f64);
-    }
-    0.5 * (2.0 * PI).ln() + (x + 0.5) * t.ln() - t + a.ln()
+    cm::lgamma(x)
 }
 
 /// `n!` extended to the reals as Γ(n+1).
@@ -615,7 +653,7 @@ pub fn ncr(n: f64, r: f64) -> f64 {
         return direct;
     }
     // Γ(n+1) overflows long before the quotient does.
-    (ln_gamma(n + 1.0) - ln_gamma(r + 1.0) - ln_gamma(n - r + 1.0)).exp()
+    cm::exp(ln_gamma(n + 1.0) - ln_gamma(r + 1.0) - ln_gamma(n - r + 1.0))
 }
 
 /// Number of permutations `nPr(n, r)` (generalised through Γ).
@@ -644,7 +682,7 @@ pub fn npr(n: f64, r: f64) -> f64 {
     if direct.is_finite() || n + 1.0 <= 0.0 || n - r + 1.0 <= 0.0 {
         return direct;
     }
-    (ln_gamma(n + 1.0) - ln_gamma(n - r + 1.0)).exp()
+    cm::exp(ln_gamma(n + 1.0) - ln_gamma(n - r + 1.0))
 }
 
 /// `b^(p/q)` with real-root semantics: a negative base is allowed when q is
@@ -662,15 +700,15 @@ pub fn pow_rational(b: f64, p: i32, q: i32) -> f64 {
         return b.sqrt();
     }
     let a = b.abs();
-    // p/q as a double is rounded (1/3 by 2⁻⁵⁶), and powf magnifies that by
-    // |ln a·p/q|. Up to |ln a·p/q| ≈ 4 that costs at most about 2 ulps and
-    // powf is used (|ln a| judged by a's binary exponent, no logarithm);
-    // beyond, see [`root_power`].
+    // p/q as a double is rounded (1/3 by 2⁻⁵⁶), and pow, though itself
+    // correctly rounded, magnifies that by |ln a·p/q|. Up to |ln a·p/q| ≈ 4
+    // that costs at most about 2 ulps and pow is used (|ln a| judged by a's
+    // binary exponent, no logarithm); beyond, see [`root_power`].
     let t = p as f64 / q as f64;
     let binades = ((a.to_bits() >> 52) & 0x7ff) as i64 - 1023;
     let m = if !(a > 0.0 && a.is_finite()) || (binades.unsigned_abs() as f64 + 1.0) * t.abs() <= 5.7
     {
-        a.powf(t)
+        cm::pow(a, t)
     } else {
         root_power(a, p, q)
     };
@@ -684,7 +722,7 @@ pub fn pow_rational(b: f64, p: i32, q: i32) -> f64 {
 #[inline(never)]
 fn root_power(a: f64, p: i32, q: i32) -> f64 {
     if p.abs() <= 3 && (q == 2 || q == 3) {
-        let r = if q == 2 { a.sqrt() } else { a.cbrt() };
+        let r = if q == 2 { a.sqrt() } else { cm::cbrt(a) };
         return match p {
             1 => r,
             2 => r * r,

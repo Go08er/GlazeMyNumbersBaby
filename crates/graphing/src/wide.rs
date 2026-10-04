@@ -16,6 +16,7 @@
 use crate::compile::{Fn1, Fn2};
 use crate::dd;
 use crate::functions as fns;
+use core_math as cm;
 use std::cmp::Ordering;
 use std::f64::consts::{LN_2, LN_10};
 
@@ -100,7 +101,7 @@ fn other(a: Wide, b: Wide) -> Wide {
 /// ln|v| for v = m·2^e ≠ 0, as a double (±∞ only for an infinite e).
 fn ln_abs(m: f64, e: f64) -> f64 {
     if e.abs() <= NORMAL {
-        ldexp(m.abs(), e).ln()
+        cm::log(ldexp(m.abs(), e))
     } else {
         ln_dd(m, e).hi
     }
@@ -123,7 +124,7 @@ fn ln_dd(m: f64, e: f64) -> dd::Dd {
 fn pow_mag(m: f64, e: f64, t: dd::Dd) -> Wide {
     let p = t.hi * e;
     if !p.is_finite() || p.abs() >= TWO53 || !e.is_finite() || e.abs() > TWO53 {
-        let n = p + t.hi * m.abs().log2();
+        let n = p + t.hi * cm::log2(m.abs());
         return if n.is_nan() {
             Wide::Unknown
         } else if n.is_infinite() || n.abs() > TWO53 {
@@ -318,7 +319,7 @@ impl Wide {
         }
         let v = ldexp(m, e);
         if (-708.0..=709.0).contains(&v) {
-            return Wide::new(v.exp());
+            return Wide::new(cm::exp(v));
         }
         let n = (v / LN_2).round();
         if n.is_nan() || n.abs() >= TWO53 {
@@ -328,7 +329,7 @@ impl Wide {
         }
         let r = (-n).mul_add(LN_2, v);
         let r = (-n).mul_add(LN2_LO, r);
-        Wide::norm(r.exp(), n)
+        Wide::norm(cm::exp(r), n)
     }
 
     /// ln, undefined at 0 (as `functions::ln`) and for negative numbers.
@@ -350,7 +351,7 @@ impl Wide {
     fn log10_inner(self) -> Wide {
         match self {
             Wide::Val(m, e) if m > 0.0 => Wide::new(if e.abs() <= NORMAL {
-                ldexp(m, e).log10()
+                cm::log10(ldexp(m, e))
             } else {
                 ln_abs(m, e) / LN_10
             }),
@@ -389,13 +390,13 @@ impl Wide {
         match self {
             Wide::Val(m, e) => {
                 if m == 0.0 || e.abs() <= NORMAL {
-                    return Wide::new(ldexp(m, e).cbrt());
+                    return Wide::new(cm::cbrt(ldexp(m, e)));
                 }
                 if e.abs() <= TWO53 {
                     let r = e.rem_euclid(3.0);
-                    Wide::norm((m * f64::from(1 << r as i32)).cbrt(), (e - r) / 3.0)
+                    Wide::norm(cm::cbrt(m * f64::from(1 << r as i32)), (e - r) / 3.0)
                 } else {
-                    Wide::norm(m.cbrt(), e / 3.0)
+                    Wide::norm(cm::cbrt(m), e / 3.0)
                 }
             }
             w => w,
@@ -440,7 +441,7 @@ pub(crate) fn pow(b: Wide, t: Wide) -> Wide {
     if tv.is_infinite() {
         // A power beyond a double: |b| = 1 stays 1, anything else leaves
         // the range one way or the other.
-        let lb = be + bm.abs().log2();
+        let lb = be + cm::log2(bm.abs());
         return if lb == 0.0 {
             Wide::ONE
         } else {

@@ -92,7 +92,7 @@ pub mod interval;
 pub mod lexer;
 pub mod parser;
 pub mod plot;
-pub(crate) mod simplify;
+pub mod simplify;
 pub mod strings;
 pub mod trace;
 pub mod variable;

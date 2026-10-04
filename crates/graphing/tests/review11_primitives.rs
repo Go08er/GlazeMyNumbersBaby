@@ -3113,14 +3113,14 @@ fn eval(name: &str, u: TrigUnit, x: f64) -> f64 {
         "asec" => fns::asec_u(x, u),
         "acsc" => fns::acsc_u(x, u),
         "acot" => fns::acot_u(x, u),
-        "sinh" => x.sinh(),
-        "cosh" => x.cosh(),
-        "tanh" => x.tanh(),
+        "sinh" => fns::sinh(x),
+        "cosh" => fns::cosh(x),
+        "tanh" => fns::tanh(x),
         "sech" => fns::sech(x),
         "csch" => fns::csch(x),
         "coth" => fns::coth(x),
-        "asinh" => x.asinh(),
-        "acosh" => x.acosh(),
+        "asinh" => fns::asinh(x),
+        "acosh" => fns::acosh(x),
         "atanh" => fns::atanh(x),
         "asech" => fns::asech(x),
         "acsch" => fns::acsch(x),
@@ -3158,16 +3158,16 @@ fn ulps(got: f64, want: f64) -> f64 {
     (got - want).abs() / u
 }
 
-/// Allowed error, in ulps, by function: libm's own (about 1) and a few
-/// roundings of our own, plus the conversion to degrees or grads where
-/// there is one. Γ's Lanczos sum (g = 7, nine terms) is good to about
-/// 2·10⁻¹³ relative near its overflow (Γ(170.5) is 726 ulps off), far
-/// below the 6 digits anything shows.
+/// Allowed error, in ulps, by function. A function that is one CORE-MATH
+/// call is correctly rounded: none. The rest are built from such calls
+/// with a few roundings of our own (sec, csc, cot, the reciprocal
+/// hyperbolics and their inverses, real-root powers with a rounded p/q),
+/// plus the conversion to degrees or grads where there is one.
 fn allowed(name: &str, u: TrigUnit) -> f64 {
     let conv = if u == Radians { 0.0 } else { 2.0 };
     match name {
-        "gamma" => 1024.0,
-        "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" | "ln" | "log10" => 2.0,
+        "sin" | "cos" | "tan" | "asin" | "acos" | "atan" if u == Radians => 0.0,
+        "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" | "ln" | "log10" | "gamma" => 0.0,
         _ => 4.0 + conv,
     }
 }

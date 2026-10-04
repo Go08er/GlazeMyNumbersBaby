@@ -225,7 +225,7 @@ pub(crate) fn exp(t: Dd) -> (f64, f64) {
     let n = (t.hi / LN_2).round();
     // t − n·ln 2, exactly enough: n·ln 2's hi part is an exact product.
     let r = t.add(LN2.mul_f(n).neg());
-    (r.hi.exp() * (1.0 + r.lo), n)
+    (core_math::exp(r.hi) * (1.0 + r.lo), n)
 }
 
 /// m = r·2^k with ½ ≤ r < 1, for a finite m ≠ 0.

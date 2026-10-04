@@ -134,23 +134,23 @@ impl Fn1 {
             Asec(u) => fns::asec_u(x, u),
             Acsc(u) => fns::acsc_u(x, u),
             Acot(u) => fns::acot_u(x, u),
-            Sinh => x.sinh(),
-            Cosh => x.cosh(),
-            Tanh => x.tanh(),
+            Sinh => fns::sinh(x),
+            Cosh => fns::cosh(x),
+            Tanh => fns::tanh(x),
             Sech => fns::sech(x),
             Csch => fns::csch(x),
             Coth => fns::coth(x),
-            Asinh => x.asinh(),
-            Acosh => x.acosh(),
+            Asinh => fns::asinh(x),
+            Acosh => fns::acosh(x),
             Atanh => fns::atanh(x),
             Asech => fns::asech(x),
             Acsch => fns::acsch(x),
             Acoth => fns::acoth(x),
             Sqrt => x.sqrt(),
-            Cbrt => x.cbrt(),
+            Cbrt => fns::cbrt(x),
             Log10 => fns::log10(x),
             Ln => fns::ln(x),
-            Exp => x.exp(),
+            Exp => fns::exp(x),
             Abs => x.abs(),
             Floor => x.floor(),
             Ceil => x.ceil(),
@@ -754,9 +754,13 @@ impl Program {
                 Op::F1(f) => {
                     let s = &mut stack[sp - 1][..len];
                     match f {
-                        Fn1::Sin(TrigUnit::Radians) => s.iter_mut().for_each(|a| *a = a.sin()),
-                        Fn1::Cos(TrigUnit::Radians) => s.iter_mut().for_each(|a| *a = a.cos()),
-                        Fn1::Exp => s.iter_mut().for_each(|a| *a = a.exp()),
+                        Fn1::Sin(TrigUnit::Radians) => s
+                            .iter_mut()
+                            .for_each(|a| *a = fns::sin_u(*a, TrigUnit::Radians)),
+                        Fn1::Cos(TrigUnit::Radians) => s
+                            .iter_mut()
+                            .for_each(|a| *a = fns::cos_u(*a, TrigUnit::Radians)),
+                        Fn1::Exp => s.iter_mut().for_each(|a| *a = fns::exp(*a)),
                         Fn1::Sqrt => s.iter_mut().for_each(|a| *a = a.sqrt()),
                         Fn1::Abs => s.iter_mut().for_each(|a| *a = a.abs()),
                         Fn1::Ln => s.iter_mut().for_each(|a| *a = fns::ln(*a)),

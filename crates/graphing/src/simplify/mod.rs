@@ -1,6 +1,49 @@
-//! Smart constructors that keep generated expression trees small (constant
-//! folding and identity elimination). Used by the equation solver and the
-//! symbolic differentiator.
+//! Simplification.
+//!
+//! Two layers live here:
+//!
+//! * At the top, smart constructors that keep generated expression trees
+//!   small (constant folding and identity elimination), used by the
+//!   equation solver and the symbolic differentiator.
+//! * The submodules: the certified engine's simplifier. [`simplify`]
+//!   rewrites a function of x by equality saturation ([`egg`]) with a
+//!   vetted rule set ([`rules`]: each rule states where it holds and is
+//!   checked against MPFR in `tests/simplify_rules.rs`), keeping the
+//!   input's domain conditions ([`side`]) apart so that no hole is lost;
+//!   [`prove_parity`] and [`prove_period`] give proofs (never disproofs);
+//!   [`rational`] puts rational functions in lowest terms with exact
+//!   asymptotes; [`limit`] finds limits at ±∞ by dominant terms.
+//!
+//! Domain of a simplified function = where the simplified form is defined
+//! ∩ where all of the original's [`side_conditions`] hold.
+
+pub mod analysis;
+pub mod egraph;
+pub mod lang;
+pub mod limit;
+pub mod period;
+pub mod q;
+pub mod rational;
+pub mod rules;
+pub mod side;
+
+pub use egraph::{Limits, Parity, Settings, Simplified, Stop, prove_parity, simplify};
+pub use lang::{ExactLiterals, Unsupported};
+pub use limit::Limit;
+pub use period::{Period, PiQ};
+pub use q::Q;
+pub use rational::{Dir, RationalForm, rational_form};
+pub use side::{Cond, Jump, side_conditions};
+
+/// Proves a period of `e` in `settings`' angle unit (see [`period`]).
+pub fn prove_period(e: &Expr, settings: &Settings<'_>) -> Option<Period> {
+    period::prove_period(e, settings.unit, settings.literals)
+}
+
+/// The limit of `e` at ±∞ (see [`limit`]).
+pub fn limit_at(e: &Expr, dir: Dir, settings: &Settings<'_>) -> Limit {
+    limit::limit(e, dir, settings.unit, settings.literals, settings.variables)
+}
 
 use crate::ast::{BinOp, Expr, Func};
 
