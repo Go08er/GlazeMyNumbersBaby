@@ -1,9 +1,88 @@
-//! Adaptive sampling of explicit curves with discontinuity detection.
+//! Sampling of explicit curves.
+//!
+//! With the curve's interval form ([`IntervalFn`]) the sampler proves what
+//! it draws. The range is first split into boxes, each classified with
+//! interval arithmetic:
+//!
+//! * **off**: f is defined on the box and its enclosure lies wholly above
+//!   or below the band around the viewport, so nothing there is visible;
+//! * **smooth**: f is defined and continuous with |f″| ≤ M, so chords of
+//!   width w ≤ √(8·tol/M) stay within `tol` (the tolerance, in pixels) of
+//!   the curve, and points that far apart are drawn;
+//! * **steep**: a box at most a pixel wide on which f is continuous and
+//!   stays within its end values (± tol): the chord across it is within a
+//!   pixel of the curve in every direction;
+//! * **peak**: a box at most a pixel wide on which f is continuous but
+//!   leaves its end values (a spike narrower than a pixel, an oscillation):
+//!   its lowest and highest values are found to within `tol` by branch and
+//!   bound, and the stroke runs through them, down that pixel's column;
+//! * **gap**: f is not proven continuous on a box narrower than
+//!   [`FLOOR_PX`]: a pole, a jump, a domain edge or a hole. The curve
+//!   breaks there; where f is proven undefined at one number inside and
+//!   the curve meets itself across, the point is a hole (`holes`).
+//!
+//! Nothing is joined that isn't proven continuous, and no chord strays
+//! more than the tolerance from the curve. Boxes the evaluation budget
+//! (or a cancel) leaves unclassified fall back to the heuristic sampler
+//! below and set `exhausted`.
+//!
+//! Without an interval form (a bare [`Program`], as in this module's
+//! tests) the heuristic sampler is used throughout.
 
-use super::{Cancel, PlotOptions, Polyline, axis_point, signed_area};
+use super::{Cancel, IntervalFn, PlotOptions, Polyline, axis_point, signed_area};
 use crate::compile::{Input, Program};
 use crate::equation::Axis;
+use crate::interval::{Dec, derivs_valid};
 use crate::viewport::Viewport;
+
+/// Width of the first boxes the certified sampler classifies (pixels).
+const CHUNK_PX: f64 = 32.0;
+
+/// Narrowest box examined (pixels): a discontinuity is located to within
+/// this, and a curve ends this close to its domain's edge.
+pub(crate) const FLOOR_PX: f64 = 1e-5;
+
+/// Most interval evaluations spent finding one sub-pixel box's extreme
+/// values (each way).
+const EXTREME_EVALS: usize = 48;
+
+/// Most points per pixel a smooth box may ask for before it is split to
+/// get a tighter curvature bound.
+const MAX_PTS_PER_PX: f64 = 8.0;
+
+/// Each first box may spend this many times its even share of the
+/// budget: a pathological one (an endless oscillation) can't starve the
+/// rest of the curve.
+const CHUNK_SHARE: usize = 4;
+
+/// Budget charged for one interval evaluation of order 0 and of order 2,
+/// in point evaluations (an interval Taylor evaluation costs about that
+/// many plain ones).
+const COST_IV0: usize = 16;
+const COST_IV2: usize = 48;
+
+/// What the certified sampler proved about a box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Kind {
+    /// Defined, enclosure wholly beyond the band: invisible.
+    Off,
+    /// Defined and continuous; chords of this width are within tolerance.
+    Smooth(f64),
+    /// At most a pixel wide, continuous, within its end values.
+    Steep,
+    /// At most a pixel wide and continuous, reaching beyond its end values:
+    /// drawn through its lowest and highest points `(x, y)` (found to
+    /// within the tolerance), a stroke down the pixel's column.
+    Peak((f64, f64), (f64, f64)),
+    /// Continuous, shape not resolved within the budget.
+    Continuous,
+    /// Not proven continuous at the narrowest width.
+    Gap,
+    /// Undefined everywhere on the box.
+    Undefined,
+    /// Not classified (budget or cancel): sampled heuristically.
+    Unresolved,
+}
 
 /// A jump between neighbouring leaf samples larger than this (pixels) is
 /// examined to decide between "steep but continuous" and "discontinuous".
@@ -11,6 +90,16 @@ const JUMP_PX: f64 = 2.0;
 
 pub(crate) struct ExplicitSampler<'a> {
     f: &'a Program,
+    iv: Option<&'a IntervalFn>,
+    /// Proven holes `(t, d)`: f undefined at t, the curve meeting itself
+    /// across it at d.
+    holes: Vec<(f64, f64)>,
+    /// The evaluation count past which the box being classified is left
+    /// unresolved (its first box's share of the budget).
+    chunk_limit: usize,
+    /// Some detail wasn't resolved (a box over its share of the budget, a
+    /// continuous box finer than [`CONTINUOUS_FLOOR_PX`]).
+    partial: bool,
     axis: Axis,
     t0: f64,
     t1: f64,
@@ -56,6 +145,10 @@ impl<'a> ExplicitSampler<'a> {
         let h = d1 - d0;
         ExplicitSampler {
             f,
+            iv: None,
+            holes: Vec::new(),
+            chunk_limit: usize::MAX,
+            partial: false,
             axis,
             t0,
             t1,
@@ -70,6 +163,20 @@ impl<'a> ExplicitSampler<'a> {
             pieces: Vec::new(),
             cur: Vec::new(),
         }
+    }
+
+    /// Proves joins and gaps with `iv` (f's interval form).
+    pub(crate) fn set_interval(&mut self, iv: Option<&'a IntervalFn>) {
+        self.iv = iv;
+    }
+
+    /// Proven holes, as points.
+    pub(crate) fn hole_points(&self) -> Vec<super::Point> {
+        self.holes
+            .iter()
+            .filter(|&&(_, d)| d >= self.band_lo && d <= self.band_hi)
+            .map(|&(t, d)| axis_point(self.axis, t, d))
+            .collect()
     }
 
     /// Stops refining (as if out of budget) once `cancel` is set.
@@ -89,7 +196,7 @@ impl<'a> ExplicitSampler<'a> {
     }
 
     pub(crate) fn exhausted(&self) -> bool {
-        self.exhausted
+        self.exhausted || self.partial
     }
 
     /// Raw continuous pieces `(t, d)` (unclipped).
@@ -99,6 +206,10 @@ impl<'a> ExplicitSampler<'a> {
     }
 
     pub(crate) fn run(&mut self) {
+        if let Some(iv) = self.iv {
+            self.run_certified(iv);
+            return;
+        }
         let h = self.opts.seed_px.max(0.05) / self.t_px;
         if !(h.is_finite() && h > 0.0) {
             return;
@@ -115,6 +226,307 @@ impl<'a> ExplicitSampler<'a> {
             self.segment(ts[i], fs[i], ts[i + 1], fs[i + 1], 0);
         }
         self.break_piece();
+    }
+
+    /// Charges `n` evaluations to the budget; false once it is spent (or
+    /// the caller cancelled).
+    fn charge(&mut self, n: usize) -> bool {
+        self.evals += n;
+        if self.evals >= self.opts.max_evals || self.cancel.is_set() {
+            self.exhausted = true;
+        }
+        !self.exhausted && self.evals < self.chunk_limit
+    }
+
+    fn run_certified(&mut self, iv: &IntervalFn) {
+        let h = self.opts.seed_px.max(0.05) / self.t_px;
+        if !(h.is_finite() && h > 0.0) {
+            return;
+        }
+        // One seed spacing past each edge, as the heuristic sampler does.
+        let (lo, hi) = (self.t0 - h, self.t1 + h);
+        let chunk = CHUNK_PX / self.t_px;
+        let chunks = (((hi - lo) / chunk).ceil() as usize).max(1);
+        let share = self.opts.max_evals / chunks * CHUNK_SHARE;
+        let mut boxes: Vec<(f64, f64, Kind)> = Vec::new();
+        let mut t = lo;
+        while t < hi {
+            let e = (t + chunk).min(hi);
+            let e = if e <= t { hi } else { e };
+            self.chunk_limit = self.evals.saturating_add(share);
+            self.classify(iv, t, e, &mut boxes);
+            if self.evals >= self.chunk_limit {
+                self.partial = true;
+            }
+            t = e;
+        }
+        self.chunk_limit = usize::MAX;
+        self.draw(iv, &boxes, h);
+    }
+
+    /// The narrowest box worth splitting around t (in t units).
+    fn floor_at(&self, t: f64) -> f64 {
+        (FLOOR_PX / self.t_px).max(4.0 * ulp(t))
+    }
+
+    /// Classifies [lo, hi], splitting it until each part is decided.
+    fn classify(&mut self, iv: &IntervalFn, lo: f64, hi: f64, out: &mut Vec<(f64, f64, Kind)>) {
+        if !self.charge(COST_IV0) {
+            out.push((lo, hi, Kind::Unresolved));
+            return;
+        }
+        let f0 = iv.enclose(lo, hi);
+        let width_px = (hi - lo) * self.t_px;
+        let narrowest = (hi - lo) <= self.floor_at(lo.abs().max(hi.abs()));
+        if f0.is_empty() {
+            out.push((lo, hi, Kind::Undefined));
+            return;
+        }
+        if f0.dec >= Dec::Def && (f0.lo() > self.band_hi || f0.hi() < self.band_lo) {
+            out.push((lo, hi, Kind::Off));
+            return;
+        }
+        if f0.dec < Dec::Dac {
+            // Not proven continuous (or defined) throughout.
+            if narrowest || !self.split(iv, lo, hi, out) {
+                out.push((lo, hi, Kind::Gap));
+            }
+            return;
+        }
+        // Continuous. A curvature bound gives the chord width that keeps
+        // the drawn line within tolerance.
+        let tol_d = self.opts.tolerance_px / self.d_px;
+        if self.charge(COST_IV2) {
+            let s = iv.series(lo, hi, 2);
+            if derivs_valid(&s, 2) {
+                let (_, m2) = s[2].iv.mig_mag();
+                let d2 = 2.0 * m2;
+                let step = if d2 > 0.0 {
+                    (8.0 * tol_d / d2).sqrt()
+                } else {
+                    f64::INFINITY
+                };
+                if step > 0.0 && (hi - lo) / step <= (width_px * MAX_PTS_PER_PX).max(1.0) {
+                    out.push((lo, hi, Kind::Smooth(step)));
+                    return;
+                }
+            }
+        }
+        if width_px <= 1.0 {
+            if self.within_ends(iv, lo, hi, f0.lo(), f0.hi(), tol_d) {
+                out.push((lo, hi, Kind::Steep));
+                return;
+            }
+            let hi_pt = self.extreme(iv, lo, hi, tol_d, 1.0);
+            let lo_pt = self.extreme(iv, lo, hi, tol_d, -1.0);
+            match (lo_pt, hi_pt) {
+                (Some(a), Some(b)) => out.push((lo, hi, Kind::Peak(a, b))),
+                _ => out.push((lo, hi, Kind::Continuous)),
+            }
+            return;
+        }
+        if narrowest || self.evals >= self.chunk_limit || !self.split(iv, lo, hi, out) {
+            out.push((lo, hi, Kind::Continuous));
+        }
+    }
+
+    /// Classifies the two halves of [lo, hi]; false if it can't be split.
+    fn split(
+        &mut self,
+        iv: &IntervalFn,
+        lo: f64,
+        hi: f64,
+        out: &mut Vec<(f64, f64, Kind)>,
+    ) -> bool {
+        let m = 0.5 * (lo + hi);
+        if m <= lo || m >= hi {
+            return false;
+        }
+        self.classify(iv, lo, m, out);
+        self.classify(iv, m, hi, out);
+        true
+    }
+
+    /// The point of [lo, hi] where `sign`·f is largest, to within `tol`:
+    /// branch and bound on the enclosures, the best point value so far
+    /// pruning boxes that can't beat it by `tol`. None if the budget runs
+    /// out first.
+    fn extreme(
+        &mut self,
+        iv: &IntervalFn,
+        lo: f64,
+        hi: f64,
+        tol: f64,
+        sign: f64,
+    ) -> Option<(f64, f64)> {
+        let mut best: Option<(f64, f64)> = None;
+        let offer = |x: f64, best: &mut Option<(f64, f64)>| {
+            let y = self.f.eval(x, 0.0);
+            if y.is_finite() && best.is_none_or(|(_, b)| sign * y > sign * b) {
+                *best = Some((x, y));
+            }
+        };
+        for x in [lo, 0.5 * (lo + hi), hi] {
+            offer(x, &mut best);
+        }
+        let mut stack = vec![(lo, hi)];
+        let mut spent = 0;
+        while let Some((a, b)) = stack.pop() {
+            spent += 1;
+            if spent > EXTREME_EVALS || !self.charge(COST_IV0) {
+                return None;
+            }
+            let e = iv.enclose(a, b);
+            if e.is_empty() {
+                continue;
+            }
+            let bound = if sign > 0.0 { e.hi() } else { -e.lo() };
+            let (_, bv) = best?;
+            if bound <= sign * bv + tol {
+                continue;
+            }
+            let m = 0.5 * (a + b);
+            if m <= a || m >= b {
+                continue;
+            }
+            offer(m, &mut best);
+            stack.push((a, m));
+            stack.push((m, b));
+        }
+        best
+    }
+
+    /// Whether the enclosure [flo, fhi] of f over [lo, hi] lies within the
+    /// hull of f's values at the ends, widened by tol.
+    fn within_ends(
+        &mut self,
+        iv: &IntervalFn,
+        lo: f64,
+        hi: f64,
+        flo: f64,
+        fhi: f64,
+        tol: f64,
+    ) -> bool {
+        if !self.charge(2 * COST_IV0) {
+            return false;
+        }
+        let a = iv.enclose(lo, lo);
+        let b = iv.enclose(hi, hi);
+        if a.is_empty() || b.is_empty() {
+            return false;
+        }
+        flo >= a.lo().min(b.lo()) - tol && fhi <= a.hi().max(b.hi()) + tol
+    }
+
+    /// Draws the classified boxes, in order.
+    fn draw(&mut self, iv: &IntervalFn, boxes: &[(f64, f64, Kind)], h: f64) {
+        let mut i = 0;
+        while i < boxes.len() {
+            let (lo, hi, kind) = boxes[i];
+            match kind {
+                Kind::Off => {
+                    let (fa, fb) = (self.off_value(lo), self.off_value(hi));
+                    self.push(lo, fa);
+                    self.push(hi, fb);
+                }
+                Kind::Smooth(step) => {
+                    let step = step.min(h);
+                    let n = (((hi - lo) / step).ceil() as usize).clamp(1, 1 << 20);
+                    let ts: Vec<f64> = (0..=n)
+                        .map(|k| {
+                            if k == n {
+                                hi
+                            } else {
+                                lo + (hi - lo) * k as f64 / n as f64
+                            }
+                        })
+                        .collect();
+                    let mut fs = vec![0.0; ts.len()];
+                    self.f
+                        .eval_batch(Input::Slice(&ts), Input::Scalar(0.0), &mut fs);
+                    self.evals += ts.len();
+                    for (&t, &d) in ts.iter().zip(&fs) {
+                        if d.is_finite() {
+                            self.push(t, d);
+                        } else {
+                            self.break_piece();
+                        }
+                    }
+                }
+                Kind::Peak(a, b) => {
+                    let (p, q) = if a.0 <= b.0 { (a, b) } else { (b, a) };
+                    for t in [lo, hi] {
+                        if !self.f.eval(t, 0.0).is_finite() {
+                            self.break_piece();
+                        }
+                    }
+                    let (fa, fb) = (self.f.eval(lo, 0.0), self.f.eval(hi, 0.0));
+                    for (t, d) in [(lo, fa), p, q, (hi, fb)] {
+                        if d.is_finite() {
+                            self.push(t, d);
+                        }
+                    }
+                }
+                Kind::Steep | Kind::Continuous => {
+                    for t in [lo, hi] {
+                        let d = self.f.eval(t, 0.0);
+                        if d.is_finite() {
+                            self.push(t, d);
+                        } else {
+                            self.break_piece();
+                        }
+                    }
+                    if kind == Kind::Continuous {
+                        // Joined (it is continuous), but its shape between
+                        // the ends isn't resolved.
+                        self.partial = true;
+                    }
+                }
+                Kind::Gap | Kind::Undefined => {
+                    // A run of gaps is one break; a hole if f is proven
+                    // undefined at a number inside and meets itself across.
+                    let mut j = i;
+                    while j + 1 < boxes.len()
+                        && matches!(boxes[j + 1].2, Kind::Gap | Kind::Undefined)
+                    {
+                        j += 1;
+                    }
+                    let (g0, g1) = (lo, boxes[j].1);
+                    let before = self.cur.last().copied();
+                    self.break_piece();
+                    let after = self.f.eval(g1, 0.0);
+                    if let Some((bt, bd)) = before
+                        && bt == g0
+                        && after.is_finite()
+                        && (after - bd).abs() * self.d_px <= self.opts.tolerance_px
+                        && let Some(p) = undefined_inside(iv, g0, g1)
+                    {
+                        self.holes.push((p, 0.5 * (bd + after)));
+                    }
+                    i = j;
+                }
+                Kind::Unresolved => {
+                    let (fa, fb) = (self.f.eval(lo, 0.0), self.f.eval(hi, 0.0));
+                    self.segment(lo, fa, hi, fb, 0);
+                }
+            }
+            i += 1;
+        }
+        self.break_piece();
+    }
+
+    /// f's value at t on an off box, made finite (beyond the band) where it
+    /// overflows: the stroke is clipped and fills clamp to the band.
+    fn off_value(&self, t: f64) -> f64 {
+        let d = self.f.eval(t, 0.0);
+        let h = self.band_hi - self.band_lo;
+        if d.is_finite() {
+            d
+        } else if d > 0.0 {
+            self.band_hi + h
+        } else {
+            self.band_lo - h
+        }
     }
 
     fn push(&mut self, t: f64, d: f64) {
@@ -283,7 +695,16 @@ impl<'a> ExplicitSampler<'a> {
                 }
                 continue;
             }
-            let lerp = |s: f64| axis_point(self.axis, pt + s * (t - pt), pd + s * (d - pd));
+            // From the nearer end: next to a pole one end can be 10³⁰ and
+            // pd + s·(d − pd) would cancel to nothing.
+            let lerp = |s: f64| {
+                if s <= 0.5 {
+                    axis_point(self.axis, pt + s * (t - pt), pd + s * (d - pd))
+                } else {
+                    let r = 1.0 - s;
+                    axis_point(self.axis, t - r * (t - pt), d - r * (d - pd))
+                }
+            };
             if cur.is_empty() {
                 cur.push(lerp(s0));
             }
@@ -339,6 +760,38 @@ impl<'a> ExplicitSampler<'a> {
         }
         out
     }
+}
+
+/// The spacing of doubles at |t|.
+fn ulp(t: f64) -> f64 {
+    let a = t.abs();
+    if a.is_finite() {
+        f64::from_bits(a.to_bits() + 1) - a
+    } else {
+        f64::MAX
+    }
+}
+
+/// A number in [g0, g1] at which f is proven undefined: the shortest
+/// decimal in the box (where a removable hole like x/x's sits), 0, then
+/// the box's middle and ends.
+fn undefined_inside(iv: &IntervalFn, g0: f64, g1: f64) -> Option<f64> {
+    let mut candidates = Vec::new();
+    let m = 0.5 * (g0 + g1);
+    for digits in 0..17 {
+        let c: f64 = format!("{m:.digits$e}").parse().unwrap_or(m);
+        if c >= g0 && c <= g1 {
+            candidates.push(c);
+            break;
+        }
+    }
+    if g0 <= 0.0 && g1 >= 0.0 {
+        candidates.push(0.0);
+    }
+    candidates.extend([m, g0, g1]);
+    candidates
+        .into_iter()
+        .find(|&p| iv.enclose(p, p).is_empty())
 }
 
 #[cfg(test)]

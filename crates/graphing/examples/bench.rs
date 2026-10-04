@@ -48,6 +48,17 @@ fn main() {
             "undefined-heavy implicit",
             &["x^y = 2", "sqrt(x*y) = 1", "ln(x*y) < 1", "sin(x*y) = 0.5"],
         ),
+        (
+            "jumps, poles, holes, oscillation",
+            &[
+                "y = floor(x)",
+                "y = sin(1/x)",
+                "y = (x^2-1)/(x-1)",
+                "y = 1/(x+3)^2",
+                "y = arctan(1000000x)",
+                "y = x^(1/3)",
+            ],
+        ),
     ];
     for (name, eqs) in sets {
         let mut g = Graph::new();

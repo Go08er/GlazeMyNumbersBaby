@@ -13,7 +13,9 @@ use crate::compile::{CompileOptions, Program};
 use crate::error::{EquationError, ErrorCode, SyntaxErrorCode};
 use crate::lexer::{ParseOptions, RelOp};
 use crate::parser::{ParsedInput, parse_input};
+use crate::plot::IntervalFn;
 use crate::simplify::{self, as_num, linear_in};
+use std::sync::Arc;
 
 /// Line style of a curve (`GraphControl::EquationLineStyle`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -235,6 +237,12 @@ impl Equation {
             }
             e
         };
+        // The literals as typed, for interval evaluation (a literal that
+        // can't be read back is enclosed by its neighbours instead).
+        let literals = || {
+            crate::interval::Literals::of(&self.text, self.parse)
+                .unwrap_or_else(|_| crate::interval::Literals::none())
+        };
         let form = match &self.form {
             Form::Explicit { axis, f } => {
                 // For x = g(y) the program takes y through its "x" input.
@@ -246,6 +254,7 @@ impl Equation {
                 CompiledForm::Explicit {
                     axis: *axis,
                     f: Program::compile(&expr, opts).map_err(fix)?,
+                    iv: Some(Arc::new(IntervalFn::new(expr, literals(), opts))),
                 }
             }
             Form::Implicit { f } => CompiledForm::Implicit {
@@ -271,6 +280,7 @@ impl Equation {
                         Some(CompiledBound {
                             axis: b.axis,
                             f: Program::compile(&expr, opts).map_err(fix)?,
+                            iv: Some(Arc::new(IntervalFn::new(expr, literals(), opts))),
                             greater: b.greater,
                         })
                     }
@@ -302,6 +312,8 @@ impl Equation {
 pub(crate) struct CompiledBound {
     pub axis: Axis,
     pub f: Program,
+    /// `f` for interval evaluation (proven joins and gaps).
+    pub iv: Option<Arc<IntervalFn>>,
     pub greater: bool,
 }
 
@@ -311,6 +323,9 @@ pub(crate) enum CompiledForm {
     Explicit {
         axis: Axis,
         f: Program,
+        /// `f` for interval evaluation (proven joins and gaps, traced
+        /// values' digits).
+        iv: Option<Arc<IntervalFn>>,
     },
     Implicit {
         f: Program,
@@ -347,8 +362,12 @@ impl CompiledEquation {
     /// field for inequalities).
     pub fn field(&self, x: f64, y: f64) -> f64 {
         match &self.form {
-            CompiledForm::Explicit { axis: Axis::X, f } => y - f.eval(x, 0.0),
-            CompiledForm::Explicit { axis: Axis::Y, f } => x - f.eval(y, 0.0),
+            CompiledForm::Explicit {
+                axis: Axis::X, f, ..
+            } => y - f.eval(x, 0.0),
+            CompiledForm::Explicit {
+                axis: Axis::Y, f, ..
+            } => x - f.eval(y, 0.0),
             CompiledForm::Implicit { f } => f.eval(x, y),
             CompiledForm::Inequality { field, .. } => field.eval(x, y),
         }

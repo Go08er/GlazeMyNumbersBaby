@@ -191,7 +191,7 @@ pub fn nearest_point(
         };
     for (index, (eq, plot)) in curves.iter().enumerate() {
         match &eq.form {
-            CompiledForm::Explicit { axis, f } => {
+            CompiledForm::Explicit { axis, f, .. } => {
                 let (cx, cy) = vp.to_world(px, py);
                 let point = |t: f64, d: f64| match axis {
                     Axis::X => (t, d),
