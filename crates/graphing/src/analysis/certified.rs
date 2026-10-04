@@ -1997,7 +1997,17 @@ pub(super) fn features(
         Some(v) => {
             let mut lines: Vec<(Num, Num, AsymptoteSide)> = Vec::new();
             for o in v.iter().rev() {
-                let exact = cx.oblique_exact(o.side, o.m, o.b);
+                // (A proven enclosure that is one double is that value
+                // exactly: a line from f's expansion, y = x + 1.)
+                let point = |e: Enc| {
+                    e.is_point()
+                        .then(|| crate::simplify::Q::from_f64(e.lo.0))
+                        .flatten()
+                        .map(Ex::q)
+                };
+                let exact = cx
+                    .oblique_exact(o.side, o.m, o.b)
+                    .or_else(|| Some((point(o.m)?, point(o.b)?)));
                 let (m, b) = (
                     Num {
                         exact: exact.map(|e| e.0),

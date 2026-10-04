@@ -120,16 +120,16 @@ fn a_tiny_constant_is_not_zero() {
 /// converges to 0, from above, and never reaches it.
 #[test]
 fn slow_power_tails_tend_to_zero() {
-    // A limit is shown only where f's own enclosures far out bear it out
-    // (bands settling on it by 10³⁰⁰): x^−0.1 and x^−0.01 do; slower tails
-    // (x^−0.001 is still 0.5 at 10³⁰⁰) leave the range and the asymptote
-    // unknown. Never divergence, never a wrong limit.
+    // A limit is shown only where it is proven: x^−0.1 and x^−0.01 by f's
+    // own enclosures far out (bands settling on it by 10³⁰⁰), the slower
+    // tails (x^−0.001 is still 0.5 at 10³⁰⁰) by the tree's structure
+    // (u^−p → 0 for p > 0). Never divergence, never a wrong limit.
     for (p, settles) in [
         ("0.1", true),
         ("0.01", true),
-        ("0.001", false),
-        ("0.0001", false),
-        ("0.00001", false),
+        ("0.001", true),
+        ("0.0001", true),
+        ("0.00001", true),
     ] {
         let src = format!("y=x^-{p}");
         let r = k(&src);
@@ -428,12 +428,16 @@ fn analysis_keeps_holes_from_powers_and_poles() {
 // R8-L-01
 
 /// A feature determined only in part (the asymptote y = 1/ln 2 on the left;
-/// the right tail creeps to 0 too slowly to be pinned down) keeps none of
-/// its values: they'd read as all there is. The row says it couldn't be
-/// calculated, and the data agree.
+/// the right tail undecided) keeps none of its values: they'd read as all
+/// there is. The row says it couldn't be calculated, and the data agree.
 #[test]
 fn a_partly_determined_feature_is_unknown() {
+    // (A right tail creeping to 0, 1/ln(2 + x), is now proven by the tree's
+    // structure: both lines.)
     let r = k("y=1/ln(2+max(x,0))+1/(1+x^2)");
+    assert_eq!(r.too_complex_features & flags::HORIZONTAL_ASYMPTOTES, 0);
+    assert_eq!(r.data.horizontal_asymptotes.len(), 2);
+    let r = k("y=1/ln(2+max(x,0))+max(x,0)*sin(x)");
     assert_ne!(r.too_complex_features & flags::HORIZONTAL_ASYMPTOTES, 0);
     assert!(r.data.horizontal_asymptotes.is_empty());
     let items = r.items();

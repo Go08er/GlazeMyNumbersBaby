@@ -355,9 +355,13 @@ fn roots_and_absolute_values() {
     let r = k("x^(1/3)");
     assert_eq!(r.domain, "x ∈ ℝ");
     assert!(r.too_complex_features & flags::INFLECTION_POINTS != 0);
-    // The simplifier finds no limit of √(x² + 1)/x: unknown.
+    // √(x² + 1) − |x| = 1/(√(x² + 1) + |x|): its expansion in 1/x gives
+    // the lines, the rest enclosed on each tail.
     let r = k("sqrt(x^2+1)");
-    assert!(r.too_complex_features & flags::OBLIQUE_ASYMPTOTES != 0);
+    assert_eq!(r.too_complex_features & flags::OBLIQUE_ASYMPTOTES, 0);
+    let mut lines = r.oblique_asymptotes.clone();
+    lines.sort();
+    assert_eq!(lines, ["y = x", "y = −x"]);
     assert_eq!(r.minima, ["(0, 1)"]);
     assert_eq!(r.range, "y ∈ [1, ∞)");
 }

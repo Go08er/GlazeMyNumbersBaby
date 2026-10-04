@@ -250,11 +250,12 @@ fn genuine_holes_and_controls_are_unchanged() {
     assert_ne!(r.range, "y ∈ {0}");
     assert_ne!(r.x_intercept, "x ∈ ℝ");
     assert_eq!(at("1/(1+e^1000)", 3.0), 0.0);
-    // Its range (0, 1) ∪ (1, ∞) reaches the pole's side only as a limit
-    // the certifier doesn't prove: unknown.
+    // Its range (0, 1) ∪ (1, ∞) reaches the pole's side only as limits,
+    // e^(−1/x) → 0 from x → 0⁺ and → ∞ from 0⁻, proven by the tree's
+    // structure.
     let r = k("y=1/exp(1/x)");
     assert_eq!(r.domain, "x ∈ ℝ \\ {0}");
-    assert!(r.range.is_empty() && !known(&r, flags::RANGE));
+    assert_eq!(r.range, "y ∈ (0, 1) ∪ (1, ∞)");
     // The one-sided pole of e^(−1/x) at 0 is not proven: unknown.
     let r = k("y=exp(1/x)^-1");
     assert_eq!(r.domain, "x ∈ ℝ \\ {0}");
