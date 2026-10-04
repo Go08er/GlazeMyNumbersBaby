@@ -502,9 +502,10 @@ impl Ex {
     /// Whether lo ≤ self ≤ hi, exactly (`None` if it can't be told).
     #[allow(clippy::float_cmp)]
     pub fn within(self, lo: f64, hi: f64) -> Option<bool> {
-        if let Some(v) = self.enclosure() {
+        if matches!(self.norm(), Ex::Exp { .. } | Ex::Ln { .. }) {
             // q·eᵏ and a + b·ln c are never a double: inside or out, once
-            // the enclosure tells.
+            // the enclosure tells (none when it underflows or overflows).
+            let v = self.enclosure()?;
             if lo <= v.lo() && v.hi() <= hi {
                 return Some(true);
             }
@@ -587,7 +588,8 @@ impl Ex {
     }
 
     /// An enclosure of q·eᵏ or a + b·ln c (`None` for the other forms, or
-    /// if it overflows).
+    /// one that overflows or reaches 0, which neither is: a double can't
+    /// stand for it).
     fn enclosure(self) -> Option<Interval> {
         let d = |q: Q| DecInterval::new(q.interval());
         let v = match self.norm() {
@@ -595,7 +597,7 @@ impl Ex {
             Ex::Ln { a, b, c } => elem::add(&d(a), &elem::mul(&d(b), &elem::ln(&d(c)))),
             _ => return None,
         };
-        (!v.is_empty() && v.iv.is_bounded()).then_some(v.iv)
+        (!v.is_empty() && v.iv.is_bounded() && (v.lo() > 0.0 || v.hi() < 0.0)).then_some(v.iv)
     }
 
     /// The angle in turns of π (`self` = t·π in radians), in `unit`.
@@ -1176,7 +1178,7 @@ fn exp_text(q: Q, k: Q) -> Option<String> {
     let ka = k.abs()?;
     let pw = if ka == Q::ONE {
         "e".to_string()
-    } else if ka.is_int() && ka.numer() <= 99 {
+    } else if ka.is_int() && ka.numer() <= 999 {
         format!("e{}", superscript(i32::try_from(ka.numer()).ok()?))
     } else if Some(ka) == Q::new(1, 2) {
         "√e".to_string()
@@ -1380,6 +1382,11 @@ mod tests {
         assert_eq!(inv_e.within(0.3679, 0.37), Some(false));
         assert_eq!(e.sub(Ex::Pi(Q::ONE)), None);
         assert_eq!(e.sub(e.mul(e).unwrap()), None);
+        // e⁻¹⁰⁰⁰ is no double: never inside an enclosure, however near 0.
+        let tiny = Ex::int(1).exp_times(Q::int(-1000)).unwrap();
+        assert_eq!(tiny.within(0.0, 1e-300), None);
+        assert!(!tiny.agrees(0.0, 1e-300));
+        assert_eq!(tiny.sign(), Some(1));
     }
 
     #[test]
