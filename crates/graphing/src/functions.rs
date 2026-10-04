@@ -89,11 +89,12 @@ fn sin_cos_zeros(x: f64, unit: TrigUnit) -> (f64, f64, bool, bool) {
             let turn = unit.full_turn();
             let quarter = turn / 4.0;
             let r = x.abs() % turn;
-            let q = (r / quarter).round();
-            let d = r - q * quarter;
-            let odd = q as i64 % 2 == 1;
+            // (r ≥ 0: adding ½ and truncating rounds, without a libm call.)
+            let qi = (r / quarter + 0.5) as i64;
+            let d = r - qi as f64 * quarter;
+            let odd = qi % 2 == 1;
             let (s, c, sz, cz) = if d == 0.0 {
-                let (s, c) = match q as i64 % 4 {
+                let (s, c) = match qi % 4 {
                     0 => (0.0, 1.0),
                     1 => (1.0, 0.0),
                     2 => (0.0, -1.0),
@@ -104,12 +105,10 @@ fn sin_cos_zeros(x: f64, unit: TrigUnit) -> (f64, f64, bool, bool) {
                 // (An angle so small that its sine underflows gives ±0 here,
                 // with the angle's sign; not an exact zero.)
                 let (sd, cd) = (d * unit.to_radians_factor()).sin_cos();
-                let (s, c) = match q as i64 % 4 {
-                    0 => (sd, cd),
-                    1 => (cd, -sd),
-                    2 => (-sd, -cd),
-                    _ => (-cd, sd),
-                };
+                // A quarter turn swaps them (and negates the new cosine), a
+                // half turn negates both.
+                let (s, c) = if odd { (cd, -sd) } else { (sd, cd) };
+                let (s, c) = if qi & 2 != 0 { (-s, -c) } else { (s, c) };
                 (s, c, false, false)
             };
             if x < 0.0 {
@@ -333,8 +332,9 @@ pub fn csch(x: f64) -> f64 {
     if a < 1.0 {
         div(1.0, x.sinh())
     } else {
+        // (e ≤ 1/e here, so 1 − e² doesn't cancel.)
         let e = (-a).exp();
-        (2.0 * e / -(-2.0 * a).exp_m1()).copysign(x)
+        (2.0 * e / (1.0 - e * e)).copysign(x)
     }
 }
 
@@ -637,32 +637,46 @@ pub fn pow_rational(b: f64, p: i32, q: i32) -> f64 {
     if b.is_nan() || (b == 0.0 && p < 0) {
         return f64::NAN;
     }
-    if b >= 0.0 || q % 2 == 0 {
-        if q == 2 && p == 1 {
-            return b.sqrt();
-        }
-        if b < 0.0 {
-            return f64::NAN;
-        }
-        return root_power(b, p, q);
+    let neg = b < 0.0;
+    if neg && q % 2 == 0 {
+        return f64::NAN;
     }
-    let m = root_power(-b, p, q);
-    if p % 2 == 0 { m } else { -m }
+    if q == 2 && p == 1 {
+        return b.sqrt();
+    }
+    let a = b.abs();
+    // p/q as a double is rounded (1/3 by 2⁻⁵⁶), and powf magnifies that by
+    // |ln a·p/q|. Up to |ln a·p/q| ≈ 4 that costs at most about 2 ulps and
+    // powf is used (|ln a| judged by a's binary exponent, no logarithm);
+    // beyond, see [`root_power`].
+    let t = p as f64 / q as f64;
+    let binades = ((a.to_bits() >> 52) & 0x7ff) as i64 - 1023;
+    let m = if !(a > 0.0 && a.is_finite()) || (binades.unsigned_abs() as f64 + 1.0) * t.abs() <= 5.7
+    {
+        a.powf(t)
+    } else {
+        root_power(a, p, q)
+    };
+    if neg && p % 2 != 0 { -m } else { m }
 }
 
-/// a^(p/q) for a ≥ 0. p/q as a double is rounded (1/3 by 2⁻⁵⁶), and powf
-/// magnifies that by |ln a·p/q|: x^(1/3) at 10⁴⁵ was 17 ulps off. Square
-/// and cube roots of small powers go through sqrt/cbrt; otherwise, where
-/// the magnification is more than an ulp's worth, the exponent is kept in
-/// double-double.
+/// a^(p/q) for a > 0 where powf's rounded p/q would cost ulps (x^(1/3) at
+/// 10⁴⁵ was 17 ulps off): square and cube roots of small powers through
+/// sqrt/cbrt, the rest with the exponent in double-double.
+#[cold]
+#[inline(never)]
 fn root_power(a: f64, p: i32, q: i32) -> f64 {
-    if p.abs() <= 4 && (q == 2 || q == 3) {
+    if p.abs() <= 3 && (q == 2 || q == 3) {
         let r = if q == 2 { a.sqrt() } else { a.cbrt() };
-        return r.powi(p);
-    }
-    let t = p as f64 / q as f64;
-    if !(a > 0.0 && a.is_finite()) || (a.ln() * t).abs() <= 1.0 {
-        return a.powf(t);
+        return match p {
+            1 => r,
+            2 => r * r,
+            3 => r * r * r,
+            -1 => 1.0 / r,
+            -2 => 1.0 / (r * r),
+            -3 => 1.0 / (r * r * r),
+            _ => 1.0,
+        };
     }
     let l = crate::dd::ln(a).mul_f(p as f64).div_f(q as f64);
     let (r, n) = crate::dd::exp(l);
