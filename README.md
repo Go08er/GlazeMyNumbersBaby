@@ -329,9 +329,13 @@ CI also runs checks that need more than `cargo test --workspace`:
   shapes second. Where it runs out (very long or wildly oscillating
   functions), the rest is drawn coarser: continuous parts are still
   joined only where proven, undecided ones only where sampling finds no
-  jump, but chords there may stray from the curve by more than a pixel;
-  the plot is flagged as having missing data (the apps don't show that
-  yet). The boundary of an explicit
+  jump, but chords there may stray from the curve by more than a pixel.
+  The plot is then flagged as having missing data (the apps don't show
+  that yet); so it is where the shape of a piece under a pixel wide can't
+  be bounded, as in the pixel beside a removable hole (`x/x` next to its
+  circle: the enclosure of x/x there doesn't know the two x are one),
+  which is joined as proven continuous through point samples. The
+  boundary of an explicit
   inequality (`y < tan x`) is drawn the same way, but implicit plots and
   inequality regions are unchanged in 0.2: still sampled in floating point
   (a certified plotter for them is planned for 0.3).
