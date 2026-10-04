@@ -498,6 +498,11 @@ impl KeyGraphFeatures {
     }
 }
 
+/// The deepest tree [`analyze`] certifies (deeper: [`AnalysisError::TooComplex`]).
+const MAX_DEPTH: usize = 48;
+/// The most nodes [`analyze`] certifies.
+const MAX_SIZE: usize = 400;
+
 /// Analyzes an equation (`Grapher::AnalyzeEquation`): explicit functions of
 /// x are analyzed; `x = g(y)` gives [`AnalysisError::VariableIsNotX`];
 /// implicit relations and inequalities give
@@ -528,6 +533,16 @@ pub fn analyze_cancellable(
     let Some((Axis::X, f)) = eq.explicit() else {
         return error(AnalysisError::AnalysisCouldNotBePerformed);
     };
+    // What doesn't compile (0⁻¹ folded from constants) has no values.
+    if crate::compile::Program::compile(f, opts).is_err() {
+        return error(AnalysisError::AnalysisCouldNotBePerformed);
+    }
+    // Trees far beyond what anyone types (√ nested a hundred deep) would
+    // take the certifier seconds: too complex, said at once.
+    let (depth, size) = f.depth_and_size();
+    if depth > MAX_DEPTH || size > MAX_SIZE {
+        return error(AnalysisError::TooComplex);
+    }
     let cancelled = || cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed));
     let Ok(a) = crate::certify::certify_equation(eq, *opts, crate::certify::DEFAULT_BUDGET, cancel)
     else {
