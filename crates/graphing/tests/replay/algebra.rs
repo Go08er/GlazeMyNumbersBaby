@@ -398,7 +398,7 @@ impl<'a> Field<'a> {
             (None, None) => (Rational::from(0), u.n.clone()),
         };
         // Quarter turns: c = q/2 + r with r in [0, 1/2).
-        let quarters = Rational::from(c.clone() * 2u32).floor();
+        let quarters = (c.clone() * 2u32).floor();
         let r = c - quarters.clone() / Rational::from(2);
         let q = quarters.numer().mod_u(4);
         let shifted = if r == 0 {
@@ -780,7 +780,7 @@ impl Rat {
         if self.n.is_empty() || dn < dd {
             return Ok(Rational::new());
         }
-        let lead = Rational::from(self.n[dn - 1].clone() / self.d[dd - 1].clone());
+        let lead = self.n[dn - 1].clone() / self.d[dd - 1].clone();
         if dn == dd {
             return Ok(lead);
         }
@@ -797,13 +797,13 @@ impl Rat {
             return None;
         }
         // Two steps of long division.
-        let m = Rational::from(self.n[dn - 1].clone() / self.d[dd - 1].clone());
+        let m = self.n[dn - 1].clone() / self.d[dd - 1].clone();
         // N − m·x·D: its coefficient at x^(dd − 1).
         let mut r = self.n.clone();
         for (i, c) in self.d.iter().enumerate() {
             r[i + 1] -= Rational::from(&m * c);
         }
-        let b = Rational::from(r[dd - 1].clone() / self.d[dd - 1].clone());
+        let b = r[dd - 1].clone() / self.d[dd - 1].clone();
         Some((m, b))
     }
 
