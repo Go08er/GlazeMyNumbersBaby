@@ -21,6 +21,7 @@ use egg::{Analysis, DidMerge, EGraph, Id, Language};
 
 use super::lang::{E, Math, PI, X};
 use super::q::Q;
+use crate::ast::Func;
 use crate::functions::TrigUnit;
 use crate::interval::{DecInterval, Interval, elem};
 
@@ -117,42 +118,49 @@ pub fn node_interval(
         Math::Sinh(x) => one(x, &elem::sinh),
         Math::Cosh(x) => one(x, &elem::cosh),
         Math::Tanh(x) => one(x, &elem::tanh),
-        Math::Sech(x) => one(x, &elem::sech),
-        Math::Csch(x) => one(x, &elem::csch),
-        Math::Coth(x) => one(x, &elem::coth),
         Math::Asinh(x) => one(x, &elem::asinh),
-        Math::Acosh(x) => one(x, &elem::acosh),
         Math::Atanh(x) => one(x, &elem::atanh),
-        Math::Asech(x) => one(x, &elem::asech),
-        Math::Acsch(x) => one(x, &elem::acsch),
-        Math::Acoth(x) => one(x, &elem::acoth),
         Math::Sqrt(x) => one(x, &elem::sqrt),
         Math::Cbrt(x) => one(x, &elem::cbrt),
-        Math::Root([x, n]) => elem::root(&a(x), &a(n)).iv,
-        Math::Log(x) => one(x, &elem::log10),
-        Math::LogBase([b, x]) => elem::log_base(&a(b), &a(x)).iv,
         Math::Ln(x) => one(x, &elem::ln),
         Math::Exp(x) => one(x, &elem::exp),
         Math::Abs(x) => one(x, &elem::abs),
-        Math::Floor(x) => one(x, &elem::floor),
-        Math::Ceil(x) => one(x, &elem::ceil),
-        Math::Round(x) => one(x, &elem::round),
-        Math::Sign(x) => one(x, &elem::sign),
-        Math::Mod([x, y]) => elem::modulo(&a(x), &a(y)).iv,
-        Math::Fact(x) => one(x, &elem::factorial),
-        Math::Fact2(x) => one(x, &elem::double_factorial),
-        Math::NCr([n, r]) => elem::ncr_npr(&a(n), &a(r), false).iv,
-        Math::NPr([n, r]) => elem::ncr_npr(&a(n), &a(r), true).iv,
-        Math::Min(args) => args
-            .iter()
-            .map(a)
-            .reduce(|p, c| elem::min(&p, &c))
-            .map_or(Interval::EMPTY, |d| d.iv),
-        Math::Max(args) => args
-            .iter()
-            .map(a)
-            .reduce(|p, c| elem::max(&p, &c))
-            .map_or(Interval::EMPTY, |d| d.iv),
+        Math::Call(t, args) => {
+            let arg = |k: usize| a(&args[k]);
+            match t.0 {
+                Func::Sech => elem::sech(&arg(0)).iv,
+                Func::Csch => elem::csch(&arg(0)).iv,
+                Func::Coth => elem::coth(&arg(0)).iv,
+                Func::Acosh => elem::acosh(&arg(0)).iv,
+                Func::Asech => elem::asech(&arg(0)).iv,
+                Func::Acsch => elem::acsch(&arg(0)).iv,
+                Func::Acoth => elem::acoth(&arg(0)).iv,
+                Func::Root => elem::root(&arg(0), &arg(1)).iv,
+                Func::Log => elem::log10(&arg(0)).iv,
+                Func::LogBase => elem::log_base(&arg(0), &arg(1)).iv,
+                Func::Floor => elem::floor(&arg(0)).iv,
+                Func::Ceil => elem::ceil(&arg(0)).iv,
+                Func::Round => elem::round(&arg(0)).iv,
+                Func::Sign => elem::sign(&arg(0)).iv,
+                Func::Mod => elem::modulo(&arg(0), &arg(1)).iv,
+                Func::Factorial => elem::factorial(&arg(0)).iv,
+                Func::DoubleFactorial => elem::double_factorial(&arg(0)).iv,
+                Func::NCr => elem::ncr_npr(&arg(0), &arg(1), false).iv,
+                Func::NPr => elem::ncr_npr(&arg(0), &arg(1), true).iv,
+                Func::Min | Func::Max => args
+                    .iter()
+                    .map(a)
+                    .reduce(|p, c| {
+                        if t.0 == Func::Min {
+                            elem::min(&p, &c)
+                        } else {
+                            elem::max(&p, &c)
+                        }
+                    })
+                    .map_or(Interval::EMPTY, |d| d.iv),
+                _ => Interval::ENTIRE,
+            }
+        }
         Math::Num(c) => c.interval(),
         Math::Real(r) => Interval::around(r.value()),
         Math::Symbol(_) => unreachable!("symbols are handled by the caller"),

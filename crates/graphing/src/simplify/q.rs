@@ -25,6 +25,9 @@ fn gcd(mut a: i128, mut b: i128) -> i128 {
     a
 }
 
+// add, sub, mul, div and neg return `None` on overflow (or a zero
+// divisor), which the operator traits can't express.
+#[allow(clippy::should_implement_trait)]
 impl Q {
     /// 0.
     pub const ZERO: Q = Q { n: 0, d: 1 };

@@ -120,6 +120,9 @@ struct StableCost<'g> {
     egraph: &'g MathGraph,
 }
 
+/// A test on one e-node.
+type NodeTest<'a> = &'a dyn Fn(&Math) -> bool;
+
 impl StableCost<'_> {
     fn has(&self, id: Id, f: &dyn Fn(&Math) -> bool) -> bool {
         self.egraph[id].nodes.iter().any(f)
@@ -143,7 +146,7 @@ impl StableCost<'_> {
     }
 
     /// a − b (written `a − b` or `a + (−b)`) that cancels for some x.
-    fn cancels(&self, a: Id, b_has: &dyn Fn(&dyn Fn(&Math) -> bool) -> bool) -> bool {
+    fn cancels(&self, a: Id, b_has: &dyn Fn(NodeTest<'_>) -> bool) -> bool {
         let cos = |n: &Math| matches!(n, Math::Cos(_));
         let atan = |n: &Math| matches!(n, Math::Atan(_));
         let sqrt = |n: &Math| matches!(n, Math::Sqrt(_));

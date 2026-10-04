@@ -84,37 +84,87 @@ define_language! {
         "sinh" = Sinh(Id),
         "cosh" = Cosh(Id),
         "tanh" = Tanh(Id),
-        "sech" = Sech(Id),
-        "csch" = Csch(Id),
-        "coth" = Coth(Id),
         "asinh" = Asinh(Id),
-        "acosh" = Acosh(Id),
         "atanh" = Atanh(Id),
-        "asech" = Asech(Id),
-        "acsch" = Acsch(Id),
-        "acoth" = Acoth(Id),
         "sqrt" = Sqrt(Id),
         "cbrt" = Cbrt(Id),
-        "root" = Root([Id; 2]),
-        "log10" = Log(Id),
-        "logb" = LogBase([Id; 2]),
         "ln" = Ln(Id),
         "exp" = Exp(Id),
         "abs" = Abs(Id),
-        "floor" = Floor(Id),
-        "ceil" = Ceil(Id),
-        "round" = Round(Id),
-        "sign" = Sign(Id),
-        "mod" = Mod([Id; 2]),
-        "fact" = Fact(Id),
-        "fact2" = Fact2(Id),
-        "ncr" = NCr([Id; 2]),
-        "npr" = NPr([Id; 2]),
-        "min" = Min(Box<[Id]>),
-        "max" = Max(Box<[Id]>),
+        Call(Tag, Vec<Id>),
         Num(Q),
         Real(Real),
         Symbol(Symbol),
+    }
+}
+
+/// A function no rule mentions (floor, mod, nCr, min, sech, …): one node
+/// kind for all of them keeps the e-graph code small.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Tag(pub Func);
+
+impl Tag {
+    /// The functions carried by [`Math::Call`] (every other one has its
+    /// own node kind).
+    pub const FUNCS: [Func; 21] = [
+        Func::Sech,
+        Func::Csch,
+        Func::Coth,
+        Func::Acosh,
+        Func::Asech,
+        Func::Acsch,
+        Func::Acoth,
+        Func::Root,
+        Func::Log,
+        Func::LogBase,
+        Func::Floor,
+        Func::Ceil,
+        Func::Round,
+        Func::Sign,
+        Func::Mod,
+        Func::Factorial,
+        Func::DoubleFactorial,
+        Func::NCr,
+        Func::NPr,
+        Func::Min,
+        Func::Max,
+    ];
+
+    fn index(self) -> usize {
+        Tag::FUNCS
+            .iter()
+            .position(|f| *f == self.0)
+            .unwrap_or(usize::MAX)
+    }
+}
+
+impl PartialOrd for Tag {
+    fn partial_cmp(&self, o: &Tag) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(o))
+    }
+}
+
+impl Ord for Tag {
+    fn cmp(&self, o: &Tag) -> std::cmp::Ordering {
+        self.index().cmp(&o.index())
+    }
+}
+
+impl fmt::Display for Tag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "@{:?}", self.0)
+    }
+}
+
+impl FromStr for Tag {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Tag, ()> {
+        let name = s.strip_prefix('@').ok_or(())?;
+        Tag::FUNCS
+            .iter()
+            .find(|f| format!("{f:?}") == name)
+            .map(|f| Tag(*f))
+            .ok_or(())
     }
 }
 
@@ -227,8 +277,10 @@ fn add(e: &Expr, lits: &ExactLiterals, rec: &mut RecExpr<Math>) -> Result<Id, Un
                 ids.push(go(a, rec)?);
             }
             let one = |ids: &[Id]| ids[0];
-            let two = |ids: &[Id]| [ids[0], ids[1]];
             use Func::*;
+            if Tag::FUNCS.contains(f) {
+                return Ok(rec.add(Math::Call(Tag(*f), ids)));
+            }
             rec.add(match f {
                 Sin => Math::Sin(one(&ids)),
                 Cos => Math::Cos(one(&ids)),
@@ -245,34 +297,14 @@ fn add(e: &Expr, lits: &ExactLiterals, rec: &mut RecExpr<Math>) -> Result<Id, Un
                 Sinh => Math::Sinh(one(&ids)),
                 Cosh => Math::Cosh(one(&ids)),
                 Tanh => Math::Tanh(one(&ids)),
-                Sech => Math::Sech(one(&ids)),
-                Csch => Math::Csch(one(&ids)),
-                Coth => Math::Coth(one(&ids)),
                 Asinh => Math::Asinh(one(&ids)),
-                Acosh => Math::Acosh(one(&ids)),
                 Atanh => Math::Atanh(one(&ids)),
-                Asech => Math::Asech(one(&ids)),
-                Acsch => Math::Acsch(one(&ids)),
-                Acoth => Math::Acoth(one(&ids)),
                 Sqrt => Math::Sqrt(one(&ids)),
                 Cbrt => Math::Cbrt(one(&ids)),
-                Root => Math::Root(two(&ids)),
-                Log => Math::Log(one(&ids)),
-                LogBase => Math::LogBase(two(&ids)),
                 Ln => Math::Ln(one(&ids)),
                 Exp => Math::Exp(one(&ids)),
                 Abs => Math::Abs(one(&ids)),
-                Floor => Math::Floor(one(&ids)),
-                Ceil => Math::Ceil(one(&ids)),
-                Round => Math::Round(one(&ids)),
-                Sign => Math::Sign(one(&ids)),
-                Mod => Math::Mod(two(&ids)),
-                Factorial => Math::Fact(one(&ids)),
-                DoubleFactorial => Math::Fact2(one(&ids)),
-                NCr => Math::NCr(two(&ids)),
-                NPr => Math::NPr(two(&ids)),
-                Min => Math::Min(ids.into_boxed_slice()),
-                Max => Math::Max(ids.into_boxed_slice()),
+                other => Math::Call(Tag(*other), ids),
             })
         }
     })
@@ -317,6 +349,10 @@ fn build(nodes: &[Math], id: Id) -> Expr {
         // a + (−b) reads as a − b; −1·a as −a.
         Math::Add([a, c]) => match &nodes[usize::from(*c)] {
             Math::Neg(d) => Expr::bin(BinOp::Sub, b(a), b(d)),
+            Math::Num(q) if q.signum() < 0 => match q.neg() {
+                Some(m) => Expr::bin(BinOp::Sub, b(a), num(m)),
+                None => Expr::bin(BinOp::Add, b(a), b(c)),
+            },
             _ => Expr::bin(BinOp::Add, b(a), b(c)),
         },
         Math::Sub(ab) => bin(BinOp::Sub, ab),
@@ -356,34 +392,14 @@ fn build(nodes: &[Math], id: Id) -> Expr {
         Math::Sinh(a) => call(Func::Sinh, &[*a]),
         Math::Cosh(a) => call(Func::Cosh, &[*a]),
         Math::Tanh(a) => call(Func::Tanh, &[*a]),
-        Math::Sech(a) => call(Func::Sech, &[*a]),
-        Math::Csch(a) => call(Func::Csch, &[*a]),
-        Math::Coth(a) => call(Func::Coth, &[*a]),
         Math::Asinh(a) => call(Func::Asinh, &[*a]),
-        Math::Acosh(a) => call(Func::Acosh, &[*a]),
         Math::Atanh(a) => call(Func::Atanh, &[*a]),
-        Math::Asech(a) => call(Func::Asech, &[*a]),
-        Math::Acsch(a) => call(Func::Acsch, &[*a]),
-        Math::Acoth(a) => call(Func::Acoth, &[*a]),
         Math::Sqrt(a) => call(Func::Sqrt, &[*a]),
         Math::Cbrt(a) => call(Func::Cbrt, &[*a]),
-        Math::Root(ab) => call(Func::Root, ab),
-        Math::Log(a) => call(Func::Log, &[*a]),
-        Math::LogBase(ab) => call(Func::LogBase, ab),
         Math::Ln(a) => call(Func::Ln, &[*a]),
         Math::Exp(a) => call(Func::Exp, &[*a]),
         Math::Abs(a) => call(Func::Abs, &[*a]),
-        Math::Floor(a) => call(Func::Floor, &[*a]),
-        Math::Ceil(a) => call(Func::Ceil, &[*a]),
-        Math::Round(a) => call(Func::Round, &[*a]),
-        Math::Sign(a) => call(Func::Sign, &[*a]),
-        Math::Mod(ab) => call(Func::Mod, ab),
-        Math::Fact(a) => call(Func::Factorial, &[*a]),
-        Math::Fact2(a) => call(Func::DoubleFactorial, &[*a]),
-        Math::NCr(ab) => call(Func::NCr, ab),
-        Math::NPr(ab) => call(Func::NPr, ab),
-        Math::Min(args) => call(Func::Min, args),
-        Math::Max(args) => call(Func::Max, args),
+        Math::Call(t, args) => call(t.0, args),
         Math::Num(q) => num(*q),
         Math::Real(r) => {
             let v = r.value();

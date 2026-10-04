@@ -292,10 +292,8 @@ fn collect(e: &Expr, out: &mut Vec<Cond>) {
                         }
                     }
                 }
-                Factorial | DoubleFactorial | NCr | NPr => {
-                    if args.iter().any(|a| varies(a)) {
-                        out.push(Cond::Opaque(e.clone()));
-                    }
+                Factorial | DoubleFactorial | NCr | NPr if args.iter().any(varies) => {
+                    out.push(Cond::Opaque(e.clone()));
                 }
                 _ => {}
             }
