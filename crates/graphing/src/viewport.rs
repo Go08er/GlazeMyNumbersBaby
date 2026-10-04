@@ -381,6 +381,49 @@ pub fn precision_for_span(span: f64) -> f64 {
     }
 }
 
+/// A range bound as the settings' fields show it, in a view `span` wide:
+/// the shortest decimal that reads back as `v` exactly when that has at
+/// most 10 significant digits (a value typed in, 1.0001), else rounded
+/// to a millionth of the span (a value a zoom left with 16 digits), which
+/// reads back within that of `v`. Past 10¹⁵ or below 10⁻⁴, in e-notation.
+pub fn range_text(v: f64, span: f64) -> String {
+    let plain = |v: f64| v == 0.0 || (1e-4..1e15).contains(&v.abs());
+    let exact = if plain(v) {
+        format!("{v}")
+    } else {
+        format!("{v:e}")
+    };
+    let mantissa = exact.split('e').next().unwrap_or("");
+    let digits = mantissa
+        .trim_start_matches('-')
+        .replace('.', "")
+        .trim_start_matches('0')
+        .len();
+    if digits <= 10 || !(span > 0.0 && span.is_finite() && v.is_finite()) {
+        return exact;
+    }
+    // Significant digits down to a millionth of the span.
+    let lead = v.abs().log10().floor();
+    let last = (span.log10() - 6.0).floor();
+    let sig = ((lead - last) as i64 + 1).clamp(1, 17) as usize;
+    let trim = |m: &str| -> String {
+        if m.contains('.') {
+            m.trim_end_matches('0').trim_end_matches('.').to_string()
+        } else {
+            m.to_string()
+        }
+    };
+    if plain(v) {
+        let decimals = (sig as i64 - 1 - lead as i64).clamp(0, 17) as usize;
+        let t = trim(&format!("{v:.decimals$}"));
+        if t == "-0" { "0".into() } else { t }
+    } else {
+        let t = format!("{:.*e}", sig - 1, v);
+        let (m, e) = t.split_once('e').unwrap_or((&t, "0"));
+        format!("{}e{e}", trim(m))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -462,5 +505,43 @@ mod tests {
             Err(RangeError::YMinNotLessThanMax)
         );
         assert!(v.set_display_ranges(0.0, 1.0, 0.0, 1.0).is_ok());
+    }
+
+    /// PREREVIEW_C Low: the range fields round-trip what was typed and
+    /// never show "inf".
+    #[test]
+    fn range_texts_round_trip() {
+        assert_eq!(range_text(1.0001, 0.0001), "1.0001");
+        assert_eq!(range_text(1.0002, 0.0001), "1.0002");
+        assert_eq!(range_text(-10.0, 20.0), "-10");
+        assert_eq!(range_text(0.0, 20.0), "0");
+        assert_eq!(range_text(1e306, 1e300), "1e306");
+        assert_eq!(range_text(-2.5e20, 1e21), "-2.5e20");
+        assert_eq!(range_text(1.5e-7, 1e-6), "1.5e-7");
+        // A bound a zoom left with 16 digits: to a millionth of the span.
+        assert_eq!(range_text(-9.411764705882353, 18.8), "-9.41176");
+        assert_eq!(range_text(9.999999999999999e305, 1e300), "1e306");
+        let mut vp = Viewport::default_for_size(640.0, 480.0);
+        vp.set_display_ranges(1.0001, 1.0002, -1.0, 1.0).unwrap();
+        for _ in 0..7 {
+            vp.zoom_about(1.00013, 0.3, 1.0625);
+        }
+        let back = |v: f64, span: f64| range_text(v, span).parse::<f64>().unwrap();
+        let (xs, ys) = (vp.x_span(), vp.y_span());
+        let mut again = vp;
+        again
+            .set_display_ranges(
+                back(vp.x_min, xs),
+                back(vp.x_max, xs),
+                back(vp.y_min, ys),
+                back(vp.y_max, ys),
+            )
+            .unwrap();
+        assert!((again.x_min - vp.x_min).abs() <= xs * 1e-6);
+        assert!((again.y_max - vp.y_max).abs() <= ys * 1e-6);
+        for v in [1.7e305, -1.79e305, 5e-300, 123456.125] {
+            let t = range_text(v, v.abs());
+            assert!(!t.contains("inf") && t.parse::<f64>().unwrap() == v, "{t}");
+        }
     }
 }

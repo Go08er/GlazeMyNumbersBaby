@@ -412,12 +412,15 @@ impl GraphPage {
 
     fn fill_ranges(&mut self) {
         if let Some(vp) = self.vp {
-            for (e, v) in self
-                .ranges
-                .iter_mut()
-                .zip([vp.x_min, vp.x_max, vp.y_min, vp.y_max])
-            {
-                e.set_text(&format_value(v));
+            // What was typed reads back exactly (1.0001, not 1).
+            let (xs, ys) = (vp.x_span(), vp.y_span());
+            for (e, (v, span)) in self.ranges.iter_mut().zip([
+                (vp.x_min, xs),
+                (vp.x_max, xs),
+                (vp.y_min, ys),
+                (vp.y_max, ys),
+            ]) {
+                e.set_text(&graphing::viewport::range_text(v, span));
             }
         }
         self.range_error = false;
@@ -1824,6 +1827,26 @@ mod tests {
                 "{src} {shift}: {travelled}"
             );
         }
+    }
+
+    /// PREREVIEW_C Low: ranges typed into the settings read back as typed
+    /// (they were rounded to 3 decimals, so [1.0001, 1.0002] collapsed).
+    #[test]
+    fn typed_ranges_round_trip() {
+        let mut g = GraphPage::for_test(session::from_list("y=x"));
+        g.vp = Some(graphing::Viewport::default_for_size(760.0, 654.0));
+        for (e, t) in g.ranges.iter_mut().zip(["1.0001", "1.0002", "-1", "1"]) {
+            e.set_text(t);
+        }
+        g.apply_ranges();
+        assert!(!g.range_error);
+        g.fill_ranges();
+        let texts: Vec<String> = g.ranges.iter().map(|e| e.text.clone()).collect();
+        assert_eq!(texts, ["1.0001", "1.0002", "-1", "1"]);
+        g.apply_ranges();
+        assert!(!g.range_error);
+        let vp = g.vp.unwrap();
+        assert_eq!((vp.x_min, vp.x_max), (1.0001, 1.0002));
     }
 
     /// PREREVIEW_B B-M4: the traced value reaches screen readers with "≈"
