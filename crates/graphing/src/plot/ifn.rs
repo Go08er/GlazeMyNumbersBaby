@@ -10,6 +10,7 @@ use crate::ast::{BinOp, Expr, Func};
 use crate::compile::{CompileOptions, DEFAULT_VARIABLE_VALUE, VariableValues};
 use crate::functions::TrigUnit;
 use crate::interval::{Ctx, DecInterval, Interval, Literals, Series, enclose, taylor};
+use crate::simplify::Q;
 
 /// Slider values captured when the curve was compiled.
 #[derive(Clone, Debug, Default)]
@@ -112,5 +113,36 @@ impl IntervalFn {
             }
         }
         c(&self.expr)
+    }
+
+    /// f at the rational `x` exactly where f is a rational function: +,
+    /// −, ×, ÷ and whole powers of x, sliders and literals that are their
+    /// doubles exactly. None for anything else, where f is undefined, or
+    /// past the range of [`Q`].
+    pub(crate) fn exact_at(&self, x: Q) -> Option<Q> {
+        fn ev(e: &Expr, x: Q, f: &IntervalFn) -> Option<Q> {
+            match e {
+                Expr::Num(v) if f.literals.is_exact(*v) => Q::from_f64(*v),
+                Expr::X => Some(x),
+                Expr::Var(n) => Q::from_f64(*f.vars.0.get(n)?),
+                Expr::Neg(a) => ev(a, x, f)?.neg(),
+                Expr::Bin(op, a, b) => {
+                    let (a, b) = (ev(a, x, f)?, ev(b, x, f)?);
+                    match op {
+                        BinOp::Add => a.add(b),
+                        BinOp::Sub => a.sub(b),
+                        BinOp::Mul => a.mul(b),
+                        BinOp::Div if !b.is_zero() => a.div(b),
+                        // The TI rule: 0 to a power ≤ 0 is undefined.
+                        BinOp::Pow if b.is_int() && !(a.is_zero() && b.signum() <= 0) => {
+                            a.powi(b.as_int().filter(|k| k.abs() <= 64)?)
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            }
+        }
+        ev(&self.expr, x, self)
     }
 }

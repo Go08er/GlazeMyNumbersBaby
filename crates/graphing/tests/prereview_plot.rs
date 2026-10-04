@@ -429,3 +429,42 @@ fn factorials_and_dense_poles_never_join_across() {
     let (_, t) = g.trace(&vp, &plots, sx, sy, 50.0).unwrap();
     assert!(t.text().starts_with("(1.32, ") && !t.text().contains("unknown"), "{}", t.text());
 }
+
+/// PREREVIEW_B Lows: keyboard Left along √x reaches its end (0, 0) (the
+/// cursor keeps the traced point's height, as the apps' keyboard tracing
+/// does); exactly known values carry no "≈"; minus signs are U+2212; the
+/// text for a screen reader says "approximately".
+#[test]
+fn keyboard_tracing_reaches_domain_ends_and_texts_are_exact() {
+    for (w, h) in [(378.0, 644.0), (760.0, 700.0), (1000.0, 700.0)] {
+        let mut g = Graph::new();
+        g.add_equation("y=sqrt(x)");
+        let vp = Viewport::default_for_size(w, h);
+        let plots = g.plot_parallel(&vp);
+        let (mut px, mut py) = vp.to_screen(1.0, 1.0);
+        let mut last = String::new();
+        for _ in 0..60 {
+            px = (px - 5.0).max(0.0);
+            if let Some((_, t)) = g.trace(&vp, &plots, px, py, 50.0) {
+                py = t.screen_y;
+                last = t.text();
+            }
+        }
+        assert_eq!(last, "(0.00, 0.00)", "at {w}x{h}");
+    }
+    let vp = Viewport::default_for_size(760.0, 700.0);
+    for (src, x, text, spoken) in [
+        ("y=x/x-1", 0.26, "(0.26, 0.00)", "(0.26, 0.00)"),
+        ("y=x-1", 0.5, "(0.50, −0.50)", "(0.50, −0.50)"),
+        ("y=-x/3", 0.5, "(0.50, ≈−0.17)", "(0.50, approximately −0.17)"),
+    ] {
+        let mut g = Graph::new();
+        let id = g.add_equation(src);
+        let plots = g.plot_parallel(&vp);
+        let y = g.evaluate(id, x).unwrap();
+        let (sx, sy) = vp.to_screen(x, y);
+        let (_, t) = g.trace(&vp, &plots, sx, sy, 50.0).unwrap();
+        assert_eq!(t.text(), text, "{src}");
+        assert_eq!(t.spoken_text(), spoken, "{src}");
+    }
+}
