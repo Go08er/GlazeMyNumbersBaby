@@ -288,11 +288,8 @@ pub(crate) fn format_decimal_digits(v: f64, sig: i32) -> String {
     let a = v.abs();
     let e = a.log10().floor() as i32;
     // Beyond 6 digits (telling points apart), whole numbers up to 10¹⁶
-    // stay whole: 1000000000002, not 1.000000000002×10¹². Past `sig`
-    // digits before the point, a value that isn't whole is written
-    // m×10ⁿ (2300620.003 is 2.30062×10⁶, not 2300620; 123456789 stays).
-    let long = e >= sig && a != a.trunc();
-    if (!(-5..9).contains(&e) && !(sig > 6 && (9..16).contains(&e))) || long {
+    // stay whole: 1000000000002, not 1.000000000002×10¹².
+    if !(-5..9).contains(&e) && !(sig > 6 && (9..16).contains(&e)) {
         let digits = (sig - 1) as usize;
         // In two steps: 10⁻³²⁴ itself is below the doubles.
         let mut m = a / 10f64.powi(e / 2) / 10f64.powi(e - e / 2);
@@ -304,8 +301,11 @@ pub(crate) fn format_decimal_digits(v: f64, sig: i32) -> String {
         let ms = trim(&format!("{m:.digits$}"));
         return format!("{sign}{ms}×10{}", superscript(e));
     }
-    // `sig` significant digits (nearby points that would read alike are
-    // given more by their callers: a maximum at 2000000.5 between zeros at
+    // `sig` significant digits, no decimal past them (166253.7622 is
+    // 166254); below 10⁹ the digits before the point all stay, so a value
+    // and the integer it rounds to read alike (999999.9999982 and 1000000
+    // both 1000000). Nearby points that would read alike are given more
+    // digits by their callers (a maximum at 2000000.5 between zeros at
     // 2000000 and 2000001).
     let decimals = (sig - 1 - e).clamp(0, sig + 6) as usize;
     let s = trim(&format!("{a:.decimals$}"));
@@ -565,8 +565,8 @@ mod tests {
         assert_eq!(format_number(1e-10), "1×10⁻¹⁰");
         assert_eq!(format_number(2.0 * PI * 1e-12), "6.28319×10⁻¹²");
         // (Six significant digits: whole numbers past them stay whole.)
-        assert_eq!(format_number(999999998.7), "1×10⁹");
-        assert_eq!(format_number(2300620.003), "2.30062×10⁶");
+        assert_eq!(format_number(999999998.7), "999999999");
+        assert_eq!(format_number(2300620.003), "2300620");
         assert_eq!(format_number(166253.7622), "166254");
         assert_eq!(format_number(1.23456789), "1.23457");
         assert_eq!(format_number(-0.000123456), "−0.000123456");
