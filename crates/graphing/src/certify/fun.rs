@@ -289,6 +289,10 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
                 | Func::Asinh
                 | Func::Atanh => go(&args[0], out),
                 Func::Exp | Func::Cosh | Func::Sech | Func::Sec | Func::Csc | Func::Csch => {}
+                // tan u = 0 where sin u = 0, cot u = 0 where cos u = 0
+                // (both finite there): factors smooth across the poles.
+                Func::Tan => out.push(Expr::call1(Func::Sin, args[0].clone())),
+                Func::Cot => out.push(Expr::call1(Func::Cos, args[0].clone())),
                 Func::Ln | Func::Log => out.push(Expr::bin(BinOp::Sub, args[0].clone(), Expr::Num(1.0))),
                 _ => out.push(e.clone()),
             },

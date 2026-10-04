@@ -787,10 +787,25 @@ pub fn sin_cos(x: &DecInterval, unit: TrigUnit) -> (DecInterval, DecInterval) {
         return (e, e);
     }
     let (s, c) = sin_cos_ivs(x.iv, unit);
-    (
+    let (sd, cd) = (
         DecInterval::result(s, Dec::Com, &[x]),
         DecInterval::result(c, Dec::Com, &[x]),
-    )
+    );
+    // Strict signs, when both ends have the same one and the box is under
+    // half a turn (no zero inside: sin and cos have simple zeros half a
+    // turn apart). The enclosure may still reach 0 (sin of a subnormal
+    // rounds to one), the value never does: csc and cot there stay defined.
+    let iv = x.iv;
+    if iv.is_bounded() && !half_turn_or_more(iv, unit) {
+        let (el, eh) = (endpoint(iv.lo(), unit), endpoint(iv.hi(), unit));
+        if let (Some((sl, cl)), Some((sh, ch))) = (el.signs, eh.signs) {
+            let fact = |a: i8, b: i8| (a == b && a > 0, a == b && a < 0);
+            let (sp, sn) = fact(sl, sh);
+            let (cp, cn) = fact(cl, ch);
+            return (sd.signs(sp, sn), cd.signs(cp, cn));
+        }
+    }
+    (sd, cd)
 }
 
 pub fn sin(x: &DecInterval, unit: TrigUnit) -> DecInterval {
