@@ -135,8 +135,8 @@ impl<'a> Fun<'a> {
     pub fn settings(&self) -> Option<crate::simplify::Settings<'a>> {
         let mut s = crate::simplify::Settings::new(&self.opts, self.exact?);
         s.cancel = self.cancel;
-        // Several runs per analysis: each kept short.
-        s.limits.time = std::time::Duration::from_millis(15);
+        // Several runs per analysis: each kept small.
+        s.limits.nodes = CERTIFY_NODES;
         Some(s)
     }
 
@@ -168,8 +168,7 @@ impl<'a> Fun<'a> {
             if !symbolic {
                 return None;
             }
-            let mut s = self.settings()?;
-            s.limits.time = std::time::Duration::from_millis(15);
+            let s = self.settings()?;
             // A typed decimal exponent as the exact fraction it is (x^0.9
             // is x^(9/10) where x ≥ 0, the only x it is evaluated at), so
             // the derivative's exponents stay exact; and every constant in
@@ -436,6 +435,11 @@ fn sound_constants(e: &Expr, exact: &crate::simplify::ExactLiterals) -> bool {
 
 /// The node budget of a symbolic derivative.
 const DIFF_NODES: usize = 4096;
+
+/// E-graph nodes for each of an analysis's simplifier runs (several per
+/// analysis, so fewer than the simplifier's default): a count, not a time,
+/// so the same function always gets the same answer.
+pub const CERTIFY_NODES: usize = 20_000;
 
 /// f′ and f″ of `e` by symbolic differentiation, each simplified (with
 /// `settings`, when given) so that what cancels in them cancels exactly.
