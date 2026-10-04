@@ -247,6 +247,14 @@ pub enum Claim {
     /// simple zero of their cosine, a logarithm of an argument falling to
     /// 0, combined with factors bounded (and away from 0) on `near`.
     Unbounded { near: XBox, at: XBox },
+    /// f is defined and continuous on the box, which holds the one point
+    /// where f has a kink (the argument of an abs, or the difference of a
+    /// min's or max's arguments, is 0 there): nothing is claimed about f′
+    /// or f″ inside it. A row built on f′ or f″ reads the box as one point:
+    /// f′'s strict signs on the boxes on either side decide whether f turns
+    /// there (a minimum from − to +), and a change of f″'s sign across it
+    /// leaves inflections undecided.
+    Kink { x: XBox },
     /// f is bounded near the excluded point (or domain end) enclosed by
     /// `at`: wherever f is defined on `near`, which holds `at`, its values
     /// lie in `[lo, hi]`. (f need not be defined at the point itself, nor

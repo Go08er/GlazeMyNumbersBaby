@@ -70,8 +70,19 @@ pub struct Fun<'a> {
     /// evaluated tree. Equal to f′, f″ wherever f is differentiable; used
     /// only where f is proven continuous.
     derivs: std::cell::OnceCell<Option<[Expr; 2]>>,
-    /// Whether f may have a symbolic derivative tree (no jumps).
+    /// The same trees for f with a kink ([`Fun::kinked`]): equal to f′, f″
+    /// only away from the kinks, so used only by covers that leave the
+    /// kinks out ([`Fun::derivs_off_kinks`]).
+    derivs_kinked: std::cell::OnceCell<Option<[Expr; 2]>>,
+    /// Whether f may have a symbolic derivative tree everywhere (no jumps,
+    /// no kinks).
     pub smooth_tree: bool,
+    /// f has jumps (floor, round, sign, mod of x): no derivative tree at
+    /// all.
+    pub steps: bool,
+    /// f has a kink (abs, min or max of x): its derivative tree,
+    /// sign(u)·u′, is defined at the kink, where f′ is not.
+    pub kinked: bool,
     /// Expressions f's side conditions require to be ≠ 0 (divisors, the
     /// sine under csc, …): never 0 where f is defined.
     pub nonzero: Vec<Expr>,
@@ -104,7 +115,10 @@ impl<'a> Fun<'a> {
             eval: expr.clone(),
             expr,
             derivs: std::cell::OnceCell::new(),
+            derivs_kinked: std::cell::OnceCell::new(),
             smooth_tree: false,
+            steps: false,
+            kinked: false,
             nonzero: Vec::new(),
             numerators: None,
             lits,
@@ -130,30 +144,49 @@ impl<'a> Fun<'a> {
     /// built on first use (simplifying them costs tens of milliseconds).
     pub fn derivs(&self) -> Option<&[Expr; 2]> {
         self.derivs
-            .get_or_init(|| {
-                let exact = self.exact?;
-                rational_derivs(&self.expr, exact).or_else(|| {
-                    if !self.smooth_tree {
-                        return None;
-                    }
-                    let mut s = self.settings()?;
-                    s.limits.time = std::time::Duration::from_millis(15);
-                    // A typed decimal exponent as the exact fraction it is
-                    // (x^0.9 is x^(9/10) where x ≥ 0, the only x it is
-                    // evaluated at), so the derivative's exponents stay
-                    // exact; and every constant in the trees typed or an
-                    // integer (none computed in floating point).
-                    let e = exact_exponents(&self.eval, exact);
-                    let d = symbolic_derivs(&e, self.opts.trig_unit, Some(&s))?;
-                    d.iter().all(|t| sound_constants(t, exact)).then_some(d)
-                })
-            })
+            .get_or_init(|| self.build_derivs(self.smooth_tree))
             .as_ref()
     }
 
-    /// The derivative trees, if already built.
+    /// The derivative trees for use away from f's kinks only: for an f
+    /// without kinks the same as [`Fun::derivs`]; for one with kinks, the
+    /// trees of `sign(u)·u′`, which equal f′ wherever u ≠ 0. A caller must
+    /// keep the kinks (`certify::kinks`) out of every box it evaluates
+    /// them on.
+    pub fn derivs_off_kinks(&self) -> Option<&[Expr; 2]> {
+        if !self.kinked {
+            return self.derivs();
+        }
+        self.derivs_kinked
+            .get_or_init(|| self.build_derivs(!self.steps))
+            .as_ref()
+    }
+
+    fn build_derivs(&self, symbolic: bool) -> Option<[Expr; 2]> {
+        let exact = self.exact?;
+        rational_derivs(&self.expr, exact).or_else(|| {
+            if !symbolic {
+                return None;
+            }
+            let mut s = self.settings()?;
+            s.limits.time = std::time::Duration::from_millis(15);
+            // A typed decimal exponent as the exact fraction it is (x^0.9
+            // is x^(9/10) where x ≥ 0, the only x it is evaluated at), so
+            // the derivative's exponents stay exact; and every constant in
+            // the trees typed or an integer (none computed in floating
+            // point).
+            let e = exact_exponents(&self.eval, exact);
+            let d = symbolic_derivs(&e, self.opts.trig_unit, Some(&s))?;
+            d.iter().all(|t| sound_constants(t, exact)).then_some(d)
+        })
+    }
+
+    /// The derivative trees, if already built (either kind).
     pub fn derivs_built(&self) -> Option<&[Expr; 2]> {
-        self.derivs.get().and_then(|d| d.as_ref())
+        self.derivs
+            .get()
+            .and_then(|d| d.as_ref())
+            .or_else(|| self.derivs_kinked.get().and_then(|d| d.as_ref()))
     }
 
     /// The zero factors of `e` ([`zero_factors`]) that can vanish where f is

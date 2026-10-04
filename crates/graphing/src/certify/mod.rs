@@ -176,10 +176,14 @@ pub fn certify_equation(
     if let Some(g) = rewrite(&f) {
         f.eval = canonical(&g);
     }
-    // A symbolic derivative only for f continuous wherever defined (no
-    // floor, round, sign, mod: their derivative 0 hides the jumps).
+    // A symbolic derivative only for f differentiable wherever defined: no
+    // floor, round, sign, mod (their derivative 0 hides the jumps), and no
+    // abs, min or max of x (their derivative's tree, sign(u)·u′, is defined
+    // at the kink, where f′ is not).
     let steps = !crate::simplify::side::jumps(&f.expr).is_empty();
-    f.smooth_tree = !steps;
+    f.steps = steps;
+    f.kinked = kinked(&f.expr) || kinked(&f.eval);
+    f.smooth_tree = !steps && !f.kinked;
     if let Ok(conds) = side::sides(&f) {
         f.nonzero = conds
             .iter()
@@ -191,6 +195,110 @@ pub fn certify_equation(
     let mut a = certify(&f, text);
     a.binding = Some(binding);
     Ok(a)
+}
+
+/// The kinks of f inside `spans`: where the argument of an abs, or the
+/// difference of a min's or max's arguments, depending on x, is 0, each
+/// enclosed by a box a few doubles wide (one double either side of an
+/// exact zero), merged where they meet. `None` when a kink can't be placed
+/// (those zeros aren't all decided, or the argument is 0 on a stretch).
+fn kinks(f: &Fun<'_>, spans: &[(f64, f64)]) -> Option<Vec<(f64, f64)>> {
+    use crate::ast::{BinOp, Expr, Func};
+    let mut args: Vec<Expr> = Vec::new();
+    for e in [&f.expr, &f.eval] {
+        e.visit(&mut |n| match n {
+            Expr::Call(Func::Abs, a) if a[0].contains_x() => args.push(canonical(&a[0])),
+            Expr::Call(Func::Min | Func::Max, a)
+                if a.len() == 2 && a.iter().any(|v| v.contains_x()) =>
+            {
+                args.push(canonical(&Expr::Bin(
+                    BinOp::Sub,
+                    Box::new(a[0].clone()),
+                    Box::new(a[1].clone()),
+                )))
+            }
+            _ => {}
+        });
+    }
+    let mut boxes: Vec<(f64, f64)> = Vec::new();
+    for (i, u) in args.iter().enumerate() {
+        if args[..i].contains(u) {
+            continue;
+        }
+        let c = Cover::run(
+            f,
+            &Target {
+                expr: u,
+                k: 0,
+                in_domain: true,
+            },
+            &[0.0],
+            spans,
+        );
+        if !c.complete() {
+            return None;
+        }
+        for l in &c.leaves {
+            match *l {
+                cover::Leaf::Band { .. } | cover::Leaf::Undefined { .. } => {}
+                cover::Leaf::Cross { exact: Some(p), .. }
+                | cover::Leaf::At { p, .. }
+                | cover::Leaf::Touch { p, .. } => boxes.push((p.next_down(), p.next_up())),
+                cover::Leaf::Cross { l, r, .. } => boxes.push((l, r)),
+                _ => return None,
+            }
+        }
+    }
+    boxes.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for b in boxes {
+        match out.last_mut() {
+            Some(last) if b.0 <= last.1 => last.1 = last.1.max(b.1),
+            _ => out.push(b),
+        }
+    }
+    Some(out)
+}
+
+/// `spans` with the kink boxes cut out: a span through one ends at its
+/// low end and resumes at its high end; a point span inside one is
+/// dropped.
+fn split_at_kinks(spans: &[(f64, f64)], kinks: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut out = Vec::new();
+    for &s in spans {
+        let mut pieces = vec![s];
+        for &(l, r) in kinks {
+            let mut next = Vec::new();
+            for (a, b) in pieces {
+                if a == b {
+                    if !(l <= a && a <= r) {
+                        next.push((a, b));
+                    }
+                } else if r <= a || b <= l {
+                    next.push((a, b));
+                } else {
+                    if a < l {
+                        next.push((a, l));
+                    }
+                    if r < b {
+                        next.push((r, b));
+                    }
+                }
+            }
+            pieces = next;
+        }
+        out.extend(pieces);
+    }
+    out
+}
+
+/// Whether f has a kink: abs, min or max of something depending on x.
+fn kinked(e: &crate::ast::Expr) -> bool {
+    use crate::ast::{Expr, Func};
+    e.any(&|n| {
+        matches!(n, Expr::Call(Func::Abs | Func::Min | Func::Max, args)
+            if args.iter().any(|a| a.contains_x()))
+    })
 }
 
 /// The simplifier's form of f to enclose values with, if it changed f and
@@ -353,6 +461,33 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             }
         }
     }
+    // A kink of f (abs, min, max) is cut out of f′'s and f″'s boxes: their
+    // trees, sign(u)·u′, equal f′ only off it. f must be continuous across
+    // each (a Kink claim); a kink that can't be placed leaves f′ and f″ to
+    // f's Taylor coefficients (undecided at the kink).
+    let mut tree_ok = true;
+    let kink_boxes: Vec<(f64, f64)> = if f.kinked {
+        let ok = |&(l, r): &(f64, f64)| {
+            f.val(crate::interval::Interval::new(l, r))
+                .is_ok_and(|v| !v.is_empty() && v.dec >= crate::interval::Dec::Dac)
+        };
+        match kinks(f, &spans) {
+            Some(k) if k.iter().all(ok) => k,
+            _ => {
+                tree_ok = false;
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    for sp in kspans.iter_mut() {
+        *sp = split_at_kinks(sp, &kink_boxes);
+    }
+    let kink_claims: Vec<Claim> = kink_boxes
+        .iter()
+        .map(|&(l, r)| Claim::Kink { x: XBox::new(l, r) })
+        .collect();
     // f⁽ᵏ⁾ from f's Taylor coefficients; if that leaves boxes undecided and
     // f is continuous, again from the derivative's own tree (for a rational
     // f its numerator is expanded exactly, so what cancels there cancels
@@ -371,8 +506,9 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             sp,
         );
         if continuous
+            && tree_ok
             && !c.complete()
-            && let Some(d) = f.derivs()
+            && let Some(d) = f.derivs_off_kinks()
         {
             f.allow(phase);
             let r = Cover::run(
@@ -391,7 +527,9 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         }
         c
     };
-    let (c1, c2) = (cover(1), cover(2));
+    let (mut c1, mut c2) = (cover(1), cover(2));
+    c1.kinks = kink_boxes.clone();
+    c2.kinks = kink_boxes.clone();
     if std::env::var_os("CERTIFY_DEBUG").is_some() {
         eprintln!("w = {w}, boxes = {spans:?}");
         for (k, c) in [&c0, &c1, &c2].iter().enumerate() {
@@ -460,7 +598,13 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             ),
         });
     }
-    let monotonicity = with(rows::monotonicity(&c1, &boxes, &scope, clear1), &gap_claims);
+    // The rows on f′ and f″ also rest on the kinks' claims.
+    let mut kgap_claims = gap_claims.clone();
+    kgap_claims.extend(kink_claims);
+    let monotonicity = with(
+        rows::monotonicity(&c1, &boxes, &scope, clear1),
+        &kgap_claims,
+    );
     let horizontal = or_unknown(rows::horizontal(f, &dom, &scope));
     let (range, range_ends) = rows::range(f, &dom, &c0, &c1, &boxes, &scope, clear1)
         .unwrap_or_else(|s| (Row::unknown(stop(s)), Vec::new()));
@@ -476,14 +620,14 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         period: or_unknown(rows::period(f, &dom, &monotonicity, w)),
         extrema: with(
             or_unknown(rows::extrema(f, &c1, &boxes, &scope, clear1)),
-            &gap_claims,
+            &kgap_claims,
         ),
         inflections: with(
             or_unknown(rows::inflections(f, &c2, &boxes, &scope, clear2)),
-            &gap_claims,
+            &kgap_claims,
         ),
         monotonicity,
-        range: with(range, &gap_claims),
+        range: with(range, &kgap_claims),
         range_ends,
         vertical: with(
             or_unknown(rows::vertical(f, &dom, &c0, &boxes, &scope)),

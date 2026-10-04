@@ -658,10 +658,6 @@ fn replay_catches_planted_errors() {
 /// the certifier is fixed the test fails, and the entry goes (with the
 /// issue's write-up).
 const KNOWN_ISSUES: &[(u32, &str, &str)] = &[
-    // 2: f″ claimed on the whole line for |x| (the derivative tree sign(x)
-    // hides the kink; f′ doesn't exist at 0): unconfirmed.
-    (2, "abs(x)", "inflections"),
-    (2, "10^-12*abs(x)", "inflections"),
     // 3: f⁽ᵏ⁾'s clearness in the gaps is not in the certificate.
     (3, "1/x", "x_intercepts"),
     (3, "sqrt(x)", "extrema"),
@@ -720,6 +716,49 @@ fn known_certifier_issues_still_reproduce() {
         "no longer reproduces (fixed?): {fixed:#?}\n\
          Remove these from KNOWN_ISSUES and research/replay-issues.md."
     );
+}
+
+/// Kinks (replay issue 2): f′ and f″ are claimed only off them, each kink
+/// a box f is continuous on; every claim replays (strong, or weak only for
+/// the simplifier's own facts) and every row follows from its claims.
+#[test]
+fn kinks_replay() {
+    let mut fails = Vec::new();
+    for src in [
+        "abs(x)",
+        "10^-12*abs(x)",
+        "abs(x-3)",
+        "x*abs(x)",
+        "abs(x^2-1)",
+        "max(x,0)",
+        "min(x^2,1)",
+        "abs(sin(x))",
+    ] {
+        for unit in [TrigUnit::Radians, TrigUnit::Degrees] {
+            let d = one(src, unit);
+            let Some(Ok(r)) = d.report else {
+                fails.push(format!("{src} [{unit:?}]: no report"));
+                continue;
+            };
+            for c in &r.claims {
+                let simplifier = matches!(c.claim, replay::Claim::Simplifier(_));
+                if !(c.outcome.class == Class::Strong
+                    || simplifier && c.outcome.class == Class::Weak)
+                {
+                    fails.push(format!(
+                        "{src} [{unit:?}]: {:?} {:?}: {}",
+                        c.outcome.class, c.claim, c.outcome.note
+                    ));
+                }
+            }
+            for row in &r.rows {
+                for p in &row.problems {
+                    fails.push(format!("{src} [{unit:?}]: {}: {p}", row.name));
+                }
+            }
+        }
+    }
+    assert!(fails.is_empty(), "{fails:#?}");
 }
 
 /// Sliders at values other than the default, in every angle unit: the

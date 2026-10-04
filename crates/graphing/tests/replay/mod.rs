@@ -143,6 +143,9 @@ pub enum Claim {
         near: B,
         at: B,
     },
+    /// f is defined and continuous on the box (a kink of f lies in it;
+    /// nothing is claimed about f′, f″ there).
+    Kink(B),
     /// Wherever f is defined on `near` (which holds `at`), its values lie
     /// in [lo, hi].
     Bounded {
@@ -180,6 +183,7 @@ impl Claim {
             Claim::TailValue { .. } => "TailValue",
             Claim::Unbounded { .. } => "Unbounded",
             Claim::Bounded { .. } => "Bounded",
+            Claim::Kink(_) => "Kink",
             Claim::Removable { .. } => "Removable",
             Claim::Simplifier(_) => "Simplifier",
             Claim::Gap(_) => "Gap",
@@ -376,6 +380,7 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
             near: xbox(field(b, "near")?)?,
             at: xbox(field(b, "at")?)?,
         },
+        "Kink" => Claim::Kink(x()?),
         "Bounded" => Claim::Bounded {
             near: xbox(field(b, "near")?)?,
             at: xbox(field(b, "at")?)?,

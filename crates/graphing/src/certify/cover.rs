@@ -130,6 +130,9 @@ impl Leaf {
 pub struct Cover {
     pub leaves: Vec<Leaf>,
     pub stopped: Option<Stop>,
+    /// For f′ and f″: the kinks of f the boxes leave out (see
+    /// `Claim::Kink`), each a box the leaves on either side end at.
+    pub kinks: Vec<(f64, f64)>,
 }
 
 struct Item {
@@ -293,7 +296,11 @@ impl Cover {
             let (ya, yb) = y.span();
             xa.total_cmp(&ya).then(xb.total_cmp(&yb))
         });
-        Cover { leaves, stopped }
+        Cover {
+            leaves,
+            stopped,
+            kinks: Vec::new(),
+        }
     }
 
     /// True when every leaf is decided, for a cover of boxes inside f's

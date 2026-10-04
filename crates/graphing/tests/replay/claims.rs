@@ -553,6 +553,7 @@ pub fn check(fx: &Fx, c: &Claim) -> Outcome {
             value(s, tail_box(*side, *from), *lo, *hi)
         }),
         Claim::Unbounded { near, at } => unbounded(fx, *near, *at),
+        Claim::Kink(x) => defined(fx, *x, Some(true)),
         Claim::Bounded { near, at, lo, hi } => {
             if !(near.0 <= at.0 && at.1 <= near.1) {
                 return Outcome::new(

@@ -194,6 +194,8 @@ struct Zero {
     at: Enc,
     left: Option<bool>,
     right: Option<bool>,
+    /// A kink of f (a Kink claim), not a zero: f⁽ᵏ⁾ isn't defined there.
+    kink: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -276,6 +278,7 @@ fn walk(fx: &Fx, claims: &[Claim], k: usize) -> Walk {
                             at: Enc { lo: x.0, hi: x.0 },
                             left: None,
                             right: None,
+                            kink: false,
                         });
                     } else {
                         w.flat.push(*x);
@@ -314,6 +317,7 @@ fn walk(fx: &Fx, claims: &[Claim], k: usize) -> Walk {
                     at: Enc { lo: *at, hi: *at },
                     left: None,
                     right: None,
+                    kink: false,
                 });
             }
             Claim::Touch {
@@ -334,10 +338,22 @@ fn walk(fx: &Fx, claims: &[Claim], k: usize) -> Walk {
                     at: Enc { lo: *at, hi: *at },
                     left: None,
                     right: None,
+                    kink: false,
                 });
             }
             Claim::Undefined(x) | Claim::Gap(x) => {
                 w.holes.push(*x);
+                w.boxes.push(*x);
+            }
+            // f′, f″ undefined at a kink: a point the signs either side
+            // decide (for f, its values are claimed elsewhere).
+            Claim::Kink(x) if k > 0 => {
+                w.zeros.push(Zero {
+                    at: Enc { lo: x.0, hi: x.1 },
+                    left: None,
+                    right: None,
+                    kink: true,
+                });
                 w.boxes.push(*x);
             }
             _ => {}
@@ -372,6 +388,7 @@ fn walk(fx: &Fx, claims: &[Claim], k: usize) -> Walk {
                     // Strictly monotone through the crossing.
                     left: Some(l),
                     right: Some(r),
+                    kink: false,
                 });
             }
             _ => w.problems.push(format!(
@@ -395,6 +412,7 @@ fn walk(fx: &Fx, claims: &[Claim], k: usize) -> Walk {
                 }
                 m.left = m.left.or(z.left);
                 m.right = m.right.or(z.right);
+                m.kink |= z.kink;
             }
             _ => merged.push(z),
         }
@@ -430,12 +448,12 @@ fn walk(fx: &Fx, claims: &[Claim], k: usize) -> Walk {
     w
 }
 
-/// Changes of sign: (where, from positive).
-fn changes(w: &Walk) -> Vec<(Enc, bool)> {
+/// Changes of sign: (where, from positive, at a kink).
+fn changes(w: &Walk) -> Vec<(Enc, bool, bool)> {
     w.zeros
         .iter()
         .filter_map(|z| match (z.left, z.right) {
-            (Some(l), Some(r)) if l != r => Some((z.at, l)),
+            (Some(l), Some(r)) if l != r => Some((z.at, l, z.kink)),
             _ => None,
         })
         .collect()
@@ -694,7 +712,21 @@ fn turns(
     if let Some(n) = holes_note(fx, rc, k) {
         out.notes.push(n);
     }
-    let mut ch = changes(&w);
+    let mut ch: Vec<(Enc, bool)> = Vec::new();
+    for (x, from_pos, kink) in changes(&w) {
+        if k == 2 && kink {
+            // f″ changes sign across a corner: no inflection is decided
+            // there, so the row can't be complete.
+            if complete(rc) {
+                out.problems.push(format!(
+                    "f″ changes sign across the kink at {:e}, yet the row is complete",
+                    x.mid()
+                ));
+            }
+            continue;
+        }
+        ch.push((x, from_pos));
+    }
     if k == 1 {
         // Extrema at closed domain ends (a maximum is "from positive").
         for (x, min) in end_extrema(rc, all, &w) {

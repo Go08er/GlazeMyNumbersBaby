@@ -218,16 +218,23 @@ enum Seg {
     Zero(Enc),
     /// ≡ 0 on a stretch.
     Flat,
+    /// A kink of f (enclosed): f′ and f″ undecided there, f continuous.
+    Kink(Enc),
     /// Not decided.
     Unknown,
 }
 
 fn walk(cover: &Cover, ib: &IBox) -> Vec<Seg> {
-    let mut out = Vec::new();
+    // Each leaf's segments, and each kink's, in x order.
+    let mut parts: Vec<(f64, Vec<Seg>)> = Vec::new();
+    for &(l, r) in cover.kinks.iter().filter(|(l, r)| *l >= ib.a && *r <= ib.b) {
+        parts.push((l, vec![Seg::Kink(Enc::new(l, r))]));
+    }
     for l in cover.leaves.iter().filter(|l| {
         let (a, b) = l.span();
         a >= ib.a && b <= ib.b
     }) {
+        let mut out = Vec::new();
         match *l {
             Leaf::Band { band, .. } => out.push(Seg::Sign(band == 1)),
             Leaf::Cross {
@@ -266,7 +273,10 @@ fn walk(cover: &Cover, ib: &IBox) -> Vec<Seg> {
             Leaf::Equal { .. } => out.push(Seg::Flat),
             Leaf::Undefined { .. } | Leaf::Flag { .. } => out.push(Seg::Unknown),
         }
+        parts.push((l.span().0, out));
     }
+    parts.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out: Vec<Seg> = parts.into_iter().flat_map(|(_, s)| s).collect();
     // Merge runs of the same sign, and a zero seen from both sides (its
     // point leaf and the boxes ending there).
     out.dedup_by(|y, x| match (*x, *y) {
@@ -284,14 +294,38 @@ fn walk(cover: &Cover, ib: &IBox) -> Vec<Seg> {
 /// every zero and stretch was decided (no change missed).
 /// f⁽ᵏ⁾ ≡ 0 on the whole box (its stretches and the points between them).
 fn flat(segs: &[Seg]) -> bool {
-    segs.contains(&Seg::Flat) && segs.iter().all(|s| matches!(s, Seg::Flat | Seg::Zero(_)))
+    segs.contains(&Seg::Flat)
+        && segs
+            .iter()
+            .all(|s| matches!(s, Seg::Flat | Seg::Zero(_) | Seg::Kink(_)))
 }
 
-fn changes(segs: &[Seg]) -> (Vec<(Enc, bool)>, bool) {
+/// With `kink_turns` (f′), a kink between strict opposite signs is a
+/// change (f, continuous there, turns); without it (f″), such a kink
+/// leaves the walk incomplete (an inflection at a corner is not decided).
+/// The same strict sign on both sides, or f⁽ᵏ⁾ ≡ 0 on both, is no change.
+fn changes(segs: &[Seg], kink_turns: bool) -> (Vec<(Enc, bool)>, bool) {
     let mut out = Vec::new();
     let mut complete = true;
     for (i, s) in segs.iter().enumerate() {
         match s {
+            Seg::Kink(x) => {
+                let before = i.checked_sub(1).and_then(|j| segs.get(j));
+                let after = segs.get(i + 1);
+                match (before, after) {
+                    (Some(Seg::Sign(p)), Some(Seg::Sign(q))) => {
+                        if p != q {
+                            if kink_turns {
+                                out.push((*x, *p));
+                            } else {
+                                complete = false;
+                            }
+                        }
+                    }
+                    (Some(Seg::Flat), Some(Seg::Flat)) => {}
+                    _ => complete = false,
+                }
+            }
             Seg::Zero(x) => {
                 let before = i.checked_sub(1).and_then(|j| segs.get(j));
                 let after = segs.get(i + 1);
@@ -424,7 +458,7 @@ pub fn extrema(
     cl.extend(gaps);
     for ib in boxes {
         let segs = walk(c1, ib);
-        let (ch, done) = changes(&segs);
+        let (ch, done) = changes(&segs, true);
         complete &= done;
         for low in [true, false] {
             if !low && ib.a == ib.b {
@@ -489,7 +523,7 @@ pub fn inflections(
     cl.extend(gaps);
     for ib in boxes {
         let segs = walk(c2, ib);
-        let (ch, done) = changes(&segs);
+        let (ch, done) = changes(&segs, false);
         complete &= done;
         for (x, _) in ch {
             if let Some(p) = scope.period
@@ -551,7 +585,7 @@ fn monotone_pieces(c1: &Cover, boxes: &[IBox]) -> Option<Vec<(Monotone, bool, bo
             ));
             continue;
         }
-        if !changes(&segs).1 {
+        if !changes(&segs, true).1 {
             return None;
         }
         let mut lo = ib.lo;
@@ -564,7 +598,7 @@ fn monotone_pieces(c1: &Cover, boxes: &[IBox]) -> Option<Vec<(Monotone, bool, bo
                         dir = Some(p);
                     }
                 }
-                Seg::Zero(x) => {
+                Seg::Zero(x) | Seg::Kink(x) => {
                     let after = segs.get(i + 1);
                     if let (Some(d), Some(Seg::Sign(q))) = (dir, after)
                         && *q != d
