@@ -722,6 +722,37 @@ pub fn same_shown(a: f64, b: f64) -> bool {
             && format_nonzero(a) == format_nonzero(b))
 }
 
+/// The allowance for a value the panel shows to fewer than six significant
+/// digits (`≈1.414`: it claims only those): one unit of its last shown
+/// digit. 0 for a value shown in full or exactly.
+pub fn shown_slack(text: &str, v: f64) -> f64 {
+    let t = text.trim();
+    if !t.starts_with('≈') || !v.is_finite() || v == 0.0 {
+        return 0.0;
+    }
+    let mantissa = t.split('×').next().unwrap_or(t);
+    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    let n = digits.trim_start_matches('0').len().max(1) as i32;
+    10f64.powi(v.abs().log10().floor() as i32 - n + 1)
+}
+
+/// The y text of a point item `(x, y)` (or a family's `(x₀ + kP, y), …`).
+pub fn point_y(item: &str) -> Option<&str> {
+    let body = item.strip_prefix('(')?;
+    let mut depth = 0i32;
+    let mut start = None;
+    for (i, ch) in body.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' if depth == 0 => return start.map(|s| body[s..i].trim()),
+            ')' => depth -= 1,
+            ',' if depth == 0 && start.is_none() => start = Some(i + 1),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// The allowance for a claimed value's own last digit: a few units of it,
 /// none for a claimed 0 (a value is 0 or it isn't).
 pub fn slack(v: f64) -> f64 {
@@ -1525,19 +1556,24 @@ pub fn check_extremum_claims(a: &Analysed, r: &mut Report) {
     let d = a.d();
     let e = &a.expr;
     let marks = marks(a);
-    for (list, sign, flag, name) in [
-        (&d.minima, 1.0, flags::MINIMA, "minimum"),
-        (&d.maxima, -1.0, flags::MAXIMA, "maximum"),
+    for (list, texts, sign, flag, name) in [
+        (&d.minima, &a.k.minima, 1.0, flags::MINIMA, "minimum"),
+        (&d.maxima, &a.k.maxima, -1.0, flags::MAXIMA, "maximum"),
     ] {
         if a.unknown(flag) {
             continue;
         }
-        'claims: for (fx, y) in list {
+        'claims: for (i, (fx, y)) in list.iter().enumerate() {
+            let shown = texts
+                .get(i)
+                .and_then(|t| point_y(t))
+                .map_or(0.0, |t| shown_slack(t, *y));
             for c in a.copies(fx) {
                 let fv = a.eval(c);
                 let n0 = a.noise(c);
                 if !fv.is_finite()
-                    || (!a.forgives_n(n0 + slack(*y), (fv - y).abs()) && !same_shown(fv, *y))
+                    || (!a.forgives_n(n0 + slack(*y) + shown, (fv - y).abs())
+                        && !same_shown(fv, *y))
                 {
                     r.fail(
                         "extremum-value-wrong",
@@ -5239,5 +5275,21 @@ fn apply(k: &mut KeyGraphFeatures, drop: u32) {
         k.periodicity_direction = super::Periodicity::Unknown;
         k.periodicity_expression.clear();
         k.data.period = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shown_digits_allowance() {
+        assert_eq!(point_y("(≈−1.4427, −0.530738)"), Some("−0.530738"));
+        assert_eq!(point_y("((1 + √5)/2, ≈0.25), k ∈ ℤ"), Some("≈0.25"));
+        assert_eq!(point_y("x = 1"), None);
+        assert_eq!(shown_slack("−0.530738", -0.530738), 0.0);
+        assert!((shown_slack("≈−0.368", -0.36788) - 0.001).abs() < 1e-15);
+        assert!((shown_slack("≈1.234", 1.2341) - 0.001).abs() < 1e-15);
+        assert!((shown_slack("≈1.23×10⁻⁷", 1.23e-7) - 1e-9).abs() < 1e-22);
     }
 }

@@ -1221,16 +1221,34 @@ fn check_pair(b: &Analysed, o: &Analysed, t: Aff, r: &mut Report) {
             );
             continue;
         }
-        // Values: the mapped base value, to within the noise at both.
-        for (bm, mf) in bl.iter().zip(&bfam) {
+        // Values: the mapped base value, to within the noise at both (and
+        // the last digit of a value shown to fewer than six).
+        let texts = |a: &Analysed, f: u32| -> Vec<String> {
+            if f == flags::MINIMA {
+                a.k.minima.clone()
+            } else {
+                a.k.maxima.clone()
+            }
+        };
+        let (bt, ot) = (texts(b, bf), texts(o, of));
+        let shown = |ts: &[String], i: usize, v: f64| {
+            ts.get(i)
+                .and_then(|t| point_y(t))
+                .map_or(0.0, |t| shown_slack(t, v))
+        };
+        for (i, (bm, mf)) in bl.iter().zip(&bfam).enumerate() {
             let want = t.my(bm.1);
-            let Some(om) = ol
+            let Some(j) = ol
                 .iter()
-                .find(|om| same_turn(o, mf.x, nearest(&om.0, mf.x), sign))
+                .position(|om| same_turn(o, mf.x, nearest(&om.0, mf.x), sign))
             else {
                 continue;
             };
-            let tol = t.k.abs() * b.noise(bm.0.x) + o.noise(om.0.x) + 8.0 * ulp(want);
+            let om = &ol[j];
+            let tol = t.k.abs() * (b.noise(bm.0.x) + shown(&bt, i, bm.1))
+                + o.noise(om.0.x)
+                + shown(&ot, j, om.1)
+                + 8.0 * ulp(want);
             if (want - om.1).abs() > tol && !same_shown(want, om.1) {
                 fail(
                     r,
