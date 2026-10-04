@@ -114,10 +114,27 @@ jobs:
           name: fedora
           path: out/*.rpm
 
+  dated:
+    name: Release metadata dated
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: No release still marked unreleased
+        run: |
+          # Until it is tagged, a release is marked unreleased: type="development"
+          # in the metainfo, UNRELEASED in debian/changelog. Tagging means dating
+          # it (the metainfo files, debian/changelog, the Fedora %changelog).
+          if grep -n 'type="development"' packaging/*.metainfo.xml ||
+            grep -n UNRELEASED packaging/debian/changelog; then
+            echo "::error::Date the release before tagging it."
+            exit 1
+          fi
+
   release:
     name: GitHub release
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [flatpak, arch, debian, fedora]
+    needs: [flatpak, arch, debian, fedora, dated]
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -81,6 +81,7 @@ fn mulnumx_core(a: &Number, b: &Number) -> CalcResult<Number> {
     let sign = a.sign.wrapping_mul(b.sign);
     let exp = a.exp.wrapping_add(b.exp);
 
+    super::charge(a.mant.len() * b.mant.len());
     let mut icdigit = 0usize; // Index of digit being calculated in final result.
     for (ia, &da) in a.mant.iter().enumerate() {
         let iadigit = a_cdigit - ia as i32;
@@ -229,6 +230,7 @@ fn divnumx_core(ctx: &Ctx, a: &Number, b: &Number, precision: i32) -> CalcResult
     while cdigits < thismax && !zernum(&rem) {
         cdigits += 1;
         c[ptrc] = 0;
+        super::charge(rem.mant.len() + b.mant.len());
         while !lessnum(&rem, b) {
             let mut digit: i32 = 1;
             let mut tmp = b.clone(); // current guess being worked on for divide.

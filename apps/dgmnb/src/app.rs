@@ -116,6 +116,43 @@ fn open_link(proxy: EventLoopProxy<UserEvent>, url: &'static str) {
     }
 }
 
+/// The largest scale and the largest logical size of the monitors.
+fn screens(
+    monitors: impl Iterator<Item = winit::monitor::MonitorHandle>,
+) -> (f64, Option<(f64, f64)>) {
+    let mut scale = 1.0f64;
+    let mut largest: Option<(f64, f64)> = None;
+    for m in monitors {
+        scale = scale.max(m.scale_factor());
+        let s = m.size().to_logical::<f64>(m.scale_factor());
+        if s.width >= 1.0 && s.height >= 1.0 {
+            let (w, h) = largest.unwrap_or_default();
+            largest = Some((w.max(s.width), h.max(s.height)));
+        }
+    }
+    (scale, largest)
+}
+
+/// A saved window size, kept to what a window can be: at least `min`, at
+/// most 16384 (as GMNB), no larger than the largest monitor (the frame
+/// buffer of a huge window cannot be allocated) and, X11 window sizes being
+/// 16-bit (winit panics on a larger one), under 65536 physical pixels at
+/// `scale`.
+fn window_size(
+    width: i32,
+    height: i32,
+    min: (f64, f64),
+    (scale, screen): (f64, Option<(f64, f64)>),
+) -> LogicalSize<f64> {
+    let max = (65535.0 / scale.max(1.0)).floor().min(16384.0);
+    let (screen_w, screen_h) = screen.unwrap_or((max, max));
+    let fit = |v: i32, max: f64, min: f64| (v as f64).min(max).max(min);
+    LogicalSize::new(
+        fit(width, max.min(screen_w), min.0),
+        fit(height, max.min(screen_h), min.1),
+    )
+}
+
 fn persist(store: &Store) {
     if let Err(e) = store.save() {
         eprintln!("dgmnb: {e}");
@@ -441,7 +478,8 @@ impl App {
                 LogicalSize::new(320.0, 420.0)
             } else {
                 let d = self.store.data.borrow();
-                LogicalSize::new(d.width.max(320) as f64, d.height.max(420) as f64)
+                let screens = screens(g.window.available_monitors());
+                window_size(d.width, d.height, (320.0, 420.0), screens)
             };
             let _ = g.window.request_inner_size(size);
         }
@@ -1575,13 +1613,18 @@ impl ApplicationHandler<UserEvent> for App {
         if self.gfx.is_some() {
             return;
         }
-        let (w, h) = {
+        let size = {
             let d = self.store.data.borrow();
-            (d.width.max(300) as f64, d.height.max(400) as f64)
+            window_size(
+                d.width,
+                d.height,
+                (300.0, 400.0),
+                screens(el.available_monitors()),
+            )
         };
         let attrs = Window::default_attributes()
             .with_title(APP_NAME)
-            .with_inner_size(LogicalSize::new(w, h))
+            .with_inner_size(size)
             .with_min_inner_size(LogicalSize::new(300.0, 400.0))
             .with_decorations(false)
             .with_visible(false);
@@ -2313,12 +2356,65 @@ const LICENCES: &str = concat!(
     include_str!("../assets/fonts/OFL-Inter.txt"),
     "\n\n— Noto Sans (Math, Arabic, Armenian, Bengali, Khmer subsets) —\n\n",
     include_str!("../assets/fonts/OFL-Noto.txt"),
-    "\n\n— Clipboard code adapted from smithay-clipboard —\n\n",
-    include_str!("../assets/LICENSE-smithay-clipboard.txt"),
-    "\n\n— CORE-MATH (correctly rounded maths functions, used by Graphing) —\n\n",
-    include_str!("../../../crates/crmath/vendor/LICENSE"),
-    "\n\nExchange rates: Frankfurter (central bank reference rates)."
+    "\n\nExchange rates: Frankfurter (central bank reference rates).\n\n",
+    // CORE-MATH, smithay-clipboard and the Rust crates (of all three programs).
+    include_str!("../../../THIRD-PARTY-LICENSES.txt"),
 );
+
+/// [`LICENCES`] wrapped for the last width asked, and the width of each
+/// word in it.
+struct LicenceLines {
+    width: f32,
+    lines: Rc<[String]>,
+    space: f32,
+    words: HashMap<&'static str, f32>,
+}
+
+thread_local! {
+    static LICENCE_LINES: std::cell::RefCell<Option<LicenceLines>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// [`LICENCES`] wrapped to `w` as `Frame::wrap` does, except that each
+/// distinct word is measured once and lines are summed from words and
+/// spaces (wrapping the whole text anew took a third of a second).
+fn licence_lines(text: &mut crate::text::Text, w: f32) -> Rc<[String]> {
+    LICENCE_LINES.with_borrow_mut(|cache| {
+        let c = cache.get_or_insert_with(|| LicenceLines {
+            width: f32::NAN,
+            lines: Rc::from([]),
+            space: text.width(" ", SMALL),
+            words: HashMap::new(),
+        });
+        if c.width != w {
+            let mut out = Vec::new();
+            for para in LICENCES.split('\n') {
+                let (mut line, mut lw) = (String::new(), 0.0);
+                for word in para.split(' ') {
+                    let ww = *c
+                        .words
+                        .entry(word)
+                        .or_insert_with(|| text.width(word, SMALL));
+                    if line.is_empty() {
+                        line = word.to_string();
+                        lw = ww;
+                    } else if lw + c.space + ww > w {
+                        out.push(std::mem::replace(&mut line, word.to_string()));
+                        lw = ww;
+                    } else {
+                        line.push(' ');
+                        line.push_str(word);
+                        lw += c.space + ww;
+                    }
+                }
+                out.push(line);
+            }
+            c.lines = out.into();
+            c.width = w;
+        }
+        c.lines.clone()
+    })
+}
 
 pub(crate) fn draw_licences(f: &mut Frame, full: Rect) {
     let t = f.t;
@@ -2344,16 +2440,80 @@ pub(crate) fn draw_licences(f: &mut Frame, full: Rect) {
     );
     let sid = id("lic-scroll");
     let off = f.scroll_begin(sid, body, "Licences");
-    let h = f.paragraph(
-        body.x + 4.0,
-        body.y - off,
-        body.w - 16.0,
-        LICENCES,
-        SMALL,
-        t.fg,
-    );
+    // `f.paragraph`, but wrapped once per width and only the lines in view
+    // drawn: the text is some 170 KB.
+    let w = body.w - 16.0;
+    let lines = licence_lines(f.text, w);
+    let lh = (SMALL.size * 1.4).round();
+    let first = ((off / lh) as usize).saturating_sub(1);
+    let last = (((off + body.h) / lh) as usize + 1).min(lines.len());
+    for (i, line) in lines.iter().enumerate().take(last).skip(first) {
+        let r = Rect::new(body.x + 4.0, body.y - off + i as f32 * lh, w, lh);
+        f.label(r, line, SMALL, t.fg, Align::Start);
+    }
+    let h = lines.len() as f32 * lh;
     f.scroll_end(sid, body, h);
     if let Some(n) = f.node(id("lic-text"), accesskit::Role::Document, "Licences", body) {
         n.value = Some(LICENCES.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The licence viewer's own wrapping keeps every word in order, and a
+    /// line of several words fits the width (summing word widths is close
+    /// to measuring the line).
+    #[test]
+    fn licence_lines_keep_every_word_and_fit() {
+        let mut text = crate::text::Text::new();
+        let words: Vec<&str> = LICENCES
+            .split(['\n', ' '])
+            .filter(|w| !w.is_empty())
+            .collect();
+        for w in [300.0, 715.0] {
+            let lines = licence_lines(&mut text, w);
+            let kept: Vec<&str> = lines
+                .iter()
+                .flat_map(|l| l.split(' '))
+                .filter(|w| !w.is_empty())
+                .collect();
+            assert_eq!(kept, words);
+            for l in lines.iter().filter(|l| l.trim().contains(' ')) {
+                assert!(text.width(l, SMALL) <= w + 1.0, "{l:?} is wider than {w}");
+            }
+        }
+        // What DGMNB contains, besides its own code and fonts.
+        for name in [
+            "CORE-MATH",
+            "smithay-clipboard",
+            "tiny-skia",
+            "winit",
+            "webpki-roots",
+        ] {
+            assert!(LICENCES.contains(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn saved_window_sizes_are_kept_to_what_a_window_can_be() {
+        let size = |w, h, screens| {
+            let s = window_size(w, h, (300.0, 400.0), screens);
+            (s.width, s.height)
+        };
+        let unknown = (1.0, None);
+        assert_eq!(size(360, 640, unknown), (360.0, 640.0));
+        assert_eq!(size(0, -5, unknown), (300.0, 400.0));
+        assert_eq!(size(65535, 65536, unknown), (16384.0, 16384.0));
+        assert_eq!(size(i32::MAX, i32::MAX, unknown), (16384.0, 16384.0));
+        // X11 sizes are 16-bit physical pixels.
+        assert_eq!(size(65536, 600, (5.0, None)), (13107.0, 600.0));
+        assert!(size(20000, 20000, (4.0, None)).0 * 4.0 < 65536.0);
+        // No larger than the largest monitor.
+        let screen = (2.0, Some((1920.0, 1080.0)));
+        assert_eq!(size(65536, 65536, screen), (1920.0, 1080.0));
+        assert_eq!(size(1200, 900, screen), (1200.0, 900.0));
+        assert_eq!(size(100, 100, (1.0, Some((200.0, 200.0)))), (300.0, 400.0));
     }
 }

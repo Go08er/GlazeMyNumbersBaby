@@ -33,16 +33,32 @@ const MAX_HISTORY_ITEMS: usize = 20;
 struct ManagerDisplay {
     display_callback: CalcDisplayRef,
     in_history_item_load_mode: bool,
+    /// Extension: see [`CalculatorManager::begin_deferred_display`].
+    deferred: Option<DeferredDisplay>,
+}
+
+/// The display updates held back while displays are deferred: the last
+/// primary display, and whether the expression or the memory list changed.
+#[derive(Default)]
+struct DeferredDisplay {
+    primary: Option<(String, bool)>,
+    expression: bool,
+    memory: bool,
 }
 
 impl CalcDisplay for ManagerDisplay {
     /// Used to set the primary display value on ViewModel
     fn set_primary_display(&mut self, display_string: &str, is_error: bool) {
-        if !self.in_history_item_load_mode {
-            self.display_callback
-                .borrow_mut()
-                .set_primary_display(display_string, is_error);
+        if self.in_history_item_load_mode {
+            return;
         }
+        if let Some(deferred) = self.deferred.as_mut() {
+            deferred.primary = Some((display_string.to_string(), is_error));
+            return;
+        }
+        self.display_callback
+            .borrow_mut()
+            .set_primary_display(display_string, is_error);
     }
 
     fn set_is_in_error(&mut self, is_error: bool) {
@@ -55,11 +71,16 @@ impl CalcDisplay for ManagerDisplay {
         tokens: &[ExpressionToken],
         commands: &[ExpressionCommand],
     ) {
-        if !self.in_history_item_load_mode {
-            self.display_callback
-                .borrow_mut()
-                .set_expression_display(tokens, commands);
+        if self.in_history_item_load_mode {
+            return;
         }
+        if let Some(deferred) = self.deferred.as_mut() {
+            deferred.expression = true;
+            return;
+        }
+        self.display_callback
+            .borrow_mut()
+            .set_expression_display(tokens, commands);
     }
 
     fn set_parenthesis_number(&mut self, parenthesis_count: u32) {
@@ -159,6 +180,7 @@ impl CalculatorManager {
         let proxy = Rc::new(RefCell::new(ManagerDisplay {
             display_callback: display_callback.clone(),
             in_history_item_load_mode: false,
+            deferred: None,
         }));
 
         CalculatorManager {
@@ -603,6 +625,10 @@ impl CalculatorManager {
     }
 
     pub fn set_memorized_numbers_string(&mut self) -> CalcResult<()> {
+        if let Some(deferred) = self.proxy.borrow_mut().deferred.as_mut() {
+            deferred.memory = true;
+            return Ok(());
+        }
         let mut result_vector: Vec<String> = Vec::new();
         let engine = self
             .current_engine_ref()
@@ -675,6 +701,38 @@ impl CalculatorManager {
 
     pub fn set_in_history_item_load_mode(&mut self, is_history_item_load_mode: bool) {
         self.proxy.borrow_mut().in_history_item_load_mode = is_history_item_load_mode;
+    }
+
+    /// Extension: until [`end_deferred_display`](Self::end_deferred_display)
+    /// the engines' `SetPrimaryDisplay` and `SetExpressionDisplay` callbacks
+    /// and the memory list updates are held back, so replaying a long saved
+    /// calculation costs one display update instead of one per command (each
+    /// expression update copies the whole expression, each memory update
+    /// formats every slot).
+    pub fn begin_deferred_display(&mut self) {
+        self.proxy.borrow_mut().deferred = Some(DeferredDisplay::default());
+    }
+
+    /// Extension: ends [`begin_deferred_display`](Self::begin_deferred_display)
+    /// and reports the last primary display held back and, if they changed
+    /// meanwhile, the current engine's running expression and the memory
+    /// list.
+    pub fn end_deferred_display(&mut self) -> CalcResult<()> {
+        let Some(deferred) = self.proxy.borrow_mut().deferred.take() else {
+            return Ok(());
+        };
+        if let Some((text, is_error)) = deferred.primary {
+            self.proxy.borrow_mut().set_primary_display(&text, is_error);
+        }
+        if deferred.expression
+            && let Some(slot) = self.current_calculator_engine
+        {
+            self.engine_mut(slot).refresh_expression_display();
+        }
+        if deferred.memory {
+            self.set_memorized_numbers_string()?;
+        }
+        Ok(())
     }
 
     pub fn get_display_commands_snapshot(&self) -> Vec<ExpressionCommand> {

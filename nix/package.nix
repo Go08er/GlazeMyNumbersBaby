@@ -34,7 +34,7 @@ rustPlatform.buildRustPackage {
   cargoLock.lockFile = ../Cargo.lock;
   cargoBuildFlags = [ "-p" "gmnb" ];
   doCheck = false;
-  # On x86_64, for x86-64-v3 (2013+ CPUs).
+  # On x86_64, for x86-64-v3 (CPUs with AVX2).
   env = lib.optionalAttrs x86 {
     RUSTFLAGS = "-C target-cpu=x86-64-v3";
   };
@@ -59,7 +59,8 @@ rustPlatform.buildRustPackage {
     install -Dm644 packaging/${appId}.desktop -t $out/share/applications
     install -Dm644 packaging/${appId}.metainfo.xml -t $out/share/metainfo
     install -Dm644 packaging/icons/${appId}.svg -t $out/share/icons/hicolor/scalable/apps
-    install -Dm644 LICENSE apps/gmnb/assets/fonts/OFL-Outfit.txt -t $out/share/licenses/${appId}
+    install -Dm644 LICENSE THIRD-PARTY-LICENSES.txt apps/gmnb/assets/fonts/OFL-Outfit.txt \
+      -t $out/share/licenses/${appId}
   '';
   preFixup = ''
     wrapGApp $out/bin/gmnb
@@ -67,10 +68,23 @@ rustPlatform.buildRustPackage {
   meta = {
     description = "GlazeMyNumbers,Baby: Windows Calculator ported to Rust, made pointlessly beautiful";
     homepage = "https://github.com/Go08er/GlazeMyNumbersBaby";
-    # MIT code; the embedded Outfit typeface is OFL-1.1.
+    # MIT code; the embedded Outfit typeface is OFL-1.1; the rest are the
+    # crates compiled in (THIRD-PARTY-LICENSES.txt).
     license = with lib.licenses; [
       mit
       ofl
+      asl20
+      bsd3
+      isc
+      unicode-30
+      zlib
+      # webpki-roots' data; not in lib.licenses.
+      {
+        spdxId = "CDLA-Permissive-2.0";
+        fullName = "Community Data License Agreement Permissive 2.0";
+        url = "https://cdla.dev/permissive-2-0/";
+        free = true;
+      }
     ];
     mainProgram = "gmnb";
     platforms = lib.platforms.linux;

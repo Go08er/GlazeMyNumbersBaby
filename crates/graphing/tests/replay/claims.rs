@@ -356,9 +356,18 @@ pub fn side_tree(f: &Expr, path: &[u8], via: Via) -> Option<Expr> {
 
 // ------------------------------------------------------------ checks
 
+/// f's own tree defined on all of `x` (shown on the canonical tree).
+pub fn orig_defined(fx: &Fx, x: B) -> bool {
+    defined(fx, x, Some(false)).class == Class::Strong
+}
+
 /// Runs `f` on the canonical tree, then (if it couldn't decide) on the
-/// certifier's tree: strong, weak, refuted or unconfirmed.
-fn by_trees(fx: &Fx, of: &Subject, mut f: impl FnMut(&Subj) -> V) -> Outcome {
+/// certifier's tree, but only where f's own tree is shown defined on each
+/// box of `on` (the claim's): the certifier's tree equals f only where f
+/// is defined. (For f′ and f″ the subject's validity also asks f's own
+/// derivatives there, [`Subj::coeffs`].) Strong, weak, refuted or
+/// unconfirmed.
+fn by_trees(fx: &Fx, of: &Subject, on: &[B], mut f: impl FnMut(&Subj) -> V) -> Outcome {
     let Some(s) = Subj::new(fx, of, Tree::Orig) else {
         return Outcome::new(Class::Unsupported, "no such side expression");
     };
@@ -375,6 +384,7 @@ fn by_trees(fx: &Fx, of: &Subject, mut f: impl FnMut(&Subj) -> V) -> Outcome {
     };
     if let Some(t) = Subj::new(fx, of, Tree::Eval)
         && t.e != s.e
+        && on.iter().all(|x| orig_defined(fx, *x))
         && let V::Yes = ladder(|| match f(&t) {
             V::No(w) => V::Unknown(w),
             v => v,
@@ -561,15 +571,17 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
         Claim::Defined(x) => defined(fx, *x, Some(false)),
         Claim::Continuous(x) => defined(fx, *x, Some(true)),
         Claim::Undefined(x) => defined(fx, *x, None),
-        Claim::Beyond { x, of, c, above } => by_trees(fx, of, |s| beyond(s, *x, *c, *above, false)),
-        Claim::NoCross { x, of, c, above } => by_trees(fx, of, |s| {
+        Claim::Beyond { x, of, c, above } => {
+            by_trees(fx, of, &[*x], |s| beyond(s, *x, *c, *above, false))
+        }
+        Claim::NoCross { x, of, c, above } => by_trees(fx, of, &[*x], |s| {
             all([
                 end_beyond(s, x.0, *c, *above),
                 end_beyond(s, x.1, *c, *above),
                 monotone(s, *x),
             ])
         }),
-        Claim::OneCross { x, of, c } => by_trees(fx, of, |s| {
+        Claim::OneCross { x, of, c } => by_trees(fx, of, &[*x], |s| {
             let a = end_beyond(s, x.0, *c, true);
             let below_first = !a.yes();
             all([
@@ -578,7 +590,7 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
                 monotone(s, *x),
             ])
         }),
-        Claim::ExactAt { x, of, c, at } => by_trees(fx, of, |s| {
+        Claim::ExactAt { x, of, c, at } => by_trees(fx, of, &[*x], |s| {
             if !(x.0 <= *at && *at <= x.1) {
                 return V::No(format!("{at:e} is outside the box"));
             }
@@ -591,7 +603,7 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
             };
             all([exact, monotone(s, *x)])
         }),
-        Claim::Factors { x, of, c, above } => by_trees(fx, of, |s| {
+        Claim::Factors { x, of, c, above } => by_trees(fx, of, &[*x], |s| {
             let direct = beyond(s, *x, *c, *above, true);
             if !matches!(direct, V::Unknown(_)) {
                 return direct;
@@ -605,8 +617,8 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
             at,
             order,
             above,
-        } => by_trees(fx, of, |s| touch(s, *x, *c, *at, *order, *above)),
-        Claim::Value { x, of, lo, hi } => by_trees(fx, of, |s| value(s, *x, *lo, *hi)),
+        } => by_trees(fx, of, &[*x], |s| touch(s, *x, *c, *at, *order, *above)),
+        Claim::Value { x, of, lo, hi } => by_trees(fx, of, &[*x], |s| value(s, *x, *lo, *hi)),
         Claim::Family { of, x0, period } => family(fx, of, *x0, *period),
         Claim::TailBeyond {
             side,
@@ -614,7 +626,7 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
             of,
             c,
             above,
-        } => by_trees(fx, of, |s| {
+        } => by_trees(fx, of, &[tail_box(*side, *from)], |s| {
             beyond(s, tail_box(*side, *from), *c, *above, false)
         }),
         Claim::TailChain {
@@ -624,10 +636,14 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
             c,
             above,
             order,
-        } => by_trees(fx, of, |s| tail_chain(s, *side, *from, *c, *above, *order)),
-        Claim::TailValue { side, from, lo, hi } => by_trees(fx, &Subject::F(0), |s| {
-            value(s, tail_box(*side, *from), *lo, *hi)
+        } => by_trees(fx, of, &[tail_box(*side, *from)], |s| {
+            tail_chain(s, *side, *from, *c, *above, *order)
         }),
+        Claim::TailValue { side, from, lo, hi } => {
+            by_trees(fx, &Subject::F(0), &[tail_box(*side, *from)], |s| {
+                value(s, tail_box(*side, *from), *lo, *hi)
+            })
+        }
         Claim::Unbounded { near, at } => unbounded(fx, *near, *at),
         Claim::Kink(x) => defined(fx, *x, Some(true)),
         Claim::KinkAt { x, at, left, right } => kink_at(fx, *x, *at, *left, *right),
@@ -638,7 +654,16 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
                     "the excluded point's box is not inside near",
                 );
             }
-            by_trees(fx, &Subject::F(0), |s| where_defined(s, *near, *lo, *hi))
+            // Off the excluded point (the certifier's tree may be defined
+            // there, f isn't).
+            let off = [(near.0, at.0.next_down()), (at.1.next_up(), near.1)];
+            let mut off: Vec<B> = off.into_iter().filter(|b| b.0 <= b.1).collect();
+            if off.is_empty() {
+                off.push(*near);
+            }
+            by_trees(fx, &Subject::F(0), &off, |s| {
+                where_defined(s, *near, *lo, *hi)
+            })
         }
         Claim::Removable { near, at, lo, hi } => removable(fx, *near, *at, *lo, *hi),
         Claim::Simplifier(fact) => simplifier(fx, fact),
@@ -1009,7 +1034,8 @@ fn defined(fx: &Fx, x: B, want: Option<bool>) -> Outcome {
 fn value(s: &Subj, x: B, lo: f64, hi: f64) -> V {
     let v = value_valid(s, x, lo, hi);
     let V::No(why) = &v else { return v };
-    if !why.starts_with("undefined") {
+    // (At a point, f is defined or it isn't: the claim says it is.)
+    if !why.starts_with("undefined") || x.0 == x.1 {
         return v;
     }
     // Not valid on the whole box (it holds a point where f is undefined):

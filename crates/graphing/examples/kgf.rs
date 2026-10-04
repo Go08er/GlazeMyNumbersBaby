@@ -3,11 +3,15 @@
 //!
 //! With `--legacy`, the earlier engine's panel instead (behind its gate);
 //! with `--gate`, also what that engine alone said and why the gate
-//! (`analysis::verify`) dropped what it dropped.
+//! (`analysis::verify`) dropped what it dropped; `--deg`, `--grad` set the
+//! angle unit (radians otherwise).
 
 use graphing::Equation;
-use graphing::analysis::{KeyGraphFeatures, analyze_legacy, analyze_str, analyze_ungated, verify};
+use graphing::analysis::{
+    AnalysisError, KeyGraphFeatures, analyze, analyze_legacy, analyze_ungated, verify,
+};
 use graphing::compile::CompileOptions;
+use graphing::functions::TrigUnit;
 
 fn print(k: &KeyGraphFeatures) {
     if let Some(e) = k.analysis_error_string() {
@@ -35,14 +39,24 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let gate = args.iter().any(|a| a == "--gate");
     let legacy = args.iter().any(|a| a == "--legacy");
+    let trig_unit = if args.iter().any(|a| a == "--deg") {
+        TrigUnit::Degrees
+    } else if args.iter().any(|a| a == "--grad") {
+        TrigUnit::Grads
+    } else {
+        TrigUnit::Radians
+    };
+    let opts = CompileOptions {
+        trig_unit,
+        ..CompileOptions::default()
+    };
     for a in args.iter().filter(|a| !a.starts_with("--")) {
         let t = std::time::Instant::now();
         // `--legacy`: the earlier engine behind its gate, for comparison.
         let k = match (legacy, Equation::parse(a)) {
-            (true, Ok(eq)) => {
-                analyze_legacy(&eq, &CompileOptions::default(), None).expect("not cancellable")
-            }
-            _ => analyze_str(a),
+            (true, Ok(eq)) => analyze_legacy(&eq, &opts, None).expect("not cancellable"),
+            (false, Ok(eq)) => analyze(&eq, &opts),
+            (_, Err(_)) => KeyGraphFeatures::error(AnalysisError::AnalysisCouldNotBePerformed),
         };
         let dt = t.elapsed();
         println!("== {a}   ({:.1} ms)", dt.as_secs_f64() * 1e3);
@@ -53,7 +67,6 @@ fn main() {
         let Ok(eq) = Equation::parse(a) else {
             continue;
         };
-        let opts = CompileOptions::default();
         let t = std::time::Instant::now();
         let raw = analyze_ungated(&eq, &opts);
         let dt = t.elapsed();

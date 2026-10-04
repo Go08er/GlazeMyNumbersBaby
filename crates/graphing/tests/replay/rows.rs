@@ -214,9 +214,13 @@ struct Walk {
     problems: Vec<String>,
 }
 
-/// f⁽ᵏ⁾'s sign at a double, from the replay's own evaluation.
+/// f⁽ᵏ⁾'s sign at a double, from the replay's own evaluation (on the
+/// certifier's tree only where f's own is shown defined).
 fn sign_at(fx: &Fx, k: usize, x: f64) -> Option<bool> {
     for tree in [Tree::Orig, Tree::Eval] {
+        if tree == Tree::Eval && !claims::orig_defined(fx, (x, x)) {
+            break;
+        }
         let Some(s) = Subj::new(fx, &Subject::F(k), tree) else {
             continue;
         };
@@ -524,15 +528,44 @@ fn coverage(rc: &RowCert, all: &[RowCert], boxes: &[B], out: &mut RowResult) {
     }
 }
 
+/// Does `d` (enclosed) meet the members x₀ + k·p of a family, for x₀ and
+/// p anywhere in their enclosures and k the whole number nearest (or
+/// either beside it)? Exactly, in rationals: no tolerance but the
+/// enclosures' own widths.
+fn meets_member(x0: &Enc, p: &Enc, d: &Enc) -> bool {
+    use rug::{Integer, Rational};
+    let q = |v: f64| Rational::from_f64(v);
+    let (Some(x0lo), Some(x0hi), Some(plo), Some(phi), Some(dlo), Some(dhi)) =
+        (q(x0.lo), q(x0.hi), q(p.lo), q(p.hi), q(d.lo), q(d.hi))
+    else {
+        return false;
+    };
+    if plo <= 0 {
+        return false;
+    }
+    // k nearest: (d − x₀)/p at the middles, rounded.
+    let guess =
+        (Rational::from(&dlo + &dhi) - Rational::from(&x0lo + &x0hi)) / Rational::from(&plo + &phi);
+    let k0 = guess.round().numer().clone();
+    [Integer::from(&k0 - 1), k0.clone(), Integer::from(&k0 + 1)]
+        .into_iter()
+        .any(|k| {
+            let k = Rational::from(k);
+            // x₀ + k·p over the enclosures: k·p's ends swap for k < 0.
+            let (kp_lo, kp_hi) = if k >= 0 {
+                (Rational::from(&k * &plo), Rational::from(&k * &phi))
+            } else {
+                (Rational::from(&k * &phi), Rational::from(&k * &plo))
+            };
+            let lo = Rational::from(&x0lo + &kp_lo);
+            let hi = Rational::from(&x0hi + &kp_hi);
+            lo <= dhi && dlo <= hi
+        })
+}
+
 /// Is `x` (enclosed) a repeat of one of `xs` by a whole number of periods?
 fn repeat_of(xs: &[Enc], x: &Enc, period: &Enc) -> bool {
-    xs.iter().any(|e| {
-        let k = ((x.mid() - e.mid()) / period.mid()).round();
-        let (a, b) = (e.lo + k * period.lo, e.hi + k * period.hi);
-        let (a, b) = (a.min(b), a.max(b));
-        let slack = 1e-9 * x.mid().abs().max(1.0);
-        a - slack <= x.hi && x.lo <= b + slack
-    })
+    xs.iter().any(|e| meets_member(e, period, x))
 }
 
 /// The derived items against the listed ones: every listed item is a
@@ -609,6 +642,22 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
     if open > 0 {
         out.notes.push(format!("{open} claims are unconfirmed"));
     }
+    let refuted = rc
+        .claims
+        .iter()
+        .filter(|c| {
+            results
+                .iter()
+                .any(|r| r.claim == **c && r.outcome.class == Class::Refuted)
+        })
+        .count();
+    if refuted > 0 {
+        out.problems
+            .push(format!("it rests on {refuted} refuted claims"));
+    }
+    if let Err(e) = in_domain(rc, all, results, &mut out) {
+        out.problems.push(format!("unreadable value: {e}"));
+    }
     let r = match rc.name.as_str() {
         "domain" => domain(fx, rc, &mut out),
         "x_intercepts" => zeros_row(fx, rc, all, &mut out),
@@ -628,6 +677,104 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
         out.problems.push(format!("unreadable value: {e}"));
     }
     out
+}
+
+/// Items only where f is defined. With the domain row certified, each
+/// x-intercept, extremum and inflection lies in its pieces. Without it,
+/// nothing says where f is defined but what the row's own claims show: no
+/// monotone pieces or range, no complete list, and each item inside a box
+/// claimed Defined and shown so on f's own tree (strictly inside for a
+/// turn: f defined on either side of it).
+fn in_domain(
+    rc: &RowCert,
+    all: &[RowCert],
+    results: &[ClaimResult],
+    out: &mut RowResult,
+) -> Result<(), String> {
+    let decided = all
+        .iter()
+        .any(|r| r.name == "domain" && r.status == "Certified");
+    let turn = match rc.name.as_str() {
+        "x_intercepts" => false,
+        "extrema" | "inflections" => true,
+        "monotonicity" | "range" if !decided => {
+            out.problems.push(format!(
+                "the domain is not decided, yet the row is {}",
+                rc.status
+            ));
+            return Ok(());
+        }
+        _ => return Ok(()),
+    };
+    let mut items: Vec<(Enc, Option<Enc>)> = Vec::new();
+    for it in list(&rc.value)? {
+        items.push(if turn {
+            let every = it
+                .get("every")
+                .filter(|v| !v.is_null())
+                .map(enc)
+                .transpose()?;
+            (enc(it.get("x").ok_or("x")?)?, every)
+        } else {
+            spot(it)?
+        });
+    }
+    if decided {
+        let pieces = domain_pieces(all).ok_or("the domain's pieces")?;
+        for (x, _) in &items {
+            let inside = pieces.iter().any(|p| {
+                let (a, b) = extent(p);
+                a <= x.lo && x.hi <= b
+            });
+            if !inside {
+                out.problems.push(format!(
+                    "the item at [{:e}, {:e}] is outside the domain",
+                    x.lo, x.hi
+                ));
+            }
+        }
+        return Ok(());
+    }
+    if complete(rc) {
+        out.problems
+            .push("the domain is not decided, yet the row is complete".into());
+    }
+    let shown: Vec<B> = rc
+        .claims
+        .iter()
+        .filter_map(|c| match c {
+            Claim::Defined(x)
+                if results
+                    .iter()
+                    .any(|r| r.claim == *c && r.outcome.class == Class::Strong) =>
+            {
+                Some(*x)
+            }
+            _ => None,
+        })
+        .collect();
+    for (x, every) in &items {
+        if every.is_some() {
+            out.problems.push(format!(
+                "a family through {:e} listed, yet the domain is not decided",
+                x.mid()
+            ));
+        }
+        let inside = shown.iter().any(|d| {
+            if turn {
+                d.0 < x.lo && x.hi < d.1
+            } else {
+                d.0 <= x.lo && x.hi <= d.1
+            }
+        });
+        if !inside {
+            out.problems.push(format!(
+                "the item at [{:e}, {:e}] is not shown where f is defined",
+                x.lo, x.hi
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn zeros_row(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
@@ -924,10 +1071,14 @@ fn domain_symmetric(all: &[RowCert]) -> Option<bool> {
         .collect::<Option<_>>()?;
     let fams_ok = fams.iter().all(|(x0, per)| {
         // −x0 = x0 + k·P for an integer k (within the enclosures).
-        let k = ((-x0.mid() - x0.mid()) / per.mid()).round();
-        let (a, b) = (x0.lo + k * per.lo, x0.hi + k * per.hi);
-        let slack = 1e-9 * x0.mid().abs().max(1.0) + (k.abs() + 1.0) * (per.hi - per.lo);
-        (a.min(b) - slack) <= -x0.lo && -x0.hi <= (a.max(b) + slack)
+        meets_member(
+            x0,
+            per,
+            &Enc {
+                lo: -x0.hi,
+                hi: -x0.lo,
+            },
+        )
     });
     Some(pieces_ok && fams_ok)
 }

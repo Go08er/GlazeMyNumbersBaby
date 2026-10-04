@@ -26,28 +26,32 @@
   <provides>
     <binary>dgmnb</binary>
   </provides>
+  <!-- Lower-case, unlike the app ID: AppStream requires it of a developer ID
+       (appstreamcli: developer-id-invalid). -->
   <developer id="io.github.go08er">
     <name>Go08er</name>
   </developer>
   <url type="homepage">https://github.com/Go08er/GlazeMyNumbersBaby</url>
   <url type="bugtracker">https://github.com/Go08er/GlazeMyNumbersBaby/issues</url>
   <url type="vcs-browser">https://github.com/Go08er/GlazeMyNumbersBaby</url>
+  <!-- Screenshots from the release's tag, so a release's listing doesn't
+       change as main does (they resolve once the tag is pushed). -->
   <screenshots>
     <screenshot type="default">
       <caption>Standard mode with history</caption>
-      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/main/docs/screenshots/dgmnb-standard.png</image>
+      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/v0.2.0/docs/screenshots/dgmnb-standard.png</image>
     </screenshot>
     <screenshot>
       <caption>Graphing</caption>
-      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/main/docs/screenshots/dgmnb-graphing.png</image>
+      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/v0.2.0/docs/screenshots/dgmnb-graphing.png</image>
     </screenshot>
     <screenshot>
       <caption>Programmer mode</caption>
-      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/main/docs/screenshots/dgmnb-programmer.png</image>
+      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/v0.2.0/docs/screenshots/dgmnb-programmer.png</image>
     </screenshot>
     <screenshot>
       <caption>Live currency conversion</caption>
-      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/main/docs/screenshots/dgmnb-currency.png</image>
+      <image>https://raw.githubusercontent.com/Go08er/GlazeMyNumbersBaby/v0.2.0/docs/screenshots/dgmnb-currency.png</image>
     </screenshot>
   </screenshots>
   <content_rating type="oars-1.1"/>
@@ -64,7 +68,10 @@
     <color type="primary" scheme_preference="dark">#2a2a30</color>
   </branding>
   <releases>
-    <release version="0.2.0" date="2026-10-02">
+    <!-- Unreleased: when v0.2.0 is tagged, drop type="development" and give
+         the tag's date (also in debian/changelog and the Fedora spec's
+         %changelog). The Packages workflow refuses a tag until then. -->
+    <release version="0.2.0" type="development" date="2026-10-04">
       <description>
         <p>First release of DGMNB, the lean twin of GMNB.</p>
       </description>

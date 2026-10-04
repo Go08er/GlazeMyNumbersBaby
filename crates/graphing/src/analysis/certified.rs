@@ -17,10 +17,11 @@
 //! the side expression and its period is the table's; a value is f at an
 //! exact point, or an exact limit (rational functions, the simplifier's
 //! limits and periods). Anything else is written to the digits its
-//! enclosure fixes (at most six significant), marked "≈" when the text
-//! could pass for exact.
+//! enclosure fixes (at most six significant; from 10⁶ on as m×10ⁿ),
+//! marked "≈": every value that isn't exact is.
 
 use std::cell::OnceCell;
+use std::sync::atomic::AtomicBool;
 
 use super::exact::{self, Ex};
 use super::format::{self, MINUS, format_decimal_digits};
@@ -166,14 +167,6 @@ fn poly_at(p: &Poly, x: Ex) -> Option<Ex> {
     Some(acc)
 }
 
-/// Significant digits in a decimal text (`1.5`, `−0.000123`, `1.2×10⁻⁷`).
-fn sig_digits(t: &str) -> usize {
-    let mantissa = t.split('×').next().unwrap_or(t);
-    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
-    let trimmed = digits.trim_start_matches('0');
-    if trimmed.is_empty() { 1 } else { trimmed.len() }
-}
-
 thread_local! {
     /// Set when a number was written as its enclosure (not one digit
     /// known): the row it is in is shown as unknown instead.
@@ -193,8 +186,8 @@ pub const MIN_SHOWN_DIGITS: i32 = 3;
 
 /// A value known to lie in `e`: as many significant digits (up to six, at
 /// least [`MIN_SHOWN_DIGITS`]) as every value in `e` rounds to alike,
-/// marked "≈" when the text has fewer than six (it could read as exact:
-/// "≈1", "≈0.5", "≈1.41").
+/// marked "≈" as it isn't exact ("≈1", "≈0.5", "≈1.41421", "≈2.30062×10⁶");
+/// a point is its double, exactly, when that has a short exact text.
 pub(super) fn approx(e: Enc) -> String {
     approx_sig(e, 6)
 }
@@ -211,7 +204,7 @@ fn fixed_to(e: Enc, sig: i32) -> Option<String> {
 }
 
 /// [`approx`] with up to `max` significant digits (more than six to tell
-/// two close points apart).
+/// two close points apart), marked "≈" whatever their number.
 fn approx_sig(e: Enc, max: i32) -> String {
     let (lo, hi) = (e.lo.0, e.hi.0);
     if e.is_point() && lo == 0.0 {
@@ -228,11 +221,7 @@ fn approx_sig(e: Enc, max: i32) -> String {
     // known, up to six (or the more asked for), and at least the minimum.
     for sig in (MIN_SHOWN_DIGITS.min(6)..=max.max(6)).rev() {
         if let Some(a) = fixed_to(e, sig) {
-            return if sig_digits(&a) < 6 {
-                format!("≈{a}")
-            } else {
-                a
-            };
+            return format!("≈{a}");
         }
     }
     // Too few digits fixed: the enclosure itself, rounded outward (the
@@ -304,11 +293,12 @@ impl Num {
     }
 }
 
-/// `k`-multiples of a period: `2kπ`, `kπ/2`, `360k`.
+/// `k`-multiples of a period: `2kπ`, `kπ/2`, `360k`, `≈9.8696k` (an
+/// approximate period stays marked).
 fn times_k(p: &Num) -> String {
     p.exact
         .and_then(Ex::times_k)
-        .unwrap_or_else(|| format!("{}k", approx(p.enc).trim_start_matches('≈')))
+        .unwrap_or_else(|| format!("{}k", approx(p.enc)))
 }
 
 /// `x₀ + k·P` (k ∈ ℤ implied).
@@ -385,7 +375,9 @@ fn merge(items: Vec<(Num, Num, String)>) -> Vec<(Num, Num, String)> {
                                 .and_then(Ex::rational)
                                 .is_some_and(|t| t.is_int())
                     }
-                    _ => false,
+                    // The certifier's very enclosures twice (one family
+                    // from two side conditions): the same set.
+                    _ => a.0.enc == b.0.enc && a.1.enc == b.1.enc,
                 }
         });
         if dup {
@@ -580,7 +572,20 @@ struct Ctx<'a> {
     /// The excluded points exactly, when the domain is the line less
     /// table families and each family is exact.
     xfams: Option<Vec<(Ex, Ex)>>,
+    /// The exact evaluations' work so far (nodes evaluated).
+    work: std::cell::Cell<u64>,
 }
+
+/// The largest tree the panel evaluates exactly (f″ of sin nested forty
+/// deep has 26 000 nodes: 9 ms an evaluation).
+const EXACT_NODES: usize = 4096;
+/// The panel's exact work, in nodes evaluated (about 0.3 µs each): a few
+/// hundred milliseconds at most.
+const EXACT_WORK: u64 = 1_000_000;
+
+/// The certifier's evaluation budget for the panel's own checks (f
+/// finite on a box), in its units.
+const PANEL_BUDGET: u64 = 20_000;
 
 impl<'a> Ctx<'a> {
     fn new(
@@ -589,10 +594,13 @@ impl<'a> Ctx<'a> {
         lits: &'a ExactLiterals,
         ilits: &'a Literals,
         a: &Analysis,
+        cancel: Option<&'a AtomicBool>,
     ) -> Ctx<'a> {
         let unit = opts.trig_unit;
-        let rf = honest_exponents(&f, lits)
-            .then(|| rational_form(&f, lits))
+        // (Sliders at their values: a/x with a at 0 is 0 off x = 0.)
+        let fv = with_values(&f, opts.variables);
+        let rf = honest_exponents(&fv, lits)
+            .then(|| rational_form(&fv, lits))
             .flatten();
         // Every x the certifier pinned to a double.
         let mut hints: Vec<Q> = Vec::new();
@@ -654,7 +662,7 @@ impl<'a> Ctx<'a> {
         let period_enc = piq
             .and_then(certify::rows::piq_interval)
             .map(|iv| Enc::new(iv.lo(), iv.hi()));
-        let fun = Fun::new(&f, ilits, *opts, 1_000_000, None);
+        let fun = Fun::new(&f, ilits, *opts, PANEL_BUDGET, cancel);
         let mut cx = Ctx {
             f,
             unit,
@@ -670,6 +678,7 @@ impl<'a> Ctx<'a> {
             period,
             period_enc,
             xfams: None,
+            work: std::cell::Cell::new(0),
         };
         if let Row::Certified { value, .. } = &a.domain
             && value.pieces.len() == 1
@@ -685,7 +694,19 @@ impl<'a> Ctx<'a> {
         cx
     }
 
+    /// e at x̂ exactly, within the panel's exact work ([`EXACT_NODES`],
+    /// [`EXACT_WORK`]): past it (or once cancelled), not known exactly,
+    /// and the panel writes the certifier's enclosure instead.
     fn eval(&self, e: &Expr, x: Ex) -> Option<Ex> {
+        if self.fun.cancelled() {
+            return None;
+        }
+        let size = e.depth_and_size().1;
+        let work = self.work.get() + size as u64;
+        if size > EXACT_NODES || work > EXACT_WORK {
+            return None;
+        }
+        self.work.set(work);
         exact::eval(e, x, self.unit, self.lits, self.vars)
     }
 
@@ -891,6 +912,34 @@ impl<'a> Ctx<'a> {
     /// and x̂₀ is a zero of the side expression inside x₀'s enclosure
     /// (narrower than the period: the only one there).
     fn table_family(&self, x0: Enc, period: Enc) -> Option<(Ex, Ex)> {
+        let (g, alpha, beta, p) = self.table_period(x0, period)?;
+        let h = self.half_turn();
+        let pf = p.to_f64();
+        if x0.hi.0 - x0.lo.0 >= pf / 2.0 || pf.is_nan() {
+            return None;
+        }
+        // Candidates: (u₀ − β)/α for the table's u₀, moved into x₀'s box.
+        let mut cands = nice(x0, self.unit);
+        let half = h.div(Ex::int(2))?;
+        for u0 in [Ex::int(0), half, h, half.neg()?] {
+            if let Some(c) = u0.sub(beta).and_then(|d| d.div(alpha)) {
+                let n = ((x0.mid() - c.to_f64()) / pf).round();
+                if n.is_finite() && n.abs() < 1e12 {
+                    cands.extend(p.mul(Ex::int(n as i128)).and_then(|s| c.add(s)));
+                }
+            }
+        }
+        let x = cands.into_iter().find(|&c| {
+            c.within(x0.lo.0, x0.hi.0) == Some(true) && self.eval(&g, c).is_some_and(Ex::is_zero)
+        })?;
+        Some((x, p))
+    }
+
+    /// A table family's period, exactly (a half or whole turn over |α| for
+    /// the argument α·x + β of its side expression g), with g, α and β:
+    /// exact even where x₀ has no closed form (tan(x + 0.5)'s poles every
+    /// π).
+    fn table_period(&self, x0: Enc, period: Enc) -> Option<(Expr, Ex, Ex, Ex)> {
         let (s, _, _) = self
             .fams
             .iter()
@@ -928,24 +977,10 @@ impl<'a> Ctx<'a> {
         }
         let p = found?;
         let pf = p.to_f64();
-        if !(x0.hi.0 - x0.lo.0 < pf / 2.0 && period.hi.0 - period.lo.0 < pf / 4.0) {
+        if period.hi.0 - period.lo.0 >= pf / 4.0 || pf.is_nan() {
             return None;
         }
-        // Candidates: (u₀ − β)/α for the table's u₀, moved into x₀'s box.
-        let mut cands = nice(x0, self.unit);
-        let half = h.div(Ex::int(2))?;
-        for u0 in [Ex::int(0), half, h, half.neg()?] {
-            if let Some(c) = u0.sub(beta).and_then(|d| d.div(alpha)) {
-                let n = ((x0.mid() - c.to_f64()) / pf).round();
-                if n.is_finite() && n.abs() < 1e12 {
-                    cands.extend(p.mul(Ex::int(n as i128)).and_then(|s| c.add(s)));
-                }
-            }
-        }
-        let x = cands.into_iter().find(|&c| {
-            c.within(x0.lo.0, x0.hi.0) == Some(true) && self.eval(&g, c).is_some_and(Ex::is_zero)
-        })?;
-        Some((x, p))
+        Some((g, alpha, beta, p))
     }
 
     /// The domain equals its mirror image: no excluded families, and its
@@ -1111,7 +1146,11 @@ impl<'a> Ctx<'a> {
                     enc: x0,
                 },
                 Num {
-                    exact: self.xfam_period(p).or_else(|| self.period_in(p)),
+                    exact: self
+                        .table_period(x0, p)
+                        .map(|t| t.3)
+                        .or_else(|| self.xfam_period(p))
+                        .or_else(|| self.period_in(p)),
                     enc: p,
                 },
             ),
@@ -1480,8 +1519,9 @@ pub(super) fn features(
     lits: &ExactLiterals,
     ilits: &Literals,
     a: &Analysis,
-) -> KeyGraphFeatures {
-    let cx = Ctx::new(certify::canonical(f), opts, lits, ilits, a);
+    cancel: Option<&AtomicBool>,
+) -> Option<KeyGraphFeatures> {
+    let cx = Ctx::new(certify::canonical(f), opts, lits, ilits, a, cancel);
     let mut out = Out {
         k: KeyGraphFeatures::default(),
     };
@@ -1717,9 +1757,13 @@ pub(super) fn features(
             }
             let was_cut = cut(&mut items);
             out.settle(flags::ZEROS, zeros_reach, items.is_empty(), was_cut);
+            // Two zeros that read alike get the digits that tell them
+            // apart (1 ± 10⁻¹⁵), as the points' rows do; if they still
+            // read alike, the row is unknown.
+            let xs: Vec<String> = items.iter().map(|(_, (x, _))| x.text()).collect();
             let mut texts = Vec::new();
             let mut any_family = false;
-            for (_, (x, p)) in &items {
+            for (i, (_, (x, p))) in items.iter().enumerate() {
                 match p {
                     Some(p) => {
                         any_family = true;
@@ -1730,10 +1774,14 @@ pub(super) fn features(
                         });
                     }
                     None => {
-                        texts.push(x.text());
+                        let twins = xs.iter().filter(|t| **t == xs[i]).count() > 1;
+                        texts.push(x.text_sig(if twins { 15 } else { 6 }));
                         data.zeros.push(DataFamily::single(x.value()));
                     }
                 }
+            }
+            if alike(&texts) {
+                UNFIXED.with(|u| u.set(true));
             }
             let mut t = texts.join(", ");
             if any_family {
@@ -1935,7 +1983,9 @@ pub(super) fn features(
             let mut lines: Vec<(Num, AsymptoteSide)> = Vec::new();
             for h in v.iter().rev() {
                 let n = Num {
-                    exact: cx.tail_limit(h.side, h.y),
+                    exact: cx
+                        .tail_limit(h.side, h.y)
+                        .or_else(|| constant_tail(&cx, a, h.side, h.y)),
                     enc: h.y,
                 };
                 let side = match h.side {
@@ -2103,16 +2153,16 @@ pub(super) fn features(
         out.unknown(flags::PERIODICITY);
     }
 
-    // Monotonicity.
+    // Monotonicity: over one period, each piece repeats every P (exact,
+    // or only enclosed: π², 360/π).
     let per: Option<Num> = match &a.monotonicity {
         Row::Certified { cert, .. } => match cert.covers {
             Region::Period { a: s0, b: s1 } => {
                 let w = s1.0 - s0.0;
-                cx.period
-                    .filter(|p| (p.to_f64() - w).abs() <= 1e-9 * w)
-                    .zip(cx.period_enc)
-                    .map(|(p, enc)| Num {
-                        exact: Some(p),
+                cx.period_enc
+                    .filter(|p| (p.mid() - w).abs() <= 1e-9 * w)
+                    .map(|enc| Num {
+                        exact: cx.period.filter(|p| (p.to_f64() - w).abs() <= 1e-9 * w),
                         enc,
                     })
             }
@@ -2138,9 +2188,21 @@ pub(super) fn features(
                             let pm = p.value();
                             let n = ((l.value() + pm / 2.0) / pm).floor();
                             if n == 0.0 || !n.is_finite() {
+                                return (l, h);
+                            }
+                            // (An end moved onto 0 with an enclosed period,
+                            // P − P, has no digit fixed: it stays put.)
+                            let (sl, sh) = (shift(l, p, n), shift(h, p, n));
+                            let on_zero = |e: &Num| {
+                                e.exact.is_none()
+                                    && !e.enc.is_point()
+                                    && e.enc.lo.0 <= 0.0
+                                    && 0.0 <= e.enc.hi.0
+                            };
+                            if on_zero(&sl) || on_zero(&sh) {
                                 (l, h)
                             } else {
-                                (shift(l, p, n), shift(h, p, n))
+                                (sl, sh)
                             }
                         }),
                     None => None,
@@ -2191,7 +2253,8 @@ pub(super) fn features(
     }
 
     out.k.data = data;
-    out.k
+    // Cut short by the flag: rows may be missing what it stopped.
+    (!cx.fun.cancelled()).then_some(out.k)
 }
 
 /// `a` with the rows a constant c (on its domain) decides filled in where
@@ -2324,10 +2387,69 @@ fn points(
     (texts, data, was_cut)
 }
 
+/// The limit at ±∞ of an f proven constant on a piece reaching it: f at a
+/// whole number inside the piece, exactly (atan(x) + atan(1/x) → π/2, as
+/// its range says).
+fn constant_tail(cx: &Ctx<'_>, a: &Analysis, side: Tail, y: Enc) -> Option<Ex> {
+    let Row::Certified { value, .. } = &a.monotonicity else {
+        return None;
+    };
+    let m = value.iter().find(|m| {
+        m.dir == Dir::Constant
+            && match side {
+                Tail::Right => m.on.hi == Bound::PosInf,
+                Tail::Left => m.on.lo == Bound::NegInf,
+            }
+    })?;
+    let c = match (side, m.on.lo, m.on.hi) {
+        (Tail::Right, Bound::At { x, .. }, _) => x.hi.0.floor() + 1.0,
+        (Tail::Left, _, Bound::At { x, .. }) => x.lo.0.ceil() - 1.0,
+        (Tail::Right, _, _) => 1.0,
+        (Tail::Left, _, _) => -1.0,
+    };
+    if c.abs() >= 1e15 || c.is_nan() {
+        return None;
+    }
+    let v = cx.eval(&cx.f, Ex::int(c as i128))?;
+    v.agrees(y.lo.0, y.hi.0).then_some(v)
+}
+
+/// `e` with each slider at its value, where that is a whole number (the
+/// rational form takes exact literals only; it is the value exact
+/// evaluation uses too).
+fn with_values(e: &Expr, vars: &dyn VariableValues) -> Expr {
+    let go = |a: &Expr| Box::new(with_values(a, vars));
+    match e {
+        Expr::Var(name) => {
+            let v = vars
+                .value(name)
+                .unwrap_or(crate::compile::DEFAULT_VARIABLE_VALUE);
+            if v == v.trunc() && v.abs() <= 9007199254740992.0 {
+                Expr::Num(v)
+            } else {
+                e.clone()
+            }
+        }
+        Expr::Neg(a) => Expr::Neg(go(a)),
+        Expr::Degrees(a) => Expr::Degrees(go(a)),
+        Expr::Bin(op, a, b) => Expr::Bin(*op, go(a), go(b)),
+        Expr::Call(f, args) => Expr::Call(*f, args.iter().map(|a| with_values(a, vars)).collect()),
+        _ => e.clone(),
+    }
+}
+
 /// `y = m·x + b` in the panel's style: `y = x + 1`, `y = −2x`,
 /// `y = x/2 − 3`.
 fn line_text(m: &Num, b: &Num) -> String {
-    let mx = match m.exact.and_then(Ex::rational) {
+    // (A slope enclosed by one double is that double: y = x − 3.14159,
+    // not y = 1x − 3.14159.)
+    let exact = m.exact.or_else(|| {
+        m.enc
+            .is_point()
+            .then(|| Q::from_f64(m.enc.lo.0).map(Ex::q))
+            .flatten()
+    });
+    let mx = match exact.and_then(Ex::rational) {
         Some(q) => {
             let (p, d) = (q.numer(), q.denom());
             let sign = if p < 0 { MINUS } else { "" };
@@ -2377,7 +2499,16 @@ mod tests {
     #[test]
     fn approximate_text() {
         let r2 = std::f64::consts::SQRT_2;
-        assert_eq!(approx(Enc::new(r2.next_down(), r2.next_up())), "1.41421");
+        // Not exact, whatever its digits: marked.
+        assert_eq!(approx(Enc::new(r2.next_down(), r2.next_up())), "≈1.41421");
+        // Never more than six digits; from 10⁶ on m×10ⁿ, the form the
+        // rounded value's, so ends straddling 10⁶ read alike.
+        assert_eq!(approx(Enc::new(2300620.0, 2300620.006)), "≈2.30062×10⁶");
+        assert_eq!(approx(Enc::new(545843449.3, 545843449.5)), "≈5.45843×10⁸");
+        assert_eq!(approx(Enc::new(999999.9999982, 1000000.0000001)), "≈1×10⁶");
+        assert_eq!(approx(Enc::new(166253.76, 166253.77)), "≈166254");
+        // An exact integer keeps its exact text.
+        assert_eq!(approx(Enc::point(1000000.0)), "1000000");
         assert_eq!(
             approx(Enc::new(0.9999999999999999, 1.0000000000000002)),
             "≈1"

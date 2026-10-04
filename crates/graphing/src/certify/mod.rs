@@ -69,14 +69,16 @@ pub struct Analysis {
     /// convention, sliders); absent from older certificates.
     #[serde(default)]
     pub binding: Option<Binding>,
-    /// Interval evaluations spent.
+    /// Interval evaluations spent, in budget units (an evaluation of a
+    /// big tree costs several: [`fun::UNIT_WORK`]).
     pub evals: u64,
     /// Set if the budget ran out or the caller cancelled.
     pub stopped: Option<String>,
 }
 
-/// Evaluations per phase (domain, f, f′, f″, the rows) unless a budget is
-/// given.
+/// The evaluation budget, in units of [`fun::UNIT_WORK`] (an evaluation
+/// of a tree up to that size, more for a bigger one), shared out over the
+/// phases (domain, f, f′, f″, the rows) unless a budget is given.
 pub const DEFAULT_BUDGET: u64 = 200_000;
 
 /// The half-width of the window the covers start from: four times the
@@ -94,6 +96,27 @@ fn window(f: &Fun<'_>, d: &side::Domain) -> f64 {
         .map(|fam| fam.period.hi())
         .fold(0.0, f64::max);
     (4.0 * c).max(16.0).max(4.0 * p)
+}
+
+/// The most family members the boxes over a window cut out (each a box, a
+/// gap and their claims, through every cover and row).
+const CUT_MEMBERS: f64 = 1000.0;
+
+/// The half-width of the window for the boxes when excluded families cut
+/// them: `w`, narrowed until the families have at most [`CUT_MEMBERS`]
+/// members in it (x + tan(190x) over [−760, 760] would cut 92 000).
+fn cut_window(dom: &side::Domain, w: f64) -> f64 {
+    let per_unit: f64 = dom
+        .families
+        .iter()
+        .map(|fam| 1.0 / fam.period.lo())
+        .filter(|d| d.is_finite())
+        .sum();
+    if per_unit > 0.0 {
+        w.min(CUT_MEMBERS / (2.0 * per_unit))
+    } else {
+        w
+    }
 }
 
 /// One period `[s, s + P]` of f to analyse instead of the line, when the
@@ -115,11 +138,10 @@ fn periodic_window(f: &Fun<'_>, dom: &side::Domain) -> Option<(f64, Enc)> {
     for c in [-0.5, -0.37, -0.29, -0.41, -0.23, -0.47, -0.31] {
         let start = c * p;
         let margin = 1e-9 * p;
-        if dom
-            .families
-            .iter()
-            .any(|fam| !fam.members(start - margin, start + margin).is_empty())
-        {
+        if dom.families.iter().any(|fam| {
+            fam.members(start - margin, start + margin)
+                .is_none_or(|m| !m.is_empty())
+        }) {
             continue;
         }
         let d = 1e-6 * p;
@@ -389,12 +411,31 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     // One period of a periodic f stands for the line; a domain with
     // excluded families otherwise gets a window.
     let periodic = periodic_window(f, &dom);
+    // An undecided domain: the rows run where f's own tree is shown
+    // defined in [-w, w], and list what they find there alone.
+    let decided = dom.row.is_certified();
     let (win, period) = match periodic {
         Some((s, p)) => (Some((s, s + p.hi.0)), Some(p)),
-        None if !dom.families.is_empty() => (Some((-w, w)), None),
+        None if !dom.families.is_empty() || !decided => {
+            let c = cut_window(&dom, w);
+            (Some((-c, c)), None)
+        }
         None => (None, None),
     };
-    let (boxes, gaps, whole) = side::interior(&dom, win);
+    f.allow(phase);
+    let (boxes, gaps, whole) = if decided {
+        side::interior(&dom, win)
+    } else {
+        let (b, defined) = side::defined_boxes(f, w);
+        (b, defined, false)
+    };
+    let defined: Vec<(f64, f64)> = gaps
+        .iter()
+        .filter_map(|c| match c {
+            Claim::Defined { x } => Some((x.a.0, x.b.0)),
+            _ => None,
+        })
+        .collect();
     let scope = rows::Scope {
         whole,
         window: win.unwrap_or((-w, w)),
@@ -688,16 +729,39 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             out.extend(kink_claims[k - 1].iter().cloned());
         }
         out.extend(gc);
-        let mut seen = Vec::new();
-        out.retain(|c| {
-            let new = !seen.contains(c);
-            seen.push(c.clone());
-            new
-        });
+        // (Each once, in linear time: a window cut by families holds
+        // thousands.)
+        let mut seen = std::collections::HashSet::new();
+        out.retain(|c| seen.insert(format!("{c:?}")));
         out
     };
     let (claims0, claims1, claims2) = (order(0, gc0), order(1, gc1), order(2, gc2));
-    let monotonicity = with(rows::monotonicity(&c1, &boxes, &scope, clear1), &claims1);
+    let monotonicity = if decided {
+        with(rows::monotonicity(&c1, &boxes, &scope, clear1), &claims1)
+    } else {
+        Row::unknown(rows::UNDECIDED)
+    };
+    let mut x_intercepts = rows::zeros(&c0, &scope, &claims0, clear0);
+    let mut extrema = with(
+        or_unknown(rows::extrema(f, &c1, &boxes, &scope, clear1)),
+        &claims1,
+    );
+    let mut inflections = with(
+        or_unknown(rows::inflections(f, &c2, &boxes, &scope, clear2)),
+        &claims2,
+    );
+    if !decided {
+        x_intercepts = rows::scoped(x_intercepts, &defined, false, |s| match s {
+            cert::Spot::At(x) => Some(*x),
+            cert::Spot::Every(_) => None,
+        });
+        extrema = rows::scoped(extrema, &defined, true, |e| {
+            e.every.is_none().then_some(e.x)
+        });
+        inflections = rows::scoped(inflections, &defined, true, |e| {
+            e.every.is_none().then_some(e.x)
+        });
+    }
     let horizontal = or_unknown(rows::horizontal(f, &dom, &scope));
     let (range, range_ends) = rows::range(f, &dom, &c0, &c1, &boxes, &scope, clear1)
         .unwrap_or_else(|s| (Row::unknown(stop(s)), Vec::new()));
@@ -707,18 +771,12 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         formula: f.expr.formula(),
         evaluated: evaluated(f),
         unit: unit_name(f.opts.trig_unit).into(),
-        x_intercepts: rows::zeros(&c0, &scope, &claims0, clear0),
+        x_intercepts,
         y_intercept: or_unknown(rows::y_intercept(f, &dom)),
         parity: or_unknown(rows::parity(f, &dom)),
         period: or_unknown(rows::period(f, &dom, &monotonicity, w)),
-        extrema: with(
-            or_unknown(rows::extrema(f, &c1, &boxes, &scope, clear1)),
-            &claims1,
-        ),
-        inflections: with(
-            or_unknown(rows::inflections(f, &c2, &boxes, &scope, clear2)),
-            &claims2,
-        ),
+        extrema,
+        inflections,
         monotonicity,
         range: with(range, &claims1),
         range_ends,

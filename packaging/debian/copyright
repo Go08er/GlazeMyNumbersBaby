@@ -6,6 +6,21 @@ Files: *
 Copyright: Microsoft Corporation (original Windows Calculator)
            2026 GMNB contributors (Rust port and new code)
 License: MIT
+Comment: The binaries also contain the Rust crates that cargo fetches at build
+ time (Cargo.lock). Their licences, and those below, are in
+ THIRD-PARTY-LICENSES.txt, installed in /usr/share/doc/<package>/.
+
+Files: crates/crmath/vendor/*
+Copyright: 2021-2026 Alexei Sibidanov <sibid@uvic.ca>
+           2021-2026 Paul Zimmermann
+           2021-2025 Tom Hubrecht
+           2023-2026 Cyprien Peignier
+           2022-2025 CERN
+           2022-2025 Inria
+License: MIT
+Comment: CORE-MATH (https://core-math.gitlabpages.inria.fr/), upstream commit
+ 85430b3e. crates/crmath/vendor/COPYRIGHT gives each file's notice; pow.c and
+ lgamma.c carry small GMNB patches (crates/crmath/README.md).
 
 Files: apps/dgmnb/src/clipboard/wayland.rs
 Copyright: 2018 Lucas Timmins & Victor Berger (smithay-clipboard)

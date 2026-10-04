@@ -97,6 +97,9 @@ pub use expression_command::{
 };
 pub use history::{E_BOUNDS, HistoryCollector, MAXPRECDEPTH};
 pub use radix_type::RadixType;
+/// The engine's arithmetic so far on this thread (`ratpack::work_done`), for
+/// bounding a replay by its cost.
+pub use ratpack::work_done;
 pub use resource::{
     EN_US_ENGINE_STRINGS, EngineResourceProvider, ResourceProvider, en_us_engine_string,
 };

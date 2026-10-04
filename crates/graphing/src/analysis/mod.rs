@@ -517,10 +517,12 @@ pub fn analyze(eq: &Equation, opts: &CompileOptions<'_>) -> KeyGraphFeatures {
         .unwrap_or_else(|| unreachable!("analysis without a cancel flag is never cancelled"))
 }
 
-/// [`analyze`], polling `cancel` while it works: returns `None` soon after
-/// the flag becomes true. Analysis is bounded either way (an over-budget
-/// function reports [`AnalysisError::TooComplex`]); the flag lets a caller
-/// running it on a worker thread abandon a result it no longer needs.
+/// [`analyze`], polling `cancel` while it works (the certifier and the
+/// panel built from it): returns `None` soon after the flag becomes true.
+/// Analysis is bounded either way (its budgets count work; rows the budget
+/// didn't reach are unknown, and a tree past the size limits reports
+/// [`AnalysisError::TooComplex`]); the flag lets a caller running it on a
+/// worker thread abandon a result it no longer needs.
 pub fn analyze_cancellable(
     eq: &Equation,
     opts: &CompileOptions<'_>,
@@ -568,7 +570,7 @@ pub fn analyze_cancellable(
     ) else {
         return error(AnalysisError::AnalysisCouldNotBePerformed);
     };
-    Some(certified::features(f, opts, &lits, &ilits, &a))
+    certified::features(f, opts, &lits, &ilits, &a, cancel)
 }
 
 /// The earlier numeric engine, checked by [`verify`] (what the panel showed

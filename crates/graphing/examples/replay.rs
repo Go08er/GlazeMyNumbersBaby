@@ -74,19 +74,13 @@ fn main() {
     }
     let mut bad = false;
     for c in &r.claims {
-        // A known certifier issue (research/replay-issues.md, issue 1).
-        let known = c.outcome.note.contains(replay::claims::WHERE_DEFINED);
-        if c.outcome.class == Class::Refuted && !known {
+        if c.outcome.class == Class::Refuted {
             bad = true;
         }
         if all || c.outcome.class != Class::Strong {
             println!(
                 "  {:<11} {:?}  [{}]{}",
-                if known {
-                    "known"
-                } else {
-                    c.outcome.class.name()
-                },
+                c.outcome.class.name(),
                 c.claim,
                 c.rows.join(", "),
                 if c.outcome.note.is_empty() {

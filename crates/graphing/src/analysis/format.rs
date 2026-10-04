@@ -287,9 +287,25 @@ pub(crate) fn format_decimal_digits(v: f64, sig: i32) -> String {
     let sign = if v < 0.0 { MINUS } else { "" };
     let a = v.abs();
     let e = a.log10().floor() as i32;
-    // Beyond 6 digits (telling points apart), whole numbers up to 10¹⁶
-    // stay whole: 1000000000002, not 1.000000000002×10¹².
-    if !(-5..9).contains(&e) && !(sig > 6 && (9..16).contains(&e)) {
+    // The exponent of `a` rounded to `sig` digits (999999.9999982 rounds
+    // to 10⁶).
+    let rounded_e = {
+        let digits = (sig - 1).max(0) as usize;
+        let m = a / 10f64.powi(e / 2) / 10f64.powi(e - e / 2);
+        e + i32::from(format!("{m:.digits$}").starts_with("10"))
+    };
+    let scientific = if sig > 6 {
+        // Beyond 6 digits (telling points apart), whole numbers up to
+        // 10¹⁶ stay whole: 1000000000002, not 1.000000000002×10¹².
+        !(-5..16).contains(&e)
+    } else {
+        // Up to six, the form is the rounded value's, so the two ends of
+        // an enclosure straddling an integer or a power of ten read alike
+        // (999999.9999982 and 1000000.0000001 both 1×10⁶); from 10⁶ on,
+        // m×10ⁿ (2300620.003 is 2.30062×10⁶, never 2300620).
+        !(-5..6).contains(&rounded_e)
+    };
+    if scientific {
         let digits = (sig - 1) as usize;
         // In two steps: 10⁻³²⁴ itself is below the doubles.
         let mut m = a / 10f64.powi(e / 2) / 10f64.powi(e - e / 2);
@@ -301,15 +317,23 @@ pub(crate) fn format_decimal_digits(v: f64, sig: i32) -> String {
         let ms = trim(&format!("{m:.digits$}"));
         return format!("{sign}{ms}×10{}", superscript(e));
     }
-    // `sig` significant digits, but large values keep a few decimals so
-    // nearby points stay apart (a maximum at 2000000.5 between zeros at
-    // 2000000 and 2000001).
-    let decimals = if e >= 5 {
-        (sig + 3 - e).max(0)
+    // `sig` significant digits and no more (166253.7622 is 166254; to
+    // three, 123456.7 is 123000). Nearby points that would read alike are
+    // given more digits by their callers (a maximum at 2000000.5 between
+    // zeros at 2000000 and 2000001).
+    let s = if sig > 6 {
+        let decimals = (sig - 1 - e).clamp(0, sig + 6) as usize;
+        trim(&format!("{a:.decimals$}"))
     } else {
-        (sig - 1 - e).clamp(0, sig + 6)
-    } as usize;
-    let s = trim(&format!("{a:.decimals$}"));
+        let decimals = sig - 1 - rounded_e;
+        if decimals >= 0 {
+            let decimals = decimals as usize;
+            trim(&format!("{a:.decimals$}"))
+        } else {
+            let unit = 10f64.powi(-decimals);
+            format!("{:.0}", (a / unit).round() * unit)
+        }
+    };
     if s == "0" {
         "0".into()
     } else {
@@ -565,7 +589,12 @@ mod tests {
         assert_eq!(format_number(f64::MIN_POSITIVE), "2.22507×10⁻³⁰⁸");
         assert_eq!(format_number(1e-10), "1×10⁻¹⁰");
         assert_eq!(format_number(2.0 * PI * 1e-12), "6.28319×10⁻¹²");
-        assert_eq!(format_number(999999998.7), "999999998.7");
+        // Six significant digits at most; from 10⁶ on m×10ⁿ (an integer
+        // keeps its digits).
+        assert_eq!(format_number(999999998.7), "1×10⁹");
+        assert_eq!(format_number(2300620.003), "2.30062×10⁶");
+        assert_eq!(format_number(166253.7622), "166254");
+        assert_eq!(format_decimal_digits(123456.7, 3), "123000");
         assert_eq!(format_number(1.23456789), "1.23457");
         assert_eq!(format_number(-0.000123456), "−0.000123456");
         assert_eq!(format_number(1.5e12), "1500000000000");

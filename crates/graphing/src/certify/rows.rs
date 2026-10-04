@@ -48,15 +48,17 @@ impl Scope {
     }
 }
 
-/// Is `x` (enclosed) a repeat of one of `xs` by a multiple of the period?
+/// Is `x` (enclosed) a repeat of one of `xs` by a multiple of the period:
+/// does it meet e + k·P for the nearest k ≠ 0, over e's and the period's
+/// enclosures (rounded outward)? Nothing looser: a period of 10⁻¹² keeps
+/// its members apart.
 fn repeats(xs: &[Enc], x: &Enc, period: &Enc) -> bool {
+    let p = Interval::new(period.lo.0, period.hi.0);
     xs.iter().any(|e| {
         let k = ((x.mid() - e.mid()) / period.mid()).round();
-        k != 0.0 && {
-            let (lo, hi) = (e.lo.0 + k * period.lo.0, e.hi.0 + k * period.hi.0);
-            let (lo, hi) = (lo.min(hi), lo.max(hi));
-            let slack = 1e-9 * x.mid().abs().max(1.0);
-            lo - slack <= x.hi.0 && x.lo.0 <= hi + slack
+        k != 0.0 && k.is_finite() && {
+            let m = Interval::new(e.lo.0, e.hi.0) + Interval::point(k) * p;
+            m.lo() <= x.hi.0 && x.lo.0 <= m.hi()
         }
     })
 }
@@ -88,6 +90,43 @@ fn row_of<T>(
     }
 }
 
+/// Why a row is unknown when f's domain isn't decided.
+pub const UNDECIDED: &str = "the domain is not decided";
+
+/// With f's domain not decided, a row found on the boxes where f's own
+/// tree is shown defined (`defined`, the boxes claimed Defined): only the
+/// items inside one (a turn strictly inside, f defined on either side of
+/// it), and never all of them.
+pub fn scoped<T>(
+    row: Row<Vec<T>>,
+    defined: &[(f64, f64)],
+    turn: bool,
+    at: impl Fn(&T) -> Option<Enc>,
+) -> Row<Vec<T>> {
+    let (items, mut cert) = match row {
+        Row::Certified { value, cert } | Row::Partial { value, cert } => (value, cert),
+        u @ Row::Unknown { .. } => return u,
+    };
+    let inside = |x: Enc| {
+        defined.iter().any(|&(a, b)| {
+            if turn {
+                a < x.lo.0 && x.hi.0 < b
+            } else {
+                a <= x.lo.0 && x.hi.0 <= b
+            }
+        })
+    };
+    let kept: Vec<T> = items
+        .into_iter()
+        .filter(|it| at(it).is_some_and(inside))
+        .collect();
+    if kept.is_empty() {
+        return Row::unknown(UNDECIDED);
+    }
+    cert.covers = Region::Points;
+    Row::Partial { value: kept, cert }
+}
+
 fn enc_of(l: f64, r: f64) -> Enc {
     Enc::new(l, r)
 }
@@ -95,6 +134,29 @@ fn enc_of(l: f64, r: f64) -> Enc {
 // ---------------------------------------------------------- x-intercepts
 
 pub fn zeros(c0: &Cover, scope: &Scope, extra: &[Claim], clear: bool) -> Row<Vec<Spot>> {
+    // Zeros at doubles with nothing decided between them but undecided
+    // boxes may be points of a stretch where f ≡ 0 (|x| − x on [0, ∞), its
+    // zeros found at every halving point): not listed, so as not to stand
+    // for it. (One alone between undecided boxes, sign(x)'s at 0, stays.)
+    let zero_at = |p: f64| {
+        c0.leaves
+            .iter()
+            .any(|l| matches!(*l, Leaf::At { p: q, .. } if q == p))
+    };
+    let flag_beside = |p: f64, left: bool| {
+        c0.leaves.iter().find_map(|l| match *l {
+            Leaf::Flag { a, b, .. } if a < b && (if left { b == p } else { a == p }) => {
+                Some(if left { a } else { b })
+            }
+            _ => None,
+        })
+    };
+    let undecided = |p: f64, left: bool| flag_beside(p, left).is_some();
+    let chained = |p: f64| {
+        [true, false]
+            .into_iter()
+            .any(|left| flag_beside(p, left).is_some_and(zero_at))
+    };
     let mut out: Vec<Spot> = Vec::new();
     for l in &c0.leaves {
         match *l {
@@ -102,6 +164,7 @@ pub fn zeros(c0: &Cover, scope: &Scope, extra: &[Claim], clear: bool) -> Row<Vec
                 Some(p) => Enc::point(p),
                 None => enc_of(l, r),
             })),
+            Leaf::At { p, .. } if undecided(p, true) && undecided(p, false) && chained(p) => {}
             Leaf::At { p, .. } => out.push(Spot::At(Enc::point(p))),
             Leaf::Equal { .. } => return Row::unknown("f is 0 on a whole stretch"),
             _ => {}
@@ -148,7 +211,8 @@ pub fn y_intercept(f: &Fun<'_>, dom: &Domain) -> Result<Row<Option<Enc>>, Stop> 
         let zero = Enc::point(0.0);
         let in_family = dom.families.iter().any(|fam| {
             fam.members(0.0, 0.0)
-                .iter()
+                .into_iter()
+                .flatten()
                 .any(|m| m.is_point() && m.lo() == 0.0)
         });
         let outside = !dom.pieces.iter().any(|p| {

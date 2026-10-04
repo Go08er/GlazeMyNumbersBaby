@@ -19,6 +19,7 @@ jobs:
         run: nix develop -c cargo test --workspace --locked
       - name: DGMNB Wayland clipboard test (private headless weston)
         run: |
+          set -o pipefail
           export XDG_RUNTIME_DIR
           XDG_RUNTIME_DIR=$(mktemp -d)
           nix shell --inputs-from . nixpkgs#weston -c weston --backend=headless \
@@ -30,13 +31,31 @@ jobs:
             cargo test -p dgmnb --locked worker_stops_before_the_display_goes -- --nocapture 2>&1 \
             | tee wayland-test.log
           kill "$weston"
-          # It must have run, not skipped.
-          grep -q "1 passed" wayland-test.log
-          ! grep -q "skipped" wayland-test.log
-      - name: GMNB launcher on an emulated pre-2013 CPU
+          # It must have run, not skipped: exactly this one test, passed.
+          grep -q "^test clipboard::wayland::tests::worker_stops_before_the_display_goes \.\.\. " \
+            wayland-test.log
+          grep -q "^test result: ok\. 1 passed; 0 failed;" wayland-test.log
+          if grep -q "skipped" wayland-test.log; then exit 1; fi
+      - name: D-Bus and X11 tests ran (private dbus-daemon and Xvfb)
+        run: |
+          set -o pipefail
+          # The test suite skips these, with a note, if the dev shell's
+          # dbus-daemon or Xvfb can't start; here a skip fails the job.
+          nix develop -c cargo test -p appcore --locked --lib dbus:: -- --nocapture 2>&1 \
+            | tee dbus-test.log
+          nix develop -c cargo test -p dgmnb --locked clipboard::x11:: -- --nocapture 2>&1 \
+            | tee x11-test.log
+          for log in dbus-test.log x11-test.log; do
+            grep -Eq "^test result: ok\. [1-9][0-9]* passed; 0 failed;" "$log"
+            if grep -q "skipped" "$log"; then
+              echo "::error::a test in $log skipped"
+              exit 1
+            fi
+          done
+      - name: GMNB launcher on an emulated CPU without AVX2 (Nehalem)
         run: |
           # GMNB is shipped for x86-64-v3 behind gmnb-launcher, which must
-          # explain itself on an older CPU rather than let GMNB die of SIGILL.
+          # explain itself on any other CPU rather than let GMNB die of SIGILL.
           nix develop -c cargo build --release --locked -p gmnb-launcher
           if out=$(nix shell --inputs-from . nixpkgs#qemu-user -c \
             qemu-x86_64 -cpu Nehalem target/release/gmnb-launcher 2>&1); then
@@ -44,8 +63,8 @@ jobs:
             exit 1
           fi
           echo "$out"
-          grep -q "needs a CPU from 2013 or newer" <<<"$out"
-      - name: Baseline, x86-64-v3 and pre-2013 CPUs agree bit for bit
+          grep -q "needs a CPU with AVX2 (x86-64-v3)" <<<"$out"
+      - name: Baseline and x86-64-v3 builds, and a CPU without AVX2, agree bit for bit
         run: |
           # The built-in functions are CORE-MATH's, correctly rounded, so
           # their results must not depend on the CPU the code was built for
@@ -82,16 +101,48 @@ jobs:
           RUSTFLAGS="-C target-cpu=x86-64-v3" nix develop -c \
             cargo run --release --locked -p graphing --example identities \
             --target-dir target/cpu-v3
-      - name: Certificate replay (independent checker, MPFR)
+      - name: Certificate replay and MPFR oracles
         run: |
-          # Every certified row of the certify corpus re-proved by a checker
-          # that shares no code with the certifier (crates/graphing/tests/
-          # replay), and false facts planted into real certificates caught.
+          # The certified analysis of each function in the certify corpus
+          # goes through JSON to a separate checker (crates/graphing/tests/
+          # replay) with its own MPFR interval arithmetic; it shares only
+          # graphing's parser and expression tree with the certifier. A claim
+          # is strong when re-proved on the function's own tree, weak when
+          # proved only on a tree the certifier supplied (its simplified form,
+          # the derivatives) or checked at sample points: weak claims rest on
+          # the simplifier. The job fails on a claim refuted or left open
+          # (unconfirmed, unsupported), on a row that doesn't follow from its
+          # claims, and if false facts planted into real certificates go
+          # uncaught. interval_oracle checks the interval core against MPFR,
+          # simplify_rules every simplifier rule.
           nix develop -c cargo test --locked -p graphing --features mpfr-oracle \
-            --test certify_replay
-      - name: Clippy
-        run: nix develop -c cargo clippy --workspace --locked
+            --test certify_replay --test interval_oracle --test simplify_rules
+      - name: Clippy (all targets, warnings are errors)
+        run: |
+          nix develop -c cargo clippy --workspace --all-targets --locked -- -D warnings
+          nix develop -c cargo clippy -p graphing --all-targets --features mpfr-oracle \
+            --locked -- -D warnings
       - name: Nix packages
         run: nix build -L .#gmnb .#dgmnb
       - name: Flake check
         run: nix flake check
+
+  msrv:
+    name: Builds with the MSRV (Rust 1.92)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+      - name: cargo check with Rust 1.92.0
+        run: |
+          # rust-version in Cargo.toml: rustup supplies that toolchain, the
+          # dev shell the C compiler and system libraries.
+          nix shell --inputs-from . nixpkgs#rustup -c \
+            rustup toolchain install 1.92.0 --profile minimal --no-self-update
+          tc="$HOME/.rustup/toolchains/1.92.0-x86_64-unknown-linux-gnu/bin"
+          # shellcheck disable=SC2016 # expanded inside the dev shell
+          nix develop -c bash -c 'PATH="$1:$PATH" RUSTC="$1/rustc" "$1/cargo" "${@:2}"' _ "$tc" \
+            check --workspace --all-targets --locked
+          # shellcheck disable=SC2016
+          nix develop -c bash -c 'PATH="$1:$PATH" RUSTC="$1/rustc" "$1/cargo" "${@:2}"' _ "$tc" \
+            check -p graphing --all-targets --features mpfr-oracle --locked

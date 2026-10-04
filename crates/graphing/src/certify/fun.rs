@@ -18,6 +18,11 @@ pub enum Stop {
     Cancelled,
 }
 
+/// The work one unit of the evaluation budget stands for: a tree's nodes
+/// times the Taylor order plus one (x³ − 2x + 1/(x − 1) to order 2 is one
+/// unit; a sum of forty sines, about eight).
+pub const UNIT_WORK: usize = 64;
+
 /// The tree every claim refers to: the parser's, with `a·a` written `a²`
 /// (an interval product of a box with itself loses the correlation:
 /// `(x−c)·(x−c)` over a box around c straddles 0, `(x−c)²` doesn't).
@@ -631,7 +636,7 @@ impl<'a> Fun<'a> {
         self.cancel.is_some_and(|c| c.load(Ordering::Relaxed))
     }
 
-    /// Evaluations so far.
+    /// Evaluations so far (in units of [`UNIT_WORK`]).
     pub fn evals(&self) -> u64 {
         self.evals.get()
     }
@@ -648,11 +653,16 @@ impl<'a> Fun<'a> {
         self.budget.set((self.evals.get() + n).min(cap));
     }
 
-    fn charge(&self) -> Result<(), Stop> {
+    /// Charges one evaluation of `e` to order `n`: one unit for a tree
+    /// of up to [`UNIT_WORK`] nodes·orders, more for a bigger one, as it
+    /// takes longer (a sum of forty sines is thirty times x²'s work).
+    fn charge(&self, e: &Expr, n: usize) -> Result<(), Stop> {
         if self.cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
             return Err(Stop::Cancelled);
         }
-        let n = self.evals.get() + 1;
+        let work = e.depth_and_size().1 * (n + 1);
+        let cost = work.div_ceil(UNIT_WORK).max(1) as u64;
+        let n = self.evals.get() + cost;
         if n > self.budget.get() {
             return Err(Stop::Budget);
         }
@@ -667,7 +677,7 @@ impl<'a> Fun<'a> {
     /// Taylor coefficients of `e` (a sub-tree of `expr`) over the box, up
     /// to order `n`.
     pub fn ser_of(&self, e: &Expr, x: Interval, n: usize) -> Result<Series, Stop> {
-        self.charge()?;
+        self.charge(e, n)?;
         let s = taylor(e, x, n, &self.ctx());
         // f's simplified form, and the formula as written: each encloses
         // f's coefficients where the formula is defined throughout the box,
@@ -680,6 +690,8 @@ impl<'a> Fun<'a> {
             !c.is_empty() && c.dec >= crate::interval::Dec::Def && c.iv.is_bounded() && c.ne0()
         };
         if std::ptr::eq(e, &self.eval) && self.eval != self.expr && !s.iter().all(decided) {
+            // (A second evaluation, charged as one.)
+            self.charge(&self.expr, n)?;
             let t = taylor(&self.expr, x, n, &self.ctx());
             return Ok(merge(s, &t));
         }
