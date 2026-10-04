@@ -120,14 +120,33 @@ fn a_tiny_constant_is_not_zero() {
 /// converges to 0, from above, and never reaches it.
 #[test]
 fn slow_power_tails_tend_to_zero() {
-    for p in ["0.1", "0.01", "0.001", "0.0001", "0.00001"] {
+    // A limit is shown only where f's own enclosures far out bear it out
+    // (bands settling on it by 10³⁰⁰): x^−0.1 and x^−0.01 do; slower tails
+    // (x^−0.001 is still 0.5 at 10³⁰⁰) leave the range and the asymptote
+    // unknown. Never divergence, never a wrong limit.
+    for (p, settles) in [
+        ("0.1", true),
+        ("0.01", true),
+        ("0.001", false),
+        ("0.0001", false),
+        ("0.00001", false),
+    ] {
         let src = format!("y=x^-{p}");
         let r = k(&src);
-        assert_range(&src, &r, &[(0.0, false, INF, false)]);
-        assert_eq!(r.data.horizontal_asymptotes.len(), 1, "{src}");
-        assert_eq!(r.data.horizontal_asymptotes[0].0, 0.0, "{src}");
+        if settles {
+            assert_range(&src, &r, &[(0.0, false, INF, false)]);
+            assert_eq!(r.data.horizontal_asymptotes.len(), 1, "{src}");
+            assert_eq!(r.data.horizontal_asymptotes[0].0, 0.0, "{src}");
+            assert_eq!(r.too_complex_features, 0, "{src}");
+        } else {
+            assert_ne!(r.too_complex_features & flags::RANGE, 0, "{src}");
+            assert_ne!(
+                r.too_complex_features & flags::HORIZONTAL_ASYMPTOTES,
+                0,
+                "{src}"
+            );
+        }
         assert!(zeros(&r).is_empty(), "{src}");
-        assert_eq!(r.too_complex_features, 0, "{src}");
         assert_eq!(
             r.data.monotonicity.iter().map(|m| m.1).collect::<Vec<_>>(),
             [Monotonicity::Decreasing],
@@ -136,8 +155,12 @@ fn slow_power_tails_tend_to_zero() {
 
         let src = format!("y=-x^-{p}");
         let r = k(&src);
-        assert_range(&src, &r, &[(-INF, false, 0.0, false)]);
-        assert_eq!(r.too_complex_features, 0, "{src}");
+        if settles {
+            assert_range(&src, &r, &[(-INF, false, 0.0, false)]);
+            assert_eq!(r.too_complex_features, 0, "{src}");
+        } else {
+            assert_ne!(r.too_complex_features & flags::RANGE, 0, "{src}");
+        }
     }
     // Shifted and offset: the limit is the offset. (The pole at −1 is past
     // the certifier's pole proofs: the range is unknown there.)
@@ -146,13 +169,19 @@ fn slow_power_tails_tend_to_zero() {
     if r.too_complex_features & flags::RANGE == 0 {
         assert_range(src, &r, &[(3.0, false, INF, false)]);
     }
-    assert_eq!(r.data.horizontal_asymptotes[0].0, 3.0);
-    // Genuine slow growth is still growth.
+    if r.too_complex_features & flags::HORIZONTAL_ASYMPTOTES == 0 {
+        assert_eq!(r.data.horizontal_asymptotes[0].0, 3.0);
+    }
+    // Genuine slow growth is still growth (or, too slow for f's bounds to
+    // show by 10³⁰⁰ — x^0.0001 is 1.07 there — unknown).
     for src in ["y=ln(x)", "y=x^0.0001", "y=log(x-5000000)"] {
         let r = k(src);
-        assert_eq!(r.data.range.last().unwrap().hi.value, INF, "{src}");
+        if r.too_complex_features & flags::RANGE == 0 {
+            assert_eq!(r.data.range.last().unwrap().hi.value, INF, "{src}");
+        }
         assert!(r.data.horizontal_asymptotes.is_empty(), "{src}");
     }
+    assert_eq!(k("y=ln(x)").data.range.last().unwrap().hi.value, INF);
 }
 
 // ---------------------------------------------------------------------------

@@ -693,7 +693,6 @@ pub fn replay(a: &Value) -> Result<Report, String> {
         ..Default::default()
     };
     rep.binding = binding(a)?;
-    trees(&fx, &mut rep);
     let mut rows_in = Vec::new();
     for name in ROWS {
         // (A row an older certifier didn't write is unknown.)
@@ -712,6 +711,7 @@ pub fn replay(a: &Value) -> Result<Report, String> {
     // Each distinct claim once (the gaps go with every row); a gap is read
     // against all the certificate's claims (the families it may hold).
     let all: Vec<Claim> = rows_in.iter().flat_map(|rc| rc.claims.clone()).collect();
+    trees(&fx, &all, &mut rep);
     let mut seen: Vec<(Claim, usize)> = Vec::new();
     for rc in &rows_in {
         for c in &rc.claims {
@@ -791,9 +791,11 @@ fn binding(a: &Value) -> Result<Vec<String>, String> {
 
 /// The certifier's trees (f's simplified form, f′'s and f″'s) against f:
 /// shown identical exactly ([`algebra`]), else compared at points where
-/// f is defined (and k times differentiable). Enclosures apart at a point
-/// prove the tree wrong there.
-fn trees(fx: &Fx, rep: &mut Report) {
+/// f is defined (and k times differentiable): near 0, ordinary, far out
+/// (to 10²⁴⁰), and near every point the claims single out (excluded
+/// points, holes, domain ends). Enclosures apart at a point prove the tree
+/// wrong there.
+fn trees(fx: &Fx, claims: &[Claim], rep: &mut Report) {
     use claims::{Subj, Tree};
     let names = ["f's simplified form", "f′'s tree", "f″'s tree"];
     let present = [fx.f_eval.is_some(), fx.d[0].is_some(), fx.d[1].is_some()];
@@ -804,6 +806,37 @@ fn trees(fx: &Fx, rep: &mut Report) {
         xs.push(t);
         xs.push(-t * 1.37);
         t *= 2.9;
+    }
+    for far in [1.3e9, 2.9e12, 1.37e15, 3.7e30, 1.1e60, 7.7e120, 2.3e240] {
+        xs.push(far);
+        xs.push(-far);
+    }
+    // Beside the points the claims single out.
+    let mut marks: Vec<f64> = Vec::new();
+    for c in claims {
+        match c {
+            Claim::Removable { at, .. }
+            | Claim::Bounded { at, .. }
+            | Claim::Unbounded { at, .. }
+            | Claim::Gap(at)
+            | Claim::Undefined(at) => marks.extend([at.0, at.1]),
+            _ => {}
+        }
+    }
+    marks.retain(|m| m.is_finite());
+    marks.sort_by(f64::total_cmp);
+    marks.dedup();
+    for p in marks.into_iter().take(16) {
+        let s = p.abs().max(1.0);
+        for d in [1e-3 * s, 1e-6 * s, 1e-9 * s] {
+            xs.extend([p - d, p + d]);
+        }
+        let (mut lo, mut hi) = (p, p);
+        for _ in 0..4 {
+            lo = lo.next_down();
+            hi = hi.next_up();
+        }
+        xs.extend([lo, hi]);
     }
     for k in 0..3 {
         if !present[k] {

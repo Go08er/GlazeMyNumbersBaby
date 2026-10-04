@@ -1019,10 +1019,13 @@ pub fn vertical(
             Near::Unknown => {
                 // The simplifier's one-sided limits: an infinite one is an
                 // asymptote, two finite ones a hole or a jump.
-                let sides = [side_limit(f, x.lo.0, false), side_limit(f, x.lo.0, true)];
                 let (Some((l, lc)), Some((r, rc))) = (
-                    x.is_point().then_some(()).and(sides[0].clone()),
-                    sides[1].clone(),
+                    if x.is_point() {
+                        side_limit(f, x.lo.0, false)?
+                    } else {
+                        None
+                    },
+                    side_limit(f, x.lo.0, true)?,
                 ) else {
                     return Ok(Row::unknown("an excluded point is not classified"));
                 };
@@ -1031,7 +1034,8 @@ pub fn vertical(
                     (TailEnd::Level(..), TailEnd::Level(..)) => {}
                     _ => return Ok(Row::unknown("an excluded point is not classified")),
                 }
-                c.extend([lc, rc]);
+                c.extend(lc);
+                c.extend(rc);
             }
         }
         c.extend(claim);
@@ -1070,12 +1074,17 @@ pub fn vertical(
                 hi: R(v.hi()),
             });
         } else {
-            match x.is_point().then(|| side_limit(f, p, from_right)).flatten() {
-                Some((TailEnd::Infinite(_), claim)) => {
+            let side = if x.is_point() {
+                side_limit(f, p, from_right)?
+            } else {
+                None
+            };
+            match side {
+                Some((TailEnd::Infinite(_), claims)) => {
                     out.push(Spot::At(x));
-                    c.push(claim);
+                    c.extend(claims);
                 }
-                Some((TailEnd::Level(..), claim)) => c.push(claim),
+                Some((TailEnd::Level(..), claims)) => c.extend(claims),
                 _ => return Ok(Row::unknown("a domain end is not classified")),
             }
         }
@@ -1130,10 +1139,347 @@ pub enum TailEnd {
     Unknown,
 }
 
+/// Where f's own enclosures on a tail [M, ∞) (or (−∞, −M]) are taken to
+/// bear out a limit: M from 10⁸ out to 10³⁰⁰.
+const FAR: [f64; 6] = [1e8, 1e16, 1e32, 1e64, 1e150, 1e300];
+
+/// The tails' starts out from `start`: a few near it (before f overflows,
+/// as eˣ does by 10³), then the far sequence.
+fn out_along(start: f64) -> Vec<f64> {
+    let steps = [1.0, 4.0, 16.0, 64.0, 256.0, 1024.0];
+    let mut ms: Vec<f64> = steps
+        .iter()
+        .chain(steps.iter().map(|k| k * start).collect::<Vec<_>>().iter())
+        .copied()
+        .chain(FAR)
+        .filter(|m| *m >= 1.0 && m.is_finite())
+        .collect();
+    ms.sort_by(f64::total_cmp);
+    ms.dedup();
+    ms
+}
+
+/// The longest run at the end of `bounds` (in order out along the tail,
+/// or in towards a point) that moves strictly one way (`up`), as the
+/// replay reads growth.
+fn growing_suffix(bounds: &[f64], up: bool) -> usize {
+    let mut n = bounds.len().min(1);
+    for i in (1..bounds.len()).rev() {
+        let (a, b) = (bounds[i - 1], bounds[i]);
+        if if up { b > a } else { b < a } {
+            n += 1;
+        } else {
+            break;
+        }
+    }
+    n
+}
+
+/// Boxes beside p shrinking towards it: ½ … 10⁻³⁰⁰ of max(1, |p|), and
+/// as much in plain units, while more than a few doubles wide.
+fn toward(p: f64) -> Vec<f64> {
+    let s = p.abs().max(1.0);
+    let ulp = p.abs().next_up() - p.abs();
+    let ks = [
+        0.5, 0.25, 0.1, 0.05, 0.02, 1e-2, 1e-3, 1e-4, 1e-6, 1e-8, 1e-12, 1e-16, 1e-32, 1e-64,
+        1e-150, 1e-300,
+    ];
+    // Relative to p, and (for a p far out, beside another feature) plain.
+    let mut ds: Vec<f64> = ks
+        .iter()
+        .map(|k| k * s)
+        .chain(ks)
+        .filter(|d| *d > 4.0 * ulp)
+        .collect();
+    ds.sort_by(|a, b| b.total_cmp(a));
+    ds.dedup();
+    ds
+}
+
+/// Bands beside a point closing in on the limit `y`: the last three each
+/// no farther from it than the one before (or all within 10⁻⁹ of it), the
+/// last within 10⁻⁹ of it (or holding it).
+fn closing_in(bands: &[Interval], y: Enc) -> bool {
+    let apart = |b: &Interval| (y.lo.0 - b.hi()).max(b.lo() - y.hi.0).max(0.0);
+    let d: Vec<f64> = bands.iter().map(apart).collect();
+    let n = d.len();
+    let tol = 1e-9 * y.lo.0.abs().max(y.hi.0.abs()).max(1.0);
+    n >= 3
+        && (d[n - 3..].windows(2).all(|p| p[1] <= p[0]) || d[n - 3..].iter().all(|v| *v <= tol))
+        && d[n - 1] <= tol
+}
+
+/// Bands that settle on a limit: the last narrow (10⁻¹² of it), or three
+/// or more, the last three none wider than the one before, the last a
+/// hundredth as wide as the widest (x^−0.01 far out: 0.83, …, 0.001).
+fn settles(bands: &[Interval]) -> bool {
+    let Some(last) = bands.last() else {
+        return false;
+    };
+    if narrow(&DecInterval::new(*last)) {
+        return true;
+    }
+    let w: Vec<f64> = bands.iter().map(|b| b.hi() - b.lo()).collect();
+    let n = w.len();
+    n >= 3
+        && w[n - 3..].windows(2).all(|p| p[1] <= p[0])
+        && w[n - 1] <= 1e-2 * w.iter().copied().fold(0.0, f64::max)
+}
+
+/// The tail beyond `m` (> 0) on the right, or before −m on the left.
+fn tail_box(right: bool, m: f64) -> Interval {
+    if right {
+        Interval::new(m, f64::INFINITY)
+    } else {
+        Interval::new(f64::NEG_INFINITY, -m)
+    }
+}
+
+/// f′'s strict sign on the tail beyond `start` (rising: `true`), with
+/// f′'s enclosure there: from that enclosure, or from f′'s own tree,
+/// continuous on the tail with no factor reaching 0 there (−csch² for
+/// coth), so of the sign it has at the start.
+fn tail_sign(f: &Fun<'_>, right: bool, start: f64) -> Result<Option<(bool, DecInterval)>, Stop> {
+    let s = f.ser(tail_box(right, start), 1)?;
+    // (f′'s enclosure, or none: 0 · ∞ in x²·e⁻ˣ.)
+    let d = if usable(&s, 1) {
+        s[1]
+    } else {
+        DecInterval::new(Interval::ENTIRE)
+    };
+    if usable(&s, 1) && d.ne0() {
+        return Ok(Some((d.gt0(), d)));
+    }
+    // Without f's own series, its tree must be smooth (no jumps, kinks)
+    // and f defined on the tail: its derivative's tree is f′ there.
+    if !usable(&s, 1) && !(f.smooth_tree && !s[0].is_empty() && s[0].dec >= Dec::Def) {
+        return Ok(None);
+    }
+    let Some(t) = f.derivs().map(|d| &d[0]) else {
+        return Ok(None);
+    };
+    let whole = f.ser_of(t, tail_box(right, start), 0)?[0];
+    let mut nonzero = !whole.is_empty() && whole.dec >= Dec::Dac;
+    for h in f.factors(t) {
+        let v = f.ser_of(&h, tail_box(right, start), 0)?[0];
+        nonzero &= !v.is_empty() && v.ne0();
+    }
+    let at = f.ser_of(t, Interval::point(if right { start } else { -start }), 0)?[0];
+    if !(nonzero && !at.is_empty() && at.ne0()) {
+        return Ok(None);
+    }
+    Ok(Some((at.gt0(), d)))
+}
+
+/// f's bands on the tails [M, ∞) of the far sequence (M ≥ `start`), each
+/// with its claims: its enclosure there where bounded (`TailValue`); else,
+/// f monotone on the tail (`rising`), its value at M one way — f moves
+/// away from f(M) out along the tail — and its enclosure's bound the other
+/// (`Value` at M, `TailBeyond` on [M, ∞)): x·e⁻ˣ in (0, M·e⁻ᴹ].
+fn far_bands(
+    f: &Fun<'_>,
+    right: bool,
+    start: f64,
+    rising: Option<bool>,
+) -> Result<Vec<(Interval, Vec<Claim>)>, Stop> {
+    let side = if right { Tail::Right } else { Tail::Left };
+    let mut out = Vec::new();
+    for m in out_along(start) {
+        let x = if right { m } else { -m };
+        let v = f.val(tail_box(right, m))?;
+        if v.is_empty() || v.dec < Dec::Def {
+            continue;
+        }
+        if v.iv.is_bounded() {
+            out.push((
+                v.iv,
+                vec![Claim::TailValue {
+                    side,
+                    from: R(x),
+                    lo: R(v.lo()),
+                    hi: R(v.hi()),
+                }],
+            ));
+            continue;
+        }
+        let Some(rising) = rising else { continue };
+        let away_up = rising == right;
+        let p = f.val(Interval::point(x))?;
+        if p.is_empty() || p.dec < Dec::Def || !p.iv.is_bounded() {
+            continue;
+        }
+        let (band, c) = if away_up {
+            let c = v.hi().next_up();
+            (Interval::new(p.lo(), c), c)
+        } else {
+            let c = v.lo().next_down();
+            (Interval::new(c, p.hi()), c)
+        };
+        if !c.is_finite() || band.is_empty() {
+            continue;
+        }
+        out.push((
+            band,
+            vec![
+                Claim::Value {
+                    x: XBox::point(x),
+                    of: Subject::f(0),
+                    lo: R(p.lo()),
+                    hi: R(p.hi()),
+                },
+                Claim::TailBeyond {
+                    side,
+                    from: R(x),
+                    of: Subject::f(0),
+                    c: R(c),
+                    above: !away_up,
+                },
+            ],
+        ));
+    }
+    Ok(out)
+}
+
+/// Interval evidence for a finite limit `y` of f on a tail (the
+/// simplifier's, whose dominant terms show it exists): f's bands on the
+/// tails of the far sequence ([`far_bands`]) each hold y, two or more,
+/// the last narrow. The limit lies in every band; returns their
+/// intersection with y. `None` when a band misses y, or none is narrow:
+/// the limit isn't borne out.
+fn level_bands(
+    f: &Fun<'_>,
+    right: bool,
+    start: f64,
+    y: Enc,
+) -> Result<Option<(Enc, Vec<Claim>)>, Stop> {
+    let side = if right { Tail::Right } else { Tail::Left };
+    let sign = tail_sign(f, right, start)?;
+    let bands = far_bands(f, right, start, sign.map(|s| s.0))?;
+    let mut claims = Vec::new();
+    if let Some((rising, _)) = sign {
+        claims.push(Claim::TailBeyond {
+            side,
+            from: R(if right { start } else { -start }),
+            of: Subject::f(1),
+            c: R(0.0),
+            above: rising,
+        });
+    }
+    let mut lim = Interval::new(y.lo.0, y.hi.0);
+    for (b, cl) in &bands {
+        if b.hi() < y.lo.0 || y.hi.0 < b.lo() {
+            return Ok(None);
+        }
+        lim = lim.intersect(*b);
+        claims.extend(cl.iter().cloned());
+    }
+    let ivs: Vec<Interval> = bands.iter().map(|b| b.0).collect();
+    if ivs.len() >= 2 && settles(&ivs) && !lim.is_empty() {
+        Ok(Some((Enc::new(lim.lo(), lim.hi()), claims)))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Bounds that grow without settling, as the replay reads them: three or
+/// more (each already beyond the last), gaining at least 1 (x^−0.00001 by
+/// 0⁺ gains 3·10⁻³ by 10⁻³⁰⁰: no evidence of ∞; ln x + 10⁶ gains 6.9·10²).
+fn grows_enough(cs: &[f64]) -> bool {
+    cs.len() >= 3 && (cs[cs.len() - 1] - cs[0]).abs() >= 1.0
+}
+
+/// Interval evidence for f → +∞ (`up`) or −∞ on a tail (the simplifier's
+/// limit): on each tail [M, ∞) of the far sequence f is defined and
+/// beyond a bound (a `TailBeyond` claim on f), the bounds strictly growing
+/// out along it. `None` when they don't grow.
+fn infinite_bounds(
+    f: &Fun<'_>,
+    right: bool,
+    start: f64,
+    up: bool,
+) -> Result<Option<Vec<Claim>>, Stop> {
+    let side = if right { Tail::Right } else { Tail::Left };
+    let mut got: Vec<(f64, f64)> = Vec::new();
+    for m in out_along(start) {
+        let v = f.val(tail_box(right, m))?;
+        if v.is_empty() || v.dec < Dec::Def {
+            continue;
+        }
+        // Strictly beyond: one double short of the enclosure's end.
+        let c = if up {
+            v.lo().next_down()
+        } else {
+            v.hi().next_up()
+        };
+        // (Past where f overflows, no more bounds.)
+        if !c.is_finite() || c.abs() >= f64::MAX / 16.0 {
+            break;
+        }
+        got.push((m, c));
+    }
+    let cs: Vec<f64> = got.iter().map(|g| g.1).collect();
+    let keep = growing_suffix(&cs, up);
+    if grows_enough(&cs[cs.len() - keep..]) {
+        return Ok(Some(
+            got[got.len() - keep..]
+                .iter()
+                .map(|&(m, c)| Claim::TailBeyond {
+                    side,
+                    from: R(if right { m } else { -m }),
+                    of: Subject::f(0),
+                    c: R(c),
+                    above: up,
+                })
+                .collect(),
+        ));
+    }
+    // f monotone on the tail, moving that way: f stays beyond its value at
+    // each M, and those values grow (x/ln x, whose enclosure on [M, ∞)
+    // starts at M/∞ = 0).
+    let Some((rising, _)) = tail_sign(f, right, start)? else {
+        return Ok(None);
+    };
+    if (rising == right) != up {
+        return Ok(None);
+    }
+    let mut pts: Vec<(f64, f64, f64)> = Vec::new();
+    for m in out_along(start) {
+        let x = if right { m } else { -m };
+        let v = f.val(Interval::point(x))?;
+        if v.is_empty() || v.dec < Dec::Def || !v.iv.is_bounded() {
+            continue;
+        }
+        pts.push((x, v.lo(), v.hi()));
+    }
+    let cs: Vec<f64> = pts.iter().map(|p| if up { p.1 } else { p.2 }).collect();
+    let keep = growing_suffix(&cs, up);
+    if !grows_enough(&cs[cs.len() - keep..]) {
+        return Ok(None);
+    }
+    let mut claims = vec![Claim::TailBeyond {
+        side,
+        from: R(if right { start } else { -start }),
+        of: Subject::f(1),
+        c: R(0.0),
+        above: rising,
+    }];
+    for &(x, lo, hi) in &pts[pts.len() - keep..] {
+        claims.push(Claim::Value {
+            x: XBox::point(x),
+            of: Subject::f(0),
+            lo: R(lo),
+            hi: R(hi),
+        });
+    }
+    Ok(Some(claims))
+}
+
 /// How f ends on the right (`right`) or left tail beyond `from`, with the
 /// claims that prove it: from intervals, and from the simplifier's limit
 /// (dominant terms, exact rational functions) when intervals fall short
-/// or to pin an enclosed limit down exactly.
+/// or to pin an enclosed limit down exactly. The simplifier's limit never
+/// stands alone: f's own enclosures far out must bear it out
+/// ([`level_bands`], [`infinite_bounds`]).
 pub fn tail_end(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Claim>), Stop> {
     let (end, mut claims) = tail_interval(f, right, from)?;
     if matches!(end, TailEnd::Infinite(_)) {
@@ -1142,8 +1488,26 @@ pub fn tail_end(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cla
     let Some((lim, fact)) = simplifier_limit(f, right) else {
         return Ok((end, claims));
     };
+    let start = from.abs().max(1.0);
+    // A rational f's limit is exact (from N/D's degrees and leading
+    // coefficients), its fact checked so: it stands as it is.
+    let rational = matches!(&fact, Claim::Simplifier { fact } if fact.starts_with(RATIONAL));
     let out = match (end, lim) {
-        (TailEnd::Unknown, lim) => lim,
+        (TailEnd::Unknown, lim) if rational => lim,
+        (TailEnd::Unknown, TailEnd::Level(y, exact)) => match level_bands(f, right, start, y)? {
+            Some((l, bands)) => {
+                claims = bands;
+                TailEnd::Level(l, exact)
+            }
+            None => return Ok((TailEnd::Unknown, Vec::new())),
+        },
+        (TailEnd::Unknown, TailEnd::Infinite(up)) => match infinite_bounds(f, right, start, up)? {
+            Some(bounds) => {
+                claims = bounds;
+                TailEnd::Infinite(up)
+            }
+            None => return Ok((TailEnd::Unknown, Vec::new())),
+        },
         // Both enclose the same limit.
         (TailEnd::Level(e, _), TailEnd::Level(y, exact)) => {
             let (lo, hi) = (e.lo.0.max(y.lo.0), e.hi.0.min(y.hi.0));
@@ -1160,10 +1524,26 @@ pub fn tail_end(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cla
     Ok((out, claims))
 }
 
-/// The simplifier's limit of f at ±∞, as a tail end with its claim.
+/// How a limit fact of a rational f begins: the limit is N/D's, exactly.
+pub const RATIONAL: &str = "f = N/D exactly: ";
+
+/// The simplifier's limit of f at ±∞, as a tail end with its claim (a
+/// rational f's marked so).
 fn simplifier_limit(f: &Fun<'_>, right: bool) -> Option<(TailEnd, Claim)> {
     let at = if right { "+∞" } else { "−∞" };
-    limit_of(f, &f.expr, right, at)
+    let (end, claim) = limit_of(f, &f.expr, right, at)?;
+    let rational = f
+        .exact
+        .is_some_and(|x| crate::simplify::rational_form(&f.expr, x).is_some());
+    match claim {
+        Claim::Simplifier { fact } if rational => Some((
+            end,
+            Claim::Simplifier {
+                fact: format!("{RATIONAL}{fact}"),
+            },
+        )),
+        c => Some((end, c)),
+    }
 }
 
 /// The simplifier's limit of `e` as x → +∞ (`right`) or −∞, as a tail end
@@ -1202,8 +1582,119 @@ fn limit_of(f: &Fun<'_>, e: &crate::ast::Expr, right: bool, at: &str) -> Option<
 }
 
 /// f's one-sided limit at the double `p`, from the right (`right`) or the
-/// left, by the simplifier: the limit at +∞ of f(p ± 1/x).
-pub fn side_limit(f: &Fun<'_>, p: f64, right: bool) -> Option<(TailEnd, Claim)> {
+/// left: the simplifier's (the limit at +∞ of f(p ± 1/x)), borne out by
+/// f's own enclosures on ever smaller boxes beside p ([`side_bands`]);
+/// the limit's claims with the fact.
+pub fn side_limit(f: &Fun<'_>, p: f64, right: bool) -> Result<Option<(TailEnd, Vec<Claim>)>, Stop> {
+    let Some((end, fact)) = side_limit_fact(f, p, right) else {
+        return Ok(None);
+    };
+    Ok(side_bands(f, p, right, &end)?.map(|(end, mut claims)| {
+        claims.push(fact);
+        (end, claims)
+    }))
+}
+
+/// Interval evidence for a one-sided limit at `p`: on boxes beside p
+/// (½ … 10⁻³⁰⁰ of max(1, |p|) wide, p left out), a finite limit lies in
+/// f's band there (two `Beyond` claims, above and below, holding it), the
+/// bands settling; an infinite one has f beyond bounds that grow as the
+/// boxes shrink (`Beyond` claims). `None` when they don't bear it out.
+fn side_bands(
+    f: &Fun<'_>,
+    p: f64,
+    right: bool,
+    end: &TailEnd,
+) -> Result<Option<(TailEnd, Vec<Claim>)>, Stop> {
+    let mut claims = Vec::new();
+    match *end {
+        TailEnd::Level(y, ref exact) => {
+            let mut lim = Interval::new(y.lo.0, y.hi.0);
+            let mut bands = Vec::new();
+            for d in toward(p) {
+                // The box beside p, p left out (f may be undefined there).
+                let n = if right {
+                    Interval::new(p.next_up(), p + d)
+                } else {
+                    Interval::new(p - d, p.next_down())
+                };
+                if n.is_empty() {
+                    break;
+                }
+                let v = f.val(n)?;
+                if v.is_empty() || v.dec < Dec::Def || !v.iv.is_bounded() {
+                    continue;
+                }
+                // f's band there, as a bound on each side. (The limit may
+                // lie just outside it, in the reals between p and the box:
+                // x·ln x < 0 on [2⁻¹⁰⁷⁴, d], its limit 0.)
+                let (lo, hi) = (v.lo().next_down(), v.hi().next_up());
+                for (c, above) in [(lo, true), (hi, false)] {
+                    claims.push(Claim::Beyond {
+                        x: XBox::new(n.lo(), n.hi()),
+                        of: Subject::f(0),
+                        c: R(c),
+                        above,
+                    });
+                }
+                bands.push(Interval::new(lo, hi));
+            }
+            let _ = &mut lim;
+            Ok(
+                (bands.len() >= 3 && settles(&bands) && closing_in(&bands, y)).then(|| {
+                    (
+                        TailEnd::Level(Enc::new(y.lo.0, y.hi.0), exact.clone()),
+                        claims,
+                    )
+                }),
+            )
+        }
+        TailEnd::Infinite(up) => {
+            let mut got: Vec<(Interval, f64)> = Vec::new();
+            for d in toward(p) {
+                let n = if right {
+                    Interval::new(p.next_up(), p + d)
+                } else {
+                    Interval::new(p - d, p.next_down())
+                };
+                if n.is_empty() {
+                    break;
+                }
+                let v = f.val(n)?;
+                if v.is_empty() || v.dec < Dec::Def {
+                    continue;
+                }
+                let c = if up {
+                    v.lo().next_down()
+                } else {
+                    v.hi().next_up()
+                };
+                if !c.is_finite() || c.abs() >= f64::MAX / 16.0 {
+                    break;
+                }
+                got.push((n, c));
+            }
+            let cs: Vec<f64> = got.iter().map(|g| g.1).collect();
+            let keep = growing_suffix(&cs, up);
+            if !grows_enough(&cs[cs.len() - keep..]) {
+                return Ok(None);
+            }
+            for &(n, c) in &got[got.len() - keep..] {
+                claims.push(Claim::Beyond {
+                    x: XBox::new(n.lo(), n.hi()),
+                    of: Subject::f(0),
+                    c: R(c),
+                    above: up,
+                });
+            }
+            Ok(Some((TailEnd::Infinite(up), claims)))
+        }
+        TailEnd::Unknown => Ok(None),
+    }
+}
+
+/// The simplifier's one-sided limit at `p`, with its fact.
+fn side_limit_fact(f: &Fun<'_>, p: f64, right: bool) -> Option<(TailEnd, Claim)> {
     use crate::ast::{BinOp, Expr};
     let pe = if p < 0.0 {
         Expr::Neg(Box::new(Expr::Num(-p)))
@@ -1453,13 +1944,6 @@ fn pi_q(v: crate::simplify::PiQ) -> String {
 
 fn tail_interval(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Claim>), Stop> {
     let side = if right { Tail::Right } else { Tail::Left };
-    let tail = |m: f64| {
-        if right {
-            Interval::new(m, f64::INFINITY)
-        } else {
-            Interval::new(f64::NEG_INFINITY, -m)
-        }
-    };
     let start = from.abs().max(1.0);
     let from_r = R(if right { start } else { -start });
     // f′ of one sign and moving away from 0 out along the tail (a sign
@@ -1486,30 +1970,8 @@ fn tail_interval(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cl
         };
         return Ok((TailEnd::Infinite(rising == right), vec![claim]));
     }
-    let s = f.ser(tail(start), 1)?;
-    if !usable(&s, 1) {
+    let Some((rising, d)) = tail_sign(f, right, start)? else {
         return Ok((TailEnd::Unknown, Vec::new()));
-    }
-    let d = s[1];
-    let rising = if d.ne0() {
-        d.gt0()
-    } else {
-        // f′'s own tree: continuous on the tail with no factor reaching 0
-        // there (−csch² for coth), so of the sign it has at the start.
-        let Some(t) = f.derivs().map(|d| &d[0]) else {
-            return Ok((TailEnd::Unknown, Vec::new()));
-        };
-        let whole = f.ser_of(t, tail(start), 0)?[0];
-        let mut nonzero = !whole.is_empty() && whole.dec >= Dec::Dac;
-        for h in f.factors(t) {
-            let v = f.ser_of(&h, tail(start), 0)?[0];
-            nonzero &= !v.is_empty() && v.ne0();
-        }
-        let at = f.ser_of(t, Interval::point(if right { start } else { -start }), 0)?[0];
-        if !(nonzero && !at.is_empty() && at.ne0()) {
-            return Ok((TailEnd::Unknown, Vec::new()));
-        }
-        at.gt0()
     };
     // f′ bounded away from 0 (beyond half its bound): f goes to ±∞.
     let c = if !d.ne0() {
@@ -1530,7 +1992,7 @@ fn tail_interval(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cl
         // Rising to the right goes to +∞; rising to the left to −∞.
         return Ok((TailEnd::Infinite(rising == right), vec![claim]));
     }
-    // Strictly monotone: a limit if bounded. Every enclosure of f far out
+    // Strictly monotone: a limit if bounded. Every band of f far out
     // holds the limit; keep their intersection.
     let mut claims = vec![Claim::TailBeyond {
         side,
@@ -1539,23 +2001,14 @@ fn tail_interval(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cl
         c: R(0.0),
         above: rising,
     }];
+    let bands = far_bands(f, right, start, Some(rising))?;
     let mut lim: Option<Interval> = None;
-    for m in [1e8_f64, 1e16, 1e32, 1e64, 1e150, 1e300] {
-        let m = m.max(start);
-        let v = f.val(tail(m))?;
-        if v.is_empty() || !v.iv.is_bounded() {
-            break;
-        }
-        claims.push(Claim::TailValue {
-            side,
-            from: R(if right { m } else { -m }),
-            lo: R(v.lo()),
-            hi: R(v.hi()),
-        });
-        lim = Some(lim.map_or(v.iv, |l| l.intersect(v.iv)));
+    for (b, cl) in &bands {
+        claims.extend(cl.iter().cloned());
+        lim = Some(lim.map_or(*b, |l| l.intersect(*b)));
     }
-    match lim {
-        Some(l) if !l.is_empty() && narrow(&DecInterval::new(l)) => {
+    match (lim, bands.last()) {
+        (Some(l), Some((last, _))) if !l.is_empty() && narrow(&DecInterval::new(*last)) => {
             Ok((TailEnd::Level(Enc::new(l.lo(), l.hi()), None), claims))
         }
         _ => Ok((TailEnd::Unknown, Vec::new())),
@@ -1639,15 +2092,85 @@ pub fn horizontal(f: &Fun<'_>, dom: &Domain, scope: &Scope) -> Result<Row<Vec<Ho
 
 // ---------------------------------------------------------- oblique
 
-/// q·πᵏ as an expression (k = 0 or 1).
-fn piq_expr(v: crate::simplify::PiQ) -> Option<crate::ast::Expr> {
-    use crate::ast::{BinOp, Constant, Expr};
-    let q = crate::simplify::rational::q_expr(v.q);
-    match v.k {
-        0 => Some(q),
-        1 => Some(Expr::bin(BinOp::Mul, q, Expr::Const(Constant::Pi))),
-        _ => None,
+/// Interval evidence on f′ along a tail, for the simplifier's f/x → ±∞
+/// (`grow`: f′ beyond bounds growing in size, so f′ → ±∞ and f/x with it)
+/// or f/x → 0 (f′ within bands about 0 narrowing to 10⁻¹², so f′ → 0 and
+/// f/x with it): `TailBeyond` claims on f′ at each tail of the far
+/// sequence. `None` when f′'s enclosures don't bear it out.
+fn slope_evidence(
+    f: &Fun<'_>,
+    right: bool,
+    start: f64,
+    grow: bool,
+) -> Result<Option<Vec<Claim>>, Stop> {
+    let side = if right { Tail::Right } else { Tail::Left };
+    let mut claims = Vec::new();
+    let mut prev: Option<f64> = None;
+    let mut last = f64::INFINITY;
+    for m in out_along(start) {
+        let s = f.ser(tail_box(right, m), 1)?;
+        if !usable(&s, 1) {
+            continue;
+        }
+        let d = s[1];
+        let from = R(if right { m } else { -m });
+        if grow {
+            let (c, above) = if d.gt0() {
+                (d.lo().next_down(), true)
+            } else if d.lt0() {
+                (d.hi().next_up(), false)
+            } else {
+                continue;
+            };
+            // (Past where f′ overflows, no more bounds.)
+            if !c.is_finite() || c.abs() >= f64::MAX / 16.0 {
+                break;
+            }
+            if prev.is_some_and(|q: f64| (c > 0.0) != (q > 0.0)) {
+                return Ok(None);
+            }
+            prev = Some(c);
+            claims.push(Claim::TailBeyond {
+                side,
+                from,
+                of: Subject::f(1),
+                c: R(c),
+                above,
+            });
+        } else {
+            if !d.iv.is_bounded() {
+                return Ok(None);
+            }
+            let (lo, hi) = (d.lo().next_down(), d.hi().next_up());
+            last = lo.abs().max(hi.abs());
+            for (c, above) in [(lo, true), (hi, false)] {
+                claims.push(Claim::TailBeyond {
+                    side,
+                    from,
+                    of: Subject::f(1),
+                    c: R(c),
+                    above,
+                });
+            }
+        }
     }
+    if grow {
+        // Growing in size: the run at the end that does, as claims.
+        let cs: Vec<f64> = claims
+            .iter()
+            .filter_map(|c| match c {
+                Claim::TailBeyond { c, .. } => Some(c.0.abs()),
+                _ => None,
+            })
+            .collect();
+        let keep = growing_suffix(&cs, true);
+        if !grows_enough(&cs[cs.len() - keep..]) {
+            return Ok(None);
+        }
+        let n = claims.len();
+        return Ok(Some(claims.split_off(n - keep)));
+    }
+    Ok((last <= 1e-12).then_some(claims))
 }
 
 /// Oblique asymptotes y = m·x + b (m ≠ 0) at each tail the domain reaches.
@@ -1724,7 +2247,6 @@ pub fn oblique(
     let Some(settings) = f.settings() else {
         return Ok(Row::unknown("the tails are not decided"));
     };
-    let mut out = Vec::new();
     for right in [false, true] {
         if !reaches(right) {
             continue;
@@ -1740,52 +2262,36 @@ pub fn oblique(
         let dir = if right { LDir::PosInf } else { LDir::NegInf };
         let at = if right { "+∞" } else { "−∞" };
         let over_x = Expr::bin(BinOp::Div, f.expr.clone(), Expr::X);
+        let start = scope.w.abs().max(1.0);
         match limit_at(&over_x, dir, &settings) {
+            // (Each with f′'s enclosures far out bearing it out.)
             Limit::PosInf | Limit::NegInf => {
+                let Some(ev) = slope_evidence(f, right, start, true)? else {
+                    return Ok(Row::unknown("a tail's slope is not decided"));
+                };
+                c.extend(ev);
                 c.push(Claim::Simplifier {
                     fact: format!("f/x → ±∞ as x → {at}: no oblique asymptote"),
                 });
             }
             Limit::Exact(m) if m.q.is_zero() => {
+                let Some(ev) = slope_evidence(f, right, start, false)? else {
+                    return Ok(Row::unknown("a tail's slope is not decided"));
+                };
+                c.extend(ev);
                 c.push(Claim::Simplifier {
                     fact: format!("f/x → 0 as x → {at} and f has no horizontal asymptote there"),
                 });
             }
-            Limit::Exact(m) => {
-                let Some(mx) = piq_expr(m) else {
-                    return Ok(Row::unknown("a tail's slope is not decided"));
-                };
-                let rest = Expr::bin(
-                    BinOp::Sub,
-                    f.expr.clone(),
-                    Expr::bin(BinOp::Mul, mx, Expr::X),
-                );
-                match limit_at(&rest, dir, &settings) {
-                    Limit::Exact(b) => {
-                        let (Some(mi), Some(bi)) = (piq_interval(m), piq_interval(b)) else {
-                            return Ok(Row::unknown("a tail's slope is not decided"));
-                        };
-                        c.push(Claim::Simplifier {
-                            fact: format!(
-                                "f/x → {} and f − m·x → {} as x → {at}",
-                                pi_q(m),
-                                pi_q(b)
-                            ),
-                        });
-                        out.push(Oblique {
-                            side,
-                            m: Enc::new(mi.lo(), mi.hi()),
-                            b: Enc::new(bi.lo(), bi.hi()),
-                        });
-                    }
-                    _ => return Ok(Row::unknown("a tail's intercept is not decided")),
-                }
-            }
+            // A line the simplifier finds: f − m·x has no enclosure far
+            // out to bear it out (m·x cancels only symbolically).
+            Limit::Exact(_) => return Ok(Row::unknown("a tail's line is not borne out")),
             _ => return Ok(Row::unknown("a tail's slope is not decided")),
         }
     }
+    // (Only a rational f's line is shown, above.)
     Ok(Row::Certified {
-        value: out,
+        value: Vec::new(),
         cert: c,
     })
 }
@@ -2014,10 +2520,10 @@ fn end_value(
             if !x.is_point() {
                 return Ok(None);
             }
-            let Some((end, claim)) = side_limit(f, x.lo.0, is_lo) else {
+            let Some((end, claims)) = side_limit(f, x.lo.0, is_lo)? else {
                 return Ok(None);
             };
-            cl.push(claim);
+            cl.extend(claims);
             match end {
                 TailEnd::Infinite(up) => Some(infinite(up)),
                 TailEnd::Level(e, _) => Some(End {

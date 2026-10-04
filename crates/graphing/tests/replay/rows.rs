@@ -1482,11 +1482,7 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
         }
         // A tail: to ±∞ (f′ beyond a nonzero c), or a limit with two
         // values apart.
-        let to_inf = rc.claims.iter().any(|c| {
-            matches!(c, Claim::TailBeyond { of: Subject::F(1), c, .. } if *c != 0.0)
-                || matches!(c, Claim::TailChain { of: Subject::F(1), .. })
-                || matches!(c, Claim::Simplifier(f) if f.contains("→ +∞ as x → ") || f.contains("→ −∞ as x → "))
-        });
+        let to_inf = shows_unbounded(&rc.claims);
         let vals: Vec<(f64, f64, f64)> = rc
             .claims
             .iter()
@@ -1501,10 +1497,9 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
             })
             .collect();
         let apart = vals.iter().any(|a| vals.iter().any(|b| a.2 < b.1));
-        let limit = rc
-            .claims
+        let limit = [Side::Left, Side::Right]
             .iter()
-            .any(|c| matches!(c, Claim::TailValue { .. } | Claim::Simplifier(_)));
+            .any(|&s| !tail_bands(&rc.claims, s).is_empty());
         if !(to_inf || (limit && apart)) {
             out.problems
                 .push("not periodic, but the claims don't show it".into());
@@ -1670,6 +1665,312 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
     Ok(())
 }
 
+// ------------------------------------------------------------ limits
+
+/// f′'s strict sign on the tail (`Some(true)`: rising), and from where.
+fn tail_mono(claims: &[Claim], side: Side) -> Option<(bool, f64)> {
+    // The widest such tail (from −∞ on the right: the whole line).
+    let right = side == Side::Right;
+    claims
+        .iter()
+        .filter_map(|c| match c {
+            Claim::TailBeyond {
+                side: s,
+                from,
+                of: Subject::F(1),
+                c,
+                above,
+            } if *s == side && *c == 0.0 => Some((*above, *from)),
+            _ => None,
+        })
+        .reduce(|a, b| {
+            let wider = if right { b.1 < a.1 } else { b.1 > a.1 };
+            if wider { b } else { a }
+        })
+}
+
+/// x lies on the tail that starts at `from` (on the right: x ≥ from).
+fn on_tail(x: f64, from: f64, right: bool) -> bool {
+    if right { x >= from } else { x <= from }
+}
+
+/// The bands f's own enclosures put it in on a tail, as (|M|, lo, hi):
+/// a `TailValue` on [M, ∞), or (f monotone there) its value at M and a
+/// bound beyond which it stays on [M, ∞) — moving away from f(M) one way
+/// out along the tail, held by the bound the other way. Out along the
+/// tail.
+fn tail_bands(claims: &[Claim], side: Side) -> Vec<(f64, f64, f64)> {
+    let right = side == Side::Right;
+    let mut out: Vec<(f64, f64, f64)> = claims
+        .iter()
+        .filter_map(|c| match c {
+            Claim::TailValue {
+                side: s,
+                from,
+                lo,
+                hi,
+            } if *s == side => Some((from.abs(), *lo, *hi)),
+            _ => None,
+        })
+        .collect();
+    if let Some((rising, start)) = tail_mono(claims, side) {
+        let away_up = rising == right;
+        for c in claims {
+            let Claim::Value {
+                x,
+                of: Subject::F(0),
+                lo,
+                hi,
+            } = c
+            else {
+                continue;
+            };
+            let m = x.0;
+            if x.0 != x.1 || (m > 0.0) != right || !on_tail(m, start, right) {
+                continue;
+            }
+            let bound = claims.iter().find_map(|d| match d {
+                Claim::TailBeyond {
+                    side: s,
+                    from,
+                    of: Subject::F(0),
+                    c,
+                    above,
+                } if *s == side && *from == m && *above != away_up => Some(*c),
+                _ => None,
+            });
+            if let Some(b) = bound {
+                out.push(if away_up {
+                    (m.abs(), *lo, b)
+                } else {
+                    (m.abs(), b, *hi)
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.0.total_cmp(&b.0));
+    out
+}
+
+/// Bounds that grow without settling: three or more, each beyond the
+/// last (in the direction `up`), gaining at least 1.
+fn growing(mut bs: Vec<(f64, f64)>, up: bool) -> bool {
+    bs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // Several bounds from one place (other rows' claims): the strongest.
+    let mut one: Vec<(f64, f64)> = Vec::new();
+    for b in bs {
+        match one.last_mut() {
+            Some(l) if l.0 == b.0 => {
+                l.1 = if up { l.1.max(b.1) } else { l.1.min(b.1) };
+            }
+            _ => one.push(b),
+        }
+    }
+    let bs = one;
+    if bs.len() < 3 {
+        return false;
+    }
+    let ok = bs
+        .windows(2)
+        .all(|w| if up { w[1].1 > w[0].1 } else { w[1].1 < w[0].1 });
+    let (first, last) = (bs[0].1, bs[bs.len() - 1].1);
+    ok && (last - first).abs() >= 1.0
+}
+
+/// Whether the claims show f → +∞ (`up`) or −∞ on the tail: f′ beyond a
+/// nonzero bound of the matching sign, or f′'s sign chain (f′ moving away
+/// from 0); or f beyond bounds on [M, ∞) that grow out along the tail.
+fn tail_infinite(claims: &[Claim], side: Side, up: bool) -> bool {
+    let right = side == Side::Right;
+    let proof = claims.iter().any(|c| match c {
+        Claim::TailBeyond {
+            side: s,
+            of: Subject::F(1),
+            c,
+            above,
+            ..
+        } if *s == side && *c != 0.0 => {
+            (*above && *c > 0.0 || !*above && *c < 0.0) && (*above == right) == up
+        }
+        Claim::TailChain {
+            side: s,
+            of: Subject::F(1),
+            above,
+            ..
+        } if *s == side => (*above == right) == up,
+        _ => false,
+    });
+    let bounds: Vec<(f64, f64)> = claims
+        .iter()
+        .filter_map(|c| match c {
+            Claim::TailBeyond {
+                side: s,
+                from,
+                of: Subject::F(0),
+                c,
+                above,
+            } if *s == side && *above == up => Some((from.abs(), *c)),
+            _ => None,
+        })
+        .collect();
+    // f monotone on the tail, moving that way, past values that grow.
+    let points = || -> Vec<(f64, f64)> {
+        let Some((rising, start)) = tail_mono(claims, side) else {
+            return Vec::new();
+        };
+        if (rising == right) != up {
+            return Vec::new();
+        }
+        claims
+            .iter()
+            .filter_map(|c| match c {
+                Claim::Value {
+                    x,
+                    of: Subject::F(0),
+                    lo,
+                    hi,
+                } if x.0 == x.1 && (x.0 > 0.0) == right && on_tail(x.0, start, right) => {
+                    Some((x.0.abs(), if up { *lo } else { *hi }))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    proof || growing(bounds, up) || growing(points(), up)
+}
+
+/// Whether the claims show f → ±∞ beside the point p (from the right, or
+/// the left): unbounded there by structure, or beyond bounds on boxes
+/// beside p that grow as the boxes shrink.
+fn side_infinite(claims: &[Claim], p: f64, right: bool) -> bool {
+    let structural = claims
+        .iter()
+        .any(|c| matches!(c, Claim::Unbounded { at, .. } if at.0 <= p && p <= at.1));
+    let near = |x: &B| {
+        if right {
+            x.0 == p.next_up()
+        } else {
+            x.1 == p.next_down()
+        }
+    };
+    let bounds = |up: bool| -> Vec<(f64, f64)> {
+        claims
+            .iter()
+            .filter_map(|c| match c {
+                Claim::Beyond {
+                    x,
+                    of: Subject::F(0),
+                    c,
+                    above,
+                } if near(x) && *above == up => Some((-(x.1 - x.0), *c)),
+                _ => None,
+            })
+            .collect()
+    };
+    structural || growing(bounds(true), true) || growing(bounds(false), false)
+}
+
+/// f's bands on boxes beside p (from the right, or the left, p left
+/// out), as (width, lo, hi), the boxes shrinking: a `Beyond` claim above a
+/// bound and one below a bound on the same box.
+fn side_bands(claims: &[Claim], p: f64, right: bool) -> Vec<(f64, f64, f64)> {
+    let near = |x: &B| {
+        if right {
+            x.0 == p.next_up()
+        } else {
+            x.1 == p.next_down()
+        }
+    };
+    let bound = |x: &B, up: bool| {
+        claims.iter().find_map(|c| match c {
+            Claim::Beyond {
+                x: y,
+                of: Subject::F(0),
+                c,
+                above,
+            } if y == x && *above == up => Some(*c),
+            _ => None,
+        })
+    };
+    let mut out: Vec<(f64, f64, f64)> = Vec::new();
+    for c in claims {
+        if let Claim::Beyond {
+            x,
+            of: Subject::F(0),
+            above: true,
+            c: lo,
+        } = c
+            && near(x)
+            && let Some(hi) = bound(x, false)
+            && !out.iter().any(|o| o.0 == x.1 - x.0)
+        {
+            out.push((x.1 - x.0, *lo, hi));
+        }
+    }
+    out.sort_by(|a, b| b.0.total_cmp(&a.0));
+    out
+}
+
+/// The limit bands bear out `y`: two or more, each holding it, and
+/// settling — the last narrow (10⁻⁹ of it), or three or more, the last
+/// three none wider than the one before, the last a hundredth as wide as
+/// the widest; their intersection, or why not.
+fn borne_out(bands: &[(f64, f64, f64)], y: &Enc, what: &str) -> Result<Enc, String> {
+    if bands.len() < 2 {
+        return Err(format!("{what} with no bands of f's values to bear it out"));
+    }
+    for (_, lo, hi) in bands {
+        if !(y.lo <= *hi && *lo <= y.hi) {
+            return Err(format!(
+                "{what} is listed in [{:e}, {:e}], outside f's band [{lo:e}, {hi:e}]",
+                y.lo, y.hi
+            ));
+        }
+    }
+    let (_, llo, lhi) = bands[bands.len() - 1];
+    let w: Vec<f64> = bands.iter().map(|b| b.2 - b.1).collect();
+    let n = w.len();
+    let shrinking = n >= 3
+        && w[n - 3..].windows(2).all(|p| p[1] <= p[0])
+        && w[n - 1] <= 1e-2 * w.iter().copied().fold(0.0, f64::max);
+    if lhi - llo > 1e-9 * y.lo.abs().max(y.hi.abs()).max(1.0) && !shrinking {
+        return Err(format!(
+            "{what}: f's bands don't narrow to it ([{llo:e}, {lhi:e}] last)"
+        ));
+    }
+    let lo = bands.iter().map(|b| b.1).fold(f64::NEG_INFINITY, f64::max);
+    let hi = bands.iter().map(|b| b.2).fold(f64::INFINITY, f64::min);
+    Ok(Enc { lo, hi })
+}
+
+/// f′ on the tail shown beyond bounds growing in size (`to_zero` false:
+/// f′ → ±∞, so f/x → ±∞) or within bands about 0 narrowing to 10⁻¹²
+/// (f′ → 0, so f/x → 0).
+fn slope_shown(claims: &[Claim], side: Side, to_zero: bool) -> bool {
+    let bs: Vec<(f64, f64, bool)> = claims
+        .iter()
+        .filter_map(|c| match c {
+            Claim::TailBeyond {
+                side: s,
+                from,
+                of: Subject::F(1),
+                c,
+                above,
+            } if *s == side && *c != 0.0 => Some((from.abs(), *c, *above)),
+            _ => None,
+        })
+        .collect();
+    if to_zero {
+        let far = bs.iter().map(|b| b.0).fold(0.0, f64::max);
+        let at_far: Vec<&(f64, f64, bool)> = bs.iter().filter(|b| b.0 == far).collect();
+        at_far.iter().any(|b| b.2 && b.1 >= -1e-12) && at_far.iter().any(|b| !b.2 && b.1 <= 1e-12)
+    } else {
+        let up: Vec<(f64, f64)> = bs.iter().filter(|b| b.2).map(|b| (b.0, b.1)).collect();
+        let down: Vec<(f64, f64)> = bs.iter().filter(|b| !b.2).map(|b| (b.0, b.1)).collect();
+        growing(up, true) || growing(down, false)
+    }
+}
+
 // ------------------------------------------------------------ asymptotes
 
 fn vertical(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
@@ -1678,10 +1979,13 @@ fn vertical(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), St
         .map(spot)
         .collect::<Result<_, _>>()?;
     for (x, _) in &listed {
-        let unbounded = rc.claims.iter().any(|c| {
-            matches!(c, Claim::Unbounded { at, .. } if at.0 == x.lo && at.1 == x.hi)
-                || matches!(c, Claim::Simplifier(f) if f.contains("∞ as x → ") && x.lo == x.hi && f.contains(&format!("{}", x.lo)))
-        });
+        let unbounded = rc
+            .claims
+            .iter()
+            .any(|c| matches!(c, Claim::Unbounded { at, .. } if at.0 == x.lo && at.1 == x.hi))
+            || (x.lo == x.hi
+                && (side_infinite(&rc.claims, x.lo, true)
+                    || side_infinite(&rc.claims, x.lo, false)));
         if !unbounded {
             out.problems.push(format!(
                 "a vertical asymptote at {:e} with no claim it is one",
@@ -1733,21 +2037,10 @@ fn horizontal(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), 
             other => return Err(format!("bad side {other:?}")),
         };
         let y = enc(item.get("y").ok_or("y")?)?;
-        // f strictly monotone on the tail and bounded there: a limit, in
-        // every enclosure of f far out; or the simplifier's limit.
-        let mono = rc.claims.iter().any(|c| {
-            matches!(c, Claim::TailBeyond { side: s, of: Subject::F(1), c, .. } if *s == side && *c == 0.0)
-        });
-        let vals: Vec<(f64, f64)> = rc
-            .claims
-            .iter()
-            .filter_map(|c| match c {
-                Claim::TailValue {
-                    side: s, lo, hi, ..
-                } if *s == side => Some((*lo, *hi)),
-                _ => None,
-            })
-            .collect();
+        // f's own enclosures far out (bands on [M, ∞) narrowing to the
+        // limit) bear it out; it exists by f's monotonicity there, or by
+        // the simplifier's fact. The fact alone never stands.
+        let mono = tail_mono(&rc.claims, side).is_some();
         let at = if side == Side::Right {
             "+∞"
         } else {
@@ -1756,27 +2049,51 @@ fn horizontal(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), 
         let fact = rc.claims.iter().any(|c| {
             matches!(c, Claim::Simplifier(f) if f.starts_with("f → ") && f.ends_with(&format!("as x → {at}")))
         });
-        if !vals.is_empty() && mono {
-            let lo = vals.iter().map(|v| v.0).fold(f64::NEG_INFINITY, f64::max);
-            let hi = vals.iter().map(|v| v.1).fold(f64::INFINITY, f64::min);
-            if !(y.lo <= hi && lo <= y.hi) {
-                out.problems.push(format!(
-                    "the limit at {at} is listed in [{:e}, {:e}], outside f's values far out",
+        let rational = rc.claims.iter().any(|c| {
+            matches!(c, Claim::Simplifier(f) if f.starts_with(claims::RATIONAL) && f.ends_with(&format!("as x → {at}")))
+        });
+        if rational {
+            // N/D's limit, exactly (its fact checked so): the listed one.
+            let fact = rc.claims.iter().find_map(|c| match c {
+                Claim::Simplifier(f)
+                    if f.starts_with(claims::RATIONAL) && f.ends_with(&format!("as x → {at}")) =>
+                {
+                    fact_limit(f)
+                }
+                _ => None,
+            });
+            match fact {
+                Some(v) if y.lo <= v.hi && v.lo <= y.hi => {}
+                _ => out.problems.push(format!(
+                    "the limit at {at} is listed in [{:e}, {:e}], not N/D's",
                     y.lo, y.hi
-                ));
+                )),
             }
-            if !(lo >= y.lo && hi <= y.hi) && !fact {
-                out.problems.push(format!(
-                    "the limit at {at}: [{:e}, {:e}] is narrower than the claims show",
-                    y.lo, y.hi
-                ));
+            continue;
+        }
+        match borne_out(
+            &tail_bands(&rc.claims, side),
+            &y,
+            &format!("the limit at {at}"),
+        ) {
+            Err(why) => out.problems.push(why),
+            Ok(b) => {
+                if !(b.lo >= y.lo && b.hi <= y.hi) && !fact {
+                    out.problems.push(format!(
+                        "the limit at {at}: [{:e}, {:e}] is narrower than the claims show",
+                        y.lo, y.hi
+                    ));
+                }
+                if !mono && !fact {
+                    out.problems
+                        .push(format!("a limit at {at} with nothing showing it exists"));
+                }
+                if fact {
+                    out.notes.push(format!(
+                        "the limit at {at}: the simplifier's, borne out by f's bands far out"
+                    ));
+                }
             }
-        } else if fact {
-            out.notes
-                .push(format!("the limit at {at} rests on the simplifier's fact"));
-        } else {
-            out.problems
-                .push(format!("a limit at {at} with no claims for it"));
         }
     }
     Ok(())
@@ -1808,12 +2125,7 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
             e.len()
         ));
     }
-    let unbounded = rc.claims.iter().any(|c| {
-        matches!(c, Claim::Unbounded { .. })
-            || matches!(c, Claim::TailBeyond { of: Subject::F(1), c, .. } if *c != 0.0)
-            || matches!(c, Claim::TailChain { of: Subject::F(1), .. })
-            || matches!(c, Claim::Simplifier(f) if f.starts_with("f → +∞") || f.starts_with("f → −∞"))
-    });
+    let unbounded = shows_unbounded(&rc.claims);
     for (i, p) in pieces.iter().enumerate() {
         for (j, b) in [p.lo, p.hi].into_iter().enumerate() {
             let x = match b {
@@ -1905,6 +2217,32 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
     Ok(())
 }
 
+/// Whether some claim shows f unbounded: structurally at a point, f′
+/// beyond a nonzero bound on a tail, f′'s sign chain, or bounds that grow
+/// out along a tail or beside a point. (A simplifier's "→ ±∞" alone never
+/// does.)
+fn shows_unbounded(claims: &[Claim]) -> bool {
+    claims.iter().any(|c| matches!(c, Claim::Unbounded { .. }))
+        || claims.iter().any(|c| {
+            matches!(c, Claim::Simplifier(f)
+                if f.strip_prefix(claims::RATIONAL).is_some_and(|r| r.starts_with("f → +∞") || r.starts_with("f → −∞")))
+        })
+        || [Side::Left, Side::Right]
+            .iter()
+            .any(|&s| tail_infinite(claims, s, true) || tail_infinite(claims, s, false))
+        || claims.iter().any(|c| match c {
+            Claim::Beyond {
+                x,
+                of: Subject::F(0),
+                ..
+            } => {
+                side_infinite(claims, x.0.next_down(), true)
+                    || side_infinite(claims, x.1.next_up(), false)
+            }
+            _ => false,
+        })
+}
+
 /// Some claim's value (or a fact's limit) lies in `e`.
 fn end_given(rc: &RowCert, e: &Enc) -> bool {
     rc.claims.iter().any(|c| match c {
@@ -1923,6 +2261,7 @@ fn end_given(rc: &RowCert, e: &Enc) -> bool {
 
 /// The finite limit a "f → L as x → …" fact states, enclosed.
 fn fact_limit(f: &str) -> Option<Enc> {
+    let f = f.strip_prefix(claims::RATIONAL).unwrap_or(f);
     let rest = f.strip_prefix("f → ")?;
     let (l, _) = rest.split_once(" as x → ")?;
     iv::set_prec(160);
@@ -1944,11 +2283,19 @@ fn source_value(rc: &RowCert, src: &Value) -> Result<Enc, String> {
     let fact_at = |at: &str| -> Option<Enc> {
         rc.claims.iter().find_map(|c| match c {
             Claim::Simplifier(f)
-                if f.starts_with("f → ") && f.ends_with(&format!("as x → {at}")) =>
+                if f.strip_prefix(claims::RATIONAL)
+                    .unwrap_or(f)
+                    .starts_with("f → ")
+                    && f.ends_with(&format!("as x → {at}")) =>
             {
                 fact_limit(f)
             }
             _ => None,
+        })
+    };
+    let rational_at = |at: &str| {
+        rc.claims.iter().any(|c| {
+            matches!(c, Claim::Simplifier(f) if f.starts_with(claims::RATIONAL) && f.ends_with(&format!("as x → {at}")))
         })
     };
     if let Some(x) = src.get("At") {
@@ -1978,29 +2325,30 @@ fn source_value(rc: &RowCert, src: &Value) -> Result<Enc, String> {
         } else {
             Side::Left
         };
-        let tv = rc
-            .claims
-            .iter()
-            .filter_map(|c| match c {
-                Claim::TailValue {
-                    side: t, lo, hi, ..
-                } if *t == s => Some((*lo, *hi)),
-                _ => None,
-            })
-            .reduce(|a, b| (a.0.max(b.0), a.1.min(b.1)))
-            .map(|(lo, hi)| Enc { lo, hi });
-        let fact = fact_at(if s == Side::Right { "+∞" } else { "−∞" });
-        return match (tv, fact) {
-            (Some(t), Some(f)) => Ok(Enc {
-                lo: t.lo.max(f.lo),
-                hi: t.hi.min(f.hi),
-            }),
-            (Some(t), None) => Ok(t),
-            (None, Some(f)) => Ok(f),
-            (None, None) => Err(format!(
-                "a range end from the {side} tail with no claim there"
-            )),
-        };
+        // f's bands far out, with the simplifier's exact limit if any:
+        // never the fact alone, but for a rational f's exact one.
+        let at = if s == Side::Right { "+∞" } else { "−∞" };
+        let bands = tail_bands(&rc.claims, s);
+        let fact = fact_at(at);
+        if rational_at(at)
+            && let Some(f) = fact
+        {
+            return Ok(f);
+        }
+        if bands.len() < 2 {
+            return Err(format!(
+                "a range end from the {side} tail with no bands of f's values there"
+            ));
+        }
+        let lo = bands.iter().map(|b| b.1).fold(f64::NEG_INFINITY, f64::max);
+        let hi = bands.iter().map(|b| b.2).fold(f64::INFINITY, f64::min);
+        return Ok(match fact {
+            Some(f) => Enc {
+                lo: lo.max(f.lo),
+                hi: hi.min(f.hi),
+            },
+            None => Enc { lo, hi },
+        });
     }
     if let Some(x) = src.get("Hole") {
         let x = enc(x)?;
@@ -2026,8 +2374,31 @@ fn source_value(rc: &RowCert, src: &Value) -> Result<Enc, String> {
             .get("right")
             .and_then(Value::as_bool)
             .ok_or("side right")?;
-        return fact_at(&format!("{at}{}", if right { "⁺" } else { "⁻" }))
-            .ok_or_else(|| format!("a range end from a one-sided limit at {at:e} with no fact"));
+        let fact = fact_at(&format!("{at}{}", if right { "⁺" } else { "⁻" }))
+            .ok_or_else(|| format!("a range end from a one-sided limit at {at:e} with no fact"))?;
+        // Borne out by f's bands on boxes beside the point (p left out):
+        // settling, and closing in on the limit.
+        let bands = side_bands(&rc.claims, at, right);
+        let scale = fact.lo.abs().max(fact.hi.abs()).max(1.0);
+        let apart = |b: &(f64, f64, f64)| (fact.lo - b.2).max(b.1 - fact.hi).max(0.0);
+        let d: Vec<f64> = bands.iter().map(apart).collect();
+        let n = d.len();
+        let tol = 1e-9 * scale;
+        let closing = n >= 3
+            && (d[n - 3..].windows(2).all(|p| p[1] <= p[0])
+                || d[n - 3..].iter().all(|v| *v <= tol))
+            && d[n - 1] <= tol;
+        let w: Vec<f64> = bands.iter().map(|b| b.2 - b.1).collect();
+        let settled = n >= 3
+            && (w[n - 1] <= 1e-9 * scale
+                || (w[n - 3..].windows(2).all(|p| p[1] <= p[0])
+                    && w[n - 1] <= 1e-2 * w.iter().copied().fold(0.0, f64::max)));
+        if !(closing && settled) {
+            return Err(format!(
+                "a one-sided limit at {at:e}: f's bands beside it don't close in on it"
+            ));
+        }
+        return Ok(fact);
     }
     Err(format!("an unread range end source {src}"))
 }
@@ -2055,12 +2426,8 @@ fn oblique(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), Str
     for item in list(&rc.value)? {
         let side = item.get("side").and_then(Value::as_str).ok_or("side")?;
         let at = if side == "Right" { "+∞" } else { "−∞" };
-        let backed = rational_line
-            || facts.iter().any(|f| {
-                f.starts_with("f/x → ")
-                    && f.contains(" and f − m·x → ")
-                    && f.ends_with(&format!("as x → {at}"))
-            });
+        // (A line from the simplifier's limits alone isn't borne out.)
+        let backed = rational_line;
         if !backed {
             out.problems
                 .push(format!("an oblique asymptote at {at} with no fact for it"));
@@ -2089,14 +2456,23 @@ fn oblique(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), Str
                 p.lo == Bound::NegInf
             }
         });
+        let s = if side == "Right" {
+            Side::Right
+        } else {
+            Side::Left
+        };
+        let fact = |head: &str| {
+            facts
+                .iter()
+                .any(|f| f.starts_with(head) && f.contains(&format!("as x → {at}")))
+        };
         let ruled_out = !reaches
             || rational_line
             || rational_none
             || periodic
             || horizontal.iter().any(|h| h == side)
-            || facts
-                .iter()
-                .any(|f| f.starts_with("f/x → ") && f.contains(&format!("as x → {at}")));
+            || (fact("f/x → ±∞") && slope_shown(&rc.claims, s, false))
+            || (fact("f/x → 0") && slope_shown(&rc.claims, s, true));
         if !ruled_out {
             out.problems.push(format!(
                 "no oblique asymptote at {at}, but nothing rules one out"
