@@ -259,7 +259,7 @@ impl Xf {
             return R::Undef;
         }
         if (-700.0..=700.0).contains(&t.hi) && t.lo == 0.0 {
-            return R::V(Xf::of(t.hi.exp()));
+            return R::V(Xf::of(fns::exp(t.hi)));
         }
         let k = (t.hi / LN_2).round();
         // (Below even this exponent range, e^t is still a positive number,
@@ -703,10 +703,13 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
             if a.lost() {
                 R::Unknown
             } else if a.normal() {
-                one(a.f().cbrt())
+                one(fns::cbrt(a.f()))
             } else {
                 let r = a.e.rem_euclid(3);
-                R::V(Xf::norm((a.m * 2f64.powi(r as i32)).cbrt(), (a.e - r) / 3))
+                R::V(Xf::norm(
+                    fns::cbrt(a.m * 2f64.powi(r as i32)),
+                    (a.e - r) / 3,
+                ))
             }
         }
         Abs => R::V(a.abs()),
@@ -777,9 +780,9 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
                 };
             }
             one(match f {
-                Sinh => t.sinh(),
-                Cosh => t.cosh(),
-                _ => t.tanh(),
+                Sinh => fns::sinh(t),
+                Cosh => fns::cosh(t),
+                _ => fns::tanh(t),
             })
         }
         Sech | Csch => {
@@ -863,8 +866,8 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
                 Asec => fns::asec_u(p, u),
                 Acsc => fns::acsc_u(p, u),
                 Acot => fns::acot_u(p, u),
-                Asinh => p.asinh(),
-                Acosh => p.acosh(),
+                Asinh => fns::asinh(p),
+                Acosh => fns::acosh(p),
                 Atanh => fns::atanh(p),
                 Asech => fns::asech(p),
                 Acsch => fns::acsch(p),
@@ -1022,23 +1025,23 @@ pub fn fn1(f: Func, u: TrigUnit) -> impl Fn(f64) -> f64 {
         Asec => fns::asec_u(x, u),
         Acsc => fns::acsc_u(x, u),
         Acot => fns::acot_u(x, u),
-        Sinh => x.sinh(),
-        Cosh => x.cosh(),
-        Tanh => x.tanh(),
+        Sinh => fns::sinh(x),
+        Cosh => fns::cosh(x),
+        Tanh => fns::tanh(x),
         Sech => fns::sech(x),
         Csch => fns::csch(x),
         Coth => fns::coth(x),
-        Asinh => x.asinh(),
-        Acosh => x.acosh(),
+        Asinh => fns::asinh(x),
+        Acosh => fns::acosh(x),
         Atanh => fns::atanh(x),
         Asech => fns::asech(x),
         Acsch => fns::acsch(x),
         Acoth => fns::acoth(x),
         Sqrt => x.sqrt(),
-        Cbrt => x.cbrt(),
+        Cbrt => fns::cbrt(x),
         Log => fns::log10(x),
         Ln => fns::ln(x),
-        Exp => x.exp(),
+        Exp => fns::exp(x),
         Abs => x.abs(),
         Floor => x.floor(),
         Ceil => x.ceil(),
