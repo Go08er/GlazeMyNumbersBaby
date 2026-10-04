@@ -674,7 +674,12 @@ impl<'a> Fun<'a> {
         // and each is tighter in places (the simplified form cancels, the
         // formula keeps a shift (x − a)/s exact where the simplifier
         // distributed it).
-        if std::ptr::eq(e, &self.eval) && self.eval != self.expr {
+        // (Only where the simplified form leaves something to decide: a
+        // coefficient not valid, unbounded, or holding 0.)
+        let decided = |c: &DecInterval| {
+            !c.is_empty() && c.dec >= crate::interval::Dec::Def && c.iv.is_bounded() && c.ne0()
+        };
+        if std::ptr::eq(e, &self.eval) && self.eval != self.expr && !s.iter().all(decided) {
             let t = taylor(&self.expr, x, n, &self.ctx());
             return Ok(merge(s, &t));
         }
