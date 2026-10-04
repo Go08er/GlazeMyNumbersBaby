@@ -407,7 +407,9 @@ pub fn mul(a: &Iv, b: &Iv) -> Iv {
         let l = mul_r(x, y, Round::Down);
         let h = mul_r(x, y, Round::Up);
         if l.is_nan() || h.is_nan() {
-            return Iv::entire().deco(&[a, b], true, true).strict(pos, neg);
+            // (Unreachable: mul_r makes 0·∞ = 0.) No sign is known of
+            // "anything".
+            return Iv::entire().deco(&[a, b], true, true);
         }
         lo = min_f(lo, l);
         hi = max_f(hi, h);

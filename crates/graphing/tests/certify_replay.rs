@@ -213,7 +213,9 @@ fn units() -> Vec<(String, TrigUnit)> {
 struct Done {
     src: String,
     unit: TrigUnit,
-    report: Result<Report, String>,
+    /// None: the certifier gave no analysis (not a function of x, …);
+    /// Some(Err): the replay rejected the certificate outright.
+    report: Option<Result<Report, String>>,
     certify_ms: f64,
     replay_ms: f64,
 }
@@ -227,7 +229,7 @@ fn one(src: &str, unit: TrigUnit) -> Done {
     let a = certify_text(src, opts, DEFAULT_BUDGET, None);
     let certify_ms = t0.elapsed().as_secs_f64() * 1e3;
     let t1 = Instant::now();
-    let report = a.and_then(|a| {
+    let report = a.ok().map(|a| {
         let json = serde_json::to_string(&a).map_err(|e| e.to_string())?;
         let v: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
         replay::replay(&v)
@@ -244,6 +246,7 @@ fn one(src: &str, unit: TrigUnit) -> Done {
 /// Replays every function (in parallel), prints the tally, and returns
 /// what fails.
 fn run(fs: Vec<(String, TrigUnit)>) -> Vec<String> {
+    let want = fs.len();
     let filter = std::env::var("REPLAY_FILTER").ok();
     let verbose = std::env::var_os("REPLAY_VERBOSE").is_some();
     let fs: Vec<(String, TrigUnit)> = fs
@@ -284,14 +287,16 @@ fn run(fs: Vec<(String, TrigUnit)>) -> Vec<String> {
         cms += d.certify_ms;
         rms += d.replay_ms;
         let label = format!("{} [{:?}]", d.src, d.unit);
+        // A certificate the replay can't read (an unknown claim kind, row
+        // or tree) is a failure, not a skip: the replay must keep up.
         let r = match &d.report {
-            Ok(r) => r,
-            Err(e) if e.starts_with("binding") => {
-                fails.push(format!("{label}: {e}"));
+            None => {
+                println!("{label}: not certified");
                 continue;
             }
-            Err(e) => {
-                println!("{label}: not replayed: {e}");
+            Some(Ok(r)) => r,
+            Some(Err(e)) => {
+                fails.push(format!("{label}: rejected: {e}"));
                 continue;
             }
         };
@@ -401,6 +406,11 @@ fn run(fs: Vec<(String, TrigUnit)>) -> Vec<String> {
     for k in &known {
         println!("KNOWN {k}");
     }
+    // Most functions certified and replayed: a run that replays little
+    // checks little.
+    if filter.is_none() && certificates * 4 < want * 3 {
+        fails.push(format!("only {certificates} of {want} functions replayed"));
+    }
     for f in &fails {
         println!("FAIL {f}");
     }
@@ -409,7 +419,15 @@ fn run(fs: Vec<(String, TrigUnit)>) -> Vec<String> {
 
 #[test]
 fn corpus_certificates_replay() {
-    let fails = run(corpus());
+    let fs = corpus();
+    // The corpus read whole (its REVIEW table parsed by layout).
+    assert!(
+        review().len() >= 80,
+        "only {} REVIEW functions read",
+        review().len()
+    );
+    assert!(fs.len() >= 140, "only {} corpus functions", fs.len());
+    let fails = run(fs);
     assert!(fails.is_empty(), "{} failures", fails.len());
 }
 
@@ -470,7 +488,12 @@ fn first<'v>(v: &'v mut serde_json::Value, row: &str, kind: &str) -> &'v mut ser
     claims_of(v, row)
         .iter_mut()
         .find(|c| c.get(kind).is_some())
-        .unwrap_or_else(|| panic!("no {kind} in {row}"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the plant needs a {kind} claim in {row}, which the certifier no longer \
+                 writes for this function: retarget the plant"
+            )
+        })
         .get_mut(kind)
         .unwrap()
 }
@@ -701,9 +724,11 @@ fn known_certifier_issues_still_reproduce() {
     let mut fixed = Vec::new();
     for (issue, src, row) in KNOWN_ISSUES {
         let d = one(src, TrigUnit::Radians);
-        let r = d
-            .report
-            .unwrap_or_else(|e| panic!("{src}: not replayed: {e}"));
+        let r = match d.report {
+            Some(Ok(r)) => r,
+            Some(Err(e)) => panic!("{src}: rejected: {e}"),
+            None => panic!("{src}: not certified"),
+        };
         if !issue_reproduces(*issue, &r, row) {
             fixed.push(format!("issue {issue}: {src} ({row})"));
         }
