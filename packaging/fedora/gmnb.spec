@@ -1,14 +1,16 @@
 %global app_id io.github.Go08er.GlazeMyNumbersBaby
 %global dapp_id io.github.Go08er.DontGlazeMyNumbersBaby
-# Release builds are stripped by their cargo profiles.
+# The cargo profiles strip release builds (once %build drops the flags of
+# Fedora's that would override them), so there is no debuginfo to package.
 %global debug_package %{nil}
 
 Name:           gmnb
 Version:        0.2.0
 Release:        1%{?dist}
 Summary:        GlazeMyNumbers,Baby: a pointlessly beautiful calculator
-# The Outfit typeface embedded in the binary is OFL-1.1.
-License:        MIT AND OFL-1.1
+# The Outfit typeface embedded in the binary is OFL-1.1; the rest are the
+# crates compiled in (THIRD-PARTY-LICENSES.txt).
+License:        MIT AND OFL-1.1 AND Apache-2.0 AND BSD-3-Clause AND CDLA-Permissive-2.0 AND ISC AND Unicode-3.0 AND Zlib
 URL:            https://github.com/Go08er/GlazeMyNumbersBaby
 Source0:        %{url}/archive/v%{version}/GlazeMyNumbersBaby-%{version}.tar.gz
 
@@ -28,15 +30,17 @@ GMNB is a Rust port of the open-source Windows Calculator with a GTK 4
 interface: Standard, Scientific, Programmer, Graphing, Date calculation and
 13 unit converters including live currency rates, with history and memory.
 The original arbitrary-precision engine was ported function-for-function.
-On x86_64 it needs a CPU from 2013 or newer (Intel Haswell, AMD Excavator,
-Ryzen, or later); the dgmnb package runs on any 64-bit PC.
+On x86_64 it needs a CPU with AVX2 (x86-64-v3): Intel Core from Haswell
+(2013) or AMD from Excavator (2015) on, though not every Pentium, Celeron
+or Atom. The dgmnb package runs on any 64-bit PC.
 
 Not affiliated with or endorsed by Microsoft.
 
 %package -n dgmnb
 Summary:        Don't Glaze My Numbers, Baby: the lean twin of GMNB
-# The Inter and Noto font subsets embedded in the binary are OFL-1.1.
-License:        MIT AND OFL-1.1
+# The Inter and Noto font subsets embedded in the binary are OFL-1.1; the
+# rest are the crates compiled in (THIRD-PARTY-LICENSES.txt).
+License:        MIT AND OFL-1.1 AND Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause AND CDLA-Permissive-2.0 AND ISC AND Unicode-3.0 AND Zlib
 Requires:       hicolor-icon-theme
 # Loaded at run time, so not picked up automatically.
 Requires:       libxkbcommon
@@ -53,9 +57,23 @@ Not affiliated with or endorsed by Microsoft.
 %autosetup -n GlazeMyNumbersBaby-%{version}
 
 %build
-# On x86_64 GMNB is built for x86-64-v3 (2013+ CPUs), behind a launcher built
-# for any x86-64 that tells older CPUs so; DGMNB runs anywhere (its CORE-MATH
-# takes an x86-64-v3 build of the C where the CPU has it).
+# %%set_build_flags exports Fedora's RUSTFLAGS, whose optimisation, debuginfo,
+# codegen-unit and strip settings would override the cargo profiles (DGMNB's
+# is optimised for size; release builds are stripped). Keep the rest.
+flags= c=
+for f in ${RUSTFLAGS:-}; do
+  # "-C x=y" is "-Cx=y" split in two.
+  if [ "$f" = -C ]; then c=-C; continue; fi
+  case "$c$f" in
+    -Copt-level=*|-Cdebuginfo=*|-Ccodegen-units=*|-Cstrip=*) ;;
+    *) flags="$flags $c$f" ;;
+  esac
+  c=
+done
+export RUSTFLAGS="$flags"
+# On x86_64 GMNB is built for x86-64-v3 (CPUs with AVX2), behind a launcher
+# built for any x86-64 that tells other CPUs so; DGMNB runs anywhere (its
+# CORE-MATH takes an x86-64-v3 build of the C where the CPU has it).
 cargo build --release --locked -p gmnb-launcher
 %ifarch x86_64
 RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=x86-64-v3" \
@@ -83,7 +101,7 @@ for id in %{app_id} %{dapp_id}; do
 done
 
 %files
-%license LICENSE apps/gmnb/assets/fonts/OFL-Outfit.txt
+%license LICENSE THIRD-PARTY-LICENSES.txt apps/gmnb/assets/fonts/OFL-Outfit.txt
 %doc README.md
 %{_bindir}/gmnb
 %{_libexecdir}/gmnb/
@@ -92,7 +110,7 @@ done
 %{_datadir}/icons/hicolor/scalable/apps/%{app_id}.svg
 
 %files -n dgmnb
-%license LICENSE apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt apps/dgmnb/assets/LICENSE-smithay-clipboard.txt
+%license LICENSE THIRD-PARTY-LICENSES.txt apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt apps/dgmnb/assets/LICENSE-smithay-clipboard.txt
 %doc README.md
 %{_bindir}/dgmnb
 %{_datadir}/applications/%{dapp_id}.desktop

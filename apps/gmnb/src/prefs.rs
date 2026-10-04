@@ -389,27 +389,80 @@ pub fn about(parent: &adw::ApplicationWindow) {
         gtk::License::MitX11,
         None,
     );
+    // Custom licence text is Pango markup: escape the plain-text notices.
     about.add_legal_section(
         "Outfit typeface",
         Some("Copyright 2021 The Outfit Project Authors"),
         gtk::License::Custom,
-        Some(include_str!("../assets/fonts/OFL-Outfit.txt")),
+        Some(&gtk::glib::markup_escape_text(OUTFIT)),
     );
     about.add_legal_section(
         "CORE-MATH",
-        Some(
-            "Correctly rounded maths functions, used by Graphing. Copyright the CORE-MATH authors.",
-        ),
+        Some("Correctly rounded maths functions, used by Graphing"),
         gtk::License::Custom,
-        Some(include_str!("../../../crates/crmath/vendor/LICENSE")),
+        Some(&gtk::glib::markup_escape_text(CORE_MATH)),
     );
+    about.add_legal_section("Rust crates", None, gtk::License::Custom, Some(CRATES));
     about.add_legal_section(
         "Exchange rates",
         None,
         gtk::License::Custom,
         Some("Currency reference rates from central banks (European Central Bank and others), served by the Frankfurter API. Rates are informational and may lag the market."),
     );
+    about.connect_activate_link(|about, uri| {
+        let ours = uri == THIRD_PARTY;
+        if ours {
+            third_party_licences(about);
+        }
+        ours
+    });
     about.present(Some(parent));
+}
+
+const OUTFIT: &str = include_str!("../assets/fonts/OFL-Outfit.txt");
+const CORE_MATH: &str = concat!(
+    include_str!("../../../crates/crmath/vendor/COPYRIGHT"),
+    "\n",
+    include_str!("../../../crates/crmath/vendor/LICENSE"),
+);
+/// The About dialog's link to [`third_party_licences`].
+const THIRD_PARTY: &str = "gmnb:third-party-licences";
+const CRATES: &str = "GMNB is built from many Rust crates, each under its own licence (MIT, \
+     Apache 2.0, BSD and others). <a href=\"gmnb:third-party-licences\">Show their \
+     licences</a>; they are also installed with GMNB, as THIRD-PARTY-LICENSES.txt.";
+
+/// THIRD-PARTY-LICENSES.txt (CORE-MATH, smithay-clipboard and every Rust
+/// crate) in a text view, which lays out only what's on screen: as a
+/// legal section's label, its 160 KB took over half a second per layout.
+fn third_party_licences(parent: &impl IsA<gtk::Widget>) {
+    let buffer = gtk::TextBuffer::new(None);
+    buffer.set_text(include_str!("../../../THIRD-PARTY-LICENSES.txt"));
+    let view = gtk::TextView::builder()
+        .buffer(&buffer)
+        .editable(false)
+        .cursor_visible(false)
+        .monospace(true)
+        .wrap_mode(gtk::WrapMode::WordChar)
+        .top_margin(12)
+        .bottom_margin(12)
+        .left_margin(12)
+        .right_margin(12)
+        .build();
+    let scroll = gtk::ScrolledWindow::builder()
+        .child(&view)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .build();
+    let toolbar = adw::ToolbarView::new();
+    toolbar.add_top_bar(&adw::HeaderBar::new());
+    toolbar.set_content(Some(&scroll));
+    let dialog = adw::Dialog::builder()
+        .title("Third-party licences")
+        .content_width(640)
+        .content_height(600)
+        .child(&toolbar)
+        .build();
+    dialog.present(Some(parent));
 }
 
 fn draw_swatch(cr: &gtk::cairo::Context, w: f64, h: f64, s: &Scheme) {
@@ -449,4 +502,29 @@ fn draw_swatch(cr: &gtk::cairo::Context, w: f64, h: f64, s: &Scheme) {
     let _ = cr.set_source(&hot);
     cr.arc(w - 20.0, h - 18.0, 9.0, 0.0, TAU);
     let _ = cr.fill();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Legal sections' text is Pango markup, and text that doesn't parse
+    /// shows as nothing (as the Outfit licence's "PERMISSION & CONDITIONS"
+    /// once did).
+    #[test]
+    fn legal_text_is_markup() {
+        assert!(pango::parse_markup(OUTFIT, '\0').is_err());
+        for text in [OUTFIT, CORE_MATH] {
+            let escaped = gtk::glib::markup_escape_text(text);
+            let (_, plain, _) = pango::parse_markup(&escaped, '\0').unwrap();
+            assert_eq!(plain, text);
+        }
+        // GtkLabel takes the links out before Pango sees the rest.
+        let link = format!("<a href=\"{THIRD_PARTY}\">");
+        assert!(CRATES.contains(&link));
+        let rest = CRATES.replace(&link, "").replace("</a>", "");
+        let (_, plain, _) = pango::parse_markup(&rest, '\0').unwrap();
+        assert!(plain.contains("Show their licences"));
+        assert!(CORE_MATH.contains("Alexei Sibidanov") && CORE_MATH.contains("Permission is"));
+    }
 }

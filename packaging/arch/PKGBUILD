@@ -6,7 +6,10 @@ pkgrel=1
 pkgdesc='Windows Calculator ported to Rust, twice: pointlessly beautiful (GMNB) and lean (DGMNB)'
 arch=('x86_64' 'aarch64')
 url='https://github.com/Go08er/GlazeMyNumbersBaby'
-license=('MIT' 'OFL-1.1')
+# The apps' own code and fonts, then the crates compiled in (their texts are
+# in THIRD-PARTY-LICENSES.txt). Each package lists its own below.
+license=('MIT' 'OFL-1.1' 'Apache-2.0' 'BSD-2-Clause' 'BSD-3-Clause' 'CDLA-Permissive-2.0'
+         'ISC' 'Unicode-3.0' 'Zlib')
 makedepends=('cargo' 'gtk4' 'libadwaita' 'wayland' 'libxkbcommon')
 # Rust handles its own LTO; makepkg's -flto would also hit the bundled C (ring).
 options=('!lto' '!debug')
@@ -25,9 +28,10 @@ prepare() {
 build() {
   cd "$_src"
   export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
-  # On x86_64 GMNB is built for x86-64-v3 (2013+ CPUs), behind a launcher
-  # built for any x86-64 that tells older CPUs so; DGMNB runs anywhere (its
-  # CORE-MATH takes an x86-64-v3 build of the C where the CPU has it).
+  # On x86_64 GMNB is built for x86-64-v3 (CPUs with AVX2), behind a
+  # launcher built for any x86-64 that tells other CPUs so; DGMNB runs
+  # anywhere (its CORE-MATH takes an x86-64-v3 build of the C where the CPU
+  # has it).
   cargo build --frozen --release -p gmnb-launcher
   if [ "$CARCH" = x86_64 ]; then
     RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=x86-64-v3" \
@@ -41,11 +45,16 @@ build() {
 check() {
   cd "$_src"
   export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
-  cargo test --frozen --release --workspace --exclude gmnb --exclude dgmnb
+  # Not the throughput tests (graphing's tests/perf.rs): they time the
+  # build machine, not the code.
+  cargo test --frozen --release --workspace --exclude gmnb --exclude dgmnb -- \
+    --skip _at_1920px --skip batch_evaluation_throughput
 }
 
 package_gmnb() {
   pkgdesc='GlazeMyNumbers,Baby: Windows Calculator ported to Rust, made pointlessly beautiful'
+  license=('MIT' 'OFL-1.1' 'Apache-2.0' 'BSD-3-Clause' 'CDLA-Permissive-2.0' 'ISC' 'Unicode-3.0'
+           'Zlib')
   depends=('gtk4' 'libadwaita' 'glib2' 'pango' 'cairo' 'gcc-libs' 'glibc' 'hicolor-icon-theme')
   local app=io.github.Go08er.GlazeMyNumbersBaby
   cd "$_src"
@@ -54,11 +63,14 @@ package_gmnb() {
   install -Dm644 "packaging/$app.desktop" -t "$pkgdir/usr/share/applications"
   install -Dm644 "packaging/$app.metainfo.xml" -t "$pkgdir/usr/share/metainfo"
   install -Dm644 "packaging/icons/$app.svg" -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
-  install -Dm644 LICENSE apps/gmnb/assets/fonts/OFL-Outfit.txt -t "$pkgdir/usr/share/licenses/$pkgname"
+  install -Dm644 LICENSE THIRD-PARTY-LICENSES.txt apps/gmnb/assets/fonts/OFL-Outfit.txt \
+    -t "$pkgdir/usr/share/licenses/$pkgname"
 }
 
 package_dgmnb() {
   pkgdesc="Don't Glaze My Numbers, Baby: the lean, software-drawn twin of GMNB"
+  license=('MIT' 'OFL-1.1' 'Apache-2.0' 'BSD-2-Clause' 'BSD-3-Clause' 'CDLA-Permissive-2.0'
+           'ISC' 'Unicode-3.0' 'Zlib')
   depends=('wayland' 'libxkbcommon' 'gcc-libs' 'glibc' 'hicolor-icon-theme')
   optdepends=('libx11: X11 sessions' 'libxcursor: X11 sessions' 'libxrandr: X11 sessions' 'libxi: X11 sessions')
   local app=io.github.Go08er.DontGlazeMyNumbersBaby
@@ -67,7 +79,7 @@ package_dgmnb() {
   install -Dm644 "packaging/$app.desktop" -t "$pkgdir/usr/share/applications"
   install -Dm644 "packaging/$app.metainfo.xml" -t "$pkgdir/usr/share/metainfo"
   install -Dm644 "packaging/icons/$app.svg" -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
-  install -Dm644 LICENSE apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt \
-    apps/dgmnb/assets/LICENSE-smithay-clipboard.txt \
+  install -Dm644 LICENSE THIRD-PARTY-LICENSES.txt apps/dgmnb/assets/fonts/OFL-Inter.txt \
+    apps/dgmnb/assets/fonts/OFL-Noto.txt apps/dgmnb/assets/LICENSE-smithay-clipboard.txt \
     -t "$pkgdir/usr/share/licenses/$pkgname"
 }

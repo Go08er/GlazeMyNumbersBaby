@@ -50,8 +50,8 @@ rustPlatform.buildRustPackage {
     install -Dm644 packaging/${appId}.desktop -t $out/share/applications
     install -Dm644 packaging/${appId}.metainfo.xml -t $out/share/metainfo
     install -Dm644 packaging/icons/${appId}.svg -t $out/share/icons/hicolor/scalable/apps
-    install -Dm644 LICENSE apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt \
-      apps/dgmnb/assets/LICENSE-smithay-clipboard.txt \
+    install -Dm644 LICENSE THIRD-PARTY-LICENSES.txt apps/dgmnb/assets/fonts/OFL-Inter.txt \
+      apps/dgmnb/assets/fonts/OFL-Noto.txt apps/dgmnb/assets/LICENSE-smithay-clipboard.txt \
       -t $out/share/licenses/${appId}
   '';
   postFixup = ''
@@ -60,10 +60,24 @@ rustPlatform.buildRustPackage {
   meta = {
     description = "Don't Glaze My Numbers, Baby: the lean, software-drawn twin of GMNB";
     homepage = "https://github.com/Go08er/GlazeMyNumbersBaby";
-    # MIT code; the embedded Inter and Noto subsets are OFL-1.1.
+    # MIT code; the embedded Inter and Noto subsets are OFL-1.1; the rest are
+    # the crates compiled in (THIRD-PARTY-LICENSES.txt).
     license = with lib.licenses; [
       mit
       ofl
+      asl20
+      bsd2
+      bsd3
+      isc
+      unicode-30
+      zlib
+      # webpki-roots' data; not in lib.licenses.
+      {
+        spdxId = "CDLA-Permissive-2.0";
+        fullName = "Community Data License Agreement Permissive 2.0";
+        url = "https://cdla.dev/permissive-2-0/";
+        free = true;
+      }
     ];
     mainProgram = "dgmnb";
     platforms = lib.platforms.linux;
