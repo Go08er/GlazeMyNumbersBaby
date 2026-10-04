@@ -1231,6 +1231,8 @@ dependencies = [
  "core-math",
  "gmp-mpfr-sys",
  "rug",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

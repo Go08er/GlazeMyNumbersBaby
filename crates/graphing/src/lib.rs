@@ -79,6 +79,7 @@
 
 pub mod analysis;
 pub mod ast;
+pub mod certify;
 pub mod compile;
 pub(crate) mod dd;
 pub mod diff;
