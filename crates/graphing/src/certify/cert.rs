@@ -272,11 +272,23 @@ pub enum Claim {
     /// A checker re-derives it with the simplifier, or tests it at points.
     Simplifier { fact: String },
     /// Nothing is claimed inside this box: it holds an excluded point or a
-    /// domain end that is not a double (the box encloses it), or the reals
+    /// domain end that is not a double (the box is its enclosure and one
+    /// double either side, so as wide as that enclosure: a family member
+    /// far out, x0 + k·period, is k periods' rounding wide), or the reals
     /// strictly between an excluded double and the next double. A row is
-    /// complete everywhere outside its gaps; each is a few doubles wide at
-    /// most.
+    /// complete everywhere outside its gaps; a row that lists features of
+    /// f⁽ᵏ⁾ (zeros, turns, inflections, monotone pieces, the range) is
+    /// complete inside each gap too only with a `GapClear` claim for it.
     Gap { x: XBox },
+    /// Strictly inside the gap box `x` (its ends are doubles other claims
+    /// decide), wherever the subject is valid, it has no zero, or it is 0
+    /// throughout (f⁽ᵏ⁾ ≡ 0): either way nothing of its own lies there.
+    /// Shown from its enclosure over the box, from its zero factors (each
+    /// away from 0 there, or exactly 0 at one of the box's doubles and
+    /// strictly monotone across it), or, for f, from a pole beside it with
+    /// no zero between. A row that lists f⁽ᵏ⁾'s features rests on one for
+    /// each of its gaps.
+    GapClear { x: XBox, of: Subject },
 }
 
 /// What a certificate's claims must cover.

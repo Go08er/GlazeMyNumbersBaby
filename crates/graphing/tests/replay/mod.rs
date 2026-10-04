@@ -162,6 +162,12 @@ pub enum Claim {
     },
     Simplifier(String),
     Gap(B),
+    /// The subject has no zero strictly inside the gap box, or is 0
+    /// throughout it, wherever it is valid there.
+    GapClear {
+        x: B,
+        of: Subject,
+    },
 }
 
 impl Claim {
@@ -187,6 +193,7 @@ impl Claim {
             Claim::Removable { .. } => "Removable",
             Claim::Simplifier(_) => "Simplifier",
             Claim::Gap(_) => "Gap",
+            Claim::GapClear { .. } => "GapClear",
         }
     }
 }
@@ -400,6 +407,7 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
                 .to_string(),
         ),
         "Gap" => Claim::Gap(x()?),
+        "GapClear" => Claim::GapClear { x: x()?, of: of()? },
         other => return Err(format!("unknown claim kind {other}")),
     })
 }
@@ -685,7 +693,9 @@ pub fn replay(a: &Value) -> Result<Report, String> {
         }
         rows_in.push(rc);
     }
-    // Each distinct claim once (the gaps go with every row).
+    // Each distinct claim once (the gaps go with every row); a gap is read
+    // against all the certificate's claims (the families it may hold).
+    let all: Vec<Claim> = rows_in.iter().flat_map(|rc| rc.claims.clone()).collect();
     let mut seen: Vec<(Claim, usize)> = Vec::new();
     for rc in &rows_in {
         for c in &rc.claims {
@@ -696,7 +706,7 @@ pub fn replay(a: &Value) -> Result<Report, String> {
                 }
                 continue;
             }
-            let outcome = claims::check(&fx, c);
+            let outcome = claims::check(&fx, c, &all);
             seen.push((c.clone(), rep.claims.len()));
             rep.claims.push(ClaimResult {
                 rows: vec![rc.name.clone()],

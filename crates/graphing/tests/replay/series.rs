@@ -400,6 +400,33 @@ pub fn integrate(a: &S, y0: Iv, d: &S) -> S {
     restrict_validity(out, &[a, d])
 }
 
+/// tan(a) from its value `t0`, by tan′ = (1 + tan²)·a′:
+/// t_k = (1/k) Σ_{j=1..k} j a_j p_{k−j} with p = 1 + t². Near a pole,
+/// where sin/cos's coefficients are wide, p₀ ≥ 1 still holds.
+pub fn tan_ode(a: &S, t0: Iv) -> S {
+    let n = order(a);
+    let mut t = vec![t0];
+    let mut p: Vec<Iv> = Vec::new();
+    for k in 1..=n {
+        let m = k - 1;
+        p.push(if m == 0 {
+            iv::add(&Iv::of(1.0), &iv::powi(&t[0], 2))
+        } else {
+            let mut acc = zero();
+            for i in 0..=m {
+                acc = iv::add(&acc, &iv::mul(&t[i], &t[m - i]));
+            }
+            acc
+        });
+        let mut acc = zero();
+        for j in 1..=k {
+            acc = iv::add(&acc, &iv::mul(&iv::scale(&a[j], j as f64), &p[k - j]));
+        }
+        t.push(iv::div(&acc, &Iv::of(k as f64)));
+    }
+    restrict_validity(t, &[a])
+}
+
 /// Replaces coefficients from 1 on as nonexistent unless `ok`.
 pub fn only_value_unless(s: S, ok: bool) -> S {
     if ok { s } else { invalid_from(s, 1) }

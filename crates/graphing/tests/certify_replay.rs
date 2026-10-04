@@ -574,6 +574,21 @@ const PLANTS: &[Plant] = &[
         let t = first(v, "x_intercepts", "TailBeyond");
         t["above"] = serde_json::json!(!t["above"].as_bool().unwrap());
     }),
+    ("1/x", "a gap's clearness dropped", |v| {
+        claims_of(v, "x_intercepts").retain(|c| c.get("GapClear").is_none());
+    }),
+    ("1/x", "a gap widened past its clearness", |v| {
+        let g = first(v, "x_intercepts", "Gap");
+        g["x"]["a"] = serde_json::json!(-1e-300);
+    }),
+    (
+        "sqrt(x)",
+        "a gap's clearness for f″ given to f′'s row",
+        |v| {
+            let c = first(v, "extrema", "GapClear");
+            c["of"] = serde_json::json!({"F": "F2"});
+        },
+    ),
     ("sqrt(x)", "a closed end opened", |v| {
         value_of(v, "domain")["pieces"][0]["lo"]["At"]["closed"] = serde_json::json!(false);
     }),
@@ -657,11 +672,27 @@ fn replay_catches_planted_errors() {
 /// number), pinned: (issue, source, row). Each must still reproduce: when
 /// the certifier is fixed the test fails, and the entry goes (with the
 /// issue's write-up).
-const KNOWN_ISSUES: &[(u32, &str, &str)] = &[
-    // 3: f⁽ᵏ⁾'s clearness in the gaps is not in the certificate.
+const KNOWN_ISSUES: &[(u32, &str, &str)] = &[];
+
+/// The issues fixed, by their reproducers: none may come back.
+const FIXED_ISSUES: &[(u32, &str, &str)] = &[
+    // 1: a Value claim over a neighbourhood of an excluded point said f is
+    // valid there (now Bounded: wherever f is defined).
+    (1, "x/ln(x)", "vertical"),
+    (1, "0/x", "vertical"),
+    (1, "atan(1/x)", "vertical"),
+    (1, "x^x", "vertical"),
+    // 2: f″ claimed on the whole line for |x| (now cut at the kink).
+    (2, "abs(x)", "inflections"),
+    (2, "10^-12*abs(x)", "inflections"),
+    // 3: f⁽ᵏ⁾'s clearness in the gaps was not in the certificate (now
+    // GapClear).
     (3, "1/x", "x_intercepts"),
     (3, "sqrt(x)", "extrema"),
-    // 4: a gap thousands of doubles wide (unconfirmed).
+    (3, "tan(x)", "monotonicity"),
+    (3, "x/ln(x)", "inflections"),
+    // 4: a gap thousands of doubles wide (now the enclosure of a family
+    // member, which the spec allows).
     (4, "tan((x-1000))", "x_intercepts"),
 ];
 
@@ -685,6 +716,7 @@ fn issue_reproduces(issue: u32, r: &Report, row: &str) -> bool {
             x.name == row
                 && x.notes
                     .iter()
+                    .chain(&x.problems)
                     .any(|n| n.contains(replay::rows::GAPS_NOT_IN_CERT))
         }),
         4 => r.claims.iter().any(|c| {
@@ -716,6 +748,23 @@ fn known_certifier_issues_still_reproduce() {
         "no longer reproduces (fixed?): {fixed:#?}\n\
          Remove these from KNOWN_ISSUES and research/replay-issues.md."
     );
+}
+
+#[test]
+fn fixed_certifier_issues_stay_fixed() {
+    let mut back = Vec::new();
+    for (issue, src, row) in FIXED_ISSUES {
+        let d = one(src, TrigUnit::Radians);
+        let r = match d.report {
+            Some(Ok(r)) => r,
+            Some(Err(e)) => panic!("{src}: rejected: {e}"),
+            None => panic!("{src}: not certified"),
+        };
+        if issue_reproduces(*issue, &r, row) {
+            back.push(format!("issue {issue}: {src} ({row})"));
+        }
+    }
+    assert!(back.is_empty(), "fixed issues back: {back:#?}");
 }
 
 /// Kinks (replay issue 2): f′ and f″ are claimed only off them, each kink

@@ -480,7 +480,7 @@ fn all(vs: impl IntoIterator<Item = V>) -> V {
     out
 }
 
-pub fn check(fx: &Fx, c: &Claim) -> Outcome {
+pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
     match c {
         Claim::Defined(x) => defined(fx, *x, Some(false)),
         Claim::Continuous(x) => defined(fx, *x, Some(true)),
@@ -565,7 +565,23 @@ pub fn check(fx: &Fx, c: &Claim) -> Outcome {
         }
         Claim::Removable { near, at, lo, hi } => removable(fx, *near, *at, *lo, *hi),
         Claim::Simplifier(fact) => simplifier(fx, fact),
-        Claim::Gap(x) => gap(*x),
+        Claim::Gap(x) => gap(*x, cert),
+        Claim::GapClear { x, of } => match of {
+            Subject::F(k) if *k <= 2 => {
+                if unmodelled(&fx.f) {
+                    return Outcome::new(
+                        Class::Unsupported,
+                        "the tree uses a function the replay doesn't model",
+                    );
+                }
+                match gap_clear(fx, *k, *x) {
+                    Some(true) => Outcome::new(Class::Strong, ""),
+                    Some(false) => Outcome::new(Class::Weak, "away from 0 on the certifier's tree"),
+                    None => Outcome::new(Class::Unconfirmed, "not shown away from 0 in the gap"),
+                }
+            }
+            _ => Outcome::new(Class::Unsupported, "a gap claim on a side expression"),
+        },
     }
 }
 
@@ -749,6 +765,14 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
                     _ => out.push(e.clone()),
                 }
             }
+            // a + b with a, b ≥ 0: 0 only where both are, so where
+            // either's factors are (the fewer).
+            Expr::Bin(BinOp::Add, a, b) if nonneg(a) && nonneg(b) => {
+                let (mut fa, mut fb) = (Vec::new(), Vec::new());
+                go(a, &mut fa);
+                go(b, &mut fb);
+                out.extend(if fb.len() < fa.len() { fb } else { fa });
+            }
             // a·c ± b·c = c·(a ± b): the shared factors (as multisets),
             // then what is left.
             Expr::Bin(op @ (BinOp::Add | BinOp::Sub), a, b) => {
@@ -777,6 +801,20 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
                 out.push(Expr::Bin(*op, Box::new(join(rest_a)), Box::new(join(pool))));
             }
             _ => out.push(e.clone()),
+        }
+    }
+    /// e ≥ 0 wherever it is defined: an even power, |u|, √u, eᵘ, cosh u,
+    /// a positive number, or a sum of these.
+    fn nonneg(e: &Expr) -> bool {
+        match e {
+            Expr::Num(v) => *v >= 0.0,
+            Expr::Const(_) => true,
+            Expr::Bin(BinOp::Pow, _, p) => {
+                written_rational(p).is_some_and(|(n, d)| d == 1 && n % 2 == 0)
+            }
+            Expr::Bin(BinOp::Add, a, b) => nonneg(a) && nonneg(b),
+            Expr::Call(Func::Abs | Func::Sqrt | Func::Exp | Func::Cosh, _) => true,
+            _ => false,
         }
     }
     /// The factors of a product (a negation's operand counts as itself:
@@ -2074,8 +2112,11 @@ fn approaches_at(
     })
 }
 
-/// A gap claims nothing; it must be a few doubles wide at most.
-fn gap(x: B) -> Outcome {
+/// A gap claims nothing. It is a few doubles wide, or it is the
+/// enclosure x0 + k·period of a member of one of the certificate's
+/// families (a far member's is k periods' rounding wide) and a few doubles
+/// either side.
+fn gap(x: B, cert: &[Claim]) -> Outcome {
     let mut n = 0;
     let mut p = x.0;
     while p < x.1 && n <= 64 {
@@ -2083,13 +2124,126 @@ fn gap(x: B) -> Outcome {
         n += 1;
     }
     if n <= 64 {
-        Outcome::new(Class::Strong, format!("{n} doubles wide"))
-    } else {
-        Outcome::new(
-            Class::Unconfirmed,
-            format!("a gap over 64 doubles wide: [{:e}, {:e}]", x.0, x.1),
-        )
+        return Outcome::new(Class::Strong, format!("{n} doubles wide"));
     }
+    for c in cert {
+        if let Claim::Family { x0, period, .. } = c
+            && let Some(k) = member_box(x, *x0, *period)
+        {
+            return Outcome::new(
+                Class::Strong,
+                format!("member {k} of the family at {:e}, enclosed", x0.0),
+            );
+        }
+    }
+    Outcome::new(
+        Class::Unconfirmed,
+        format!("a gap over 64 doubles wide: [{:e}, {:e}]", x.0, x.1),
+    )
+}
+
+/// The k for which the box `x` holds the box x0 + k·period (computed
+/// exactly) and reaches at most 64 doubles beyond it on either side.
+fn member_box(x: B, x0: B, period: B) -> Option<i64> {
+    use rug::Rational;
+    let q = Rational::from_f64;
+    if !(period.0 > 0.0 && period.1.is_finite()) {
+        return None;
+    }
+    let mid = |b: B| b.0 / 2.0 + b.1 / 2.0;
+    let kf = ((mid(x) - mid(x0)) / mid(period)).round();
+    if !kf.is_finite() || kf.abs() > 1e15 {
+        return None;
+    }
+    let step = |mut v: f64, up: bool| {
+        for _ in 0..65 {
+            v = if up { v.next_up() } else { v.next_down() };
+        }
+        v
+    };
+    (-1..=1).find_map(|dk| {
+        let k = kf + dk as f64;
+        let (pa, pb) = if k >= 0.0 {
+            (period.0, period.1)
+        } else {
+            (period.1, period.0)
+        };
+        let lo = q(x0.0)? + q(k)? * q(pa)?;
+        let hi = q(x0.1)? + q(k)? * q(pb)?;
+        let holds = q(x.0)? <= lo && hi <= q(x.1)?;
+        let near = step(lo.to_f64(), false) <= x.0 && x.1 <= step(hi.to_f64(), true);
+        (holds && near).then_some(k as i64)
+    })
+}
+
+/// Whether f⁽ᵏ⁾ has no zero in the gap box `g` (or is 0 throughout it),
+/// wherever it exists there:
+/// `Some(true)` shown on the canonical tree (or on a certifier's tree shown
+/// identical to it exactly), `Some(false)` only on the certifier's tree,
+/// `None` not shown.
+pub fn gap_clear(fx: &Fx, k: usize, g: B) -> Option<bool> {
+    if unmodelled(&fx.f) {
+        return None;
+    }
+    // The reals strictly inside the gap: its ends are doubles other claims
+    // decide (or the excluded point). Beside an excluded 0, x keeps its
+    // strict sign.
+    let x = |p: u32| {
+        iv::set_prec(p);
+        Iv::of2(g.0, g.1).strict(g.0 == 0.0, g.1 == 0.0)
+    };
+    // Away from 0, or exactly 0 throughout (f⁽ᵏ⁾ ≡ 0: no zero of its own).
+    let away = |e: &Expr, k: usize| -> bool {
+        [160, 640].into_iter().any(|p| {
+            let xb = x(p);
+            let s = se::where_defined(|| fx.series_iv(e, xb, k));
+            let c = &s[k];
+            let r = s[0].empty || c.empty || c.ne0() || (c.is_point() && c.lo == 0);
+            iv::set_prec(160);
+            r
+        })
+    };
+    if away(&fx.f, k) {
+        return Some(true);
+    }
+    // A factor exactly 0 at one of the gap's doubles and strictly monotone
+    // over the closed gap is 0 nowhere strictly inside it.
+    let end_root = |h: &Expr| -> bool {
+        iv::set_prec(160);
+        let root = [g.0, g.1].into_iter().any(|e| {
+            let v = &fx.series_iv(h, Iv::of(e), 0)[0];
+            v.def && v.is_point() && v.lo == 0
+        });
+        root && {
+            let s = fx.series_iv(h, Iv::of2(g.0, g.1), 1);
+            s[0].cont && s[1].def && !s[1].empty && s[1].ne0()
+        }
+    };
+    // Factor by factor (f's zeros are among its factors').
+    let by_factors = |e: &Expr| -> bool {
+        let mut safe = Vec::new();
+        nonzero_where_defined(&fx.f, &mut safe);
+        nonzero_where_defined(e, &mut safe);
+        zero_factors(e)
+            .iter()
+            .all(|h| safe.contains(h) || away(h, 0) || end_root(h))
+    };
+    if k == 0 && by_factors(&fx.f) {
+        return Some(true);
+    }
+    if k > 0
+        && let Some(d) = &fx.d[k - 1]
+        && (away(d, 0) || by_factors(d))
+    {
+        return Some(fx.verified.d[k - 1]);
+    }
+    // The simplifier's form of f (equal to f where f is defined).
+    if let Some(e) = &fx.f_eval
+        && (away(e, k) || (k == 0 && by_factors(e)))
+    {
+        return Some(fx.verified.f);
+    }
+    None
 }
 
 /// Constants by name (for the example's printing).

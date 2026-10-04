@@ -558,12 +558,6 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             .filter(|c| matches!(c, Claim::Family { .. }))
             .cloned(),
     );
-    for g in kgaps.iter().flatten() {
-        let c = Claim::Gap { x: *g };
-        if !gap_claims.contains(&c) {
-            gap_claims.push(c);
-        }
-    }
     // Is f⁽ᵏ⁾ free of zeros in the gaps? (Out of budget: not shown.)
     let gap_boxes: Vec<XBox> = gaps
         .iter()
@@ -572,17 +566,29 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             _ => None,
         })
         .collect();
-    let clear = |k: usize| {
+    // When it is, a GapClear claim for each gap: the rows on f⁽ᵏ⁾ rest on
+    // them.
+    let clear = |k: usize| -> (bool, Vec<Claim>) {
         let mut g = gap_boxes.clone();
         if k > 0 {
             if !kcont[k - 1] {
-                return false;
+                return (false, Vec::new());
             }
             g.extend(kgaps[k - 1].iter().copied());
         }
-        rows::gaps_clear(f, k, &g, &boxes, continuous).unwrap_or(false)
+        if !rows::gaps_clear(f, k, &g, &boxes, continuous).unwrap_or(false) {
+            return (false, Vec::new());
+        }
+        let claims = g
+            .iter()
+            .map(|x| Claim::GapClear {
+                x: *x,
+                of: Subject::f(k),
+            })
+            .collect();
+        (true, claims)
     };
-    let (clear0, clear1, clear2) = (clear(0), clear(1), clear(2));
+    let ((clear0, gc0), (clear1, gc1), (clear2, gc2)) = (clear(0), clear(1), clear(2));
     if std::env::var_os("CERTIFY_DEBUG").is_some() {
         eprintln!("gaps {gap_boxes:?}: clear {clear0} {clear1} {clear2}");
         for g in &gap_boxes {
@@ -598,13 +604,26 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             ),
         });
     }
-    // The rows on f′ and f″ also rest on the kinks' claims.
-    let mut kgap_claims = gap_claims.clone();
-    kgap_claims.extend(kink_claims);
-    let monotonicity = with(
-        rows::monotonicity(&c1, &boxes, &scope, clear1),
-        &kgap_claims,
-    );
+    // A row on f⁽ᵏ⁾ rests on its own gaps' clearness; one on f′ or f″ also
+    // on the gaps where f⁽ᵏ⁾ is not claimed (an end f isn't
+    // differentiable at) and on the kinks' claims.
+    let order = |k: usize, gc: Vec<Claim>| -> Vec<Claim> {
+        let mut out = gap_claims.clone();
+        if k > 0 {
+            out.extend(kgaps[k - 1].iter().map(|x| Claim::Gap { x: *x }));
+            out.extend(kink_claims.iter().cloned());
+        }
+        out.extend(gc);
+        let mut seen = Vec::new();
+        out.retain(|c| {
+            let new = !seen.contains(c);
+            seen.push(c.clone());
+            new
+        });
+        out
+    };
+    let (claims0, claims1, claims2) = (order(0, gc0), order(1, gc1), order(2, gc2));
+    let monotonicity = with(rows::monotonicity(&c1, &boxes, &scope, clear1), &claims1);
     let horizontal = or_unknown(rows::horizontal(f, &dom, &scope));
     let (range, range_ends) = rows::range(f, &dom, &c0, &c1, &boxes, &scope, clear1)
         .unwrap_or_else(|s| (Row::unknown(stop(s)), Vec::new()));
@@ -614,20 +633,20 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         formula: f.expr.formula(),
         evaluated: evaluated(f),
         unit: unit_name(f.opts.trig_unit).into(),
-        x_intercepts: rows::zeros(&c0, &scope, &gap_claims, clear0),
+        x_intercepts: rows::zeros(&c0, &scope, &claims0, clear0),
         y_intercept: or_unknown(rows::y_intercept(f, &dom)),
         parity: or_unknown(rows::parity(f, &dom)),
         period: or_unknown(rows::period(f, &dom, &monotonicity, w)),
         extrema: with(
             or_unknown(rows::extrema(f, &c1, &boxes, &scope, clear1)),
-            &kgap_claims,
+            &claims1,
         ),
         inflections: with(
             or_unknown(rows::inflections(f, &c2, &boxes, &scope, clear2)),
-            &kgap_claims,
+            &claims2,
         ),
         monotonicity,
-        range: with(range, &kgap_claims),
+        range: with(range, &claims1),
         range_ends,
         vertical: with(
             or_unknown(rows::vertical(f, &dom, &c0, &boxes, &scope)),

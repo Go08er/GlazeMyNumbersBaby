@@ -512,6 +512,9 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
                 return vec![Iv::empty(); n + 1];
             }
             let v = t[0].meet(&direct);
+            // Again from tan′ = 1 + tan², which keeps f′ ≥ 1 by a pole.
+            let ode = se::tan_ode(&to_rad(&ea, unit), v.clone());
+            let t = t.iter().zip(&ode).map(|(a, b)| a.meet(b)).collect();
             se::with_value(t, v)
         }
         Sec => se::recip(&sin_cos(&a(), unit).1),
