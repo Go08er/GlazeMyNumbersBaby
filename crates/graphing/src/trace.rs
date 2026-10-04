@@ -721,6 +721,18 @@ mod tests {
     }
 
     #[test]
+    fn holes_in_x_of_y_trace_as_undefined() {
+        // x = g(y): y is traced, x is the value.
+        let t = trace_at("x = (y^2-1)/(y-1)", 2.03, 1.06, 100.0).unwrap();
+        assert_eq!(t.axis, Axis::Y);
+        assert_eq!(t.value, TraceValue::Undefined, "{t:?}");
+        assert!(t.y == 1.0 && (t.x - 2.0).abs() < 1e-6, "{t:?}");
+        assert_eq!(t.text(), "(undefined, 1.00)");
+        let t = trace_at("x = (y^2-1)/(y-1)", 3.0, 2.0, 100.0).unwrap();
+        assert_eq!(t.text(), "(3.00, 2.00)");
+    }
+
+    #[test]
     fn holes_off_the_step_grid_are_passed_over() {
         // 0.125 isn't a multiple of this view's step, 0.01: the decimals
         // either side are traced, not the hole.

@@ -168,6 +168,21 @@ fn removable_holes_are_gaps_with_markers() {
 
     // A pole is not a hole.
     assert!(geometry("y = 1/x", &v).holes.is_empty());
+
+    // x = g(y): the hole in world coordinates.
+    let p = geometry("x = (y^2-1)/(y-1)", &v);
+    assert_eq!(p.holes.len(), 1, "{:?}", p.holes);
+    assert!(
+        (p.holes[0].x - 2.0).abs() < 1e-6 && p.holes[0].y == 1.0,
+        "{:?}",
+        p.holes
+    );
+    for l in &p.curves {
+        for w in l.windows(2) {
+            let (a, b) = (w[0].y.min(w[1].y), w[0].y.max(w[1].y));
+            assert!(!(a < 1.0 && 1.0 < b), "joined across y = 1: {w:?}");
+        }
+    }
 }
 
 #[test]
