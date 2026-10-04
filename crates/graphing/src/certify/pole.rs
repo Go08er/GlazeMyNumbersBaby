@@ -127,6 +127,7 @@ pub fn pole_free(f: &Fun<'_>, e: &Expr, n: Interval) -> Result<bool, Stop> {
         }
         Expr::Bin(BinOp::Pow, a, b) => match syntactic_rational(b) {
             Some((p, 1)) if p < 0 => simple_zero(f, a, n)?,
+            Some((p, 1)) if p > 0 => pole_free(f, a, n)?,
             _ => false,
         },
         Expr::Call(Func::Tan | Func::Cot | Func::Sec | Func::Csc | Func::Csch | Func::Coth, _) => {

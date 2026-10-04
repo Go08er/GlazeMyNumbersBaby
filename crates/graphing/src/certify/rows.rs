@@ -257,6 +257,7 @@ fn walk(cover: &Cover, ib: &IBox) -> Vec<Seg> {
     out.dedup_by(|y, x| match (*x, *y) {
         (Seg::Sign(p), Seg::Sign(q)) => p == q,
         (Seg::Zero(p), Seg::Zero(q)) => p == q,
+        (Seg::Flat, Seg::Flat) => true,
         _ => false,
     });
     out
@@ -266,6 +267,11 @@ fn walk(cover: &Cover, ib: &IBox) -> Vec<Seg> {
 /// negative?), each proven by decided signs on both sides (the leaves tile
 /// the box, so neighbours in the walk are neighbours in x); and whether
 /// every zero and stretch was decided (no change missed).
+/// f⁽ᵏ⁾ ≡ 0 on the whole box (its stretches and the points between them).
+fn flat(segs: &[Seg]) -> bool {
+    segs.contains(&Seg::Flat) && segs.iter().all(|s| matches!(s, Seg::Flat | Seg::Zero(_)))
+}
+
 fn changes(segs: &[Seg]) -> (Vec<(Enc, bool)>, bool) {
     let mut out = Vec::new();
     let mut complete = true;
@@ -291,7 +297,7 @@ fn changes(segs: &[Seg]) -> (Vec<(Enc, bool)>, bool) {
         }
     }
     // ≡ 0 on the whole box: no strict change of sign anywhere in it.
-    if segs == [Seg::Flat] {
+    if flat(segs) {
         complete = true;
     }
     (out, complete)
@@ -409,6 +415,18 @@ fn monotone_pieces(c1: &Cover, boxes: &[IBox]) -> Option<Vec<(Monotone, bool, bo
     let mut out = Vec::new();
     for ib in boxes {
         let segs = walk(c1, ib);
+        if flat(&segs) {
+            // f′ ≡ 0 on the whole box: f is constant there.
+            out.push((
+                Monotone {
+                    on: Piece { lo: ib.lo, hi: ib.hi },
+                    dir: Dir::Constant,
+                },
+                ib.lo_clipped,
+                ib.hi_clipped,
+            ));
+            continue;
+        }
         if !changes(&segs).1 {
             return None;
         }
@@ -617,7 +635,7 @@ pub fn gaps_clear(
             _ => None,
         };
         if let Some(t) = tree
-            && factors_clear(f, t, iv)?
+            && (matches!(t, crate::ast::Expr::Num(v) if *v == 0.0) || factors_clear(f, t, iv)?)
         {
             continue;
         }
@@ -1606,6 +1624,24 @@ pub fn range(
     let mut cl = claims(c1, &Subject::f(1), &[0.0]);
     let mut images: Vec<(End, End)> = Vec::new();
     for (m, lc, hc) in &pieces {
+        if m.dir == Dir::Constant {
+            // One value, taken at a point of the box.
+            let ib = boxes.iter().find(|ib| ib.lo == m.on.lo && ib.hi == m.on.hi);
+            let Some(ib) = ib else {
+                return Ok(Row::unknown("an end of a monotone piece has no proven value"));
+            };
+            let x = match (ib.a.is_finite(), ib.b.is_finite()) {
+                (true, true) => ib.a / 2.0 + ib.b / 2.0,
+                (true, false) => ib.a + 1.0,
+                (false, true) => ib.b - 1.0,
+                (false, false) => 0.0,
+            };
+            let Some(e) = attained(f, Enc::point(x), &mut cl)? else {
+                return Ok(Row::unknown("an end of a monotone piece has no proven value"));
+            };
+            images.push((e, e));
+            continue;
+        }
         let (a, b) = (
             end_value(f, m.on.lo, *lc, true, boxes, c0, scope, &mut cl)?,
             end_value(f, m.on.hi, *hc, false, boxes, c0, scope, &mut cl)?,

@@ -29,7 +29,6 @@ use crate::ast::Expr;
 use crate::interval::{Dec, DecInterval, Interval, Series};
 
 /// Boxes within this of 0 are not split (see `step`).
-const NEAR: f64 = 1e-300;
 const NEAR_END: f64 = 1e-150;
 
 /// The most crossings a cover lists before leaving the rest undecided.
@@ -342,12 +341,10 @@ fn step(
     // Beyond reach, an undecided box is left so: features out there are
     // past anything the panel shows, and splitting there (underflow,
     // overflow) rarely helps.
-    // So too a box within 10⁻³⁰⁰ of 0 (subnormal x, where f′ of 1/x or
-    // ln x overflows).
-    // (A box from there up to 10⁻¹⁵⁰ too: splitting it would only approach
-    // 10⁻³⁰⁰ ever more finely.)
+    // So too a box within 10⁻¹⁵⁰ of 0 (where f′ of 1/x or ln x
+    // overflows, and splitting only descends through the subnormals).
     let near0 = a < b
-        && ((a >= 0.0 && a <= NEAR && b <= NEAR_END) || (b <= 0.0 && b >= -NEAR && a >= -NEAR_END));
+        && ((a >= 0.0 && b <= NEAR_END) || (b <= 0.0 && a >= -NEAR_END));
     let far = a >= REACH || b <= -REACH || near0;
     let split_or_flag = |why: &'static str| -> Result<Step, Stop> {
         if far {

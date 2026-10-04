@@ -356,6 +356,7 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
                 Func::Sqrt
                 | Func::Cbrt
                 | Func::Abs
+                | Func::Sign
                 | Func::Atan
                 | Func::Asin
                 | Func::Sinh
@@ -371,6 +372,12 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
                 _ => out.push(e.clone()),
             },
             Expr::Call(Func::Root, args) => go(&args[0], out),
+            // A sum of a positive term and a nonnegative one is never 0.
+            Expr::Bin(BinOp::Add, a, b)
+                if matches!(
+                    (sign_of(a), sign_of(b)),
+                    (Some(true), Some(_)) | (Some(_), Some(true))
+                ) => {}
             // a·c ± b·c = c·(a ± b): the shared factors, then the rest.
             Expr::Bin(op @ (BinOp::Add | BinOp::Sub), a, b) => {
                 let (sa, fa) = product(a);
@@ -405,6 +412,38 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
             _ => out.push(e.clone()),
         }
     }
+    /// From the tree alone, where e is defined: `Some(true)` e > 0,
+    /// `Some(false)` e ≥ 0.
+    fn sign_of(e: &Expr) -> Option<bool> {
+        let never_zero = |e: &Expr| {
+            let mut fs = Vec::new();
+            go(e, &mut fs);
+            fs.is_empty()
+        };
+        match e {
+            Expr::Num(v) => (*v >= 0.0).then_some(*v > 0.0),
+            Expr::Const(_) => Some(true),
+            Expr::Bin(BinOp::Pow, a, p) => match crate::compile::syntactic_rational(p) {
+                Some((n, 1)) if n % 2 == 0 => Some(never_zero(a)),
+                _ => sign_of(a).map(|pos| pos && never_zero(e)),
+            },
+            Expr::Bin(BinOp::Mul | BinOp::Div, a, b) => {
+                let (sa, sb) = (sign_of(a)?, sign_of(b)?);
+                Some(sa && sb)
+            }
+            Expr::Bin(BinOp::Add, a, b) => {
+                let (sa, sb) = (sign_of(a)?, sign_of(b)?);
+                Some(sa || sb)
+            }
+            Expr::Call(f, args) if args.len() == 1 => match f {
+                Func::Exp | Func::Cosh | Func::Sech => Some(true),
+                Func::Abs | Func::Sqrt => Some(never_zero(&args[0])),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// e = ±Π factors (negations pulled out): (negative, factors).
     fn product(e: &Expr) -> (bool, Vec<Expr>) {
         match e {

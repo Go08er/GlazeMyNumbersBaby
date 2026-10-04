@@ -111,7 +111,8 @@ fn periodic_window(f: &Fun<'_>, dom: &side::Domain) -> Option<(f64, Enc)> {
         {
             continue;
         }
-        let Ok(sr) = f.ser(crate::interval::Interval::point(start), 2) else {
+        let d = 1e-6 * p;
+        let Ok(sr) = f.ser(crate::interval::Interval::new(start - d, start + d), 2) else {
             return None;
         };
         if fun::usable(&sr, 2) && sr.iter().take(3).all(|v| !v.is_empty() && v.ne0()) {

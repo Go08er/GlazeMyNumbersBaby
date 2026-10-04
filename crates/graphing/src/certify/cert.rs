@@ -426,6 +426,8 @@ pub struct Inflection {
 pub enum Dir {
     Increasing,
     Decreasing,
+    /// f′ ≡ 0 there.
+    Constant,
 }
 
 /// f is strictly monotone on the piece.
