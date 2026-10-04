@@ -245,10 +245,226 @@ pub(crate) fn analyze_expr_ungated(
     cancel: Option<&AtomicBool>,
 ) -> Result<KeyGraphFeatures, Stop> {
     let k = analyze_framed(expr, opts, cancel)?;
-    Ok(match constant_where_defined(expr, opts) {
+    let k = match constant_where_defined(expr, opts) {
         Some(c) => constant_where(k, c),
         None => k,
-    })
+    };
+    Ok(trig_holes(k, expr, opts))
+}
+
+/// The poles of tan, sec, cot and csc of an affine argument a·x + b, as
+/// families of x: a·x + b = q/2 + kq for tan and sec, kq for cot and csc,
+/// q the half turn (π, 180 or 200). In radians no double is one of them,
+/// so a product that cancels one (tan x · cos x) is finite at every double
+/// beside it, and sampling sees nothing there. None if such a function's
+/// argument varies with x but isn't affine.
+fn trig_pole_families(e: &Expr, opts: &CompileOptions<'_>) -> Option<Vec<Family>> {
+    fn walk(e: &Expr, opts: &CompileOptions<'_>, out: &mut Vec<Family>) -> bool {
+        match e {
+            Expr::Call(f, args) => {
+                if !args.iter().all(|a| walk(a, opts, out)) {
+                    return false;
+                }
+                let (Func::Tan | Func::Sec | Func::Cot | Func::Csc, [u]) = (f, args.as_slice())
+                else {
+                    return true;
+                };
+                if !u.contains_x() {
+                    return true;
+                }
+                let num = |e: &Expr| Program::compile(e, opts).ok()?.as_constant();
+                let Some((a, b)) = linear_in(u, &|n| matches!(n, Expr::X))
+                    .and_then(|(c, r)| Some((num(&c)?, num(&r)?)))
+                else {
+                    return false;
+                };
+                if !(a != 0.0 && a.is_finite() && b.is_finite()) {
+                    return false;
+                }
+                let q = match opts.trig_unit {
+                    TrigUnit::Radians => std::f64::consts::PI,
+                    TrigUnit::Degrees => 180.0,
+                    TrigUnit::Grads => 200.0,
+                };
+                let off = if matches!(f, Func::Tan | Func::Sec) {
+                    q / 2.0
+                } else {
+                    0.0
+                };
+                let period = q / a.abs();
+                out.push(Family {
+                    x: normalize((off - b) / a, period),
+                    period: Some(period),
+                });
+                true
+            }
+            Expr::Bin(_, l, r) => walk(l, opts, out) && walk(r, opts, out),
+            Expr::Neg(x) | Expr::Degrees(x) => walk(x, opts, out),
+            _ => true,
+        }
+    }
+    let mut out = Vec::new();
+    walk(e, opts, &mut out).then_some(out)
+}
+
+/// Whether families `f` and `g` share a point (within rounding).
+fn families_meet(f: &Family, g: &Family) -> bool {
+    let near = |fam: &Family, t: f64| {
+        let c = match fam.period {
+            Some(p) if p > 0.0 => fam.x + ((t - fam.x) / p).round() * p,
+            _ => fam.x,
+        };
+        (c - t).abs() <= 1e-9 * t.abs().max(1.0)
+    };
+    match g.period {
+        Some(q) if q > 0.0 => (-64..=64).any(|j| near(f, g.x + j as f64 * q)),
+        _ => near(f, g.x),
+    }
+}
+
+/// Holes the samples can't show: where tan, sec, cot or csc of an affine
+/// argument has a pole (no double in radians) and the function stays
+/// bounded beside it (tan x · cos x at π/2 + kπ), excluded from the domain
+/// as the family they are. What was found at those points (a turn of
+/// sin x where tan x · cos x is undefined) is made unknown, and with it the
+/// range those turns would attain. A pole family that can't be added this
+/// way (no period to state it in, or f unbounded beside it, a pole the
+/// scan missed) makes the domain unknown.
+fn trig_holes(mut k: KeyGraphFeatures, expr: &Expr, opts: &CompileOptions<'_>) -> KeyGraphFeatures {
+    if k.analysis_error != AnalysisError::NoError || k.too_complex_features & flags::DOMAIN != 0 {
+        return k;
+    }
+    let Some(fams) = trig_pole_families(expr, opts) else {
+        // (A non-affine argument's poles are the gate's to look for.)
+        return k;
+    };
+    let Ok(f) = Program::compile(expr, opts) else {
+        return k;
+    };
+    let mut bail = false;
+    let mut added: Vec<Family> = Vec::new();
+    for fam in &fams {
+        let d = &k.data;
+        let covered = d.excluded.iter().chain(&d.vertical_asymptotes).any(|g| {
+            (-4..=4).all(|m| {
+                let t = fam.x + m as f64 * fam.period.unwrap_or(0.0);
+                families_meet(g, &Family::single(t))
+            })
+        });
+        if covered {
+            continue;
+        }
+        // Outside the claimed domain altogether (beside sqrt(sin x)'s
+        // gaps): nothing claimed there.
+        let in_domain = |t: f64| match d.period {
+            None => d.domain.iter().any(|iv| iv.contains(t)),
+            Some(p) => {
+                let lo = d
+                    .domain
+                    .iter()
+                    .map(|iv| iv.lo.value)
+                    .fold(f64::INFINITY, f64::min);
+                let lo = if lo.is_finite() { lo } else { 0.0 };
+                let r = lo + (t - lo).rem_euclid(p);
+                d.domain
+                    .iter()
+                    .any(|iv| iv.contains(r) || iv.contains(r - p) || iv.contains(r + p))
+            }
+        };
+        if !(-4..=4).any(|m| in_domain(fam.x + m as f64 * fam.period.unwrap_or(0.0))) {
+            continue;
+        }
+        // Bounded beside it: a hole. Growing: a pole the scan missed.
+        let side = |h: f64| {
+            f.eval(fam.x + h, 0.0)
+                .abs()
+                .max(f.eval(fam.x - h, 0.0).abs())
+        };
+        let (far, near) = (
+            side(1e-3 * fam.x.abs().max(1.0)),
+            side(1e-9 * fam.x.abs().max(1.0)),
+        );
+        let bounded = far.is_finite() && near.is_finite() && near <= 2.0 * far + 1.0;
+        let fits = match (d.period, fam.period) {
+            (Some(p), Some(q)) => {
+                let n = (p / q).round();
+                (1.0..=64.0).contains(&n) && (p - n * q).abs() <= 1e-9 * p
+            }
+            _ => false,
+        };
+        let full = match d.period {
+            Some(p) => {
+                let covered: f64 = d.domain.iter().map(|i| i.hi.value - i.lo.value).sum();
+                (covered - p).abs() <= 1e-9 * p
+            }
+            None => false,
+        };
+        if bounded && fits && full {
+            added.push(*fam);
+        } else {
+            bail = true;
+        }
+    }
+    if bail {
+        forget(&mut k, flags::DOMAIN | flags::VERTICAL_ASYMPTOTES);
+        return k;
+    }
+    if added.is_empty() {
+        return k;
+    }
+    let p = k.data.period.expect("added only with a period");
+    let mut reps: Vec<f64> = Vec::new();
+    for g in k.data.excluded.iter().chain(&added) {
+        let q = g.period.unwrap_or(p);
+        let n = (p / q).round().max(1.0) as usize;
+        reps.extend((0..n).map(|j| g.x + j as f64 * q));
+    }
+    k.data.excluded = families(reps, p);
+    let reps: Vec<f64> = k.data.excluded.iter().map(|f| f.x).collect();
+    let per = k.data.excluded.first().and_then(|f| f.period).unwrap_or(p);
+    k.domain = format_periodic_set("x", &[], &reps, per);
+    // What sits on the new holes isn't there.
+    let mut drop = 0;
+    let d = &k.data;
+    for (flag, list) in [
+        (
+            flags::MINIMA,
+            d.minima.iter().map(|m| m.0).collect::<Vec<_>>(),
+        ),
+        (flags::MAXIMA, d.maxima.iter().map(|m| m.0).collect()),
+        (
+            flags::INFLECTION_POINTS,
+            d.inflection_points.iter().map(|m| m.0).collect(),
+        ),
+        (flags::ZEROS, d.zeros.clone()),
+    ] {
+        if list
+            .iter()
+            .any(|g| added.iter().any(|h| families_meet(h, g)))
+        {
+            drop |= flag;
+        }
+    }
+    // A bound attained at a turn that isn't there may not be attained.
+    if drop & (flags::MINIMA | flags::MAXIMA) != 0 {
+        drop |= flags::RANGE;
+    }
+    if matches!(k.parity, Parity::Odd | Parity::Even)
+        && !added
+            .iter()
+            .all(|h| families_meet(h, &Family::single(-h.x)))
+    {
+        k.parity = Parity::Unknown;
+        k.too_complex_features |= flags::PARITY;
+    }
+    if added.iter().any(|h| families_meet(h, &Family::single(0.0))) {
+        k.data.y_intercept = None;
+        k.y_intercept.clear();
+    }
+    if drop != 0 {
+        forget(&mut k, drop);
+    }
+    k
 }
 
 fn analyze_framed(

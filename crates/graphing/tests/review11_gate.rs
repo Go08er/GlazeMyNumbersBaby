@@ -6,7 +6,12 @@
 //! from an exponent whose fraction was lost). Checked as "correct or
 //! unknown"; the last test is the control that ordinary answers stay.
 
-use graphing::analysis::{KeyGraphFeatures, analyze_str, flags};
+use graphing::analysis::{
+    Interval, KeyGraphFeatures, analyze, analyze_str, analyze_ungated, flags, verify,
+};
+use graphing::compile::CompileOptions;
+use graphing::equation::Equation;
+use graphing::functions::TrigUnit;
 
 fn k(src: &str) -> KeyGraphFeatures {
     let r = analyze_str(src);
@@ -161,6 +166,87 @@ fn a_constant_only_the_compiler_has_is_no_answer() {
         unknown(&r, flags::ZEROS) || !r.x_intercept.is_empty(),
         "every x is an intercept, not none"
     );
+}
+
+fn in_unit(src: &str, unit: TrigUnit) -> KeyGraphFeatures {
+    analyze(
+        &Equation::parse(src).unwrap(),
+        &CompileOptions {
+            trig_unit: unit,
+            variables: &(),
+        },
+    )
+}
+
+/// Excludes something, or says it can't tell.
+fn excludes_or_unknown(r: &KeyGraphFeatures) -> bool {
+    unknown(r, flags::DOMAIN) || r.domain.contains('\\')
+}
+
+/// Removable trig holes: tan x · cos x is sin x except at π/2 + kπ, where
+/// tan has its poles. In radians no double is such a point, so f is finite
+/// at every double and sampling never sees the hole: the domain must still
+/// exclude it (or say it can't tell), and nothing may be claimed there.
+#[test]
+fn removable_trig_holes_are_excluded_or_unknown() {
+    let r = k("y=tan(x)*cos(x)");
+    assert_eq!(r.domain, "x ∈ ℝ \\ {π/2 + kπ | k ∈ ℤ}");
+    assert!(r.vertical_asymptotes.is_empty() && !unknown(&r, flags::VERTICAL_ASYMPTOTES));
+    // sin x's turns at π/2 + kπ are holes: no extremum there, and the
+    // range (−1, 1) is not [−1, 1].
+    assert!(
+        r.maxima.is_empty() || unknown(&r, flags::MAXIMA),
+        "{:?}",
+        r.maxima
+    );
+    assert!(r.range != "y ∈ [−1, 1]", "{}", r.range);
+    for src in [
+        "y=tan(2x+1)*cos(2x+1)",
+        "y=sec(x)*cos(x)",
+        "y=csc(x)*sin(x)",
+        "y=sin(x)/sin(x)",
+        "y=tan(x^2)*cos(x^2)",
+        "y=tan(x)*cos(x)+x",
+        "y=cot(x)*tan(x)",
+    ] {
+        let r = analyze_str(src);
+        assert!(
+            r.analysis_error_string().is_some() || excludes_or_unknown(&r),
+            "{src}: domain {}",
+            r.domain
+        );
+    }
+    // In degrees and grads the poles are doubles, sampled like any other.
+    for unit in [TrigUnit::Degrees, TrigUnit::Grads] {
+        let r = in_unit("y=tan(x)*cos(x)", unit);
+        assert!(excludes_or_unknown(&r), "{unit:?}: {}", r.domain);
+    }
+    let r = in_unit("y=tan(x)", TrigUnit::Degrees);
+    assert_eq!(r.domain, "x ∈ ℝ \\ {90 + 180k | k ∈ ℤ}");
+}
+
+/// The gate on its own: told that tan x · cos x is defined everywhere (what
+/// the engine used to say), it finds the cosine under the tangent crossing 0
+/// inside the claimed domain, at a point no double is.
+#[test]
+fn the_gate_finds_singular_points_no_double_hits() {
+    let opts = CompileOptions::default();
+    for src in ["y=tan(x)*cos(x)", "y=tan(2*x+1)*cos(2*x+1)"] {
+        let eq = Equation::parse(src).unwrap();
+        let mut raw = analyze_ungated(&eq, &opts);
+        raw.too_complex_features &= !flags::DOMAIN;
+        raw.data.excluded.clear();
+        raw.data.domain = vec![Interval::all()];
+        raw.domain = "x ∈ ℝ".into();
+        let (_, f) = eq.explicit().unwrap();
+        let (k, r, _) = verify::gate_report(raw, f, &opts);
+        assert!(
+            unknown(&k, flags::DOMAIN),
+            "{src}: kept {} ({:?})",
+            k.domain,
+            r.failures.keys().collect::<Vec<_>>()
+        );
+    }
 }
 
 /// Ordinary answers stay: the new rules leave these as they were.

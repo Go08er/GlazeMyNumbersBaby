@@ -2371,6 +2371,184 @@ pub fn check_domain(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
     }
 }
 
+/// Where an operand that makes f undefined at its zeros (a divisor, the
+/// cosine under a tangent, …) crosses 0 continuously between two samples,
+/// f is undefined at a point between them, even one no double is
+/// (tan x · cos x at π/2, sin x / sin x at π): a domain that claims that
+/// point is wrong. (Within ±10⁶, where the floats still resolve a trig
+/// argument's zeros; the first 256 crossings.)
+pub fn check_singular_zeros(a: &Analysed, xs: &[f64], r: &mut Report) {
+    let d = a.d();
+    if a.unknown(flags::DOMAIN) || d.domain.is_empty() {
+        return;
+    }
+    let e = &a.expr;
+    let mut ops = Vec::new();
+    // (A varying exponent is NaN here, so its base counts.)
+    singular_operands(a, f64::NAN, &a.ast, &mut ops);
+    ops.retain(|o| o.contains_x());
+    ops.dedup();
+    if ops.is_empty() {
+        return;
+    }
+    let plain = CompileOptions {
+        trig_unit: a.unit,
+        ..CompileOptions::default()
+    };
+    // What the claim already says about a point: excluded, a pole, or an
+    // end of the domain (to a few floats).
+    let period = a.period();
+    let marks: Vec<Family> = d
+        .excluded
+        .iter()
+        .chain(&d.vertical_asymptotes)
+        .copied()
+        .chain(
+            d.domain
+                .iter()
+                .flat_map(|iv| [iv.lo.value, iv.hi.value])
+                .filter(|v| v.is_finite())
+                .map(|v| Family { x: v, period }),
+        )
+        .collect();
+    let accounted = |c: f64| marks.iter().any(|f| close_to(f, c, 64));
+    let whole = d
+        .domain
+        .iter()
+        .any(|iv| iv.lo.value == f64::NEG_INFINITY && iv.hi.value == f64::INFINITY);
+    let w = d
+        .domain
+        .iter()
+        .map(|iv| iv.lo.value)
+        .filter(|v| v.is_finite())
+        .fold(f64::INFINITY, f64::min);
+    let w = if w.is_finite() { w } else { 0.0 };
+    let claimed = |x: f64| {
+        let t = match period {
+            Some(p) => w + (x - w).rem_euclid(p),
+            None => x,
+        };
+        (whole || set_has(&d.domain, t)) && !d.excluded.iter().any(|f| in_family(f, x))
+    };
+    let mut tried = 0;
+    for o in &ops {
+        let Ok(prog) = Program::compile(o, &plain) else {
+            continue;
+        };
+        a.charge((prog.cost().max(1) * xs.len()) as u64);
+        let vs: Vec<f64> = xs.iter().map(|&x| prog.eval(x, 0.0)).collect();
+        for i in 0..xs.len().saturating_sub(1) {
+            if a.over() || tried >= 256 {
+                return;
+            }
+            let (x0, x1, v0, v1) = (xs[i], xs[i + 1], vs[i], vs[i + 1]);
+            if x0.abs() > 1e6
+                || x1.abs() > 1e6
+                || !(v0.is_finite() && v1.is_finite())
+                || v0 == 0.0
+                || v1 == 0.0
+                || v0.signum() == v1.signum()
+            {
+                continue;
+            }
+            tried += 1;
+            // To adjacent floats, on o's own values.
+            let (mut lo, mut hi, mut vl) = (x0, x1, v0);
+            let scale = v0.abs().max(v1.abs());
+            let mut smooth = true;
+            for _ in 0..200 {
+                let m = 0.5 * (lo + hi);
+                if m <= lo || m >= hi {
+                    break;
+                }
+                let vm = prog.eval(m, 0.0);
+                a.charge(prog.cost().max(1) as u64);
+                if !vm.is_finite() || vm.abs() > scale {
+                    smooth = false;
+                    break;
+                }
+                if vm == 0.0 {
+                    (lo, hi) = (m, m);
+                    break;
+                }
+                if vm.signum() == vl.signum() {
+                    (lo, vl) = (m, vm);
+                } else {
+                    hi = m;
+                }
+            }
+            if !smooth {
+                continue;
+            }
+            // A crossing, not a jump: o is small at the floats beside it.
+            let (vlo, vhi) = (prog.eval(lo, 0.0), prog.eval(hi, 0.0));
+            let (_, err) = a.bound_of(o, lo);
+            let small = vlo.abs().min(vhi.abs());
+            if !(small <= 1e-6 * scale || small <= 64.0 * err) {
+                continue;
+            }
+            let c = lo;
+            if accounted(c) || accounted(hi) || !claimed(c) || !claimed(hi) {
+                continue;
+            }
+            r.fail(
+                "domain-includes-singular-point",
+                flags::DOMAIN,
+                e,
+                format!(
+                    "{o} crosses 0 between {lo:?} and {hi:?}, inside domain {} excl {}",
+                    fmt_set(&d.domain),
+                    fmt_fams(&d.excluded)
+                ),
+            );
+            return;
+        }
+    }
+}
+
+/// The operands of `e` that make it undefined where they are 0 (at `at`,
+/// for a power's exponent): divisors, logarithms' arguments, a power's base
+/// under an exponent that isn't positive, the cosine under tan and sec and
+/// the sine under cot and csc, mod's divisor.
+fn singular_operands(a: &Analysed, at: f64, e: &Expr, out: &mut Vec<Expr>) {
+    use crate::ast::{BinOp, Func};
+    match e {
+        Expr::Bin(op, l, rr) => {
+            match op {
+                BinOp::Div => out.push((**rr).clone()),
+                BinOp::Pow => {
+                    // (A NaN exponent counts: it can't be shown positive.)
+                    let (p, _) = a.bound_of(rr, at);
+                    if p.is_nan() || p <= 0.0 {
+                        out.push((**l).clone());
+                    }
+                }
+                _ => {}
+            }
+            singular_operands(a, at, l, out);
+            singular_operands(a, at, rr, out);
+        }
+        Expr::Call(f, args) => {
+            match f {
+                Func::Ln | Func::Log | Func::LogBase | Func::Coth | Func::Csch => {
+                    out.extend(args.iter().cloned())
+                }
+                Func::Mod => out.extend(args.get(1).cloned()),
+                Func::Tan | Func::Sec => {
+                    out.push(Expr::Call(Func::Cos, args.clone()));
+                }
+                Func::Cot | Func::Csc => {
+                    out.push(Expr::Call(Func::Sin, args.clone()));
+                }
+                _ => {}
+            }
+            args.iter().for_each(|x| singular_operands(a, at, x, out));
+        }
+        Expr::Neg(x) | Expr::Degrees(x) => singular_operands(a, at, x, out),
+        _ => {}
+    }
+}
+
 /// Whether a point excluded from the domain has anything to show for it:
 /// f undefined within two floats, blowing up beside it, or an operand that
 /// makes f undefined there within its own rounding of doing so: a divisor
@@ -2382,53 +2560,31 @@ pub fn exclusion_supported(a: &Analysed, c: f64) -> bool {
     if (-2..=2).any(|k| a.defined(nudge(c, k)) != Some(true)) || blows_up(a, c) {
         return true;
     }
-    fn singular(a: &Analysed, at: f64, e: &Expr, out: &mut Vec<Expr>) {
-        use crate::ast::{BinOp, Func};
-        match e {
-            Expr::Bin(op, l, rr) => {
-                match op {
-                    BinOp::Div => out.push((**rr).clone()),
-                    BinOp::Pow => {
-                        // (A NaN exponent counts: it can't be shown positive.)
-                        let (p, _) = a.bound_of(rr, at);
-                        if p.is_nan() || p <= 0.0 {
-                            out.push((**l).clone());
-                        }
-                    }
-                    _ => {}
-                }
-                singular(a, at, l, out);
-                singular(a, at, rr, out);
-            }
-            Expr::Call(f, args) => {
-                match f {
-                    Func::Ln | Func::Log | Func::LogBase | Func::Coth | Func::Csch => {
-                        out.extend(args.iter().cloned())
-                    }
-                    Func::Mod => out.extend(args.get(1).cloned()),
-                    Func::Tan | Func::Sec => {
-                        out.push(Expr::Call(Func::Cos, args.clone()));
-                    }
-                    Func::Cot | Func::Csc => {
-                        out.push(Expr::Call(Func::Sin, args.clone()));
-                    }
-                    _ => {}
-                }
-                args.iter().for_each(|x| singular(a, at, x, out));
-            }
-            Expr::Neg(x) | Expr::Degrees(x) => singular(a, at, x, out),
-            _ => {}
-        }
-    }
     let mut ops = Vec::new();
-    singular(a, c, &a.ast, &mut ops);
+    singular_operands(a, c, &a.ast, &mut ops);
     ops.iter().filter(|o| o.contains_x()).any(|o| {
         [-1, 0, 1].iter().any(|&k| {
             let t = nudge(c, k);
             let (v, err) = a.bound_of(o, t);
             v.is_finite() && v.abs() <= err + 4.0 * ulp(v)
-        })
+        }) || crosses_near(a, o, c)
     })
+}
+
+/// Whether operand `o` crosses 0 within a few dozen floats of c,
+/// continuously (smaller there than a little way off, so not through a
+/// pole): its zero is then a point no double hits (cos x at π/2), and
+/// a point excluded there is where f is undefined.
+fn crosses_near(a: &Analysed, o: &Expr, c: f64) -> bool {
+    let (lo, _) = a.bound_of(o, nudge(c, -64));
+    let (hi, _) = a.bound_of(o, nudge(c, 64));
+    if !(lo.is_finite() && hi.is_finite()) || lo * hi >= 0.0 {
+        return false;
+    }
+    let h = 1e-3 * c.abs().max(1.0);
+    let (l2, _) = a.bound_of(o, c - h);
+    let (h2, _) = a.bound_of(o, c + h);
+    l2.is_finite() && h2.is_finite() && lo.abs() < l2.abs() && hi.abs() < h2.abs()
 }
 
 /// Whether |f| grows without bound (or f keeps changing by as much per
@@ -3474,7 +3630,10 @@ fn steps() -> [(u32, Step); 13] {
         (flags::INFLECTION_POINTS, |a, _, _, _, r| {
             check_inflections(a, r)
         }),
-        (flags::DOMAIN, |a, xs, ys, _, r| check_domain(a, xs, ys, r)),
+        (flags::DOMAIN, |a, xs, ys, _, r| {
+            check_domain(a, xs, ys, r);
+            check_singular_zeros(a, xs, r);
+        }),
         (flags::MONOTONE_INTERVALS, |a, xs, ys, _, r| {
             check_monotonicity(a, xs, ys, r)
         }),
