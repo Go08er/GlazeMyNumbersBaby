@@ -21,6 +21,7 @@
 //! could pass for exact.
 
 use std::cell::OnceCell;
+use std::sync::atomic::AtomicBool;
 
 use super::exact::{self, Ex};
 use super::format::{self, MINUS, format_decimal_digits};
@@ -581,7 +582,20 @@ struct Ctx<'a> {
     /// The excluded points exactly, when the domain is the line less
     /// table families and each family is exact.
     xfams: Option<Vec<(Ex, Ex)>>,
+    /// The exact evaluations' work so far (nodes evaluated).
+    work: std::cell::Cell<u64>,
 }
+
+/// The largest tree the panel evaluates exactly (f″ of sin nested forty
+/// deep has 26 000 nodes: 9 ms an evaluation).
+const EXACT_NODES: usize = 4096;
+/// The panel's exact work, in nodes evaluated (about 0.3 µs each): a few
+/// hundred milliseconds at most.
+const EXACT_WORK: u64 = 1_000_000;
+
+/// The certifier's evaluation budget for the panel's own checks (f
+/// finite on a box), in its units.
+const PANEL_BUDGET: u64 = 20_000;
 
 impl<'a> Ctx<'a> {
     fn new(
@@ -590,6 +604,7 @@ impl<'a> Ctx<'a> {
         lits: &'a ExactLiterals,
         ilits: &'a Literals,
         a: &Analysis,
+        cancel: Option<&'a AtomicBool>,
     ) -> Ctx<'a> {
         let unit = opts.trig_unit;
         let rf = honest_exponents(&f, lits)
@@ -655,7 +670,7 @@ impl<'a> Ctx<'a> {
         let period_enc = piq
             .and_then(certify::rows::piq_interval)
             .map(|iv| Enc::new(iv.lo(), iv.hi()));
-        let fun = Fun::new(&f, ilits, *opts, 1_000_000, None);
+        let fun = Fun::new(&f, ilits, *opts, PANEL_BUDGET, cancel);
         let mut cx = Ctx {
             f,
             unit,
@@ -671,6 +686,7 @@ impl<'a> Ctx<'a> {
             period,
             period_enc,
             xfams: None,
+            work: std::cell::Cell::new(0),
         };
         if let Row::Certified { value, .. } = &a.domain
             && value.pieces.len() == 1
@@ -686,7 +702,19 @@ impl<'a> Ctx<'a> {
         cx
     }
 
+    /// e at x̂ exactly, within the panel's exact work ([`EXACT_NODES`],
+    /// [`EXACT_WORK`]): past it (or once cancelled), not known exactly,
+    /// and the panel writes the certifier's enclosure instead.
     fn eval(&self, e: &Expr, x: Ex) -> Option<Ex> {
+        if self.fun.cancelled() {
+            return None;
+        }
+        let size = e.depth_and_size().1;
+        let work = self.work.get() + size as u64;
+        if size > EXACT_NODES || work > EXACT_WORK {
+            return None;
+        }
+        self.work.set(work);
         exact::eval(e, x, self.unit, self.lits, self.vars)
     }
 
@@ -1481,8 +1509,9 @@ pub(super) fn features(
     lits: &ExactLiterals,
     ilits: &Literals,
     a: &Analysis,
-) -> KeyGraphFeatures {
-    let cx = Ctx::new(certify::canonical(f), opts, lits, ilits, a);
+    cancel: Option<&AtomicBool>,
+) -> Option<KeyGraphFeatures> {
+    let cx = Ctx::new(certify::canonical(f), opts, lits, ilits, a, cancel);
     let mut out = Out {
         k: KeyGraphFeatures::default(),
     };
@@ -2204,7 +2233,8 @@ pub(super) fn features(
     }
 
     out.k.data = data;
-    out.k
+    // Cut short by the flag: rows may be missing what it stopped.
+    (!cx.fun.cancelled()).then_some(out.k)
 }
 
 /// `a` with the rows a constant c (on its domain) decides filled in where
