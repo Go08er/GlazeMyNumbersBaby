@@ -366,26 +366,35 @@ fn step_exponent(iv: &IntervalFn, t: f64, n0: i32, t_px: f64, d_px: f64) -> i32 
         let Some(m) = slope(Decimal::round(t, n).0.to_f64()) else {
             break;
         };
-        let moved = h * (t_px.recip().powi(2) + (m / d_px).powi(2)).sqrt();
-        if !(moved > 1.0 && moved.is_finite()) {
+        // log₁₀ of the pixels one step moves, the larger way (in logs: a
+        // slope of 10³⁰⁰ on a fine view overflows the pixels themselves).
+        let (a, b) = (-t_px.log10(), m.log10() - d_px.log10());
+        let (big, small) = if a >= b { (a, b) } else { (b, a) };
+        let moved = h.log10() + big + 0.5 * (10f64.powf(2.0 * (small - big))).ln_1p() / 10f64.ln();
+        if !(moved > 0.0 && moved.is_finite()) {
             break;
         }
-        let decades = moved.log10().ceil().clamp(1.0, 300.0) as i32;
+        let decades = moved.ceil().clamp(1.0, 300.0) as i32;
         n = (n - decades).max(finest);
     }
     n
 }
 
-/// Where the curve takes the value `d` near `t`: a few Newton steps, with
-/// f and f′ from the interval form. None where it isn't proven smooth.
-fn solve_near(iv: &IntervalFn, t: f64, d: f64) -> Option<f64> {
+/// Where the curve takes the value `d` (to within `tol`) near `t`: Newton
+/// steps, with f and f′ from the interval form. None where it isn't proven
+/// smooth. On a line steeper than 10¹⁶ each step can only cancel the
+/// leading digits of t (10³⁰⁰·x from 10⁻¹⁷ to 10⁻³⁰² takes about twenty).
+fn solve_near(iv: &IntervalFn, t: f64, d: f64, tol: f64) -> Option<f64> {
     let mut t = t;
-    for _ in 0..4 {
+    for _ in 0..32 {
         let s = iv.series(t, t, 1);
         if !derivs_valid(&s, 1) {
             return None;
         }
         let (v, dv) = (s[0].iv.mid(), s[1].iv.mid());
+        if (v - d).abs() <= tol {
+            break;
+        }
         let next = t - (v - d) / dv;
         if !next.is_finite() {
             return None;
@@ -563,7 +572,7 @@ pub fn nearest_point(
                     // where along it the curve itself meets that point's
                     // level.
                     if let Some(iv) = iv
-                        && let Some(t) = solve_near(iv, qt, qd)
+                        && let Some(t) = solve_near(iv, qt, qd, 0.01 * d_px)
                         && let Some(c) = snap(t)
                     {
                         offer(index, c, 0.0, &mut best);

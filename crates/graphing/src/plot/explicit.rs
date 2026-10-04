@@ -455,22 +455,22 @@ impl<'a> ExplicitSampler<'a> {
                 }
                 Kind::Peak(a, b) => {
                     let (p, q) = if a.0 <= b.0 { (a, b) } else { (b, a) };
-                    for t in [lo, hi] {
-                        if !self.f.eval(t, 0.0).is_finite() {
-                            self.break_piece();
-                        }
+                    let (fa, fb) = (self.continuous_value(lo), self.continuous_value(hi));
+                    if fa.is_none() {
+                        self.break_piece();
                     }
-                    let (fa, fb) = (self.f.eval(lo, 0.0), self.f.eval(hi, 0.0));
-                    for (t, d) in [(lo, fa), p, q, (hi, fb)] {
-                        if d.is_finite() {
+                    for (t, d) in [(lo, fa), (p.0, Some(p.1)), (q.0, Some(q.1)), (hi, fb)] {
+                        if let Some(d) = d {
                             self.push(t, d);
                         }
+                    }
+                    if fb.is_none() {
+                        self.break_piece();
                     }
                 }
                 Kind::Steep | Kind::Continuous => {
                     for t in [lo, hi] {
-                        let d = self.f.eval(t, 0.0);
-                        if d.is_finite() {
+                        if let Some(d) = self.continuous_value(t) {
                             self.push(t, d);
                         } else {
                             self.break_piece();
@@ -518,7 +518,10 @@ impl<'a> ExplicitSampler<'a> {
     /// f's value at t on an off box, made finite (beyond the band) where it
     /// overflows: the stroke is clipped and fills clamp to the band.
     fn off_value(&self, t: f64) -> f64 {
-        let d = self.f.eval(t, 0.0);
+        self.off_value_of(self.f.eval(t, 0.0))
+    }
+
+    fn off_value_of(&self, d: f64) -> f64 {
         let h = self.band_hi - self.band_lo;
         if d.is_finite() {
             d
@@ -527,6 +530,14 @@ impl<'a> ExplicitSampler<'a> {
         } else {
             self.band_lo - h
         }
+    }
+
+    /// f's value at an end of a box it is proven continuous on (so
+    /// defined: an infinite value is an overflow, `sinh(10²⁰x)`), made
+    /// finite beyond the band like [`Self::off_value`]. None for NaN.
+    fn continuous_value(&self, t: f64) -> Option<f64> {
+        let d = self.f.eval(t, 0.0);
+        if d.is_nan() { None } else { Some(self.off_value_of(d)) }
     }
 
     fn push(&mut self, t: f64, d: f64) {
@@ -696,22 +707,31 @@ impl<'a> ExplicitSampler<'a> {
                 continue;
             }
             // From the nearer end: next to a pole one end can be 10³⁰ and
-            // pd + s·(d − pd) would cancel to nothing.
-            let lerp = |s: f64| {
-                if s <= 0.5 {
-                    axis_point(self.axis, pt + s * (t - pt), pd + s * (d - pd))
+            // pt + s·(t − pt) would cancel to nothing. Where the segment
+            // crosses the band its dependent value is the band's edge, not
+            // pd + s·(d − pd): for a line steeper than 10¹⁹ per pixel both
+            // crossings round to the same s and the stroke would collapse
+            // to a point instead of running down the pixel's column.
+            let lerp = |s: f64, edge: f64| {
+                let t = if s <= 0.5 {
+                    pt + s * (t - pt)
                 } else {
-                    let r = 1.0 - s;
-                    axis_point(self.axis, t - r * (t - pt), d - r * (d - pd))
-                }
+                    t - (1.0 - s) * (t - pt)
+                };
+                axis_point(self.axis, t, edge)
             };
+            let (enter, leave) = if d > pd { (lo, hi) } else { (hi, lo) };
             if cur.is_empty() {
-                cur.push(lerp(s0));
+                cur.push(if s0 <= 0.0 {
+                    axis_point(self.axis, pt, pd)
+                } else {
+                    lerp(s0, enter)
+                });
             }
             cur.push(if s1 >= 1.0 {
                 axis_point(self.axis, t, d)
             } else {
-                lerp(s1)
+                lerp(s1, leave)
             });
             if s1 < 1.0 {
                 if cur.len() >= 2 {

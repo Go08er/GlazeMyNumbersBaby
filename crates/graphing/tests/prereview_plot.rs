@@ -112,3 +112,114 @@ fn navigation_fuzz_keeps_views_sane() {
         finite_plot(&g, &vp);
     }
 }
+
+/// The range of the drawn curves along the dependent axis, clipped to the
+/// view.
+fn drawn_extent(p: &graphing::Plot, vp: &Viewport) -> (f64, f64) {
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for c in &p.curves {
+        if c.len() < 2 {
+            continue;
+        }
+        for q in c {
+            lo = lo.min(q.y.clamp(vp.y_min, vp.y_max));
+            hi = hi.max(q.y.clamp(vp.y_min, vp.y_max));
+        }
+    }
+    (lo, hi)
+}
+
+/// PREREVIEW_C M3, PREREVIEW_B B-M3: lines steeper than about 10¹⁹ per
+/// pixel collapsed to a point at most canvas sizes (both band crossings
+/// rounded to the same spot of the chord), and so did overflowing ones.
+#[test]
+fn very_steep_lines_cross_the_view_at_every_size() {
+    let srcs = [
+        "y=10^17*x",
+        "y=5*10^18*x",
+        "y=10^19*x",
+        "y=10^20*x",
+        "y=x*10^20",
+        "y=-10^20*x",
+        "y=10^20*x+1",
+        "y=10^21*x",
+        "y=10^25*x",
+        "y=10^30*x",
+        "y=10^300*x",
+        "y=sinh(10^20*x)",
+        "y=10^300*x^3",
+    ];
+    let mut g = Graph::new();
+    let ids: Vec<_> = srcs.iter().map(|s| g.add_equation(s)).collect();
+    let mut sizes = 0;
+    for w in (300..=1900).step_by(67) {
+        for h in (300..=1100).step_by(43) {
+            let vp = Viewport::default_for_size(w as f64, h as f64);
+            sizes += 1;
+            for (src, &id) in srcs.iter().zip(&ids) {
+                let p = g.plot_equation(id, &vp).unwrap();
+                let (lo, hi) = drawn_extent(&p, &vp);
+                assert!(
+                    lo <= vp.y_min && hi >= vp.y_max,
+                    "{src} at {w}x{h}: drawn over [{lo}, {hi}] of {:?}",
+                    (vp.y_min, vp.y_max)
+                );
+            }
+        }
+    }
+    assert!(sizes > 400);
+    // x = g(y) alike.
+    let mut g = Graph::new();
+    let id = g.add_equation("x=10^25*y");
+    let vp = Viewport::default_for_size(761.0, 700.0);
+    let p = g.plot_equation(id, &vp).unwrap();
+    let (lo, hi) = p
+        .curves
+        .iter()
+        .flatten()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), q| {
+            (a.min(q.x), b.max(q.x))
+        });
+    assert!(lo <= vp.x_min && hi >= vp.x_max, "[{lo}, {hi}]");
+}
+
+/// M3 tracing: Shift+Up (1 px) and Up (5 px) from the centre move the
+/// traced point up a very steep line by about the step, as the apps'
+/// keyboard tracing does, at several canvas sizes.
+#[test]
+fn keyboard_tracing_climbs_very_steep_lines() {
+    for src in ["y=10^20*x", "y=10^25*x", "y=10^300*x", "y=-10^20*x+3"] {
+        let mut g = Graph::new();
+        g.add_equation(src);
+        for (w, h) in [
+            (378.0, 644.0),
+            (760.0, 700.0),
+            (761.0, 700.0),
+            (1000.0, 700.0),
+            (1919.0, 1080.0),
+        ] {
+            let vp = Viewport::default_for_size(w, h);
+            let plots = g.plot_parallel(&vp);
+            for step in [1.0, 5.0] {
+                let (mut px, mut py) = (w / 2.0, h / 2.0);
+                let mut ys = Vec::new();
+                for _ in 0..21 {
+                    py -= step;
+                    let (_, t) = g
+                        .trace(&vp, &plots, px, py, 50.0)
+                        .unwrap_or_else(|| panic!("{src} {w}x{h}: lost the curve"));
+                    assert!(t.distance_px < 2.0, "{src} {w}x{h}: {t:?}");
+                    assert!(!t.text().contains("unknown"), "{src} {w}x{h}: {}", t.text());
+                    px = t.screen_x;
+                    ys.push(t.screen_y);
+                }
+                assert!(ys.windows(2).all(|p| p[1] < p[0]), "{src} {w}x{h} {step}: {ys:?}");
+                let travelled = ys[0] - ys[20];
+                assert!(
+                    (travelled - 20.0 * step).abs() < 3.0,
+                    "{src} {w}x{h} {step}: {travelled}"
+                );
+            }
+        }
+    }
+}
