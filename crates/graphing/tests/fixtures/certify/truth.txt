@@ -1,0 +1,64 @@
+# Ground truth, written BEFORE looking at Giac's batch output.
+# Fields: D=domain R=range XI=x-intercepts YI=y-intercept P=parity T=period
+#         MIN/MAX=local extrema INF=inflection VA/HA/OA=asymptotes MON=monotonicity
+# k ranges over Z.  "none" = the feature is empty.  Real-valued semantics.
+# WinCalc log() is base 10.  Endpoint extrema (sqrt at 0) noted as "endpoint min".
+
+K01 x^2 | D=R | R=[0,inf) | XI=0 | YI=0 | P=even | T=none | MIN=(0,0) MAX=none | INF=none | VA=none HA=none OA=none | MON=dec(-inf,0] inc[0,inf)
+K02 x^3-2x+1/(x-1) | D=x!=1 | R=(-inf,0.546759]U[2.364148,inf) | XI=two roots of x^4-x^3-2x^2+2x+1 in (-inf,1) | YI=-1 | P=neither | T=none | MAX=(-0.872759,0.546759) MIN=(1.471580,2.364148) | INF=none (f''=6x+2/(x-1)^3 changes sign only at the pole) | VA=x=1 HA=none OA=none | MON=inc(-inf,-0.8728] dec[-0.8728,1) dec(1,1.4716] inc[1.4716,inf)
+K03 sin(x) | D=R | R=[-1,1] | XI=k*pi | YI=0 | P=odd | T=2pi | MAX=pi/2+2kpi MIN=-pi/2+2kpi | INF=k*pi | none | MON=periodic
+K04 tan(x) | D=x!=pi/2+kpi | R=R | XI=kpi | YI=0 | P=odd | T=pi | MIN/MAX=none | INF=kpi | VA=x=pi/2+kpi | MON=inc on each branch
+K05 1/x | D=x!=0 | R=y!=0 | XI=none | YI=none | P=odd | T=none | none | INF=none | VA=x=0 HA=y=0 | MON=dec(-inf,0) dec(0,inf)
+K06 ln(x) | D=x>0 | R=R | XI=1 | YI=none | P=neither | none | INF=none | VA=x=0 | MON=inc
+K07 log(x) [log10] | D=x>0 | R=R | XI=1 | YI=none | P=neither | none | INF=none | VA=x=0 | MON=inc
+K08 sqrt(x) | D=x>=0 | R=[0,inf) | XI=0 | YI=0 | P=neither | endpoint min (0,0) | INF=none | no asymptotes | MON=inc
+K09 e^x | D=R | R=(0,inf) | XI=none | YI=1 | P=neither | none | INF=none | HA=y=0 (x->-inf) | MON=inc
+K10 (x^2-1)/(x-1) | D=x!=1 | R=y!=2 | XI=-1 | YI=1 | P=neither | none | INF=none | no VA (hole at 1); the graph IS the line y=x+1 | MON=inc both branches
+K11 x^0.9 = x^(9/10) | D=x>=0 (even 10th root) | R=[0,inf) | XI=0 | YI=0 | P=neither | endpoint min (0,0) | INF=none | no asymptotes | MON=inc
+K12 x/ln(x) | D=x>0,x!=1 | R=(-inf,0)U[e,inf) | XI=none | YI=none | P=neither | MIN=(e,e) | INF=(e^2,e^2/2) | VA=x=1 (no HA, no OA) | MON=dec(0,1) dec(1,e] inc[e,inf)
+K13 1/ln(x) | D=x>0,x!=1 | R=y!=0 | XI=none | YI=none | P=neither | none | INF=(e^-2,-1/2) | VA=x=1 HA=y=0 (+inf) | MON=dec(0,1) dec(1,inf)
+K14 sin(x^2) | D=R | R=[-1,1] | XI=+-sqrt(kpi),k>=0 | YI=0 | P=even | T=none | MAX=+-sqrt(pi/2+2kpi) MIN=0 and +-sqrt(3pi/2+2kpi) (infinitely many) | INF=infinitely many | none | MON=infinitely many intervals
+K15 floor(x) | D=R | R=Z | XI=[0,1) | YI=0 | P=neither | T=none | strict extrema none (locally constant) | INF=none | none | MON=non-decreasing, jumps at integers
+K16 atan(x) | D=R | R=(-pi/2,pi/2) | XI=0 | YI=0 | P=odd | none | INF=(0,0) | HA=y=pi/2 (+inf), y=-pi/2 (-inf) | MON=inc
+K17 x*e^(-x) | D=R | R=(-inf,1/e] | XI=0 | YI=0 | P=neither | MAX=(1,1/e) | INF=(2,2/e^2) | HA=y=0 (+inf) | MON=inc(-inf,1] dec[1,inf)
+K18 sin(x)/x | D=x!=0 | R=[-0.217234,1) | XI=kpi,k!=0 | YI=none (hole) | P=even | T=none | infinitely many (tan x = x) | INF=infinitely many | HA=y=0 both | MON=infinitely many intervals
+K19 x*sin(x) | D=R | R=R | XI=kpi | YI=0 | P=even | T=none | infinitely many | infinitely many | none | -
+K20 1/(x-2) | D=x!=2 | R=y!=0 | XI=none | YI=-1/2 | P=neither | none | INF=none | VA=x=2 HA=y=0 | MON=dec both
+K21 1/(x^2-4) | D=x!=+-2 | R=(-inf,-1/4]U(0,inf) | XI=none | YI=-1/4 | P=even | MAX=(0,-1/4) | INF=none | VA=x=+-2 HA=y=0 | MON=inc(-inf,-2) inc(-2,0] dec[0,2) dec(2,inf)
+K22 cot(x) | D=x!=kpi | R=R | XI=pi/2+kpi | YI=none | P=odd | T=pi | none | INF=pi/2+kpi | VA=x=kpi | MON=dec each branch
+K23 csc(x) | D=x!=kpi | R=(-inf,-1]U[1,inf) | XI=none | YI=none | P=odd | T=2pi | MIN=(pi/2+2kpi,1) MAX=(-pi/2+2kpi,-1) | INF=none | VA=x=kpi | -
+K24 sec(x) | D=x!=pi/2+kpi | R=(-inf,-1]U[1,inf) | XI=none | YI=1 | P=even | T=2pi | MIN=(2kpi,1) MAX=(pi+2kpi,-1) | INF=none | VA=x=pi/2+kpi | -
+K25 coth(x) | D=x!=0 | R=(-inf,-1)U(1,inf) | XI=none | YI=none | P=odd | none | INF=none | VA=x=0 HA=y=1(+inf),y=-1(-inf) | MON=dec both
+K26 csch(x) | D=x!=0 | R=y!=0 | XI=none | YI=none | P=odd | none | INF=none | VA=x=0 HA=y=0 | MON=dec both
+K27 atan(1/x) | D=x!=0 | R=(-pi/2,0)U(0,pi/2) | XI=none | YI=none | P=odd | none | INF=none (sign change only at 0, not in domain) | VA=none (jump) HA=y=0 | MON=dec both
+K28 e^(-1/x^2) | D=x!=0 | R=(0,1) | XI=none | YI=none | P=even | none (inf 0 not attained) | INF=(+-sqrt(2/3),e^-1.5) | HA=y=1 | MON=dec(-inf,0) inc(0,inf)
+K29 e^(ln(x)) | D=x>0 | R=(0,inf) | XI=none | YI=none | P=neither | none | INF=none | no VA/HA (graph is y=x) | MON=inc
+K30 1/(1+e^x) | D=R | R=(0,1) | XI=none | YI=1/2 | P=neither (point-symmetric about (0,1/2)) | none | INF=(0,1/2) | HA=y=1(-inf),y=0(+inf) | MON=dec
+K31 x*ln(x) | D=x>0 | R=[-1/e,inf) | XI=1 | YI=none | P=neither | MIN=(1/e,-1/e) | INF=none | none | MON=dec(0,1/e] inc[1/e,inf)
+K32 x/x | D=x!=0 | R={1} | XI=none | YI=none | P=even | T=none (hole at 0 only) | none strict | INF=none | HA y=1 debatable | MON=constant
+K33 1/x^2 | D=x!=0 | R=(0,inf) | XI=none | YI=none | P=even | none | INF=none | VA=x=0 HA=y=0 | MON=inc(-inf,0) dec(0,inf)
+K34 log(x-5000000) [log10] | D=x>5000000 | R=R | XI=5000001 | YI=none | P=neither | none | INF=none | VA=x=5000000 | MON=inc
+K35 1/(x^2-400000000) | D=x!=+-20000 | R=(-inf,-1/400000000]U(0,inf) | XI=none | YI=-1/400000000 | P=even | MAX=(0,-1/400000000) | INF=none | VA=x=+-20000 HA=y=0 | -
+K36 tan(x)^2 | D=x!=pi/2+kpi | R=[0,inf) | XI=kpi | YI=0 | P=even | T=pi | MIN=(kpi,0) | INF=none | VA=x=pi/2+kpi | -
+K37 1/sin(x) | = csc (K23)
+K38 ln(abs(x)) | D=x!=0 | R=R | XI=+-1 | YI=none | P=even | none | INF=none | VA=x=0 | MON=dec(-inf,0) inc(0,inf)
+K39 sqrt(1/x) | D=x>0 | R=(0,inf) | XI=none | YI=none | P=neither | none | INF=none | VA=x=0 HA=y=0 | MON=dec
+K40 x^x | D=x>0 | R=[e^(-1/e),inf)=[0.692201,inf) | XI=none | YI=none | P=neither | MIN=(1/e,e^(-1/e)) | INF=none | none (lim 0+ = 1 is an endpoint) | MON=dec(0,1/e] inc[1/e,inf)
+
+A01 acot(10^15)*10^15 | constant c = 10^15*atan(10^-15) = 1 - 3.333e-31 (NOT 1) | D=R | R={c} | XI=none | YI=c | P=even | constant | none | none | HA y=c debatable | MON=constant
+A02 ln(exp(10^15)^4)-4*10^15 | constant 0 exactly | D=R | R={0} | XI=all x | YI=0 | P=even and odd | constant | none | none | - | MON=constant
+A03 tan(x)*cos(x) | = sin x with holes at pi/2+kpi | D=x!=pi/2+kpi | R=(-1,1) OPEN | XI=kpi | YI=0 | P=odd | T=2pi | MIN/MAX=NONE (they fall in the holes) | INF=kpi | NO asymptotes | MON=inc(-pi/2+2kpi,pi/2+2kpi) dec(pi/2+2kpi,3pi/2+2kpi)
+A04 cos(x)^2/cos(x)^2 | = 1 with holes at pi/2+kpi | D=x!=pi/2+kpi | R={1} | XI=none | YI=1 | P=even | T=pi | none | none | no VA | MON=constant
+A05 2*exp(-(x-1522756)^2/10^-6)+exp(-x^2) | D=R | R=(0,2] (max 2+e^-2.3e12) | XI=none | YI=1 (+2e^-2.3e18) | P=neither | MAX~(0,1) and (1522756,2); MIN at x~1000*1522756/1001=1521235 (value ~e^-2.3e12>0) | INF=4 (+-0.7071, 1522756+-0.000707) | HA=y=0 both | MON=inc(-inf,0] dec[0,m] inc[m,1522756] dec[1522756,inf)
+A06 1/(1+(x-1522756)^2/10^-12)+exp(-x^2) | D=R | R=(0,1+4.3e-25] | XI=none | YI=1+4.3e-25 | P=neither | MAX~(0,1+4.3e-25) and (1522756,1); MIN near x~8.3 | INF=4 | HA=y=0 | -
+A07 sin(x)+10^13 | D=R | R=[10^13-1,10^13+1] | XI=none | YI=10^13 | P=neither | T=2pi | MAX=pi/2+2kpi MIN=-pi/2+2kpi | INF=kpi | none
+A08 exp(-(x-100)^2)+exp(-x^2) | D=R | R=(0,1+e^-10000] | XI=none | YI=1+e^-10000 | P=neither (symmetric about x=50) | MAX~0 and ~100, MIN=(50,2e^-2500) | INF=4 (~+-0.707, ~100+-0.707) | HA=y=0 | MON=inc(-inf,~0] dec[~0,50] inc[50,~100] dec[~100,inf)
+A09 (x-10^12)/(x-(10^12+1/16)) | = 1 + (1/16)/(x-c), c=16000000000001/16 | D=x!=c | R=y!=1 | XI=10^12 | YI=16*10^12/(16*10^12+1) | P=neither | none | INF=none | VA=x=c HA=y=1 | MON=dec both
+A10 (x-10^6)^2+10^-7+(x/10^9)^2 | D=R | R=[m,inf), m=10^-7+10^-6/(1+10^-18) ~ 1.1e-6 | XI=none | YI=10^12+10^-7 | P=neither | MIN at x=10^24/(10^18+1) (=10^6-10^-12) | INF=none | none | MON=dec then inc
+A11 floor(cos(x)) | D=R | R={-1,0,1} | XI=[-pi/2+2kpi,pi/2+2kpi] minus {2kpi} | YI=1 | P=even | T=2pi | strict local MAX at 2kpi (isolated value 1); otherwise plateaus | INF=none | none | step function
+A12 atan(tan(x))+1 | sawtooth x-kpi+1 | D=x!=pi/2+kpi | R=(1-pi/2,1+pi/2) OPEN | XI=x=kpi-1 | YI=1 | P=neither | T=pi | none | INF=none | NO asymptotes (jumps) | MON=inc on each branch
+A13 sin(x)+sin(sqrt(2)x) | D=R | R=(-2,2) OPEN | XI=infinitely many | YI=0 | P=odd | T=NOT periodic | infinitely many | infinitely many | none
+A14 1/(1+cos(x)) | D=x!=pi+2kpi | R=[1/2,inf) | XI=none | YI=1/2 | P=even | T=2pi | MIN=(2kpi,1/2) | INF=none | VA=x=pi+2kpi
+A15 exp(x)^-1 | = e^-x | D=R | R=(0,inf) | XI=none | YI=1 | P=neither | none | none | HA=y=0 (+inf) | MON=dec
+A16 0*x | = 0 | D=R | R={0} | XI=all x | YI=0 | P=even and odd | constant | none | none | MON=constant
+A17..A27 duplicate K40,K14,K18,K02,K10,K04,K05,K08,K06,K09,K01

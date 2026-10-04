@@ -98,6 +98,30 @@ pub fn pole(f: &Fun<'_>, e: &Expr, n: Interval) -> Result<bool, Stop> {
     })
 }
 
+/// [`pole`], and e ≠ 0 on the rest of N: a quotient whose numerator stays
+/// away from 0, tan/cot whose sine/cosine does, sec, csc, csch, coth, and
+/// products and negations of such.
+pub fn pole_free(f: &Fun<'_>, e: &Expr, n: Interval) -> Result<bool, Stop> {
+    Ok(match e {
+        Expr::Neg(a) => pole_free(f, a, n)?,
+        Expr::Bin(BinOp::Mul, a, b) => {
+            (pole_free(f, a, n)? && nonzero_cont(f, b, n)?) || (pole_free(f, b, n)? && nonzero_cont(f, a, n)?)
+        }
+        Expr::Bin(BinOp::Div, a, b) => {
+            (simple_zero(f, b, n)? && nonzero_cont(f, a, n)?)
+                || (pole_free(f, a, n)? && nonzero_cont(f, b, n)?)
+        }
+        Expr::Bin(BinOp::Pow, a, b) => match syntactic_rational(b) {
+            Some((p, 1)) if p < 0 => simple_zero(f, a, n)?,
+            _ => false,
+        },
+        Expr::Call(Func::Tan | Func::Cot | Func::Sec | Func::Csc | Func::Csch | Func::Coth, _) => {
+            pole(f, e, n)?
+        }
+        _ => false,
+    })
+}
+
 /// |e| → ∞ as x approaches the domain end p from inside, the side `n`
 /// lies on (`n` has p as one end): the logarithm of an argument that falls
 /// to 0, and the same compositions as [`pole`].

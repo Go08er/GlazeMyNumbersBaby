@@ -649,6 +649,24 @@ fn refine(
             None => break,
         }
     }
+    // A crossing a few doubles wide may be exactly at one of them (x − 2
+    // at 2): try each, so it is known as a double, not an enclosure.
+    if exact.is_none() {
+        let mut p = l.next_up();
+        for _ in 0..8 {
+            if p >= r {
+                break;
+            }
+            if let Some(v) = point(fun, t, p)?
+                && v.lo() == c
+                && v.hi() == c
+            {
+                exact = Some(p);
+                break;
+            }
+            p = p.next_up();
+        }
+    }
     let (l, r) = match exact {
         Some(m) => (m, m),
         None => (l, r),

@@ -3,21 +3,17 @@
 use super::cert::*;
 use super::cover::{Cover, Leaf, claims};
 use super::fun::{Fun, Stop, usable};
-use super::pole::{bounded_near, end_pole, pole};
+use super::pole::{bounded_near, end_pole, pole, pole_free};
 use super::side::{Domain, IBox};
 use crate::analysis::format::Nice;
 use crate::interval::{Dec, DecInterval, Interval};
 
-/// Whether every leaf of a cover is decided (an undecided box anywhere,
-/// even the last few doubles beside a pole, leaves the row incomplete:
-/// a zero or a turn could hide there). Returns no extra claims; kept as a
-/// hook for gap policies.
-pub fn settle(cover: &Cover, _boxes: &[IBox]) -> (Vec<Claim>, bool) {
-    (Vec::new(), cover.complete())
-}
-
-fn is_gap(_l: &Leaf, _boxes: &[IBox]) -> bool {
-    false
+/// Whether every leaf of a cover is decided and the gaps beside excluded
+/// points are clear (`clear`, from [`gaps_clear`]): an undecided box
+/// anywhere leaves the row incomplete, as a zero or a turn could hide
+/// there. Returns no extra claims (the gaps' go with every row).
+pub fn settle(cover: &Cover, clear: bool) -> (Vec<Claim>, bool) {
+    (Vec::new(), cover.complete() && clear)
 }
 
 /// The region a cover's claims reach.
@@ -62,7 +58,7 @@ fn enc_of(l: f64, r: f64) -> Enc {
 
 // ---------------------------------------------------------- x-intercepts
 
-pub fn zeros(c0: &Cover, boxes: &[IBox], whole: bool, w: f64, extra: &[Claim]) -> Row<Vec<Spot>> {
+pub fn zeros(c0: &Cover, whole: bool, w: f64, extra: &[Claim], clear: bool) -> Row<Vec<Spot>> {
     let mut out: Vec<Spot> = Vec::new();
     for l in &c0.leaves {
         match *l {
@@ -76,7 +72,7 @@ pub fn zeros(c0: &Cover, boxes: &[IBox], whole: bool, w: f64, extra: &[Claim]) -
         }
     }
     out.dedup();
-    let (gaps, complete) = settle(c0, boxes);
+    let (gaps, complete) = settle(c0, clear);
     let mut cl = claims(c0, &Subject::f(0), &[0.0]);
     cl.extend(gaps);
     cl.extend(extra.iter().cloned());
@@ -126,7 +122,7 @@ enum Seg {
     Unknown,
 }
 
-fn walk(cover: &Cover, ib: &IBox, boxes: &[IBox]) -> Vec<Seg> {
+fn walk(cover: &Cover, ib: &IBox) -> Vec<Seg> {
     let mut out = Vec::new();
     for l in cover.leaves.iter().filter(|l| {
         let (a, b) = l.span();
@@ -168,12 +164,7 @@ fn walk(cover: &Cover, ib: &IBox, boxes: &[IBox]) -> Vec<Seg> {
                 }
             }
             Leaf::Equal { .. } => out.push(Seg::Flat),
-            Leaf::Undefined { .. } => out.push(Seg::Unknown),
-            Leaf::Flag { .. } => {
-                if !is_gap(l, boxes) {
-                    out.push(Seg::Unknown);
-                }
-            }
+            Leaf::Undefined { .. } | Leaf::Flag { .. } => out.push(Seg::Unknown),
         }
     }
     // Merge runs of the same sign, and a zero seen from both sides (its
@@ -229,13 +220,14 @@ pub fn extrema(
     boxes: &[IBox],
     whole: bool,
     w: f64,
+    clear: bool,
 ) -> Result<Row<Vec<Extremum>>, Stop> {
-    let (gaps, mut complete) = settle(c1, boxes);
+    let (gaps, mut complete) = settle(c1, clear);
     let mut out = Vec::new();
     let mut cl = claims(c1, &Subject::f(1), &[0.0]);
     cl.extend(gaps);
     for ib in boxes {
-        let segs = walk(c1, ib, boxes);
+        let segs = walk(c1, ib);
         let (ch, done) = changes(&segs);
         complete &= done;
         for (x, from_pos) in ch {
@@ -277,13 +269,14 @@ pub fn inflections(
     boxes: &[IBox],
     whole: bool,
     w: f64,
+    clear: bool,
 ) -> Result<Row<Vec<Inflection>>, Stop> {
-    let (gaps, mut complete) = settle(c2, boxes);
+    let (gaps, mut complete) = settle(c2, clear);
     let mut out = Vec::new();
     let mut cl = claims(c2, &Subject::f(2), &[0.0]);
     cl.extend(gaps);
     for ib in boxes {
-        let segs = walk(c2, ib, boxes);
+        let segs = walk(c2, ib);
         let (ch, done) = changes(&segs);
         complete &= done;
         for (x, _) in ch {
@@ -320,7 +313,7 @@ pub fn inflections(
 fn monotone_pieces(c1: &Cover, boxes: &[IBox]) -> Option<Vec<(Monotone, bool, bool)>> {
     let mut out = Vec::new();
     for ib in boxes {
-        let segs = walk(c1, ib, boxes);
+        let segs = walk(c1, ib);
         if !changes(&segs).1 {
             return None;
         }
@@ -379,8 +372,8 @@ fn monotone_pieces(c1: &Cover, boxes: &[IBox]) -> Option<Vec<(Monotone, bool, bo
     Some(out)
 }
 
-pub fn monotonicity(c1: &Cover, boxes: &[IBox], whole: bool, w: f64) -> Row<Vec<Monotone>> {
-    let (gaps, complete) = settle(c1, boxes);
+pub fn monotonicity(c1: &Cover, boxes: &[IBox], whole: bool, w: f64, clear: bool) -> Row<Vec<Monotone>> {
+    let (gaps, complete) = settle(c1, clear);
     let Some(pieces) = monotone_pieces(c1, boxes) else {
         return Row::unknown("f′'s sign is not decided everywhere");
     };
@@ -424,10 +417,10 @@ fn beside(p: f64, ib: &IBox, from_right: bool) -> Interval {
 
 /// f's sign right beside a box end, from the cover of f (the first
 /// decided leaf inward from that end).
-fn sign_beside(c0: &Cover, ib: &IBox, at_start: bool, boxes: &[IBox]) -> Option<bool> {
+fn sign_beside(c0: &Cover, ib: &IBox, at_start: bool) -> Option<bool> {
     let inside = |l: &&Leaf| {
         let (a, b) = l.span();
-        a >= ib.a && b <= ib.b && !is_gap(l, boxes)
+        a >= ib.a && b <= ib.b
     };
     let leaf = if at_start {
         c0.leaves.iter().filter(inside).min_by(|x, y| x.span().0.total_cmp(&y.span().0))
@@ -482,6 +475,79 @@ fn classify(f: &Fun<'_>, x: Enc, boxes: &[IBox]) -> Result<(super::pole::Near, O
         ));
     }
     Ok((Near::Unknown, None))
+}
+
+/// Whether f⁽ᵏ⁾ has no zero in any gap (the reals between an excluded
+/// point or domain end and the first double a box starts from, the
+/// excluded point included: f's enclosure there covers where f is
+/// defined). A zero there would be a feature less than an ulp from the
+/// excluded point, which no box decides (`ln(x) + 10⁶` has its root at
+/// e^(−10⁶), below every double): a row is complete only if the gaps are
+/// clear. For f itself a pole with no zero beside it (a quotient whose
+/// numerator stays away from 0) also clears its gaps.
+pub fn gaps_clear(f: &Fun<'_>, k: usize, gaps: &[XBox], boxes: &[IBox]) -> Result<bool, Stop> {
+    let (inner, _) = excluded_points(boxes);
+    for g in gaps {
+        let iv = Interval::new(g.a.0, g.b.0);
+        let c = f.ser(iv, k)?[k];
+        if !c.is_empty() && c.ne0() {
+            continue;
+        }
+        if k > 0
+            && let Some(d) = &f.derivs
+        {
+            let v = f.ser_of(&d[k - 1], iv, 0)?[0];
+            if !v.is_empty() && v.ne0() {
+                continue;
+            }
+        }
+        if k == 0 {
+            let near = inner
+                .iter()
+                .filter(|x| g.a.0 <= x.lo.0 && x.hi.0 <= g.b.0)
+                .find_map(|x| around(*x, boxes));
+            if let Some(n) = near
+                && n.lo() <= iv.lo()
+                && iv.hi() <= n.hi()
+                && pole_free(f, &f.eval, n)?
+            {
+                continue;
+            }
+        }
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// f's sign right beside an excluded point or domain end (enclosed by
+/// `x`), on the side of the box `ib` (`is_lo`: ib starts there): from f
+/// over the gap between them, or from the first leaf when f has a pole
+/// there and no zero beside it.
+fn gap_sign(
+    f: &Fun<'_>,
+    x: Enc,
+    ib: &IBox,
+    is_lo: bool,
+    c0: &Cover,
+    boxes: &[IBox],
+) -> Result<Option<bool>, Stop> {
+    let g = if is_lo {
+        Interval::new(x.lo.0, ib.a)
+    } else {
+        Interval::new(ib.b, x.hi.0)
+    };
+    let v = f.val(g)?;
+    if !v.is_empty() && v.ne0() {
+        return Ok(Some(v.gt0()));
+    }
+    if let Some(n) = around(x, boxes)
+        && n.lo() <= g.lo()
+        && g.hi() <= n.hi()
+        && pole_free(f, &f.eval, n)?
+    {
+        return Ok(sign_beside(c0, ib, is_lo));
+    }
+    Ok(None)
 }
 
 /// The excluded points between boxes, and domain ends (one-sided).
@@ -1132,7 +1198,7 @@ fn end_value(
                 near: XBox::new(n.lo(), n.hi()),
                 at: XBox { a: x.lo, b: x.hi },
             });
-            sign_beside(c0, ib, is_lo, boxes).map(infinite)
+            gap_sign(f, x, ib, is_lo, c0, boxes)?.map(infinite)
         }
     })
 }
@@ -1196,11 +1262,12 @@ pub fn range(
     boxes: &[IBox],
     whole: bool,
     w: f64,
+    clear: bool,
 ) -> Result<Row<Vec<Piece>>, Stop> {
     if !dom.row.is_certified() || !whole {
         return Ok(Row::unknown("the domain is not known"));
     }
-    let (_, complete) = settle(c1, boxes);
+    let (_, complete) = settle(c1, clear);
     if !complete {
         return Ok(Row::unknown("f′'s sign is not decided everywhere"));
     }

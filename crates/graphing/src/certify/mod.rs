@@ -251,20 +251,43 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     // every certificate built on the boxes.
     let mut gap_claims = gaps.clone();
     gap_claims.extend(dom.claims.iter().filter(|c| matches!(c, Claim::Family { .. })).cloned());
-    let monotonicity = with(rows::monotonicity(&c1, &boxes, whole, w), &gap_claims);
+    // Is f⁽ᵏ⁾ free of zeros in the gaps? (Out of budget: not shown.)
+    let gap_boxes: Vec<XBox> = gaps
+        .iter()
+        .filter_map(|c| match c {
+            Claim::Gap { x } => Some(*x),
+            _ => None,
+        })
+        .collect();
+    let clear = |k: usize| rows::gaps_clear(f, k, &gap_boxes, &boxes).unwrap_or(false);
+    let (clear0, clear1, clear2) = (clear(0), clear(1), clear(2));
+    if std::env::var_os("CERTIFY_DEBUG").is_some() {
+        eprintln!("gaps {gap_boxes:?}: clear {clear0} {clear1} {clear2}");
+        for g in &gap_boxes {
+            let iv = crate::interval::Interval::new(g.a.0, g.b.0);
+            eprintln!("  {g:?}: {:?}", f.ser(iv, 2).map(|s| s.to_vec()));
+        }
+    }
+    let monotonicity = with(rows::monotonicity(&c1, &boxes, whole, w, clear1), &gap_claims);
     Analysis {
         source: source.to_string(),
         formula: f.expr.formula(),
         evaluated: evaluated(f),
         unit: unit_name(f.opts.trig_unit).into(),
-        x_intercepts: rows::zeros(&c0, &boxes, whole, w, &gap_claims),
+        x_intercepts: rows::zeros(&c0, whole, w, &gap_claims, clear0),
         y_intercept: or_unknown(rows::y_intercept(f)),
         parity: or_unknown(rows::parity(f)),
         period: or_unknown(rows::period(f, &dom, &monotonicity)),
-        extrema: with(or_unknown(rows::extrema(f, &c1, &boxes, whole, w)), &gap_claims),
-        inflections: with(or_unknown(rows::inflections(f, &c2, &boxes, whole, w)), &gap_claims),
+        extrema: with(or_unknown(rows::extrema(f, &c1, &boxes, whole, w, clear1)), &gap_claims),
+        inflections: with(
+            or_unknown(rows::inflections(f, &c2, &boxes, whole, w, clear2)),
+            &gap_claims,
+        ),
         monotonicity,
-        range: with(or_unknown(rows::range(f, &dom, &c0, &c1, &boxes, whole, w)), &gap_claims),
+        range: with(
+            or_unknown(rows::range(f, &dom, &c0, &c1, &boxes, whole, w, clear1)),
+            &gap_claims,
+        ),
         vertical: with(or_unknown(rows::vertical(f, &dom, &c0, &boxes, whole)), &gap_claims),
         horizontal: or_unknown(rows::horizontal(f, &dom, whole, w)),
         domain: dom.row.clone(),
