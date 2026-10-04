@@ -1,11 +1,12 @@
 //! Prints the function analysis panel for each equation given on the
 //! command line, e.g. `cargo run -p graphing --example kgf -- "y = x^2" "tan(x)"`.
 //!
-//! With `--gate`, also what the engine alone said and why the gate
+//! With `--legacy`, the earlier engine's panel instead (behind its gate);
+//! with `--gate`, also what that engine alone said and why the gate
 //! (`analysis::verify`) dropped what it dropped.
 
 use graphing::Equation;
-use graphing::analysis::{KeyGraphFeatures, analyze_str, analyze_ungated, verify};
+use graphing::analysis::{KeyGraphFeatures, analyze_legacy, analyze_str, analyze_ungated, verify};
 use graphing::compile::CompileOptions;
 
 fn print(k: &KeyGraphFeatures) {
@@ -33,9 +34,16 @@ fn print(k: &KeyGraphFeatures) {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let gate = args.iter().any(|a| a == "--gate");
-    for a in args.iter().filter(|a| *a != "--gate") {
+    let legacy = args.iter().any(|a| a == "--legacy");
+    for a in args.iter().filter(|a| !a.starts_with("--")) {
         let t = std::time::Instant::now();
-        let k = analyze_str(a);
+        // `--legacy`: the earlier engine behind its gate, for comparison.
+        let k = match (legacy, Equation::parse(a)) {
+            (true, Ok(eq)) => {
+                analyze_legacy(&eq, &CompileOptions::default(), None).expect("not cancellable")
+            }
+            _ => analyze_str(a),
+        };
         let dt = t.elapsed();
         println!("== {a}   ({:.1} ms)", dt.as_secs_f64() * 1e3);
         print(&k);

@@ -544,8 +544,10 @@ impl F {
 
 // ---------------------------------------------------------------- claims
 
+/// A complete answer: not unknown, and not a partial list (proven items,
+/// maybe not all; the certify corpus checks those against the truth).
 fn definite(k: &KeyGraphFeatures, flag: u32) -> bool {
-    k.too_complex_features & flag == 0
+    (k.too_complex_features | k.partial_features) & flag == 0
 }
 
 /// Members of a family near the origin.

@@ -984,6 +984,13 @@ pub fn vertical(
         };
         let p = if from_right { x.hi.0 } else { x.lo.0 };
         let n = beside(p, ib, from_right);
+        // An end known only to an enclosure: bounded up to the end means
+        // bounded over the enclosure too (where f is defined there).
+        let n = if x.is_point() {
+            n
+        } else {
+            n.hull(Interval::new(x.lo.0, x.hi.0))
+        };
         let near = XBox::new(n.lo(), n.hi());
         if x.is_point() && end_pole(f, &f.eval, n, p)? {
             out.push(Spot::At(x));

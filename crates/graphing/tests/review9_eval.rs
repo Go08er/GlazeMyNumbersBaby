@@ -151,12 +151,17 @@ fn a_reciprocal_power_of_exp_is_defined_everywhere() {
         assert!(known(&r, flags::VERTICAL_ASYMPTOTES), "{src}");
     }
     assert_eq!(k("y=exp(x)^-1").horizontal_asymptotes, ["y = 0"]);
-    // The limit 0 at +∞ is proven to an enclosure only: ≈0 (the +∞ side
-    // first, like the original).
+    // The limit 0 at +∞ is proven to an enclosure holding 0 only: never
+    // written as 0, so the row is unknown.
     for src in ["y=atan(exp(x)^-1)", "y=atan(1/exp(x))"] {
         let r = k(src);
         assert_eq!(r.domain, "x ∈ ℝ", "{src}");
-        assert_eq!(r.horizontal_asymptotes, ["y = ≈0", "y = π/2"], "{src}");
+        assert!(
+            r.horizontal_asymptotes == ["y = 0", "y = π/2"]
+                || !known(&r, flags::HORIZONTAL_ASYMPTOTES),
+            "{src}: {:?}",
+            r.horizontal_asymptotes
+        );
     }
 }
 

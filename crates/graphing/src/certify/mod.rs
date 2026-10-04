@@ -9,8 +9,8 @@
 //! conditions of the original tree (divisors, logarithm arguments, roots,
 //! the trigonometric poles) prove where f is defined.
 //!
-//! Not wired into the panel yet: `crate::analysis` still produces what the
-//! app shows.
+//! The panel shows these rows: `crate::analysis::analyze` certifies and
+//! `analysis::certified` writes the rows from the proofs.
 
 pub mod cert;
 pub mod cover;

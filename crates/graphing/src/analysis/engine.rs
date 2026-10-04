@@ -803,6 +803,7 @@ fn map_affine(kg: KeyGraphFeatures, fun: &Fun, a: f64, b: f64) -> KeyGraphFeatur
     }
     let data = AnalysisData {
         period,
+        repeat: None,
         domain: ivs(&d.domain),
         excluded: fams(&d.excluded),
         range: d.range.clone(),
@@ -4454,6 +4455,7 @@ fn analyze_aperiodic(
     k.too_complex_features = too;
     k.data = AnalysisData {
         period: None,
+        repeat: None,
         domain,
         excluded: sc.excluded.iter().map(|&x| Family::single(x)).collect(),
         range,
@@ -4788,6 +4790,7 @@ fn analyze_periodic(
     k.too_complex_features = too;
     k.data = AnalysisData {
         period: Some(p),
+        repeat: None,
         domain,
         excluded: excluded_fam,
         range,

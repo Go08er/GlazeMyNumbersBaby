@@ -155,6 +155,9 @@ impl Family {
 pub struct AnalysisData {
     /// Fundamental period, if periodic.
     pub period: Option<f64>,
+    /// When the fundamental period isn't known: a period the per-period
+    /// lists (monotone intervals) repeat with.
+    pub repeat: Option<f64>,
     /// Domain intervals (within one period `[w, w + period]` if periodic).
     pub domain: Vec<Interval>,
     /// Isolated excluded points (families if periodic).

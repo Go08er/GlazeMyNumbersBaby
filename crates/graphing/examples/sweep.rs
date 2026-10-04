@@ -1,10 +1,12 @@
 //! Adversarial invariant sweep over function analysis (not run in CI).
 //!
-//! `cargo run --release -p graphing --example sweep [-- FILTER] [--all] [--check-ref] [--ungated]`
+//! `cargo run --release -p graphing --example sweep [-- FILTER] [--all] [--check-ref] [--legacy] [--ungated]`
 //! (`--check-ref` also checks the reference evaluator against the compiled
-//! program; `--ungated` checks the engine's own answers, before the
-//! gate in `analysis::verify`; `-- --at EXPR X [deg|grad]` shows one
-//! function at one point.)
+//! program; the panel is the certified analysis, `--legacy` checks the
+//! earlier engine behind its gate instead (`analysis::analyze_legacy`) and
+//! `--ungated` that engine's own answers, before the gate in
+//! `analysis::verify`; `-- --at EXPR X [deg|grad]` shows one function at one
+//! point.)
 //!
 //! For a set of base functions it analyses shifted, offset, scaled and
 //! stretched variants (alone and combined), plus hand-written families
@@ -66,7 +68,9 @@ use std::f64::consts::PI;
 
 use graphing::analysis::truth::*;
 use graphing::analysis::verify::{self, *};
-use graphing::analysis::{Family, Interval, Periodicity, analyze, analyze_ungated, flags};
+use graphing::analysis::{
+    Family, Interval, Periodicity, analyze, analyze_legacy, analyze_ungated, flags,
+};
 use graphing::compile::CompileOptions;
 use graphing::{Equation, TrigUnit};
 
@@ -728,12 +732,14 @@ const FEATURES: [(u32, &str); 13] = [
 ];
 
 /// How many functions, how many the analysis refused, and per feature how
-/// many answers were unknown (the rest of the analysed ones are definite).
+/// many answers were unknown and how many partial (proven items, maybe not
+/// all; the rest of the analysed ones are complete).
 #[derive(Default, Clone)]
 struct Coverage {
     fns: usize,
     refused: usize,
     unknown: [usize; 13],
+    partial: [usize; 13],
 }
 
 impl Coverage {
@@ -744,8 +750,10 @@ impl Coverage {
             return;
         }
         for (i, (flag, _)) in FEATURES.iter().enumerate() {
-            if a.unknown(*flag) {
+            if a.k.too_complex_features & flag != 0 {
                 self.unknown[i] += 1;
+            } else if a.k.partial_features & flag != 0 {
+                self.partial[i] += 1;
             }
         }
     }
@@ -754,6 +762,7 @@ impl Coverage {
         self.refused += o.refused;
         for i in 0..13 {
             self.unknown[i] += o.unknown[i];
+            self.partial[i] += o.partial[i];
         }
     }
     fn unknown_total(&self) -> usize {
@@ -790,6 +799,8 @@ fn analysed(expr: &str, unit: TrigUnit) -> Option<Analysed<'static>> {
     let ast = eq.explicit()?.1.clone();
     let k = if UNGATED.load(std::sync::atomic::Ordering::Relaxed) {
         analyze_ungated(&eq, &opts)
+    } else if LEGACY.load(std::sync::atomic::Ordering::Relaxed) {
+        analyze_legacy(&eq, &opts, None).expect("not cancellable")
     } else {
         analyze(&eq, &opts)
     };
@@ -833,6 +844,9 @@ fn tally(expr: &str, unit: TrigUnit) {
 /// `--ungated`: check what the engine alone says (`analyze_ungated`), not
 /// what the gate lets through.
 static UNGATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `--legacy`: check the earlier engine behind its gate (`analyze_legacy`).
+static LEGACY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Known undefined points must be outside the domain and never intercepts.
 fn check_undefined(a: &Analysed, points: &[f64], r: &mut Report) {
@@ -1009,6 +1023,38 @@ impl Aff {
 /// Match two lists of families one to one with `same`, comparing each of
 /// the first with the nearest member of each of the second.
 fn match_families(a: &[Family], b: &[Family], same: &dyn Fn(f64, f64) -> bool) -> bool {
+    // One set may be written with a shorter period (kπ) and the other as
+    // several families with a multiple of it (2kπ and π + 2kπ): compare
+    // both at the longest period.
+    let longest = a
+        .iter()
+        .chain(b)
+        .filter_map(|f| f.period)
+        .fold(0.0, f64::max);
+    let split = |v: &[Family]| -> Vec<Family> {
+        let mut out = Vec::new();
+        for f in v {
+            match f.period {
+                Some(p) if longest > 0.0 && p > 0.0 => {
+                    let n = (longest / p).round();
+                    if (2.0..=64.0).contains(&n) && (n * p - longest).abs() <= 1e-9 * longest {
+                        for j in 0..n as i64 {
+                            out.push(Family {
+                                x: f.x + j as f64 * p,
+                                period: Some(longest),
+                            });
+                        }
+                    } else {
+                        out.push(*f);
+                    }
+                }
+                _ => out.push(*f),
+            }
+        }
+        out
+    };
+    let (a, b) = (split(a), split(b));
+    let (a, b) = (a.as_slice(), b.as_slice());
     if a.len() != b.len() {
         return false;
     }
@@ -1688,6 +1734,9 @@ fn main() {
     if args.iter().any(|a| a == "--ungated") {
         UNGATED.store(true, std::sync::atomic::Ordering::Relaxed);
     }
+    if args.iter().any(|a| a == "--legacy") {
+        LEGACY.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let why = args.iter().any(|a| a == "--why");
     let wanted = |e: &str| filter.as_ref().is_none_or(|f| e.contains(f.as_str()));
     let mut r = Report::default();
@@ -1898,14 +1947,16 @@ fn main() {
     }
     let analysed = sum.fns - sum.refused;
     println!(
-        "\n## coverage: {} functions, {} refused; per feature, definite / unknown of {analysed} analysed",
+        "\n## coverage: {} functions, {} refused; per feature, complete / partial / unknown of {analysed} analysed",
         sum.fns, sum.refused
     );
     for (i, (_, name)) in FEATURES.iter().enumerate() {
+        let complete = analysed - sum.unknown[i] - sum.partial[i];
         println!(
-            "  {name:<9} {:>6} / {:<6} ({:.1}% definite)",
-            analysed - sum.unknown[i],
+            "  {name:<9} {complete:>6} / {:<5} / {:<6} ({:.1}% complete, {:.1}% answered)",
+            sum.partial[i],
             sum.unknown[i],
+            100.0 * complete as f64 / analysed.max(1) as f64,
             100.0 * (analysed - sum.unknown[i]) as f64 / analysed.max(1) as f64
         );
     }

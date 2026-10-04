@@ -715,6 +715,13 @@ fn divisors(n: i128) -> Option<Vec<i128>> {
 /// rational roots, and the roots of what is left when that is a
 /// quadratic. Roots of a remaining cubic or higher factor are left out.
 pub fn exact_roots(p: &Poly) -> Vec<Ex> {
+    exact_roots_hinted(p, &[])
+}
+
+/// [`exact_roots`], first dividing out the `hints` that are roots (points
+/// found otherwise, exactly: a far root whose constant term is too large
+/// to factor, leaving a quadratic).
+pub fn exact_roots_hinted(p: &Poly, hints: &[Q]) -> Vec<Ex> {
     let mut out: Vec<Ex> = Vec::new();
     let Some(deg) = p.degree() else {
         return out;
@@ -728,6 +735,18 @@ pub fn exact_roots(p: &Poly) -> Vec<Ex> {
             out.push(e);
         }
     };
+    for &h in hints {
+        if rest.degree().is_some_and(|d| d > 0) && rest.eval(h) == Some(Q::ZERO) {
+            push(Ex::q(h), &mut out);
+            let lin = Poly::from_coefficients(vec![h.neg().unwrap_or(Q::ZERO), Q::ONE]);
+            while let Some((qt, rm)) = rest.divmod(&lin) {
+                if !rm.is_zero() {
+                    break;
+                }
+                rest = qt;
+            }
+        }
+    }
     // Rational roots: p/q with p | a₀ and q | aₙ of the integer form.
     let rational_roots = |rest: &Poly| -> Option<Vec<Q>> {
         let c = rest.coefficients();

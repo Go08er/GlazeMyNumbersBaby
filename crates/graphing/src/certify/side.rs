@@ -55,6 +55,12 @@ const AT_LEAST_ONE: &[Seg] = &[seg(1.0, true, INF, false)];
 const ZERO_TO_ONE: &[Seg] = &[seg(0.0, false, 1.0, true)];
 const LOG_BASE: &[Seg] = &[seg(0.0, false, 1.0, false), seg(1.0, false, INF, false)];
 
+/// Every value in [lo, hi] is allowed (one segment holds them all).
+fn allows_all(segs: &[Seg], lo: f64, hi: f64) -> bool {
+    segs.iter()
+        .any(|s| (lo > s.lo || (lo == s.lo && s.lo_in)) && (hi < s.hi || (hi == s.hi && s.hi_in)))
+}
+
 fn allows(segs: &[Seg], v: f64) -> bool {
     segs.iter()
         .any(|s| (v > s.lo || (v == s.lo && s.lo_in)) && (v < s.hi || (v == s.hi && s.hi_in)))
@@ -832,7 +838,39 @@ pub fn domain(f: &Fun<'_>) -> Domain {
             }
             cl.extend(claims(&cover, &subject, &cs));
             match pieces_of(f, s, &cs, p, &cover) {
-                Ok(Some(ps)) => next.extend(ps),
+                Ok(Some(ps)) => {
+                    // A closed end known only to an enclosure (a gap the
+                    // cover left out) keeps this piece's bound: the
+                    // condition must hold over the whole enclosure, so at
+                    // the end itself (1/√(1 − (x/0.001)²) is undefined at
+                    // the ends √ allows).
+                    for q in &ps {
+                        for (b, own) in [(q.lo, p.lo), (q.hi, p.hi)] {
+                            if let Bound::At { x, closed: true } = b
+                                && !x.is_point()
+                                && b == own
+                            {
+                                let v = f.ser_of(&s.g, Interval::new(x.lo.0, x.hi.0), 0);
+                                let ok = match v {
+                                    Ok(v) => {
+                                        let v = v[0];
+                                        !v.is_empty()
+                                            && s.zero_if_exponent.is_none()
+                                            && allows_all(&s.allowed, v.lo(), v.hi())
+                                    }
+                                    Err(_) => false,
+                                };
+                                if !ok {
+                                    return unknown(
+                                        "a closed end known to an enclosure is not decided".into(),
+                                        families,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    next.extend(ps)
+                }
                 Ok(None) => {
                     return unknown(
                         format!("where {} is allowed is not decided", s.g.formula()),

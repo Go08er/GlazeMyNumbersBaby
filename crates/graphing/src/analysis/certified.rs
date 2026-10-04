@@ -178,12 +178,11 @@ fn approx_sig(e: Enc, max: i32) -> String {
     {
         return t;
     }
-    // Zero within rounding.
-    if lo <= 0.0 && 0.0 <= hi && hi - lo <= 1e-12 {
-        return "≈0".into();
-    }
+    // A value that may be 0 is never written as 0, nor ≈0: not one digit
+    // of it is known (below).
+    // Six significant digits known (or the more asked for), or none shown.
     if !(lo <= 0.0 && 0.0 <= hi) {
-        for sig in (1..=max).rev() {
+        for sig in (6..=max.max(6)).rev() {
             let (a, b) = (
                 format_decimal_digits(lo, sig),
                 format_decimal_digits(hi, sig),
@@ -197,7 +196,8 @@ fn approx_sig(e: Enc, max: i32) -> String {
             }
         }
     }
-    // Not even one digit fixed: the enclosure itself, rounded outward.
+    // Not six digits fixed: the enclosure itself, rounded outward (the row
+    // it is in is shown as unknown).
     UNFIXED.with(|u| u.set(true));
     format!("[{}, {}]", outward(lo, false), outward(hi, true))
 }
@@ -425,10 +425,12 @@ struct Rat {
     d: Poly,
     p: [Poly; 3],
     roots: [OnceCell<Vec<Ex>>; 3],
+    /// Points the certifier pinned exactly, tried first as roots.
+    hints: Vec<Q>,
 }
 
 impl Rat {
-    fn new(r: &Rational) -> Option<Rat> {
+    fn new(r: &Rational, hints: Vec<Q>) -> Option<Rat> {
         let (n, d) = (r.num.clone(), r.den.clone());
         let (dn, dd) = (exact::derivative(&n)?, exact::derivative(&d)?);
         let p1 = dn.mul(&d)?.sub(&n.mul(&dd)?)?;
@@ -439,11 +441,12 @@ impl Rat {
             d,
             p: [n, p1, p2],
             roots: Default::default(),
+            hints,
         })
     }
 
     fn roots(&self, k: usize) -> &[Ex] {
-        self.roots[k].get_or_init(|| exact::exact_roots(&self.p[k]))
+        self.roots[k].get_or_init(|| exact::exact_roots_hinted(&self.p[k], &self.hints))
     }
 }
 
@@ -478,10 +481,11 @@ fn derivative_trees(f: &Expr, unit: TrigUnit, lits: &ExactLiterals) -> [Option<E
         return none;
     }
     let mut ok = true;
-    let reserved = [
-        std::f64::consts::LN_10.to_bits(),
-        unit.to_radians_factor().to_bits(),
-    ];
+    // (In radians the unit factor is 1, which is no constant of its own.)
+    let mut reserved = vec![std::f64::consts::LN_10.to_bits()];
+    if unit != TrigUnit::Radians {
+        reserved.push(unit.to_radians_factor().to_bits());
+    }
     f.visit(&mut |n| {
         if let Expr::Num(v) = n {
             let short = lits.exact(*v).is_some_and(|q| {
@@ -551,7 +555,28 @@ impl<'a> Ctx<'a> {
         let rf = honest_exponents(&f, lits)
             .then(|| rational_form(&f, lits))
             .flatten();
-        let rat = rf.as_ref().and_then(|r| Rat::new(&r.reduced));
+        // Every x the certifier pinned to a double.
+        let mut hints: Vec<Q> = Vec::new();
+        let mut hint = |e: Enc| {
+            if e.is_point()
+                && let Some(q) = Q::from_f64(e.lo.0)
+                && !hints.contains(&q)
+            {
+                hints.push(q);
+            }
+        };
+        for e in a.extrema.value().into_iter().flatten() {
+            hint(e.x);
+        }
+        for i in a.inflections.value().into_iter().flatten() {
+            hint(i.x);
+        }
+        for s in a.x_intercepts.value().into_iter().flatten() {
+            if let Spot::At(x) = s {
+                hint(*x);
+            }
+        }
+        let rat = rf.as_ref().and_then(|r| Rat::new(&r.reduced, hints));
         let d = if rat.is_some() {
             [None, None]
         } else {
@@ -1247,10 +1272,19 @@ impl Ctx<'_> {
                 vals.iter().all(|v| same(*v, vals[0])).then_some(vals[0])
             })
         };
+        // A closed end is a value f takes: written only when exact or known
+        // to the last few doubles (no rounding allowance for "attained").
+        let tight = |e: Enc| {
+            let m = e.lo.0.abs().max(e.hi.0.abs());
+            e.hi.0 - e.lo.0 <= 32.0 * f64::EPSILON * m
+        };
+        if closed && exact.is_none() && !tight(y) {
+            UNFIXED.with(|u| u.set(true));
+        }
         let mut e = finite(Num { exact, enc: y }, closed);
-        // Not exact: the numbers keep the enclosure's outer end (the range
-        // lies within it).
-        if exact.is_none() {
+        // An open end known only to an enclosure: the numbers keep its
+        // outer end (the range lies within it).
+        if exact.is_none() && !closed {
             e.value = if low { y.lo.0 } else { y.hi.0 };
         }
         e
@@ -1869,9 +1903,10 @@ pub(super) fn features(
                     Tail::Left => AsymptoteSide::NegativeInfinity,
                     Tail::Right => AsymptoteSide::PositiveInfinity,
                 };
+                // (Limits that agree to fifteen places are one line.)
                 let agree = |m: &Num| match (m.exact, n.exact) {
                     (Some(a), Some(b)) => same(a, b),
-                    _ => m.enc == n.enc && m.enc.is_point(),
+                    _ => (m.enc == n.enc && m.enc.is_point()) || m.text_sig(15) == n.text_sig(15),
                 };
                 if let Some(l) = lines.iter_mut().find(|(m, _)| agree(m)) {
                     l.1 = AsymptoteSide::AnyInfinity;
@@ -1886,9 +1921,16 @@ pub(super) fn features(
                 false,
             );
             if out.k.too_complex_features & flags::HORIZONTAL_ASYMPTOTES == 0 {
+                // Two lines that read alike get the digits that tell them
+                // apart.
+                let texts: Vec<String> = lines.iter().map(|(n, _)| n.text()).collect();
                 out.k.horizontal_asymptotes = lines
                     .iter()
-                    .map(|(n, _)| format!("y = {}", n.text()))
+                    .enumerate()
+                    .map(|(i, (n, _))| {
+                        let twin = texts.iter().filter(|t| **t == texts[i]).count() > 1;
+                        format!("y = {}", if twin { n.text_sig(15) } else { n.text() })
+                    })
                     .collect();
                 data.horizontal_asymptotes = lines.iter().map(|(n, s)| (n.value(), *s)).collect();
             }
@@ -2073,6 +2115,9 @@ pub(super) fn features(
                 false,
             );
             if out.k.too_complex_features & flags::MONOTONE_INTERVALS == 0 {
+                if data.period.is_none() {
+                    data.repeat = per.map(|p| p.value());
+                }
                 for (_, (text, dir, lo, hi)) in pieces {
                     data.monotonicity.push((data_interval(&lo, &hi), dir));
                     out.k.monotonicity.push((text, dir));
@@ -2277,14 +2322,15 @@ mod tests {
             approx(Enc::new(0.9999999999999999, 1.0000000000000002)),
             "≈1"
         );
-        assert_eq!(approx(Enc::new(-1e-17, 1e-17)), "≈0");
+        // Maybe 0: no digit known.
+        assert_eq!(approx(Enc::new(-1e-17, 1e-17)), "[−1×10⁻¹⁷, 1×10⁻¹⁷]");
         assert_eq!(approx(Enc::point(0.0)), "0");
         assert_eq!(
             approx(Enc::new(0.49999999999999994, 0.5000000000000001)),
             "≈0.5"
         );
-        // Only the digits the enclosure fixes.
-        assert_eq!(approx(Enc::new(2.41, 2.42)), "≈2.4");
+        // Fewer than six digits fixed: not a value to show.
+        assert_eq!(approx(Enc::new(2.41, 2.42)), "[2.4, 2.5]");
         // None fixed: the enclosure, rounded outward.
         assert_eq!(
             approx(Enc::new(-std::f64::consts::FRAC_PI_2, 0.0)),

@@ -510,14 +510,22 @@ impl<'c> Analysed<'c> {
     pub fn ok(&self) -> bool {
         self.k.analysis_error == AnalysisError::NoError
     }
+    /// The feature is not a complete answer: unknown, or a partial list
+    /// (its items proven by the certifier, maybe not all of them). Checks
+    /// of a feature as a whole skip it.
     pub fn unknown(&self, flag: u32) -> bool {
-        self.k.too_complex_features & flag != 0
+        (self.k.too_complex_features | self.k.partial_features) & flag != 0
     }
     pub fn d(&self) -> &AnalysisData {
         &self.k.data
     }
+    /// The period the per-period lists repeat with: the fundamental one,
+    /// or (when that is unknown) a period they were found over.
     pub fn period(&self) -> Option<f64> {
-        self.d().period.filter(|p| p.is_finite() && *p > 0.0)
+        self.d()
+            .period
+            .or(self.d().repeat)
+            .filter(|p| p.is_finite() && *p > 0.0)
     }
     /// The x-intercepts are every x of the domain ("x ∈ ℝ").
     pub fn zero_everywhere(&self) -> bool {
@@ -887,7 +895,8 @@ pub fn check_flagged(a: &Analysed, r: &mut Report) {
             d.oblique_asymptotes.len(),
         ),
     ] {
-        if a.unknown(flag) && n > 0 {
+        // (A partial list keeps its proven items.)
+        if a.k.too_complex_features & flag != 0 && n > 0 {
             r.fail(
                 "flagged-unknown-but-has-values",
                 flag,
@@ -3209,7 +3218,12 @@ pub fn check_vertical(a: &Analysed, xs: &[f64], ys: &[f64], r: &mut Report) {
             continue;
         }
         let c = xs[i];
-        if d.vertical_asymptotes.iter().any(|v| close_to(v, c, 1024)) {
+        // (Or within f's resolution of one: (x − 1)² − 1 is 0 in doubles
+        // for every x within 10⁻¹⁶ of the pole at 0.)
+        if d.vertical_asymptotes
+            .iter()
+            .any(|v| close_to(v, c, 1024) || (nearest(v, c) - c).abs() <= a.resolution(c))
+        {
             continue;
         }
         tried += 1;
@@ -3386,8 +3400,11 @@ pub fn check_horizontal(a: &Analysed, centres: &[f64], r: &mut Report) {
     // And a side on which f settles has an asymptote there (unless f is a
     // constant, or a line is claimed).
     let d = a.d();
-    let constant = !d.range.is_empty() && d.range.iter().all(|iv| iv.lo.value == iv.hi.value);
-    if constant || a.unknown(flags::OBLIQUE_ASYMPTOTES) {
+    let constant = (!d.range.is_empty() && d.range.iter().all(|iv| iv.lo.value == iv.hi.value))
+        || a.k.periodicity_direction == crate::analysis::Periodicity::Constant;
+    // (A periodic f that isn't constant has no limit at ±∞: what seems to
+    // settle far out is the doubles' coarse sampling of its period.)
+    if constant || a.unknown(flags::OBLIQUE_ASYMPTOTES) || a.period().is_some() {
         return;
     }
     for s in [1.0, -1.0] {
