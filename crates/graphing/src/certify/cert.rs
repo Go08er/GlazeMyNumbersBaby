@@ -179,8 +179,10 @@ pub enum Claim {
     ExactAt { x: XBox, of: Subject, c: R, at: R },
     /// The subject is continuous on the box, strictly on side `above` of
     /// `c` = 0 there: each of its zero factors (`certify::fun::zero_factors`
-    /// of its tree; its zeros are among theirs) stays away from 0 on the
-    /// box, and its value at a point of the box has that sign.
+    /// of its tree; its zeros are among theirs) that f's side conditions
+    /// don't already keep from 0 (a divisor, the sine under csc) stays away
+    /// from 0 on the box, and its value at a point of the box has that
+    /// sign.
     Factors {
         x: XBox,
         of: Subject,

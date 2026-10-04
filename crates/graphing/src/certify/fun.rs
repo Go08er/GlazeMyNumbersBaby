@@ -407,11 +407,16 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
             Expr::Bin(op @ (BinOp::Add | BinOp::Sub), a, b) => {
                 let (sa, fa) = product(a);
                 let (sb, fb) = product(b);
-                let common: Vec<Expr> = fa
-                    .iter()
-                    .filter(|f| f.contains_x() && fb.contains(f))
-                    .cloned()
-                    .collect();
+                // As multisets: x·x·eˣ and x·eˣ share x·eˣ once.
+                let mut pool = fb.clone();
+                let mut common: Vec<Expr> = Vec::new();
+                for f in &fa {
+                    if f.contains_x()
+                        && let Some(i) = pool.iter().position(|g| g == f)
+                    {
+                        common.push(pool.remove(i));
+                    }
+                }
                 if common.is_empty() {
                     out.push(e.clone());
                     return;

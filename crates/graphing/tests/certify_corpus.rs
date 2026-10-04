@@ -615,6 +615,10 @@ const REVIEW: &[(&str, &str)] = &[
         "x^3-2x+1/(x-1)",
         "D=(-inf,1)U(1,inf) | XI=-1.288795~;-0.389391~ | YI=-1 | P=neither | T=none | MAX=(-0.872759~,0.546759~) | MIN=(1.471580~,2.364148~) | INF=none | VA=1 | HA=none | R=(-inf,0.546759~]U[2.364148~,inf)",
     ),
+    // Not from the reviews: a factor shared twice by one term and once by
+    // the other (x·eˣ·(x + 1), zeros −1 and 0), which the zero-factor
+    // reasoning once split wrongly.
+    ("x*e^x*x+e^x*x", "D=R | XI=-1;0 | YI=0 | VA=none | HA=L:0"),
 ];
 
 // ---------------------------------------------------------------- values
