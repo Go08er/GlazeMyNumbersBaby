@@ -792,12 +792,41 @@ impl GraphView {
                 }
                 st
             };
+            // Proven holes ((x²−1)/(x−1) at 1): the curve is cut away
+            // inside an open circle.
+            let hole_r = graphing::graph::trace_point_radius(imp.line_width.get()) as f32 + 1.0;
+            let holes = || {
+                let b = gsk::PathBuilder::new();
+                for p in &ep.plot.holes {
+                    let (sx, sy) = vp.to_screen(p.x, p.y);
+                    b.add_circle(&graphene::Point::new(sx as f32, sy as f32), hole_r);
+                }
+                b.to_path()
+            };
+            let has_holes = !ep.plot.holes.is_empty();
+            if has_holes {
+                s.push_mask(gsk::MaskMode::InvertedAlpha);
+                s.append_fill(
+                    &holes(),
+                    gsk::FillRule::Winding,
+                    &rgba([1.0, 1.0, 1.0], 1.0),
+                );
+                s.pop();
+            }
             if scheme.dark {
                 s.push_blur(6.0);
                 s.append_stroke(&path, &make(lw * 3.2), &rgba(color, 0.55));
                 s.pop();
             }
             s.append_stroke(&path, &make(lw), &rgba(color, 1.0));
+            if has_holes {
+                s.pop();
+                s.append_stroke(
+                    &holes(),
+                    &gsk::Stroke::new((lw * 0.75).max(1.25)),
+                    &rgba(color, draw_p),
+                );
+            }
         }
 
         // Trace.

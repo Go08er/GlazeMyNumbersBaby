@@ -553,7 +553,10 @@ impl Graph {
         let mut any_function = false;
         for e in self.entries.iter().filter(|e| e.graphable()) {
             let Some(Ok(c)) = &e.compiled else { continue };
-            let CompiledForm::Explicit { axis: Axis::X, f } = &c.form else {
+            let CompiledForm::Explicit {
+                axis: Axis::X, f, ..
+            } = &c.form
+            else {
                 any_visible = true;
                 continue;
             };

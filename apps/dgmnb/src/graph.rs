@@ -1378,6 +1378,17 @@ impl GraphPage {
                 };
                 f.cv.stroke_path(&p, color, self.line_width as f32, dash);
             }
+            // Proven holes ((x²−1)/(x−1) at 1): open circles over the gap.
+            let hole_r = graphing::graph::trace_point_radius(self.line_width) as f32 + 1.0;
+            for h in &ep.plot.holes {
+                let (sx, sy) = vp.to_screen(h.x, h.y);
+                let (sx, sy) = (r.x + sx as f32, r.y + sy as f32);
+                f.cv.circle(sx, sy, hole_r, t.surface);
+                if let Some(p) = PathBuilder::from_circle(sx, sy, hole_r) {
+                    let w = (self.line_width as f32 * 0.75).max(1.25);
+                    f.cv.stroke_path(&p, color, w, None);
+                }
+            }
         }
         // Trace.
         if let Some((eid, tp)) = &self.trace {
@@ -1760,6 +1771,8 @@ mod tests {
             ("y=1000000000*x", true),
             ("y=1000000000000000*x", false),
             ("y=1000000000000000*x", true),
+            ("y=100000000000000000000*x", false),
+            ("y=100000000000000000000*x", true),
             ("y=x", false),
         ] {
             let mut g = GraphPage::for_test(session::from_list(src));
@@ -1809,6 +1822,49 @@ mod tests {
                 "{src} {shift}: {travelled}"
             );
         }
+    }
+
+    /// A proven hole is drawn as an open circle: the curve is stroked up
+    /// to it and not through it.
+    #[test]
+    fn holes_are_open_circles() {
+        let mut g = GraphPage::for_test(session::from_list("y=(x^2-1)/(x-1)"));
+        let mut pm = tiny_skia::Pixmap::new(760, 700).unwrap();
+        let (mut text, mut icons, input) = (
+            crate::text::Text::new(),
+            ui::Icons::default(),
+            ui::Input::default(),
+        );
+        let mut scrolls = std::collections::HashMap::new();
+        let mut f = Frame::new(
+            crate::gfx::Canvas::new(pm.as_mut(), 1.0, false),
+            &mut text,
+            &mut icons,
+            crate::theme::Theme::new(false, None),
+            &input,
+            &mut scrolls,
+            true,
+        );
+        g.view(&mut f, Rect::new(0.0, 46.0, 760.0, 654.0));
+        drop(f);
+        let holes = &g.plots[0].plot.holes;
+        assert_eq!(holes.len(), 1, "{holes:?}");
+        let (vp, c) = (g.vp.unwrap(), g.canvas);
+        let at = |x: f64, y: f64| {
+            let (sx, sy) = vp.to_screen(x, y);
+            let p = pm
+                .pixel((c.x as f64 + sx) as u32, (c.y as f64 + sy) as u32)
+                .unwrap();
+            [p.red(), p.green(), p.blue()]
+        };
+        let centre = at(holes[0].x, holes[0].y);
+        let surface = crate::theme::Theme::new(false, None).surface;
+        let close = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(p, q)| p.abs_diff(q) <= 8);
+        let s = surface.rgb3().map(|v| (v * 255.0).round() as u8);
+        assert!(close(centre, s), "{centre:?} vs {s:?}");
+        // The curve itself, away from the hole, is stroked.
+        let away = at(holes[0].x + 1.0, holes[0].y + 1.0);
+        assert!(!close(away, s), "{away:?}");
     }
 
     /// R4-M-04: function analysis results (labels only, nothing focusable)

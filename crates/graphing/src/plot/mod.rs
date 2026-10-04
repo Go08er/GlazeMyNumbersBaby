@@ -1,9 +1,11 @@
 //! Plot geometry for a viewport, in world (graph) coordinates.
 //!
-//! * Explicit curves (`y = f(x)`, `x = g(y)`) are sampled adaptively with
-//!   discontinuity detection, so polylines break at poles and jumps
-//!   (`tan x`, `1/x`, `floor x`) instead of drawing vertical connectors,
-//!   while steep-but-continuous parts (`atan(10⁶x)`) stay connected.
+//! * Explicit curves (`y = f(x)`, `x = g(y)`) are sampled with interval
+//!   arithmetic proving each join: polylines break wherever f isn't proven
+//!   continuous (poles, jumps, domain edges, holes: `tan x`, `1/x`,
+//!   `floor x`, `x/x`), steep-but-continuous parts (`atan(10⁶x)`) stay
+//!   connected, and every chord is within the tolerance of the curve
+//!   (see `explicit.rs`). Proven holes are reported as points.
 //! * Implicit relations are contoured with marching squares on a
 //!   two-level lattice (coarse blocks, refined where the sign changes).
 //! * Inequalities produce fill polygons plus the boundary curve; strict
@@ -13,6 +15,7 @@
 //! tall above and below the visible area, so they can be stroked directly.
 
 mod explicit;
+mod ifn;
 mod implicit;
 
 use crate::equation::{Axis, CompiledEquation, CompiledForm, EquationKind};
@@ -20,6 +23,7 @@ use crate::viewport::Viewport;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) use explicit::ExplicitSampler;
+pub use ifn::IntervalFn;
 
 /// A point in world coordinates.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -90,6 +94,10 @@ pub struct Plot {
     /// True if some part could not be resolved within the evaluation
     /// budget (`hasSomeMissingData` in the original renderer).
     pub has_missing_data: bool,
+    /// Holes in an explicit curve: points where f is proven undefined
+    /// while the curve meets itself across (`x/x` at 0), drawn as open
+    /// circles.
+    pub holes: Vec<Point>,
 }
 
 impl Plot {
@@ -146,8 +154,9 @@ pub(crate) fn plot_with(
     cancel: &Cancel<'_>,
 ) -> Plot {
     match &eq.form {
-        CompiledForm::Explicit { axis, f } => {
+        CompiledForm::Explicit { axis, f, iv } => {
             let mut s = ExplicitSampler::new(f, *axis, vp, opts);
+            s.set_interval(iv.as_deref());
             s.set_cancel(*cancel);
             s.run();
             Plot {
@@ -155,6 +164,7 @@ pub(crate) fn plot_with(
                 fill: Vec::new(),
                 boundary_dashed: false,
                 has_missing_data: s.exhausted(),
+                holes: s.hole_points(),
             }
         }
         CompiledForm::Implicit { f } => {
@@ -164,6 +174,7 @@ pub(crate) fn plot_with(
                 fill: Vec::new(),
                 boundary_dashed: false,
                 has_missing_data: r.missing,
+                holes: Vec::new(),
             }
         }
         CompiledForm::Inequality {
@@ -174,6 +185,7 @@ pub(crate) fn plot_with(
         } => {
             if let Some(b) = bound {
                 let mut s = ExplicitSampler::new(&b.f, b.axis, vp, opts);
+                s.set_interval(b.iv.as_deref());
                 s.set_cancel(*cancel);
                 s.run();
                 Plot {
@@ -181,6 +193,7 @@ pub(crate) fn plot_with(
                     fill: s.fill_polygons(b.greater),
                     boundary_dashed: *strict,
                     has_missing_data: s.exhausted(),
+                    holes: s.hole_points(),
                 }
             } else {
                 let r = implicit::contour(field, vp, opts, true, *strict, cancel);
@@ -189,6 +202,7 @@ pub(crate) fn plot_with(
                     fill: r.fill,
                     boundary_dashed: *strict,
                     has_missing_data: r.missing,
+                    holes: Vec::new(),
                 }
             }
         }

@@ -70,7 +70,8 @@
 //! // Tracing: nearest point to the pointer at pixel (700, 300).
 //! if let Some((eq, point)) = graph.trace(&vp, &plots, 700.0, 300.0, 50.0) {
 //!     assert_eq!(eq, id);
-//!     let _label = graphing::trace::format_trace_value(point.x, point.y, vp.precision());
+//!     // "(x, y)": y to the digits its enclosure fixes, or "undefined".
+//!     let _label = point.text();
 //! }
 //! ```
 
