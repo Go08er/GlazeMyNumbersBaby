@@ -294,6 +294,14 @@ fn run(fs: Vec<(String, TrigUnit)>) -> Vec<String> {
             }
         };
         certificates += 1;
+        // The certifier writes a binding: one missing is a failure.
+        for b in &r.binding {
+            if b.starts_with("missing") {
+                fails.push(format!("{label}: {b}"));
+            } else if verbose {
+                println!("{label}: binding: {b}");
+            }
+        }
         rows_checked += r.rows.iter().filter(|x| x.status != "Unknown").count();
         for (k, n) in r.count() {
             *tally.entry(k).or_insert(0) += n;
@@ -583,6 +591,15 @@ const PLANTS: &[Plant] = &[
         y["lo"] = serde_json::json!(1.0);
         y["hi"] = serde_json::json!(1.0);
     }),
+    ("x^2-1", "another power convention", |v| {
+        v["binding"]["power"] = serde_json::json!("ieee-pow");
+    }),
+    ("x^2-1", "another certifier", |v| {
+        v["binding"]["certifier"] = serde_json::json!("graphing 0.1.0");
+    }),
+    ("a*x^2-1", "a slider's value changed", |v| {
+        v["binding"]["sliders"]["a"] = serde_json::json!(2.0);
+    }),
     ("1/(1+x^2)", "the range's top end moved", |v| {
         let hi = &mut value_of(v, "range")[0]["hi"]["At"]["x"];
         hi["lo"] = serde_json::json!(2.0);
@@ -682,4 +699,32 @@ fn known_certifier_issues_still_reproduce() {
         "no longer reproduces (fixed?): {fixed:#?}\n\
          Remove these from KNOWN_ISSUES and research/replay-issues.md."
     );
+}
+
+/// Sliders at values other than the default, in every angle unit: the
+/// replay evaluates them at the binding's values.
+#[test]
+fn sliders_replay() {
+    let vars: BTreeMap<String, f64> = [("a".to_string(), 2.5), ("b".to_string(), -0.75)].into();
+    let mut fails = Vec::new();
+    for src in ["a*sin(x)+b", "a*x^2+b", "(x-a)/(x+b)", "ln(a*x)+b"] {
+        for unit in [TrigUnit::Radians, TrigUnit::Degrees, TrigUnit::Grads] {
+            let opts = CompileOptions {
+                trig_unit: unit,
+                variables: &vars,
+            };
+            let a = certify_text(src, opts, DEFAULT_BUDGET, None).expect("certified");
+            let v: serde_json::Value =
+                serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
+            assert_eq!(
+                v["binding"]["sliders"]["a"],
+                serde_json::json!(2.5),
+                "{src}"
+            );
+            if let Some(why) = rejected(&v) {
+                fails.push(format!("{src} [{unit:?}]: {why}"));
+            }
+        }
+    }
+    assert!(fails.is_empty(), "{fails:#?}");
 }

@@ -629,7 +629,7 @@ pub fn replay(a: &Value) -> Result<Report, String> {
         source: fx.source.clone(),
         ..Default::default()
     };
-    rep.binding = binding(a);
+    rep.binding = binding(a)?;
     let mut rows_in = Vec::new();
     for name in ROWS {
         // (A row an older certifier didn't write is unknown.)
@@ -677,20 +677,48 @@ pub fn replay(a: &Value) -> Result<Report, String> {
     Ok(rep)
 }
 
-/// What the certificate is bound to: the source, unit and formula are
-/// checked by [`function`]; the rest of the binding (when the certifier
-/// writes one) is reported if missing.
-fn binding(a: &Value) -> Vec<String> {
+/// The power convention the replay implements (`eval`'s rules).
+pub const POWER: &str = "ti-real-1";
+
+/// The simplifier rule set the replay's weak evidence was last reviewed
+/// against (its hash in the binding); another is noted, not refused.
+pub const RULES_SEEN: &str = "32045d7ad9dab698";
+
+/// What the certificate is bound to. The source, unit and formula are
+/// checked by [`function`]; here the binding: made by this certifier,
+/// under the power convention the replay implements (else refused), with
+/// its rule set and sliders noted. Returns the notes.
+fn binding(a: &Value) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
-    match a.get("binding") {
-        None => out.push("no binding (certifier version, rule set, sliders, power rule)".into()),
-        Some(b) => {
-            for k in ["certifier", "rules", "power", "sliders"] {
-                if b.get(k).is_none() {
-                    out.push(format!("binding without {k}"));
-                }
-            }
-        }
+    let Some(b) = a.get("binding").filter(|b| !b.is_null()) else {
+        out.push("missing: no binding (certifier, rule set, power convention, sliders)".into());
+        return Ok(out);
+    };
+    let get = |k: &str| b.get(k).ok_or_else(|| format!("binding: no {k}"));
+    let certifier = get("certifier")?.as_str().unwrap_or_default();
+    let ours = format!("graphing {}", env!("CARGO_PKG_VERSION"));
+    if certifier != ours {
+        return Err(format!(
+            "binding: made by {certifier:?}, the replay is for {ours:?}"
+        ));
     }
-    out
+    let power = get("power")?.as_str().unwrap_or_default();
+    if power != POWER {
+        return Err(format!(
+            "binding: power convention {power:?}, the replay implements {POWER:?}"
+        ));
+    }
+    let rules = get("rules")?.as_str().unwrap_or_default();
+    if rules.len() != 16 || !rules.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("binding: rule set {rules:?} is no hash"));
+    }
+    if !RULES_SEEN.is_empty() && rules != RULES_SEEN {
+        out.push(format!(
+            "rule set {rules} (the replay last saw {RULES_SEEN})"
+        ));
+    }
+    if !get("sliders")?.is_object() {
+        return Err("binding: sliders not a map".into());
+    }
+    Ok(out)
 }

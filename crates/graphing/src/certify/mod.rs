@@ -63,6 +63,10 @@ pub struct Analysis {
     pub vertical: Row<Vec<Spot>>,
     pub horizontal: Row<Vec<Horizontal>>,
     pub oblique: Row<Vec<Oblique>>,
+    /// What the certificate was made under (certifier, rules, power
+    /// convention, sliders); absent from older certificates.
+    #[serde(default)]
+    pub binding: Option<Binding>,
     /// Interval evaluations spent.
     pub evals: u64,
     /// Set if the budget ran out or the caller cancelled.
@@ -163,6 +167,7 @@ pub fn certify_equation(
     let Some((Axis::X, expr)) = eq.explicit() else {
         return Err("not a function of x".into());
     };
+    let binding = Binding::of(eq, &opts, budget);
     let po: ParseOptions = eq.parse_options();
     let lits = Literals::of(text, po).map_err(|e| format!("{e:?}"))?;
     let exact = ExactLiterals::of(text, po).map_err(|e| format!("{e:?}"))?;
@@ -183,7 +188,9 @@ pub fn certify_equation(
             .collect();
     }
     f.numerators = fun::rational_numerators(&f.expr, &exact);
-    Ok(certify(&f, text))
+    let mut a = certify(&f, text);
+    a.binding = Some(binding);
+    Ok(a)
 }
 
 /// The simplifier's form of f to enclose values with, if it changed f and
@@ -485,6 +492,7 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         horizontal,
         oblique,
         domain: dom.row.clone(),
+        binding: None,
         evals: f.evals(),
         stopped: [c0.stopped, c1.stopped, c2.stopped]
             .into_iter()
