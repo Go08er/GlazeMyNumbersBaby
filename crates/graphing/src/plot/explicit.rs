@@ -35,9 +35,10 @@
 //! which breaks rather than joins any jump it can't examine. Either sets
 //! `has_missing_data`.
 //!
-//! The budget ([`PlotOptions::max_work`]) is in estimated nanoseconds: an
-//! evaluation is charged by the size of f's program
-//! ([`Program::cost`]), an interval one many times a point one.
+//! The budget ([`PlotOptions::max_work`]) is a deterministic count of
+//! estimated cost, never a time: an evaluation is charged by the size of
+//! f ([`Program::cost`], [`IntervalFn::cost`]), an interval one many
+//! times a point one.
 //!
 //! Without an interval form (a bare [`Program`], as in this module's
 //! tests) the heuristic sampler is used throughout.
@@ -76,14 +77,25 @@ const STRUCTURE_SHARE: f64 = 0.75;
 /// parts with point samples where the structure is unknown.
 const FALLBACK_SHARE: f64 = 0.25;
 
+/// Most interval evaluations the first pass spends below one pixel column
+/// that isn't proven continuous: about two features (a pole, a hole, a
+/// domain edge) located to [`FLOOR_PX`]. A column with more (`tan(30x)`
+/// at ±1000: 25 poles a pixel) is drawn as a stroke down the column
+/// through its sampled values ([`Kind::Dense`]).
+const COLUMN_EVALS: usize = 96;
+
+/// Point samples across a dense column.
+const DENSE_SAMPLES: usize = 16;
+
 /// A run of unproven boxes wider than this (pixels) is no hole.
 const HOLE_RUN_PX: f64 = 1e-3;
 
-/// Estimated cost (≈ ns) of one point evaluation and of interval
-/// evaluations of order 0 and 2 of a function of cost `c`
-/// ([`Program::cost`] for points, [`IntervalFn::cost`] for intervals):
-/// measured on x/x, tan x, sin(3x)·e^(−x/4)+x², x! and a 59-term max of
-/// sin(kx)^k, these are within a factor of two.
+/// Estimated cost of one point evaluation and of interval evaluations of
+/// order 0 and 2 of a function of cost `c` ([`Program::cost`] for points,
+/// [`IntervalFn::cost`] for intervals), in units calibrated to about a
+/// nanosecond each on x/x, tan x, sin(3x)·e^(−x/4)+x², x! and a 59-term
+/// max of sin(kx)^k (within a factor of two). Fixed numbers: the budget
+/// is counted, not timed.
 fn costs(c: usize) -> (usize, usize, usize) {
     (4 + 4 * c, 500 + 70 * c, 1200 + 300 * c)
 }
@@ -112,6 +124,10 @@ enum Kind {
     Undefined,
     /// Not classified (budget or cancel): sampled heuristically.
     Unresolved,
+    /// At most a pixel wide, with more breaks than [`COLUMN_EVALS`]
+    /// locates: a stroke down the column through its sampled values, not
+    /// joined to either side.
+    Dense,
 }
 
 /// A jump between neighbouring leaf samples larger than this (pixels) is
@@ -131,6 +147,9 @@ pub(crate) struct ExplicitSampler<'a> {
     pass_limit: usize,
     /// Work spent telling jumps from steep parts in unresolved boxes.
     fallback_work: usize,
+    /// Interval evaluations spent in the column being structured (None
+    /// outside one).
+    column: Option<usize>,
     /// Costs of a point and an order-0 and order-2 interval evaluation.
     pt_cost: usize,
     iv0_cost: usize,
@@ -190,6 +209,7 @@ impl<'a> ExplicitSampler<'a> {
             chunk_limit: usize::MAX,
             pass_limit: usize::MAX,
             fallback_work: 0,
+            column: None,
             pt_cost,
             iv0_cost: 0,
             iv2_cost: 0,
@@ -337,6 +357,13 @@ impl<'a> ExplicitSampler<'a> {
     /// First pass: splits [lo, hi] until each part is proven continuous
     /// (`Proven`), undefined, beyond the band, or a narrowest `Gap`.
     fn structure(&mut self, iv: &IntervalFn, lo: f64, hi: f64, out: &mut Vec<(f64, f64, Kind)>) {
+        if let Some(n) = &mut self.column {
+            *n += 1;
+            if *n > COLUMN_EVALS {
+                // Dropped: the whole column is dense.
+                return;
+            }
+        }
         if !self.charge(self.iv0_cost) {
             out.push((lo, hi, Kind::Unresolved));
             return;
@@ -356,6 +383,17 @@ impl<'a> ExplicitSampler<'a> {
             let narrowest = (hi - lo) <= self.floor_at(lo.abs().max(hi.abs()));
             if narrowest || m <= lo || m >= hi {
                 out.push((lo, hi, Kind::Gap));
+            } else if self.column.is_none() && (hi - lo) * self.t_px <= 1.0 {
+                // A column: its breaks are located within COLUMN_EVALS.
+                let mark = out.len();
+                self.column = Some(0);
+                self.structure(iv, lo, m, out);
+                self.structure(iv, m, hi, out);
+                let n = self.column.take().unwrap_or(0);
+                if n > COLUMN_EVALS {
+                    out.truncate(mark);
+                    out.push((lo, hi, Kind::Dense));
+                }
             } else {
                 self.structure(iv, lo, m, out);
                 self.structure(iv, m, hi, out);
@@ -515,6 +553,24 @@ impl<'a> ExplicitSampler<'a> {
                     self.push(lo, fa);
                     self.push(hi, fb);
                 }
+                Kind::Dense => {
+                    self.partial = true;
+                    self.break_piece();
+                    let n = DENSE_SAMPLES;
+                    self.work += (n + 1) * self.pt_cost;
+                    let (mut a, mut b) = (f64::INFINITY, f64::NEG_INFINITY);
+                    for k in 0..=n {
+                        let d = self.f.eval(lo + (hi - lo) * k as f64 / n as f64, 0.0);
+                        if d.is_finite() {
+                            a = a.min(d);
+                            b = b.max(d);
+                        }
+                    }
+                    if a < b {
+                        let t = 0.5 * (lo + hi);
+                        self.pieces.push(vec![(t, a), (t, b)]);
+                    }
+                }
                 Kind::Smooth(step) => {
                     let step = step.min(h);
                     let n = (((hi - lo) / step).ceil() as usize).clamp(1, 1 << 20);
@@ -671,9 +727,13 @@ impl<'a> ExplicitSampler<'a> {
     /// tolerance only that close in (`x!` at −13 at the default view:
     /// ±0.0005 a hundred-thousandth of a pixel away, ±10⁴ eight doubles
     /// away), or at least grows towards p (`x!` at −20: 10⁻¹¹, then
-    /// 10⁻⁴), is no hole. Enclosures, not point values, close in, so a
+    /// 10⁻⁴), is no hole; nor is a factorial's pole where doubles see no
+    /// growth at all ([`IntervalFn::pole_at`]: x! near −1000). Enclosures, not point values, close in, so a
     /// cancelling form (`(x³−8)/(x−2)`) isn't mistaken for growth.
     fn removable(&self, iv: &IntervalFn, p: f64, r: f64) -> Option<f64> {
+        if iv.pole_at(p) {
+            return None;
+        }
         let tol = self.opts.tolerance_px / self.d_px;
         let (l, h) = (self.f.eval(p - r, 0.0), self.f.eval(p + r, 0.0));
         if !(l.is_finite() && h.is_finite() && (h - l).abs() <= tol) {

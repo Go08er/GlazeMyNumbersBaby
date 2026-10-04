@@ -304,8 +304,9 @@ fn holes_marked_and_unjoined_at_every_size() {
 
 /// PREREVIEW_B B-M1: no open circle inside an interval where f is
 /// undefined (a run of unproven boxes as wide as the gap in sqrt(x²−4),
-/// or one with a box proven undefined); the true holes stay, one per
-/// integer for (x − ⌊x⌋)/(x − ⌊x⌋).
+/// or one with a box proven undefined), nor at a pole (x! at −13, where
+/// the values either side meet a hundred-thousandth of a pixel out); the
+/// true holes stay, one per integer for (x − ⌊x⌋)/(x − ⌊x⌋).
 #[test]
 fn holes_only_where_proven() {
     let none = [
@@ -315,6 +316,7 @@ fn holes_only_where_proven() {
         "y=sqrt(cos(x))",
         "y=asin(2*sin(x))",
         "y=sqrt(sin(2*x))",
+        "y=x!",
         "y=1/x",
     ];
     let sizes = [
@@ -346,4 +348,84 @@ fn holes_only_where_proven() {
         assert_eq!(xs, ints, "at {w}x{h}");
         assert!(p.holes.iter().all(|q| q.y == 1.0), "{:?}", p.holes);
     }
+    // x! far out: between its poles it underflows to ±0 in doubles, but
+    // the poles are poles, not holes.
+    let mut g = Graph::new();
+    let id = g.add_equation("y=x!");
+    for half in [100.0, 1000.0] {
+        let vp = Viewport::new(-half, half, -half, half, 380.0, 645.0);
+        let p = g.plot_equation(id, &vp).unwrap();
+        assert!(p.holes.is_empty(), "±{half}: {:?}", p.holes);
+    }
+    // nCr(x, 2) is undefined at the negative integers (Γ at a pole in its
+    // definition) while x(x − 1)/2 isn't: holes there.
+    let mut g = Graph::new();
+    let id = g.add_equation("y=nCr(x,2)");
+    let p = g
+        .plot_equation(id, &Viewport::default_for_size(760.0, 700.0))
+        .unwrap();
+    for k in 1..=4 {
+        let x = -(k as f64);
+        let want = x * (x - 1.0) / 2.0;
+        assert!(
+            p.holes.iter().any(|q| q.x == x && (q.y - want).abs() < 1e-3),
+            "{x}: {:?}",
+            p.holes
+        );
+    }
+    // 1/x! is undefined at the negative integers (Γ's poles) with 0 the
+    // limit: holes, where its slope lets the values either side meet.
+    let mut g = Graph::new();
+    let id = g.add_equation("y=1/x!");
+    let p = g
+        .plot_equation(id, &Viewport::default_for_size(760.0, 700.0))
+        .unwrap();
+    assert!(!p.holes.is_empty());
+    for q in &p.holes {
+        assert!(q.x < 0.0 && q.x == q.x.trunc() && q.y.abs() < 1e-3, "{q:?}");
+    }
+}
+
+/// PREREVIEW_B B-M2: factorials, nCr/nPr in x and dense poles are drawn
+/// without a join across a pole or a point where f is undefined, and with
+/// their shapes (x! was a few segments zig-zagging over its poles).
+#[test]
+fn factorials_and_dense_poles_never_join_across() {
+    let cases: [(&str, f64, f64, f64); 14] = [
+        ("y=x!", 10.0, 380.0, 645.0),
+        ("y=1/x!", 10.0, 380.0, 645.0),
+        ("y=(x/2)!", 10.0, 1000.0, 700.0),
+        ("y=nCr(x,2)", 10.0, 380.0, 645.0),
+        ("y=nPr(x,2)", 10.0, 1000.0, 700.0),
+        ("y=tan(30*x)", 10.0, 380.0, 645.0),
+        ("y=tan(50*x)", 10.0, 1000.0, 700.0),
+        ("y=tan(100*x)", 10.0, 1000.0, 700.0),
+        ("y=1/sin(30*x)", 10.0, 1000.0, 700.0),
+        ("y=tan(x)", 1000.0, 1920.0, 1080.0),
+        ("y=tan(10*x)", 100.0, 1000.0, 700.0),
+        ("y=tan(x^2)", 100.0, 1000.0, 700.0),
+        ("y=tan(30*x)", 1000.0, 1000.0, 700.0),
+        ("y=x!", 100.0, 1000.0, 700.0),
+    ];
+    for (src, half, w, h) in cases {
+        let mut g = Graph::new();
+        let id = g.add_equation(src);
+        let yh = half * h / w;
+        let vp = Viewport::new(-half, half, -yh, yh, w, h);
+        let p = g.plot_equation(id, &vp).unwrap();
+        let bad = suspicious_joins(&g, id, &p, &vp);
+        assert!(bad.is_empty(), "{src} ±{half} {w}x{h}: {bad:?}");
+        assert!(p.point_count() > 200, "{src}: {} points", p.point_count());
+    }
+    // x! between its poles is resolved, and traces as a value, not
+    // "unknown".
+    let mut g = Graph::new();
+    g.add_equation("y=x!");
+    let vp = Viewport::default_for_size(760.0, 700.0);
+    let plots = g.plot_parallel(&vp);
+    assert!(!plots[0].plot.has_missing_data);
+    // 1.32! = Γ(2.32) ≈ 1.181.
+    let (sx, sy) = vp.to_screen(1.32, 1.181);
+    let (_, t) = g.trace(&vp, &plots, sx, sy, 50.0).unwrap();
+    assert!(t.text().starts_with("(1.32, ") && !t.text().contains("unknown"), "{}", t.text());
 }

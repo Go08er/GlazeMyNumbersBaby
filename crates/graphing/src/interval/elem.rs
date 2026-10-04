@@ -1510,13 +1510,116 @@ pub fn modulo(a: &DecInterval, b: &DecInterval) -> DecInterval {
     DecInterval::result(range, Dec::Def, &[a, b])
 }
 
-// ------------------------------------------------- factorials (points)
+// ---------------------------------------------------------- factorials
 
-/// n! = Γ(n + 1): an enclosure only for a point argument; anything else
-/// is unknown.
+/// Γ's minimum on (0, ∞) is at x₀ = 1.46163214496836234…: the bounds
+/// below are either side of it, and its value 0.88560319441088870… is
+/// above `GAMMA_MIN`.
+const GAMMA_ARGMIN_LO: f64 = 1.461632144968362;
+const GAMMA_ARGMIN_HI: f64 = 1.4616321449683625;
+const GAMMA_MIN: f64 = 0.8856031944108886;
+
+/// Γ at a double, enclosed (CORE-MATH's is correctly rounded).
+fn gamma_pt(v: f64) -> Interval {
+    cr(cm::tgamma(v))
+}
+
+/// Γ over `v` and whether it is defined throughout (no pole inside).
+///
+/// Off the poles Γ is continuous and |Γ| log-convex on each branch, so
+/// its largest magnitude on a box is at an end. The smallest is at an end
+/// unless the box holds the branch's extremum: on (0, ∞) that is x₀,
+/// enclosed above; on a negative branch the reflection formula
+/// |Γ(x)| = π / (|sin πx| · Γ(1 − x)) bounds it below by
+/// π / (max |sin πx| · max Γ(1 − x)), the second maximum again at an
+/// end of the box (Γ is convex on (1, ∞)).
+pub(crate) fn gamma_iv(v: Interval) -> (Interval, bool) {
+    if v.is_empty() {
+        return (v, false);
+    }
+    let (a, b) = (v.lo(), v.hi());
+    if a.is_nan() || b.is_nan() {
+        return (Interval::ENTIRE, false);
+    }
+    // A pole: a non-positive integer in [a, b].
+    let k = a.ceil();
+    if k <= 0.0 && k <= b {
+        if a == b {
+            return (Interval::EMPTY, false);
+        }
+        return (Interval::ENTIRE, false);
+    }
+    if a == b {
+        return (gamma_pt(a), true);
+    }
+    if a > 0.0 {
+        if b == INF {
+            let lo = if a >= GAMMA_ARGMIN_HI {
+                gamma_pt(a).lo()
+            } else {
+                GAMMA_MIN
+            };
+            return (Interval::new(lo, INF), true);
+        }
+        let (ga, gb) = (gamma_pt(a), gamma_pt(b));
+        let hi = ga.hi().max(gb.hi());
+        let lo = if b <= GAMMA_ARGMIN_LO {
+            gb.lo()
+        } else if a >= GAMMA_ARGMIN_HI {
+            ga.lo()
+        } else {
+            GAMMA_MIN
+        };
+        return (Interval::new(lo.min(hi), hi), true);
+    }
+    if a == -INF {
+        return (Interval::ENTIRE, false);
+    }
+    // [a, b] inside (k − 1, k) for an integer k ≤ 0 (|a| < 2⁵³: beyond,
+    // every double is an integer).
+    let (ga, gb) = (gamma_pt(a), gamma_pt(b));
+    let mag = |i: Interval| (i.lo().abs().min(i.hi().abs()), i.lo().abs().max(i.hi().abs()));
+    let (_, ma) = mag(ga);
+    let (_, mb) = mag(gb);
+    let hi = ma.max(mb);
+    // max |sin πx| on [a, b]: 1 if it holds the half-integer, else at an end.
+    let mid = k - 0.5;
+    let sin_max = if a <= mid && mid <= b {
+        1.0
+    } else {
+        cm::sinpi(a).abs().max(cm::sinpi(b).abs()).next_up().min(1.0)
+    };
+    // max Γ(1 − x) over [1 − b, 1 − a] ⊂ (1, ∞), its ends rounded out.
+    let (u0, u1) = ((1.0 - b).next_down().max(1.0), (1.0 - a).next_up());
+    let g_max = gamma_pt(u0).hi().max(gamma_pt(u1).hi());
+    let lo = if g_max.is_finite() {
+        let p = pi().lo();
+        let den = mul_up(sin_max, g_max);
+        if den > 0.0 && den.is_finite() {
+            (p / den).next_down().max(0.0)
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+    let lo = lo.min(hi);
+    // (−1, 0) negative, (−2, −1) positive, …
+    let negative = (k as i64).rem_euclid(2) == 0;
+    let iv = if negative {
+        Interval::new(-hi, -lo)
+    } else {
+        Interval::new(lo, hi)
+    };
+    (iv, true)
+}
+
+/// n! = Γ(n + 1): exact for small natural numbers, else from [`gamma_iv`];
+/// undefined at the negative integers.
 pub fn factorial(x: &DecInterval) -> DecInterval {
     let iv = x.iv;
-    if iv.is_point() {
+    // n + 1 exactly (−10⁻²⁰ + 1 rounds to 1, but (−10⁻²⁰)! isn't 0!).
+    if iv.is_point() && (iv.lo() + 1.0) - 1.0 == iv.lo() {
         let v = iv.lo() + 1.0;
         if v == v.trunc() && v <= 0.0 {
             return DecInterval::result(Interval::EMPTY, Dec::Trv, &[x]);
@@ -1531,12 +1634,16 @@ pub fn factorial(x: &DecInterval) -> DecInterval {
             }
             return DecInterval::result(Interval::point(r), Dec::Com, &[x]);
         }
-        let g = cm::tgamma(v);
-        if g.is_finite() || g.is_infinite() {
-            return DecInterval::result(cr(g), Dec::Com, &[x]);
-        }
     }
-    DecInterval::result(Interval::ENTIRE, Dec::Trv, &[x])
+    if iv.is_empty() {
+        return DecInterval::result(Interval::EMPTY, Dec::Trv, &[x]);
+    }
+    let (g, defined) = gamma_iv(iv + Interval::point(1.0));
+    let r = DecInterval::result(g, if defined { Dec::Com } else { Dec::Trv }, &[x]);
+    // Γ is never 0, and positive on (0, ∞).
+    let pos = defined && g.lo() > 0.0;
+    let neg = defined && g.hi() < 0.0;
+    r.signs(pos, neg)
 }
 
 /// n!! for an integer n ≥ −1, from a point argument only.
@@ -1577,5 +1684,52 @@ pub fn ncr_npr(n: &DecInterval, r: &DecInterval, perm: bool) -> DecInterval {
             return DecInterval::result(iv, Dec::Com, &[n, r]);
         }
     }
-    DecInterval::result(Interval::ENTIRE, Dec::Trv, &[n, r])
+    if n.is_empty() || r.is_empty() {
+        return DecInterval::result(Interval::EMPTY, Dec::Trv, &[n, r]);
+    }
+    if let Some(k) = small_count(r) {
+        // nPr(n, k) = n(n − 1)…(n − k + 1), nCr(n, k) that over k!, for
+        // every n but the negative integers (where `functions` has
+        // Γ(n + 1) at a pole: undefined).
+        let mut acc = Interval::point(1.0);
+        for i in 0..k {
+            acc = acc * (n.iv - Interval::point(i as f64));
+        }
+        if !perm {
+            let mut f = Interval::point(1.0);
+            for i in 2..=k {
+                f = f * Interval::point(i as f64);
+            }
+            acc = acc / f;
+        }
+        let first = n.iv.lo().max(-1e300).ceil();
+        let negative_integer = first <= n.iv.hi() && first <= -1.0;
+        if negative_integer && n.iv.is_point() {
+            // Undefined there, though the polynomial isn't: a hole.
+            return DecInterval::result(Interval::EMPTY, Dec::Trv, &[n, r]);
+        }
+        return DecInterval::result(
+            acc,
+            if negative_integer { Dec::Trv } else { Dec::Com },
+            &[n, r],
+        );
+    }
+    // Γ(n+1) / (Γ(r+1)·Γ(n−r+1)) (nPr without Γ(r+1)), defined where no
+    // Γ argument is at a pole.
+    let one = Interval::point(1.0);
+    let (gn, dn) = gamma_iv(n.iv + one);
+    let (gd, dd) = gamma_iv(n.iv - r.iv + one);
+    let (mut q, mut defined) = (gn / gd, dn && dd);
+    if !perm {
+        let (gr, dr) = gamma_iv(r.iv + one);
+        q = q / gr;
+        defined &= dr;
+    }
+    DecInterval::result(q, if defined { Dec::Com } else { Dec::Trv }, &[n, r])
+}
+
+/// r as a count 0 ≤ k ≤ 60 when it is that integer exactly.
+pub(crate) fn small_count(r: &DecInterval) -> Option<u32> {
+    let v = r.iv.lo();
+    (r.iv.is_point() && v == v.trunc() && (0.0..=60.0).contains(&v)).then_some(v as u32)
 }

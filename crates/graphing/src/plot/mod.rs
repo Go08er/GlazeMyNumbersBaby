@@ -53,12 +53,16 @@ pub struct PlotOptions {
     pub tolerance_px: f64,
     /// Maximum refinement depth below the seed spacing (2^depth subdivisions).
     pub max_depth: u32,
-    /// Work budget per explicit curve, in estimated nanoseconds of
-    /// evaluation (each evaluation is charged by the size of the curve's
-    /// program, an interval one many times a point one): about this long
-    /// on one core of a 2020s desktop. When it runs out, the rest is drawn
-    /// coarser — joined only where proven continuous or where the
-    /// heuristic sampler finds no jump — and `has_missing_data` is set.
+    /// Work budget per explicit curve, a count of estimated evaluation
+    /// cost: each evaluation is charged by the size of the curve's
+    /// expression ([`crate::compile::Program::cost`],
+    /// [`IntervalFn::cost`]), an interval one many times a point one. It
+    /// is counted, never timed, so the same view gives the same geometry
+    /// on any machine, serial or parallel (the units are calibrated so the
+    /// default is roughly 0.1 s of work on a 2020s desktop core). When it
+    /// runs out, the rest is drawn coarser — joined only where proven
+    /// continuous or where the heuristic sampler finds no jump — and
+    /// `has_missing_data` is set.
     pub max_work: usize,
     /// Size of a fine marching-squares cell for implicit relations, in pixels.
     pub implicit_cell_px: f64,

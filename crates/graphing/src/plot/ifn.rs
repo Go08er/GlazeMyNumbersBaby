@@ -64,6 +64,20 @@ impl IntervalFn {
         self.with_ctx(|ctx| enclose(&self.expr, Interval::new(lo, hi), ctx))
     }
 
+    /// Whether f is unbounded at `x` because a factorial there is at a
+    /// pole of Γ (see [`Ctx::pole_probe`]): a pole, not a hole, however
+    /// small the values beside it.
+    pub(crate) fn pole_at(&self, x: f64) -> bool {
+        let opts = CompileOptions {
+            trig_unit: self.unit,
+            variables: &self.vars,
+        };
+        let mut ctx = Ctx::new(opts, &self.literals);
+        ctx.pole_probe = true;
+        let e = enclose(&self.expr, Interval::point(x), &ctx);
+        !e.is_empty() && !e.iv.is_bounded()
+    }
+
     /// Taylor coefficients `c[0..=n]` of f over [lo, hi].
     pub fn series(&self, lo: f64, hi: f64, n: usize) -> Series {
         self.with_ctx(|ctx| taylor(&self.expr, Interval::new(lo, hi), n, ctx))

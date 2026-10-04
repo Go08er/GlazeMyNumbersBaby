@@ -29,6 +29,11 @@ pub struct Ctx<'a> {
     pub literals: &'a Literals,
     /// The value(s) of y, for relations in x and y (no y-derivatives).
     pub y: DecInterval,
+    /// Probe for poles: n! at a pole of Γ is [`f64::MAX`, +∞] instead of
+    /// undefined, so a result that stays bounded there (1/x!) tells a
+    /// removable point from a pole (x!) where the values beside it, all
+    /// that doubles reach, can't (x! near −1000 underflows to ±0).
+    pub pole_probe: bool,
 }
 
 impl<'a> Ctx<'a> {
@@ -37,6 +42,7 @@ impl<'a> Ctx<'a> {
             opts,
             literals,
             y: DecInterval::unknown(),
+            pole_probe: false,
         }
     }
 }
@@ -636,8 +642,38 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
             }
             acc
         }
-        Factorial => flat(elem::factorial(&arg(0)[0]), n),
+        Factorial => {
+            let a = arg(0);
+            let v = a[0].iv.lo() + 1.0;
+            if ctx.pole_probe && a[0].iv.is_point() && v <= 0.0 && v == v.trunc() {
+                let big = Interval::new(f64::MAX, f64::INFINITY);
+                return flat(DecInterval::result(big, Dec::Trv, &[&a[0]]), n);
+            }
+            flat(elem::factorial(&a[0]), n)
+        }
         DoubleFactorial => flat(elem::double_factorial(&arg(0)[0]), n),
-        NCr | NPr => flat(elem::ncr_npr(&arg(0)[0], &arg(1)[0], f == NPr), n),
+        NCr | NPr => {
+            let (a, b) = (arg(0), arg(1));
+            let h0 = elem::ncr_npr(&a[0], &b[0], f == NPr);
+            let constant = b[1..].iter().all(|c| c.iv.is_point() && c.lo() == 0.0);
+            match elem::small_count(&b[0]) {
+                // A polynomial in n where it is defined: n(n−1)…(n−k+1),
+                // over k! for nCr.
+                Some(k) if constant && h0.dec >= Dec::Dac => {
+                    let mut h = konst(DecInterval::point(1.0), n);
+                    let mut fact = DecInterval::point(1.0);
+                    for i in 0..k {
+                        h = mul(&h, &sub(&a, &konst(DecInterval::point(i as f64), n)));
+                        fact = elem::mul(&fact, &DecInterval::point((i + 1) as f64));
+                    }
+                    if f == NCr {
+                        h = scale(&h, &elem::recip(&fact));
+                    }
+                    h[0] = h0.refine(&h[0]);
+                    h
+                }
+                _ => flat(h0, n),
+            }
+        }
     }
 }
