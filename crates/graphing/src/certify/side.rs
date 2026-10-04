@@ -1030,9 +1030,10 @@ pub fn interior(d: &Domain, window: Option<(f64, f64)>) -> (Vec<IBox>, Vec<Claim
 const DEFINED_EVALS: usize = 4096;
 
 /// When the domain isn't decided, the boxes the other rows run on: where
-/// f's own tree is shown defined (decoration at least *def*) within
-/// `[-w, w]`, found by halving until each piece is defined, undefined, or
-/// too narrow to halve. f's simplified form may be defined where f isn't;
+/// f's own tree is shown defined and continuous (decoration at least
+/// *dac*: no box spans a jump of ⌊x⌋ in it, whose derivative the replay
+/// can't follow) within `[-w, w]`, found by halving until each piece is
+/// so, undefined, or too narrow to halve. f's simplified form may be defined where f isn't;
 /// on these boxes it equals f. Each comes one double in from the box
 /// claimed Defined, so f equals the form on a neighbourhood of it (and
 /// f′, f″ the form's). What they leave out is undecided: rows on them list
@@ -1056,7 +1057,7 @@ pub fn defined_boxes(f: &Fun<'_>, w: f64) -> (Vec<IBox>, Vec<Claim>) {
             if v.is_empty() {
                 continue;
             }
-            if v.dec >= crate::interval::Dec::Def {
+            if v.dec >= crate::interval::Dec::Dac {
                 found.push((a, b));
                 continue;
             }

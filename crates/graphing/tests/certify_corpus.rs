@@ -260,6 +260,17 @@ const TRUTH: &[(&str, &str)] = &[
     ),
 ];
 
+/// Functions whose trees use what the certificate replay doesn't model
+/// (Γ, through x!): checked against their truth here, but not in the
+/// replay's corpus, which reads `REVIEW` and wants every claim proven.
+const UNMODELLED: &[(&str, &str)] = &[
+    // Pre-review A, F3: x!/x! is 1 where Γ(x + 1) is defined.
+    (
+        "x!/x!",
+        "XI=none | YI=1 | P=neither | MIN=none | MAX=none | INF=none | VA=none | R={1}",
+    ),
+];
+
 /// The functions of review rounds 9–11 (REVIEW_9/10/11.md), with what is
 /// known of each. The reviews' `1e-7`, `1e13` are written out here: the
 /// app reads `1e6` as 1·e·6 (`1e9*x` is kept, as that line).
@@ -688,10 +699,6 @@ const REVIEW: &[(&str, &str)] = &[
     (
         "(x+1)*(x-2)^x/(x-2)^x",
         "D=(2,inf) | XI=none | YI=none | P=neither | T=none | MIN=none | MAX=none | INF=none | VA=none | R=(3,inf) | M=inc:(2,inf)",
-    ),
-    (
-        "x!/x!",
-        "XI=none | YI=1 | P=neither | MIN=none | MAX=none | INF=none | VA=none | R={1}",
     ),
     (
         "sin(1/x)/sin(1/x)",
@@ -1532,7 +1539,7 @@ fn no_row_is_certified_wrong() {
         let grades = engine_grades(id, variant).unwrap_or(['?'; 11]);
         runs.push(run(set, format!("{id} {src}"), src, &truth(t.1), grades));
     }
-    for (src, t) in REVIEW {
+    for (src, t) in REVIEW.iter().chain(UNMODELLED) {
         runs.push(run("review", src.to_string(), src, &truth(t), engine(src)));
     }
 
