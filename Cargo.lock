@@ -1155,6 +1155,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "gmnb-launcher"
+version = "0.2.0"
+
+[[package]]
 name = "gobject-sys"
 version = "0.22.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

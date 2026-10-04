@@ -31,8 +31,10 @@
       "buildsystem": "simple",
       "build-commands": [
         "cargo --offline fetch --manifest-path Cargo.toml",
-        "cargo --offline build --release --locked -p gmnb",
-        "install -Dm755 target/release/gmnb -t /app/bin",
+        "cargo --offline build --release --locked -p gmnb-launcher",
+        "if [ \"$FLATPAK_ARCH\" = x86_64 ]; then export RUSTFLAGS='-C target-cpu=x86-64-v3' TARGET_CPU=x86-64-v3; fi; cargo --offline build --release --locked -p gmnb --target-dir target/v3",
+        "install -Dm755 target/release/gmnb-launcher /app/bin/gmnb",
+        "install -Dm755 target/v3/release/gmnb -t /app/libexec/gmnb",
         "install -Dm644 packaging/io.github.Go08er.GlazeMyNumbersBaby.desktop -t /app/share/applications",
         "install -Dm644 packaging/io.github.Go08er.GlazeMyNumbersBaby.metainfo.xml -t /app/share/metainfo",
         "install -Dm644 packaging/icons/io.github.Go08er.GlazeMyNumbersBaby.svg -t /app/share/icons/hicolor/scalable/apps",

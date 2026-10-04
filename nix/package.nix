@@ -1,5 +1,6 @@
 {
   lib,
+  stdenv,
   rustPlatform,
   pkg-config,
   wrapGAppsHook4,
@@ -11,14 +12,35 @@
 }:
 let
   appId = "io.github.Go08er.GlazeMyNumbersBaby";
+  version = (lib.importTOML ../Cargo.toml).workspace.package.version;
+  src = lib.cleanSource ../.;
+  x86 = stdenv.hostPlatform.isx86_64;
+  # Installed as bin/gmnb: built for any x86-64, it tells an older CPU why
+  # GMNB (built for x86-64-v3 below) can't run there, else runs it.
+  launcher = rustPlatform.buildRustPackage {
+    pname = "gmnb-launcher";
+    inherit version src;
+    cargoLock.lockFile = ../Cargo.lock;
+    cargoBuildFlags = [
+      "-p"
+      "gmnb-launcher"
+    ];
+    doCheck = false;
+  };
 in
 rustPlatform.buildRustPackage {
   pname = "gmnb";
-  version = (lib.importTOML ../Cargo.toml).workspace.package.version;
-  src = lib.cleanSource ../.;
+  inherit version src;
   cargoLock.lockFile = ../Cargo.lock;
   cargoBuildFlags = [ "-p" "gmnb" ];
   doCheck = false;
+  # On x86_64, for x86-64-v3 (2013+ CPUs). TARGET_CPU pins the CPU the
+  # core-math crate's C is compiled for (its build script otherwise uses the
+  # build machine's own, -march=native).
+  env = lib.optionalAttrs x86 {
+    RUSTFLAGS = "-C target-cpu=x86-64-v3";
+    TARGET_CPU = "x86-64-v3";
+  };
   nativeBuildInputs = [
     pkg-config
     wrapGAppsHook4
@@ -31,11 +53,19 @@ rustPlatform.buildRustPackage {
     adwaita-icon-theme
     gsettings-desktop-schemas
   ];
+  # The launcher execs the real binary with its environment, so only it
+  # needs wrapping.
+  dontWrapGApps = true;
   postInstall = ''
+    install -Dm755 $out/bin/gmnb -t $out/libexec/gmnb
+    install -Dm755 ${launcher}/bin/gmnb-launcher $out/bin/gmnb
     install -Dm644 packaging/${appId}.desktop -t $out/share/applications
     install -Dm644 packaging/${appId}.metainfo.xml -t $out/share/metainfo
     install -Dm644 packaging/icons/${appId}.svg -t $out/share/icons/hicolor/scalable/apps
     install -Dm644 LICENSE apps/gmnb/assets/fonts/OFL-Outfit.txt -t $out/share/licenses/${appId}
+  '';
+  preFixup = ''
+    wrapGApp $out/bin/gmnb
   '';
   meta = {
     description = "GlazeMyNumbers,Baby: Windows Calculator ported to Rust, made pointlessly beautiful";

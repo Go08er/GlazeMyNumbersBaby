@@ -1,0 +1,13 @@
+[package]
+name = "gmnb-launcher"
+description = "Installed as `gmnb`: checks the CPU, then runs GMNB"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+# Built for plain x86-64, never with the x86-64-v3 flags GMNB itself gets:
+# it is what tells an older CPU why GMNB can't run there. No dependencies,
+# so nothing else is ever compiled for it.
+[dependencies]

@@ -4,19 +4,31 @@
 GMNB := io.github.Go08er.GlazeMyNumbersBaby
 DGMNB := io.github.Go08er.DontGlazeMyNumbersBaby
 
+include /usr/share/dpkg/architecture.mk
+# On amd64 GMNB is built for x86-64-v3 (2013+ CPUs), behind a launcher built
+# for any x86-64 that tells older CPUs so; DGMNB runs anywhere. TARGET_CPU
+# pins the CPU the core-math crate's C is compiled for (its build script
+# otherwise uses the build machine's own, -march=native).
+ifeq ($(DEB_HOST_ARCH),amd64)
+GMNB_ENV := RUSTFLAGS="-C target-cpu=x86-64-v3" TARGET_CPU=x86-64-v3
+DGMNB_ENV := TARGET_CPU=x86-64
+endif
+
 %:
 	dh $@
 
 override_dh_auto_configure:
 
 override_dh_auto_build:
-	cargo build --release --locked -p gmnb
-	cargo build --profile lean --locked -p dgmnb
+	cargo build --release --locked -p gmnb-launcher
+	$(GMNB_ENV) cargo build --release --locked -p gmnb --target-dir target/v3
+	$(DGMNB_ENV) cargo build --profile lean --locked -p dgmnb
 
 override_dh_auto_test:
 
 override_dh_auto_install:
-	install -Dm755 target/release/gmnb debian/gmnb/usr/bin/gmnb
+	install -Dm755 target/release/gmnb-launcher debian/gmnb/usr/bin/gmnb
+	install -Dm755 target/v3/release/gmnb debian/gmnb/usr/libexec/gmnb/gmnb
 	install -Dm644 packaging/$(GMNB).desktop debian/gmnb/usr/share/applications/$(GMNB).desktop
 	install -Dm644 packaging/$(GMNB).metainfo.xml debian/gmnb/usr/share/metainfo/$(GMNB).metainfo.xml
 	install -Dm644 packaging/icons/$(GMNB).svg debian/gmnb/usr/share/icons/hicolor/scalable/apps/$(GMNB).svg

@@ -30,7 +30,7 @@
       "buildsystem": "simple",
       "build-commands": [
         "cargo --offline fetch --manifest-path Cargo.toml",
-        "cargo --offline build --profile lean --locked -p dgmnb",
+        "if [ \"$FLATPAK_ARCH\" = x86_64 ]; then export TARGET_CPU=x86-64; fi; cargo --offline build --profile lean --locked -p dgmnb",
         "install -Dm755 target/lean/dgmnb -t /app/bin",
         "install -Dm644 packaging/io.github.Go08er.DontGlazeMyNumbersBaby.desktop -t /app/share/applications",
         "install -Dm644 packaging/io.github.Go08er.DontGlazeMyNumbersBaby.metainfo.xml -t /app/share/metainfo",

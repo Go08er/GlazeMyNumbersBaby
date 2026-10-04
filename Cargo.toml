@@ -11,6 +11,7 @@ members = [
     "crates/calcvm",
     "crates/appcore",
     "apps/gmnb",
+    "apps/gmnb-launcher",
     "apps/dgmnb",
 ]
 

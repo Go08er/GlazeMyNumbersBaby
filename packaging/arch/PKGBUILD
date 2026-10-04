@@ -25,8 +25,19 @@ prepare() {
 build() {
   cd "$_src"
   export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
-  cargo build --frozen --release -p gmnb
-  cargo build --frozen --profile lean -p dgmnb
+  # On x86_64 GMNB is built for x86-64-v3 (2013+ CPUs), behind a launcher
+  # built for any x86-64 that tells older CPUs so; DGMNB runs anywhere.
+  # TARGET_CPU pins the CPU the core-math crate's C is compiled for (its
+  # build script otherwise uses the build machine's own, -march=native).
+  cargo build --frozen --release -p gmnb-launcher
+  if [ "$CARCH" = x86_64 ]; then
+    RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=x86-64-v3" TARGET_CPU=x86-64-v3 \
+      cargo build --frozen --release -p gmnb --target-dir target/v3
+    TARGET_CPU=x86-64 cargo build --frozen --profile lean -p dgmnb
+  else
+    cargo build --frozen --release -p gmnb --target-dir target/v3
+    cargo build --frozen --profile lean -p dgmnb
+  fi
 }
 
 check() {
@@ -40,7 +51,8 @@ package_gmnb() {
   depends=('gtk4' 'libadwaita' 'glib2' 'pango' 'cairo' 'gcc-libs' 'glibc' 'hicolor-icon-theme')
   local app=io.github.Go08er.GlazeMyNumbersBaby
   cd "$_src"
-  install -Dm755 target/release/gmnb -t "$pkgdir/usr/bin"
+  install -Dm755 target/release/gmnb-launcher "$pkgdir/usr/bin/gmnb"
+  install -Dm755 target/v3/release/gmnb -t "$pkgdir/usr/lib/gmnb"
   install -Dm644 "packaging/$app.desktop" -t "$pkgdir/usr/share/applications"
   install -Dm644 "packaging/$app.metainfo.xml" -t "$pkgdir/usr/share/metainfo"
   install -Dm644 "packaging/icons/$app.svg" -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"

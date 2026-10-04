@@ -28,6 +28,8 @@ GMNB is a Rust port of the open-source Windows Calculator with a GTK 4
 interface: Standard, Scientific, Programmer, Graphing, Date calculation and
 13 unit converters including live currency rates, with history and memory.
 The original arbitrary-precision engine was ported function-for-function.
+On x86_64 it needs a CPU from 2013 or newer (Intel Haswell, AMD Excavator,
+Ryzen, or later); the dgmnb package runs on any 64-bit PC.
 
 Not affiliated with or endorsed by Microsoft.
 
@@ -51,11 +53,23 @@ Not affiliated with or endorsed by Microsoft.
 %autosetup -n GlazeMyNumbersBaby-%{version}
 
 %build
-cargo build --release --locked -p gmnb
+# On x86_64 GMNB is built for x86-64-v3 (2013+ CPUs), behind a launcher built
+# for any x86-64 that tells older CPUs so; DGMNB runs anywhere. TARGET_CPU
+# pins the CPU the core-math crate's C is compiled for (its build script
+# otherwise uses the build machine's own, -march=native).
+cargo build --release --locked -p gmnb-launcher
+%ifarch x86_64
+RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=x86-64-v3" TARGET_CPU=x86-64-v3 \
+  cargo build --release --locked -p gmnb --target-dir target/v3
+TARGET_CPU=x86-64 cargo build --profile lean --locked -p dgmnb
+%else
+cargo build --release --locked -p gmnb --target-dir target/v3
 cargo build --profile lean --locked -p dgmnb
+%endif
 
 %install
-install -Dm755 target/release/gmnb %{buildroot}%{_bindir}/gmnb
+install -Dm755 target/release/gmnb-launcher %{buildroot}%{_bindir}/gmnb
+install -Dm755 target/v3/release/gmnb %{buildroot}%{_libexecdir}/gmnb/gmnb
 install -Dm644 packaging/%{app_id}.desktop %{buildroot}%{_datadir}/applications/%{app_id}.desktop
 install -Dm644 packaging/%{app_id}.metainfo.xml %{buildroot}%{_metainfodir}/%{app_id}.metainfo.xml
 install -Dm644 packaging/icons/%{app_id}.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/%{app_id}.svg
@@ -74,6 +88,7 @@ done
 %license LICENSE apps/gmnb/assets/fonts/OFL-Outfit.txt
 %doc README.md
 %{_bindir}/gmnb
+%{_libexecdir}/gmnb/
 %{_datadir}/applications/%{app_id}.desktop
 %{_metainfodir}/%{app_id}.metainfo.xml
 %{_datadir}/icons/hicolor/scalable/apps/%{app_id}.svg

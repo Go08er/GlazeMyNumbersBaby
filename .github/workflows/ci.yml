@@ -12,6 +12,11 @@ jobs:
   test:
     name: Tests, Nix build, flake check
     runs-on: ubuntu-latest
+    env:
+      # Tests run for plain x86-64 (no RUSTFLAGS target-cpu here), and so does
+      # any C the core-math crate compiles: its build script otherwise uses
+      # the runner's own CPU (-march=native).
+      TARGET_CPU: x86-64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
@@ -33,6 +38,28 @@ jobs:
           # It must have run, not skipped.
           grep -q "1 passed" wayland-test.log
           ! grep -q "skipped" wayland-test.log
+      - name: GMNB launcher on an emulated pre-2013 CPU
+        run: |
+          # GMNB is shipped for x86-64-v3 behind gmnb-launcher, which must
+          # explain itself on an older CPU rather than let GMNB die of SIGILL.
+          nix develop -c cargo build --release --locked -p gmnb-launcher
+          if out=$(nix shell --inputs-from . nixpkgs#qemu-user -c \
+            qemu-x86_64 -cpu Nehalem target/release/gmnb-launcher 2>&1); then
+            echo "the launcher accepted a Nehalem CPU"
+            exit 1
+          fi
+          echo "$out"
+          grep -q "needs a CPU from 2013 or newer" <<<"$out"
+      # To switch on once the core-math crate is in (certified engine, phase
+      # 1): results must not depend on the CPU the code was built for.
+      # - name: Baseline and x86-64-v3 builds agree bit for bit
+      #   run: |
+      #     TARGET_CPU=x86-64 nix develop -c cargo run --release --locked \
+      #       -p graphing --example identities > base.txt
+      #     RUSTFLAGS="-C target-cpu=x86-64-v3" TARGET_CPU=x86-64-v3 nix develop -c \
+      #       cargo run --release --locked -p graphing --example identities \
+      #       --target-dir target/v3 > v3.txt
+      #     cmp base.txt v3.txt
       - name: Clippy
         run: nix develop -c cargo clippy --workspace --locked
       - name: Nix packages

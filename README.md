@@ -102,6 +102,13 @@ Every release attaches all of these to its
 The Arch `PKGBUILD` is a split package that builds both
 (`makepkg -si` in `packaging/arch`).
 
+**CPU:** on x86-64 PCs, GMNB's packages are built for x86-64-v3, so GMNB
+needs a CPU from 2013 or newer (Intel Haswell, AMD Excavator, Ryzen, or
+later). On an older one it says so and stops, rather than crashing:
+`gmnb` is a small launcher, built for any x86-64, that checks the CPU and
+then runs the real program from `libexec/gmnb/` (`lib/gmnb/` on Arch).
+DGMNB runs on any 64-bit PC. ARM builds of both have no such requirement.
+
 ### NixOS module
 
 ```nix
