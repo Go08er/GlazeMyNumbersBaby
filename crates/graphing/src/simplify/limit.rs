@@ -501,7 +501,9 @@ fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
                             } else {
                                 let i = elem::ln(&DecInterval::new(t.c.interval())).iv;
                                 if i.lo() == 0.0 && i.hi() == 0.0 {
-                                    Asy::Zero
+                                    // ln(1 + o(1)) → 0, but is not 0: x·ln(1 + 1/x)
+                                    // → 1, not 0.
+                                    Asy::Small
                                 } else {
                                     Coef::approx(i)
                                         .map_or(Asy::Unknown, |c| Asy::Term(Term::constant(c)))
@@ -698,5 +700,11 @@ mod tests {
         assert_eq!(lim("1-1/x", PosInf), exact(1, 1, 0));
         assert_eq!(lim("acot(x)", NegInf), exact(1, 1, 1));
         assert_eq!(lim("acot(x)", PosInf), exact(0, 1, 0));
+        // 1^∞: the base's leading term 1 says nothing of the power.
+        assert_eq!(lim("ln(1+1/x)", PosInf), exact(0, 1, 0));
+        assert_eq!(lim("x*ln(1+1/x)", PosInf), Limit::Unknown);
+        assert_eq!(lim("(1+1/x)^x", PosInf), Limit::Unknown);
+        assert_eq!(lim("(1+1/x)^x", NegInf), Limit::Unknown);
+        assert_eq!(lim("(1+1/x^2)^x", PosInf), Limit::Unknown);
     }
 }
