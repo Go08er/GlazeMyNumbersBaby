@@ -394,6 +394,10 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
                 Func::Ln | Func::Log => {
                     out.push(Expr::bin(BinOp::Sub, args[0].clone(), Expr::Num(1.0)))
                 }
+                // log_b u = 0 where u = 1 (b a valid base wherever defined).
+                Func::LogBase if args.len() == 2 => {
+                    out.push(Expr::bin(BinOp::Sub, args[1].clone(), Expr::Num(1.0)))
+                }
                 _ => out.push(e.clone()),
             },
             Expr::Call(Func::Root, args) => go(&args[0], out),

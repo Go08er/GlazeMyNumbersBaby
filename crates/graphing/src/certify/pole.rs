@@ -172,6 +172,15 @@ pub fn end_pole(f: &Fun<'_>, e: &Expr, n: Interval, p_end: f64) -> Result<bool, 
                 || (end_pole(f, b, n, p_end)? && nonzero_cont(f, a, n)?)
         }
         Expr::Call(Func::Ln | Func::Log, args) => to_zero(&args[0])?,
+        // log_b u = ln u / ln b, for a constant base b > 0, b ≠ 1.
+        Expr::Call(Func::LogBase, args) if !args[0].contains_x() => {
+            let b = f.ser_of(&args[0], n, 0)?[0];
+            !b.is_empty()
+                && b.iv.is_bounded()
+                && b.gt0()
+                && (b.lo() > 1.0 || b.hi() < 1.0)
+                && to_zero(&args[1])?
+        }
         _ => false,
     })
 }

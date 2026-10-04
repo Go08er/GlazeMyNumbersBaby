@@ -2,19 +2,20 @@
 //!
 //! Produces the same set of fields as the original engine's
 //! `IGraphFunctionAnalysisData` / `GraphControl::KeyGraphFeaturesInfo`, and
-//! [`KeyGraphFeatures::items`] lays them out exactly like
+//! [`KeyGraphFeatures::items`] lays them out like
 //! `EquationViewModel.PopulateKeyGraphFeatures` (titles, "none" texts,
-//! period shown only when known, the "too complex" footer).
+//! the "too complex" footer), plus a note on lists that may be partial.
 //!
-//! The original engine is symbolic; this one is numeric. Results are
-//! computed by sampling, root finding on exact symbolic derivatives, limit
-//! probing and periodicity detection, then formatted with recognition of
-//! simple closed forms (integers, fractions, multiples of π, surds, e).
-//! When a feature cannot be determined reliably (e.g. infinitely many
-//! non-periodic zeros, as in `sin(x²)`), it is reported through the
-//! too-complex flags like the original does.
+//! [`analyze`] shows only what the certified analysis ([`crate::certify`])
+//! proves, row by row: a complete answer, a correct list labelled with
+//! where it is complete, or "unable to calculate" (see `certified`). The
+//! earlier numeric engine (sampling, root finding, limit probing, checked
+//! by [`verify`]) stays as [`analyze_legacy`] for the tools that compare
+//! the two.
 
+mod certified;
 mod engine;
+pub mod exact;
 pub mod format;
 pub(crate) mod numeric;
 #[doc(hidden)]
@@ -69,6 +70,8 @@ pub enum Parity {
     Odd = 1,
     Even = 2,
     Neither = 3,
+    /// Only the zero function (on a symmetric domain) is both.
+    Both = 4,
 }
 
 /// `FunctionPeriodicityType` (the panel hides the period row for `Unknown`).
@@ -78,6 +81,8 @@ pub enum Periodicity {
     Unknown = 0,
     Periodic = 1,
     NotPeriodic = 2,
+    /// A constant: every shift is a period, so it has no fundamental one.
+    Constant = 3,
 }
 
 /// `FunctionMonotonicityType`.
@@ -200,6 +205,11 @@ pub struct KeyGraphFeatures {
     pub monotonicity: Vec<(String, Monotonicity)>,
     /// [`flags`] of features too complex to calculate.
     pub too_complex_features: u32,
+    /// [`flags`] of lists proven correct but not proven complete (shown
+    /// with a note saying so).
+    pub partial_features: u32,
+    /// The note shown with each partial list, by its flag.
+    pub notes: Vec<(u32, String)>,
     pub analysis_error: AnalysisError,
     /// The underlying numbers.
     pub data: AnalysisData,
@@ -216,6 +226,8 @@ pub struct KeyGraphFeaturesItem {
     pub grid_items: Vec<GridDisplayItem>,
     /// True if `display_items` is plain text rather than math.
     pub is_text: bool,
+    /// A note on the row (a list that may not be complete); empty if none.
+    pub note: String,
 }
 
 /// One monotonicity row (`GridDisplayItems`).
@@ -362,6 +374,7 @@ impl KeyGraphFeatures {
             Parity::Odd => s::KGF_PARITY_ODD,
             Parity::Even => s::KGF_PARITY_EVEN,
             Parity::Neither => s::KGF_PARITY_NEITHER,
+            Parity::Both => s::KGF_PARITY_BOTH,
             Parity::Unknown => s::KGF_PARITY_UNKNOWN,
         };
         items.push(KeyGraphFeaturesItem {
@@ -371,6 +384,16 @@ impl KeyGraphFeatures {
             ..Default::default()
         });
         match self.periodicity_direction {
+            // Hidden when not asked about (the original), said when it
+            // couldn't be calculated.
+            Periodicity::Unknown if self.too_complex_features & flags::PERIODICITY != 0 => {
+                items.push(KeyGraphFeaturesItem {
+                    title: s::PERIODICITY.into(),
+                    display_items: vec![s::KGF_PERIODICITY_UNKNOWN.into()],
+                    is_text: true,
+                    ..Default::default()
+                });
+            }
             Periodicity::Unknown => {}
             Periodicity::Periodic => {
                 if self.periodicity_expression.is_empty() {
@@ -396,6 +419,12 @@ impl KeyGraphFeatures {
                 is_text: false,
                 ..Default::default()
             }),
+            Periodicity::Constant => items.push(KeyGraphFeaturesItem {
+                title: s::PERIODICITY.into(),
+                display_items: vec![s::KGF_PERIODICITY_CONSTANT.into()],
+                is_text: true,
+                ..Default::default()
+            }),
         }
         let mut mono = KeyGraphFeaturesItem {
             title: s::MONOTONICITY.into(),
@@ -418,6 +447,25 @@ impl KeyGraphFeatures {
             mono.is_text = true;
         }
         items.push(mono);
+        // Notes on partial lists, on the row they belong to.
+        let titled: [(u32, &str); 9] = [
+            (flags::ZEROS, s::X_INTERCEPT),
+            (flags::MINIMA, s::MINIMA),
+            (flags::MAXIMA, s::MAXIMA),
+            (flags::INFLECTION_POINTS, s::INFLECTION_POINTS),
+            (flags::VERTICAL_ASYMPTOTES, s::VERTICAL_ASYMPTOTES),
+            (flags::HORIZONTAL_ASYMPTOTES, s::HORIZONTAL_ASYMPTOTES),
+            (flags::OBLIQUE_ASYMPTOTES, s::OBLIQUE_ASYMPTOTES),
+            (flags::MONOTONE_INTERVALS, s::MONOTONICITY),
+            (flags::RANGE, s::RANGE),
+        ];
+        for (flag, note) in &self.notes {
+            if let Some((_, title)) = titled.iter().find(|(f, _)| f == flag)
+                && let Some(item) = items.iter_mut().find(|i| i.title == *title)
+            {
+                item.note = note.clone();
+            }
+        }
         if self.too_complex_features != 0 {
             let order: [(u32, &str); 13] = [
                 (flags::DOMAIN, s::DOMAIN),
@@ -480,6 +528,49 @@ pub fn analyze_cancellable(
     let Some((Axis::X, f)) = eq.explicit() else {
         return error(AnalysisError::AnalysisCouldNotBePerformed);
     };
+    let cancelled = || cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed));
+    let Ok(a) = crate::certify::certify_equation(eq, *opts, crate::certify::DEFAULT_BUDGET, cancel)
+    else {
+        return error(AnalysisError::AnalysisCouldNotBePerformed);
+    };
+    // A row cut short by the flag is unknown, not "none": drop the result.
+    if cancelled() {
+        return None;
+    }
+    // Defined nowhere: nothing to analyse (as the original says).
+    if let crate::certify::Row::Certified { value, .. } = &a.domain
+        && value.pieces.is_empty()
+    {
+        return error(AnalysisError::AnalysisCouldNotBePerformed);
+    }
+    let (Ok(lits), Ok(ilits)) = (
+        crate::simplify::ExactLiterals::of(eq.text(), eq.parse_options()),
+        crate::interval::Literals::of(eq.text(), eq.parse_options()),
+    ) else {
+        return error(AnalysisError::AnalysisCouldNotBePerformed);
+    };
+    Some(certified::features(f, opts, &lits, &ilits, &a))
+}
+
+/// The earlier numeric engine, checked by [`verify`] (what the panel showed
+/// before the certified analysis). For the tools that compare the two.
+#[doc(hidden)]
+pub fn analyze_legacy(
+    eq: &Equation,
+    opts: &CompileOptions<'_>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Option<KeyGraphFeatures> {
+    let error = |e| Some(KeyGraphFeatures::error(e));
+    match eq.kind() {
+        EquationKind::Function => {}
+        EquationKind::InverseFunction => return error(AnalysisError::VariableIsNotX),
+        EquationKind::Implicit | EquationKind::Inequality => {
+            return error(AnalysisError::AnalysisNotSupported);
+        }
+    }
+    let Some((Axis::X, f)) = eq.explicit() else {
+        return error(AnalysisError::AnalysisCouldNotBePerformed);
+    };
     match engine::analyze_expr(f, opts, cancel) {
         Ok(k) => Some(k),
         Err(engine::Stop::Cancelled) => None,
@@ -487,8 +578,9 @@ pub fn analyze_cancellable(
     }
 }
 
-/// [`analyze`] without the check of its claims against the function
-/// ([`verify`]): what the engine alone says. For tests and the sweep.
+/// [`analyze_legacy`] without the check of its claims against the function
+/// ([`verify`]): what the earlier engine alone says. For tests and the
+/// sweep.
 #[doc(hidden)]
 pub fn analyze_ungated(eq: &Equation, opts: &CompileOptions<'_>) -> KeyGraphFeatures {
     match eq.explicit() {
@@ -499,7 +591,7 @@ pub fn analyze_ungated(eq: &Equation, opts: &CompileOptions<'_>) -> KeyGraphFeat
                 Err(engine::Stop::Cancelled) => unreachable!("not cancellable"),
             }
         }
-        _ => analyze(eq, opts),
+        _ => analyze_legacy(eq, opts, None).expect("not cancellable"),
     }
 }
 

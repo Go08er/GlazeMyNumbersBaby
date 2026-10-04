@@ -43,6 +43,11 @@ impl Poly {
         Poly(c)
     }
 
+    /// The polynomial with these coefficients, constant term first.
+    pub fn from_coefficients(c: Vec<Q>) -> Poly {
+        Poly::from(c)
+    }
+
     /// The coefficients, constant term first.
     pub fn coefficients(&self) -> &[Q] {
         &self.0

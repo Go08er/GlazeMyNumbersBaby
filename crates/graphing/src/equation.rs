@@ -93,6 +93,8 @@ pub(crate) enum Form {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Equation {
     text: String,
+    /// How `text` was tokenized (its literals are read back the same way).
+    parse: ParseOptions,
     form: Form,
     variables: Vec<String>,
     function_name: Option<String>,
@@ -120,6 +122,7 @@ impl Equation {
         }
         Ok(Equation {
             text: text.to_string(),
+            parse: opts,
             form,
             variables,
             function_name: parsed.function_name.clone(),
@@ -130,6 +133,11 @@ impl Equation {
     /// The original text.
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// The options `text` was parsed with.
+    pub fn parse_options(&self) -> ParseOptions {
+        self.parse
     }
 
     /// The kind of equation.
