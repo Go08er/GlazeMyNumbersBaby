@@ -383,7 +383,7 @@ impl<'a> Fun<'a> {
             sides.push((u, !rising, rising));
         }
         if !at_zero {
-            return Ok(None);
+            return self.singular_at(l, p, r);
         }
         for tree in [&self.expr, &self.eval] {
             let slope = |left: bool, x: Interval| -> Result<Option<bool>, Stop> {
@@ -403,6 +403,58 @@ impl<'a> Fun<'a> {
             }
         }
         Ok(None)
+    }
+
+    /// A singular point of f′ placed exactly (`kink_at`'s, for x^(2/3)):
+    /// the base of a fractional power u^r (r < 1) exactly 0 at the double
+    /// p, every such base strictly signed on each side of p within the box
+    /// (away from 0 over it, or 0 at p with a strictly signed derivative),
+    /// so f′ exists on the box but at p; and f′'s enclosure over [l, p] and
+    /// over [p, r] — where it exists — strictly signed. f, continuous
+    /// across the box (its `Kink` claim), is then strictly monotone on each
+    /// side of p.
+    fn singular_at(&self, l: f64, p: f64, r: f64) -> Result<Option<KinkPoint>, Stop> {
+        use crate::interval::Dec;
+        let around = Interval::new(l, r);
+        let mut at_zero = false;
+        for (u, rr) in self.singular_args() {
+            let s = self.ser_of(&u, around, 1)?;
+            if s[0].dec >= Dec::Def && s[0].ne0() {
+                continue;
+            }
+            let v = self.ser_of(&u, Interval::point(p), 0)?[0];
+            let zero = !v.is_empty() && v.lo() == 0.0 && v.hi() == 0.0 && v.dec >= Dec::Def;
+            let d = s[1];
+            if !(zero && d.dec >= Dec::Def && d.iv.is_bounded() && d.ne0()) {
+                return Ok(None);
+            }
+            // (A power with r ≥ 1 is smooth enough for f′ at p.)
+            at_zero |= rr < 1.0;
+        }
+        if !at_zero {
+            return Ok(None);
+        }
+        let Some(d) = self.derivs().map(|d| d[0].clone()) else {
+            return Ok(None);
+        };
+        let sign = |x: Interval| -> Result<Option<bool>, Stop> {
+            let v = self.ser_of(&d, x, 0)?[0];
+            Ok(if v.is_empty() {
+                None
+            } else if v.gt0() {
+                Some(true)
+            } else if v.lt0() {
+                Some(false)
+            } else {
+                None
+            })
+        };
+        Ok(
+            match (sign(Interval::new(l, p))?, sign(Interval::new(p, r))?) {
+                (Some(left), Some(right)) => Some(KinkPoint { p, left, right }),
+                _ => None,
+            },
+        )
     }
 
     /// No kink of f in the box at which f is defined: each kink argument

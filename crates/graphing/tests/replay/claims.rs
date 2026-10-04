@@ -740,6 +740,9 @@ fn kink_at(fx: &Fx, x: B, at: f64, left: bool, right: bool) -> Outcome {
     }
     let mut args = Vec::new();
     kink_args(&fx.f, &mut args);
+    // (Set when a singular point's f′ was signed on the certifier's tree
+    // of f′, compared with f′ at points only.)
+    let weak = std::cell::Cell::new(false);
     let v = ladder(|| {
         let mut sides: Vec<(Expr, bool, bool)> = Vec::new();
         let mut zero = false;
@@ -763,7 +766,8 @@ fn kink_at(fx: &Fx, x: B, at: f64, left: bool, right: bool) -> Outcome {
             sides.push((u.clone(), !rising, rising));
         }
         if !zero {
-            return V::No("no kink argument is 0 at the point".into());
+            // No corner: a point where f′ is singular (u^r, r < 1, u = 0)?
+            return singular_at(fx, x, at, left, right, &sides, &weak);
         }
         for (on_left, lo, hi, want) in [(true, x.0, at, left), (false, at, x.1, right)] {
             let Some(e) = one_sided(&fx.f, &sides, on_left) else {
@@ -784,9 +788,158 @@ fn kink_at(fx: &Fx, x: B, at: f64, left: bool, right: bool) -> Outcome {
         V::Yes
     });
     match v {
+        V::Yes if weak.get() => Outcome::new(Class::Weak, "f′ signed on the certifier's tree"),
         V::Yes => Outcome::new(Class::Strong, ""),
         V::No(w) => Outcome::new(Class::Refuted, w),
         V::Unknown(w) => Outcome::new(Class::Unconfirmed, w),
+    }
+}
+
+/// The bases u (varying with x) of f's fractional powers u^r with r < 1
+/// (√u, ∛u, a typed or written non-integer exponent): f′ is unbounded
+/// where u = 0.
+fn singular_args(fx: &Fx, e: &Expr, out: &mut Vec<Expr>) {
+    let r = |b: &Expr| -> Option<f64> {
+        if contains_x(b) {
+            return None;
+        }
+        if let Some((p, q)) = super::eval::written_rational(b) {
+            return (q != 1).then(|| p as f64 / q as f64);
+        }
+        let v = fx.series(b, 0.0, 0.0, 0)[0].clone();
+        (v.is_point() && !v.lo.is_integer()).then(|| v.lo.to_f64())
+    };
+    match e {
+        Expr::Bin(BinOp::Pow, u, b) if contains_x(u) && r(b).is_some_and(|r| r < 1.0) => {
+            if !out.contains(u) {
+                out.push((**u).clone());
+            }
+            singular_args(fx, u, out);
+        }
+        Expr::Call(Func::Sqrt | Func::Cbrt, a) if contains_x(&a[0]) => {
+            if !out.contains(&a[0]) {
+                out.push(a[0].clone());
+            }
+            singular_args(fx, &a[0], out);
+        }
+        Expr::Neg(a) | Expr::Degrees(a) => singular_args(fx, a, out),
+        Expr::Bin(_, a, b) => {
+            singular_args(fx, a, out);
+            singular_args(fx, b, out);
+        }
+        Expr::Call(_, args) => args.iter().for_each(|v| singular_args(fx, v, out)),
+        _ => {}
+    }
+}
+
+/// A `KinkAt` with no corner: f′ singular at `at` (a base of a power
+/// u^r, r < 1, exactly 0 there), every such base strictly signed on each
+/// side within the box, so f′ exists on the box but at `at`; f′'s
+/// enclosure (f's series, or the certifier's tree of f′) over [x.0, at]
+/// and [at, x.1], where it exists, has the claimed strict signs.
+fn singular_at(
+    fx: &Fx,
+    x: B,
+    at: f64,
+    left: bool,
+    right: bool,
+    corners: &[(Expr, bool, bool)],
+    weak: &std::cell::Cell<bool>,
+) -> V {
+    // (Every corner argument away from 0 over the box: f is smooth there
+    // but where f′ is singular.)
+    if corners.iter().any(|(_, l, r)| l != r) {
+        return V::No("a corner argument changes sign in the box".into());
+    }
+    let mut args = Vec::new();
+    singular_args(fx, &fx.f, &mut args);
+    let mut zero = false;
+    for u in &args {
+        let s = fx.series(u, x.0, x.1, 1);
+        if s[0].def && (s[0].gt(0.0) || s[0].lt(0.0)) {
+            continue;
+        }
+        let at_u = fx.series(u, at, at, 0);
+        let d = &s[1];
+        if !(at_u[0].def && at_u[0].is_exactly(0.0)) {
+            return unknown("a power's base is not decided over the box");
+        }
+        if !(s[0].cont && d.def && d.bounded() && (d.gt(0.0) || d.lt(0.0))) {
+            return unknown("a power's base's slope is not decided over the box");
+        }
+        zero = true;
+    }
+    if !zero {
+        return V::No("no corner or power's base is 0 at the point".into());
+    }
+    for (lo, hi, want) in [(x.0, at, left), (at, x.1, right)] {
+        let far = if lo == at { hi } else { lo };
+        let d = fx.series(&fx.f, lo, hi, 1)[1].clone();
+        let sign = if d.gt(0.0) {
+            Some(true)
+        } else if d.lt(0.0) {
+            Some(false)
+        } else if let Some(t) = &fx.d[0] {
+            // The certifier's tree of f′ (weak unless shown identical to
+            // f′ exactly), signed factor by factor on the side less `at`.
+            if !fx.verified.d[0] {
+                weak.set(true);
+            }
+            open_sign(fx, t, lo, hi, at, far, 6)
+        } else {
+            None
+        };
+        match sign {
+            Some(s) if s == want => {}
+            Some(_) => return V::No("f′ has the other sign beside the point".into()),
+            None => return unknown("f′ is not strictly signed beside the point"),
+        }
+    }
+    V::Yes
+}
+
+/// e's strict sign on [lo, hi] less the point `at` (an end of it), `far`
+/// the other end: its enclosure, or by its factors — a power u^(p/q) of a
+/// base u exactly 0 at `at` and strictly monotone over the box has, off
+/// `at`, the sign of u at `far` to the p (q odd), or is positive (q even).
+fn open_sign(fx: &Fx, e: &Expr, lo: f64, hi: f64, at: f64, far: f64, depth: usize) -> Option<bool> {
+    let v = fx.series(e, lo, hi, 0)[0].clone();
+    if !v.empty && v.gt(0.0) {
+        return Some(true);
+    }
+    if !v.empty && v.lt(0.0) {
+        return Some(false);
+    }
+    let d = depth.checked_sub(1)?;
+    match e {
+        Expr::Neg(a) => open_sign(fx, a, lo, hi, at, far, d).map(|s| !s),
+        Expr::Bin(BinOp::Mul | BinOp::Div, a, b) => {
+            Some(open_sign(fx, a, lo, hi, at, far, d)? == open_sign(fx, b, lo, hi, at, far, d)?)
+        }
+        Expr::Bin(BinOp::Pow, u, b) => {
+            let (p, q) = super::eval::written_rational(b)?;
+            let s = fx.series(u, lo, hi, 1);
+            let at_u = fx.series(u, at, at, 0);
+            let monotone =
+                s[0].cont && s[1].def && s[1].bounded() && (s[1].gt(0.0) || s[1].lt(0.0));
+            if !(at_u[0].def && at_u[0].is_exactly(0.0) && monotone) {
+                return None;
+            }
+            let uf = fx.series(u, far, far, 0)[0].clone();
+            let pos = if uf.gt(0.0) {
+                true
+            } else if uf.lt(0.0) {
+                false
+            } else {
+                return None;
+            };
+            if q % 2 == 0 {
+                pos.then_some(true)
+            } else {
+                Some(pos || p % 2 == 0)
+            }
+        }
+        _ => None,
     }
 }
 
