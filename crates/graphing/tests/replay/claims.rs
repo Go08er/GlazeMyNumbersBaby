@@ -2342,12 +2342,13 @@ fn judge(vals: &[(f64, Iv)], lim: &str) -> Approach {
             let grows = |a: &Iv, b: &Iv| if up { b.lo > a.hi } else { b.hi < a.lo };
             let rising = vals.windows(2).all(|w| grows(&w[0].1, &w[1].1));
             let (first, last) = (&vals[0].1, &vals[n - 1].1);
+            // (In MPFR: the values may be past every double.)
             let gain = if up {
-                last.lo.to_f64() - first.hi.to_f64()
+                iv::sub(last, first)
             } else {
-                first.lo.to_f64() - last.hi.to_f64()
+                iv::sub(first, last)
             };
-            if rising && gain > 1.0 {
+            if rising && gain.gt(1.0) {
                 return Approach::Consistent(format!(
                     "{} then {}",
                     show(&vals[0]),
@@ -2371,7 +2372,10 @@ fn judge(vals: &[(f64, Iv)], lim: &str) -> Approach {
                     show(&last3[2])
                 ));
             }
-            Approach::Undecided(format!("points approaching don't show {lim}"))
+            Approach::Undecided(format!(
+                "points approaching don't show {lim}: {}",
+                vals.iter().map(show).collect::<Vec<_>>().join(", ")
+            ))
         }
         l => {
             let target = if let Some(b) = l.strip_prefix("in ") {

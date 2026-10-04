@@ -632,7 +632,60 @@ pub fn limit(
             .collect(),
     };
     let cx = Cx { unit, lits, facts };
-    match asy(&e, &cx) {
+    let first = read_limit(asy(&e, &cx));
+    if first != Limit::Unknown {
+        return first;
+    }
+    // The limit of f(x) at ±∞ is f(x + c)'s for any c: an exponential
+    // centred far out (e^(x − 1000), whose e⁻¹⁰⁰⁰ is no double) is taken
+    // about its centre, where its constant part folds away exactly.
+    for c in centres(&e, lits) {
+        let shifted =
+            e.map(&|n| matches!(n, Expr::X).then(|| Expr::bin(BinOp::Add, Expr::X, Expr::Num(c))));
+        let l = read_limit(asy(&shifted, &cx));
+        if l != Limit::Unknown {
+            return l;
+        }
+    }
+    Limit::Unknown
+}
+
+/// The integers c (|c| ≥ 2⁸, below 2⁵³) at which an exponential's affine
+/// exponent a·x + b in `e` is 0 (c = −b/a): where to take e^(…) about.
+pub fn centres(e: &Expr, lits: &ExactLiterals) -> Vec<f64> {
+    let mut out: Vec<f64> = Vec::new();
+    e.visit(&mut |n| {
+        let arg = match n {
+            Expr::Call(Func::Exp, args) => args.first(),
+            Expr::Bin(BinOp::Pow, a, b) if matches!(**a, Expr::Const(crate::ast::Constant::E)) => {
+                Some(&**b)
+            }
+            _ => None,
+        };
+        let Some(arg) = arg else { return };
+        let Some(s) = affine(arg, lits).filter(|s| s.k == 0 && !s.q.is_zero()) else {
+            return;
+        };
+        let at0 = arg.map(&|m| matches!(m, Expr::X).then_some(Expr::Num(0.0)));
+        let Some(d) = exact_constant(&at0, lits).filter(|d| d.k == 0) else {
+            return;
+        };
+        let Some(c) = d.q.neg().and_then(|b| b.div(s.q)) else {
+            return;
+        };
+        if let Some(v) = c.as_int()
+            && (256..=1 << 53).contains(&v.unsigned_abs())
+            && !out.contains(&(v as f64))
+        {
+            out.push(v as f64);
+        }
+    });
+    out.truncate(4);
+    out
+}
+
+fn read_limit(a: Asy) -> Limit {
+    match a {
         Asy::Zero | Asy::Small => Limit::Exact(PiQ { q: Q::ZERO, k: 0 }),
         Asy::Huge(s) => {
             if s > 0 {
@@ -706,5 +759,9 @@ mod tests {
         assert_eq!(lim("(1+1/x)^x", PosInf), Limit::Unknown);
         assert_eq!(lim("(1+1/x)^x", NegInf), Limit::Unknown);
         assert_eq!(lim("(1+1/x^2)^x", PosInf), Limit::Unknown);
+        // Centred far out: taken about the centre.
+        assert_eq!(lim("e^(x-1000)", NegInf), exact(0, 1, 0));
+        assert_eq!(lim("e^(x-1000)/x", PosInf), Limit::PosInf);
+        assert_eq!(lim("(x-1000000)*e^(-(x-1000000))", PosInf), exact(0, 1, 0));
     }
 }

@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::ast::{BinOp, Expr, Func};
 use crate::compile::CompileOptions;
 use crate::interval::{Ctx, DecInterval, Interval, Literals, Series, taylor};
+use crate::simplify::q::Q;
 
 /// Why certification stopped early.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +35,94 @@ pub fn canonical(e: &Expr) -> Expr {
             }
         }
         Expr::Call(f, args) => Expr::Call(*f, args.iter().map(canonical).collect()),
+    }
+}
+
+/// `e` as a·x + b with a, b exact rationals, if it is one (sliders and π
+/// aside).
+fn affine(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<(Q, Q)> {
+    Some(match e {
+        Expr::X => (Q::ONE, Q::ZERO),
+        Expr::Num(v) => (Q::ZERO, lits.exact(*v)?),
+        Expr::Neg(a) => {
+            let (a, b) = affine(a, lits)?;
+            (a.neg()?, b.neg()?)
+        }
+        Expr::Bin(op @ (BinOp::Add | BinOp::Sub), l, r) => {
+            let ((a, b), (c, d)) = (affine(l, lits)?, affine(r, lits)?);
+            if *op == BinOp::Add {
+                (a.add(c)?, b.add(d)?)
+            } else {
+                (a.sub(c)?, b.sub(d)?)
+            }
+        }
+        Expr::Bin(BinOp::Mul, l, r) => {
+            let ((a, b), (c, d)) = (affine(l, lits)?, affine(r, lits)?);
+            match (a.is_zero(), c.is_zero()) {
+                (true, _) => (c.mul(b)?, d.mul(b)?),
+                (_, true) => (a.mul(d)?, b.mul(d)?),
+                _ => return None,
+            }
+        }
+        Expr::Bin(BinOp::Div, l, r) => {
+            let ((a, b), (c, d)) = (affine(l, lits)?, affine(r, lits)?);
+            if !c.is_zero() || d.is_zero() {
+                return None;
+            }
+            (a.div(d)?, b.div(d)?)
+        }
+        _ => return None,
+    })
+}
+
+/// A whole number ≥ 0 that `Num` reads back exactly.
+fn int_num(q: Q) -> Option<Expr> {
+    (q.is_int() && q.signum() >= 0 && q.numer() <= 1 << 53).then(|| Expr::Num(q.numer() as f64))
+}
+
+/// `e` with each part a·x + b in x (exact rationals a ≠ 0 and b, with
+/// c = −b/a an integer) written a·(x − c): x − c is exact near c, where
+/// a·x + b cancels. (x/1000 − 1 at x = 1000 + 2⁻⁴³, evaluated as written,
+/// is [0, 2⁻⁵²]; as (x − 1000)/1000, 2⁻⁴³/1000 to an ulp.) The same real
+/// function, so f's evaluated tree may be written so.
+pub fn recentre(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Expr {
+    if !matches!(e, Expr::X)
+        && let Some((a, b)) = affine(e, lits)
+        && !a.is_zero()
+        && let Some(form) = (|| {
+            let c = b.neg()?.div(a)?;
+            let shifted = match c.signum() {
+                0 => Expr::X,
+                1 => Expr::bin(BinOp::Sub, Expr::X, int_num(c)?),
+                _ => Expr::bin(BinOp::Add, Expr::X, int_num(c.neg()?)?),
+            };
+            let m = a.abs()?;
+            let scaled = if m == Q::ONE {
+                shifted
+            } else if m.is_int() {
+                Expr::bin(BinOp::Mul, int_num(m)?, shifted)
+            } else if m.numer() == 1 {
+                Expr::bin(BinOp::Div, shifted, int_num(Q::int(m.denom()))?)
+            } else {
+                let num = int_num(Q::int(m.numer()))?;
+                let den = int_num(Q::int(m.denom()))?;
+                Expr::bin(BinOp::Mul, Expr::bin(BinOp::Div, num, den), shifted)
+            };
+            Some(if a.signum() < 0 {
+                Expr::Neg(Box::new(scaled))
+            } else {
+                scaled
+            })
+        })()
+    {
+        return form;
+    }
+    match e {
+        Expr::Neg(a) => Expr::Neg(Box::new(recentre(a, lits))),
+        Expr::Degrees(a) => Expr::Degrees(Box::new(recentre(a, lits))),
+        Expr::Bin(op, a, b) => Expr::bin(*op, recentre(a, lits), recentre(b, lits)),
+        Expr::Call(f, args) => Expr::Call(*f, args.iter().map(|a| recentre(a, lits)).collect()),
+        _ => e.clone(),
     }
 }
 
@@ -366,7 +455,17 @@ impl<'a> Fun<'a> {
     /// to order `n`.
     pub fn ser_of(&self, e: &Expr, x: Interval, n: usize) -> Result<Series, Stop> {
         self.charge()?;
-        Ok(taylor(e, x, n, &self.ctx()))
+        let s = taylor(e, x, n, &self.ctx());
+        // f's simplified form, and the formula as written: each encloses
+        // f's coefficients where the formula is defined throughout the box,
+        // and each is tighter in places (the simplified form cancels, the
+        // formula keeps a shift (x − a)/s exact where the simplifier
+        // distributed it).
+        if std::ptr::eq(e, &self.eval) && self.eval != self.expr {
+            let t = taylor(&self.expr, x, n, &self.ctx());
+            return Ok(merge(s, &t));
+        }
+        Ok(s)
     }
 
     /// Taylor coefficients of f over the box (from the evaluated tree).
@@ -378,6 +477,49 @@ impl<'a> Fun<'a> {
     pub fn val(&self, x: Interval) -> Result<DecInterval, Stop> {
         Ok(self.ser(x, 0)?[0])
     }
+}
+
+/// Taylor coefficients of f over a box from its simplified form (`s`) and
+/// from the formula (`t`), equal wherever the formula is defined: up to the
+/// order the formula's are valid to (its value defined throughout the box,
+/// its derivatives' too, with f continuous there), each coefficient is the
+/// intersection of the two, or the formula's alone where the simplified
+/// form's isn't valid. The formula defined throughout the box means the two
+/// trees are the same function there, so whatever either proves holds.
+fn merge(mut s: Series, t: &Series) -> Series {
+    use crate::interval::Dec;
+    let valid = |c: &DecInterval| !c.is_empty() && c.dec >= Dec::Def;
+    let Some(t0) = t.first().filter(|c| valid(c)) else {
+        return s;
+    };
+    // The orders the formula's coefficients are good to.
+    let upto = if t0.dec >= Dec::Dac {
+        t.iter().skip(1).take_while(|c| valid(c)).count()
+    } else {
+        0
+    };
+    let s_cont = s.first().is_some_and(|c| valid(c) && c.dec >= Dec::Dac);
+    for (j, c) in s.iter_mut().enumerate().take(upto + 1) {
+        let tj = t[j];
+        // The simplified form's coefficient j stands only with its value
+        // valid (and, past order 0, continuous).
+        let ok = valid(c) && (j == 0 || s_cont);
+        if !ok {
+            *c = tj;
+            continue;
+        }
+        let iv = c.iv.intersect(tj.iv);
+        if iv.is_empty() {
+            continue;
+        }
+        *c = DecInterval {
+            iv,
+            dec: c.dec.max(tj.dec),
+            pos: c.pos || tj.pos,
+            neg: c.neg || tj.neg,
+        };
+    }
+    s
 }
 
 /// f′ and f″ of a rational function from its exact form (see

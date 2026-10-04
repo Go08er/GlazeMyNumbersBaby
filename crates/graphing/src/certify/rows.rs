@@ -1146,11 +1146,11 @@ const FAR: [f64; 6] = [1e8, 1e16, 1e32, 1e64, 1e150, 1e300];
 /// The tails' starts out from `start`: a few near it (before f overflows,
 /// as eˣ does by 10³), then the far sequence.
 fn out_along(start: f64) -> Vec<f64> {
-    let steps = [1.0, 4.0, 16.0, 64.0, 256.0, 1024.0];
-    let mut ms: Vec<f64> = steps
-        .iter()
-        .chain(steps.iter().map(|k| k * start).collect::<Vec<_>>().iter())
-        .copied()
+    // Doublings from 1 and from the start (e^(x − 1000) is a double only
+    // between 2⁸ and 2¹¹), then the far sequence.
+    let mut ms: Vec<f64> = (0..=24)
+        .map(|k| f64::from(1u32 << k))
+        .chain((0..=12).map(|k| start * f64::from(1u32 << k)))
         .chain(FAR)
         .filter(|m| *m >= 1.0 && m.is_finite())
         .collect();
@@ -1158,6 +1158,38 @@ fn out_along(start: f64) -> Vec<f64> {
     ms.dedup();
     ms
 }
+
+/// The tails' starts for f on one side: [`out_along`], and beside each
+/// far centre of an exponential in f on that side (c + 2ᵏ: e^(x − 10⁹) is
+/// a double only within 745 of 10⁹).
+fn far_points(f: &Fun<'_>, right: bool, start: f64) -> Vec<f64> {
+    let mut ms = out_along(start);
+    if let Some(lits) = f.exact {
+        for c in crate::simplify::limit::centres(&f.expr, lits) {
+            if (c > 0.0) == right {
+                ms.extend((0..=12).map(|k| c.abs() + f64::from(1u32 << k)));
+            }
+        }
+        ms.sort_by(f64::total_cmp);
+        ms.dedup();
+    }
+    ms
+}
+
+/// At most `k` of `v`, evenly spread, the first and the last kept (the
+/// claims a run of bounds or bands needs, not every one computed).
+fn thin<T: Clone>(v: &[T], k: usize) -> Vec<T> {
+    let n = v.len();
+    if n <= k || k < 2 {
+        return v.to_vec();
+    }
+    let mut idx: Vec<usize> = (0..k).map(|i| i * (n - 1) / (k - 1)).collect();
+    idx.dedup();
+    idx.into_iter().map(|i| v[i].clone()).collect()
+}
+
+/// How many claims a run of tail bounds or bands keeps.
+const KEEP: usize = 10;
 
 /// The longest run at the end of `bounds` (in order out along the tail,
 /// or in towards a point) that moves strictly one way (`up`), as the
@@ -1284,7 +1316,7 @@ fn far_bands(
 ) -> Result<Vec<(Interval, Vec<Claim>)>, Stop> {
     let side = if right { Tail::Right } else { Tail::Left };
     let mut out = Vec::new();
-    for m in out_along(start) {
+    for m in far_points(f, right, start) {
         let x = if right { m } else { -m };
         let v = f.val(tail_box(right, m))?;
         if v.is_empty() || v.dec < Dec::Def {
@@ -1354,7 +1386,7 @@ fn level_bands(
 ) -> Result<Option<(Enc, Vec<Claim>)>, Stop> {
     let side = if right { Tail::Right } else { Tail::Left };
     let sign = tail_sign(f, right, start)?;
-    let bands = far_bands(f, right, start, sign.map(|s| s.0))?;
+    let bands = thin(&far_bands(f, right, start, sign.map(|s| s.0))?, KEEP);
     let mut claims = Vec::new();
     if let Some((rising, _)) = sign {
         claims.push(Claim::TailBeyond {
@@ -1400,7 +1432,7 @@ fn infinite_bounds(
 ) -> Result<Option<Vec<Claim>>, Stop> {
     let side = if right { Tail::Right } else { Tail::Left };
     let mut got: Vec<(f64, f64)> = Vec::new();
-    for m in out_along(start) {
+    for m in far_points(f, right, start) {
         let v = f.val(tail_box(right, m))?;
         if v.is_empty() || v.dec < Dec::Def {
             continue;
@@ -1421,7 +1453,7 @@ fn infinite_bounds(
     let keep = growing_suffix(&cs, up);
     if grows_enough(&cs[cs.len() - keep..]) {
         return Ok(Some(
-            got[got.len() - keep..]
+            thin(&got[got.len() - keep..], KEEP)
                 .iter()
                 .map(|&(m, c)| Claim::TailBeyond {
                     side,
@@ -1443,7 +1475,7 @@ fn infinite_bounds(
         return Ok(None);
     }
     let mut pts: Vec<(f64, f64, f64)> = Vec::new();
-    for m in out_along(start) {
+    for m in far_points(f, right, start) {
         let x = if right { m } else { -m };
         let v = f.val(Interval::point(x))?;
         if v.is_empty() || v.dec < Dec::Def || !v.iv.is_bounded() {
@@ -1463,7 +1495,7 @@ fn infinite_bounds(
         c: R(0.0),
         above: rising,
     }];
-    for &(x, lo, hi) in &pts[pts.len() - keep..] {
+    for &(x, lo, hi) in &thin(&pts[pts.len() - keep..], KEEP) {
         claims.push(Claim::Value {
             x: XBox::point(x),
             of: Subject::f(0),
@@ -1609,8 +1641,7 @@ fn side_bands(
     let mut claims = Vec::new();
     match *end {
         TailEnd::Level(y, ref exact) => {
-            let mut lim = Interval::new(y.lo.0, y.hi.0);
-            let mut bands = Vec::new();
+            let mut got: Vec<(Interval, Interval)> = Vec::new();
             for d in toward(p) {
                 // The box beside p, p left out (f may be undefined there).
                 let n = if right {
@@ -1628,8 +1659,11 @@ fn side_bands(
                 // f's band there, as a bound on each side. (The limit may
                 // lie just outside it, in the reals between p and the box:
                 // x·ln x < 0 on [2⁻¹⁰⁷⁴, d], its limit 0.)
-                let (lo, hi) = (v.lo().next_down(), v.hi().next_up());
-                for (c, above) in [(lo, true), (hi, false)] {
+                got.push((n, Interval::new(v.lo().next_down(), v.hi().next_up())));
+            }
+            let got = thin(&got, KEEP);
+            for (n, b) in &got {
+                for (c, above) in [(b.lo(), true), (b.hi(), false)] {
                     claims.push(Claim::Beyond {
                         x: XBox::new(n.lo(), n.hi()),
                         of: Subject::f(0),
@@ -1637,9 +1671,8 @@ fn side_bands(
                         above,
                     });
                 }
-                bands.push(Interval::new(lo, hi));
             }
-            let _ = &mut lim;
+            let bands: Vec<Interval> = got.iter().map(|g| g.1).collect();
             Ok(
                 (bands.len() >= 3 && settles(&bands) && closing_in(&bands, y)).then(|| {
                     (
@@ -1679,7 +1712,7 @@ fn side_bands(
             if !grows_enough(&cs[cs.len() - keep..]) {
                 return Ok(None);
             }
-            for &(n, c) in &got[got.len() - keep..] {
+            for &(n, c) in &thin(&got[got.len() - keep..], KEEP) {
                 claims.push(Claim::Beyond {
                     x: XBox::new(n.lo(), n.hi()),
                     of: Subject::f(0),
@@ -2001,7 +2034,7 @@ fn tail_interval(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cl
         c: R(0.0),
         above: rising,
     }];
-    let bands = far_bands(f, right, start, Some(rising))?;
+    let bands = thin(&far_bands(f, right, start, Some(rising))?, KEEP);
     let mut lim: Option<Interval> = None;
     for (b, cl) in &bands {
         claims.extend(cl.iter().cloned());
@@ -2107,7 +2140,7 @@ fn slope_evidence(
     let mut claims = Vec::new();
     let mut prev: Option<f64> = None;
     let mut last = f64::INFINITY;
-    for m in out_along(start) {
+    for m in far_points(f, right, start) {
         let s = f.ser(tail_box(right, m), 1)?;
         if !usable(&s, 1) {
             continue;
@@ -2125,6 +2158,10 @@ fn slope_evidence(
             // (Past where f′ overflows, no more bounds.)
             if !c.is_finite() || c.abs() >= f64::MAX / 16.0 {
                 break;
+            }
+            // A bound of 0 or past it (f′ underflowing) says nothing.
+            if (above && c <= 0.0) || (!above && c >= 0.0) {
+                continue;
             }
             if prev.is_some_and(|q: f64| (c > 0.0) != (q > 0.0)) {
                 return Ok(None);
@@ -2168,7 +2205,7 @@ fn slope_evidence(
             return Ok(None);
         }
         let n = claims.len();
-        return Ok(Some(claims.split_off(n - keep)));
+        return Ok(Some(thin(&claims.split_off(n - keep), KEEP)));
     }
     Ok((last <= 1e-12).then_some(claims))
 }

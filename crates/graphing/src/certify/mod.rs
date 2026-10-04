@@ -176,6 +176,7 @@ pub fn certify_equation(
     if let Some(g) = rewrite(&f) {
         f.eval = canonical(&g);
     }
+    f.eval = fun::recentre(&f.eval, &exact);
     // A symbolic derivative only for f differentiable wherever defined: no
     // floor, round, sign, mod (their derivative 0 hides the jumps), and no
     // abs, min or max of x (their derivative's tree, sign(u)·u′, is defined
