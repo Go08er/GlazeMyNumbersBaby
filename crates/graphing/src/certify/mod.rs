@@ -150,20 +150,27 @@ pub fn certify_text(
     let exact = ExactLiterals::of(&text, ParseOptions::default()).map_err(|e| format!("{e:?}"))?;
     let mut f = Fun::new(expr, &lits, opts, budget, cancel);
     f.exact = Some(&exact);
+    let t0 = std::time::Instant::now();
     if let Some(g) = rewrite(&f) {
         f.eval = canonical(&g);
     }
+    let t1 = t0.elapsed();
     // A symbolic derivative only for f continuous wherever defined (no
     // floor, round, sign, mod: their derivative 0 hides the jumps).
     let steps = !crate::simplify::side::jumps(&f.expr).is_empty();
-    let settings = f.settings();
-    f.derivs = fun::rational_derivs(&f.expr, &exact).or_else(|| {
-        (!steps)
-            .then(|| fun::symbolic_derivs(&f.eval, f.opts.trig_unit, settings.as_ref()))
-            .flatten()
-    });
+    f.smooth_tree = !steps;
     f.numerators = fun::rational_numerators(&f.expr, &exact);
-    Ok(certify(&f, &text))
+    let t2 = t0.elapsed();
+    let a = certify(&f, &text);
+    if std::env::var_os("CERTIFY_TIME").is_some() {
+        eprintln!(
+            "{text}: simplify {:.1} ms, derivatives {:.1} ms, rows {:.1} ms",
+            t1.as_secs_f64() * 1e3,
+            (t2 - t1).as_secs_f64() * 1e3,
+            (t0.elapsed() - t2).as_secs_f64() * 1e3
+        );
+    }
+    Ok(a)
 }
 
 /// The simplifier's form of f to enclose values with, if it changed f and
@@ -210,7 +217,7 @@ fn evaluated(f: &Fun<'_>) -> Option<String> {
     if f.eval != f.expr {
         parts.push(format!("f = {}", f.eval.formula()));
     }
-    if let Some([d1, d2]) = &f.derivs {
+    if let Some([d1, d2]) = f.derivs_built() {
         parts.push(format!("f′ = {}", d1.formula()));
         parts.push(format!("f″ = {}", d2.formula()));
     }
@@ -327,14 +334,17 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         let sp = &kspans[k - 1];
         f.allow(phase);
         let c = Cover::run(f, &Target { expr: &f.eval, k }, &[0.0], sp);
-        match &f.derivs {
-            Some(d) if continuous && !c.complete() => {
-                f.allow(phase);
-                let r = Cover::run(f, &Target { expr: &d[k - 1], k: 0 }, &[0.0], sp);
-                if r.complete() { r } else { c }
+        if continuous
+            && !c.complete()
+            && let Some(d) = f.derivs()
+        {
+            f.allow(phase);
+            let r = Cover::run(f, &Target { expr: &d[k - 1], k: 0 }, &[0.0], sp);
+            if r.complete() {
+                return r;
             }
-            _ => c,
         }
+        c
     };
     let (c1, c2) = (cover(1), cover(2));
     if std::env::var_os("CERTIFY_DEBUG").is_some() {

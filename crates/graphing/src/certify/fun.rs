@@ -69,7 +69,9 @@ pub struct Fun<'a> {
     /// otherwise by symbolic differentiation (`crate::diff`) of the
     /// evaluated tree. Equal to f′, f″ wherever f is differentiable; used
     /// only where f is proven continuous.
-    pub derivs: Option<[Expr; 2]>,
+    derivs: std::cell::OnceCell<Option<[Expr; 2]>>,
+    /// Whether f may have a symbolic derivative tree (no jumps).
+    pub smooth_tree: bool,
     /// For a rational f, the numerators of f, f′, f″ in lowest terms
     /// ([`rational_numerators`]).
     pub numerators: Option<[Expr; 3]>,
@@ -98,7 +100,8 @@ impl<'a> Fun<'a> {
         Fun {
             eval: expr.clone(),
             expr,
-            derivs: None,
+            derivs: std::cell::OnceCell::new(),
+            smooth_tree: false,
             numerators: None,
             lits,
             exact: None,
@@ -114,7 +117,32 @@ impl<'a> Fun<'a> {
     pub fn settings(&self) -> Option<crate::simplify::Settings<'a>> {
         let mut s = crate::simplify::Settings::new(&self.opts, self.exact?);
         s.cancel = self.cancel;
+        // Several runs per analysis: each kept short.
+        s.limits.time = std::time::Duration::from_millis(15);
         Some(s)
+    }
+
+    /// f′ and f″ as trees of their own ([`Fun::derivs`]'s field doc),
+    /// built on first use (simplifying them costs tens of milliseconds).
+    pub fn derivs(&self) -> Option<&[Expr; 2]> {
+        self.derivs
+            .get_or_init(|| {
+                let exact = self.exact?;
+                rational_derivs(&self.expr, exact).or_else(|| {
+                    if !self.smooth_tree {
+                        return None;
+                    }
+                    let mut s = self.settings()?;
+                    s.limits.time = std::time::Duration::from_millis(15);
+                    symbolic_derivs(&self.eval, self.opts.trig_unit, Some(&s))
+                })
+            })
+            .as_ref()
+    }
+
+    /// The derivative trees, if already built.
+    pub fn derivs_built(&self) -> Option<&[Expr; 2]> {
+        self.derivs.get().and_then(|d| d.as_ref())
     }
 
     /// The caller's cancel flag.

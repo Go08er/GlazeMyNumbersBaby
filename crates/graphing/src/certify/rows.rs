@@ -600,7 +600,7 @@ pub fn gaps_clear(
         }
         if k > 0
             && use_derivs
-            && let Some(d) = &f.derivs
+            && let Some(d) = f.derivs()
         {
             let v = f.ser_of(&d[k - 1], iv, 0)?[0];
             if !v.is_empty() && v.ne0() {
@@ -610,7 +610,7 @@ pub fn gaps_clear(
         // Factor by factor: each away from 0 over the gap, or exactly 0 at
         // one of its doubles and strictly monotone across it (so 0 nowhere
         // between the doubles).
-        let tree = match (k, &f.numerators, &f.derivs) {
+        let tree = match (k, &f.numerators, if use_derivs { f.derivs() } else { None }) {
             (_, Some(n), _) => Some(&n[k]),
             (0, None, _) => Some(&f.eval),
             (_, None, Some(d)) if use_derivs => Some(&d[k - 1]),
@@ -1209,7 +1209,7 @@ fn tail_interval(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cl
     } else {
         // f′'s own tree: continuous on the tail with no factor reaching 0
         // there (−csch² for coth), so of the sign it has at the start.
-        let Some(t) = f.derivs.as_ref().map(|d| &d[0]) else {
+        let Some(t) = f.derivs().map(|d| &d[0]) else {
             return Ok((TailEnd::Unknown, Vec::new()));
         };
         let whole = f.ser_of(t, tail(start), 0)?[0];
