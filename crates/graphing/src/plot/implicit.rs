@@ -443,8 +443,15 @@ pub(crate) fn contour(
             missing: true,
         };
     }
+    // Kept as long as the plot is shown: no spare capacity.
+    let mut curves = join_segments(segments);
+    for c in &mut curves {
+        c.shrink_to_fit();
+    }
+    curves.shrink_to_fit();
+    fill.shrink_to_fit();
     ContourResult {
-        curves: join_segments(segments),
+        curves,
         fill,
         missing: false,
     }

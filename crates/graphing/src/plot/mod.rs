@@ -13,6 +13,8 @@
 //!
 //! All coordinates are finite: curves are clipped to a band one viewport
 //! tall above and below the visible area, so they can be stroked directly.
+//! A viewport that isn't [`Viewport::is_sane`] (only possible by setting
+//! its fields directly) gets an empty plot with `has_missing_data`.
 
 mod explicit;
 mod ifn;
@@ -51,9 +53,17 @@ pub struct PlotOptions {
     pub tolerance_px: f64,
     /// Maximum refinement depth below the seed spacing (2^depth subdivisions).
     pub max_depth: u32,
-    /// Evaluation budget per explicit curve; when exhausted the remaining
-    /// segments are drawn unrefined and `has_missing_data` is set.
-    pub max_evals: usize,
+    /// Work budget per explicit curve, a count of estimated evaluation
+    /// cost: each evaluation is charged by the size of the curve's
+    /// expression ([`crate::compile::Program::cost`],
+    /// [`IntervalFn::cost`]), an interval one many times a point one. It
+    /// is counted, never timed, so the same view gives the same geometry
+    /// on any machine, serial or parallel (the units are calibrated so the
+    /// default is roughly 0.1 s of work on a 2020s desktop core). When it
+    /// runs out, the rest is drawn coarser — joined only where proven
+    /// continuous or where the heuristic sampler finds no jump — and
+    /// `has_missing_data` is set.
+    pub max_work: usize,
     /// Size of a fine marching-squares cell for implicit relations, in pixels.
     pub implicit_cell_px: f64,
     /// Number of fine cells per coarse block side.
@@ -72,7 +82,7 @@ impl Default for PlotOptions {
             seed_px: 1.0,
             tolerance_px: 0.25,
             max_depth: 6,
-            max_evals: 200_000,
+            max_work: 100_000_000,
             implicit_cell_px: 2.0,
             implicit_block: 8,
             implicit_max_refined: 4.0e6,
@@ -153,6 +163,12 @@ pub(crate) fn plot_with(
     opts: &PlotOptions,
     cancel: &Cancel<'_>,
 ) -> Plot {
+    if !vp.is_sane() {
+        return Plot {
+            has_missing_data: true,
+            ..Plot::default()
+        };
+    }
     match &eq.form {
         CompiledForm::Explicit { axis, f, iv } => {
             let mut s = ExplicitSampler::new(f, *axis, vp, opts);

@@ -552,8 +552,72 @@ fn critical(f: Func, iv: Interval, unit: TrigUnit) -> Vec<Float> {
         Cos | Sec => lattice(iv, &half, &mp(0.0)),
         Floor | Ceil => lattice(iv, &mp(1.0), &mp(0.0)),
         Round => lattice(iv, &mp(1.0), &mp(0.5)),
+        Factorial => factorial_extrema()
+            .iter()
+            .filter(|e| iv.contains(e.to_f64()))
+            .take(6)
+            .cloned()
+            .collect(),
         _ => Vec::new(),
     }
+}
+
+/// Where n! = Γ(n + 1) has its extrema: ψ(n + 1) = 0, once on (0, ∞) and
+/// once between each two poles (the first 60), by bisection in MPFR.
+fn factorial_extrema() -> &'static [Float] {
+    static E: std::sync::OnceLock<Vec<Float>> = std::sync::OnceLock::new();
+    E.get_or_init(|| {
+        init();
+        let root = |lo: f64, hi: f64| {
+            // ψ increases on each branch.
+            let (mut a, mut b) = (Float::with_val(P, lo), Float::with_val(P, hi));
+            for _ in 0..P + 8 {
+                let m = Float::with_val(P, &a + &b) / 2u32;
+                if Float::with_val(P, m.digamma_ref()) < 0 {
+                    a = m;
+                } else {
+                    b = m;
+                }
+            }
+            Float::with_val(P, &a - 1u32)
+        };
+        let mut v = vec![root(1.0, 2.0)];
+        for n in 0..60 {
+            v.push(root(-(n as f64) - 1.0, -(n as f64)));
+        }
+        v
+    })
+}
+
+/// nCr(n, r) and nPr(n, r) as `functions` defines them: the exact count
+/// for whole n ≥ 0 and whole r (0 outside 0 ≤ r ≤ n), else through Γ,
+/// undefined where an argument of Γ is at a pole.
+fn mp_ncr(n: &Float, r: &Float, perm: bool) -> Option<Float> {
+    if n.is_integer() && r.is_integer() && *n >= 0 && (*r < 0 || *r > *n) {
+        return Some(mp(0.0));
+    }
+    // Each argument exactly (a sum of doubles needs up to ~2100 bits; at
+    // the working precision −1 + 8·10⁻²⁰² would round onto Γ's pole), and
+    // at the working precision where that is exact (fast).
+    let g = |v: Float| {
+        if v <= 0 && v.is_integer() {
+            return None;
+        }
+        let short = Float::with_val(p(), &v);
+        Some(if short == v {
+            short.gamma()
+        } else {
+            Float::with_val(p(), v.gamma_ref())
+        })
+    };
+    let n1 = Float::with_val(4200, n + 1u32);
+    let num = g(n1.clone())?;
+    let den = g(Float::with_val(4200, &n1 - r))?;
+    let mut q = Float::with_val(p(), num / den);
+    if !perm {
+        q /= g(Float::with_val(4200, r + 1u32))?;
+    }
+    defined(q)
 }
 
 /// How many ulps a point input's enclosure may span.
@@ -752,6 +816,7 @@ fn unary_ops(unit: TrigUnit) -> Vec<(String, Func, UnaryOp)> {
             ("ceil", Ceil, Box::new(elem::ceil)),
             ("round", Round, Box::new(elem::round)),
             ("sign", Sign, Box::new(elem::sign)),
+            ("factorial", Factorial, Box::new(elem::factorial)),
         ];
         v.extend(more.into_iter().map(|(n, f, b)| (n.to_string(), f, b)));
     }
@@ -947,6 +1012,85 @@ fn every_operation_encloses_mpfr_fuzz() {
     }
     report(&total);
     assert!(total.violations.is_empty());
+}
+
+/// Γ, n!, nCr and nPr over boxes on every branch: between and next to the
+/// poles, around the extrema, past the overflow, and nCr/nPr in n with a
+/// count r (a polynomial there) or a fractional r (Γ quotients).
+#[test]
+fn factorials_enclose_mpfr() {
+    init();
+    let mut rng = Rng(0x5EED_F00D);
+    let mut bxs = Vec::new();
+    for k in -25..=25 {
+        let k = k as f64;
+        for (a, b) in [
+            (0.01, 0.99),
+            (0.4, 0.6),
+            (1e-9, 1e-6),
+            (1.0 - 1e-6, 1.0 - 1e-9),
+            (0.25, 0.5),
+            (0.5, 0.75),
+            (-0.5, 0.5),
+            (0.0, 1.0),
+        ] {
+            bxs.push(Interval::new(k + a, k + b));
+        }
+        bxs.push(Interval::point(k + 0.5));
+        bxs.push(Interval::point(k));
+    }
+    for e in factorial_extrema() {
+        let c = e.to_f64();
+        bxs.push(Interval::new(c - 1e-3, c + 1e-3));
+        bxs.push(Interval::new(c, c + 1e-12));
+    }
+    for (a, b) in [
+        (169.0, 170.0),
+        (170.0, 171.5),
+        (171.0, 180.0),
+        (1e-300, 1e-200),
+        (5e-324, 1e-300),
+        (-171.7, -171.6),
+        (-180.5, -180.4),
+        (-1000.6, -1000.4),
+        (0.0, 3.0),
+        (2.0, INF),
+    ] {
+        bxs.push(Interval::new(a, b));
+    }
+    let mut t = Tally::default();
+    let truth = |x: &Float| mp_unary(Func::Factorial, x, TrigUnit::Radians);
+    let crit = |iv: Interval| critical(Func::Factorial, iv, TrigUnit::Radians);
+    check_unary(
+        &mut t,
+        "factorial",
+        &elem::factorial,
+        &truth,
+        &crit,
+        16,
+        &bxs,
+        &mut rng,
+    );
+    let ns: Vec<Interval> = bxs
+        .iter()
+        .copied()
+        .filter(|b| b.lo().abs() <= 60.0 && b.hi().abs() <= 60.0)
+        .collect();
+    let rs = [0.0, 1.0, 2.0, 3.0, 5.0, 0.5, 2.5, -1.5];
+    let mut pairs = Vec::new();
+    for n in &ns {
+        for &r in &rs {
+            pairs.push((*n, Interval::point(r)));
+        }
+    }
+    for perm in [false, true] {
+        let op = move |a: &DecInterval, b: &DecInterval| elem::ncr_npr(a, b, perm);
+        let truth = move |a: &Float, b: &Float| mp_ncr(a, b, perm);
+        let name = if perm { "nPr" } else { "nCr" };
+        check_binary(&mut t, name, &op, &truth, &pairs, 64, &mut rng);
+    }
+    report(&t);
+    assert!(t.violations.is_empty(), "{:#?}", t.violations);
 }
 
 #[test]

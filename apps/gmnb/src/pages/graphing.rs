@@ -1020,12 +1020,20 @@ impl GraphingPage {
         let fill = {
             let entries = [&xmin, &xmax, &ymin, &ymax].map(|e| e.downgrade());
             move |vp: &graphing::Viewport| {
-                let f = |v: f64| format!("{}", (v * 1000.0).round() / 1000.0);
-                for (e, v) in entries.iter().zip([vp.x_min, vp.x_max, vp.y_min, vp.y_max]) {
+                // What was typed reads back exactly; no "inf" near the
+                // largest doubles.
+                let (xs, ys) = (vp.x_span(), vp.y_span());
+                let texts = [
+                    graphing::viewport::range_text(vp.x_min, xs),
+                    graphing::viewport::range_text(vp.x_max, xs),
+                    graphing::viewport::range_text(vp.y_min, ys),
+                    graphing::viewport::range_text(vp.y_max, ys),
+                ];
+                for (e, t) in entries.iter().zip(texts) {
                     if let Some(e) = e.upgrade()
                         && !e.has_focus()
                     {
-                        e.set_text(&f(v));
+                        e.set_text(&t);
                     }
                 }
             }
@@ -1218,8 +1226,8 @@ impl GraphingPage {
 /// read as "approximately".
 fn spoken(l: &gtk::Label, text: &str) {
     if text.contains('≈') {
-        l.update_property(&[gtk::accessible::Property::Label(
-            &text.replace('≈', "approximately "),
-        )]);
+        l.update_property(&[gtk::accessible::Property::Label(&graphing::trace::spoken(
+            text,
+        ))]);
     }
 }

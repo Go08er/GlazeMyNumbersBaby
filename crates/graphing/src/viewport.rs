@@ -16,6 +16,11 @@ pub const WHEEL_SCROLL_DAMPER: f64 = 0.15;
 /// One wheel notch (`WHEEL_DELTA`).
 pub const WHEEL_DELTA: f64 = 120.0;
 
+/// Largest magnitude a viewport bound may have: a hundredth of the
+/// largest double, so the band of one span either side the plotters use
+/// (and any move or zoom step) stays finite.
+pub const MAX_COORD: f64 = 1e306;
+
 /// Range-changing actions (`Graphing::Renderer::ChangeRangeAction`, 2D
 /// subset). The engine's predefined ratios are not public; these use
 /// 1.25× for zoom/widen/shrink, the button ratio 1.0625× for smooth/pinch
@@ -222,23 +227,30 @@ impl Viewport {
 
     /// `IGraphRenderer::MoveRangeByRatio`: +1 moves the view half a screen
     /// in the positive direction of the axis.
+    /// A move that would leave the usable range (see [`Viewport::is_sane`])
+    /// is ignored.
     pub fn move_by_ratio(&mut self, ratio_x: f64, ratio_y: f64) {
-        let dx = ratio_x * 0.5 * self.x_span();
-        let dy = ratio_y * 0.5 * self.y_span();
-        self.x_min += dx;
-        self.x_max += dx;
-        self.y_min += dy;
-        self.y_max += dy;
+        self.shift(ratio_x * 0.5 * self.x_span(), ratio_y * 0.5 * self.y_span());
     }
 
     /// Pans so that the content follows a pointer drag of `(dx, dy)` pixels.
+    /// A pan that would leave the usable range is ignored.
     pub fn pan_pixels(&mut self, dx: f64, dy: f64) {
-        let wx = -dx * self.x_per_px();
-        let wy = dy * self.y_per_px();
-        self.x_min += wx;
-        self.x_max += wx;
-        self.y_min += wy;
-        self.y_max += wy;
+        self.shift(-dx * self.x_per_px(), dy * self.y_per_px());
+    }
+
+    /// Moves the ranges by `(wx, wy)` world units if the result is sane.
+    fn shift(&mut self, wx: f64, wy: f64) {
+        let new = Viewport {
+            x_min: self.x_min + wx,
+            x_max: self.x_max + wx,
+            y_min: self.y_min + wy,
+            y_max: self.y_max + wy,
+            ..*self
+        };
+        if new.is_sane() {
+            *self = new;
+        }
     }
 
     /// `IGraphRenderer::ChangeRange`.
@@ -334,13 +346,25 @@ impl Viewport {
         x >= self.x_min && x <= self.x_max && y >= self.y_min && y <= self.y_max
     }
 
-    fn is_sane(&self) -> bool {
+    /// Whether the ranges can be plotted: finite, ordered, spans between
+    /// 1e−300 and 1e300 with about 12 significant digits across a pixel,
+    /// and every bound within ±[`MAX_COORD`] (the plotters reach a few
+    /// spans past the view, which must stay finite). Every navigation keeps
+    /// this; the plotters draw nothing for a viewport built without it.
+    pub fn is_sane(&self) -> bool {
         let ok = |a: f64, b: f64| {
-            a.is_finite() && b.is_finite() && b > a && (b - a) > 1e-300 && (b - a) < 1e300
+            a.is_finite()
+                && b.is_finite()
+                && b > a
+                && (b - a) > 1e-300
+                && (b - a) < 1e300
+                && a.abs().max(b.abs()) <= MAX_COORD
         };
         // Keep at least ~12 significant digits of resolution across a pixel.
         let res = |a: f64, b: f64, px: f64| (b - a) / px > 1e-13 * a.abs().max(b.abs()).max(1e-300);
-        ok(self.x_min, self.x_max)
+        self.width.is_finite()
+            && self.height.is_finite()
+            && ok(self.x_min, self.x_max)
             && ok(self.y_min, self.y_max)
             && res(self.x_min, self.x_max, self.width)
             && res(self.y_min, self.y_max, self.height)
@@ -354,6 +378,49 @@ pub fn precision_for_span(span: f64) -> f64 {
         10f64.powi(e as i32)
     } else {
         f64::NAN
+    }
+}
+
+/// A range bound as the settings' fields show it, in a view `span` wide:
+/// the shortest decimal that reads back as `v` exactly when that has at
+/// most 10 significant digits (a value typed in, 1.0001), else rounded
+/// to a millionth of the span (a value a zoom left with 16 digits), which
+/// reads back within that of `v`. Past 10¹⁵ or below 10⁻⁴, in e-notation.
+pub fn range_text(v: f64, span: f64) -> String {
+    let plain = |v: f64| v == 0.0 || (1e-4..1e15).contains(&v.abs());
+    let exact = if plain(v) {
+        format!("{v}")
+    } else {
+        format!("{v:e}")
+    };
+    let mantissa = exact.split('e').next().unwrap_or("");
+    let digits = mantissa
+        .trim_start_matches('-')
+        .replace('.', "")
+        .trim_start_matches('0')
+        .len();
+    if digits <= 10 || !(span > 0.0 && span.is_finite() && v.is_finite()) {
+        return exact;
+    }
+    // Significant digits down to a millionth of the span.
+    let lead = v.abs().log10().floor();
+    let last = (span.log10() - 6.0).floor();
+    let sig = ((lead - last) as i64 + 1).clamp(1, 17) as usize;
+    let trim = |m: &str| -> String {
+        if m.contains('.') {
+            m.trim_end_matches('0').trim_end_matches('.').to_string()
+        } else {
+            m.to_string()
+        }
+    };
+    if plain(v) {
+        let decimals = (sig as i64 - 1 - lead as i64).clamp(0, 17) as usize;
+        let t = trim(&format!("{v:.decimals$}"));
+        if t == "-0" { "0".into() } else { t }
+    } else {
+        let t = format!("{:.*e}", sig - 1, v);
+        let (m, e) = t.split_once('e').unwrap_or((&t, "0"));
+        format!("{}e{e}", trim(m))
     }
 }
 
@@ -438,5 +505,43 @@ mod tests {
             Err(RangeError::YMinNotLessThanMax)
         );
         assert!(v.set_display_ranges(0.0, 1.0, 0.0, 1.0).is_ok());
+    }
+
+    /// PREREVIEW_C Low: the range fields round-trip what was typed and
+    /// never show "inf".
+    #[test]
+    fn range_texts_round_trip() {
+        assert_eq!(range_text(1.0001, 0.0001), "1.0001");
+        assert_eq!(range_text(1.0002, 0.0001), "1.0002");
+        assert_eq!(range_text(-10.0, 20.0), "-10");
+        assert_eq!(range_text(0.0, 20.0), "0");
+        assert_eq!(range_text(1e306, 1e300), "1e306");
+        assert_eq!(range_text(-2.5e20, 1e21), "-2.5e20");
+        assert_eq!(range_text(1.5e-7, 1e-6), "1.5e-7");
+        // A bound a zoom left with 16 digits: to a millionth of the span.
+        assert_eq!(range_text(-9.411764705882353, 18.8), "-9.41176");
+        assert_eq!(range_text(9.999999999999999e305, 1e300), "1e306");
+        let mut vp = Viewport::default_for_size(640.0, 480.0);
+        vp.set_display_ranges(1.0001, 1.0002, -1.0, 1.0).unwrap();
+        for _ in 0..7 {
+            vp.zoom_about(1.00013, 0.3, 1.0625);
+        }
+        let back = |v: f64, span: f64| range_text(v, span).parse::<f64>().unwrap();
+        let (xs, ys) = (vp.x_span(), vp.y_span());
+        let mut again = vp;
+        again
+            .set_display_ranges(
+                back(vp.x_min, xs),
+                back(vp.x_max, xs),
+                back(vp.y_min, ys),
+                back(vp.y_max, ys),
+            )
+            .unwrap();
+        assert!((again.x_min - vp.x_min).abs() <= xs * 1e-6);
+        assert!((again.y_max - vp.y_max).abs() <= ys * 1e-6);
+        for v in [1.7e305, -1.79e305, 5e-300, 123456.125] {
+            let t = range_text(v, v.abs());
+            assert!(!t.contains("inf") && t.parse::<f64>().unwrap() == v, "{t}");
+        }
     }
 }

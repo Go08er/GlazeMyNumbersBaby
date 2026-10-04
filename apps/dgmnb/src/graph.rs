@@ -83,7 +83,11 @@ pub struct GraphPage {
     next_color: usize,
     vp: Option<Viewport>,
     plots: Vec<EquationPlot>,
+    /// How long the last plot took, its `Graph::plot_weight`, and that of
+    /// the plot running on the worker.
     plot_ms: f64,
+    plot_weight: f64,
+    pending_weight: f64,
     dirty: bool,
     busy: bool,
     again: bool,
@@ -176,6 +180,8 @@ impl GraphPage {
             vp: None,
             plots: Vec::new(),
             plot_ms: 0.0,
+            plot_weight: 0.0,
+            pending_weight: 0.0,
             dirty: true,
             busy: false,
             again: false,
@@ -412,12 +418,15 @@ impl GraphPage {
 
     fn fill_ranges(&mut self) {
         if let Some(vp) = self.vp {
-            for (e, v) in self
-                .ranges
-                .iter_mut()
-                .zip([vp.x_min, vp.x_max, vp.y_min, vp.y_max])
-            {
-                e.set_text(&format_value(v));
+            // What was typed reads back exactly (1.0001, not 1).
+            let (xs, ys) = (vp.x_span(), vp.y_span());
+            for (e, (v, span)) in self.ranges.iter_mut().zip([
+                (vp.x_min, xs),
+                (vp.x_max, xs),
+                (vp.y_min, ys),
+                (vp.y_max, ys),
+            ]) {
+                e.set_text(&graphing::viewport::range_text(v, span));
             }
         }
         self.range_error = false;
@@ -841,13 +850,22 @@ impl GraphPage {
         }
         self.busy = false;
         self.plot_cancel = None;
+        let heavy = plots.is_some() && ms >= INLINE_PLOT_MS;
         if let Some(plots) = plots {
             self.plot_ms = ms;
+            self.plot_weight = self.pending_weight;
             self.plots = plots;
         }
         if self.again {
             self.again = false;
             self.dirty = true;
+        } else if heavy {
+            // A heavy plot's scratch (and the plots it replaced, just
+            // freed) stays in the allocator's per-thread arenas: hand it
+            // back, off this thread (it takes ~15 ms), once no newer plot
+            // is wanted (a trim during a pan would contend with its
+            // allocations).
+            release_free_memory();
         }
         self.update_trace();
     }
@@ -857,11 +875,16 @@ impl GraphPage {
         if !self.dirty {
             return;
         }
-        if self.plot_ms < INLINE_PLOT_MS || self.proxy.is_none() {
+        // Inline only if this plot, scaled from the last by the graph's
+        // weight, is quick: an edit to a heavy row goes to the worker.
+        let weight = self.graph.plot_weight();
+        let predicted = graphing::graph::predicted_plot_ms(self.plot_ms, self.plot_weight, weight);
+        if predicted < INLINE_PLOT_MS || self.proxy.is_none() {
             self.dirty = false;
             let t = Instant::now();
             self.plots = self.graph.plot_parallel(&vp);
             self.plot_ms = t.elapsed().as_secs_f64() * 1e3;
+            self.plot_weight = weight;
             self.update_trace();
             return;
         }
@@ -878,6 +901,7 @@ impl GraphPage {
             return;
         }
         self.busy = true;
+        self.pending_weight = weight;
         self.plot_seq += 1;
         let cancel = Arc::new(AtomicBool::new(false));
         self.plot_cancel = Some(cancel.clone());
@@ -1191,7 +1215,7 @@ impl GraphPage {
                                 item.display_items.iter().cloned().chain(rows).collect();
                             // "≈" (known to its digits only) read as
                             // "approximately".
-                            let mut value = text.join(", ").replace('≈', "approximately ");
+                            let mut value = graphing::trace::spoken(&text.join(", "));
                             if !item.note.is_empty() {
                                 value.push_str(". ");
                                 value.push_str(&item.note);
@@ -1417,7 +1441,9 @@ impl GraphPage {
             let bubble = Rect::new(bx, by, bw, bh);
             f.surface(bubble, 8.0);
             f.draw_line(&line, bubble, Align::Center, t.fg);
-            if let Some(n) = f.node(id("trace"), accesskit::Role::Label, &text, bubble) {
+            // Read as a screen reader should: "≈" as "approximately".
+            let spoken = graphing::trace::spoken(&text);
+            if let Some(n) = f.node(id("trace"), accesskit::Role::Label, &spoken, bubble) {
                 n.live = true;
             }
         }
@@ -1663,6 +1689,20 @@ impl GraphPage {
     }
 }
 
+/// Returns the heap's free memory to the system (PREREVIEW_D: 14 ×
+/// `sin(x*y)<0` left idle RSS at 135 MB, 123 of it free arena memory).
+fn release_free_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        let _ = std::thread::Builder::new()
+            .name("trim".into())
+            // SAFETY: malloc_trim only returns free memory to the system.
+            .spawn(|| unsafe {
+                libc::malloc_trim(0);
+            });
+    }
+}
+
 fn format_value(v: f64) -> String {
     // To 3 decimals, as the field shows; past 10¹⁵ (where v·1000 can
     // overflow and every double is whole anyway) in e-notation.
@@ -1822,6 +1862,79 @@ mod tests {
                 "{src} {shift}: {travelled}"
             );
         }
+    }
+
+    /// PREREVIEW_C Low: ranges typed into the settings read back as typed
+    /// (they were rounded to 3 decimals, so [1.0001, 1.0002] collapsed).
+    #[test]
+    fn typed_ranges_round_trip() {
+        let mut g = GraphPage::for_test(session::from_list("y=x"));
+        g.vp = Some(graphing::Viewport::default_for_size(760.0, 654.0));
+        for (e, t) in g.ranges.iter_mut().zip(["1.0001", "1.0002", "-1", "1"]) {
+            e.set_text(t);
+        }
+        g.apply_ranges();
+        assert!(!g.range_error);
+        g.fill_ranges();
+        let texts: Vec<String> = g.ranges.iter().map(|e| e.text.clone()).collect();
+        assert_eq!(texts, ["1.0001", "1.0002", "-1", "1"]);
+        g.apply_ranges();
+        assert!(!g.range_error);
+        let vp = g.vp.unwrap();
+        assert_eq!((vp.x_min, vp.x_max), (1.0001, 1.0002));
+    }
+
+    /// PREREVIEW_B B-M4: the traced value reaches screen readers with "≈"
+    /// read as "approximately" (the bubble itself shows "≈").
+    #[test]
+    fn traced_values_are_spoken_as_approximately() {
+        use appcore::Named;
+        let mut g = GraphPage::for_test(session::from_list("y=sin(x)"));
+        let mut pm = tiny_skia::Pixmap::new(760, 700).unwrap();
+        let (mut text, mut icons, input) = (
+            crate::text::Text::new(),
+            ui::Icons::default(),
+            ui::Input::default(),
+        );
+        let mut scrolls = std::collections::HashMap::new();
+        let frame = |g: &mut GraphPage,
+                     pm: &mut tiny_skia::Pixmap,
+                     text: &mut crate::text::Text,
+                     icons: &mut ui::Icons,
+                     scrolls: &mut std::collections::HashMap<_, _>| {
+            let mut f = Frame::new(
+                crate::gfx::Canvas::new(pm.as_mut(), 1.0, false),
+                text,
+                icons,
+                crate::theme::Theme::new(false, None),
+                &input,
+                scrolls,
+                true,
+            );
+            g.view(&mut f, Rect::new(0.0, 46.0, 760.0, 654.0));
+            f.nodes.take().unwrap()
+        };
+        frame(&mut g, &mut pm, &mut text, &mut icons, &mut scrolls);
+        let (mut toasts, mut focus) = (Vec::new(), Some(canvas_id()));
+        let mut cx = Cx {
+            toasts: &mut toasts,
+            clipboard: None,
+            wide: true,
+            focus: &mut focus,
+        };
+        assert!(g.key(&KeyPress::named(Named::Right), &mut cx));
+        let (_, t) = g.trace.expect("tracing");
+        assert!(t.text().contains('≈'), "{}", t.text());
+        let nodes = frame(&mut g, &mut pm, &mut text, &mut icons, &mut scrolls);
+        let label = &nodes
+            .iter()
+            .find(|n| n.id == id("trace"))
+            .expect("trace label")
+            .label;
+        assert!(
+            label.contains("approximately ") && !label.contains('≈'),
+            "{label}"
+        );
     }
 
     /// A proven hole is drawn as an open circle: the curve is stroked up

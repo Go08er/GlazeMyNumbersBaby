@@ -13,8 +13,12 @@ use crate::analysis::MIN_SHOWN_DIGITS;
 use crate::equation::{Axis, CompiledEquation, CompiledForm};
 use crate::interval::{Dec, derivs_valid};
 use crate::plot::{IntervalFn, Plot, Point};
+use crate::simplify::Q;
 use crate::strings as s;
 use crate::viewport::Viewport;
+
+/// The minus sign in trace texts, as in the analysis panel (U+2212).
+const MINUS: &str = "−";
 
 /// Default distance (pixels) within which the pointer snaps to a curve.
 pub const DEFAULT_TRACE_RADIUS_PX: f64 = 50.0;
@@ -28,6 +32,10 @@ pub const ACTIVE_TRACE_TICK_MS: u64 = 100;
 /// A hole within this many pixels of the pointer is traced in preference
 /// to the curve around it.
 pub const HOLE_SNAP_PX: f64 = 4.0;
+/// The end of a curve at a domain edge within this many pixels of the
+/// pointer is traced in preference to the curve's nearest point when the
+/// pointer is past the edge.
+pub const EDGE_SNAP_PX: f64 = 50.0;
 /// Initial active tracing cursor offset from the centre of the graph
 /// (`RenderMain`: 40 px right of and 40 px above the centre).
 pub const ACTIVE_TRACE_START_OFFSET_PX: (f64, f64) = (40.0, -40.0);
@@ -103,6 +111,18 @@ impl TracePoint {
         };
         format!("({x}, {y})")
     }
+
+    /// [`TracePoint::text`] for a screen reader: "≈" read as
+    /// "approximately" (see [`spoken`]).
+    pub fn spoken_text(&self) -> String {
+        spoken(&self.text())
+    }
+}
+
+/// A trace or value text for a screen reader: "≈" (a value known to its
+/// digits only) read as "approximately".
+pub fn spoken(text: &str) -> String {
+    text.replace('≈', "approximately ")
 }
 
 /// The point of segment a–b nearest to p: its distance from p and its
@@ -248,6 +268,18 @@ impl Decimal {
         (Decimal { neg, m, n }, exact)
     }
 
+    /// It as a rational, if that fits.
+    fn to_q(&self) -> Option<Q> {
+        let m: i128 = self.m.parse().ok()?;
+        let m = if self.neg { -m } else { m };
+        let p = 10i128.checked_pow(self.n.unsigned_abs())?;
+        if self.n >= 0 {
+            Q::new(m.checked_mul(p)?, 1)
+        } else {
+            Q::new(m, p)
+        }
+    }
+
     /// The double nearest to it.
     fn to_f64(&self) -> f64 {
         let sign = if self.neg { "-" } else { "" };
@@ -268,7 +300,7 @@ impl Decimal {
     /// With as many decimals as 10ⁿ has; past 15, as m×10ᵉ with its
     /// digits.
     fn text(&self) -> String {
-        let sign = if self.neg { "-" } else { "" };
+        let sign = if self.neg { MINUS } else { "" };
         if self.m == "0" && (self.n >= 0 || self.n < -15) {
             return "0".into();
         }
@@ -358,7 +390,7 @@ fn step_exponent(iv: &IntervalFn, t: f64, n0: i32, t_px: f64, d_px: f64) -> i32 
         derivs_valid(&s, 1).then(|| s[1].iv.mig_mag().1)
     };
     let mut n = n0;
-    for _ in 0..8 {
+    for _ in 0..iterations(iv, 8) {
         if n <= finest {
             break;
         }
@@ -366,26 +398,69 @@ fn step_exponent(iv: &IntervalFn, t: f64, n0: i32, t_px: f64, d_px: f64) -> i32 
         let Some(m) = slope(Decimal::round(t, n).0.to_f64()) else {
             break;
         };
-        let moved = h * (t_px.recip().powi(2) + (m / d_px).powi(2)).sqrt();
-        if !(moved > 1.0 && moved.is_finite()) {
+        // log₁₀ of the pixels one step moves, the larger way (in logs: a
+        // slope of 10³⁰⁰ on a fine view overflows the pixels themselves).
+        let (a, b) = (-t_px.log10(), m.log10() - d_px.log10());
+        let (big, small) = if a >= b { (a, b) } else { (b, a) };
+        let moved = h.log10() + big + 0.5 * (10f64.powf(2.0 * (small - big))).ln_1p() / 10f64.ln();
+        if !(moved > 0.0 && moved.is_finite()) {
             break;
         }
-        let decades = moved.log10().ceil().clamp(1.0, 300.0) as i32;
+        let decades = moved.ceil().clamp(1.0, 300.0) as i32;
         n = (n - decades).max(finest);
     }
     n
 }
 
-/// Where the curve takes the value `d` near `t`: a few Newton steps, with
-/// f and f′ from the interval form. None where it isn't proven smooth.
-fn solve_near(iv: &IntervalFn, t: f64, d: f64) -> Option<f64> {
+/// The value at the decimal `t` exactly where the interval form allows
+/// it (a rational function: `x/x − 1` is 0 at 0.26 exactly, though its
+/// enclosure over the doubles either side of 0.26 is only ≈0), else
+/// `value` (its enclosure there).
+fn exact_value(iv: &IntervalFn, t: &Decimal, value: TraceValue) -> TraceValue {
+    if let TraceValue::Defined { lo, hi } = value
+        && let Some(v) = t.to_q().and_then(|q| iv.exact_at(q)).and_then(Q::exact_f64)
+        && lo <= v
+        && v <= hi
+    {
+        return TraceValue::Defined { lo: v, hi: v };
+    }
+    value
+}
+
+/// At most `most` interval evaluations of f's series for one refinement,
+/// fewer for a long f, so a pointer move over 14 long curves stays within
+/// a frame: about 3000 units of [`IntervalFn::cost`] (a sine is 8), at
+/// least two.
+fn iterations(iv: &IntervalFn, most: usize) -> usize {
+    (3000 / iv.cost().max(1)).clamp(2, most)
+}
+
+/// Where the curve takes the value `d` (to within `tol`) near `t`: Newton
+/// steps, with f and f′ from the interval form. None where it isn't proven
+/// smooth. On a line steeper than 10¹⁶ each step can only cancel the
+/// leading digits of t (10³⁰⁰·x from 10⁻¹⁷ to 10⁻³⁰² takes about twenty).
+///
+/// Only where the curve is steep there (`ratio`·|f′| over 2, `ratio` the
+/// traced coordinate's units per pixel over the other's): elsewhere the
+/// point in the pointer's column is as good, and a wandering Newton on a
+/// long, wiggly f (79 terms of sin(x^k)) cost tens of milliseconds a
+/// pointer move. Stops once a step no longer halves the miss.
+fn solve_near(iv: &IntervalFn, t: f64, d: f64, tol: f64, ratio: f64) -> Option<f64> {
     let mut t = t;
-    for _ in 0..4 {
+    let mut miss = f64::INFINITY;
+    for i in 0..iterations(iv, 32) {
         let s = iv.series(t, t, 1);
         if !derivs_valid(&s, 1) {
             return None;
         }
         let (v, dv) = (s[0].iv.mid(), s[1].iv.mid());
+        if i == 0 && (dv.abs() * ratio).partial_cmp(&2.0) != Some(std::cmp::Ordering::Greater) {
+            return None;
+        }
+        if (v - d).abs() <= tol || (v - d).abs() > 0.5 * miss {
+            break;
+        }
+        miss = (v - d).abs();
         let next = t - (v - d) / dv;
         if !next.is_finite() {
             return None;
@@ -499,6 +574,18 @@ pub fn nearest_point(
                     Axis::X => (t, d),
                     Axis::Y => (d, t),
                 };
+                // A curve whose drawn polylines (within the tolerance of
+                // it) and holes are all out of reach has no point to
+                // trace: skip its interval work.
+                let near = nearest_on_polylines(vp, &plot.curves, px, py);
+                let reach = radius_px + 1.0;
+                let hole_near = plot.holes.iter().any(|h| {
+                    let (sx, sy) = vp.to_screen(h.x, h.y);
+                    (sx - px).hypot(sy - py) <= reach
+                });
+                if !hole_near && near.is_none_or(|(d, _)| d > reach) {
+                    continue;
+                }
                 let snap = |t: f64| -> Option<Candidate> {
                     if !t.is_finite() {
                         return None;
@@ -509,14 +596,15 @@ pub fn nearest_point(
                     };
                     // The decimal shown, and its enclosure: the double
                     // itself when exact, else the doubles either side.
-                    let t = Decimal::round(t, n).0.to_f64();
+                    let shown = Decimal::round(t, n).0;
+                    let t = shown.to_f64();
                     let (lo, hi) = if Decimal::round(t, n).1 {
                         (t, t)
                     } else {
                         (t.next_down(), t.next_up())
                     };
                     let value = match iv {
-                        Some(iv) => value_at(iv, lo, hi, n0),
+                        Some(iv) => exact_value(iv, &shown, value_at(iv, lo, hi, n0)),
                         None => TraceValue::Approximate,
                     };
                     let d = match value {
@@ -541,8 +629,42 @@ pub fn nearest_point(
                     Some((point(t, d), steps, axis, value))
                 };
                 // Directly above/below (or beside) the pointer.
-                if let Some(c) = snap(if axis == Axis::X { cx } else { cy }) {
+                let pt = if axis == Axis::X { cx } else { cy };
+                let mut on_it = false;
+                if let Some(c) = snap(pt) {
+                    let (sx, sy) = vp.to_screen(c.0.0, c.0.1);
+                    on_it = (sx - px).hypot(sy - py) <= 0.5;
                     offer(index, c, 0.0, &mut best);
+                }
+                // Past an end of f's domain (proven undefined in the
+                // pointer's column, not a hole), the end of the curve near
+                // it comes first, at the tracing step if f is defined
+                // there: keyboard tracing reaches √x's (0, 0), where the
+                // nearest point of the drawn curve to a pointer left of
+                // it can be well up the steep part.
+                if let Some(iv) = iv
+                    && iv.enclose(pt, pt).is_empty()
+                {
+                    for l in &plot.curves {
+                        for q in [l.first(), l.last()].into_iter().flatten() {
+                            let (qt, _) = point(q.x, q.y);
+                            let shown = Decimal::round(qt, n0).0;
+                            let t = shown.to_f64();
+                            let (lo, hi) = if Decimal::round(t, n0).1 {
+                                (t, t)
+                            } else {
+                                (t.next_down(), t.next_up())
+                            };
+                            if let TraceValue::Defined { lo: a, hi: b } = value_at(iv, lo, hi, n0) {
+                                let value =
+                                    exact_value(iv, &shown, TraceValue::Defined { lo: a, hi: b });
+                                let d = f.eval(t, 0.0);
+                                let d = if d.is_finite() { d } else { 0.5 * (a + b) };
+                                let c = (point(t, d), (pow10(n0), pow10(n0)), axis, value);
+                                offer(index, c, EDGE_SNAP_PX, &mut best);
+                            }
+                        }
+                    }
                 }
                 // A hole near the pointer, which could hardly land on its
                 // exact coordinate otherwise.
@@ -554,7 +676,10 @@ pub fn nearest_point(
                     }
                 }
                 // Nearest along the drawn curve (steep parts, asymptotes).
-                if let Some((_, q)) = nearest_on_polylines(vp, &plot.curves, px, py) {
+                // (Not needed when the point in the pointer's column is
+                // within half a pixel of it: nothing along the curve is nearer
+                // by more than that.)
+                if let Some((_, q)) = near.filter(|_| !on_it) {
                     let (qt, qd) = point(q.x, q.y);
                     if let Some(c) = snap(qt) {
                         offer(index, c, 0.0, &mut best);
@@ -563,7 +688,7 @@ pub fn nearest_point(
                     // where along it the curve itself meets that point's
                     // level.
                     if let Some(iv) = iv
-                        && let Some(t) = solve_near(iv, qt, qd)
+                        && let Some(t) = solve_near(iv, qt, qd, 0.01 * d_px, t_px / d_px)
                         && let Some(c) = snap(t)
                     {
                         offer(index, c, 0.0, &mut best);
@@ -590,7 +715,7 @@ pub fn nearest_point(
 }
 
 /// Formats a point as `(x, y)` with as many decimals as the tracing
-/// precision (`10^(floor(log10(xMax − xMin)) − 3)`), e.g. `(1.25, -0.84)`:
+/// precision (`10^(floor(log10(xMax − xMin)) − 3)`), e.g. `(1.25, −0.84)`:
 /// the original's rounding, of the doubles as they are. A traced point's
 /// own text is [`TracePoint::text`].
 pub fn format_trace_value(x: f64, y: f64, precision: f64) -> String {
@@ -602,8 +727,17 @@ pub fn format_trace_value(x: f64, y: f64, precision: f64) -> String {
 }
 
 /// `v` rounded to `step`, with as many decimals as the step has; past 15
-/// decimals, as m×10ⁿ with the digits the step gives it.
+/// decimals, as m×10ⁿ with the digits the step gives it. Negative with
+/// U+2212, as the analysis panel writes them.
 fn format_coordinate(v: f64, step: f64) -> String {
+    let s = format_coordinate_ascii(v, step);
+    match s.strip_prefix('-') {
+        Some(rest) => format!("{MINUS}{rest}"),
+        None => s,
+    }
+}
+
+fn format_coordinate_ascii(v: f64, step: f64) -> String {
     let decimals = if step > 0.0 && step.is_finite() {
         (-step.log10().floor()).max(0.0)
     } else {
@@ -735,16 +869,27 @@ mod tests {
     #[test]
     fn holes_off_the_step_grid_are_passed_over() {
         // 0.125 isn't a multiple of this view's step, 0.01: the decimals
-        // either side are traced, not the hole.
+        // either side are traced, not the hole, and the value there is 1
+        // exactly (PREREVIEW_B: "≈1.00").
         let src = "y = (x-0.125)/(x-0.125)";
         let (_, p) = setup(src, &vp());
         assert_eq!(p.holes.len(), 1, "{:?}", p.holes);
         let t = trace_at(src, 0.125, 1.0, 100.0).unwrap();
         assert!(matches!(t.value, TraceValue::Defined { .. }), "{t:?}");
         assert!(
-            ["(0.12, ≈1.00)", "(0.13, ≈1.00)"].contains(&t.text().as_str()),
+            ["(0.12, 1.00)", "(0.13, 1.00)"].contains(&t.text().as_str()),
             "{t:?}"
         );
+        // x/x − 1 at 0.26 (not a double) is 0 exactly too.
+        let t = trace_at("y = x/x - 1", 0.26, 0.0, 100.0).unwrap();
+        assert_eq!(t.text(), "(0.26, 0.00)");
+        // Negative values with U+2212, as the panel writes them.
+        let t = trace_at("y = x - 1", 0.5, -0.5, 100.0).unwrap();
+        assert_eq!(t.text(), "(0.50, −0.50)");
+        assert_eq!(t.spoken_text(), "(0.50, −0.50)");
+        let t = trace_at("y = sin(x)", 0.5, 0.48, 100.0).unwrap();
+        assert_eq!(t.text(), "(0.50, ≈0.48)");
+        assert_eq!(t.spoken_text(), "(0.50, approximately 0.48)");
     }
 
     #[test]
@@ -779,7 +924,7 @@ mod tests {
         assert_eq!(d(1234.5, 1).0.text(), "1230");
         assert_eq!(d(9.996, -2).0.text(), "10.00");
         assert_eq!(d(2.5e-21, -22).0.text(), "2.5×10⁻²¹");
-        assert_eq!(d(-3.5e-15, -17).0.text(), "-3.5×10⁻¹⁵");
+        assert_eq!(d(-3.5e-15, -17).0.text(), "−3.5×10⁻¹⁵");
         assert_eq!(d(1e-20, -17).0.text(), "0");
         assert_eq!(d(0.1, -2).0.to_f64(), 0.1);
 
@@ -813,16 +958,18 @@ mod tests {
         let (px, py) = vp.to_screen(0.0, 0.25);
         let t = nearest_point(&vp, &[(&eq, &p)], px, py, 50.0).unwrap();
         assert!(t.distance_px < 2.0, "{t:?}");
-        assert_eq!(t.text(), "(0.00025, ≈0.25)");
+        // 1000 · 0.00025 is 0.25 exactly, though neither decimal is a
+        // double.
+        assert_eq!(t.text(), "(0.00025, 0.25)");
         // R10-M-06: as steep as the floats allow, not a fixed number of
         // decades finer.
         for (src, text) in [
-            ("y = 1000000000*x", "(0.00000000025, ≈0.25)"),
-            ("y = 1000000000000*x", "(0.00000000000025, ≈0.25)"),
+            ("y = 1000000000*x", "(0.00000000025, 0.25)"),
+            ("y = 1000000000000*x", "(0.00000000000025, 0.25)"),
             // R11-M-05/L-02: past what the view's own coordinates resolve,
             // and past 15 decimals.
-            ("y = 1000000000000000*x", "(2.5×10⁻¹⁶, ≈0.25)"),
-            ("y = 100000000000000000000*x", "(2.5×10⁻²¹, ≈0.25)"),
+            ("y = 1000000000000000*x", "(2.5×10⁻¹⁶, 0.25)"),
+            ("y = 100000000000000000000*x", "(2.5×10⁻²¹, 0.25)"),
         ] {
             let (eq, p) = setup(src, &vp);
             let t = nearest_point(&vp, &[(&eq, &p)], px, py, 50.0).unwrap();
@@ -899,11 +1046,11 @@ mod tests {
 
     #[test]
     fn trace_text() {
-        assert_eq!(format_trace_value(1.23456, -0.5, 0.01), "(1.23, -0.50)");
+        assert_eq!(format_trace_value(1.23456, -0.5, 0.01), "(1.23, −0.50)");
         assert_eq!(format_trace_value(-0.0001, 2.0, 0.01), "(0.00, 2.00)");
         assert_eq!(format_trace_value(1234.5, 2.0, 1.0), "(1235, 2)");
         assert_eq!(format_coordinate(3.55e-15, 1e-17), "3.55×10⁻¹⁵");
-        assert_eq!(format_coordinate(-3.5e-15, 1e-17), "-3.5×10⁻¹⁵");
+        assert_eq!(format_coordinate(-3.5e-15, 1e-17), "−3.5×10⁻¹⁵");
         assert_eq!(format_coordinate(1e-20, 1e-17), "0");
     }
 }
