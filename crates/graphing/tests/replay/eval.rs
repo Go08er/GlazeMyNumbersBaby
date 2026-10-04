@@ -537,7 +537,20 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
                     se::neg(&se::recip(&se::add(&one(n), &sq(&ea)))),
                 ),
             };
-            from_rad(&se::integrate(&ea, y0, &d), unit)
+            let s = from_rad(&se::integrate(&ea, y0, &d), unit);
+            // The value rounded in the unit itself (arctan(−∞) = −90°
+            // exactly).
+            let which = match f {
+                Asin => 's',
+                Acos => 'c',
+                Atan => 't',
+                _ => return s,
+            };
+            if unit == Unit::Radians {
+                return s;
+            }
+            let v = s[0].meet(&iv::ainv_unit(&ea[0], unit, which));
+            se::with_value(s, v)
         }
         Asec => {
             let inner = Expr::Call(Acos, vec![recip_expr(&args[0])]);

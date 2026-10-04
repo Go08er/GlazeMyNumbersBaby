@@ -465,7 +465,16 @@ pub fn div(a: &Iv, b: &Iv) -> Iv {
             };
             let (l, h) = (q(Round::Down), q(Round::Up));
             if l.is_nan() || h.is_nan() {
-                return Iv::entire().deco(&[a, b], true, true).strict(pos, neg);
+                // ∞/∞: two unbounded reals; their quotient is anything of
+                // the sign of x·y, from 0 out to ∞.
+                let s = if (x.is_sign_negative()) == (y.is_sign_negative()) {
+                    inf(true)
+                } else {
+                    inf(false)
+                };
+                lo = min_f(min_f(lo, fl(0.0)), cp(&s));
+                hi = max_f(max_f(hi, fl(0.0)), s);
+                continue;
             }
             lo = min_f(lo, l);
             hi = max_f(hi, h);
@@ -1067,6 +1076,33 @@ pub fn tan(a: &Iv, unit: Unit) -> Iv {
         nan_to(v, r == Round::Up)
     };
     Iv::new(t(&a.lo, Round::Down), t(&a.hi, Round::Up)).deco(&[a], true, true)
+}
+
+/// arcsin, arccos or arctan (`which`: 's', 'c', 't') of a box, as an angle
+/// in the unit, rounded directly in it (arctan(−∞) is −90° exactly, not
+/// −π/2 times 180/π rounded outward).
+pub fn ainv_unit(a: &Iv, unit: Unit, which: char) -> Iv {
+    let u = unit.u();
+    match which {
+        's' => on_domain_s(
+            a,
+            Some((-1.0, true)),
+            Some((1.0, true)),
+            true,
+            Signs::Keep,
+            move |v, r| v.asin_u_round(u, r),
+        ),
+        'c' => on_domain(
+            a,
+            Some((-1.0, true)),
+            Some((1.0, true)),
+            false,
+            move |v, r| v.acos_u_round(u, r),
+        ),
+        _ => on_domain_s(a, None, None, true, Signs::Keep, move |v, r| {
+            v.atan_u_round(u, r)
+        }),
+    }
 }
 
 /// An angle in radians as the unit.

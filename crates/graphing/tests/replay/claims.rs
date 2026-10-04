@@ -1707,14 +1707,18 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
         let Some((m, b, at)) = parse() else {
             return Outcome::new(Class::Unconfirmed, format!("unread fact: {fact}"));
         };
-        let Some(mv) = pi_q(&m) else {
+        if pi_q(&m).is_none() {
             return Outcome::new(Class::Unconfirmed, format!("unread slope: {fact}"));
-        };
+        }
         let slope = weak(approaches(fx, &at, &over_x, &m), "the slope");
         if slope.class != Class::Weak {
             return slope;
         }
-        let minus_mx = |x: f64, v: Iv| iv::sub(&v, &iv::mul(&mv, &Iv::of(x)));
+        // (m enclosed at the precision the points are evaluated at.)
+        let minus_mx = |x: f64, v: Iv| {
+            let mv = pi_q(&m).unwrap_or_else(Iv::entire);
+            iv::sub(&v, &iv::mul(&mv, &Iv::of(x)))
+        };
         return weak(approaches(fx, &at, &minus_mx, &b), "the intercept");
     }
     if let Some(rest) = fact.strip_prefix("f = N/D exactly and N/D − (") {
@@ -1725,11 +1729,17 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
         let Some((m, b)) = mb.split_once("·x + ") else {
             return Outcome::new(Class::Unconfirmed, format!("unread fact: {fact}"));
         };
-        let (Some(mv), Some(bv)) = (pi_q(m), pi_q(b)) else {
+        if pi_q(m).is_none() || pi_q(b).is_none() {
             return Outcome::new(Class::Unconfirmed, format!("unread line: {fact}"));
-        };
+        }
         for at in ["+∞", "−∞"] {
-            let gap = |x: f64, v: Iv| iv::sub(&v, &iv::add(&iv::mul(&mv, &Iv::of(x)), &bv));
+            let gap = |x: f64, v: Iv| {
+                let (mv, bv) = (
+                    pi_q(m).unwrap_or_else(Iv::entire),
+                    pi_q(b).unwrap_or_else(Iv::entire),
+                );
+                iv::sub(&v, &iv::add(&iv::mul(&mv, &Iv::of(x)), &bv))
+            };
             let o = weak(approaches(fx, at, &gap, "0"), "the line");
             if o.class != Class::Weak {
                 return o;
@@ -1857,9 +1867,13 @@ fn approaches_at(
             let d = |v: &Iv| iv::abs(&iv::sub(v, &t)).hi.to_f64();
             let ds: Vec<f64> = vals.iter().map(d).collect();
             let scale = t.hi.to_f64().abs().max(1.0);
-            // Already there to 10⁻¹² everywhere, or ever closer.
+            // Already there to 10⁻¹² everywhere, ever closer, or (an
+            // oscillating approach) never farther than at first and
+            // nearly there at the last.
+            let last = ds[ds.len() - 1];
             ds.iter().all(|d| *d <= 1e-12 * scale)
-                || (ds.windows(2).all(|w| w[1] <= w[0]) && ds[ds.len() - 1] < ds[0])
+                || (ds.windows(2).all(|w| w[1] <= w[0]) && last < ds[0])
+                || (ds.iter().all(|d| *d <= ds[0]) && last <= 1e-9 * ds[0].max(1e-300))
         }
     })
 }
