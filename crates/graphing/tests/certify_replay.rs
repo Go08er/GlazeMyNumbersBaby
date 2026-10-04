@@ -807,6 +807,23 @@ const PLANTS: &[Plant] = &[
             claims_of(v, "oblique").retain(|c| c.get("Value").is_none());
         },
     ),
+    // No line at all: f − m·x periodic and not constant.
+    ("x-sin(x)", "f − m·x given half its period", |v| {
+        for c in claims_of(v, "oblique").iter_mut() {
+            if let Some(s) = c.get_mut("Simplifier")
+                && let Some(f) = s["fact"].as_str()
+            {
+                s["fact"] = serde_json::json!(f.replace("has period 2·π", "has period 1·π"));
+            }
+        }
+    }),
+    (
+        "x-sin(x)",
+        "the values showing f − m·x not constant dropped",
+        |v| {
+            claims_of(v, "oblique").retain(|c| c.get("Value").is_none());
+        },
+    ),
     // Lines from expansions in 1/x.
     ("sqrt(x^2+1)", "a line's slope moved by 10⁻⁹", |v| {
         for c in claims_of(v, "oblique").iter_mut() {

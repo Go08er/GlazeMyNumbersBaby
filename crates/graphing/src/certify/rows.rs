@@ -2178,9 +2178,22 @@ fn value_claim(x: f64, v: DecInterval) -> Claim {
 }
 
 /// Two values of f apart: f is no constant (its own line, with no
-/// asymptote), and a periodic f has no limit at ±∞.
+/// asymptote), and a periodic f has no limit at ±∞. At points of the
+/// window, then out along both tails (e^(x − 10⁶) underflows in a window
+/// about 0).
 fn not_constant(f: &Fun<'_>, scope: &Scope) -> Result<Option<Vec<Claim>>, Stop> {
-    let vals = samples(f, scope)?;
+    let mut vals = samples(f, scope)?;
+    if scope.period.is_none() {
+        for right in [false, true] {
+            for m in thin(&far_points(f, right, 1.0), 24) {
+                let x = if right { m } else { -m };
+                let v = f.val(Interval::point(x))?;
+                if !v.is_empty() && v.dec >= Dec::Def && v.iv.is_bounded() {
+                    vals.push((x, v));
+                }
+            }
+        }
+    }
     Ok(vals.iter().find_map(|(x, v)| {
         vals.iter()
             .find(|(_, u)| u.hi() < v.lo() || v.hi() < u.lo())
@@ -2234,6 +2247,7 @@ pub fn horizontal(f: &Fun<'_>, dom: &Domain, scope: &Scope) -> Result<Row<Vec<Ho
     }
     let w = scope.w;
     let mut out = Vec::new();
+    let mut unbounded = false;
     let mut c = Certificate::new(Region::Line);
     for right in [false, true] {
         // Does the domain reach this tail?
@@ -2249,7 +2263,7 @@ pub fn horizontal(f: &Fun<'_>, dom: &Domain, scope: &Scope) -> Result<Row<Vec<Ho
         }
         let (end, claims) = tail_end(f, right, w)?;
         match end {
-            TailEnd::Infinite(_) => {}
+            TailEnd::Infinite(_) => unbounded = true,
             TailEnd::Level(y, exact) => out.push(Horizontal {
                 side: if right { Tail::Right } else { Tail::Left },
                 y,
@@ -2260,8 +2274,10 @@ pub fn horizontal(f: &Fun<'_>, dom: &Domain, scope: &Scope) -> Result<Row<Vec<Ho
         }
         c.extend(claims);
     }
-    // A constant has no asymptote: the line listed is not f's own graph.
-    if !out.is_empty() {
+    // A constant has no asymptote: the line listed is not f's own graph
+    // (f unbounded on the other tail, or two limits apart, show it too).
+    let apart = out.len() == 2 && (out[0].y.hi.0 < out[1].y.lo.0 || out[1].y.hi.0 < out[0].y.lo.0);
+    if !out.is_empty() && !unbounded && !apart {
         let Some(apart) = not_constant(f, scope)? else {
             return Ok(Row::unknown("f is not shown to be other than a constant"));
         };
@@ -2529,11 +2545,14 @@ fn slope_bounds(
 }
 
 /// Oblique asymptotes y = m·x + b (m ≠ 0) at each tail the domain reaches.
-/// A rational f has one exactly when deg N = deg D + 1 (from its exact
-/// rational form). Otherwise, per tail: a horizontal asymptote there rules
-/// one out, so does f/x → ±∞ or f/x → 0 (the simplifier's limits); a
-/// finite nonzero limit m of f/x with a finite limit b of f − m·x gives
-/// y = m·x + b. A periodic f has none (f − (m·x + b) can't tend to 0).
+/// A line on its domain has none (its graph is the line). A rational f has
+/// one exactly when deg N = deg D + 1 (from its exact rational form).
+/// Otherwise, per tail: a horizontal asymptote there rules one out, so do
+/// f″ away from 0 and f/x → ±∞ or exactly 0 by the tree's structure; f's
+/// expansion in 1/x gives a line with f − (m·x + b) enclosed on the tail;
+/// f′'s evidence far out bears out the simplifier's f/x → ±∞ or → 0. A
+/// periodic f has none (f − (m·x + b) can't tend to 0). A line listed
+/// comes with three values of f off one line.
 pub fn oblique(
     f: &Fun<'_>,
     dom: &Domain,
@@ -2689,9 +2708,17 @@ pub fn oblique(
                     fact: format!("f/x → 0 as x → {at} and f has no horizontal asymptote there"),
                 });
             }
-            // A line the simplifier finds: f − m·x has no enclosure far
-            // out to bear it out (m·x cancels only symbolically).
-            Limit::Exact(_) => return Ok(Row::unknown("a tail's line is not borne out")),
+            // A slope the simplifier finds with no line from f's expansion:
+            // none at all where f − m·x is periodic and not constant.
+            Limit::Exact(m) => match periodic_rest(f, m, scope)? {
+                // (Both tails at once.)
+                Some(claims) => {
+                    if !claims.iter().all(|x| c.claims.contains(x)) {
+                        c.extend(claims);
+                    }
+                }
+                None => return Ok(Row::unknown("a tail's line is not borne out")),
+            },
             _ => return Ok(Row::unknown("a tail's slope is not decided")),
         }
     }
@@ -2706,6 +2733,62 @@ pub fn oblique(
         value: lines,
         cert: c,
     })
+}
+
+/// No oblique asymptote at all, for f − m·x periodic and not constant
+/// (x − sin x, sin x + x/10, with m the simplifier's limit of f/x): a
+/// periodic G = f − m·x with a limit would be constant, and with a line of
+/// another slope m′ G would grow like (m′ − m)·x, which a periodic G can't.
+/// The simplifier's form of f − m·x, its proven period, and two values of
+/// f with f − m·x apart.
+fn periodic_rest(
+    f: &Fun<'_>,
+    m: crate::simplify::PiQ,
+    scope: &Scope,
+) -> Result<Option<Vec<Claim>>, Stop> {
+    use crate::ast::{BinOp, Constant, Expr};
+    let Some(s) = f.settings() else {
+        return Ok(None);
+    };
+    let Some(mv) = piq_interval(m) else {
+        return Ok(None);
+    };
+    let mut me = crate::simplify::rational::q_expr(m.q);
+    for _ in 0..m.k.unsigned_abs() {
+        let op = if m.k > 0 { BinOp::Mul } else { BinOp::Div };
+        me = Expr::bin(op, me, Expr::Const(Constant::Pi));
+    }
+    let g = Expr::bin(
+        BinOp::Sub,
+        f.expr.clone(),
+        Expr::bin(BinOp::Mul, me, Expr::X),
+    );
+    let Ok(simple) = crate::simplify::simplify(&g, &s) else {
+        return Ok(None);
+    };
+    let Some(per) = crate::simplify::prove_period(&simple.expr, &s) else {
+        return Ok(None);
+    };
+    // Two values of f − m·x apart.
+    let vals = samples(f, scope)?;
+    let rest = |(x, v): &(f64, DecInterval)| v.iv - mv * Interval::point(*x);
+    let apart = vals.iter().find_map(|a| {
+        vals.iter()
+            .find(|b| rest(b).hi() < rest(a).lo())
+            .map(|b| vec![value_claim(a.0, a.1), value_claim(b.0, b.1)])
+    });
+    let Some(mut claims) = apart else {
+        return Ok(None);
+    };
+    claims.push(Claim::Simplifier {
+        fact: format!(
+            "f − {}·x = {} has period {}: no oblique asymptote",
+            pi_q(m),
+            simple.expr.formula(),
+            pi_q(per.value)
+        ),
+    });
+    Ok(Some(claims))
 }
 
 /// An oblique line on one tail from f's expansions in t = 1/x

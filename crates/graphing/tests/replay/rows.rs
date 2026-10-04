@@ -2184,6 +2184,32 @@ fn point_values(claims: &[Claim]) -> Vec<(f64, f64, f64)> {
     v
 }
 
+/// f − m·x periodic (a fact) and not constant (two of f's values with
+/// f − m·x apart): no line at all.
+fn periodic_rest(claims: &[Claim]) -> bool {
+    let Some(m) = claims.iter().find_map(|c| match c {
+        Claim::Simplifier(f)
+            if f.contains(" has period ") && f.ends_with(": no oblique asymptote") =>
+        {
+            f.strip_prefix("f − ")?
+                .split_once("·x = ")
+                .map(|(m, _)| m.to_string())
+        }
+        _ => None,
+    }) else {
+        return false;
+    };
+    iv::set_prec(160);
+    let Some(mv) = claims::pi_q(&m) else {
+        return false;
+    };
+    let rest: Vec<Iv> = point_values(claims)
+        .iter()
+        .map(|(x, lo, hi)| iv::sub(&Iv::of2(*lo, *hi), &iv::mul(&mv, &Iv::of(*x))))
+        .collect();
+    rest.iter().any(|a| rest.iter().any(|b| a.hi < b.lo))
+}
+
 /// Two of f's values apart: f is no constant.
 fn not_constant(claims: &[Claim]) -> bool {
     let v = point_values(claims);
@@ -2216,7 +2242,16 @@ fn horizontal(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), 
             out.problems
                 .push("a horizontal asymptote listed for a line, its own graph".into());
         }
-        if !not_constant(&rc.claims) {
+        // Two values apart, f unbounded on a tail, or two limits apart.
+        let ys: Vec<Enc> = list(&rc.value)?
+            .iter()
+            .filter_map(|h| enc(h.get("y")?).ok())
+            .collect();
+        let limits_apart = ys.iter().any(|a| ys.iter().any(|b| a.hi < b.lo));
+        let unbounded = [Side::Left, Side::Right]
+            .iter()
+            .any(|&s| tail_infinite(&rc.claims, s, true) || tail_infinite(&rc.claims, s, false));
+        if !(not_constant(&rc.claims) || unbounded || limits_apart) {
             out.problems
                 .push("a horizontal asymptote listed, but nothing shows f is no constant".into());
         }
@@ -2772,6 +2807,7 @@ fn oblique(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), Str
             || periodic
             || horizontal.iter().any(|h| h == side)
             || line_fact(&rc.claims)
+            || periodic_rest(&rc.claims)
             || bends_away(&rc.claims, s)
             || matches!(
                 limit_at(

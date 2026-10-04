@@ -2332,6 +2332,13 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
         }
         return Outcome::new(Class::Weak, "on the line at sample points");
     }
+    if let Some(rest) = fact.strip_prefix("f − ")
+        && let Some((m, rest)) = rest.split_once("·x = ")
+        && let Some((g, rest)) = rest.split_once(" has period ")
+        && let Some((p, _)) = rest.split_once(": no oblique asymptote")
+    {
+        return periodic_rest(fx, m, g, p, fact);
+    }
     // Oblique asymptotes (and their absence).
     let over_x = |x: f64, v: Iv| iv::div(&v, &Iv::of(x));
     if fact.starts_with("f is periodic: f − (m·x + b) does not tend to 0") {
@@ -2438,6 +2445,51 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
         };
     }
     Outcome::new(Class::Unconfirmed, format!("unread fact: {fact}"))
+}
+
+/// f − m·x is G, of period P: each by the field of fractions in x and
+/// atoms (strong), or else at sample points (weak).
+fn periodic_rest(fx: &Fx, m: &str, g: &str, p: &str, fact: &str) -> Outcome {
+    let unread = || Outcome::new(Class::Unconfirmed, format!("unread fact: {fact}"));
+    let (Some((mn, md, mk)), Some((pn, pd, pk))) = (piq_parts(m), piq_parts(p)) else {
+        return unread();
+    };
+    let (Some(me), Some(pe), Some(gt)) = (
+        super::algebra::piq_expr(mn, md, mk),
+        super::algebra::piq_expr(pn, pd, pk),
+        super::eval::parse_formula(g),
+    ) else {
+        return unread();
+    };
+    let rest = Expr::Bin(
+        BinOp::Sub,
+        Box::new(fx.f.clone()),
+        Box::new(Expr::Bin(BinOp::Mul, Box::new(me), Box::new(Expr::X))),
+    );
+    let shifted = gt.map(&|e| {
+        matches!(e, Expr::X).then(|| Expr::Bin(BinOp::Add, Box::new(Expr::X), Box::new(pe.clone())))
+    });
+    let same =
+        |a: &Expr, b: &Expr| super::algebra::same_trees(a, b, false, &fx.lits, &fx.vars, fx.unit);
+    let (is_rest, is_periodic) = (same(&rest, &gt), same(&gt, &shifted));
+    if is_rest && is_periodic {
+        return Outcome::new(Class::Strong, "f − m·x is G exactly, and G(x + P) ≡ G(x)");
+    }
+    // At sample points: f − m·x against G, and G against G shifted.
+    let ctx = fx.ctx();
+    let at = |e: &Expr, x: &Iv| super::eval::eval(e, &se::var(x.clone(), 0), 0, &ctx)[0].clone();
+    for &x in SAMPLES.iter().chain(&[-0.7, -2.2, -9.1]) {
+        let xv = Iv::of(x);
+        let (a, b) = (at(&rest, &xv), at(&gt, &xv));
+        if !a.empty && a.def && !b.empty && b.def && (a.hi < b.lo || b.hi < a.lo) {
+            return Outcome::new(Class::Refuted, format!("f − m·x is not G at {x}"));
+        }
+        let c = at(&shifted, &xv);
+        if !b.empty && b.def && !c.empty && c.def && (b.hi < c.lo || c.hi < b.lo) {
+            return Outcome::new(Class::Refuted, format!("G(x + P) ≠ G(x) at {x}"));
+        }
+    }
+    Outcome::new(Class::Weak, "agrees at sample points")
 }
 
 /// How a limit fact of a rational f begins (the certifier's mark).
