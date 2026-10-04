@@ -45,6 +45,9 @@ pub struct Target<'e> {
     pub expr: &'e Expr,
     /// The derivative order: 0 for the value, 1 for f′, 2 for f″.
     pub k: usize,
+    /// The boxes lie in f's proven domain, where f's side conditions hold
+    /// (false while that domain is being proven).
+    pub in_domain: bool,
 }
 
 /// One decided box.
@@ -418,7 +421,11 @@ fn step(
     // with no factor reaching 0 keeps one sign, or with each that does
     // exactly 0 at an end and strictly monotone, is 0 only there.
     if k == 0 && c == 0.0 && cs.len() == 1 && cont {
-        let fs = super::fun::zero_factors(t.expr);
+        let fs = if t.in_domain {
+            fun.factors(t.expr)
+        } else {
+            super::fun::zero_factors(t.expr)
+        };
         if fs.len() != 1 || fs[0] != *t.expr {
             let ends: Vec<f64> = exacts
                 .iter()

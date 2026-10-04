@@ -160,6 +160,13 @@ pub fn certify_text(
     // floor, round, sign, mod: their derivative 0 hides the jumps).
     let steps = !crate::simplify::side::jumps(&f.expr).is_empty();
     f.smooth_tree = !steps;
+    if let Ok(conds) = side::sides(&f) {
+        f.nonzero = conds
+            .iter()
+            .filter(|c| c.allowed_nonzero())
+            .map(|c| canonical(&c.g))
+            .collect();
+    }
     f.numerators = fun::rational_numerators(&f.expr, &exact);
     let t2 = t0.elapsed();
     let a = certify(&f, &text);
@@ -272,7 +279,7 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         spans.push((b.a, b.b));
     }
     f.allow(phase);
-    let c0 = Cover::run(f, &Target { expr: &f.eval, k: 0 }, &[0.0], &spans);
+    let c0 = Cover::run(f, &Target { expr: &f.eval, k: 0, in_domain: true }, &[0.0], &spans);
     // f is continuous on every box: the derivative's own tree may stand
     // for f′ (it equals f′ wherever f is differentiable, and f is monotone
     // where it keeps a sign).
@@ -334,13 +341,13 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     let cover = |k: usize| {
         let sp = &kspans[k - 1];
         f.allow(phase);
-        let c = Cover::run(f, &Target { expr: &f.eval, k }, &[0.0], sp);
+        let c = Cover::run(f, &Target { expr: &f.eval, k, in_domain: true }, &[0.0], sp);
         if continuous
             && !c.complete()
             && let Some(d) = f.derivs()
         {
             f.allow(phase);
-            let r = Cover::run(f, &Target { expr: &d[k - 1], k: 0 }, &[0.0], sp);
+            let r = Cover::run(f, &Target { expr: &d[k - 1], k: 0, in_domain: true }, &[0.0], sp);
             if r.complete() {
                 return r;
             }

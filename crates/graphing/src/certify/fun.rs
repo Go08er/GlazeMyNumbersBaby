@@ -72,6 +72,9 @@ pub struct Fun<'a> {
     derivs: std::cell::OnceCell<Option<[Expr; 2]>>,
     /// Whether f may have a symbolic derivative tree (no jumps).
     pub smooth_tree: bool,
+    /// Expressions f's side conditions require to be ≠ 0 (divisors, the
+    /// sine under csc, …): never 0 where f is defined.
+    pub nonzero: Vec<Expr>,
     /// For a rational f, the numerators of f, f′, f″ in lowest terms
     /// ([`rational_numerators`]).
     pub numerators: Option<[Expr; 3]>,
@@ -102,6 +105,7 @@ impl<'a> Fun<'a> {
             expr,
             derivs: std::cell::OnceCell::new(),
             smooth_tree: false,
+            nonzero: Vec::new(),
             numerators: None,
             lits,
             exact: None,
@@ -150,6 +154,15 @@ impl<'a> Fun<'a> {
     /// The derivative trees, if already built.
     pub fn derivs_built(&self) -> Option<&[Expr; 2]> {
         self.derivs.get().and_then(|d| d.as_ref())
+    }
+
+    /// The zero factors of `e` ([`zero_factors`]) that can vanish where f is
+    /// defined: those f's side conditions keep away from 0 are left out.
+    pub fn factors(&self, e: &Expr) -> Vec<Expr> {
+        zero_factors(e)
+            .into_iter()
+            .filter(|h| !self.nonzero.contains(h))
+            .collect()
     }
 
     /// The caller's cancel flag.

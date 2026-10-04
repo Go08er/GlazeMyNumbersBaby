@@ -85,6 +85,13 @@ impl SideCond {
 }
 
 /// The side conditions of f, children first; or why they can't be stated.
+impl SideCond {
+    /// The condition is g ≠ 0 (no more, no less).
+    pub fn allowed_nonzero(&self) -> bool {
+        self.allowed.as_slice() == NONZERO && self.zero_if_exponent.is_none()
+    }
+}
+
 pub fn sides(f: &Fun<'_>) -> Result<Vec<SideCond>, String> {
     let mut out = Vec::new();
     walk(f, &f.expr, &mut Vec::new(), &mut out)?;
@@ -798,7 +805,11 @@ pub fn domain(f: &Fun<'_>) -> Domain {
             .collect();
         cs.sort_by(f64::total_cmp);
         cs.dedup();
-        let target = Target { expr: &s.g, k: 0 };
+        let target = Target {
+            expr: &s.g,
+            k: 0,
+            in_domain: false,
+        };
         let mut next = Vec::new();
         for p in &pieces {
             let (lo, hi) = piece_box(p);

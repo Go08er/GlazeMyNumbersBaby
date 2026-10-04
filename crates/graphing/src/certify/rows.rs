@@ -661,7 +661,7 @@ pub fn gaps_clear(
 /// its zero factors ([`super::fun::zero_factors`]) is away from 0 over the
 /// box, or is exactly 0 at one of its doubles and strictly monotone there.
 fn factors_clear(f: &Fun<'_>, e: &crate::ast::Expr, g: Interval) -> Result<bool, Stop> {
-    for h in super::fun::zero_factors(e) {
+    for h in f.factors(e) {
         let s = f.ser_of(&h, g, 1)?;
         if !s[0].is_empty() && s[0].ne0() {
             continue;
@@ -1203,7 +1203,11 @@ fn tail_interval(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cl
     let from_r = R(if right { start } else { -start });
     // f′ of one sign and moving away from 0 out along the tail (a sign
     // chain through f″, f‴): |f′| ≥ |f′(start)| > 0, so f goes to ±∞.
-    let t = super::cover::Target { expr: &f.eval, k: 1 };
+    let t = super::cover::Target {
+        expr: &f.eval,
+        k: 1,
+        in_domain: true,
+    };
     let (a, b) = if right { (start, f64::INFINITY) } else { (f64::NEG_INFINITY, -start) };
     if let Some(Leaf::Band { band, chain, .. }) = super::cover::tail_chain(f, &t, &[0.0], a, b)? {
         let rising = band == 1;
@@ -1232,7 +1236,7 @@ fn tail_interval(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cl
         };
         let whole = f.ser_of(t, tail(start), 0)?[0];
         let mut nonzero = !whole.is_empty() && whole.dec >= Dec::Dac;
-        for h in super::fun::zero_factors(t) {
+        for h in f.factors(t) {
             let v = f.ser_of(&h, tail(start), 0)?[0];
             nonzero &= !v.is_empty() && v.ne0();
         }
