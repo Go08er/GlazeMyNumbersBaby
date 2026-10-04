@@ -219,7 +219,18 @@ impl<'a> Subj<'a> {
     /// there (f defined, and for k ≥ 1 continuous with its derivatives up
     /// to k; g defined), judged on the canonical tree.
     pub fn coeffs(&self, lo: f64, hi: f64, m: usize) -> (Vec<Iv>, bool) {
-        let s = self.fx.series(&self.e, lo, hi, self.k + m);
+        let mut s = self.fx.series(&self.e, lo, hi, self.k + m);
+        // f's own tree ∞ − ∞ on a tail: its Horner form, the same function.
+        if self.tree == Tree::Orig
+            && matches!(self.of, Subject::F(_))
+            && !valid_f(&s, self.k)
+            && let Some(h) = &self.fx.f_alt
+        {
+            let t = self.fx.series(h, lo, hi, self.k + m);
+            if valid_f(&t, self.k) {
+                s = t;
+            }
+        }
         let c: Vec<Iv> = (0..=m)
             .map(|j| {
                 if self.k == 0 {

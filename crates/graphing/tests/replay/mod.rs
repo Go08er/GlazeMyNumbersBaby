@@ -490,6 +490,10 @@ pub struct Fx {
     pub vars: Vec<(String, f64)>,
     /// Which of the certifier's trees are exactly f's.
     pub verified: algebra::Verified,
+    /// f's tree with each sum of monomials of degree ≥ 2 in Horner's form
+    /// (the replay's own rearrangement of + and ·: the same function, with
+    /// the same domain), where f's tree is ∞ − ∞ on a tail.
+    pub f_alt: Option<Expr>,
 }
 
 impl Fx {
@@ -569,6 +573,7 @@ pub fn function(a: &Value) -> Result<Fx, String> {
         _ => Vec::new(),
     };
     let lits = Lits::of_with(&text, comma);
+    let f_alt = eval::horner(&f);
     let verified = algebra::verify(
         &f,
         f_eval.as_ref(),
@@ -586,6 +591,7 @@ pub fn function(a: &Value) -> Result<Fx, String> {
         unit,
         vars,
         verified,
+        f_alt,
     })
 }
 
