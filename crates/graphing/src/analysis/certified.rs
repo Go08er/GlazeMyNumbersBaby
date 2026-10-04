@@ -17,8 +17,8 @@
 //! the side expression and its period is the table's; a value is f at an
 //! exact point, or an exact limit (rational functions, the simplifier's
 //! limits and periods). Anything else is written to the digits its
-//! enclosure fixes (at most six significant), marked "≈" when the text
-//! could pass for exact.
+//! enclosure fixes (at most six significant; from 10⁶ on as m×10ⁿ),
+//! marked "≈": every value that isn't exact is.
 
 use std::cell::OnceCell;
 use std::sync::atomic::AtomicBool;
@@ -167,14 +167,6 @@ fn poly_at(p: &Poly, x: Ex) -> Option<Ex> {
     Some(acc)
 }
 
-/// Significant digits in a decimal text (`1.5`, `−0.000123`, `1.2×10⁻⁷`).
-fn sig_digits(t: &str) -> usize {
-    let mantissa = t.split('×').next().unwrap_or(t);
-    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
-    let trimmed = digits.trim_start_matches('0');
-    if trimmed.is_empty() { 1 } else { trimmed.len() }
-}
-
 thread_local! {
     /// Set when a number was written as its enclosure (not one digit
     /// known): the row it is in is shown as unknown instead.
@@ -194,8 +186,8 @@ pub const MIN_SHOWN_DIGITS: i32 = 3;
 
 /// A value known to lie in `e`: as many significant digits (up to six, at
 /// least [`MIN_SHOWN_DIGITS`]) as every value in `e` rounds to alike,
-/// marked "≈" when the text has fewer than six (it could read as exact:
-/// "≈1", "≈0.5", "≈1.41").
+/// marked "≈" as it isn't exact ("≈1", "≈0.5", "≈1.41421", "≈2.30062×10⁶");
+/// a point is its double, exactly, when that has a short exact text.
 pub(super) fn approx(e: Enc) -> String {
     approx_sig(e, 6)
 }
@@ -212,7 +204,7 @@ fn fixed_to(e: Enc, sig: i32) -> Option<String> {
 }
 
 /// [`approx`] with up to `max` significant digits (more than six to tell
-/// two close points apart).
+/// two close points apart), marked "≈" whatever their number.
 fn approx_sig(e: Enc, max: i32) -> String {
     let (lo, hi) = (e.lo.0, e.hi.0);
     if e.is_point() && lo == 0.0 {
@@ -229,11 +221,7 @@ fn approx_sig(e: Enc, max: i32) -> String {
     // known, up to six (or the more asked for), and at least the minimum.
     for sig in (MIN_SHOWN_DIGITS.min(6)..=max.max(6)).rev() {
         if let Some(a) = fixed_to(e, sig) {
-            return if sig_digits(&a) < 6 {
-                format!("≈{a}")
-            } else {
-                a
-            };
+            return format!("≈{a}");
         }
     }
     // Too few digits fixed: the enclosure itself, rounded outward (the
@@ -2511,7 +2499,16 @@ mod tests {
     #[test]
     fn approximate_text() {
         let r2 = std::f64::consts::SQRT_2;
-        assert_eq!(approx(Enc::new(r2.next_down(), r2.next_up())), "1.41421");
+        // Not exact, whatever its digits: marked.
+        assert_eq!(approx(Enc::new(r2.next_down(), r2.next_up())), "≈1.41421");
+        // Never more than six digits; from 10⁶ on m×10ⁿ, the form the
+        // rounded value's, so ends straddling 10⁶ read alike.
+        assert_eq!(approx(Enc::new(2300620.0, 2300620.006)), "≈2.30062×10⁶");
+        assert_eq!(approx(Enc::new(545843449.3, 545843449.5)), "≈5.45843×10⁸");
+        assert_eq!(approx(Enc::new(999999.9999982, 1000000.0000001)), "≈1×10⁶");
+        assert_eq!(approx(Enc::new(166253.76, 166253.77)), "≈166254");
+        // An exact integer keeps its exact text.
+        assert_eq!(approx(Enc::point(1000000.0)), "1000000");
         assert_eq!(
             approx(Enc::new(0.9999999999999999, 1.0000000000000002)),
             "≈1"

@@ -318,7 +318,7 @@ fn touched_trig_holes_are_excluded_or_unknown() {
     // reach it, the domain is unknown).
     let r = k("y=cos(2x+1)^3/cos(2x+1)^3");
     assert!(
-        r.domain == "x ∈ ℝ \\ {0.285398 + kπ/2 | k ∈ ℤ}" || unknown(&r, flags::DOMAIN),
+        r.domain == "x ∈ ℝ \\ {≈0.285398 + kπ/2 | k ∈ ℤ}" || unknown(&r, flags::DOMAIN),
         "{}",
         r.domain
     );

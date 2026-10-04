@@ -403,18 +403,19 @@ fn scalings_of_one_expression_in_proportion() {
 
 #[test]
 fn large_values_keep_the_digits_they_show() {
-    // No decimal past the sixth significant digit (pre-review A, L6):
-    // 545843449.4 reads 545843449, a rounding, not an exact integer (its
-    // data value keeps the .4).
+    // Never more than six significant digits, and marked approximate
+    // (pre-review A, L6): 545843449.4 reads ≈5.45843×10⁸, not an exact
+    // integer (its data value keeps the .4).
     let r = k("y=(x-1000000000)*sin((x-1000000000))");
-    assert_eq!(r.y_intercept, "545843449");
+    assert_eq!(r.y_intercept, "≈5.45843×10⁸");
     assert!((r.data.y_intercept.unwrap() - 545843449.4).abs() < 0.05);
     let r = k("y=(x-1000000000)-sin((x-1000000000))");
-    assert_eq!(r.y_intercept, "−999999999");
+    assert_eq!(r.y_intercept, "≈−1×10⁹");
     // f′'s sign between the far roots is beyond the budget: unknown.
     let r = k("y=(x-1000000000000)^2*(x-1000000001000)");
     assert!(
-        (r.minima.len() == 1 && r.minima[0].ends_with("−148148148)")) || !known(&r, flags::MINIMA),
+        (r.minima.len() == 1 && r.minima[0].ends_with("≈−1.48148×10⁸)"))
+            || !known(&r, flags::MINIMA),
         "{:?}",
         r.minima
     );
