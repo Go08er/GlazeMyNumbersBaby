@@ -8,7 +8,10 @@
 //! function is checked at extreme arguments (subnormal, near its domain
 //! edges and poles, huge) in every angle unit, against values computed from
 //! the exact double arguments with mpmath at 80 digits and rounded once to
-//! the nearest double.
+//! the nearest double. `review11_primitives.py` beside this file generates
+//! the table (`nix-shell -p "python3.withPackages(p: [p.mpmath])" --run
+//! "python3 review11_primitives.py rows.txt"`; degree and grad angles are
+//! reduced exactly with fractions first).
 
 // The table is data: arguments such as the double nearest π/2, written out.
 #![allow(clippy::approx_constant, clippy::excessive_precision)]
