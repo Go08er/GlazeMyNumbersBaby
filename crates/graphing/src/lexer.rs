@@ -153,6 +153,25 @@ fn is_letter(c: char) -> bool {
 }
 
 pub(crate) fn tokenize(input: &str, opts: ParseOptions) -> Result<Vec<Token>, EquationError> {
+    tokenize_with(input, opts, &mut None)
+}
+
+/// Each numeric literal's value and its text (digits and `.`), in order:
+/// the exact decimal the parsed double stands for.
+pub(crate) fn literal_texts(
+    input: &str,
+    opts: ParseOptions,
+) -> Result<Vec<(f64, String)>, EquationError> {
+    let mut lits = Some(Vec::new());
+    tokenize_with(input, opts, &mut lits)?;
+    Ok(lits.unwrap_or_default())
+}
+
+fn tokenize_with(
+    input: &str,
+    opts: ParseOptions,
+    lits: &mut Option<Vec<(f64, String)>>,
+) -> Result<Vec<Token>, EquationError> {
     let chars: Vec<char> = input.chars().collect();
     let mut out = Vec::new();
     let mut i = 0;
@@ -209,6 +228,9 @@ pub(crate) fn tokenize(input: &str, opts: ParseOptions) -> Result<Vec<Token>, Eq
             let v: f64 = digits
                 .parse()
                 .map_err(|_| EquationError::syntax(SyntaxErrorCode::InvalidToken, start..i))?;
+            if let Some(l) = lits.as_mut() {
+                l.push((v, digits.clone()));
+            }
             out.push(Token {
                 tok: Tok::Num(v),
                 span: start..i,
@@ -222,9 +244,11 @@ pub(crate) fn tokenize(input: &str, opts: ParseOptions) -> Result<Vec<Token>, Eq
                 inner.push(v);
                 i += 1;
             }
-            let sub = tokenize(&inner, ParseOptions::default()).map_err(|e| EquationError {
-                code: e.code,
-                span: start..i,
+            let sub = tokenize_with(&inner, ParseOptions::default(), lits).map_err(|e| {
+                EquationError {
+                    code: e.code,
+                    span: start..i,
+                }
             })?;
             out.push(Token {
                 tok: Tok::Caret,

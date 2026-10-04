@@ -87,6 +87,7 @@ pub mod error;
 pub mod functions;
 pub mod graph;
 pub mod grid;
+pub mod interval;
 pub mod lexer;
 pub mod parser;
 pub mod plot;
