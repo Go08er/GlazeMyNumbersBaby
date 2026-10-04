@@ -25,6 +25,9 @@ pub const ACTIVE_TRACE_STEP_PX: f64 = 5.0;
 pub const ACTIVE_TRACE_FINE_STEP_PX: f64 = 1.0;
 /// Tick interval of active tracing.
 pub const ACTIVE_TRACE_TICK_MS: u64 = 100;
+/// A hole within this many pixels of the pointer is traced in preference
+/// to the curve around it.
+pub const HOLE_SNAP_PX: f64 = 4.0;
 /// Initial active tracing cursor offset from the centre of the graph
 /// (`RenderMain`: 40 px right of and 40 px above the centre).
 pub const ACTIVE_TRACE_START_OFFSET_PX: (f64, f64) = (40.0, -40.0);
@@ -456,27 +459,32 @@ pub fn nearest_point(
     } else {
         (vp.x_span().log10().floor() - 3.0).clamp(-323.0, 308.0) as i32
     };
-    let mut best: Option<TracePoint> = None;
-    let offer = |index: usize, c: Candidate, best: &mut Option<TracePoint>| {
+    // The best so far, by its distance less its bias.
+    let mut best: Option<(f64, TracePoint)> = None;
+    let offer = |index: usize, c: Candidate, bias: f64, best: &mut Option<(f64, TracePoint)>| {
         let ((x, y), (x_step, y_step), axis, value) = c;
         if !(x.is_finite() && y.is_finite()) {
             return;
         }
         let (sx, sy) = vp.to_screen(x, y);
         let d = ((sx - px).powi(2) + (sy - py).powi(2)).sqrt();
-        if d <= radius_px && best.is_none_or(|b| d < b.distance_px) {
-            *best = Some(TracePoint {
-                index,
-                x,
-                y,
-                screen_x: sx,
-                screen_y: sy,
-                distance_px: d,
-                x_step,
-                y_step,
-                axis,
-                value,
-            });
+        let key = d - bias;
+        if d <= radius_px && best.is_none_or(|(k, _)| key < k) {
+            *best = Some((
+                key,
+                TracePoint {
+                    index,
+                    x,
+                    y,
+                    screen_x: sx,
+                    screen_y: sy,
+                    distance_px: d,
+                    x_step,
+                    y_step,
+                    axis,
+                    value,
+                },
+            ));
         }
     };
     for (index, (eq, plot)) in curves.iter().enumerate() {
@@ -536,13 +544,20 @@ pub fn nearest_point(
                 };
                 // Directly above/below (or beside) the pointer.
                 if let Some(c) = snap(if axis == Axis::X { cx } else { cy }) {
-                    offer(index, c, &mut best);
+                    offer(index, c, 0.0, &mut best);
+                }
+                // A hole near the pointer, which could hardly land on its
+                // exact coordinate otherwise.
+                for h in &plot.holes {
+                    if let Some(c) = snap(point(h.x, h.y).0) {
+                        offer(index, c, HOLE_SNAP_PX, &mut best);
+                    }
                 }
                 // Nearest along the drawn curve (steep parts, asymptotes).
                 if let Some((_, q)) = nearest_on_polylines(vp, &plot.curves, px, py) {
                     let (qt, qd) = point(q.x, q.y);
                     if let Some(c) = snap(qt) {
-                        offer(index, c, &mut best);
+                        offer(index, c, 0.0, &mut best);
                     }
                     // A chord a pixel wide can cross the whole view (1e20·x):
                     // where along it the curve itself meets that point's
@@ -551,7 +566,7 @@ pub fn nearest_point(
                         && let Some(t) = solve_near(iv, qt, qd)
                         && let Some(c) = snap(t)
                     {
-                        offer(index, c, &mut best);
+                        offer(index, c, 0.0, &mut best);
                     }
                 }
             }
@@ -566,12 +581,12 @@ pub fn nearest_point(
                         Axis::X,
                         TraceValue::Approximate,
                     );
-                    offer(index, c, &mut best);
+                    offer(index, c, 0.0, &mut best);
                 }
             }
         }
     }
-    best
+    best.map(|(_, t)| t)
 }
 
 /// Formats a point as `(x, y)` with as many decimals as the tracing
@@ -685,13 +700,19 @@ mod tests {
 
     #[test]
     fn holes_trace_as_undefined_at_their_markers() {
-        for (src, x, y) in [("y = (x^2-1)/(x-1)", 1.0, 2.0), ("y = x/x", 0.0, 1.0)] {
+        for (src, x, y, slope) in [
+            ("y = (x^2-1)/(x-1)", 1.0, 2.0, 1.0),
+            ("y = x/x", 0.0, 1.0, 0.0),
+        ] {
             let t = trace_at(src, x + 0.001, y + 0.001, 100.0).unwrap();
             assert_eq!(t.value, TraceValue::Undefined, "{src}: {t:?}");
             assert!(t.x == x && (t.y - y).abs() < 1e-6, "{src}: {t:?}");
             assert_eq!(t.text(), format!("({x:.2}, undefined)"), "{src}");
-            // A step away it's defined again.
-            let t = trace_at(src, x + 0.01, y, 100.0).unwrap();
+            // Within a few pixels of it, not on its exact coordinate.
+            let t = trace_at(src, x + 0.06, y + 0.03, 100.0).unwrap();
+            assert_eq!(t.value, TraceValue::Undefined, "{src}: {t:?}");
+            // Further along it's defined again.
+            let t = trace_at(src, x + 0.3, y + 0.3 * slope, 100.0).unwrap();
             assert!(
                 matches!(t.value, TraceValue::Defined { .. }),
                 "{src}: {t:?}"
