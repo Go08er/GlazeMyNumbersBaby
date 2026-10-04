@@ -16,13 +16,48 @@ pub fn settle(cover: &Cover, clear: bool) -> (Vec<Claim>, bool) {
     (Vec::new(), cover.complete() && clear)
 }
 
-/// The region a cover's claims reach.
-pub fn region(whole: bool, complete: bool, w: f64) -> Option<Region> {
-    match (whole, complete) {
-        (true, true) => Some(Region::Line),
-        (false, true) => Some(Region::Window { a: R(-w), b: R(w) }),
-        _ => None,
+/// What the boxes cover.
+#[derive(Clone, Copy, Debug)]
+pub struct Scope {
+    /// The boxes reach the whole line.
+    pub whole: bool,
+    /// Otherwise the window they stop at.
+    pub window: (f64, f64),
+    /// The window is one period of f, proven periodic with this period.
+    pub period: Option<Enc>,
+    /// Where the tails start.
+    pub w: f64,
+}
+
+impl Scope {
+    /// The region a complete cover's claims reach; over one period of a
+    /// periodic f, the line by periodicity if the row repeats with f
+    /// (`repeats`).
+    pub fn region(&self, complete: bool, repeats: bool) -> Option<Region> {
+        let (a, b) = (R(self.window.0), R(self.window.1));
+        complete.then(|| {
+            if self.whole {
+                Region::Line
+            } else if repeats && self.period.is_some() {
+                Region::Period { a, b }
+            } else {
+                Region::Window { a, b }
+            }
+        })
     }
+}
+
+/// Is `x` (enclosed) a repeat of one of `xs` by a multiple of the period?
+fn repeats(xs: &[Enc], x: &Enc, period: &Enc) -> bool {
+    xs.iter().any(|e| {
+        let k = ((x.mid() - e.mid()) / period.mid()).round();
+        k != 0.0 && {
+            let (lo, hi) = (e.lo.0 + k * period.lo.0, e.hi.0 + k * period.hi.0);
+            let (lo, hi) = (lo.min(hi), lo.max(hi));
+            let slack = 1e-9 * x.mid().abs().max(1.0);
+            lo - slack <= x.hi.0 && x.lo.0 <= hi + slack
+        }
+    })
 }
 
 fn row_of<T>(
@@ -33,8 +68,8 @@ fn row_of<T>(
     why: &str,
 ) -> Row<T> {
     match region {
-        Some(Region::Line) => {
-            let mut c = Certificate::new(Region::Line);
+        Some(r @ (Region::Line | Region::Period { .. })) => {
+            let mut c = Certificate::new(r);
             c.extend(claims);
             Row::Certified { value, cert: c }
         }
@@ -58,7 +93,7 @@ fn enc_of(l: f64, r: f64) -> Enc {
 
 // ---------------------------------------------------------- x-intercepts
 
-pub fn zeros(c0: &Cover, whole: bool, w: f64, extra: &[Claim], clear: bool) -> Row<Vec<Spot>> {
+pub fn zeros(c0: &Cover, scope: &Scope, extra: &[Claim], clear: bool) -> Row<Vec<Spot>> {
     let mut out: Vec<Spot> = Vec::new();
     for l in &c0.leaves {
         match *l {
@@ -72,12 +107,29 @@ pub fn zeros(c0: &Cover, whole: bool, w: f64, extra: &[Claim], clear: bool) -> R
         }
     }
     out.dedup();
+    if let Some(period) = scope.period {
+        // Over one period: each zero repeats.
+        let mut seen: Vec<Enc> = Vec::new();
+        out.retain(|s| match s {
+            Spot::At(x) => {
+                let keep = !repeats(&seen, x, &period);
+                seen.push(*x);
+                keep
+            }
+            Spot::Every(_) => true,
+        });
+        for s in out.iter_mut() {
+            if let Spot::At(x) = *s {
+                *s = Spot::Every(Family { x0: x, period });
+            }
+        }
+    }
     let (gaps, complete) = settle(c0, clear);
     let mut cl = claims(c0, &Subject::f(0), &[0.0]);
     cl.extend(gaps);
     cl.extend(extra.iter().cloned());
     let has = !out.is_empty();
-    row_of(out, region(whole, complete, w), has, cl, "f's sign is not decided everywhere")
+    row_of(out, scope.region(complete, true), has, cl, "f's sign is not decided everywhere")
 }
 
 // ---------------------------------------------------------- y-intercept
@@ -218,8 +270,7 @@ pub fn extrema(
     f: &Fun<'_>,
     c1: &Cover,
     boxes: &[IBox],
-    whole: bool,
-    w: f64,
+    scope: &Scope,
     clear: bool,
 ) -> Result<Row<Vec<Extremum>>, Stop> {
     let (gaps, mut complete) = settle(c1, clear);
@@ -231,6 +282,11 @@ pub fn extrema(
         let (ch, done) = changes(&segs);
         complete &= done;
         for (x, from_pos) in ch {
+            if let Some(p) = scope.period
+                && repeats(&out.iter().map(|e: &Extremum| e.x).collect::<Vec<_>>(), &x, &p)
+            {
+                continue;
+            }
             let y = f.val(Interval::new(x.lo.0, x.hi.0))?;
             if y.is_empty() || !y.iv.is_bounded() || y.dec < Dec::Def {
                 complete = false;
@@ -250,13 +306,14 @@ pub fn extrema(
                 } else {
                     ExtKind::Min
                 },
+                every: scope.period,
             });
         }
     }
     let has = !out.is_empty();
     Ok(row_of(
         out,
-        region(whole, complete, w),
+        scope.region(complete, true),
         has,
         cl,
         "f′ is not decided everywhere",
@@ -267,8 +324,7 @@ pub fn inflections(
     f: &Fun<'_>,
     c2: &Cover,
     boxes: &[IBox],
-    whole: bool,
-    w: f64,
+    scope: &Scope,
     clear: bool,
 ) -> Result<Row<Vec<Inflection>>, Stop> {
     let (gaps, mut complete) = settle(c2, clear);
@@ -280,6 +336,11 @@ pub fn inflections(
         let (ch, done) = changes(&segs);
         complete &= done;
         for (x, _) in ch {
+            if let Some(p) = scope.period
+                && repeats(&out.iter().map(|e: &Inflection| e.x).collect::<Vec<_>>(), &x, &p)
+            {
+                continue;
+            }
             let y = f.val(Interval::new(x.lo.0, x.hi.0))?;
             if y.is_empty() || !y.iv.is_bounded() || y.dec < Dec::Def {
                 complete = false;
@@ -294,13 +355,14 @@ pub fn inflections(
             out.push(Inflection {
                 x,
                 y: Enc::new(y.lo(), y.hi()),
+                every: scope.period,
             });
         }
     }
     let has = !out.is_empty();
     Ok(row_of(
         out,
-        region(whole, complete, w),
+        scope.region(complete, true),
         has,
         cl,
         "f″ is not decided everywhere",
@@ -372,7 +434,7 @@ fn monotone_pieces(c1: &Cover, boxes: &[IBox]) -> Option<Vec<(Monotone, bool, bo
     Some(out)
 }
 
-pub fn monotonicity(c1: &Cover, boxes: &[IBox], whole: bool, w: f64, clear: bool) -> Row<Vec<Monotone>> {
+pub fn monotonicity(c1: &Cover, boxes: &[IBox], scope: &Scope, clear: bool) -> Row<Vec<Monotone>> {
     let (gaps, complete) = settle(c1, clear);
     let Some(pieces) = monotone_pieces(c1, boxes) else {
         return Row::unknown("f′'s sign is not decided everywhere");
@@ -383,7 +445,7 @@ pub fn monotonicity(c1: &Cover, boxes: &[IBox], whole: bool, w: f64, clear: bool
     let has = !out.is_empty();
     row_of(
         out,
-        region(whole, complete, w),
+        scope.region(complete, false),
         has,
         cl,
         "f′'s sign is not decided everywhere",
@@ -628,12 +690,12 @@ fn excluded_points(boxes: &[IBox]) -> (Vec<Enc>, Vec<(Enc, bool)>) {
     (inner, ends)
 }
 
-pub fn vertical(f: &Fun<'_>, dom: &Domain, c0: &Cover, boxes: &[IBox], whole: bool) -> Result<Row<Vec<Spot>>, Stop> {
+pub fn vertical(f: &Fun<'_>, dom: &Domain, c0: &Cover, boxes: &[IBox], scope: &Scope) -> Result<Row<Vec<Spot>>, Stop> {
     use super::pole::Near;
     if !dom.row.is_certified() {
         return Ok(Row::unknown("the domain is not known"));
     }
-    if !whole {
+    if !scope.whole && scope.period.is_none() {
         return Ok(Row::unknown("excluded families"));
     }
     // Continuity (or boundedness) everywhere inside: no asymptote but at
@@ -722,6 +784,21 @@ pub fn vertical(f: &Fun<'_>, dom: &Domain, c0: &Cover, boxes: &[IBox], whole: bo
                 _ => return Ok(Row::unknown("a domain end is not classified")),
             }
         }
+    }
+    if let Some(period) = scope.period {
+        // Over one period: each asymptote repeats.
+        let mut seen: Vec<Enc> = Vec::new();
+        let mut fams = Vec::new();
+        for s in out {
+            if let Spot::At(x) = s
+                && !repeats(&seen, &x, &period)
+            {
+                seen.push(x);
+                fams.push(Spot::Every(Family { x0: x, period }));
+            }
+        }
+        out = fams;
+        c.covers = scope.region(true, true).unwrap_or(Region::Line);
     }
     Ok(Row::Certified { value: out, cert: c })
 }
@@ -841,7 +918,7 @@ pub fn side_limit(f: &Fun<'_>, p: f64, right: bool) -> Option<(TailEnd, Claim)> 
 }
 
 /// An enclosure of q·πᵏ.
-fn piq_interval(v: crate::simplify::PiQ) -> Option<Interval> {
+pub fn piq_interval(v: crate::simplify::PiQ) -> Option<Interval> {
     let mut iv = v.q.interval();
     for _ in 0..v.k.unsigned_abs() {
         iv = if v.k > 0 {
@@ -1091,10 +1168,45 @@ fn tail_interval(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cl
     }
 }
 
-pub fn horizontal(f: &Fun<'_>, dom: &Domain, whole: bool, w: f64) -> Result<Row<Vec<Horizontal>>, Stop> {
-    if !dom.row.is_certified() || !whole {
+pub fn horizontal(f: &Fun<'_>, dom: &Domain, scope: &Scope) -> Result<Row<Vec<Horizontal>>, Stop> {
+    if !dom.row.is_certified() {
         return Ok(Row::unknown("the domain's tails are not known"));
     }
+    if scope.period.is_some() {
+        // A periodic f with a limit at ±∞ would be constant: two values
+        // apart show it has none.
+        let (a, b) = scope.window;
+        let mut vals = Vec::new();
+        for i in 0..16 {
+            let x = a + (b - a) * (i as f64 + 0.5) / 16.0;
+            let v = f.val(Interval::point(x))?;
+            if !v.is_empty() && v.dec >= Dec::Def && v.iv.is_bounded() {
+                vals.push((x, v));
+            }
+        }
+        let apart = vals.iter().find_map(|(x, v)| {
+            vals.iter()
+                .find(|(_, u)| u.hi() < v.lo() || v.hi() < u.lo())
+                .map(|(y, u)| ((*x, *v), (*y, *u)))
+        });
+        let Some(((x, v), (y, u))) = apart else {
+            return Ok(Row::unknown("a tail's limit is not decided"));
+        };
+        let mut c = Certificate::new(Region::Line);
+        for (p, w) in [(x, v), (y, u)] {
+            c.push(Claim::Value {
+                x: XBox::point(p),
+                of: Subject::f(0),
+                lo: R(w.lo()),
+                hi: R(w.hi()),
+            });
+        }
+        return Ok(Row::Certified { value: Vec::new(), cert: c });
+    }
+    if !scope.whole {
+        return Ok(Row::unknown("the domain's tails are not known"));
+    }
+    let w = scope.w;
     let mut out = Vec::new();
     let mut c = Certificate::new(Region::Line);
     for right in [false, true] {
@@ -1222,11 +1334,17 @@ fn end_value(
     is_lo: bool,
     boxes: &[IBox],
     c0: &Cover,
-    w: f64,
+    scope: &Scope,
     cl: &mut Vec<Claim>,
 ) -> Result<Option<End>, Stop> {
+    let w = scope.w;
     if clipped {
-        return Ok(None);
+        // A window edge: over one period of a periodic f a point like any
+        // other, its value taken; otherwise not an end of f's range.
+        return match (scope.period, b) {
+            (Some(_), Bound::At { x, .. }) => attained(f, x, cl),
+            _ => Ok(None),
+        };
     }
     let infinite = |up: bool| End {
         v: Enc::point(if up { f64::INFINITY } else { f64::NEG_INFINITY }),
@@ -1364,11 +1482,10 @@ pub fn range(
     c0: &Cover,
     c1: &Cover,
     boxes: &[IBox],
-    whole: bool,
-    w: f64,
+    scope: &Scope,
     clear: bool,
 ) -> Result<Row<Vec<Piece>>, Stop> {
-    if !dom.row.is_certified() || !whole {
+    if !dom.row.is_certified() || !(scope.whole || scope.period.is_some()) {
         return Ok(Row::unknown("the domain is not known"));
     }
     let (_, complete) = settle(c1, clear);
@@ -1383,8 +1500,8 @@ pub fn range(
     let mut images: Vec<(End, End)> = Vec::new();
     for (m, lc, hc) in &pieces {
         let (a, b) = (
-            end_value(f, m.on.lo, *lc, true, boxes, c0, w, &mut cl)?,
-            end_value(f, m.on.hi, *hc, false, boxes, c0, w, &mut cl)?,
+            end_value(f, m.on.lo, *lc, true, boxes, c0, scope, &mut cl)?,
+            end_value(f, m.on.hi, *hc, false, boxes, c0, scope, &mut cl)?,
         );
         if std::env::var_os("CERTIFY_DEBUG").is_some() {
             eprintln!("range piece {:?}: {a:?} .. {b:?}", m.on);
@@ -1429,7 +1546,7 @@ pub fn range(
     if out.iter().any(|p| p.lo == Bound::NegInf || p.hi == Bound::PosInf) {
         cl.extend(claims(c0, &Subject::f(0), &[0.0]));
     }
-    let mut c = Certificate::new(Region::Line);
+    let mut c = Certificate::new(scope.region(true, true).unwrap_or(Region::Line));
     c.extend(cl);
     Ok(Row::Certified { value: out, cert: c })
 }

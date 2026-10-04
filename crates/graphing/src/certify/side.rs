@@ -852,32 +852,33 @@ pub struct IBox {
 }
 
 /// Closed boxes covering the domain's interior for the other rows: within
-/// `[-w, w]` when there are excluded families (an infinite family can't
-/// be covered), with each family member cut out (a member at a double is
+/// `window` when given (one period of a periodic f, or `[-w, w]` when
+/// there are excluded families: an infinite family can't be covered), with
+/// each family member cut out (a member at a double is
 /// left out exactly, one known only to an enclosure leaves a gap).
 /// Returns the boxes, the claims for what they leave out (gaps, excluded
 /// doubles), and whether they reach the whole line.
-pub fn interior(d: &Domain, w: f64) -> (Vec<IBox>, Vec<Claim>, bool) {
+pub fn interior(d: &Domain, window: Option<(f64, f64)>) -> (Vec<IBox>, Vec<Claim>, bool) {
     let mut boxes = Vec::new();
     let mut gaps = Vec::new();
-    let whole = d.families.is_empty();
+    let whole = window.is_none();
     for p in &d.pieces {
         let (mut lo, mut hi) = piece_box(p);
         let (mut lo_b, mut hi_b) = (p.lo, p.hi);
         let (mut lo_c, mut hi_c) = (false, false);
-        if !whole {
-            if lo < -w {
-                lo = -w;
+        if let Some((a, b)) = window {
+            if lo < a {
+                lo = a;
                 lo_b = Bound::At {
-                    x: Enc::point(-w),
+                    x: Enc::point(a),
                     closed: true,
                 };
                 lo_c = true;
             }
-            if hi > w {
-                hi = w;
+            if hi > b {
+                hi = b;
                 hi_b = Bound::At {
-                    x: Enc::point(w),
+                    x: Enc::point(b),
                     closed: true,
                 };
                 hi_c = true;

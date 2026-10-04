@@ -85,6 +85,42 @@ fn window(f: &Fun<'_>, d: &side::Domain) -> f64 {
     (4.0 * c).max(16.0).max(4.0 * p)
 }
 
+/// One period `[s, s + P]` of f to analyse instead of the line, when the
+/// simplifier proves f periodic with period P and f's domain is the line
+/// (less excluded families): its start s is no family member, and f, f′
+/// and f″ are strictly of one sign there (no feature sits on its edge, to
+/// be missed at both ends).
+fn periodic_window(f: &Fun<'_>, dom: &side::Domain) -> Option<(f64, Enc)> {
+    if !dom.row.is_certified() || dom.pieces != [side::line()] {
+        return None;
+    }
+    let s = f.settings()?;
+    let per = crate::simplify::prove_period(&f.expr, &s)?;
+    let pv = rows::piq_interval(per.value)?;
+    if !(pv.lo() > 0.0 && pv.hi() <= 1e6) {
+        return None;
+    }
+    let p = pv.mid();
+    for c in [-0.5, -0.37, -0.29, -0.41, -0.23, -0.47, -0.31] {
+        let start = c * p;
+        let margin = 1e-9 * p;
+        if dom
+            .families
+            .iter()
+            .any(|fam| !fam.members(start - margin, start + margin).is_empty())
+        {
+            continue;
+        }
+        let Ok(sr) = f.ser(crate::interval::Interval::point(start), 2) else {
+            return None;
+        };
+        if fun::usable(&sr, 2) && sr.iter().take(3).all(|v| !v.is_empty() && v.ne0()) {
+            return Some((start, Enc::new(pv.lo(), pv.hi())));
+        }
+    }
+    None
+}
+
 fn unit_name(u: crate::functions::TrigUnit) -> &'static str {
     match u {
         crate::functions::TrigUnit::Radians => "radians",
@@ -196,7 +232,21 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     f.allow(phase);
     let dom = side::domain(f);
     let w = window(f, &dom);
-    let (boxes, gaps, whole) = side::interior(&dom, w);
+    // One period of a periodic f stands for the line; a domain with
+    // excluded families otherwise gets a window.
+    let periodic = periodic_window(f, &dom);
+    let (win, period) = match periodic {
+        Some((s, p)) => (Some((s, s + p.hi.0)), Some(p)),
+        None if !dom.families.is_empty() => (Some((-w, w)), None),
+        None => (None, None),
+    };
+    let (boxes, gaps, whole) = side::interior(&dom, win);
+    let scope = rows::Scope {
+        whole,
+        window: win.unwrap_or((-w, w)),
+        period,
+        w,
+    };
     // A closed end at a double is also decided on its own (a point box,
     // decided before the box it ends), so a zero right at the end is found
     // exactly and the box beside it can touch it.
@@ -350,28 +400,33 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             eprintln!("  {g:?}: {:?}", f.ser(iv, 2).map(|s| s.to_vec()));
         }
     }
-    let monotonicity = with(rows::monotonicity(&c1, &boxes, whole, w, clear1), &gap_claims);
+    if let Some(p) = period {
+        gap_claims.push(Claim::Simplifier {
+            fact: format!("f(x + P) = f(x) wherever f is defined, P ∈ [{:e}, {:e}]", p.lo.0, p.hi.0),
+        });
+    }
+    let monotonicity = with(rows::monotonicity(&c1, &boxes, &scope, clear1), &gap_claims);
     Analysis {
         source: source.to_string(),
         formula: f.expr.formula(),
         evaluated: evaluated(f),
         unit: unit_name(f.opts.trig_unit).into(),
-        x_intercepts: rows::zeros(&c0, whole, w, &gap_claims, clear0),
+        x_intercepts: rows::zeros(&c0, &scope, &gap_claims, clear0),
         y_intercept: or_unknown(rows::y_intercept(f)),
         parity: or_unknown(rows::parity(f, &dom)),
         period: or_unknown(rows::period(f, &dom, &monotonicity)),
-        extrema: with(or_unknown(rows::extrema(f, &c1, &boxes, whole, w, clear1)), &gap_claims),
+        extrema: with(or_unknown(rows::extrema(f, &c1, &boxes, &scope, clear1)), &gap_claims),
         inflections: with(
-            or_unknown(rows::inflections(f, &c2, &boxes, whole, w, clear2)),
+            or_unknown(rows::inflections(f, &c2, &boxes, &scope, clear2)),
             &gap_claims,
         ),
         monotonicity,
         range: with(
-            or_unknown(rows::range(f, &dom, &c0, &c1, &boxes, whole, w, clear1)),
+            or_unknown(rows::range(f, &dom, &c0, &c1, &boxes, &scope, clear1)),
             &gap_claims,
         ),
-        vertical: with(or_unknown(rows::vertical(f, &dom, &c0, &boxes, whole)), &gap_claims),
-        horizontal: or_unknown(rows::horizontal(f, &dom, whole, w)),
+        vertical: with(or_unknown(rows::vertical(f, &dom, &c0, &boxes, &scope)), &gap_claims),
+        horizontal: or_unknown(rows::horizontal(f, &dom, &scope)),
         domain: dom.row.clone(),
         evals: f.evals(),
         stopped: [c0.stopped, c1.stopped, c2.stopped]

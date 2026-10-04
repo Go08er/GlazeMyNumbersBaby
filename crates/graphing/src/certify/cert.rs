@@ -280,6 +280,10 @@ pub enum Region {
     Line,
     /// Only `[a, b]`: a correct but possibly incomplete answer.
     Window { a: R, b: R },
+    /// One period `[a, b]` of f, proven periodic with that period (the
+    /// certificate's `Simplifier` claim): by periodicity the whole line, a
+    /// complete answer (its x positions repeat every period).
+    Period { a: R, b: R },
     /// Only the points the claims name (a value at x = 0, say).
     Points,
 }
@@ -387,12 +391,13 @@ pub enum ExtKind {
     Max,
 }
 
-/// A local extremum.
+/// A local extremum (and, with `every`, one at x + k·every for all k ∈ ℤ).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Extremum {
     pub x: Enc,
     pub y: Enc,
     pub kind: ExtKind,
+    pub every: Option<Enc>,
 }
 
 /// An inflection point.
@@ -400,6 +405,8 @@ pub struct Extremum {
 pub struct Inflection {
     pub x: Enc,
     pub y: Enc,
+    /// Repeats every this far, when f is periodic.
+    pub every: Option<Enc>,
 }
 
 /// Increasing, decreasing or constant.

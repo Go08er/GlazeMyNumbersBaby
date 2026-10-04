@@ -250,6 +250,12 @@ impl Val {
     }
 }
 
+/// Is the enclosed period `q` a whole multiple of `p`?
+fn multiple(q: &Enc, p: f64) -> bool {
+    let n = (q.mid() / p).round();
+    n >= 1.0 && Val::Exact(n * p).fits(q.lo.0 - 1e-12 * q.mid(), q.hi.0 + 1e-12 * q.mid())
+}
+
 /// Is some member of `x0 + k·p` in the enclosure?
 fn in_family(x0: f64, p: f64, e: &Enc) -> bool {
     let k = ((e.mid() - x0) / p).round();
@@ -528,7 +534,7 @@ fn check_xs(r: &Row<Vec<Spot>>, want: &Option<Xs>, name: &str) -> Option<String>
         let ok = match s {
             Spot::At(e) => member(e),
             Spot::Every(f) => match want {
-                Xs::Fam(x0, p) => Val::Exact(*p).fits_enc(&f.period) && in_family(*x0, *p, &f.x0),
+                Xs::Fam(x0, p) => multiple(&f.period, *p) && in_family(*x0, *p, &f.x0),
                 _ => false,
             },
         };
@@ -539,7 +545,7 @@ fn check_xs(r: &Row<Vec<Spot>>, want: &Option<Xs>, name: &str) -> Option<String>
     // Completeness: everything on the line, or in the window.
     let window = match region(r) {
         Some(Region::Line) if certified => Some((f64::NEG_INFINITY, f64::INFINITY)),
-        Some(Region::Window { a, b }) => Some((a.0, b.0)),
+        Some(Region::Window { a, b } | Region::Period { a, b }) => Some((a.0, b.0)),
         _ => None,
     };
     let (a, b) = window?;
@@ -575,18 +581,21 @@ fn check_xs(r: &Row<Vec<Spot>>, want: &Option<Xs>, name: &str) -> Option<String>
 }
 
 /// Points (x, y) against a set, as [`check_xs`].
-fn check_pts(r: &Row<Vec<(Enc, Enc)>>, want: &Option<Pts>, name: &str) -> Option<String> {
+fn check_pts(r: &Row<Vec<(Enc, Enc, Option<Enc>)>>, want: &Option<Pts>, name: &str) -> Option<String> {
     let want = want.as_ref()?;
     let (value, certified) = match r {
         Row::Certified { value, .. } => (value, true),
         Row::Partial { value, .. } => (value, false),
         Row::Unknown { .. } => return None,
     };
-    for (x, y) in value {
-        let ok = match want {
-            Pts::List(l) => l.iter().any(|(tx, ty)| tx.fits_enc(x) && ty.fits_enc(y)),
-            Pts::Fam(x0, p, ty) => in_family(*x0, *p, x) && ty.fits_enc(y),
-            Pts::Many => true,
+    for (x, y, every) in value {
+        let ok = match (want, every) {
+            (Pts::List(l), None) => l.iter().any(|(tx, ty)| tx.fits_enc(x) && ty.fits_enc(y)),
+            (Pts::List(_), Some(_)) => false,
+            (Pts::Fam(x0, p, ty), _) => {
+                in_family(*x0, *p, x) && ty.fits_enc(y) && every.is_none_or(|q| multiple(&q, *p))
+            }
+            (Pts::Many, _) => true,
         };
         if !ok {
             return Some(format!("{name}: ({x:?}, {y:?}) is not in the truth {want:?}"));
@@ -594,15 +603,21 @@ fn check_pts(r: &Row<Vec<(Enc, Enc)>>, want: &Option<Pts>, name: &str) -> Option
     }
     let window = match region(r) {
         Some(Region::Line) if certified => Some((f64::NEG_INFINITY, f64::INFINITY)),
-        Some(Region::Window { a, b }) => Some((a.0, b.0)),
+        Some(Region::Window { a, b } | Region::Period { a, b }) => Some((a.0, b.0)),
         _ => None,
     };
     let (a, b) = window?;
+    let listed = |t: f64| {
+        value.iter().any(|(x, _, every)| match every {
+            None => Val::Exact(t).fits_enc(x),
+            Some(q) => in_family(t, q.mid(), x),
+        })
+    };
     match want {
         Pts::List(l) => l
             .iter()
             .filter(|(tx, _)| tx.mid() >= a && tx.mid() <= b)
-            .find(|(tx, _)| !value.iter().any(|(x, _)| tx.fits_enc(x)))
+            .find(|(tx, _)| !value.iter().any(|(x, _, _)| tx.fits_enc(x)))
             .map(|t| format!("{name}: {t:?} missing ({value:?})")),
         Pts::Fam(x0, p, _) => {
             if a.is_infinite() || b.is_infinite() {
@@ -610,7 +625,7 @@ fn check_pts(r: &Row<Vec<(Enc, Enc)>>, want: &Option<Pts>, name: &str) -> Option
             }
             members(*x0, *p, a, b)
                 .into_iter()
-                .find(|t| !value.iter().any(|(x, _)| Val::Exact(*t).fits_enc(x)))
+                .find(|t| !listed(*t))
                 .map(|t| format!("{name}: {t} missing over [{a}, {b}] ({value:?})"))
         }
         Pts::Many => (a.is_infinite() || b.is_infinite())
@@ -647,12 +662,15 @@ const ROWS: [&str; 11] = ["D", "XI", "YI", "P", "T", "EXT", "INF", "MON", "R", "
 fn checks(a: &Analysis, t: &Truth) -> Vec<Check> {
     let ext = |k: ExtKind| {
         map_row(&a.extrema, |v| {
-            v.iter().filter(|e| e.kind == k).map(|e| (e.x, e.y)).collect::<Vec<_>>()
+            v.iter()
+                .filter(|e| e.kind == k)
+                .map(|e| (e.x, e.y, e.every))
+                .collect::<Vec<_>>()
         })
     };
     let ext_wrong = check_pts(&ext(ExtKind::Min), &t.min, "minima")
         .or_else(|| check_pts(&ext(ExtKind::Max), &t.max, "maxima"));
-    let inf = map_row(&a.inflections, |v| v.iter().map(|i| (i.x, i.y)).collect::<Vec<_>>());
+    let inf = map_row(&a.inflections, |v| v.iter().map(|i| (i.x, i.y, i.every)).collect::<Vec<_>>());
     let yi = check_scalar(
         &a.y_intercept,
         |v| {
