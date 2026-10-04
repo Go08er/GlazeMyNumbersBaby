@@ -136,6 +136,10 @@ pub const CANNOT_USE_I_IN_INEQUALITY_SOLVING: &str = "Cannot use complex numbers
 /// Miscellaneous graphing strings.
 pub const VARIABLE_LIST_VIEW_ITEM: &str = "Variable %1 list item";
 pub const KEY_GRAPH_FEATURES_LABEL: &str = "Function analysis";
+/// Not upstream strings: a traced value where the function is proven
+/// undefined, and where its value couldn't be determined.
+pub const TRACE_UNDEFINED: &str = "undefined";
+pub const TRACE_UNKNOWN: &str = "unknown";
 
 /// Every resource key known to this crate together with its en-US value.
 pub const RESOURCES: &[(&str, &str)] = &[

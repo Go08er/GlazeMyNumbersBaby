@@ -27,6 +27,7 @@ use crate::compile::CompileOptions;
 use crate::equation::{Axis, Equation, EquationKind};
 use crate::strings as s;
 
+pub use certified::MIN_SHOWN_DIGITS;
 pub use format::{Bound, Interval};
 
 /// Why analysis produced no features (`CalculatorApp::AnalysisErrorType`).
