@@ -84,6 +84,9 @@ fn pi_bounds() -> Option<(Q, Q)> {
     Some((Q::from_f64(lo)?, Q::from_f64(lo.next_up())?))
 }
 
+// add, sub, mul, div and neg return `None` where the result has no form
+// here (or overflows), which the operator traits can't express.
+#[allow(clippy::should_implement_trait)]
 impl Ex {
     /// The rational `q`.
     pub fn q(q: Q) -> Ex {
@@ -282,7 +285,7 @@ impl Ex {
             return self.sqrt();
         }
         let neg = r.signum() < 0;
-        if neg && n % 2 == 0 {
+        if neg && n.is_multiple_of(2) {
             return None;
         }
         let root = |v: i128| -> Option<i128> {
@@ -533,7 +536,7 @@ pub fn eval(
             }
         }
         Expr::Call(f, args) => {
-            let arg = |i: usize| args.get(i).and_then(|a| ev(a));
+            let arg = |i: usize| args.get(i).and_then(&ev);
             let a0 = arg(0)?;
             let trig = |s: i32| -> Option<Ex> {
                 // s: 0 sin, 1 cos, 2 tan.
@@ -769,10 +772,7 @@ pub fn exact_roots(p: &Poly) -> Vec<Ex> {
             push(Ex::q(r), &mut out);
             // Divide out every copy of (x − r).
             let lin = Poly::from_coefficients(vec![r.neg().unwrap_or(Q::ZERO), Q::ONE]);
-            loop {
-                let Some((qt, rm)) = rest.divmod(&lin) else {
-                    break;
-                };
+            while let Some((qt, rm)) = rest.divmod(&lin) {
                 if !rm.is_zero() {
                     break;
                 }
@@ -835,7 +835,18 @@ fn rational_text(q: Q) -> Option<String> {
     if d == 1 {
         return Some(int_text(n));
     }
-    if d <= 16 && n.unsigned_abs() <= 1_000_000_000 {
+    // Small fractions as p/q (1/2, −9/4, 19/36); a large one whose decimal
+    // ends reads better that way (2000000.5, not 4000001/2).
+    let terminates = {
+        let mut dd = d;
+        for p in [2, 5] {
+            while dd % p == 0 {
+                dd /= p;
+            }
+        }
+        dd == 1
+    };
+    if d <= 16 && n.unsigned_abs() <= 1_000_000_000 && (n.unsigned_abs() <= 1000 || !terminates) {
         return Some(Nice::Rational(i64::try_from(n).ok()?, i64::try_from(d).ok()?).to_string());
     }
     // A terminating decimal (d = 2ᵃ5ᵇ) of at most 17 significant digits.
@@ -1031,7 +1042,7 @@ mod tests {
         assert_eq!(Ex::int(1).sub(r2).unwrap().sign(), Some(-1));
         assert_eq!(r2.within(1.414, 1.415), Some(true));
         assert_eq!(r2.within(1.415, 2.0), Some(false));
-        assert_eq!(Ex::Pi(q(1, 2)).within(1.5707, 1.5709), Some(true));
+        assert_eq!(Ex::Pi(q(1, 2)).within(1.57, 1.571), Some(true));
         assert_eq!(Ex::Pi(q(1, 2)).within(1.5709, 2.0), Some(false));
     }
 

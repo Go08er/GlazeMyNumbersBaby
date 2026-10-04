@@ -50,10 +50,11 @@ fn arccot_of_a_large_argument_is_its_reciprocal() {
     // Below 0 the continuous branch (0, π): arccot(−10¹⁵) is π − 10⁻¹⁵,
     // two doubles below π's.
     assert_eq!(at("acot(x)", -1e15), 3.1415926535897922);
-    // The panel and the plot: 1, not 0.888178.
+    // The panel and the plot: 1, not 0.888178 (1 − 10⁻³⁰/3, written ≈1).
     let k = analyze_str("y=acot(1000000000000000)*1000000000000000");
-    assert_eq!(k.data.y_intercept, Some(1.0), "{:?}", k.y_intercept);
-    assert_eq!(k.range, "y ∈ {1}", "{:?}", k.range);
+    let y = k.data.y_intercept.expect("a y-intercept");
+    assert!((y - 1.0).abs() < 1e-15, "{:?}", k.y_intercept);
+    assert_eq!(k.range, "y ∈ {≈1}", "{:?}", k.range);
 }
 
 #[test]
@@ -70,20 +71,32 @@ fn a_power_far_beyond_the_doubles_keeps_its_value_or_says_it_cannot() {
         "{}",
         k.range
     );
-    // Beyond 2⁵³ binades nothing in range can be known of it: no definite
-    // value at all, rather than a made-up one.
-    for src in [
-        "ln(exp(1000000000000000)^8)-8000000000000000",
-        "ln(exp(1000000000000000)^8)",
-        "sqrt(sqrt(exp(1000000000000000)^16))/exp(1000000000000000)^4",
+    // Beyond 2⁵³ binades the evaluator knows nothing of it: no definite
+    // value at all, rather than a made-up one. The panel says nothing, or
+    // the true value (the certifier encloses e^(10¹⁵) beyond the doubles).
+    for (src, truth) in [
+        ("ln(exp(1000000000000000)^8)-8000000000000000", 0.0),
+        ("ln(exp(1000000000000000)^8)", 8e15),
+        (
+            "sqrt(sqrt(exp(1000000000000000)^16))/exp(1000000000000000)^4",
+            1.0,
+        ),
     ] {
         let v = at(src, 0.0);
         assert!(v.is_nan(), "{src}: {v}");
         let k = analyze_str(&format!("y={src}"));
         assert!(
-            k.data.y_intercept.is_none() && k.data.range.is_empty(),
+            k.data.y_intercept.is_none_or(|y| y == truth),
             "{src}: {:?} {:?}",
             k.y_intercept,
+            k.range
+        );
+        assert!(
+            k.data.range.is_empty()
+                || (k.data.range.len() == 1
+                    && k.data.range[0].lo.value == truth
+                    && k.data.range[0].hi.value == truth),
+            "{src}: {:?}",
             k.range
         );
     }

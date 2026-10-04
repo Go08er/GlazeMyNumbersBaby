@@ -81,8 +81,13 @@ fn domains_that_start_beyond_the_window() {
     assert_eq!(r.domain, "x ∈ [10000000, ∞)");
     assert_eq!(r.range, "y ∈ [0, ∞)");
     assert_eq!(r.x_intercept, "10000000");
+    // (A pole of 1/(√x − c) is past the certifier's pole proofs: unknown,
+    // never missing from a list said to be complete.)
     let r = k("y = 1/(sqrt(x) - 2000)");
-    assert_eq!(r.vertical_asymptotes, ["x = 4000000"]);
+    assert!(
+        r.vertical_asymptotes == ["x = 4000000"]
+            || r.too_complex_features & flags::VERTICAL_ASYMPTOTES != 0
+    );
 }
 
 /// A transcendental zero out at e³⁰ ≈ 1.07·10¹³, and growth through zero

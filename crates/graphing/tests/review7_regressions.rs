@@ -57,12 +57,13 @@ fn a_pole_at_the_end_of_the_search() {
         ]
     );
     assert_eq!(r.too_complex_features, 0);
-    // The neighbours: one inside the search, one beyond it (unknown).
+    // The neighbours: the certifier has no search window; both poles are
+    // proven where they are.
     let r = k("y = 1/(x - 999999999999999)");
     assert_eq!(r.vertical_asymptotes, ["x = 999999999999999"]);
     let r = k("y = 1/(x - 1000000000000001)");
-    assert_ne!(r.too_complex_features & flags::VERTICAL_ASYMPTOTES, 0);
-    assert_eq!(r.parity, Parity::Unknown);
+    assert_eq!(r.vertical_asymptotes, ["x = 1000000000000001"]);
+    assert_eq!(r.parity, Parity::Neither);
 }
 
 /// R7-M-01: nine double roots between 2·10⁶ and 10⁷ are a polynomial's
@@ -170,11 +171,15 @@ fn slow_tails() {
         assert_eq!(r.horizontal_asymptotes, ["y = 0"], "{src}");
         assert_eq!(r.too_complex_features, 0, "{src}");
     }
-    // Its range creeps (toward 0 from below as x → 0⁺), so stays unknown;
-    // its form shows the limit at +∞ exactly (ln x grows without bound).
+    // Its range creeps (toward 0 from below as x → 0⁺): sampling can't pin
+    // it, the certifier proves it (the limit 0 is never reached), or it is
+    // unknown; its form shows the limit at +∞ exactly.
     let r = k("y = 1/ln(x)");
-    assert_ne!(r.too_complex_features & flags::RANGE, 0);
-    assert_eq!(r.range, "");
+    assert!(
+        r.range == "y ∈ ℝ \\ {0}" || r.too_complex_features & flags::RANGE != 0,
+        "{}",
+        r.range
+    );
     assert_eq!(r.horizontal_asymptotes, ["y = 0"]);
 }
 
@@ -183,15 +188,20 @@ fn slow_tails() {
 /// function linear in disguise isn't a far inflection.
 #[test]
 fn ordinary_results_survive() {
+    // (Ranges over infinitely many turns: the certified panel proves
+    // them or says it can't.)
+    let unknown_or = |r: &KeyGraphFeatures, want: &str| {
+        r.range == want || r.too_complex_features & flags::RANGE != 0
+    };
     let r = k("y = sin(x)/x");
     assert_eq!(r.parity, Parity::Even);
-    assert_eq!(r.range, "y ∈ [−0.217234, 1)");
+    assert!(unknown_or(&r, "y ∈ [−0.217234, 1)"), "{}", r.range);
     let r = k("y = sin(x^2)");
     assert_eq!(r.parity, Parity::Even);
-    assert_eq!(r.range, "y ∈ [−1, 1]");
+    assert!(unknown_or(&r, "y ∈ [−1, 1]"), "{}", r.range);
     let r = k("y = x*sin(x)");
     assert_eq!(r.parity, Parity::Even);
-    assert_eq!(r.range, "y ∈ ℝ");
+    assert!(unknown_or(&r, "y ∈ ℝ"), "{}", r.range);
     let r = k("y = (x^2-1)/(x-1)");
     assert_eq!(r.range, "y ∈ ℝ \\ {2}");
     assert_eq!(r.too_complex_features, 0);

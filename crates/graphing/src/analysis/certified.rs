@@ -147,20 +147,43 @@ fn sig_digits(t: &str) -> usize {
     if trimmed.is_empty() { 1 } else { trimmed.len() }
 }
 
+thread_local! {
+    /// Set when a number was written as its enclosure (not one digit
+    /// known): the row it is in is shown as unknown instead.
+    static UNFIXED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether a number since the last call was written as an enclosure.
+fn take_unfixed() -> bool {
+    UNFIXED.with(|u| u.replace(false))
+}
+
 /// A value known to lie in `e`: as many significant digits (up to six) as
 /// every value in `e` rounds to alike, marked "≈" when the text has fewer
 /// than six (it could read as exact: "≈1", "≈0.5").
 pub(super) fn approx(e: Enc) -> String {
+    approx_sig(e, 6)
+}
+
+/// [`approx`] with up to `max` significant digits (more than six to tell
+/// two close points apart).
+fn approx_sig(e: Enc, max: i32) -> String {
     let (lo, hi) = (e.lo.0, e.hi.0);
     if e.is_point() && lo == 0.0 {
         return "0".into();
+    }
+    // A point is that double, exactly: its own text when it has a short one.
+    if e.is_point()
+        && let Some(t) = Q::from_f64(lo).and_then(|q| Ex::q(q).text())
+    {
+        return t;
     }
     // Zero within rounding.
     if lo <= 0.0 && 0.0 <= hi && hi - lo <= 1e-12 {
         return "≈0".into();
     }
     if !(lo <= 0.0 && 0.0 <= hi) {
-        for sig in (1..=6).rev() {
+        for sig in (1..=max).rev() {
             let (a, b) = (
                 format_decimal_digits(lo, sig),
                 format_decimal_digits(hi, sig),
@@ -175,6 +198,7 @@ pub(super) fn approx(e: Enc) -> String {
         }
     }
     // Not even one digit fixed: the enclosure itself, rounded outward.
+    UNFIXED.with(|u| u.set(true));
     format!("[{}, {}]", outward(lo, false), outward(hi, true))
 }
 
@@ -209,9 +233,13 @@ struct Num {
 
 impl Num {
     fn text(&self) -> String {
+        self.text_sig(6)
+    }
+
+    fn text_sig(&self, max: i32) -> String {
         self.exact
             .and_then(Ex::text)
-            .unwrap_or_else(|| approx(self.enc))
+            .unwrap_or_else(|| approx_sig(self.enc, max))
     }
 
     fn value(&self) -> f64 {
@@ -223,7 +251,13 @@ impl Num {
 
     /// Exact, or with at least one significant digit fixed.
     fn fixed(&self) -> bool {
-        self.exact.is_some() || !approx(self.enc).starts_with('[')
+        let unfixed = take_unfixed();
+        let ok = self.exact.is_some() || !approx(self.enc).starts_with('[');
+        take_unfixed();
+        if unfixed {
+            UNFIXED.with(|u| u.set(true));
+        }
+        ok
     }
 
     fn is_zero(&self) -> bool {
@@ -250,7 +284,7 @@ fn family_text(x0: &Num, p: &Num) -> String {
 /// (exactly when both are exact).
 fn normalize(x: Num, p: Num) -> (Num, Num) {
     let pm = p.value();
-    if !(pm > 0.0) {
+    if pm.is_nan() || pm <= 0.0 {
         return (x, p);
     }
     let n = match (x.exact, p.exact) {
@@ -295,6 +329,32 @@ fn shift(x: Num, p: &Num, n: f64) -> Num {
 /// with period P/n (the zeros of sin at 0 and π every 2π: kπ). `tag`
 /// must agree too (an extremum's value).
 fn merge(items: Vec<(Num, Num, String)>) -> Vec<(Num, Num, String)> {
+    // The same family twice (tan's poles from tan itself and from it as a
+    // divisor): once.
+    let mut items = items;
+    let mut i = 0;
+    while i < items.len() {
+        let dup = (0..i).any(|j| {
+            let (a, b) = (&items[j], &items[i]);
+            a.2 == b.2
+                && match (a.0.exact, a.1.exact, b.0.exact, b.1.exact) {
+                    (Some(xa), Some(pa), Some(xb), Some(pb)) => {
+                        same(pa, pb)
+                            && xb
+                                .sub(xa)
+                                .and_then(|d| d.div(pa))
+                                .and_then(Ex::rational)
+                                .is_some_and(|t| t.is_int())
+                    }
+                    _ => false,
+                }
+        });
+        if dup {
+            items.remove(i);
+        } else {
+            i += 1;
+        }
+    }
     let mut out: Vec<(Num, Num, String)> = Vec::new();
     let mut used = vec![false; items.len()];
     for i in 0..items.len() {
@@ -591,8 +651,48 @@ impl<'a> Ctx<'a> {
                     || (self.zero_at(b, at, x) && self.finite_on(a, x, false))
             }
             Expr::Bin(BinOp::Div, a, b) => self.zero_at(a, at, x) && self.finite_on(b, x, true),
+            Expr::Bin(BinOp::Add | BinOp::Sub, _, _) => self.common_factor_zero(e, at, x),
             _ => false,
         }
+    }
+
+    /// A sum whose terms share a factor c (eˣ·(1 − x) written out as
+    /// eˣ − x·eˣ): c finite on the box and the sum of the rest exactly 0.
+    fn common_factor_zero(&self, e: &Expr, at: Ex, x: Enc) -> bool {
+        let mut ts = Vec::new();
+        terms(e, false, &mut ts);
+        let split: Vec<(bool, Vec<&Expr>)> = ts
+            .iter()
+            .map(|&(neg, t)| {
+                let mut neg = neg;
+                let mut fs = Vec::new();
+                factors(t, &mut neg, &mut fs);
+                (neg, fs)
+            })
+            .collect();
+        let Some((_, first)) = split.first() else {
+            return false;
+        };
+        for c in first.iter().filter(|c| c.contains_x()) {
+            if !split.iter().all(|(_, fs)| fs.contains(c)) || !self.finite_on(c, x, false) {
+                continue;
+            }
+            let mut sum = Some(Ex::int(0));
+            for (neg, fs) in &split {
+                let mut rest = fs.clone();
+                let i = rest.iter().position(|f| f == c).expect("shared");
+                rest.remove(i);
+                let mut prod = Some(Ex::int(if *neg { -1 } else { 1 }));
+                for f in rest {
+                    prod = prod.and_then(|p| p.mul(self.eval(f, at)?));
+                }
+                sum = sum.zip(prod).and_then(|(s, p)| s.add(p));
+            }
+            if sum.is_some_and(Ex::is_zero) {
+                return true;
+            }
+        }
+        false
     }
 
     /// The side expression a claim's subject names.
@@ -782,6 +882,42 @@ impl<'a> Ctx<'a> {
             c.within(x0.lo.0, x0.hi.0) == Some(true) && self.eval(&g, c).is_some_and(Ex::is_zero)
         })?;
         Some((x, p))
+    }
+
+    /// The domain equals its mirror image: no excluded families, and its
+    /// pieces' ends, exactly, are those of a piece mirrored.
+    fn symmetric(&self, d: &certify::DomainValue) -> bool {
+        if !d.excluded.is_empty() {
+            return false;
+        }
+        // An end as (exact value, closed); ±∞ as None.
+        let end = |b: &Bound| -> Option<Option<(Ex, bool)>> {
+            match b {
+                Bound::NegInf | Bound::PosInf => Some(None),
+                Bound::At { x, closed } => Some(Some((self.exact_x(*x)?, *closed))),
+            }
+        };
+        let same_end = |a: &Option<(Ex, bool)>, b: &Option<(Ex, bool)>, neg: bool| match (a, b) {
+            (None, None) => true,
+            (Some((x, c)), Some((y, d))) => {
+                c == d && (if neg { y.neg() } else { Some(*y) }).is_some_and(|y| same(*x, y))
+            }
+            _ => false,
+        };
+        let mut ends = Vec::new();
+        for p in &d.pieces {
+            let (Some(lo), Some(hi)) = (end(&p.lo), end(&p.hi)) else {
+                return false;
+            };
+            // A piece reaching −∞ must mirror one reaching +∞.
+            let (lo_inf, hi_inf) = (p.lo == Bound::NegInf, p.hi == Bound::PosInf);
+            ends.push((lo, hi, lo_inf, hi_inf));
+        }
+        ends.iter().all(|(lo, hi, li, hi_inf)| {
+            ends.iter().any(|(lo2, hi2, li2, hi2_inf)| {
+                li == hi2_inf && hi_inf == li2 && same_end(lo, hi2, true) && same_end(hi, lo2, true)
+            })
+        })
     }
 
     /// The one excluded point inside `x`, exactly (the domain is the line
@@ -993,6 +1129,37 @@ impl<'a> Ctx<'a> {
     }
 }
 
+/// A sum's terms, with whether each is subtracted.
+fn terms<'e>(e: &'e Expr, neg: bool, out: &mut Vec<(bool, &'e Expr)>) {
+    match e {
+        Expr::Bin(BinOp::Add, a, b) => {
+            terms(a, neg, out);
+            terms(b, neg, out);
+        }
+        Expr::Bin(BinOp::Sub, a, b) => {
+            terms(a, neg, out);
+            terms(b, !neg, out);
+        }
+        Expr::Neg(a) => terms(a, !neg, out),
+        _ => out.push((neg, e)),
+    }
+}
+
+/// A product's factors (negations folded into `neg`).
+fn factors<'e>(e: &'e Expr, neg: &mut bool, out: &mut Vec<&'e Expr>) {
+    match e {
+        Expr::Bin(BinOp::Mul, a, b) => {
+            factors(a, neg, out);
+            factors(b, neg, out);
+        }
+        Expr::Neg(a) => {
+            *neg = !*neg;
+            factors(a, neg, out);
+        }
+        _ => out.push(e),
+    }
+}
+
 fn piq_expr(v: PiQ) -> Option<Expr> {
     let q = crate::simplify::rational::q_expr(v.q);
     match v.k {
@@ -1041,13 +1208,20 @@ impl Ctx<'_> {
         match b {
             Bound::NegInf => infinite(false),
             Bound::PosInf => infinite(true),
-            Bound::At { x, closed } => finite(self.x(*x), *closed),
+            Bound::At { x, closed } => {
+                let mut n = self.x(*x);
+                if n.exact.is_none() && !*closed {
+                    // An excluded point of an exact family.
+                    n.exact = self.member(*x);
+                }
+                finite(n, *closed)
+            }
         }
     }
 
     /// A range end: exact from where the certifier says it comes from
     /// (every source exact and equal, when it is the hull of several).
-    fn range_end(&self, b: &Bound, srcs: Option<&[EndSrc]>) -> End {
+    fn range_end(&self, b: &Bound, srcs: Option<&[EndSrc]>, low: bool) -> End {
         let Bound::At { x: y, closed } = *b else {
             return self.end(b);
         };
@@ -1073,7 +1247,13 @@ impl Ctx<'_> {
                 vals.iter().all(|v| same(*v, vals[0])).then_some(vals[0])
             })
         };
-        finite(Num { exact, enc: y }, closed)
+        let mut e = finite(Num { exact, enc: y }, closed);
+        // Not exact: the numbers keep the enclosure's outer end (the range
+        // lies within it).
+        if exact.is_none() {
+            e.value = if low { y.lo.0 } else { y.hi.0 };
+        }
+        e
     }
 }
 
@@ -1184,12 +1364,22 @@ impl Out {
         self.k.notes.push((flag, note));
     }
 
+    /// Drops the notes of rows now shown as unknown.
+    fn drop_notes(&mut self, flags: u32) {
+        self.k.partial_features &= !flags;
+        self.k.notes.retain(|(f, _)| f & flags == 0);
+    }
+
     /// Flags and the note for one list row of the panel: `empty`, it shows
     /// no item; `was_cut`, items were left out.
     fn settle(&mut self, flag: u32, r: Reach, empty: bool, was_cut: bool) {
         let window = |t: &str, a: f64, b: f64| {
-            t.replace("%1", &approx(Enc::point(a)))
-                .replace("%2", &approx(Enc::point(b)))
+            let num = |v: f64| Num {
+                exact: Q::from_f64(v).map(Ex::q),
+                enc: Enc::point(v),
+            };
+            t.replace("%1", &num(a).text())
+                .replace("%2", &num(b).text())
         };
         match r {
             Reach::All if was_cut => self.note(flag, s::KGF_PARTIAL_SOME.into()),
@@ -1222,10 +1412,52 @@ pub(super) fn features(
     let mut out = Out {
         k: KeyGraphFeatures::default(),
     };
+    take_unfixed();
     let mut data = AnalysisData::default();
+
+    // A rational function that reduces to a constant c is c wherever it is
+    // defined (its holes aside).
+    let rat_const: Option<Q> = cx
+        .reduced
+        .as_ref()
+        .filter(|r| r.den.degree() == Some(0) && r.num.degree().unwrap_or(0) == 0)
+        .map(|r| {
+            r.num
+                .coefficients()
+                .first()
+                .copied()
+                .unwrap_or(Q::ZERO)
+                .div(r.den.lead())
+                .unwrap_or(Q::ZERO)
+        });
+    let domain_nonempty =
+        matches!(&a.domain, Row::Certified { value, .. } if !value.pieces.is_empty());
+    // Or one free of x whose value is exact (sin(π) is 0, not the residue
+    // its double leaves).
+    let exact_const: Option<Ex> = rat_const
+        .map(Ex::q)
+        .or_else(|| {
+            (!cx.f.contains_x())
+                .then(|| cx.eval(&cx.f, Ex::int(0)))
+                .flatten()
+        })
+        .filter(|_| domain_nonempty);
+    let const_enc = |c: Ex| -> Enc {
+        match c.rational() {
+            Some(q) => {
+                let iv = q.interval();
+                Enc::new(iv.lo(), iv.hi())
+            }
+            None => {
+                let (lo, hi) = widen(c.to_f64(), c.to_f64());
+                Enc::new(lo, hi)
+            }
+        }
+    };
 
     // Constant on its domain: the range is one value.
     let constant: Option<Enc> = match &a.range {
+        _ if exact_const.is_some() => exact_const.map(const_enc),
         Row::Certified { value, .. } if value.len() == 1 => match value[0] {
             Piece {
                 lo: Bound::At { x: l, closed: true },
@@ -1235,7 +1467,21 @@ pub(super) fn features(
         },
         _ => None,
     };
-    let zero_function = constant.is_some_and(|c| c.is_point() && c.lo.0 == 0.0);
+    let zero_function = exact_const.map_or(
+        constant.is_some_and(|c| c.is_point() && c.lo.0 == 0.0),
+        Ex::is_zero,
+    );
+    // A constant on its domain has no strict extremum, no inflection, no
+    // pole, no zero unless it is 0, and is constant on each piece of its
+    // domain: rows the certifier left open follow from that.
+    let owned;
+    let a = match constant {
+        Some(c) => {
+            owned = constant_rows(a, c);
+            &owned
+        }
+        None => a,
+    };
 
     // Domain.
     let mut domain_whole = false;
@@ -1287,8 +1533,20 @@ pub(super) fn features(
         _ => out.unknown(flags::DOMAIN),
     }
 
+    if take_unfixed() {
+        out.k.domain.clear();
+        data.domain.clear();
+        data.excluded.clear();
+        out.unknown(flags::DOMAIN);
+    }
+
     // Range.
-    match &a.range {
+    let range_row = match exact_const {
+        // Its one value, exactly.
+        Some(_) => Row::unknown("written from the exact constant"),
+        None => a.range.clone(),
+    };
+    match &range_row {
         Row::Certified { value, .. } => {
             let parts: Vec<(End, End)> = value
                 .iter()
@@ -1296,8 +1554,8 @@ pub(super) fn features(
                 .map(|(i, p)| {
                     let srcs = a.range_ends.get(i);
                     (
-                        cx.range_end(&p.lo, srcs.map(|s| s[0].as_slice())),
-                        cx.range_end(&p.hi, srcs.map(|s| s[1].as_slice())),
+                        cx.range_end(&p.lo, srcs.map(|s| s[0].as_slice()), true),
+                        cx.range_end(&p.hi, srcs.map(|s| s[1].as_slice()), false),
                     )
                 })
                 .collect();
@@ -1308,7 +1566,23 @@ pub(super) fn features(
             out.k.range = set_text("y", &parts, &joined);
             data.range = parts.iter().map(|(a, b)| data_interval(a, b)).collect();
         }
-        _ => out.unknown(flags::RANGE),
+        _ => match exact_const {
+            Some(c) => {
+                let n = Num {
+                    exact: Some(c),
+                    enc: constant.expect("a constant"),
+                };
+                out.k.range = format!("y ∈ {{{}}}", n.text());
+                data.range = vec![format::Interval::closed(n.value(), n.value())];
+            }
+            None => out.unknown(flags::RANGE),
+        },
+    }
+
+    if take_unfixed() {
+        out.k.range.clear();
+        data.range.clear();
+        out.unknown(flags::RANGE);
     }
 
     // x-intercepts: the row's, and any extremum or inflection whose value
@@ -1403,8 +1677,47 @@ pub(super) fn features(
         None => out.unknown(flags::ZEROS),
     }
 
-    // y-intercept.
-    match &a.y_intercept {
+    if take_unfixed() {
+        out.k.x_intercept.clear();
+        data.zeros.clear();
+        out.drop_notes(flags::ZEROS);
+        out.unknown(flags::ZEROS);
+    }
+
+    // y-intercept (a constant's own value, exactly, when 0 is in its
+    // domain: its enclosure at 0 may be wider, or not proven).
+    let zero_in_domain = match &a.domain {
+        Row::Certified { value, .. } => {
+            value.excluded.is_empty()
+                && value.pieces.iter().any(|p| {
+                    let lo_ok = match p.lo {
+                        Bound::NegInf => true,
+                        Bound::At { x, closed } => {
+                            x.hi.0 < 0.0 || (closed && x.is_point() && x.lo.0 == 0.0)
+                        }
+                        Bound::PosInf => false,
+                    };
+                    let hi_ok = match p.hi {
+                        Bound::PosInf => true,
+                        Bound::At { x, closed } => {
+                            x.lo.0 > 0.0 || (closed && x.is_point() && x.lo.0 == 0.0)
+                        }
+                        Bound::NegInf => false,
+                    };
+                    lo_ok && hi_ok
+                })
+        }
+        _ => false,
+    };
+    let const_y = constant.filter(|c| c.is_point() && zero_in_domain);
+    let y_row = match (&a.y_intercept, const_y) {
+        (_, Some(c)) => Row::Certified {
+            value: Some(c),
+            cert: Certificate::new(Region::Points),
+        },
+        (r, None) => r.clone(),
+    };
+    match &y_row {
         Row::Certified { value, .. } | Row::Partial { value, .. } => {
             if let Some(y) = value {
                 let n = cx.y_at(Some(Ex::int(0)), *y);
@@ -1451,6 +1764,15 @@ pub(super) fn features(
         None => out.unknown(flags::MINIMA | flags::MAXIMA),
     }
 
+    if take_unfixed() {
+        out.k.minima.clear();
+        out.k.maxima.clear();
+        data.minima.clear();
+        data.maxima.clear();
+        out.drop_notes(flags::MINIMA | flags::MAXIMA);
+        out.unknown(flags::MINIMA | flags::MAXIMA);
+    }
+
     // Inflection points.
     match a.inflections.value() {
         Some(v) => {
@@ -1468,6 +1790,13 @@ pub(super) fn features(
             }
         }
         None => out.unknown(flags::INFLECTION_POINTS),
+    }
+
+    if take_unfixed() {
+        out.k.inflection_points.clear();
+        data.inflection_points.clear();
+        out.drop_notes(flags::INFLECTION_POINTS);
+        out.unknown(flags::INFLECTION_POINTS);
     }
 
     // Vertical asymptotes.
@@ -1509,6 +1838,13 @@ pub(super) fn features(
         None => out.unknown(flags::VERTICAL_ASYMPTOTES),
     }
 
+    if take_unfixed() {
+        out.k.vertical_asymptotes.clear();
+        data.vertical_asymptotes.clear();
+        out.drop_notes(flags::VERTICAL_ASYMPTOTES);
+        out.unknown(flags::VERTICAL_ASYMPTOTES);
+    }
+
     // A function that is a line on its domain (a constant, m·x + b with
     // holes) is not its own asymptote: its graph is the line.
     let line_degree = cx
@@ -1521,7 +1857,7 @@ pub(super) fn features(
     // Horizontal asymptotes (one line for both sides when they agree; +∞
     // first, like the original).
     match a.horizontal.value() {
-        Some(_) if is_constant => {}
+        _ if is_constant => {}
         Some(v) => {
             let mut lines: Vec<(Num, AsymptoteSide)> = Vec::new();
             for h in v.iter().rev() {
@@ -1560,9 +1896,16 @@ pub(super) fn features(
         None => out.unknown(flags::HORIZONTAL_ASYMPTOTES),
     }
 
+    if take_unfixed() {
+        out.k.horizontal_asymptotes.clear();
+        data.horizontal_asymptotes.clear();
+        out.drop_notes(flags::HORIZONTAL_ASYMPTOTES);
+        out.unknown(flags::HORIZONTAL_ASYMPTOTES);
+    }
+
     // Oblique asymptotes (+∞ first).
     match a.oblique.value() {
-        Some(_) if line_degree == Some(1) => {}
+        _ if is_constant || line_degree == Some(1) => {}
         Some(v) => {
             let mut lines: Vec<(Num, Num, AsymptoteSide)> = Vec::new();
             for o in v.iter().rev() {
@@ -1610,9 +1953,23 @@ pub(super) fn features(
         None => out.unknown(flags::OBLIQUE_ASYMPTOTES),
     }
 
-    // Parity.
+    if take_unfixed() {
+        out.k.oblique_asymptotes.clear();
+        data.oblique_asymptotes.clear();
+        out.drop_notes(flags::OBLIQUE_ASYMPTOTES);
+        out.unknown(flags::OBLIQUE_ASYMPTOTES);
+    }
+
+    // Parity. A constant on a domain symmetric about 0 is even (both, if
+    // 0).
+    let symmetric = match &a.domain {
+        Row::Certified { value, .. } => cx.symmetric(value),
+        _ => false,
+    };
     out.k.parity = match a.parity.value() {
         Some(certify::Parity::Even | certify::Parity::Odd) if zero_function => Parity::Both,
+        _ if zero_function && symmetric => Parity::Both,
+        None if constant.is_some() && symmetric => Parity::Even,
         Some(certify::Parity::Even) => Parity::Even,
         Some(certify::Parity::Odd) => Parity::Odd,
         Some(certify::Parity::Neither) => Parity::Neither,
@@ -1639,6 +1996,13 @@ pub(super) fn features(
             Some(None) => out.k.periodicity_direction = Periodicity::NotPeriodic,
             None => out.unknown(flags::PERIODICITY),
         }
+    }
+
+    if take_unfixed() {
+        out.k.periodicity_direction = Periodicity::Unknown;
+        out.k.periodicity_expression.clear();
+        data.period = None;
+        out.unknown(flags::PERIODICITY);
     }
 
     // Monotonicity.
@@ -1718,8 +2082,74 @@ pub(super) fn features(
         None => out.unknown(flags::MONOTONE_INTERVALS),
     }
 
+    if take_unfixed() {
+        out.k.monotonicity.clear();
+        data.monotonicity.clear();
+        out.drop_notes(flags::MONOTONE_INTERVALS);
+        out.unknown(flags::MONOTONE_INTERVALS);
+    }
+
     out.k.data = data;
     out.k
+}
+
+/// `a` with the rows a constant c (on its domain) decides filled in where
+/// the certifier left them open.
+fn constant_rows(a: &Analysis, c: Enc) -> Analysis {
+    let mut a = a.clone();
+    let proof = || {
+        let mut cert = Certificate::new(Region::Line);
+        cert.push(Claim::Simplifier {
+            fact: "f is constant on its domain".into(),
+        });
+        cert
+    };
+    fn open<T>(r: &Row<T>) -> bool {
+        !r.is_certified()
+    }
+    if open(&a.extrema) {
+        a.extrema = Row::Certified {
+            value: Vec::new(),
+            cert: proof(),
+        };
+    }
+    if open(&a.inflections) {
+        a.inflections = Row::Certified {
+            value: Vec::new(),
+            cert: proof(),
+        };
+    }
+    if open(&a.vertical) {
+        a.vertical = Row::Certified {
+            value: Vec::new(),
+            cert: proof(),
+        };
+    }
+    // Not 0: no zeros (0 itself is handled as the zero function).
+    if open(&a.x_intercepts) && (c.lo.0 > 0.0 || c.hi.0 < 0.0) {
+        a.x_intercepts = Row::Certified {
+            value: Vec::new(),
+            cert: proof(),
+        };
+    }
+    if open(&a.monotonicity)
+        && let Row::Certified { value, .. } = &a.domain
+        && value.excluded.is_empty()
+    {
+        a.monotonicity = Row::Certified {
+            value: value
+                .pieces
+                .iter()
+                .filter(|p| p.lo != p.hi)
+                .map(|p| certify::Monotone {
+                    on: *p,
+                    dir: Dir::Constant,
+                })
+                .collect(),
+            cert: proof(),
+        };
+    }
+    a
 }
 
 /// Extrema or inflection points: `(x, y)` texts, their numbers, and
@@ -1757,9 +2187,18 @@ fn points(
         items.push((x.value(), (x, Some(p), y)));
     }
     let was_cut = cut(&mut items);
+    // Two points that read alike get the digits that tell them apart.
+    let xs: Vec<String> = items.iter().map(|(_, (x, _, _))| x.text()).collect();
+    let sig = |i: usize| {
+        if xs.iter().filter(|t| **t == xs[i]).count() > 1 {
+            15
+        } else {
+            6
+        }
+    };
     let mut texts = Vec::new();
     let mut data = Vec::new();
-    for (_, (x, p, y)) in items {
+    for (i, (_, (x, p, y))) in items.into_iter().enumerate() {
         match p {
             Some(p) => {
                 texts.push(format!("({}, {}), k ∈ ℤ", family_text(&x, &p), y.text()));
@@ -1772,7 +2211,7 @@ fn points(
                 ));
             }
             None => {
-                texts.push(format!("({}, {})", x.text(), y.text()));
+                texts.push(format!("({}, {})", x.text_sig(sig(i)), y.text()));
                 data.push((DataFamily::single(x.value()), y.value()));
             }
         }
@@ -1832,10 +2271,8 @@ mod tests {
 
     #[test]
     fn approximate_text() {
-        assert_eq!(
-            approx(Enc::new(1.4142135623730949, 1.4142135623730951)),
-            "1.41421"
-        );
+        let r2 = std::f64::consts::SQRT_2;
+        assert_eq!(approx(Enc::new(r2.next_down(), r2.next_up())), "1.41421");
         assert_eq!(
             approx(Enc::new(0.9999999999999999, 1.0000000000000002)),
             "≈1"
@@ -1849,7 +2286,10 @@ mod tests {
         // Only the digits the enclosure fixes.
         assert_eq!(approx(Enc::new(2.41, 2.42)), "≈2.4");
         // None fixed: the enclosure, rounded outward.
-        assert_eq!(approx(Enc::new(-1.5707963267948966, 0.0)), "[−1.6, 0]");
+        assert_eq!(
+            approx(Enc::new(-std::f64::consts::FRAC_PI_2, 0.0)),
+            "[−1.6, 0]"
+        );
         assert_eq!(approx(Enc::new(0.851, 1.05)), "[0.85, 1.1]");
     }
 }

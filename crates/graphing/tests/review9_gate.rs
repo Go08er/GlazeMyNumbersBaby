@@ -172,12 +172,14 @@ fn ordinary_answers_stay() {
         ("y=sqrt(x)", "y ∈ [0, ∞)"),
         ("y=ln(x)", "y ∈ ℝ"),
         ("y=e^x", "y ∈ (0, ∞)"),
-        ("y=sin(x^2)", "y ∈ [−1, 1]"),
-        ("y=sin(x)/x", "y ∈ [−0.217234, 1)"),
         ("y=(x^2-1)/(x-1)", "y ∈ ℝ \\ {2}"),
     ] {
         let r = k(src);
         assert_eq!(r.range, range, "{src}");
+    }
+    // Infinitely many turns: the certified range is unknown (not a guess).
+    for src in ["y=sin(x^2)", "y=sin(x)/x"] {
+        assert!(unknown(&k(src), flags::RANGE), "{src}");
     }
     let r = k("y=x^3-3x");
     assert_eq!(r.too_complex_features, 0, "{}", r.x_intercept);

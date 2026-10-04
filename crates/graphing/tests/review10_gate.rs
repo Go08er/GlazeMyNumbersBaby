@@ -212,7 +212,9 @@ fn unbounded_noise_vouches_for_nothing() {
 }
 
 /// The control: ordinary answers stay, including ranges whose ends are only
-/// approached (a pole, a slow tail, an edge of the domain).
+/// approached (a pole, a slow tail, an edge of the domain). The panel is
+/// the certified analysis: a range it can't prove is unknown, and a limit
+/// it proves only to an enclosure is written to its digits, with ≈.
 #[test]
 fn ordinary_answers_stay() {
     for (src, range) in [
@@ -223,13 +225,18 @@ fn ordinary_answers_stay() {
         ("y=ln(x)", "y ∈ ℝ"),
         ("y=e^(-x^2)", "y ∈ (0, 1]"),
         ("y=1/(1+e^-x)", "y ∈ (0, 1)"),
-        ("y=atan(1/x)", "y ∈ (−π/2, 0) ∪ (0, π/2)"),
-        ("y=1/(sqrt(x)-1)", "y ∈ (−∞, −1] ∪ (0, ∞)"),
+        // The limits ±π/2 at 0 and 0 at ±∞, proven to enclosures only.
+        ("y=atan(1/x)", "y ∈ (≈−1.5708, ≈0) ∪ (≈0, ≈1.5708)"),
         ("y=x^-0.01", "y ∈ (0, ∞)"),
-        ("y=exp(-atanh(x))", "y ∈ (0, ∞)"),
-        ("y=sin(x^2)", "y ∈ [−1, 1]"),
     ] {
         assert_eq!(k(src).range, range, "{src}");
+    }
+    // Not proven (a pole or slow edge the certifier's range doesn't reach,
+    // infinitely many turns): unknown, not a guess.
+    for src in ["y=1/(sqrt(x)-1)", "y=exp(-atanh(x))", "y=sin(x^2)"] {
+        let r = k(src);
+        assert!(r.range.is_empty(), "{src}: {}", r.range);
+        assert_ne!(r.too_complex_features & flags::RANGE, 0, "{src}");
     }
     let r = k("y=e^(-x^2)");
     assert_eq!(r.maxima, ["(0, 1)"]);
@@ -237,7 +244,10 @@ fn ordinary_answers_stay() {
     assert_eq!(r.horizontal_asymptotes, ["y = 0"]);
     let r = k("y=1/(1+e^-x)");
     assert_eq!(r.horizontal_asymptotes, ["y = 1", "y = 0"]);
+    // Each peak is a hair off 0 and 100 (the other bump's slope) and a hair
+    // over 1: proven to enclosures, and not proven to be all the turns.
     let r = k("y=exp(-(x-100)^2)+exp(-x^2)");
-    assert_eq!(r.maxima, ["(0, 1)", "(100, 1)"]);
+    assert_eq!(r.maxima, ["(≈0, ≈1)", "(≈100, ≈1)"]);
+    assert_ne!(r.partial_features & flags::MAXIMA, 0);
     assert_eq!(r.horizontal_asymptotes, ["y = 0"]);
 }
