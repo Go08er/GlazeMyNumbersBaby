@@ -888,6 +888,17 @@ const PLANTS: &[Plant] = &[
         x["lo"] = serde_json::json!(3.0f64.next_up());
         x["hi"] = serde_json::json!(3.0f64.next_up());
     }),
+    // A period of 2π·10⁻¹⁰: the minima are no repeat of the maxima.
+    (
+        "cos(10^10*x)",
+        "the minima dropped as repeats of the maxima",
+        |v| {
+            value_of(v, "extrema")
+                .as_array_mut()
+                .unwrap()
+                .retain(|e| e["kind"] != "Min");
+        },
+    ),
     // The domain undecided (sign(x) in a divisor): items only inside boxes
     // where f's own tree is shown defined.
     (

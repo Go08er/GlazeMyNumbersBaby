@@ -48,15 +48,17 @@ impl Scope {
     }
 }
 
-/// Is `x` (enclosed) a repeat of one of `xs` by a multiple of the period?
+/// Is `x` (enclosed) a repeat of one of `xs` by a multiple of the period:
+/// does it meet e + k·P for the nearest k ≠ 0, over e's and the period's
+/// enclosures (rounded outward)? Nothing looser: a period of 10⁻¹² keeps
+/// its members apart.
 fn repeats(xs: &[Enc], x: &Enc, period: &Enc) -> bool {
+    let p = Interval::new(period.lo.0, period.hi.0);
     xs.iter().any(|e| {
         let k = ((x.mid() - e.mid()) / period.mid()).round();
-        k != 0.0 && {
-            let (lo, hi) = (e.lo.0 + k * period.lo.0, e.hi.0 + k * period.hi.0);
-            let (lo, hi) = (lo.min(hi), lo.max(hi));
-            let slack = 1e-9 * x.mid().abs().max(1.0);
-            lo - slack <= x.hi.0 && x.lo.0 <= hi + slack
+        k != 0.0 && k.is_finite() && {
+            let m = Interval::new(e.lo.0, e.hi.0) + Interval::point(k) * p;
+            m.lo() <= x.hi.0 && x.lo.0 <= m.hi()
         }
     })
 }

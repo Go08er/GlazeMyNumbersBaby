@@ -528,15 +528,44 @@ fn coverage(rc: &RowCert, all: &[RowCert], boxes: &[B], out: &mut RowResult) {
     }
 }
 
+/// Does `d` (enclosed) meet the members x₀ + k·p of a family, for x₀ and
+/// p anywhere in their enclosures and k the whole number nearest (or
+/// either beside it)? Exactly, in rationals: no tolerance but the
+/// enclosures' own widths.
+fn meets_member(x0: &Enc, p: &Enc, d: &Enc) -> bool {
+    use rug::{Integer, Rational};
+    let q = |v: f64| Rational::from_f64(v);
+    let (Some(x0lo), Some(x0hi), Some(plo), Some(phi), Some(dlo), Some(dhi)) =
+        (q(x0.lo), q(x0.hi), q(p.lo), q(p.hi), q(d.lo), q(d.hi))
+    else {
+        return false;
+    };
+    if plo <= 0 {
+        return false;
+    }
+    // k nearest: (d − x₀)/p at the middles, rounded.
+    let guess =
+        (Rational::from(&dlo + &dhi) - Rational::from(&x0lo + &x0hi)) / Rational::from(&plo + &phi);
+    let k0 = guess.round().numer().clone();
+    [Integer::from(&k0 - 1), k0.clone(), Integer::from(&k0 + 1)]
+        .into_iter()
+        .any(|k| {
+            let k = Rational::from(k);
+            // x₀ + k·p over the enclosures: k·p's ends swap for k < 0.
+            let (kp_lo, kp_hi) = if k >= 0 {
+                (Rational::from(&k * &plo), Rational::from(&k * &phi))
+            } else {
+                (Rational::from(&k * &phi), Rational::from(&k * &plo))
+            };
+            let lo = Rational::from(&x0lo + &kp_lo);
+            let hi = Rational::from(&x0hi + &kp_hi);
+            lo <= dhi && dlo <= hi
+        })
+}
+
 /// Is `x` (enclosed) a repeat of one of `xs` by a whole number of periods?
 fn repeat_of(xs: &[Enc], x: &Enc, period: &Enc) -> bool {
-    xs.iter().any(|e| {
-        let k = ((x.mid() - e.mid()) / period.mid()).round();
-        let (a, b) = (e.lo + k * period.lo, e.hi + k * period.hi);
-        let (a, b) = (a.min(b), a.max(b));
-        let slack = 1e-9 * x.mid().abs().max(1.0);
-        a - slack <= x.hi && x.lo <= b + slack
-    })
+    xs.iter().any(|e| meets_member(e, period, x))
 }
 
 /// The derived items against the listed ones: every listed item is a
@@ -1042,10 +1071,14 @@ fn domain_symmetric(all: &[RowCert]) -> Option<bool> {
         .collect::<Option<_>>()?;
     let fams_ok = fams.iter().all(|(x0, per)| {
         // −x0 = x0 + k·P for an integer k (within the enclosures).
-        let k = ((-x0.mid() - x0.mid()) / per.mid()).round();
-        let (a, b) = (x0.lo + k * per.lo, x0.hi + k * per.hi);
-        let slack = 1e-9 * x0.mid().abs().max(1.0) + (k.abs() + 1.0) * (per.hi - per.lo);
-        (a.min(b) - slack) <= -x0.lo && -x0.hi <= (a.max(b) + slack)
+        meets_member(
+            x0,
+            per,
+            &Enc {
+                lo: -x0.hi,
+                hi: -x0.lo,
+            },
+        )
     });
     Some(pieces_ok && fams_ok)
 }
