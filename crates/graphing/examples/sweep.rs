@@ -56,8 +56,8 @@
 //! A feature the analysis marks as unknown is never counted as a failure; a
 //! definite claim that contradicts the function is. A coverage table says
 //! how many features were definite. Checks named `policy-…` are deliberate
-//! choices of the calculator (0⁰ = 1, refusing to analyse a function that
-//! is nowhere defined) rather than false claims; `unverifiable-…` ones are
+//! choices of the calculator (refusing to analyse a function that is
+//! nowhere defined) rather than false claims; `unverifiable-…` ones are
 //! claims no float can confirm or refute (a zero closer to a pole than f's
 //! resolution). Exits with status 1 if any other check fails.
 
@@ -183,52 +183,42 @@ const BASES: &[&str] = &[
 
 /// Expressions whose inner operations are undefined at known points while
 /// an outer one could make IEEE arithmetic finite again, with those points
-/// (which must be outside the claimed domain and never be intercepts). The
-/// flag marks the calculator's deliberate 0⁰ = 1, under which the listed
-/// points are defined after all: disagreements there are policy.
-const UNDEFINED: &[(&str, TrigUnit, &[f64], bool)] = &[
-    ("x^-1", TrigUnit::Radians, &[0.0], false),
-    ("1/(x^-1)", TrigUnit::Radians, &[0.0], false),
-    ("1/(1/x)", TrigUnit::Radians, &[0.0], false),
-    ("x*(1/x)", TrigUnit::Radians, &[0.0], false),
-    ("1^(1/x)", TrigUnit::Radians, &[0.0], false),
-    ("(1/x)^0", TrigUnit::Radians, &[0.0], false),
-    ("1^(ln(x))", TrigUnit::Radians, &[0.0, -1.0, -5.0], false),
-    ("exp(-x^-2)", TrigUnit::Radians, &[0.0], false),
-    ("1/asech(x)", TrigUnit::Radians, &[0.0], false),
-    ("1/acoth(x)", TrigUnit::Radians, &[1.0, -1.0], false),
-    ("exp(-atanh(x))", TrigUnit::Radians, &[1.0, -1.0], false),
-    (
-        "atan(tan(x))",
-        TrigUnit::Degrees,
-        &[90.0, -90.0, 270.0],
-        false,
-    ),
-    (
-        "atan(tan(x))",
-        TrigUnit::Grads,
-        &[100.0, -100.0, 300.0],
-        false,
-    ),
-    ("atan(sec(x))", TrigUnit::Degrees, &[90.0, 270.0], false),
-    ("atan(csc(x))", TrigUnit::Degrees, &[0.0, 180.0], false),
-    ("atan(cot(x))", TrigUnit::Degrees, &[0.0, 180.0], false),
-    ("atan(1/(x-x))", TrigUnit::Radians, &[0.0, 1.0, -3.0], false),
-    ("ln(x-x)", TrigUnit::Radians, &[0.0, 1.0], false),
-    ("e^(-1/abs(x))", TrigUnit::Radians, &[0.0], false),
-    ("atan(1/sin(x))", TrigUnit::Radians, &[0.0], false),
-    ("1/e^(1/x)", TrigUnit::Radians, &[0.0], false),
-    ("(x-x)^0", TrigUnit::Radians, &[0.0, 1.0], true),
-    ("atan(x^-2)", TrigUnit::Radians, &[0.0], false),
-    ("atan(log(x))", TrigUnit::Radians, &[0.0], false),
-    ("atan(ln(abs(x)))", TrigUnit::Radians, &[0.0], false),
-    ("0^(-x)", TrigUnit::Radians, &[0.0, 1.0, 2.5], true),
-    ("root(x,-2)", TrigUnit::Radians, &[0.0], false),
-    ("1/root(x,-2)", TrigUnit::Radians, &[0.0], false),
-    ("x^(-1/3)", TrigUnit::Radians, &[0.0], false),
-    ("1/x^(-1/3)", TrigUnit::Radians, &[0.0], false),
-    ("e^(1/(x-1))", TrigUnit::Radians, &[1.0], false),
-    ("atan(1/(x^2-1))", TrigUnit::Radians, &[1.0, -1.0], false),
+/// (which must be outside the claimed domain and never be intercepts). 0⁰
+/// is undefined in graphing, as on the TI-84 Plus CE
+/// (docs/ti-conventions.md), so (x−x)⁰ is nowhere defined.
+const UNDEFINED: &[(&str, TrigUnit, &[f64])] = &[
+    ("x^-1", TrigUnit::Radians, &[0.0]),
+    ("1/(x^-1)", TrigUnit::Radians, &[0.0]),
+    ("1/(1/x)", TrigUnit::Radians, &[0.0]),
+    ("x*(1/x)", TrigUnit::Radians, &[0.0]),
+    ("1^(1/x)", TrigUnit::Radians, &[0.0]),
+    ("(1/x)^0", TrigUnit::Radians, &[0.0]),
+    ("1^(ln(x))", TrigUnit::Radians, &[0.0, -1.0, -5.0]),
+    ("exp(-x^-2)", TrigUnit::Radians, &[0.0]),
+    ("1/asech(x)", TrigUnit::Radians, &[0.0]),
+    ("1/acoth(x)", TrigUnit::Radians, &[1.0, -1.0]),
+    ("exp(-atanh(x))", TrigUnit::Radians, &[1.0, -1.0]),
+    ("atan(tan(x))", TrigUnit::Degrees, &[90.0, -90.0, 270.0]),
+    ("atan(tan(x))", TrigUnit::Grads, &[100.0, -100.0, 300.0]),
+    ("atan(sec(x))", TrigUnit::Degrees, &[90.0, 270.0]),
+    ("atan(csc(x))", TrigUnit::Degrees, &[0.0, 180.0]),
+    ("atan(cot(x))", TrigUnit::Degrees, &[0.0, 180.0]),
+    ("atan(1/(x-x))", TrigUnit::Radians, &[0.0, 1.0, -3.0]),
+    ("ln(x-x)", TrigUnit::Radians, &[0.0, 1.0]),
+    ("e^(-1/abs(x))", TrigUnit::Radians, &[0.0]),
+    ("atan(1/sin(x))", TrigUnit::Radians, &[0.0]),
+    ("1/e^(1/x)", TrigUnit::Radians, &[0.0]),
+    ("(x-x)^0", TrigUnit::Radians, &[0.0, 1.0]),
+    ("atan(x^-2)", TrigUnit::Radians, &[0.0]),
+    ("atan(log(x))", TrigUnit::Radians, &[0.0]),
+    ("atan(ln(abs(x)))", TrigUnit::Radians, &[0.0]),
+    ("0^(-x)", TrigUnit::Radians, &[0.0, 1.0, 2.5]),
+    ("root(x,-2)", TrigUnit::Radians, &[0.0]),
+    ("1/root(x,-2)", TrigUnit::Radians, &[0.0]),
+    ("x^(-1/3)", TrigUnit::Radians, &[0.0]),
+    ("1/x^(-1/3)", TrigUnit::Radians, &[0.0]),
+    ("e^(1/(x-1))", TrigUnit::Radians, &[1.0]),
+    ("atan(1/(x^2-1))", TrigUnit::Radians, &[1.0, -1.0]),
 ];
 
 /// A hand-written case: the expression and where to sample densely (its
@@ -845,20 +835,7 @@ fn tally(expr: &str, unit: TrigUnit) {
 static UNGATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Known undefined points must be outside the domain and never intercepts.
-/// `policy`: the calculator defines these points (0⁰ = 1), so a
-/// disagreement is policy, not a false claim.
-fn check_undefined(a: &Analysed, points: &[f64], policy: bool, r: &mut Report) {
-    let name = |n: &'static str| -> &'static str {
-        if !policy {
-            return n;
-        }
-        match n {
-            "undefined-point-in-domain" => "policy-0^0-point-in-domain",
-            "undefined-y-intercept" => "policy-0^0-y-intercept",
-            "undefined-zero" => "policy-0^0-zero",
-            _ => "policy-0^0-extremum",
-        }
-    };
+fn check_undefined(a: &Analysed, points: &[f64], r: &mut Report) {
     if !a.ok() {
         // Refusing a function defined nowhere is the safe answer.
         let nowhere = (-200..=200).all(|i| a.defined(i as f64 * 0.37 + 0.01) != Some(true));
@@ -896,7 +873,7 @@ fn check_undefined(a: &Analysed, points: &[f64], policy: bool, r: &mut Report) {
         if in_dom && !a.unknown(flags::DOMAIN) {
             fail(
                 r,
-                name("undefined-point-in-domain"),
+                "undefined-point-in-domain",
                 &a.expr,
                 format!(
                     "x={p:?} is undefined but domain {} excl {}",
@@ -908,7 +885,7 @@ fn check_undefined(a: &Analysed, points: &[f64], policy: bool, r: &mut Report) {
         if p == 0.0 && d.y_intercept.is_some() {
             fail(
                 r,
-                name("undefined-y-intercept"),
+                "undefined-y-intercept",
                 &a.expr,
                 format!("y-intercept {:?} at undefined x=0", d.y_intercept),
             );
@@ -916,7 +893,7 @@ fn check_undefined(a: &Analysed, points: &[f64], policy: bool, r: &mut Report) {
         if d.zeros.iter().any(|z| close_to(z, p, 4)) {
             fail(
                 r,
-                name("undefined-zero"),
+                "undefined-zero",
                 &a.expr,
                 format!("x-intercept at undefined x={p:?}"),
             );
@@ -925,7 +902,7 @@ fn check_undefined(a: &Analysed, points: &[f64], policy: bool, r: &mut Report) {
             if close_to(fx, p, 4) {
                 fail(
                     r,
-                    name("undefined-extremum"),
+                    "undefined-extremum",
                     &a.expr,
                     format!("extremum ({p:?}, {y:?}) at an undefined point"),
                 );
@@ -1801,7 +1778,7 @@ fn main() {
         coverage.push((base.to_string(), cov));
     }
     let mut cov = Coverage::default();
-    for (expr, unit, points, policy) in UNDEFINED {
+    for (expr, unit, points) in UNDEFINED {
         if !wanted(expr) {
             continue;
         }
@@ -1809,7 +1786,7 @@ fn main() {
             let mut tagged = a;
             tagged.expr = format!("{expr}  [{unit:?}]");
             check_one(&tagged, &[0.0], false, &mut r);
-            check_undefined(&tagged, points, *policy, &mut r);
+            check_undefined(&tagged, points, &mut r);
         }
     }
     coverage.push(("(undefined points)".to_string(), cov));

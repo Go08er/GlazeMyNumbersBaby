@@ -113,6 +113,12 @@ fn d(e: &Expr, cx: &mut Cx) -> Option<Expr> {
                 BinOp::Pow => {
                     if free(b) {
                         let da = d(a, cx)?;
+                        if let Some((0, _)) = syntactic_rational(b) {
+                            // g⁰ is 1 only where g ≠ 0 (0⁰ is undefined, as
+                            // on the TI-84 Plus CE): so is its derivative 0,
+                            // 0/g keeping g's zeros out of its domain.
+                            return Some(Expr::bin(BinOp::Div, Expr::Num(0.0), a.clone()));
+                        }
                         if let Some((p, q)) = syntactic_rational(b) {
                             // (p/q)·a^((p-q)/q)·a'
                             let coef = if q == 1 {

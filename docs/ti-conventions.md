@@ -1,0 +1,42 @@
+# Conventions borrowed from the TI-84 Plus CE
+
+GMNB and DGMNB follow Windows Calculator. Where the TI-84 Plus CE does
+something better (more correct, or more useful), they follow the TI-84 Plus CE
+instead, and the choice is recorded here with its reason.
+
+This list is also the specification for a planned TI-84-style mode (0.3). That
+mode will be a clean-room clone of the calculator's documented *behaviour*: it
+will contain no TI operating system or ROM, no TI code, and no TI names,
+logos or artwork. "TI-84 Plus CE" here names a behaviour to match, nothing
+more.
+
+## Powers in graphing
+
+Applies to graphed equations and their analysis (`crates/graphing`:
+`functions::pow`, `pow_var`, `pow_int`, `pow_rational`, the compiler's `Pow`
+and `PowVar` instructions, the extended-range and reference evaluators). The
+calculator modes are unchanged (see 0⁰ below).
+
+| Expression | Windows Calculator | TI-84 Plus CE (Real mode) | GMNB/DGMNB graphing |
+| --- | --- | --- | --- |
+| `x^x`, `(x−1)^x`, `2^x` (exponent varies with x) | graphing engine closed source | defined only for a positive base (a negative base gives a non-real answer, which isn't plotted) | **TI:** positive base only, or 0 to a positive power. `x^x` has domain x > 0 and no y-intercept |
+| `(−2)^x` | — | non-real, nothing plotted, even at whole x | **TI:** undefined everywhere |
+| `0^0`, so `x^0` at x = 0 | 1 in the calculator modes | ERR:DOMAIN | **TI:** undefined, so `x^0` is 1 with a hole at 0 |
+| `x^3`, `x^(1/3)`, `(−8)^(1/3)` (constant exponent) | real powers | real powers and odd roots | unchanged: real powers and odd roots (`(−8)^(1/3)` = −2) |
+| `x^0.5`, `x^π` at x < 0 | — | non-real | undefined (unchanged) |
+
+Why: a power whose exponent varies with x is `e^(exponent·ln base)` in real
+analysis. It has no real value for a negative base except at isolated points
+(a whole exponent, or a fraction with an odd denominator), which no graph or
+analysis can show faithfully. Treating it as defined there made the analysis
+claim points no curve has (x^x at −1, −2, …). The TI's rule, which is also
+IEEE 1788's `pow`, is simple, standard and exactly what gets plotted. A
+constant exponent is different: `x^3` and `x^(1/3)` are polynomial and root
+functions, defined for negative x, and both calculators graph them on both
+sides.
+
+0⁰: the limit of x^y at (0, 0) doesn't exist, so a function graphed through
+it has no value there (x⁰ approaches 1 but 0^x approaches 0). The TI reports a
+domain error. Windows' calculator modes give 1, the common algebraic
+convention for a typed number, and keep doing so here: those modes are
+tested against Microsoft's own engine.

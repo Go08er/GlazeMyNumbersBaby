@@ -180,22 +180,39 @@ pub fn log10(x: f64) -> f64 {
     if x == 0.0 { f64::NAN } else { x.log10() }
 }
 
-/// b^e, where 0 to a negative power is undefined (NaN, not ∞) and an
-/// undefined operand stays undefined: IEEE makes 1^NaN and NaN^0 equal 1,
-/// which would turn 1^(1/0) or (1/0)^0 into a defined value.
+/// b^e for an exponent that doesn't depend on x (a constant, or a slider):
+/// a negative base only to an integer power, 0 only to a positive power
+/// (0⁰ is undefined, as on the TI-84 Plus CE: see `docs/ti-conventions.md`),
+/// and an undefined operand stays undefined: IEEE makes 1^NaN and NaN^0
+/// equal 1, which would turn 1^(1/0) or (1/0)^0 into a defined value.
 #[inline]
 pub fn pow(b: f64, e: f64) -> f64 {
-    if b.is_nan() || e.is_nan() || (b == 0.0 && e < 0.0) {
+    if b.is_nan() || e.is_nan() || (b == 0.0 && e <= 0.0) {
         f64::NAN
     } else {
         b.powf(e)
     }
 }
 
-/// [`pow`] for an integer exponent.
+/// b^e for an exponent that depends on x (x^x, 2^x, (x−1)^(x+1)): defined
+/// only for a positive base, or a zero base to a positive power, as in the
+/// TI-84 Plus CE's Real mode and IEEE 1788's pow. (−2)^x is undefined even
+/// at whole x, rather than defined on scattered points.
+#[inline]
+pub fn pow_var(b: f64, e: f64) -> f64 {
+    if b > 0.0 {
+        if e.is_nan() { f64::NAN } else { b.powf(e) }
+    } else if b == 0.0 && e > 0.0 {
+        0.0
+    } else {
+        f64::NAN
+    }
+}
+
+/// [`pow`] for an integer exponent (0⁰ undefined, as for [`pow`]).
 #[inline]
 pub fn pow_int(b: f64, n: i32) -> f64 {
-    if b.is_nan() || (b == 0.0 && n < 0) {
+    if b.is_nan() || (b == 0.0 && n <= 0) {
         return f64::NAN;
     }
     match n {
@@ -634,7 +651,7 @@ pub fn npr(n: f64, r: f64) -> f64 {
 /// odd (e.g. `(-8)^(1/3) = -2`, `(-8)^(2/3) = 4`).
 #[inline]
 pub fn pow_rational(b: f64, p: i32, q: i32) -> f64 {
-    if b.is_nan() || (b == 0.0 && p < 0) {
+    if b.is_nan() || (b == 0.0 && p <= 0) {
         return f64::NAN;
     }
     let neg = b < 0.0;

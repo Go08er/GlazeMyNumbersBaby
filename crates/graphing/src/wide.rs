@@ -403,21 +403,21 @@ impl Wide {
     }
 }
 
-/// `b^t` (as `functions::pow`: 0 to a negative power is undefined, b⁰ = 1,
-/// a negative base only to an integer power).
+/// `b^t` (as `functions::pow`: 0 only to a positive power, b⁰ = 1 for any
+/// other b, a negative base only to an integer power).
 pub(crate) fn pow(b: Wide, t: Wide) -> Wide {
     let (Wide::Val(bm, be), Wide::Val(tm, te)) = (b, t) else {
         return other(b, t);
     };
-    if tm == 0.0 {
-        return Wide::ONE;
-    }
     if bm == 0.0 {
-        return if tm < 0.0 {
+        return if tm <= 0.0 {
             Wide::Undef
         } else {
             Wide::Val(0.0, 0.0)
         };
+    }
+    if tm == 0.0 {
+        return Wide::ONE;
     }
     if let (Some(bv), Some(tv)) = (b.normal(), t.normal()) {
         let r = fns::pow(bv, tv);
@@ -451,13 +451,30 @@ pub(crate) fn pow(b: Wide, t: Wide) -> Wide {
     if odd { r.neg() } else { r }
 }
 
+/// `b^t` for an exponent that varies with x (as `functions::pow_var`:
+/// positive bases only, or 0 to a positive power).
+pub(crate) fn pow_var(b: Wide, t: Wide) -> Wide {
+    match (b, t) {
+        // Whatever the exponent is (or whether it is at all).
+        (Wide::Val(bm, _), _) if bm < 0.0 => Wide::Undef,
+        (Wide::Val(bm, _), Wide::Val(tm, _)) if bm == 0.0 => {
+            if tm > 0.0 {
+                Wide::Val(0.0, 0.0)
+            } else {
+                Wide::Undef
+            }
+        }
+        _ => pow(b, t),
+    }
+}
+
 /// `b^n` for an integer n (as `functions::pow_int`).
 pub(crate) fn powi(b: Wide, n: i32) -> Wide {
     let Wide::Val(m, e) = b else {
         return b;
     };
     if m == 0.0 {
-        return if n < 0 {
+        return if n <= 0 {
             Wide::Undef
         } else {
             Wide::new(fns::pow_int(m, n))
@@ -481,7 +498,7 @@ pub(crate) fn pow_rational(b: Wide, p: i32, q: i32) -> Wide {
         return b;
     };
     if m == 0.0 {
-        return if p < 0 {
+        return if p <= 0 {
             Wide::Undef
         } else {
             Wide::new(fns::pow_rational(m, p, q))

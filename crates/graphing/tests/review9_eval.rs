@@ -247,7 +247,9 @@ fn genuine_holes_and_controls_are_unchanged() {
     assert_eq!(r.domain, "x ∈ ℝ \\ {0}");
     assert_eq!(r.vertical_asymptotes, ["x = 0"]);
     assert_eq!(k("y=x/x").range, "y ∈ {1}");
-    assert_eq!(k("y=0^(-x)").domain, "x ∈ (−∞, 0]");
+    // 0 to a varying power: defined only where the power is positive. At 0
+    // it is 0⁰, undefined as on the TI-84 Plus CE (docs/ti-conventions.md).
+    assert_eq!(k("y=0^(-x)").domain, "x ∈ (−∞, 0)");
 }
 
 #[test]

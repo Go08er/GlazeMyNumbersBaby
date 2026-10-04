@@ -67,7 +67,9 @@ fn a_zero_beside_a_pole_is_shown_apart_from_it() {
 
 #[test]
 fn zero_to_a_negative_power_has_no_values_there() {
+    // 0⁰ (at x = 0) is undefined too, as on the TI-84 Plus CE
+    // (docs/ti-conventions.md): 0 to a positive power only.
     let p = panel("y=0^(-x)");
-    assert_eq!(p[s::DOMAIN], "x ∈ (−∞, 0]");
-    assert_eq!(p[s::RANGE], "y ∈ {0, 1}");
+    assert_eq!(p[s::DOMAIN], "x ∈ (−∞, 0)");
+    assert_eq!(p[s::RANGE], "y ∈ {0}");
 }

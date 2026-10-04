@@ -216,7 +216,11 @@ pub(crate) enum Op {
     /// a 0 there is underflow, so the quotient overflows to ±∞ instead of
     /// being undefined (1/e^(1/x) just left of 0).
     DivNz,
+    /// Power with an exponent that doesn't depend on x or y (`fns::pow`).
     Pow,
+    /// Power with an exponent that does (`fns::pow_var`: positive bases
+    /// only, as on the TI-84 Plus CE).
+    PowVar,
     /// Integer power (exact for negative bases).
     PowI(i32),
     /// Rational power p/q with real-root semantics for odd q.
@@ -233,7 +237,7 @@ impl Op {
     fn may_leave_range(&self) -> bool {
         use Fn1::*;
         match self {
-            Op::Mul | Op::Div | Op::DivNz | Op::Pow | Op::PowRat(..) => true,
+            Op::Mul | Op::Div | Op::DivNz | Op::Pow | Op::PowVar | Op::PowRat(..) => true,
             Op::PowI(n) => !matches!(n, 0 | 1),
             // A tiny angle in degrees or grads: its sine is the angle times
             // π/180 (or π/200), which can fall below the doubles.
@@ -264,7 +268,7 @@ impl Op {
         match self {
             Op::Const(_) | Op::Big(..) | Op::X | Op::Y | Op::Add | Op::Sub | Op::Mul | Op::Neg => 1,
             Op::Div | Op::DivNz | Op::PowI(_) => 2,
-            Op::Pow | Op::PowRat(..) => 8,
+            Op::Pow | Op::PowVar | Op::PowRat(..) => 8,
             Op::F1(Fn1::Factorial | Fn1::DoubleFactorial) => 60,
             Op::F1(Fn1::Abs | Fn1::Floor | Fn1::Ceil | Fn1::Round | Fn1::Sign) => 1,
             Op::F1(_) => 8,
@@ -351,9 +355,14 @@ impl Program {
                     uses_y = true;
                     depth += 1
                 }
-                Op::Add | Op::Sub | Op::Mul | Op::Div | Op::DivNz | Op::Pow | Op::F2(_) => {
-                    depth -= 1
-                }
+                Op::Add
+                | Op::Sub
+                | Op::Mul
+                | Op::Div
+                | Op::DivNz
+                | Op::Pow
+                | Op::PowVar
+                | Op::F2(_) => depth -= 1,
                 Op::PowI(_) | Op::PowRat(..) | Op::Neg | Op::F1(_) => {}
             }
             max_stack = max_stack.max(depth);
@@ -555,6 +564,10 @@ impl Program {
                     sp -= 1;
                     stack[sp - 1] = fns::pow(stack[sp - 1], stack[sp]);
                 }
+                Op::PowVar => {
+                    sp -= 1;
+                    stack[sp - 1] = fns::pow_var(stack[sp - 1], stack[sp]);
+                }
                 Op::PowI(n) => stack[sp - 1] = powi(stack[sp - 1], n),
                 Op::PowRat(p, q) => stack[sp - 1] = fns::pow_rational(stack[sp - 1], p, q),
                 Op::Neg => stack[sp - 1] = -stack[sp - 1],
@@ -704,7 +717,14 @@ impl Program {
                     load(&mut stack[sp], ys);
                     sp += 1;
                 }
-                Op::Add | Op::Sub | Op::Mul | Op::Div | Op::DivNz | Op::Pow | Op::F2(_) => {
+                Op::Add
+                | Op::Sub
+                | Op::Mul
+                | Op::Div
+                | Op::DivNz
+                | Op::Pow
+                | Op::PowVar
+                | Op::F2(_) => {
                     sp -= 1;
                     let (lo, hi) = stack.split_at_mut(sp);
                     let a = &mut lo[sp - 1][..len];
@@ -716,6 +736,10 @@ impl Program {
                         Op::Div => a.iter_mut().zip(b).for_each(|(a, b)| *a = fns::div(*a, *b)),
                         Op::DivNz => a.iter_mut().zip(b).for_each(|(a, b)| *a /= b),
                         Op::Pow => a.iter_mut().zip(b).for_each(|(a, b)| *a = fns::pow(*a, *b)),
+                        Op::PowVar => a
+                            .iter_mut()
+                            .zip(b)
+                            .for_each(|(a, b)| *a = fns::pow_var(*a, *b)),
                         Op::F2(f) => a.iter_mut().zip(b).for_each(|(a, b)| *a = f.apply(*a, *b)),
                         _ => unreachable!(),
                     }
@@ -813,6 +837,7 @@ fn wide_bin(op: &Op, a: Wide, b: Wide) -> Wide {
         // underflows: plain division.
         Op::Div | Op::DivNz => a.div(b),
         Op::Pow => wide::pow(a, b),
+        Op::PowVar => wide::pow_var(a, b),
         Op::F2(f) => wide::apply2(f, a, b),
         _ => unreachable!("not a binary instruction"),
     }
@@ -1257,6 +1282,8 @@ fn lower(e: &Expr, opts: &CompileOptions<'_>) -> Result<Piece, EquationError> {
                     {
                         return Err(EquationError::eval(EvaluationErrorCode::DivideByZero, 0..0));
                     }
+                    // An exponent that varies with x or y takes the TI rule.
+                    let varying = matches!(lb, Piece::Code(_));
                     let mut c = la.into_code();
                     c.extend(lb.into_code());
                     c.push(match op {
@@ -1265,6 +1292,7 @@ fn lower(e: &Expr, opts: &CompileOptions<'_>) -> Result<Piece, EquationError> {
                         BinOp::Mul => Op::Mul,
                         BinOp::Div if never_zero(b) => Op::DivNz,
                         BinOp::Div => Op::Div,
+                        BinOp::Pow if varying => Op::PowVar,
                         BinOp::Pow => Op::Pow,
                     });
                     Piece::Code(c)

@@ -89,10 +89,6 @@ struct Fun<'a> {
     /// constant plus terms that vanish there (x^−0.0001 + 10⁻⁹ tends to
     /// 10⁻⁹, a value no sampling of so slow a tail can pin down).
     tails: [Option<f64>; 2],
-    /// Bases of powers whose exponent varies with x (x^x, (−2)^x): where
-    /// one is negative, the power is undefined except where the exponent
-    /// is an integer, isolated points no sampling finds.
-    power_bases: Vec<Program>,
     /// Whether f was beyond even extended range somewhere within the search
     /// (the sine of e^1000): NaN there, but not known to be undefined.
     unresolved: Cell<bool>,
@@ -1034,16 +1030,6 @@ fn make_fun<'a>(
         )
     });
     let tails = [-1.0, 1.0].map(|side| exact_tail(expr, opts, side));
-    let mut power_bases = Vec::new();
-    expr.visit(&mut |e| {
-        if let Expr::Bin(BinOp::Pow, b, g) = e
-            && g.contains_x()
-            && let Ok(p) = Program::compile(b, opts)
-            && p.as_constant().is_none_or(|c| c < 0.0)
-        {
-            power_bases.push(p);
-        }
-    });
     Ok(Fun {
         f,
         df,
@@ -1051,7 +1037,6 @@ fn make_fun<'a>(
         piecewise,
         kinks: kink_programs(expr, opts),
         tails,
-        power_bases,
         unresolved: Cell::new(false),
         work: Cell::new(0),
         budget,
@@ -1722,8 +1707,10 @@ fn generators(e: &Expr, out: &mut Vec<Expr>) {
             match op {
                 BinOp::Div => push((**b).clone(), out),
                 BinOp::Pow => {
-                    let integral_nonneg = matches!(syntactic_rational(b), Some((p, 1)) if p >= 0);
-                    if !integral_nonneg {
+                    // A positive whole power is defined everywhere; g⁰ is
+                    // undefined where g = 0 (0⁰, as on the TI-84 Plus CE).
+                    let integral_pos = matches!(syntactic_rational(b), Some((p, 1)) if p > 0);
+                    if !integral_pos {
                         push((**a).clone(), out);
                     }
                 }
@@ -4278,9 +4265,6 @@ fn analyze_aperiodic(
     if sc.too_complex {
         too |= flags::RANGE | flags::MONOTONE_INTERVALS;
     }
-    if isolated_powers(fun, &xs) {
-        too |= flags::DOMAIN | flags::RANGE | flags::ZEROS;
-    }
     if sc.overflow {
         too |= flags::ZEROS
             | flags::MINIMA
@@ -4547,22 +4531,6 @@ fn families(mut reps: Vec<f64>, p: f64) -> Vec<Family> {
 
 /// Zeros as a list, each with the digits that tell it apart from the
 /// other zeros and from `others` (poles, excluded points).
-/// Whether f is undefined somewhere a power with a varying exponent has a
-/// negative base: x^x is defined at x = −1, −2, … (and wherever x is a
-/// fraction with an odd denominator) between the samples, so its domain,
-/// range and zeros aren't what the samples show.
-fn isolated_powers(fun: &Fun, xs: &[f64]) -> bool {
-    if fun.power_bases.is_empty() {
-        return false;
-    }
-    let fs = fun.batch(0, xs);
-    let mut bs = vec![0.0; xs.len()];
-    fun.power_bases.iter().any(|b| {
-        fun.eval_batch(b, xs, &mut bs);
-        bs.iter().zip(&fs).any(|(b, f)| *b < 0.0 && f.is_nan())
-    })
-}
-
 fn fmt_zero_families(zeros: &[Family], others: &[Family]) -> String {
     let near: Vec<f64> = zeros.iter().chain(others).map(|f| f.x).collect();
     zeros
@@ -4660,9 +4628,6 @@ fn analyze_periodic(
     // A stretch where f is 0 isn't a list of intercepts.
     if zero_interval {
         too |= flags::ZEROS;
-    }
-    if isolated_powers(fun, &xs) {
-        too |= flags::DOMAIN | flags::RANGE | flags::ZEROS;
     }
     if sc.overflow {
         too |= flags::ZEROS

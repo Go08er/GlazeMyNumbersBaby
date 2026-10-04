@@ -416,6 +416,13 @@ pub fn reval(e: &Expr, x: f64, u: TrigUnit) -> R {
         Expr::Bin(BinOp::Pow, a, b) if let Some((p, q)) = rational(b) => {
             pow_rat(reval(a, x, u), p, q)
         }
+        // An exponent that varies with x: the TI rule (`fns::pow_var`).
+        Expr::Bin(BinOp::Pow, a, b) if varies(b) => match (reval(a, x, u), reval(b, x, u)) {
+            (R::Undef, _) | (_, R::Undef) => R::Undef,
+            (R::V(va), _) if va.sign() < 0.0 => R::Undef,
+            (R::V(va), R::V(vb)) => pow_var(va, vb),
+            _ => R::Unknown,
+        },
         Expr::Bin(op, a, b) => match (reval(a, x, u), reval(b, x, u)) {
             (R::Undef, _) | (_, R::Undef) => R::Undef,
             (R::V(va), R::V(vb)) => bin(*op, va, vb),
@@ -474,7 +481,29 @@ pub fn bin(op: BinOp, a: Xf, b: Xf) -> R {
     })
 }
 
-/// b^(p/q), with the compiler's integer and real-root powers.
+/// Whether an exponent varies with x or y (so the power takes the TI rule).
+fn varies(e: &Expr) -> bool {
+    e.contains_x() || e.contains_y()
+}
+
+/// a^b for an exponent that varies with x (`fns::pow_var`): a positive
+/// base, or 0 to a positive power.
+pub fn pow_var(a: Xf, b: Xf) -> R {
+    if a.sign() < 0.0 {
+        R::Undef
+    } else if a.is_zero() {
+        if b.sign() > 0.0 {
+            R::V(Xf::ZERO)
+        } else {
+            R::Undef
+        }
+    } else {
+        pow_real(a, b)
+    }
+}
+
+/// b^(p/q), with the compiler's integer and real-root powers (0⁰ is
+/// undefined, as on the TI-84 Plus CE).
 pub fn pow_rat(b: R, p: i32, q: i32) -> R {
     let b = match b {
         R::V(b) => b,
@@ -482,8 +511,7 @@ pub fn pow_rat(b: R, p: i32, q: i32) -> R {
     };
     if b.is_zero() {
         return match p {
-            ..0 => R::Undef,
-            0 => R::V(Xf::of(1.0)),
+            ..=0 => R::Undef,
             _ => R::V(Xf::ZERO),
         };
     }
@@ -520,7 +548,8 @@ pub fn pow_rat(b: R, p: i32, q: i32) -> R {
     }
 }
 
-/// a^b for a computed exponent (`fns::pow`, so 0⁰ = 1).
+/// a^b for an exponent that doesn't vary with x (`fns::pow`: 0⁰ is
+/// undefined, as on the TI-84 Plus CE).
 pub fn pow_real(a: Xf, b: Xf) -> R {
     if a.normal() && b.normal() {
         let (x, y) = (a.f(), b.f());
@@ -535,10 +564,8 @@ pub fn pow_real(a: Xf, b: Xf) -> R {
         }
     }
     if a.is_zero() {
-        return if b.sign() < 0.0 {
+        return if b.sign() <= 0.0 || b.is_zero() {
             R::Undef
-        } else if b.is_zero() {
-            R::V(Xf::of(1.0))
         } else {
             R::V(Xf::ZERO)
         };
@@ -1107,6 +1134,9 @@ pub fn eb(e: &Expr, x: f64, u: TrigUnit) -> (f64, f64) {
         Expr::Bin(op, a, b) => {
             let ((va, ea), (vb, ebb)) = (eb(a, x, u), eb(b, x, u));
             if *op == BinOp::Pow {
+                if varies(b) {
+                    return binary_err(&|s, t| fns::pow_var(s, t), (va, ea), (vb, ebb), 2.0);
+                }
                 return binary_err(&|s, t| fns::pow(s, t), (va, ea), (vb, ebb), 2.0);
             }
             let r = match op {
