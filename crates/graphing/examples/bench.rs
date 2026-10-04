@@ -44,6 +44,10 @@ fn main() {
                 "x^2/16 + y^2/4 = 1",
             ],
         ),
+        (
+            "undefined-heavy implicit",
+            &["x^y = 2", "sqrt(x*y) = 1", "ln(x*y) < 1", "sin(x*y) = 0.5"],
+        ),
     ];
     for (name, eqs) in sets {
         let mut g = Graph::new();
