@@ -1157,6 +1157,20 @@ impl GraphPage {
                             f.label_fit(b, &g.direction, SMALL, 9.0, t.fg_dim, Align::Start);
                             y += 22.0;
                         }
+                        // A list proven correct but maybe not complete
+                        // says so.
+                        if !item.note.is_empty() {
+                            for l in f.wrap(&item.note, body.w - 24.0, CAPTION) {
+                                f.label(
+                                    Rect::new(body.x + 12.0, y, body.w - 24.0, 18.0),
+                                    &l,
+                                    CAPTION,
+                                    t.fg_dim,
+                                    Align::Start,
+                                );
+                                y += 18.0;
+                            }
+                        }
                         y += 8.0;
                         let card = Rect::new(body.x + 4.0, top, body.w - 8.0, y - top);
                         f.cv.rounded_border(card, 8.0, t.border, 1.0);
@@ -1175,7 +1189,14 @@ impl GraphPage {
                                 .map(|g| format!("{} {}", g.expression, g.direction));
                             let text: Vec<String> =
                                 item.display_items.iter().cloned().chain(rows).collect();
-                            n.value = Some(text.join(", "));
+                            // "≈" (known to its digits only) read as
+                            // "approximately".
+                            let mut value = text.join(", ").replace('≈', "approximately ");
+                            if !item.note.is_empty() {
+                                value.push_str(". ");
+                                value.push_str(&item.note);
+                            }
+                            n.value = Some(value);
                         }
                         y += 6.0;
                     }

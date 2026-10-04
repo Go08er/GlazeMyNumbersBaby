@@ -650,6 +650,12 @@ button.wc-add-eq:hover {
   color: alpha(@wc_fg, 0.8);
 }
 
+.wc-kgf-note {
+  font-size: 12px;
+  font-style: italic;
+  color: alpha(@wc_fg, 0.6);
+}
+
 entry.wc-range-entry {
   font-family: "Outfit";
 }

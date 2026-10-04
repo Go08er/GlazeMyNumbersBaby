@@ -919,17 +919,28 @@ impl GraphingPage {
                 l.set_xalign(0.0);
                 l.set_wrap(true);
                 l.set_selectable(true);
+                spoken(&l, v);
                 card.append(&l);
             }
             for g in &item.grid_items {
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
                 let a = gtk::Label::new(Some(&g.expression));
                 a.add_css_class("wc-kgf-value");
+                spoken(&a, &g.expression);
                 let b = gtk::Label::new(Some(&g.direction));
                 b.add_css_class("wc-kgf-text");
                 row.append(&a);
                 row.append(&b);
                 card.append(&row);
+            }
+            // A list proven correct but maybe not complete says so.
+            if !item.note.is_empty() {
+                let n = gtk::Label::new(Some(&item.note));
+                n.add_css_class("wc-kgf-note");
+                n.set_xalign(0.0);
+                n.set_wrap(true);
+                card.append(&n);
+                card.update_property(&[gtk::accessible::Property::Description(&item.note)]);
             }
             self.analysis_body.append(&card);
         }
@@ -1094,8 +1105,10 @@ impl GraphingPage {
             Err(_) => session::restore(self.ctx.store.page_state("graphing")),
         };
         self.building.set(true);
+        let mut first = None;
         for eq in &saved {
             if let Some(row) = self.add_equation(&eq.text) {
+                first.get_or_insert(row.id);
                 row.color.set(eq.color);
                 self.paint_swatch(&row);
                 let s = self.ctx.hub.scheme();
@@ -1112,6 +1125,12 @@ impl GraphingPage {
         }
         self.next_color.set(session::next_color(&saved));
         self.building.set(false);
+        // Dev/screenshot helper: open the first equation's analysis.
+        if std::env::var_os("GMNB_ANALYSIS").is_some()
+            && let Some(id) = first
+        {
+            self.show_analysis(id);
+        }
         let rows: Vec<(EquationId, String)> = self
             .rows
             .borrow()
@@ -1192,5 +1211,15 @@ impl Page for GraphingHandle {
 impl GraphingPage {
     pub fn handle(ctx: Rc<Ctx>) -> Rc<dyn Page> {
         Rc::new(GraphingHandle(Self::new(ctx)))
+    }
+}
+
+/// A value's accessible label: "≈" (a value known to its digits only)
+/// read as "approximately".
+fn spoken(l: &gtk::Label, text: &str) {
+    if text.contains('≈') {
+        l.update_property(&[gtk::accessible::Property::Label(
+            &text.replace('≈', "approximately "),
+        )]);
     }
 }
