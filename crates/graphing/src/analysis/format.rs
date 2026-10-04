@@ -307,7 +307,7 @@ pub(crate) fn format_decimal_digits(v: f64, sig: i32) -> String {
     let decimals = if e >= 5 {
         (sig + 3 - e).max(0)
     } else {
-        (sig - 1 - e).min(sig + 6)
+        (sig - 1 - e).clamp(0, sig + 6)
     } as usize;
     let s = trim(&format!("{a:.decimals$}"));
     if s == "0" {

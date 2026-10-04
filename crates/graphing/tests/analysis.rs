@@ -75,9 +75,10 @@ fn cubic() {
     );
 
     let r = k("f(x) = x^3 - 6x^2 + 9x");
-    // The double zero at 3 (a touch, no sign change) is not proven within
-    // the budget: the zeros found are listed as some of them.
-    assert_eq!(r.x_intercept, "0");
+    // The double zero at 3 (a touch, no sign change) is not proven by the
+    // zeros row within the budget; the minimum (3, 0) shows it is a zero,
+    // but not that there are no others: some of them.
+    assert_eq!(r.x_intercept, "0, 3");
     assert!(r.partial_features & flags::ZEROS != 0);
     assert_eq!(r.minima, ["(3, 0)"]);
     assert_eq!(r.maxima, ["(1, 4)"]);

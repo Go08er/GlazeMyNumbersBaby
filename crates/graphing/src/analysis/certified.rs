@@ -221,6 +221,11 @@ impl Num {
         }
     }
 
+    /// Exact, or with at least one significant digit fixed.
+    fn fixed(&self) -> bool {
+        self.exact.is_some() || !approx(self.enc).starts_with('[')
+    }
+
     fn is_zero(&self) -> bool {
         self.exact.is_some_and(Ex::is_zero) || (self.enc.is_point() && self.enc.lo.0 == 0.0)
     }
@@ -1225,12 +1230,12 @@ pub(super) fn features(
             Piece {
                 lo: Bound::At { x: l, closed: true },
                 hi: Bound::At { x: h, closed: true },
-            } if l == h && l.is_point() => Some(l),
+            } if l == h => Some(l),
             _ => None,
         },
         _ => None,
     };
-    let zero_function = constant.is_some_and(|c| c.lo.0 == 0.0);
+    let zero_function = constant.is_some_and(|c| c.is_point() && c.lo.0 == 0.0);
 
     // Domain.
     let mut domain_whole = false;
@@ -1306,8 +1311,41 @@ pub(super) fn features(
         _ => out.unknown(flags::RANGE),
     }
 
-    // x-intercepts.
-    match a.x_intercepts.value() {
+    // x-intercepts: the row's, and any extremum or inflection whose value
+    // is exactly 0 (a touching zero the row couldn't prove); with any of
+    // those, the list is only some of them unless the row was complete.
+    let mut spots: Vec<Spot> = a.x_intercepts.value().cloned().unwrap_or_default();
+    let mut added = false;
+    if !matches!(a.x_intercepts, Row::Certified { .. }) {
+        let mut pts: Vec<(Enc, Enc, Option<Enc>)> = Vec::new();
+        if let Some(v) = a.extrema.value() {
+            pts.extend(v.iter().map(|e| (e.x, e.y, e.every)));
+        }
+        if let Some(v) = a.inflections.value() {
+            pts.extend(v.iter().map(|i| (i.x, i.y, i.every)));
+        }
+        for (x, y, every) in pts {
+            let xe = cx.exact_x(x);
+            let zero =
+                cx.y_at(xe, y).exact.is_some_and(Ex::is_zero) || (y.is_point() && y.lo.0 == 0.0);
+            let known = spots.iter().any(|s| match s {
+                Spot::At(z) => z.lo.0 <= x.hi.0 && x.lo.0 <= z.hi.0,
+                Spot::Every(f) => f.x0.lo.0 <= x.hi.0 && x.lo.0 <= f.x0.hi.0,
+            });
+            if zero && !known {
+                spots.push(match every {
+                    None => Spot::At(x),
+                    Some(p) => Spot::Every(certify::Family { x0: x, period: p }),
+                });
+                added = true;
+            }
+        }
+    }
+    let zeros_reach = match reach(&a.x_intercepts) {
+        Reach::Unknown if added => Reach::Part(None),
+        r => r,
+    };
+    match (!spots.is_empty() || a.x_intercepts.value().is_some()).then_some(&spots) {
         Some(v) => {
             let mut items: Vec<(f64, (Num, Option<Num>))> = Vec::new();
             let mut fams: Vec<(Num, Num, String)> = Vec::new();
@@ -1331,12 +1369,7 @@ pub(super) fn features(
                 items.push((x.value(), (x, Some(p))));
             }
             let was_cut = cut(&mut items);
-            out.settle(
-                flags::ZEROS,
-                reach(&a.x_intercepts),
-                items.is_empty(),
-                was_cut,
-            );
+            out.settle(flags::ZEROS, zeros_reach, items.is_empty(), was_cut);
             let mut texts = Vec::new();
             let mut any_family = false;
             for (_, (x, p)) in &items {
@@ -1375,8 +1408,13 @@ pub(super) fn features(
         Row::Certified { value, .. } | Row::Partial { value, .. } => {
             if let Some(y) = value {
                 let n = cx.y_at(Some(Ex::int(0)), *y);
-                out.k.y_intercept = n.text();
-                data.y_intercept = Some(n.value());
+                if n.fixed() {
+                    out.k.y_intercept = n.text();
+                    data.y_intercept = Some(n.value());
+                } else {
+                    // Proven to exist, but not one digit of it is known.
+                    out.unknown(flags::Y_INTERCEPT);
+                }
             }
         }
         Row::Unknown { .. } => out.unknown(flags::Y_INTERCEPT),

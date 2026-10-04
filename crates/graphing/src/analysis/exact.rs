@@ -13,7 +13,7 @@ use crate::simplify::Q;
 use crate::simplify::rational::Poly;
 use crate::simplify::{ExactLiterals, PiQ};
 
-use super::format::{MINUS, Nice};
+use super::format::{MINUS, Nice, superscript};
 
 /// An exact real number.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -872,11 +872,23 @@ fn rational_text(q: Q) -> Option<String> {
                     ("0".into(), format!("{:0>k$}", digits))
                 };
                 let frac = frac.trim_end_matches('0');
-                let sig = format!("{int}{frac}").trim_start_matches('0').len();
+                let all = format!("{int}{frac}");
+                let sig = all.trim_start_matches('0').len();
                 if sig > 17 {
                     return None;
                 }
                 let sign = if neg { MINUS } else { "" };
+                // Below 10⁻⁵, like the decimals elsewhere: m×10ⁿ.
+                if int == "0" && frac.len() > sig + 4 {
+                    let digits = all.trim_start_matches('0');
+                    let e = -((frac.len() - digits.len()) as i32) - 1;
+                    let m = if digits.len() > 1 {
+                        format!("{}.{}", &digits[..1], &digits[1..])
+                    } else {
+                        digits.to_string()
+                    };
+                    return Some(format!("{sign}{m}×10{}", superscript(e)));
+                }
                 return Some(if frac.is_empty() {
                     format!("{sign}{int}")
                 } else {
@@ -892,11 +904,19 @@ fn rational_text(q: Q) -> Option<String> {
 }
 
 fn int_text(n: i128) -> String {
-    if n < 0 {
-        format!("{MINUS}{}", n.unsigned_abs())
-    } else {
-        n.to_string()
+    let sign = if n < 0 { MINUS } else { "" };
+    let digits = n.unsigned_abs().to_string();
+    // From 10¹⁶ on, m×10ⁿ (exactly: every nonzero digit kept).
+    if digits.len() > 16 {
+        let kept = digits.trim_end_matches('0');
+        let m = if kept.len() > 1 {
+            format!("{}.{}", &kept[..1], &kept[1..])
+        } else {
+            kept.to_string()
+        };
+        return format!("{sign}{m}×10{}", superscript(digits.len() as i32 - 1));
     }
+    format!("{sign}{digits}")
 }
 
 impl Ex {
