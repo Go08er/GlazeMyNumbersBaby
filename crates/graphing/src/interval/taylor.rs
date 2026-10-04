@@ -225,7 +225,8 @@ fn sincos(u: &Series, unit: TrigUnit, hyper: bool) -> (Series, Series) {
     let (mut s, mut c) = if hyper {
         (vec![elem::sinh(&u[0])], vec![elem::cosh(&u[0])])
     } else {
-        (vec![elem::sin(&u[0], unit)], vec![elem::cos(&u[0], unit)])
+        let (s0, c0) = elem::sin_cos(&u[0], unit);
+        (vec![s0], vec![c0])
     };
     let k_rad = if hyper {
         DecInterval::point(1.0)
@@ -603,7 +604,7 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
         Mod => {
             let (a, b) = (arg(0), arg(1));
             let h0 = elem::modulo(&a[0], &b[0]);
-            let quotient_steady = constant_near(&elem::div(&a[0], &b[0]), |q| elem::floor(q));
+            let quotient_steady = constant_near(&elem::div(&a[0], &b[0]), elem::floor);
             if h0.dec >= Dec::Dac && quotient_steady {
                 // One integer quotient on the box: a − b·k.
                 let k = elem::floor(&elem::div(&a[0], &b[0]));

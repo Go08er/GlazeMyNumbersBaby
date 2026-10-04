@@ -170,9 +170,7 @@ impl Interval {
 
     /// Absolute value.
     pub fn abs(self) -> Interval {
-        if self.is_empty() {
-            self
-        } else if self.lo >= 0.0 {
+        if self.is_empty() || self.lo >= 0.0 {
             self
         } else if self.hi <= 0.0 {
             -self

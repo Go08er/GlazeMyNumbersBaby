@@ -656,11 +656,19 @@ pub(crate) fn pe_sin_cos(x: f64, unit: TrigUnit) -> (Interval, Interval) {
     if x < 0.0 { (-s, c) } else { (s, c) }
 }
 
-/// The exact signs of sin and cos of a double angle: in radians those of
-/// the correctly rounded values (no double but 0 is a multiple of π/2, and
-/// rounding to nearest keeps a nonzero value's sign); in degrees and grads
-/// those of the exact-reduction enclosures, if they decide them.
-fn sin_cos_signs(x: f64, unit: TrigUnit) -> Option<(i8, i8)> {
+/// sin and cos of one double angle: enclosures and, when decided, their
+/// exact signs (in radians those of the correctly rounded values: no double
+/// but 0 is a multiple of π/2, and rounding to nearest keeps a nonzero
+/// value's sign; in degrees and grads those of the exact-reduction
+/// enclosures).
+#[derive(Clone, Copy)]
+struct Ep {
+    s: Interval,
+    c: Interval,
+    signs: Option<(i8, i8)>,
+}
+
+fn endpoint(x: f64, unit: TrigUnit) -> Ep {
     let sg = |v: f64| -> i8 {
         if v > 0.0 {
             1
@@ -672,10 +680,18 @@ fn sin_cos_signs(x: f64, unit: TrigUnit) -> Option<(i8, i8)> {
     };
     if unit == TrigUnit::Radians {
         if x == 0.0 {
-            return Some((0, 1));
+            return Ep {
+                s: Interval::point(0.0),
+                c: Interval::point(1.0),
+                signs: Some((0, 1)),
+            };
         }
         let (s, c) = cm::sincos(x);
-        return Some((sg(s), sg(c)));
+        return Ep {
+            s: widen(s, -1.0, 1.0),
+            c: widen(c, -1.0, 1.0),
+            signs: Some((sg(s), sg(c))),
+        };
     }
     let (s, c) = pe_sin_cos(x, unit);
     let decide = |i: Interval| -> Option<i8> {
@@ -689,7 +705,11 @@ fn sin_cos_signs(x: f64, unit: TrigUnit) -> Option<(i8, i8)> {
             None
         }
     };
-    Some((decide(s)?, decide(c)?))
+    let signs = match (decide(s), decide(c)) {
+        (Some(a), Some(b)) => Some((a, b)),
+        _ => None,
+    };
+    Ep { s, c, signs }
 }
 
 /// Whether `[lo, hi]` (finite) is at least half a turn wide, judged
@@ -702,71 +722,71 @@ fn half_turn_or_more(x: Interval, unit: TrigUnit) -> bool {
     }
 }
 
-/// sin or cos (`cosine`) over an interval.
-fn sin_or_cos(x: &DecInterval, unit: TrigUnit, cosine: bool) -> DecInterval {
-    let iv = x.iv;
-    if iv.is_empty() {
-        return DecInterval::result(iv, Dec::Trv, &[x]);
-    }
-    let r = sin_cos_iv(iv, unit, cosine);
-    DecInterval::result(r, Dec::Com, &[x])
-}
-
-fn sin_cos_iv(iv: Interval, unit: TrigUnit, cosine: bool) -> Interval {
+/// The images of `iv` under sin and under cos, from shared end values.
+fn sin_cos_ivs(iv: Interval, unit: TrigUnit) -> (Interval, Interval) {
     let full = Interval::new(-1.0, 1.0);
     if !iv.is_bounded() {
-        return full;
+        return (full, full);
     }
-    let w = iv.width();
     let turn = match unit {
         TrigUnit::Radians => 2.0 * PI,
         u => u.full_turn(),
     };
-    if w >= turn {
-        return full;
+    if iv.width() >= turn {
+        return (full, full);
     }
     if half_turn_or_more(iv, unit) {
         let m = iv.mid();
-        let a = sin_cos_iv(Interval::new(iv.lo(), m), unit, cosine);
-        let b = sin_cos_iv(Interval::new(m, iv.hi()), unit, cosine);
-        return a.hull(b);
+        let (sa, ca) = sin_cos_ivs(Interval::new(iv.lo(), m), unit);
+        let (sb, cb) = sin_cos_ivs(Interval::new(m, iv.hi()), unit);
+        return (sa.hull(sb), ca.hull(cb));
     }
-    // Under half a turn: at most one critical point, inside exactly when the
-    // derivative changes sign between the ends (whose signs are exact).
-    let (sl, cl) = pe_sin_cos(iv.lo(), unit);
-    let (sh, ch) = pe_sin_cos(iv.hi(), unit);
-    let (vl, vh) = if cosine { (cl, ch) } else { (sl, sh) };
-    let mut r = vl.hull(vh);
+    let el = endpoint(iv.lo(), unit);
+    let mut s = el.s;
+    let mut c = el.c;
     if iv.is_point() {
-        return r.intersect(full);
+        return (s, c);
     }
-    // The derivative's sign at each end: cos for sin, −sin for cos.
-    let (gl, gh) = match (sin_cos_signs(iv.lo(), unit), sin_cos_signs(iv.hi(), unit)) {
-        (Some((sl, cl)), Some((sh, ch))) => {
-            if cosine {
-                (-sl, -sh)
-            } else {
-                (cl, ch)
-            }
-        }
-        // An angle whose sine or cosine can't be signed (degrees below the
-        // subnormals): be safe.
-        _ => return full,
+    let eh = endpoint(iv.hi(), unit);
+    s = s.hull(eh.s);
+    c = c.hull(eh.c);
+    // Under half a turn: at most one critical point of each, inside exactly
+    // when the derivative (cos for sin, −sin for cos) changes sign.
+    let (Some((sl, cl)), Some((sh, ch))) = (el.signs, eh.signs) else {
+        return (full, full);
     };
-    if gl > 0 && gh < 0 {
-        r = Interval::new(r.lo(), 1.0);
-    } else if gl < 0 && gh > 0 {
-        r = Interval::new(-1.0, r.hi());
+    if cl > 0 && ch < 0 {
+        s = Interval::new(s.lo(), 1.0);
+    } else if cl < 0 && ch > 0 {
+        s = Interval::new(-1.0, s.hi());
     }
-    r.intersect(full)
+    if sl < 0 && sh > 0 {
+        c = Interval::new(c.lo(), 1.0);
+    } else if sl > 0 && sh < 0 {
+        c = Interval::new(-1.0, c.hi());
+    }
+    (s.intersect(full), c.intersect(full))
+}
+
+/// sin and cos of the same argument, sharing their work.
+pub fn sin_cos(x: &DecInterval, unit: TrigUnit) -> (DecInterval, DecInterval) {
+    if x.is_empty() {
+        let e = DecInterval::result(x.iv, Dec::Trv, &[x]);
+        return (e, e);
+    }
+    let (s, c) = sin_cos_ivs(x.iv, unit);
+    (
+        DecInterval::result(s, Dec::Com, &[x]),
+        DecInterval::result(c, Dec::Com, &[x]),
+    )
 }
 
 pub fn sin(x: &DecInterval, unit: TrigUnit) -> DecInterval {
-    sin_or_cos(x, unit, false)
+    sin_cos(x, unit).0
 }
 
 pub fn cos(x: &DecInterval, unit: TrigUnit) -> DecInterval {
-    sin_or_cos(x, unit, true)
+    sin_cos(x, unit).1
 }
 
 /// True if `iv` may contain a zero of sin (`sine`) or cos: a pole of
@@ -777,7 +797,7 @@ fn may_hit_zero(iv: Interval, unit: TrigUnit, sine: bool) -> bool {
     }
     // Under half a turn, a zero inside means a sign change; a zero at an end
     // is exact (degrees) or the end is 0 (radians, sine).
-    match (sin_cos_signs(iv.lo(), unit), sin_cos_signs(iv.hi(), unit)) {
+    match (endpoint(iv.lo(), unit).signs, endpoint(iv.hi(), unit).signs) {
         (Some((sl, cl)), Some((sh, ch))) => {
             let (a, b) = if sine { (sl, sh) } else { (cl, ch) };
             !(a != 0 && a == b)

@@ -177,7 +177,11 @@ impl Rng {
     /// Doubles spread over magnitudes and signs.
     fn double(&mut self) -> f64 {
         let r = self.next() % 10;
-        let s = if self.next() % 2 == 0 { 1.0 } else { -1.0 };
+        let s = if self.next().is_multiple_of(2) {
+            1.0
+        } else {
+            -1.0
+        };
         let v = match r {
             0 => self.unit() * 2.0,
             1 => self.unit() * 10.0,
@@ -221,6 +225,8 @@ fn boxes(rng: &mut Rng, n_random: usize) -> Vec<Interval> {
 // ---------------------------------------------------------- MPFR truths
 
 type Truth2 = Box<dyn Fn(&Float, &Float) -> Option<Float>>;
+type UnaryOp = Box<dyn Fn(&DecInterval) -> DecInterval>;
+type BinaryOp = Box<dyn Fn(&DecInterval, &DecInterval) -> DecInterval>;
 
 fn defined(v: Float) -> Option<Float> {
     if v.is_nan() { None } else { Some(v) }
@@ -583,6 +589,7 @@ fn check_point_width(t: &mut Tally, name: &str, r: &DecInterval, truth: &Float, 
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_unary(
     t: &mut Tally,
     name: &str,
@@ -703,10 +710,10 @@ fn check_binary(
     }
 }
 
-fn unary_ops(unit: TrigUnit) -> Vec<(String, Func, Box<dyn Fn(&DecInterval) -> DecInterval>)> {
+fn unary_ops(unit: TrigUnit) -> Vec<(String, Func, UnaryOp)> {
     use Func::*;
     let u = unit;
-    let mut v: Vec<(String, Func, Box<dyn Fn(&DecInterval) -> DecInterval>)> = vec![
+    let mut v: Vec<(String, Func, UnaryOp)> = vec![
         ("sin".into(), Sin, Box::new(move |x| elem::sin(x, u))),
         ("cos".into(), Cos, Box::new(move |x| elem::cos(x, u))),
         ("tan".into(), Tan, Box::new(move |x| elem::tan(x, u))),
@@ -721,7 +728,7 @@ fn unary_ops(unit: TrigUnit) -> Vec<(String, Func, Box<dyn Fn(&DecInterval) -> D
         ("acot".into(), Acot, Box::new(move |x| elem::acot(x, u))),
     ];
     if unit == TrigUnit::Radians {
-        let more: Vec<(&str, Func, Box<dyn Fn(&DecInterval) -> DecInterval>)> = vec![
+        let more: Vec<(&str, Func, UnaryOp)> = vec![
             ("sinh", Sinh, Box::new(elem::sinh)),
             ("cosh", Cosh, Box::new(elem::cosh)),
             ("tanh", Tanh, Box::new(elem::tanh)),
@@ -820,12 +827,7 @@ fn run_ops(n_random: usize, seed: u64) -> Tally {
             pairs.push((*a, *b));
         }
     }
-    let bin: Vec<(
-        &str,
-        Box<dyn Fn(&DecInterval, &DecInterval) -> DecInterval>,
-        Truth2,
-        u64,
-    )> = vec![
+    let bin: Vec<(&str, BinaryOp, Truth2, u64)> = vec![
         (
             "add",
             Box::new(elem::add),
