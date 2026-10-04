@@ -5,7 +5,7 @@
 use super::eval::{at_path, contains_x, written_rational};
 use super::iv::{self, Iv, Unit};
 use super::series::{self as se};
-use super::{B, Claim, Class, Fx, Outcome, Side, Subject, Via, exact};
+use super::{B, Claim, Class, Fx, Outcome, Side, Subject, Via, exact, growth};
 use graphing::ast::{BinOp, Constant, Expr, Func};
 
 /// The precisions tried in turn (bits).
@@ -642,6 +642,7 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
         }
         Claim::Removable { near, at, lo, hi } => removable(fx, *near, *at, *lo, *hi),
         Claim::Simplifier(fact) => simplifier(fx, fact),
+        Claim::Limit { at, over_x, to } => limit(fx, *at, *over_x, *to),
         Claim::Gap(x) => gap(*x, cert),
         Claim::GapClear { x, of } => match of {
             Subject::F(k) if *k <= 2 => {
@@ -1873,6 +1874,49 @@ fn unbounded(fx: &Fx, near: B, at: B) -> Outcome {
 pub fn limit_at(fx: &Fx, p: f64) -> Option<Iv> {
     let s = se::with_shift(|| fx.series(&fx.f, p, p, 8));
     (!s[0].empty && s[0].def && s[0].bounded() && !s[1].empty && s[1].def).then(|| s[0].clone())
+}
+
+/// A limit by the tree's structure: derived again by the replay's own
+/// reading of the rules (`growth`), a proof when it agrees.
+fn limit(fx: &Fx, at: growth::At, over_x: bool, to: super::Toward) -> Outcome {
+    use super::Toward;
+    use growth::Goes;
+    if unmodelled(&fx.f) {
+        return Outcome::new(
+            Class::Unsupported,
+            "the tree uses a function the replay doesn't model",
+        );
+    }
+    let Some(got) = growth::limit(fx, at, over_x) else {
+        return Outcome::new(
+            Class::Unconfirmed,
+            "the tree's structure doesn't decide the limit",
+        );
+    };
+    match (got, to) {
+        (Goes::PosInf, Toward::PosInf) | (Goes::NegInf, Toward::NegInf) => {
+            Outcome::new(Class::Strong, "by the tree's structure")
+        }
+        (Goes::To(v), Toward::In(lo, hi)) => {
+            if v.ge(lo) && v.le(hi) {
+                Outcome::new(Class::Strong, "by the tree's structure")
+            } else if v.hi < lo || v.lo > hi {
+                Outcome::new(
+                    Class::Refuted,
+                    format!("the limit is {}, outside [{lo:e}, {hi:e}]", show(&v)),
+                )
+            } else {
+                Outcome::new(
+                    Class::Unconfirmed,
+                    format!("the limit {} is not inside [{lo:e}, {hi:e}]", show(&v)),
+                )
+            }
+        }
+        (got, to) => Outcome::new(
+            Class::Refuted,
+            format!("the limit is {got:?} by the tree's structure, not {to:?}"),
+        ),
+    }
 }
 
 fn removable(fx: &Fx, near: B, at: B, lo: f64, hi: f64) -> Outcome {

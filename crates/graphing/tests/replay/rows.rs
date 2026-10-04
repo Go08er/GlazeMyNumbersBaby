@@ -12,8 +12,11 @@
 //! facts their claims state.
 
 use super::claims::{self, Subj, Tree, split};
+use super::growth::At;
 use super::iv::{self, Iv};
-use super::{B, Claim, ClaimResult, Class, Fx, Region, RowCert, RowResult, Side, Subject, r};
+use super::{
+    B, Claim, ClaimResult, Class, Fx, Region, RowCert, RowResult, Side, Subject, Toward, r,
+};
 use serde_json::Value;
 
 // ------------------------------------------------------------ values
@@ -1503,7 +1506,10 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
             .any(|&s| !tail_bands(&rc.claims, s).is_empty())
             || rc.claims.iter().any(|c| {
                 matches!(c, Claim::Simplifier(f) if f.starts_with(claims::RATIONAL) && fact_limit(f).is_some())
-            });
+            })
+            || [At::PosInf, At::NegInf]
+                .iter()
+                .any(|&at| matches!(limit_at(&rc.claims, at, false), Some(Toward::In(..))));
         if !(to_inf || (limit && apart)) {
             out.problems
                 .push("not periodic, but the claims don't show it".into());
@@ -1856,16 +1862,36 @@ fn tail_infinite(claims: &[Claim], side: Side, up: bool) -> bool {
             })
             .collect()
     };
-    proof || growing(bounds, up) || growing(points(), up)
+    let at = if right { At::PosInf } else { At::NegInf };
+    let structure =
+        limit_at(claims, at, false) == Some(if up { Toward::PosInf } else { Toward::NegInf });
+    structure || proof || growing(bounds, up) || growing(points(), up)
+}
+
+/// What a `Limit` claim says f (or f/x, `over_x`) tends to as x → `at`.
+fn limit_at(claims: &[Claim], at: At, over_x: bool) -> Option<Toward> {
+    claims.iter().find_map(|c| match c {
+        Claim::Limit {
+            at: a,
+            over_x: o,
+            to,
+        } if *a == at && *o == over_x => Some(*to),
+        _ => None,
+    })
 }
 
 /// Whether the claims show f → ±∞ beside the point p (from the right, or
 /// the left): unbounded there by structure, or beyond bounds on boxes
 /// beside p that grow as the boxes shrink.
 fn side_infinite(claims: &[Claim], p: f64, right: bool) -> bool {
+    let at = if right { At::Right(p) } else { At::Left(p) };
     let structural = claims
         .iter()
-        .any(|c| matches!(c, Claim::Unbounded { at, .. } if at.0 <= p && p <= at.1));
+        .any(|c| matches!(c, Claim::Unbounded { at, .. } if at.0 <= p && p <= at.1))
+        || matches!(
+            limit_at(claims, at, false),
+            Some(Toward::PosInf | Toward::NegInf)
+        );
     let near = |x: &B| {
         if right {
             x.0 == p.next_up()
@@ -2170,6 +2196,46 @@ fn horizontal(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), 
             }
             continue;
         }
+        // By the tree's structure (its claim checked so): the limit lies
+        // in the claim's enclosure; a narrower listing only with the
+        // simplifier's exact value.
+        let toward = if side == Side::Right {
+            At::PosInf
+        } else {
+            At::NegInf
+        };
+        match limit_at(&rc.claims, toward, false) {
+            Some(Toward::In(lo, hi)) => {
+                if !(y.lo <= hi && lo <= y.hi) {
+                    out.problems.push(format!(
+                        "the limit at {at} is listed in [{:e}, {:e}], outside [{lo:e}, {hi:e}]",
+                        y.lo, y.hi
+                    ));
+                } else if !(y.lo <= lo && hi <= y.hi) && !fact {
+                    out.problems.push(format!(
+                        "the limit at {at}: [{:e}, {:e}] is narrower than the claims show",
+                        y.lo, y.hi
+                    ));
+                }
+                // An exact form shown for it lies in the enclosure.
+                if let Some(text) = item.get("exact").and_then(Value::as_str) {
+                    iv::set_prec(160);
+                    match claims::pi_q(text) {
+                        Some(v) if v.hi >= lo && v.lo <= hi => {}
+                        _ => out.problems.push(format!(
+                            "the limit at {at} is written {text}, outside [{lo:e}, {hi:e}]"
+                        )),
+                    }
+                }
+                continue;
+            }
+            Some(_) => {
+                out.problems
+                    .push(format!("a limit listed at {at}, where f tends to ±∞"));
+                continue;
+            }
+            None => {}
+        }
         match borne_out(
             &tail_bands(&rc.claims, side),
             &y,
@@ -2323,6 +2389,9 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
 fn shows_unbounded(claims: &[Claim]) -> bool {
     claims.iter().any(|c| matches!(c, Claim::Unbounded { .. }))
         || claims.iter().any(|c| {
+            matches!(c, Claim::Limit { over_x: false, to: Toward::PosInf | Toward::NegInf, .. })
+        })
+        || claims.iter().any(|c| {
             matches!(c, Claim::Simplifier(f)
                 if f.strip_prefix(claims::RATIONAL).is_some_and(|r| r.starts_with("f → +∞") || r.starts_with("f → −∞")))
         })
@@ -2397,6 +2466,20 @@ fn source_value(rc: &RowCert, src: &Value) -> Result<Enc, String> {
             matches!(c, Claim::Simplifier(f) if f.starts_with(claims::RATIONAL) && f.ends_with(&format!("as x → {at}")))
         })
     };
+    // A limit by the tree's structure (its claim checked so), narrowed by
+    // the simplifier's exact value where they meet.
+    let structural = |toward: At, at: &str| -> Option<Enc> {
+        let Some(Toward::In(lo, hi)) = limit_at(&rc.claims, toward, false) else {
+            return None;
+        };
+        Some(match fact_at(at) {
+            Some(f) if f.lo <= hi && lo <= f.hi => Enc {
+                lo: lo.max(f.lo),
+                hi: hi.min(f.hi),
+            },
+            _ => Enc { lo, hi },
+        })
+    };
     if let Some(x) = src.get("At") {
         let x = enc(x)?;
         return rc
@@ -2427,6 +2510,14 @@ fn source_value(rc: &RowCert, src: &Value) -> Result<Enc, String> {
         // f's bands far out, with the simplifier's exact limit if any:
         // never the fact alone, but for a rational f's exact one.
         let at = if s == Side::Right { "+∞" } else { "−∞" };
+        let toward = if s == Side::Right {
+            At::PosInf
+        } else {
+            At::NegInf
+        };
+        if let Some(v) = structural(toward, at) {
+            return Ok(v);
+        }
         let bands = tail_bands(&rc.claims, s);
         let fact = fact_at(at);
         if rational_at(at)
@@ -2473,6 +2564,10 @@ fn source_value(rc: &RowCert, src: &Value) -> Result<Enc, String> {
             .get("right")
             .and_then(Value::as_bool)
             .ok_or("side right")?;
+        let toward = if right { At::Right(at) } else { At::Left(at) };
+        if let Some(v) = structural(toward, &format!("{at}{}", if right { "⁺" } else { "⁻" })) {
+            return Ok(v);
+        }
         let fact = fact_at(&format!("{at}{}", if right { "⁺" } else { "⁻" }))
             .ok_or_else(|| format!("a range end from a one-sided limit at {at:e} with no fact"))?;
         // Borne out by f's bands on boxes beside the point (p left out):
@@ -2571,6 +2666,27 @@ fn oblique(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), Str
             || periodic
             || horizontal.iter().any(|h| h == side)
             || bends_away(&rc.claims, s)
+            || matches!(
+                limit_at(
+                    &rc.claims,
+                    if side == "Right" {
+                        At::PosInf
+                    } else {
+                        At::NegInf
+                    },
+                    true
+                ),
+                Some(Toward::PosInf | Toward::NegInf)
+            )
+            || limit_at(
+                &rc.claims,
+                if side == "Right" {
+                    At::PosInf
+                } else {
+                    At::NegInf
+                },
+                true,
+            ) == Some(Toward::In(0.0, 0.0))
             || (fact("f/x → ±∞") && slope_shown(&rc.claims, s, false))
             || (fact("f/x → 0") && slope_shown(&rc.claims, s, true));
         if !ruled_out {

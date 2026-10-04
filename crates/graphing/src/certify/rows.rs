@@ -1535,6 +1535,20 @@ pub fn tail_end(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cla
     if matches!(end, TailEnd::Infinite(_)) {
         return Ok((end, claims));
     }
+    // By the tree's structure: a proof however slowly f settles (1/ln x),
+    // its exact value the simplifier's where that agrees.
+    if matches!(end, TailEnd::Unknown)
+        && let Some(s) = by_structure(
+            f,
+            if right {
+                Toward::PosInf
+            } else {
+                Toward::NegInf
+            },
+        )
+    {
+        return Ok(with_exact(s, simplifier_limit(f, right)));
+    }
     let Some((lim, fact)) = simplifier_limit(f, right) else {
         return Ok((end, claims));
     };
@@ -1572,6 +1586,42 @@ pub fn tail_end(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cla
     };
     claims.push(fact);
     Ok((out, claims))
+}
+
+/// f's limit as x → `at` by the tree's structure ([`super::growth`]), with
+/// its claim.
+fn by_structure(f: &Fun<'_>, at: Toward) -> Option<(TailEnd, Claim)> {
+    let to = super::growth::limit(f, at, false)?;
+    let end = match to {
+        To::PosInf => TailEnd::Infinite(true),
+        To::NegInf => TailEnd::Infinite(false),
+        To::In { lo, hi } => TailEnd::Level(Enc::new(lo.0, hi.0), None),
+    };
+    Some((
+        end,
+        Claim::Limit {
+            at,
+            over_x: false,
+            to,
+        },
+    ))
+}
+
+/// A limit by structure, written as the simplifier's exact value where
+/// that lies in its enclosure (the enclosure kept as proven: the exact
+/// form is how it reads, not a narrower claim).
+fn with_exact(
+    (end, claim): (TailEnd, Claim),
+    simplifier: Option<(TailEnd, Claim)>,
+) -> (TailEnd, Vec<Claim>) {
+    if let TailEnd::Level(y, _) = end
+        && let Some((TailEnd::Level(z, Some(text)), _)) = simplifier
+        && y.lo.0 <= z.lo.0
+        && z.hi.0 <= y.hi.0
+    {
+        return (TailEnd::Level(y, Some(text)), vec![claim]);
+    }
+    (end, vec![claim])
 }
 
 /// How a limit fact of a rational f begins: the limit is N/D's, exactly.
@@ -1636,6 +1686,14 @@ fn limit_of(f: &Fun<'_>, e: &crate::ast::Expr, right: bool, at: &str) -> Option<
 /// f's own enclosures on ever smaller boxes beside p ([`side_bands`]);
 /// the limit's claims with the fact.
 pub fn side_limit(f: &Fun<'_>, p: f64, right: bool) -> Result<Option<(TailEnd, Vec<Claim>)>, Stop> {
+    let at = if right {
+        Toward::Right(R(p))
+    } else {
+        Toward::Left(R(p))
+    };
+    if let Some(s) = by_structure(f, at) {
+        return Ok(Some(with_exact(s, side_limit_fact(f, p, right))));
+    }
     let Some((end, fact)) = side_limit_fact(f, p, right) else {
         return Ok(None);
     };
@@ -2491,6 +2549,32 @@ pub fn oblique(
         if let Some(bend) = bends_away(f, right, start)? {
             c.push(bend);
             continue;
+        }
+        // f/x → ±∞ or exactly 0 by the tree's structure: no line (a line
+        // has f/x → m ≠ 0).
+        let toward = if right {
+            Toward::PosInf
+        } else {
+            Toward::NegInf
+        };
+        match super::growth::limit(f, toward, true) {
+            Some(to @ (To::PosInf | To::NegInf)) => {
+                c.push(Claim::Limit {
+                    at: toward,
+                    over_x: true,
+                    to,
+                });
+                continue;
+            }
+            Some(to @ To::In { lo, hi }) if lo.0 == 0.0 && hi.0 == 0.0 => {
+                c.push(Claim::Limit {
+                    at: toward,
+                    over_x: true,
+                    to,
+                });
+                continue;
+            }
+            _ => {}
         }
         match limit_at(&over_x, dir, &settings) {
             // (Each with f′'s enclosures far out bearing it out.)

@@ -40,7 +40,7 @@ pub fn canonical(e: &Expr) -> Expr {
 
 /// `e` as a·x + b with a, b exact rationals, if it is one (sliders and π
 /// aside).
-fn affine(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<(Q, Q)> {
+pub(crate) fn affine(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<(Q, Q)> {
     Some(match e {
         Expr::X => (Q::ONE, Q::ZERO),
         Expr::Num(v) => (Q::ZERO, lits.exact(*v)?),

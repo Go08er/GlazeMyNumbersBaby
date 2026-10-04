@@ -274,7 +274,9 @@ const REVIEW: &[(&str, &str)] = &[
     ("(1+1/x^2)^x", "HA=1"),
     ("x*ln(1+1/x)", "HA=1"),
     ("(1+1/x)^(x^2)", "HA=L:0"),
-    ("x^(1/ln(x))", "HA=none"),
+    // x^(1/ln x) = e^((1/ln x)·ln x) = e for x > 0, x ≠ 1: its limit at +∞
+    // is e (a constant tail has its value as asymptote, as x/x has 1).
+    ("x^(1/ln(x))", "HA=R:e"),
     ("x*sin(1/x)", "HA=1"),
     ("x^2*(1-cos(1/x))", "HA=1/2"),
     ("x*(e^(1/x)-1)", "HA=1"),

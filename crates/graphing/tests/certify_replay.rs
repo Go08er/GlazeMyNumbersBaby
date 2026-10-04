@@ -488,6 +488,29 @@ fn first<'v>(v: &'v mut serde_json::Value, row: &str, kind: &str) -> &'v mut ser
 
 type Plant = (&'static str, &'static str, fn(&mut serde_json::Value));
 
+/// ln(x)²'s right tail ruled out of lines by f′ monotone far out (f″ < 0
+/// from 16) and its value at 10³⁰⁰ (or `value` instead) within 10⁻¹² of
+/// 0, as the certifier writes slope evidence; `mono`: with f″'s sign.
+fn slope_claims(mono: bool, value: Option<(f64, f64)>) -> Vec<serde_json::Value> {
+    let (lo, hi) = value.unwrap_or((1.3815510557964267e-297, 1.3815510557964282e-297));
+    let mut out = Vec::new();
+    if mono {
+        out.push(
+            serde_json::json!({"TailBeyond": {"side": "Right", "from": 16.0,
+            "of": {"F": "F2"}, "c": 0.0, "above": false}}),
+        );
+    }
+    out.push(serde_json::json!({"Value": {"x": {"a": 1e300, "b": 1e300},
+        "of": {"F": "F1"}, "lo": lo, "hi": hi}}));
+    out.push(
+        serde_json::json!({"TailBeyond": {"side": "Right", "from": 1e300,
+        "of": {"F": "F1"}, "c": -5e-324, "above": true}}),
+    );
+    out.push(serde_json::json!({"Simplifier": {"fact":
+        "f/x → 0 as x → +∞ and f has no horizontal asymptote there"}}));
+    out
+}
+
 /// False facts planted into real certificates: each must be caught.
 const PLANTS: &[Plant] = &[
     ("x^3-2x+1/(x-1)", "an x-intercept left out", |v| {
@@ -715,19 +738,57 @@ const PLANTS: &[Plant] = &[
             c["TailBeyond"]["of"] = serde_json::json!({"F": "F1"});
         }
     }),
+    // (ln(x)²'s own certificate rules its line out by structure: the slope
+    // evidence written out as the certifier writes it where structure
+    // doesn't decide.)
     ("ln(x)^2", "f′'s value far out moved off 0", |v| {
-        for c in claims_of(v, "oblique").iter_mut() {
-            if let Some(b) = c.get_mut("Value") {
-                b["lo"] = serde_json::json!(1e-3);
-                b["hi"] = serde_json::json!(2e-3);
-            }
-        }
+        *claims_of(v, "oblique") = slope_claims(true, Some((1e-3, 2e-3)));
     }),
     ("ln(x)^2", "f′'s monotonicity dropped", |v| {
-        claims_of(v, "oblique").retain(|c| {
-            !(c.get("TailBeyond")
-                .is_some_and(|t| t["of"] == serde_json::json!({"F": "F2"})))
-        });
+        *claims_of(v, "oblique") = slope_claims(false, None);
+    }),
+    // Limits by structure.
+    ("x^-0.0001", "a slow limit moved", |v| {
+        for c in claims_of(v, "horizontal").iter_mut() {
+            if let Some(l) = c.get_mut("Limit") {
+                l["to"] = serde_json::json!({"In": {"lo": 0.5, "hi": 0.5}});
+            }
+        }
+        let y = &mut value_of(v, "horizontal")[0]["y"];
+        y["lo"] = serde_json::json!(0.5);
+        y["hi"] = serde_json::json!(0.5);
+    }),
+    ("1/ln(x)", "a limit at a tail called infinite", |v| {
+        first(v, "horizontal", "Limit")["to"] = serde_json::json!("PosInf");
+    }),
+    (
+        "1/ln(x)",
+        "a one-sided limit taken from the other side",
+        |v| {
+            for c in claims_of(v, "range").iter_mut() {
+                if let Some(l) = c.get_mut("Limit")
+                    && let Some(p) = l["at"].get("Right").cloned()
+                {
+                    l["at"] = serde_json::json!({ "Left": p });
+                }
+            }
+        },
+    ),
+    (
+        "sqrt(x^2+1)-x",
+        "a limit by structure where the tree is ∞ − ∞",
+        |v| {
+            v["horizontal"] = serde_json::json!({"Certified": {
+                "value": [{"side": "Right", "y": {"lo": 0.0, "hi": 0.0}, "exact": null, "looks_like": null}],
+                "cert": {"covers": "Line", "claims": [{"Limit": {"at": "PosInf", "over_x": false, "to": {"In": {"lo": 0.0, "hi": 0.0}}}}]}
+            }});
+        },
+    ),
+    ("x/ln(x)", "f/x's limit called infinite", |v| {
+        first(v, "oblique", "Limit")["to"] = serde_json::json!("PosInf");
+    }),
+    ("x/ln(x)", "f/x's limit dropped", |v| {
+        claims_of(v, "oblique").retain(|c| c.get("Limit").is_none());
     }),
     ("abs(x-3)", "a kink's slope flipped on one side", |v| {
         let k = first(v, "extrema", "KinkAt");
@@ -744,6 +805,14 @@ const PLANTS: &[Plant] = &[
         x["hi"] = serde_json::json!(3.0f64.next_up());
     }),
 ];
+
+/// The slope evidence the plants above alter, unaltered, replays.
+#[test]
+fn written_slope_evidence_replays() {
+    let mut v = certificate("ln(x)^2");
+    *claims_of(&mut v, "oblique") = slope_claims(true, None);
+    assert_eq!(rejected(&v), None);
+}
 
 #[test]
 fn replay_catches_planted_errors() {

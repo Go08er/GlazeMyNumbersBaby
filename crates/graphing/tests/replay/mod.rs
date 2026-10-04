@@ -30,6 +30,7 @@ pub mod algebra;
 pub mod claims;
 pub mod eval;
 pub mod exact;
+pub mod growth;
 pub mod iv;
 pub mod rows;
 pub mod series;
@@ -177,6 +178,21 @@ pub enum Claim {
         x: B,
         of: Subject,
     },
+    /// As x → `at`, f (or f/x, `over_x`) tends to `to`, by the tree's
+    /// structure (`growth`).
+    Limit {
+        at: growth::At,
+        over_x: bool,
+        to: Toward,
+    },
+}
+
+/// Where a limit claim says f goes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Toward {
+    PosInf,
+    NegInf,
+    In(f64, f64),
 }
 
 impl Claim {
@@ -204,6 +220,7 @@ impl Claim {
             Claim::Simplifier(_) => "Simplifier",
             Claim::Gap(_) => "Gap",
             Claim::GapClear { .. } => "GapClear",
+            Claim::Limit { .. } => "Limit",
         }
     }
 }
@@ -424,6 +441,32 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
         ),
         "Gap" => Claim::Gap(x()?),
         "GapClear" => Claim::GapClear { x: x()?, of: of()? },
+        "Limit" => {
+            let at = field(b, "at")?;
+            let at = match at.as_str() {
+                Some("PosInf") => growth::At::PosInf,
+                Some("NegInf") => growth::At::NegInf,
+                _ => match (at.get("Right"), at.get("Left")) {
+                    (Some(p), _) => growth::At::Right(r(p)?),
+                    (_, Some(p)) => growth::At::Left(r(p)?),
+                    _ => return Err(format!("bad limit point {at}")),
+                },
+            };
+            let to = field(b, "to")?;
+            let to = match to.as_str() {
+                Some("PosInf") => Toward::PosInf,
+                Some("NegInf") => Toward::NegInf,
+                _ => {
+                    let i = field(to, "In")?;
+                    Toward::In(rf(i, "lo")?, rf(i, "hi")?)
+                }
+            };
+            Claim::Limit {
+                at,
+                over_x: bf(b, "over_x")?,
+                to,
+            }
+        }
         other => return Err(format!("unknown claim kind {other}")),
     })
 }

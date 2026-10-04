@@ -108,6 +108,24 @@ pub enum Tail {
     Right,
 }
 
+/// Where x goes for a limit: out along a tail, or to the double `p` from
+/// the right (x → p⁺) or the left.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Toward {
+    PosInf,
+    NegInf,
+    Right(R),
+    Left(R),
+}
+
+/// Where a limit goes: +∞, −∞, or a value in `[lo, hi]`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum To {
+    PosInf,
+    NegInf,
+    In { lo: R, hi: R },
+}
+
 /// How a side expression g is read off the node at its path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Via {
@@ -240,6 +258,17 @@ pub enum Claim {
     },
     /// f is defined on the whole tail with values in `[lo, hi]`.
     TailValue { side: Tail, from: R, lo: R, hi: R },
+    /// As x → `at`, f — or f/x (`over_x`) — tends to `to`, by its tree's
+    /// structure (`certify::growth`): with u → +∞ the distance out (x = ±u
+    /// at ±∞, x = p ± 1/u beside p), each node of the formula as written,
+    /// read bottom-up, is a dominant term c·u^q·(ln u)^r (c ≠ 0 enclosed,
+    /// q and r exact rationals), tends to ±∞ faster than every power of u
+    /// or at no known rate, tends to 0 faster than every power, tends to a
+    /// value, or stays within bounds — by the rules for sums, products,
+    /// quotients and powers of these, and for the elementary functions at
+    /// the ends of their domains and where they are continuous. An exact
+    /// a·x + b is read as one term (x − p beside p is ±1/u exactly).
+    Limit { at: Toward, over_x: bool, to: To },
     /// |f| → ∞ at the one excluded point enclosed by `at`, approached
     /// inside `near` (from both sides, or only from the side of `near`
     /// that `at` doesn't end). Proven from the tree's structure: a divisor
