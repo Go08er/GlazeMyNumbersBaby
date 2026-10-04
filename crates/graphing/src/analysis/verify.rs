@@ -2879,9 +2879,7 @@ pub fn settled(a: &Analysed, s: f64, reach: f64) -> Option<(f64, f64)> {
         // largest double, is no value to settle on; nor is one only the
         // compiled program has, the reference abstaining: e^(10¹⁰⁰) is
         // beyond what it can size.)
-        let Some(y) = a.known(s * x) else {
-            return None;
-        };
+        let y = a.known(s * x)?;
         if !(y.is_finite() && y.abs() < f64::MAX && y.abs() != f64::from_bits(1)) {
             return None;
         }
