@@ -263,7 +263,10 @@ impl GraphView {
             } else {
                 (t.screen_x, y)
             }));
-            self.announce(&t.spoken_text(), gtk::AccessibleAnnouncementPriority::Medium);
+            self.announce(
+                &t.spoken_text(),
+                gtk::AccessibleAnnouncementPriority::Medium,
+            );
         }
         self.queue_draw();
     }
@@ -510,11 +513,8 @@ impl GraphView {
         // Inline only if this plot, scaled from the last by the graph's
         // weight, is quick: an edit to a heavy row goes to the worker.
         let weight = graph.borrow().plot_weight();
-        let predicted = graphing::graph::predicted_plot_ms(
-            imp.plot_ms.get(),
-            imp.plot_weight.get(),
-            weight,
-        );
+        let predicted =
+            graphing::graph::predicted_plot_ms(imp.plot_ms.get(), imp.plot_weight.get(), weight);
         if predicted < INLINE_PLOT_MS {
             let started = Instant::now();
             let plots = graph.borrow().plot_parallel(&vp);

@@ -876,8 +876,7 @@ impl GraphPage {
         // Inline only if this plot, scaled from the last by the graph's
         // weight, is quick: an edit to a heavy row goes to the worker.
         let weight = self.graph.plot_weight();
-        let predicted =
-            graphing::graph::predicted_plot_ms(self.plot_ms, self.plot_weight, weight);
+        let predicted = graphing::graph::predicted_plot_ms(self.plot_ms, self.plot_weight, weight);
         if predicted < INLINE_PLOT_MS || self.proxy.is_none() {
             self.dirty = false;
             let t = Instant::now();

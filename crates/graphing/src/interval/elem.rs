@@ -1578,7 +1578,12 @@ pub(crate) fn gamma_iv(v: Interval) -> (Interval, bool) {
     // [a, b] inside (k − 1, k) for an integer k ≤ 0 (|a| < 2⁵³: beyond,
     // every double is an integer).
     let (ga, gb) = (gamma_pt(a), gamma_pt(b));
-    let mag = |i: Interval| (i.lo().abs().min(i.hi().abs()), i.lo().abs().max(i.hi().abs()));
+    let mag = |i: Interval| {
+        (
+            i.lo().abs().min(i.hi().abs()),
+            i.lo().abs().max(i.hi().abs()),
+        )
+    };
     let (_, ma) = mag(ga);
     let (_, mb) = mag(gb);
     let hi = ma.max(mb);
@@ -1587,7 +1592,11 @@ pub(crate) fn gamma_iv(v: Interval) -> (Interval, bool) {
     let sin_max = if a <= mid && mid <= b {
         1.0
     } else {
-        cm::sinpi(a).abs().max(cm::sinpi(b).abs()).next_up().min(1.0)
+        cm::sinpi(a)
+            .abs()
+            .max(cm::sinpi(b).abs())
+            .next_up()
+            .min(1.0)
     };
     // max Γ(1 − x) over [1 − b, 1 − a] ⊂ (1, ∞), its ends rounded out.
     let (u0, u1) = ((1.0 - b).next_down().max(1.0), (1.0 - a).next_up());

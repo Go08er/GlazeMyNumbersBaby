@@ -768,7 +768,11 @@ impl<'a> ExplicitSampler<'a> {
     /// finite beyond the band like [`Self::off_value`]. None for NaN.
     fn continuous_value(&self, t: f64) -> Option<f64> {
         let d = self.f.eval(t, 0.0);
-        if d.is_nan() { None } else { Some(self.off_value_of(d)) }
+        if d.is_nan() {
+            None
+        } else {
+            Some(self.off_value_of(d))
+        }
     }
 
     fn push(&mut self, t: f64, d: f64) {

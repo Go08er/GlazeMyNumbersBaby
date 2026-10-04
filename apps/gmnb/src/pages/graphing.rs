@@ -1226,8 +1226,8 @@ impl GraphingPage {
 /// read as "approximately".
 fn spoken(l: &gtk::Label, text: &str) {
     if text.contains('≈') {
-        l.update_property(&[gtk::accessible::Property::Label(
-            &graphing::trace::spoken(text),
-        )]);
+        l.update_property(&[gtk::accessible::Property::Label(&graphing::trace::spoken(
+            text,
+        ))]);
     }
 }

@@ -454,7 +454,7 @@ fn solve_near(iv: &IntervalFn, t: f64, d: f64, tol: f64, ratio: f64) -> Option<f
             return None;
         }
         let (v, dv) = (s[0].iv.mid(), s[1].iv.mid());
-        if i == 0 && !(dv.abs() * ratio > 2.0) {
+        if i == 0 && (dv.abs() * ratio).partial_cmp(&2.0) != Some(std::cmp::Ordering::Greater) {
             return None;
         }
         if (v - d).abs() <= tol || (v - d).abs() > 0.5 * miss {
@@ -655,10 +655,9 @@ pub fn nearest_point(
                             } else {
                                 (t.next_down(), t.next_up())
                             };
-                            if let TraceValue::Defined { lo: a, hi: b } =
-                                value_at(iv, lo, hi, n0)
-                            {
-                                let value = exact_value(iv, &shown, TraceValue::Defined { lo: a, hi: b });
+                            if let TraceValue::Defined { lo: a, hi: b } = value_at(iv, lo, hi, n0) {
+                                let value =
+                                    exact_value(iv, &shown, TraceValue::Defined { lo: a, hi: b });
                                 let d = f.eval(t, 0.0);
                                 let d = if d.is_finite() { d } else { 0.5 * (a + b) };
                                 let c = (point(t, d), (pow10(n0), pow10(n0)), axis, value);

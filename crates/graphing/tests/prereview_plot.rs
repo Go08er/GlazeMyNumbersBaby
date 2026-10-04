@@ -93,8 +93,12 @@ fn navigation_fuzz_keeps_views_sane() {
         let mut vp = Viewport::default_for_size(640.0, 480.0);
         let span = (start * 1e-7).max(1.0);
         let c = start * if rnd() < 0.5 { -1.0 } else { 1.0 };
-        if vp.set_display_ranges(c - span, c + span, -c - span, -c + span).is_err() {
-            vp.set_display_ranges(-span, span, c - span, c + span).unwrap();
+        if vp
+            .set_display_ranges(c - span, c + span, -c - span, -c + span)
+            .is_err()
+        {
+            vp.set_display_ranges(-span, span, c - span, c + span)
+                .unwrap();
         }
         for _ in 0..200 {
             let r = rnd();
@@ -213,7 +217,10 @@ fn keyboard_tracing_climbs_very_steep_lines() {
                     px = t.screen_x;
                     ys.push(t.screen_y);
                 }
-                assert!(ys.windows(2).all(|p| p[1] < p[0]), "{src} {w}x{h} {step}: {ys:?}");
+                assert!(
+                    ys.windows(2).all(|p| p[1] < p[0]),
+                    "{src} {w}x{h} {step}: {ys:?}"
+                );
                 let travelled = ys[0] - ys[20];
                 assert!(
                     (travelled - 20.0 * step).abs() < 3.0,
@@ -368,7 +375,9 @@ fn holes_only_where_proven() {
         let x = -(k as f64);
         let want = x * (x - 1.0) / 2.0;
         assert!(
-            p.holes.iter().any(|q| q.x == x && (q.y - want).abs() < 1e-3),
+            p.holes
+                .iter()
+                .any(|q| q.x == x && (q.y - want).abs() < 1e-3),
             "{x}: {:?}",
             p.holes
         );
@@ -427,7 +436,11 @@ fn factorials_and_dense_poles_never_join_across() {
     // 1.32! = Γ(2.32) ≈ 1.181.
     let (sx, sy) = vp.to_screen(1.32, 1.181);
     let (_, t) = g.trace(&vp, &plots, sx, sy, 50.0).unwrap();
-    assert!(t.text().starts_with("(1.32, ") && !t.text().contains("unknown"), "{}", t.text());
+    assert!(
+        t.text().starts_with("(1.32, ") && !t.text().contains("unknown"),
+        "{}",
+        t.text()
+    );
 }
 
 /// PREREVIEW_B Lows: keyboard Left along √x reaches its end (0, 0) (the
@@ -456,7 +469,12 @@ fn keyboard_tracing_reaches_domain_ends_and_texts_are_exact() {
     for (src, x, text, spoken) in [
         ("y=x/x-1", 0.26, "(0.26, 0.00)", "(0.26, 0.00)"),
         ("y=x-1", 0.5, "(0.50, −0.50)", "(0.50, −0.50)"),
-        ("y=-x/3", 0.5, "(0.50, ≈−0.17)", "(0.50, approximately −0.17)"),
+        (
+            "y=-x/3",
+            0.5,
+            "(0.50, ≈−0.17)",
+            "(0.50, approximately −0.17)",
+        ),
     ] {
         let mut g = Graph::new();
         let id = g.add_equation(src);
