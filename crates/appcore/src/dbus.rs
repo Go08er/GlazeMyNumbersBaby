@@ -1068,26 +1068,26 @@ fn open_uri_on(mut conn: Connection, uri: &str, wait: Duration) -> io::Result<Op
     // Only the portal's owner may answer; if it can't be named, the answer
     // can't be trusted either. Naming it first (starting the portal if it
     // isn't running) lets its answer be kept whatever else arrives while
-    // the calls below wait for their replies.
-    let owner = match conn.name_owner(PORTAL) {
-        Some(owner) => owner,
-        None => {
-            conn.call_args(
-                "org.freedesktop.DBus",
-                "/org/freedesktop/DBus",
-                "org.freedesktop.DBus",
-                "StartServiceByName",
-                &[Arg::Str(PORTAL), Arg::U32(0)],
-            )?;
-            conn.name_owner(PORTAL)
-                .ok_or_else(|| err("the portal has no owner"))?
-        }
-    };
-    conn.set_wanted(vec![Wanted {
-        sender: owner.clone(),
-        interface: "org.freedesktop.portal.Request".into(),
-        member: "Response".into(),
-    }]);
+    // the calls below wait for their replies. If it can't be started that
+    // way, the OpenURI call starts it and it is named afterwards.
+    let mut owner = conn.name_owner(PORTAL);
+    if owner.is_none() {
+        let _ = conn.call_args(
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "StartServiceByName",
+            &[Arg::Str(PORTAL), Arg::U32(0)],
+        );
+        owner = conn.name_owner(PORTAL);
+    }
+    if let Some(owner) = &owner {
+        conn.set_wanted(vec![Wanted {
+            sender: owner.clone(),
+            interface: "org.freedesktop.portal.Request".into(),
+            member: "Response".into(),
+        }]);
+    }
     let reply = conn.call_args(
         PORTAL,
         PORTAL_PATH,
@@ -1113,6 +1113,12 @@ fn open_uri_on(mut conn: Connection, uri: &str, wait: Duration) -> io::Result<Op
              member='Response',path='{handle}'"
         ))?;
     }
+    let owner = match owner {
+        Some(owner) => owner,
+        None => conn
+            .name_owner(PORTAL)
+            .ok_or_else(|| err("the portal has no owner"))?,
+    };
     let deadline = Instant::now() + wait;
     loop {
         let left = deadline.saturating_duration_since(Instant::now());

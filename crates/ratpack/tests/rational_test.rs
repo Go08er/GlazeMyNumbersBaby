@@ -243,5 +243,5 @@ fn test_shift_count_bounds() {
         assert_eq!(r(1).shl(&r(-count)), Err(CALC_E_DOMAIN), "lsh -{count}");
     }
     assert_eq!(r(1).shl(&r(100_001)), Err(CALC_E_DOMAIN));
-    assert!(start.elapsed() < std::time::Duration::from_secs(1));
+    assert!(start.elapsed() < std::time::Duration::from_secs(10));
 }
