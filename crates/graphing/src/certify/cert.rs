@@ -498,3 +498,82 @@ impl<T> Row<T> {
         }
     }
 }
+
+// ------------------------------------------------------------------ binding
+
+/// The power convention claims are made under: an exponent written as an
+/// integer or a ratio of integers is an integer power or a real root (a
+/// negative base only for an odd denominator); one that varies with x
+/// takes a positive base, or 0 to a positive power; any other constant
+/// exponent allows a negative base only at an integer value; 0⁰ is
+/// undefined (`docs/ti-conventions.md`).
+pub const POWER_CONVENTION: &str = "ti-real-1";
+
+/// What a certificate was made under, besides its source text, formula
+/// and angle unit (which [`super::Analysis`] carries): a replay accepts
+/// only conventions it implements, and evaluates sliders at these values.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Binding {
+    /// The certifier: crate and version.
+    pub certifier: String,
+    /// The simplifier's rule set (FNV-1a 64 of every rule's name, patterns,
+    /// conditions and stated side condition), in hex: what weak evidence
+    /// (facts the simplifier proved, its trees) rests on.
+    pub rules: String,
+    /// [`POWER_CONVENTION`].
+    pub power: String,
+    /// The value each variable of the tree (a slider) took.
+    pub sliders: std::collections::BTreeMap<String, f64>,
+    /// `,` was the decimal separator (and `;` the argument separator).
+    pub decimal_comma: bool,
+    /// Interval evaluations allowed per phase.
+    pub budget: u64,
+}
+
+impl Binding {
+    /// The binding of a certificate for `eq` under `opts`.
+    pub fn of(
+        eq: &crate::Equation,
+        opts: &crate::compile::CompileOptions<'_>,
+        budget: u64,
+    ) -> Binding {
+        let sliders = eq
+            .variables()
+            .iter()
+            .map(|v| {
+                let value = opts
+                    .variables
+                    .value(v)
+                    .unwrap_or(crate::compile::DEFAULT_VARIABLE_VALUE);
+                (v.clone(), value)
+            })
+            .collect();
+        Binding {
+            certifier: format!("graphing {}", env!("CARGO_PKG_VERSION")),
+            rules: rules_hash(),
+            power: POWER_CONVENTION.into(),
+            sliders,
+            decimal_comma: eq.parse_options().decimal_comma,
+            budget,
+        }
+    }
+}
+
+/// FNV-1a 64 of the simplifier's rules, in hex.
+pub fn rules_hash() -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |s: &str| {
+        for b in s.bytes().chain([0u8]) {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    };
+    for r in crate::simplify::rules::RULES {
+        eat(r.name);
+        eat(r.lhs);
+        eat(r.rhs);
+        eat(&format!("{:?}", r.conds));
+        eat(r.why);
+    }
+    format!("{h:016x}")
+}
