@@ -84,6 +84,12 @@ const FALLBACK_SHARE: f64 = 0.25;
 /// through its sampled values ([`Kind::Dense`]).
 const COLUMN_EVALS: usize = 96;
 
+/// [`COLUMN_EVALS`] for a column right after a dense one: dense poles come
+/// in runs (`tan 100x` at ±1000 has one run across the whole view), and
+/// spending the full allowance on each column before giving up would use
+/// the budget up halfway across, leaving the rest to the fallback.
+const DENSE_RUN_EVALS: usize = 20;
+
 /// Point samples across a dense column.
 const DENSE_SAMPLES: usize = 16;
 
@@ -148,8 +154,11 @@ pub(crate) struct ExplicitSampler<'a> {
     /// Work spent telling jumps from steep parts in unresolved boxes.
     fallback_work: usize,
     /// Interval evaluations spent in the column being structured (None
-    /// outside one).
+    /// outside one), and the most it may spend.
     column: Option<usize>,
+    column_limit: usize,
+    /// The last column structured was dense.
+    dense_run: bool,
     /// Costs of a point and an order-0 and order-2 interval evaluation.
     pt_cost: usize,
     iv0_cost: usize,
@@ -210,6 +219,8 @@ impl<'a> ExplicitSampler<'a> {
             pass_limit: usize::MAX,
             fallback_work: 0,
             column: None,
+            column_limit: COLUMN_EVALS,
+            dense_run: false,
             pt_cost,
             iv0_cost: 0,
             iv2_cost: 0,
@@ -316,11 +327,13 @@ impl<'a> ExplicitSampler<'a> {
         let (lo, hi) = (self.t0 - h, self.t1 + h);
         let chunk = CHUNK_PX / self.t_px;
         let chunks = (((hi - lo) / chunk).ceil() as usize).max(1);
-        // Each first box may spend CHUNK_SHARE times its even share of what
-        // the pass has left: the structure first, then the shapes.
-        let share = |limit: usize, work: usize, done: usize| {
+        // Each first box may spend `times` its even share of what the pass
+        // has left: the structure first (an even share, so a view of dense
+        // poles degrades alike from left to right), then the shapes
+        // (CHUNK_SHARE times).
+        let share = |limit: usize, work: usize, done: usize, times: usize| {
             let left = chunks.saturating_sub(done).max(1);
-            work.saturating_add(limit.saturating_sub(work) / left * CHUNK_SHARE)
+            work.saturating_add(limit.saturating_sub(work) / left * times)
         };
         self.pass_limit = (self.opts.max_work as f64 * STRUCTURE_SHARE) as usize;
         let mut firsts: Vec<Vec<(f64, f64, Kind)>> = Vec::with_capacity(chunks);
@@ -328,7 +341,7 @@ impl<'a> ExplicitSampler<'a> {
         while t < hi {
             let e = (t + chunk).min(hi);
             let e = if e <= t { hi } else { e };
-            self.chunk_limit = share(self.pass_limit, self.work, firsts.len());
+            self.chunk_limit = share(self.pass_limit, self.work, firsts.len(), 1);
             let mut first = Vec::new();
             self.structure(iv, t, e, &mut first);
             firsts.push(first);
@@ -337,7 +350,7 @@ impl<'a> ExplicitSampler<'a> {
         self.pass_limit = usize::MAX;
         let mut boxes: Vec<(f64, f64, Kind)> = Vec::new();
         for (k, first) in firsts.into_iter().enumerate() {
-            self.chunk_limit = share(self.opts.max_work, self.work, k);
+            self.chunk_limit = share(self.opts.max_work, self.work, k, CHUNK_SHARE);
             for (a, b, kind) in first {
                 match kind {
                     Kind::Proven(flo, fhi) => self.shape(iv, a, b, flo, fhi, &mut boxes),
@@ -359,12 +372,18 @@ impl<'a> ExplicitSampler<'a> {
     fn structure(&mut self, iv: &IntervalFn, lo: f64, hi: f64, out: &mut Vec<(f64, f64, Kind)>) {
         if let Some(n) = &mut self.column {
             *n += 1;
-            if *n > COLUMN_EVALS {
+            if *n > self.column_limit {
                 // Dropped: the whole column is dense.
                 return;
             }
         }
         if !self.charge(self.iv0_cost) {
+            if let Some(n) = &mut self.column {
+                // Out of budget inside a column already known to break:
+                // drawn as a dense one.
+                *n = usize::MAX / 2;
+                return;
+            }
             out.push((lo, hi, Kind::Unresolved));
             return;
         }
@@ -384,13 +403,20 @@ impl<'a> ExplicitSampler<'a> {
             if narrowest || m <= lo || m >= hi {
                 out.push((lo, hi, Kind::Gap));
             } else if self.column.is_none() && (hi - lo) * self.t_px <= 1.0 {
-                // A column: its breaks are located within COLUMN_EVALS.
+                // A column: its breaks are located within COLUMN_EVALS
+                // (fewer next to a dense one).
                 let mark = out.len();
                 self.column = Some(0);
+                self.column_limit = if self.dense_run {
+                    DENSE_RUN_EVALS
+                } else {
+                    COLUMN_EVALS
+                };
                 self.structure(iv, lo, m, out);
                 self.structure(iv, m, hi, out);
                 let n = self.column.take().unwrap_or(0);
-                if n > COLUMN_EVALS {
+                self.dense_run = n > self.column_limit;
+                if self.dense_run {
                     out.truncate(mark);
                     out.push((lo, hi, Kind::Dense));
                 }
