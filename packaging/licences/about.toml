@@ -1,0 +1,44 @@
+# cargo-about configuration for THIRD-PARTY-LICENSES.txt, the licences of
+# the Rust crates GMNB, DGMNB and gmnb-launcher are built from. Regenerate
+# that file with packaging/licences/generate.sh after changing dependencies.
+
+# The licences allowed; cargo-about fails on a crate under any other, so a
+# new kind of licence is a decision, not an accident. For a crate offering a
+# choice, cargo-about picks one of these (MIT, for the MIT-or-Apache crates).
+accepted = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "BSL-1.0",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+]
+# The release binaries: Linux on x86-64 and AArch64.
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+# Development and build-script dependencies don't end up in the binaries.
+# (Procedural-macro crates are still listed.)
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+# cargo-about's built-in fixes for crates whose licence files it can't match.
+workarounds = ["chrono", "ring"]
+
+# dpi's MIT part (code from libm) is in a file whose name cargo-about doesn't
+# look for.
+[dpi.clarify]
+license = "Apache-2.0 AND MIT"
+
+[[dpi.clarify.files]]
+path = "LICENSE"
+license = "Apache-2.0"
+checksum = "6dc0e068dcf3a5bc8e054205b85b7720e1d49265bbc64bf515d2cf79197df69a"
+
+[[dpi.clarify.files]]
+path = "LICENSE-LIBM-MIT"
+license = "MIT"
+checksum = "9eff396a99bafd208e7126602420d6864f6066c08b84485a5b032320a9c01997"

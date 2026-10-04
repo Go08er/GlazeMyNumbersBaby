@@ -1,16 +1,16 @@
 CORE-MATH copyright notices
 ===========================
 
-The CORE-MATH files vendored in this directory are distributed under the
-MIT licence in LICENSE, alongside this file. CORE-MATH's LICENSE carries
-the permission text only; the copyright notices are in each file's header.
-They are collected here so that the full notice, copyright and permission,
-ships with every binary that contains this code.
+The CORE-MATH files in GMNB's crates/crmath/vendor are distributed under
+the MIT licence in vendor/LICENSE. That file carries the permission text
+only; the copyright notices are in each source file's header. They are
+collected here so that the full notice, copyright and permission, ships
+with every binary that contains this code.
 
 Collected from upstream commit 85430b3e (as vendored by core-math-sys 1.4.0)
-with `grep -h '^Copyright' binary64/*/*.[ch]` over all 32 vendored files,
-which each carry one copyright line. When a function is added, rerun that
-command and update this list.
+by running `grep -h '^Copyright' binary64/*/*.[ch]` in crates/crmath/vendor
+over all 32 vendored files, which each carry one copyright line. When a
+function is added, rerun that command and update this list.
 
 Copyright holders
 -----------------
