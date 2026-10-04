@@ -16,6 +16,11 @@ pub const WHEEL_SCROLL_DAMPER: f64 = 0.15;
 /// One wheel notch (`WHEEL_DELTA`).
 pub const WHEEL_DELTA: f64 = 120.0;
 
+/// Largest magnitude a viewport bound may have: a hundredth of the
+/// largest double, so the band of one span either side the plotters use
+/// (and any move or zoom step) stays finite.
+pub const MAX_COORD: f64 = 1e306;
+
 /// Range-changing actions (`Graphing::Renderer::ChangeRangeAction`, 2D
 /// subset). The engine's predefined ratios are not public; these use
 /// 1.25× for zoom/widen/shrink, the button ratio 1.0625× for smooth/pinch
@@ -222,23 +227,30 @@ impl Viewport {
 
     /// `IGraphRenderer::MoveRangeByRatio`: +1 moves the view half a screen
     /// in the positive direction of the axis.
+    /// A move that would leave the usable range (see [`Viewport::is_sane`])
+    /// is ignored.
     pub fn move_by_ratio(&mut self, ratio_x: f64, ratio_y: f64) {
-        let dx = ratio_x * 0.5 * self.x_span();
-        let dy = ratio_y * 0.5 * self.y_span();
-        self.x_min += dx;
-        self.x_max += dx;
-        self.y_min += dy;
-        self.y_max += dy;
+        self.shift(ratio_x * 0.5 * self.x_span(), ratio_y * 0.5 * self.y_span());
     }
 
     /// Pans so that the content follows a pointer drag of `(dx, dy)` pixels.
+    /// A pan that would leave the usable range is ignored.
     pub fn pan_pixels(&mut self, dx: f64, dy: f64) {
-        let wx = -dx * self.x_per_px();
-        let wy = dy * self.y_per_px();
-        self.x_min += wx;
-        self.x_max += wx;
-        self.y_min += wy;
-        self.y_max += wy;
+        self.shift(-dx * self.x_per_px(), dy * self.y_per_px());
+    }
+
+    /// Moves the ranges by `(wx, wy)` world units if the result is sane.
+    fn shift(&mut self, wx: f64, wy: f64) {
+        let new = Viewport {
+            x_min: self.x_min + wx,
+            x_max: self.x_max + wx,
+            y_min: self.y_min + wy,
+            y_max: self.y_max + wy,
+            ..*self
+        };
+        if new.is_sane() {
+            *self = new;
+        }
     }
 
     /// `IGraphRenderer::ChangeRange`.
@@ -334,13 +346,25 @@ impl Viewport {
         x >= self.x_min && x <= self.x_max && y >= self.y_min && y <= self.y_max
     }
 
-    fn is_sane(&self) -> bool {
+    /// Whether the ranges can be plotted: finite, ordered, spans between
+    /// 1e−300 and 1e300 with about 12 significant digits across a pixel,
+    /// and every bound within ±[`MAX_COORD`] (the plotters reach a few
+    /// spans past the view, which must stay finite). Every navigation keeps
+    /// this; the plotters draw nothing for a viewport built without it.
+    pub fn is_sane(&self) -> bool {
         let ok = |a: f64, b: f64| {
-            a.is_finite() && b.is_finite() && b > a && (b - a) > 1e-300 && (b - a) < 1e300
+            a.is_finite()
+                && b.is_finite()
+                && b > a
+                && (b - a) > 1e-300
+                && (b - a) < 1e300
+                && a.abs().max(b.abs()) <= MAX_COORD
         };
         // Keep at least ~12 significant digits of resolution across a pixel.
         let res = |a: f64, b: f64, px: f64| (b - a) / px > 1e-13 * a.abs().max(b.abs()).max(1e-300);
-        ok(self.x_min, self.x_max)
+        self.width.is_finite()
+            && self.height.is_finite()
+            && ok(self.x_min, self.x_max)
             && ok(self.y_min, self.y_max)
             && res(self.x_min, self.x_max, self.width)
             && res(self.y_min, self.y_max, self.height)

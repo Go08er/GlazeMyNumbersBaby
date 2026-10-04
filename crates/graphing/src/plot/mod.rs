@@ -13,6 +13,8 @@
 //!
 //! All coordinates are finite: curves are clipped to a band one viewport
 //! tall above and below the visible area, so they can be stroked directly.
+//! A viewport that isn't [`Viewport::is_sane`] (only possible by setting
+//! its fields directly) gets an empty plot with `has_missing_data`.
 
 mod explicit;
 mod ifn;
@@ -153,6 +155,12 @@ pub(crate) fn plot_with(
     opts: &PlotOptions,
     cancel: &Cancel<'_>,
 ) -> Plot {
+    if !vp.is_sane() {
+        return Plot {
+            has_missing_data: true,
+            ..Plot::default()
+        };
+    }
     match &eq.form {
         CompiledForm::Explicit { axis, f, iv } => {
             let mut s = ExplicitSampler::new(f, *axis, vp, opts);

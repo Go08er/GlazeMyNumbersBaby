@@ -737,6 +737,10 @@ impl<'a> ExplicitSampler<'a> {
 
     /// Fill polygons for `dependent > f` (`greater`) or `dependent < f`.
     pub(crate) fn fill_polygons(&self, greater: bool) -> Vec<Polyline> {
+        // `clamp` panics on NaN bounds (a viewport that isn't sane).
+        if !(self.band_lo.is_finite() && self.band_hi.is_finite() && self.band_lo <= self.band_hi) {
+            return Vec::new();
+        }
         let edge = if greater { self.band_hi } else { self.band_lo };
         let mut out = Vec::new();
         for p in &self.pieces {
