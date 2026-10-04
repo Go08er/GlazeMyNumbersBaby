@@ -1191,20 +1191,21 @@ fn thin<T: Clone>(v: &[T], k: usize) -> Vec<T> {
 /// How many claims a run of tail bounds or bands keeps.
 const KEEP: usize = 10;
 
-/// The longest run at the end of `bounds` (in order out along the tail,
-/// or in towards a point) that moves strictly one way (`up`), as the
-/// replay reads growth.
-fn growing_suffix(bounds: &[f64], up: bool) -> usize {
-    let mut n = bounds.len().min(1);
-    for i in (1..bounds.len()).rev() {
-        let (a, b) = (bounds[i - 1], bounds[i]);
-        if if up { b > a } else { b < a } {
-            n += 1;
-        } else {
-            break;
+/// The records of `bounds` (in order out along the tail, or in towards a
+/// point): the indices of those beyond every one before them (in the
+/// direction `up`), as the replay reads growth. (An overflowed bound
+/// repeats; a weaker one adds nothing.)
+fn records(bounds: &[f64], up: bool) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::new();
+    for (i, &b) in bounds.iter().enumerate() {
+        let beyond = out
+            .last()
+            .is_none_or(|&j| if up { b > bounds[j] } else { b < bounds[j] });
+        if beyond {
+            out.push(i);
         }
     }
-    n
+    out
 }
 
 /// Boxes beside p shrinking towards it: ½ … 10⁻³⁰⁰ of max(1, |p|), and
@@ -1450,10 +1451,12 @@ fn infinite_bounds(
         got.push((m, c));
     }
     let cs: Vec<f64> = got.iter().map(|g| g.1).collect();
-    let keep = growing_suffix(&cs, up);
-    if grows_enough(&cs[cs.len() - keep..]) {
+    let rec = records(&cs, up);
+    let rcs: Vec<f64> = rec.iter().map(|&i| cs[i]).collect();
+    if grows_enough(&rcs) {
+        let kept: Vec<(f64, f64)> = rec.iter().map(|&i| got[i]).collect();
         return Ok(Some(
-            thin(&got[got.len() - keep..], KEEP)
+            thin(&kept, KEEP)
                 .iter()
                 .map(|&(m, c)| Claim::TailBeyond {
                     side,
@@ -1484,10 +1487,11 @@ fn infinite_bounds(
         pts.push((x, v.lo(), v.hi()));
     }
     let cs: Vec<f64> = pts.iter().map(|p| if up { p.1 } else { p.2 }).collect();
-    let keep = growing_suffix(&cs, up);
-    if !grows_enough(&cs[cs.len() - keep..]) {
+    let rec = records(&cs, up);
+    if !grows_enough(&rec.iter().map(|&i| cs[i]).collect::<Vec<_>>()) {
         return Ok(None);
     }
+    let pts: Vec<(f64, f64, f64)> = rec.iter().map(|&i| pts[i]).collect();
     let mut claims = vec![Claim::TailBeyond {
         side,
         from: R(if right { start } else { -start }),
@@ -1495,7 +1499,7 @@ fn infinite_bounds(
         c: R(0.0),
         above: rising,
     }];
-    for &(x, lo, hi) in &thin(&pts[pts.len() - keep..], KEEP) {
+    for &(x, lo, hi) in &thin(&pts, KEEP) {
         claims.push(Claim::Value {
             x: XBox::point(x),
             of: Subject::f(0),
@@ -1708,11 +1712,12 @@ fn side_bands(
                 got.push((n, c));
             }
             let cs: Vec<f64> = got.iter().map(|g| g.1).collect();
-            let keep = growing_suffix(&cs, up);
-            if !grows_enough(&cs[cs.len() - keep..]) {
+            let rec = records(&cs, up);
+            if !grows_enough(&rec.iter().map(|&i| cs[i]).collect::<Vec<_>>()) {
                 return Ok(None);
             }
-            for &(n, c) in &thin(&got[got.len() - keep..], KEEP) {
+            let kept: Vec<(Interval, f64)> = rec.iter().map(|&i| got[i]).collect();
+            for &(n, c) in &thin(&kept, KEEP) {
                 claims.push(Claim::Beyond {
                     x: XBox::new(n.lo(), n.hi()),
                     of: Subject::f(0),
@@ -2200,12 +2205,12 @@ fn slope_evidence(
                 _ => None,
             })
             .collect();
-        let keep = growing_suffix(&cs, true);
-        if !grows_enough(&cs[cs.len() - keep..]) {
+        let rec = records(&cs, true);
+        if !grows_enough(&rec.iter().map(|&i| cs[i]).collect::<Vec<_>>()) {
             return Ok(None);
         }
-        let n = claims.len();
-        return Ok(Some(thin(&claims.split_off(n - keep), KEEP)));
+        let kept: Vec<Claim> = rec.iter().map(|&i| claims[i].clone()).collect();
+        return Ok(Some(thin(&kept, KEEP)));
     }
     Ok((last <= 1e-12).then_some(claims))
 }
