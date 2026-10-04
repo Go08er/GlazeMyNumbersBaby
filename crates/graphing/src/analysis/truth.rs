@@ -706,7 +706,11 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
             if a.huge() {
                 return R::Unknown;
             }
-            if a.tiny() {
+            // Below the doubles, or (in degrees and grads) an angle whose
+            // sine is: sin(10⁻³²³°) rounds to 0 as a double, but it is
+            // 10⁻³²³·π/180, which a double can't hold, not 0.
+            let small = u != TrigUnit::Radians && a.f().abs() < 1e-290;
+            if (a.tiny() || small) && !a.is_zero() {
                 let t = a.mul(Xf::of(c));
                 return match f {
                     Sin | Tan => R::V(t),

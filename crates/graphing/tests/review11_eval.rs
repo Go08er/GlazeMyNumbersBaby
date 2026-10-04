@@ -190,6 +190,27 @@ fn the_reference_keeps_what_a_huge_exponent_leaves_known() {
 }
 
 #[test]
+fn the_reference_knows_the_sine_of_a_tiny_angle_in_degrees() {
+    use graphing::analysis::truth::{R, reval};
+    // sin(10⁻³²³°) rounds to 0 as a double; the reference must not take
+    // that 0 for the value (sin(x)/x is π/180 there, not 0).
+    for (unit, k) in [
+        (TrigUnit::Degrees, std::f64::consts::PI / 180.0),
+        (TrigUnit::Grads, std::f64::consts::PI / 200.0),
+    ] {
+        let eq = Equation::parse("y=sin(x)/x").unwrap();
+        let (_, ast) = eq.explicit().unwrap();
+        for x in [-1e-323, 5e-324, 1e-310] {
+            match reval(ast, x, unit) {
+                R::V(v) => assert!(ulps(v.f(), k) <= 2.0, "{unit:?} {x:e}: {:e}", v.f()),
+                r => panic!("{unit:?} {x:e}: {r:?}"),
+            }
+            assert!(ulps(prog("sin(x)/x", unit).eval(x, 0.0), k) <= 2.0);
+        }
+    }
+}
+
+#[test]
 fn reciprocals_of_an_underflowing_sine_overflow_rather_than_vanish() {
     // In degrees the sine of 5·10⁻³²⁴ is 8.6·10⁻³²⁶, below every double:
     // it rounds to 0, but it is no zero of the sine, so its reciprocal is
