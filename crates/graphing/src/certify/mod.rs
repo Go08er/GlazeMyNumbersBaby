@@ -69,14 +69,16 @@ pub struct Analysis {
     /// convention, sliders); absent from older certificates.
     #[serde(default)]
     pub binding: Option<Binding>,
-    /// Interval evaluations spent.
+    /// Interval evaluations spent, in budget units (an evaluation of a
+    /// big tree costs several: [`fun::UNIT_WORK`]).
     pub evals: u64,
     /// Set if the budget ran out or the caller cancelled.
     pub stopped: Option<String>,
 }
 
-/// Evaluations per phase (domain, f, f′, f″, the rows) unless a budget is
-/// given.
+/// The evaluation budget, in units of [`fun::UNIT_WORK`] (an evaluation
+/// of a tree up to that size, more for a bigger one), shared out over the
+/// phases (domain, f, f′, f″, the rows) unless a budget is given.
 pub const DEFAULT_BUDGET: u64 = 200_000;
 
 /// The half-width of the window the covers start from: four times the

@@ -88,7 +88,10 @@ How numbers are written:
 * **Otherwise to as many significant digits as the enclosure fixes, up to
   six and at least three** (every value in it rounds alike to that many),
   marked "≈" when the text has fewer than six (`≈1`, `≈0.5`, `≈1.414`:
-  trailing zeros trimmed). Accessibility reads "≈" as "approximately". The
+  trailing zeros trimmed). No decimal is written past the sixth
+  significant digit (`166254`, not `166253.7622`); below 10⁹ the digits
+  before the point all stay (`545843449`), so a value and the integer it
+  rounds to read alike. Accessibility reads "≈" as "approximately". The
   minimum is one switch, `MIN_SHOWN_DIGITS` in
   `crates/graphing/src/analysis/certified.rs`: 6 restores the strict rule
   (all six digits fixed, or the row is unknown).
