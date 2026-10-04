@@ -287,9 +287,16 @@ impl Cover {
         Cover { leaves, stopped }
     }
 
-    /// True when every leaf is decided.
+    /// True when every leaf is decided, for a cover of boxes inside f's
+    /// domain: a box where the evaluated tree is undefined contradicts the
+    /// domain (a simplified form read differently), so it counts as
+    /// undecided.
     pub fn complete(&self) -> bool {
-        self.stopped.is_none() && !self.leaves.iter().any(|l| matches!(l, Leaf::Flag { .. }))
+        self.stopped.is_none()
+            && !self
+                .leaves
+                .iter()
+                .any(|l| matches!(l, Leaf::Flag { .. } | Leaf::Undefined { .. }))
     }
 }
 

@@ -87,7 +87,8 @@ pub fn zeros(c0: &Cover, boxes: &[IBox], whole: bool, w: f64, extra: &[Claim]) -
 // ---------------------------------------------------------- y-intercept
 
 pub fn y_intercept(f: &Fun<'_>) -> Result<Row<Option<Enc>>, Stop> {
-    let v = f.val(Interval::point(0.0))?;
+    // The original tree: 0 may be a hole the simplified form fills.
+    let v = f.ser_of(&f.expr, Interval::point(0.0), 0)?[0];
     let mut c = Certificate::new(Region::Points);
     if v.is_empty() {
         c.push(Claim::Undefined {
@@ -212,6 +213,10 @@ fn changes(segs: &[Seg]) -> (Vec<(Enc, bool)>, bool) {
             Seg::Flat | Seg::Unknown => complete = false,
             Seg::Sign(_) => {}
         }
+    }
+    // ≡ 0 on the whole box: no strict change of sign anywhere in it.
+    if segs == [Seg::Flat] {
+        complete = true;
     }
     (out, complete)
 }
@@ -432,6 +437,17 @@ fn sign_beside(c0: &Cover, ib: &IBox, at_start: bool, boxes: &[IBox]) -> Option<
     match *leaf {
         Leaf::Band { band, .. } => Some(band == 1),
         Leaf::Touch { above, .. } => Some(above),
+        // Before the crossing h is on the side it rises from; after it, on
+        // the side it rises to (the crossing is inside, or at the far end).
+        Leaf::Cross { a, b, l, r, rising, .. } => {
+            if at_start && a < l {
+                Some(!rising)
+            } else if !at_start && r < b {
+                Some(rising)
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -444,7 +460,7 @@ fn classify(f: &Fun<'_>, x: Enc, boxes: &[IBox]) -> Result<(super::pole::Near, O
         return Ok((Near::Unknown, None));
     };
     let near = XBox::new(n.lo(), n.hi());
-    if pole(f, &f.expr, n)? {
+    if pole(f, &f.eval, n)? {
         return Ok((
             Near::Pole,
             Some(Claim::Unbounded {
@@ -555,7 +571,7 @@ pub fn vertical(f: &Fun<'_>, dom: &Domain, c0: &Cover, boxes: &[IBox], whole: bo
         let p = if from_right { x.hi.0 } else { x.lo.0 };
         let n = beside(p, ib, from_right);
         let near = XBox::new(n.lo(), n.hi());
-        if x.is_point() && end_pole(f, &f.expr, n, p)? {
+        if x.is_point() && end_pole(f, &f.eval, n, p)? {
             out.push(Spot::At(x));
             c.push(Claim::Unbounded {
                 near,
@@ -596,18 +612,262 @@ fn looks_like(y: Enc) -> Option<R> {
     (y.lo.0 - slack <= v && v <= y.hi.0 + slack).then_some(R(v))
 }
 
-/// What f does on a tail: tends to ±∞, tends to a limit (enclosed), or not
-/// decided.
-#[derive(Clone, Copy, Debug)]
+
+/// What f does on a tail: tends to ±∞, tends to a limit (enclosed, and
+/// exactly when the simplifier proved it), or not decided.
+#[derive(Clone, Debug)]
 pub enum TailEnd {
     Infinite(bool),
-    Level(Enc),
+    Level(Enc, Option<String>),
     Unknown,
 }
 
 /// How f ends on the right (`right`) or left tail beyond `from`, with the
-/// claims that prove it.
+/// claims that prove it: from intervals, and from the simplifier's limit
+/// (dominant terms, exact rational functions) when intervals fall short
+/// or to pin an enclosed limit down exactly.
 pub fn tail_end(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Claim>), Stop> {
+    let (end, mut claims) = tail_interval(f, right, from)?;
+    if matches!(end, TailEnd::Infinite(_)) {
+        return Ok((end, claims));
+    }
+    let Some((lim, fact)) = simplifier_limit(f, right) else {
+        return Ok((end, claims));
+    };
+    let out = match (end, lim) {
+        (TailEnd::Unknown, lim) => lim,
+        // Both enclose the same limit.
+        (TailEnd::Level(e, _), TailEnd::Level(y, exact)) => {
+            let (lo, hi) = (e.lo.0.max(y.lo.0), e.hi.0.min(y.hi.0));
+            if lo > hi {
+                return Ok((TailEnd::Unknown, Vec::new()));
+            }
+            TailEnd::Level(Enc::new(lo, hi), exact)
+        }
+        // A bounded tail can't go to ±∞: the two disagree, so neither is
+        // trusted.
+        _ => return Ok((TailEnd::Unknown, Vec::new())),
+    };
+    claims.push(fact);
+    Ok((out, claims))
+}
+
+/// The simplifier's limit of f at ±∞, as a tail end with its claim.
+fn simplifier_limit(f: &Fun<'_>, right: bool) -> Option<(TailEnd, Claim)> {
+    use crate::simplify::{Dir, Limit, limit_at};
+    if f.cancelled() {
+        return None;
+    }
+    let s = f.settings()?;
+    let dir = if right { Dir::PosInf } else { Dir::NegInf };
+    let at = if right { "+∞" } else { "−∞" };
+    let (end, says) = match limit_at(&f.expr, dir, &s) {
+        Limit::PosInf => (TailEnd::Infinite(true), "+∞".to_string()),
+        Limit::NegInf => (TailEnd::Infinite(false), "−∞".to_string()),
+        Limit::Exact(v) => {
+            let mut iv = v.q.interval();
+            for _ in 0..v.k.unsigned_abs() {
+                iv = if v.k > 0 {
+                    iv * crate::interval::elem::pi()
+                } else {
+                    iv / crate::interval::elem::pi()
+                };
+            }
+            if iv.is_empty() || !iv.is_bounded() {
+                return None;
+            }
+            let text = pi_q(v);
+            (TailEnd::Level(Enc::new(iv.lo(), iv.hi()), Some(text.clone())), text)
+        }
+        Limit::Approx(iv) => {
+            if iv.is_empty() || !iv.is_bounded() {
+                return None;
+            }
+            (
+                TailEnd::Level(Enc::new(iv.lo(), iv.hi()), None),
+                format!("in [{:e}, {:e}]", iv.lo(), iv.hi()),
+            )
+        }
+        Limit::Unknown => return None,
+    };
+    let fact = format!("f → {says} as x → {at}");
+    Some((end, Claim::Simplifier { fact }))
+}
+
+/// An enclosure of q·πᵏ.
+fn piq_interval(v: crate::simplify::PiQ) -> Option<Interval> {
+    let mut iv = v.q.interval();
+    for _ in 0..v.k.unsigned_abs() {
+        iv = if v.k > 0 {
+            iv * crate::interval::elem::pi()
+        } else {
+            iv / crate::interval::elem::pi()
+        };
+    }
+    (!iv.is_empty() && iv.is_bounded()).then_some(iv)
+}
+
+// ---------------------------------------------------------- period
+
+/// The most primes a least-period proof checks.
+const MAX_PRIMES: u64 = 200;
+
+fn primes_upto(n: u64) -> Vec<u64> {
+    (2..=n)
+        .filter(|&p| (2..).take_while(|d| d * d <= p).all(|d| p % d != 0))
+        .collect()
+}
+
+/// The least period, or `None` (not periodic).
+///
+/// *Not periodic*: a certified domain that is a finite union of pieces
+/// other than the whole line can't be invariant under a shift, nor can a
+/// function strictly monotone on a piece reaching ±∞.
+///
+/// *Least period*: the simplifier proves P is a period. A smaller one T
+/// would divide it, P = n·T, and then P/p is a period for each prime p
+/// dividing n, so it is enough to show P/p is no period (two values of f
+/// a shift P/p apart, enclosed apart) for every prime p up to a bound on
+/// n: on a continuous f on ℝ, |f′| ≤ L everywhere (f′ has period P too,
+/// bounded over one) and two values V apart are reached within any T, so
+/// T ≥ V/L and n ≤ P·L/V; with one excluded family of period q, a period
+/// maps the family onto itself, so q divides T and n ≤ P/q.
+pub fn period(f: &Fun<'_>, dom: &Domain, mono: &Row<Vec<Monotone>>) -> Result<Row<Option<Enc>>, Stop> {
+    let line = super::side::line();
+    if let Row::Certified { value: d, cert } = &dom.row
+        && d.excluded.is_empty()
+        && d.pieces != [line]
+    {
+        let mut c = Certificate::new(Region::Line);
+        c.extend(cert.claims.iter().cloned());
+        return Ok(Row::Certified { value: None, cert: c });
+    }
+    if let Row::Certified { value: m, cert } = mono
+        && m.iter().any(|p| p.on.lo == Bound::NegInf || p.on.hi == Bound::PosInf)
+    {
+        let mut c = Certificate::new(Region::Line);
+        c.extend(cert.claims.iter().cloned());
+        return Ok(Row::Certified { value: None, cert: c });
+    }
+    let Some(s) = f.settings() else {
+        return Ok(Row::unknown("no period proven"));
+    };
+    let Some(per) = crate::simplify::prove_period(&f.expr, &s) else {
+        return Ok(Row::unknown("no period proven"));
+    };
+    let Some(pv) = piq_interval(per.value) else {
+        return Ok(Row::unknown("the period is out of range"));
+    };
+    if !(pv.lo() > 0.0) || !dom.row.is_certified() {
+        return Ok(Row::unknown("the period's minimality is not proven"));
+    }
+    let mut c = Certificate::new(Region::Line);
+    c.push(Claim::Simplifier {
+        fact: format!("f(x + {}) = f(x) wherever f is defined", pi_q(per.value)),
+    });
+    // How many times a smaller period could fit in P.
+    let n = if dom.pieces == [line] && dom.families.is_empty() {
+        let k = 64;
+        let w = pv.hi() / k as f64;
+        let mut l: f64 = 0.0;
+        let (mut top, mut bottom) = (f64::NEG_INFINITY, f64::INFINITY);
+        for i in 0..k {
+            let b = Interval::new(i as f64 * w, (i + 1) as f64 * w);
+            let s = f.ser(b, 1)?;
+            if !(usable(&s, 1) && s[1].iv.is_bounded()) {
+                return Ok(Row::unknown("f′ is not bounded over a period"));
+            }
+            let (lo, hi) = s[1].iv.mig_mag();
+            let _ = lo;
+            l = l.max(hi);
+            c.push(Claim::Value {
+                x: XBox::new(b.lo(), b.hi()),
+                of: Subject::f(1),
+                lo: R(s[1].lo()),
+                hi: R(s[1].hi()),
+            });
+            let v = f.val(Interval::point(b.lo()))?;
+            if !v.is_empty() && v.iv.is_bounded() && v.dec >= Dec::Def {
+                c.push(Claim::Value {
+                    x: XBox::point(b.lo()),
+                    of: Subject::f(0),
+                    lo: R(v.lo()),
+                    hi: R(v.hi()),
+                });
+                top = top.max(v.lo());
+                bottom = bottom.min(v.hi());
+            }
+        }
+        let v = top - bottom;
+        if !(v > 0.0) || !(l > 0.0) {
+            return Ok(Row::unknown("the period's minimality is not proven"));
+        }
+        // f′ is (at most) the coefficient bound; round the ratio up.
+        (pv.hi() * l / v * (1.0 + 1e-12)).floor()
+    } else if dom.pieces == [line] && dom.families.len() == 1 {
+        let q = dom.families[0].period;
+        if !(q.lo() > 0.0) {
+            return Ok(Row::unknown("the period's minimality is not proven"));
+        }
+        (pv.hi() / q.lo() * (1.0 + 1e-12)).floor()
+    } else {
+        return Ok(Row::unknown("the period's minimality is not proven"));
+    };
+    if !(n.is_finite() && n <= 1e6) {
+        return Ok(Row::unknown("the period's minimality is not proven"));
+    }
+    let primes = primes_upto(n as u64);
+    if primes.len() as u64 > MAX_PRIMES {
+        return Ok(Row::unknown("the period's minimality is not proven"));
+    }
+    // Each P/p shifts some sample's value away from itself.
+    for p in primes {
+        let shift = pv / Interval::point(p as f64);
+        let mut found = false;
+        for i in 0..24 {
+            let x = 0.1 + i as f64 * pv.mid() / 24.0;
+            let a = f.ser_of(&f.expr, Interval::point(x), 0)?[0];
+            let xs = Interval::point(x) + shift;
+            let b = f.ser_of(&f.expr, xs, 0)?[0];
+            let def = |v: &DecInterval| !v.is_empty() && v.dec >= Dec::Def && v.iv.is_bounded();
+            if def(&a) && def(&b) && (a.hi() < b.lo() || b.hi() < a.lo()) {
+                for (bx, v) in [(Interval::point(x), a), (xs, b)] {
+                    c.push(Claim::Value {
+                        x: XBox::new(bx.lo(), bx.hi()),
+                        of: Subject::f(0),
+                        lo: R(v.lo()),
+                        hi: R(v.hi()),
+                    });
+                }
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return Ok(Row::unknown(format!("P/{p} is not shown to be no period")));
+        }
+    }
+    Ok(Row::Certified {
+        value: Some(Enc::new(pv.lo(), pv.hi())),
+        cert: c,
+    })
+}
+
+/// q·πᵏ written out: `1/2·π`, `-3`, `2·π^-1`.
+fn pi_q(v: crate::simplify::PiQ) -> String {
+    let q = if v.q.is_int() {
+        format!("{}", v.q.numer())
+    } else {
+        format!("{}/{}", v.q.numer(), v.q.denom())
+    };
+    match v.k {
+        0 => q,
+        1 => format!("{q}·π"),
+        k => format!("{q}·π^{k}"),
+    }
+}
+
+fn tail_interval(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Claim>), Stop> {
     let side = if right { Tail::Right } else { Tail::Left };
     let tail = |m: f64| {
         if right {
@@ -620,7 +880,7 @@ pub fn tail_end(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cla
     let from_r = R(if right { start } else { -start });
     // f′ of one sign and moving away from 0 out along the tail (a sign
     // chain through f″, f‴): |f′| ≥ |f′(start)| > 0, so f goes to ±∞.
-    let t = super::cover::Target { expr: &f.expr, k: 1 };
+    let t = super::cover::Target { expr: &f.eval, k: 1 };
     let (a, b) = if right { (start, f64::INFINITY) } else { (f64::NEG_INFINITY, -start) };
     if let Some(Leaf::Band { band, chain, .. }) = super::cover::tail_chain(f, &t, &[0.0], a, b)? {
         let rising = band == 1;
@@ -653,32 +913,36 @@ pub fn tail_end(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cla
         // Rising to the right goes to +∞; rising to the left to −∞.
         return Ok((TailEnd::Infinite(rising == right), vec![claim]));
     }
-    // Strictly monotone: a limit if bounded. Look far out for a narrow
-    // enclosure; the limit lies in it.
-    let mono = Claim::TailBeyond {
+    // Strictly monotone: a limit if bounded. Every enclosure of f far out
+    // holds the limit; keep their intersection.
+    let mut claims = vec![Claim::TailBeyond {
         side,
         from: from_r,
         of: Subject::f(1),
         c: R(0.0),
         above: rising,
-    };
+    }];
+    let mut lim: Option<Interval> = None;
     for m in [1e8_f64, 1e16, 1e32, 1e64, 1e150, 1e300] {
         let m = m.max(start);
         let v = f.val(tail(m))?;
         if v.is_empty() || !v.iv.is_bounded() {
             break;
         }
-        if narrow(&v) {
-            let value = Claim::TailValue {
-                side,
-                from: R(if right { m } else { -m }),
-                lo: R(v.lo()),
-                hi: R(v.hi()),
-            };
-            return Ok((TailEnd::Level(Enc::new(v.lo(), v.hi())), vec![mono, value]));
-        }
+        claims.push(Claim::TailValue {
+            side,
+            from: R(if right { m } else { -m }),
+            lo: R(v.lo()),
+            hi: R(v.hi()),
+        });
+        lim = Some(lim.map_or(v.iv, |l| l.intersect(v.iv)));
     }
-    Ok((TailEnd::Unknown, Vec::new()))
+    match lim {
+        Some(l) if !l.is_empty() && narrow(&DecInterval::new(l)) => {
+            Ok((TailEnd::Level(Enc::new(l.lo(), l.hi()), None), claims))
+        }
+        _ => Ok((TailEnd::Unknown, Vec::new())),
+    }
 }
 
 pub fn horizontal(f: &Fun<'_>, dom: &Domain, whole: bool, w: f64) -> Result<Row<Vec<Horizontal>>, Stop> {
@@ -702,10 +966,11 @@ pub fn horizontal(f: &Fun<'_>, dom: &Domain, whole: bool, w: f64) -> Result<Row<
         let (end, claims) = tail_end(f, right, w)?;
         match end {
             TailEnd::Infinite(_) => {}
-            TailEnd::Level(y) => out.push(Horizontal {
+            TailEnd::Level(y, exact) => out.push(Horizontal {
                 side: if right { Tail::Right } else { Tail::Left },
                 y,
-                looks_like: looks_like(y),
+                looks_like: if exact.is_some() { None } else { looks_like(y) },
+                exact,
             }),
             TailEnd::Unknown => return Ok(Row::unknown("a tail's limit is not decided")),
         }
@@ -713,6 +978,7 @@ pub fn horizontal(f: &Fun<'_>, dom: &Domain, whole: bool, w: f64) -> Result<Row<
     }
     Ok(Row::Certified { value: out, cert: c })
 }
+
 
 // ---------------------------------------------------------- range
 
@@ -828,7 +1094,7 @@ fn end_value(
             cl.extend(claims);
             match end {
                 TailEnd::Infinite(up) => Some(infinite(up)),
-                TailEnd::Level(e) => Some(End {
+                TailEnd::Level(e, _) => Some(End {
                     v: e,
                     closed: false,
                     infinite: None,
@@ -849,15 +1115,18 @@ fn end_value(
             // A pole (two-sided, or at a domain end): ±∞ with f's sign
             // beside it.
             let n = match around(x, boxes) {
-                Some(n) => pole(f, &f.expr, n)?.then_some(n),
+                Some(n) => pole(f, &f.eval, n)?.then_some(n),
                 None => {
                     let p = if is_lo { x.hi.0 } else { x.lo.0 };
                     let n = beside(p, ib, is_lo);
-                    (x.is_point() && end_pole(f, &f.expr, n, p)?).then_some(n)
+                    (x.is_point() && end_pole(f, &f.eval, n, p)?).then_some(n)
                 }
             };
             let Some(n) = n else {
-                return Ok(None);
+                return removable(f, x, around(x, boxes).unwrap_or_else(|| {
+                    let p = if is_lo { x.hi.0 } else { x.lo.0 };
+                    beside(p, ib, is_lo).hull(Interval::new(x.lo.0, x.hi.0))
+                }), cl);
             };
             cl.push(Claim::Unbounded {
                 near: XBox::new(n.lo(), n.hi()),
@@ -866,6 +1135,36 @@ fn end_value(
             sign_beside(c0, ib, is_lo, boxes).map(infinite)
         }
     })
+}
+
+/// f's limit at an excluded point (enclosed by `x`) the evaluated tree
+/// fills in (a removable hole): the tree, equal to f wherever f is
+/// defined, is defined and continuous on `n` around it, so the limit is
+/// the tree's value there. Not attained (an open end).
+fn removable(f: &Fun<'_>, x: Enc, n: Interval, cl: &mut Vec<Claim>) -> Result<Option<End>, Stop> {
+    if f.eval == f.expr {
+        return Ok(None);
+    }
+    let over = f.val(n)?;
+    if over.is_empty() || over.dec < Dec::Dac || !over.iv.is_bounded() {
+        return Ok(None);
+    }
+    let v = f.val(Interval::new(x.lo.0, x.hi.0))?;
+    if v.is_empty() || !v.iv.is_bounded() {
+        return Ok(None);
+    }
+    cl.push(Claim::Removable {
+        near: XBox::new(n.lo(), n.hi()),
+        at: XBox { a: x.lo, b: x.hi },
+        lo: R(v.lo()),
+        hi: R(v.hi()),
+    });
+    Ok(Some(End {
+        v: Enc::new(v.lo(), v.hi()),
+        closed: false,
+        infinite: None,
+        at: None,
+    }))
 }
 
 /// f's value at a point of the domain (enclosed by `x`), attained, with
@@ -912,10 +1211,14 @@ pub fn range(
     let mut cl = claims(c1, &Subject::f(1), &[0.0]);
     let mut images: Vec<(End, End)> = Vec::new();
     for (m, lc, hc) in &pieces {
-        let (Some(a), Some(b)) = (
+        let (a, b) = (
             end_value(f, m.on.lo, *lc, true, boxes, c0, w, &mut cl)?,
             end_value(f, m.on.hi, *hc, false, boxes, c0, w, &mut cl)?,
-        ) else {
+        );
+        if std::env::var_os("CERTIFY_DEBUG").is_some() {
+            eprintln!("range piece {:?}: {a:?} .. {b:?}", m.on);
+        }
+        let (Some(a), Some(b)) = (a, b) else {
             return Ok(Row::unknown("an end of a monotone piece has no proven value"));
         };
         images.push(if m.dir == Dir::Increasing { (a, b) } else { (b, a) });
@@ -962,11 +1265,29 @@ pub fn range(
 
 // ---------------------------------------------------------- parity
 
+/// Even or odd from the simplifier's proof (f(−x) and ±f(x) in one
+/// e-class, on a symmetric domain); neither from two interval witnesses
+/// (one against each); otherwise unknown.
 pub fn parity(f: &Fun<'_>) -> Result<Row<Parity>, Stop> {
+    use crate::simplify::{Parity as P, prove_parity};
+    if let Some(s) = f.settings()
+        && let Some(p) = prove_parity(&f.expr, &s)
+    {
+        let (value, word) = match p {
+            P::Even => (Parity::Even, "even"),
+            P::Odd => (Parity::Odd, "odd"),
+        };
+        let mut c = Certificate::new(Region::Line);
+        c.push(Claim::Simplifier {
+            fact: format!("f is {word}: f(−x) = {}f(x), on a domain symmetric about 0", if word == "odd" { "−" } else { "" }),
+        });
+        return Ok(Row::Certified { value, cert: c });
+    }
     let mut c = Certificate::new(Region::Points);
     let (mut not_even, mut not_odd) = (false, false);
     for x in [0.5, 1.0, 1.7, 2.3, 3.1, 4.6, 7.3, 11.9] {
-        let (a, b) = (f.val(Interval::point(x))?, f.val(Interval::point(-x))?);
+        let at = |p: f64| f.ser_of(&f.expr, Interval::point(p), 0).map(|s| s[0]);
+        let (a, b) = (at(x)?, at(-x)?);
         for (p, v) in [(x, a), (-x, b)] {
             if v.is_empty() {
                 c.push(Claim::Undefined { x: XBox::point(p) });

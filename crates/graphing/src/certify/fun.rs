@@ -54,9 +54,23 @@ pub fn at_path<'e>(e: &'e Expr, path: &[u8]) -> Option<&'e Expr> {
 
 /// The function, its literals and its budget.
 pub struct Fun<'a> {
-    /// The canonical tree.
+    /// The canonical tree: where f is defined comes from its side
+    /// conditions, and side expressions are paths into it.
     pub expr: Expr,
+    /// The canonical tree f's values are enclosed with: `expr`, or the
+    /// simplifier's form of it, equal to f wherever f is defined (it may be
+    /// defined in more places: `(x²−1)/(x−1)` is evaluated as x + 1, so
+    /// nothing cancels near the hole).
+    pub eval: Expr,
+    /// f′ and f″ as trees of their own, when f is a rational function:
+    /// from its exact form N/D, f′ = (N′D − ND′)/D² and f″ = (P′D −
+    /// 2PD′)/D³ with P = N′D − ND′, each numerator expanded exactly (what
+    /// cancels in them cancels exactly, not in interval arithmetic).
+    pub derivs: Option<[Expr; 2]>,
     pub lits: &'a Literals,
+    /// The exact literals, for the simplifier's proofs (none: no
+    /// simplifier).
+    pub exact: Option<&'a crate::simplify::ExactLiterals>,
     pub opts: CompileOptions<'a>,
     evals: Cell<u64>,
     /// The current phase's limit.
@@ -74,15 +88,31 @@ impl<'a> Fun<'a> {
         budget: u64,
         cancel: Option<&'a AtomicBool>,
     ) -> Fun<'a> {
+        let expr = canonical(expr);
         Fun {
-            expr: canonical(expr),
+            eval: expr.clone(),
+            expr,
+            derivs: None,
             lits,
+            exact: None,
             opts,
             evals: Cell::new(0),
             budget: Cell::new(budget),
             total: Cell::new(budget),
             cancel,
         }
+    }
+
+    /// The simplifier's settings for f, when it has its literals.
+    pub fn settings(&self) -> Option<crate::simplify::Settings<'a>> {
+        let mut s = crate::simplify::Settings::new(&self.opts, self.exact?);
+        s.cancel = self.cancel;
+        Some(s)
+    }
+
+    /// The caller's cancel flag.
+    pub fn cancelled(&self) -> bool {
+        self.cancel.is_some_and(|c| c.load(Ordering::Relaxed))
     }
 
     /// Evaluations so far.
@@ -125,15 +155,44 @@ impl<'a> Fun<'a> {
         Ok(taylor(e, x, n, &self.ctx()))
     }
 
-    /// Taylor coefficients of f over the box.
+    /// Taylor coefficients of f over the box (from the evaluated tree).
     pub fn ser(&self, x: Interval, n: usize) -> Result<Series, Stop> {
-        self.ser_of(&self.expr, x, n)
+        self.ser_of(&self.eval, x, n)
     }
 
     /// f over the box.
     pub fn val(&self, x: Interval) -> Result<DecInterval, Stop> {
         Ok(self.ser(x, 0)?[0])
     }
+}
+
+/// f′ and f″ of a rational function from its exact form (see
+/// [`Fun::derivs`]); `None` if f isn't one or the arithmetic would overflow.
+pub fn rational_derivs(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<[Expr; 2]> {
+    use crate::simplify::q::Q;
+    use crate::simplify::rational::Poly;
+    let rf = crate::simplify::rational_form(e, lits)?;
+    let (n, d) = (rf.reduced.num, rf.reduced.den);
+    let deriv = |p: &Poly| -> Option<Poly> {
+        let mut out = Poly::zero();
+        for (i, c) in p.coefficients().iter().enumerate().skip(1) {
+            let term = Poly::x().pow(i as u32 - 1)?.scale(c.mul(Q::int(i as i128))?)?;
+            out = out.add(&term)?;
+        }
+        Some(out)
+    };
+    let (n1, d1) = (deriv(&n)?, deriv(&d)?);
+    let p = n1.mul(&d)?.sub(&n.mul(&d1)?)?;
+    let p2 = deriv(&p)?.mul(&d)?.sub(&p.mul(&d1)?.scale(Q::int(2))?)?;
+    let over = |num: &Poly, k: f64| -> Expr {
+        if d.degree() == Some(0) {
+            // D is monic: 1.
+            num.to_expr()
+        } else {
+            Expr::bin(BinOp::Div, num.to_expr(), Expr::bin(BinOp::Pow, d.to_expr(), Expr::Num(k)))
+        }
+    };
+    Some([canonical(&over(&p, 2.0)), canonical(&over(&p2, 3.0))])
 }
 
 /// The values of the expression's x-free sub-trees: where its features

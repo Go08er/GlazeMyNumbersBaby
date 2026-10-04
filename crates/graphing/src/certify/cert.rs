@@ -249,6 +249,22 @@ pub enum Claim {
     /// simple zero of their cosine, a logarithm of an argument falling to
     /// 0, combined with factors bounded (and away from 0) on `near`.
     Unbounded { near: XBox, at: XBox },
+    /// The evaluated tree (`Analysis::evaluated`, equal to f wherever f is
+    /// defined) is defined and continuous on `near`, which holds `at`, and
+    /// takes values in `[lo, hi]` on `at`: f's limit at the excluded point
+    /// enclosed by `at` (from within `near`) lies in `[lo, hi]` — a
+    /// removable hole.
+    Removable {
+        near: XBox,
+        at: XBox,
+        lo: R,
+        hi: R,
+    },
+    /// A fact proven by the simplifier (`crate::simplify`: equality
+    /// saturation with rules each checked against MPFR, exact rational
+    /// arithmetic, dominant terms), not by intervals; `fact` states it.
+    /// A checker re-derives it with the simplifier, or tests it at points.
+    Simplifier { fact: String },
     /// Nothing is claimed inside this box: it holds an excluded point or a
     /// domain end that is not a double (the box encloses it), or the reals
     /// strictly between an excluded double and the next double. A row is
@@ -409,14 +425,18 @@ pub enum Parity {
 }
 
 /// A horizontal asymptote: f → a limit in `y` as x → ±∞ on `side`.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Horizontal {
     pub side: Tail,
     /// The proven enclosure of the limit ("y ∈ [lo, hi]").
     pub y: Enc,
-    /// A recognised closed form (0, a fraction, a multiple of π or e, a
-    /// surd) inside `y`, when `y` is narrower than anything the panel
-    /// shows. Recognised, not proven: the limit is only known to lie in `y`.
+    /// The limit exactly (q·πᵏ, written like `1/2·π`), when the simplifier
+    /// proved it.
+    pub exact: Option<String>,
+    /// Otherwise, a recognised closed form (0, a fraction, a multiple of π
+    /// or e, a surd) inside `y`, when `y` is narrower than anything the
+    /// panel shows. Recognised, not proven: the limit is only known to lie
+    /// in `y`.
     pub looks_like: Option<R>,
 }
 

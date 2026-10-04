@@ -29,6 +29,7 @@ use crate::compile::CompileOptions;
 use crate::equation::Axis;
 use crate::interval::Literals;
 use crate::lexer::ParseOptions;
+use crate::simplify::ExactLiterals;
 use cover::{Cover, Target};
 use serde::{Deserialize, Serialize};
 
@@ -39,13 +40,18 @@ pub struct Analysis {
     pub source: String,
     /// The canonical tree every claim refers to (prefix notation).
     pub formula: String,
+    /// The tree values were enclosed with, when not `formula`: the
+    /// simplifier's form of f, equal to f wherever f is defined (claims
+    /// about f are checked on it, where f is defined).
+    pub evaluated: Option<String>,
     /// "radians", "degrees" or "grads".
     pub unit: String,
     pub domain: Row<DomainValue>,
     pub x_intercepts: Row<Vec<Spot>>,
     pub y_intercept: Row<Option<Enc>>,
     pub parity: Row<Parity>,
-    pub period: Row<Enc>,
+    /// The least period; `None`: not periodic.
+    pub period: Row<Option<Enc>>,
     pub extrema: Row<Vec<Extremum>>,
     pub inflections: Row<Vec<Inflection>>,
     pub monotonicity: Row<Vec<Monotone>>,
@@ -105,8 +111,40 @@ pub fn certify_text(
         return Err("not a function of x".into());
     };
     let lits = Literals::of(&text, ParseOptions::default()).map_err(|e| format!("{e:?}"))?;
-    let f = Fun::new(expr, &lits, opts, budget, cancel);
+    let exact = ExactLiterals::of(&text, ParseOptions::default()).map_err(|e| format!("{e:?}"))?;
+    let mut f = Fun::new(expr, &lits, opts, budget, cancel);
+    f.exact = Some(&exact);
+    if let Some(g) = rewrite(&f) {
+        f.eval = canonical(&g);
+    }
+    f.derivs = fun::rational_derivs(&f.expr, &exact);
     Ok(certify(&f, &text))
+}
+
+/// The simplifier's form of f to enclose values with, if it changed f and
+/// every constant in it is enclosed soundly by [`Literals`]: an integer the
+/// simplifier computed from inexact numbers would be read back as exact.
+fn rewrite(f: &Fun<'_>) -> Option<crate::ast::Expr> {
+    use crate::simplify::lang::Math;
+    let settings = f.settings()?;
+    let s = crate::simplify::simplify(&f.expr, &settings).ok()?;
+    if !s.changed {
+        return None;
+    }
+    let mut typed = Vec::new();
+    f.expr.visit(&mut |n| {
+        if let crate::ast::Expr::Num(v) = n {
+            typed.push(v.abs());
+        }
+    });
+    let unsound = s.term.as_ref().iter().any(|n| match n {
+        Math::Real(r) => {
+            let v = r.value().abs();
+            v == v.trunc() && v <= 9007199254740992.0 && !typed.contains(&v)
+        }
+        _ => false,
+    });
+    (!unsound).then_some(s.expr)
 }
 
 fn stop(s: Stop) -> String {
@@ -118,6 +156,20 @@ fn stop(s: Stop) -> String {
 
 fn or_unknown<T>(r: Result<Row<T>, Stop>) -> Row<T> {
     r.unwrap_or_else(|s| Row::unknown(stop(s)))
+}
+
+/// The trees values were enclosed with, when not the formula's: the
+/// simplified form, and f′, f″ of a rational function.
+fn evaluated(f: &Fun<'_>) -> Option<String> {
+    let mut parts = Vec::new();
+    if f.eval != f.expr {
+        parts.push(format!("f = {}", f.eval.formula()));
+    }
+    if let Some([d1, d2]) = &f.derivs {
+        parts.push(format!("f′ = {}", d1.formula()));
+        parts.push(format!("f″ = {}", d2.formula()));
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
 }
 
 /// The row with `extra` claims added to its certificate.
@@ -151,9 +203,21 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         }
         spans.push((b.a, b.b));
     }
+    // f⁽ᵏ⁾ from f's Taylor coefficients; for a rational f, if that leaves
+    // boxes undecided, again from the exact derivative's own tree (its
+    // numerator expanded, so what cancels there cancels exactly), keeping
+    // whichever cover is complete.
     let cover = |k: usize| {
         f.allow(phase);
-        Cover::run(f, &Target { expr: &f.expr, k }, &[0.0], &spans)
+        let c = Cover::run(f, &Target { expr: &f.eval, k }, &[0.0], &spans);
+        match &f.derivs {
+            Some(d) if k > 0 && !c.complete() => {
+                f.allow(phase);
+                let r = Cover::run(f, &Target { expr: &d[k - 1], k: 0 }, &[0.0], &spans);
+                if r.complete() { r } else { c }
+            }
+            _ => c,
+        }
     };
     let (c0, c1, c2) = (cover(0), cover(1), cover(2));
     if std::env::var_os("CERTIFY_DEBUG").is_some() {
@@ -187,18 +251,19 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     // every certificate built on the boxes.
     let mut gap_claims = gaps.clone();
     gap_claims.extend(dom.claims.iter().filter(|c| matches!(c, Claim::Family { .. })).cloned());
-
-    let analysis = Analysis {
+    let monotonicity = with(rows::monotonicity(&c1, &boxes, whole, w), &gap_claims);
+    Analysis {
         source: source.to_string(),
         formula: f.expr.formula(),
+        evaluated: evaluated(f),
         unit: unit_name(f.opts.trig_unit).into(),
         x_intercepts: rows::zeros(&c0, &boxes, whole, w, &gap_claims),
         y_intercept: or_unknown(rows::y_intercept(f)),
         parity: or_unknown(rows::parity(f)),
-        period: Row::unknown("periods are proven only by simplification"),
+        period: or_unknown(rows::period(f, &dom, &monotonicity)),
         extrema: with(or_unknown(rows::extrema(f, &c1, &boxes, whole, w)), &gap_claims),
         inflections: with(or_unknown(rows::inflections(f, &c2, &boxes, whole, w)), &gap_claims),
-        monotonicity: with(rows::monotonicity(&c1, &boxes, whole, w), &gap_claims),
+        monotonicity,
         range: with(or_unknown(rows::range(f, &dom, &c0, &c1, &boxes, whole, w)), &gap_claims),
         vertical: with(or_unknown(rows::vertical(f, &dom, &c0, &boxes, whole)), &gap_claims),
         horizontal: or_unknown(rows::horizontal(f, &dom, whole, w)),
@@ -209,6 +274,5 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             .flatten()
             .next()
             .map(stop),
-    };
-    analysis
+    }
 }

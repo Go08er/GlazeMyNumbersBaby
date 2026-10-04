@@ -90,6 +90,9 @@ fn list<T>(v: &[T], f: impl Fn(&T) -> String) -> String {
 
 fn print(a: &Analysis, ms: f64) {
     println!("y = {}   [{}]   {} evaluations, {ms:.1} ms", a.source, a.unit, a.evals);
+    if let Some(g) = &a.evaluated {
+        println!("  (evaluated as {g})");
+    }
     row("domain", &a.domain, |d| {
         let mut s = list(&d.pieces, piece);
         for f in &d.excluded {
@@ -103,7 +106,10 @@ fn print(a: &Analysis, ms: f64) {
         None => "none".into(),
     });
     row("parity", &a.parity, |p| format!("{p:?}"));
-    row("period", &a.period, enc);
+    row("period", &a.period, |p| match p {
+        Some(e) => enc(e),
+        None => "not periodic".into(),
+    });
     row("extrema", &a.extrema, |v| {
         list(v, |e| {
             format!(
@@ -123,9 +129,10 @@ fn print(a: &Analysis, ms: f64) {
     row("range", &a.range, |v| list(v, piece));
     row("vertical", &a.vertical, |v| list(v, spot));
     row("horizontal", &a.horizontal, |v| {
-        list(v, |h: &Horizontal| match h.looks_like {
-            Some(y) => format!("y ∈ {} (looks like {}) ({:?})", enc(&h.y), y.0, h.side),
-            None => format!("y ∈ {} ({:?})", enc(&h.y), h.side),
+        list(v, |h: &Horizontal| match (&h.exact, h.looks_like) {
+            (Some(x), _) => format!("y = {x} ∈ {} ({:?})", enc(&h.y), h.side),
+            (None, Some(y)) => format!("y ∈ {} (looks like {}) ({:?})", enc(&h.y), y.0, h.side),
+            (None, None) => format!("y ∈ {} ({:?})", enc(&h.y), h.side),
         })
     });
     if let Some(s) = &a.stopped {
@@ -156,7 +163,10 @@ fn main() {
             Ok(a) => {
                 let ms = t.elapsed().as_secs_f64() * 1e3;
                 if json {
-                    println!("{}", serde_json_like(&a));
+                    match serde_json::to_string_pretty(&a) {
+                        Ok(s) => println!("{s}"),
+                        Err(e) => println!("y = {src}: {e}"),
+                    }
                 } else {
                     print(&a, ms);
                 }
@@ -164,10 +174,4 @@ fn main() {
             Err(e) => println!("y = {src}: {e}"),
         }
     }
-}
-
-/// The analysis as JSON (through serde's derive, without a JSON crate in
-/// the library: the example builds a tiny writer over `Debug` instead).
-fn serde_json_like(a: &Analysis) -> String {
-    format!("{a:#?}")
 }
