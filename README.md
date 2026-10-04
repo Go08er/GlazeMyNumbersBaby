@@ -191,7 +191,7 @@ crates/calcvm       StandardCalculatorViewModel & friends (UI-agnostic)
 crates/unitconv     UnitConverter engine, unit tables, currency, view model
 crates/datecalc     DateCalculator + its view model
 crates/copypaste    CopyPasteManager (paste validation → key sequences)
-crates/graphing     Numeric graphing engine (parser, sampler, analysis)
+crates/graphing     Graphing engine (parser, sampler, certified analysis)
 crates/appcore      Everything the twins share that isn't drawing: modes, key
                     layouts and the keyboard map, settings, colour maths,
                     graph sessions, a tiny D-Bus client, time zone fix
@@ -211,7 +211,8 @@ checks graph analysis against about 3,400 generated functions (shifted,
 offset, scaled and stretched variants, close and far centres, jumps,
 incommensurate sums, values beyond a double's range) for claims the
 function's own values contradict, and exits with an error if it finds one;
-`--ungated` checks the engine without the app's own check (below).
+`--legacy` checks the earlier sampling engine behind its own check, and
+`--ungated` that engine alone.
 `cargo run --release -p graphing --example oracle` is a second, deliberately
 independent check of the same answers (it shares none of the app's checking
 code, only its formatter and reference evaluator). The D-Bus and
@@ -246,17 +247,22 @@ out at `reference/calculator` to regenerate the golden files.
   cache them, and fall back to a bundled snapshot when offline.
 - **Graphing uses a new numeric engine.** The original graphing engine is
   proprietary (open-source builds contain only a mock). This engine was
-  written against the original's interfaces and reproduces its features
-  numerically: explicit, implicit and inequality plots, variables with
-  sliders, tracing, and key-graph-feature analysis. Being numeric, the
-  analysis checks each of its answers against the function's own values
-  before showing it (sampled near the origin, far out to 10¹⁵, around up
-  to 64 centres taken from the numbers and constant parts of the
-  expression, and around each feature it reports), and says "Unable to
-  calculate …" for any answer those values contradict or that sampling
-  can't stand behind. No answer shown is contradicted by a value the check
-  computed; that is not a proof, since a feature can still hide between
-  samples.
+  written against the original's interfaces and reproduces its features:
+  explicit, implicit and inequality plots, variables with sliders, tracing,
+  and key-graph-feature analysis. The analysis panel shows only what is
+  proven: every row comes from a certified analysis (interval arithmetic
+  with directed rounding and an exact simplifier) that either proves the
+  answer complete, proves the items it lists but not that they are all
+  (the row then says where it is complete, or that there may be more), or
+  says "Unable to calculate …" rather than "none". Numbers are exact
+  (`√2`, `π/2 + kπ`, `−9/4`) only when exact arithmetic confirms them;
+  otherwise they are shown to the six significant digits the proof fixes,
+  marked "≈" where the text could pass for exact, or not at all. This is
+  more conservative than Windows' symbolic engine: functions it can't prove
+  (corners like |x|, some poles and far features) get fewer answers.
+  Windows-parity of the analysis is not claimed; the conventions it
+  follows where Windows' choice isn't known are in
+  [docs/ti-conventions.md](docs/ti-conventions.md).
 - **Keep on top** switches to the original's compact overlay, but Wayland
   has no client-side "always on top": pin it with your compositor (e.g. a
   niri window rule for the app ID).

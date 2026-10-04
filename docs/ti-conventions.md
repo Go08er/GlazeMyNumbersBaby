@@ -56,15 +56,40 @@ tested against Microsoft's own engine.
 
 ## The certified analysis
 
-Applies to `crates/graphing/src/certify`, the proof-carrying analysis that
-will back the panel. Its rows follow what the panel already shows (Windows'
-key-graph-features rows), with these choices where that isn't settled:
+Applies to the function analysis panel in both apps: `crates/graphing/src/certify`
+proves each row, and `crates/graphing/src/analysis/certified.rs` writes the
+panel from the proofs. Its rows follow Windows' key-graph-features panel; where
+Windows' behaviour is known it is followed, otherwise the TI-84 Plus CE's,
+otherwise the mathematically clearest choice, as below.
 
 | Row | Choice | Why |
 | --- | --- | --- |
-| Minima, maxima | strict turning points only: where f′ changes sign. A closed end of the domain (√x at 0) is not listed | Windows' panel lists turning points, as the current engine does; the TI's fMin/fMax answer a different question (an extremum over an interval the user picks) |
-| Minima, maxima, inflections of a constant stretch (`x/x`) | none: no strict turn, no change of concavity | the same rule; nothing to point at |
-| Monotonicity of a constant stretch | "constant" | Windows' panel has that text (`GraphingEnums.h`) |
-| Period of a constant function | not periodic | every number is a period, none is the least; the current engine and the simplifier say "not periodic" |
-| Features of a periodic function | one family `x₀ + k·P` per feature in one period | Windows' panel shows families; P is the period the simplifier proves |
-| Horizontal asymptote | the limit is proven to an enclosure; shown exactly only when the simplifier proves it exactly | a value the panel rounds is not a proof; how the panel shows "y ≈ 0.5" is decided when it is wired in |
+| Minima, maxima | strict local extrema, never global ones: where f′ changes sign, **and a closed end of the domain where f rises or falls away from it** (√x has a minimum (0, 0); asin x has (−1, −π/2) and (1, π/2)) | Windows lists endpoint extrema; a local extremum at a domain end is one by the textbook definition |
+| Minima, maxima, inflections of a constant stretch (`x/x`) | none: no strict turn, no change of concavity | a plateau has no strict extremum; nothing to point at |
+| Monotonicity | each piece open, `(a, b)`, strictly increasing or decreasing on it; "constant" where f′ ≡ 0 | Windows' panel shows open intervals and has the "constant" text (`GraphingEnums.h`) |
+| Parity of the zero function | "both even and odd" (on a domain symmetric about 0) | it is both; neither "even" nor "odd" alone is the whole answer |
+| Period of a constant function | "constant: it has no fundamental period" | every number is a period and none is the least; "not periodic" would be false |
+| Asymptotes of a line (a constant, m·x + b, holes aside) | none | its graph is the line itself, not something it approaches |
+| Features of a periodic function | one family `x₀ + k·P` per feature (families evenly spaced by P/n merged: `kπ`) | Windows' panel shows families; P is the period the simplifier proves |
+| A list proven correct but not complete | shown, with a note: "Complete for a ≤ x ≤ b; there may be more outside." or "These are some of them; there may be more." (none found in the window: "Unable to calculate …" with "None for a ≤ x ≤ b; …") | the items are proven; claiming "that's all" isn't |
+| A row not proven | "Unable to calculate …", listed in the too-complex footer, never "none" | "none" is a claim; an unfinished proof (budget, cancellation) is not one |
+
+How numbers are written:
+
+* **Exactly**, only when proven exact: a double the certifier pinned, or a
+  closed form (a rational, a + b√c, a rational multiple of π, the special
+  values of sin, cos, tan and their inverses) that exact arithmetic checks
+  against the claim pinning the point down (f, f′ or f″ is 0 there exactly,
+  or a side expression takes its level, on a box where that crossing is
+  proven unique); excluded families from the trigonometric table; a value
+  f takes at an exact point; an exact limit (rational functions, the
+  simplifier's limits and periods). A rounded pole or hole is never shown
+  as exact.
+* **Otherwise to six significant digits, only when the enclosure fixes all
+  six** (every value in it rounds alike), marked "≈" when the text could
+  read as exact (`≈1`, `≈0.5`: trailing zeros trimmed). Accessibility reads
+  "≈" as "approximately".
+* **Not at all** when six digits aren't fixed: the row is unknown. A value
+  that may be 0 is never written "0" or "≈0", and a closed range bound (a
+  value f takes) is written only when exact or known to its last few
+  doubles: "0", "none" and "attained" get no rounding allowance.
