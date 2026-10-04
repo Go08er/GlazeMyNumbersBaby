@@ -309,3 +309,17 @@ fn cancellation_mid_flight_is_prompt() {
         assert!(cancelled && lag < prompt);
     }
 }
+
+/// sin and cos over two adjacent doubles a half turn or more apart (past
+/// 2⁵³, as 1/x near 0 reaches): nothing to split at, so the whole of
+/// [−1, 1], not a split that recurses forever. sin(1/x) and x·sin(1/x)
+/// analyse on a small stack.
+#[test]
+fn trig_of_huge_arguments_does_not_recurse() {
+    on_small_stack(|| {
+        for src in ["y=sin(1/x)", "y=x*sin(1/x)", "y=cos(1/x^2)"] {
+            let r = graphing::analysis::analyze_str(src);
+            assert_eq!(r.analysis_error, AnalysisError::NoError, "{src}");
+        }
+    });
+}

@@ -749,6 +749,11 @@ fn sin_cos_ivs(iv: Interval, unit: TrigUnit) -> (Interval, Interval) {
     }
     if half_turn_or_more(iv, unit) {
         let m = iv.mid();
+        // Two adjacent doubles a half turn or more apart (beyond 2⁵³ or
+        // so): no double between to split at.
+        if !(iv.lo() < m && m < iv.hi()) {
+            return (full, full);
+        }
         let (sa, ca) = sin_cos_ivs(Interval::new(iv.lo(), m), unit);
         let (sb, cb) = sin_cos_ivs(Interval::new(m, iv.hi()), unit);
         return (sa.hull(sb), ca.hull(cb));
