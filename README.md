@@ -204,7 +204,7 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **772 tests** (counts include
+`nix develop -c cargo test --workspace` runs **796 tests** (counts include
 doctests; two more, a live currency fetch and the full metamorphic graph
 sweep, are `#[ignore]`d). `cargo run --release -p graphing --example sweep`
 checks graph analysis against about 3,400 generated functions (shifted,
@@ -232,6 +232,7 @@ upstream sources with g++:
 | datecalc (40), copypaste (40) | Ports of `DateCalculatorTests` and `CopyPasteManagerTests`, plus paste key-sequence tests |
 | graphing (281 + 1 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance) and holes, tracing values and steep-curve stepping, implicit/inequality plots, function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses, and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis) |
 | appcore (43) | Keyboard map, key scripts, converter paste validation, settings storage (huge/corrupt files), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
+| crmath (1) | The vendored CORE-MATH's two builds (baseline and x86-64-v3) give the same bits |
 | gmnb (5), gmnb-launcher (2), dgmnb (36) | GDK key translation, palette contrast for extreme accents, settings compatibility, the launcher's CPU check; DGMNB text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown, pipe deadlines, and X11 paste (formats, size caps, deadlines under event floods) against a private Xvfb |
 
 The oracles live in `tools/oracle/` and need the upstream repository checked
