@@ -64,6 +64,15 @@
 //! (dropping a claim changes what the others are checked against), within
 //! [`GATE_BUDGET`] units of work, polling cancellation as it goes; what it
 //! couldn't finish is dropped, never kept.
+//!
+//! Evidence a check finds but can't settle (a sampled turn it can't place,
+//! a candidate past its caps nothing accounts for: 48 candidate turns get
+//! the full tests for a periodic f, 176 otherwise, and 512 more the cheaper
+//! ones) leaves the feature unverified ([`Report::doubt`]), never
+//! discarded. A value only the compiled program has, the reference
+//! abstaining (or a constant part folding to another double), is no
+//! evidence for anything: what is checked with it is unverified. And where
+//! the domain is unknown, so are the "none" answers found by scanning it.
 
 #![allow(missing_docs)]
 
