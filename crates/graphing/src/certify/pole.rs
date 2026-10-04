@@ -83,7 +83,8 @@ pub fn pole(f: &Fun<'_>, e: &Expr, n: Interval) -> Result<bool, Stop> {
             (pole(f, a, n)? && nonzero_cont(f, b, n)?) || (pole(f, b, n)? && nonzero_cont(f, a, n)?)
         }
         Expr::Bin(BinOp::Div, a, b) => {
-            (vanishes(f, b, n)? && nonzero_cont(f, a, n)?) || (pole(f, a, n)? && nonzero_cont(f, b, n)?)
+            (vanishes(f, b, n)? && nonzero_cont(f, a, n)?)
+                || (pole(f, a, n)? && nonzero_cont(f, b, n)?)
         }
         Expr::Bin(BinOp::Pow, a, b) => match syntactic_rational(b) {
             Some((p, 1)) if p > 0 => pole(f, a, n)?,
@@ -119,7 +120,8 @@ pub fn pole_free(f: &Fun<'_>, e: &Expr, n: Interval) -> Result<bool, Stop> {
     Ok(match e {
         Expr::Neg(a) => pole_free(f, a, n)?,
         Expr::Bin(BinOp::Mul, a, b) => {
-            (pole_free(f, a, n)? && nonzero_cont(f, b, n)?) || (pole_free(f, b, n)? && nonzero_cont(f, a, n)?)
+            (pole_free(f, a, n)? && nonzero_cont(f, b, n)?)
+                || (pole_free(f, b, n)? && nonzero_cont(f, a, n)?)
         }
         Expr::Bin(BinOp::Div, a, b) => {
             (vanishes(f, b, n)? && nonzero_cont(f, a, n)?)

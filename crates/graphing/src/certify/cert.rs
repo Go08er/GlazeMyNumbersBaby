@@ -176,12 +176,7 @@ pub enum Claim {
     /// The subject equals `c` exactly at the double `at`, and is
     /// continuous and strictly monotone on the box: `at` is the only
     /// place in the box where it equals `c`.
-    ExactAt {
-        x: XBox,
-        of: Subject,
-        c: R,
-        at: R,
-    },
+    ExactAt { x: XBox, of: Subject, c: R, at: R },
     /// The subject is continuous on the box, strictly on side `above` of
     /// `c` = 0 there: each of its zero factors (`certify::fun::zero_factors`
     /// of its tree; its zeros are among theirs) stays away from 0 on the
@@ -208,21 +203,12 @@ pub enum Claim {
         above: bool,
     },
     /// The subject is valid on the box with values in `[lo, hi]`.
-    Value {
-        x: XBox,
-        of: Subject,
-        lo: R,
-        hi: R,
-    },
+    Value { x: XBox, of: Subject, lo: R, hi: R },
     /// Table fact: the side expression (`of` is a `G`) is s(a·x + b) for s
     /// one of sin, cos, tan, cot, 1 ± sin, 1 ± cos, cos − 1, sin − 1 (in
     /// the analysis' unit), and is 0 exactly at `x0 + k·period`, k ∈ ℤ
     /// (both enclosed).
-    Family {
-        of: Subject,
-        x0: XBox,
-        period: XBox,
-    },
+    Family { of: Subject, x0: XBox, period: XBox },
     /// The subject is valid and strictly on one side of `c` on the whole
     /// tail.
     TailBeyond {
@@ -248,12 +234,7 @@ pub enum Claim {
         order: u8,
     },
     /// f is defined on the whole tail with values in `[lo, hi]`.
-    TailValue {
-        side: Tail,
-        from: R,
-        lo: R,
-        hi: R,
-    },
+    TailValue { side: Tail, from: R, lo: R, hi: R },
     /// |f| → ∞ at the one excluded point enclosed by `at`, approached
     /// inside `near` (from both sides, or only from the side of `near`
     /// that `at` doesn't end). Proven from the tree's structure: a divisor
@@ -266,12 +247,7 @@ pub enum Claim {
     /// takes values in `[lo, hi]` on `at`: f's limit at the excluded point
     /// enclosed by `at` (from within `near`) lies in `[lo, hi]` — a
     /// removable hole.
-    Removable {
-        near: XBox,
-        at: XBox,
-        lo: R,
-        hi: R,
-    },
+    Removable { near: XBox, at: XBox, lo: R, hi: R },
     /// A fact proven by the simplifier (`crate::simplify`: equality
     /// saturation with rules each checked against MPFR, exact rational
     /// arithmetic, dominant terms), not by intervals; `fact` states it.
@@ -335,7 +311,10 @@ pub struct Enc {
 
 impl Enc {
     pub fn new(lo: f64, hi: f64) -> Enc {
-        Enc { lo: R(lo), hi: R(hi) }
+        Enc {
+            lo: R(lo),
+            hi: R(hi),
+        }
     }
 
     pub fn point(v: f64) -> Enc {
@@ -365,7 +344,10 @@ pub enum Bound {
     NegInf,
     PosInf,
     /// At a point (enclosed), included when `closed`.
-    At { x: Enc, closed: bool },
+    At {
+        x: Enc,
+        closed: bool,
+    },
 }
 
 /// An interval of the line between two bounds.

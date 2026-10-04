@@ -346,8 +346,7 @@ fn step(
     // overflow) rarely helps.
     // So too a box within 10⁻¹⁵⁰ of 0 (where f′ of 1/x or ln x
     // overflows, and splitting only descends through the subnormals).
-    let near0 = a < b
-        && ((a >= 0.0 && b <= NEAR_END) || (b <= 0.0 && a >= -NEAR_END));
+    let near0 = a < b && ((a >= 0.0 && b <= NEAR_END) || (b <= 0.0 && a >= -NEAR_END));
     let far = a >= REACH || b <= -REACH || near0;
     let split_or_flag = |why: &'static str| -> Result<Step, Stop> {
         if far {
@@ -408,7 +407,8 @@ fn step(
         Place::Many => None,
         Place::Touches(j) => Some(j),
     };
-    if !finite && (a.is_finite() || b.is_finite())
+    if !finite
+        && (a.is_finite() || b.is_finite())
         && let Some(leaf) = tail_chain(fun, t, cs, a, b)?
     {
         return Ok(Step::Leaves(vec![leaf]));
@@ -546,7 +546,13 @@ fn by_factors(
     }
     // The sign, at a point of the box other than the zero.
     let q = match (a.is_finite(), b.is_finite(), at) {
-        (true, true, Some(p)) => if p == a { b } else { a },
+        (true, true, Some(p)) => {
+            if p == a {
+                b
+            } else {
+                a
+            }
+        }
         (true, true, None) => a / 2.0 + b / 2.0,
         (true, false, _) => a.abs().max(1.0) * 2.0 + a,
         (false, true, _) => b - b.abs().max(1.0) * 2.0,
@@ -588,7 +594,13 @@ const CHAIN_ORDER: usize = 3;
 /// derivative means smaller values further out). Each then keeps its sign
 /// out along the tail, one order at a time. This decides tails whose
 /// enclosure suffers ∞ − ∞ (x⁴ − x²) once a higher derivative doesn't.
-pub fn tail_chain(fun: &Fun<'_>, t: &Target<'_>, cs: &[f64], a: f64, b: f64) -> Result<Option<Leaf>, Stop> {
+pub fn tail_chain(
+    fun: &Fun<'_>,
+    t: &Target<'_>,
+    cs: &[f64],
+    a: f64,
+    b: f64,
+) -> Result<Option<Leaf>, Stop> {
     let k = t.k;
     let right = a.is_finite();
     let m = if right { a } else { b };
@@ -600,7 +612,13 @@ pub fn tail_chain(fun: &Fun<'_>, t: &Target<'_>, cs: &[f64], a: f64, b: f64) -> 
             continue;
         }
         let sigma = d.gt0();
-        let need = |i: usize| if right { sigma } else { sigma == (n - i).is_multiple_of(2) };
+        let need = |i: usize| {
+            if right {
+                sigma
+            } else {
+                sigma == (n - i).is_multiple_of(2)
+            }
+        };
         if at.is_none() {
             at = Some(fun.ser_of(t.expr, Interval::point(m), k + CHAIN_ORDER - 1)?);
         }
@@ -695,7 +713,10 @@ fn split_with_points(
         v.as_ref()
             .and_then(|v| cs.iter().position(|&c| v.lo() == c && v.hi() == c))
     };
-    let decided = |v: &Option<DecInterval>| v.as_ref().is_some_and(|v| cs.iter().all(|&c| side(v, c).is_some()));
+    let decided = |v: &Option<DecInterval>| {
+        v.as_ref()
+            .is_some_and(|v| cs.iter().all(|&c| side(v, c).is_some()))
+    };
     let mut v = point(fun, t, m)?;
     if exact_at(&v).is_none() && !decided(&v) {
         // The cut sits where h's sign can't be told (on or next to a root):
@@ -911,9 +932,7 @@ pub fn claims(cover: &Cover, of: &Subject, cs: &[f64]) -> Vec<Claim> {
                 lo: R(cs[j]),
                 hi: R(cs[j]),
             }),
-            Leaf::Undefined { a, b } => out.push(Claim::Undefined {
-                x: XBox::new(a, b),
-            }),
+            Leaf::Undefined { a, b } => out.push(Claim::Undefined { x: XBox::new(a, b) }),
             Leaf::Touch {
                 a,
                 b,

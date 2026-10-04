@@ -56,9 +56,8 @@ const ZERO_TO_ONE: &[Seg] = &[seg(0.0, false, 1.0, true)];
 const LOG_BASE: &[Seg] = &[seg(0.0, false, 1.0, false), seg(1.0, false, INF, false)];
 
 fn allows(segs: &[Seg], v: f64) -> bool {
-    segs.iter().any(|s| {
-        (v > s.lo || (v == s.lo && s.lo_in)) && (v < s.hi || (v == s.hi && s.hi_in))
-    })
+    segs.iter()
+        .any(|s| (v > s.lo || (v == s.lo && s.lo_in)) && (v < s.hi || (v == s.hi && s.hi_in)))
 }
 
 /// One condition: the side expression must take values in `allowed`.
@@ -396,8 +395,7 @@ fn affine(f: &Fun<'_>, u: &Expr) -> Option<(Interval, Interval)> {
         }
         Expr::Bin(BinOp::Div, a, b) => {
             let ((a1, b1), (a2, b2)) = (affine(f, a)?, affine(f, b)?);
-            (a2.lo() == 0.0 && a2.hi() == 0.0 && !b2.contains_zero())
-                .then_some((a1 / b2, b1 / b2))
+            (a2.lo() == 0.0 && a2.hi() == 0.0 && !b2.contains_zero()).then_some((a1 / b2, b1 / b2))
         }
         _ => None,
     }
@@ -645,9 +643,7 @@ fn pieces_of(
                     items.push(Item::Run(band_in(right)));
                 }
             }
-            Leaf::Touch {
-                a, p, j, above, ..
-            } => {
+            Leaf::Touch { a, p, j, above, .. } => {
                 let Some(v) = value_in(j, Interval::point(p))? else {
                     return Ok(None);
                 };
@@ -663,7 +659,9 @@ fn pieces_of(
         }
     }
     // A point seen from both sides (its own leaf and a box ending there).
-    items.dedup_by(|y, x| matches!((*x, *y), (Item::Point(p, u), Item::Point(q, v)) if p == q && u == v));
+    items.dedup_by(
+        |y, x| matches!((*x, *y), (Item::Point(p, u), Item::Point(q, v)) if p == q && u == v),
+    );
     Ok(scan(&items, piece))
 }
 
@@ -688,9 +686,7 @@ fn scan(items: &[Item], piece: &Piece) -> Option<Vec<Piece>> {
                         });
                     }
                     (false, Some(lo)) => {
-                        let Some((x, pin)) = point else {
-                            return None;
-                        };
+                        let (x, pin) = point?;
                         out.push(Piece {
                             lo,
                             hi: Bound::At { x, closed: pin },

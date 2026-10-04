@@ -89,7 +89,10 @@ fn list<T>(v: &[T], f: impl Fn(&T) -> String) -> String {
 }
 
 fn print(a: &Analysis, ms: f64) {
-    println!("y = {}   [{}]   {} evaluations, {ms:.1} ms", a.source, a.unit, a.evals);
+    println!(
+        "y = {}   [{}]   {} evaluations, {ms:.1} ms",
+        a.source, a.unit, a.evals
+    );
     if let Some(g) = &a.evaluated {
         println!("  (evaluated as {g})");
     }

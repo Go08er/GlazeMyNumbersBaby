@@ -42,3 +42,18 @@ it has no value there (x⁰ approaches 1 but 0^x approaches 0). The TI reports a
 domain error. Windows' calculator modes give 1, the common algebraic
 convention for a typed number, and keep doing so here: those modes are
 tested against Microsoft's own engine.
+
+## The certified analysis
+
+Applies to `crates/graphing/src/certify`, the proof-carrying analysis that
+will back the panel. Its rows follow what the panel already shows (Windows'
+key-graph-features rows), with these choices where that isn't settled:
+
+| Row | Choice | Why |
+| --- | --- | --- |
+| Minima, maxima | strict turning points only: where f′ changes sign. A closed end of the domain (√x at 0) is not listed | Windows' panel lists turning points, as the current engine does; the TI's fMin/fMax answer a different question (an extremum over an interval the user picks) |
+| Minima, maxima, inflections of a constant stretch (`x/x`) | none: no strict turn, no change of concavity | the same rule; nothing to point at |
+| Monotonicity of a constant stretch | "constant" | Windows' panel has that text (`GraphingEnums.h`) |
+| Period of a constant function | not periodic | every number is a period, none is the least; the current engine and the simplifier say "not periodic" |
+| Features of a periodic function | one family `x₀ + k·P` per feature in one period | Windows' panel shows families; P is the period the simplifier proves |
+| Horizontal asymptote | the limit is proven to an enclosure; shown exactly only when the simplifier proves it exactly | a value the panel rounds is not a proof; how the panel shows "y ≈ 0.5" is decided when it is wired in |

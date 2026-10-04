@@ -151,11 +151,9 @@ pub fn certify_text(
     let exact = ExactLiterals::of(&text, ParseOptions::default()).map_err(|e| format!("{e:?}"))?;
     let mut f = Fun::new(expr, &lits, opts, budget, cancel);
     f.exact = Some(&exact);
-    let t0 = std::time::Instant::now();
     if let Some(g) = rewrite(&f) {
         f.eval = canonical(&g);
     }
-    let t1 = t0.elapsed();
     // A symbolic derivative only for f continuous wherever defined (no
     // floor, round, sign, mod: their derivative 0 hides the jumps).
     let steps = !crate::simplify::side::jumps(&f.expr).is_empty();
@@ -168,17 +166,7 @@ pub fn certify_text(
             .collect();
     }
     f.numerators = fun::rational_numerators(&f.expr, &exact);
-    let t2 = t0.elapsed();
-    let a = certify(&f, &text);
-    if std::env::var_os("CERTIFY_TIME").is_some() {
-        eprintln!(
-            "{text}: simplify {:.1} ms, derivatives {:.1} ms, rows {:.1} ms",
-            t1.as_secs_f64() * 1e3,
-            (t2 - t1).as_secs_f64() * 1e3,
-            (t0.elapsed() - t2).as_secs_f64() * 1e3
-        );
-    }
-    Ok(a)
+    Ok(certify(&f, &text))
 }
 
 /// The simplifier's form of f to enclose values with, if it changed f and
@@ -267,9 +255,7 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     // exactly and the box beside it can touch it.
     let mut spans: Vec<(f64, f64)> = Vec::new();
     for b in &boxes {
-        let point_end = |bd: Bound, at: f64| {
-            matches!(bd, Bound::At { x, closed: true } if x.is_point() && x.lo.0 == at)
-        };
+        let point_end = |bd: Bound, at: f64| matches!(bd, Bound::At { x, closed: true } if x.is_point() && x.lo.0 == at);
         if b.a < b.b && point_end(b.lo, b.a) && !b.lo_clipped {
             spans.push((b.a, b.a));
         }
@@ -279,7 +265,16 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         spans.push((b.a, b.b));
     }
     f.allow(phase);
-    let c0 = Cover::run(f, &Target { expr: &f.eval, k: 0, in_domain: true }, &[0.0], &spans);
+    let c0 = Cover::run(
+        f,
+        &Target {
+            expr: &f.eval,
+            k: 0,
+            in_domain: true,
+        },
+        &[0.0],
+        &spans,
+    );
     // f is continuous on every box: the derivative's own tree may stand
     // for f′ (it equals f′ wherever f is differentiable, and f is monotone
     // where it keeps a sign).
@@ -341,13 +336,31 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     let cover = |k: usize| {
         let sp = &kspans[k - 1];
         f.allow(phase);
-        let c = Cover::run(f, &Target { expr: &f.eval, k, in_domain: true }, &[0.0], sp);
+        let c = Cover::run(
+            f,
+            &Target {
+                expr: &f.eval,
+                k,
+                in_domain: true,
+            },
+            &[0.0],
+            sp,
+        );
         if continuous
             && !c.complete()
             && let Some(d) = f.derivs()
         {
             f.allow(phase);
-            let r = Cover::run(f, &Target { expr: &d[k - 1], k: 0, in_domain: true }, &[0.0], sp);
+            let r = Cover::run(
+                f,
+                &Target {
+                    expr: &d[k - 1],
+                    k: 0,
+                    in_domain: true,
+                },
+                &[0.0],
+                sp,
+            );
             if r.complete() {
                 return r;
             }
@@ -370,14 +383,6 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             );
             if c.leaves.len() <= 12 {
                 eprintln!("  {:?}", c.leaves);
-            } else {
-                let mut hist = std::collections::BTreeMap::new();
-                for l in &c.leaves {
-                    let (a, _) = l.span();
-                    let key = if a == 0.0 { 0 } else { (a.signum() * (a.abs().log10().floor() + 400.0)) as i32 };
-                    *hist.entry(key).or_insert(0) += 1;
-                }
-                eprintln!("  leaves by signed decade(+400): {hist:?}");
             }
         }
     }
@@ -385,7 +390,12 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     // What the boxes leave out, and the families cut from them: part of
     // every certificate built on the boxes.
     let mut gap_claims = gaps.clone();
-    gap_claims.extend(dom.claims.iter().filter(|c| matches!(c, Claim::Family { .. })).cloned());
+    gap_claims.extend(
+        dom.claims
+            .iter()
+            .filter(|c| matches!(c, Claim::Family { .. }))
+            .cloned(),
+    );
     for g in kgaps.iter().flatten() {
         let c = Claim::Gap { x: *g };
         if !gap_claims.contains(&c) {
@@ -420,7 +430,10 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     }
     if let Some(p) = period {
         gap_claims.push(Claim::Simplifier {
-            fact: format!("f(x + P) = f(x) wherever f is defined, P ∈ [{:e}, {:e}]", p.lo.0, p.hi.0),
+            fact: format!(
+                "f(x + P) = f(x) wherever f is defined, P ∈ [{:e}, {:e}]",
+                p.lo.0, p.hi.0
+            ),
         });
     }
     let monotonicity = with(rows::monotonicity(&c1, &boxes, &scope, clear1), &gap_claims);
@@ -433,7 +446,10 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         y_intercept: or_unknown(rows::y_intercept(f, &dom)),
         parity: or_unknown(rows::parity(f, &dom)),
         period: or_unknown(rows::period(f, &dom, &monotonicity, w)),
-        extrema: with(or_unknown(rows::extrema(f, &c1, &boxes, &scope, clear1)), &gap_claims),
+        extrema: with(
+            or_unknown(rows::extrema(f, &c1, &boxes, &scope, clear1)),
+            &gap_claims,
+        ),
         inflections: with(
             or_unknown(rows::inflections(f, &c2, &boxes, &scope, clear2)),
             &gap_claims,
@@ -443,7 +459,10 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             or_unknown(rows::range(f, &dom, &c0, &c1, &boxes, &scope, clear1)),
             &gap_claims,
         ),
-        vertical: with(or_unknown(rows::vertical(f, &dom, &c0, &boxes, &scope)), &gap_claims),
+        vertical: with(
+            or_unknown(rows::vertical(f, &dom, &c0, &boxes, &scope)),
+            &gap_claims,
+        ),
         horizontal: or_unknown(rows::horizontal(f, &dom, &scope)),
         domain: dom.row.clone(),
         evals: f.evals(),

@@ -231,7 +231,9 @@ pub fn rational_derivs(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Optio
     let deriv = |p: &Poly| -> Option<Poly> {
         let mut out = Poly::zero();
         for (i, c) in p.coefficients().iter().enumerate().skip(1) {
-            let term = Poly::x().pow(i as u32 - 1)?.scale(c.mul(Q::int(i as i128))?)?;
+            let term = Poly::x()
+                .pow(i as u32 - 1)?
+                .scale(c.mul(Q::int(i as i128))?)?;
             out = out.add(&term)?;
         }
         Some(out)
@@ -244,7 +246,11 @@ pub fn rational_derivs(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Optio
             // D is monic: 1.
             num.to_expr()
         } else {
-            Expr::bin(BinOp::Div, num.to_expr(), Expr::bin(BinOp::Pow, d.to_expr(), Expr::Num(k)))
+            Expr::bin(
+                BinOp::Div,
+                num.to_expr(),
+                Expr::bin(BinOp::Pow, d.to_expr(), Expr::Num(k)),
+            )
         }
     };
     Some([canonical(&over(&p, 2.0)), canonical(&over(&p2, 3.0))])
@@ -261,7 +267,9 @@ pub fn rational_numerators(e: &Expr, lits: &crate::simplify::ExactLiterals) -> O
     let deriv = |p: &Poly| -> Option<Poly> {
         let mut out = Poly::zero();
         for (i, c) in p.coefficients().iter().enumerate().skip(1) {
-            let term = Poly::x().pow(i as u32 - 1)?.scale(c.mul(Q::int(i as i128))?)?;
+            let term = Poly::x()
+                .pow(i as u32 - 1)?
+                .scale(c.mul(Q::int(i as i128))?)?;
             out = out.add(&term)?;
         }
         Some(out)
@@ -290,7 +298,9 @@ pub fn rational_numerators(e: &Expr, lits: &crate::simplify::ExactLiterals) -> O
 /// the decimal power is defined (base ≥ 0, or an integer exponent).
 fn exact_exponents(e: &Expr, exact: &crate::simplify::ExactLiterals) -> Expr {
     e.map(&|n| match n {
-        Expr::Bin(BinOp::Pow, a, b) if !b.contains_x() && crate::compile::syntactic_rational(b).is_none() => {
+        Expr::Bin(BinOp::Pow, a, b)
+            if !b.contains_x() && crate::compile::syntactic_rational(b).is_none() =>
+        {
             let v = match &**b {
                 Expr::Num(v) => *v,
                 Expr::Neg(inner) => match &**inner {
@@ -381,7 +391,9 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
                 // (both finite there): factors smooth across the poles.
                 Func::Tan => out.push(Expr::call1(Func::Sin, args[0].clone())),
                 Func::Cot => out.push(Expr::call1(Func::Cos, args[0].clone())),
-                Func::Ln | Func::Log => out.push(Expr::bin(BinOp::Sub, args[0].clone(), Expr::Num(1.0))),
+                Func::Ln | Func::Log => {
+                    out.push(Expr::bin(BinOp::Sub, args[0].clone(), Expr::Num(1.0)))
+                }
                 _ => out.push(e.clone()),
             },
             Expr::Call(Func::Root, args) => go(&args[0], out),
@@ -564,7 +576,11 @@ pub fn split(lo: f64, hi: f64) -> Option<f64> {
     } else {
         lo / 2.0 + hi / 2.0
     };
-    let m = if m.is_finite() { m } else { lo / 2.0 + hi / 2.0 };
+    let m = if m.is_finite() {
+        m
+    } else {
+        lo / 2.0 + hi / 2.0
+    };
     (m > lo && m < hi).then_some(m)
 }
 
