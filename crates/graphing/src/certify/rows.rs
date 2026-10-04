@@ -439,7 +439,7 @@ fn end_extremum(
     if over.is_empty() || over.dec < Dec::Dac {
         return Ok(None);
     }
-    let y = f.val(Interval::new(x.lo.0, x.hi.0))?;
+    let y = f.val_tight(Interval::new(x.lo.0, x.hi.0))?;
     if y.is_empty() || !y.iv.is_bounded() || y.dec < Dec::Def {
         return Ok(None);
     }
@@ -498,7 +498,7 @@ pub fn extrema(
             {
                 continue;
             }
-            let y = f.val(Interval::new(x.lo.0, x.hi.0))?;
+            let y = f.val_tight(Interval::new(x.lo.0, x.hi.0))?;
             if y.is_empty() || !y.iv.is_bounded() || y.dec < Dec::Def {
                 complete = false;
                 continue;
@@ -552,7 +552,7 @@ pub fn inflections(
             {
                 continue;
             }
-            let y = f.val(Interval::new(x.lo.0, x.hi.0))?;
+            let y = f.val_tight(Interval::new(x.lo.0, x.hi.0))?;
             if y.is_empty() || !y.iv.is_bounded() || y.dec < Dec::Def {
                 complete = false;
                 continue;
@@ -2591,7 +2591,7 @@ fn removable(f: &Fun<'_>, x: Enc, n: Interval, cl: &mut Vec<Claim>) -> Result<Op
     if over.is_empty() || over.dec < Dec::Dac || !over.iv.is_bounded() {
         return Ok(None);
     }
-    let v = f.val(Interval::new(x.lo.0, x.hi.0))?;
+    let v = f.val_tight(Interval::new(x.lo.0, x.hi.0))?;
     if v.is_empty() || !v.iv.is_bounded() {
         return Ok(None);
     }
@@ -2613,7 +2613,7 @@ fn removable(f: &Fun<'_>, x: Enc, n: Interval, cl: &mut Vec<Claim>) -> Result<Op
 /// f's value at a point of the domain (enclosed by `x`), attained, with
 /// its claim added to `cl`.
 fn attained(f: &Fun<'_>, x: Enc, cl: &mut Vec<Claim>) -> Result<Option<End>, Stop> {
-    let v = f.val(Interval::new(x.lo.0, x.hi.0))?;
+    let v = f.val_tight(Interval::new(x.lo.0, x.hi.0))?;
     if v.is_empty() || !v.iv.is_bounded() || v.dec < Dec::Def {
         return Ok(None);
     }

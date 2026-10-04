@@ -477,6 +477,30 @@ impl<'a> Fun<'a> {
     pub fn val(&self, x: Interval) -> Result<DecInterval, Stop> {
         Ok(self.ser(x, 0)?[0])
     }
+
+    /// f over a narrow box, tightened by the mean value form: f(m) +
+    /// f′(box)·(box − m) for its middle m, where f′ is valid there (at a
+    /// turn f′ is near 0, so f's value is known far better than its
+    /// enclosure over the box shows).
+    pub fn val_tight(&self, x: Interval) -> Result<DecInterval, Stop> {
+        let s = self.ser(x, 1)?;
+        let v = s[0];
+        if !(x.lo() < x.hi() && x.is_bounded() && usable(&s, 1) && s[1].iv.is_bounded()) {
+            return Ok(v);
+        }
+        let m = x.lo() / 2.0 + x.hi() / 2.0;
+        let vm = self.val(Interval::point(m))?;
+        if vm.is_empty() || !vm.iv.is_bounded() {
+            return Ok(v);
+        }
+        let dx = x - Interval::point(m);
+        let mv = vm.iv + s[1].iv * dx;
+        let iv = v.iv.intersect(mv);
+        if iv.is_empty() {
+            return Ok(v);
+        }
+        Ok(DecInterval { iv, ..v })
+    }
 }
 
 /// Taylor coefficients of f over a box from its simplified form (`s`) and
