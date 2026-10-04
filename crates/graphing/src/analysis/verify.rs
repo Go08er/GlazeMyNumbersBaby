@@ -5121,7 +5121,9 @@ fn gate_with_spent(
             // A function constant where defined: its period and its
             // constant pieces are its holes' (0·sin x / sin x's claimed
             // kπ/12 with the domain it came with).
-            if matches!(k.data.range.as_slice(), [iv] if iv.lo.value == iv.hi.value) {
+            if drop & flags::RANGE == 0
+                && matches!(k.data.range.as_slice(), [iv] if iv.lo.value == iv.hi.value)
+            {
                 deps |= flags::PERIODICITY | flags::MONOTONE_INTERVALS;
             }
             for (flag, none) in [
