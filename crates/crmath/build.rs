@@ -22,10 +22,59 @@ const V3_FEATURES: &[&str] = &[
     "avx", "avx2", "fma", "bmi1", "bmi2", "lzcnt", "movbe", "f16c",
 ];
 
+/// Whether a compiler flag chooses the CPU or toggles an instruction-set
+/// extension (`-march=`, `-mtune=`, `-mcpu=`, `-mavx2`, `-mno-fma`, …).
+fn is_cpu_flag(f: &str) -> bool {
+    if ["-march=", "-mtune=", "-mcpu="]
+        .iter()
+        .any(|p| f.starts_with(p))
+    {
+        return true;
+    }
+    let isa = f.strip_prefix("-mno-").or_else(|| f.strip_prefix("-m"));
+    isa.is_some_and(|i| {
+        [
+            "avx", "fma", "bmi", "sse", "f16c", "lzcnt", "movbe", "popcnt", "xsave",
+        ]
+        .iter()
+        .any(|e| i.starts_with(e))
+    })
+}
+
+/// Packaging tools put their own CPU choice in CFLAGS (makepkg and Fedora:
+/// `-march=x86-64 -mtune=generic`), and `cc` appends the environment's
+/// flags last, so it would quietly build the v3 copy without FMA (and a
+/// `-march=native` would put AVX in the baseline copy). Keep the
+/// environment's other flags (hardening, debug info), drop its CPU choice:
+/// which copy is which is this script's decision.
+fn strip_cpu_flags() {
+    let target = std::env::var("TARGET").unwrap_or_default();
+    let keys = [
+        "CFLAGS".to_string(),
+        "TARGET_CFLAGS".to_string(),
+        "HOST_CFLAGS".to_string(),
+        format!("CFLAGS_{target}"),
+        format!("CFLAGS_{}", target.replace('-', "_")),
+    ];
+    for key in &keys {
+        println!("cargo::rerun-if-env-changed={key}");
+        if let Ok(value) = std::env::var(key) {
+            let kept: Vec<&str> = value
+                .split_whitespace()
+                .filter(|f| !is_cpu_flag(f))
+                .collect();
+            // SAFETY: the build script is single-threaded here.
+            unsafe { std::env::set_var(key, kept.join(" ")) };
+        }
+    }
+}
+
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(crmath_dispatch)");
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-changed=vendor");
+    println!("cargo::rerun-if-changed=guard");
+    strip_cpu_flags();
 
     let mut functions: Vec<String> = std::fs::read_dir("vendor/binary64")
         .expect("vendor/binary64")
@@ -43,11 +92,18 @@ fn main() {
     let features = std::env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default();
     let has = |f: &str| features.split(',').any(|g| g == f);
 
+    // Each copy also compiles a guard that fails the build if it didn't get
+    // the instruction set it is for.
     let build = |march: Option<&str>| {
         let mut b = cc::Build::new();
         b.files(&sources).warnings(false).cargo_warnings(false);
         if let Some(m) = march {
             b.flag(format!("-march={m}")).flag("-mtune=generic");
+            b.file(if m == "x86-64" {
+                "guard/baseline.c"
+            } else {
+                "guard/v3.c"
+            });
         }
         b
     };
