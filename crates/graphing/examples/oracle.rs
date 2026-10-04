@@ -133,7 +133,7 @@ use std::cmp::Ordering;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering as AtOrd};
 
-use graphing::analysis::format::format_nonzero;
+use graphing::analysis::format::{format_decimal, format_nonzero};
 use graphing::analysis::truth::{R, Xf, reval};
 use graphing::analysis::{
     AnalysisError, Family, Interval, KeyGraphFeatures, Monotonicity, Parity, Periodicity, analyze,
@@ -194,6 +194,15 @@ fn cmp_xf(a: Xf, b: Xf) -> Ordering {
 
 fn fmt(v: f64) -> String {
     format_nonzero(v)
+}
+
+/// Two values the panel would show alike: the same closed form or text,
+/// or the same six significant digits (an approximate value is written
+/// to at most six, its form chosen from the rounded value: 1000000 and
+/// 999999.9999982 are both 1×10⁶ there, though 1000000 alone is a
+/// closed form).
+fn alike(a: f64, b: f64) -> bool {
+    fmt(a) == fmt(b) || format_decimal(a) == format_decimal(b)
 }
 
 /// A value the doubles hold (0 included): compared absolutely, against
@@ -497,7 +506,7 @@ impl F {
         let w = 1e-6 * z.abs().max(1.0);
         for (a, b) in [(z - w, z), (z, z + w)] {
             if let Some(c) = self.crossing(a, b)
-                && fmt(c) == fmt(z)
+                && alike(c, z)
             {
                 return Some(true);
             }
@@ -1072,7 +1081,7 @@ fn check_with(
                 let wrong = if y == 0.0 {
                     !v0.xf.is_zero() && (beyond || v0.v.abs() > f.tol(0.0))
                 } else {
-                    (y - v0.v).abs() > f.tol(0.0) && fmt(y) != fmt(v0.v)
+                    (y - v0.v).abs() > f.tol(0.0) && !alike(y, v0.v)
                 };
                 if wrong {
                     cx.fail(
@@ -1102,7 +1111,7 @@ fn check_with(
                 .filter(|b| b.is_finite())
                 .min_by(|a, b| (a - v.v).abs().total_cmp(&(b - v.v).abs()));
             let Some(b) = b else { continue };
-            if (v.v - b).abs() > f.tol(*x) && fmt(v.v) != fmt(b) {
+            if (v.v - b).abs() > f.tol(*x) && !alike(v.v, b) {
                 cx.fail_at(
                     "range-excludes-value",
                     *x,
@@ -1217,7 +1226,7 @@ fn check_with(
                 let wrong = if *y == 0.0 {
                     f.zero_holds(x, &poles) == Some(false)
                 } else {
-                    (y - v.v).abs() > f.tol(x) && fmt(*y) != fmt(v.v)
+                    (y - v.v).abs() > f.tol(x) && !alike(*y, v.v)
                 };
                 if wrong {
                     cx.fail(
@@ -1534,7 +1543,7 @@ fn check_with(
                 if !v.cmp_ok() || !v.v.is_finite() {
                     continue;
                 }
-                if (y - v.v).abs() > f.tol(x) && fmt(*y) != fmt(v.v) {
+                if (y - v.v).abs() > f.tol(x) && !alike(*y, v.v) {
                     cx.fail(
                         "inflection-value-wrong",
                         format!("({x:e}, {}) but f there = {}", fmt(*y), show(&v)),
@@ -2251,7 +2260,7 @@ fn check_with(
                         v.cmp_ok()
                             && v.v.is_finite()
                             && (v.v - b).abs() <= 1e-5 * b.abs().max(1e-300)
-                            && (fmt(v.v) == fmt(b) || (v.v - b).abs() <= f.tol(*x))
+                            && (alike(v.v, b) || (v.v - b).abs() <= f.tol(*x))
                     });
                 if !reached {
                     cx.note(
@@ -2268,7 +2277,7 @@ fn check_with(
 
 /// Two numbers the panel would show as the same claim.
 fn same(a: f64, b: f64) -> bool {
-    a == b || fmt(a) == fmt(b) || (a - b).abs() <= 1e-9 * a.abs().max(b.abs())
+    a == b || alike(a, b) || (a - b).abs() <= 1e-9 * a.abs().max(b.abs())
 }
 
 fn same_intervals(a: &[Interval], b: &[Interval]) -> bool {
@@ -2354,7 +2363,7 @@ fn check_pair(lhs: &str, rhs: &str, positive: bool) -> Vec<Finding> {
             continue;
         }
         let allow = fr.tol(x) + 8.0 * ulp(c.abs().max(t.v.abs())) + 2.0 * el;
-        if (c - t.v).abs() > allow && fmt(c) != fmt(t.v) {
+        if (c - t.v).abs() > allow && !alike(c, t.v) {
             cx.fail_at(
                 "spelling-value-differs",
                 x,
