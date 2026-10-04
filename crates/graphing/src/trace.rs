@@ -390,7 +390,7 @@ fn step_exponent(iv: &IntervalFn, t: f64, n0: i32, t_px: f64, d_px: f64) -> i32 
         derivs_valid(&s, 1).then(|| s[1].iv.mig_mag().1)
     };
     let mut n = n0;
-    for _ in 0..8 {
+    for _ in 0..iterations(iv, 8) {
         if n <= finest {
             break;
         }
@@ -427,21 +427,40 @@ fn exact_value(iv: &IntervalFn, t: &Decimal, value: TraceValue) -> TraceValue {
     value
 }
 
+/// At most `most` interval evaluations of f's series for one refinement,
+/// fewer for a long f, so a pointer move over 14 long curves stays within
+/// a frame: about 3000 units of [`IntervalFn::cost`] (a sine is 8), at
+/// least two.
+fn iterations(iv: &IntervalFn, most: usize) -> usize {
+    (3000 / iv.cost().max(1)).clamp(2, most)
+}
+
 /// Where the curve takes the value `d` (to within `tol`) near `t`: Newton
 /// steps, with f and f′ from the interval form. None where it isn't proven
 /// smooth. On a line steeper than 10¹⁶ each step can only cancel the
 /// leading digits of t (10³⁰⁰·x from 10⁻¹⁷ to 10⁻³⁰² takes about twenty).
-fn solve_near(iv: &IntervalFn, t: f64, d: f64, tol: f64) -> Option<f64> {
+///
+/// Only where the curve is steep there (`ratio`·|f′| over 2, `ratio` the
+/// traced coordinate's units per pixel over the other's): elsewhere the
+/// point in the pointer's column is as good, and a wandering Newton on a
+/// long, wiggly f (79 terms of sin(x^k)) cost tens of milliseconds a
+/// pointer move. Stops once a step no longer halves the miss.
+fn solve_near(iv: &IntervalFn, t: f64, d: f64, tol: f64, ratio: f64) -> Option<f64> {
     let mut t = t;
-    for _ in 0..32 {
+    let mut miss = f64::INFINITY;
+    for i in 0..iterations(iv, 32) {
         let s = iv.series(t, t, 1);
         if !derivs_valid(&s, 1) {
             return None;
         }
         let (v, dv) = (s[0].iv.mid(), s[1].iv.mid());
-        if (v - d).abs() <= tol {
+        if i == 0 && !(dv.abs() * ratio > 2.0) {
+            return None;
+        }
+        if (v - d).abs() <= tol || (v - d).abs() > 0.5 * miss {
             break;
         }
+        miss = (v - d).abs();
         let next = t - (v - d) / dv;
         if !next.is_finite() {
             return None;
@@ -555,6 +574,18 @@ pub fn nearest_point(
                     Axis::X => (t, d),
                     Axis::Y => (d, t),
                 };
+                // A curve whose drawn polylines (within the tolerance of
+                // it) and holes are all out of reach has no point to
+                // trace: skip its interval work.
+                let near = nearest_on_polylines(vp, &plot.curves, px, py);
+                let reach = radius_px + 1.0;
+                let hole_near = plot.holes.iter().any(|h| {
+                    let (sx, sy) = vp.to_screen(h.x, h.y);
+                    (sx - px).hypot(sy - py) <= reach
+                });
+                if !hole_near && near.is_none_or(|(d, _)| d > reach) {
+                    continue;
+                }
                 let snap = |t: f64| -> Option<Candidate> {
                     if !t.is_finite() {
                         return None;
@@ -599,7 +630,10 @@ pub fn nearest_point(
                 };
                 // Directly above/below (or beside) the pointer.
                 let pt = if axis == Axis::X { cx } else { cy };
+                let mut on_it = false;
                 if let Some(c) = snap(pt) {
+                    let (sx, sy) = vp.to_screen(c.0.0, c.0.1);
+                    on_it = (sx - px).hypot(sy - py) <= 0.5;
                     offer(index, c, 0.0, &mut best);
                 }
                 // Past an end of f's domain (proven undefined in the
@@ -643,7 +677,10 @@ pub fn nearest_point(
                     }
                 }
                 // Nearest along the drawn curve (steep parts, asymptotes).
-                if let Some((_, q)) = nearest_on_polylines(vp, &plot.curves, px, py) {
+                // (Not needed when the point in the pointer's column is
+                // within half a pixel of it: nothing along the curve is nearer
+                // by more than that.)
+                if let Some((_, q)) = near.filter(|_| !on_it) {
                     let (qt, qd) = point(q.x, q.y);
                     if let Some(c) = snap(qt) {
                         offer(index, c, 0.0, &mut best);
@@ -652,7 +689,7 @@ pub fn nearest_point(
                     // where along it the curve itself meets that point's
                     // level.
                     if let Some(iv) = iv
-                        && let Some(t) = solve_near(iv, qt, qd, 0.01 * d_px)
+                        && let Some(t) = solve_near(iv, qt, qd, 0.01 * d_px, t_px / d_px)
                         && let Some(c) = snap(t)
                     {
                         offer(index, c, 0.0, &mut best);
