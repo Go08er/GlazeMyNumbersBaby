@@ -2803,7 +2803,9 @@ pub fn check_trig_singular(a: &Analysed, r: &mut Report) {
     // rounds to exactly 0 within 1.5·10⁻⁸ of π): a claim may place the
     // point anywhere in that band.
     let band = |c: f64| {
-        let undefined = |x: f64| !a.eval(x).is_finite();
+        // (Only where the reference vouches: beside 0 the doubles are
+        // subnormal, where it may abstain, and that is no evidence.)
+        let undefined = |x: f64| a.known(x).is_some_and(|v| !v.is_finite());
         let limit = 1e-6 * c.abs().max(1.0);
         let mut h = 2.0 * ulp(c);
         if !(undefined(c + h) && undefined(c - h)) {
