@@ -16,8 +16,8 @@ use std::time::Instant;
 
 use graphing::analysis::{analyze_str, flags};
 use graphing::certify::{
-    Analysis, Bound, DEFAULT_BUDGET, DomainValue, Enc, ExtKind, Parity, Piece, Region, Row, Spot,
-    Tail, certify_text,
+    Analysis, Bound, DEFAULT_BUDGET, Dir, DomainValue, Enc, ExtKind, Monotone, Parity, Piece,
+    Region, Row, Spot, Tail, certify_text,
 };
 use graphing::compile::{CompileOptions, compile_str};
 use graphing::functions::TrigUnit;
@@ -29,7 +29,8 @@ const ENGINE: &str = include_str!("fixtures/certify/engine_grades.tsv");
 /// y-intercept, P parity, T period, MIN/MAX extrema (local, strict; a
 /// closed end of the domain where f turns away counts, as in Windows:
 /// √x has a minimum at 0), INF inflections, VA/HA asymptotes, R
-/// range. A key left out is not checked (the truth is debatable or not a
+/// range, M the monotone pieces (`inc:(a,b];dec:[b,c)`, `const:` for a
+/// constant one). A key left out is not checked (the truth is debatable or not a
 /// set the rows can state). Values are expressions; `~` marks a value
 /// known to 6 digits, `-`/`+` one just below/above a double.
 const TRUTH: &[(&str, &str)] = &[
@@ -256,6 +257,17 @@ const TRUTH: &[(&str, &str)] = &[
     (
         "A16",
         "D=R | XI=all | YI=0 | P=both | T=none | INF=none | VA=none | R={0}",
+    ),
+];
+
+/// Functions whose trees use what the certificate replay doesn't model
+/// (Γ, through x!): checked against their truth here, but not in the
+/// replay's corpus, which reads `REVIEW` and wants every claim proven.
+const UNMODELLED: &[(&str, &str)] = &[
+    // Pre-review A, F3: x!/x! is 1 where Γ(x + 1) is defined.
+    (
+        "x!/x!",
+        "XI=none | YI=1 | P=neither | MIN=none | MAX=none | INF=none | VA=none | R={1}",
     ),
 ];
 
@@ -641,6 +653,105 @@ const REVIEW: &[(&str, &str)] = &[
     // the other (x·eˣ·(x + 1), zeros −1 and 0), which the zero-factor
     // reasoning once split wrongly.
     ("x*e^x*x+e^x*x", "D=R | XI=-1;0 | YI=0 | VA=none | HA=L:0"),
+    // Pre-review A, F3: side conditions the domain row can't decide, which
+    // f's simplified form has lost (it is defined where f isn't). The
+    // rows on it list only what lies where f's own tree is shown defined.
+    (
+        "x^2*floor(x)/floor(x)",
+        "D=(-inf,0)U[1,inf) | XI=none | YI=none | P=neither | T=none | MIN=(1,1) | MAX=none | INF=none | VA=none | HA=none | R=(0,inf) | M=dec:(-inf,0);inc:[1,inf)",
+    ),
+    (
+        "(x-0.5)*floor(x)/floor(x)",
+        "D=(-inf,0)U[1,inf) | XI=none | YI=none | P=neither | T=none | MIN=(1,0.5) | MAX=none | INF=none | VA=none | HA=none | R=(-inf,-0.5)U[0.5,inf) | M=inc:(-inf,0);inc:[1,inf)",
+    ),
+    (
+        "x^2*round(x)/round(x)",
+        "D=(-inf,-0.5]U[0.5,inf) | XI=none | YI=none | P=even | T=none | MIN=(-0.5,0.25);(0.5,0.25) | MAX=none | INF=none | VA=none | HA=none | R=[0.25,inf) | M=dec:(-inf,-0.5];inc:[0.5,inf)",
+    ),
+    (
+        "sin(x)*sign(x)/sign(x)",
+        "D=(-inf,0)U(0,inf) | XI=fam(0,pi) | YI=none | P=odd | MIN=fam(-pi/2,2*pi,-1) | MAX=fam(pi/2,2*pi,1) | INF=fam(0,pi,0) | VA=none | HA=none | R=[-1,1]",
+    ),
+    (
+        "(x^2-1)*floor(x^2)/floor(x^2)",
+        "D=(-inf,-1]U[1,inf) | XI=-1;1 | YI=none | P=even | T=none | MIN=(-1,0);(1,0) | MAX=none | INF=none | VA=none | HA=none | R=[0,inf) | M=dec:(-inf,-1];inc:[1,inf)",
+    ),
+    (
+        "x^2*sqrt(sin(x))/sqrt(sin(x))",
+        "XI=none | YI=none | P=neither | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none",
+    ),
+    (
+        "cos(x)*sqrt(sin(x))/sqrt(sin(x))",
+        "XI=fam(pi/2,2*pi) | YI=none | P=neither | T=2*pi | MIN=none | MAX=none | INF=fam(pi/2,2*pi,0) | VA=none | HA=none | R=(-1,1)",
+    ),
+    (
+        "x^2*ln(cos(x))/ln(cos(x))",
+        "XI=none | YI=none | P=even | MIN=none | MAX=none | INF=none | VA=none | HA=none",
+    ),
+    (
+        "x^2*mod(x,2)/mod(x,2)",
+        "D=fam(0,2) | XI=none | YI=none | P=even | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none",
+    ),
+    (
+        "cos(x)*floor(x)/floor(x)",
+        "D=(-inf,0)U[1,inf) | XI=fam(pi/2,pi) | YI=none | P=neither | T=none | MIN=fam(pi,2*pi,-1) | INF=fam(pi/2,pi,0) | VA=none | HA=none | R=[-1,1]",
+    ),
+    (
+        "(x+1)*(x-2)^x/(x-2)^x",
+        "D=(2,inf) | XI=none | YI=none | P=neither | T=none | MIN=none | MAX=none | INF=none | VA=none | R=(3,inf) | M=inc:(2,inf)",
+    ),
+    (
+        "sin(1/x)/sin(1/x)",
+        "XI=none | YI=none | P=even | MIN=none | MAX=none | INF=none | VA=none | HA=1 | R={1}",
+    ),
+    // Pre-review A, F1: periods far below 1 (each zero, extremum and
+    // inflection a family of its own, none taken for a repeat of another).
+    (
+        "cos(10^10*x)",
+        "D=R | XI=fam(pi/2*10^-10,pi*10^-10) | YI=1 | P=even | T=2*pi*10^-10 | MIN=fam(pi*10^-10,2*pi*10^-10,-1) | MAX=fam(0,2*pi*10^-10,1) | INF=fam(pi/2*10^-10,pi*10^-10,0) | VA=none | HA=none | R=[-1,1]",
+    ),
+    (
+        "sin(10^10*x)",
+        "D=R | XI=fam(0,pi*10^-10) | YI=0 | P=odd | T=2*pi*10^-10 | MIN=fam(-pi/2*10^-10,2*pi*10^-10,-1) | MAX=fam(pi/2*10^-10,2*pi*10^-10,1) | INF=fam(0,pi*10^-10,0) | VA=none | HA=none | R=[-1,1]",
+    ),
+    (
+        "1/sin(10^10*x)",
+        "D=fam(0,pi*10^-10) | XI=none | YI=none | P=odd | T=2*pi*10^-10 | MIN=fam(pi/2*10^-10,2*pi*10^-10,1) | MAX=fam(-pi/2*10^-10,2*pi*10^-10,-1) | INF=none | VA=fam(0,pi*10^-10) | HA=none | R=(-inf,-1]U[1,inf)",
+    ),
+    (
+        "1/sin(10^10*x)+1/cos(10^10*x)",
+        "D=fam(0,pi/2*10^-10) | XI=fam(-pi/4*10^-10,pi*10^-10) | YI=none | P=neither | T=2*pi*10^-10 | MIN=fam(pi/4*10^-10,2*pi*10^-10,2*sqrt(2)) | MAX=fam(5*pi/4*10^-10,2*pi*10^-10,-2*sqrt(2)) | VA=fam(0,pi/2*10^-10) | HA=none",
+    ),
+    (
+        "sin(10^10*x)^2",
+        "D=R | XI=fam(0,pi*10^-10) | YI=0 | P=even | T=pi*10^-10 | MIN=fam(0,pi*10^-10,0) | MAX=fam(pi/2*10^-10,pi*10^-10,1) | INF=fam(pi/4*10^-10,pi/2*10^-10,1/2) | VA=none | HA=none | R=[0,1]",
+    ),
+    (
+        "sin(2*pi*10^12*x)",
+        "D=R | XI=fam(0,1/2*10^-12) | YI=0 | P=odd | T=10^-12 | MIN=fam(-1/4*10^-12,10^-12,-1) | MAX=fam(1/4*10^-12,10^-12,1) | INF=fam(0,1/2*10^-12,0) | VA=none | HA=none | R=[-1,1]",
+    ),
+    (
+        "cos(2*pi*10^15*x)",
+        "D=R | XI=fam(1/4*10^-15,1/2*10^-15) | YI=1 | P=even | T=10^-15 | MIN=fam(1/2*10^-15,10^-15,-1) | MAX=fam(0,10^-15,1) | INF=fam(1/4*10^-15,1/2*10^-15,0) | VA=none | HA=none | R=[-1,1]",
+    ),
+    (
+        "tan(2*pi*10^12*x)",
+        "D=fam(1/4*10^-12,1/2*10^-12) | XI=fam(0,1/2*10^-12) | YI=0 | P=odd | T=1/2*10^-12 | MIN=none | MAX=none | INF=fam(0,1/2*10^-12,0) | VA=fam(1/4*10^-12,1/2*10^-12) | HA=none | R=R",
+    ),
+    // Pre-review D, M1: a non-periodic f with a dense family of poles
+    // (the window narrowed to a thousand members, none left uncut).
+    (
+        "x+tan(200x)",
+        "D=fam(pi/400,pi/200) | XI=inf | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=inf | VA=fam(pi/400,pi/200) | HA=none | R=R",
+    ),
+    (
+        "x+tan(1000x)",
+        "D=fam(pi/2000,pi/1000) | XI=inf | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=inf | VA=fam(pi/2000,pi/1000) | HA=none | R=R",
+    ),
+    (
+        "x+tan(x)-30000",
+        "D=fam(pi/2,pi) | XI=inf | P=neither | T=none | MIN=none | MAX=none | INF=inf | VA=fam(pi/2,pi) | HA=none | R=R",
+    ),
 ];
 
 // ---------------------------------------------------------------- values
@@ -711,11 +822,13 @@ fn multiple(q: &Enc, p: f64) -> bool {
     n >= 1.0 && Val::Exact(n * p).fits(q.lo.0 - 1e-12 * q.mid(), q.hi.0 + 1e-12 * q.mid())
 }
 
-/// Is some member of `x0 + k·p` in the enclosure?
+/// Is some member of `x0 + k·p` in the enclosure (to the rounding of
+/// x0 + k·p in doubles: no absolute tolerance, which a period of 10⁻¹²
+/// would fall under)?
 fn in_family(x0: f64, p: f64, e: &Enc) -> bool {
     let k = ((e.mid() - x0) / p).round();
     let t = x0 + k * p;
-    let slack = 1e-9 * t.abs().max(1.0);
+    let slack = 1e-12 * (x0.abs() + (k * p).abs()) + f64::MIN_POSITIVE;
     e.lo.0 - slack <= t && t <= e.hi.0 + slack
 }
 
@@ -754,6 +867,10 @@ enum Set {
     LineMinus(f64, f64),
 }
 
+/// A monotone piece of the truth: its direction and its ends (value,
+/// closed).
+type MonoPiece = (Dir, (Val, bool, Val, bool));
+
 #[derive(Clone, Debug, Default)]
 struct Truth {
     d: Option<Set>,
@@ -767,6 +884,7 @@ struct Truth {
     va: Option<Xs>,
     ha: Option<Vec<(Tail, Val)>>,
     r: Option<Set>,
+    m: Option<Vec<MonoPiece>>,
 }
 
 /// Splits at `sep` outside parentheses and brackets.
@@ -892,6 +1010,26 @@ fn truth(s: &'static str) -> Truth {
                 })
             }
             "R" => t.r = Some(set(v)),
+            "M" => {
+                t.m = Some(
+                    split_top(v, ';')
+                        .into_iter()
+                        .map(|p| {
+                            let (d, i) = p.trim().split_once(':').expect("dir:interval");
+                            let dir = match d {
+                                "inc" => Dir::Increasing,
+                                "dec" => Dir::Decreasing,
+                                "const" => Dir::Constant,
+                                _ => panic!("direction {d}"),
+                            };
+                            let Set::Pieces(ps) = set(i) else {
+                                panic!("interval {i}")
+                            };
+                            (dir, ps[0])
+                        })
+                        .collect(),
+                )
+            }
             _ => panic!("key {k}"),
         }
     }
@@ -949,12 +1087,25 @@ fn domain_fits(d: &DomainValue, want: &Set) -> bool {
     match want {
         Set::Pieces(p) => d.excluded.is_empty() && pieces_fit(&d.pieces, p),
         Set::LineMinus(x0, per) => {
+            // One family, or n families of period n·per through distinct
+            // members of the truth's (tan(x) + cot(x): 0 + kπ and
+            // π/2 + kπ, together kπ/2).
+            let n = d.excluded.len();
+            let mut offsets: Vec<i64> = d
+                .excluded
+                .iter()
+                .filter(|f| {
+                    Val::Exact(n as f64 * per).fits_enc(&f.period) && in_family(*x0, *per, &f.x0)
+                })
+                .map(|f| (((f.x0.mid() - x0) / per).round() as i64).rem_euclid(n as i64))
+                .collect();
+            offsets.sort_unstable();
+            offsets.dedup();
             d.pieces.len() == 1
                 && d.pieces[0].lo == Bound::NegInf
                 && d.pieces[0].hi == Bound::PosInf
-                && d.excluded.len() == 1
-                && Val::Exact(*per).fits_enc(&d.excluded[0].period)
-                && in_family(*x0, *per, &d.excluded[0].x0)
+                && n >= 1
+                && offsets.len() == n
         }
     }
 }
@@ -976,6 +1127,53 @@ fn check_range(r: &Row<Vec<Piece>>, want: &Option<Set>) -> Option<String> {
         Set::LineMinus(..) => false,
     };
     (!ok).then(|| format!("range {value:?}, truth {want:?}"))
+}
+
+/// Monotone pieces: each listed one inside a true piece of its direction
+/// (its ends fit, or lie inside); a certified row lists every true piece,
+/// ends fitting.
+fn check_mono(r: &Row<Vec<Monotone>>, want: &Option<Vec<MonoPiece>>) -> Option<String> {
+    let want = want.as_ref()?;
+    let (value, certified) = match r {
+        Row::Certified { value, .. } => (value, true),
+        Row::Partial { value, .. } => (value, false),
+        Row::Unknown { .. } => return None,
+    };
+    // A listed end at or inside a true one.
+    let within = |b: &Bound, v: Val, closed: bool, low: bool| {
+        bound_fits(b, v, closed, low)
+            || match b {
+                Bound::At { x, .. } => {
+                    if low {
+                        x.lo.0 > v.mid()
+                    } else {
+                        x.hi.0 < v.mid()
+                    }
+                }
+                _ => false,
+            }
+    };
+    for m in value {
+        let ok = want.iter().any(|(d, (lo, lc, hi, hc))| {
+            *d == m.dir && within(&m.on.lo, *lo, *lc, true) && within(&m.on.hi, *hi, *hc, false)
+        });
+        if !ok {
+            return Some(format!("monotonicity: {m:?} is not in the truth {want:?}"));
+        }
+    }
+    if certified {
+        for (d, (lo, lc, hi, hc)) in want {
+            let listed = value.iter().any(|m| {
+                m.dir == *d
+                    && bound_fits(&m.on.lo, *lo, *lc, true)
+                    && bound_fits(&m.on.hi, *hi, *hc, false)
+            });
+            if !listed {
+                return Some(format!("monotonicity: certified {value:?}, truth {want:?}"));
+            }
+        }
+    }
+    None
 }
 
 /// x positions against a set: a certified row must be the set, a partial
@@ -1208,7 +1406,7 @@ fn checks(a: &Analysis, t: &Truth) -> Vec<Check> {
         period,
         ext_wrong,
         check_pts(&inf, &t.inf, "inflections"),
-        None,
+        check_mono(&a.monotonicity, &t.m),
         check_range(&a.range, &t.r),
         check_xs(&a.vertical, &t.va, "vertical"),
         ha,
@@ -1341,7 +1539,7 @@ fn no_row_is_certified_wrong() {
         let grades = engine_grades(id, variant).unwrap_or(['?'; 11]);
         runs.push(run(set, format!("{id} {src}"), src, &truth(t.1), grades));
     }
-    for (src, t) in REVIEW {
+    for (src, t) in REVIEW.iter().chain(UNMODELLED) {
         runs.push(run("review", src.to_string(), src, &truth(t), engine(src)));
     }
 

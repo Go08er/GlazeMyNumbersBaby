@@ -473,9 +473,14 @@ impl Graph {
 
     /// Function analysis for an equation (`Grapher::AnalyzeEquation`).
     ///
-    /// Bounded: a function too expensive to analyze reports
-    /// [`AnalysisError::TooComplex`] after a few hundred milliseconds at
-    /// most. Use [`Graph::analyze_cancellable`] to run it off the UI thread.
+    /// Bounded: the certifier's budget counts the work of each evaluation
+    /// (a tree's size times its order), and the panel's exact arithmetic
+    /// has its own, so the heaviest functions known (forty-term sums, a
+    /// max of seventy-nine tangents, sine nested forty deep) take about a
+    /// second at most, their rows unknown or partial where the budget ran
+    /// out; trees beyond the size limits report
+    /// [`AnalysisError::TooComplex`] at once. Use
+    /// [`Graph::analyze_cancellable`] to run it off the UI thread.
     pub fn analyze(&self, id: EquationId) -> KeyGraphFeatures {
         self.analyze_with(id, None)
             .expect("analysis without a cancel flag is never cancelled")

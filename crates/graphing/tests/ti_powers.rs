@@ -89,7 +89,7 @@ fn the_panel_follows_the_ti_rule() {
     assert_eq!(k.domain, "x ∈ (0, ∞)");
     assert!(k.y_intercept.is_empty(), "{}", k.y_intercept);
     assert!(k.vertical_asymptotes.is_empty());
-    assert_eq!(k.range, "y ∈ [0.692201, ∞)");
+    assert_eq!(k.range, "y ∈ [≈0.692201, ∞)");
 
     let k = analyze_str("y=x^0");
     assert_eq!(k.domain, "x ∈ ℝ \\ {0}");

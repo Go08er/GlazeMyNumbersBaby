@@ -98,9 +98,13 @@ How numbers are written:
 * **Otherwise to as many significant digits as the enclosure fixes, from
   three to six** (every value in it rounds alike to that many; large values
   too get no more than six), marked "≈" because the value isn't exact
-  (`≈1`, `≈0.5`, `≈1.41421`: trailing zeros trimmed). Accessibility reads
-  "≈" as "approximately". Two items of a row that would read alike get up
-  to fifteen digits, to tell them apart. The minimum is one switch,
+  (`≈1`, `≈0.5`, `≈1.41421`: trailing zeros trimmed). Values of 10⁶ and
+  more are written m×10ⁿ (`≈2.30062×10⁶`), the form chosen from the value
+  rounded to those digits, so both ends of an enclosure straddling an
+  integer or a power of ten read alike (`≈1×10⁶`); an exact integer keeps
+  its exact text (`1000000`). Accessibility reads "≈" as
+  "approximately". Two items of a row that would read alike get up to
+  fifteen digits, to tell them apart. The minimum is one switch,
   `MIN_SHOWN_DIGITS` in `crates/graphing/src/analysis/certified.rs`: 6
   restores the strict rule (all six digits fixed, or the row is unknown).
   Tracing shares it (`crates/graphing/src/trace.rs`): a traced value with
