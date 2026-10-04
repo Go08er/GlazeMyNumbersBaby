@@ -216,7 +216,7 @@ pub fn format_number_tol(v: f64, tol: f64) -> String {
     Nice::with_tol(v, tol).to_string()
 }
 
-fn superscript(n: i32) -> String {
+pub(crate) fn superscript(n: i32) -> String {
     n.to_string()
         .chars()
         .map(|c| match c {
@@ -291,7 +291,8 @@ fn format_decimal_digits(v: f64, sig: i32) -> String {
     // stay whole: 1000000000002, not 1.000000000002×10¹².
     if !(-5..9).contains(&e) && !(sig > 6 && (9..16).contains(&e)) {
         let digits = (sig - 1) as usize;
-        let mut m = a / 10f64.powi(e);
+        // In two steps: 10⁻³²⁴ itself is below the doubles.
+        let mut m = a / 10f64.powi(e / 2) / 10f64.powi(e - e / 2);
         let mut e = e;
         if format!("{m:.digits$}").starts_with("10") {
             m /= 10.0;
@@ -558,6 +559,10 @@ mod tests {
         // Noise is cleared before display; what reaches it is a value
         // (the zero of x − 10⁻¹⁰, the period of sin(10¹²x)).
         assert_eq!(format_number(1e-17), "1×10⁻¹⁷");
+        // R11-L-03: a decimal exponent whose power of ten is below the
+        // doubles.
+        assert_eq!(format_number(-f64::from_bits(1)), "−4.94066×10⁻³²⁴");
+        assert_eq!(format_number(f64::MIN_POSITIVE), "2.22507×10⁻³⁰⁸");
         assert_eq!(format_number(1e-10), "1×10⁻¹⁰");
         assert_eq!(format_number(2.0 * PI * 1e-12), "6.28319×10⁻¹²");
         assert_eq!(format_number(999999998.7), "999999998.7");

@@ -12,8 +12,9 @@ pub fn trim_trailing_zeros(number: &mut String) {
         return;
     }
 
-    if let Some(i) = number.rfind(|c| c != '0') {
-        number.truncate(i + 1);
+    // After the last character that isn't a zero, whatever its width.
+    if let Some((i, c)) = number.char_indices().rfind(|&(_, c)| c != '0') {
+        number.truncate(i + c.len_utf8());
     }
 
     if number.ends_with('.') {
