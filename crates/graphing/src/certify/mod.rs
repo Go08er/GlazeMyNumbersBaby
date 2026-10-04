@@ -389,12 +389,28 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     // One period of a periodic f stands for the line; a domain with
     // excluded families otherwise gets a window.
     let periodic = periodic_window(f, &dom);
+    // An undecided domain: the rows run where f's own tree is shown
+    // defined in [-w, w], and list what they find there alone.
+    let decided = dom.row.is_certified();
     let (win, period) = match periodic {
         Some((s, p)) => (Some((s, s + p.hi.0)), Some(p)),
-        None if !dom.families.is_empty() => (Some((-w, w)), None),
+        None if !dom.families.is_empty() || !decided => (Some((-w, w)), None),
         None => (None, None),
     };
-    let (boxes, gaps, whole) = side::interior(&dom, win);
+    f.allow(phase);
+    let (boxes, gaps, whole) = if decided {
+        side::interior(&dom, win)
+    } else {
+        let (b, defined) = side::defined_boxes(f, w);
+        (b, defined, false)
+    };
+    let defined: Vec<(f64, f64)> = gaps
+        .iter()
+        .filter_map(|c| match c {
+            Claim::Defined { x } => Some((x.a.0, x.b.0)),
+            _ => None,
+        })
+        .collect();
     let scope = rows::Scope {
         whole,
         window: win.unwrap_or((-w, w)),
@@ -697,7 +713,32 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         out
     };
     let (claims0, claims1, claims2) = (order(0, gc0), order(1, gc1), order(2, gc2));
-    let monotonicity = with(rows::monotonicity(&c1, &boxes, &scope, clear1), &claims1);
+    let monotonicity = if decided {
+        with(rows::monotonicity(&c1, &boxes, &scope, clear1), &claims1)
+    } else {
+        Row::unknown(rows::UNDECIDED)
+    };
+    let mut x_intercepts = rows::zeros(&c0, &scope, &claims0, clear0);
+    let mut extrema = with(
+        or_unknown(rows::extrema(f, &c1, &boxes, &scope, clear1)),
+        &claims1,
+    );
+    let mut inflections = with(
+        or_unknown(rows::inflections(f, &c2, &boxes, &scope, clear2)),
+        &claims2,
+    );
+    if !decided {
+        x_intercepts = rows::scoped(x_intercepts, &defined, false, |s| match s {
+            cert::Spot::At(x) => Some(*x),
+            cert::Spot::Every(_) => None,
+        });
+        extrema = rows::scoped(extrema, &defined, true, |e| {
+            e.every.is_none().then_some(e.x)
+        });
+        inflections = rows::scoped(inflections, &defined, true, |e| {
+            e.every.is_none().then_some(e.x)
+        });
+    }
     let horizontal = or_unknown(rows::horizontal(f, &dom, &scope));
     let (range, range_ends) = rows::range(f, &dom, &c0, &c1, &boxes, &scope, clear1)
         .unwrap_or_else(|s| (Row::unknown(stop(s)), Vec::new()));
@@ -707,18 +748,12 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         formula: f.expr.formula(),
         evaluated: evaluated(f),
         unit: unit_name(f.opts.trig_unit).into(),
-        x_intercepts: rows::zeros(&c0, &scope, &claims0, clear0),
+        x_intercepts,
         y_intercept: or_unknown(rows::y_intercept(f, &dom)),
         parity: or_unknown(rows::parity(f, &dom)),
         period: or_unknown(rows::period(f, &dom, &monotonicity, w)),
-        extrema: with(
-            or_unknown(rows::extrema(f, &c1, &boxes, &scope, clear1)),
-            &claims1,
-        ),
-        inflections: with(
-            or_unknown(rows::inflections(f, &c2, &boxes, &scope, clear2)),
-            &claims2,
-        ),
+        extrema,
+        inflections,
         monotonicity,
         range: with(range, &claims1),
         range_ends,

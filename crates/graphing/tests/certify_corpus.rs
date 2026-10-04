@@ -16,8 +16,8 @@ use std::time::Instant;
 
 use graphing::analysis::{analyze_str, flags};
 use graphing::certify::{
-    Analysis, Bound, DEFAULT_BUDGET, DomainValue, Enc, ExtKind, Parity, Piece, Region, Row, Spot,
-    Tail, certify_text,
+    Analysis, Bound, DEFAULT_BUDGET, Dir, DomainValue, Enc, ExtKind, Monotone, Parity, Piece,
+    Region, Row, Spot, Tail, certify_text,
 };
 use graphing::compile::{CompileOptions, compile_str};
 use graphing::functions::TrigUnit;
@@ -29,7 +29,8 @@ const ENGINE: &str = include_str!("fixtures/certify/engine_grades.tsv");
 /// y-intercept, P parity, T period, MIN/MAX extrema (local, strict; a
 /// closed end of the domain where f turns away counts, as in Windows:
 /// √x has a minimum at 0), INF inflections, VA/HA asymptotes, R
-/// range. A key left out is not checked (the truth is debatable or not a
+/// range, M the monotone pieces (`inc:(a,b];dec:[b,c)`, `const:` for a
+/// constant one). A key left out is not checked (the truth is debatable or not a
 /// set the rows can state). Values are expressions; `~` marks a value
 /// known to 6 digits, `-`/`+` one just below/above a double.
 const TRUTH: &[(&str, &str)] = &[
@@ -641,6 +642,61 @@ const REVIEW: &[(&str, &str)] = &[
     // the other (x·eˣ·(x + 1), zeros −1 and 0), which the zero-factor
     // reasoning once split wrongly.
     ("x*e^x*x+e^x*x", "D=R | XI=-1;0 | YI=0 | VA=none | HA=L:0"),
+    // Pre-review A, F3: side conditions the domain row can't decide, which
+    // f's simplified form has lost (it is defined where f isn't). The
+    // rows on it list only what lies where f's own tree is shown defined.
+    (
+        "x^2*floor(x)/floor(x)",
+        "D=(-inf,0)U[1,inf) | XI=none | YI=none | P=neither | T=none | MIN=(1,1) | MAX=none | INF=none | VA=none | HA=none | R=(0,inf) | M=dec:(-inf,0);inc:[1,inf)",
+    ),
+    (
+        "(x-0.5)*floor(x)/floor(x)",
+        "D=(-inf,0)U[1,inf) | XI=none | YI=none | P=neither | T=none | MIN=(1,0.5) | MAX=none | INF=none | VA=none | HA=none | R=(-inf,-0.5)U[0.5,inf) | M=inc:(-inf,0);inc:[1,inf)",
+    ),
+    (
+        "x^2*round(x)/round(x)",
+        "D=(-inf,-0.5]U[0.5,inf) | XI=none | YI=none | P=even | T=none | MIN=(-0.5,0.25);(0.5,0.25) | MAX=none | INF=none | VA=none | HA=none | R=[0.25,inf) | M=dec:(-inf,-0.5];inc:[0.5,inf)",
+    ),
+    (
+        "sin(x)*sign(x)/sign(x)",
+        "D=(-inf,0)U(0,inf) | XI=fam(0,pi) | YI=none | P=odd | MIN=fam(-pi/2,2*pi,-1) | MAX=fam(pi/2,2*pi,1) | INF=fam(0,pi,0) | VA=none | HA=none | R=[-1,1]",
+    ),
+    (
+        "(x^2-1)*floor(x^2)/floor(x^2)",
+        "D=(-inf,-1]U[1,inf) | XI=-1;1 | YI=none | P=even | T=none | MIN=(-1,0);(1,0) | MAX=none | INF=none | VA=none | HA=none | R=[0,inf) | M=dec:(-inf,-1];inc:[1,inf)",
+    ),
+    (
+        "x^2*sqrt(sin(x))/sqrt(sin(x))",
+        "XI=none | YI=none | P=neither | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none",
+    ),
+    (
+        "cos(x)*sqrt(sin(x))/sqrt(sin(x))",
+        "XI=fam(pi/2,2*pi) | YI=none | P=neither | T=2*pi | MIN=none | MAX=none | INF=fam(pi/2,2*pi,0) | VA=none | HA=none | R=(-1,1)",
+    ),
+    (
+        "x^2*ln(cos(x))/ln(cos(x))",
+        "XI=none | YI=none | P=even | MIN=none | MAX=none | INF=none | VA=none | HA=none",
+    ),
+    (
+        "x^2*mod(x,2)/mod(x,2)",
+        "D=fam(0,2) | XI=none | YI=none | P=even | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none",
+    ),
+    (
+        "cos(x)*floor(x)/floor(x)",
+        "D=(-inf,0)U[1,inf) | XI=fam(pi/2,pi) | YI=none | P=neither | T=none | MIN=fam(pi,2*pi,-1) | INF=fam(pi/2,pi,0) | VA=none | HA=none | R=[-1,1]",
+    ),
+    (
+        "(x+1)*(x-2)^x/(x-2)^x",
+        "D=(2,inf) | XI=none | YI=none | P=neither | T=none | MIN=none | MAX=none | INF=none | VA=none | R=(3,inf) | M=inc:(2,inf)",
+    ),
+    (
+        "x!/x!",
+        "XI=none | YI=1 | P=neither | MIN=none | MAX=none | INF=none | VA=none | R={1}",
+    ),
+    (
+        "sin(1/x)/sin(1/x)",
+        "XI=none | YI=none | P=even | MIN=none | MAX=none | INF=none | VA=none | HA=1 | R={1}",
+    ),
 ];
 
 // ---------------------------------------------------------------- values
@@ -767,6 +823,7 @@ struct Truth {
     va: Option<Xs>,
     ha: Option<Vec<(Tail, Val)>>,
     r: Option<Set>,
+    m: Option<Vec<(Dir, (Val, bool, Val, bool))>>,
 }
 
 /// Splits at `sep` outside parentheses and brackets.
@@ -892,6 +949,26 @@ fn truth(s: &'static str) -> Truth {
                 })
             }
             "R" => t.r = Some(set(v)),
+            "M" => {
+                t.m = Some(
+                    split_top(v, ';')
+                        .into_iter()
+                        .map(|p| {
+                            let (d, i) = p.trim().split_once(':').expect("dir:interval");
+                            let dir = match d {
+                                "inc" => Dir::Increasing,
+                                "dec" => Dir::Decreasing,
+                                "const" => Dir::Constant,
+                                _ => panic!("direction {d}"),
+                            };
+                            let Set::Pieces(ps) = set(i) else {
+                                panic!("interval {i}")
+                            };
+                            (dir, ps[0])
+                        })
+                        .collect(),
+                )
+            }
             _ => panic!("key {k}"),
         }
     }
@@ -976,6 +1053,56 @@ fn check_range(r: &Row<Vec<Piece>>, want: &Option<Set>) -> Option<String> {
         Set::LineMinus(..) => false,
     };
     (!ok).then(|| format!("range {value:?}, truth {want:?}"))
+}
+
+/// Monotone pieces: each listed one inside a true piece of its direction
+/// (its ends fit, or lie inside); a certified row lists every true piece,
+/// ends fitting.
+fn check_mono(
+    r: &Row<Vec<Monotone>>,
+    want: &Option<Vec<(Dir, (Val, bool, Val, bool))>>,
+) -> Option<String> {
+    let want = want.as_ref()?;
+    let (value, certified) = match r {
+        Row::Certified { value, .. } => (value, true),
+        Row::Partial { value, .. } => (value, false),
+        Row::Unknown { .. } => return None,
+    };
+    // A listed end at or inside a true one.
+    let within = |b: &Bound, v: Val, closed: bool, low: bool| {
+        bound_fits(b, v, closed, low)
+            || match b {
+                Bound::At { x, .. } => {
+                    if low {
+                        x.lo.0 > v.mid()
+                    } else {
+                        x.hi.0 < v.mid()
+                    }
+                }
+                _ => false,
+            }
+    };
+    for m in value {
+        let ok = want.iter().any(|(d, (lo, lc, hi, hc))| {
+            *d == m.dir && within(&m.on.lo, *lo, *lc, true) && within(&m.on.hi, *hi, *hc, false)
+        });
+        if !ok {
+            return Some(format!("monotonicity: {m:?} is not in the truth {want:?}"));
+        }
+    }
+    if certified {
+        for (d, (lo, lc, hi, hc)) in want {
+            let listed = value.iter().any(|m| {
+                m.dir == *d
+                    && bound_fits(&m.on.lo, *lo, *lc, true)
+                    && bound_fits(&m.on.hi, *hi, *hc, false)
+            });
+            if !listed {
+                return Some(format!("monotonicity: certified {value:?}, truth {want:?}"));
+            }
+        }
+    }
+    None
 }
 
 /// x positions against a set: a certified row must be the set, a partial
@@ -1208,7 +1335,7 @@ fn checks(a: &Analysis, t: &Truth) -> Vec<Check> {
         period,
         ext_wrong,
         check_pts(&inf, &t.inf, "inflections"),
-        None,
+        check_mono(&a.monotonicity, &t.m),
         check_range(&a.range, &t.r),
         check_xs(&a.vertical, &t.va, "vertical"),
         ha,

@@ -888,6 +888,46 @@ const PLANTS: &[Plant] = &[
         x["lo"] = serde_json::json!(3.0f64.next_up());
         x["hi"] = serde_json::json!(3.0f64.next_up());
     }),
+    // The domain undecided (sign(x) in a divisor): items only inside boxes
+    // where f's own tree is shown defined.
+    (
+        "sin(x)*sign(x)/sign(x)",
+        "the boxes f is defined on dropped",
+        |v| {
+            claims_of(v, "x_intercepts").retain(|c| c.get("Defined").is_none());
+        },
+    ),
+    (
+        "sin(x)*sign(x)/sign(x)",
+        "an x-intercept where f is undefined, from the simplified form",
+        |v| {
+            value_of(v, "x_intercepts")
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({"At": {"lo": 0.0, "hi": 0.0}}));
+            claims_of(v, "x_intercepts").push(serde_json::json!({"ExactAt": {
+                "x": {"a": -0.5, "b": 0.5}, "of": {"F": "F0"}, "c": 0.0, "at": 0.0}}));
+        },
+    ),
+    (
+        "sin(x)*sign(x)/sign(x)",
+        "extrema called complete with the domain undecided",
+        |v| {
+            let r = v["extrema"].as_object_mut().unwrap();
+            let mut body = r.remove("Partial").unwrap();
+            body["cert"]["covers"] = serde_json::json!({"Window": {"a": -16.0, "b": 16.0}});
+            r.insert("Certified".into(), body);
+        },
+    ),
+    (
+        "sin(x)*sign(x)/sign(x)",
+        "monotone pieces with the domain undecided",
+        |v| {
+            v["monotonicity"] = serde_json::json!({"Certified": {
+                "value": [{"on": {"lo": "NegInf", "hi": "PosInf"}, "dir": "Increasing"}],
+                "cert": {"covers": "Line", "claims": []}}});
+        },
+    ),
 ];
 
 /// The slope evidence the plants above alter, unaltered, replays.

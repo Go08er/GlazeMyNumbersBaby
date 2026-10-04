@@ -1014,6 +1014,80 @@ pub fn interior(d: &Domain, window: Option<(f64, f64)>) -> (Vec<IBox>, Vec<Claim
     (boxes, gaps, whole)
 }
 
+/// Halvings of `[-w, w]` [`defined_boxes`] may evaluate f's tree on.
+const DEFINED_EVALS: usize = 4096;
+
+/// When the domain isn't decided, the boxes the other rows run on: where
+/// f's own tree is shown defined (decoration at least *def*) within
+/// `[-w, w]`, found by halving until each piece is defined, undefined, or
+/// too narrow to halve. f's simplified form may be defined where f isn't;
+/// on these boxes it equals f. Each comes one double in from the box
+/// claimed Defined, so f equals the form on a neighbourhood of it (and
+/// f′, f″ the form's). What they leave out is undecided: rows on them list
+/// what they find, never all of it. Returns the boxes and the Defined
+/// claims.
+pub fn defined_boxes(f: &Fun<'_>, w: f64) -> (Vec<IBox>, Vec<Claim>) {
+    let mut found: Vec<(f64, f64)> = Vec::new();
+    let mut level = vec![(-w, w)];
+    let mut evals = 0;
+    'halving: while !level.is_empty() {
+        let mut next = Vec::new();
+        for (a, b) in level {
+            if evals == DEFINED_EVALS {
+                break 'halving;
+            }
+            evals += 1;
+            let Ok(s) = f.ser_of(&f.expr, Interval::new(a, b), 0) else {
+                break 'halving;
+            };
+            let v = s[0];
+            if v.is_empty() {
+                continue;
+            }
+            if v.dec >= crate::interval::Dec::Def {
+                found.push((a, b));
+                continue;
+            }
+            let m = a / 2.0 + b / 2.0;
+            if b - a > 1e-10 * a.abs().max(b.abs()).max(1.0) && a < m && m < b {
+                next.push((a, m));
+                next.push((m, b));
+            }
+        }
+        level = next;
+    }
+    found.sort_by(|p, q| p.0.total_cmp(&q.0));
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    for (a, b) in found {
+        match merged.last_mut() {
+            Some(m) if m.1 >= a => m.1 = m.1.max(b),
+            _ => merged.push((a, b)),
+        }
+    }
+    let at = |x: f64| Bound::At {
+        x: Enc::point(x),
+        closed: true,
+    };
+    let mut boxes = Vec::new();
+    let mut claims = Vec::new();
+    for (a, b) in merged {
+        let (ia, ib) = (a.next_up(), b.next_down());
+        if ia > ib {
+            continue;
+        }
+        boxes.push(IBox {
+            a: ia,
+            b: ib,
+            lo: at(ia),
+            hi: at(ib),
+            lo_clipped: true,
+            hi_clipped: true,
+        });
+        claims.push(Claim::Defined { x: XBox::new(a, b) });
+    }
+    (boxes, claims)
+}
+
 /// True if `x` (a double) is in the domain's pieces, as far as the bounds
 /// tell (an enclosed bound counts as excluding its enclosure).
 pub fn in_pieces(pieces: &[Piece], x: f64) -> bool {

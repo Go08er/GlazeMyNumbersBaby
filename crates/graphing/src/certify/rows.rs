@@ -88,6 +88,43 @@ fn row_of<T>(
     }
 }
 
+/// Why a row is unknown when f's domain isn't decided.
+pub const UNDECIDED: &str = "the domain is not decided";
+
+/// With f's domain not decided, a row found on the boxes where f's own
+/// tree is shown defined (`defined`, the boxes claimed Defined): only the
+/// items inside one (a turn strictly inside, f defined on either side of
+/// it), and never all of them.
+pub fn scoped<T>(
+    row: Row<Vec<T>>,
+    defined: &[(f64, f64)],
+    turn: bool,
+    at: impl Fn(&T) -> Option<Enc>,
+) -> Row<Vec<T>> {
+    let (items, mut cert) = match row {
+        Row::Certified { value, cert } | Row::Partial { value, cert } => (value, cert),
+        u @ Row::Unknown { .. } => return u,
+    };
+    let inside = |x: Enc| {
+        defined.iter().any(|&(a, b)| {
+            if turn {
+                a < x.lo.0 && x.hi.0 < b
+            } else {
+                a <= x.lo.0 && x.hi.0 <= b
+            }
+        })
+    };
+    let kept: Vec<T> = items
+        .into_iter()
+        .filter(|it| at(it).is_some_and(inside))
+        .collect();
+    if kept.is_empty() {
+        return Row::unknown(UNDECIDED);
+    }
+    cert.covers = Region::Points;
+    Row::Partial { value: kept, cert }
+}
+
 fn enc_of(l: f64, r: f64) -> Enc {
     Enc::new(l, r)
 }
