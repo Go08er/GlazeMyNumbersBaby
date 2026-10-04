@@ -219,7 +219,7 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **800 tests** (counts include
+`nix develop -c cargo test --workspace` runs **836 tests** (counts include
 doctests; two more, a live currency fetch and the full metamorphic graph
 sweep, are `#[ignore]`d). `cargo run --release -p graphing --example sweep`
 checks graph analysis against about 3,400 generated functions (shifted,
@@ -240,15 +240,15 @@ upstream sources with g++:
 
 | Crate | What's checked |
 | --- | --- |
-| ratpack (11) | 13,628 golden cases from the C++ Ratpack (every op and function, all angle types, radixes 2, 3, 8, 10, 16 and 36, formats, precisions, error codes), byte-for-byte; port of `RationalTest.cpp` |
+| ratpack (12) | 13,628 golden cases from the C++ Ratpack (every op and function, all angle types, radixes 2, 3, 8, 10, 16 and 36, formats, precisions, error codes), byte-for-byte; port of `RationalTest.cpp` |
 | calcmanager (77) | 3,500 golden command sequences replayed against the C++ `CalculatorManager` (every display callback, expression token, history and memory state); ports of `CalcEngineTests`, `CalcInputTest`, `CalculatorManagerTest` |
-| calcvm (121) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage |
-| unitconv (139 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
+| calcvm (129) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage |
+| unitconv (140 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
 | datecalc (40), copypaste (40) | Ports of `DateCalculatorTests` and `CopyPasteManagerTests`, plus paste key-sequence tests |
-| graphing (290 + 1 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
-| appcore (43) | Keyboard map, key scripts, converter paste validation, settings storage (huge/corrupt files), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
+| graphing (300 + 1 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
+| appcore (46) | Keyboard map, key scripts, converter paste validation, settings storage (huge/corrupt files), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
 | crmath (1) | The vendored CORE-MATH's two builds (baseline and x86-64-v3) give the same bits |
-| gmnb (6), gmnb-launcher (4), dgmnb (37) | GDK key translation, palette contrast for extreme accents, settings compatibility, licence text that parses as markup; the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it) and where it finds GMNB; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown, pipe deadlines, and X11 paste (formats, size caps, deadlines under event floods) against a private Xvfb |
+| gmnb (7), gmnb-launcher (4), dgmnb (40) | GDK key translation, palette contrast for extreme accents, settings compatibility, licence text that parses as markup; the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it) and where it finds GMNB; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown, pipe deadlines, and X11 paste (formats, size caps, deadlines under event floods) against a private Xvfb |
 
 The oracles live in `tools/oracle/` and need the upstream repository checked
 out at `reference/calculator` to regenerate the golden files.
@@ -308,37 +308,37 @@ CI also runs checks that need more than `cargo test --workspace`:
   Windows-parity of the analysis is not claimed; the conventions it
   follows where Windows' choice isn't known are in
   [docs/ti-conventions.md](docs/ti-conventions.md).
-- **Explicit curves are joined only where that is proven.** Two plotted
-  points of y = f(x) are joined only when interval arithmetic proves f
-  defined and continuous between them and the line between them within
-  about a pixel of the curve; elsewhere the sampler subdivides, and leaves
-  a gap where it can't prove that down to a hundred-thousandth of a pixel:
-  at poles (`tan x`, `1/x`), jumps (`floor x`) and domain edges (`√x`).
-  Spikes and oscillations narrower than a pixel (`sin(1/x)` near 0) are
-  drawn through their true extremes. A removable hole (`(x²−1)/(x−1)` at
-  1, `x/x` at 0) is drawn as an open circle, where Windows and the TI-84
-  show nothing. A hole at a point that isn't a double (`tan x·cos x` at
-  π/2) can't be proven undefined at any double, so it isn't marked: its
-  gap is far narrower than a pixel. A circle needs f proven undefined at
-  a number in a gap far narrower than a pixel, proven defined on both
-  sides, and meeting itself across it (a pole of `x!` is never one). A
-  pixel column with more poles than a pixel shows (`tan 100x` at ±1000)
-  is drawn as a stroke down the column, joined to neither side. Each
-  curve has a fixed work budget, counted rather than timed (the same view
-  draws the same on any machine), spent on the breaks first and the
-  shapes second. Where it runs out (very long or wildly oscillating
-  functions), the rest is drawn coarser: continuous parts are still
-  joined only where proven, undecided ones only where sampling finds no
-  jump, but chords there may stray from the curve by more than a pixel.
+- **Explicit curves are joined only where that is proven, within a work
+  budget.** Two plotted points of y = f(x) are joined only when interval
+  arithmetic proves f defined and continuous between them and the line
+  between them within about a pixel of the curve; elsewhere the sampler
+  subdivides, and leaves a gap where it can't prove that down to a
+  hundred-thousandth of a pixel: at poles (`tan x`, `1/x`), jumps (`floor
+  x`) and domain edges (`√x`). Spikes and oscillations narrower than a
+  pixel (`sin(1/x)` near 0) are drawn through their true extremes. A
+  removable hole (`(x²−1)/(x−1)` at 1, `x/x` at 0) is drawn as an open
+  circle, where Windows and the TI-84 show nothing. A hole at a point that
+  isn't a double (`tan x·cos x` at π/2) can't be proven undefined at any
+  double, so it isn't marked: its gap is far narrower than a pixel. A
+  circle needs f proven undefined at a number in a gap far narrower than a
+  pixel, proven defined on both sides, and meeting itself across it (a
+  pole of `x!` is never one). A pixel column with more poles than a pixel
+  shows (`tan 100x` at ±1000) is drawn as a stroke down the column, joined
+  to neither side. Each curve has a fixed work budget, counted rather than
+  timed (the same view draws the same on any machine), spent on the breaks
+  first and the shapes second. Where it runs out (very long or wildly
+  oscillating functions), the rest is drawn coarser: continuous parts are
+  still joined only where proven, undecided ones only where sampling finds
+  no jump, but chords there may stray from the curve by more than a pixel.
   The plot is then flagged as having missing data (the apps don't show
   that yet); so it is where the shape of a piece under a pixel wide can't
   be bounded, as in the pixel beside a removable hole (`x/x` next to its
   circle: the enclosure of x/x there doesn't know the two x are one),
-  which is joined as proven continuous through point samples. The
-  boundary of an explicit
-  inequality (`y < tan x`) is drawn the same way, but implicit plots and
-  inequality regions are unchanged in 0.2: still sampled in floating point
-  (a certified plotter for them is planned for 0.3).
+  which is joined as proven continuous through point samples. The boundary
+  of an explicit inequality (`y < tan x`) is drawn the same way, but
+  implicit plots and inequality regions are unchanged in 0.2: still
+  sampled in floating point (a certified plotter for them is planned for
+  0.3).
 - **Tracing shows only what is determined.** On y = f(x) the traced x is
   the decimal shown, and y comes from f's interval enclosure there, to the
   digits it fixes: the view's precision, as in Windows; up to three more
