@@ -304,11 +304,12 @@ impl Num {
     }
 }
 
-/// `k`-multiples of a period: `2kπ`, `kπ/2`, `360k`.
+/// `k`-multiples of a period: `2kπ`, `kπ/2`, `360k`, `≈9.8696k` (an
+/// approximate period stays marked).
 fn times_k(p: &Num) -> String {
     p.exact
         .and_then(Ex::times_k)
-        .unwrap_or_else(|| format!("{}k", approx(p.enc).trim_start_matches('≈')))
+        .unwrap_or_else(|| format!("{}k", approx(p.enc)))
 }
 
 /// `x₀ + k·P` (k ∈ ℤ implied).
@@ -2103,16 +2104,16 @@ pub(super) fn features(
         out.unknown(flags::PERIODICITY);
     }
 
-    // Monotonicity.
+    // Monotonicity: over one period, each piece repeats every P (exact,
+    // or only enclosed: π², 360/π).
     let per: Option<Num> = match &a.monotonicity {
         Row::Certified { cert, .. } => match cert.covers {
             Region::Period { a: s0, b: s1 } => {
                 let w = s1.0 - s0.0;
-                cx.period
-                    .filter(|p| (p.to_f64() - w).abs() <= 1e-9 * w)
-                    .zip(cx.period_enc)
-                    .map(|(p, enc)| Num {
-                        exact: Some(p),
+                cx.period_enc
+                    .filter(|p| (p.mid() - w).abs() <= 1e-9 * w)
+                    .map(|enc| Num {
+                        exact: cx.period.filter(|p| (p.to_f64() - w).abs() <= 1e-9 * w),
                         enc,
                     })
             }
@@ -2138,9 +2139,21 @@ pub(super) fn features(
                             let pm = p.value();
                             let n = ((l.value() + pm / 2.0) / pm).floor();
                             if n == 0.0 || !n.is_finite() {
+                                return (l, h);
+                            }
+                            // (An end moved onto 0 with an enclosed period,
+                            // P − P, has no digit fixed: it stays put.)
+                            let (sl, sh) = (shift(l, p, n), shift(h, p, n));
+                            let on_zero = |e: &Num| {
+                                e.exact.is_none()
+                                    && !e.enc.is_point()
+                                    && e.enc.lo.0 <= 0.0
+                                    && 0.0 <= e.enc.hi.0
+                            };
+                            if on_zero(&sl) || on_zero(&sh) {
                                 (l, h)
                             } else {
-                                (shift(l, p, n), shift(h, p, n))
+                                (sl, sh)
                             }
                         }),
                     None => None,
