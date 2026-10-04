@@ -41,15 +41,34 @@ pub fn apply_theme_setting(theme: &str) {
     });
 }
 
+/// The window class for a see-through backdrop.
+pub const SEE_THROUGH: &str = "wc-see-through";
+
 /// Show the backdrop at `alpha`: below 1 it, and the window under it, are
-/// see-through.
+/// see-through, where the display composites windows. Without that (X11
+/// with no compositing manager) a see-through window shows black, so it
+/// stays opaque.
 pub fn apply_backdrop(win: &adw::ApplicationWindow, aurora: &Aurora, alpha: f32) {
-    aurora.set_backdrop_alpha(alpha);
-    if alpha < 1.0 {
-        win.add_css_class("wc-see-through");
-    } else {
-        win.remove_css_class("wc-see-through");
+    let see_through = alpha < 1.0 && WidgetExt::display(win).is_composited();
+    aurora.set_backdrop_alpha(if see_through { alpha } else { 1.0 });
+    if see_through == win.has_css_class(SEE_THROUGH) {
+        return;
     }
+    if see_through {
+        win.add_css_class(SEE_THROUGH);
+    } else {
+        win.remove_css_class(SEE_THROUGH);
+    }
+    // Text drawn by hand (the display) adds or drops its halo.
+    fn redraw(w: &gtk::Widget) {
+        w.queue_draw();
+        let mut c = w.first_child();
+        while let Some(child) = c {
+            redraw(&child);
+            c = child.next_sibling();
+        }
+    }
+    redraw(win.upcast_ref());
 }
 
 impl Window {
@@ -125,6 +144,16 @@ impl Window {
             &aurora,
             crate::settings::backdrop_alpha(settings.background_opacity),
         );
+        {
+            // A compositing manager can start or stop while GMNB runs (X11).
+            let (w, a, st) = (win.downgrade(), aurora.downgrade(), Rc::downgrade(&store));
+            WidgetExt::display(&win).connect_composited_notify(move |_| {
+                if let (Some(w), Some(a), Some(st)) = (w.upgrade(), a.upgrade(), st.upgrade()) {
+                    let v = st.data.borrow().background_opacity;
+                    apply_backdrop(&w, &a, crate::settings::backdrop_alpha(v));
+                }
+            });
+        }
         let toasts = adw::ToastOverlay::new();
         let ctx = Rc::new(Ctx {
             hub: hub.clone(),

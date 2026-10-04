@@ -1632,6 +1632,11 @@ impl GraphPage {
 }
 
 fn format_value(v: f64) -> String {
+    // To 3 decimals, as the field shows; past 10¹⁵ (where v·1000 can
+    // overflow and every double is whole anyway) in e-notation.
+    if !v.is_finite() || v.abs() >= 1e15 {
+        return format!("{v:e}");
+    }
     let r = (v * 1000.0).round() / 1000.0;
     if r == 0.0 { "0".into() } else { format!("{r}") }
 }
@@ -1639,6 +1644,15 @@ fn format_value(v: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A variable's value as its field shows it, however big.
+    #[test]
+    fn variable_values_format_at_any_size() {
+        assert_eq!(format_value(1.23456), "1.235");
+        assert_eq!(format_value(-0.0001), "0");
+        assert_eq!(format_value(1e306), "1e306");
+        assert_eq!(format_value(-2.5e20), "-2.5e20");
+    }
 
     /// Pre-review: a variable's slider works from the keyboard (and says
     /// its number), and arrows on the focused graph trace it.
@@ -1723,6 +1737,8 @@ mod tests {
             ("y=1000*x", true),
             ("y=1000000000*x", false),
             ("y=1000000000*x", true),
+            ("y=1000000000000000*x", false),
+            ("y=1000000000000000*x", true),
             ("y=x", false),
         ] {
             let mut g = GraphPage::for_test(session::from_list(src));

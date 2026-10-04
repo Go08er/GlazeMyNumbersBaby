@@ -6,9 +6,30 @@ window.gmnb {
   color: @wc_fg;
 }
 
-/* The backdrop (the aurora) is see-through: so is the window under it. */
+/* The backdrop (the aurora) is see-through: so is the window under it,
+   and text that sits straight on it gets a halo in the backdrop's colour
+   (the display draws its own). */
 window.gmnb.wc-see-through {
   background-color: transparent;
+}
+window.gmnb.wc-see-through label,
+window.gmnb.wc-see-through button.wc-mem {
+  text-shadow: 0 0 3px alpha(@wc_base, 0.9), 0 0 10px alpha(@wc_base, 0.75);
+}
+/* Frosted panels: what sits straight on the backdrop gets a translucent
+   layer of the backdrop's own colour, so it stays readable over any
+   desktop (the keys' glass is drawn over it). */
+window.gmnb.wc-see-through headerbar,
+window.gmnb.wc-see-through calcdisplay,
+window.gmnb.wc-see-through .wc-glass-panel,
+window.gmnb.wc-see-through button.wc-key {
+  background-color: alpha(@wc_base, 0.55);
+}
+window.gmnb.wc-see-through calcdisplay {
+  border-radius: 18px;
+}
+window.gmnb.wc-see-through button.wc-mem {
+  background-color: alpha(@wc_base, 0.45);
 }
 
 window.gmnb headerbar,

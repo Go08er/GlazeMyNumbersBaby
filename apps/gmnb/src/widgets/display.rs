@@ -143,7 +143,28 @@ mod imp {
         }
 
         fn snapshot(&self, s: &gtk::Snapshot) {
-            self.obj().draw(s);
+            let obj = self.obj();
+            // Over a see-through window the desktop can be anything: a
+            // soft halo in the backdrop's colour keeps the numbers legible.
+            let halo = self.scheme.get().filter(|_| {
+                obj.root()
+                    .is_some_and(|r| r.has_css_class(crate::window::SEE_THROUGH))
+            });
+            if let Some(scheme) = halo {
+                let base = if scheme.dark {
+                    scheme.base_bottom
+                } else {
+                    scheme.base_top
+                };
+                s.push_shadow(&[
+                    gsk::Shadow::new(rgba(base, 0.9), 0.0, 0.0, 3.0),
+                    gsk::Shadow::new(rgba(base, 0.75), 0.0, 0.0, 10.0),
+                ]);
+            }
+            obj.draw(s);
+            if halo.is_some() {
+                s.pop();
+            }
         }
     }
 }
