@@ -2,11 +2,17 @@
 //! checker (`tests/replay/`, MPFR, `--features mpfr-oracle`).
 //!
 //! For each function the certifier (`graphing::certify`) runs as the app
-//! would; its analysis goes through JSON to the replay, which knows
-//! nothing of the certifier's code: every claim is re-proved with the
-//! replay's own interval arithmetic, and every row is checked against its
-//! claims. A claim the replay proves false, or a row that doesn't follow
-//! from its claims, fails the test.
+//! would; its analysis goes through JSON to the replay, which shares none
+//! of the certifier's code (only graphing's parser and expression tree,
+//! for reading the source): every claim is checked with the replay's own
+//! MPFR interval arithmetic, and every row against its claims. A claim is
+//! *strong* when the replay proves it on the source's own tree, and *weak*
+//! when it can only prove it on a tree the certifier supplied (the
+//! simplifier's form, the derivatives) or check it at sample points: a
+//! weak claim rests on the simplifier being right. A claim the replay
+//! proves false, or a row that doesn't follow from its claims, fails the
+//! test; on the certify corpus so does a claim it can neither prove nor
+//! refute (unconfirmed) or doesn't model (unsupported).
 //!
 //! `cargo test -p graphing --features mpfr-oracle --test certify_replay`
 //! replays the certify corpus (its fixtures and review rounds 9–11);
@@ -244,8 +250,8 @@ fn one(src: &str, unit: TrigUnit) -> Done {
 }
 
 /// Replays every function (in parallel), prints the tally, and returns
-/// what fails.
-fn run(fs: Vec<(String, TrigUnit)>) -> Vec<String> {
+/// what fails: with `strict`, unconfirmed and unsupported claims too.
+fn run(fs: Vec<(String, TrigUnit)>, strict: bool) -> Vec<String> {
     let want = fs.len();
     let filter = std::env::var("REPLAY_FILTER").ok();
     let verbose = std::env::var_os("REPLAY_VERBOSE").is_some();
@@ -322,10 +328,15 @@ fn run(fs: Vec<(String, TrigUnit)>) -> Vec<String> {
             *tally.entry(k).or_insert(0) += n;
         }
         for c in &r.claims {
-            let bad = c.outcome.class == Class::Refuted;
+            let bad = match c.outcome.class {
+                Class::Refuted => true,
+                Class::Unconfirmed | Class::Unsupported => strict,
+                Class::Strong | Class::Weak => false,
+            };
             if bad {
                 fails.push(format!(
-                    "{label}: refuted {:?} ({}): {}",
+                    "{label}: {} {:?} ({}): {}",
+                    c.outcome.class.name(),
                     c.claim,
                     c.rows.join(","),
                     c.outcome.note
@@ -415,7 +426,8 @@ fn corpus_certificates_replay() {
         review().len()
     );
     assert!(fs.len() >= 140, "only {} corpus functions", fs.len());
-    let fails = run(fs);
+    // Every claim of the corpus proved or refuted (none is left open today).
+    let fails = run(fs, true);
     assert!(fails.is_empty(), "{} failures", fails.len());
 }
 
@@ -424,7 +436,7 @@ fn corpus_certificates_replay() {
 fn pool_certificates_replay() {
     let mut fs = units();
     fs.extend(pool());
-    let fails = run(fs);
+    let fails = run(fs, false);
     assert!(fails.is_empty(), "{} failures", fails.len());
 }
 

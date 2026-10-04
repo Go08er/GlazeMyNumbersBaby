@@ -30,6 +30,13 @@ SOFTWARE.
 #endif
 #include <math.h> // for signgam
 
+/* GMNB patch (see crates/crmath/README.md): the sign of Γ goes to a
+   thread-local of this file, not to libc's global `signgam`, which plot
+   threads would otherwise write concurrently. Nothing here reads it. */
+#undef signgam
+#define signgam crmath_lgamma_sign
+static _Thread_local int crmath_lgamma_sign;
+
 // Warning: clang also defines __GNUC__
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic ignored "-Wunknown-pragmas"

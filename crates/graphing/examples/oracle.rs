@@ -16,9 +16,10 @@
 //! for *values* (a double with an unbounded exponent where an intermediate
 //! leaves the doubles). Nothing from `analysis::verify` is used: no noise
 //! estimate, rounding bound, sample set, rule or tolerance of the gate's.
-//! What it does share with the app is arithmetic: libm and `dd.rs` under
-//! both evaluators. A wrong primitive both use agrees with itself, so the
-//! pool also compares equivalent spellings (below).
+//! What it does share with the app is arithmetic: CORE-MATH's functions
+//! (`crates/crmath`) and `dd.rs` under both evaluators. A wrong primitive
+//! both use agrees with itself, so the pool also compares equivalent
+//! spellings (below).
 //!
 //! # What is checked
 //!

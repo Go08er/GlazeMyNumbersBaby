@@ -1951,10 +1951,14 @@ double cr_pow (double x, double y) {
                       in [1, 2) */
     return (qR.sgn == 0x0) ? 1.0 + 0x1p-100 : 1.0 - 0x1p-100;
 
-  printf ("Unexpected worst-case found.\n");
-  printf ("Please report to core-math@inria.fr:\n");
-  printf ("Worst-case of pow found: x,y=%la,%la\n", x, y);
-  exit (1);
+  /* GMNB patch (see crates/crmath/README.md): upstream prints and calls
+     exit(1) here, a path its worst-case search says is never reached. A
+     graphing app mustn't exit on one value: return the rounding of the
+     third iteration's approximation (relative error < 2^-240), as the
+     branch above does. */
+  qZ.sgn = s == -1.0;
+  qZ.ll = qZ.ll & (~0ull << 10);
+  return qint_tod (&qZ);
 
 #else
   return -0.0;

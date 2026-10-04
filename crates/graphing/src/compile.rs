@@ -1034,10 +1034,13 @@ fn constant_wide(e: &Expr, opts: &CompileOptions<'_>) -> Option<Wide> {
         }
         Expr::Bin(BinOp::Sub, a, b) if a == b => Some(zero),
         // Shifts of one expression that cancel: (x + 1) − x is 1.
+        // (No `if let` guards here: they need Rust 1.95; the MSRV is 1.92.)
         Expr::Bin(BinOp::Add | BinOp::Sub, ..)
-            if let Some(s) = Scaled::of(e, opts)
-                && s.k == 0.0 =>
+            if Scaled::of(e, opts).is_some_and(|s| s.k == 0.0) =>
         {
+            let Some(s) = Scaled::of(e, opts) else {
+                unreachable!()
+            };
             value(Wide::new(s.c).div(Wide::new(s.d)))
         }
         Expr::Bin(op, a, b) => value(apply_bin(*op, c(a)?, c(b)?)),
@@ -1225,10 +1228,12 @@ fn lower(e: &Expr, opts: &CompileOptions<'_>) -> Result<Piece, EquationError> {
             }
         },
         Expr::Bin(BinOp::Div, a, b)
-            if let Expr::Bin(BinOp::Pow, base, k) = &**b
-                && syntactic_rational(k).is_some_and(|(p, _)| p > 0)
-                && !never_zero(base) =>
+            if matches!(&**b, Expr::Bin(BinOp::Pow, base, k)
+                if syntactic_rational(k).is_some_and(|(p, _)| p > 0) && !never_zero(base)) =>
         {
+            let Expr::Bin(BinOp::Pow, base, k) = &**b else {
+                unreachable!()
+            };
             // a/b^k as a·b^(−k): the same where b = 0 (undefined), but where
             // b^k underflows (1/x^400 near 0) the power overflows to ∞
             // instead of a division by an underflowed 0.

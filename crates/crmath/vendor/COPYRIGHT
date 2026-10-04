@@ -1,0 +1,65 @@
+CORE-MATH copyright notices
+===========================
+
+The CORE-MATH files in GMNB's crates/crmath/vendor are distributed under
+the MIT licence in vendor/LICENSE. That file carries the permission text
+only; the copyright notices are in each source file's header. They are
+collected here so that the full notice, copyright and permission, ships
+with every binary that contains this code.
+
+Collected from upstream commit 85430b3e (as vendored by core-math-sys 1.4.0)
+by running `grep -h '^Copyright' binary64/*/*.[ch]` in crates/crmath/vendor
+over all 32 vendored files, which each carry one copyright line. When a
+function is added, rerun that command and update this list.
+
+Copyright holders
+-----------------
+
+Copyright (c) 2021-2026 Alexei Sibidanov <sibid@uvic.ca>
+Copyright (c) 2021-2026 Paul Zimmermann
+Copyright (c) 2021-2025 Tom Hubrecht
+Copyright (c) 2023-2026 Cyprien Peignier
+Copyright (c) 2022-2025 CERN
+Copyright (c) 2022-2025 Inria (INRIA)
+
+Per file
+--------
+
+binary64/acos/acos.c          Copyright (c) 2024-2025 Alexei Sibidanov
+binary64/acosh/acosh.c        Copyright (c) 2023 Alexei Sibidanov
+binary64/acospi/acospi.c      Copyright (c) 2021-2023 Paul Zimmermann and Tom Hubrecht
+binary64/asin/asin.c          Copyright (c) 2022-2026 Alexei Sibidanov <sibid@uvic.ca>
+binary64/asinh/asinh.c        Copyright (c) 2023-2025 Alexei Sibidanov <sibid@uvic.ca>
+binary64/asinpi/asinpi.c      Copyright (c) 2022-2025 Alexei Sibidanov and Paul Zimmermann
+binary64/atan/atan.c          Copyright (c) 2023-2026 Alexei Sibidanov <sibid@uvic.ca>
+binary64/atanh/atanh.c        Copyright (c) 2023-2025 Alexei Sibidanov <sibid@uvic.ca>
+binary64/atanpi/atanpi.c      Copyright (c) 2023-2025 Alexei Sibidanov and Paul Zimmermann
+binary64/cbrt/cbrt.c          Copyright (c) 2021-2022 Alexei Sibidanov
+binary64/cos/cos.c            Copyright (c) 2022-2025 Paul Zimmermann and Tom Hubrecht
+binary64/cosh/cosh.c          Copyright (c) 2023-2025 Alexei Sibidanov <sibid@uvic.ca>
+binary64/cospi/cospi.c        Copyright (c) 2023-2026 Alexei Sibidanov <sibid@uvic.ca>
+binary64/exp/exp.c            Copyright (c) 2022-2025 Alexei Sibidanov
+binary64/lgamma/lgamma.c      Copyright (c) 2025 Alexei Sibidanov <sibid@uvic.ca>
+binary64/log/dint.h           Copyright (c) 2022 CERN
+binary64/log/log.c            Copyright (c) 2022 INRIA and CERN
+binary64/log10/dint.h         Copyright (c) 2022 CERN
+binary64/log10/log10.c        Copyright (c) 2022-2025 INRIA and CERN
+binary64/log1p/log1p.c        Copyright (c) 2024-2026 Alexei Sibidanov <sibid@uvic.ca>
+binary64/log2/log2.c          Copyright (c) 2023 Alexei Sibidanov
+binary64/pow/dint.h           Copyright (c) 2022, 2023 CERN and Inria
+binary64/pow/pow.c            Copyright (c) 2022-2025 CERN and Inria
+binary64/pow/pow.h            Copyright (c) 2022-2025 CERN and Inria
+binary64/pow/qint.h           Copyright (c) 2022, 2023 CERN and Inria
+binary64/sin/sin.c            Copyright (c) 2022-2025 Paul Zimmermann and Tom Hubrecht
+binary64/sincos/sincos.c      Copyright (c) 2022-2024 Paul Zimmermann and Tom Hubrecht
+binary64/sinh/sinh.c          Copyright (c) 2023-2026 Alexei Sibidanov and Paul Zimmermann
+binary64/sinpi/sinpi.c        Copyright (c) 2023-2026 Alexei Sibidanov <sibid@uvic.ca>
+binary64/tan/tan.c            Copyright (c) 2022-2025 Paul Zimmermann and Tom Hubrecht
+binary64/tanh/tanh.c          Copyright (c) 2023-2026 Alexei Sibidanov, Cyprien Peignier, Paul Zimmermann
+binary64/tgamma/tgamma.c      Copyright (c) 2024 Alexei Sibidanov <sibid@uvic.ca>
+
+Local changes
+-------------
+
+binary64/pow/pow.c and binary64/lgamma/lgamma.c carry small GMNB patches,
+marked "GMNB patch" in the source and described in crates/crmath/README.md.

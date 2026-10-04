@@ -2313,12 +2313,65 @@ const LICENCES: &str = concat!(
     include_str!("../assets/fonts/OFL-Inter.txt"),
     "\n\n— Noto Sans (Math, Arabic, Armenian, Bengali, Khmer subsets) —\n\n",
     include_str!("../assets/fonts/OFL-Noto.txt"),
-    "\n\n— Clipboard code adapted from smithay-clipboard —\n\n",
-    include_str!("../assets/LICENSE-smithay-clipboard.txt"),
-    "\n\n— CORE-MATH (correctly rounded maths functions, used by Graphing) —\n\n",
-    include_str!("../../../crates/crmath/vendor/LICENSE"),
-    "\n\nExchange rates: Frankfurter (central bank reference rates)."
+    "\n\nExchange rates: Frankfurter (central bank reference rates).\n\n",
+    // CORE-MATH, smithay-clipboard and the Rust crates (of all three programs).
+    include_str!("../../../THIRD-PARTY-LICENSES.txt"),
 );
+
+/// [`LICENCES`] wrapped for the last width asked, and the width of each
+/// word in it.
+struct LicenceLines {
+    width: f32,
+    lines: Rc<[String]>,
+    space: f32,
+    words: HashMap<&'static str, f32>,
+}
+
+thread_local! {
+    static LICENCE_LINES: std::cell::RefCell<Option<LicenceLines>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// [`LICENCES`] wrapped to `w` as `Frame::wrap` does, except that each
+/// distinct word is measured once and lines are summed from words and
+/// spaces (wrapping the whole text anew took a third of a second).
+fn licence_lines(text: &mut crate::text::Text, w: f32) -> Rc<[String]> {
+    LICENCE_LINES.with_borrow_mut(|cache| {
+        let c = cache.get_or_insert_with(|| LicenceLines {
+            width: f32::NAN,
+            lines: Rc::from([]),
+            space: text.width(" ", SMALL),
+            words: HashMap::new(),
+        });
+        if c.width != w {
+            let mut out = Vec::new();
+            for para in LICENCES.split('\n') {
+                let (mut line, mut lw) = (String::new(), 0.0);
+                for word in para.split(' ') {
+                    let ww = *c
+                        .words
+                        .entry(word)
+                        .or_insert_with(|| text.width(word, SMALL));
+                    if line.is_empty() {
+                        line = word.to_string();
+                        lw = ww;
+                    } else if lw + c.space + ww > w {
+                        out.push(std::mem::replace(&mut line, word.to_string()));
+                        lw = ww;
+                    } else {
+                        line.push(' ');
+                        line.push_str(word);
+                        lw += c.space + ww;
+                    }
+                }
+                out.push(line);
+            }
+            c.lines = out.into();
+            c.width = w;
+        }
+        c.lines.clone()
+    })
+}
 
 pub(crate) fn draw_licences(f: &mut Frame, full: Rect) {
     let t = f.t;
@@ -2344,16 +2397,59 @@ pub(crate) fn draw_licences(f: &mut Frame, full: Rect) {
     );
     let sid = id("lic-scroll");
     let off = f.scroll_begin(sid, body, "Licences");
-    let h = f.paragraph(
-        body.x + 4.0,
-        body.y - off,
-        body.w - 16.0,
-        LICENCES,
-        SMALL,
-        t.fg,
-    );
+    // `f.paragraph`, but wrapped once per width and only the lines in view
+    // drawn: the text is some 170 KB.
+    let w = body.w - 16.0;
+    let lines = licence_lines(f.text, w);
+    let lh = (SMALL.size * 1.4).round();
+    let first = ((off / lh) as usize).saturating_sub(1);
+    let last = (((off + body.h) / lh) as usize + 1).min(lines.len());
+    for (i, line) in lines.iter().enumerate().take(last).skip(first) {
+        let r = Rect::new(body.x + 4.0, body.y - off + i as f32 * lh, w, lh);
+        f.label(r, line, SMALL, t.fg, Align::Start);
+    }
+    let h = lines.len() as f32 * lh;
     f.scroll_end(sid, body, h);
     if let Some(n) = f.node(id("lic-text"), accesskit::Role::Document, "Licences", body) {
         n.value = Some(LICENCES.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The licence viewer's own wrapping keeps every word in order, and a
+    /// line of several words fits the width (summing word widths is close
+    /// to measuring the line).
+    #[test]
+    fn licence_lines_keep_every_word_and_fit() {
+        let mut text = crate::text::Text::new();
+        let words: Vec<&str> = LICENCES
+            .split(['\n', ' '])
+            .filter(|w| !w.is_empty())
+            .collect();
+        for w in [300.0, 715.0] {
+            let lines = licence_lines(&mut text, w);
+            let kept: Vec<&str> = lines
+                .iter()
+                .flat_map(|l| l.split(' '))
+                .filter(|w| !w.is_empty())
+                .collect();
+            assert_eq!(kept, words);
+            for l in lines.iter().filter(|l| l.trim().contains(' ')) {
+                assert!(text.width(l, SMALL) <= w + 1.0, "{l:?} is wider than {w}");
+            }
+        }
+        // What DGMNB contains, besides its own code and fonts.
+        for name in [
+            "CORE-MATH",
+            "smithay-clipboard",
+            "tiny-skia",
+            "winit",
+            "webpki-roots",
+        ] {
+            assert!(LICENCES.contains(name), "{name}");
+        }
     }
 }
