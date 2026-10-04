@@ -1166,6 +1166,31 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
                     .push(format!("an open end at {:e}, yet {w}", x.lo));
             }
         }
+        // Ends known only to an enclosure: the end inside it, and whether
+        // f is defined there, from the edge of a node's domain.
+        for (b, low) in [(p.lo, true), (p.hi, false)] {
+            let Bound::At { x, closed } = b else { continue };
+            if x.lo == x.hi {
+                continue;
+            }
+            let shut = |c: bool| if c { "closed" } else { "open" };
+            match enclosed_end(fx, (x.lo, x.hi), low) {
+                Some(c) if c != closed => out.problems.push(format!(
+                    "the end in [{:e}, {:e}] is listed {}, yet it is {}",
+                    x.lo,
+                    x.hi,
+                    shut(closed),
+                    shut(c)
+                )),
+                Some(_) => {}
+                None => out.notes.push(format!(
+                    "the end in [{:e}, {:e}]: not shown {}",
+                    x.lo,
+                    x.hi,
+                    shut(closed)
+                )),
+            }
+        }
     }
     // Between pieces, and beyond the outer ones: undefined. (Doubles only
     // outside an end's enclosure; an open end at a double is outside.)
@@ -1213,6 +1238,130 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
     Ok(())
 }
 
+/// Where a node's argument g meets an edge `c` of its function's domain:
+/// allowed strictly `above` c (or below), undefined strictly beyond it,
+/// with a stand-in for g's allowed values beside the edge.
+struct Edge {
+    path: Vec<u8>,
+    c: f64,
+    above: bool,
+    stand_in: &'static str,
+}
+
+/// The edges of f's nodes: √, even roots and powers with an even
+/// denominator, ln and log (g ≥ 0, g > 0); asin, acos, atanh (|g| ≤ 1,
+/// < 1); acosh (g ≥ 1); a power with a varying exponent (a positive base,
+/// or 0 to a positive power); 0^b (b > 0). Which side of the edge holds,
+/// at the edge itself, is f's evaluation with g = c.
+fn edges(fx: &Fx, e: &graphing::ast::Expr, path: &mut Vec<u8>, out: &mut Vec<Edge>) {
+    use graphing::ast::{BinOp, Expr, Func};
+    let mut push = |i: u8, c: f64, above: bool| {
+        let mut p = path.clone();
+        p.push(i);
+        let stand_in = match (c == 0.0, above) {
+            (true, true) => "__pos",
+            (true, false) => "__neg",
+            (false, true) if c == 1.0 => "__ge1",
+            _ => "__unit",
+        };
+        out.push(Edge {
+            path: p,
+            c,
+            above,
+            stand_in,
+        });
+    };
+    let even =
+        |k: &Expr| super::eval::written_rational(k).is_some_and(|(p, q)| q == 1 && p % 2 == 0);
+    match e {
+        Expr::Call(f, args) => match f {
+            Func::Sqrt | Func::Ln | Func::Log => push(0, 0.0, true),
+            Func::Root if even(&args[1]) => push(0, 0.0, true),
+            Func::Asin | Func::Acos | Func::Atanh => {
+                push(0, 1.0, false);
+                push(0, -1.0, true);
+            }
+            Func::Acosh => push(0, 1.0, true),
+            _ => {}
+        },
+        Expr::Bin(BinOp::Pow, a, b) => match super::eval::written_rational(b) {
+            Some((_, q)) if q % 2 == 0 => push(0, 0.0, true),
+            Some(_) => {}
+            None => {
+                push(0, 0.0, true);
+                let zero = !super::eval::contains_x(a) && {
+                    let v = &fx.series(a, 0.0, 0.0, 0)[0];
+                    v.def && v.is_point() && v.lo == 0
+                };
+                if zero {
+                    push(1, 0.0, true);
+                }
+            }
+        },
+        _ => {}
+    }
+    let kids: Vec<&Expr> = match e {
+        Expr::Neg(a) | Expr::Degrees(a) => vec![&**a],
+        Expr::Bin(_, a, b) => vec![&**a, &**b],
+        Expr::Call(_, args) => args.iter().collect(),
+        _ => Vec::new(),
+    };
+    for (i, k) in kids.into_iter().enumerate() {
+        path.push(i as u8);
+        edges(fx, k, path, out);
+        path.pop();
+    }
+}
+
+/// The end of a piece known only to the enclosure `x` (a low end: the
+/// piece to its right): whether f is defined there (closed), shown from an
+/// edge of one of f's nodes. Its g is continuous and strictly monotone
+/// over `x`, strictly allowed at the end toward the piece and strictly
+/// beyond c at the other, so g = c at exactly one e inside, with f
+/// undefined on the far side of e; f with g's stand-in is defined over
+/// `x`, so f is defined on the near side; f with g = c is defined over `x`
+/// (closed) or nowhere on it (open).
+fn enclosed_end(fx: &Fx, x: B, low: bool) -> Option<bool> {
+    use graphing::ast::Expr;
+    if claims::unmodelled(&fx.f) {
+        return None;
+    }
+    iv::set_prec(160);
+    let (near, far) = if low { (x.1, x.0) } else { (x.0, x.1) };
+    let mut es = Vec::new();
+    edges(fx, &fx.f, &mut Vec::new(), &mut es);
+    for ed in es {
+        let Some(g) = super::eval::at_path(&fx.f, &ed.path) else {
+            continue;
+        };
+        let s = fx.series(g, x.0, x.1, 1);
+        if !(s[0].cont && !s[1].empty && s[1].def && s[1].ne0()) {
+            continue;
+        }
+        let at = |p: f64| fx.series(g, p, p, 0)[0].clone();
+        let (gn, gf) = (at(near), at(far));
+        let allowed = |v: &Iv| if ed.above { v.gt(ed.c) } else { v.lt(ed.c) };
+        let beyond = |v: &Iv| if ed.above { v.lt(ed.c) } else { v.gt(ed.c) };
+        let inside = ed.stand_in != "__unit" || (gn.gt(-1.0) && gn.lt(1.0));
+        if !(allowed(&gn) && inside && beyond(&gf)) {
+            continue;
+        }
+        let v = &fx.series(&replace(&fx.f, &ed.path, ed.stand_in), x.0, x.1, 0)[0];
+        if v.empty || !v.def {
+            continue;
+        }
+        let edge = replace_with(&fx.f, &ed.path, Expr::Num(ed.c));
+        let v = &fx.series(&edge, x.0, x.1, 0)[0];
+        if v.empty {
+            return Some(false);
+        }
+        if v.def {
+            return Some(true);
+        }
+    }
+    None
+}
+
 /// Whether the node at `path` is a divisor of `f`, or the base of a
 /// positive power (a chain of them) that is one.
 fn divisor(f: &graphing::ast::Expr, path: &[u8]) -> bool {
@@ -1231,24 +1380,33 @@ fn divisor(f: &graphing::ast::Expr, path: &[u8]) -> bool {
 
 /// `t` with the node at `path` replaced by a stand-in variable.
 fn replace(t: &graphing::ast::Expr, path: &[u8], name: &str) -> graphing::ast::Expr {
+    replace_with(t, path, graphing::ast::Expr::Var(name.into()))
+}
+
+/// `t` with the node at `path` replaced by `new`.
+fn replace_with(
+    t: &graphing::ast::Expr,
+    path: &[u8],
+    new: graphing::ast::Expr,
+) -> graphing::ast::Expr {
     use graphing::ast::Expr;
     let Some((&i, rest)) = path.split_first() else {
-        return Expr::Var(name.into());
+        return new;
     };
     match t {
-        Expr::Neg(a) => Expr::Neg(Box::new(replace(a, rest, name))),
-        Expr::Degrees(a) => Expr::Degrees(Box::new(replace(a, rest, name))),
+        Expr::Neg(a) => Expr::Neg(Box::new(replace_with(a, rest, new))),
+        Expr::Degrees(a) => Expr::Degrees(Box::new(replace_with(a, rest, new))),
         Expr::Bin(op, a, b) => {
             if i == 0 {
-                Expr::Bin(*op, Box::new(replace(a, rest, name)), b.clone())
+                Expr::Bin(*op, Box::new(replace_with(a, rest, new)), b.clone())
             } else {
-                Expr::Bin(*op, a.clone(), Box::new(replace(b, rest, name)))
+                Expr::Bin(*op, a.clone(), Box::new(replace_with(b, rest, new)))
             }
         }
         Expr::Call(f, args) => {
             let mut args = args.clone();
             if let Some(a) = args.get_mut(i as usize) {
-                *a = replace(a, rest, name);
+                *a = replace_with(a, rest, new);
             }
             Expr::Call(*f, args)
         }

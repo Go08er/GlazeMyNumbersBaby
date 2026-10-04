@@ -441,6 +441,10 @@ pub fn eval(e: &Expr, x: &S, n: usize, ctx: &Ctx<'_>) -> S {
         Expr::Var(name) if name == "__neg" => {
             se::constant(Iv::of2(f64::NEG_INFINITY, 0.0).strict(false, true), n)
         }
+        // ... any value in [−1, 1], any value ≥ 1 (supersets of the open
+        // sets a node's argument keeps beside an edge of its domain).
+        Expr::Var(name) if name == "__unit" => se::constant(Iv::of2(-1.0, 1.0), n),
+        Expr::Var(name) if name == "__ge1" => se::constant(Iv::of2(1.0, f64::INFINITY), n),
         Expr::Var(name) => match ctx.vars.iter().find(|(v, _)| v == name) {
             Some((_, v)) => se::constant(Iv::of(*v), n),
             None => se::constant(Iv::unknown(), n),

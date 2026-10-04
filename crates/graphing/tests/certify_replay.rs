@@ -589,6 +589,40 @@ const PLANTS: &[Plant] = &[
             c["of"] = serde_json::json!({"F": "F2"});
         },
     ),
+    ("1/x", "the range's gap clearness dropped", |v| {
+        claims_of(v, "range").retain(|c| c.get("GapClear").is_none());
+    }),
+    (
+        "ln(4-(x/0.001)^2)",
+        "ends known to enclosures closed where f is undefined",
+        |v| {
+            let p = &mut value_of(v, "domain")["pieces"][0];
+            p["lo"]["At"]["closed"] = serde_json::json!(true);
+            p["hi"]["At"]["closed"] = serde_json::json!(true);
+        },
+    ),
+    (
+        "asin(x/0.3)",
+        "ends known to enclosures opened where f is defined",
+        |v| {
+            let p = &mut value_of(v, "domain")["pieces"][0];
+            p["lo"]["At"]["closed"] = serde_json::json!(false);
+            p["hi"]["At"]["closed"] = serde_json::json!(false);
+        },
+    ),
+    (
+        "0^(x-0.1)",
+        "0^b closed where b = 0, inside an enclosure",
+        |v| {
+            value_of(v, "domain")["pieces"][0]["lo"]["At"]["closed"] = serde_json::json!(true);
+        },
+    ),
+    ("0^x", "0^x's domain extended to the line", |v| {
+        value_of(v, "domain")["pieces"][0]["lo"] = serde_json::json!("NegInf");
+    }),
+    ("0^(x-1)", "0^(x−1) closed at 1", |v| {
+        value_of(v, "domain")["pieces"][0]["lo"]["At"]["closed"] = serde_json::json!(true);
+    }),
     ("sqrt(x)", "a closed end opened", |v| {
         value_of(v, "domain")["pieces"][0]["lo"]["At"]["closed"] = serde_json::json!(false);
     }),
