@@ -807,6 +807,31 @@ impl Rat {
         Some((m, b))
     }
 
+    /// N/D as m·x + b exactly (D divides N, the quotient of degree ≤ 1).
+    pub fn affine(&self) -> Option<(Rational, Rational)> {
+        let d = &self.d;
+        let lead = d.last()?.clone();
+        let mut r = self.n.clone();
+        let mut q = vec![Rational::new(); r.len().saturating_sub(d.len()) + 1];
+        while r.len() >= d.len() && !r.is_empty() {
+            let k = r.len() - d.len();
+            let c = r[r.len() - 1].clone() / lead.clone();
+            for (i, v) in d.iter().enumerate() {
+                r[i + k] -= Rational::from(&c * v);
+            }
+            q[k] = c;
+            r.pop();
+            while r.last().is_some_and(|v| *v == 0) {
+                r.pop();
+            }
+        }
+        if r.iter().any(|v| *v != 0) || q.iter().skip(2).any(|v| *v != 0) {
+            return None;
+        }
+        let at = |i: usize| q.get(i).cloned().unwrap_or_default();
+        Some((at(1), at(0)))
+    }
+
     /// deg N − deg D.
     pub fn excess(&self) -> i64 {
         self.n.len() as i64 - self.d.len() as i64

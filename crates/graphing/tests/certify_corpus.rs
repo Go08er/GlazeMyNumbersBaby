@@ -274,9 +274,7 @@ const REVIEW: &[(&str, &str)] = &[
     ("(1+1/x^2)^x", "HA=1"),
     ("x*ln(1+1/x)", "HA=1"),
     ("(1+1/x)^(x^2)", "HA=L:0"),
-    // x^(1/ln x) = e^((1/ln x)·ln x) = e for x > 0, x ≠ 1: its limit at +∞
-    // is e (a constant tail has its value as asymptote, as x/x has 1).
-    ("x^(1/ln(x))", "HA=R:e"),
+    ("x^(1/ln(x))", "HA=none"),
     ("x*sin(1/x)", "HA=1"),
     ("x^2*(1-cos(1/x))", "HA=1/2"),
     ("x*(e^(1/x)-1)", "HA=1"),
@@ -1449,4 +1447,127 @@ fn trunc(s: &str, n: usize) -> String {
     } else {
         s.chars().take(n - 1).collect::<String>() + "…"
     }
+}
+
+// ------------------------------------------------------------ asymptotes
+
+/// Functions whose asymptotes need slow limits (by the tree's structure)
+/// or non-rational lines (by expansions in 1/x), with shifts and scales:
+/// (source, truth as above, oblique lines: "none" or "L:m,b;R:m,b", the
+/// sides listed exactly those with a line). Lines of their own graph — a
+/// constant, m·x + b, holes aside — have no asymptote.
+const ASYMPTOTES: &[(&str, &str, &str)] = &[
+    ("sqrt(x^2+1)", "HA=none | R=[1,inf)", "L:-1,0;R:1,0"),
+    ("sqrt((x-1000)^2+1)", "HA=none", "L:-1,1000;R:1,-1000"),
+    ("3*sqrt(x^2+1)+2", "HA=none", "L:-3,2;R:3,2"),
+    ("sqrt(x^2-1)", "HA=none", "L:-1,0;R:1,0"),
+    (
+        "sqrt(2x^2+3x)",
+        "HA=none",
+        "L:-sqrt(2),-3/(2*sqrt(2));R:sqrt(2),3/(2*sqrt(2))",
+    ),
+    ("x+1/x+sin(x)/x", "HA=none", "L:1,0;R:1,0"),
+    ("(x-1)+1/(x-1)+sin(x-1)/(x-1)", "HA=none", "L:1,-1;R:1,-1"),
+    ("x*e^(1/x)", "HA=none", "L:1,1;R:1,1"),
+    ("(x-1000)*e^(1/(x-1000))", "HA=none", "L:1,-999;R:1,-999"),
+    ("x*atan(x)", "HA=none | R=[0,inf)", "L:-pi/2,-1;R:pi/2,-1"),
+    (
+        "(x/1000)*atan(x/1000)",
+        "HA=none",
+        "L:-pi/2000,-1;R:pi/2000,-1",
+    ),
+    ("-2*x*atan(x)+1", "HA=none", "L:pi,3;R:-pi,3"),
+    ("e^x-x", "HA=none", "L:-1,0"),
+    ("abs(x)", "HA=none", "L:-1,0;R:1,0"),
+    ("x^x", "HA=none", "none"),
+    ("x*abs(x)", "HA=none", "none"),
+    ("x/ln(x)", "HA=none", "none"),
+    ("(x/1000)/ln(x/1000)", "HA=none", "none"),
+    ("2^x", "HA=L:0", "none"),
+    ("e^x/x", "HA=L:0", "none"),
+    ("sqrt(x)*ln(x)", "HA=none", "none"),
+    ("ln(x)^2", "HA=none", "none"),
+    ("ln(x^2+1)", "HA=none", "none"),
+    ("1/ln(x)", "HA=R:0 | R=(-inf,0)U(0,inf)", "none"),
+    ("1/ln(x-1000000)", "HA=R:0", "none"),
+    ("2/ln(x/1000)+1", "HA=R:1", "none"),
+    ("x^-0.0001", "HA=R:0 | R=(0,inf)", "none"),
+    ("(x-1000)^-0.0001", "HA=R:0", "none"),
+    ("3*x^-0.0001-1", "HA=R:-1", "none"),
+    ("atan(ln(abs(x)))", "HA=pi/2 | R=(-pi/2,pi/2)", "none"),
+    ("atan(ln(abs(x-1000)))", "HA=pi/2", "none"),
+    ("-atan(ln(abs(x/1000)))+1", "HA=1-pi/2", "none"),
+    ("0.000000000001*ln(x)", "HA=none", "none"),
+    ("-0.000000000001*ln(x-1000)", "HA=none", "none"),
+    ("2x+1", "HA=none", "none"),
+    ("(x^2-1)/(x-1)", "HA=none", "none"),
+    ("x/x", "HA=none", "none"),
+    ("5", "HA=none", "none"),
+    ("x^(1/ln(x))", "HA=none", "none"),
+];
+
+/// The oblique row against its truth: wrong if certified otherwise.
+fn check_oblique(r: &Row<Vec<graphing::certify::Oblique>>, want: &str) -> Option<String> {
+    let (Row::Certified { value, .. } | Row::Partial { value, .. }) = r else {
+        return None;
+    };
+    let lines: Vec<(Tail, Val, Val)> = if want == "none" {
+        Vec::new()
+    } else {
+        want.split(';')
+            .map(|p| {
+                let (side, mb) = p.split_once(':').expect("side");
+                let (m, b) = mb.split_once(',').expect("m,b");
+                let side = if side == "L" { Tail::Left } else { Tail::Right };
+                (side, val(m), val(b))
+            })
+            .collect()
+    };
+    let fits = value.len() == lines.len()
+        && lines.iter().all(|(s, m, b)| {
+            value
+                .iter()
+                .any(|o| o.side == *s && m.fits_enc(&o.m) && b.fits_enc(&o.b))
+        });
+    (!fits).then(|| format!("oblique: {value:?}, not {want}"))
+}
+
+#[test]
+fn asymptotes_are_right() {
+    let mut wrong = Vec::new();
+    let (mut ha, mut oa, mut range) = (0, 0, 0);
+    for (src, spec, lines) in ASYMPTOTES {
+        let t = truth(spec);
+        let a = certify_text(src, CompileOptions::default(), DEFAULT_BUDGET, None)
+            .unwrap_or_else(|e| panic!("{src}: {e}"));
+        let cs = checks(&a, &t);
+        for (c, row) in cs.iter().zip(ROWS) {
+            if let Some(w) = &c.wrong {
+                wrong.push(format!("{src} [{row}]: {w}"));
+            }
+        }
+        if let Some(w) = check_oblique(&a.oblique, lines) {
+            wrong.push(format!("{src} [OA]: {w}"));
+        }
+        ha += usize::from(kind(&a.horizontal) != 'U');
+        oa += usize::from(kind(&a.oblique) != 'U');
+        range += usize::from(t.r.is_some() && kind(&a.range) != 'U');
+        println!(
+            "{src:<34} HA {} OA {} R {}",
+            kind(&a.horizontal),
+            kind(&a.oblique),
+            kind(&a.range)
+        );
+    }
+    let n = ASYMPTOTES.len();
+    let with_range = ASYMPTOTES
+        .iter()
+        .filter(|(_, s, _)| s.contains("R="))
+        .count();
+    println!("answered: HA {ha}/{n}, OA {oa}/{n}, R {range}/{with_range}");
+    assert!(
+        wrong.is_empty(),
+        "rows certified wrong:\n{}",
+        wrong.join("\n")
+    );
 }

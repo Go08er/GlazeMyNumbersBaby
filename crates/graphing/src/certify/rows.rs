@@ -2125,39 +2125,105 @@ fn tail_interval(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cl
     }
 }
 
+/// f proven a line on its domain (a constant, m·x + b, holes aside): its
+/// graph is the line itself, so it has no asymptote
+/// (`docs/ti-conventions.md`). From f's exact rational form (N/D reduced
+/// to a polynomial of degree ≤ 1), or the simplifier's form of f, an exact
+/// a·x + b (`e^(ln x)` is x where defined).
+fn own_line(f: &Fun<'_>) -> Option<Claim> {
+    let exact = f.exact?;
+    if let Some(rf) = crate::simplify::rational_form(&f.expr, exact) {
+        let (n, d) = (&rf.reduced.num, &rf.reduced.den);
+        if d.degree() != Some(0) || n.degree().unwrap_or(0) > 1 {
+            return None;
+        }
+        let c = n.coefficients();
+        let k = d.lead();
+        let at = |i: usize| c.get(i).copied().unwrap_or(crate::simplify::Q::ZERO).div(k);
+        let (m, b) = (at(1)?, at(0)?);
+        return Some(Claim::Simplifier {
+            fact: format!("{RATIONAL}the line {m}·x + {b} on its domain: no asymptote"),
+        });
+    }
+    if f.eval == f.expr {
+        return None;
+    }
+    let (m, b) = super::fun::affine(&f.eval, exact)?;
+    Some(Claim::Simplifier {
+        fact: format!("f = {m}·x + {b} on its domain (the simplifier's form): no asymptote"),
+    })
+}
+
+/// Sample points of the window where f is defined, with its values.
+fn samples(f: &Fun<'_>, scope: &Scope) -> Result<Vec<(f64, DecInterval)>, Stop> {
+    let (a, b) = scope.window;
+    let mut vals = Vec::new();
+    for i in 0..16 {
+        let x = a + (b - a) * (i as f64 + 0.5) / 16.0;
+        let v = f.val(Interval::point(x))?;
+        if !v.is_empty() && v.dec >= Dec::Def && v.iv.is_bounded() {
+            vals.push((x, v));
+        }
+    }
+    Ok(vals)
+}
+
+fn value_claim(x: f64, v: DecInterval) -> Claim {
+    Claim::Value {
+        x: XBox::point(x),
+        of: Subject::f(0),
+        lo: R(v.lo()),
+        hi: R(v.hi()),
+    }
+}
+
+/// Two values of f apart: f is no constant (its own line, with no
+/// asymptote), and a periodic f has no limit at ±∞.
+fn not_constant(f: &Fun<'_>, scope: &Scope) -> Result<Option<Vec<Claim>>, Stop> {
+    let vals = samples(f, scope)?;
+    Ok(vals.iter().find_map(|(x, v)| {
+        vals.iter()
+            .find(|(_, u)| u.hi() < v.lo() || v.hi() < u.lo())
+            .map(|(y, u)| vec![value_claim(*x, *v), value_claim(*y, *u)])
+    }))
+}
+
+/// Three values of f off one line (the slopes between them apart): f is
+/// no m·x + b, so a line it approaches is not its own graph.
+fn not_affine(f: &Fun<'_>, scope: &Scope) -> Result<Option<Vec<Claim>>, Stop> {
+    let vals = samples(f, scope)?;
+    let slope = |(x, v): &(f64, DecInterval), (y, u): &(f64, DecInterval)| {
+        (u.iv - v.iv) / (Interval::point(*y) - Interval::point(*x))
+    };
+    for w in vals.windows(3) {
+        let (s, t) = (slope(&w[0], &w[1]), slope(&w[1], &w[2]));
+        if s.hi() < t.lo() || t.hi() < s.lo() {
+            return Ok(Some(w.iter().map(|(x, v)| value_claim(*x, *v)).collect()));
+        }
+    }
+    Ok(None)
+}
+
 pub fn horizontal(f: &Fun<'_>, dom: &Domain, scope: &Scope) -> Result<Row<Vec<Horizontal>>, Stop> {
     if !dom.row.is_certified() {
         return Ok(Row::unknown("the domain's tails are not known"));
     }
+    if let Some(fact) = own_line(f) {
+        let mut c = Certificate::new(Region::Line);
+        c.push(fact);
+        return Ok(Row::Certified {
+            value: Vec::new(),
+            cert: c,
+        });
+    }
     if scope.period.is_some() {
         // A periodic f with a limit at ±∞ would be constant: two values
         // apart show it has none.
-        let (a, b) = scope.window;
-        let mut vals = Vec::new();
-        for i in 0..16 {
-            let x = a + (b - a) * (i as f64 + 0.5) / 16.0;
-            let v = f.val(Interval::point(x))?;
-            if !v.is_empty() && v.dec >= Dec::Def && v.iv.is_bounded() {
-                vals.push((x, v));
-            }
-        }
-        let apart = vals.iter().find_map(|(x, v)| {
-            vals.iter()
-                .find(|(_, u)| u.hi() < v.lo() || v.hi() < u.lo())
-                .map(|(y, u)| ((*x, *v), (*y, *u)))
-        });
-        let Some(((x, v), (y, u))) = apart else {
+        let Some(apart) = not_constant(f, scope)? else {
             return Ok(Row::unknown("a tail's limit is not decided"));
         };
         let mut c = Certificate::new(Region::Line);
-        for (p, w) in [(x, v), (y, u)] {
-            c.push(Claim::Value {
-                x: XBox::point(p),
-                of: Subject::f(0),
-                lo: R(w.lo()),
-                hi: R(w.hi()),
-            });
-        }
+        c.extend(apart);
         return Ok(Row::Certified {
             value: Vec::new(),
             cert: c,
@@ -2193,6 +2259,13 @@ pub fn horizontal(f: &Fun<'_>, dom: &Domain, scope: &Scope) -> Result<Row<Vec<Ho
             TailEnd::Unknown => return Ok(Row::unknown("a tail's limit is not decided")),
         }
         c.extend(claims);
+    }
+    // A constant has no asymptote: the line listed is not f's own graph.
+    if !out.is_empty() {
+        let Some(apart) = not_constant(f, scope)? else {
+            return Ok(Row::unknown("f is not shown to be other than a constant"));
+        };
+        c.extend(apart);
     }
     Ok(Row::Certified {
         value: out,
@@ -2482,6 +2555,13 @@ pub fn oblique(
         })
     };
     let mut c = Certificate::new(Region::Line);
+    if let Some(fact) = own_line(f) {
+        c.push(fact);
+        return Ok(Row::Certified {
+            value: Vec::new(),
+            cert: c,
+        });
+    }
     if scope.period.is_some() {
         c.push(Claim::Simplifier {
             fact: "f is periodic: f − (m·x + b) does not tend to 0 for m ≠ 0".into(),
@@ -2504,6 +2584,11 @@ pub fn oblique(
                 c.push(Claim::Simplifier {
                     fact: format!("f = N/D exactly and N/D − ({m}·x + {b}) → 0 as x → ±∞"),
                 });
+                // (Not f's own graph: f is no m·x + b.)
+                let Some(off) = not_affine(f, scope)? else {
+                    return Ok(Row::unknown("f is not shown to be other than a line"));
+                };
+                c.extend(off);
                 for right in [false, true] {
                     if reaches(right) {
                         out.push(Oblique {
@@ -2609,6 +2694,13 @@ pub fn oblique(
             Limit::Exact(_) => return Ok(Row::unknown("a tail's line is not borne out")),
             _ => return Ok(Row::unknown("a tail's slope is not decided")),
         }
+    }
+    // A line listed is not f's own graph: f is no m·x + b.
+    if !lines.is_empty() {
+        let Some(off) = not_affine(f, scope)? else {
+            return Ok(Row::unknown("f is not shown to be other than a line"));
+        };
+        c.extend(off);
     }
     Ok(Row::Certified {
         value: lines,

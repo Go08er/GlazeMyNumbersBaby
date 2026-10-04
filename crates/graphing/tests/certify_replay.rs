@@ -784,6 +784,29 @@ const PLANTS: &[Plant] = &[
             }});
         },
     ),
+    // A line's graph is the line itself: no asymptote.
+    ("5", "a constant's own line listed as its asymptote", |v| {
+        v["horizontal"] = serde_json::json!({"Certified": {
+            "value": [{"side": "Right", "y": {"lo": 5.0, "hi": 5.0}, "exact": "5", "looks_like": null}],
+            "cert": {"covers": "Line", "claims": [{"Limit": {"at": "PosInf", "over_x": false, "to": {"In": {"lo": 5.0, "hi": 5.0}}}}]}
+        }});
+    }),
+    ("2x+1", "a line listed as its own oblique asymptote", |v| {
+        value_of(v, "oblique")
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"side": "Right", "m": {"lo": 2.0, "hi": 2.0}, "b": {"lo": 1.0, "hi": 1.0}}));
+    }),
+    ("1/x", "the values showing f is no constant dropped", |v| {
+        claims_of(v, "horizontal").retain(|c| c.get("Value").is_none());
+    }),
+    (
+        "sqrt(x^2+1)",
+        "the values showing f is no line dropped",
+        |v| {
+            claims_of(v, "oblique").retain(|c| c.get("Value").is_none());
+        },
+    ),
     // Lines from expansions in 1/x.
     ("sqrt(x^2+1)", "a line's slope moved by 10⁻⁹", |v| {
         for c in claims_of(v, "oblique").iter_mut() {

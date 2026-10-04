@@ -2153,8 +2153,74 @@ fn vertical(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), St
     Ok(())
 }
 
+/// A fact that f is a line on its domain (a constant, m·x + b, holes
+/// aside): its graph is that line, so it has no asymptote.
+fn line_fact(claims: &[Claim]) -> bool {
+    claims.iter().any(|c| match c {
+        Claim::Simplifier(f) => {
+            f.strip_prefix(claims::RATIONAL)
+                .is_some_and(|r| r.starts_with("the line "))
+                || (f.starts_with("f = ") && f.contains(" on its domain (the simplifier's form)"))
+        }
+        _ => false,
+    })
+}
+
+/// f's values at points (`Value` claims on f), as (x, lo, hi), by x.
+fn point_values(claims: &[Claim]) -> Vec<(f64, f64, f64)> {
+    let mut v: Vec<(f64, f64, f64)> = claims
+        .iter()
+        .filter_map(|c| match c {
+            Claim::Value {
+                x,
+                of: Subject::F(0),
+                lo,
+                hi,
+            } if x.0 == x.1 => Some((x.0, *lo, *hi)),
+            _ => None,
+        })
+        .collect();
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    v
+}
+
+/// Two of f's values apart: f is no constant.
+fn not_constant(claims: &[Claim]) -> bool {
+    let v = point_values(claims);
+    v.iter().any(|a| v.iter().any(|b| a.2 < b.1))
+}
+
+/// Three of f's values off one line (the slopes between them apart): f is
+/// no m·x + b.
+fn not_affine(claims: &[Claim]) -> bool {
+    let v = point_values(claims);
+    let slope = |a: &(f64, f64, f64), b: &(f64, f64, f64)| {
+        iv::div(
+            &iv::sub(&Iv::of2(b.1, b.2), &Iv::of2(a.1, a.2)),
+            &iv::sub(&Iv::of(b.0), &Iv::of(a.0)),
+        )
+    };
+    iv::set_prec(160);
+    v.windows(3).any(|w| {
+        let (s, t) = (slope(&w[0], &w[1]), slope(&w[1], &w[2]));
+        w[0].0 < w[1].0 && w[1].0 < w[2].0 && (s.hi < t.lo || t.hi < s.lo)
+    })
+}
+
 fn horizontal(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
     let _ = all;
+    // A line's graph is the line itself: no asymptote (a constant, m·x +
+    // b, holes aside). One listed needs f shown to be no constant.
+    if !list(&rc.value)?.is_empty() {
+        if line_fact(&rc.claims) {
+            out.problems
+                .push("a horizontal asymptote listed for a line, its own graph".into());
+        }
+        if !not_constant(&rc.claims) {
+            out.problems
+                .push("a horizontal asymptote listed, but nothing shows f is no constant".into());
+        }
+    }
     for item in list(&rc.value)? {
         let side = match item.get("side").and_then(Value::as_str) {
             Some("Left") => Side::Left,
@@ -2617,6 +2683,18 @@ fn oblique(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), Str
         .any(|f| f.starts_with("f = N/D exactly with deg N ≠ deg D + 1"));
     let periodic = facts.iter().any(|f| f.starts_with("f is periodic"));
     let mut sides = Vec::new();
+    // A line's graph is the line itself: no asymptote. One listed needs f
+    // shown to be no m·x + b.
+    if !list(&rc.value)?.is_empty() {
+        if line_fact(&rc.claims) {
+            out.problems
+                .push("an oblique asymptote listed for a line, its own graph".into());
+        }
+        if !not_affine(&rc.claims) {
+            out.problems
+                .push("an oblique asymptote listed, but nothing shows f is no line".into());
+        }
+    }
     for item in list(&rc.value)? {
         let side = item.get("side").and_then(Value::as_str).ok_or("side")?;
         let at = if side == "Right" { "+∞" } else { "−∞" };
@@ -2693,6 +2771,7 @@ fn oblique(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), Str
             || rational_none
             || periodic
             || horizontal.iter().any(|h| h == side)
+            || line_fact(&rc.claims)
             || bends_away(&rc.claims, s)
             || matches!(
                 limit_at(

@@ -2312,6 +2312,26 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
         };
         return weak(approaches(fx, at, &|_, v| v, lim), "the limit");
     }
+    if let Some(rest) = fact.strip_prefix("f = ")
+        && let Some((mb, _)) = rest.split_once(" on its domain (the simplifier's form)")
+        && let Some((m, b)) = mb.split_once("·x + ")
+    {
+        // f is m·x + b wherever defined: tested at points.
+        let (Some(m), Some(b)) = (pi_q(m), pi_q(b)) else {
+            return Outcome::new(Class::Unconfirmed, format!("unread line: {fact}"));
+        };
+        for &x in SAMPLES.iter().chain(&[-0.7, -2.2, -9.1, -1e3, -3.7e9]) {
+            let v = f_at(fx, &Iv::of(x));
+            if v.empty || !v.def {
+                continue;
+            }
+            let line = iv::add(&iv::mul(&m, &Iv::of(x)), &b);
+            if v.hi < line.lo || line.hi < v.lo {
+                return Outcome::new(Class::Refuted, format!("f({x}) is off the line"));
+            }
+        }
+        return Outcome::new(Class::Weak, "on the line at sample points");
+    }
     // Oblique asymptotes (and their absence).
     let over_x = |x: f64, v: Iv| iv::div(&v, &Iv::of(x));
     if fact.starts_with("f is periodic: f − (m·x + b) does not tend to 0") {
@@ -2480,6 +2500,18 @@ fn rational_fact(fx: &Fx, fact: &str) -> Option<Outcome> {
             rat.excess() > 1,
             format!("deg N − deg D = {}", rat.excess()),
         ));
+    }
+    if let Some(rest) = fact.strip_prefix("the line ") {
+        // A line on its domain (holes aside): N/D is m·x + b exactly.
+        let (mb, _) = rest.split_once(" on its domain")?;
+        let (m, b) = mb.split_once("·x + ")?;
+        let (m, b) = (q(m)?, q(b)?);
+        let got = rat.affine();
+        let shown = match &got {
+            Some((gm, gb)) => format!("N/D = {gm}·x + {gb}"),
+            None => "N/D is no line".to_string(),
+        };
+        return Some(verdict(got == Some((m, b)), shown));
     }
     if fact.starts_with("f = N/D exactly with deg N ≠ deg D + 1") {
         return Some(verdict(
