@@ -597,8 +597,8 @@ const PLANTS: &[Plant] = &[
     }),
     ("tan(x)", "the family claim's period doubled", |v| {
         let f = first(v, "domain", "Family");
-        f["period"]["a"] = serde_json::json!(6.283185307179586);
-        f["period"]["b"] = serde_json::json!(6.283185307179587);
+        f["period"]["a"] = serde_json::json!(std::f64::consts::TAU);
+        f["period"]["b"] = serde_json::json!(std::f64::consts::TAU.next_up());
     }),
     ("1/(1+x^2)", "the horizontal asymptote moved", |v| {
         let y = &mut value_of(v, "horizontal")[0]["y"];

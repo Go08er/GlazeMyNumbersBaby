@@ -395,7 +395,7 @@ fn from_rad(a: &S, unit: Unit) -> S {
     if unit == Unit::Radians {
         a.clone()
     } else {
-        se::scale(a, &unit.from_rad())
+        se::scale(a, &unit.per_rad())
     }
 }
 

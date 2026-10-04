@@ -82,6 +82,13 @@ jobs:
           RUSTFLAGS="-C target-cpu=x86-64-v3" nix develop -c \
             cargo run --release --locked -p graphing --example identities \
             --target-dir target/cpu-v3
+      - name: Certificate replay (independent checker, MPFR)
+        run: |
+          # Every certified row of the certify corpus re-proved by a checker
+          # that shares no code with the certifier (crates/graphing/tests/
+          # replay), and false facts planted into real certificates caught.
+          nix develop -c cargo test --locked -p graphing --features mpfr-oracle \
+            --test certify_replay
       - name: Clippy
         run: nix develop -c cargo clippy --workspace --locked
       - name: Nix packages

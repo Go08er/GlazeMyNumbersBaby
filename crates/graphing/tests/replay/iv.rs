@@ -771,7 +771,11 @@ fn pow_pos(a: &Iv, y: &Iv) -> Iv {
 /// The real q-th root (q ≥ 2): x ≥ 0 for even q; odd q accepts negative
 /// x (MPFR's rootn is exact where the root is).
 pub fn rootn(a: &Iv, q: u32) -> Iv {
-    let lo = if q % 2 == 0 { Some((0.0, true)) } else { None };
+    let lo = if q.is_multiple_of(2) {
+        Some((0.0, true))
+    } else {
+        None
+    };
     on_domain_s(a, lo, None, true, Signs::Keep, move |v, r| {
         v.root_round(q, r)
     })
@@ -968,7 +972,7 @@ impl Unit {
     }
 
     /// One radian in the unit.
-    pub fn from_rad(self) -> Iv {
+    pub fn per_rad(self) -> Iv {
         match self {
             Unit::Radians => Iv::of(1.0),
             Unit::Degrees => div(&Iv::of(180.0), &pi()),
@@ -1110,7 +1114,7 @@ pub fn angle_out(rad: &Iv, unit: Unit) -> Iv {
     if unit == Unit::Radians {
         rad.clone()
     } else {
-        mul(rad, &unit.from_rad())
+        mul(rad, &unit.per_rad())
     }
 }
 

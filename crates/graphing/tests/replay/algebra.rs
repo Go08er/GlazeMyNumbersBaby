@@ -138,7 +138,7 @@ impl Poly {
             } else {
                 k2[pos].1 = e - 1;
             }
-            let c = Rational::from(v * Rational::from(e));
+            let c: Rational = v * Rational::from(e);
             let slot = m.entry(k2).or_insert_with(|| Rational::from(0));
             *slot += c;
         }
@@ -553,9 +553,9 @@ pub fn verify(
         out.f = base.same(&g) == Some(true);
     }
     let mut cur = base;
-    for k in 0..2 {
+    for (k, dk) in d.iter().enumerate() {
         let Some(next) = fld.d(&cur) else { break };
-        if let Some(t) = d[k]
+        if let Some(t) = dk
             && let Some(g) = fld.read(t)
         {
             out.d[k] = next.same(&g) == Some(true);

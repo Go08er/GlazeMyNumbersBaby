@@ -54,14 +54,14 @@ fn valid_upto(s: &S, k: usize) -> bool {
 }
 
 fn restrict_validity(mut out: S, ins: &[&S]) -> S {
-    for k in 1..out.len() {
-        if !ins.iter().all(|s| valid_upto(s, k)) && !out[k].empty {
-            if lenient() {
+    for (k, c) in out.iter_mut().enumerate().skip(1) {
+        if !ins.iter().all(|s| valid_upto(s, k)) && !c.empty {
+            *c = if lenient() {
                 // Where defined: the bounds hold where the inputs exist.
-                out[k] = out[k].clone().with(false, false);
-                continue;
-            }
-            out[k] = none();
+                c.clone().with(false, false)
+            } else {
+                none()
+            };
         }
     }
     out
@@ -306,9 +306,9 @@ pub fn compose(gs: &[Iv], a: &S) -> S {
     let mut out: S = (0..=n).map(|_| zero()).collect();
     out[0] = gs[0].clone();
     let mut pw = d.clone();
-    for j in 1..=n {
+    for (j, g) in gs.iter().enumerate().take(n + 1).skip(1) {
         for k in j..=n {
-            out[k] = iv::add(&out[k], &iv::mul(&gs[j], &pw[k]));
+            out[k] = iv::add(&out[k], &iv::mul(g, &pw[k]));
         }
         if j < n {
             pw = mul(&pw, &d);

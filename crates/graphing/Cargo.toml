@@ -30,3 +30,8 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 
 [features]
 mpfr-oracle = ["dep:rug", "dep:gmp-mpfr-sys"]
+
+[[example]]
+# The certificate replay, claim by claim (MPFR: dev only).
+name = "replay"
+required-features = ["mpfr-oracle"]

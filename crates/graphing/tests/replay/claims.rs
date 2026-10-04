@@ -62,7 +62,7 @@ pub fn unmodelled(e: &Expr) -> bool {
 /// A double strictly inside `(lo, hi)` to split at (geometric across wide
 /// spans, out to the tails by factors of 16).
 pub fn split(lo: f64, hi: f64) -> Option<f64> {
-    if !(lo < hi) {
+    if lo >= hi || lo.is_nan() || hi.is_nan() {
         return None;
     }
     let m = if lo == f64::NEG_INFINITY && hi == f64::INFINITY {
@@ -930,7 +930,7 @@ fn taylor_touch(s: &Subj, x: B, at: f64, m: usize, above: bool) -> V {
     // The order-m coefficient over the box, of one sign τ.
     let left_end = at == x.0;
     let want = |tau: bool| -> bool {
-        if left_end || m % 2 == 0 {
+        if left_end || m.is_multiple_of(2) {
             tau == above
         } else {
             tau != above
@@ -973,7 +973,7 @@ fn tail_chain(s: &Subj, side: Side, from: f64, c: f64, above: bool, order: usize
         // The sign s − c ends up with.
         let s0 = match side {
             Side::Right => sigma,
-            Side::Left => sigma == (order % 2 == 0),
+            Side::Left => sigma == order.is_multiple_of(2),
         };
         s0 == above
     };
@@ -1008,7 +1008,7 @@ fn tail_chain(s: &Subj, side: Side, from: f64, c: f64, above: bool, order: usize
             };
             let want = match side {
                 Side::Right => sigma,
-                Side::Left => sigma == ((order - i) % 2 == 0),
+                Side::Left => sigma == ((order - i).is_multiple_of(2)),
             };
             if !v.beyond(0.0, want) {
                 return unknown(format!("order {i} {} at {from:e}", show(&v)));

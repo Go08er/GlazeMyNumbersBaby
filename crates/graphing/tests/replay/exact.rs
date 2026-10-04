@@ -85,11 +85,11 @@ pub fn eval(
             match f {
                 Func::Abs => a.abs(),
                 Func::Sqrt => sqrt_exact(&a)?,
-                Func::Floor => Rational::from(a.floor()),
-                Func::Ceil => Rational::from(a.ceil()),
+                Func::Floor => a.floor(),
+                Func::Ceil => a.ceil(),
                 Func::Round => {
                     // Half away from zero.
-                    let t = Rational::from((a.clone().abs() + Rational::from((1, 2))).floor());
+                    let t = (a.clone().abs() + Rational::from((1, 2))).floor();
                     if a < 0 { -t } else { t }
                 }
                 Func::Sign => Rational::from(a.cmp0() as i32),
@@ -109,7 +109,7 @@ pub fn eval(
                     if b == 0 {
                         return None;
                     }
-                    let k = Rational::from((a.clone() / b.clone()).floor());
+                    let k = (a.clone() / b.clone()).floor();
                     a - b * k
                 }
                 _ => return None,
