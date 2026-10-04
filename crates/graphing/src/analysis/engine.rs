@@ -257,9 +257,11 @@ pub(crate) fn analyze_expr_ungated(
 /// q the half turn (π, 180 or 200). In radians no double is one of them,
 /// so a product that cancels one (tan x · cos x) is finite at every double
 /// beside it, and sampling sees nothing there. None if such a function's
-/// argument varies with x but isn't affine.
-fn trig_pole_families(e: &Expr, opts: &CompileOptions<'_>) -> Option<Vec<Family>> {
-    fn walk(e: &Expr, opts: &CompileOptions<'_>, out: &mut Vec<Family>) -> bool {
+/// argument varies with x but isn't affine. Each with how far the
+/// analysis' own placing of it may be off: the rounding of the shift
+/// (sec(x − 10⁹) is only sampled to ulp(10⁹)).
+fn trig_pole_families(e: &Expr, opts: &CompileOptions<'_>) -> Option<Vec<(Family, f64)>> {
+    fn walk(e: &Expr, opts: &CompileOptions<'_>, out: &mut Vec<(Family, f64)>) -> bool {
         match e {
             Expr::Call(f, args) => {
                 if !args.iter().all(|a| walk(a, opts, out)) {
@@ -281,21 +283,33 @@ fn trig_pole_families(e: &Expr, opts: &CompileOptions<'_>) -> Option<Vec<Family>
                 if !(a != 0.0 && a.is_finite() && b.is_finite()) {
                     return false;
                 }
-                let q = match opts.trig_unit {
-                    TrigUnit::Radians => std::f64::consts::PI,
-                    TrigUnit::Degrees => 180.0,
-                    TrigUnit::Grads => 200.0,
+                // The half turn, as a double and what it leaves out.
+                let (q, q_lo) = match opts.trig_unit {
+                    TrigUnit::Radians => (std::f64::consts::PI, 1.2246467991473532e-16),
+                    TrigUnit::Degrees => (180.0, 0.0),
+                    TrigUnit::Grads => (200.0, 0.0),
                 };
-                let off = if matches!(f, Func::Tan | Func::Sec) {
-                    q / 2.0
+                let (off, off_lo) = if matches!(f, Func::Tan | Func::Sec) {
+                    (q / 2.0, q_lo / 2.0)
                 } else {
-                    0.0
+                    (0.0, 0.0)
                 };
-                let period = q / a.abs();
-                out.push(Family {
-                    x: normalize((off - b) / a, period),
-                    period: Some(period),
-                });
+                // a·x0 = off − b − m·q for the nearest whole m, reduced
+                // with one rounding (−b − m·q is small, so its fma is
+                // exact to its own last bit) and π's low part: tan(x − 1000)
+                // has its pole at the double nearest π/2 + 1000 − 319π, not
+                // 10⁻¹³ off it.
+                let m = ((off - b) / q).round();
+                let rem = (-m).mul_add(q, -b) + off + (off_lo - m * q_lo);
+                let x0 = rem / a;
+                let tol = 1e-9 * x0.abs().max(1.0) + 16.0 * (b.abs() * f64::EPSILON) / a.abs();
+                out.push((
+                    Family {
+                        x: x0,
+                        period: Some(q / a.abs()),
+                    },
+                    tol,
+                ));
                 true
             }
             Expr::Bin(_, l, r) => walk(l, opts, out) && walk(r, opts, out),
@@ -307,14 +321,14 @@ fn trig_pole_families(e: &Expr, opts: &CompileOptions<'_>) -> Option<Vec<Family>
     walk(e, opts, &mut out).then_some(out)
 }
 
-/// Whether families `f` and `g` share a point (within rounding).
-fn families_meet(f: &Family, g: &Family) -> bool {
+/// Whether families `f` and `g` share a point (to `tol`, plus rounding).
+fn families_meet(f: &Family, g: &Family, tol: f64) -> bool {
     let near = |fam: &Family, t: f64| {
         let c = match fam.period {
             Some(p) if p > 0.0 => fam.x + ((t - fam.x) / p).round() * p,
             _ => fam.x,
         };
-        (c - t).abs() <= 1e-9 * t.abs().max(1.0)
+        (c - t).abs() <= tol + 1e-9 * t.abs().max(1.0)
     };
     match g.period {
         Some(q) if q > 0.0 => (-64..=64).any(|j| near(f, g.x + j as f64 * q)),
@@ -342,13 +356,13 @@ fn trig_holes(mut k: KeyGraphFeatures, expr: &Expr, opts: &CompileOptions<'_>) -
         return k;
     };
     let mut bail = false;
-    let mut added: Vec<Family> = Vec::new();
-    for fam in &fams {
+    let mut added: Vec<(Family, f64)> = Vec::new();
+    for (fam, tol) in &fams {
         let d = &k.data;
         let covered = d.excluded.iter().chain(&d.vertical_asymptotes).any(|g| {
             (-4..=4).all(|m| {
                 let t = fam.x + m as f64 * fam.period.unwrap_or(0.0);
-                families_meet(g, &Family::single(t))
+                families_meet(g, &Family::single(t), *tol)
             })
         });
         if covered {
@@ -400,7 +414,7 @@ fn trig_holes(mut k: KeyGraphFeatures, expr: &Expr, opts: &CompileOptions<'_>) -
             None => false,
         };
         if bounded && fits && full {
-            added.push(*fam);
+            added.push((*fam, *tol));
         } else {
             bail = true;
         }
@@ -414,7 +428,7 @@ fn trig_holes(mut k: KeyGraphFeatures, expr: &Expr, opts: &CompileOptions<'_>) -
     }
     let p = k.data.period.expect("added only with a period");
     let mut reps: Vec<f64> = Vec::new();
-    for g in k.data.excluded.iter().chain(&added) {
+    for g in k.data.excluded.iter().chain(added.iter().map(|(f, _)| f)) {
         let q = g.period.unwrap_or(p);
         let n = (p / q).round().max(1.0) as usize;
         reps.extend((0..n).map(|j| g.x + j as f64 * q));
@@ -440,7 +454,7 @@ fn trig_holes(mut k: KeyGraphFeatures, expr: &Expr, opts: &CompileOptions<'_>) -
     ] {
         if list
             .iter()
-            .any(|g| added.iter().any(|h| families_meet(h, g)))
+            .any(|g| added.iter().any(|(h, t)| families_meet(h, g, *t)))
         {
             drop |= flag;
         }
@@ -452,12 +466,15 @@ fn trig_holes(mut k: KeyGraphFeatures, expr: &Expr, opts: &CompileOptions<'_>) -
     if matches!(k.parity, Parity::Odd | Parity::Even)
         && !added
             .iter()
-            .all(|h| families_meet(h, &Family::single(-h.x)))
+            .all(|(h, t)| families_meet(h, &Family::single(-h.x), *t))
     {
         k.parity = Parity::Unknown;
         k.too_complex_features |= flags::PARITY;
     }
-    if added.iter().any(|h| families_meet(h, &Family::single(0.0))) {
+    if added
+        .iter()
+        .any(|(h, t)| families_meet(h, &Family::single(0.0), *t))
+    {
         k.data.y_intercept = None;
         k.y_intercept.clear();
     }

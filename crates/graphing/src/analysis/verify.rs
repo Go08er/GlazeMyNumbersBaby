@@ -2411,7 +2411,24 @@ pub fn check_singular_zeros(a: &Analysed, xs: &[f64], r: &mut Report) {
                 .map(|v| Family { x: v, period }),
         )
         .collect();
-    let accounted = |c: f64| marks.iter().any(|f| close_to(f, c, 64));
+    // (To where the operand's own rounding puts its zero, too: in a
+    // shifted frame, tan(x − 1000), cos(x − 1000) is only known to ulp(1000)
+    // or so, and a claimed position carries the shift's rounding.)
+    let accounted = |c: f64, o: &Expr| {
+        marks.iter().any(|f| close_to(f, c, 64)) || {
+            let (_, err) = a.bound_of(o, c);
+            let h = 1e-6 * c.abs().max(1.0);
+            let slope = ((a.bound_of(o, c + h).0 - a.bound_of(o, c - h).0) / (2.0 * h)).abs();
+            let tol = if err.is_finite() && slope > 0.0 {
+                4.0 * err / slope
+            } else {
+                0.0
+            };
+            marks
+                .iter()
+                .any(|f| (nearest(f, c) - c).abs() <= tol + 64.0 * ulp(c))
+        }
+    };
     let whole = d
         .domain
         .iter()
@@ -2488,7 +2505,7 @@ pub fn check_singular_zeros(a: &Analysed, xs: &[f64], r: &mut Report) {
                 continue;
             }
             let c = lo;
-            if accounted(c) || accounted(hi) || !claimed(c) || !claimed(hi) {
+            if accounted(c, o) || accounted(hi, o) || !claimed(c) || !claimed(hi) {
                 continue;
             }
             r.fail(
@@ -2576,8 +2593,16 @@ pub fn exclusion_supported(a: &Analysed, c: f64) -> bool {
 /// pole): its zero is then a point no double hits (cos x at π/2), and
 /// a point excluded there is where f is undefined.
 fn crosses_near(a: &Analysed, o: &Expr, c: f64) -> bool {
-    let (lo, _) = a.bound_of(o, nudge(c, -64));
-    let (hi, _) = a.bound_of(o, nudge(c, 64));
+    // (Or as far as the expression's own numbers round: in a shifted
+    // frame, tan(x − 1000), the argument is only known to ulp(1000).)
+    let scale = centres_in(o, a.unit)
+        .iter()
+        .map(|v| v.abs())
+        .filter(|v| v.is_finite())
+        .fold(0.0f64, f64::max);
+    let w = (64.0 * ulp(c)).max(4.0 * ulp(scale));
+    let (lo, _) = a.bound_of(o, c - w);
+    let (hi, _) = a.bound_of(o, c + w);
     if !(lo.is_finite() && hi.is_finite()) || lo * hi >= 0.0 {
         return false;
     }
