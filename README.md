@@ -272,8 +272,9 @@ out at `reference/calculator` to regenerate the golden files.
   Spikes and oscillations narrower than a pixel (`sin(1/x)` near 0) are
   drawn through their true extremes. A removable hole (`(x²−1)/(x−1)` at
   1, `x/x` at 0) is drawn as an open circle, where Windows and the TI-84
-  show nothing; a hole at a point that isn't a double (`tan x·cos x` at
-  π/2) is left as a gap without the circle. The boundary of an explicit
+  show nothing. A hole at a point that isn't a double (`tan x·cos x` at
+  π/2) can't be proven undefined at any double, so it isn't marked: its
+  gap is far narrower than a pixel. The boundary of an explicit
   inequality (`y < tan x`) is drawn the same way, but implicit plots and
   inequality regions are unchanged in 0.2: still sampled in floating point
   (a certified plotter for them is planned for 0.3).

@@ -346,19 +346,16 @@ fn value_at(iv: &IntervalFn, lo: f64, hi: f64, n: i32) -> TraceValue {
 /// moves the point more than a pixel (a steep curve): then finer, so
 /// tracing can still move along it pixel by pixel, by as many decades as
 /// that movement is over a pixel, down to a few floats of `t` itself. The
-/// movement is bounded with f′ over a step either side, from the interval
-/// form (a jump only counts on one side); where neither side is proven
-/// continuous (a pole, a hole) the step stays. `t_px` and `d_px` are the
-/// traced and the other coordinate's units per pixel.
+/// movement is the step times f′ at the rounded point, from the interval
+/// form (an enclosure of f′ over a whole step can be far wider than the
+/// slope: (x−c)/(x−c) next to c); where f′ isn't known there (a pole, a
+/// hole, a jump) the step stays. `t_px` and `d_px` are the traced and the
+/// other coordinate's units per pixel.
 fn step_exponent(iv: &IntervalFn, t: f64, n0: i32, t_px: f64, d_px: f64) -> i32 {
     let finest = exponent_at_least(4.0 * ulp(t));
-    let slope = |a: f64, b: f64| {
-        let s = iv.series(a, b, 1);
-        if derivs_valid(&s, 1) {
-            s[1].iv.mig_mag().1
-        } else {
-            f64::INFINITY
-        }
+    let slope = |c: f64| {
+        let s = iv.series(c, c, 1);
+        derivs_valid(&s, 1).then(|| s[1].iv.mig_mag().1)
     };
     let mut n = n0;
     for _ in 0..8 {
@@ -366,8 +363,9 @@ fn step_exponent(iv: &IntervalFn, t: f64, n0: i32, t_px: f64, d_px: f64) -> i32 
             break;
         }
         let h = pow10(n);
-        let c = Decimal::round(t, n).0.to_f64();
-        let m = slope(c - h, c).min(slope(c, c + h));
+        let Some(m) = slope(Decimal::round(t, n).0.to_f64()) else {
+            break;
+        };
         let moved = h * (t_px.recip().powi(2) + (m / d_px).powi(2)).sqrt();
         if !(moved > 1.0 && moved.is_finite()) {
             break;
@@ -549,7 +547,9 @@ pub fn nearest_point(
                 // A hole near the pointer, which could hardly land on its
                 // exact coordinate otherwise.
                 for h in &plot.holes {
-                    if let Some(c) = snap(point(h.x, h.y).0) {
+                    if let Some(c) = snap(point(h.x, h.y).0)
+                        && c.3 == TraceValue::Undefined
+                    {
                         offer(index, c, HOLE_SNAP_PX, &mut best);
                     }
                 }
@@ -718,6 +718,21 @@ mod tests {
                 "{src}: {t:?}"
             );
         }
+    }
+
+    #[test]
+    fn holes_off_the_step_grid_are_passed_over() {
+        // 0.125 isn't a multiple of this view's step, 0.01: the decimals
+        // either side are traced, not the hole.
+        let src = "y = (x-0.125)/(x-0.125)";
+        let (_, p) = setup(src, &vp());
+        assert_eq!(p.holes.len(), 1, "{:?}", p.holes);
+        let t = trace_at(src, 0.125, 1.0, 100.0).unwrap();
+        assert!(matches!(t.value, TraceValue::Defined { .. }), "{t:?}");
+        assert!(
+            ["(0.12, ≈1.00)", "(0.13, ≈1.00)"].contains(&t.text().as_str()),
+            "{t:?}"
+        );
     }
 
     #[test]
