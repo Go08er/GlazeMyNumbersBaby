@@ -291,7 +291,7 @@ fn undefined_band(f: &Program, x0: f64) -> f64 {
     let undefined = |x: f64| !f.eval(x, 0.0).is_finite();
     let limit = 1e-6 * x0.abs().max(1.0);
     let mut h = 2.0 * (f64::from_bits(x0.abs().to_bits() + 1) - x0.abs());
-    if !(h > 0.0) || !(undefined(x0 + h) && undefined(x0 - h)) {
+    if h.is_nan() || h <= 0.0 || !(undefined(x0 + h) && undefined(x0 - h)) {
         return 0.0;
     }
     while h < limit && undefined(x0 + 2.0 * h) && undefined(x0 - 2.0 * h) {
@@ -306,13 +306,9 @@ fn undefined_band(f: &Program, x0: f64) -> f64 {
 /// f is defined at the double itself is dropped (0·sin x / sin x was
 /// sampled into holes at kπ/12, a period no value shows). Its period and
 /// its constant pieces are its holes', which no value tells apart from
-/// their halves: unknown. Err (unchanged) unless it is such a function and
-/// all its holes are these families or undefined doubles of them.
-fn constant_holes(
-    mut k: KeyGraphFeatures,
-    fams: &[(Family, f64)],
-    f: &Program,
-) -> Result<KeyGraphFeatures, KeyGraphFeatures> {
+/// their halves: unknown. False (k unchanged) unless it is such a function
+/// and all its holes are these families or undefined doubles of them.
+fn constant_holes(k: &mut KeyGraphFeatures, fams: &[(Family, f64)], f: &Program) -> bool {
     let d = &k.data;
     let flat = matches!(d.range.as_slice(), [iv] if iv.lo.value == iv.hi.value)
         && !d.monotonicity.is_empty()
@@ -320,7 +316,7 @@ fn constant_holes(
             .iter()
             .all(|(_, m)| *m == Monotonicity::Constant);
     if !flat || fams.is_empty() {
-        return Err(k);
+        return false;
     }
     let p = fams
         .iter()
@@ -331,7 +327,7 @@ fn constant_holes(
         (1.0..=64.0).contains(&n) && (p - n * q).abs() <= 1e-9 * p
     };
     if !(p > 0.0 && fams.iter().all(|(g, _)| g.period.is_some_and(divides))) {
-        return Err(k);
+        return false;
     }
     // The holes it claims: excluded points, and gaps between its pieces.
     let mut ivs = d.domain.clone();
@@ -348,12 +344,12 @@ fn constant_holes(
         }
     };
     if !spans {
-        return Err(k);
+        return false;
     }
     let mut claimed: Vec<f64> = Vec::new();
     for w in ivs.windows(2) {
         if w[0].hi.value != w[1].lo.value || w[0].hi.closed || w[1].lo.closed {
-            return Err(k);
+            return false;
         }
         claimed.push(w[0].hi.value);
     }
@@ -371,7 +367,7 @@ fn constant_holes(
         .iter()
         .any(|&t| t.is_finite() && !in_fams(t) && f.eval(t, 0.0).is_nan())
     {
-        return Err(k);
+        return false;
     }
     // Holes, not poles: bounded beside each.
     for (g, _) in fams {
@@ -382,7 +378,7 @@ fn constant_holes(
             side((1e-9 * g.x.abs().max(1.0)).max(4.0 * band)),
         );
         if !(far.is_finite() && near.is_finite() && near <= 2.0 * far + 1.0) {
-            return Err(k);
+            return false;
         }
     }
     let c = d.range[0].lo.value;
@@ -405,7 +401,7 @@ fn constant_holes(
     k.vertical_asymptotes.clear();
     k.periodicity_direction = Periodicity::Unknown;
     k.periodicity_expression.clear();
-    forget(&mut k, flags::PERIODICITY | flags::MONOTONE_INTERVALS);
+    forget(k, flags::PERIODICITY | flags::MONOTONE_INTERVALS);
     if c == 0.0 {
         k.x_intercept = k.domain.clone();
     }
@@ -425,7 +421,7 @@ fn constant_holes(
         k.parity = Parity::Unknown;
         k.too_complex_features |= flags::PARITY;
     }
-    Ok(k)
+    true
 }
 
 /// Holes the samples can't show: where tan, sec, cot or csc of an affine
@@ -447,10 +443,10 @@ fn trig_holes(k: KeyGraphFeatures, expr: &Expr, opts: &CompileOptions<'_>) -> Ke
     let Ok(f) = Program::compile(expr, opts) else {
         return k;
     };
-    let mut k = match constant_holes(k, &fams, &f) {
-        Ok(k) => return k,
-        Err(k) => k,
-    };
+    let mut k = k;
+    if constant_holes(&mut k, &fams, &f) {
+        return k;
+    }
     let mut bail = false;
     let mut added: Vec<(Family, f64)> = Vec::new();
     for (fam, tol) in &fams {
