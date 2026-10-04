@@ -301,3 +301,49 @@ fn holes_marked_and_unjoined_at_every_size() {
         assert!(sizes > 50, "{src}: {sizes}");
     }
 }
+
+/// PREREVIEW_B B-M1: no open circle inside an interval where f is
+/// undefined (a run of unproven boxes as wide as the gap in sqrt(x²−4),
+/// or one with a box proven undefined); the true holes stay, one per
+/// integer for (x − ⌊x⌋)/(x − ⌊x⌋).
+#[test]
+fn holes_only_where_proven() {
+    let none = [
+        "y=sqrt(sin(x))",
+        "y=sqrt(x^2-4)+3",
+        "y=floor(x)/floor(x)-5",
+        "y=sqrt(cos(x))",
+        "y=asin(2*sin(x))",
+        "y=sqrt(sin(2*x))",
+        "y=1/x",
+    ];
+    let sizes = [
+        (378.0, 644.0),
+        (760.0, 700.0),
+        (1000.0, 700.0),
+        (1920.0, 1080.0),
+        (882.0, 300.0),
+    ];
+    for src in none {
+        let mut g = Graph::new();
+        let id = g.add_equation(src);
+        for (w, h) in sizes {
+            let vp = Viewport::default_for_size(w, h);
+            let p = g.plot_equation(id, &vp).unwrap();
+            assert!(p.holes.is_empty(), "{src} at {w}x{h}: {:?}", p.holes);
+        }
+    }
+    let mut g = Graph::new();
+    let id = g.add_equation("y=(x-floor(x))/(x-floor(x))");
+    for (w, h) in sizes {
+        let vp = Viewport::default_for_size(w, h);
+        let p = g.plot_equation(id, &vp).unwrap();
+        let ints: Vec<f64> = ((vp.x_min.ceil() as i64)..=(vp.x_max.floor() as i64))
+            .map(|k| k as f64)
+            .collect();
+        let mut xs: Vec<f64> = p.holes.iter().map(|q| q.x).collect();
+        xs.sort_by(f64::total_cmp);
+        assert_eq!(xs, ints, "at {w}x{h}");
+        assert!(p.holes.iter().all(|q| q.y == 1.0), "{:?}", p.holes);
+    }
+}

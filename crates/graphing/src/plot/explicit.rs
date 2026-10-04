@@ -76,6 +76,9 @@ const STRUCTURE_SHARE: f64 = 0.75;
 /// parts with point samples where the structure is unknown.
 const FALLBACK_SHARE: f64 = 0.25;
 
+/// A run of unproven boxes wider than this (pixels) is no hole.
+const HOLE_RUN_PX: f64 = 1e-3;
+
 /// Estimated cost (≈ ns) of one point evaluation and of interval
 /// evaluations of order 0 and 2 of a function of cost `c`
 /// ([`Program::cost`] for points, [`IntervalFn::cost`] for intervals):
@@ -576,25 +579,46 @@ impl<'a> ExplicitSampler<'a> {
                     }
                 }
                 Kind::Gap | Kind::Undefined => {
-                    // A run of gaps is one break; a hole if f is proven
-                    // undefined at a number inside and meets itself across.
+                    // A run of gaps is one break; a hole if it is narrower
+                    // than HOLE_RUN_PX with no box of it proven undefined,
+                    // f is proven defined on both sides of it and meets
+                    // itself across, and is proven undefined at a number
+                    // inside.
                     let mut j = i;
+                    let mut undefined = kind == Kind::Undefined;
                     while j + 1 < boxes.len()
                         && matches!(boxes[j + 1].2, Kind::Gap | Kind::Undefined)
                     {
                         j += 1;
+                        undefined |= boxes[j].2 == Kind::Undefined;
                     }
                     let (g0, g1) = (lo, boxes[j].1);
                     let before = self.cur.last().copied();
                     self.break_piece();
-                    let after = self.f.eval(g1, 0.0);
-                    if let Some((bt, bd)) = before
-                        && bt == g0
-                        && after.is_finite()
-                        && (after - bd).abs() * self.d_px <= self.opts.tolerance_px
+                    let defined = |k: usize| {
+                        boxes.get(k).is_some_and(|b| {
+                            matches!(
+                                b.2,
+                                Kind::Smooth(_)
+                                    | Kind::Steep
+                                    | Kind::Peak(..)
+                                    | Kind::Continuous
+                                    | Kind::Off
+                            )
+                        })
+                    };
+                    let narrow = g1 - g0
+                        <= (HOLE_RUN_PX / self.t_px).max(16.0 * ulp(g0.abs().max(g1.abs())));
+                    if !undefined
+                        && narrow
+                        && i > 0
+                        && defined(i - 1)
+                        && defined(j + 1)
+                        && before.is_some_and(|(bt, _)| bt == g0)
                         && let Some(p) = undefined_inside(iv, g0, g1)
+                        && let Some(v) = self.removable(iv, p, (p - g0).max(g1 - p))
                     {
-                        self.holes.push((p, 0.5 * (bd + after)));
+                        self.holes.push((p, v));
                     }
                     i = j;
                 }
@@ -637,6 +661,46 @@ impl<'a> ExplicitSampler<'a> {
         } else {
             self.band_lo - h
         }
+    }
+
+    /// The value of a hole at `p` (where f is undefined, within a run of
+    /// unproven boxes reaching `r` either side of it), or None: f at p ± r
+    /// must meet within the tolerance, and eight doubles either side of p
+    /// may still be within the tolerance of their mean `v` and not much
+    /// further from it than at p ± r. So a pole that outgrows the
+    /// tolerance only that close in (`x!` at −13 at the default view:
+    /// ±0.0005 a hundred-thousandth of a pixel away, ±10⁴ eight doubles
+    /// away), or at least grows towards p (`x!` at −20: 10⁻¹¹, then
+    /// 10⁻⁴), is no hole. Enclosures, not point values, close in, so a
+    /// cancelling form (`(x³−8)/(x−2)`) isn't mistaken for growth.
+    fn removable(&self, iv: &IntervalFn, p: f64, r: f64) -> Option<f64> {
+        let tol = self.opts.tolerance_px / self.d_px;
+        let (l, h) = (self.f.eval(p - r, 0.0), self.f.eval(p + r, 0.0));
+        if !(l.is_finite() && h.is_finite() && (h - l).abs() <= tol) {
+            return None;
+        }
+        let v = 0.5 * (l + h);
+        let dist = |t: f64| {
+            let e = iv.enclose(t, t);
+            if e.is_empty() {
+                f64::INFINITY
+            } else {
+                (e.lo() - v).max(v - e.hi()).max(0.0)
+            }
+        };
+        let far = dist(p - r).max(dist(p + r));
+        let (mut a, mut b) = (p, p);
+        for _ in 0..8 {
+            a = a.next_down();
+            b = b.next_up();
+        }
+        [a, b]
+            .into_iter()
+            .all(|near| {
+                let d = dist(near);
+                d <= tol && d <= 2.0 * far + 4.0 * ulp(v)
+            })
+            .then_some(v)
     }
 
     /// f's value at an end of a box it is proven continuous on (so
