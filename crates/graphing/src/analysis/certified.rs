@@ -96,7 +96,8 @@ fn widen(lo: f64, hi: f64) -> (f64, f64) {
 
 /// Closed forms near an enclosure, to be checked: the simplest rational in
 /// it, the simplest rational multiple of π (radians), ±√r for the simplest
-/// rational r in its square.
+/// rational r in its square, ±eᵏ for the simplest rational k in its
+/// logarithm, ln(r)/m for the simplest rational r in eᵐˣ (m ≤ 3).
 fn nice(x: Enc, unit: TrigUnit) -> Vec<Ex> {
     let (lo, hi) = (x.lo.0, x.hi.0);
     let mut out = Vec::new();
@@ -121,6 +122,24 @@ fn nice(x: Enc, unit: TrigUnit) -> Vec<Ex> {
             } else {
                 root
             });
+        }
+        let (m, n) = (lo.abs().min(hi.abs()), lo.abs().max(hi.abs()));
+        let (a, b) = widen(m.ln(), n.ln());
+        if let Some(k) = simplest(a, b)
+            && let Some(v) = Ex::int(1).exp_times(k)
+        {
+            out.extend(if hi < 0.0 { v.neg() } else { Some(v) });
+        }
+    }
+    // ln(r)/m: eᵐˣ = r (e²ˣ − 4x turns at ln(2)/2).
+    for m in 1..=3 {
+        let (a, b) = widen((lo * f64::from(m)).exp(), (hi * f64::from(m)).exp());
+        if a > 0.0
+            && b.is_finite()
+            && let Some(r) = simplest(a, b)
+            && let Some(v) = Ex::ln_q(r).and_then(|v| v.div(Ex::int(m.into())))
+        {
+            out.push(v);
         }
     }
     out
@@ -855,7 +874,7 @@ impl<'a> Ctx<'a> {
     fn y_at(&self, x: Option<Ex>, y: Enc) -> Num {
         let exact = x
             .and_then(|x| self.eval(&self.f, x))
-            .filter(|v| v.within(y.lo.0, y.hi.0) == Some(true));
+            .filter(|v| v.agrees(y.lo.0, y.hi.0));
         Num { exact, enc: y }
     }
 
@@ -1140,7 +1159,7 @@ impl<'a> Ctx<'a> {
                 _ => return None,
             },
         };
-        (v.within(y.lo.0, y.hi.0) == Some(true)).then_some(v)
+        v.agrees(y.lo.0, y.hi.0).then_some(v)
     }
 
     /// The oblique asymptote's slope and intercept, exactly.

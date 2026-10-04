@@ -286,14 +286,14 @@ fn exponential_and_logarithmic() {
     assert_eq!(r.domain, "x ∈ (0, ∞)");
     assert_eq!(r.vertical_asymptotes, ["x = 0"]);
 
-    // 1/e has no exact form here: six digits, all fixed by the proof.
+    // 1/e exactly: f′(1/e) = ln(1/e) + 1 = 0 in exact arithmetic.
     let r = k("x ln(x)");
-    assert_eq!(r.minima, ["(0.367879, −0.367879)"]);
-    assert_eq!(r.range, "y ∈ [−0.367879, ∞)");
+    assert_eq!(r.minima, ["(1/e, −1/e)"]);
+    assert_eq!(r.range, "y ∈ [−1/e, ∞)");
 
     let r = k("ln(ln(x))");
     assert_eq!(r.domain, "x ∈ (1, ∞)");
-    assert_eq!(r.x_intercept, "2.71828");
+    assert_eq!(r.x_intercept, "e");
 
     let r = k("e^(-x^2)");
     assert_eq!(r.maxima, ["(0, 1)"]);
@@ -491,4 +491,27 @@ fn analysis_is_reasonably_fast() {
     }
     let limit = if cfg!(debug_assertions) { 20.0 } else { 2.0 };
     assert!(t.elapsed().as_secs_f64() < limit, "{:?}", t.elapsed());
+}
+
+/// e, 1/e, eᵏ and ln forms, exactly where exact arithmetic proves them (f′
+/// exactly 0 at the closed form, f's value there computed exactly).
+#[test]
+fn e_and_ln_closed_forms() {
+    let r = k("x*e^(-x)");
+    assert_eq!(r.maxima, ["(1, 1/e)"]);
+    assert_eq!(r.range, "y ∈ (−∞, 1/e]");
+    assert_eq!(r.inflection_points, ["(2, 2/e²)"]);
+    let r = k("x*ln(x)");
+    assert_eq!(r.minima, ["(1/e, −1/e)"]);
+    let r = k("ln(x)/x");
+    assert_eq!(r.maxima, ["(e, 1/e)"]);
+    let r = k("e^x-2x");
+    assert_eq!(r.minima, ["(ln(2), 2 − 2ln(2))"]);
+    let r = k("e^(2x)-4x");
+    assert_eq!(r.minima, ["(ln(2)/2, 2 − 2ln(2))"]);
+    let r = k("e^(-x^2)");
+    assert_eq!(r.inflection_points, ["(−√2/2, 1/√e)", "(√2/2, 1/√e)"]);
+    // Fewer digits than six fixed: as many as are, marked "≈".
+    let r = k("x*2^x");
+    assert!(r.minima[0].starts_with("(≈−1.44"), "{:?}", r.minima);
 }
