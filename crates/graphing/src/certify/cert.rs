@@ -255,6 +255,22 @@ pub enum Claim {
     /// there (a minimum from − to +), and a change of f″'s sign across it
     /// leaves inflections undecided.
     Kink { x: XBox },
+    /// The kink in the `Kink` box `x` is at exactly the double `at` (some
+    /// kink argument — the u of an |u|, or a − b of a min(a, b) or
+    /// max(a, b) — is exactly 0 there): every kink argument is strictly
+    /// signed on each side of `at` inside `x` (away from 0 over `x`, or
+    /// exactly 0 at `at` with a strictly signed derivative over `x`), so on
+    /// `[x.a, at]` and on `[at, x.b]` f equals the smooth form with each
+    /// |u| (min, max) resolved by those signs; that form's derivative is
+    /// strictly positive (`true`) or negative on `[x.a, at]` (`left`) and
+    /// on `[at, x.b]` (`right`). f is strictly monotone on each side, so a
+    /// turn across the kink is at exactly `at`.
+    KinkAt {
+        x: XBox,
+        at: R,
+        left: bool,
+        right: bool,
+    },
     /// f is bounded near the excluded point (or domain end) enclosed by
     /// `at`: wherever f is defined on `near`, which holds `at`, its values
     /// lie in `[lo, hi]`. (f need not be defined at the point itself, nor

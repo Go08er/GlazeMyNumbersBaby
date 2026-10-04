@@ -1024,12 +1024,22 @@ fn may_contain(a: &Iv, unit: Unit, phase: f64, step: f64) -> bool {
     k_lo <= k_hi
 }
 
+/// An argument too large to reduce by a period in reasonable time and
+/// memory (beyond 2⁶⁵⁵³⁶: e^x at x = 10¹⁵ is 2^(1.4·10¹⁵)); only an
+/// exponential far out reaches one. Its sine and cosine are taken as
+/// [−1, 1], its tangent unknown.
+fn unreducible(a: &Iv) -> bool {
+    let bound = Float::with_val(64, 1u32) << 65_536u32;
+    let big = |v: &Float| v.is_finite() && *v.as_abs() > bound;
+    big(&a.lo) || big(&a.hi)
+}
+
 /// sin (`cos` false) or cos over a box, in the unit.
 pub fn sin_cos(a: &Iv, unit: Unit, cos: bool) -> Iv {
     if a.empty {
         return Iv::empty();
     }
-    if !a.lo.is_finite() || !a.hi.is_finite() {
+    if !a.lo.is_finite() || !a.hi.is_finite() || unreducible(a) {
         return Iv::of2(-1.0, 1.0).deco(&[a], true, true);
     }
     // Maxima of sin at 1 + 4k quarter turns, minima at 3 + 4k; cos: 0 + 4k
@@ -1070,7 +1080,7 @@ pub fn tan(a: &Iv, unit: Unit) -> Iv {
             };
         }
     }
-    if !a.lo.is_finite() || !a.hi.is_finite() || may_contain(a, unit, 1.0, 2.0) {
+    if !a.lo.is_finite() || !a.hi.is_finite() || unreducible(a) || may_contain(a, unit, 1.0, 2.0) {
         return Iv::unknown().deco(&[a], false, false);
     }
     let t = |x: &Float, r: Round| -> Float {

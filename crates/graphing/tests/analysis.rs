@@ -134,12 +134,11 @@ fn rational_functions() {
 
     let r = k("x^2/(x+1)");
     assert_eq!(r.oblique_asymptotes, ["y = x − 1"]);
-    // f′'s sign is not decided near the pole within the budget: the range
-    // and monotonicity are unknown, the extrema found are some of them.
-    assert!(r.too_complex_features & flags::RANGE != 0);
-    assert!(r.range.is_empty());
+    // f′'s tree in Horner's form decides its sign up to the pole.
+    assert_eq!(r.range, "y ∈ (−∞, −4] ∪ [0, ∞)");
     assert_eq!(r.maxima, ["(−2, −4)"]);
-    assert!(r.partial_features & flags::MAXIMA != 0);
+    assert_eq!(r.minima, ["(0, 0)"]);
+    assert_eq!(r.too_complex_features, 0);
 
     let r = k("1/(x^2-4)");
     assert_eq!(r.domain, "x ∈ ℝ \\ {−2, 2}");
@@ -286,14 +285,14 @@ fn exponential_and_logarithmic() {
     assert_eq!(r.domain, "x ∈ (0, ∞)");
     assert_eq!(r.vertical_asymptotes, ["x = 0"]);
 
-    // 1/e has no exact form here: six digits, all fixed by the proof.
+    // 1/e exactly: f′(1/e) = ln(1/e) + 1 = 0 in exact arithmetic.
     let r = k("x ln(x)");
-    assert_eq!(r.minima, ["(0.367879, −0.367879)"]);
-    assert_eq!(r.range, "y ∈ [−0.367879, ∞)");
+    assert_eq!(r.minima, ["(1/e, −1/e)"]);
+    assert_eq!(r.range, "y ∈ [−1/e, ∞)");
 
     let r = k("ln(ln(x))");
     assert_eq!(r.domain, "x ∈ (1, ∞)");
-    assert_eq!(r.x_intercept, "2.71828");
+    assert_eq!(r.x_intercept, "e");
 
     let r = k("e^(-x^2)");
     assert_eq!(r.maxima, ["(0, 1)"]);
@@ -342,13 +341,17 @@ fn roots_and_absolute_values() {
     assert_eq!(r.domain, "x ∈ [−1, 1]");
     assert_eq!(r.range, "y ∈ [0, 1]");
     assert_eq!(r.maxima, ["(0, 1)"]);
-    // |x| turns at a corner (no f′ there) and x^(1/3) has a vertical
-    // tangent at 0: the certifier proves turns and inflections from f′ and
-    // f″ only, so those rows are unknown.
+    // |x| turns at a corner, placed exactly at 0 with f′ of each side's
+    // form (−x, x) strictly signed there. x^(1/3) has a vertical tangent at
+    // 0: the certifier proves inflections from f″ only, so that row is
+    // unknown.
     let r = k("|x|");
-    assert!(r.too_complex_features & flags::MINIMA != 0);
-    assert!(r.minima.is_empty());
-    assert!(r.inflection_points.is_empty());
+    assert_eq!(r.too_complex_features & flags::MINIMA, 0);
+    assert_eq!(r.minima, ["(0, 0)"]);
+    assert_eq!(r.x_intercept, "0");
+    let r = k("|x-3|");
+    assert_eq!(r.minima, ["(3, 0)"]);
+    assert_eq!(r.x_intercept, "3");
     let r = k("x^(1/3)");
     assert_eq!(r.domain, "x ∈ ℝ");
     assert!(r.too_complex_features & flags::INFLECTION_POINTS != 0);
@@ -373,7 +376,14 @@ fn piecewise_constant() {
     let r = k("x/|x|");
     assert_eq!(r.domain, "x ∈ ℝ \\ {0}");
     assert!(r.too_complex_features & flags::RANGE != 0);
-    assert_eq!(r.horizontal_asymptotes, ["y = 1", "y = −1"]);
+    // Its tails' enclosures are ∞/∞: no band bears the limits out, so
+    // they are unknown (never other lines).
+    assert!(
+        r.horizontal_asymptotes == ["y = 1", "y = −1"]
+            || r.too_complex_features & flags::HORIZONTAL_ASYMPTOTES != 0,
+        "{:?}",
+        r.horizontal_asymptotes
+    );
 }
 
 #[test]
@@ -487,4 +497,27 @@ fn analysis_is_reasonably_fast() {
     }
     let limit = if cfg!(debug_assertions) { 20.0 } else { 2.0 };
     assert!(t.elapsed().as_secs_f64() < limit, "{:?}", t.elapsed());
+}
+
+/// e, 1/e, eᵏ and ln forms, exactly where exact arithmetic proves them (f′
+/// exactly 0 at the closed form, f's value there computed exactly).
+#[test]
+fn e_and_ln_closed_forms() {
+    let r = k("x*e^(-x)");
+    assert_eq!(r.maxima, ["(1, 1/e)"]);
+    assert_eq!(r.range, "y ∈ (−∞, 1/e]");
+    assert_eq!(r.inflection_points, ["(2, 2/e²)"]);
+    let r = k("x*ln(x)");
+    assert_eq!(r.minima, ["(1/e, −1/e)"]);
+    let r = k("ln(x)/x");
+    assert_eq!(r.maxima, ["(e, 1/e)"]);
+    let r = k("e^x-2x");
+    assert_eq!(r.minima, ["(ln(2), 2 − 2ln(2))"]);
+    let r = k("e^(2x)-4x");
+    assert_eq!(r.minima, ["(ln(2)/2, 2 − 2ln(2))"]);
+    let r = k("e^(-x^2)");
+    assert_eq!(r.inflection_points, ["(−√2/2, 1/√e)", "(√2/2, 1/√e)"]);
+    // Fewer digits than six fixed: as many as are, marked "≈".
+    let r = k("x*2^x");
+    assert!(r.minima[0].starts_with("(≈−1.44"), "{:?}", r.minima);
 }

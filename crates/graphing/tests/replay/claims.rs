@@ -219,7 +219,18 @@ impl<'a> Subj<'a> {
     /// there (f defined, and for k ≥ 1 continuous with its derivatives up
     /// to k; g defined), judged on the canonical tree.
     pub fn coeffs(&self, lo: f64, hi: f64, m: usize) -> (Vec<Iv>, bool) {
-        let s = self.fx.series(&self.e, lo, hi, self.k + m);
+        let mut s = self.fx.series(&self.e, lo, hi, self.k + m);
+        // f's own tree ∞ − ∞ on a tail: its Horner form, the same function.
+        if self.tree == Tree::Orig
+            && matches!(self.of, Subject::F(_))
+            && !valid_f(&s, self.k)
+            && let Some(h) = &self.fx.f_alt
+        {
+            let t = self.fx.series(h, lo, hi, self.k + m);
+            if valid_f(&t, self.k) {
+                s = t;
+            }
+        }
         let c: Vec<Iv> = (0..=m)
             .map(|j| {
                 if self.k == 0 {
@@ -386,6 +397,67 @@ fn on(x: B, check: &mut dyn FnMut(f64, f64) -> V) -> V {
 }
 
 /// The subject valid on the box and strictly on side `above` of c.
+/// The factors of a product (or quotient's numerator and denominator),
+/// flattened.
+fn mul_factors(e: &Expr, out: &mut Vec<Expr>) {
+    match e {
+        Expr::Bin(BinOp::Mul, a, b) => {
+            mul_factors(a, out);
+            mul_factors(b, out);
+        }
+        _ => out.push(e.clone()),
+    }
+}
+
+fn product_of(fs: &[Expr]) -> Expr {
+    fs.iter()
+        .cloned()
+        .reduce(|a, b| Expr::Bin(BinOp::Mul, Box::new(a), Box::new(b)))
+        .unwrap_or(Expr::Num(1.0))
+}
+
+/// e's strict sign over [lo, hi] (`true`: positive) from its parts: its
+/// enclosure, or a product or quotient of parts each strictly signed, or a
+/// sum or difference whose terms share a factor c (a·c ± b·c = c·(a ± b))
+/// signed as c and the rest. (x·e⁻ˣ's f′, e⁻ˣ − x·e⁻ˣ, is e⁻ˣ·(1 − x):
+/// negative on [16, ∞) though its enclosure there holds 0.) Identities
+/// and the sign rules of products only: the replay's own.
+fn factor_sign(fx: &Fx, e: &Expr, lo: f64, hi: f64, depth: usize) -> Option<bool> {
+    let v = fx.series(e, lo, hi, 0)[0].clone();
+    if v.empty || !v.def {
+        return None;
+    }
+    if v.gt(0.0) {
+        return Some(true);
+    }
+    if v.lt(0.0) {
+        return Some(false);
+    }
+    if depth == 0 {
+        return None;
+    }
+    let d = depth - 1;
+    match e {
+        Expr::Neg(a) => factor_sign(fx, a, lo, hi, d).map(|s| !s),
+        Expr::Bin(BinOp::Mul | BinOp::Div, a, b) => {
+            Some(factor_sign(fx, a, lo, hi, d)? == factor_sign(fx, b, lo, hi, d)?)
+        }
+        Expr::Bin(op @ (BinOp::Add | BinOp::Sub), a, b) => {
+            let (mut fa, mut fb) = (Vec::new(), Vec::new());
+            mul_factors(a, &mut fa);
+            mul_factors(b, &mut fb);
+            let c = fa.iter().find(|f| contains_x(f) && fb.contains(f))?.clone();
+            let ia = fa.iter().position(|f| *f == c)?;
+            let ib = fb.iter().position(|f| *f == c)?;
+            fa.remove(ia);
+            fb.remove(ib);
+            let rest = Expr::Bin(*op, Box::new(product_of(&fa)), Box::new(product_of(&fb)));
+            Some(factor_sign(fx, &c, lo, hi, d)? == factor_sign(fx, &rest, lo, hi, d)?)
+        }
+        _ => None,
+    }
+}
+
 fn beyond(s: &Subj, x: B, c: f64, above: bool, cont: bool) -> V {
     on(x, &mut |lo, hi| {
         let (v, valid, is_cont) = s.enc(0, lo, hi);
@@ -399,6 +471,10 @@ fn beyond(s: &Subj, x: B, c: f64, above: bool, cont: bool) -> V {
             return unknown("not shown continuous");
         }
         if v.beyond(c, above) {
+            return V::Yes;
+        }
+        // Against 0, the tree's own factors may tell.
+        if c == 0.0 && s.k == 0 && factor_sign(s.fx, &s.e, lo, hi, 4) == Some(above) {
             return V::Yes;
         }
         let wrong = if above { v.le(c) } else { v.ge(c) };
@@ -554,6 +630,7 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
         }),
         Claim::Unbounded { near, at } => unbounded(fx, *near, *at),
         Claim::Kink(x) => defined(fx, *x, Some(true)),
+        Claim::KinkAt { x, at, left, right } => kink_at(fx, *x, *at, *left, *right),
         Claim::Bounded { near, at, lo, hi } => {
             if !(near.0 <= at.0 && at.1 <= near.1) {
                 return Outcome::new(
@@ -582,6 +659,298 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
             }
             _ => Outcome::new(Class::Unsupported, "a gap claim on a side expression"),
         },
+    }
+}
+
+/// The kink arguments of `e`, from the spec: the u of each |u| and the
+/// a − b of each min(a, b), max(a, b) that varies with x.
+fn kink_args(e: &Expr, out: &mut Vec<Expr>) {
+    match e {
+        Expr::Call(Func::Abs, a) if contains_x(&a[0]) => {
+            if !out.contains(&a[0]) {
+                out.push(a[0].clone());
+            }
+            kink_args(&a[0], out);
+        }
+        Expr::Call(Func::Min | Func::Max, a) if a.len() == 2 && a.iter().any(contains_x) => {
+            let d = Expr::Bin(BinOp::Sub, Box::new(a[0].clone()), Box::new(a[1].clone()));
+            if !out.contains(&d) {
+                out.push(d);
+            }
+            a.iter().for_each(|v| kink_args(v, out));
+        }
+        Expr::Neg(a) | Expr::Degrees(a) => kink_args(a, out),
+        Expr::Bin(_, a, b) => {
+            kink_args(a, out);
+            kink_args(b, out);
+        }
+        Expr::Call(_, args) => args.iter().for_each(|v| kink_args(v, out)),
+        _ => {}
+    }
+}
+
+/// `e` on one side of a kink: each |u| as u or −u, each min, max as the
+/// argument it picks, by the sign each kink argument has on that side.
+fn one_sided(e: &Expr, sides: &[(Expr, bool, bool)], left: bool) -> Option<Expr> {
+    let sign = |u: &Expr| {
+        sides
+            .iter()
+            .find(|(v, ..)| v == u)
+            .map(|(_, l, r)| if left { *l } else { *r })
+    };
+    Some(match e {
+        Expr::Call(Func::Abs, a) if contains_x(&a[0]) => {
+            let inner = one_sided(&a[0], sides, left)?;
+            if sign(&a[0])? {
+                inner
+            } else {
+                Expr::Neg(Box::new(inner))
+            }
+        }
+        Expr::Call(f @ (Func::Min | Func::Max), a) if a.len() == 2 && a.iter().any(contains_x) => {
+            let d = Expr::Bin(BinOp::Sub, Box::new(a[0].clone()), Box::new(a[1].clone()));
+            let a_bigger = sign(&d)?;
+            let pick = if a_bigger == (*f == Func::Max) {
+                &a[0]
+            } else {
+                &a[1]
+            };
+            one_sided(pick, sides, left)?
+        }
+        Expr::Neg(a) => Expr::Neg(Box::new(one_sided(a, sides, left)?)),
+        Expr::Degrees(a) => Expr::Degrees(Box::new(one_sided(a, sides, left)?)),
+        Expr::Bin(op, a, b) => Expr::Bin(
+            *op,
+            Box::new(one_sided(a, sides, left)?),
+            Box::new(one_sided(b, sides, left)?),
+        ),
+        Expr::Call(f, args) => Expr::Call(
+            *f,
+            args.iter()
+                .map(|v| one_sided(v, sides, left))
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        _ => e.clone(),
+    })
+}
+
+/// A kink placed exactly (`KinkAt`): some kink argument is exactly 0 at
+/// `at`; every kink argument is strictly signed on each side of `at`
+/// inside the box (away from 0 over it, or 0 at `at` with a strictly
+/// signed derivative over it), so f is the one-sided form there; and that
+/// form's derivative has the claimed strict sign on [x.0, at], [at, x.1].
+fn kink_at(fx: &Fx, x: B, at: f64, left: bool, right: bool) -> Outcome {
+    if !(x.0 < at && at < x.1) {
+        return Outcome::new(Class::Refuted, "the kink's point is not inside its box");
+    }
+    if unmodelled(&fx.f) {
+        return Outcome::new(
+            Class::Unsupported,
+            "the tree uses a function the replay doesn't model",
+        );
+    }
+    let mut args = Vec::new();
+    kink_args(&fx.f, &mut args);
+    // (Set when a singular point's f′ was signed on the certifier's tree
+    // of f′, compared with f′ at points only.)
+    let weak = std::cell::Cell::new(false);
+    let v = ladder(|| {
+        let mut sides: Vec<(Expr, bool, bool)> = Vec::new();
+        let mut zero = false;
+        for u in &args {
+            let s = fx.series(u, x.0, x.1, 1);
+            if s[0].def && (s[0].gt(0.0) || s[0].lt(0.0)) {
+                let pos = s[0].gt(0.0);
+                sides.push((u.clone(), pos, pos));
+                continue;
+            }
+            let at_u = fx.series(u, at, at, 0);
+            let d = &s[1];
+            if !(at_u[0].def && at_u[0].is_exactly(0.0)) {
+                return unknown("a kink argument is not decided over the box");
+            }
+            if !(s[0].cont && d.def && d.bounded() && (d.gt(0.0) || d.lt(0.0))) {
+                return unknown("a kink argument's slope is not decided over the box");
+            }
+            zero = true;
+            let rising = d.gt(0.0);
+            sides.push((u.clone(), !rising, rising));
+        }
+        if !zero {
+            // No corner: a point where f′ is singular (u^r, r < 1, u = 0)?
+            return singular_at(fx, x, at, left, right, &sides, &weak);
+        }
+        for (on_left, lo, hi, want) in [(true, x.0, at, left), (false, at, x.1, right)] {
+            let Some(e) = one_sided(&fx.f, &sides, on_left) else {
+                return unknown("no one-sided form");
+            };
+            let s = fx.series(&e, lo, hi, 1);
+            let d = &s[1];
+            if !(s[0].cont && d.def && d.bounded()) {
+                return unknown("the one-sided form's slope is not decided");
+            }
+            if (want && d.lt(0.0)) || (!want && d.gt(0.0)) {
+                return V::No("the one-sided slope has the other sign".into());
+            }
+            if !((want && d.gt(0.0)) || (!want && d.lt(0.0))) {
+                return unknown("the one-sided slope is not strictly signed");
+            }
+        }
+        V::Yes
+    });
+    match v {
+        V::Yes if weak.get() => Outcome::new(Class::Weak, "f′ signed on the certifier's tree"),
+        V::Yes => Outcome::new(Class::Strong, ""),
+        V::No(w) => Outcome::new(Class::Refuted, w),
+        V::Unknown(w) => Outcome::new(Class::Unconfirmed, w),
+    }
+}
+
+/// The bases u (varying with x) of f's fractional powers u^r with r < 1
+/// (√u, ∛u, a typed or written non-integer exponent): f′ is unbounded
+/// where u = 0.
+fn singular_args(fx: &Fx, e: &Expr, out: &mut Vec<Expr>) {
+    let r = |b: &Expr| -> Option<f64> {
+        if contains_x(b) {
+            return None;
+        }
+        if let Some((p, q)) = super::eval::written_rational(b) {
+            return (q != 1).then(|| p as f64 / q as f64);
+        }
+        let v = fx.series(b, 0.0, 0.0, 0)[0].clone();
+        (v.is_point() && !v.lo.is_integer()).then(|| v.lo.to_f64())
+    };
+    match e {
+        Expr::Bin(BinOp::Pow, u, b) if contains_x(u) && r(b).is_some_and(|r| r < 1.0) => {
+            if !out.contains(u) {
+                out.push((**u).clone());
+            }
+            singular_args(fx, u, out);
+        }
+        Expr::Call(Func::Sqrt | Func::Cbrt, a) if contains_x(&a[0]) => {
+            if !out.contains(&a[0]) {
+                out.push(a[0].clone());
+            }
+            singular_args(fx, &a[0], out);
+        }
+        Expr::Neg(a) | Expr::Degrees(a) => singular_args(fx, a, out),
+        Expr::Bin(_, a, b) => {
+            singular_args(fx, a, out);
+            singular_args(fx, b, out);
+        }
+        Expr::Call(_, args) => args.iter().for_each(|v| singular_args(fx, v, out)),
+        _ => {}
+    }
+}
+
+/// A `KinkAt` with no corner: f′ singular at `at` (a base of a power
+/// u^r, r < 1, exactly 0 there), every such base strictly signed on each
+/// side within the box, so f′ exists on the box but at `at`; f′'s
+/// enclosure (f's series, or the certifier's tree of f′) over [x.0, at]
+/// and [at, x.1], where it exists, has the claimed strict signs.
+fn singular_at(
+    fx: &Fx,
+    x: B,
+    at: f64,
+    left: bool,
+    right: bool,
+    corners: &[(Expr, bool, bool)],
+    weak: &std::cell::Cell<bool>,
+) -> V {
+    // (Every corner argument away from 0 over the box: f is smooth there
+    // but where f′ is singular.)
+    if corners.iter().any(|(_, l, r)| l != r) {
+        return V::No("a corner argument changes sign in the box".into());
+    }
+    let mut args = Vec::new();
+    singular_args(fx, &fx.f, &mut args);
+    let mut zero = false;
+    for u in &args {
+        let s = fx.series(u, x.0, x.1, 1);
+        if s[0].def && (s[0].gt(0.0) || s[0].lt(0.0)) {
+            continue;
+        }
+        let at_u = fx.series(u, at, at, 0);
+        let d = &s[1];
+        if !(at_u[0].def && at_u[0].is_exactly(0.0)) {
+            return unknown("a power's base is not decided over the box");
+        }
+        if !(s[0].cont && d.def && d.bounded() && (d.gt(0.0) || d.lt(0.0))) {
+            return unknown("a power's base's slope is not decided over the box");
+        }
+        zero = true;
+    }
+    if !zero {
+        return V::No("no corner or power's base is 0 at the point".into());
+    }
+    for (lo, hi, want) in [(x.0, at, left), (at, x.1, right)] {
+        let far = if lo == at { hi } else { lo };
+        let d = fx.series(&fx.f, lo, hi, 1)[1].clone();
+        let sign = if d.gt(0.0) {
+            Some(true)
+        } else if d.lt(0.0) {
+            Some(false)
+        } else if let Some(t) = &fx.d[0] {
+            // The certifier's tree of f′ (weak unless shown identical to
+            // f′ exactly), signed factor by factor on the side less `at`.
+            if !fx.verified.d[0] {
+                weak.set(true);
+            }
+            open_sign(fx, t, lo, hi, at, far, 6)
+        } else {
+            None
+        };
+        match sign {
+            Some(s) if s == want => {}
+            Some(_) => return V::No("f′ has the other sign beside the point".into()),
+            None => return unknown("f′ is not strictly signed beside the point"),
+        }
+    }
+    V::Yes
+}
+
+/// e's strict sign on [lo, hi] less the point `at` (an end of it), `far`
+/// the other end: its enclosure, or by its factors — a power u^(p/q) of a
+/// base u exactly 0 at `at` and strictly monotone over the box has, off
+/// `at`, the sign of u at `far` to the p (q odd), or is positive (q even).
+fn open_sign(fx: &Fx, e: &Expr, lo: f64, hi: f64, at: f64, far: f64, depth: usize) -> Option<bool> {
+    let v = fx.series(e, lo, hi, 0)[0].clone();
+    if !v.empty && v.gt(0.0) {
+        return Some(true);
+    }
+    if !v.empty && v.lt(0.0) {
+        return Some(false);
+    }
+    let d = depth.checked_sub(1)?;
+    match e {
+        Expr::Neg(a) => open_sign(fx, a, lo, hi, at, far, d).map(|s| !s),
+        Expr::Bin(BinOp::Mul | BinOp::Div, a, b) => {
+            Some(open_sign(fx, a, lo, hi, at, far, d)? == open_sign(fx, b, lo, hi, at, far, d)?)
+        }
+        Expr::Bin(BinOp::Pow, u, b) => {
+            let (p, q) = super::eval::written_rational(b)?;
+            let s = fx.series(u, lo, hi, 1);
+            let at_u = fx.series(u, at, at, 0);
+            let monotone =
+                s[0].cont && s[1].def && s[1].bounded() && (s[1].gt(0.0) || s[1].lt(0.0));
+            if !(at_u[0].def && at_u[0].is_exactly(0.0) && monotone) {
+                return None;
+            }
+            let uf = fx.series(u, far, far, 0)[0].clone();
+            let pos = if uf.gt(0.0) {
+                true
+            } else if uf.lt(0.0) {
+                false
+            } else {
+                return None;
+            };
+            if q % 2 == 0 {
+                pos.then_some(true)
+            } else {
+                Some(pos || p % 2 == 0)
+            }
+        }
+        _ => None,
     }
 }
 
@@ -1709,8 +2078,11 @@ pub fn tree_parity(e: &Expr) -> Option<bool> {
     })
 }
 
-const SAMPLES: [f64; 12] = [
-    0.1, 0.37, 0.5, 1.0, 1.3, 2.9, 3.7, 7.7, 11.3, 25.1, 113.0, 1e4,
+/// Points a symmetry or a period is tested at: near 0, ordinary, and far
+/// out.
+const SAMPLES: [f64; 20] = [
+    1e-9, 1e-6, 1e-3, 0.1, 0.37, 0.5, 1.0, 1.3, 2.9, 3.7, 7.7, 11.3, 25.1, 113.0, 1e4, 1.37e6,
+    2.9e9, 1.13e12, 3.7e15, 7.7e30,
 ];
 
 fn simplifier(fx: &Fx, fact: &str) -> Outcome {
@@ -1817,13 +2189,15 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
         }
         return Outcome::new(Class::Weak, "agrees at sample points");
     }
-    let weak = |ok: Result<bool, String>, what: &str| match ok {
-        Ok(true) => Outcome::new(Class::Weak, format!("agrees at points approaching {what}")),
-        Ok(false) => Outcome::new(
-            Class::Unconfirmed,
-            format!("points approaching {what} don't show it"),
+    // Weak only when f's values at every point tested, far out (or near
+    // the point), bear the limit out; refuted when they settle elsewhere.
+    let weak = |ok: Approach, what: &str| match ok {
+        Approach::Consistent(how) => Outcome::new(
+            Class::Weak,
+            format!("agrees at points approaching {what}: {how}"),
         ),
-        Err(e) => Outcome::new(Class::Unconfirmed, e),
+        Approach::Inconsistent(why) => Outcome::new(Class::Refuted, format!("{what}: {why}")),
+        Approach::Undecided(why) => Outcome::new(Class::Unconfirmed, format!("{what}: {why}")),
     };
     // A rational f: its behaviour at ±∞ exactly, from N/D's degrees and
     // leading coefficients.
@@ -1837,10 +2211,18 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
         return weak(approaches(fx, at, &|_, v| v, lim), "the limit");
     }
     // Oblique asymptotes (and their absence).
-    if fact.starts_with("f is periodic: f − (m·x + b) does not tend to 0") {
-        return Outcome::new(Class::Weak, "follows from f's period (the simplifier's)");
-    }
     let over_x = |x: f64, v: Iv| iv::div(&v, &Iv::of(x));
+    if fact.starts_with("f is periodic: f − (m·x + b) does not tend to 0") {
+        // A periodic f is bounded where defined: f/x → 0 both ways, so no
+        // line with m ≠ 0 is approached. Tested far out on both sides.
+        for at in ["+∞", "−∞"] {
+            let o = weak(approaches(fx, at, &over_x, "0"), "f/x → 0");
+            if o.class != Class::Weak {
+                return o;
+            }
+        }
+        return Outcome::new(Class::Weak, "f/x → 0 at points far out both ways");
+    }
     if let Some(rest) = fact.strip_prefix("f/x → ±∞ as x → ") {
         let at = rest.split_once(':').map_or(rest, |(a, _)| a);
         let abs_over_x = |x: f64, v: Iv| iv::abs(&over_x(x, v));
@@ -1936,13 +2318,24 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
     Outcome::new(Class::Unconfirmed, format!("unread fact: {fact}"))
 }
 
+/// How a limit fact of a rational f begins (the certifier's mark).
+pub const RATIONAL: &str = "f = N/D exactly: ";
+
 /// A fact about f at ±∞ decided exactly when f is a rational function of
 /// x (N/D over the rationals): strong when it holds, refuted when not;
 /// None when f is no rational function or the fact is about something
 /// else.
 fn rational_fact(fx: &Fx, fact: &str) -> Option<Outcome> {
     use rug::Rational;
-    let rat = super::algebra::Rat::of(&fx.f, &fx.lits, &fx.vars, fx.unit)?;
+    // "f = N/D exactly: …" claims f is rational: refuted if it isn't one.
+    let (fact, claims_rational) = match fact.strip_prefix(RATIONAL) {
+        Some(rest) => (rest, true),
+        None => (fact, false),
+    };
+    let Some(rat) = super::algebra::Rat::of(&fx.f, &fx.lits, &fx.vars, fx.unit) else {
+        return claims_rational
+            .then(|| Outcome::new(Class::Refuted, "f is no rational function of x"));
+    };
     let q = |t: &str| -> Option<Rational> {
         let (n, d, k) = piq_parts(t.trim())?;
         (k == 0).then(|| Rational::from((n, d)))
@@ -2017,13 +2410,20 @@ fn rational_fact(fx: &Fx, fact: &str) -> Option<Outcome> {
     None
 }
 
-/// Weak evidence that `g(x, f(x))` tends to `lim` ("+∞", "−∞", a number
-/// in the certifier's notation, or "in [lo, hi]") as x → `at` ("+∞",
-/// "−∞", "p⁺", "p⁻"): along points ever nearer `at`, the values decided
-/// there move monotonically (rising, falling, ever closer).
-fn approaches(fx: &Fx, at: &str, g: &dyn Fn(f64, Iv) -> Iv, lim: &str) -> Result<bool, String> {
-    // Far out: beyond every constant in f (where its features are), and
-    // at a precision that keeps x² exact out to 10³⁰⁰.
+/// What f's values along points ever nearer `at` say of a claimed limit.
+pub enum Approach {
+    /// Every decided value bears it out (already there, or ever closer).
+    Consistent(String),
+    /// The values settle away from it (or don't grow).
+    Inconsistent(String),
+    Undecided(String),
+}
+
+/// The points a limit is tested at, ever nearer `at` ("+∞", "−∞", "p⁺",
+/// "p⁻"): far out, a decade sequence beyond every constant in f to 10¹⁵
+/// times them and on to 10³⁰⁰; near p, p ± 10⁻²…10⁻¹² (relative) and a few
+/// doubles.
+fn approach_points(fx: &Fx, at: &str) -> Result<Vec<f64>, String> {
     let mut scale: f64 = 1.0;
     fx.f.visit(&mut |n| {
         if let Expr::Num(v) = n
@@ -2032,26 +2432,15 @@ fn approaches(fx: &Fx, at: &str, g: &dyn Fn(f64, Iv) -> Iv, lim: &str) -> Result
             scale = scale.max(v.abs());
         }
     });
-    let far: Vec<f64> = [16.0, 1.6e4, 1.6e7, 1.6e13, 1.6e25, 1.6e49, 1.6e97, 1.6e193]
-        .iter()
-        .map(|k| k * scale)
-        .filter(|x| *x <= 1e300)
-        .collect();
-    iv::set_prec(2400);
-    let r = approaches_at(fx, at, g, lim, &far);
-    iv::set_prec(PRECS[0]);
-    r
-}
-
-fn approaches_at(
-    fx: &Fx,
-    at: &str,
-    g: &dyn Fn(f64, Iv) -> Iv,
-    lim: &str,
-    far: &[f64],
-) -> Result<bool, String> {
-    let xs: Vec<f64> = match at {
-        "+∞" => far.to_vec(),
+    let far: Vec<f64> = [
+        16.0, 1.6e2, 1.6e3, 1.6e6, 1.6e9, 1.6e12, 1.6e15, 1.6e30, 1.6e60, 1.6e120, 1.6e240,
+    ]
+    .iter()
+    .map(|k| k * scale)
+    .filter(|x| *x <= 1e300)
+    .collect();
+    Ok(match at {
+        "+∞" => far,
         "−∞" => far.iter().map(|x| -x).collect(),
         other => {
             let (p, right) = if let Some(p) = other.strip_suffix('⁺') {
@@ -2077,39 +2466,120 @@ fn approaches_at(
                 .filter(|x| *x != p)
                 .collect()
         }
+    })
+}
+
+/// Whether `g(x, f(x))` tends to `lim` ("+∞", "−∞", a number in the
+/// certifier's notation, or "in [lo, hi]") as x → `at`, judged at
+/// [`approach_points`] in high precision. The nearest points decide:
+/// consistent when there already (to 10⁻⁹) or ever closer; inconsistent
+/// when the last three stay apart from a finite limit by more than 10⁻⁶ of
+/// it without coming closer, or settle short of an infinite one.
+pub fn approaches(fx: &Fx, at: &str, g: &dyn Fn(f64, Iv) -> Iv, lim: &str) -> Approach {
+    let xs = match approach_points(fx, at) {
+        Ok(xs) => xs,
+        Err(e) => return Approach::Undecided(e),
     };
-    let vals: Vec<Iv> = xs
+    iv::set_prec(2400);
+    let vals: Vec<(f64, Iv)> = xs
         .iter()
         .map(|&x| (x, f_at(fx, &Iv::of(x))))
         .filter(|(_, v)| !v.empty && v.def && v.bounded())
-        .map(|(x, v)| g(x, v))
-        .filter(|v| !v.empty && v.bounded())
+        .map(|(x, v)| (x, g(x, v)))
+        .filter(|(_, v)| !v.empty && v.bounded())
         .collect();
+    let r = judge(&vals, lim);
+    iv::set_prec(PRECS[0]);
+    r
+}
+
+fn judge(vals: &[(f64, Iv)], lim: &str) -> Approach {
     if vals.len() < 3 {
-        return Err("f not decided near the limit".into());
+        return Approach::Undecided("f not decided near the limit".into());
     }
-    Ok(match lim {
-        "+∞" => vals.windows(2).all(|w| w[1].lo > w[0].hi),
-        "−∞" => vals.windows(2).all(|w| w[1].hi < w[0].lo),
+    let n = vals.len();
+    let last3 = &vals[n - 3..];
+    let show = |(x, v): &(f64, Iv)| format!("{:.6e} at {x:e}", v.mid().to_f64());
+    match lim {
+        "+∞" | "−∞" => {
+            let up = lim == "+∞";
+            let grows = |a: &Iv, b: &Iv| if up { b.lo > a.hi } else { b.hi < a.lo };
+            let rising = vals.windows(2).all(|w| grows(&w[0].1, &w[1].1));
+            let (first, last) = (&vals[0].1, &vals[n - 1].1);
+            // (In MPFR: the values may be past every double.)
+            let gain = if up {
+                iv::sub(last, first)
+            } else {
+                iv::sub(first, last)
+            };
+            if rising && gain.gt(1.0) {
+                return Approach::Consistent(format!(
+                    "{} then {}",
+                    show(&vals[0]),
+                    show(&vals[n - 1])
+                ));
+            }
+            // Settled: the nearest three within 10⁻⁶ of each other.
+            let lo = last3
+                .iter()
+                .map(|(_, v)| v.lo.to_f64())
+                .fold(f64::INFINITY, f64::min);
+            let hi = last3
+                .iter()
+                .map(|(_, v)| v.hi.to_f64())
+                .fold(f64::NEG_INFINITY, f64::max);
+            if hi - lo <= 1e-6 * lo.abs().max(hi.abs()).max(1.0) {
+                return Approach::Inconsistent(format!(
+                    "f settles ({}, {}, {}), not going to {lim}",
+                    show(&last3[0]),
+                    show(&last3[1]),
+                    show(&last3[2])
+                ));
+            }
+            Approach::Undecided(format!(
+                "points approaching don't show {lim}: {}",
+                vals.iter().map(show).collect::<Vec<_>>().join(", ")
+            ))
+        }
         l => {
             let target = if let Some(b) = l.strip_prefix("in ") {
                 bracket(b)
             } else {
                 pi_q(l)
             };
-            let t = target.ok_or_else(|| format!("unread limit {l}"))?;
-            let d = |v: &Iv| iv::abs(&iv::sub(v, &t)).hi.to_f64();
-            let ds: Vec<f64> = vals.iter().map(d).collect();
-            let scale = t.hi.to_f64().abs().max(1.0);
-            // Already there to 10⁻¹² everywhere, ever closer, or (an
-            // oscillating approach) never farther than at first and
-            // nearly there at the last.
-            let last = ds[ds.len() - 1];
-            ds.iter().all(|d| *d <= 1e-12 * scale)
-                || (ds.windows(2).all(|w| w[1] <= w[0]) && last < ds[0])
-                || (ds.iter().all(|d| *d <= ds[0]) && last <= 1e-9 * ds[0].max(1e-300))
+            let Some(t) = target else {
+                return Approach::Undecided(format!("unread limit {l}"));
+            };
+            let scale = t.hi.to_f64().abs().max(t.lo.to_f64().abs()).max(1.0);
+            // Distance from the limit: at most, and at least.
+            let far = |v: &Iv| iv::abs(&iv::sub(v, &t)).hi.to_f64();
+            let apart = |v: &Iv| {
+                let below = t.lo.to_f64() - v.hi.to_f64();
+                let above = v.lo.to_f64() - t.hi.to_f64();
+                below.max(above).max(0.0)
+            };
+            let ds: Vec<f64> = vals.iter().map(|(_, v)| far(v)).collect();
+            let last = ds[n - 1];
+            if last <= 1e-9 * scale {
+                return Approach::Consistent(format!("within {last:.1e} at {:e}", vals[n - 1].0));
+            }
+            if ds[n - 3..].windows(2).all(|w| w[1] <= w[0]) && last < 0.5 * ds[0] {
+                return Approach::Consistent(format!("ever closer: {:.3e} … {last:.3e}", ds[0]));
+            }
+            let gaps: Vec<f64> = last3.iter().map(|(_, v)| apart(v)).collect();
+            if gaps.iter().all(|g| *g > 1e-6 * scale)
+                && gaps.windows(2).all(|w| w[1] >= 0.999 * w[0])
+            {
+                return Approach::Inconsistent(format!(
+                    "f stays apart from {l}: {}, {}, {}",
+                    show(&last3[0]),
+                    show(&last3[1]),
+                    show(&last3[2])
+                ));
+            }
+            Approach::Undecided(format!("points approaching don't show {l}"))
         }
-    })
+    }
 }
 
 /// A gap claims nothing. It is a few doubles wide, or it is the

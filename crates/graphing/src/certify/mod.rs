@@ -176,6 +176,7 @@ pub fn certify_equation(
     if let Some(g) = rewrite(&f) {
         f.eval = canonical(&g);
     }
+    f.eval = fun::recentre(&f.eval, &exact);
     // A symbolic derivative only for f differentiable wherever defined: no
     // floor, round, sign, mod (their derivative 0 hides the jumps), and no
     // abs, min or max of x (their derivative's tree, sign(u)·u′, is defined
@@ -202,9 +203,9 @@ pub fn certify_equation(
 /// enclosed by a box a few doubles wide (one double either side of an
 /// exact zero), merged where they meet. `None` when a kink can't be placed
 /// (those zeros aren't all decided, or the argument is 0 on a stretch).
-fn kinks(f: &Fun<'_>, spans: &[(f64, f64)]) -> Option<Vec<(f64, f64)>> {
+fn kinks(f: &Fun<'_>, spans: &[(f64, f64)], args: &[crate::ast::Expr]) -> Option<Vec<(f64, f64)>> {
     let mut boxes: Vec<(f64, f64)> = Vec::new();
-    for u in &f.kink_args() {
+    for u in args {
         let c = Cover::run(
             f,
             &Target {
@@ -229,6 +230,11 @@ fn kinks(f: &Fun<'_>, spans: &[(f64, f64)]) -> Option<Vec<(f64, f64)>> {
             }
         }
     }
+    Some(merged(boxes))
+}
+
+/// Boxes sorted and merged where they meet.
+fn merged(mut boxes: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     boxes.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut out: Vec<(f64, f64)> = Vec::new();
     for b in boxes {
@@ -237,7 +243,35 @@ fn kinks(f: &Fun<'_>, spans: &[(f64, f64)]) -> Option<Vec<(f64, f64)>> {
             _ => out.push(b),
         }
     }
-    Some(out)
+    out
+}
+
+/// The points where f′ (`k` = 1) or f″ (`k` = 2) is singular though f is
+/// continuous (`Fun::singular_args`), each in a box strictly inside a span
+/// of the domain (a zero of a base at a domain end is that end's), f
+/// continuous across it. Those not placed are left out (f⁽ᵏ⁾ is then
+/// undecided there, as before).
+fn singular_boxes(f: &Fun<'_>, spans: &[(f64, f64)], k: usize) -> Vec<(f64, f64)> {
+    let args: Vec<crate::ast::Expr> = f
+        .singular_args()
+        .into_iter()
+        .filter(|(_, r)| *r < k as f64)
+        .map(|(u, _)| u)
+        .collect();
+    if args.is_empty() {
+        return Vec::new();
+    }
+    let Some(boxes) = kinks(f, spans, &args) else {
+        return Vec::new();
+    };
+    boxes
+        .into_iter()
+        .filter(|&(l, r)| {
+            spans.iter().any(|&(a, b)| a < l && r < b)
+                && f.val(crate::interval::Interval::new(l, r))
+                    .is_ok_and(|v| !v.is_empty() && v.dec >= crate::interval::Dec::Dac)
+        })
+        .collect()
 }
 
 /// `spans` with the kink boxes cut out: a span through one ends at its
@@ -302,6 +336,9 @@ fn rewrite(f: &Fun<'_>) -> Option<crate::ast::Expr> {
             let v = r.value().abs();
             v == v.trunc() && v <= 9007199254740992.0 && !typed.contains(&v)
         }
+        // An exact rational whose numerator or denominator no double
+        // holds: written back as rounded numbers (1 + 10⁻³⁰ would read 1).
+        Math::Num(q) => q.numer().unsigned_abs() > 1 << 53 || q.denom() > 1 << 53,
         _ => false,
     });
     (!unsound).then_some(s.expr)
@@ -377,6 +414,36 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         spans.push((b.a, b.b));
     }
     f.allow(phase);
+    // The kinks of f (abs, min, max), where its derivative trees are not
+    // f′ (below). f's own boxes are cut at a kink placed at a double, so
+    // f is decided there exactly and the boxes beside it can touch it
+    // (|x − 3| is 0 at 3 alone).
+    let kinks_found = if f.kinked {
+        kinks(f, &spans, &f.kink_args())
+    } else {
+        Some(Vec::new())
+    };
+    // And where f′, f″ are singular (x^(1/3) at 0), f continuous.
+    let singular = [singular_boxes(f, &spans, 1), singular_boxes(f, &spans, 2)];
+    let mut spans0 = spans.clone();
+    for &(l, r) in kinks_found.iter().flatten().chain(&singular[1]) {
+        let p = l.next_up();
+        if p.next_up() != r || !p.is_finite() {
+            continue;
+        }
+        let p = if p == 0.0 { 0.0 } else { p };
+        spans0 = spans0
+            .into_iter()
+            .flat_map(|(a, b)| {
+                if a < p && p < b {
+                    vec![(a, p), (p, p), (p, b)]
+                } else {
+                    vec![(a, b)]
+                }
+            })
+            .collect();
+    }
+    f.allow(phase);
     let c0 = Cover::run(
         f,
         &Target {
@@ -385,7 +452,7 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             in_domain: true,
         },
         &[0.0],
-        &spans,
+        &spans0,
     );
     // f is continuous on every box: the derivative's own tree may stand
     // for f′ (it equals f′ wherever f is differentiable, and f is monotone
@@ -451,7 +518,7 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             f.val(crate::interval::Interval::new(l, r))
                 .is_ok_and(|v| !v.is_empty() && v.dec >= crate::interval::Dec::Dac)
         };
-        match kinks(f, &spans) {
+        match kinks_found {
             Some(k) if k.iter().all(ok) => k,
             _ => {
                 tree_ok = false;
@@ -461,13 +528,22 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     } else {
         Vec::new()
     };
-    for sp in kspans.iter_mut() {
-        *sp = split_at_kinks(sp, &kink_boxes);
+    // Per order: the kinks, and where that derivative is singular.
+    let kbox: [Vec<(f64, f64)>; 2] = [0, 1].map(|i| {
+        let mut b = kink_boxes.clone();
+        b.extend(singular[i].iter().copied());
+        merged(b)
+    });
+    for (i, sp) in kspans.iter_mut().enumerate() {
+        *sp = split_at_kinks(sp, &kbox[i]);
     }
-    let kink_claims: Vec<Claim> = kink_boxes
-        .iter()
-        .map(|&(l, r)| Claim::Kink { x: XBox::new(l, r) })
-        .collect();
+    let kink_claims_of = |i: usize| -> Vec<Claim> {
+        kbox[i]
+            .iter()
+            .map(|&(l, r)| Claim::Kink { x: XBox::new(l, r) })
+            .collect()
+    };
+    let mut kink_claims: [Vec<Claim>; 2] = [kink_claims_of(0), kink_claims_of(1)];
     // f⁽ᵏ⁾ from f's Taylor coefficients; if that leaves boxes undecided and
     // f is continuous, again from the derivative's own tree (for a rational
     // f its numerator is expanded exactly, so what cancels there cancels
@@ -508,8 +584,24 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         c
     };
     let (mut c1, mut c2) = (cover(1), cover(2));
-    c1.kinks = kink_boxes.clone();
-    c2.kinks = kink_boxes.clone();
+    c1.kinks = kbox[0].clone();
+    c2.kinks = kbox[1].clone();
+    // A kink at a double, placed exactly with f′'s strict sign on each
+    // side: a turn there is at exactly that point.
+    for &(l, r) in &kbox[0] {
+        let k = f.kink_at(l, r).ok().flatten();
+        if let Some(k) = k {
+            let claim = Claim::KinkAt {
+                x: XBox::new(l, r),
+                at: R(k.p),
+                left: k.left,
+                right: k.right,
+            };
+            kink_claims[0].push(claim.clone());
+            kink_claims[1].push(claim);
+        }
+        c1.kink_at.push(k);
+    }
     if std::env::var_os("CERTIFY_DEBUG").is_some() {
         eprintln!("w = {w}, boxes = {spans:?}");
         for (k, c) in [&c0, &c1, &c2].iter().enumerate() {
@@ -591,7 +683,7 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         let mut out = gap_claims.clone();
         if k > 0 {
             out.extend(kgaps[k - 1].iter().map(|x| Claim::Gap { x: *x }));
-            out.extend(kink_claims.iter().cloned());
+            out.extend(kink_claims[k - 1].iter().cloned());
         }
         out.extend(gc);
         let mut seen = Vec::new();

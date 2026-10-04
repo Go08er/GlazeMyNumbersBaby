@@ -368,6 +368,123 @@ fn term(cs: &[char], i: &mut usize) -> Option<Expr> {
 
 // ------------------------------------------------------------ evaluation
 
+/// A term of a sum as a monomial: its constant factor (an expression, its
+/// numbers kept as typed) and the power of x.
+fn monomial(e: &Expr, base: &Expr) -> Option<(Expr, u32)> {
+    let one = || Expr::Num(1.0);
+    Some(match e {
+        _ if e == base => (one(), 1),
+        _ if !contains_x(e) => (e.clone(), 0),
+        Expr::Neg(a) => {
+            let (c, k) = monomial(a, base)?;
+            (Expr::Neg(Box::new(c)), k)
+        }
+        Expr::Bin(BinOp::Mul, a, b) => {
+            let ((c, k), (d, j)) = (monomial(a, base)?, monomial(b, base)?);
+            (Expr::Bin(BinOp::Mul, Box::new(c), Box::new(d)), k + j)
+        }
+        Expr::Bin(BinOp::Div, a, b) if !contains_x(b) => {
+            let (c, k) = monomial(a, base)?;
+            (Expr::Bin(BinOp::Div, Box::new(c), b.clone()), k)
+        }
+        Expr::Bin(BinOp::Pow, a, b) if **a == *base => {
+            let (n, 1) = written_rational(b)? else {
+                return None;
+            };
+            (one(), u32::try_from(n).ok().filter(|n| *n <= 64)?)
+        }
+        _ => return None,
+    })
+}
+
+/// The bases a sum's terms may be monomials in: x, and each base of a
+/// whole power among them ((x − 1000)² + (x − 1000) + 1).
+fn bases(e: &Expr) -> Vec<Expr> {
+    let mut out = vec![Expr::X];
+    e.visit(&mut |n| {
+        if let Expr::Bin(BinOp::Pow, a, b) = n
+            && contains_x(a)
+            && written_rational(b).is_some_and(|(_, q)| q == 1)
+            && !out.contains(a)
+        {
+            out.push((**a).clone());
+        }
+    });
+    out
+}
+
+/// The signed terms of a sum, a node equal to `base` kept whole.
+fn terms(e: &Expr, base: &Expr, sign: bool, out: &mut Vec<(bool, Expr)>) {
+    match e {
+        Expr::Bin(op @ (BinOp::Add | BinOp::Sub), a, b) if e != base => {
+            terms(a, base, sign, out);
+            terms(b, base, sign == (*op == BinOp::Add), out);
+        }
+        _ => out.push((sign, e.clone())),
+    }
+}
+
+/// `e` with each sum of monomials of degree ≥ 2 in Horner's form,
+/// ((cₙ·x + cₙ₋₁)·x + …)·x + c₀, each cₖ the (signed) sum of the constant
+/// factors of the terms in xᵏ. Only + and · rearranged: the same function
+/// on the same domain. `None` if nothing changes.
+pub fn horner(e: &Expr) -> Option<Expr> {
+    fn go(e: &Expr) -> Expr {
+        if matches!(e, Expr::Bin(BinOp::Add | BinOp::Sub, ..)) {
+            let (ms, base) = bases(e)
+                .into_iter()
+                .find_map(|b| {
+                    let mut ts = Vec::new();
+                    terms(e, &b, true, &mut ts);
+                    let ms: Option<Vec<(bool, Expr, u32)>> = ts
+                        .iter()
+                        .map(|(s, t)| monomial(t, &b).map(|(c, k)| (*s, c, k)))
+                        .collect();
+                    ms.filter(|m| m.iter().any(|t| t.2 >= 2)).map(|m| (m, b))
+                })
+                .map_or((None, Expr::X), |(m, b)| (Some(m), b));
+            if let Some(ms) = ms
+                && let Some(n) = ms.iter().map(|m| m.2).max()
+                && n >= 2
+                && ms.len() >= 2
+            {
+                let coef = |k: u32| -> Option<Expr> {
+                    ms.iter().filter(|m| m.2 == k).fold(None, |acc, (s, c, _)| {
+                        let c = c.clone();
+                        Some(match acc {
+                            None if *s => c,
+                            None => Expr::Neg(Box::new(c)),
+                            Some(a) => Expr::Bin(
+                                if *s { BinOp::Add } else { BinOp::Sub },
+                                Box::new(a),
+                                Box::new(c),
+                            ),
+                        })
+                    })
+                };
+                let mut acc = coef(n).unwrap_or(Expr::Num(0.0));
+                for k in (0..n).rev() {
+                    let ax = Expr::Bin(BinOp::Mul, Box::new(acc), Box::new(base.clone()));
+                    acc = match coef(k) {
+                        Some(c) => Expr::Bin(BinOp::Add, Box::new(ax), Box::new(c)),
+                        None => ax,
+                    };
+                }
+                return acc;
+            }
+        }
+        match e {
+            Expr::Neg(a) => Expr::Neg(Box::new(go(a))),
+            Expr::Degrees(a) => Expr::Degrees(Box::new(go(a))),
+            Expr::Bin(op, a, b) => Expr::Bin(*op, Box::new(go(a)), Box::new(go(b))),
+            Expr::Call(f, args) => Expr::Call(*f, args.iter().map(go).collect()),
+            _ => e.clone(),
+        }
+    }
+    let h = go(e);
+    (h != *e).then_some(h)
+}
+
 /// f's series over `[lo, hi]` (endpoints doubles, ±∞ allowed) to order n.
 pub fn series(e: &Expr, lo: f64, hi: f64, n: usize, ctx: &Ctx<'_>) -> S {
     let x = se::var(Iv::of2(lo, hi), n);

@@ -69,7 +69,7 @@ use std::f64::consts::PI;
 use graphing::analysis::truth::*;
 use graphing::analysis::verify::{self, *};
 use graphing::analysis::{
-    Family, Interval, Periodicity, analyze, analyze_legacy, analyze_ungated, flags,
+    Family, Interval, Periodicity, analyze, analyze_legacy, analyze_str, analyze_ungated, flags,
 };
 use graphing::compile::CompileOptions;
 use graphing::{Equation, TrigUnit};
@@ -1221,16 +1221,34 @@ fn check_pair(b: &Analysed, o: &Analysed, t: Aff, r: &mut Report) {
             );
             continue;
         }
-        // Values: the mapped base value, to within the noise at both.
-        for (bm, mf) in bl.iter().zip(&bfam) {
+        // Values: the mapped base value, to within the noise at both (and
+        // the last digit of a value shown to fewer than six).
+        let texts = |a: &Analysed, f: u32| -> Vec<String> {
+            if f == flags::MINIMA {
+                a.k.minima.clone()
+            } else {
+                a.k.maxima.clone()
+            }
+        };
+        let (bt, ot) = (texts(b, bf), texts(o, of));
+        let shown = |ts: &[String], i: usize, v: f64| {
+            ts.get(i)
+                .and_then(|t| point_y(t))
+                .map_or(0.0, |t| shown_slack(t, v))
+        };
+        for (i, (bm, mf)) in bl.iter().zip(&bfam).enumerate() {
             let want = t.my(bm.1);
-            let Some(om) = ol
+            let Some(j) = ol
                 .iter()
-                .find(|om| same_turn(o, mf.x, nearest(&om.0, mf.x), sign))
+                .position(|om| same_turn(o, mf.x, nearest(&om.0, mf.x), sign))
             else {
                 continue;
             };
-            let tol = t.k.abs() * b.noise(bm.0.x) + o.noise(om.0.x) + 8.0 * ulp(want);
+            let om = &ol[j];
+            let tol = t.k.abs() * (b.noise(bm.0.x) + shown(&bt, i, bm.1))
+                + o.noise(om.0.x)
+                + shown(&ot, j, om.1)
+                + 8.0 * ulp(want);
             if (want - om.1).abs() > tol && !same_shown(want, om.1) {
                 fail(
                     r,
@@ -1707,6 +1725,115 @@ fn check_reference(a: &Analysed, centres: &[f64], r: &mut Report) {
 
 // ---------------------------------------------------------------------------
 
+/// `--why-certified`: over the bases and their transforms, tally why each
+/// panel row is unknown: the certifier's reason, or "display" when the row
+/// was certified but the panel didn't show it; per row, and per transform.
+fn why_certified(transforms: &[Aff], filter: Option<&str>) {
+    use graphing::certify::{DEFAULT_BUDGET, Row, certify_text};
+    let class = |t: &Aff| -> String {
+        let parts: Vec<String> = [
+            (t.a != 0.0).then(|| format!("shift {:e}", t.a)),
+            (t.s != 1.0).then(|| format!("stretch {:e}", t.s)),
+            (t.k != 1.0).then(|| format!("scale {:e}", t.k)),
+            (t.c != 0.0).then(|| format!("offset {:e}", t.c)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if parts.is_empty() {
+            "base".into()
+        } else {
+            parts.join(" + ")
+        }
+    };
+    let norm = |r: &str| -> String {
+        r.chars()
+            .map(|c| if c.is_ascii_digit() { '#' } else { c })
+            .collect::<String>()
+    };
+    let mut reasons: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_class: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    let mut total = 0usize;
+    let mut examples: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let ident = Aff { ..ID };
+    // `--why-dump`: every unknown row and its function, on stderr.
+    let dump = std::env::args().any(|a| a == "--why-dump");
+    for base in BASES {
+        if filter.is_some_and(|f| !base.contains(f)) {
+            continue;
+        }
+        for t in std::iter::once(&ident).chain(transforms) {
+            let expr = t.apply(base);
+            let Ok(a) = certify_text(&expr, CompileOptions::default(), DEFAULT_BUDGET, None) else {
+                continue;
+            };
+            let k = analyze_str(&format!("y={expr}"));
+            total += 1;
+            let rows: [(&str, Option<&str>, u32); 12] = {
+                fn why<T>(r: &Row<T>) -> Option<&str> {
+                    match r {
+                        Row::Unknown { reason } => Some(reason.as_str()),
+                        _ => None,
+                    }
+                }
+                [
+                    ("domain", why(&a.domain), flags::DOMAIN),
+                    ("range", why(&a.range), flags::RANGE),
+                    ("parity", why(&a.parity), flags::PARITY),
+                    ("period", why(&a.period), flags::PERIODICITY),
+                    ("zeros", why(&a.x_intercepts), flags::ZEROS),
+                    ("y-int", why(&a.y_intercept), flags::Y_INTERCEPT),
+                    ("extrema", why(&a.extrema), flags::MINIMA | flags::MAXIMA),
+                    ("inflect", why(&a.inflections), flags::INFLECTION_POINTS),
+                    ("v-asym", why(&a.vertical), flags::VERTICAL_ASYMPTOTES),
+                    ("h-asym", why(&a.horizontal), flags::HORIZONTAL_ASYMPTOTES),
+                    ("o-asym", why(&a.oblique), flags::OBLIQUE_ASYMPTOTES),
+                    ("monotone", why(&a.monotonicity), flags::MONOTONE_INTERVALS),
+                ]
+            };
+            let c = class(t);
+            let entry = by_class.entry(c.clone()).or_default();
+            entry.0 += rows.len();
+            for (row, reason, flag) in rows {
+                let shown_unknown = k.too_complex_features & flag != 0;
+                let key = match reason {
+                    Some(r) => format!("{row}: {}", norm(r)),
+                    None if shown_unknown => format!("{row}: display (certified, not shown)"),
+                    None => continue,
+                };
+                entry.1 += 1;
+                *reasons.entry(key.clone()).or_default() += 1;
+                if dump {
+                    eprintln!("{key}\t{expr}");
+                }
+                let ex = examples.entry(key).or_default();
+                if ex.len() < 3 {
+                    ex.push(expr.clone());
+                }
+            }
+        }
+    }
+    println!("{total} functions");
+    let mut v: Vec<_> = reasons.into_iter().collect();
+    v.sort_by_key(|a| std::cmp::Reverse(a.1));
+    println!("## unknown rows by reason");
+    for (k, n) in &v {
+        println!("{n:6}  {k}");
+        for e in &examples[k] {
+            println!("          y={e}");
+        }
+    }
+    println!("## unknown rows by transform (unknown / rows)");
+    let mut c: Vec<_> = by_class.into_iter().collect();
+    c.sort_by(|a, b| (b.1.1 * a.1.0).cmp(&(a.1.1 * b.1.0)));
+    for (k, (rows, unk)) in c {
+        println!(
+            "{:5.1}%  {unk:5}/{rows:<5}  {k}",
+            100.0 * unk as f64 / rows as f64
+        );
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // `--at EXPR X`: one function at one point, for looking into a report.
@@ -1801,6 +1928,22 @@ fn main() {
         k: 1e-6,
         c: 1e6,
     });
+    if args.iter().any(|a| a == "--list") {
+        // Every function the sweep analyses (radians), one per line.
+        let ident = Aff { ..ID };
+        for base in BASES {
+            if wanted(base) {
+                for t in std::iter::once(&ident).chain(&transforms) {
+                    println!("{}", t.apply(base));
+                }
+            }
+        }
+        return;
+    }
+    if args.iter().any(|a| a == "--why-certified") {
+        why_certified(&transforms, filter.as_deref());
+        return;
+    }
     for base in BASES {
         if !wanted(base) {
             continue;

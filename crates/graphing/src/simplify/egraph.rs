@@ -15,15 +15,16 @@ use crate::compile::{CompileOptions, DEFAULT_VARIABLE_VALUE};
 use crate::functions::TrigUnit;
 use crate::interval::Interval;
 
-/// Bounds on one saturation run.
+/// Bounds on one saturation run. Only counts: a wall-clock limit would
+/// make the result depend on how busy the machine is, and the same input
+/// must always give the same answer. The node limit also bounds how long a
+/// set cancel flag can go unseen (it is checked between runs).
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
     /// E-graph nodes.
     pub nodes: usize,
     /// Rule-application rounds.
     pub iterations: usize,
-    /// Wall time.
-    pub time: Duration,
 }
 
 impl Default for Limits {
@@ -31,10 +32,13 @@ impl Default for Limits {
         Limits {
             nodes: 20_000,
             iterations: 12,
-            time: Duration::from_millis(50),
         }
     }
 }
+
+/// egg stops a run after this long by default (5 s); a run here ends on
+/// its counts instead, so the clock is set out of reach.
+const NO_CLOCK: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// What the simplifier works with.
 #[derive(Clone, Copy)]
@@ -177,9 +181,9 @@ impl CostFunction<Math> for StableCost<'_> {
     }
 }
 
-/// Runs the rules on `egraph` until saturation or a limit. The cancel
-/// flag is checked before the run; the time limit bounds how long a set
-/// flag can go unseen.
+/// Runs the rules on `egraph` until saturation or a count limit. The
+/// cancel flag is checked before the run; the node limit bounds how long a
+/// set flag can go unseen.
 fn saturate(egraph: MathGraph, s: &Settings<'_>) -> (MathGraph, Stop) {
     if s.cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
         return (egraph, Stop::Cancelled);
@@ -190,7 +194,7 @@ fn saturate(egraph: MathGraph, s: &Settings<'_>) -> (MathGraph, Stop) {
         .with_scheduler(BackoffScheduler::default())
         .with_iter_limit(s.limits.iterations)
         .with_node_limit(s.limits.nodes)
-        .with_time_limit(s.limits.time)
+        .with_time_limit(NO_CLOCK)
         .run(&rewrites(s.unit));
     let stop = match r.stop_reason {
         Some(StopReason::Saturated) => Stop::Saturated,

@@ -96,7 +96,8 @@ fn widen(lo: f64, hi: f64) -> (f64, f64) {
 
 /// Closed forms near an enclosure, to be checked: the simplest rational in
 /// it, the simplest rational multiple of π (radians), ±√r for the simplest
-/// rational r in its square.
+/// rational r in its square, ±eᵏ for the simplest rational k in its
+/// logarithm, ln(r)/m for the simplest rational r in eᵐˣ (m ≤ 3).
 fn nice(x: Enc, unit: TrigUnit) -> Vec<Ex> {
     let (lo, hi) = (x.lo.0, x.hi.0);
     let mut out = Vec::new();
@@ -122,8 +123,34 @@ fn nice(x: Enc, unit: TrigUnit) -> Vec<Ex> {
                 root
             });
         }
+        let (m, n) = (lo.abs().min(hi.abs()), lo.abs().max(hi.abs()));
+        let (a, b) = widen(m.ln(), n.ln());
+        if let Some(k) = simplest(a, b)
+            && let Some(v) = Ex::int(1).exp_times(k)
+        {
+            out.extend(if hi < 0.0 { v.neg() } else { Some(v) });
+        }
+    }
+    // ln(r)/m: eᵐˣ = r (e²ˣ − 4x turns at ln(2)/2).
+    for m in 1..=3 {
+        let (a, b) = widen((lo * f64::from(m)).exp(), (hi * f64::from(m)).exp());
+        if a > 0.0
+            && b.is_finite()
+            && let Some(r) = simplest(a, b)
+            && let Some(v) = Ex::ln_q(r).and_then(|v| v.div(Ex::int(m.into())))
+        {
+            out.push(v);
+        }
     }
     out
+}
+
+/// Whether two of `texts` read alike (they can't be told apart).
+fn alike(texts: &[String]) -> bool {
+    texts
+        .iter()
+        .enumerate()
+        .any(|(i, t)| texts[..i].contains(t))
 }
 
 /// Exactly equal.
@@ -158,11 +185,29 @@ fn take_unfixed() -> bool {
     UNFIXED.with(|u| u.replace(false))
 }
 
-/// A value known to lie in `e`: as many significant digits (up to six) as
-/// every value in `e` rounds to alike, marked "≈" when the text has fewer
-/// than six (it could read as exact: "≈1", "≈0.5").
+/// The fewest significant digits a rounded value is shown with: an
+/// enclosure that fixes fewer leaves its row unknown. This is the display
+/// policy's one switch (docs/ti-conventions.md): 6 restores the strict
+/// rule, all six digits fixed or nothing shown.
+pub const MIN_SHOWN_DIGITS: i32 = 3;
+
+/// A value known to lie in `e`: as many significant digits (up to six, at
+/// least [`MIN_SHOWN_DIGITS`]) as every value in `e` rounds to alike,
+/// marked "≈" when the text has fewer than six (it could read as exact:
+/// "≈1", "≈0.5", "≈1.41").
 pub(super) fn approx(e: Enc) -> String {
     approx_sig(e, 6)
+}
+
+/// The text of `e` to `sig` significant digits when every value in it
+/// rounds alike to that many (and it can't be 0).
+fn fixed_to(e: Enc, sig: i32) -> Option<String> {
+    let (lo, hi) = (e.lo.0, e.hi.0);
+    if lo <= 0.0 && 0.0 <= hi {
+        return None;
+    }
+    let a = format_decimal_digits(lo, sig);
+    (a == format_decimal_digits(hi, sig)).then_some(a)
 }
 
 /// [`approx`] with up to `max` significant digits (more than six to tell
@@ -179,25 +224,19 @@ fn approx_sig(e: Enc, max: i32) -> String {
         return t;
     }
     // A value that may be 0 is never written as 0, nor ≈0: not one digit
-    // of it is known (below).
-    // Six significant digits known (or the more asked for), or none shown.
-    if !(lo <= 0.0 && 0.0 <= hi) {
-        for sig in (6..=max.max(6)).rev() {
-            let (a, b) = (
-                format_decimal_digits(lo, sig),
-                format_decimal_digits(hi, sig),
-            );
-            if a == b {
-                return if sig_digits(&a) < 6 {
-                    format!("≈{a}")
-                } else {
-                    a
-                };
-            }
+    // of it is known (`fixed_to`). As many significant digits as are
+    // known, up to six (or the more asked for), and at least the minimum.
+    for sig in (MIN_SHOWN_DIGITS.min(6)..=max.max(6)).rev() {
+        if let Some(a) = fixed_to(e, sig) {
+            return if sig_digits(&a) < 6 {
+                format!("≈{a}")
+            } else {
+                a
+            };
         }
     }
-    // Not six digits fixed: the enclosure itself, rounded outward (the row
-    // it is in is shown as unknown).
+    // Too few digits fixed: the enclosure itself, rounded outward (the
+    // row it is in is shown as unknown).
     UNFIXED.with(|u| u.set(true));
     format!("[{}, {}]", outward(lo, false), outward(hi, true))
 }
@@ -835,7 +874,7 @@ impl<'a> Ctx<'a> {
     fn y_at(&self, x: Option<Ex>, y: Enc) -> Num {
         let exact = x
             .and_then(|x| self.eval(&self.f, x))
-            .filter(|v| v.within(y.lo.0, y.hi.0) == Some(true));
+            .filter(|v| v.agrees(y.lo.0, y.hi.0));
         Num { exact, enc: y }
     }
 
@@ -1120,7 +1159,7 @@ impl<'a> Ctx<'a> {
                 _ => return None,
             },
         };
-        (v.within(y.lo.0, y.hi.0) == Some(true)).then_some(v)
+        v.agrees(y.lo.0, y.hi.0).then_some(v)
     }
 
     /// The oblique asymptote's slope and intercept, exactly.
@@ -1906,7 +1945,10 @@ pub(super) fn features(
                 // (Limits that agree to fifteen places are one line.)
                 let agree = |m: &Num| match (m.exact, n.exact) {
                     (Some(a), Some(b)) => same(a, b),
-                    _ => (m.enc == n.enc && m.enc.is_point()) || m.text_sig(15) == n.text_sig(15),
+                    _ => {
+                        (m.enc == n.enc && m.enc.is_point())
+                            || fixed_to(m.enc, 15).is_some_and(|t| Some(t) == fixed_to(n.enc, 15))
+                    }
                 };
                 if let Some(l) = lines.iter_mut().find(|(m, _)| agree(m)) {
                     l.1 = AsymptoteSide::AnyInfinity;
@@ -1932,6 +1974,10 @@ pub(super) fn features(
                         format!("y = {}", if twin { n.text_sig(15) } else { n.text() })
                     })
                     .collect();
+                // Two lines that still read alike can't be told apart.
+                if alike(&out.k.horizontal_asymptotes) {
+                    UNFIXED.with(|u| u.set(true));
+                }
                 data.horizontal_asymptotes = lines.iter().map(|(n, s)| (n.value(), *s)).collect();
             }
         }
@@ -2241,7 +2287,7 @@ fn points(
             6
         }
     };
-    let mut texts = Vec::new();
+    let mut texts: Vec<String> = Vec::new();
     let mut data = Vec::new();
     for (i, (_, (x, p, y))) in items.into_iter().enumerate() {
         match p {
@@ -2260,6 +2306,10 @@ fn points(
                 data.push((DataFamily::single(x.value()), y.value()));
             }
         }
+    }
+    // Two points that still read alike can't be told apart.
+    if alike(&texts) {
+        UNFIXED.with(|u| u.set(true));
     }
     (texts, data, was_cut)
 }
@@ -2329,7 +2379,10 @@ mod tests {
             approx(Enc::new(0.49999999999999994, 0.5000000000000001)),
             "≈0.5"
         );
-        // Fewer than six digits fixed: not a value to show.
+        // Fewer than six digits fixed: as many as are, marked.
+        assert_eq!(approx(Enc::new(1.41419, 1.41431)), "≈1.414");
+        assert_eq!(approx(Enc::new(-0.0012341, -0.0012339)), "≈−0.001234");
+        // Fewer than three: not a value to show.
         assert_eq!(approx(Enc::new(2.41, 2.42)), "[2.4, 2.5]");
         // None fixed: the enclosure, rounded outward.
         assert_eq!(

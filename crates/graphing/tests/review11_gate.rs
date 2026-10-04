@@ -261,9 +261,9 @@ fn ordinary_answers_stay() {
     assert_eq!(r.maxima, ["(0, 1)"]);
     assert_eq!(r.range, "y ∈ (0, 1]");
     assert!(r.minima.is_empty() && !unknown(&r, flags::MINIMA));
-    // 1/e has no exact form here: its six digits.
+    // 1/e exactly: f(1) = 1·e⁻¹ in exact arithmetic.
     let r = k("y=x*exp(-x)");
-    assert_eq!(r.maxima, ["(1, 0.367879)"]);
+    assert_eq!(r.maxima, ["(1, 1/e)"]);
     let r = k("y=sec(x)");
     assert_eq!(r.range, "y ∈ (−∞, −1] ∪ [1, ∞)");
     assert_eq!(r.minima, ["(2kπ, 1), k ∈ ℤ"]);

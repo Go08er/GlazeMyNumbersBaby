@@ -133,6 +133,9 @@ pub struct Cover {
     /// For f′ and f″: the kinks of f the boxes leave out (see
     /// `Claim::Kink`), each a box the leaves on either side end at.
     pub kinks: Vec<(f64, f64)>,
+    /// For f′: each kink placed exactly, where it could be
+    /// (`Claim::KinkAt`), in the order of `kinks`.
+    pub kink_at: Vec<Option<crate::certify::fun::KinkPoint>>,
 }
 
 struct Item {
@@ -153,12 +156,13 @@ impl PartialOrd for Item {
     }
 }
 impl Ord for Item {
-    // A max-heap: the nearest box (smallest key) first, and of two as near
-    // the narrower (a point box before the box it ends), so exact points
-    // are known before the boxes that touch them.
+    // A max-heap: point boxes first (so exact points are known before the
+    // boxes that end at them), then the nearest box (smallest key), and of
+    // two as near the narrower.
     fn cmp(&self, o: &Item) -> Ordering {
-        o.key
-            .total_cmp(&self.key)
+        (self.a == self.b)
+            .cmp(&(o.a == o.b))
+            .then(o.key.total_cmp(&self.key))
             .then((o.b - o.a).total_cmp(&(self.b - self.a)))
     }
 }
@@ -300,6 +304,7 @@ impl Cover {
             leaves,
             stopped,
             kinks: Vec::new(),
+            kink_at: Vec::new(),
         }
     }
 

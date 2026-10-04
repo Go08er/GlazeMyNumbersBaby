@@ -263,6 +263,27 @@ const TRUTH: &[(&str, &str)] = &[
 /// known of each. The reviews' `1e-7`, `1e13` are written out here: the
 /// app reads `1e6` as 1·e·6 (`1e9*x` is kept, as that line).
 const REVIEW: &[(&str, &str)] = &[
+    // Limits a dominant-term argument can get wrong (1^∞, 0·∞): each row
+    // the exact limit, or unknown.
+    ("(1+1/x)^x", "HA=e"),
+    ("(1-1/x)^x", "HA=1/e"),
+    ("(1+2/x)^x", "HA=e^2"),
+    ("(1+1/x)^(2x)", "HA=e^2"),
+    ("(x/(x+1))^x", "HA=1/e"),
+    ("x^(1/x)", "HA=R:1"),
+    ("(1+1/x^2)^x", "HA=1"),
+    ("x*ln(1+1/x)", "HA=1"),
+    ("(1+1/x)^(x^2)", "HA=L:0"),
+    ("x^(1/ln(x))", "HA=none"),
+    ("x*sin(1/x)", "HA=1"),
+    ("x^2*(1-cos(1/x))", "HA=1/2"),
+    ("x*(e^(1/x)-1)", "HA=1"),
+    ("sqrt(x^2+x)-x", "HA=R:1/2"),
+    ("x*sin(1/x^2)", "HA=0"),
+    ("(e^x+x)^(1/x)", "HA=R:e"),
+    ("x*e^(-x)", "HA=R:0"),
+    ("x^2*e^(-x)", "HA=R:0"),
+    ("ln(x)/x", "HA=R:0"),
     (
         "x^2+0.0000001",
         "D=R | XI=none | YI=0.0000001 | P=even | T=none | MIN=(0,0.0000001) | MAX=none | INF=none | VA=none | HA=none | R=[0.0000001,inf)",

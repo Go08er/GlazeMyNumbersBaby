@@ -679,6 +679,45 @@ const PLANTS: &[Plant] = &[
         hi["lo"] = serde_json::json!(2.0);
         hi["hi"] = serde_json::json!(2.0);
     }),
+    // A limit resting on the simplifier alone, and wrong: (1 + 1/x)^x → e,
+    // not 1 (the 1^∞ slip the simplifier once made).
+    ("(1+1/x)^x", "a wrong limit of 1 (it is e)", |v| {
+        v["horizontal"] = serde_json::json!({"Certified": {
+            "value": [{"side": "Right", "y": {"lo": 1.0, "hi": 1.0}, "exact": "1", "looks_like": null}],
+            "cert": {"covers": "Line", "claims": [{"Simplifier": {"fact": "f → 1 as x → +∞"}}]}
+        }});
+    }),
+    ("1/(1+e^(-x))", "the simplifier's limit moved", |v| {
+        let cs = claims_of(v, "horizontal");
+        for c in cs.iter_mut() {
+            if c["Simplifier"]["fact"] == "f → 1 as x → +∞" {
+                c["Simplifier"]["fact"] = serde_json::json!("f → 2 as x → +∞");
+            }
+        }
+        let y = &mut value_of(v, "horizontal")[1]["y"];
+        y["lo"] = serde_json::json!(2.0);
+        y["hi"] = serde_json::json!(2.0);
+    }),
+    ("ln(x)", "a limit where f grows without bound", |v| {
+        v["horizontal"] = serde_json::json!({"Certified": {
+            "value": [{"side": "Right", "y": {"lo": 50.0, "hi": 50.0}, "exact": "50", "looks_like": null}],
+            "cert": {"covers": "Line", "claims": [{"Simplifier": {"fact": "f → 50 as x → +∞"}}]}
+        }});
+    }),
+    ("abs(x-3)", "a kink's slope flipped on one side", |v| {
+        let k = first(v, "extrema", "KinkAt");
+        k["left"] = serde_json::json!(!k["left"].as_bool().unwrap());
+    }),
+    ("abs(x-3)", "the kink placed a double off", |v| {
+        let k = first(v, "extrema", "KinkAt");
+        k["at"] = serde_json::json!(3.0f64.next_up());
+        k["x"]["b"] = serde_json::json!(3.0f64.next_up().next_up());
+    }),
+    ("abs(x-3)", "the minimum at a kink moved", |v| {
+        let x = &mut value_of(v, "extrema")[0]["x"];
+        x["lo"] = serde_json::json!(3.0f64.next_up());
+        x["hi"] = serde_json::json!(3.0f64.next_up());
+    }),
 ];
 
 #[test]

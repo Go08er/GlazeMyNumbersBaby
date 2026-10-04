@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::ast::{BinOp, Expr, Func};
 use crate::compile::CompileOptions;
 use crate::interval::{Ctx, DecInterval, Interval, Literals, Series, taylor};
+use crate::simplify::q::Q;
 
 /// Why certification stopped early.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +35,213 @@ pub fn canonical(e: &Expr) -> Expr {
             }
         }
         Expr::Call(f, args) => Expr::Call(*f, args.iter().map(canonical).collect()),
+    }
+}
+
+/// `e` as a·x + b with a, b exact rationals, if it is one (sliders and π
+/// aside).
+fn affine(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<(Q, Q)> {
+    Some(match e {
+        Expr::X => (Q::ONE, Q::ZERO),
+        Expr::Num(v) => (Q::ZERO, lits.exact(*v)?),
+        Expr::Neg(a) => {
+            let (a, b) = affine(a, lits)?;
+            (a.neg()?, b.neg()?)
+        }
+        Expr::Bin(op @ (BinOp::Add | BinOp::Sub), l, r) => {
+            let ((a, b), (c, d)) = (affine(l, lits)?, affine(r, lits)?);
+            if *op == BinOp::Add {
+                (a.add(c)?, b.add(d)?)
+            } else {
+                (a.sub(c)?, b.sub(d)?)
+            }
+        }
+        Expr::Bin(BinOp::Mul, l, r) => {
+            let ((a, b), (c, d)) = (affine(l, lits)?, affine(r, lits)?);
+            match (a.is_zero(), c.is_zero()) {
+                (true, _) => (c.mul(b)?, d.mul(b)?),
+                (_, true) => (a.mul(d)?, b.mul(d)?),
+                _ => return None,
+            }
+        }
+        Expr::Bin(BinOp::Div, l, r) => {
+            let ((a, b), (c, d)) = (affine(l, lits)?, affine(r, lits)?);
+            if !c.is_zero() || d.is_zero() {
+                return None;
+            }
+            (a.div(d)?, b.div(d)?)
+        }
+        _ => return None,
+    })
+}
+
+/// A whole number ≥ 0 that `Num` reads back exactly.
+fn int_num(q: Q) -> Option<Expr> {
+    (q.is_int() && q.signum() >= 0 && q.numer() <= 1 << 53).then(|| Expr::Num(q.numer() as f64))
+}
+
+/// `e` as c·xᵏ (c exact, k whole ≤ 64) if it is a monomial.
+fn monomial(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<(Q, u32)> {
+    Some(match e {
+        Expr::X => (Q::ONE, 1),
+        Expr::Num(v) => (lits.exact(*v)?, 0),
+        Expr::Neg(a) => {
+            let (c, k) = monomial(a, lits)?;
+            (c.neg()?, k)
+        }
+        Expr::Bin(BinOp::Mul, a, b) => {
+            let ((c, k), (d, j)) = (monomial(a, lits)?, monomial(b, lits)?);
+            (c.mul(d)?, k + j)
+        }
+        Expr::Bin(BinOp::Div, a, b) => {
+            let ((c, k), (d, 0)) = (monomial(a, lits)?, monomial(b, lits)?) else {
+                return None;
+            };
+            (c.div(d)?, k)
+        }
+        Expr::Bin(BinOp::Pow, a, b) => {
+            let (c, k) = monomial(a, lits)?;
+            let n = crate::compile::syntactic_rational(b)
+                .filter(|&(_, q)| q == 1)
+                .map(|(p, _)| p)
+                .filter(|&p| (0..=64).contains(&p))?;
+            (c.powi(n.into())?, k * u32::try_from(n).ok()?)
+        }
+        _ => return None,
+    })
+    .filter(|&(_, k)| k <= 64)
+}
+
+/// The terms of a sum of monomials (± each), as coefficients by power.
+fn monomial_sum(
+    e: &Expr,
+    lits: &crate::simplify::ExactLiterals,
+    sign: bool,
+    out: &mut Vec<Q>,
+) -> Option<()> {
+    match e {
+        Expr::Bin(op @ (BinOp::Add | BinOp::Sub), a, b) => {
+            monomial_sum(a, lits, sign, out)?;
+            monomial_sum(b, lits, sign == (*op == BinOp::Add), out)
+        }
+        _ => {
+            let (c, k) = monomial(e, lits)?;
+            let c = if sign { c } else { c.neg()? };
+            let k = k as usize;
+            if out.len() <= k {
+                out.resize(k + 1, Q::ZERO);
+            }
+            out[k] = out[k].add(c)?;
+            Some(())
+        }
+    }
+}
+
+/// An exact rational as an expression `Num` reads back exactly.
+fn q_num(q: Q) -> Option<Expr> {
+    let m = q.abs()?;
+    let e = if m.is_int() {
+        int_num(m)?
+    } else {
+        Expr::bin(
+            BinOp::Div,
+            int_num(Q::int(m.numer()))?,
+            int_num(Q::int(m.denom()))?,
+        )
+    };
+    Some(if q.signum() < 0 {
+        Expr::Neg(Box::new(e))
+    } else {
+        e
+    })
+}
+
+/// A sum of monomials of degree ≥ 2 (x² + x + 1, as a rational function's
+/// parts come expanded) in Horner's form, ((aₙx + aₙ₋₁)x + …)x + a₀: on a
+/// tail every product there has its factors of one sign, where the sum
+/// as written is ∞ − ∞ (x² + x on (−∞, −M]).
+fn horner(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<Expr> {
+    if !matches!(e, Expr::Bin(BinOp::Add | BinOp::Sub, ..)) {
+        return None;
+    }
+    let mut cs: Vec<Q> = Vec::new();
+    monomial_sum(e, lits, true, &mut cs)?;
+    while cs.last().is_some_and(|c| c.is_zero()) {
+        cs.pop();
+    }
+    if cs.len() < 3 {
+        return None;
+    }
+    let mut acc: Option<Expr> = None;
+    for c in cs.iter().rev() {
+        let next = match acc {
+            None => q_num(*c)?,
+            Some(a) => {
+                let ax = match a {
+                    Expr::Num(v) if v == 1.0 => Expr::X,
+                    a => Expr::bin(BinOp::Mul, a, Expr::X),
+                };
+                if c.is_zero() {
+                    ax
+                } else if c.signum() < 0 {
+                    Expr::bin(BinOp::Sub, ax, q_num(c.neg()?)?)
+                } else {
+                    Expr::bin(BinOp::Add, ax, q_num(*c)?)
+                }
+            }
+        };
+        acc = Some(next);
+    }
+    acc
+}
+
+/// `e` with each part a·x + b in x (exact rationals a ≠ 0 and b, with
+/// c = −b/a an integer) written a·(x − c): x − c is exact near c, where
+/// a·x + b cancels. (x/1000 − 1 at x = 1000 + 2⁻⁴³, evaluated as written,
+/// is [0, 2⁻⁵²]; as (x − 1000)/1000, 2⁻⁴³/1000 to an ulp.) And each sum of
+/// monomials of degree ≥ 2 in Horner's form ([`horner`]). The same real
+/// function, so f's evaluated tree may be written so.
+pub fn recentre(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Expr {
+    if !matches!(e, Expr::X)
+        && let Some((a, b)) = affine(e, lits)
+        && !a.is_zero()
+        && let Some(form) = (|| {
+            let c = b.neg()?.div(a)?;
+            let shifted = match c.signum() {
+                0 => Expr::X,
+                1 => Expr::bin(BinOp::Sub, Expr::X, int_num(c)?),
+                _ => Expr::bin(BinOp::Add, Expr::X, int_num(c.neg()?)?),
+            };
+            let m = a.abs()?;
+            let scaled = if m == Q::ONE {
+                shifted
+            } else if m.is_int() {
+                Expr::bin(BinOp::Mul, int_num(m)?, shifted)
+            } else if m.numer() == 1 {
+                Expr::bin(BinOp::Div, shifted, int_num(Q::int(m.denom()))?)
+            } else {
+                let num = int_num(Q::int(m.numer()))?;
+                let den = int_num(Q::int(m.denom()))?;
+                Expr::bin(BinOp::Mul, Expr::bin(BinOp::Div, num, den), shifted)
+            };
+            Some(if a.signum() < 0 {
+                Expr::Neg(Box::new(scaled))
+            } else {
+                scaled
+            })
+        })()
+    {
+        return form;
+    }
+    if let Some(h) = horner(e, lits) {
+        return h;
+    }
+    match e {
+        Expr::Neg(a) => Expr::Neg(Box::new(recentre(a, lits))),
+        Expr::Degrees(a) => Expr::Degrees(Box::new(recentre(a, lits))),
+        Expr::Bin(op, a, b) => Expr::bin(*op, recentre(a, lits), recentre(b, lits)),
+        Expr::Call(f, args) => Expr::Call(*f, args.iter().map(|a| recentre(a, lits)).collect()),
+        _ => e.clone(),
     }
 }
 
@@ -135,8 +343,8 @@ impl<'a> Fun<'a> {
     pub fn settings(&self) -> Option<crate::simplify::Settings<'a>> {
         let mut s = crate::simplify::Settings::new(&self.opts, self.exact?);
         s.cancel = self.cancel;
-        // Several runs per analysis: each kept short.
-        s.limits.time = std::time::Duration::from_millis(15);
+        // Several runs per analysis: each kept small.
+        s.limits.nodes = CERTIFY_NODES;
         Some(s)
     }
 
@@ -164,12 +372,13 @@ impl<'a> Fun<'a> {
 
     fn build_derivs(&self, symbolic: bool) -> Option<[Expr; 2]> {
         let exact = self.exact?;
-        rational_derivs(&self.expr, exact).or_else(|| {
+        // (A rational f's, expanded exactly, in Horner's form.)
+        let rational = rational_derivs(&self.expr, exact).map(|d| d.map(|t| recentre(&t, exact)));
+        rational.or_else(|| {
             if !symbolic {
                 return None;
             }
-            let mut s = self.settings()?;
-            s.limits.time = std::time::Duration::from_millis(15);
+            let s = self.settings()?;
             // A typed decimal exponent as the exact fraction it is (x^0.9
             // is x^(9/10) where x ≥ 0, the only x it is evaluated at), so
             // the derivative's exponents stay exact; and every constant in
@@ -187,6 +396,46 @@ impl<'a> Fun<'a> {
             .get()
             .and_then(|d| d.as_ref())
             .or_else(|| self.derivs_kinked.get().and_then(|d| d.as_ref()))
+    }
+
+    /// Where f′ or f″ is singular though f is continuous: the bases u
+    /// (varying with x) of f's fractional powers u^r, √u, ∛u, with r: at
+    /// u = 0, f′ is unbounded for r < 1 (x^(1/3), x^(2/3)), f″ for r < 2
+    /// (x^(4/3)). Each base once, with its smallest r.
+    pub fn singular_args(&self) -> Vec<(Expr, f64)> {
+        let mut args: Vec<(Expr, f64)> = Vec::new();
+        let exponent = |b: &Expr| -> Option<f64> {
+            if b.contains_x() {
+                return None;
+            }
+            if let Some((p, q)) = crate::compile::syntactic_rational(b) {
+                return (q != 1).then(|| p as f64 / q as f64);
+            }
+            let v = crate::simplify::period::exact_constant(b, self.exact?)?;
+            (v.k == 0 && !v.q.is_int()).then(|| v.q.to_f64())
+        };
+        for e in [&self.expr, &self.eval] {
+            e.visit(&mut |n| {
+                let (u, r) = match n {
+                    Expr::Bin(BinOp::Pow, u, b) if u.contains_x() => match exponent(b) {
+                        Some(r) => (&**u, r),
+                        None => return,
+                    },
+                    Expr::Call(Func::Sqrt, a) if a[0].contains_x() => (&a[0], 0.5),
+                    Expr::Call(Func::Cbrt, a) if a[0].contains_x() => (&a[0], 1.0 / 3.0),
+                    _ => return,
+                };
+                if r.is_nan() || r >= 2.0 {
+                    return;
+                }
+                let u = canonical(u);
+                match args.iter_mut().find(|(v, _)| *v == u) {
+                    Some(a) => a.1 = a.1.min(r),
+                    None => args.push((u, r)),
+                }
+            });
+        }
+        args
     }
 
     /// Where f's kinks are: the arguments u of its |u| (and a − b of its
@@ -215,6 +464,118 @@ impl<'a> Fun<'a> {
             });
         }
         args
+    }
+
+    /// The exact point of the kink in the box `(l, r)`, one double either
+    /// side of a double p at which a kink argument is exactly 0: with every
+    /// kink argument strictly signed on each side of p (a nonzero value
+    /// over the box, or an exact zero at p with a strictly signed
+    /// derivative), f equals on `[l, p]` and on `[p, r]` the smooth form
+    /// with each |u| (min, max) resolved by those signs, and f′'s strict
+    /// sign on each side is that form's. `None` if any of it isn't
+    /// decided. (f is continuous across the box: a `Kink` claim.)
+    pub fn kink_at(&self, l: f64, r: f64) -> Result<Option<KinkPoint>, Stop> {
+        use crate::interval::Dec;
+        let p = l.next_up();
+        if p.next_up() != r || !p.is_finite() {
+            return Ok(None);
+        }
+        // (−0 is 0: the kink of |x| is at 0.)
+        let p = if p == 0.0 { 0.0 } else { p };
+        let around = Interval::new(l, r);
+        let mut sides: Vec<(Expr, bool, bool)> = Vec::new();
+        let mut at_zero = false;
+        for u in self.kink_args() {
+            let s = self.ser_of(&u, around, 1)?;
+            if s[0].dec >= Dec::Def && s[0].ne0() {
+                let pos = s[0].gt0();
+                sides.push((u, pos, pos));
+                continue;
+            }
+            let v = self.ser_of(&u, Interval::point(p), 0)?[0];
+            let zero = !v.is_empty() && v.lo() == 0.0 && v.hi() == 0.0 && v.dec >= Dec::Def;
+            let d = s[1];
+            if !(zero && s[0].dec >= Dec::Dac && d.dec >= Dec::Def && d.iv.is_bounded() && d.ne0())
+            {
+                return Ok(None);
+            }
+            at_zero = true;
+            let rising = d.gt0();
+            sides.push((u, !rising, rising));
+        }
+        if !at_zero {
+            return self.singular_at(l, p, r);
+        }
+        for tree in [&self.expr, &self.eval] {
+            let slope = |left: bool, x: Interval| -> Result<Option<bool>, Stop> {
+                let e = one_sided(tree, &sides, left);
+                let s = self.ser_of(&e, x, 1)?;
+                let d = s[1];
+                Ok(
+                    (s[0].dec >= Dec::Dac && d.dec >= Dec::Def && d.iv.is_bounded() && d.ne0())
+                        .then(|| d.gt0()),
+                )
+            };
+            if let (Some(left), Some(right)) = (
+                slope(true, Interval::new(l, p))?,
+                slope(false, Interval::new(p, r))?,
+            ) {
+                return Ok(Some(KinkPoint { p, left, right }));
+            }
+        }
+        Ok(None)
+    }
+
+    /// A singular point of f′ placed exactly (`kink_at`'s, for x^(2/3)):
+    /// the base of a fractional power u^r (r < 1) exactly 0 at the double
+    /// p, every such base strictly signed on each side of p within the box
+    /// (away from 0 over it, or 0 at p with a strictly signed derivative),
+    /// so f′ exists on the box but at p; and f′'s enclosure over [l, p] and
+    /// over [p, r] — where it exists — strictly signed. f, continuous
+    /// across the box (its `Kink` claim), is then strictly monotone on each
+    /// side of p.
+    fn singular_at(&self, l: f64, p: f64, r: f64) -> Result<Option<KinkPoint>, Stop> {
+        use crate::interval::Dec;
+        let around = Interval::new(l, r);
+        let mut at_zero = false;
+        for (u, rr) in self.singular_args() {
+            let s = self.ser_of(&u, around, 1)?;
+            if s[0].dec >= Dec::Def && s[0].ne0() {
+                continue;
+            }
+            let v = self.ser_of(&u, Interval::point(p), 0)?[0];
+            let zero = !v.is_empty() && v.lo() == 0.0 && v.hi() == 0.0 && v.dec >= Dec::Def;
+            let d = s[1];
+            if !(zero && d.dec >= Dec::Def && d.iv.is_bounded() && d.ne0()) {
+                return Ok(None);
+            }
+            // (A power with r ≥ 1 is smooth enough for f′ at p.)
+            at_zero |= rr < 1.0;
+        }
+        if !at_zero {
+            return Ok(None);
+        }
+        let Some(d) = self.derivs().map(|d| d[0].clone()) else {
+            return Ok(None);
+        };
+        let sign = |x: Interval| -> Result<Option<bool>, Stop> {
+            let v = self.ser_of(&d, x, 0)?[0];
+            Ok(if v.is_empty() {
+                None
+            } else if v.gt0() {
+                Some(true)
+            } else if v.lt0() {
+                Some(false)
+            } else {
+                None
+            })
+        };
+        Ok(
+            match (sign(Interval::new(l, p))?, sign(Interval::new(p, r))?) {
+                (Some(left), Some(right)) => Some(KinkPoint { p, left, right }),
+                _ => None,
+            },
+        )
     }
 
     /// No kink of f in the box at which f is defined: each kink argument
@@ -307,7 +668,22 @@ impl<'a> Fun<'a> {
     /// to order `n`.
     pub fn ser_of(&self, e: &Expr, x: Interval, n: usize) -> Result<Series, Stop> {
         self.charge()?;
-        Ok(taylor(e, x, n, &self.ctx()))
+        let s = taylor(e, x, n, &self.ctx());
+        // f's simplified form, and the formula as written: each encloses
+        // f's coefficients where the formula is defined throughout the box,
+        // and each is tighter in places (the simplified form cancels, the
+        // formula keeps a shift (x − a)/s exact where the simplifier
+        // distributed it).
+        // (Only where the simplified form leaves something to decide: a
+        // coefficient not valid, unbounded, or holding 0.)
+        let decided = |c: &DecInterval| {
+            !c.is_empty() && c.dec >= crate::interval::Dec::Def && c.iv.is_bounded() && c.ne0()
+        };
+        if std::ptr::eq(e, &self.eval) && self.eval != self.expr && !s.iter().all(decided) {
+            let t = taylor(&self.expr, x, n, &self.ctx());
+            return Ok(merge(s, &t));
+        }
+        Ok(s)
     }
 
     /// Taylor coefficients of f over the box (from the evaluated tree).
@@ -319,6 +695,73 @@ impl<'a> Fun<'a> {
     pub fn val(&self, x: Interval) -> Result<DecInterval, Stop> {
         Ok(self.ser(x, 0)?[0])
     }
+
+    /// f over a narrow box, tightened by the mean value form: f(m) +
+    /// f′(box)·(box − m) for its middle m, where f′ is valid there (at a
+    /// turn f′ is near 0, so f's value is known far better than its
+    /// enclosure over the box shows).
+    pub fn val_tight(&self, x: Interval) -> Result<DecInterval, Stop> {
+        let s = self.ser(x, 1)?;
+        let v = s[0];
+        if !(x.lo() < x.hi() && x.is_bounded() && usable(&s, 1) && s[1].iv.is_bounded()) {
+            return Ok(v);
+        }
+        let m = x.lo() / 2.0 + x.hi() / 2.0;
+        let vm = self.val(Interval::point(m))?;
+        if vm.is_empty() || !vm.iv.is_bounded() {
+            return Ok(v);
+        }
+        let dx = x - Interval::point(m);
+        let mv = vm.iv + s[1].iv * dx;
+        let iv = v.iv.intersect(mv);
+        if iv.is_empty() {
+            return Ok(v);
+        }
+        Ok(DecInterval { iv, ..v })
+    }
+}
+
+/// Taylor coefficients of f over a box from its simplified form (`s`) and
+/// from the formula (`t`), equal wherever the formula is defined: up to the
+/// order the formula's are valid to (its value defined throughout the box,
+/// its derivatives' too, with f continuous there), each coefficient is the
+/// intersection of the two, or the formula's alone where the simplified
+/// form's isn't valid. The formula defined throughout the box means the two
+/// trees are the same function there, so whatever either proves holds.
+fn merge(mut s: Series, t: &Series) -> Series {
+    use crate::interval::Dec;
+    let valid = |c: &DecInterval| !c.is_empty() && c.dec >= Dec::Def;
+    let Some(t0) = t.first().filter(|c| valid(c)) else {
+        return s;
+    };
+    // The orders the formula's coefficients are good to.
+    let upto = if t0.dec >= Dec::Dac {
+        t.iter().skip(1).take_while(|c| valid(c)).count()
+    } else {
+        0
+    };
+    let s_cont = s.first().is_some_and(|c| valid(c) && c.dec >= Dec::Dac);
+    for (j, c) in s.iter_mut().enumerate().take(upto + 1) {
+        let tj = t[j];
+        // The simplified form's coefficient j stands only with its value
+        // valid (and, past order 0, continuous).
+        let ok = valid(c) && (j == 0 || s_cont);
+        if !ok {
+            *c = tj;
+            continue;
+        }
+        let iv = c.iv.intersect(tj.iv);
+        if iv.is_empty() {
+            continue;
+        }
+        *c = DecInterval {
+            iv,
+            dec: c.dec.max(tj.dec),
+            pos: c.pos || tj.pos,
+            neg: c.neg || tj.neg,
+        };
+    }
+    s
 }
 
 /// f′ and f″ of a rational function from its exact form (see
@@ -353,6 +796,16 @@ pub fn rational_derivs(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Optio
             )
         }
     };
+    // Every coefficient written as doubles that hold it exactly (q_expr
+    // rounds a numerator or denominator past 2⁵³: 1 + 10⁻³⁰ would read 1).
+    let exact = |q: &Poly| {
+        q.coefficients()
+            .iter()
+            .all(|c| c.numer().unsigned_abs() <= 1 << 53 && c.denom() <= 1 << 53)
+    };
+    if !(exact(&p) && exact(&p2) && exact(&d)) {
+        return None;
+    }
     Some([canonical(&over(&p, 2.0)), canonical(&over(&p2, 3.0))])
 }
 
@@ -386,11 +839,14 @@ pub fn rational_numerators(e: &Expr, lits: &crate::simplify::ExactLiterals) -> O
     let p = n1.mul(&d)?.sub(&n.mul(&d1)?)?;
     let p2 = deriv(&p)?.mul(&d)?.sub(&p.mul(&d1)?.scale(Q::int(2))?)?;
     let (d2, d3) = (d.pow(2)?, d.pow(3)?);
-    Some([
-        canonical(&n.to_expr()),
-        canonical(&lowest(&p, &d2)?.to_expr()),
-        canonical(&lowest(&p2, &d3)?.to_expr()),
-    ])
+    let ps = [n, lowest(&p, &d2)?, lowest(&p2, &d3)?];
+    // (Only with every coefficient a double's exactly: see rational_derivs.)
+    let exact = ps.iter().all(|q| {
+        q.coefficients()
+            .iter()
+            .all(|c| c.numer().unsigned_abs() <= 1 << 53 && c.denom() <= 1 << 53)
+    });
+    exact.then(|| ps.map(|q| canonical(&q.to_expr())))
 }
 
 /// `e` with each constant exponent that is a typed decimal (`x^0.9`)
@@ -436,6 +892,62 @@ fn sound_constants(e: &Expr, exact: &crate::simplify::ExactLiterals) -> bool {
 
 /// The node budget of a symbolic derivative.
 const DIFF_NODES: usize = 4096;
+
+/// A kink placed exactly (see [`Fun::kink_at`]): at the double `p`, with
+/// f′ strictly positive (`true`) or negative on `[p⁻, p]` (`left`) and on
+/// `[p, p⁺]` (`right`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KinkPoint {
+    pub p: f64,
+    pub left: bool,
+    pub right: bool,
+}
+
+/// `e` on one side of a kink: each |u| as u or −u and each min(a, b),
+/// max(a, b) as the argument it picks, by the signs `sides` gives each
+/// kink argument (canonical u, or a − b) on that side; the rest as is.
+pub fn one_sided(e: &Expr, sides: &[(Expr, bool, bool)], left: bool) -> Expr {
+    let sign_of = |u: &Expr| {
+        sides
+            .iter()
+            .find(|(v, ..)| v == u)
+            .map(|(_, l, r)| if left { *l } else { *r })
+    };
+    e.map(&|n| match n {
+        Expr::Call(Func::Abs, a) if a[0].contains_x() => {
+            let inner = one_sided(&a[0], sides, left);
+            let pos = sign_of(&canonical(&a[0]))?;
+            Some(if pos {
+                inner
+            } else {
+                Expr::Neg(Box::new(inner))
+            })
+        }
+        Expr::Call(f @ (Func::Min | Func::Max), a)
+            if a.len() == 2 && a.iter().any(|v| v.contains_x()) =>
+        {
+            let d = canonical(&Expr::Bin(
+                BinOp::Sub,
+                Box::new(a[0].clone()),
+                Box::new(a[1].clone()),
+            ));
+            // a − b > 0: max picks a, min picks b.
+            let a_bigger = sign_of(&d)?;
+            let pick = if a_bigger == (*f == Func::Max) {
+                &a[0]
+            } else {
+                &a[1]
+            };
+            Some(one_sided(pick, sides, left))
+        }
+        _ => None,
+    })
+}
+
+/// E-graph nodes for each of an analysis's simplifier runs (several per
+/// analysis, so fewer than the simplifier's default): a count, not a time,
+/// so the same function always gets the same answer.
+pub const CERTIFY_NODES: usize = 20_000;
 
 /// f′ and f″ of `e` by symbolic differentiation, each simplified (with
 /// `settings`, when given) so that what cancels in them cancels exactly.

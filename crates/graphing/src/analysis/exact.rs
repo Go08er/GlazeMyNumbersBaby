@@ -1,14 +1,16 @@
 //! Exact values for the analysis panel. The panel shows a closed form
-//! (`√2`, `π/2`, `(1 + √5)/2`) only when it is proven, and the values here
-//! are exact by construction: rational arithmetic, square roots of exact
-//! rationals, rational multiples of π, and the trigonometric functions'
-//! values at multiples of π/6 and π/4. A candidate is never *recognised*
+//! (`√2`, `π/2`, `(1 + √5)/2`, `1/e`, `ln(2)`) only when it is proven, and
+//! the values here are exact by construction: rational arithmetic, square
+//! roots of exact rationals, rational multiples of π, the trigonometric
+//! functions' values at multiples of π/6 and π/4, rational multiples of
+//! eᵏ and a + b·ln c (k, a, b, c rational). A candidate is never *recognised*
 //! from a double: it is built exactly (a root of an exact polynomial, a
 //! rational multiple of an exact period) and then checked exactly (the
 //! function, or its derivative, evaluates to exactly 0 there).
 
 use crate::ast::{BinOp, Constant, Expr, Func};
 use crate::functions::TrigUnit;
+use crate::interval::{DecInterval, Interval, elem};
 use crate::simplify::Q;
 use crate::simplify::rational::Poly;
 use crate::simplify::{ExactLiterals, PiQ};
@@ -22,6 +24,73 @@ pub enum Ex {
     Alg { a: Q, b: Q, c: i64 },
     /// q·π.
     Pi(Q),
+    /// q·eᵏ (q ≠ 0, k ≠ 0). Transcendental (Lindemann): never a value of
+    /// another form, nor q′·eᵏ′ for k′ ≠ k.
+    Exp { q: Q, k: Q },
+    /// a + b·ln c (b ≠ 0; c > 1 rational and not a perfect power, so a
+    /// value has one form). Transcendental: never 0, nor a double.
+    Ln { a: Q, b: Q, c: Q },
+}
+
+/// The whole n-th root of v ≥ 1, if v is an n-th power.
+fn int_root(v: i128, n: u32) -> Option<i128> {
+    let g = (v as f64).powf(1.0 / f64::from(n)).round() as i128;
+    (g - 1..=g + 1).find(|&r| r >= 1 && r.checked_pow(n) == Some(v))
+}
+
+/// ln r (r > 0 rational) as m·ln c, with c > 1 no perfect power (c = 1
+/// and m = 0 for r = 1).
+fn ln_parts(r: Q) -> Option<(Q, Q)> {
+    if r.signum() <= 0 {
+        return None;
+    }
+    if r == Q::ONE {
+        return Some((Q::ZERO, Q::ONE));
+    }
+    let (mut m, mut c) = if r < Q::ONE {
+        (Q::int(-1), r.recip()?)
+    } else {
+        (Q::ONE, r)
+    };
+    // c = sⁿ: ln c = n·ln s (each step makes c smaller, and c > 1).
+    'smaller: loop {
+        for n in (2..=40u32).rev() {
+            if let (Some(p), Some(q)) = (int_root(c.numer(), n), int_root(c.denom(), n))
+                && let Some(s) = Q::new(p, q)
+                && s != Q::ONE
+            {
+                c = s;
+                m = m.mul(Q::int(n.into()))?;
+                continue 'smaller;
+            }
+        }
+        break;
+    }
+    Some((m, c))
+}
+
+/// eᵛ, exactly: v rational (eᵛ), or a + n·ln c with n whole (cⁿ·eᵃ).
+fn exp_of(v: Ex) -> Option<Ex> {
+    match v.norm() {
+        Ex::Alg { a, b, .. } if b.is_zero() => Some(Ex::Exp { q: Q::ONE, k: a }.norm()),
+        Ex::Ln { a, b, c } if b.is_int() => {
+            let n = i64::try_from(b.numer()).ok()?;
+            let p = Ex::q(c).powi(n)?.rational()?;
+            Some(Ex::Exp { q: p, k: a }.norm())
+        }
+        _ => None,
+    }
+}
+
+/// ln v, exactly: v > 0 rational, or q·eᵏ with q > 0 (k + ln q).
+fn ln_of(v: Ex) -> Option<Ex> {
+    let (k, r) = match v.norm() {
+        Ex::Alg { a, b, .. } if b.is_zero() => (Q::ZERO, a),
+        Ex::Exp { q, k } => (k, q),
+        _ => return None,
+    };
+    let (m, c) = ln_parts(r)?;
+    Some(Ex::Ln { a: k, b: m, c }.norm())
 }
 
 fn sq(q: Q) -> Option<Q> {
@@ -102,10 +171,29 @@ impl Ex {
         Ex::q(Q::int(n))
     }
 
+    /// self·eᵏ, for a rational self.
+    pub fn exp_times(self, k: Q) -> Option<Ex> {
+        Some(
+            Ex::Exp {
+                q: self.rational()?,
+                k,
+            }
+            .norm(),
+        )
+    }
+
+    /// ln r, for a rational r > 0.
+    pub fn ln_q(r: Q) -> Option<Ex> {
+        ln_of(Ex::q(r))
+    }
+
     fn norm(self) -> Ex {
         match self {
             Ex::Alg { a, b, .. } if b.is_zero() => Ex::q(a),
             Ex::Pi(q) if q.is_zero() => Ex::q(Q::ZERO),
+            Ex::Exp { q, .. } if q.is_zero() => Ex::q(Q::ZERO),
+            Ex::Exp { q, k } if k.is_zero() => Ex::q(q),
+            Ex::Ln { a, b, .. } if b.is_zero() => Ex::q(a),
             e => e,
         }
     }
@@ -130,6 +218,12 @@ impl Ex {
                 c,
             },
             Ex::Pi(q) => Ex::Pi(q.neg()?),
+            Ex::Exp { q, k } => Ex::Exp { q: q.neg()?, k },
+            Ex::Ln { a, b, c } => Ex::Ln {
+                a: a.neg()?,
+                b: b.neg()?,
+                c,
+            },
         })
     }
 
@@ -160,6 +254,46 @@ impl Ex {
                 }
                 (Ex::Pi(p), Ex::Pi(q)) => Ex::Pi(p.add(q)?),
                 (Ex::Pi(p), z) | (z, Ex::Pi(p)) if z.is_zero() => Ex::Pi(p),
+                (Ex::Exp { q, k }, Ex::Exp { q: q2, k: k2 }) if k == k2 => {
+                    Ex::Exp { q: q.add(q2)?, k }
+                }
+                (Ex::Exp { q, k }, z) | (z, Ex::Exp { q, k }) if z.is_zero() => Ex::Exp { q, k },
+                (
+                    Ex::Ln { a, b, c },
+                    Ex::Ln {
+                        a: a2,
+                        b: b2,
+                        c: c2,
+                    },
+                ) if c == c2 => Ex::Ln {
+                    a: a.add(a2)?,
+                    b: b.add(b2)?,
+                    c,
+                },
+                // b·ln c ± b·ln c₂ = b·ln(c·c₂^±1).
+                (
+                    Ex::Ln { a, b, c },
+                    Ex::Ln {
+                        a: a2,
+                        b: b2,
+                        c: c2,
+                    },
+                ) if b == b2 || Some(b) == b2.neg() => {
+                    let r = if b == b2 { c.mul(c2)? } else { c.div(c2)? };
+                    let (m, base) = ln_parts(r)?;
+                    Ex::Ln {
+                        a: a.add(a2)?,
+                        b: b.mul(m)?,
+                        c: base,
+                    }
+                }
+                (Ex::Ln { a, b, c }, r) | (r, Ex::Ln { a, b, c }) if r.rational().is_some() => {
+                    Ex::Ln {
+                        a: a.add(r.rational()?)?,
+                        b,
+                        c,
+                    }
+                }
                 _ => return None,
             }
             .norm(),
@@ -206,6 +340,22 @@ impl Ex {
                     }
                 }
                 (Ex::Pi(p), r) | (r, Ex::Pi(p)) => Ex::Pi(p.mul(r.rational()?)?),
+                (Ex::Exp { q, k }, Ex::Exp { q: q2, k: k2 }) => Ex::Exp {
+                    q: q.mul(q2)?,
+                    k: k.add(k2)?,
+                },
+                (Ex::Exp { q, k }, r) | (r, Ex::Exp { q, k }) => Ex::Exp {
+                    q: q.mul(r.rational()?)?,
+                    k,
+                },
+                (Ex::Ln { a, b, c }, r) | (r, Ex::Ln { a, b, c }) => {
+                    let r = r.rational()?;
+                    Ex::Ln {
+                        a: a.mul(r)?,
+                        b: b.mul(r)?,
+                        c,
+                    }
+                }
             }
             .norm(),
         )
@@ -225,7 +375,11 @@ impl Ex {
                     c,
                 })
             }
-            Ex::Pi(_) => None,
+            Ex::Exp { q, k } => Some(Ex::Exp {
+                q: q.recip()?,
+                k: k.neg()?,
+            }),
+            Ex::Pi(_) | Ex::Ln { .. } => None,
         }
     }
 
@@ -235,6 +389,20 @@ impl Ex {
         }
         if let (Ex::Pi(p), Ex::Pi(q)) = (self.norm(), o.norm()) {
             return Some(Ex::q(p.div(q)?));
+        }
+        // (a + b·ln c)/(a₂ + b₂·ln c): rational when proportional.
+        if let (
+            Ex::Ln { a, b, c },
+            Ex::Ln {
+                a: a2,
+                b: b2,
+                c: c2,
+            },
+        ) = (self.norm(), o.norm())
+            && c == c2
+            && a.mul(b2)? == a2.mul(b)?
+        {
+            return Some(Ex::q(b.div(b2)?));
         }
         if o.is_zero() {
             return None;
@@ -300,7 +468,18 @@ impl Ex {
     /// The sign: −1, 0 or 1 (exactly).
     pub fn sign(self) -> Option<i32> {
         match self.norm() {
-            Ex::Pi(q) => Some(q.signum()),
+            Ex::Pi(q) | Ex::Exp { q, .. } => Some(q.signum()),
+            // Never 0: the sign of an enclosure away from it.
+            e @ Ex::Ln { .. } => {
+                let v = e.enclosure()?;
+                if v.lo() > 0.0 {
+                    Some(1)
+                } else if v.hi() < 0.0 {
+                    Some(-1)
+                } else {
+                    None
+                }
+            }
             Ex::Alg { a, b, c } => {
                 if b.is_zero() {
                     return Some(a.signum());
@@ -323,6 +502,18 @@ impl Ex {
     /// Whether lo ≤ self ≤ hi, exactly (`None` if it can't be told).
     #[allow(clippy::float_cmp)]
     pub fn within(self, lo: f64, hi: f64) -> Option<bool> {
+        if matches!(self.norm(), Ex::Exp { .. } | Ex::Ln { .. }) {
+            // q·eᵏ and a + b·ln c are never a double: inside or out, once
+            // the enclosure tells (none when it underflows or overflows).
+            let v = self.enclosure()?;
+            if lo <= v.lo() && v.hi() <= hi {
+                return Some(true);
+            }
+            if v.hi() < lo || hi < v.lo() {
+                return Some(false);
+            }
+            return None;
+        }
         let at_least = |v: f64| -> Option<bool> {
             if v == f64::NEG_INFINITY {
                 return Some(true);
@@ -379,7 +570,34 @@ impl Ex {
         match self.norm() {
             Ex::Alg { a, b, c } => a.to_f64() + b.to_f64() * (c as f64).sqrt(),
             Ex::Pi(q) => q.to_f64() * std::f64::consts::PI,
+            Ex::Exp { q, k } => q.to_f64() * k.to_f64().exp(),
+            Ex::Ln { a, b, c } => a.to_f64() + b.to_f64() * c.to_f64().ln(),
         }
+    }
+
+    /// Whether the value agrees with an enclosure `[lo, hi]` of it: inside
+    /// it, exactly; for q·eᵏ and a + b·ln c, whose own enclosures are a
+    /// few doubles wide, overlapping it (a cross-check of a value proven
+    /// otherwise, not a proof).
+    pub fn agrees(self, lo: f64, hi: f64) -> bool {
+        if self.within(lo, hi) == Some(true) {
+            return true;
+        }
+        self.enclosure()
+            .is_some_and(|v| lo <= v.hi() && v.lo() <= hi)
+    }
+
+    /// An enclosure of q·eᵏ or a + b·ln c (`None` for the other forms, or
+    /// one that overflows or reaches 0, which neither is: a double can't
+    /// stand for it).
+    fn enclosure(self) -> Option<Interval> {
+        let d = |q: Q| DecInterval::new(q.interval());
+        let v = match self.norm() {
+            Ex::Exp { q, k } => elem::mul(&d(q), &elem::exp(&d(k))),
+            Ex::Ln { a, b, c } => elem::add(&d(a), &elem::mul(&d(b), &elem::ln(&d(c)))),
+            _ => return None,
+        };
+        (!v.is_empty() && v.iv.is_bounded() && (v.lo() > 0.0 || v.hi() < 0.0)).then_some(v.iv)
     }
 
     /// The angle in turns of π (`self` = t·π in radians), in `unit`.
@@ -512,7 +730,10 @@ pub fn eval(
             None => None,
         },
         Expr::Const(Constant::Pi) => Some(Ex::Pi(Q::ONE)),
-        Expr::Const(Constant::E) => None,
+        Expr::Const(Constant::E) => Some(Ex::Exp {
+            q: Q::ONE,
+            k: Q::ONE,
+        }),
         Expr::X => Some(x),
         Expr::Y => None,
         Expr::Var(name) => Some(Ex::q(Q::from_f64(
@@ -521,10 +742,8 @@ pub fn eval(
         )?)),
         Expr::Neg(a) => ev(a)?.neg(),
         Expr::Degrees(a) => (unit == TrigUnit::Degrees).then(|| ev(a)).flatten(),
-        // eᵇ: exactly only e⁰ = 1.
-        Expr::Bin(BinOp::Pow, a, b) if matches!(**a, Expr::Const(Constant::E)) => {
-            ev(b)?.is_zero().then(|| Ex::int(1))
-        }
+        // eᵇ for b rational, or a + n·ln c.
+        Expr::Bin(BinOp::Pow, a, b) if matches!(**a, Expr::Const(Constant::E)) => exp_of(ev(b)?),
         Expr::Bin(op, a, b) => {
             let u = ev(a)?;
             match op {
@@ -564,7 +783,7 @@ pub fn eval(
                     let n = u32::try_from(n.as_int()?).ok()?;
                     (n >= 2).then(|| a0.nth_root(n)).flatten()
                 }
-                Func::Exp => a0.is_zero().then(|| Ex::int(1)),
+                Func::Exp => exp_of(a0),
                 // The hyperbolic functions at 0 (and acosh at 1).
                 Func::Sinh | Func::Tanh | Func::Asinh | Func::Atanh => {
                     a0.is_zero().then(|| Ex::int(0))
@@ -592,7 +811,7 @@ pub fn eval(
                         _ => None,
                     }
                 }
-                Func::Ln => (a0.rational()? == Q::ONE).then(|| Ex::int(0)),
+                Func::Ln => ln_of(a0),
                 Func::Log => {
                     // log₁₀ of an integer power of 10.
                     let r = a0.rational()?;
@@ -949,10 +1168,69 @@ fn int_text(n: i128) -> String {
     format!("{sign}{digits}")
 }
 
+/// q·eᵏ in the panel's style: e, 2e, e/2, e², √e, 1/e, 2/e, 1/(3e²),
+/// e^(2/3).
+fn exp_text(q: Q, k: Q) -> Option<String> {
+    let (n, d) = (q.numer(), q.denom());
+    if n.unsigned_abs() > 1_000_000 || d > 1_000_000 {
+        return None;
+    }
+    let ka = k.abs()?;
+    let pw = if ka == Q::ONE {
+        "e".to_string()
+    } else if ka.is_int() && ka.numer() <= 999 {
+        format!("e{}", superscript(i32::try_from(ka.numer()).ok()?))
+    } else if Some(ka) == Q::new(1, 2) {
+        "√e".to_string()
+    } else if ka.numer() <= 99 && ka.denom() <= 99 {
+        format!("e^({}/{})", ka.numer(), ka.denom())
+    } else {
+        return None;
+    };
+    let sign = if n < 0 { MINUS } else { "" };
+    let n = n.unsigned_abs();
+    Some(if k.signum() > 0 {
+        let num = if n == 1 { pw } else { format!("{n}{pw}") };
+        if d == 1 {
+            format!("{sign}{num}")
+        } else {
+            format!("{sign}{num}/{d}")
+        }
+    } else if d == 1 {
+        format!("{sign}{n}/{pw}")
+    } else {
+        format!("{sign}{n}/({d}{pw})")
+    })
+}
+
+/// a + b·ln c in the panel's style: ln(2), 2ln(3), ln(2)/2, 1 − ln(2).
+fn ln_text(a: Q, b: Q, c: Q) -> Option<String> {
+    let arg = rational_text(c)?;
+    let (n, d) = (b.numer(), b.denom());
+    if n.unsigned_abs() > 1_000_000 || d > 1_000_000 {
+        return None;
+    }
+    let m = n.unsigned_abs();
+    let coef = if m == 1 { String::new() } else { m.to_string() };
+    let term = if d == 1 {
+        format!("{coef}ln({arg})")
+    } else {
+        format!("{coef}ln({arg})/{d}")
+    };
+    let sign = if n < 0 { MINUS } else { "" };
+    if a.is_zero() {
+        return Some(format!("{sign}{term}"));
+    }
+    let op = if n < 0 { MINUS } else { "+" };
+    Some(format!("{} {op} {term}", rational_text(a)?))
+}
+
 impl Ex {
     /// The closed form, for the panel (`None` if it would be unwieldy).
     pub fn text(self) -> Option<String> {
         match self.norm() {
+            Ex::Exp { q, k } => exp_text(q, k),
+            Ex::Ln { a, b, c } => ln_text(a, b, c),
             Ex::Pi(q) => {
                 let (n, d) = (
                     i64::try_from(q.numer()).ok()?,
@@ -1063,6 +1341,52 @@ mod tests {
         assert_eq!(r2.within(1.415, 2.0), Some(false));
         assert_eq!(Ex::Pi(q(1, 2)).within(1.57, 1.571), Some(true));
         assert_eq!(Ex::Pi(q(1, 2)).within(1.5709, 2.0), Some(false));
+    }
+
+    #[test]
+    fn e_and_ln_forms() {
+        let e = Ex::Exp {
+            q: Q::ONE,
+            k: Q::ONE,
+        };
+        let inv_e = e.recip().unwrap();
+        assert_eq!(inv_e.text().as_deref(), Some("1/e"));
+        assert_eq!(e.mul(inv_e), Some(Ex::int(1)));
+        assert_eq!(e.mul(e).unwrap().text().as_deref(), Some("e²"));
+        assert_eq!(
+            e.mul(Ex::q(q(3, 2))).unwrap().text().as_deref(),
+            Some("3e/2")
+        );
+        assert_eq!(
+            inv_e.mul(Ex::q(q(-1, 2))).unwrap().text().as_deref(),
+            Some("−1/(2e)")
+        );
+        // ln(1/e) = −1; e^(ln 2) = 2; ln 4 − 2·ln 2 = 0; ln 6 − ln 2 = ln 3.
+        assert_eq!(ln_of(inv_e), Some(Ex::int(-1)));
+        let ln2 = ln_of(Ex::int(2)).unwrap();
+        assert_eq!(ln2.text().as_deref(), Some("ln(2)"));
+        assert_eq!(exp_of(ln2), Some(Ex::int(2)));
+        let ln4 = ln_of(Ex::int(4)).unwrap();
+        assert!(ln4.sub(ln2.mul(Ex::int(2)).unwrap()).unwrap().is_zero());
+        let ln3 = ln_of(Ex::int(6)).unwrap().sub(ln2).unwrap();
+        assert_eq!(ln3, ln_of(Ex::int(3)).unwrap());
+        assert_eq!(ln_of(Ex::q(q(1, 2))), ln2.neg());
+        assert_eq!(ln4.div(ln2), Some(Ex::int(2)));
+        // 2 − 2·ln 2 > 0; 1 − ln 3 < 0.
+        let v = Ex::int(2).sub(ln2.mul(Ex::int(2)).unwrap()).unwrap();
+        assert_eq!(v.text().as_deref(), Some("2 − 2ln(2)"));
+        assert_eq!(v.sign(), Some(1));
+        assert_eq!(Ex::int(1).sub(ln3).unwrap().sign(), Some(-1));
+        // Inside an enclosure, or not; never equal to another form.
+        assert_eq!(inv_e.within(0.36787, 0.36788), Some(true));
+        assert_eq!(inv_e.within(0.3679, 0.37), Some(false));
+        assert_eq!(e.sub(Ex::Pi(Q::ONE)), None);
+        assert_eq!(e.sub(e.mul(e).unwrap()), None);
+        // e⁻¹⁰⁰⁰ is no double: never inside an enclosure, however near 0.
+        let tiny = Ex::int(1).exp_times(Q::int(-1000)).unwrap();
+        assert_eq!(tiny.within(0.0, 1e-300), None);
+        assert!(!tiny.agrees(0.0, 1e-300));
+        assert_eq!(tiny.sign(), Some(1));
     }
 
     #[test]
