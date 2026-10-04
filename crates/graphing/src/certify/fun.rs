@@ -134,7 +134,14 @@ impl<'a> Fun<'a> {
                     }
                     let mut s = self.settings()?;
                     s.limits.time = std::time::Duration::from_millis(15);
-                    symbolic_derivs(&self.eval, self.opts.trig_unit, Some(&s))
+                    // A typed decimal exponent as the exact fraction it is
+                    // (x^0.9 is x^(9/10) where x ≥ 0, the only x it is
+                    // evaluated at), so the derivative's exponents stay
+                    // exact; and every constant in the trees typed or an
+                    // integer (none computed in floating point).
+                    let e = exact_exponents(&self.eval, exact);
+                    let d = symbolic_derivs(&e, self.opts.trig_unit, Some(&s))?;
+                    d.iter().all(|t| sound_constants(t, exact)).then_some(d)
                 })
             })
             .as_ref()
@@ -265,6 +272,45 @@ pub fn rational_numerators(e: &Expr, lits: &crate::simplify::ExactLiterals) -> O
     ])
 }
 
+/// `e` with each constant exponent that is a typed decimal (`x^0.9`)
+/// written as the exact fraction it is (`x^(9/10)`). The two agree wherever
+/// the decimal power is defined (base ≥ 0, or an integer exponent).
+fn exact_exponents(e: &Expr, exact: &crate::simplify::ExactLiterals) -> Expr {
+    e.map(&|n| match n {
+        Expr::Bin(BinOp::Pow, a, b) if !b.contains_x() && crate::compile::syntactic_rational(b).is_none() => {
+            let v = match &**b {
+                Expr::Num(v) => *v,
+                Expr::Neg(inner) => match &**inner {
+                    Expr::Num(v) => -*v,
+                    _ => return None,
+                },
+                _ => return None,
+            };
+            let q = exact.exact(v)?;
+            Some(Expr::bin(
+                BinOp::Pow,
+                exact_exponents(a, exact),
+                crate::simplify::rational::q_expr(q),
+            ))
+        }
+        _ => None,
+    })
+}
+
+/// Every constant of `e` is an integer or a typed literal (enclosed as the
+/// decimal typed), never a value computed in floating point.
+fn sound_constants(e: &Expr, exact: &crate::simplify::ExactLiterals) -> bool {
+    let mut ok = true;
+    e.visit(&mut |n| {
+        if let Expr::Num(v) = n
+            && exact.exact(*v).is_none()
+        {
+            ok = false;
+        }
+    });
+    ok
+}
+
 /// The node budget of a symbolic derivative.
 const DIFF_NODES: usize = 4096;
 
@@ -325,7 +371,54 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
                 _ => out.push(e.clone()),
             },
             Expr::Call(Func::Root, args) => go(&args[0], out),
+            // a·c ± b·c = c·(a ± b): the shared factors, then the rest.
+            Expr::Bin(op @ (BinOp::Add | BinOp::Sub), a, b) => {
+                let (sa, fa) = product(a);
+                let (sb, fb) = product(b);
+                let common: Vec<Expr> = fa
+                    .iter()
+                    .filter(|f| f.contains_x() && fb.contains(f))
+                    .cloned()
+                    .collect();
+                if common.is_empty() {
+                    out.push(e.clone());
+                    return;
+                }
+                let rest = |fs: &[Expr], neg: bool| -> Expr {
+                    let mut left: Vec<Expr> = fs.to_vec();
+                    for c in &common {
+                        if let Some(i) = left.iter().position(|f| f == c) {
+                            left.remove(i);
+                        }
+                    }
+                    let p = left
+                        .into_iter()
+                        .reduce(|x, y| Expr::bin(BinOp::Mul, x, y))
+                        .unwrap_or(Expr::Num(1.0));
+                    if neg { Expr::Neg(Box::new(p)) } else { p }
+                };
+                for c in &common {
+                    go(c, out);
+                }
+                out.push(Expr::bin(*op, rest(&fa, sa), rest(&fb, sb)));
+            }
             _ => out.push(e.clone()),
+        }
+    }
+    /// e = ±Π factors (negations pulled out): (negative, factors).
+    fn product(e: &Expr) -> (bool, Vec<Expr>) {
+        match e {
+            Expr::Neg(a) => {
+                let (s, f) = product(a);
+                (!s, f)
+            }
+            Expr::Bin(BinOp::Mul, a, b) => {
+                let (sa, mut fa) = product(a);
+                let (sb, fb) = product(b);
+                fa.extend(fb);
+                (sa != sb, fa)
+            }
+            _ => (false, vec![e.clone()]),
         }
     }
     go(e, &mut out);

@@ -30,6 +30,7 @@ use crate::interval::{Dec, DecInterval, Interval, Series};
 
 /// Boxes within this of 0 are not split (see `step`).
 const NEAR: f64 = 1e-300;
+const NEAR_END: f64 = 1e-150;
 
 /// The most crossings a cover lists before leaving the rest undecided.
 pub const MAX_FEATURES: usize = 64;
@@ -63,6 +64,9 @@ pub enum Leaf {
         band: usize,
         mono: Option<usize>,
         chain: usize,
+        /// Decided from h's zero factors (see `by_factors`), not its
+        /// enclosure.
+        factors: bool,
         cont: bool,
     },
     /// h is continuous and strictly monotone on `[a, b]` (rising or not)
@@ -340,7 +344,10 @@ fn step(
     // overflow) rarely helps.
     // So too a box within 10⁻³⁰⁰ of 0 (subnormal x, where f′ of 1/x or
     // ln x overflows).
-    let near0 = a < b && ((a >= 0.0 && b <= NEAR) || (a >= -NEAR && b <= 0.0));
+    // (A box from there up to 10⁻¹⁵⁰ too: splitting it would only approach
+    // 10⁻³⁰⁰ ever more finely.)
+    let near0 = a < b
+        && ((a >= 0.0 && a <= NEAR && b <= NEAR_END) || (b <= 0.0 && b >= -NEAR && a >= -NEAR_END));
     let far = a >= REACH || b <= -REACH || near0;
     let split_or_flag = |why: &'static str| -> Result<Step, Stop> {
         if far {
@@ -388,6 +395,7 @@ fn step(
                 band: i,
                 mono: None,
                 chain: 0,
+                factors: false,
                 cont,
             }]));
         }
@@ -409,6 +417,22 @@ fn step(
         return split_with_points(fun, t, cs, a, b, far, &split_or_flag);
     };
     let c = cs[j];
+    // Factor by factor (h's zeros are among its factors'): h continuous
+    // with no factor reaching 0 keeps one sign, or with each that does
+    // exactly 0 at an end and strictly monotone, is 0 only there.
+    if k == 0 && c == 0.0 && cs.len() == 1 && cont {
+        let fs = super::fun::zero_factors(t.expr);
+        if fs.len() != 1 || fs[0] != *t.expr {
+            let ends: Vec<f64> = exacts
+                .iter()
+                .filter(|e| e.1 == j && finite && (e.0 == a || e.0 == b))
+                .map(|e| e.0)
+                .collect();
+            if let Some(leaf) = by_factors(fun, &fs, a, b, &ends, t)? {
+                return Ok(Step::Leaves(vec![leaf]));
+            }
+        }
+    }
     // A crossing of cⱼ: unique when h is continuous and strictly monotone
     // on the box.
     let d = kth(&s, k + 1);
@@ -453,6 +477,7 @@ fn step(
                         band: band_of(sa),
                         mono: Some(j),
                         chain: 0,
+                        factors: false,
                         cont: true,
                     }]));
                 }
@@ -478,6 +503,75 @@ fn step(
         }
     }
     split_with_points(fun, t, cs, a, b, far, &split_or_flag)
+}
+
+/// h (continuous on `[a, b]`) from its zero factors `fs`: each away from 0
+/// on the box, or exactly 0 at one end `p` of `ends` and strictly
+/// monotone there. Then h ≠ 0 on the box (but at p), of the sign it has at
+/// a point inside: a band, or a touch at p.
+fn by_factors(
+    fun: &Fun<'_>,
+    fs: &[Expr],
+    a: f64,
+    b: f64,
+    ends: &[f64],
+    t: &Target<'_>,
+) -> Result<Option<Leaf>, Stop> {
+    let iv = Interval::new(a, b);
+    let mut at: Option<f64> = None;
+    for h in fs {
+        let s = fun.ser_of(h, iv, 1)?;
+        if !s[0].is_empty() && s[0].ne0() {
+            continue;
+        }
+        if !(usable(&s, 1) && s[1].ne0()) {
+            return Ok(None);
+        }
+        let mut hit = None;
+        for &p in ends {
+            let v = fun.ser_of(h, Interval::point(p), 0)?[0];
+            if v.lo() == 0.0 && v.hi() == 0.0 {
+                hit = Some(p);
+            }
+        }
+        match (hit, at) {
+            (Some(p), None) => at = Some(p),
+            (Some(p), Some(q)) if p == q => {}
+            _ => return Ok(None),
+        }
+    }
+    // The sign, at a point of the box other than the zero.
+    let q = match (a.is_finite(), b.is_finite(), at) {
+        (true, true, Some(p)) => if p == a { b } else { a },
+        (true, true, None) => a / 2.0 + b / 2.0,
+        (true, false, _) => a.abs().max(1.0) * 2.0 + a,
+        (false, true, _) => b - b.abs().max(1.0) * 2.0,
+        (false, false, _) => 0.0,
+    };
+    let v = fun.ser_of(t.expr, Interval::point(q), 0)?[0];
+    if v.is_empty() || v.dec < Dec::Def || !v.ne0() {
+        return Ok(None);
+    }
+    let above = v.gt0();
+    Ok(Some(match at {
+        Some(p) => Leaf::Touch {
+            a,
+            b,
+            p,
+            j: 0,
+            order: 0,
+            above,
+        },
+        None => Leaf::Band {
+            a,
+            b,
+            band: usize::from(above),
+            mono: None,
+            chain: 0,
+            factors: true,
+            cont: true,
+        },
+    }))
 }
 
 /// The derivative orders a tail's sign chain looks up to.
@@ -524,6 +618,7 @@ pub fn tail_chain(fun: &Fun<'_>, t: &Target<'_>, cs: &[f64], a: f64, b: f64) -> 
             band: if above { cs.len() } else { 0 },
             mono: None,
             chain: n,
+            factors: false,
             cont: true,
         }));
     }
@@ -722,6 +817,18 @@ pub fn claims(cover: &Cover, of: &Subject, cs: &[f64]) -> Vec<Claim> {
     let mut out = Vec::new();
     for l in &cover.leaves {
         match *l {
+            Leaf::Band {
+                a,
+                b,
+                band,
+                factors: true,
+                ..
+            } => out.push(Claim::Factors {
+                x: XBox::new(a, b),
+                of: of.clone(),
+                c: R(cs[0]),
+                above: band > 0,
+            }),
             Leaf::Band {
                 a,
                 b,
