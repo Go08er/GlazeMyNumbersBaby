@@ -277,6 +277,46 @@ impl<'a> Fun<'a> {
             .or_else(|| self.derivs_kinked.get().and_then(|d| d.as_ref()))
     }
 
+    /// Where f′ or f″ is singular though f is continuous: the bases u
+    /// (varying with x) of f's fractional powers u^r, √u, ∛u, with r: at
+    /// u = 0, f′ is unbounded for r < 1 (x^(1/3), x^(2/3)), f″ for r < 2
+    /// (x^(4/3)). Each base once, with its smallest r.
+    pub fn singular_args(&self) -> Vec<(Expr, f64)> {
+        let mut args: Vec<(Expr, f64)> = Vec::new();
+        let exponent = |b: &Expr| -> Option<f64> {
+            if b.contains_x() {
+                return None;
+            }
+            if let Some((p, q)) = crate::compile::syntactic_rational(b) {
+                return (q != 1).then(|| p as f64 / q as f64);
+            }
+            let v = crate::simplify::period::exact_constant(b, self.exact?)?;
+            (v.k == 0 && !v.q.is_int()).then(|| v.q.to_f64())
+        };
+        for e in [&self.expr, &self.eval] {
+            e.visit(&mut |n| {
+                let (u, r) = match n {
+                    Expr::Bin(BinOp::Pow, u, b) if u.contains_x() => match exponent(b) {
+                        Some(r) => (&**u, r),
+                        None => return,
+                    },
+                    Expr::Call(Func::Sqrt, a) if a[0].contains_x() => (&a[0], 0.5),
+                    Expr::Call(Func::Cbrt, a) if a[0].contains_x() => (&a[0], 1.0 / 3.0),
+                    _ => return,
+                };
+                if r.is_nan() || r >= 2.0 {
+                    return;
+                }
+                let u = canonical(u);
+                match args.iter_mut().find(|(v, _)| *v == u) {
+                    Some(a) => a.1 = a.1.min(r),
+                    None => args.push((u, r)),
+                }
+            });
+        }
+        args
+    }
+
     /// Where f's kinks are: the arguments u of its |u| (and a − b of its
     /// min(a, b), max(a, b)) that vary with x, canonical, each once. A kink
     /// is where one is 0.
