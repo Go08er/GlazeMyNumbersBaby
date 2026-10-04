@@ -854,6 +854,12 @@ impl GraphPage {
             self.plot_ms = ms;
             self.plot_weight = self.pending_weight;
             self.plots = plots;
+            // A heavy plot's scratch (and the plots it replaced, just
+            // freed) stays in the allocator's per-thread arenas: hand it
+            // back, off this thread (it takes ~15 ms).
+            if ms >= INLINE_PLOT_MS {
+                release_free_memory();
+            }
         }
         if self.again {
             self.again = false;
@@ -1679,6 +1685,20 @@ impl GraphPage {
                 );
             }
         }
+    }
+}
+
+/// Returns the heap's free memory to the system (PREREVIEW_D: 14 ×
+/// `sin(x*y)<0` left idle RSS at 135 MB, 123 of it free arena memory).
+fn release_free_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        let _ = std::thread::Builder::new()
+            .name("trim".into())
+            // SAFETY: malloc_trim only returns free memory to the system.
+            .spawn(|| unsafe {
+                libc::malloc_trim(0);
+            });
     }
 }
 
