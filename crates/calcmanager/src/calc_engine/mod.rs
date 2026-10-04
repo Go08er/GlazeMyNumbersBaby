@@ -386,6 +386,12 @@ impl CalcEngine {
         self.decimal_separator
     }
 
+    /// Extension: reports the running expression to the display again (see
+    /// `CalculatorManager::end_deferred_display`).
+    pub(crate) fn refresh_expression_display(&mut self) {
+        self.history_collector.refresh_expression_display();
+    }
+
     pub fn get_history_collector_commands_snapshot(&self) -> Vec<ExpressionCommand> {
         let mut commands = self.history_collector.get_commands();
         if !self.history_collector.f_opnd_added_to_history() && self.b_record {

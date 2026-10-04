@@ -66,6 +66,7 @@ pub(crate) fn addnum_self(pa: &mut Number, radix: u32) -> CalcResult<()> {
 fn addnum_core(a: &Number, b: &Number, bsign: i32, radix: u32) -> CalcResult<Number> {
     let a_cdigit = a.cdigit();
     let b_cdigit = b.cdigit();
+    super::charge(a.mant.len() + b.mant.len());
 
     // Calculate the overlap of the numbers after alignment, this includes
     // necessary padding 0's
@@ -229,6 +230,7 @@ fn mulnum_core(a: &Number, b: &Number, radix: u32) -> CalcResult<Number> {
     let sign = a.sign.wrapping_mul(b.sign);
     let exp = a.exp.wrapping_add(b.exp);
     let radix64 = radix as u64;
+    super::charge(a.mant.len() * b.mant.len());
 
     let mut icdigit = 0usize; // Index of digit being calculated in final result.
     for (ia, &da) in a.mant.iter().enumerate() {
@@ -371,6 +373,7 @@ fn divnum_core(a: &Number, b: &Number, radix: u32, precision: i32) -> CalcResult
     let mut cdigits: i32 = 0;
     while cdigits < thismax && !zernum(&rem) {
         cdigits += 1;
+        super::charge(rem.mant.len() * numbers.len());
         let mut digit = radix as i32 - 1;
         let mut multiple = 0usize;
         for k in (0..numbers.len()).rev() {

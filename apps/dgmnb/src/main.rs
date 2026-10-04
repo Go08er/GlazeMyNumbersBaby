@@ -57,7 +57,11 @@ fn main() {
         let proxy = proxy.clone();
         let _ = std::thread::Builder::new()
             .name("portal".into())
-            .stack_size(64 * 1024)
+            // Decoding the deepest message the bus may send (64 nested
+            // containers) and dropping it takes 22 KiB in the lean build,
+            // a third of 64 KiB before TLS and the rest of the thread; the
+            // pages are only touched when used.
+            .stack_size(128 * 1024)
             .spawn(move || {
                 let mut state = desktop;
                 let mut pause = Duration::from_secs(2);

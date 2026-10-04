@@ -27,6 +27,10 @@ static OUTFIT: &[u8] = include_bytes!("../assets/fonts/Outfit-Variable.ttf");
 /// the "Vulkan acceleration" setting doesn't decide the renderer).
 pub static RENDERER_FROM_ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
+/// Whether GMNB set GSK_RENDERER for itself (until the window has its
+/// renderer).
+static RENDERER_SET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn main() -> glib::ExitCode {
     launch::mark("main");
     // SAFETY: first thing in main, before GTK or any other thread starts.
@@ -46,6 +50,7 @@ fn main() -> glib::ExitCode {
     if !from_env && !settings::wants_vulkan() {
         // SAFETY: first thing in main, before GTK or any other thread starts.
         unsafe { std::env::set_var("GSK_RENDERER", "cairo") };
+        RENDERER_SET.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     // Initialise libadwaita before the application starts up. AdwApplication
     // would do it after GtkApplication's startup, which has already loaded
@@ -119,6 +124,18 @@ fn activate(app: &adw::Application) {
     launch::exit_after_first_frame(&win.widget());
     win.present();
     launch::mark("presented");
+    // GTK reads GSK_RENDERER once, when it makes its first renderer: the
+    // window's, realised by present(). What GMNB set for itself must not
+    // reach the browser or anything else it starts.
+    if win.widget().renderer().is_some()
+        && RENDERER_SET.swap(false, std::sync::atomic::Ordering::Relaxed)
+    {
+        // SAFETY: GTK has read the variable, and nothing else reads it.
+        // GLib's threads may read other variables meanwhile; glibc's
+        // unsetenv takes the environment lock and frees nothing they could
+        // be reading.
+        unsafe { std::env::remove_var("GSK_RENDERER") };
+    }
     if let Some(ms) = std::env::var("GMNB_AUTOCLOSE_MS")
         .ok()
         .and_then(|v| v.parse().ok())

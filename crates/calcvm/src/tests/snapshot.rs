@@ -442,3 +442,425 @@ fn errored_scientific_engine_angle_mode_is_reset() {
     }
     assert_eq!(calculator.display_value(), "1");
 }
+
+// ---- Extension: restore cost and bounds
+//
+// A restore replays the saved commands with the engine's display updates
+// held back (one update at the end instead of one per command, each of which
+// copied the whole expression), re-enters at most 100 memory slots that pass
+// paste validation, and rejects command lists, displays and operators that
+// the mode cannot have produced.
+
+fn observed(vm: &CalculatorViewModel) -> String {
+    format!(
+        "{:?} display {:?} expression {:?} error {} parens {} {:?} fe {} {:?} {:?} {:?}\n\
+         memory {:?}\nhistory {:?}",
+        vm.mode(),
+        vm.display_value(),
+        vm.expression(),
+        vm.is_error(),
+        vm.open_parens(),
+        vm.angle_unit(),
+        vm.is_fe(),
+        vm.radix(),
+        vm.word_size(),
+        vm.shift_mode(),
+        vm.memory(),
+        vm.history(),
+    )
+}
+
+fn press_all(vm: &mut CalculatorViewModel, buttons: &[Button]) {
+    for b in buttons {
+        vm.press(*b);
+    }
+}
+
+fn snapshot_json(mode: i64, display_commands: Value, x: Value) -> String {
+    json!({
+        "m": mode,
+        "s": { "m": { "h": null }, "p": { "d": "0", "e": false }, "e": null, "c": display_commands },
+        "x": x,
+    })
+    .to_string()
+}
+
+fn operand(digits: &[i32]) -> Value {
+    json!({ "$t": 2, "n": false, "d": false, "s": false, "c": digits })
+}
+
+#[test]
+fn app_states_restore_as_they_were_saved() {
+    use Button::*;
+    // (mode, keys, whether the restored calculator saves the same state and
+    // continues the same way: a re-entered display value is an operand being
+    // typed, where the original showed a result)
+    let scripts: Vec<(CalcMode, Vec<Button>, bool)> = vec![
+        // A pending operator and an operand being typed; grouped, negative
+        // and long fractional memory slots.
+        (
+            CalcMode::Standard,
+            vec![
+                One, Two, Three, Four, Five, Six, Seven, Memory, Five, Negate, Memory, One, Divide,
+                Three, Equals, Memory, One, Two, Add, Three, Four, Multiply, Five,
+            ],
+            true,
+        ),
+        // An error.
+        (
+            CalcMode::Standard,
+            vec![Seven, Memory, One, Divide, Zero, Equals],
+            true,
+        ),
+        // A recalled value that the display commands do not describe.
+        (
+            CalcMode::Standard,
+            vec![Nine, Memory, Clear, Two, Add, MemoryRecall],
+            false,
+        ),
+        // Parentheses, powers, an exponent in memory, gradians.
+        (
+            CalcMode::Scientific,
+            vec![
+                Grads,
+                One,
+                Exp,
+                Three,
+                Zero,
+                Zero,
+                Memory,
+                OpenParenthesis,
+                Two,
+                Add,
+                Three,
+                CloseParenthesis,
+                XPowerY,
+                Two,
+                Add,
+                Five,
+                Sin,
+                Multiply,
+                OpenParenthesis,
+                Seven,
+            ],
+            true,
+        ),
+        (
+            CalcMode::Scientific,
+            vec![FToE, Two, Multiply, Pi, Equals, Memory, Add],
+            true,
+        ),
+        // Evaluated in Programmer mode, in hex.
+        (
+            CalcMode::Programmer,
+            vec![HexButton, F, F, Add, One, Equals, Memory],
+            false,
+        ),
+        // A padded binary display and a pending shift in a byte.
+        (
+            CalcMode::Programmer,
+            vec![Byte, BinButton, One, Zero, One, Memory, Lsh, One],
+            true,
+        ),
+        (
+            CalcMode::Programmer,
+            vec![Seven, RshL, Two, Equals, Memory, Not, Xor, Five],
+            true,
+        ),
+    ];
+    for (mode, script, exact) in scripts {
+        let mut original = new_vm();
+        original.set_mode(mode);
+        press_all(&mut original, &script);
+        let state = original.save_state();
+
+        let mut restored = new_vm();
+        restored.restore_state(&state);
+        assert_eq!(
+            observed(&restored),
+            observed(&original),
+            "{mode:?} {script:?}"
+        );
+        if !exact {
+            continue;
+        }
+        assert_eq!(restored.save_state(), state, "{mode:?} {script:?}");
+
+        for more in [
+            &[Add, Two, Equals][..],
+            &[Backspace, Seven, Equals],
+            &[MemoryRecall, Equals],
+        ] {
+            let mut a = new_vm();
+            a.set_mode(mode);
+            press_all(&mut a, &script);
+            press_all(&mut a, more);
+            let mut b = new_vm();
+            b.restore_state(&state);
+            press_all(&mut b, more);
+            assert_eq!(
+                observed(&b),
+                observed(&a),
+                "{mode:?} {script:?} then {more:?}"
+            );
+        }
+    }
+}
+
+/// A long calculation built from pastes (40 × a 100-term sum, about 12,000
+/// keys and 800 KB of state) restores as saved, without the per-command
+/// display updates that made it take seconds.
+#[test]
+fn a_long_pasted_calculation_restores_as_saved() {
+    let sum = vec!["1"; 100].join("+");
+    for mode in [CalcMode::Scientific, CalcMode::Programmer] {
+        let mut original = new_vm();
+        original.set_mode(mode);
+        for _ in 0..40 {
+            assert!(original.paste(&sum));
+        }
+        original.press(Button::Add);
+        let state = original.save_state();
+        assert!(state.len() > 700_000);
+
+        let start = std::time::Instant::now();
+        let mut restored = new_vm();
+        restored.restore_state(&state);
+        let elapsed = start.elapsed();
+        assert_eq!(observed(&restored), observed(&original), "{mode:?}");
+        assert_eq!(restored.display_value(), "3,961");
+        assert!(
+            elapsed < std::time::Duration::from_secs(20),
+            "{mode:?}: {elapsed:?}"
+        );
+
+        restored.press(Button::One);
+        restored.press(Button::Equals);
+        assert_eq!(restored.display_value(), "3,962");
+    }
+}
+
+#[test]
+fn hostile_memory_restores_quickly() {
+    for mode in [0, 1, 2] {
+        // One huge expression (upstream: never finishes), a thousand
+        // slots, and slots no paste would accept.
+        let mut memory = vec!["1+".repeat(50_000), "abc".into(), "1e+99999".into()];
+        memory.extend((0..1000).map(|i| (i + 1).to_string()));
+        let state = snapshot_json(mode, json!([]), json!({ "mem": memory }));
+
+        let start = std::time::Instant::now();
+        let mut vm = new_vm();
+        vm.restore_state(&state);
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "mode {mode}: {elapsed:?}"
+        );
+        let restored = vm.memory();
+        assert_eq!(restored.len(), 97, "mode {mode}: {restored:?}");
+        assert_eq!(restored[0], "1");
+        assert_eq!(restored[96], "97");
+        assert_eq!(vm.display_value(), "0");
+    }
+}
+
+#[test]
+fn over_long_snapshots_are_rejected() {
+    let mut vm = new_vm();
+    vm.press(Button::Four);
+    let before = vm.save_state();
+
+    // 16,385 keys of display commands.
+    let mut commands = vec![operand(&[131; 16_383])];
+    commands.push(json!({ "$t": 1, "c": 93 }));
+    vm.restore_state(&snapshot_json(1, Value::Array(commands), json!({})));
+    assert_eq!(vm.save_state(), before);
+
+    // An over-long display value.
+    let mut s: Value = serde_json::from_str(&snapshot_json(0, json!([]), json!({}))).unwrap();
+    s["s"]["p"]["d"] = json!("1".repeat(513));
+    vm.restore_state(&s.to_string());
+    assert_eq!(vm.save_state(), before);
+
+    // At the limit, cheap keys restore in tens of milliseconds (the bounds in
+    // these tests leave room for slow builders; the old replay took minutes).
+    let mut commands = vec![];
+    for _ in 0..(16_384 / 3) {
+        commands.push(operand(&[131]));
+        commands.push(json!({ "$t": 1, "c": 93 }));
+    }
+    let start = std::time::Instant::now();
+    vm.restore_state(&snapshot_json(1, Value::Array(commands), json!({})));
+    assert!(vm.expression().starts_with("1 + 1 + "));
+    assert!(start.elapsed() < std::time::Duration::from_secs(20));
+}
+
+/// Upstream accepts the Programmer-only operators in every mode; outside
+/// Programmer mode the integer guard is off and a right shift by 10^7 takes
+/// minutes (by 2^31 − 1, forever).
+#[test]
+fn programmer_operators_are_rejected_outside_programmer_mode() {
+    let shift = |op: i32| {
+        json!([
+            operand(&[131]),
+            { "$t": 1, "c": op },
+            operand(&[131, 130, 130, 130, 130, 130, 130, 130]),
+            { "$t": 1, "c": 93 },
+        ])
+    };
+    let mut vm = new_vm();
+    vm.press(Button::Four);
+    let before = vm.save_state();
+    let start = std::time::Instant::now();
+    for mode in [0, 1] {
+        for op in [86, 87, 88, 89, 90, 501, 502, 505] {
+            vm.restore_state(&snapshot_json(mode, shift(op), json!({})));
+            assert_eq!(vm.save_state(), before, "mode {mode} binary {op}");
+        }
+        for op in [99, 100, 101, 416, 417] {
+            let unary = json!([operand(&[131]), { "$t": 0, "c": [op] }]);
+            vm.restore_state(&snapshot_json(mode, unary, json!({})));
+            assert_eq!(vm.save_state(), before, "mode {mode} unary {op}");
+        }
+        // In a history item of either mode.
+        let item = json!({
+            "t": [{ "t": "1", "c": 0 }, { "t": " Rsh ", "c": 1 }, { "t": "1", "c": 2 }, { "t": "=", "c": -1 }],
+            "c": shift(505), "e": "1 Rsh 1 =", "r": "0",
+        });
+        for key in ["hs", "hc"] {
+            vm.restore_state(&snapshot_json(
+                mode,
+                json!([]),
+                json!({ key: [item.clone()] }),
+            ));
+            assert_eq!(vm.save_state(), before, "mode {mode} {key}");
+        }
+    }
+    // Log base y is a Scientific operator.
+    let logy = json!([operand(&[136, 134]), { "$t": 1, "c": 500 }, operand(&[132])]);
+    vm.restore_state(&snapshot_json(1, logy, json!({})));
+    assert_eq!(vm.expression(), "64 log base ");
+
+    // In Programmer mode the same shifts are valid and the word-size guard
+    // answers at once.
+    for op in [89, 90, 505] {
+        vm.restore_state(&snapshot_json(2, shift(op), json!({})));
+        assert_eq!(vm.mode(), CalcMode::Programmer);
+        assert!(vm.is_error(), "binary {op}");
+    }
+    assert!(start.elapsed() < std::time::Duration::from_secs(20));
+}
+
+/// `count` copies of `unit`, as display commands.
+fn chain(unit: &[Value], count: usize) -> Value {
+    Value::Array(
+        unit.iter()
+            .cloned()
+            .cycle()
+            .take(unit.len() * count)
+            .collect(),
+    )
+}
+
+/// Arithmetic `f` does on this thread, in `ratpack::work_done` units.
+fn work(f: impl FnOnce()) -> u64 {
+    let start = calcmanager::work_done();
+    f();
+    calcmanager::work_done() - start
+}
+
+/// A crafted "√7 + √7 + …" at the key limit replayed for half a minute
+/// (every √ costs milliseconds). The replay now stops at its budget: the
+/// pending expression is dropped, the displayed value, memory and history
+/// are kept, and the work done is bounded.
+#[test]
+fn a_costly_crafted_expression_is_dropped_within_the_budget() {
+    use crate::snapshot::{MAX_RESTORED_KEYS, REPLAY_WORK};
+    let sqrt7 = [
+        operand(&[137]),
+        json!({ "$t": 0, "c": [110] }),
+        json!({ "$t": 1, "c": 93 }),
+    ];
+    let units = MAX_RESTORED_KEYS / 4;
+    let item = json!({
+        "t": [{ "t": "1", "c": 0 }, { "t": " + ", "c": 1 }, { "t": "1", "c": 2 }, { "t": "=", "c": -1 }],
+        "c": [operand(&[131]), { "$t": 1, "c": 93 }, operand(&[131])], "e": "1 + 1 =", "r": "2",
+    });
+    let mut s: Value = serde_json::from_str(&snapshot_json(
+        1,
+        chain(&sqrt7, units),
+        json!({ "mem": ["5"], "hc": [item] }),
+    ))
+    .unwrap();
+    s["s"]["p"]["d"] = json!("42");
+
+    let mut vm = new_vm();
+    let done = work(|| vm.restore_state(&s.to_string()));
+    // Each √ and + is at most a few million units.
+    assert!(done < REPLAY_WORK + 20_000_000, "{done}");
+    assert_eq!(vm.mode(), CalcMode::Scientific);
+    assert_eq!(vm.display_value(), "42");
+    assert_eq!(vm.expression(), "");
+    assert_eq!(vm.memory(), ["5"]);
+    assert_eq!(vm.history().len(), 1);
+    vm.press(Button::Add);
+    vm.press(Button::One);
+    vm.press(Button::Equals);
+    assert_eq!(vm.display_value(), "43");
+
+    // A short one is restored whole, well within the budget.
+    let mut s: Value =
+        serde_json::from_str(&snapshot_json(1, chain(&sqrt7, 3), json!({}))).unwrap();
+    s["s"]["p"]["d"] = json!("2.645751311064591");
+    let mut vm = new_vm();
+    let done = work(|| vm.restore_state(&s.to_string()));
+    assert!(done < REPLAY_WORK / 10, "{done}");
+    assert_eq!(vm.expression(), "√(7) + √(7) + √(7) + ");
+}
+
+/// A crafted history item: clicking it replays within the budget too, and
+/// the calculation continues from its saved result.
+#[test]
+fn a_costly_crafted_history_item_is_replayed_within_the_budget() {
+    use crate::snapshot::REPLAY_WORK;
+    let fact = [
+        operand(&[130, 84, 135]),
+        json!({ "$t": 0, "c": [113] }),
+        json!({ "$t": 1, "c": 93 }),
+    ];
+    let item = json!({
+        "t": [{ "t": "x", "c": 0 }, { "t": "=", "c": -1 }],
+        "c": chain(&fact, 1000), "e": "x =", "r": "77",
+    });
+    let mut vm = new_vm();
+    vm.restore_state(&snapshot_json(1, json!([]), json!({ "hc": [item] })));
+    assert_eq!(vm.history().len(), 1);
+    // One 0.5! is about 47 million units.
+    let done = work(|| vm.history_recall(0));
+    assert!(done < REPLAY_WORK + 60_000_000, "{done}");
+    assert_eq!(vm.display_value(), "77");
+    vm.press(Button::Add);
+    vm.press(Button::One);
+    vm.press(Button::Equals);
+    assert_eq!(vm.display_value(), "78");
+}
+
+/// Memory slots near 10^-9999 cost millions of units each: the oldest that
+/// fit the memory budget are kept, the rest dropped, and the work bounded.
+#[test]
+fn costly_crafted_memory_is_restored_within_the_budget() {
+    use crate::snapshot::{MEMORY_WORK, VALUE_WORK};
+    let tiny = "9.9999999999999999999999999999999e-9999";
+    let mut memory = vec![tiny; 100];
+    memory[99] = "3"; // the oldest
+    let mut vm = new_vm();
+    let done = work(|| vm.restore_state(&snapshot_json(1, json!([]), json!({ "mem": memory }))));
+    // The budget, one slot past it, and showing the kept slots (formatting
+    // each costs about what entering it did).
+    assert!(done < 2 * MEMORY_WORK + VALUE_WORK, "{done}");
+    let kept = vm.memory();
+    assert!((2..100).contains(&kept.len()), "{kept:?}");
+    assert_eq!(kept.last().map(String::as_str), Some("3"));
+    assert_eq!(vm.display_value(), "0");
+}

@@ -8,7 +8,7 @@
 //! so each test calls [`setup`] first.
 
 use ratpack::rational_math::modulo;
-use ratpack::{CALC_E_INDEFINITE, Number, NumberFormat, Rational, change_constants};
+use ratpack::{CALC_E_DOMAIN, CALC_E_INDEFINITE, Number, NumberFormat, Rational, change_constants};
 
 fn setup() {
     change_constants(10, 128);
@@ -219,4 +219,29 @@ fn test_remainder_rational() {
     assert_str(&res, "0.71");
     res = r(-834345).rem(&pq(1, 103, 100)).unwrap();
     assert_str(&res, "-0.71");
+}
+
+/// Deviation: a shift toward zero by more than 200000 (right by a positive
+/// count, left by a negative one) is a domain error, as a shift away from
+/// zero by more than 100000 is, instead of computing 2^count (upstream takes
+/// minutes for counts of a few million and more). Smaller counts, including
+/// those just past 100000 that the C++ golden cases pin, are unchanged.
+#[test]
+fn test_shift_count_bounds() {
+    setup();
+    assert_rat_eq(&r(1024).shr(&r(3)).unwrap(), 128);
+    assert_rat_eq(&r(5).shl(&r(4)).unwrap(), 80);
+    assert_rat_eq(&r(1).shl(&r(100_000)).unwrap().shr(&r(100_000)).unwrap(), 1);
+    assert_rat_eq(&r(1).shr(&r(-3)).unwrap(), 8);
+    assert_rat_eq(&r(8).shl(&r(-3)).unwrap(), 1);
+    assert_rat_eq(&r(0).shr(&r(i32::MAX)).unwrap(), 0);
+    assert!(r(1).shr(&r(200_000)).is_ok());
+
+    let start = std::time::Instant::now();
+    for count in [200_001, 10_000_000, i32::MAX] {
+        assert_eq!(r(1).shr(&r(count)), Err(CALC_E_DOMAIN), "rsh {count}");
+        assert_eq!(r(1).shl(&r(-count)), Err(CALC_E_DOMAIN), "lsh -{count}");
+    }
+    assert_eq!(r(1).shl(&r(100_001)), Err(CALC_E_DOMAIN));
+    assert!(start.elapsed() < std::time::Duration::from_secs(10));
 }

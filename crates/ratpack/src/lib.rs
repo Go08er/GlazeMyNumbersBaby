@@ -30,6 +30,7 @@ mod cengine;
 mod ratpak;
 
 pub use cengine::rational_math;
+pub use ratpak::work_done;
 
 // ---------------------------------------------------------------------------
 // Errors (CalcErr.h)

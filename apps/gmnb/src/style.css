@@ -20,16 +20,38 @@ window.gmnb.wc-see-through button.wc-mem {
    layer of the backdrop's own colour, so it stays readable over any
    desktop (the keys' glass is drawn over it). */
 window.gmnb.wc-see-through headerbar,
-window.gmnb.wc-see-through calcdisplay,
-window.gmnb.wc-see-through .wc-glass-panel,
-window.gmnb.wc-see-through button.wc-key {
+window.gmnb.wc-see-through .wc-glass-panel {
   background-color: alpha(@wc_base, 0.55);
+}
+/* Keys and the display hold the text that must stay readable over a black
+   or a white desktop at the lowest opacity (3:1 for operator glyphs and the
+   expression line, more for the rest): a denser tint, and operator glyphs
+   halfway to the text colour. */
+window.gmnb.wc-see-through calcdisplay,
+window.gmnb.wc-see-through button.wc-key {
+  background-color: alpha(@wc_base, 0.7);
+}
+window.gmnb.wc-see-through button.wc-op {
+  color: mix(@wc_accent, @wc_fg, 0.5);
 }
 window.gmnb.wc-see-through calcdisplay {
   border-radius: 18px;
 }
+/* The memory row's states, restated here because the see-through tint
+   outranks the plain rules below; a disabled key gets no halo (it smeared
+   the faint text). */
 window.gmnb.wc-see-through button.wc-mem {
   background-color: alpha(@wc_base, 0.45);
+}
+window.gmnb.wc-see-through button.wc-mem:hover {
+  background-color: alpha(mix(@wc_base, @wc_fg, 0.12), 0.6);
+}
+window.gmnb.wc-see-through button.wc-mem:checked {
+  background-color: alpha(mix(@wc_base, @wc_accent, 0.2), 0.6);
+}
+window.gmnb.wc-see-through button.wc-mem:disabled,
+window.gmnb.wc-see-through button.wc-mem:disabled label {
+  text-shadow: none;
 }
 
 window.gmnb headerbar,

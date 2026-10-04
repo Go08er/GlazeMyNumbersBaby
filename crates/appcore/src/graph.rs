@@ -51,11 +51,18 @@ pub fn clamp_text(text: &str) -> &str {
 /// Saved equations from settings, made safe to replay: blank entries are
 /// dropped, text is clamped to the length limit (an over-long or malicious
 /// expression then shows as an equation error instead of being parsed in
-/// full), and at most [`MAX_EQUATIONS`] are kept.
+/// full), and at most [`MAX_EQUATIONS`] are kept. Each entry is read on its
+/// own and field by field, so a damaged one (a colour that is not a number)
+/// loses only that field, and an entry that is not an object only itself.
 pub fn restore(value: Option<serde_json::Value>) -> Vec<SavedEquation> {
-    let list: Vec<SavedEquation> = value
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default();
+    let list: Vec<SavedEquation> = match value {
+        Some(serde_json::Value::Array(items)) => items
+            .into_iter()
+            .filter(serde_json::Value::is_object)
+            .map(|item| crate::settings::from_value_lenient(item).0)
+            .collect(),
+        _ => Vec::new(),
+    };
     sanitize(list)
 }
 
@@ -106,6 +113,23 @@ mod tests {
         assert_eq!(eqs[0].text.chars().count(), MAX_EQUATION_CHARS);
         assert!(eqs.iter().all(|e| e.color < 1 << 16));
         assert!(restore(Some(serde_json::json!("garbage"))).is_empty());
+    }
+
+    #[test]
+    fn one_damaged_equation_does_not_drop_the_others() {
+        let eqs = restore(Some(serde_json::json!([
+            {"text": "x^2", "color": 2},
+            {"text": "sin(x)", "color": "red", "hidden": true},
+            "not an equation",
+            {"text": 5},
+            {"text": "x+1", "style": "dash"},
+        ])));
+        let texts: Vec<&str> = eqs.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, ["x^2", "sin(x)", "x+1"]);
+        assert_eq!(eqs[0].color, 2);
+        assert_eq!(eqs[1].color, 0);
+        assert!(eqs[1].hidden);
+        assert_eq!(eqs[2].style, "dash");
     }
 
     #[test]

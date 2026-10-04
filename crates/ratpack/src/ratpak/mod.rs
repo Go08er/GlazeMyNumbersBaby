@@ -271,6 +271,22 @@ pub(crate) struct Ctx {
 
 thread_local! {
     static CTX: RefCell<Ctx> = RefCell::new(Ctx::initial());
+    /// Extension: see [`work_done`].
+    static WORK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Extension: how much arithmetic ratpak has done on this thread, in
+/// digit operations (a digit times a digit, a digit added to a digit), so a
+/// caller can bound a computation by what it costs rather than by how long
+/// it takes. Only differences between two readings mean anything.
+pub fn work_done() -> u64 {
+    WORK.with(std::cell::Cell::get)
+}
+
+/// Counts `n` digit operations towards [`work_done`].
+#[inline]
+pub(crate) fn charge(n: usize) {
+    WORK.with(|w| w.set(w.get().wrapping_add(n as u64)));
 }
 
 /// Runs `f` with shared access to this thread's ratpak globals.
