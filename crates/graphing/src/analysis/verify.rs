@@ -2523,6 +2523,327 @@ pub fn check_singular_zeros(a: &Analysed, xs: &[f64], r: &mut Report) {
     }
 }
 
+/// Where a·x + b = j·q/2 + k·s for the affine argument `u` (q the half
+/// turn: π, 180 or 200; j quarter turns; s = q, or the whole turn 2q with
+/// `whole`), as a family of x placed to the last bit, with how far a
+/// placing by sampling may be off (the shift's rounding). `None` if u
+/// varies with x but isn't affine, `Some(None)` if it doesn't vary.
+pub(super) fn turn_family(
+    u: &Expr,
+    quarters: u8,
+    whole: bool,
+    opts: &CompileOptions<'_>,
+) -> Option<Option<(Family, f64)>> {
+    if !u.contains_x() {
+        return Some(None);
+    }
+    let num = |e: &Expr| Program::compile(e, opts).ok()?.as_constant();
+    let (a, b) = crate::simplify::linear_in(u, &|n| matches!(n, Expr::X))
+        .and_then(|(c, r)| Some((num(&c)?, num(&r)?)))?;
+    if !(a != 0.0 && a.is_finite() && b.is_finite()) {
+        return None;
+    }
+    // The half turn, as a double and what it leaves out.
+    let (q, q_lo) = match opts.trig_unit {
+        TrigUnit::Radians => (std::f64::consts::PI, 1.2246467991473532e-16),
+        TrigUnit::Degrees => (180.0, 0.0),
+        TrigUnit::Grads => (200.0, 0.0),
+    };
+    // (Multiples of q/2 and 2q are exact, as is their low part.)
+    let j = f64::from(quarters);
+    let (off, off_lo) = (j * q / 2.0, j * q_lo / 2.0);
+    let (s, s_lo) = if whole {
+        (2.0 * q, 2.0 * q_lo)
+    } else {
+        (q, q_lo)
+    };
+    // a·x0 = off − b − m·s for the nearest whole m, reduced with one
+    // rounding (−b − m·s is small, so its fma is exact to its own last bit)
+    // and π's low part: tan(x − 1000) has its pole at the double nearest
+    // π/2 + 1000 − 319π, not 10⁻¹³ off it.
+    let m = ((off - b) / s).round();
+    let rem = (-m).mul_add(s, -b) + off + (off_lo - m * s_lo);
+    let x0 = rem / a;
+    let tol = 1e-9 * x0.abs().max(1.0) + 16.0 * (b.abs() * f64::EPSILON) / a.abs();
+    Some(Some((
+        Family {
+            x: x0,
+            period: Some(s / a.abs()),
+        },
+        tol,
+    )))
+}
+
+/// Points of f's domain that no sampling can show it lacks: the zeros of a
+/// sine, cosine, tangent or cotangent factor of something f is undefined
+/// at the zeros of (a divisor, a logarithm's argument, a power's base
+/// under an exponent that isn't positive, the cosine under tan and sec, the
+/// sine under cot and csc), which in radians are no double. `fams`: those
+/// of an affine argument, as families (with how far a placing may be off).
+/// `hidden`: such a factor of an argument that isn't affine, touched
+/// rather than crossed (an even power, under |·| or a root), so that no
+/// sign change shows its zeros either.
+#[derive(Debug, Default)]
+pub(super) struct TrigSingular {
+    pub fams: Vec<(Family, f64)>,
+    pub hidden: bool,
+}
+
+pub(super) fn trig_singular(e: &Expr, opts: &CompileOptions<'_>) -> TrigSingular {
+    use crate::ast::{BinOp, Func};
+    type Const<'a> = &'a dyn Fn(&Expr) -> Option<f64>;
+    // The operands f is undefined at the zeros of.
+    fn operands(e: &Expr, c: Const, out: &mut Vec<Expr>) {
+        match e {
+            Expr::Bin(op, l, r) => {
+                match op {
+                    BinOp::Div => out.push((**r).clone()),
+                    BinOp::Pow if c(r).is_some_and(|p| p <= 0.0) => out.push((**l).clone()),
+                    _ => {}
+                }
+                operands(l, c, out);
+                operands(r, c, out);
+            }
+            Expr::Call(f, args) => {
+                match f {
+                    Func::Ln | Func::Log | Func::LogBase | Func::Coth | Func::Csch => {
+                        out.extend(args.iter().cloned())
+                    }
+                    Func::Mod => out.extend(args.get(1).cloned()),
+                    Func::Tan | Func::Sec => out.push(Expr::Call(Func::Cos, args.clone())),
+                    Func::Cot | Func::Csc => out.push(Expr::Call(Func::Sin, args.clone())),
+                    _ => {}
+                }
+                args.iter().for_each(|a| operands(a, c, out));
+            }
+            Expr::Neg(x) | Expr::Degrees(x) => operands(x, c, out),
+            _ => {}
+        }
+    }
+    // coef · g(u)ⁿ for g sin or cos (true), n 1 or 2.
+    fn sin_cos_power(e: &Expr, c: Const) -> Option<(f64, bool, Expr, u8)> {
+        match e {
+            Expr::Call(f @ (Func::Sin | Func::Cos), args)
+                if args.len() == 1 && args[0].contains_x() =>
+            {
+                Some((1.0, *f == Func::Cos, args[0].clone(), 1))
+            }
+            Expr::Bin(BinOp::Pow, l, r) if c(r) == Some(2.0) => {
+                let (k, cos, u, n) = sin_cos_power(l, c)?;
+                (n == 1).then_some((k * k, cos, u, 2))
+            }
+            Expr::Neg(x) => sin_cos_power(x, c).map(|(k, cos, u, n)| (-k, cos, u, n)),
+            Expr::Bin(BinOp::Mul, l, r) => match (c(l), c(r)) {
+                (Some(k), None) => sin_cos_power(r, c).map(|(j, cos, u, n)| (k * j, cos, u, n)),
+                (None, Some(k)) => sin_cos_power(l, c).map(|(j, cos, u, n)| (k * j, cos, u, n)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    // An operand's trig zeros: (quarter turns, whole-turn step, argument,
+    // touched): sin u at kπ, cos u at π/2 + kπ, …; 1 + cos u at π + 2kπ,
+    // 1 − sin² u at π/2 + kπ, …, where sin or cos reaches ±1 and the
+    // operand only touches 0.
+    fn factors(e: &Expr, c: Const, touched: bool, out: &mut Vec<(u8, bool, Expr, bool)>) {
+        match e {
+            Expr::Bin(BinOp::Mul, l, r) => {
+                factors(l, c, touched, out);
+                factors(r, c, touched, out);
+            }
+            // A quotient is 0 where its numerator is.
+            Expr::Bin(BinOp::Div, l, _) => factors(l, c, touched, out),
+            Expr::Bin(BinOp::Pow, l, r) => {
+                if let Some(p) = c(r).filter(|p| *p > 0.0 && p.is_finite()) {
+                    let odd = p.fract() == 0.0 && p % 2.0 != 0.0;
+                    factors(l, c, touched || !odd, out);
+                }
+            }
+            Expr::Bin(op @ (BinOp::Add | BinOp::Sub), l, r) => {
+                // k + coef·gⁿ = 0 where gⁿ = −k/coef.
+                let sign = if *op == BinOp::Sub { -1.0 } else { 1.0 };
+                let (k, term) = match (c(l), c(r)) {
+                    (Some(k), None) => (
+                        k,
+                        sin_cos_power(r, c).map(|(j, g, u, n)| (sign * j, g, u, n)),
+                    ),
+                    (None, Some(k)) => (sign * k, sin_cos_power(l, c)),
+                    _ => return,
+                };
+                let Some((coef, cos, u, n)) = term else {
+                    return;
+                };
+                if coef == 0.0 {
+                    return;
+                }
+                let at = -k / coef;
+                let zero = match (n, at, cos) {
+                    (1, 1.0, true) => Some((0, true)),
+                    (1, -1.0, true) => Some((2, true)),
+                    (1, 1.0, false) => Some((1, true)),
+                    (1, -1.0, false) => Some((3, true)),
+                    (2, 1.0, true) => Some((0, false)),
+                    (2, 1.0, false) => Some((1, false)),
+                    // (Elsewhere g crosses its level: a sign change shows it.)
+                    _ => None,
+                };
+                if let Some((j, whole)) = zero {
+                    out.push((j, whole, u, true));
+                }
+            }
+            Expr::Neg(x) => factors(x, c, touched, out),
+            Expr::Call(Func::Abs | Func::Sqrt, args) if args.len() == 1 => {
+                factors(&args[0], c, true, out)
+            }
+            Expr::Call(Func::Cbrt, args) if args.len() == 1 => factors(&args[0], c, touched, out),
+            Expr::Call(f @ (Func::Sin | Func::Cos | Func::Tan | Func::Cot), args)
+                if args.len() == 1 && args[0].contains_x() =>
+            {
+                let j = if matches!(f, Func::Cos | Func::Cot) {
+                    1
+                } else {
+                    0
+                };
+                out.push((j, false, args[0].clone(), touched));
+            }
+            _ => {}
+        }
+    }
+    let constant = |e: &Expr| -> Option<f64> {
+        if e.contains_x() {
+            return None;
+        }
+        Program::compile(e, opts).ok()?.as_constant()
+    };
+    let mut ops = Vec::new();
+    operands(e, &constant, &mut ops);
+    let mut out = TrigSingular::default();
+    for o in ops.iter().filter(|o| o.contains_x()) {
+        let mut fs = Vec::new();
+        factors(o, &constant, false, &mut fs);
+        for (quarters, whole, u, touched) in fs {
+            match turn_family(&u, quarters, whole, opts) {
+                Some(Some(f)) => {
+                    if !out
+                        .fams
+                        .iter()
+                        .any(|(g, _)| g.x == f.0.x && g.period == f.0.period)
+                    {
+                        out.fams.push(f);
+                    }
+                }
+                Some(None) => {}
+                None => out.hidden |= touched,
+            }
+        }
+    }
+    out
+}
+
+/// Where f is undefined at points no double is and no sign change shows
+/// (the zeros of cos x under cos² x / cos² x, at π/2 + kπ): the claimed
+/// domain must leave them out, as an excluded point, a pole or a gap.
+/// Those of an argument that isn't affine can't be placed: a definite
+/// domain is then unverified.
+pub fn check_trig_singular(a: &Analysed, r: &mut Report) {
+    let d = a.d();
+    if a.unknown(flags::DOMAIN) || d.domain.is_empty() {
+        return;
+    }
+    let opts = CompileOptions {
+        trig_unit: a.unit,
+        ..CompileOptions::default()
+    };
+    let ts = trig_singular(&a.ast, &opts);
+    if ts.hidden {
+        r.fail(
+            "domain-hides-singular-points",
+            flags::DOMAIN,
+            &a.expr,
+            "an operand touches 0, at points no double is, through a trig factor whose argument isn't affine".into(),
+        );
+        return;
+    }
+    if ts.fams.is_empty() {
+        return;
+    }
+    let period = a.period();
+    let marks: Vec<Family> = d
+        .excluded
+        .iter()
+        .chain(&d.vertical_asymptotes)
+        .copied()
+        .chain(
+            d.domain
+                .iter()
+                .flat_map(|iv| [iv.lo.value, iv.hi.value])
+                .filter(|v| v.is_finite())
+                .map(|v| Family { x: v, period }),
+        )
+        .collect();
+    let whole = d
+        .domain
+        .iter()
+        .any(|iv| iv.lo.value == f64::NEG_INFINITY && iv.hi.value == f64::INFINITY);
+    let w = d
+        .domain
+        .iter()
+        .map(|iv| iv.lo.value)
+        .filter(|v| v.is_finite())
+        .fold(f64::INFINITY, f64::min);
+    let w = if w.is_finite() { w } else { 0.0 };
+    let claimed = |x: f64| {
+        let t = match period {
+            Some(p) => w + (x - w).rem_euclid(p),
+            None => x,
+        };
+        (whole || set_has(&d.domain, t)) && !d.excluded.iter().any(|f| in_family(f, x))
+    };
+    // How far either side of c f is undefined at every double (1 + cos x
+    // rounds to exactly 0 within 1.5·10⁻⁸ of π): a claim may place the
+    // point anywhere in that band.
+    let band = |c: f64| {
+        let undefined = |x: f64| !a.eval(x).is_finite();
+        let limit = 1e-6 * c.abs().max(1.0);
+        let mut h = 2.0 * ulp(c);
+        if !(undefined(c + h) && undefined(c - h)) {
+            return 0.0;
+        }
+        while h < limit && undefined(c + 2.0 * h) && undefined(c - 2.0 * h) {
+            h *= 2.0;
+        }
+        h
+    };
+    for (fam, tol) in &ts.fams {
+        let q = fam.period.unwrap_or(0.0);
+        for k in -3..=3 {
+            let c = fam.x + k as f64 * q;
+            if !c.is_finite() || c.abs() > 1e15 {
+                continue;
+            }
+            let w = tol + 64.0 * ulp(c) + 2.0 * band(c);
+            let shown = marks
+                .iter()
+                .any(|m| close_to(m, c, 64) || (nearest(m, c) - c).abs() <= w);
+            if shown || !claimed(c) {
+                continue;
+            }
+            r.fail(
+                "domain-includes-singular-family",
+                flags::DOMAIN,
+                &a.expr,
+                format!(
+                    "undefined at {c:?} (family {:?} + k·{q:?}), inside domain {} excl {}",
+                    fam.x,
+                    fmt_set(&d.domain),
+                    fmt_fams(&d.excluded)
+                ),
+            );
+            return;
+        }
+    }
+}
+
 /// The operands of `e` that make it undefined where they are 0 (at `at`,
 /// for a power's exponent): divisors, logarithms' arguments, a power's base
 /// under an exponent that isn't positive, the cosine under tan and sec and
@@ -2575,6 +2896,19 @@ fn singular_operands(a: &Analysed, at: f64, e: &Expr, out: &mut Vec<Expr>) {
 /// defined, so it shows nothing (1/(1 + (x − c)²/10⁻¹²) is defined at c).
 pub fn exclusion_supported(a: &Analysed, c: f64) -> bool {
     if (-2..=2).any(|k| a.defined(nudge(c, k)) != Some(true)) || blows_up(a, c) {
+        return true;
+    }
+    // Analytically: a zero of a trig factor of such an operand (cos² x
+    // under cos² x / cos² x touches 0 at π/2, a point no double is).
+    let opts = CompileOptions {
+        trig_unit: a.unit,
+        ..CompileOptions::default()
+    };
+    if trig_singular(&a.ast, &opts)
+        .fams
+        .iter()
+        .any(|(f, tol)| close_to(f, c, 64) || (nearest(f, c) - c).abs() <= tol + 64.0 * ulp(c))
+    {
         return true;
     }
     let mut ops = Vec::new();
@@ -3658,6 +3992,7 @@ fn steps() -> [(u32, Step); 13] {
         (flags::DOMAIN, |a, xs, ys, _, r| {
             check_domain(a, xs, ys, r);
             check_singular_zeros(a, xs, r);
+            check_trig_singular(a, r);
         }),
         (flags::MONOTONE_INTERVALS, |a, xs, ys, _, r| {
             check_monotonicity(a, xs, ys, r)
@@ -4781,10 +5116,18 @@ fn gate_with_spent(
         if drop & flags::DOMAIN != 0 || a.unknown(flags::DOMAIN) {
             let k = &a.k;
             let mut deps = flags::VERTICAL_ASYMPTOTES;
+            // A function constant where defined: its period and its
+            // constant pieces are its holes' (0·sin x / sin x's claimed
+            // kπ/12 with the domain it came with).
+            if matches!(k.data.range.as_slice(), [iv] if iv.lo.value == iv.hi.value) {
+                deps |= flags::PERIODICITY | flags::MONOTONE_INTERVALS;
+            }
             for (flag, none) in [
                 (
                     flags::ZEROS,
-                    k.x_intercept.is_empty() && k.data.zeros.is_empty(),
+                    // "None", or every x of the domain ("x ∈ …").
+                    k.data.zeros.is_empty()
+                        && (k.x_intercept.is_empty() || k.x_intercept.starts_with("x ∈")),
                 ),
                 (flags::MINIMA, k.data.minima.is_empty()),
                 (flags::MAXIMA, k.data.maxima.is_empty()),
