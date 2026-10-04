@@ -270,7 +270,7 @@ pub fn format_decimal(v: f64) -> String {
 }
 
 /// [`format_decimal`] with `sig` significant digits.
-fn format_decimal_digits(v: f64, sig: i32) -> String {
+pub(crate) fn format_decimal_digits(v: f64, sig: i32) -> String {
     if v.is_nan() {
         return "NaN".into();
     }

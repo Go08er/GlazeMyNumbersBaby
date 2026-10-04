@@ -26,8 +26,9 @@ const CASES: &str = include_str!("fixtures/certify/cases.tsv");
 const ENGINE: &str = include_str!("fixtures/certify/engine_grades.tsv");
 
 /// `truth.txt`, one line per id. Keys: D domain, XI x-intercepts, YI
-/// y-intercept, P parity, T period, MIN/MAX extrema (interior turns; an
-/// endpoint extremum is not one), INF inflections, VA/HA asymptotes, R
+/// y-intercept, P parity, T period, MIN/MAX extrema (local, strict; a
+/// closed end of the domain where f turns away counts, as in Windows:
+/// √x has a minimum at 0), INF inflections, VA/HA asymptotes, R
 /// range. A key left out is not checked (the truth is debatable or not a
 /// set the rows can state). Values are expressions; `~` marks a value
 /// known to 6 digits, `-`/`+` one just below/above a double.
@@ -62,7 +63,7 @@ const TRUTH: &[(&str, &str)] = &[
     ),
     (
         "K08",
-        "D=[0,inf) | XI=0 | YI=0 | P=neither | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=[0,inf)",
+        "D=[0,inf) | XI=0 | YI=0 | P=neither | T=none | MIN=(0,0) | MAX=none | INF=none | VA=none | HA=none | R=[0,inf)",
     ),
     (
         "K09",
@@ -74,7 +75,7 @@ const TRUTH: &[(&str, &str)] = &[
     ),
     (
         "K11",
-        "D=[0,inf) | XI=0 | YI=0 | P=neither | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=[0,inf)",
+        "D=[0,inf) | XI=0 | YI=0 | P=neither | T=none | MIN=(0,0) | MAX=none | INF=none | VA=none | HA=none | R=[0,inf)",
     ),
     (
         "K12",
@@ -609,7 +610,7 @@ const REVIEW: &[(&str, &str)] = &[
     ),
     (
         "sqrt(x)",
-        "D=[0,inf) | XI=0 | YI=0 | P=neither | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=[0,inf)",
+        "D=[0,inf) | XI=0 | YI=0 | P=neither | T=none | MIN=(0,0) | MAX=none | INF=none | VA=none | HA=none | R=[0,inf)",
     ),
     (
         "x^3-2x+1/(x-1)",

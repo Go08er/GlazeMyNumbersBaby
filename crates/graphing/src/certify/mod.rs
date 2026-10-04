@@ -56,8 +56,13 @@ pub struct Analysis {
     pub inflections: Row<Vec<Inflection>>,
     pub monotonicity: Row<Vec<Monotone>>,
     pub range: Row<Vec<Piece>>,
+    /// Where each range piece's ends come from (for writing them exactly):
+    /// one source, or several whose hull the end is.
+    #[serde(default)]
+    pub range_ends: Vec<[Vec<rows::EndSrc>; 2]>,
     pub vertical: Row<Vec<Spot>>,
     pub horizontal: Row<Vec<Horizontal>>,
+    pub oblique: Row<Vec<Oblique>>,
     /// Interval evaluations spent.
     pub evals: u64,
     /// Set if the budget ran out or the caller cancelled.
@@ -144,11 +149,23 @@ pub fn certify_text(
         format!("y={text}")
     };
     let eq = Equation::parse(&text).map_err(|e| format!("{e:?}"))?;
+    certify_equation(&eq, opts, budget, cancel)
+}
+
+/// Certifies the analysis of a parsed explicit function `y = f(x)`.
+pub fn certify_equation(
+    eq: &Equation,
+    opts: CompileOptions<'_>,
+    budget: u64,
+    cancel: Option<&AtomicBool>,
+) -> Result<Analysis, String> {
+    let text = eq.text();
     let Some((Axis::X, expr)) = eq.explicit() else {
         return Err("not a function of x".into());
     };
-    let lits = Literals::of(&text, ParseOptions::default()).map_err(|e| format!("{e:?}"))?;
-    let exact = ExactLiterals::of(&text, ParseOptions::default()).map_err(|e| format!("{e:?}"))?;
+    let po: ParseOptions = eq.parse_options();
+    let lits = Literals::of(text, po).map_err(|e| format!("{e:?}"))?;
+    let exact = ExactLiterals::of(text, po).map_err(|e| format!("{e:?}"))?;
     let mut f = Fun::new(expr, &lits, opts, budget, cancel);
     f.exact = Some(&exact);
     if let Some(g) = rewrite(&f) {
@@ -166,7 +183,7 @@ pub fn certify_text(
             .collect();
     }
     f.numerators = fun::rational_numerators(&f.expr, &exact);
-    Ok(certify(&f, &text))
+    Ok(certify(&f, text))
 }
 
 /// The simplifier's form of f to enclose values with, if it changed f and
@@ -437,6 +454,10 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         });
     }
     let monotonicity = with(rows::monotonicity(&c1, &boxes, &scope, clear1), &gap_claims);
+    let horizontal = or_unknown(rows::horizontal(f, &dom, &scope));
+    let (range, range_ends) = rows::range(f, &dom, &c0, &c1, &boxes, &scope, clear1)
+        .unwrap_or_else(|s| (Row::unknown(stop(s)), Vec::new()));
+    let oblique = or_unknown(rows::oblique(f, &dom, &horizontal, &scope));
     Analysis {
         source: source.to_string(),
         formula: f.expr.formula(),
@@ -455,15 +476,14 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             &gap_claims,
         ),
         monotonicity,
-        range: with(
-            or_unknown(rows::range(f, &dom, &c0, &c1, &boxes, &scope, clear1)),
-            &gap_claims,
-        ),
+        range: with(range, &gap_claims),
+        range_ends,
         vertical: with(
             or_unknown(rows::vertical(f, &dom, &c0, &boxes, &scope)),
             &gap_claims,
         ),
-        horizontal: or_unknown(rows::horizontal(f, &dom, &scope)),
+        horizontal,
+        oblique,
         domain: dom.row.clone(),
         evals: f.evals(),
         stopped: [c0.stopped, c1.stopped, c2.stopped]

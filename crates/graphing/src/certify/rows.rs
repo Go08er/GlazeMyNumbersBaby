@@ -7,6 +7,7 @@ use super::pole::{bounded_near, end_pole, pole, pole_free};
 use super::side::{Domain, IBox};
 use crate::analysis::format::Nice;
 use crate::interval::{Dec, DecInterval, Interval};
+use serde::{Deserialize, Serialize};
 
 /// Whether every leaf of a cover is decided and the gaps beside excluded
 /// points are clear (`clear`, from [`gaps_clear`]): an undecided box
@@ -319,6 +320,97 @@ fn changes(segs: &[Seg]) -> (Vec<(Enc, bool)>, bool) {
 
 // ---------------------------------------------------------- extrema
 
+/// A local extremum at a closed end of the domain (a domain bound, not a
+/// window edge), like √x's minimum at 0 or asin's at ±1: f is continuous
+/// from the end to the first box f′ decides, and f′ keeps one strict sign
+/// beside the end (a zero right at the end aside), so f is strictly
+/// monotone beside it; rising away from a low end makes it a minimum.
+/// `Ok(None)`: not decided; `Ok(Some(None))`: the end is no closed domain
+/// end.
+fn end_extremum(
+    f: &Fun<'_>,
+    c1: &Cover,
+    ib: &IBox,
+    low: bool,
+    segs: &[Seg],
+    cl: &mut Vec<Claim>,
+) -> Result<Option<Option<Extremum>>, Stop> {
+    let (bound, clipped) = if low {
+        (ib.lo, ib.lo_clipped)
+    } else {
+        (ib.hi, ib.hi_clipped)
+    };
+    let Bound::At { x, closed: true } = bound else {
+        return Ok(Some(None));
+    };
+    if clipped {
+        return Ok(Some(None));
+    }
+    // f′'s sign beside the end, a zero at the end itself aside.
+    let ordered: Vec<&Seg> = if low {
+        segs.iter().collect()
+    } else {
+        segs.iter().rev().collect()
+    };
+    let mut sign = None;
+    for s in ordered {
+        match s {
+            Seg::Zero(z) if (low && z.lo.0 <= x.hi.0) || (!low && z.hi.0 >= x.lo.0) => {}
+            Seg::Sign(p) => {
+                sign = Some(*p);
+                break;
+            }
+            _ => return Ok(None),
+        }
+    }
+    let Some(sign) = sign else {
+        return Ok(None);
+    };
+    // The first leaf beside the end (an exact zero at the end aside).
+    let mut leaves: Vec<(f64, f64)> = c1
+        .leaves
+        .iter()
+        .filter(|l| !matches!(l, Leaf::At { .. }))
+        .map(|l| l.span())
+        .filter(|&(a, b)| a >= ib.a && b <= ib.b)
+        .collect();
+    leaves.sort_by(|p, q| p.0.total_cmp(&q.0));
+    let near = if low { leaves.first() } else { leaves.last() };
+    let Some(&(a, b)) = near else {
+        return Ok(None);
+    };
+    let span = if low {
+        Interval::new(x.lo.0, b)
+    } else {
+        Interval::new(a, x.hi.0)
+    };
+    let over = f.val(span)?;
+    if over.is_empty() || over.dec < Dec::Dac {
+        return Ok(None);
+    }
+    let y = f.val(Interval::new(x.lo.0, x.hi.0))?;
+    if y.is_empty() || !y.iv.is_bounded() || y.dec < Dec::Def {
+        return Ok(None);
+    }
+    cl.push(Claim::Continuous {
+        x: XBox::new(span.lo(), span.hi()),
+    });
+    cl.push(Claim::Value {
+        x: XBox { a: x.lo, b: x.hi },
+        of: Subject::f(0),
+        lo: R(y.lo()),
+        hi: R(y.hi()),
+    });
+    // Rising away from a low end, or up to a high end.
+    let min = sign == low;
+    Ok(Some(Some(Extremum {
+        x,
+        y: Enc::new(y.lo(), y.hi()),
+        kind: if min { ExtKind::Min } else { ExtKind::Max },
+        every: None,
+    })))
+}
+
 pub fn extrema(
     f: &Fun<'_>,
     c1: &Cover,
@@ -334,6 +426,17 @@ pub fn extrema(
         let segs = walk(c1, ib);
         let (ch, done) = changes(&segs);
         complete &= done;
+        for low in [true, false] {
+            if !low && ib.a == ib.b {
+                // An isolated point: one end.
+                continue;
+            }
+            match end_extremum(f, c1, ib, low, &segs, &mut cl)? {
+                Some(Some(e)) => out.push(e),
+                Some(None) => {}
+                None => complete = false,
+            }
+        }
         for (x, from_pos) in ch {
             if let Some(p) = scope.period
                 && repeats(
@@ -500,16 +603,40 @@ fn monotone_pieces(c1: &Cover, boxes: &[IBox]) -> Option<Vec<(Monotone, bool, bo
 
 pub fn monotonicity(c1: &Cover, boxes: &[IBox], scope: &Scope, clear: bool) -> Row<Vec<Monotone>> {
     let (gaps, complete) = settle(c1, clear);
-    let Some(pieces) = monotone_pieces(c1, boxes) else {
+    let Some(mut pieces) = monotone_pieces(c1, boxes) else {
         return Row::unknown("f′'s sign is not decided everywhere");
     };
     let mut cl = claims(c1, &Subject::f(1), &[0.0]);
     cl.extend(gaps);
+    // Over one period [s, s + P] of a periodic f, the piece cut at the
+    // window's end continues into the one cut at its start, shifted by P:
+    // f′ has the same strict sign on both sides of s + P (s is chosen
+    // where f, f′ and f″ are strictly signed), so f is monotone across it.
+    // Joined, the pieces describe one period, repeated: the whole line.
+    let mut repeats = false;
+    if let Some(p) = scope.period
+        && complete
+        && pieces.len() >= 2
+        && pieces[0].1
+        && pieces[pieces.len() - 1].2
+        && pieces[0].0.dir == pieces[pieces.len() - 1].0.dir
+        && let Bound::At { x: first_hi, .. } = pieces[0].0.on.hi
+    {
+        let (first, _, _) = pieces.remove(0);
+        let last = pieces.last_mut().expect("two or more pieces");
+        let shifted = Interval::new(first_hi.lo.0, first_hi.hi.0) + Interval::new(p.lo.0, p.hi.0);
+        last.0.on.hi = Bound::At {
+            x: Enc::new(shifted.lo(), shifted.hi()),
+            closed: matches!(first.on.hi, Bound::At { closed: true, .. }),
+        };
+        last.2 = false;
+        repeats = true;
+    }
     let out: Vec<Monotone> = pieces.into_iter().map(|(m, _, _)| m).collect();
     let has = !out.is_empty();
     row_of(
         out,
-        scope.region(complete, false),
+        scope.region(complete, repeats),
         has,
         cl,
         "f′'s sign is not decided everywhere",
@@ -1440,7 +1567,207 @@ pub fn horizontal(f: &Fun<'_>, dom: &Domain, scope: &Scope) -> Result<Row<Vec<Ho
     })
 }
 
+// ---------------------------------------------------------- oblique
+
+/// q·πᵏ as an expression (k = 0 or 1).
+fn piq_expr(v: crate::simplify::PiQ) -> Option<crate::ast::Expr> {
+    use crate::ast::{BinOp, Constant, Expr};
+    let q = crate::simplify::rational::q_expr(v.q);
+    match v.k {
+        0 => Some(q),
+        1 => Some(Expr::bin(BinOp::Mul, q, Expr::Const(Constant::Pi))),
+        _ => None,
+    }
+}
+
+/// Oblique asymptotes y = m·x + b (m ≠ 0) at each tail the domain reaches.
+/// A rational f has one exactly when deg N = deg D + 1 (from its exact
+/// rational form). Otherwise, per tail: a horizontal asymptote there rules
+/// one out, so does f/x → ±∞ or f/x → 0 (the simplifier's limits); a
+/// finite nonzero limit m of f/x with a finite limit b of f − m·x gives
+/// y = m·x + b. A periodic f has none (f − (m·x + b) can't tend to 0).
+pub fn oblique(
+    f: &Fun<'_>,
+    dom: &Domain,
+    horizontal: &Row<Vec<Horizontal>>,
+    scope: &Scope,
+) -> Result<Row<Vec<Oblique>>, Stop> {
+    use crate::ast::{BinOp, Expr};
+    use crate::simplify::{Dir as LDir, Limit, limit_at};
+    if !dom.row.is_certified() {
+        return Ok(Row::unknown("the domain's tails are not known"));
+    }
+    let reaches = |right: bool| {
+        dom.pieces.iter().any(|p| {
+            if right {
+                p.hi == Bound::PosInf
+            } else {
+                p.lo == Bound::NegInf
+            }
+        })
+    };
+    let mut c = Certificate::new(Region::Line);
+    if scope.period.is_some() {
+        c.push(Claim::Simplifier {
+            fact: "f is periodic: f − (m·x + b) does not tend to 0 for m ≠ 0".into(),
+        });
+        return Ok(Row::Certified {
+            value: Vec::new(),
+            cert: c,
+        });
+    }
+    let enc = |q: crate::simplify::Q| {
+        let iv = q.interval();
+        Enc::new(iv.lo(), iv.hi())
+    };
+    if let Some(exact) = f.exact
+        && let Some(rf) = crate::simplify::rational_form(&f.expr, exact)
+    {
+        let mut out = Vec::new();
+        match rf.reduced.oblique() {
+            Some((m, b)) => {
+                c.push(Claim::Simplifier {
+                    fact: format!("f = N/D exactly and N/D − ({m}·x + {b}) → 0 as x → ±∞"),
+                });
+                for right in [false, true] {
+                    if reaches(right) {
+                        out.push(Oblique {
+                            side: if right { Tail::Right } else { Tail::Left },
+                            m: enc(m),
+                            b: enc(b),
+                        });
+                    }
+                }
+            }
+            None => c.push(Claim::Simplifier {
+                fact: "f = N/D exactly with deg N ≠ deg D + 1: no oblique asymptote".into(),
+            }),
+        }
+        return Ok(Row::Certified {
+            value: out,
+            cert: c,
+        });
+    }
+    let Row::Certified { value: hs, .. } = horizontal else {
+        return Ok(Row::unknown("the tails are not decided"));
+    };
+    let Some(settings) = f.settings() else {
+        return Ok(Row::unknown("the tails are not decided"));
+    };
+    let mut out = Vec::new();
+    for right in [false, true] {
+        if !reaches(right) {
+            continue;
+        }
+        let side = if right { Tail::Right } else { Tail::Left };
+        if hs.iter().any(|h| h.side == side) {
+            // A horizontal asymptote on this side: no oblique one.
+            continue;
+        }
+        if f.cancelled() {
+            return Err(Stop::Cancelled);
+        }
+        let dir = if right { LDir::PosInf } else { LDir::NegInf };
+        let at = if right { "+∞" } else { "−∞" };
+        let over_x = Expr::bin(BinOp::Div, f.expr.clone(), Expr::X);
+        match limit_at(&over_x, dir, &settings) {
+            Limit::PosInf | Limit::NegInf => {
+                c.push(Claim::Simplifier {
+                    fact: format!("f/x → ±∞ as x → {at}: no oblique asymptote"),
+                });
+            }
+            Limit::Exact(m) if m.q.is_zero() => {
+                c.push(Claim::Simplifier {
+                    fact: format!("f/x → 0 as x → {at} and f has no horizontal asymptote there"),
+                });
+            }
+            Limit::Exact(m) => {
+                let Some(mx) = piq_expr(m) else {
+                    return Ok(Row::unknown("a tail's slope is not decided"));
+                };
+                let rest = Expr::bin(
+                    BinOp::Sub,
+                    f.expr.clone(),
+                    Expr::bin(BinOp::Mul, mx, Expr::X),
+                );
+                match limit_at(&rest, dir, &settings) {
+                    Limit::Exact(b) => {
+                        let (Some(mi), Some(bi)) = (piq_interval(m), piq_interval(b)) else {
+                            return Ok(Row::unknown("a tail's slope is not decided"));
+                        };
+                        c.push(Claim::Simplifier {
+                            fact: format!(
+                                "f/x → {} and f − m·x → {} as x → {at}",
+                                pi_q(m),
+                                pi_q(b)
+                            ),
+                        });
+                        out.push(Oblique {
+                            side,
+                            m: Enc::new(mi.lo(), mi.hi()),
+                            b: Enc::new(bi.lo(), bi.hi()),
+                        });
+                    }
+                    _ => return Ok(Row::unknown("a tail's intercept is not decided")),
+                }
+            }
+            _ => return Ok(Row::unknown("a tail's slope is not decided")),
+        }
+    }
+    Ok(Row::Certified {
+        value: out,
+        cert: c,
+    })
+}
+
 // ---------------------------------------------------------- range
+
+/// Where a finite end of the range comes from, when it is one value (not
+/// the hull of two ends that couldn't be told apart): what the panel
+/// needs to write it exactly.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum EndSrc {
+    /// f's value at the point enclosed (attained).
+    At(Enc),
+    /// f's limit as x → ±∞ on this side.
+    Tail(Tail),
+    /// f's limit at the excluded point enclosed: a removable hole.
+    Hole(Enc),
+    /// The simplifier's one-sided limit at the double `at`, from the right
+    /// when `right`.
+    Side { at: R, right: bool },
+    /// Infinite, or more than one value's hull.
+    Other,
+}
+
+/// Where an end comes from: one source, or those of the ends whose hull
+/// it is (it is one of their values).
+#[derive(Clone, Copy, Debug)]
+struct Srcs {
+    s: [EndSrc; 8],
+    n: usize,
+}
+
+impl Srcs {
+    fn one(e: EndSrc) -> Srcs {
+        let mut s = [EndSrc::Other; 8];
+        s[0] = e;
+        Srcs { s, n: 1 }
+    }
+
+    fn join(a: Srcs, b: Srcs) -> Srcs {
+        if a.n + b.n > a.s.len() {
+            return Srcs::one(EndSrc::Other);
+        }
+        let mut s = a.s;
+        s[a.n..a.n + b.n].copy_from_slice(&b.s[..b.n]);
+        Srcs { s, n: a.n + b.n }
+    }
+
+    fn to_vec(self) -> Vec<EndSrc> {
+        self.s[..self.n].to_vec()
+    }
+}
 
 /// One end of a monotone piece's image.
 #[derive(Clone, Copy, Debug)]
@@ -1451,6 +1778,7 @@ struct End {
     /// Where f takes this value, for an attained end: two ends taken at the
     /// same place are the same value, however wide their enclosures.
     at: Option<Enc>,
+    src: Srcs,
 }
 
 impl End {
@@ -1482,6 +1810,7 @@ fn outer(a: End, b: End, low: bool) -> Option<End> {
         closed: a.closed,
         infinite: None,
         at: None,
+        src: Srcs::join(a.src, b.src),
     })
 }
 
@@ -1553,6 +1882,7 @@ fn end_value(
         closed: false,
         infinite: Some(up),
         at: None,
+        src: Srcs::one(EndSrc::Other),
     };
     Ok(match b {
         Bound::NegInf | Bound::PosInf => {
@@ -1565,6 +1895,11 @@ fn end_value(
                     closed: false,
                     infinite: None,
                     at: None,
+                    src: Srcs::one(EndSrc::Tail(if b == Bound::PosInf {
+                        Tail::Right
+                    } else {
+                        Tail::Left
+                    })),
                 }),
                 TailEnd::Unknown => None,
             }
@@ -1620,6 +1955,10 @@ fn end_value(
                     closed: false,
                     infinite: None,
                     at: None,
+                    src: Srcs::one(EndSrc::Side {
+                        at: x.lo,
+                        right: is_lo,
+                    }),
                 }),
                 TailEnd::Unknown => None,
             }
@@ -1654,6 +1993,7 @@ fn removable(f: &Fun<'_>, x: Enc, n: Interval, cl: &mut Vec<Claim>) -> Result<Op
         closed: false,
         infinite: None,
         at: None,
+        src: Srcs::one(EndSrc::Hole(x)),
     }))
 }
 
@@ -1675,8 +2015,12 @@ fn attained(f: &Fun<'_>, x: Enc, cl: &mut Vec<Claim>) -> Result<Option<End>, Sto
         closed: true,
         infinite: None,
         at: Some(x),
+        src: Srcs::one(EndSrc::At(x)),
     }))
 }
+
+/// The range, and where each of its pieces' finite ends comes from.
+pub type RangeRow = (Row<Vec<Piece>>, Vec<[Vec<EndSrc>; 2]>);
 
 pub fn range(
     f: &Fun<'_>,
@@ -1686,16 +2030,17 @@ pub fn range(
     boxes: &[IBox],
     scope: &Scope,
     clear: bool,
-) -> Result<Row<Vec<Piece>>, Stop> {
+) -> Result<RangeRow, Stop> {
+    let unknown = |why: &str| Ok((Row::unknown(why), Vec::new()));
     if !dom.row.is_certified() || !(scope.whole || scope.period.is_some()) {
-        return Ok(Row::unknown("the domain is not known"));
+        return unknown("the domain is not known");
     }
     let (_, complete) = settle(c1, clear);
     if !complete {
-        return Ok(Row::unknown("f′'s sign is not decided everywhere"));
+        return unknown("f′'s sign is not decided everywhere");
     }
     let Some(pieces) = monotone_pieces(c1, boxes) else {
-        return Ok(Row::unknown("f′'s sign is not decided everywhere"));
+        return unknown("f′'s sign is not decided everywhere");
     };
     // Each strictly monotone piece's image, as (low end, high end).
     let mut cl = claims(c1, &Subject::f(1), &[0.0]);
@@ -1705,9 +2050,7 @@ pub fn range(
             // One value, taken at a point of the box.
             let ib = boxes.iter().find(|ib| ib.lo == m.on.lo && ib.hi == m.on.hi);
             let Some(ib) = ib else {
-                return Ok(Row::unknown(
-                    "an end of a monotone piece has no proven value",
-                ));
+                return unknown("an end of a monotone piece has no proven value");
             };
             let x = match (ib.a.is_finite(), ib.b.is_finite()) {
                 (true, true) => ib.a / 2.0 + ib.b / 2.0,
@@ -1716,9 +2059,7 @@ pub fn range(
                 (false, false) => 0.0,
             };
             let Some(e) = attained(f, Enc::point(x), &mut cl)? else {
-                return Ok(Row::unknown(
-                    "an end of a monotone piece has no proven value",
-                ));
+                return unknown("an end of a monotone piece has no proven value");
             };
             images.push((e, e));
             continue;
@@ -1728,9 +2069,7 @@ pub fn range(
             end_value(f, m.on.hi, *hc, false, boxes, c0, scope, &mut cl)?,
         );
         let (Some(a), Some(b)) = (a, b) else {
-            return Ok(Row::unknown(
-                "an end of a monotone piece has no proven value",
-            ));
+            return unknown("an end of a monotone piece has no proven value");
         };
         images.push(if m.dir == Dir::Increasing {
             (a, b)
@@ -1744,13 +2083,13 @@ pub fn range(
             && let Bound::At { x, closed: true } = p.lo
         {
             let Some(e) = attained(f, x, &mut cl)? else {
-                return Ok(Row::unknown("an isolated point's value"));
+                return unknown("an isolated point's value");
             };
             images.push((e, e));
         }
     }
     let Some(merged) = union(images) else {
-        return Ok(Row::unknown("two ends of the range are not told apart"));
+        return unknown("two ends of the range are not told apart");
     };
     let to_bound = |e: End, low: bool| -> Bound {
         match e.infinite {
@@ -1763,11 +2102,15 @@ pub fn range(
         }
     };
     let out: Vec<Piece> = merged
-        .into_iter()
-        .map(|(a, b)| Piece {
+        .iter()
+        .map(|&(a, b)| Piece {
             lo: to_bound(a, true),
             hi: to_bound(b, false),
         })
+        .collect();
+    let srcs: Vec<[Vec<EndSrc>; 2]> = merged
+        .iter()
+        .map(|(a, b)| [a.src.to_vec(), b.src.to_vec()])
         .collect();
     // f's sign beside the poles.
     if out
@@ -1778,10 +2121,13 @@ pub fn range(
     }
     let mut c = Certificate::new(scope.region(true, true).unwrap_or(Region::Line));
     c.extend(cl);
-    Ok(Row::Certified {
-        value: out,
-        cert: c,
-    })
+    Ok((
+        Row::Certified {
+            value: out,
+            cert: c,
+        },
+        srcs,
+    ))
 }
 
 // ---------------------------------------------------------- parity

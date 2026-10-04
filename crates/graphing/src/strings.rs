@@ -71,6 +71,17 @@ pub const KGF_HORIZONTAL_ASYMPTOTES_UNKNOWN: &str =
     "Unable to calculate the horizontal asymptotes for this function.";
 pub const KGF_OBLIQUE_ASYMPTOTES_UNKNOWN: &str =
     "Unable to calculate the oblique asymptotes for this function.";
+// Not upstream strings: conventions this port states plainly (see
+// docs/ti-conventions.md).
+pub const KGF_PARITY_BOTH: &str = "The function is both even and odd.";
+pub const KGF_PERIODICITY_CONSTANT: &str =
+    "The function is constant: it has no fundamental period.";
+/// A list proven correct, and complete only over part of the line.
+pub const KGF_PARTIAL_WINDOW: &str = "Complete for %1 ≤ x ≤ %2; there may be more outside.";
+/// A list proven correct, with no proof that it is complete.
+pub const KGF_PARTIAL_SOME: &str = "These are some of them; there may be more.";
+/// A partial list with nothing found in its window.
+pub const KGF_PARTIAL_NONE_WINDOW: &str = "None for %1 ≤ x ≤ %2; there may be some outside.";
 pub const KGF_TOO_COMPLEX_FEATURES_ERROR: &str =
     "These features are too complex for Calculator to calculate:";
 

@@ -772,7 +772,31 @@ fn refine(
         match side(&v, c) {
             Some(sm) if sm == sa => l = m,
             Some(_) => r = m,
-            None => break,
+            None => {
+                // Undecided at the midpoint (the crossing is right there,
+                // within rounding): narrow from a quarter in on each side.
+                let mut moved = false;
+                for q in [l + (m - l) / 2.0, m + (r - m) / 2.0] {
+                    if !(l < q && q < r) {
+                        continue;
+                    }
+                    let Some(v) = point(fun, t, q)? else { continue };
+                    match side(&v, c) {
+                        Some(sq) if sq == sa => {
+                            l = q;
+                            moved = true;
+                        }
+                        Some(_) => {
+                            r = q;
+                            moved = true;
+                        }
+                        None => {}
+                    }
+                }
+                if !moved {
+                    break;
+                }
+            }
         }
     }
     // A crossing a few doubles wide may be exactly at one of them (x − 2

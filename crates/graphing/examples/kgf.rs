@@ -24,6 +24,9 @@ fn print(k: &KeyGraphFeatures) {
                 .collect();
             println!("   {:<22} {}", item.title, rows.join(" | "));
         }
+        if !item.note.is_empty() {
+            println!("   {:<22} ({})", "", item.note);
+        }
     }
 }
 

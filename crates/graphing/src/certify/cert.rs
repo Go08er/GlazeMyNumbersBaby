@@ -150,6 +150,9 @@ impl Subject {
 pub enum Claim {
     /// f is defined everywhere on the box (decoration at least *def*).
     Defined { x: XBox },
+    /// f is defined and continuous everywhere on the box (decoration at
+    /// least *dac*).
+    Continuous { x: XBox },
     /// f is defined nowhere on the box (empty enclosure).
     Undefined { x: XBox },
     /// The subject is valid on the box and strictly above `c` (`above`) or
@@ -443,6 +446,14 @@ pub struct Horizontal {
     /// panel shows. Recognised, not proven: the limit is only known to lie
     /// in `y`.
     pub looks_like: Option<R>,
+}
+
+/// An oblique asymptote y = m·x + b as x → ±∞ on `side`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Oblique {
+    pub side: Tail,
+    pub m: Enc,
+    pub b: Enc,
 }
 
 /// The outcome of certifying one row.
