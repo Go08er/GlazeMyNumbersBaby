@@ -120,6 +120,14 @@ fn or_unknown<T>(r: Result<Row<T>, Stop>) -> Row<T> {
     r.unwrap_or_else(|s| Row::unknown(stop(s)))
 }
 
+/// The row with `extra` claims added to its certificate.
+fn with<T>(mut r: Row<T>, extra: &[Claim]) -> Row<T> {
+    if let Row::Certified { cert, .. } | Row::Partial { cert, .. } = &mut r {
+        cert.extend(extra.iter().cloned());
+    }
+    r
+}
+
 /// Certifies every row for the function `f`.
 pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     let phase = f.left() / 6;
@@ -127,26 +135,21 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     let dom = side::domain(f);
     let w = window(f, &dom);
     let (boxes, gaps, whole) = side::interior(&dom, w);
-    // A closed end at a double is decided on its own (a point box), so a
-    // zero or a value right at the end isn't lost among the first few
-    // doubles beside it.
+    // A closed end at a double is also decided on its own (a point box,
+    // decided before the box it ends), so a zero right at the end is found
+    // exactly and the box beside it can touch it.
     let mut spans: Vec<(f64, f64)> = Vec::new();
     for b in &boxes {
-        let (mut a, mut z) = (b.a, b.b);
         let point_end = |bd: Bound, at: f64| {
             matches!(bd, Bound::At { x, closed: true } if x.is_point() && x.lo.0 == at)
         };
-        if a < z && point_end(b.lo, a) && !b.lo_clipped {
-            spans.push((a, a));
-            a = a.next_up();
+        if b.a < b.b && point_end(b.lo, b.a) && !b.lo_clipped {
+            spans.push((b.a, b.a));
         }
-        if a < z && point_end(b.hi, z) && !b.hi_clipped {
-            spans.push((z, z));
-            z = z.next_down();
+        if b.a < b.b && point_end(b.hi, b.b) && !b.hi_clipped {
+            spans.push((b.b, b.b));
         }
-        if a <= z {
-            spans.push((a, z));
-        }
+        spans.push((b.a, b.b));
     }
     let cover = |k: usize| {
         f.allow(phase);
@@ -180,8 +183,11 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         }
     }
     f.allow(2 * phase);
+    // What the boxes leave out, and the families cut from them: part of
+    // every certificate built on the boxes.
     let mut gap_claims = gaps.clone();
     gap_claims.extend(dom.claims.iter().filter(|c| matches!(c, Claim::Family { .. })).cloned());
+
     let analysis = Analysis {
         source: source.to_string(),
         formula: f.expr.formula(),
@@ -190,11 +196,11 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         y_intercept: or_unknown(rows::y_intercept(f)),
         parity: or_unknown(rows::parity(f)),
         period: Row::unknown("periods are proven only by simplification"),
-        extrema: or_unknown(rows::extrema(f, &c1, &boxes, whole, w)),
-        inflections: or_unknown(rows::inflections(f, &c2, &boxes, whole, w)),
-        monotonicity: rows::monotonicity(&c1, &boxes, whole, w),
-        range: or_unknown(rows::range(f, &dom, &c0, &c1, &boxes, whole, w)),
-        vertical: or_unknown(rows::vertical(f, &dom, &c0, &boxes, whole)),
+        extrema: with(or_unknown(rows::extrema(f, &c1, &boxes, whole, w)), &gap_claims),
+        inflections: with(or_unknown(rows::inflections(f, &c2, &boxes, whole, w)), &gap_claims),
+        monotonicity: with(rows::monotonicity(&c1, &boxes, whole, w), &gap_claims),
+        range: with(or_unknown(rows::range(f, &dom, &c0, &c1, &boxes, whole, w)), &gap_claims),
+        vertical: with(or_unknown(rows::vertical(f, &dom, &c0, &boxes, whole)), &gap_claims),
         horizontal: or_unknown(rows::horizontal(f, &dom, whole, w)),
         domain: dom.row.clone(),
         evals: f.evals(),

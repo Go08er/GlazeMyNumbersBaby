@@ -11,6 +11,8 @@
 //!   cⱼ exactly once (opposite strict signs of h − cⱼ at the two ends, or
 //!   h = cⱼ exactly at a double), located in a narrow box;
 //! * `At`: h = cⱼ exactly at a double (a point box);
+//! * `Touch`: h = cⱼ exactly at an end of the box and strictly on one side
+//!   of it elsewhere there (a double root at a double, by Taylor's theorem);
 //! * `Equal`: h ≡ cⱼ on the box;
 //! * `Undefined`: h is defined nowhere on the box;
 //! * `Flag`: undecided (too narrow to split, out of budget, beyond reach).
@@ -47,14 +49,17 @@ pub struct Target<'e> {
 pub enum Leaf {
     /// h is strictly inside band `band` on `[a, b]` (an end may be ±∞: a
     /// tail); `mono`: the enclosure reached threshold `mono`, which h is
-    /// shown not to cross from monotonicity and the ends' signs; `cont`:
-    /// the function is also continuous on the box (and so bounded on a
-    /// finite one).
+    /// shown not to cross from monotonicity and the ends' signs; `chain`
+    /// (a tail, when not 0): every threshold is shown not crossed by the
+    /// sign chain through h's derivatives up to that order (see
+    /// [`Claim::TailChain`]); `cont`: the function is also continuous on
+    /// the box (and so bounded on a finite one).
     Band {
         a: f64,
         b: f64,
         band: usize,
         mono: Option<usize>,
+        chain: usize,
         cont: bool,
     },
     /// h is continuous and strictly monotone on `[a, b]` (rising or not)
@@ -71,6 +76,18 @@ pub enum Leaf {
     },
     /// h(p) = cⱼ exactly.
     At { p: f64, j: usize },
+    /// h = cⱼ exactly at the end `p` of `[a, b]` and strictly on side
+    /// `above` of it on the rest of the box: Taylor's theorem at p, with
+    /// the coefficients of orders 1 to `order` − 1 exactly 0 there and the
+    /// order-`order` one away from 0 over the whole box.
+    Touch {
+        a: f64,
+        b: f64,
+        p: f64,
+        j: usize,
+        order: usize,
+        above: bool,
+    },
     /// h ≡ cⱼ on `[a, b]` (continuous there when `cont`).
     Equal {
         a: f64,
@@ -92,6 +109,7 @@ impl Leaf {
             | Leaf::Equal { a, b, .. }
             | Leaf::Undefined { a, b }
             | Leaf::Flag { a, b, .. }
+            | Leaf::Touch { a, b, .. }
             | Leaf::Cross { a, b, .. } => (a, b),
             Leaf::At { p, .. } => (p, p),
         }
@@ -113,7 +131,7 @@ struct Item {
 
 impl PartialEq for Item {
     fn eq(&self, o: &Item) -> bool {
-        self.key.total_cmp(&o.key) == Ordering::Equal
+        self.cmp(o) == Ordering::Equal
     }
 }
 impl Eq for Item {}
@@ -123,9 +141,13 @@ impl PartialOrd for Item {
     }
 }
 impl Ord for Item {
-    // A max-heap: the nearest box (smallest key) first.
+    // A max-heap: the nearest box (smallest key) first, and of two as near
+    // the narrower (a point box before the box it ends), so exact points
+    // are known before the boxes that touch them.
     fn cmp(&self, o: &Item) -> Ordering {
-        o.key.total_cmp(&self.key)
+        o.key
+            .total_cmp(&self.key)
+            .then((o.b - o.a).total_cmp(&(self.b - self.a)))
     }
 }
 
@@ -196,6 +218,8 @@ impl Cover {
         let mut leaves = Vec::new();
         let mut stopped = None;
         let mut found = 0;
+        // Doubles where h is exactly a threshold (point, threshold).
+        let mut exacts: Vec<(f64, usize)> = Vec::new();
         while let Some(Item { a, b, .. }) = heap.pop() {
             if stopped.is_some() {
                 leaves.push(Leaf::Flag {
@@ -216,16 +240,30 @@ impl Cover {
                 });
                 continue;
             }
-            match step(fun, t, cs, a, b) {
+            match step(fun, t, cs, a, b, &exacts) {
                 Ok(Step::Leaves(ls)) => {
+                    // Each crossing once (one at a known exact point is
+                    // already counted).
                     found += ls
                         .iter()
-                        .filter(|l| matches!(l, Leaf::Cross { .. } | Leaf::At { .. }))
+                        .filter(|l| match **l {
+                            Leaf::At { .. } | Leaf::Cross { exact: None, .. } => true,
+                            Leaf::Cross { exact: Some(p), .. } => !exacts.iter().any(|e| e.0 == p),
+                            _ => false,
+                        })
                         .count();
+                    exacts.extend(ls.iter().filter_map(|l| match *l {
+                        Leaf::At { p, j } => Some((p, j)),
+                        _ => None,
+                    }));
                     leaves.extend(ls);
                 }
                 Ok(Step::Split(parts, points)) => {
                     found += points.len();
+                    exacts.extend(points.iter().filter_map(|l| match *l {
+                        Leaf::At { p, j } => Some((p, j)),
+                        _ => None,
+                    }));
                     leaves.extend(points);
                     for (l, h) in parts {
                         heap.push(item(l, h));
@@ -276,13 +314,23 @@ pub fn point(fun: &Fun<'_>, t: &Target<'_>, p: f64) -> Result<Option<DecInterval
     Ok(ok.then(|| kth(&s, t.k)))
 }
 
-fn step(fun: &Fun<'_>, t: &Target<'_>, cs: &[f64], a: f64, b: f64) -> Result<Step, Stop> {
+fn step(
+    fun: &Fun<'_>,
+    t: &Target<'_>,
+    cs: &[f64],
+    a: f64,
+    b: f64,
+    exacts: &[(f64, usize)],
+) -> Result<Step, Stop> {
     let k = t.k;
     let s = fun.ser_of(t.expr, Interval::new(a, b), k + 1)?;
     let finite = a.is_finite() && b.is_finite();
-    let tail_far = (!a.is_finite() && b <= -REACH) || (!b.is_finite() && a >= REACH);
+    // Beyond reach, an undecided box is left so: features out there are
+    // past anything the panel shows, and splitting there (underflow,
+    // overflow) rarely helps.
+    let far = a >= REACH || b <= -REACH;
     let split_or_flag = |why: &'static str| -> Result<Step, Stop> {
-        if tail_far {
+        if far {
             return Ok(Step::Leaves(vec![Leaf::Flag {
                 a,
                 b,
@@ -302,18 +350,31 @@ fn step(fun: &Fun<'_>, t: &Target<'_>, cs: &[f64], a: f64, b: f64) -> Result<Ste
     } else {
         usable(&s, k)
     };
+    // Splitting further toward a point where h isn't valid (an end of the
+    // domain, a kink) or that h only touches without a proof can't make the
+    // cover complete; stop at a narrow box instead of bisecting down
+    // through the subnormals.
+    let narrow = finite && b - a <= 1e-12 * a.abs().max(b.abs()).max(1.0);
     if !valid {
+        if narrow {
+            return Ok(Step::Leaves(vec![Leaf::Flag {
+                a,
+                b,
+                why: "not defined or not smooth throughout",
+            }]));
+        }
         return split_or_flag("not defined or not smooth throughout");
     }
     let h = kth(&s, k);
     let cont = s[0].dec >= Dec::Dac && usable(&s, k);
-    let j = match place(&h, cs) {
+    let touched = match place(&h, cs) {
         Place::Band(i) => {
             return Ok(Step::Leaves(vec![Leaf::Band {
                 a,
                 b,
                 band: i,
                 mono: None,
+                chain: 0,
                 cont,
             }]));
         }
@@ -323,8 +384,16 @@ fn step(fun: &Fun<'_>, t: &Target<'_>, cs: &[f64], a: f64, b: f64) -> Result<Ste
         Place::Exactly(j) => {
             return Ok(Step::Leaves(vec![Leaf::Equal { a, b, j, cont }]));
         }
-        Place::Many => return split_with_points(fun, t, cs, a, b, &split_or_flag),
-        Place::Touches(j) => j,
+        Place::Many => None,
+        Place::Touches(j) => Some(j),
+    };
+    if !finite && (a.is_finite() || b.is_finite())
+        && let Some(leaf) = tail_chain(fun, t, cs, a, b)?
+    {
+        return Ok(Step::Leaves(vec![leaf]));
+    }
+    let Some(j) = touched else {
+        return split_with_points(fun, t, cs, a, b, far, &split_or_flag);
     };
     let c = cs[j];
     // A crossing of cⱼ: unique when h is continuous and strictly monotone
@@ -332,29 +401,6 @@ fn step(fun: &Fun<'_>, t: &Target<'_>, cs: &[f64], a: f64, b: f64) -> Result<Ste
     let d = kth(&s, k + 1);
     let mono = cont && usable(&s, k + 1) && d.ne0();
     let band_of = |above: bool| cs.iter().filter(|&&cc| cc < c).count() + usize::from(above);
-    if mono && !finite && (a.is_finite() || b.is_finite()) {
-        // A tail moving away from cⱼ from where it starts never reaches it.
-        let rising = d.gt0();
-        let start = if a.is_finite() { a } else { b };
-        if let Some(p) = point(fun, t, start)?
-            && let Some(above) = side(&p, c)
-        {
-            let away = if a.is_finite() {
-                above == rising
-            } else {
-                above != rising
-            };
-            if away {
-                return Ok(Step::Leaves(vec![Leaf::Band {
-                    a,
-                    b,
-                    band: band_of(above),
-                    mono: Some(j),
-                    cont: true,
-                }]));
-            }
-        }
-    }
     if !mono && c == 0.0 && h.iv.mig_mag().1 <= TINY {
         // Underflow: below anything a double can tell apart here.
         if !atomic(a, b) && finite {
@@ -393,6 +439,7 @@ fn step(fun: &Fun<'_>, t: &Target<'_>, cs: &[f64], a: f64, b: f64) -> Result<Ste
                         b,
                         band: band_of(sa),
                         mono: Some(j),
+                        chain: 0,
                         cont: true,
                     }]));
                 }
@@ -400,7 +447,122 @@ fn step(fun: &Fun<'_>, t: &Target<'_>, cs: &[f64], a: f64, b: f64) -> Result<Ste
             }
         }
     }
-    split_with_points(fun, t, cs, a, b, &split_or_flag)
+    // Touching cⱼ at an end where h is exactly cⱼ (a double root there).
+    if finite {
+        for &(p, pj) in exacts {
+            if pj == j && (p == a || p == b) {
+                if let Some(leaf) = touch(fun, t, c, j, a, b, p)? {
+                    return Ok(Step::Leaves(vec![leaf]));
+                }
+                if narrow {
+                    return Ok(Step::Leaves(vec![Leaf::Flag {
+                        a,
+                        b,
+                        why: "touch not proven",
+                    }]));
+                }
+            }
+        }
+    }
+    split_with_points(fun, t, cs, a, b, far, &split_or_flag)
+}
+
+/// The derivative orders a tail's sign chain looks up to.
+const CHAIN_ORDER: usize = 3;
+
+/// A tail `[a, ∞)` or `(−∞, b]` on which h moves away from every
+/// threshold: h⁽ⁿ⁾ strictly of one sign σ there (n ≤ 3), and at the finite
+/// end h⁽ⁱ⁾ for 1 ≤ i < n, and h − c for every threshold c, strictly of the
+/// sign σ forces (σ on the right; σ·(−1)ⁿ⁻ⁱ on the left, where a positive
+/// derivative means smaller values further out). Each then keeps its sign
+/// out along the tail, one order at a time. This decides tails whose
+/// enclosure suffers ∞ − ∞ (x⁴ − x²) once a higher derivative doesn't.
+pub fn tail_chain(fun: &Fun<'_>, t: &Target<'_>, cs: &[f64], a: f64, b: f64) -> Result<Option<Leaf>, Stop> {
+    let k = t.k;
+    let right = a.is_finite();
+    let m = if right { a } else { b };
+    let over = fun.ser_of(t.expr, Interval::new(a, b), k + CHAIN_ORDER)?;
+    let mut at: Option<Series> = None;
+    for n in 1..=CHAIN_ORDER {
+        let d = kth(&over, k + n);
+        if !(usable(&over, k + n) && d.ne0()) {
+            continue;
+        }
+        let sigma = d.gt0();
+        let need = |i: usize| if right { sigma } else { sigma == (n - i).is_multiple_of(2) };
+        if at.is_none() {
+            at = Some(fun.ser_of(t.expr, Interval::point(m), k + CHAIN_ORDER - 1)?);
+        }
+        let at = at.as_ref().expect("just set");
+        if !usable(at, k + n - 1) {
+            return Ok(None);
+        }
+        if !(1..n).all(|i| side(&kth(at, k + i), 0.0) == Some(need(i))) {
+            continue;
+        }
+        let h = kth(at, k);
+        let above = need(0);
+        if !cs.iter().all(|&c| side(&h, c) == Some(above)) {
+            continue;
+        }
+        return Ok(Some(Leaf::Band {
+            a,
+            b,
+            band: if above { cs.len() } else { 0 },
+            mono: None,
+            chain: n,
+            cont: true,
+        }));
+    }
+    Ok(None)
+}
+
+/// The Taylor orders a touch is looked for up to.
+const TOUCH_ORDER: usize = 3;
+
+/// h = c exactly at the end p of `[a, b]`: is h − c of one strict sign on
+/// the rest of the box? With h's Taylor coefficients at p of orders 1 to
+/// n − 1 exactly 0 and the order-n coefficient over the box away from 0,
+/// h(x) − c = h⁽ⁿ⁾(ξ)/n!·(x − p)ⁿ for some ξ in the box (Lagrange's
+/// remainder), so its sign is that coefficient's, times (−1)ⁿ left of p.
+fn touch(
+    fun: &Fun<'_>,
+    t: &Target<'_>,
+    c: f64,
+    j: usize,
+    a: f64,
+    b: f64,
+    p: f64,
+) -> Result<Option<Leaf>, Stop> {
+    let k = t.k;
+    let at = fun.ser_of(t.expr, Interval::point(p), k + TOUCH_ORDER)?;
+    let over = fun.ser_of(t.expr, Interval::new(a, b), k + TOUCH_ORDER)?;
+    let zero = |v: &DecInterval| v.dec >= Dec::Def && v.lo() == 0.0 && v.hi() == 0.0;
+    let exact = kth(&at, k);
+    if !(exact.dec >= Dec::Def && exact.lo() == c && exact.hi() == c) {
+        return Ok(None);
+    }
+    for n in 1..=TOUCH_ORDER {
+        if n > 1 && !zero(&kth(&at, k + n - 1)) {
+            break;
+        }
+        let d = kth(&over, k + n);
+        if !(usable(&over, k + n) && d.ne0()) {
+            continue;
+        }
+        // The coefficients of h = f⁽ᵏ⁾ are positive multiples of f's.
+        let left = p == b;
+        let above = d.gt0() != (left && n % 2 == 1);
+        return Ok(Some(Leaf::Touch {
+            a,
+            b,
+            p,
+            j,
+            order: n,
+            above,
+        }));
+    }
+    Ok(None)
 }
 
 /// Splits the box, checking whether h sits exactly on a threshold at the
@@ -411,26 +573,41 @@ fn split_with_points(
     cs: &[f64],
     a: f64,
     b: f64,
+    far: bool,
     split_or_flag: &dyn Fn(&'static str) -> Result<Step, Stop>,
 ) -> Result<Step, Stop> {
-    let Some(m) = split(a, b).filter(|_| !atomic(a, b)) else {
+    let Some(mut m) = split(a, b).filter(|_| !atomic(a, b) && !far) else {
         return split_or_flag("not decided");
     };
-    if let Some(v) = point(fun, t, m)? {
-        for (j, &c) in cs.iter().enumerate() {
-            if v.lo() == c && v.hi() == c {
-                let mut parts = Vec::new();
-                if a <= m.next_down() {
-                    parts.push((a, m.next_down()));
-                }
-                if m.next_up() <= b {
-                    parts.push((m.next_up(), b));
-                }
-                return Ok(Step::Split(parts, vec![Leaf::At { p: m, j }]));
+    let exact_at = |v: &Option<DecInterval>| {
+        v.as_ref()
+            .and_then(|v| cs.iter().position(|&c| v.lo() == c && v.hi() == c))
+    };
+    let decided = |v: &Option<DecInterval>| v.as_ref().is_some_and(|v| cs.iter().all(|&c| side(v, c).is_some()));
+    let mut v = point(fun, t, m)?;
+    if exact_at(&v).is_none() && !decided(&v) {
+        // The cut sits where h's sign can't be told (on or next to a root):
+        // both halves would end there undecided. Cut off-centre.
+        let m2 = match (a.is_finite(), b.is_finite()) {
+            (true, true) => a + 0.382 * (b - a),
+            (true, false) => m + 0.618 * (m - a),
+            (false, true) => m - 0.618 * (b - m),
+            (false, false) => 0.382,
+        };
+        if m2 > a && m2 < b {
+            let v2 = point(fun, t, m2)?;
+            if exact_at(&v2).is_some() || decided(&v2) {
+                (m, v) = (m2, v2);
             }
         }
     }
-    Ok(Step::Split(vec![(a, m), (m, b)], vec![]))
+    // Both halves keep m (no real between two doubles is left out); h at
+    // m itself is the point leaf.
+    let points = match exact_at(&v) {
+        Some(j) => vec![Leaf::At { p: m, j }],
+        None => vec![],
+    };
+    Ok(Step::Split(vec![(a, m), (m, b)], points))
 }
 
 /// Narrows a proven crossing of `c` in `[a, b]` (monotone there, h − c of
@@ -515,11 +692,16 @@ pub fn claims(cover: &Cover, of: &Subject, cs: &[f64]) -> Vec<Claim> {
     for l in &cover.leaves {
         match *l {
             Leaf::Band {
-                a, b, band, mono, ..
+                a,
+                b,
+                band,
+                mono,
+                chain,
+                ..
             } => {
                 // Above every threshold below the band, below every one
                 // above it; the one reached by the enclosure (if any) by
-                // monotonicity.
+                // monotonicity, or all of them by a tail's sign chain.
                 for (j, &c) in cs.iter().enumerate() {
                     let above = j < band;
                     if mono == Some(j) && a.is_finite() && b.is_finite() {
@@ -529,8 +711,8 @@ pub fn claims(cover: &Cover, of: &Subject, cs: &[f64]) -> Vec<Claim> {
                             c: R(c),
                             above,
                         });
-                    } else if mono == Some(j) {
-                        out.push(Claim::TailNoCross {
+                    } else if chain > 0 {
+                        out.push(Claim::TailChain {
                             side: if a.is_finite() {
                                 Tail::Right
                             } else {
@@ -540,6 +722,7 @@ pub fn claims(cover: &Cover, of: &Subject, cs: &[f64]) -> Vec<Claim> {
                             of: of.clone(),
                             c: R(c),
                             above,
+                            order: chain as u8,
                         });
                     } else {
                         out.push(beyond(a, b, of, c, above));
@@ -588,6 +771,21 @@ pub fn claims(cover: &Cover, of: &Subject, cs: &[f64]) -> Vec<Claim> {
             }),
             Leaf::Undefined { a, b } => out.push(Claim::Undefined {
                 x: XBox::new(a, b),
+            }),
+            Leaf::Touch {
+                a,
+                b,
+                p,
+                j,
+                order,
+                above,
+            } => out.push(Claim::Touch {
+                x: XBox::new(a, b),
+                of: of.clone(),
+                c: R(cs[j]),
+                at: R(p),
+                order: order as u8,
+                above,
             }),
             Leaf::Flag { .. } => {}
         }

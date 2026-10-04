@@ -182,6 +182,19 @@ pub enum Claim {
         c: R,
         at: R,
     },
+    /// The subject equals `c` exactly at `at`, an end of the box, and is
+    /// strictly above (`above`) or below `c` everywhere else on the box:
+    /// its Taylor coefficients at `at` of orders 1 to `order` − 1 are
+    /// exactly 0, and its order-`order` coefficient is valid over the box
+    /// and away from 0 there (Taylor's theorem, Lagrange's remainder).
+    Touch {
+        x: XBox,
+        of: Subject,
+        c: R,
+        at: R,
+        order: u8,
+        above: bool,
+    },
     /// The subject is valid on the box with values in `[lo, hi]`.
     Value {
         x: XBox,
@@ -207,16 +220,20 @@ pub enum Claim {
         c: R,
         above: bool,
     },
-    /// On the tail the subject is continuous and strictly monotone, moving
-    /// away from `c` as x goes out (its derivative's sign says which way),
-    /// and strictly on side `above` of `c` at `from`: it never reaches `c`
-    /// on the tail.
-    TailNoCross {
+    /// On the tail the subject's derivative of order `order` (≥ 1) is
+    /// valid and strictly of one sign σ, and at `from` the subject minus
+    /// `c` and its derivatives below `order` are strictly of the signs σ
+    /// forces (all σ on the right tail; on the left, σ·(−1)^(order − i) for
+    /// the i-th): each keeps that sign on the whole tail, by monotonicity
+    /// one order up. So the subject is strictly on side `above` of `c`
+    /// there. (Order 1: monotone and moving away from `c`.)
+    TailChain {
         side: Tail,
         from: R,
         of: Subject,
         c: R,
         above: bool,
+        order: u8,
     },
     /// f is defined on the whole tail with values in `[lo, hi]`.
     TailValue {
@@ -232,9 +249,11 @@ pub enum Claim {
     /// simple zero of their cosine, a logarithm of an argument falling to
     /// 0, combined with factors bounded (and away from 0) on `near`.
     Unbounded { near: XBox, at: XBox },
-    /// Nothing is claimed inside this box: it holds an excluded point that
-    /// is not a double (the box encloses it), or it is the last few doubles
-    /// next to an excluded point or a domain end.
+    /// Nothing is claimed inside this box: it holds an excluded point or a
+    /// domain end that is not a double (the box encloses it), or the reals
+    /// strictly between an excluded double and the next double. A row is
+    /// complete everywhere outside its gaps; each is a few doubles wide at
+    /// most.
     Gap { x: XBox },
 }
 

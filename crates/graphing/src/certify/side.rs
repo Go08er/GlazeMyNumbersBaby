@@ -520,6 +520,7 @@ pub fn piece_box(p: &Piece) -> (f64, f64) {
 }
 
 /// One stretch of x in the scan of a side's cover.
+#[derive(Clone, Copy)]
 enum Item {
     /// A box, in or out of the allowed set.
     Run(bool),
@@ -618,9 +619,25 @@ fn pieces_of(
                     items.push(Item::Run(band_in(right)));
                 }
             }
+            Leaf::Touch {
+                a, p, j, above, ..
+            } => {
+                let Some(v) = value_in(j, Interval::point(p))? else {
+                    return Ok(None);
+                };
+                let run = Item::Run(band_in(j + usize::from(above)));
+                let at = Item::Point(Enc::point(p), v);
+                if p == a {
+                    items.extend([at, run]);
+                } else {
+                    items.extend([run, at]);
+                }
+            }
             Leaf::Flag { .. } => return Ok(None),
         }
     }
+    // A point seen from both sides (its own leaf and a box ending there).
+    items.dedup_by(|y, x| matches!((*x, *y), (Item::Point(p, u), Item::Point(q, v)) if p == q && u == v));
     Ok(scan(&items, piece))
 }
 
@@ -691,14 +708,25 @@ fn scan(items: &[Item], piece: &Piece) -> Option<Vec<Piece>> {
     Some(out)
 }
 
-fn gap_claims(p: &Piece, out: &mut Vec<Claim>) {
-    for b in [p.lo, p.hi] {
-        if let Bound::At { x, .. } = b
-            && !x.is_point()
-        {
-            out.push(Claim::Gap {
-                x: XBox { a: x.lo, b: x.hi },
-            });
+/// What a piece's box (`[lo, hi]`, from [`piece_box`]) leaves out at the
+/// piece's ends: an open end at a double is undefined, and the reals
+/// between a bound and the double the box starts from (a bound known only
+/// to an enclosure, or the reals beside an open end) are a gap.
+fn end_gaps(p: &Piece, lo: f64, hi: f64, out: &mut Vec<Claim>) {
+    for (b, is_lo) in [(p.lo, true), (p.hi, false)] {
+        let Bound::At { x, closed } = b else { continue };
+        let undefined = Claim::Undefined {
+            x: XBox::point(x.lo.0),
+        };
+        if !closed && x.is_point() && !out.contains(&undefined) {
+            out.push(undefined);
+        }
+        let (from, to) = if is_lo { (x.lo.0, lo) } else { (hi, x.hi.0) };
+        let gap = Claim::Gap {
+            x: XBox::new(from, to),
+        };
+        if from < to && !out.contains(&gap) {
+            out.push(gap);
         }
     }
 }
@@ -758,6 +786,8 @@ pub fn domain(f: &Fun<'_>) -> Domain {
             if lo > hi {
                 continue;
             }
+            // The cover says nothing about the reals the box leaves out.
+            end_gaps(p, lo, hi, &mut cl);
             let cover = Cover::run(f, &target, &cs, &[(lo, hi)]);
             if let Some(stop) = cover.stopped {
                 return unknown(
@@ -783,7 +813,8 @@ pub fn domain(f: &Fun<'_>) -> Domain {
         pieces = next;
     }
     for p in &pieces {
-        gap_claims(p, &mut cl);
+        let (lo, hi) = piece_box(p);
+        end_gaps(p, lo, hi, &mut cl);
     }
     let mut cert = Certificate::new(Region::Line);
     cert.extend(cl.iter().cloned());
@@ -855,16 +886,8 @@ pub fn interior(d: &Domain, w: f64) -> (Vec<IBox>, Vec<Claim>, bool) {
         if lo > hi {
             continue;
         }
-        // What the piece's own open ends at doubles leave out.
-        for b in [p.lo, p.hi] {
-            if let Bound::At { x, closed: false } = b
-                && x.is_point()
-            {
-                gaps.push(Claim::Undefined {
-                    x: XBox::point(x.lo.0),
-                });
-            }
-        }
+        let (blo, bhi) = piece_box(p);
+        end_gaps(p, blo, bhi, &mut gaps);
         // Cut out the family members in [lo, hi].
         let mut cuts: Vec<Interval> = d
             .families
@@ -878,11 +901,12 @@ pub fn interior(d: &Domain, w: f64) -> (Vec<IBox>, Vec<Claim>, bool) {
                 gaps.push(Claim::Undefined {
                     x: XBox::point(c.lo()),
                 });
-            } else {
-                gaps.push(Claim::Gap {
-                    x: XBox::new(c.lo(), c.hi()),
-                });
             }
+            // The member's enclosure and the reals out to the doubles the
+            // boxes on either side stop at.
+            gaps.push(Claim::Gap {
+                x: XBox::new(c.lo().next_down(), c.hi().next_up()),
+            });
             let at = Bound::At {
                 x: Enc::new(c.lo(), c.hi()),
                 closed: false,

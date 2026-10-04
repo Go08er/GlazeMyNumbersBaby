@@ -6,7 +6,7 @@ use super::fun::{Fun, Stop, usable};
 use super::pole::{bounded_near, end_pole, pole};
 use super::side::{Domain, IBox};
 use crate::analysis::format::Nice;
-use crate::interval::{DecInterval, Interval};
+use crate::interval::{Dec, DecInterval, Interval};
 
 /// Whether every leaf of a cover is decided (an undecided box anywhere,
 /// even the last few doubles beside a pole, leaves the row incomplete:
@@ -95,7 +95,7 @@ pub fn y_intercept(f: &Fun<'_>) -> Result<Row<Option<Enc>>, Stop> {
         });
         return Ok(Row::Certified { value: None, cert: c });
     }
-    if v.dec < crate::interval::Dec::Def || !v.iv.is_bounded() {
+    if v.dec < Dec::Def || !v.iv.is_bounded() {
         return Ok(Row::unknown("f(0) is not decided"));
     }
     c.push(Claim::Value {
@@ -159,6 +159,13 @@ fn walk(cover: &Cover, ib: &IBox, boxes: &[IBox]) -> Vec<Seg> {
                 }
             }
             Leaf::At { p, .. } => out.push(Seg::Zero(Enc::point(p))),
+            Leaf::Touch { a, p, above, .. } => {
+                if p == a {
+                    out.extend([Seg::Zero(Enc::point(p)), Seg::Sign(above)]);
+                } else {
+                    out.extend([Seg::Sign(above), Seg::Zero(Enc::point(p))]);
+                }
+            }
             Leaf::Equal { .. } => out.push(Seg::Flat),
             Leaf::Undefined { .. } => out.push(Seg::Unknown),
             Leaf::Flag { .. } => {
@@ -168,15 +175,23 @@ fn walk(cover: &Cover, ib: &IBox, boxes: &[IBox]) -> Vec<Seg> {
             }
         }
     }
-    // Merge runs of the same sign.
-    out.dedup_by(|y, x| matches!((*x, *y), (Seg::Sign(p), Seg::Sign(q)) if p == q));
+    // Merge runs of the same sign, and a zero seen from both sides (its
+    // point leaf and the boxes ending there).
+    out.dedup_by(|y, x| match (*x, *y) {
+        (Seg::Sign(p), Seg::Sign(q)) => p == q,
+        (Seg::Zero(p), Seg::Zero(q)) => p == q,
+        _ => false,
+    });
     out
 }
 
 /// Where f⁽ᵏ⁾ changes sign along a box: (point, from positive to
-/// negative?). `None` if a zero's sides aren't both decided.
-fn changes(segs: &[Seg]) -> Option<Vec<(Enc, bool)>> {
+/// negative?), each proven by decided signs on both sides (the leaves tile
+/// the box, so neighbours in the walk are neighbours in x); and whether
+/// every zero and stretch was decided (no change missed).
+fn changes(segs: &[Seg]) -> (Vec<(Enc, bool)>, bool) {
     let mut out = Vec::new();
+    let mut complete = true;
     for (i, s) in segs.iter().enumerate() {
         match s {
             Seg::Zero(x) => {
@@ -191,14 +206,14 @@ fn changes(segs: &[Seg]) -> Option<Vec<(Enc, bool)>> {
                     // A zero at the very end of a box: the box's bound,
                     // not a change inside.
                     (None, Some(Seg::Sign(_))) | (Some(Seg::Sign(_)), None) => {}
-                    _ => return None,
+                    _ => complete = false,
                 }
             }
-            Seg::Flat | Seg::Unknown => return None,
+            Seg::Flat | Seg::Unknown => complete = false,
             Seg::Sign(_) => {}
         }
     }
-    Some(out)
+    (out, complete)
 }
 
 // ---------------------------------------------------------- extrema
@@ -216,13 +231,11 @@ pub fn extrema(
     cl.extend(gaps);
     for ib in boxes {
         let segs = walk(c1, ib, boxes);
-        let Some(ch) = changes(&segs) else {
-            complete = false;
-            continue;
-        };
+        let (ch, done) = changes(&segs);
+        complete &= done;
         for (x, from_pos) in ch {
             let y = f.val(Interval::new(x.lo.0, x.hi.0))?;
-            if y.is_empty() || !y.iv.is_bounded() {
+            if y.is_empty() || !y.iv.is_bounded() || y.dec < Dec::Def {
                 complete = false;
                 continue;
             }
@@ -266,13 +279,11 @@ pub fn inflections(
     cl.extend(gaps);
     for ib in boxes {
         let segs = walk(c2, ib, boxes);
-        let Some(ch) = changes(&segs) else {
-            complete = false;
-            continue;
-        };
+        let (ch, done) = changes(&segs);
+        complete &= done;
         for (x, _) in ch {
             let y = f.val(Interval::new(x.lo.0, x.hi.0))?;
-            if y.is_empty() || !y.iv.is_bounded() {
+            if y.is_empty() || !y.iv.is_bounded() || y.dec < Dec::Def {
                 complete = false;
                 continue;
             }
@@ -305,7 +316,9 @@ fn monotone_pieces(c1: &Cover, boxes: &[IBox]) -> Option<Vec<(Monotone, bool, bo
     let mut out = Vec::new();
     for ib in boxes {
         let segs = walk(c1, ib, boxes);
-        changes(&segs)?;
+        if !changes(&segs).1 {
+            return None;
+        }
         let mut lo = ib.lo;
         let mut lo_clip = ib.lo_clipped;
         let mut dir: Option<bool> = None;
@@ -418,6 +431,7 @@ fn sign_beside(c0: &Cover, ib: &IBox, at_start: bool, boxes: &[IBox]) -> Option<
     }?;
     match *leaf {
         Leaf::Band { band, .. } => Some(band == 1),
+        Leaf::Touch { above, .. } => Some(above),
         _ => None,
     }
 }
@@ -492,19 +506,37 @@ pub fn vertical(f: &Fun<'_>, dom: &Domain, c0: &Cover, boxes: &[IBox], whole: bo
     if !whole {
         return Ok(Row::unknown("excluded families"));
     }
-    // Continuity everywhere inside: no asymptote but at the exclusions.
-    let all_cont = c0.leaves.iter().all(|l| match *l {
-        Leaf::Band { cont, .. } | Leaf::Equal { cont, .. } => cont,
-        Leaf::Flag { .. } => is_gap(l, boxes),
-        _ => true,
-    }) && c0.stopped.is_none();
-    if !all_cont {
-        return Ok(Row::unknown("f is not proven continuous inside its domain"));
+    // Continuity (or boundedness) everywhere inside: no asymptote but at
+    // the exclusions. A box the cover left undecided (its sign) is bounded
+    // on its own.
+    let mut cl = Vec::new();
+    for l in &c0.leaves {
+        let ok = match *l {
+            Leaf::Band { cont, .. } | Leaf::Equal { cont, .. } => cont,
+            Leaf::Flag { a, b, .. } => {
+                let v = f.val(Interval::new(a, b))?;
+                let ok = !v.is_empty() && v.dec >= Dec::Def && v.iv.is_bounded();
+                if ok {
+                    cl.push(Claim::Value {
+                        x: XBox::new(a, b),
+                        of: Subject::f(0),
+                        lo: R(v.lo()),
+                        hi: R(v.hi()),
+                    });
+                }
+                ok
+            }
+            _ => true,
+        };
+        if !ok {
+            return Ok(Row::unknown("f is not proven continuous inside its domain"));
+        }
     }
     let (inner, ends) = excluded_points(boxes);
     let mut out = Vec::new();
     let mut c = Certificate::new(Region::Line);
     c.extend(claims(c0, &Subject::f(0), &[0.0]));
+    c.extend(cl);
     for x in inner {
         let (near, claim) = classify(f, x, boxes)?;
         match near {
@@ -585,13 +617,29 @@ pub fn tail_end(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cla
         }
     };
     let start = from.abs().max(1.0);
+    let from_r = R(if right { start } else { -start });
+    // f′ of one sign and moving away from 0 out along the tail (a sign
+    // chain through f″, f‴): |f′| ≥ |f′(start)| > 0, so f goes to ±∞.
+    let t = super::cover::Target { expr: &f.expr, k: 1 };
+    let (a, b) = if right { (start, f64::INFINITY) } else { (f64::NEG_INFINITY, -start) };
+    if let Some(Leaf::Band { band, chain, .. }) = super::cover::tail_chain(f, &t, &[0.0], a, b)? {
+        let rising = band == 1;
+        let claim = Claim::TailChain {
+            side,
+            from: from_r,
+            of: Subject::f(1),
+            c: R(0.0),
+            above: rising,
+            order: chain as u8,
+        };
+        return Ok((TailEnd::Infinite(rising == right), vec![claim]));
+    }
     let s = f.ser(tail(start), 1)?;
     if !(usable(&s, 1) && s[1].ne0()) {
         return Ok((TailEnd::Unknown, Vec::new()));
     }
     let d = s[1];
     let rising = d.gt0();
-    let from_r = R(if right { start } else { -start });
     // f′ bounded away from 0 (beyond half its bound): f goes to ±∞.
     let c = if rising { d.lo() / 2.0 } else { d.hi() / 2.0 };
     if c != 0.0 {
@@ -824,7 +872,7 @@ fn end_value(
 /// its claim added to `cl`.
 fn attained(f: &Fun<'_>, x: Enc, cl: &mut Vec<Claim>) -> Result<Option<End>, Stop> {
     let v = f.val(Interval::new(x.lo.0, x.hi.0))?;
-    if v.is_empty() || !v.iv.is_bounded() || v.dec < crate::interval::Dec::Def {
+    if v.is_empty() || !v.iv.is_bounded() || v.dec < Dec::Def {
         return Ok(None);
     }
     cl.push(Claim::Value {
@@ -922,7 +970,7 @@ pub fn parity(f: &Fun<'_>) -> Result<Row<Parity>, Stop> {
         for (p, v) in [(x, a), (-x, b)] {
             if v.is_empty() {
                 c.push(Claim::Undefined { x: XBox::point(p) });
-            } else if v.dec >= crate::interval::Dec::Def {
+            } else if v.dec >= Dec::Def {
                 c.push(Claim::Value {
                     x: XBox::point(p),
                     of: Subject::f(0),
@@ -931,7 +979,7 @@ pub fn parity(f: &Fun<'_>) -> Result<Row<Parity>, Stop> {
                 });
             }
         }
-        let def = |v: &DecInterval| !v.is_empty() && v.dec >= crate::interval::Dec::Def;
+        let def = |v: &DecInterval| !v.is_empty() && v.dec >= Dec::Def;
         if def(&a) != def(&b) && (a.is_empty() || b.is_empty()) {
             not_even = true;
             not_odd = true;
