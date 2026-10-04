@@ -1,0 +1,702 @@
+//! Limits at ±∞ by dominant terms ("Gruntz-lite"), kept to what can be
+//! proven.
+//!
+//! As x → +∞ each subexpression is reduced to its **leading term**
+//! c·e^{kx}·x^p·(ln x)^m (exact k, p, m; c exact, or an enclosure that
+//! excludes 0), or to "tends to 0", "grows faster than any such term",
+//! "stays bounded" or "unknown". A sum keeps its largest term; equal
+//! terms add exactly, and a sum whose leading terms cancel is unknown
+//! (the next term would be needed). Rational functions go through the
+//! exact normaliser first. The limit at −∞ is that of f(−x) at +∞.
+//!
+//! "Unknown" is always allowed; a wrong limit never is.
+
+use super::analysis::{Facts, rec_interval};
+use super::lang::{ExactLiterals, to_rec};
+use super::period::{PiQ, affine, exact_constant};
+use super::q::Q;
+use super::rational::{Dir, RationalLimit, rational_form};
+use crate::ast::{BinOp, Expr, Func};
+use crate::compile::syntactic_rational;
+use crate::functions::TrigUnit;
+use crate::interval::{DecInterval, Interval, elem};
+
+/// A limit at ±∞.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Limit {
+    /// +∞.
+    PosInf,
+    /// −∞.
+    NegInf,
+    /// A finite value, exactly q·πᵏ.
+    Exact(PiQ),
+    /// A finite value, enclosed.
+    Approx(Interval),
+    /// Not determined.
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Coef {
+    Exact(PiQ),
+    Approx(Interval),
+}
+
+impl Coef {
+    fn interval(self) -> Interval {
+        match self {
+            Coef::Exact(v) => {
+                let q = v.q.interval();
+                if v.k == 0 {
+                    q
+                } else {
+                    let p = DecInterval::new(elem::pi());
+                    elem::mul(&DecInterval::new(q), &elem::powi(&p, v.k)).iv
+                }
+            }
+            Coef::Approx(i) => i,
+        }
+    }
+
+    fn sign(self) -> Option<i32> {
+        match self {
+            Coef::Exact(v) => Some(v.q.signum()),
+            Coef::Approx(i) => {
+                if i.lo() > 0.0 {
+                    Some(1)
+                } else if i.hi() < 0.0 {
+                    Some(-1)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn approx(i: Interval) -> Option<Coef> {
+        (!i.is_empty() && (i.lo() > 0.0 || i.hi() < 0.0)).then_some(Coef::Approx(i))
+    }
+
+    fn neg(self) -> Coef {
+        match self {
+            Coef::Exact(v) => {
+                v.q.neg()
+                    .map(|q| Coef::Exact(PiQ { q, k: v.k }))
+                    .unwrap_or(Coef::Approx(-v_interval(v)))
+            }
+            Coef::Approx(i) => Coef::Approx(-i),
+        }
+    }
+
+    fn mul(self, o: Coef) -> Option<Coef> {
+        if let (Coef::Exact(a), Coef::Exact(b)) = (self, o)
+            && let (Some(q), Some(k)) = (a.q.mul(b.q), a.k.checked_add(b.k))
+        {
+            return Some(Coef::Exact(PiQ { q, k }));
+        }
+        let r = elem::mul(
+            &DecInterval::new(self.interval()),
+            &DecInterval::new(o.interval()),
+        );
+        Coef::approx(r.iv)
+    }
+
+    fn recip(self) -> Option<Coef> {
+        if let Coef::Exact(a) = self
+            && let Some(q) = a.q.recip()
+        {
+            return Some(Coef::Exact(PiQ { q, k: -a.k }));
+        }
+        Coef::approx(elem::recip(&DecInterval::new(self.interval())).iv)
+    }
+
+    /// The sum of two coefficients of the same scale, if it doesn't vanish
+    /// (or might).
+    fn add(self, o: Coef) -> Option<Coef> {
+        if let (Coef::Exact(a), Coef::Exact(b)) = (self, o)
+            && a.k == b.k
+        {
+            let q = a.q.add(b.q)?;
+            return (!q.is_zero()).then_some(Coef::Exact(PiQ { q, k: a.k }));
+        }
+        let r = elem::add(
+            &DecInterval::new(self.interval()),
+            &DecInterval::new(o.interval()),
+        );
+        Coef::approx(r.iv)
+    }
+
+    /// cʳ for a rational r (real-root meaning).
+    fn pow(self, r: Q) -> Option<Coef> {
+        if let Coef::Exact(a) = self
+            && let Some(n) = r.as_int()
+            && n.unsigned_abs() <= 64
+        {
+            let q = a.q.powi(n)?;
+            return Some(Coef::Exact(PiQ {
+                q,
+                k: a.k.checked_mul(i32::try_from(n).ok()?)?,
+            }));
+        }
+        let (p, d) = (
+            i32::try_from(r.numer()).ok()?,
+            i32::try_from(r.denom()).ok()?,
+        );
+        let base = DecInterval::new(self.interval());
+        let v = if d == 1 {
+            elem::powi(&base, p)
+        } else {
+            elem::pow_rational(&base, p, d)
+        };
+        Coef::approx(v.iv)
+    }
+}
+
+fn v_interval(v: PiQ) -> Interval {
+    Coef::Exact(v).interval()
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Term {
+    c: Coef,
+    k: Q,
+    p: Q,
+    m: Q,
+}
+
+impl Term {
+    fn constant(c: Coef) -> Term {
+        Term {
+            c,
+            k: Q::ZERO,
+            p: Q::ZERO,
+            m: Q::ZERO,
+        }
+    }
+
+    /// The sign of the scale e^{kx}x^p(ln x)^m against 1: 1 grows, 0 is
+    /// constant, −1 decays.
+    fn growth(&self) -> i32 {
+        for s in [self.k, self.p, self.m] {
+            if s.signum() != 0 {
+                return s.signum();
+            }
+        }
+        0
+    }
+
+    fn scale_cmp(&self, o: &Term) -> std::cmp::Ordering {
+        (self.k, self.p, self.m).cmp(&(o.k, o.p, o.m))
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Asy {
+    /// Exactly 0.
+    Zero,
+    /// The leading term.
+    Term(Term),
+    /// → 0, no leading term known.
+    Small,
+    /// → ±∞ faster than every term.
+    Huge(i32),
+    /// Bounded within the interval, no limit known.
+    Bounded(Interval),
+    Unknown,
+}
+
+struct Cx<'a> {
+    unit: TrigUnit,
+    lits: &'a ExactLiterals,
+    facts: Facts,
+}
+
+impl Cx<'_> {
+    fn constant(&self, e: &Expr) -> Asy {
+        if let Some(v) = exact_constant(e, self.lits) {
+            return if v.q.is_zero() {
+                Asy::Zero
+            } else {
+                Asy::Term(Term::constant(Coef::Exact(v)))
+            };
+        }
+        let Ok(rec) = to_rec(e, self.lits) else {
+            return Asy::Unknown;
+        };
+        let i = rec_interval(&rec, &self.facts);
+        if i.lo() == 0.0 && i.hi() == 0.0 {
+            return Asy::Zero;
+        }
+        match Coef::approx(i) {
+            Some(c) => Asy::Term(Term::constant(c)),
+            None => Asy::Unknown,
+        }
+    }
+
+    fn quarter(&self) -> PiQ {
+        match self.unit {
+            TrigUnit::Radians => PiQ {
+                q: Q::new(1, 2).expect("½"),
+                k: 1,
+            },
+            TrigUnit::Degrees => PiQ {
+                q: Q::int(90),
+                k: 0,
+            },
+            TrigUnit::Grads => PiQ {
+                q: Q::int(100),
+                k: 0,
+            },
+        }
+    }
+}
+
+fn neg(a: Asy) -> Asy {
+    match a {
+        Asy::Term(t) => Asy::Term(Term { c: t.c.neg(), ..t }),
+        Asy::Huge(s) => Asy::Huge(-s),
+        Asy::Bounded(i) => Asy::Bounded(-i),
+        other => other,
+    }
+}
+
+fn add(a: Asy, b: Asy) -> Asy {
+    use Asy::*;
+    match (a, b) {
+        (Unknown, _) | (_, Unknown) => Unknown,
+        (Zero, x) | (x, Zero) => x,
+        (Huge(s), Huge(t)) => {
+            if s == t {
+                Huge(s)
+            } else {
+                Unknown
+            }
+        }
+        (Huge(s), _) | (_, Huge(s)) => Huge(s),
+        (Term(x), Term(y)) => match x.scale_cmp(&y) {
+            std::cmp::Ordering::Greater => Term(x),
+            std::cmp::Ordering::Less => Term(y),
+            std::cmp::Ordering::Equal => match x.c.add(y.c) {
+                Some(c) => Term(self::Term { c, ..x }),
+                None => Unknown,
+            },
+        },
+        (Term(t), Small) | (Small, Term(t)) => {
+            if t.growth() >= 0 {
+                Term(t)
+            } else {
+                Small
+            }
+        }
+        (Term(t), Bounded(_)) | (Bounded(_), Term(t)) => {
+            if t.growth() > 0 {
+                Term(t)
+            } else {
+                Unknown
+            }
+        }
+        (Small, Small) => Small,
+        _ => Unknown,
+    }
+}
+
+fn mul(a: Asy, b: Asy) -> Asy {
+    use Asy::*;
+    match (a, b) {
+        (Unknown, _) | (_, Unknown) => Unknown,
+        (Zero, _) | (_, Zero) => Zero,
+        (Huge(s), Huge(t)) => Huge(s * t),
+        (Huge(s), Term(t)) | (Term(t), Huge(s)) => match (t.growth() >= 0, t.c.sign()) {
+            (true, Some(c)) => Huge(s * c),
+            _ => Unknown,
+        },
+        (Term(x), Term(y)) => match (x.c.mul(y.c), x.k.add(y.k), x.p.add(y.p), x.m.add(y.m)) {
+            (Some(c), Some(k), Some(p), Some(m)) => Term(self::Term { c, k, p, m }),
+            _ => Unknown,
+        },
+        (Term(t), Small) | (Small, Term(t)) => {
+            if t.growth() <= 0 {
+                Small
+            } else {
+                Unknown
+            }
+        }
+        (Term(t), Bounded(_)) | (Bounded(_), Term(t)) => {
+            if t.growth() < 0 {
+                Small
+            } else {
+                Unknown
+            }
+        }
+        (Small, Small) | (Small, Bounded(_)) | (Bounded(_), Small) => Small,
+        _ => Unknown,
+    }
+}
+
+fn recip(a: Asy) -> Asy {
+    match a {
+        Asy::Term(t) => match (t.c.recip(), t.k.neg(), t.p.neg(), t.m.neg()) {
+            (Some(c), Some(k), Some(p), Some(m)) => Asy::Term(Term { c, k, p, m }),
+            _ => Asy::Unknown,
+        },
+        Asy::Huge(_) => Asy::Small,
+        _ => Asy::Unknown,
+    }
+}
+
+/// aʳ for a constant rational r (real-root meaning).
+fn pow(a: Asy, r: Q) -> Asy {
+    match a {
+        Asy::Zero => {
+            if r.signum() > 0 {
+                Asy::Zero
+            } else {
+                Asy::Unknown
+            }
+        }
+        Asy::Term(t) => match (t.c.pow(r), t.k.mul(r), t.p.mul(r), t.m.mul(r)) {
+            (Some(c), Some(k), Some(p), Some(m)) => Asy::Term(Term { c, k, p, m }),
+            _ => Asy::Unknown,
+        },
+        Asy::Small if r.signum() > 0 => Asy::Small,
+        Asy::Huge(s) if r.signum() > 0 => {
+            if s > 0 {
+                Asy::Huge(1)
+            } else if r.denom() % 2 == 1 {
+                Asy::Huge(if r.numer() % 2 == 0 { 1 } else { -1 })
+            } else {
+                Asy::Unknown
+            }
+        }
+        Asy::Huge(_) if r.signum() < 0 => Asy::Small,
+        _ => Asy::Unknown,
+    }
+}
+
+fn exp_of(a: Asy) -> Asy {
+    match a {
+        Asy::Zero | Asy::Small => Asy::Term(Term::constant(Coef::Exact(PiQ { q: Q::ONE, k: 0 }))),
+        Asy::Term(t) => match (t.growth(), t.c.sign()) {
+            (0, _) => {
+                let i = elem::exp(&DecInterval::new(t.c.interval())).iv;
+                Coef::approx(i).map_or(Asy::Unknown, |c| Asy::Term(Term::constant(c)))
+            }
+            (g, _) if g < 0 => Asy::Term(Term::constant(Coef::Exact(PiQ { q: Q::ONE, k: 0 }))),
+            (_, Some(s)) if s > 0 => Asy::Huge(1),
+            (_, Some(_)) => Asy::Small,
+            _ => Asy::Unknown,
+        },
+        Asy::Huge(s) if s > 0 => Asy::Huge(1),
+        Asy::Huge(_) => Asy::Small,
+        Asy::Bounded(i) => Asy::Bounded(elem::exp(&DecInterval::new(i)).iv),
+        Asy::Unknown => Asy::Unknown,
+    }
+}
+
+fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
+    if !e.contains_x() {
+        return cx.constant(e);
+    }
+    match e {
+        Expr::X => Asy::Term(Term {
+            c: Coef::Exact(PiQ { q: Q::ONE, k: 0 }),
+            k: Q::ZERO,
+            p: Q::ONE,
+            m: Q::ZERO,
+        }),
+        Expr::Neg(a) => neg(asy(a, cx)),
+        Expr::Degrees(a) => asy(a, cx),
+        Expr::Bin(op, a, b) => match op {
+            BinOp::Add => add(asy(a, cx), asy(b, cx)),
+            BinOp::Sub => add(asy(a, cx), neg(asy(b, cx))),
+            BinOp::Mul => mul(asy(a, cx), asy(b, cx)),
+            BinOp::Div => {
+                let d = asy(b, cx);
+                match d {
+                    Asy::Zero | Asy::Small | Asy::Bounded(_) | Asy::Unknown => Asy::Unknown,
+                    d => mul(asy(a, cx), recip(d)),
+                }
+            }
+            BinOp::Pow => {
+                if let Some((p, q)) = syntactic_rational(b) {
+                    let r = Q::new(p as i128, q as i128).expect("q ≠ 0");
+                    return pow(asy(a, cx), r);
+                }
+                if !b.contains_x() {
+                    // functions::pow: a non-integer exponent needs a base ≥ 0.
+                    let Some(r) = exact_constant(b, cx.lits).filter(|v| v.k == 0) else {
+                        return Asy::Unknown;
+                    };
+                    let base = asy(a, cx);
+                    let positive = match base {
+                        Asy::Term(t) => t.c.sign() == Some(1),
+                        Asy::Huge(s) => s > 0,
+                        _ => false,
+                    };
+                    return if r.q.is_int() || positive {
+                        pow(base, r.q)
+                    } else {
+                        Asy::Unknown
+                    };
+                }
+                // e^b is exp(b); a^b = e^(b·ln a) where defined (the TI
+                // rule: a > 0).
+                if matches!(**a, Expr::Const(crate::ast::Constant::E)) {
+                    return asy(&Expr::Call(Func::Exp, vec![(**b).clone()]), cx);
+                }
+                let ln = Expr::Call(Func::Ln, vec![(**a).clone()]);
+                let arg = Expr::bin(BinOp::Mul, (**b).clone(), ln);
+                asy(&Expr::Call(Func::Exp, vec![arg]), cx)
+            }
+        },
+        Expr::Call(f, args) => {
+            let a = &args[0];
+            use Func::*;
+            match f {
+                Exp => {
+                    // An exactly affine exponent gives the term e^d·e^{sx}.
+                    if let Some(s) = affine(a, cx.lits)
+                        && s.k == 0
+                    {
+                        let at0 = a.map(&|n| matches!(n, Expr::X).then_some(Expr::Num(0.0)));
+                        let d = cx.constant(&at0);
+                        let c = match d {
+                            Asy::Zero => Some(Coef::Exact(PiQ { q: Q::ONE, k: 0 })),
+                            Asy::Term(t) => {
+                                Coef::approx(elem::exp(&DecInterval::new(t.c.interval())).iv)
+                            }
+                            _ => None,
+                        };
+                        return match c {
+                            Some(c) => Asy::Term(Term {
+                                c,
+                                k: s.q,
+                                p: Q::ZERO,
+                                m: Q::ZERO,
+                            }),
+                            None => Asy::Unknown,
+                        };
+                    }
+                    exp_of(asy(a, cx))
+                }
+                Ln | Log => {
+                    let r = match asy(a, cx) {
+                        Asy::Term(t) if t.c.sign() == Some(1) => {
+                            if t.k.signum() != 0 {
+                                Asy::Term(Term {
+                                    c: Coef::Exact(PiQ { q: t.k, k: 0 }),
+                                    k: Q::ZERO,
+                                    p: Q::ONE,
+                                    m: Q::ZERO,
+                                })
+                            } else if t.p.signum() != 0 {
+                                Asy::Term(Term {
+                                    c: Coef::Exact(PiQ { q: t.p, k: 0 }),
+                                    k: Q::ZERO,
+                                    p: Q::ZERO,
+                                    m: Q::ONE,
+                                })
+                            } else if t.m.signum() != 0 {
+                                Asy::Unknown
+                            } else {
+                                let i = elem::ln(&DecInterval::new(t.c.interval())).iv;
+                                if i.lo() == 0.0 && i.hi() == 0.0 {
+                                    Asy::Zero
+                                } else {
+                                    Coef::approx(i)
+                                        .map_or(Asy::Unknown, |c| Asy::Term(Term::constant(c)))
+                                }
+                            }
+                        }
+                        _ => Asy::Unknown,
+                    };
+                    if *f == Log {
+                        let ln10 = elem::ln(&DecInterval::new(Interval::point(10.0))).iv;
+                        let k = Coef::approx(ln10).expect("ln 10 > 0");
+                        mul(r, recip(Asy::Term(Term::constant(k))))
+                    } else {
+                        r
+                    }
+                }
+                Sqrt => pow(asy(a, cx), Q::new(1, 2).expect("½")),
+                Cbrt => pow(asy(a, cx), Q::new(1, 3).expect("⅓")),
+                Atan | Tanh | Acot => {
+                    let inner = asy(a, cx);
+                    let to = |s: i32| -> Asy {
+                        let v = if *f == Tanh {
+                            PiQ {
+                                q: Q::int(s as i128),
+                                k: 0,
+                            }
+                        } else if *f == Acot {
+                            if s > 0 {
+                                return Asy::Small;
+                            }
+                            let q = cx.quarter();
+                            PiQ {
+                                q: q.q.mul(Q::int(2)).expect("2·quarter"),
+                                k: q.k,
+                            }
+                        } else {
+                            let q = cx.quarter();
+                            PiQ {
+                                q: q.q.mul(Q::int(s as i128)).expect("±quarter"),
+                                k: q.k,
+                            }
+                        };
+                        Asy::Term(Term::constant(Coef::Exact(v)))
+                    };
+                    match inner {
+                        Asy::Term(t) if t.growth() > 0 => match t.c.sign() {
+                            Some(s) => to(s),
+                            None => Asy::Unknown,
+                        },
+                        Asy::Huge(s) => to(s),
+                        Asy::Zero | Asy::Small if *f != Acot => Asy::Small,
+                        _ => Asy::Unknown,
+                    }
+                }
+                Sinh | Cosh => {
+                    let e1 = Expr::Call(Exp, vec![a.clone()]);
+                    let e2 = Expr::Call(Exp, vec![Expr::Neg(Box::new(a.clone()))]);
+                    let op = if *f == Sinh { BinOp::Sub } else { BinOp::Add };
+                    let sum = Expr::bin(op, e1, e2);
+                    asy(&Expr::bin(BinOp::Div, sum, Expr::Num(2.0)), cx)
+                }
+                Sin | Cos => match asy(a, cx) {
+                    Asy::Term(t) if t.growth() > 0 => Asy::Bounded(Interval::new(-1.0, 1.0)),
+                    Asy::Huge(_) => Asy::Bounded(Interval::new(-1.0, 1.0)),
+                    Asy::Zero | Asy::Small if *f == Sin => Asy::Small,
+                    Asy::Zero | Asy::Small => {
+                        Asy::Term(Term::constant(Coef::Exact(PiQ { q: Q::ONE, k: 0 })))
+                    }
+                    _ => Asy::Unknown,
+                },
+                Abs => match asy(a, cx) {
+                    Asy::Term(t) => match t.c.sign() {
+                        Some(-1) => neg(Asy::Term(t)),
+                        Some(_) => Asy::Term(t),
+                        None => Asy::Unknown,
+                    },
+                    Asy::Huge(_) => Asy::Huge(1),
+                    other @ (Asy::Zero | Asy::Small) => other,
+                    _ => Asy::Unknown,
+                },
+                Floor | Ceil | Round => match asy(a, cx) {
+                    // ⌊A⌋ = A + O(1): the leading term of a growing A.
+                    Asy::Term(t) if t.growth() > 0 => Asy::Term(t),
+                    h @ Asy::Huge(_) => h,
+                    _ => Asy::Unknown,
+                },
+                _ => Asy::Unknown,
+            }
+        }
+        _ => Asy::Unknown,
+    }
+}
+
+/// The limit of `e` as x → ±∞ (`Unknown` when not proven).
+pub fn limit(
+    e: &Expr,
+    dir: Dir,
+    unit: TrigUnit,
+    lits: &ExactLiterals,
+    variables: &dyn crate::compile::VariableValues,
+) -> Limit {
+    if let Some(f) = rational_form(e, lits) {
+        return match f.reduced.limit(dir) {
+            Some(RationalLimit::Finite(q)) => Limit::Exact(PiQ { q, k: 0 }),
+            Some(RationalLimit::PosInf) => Limit::PosInf,
+            Some(RationalLimit::NegInf) => Limit::NegInf,
+            None => Limit::Unknown,
+        };
+    }
+    let e = match dir {
+        Dir::PosInf => e.clone(),
+        Dir::NegInf => e.map(&|n| matches!(n, Expr::X).then(|| Expr::Neg(Box::new(Expr::X)))),
+    };
+    let facts = Facts {
+        unit,
+        x: Interval::ENTIRE,
+        vars: e
+            .variables()
+            .into_iter()
+            .map(|n| {
+                let v = variables
+                    .value(&n)
+                    .unwrap_or(crate::compile::DEFAULT_VARIABLE_VALUE);
+                (n, v)
+            })
+            .collect(),
+    };
+    let cx = Cx { unit, lits, facts };
+    match asy(&e, &cx) {
+        Asy::Zero | Asy::Small => Limit::Exact(PiQ { q: Q::ZERO, k: 0 }),
+        Asy::Huge(s) => {
+            if s > 0 {
+                Limit::PosInf
+            } else {
+                Limit::NegInf
+            }
+        }
+        Asy::Term(t) => match t.growth() {
+            g if g < 0 => Limit::Exact(PiQ { q: Q::ZERO, k: 0 }),
+            0 => match t.c {
+                Coef::Exact(v) => Limit::Exact(v),
+                Coef::Approx(i) => Limit::Approx(i),
+            },
+            _ => match t.c.sign() {
+                Some(1) => Limit::PosInf,
+                Some(_) => Limit::NegInf,
+                None => Limit::Unknown,
+            },
+        },
+        Asy::Bounded(_) | Asy::Unknown => Limit::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::equation::Equation;
+
+    fn lim(s: &str, dir: Dir) -> Limit {
+        let text = format!("y={s}");
+        let eq = Equation::parse(&text).unwrap();
+        let lits = ExactLiterals::of(&text, Default::default()).unwrap();
+        limit(eq.explicit().unwrap().1, dir, TrigUnit::Radians, &lits, &())
+    }
+
+    fn exact(n: i128, d: i128, k: i32) -> Limit {
+        Limit::Exact(PiQ {
+            q: Q::new(n, d).unwrap(),
+            k,
+        })
+    }
+
+    #[test]
+    fn dominant_terms() {
+        use Dir::*;
+        assert_eq!(lim("exp(-x^2)", PosInf), exact(0, 1, 0));
+        assert_eq!(lim("exp(-x^2)", NegInf), exact(0, 1, 0));
+        assert_eq!(lim("atan(x)", PosInf), exact(1, 2, 1));
+        assert_eq!(lim("atan(x)", NegInf), exact(-1, 2, 1));
+        assert_eq!(lim("1/(1+e^x)", PosInf), exact(0, 1, 0));
+        assert_eq!(lim("1/(1+e^x)", NegInf), exact(1, 1, 0));
+        assert_eq!(lim("sin(x)/x", PosInf), exact(0, 1, 0));
+        assert_eq!(lim("x*e^(-x)", PosInf), exact(0, 1, 0));
+        assert_eq!(lim("x*e^(-x)", NegInf), Limit::NegInf);
+        assert_eq!(lim("ln(x)/x", PosInf), exact(0, 1, 0));
+        assert_eq!(lim("x^(1/3)", NegInf), Limit::NegInf);
+        assert_eq!(lim("e^x/x^100", PosInf), Limit::PosInf);
+        assert_eq!(lim("(2x+1)/(x-3)", PosInf), exact(2, 1, 0));
+        assert_eq!(lim("tanh(x)", NegInf), exact(-1, 1, 0));
+        assert_eq!(lim("sin(x)", PosInf), Limit::Unknown);
+        assert_eq!(lim("x-x+sin(x)", PosInf), Limit::Unknown);
+        assert_eq!(lim("sqrt(x^2+x)-x", PosInf), Limit::Unknown, "cancels");
+        assert_eq!(lim("e^(x^2)-x", PosInf), Limit::PosInf);
+        assert_eq!(lim("1-1/x", PosInf), exact(1, 1, 0));
+        assert_eq!(lim("acot(x)", NegInf), exact(1, 1, 1));
+        assert_eq!(lim("acot(x)", PosInf), exact(0, 1, 0));
+    }
+}

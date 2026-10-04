@@ -10,6 +10,9 @@ authors.workspace = true
 # Correctly rounded binary64 elementary functions (CORE-MATH, MIT): the
 # interval core's point evaluations.
 core-math = "1.4"
+# E-graph equality saturation (MIT): the simplifier's rewriting
+# (`simplify::egraph`), with every rule checked against MPFR in tests.
+egg = { version = "0.11", default-features = false }
 # Development only (`--features mpfr-oracle`): MPFR, to check the interval
 # core's enclosures against 256-bit values. LGPL; never in a release build.
 rug = { version = "1.28", default-features = false, features = ["float", "std"], optional = true }
