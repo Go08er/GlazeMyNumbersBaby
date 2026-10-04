@@ -794,6 +794,19 @@ pub fn gaps_clear(
     let (inner, _) = excluded_points(boxes);
     for g in gaps {
         let iv = Interval::new(g.a.0, g.b.0);
+        // The derivative trees, for a kinked f off its kinks: usable here
+        // when no kink in the gap is a point of f's.
+        let derivs = if !use_derivs {
+            None
+        } else if f.kinked {
+            if f.no_kink_in(iv)? {
+                f.derivs_off_kinks()
+            } else {
+                None
+            }
+        } else {
+            f.derivs()
+        };
         let c = f.ser(iv, k)?[k];
         if !c.is_empty() && c.ne0() {
             continue;
@@ -807,8 +820,7 @@ pub fn gaps_clear(
             continue;
         }
         if k > 0
-            && use_derivs
-            && let Some(d) = f.derivs()
+            && let Some(d) = derivs
         {
             let v = f.ser_of(&d[k - 1], iv, 0)?[0];
             if !v.is_empty() && v.ne0() {
@@ -818,10 +830,10 @@ pub fn gaps_clear(
         // Factor by factor: each away from 0 over the gap, or exactly 0 at
         // one of its doubles and strictly monotone across it (so 0 nowhere
         // between the doubles).
-        let tree = match (k, &f.numerators, if use_derivs { f.derivs() } else { None }) {
+        let tree = match (k, &f.numerators, derivs) {
             (_, Some(n), _) => Some(&n[k]),
             (0, None, _) => Some(&f.eval),
-            (_, None, Some(d)) if use_derivs => Some(&d[k - 1]),
+            (_, None, Some(d)) => Some(&d[k - 1]),
             _ => None,
         };
         if let Some(t) = tree

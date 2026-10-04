@@ -203,28 +203,8 @@ pub fn certify_equation(
 /// exact zero), merged where they meet. `None` when a kink can't be placed
 /// (those zeros aren't all decided, or the argument is 0 on a stretch).
 fn kinks(f: &Fun<'_>, spans: &[(f64, f64)]) -> Option<Vec<(f64, f64)>> {
-    use crate::ast::{BinOp, Expr, Func};
-    let mut args: Vec<Expr> = Vec::new();
-    for e in [&f.expr, &f.eval] {
-        e.visit(&mut |n| match n {
-            Expr::Call(Func::Abs, a) if a[0].contains_x() => args.push(canonical(&a[0])),
-            Expr::Call(Func::Min | Func::Max, a)
-                if a.len() == 2 && a.iter().any(|v| v.contains_x()) =>
-            {
-                args.push(canonical(&Expr::Bin(
-                    BinOp::Sub,
-                    Box::new(a[0].clone()),
-                    Box::new(a[1].clone()),
-                )))
-            }
-            _ => {}
-        });
-    }
     let mut boxes: Vec<(f64, f64)> = Vec::new();
-    for (i, u) in args.iter().enumerate() {
-        if args[..i].contains(u) {
-            continue;
-        }
+    for u in &f.kink_args() {
         let c = Cover::run(
             f,
             &Target {

@@ -4,7 +4,7 @@
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::ast::{BinOp, Expr};
+use crate::ast::{BinOp, Expr, Func};
 use crate::compile::CompileOptions;
 use crate::interval::{Ctx, DecInterval, Interval, Literals, Series, taylor};
 
@@ -187,6 +187,73 @@ impl<'a> Fun<'a> {
             .get()
             .and_then(|d| d.as_ref())
             .or_else(|| self.derivs_kinked.get().and_then(|d| d.as_ref()))
+    }
+
+    /// Where f's kinks are: the arguments u of its |u| (and a − b of its
+    /// min(a, b), max(a, b)) that vary with x, canonical, each once. A kink
+    /// is where one is 0.
+    pub fn kink_args(&self) -> Vec<Expr> {
+        let mut args: Vec<Expr> = Vec::new();
+        for e in [&self.expr, &self.eval] {
+            e.visit(&mut |n| {
+                let u = match n {
+                    Expr::Call(Func::Abs, a) if a[0].contains_x() => canonical(&a[0]),
+                    Expr::Call(Func::Min | Func::Max, a)
+                        if a.len() == 2 && a.iter().any(|v| v.contains_x()) =>
+                    {
+                        canonical(&Expr::Bin(
+                            BinOp::Sub,
+                            Box::new(a[0].clone()),
+                            Box::new(a[1].clone()),
+                        ))
+                    }
+                    _ => return,
+                };
+                if !args.contains(&u) {
+                    args.push(u);
+                }
+            });
+        }
+        args
+    }
+
+    /// No kink of f in the box at which f is defined: each kink argument
+    /// is away from 0 over it, or f with that kink's |u| set to 0 (its
+    /// min, max to either side) is defined nowhere on it. The derivative
+    /// trees off the kinks then stand for f′, f″ wherever these exist on
+    /// the box, with no corner between.
+    pub fn no_kink_in(&self, x: Interval) -> Result<bool, Stop> {
+        for u in self.kink_args() {
+            let v = self.ser_of(&u, x, 0)?[0];
+            if !v.is_empty() && v.ne0() {
+                continue;
+            }
+            let at = |e: &Expr| {
+                e.map(&|n| match n {
+                    Expr::Call(Func::Abs, a) if canonical(&a[0]) == u => Some(Expr::Num(0.0)),
+                    Expr::Call(Func::Min | Func::Max, a)
+                        if a.len() == 2
+                            && canonical(&Expr::Bin(
+                                BinOp::Sub,
+                                Box::new(a[0].clone()),
+                                Box::new(a[1].clone()),
+                            )) == u =>
+                    {
+                        Some(a[0].clone())
+                    }
+                    _ => None,
+                })
+            };
+            // (On the formula, or on the simplified form it equals.)
+            let mut undefined = false;
+            for e in [&self.expr, &self.eval] {
+                undefined |= self.ser_of(&at(e), x, 0)?[0].is_empty();
+            }
+            if !undefined {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// The zero factors of `e` ([`zero_factors`]) that can vanish where f is
