@@ -134,12 +134,11 @@ fn rational_functions() {
 
     let r = k("x^2/(x+1)");
     assert_eq!(r.oblique_asymptotes, ["y = x − 1"]);
-    // f′'s sign is not decided near the pole within the budget: the range
-    // and monotonicity are unknown, the extrema found are some of them.
-    assert!(r.too_complex_features & flags::RANGE != 0);
-    assert!(r.range.is_empty());
+    // f′'s tree in Horner's form decides its sign up to the pole.
+    assert_eq!(r.range, "y ∈ (−∞, −4] ∪ [0, ∞)");
     assert_eq!(r.maxima, ["(−2, −4)"]);
-    assert!(r.partial_features & flags::MAXIMA != 0);
+    assert_eq!(r.minima, ["(0, 0)"]);
+    assert_eq!(r.too_complex_features, 0);
 
     let r = k("1/(x^2-4)");
     assert_eq!(r.domain, "x ∈ ℝ \\ {−2, 2}");

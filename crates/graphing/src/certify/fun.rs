@@ -80,10 +80,126 @@ fn int_num(q: Q) -> Option<Expr> {
     (q.is_int() && q.signum() >= 0 && q.numer() <= 1 << 53).then(|| Expr::Num(q.numer() as f64))
 }
 
+/// `e` as c·xᵏ (c exact, k whole ≤ 64) if it is a monomial.
+fn monomial(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<(Q, u32)> {
+    Some(match e {
+        Expr::X => (Q::ONE, 1),
+        Expr::Num(v) => (lits.exact(*v)?, 0),
+        Expr::Neg(a) => {
+            let (c, k) = monomial(a, lits)?;
+            (c.neg()?, k)
+        }
+        Expr::Bin(BinOp::Mul, a, b) => {
+            let ((c, k), (d, j)) = (monomial(a, lits)?, monomial(b, lits)?);
+            (c.mul(d)?, k + j)
+        }
+        Expr::Bin(BinOp::Div, a, b) => {
+            let ((c, k), (d, 0)) = (monomial(a, lits)?, monomial(b, lits)?) else {
+                return None;
+            };
+            (c.div(d)?, k)
+        }
+        Expr::Bin(BinOp::Pow, a, b) => {
+            let (c, k) = monomial(a, lits)?;
+            let n = crate::compile::syntactic_rational(b)
+                .filter(|&(_, q)| q == 1)
+                .map(|(p, _)| p)
+                .filter(|&p| (0..=64).contains(&p))?;
+            (c.powi(n.into())?, k * u32::try_from(n).ok()?)
+        }
+        _ => return None,
+    })
+    .filter(|&(_, k)| k <= 64)
+}
+
+/// The terms of a sum of monomials (± each), as coefficients by power.
+fn monomial_sum(
+    e: &Expr,
+    lits: &crate::simplify::ExactLiterals,
+    sign: bool,
+    out: &mut Vec<Q>,
+) -> Option<()> {
+    match e {
+        Expr::Bin(op @ (BinOp::Add | BinOp::Sub), a, b) => {
+            monomial_sum(a, lits, sign, out)?;
+            monomial_sum(b, lits, sign == (*op == BinOp::Add), out)
+        }
+        _ => {
+            let (c, k) = monomial(e, lits)?;
+            let c = if sign { c } else { c.neg()? };
+            let k = k as usize;
+            if out.len() <= k {
+                out.resize(k + 1, Q::ZERO);
+            }
+            out[k] = out[k].add(c)?;
+            Some(())
+        }
+    }
+}
+
+/// An exact rational as an expression `Num` reads back exactly.
+fn q_num(q: Q) -> Option<Expr> {
+    let m = q.abs()?;
+    let e = if m.is_int() {
+        int_num(m)?
+    } else {
+        Expr::bin(
+            BinOp::Div,
+            int_num(Q::int(m.numer()))?,
+            int_num(Q::int(m.denom()))?,
+        )
+    };
+    Some(if q.signum() < 0 {
+        Expr::Neg(Box::new(e))
+    } else {
+        e
+    })
+}
+
+/// A sum of monomials of degree ≥ 2 (x² + x + 1, as a rational function's
+/// parts come expanded) in Horner's form, ((aₙx + aₙ₋₁)x + …)x + a₀: on a
+/// tail every product there has its factors of one sign, where the sum
+/// as written is ∞ − ∞ (x² + x on (−∞, −M]).
+fn horner(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<Expr> {
+    if !matches!(e, Expr::Bin(BinOp::Add | BinOp::Sub, ..)) {
+        return None;
+    }
+    let mut cs: Vec<Q> = Vec::new();
+    monomial_sum(e, lits, true, &mut cs)?;
+    while cs.last().is_some_and(|c| c.is_zero()) {
+        cs.pop();
+    }
+    if cs.len() < 3 {
+        return None;
+    }
+    let mut acc: Option<Expr> = None;
+    for c in cs.iter().rev() {
+        let next = match acc {
+            None => q_num(*c)?,
+            Some(a) => {
+                let ax = match a {
+                    Expr::Num(v) if v == 1.0 => Expr::X,
+                    a => Expr::bin(BinOp::Mul, a, Expr::X),
+                };
+                if c.is_zero() {
+                    ax
+                } else if c.signum() < 0 {
+                    Expr::bin(BinOp::Sub, ax, q_num(c.neg()?)?)
+                } else {
+                    Expr::bin(BinOp::Add, ax, q_num(*c)?)
+                }
+            }
+        };
+        acc = Some(next);
+    }
+    acc
+}
+
 /// `e` with each part a·x + b in x (exact rationals a ≠ 0 and b, with
 /// c = −b/a an integer) written a·(x − c): x − c is exact near c, where
 /// a·x + b cancels. (x/1000 − 1 at x = 1000 + 2⁻⁴³, evaluated as written,
-/// is [0, 2⁻⁵²]; as (x − 1000)/1000, 2⁻⁴³/1000 to an ulp.) The same real
+/// is [0, 2⁻⁵²]; as (x − 1000)/1000, 2⁻⁴³/1000 to an ulp.) And each sum of
+/// monomials of degree ≥ 2 in Horner's form ([`horner`]). The same real
 /// function, so f's evaluated tree may be written so.
 pub fn recentre(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Expr {
     if !matches!(e, Expr::X)
@@ -116,6 +232,9 @@ pub fn recentre(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Expr {
         })()
     {
         return form;
+    }
+    if let Some(h) = horner(e, lits) {
+        return h;
     }
     match e {
         Expr::Neg(a) => Expr::Neg(Box::new(recentre(a, lits))),
@@ -253,7 +372,9 @@ impl<'a> Fun<'a> {
 
     fn build_derivs(&self, symbolic: bool) -> Option<[Expr; 2]> {
         let exact = self.exact?;
-        rational_derivs(&self.expr, exact).or_else(|| {
+        // (A rational f's, expanded exactly, in Horner's form.)
+        let rational = rational_derivs(&self.expr, exact).map(|d| d.map(|t| recentre(&t, exact)));
+        rational.or_else(|| {
             if !symbolic {
                 return None;
             }
