@@ -756,32 +756,6 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/core-math/core-math-1.4.0.crate",
-        "sha256": "6454166c441d8fcd5a3f9aa6abd46e2df728849426849733b8c0b4781edc54d6",
-        "dest": "cargo/vendor/core-math-1.4.0"
-    },
-    {
-        "type": "inline",
-        "contents": "{\"package\": \"6454166c441d8fcd5a3f9aa6abd46e2df728849426849733b8c0b4781edc54d6\", \"files\": {}}",
-        "dest": "cargo/vendor/core-math-1.4.0",
-        "dest-filename": ".cargo-checksum.json"
-    },
-    {
-        "type": "archive",
-        "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/core-math-sys/core-math-sys-1.4.0.crate",
-        "sha256": "07fcc675783e2866181bf63060b7983973bd6e93f042fb0f8ba544e84c26c3d4",
-        "dest": "cargo/vendor/core-math-sys-1.4.0"
-    },
-    {
-        "type": "inline",
-        "contents": "{\"package\": \"07fcc675783e2866181bf63060b7983973bd6e93f042fb0f8ba544e84c26c3d4\", \"files\": {}}",
-        "dest": "cargo/vendor/core-math-sys-1.4.0",
-        "dest-filename": ".cargo-checksum.json"
-    },
-    {
-        "type": "archive",
-        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/crc32fast/crc32fast-1.5.2.crate",
         "sha256": "01a7799fd6b852db0e61728dde9a204c423b44d689dbd432522543614b490e78",
         "dest": "cargo/vendor/crc32fast-1.5.2"

@@ -2,10 +2,13 @@
 //! angle unit: `cargo run --release -p graphing --example bits [-- --full]`.
 //!
 //! The built-in functions are CORE-MATH's, correctly rounded, so the bits
-//! must not depend on the CPU the code was built for. CI runs this from a
-//! baseline x86-64 build and an x86-64-v3 build (as GMNB ships) and
-//! compares the output. `--full` prints every value instead of a hash, for
-//! finding a difference.
+//! must not depend on the CPU the code was built for or runs on. A baseline
+//! build carries both CORE-MATH builds (baseline and x86-64-v3, picked at
+//! run time): this runs everything on each, where the CPU allows, and
+//! fails if they differ; stderr names the builds compared. CI also runs it
+//! from an x86-64-v3 build (as GMNB ships) and on an emulated pre-2013 CPU
+//! and compares the output. `--full` prints every value instead of a hash,
+//! for finding a difference.
 
 use graphing::TrigUnit;
 use graphing::compile::{Input, Program, compile_str};
@@ -120,16 +123,17 @@ fn hash(values: &[f64]) -> u64 {
     h
 }
 
-fn main() {
-    let full = std::env::args().any(|a| a == "--full");
-    let xs = arguments();
+/// Every expression in every unit, as output lines (hashes, or every value
+/// with `full`).
+fn run(xs: &[f64], full: bool) -> Vec<String> {
+    let mut out = Vec::new();
     for src in EXPRS {
         for unit in [TrigUnit::Radians, TrigUnit::Degrees, TrigUnit::Grads] {
             let p: Program = compile_str(src, unit).expect(src);
             // The scalar and batch paths must agree too.
             let scalar: Vec<f64> = xs.iter().map(|&x| p.eval(x, 0.0)).collect();
             let mut batch = vec![0.0; xs.len()];
-            p.eval_batch(Input::Slice(&xs), Input::Scalar(0.0), &mut batch);
+            p.eval_batch(Input::Slice(xs), Input::Scalar(0.0), &mut batch);
             let same = scalar
                 .iter()
                 .zip(&batch)
@@ -137,15 +141,40 @@ fn main() {
             assert!(same, "{src} [{unit:?}]: scalar and batch evaluation differ");
             if full {
                 for (x, v) in xs.iter().zip(&scalar) {
-                    println!(
+                    out.push(format!(
                         "{src}\t{unit:?}\t{:016x}\t{:016x}",
                         x.to_bits(),
                         v.to_bits()
-                    );
+                    ));
                 }
             } else {
-                println!("{src:<12} {unit:<8?} {:016x}", hash(&scalar));
+                out.push(format!("{src:<12} {unit:<8?} {:016x}", hash(&scalar)));
             }
         }
+    }
+    out
+}
+
+fn main() {
+    let full = std::env::args().any(|a| a == "--full");
+    let xs = arguments();
+    // The C is built for baseline x86-64 and for x86-64-v3, and a call takes
+    // the v3 build on a CPU that has it (crates/crmath): run both in this
+    // one binary where this CPU allows, and require the same bits.
+    let first = core_math::select(core_math::Build::Baseline);
+    let lines = run(&xs, full);
+    let second = core_math::select(core_math::Build::V3);
+    if second != first {
+        let again = run(&xs, full);
+        if let Some(i) = (0..lines.len()).find(|&i| lines[i] != again[i]) {
+            panic!(
+                "the {first:?} and {second:?} builds differ:\n  {}\n  {}",
+                lines[i], again[i]
+            );
+        }
+    }
+    eprintln!("CORE-MATH builds compared: {first:?}, {second:?}");
+    for l in lines {
+        println!("{l}");
     }
 }

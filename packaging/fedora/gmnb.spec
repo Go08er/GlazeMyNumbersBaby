@@ -54,18 +54,16 @@ Not affiliated with or endorsed by Microsoft.
 
 %build
 # On x86_64 GMNB is built for x86-64-v3 (2013+ CPUs), behind a launcher built
-# for any x86-64 that tells older CPUs so; DGMNB runs anywhere. TARGET_CPU
-# pins the CPU the core-math crate's C is compiled for (its build script
-# otherwise uses the build machine's own, -march=native).
+# for any x86-64 that tells older CPUs so; DGMNB runs anywhere (its CORE-MATH
+# takes an x86-64-v3 build of the C where the CPU has it).
 cargo build --release --locked -p gmnb-launcher
 %ifarch x86_64
-RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=x86-64-v3" TARGET_CPU=x86-64-v3 \
+RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=x86-64-v3" \
   cargo build --release --locked -p gmnb --target-dir target/v3
-TARGET_CPU=x86-64 cargo build --profile lean --locked -p dgmnb
 %else
 cargo build --release --locked -p gmnb --target-dir target/v3
-cargo build --profile lean --locked -p dgmnb
 %endif
+cargo build --profile lean --locked -p dgmnb
 
 %install
 install -Dm755 target/release/gmnb-launcher %{buildroot}%{_bindir}/gmnb

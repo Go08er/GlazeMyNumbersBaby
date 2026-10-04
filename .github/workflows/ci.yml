@@ -12,11 +12,6 @@ jobs:
   test:
     name: Tests, Nix build, flake check
     runs-on: ubuntu-latest
-    env:
-      # Tests run for plain x86-64 (no RUSTFLAGS target-cpu here), and so does
-      # any C the core-math crate compiles: its build script otherwise uses
-      # the runner's own CPU (-march=native).
-      TARGET_CPU: x86-64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
@@ -54,24 +49,37 @@ jobs:
         run: |
           # The built-in functions are CORE-MATH's, correctly rounded, so
           # their results must not depend on the CPU the code was built for
-          # (DGMNB ships for plain x86-64, GMNB for x86-64-v3) or runs on.
-          # core-math-sys doesn't rebuild when TARGET_CPU changes: one target
-          # dir per build.
+          # (DGMNB ships for plain x86-64, GMNB for x86-64-v3) or runs on. A
+          # plain x86-64 build carries both a baseline and an x86-64-v3 build
+          # of the C (crates/crmath) and `bits` runs everything on each where
+          # the CPU allows, failing on any difference; stderr names them.
           nix develop -c cargo run --release --locked -p graphing --example bits \
-            --target-dir target/cpu-base > bits-base.txt
-          RUSTFLAGS="-C target-cpu=x86-64-v3" TARGET_CPU=x86-64-v3 nix develop -c \
+            --target-dir target/cpu-base > bits-base.txt 2> bits-base.err
+          cat bits-base.err
+          if grep -q avx2 /proc/cpuinfo && grep -q fma /proc/cpuinfo; then
+            grep -q "Baseline, V3" bits-base.err
+          fi
+          RUSTFLAGS="-C target-cpu=x86-64-v3" nix develop -c \
             cargo run --release --locked -p graphing --example bits \
             --target-dir target/cpu-v3 > bits-v3.txt
           cmp bits-base.txt bits-v3.txt
-          # The baseline build on an emulated Nehalem (no AVX, no FMA).
+          # The plain build on an emulated Nehalem (no AVX, no FMA): it must
+          # keep to the baseline build of the C.
           nix shell --inputs-from . nixpkgs#qemu-user -c \
-            qemu-x86_64 -cpu Nehalem target/cpu-base/release/examples/bits > bits-nehalem.txt
+            qemu-x86_64 -cpu Nehalem target/cpu-base/release/examples/bits \
+            > bits-nehalem.txt 2> bits-nehalem.err
+          cat bits-nehalem.err
+          grep -q "Baseline, Baseline" bits-nehalem.err
           cmp bits-base.txt bits-nehalem.txt
-          # The exact-value checks hold on the v3 build too.
-          RUSTFLAGS="-C target-cpu=x86-64-v3" TARGET_CPU=x86-64-v3 nix develop -c \
+          # The exact-value checks hold on the baseline build of the C and on
+          # the v3 build too.
+          GRAPHING_CRMATH=baseline nix develop -c \
+            cargo test --release --locked -p graphing --target-dir target/cpu-base \
+            --test review11_primitives --test correctly_rounded
+          RUSTFLAGS="-C target-cpu=x86-64-v3" nix develop -c \
             cargo test --release --locked -p graphing --target-dir target/cpu-v3 \
             --test review11_primitives --test correctly_rounded
-          RUSTFLAGS="-C target-cpu=x86-64-v3" TARGET_CPU=x86-64-v3 nix develop -c \
+          RUSTFLAGS="-C target-cpu=x86-64-v3" nix develop -c \
             cargo run --release --locked -p graphing --example identities \
             --target-dir target/cpu-v3
       - name: Clippy
