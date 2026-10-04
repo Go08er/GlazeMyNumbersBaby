@@ -357,6 +357,22 @@ fn touched_trig_holes_are_excluded_or_unknown() {
     }
     let r = in_unit("y=cos(x)^2/cos(x)^2", TrigUnit::Degrees);
     assert_ne!(r.domain, "x ∈ ℝ");
+    // The same away from trig: a divisor touching 0 at ±√2, no double.
+    for src in [
+        "y=(x^2-2)^2/(x^2-2)^2",
+        "y=abs(x^2-2)/abs(x^2-2)",
+        "y=(x^2-3)^2/(x^2-3)^2",
+        "y=x*(x^2-2)^2/(x^2-2)^2",
+    ] {
+        let r = analyze_str(src);
+        assert!(
+            r.analysis_error_string().is_some() || excludes_or_unknown(&r),
+            "{src}: domain {}",
+            r.domain
+        );
+    }
+    // (Poles there were already found.)
+    assert_eq!(k("y=1/(x^2-2)^2").domain, "x ∈ ℝ \\ {−√2, √2}");
 }
 
 /// The gate on its own: told that cos² x / cos² x and (1 + cos x) / (1 +

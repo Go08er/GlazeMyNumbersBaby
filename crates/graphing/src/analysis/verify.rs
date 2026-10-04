@@ -2386,6 +2386,34 @@ pub fn check_singular_zeros(a: &Analysed, xs: &[f64], r: &mut Report) {
     let mut ops = Vec::new();
     // (A varying exponent is NaN here, so its base counts.)
     singular_operands(a, f64::NAN, &a.ast, &mut ops);
+    // And their factors, which may cross 0 where the operand only touches
+    // it: (x² − 2)² under (x² − 2)² / (x² − 2)² is 0 at ±√2, no double, and
+    // never changes sign, but x² − 2 does.
+    fn crossing_factors(e: &Expr, out: &mut Vec<Expr>) {
+        use crate::ast::{BinOp, Func};
+        match e {
+            Expr::Bin(BinOp::Mul, l, r) => {
+                crossing_factors(l, out);
+                crossing_factors(r, out);
+            }
+            Expr::Bin(BinOp::Div, l, _) => crossing_factors(l, out),
+            Expr::Bin(BinOp::Pow, l, r) if !r.contains_x() => {
+                out.push((**l).clone());
+                crossing_factors(l, out);
+            }
+            Expr::Neg(x) => crossing_factors(x, out),
+            Expr::Call(Func::Abs | Func::Sqrt | Func::Cbrt, args) if args.len() == 1 => {
+                out.push(args[0].clone());
+                crossing_factors(&args[0], out);
+            }
+            _ => {}
+        }
+    }
+    let mut factors = Vec::new();
+    for o in &ops {
+        crossing_factors(o, &mut factors);
+    }
+    ops.extend(factors);
     ops.retain(|o| o.contains_x());
     ops.dedup();
     if ops.is_empty() {
