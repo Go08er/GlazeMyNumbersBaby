@@ -8,6 +8,10 @@
 //! `float(Fraction(x) ** n)` in Python, which is correctly rounded
 //! (subnormals included; overflow written as ±∞).
 
+// The table is data: arguments such as the doubles nearest π and e,
+// written out.
+#![allow(clippy::approx_constant, clippy::excessive_precision)]
+
 use graphing::TrigUnit;
 use graphing::compile::compile_str;
 use graphing::functions::pow_int;

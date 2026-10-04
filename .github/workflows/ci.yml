@@ -50,16 +50,30 @@ jobs:
           fi
           echo "$out"
           grep -q "needs a CPU from 2013 or newer" <<<"$out"
-      # To switch on once the core-math crate is in (certified engine, phase
-      # 1): results must not depend on the CPU the code was built for.
-      # - name: Baseline and x86-64-v3 builds agree bit for bit
-      #   run: |
-      #     TARGET_CPU=x86-64 nix develop -c cargo run --release --locked \
-      #       -p graphing --example identities > base.txt
-      #     RUSTFLAGS="-C target-cpu=x86-64-v3" TARGET_CPU=x86-64-v3 nix develop -c \
-      #       cargo run --release --locked -p graphing --example identities \
-      #       --target-dir target/v3 > v3.txt
-      #     cmp base.txt v3.txt
+      - name: Baseline, x86-64-v3 and pre-2013 CPUs agree bit for bit
+        run: |
+          # The built-in functions are CORE-MATH's, correctly rounded, so
+          # their results must not depend on the CPU the code was built for
+          # (DGMNB ships for plain x86-64, GMNB for x86-64-v3) or runs on.
+          # core-math-sys doesn't rebuild when TARGET_CPU changes: one target
+          # dir per build.
+          nix develop -c cargo run --release --locked -p graphing --example bits \
+            --target-dir target/cpu-base > bits-base.txt
+          RUSTFLAGS="-C target-cpu=x86-64-v3" TARGET_CPU=x86-64-v3 nix develop -c \
+            cargo run --release --locked -p graphing --example bits \
+            --target-dir target/cpu-v3 > bits-v3.txt
+          cmp bits-base.txt bits-v3.txt
+          # The baseline build on an emulated Nehalem (no AVX, no FMA).
+          nix shell --inputs-from . nixpkgs#qemu-user -c \
+            qemu-x86_64 -cpu Nehalem target/cpu-base/release/examples/bits > bits-nehalem.txt
+          cmp bits-base.txt bits-nehalem.txt
+          # The exact-value checks hold on the v3 build too.
+          RUSTFLAGS="-C target-cpu=x86-64-v3" TARGET_CPU=x86-64-v3 nix develop -c \
+            cargo test --release --locked -p graphing --target-dir target/cpu-v3 \
+            --test review11_primitives --test correctly_rounded
+          RUSTFLAGS="-C target-cpu=x86-64-v3" TARGET_CPU=x86-64-v3 nix develop -c \
+            cargo run --release --locked -p graphing --example identities \
+            --target-dir target/cpu-v3
       - name: Clippy
         run: nix develop -c cargo clippy --workspace --locked
       - name: Nix packages
