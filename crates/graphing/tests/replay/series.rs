@@ -13,6 +13,26 @@ fn none() -> Iv {
     Iv::unknown()
 }
 
+thread_local! {
+    static LENIENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn lenient() -> bool {
+    LENIENT.get()
+}
+
+/// Runs `f` with coefficients enclosed *where they exist*: past a domain
+/// end inside the box (x ≥ 0 under √x, a divisor's zero at an end) they
+/// are still computed, for the points where f is defined, and only marked
+/// not valid throughout. For boxes beside an excluded point (the gaps),
+/// where nothing else can be said.
+pub fn where_defined<T>(f: impl FnOnce() -> T) -> T {
+    LENIENT.set(true);
+    let r = f();
+    LENIENT.set(false);
+    r
+}
+
 fn zero() -> Iv {
     Iv::of(0.0)
 }
@@ -36,6 +56,11 @@ fn valid_upto(s: &S, k: usize) -> bool {
 fn restrict_validity(mut out: S, ins: &[&S]) -> S {
     for k in 1..out.len() {
         if !ins.iter().all(|s| valid_upto(s, k)) && !out[k].empty {
+            if lenient() {
+                // Where defined: the bounds hold where the inputs exist.
+                out[k] = out[k].clone().with(false, false);
+                continue;
+            }
             out[k] = none();
         }
     }
@@ -150,7 +175,7 @@ pub fn div(a: &S, b: &S) -> S {
     if out[0].empty {
         return vec![Iv::empty(); n + 1];
     }
-    let ok = b[0].ne0();
+    let ok = b[0].ne0() || (lenient() && !b[0].is_exactly(0.0));
     for k in 1..=n {
         if !ok {
             out.push(none());
@@ -235,7 +260,7 @@ pub fn exp(a: &S) -> S {
 pub fn ln(a: &S) -> S {
     let n = order(a);
     let mut out = vec![iv::ln(&a[0])];
-    let ok = a[0].gt(0.0);
+    let ok = a[0].gt(0.0) || (lenient() && a[0].hi > 0);
     for k in 1..=n {
         if !ok {
             out.push(none());
@@ -254,7 +279,7 @@ pub fn ln(a: &S) -> S {
 pub fn sqrt(a: &S) -> S {
     let n = order(a);
     let mut out = vec![iv::sqrt(&a[0])];
-    let ok = a[0].gt(0.0);
+    let ok = a[0].gt(0.0) || (lenient() && a[0].hi > 0);
     for k in 1..=n {
         if !ok {
             out.push(none());
@@ -300,7 +325,7 @@ pub fn pow_real(a: &S, p: &Iv, value: Iv) -> S {
     if value.empty {
         return vec![Iv::empty(); n + 1];
     }
-    let ok = a[0].gt(0.0);
+    let ok = a[0].gt(0.0) || (lenient() && a[0].hi > 0);
     let mut gs = vec![value];
     let mut binom = Iv::of(1.0);
     for j in 1..=n {

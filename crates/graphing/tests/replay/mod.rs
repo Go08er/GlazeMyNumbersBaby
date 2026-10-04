@@ -458,6 +458,13 @@ impl Fx {
     pub fn series(&self, e: &Expr, lo: f64, hi: f64, n: usize) -> series::S {
         eval::series(e, lo, hi, n, &self.ctx())
     }
+
+    /// The same over an x interval of the replay's own (strictly signed,
+    /// say: the reals beside an excluded 0, 0 left out).
+    pub fn series_iv(&self, e: &Expr, x: iv::Iv, n: usize) -> series::S {
+        let xs = series::var(x, n);
+        eval::eval(e, &xs, n, &self.ctx())
+    }
 }
 
 /// Reads the source and the trees the analysis names; checks that the

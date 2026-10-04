@@ -608,3 +608,78 @@ fn replay_catches_planted_errors() {
     }
     assert!(missed.is_empty(), "planted errors not caught: {missed:#?}");
 }
+
+// ------------------------------------------------------------ known issues
+
+/// Certifier issues the replay found (research/replay-issues.md, by
+/// number), pinned: (issue, source, row). Each must still reproduce: when
+/// the certifier is fixed the test fails, and the entry goes (with the
+/// issue's write-up).
+const KNOWN_ISSUES: &[(u32, &str, &str)] = &[
+    // 1: a Value claim over a neighbourhood of an excluded point says f is
+    // valid on the whole box; it holds only where f is defined.
+    (1, "x/ln(x)", "vertical"),
+    (1, "0/x", "vertical"),
+    (1, "atan(1/x)", "vertical"),
+    (1, "x^x", "vertical"),
+    // 2: f″ claimed on the whole line for |x| (the derivative tree sign(x)
+    // hides the kink; f′ doesn't exist at 0): unconfirmed.
+    (2, "abs(x)", "inflections"),
+    (2, "10^-12*abs(x)", "inflections"),
+    // 3: f⁽ᵏ⁾'s clearness in the gaps is not in the certificate.
+    (3, "1/x", "x_intercepts"),
+    (3, "sqrt(x)", "extrema"),
+    // 4: a gap thousands of doubles wide (unconfirmed).
+    (4, "tan((x-1000))", "x_intercepts"),
+];
+
+fn issue_reproduces(issue: u32, r: &Report, row: &str) -> bool {
+    use replay::{Claim, Subject};
+    let in_row = |c: &replay::ClaimResult| c.rows.iter().any(|x| x == row);
+    match issue {
+        1 => r.claims.iter().any(|c| {
+            in_row(c)
+                && matches!(c.claim, Claim::Value { .. })
+                && c.outcome.class == Class::Refuted
+                && c.outcome.note.contains(replay::claims::WHERE_DEFINED)
+        }),
+        2 => r.claims.iter().any(|c| {
+            in_row(c)
+                && matches!(c.claim, Claim::Value { x, of: Subject::F(2), .. }
+                    if x.0 == f64::NEG_INFINITY && x.1 == f64::INFINITY)
+                && c.outcome.class == Class::Unconfirmed
+        }),
+        3 => r.rows.iter().any(|x| {
+            x.name == row
+                && x.notes
+                    .iter()
+                    .any(|n| n.contains(replay::rows::GAPS_NOT_IN_CERT))
+        }),
+        4 => r.claims.iter().any(|c| {
+            in_row(c)
+                && matches!(c.claim, Claim::Gap(_))
+                && c.outcome.class == Class::Unconfirmed
+                && c.outcome.note.contains("over 64 doubles")
+        }),
+        _ => false,
+    }
+}
+
+#[test]
+fn known_certifier_issues_still_reproduce() {
+    let mut fixed = Vec::new();
+    for (issue, src, row) in KNOWN_ISSUES {
+        let d = one(src, TrigUnit::Radians);
+        let r = d
+            .report
+            .unwrap_or_else(|e| panic!("{src}: not replayed: {e}"));
+        if !issue_reproduces(*issue, &r, row) {
+            fixed.push(format!("issue {issue}: {src} ({row})"));
+        }
+    }
+    assert!(
+        fixed.is_empty(),
+        "no longer reproduces (fixed?): {fixed:#?}\n\
+         Remove these from KNOWN_ISSUES and research/replay-issues.md."
+    );
+}

@@ -441,14 +441,103 @@ fn changes(w: &Walk) -> Vec<(Enc, bool)> {
         .collect()
 }
 
-fn holes_note(w: &Walk, k: usize) -> Option<String> {
-    let n = w.holes.len();
-    (n > 0).then(|| {
-        format!(
-            "{n} gaps/undefined boxes: f{} must have no zero in them (not part of the certificate)",
-            ["", "′", "″"][k]
-        )
-    })
+/// The note on a row's gaps: f⁽ᵏ⁾ must have no zero in them, which the
+/// certificate doesn't state (research/replay-issues.md, issue 3); the
+/// replay shows it where it can.
+pub const GAPS_NOT_IN_CERT: &str = "clearness is not in the certificate";
+
+fn holes_note(fx: &Fx, rc: &RowCert, k: usize) -> Option<String> {
+    let gaps: Vec<B> = rc
+        .claims
+        .iter()
+        .filter_map(|c| match c {
+            Claim::Gap(x) => Some(*x),
+            _ => None,
+        })
+        .collect();
+    if gaps.is_empty() {
+        return None;
+    }
+    let (mut strong, mut weak, mut open) = (0, 0, Vec::new());
+    for g in &gaps {
+        match gap_clear(fx, k, *g) {
+            Some(true) => strong += 1,
+            Some(false) => weak += 1,
+            None => open.push(*g),
+        }
+    }
+    let mut note = format!(
+        "{} gaps, f{} free of zeros in them ({GAPS_NOT_IN_CERT}): {strong} shown by the replay",
+        gaps.len(),
+        ["", "′", "″"][k]
+    );
+    if weak > 0 {
+        note += &format!(", {weak} on the certifier's tree");
+    }
+    if !open.is_empty() {
+        note += &format!(
+            ", {} not shown (first [{:e}, {:e}])",
+            open.len(),
+            open[0].0,
+            open[0].1
+        );
+    }
+    Some(note)
+}
+
+/// Whether f⁽ᵏ⁾ has no zero in the gap box `g`, wherever it exists there:
+/// `Some(true)` shown on the canonical tree, `Some(false)` only on the
+/// certifier's derivative tree, `None` not shown.
+fn gap_clear(fx: &Fx, k: usize, g: B) -> Option<bool> {
+    use super::series as se;
+    if claims::unmodelled(&fx.f) {
+        return None;
+    }
+    // The reals strictly inside the gap: its ends are doubles other claims
+    // decide (or the excluded point). Beside an excluded 0, x keeps its
+    // strict sign.
+    let x = |p: u32| {
+        iv::set_prec(p);
+        Iv::of2(g.0, g.1).strict(g.0 == 0.0, g.1 == 0.0)
+    };
+    let away = |e: &graphing::ast::Expr, k: usize| -> bool {
+        [160, 640].into_iter().any(|p| {
+            let xb = x(p);
+            let s = se::where_defined(|| fx.series_iv(e, xb, k));
+            let c = &s[k];
+            let r = s[0].empty || c.empty || c.ne0();
+            iv::set_prec(160);
+            r
+        })
+    };
+    if away(&fx.f, k) {
+        return Some(true);
+    }
+    // Factor by factor (f's zeros are among its factors').
+    let by_factors = |e: &graphing::ast::Expr| -> bool {
+        let mut safe = Vec::new();
+        claims::nonzero_where_defined(&fx.f, &mut safe);
+        claims::nonzero_where_defined(e, &mut safe);
+        claims::zero_factors(e)
+            .iter()
+            .all(|h| safe.contains(h) || away(h, 0))
+    };
+    if k == 0 && by_factors(&fx.f) {
+        return Some(true);
+    }
+    if k > 0
+        && let Some(d) = &fx.d[k - 1]
+        && (away(d, 0) || by_factors(d))
+    {
+        return Some(false);
+    }
+    // The simplifier's form of f (equal to f where f is defined).
+    if let Some(e) = &fx.f_eval
+        && (away(e, k) || (k == 0 && by_factors(e)))
+    {
+        return Some(false);
+    }
+    None
 }
 
 /// Coverage of the row's region by its walk's boxes.
@@ -574,7 +663,7 @@ fn zeros_row(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Res
     let w = walk(fx, &rc.claims, 0);
     out.problems.extend(w.problems.iter().cloned());
     coverage(rc, all, &w.boxes, out);
-    if let Some(n) = holes_note(&w, 0) {
+    if let Some(n) = holes_note(fx, rc, 0) {
         out.notes.push(n);
     }
     if !w.flat.is_empty() {
@@ -602,7 +691,7 @@ fn turns(
     let w = walk(fx, &rc.claims, k);
     out.problems.extend(w.problems.iter().cloned());
     coverage(rc, all, &w.boxes, out);
-    if let Some(n) = holes_note(&w, k) {
+    if let Some(n) = holes_note(fx, rc, k) {
         out.notes.push(n);
     }
     let mut ch = changes(&w);
@@ -735,6 +824,9 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
     let w = walk(fx, &rc.claims, 1);
     out.problems.extend(w.problems.iter().cloned());
     coverage(rc, all, &w.boxes, out);
+    if let Some(n) = holes_note(fx, rc, 1) {
+        out.notes.push(n);
+    }
     for item in list(&rc.value)? {
         let p = piece(item.get("on").ok_or("on")?)?;
         let dir = item.get("dir").and_then(Value::as_str).unwrap_or("");
