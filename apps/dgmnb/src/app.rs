@@ -2315,6 +2315,8 @@ const LICENCES: &str = concat!(
     include_str!("../assets/fonts/OFL-Noto.txt"),
     "\n\n— Clipboard code adapted from smithay-clipboard —\n\n",
     include_str!("../assets/LICENSE-smithay-clipboard.txt"),
+    "\n\n— CORE-MATH (correctly rounded maths functions, used by Graphing) —\n\n",
+    include_str!("../../../crates/crmath/vendor/LICENSE"),
     "\n\nExchange rates: Frankfurter (central bank reference rates)."
 );
 

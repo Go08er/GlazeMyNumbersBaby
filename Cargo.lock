@@ -646,30 +646,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "core-math"
-version = "1.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6454166c441d8fcd5a3f9aa6abd46e2df728849426849733b8c0b4781edc54d6"
-dependencies = [
- "core-math-sys",
-]
-
-[[package]]
-name = "core-math-sys"
-version = "1.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07fcc675783e2866181bf63060b7983973bd6e93f042fb0f8ba544e84c26c3d4"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01a7799fd6b852db0e61728dde9a204c423b44d689dbd432522543614b490e78"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "crmath"
+version = "0.2.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -1269,7 +1258,7 @@ dependencies = [
 name = "graphing"
 version = "0.2.0"
 dependencies = [
- "core-math",
+ "crmath",
  "egg",
  "gmp-mpfr-sys",
  "rug",

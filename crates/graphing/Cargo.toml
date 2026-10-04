@@ -7,9 +7,10 @@ rust-version.workspace = true
 authors.workspace = true
 
 [dependencies]
-# Correctly rounded binary64 elementary functions (CORE-MATH, MIT): the
-# interval core's point evaluations.
-core-math = "1.4"
+# Correctly rounded binary64 elementary functions (CORE-MATH, MIT), vendored
+# in crates/crmath and built for baseline x86-64 and x86-64-v3, picked at
+# run time: every evaluation's primitives and the interval core's.
+core-math = { package = "crmath", path = "../crmath" }
 # E-graph equality saturation (MIT): the simplifier's rewriting
 # (`simplify::egraph`), with every rule checked against MPFR in tests.
 egg = { version = "0.11", default-features = false }

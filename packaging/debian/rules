@@ -6,12 +6,10 @@ DGMNB := io.github.Go08er.DontGlazeMyNumbersBaby
 
 include /usr/share/dpkg/architecture.mk
 # On amd64 GMNB is built for x86-64-v3 (2013+ CPUs), behind a launcher built
-# for any x86-64 that tells older CPUs so; DGMNB runs anywhere. TARGET_CPU
-# pins the CPU the core-math crate's C is compiled for (its build script
-# otherwise uses the build machine's own, -march=native).
+# for any x86-64 that tells older CPUs so; DGMNB runs anywhere (its CORE-MATH
+# takes an x86-64-v3 build of the C on CPUs that have it; crates/crmath).
 ifeq ($(DEB_HOST_ARCH),amd64)
-GMNB_ENV := RUSTFLAGS="-C target-cpu=x86-64-v3" TARGET_CPU=x86-64-v3
-DGMNB_ENV := TARGET_CPU=x86-64
+GMNB_ENV := RUSTFLAGS="-C target-cpu=x86-64-v3"
 endif
 
 %:
@@ -22,7 +20,7 @@ override_dh_auto_configure:
 override_dh_auto_build:
 	cargo build --release --locked -p gmnb-launcher
 	$(GMNB_ENV) cargo build --release --locked -p gmnb --target-dir target/v3
-	$(DGMNB_ENV) cargo build --profile lean --locked -p dgmnb
+	cargo build --profile lean --locked -p dgmnb
 
 override_dh_auto_test:
 

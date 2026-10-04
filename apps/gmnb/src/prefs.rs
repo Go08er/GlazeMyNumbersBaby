@@ -396,6 +396,14 @@ pub fn about(parent: &adw::ApplicationWindow) {
         Some(include_str!("../assets/fonts/OFL-Outfit.txt")),
     );
     about.add_legal_section(
+        "CORE-MATH",
+        Some(
+            "Correctly rounded maths functions, used by Graphing. Copyright the CORE-MATH authors.",
+        ),
+        gtk::License::Custom,
+        Some(include_str!("../../../crates/crmath/vendor/LICENSE")),
+    );
+    about.add_legal_section(
         "Exchange rates",
         None,
         gtk::License::Custom,

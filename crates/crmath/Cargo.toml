@@ -1,0 +1,19 @@
+[package]
+name = "crmath"
+description = "CORE-MATH's correctly rounded binary64 functions, built for baseline x86-64 and for x86-64-v3 in one binary and picked at run time"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors = ["The CORE-MATH authors (vendored C, see vendor/LICENSE)", "GMNB contributors (Rust bindings and build)"]
+license = "MIT"
+publish = false
+build = "build.rs"
+links = "crmath"
+
+# Used as `core_math` (the name the graphing code already calls it by).
+[lib]
+name = "core_math"
+path = "src/lib.rs"
+
+[build-dependencies]
+cc = "1"

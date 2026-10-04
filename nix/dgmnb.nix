@@ -37,9 +37,6 @@ rustPlatform.buildRustPackage {
   ];
   # The workspace's size-optimised profile (see Cargo.toml).
   buildType = "lean";
-  # Any x86-64: TARGET_CPU pins the CPU the core-math crate's C is compiled
-  # for (its build script otherwise uses the build machine's own).
-  env = lib.optionalAttrs stdenv.hostPlatform.isx86_64 { TARGET_CPU = "x86-64"; };
   doCheck = false;
   nativeBuildInputs = [
     pkg-config

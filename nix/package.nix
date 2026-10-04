@@ -34,12 +34,9 @@ rustPlatform.buildRustPackage {
   cargoLock.lockFile = ../Cargo.lock;
   cargoBuildFlags = [ "-p" "gmnb" ];
   doCheck = false;
-  # On x86_64, for x86-64-v3 (2013+ CPUs). TARGET_CPU pins the CPU the
-  # core-math crate's C is compiled for (its build script otherwise uses the
-  # build machine's own, -march=native).
+  # On x86_64, for x86-64-v3 (2013+ CPUs).
   env = lib.optionalAttrs x86 {
     RUSTFLAGS = "-C target-cpu=x86-64-v3";
-    TARGET_CPU = "x86-64-v3";
   };
   nativeBuildInputs = [
     pkg-config

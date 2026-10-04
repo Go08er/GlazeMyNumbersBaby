@@ -7,6 +7,7 @@ members = [
     "crates/unitconv",
     "crates/datecalc",
     "crates/copypaste",
+    "crates/crmath",
     "crates/graphing",
     "crates/calcvm",
     "crates/appcore",
@@ -72,4 +73,9 @@ opt-level = 3
 opt-level = 3
 
 [profile.lean.package.graphing]
+opt-level = 3
+
+# CORE-MATH (its C follows the package's opt-level): the elementary
+# functions every plotted point goes through.
+[profile.lean.package.crmath]
 opt-level = 3

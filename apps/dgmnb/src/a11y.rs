@@ -461,6 +461,7 @@ mod tests {
             .and_then(|(_, _, text)| text)
             .expect("licence text exported");
         assert!(doc.contains("MIT License") && doc.contains("SIL Open Font License"));
+        assert!(doc.contains("CORE-MATH"), "vendored CORE-MATH's notice");
 
         let mut d = crate::date::DatePage::new();
         let (mut toasts, mut focus) = (Vec::new(), None);
