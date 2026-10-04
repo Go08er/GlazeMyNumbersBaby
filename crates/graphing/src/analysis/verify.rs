@@ -290,6 +290,17 @@ impl<'c> Analysed<'c> {
         self.vouch(x);
         v
     }
+    /// f(x) where the reference vouches for it; None where only the compiled
+    /// program has a value (no evidence either way, and nothing marked).
+    pub fn known(&self, x: f64) -> Option<f64> {
+        let was = self.unbounded.get();
+        let v = self.eval(x);
+        if self.abstained(x) {
+            self.unbounded.set(was);
+            return None;
+        }
+        Some(v)
+    }
     /// Whether f(x) was taken from the compiled program alone, the
     /// reference abstaining.
     pub fn abstained(&self, x: f64) -> bool {
@@ -2864,9 +2875,13 @@ pub fn settled(a: &Analysed, s: f64, reach: f64) -> Option<(f64, f64)> {
         if x < floor || pts.len() == 3 {
             break;
         }
-        let y = a.eval(s * x);
         // (A stand-in for a value beyond the doubles, ±5·10⁻³²⁴ or the
-        // largest double, is no value to settle on.)
+        // largest double, is no value to settle on; nor is one only the
+        // compiled program has, the reference abstaining: e^(10¹⁰⁰) is
+        // beyond what it can size.)
+        let Some(y) = a.known(s * x) else {
+            return None;
+        };
         if !(y.is_finite() && y.abs() < f64::MAX && y.abs() != f64::from_bits(1)) {
             return None;
         }
