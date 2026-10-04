@@ -751,3 +751,116 @@ fn programmer_operators_are_rejected_outside_programmer_mode() {
     }
     assert!(start.elapsed() < std::time::Duration::from_secs(20));
 }
+
+/// `count` copies of `unit`, as display commands.
+fn chain(unit: &[Value], count: usize) -> Value {
+    Value::Array(
+        unit.iter()
+            .cloned()
+            .cycle()
+            .take(unit.len() * count)
+            .collect(),
+    )
+}
+
+/// Arithmetic `f` does on this thread, in `ratpack::work_done` units.
+fn work(f: impl FnOnce()) -> u64 {
+    let start = calcmanager::work_done();
+    f();
+    calcmanager::work_done() - start
+}
+
+/// A crafted "√7 + √7 + …" at the key limit replayed for half a minute
+/// (every √ costs milliseconds). The replay now stops at its budget: the
+/// pending expression is dropped, the displayed value, memory and history
+/// are kept, and the work done is bounded.
+#[test]
+fn a_costly_crafted_expression_is_dropped_within_the_budget() {
+    use crate::snapshot::{MAX_RESTORED_KEYS, REPLAY_WORK};
+    let sqrt7 = [
+        operand(&[137]),
+        json!({ "$t": 0, "c": [110] }),
+        json!({ "$t": 1, "c": 93 }),
+    ];
+    let units = MAX_RESTORED_KEYS / 4;
+    let item = json!({
+        "t": [{ "t": "1", "c": 0 }, { "t": " + ", "c": 1 }, { "t": "1", "c": 2 }, { "t": "=", "c": -1 }],
+        "c": [operand(&[131]), { "$t": 1, "c": 93 }, operand(&[131])], "e": "1 + 1 =", "r": "2",
+    });
+    let mut s: Value = serde_json::from_str(&snapshot_json(
+        1,
+        chain(&sqrt7, units),
+        json!({ "mem": ["5"], "hc": [item] }),
+    ))
+    .unwrap();
+    s["s"]["p"]["d"] = json!("42");
+
+    let mut vm = new_vm();
+    let done = work(|| vm.restore_state(&s.to_string()));
+    // Each √ and + is at most a few million units.
+    assert!(done < REPLAY_WORK + 20_000_000, "{done}");
+    assert_eq!(vm.mode(), CalcMode::Scientific);
+    assert_eq!(vm.display_value(), "42");
+    assert_eq!(vm.expression(), "");
+    assert_eq!(vm.memory(), ["5"]);
+    assert_eq!(vm.history().len(), 1);
+    vm.press(Button::Add);
+    vm.press(Button::One);
+    vm.press(Button::Equals);
+    assert_eq!(vm.display_value(), "43");
+
+    // A short one is restored whole, well within the budget.
+    let mut s: Value =
+        serde_json::from_str(&snapshot_json(1, chain(&sqrt7, 3), json!({}))).unwrap();
+    s["s"]["p"]["d"] = json!("2.645751311064591");
+    let mut vm = new_vm();
+    let done = work(|| vm.restore_state(&s.to_string()));
+    assert!(done < REPLAY_WORK / 10, "{done}");
+    assert_eq!(vm.expression(), "√(7) + √(7) + √(7) + ");
+}
+
+/// A crafted history item: clicking it replays within the budget too, and
+/// the calculation continues from its saved result.
+#[test]
+fn a_costly_crafted_history_item_is_replayed_within_the_budget() {
+    use crate::snapshot::REPLAY_WORK;
+    let fact = [
+        operand(&[130, 84, 135]),
+        json!({ "$t": 0, "c": [113] }),
+        json!({ "$t": 1, "c": 93 }),
+    ];
+    let item = json!({
+        "t": [{ "t": "x", "c": 0 }, { "t": "=", "c": -1 }],
+        "c": chain(&fact, 1000), "e": "x =", "r": "77",
+    });
+    let mut vm = new_vm();
+    vm.restore_state(&snapshot_json(1, json!([]), json!({ "hc": [item] })));
+    assert_eq!(vm.history().len(), 1);
+    // One 0.5! is about 47 million units.
+    let done = work(|| vm.history_recall(0));
+    assert!(done < REPLAY_WORK + 60_000_000, "{done}");
+    assert_eq!(vm.display_value(), "77");
+    vm.press(Button::Add);
+    vm.press(Button::One);
+    vm.press(Button::Equals);
+    assert_eq!(vm.display_value(), "78");
+}
+
+/// Memory slots near 10^-9999 cost millions of units each: the oldest that
+/// fit the memory budget are kept, the rest dropped, and the work bounded.
+#[test]
+fn costly_crafted_memory_is_restored_within_the_budget() {
+    use crate::snapshot::{MEMORY_WORK, VALUE_WORK};
+    let tiny = "9.9999999999999999999999999999999e-9999";
+    let mut memory = vec![tiny; 100];
+    memory[99] = "3"; // the oldest
+    let mut vm = new_vm();
+    let done = work(|| vm.restore_state(&snapshot_json(1, json!([]), json!({ "mem": memory }))));
+    // The budget, one slot past it, and showing the kept slots (formatting
+    // each costs about what entering it did).
+    assert!(done < 2 * MEMORY_WORK + VALUE_WORK, "{done}");
+    let kept = vm.memory();
+    assert!((2..100).contains(&kept.len()), "{kept:?}");
+    assert_eq!(kept.last().map(String::as_str), Some("3"));
+    assert_eq!(vm.display_value(), "0");
+}

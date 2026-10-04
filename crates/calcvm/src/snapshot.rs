@@ -642,9 +642,8 @@ pub(crate) struct SnapshotValidator;
 /// calculations stay far below it, and 40 pastes of a 100-term sum (about
 /// 12,000 keys) still fit. With display updates deferred, replay is linear:
 /// at the limit, cheap keys restore in about 30 ms (Programmer, whose number
-/// conversions cost more per key, about 0.2 s). Expensive arithmetic (√, ln,
-/// huge exponents: several milliseconds per operator) costs what it cost
-/// when it was typed.
+/// conversions cost more per key, about 0.2 s). Expensive arithmetic is
+/// bounded by [`REPLAY_WORK`] instead.
 pub(crate) const MAX_RESTORED_KEYS: usize = 16_384;
 
 /// Extension: the longest primary display a snapshot may carry (the longest
@@ -654,6 +653,28 @@ pub(crate) const MAX_DISPLAY_LENGTH: usize = copypaste::MAX_PASTEABLE_LENGTH as 
 /// Extension: memory slots restored (`CalculatorManager`'s
 /// `MAXIMUM_MEMORY_SIZE`; the manager drops older ones anyway).
 pub(crate) const MAX_RESTORED_MEMORY: usize = 100;
+
+/// Extension: arithmetic budgets for replaying saved state, in units of
+/// `ratpack::work_done` (digit operations). Keys are cheap, but one operator
+/// can cost milliseconds (√, ln, x^y, n! of a fraction, anything near
+/// 10^±9999: up to 180 ms for one n!), and a crafted chain of them at the
+/// key limit replayed for half a minute. A replay that goes past its budget
+/// stops, and only what it was restoring is dropped: the pending expression
+/// (the displayed value is kept), a history item's replay (its result is
+/// kept), a memory slot (and, once the slots together are past theirs, the
+/// newer ones).
+///
+/// In a release build heavy arithmetic runs at 1–4.5 ns a unit, so the
+/// costliest crafted states (n! of fractions, after 100 memory slots near
+/// 10^-9999) restore in under a second. The costliest of 1,506
+/// app-produced states replays 166 million units (an n! of a fraction among
+/// others, 0.35 s); 40 pastes of a 100-term sum, 59 million.
+pub(crate) const REPLAY_WORK: u64 = 180_000_000;
+/// All memory slots together, and one slot (one displayed number: a
+/// legible one costs well under a million units, one near 10^±9999 about
+/// three million).
+pub(crate) const MEMORY_WORK: u64 = 30_000_000;
+pub(crate) const VALUE_WORK: u64 = 8_000_000;
 
 impl SnapshotValidator {
     /// The calculator view mode of a snapshot (only Standard, Scientific and
@@ -1000,22 +1021,32 @@ impl StandardCalculatorViewModel {
                 // for history items, which Programmer mode does not have.
                 // Re-evaluate the expression in the Programmer engine instead,
                 // which leaves it exactly as it was after "=".
-                self.with_deferred_display(|vm| {
-                    vm.replay(&expression_display.commands);
-                    vm.send_command(cmd::EQU);
+                let within = self.within_work(REPLAY_WORK, |vm| {
+                    vm.with_deferred_display(|vm| {
+                        vm.replay(&expression_display.commands);
+                        vm.send_command(cmd::EQU);
+                    })
                 });
-                self.set_expression_display(tokens, commands);
-                self.set_primary_display(&snapshot.primary_display.display_value, false);
-                self.drain();
+                if within {
+                    self.set_expression_display(tokens, commands);
+                    self.set_primary_display(&snapshot.primary_display.display_value, false);
+                    self.drain();
+                } else {
+                    self.clear_unbudgeted();
+                    self.reenter_display_value(mode, &snapshot.primary_display.display_value);
+                }
             } else if snapshot.display_commands.is_empty() {
                 // Expression was evaluated before. Load from history.
-                self.set_history_expression_display(tokens.clone(), commands.clone());
-                self.set_expression_display(tokens, commands);
-                self.set_primary_display(&snapshot.primary_display.display_value, false);
-                self.drain();
+                if self.set_history_expression_display(tokens.clone(), commands.clone()) {
+                    self.set_expression_display(tokens, commands);
+                    self.set_primary_display(&snapshot.primary_display.display_value, false);
+                    self.drain();
+                } else {
+                    self.reenter_display_value(mode, &snapshot.primary_display.display_value);
+                }
             } else {
                 // Expression was not evaluated before, or it was an error.
-                self.with_deferred_display(|vm| vm.replay(&snapshot.display_commands));
+                self.replay_within_budget(&snapshot.display_commands);
                 if snapshot.primary_display.is_error {
                     self.restore_error_display(&snapshot.primary_display.display_value);
                 } else {
@@ -1025,8 +1056,20 @@ impl StandardCalculatorViewModel {
         } else if snapshot.primary_display.is_error {
             self.restore_error_display(&snapshot.primary_display.display_value);
         } else {
-            self.with_deferred_display(|vm| vm.replay(&snapshot.display_commands));
+            self.replay_within_budget(&snapshot.display_commands);
             self.reenter_display_value(mode, &snapshot.primary_display.display_value);
+        }
+    }
+
+    /// Replays the display commands within [`REPLAY_WORK`]; past it, the
+    /// pending expression is dropped (the displayed value is re-entered by
+    /// the caller).
+    fn replay_within_budget(&mut self, commands: &[ExpressionCommandWrapper]) {
+        let within = self.within_work(REPLAY_WORK, |vm| {
+            vm.with_deferred_display(|vm| vm.replay(commands))
+        });
+        if !within {
+            self.clear_unbudgeted();
         }
     }
 
@@ -1063,7 +1106,18 @@ impl StandardCalculatorViewModel {
         if self.is_in_error || self.display_value == display_value {
             return;
         }
-        self.enter_value(mode, display_value);
+        self.enter_value_within_budget(mode, display_value);
+    }
+
+    /// [`enter_value`](Self::enter_value) within [`VALUE_WORK`]; past it,
+    /// the entry is cleared. Returns whether the value was entered.
+    pub(crate) fn enter_value_within_budget(&mut self, mode: CalcMode, value: &str) -> bool {
+        let mut entered = false;
+        if self.within_work(VALUE_WORK, |vm| entered = vm.enter_value(mode, value)) {
+            return entered;
+        }
+        self.clear_unbudgeted();
+        false
     }
 
     /// Types a displayed number (as `OnPaste` would) into the engine.
@@ -1164,12 +1218,16 @@ impl StandardCalculatorViewModel {
         }
         let memory = &memory[..memory.len().min(MAX_RESTORED_MEMORY)];
         self.with_deferred_display(|vm| {
-            for value in memory.iter().rev() {
-                if vm.enter_value(mode, value) {
-                    let _ = vm.with_manager(|m| m.memorize_number());
+            // Extension: each slot within VALUE_WORK, all within
+            // MEMORY_WORK; a slot past either is dropped.
+            vm.within_work(MEMORY_WORK, |vm| {
+                for value in memory.iter().rev() {
+                    if vm.enter_value_within_budget(mode, value) {
+                        let _ = vm.with_manager(|m| m.memorize_number());
+                    }
                 }
-            }
-            vm.send_command(cmd::CLEAR);
+            });
+            vm.clear_unbudgeted();
         });
     }
 }

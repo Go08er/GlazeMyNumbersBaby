@@ -148,6 +148,12 @@ pub(crate) struct StandardCalculatorViewModel {
     programmer_panel_dirty: bool,
     trace: OpTrace,
     events: Vec<Event>,
+
+    /// Extension: while replaying saved state, the `ratpack::work_done`
+    /// reading past which commands are dropped (see
+    /// [`within_work`](Self::within_work)), and whether one was.
+    work_limit: Option<u64>,
+    work_cut: bool,
 }
 
 impl StandardCalculatorViewModel {
@@ -195,6 +201,8 @@ impl StandardCalculatorViewModel {
             programmer_panel_dirty: false,
             trace: OpTrace::default(),
             events: Vec::new(),
+            work_limit: None,
+            work_cut: false,
         }
     }
 
@@ -205,12 +213,40 @@ impl StandardCalculatorViewModel {
     /// `_standardCalculatorManager.SendCommand((CalculatorCommand)command)`
     /// followed by the replay of the callbacks it produced.
     pub(crate) fn send_command(&mut self, command: i32) {
+        if let Some(limit) = self.work_limit
+            && calcmanager::work_done() > limit
+        {
+            self.work_cut = true;
+            return;
+        }
         // The shipping app never catches engine exceptions; an `Err` leaves
         // the engine in the same state the C++ would be in.
         let _ = self
             .standard_calculator_manager
             .send_command(Command(command));
         self.drain();
+    }
+
+    /// Extension: runs `f` (a replay of saved state) with the engine's
+    /// arithmetic limited to `budget` units of `ratpack::work_done`: once
+    /// that much is done, the commands `f` sends are dropped. Returns
+    /// whether `f` ran within the budget; when it didn't, the caller drops
+    /// what `f` was restoring (see [`clear_unbudgeted`](Self::clear_unbudgeted)).
+    pub(crate) fn within_work(&mut self, budget: u64, f: impl FnOnce(&mut Self)) -> bool {
+        let outer = (self.work_limit, std::mem::take(&mut self.work_cut));
+        let limit = calcmanager::work_done().saturating_add(budget);
+        self.work_limit = Some(outer.0.map_or(limit, |o| o.min(limit)));
+        f(self);
+        let within = !self.work_cut;
+        (self.work_limit, self.work_cut) = (outer.0, outer.1 || !within);
+        within
+    }
+
+    /// Extension: `Clear`, sent even when a replay budget is spent.
+    pub(crate) fn clear_unbudgeted(&mut self) {
+        let limit = self.work_limit.take();
+        self.send_command(cmd::CLEAR);
+        self.work_limit = limit;
     }
 
     /// Runs `f` on the manager and replays the callbacks it produced.
@@ -708,7 +744,11 @@ impl StandardCalculatorViewModel {
     pub(crate) fn select_history_item(&mut self, item: &HistoryItemViewModel) {
         let tokens = item.get_tokens().to_vec();
         let commands = item.get_commands().to_vec();
-        self.set_history_expression_display(tokens.clone(), commands.clone());
+        if !self.set_history_expression_display(tokens.clone(), commands.clone()) {
+            // Over the replay budget: continue from the result as shown.
+            let mode = self.get_calculator_mode();
+            self.enter_value_within_budget(mode, item.result());
+        }
         self.set_expression_display(tokens, commands);
         self.set_primary_display(item.result(), false);
         self.is_f_to_e_enabled = false;
@@ -908,15 +948,21 @@ impl StandardCalculatorViewModel {
         &mut self,
         tokens: Vec<ExpressionToken>,
         commands: Vec<ExpressionCommand>,
-    ) {
+    ) -> bool {
         self.tokens = tokens;
         self.commands = commands;
         // IsEditingEnabled = false;
 
         self.with_manager(|m| m.set_in_history_item_load_mode(true));
-        self.recalculate(true);
+        // Extension: within a budget (a damaged or crafted item could
+        // otherwise replay for minutes); past it the engine is cleared.
+        let within = self.within_work(crate::snapshot::REPLAY_WORK, |vm| vm.recalculate(true));
+        if !within {
+            self.clear_unbudgeted();
+        }
         self.with_manager(|m| m.set_in_history_item_load_mode(false));
         self.is_last_operation_history_load = true;
+        within
     }
 
     /// `SetTokens(tokens)`: `ExpressionTokens` from the engine tokens.
