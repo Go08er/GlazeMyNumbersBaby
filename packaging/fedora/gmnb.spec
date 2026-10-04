@@ -118,7 +118,7 @@ done
 %{_datadir}/icons/hicolor/scalable/apps/%{dapp_id}.svg
 
 %changelog
-* Fri Oct 02 2026 Go08er <Go08er@users.noreply.github.com> - 0.2.0-1
+* Sun Oct 04 2026 Go08er <Go08er@users.noreply.github.com> - 0.2.0-1
 - Add the dgmnb subpackage, the lean twin
 * Fri Oct 02 2026 Go08er <Go08er@users.noreply.github.com> - 0.1.0-1
 - Initial release
