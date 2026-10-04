@@ -281,3 +281,112 @@ fn ordinary_answers_stay() {
     assert_eq!(r.domain, "x ∈ ℝ");
     assert_eq!(r.maxima, ["(1522756, 1)"]);
 }
+
+/// Touched trig holes: cos² x / cos² x is 1 except at π/2 + kπ, where its
+/// divisor touches 0 without changing sign. No double is such a point, so
+/// neither sampling nor a sign change shows it: the domain must still leave
+/// it out (or say it can't tell), and nothing may say "ℝ".
+#[test]
+fn touched_trig_holes_are_excluded_or_unknown() {
+    for (src, domain) in [
+        ("y=cos(x)^2/cos(x)^2", "x ∈ ℝ \\ {π/2 + kπ | k ∈ ℤ}"),
+        ("y=sin(x)^2/sin(x)^2", "x ∈ ℝ \\ {kπ | k ∈ ℤ}"),
+        ("y=sin(x)/sin(x)", "x ∈ ℝ \\ {kπ | k ∈ ℤ}"),
+        ("y=cos(x)/cos(x)", "x ∈ ℝ \\ {π/2 + kπ | k ∈ ℤ}"),
+        ("y=sec(x)*cos(x)", "x ∈ ℝ \\ {π/2 + kπ | k ∈ ℤ}"),
+        ("y=tan(x)/tan(x)", "x ∈ ℝ \\ {kπ/2 | k ∈ ℤ}"),
+        ("y=(1+cos(x))/(1+cos(x))", "x ∈ ℝ \\ {π + 2kπ | k ∈ ℤ}"),
+    ] {
+        let r = k(src);
+        assert_eq!(r.domain, domain, "{src}");
+        assert_eq!(r.range, "y ∈ {1}", "{src}");
+        assert!(
+            r.vertical_asymptotes.is_empty() && !unknown(&r, flags::VERTICAL_ASYMPTOTES),
+            "{src}"
+        );
+        // Not "not periodic": its holes repeat.
+        assert!(!r.periodicity_expression.is_empty() || unknown(&r, flags::PERIODICITY));
+    }
+    // A shifted, stretched argument's holes are its own.
+    let r = k("y=cos(2x+1)^3/cos(2x+1)^3");
+    assert_eq!(r.domain, "x ∈ ℝ \\ {0.285398 + kπ/2 | k ∈ ℤ}");
+    // 0 everywhere it is defined: every such x is an intercept, and the
+    // holes are sin's, not a period sampling saw (it used to say kπ/12).
+    let r = k("y=0*sin(x)/sin(x)");
+    assert_eq!(r.domain, "x ∈ ℝ \\ {kπ | k ∈ ℤ}");
+    assert_eq!(r.x_intercept, r.domain);
+    assert!(!r.periodicity_expression.contains("π/12"));
+    // Poles where the divisor touches 0, and ones only a log shows.
+    for (src, domain) in [
+        ("y=1/cos(x)^2", "x ∈ ℝ \\ {π/2 + kπ | k ∈ ℤ}"),
+        ("y=ln(sin(x)^2)", "x ∈ ℝ \\ {kπ | k ∈ ℤ}"),
+        ("y=ln(cos(x)^2)", "x ∈ ℝ \\ {π/2 + kπ | k ∈ ℤ}"),
+    ] {
+        let r = k(src);
+        assert_eq!(r.domain, domain, "{src}");
+        assert!(!r.vertical_asymptotes.is_empty(), "{src}");
+    }
+    // Where the holes can't be stated, the domain says it can't tell; it
+    // never says ℝ (ln(1 + cos x) used to, with a range bounded below).
+    for src in [
+        "y=x/cos(x)^2",
+        "y=cos(x^2)^2/cos(x^2)^2",
+        "y=(1+cos(x^2))/(1+cos(x^2))",
+        "y=ln(1+cos(x))",
+        "y=(1-sin(x))/(1-sin(x))",
+        "y=sin(x)^-2*sin(x)^2",
+    ] {
+        let r = analyze_str(src);
+        assert!(
+            r.analysis_error_string().is_some() || excludes_or_unknown(&r),
+            "{src}: domain {}",
+            r.domain
+        );
+        assert!(r.domain != "x ∈ ℝ", "{src}");
+    }
+    // In degrees and grads the holes are doubles, sampled like any other.
+    for unit in [TrigUnit::Degrees, TrigUnit::Grads] {
+        for src in ["y=cos(x)^2/cos(x)^2", "y=(1+cos(x))/(1+cos(x))"] {
+            let r = in_unit(src, unit);
+            assert!(
+                r.analysis_error_string().is_some() || excludes_or_unknown(&r),
+                "{unit:?} {src}: {}",
+                r.domain
+            );
+        }
+    }
+    let r = in_unit("y=cos(x)^2/cos(x)^2", TrigUnit::Degrees);
+    assert_ne!(r.domain, "x ∈ ℝ");
+}
+
+/// The gate on its own: told that cos² x / cos² x and (1 + cos x) / (1 +
+/// cos x) are defined everywhere (what the engine used to say), it finds
+/// the points no double is and no sign change shows, and drops the domain;
+/// and a touched factor of an argument that isn't affine leaves no definite
+/// domain either.
+#[test]
+fn the_gate_finds_touched_singular_points() {
+    let opts = CompileOptions::default();
+    for src in [
+        "y=cos(x)^2/cos(x)^2",
+        "y=(1+cos(x))/(1+cos(x))",
+        "y=1/cos(x)^2*cos(x)^2",
+        "y=cos(x^2)^2/cos(x^2)^2",
+    ] {
+        let eq = Equation::parse(src).unwrap();
+        let mut raw = analyze_ungated(&eq, &opts);
+        raw.too_complex_features &= !flags::DOMAIN;
+        raw.data.excluded.clear();
+        raw.data.period = None;
+        raw.data.domain = vec![Interval::all()];
+        raw.domain = "x ∈ ℝ".into();
+        let (_, f) = eq.explicit().unwrap();
+        let (k, r, _) = verify::gate_report(raw, f, &opts);
+        assert!(
+            unknown(&k, flags::DOMAIN),
+            "{src}: kept {} ({:?})",
+            k.domain,
+            r.failures.keys().collect::<Vec<_>>()
+        );
+    }
+}
