@@ -117,7 +117,16 @@ pub fn certify_text(
     if let Some(g) = rewrite(&f) {
         f.eval = canonical(&g);
     }
-    f.derivs = fun::rational_derivs(&f.expr, &exact);
+    // A symbolic derivative only for f continuous wherever defined (no
+    // floor, round, sign, mod: their derivative 0 hides the jumps).
+    let steps = !crate::simplify::side::jumps(&f.expr).is_empty();
+    let settings = f.settings();
+    f.derivs = fun::rational_derivs(&f.expr, &exact).or_else(|| {
+        (!steps)
+            .then(|| fun::symbolic_derivs(&f.eval, f.opts.trig_unit, settings.as_ref()))
+            .flatten()
+    });
+    f.numerators = fun::rational_numerators(&f.expr, &exact);
     Ok(certify(&f, &text))
 }
 
@@ -182,7 +191,8 @@ fn with<T>(mut r: Row<T>, extra: &[Claim]) -> Row<T> {
 
 /// Certifies every row for the function `f`.
 pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
-    let phase = f.left() / 6;
+    // Domain, f, f′ (and its fallback), f″ (and its fallback), the rows.
+    let phase = f.left() / 8;
     f.allow(phase);
     let dom = side::domain(f);
     let w = window(f, &dom);
@@ -203,23 +213,80 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         }
         spans.push((b.a, b.b));
     }
-    // f⁽ᵏ⁾ from f's Taylor coefficients; for a rational f, if that leaves
-    // boxes undecided, again from the exact derivative's own tree (its
-    // numerator expanded, so what cancels there cancels exactly), keeping
-    // whichever cover is complete.
+    f.allow(phase);
+    let c0 = Cover::run(f, &Target { expr: &f.eval, k: 0 }, &[0.0], &spans);
+    // f is continuous on every box: the derivative's own tree may stand
+    // for f′ (it equals f′ wherever f is differentiable, and f is monotone
+    // where it keeps a sign).
+    let continuous = c0.complete()
+        && c0.leaves.iter().all(|l| match *l {
+            cover::Leaf::Band { cont, .. } | cover::Leaf::Equal { cont, .. } => cont,
+            _ => true,
+        });
+    // For f′ and f″, a closed end where f isn't differentiable (√x at 0)
+    // is left out: its box starts one double in, the reals between are a
+    // gap (f⁽ᵏ⁾ must have no zero there), and f must be continuous across
+    // it.
+    let mut kgaps: [Vec<XBox>; 2] = [Vec::new(), Vec::new()];
+    let mut kcont = [true, true];
+    let mut kspans: [Vec<(f64, f64)>; 2] = [Vec::new(), Vec::new()];
+    for (i, k) in [1usize, 2].into_iter().enumerate() {
+        for &(a, b) in &spans {
+            // (Point spans are the closed ends.)
+            if a == b {
+                let smooth = f
+                    .ser(crate::interval::Interval::point(a), k)
+                    .is_ok_and(|s| fun::usable(&s, k));
+                if !smooth {
+                    // Drop the point box; trim the box it ends.
+                    continue;
+                }
+            }
+            kspans[i].push((a, b));
+        }
+        // Trim boxes at dropped ends.
+        let dropped: Vec<f64> = spans
+            .iter()
+            .filter(|&&(a, b)| a == b && !kspans[i].contains(&(a, b)))
+            .map(|&(a, _)| a)
+            .collect();
+        for s in kspans[i].iter_mut() {
+            if s.0 < s.1 && dropped.contains(&s.0) {
+                let p = s.0;
+                s.0 = p.next_up();
+                kgaps[i].push(XBox::new(p, s.0));
+            }
+            if s.0 < s.1 && dropped.contains(&s.1) {
+                let p = s.1;
+                s.1 = p.next_down();
+                kgaps[i].push(XBox::new(s.1, p));
+            }
+        }
+        for g in &kgaps[i] {
+            let v = f.val(crate::interval::Interval::new(g.a.0, g.b.0));
+            if !v.is_ok_and(|v| !v.is_empty() && v.dec >= crate::interval::Dec::Dac) {
+                kcont[i] = false;
+            }
+        }
+    }
+    // f⁽ᵏ⁾ from f's Taylor coefficients; if that leaves boxes undecided and
+    // f is continuous, again from the derivative's own tree (for a rational
+    // f its numerator is expanded exactly, so what cancels there cancels
+    // exactly), keeping whichever cover is complete.
     let cover = |k: usize| {
+        let sp = &kspans[k - 1];
         f.allow(phase);
-        let c = Cover::run(f, &Target { expr: &f.eval, k }, &[0.0], &spans);
+        let c = Cover::run(f, &Target { expr: &f.eval, k }, &[0.0], sp);
         match &f.derivs {
-            Some(d) if k > 0 && !c.complete() => {
+            Some(d) if continuous && !c.complete() => {
                 f.allow(phase);
-                let r = Cover::run(f, &Target { expr: &d[k - 1], k: 0 }, &[0.0], &spans);
+                let r = Cover::run(f, &Target { expr: &d[k - 1], k: 0 }, &[0.0], sp);
                 if r.complete() { r } else { c }
             }
             _ => c,
         }
     };
-    let (c0, c1, c2) = (cover(0), cover(1), cover(2));
+    let (c1, c2) = (cover(1), cover(2));
     if std::env::var_os("CERTIFY_DEBUG").is_some() {
         eprintln!("w = {w}, boxes = {spans:?}");
         for (k, c) in [&c0, &c1, &c2].iter().enumerate() {
@@ -251,6 +318,12 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     // every certificate built on the boxes.
     let mut gap_claims = gaps.clone();
     gap_claims.extend(dom.claims.iter().filter(|c| matches!(c, Claim::Family { .. })).cloned());
+    for g in kgaps.iter().flatten() {
+        let c = Claim::Gap { x: *g };
+        if !gap_claims.contains(&c) {
+            gap_claims.push(c);
+        }
+    }
     // Is f⁽ᵏ⁾ free of zeros in the gaps? (Out of budget: not shown.)
     let gap_boxes: Vec<XBox> = gaps
         .iter()
@@ -259,7 +332,16 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             _ => None,
         })
         .collect();
-    let clear = |k: usize| rows::gaps_clear(f, k, &gap_boxes, &boxes).unwrap_or(false);
+    let clear = |k: usize| {
+        let mut g = gap_boxes.clone();
+        if k > 0 {
+            if !kcont[k - 1] {
+                return false;
+            }
+            g.extend(kgaps[k - 1].iter().copied());
+        }
+        rows::gaps_clear(f, k, &g, &boxes, continuous).unwrap_or(false)
+    };
     let (clear0, clear1, clear2) = (clear(0), clear(1), clear(2));
     if std::env::var_os("CERTIFY_DEBUG").is_some() {
         eprintln!("gaps {gap_boxes:?}: clear {clear0} {clear1} {clear2}");
@@ -276,7 +358,7 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         unit: unit_name(f.opts.trig_unit).into(),
         x_intercepts: rows::zeros(&c0, whole, w, &gap_claims, clear0),
         y_intercept: or_unknown(rows::y_intercept(f)),
-        parity: or_unknown(rows::parity(f)),
+        parity: or_unknown(rows::parity(f, &dom)),
         period: or_unknown(rows::period(f, &dom, &monotonicity)),
         extrema: with(or_unknown(rows::extrema(f, &c1, &boxes, whole, w, clear1)), &gap_claims),
         inflections: with(

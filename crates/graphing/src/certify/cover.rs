@@ -28,6 +28,9 @@ use super::fun::{Fun, REACH, Stop, atomic, split, usable};
 use crate::ast::Expr;
 use crate::interval::{Dec, DecInterval, Interval, Series};
 
+/// Boxes within this of 0 are not split (see `step`).
+const NEAR: f64 = 1e-300;
+
 /// The most crossings a cover lists before leaving the rest undecided.
 pub const MAX_FEATURES: usize = 64;
 
@@ -335,7 +338,10 @@ fn step(
     // Beyond reach, an undecided box is left so: features out there are
     // past anything the panel shows, and splitting there (underflow,
     // overflow) rarely helps.
-    let far = a >= REACH || b <= -REACH;
+    // So too a box within 10⁻³⁰⁰ of 0 (subnormal x, where f′ of 1/x or
+    // ln x overflows).
+    let near0 = a < b && ((a >= 0.0 && b <= NEAR) || (a >= -NEAR && b <= 0.0));
+    let far = a >= REACH || b <= -REACH || near0;
     let split_or_flag = |why: &'static str| -> Result<Step, Stop> {
         if far {
             return Ok(Step::Leaves(vec![Leaf::Flag {

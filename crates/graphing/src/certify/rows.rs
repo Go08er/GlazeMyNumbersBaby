@@ -485,7 +485,13 @@ fn classify(f: &Fun<'_>, x: Enc, boxes: &[IBox]) -> Result<(super::pole::Near, O
 /// e^(−10⁶), below every double): a row is complete only if the gaps are
 /// clear. For f itself a pole with no zero beside it (a quotient whose
 /// numerator stays away from 0) also clears its gaps.
-pub fn gaps_clear(f: &Fun<'_>, k: usize, gaps: &[XBox], boxes: &[IBox]) -> Result<bool, Stop> {
+pub fn gaps_clear(
+    f: &Fun<'_>,
+    k: usize,
+    gaps: &[XBox],
+    boxes: &[IBox],
+    use_derivs: bool,
+) -> Result<bool, Stop> {
     let (inner, _) = excluded_points(boxes);
     for g in gaps {
         let iv = Interval::new(g.a.0, g.b.0);
@@ -494,12 +500,27 @@ pub fn gaps_clear(f: &Fun<'_>, k: usize, gaps: &[XBox], boxes: &[IBox]) -> Resul
             continue;
         }
         if k > 0
+            && use_derivs
             && let Some(d) = &f.derivs
         {
             let v = f.ser_of(&d[k - 1], iv, 0)?[0];
             if !v.is_empty() && v.ne0() {
                 continue;
             }
+        }
+        // Factor by factor: each away from 0 over the gap, or exactly 0 at
+        // one of its doubles and strictly monotone across it (so 0 nowhere
+        // between the doubles).
+        let tree = match (k, &f.numerators, &f.derivs) {
+            (_, Some(n), _) => Some(&n[k]),
+            (0, None, _) => Some(&f.eval),
+            (_, None, Some(d)) if use_derivs => Some(&d[k - 1]),
+            _ => None,
+        };
+        if let Some(t) = tree
+            && factors_clear(f, t, iv)?
+        {
+            continue;
         }
         if k == 0 {
             let near = inner
@@ -515,6 +536,33 @@ pub fn gaps_clear(f: &Fun<'_>, k: usize, gaps: &[XBox], boxes: &[IBox]) -> Resul
             }
         }
         return Ok(false);
+    }
+    Ok(true)
+}
+
+/// `e` has no zero strictly between the doubles of the box `g`: each of
+/// its zero factors ([`super::fun::zero_factors`]) is away from 0 over the
+/// box, or is exactly 0 at one of its doubles and strictly monotone there.
+fn factors_clear(f: &Fun<'_>, e: &crate::ast::Expr, g: Interval) -> Result<bool, Stop> {
+    for h in super::fun::zero_factors(e) {
+        let s = f.ser_of(&h, g, 1)?;
+        if !s[0].is_empty() && s[0].ne0() {
+            continue;
+        }
+        let mono = usable(&s, 1) && s[1].ne0();
+        let mut exact = false;
+        let mut q = g.lo();
+        for _ in 0..8 {
+            if !mono || q > g.hi() || exact {
+                break;
+            }
+            let v = f.ser_of(&h, Interval::point(q), 0)?[0];
+            exact = v.lo() == 0.0 && v.hi() == 0.0;
+            q = q.next_up();
+        }
+        if !exact {
+            return Ok(false);
+        }
     }
     Ok(true)
 }
@@ -624,7 +672,20 @@ pub fn vertical(f: &Fun<'_>, dom: &Domain, c0: &Cover, boxes: &[IBox], whole: bo
         match near {
             Near::Pole => out.push(Spot::At(x)),
             Near::Bounded => {}
-            Near::Unknown => return Ok(Row::unknown("an excluded point is not classified")),
+            Near::Unknown => {
+                // The simplifier's one-sided limits: an infinite one is an
+                // asymptote, two finite ones a hole or a jump.
+                let sides = [side_limit(f, x.lo.0, false), side_limit(f, x.lo.0, true)];
+                let (Some((l, lc)), Some((r, rc))) = (x.is_point().then_some(()).and(sides[0].clone()), sides[1].clone()) else {
+                    return Ok(Row::unknown("an excluded point is not classified"));
+                };
+                match (l, r) {
+                    (TailEnd::Infinite(_), _) | (_, TailEnd::Infinite(_)) => out.push(Spot::At(x)),
+                    (TailEnd::Level(..), TailEnd::Level(..)) => {}
+                    _ => return Ok(Row::unknown("an excluded point is not classified")),
+                }
+                c.extend([lc, rc]);
+            }
         }
         c.extend(claim);
     }
@@ -652,7 +713,14 @@ pub fn vertical(f: &Fun<'_>, dom: &Domain, c0: &Cover, boxes: &[IBox], whole: bo
                 hi: R(v.hi()),
             });
         } else {
-            return Ok(Row::unknown("a domain end is not classified"));
+            match x.is_point().then(|| side_limit(f, p, from_right)).flatten() {
+                Some((TailEnd::Infinite(_), claim)) => {
+                    out.push(Spot::At(x));
+                    c.push(claim);
+                }
+                Some((TailEnd::Level(..), claim)) => c.push(claim),
+                _ => return Ok(Row::unknown("a domain end is not classified")),
+            }
         }
     }
     Ok(Row::Certified { value: out, cert: c })
@@ -720,28 +788,24 @@ pub fn tail_end(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cla
 
 /// The simplifier's limit of f at ±∞, as a tail end with its claim.
 fn simplifier_limit(f: &Fun<'_>, right: bool) -> Option<(TailEnd, Claim)> {
+    let at = if right { "+∞" } else { "−∞" };
+    limit_of(f, &f.expr, right, at)
+}
+
+/// The simplifier's limit of `e` as x → +∞ (`right`) or −∞, as a tail end
+/// with its claim (the limit of f as x → `at`).
+fn limit_of(f: &Fun<'_>, e: &crate::ast::Expr, right: bool, at: &str) -> Option<(TailEnd, Claim)> {
     use crate::simplify::{Dir, Limit, limit_at};
     if f.cancelled() {
         return None;
     }
     let s = f.settings()?;
     let dir = if right { Dir::PosInf } else { Dir::NegInf };
-    let at = if right { "+∞" } else { "−∞" };
-    let (end, says) = match limit_at(&f.expr, dir, &s) {
+    let (end, says) = match limit_at(e, dir, &s) {
         Limit::PosInf => (TailEnd::Infinite(true), "+∞".to_string()),
         Limit::NegInf => (TailEnd::Infinite(false), "−∞".to_string()),
         Limit::Exact(v) => {
-            let mut iv = v.q.interval();
-            for _ in 0..v.k.unsigned_abs() {
-                iv = if v.k > 0 {
-                    iv * crate::interval::elem::pi()
-                } else {
-                    iv / crate::interval::elem::pi()
-                };
-            }
-            if iv.is_empty() || !iv.is_bounded() {
-                return None;
-            }
+            let iv = piq_interval(v)?;
             let text = pi_q(v);
             (TailEnd::Level(Enc::new(iv.lo(), iv.hi()), Some(text.clone())), text)
         }
@@ -758,6 +822,22 @@ fn simplifier_limit(f: &Fun<'_>, right: bool) -> Option<(TailEnd, Claim)> {
     };
     let fact = format!("f → {says} as x → {at}");
     Some((end, Claim::Simplifier { fact }))
+}
+
+/// f's one-sided limit at the double `p`, from the right (`right`) or the
+/// left, by the simplifier: the limit at +∞ of f(p ± 1/x).
+pub fn side_limit(f: &Fun<'_>, p: f64, right: bool) -> Option<(TailEnd, Claim)> {
+    use crate::ast::{BinOp, Expr};
+    let pe = if p < 0.0 {
+        Expr::Neg(Box::new(Expr::Num(-p)))
+    } else {
+        Expr::Num(p)
+    };
+    let inv = Expr::bin(BinOp::Div, Expr::Num(1.0), Expr::X);
+    let shifted = Expr::bin(if right { BinOp::Add } else { BinOp::Sub }, pe, inv);
+    let e = f.expr.map(&|n| matches!(n, Expr::X).then(|| shifted.clone()));
+    let at = format!("{p}{}", if right { "⁺" } else { "⁻" });
+    limit_of(f, &e, true, &at)
 }
 
 /// An enclosure of q·πᵏ.
@@ -1188,17 +1268,41 @@ fn end_value(
                     (x.is_point() && end_pole(f, &f.eval, n, p)?).then_some(n)
                 }
             };
-            let Some(n) = n else {
-                return removable(f, x, around(x, boxes).unwrap_or_else(|| {
-                    let p = if is_lo { x.hi.0 } else { x.lo.0 };
-                    beside(p, ib, is_lo).hull(Interval::new(x.lo.0, x.hi.0))
-                }), cl);
-            };
-            cl.push(Claim::Unbounded {
-                near: XBox::new(n.lo(), n.hi()),
-                at: XBox { a: x.lo, b: x.hi },
+            if let Some(n) = n
+                && let Some(up) = gap_sign(f, x, ib, is_lo, c0, boxes)?
+            {
+                cl.push(Claim::Unbounded {
+                    near: XBox::new(n.lo(), n.hi()),
+                    at: XBox { a: x.lo, b: x.hi },
+                });
+                return Ok(Some(infinite(up)));
+            }
+            let n = around(x, boxes).unwrap_or_else(|| {
+                let p = if is_lo { x.hi.0 } else { x.lo.0 };
+                beside(p, ib, is_lo).hull(Interval::new(x.lo.0, x.hi.0))
             });
-            gap_sign(f, x, ib, is_lo, c0, boxes)?.map(infinite)
+            if let Some(e) = removable(f, x, n, cl)? {
+                return Ok(Some(e));
+            }
+            // The simplifier's one-sided limit (the piece lies right of x
+            // when x is its low end).
+            if !x.is_point() {
+                return Ok(None);
+            }
+            let Some((end, claim)) = side_limit(f, x.lo.0, is_lo) else {
+                return Ok(None);
+            };
+            cl.push(claim);
+            match end {
+                TailEnd::Infinite(up) => Some(infinite(up)),
+                TailEnd::Level(e, _) => Some(End {
+                    v: e,
+                    closed: false,
+                    infinite: None,
+                    at: None,
+                }),
+                TailEnd::Unknown => None,
+            }
         }
     })
 }
@@ -1335,24 +1439,124 @@ pub fn range(
 /// Even or odd from the simplifier's proof (f(−x) and ±f(x) in one
 /// e-class, on a symmetric domain); neither from two interval witnesses
 /// (one against each); otherwise unknown.
-pub fn parity(f: &Fun<'_>) -> Result<Row<Parity>, Stop> {
+/// Parity from the tree's structure: `Some(true)` even, `Some(false)` odd.
+/// x is odd, a constant even; sums keep a shared parity, products and
+/// quotients multiply them, an integer (or odd-root) power of an odd
+/// base is odd or even with the exponent, any function of an even
+/// argument is even, an odd (even) function of an odd argument is odd
+/// (even). Each step maps f(−x) to ±f(x), and defined to defined.
+fn structural_parity(e: &crate::ast::Expr) -> Option<bool> {
+    use crate::ast::{BinOp, Expr, Func};
+    use crate::compile::syntactic_rational;
+    if !e.contains_x() {
+        return (!e.contains_y()).then_some(true);
+    }
+    Some(match e {
+        Expr::X => false,
+        Expr::Neg(a) | Expr::Degrees(a) => structural_parity(a)?,
+        Expr::Bin(BinOp::Add | BinOp::Sub, a, b) => {
+            let (pa, pb) = (structural_parity(a)?, structural_parity(b)?);
+            (pa == pb).then_some(pa)?
+        }
+        Expr::Bin(BinOp::Mul | BinOp::Div, a, b) => structural_parity(a)? == structural_parity(b)?,
+        Expr::Bin(BinOp::Pow, a, b) => {
+            let pa = structural_parity(a)?;
+            if b.contains_x() {
+                (pa && structural_parity(b)?).then_some(true)?
+            } else if pa {
+                true
+            } else {
+                match syntactic_rational(b)? {
+                    (p, q) if q % 2 == 1 => p % 2 == 0,
+                    _ => return None,
+                }
+            }
+        }
+        Expr::Call(Func::Root, args) if args.len() == 2 && !args[1].contains_x() => {
+            let pa = structural_parity(&args[0])?;
+            match syntactic_rational(&args[1])? {
+                (n, 1) if pa || n % 2 == 1 => pa,
+                _ => return None,
+            }
+        }
+        Expr::Call(f, args) if args.len() == 1 => {
+            if structural_parity(&args[0])? {
+                true
+            } else {
+                match f {
+                    Func::Sin
+                    | Func::Tan
+                    | Func::Cot
+                    | Func::Csc
+                    | Func::Sinh
+                    | Func::Tanh
+                    | Func::Coth
+                    | Func::Csch
+                    | Func::Asin
+                    | Func::Atan
+                    | Func::Acsc
+                    | Func::Asinh
+                    | Func::Atanh
+                    | Func::Acsch
+                    | Func::Acoth
+                    | Func::Cbrt => false,
+                    Func::Cos | Func::Sec | Func::Cosh | Func::Sech | Func::Abs => true,
+                    _ => return None,
+                }
+            }
+        }
+        Expr::Call(_, args) => {
+            // min, max, … of even arguments.
+            args.iter()
+                .all(|a| structural_parity(a) == Some(true))
+                .then_some(true)?
+        }
+        _ => return None,
+    })
+}
+
+pub fn parity(f: &Fun<'_>, dom: &Domain) -> Result<Row<Parity>, Stop> {
     use crate::simplify::{Parity as P, prove_parity};
+    let proven = |even: bool, by: &str| {
+        let word = if even { "even" } else { "odd" };
+        let mut c = Certificate::new(Region::Line);
+        c.push(Claim::Simplifier {
+            fact: format!(
+                "f is {word} ({by}): f(−x) = {}f(x), on a domain symmetric about 0",
+                if even { "" } else { "−" }
+            ),
+        });
+        Row::Certified {
+            value: if even { Parity::Even } else { Parity::Odd },
+            cert: c,
+        }
+    };
     if let Some(s) = f.settings()
         && let Some(p) = prove_parity(&f.expr, &s)
     {
-        let (value, word) = match p {
-            P::Even => (Parity::Even, "even"),
-            P::Odd => (Parity::Odd, "odd"),
-        };
-        let mut c = Certificate::new(Region::Line);
-        c.push(Claim::Simplifier {
-            fact: format!("f is {word}: f(−x) = {}f(x), on a domain symmetric about 0", if word == "odd" { "−" } else { "" }),
-        });
-        return Ok(Row::Certified { value, cert: c });
+        return Ok(proven(p == P::Even, "simplifier"));
+    }
+    if let Some(even) = structural_parity(&f.expr) {
+        return Ok(proven(even, "its tree is built of even and odd parts"));
     }
     let mut c = Certificate::new(Region::Points);
     let (mut not_even, mut not_odd) = (false, false);
-    for x in [0.5, 1.0, 1.7, 2.3, 3.1, 4.6, 7.3, 11.9] {
+    // Fixed points, and one inside each piece of the domain (an asymmetric
+    // domain shows at its own points).
+    let mut xs = vec![0.5, 1.0, 1.7, 2.3, 3.1, 4.6, 7.3, 11.9];
+    for p in &dom.pieces {
+        let (lo, hi) = super::side::piece_box(p);
+        let x = match (lo.is_finite(), hi.is_finite()) {
+            (true, true) => lo / 2.0 + hi / 2.0,
+            (true, false) => lo + 1.0 + lo.abs() / 2.0,
+            (false, true) => hi - 1.0 - hi.abs() / 2.0,
+            (false, false) => continue,
+        };
+        if x.is_finite() && x != 0.0 {
+            xs.push(x.abs());
+        }
+    }
+    for x in xs {
         let at = |p: f64| f.ser_of(&f.expr, Interval::point(p), 0).map(|s| s[0]);
         let (a, b) = (at(x)?, at(-x)?);
         for (p, v) in [(x, a), (-x, b)] {

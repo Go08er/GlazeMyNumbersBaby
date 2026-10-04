@@ -62,11 +62,17 @@ pub struct Fun<'a> {
     /// defined in more places: `(x²−1)/(x−1)` is evaluated as x + 1, so
     /// nothing cancels near the hole).
     pub eval: Expr,
-    /// f′ and f″ as trees of their own, when f is a rational function:
+    /// f′ and f″ as trees of their own: when f is a rational function,
     /// from its exact form N/D, f′ = (N′D − ND′)/D² and f″ = (P′D −
     /// 2PD′)/D³ with P = N′D − ND′, each numerator expanded exactly (what
-    /// cancels in them cancels exactly, not in interval arithmetic).
+    /// cancels in them cancels exactly, not in interval arithmetic);
+    /// otherwise by symbolic differentiation (`crate::diff`) of the
+    /// evaluated tree. Equal to f′, f″ wherever f is differentiable; used
+    /// only where f is proven continuous.
     pub derivs: Option<[Expr; 2]>,
+    /// For a rational f, the numerators of f, f′, f″ in lowest terms
+    /// ([`rational_numerators`]).
+    pub numerators: Option<[Expr; 3]>,
     pub lits: &'a Literals,
     /// The exact literals, for the simplifier's proofs (none: no
     /// simplifier).
@@ -93,6 +99,7 @@ impl<'a> Fun<'a> {
             eval: expr.clone(),
             expr,
             derivs: None,
+            numerators: None,
             lits,
             exact: None,
             opts,
@@ -193,6 +200,104 @@ pub fn rational_derivs(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Optio
         }
     };
     Some([canonical(&over(&p, 2.0)), canonical(&over(&p2, 3.0))])
+}
+
+/// The numerators of f, f′ and f″ in lowest terms, for a rational f: on
+/// f's domain each vanishes exactly where its function does (what is left
+/// of the denominator vanishes only at f's poles).
+pub fn rational_numerators(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<[Expr; 3]> {
+    use crate::simplify::q::Q;
+    use crate::simplify::rational::Poly;
+    let rf = crate::simplify::rational_form(e, lits)?;
+    let (n, d) = (rf.reduced.num, rf.reduced.den);
+    let deriv = |p: &Poly| -> Option<Poly> {
+        let mut out = Poly::zero();
+        for (i, c) in p.coefficients().iter().enumerate().skip(1) {
+            let term = Poly::x().pow(i as u32 - 1)?.scale(c.mul(Q::int(i as i128))?)?;
+            out = out.add(&term)?;
+        }
+        Some(out)
+    };
+    // num / gcd(num, den).
+    let lowest = |num: &Poly, den: &Poly| -> Option<Poly> {
+        if num.is_zero() {
+            return Some(Poly::zero());
+        }
+        let g = num.gcd(den)?;
+        Some(num.divmod(&g)?.0)
+    };
+    let (n1, d1) = (deriv(&n)?, deriv(&d)?);
+    let p = n1.mul(&d)?.sub(&n.mul(&d1)?)?;
+    let p2 = deriv(&p)?.mul(&d)?.sub(&p.mul(&d1)?.scale(Q::int(2))?)?;
+    let (d2, d3) = (d.pow(2)?, d.pow(3)?);
+    Some([
+        canonical(&n.to_expr()),
+        canonical(&lowest(&p, &d2)?.to_expr()),
+        canonical(&lowest(&p2, &d3)?.to_expr()),
+    ])
+}
+
+/// The node budget of a symbolic derivative.
+const DIFF_NODES: usize = 4096;
+
+/// f′ and f″ of `e` by symbolic differentiation, each simplified (with
+/// `settings`, when given) so that what cancels in them cancels exactly.
+pub fn symbolic_derivs(
+    e: &Expr,
+    unit: crate::functions::TrigUnit,
+    settings: Option<&crate::simplify::Settings<'_>>,
+) -> Option<[Expr; 2]> {
+    let simp = |d: Expr| -> Expr {
+        match settings.and_then(|s| crate::simplify::simplify(&d, s).ok()) {
+            Some(s) if s.changed => s.expr,
+            _ => d,
+        }
+    };
+    let d1 = simp(crate::diff::derivative_bounded(e, unit, DIFF_NODES)?);
+    let d2 = simp(crate::diff::derivative_bounded(&d1, unit, DIFF_NODES)?);
+    Some([canonical(&d1), canonical(&d2)])
+}
+
+/// Factors whose zeros, on the domain of `e`, are the zeros of `e`: the
+/// argument of an outer function that vanishes only where its argument
+/// does (powers, roots, |·|, atan, sinh, …), each factor of a product, the
+/// numerator of a quotient (its divisor is never 0 where `e` is defined),
+/// u − 1 for ln u; nothing for a function that never vanishes (exp, cosh,
+/// sec, …). `e` itself when nothing applies.
+pub fn zero_factors(e: &Expr) -> Vec<Expr> {
+    use crate::ast::Func;
+    let mut out = Vec::new();
+    fn go(e: &Expr, out: &mut Vec<Expr>) {
+        match e {
+            Expr::Num(v) if *v != 0.0 => {}
+            Expr::Const(_) => {}
+            Expr::Neg(a) => go(a, out),
+            Expr::Bin(BinOp::Mul, a, b) => {
+                go(a, out);
+                go(b, out);
+            }
+            Expr::Bin(BinOp::Div, a, _) => go(a, out),
+            Expr::Bin(BinOp::Pow, a, _) => go(a, out),
+            Expr::Call(f, args) if args.len() == 1 => match f {
+                Func::Sqrt
+                | Func::Cbrt
+                | Func::Abs
+                | Func::Atan
+                | Func::Asin
+                | Func::Sinh
+                | Func::Tanh
+                | Func::Asinh
+                | Func::Atanh => go(&args[0], out),
+                Func::Exp | Func::Cosh | Func::Sech | Func::Sec | Func::Csc | Func::Csch => {}
+                Func::Ln | Func::Log => out.push(Expr::bin(BinOp::Sub, args[0].clone(), Expr::Num(1.0))),
+                _ => out.push(e.clone()),
+            },
+            Expr::Call(Func::Root, args) => go(&args[0], out),
+            _ => out.push(e.clone()),
+        }
+    }
+    go(e, &mut out);
+    out.into_iter().map(|g| canonical(&g)).collect()
 }
 
 /// The values of the expression's x-free sub-trees: where its features

@@ -435,6 +435,15 @@ fn truth(s: &'static str) -> Truth {
 struct Check {
     kind: char,
     wrong: Option<String>,
+    /// Why the row is unknown.
+    why: Option<String>,
+}
+
+fn why<T>(r: &Row<T>) -> Option<String> {
+    match r {
+        Row::Unknown { reason } => Some(reason.clone()),
+        _ => None,
+    }
 }
 
 fn kind<T>(r: &Row<T>) -> char {
@@ -708,22 +717,22 @@ fn checks(a: &Analysis, t: &Truth) -> Vec<Check> {
         ha,
     ];
     let kinds = [
-        kind(&a.domain),
-        kind(&a.x_intercepts),
-        kind(&a.y_intercept),
-        kind(&a.parity),
-        kind(&a.period),
-        kind(&a.extrema),
-        kind(&a.inflections),
-        kind(&a.monotonicity),
-        kind(&a.range),
-        kind(&a.vertical),
-        kind(&a.horizontal),
+        (kind(&a.domain), why(&a.domain)),
+        (kind(&a.x_intercepts), why(&a.x_intercepts)),
+        (kind(&a.y_intercept), why(&a.y_intercept)),
+        (kind(&a.parity), why(&a.parity)),
+        (kind(&a.period), why(&a.period)),
+        (kind(&a.extrema), why(&a.extrema)),
+        (kind(&a.inflections), why(&a.inflections)),
+        (kind(&a.monotonicity), why(&a.monotonicity)),
+        (kind(&a.range), why(&a.range)),
+        (kind(&a.vertical), why(&a.vertical)),
+        (kind(&a.horizontal), why(&a.horizontal)),
     ];
     kinds
         .into_iter()
         .zip(wrongs)
-        .map(|(kind, wrong)| Check { kind, wrong })
+        .map(|((kind, why), wrong)| Check { kind, wrong, why })
         .collect()
 }
 
@@ -780,7 +789,16 @@ fn run(set: &'static str, label: String, src: &str, t: &Truth, engine: [char; 11
             (checks(&a, t), a.evals)
         }
         // Not analysed: every row unknown.
-        Err(_) => (ROWS.iter().map(|_| Check { kind: 'U', wrong: None }).collect(), 0),
+        Err(e) => (
+            ROWS.iter()
+                .map(|_| Check {
+                    kind: 'U',
+                    wrong: None,
+                    why: Some(e.clone()),
+                })
+                .collect(),
+            0,
+        ),
     };
     Run {
         set,
@@ -817,6 +835,16 @@ fn no_row_is_certified_wrong() {
         println!("{:<58} {:>8.1} {:>8} {kinds}", trunc(&r.label, 58), r.ms, r.evals);
     }
 
+    // Why each kgfset row is unknown.
+    println!("\nkgfset rows still unknown:");
+    for r in runs.iter().filter(|r| r.set == "kgfset") {
+        for (c, row) in r.checks.iter().zip(ROWS) {
+            if let Some(why) = &c.why {
+                println!("  {:<40} {row:<4} {why}", trunc(&r.label, 40));
+            }
+        }
+    }
+
     // Coverage per row and set, beside the current engine's.
     println!("\ncertified/partial/unknown per row (engine: C/P/W/R graded on the truth table; A/R answered or refused on the reviews)");
     for set in ["kgfset", "adversarial", "review"] {
@@ -843,9 +871,18 @@ fn no_row_is_certified_wrong() {
                 eng.join(" ")
             );
         }
-        let total: f64 = rs.iter().map(|r| r.ms).sum();
-        let worst = rs.iter().map(|r| r.ms).fold(0.0, f64::max);
-        println!("time: {total:.0} ms in all, {worst:.0} ms at most");
+        let answered = rs.iter().filter(|r| r.checks.iter().all(|c| c.kind != 'U')).count();
+        println!("fully answered (every row certified or partial): {answered}/{}", rs.len());
+        let mut ms: Vec<f64> = rs.iter().map(|r| r.ms).collect();
+        ms.sort_by(f64::total_cmp);
+        let at = |q: f64| ms[((ms.len() - 1) as f64 * q).round() as usize];
+        let total: f64 = ms.iter().sum();
+        println!(
+            "time: median {:.0} ms, p90 {:.0} ms, at most {:.0} ms, {total:.0} ms in all",
+            at(0.5),
+            at(0.9),
+            at(1.0)
+        );
     }
 
     let wrong: Vec<String> = runs

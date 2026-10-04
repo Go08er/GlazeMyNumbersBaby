@@ -57,6 +57,21 @@ fn simple_zero(f: &Fun<'_>, g: &Expr, n: Interval) -> Result<bool, Stop> {
     Ok(matches!((side(&a, 0.0), side(&b, 0.0)), (Some(x), Some(y)) if x != y))
 }
 
+/// g is 0 at exactly one point of N, continuous there: g has a simple
+/// zero, or g = cⁿ (n a positive integer) with c having one.
+fn vanishes(f: &Fun<'_>, g: &Expr, n: Interval) -> Result<bool, Stop> {
+    if simple_zero(f, g, n)? {
+        return Ok(true);
+    }
+    Ok(match g {
+        Expr::Bin(BinOp::Pow, c, p) => {
+            matches!(syntactic_rational(p), Some((p, 1)) if p > 0) && simple_zero(f, c, n)?
+        }
+        Expr::Neg(c) => vanishes(f, c, n)?,
+        _ => false,
+    })
+}
+
 /// |e| → ∞ at the one excluded point in N (approached from both sides).
 pub fn pole(f: &Fun<'_>, e: &Expr, n: Interval) -> Result<bool, Stop> {
     Ok(match e {
@@ -68,8 +83,7 @@ pub fn pole(f: &Fun<'_>, e: &Expr, n: Interval) -> Result<bool, Stop> {
             (pole(f, a, n)? && nonzero_cont(f, b, n)?) || (pole(f, b, n)? && nonzero_cont(f, a, n)?)
         }
         Expr::Bin(BinOp::Div, a, b) => {
-            (simple_zero(f, b, n)? && nonzero_cont(f, a, n)?)
-                || (pole(f, a, n)? && nonzero_cont(f, b, n)?)
+            (vanishes(f, b, n)? && nonzero_cont(f, a, n)?) || (pole(f, a, n)? && nonzero_cont(f, b, n)?)
         }
         Expr::Bin(BinOp::Pow, a, b) => match syntactic_rational(b) {
             Some((p, 1)) if p > 0 => pole(f, a, n)?,
@@ -108,7 +122,7 @@ pub fn pole_free(f: &Fun<'_>, e: &Expr, n: Interval) -> Result<bool, Stop> {
             (pole_free(f, a, n)? && nonzero_cont(f, b, n)?) || (pole_free(f, b, n)? && nonzero_cont(f, a, n)?)
         }
         Expr::Bin(BinOp::Div, a, b) => {
-            (simple_zero(f, b, n)? && nonzero_cont(f, a, n)?)
+            (vanishes(f, b, n)? && nonzero_cont(f, a, n)?)
                 || (pole_free(f, a, n)? && nonzero_cont(f, b, n)?)
         }
         Expr::Bin(BinOp::Pow, a, b) => match syntactic_rational(b) {
