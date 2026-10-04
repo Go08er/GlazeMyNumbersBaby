@@ -408,9 +408,10 @@ fn mp_unary(f: Func, x: &Float, unit: TrigUnit) -> Option<Float> {
     .and_then(defined)
 }
 
-/// Integer power with the app's 0⁰ = 1 and undefined 0 to a negative power.
+/// Integer power with 0 to a power ≤ 0 undefined (0⁰ included: the
+/// graphing rule, after the TI-84 Plus CE).
 fn mp_powi(x: &Float, n: i32) -> Option<Float> {
-    if x.is_zero() && n < 0 {
+    if x.is_zero() && n <= 0 {
         return None;
     }
     Some(Float::with_val(p(), x.clone().pow(n)))

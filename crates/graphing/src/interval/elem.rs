@@ -310,11 +310,21 @@ fn pe_pown(x: f64, n: i32) -> Interval {
     cr(cm::pow(x, n as f64))
 }
 
-/// xⁿ for an integer n: 0⁰ = 1 (the app's convention for a constant
-/// exponent), 0 to a negative power undefined.
+/// xⁿ for an integer n: 0 to a power ≤ 0 undefined (0⁰ included, as on
+/// the TI-84 Plus CE and in the graphing evaluator, `functions::pow_int`).
 pub fn powi(x: &DecInterval, n: i32) -> DecInterval {
     if n == 0 {
-        return DecInterval::result(Interval::point(1.0), Dec::Com, &[x]).signs(true, false);
+        let iv = x.iv;
+        if iv.is_empty() || (iv.lo() == 0.0 && iv.hi() == 0.0) {
+            return DecInterval::result(Interval::EMPTY, Dec::Trv, &[x]);
+        }
+        // 1 wherever x ≠ 0; a box that may hold 0 isn't defined throughout.
+        let local = if iv.contains_zero() && !x.ne0() {
+            Dec::Trv
+        } else {
+            Dec::Com
+        };
+        return DecInterval::result(Interval::point(1.0), local, &[x]).signs(true, false);
     }
     if n == 1 {
         return *x;
@@ -522,7 +532,9 @@ pub fn pow_rational(x: &DecInterval, p: i32, q: i32) -> DecInterval {
 /// exponent that varies): defined for b > 0, and for b = 0 with e > 0.
 pub fn pow(b: &DecInterval, e: &DecInterval) -> DecInterval {
     let (bd, left) = restrict(b, Interval::new(0.0, INF));
-    if bd.is_empty() || e.is_empty() {
+    // 0^e for e ≤ 0 is undefined (TI-84 Plus CE; `functions::pow`).
+    let only_zero_base = bd.lo() == 0.0 && bd.hi() == 0.0;
+    if bd.is_empty() || e.is_empty() || (only_zero_base && e.hi() <= 0.0) {
         return DecInterval::result(Interval::EMPTY, Dec::Trv, &[b, e]);
     }
     let corner = |bv: f64, ev: f64| -> Interval {
