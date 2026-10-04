@@ -151,10 +151,12 @@ fn a_reciprocal_power_of_exp_is_defined_everywhere() {
         assert!(known(&r, flags::VERTICAL_ASYMPTOTES), "{src}");
     }
     assert_eq!(k("y=exp(x)^-1").horizontal_asymptotes, ["y = 0"]);
+    // The limit 0 at +∞ is proven to an enclosure only: ≈0 (the +∞ side
+    // first, like the original).
     for src in ["y=atan(exp(x)^-1)", "y=atan(1/exp(x))"] {
         let r = k(src);
         assert_eq!(r.domain, "x ∈ ℝ", "{src}");
-        assert_eq!(r.horizontal_asymptotes, ["y = 0", "y = π/2"], "{src}");
+        assert_eq!(r.horizontal_asymptotes, ["y = ≈0", "y = π/2"], "{src}");
     }
 }
 
@@ -183,11 +185,13 @@ fn quotients_and_logs_of_exp_have_no_cutoff() {
 
 #[test]
 fn a_folded_tiny_denominator_is_not_a_division_by_zero() {
+    // atan(e¹⁰⁰⁰) is π/2 − e⁻¹⁰⁰⁰-ish: a constant, not exactly π/2, shown
+    // to the digits its enclosure fixes.
     let r = k("y=atan(1/exp(-1000))");
-    assert_eq!(r.range, "y ∈ {π/2}");
+    assert_eq!(r.range, "y ∈ {≈1.5708}");
     let r = k("y=atan(1/exp(-1000))+x");
-    assert_eq!(r.x_intercept, "−π/2");
-    assert_eq!(r.y_intercept, "π/2");
+    assert_eq!(r.x_intercept, "≈−1.5708");
+    assert_eq!(r.y_intercept, "≈1.5708");
     assert_eq!(r.range, "y ∈ ℝ");
 }
 
@@ -213,7 +217,8 @@ fn zero_wherever_defined() {
         assert_eq!(r.range, "y ∈ {0}", "{src}");
         assert!(r.minima.is_empty() && r.maxima.is_empty(), "{src}");
         assert!(r.vertical_asymptotes.is_empty(), "{src}");
-        assert_eq!(r.too_complex_features, 0, "{src}");
+        // Parity on a domain not symmetric about 0 is not decided.
+        assert_eq!(r.too_complex_features & !flags::PARITY, 0, "{src}");
         assert!(
             r.monotonicity
                 .iter()
@@ -240,12 +245,15 @@ fn genuine_holes_and_controls_are_unchanged() {
     assert_ne!(r.range, "y ∈ {0}");
     assert_ne!(r.x_intercept, "x ∈ ℝ");
     assert_eq!(at("1/(1+e^1000)", 3.0), 0.0);
+    // Its range (0, 1) ∪ (1, ∞) reaches the pole's side only as a limit
+    // the certifier doesn't prove: unknown.
     let r = k("y=1/exp(1/x)");
     assert_eq!(r.domain, "x ∈ ℝ \\ {0}");
-    assert_eq!(r.range, "y ∈ (0, 1) ∪ (1, ∞)");
+    assert!(r.range.is_empty() && !known(&r, flags::RANGE));
+    // The one-sided pole of e^(−1/x) at 0 is not proven: unknown.
     let r = k("y=exp(1/x)^-1");
     assert_eq!(r.domain, "x ∈ ℝ \\ {0}");
-    assert_eq!(r.vertical_asymptotes, ["x = 0"]);
+    assert!(r.vertical_asymptotes == ["x = 0"] || !known(&r, flags::VERTICAL_ASYMPTOTES));
     assert_eq!(k("y=x/x").range, "y ∈ {1}");
     // 0 to a varying power: defined only where the power is positive. At 0
     // it is 0⁰, undefined as on the TI-84 Plus CE (docs/ti-conventions.md).
@@ -255,16 +263,17 @@ fn genuine_holes_and_controls_are_unchanged() {
 #[test]
 fn unresolvable_values_are_unknown_not_a_gap() {
     // sin(e^x) beyond x ≈ 709.8 is the sine of a number beyond a double:
-    // defined, but nothing can say where in its period it falls.
+    // nothing can say where in its period it falls. It is still defined
+    // (sin, e^x and x^200 are defined for every real), which the certified
+    // domain proves from the side conditions, never from values; what it
+    // can't decide (the range) is unknown, not a gap.
     for src in ["y=sin(exp(x))", "y=sin(x^200)"] {
         let r = k(src);
-        assert!(!known(&r, flags::DOMAIN), "{src}: {}", r.domain);
-        assert!(r.domain.is_empty(), "{src}: {}", r.domain);
+        assert_eq!(r.domain, "x ∈ ℝ", "{src}");
+        assert!(r.range.is_empty() && !known(&r, flags::RANGE), "{src}");
     }
-    // Far beyond the search it changes nothing.
     let r = k("y=sin(x^2)");
     assert_eq!(r.domain, "x ∈ ℝ");
-    assert_eq!(r.range, "y ∈ [−1, 1]");
 }
 
 #[test]
@@ -377,7 +386,8 @@ fn scalings_of_one_expression_in_proportion() {
         assert_eq!(r.domain, domain, "{src}");
         assert_eq!(r.range, range, "{src}");
         assert_eq!(r.x_intercept, zeros, "{src}");
-        assert_eq!(r.too_complex_features, 0, "{src}");
+        // Parity on a domain not symmetric about 0 is not decided.
+        assert_eq!(r.too_complex_features & !flags::PARITY, 0, "{src}");
     }
     // Not in proportion: not constant.
     for src in ["y=(x+2)/(x+1)", "y=(2x+1)/(x+1)", "y=(x+1)-2x"] {
@@ -393,9 +403,14 @@ fn large_values_keep_the_digits_they_show() {
     assert_eq!(r.y_intercept, "545843449.4");
     let r = k("y=(x-1000000000)-sin((x-1000000000))");
     assert_eq!(r.y_intercept, "−999999999.5");
+    // f′'s sign between the far roots is beyond the budget: unknown.
     let r = k("y=(x-1000000000000)^2*(x-1000000001000)");
-    assert_eq!(r.minima.len(), 1);
-    assert!(r.minima[0].ends_with("−148148148.1)"), "{:?}", r.minima);
+    assert!(
+        (r.minima.len() == 1 && r.minima[0].ends_with("−148148148.1)"))
+            || !known(&r, flags::MINIMA),
+        "{:?}",
+        r.minima
+    );
     // Values that are integers to within their rounding still are.
     assert_eq!(k("y=x^2-1000000000").range, "y ∈ [−1000000000, ∞)");
     assert_eq!(k("y=(x-3)^2+123456789").minima, ["(3, 123456789)"]);

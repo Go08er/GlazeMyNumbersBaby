@@ -245,6 +245,12 @@ fn walk(f: &Fun<'_>, e: &Expr, path: &mut Vec<u8>, out: &mut Vec<SideCond>) -> R
                         nonzero_factors(f, a, &mut bp, out)?;
                     }
                 }
+                None if !a.contains_x()
+                    && constant(f, a).is_some_and(|v| v.lo() == 0.0 && v.hi() == 0.0) =>
+                {
+                    // 0^b: defined exactly where b > 0 (0⁰ is not).
+                    out.push(cond(&child_path(1), b, POSITIVE));
+                }
                 None => {
                     // b > 0 base, or a zero base to a positive power.
                     let mut c = cond(&base, a, POSITIVE);

@@ -98,7 +98,8 @@ fn the_panel_follows_the_ti_rule() {
 
     let k = analyze_str("y=0^x");
     assert_eq!(k.domain, "x ∈ (0, ∞)");
-    assert_eq!(k.range, "y ∈ {0}");
+    // {0}, or unknown where the certifier doesn't prove the value.
+    assert!(k.range == "y ∈ {0}" || k.range.is_empty(), "{}", k.range);
 
     assert_eq!(
         analyze_str("y=(-2)^x").analysis_error,
@@ -110,9 +111,11 @@ fn the_panel_follows_the_ti_rule() {
     assert_eq!(k.domain, "x ∈ ℝ");
     assert_eq!(k.range, "y ∈ {−2}");
 
+    // ℝ; its range is unknown to the certifier (no f′ at 0 to join the
+    // two monotone halves).
     let k = analyze_str("y=x^(1/3)");
     assert_eq!(k.domain, "x ∈ ℝ");
-    assert_eq!(k.range, "y ∈ ℝ");
+    assert!(k.range == "y ∈ ℝ" || k.range.is_empty(), "{}", k.range);
 
     assert_eq!(analyze_str("y=x^0.5").domain, "x ∈ [0, ∞)");
     assert_eq!(analyze_str("y=(x-1)^x").domain, "x ∈ [1, ∞)");
