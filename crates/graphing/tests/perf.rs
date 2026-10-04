@@ -1,6 +1,7 @@
 //! Throughput: several equations sampled at 1920 px width must be fast
 //! enough to re-plot every frame while panning. Thresholds are generous in
-//! debug builds (the workspace dev profile is opt-level 1); run
+//! debug builds (the workspace dev profile is opt-level 1) and on the
+//! baseline CORE-MATH build (see `budget`); run
 //! `cargo test --release -p graphing --test perf -- --nocapture` for real
 //! numbers, or `cargo run --release -p graphing --example bench`.
 
@@ -19,12 +20,19 @@ fn per_frame_ms(g: &Graph, vp: &Viewport, frames: usize) -> f64 {
     t.elapsed().as_secs_f64() * 1e3 / frames as f64
 }
 
+/// A release-build budget for this build: 20× in debug builds, and 3× on
+/// the baseline x86-64 copy of CORE-MATH (a CPU without x86-64-v3, or
+/// `GRAPHING_CRMATH=baseline`), whose software `fma` makes the elementary
+/// functions 2–3× slower (PREREVIEW_D: sin x + cos y = 0.5 33 ms a frame
+/// against 15 on v3).
 fn budget(release_ms: f64) -> f64 {
-    if cfg!(debug_assertions) {
-        release_ms * 20.0
+    let debug = if cfg!(debug_assertions) { 20.0 } else { 1.0 };
+    let baseline = if core_math::build() == core_math::Build::Baseline {
+        3.0
     } else {
-        release_ms
-    }
+        1.0
+    };
+    release_ms * debug * baseline
 }
 
 #[test]
