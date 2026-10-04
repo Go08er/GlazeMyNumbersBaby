@@ -116,6 +116,43 @@ fn open_link(proxy: EventLoopProxy<UserEvent>, url: &'static str) {
     }
 }
 
+/// The largest scale and the largest logical size of the monitors.
+fn screens(
+    monitors: impl Iterator<Item = winit::monitor::MonitorHandle>,
+) -> (f64, Option<(f64, f64)>) {
+    let mut scale = 1.0f64;
+    let mut largest: Option<(f64, f64)> = None;
+    for m in monitors {
+        scale = scale.max(m.scale_factor());
+        let s = m.size().to_logical::<f64>(m.scale_factor());
+        if s.width >= 1.0 && s.height >= 1.0 {
+            let (w, h) = largest.unwrap_or_default();
+            largest = Some((w.max(s.width), h.max(s.height)));
+        }
+    }
+    (scale, largest)
+}
+
+/// A saved window size, kept to what a window can be: at least `min`, at
+/// most 16384 (as GMNB), no larger than the largest monitor (the frame
+/// buffer of a huge window cannot be allocated) and, X11 window sizes being
+/// 16-bit (winit panics on a larger one), under 65536 physical pixels at
+/// `scale`.
+fn window_size(
+    width: i32,
+    height: i32,
+    min: (f64, f64),
+    (scale, screen): (f64, Option<(f64, f64)>),
+) -> LogicalSize<f64> {
+    let max = (65535.0 / scale.max(1.0)).floor().min(16384.0);
+    let (screen_w, screen_h) = screen.unwrap_or((max, max));
+    let fit = |v: i32, max: f64, min: f64| (v as f64).min(max).max(min);
+    LogicalSize::new(
+        fit(width, max.min(screen_w), min.0),
+        fit(height, max.min(screen_h), min.1),
+    )
+}
+
 fn persist(store: &Store) {
     if let Err(e) = store.save() {
         eprintln!("dgmnb: {e}");
@@ -441,7 +478,8 @@ impl App {
                 LogicalSize::new(320.0, 420.0)
             } else {
                 let d = self.store.data.borrow();
-                LogicalSize::new(d.width.max(320) as f64, d.height.max(420) as f64)
+                let screens = screens(g.window.available_monitors());
+                window_size(d.width, d.height, (320.0, 420.0), screens)
             };
             let _ = g.window.request_inner_size(size);
         }
@@ -1575,13 +1613,18 @@ impl ApplicationHandler<UserEvent> for App {
         if self.gfx.is_some() {
             return;
         }
-        let (w, h) = {
+        let size = {
             let d = self.store.data.borrow();
-            (d.width.max(300) as f64, d.height.max(400) as f64)
+            window_size(
+                d.width,
+                d.height,
+                (300.0, 400.0),
+                screens(el.available_monitors()),
+            )
         };
         let attrs = Window::default_attributes()
             .with_title(APP_NAME)
-            .with_inner_size(LogicalSize::new(w, h))
+            .with_inner_size(size)
             .with_min_inner_size(LogicalSize::new(300.0, 400.0))
             .with_decorations(false)
             .with_visible(false);
@@ -2451,5 +2494,26 @@ mod tests {
         ] {
             assert!(LICENCES.contains(name), "{name}");
         }
+    }
+
+    #[test]
+    fn saved_window_sizes_are_kept_to_what_a_window_can_be() {
+        let size = |w, h, screens| {
+            let s = window_size(w, h, (300.0, 400.0), screens);
+            (s.width, s.height)
+        };
+        let unknown = (1.0, None);
+        assert_eq!(size(360, 640, unknown), (360.0, 640.0));
+        assert_eq!(size(0, -5, unknown), (300.0, 400.0));
+        assert_eq!(size(65535, 65536, unknown), (16384.0, 16384.0));
+        assert_eq!(size(i32::MAX, i32::MAX, unknown), (16384.0, 16384.0));
+        // X11 sizes are 16-bit physical pixels.
+        assert_eq!(size(65536, 600, (5.0, None)), (13107.0, 600.0));
+        assert!(size(20000, 20000, (4.0, None)).0 * 4.0 < 65536.0);
+        // No larger than the largest monitor.
+        let screen = (2.0, Some((1920.0, 1080.0)));
+        assert_eq!(size(65536, 65536, screen), (1920.0, 1080.0));
+        assert_eq!(size(1200, 900, screen), (1200.0, 900.0));
+        assert_eq!(size(100, 100, (1.0, Some((200.0, 200.0)))), (300.0, 400.0));
     }
 }

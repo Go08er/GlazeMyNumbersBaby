@@ -378,6 +378,12 @@ impl HistoryCollector {
         }
     }
 
+    /// Extension: [`set_expression_display`](Self::set_expression_display)
+    /// for a display that missed the updates.
+    pub(crate) fn refresh_expression_display(&mut self) {
+        self.set_expression_display();
+    }
+
     pub fn add_command(&mut self, sp_command: ExpressionCommand) -> i32 {
         let commands = self.commands.get_or_insert_with(Vec::new);
         commands.push(sp_command);

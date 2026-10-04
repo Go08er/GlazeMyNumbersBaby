@@ -282,7 +282,11 @@ pub fn show(win: &Rc<Window>) {
         scale.set_hexpand(true);
         scale.set_valign(gtk::Align::Center);
         scale.set_width_request(160);
-        scale.update_property(&[gtk::accessible::Property::Label("Background opacity")]);
+        // The range reports its value as a fraction (0.1); say it as shown.
+        scale.update_property(&[
+            gtk::accessible::Property::Label("Background opacity"),
+            gtk::accessible::Property::ValueText(&percent(saved)),
+        ]);
         let shown = gtk::Label::new(Some(&percent(saved)));
         shown.add_css_class("numeric");
         shown.set_width_chars(4);
@@ -305,6 +309,7 @@ pub fn show(win: &Rc<Window>) {
             scale.connect_value_changed(move |s| {
                 let v = s.value();
                 shown.set_text(&percent(v));
+                s.update_property(&[gtk::accessible::Property::ValueText(&percent(v))]);
                 apply_backdrop(&win, &ctx.aurora, crate::settings::backdrop_alpha(v));
                 ctx.store.data.borrow_mut().background_opacity = v;
                 if let Some(id) = pending.borrow_mut().take() {

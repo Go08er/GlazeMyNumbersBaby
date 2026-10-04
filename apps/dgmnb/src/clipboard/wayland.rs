@@ -251,7 +251,19 @@ impl State {
         self.seats.get(self.latest.as_ref()?)
     }
 
+    /// Puts `offers` on the clipboard. Copying what our newest source still
+    /// offers (a held Ctrl+C repeats) changes nothing, and older sources are
+    /// let go past a few: a compositor that doesn't cancel a source set
+    /// again with the same serial (weston) would otherwise keep them all.
     fn store(&mut self, offers: Offers) {
+        const MAX_SOURCES: usize = 4;
+        if self
+            .sources
+            .last()
+            .is_some_and(|(_, newest)| *newest == offers)
+        {
+            return;
+        }
         let Some(seat) = self.seat() else { return };
         let (Some(device), serial) = (seat.device.as_ref(), seat.serial) else {
             return;
@@ -261,6 +273,10 @@ impl State {
             .create_copy_paste_source(&self.qh, offers.iter().map(|o| o.0.clone()));
         source.set_selection(device, serial);
         self.sources.push((source, offers));
+        if self.sources.len() > MAX_SOURCES {
+            // Dropping a source destroys it.
+            self.sources.drain(..self.sources.len() - MAX_SOURCES);
+        }
     }
 
     fn load_text(&mut self, reply: Sender<Option<String>>) {

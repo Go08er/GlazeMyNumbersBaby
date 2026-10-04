@@ -115,6 +115,37 @@ mod tests {
         assert_eq!(s.theme, "dark");
     }
 
+    /// `"vulkan": "false"` (a string) used to fail the whole file, and the
+    /// defaults saved over it lost the history, memory and equations too.
+    #[test]
+    fn a_mistyped_vulkan_setting_keeps_everything_else() {
+        let dir = std::env::temp_dir().join(format!("gmnb-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"theme": "dark", "vulkan": "false", "background_opacity": 0.4,
+                "mode": "graphing", "pages": {"calculator": {"m": 1, "x": {"mem": ["7"]}},
+                "graphing": [{"text": "sin(x)"}]}}"#,
+        )
+        .unwrap();
+
+        let store = Store::load_from(path.clone());
+        let s = store.data.borrow();
+        assert!(s.vulkan, "the mistyped setting takes its default");
+        assert_eq!(s.theme, "dark");
+        assert_eq!(s.background_opacity, 0.4);
+        assert_eq!(s.mode, "graphing");
+        assert_eq!(s.pages["calculator"]["x"]["mem"][0], "7");
+        assert_eq!(
+            appcore::graph::restore(s.pages.get("graphing").cloned())[0].text,
+            "sin(x)"
+        );
+        assert!(dir.join("settings.json.bad").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn saved_opacity_is_kept_drawable() {
         assert_eq!(backdrop_alpha(0.4), 0.4);
