@@ -49,12 +49,12 @@ shares one (kept readable), no GPU, no animations, no idle CPU.
 
 | App (760×700 at 1× scale, idle) | RSS | PSS | Idle CPU |
 | --- | --- | --- | --- |
-| GMNB, default (Vulkan) | 205 MB | 121 MB | 0.3% |
-| GMNB, software renderer (`GSK_RENDERER=cairo`) | 68 MB | 40 MB | 0% |
-| **DGMNB** | **12.6 MB** | **8.6 MB** | **0%** |
-| DGMNB, Graphing with three equations | 13.7 MB | 9.5 MB | 0% |
-| DGMNB at 2× scale (the window buffer quadruples) | 21.1 MB | 12.8 MB | 0% |
-| *KCalc 26.08.1, for reference (Qt 6)* | *79 MB* | *36 MB* | |
+| GMNB, default (Vulkan) | 267 MiB | 202 MiB | 0.3% |
+| GMNB, software renderer (`GSK_RENDERER=cairo`) | 68 MiB | 40 MiB | 0% |
+| **DGMNB** | **12.6 MiB** | **8.6 MiB** | **0%** |
+| DGMNB, Graphing with three equations | 13.7 MiB | 9.5 MiB | 0% |
+| DGMNB at 2× scale (the window buffer quadruples) | 21.1 MiB | 12.8 MiB | 0% |
+| *KCalc 26.08.1, for reference (Qt 6)* | *79 MiB* | *36 MiB* | |
 
 DGMNB's toolkit was picked by measuring a bare window with keys in each
 candidate: winit + softbuffer + tiny-skia 9 MB, iced (tiny-skia) 14 MB,
@@ -81,10 +81,14 @@ shows through the window; whether it's blurred into frosted glass is up to
 your compositor (most blur translucent windows only when told to, e.g. a
 window rule for GMNB's app ID).
 
-Measured on NixOS with an RTX 3070 (driver 595), in a headless Wayland
-session (weston) at 760×700, idle in Standard mode unless noted. RSS counts
-shared libraries in full; PSS splits them between the processes using them.
-Numbers will differ with other GPUs, drivers and fonts.
+Measured with [`tools/bench/mem.sh`](tools/bench) on NixOS with an RTX 3070
+(NVIDIA driver 595.104.02), in a headless Wayland session (weston) at
+760×700, idle in Standard mode unless noted. RSS counts shared libraries in
+full; PSS splits them between the processes using them. Numbers will differ
+with other GPUs, drivers and fonts. The Vulkan row most of all: it is mostly
+the driver's own memory, and it has measured anywhere from 205 to 267 MiB
+RSS (121 to 202 MiB PSS) on this machine while the other rows held within
+a few percent.
 
 ## Install
 
@@ -95,7 +99,7 @@ Every release attaches all of these to its
 | --- | --- | --- |
 | **Flatpak** (any distro) | `flatpak install --user GMNB.flatpak` (GNOME 51 runtime) | `flatpak install --user DGMNB.flatpak` (freedesktop 26.08 runtime) |
 | **Arch Linux** | `sudo pacman -U gmnb-*.pkg.tar.zst` | `sudo pacman -U dgmnb-*.pkg.tar.zst` |
-| **Debian 13+ / Ubuntu** | `sudo apt install ./gmnb_*_amd64.deb` | `sudo apt install ./dgmnb_*_amd64.deb` |
+| **Debian 13+ / Ubuntu 25.04+** | `sudo apt install ./gmnb_*_amd64.deb` | `sudo apt install ./dgmnb_*_amd64.deb` |
 | **Fedora** | `sudo dnf install ./gmnb-*.rpm` | `sudo dnf install ./dgmnb-*.rpm` |
 | **NixOS / Nix** | `nix run github:Go08er/GlazeMyNumbersBaby` | `nix run github:Go08er/GlazeMyNumbersBaby#dgmnb` |
 
@@ -103,8 +107,9 @@ The Arch `PKGBUILD` is a split package that builds both
 (`makepkg -si` in `packaging/arch`).
 
 **CPU:** on x86-64 PCs, GMNB's packages are built for x86-64-v3, so GMNB
-needs a CPU from 2013 or newer (Intel Haswell, AMD Excavator, Ryzen, or
-later). On an older one it says so and stops, rather than crashing:
+needs a CPU with AVX2 (x86-64-v3): Intel Core from Haswell (2013) or AMD
+from Excavator (2015) on, though not every Pentium, Celeron or Atom has
+it. On any other it says so and stops, rather than crashing:
 `gmnb` is a small launcher, built for any x86-64, that checks the CPU and
 then runs the real program from `libexec/gmnb/` (`lib/gmnb/` on Arch).
 DGMNB runs on any 64-bit PC. ARM builds of both have no such requirement.
@@ -150,7 +155,8 @@ Everything goes through the flake; you don't need Rust installed.
 | Flatpak bundle + install | `nix run .#flatpak -- --install` (same for `flatpak-dgmnb`) |
 | Refresh `cargo-sources.json` after changing dependencies | `nix run .#update-cargo-sources` |
 
-Without Nix: Rust ≥ 1.92, then
+Without Nix: Rust ≥ 1.92 and a C compiler for the vendored CORE-MATH (on
+x86-64 one that knows `-march=x86-64-v3`: GCC ≥ 11 or Clang ≥ 12), then
 
 - GMNB: GTK ≥ 4.18, libadwaita ≥ 1.7 and Pango ≥ 1.56, and
   `cargo build --release -p gmnb`;
@@ -174,8 +180,14 @@ packaging/
   arch/      split PKGBUILD (gmnb + dgmnb)
   debian/    copy to ./debian, then dpkg-buildpackage -b (needs rustup's cargo)
   fedora/    gmnb.spec (+ the dgmnb subpackage)
+  licences/  generate.sh: regenerates THIRD-PARTY-LICENSES.txt from Cargo.lock
 nix/         package.nix, dgmnb.nix, NixOS module, Flatpak tooling
 ```
+
+Until it is tagged, a release is marked unreleased: `type="development"`
+in the metainfo files, `UNRELEASED` in `debian/changelog`. Tagging means
+dating it there and in the Fedora `%changelog`; the `Packages` workflow
+refuses a tag that's still marked.
 
 `nix run .#flatpak` reuses the canonical Flatpak manifest verbatim, only
 swapping its source for an offline tarball with every crate vendored by Nix.
@@ -192,10 +204,13 @@ crates/unitconv     UnitConverter engine, unit tables, currency, view model
 crates/datecalc     DateCalculator + its view model
 crates/copypaste    CopyPasteManager (paste validation → key sequences)
 crates/graphing     Graphing engine (parser, sampler, certified analysis)
+crates/crmath       CORE-MATH's correctly rounded functions (vendored C),
+                    built for x86-64 and x86-64-v3, picked at run time
 crates/appcore      Everything the twins share that isn't drawing: modes, key
                     layouts and the keyboard map, settings, colour maths,
                     graph sessions, a tiny D-Bus client, time zone fix
 apps/gmnb           The GTK 4 / libadwaita application
+apps/gmnb-launcher  Installed as `gmnb`: checks the CPU, then runs GMNB
 apps/dgmnb          The software-drawn application (winit, softbuffer,
                     tiny-skia, swash, AccessKit)
 tools/oracle/       C++ drivers that generate the golden test data
@@ -225,7 +240,7 @@ upstream sources with g++:
 
 | Crate | What's checked |
 | --- | --- |
-| ratpack (11) | 13,628 golden cases from the C++ Ratpack (every op and function, all angle types, radixes 2–36, formats, precisions, error codes), byte-for-byte; port of `RationalTest.cpp` |
+| ratpack (11) | 13,628 golden cases from the C++ Ratpack (every op and function, all angle types, radixes 2, 3, 8, 10, 16 and 36, formats, precisions, error codes), byte-for-byte; port of `RationalTest.cpp` |
 | calcmanager (77) | 3,500 golden command sequences replayed against the C++ `CalculatorManager` (every display callback, expression token, history and memory state); ports of `CalcEngineTests`, `CalcInputTest`, `CalculatorManagerTest` |
 | calcvm (121) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage |
 | unitconv (139 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
@@ -233,7 +248,7 @@ upstream sources with g++:
 | graphing (281 + 1 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance) and holes, tracing values and steep-curve stepping, implicit/inequality plots, function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses, and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis) |
 | appcore (43) | Keyboard map, key scripts, converter paste validation, settings storage (huge/corrupt files), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
 | crmath (1) | The vendored CORE-MATH's two builds (baseline and x86-64-v3) give the same bits |
-| gmnb (5), gmnb-launcher (2), dgmnb (36) | GDK key translation, palette contrast for extreme accents, settings compatibility, the launcher's CPU check; DGMNB text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown, pipe deadlines, and X11 paste (formats, size caps, deadlines under event floods) against a private Xvfb |
+| gmnb (6), gmnb-launcher (4), dgmnb (37) | GDK key translation, palette contrast for extreme accents, settings compatibility, licence text that parses as markup; the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it) and where it finds GMNB; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown, pipe deadlines, and X11 paste (formats, size caps, deadlines under event floods) against a private Xvfb |
 
 The oracles live in `tools/oracle/` and need the upstream repository checked
 out at `reference/calculator` to regenerate the golden files.
@@ -255,12 +270,15 @@ out at `reference/calculator` to regenerate the golden files.
   with directed rounding and an exact simplifier) that either proves the
   answer complete, proves the items it lists but not that they are all
   (the row then says where it is complete, or that there may be more), or
-  says "Unable to calculate …" rather than "none". Numbers are exact
+  says it can't tell ("Unable to calculate …"; "… is unknown" for parity,
+  periodicity and monotonicity) rather than "none". Numbers are exact
   (`√2`, `π/2 + kπ`, `−9/4`) only when exact arithmetic confirms them;
-  otherwise they are shown to the six significant digits the proof fixes,
-  marked "≈" where the text could pass for exact, or not at all. This is
-  more conservative than Windows' symbolic engine: functions it can't prove
-  (corners like |x|, some poles and far features) get fewer answers.
+  otherwise they get as many significant digits as the proof fixes, from
+  three to six (large values too: never more than six), marked "≈"
+  because they aren't exact; a value the proof fixes to fewer than three
+  digits leaves its row unknown. This is more conservative than Windows'
+  symbolic engine: functions it can't prove (some poles and far features)
+  get fewer answers.
   Windows-parity of the analysis is not claimed; the conventions it
   follows where Windows' choice isn't known are in
   [docs/ti-conventions.md](docs/ti-conventions.md).
@@ -281,8 +299,8 @@ out at `reference/calculator` to regenerate the golden files.
   (a certified plotter for them is planned for 0.3).
 - **Tracing shows only what is determined.** On y = f(x) the traced x is
   the decimal shown, and y comes from f's interval enclosure there, to the
-  digits it fixes: the view's precision, as in Windows; one more for a
-  value on a rounding boundary; fewer if the enclosure is wider, down to
+  digits it fixes: the view's precision, as in Windows; up to three more
+  for a value on a rounding boundary; fewer if the enclosure is wider, down to
   three significant digits. It is marked "≈" unless exact, and reads
   "undefined" where f is proven undefined (at a hole's circle; a pole or
   domain edge is passed over) or "unknown" where the enclosure can't tell.
@@ -320,3 +338,13 @@ notice. GMNB embeds the *Outfit* typeface (`apps/gmnb/assets/fonts/`), DGMNB
 subsets of *Inter* and *Noto Sans* (`apps/dgmnb/assets/fonts/`), all under
 the SIL Open Font License. Exchange-rate data comes from Frankfurter
 (central bank reference rates).
+
+Both also contain code by others:
+[CORE-MATH](https://core-math.gitlabpages.inria.fr/)'s correctly rounded
+functions (MIT; their authors are listed in
+[`crates/crmath/vendor/COPYRIGHT`](crates/crmath/vendor/COPYRIGHT)), DGMNB's
+Wayland clipboard code adapted from smithay-clipboard (MIT), and the Rust
+crates they are built from (MIT, Apache 2.0, BSD, ISC and others).
+[THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt) has every one of those
+notices; it is installed with each package, and both apps show it (GMNB:
+About → Legal; DGMNB: Licences).
