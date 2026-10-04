@@ -4,11 +4,13 @@ GMNB and DGMNB follow Windows Calculator. Where the TI-84 Plus CE does
 something better (more correct, or more useful), they follow the TI-84 Plus CE
 instead, and the choice is recorded here with its reason.
 
-This list is also the specification for a planned TI-84-style mode (0.3). That
-mode will be a clean-room clone of the calculator's documented *behaviour*: it
-will contain no TI operating system or ROM, no TI code, and no TI names,
-logos or artwork. "TI-84 Plus CE" here names a behaviour to match, nothing
-more.
+In graphing, the TI-84 Plus CE is also the default wherever Windows' behaviour
+isn't known: its graphing engine is closed source, so only what the open
+repository shows (tracing steps and precision, the analysis panel's texts) is
+known to be Windows'.
+
+"TI-84 Plus CE" here names a documented behaviour to match, nothing more: no
+TI code, ROM, names or artwork are used.
 
 ## Powers in graphing
 
