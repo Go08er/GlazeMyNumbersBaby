@@ -413,7 +413,11 @@ pub fn reval(e: &Expr, x: f64, u: TrigUnit) -> R {
             R::V(v) => R::V(v.neg()),
             r => r,
         },
-        Expr::Bin(BinOp::Pow, a, b) if let Some((p, q)) = rational(b) => {
+        // (No `if let` guard: it needs Rust 1.95, and the MSRV is 1.92.)
+        Expr::Bin(BinOp::Pow, a, b) if rational(b).is_some() => {
+            let Some((p, q)) = rational(b) else {
+                unreachable!()
+            };
             pow_rat(reval(a, x, u), p, q)
         }
         // An exponent that varies with x: the TI rule (`fns::pow_var`).
@@ -1104,7 +1108,10 @@ pub fn eb(e: &Expr, x: f64, u: TrigUnit) -> (f64, f64) {
             let (v, err) = eb(a, x, u);
             (-v, err)
         }
-        Expr::Bin(BinOp::Pow, a, b) if let Some((p, q)) = rational(b) => {
+        Expr::Bin(BinOp::Pow, a, b) if rational(b).is_some() => {
+            let Some((p, q)) = rational(b) else {
+                unreachable!()
+            };
             let (va, ea) = eb(a, x, u);
             let g = move |t: f64| {
                 if q == 1 {
