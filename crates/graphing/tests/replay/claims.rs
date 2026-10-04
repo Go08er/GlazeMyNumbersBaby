@@ -1506,6 +1506,26 @@ fn removable(fx: &Fx, near: B, at: B, lo: f64, hi: f64) -> Outcome {
 
 /// A number written `q`, `p/q`, `q·π`, `q·π^k` (the certifier's `pi_q`),
 /// or `+∞`/`−∞` (as None with the sign).
+/// The parts (p, d, k) of a number written `p/d·π^k` (`pi_q`'s notation).
+pub fn piq_parts(text: &str) -> Option<(i64, i64, i32)> {
+    let (q, k) = match text.split_once('·') {
+        Some((q, rest)) => {
+            let k = if rest == "π" {
+                1
+            } else {
+                rest.strip_prefix("π^")?.parse::<i32>().ok()?
+            };
+            (q, k)
+        }
+        None => (text, 0),
+    };
+    let (n, d) = match q.split_once('/') {
+        Some((n, d)) => (n.parse().ok()?, d.parse().ok()?),
+        None => (q.parse().ok()?, 1),
+    };
+    Some((n, d, k))
+}
+
 pub fn pi_q(text: &str) -> Option<Iv> {
     let (q, k) = match text.split_once('·') {
         Some((q, rest)) => {
@@ -1643,6 +1663,12 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
         if tree_parity(&fx.f) == Some(even) {
             return Outcome::new(Class::Strong, "by the tree's structure");
         }
+        // f(−x) ≡ ±f(x) exactly (the domain's symmetry: its row).
+        let mirror =
+            fx.f.map(&|n| matches!(n, Expr::X).then(|| Expr::Neg(Box::new(Expr::X))));
+        if super::algebra::same_trees(&fx.f, &mirror, !even, &fx.lits, &fx.vars, fx.unit) {
+            return Outcome::new(Class::Strong, "f(−x) ≡ ±f(x) exactly");
+        }
         for &x in &SAMPLES {
             let (a, b) = (f_at(fx, &Iv::of(x)), f_at(fx, &Iv::of(-x)));
             if a.empty != b.empty && (a.def || b.def) {
@@ -1665,6 +1691,46 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
         let Some((p, _)) = rest.split_once(") = f(x)") else {
             return Outcome::new(Class::Unconfirmed, format!("unread fact: {fact}"));
         };
+        // f(x + P) ≡ f(x) exactly, for P written q·πᵏ, or (P only
+        // enclosed) a q·πᵏ with a small denominator inside the enclosure:
+        // a period there. (The domain's invariance: its row.)
+        let mut candidates: Vec<(i64, i64, i32)> = piq_parts(p).into_iter().collect();
+        if p == "P"
+            && let Some(b) = fact.split_once("P ∈ ").and_then(|(_, b)| bracket(b))
+        {
+            for k in [1, 0] {
+                let v = if k == 1 {
+                    iv::div(&b, &iv::pi())
+                } else {
+                    b.clone()
+                };
+                let m = v.mid().to_f64();
+                for d in 1..=720i64 {
+                    let n = (m * d as f64).round() as i64;
+                    let q = iv::div(&Iv::of(n as f64), &Iv::of(d as f64));
+                    let val = if k == 1 { iv::mul(&q, &iv::pi()) } else { q };
+                    if n != 0 && val.ge(b.lo.to_f64()) && val.le(b.hi.to_f64()) {
+                        candidates.push((n, d, k));
+                        break;
+                    }
+                }
+            }
+        }
+        for (n, d, k) in candidates {
+            let Some(pe) = super::algebra::piq_expr(n, d, k) else {
+                continue;
+            };
+            let shifted = fx.f.map(&|e| {
+                matches!(e, Expr::X)
+                    .then(|| Expr::Bin(BinOp::Add, Box::new(Expr::X), Box::new(pe.clone())))
+            });
+            if super::algebra::same_trees(&fx.f, &shifted, false, &fx.lits, &fx.vars, fx.unit) {
+                return Outcome::new(
+                    Class::Strong,
+                    format!("f(x + P) ≡ f(x) exactly, P = {n}/{d}·π^{k}"),
+                );
+            }
+        }
         let per = if p == "P" {
             fact.split_once("P ∈ ").and_then(|(_, b)| bracket(b))
         } else {
@@ -1694,6 +1760,11 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
         ),
         Err(e) => Outcome::new(Class::Unconfirmed, e),
     };
+    // A rational f: its behaviour at ±∞ exactly, from N/D's degrees and
+    // leading coefficients.
+    if let Some(o) = rational_fact(fx, fact) {
+        return o;
+    }
     if let Some(rest) = fact.strip_prefix("f → ") {
         let Some((lim, at)) = rest.split_once(" as x → ") else {
             return Outcome::new(Class::Unconfirmed, format!("unread fact: {fact}"));
@@ -1798,6 +1869,87 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
         };
     }
     Outcome::new(Class::Unconfirmed, format!("unread fact: {fact}"))
+}
+
+/// A fact about f at ±∞ decided exactly when f is a rational function of
+/// x (N/D over the rationals): strong when it holds, refuted when not;
+/// None when f is no rational function or the fact is about something
+/// else.
+fn rational_fact(fx: &Fx, fact: &str) -> Option<Outcome> {
+    use rug::Rational;
+    let rat = super::algebra::Rat::of(&fx.f, &fx.lits, &fx.vars, fx.unit)?;
+    let q = |t: &str| -> Option<Rational> {
+        let (n, d, k) = piq_parts(t.trim())?;
+        (k == 0).then(|| Rational::from((n, d)))
+    };
+    let verdict = |ok: bool, what: String| {
+        if ok {
+            Outcome::new(Class::Strong, format!("exactly: {what}"))
+        } else {
+            Outcome::new(Class::Refuted, format!("f is N/D and {what}"))
+        }
+    };
+    let side = |at: &str| match at {
+        "+∞" => Some(true),
+        "−∞" => Some(false),
+        _ => None,
+    };
+    if let Some(rest) = fact.strip_prefix("f → ") {
+        let (lim, at) = rest.split_once(" as x → ")?;
+        let right = side(at)?;
+        let got = rat.limit(right);
+        let shown = match &got {
+            Ok(l) => format!("its limit at {at} is {l}"),
+            Err(up) => format!("it goes to {} at {at}", if *up { "+∞" } else { "−∞" }),
+        };
+        let ok = match (lim, &got) {
+            ("+∞", Err(true)) | ("−∞", Err(false)) => true,
+            (l, Ok(v)) if l.starts_with("in ") => {
+                let b = bracket(l.strip_prefix("in ")?)?;
+                let v = v.to_f64();
+                b.lo.to_f64() <= v && v <= b.hi.to_f64()
+            }
+            (l, Ok(v)) => q(l).is_some_and(|w| w == *v),
+            _ => false,
+        };
+        return Some(verdict(ok, shown));
+    }
+    if let Some(rest) = fact.strip_prefix("f/x → ±∞ as x → ") {
+        side(rest.split_once(':').map_or(rest, |(a, _)| a))?;
+        return Some(verdict(
+            rat.excess() > 1,
+            format!("deg N − deg D = {}", rat.excess()),
+        ));
+    }
+    if fact.starts_with("f = N/D exactly with deg N ≠ deg D + 1") {
+        return Some(verdict(
+            rat.excess() != 1,
+            format!("deg N − deg D = {}", rat.excess()),
+        ));
+    }
+    let line = |m: &str, b: &str| -> Option<Outcome> {
+        let (m, b) = (q(m)?, q(b)?);
+        let got = rat.line();
+        let shown = match &got {
+            Some((gm, gb)) => format!("N/D − ({gm}·x + {gb}) → 0"),
+            None => format!("deg N − deg D = {}", rat.excess()),
+        };
+        Some(verdict(
+            got.is_some_and(|(gm, gb)| gm == m && gb == b),
+            shown,
+        ))
+    };
+    if let Some(rest) = fact.strip_prefix("f = N/D exactly and N/D − (") {
+        let (mb, _) = rest.split_once(") → 0")?;
+        let (m, b) = mb.split_once("·x + ")?;
+        return line(m, b);
+    }
+    if let Some(rest) = fact.strip_prefix("f/x → ") {
+        let (m, rest) = rest.split_once(" and f − m·x → ")?;
+        let (b, _) = rest.split_once(" as x → ")?;
+        return line(m, b);
+    }
+    None
 }
 
 /// Weak evidence that `g(x, f(x))` tends to `lim` ("+∞", "−∞", a number

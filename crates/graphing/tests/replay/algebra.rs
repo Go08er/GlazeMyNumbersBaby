@@ -247,7 +247,39 @@ impl Frac {
     }
 
     fn key(&self) -> String {
-        format!("({})/({})", self.n.key(), self.d.key())
+        let f = self.norm();
+        format!("({})/({})", f.n.key(), f.d.key())
+    }
+
+    /// With a constant denominator divided through (to 1).
+    fn norm(&self) -> Frac {
+        match (self.d.0.len(), self.d.0.get(&Vec::new())) {
+            (1, Some(c)) if *c != 1 => Frac {
+                n: Poly(
+                    self.n
+                        .0
+                        .iter()
+                        .map(|(k, v)| (k.clone(), Rational::from(v / c)))
+                        .collect(),
+                ),
+                d: Poly::constant(Rational::from(1)),
+            },
+            // (−a)/(−b) as a/b: the denominator's highest coefficient > 0.
+            _ if self.d.0.iter().next_back().is_some_and(|(_, v)| *v < 0) => Frac {
+                n: self.n.neg(),
+                d: self.d.neg(),
+            },
+            _ => self.clone(),
+        }
+    }
+
+    /// The numerator's highest monomial has a negative coefficient (with a
+    /// constant positive denominator): −u's form is the canonical one.
+    fn leading_negative(&self) -> bool {
+        let f = self.norm();
+        f.d.vars().is_empty()
+            && f.d.0.get(&Vec::new()).is_some_and(|c| *c > 0)
+            && f.n.0.iter().next_back().is_some_and(|(_, v)| *v < 0)
     }
 
     /// The same value: N₁·D₂ = N₂·D₁.
@@ -303,9 +335,107 @@ impl<'a> Field<'a> {
         Frac::of(Poly::var(i as u16 + 1))
     }
 
+    /// f(u) as an atom, its argument in a normal form: a fraction with a
+    /// constant denominator is divided through; sin and cos shed whole
+    /// quarter turns of a constant term (sin(u + π/2) = cos u, sin(u + π)
+    /// = −sin u) and take the argument's sign out (sin(−u) = −sin u,
+    /// cos(−u) = cos u), as do the odd functions (sinh, atan, asin,
+    /// asinh, atanh) and the even ones (cosh, abs).
     fn of(&mut self, f: &'static str, u: Frac) -> Frac {
+        let u = u.norm();
+        if matches!(f, "sin" | "cos")
+            && let Some(r) = self.trig(f == "cos", &u)
+        {
+            return r;
+        }
+        let odd = matches!(f, "sinh" | "atan" | "asin" | "asinh" | "atanh");
+        let even = matches!(f, "cosh" | "abs");
+        if (odd || even) && u.leading_negative() {
+            let a = self.plain(f, u.neg().norm());
+            return if odd { a.neg() } else { a };
+        }
+        self.plain(f, u)
+    }
+
+    fn plain(&mut self, f: &'static str, u: Frac) -> Frac {
         let name = format!("{f}{}", u.key());
         self.atom(name, Atom::Of(f, u))
+    }
+
+    /// sin u (`cos` false) or cos u, reduced: u = v + c·H with H the half
+    /// turn and c rational; c's whole quarter turns become a rotation, the
+    /// rest stays in the argument; then v's sign is taken out.
+    fn trig(&mut self, cos: bool, u: &Frac) -> Option<Frac> {
+        if !u.d.vars().is_empty() {
+            return None;
+        }
+        // The constant part in half turns.
+        let pi_var = self
+            .names
+            .iter()
+            .position(|n| n == "π")
+            .map(|i| i as u16 + 1);
+        let half = match self.unit {
+            Unit::Radians => None,
+            Unit::Degrees => Some(Rational::from(180)),
+            Unit::Grads => Some(Rational::from(200)),
+        };
+        let d0 = u.d.0.get(&Vec::new())?.clone();
+        let (c, rest) = match (&half, pi_var) {
+            (Some(h), _) => {
+                let c0 = u.n.0.get(&Vec::new()).cloned().unwrap_or_default();
+                let mut rest = u.n.clone();
+                rest.0.remove(&Vec::new());
+                (c0 / d0.clone() / h.clone(), rest)
+            }
+            (None, Some(p)) => {
+                let key = vec![(p, 1)];
+                let c0 = u.n.0.get(&key).cloned().unwrap_or_default();
+                let mut rest = u.n.clone();
+                rest.0.remove(&key);
+                (c0 / d0.clone(), rest)
+            }
+            (None, None) => (Rational::from(0), u.n.clone()),
+        };
+        // Quarter turns: c = q/2 + r with r in [0, 1/2).
+        let quarters = Rational::from(c.clone() * 2u32).floor();
+        let r = c - quarters.clone() / Rational::from(2);
+        let q = quarters.numer().mod_u(4);
+        let shifted = if r == 0 {
+            Frac {
+                n: rest,
+                d: u.d.clone(),
+            }
+        } else {
+            let k = match (&half, pi_var) {
+                (Some(h), _) => Frac::constant(r * h.clone()),
+                (None, Some(p)) => Frac::of(Poly::var(p)).mul(&Frac::constant(r))?,
+                (None, None) => unreachable!(),
+            };
+            Frac {
+                n: rest,
+                d: u.d.clone(),
+            }
+            .add(&k)?
+        }
+        .norm();
+        // sin(v + q quarters): q = 1 → cos v, 2 → −sin v, 3 → −cos v; cos
+        // is sin a quarter on.
+        let q = (q + if cos { 1 } else { 0 }) % 4;
+        let (base_cos, negate) = match q {
+            0 => (false, false),
+            1 => (true, false),
+            2 => (false, true),
+            _ => (true, true),
+        };
+        // The argument's sign out: sin is odd, cos even.
+        let (v, flip) = if shifted.leading_negative() {
+            (shifted.neg().norm(), !base_cos)
+        } else {
+            (shifted, false)
+        };
+        let a = self.plain(if base_cos { "cos" } else { "sin" }, v);
+        Some(if negate != flip { a.neg() } else { a })
     }
 
     fn root(&mut self, q: u32, u: Frac) -> Frac {
@@ -563,4 +693,122 @@ pub fn verify(
         cur = next;
     }
     out
+}
+
+/// `a` and `b` (negated with `negate`) are the same function wherever both
+/// are defined, shown exactly.
+pub fn same_trees(
+    a: &Expr,
+    b: &Expr,
+    negate: bool,
+    lits: &Lits,
+    vars: &[(String, f64)],
+    unit: Unit,
+) -> bool {
+    let mut fld = Field::new(lits, vars, unit);
+    let (Some(x), Some(y)) = (fld.read(a), fld.read(b)) else {
+        return false;
+    };
+    let y = if negate { y.neg() } else { y };
+    x.same(&y) == Some(true)
+}
+
+/// The number (p/d)·πᵏ (k = 0 or 1) as a tree of integers.
+pub fn piq_expr(p: i64, d: i64, k: i32) -> Option<Expr> {
+    let int = |v: i64| {
+        let n = Expr::Num(v.unsigned_abs() as f64);
+        if v < 0 { Expr::Neg(Box::new(n)) } else { n }
+    };
+    let q = if d == 1 {
+        int(p)
+    } else {
+        Expr::Bin(BinOp::Div, Box::new(int(p)), Box::new(int(d)))
+    };
+    match k {
+        0 => Some(q),
+        1 => Some(Expr::Bin(
+            BinOp::Mul,
+            Box::new(q),
+            Box::new(Expr::Const(Constant::Pi)),
+        )),
+        _ => None,
+    }
+}
+
+/// A rational function of x alone, N/D, as coefficient lists (index =
+/// power), for its behaviour at ±∞.
+pub struct Rat {
+    pub n: Vec<Rational>,
+    pub d: Vec<Rational>,
+}
+
+fn coeffs(p: &Poly) -> Option<Vec<Rational>> {
+    let mut out: Vec<Rational> = Vec::new();
+    for (k, v) in &p.0 {
+        let e = match k.as_slice() {
+            [] => 0,
+            [(0, e)] => *e as usize,
+            _ => return None,
+        };
+        if e > 4096 {
+            return None;
+        }
+        if out.len() <= e {
+            out.resize(e + 1, Rational::new());
+        }
+        out[e] = v.clone();
+    }
+    while out.last().is_some_and(|c| *c == 0) {
+        out.pop();
+    }
+    Some(out)
+}
+
+impl Rat {
+    /// f as N/D over the rationals in x alone (no atoms), if it is one.
+    pub fn of(f: &Expr, lits: &Lits, vars: &[(String, f64)], unit: Unit) -> Option<Rat> {
+        let mut fld = Field::new(lits, vars, unit);
+        let fr = fld.read(f)?;
+        let (n, d) = (coeffs(&fr.n)?, coeffs(&fr.d)?);
+        (!d.is_empty()).then_some(Rat { n, d })
+    }
+
+    /// The limit as x → +∞ (`right`) or −∞: Some(Some(L)), or Some(None)
+    /// with the sign of an infinite one in `inf`.
+    pub fn limit(&self, right: bool) -> Result<Rational, bool> {
+        let (dn, dd) = (self.n.len(), self.d.len());
+        if self.n.is_empty() || dn < dd {
+            return Ok(Rational::new());
+        }
+        let lead = Rational::from(self.n[dn - 1].clone() / self.d[dd - 1].clone());
+        if dn == dd {
+            return Ok(lead);
+        }
+        // ±∞ with the sign of lead·x^(dn − dd).
+        let odd = (dn - dd) % 2 == 1;
+        let positive = (lead > 0) == (right || !odd);
+        Err(positive)
+    }
+
+    /// N/D − (m·x + b) → 0 at ±∞: (m, b) when deg N = deg D + 1.
+    pub fn line(&self) -> Option<(Rational, Rational)> {
+        let (dn, dd) = (self.n.len(), self.d.len());
+        if dn != dd + 1 {
+            return None;
+        }
+        // Two steps of long division.
+        let m = Rational::from(self.n[dn - 1].clone() / self.d[dd - 1].clone());
+        // N − m·x·D: its coefficient at x^(dd − 1).
+        let mut r = self.n.clone();
+        for (i, c) in self.d.iter().enumerate() {
+            r[i + 1] -= Rational::from(&m * c);
+        }
+        let b = Rational::from(r[dd - 1].clone() / self.d[dd - 1].clone());
+        Some((m, b))
+    }
+
+    /// deg N − deg D.
+    pub fn excess(&self) -> i64 {
+        self.n.len() as i64 - self.d.len() as i64
+    }
 }

@@ -645,7 +645,7 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
         "inflections" => turns(fx, rc, all, 2, &mut out),
         "monotonicity" => monotonicity(fx, rc, all, &mut out),
         "y_intercept" => y_intercept(fx, rc, &mut out),
-        "parity" => parity(rc, results, &mut out),
+        "parity" => parity(rc, all, results, &mut out),
         "period" => period(fx, rc, all, &mut out),
         "vertical" => vertical(rc, all, &mut out),
         "horizontal" => horizontal(rc, all, &mut out),
@@ -904,10 +904,70 @@ fn y_intercept(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String>
     Ok(())
 }
 
-fn parity(rc: &RowCert, results: &[ClaimResult], out: &mut RowResult) -> Result<(), String> {
+/// The domain (its row's value) is symmetric about 0: each piece's mirror
+/// is a piece, each excluded family its own mirror. None: not known.
+fn domain_symmetric(all: &[RowCert]) -> Option<bool> {
+    let d = all
+        .iter()
+        .find(|r| r.name == "domain" && r.status == "Certified")?;
+    let pieces: Vec<Piece> = d
+        .value
+        .get("pieces")?
+        .as_array()?
+        .iter()
+        .map(|p| piece(p).ok())
+        .collect::<Option<_>>()?;
+    let mirror = |b: Bound| match b {
+        Bound::NegInf => Bound::PosInf,
+        Bound::PosInf => Bound::NegInf,
+        Bound::At { x, closed } => Bound::At {
+            x: Enc {
+                lo: -x.hi,
+                hi: -x.lo,
+            },
+            closed,
+        },
+    };
+    let pieces_ok = pieces.iter().all(|p| {
+        let m = Piece {
+            lo: mirror(p.hi),
+            hi: mirror(p.lo),
+        };
+        pieces.contains(&m)
+    });
+    let fams: Vec<(Enc, Enc)> = d
+        .value
+        .get("excluded")?
+        .as_array()?
+        .iter()
+        .map(|f| Some((enc(f.get("x0")?).ok()?, enc(f.get("period")?).ok()?)))
+        .collect::<Option<_>>()?;
+    let fams_ok = fams.iter().all(|(x0, per)| {
+        // −x0 = x0 + k·P for an integer k (within the enclosures).
+        let k = ((-x0.mid() - x0.mid()) / per.mid()).round();
+        let (a, b) = (x0.lo + k * per.lo, x0.hi + k * per.hi);
+        let slack = 1e-9 * x0.mid().abs().max(1.0) + (k.abs() + 1.0) * (per.hi - per.lo);
+        (a.min(b) - slack) <= -x0.lo && -x0.hi <= (a.max(b) + slack)
+    });
+    Some(pieces_ok && fams_ok)
+}
+
+fn parity(
+    rc: &RowCert,
+    all: &[RowCert],
+    results: &[ClaimResult],
+    out: &mut RowResult,
+) -> Result<(), String> {
     let p = rc.value.as_str().ok_or("parity")?;
     match p {
         "Even" | "Odd" => {
+            match domain_symmetric(all) {
+                Some(true) => {}
+                Some(false) => out
+                    .problems
+                    .push(format!("{p}, but the domain is not symmetric about 0")),
+                None => out.notes.push("the domain's symmetry is not known".into()),
+            }
             let word = if p == "Even" { "even" } else { "odd" };
             let fact = rc.claims.iter().find(
                 |c| matches!(c, Claim::Simplifier(f) if f.starts_with(&format!("f is {word}"))),
@@ -1328,6 +1388,29 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
             .push("a period with no fact that it is one".into());
         return Ok(());
     };
+    // A period maps each excluded family onto itself: P is a multiple of
+    // its period.
+    let fams: Vec<Enc> = all
+        .iter()
+        .find(|r| r.name == "domain")
+        .and_then(|d| d.value.get("excluded"))
+        .and_then(Value::as_array)
+        .map(|e| {
+            e.iter()
+                .filter_map(|f| f.get("period").and_then(|p| enc(p).ok()))
+                .collect()
+        })
+        .unwrap_or_default();
+    for q in &fams {
+        let n = (p.mid() / q.mid()).round();
+        let fits = n >= 1.0 && n * q.lo <= p.hi * (1.0 + 1e-12) && p.lo * (1.0 - 1e-12) <= n * q.hi;
+        if !fits {
+            out.problems.push(format!(
+                "the period [{:e}, {:e}] is no multiple of an excluded family's [{:e}, {:e}]",
+                p.lo, p.hi, q.lo, q.hi
+            ));
+        }
+    }
     // The listed period is the fact's.
     iv::set_prec(160);
     let stated = fact
