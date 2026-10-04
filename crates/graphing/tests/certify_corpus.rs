@@ -860,6 +860,10 @@ enum Set {
     LineMinus(f64, f64),
 }
 
+/// A monotone piece of the truth: its direction and its ends (value,
+/// closed).
+type MonoPiece = (Dir, (Val, bool, Val, bool));
+
 #[derive(Clone, Debug, Default)]
 struct Truth {
     d: Option<Set>,
@@ -873,7 +877,7 @@ struct Truth {
     va: Option<Xs>,
     ha: Option<Vec<(Tail, Val)>>,
     r: Option<Set>,
-    m: Option<Vec<(Dir, (Val, bool, Val, bool))>>,
+    m: Option<Vec<MonoPiece>>,
 }
 
 /// Splits at `sep` outside parentheses and brackets.
@@ -1121,10 +1125,7 @@ fn check_range(r: &Row<Vec<Piece>>, want: &Option<Set>) -> Option<String> {
 /// Monotone pieces: each listed one inside a true piece of its direction
 /// (its ends fit, or lie inside); a certified row lists every true piece,
 /// ends fitting.
-fn check_mono(
-    r: &Row<Vec<Monotone>>,
-    want: &Option<Vec<(Dir, (Val, bool, Val, bool))>>,
-) -> Option<String> {
+fn check_mono(r: &Row<Vec<Monotone>>, want: &Option<Vec<MonoPiece>>) -> Option<String> {
     let want = want.as_ref()?;
     let (value, certified) = match r {
         Row::Certified { value, .. } => (value, true),

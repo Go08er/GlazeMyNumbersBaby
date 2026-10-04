@@ -927,7 +927,7 @@ impl<'a> Ctx<'a> {
         let (g, alpha, beta, p) = self.table_period(x0, period)?;
         let h = self.half_turn();
         let pf = p.to_f64();
-        if !(x0.hi.0 - x0.lo.0 < pf / 2.0) {
+        if x0.hi.0 - x0.lo.0 >= pf / 2.0 || pf.is_nan() {
             return None;
         }
         // Candidates: (u₀ − β)/α for the table's u₀, moved into x₀'s box.
@@ -988,7 +988,8 @@ impl<'a> Ctx<'a> {
             }
         }
         let p = found?;
-        if !(period.hi.0 - period.lo.0 < p.to_f64() / 4.0) {
+        let pf = p.to_f64();
+        if period.hi.0 - period.lo.0 >= pf / 4.0 || pf.is_nan() {
             return None;
         }
         Some((g, alpha, beta, p))
@@ -2418,7 +2419,7 @@ fn constant_tail(cx: &Ctx<'_>, a: &Analysis, side: Tail, y: Enc) -> Option<Ex> {
         (Tail::Right, _, _) => 1.0,
         (Tail::Left, _, _) => -1.0,
     };
-    if !(c.abs() < 1e15) {
+    if c.abs() >= 1e15 || c.is_nan() {
         return None;
     }
     let v = cx.eval(&cx.f, Ex::int(c as i128))?;
