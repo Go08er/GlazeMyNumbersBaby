@@ -219,7 +219,7 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **796 tests** (counts include
+`nix develop -c cargo test --workspace` runs **800 tests** (counts include
 doctests; two more, a live currency fetch and the full metamorphic graph
 sweep, are `#[ignore]`d). `cargo run --release -p graphing --example sweep`
 checks graph analysis against about 3,400 generated functions (shifted,
@@ -252,6 +252,32 @@ upstream sources with g++:
 
 The oracles live in `tools/oracle/` and need the upstream repository checked
 out at `reference/calculator` to regenerate the golden files.
+
+CI also runs checks that need more than `cargo test --workspace`:
+
+- **Certificate replay** (`cargo test -p graphing --features mpfr-oracle
+  --test certify_replay`): the certified analysis of each of the certify
+  corpus's 148 functions goes through JSON to a separate checker
+  (`crates/graphing/tests/replay`) with its own MPFR interval arithmetic,
+  sharing only graphing's parser and expression tree with the certifier. A
+  claim is *strong* when it re-proves it on the function's own tree, *weak*
+  when it can only prove it on a tree the certifier supplied (the
+  simplifier's form, the derivatives) or check it at sample points, so it
+  rests on the simplifier: today 60,592 strong, 135 weak. A claim refuted
+  or left open, or a row that doesn't follow from its claims, fails it.
+- **MPFR oracles** (same feature): `interval_oracle` checks every interval
+  operation's enclosure against MPFR at 256 bits on adversarial boxes,
+  `simplify_rules` checks every simplifier rule on both sides wherever its
+  left side is defined.
+- **`bits`** (`cargo run --release -p graphing --example bits`): every
+  built-in function's results, bit for bit, from a plain x86-64 build (which
+  runs both CORE-MATH builds), an x86-64-v3 build and the plain build on an
+  emulated Nehalem; any difference fails.
+- **`identities`** (`--example identities`): two spellings of one function
+  at extreme arguments (subnormals to 10³⁰⁰, both sides of ±1, the edge of
+  eˣ) must read the same in the panel's formatting.
+- The launcher on an emulated Nehalem must refuse with its message, and the
+  D-Bus, X11 and Wayland tests must run rather than skip.
 
 ## Deliberate differences from the original
 
