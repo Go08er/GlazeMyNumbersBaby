@@ -796,6 +796,16 @@ pub fn rational_derivs(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Optio
             )
         }
     };
+    // Every coefficient written as doubles that hold it exactly (q_expr
+    // rounds a numerator or denominator past 2⁵³: 1 + 10⁻³⁰ would read 1).
+    let exact = |q: &Poly| {
+        q.coefficients()
+            .iter()
+            .all(|c| c.numer().unsigned_abs() <= 1 << 53 && c.denom() <= 1 << 53)
+    };
+    if !(exact(&p) && exact(&p2) && exact(&d)) {
+        return None;
+    }
     Some([canonical(&over(&p, 2.0)), canonical(&over(&p2, 3.0))])
 }
 
@@ -829,11 +839,14 @@ pub fn rational_numerators(e: &Expr, lits: &crate::simplify::ExactLiterals) -> O
     let p = n1.mul(&d)?.sub(&n.mul(&d1)?)?;
     let p2 = deriv(&p)?.mul(&d)?.sub(&p.mul(&d1)?.scale(Q::int(2))?)?;
     let (d2, d3) = (d.pow(2)?, d.pow(3)?);
-    Some([
-        canonical(&n.to_expr()),
-        canonical(&lowest(&p, &d2)?.to_expr()),
-        canonical(&lowest(&p2, &d3)?.to_expr()),
-    ])
+    let ps = [n, lowest(&p, &d2)?, lowest(&p2, &d3)?];
+    // (Only with every coefficient a double's exactly: see rational_derivs.)
+    let exact = ps.iter().all(|q| {
+        q.coefficients()
+            .iter()
+            .all(|c| c.numer().unsigned_abs() <= 1 << 53 && c.denom() <= 1 << 53)
+    });
+    exact.then(|| ps.map(|q| canonical(&q.to_expr())))
 }
 
 /// `e` with each constant exponent that is a typed decimal (`x^0.9`)

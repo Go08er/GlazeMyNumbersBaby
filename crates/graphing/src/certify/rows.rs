@@ -2147,10 +2147,23 @@ fn slope_evidence(
     let mut last = f64::INFINITY;
     for m in far_points(f, right, start) {
         let s = f.ser(tail_box(right, m), 1)?;
-        if !usable(&s, 1) {
+        // f′ on the tail: its Taylor coefficient, or where that is ∞/∞
+        // (x^0.9: 0.9·x^0.9/x) its own tree (f smooth and defined there).
+        let d = if usable(&s, 1) && s[1].iv.is_bounded() {
+            s[1]
+        } else if f.smooth_tree
+            && !s[0].is_empty()
+            && s[0].dec >= Dec::Dac
+            && let Some(t) = f.derivs().map(|d| d[0].clone())
+        {
+            let v = f.ser_of(&t, tail_box(right, m), 0)?[0];
+            if v.is_empty() || v.dec < Dec::Def {
+                continue;
+            }
+            v
+        } else {
             continue;
-        }
-        let d = s[1];
+        };
         let from = R(if right { m } else { -m });
         if grow {
             let (c, above) = if d.gt0() {
@@ -2181,7 +2194,7 @@ fn slope_evidence(
             });
         } else {
             if !d.iv.is_bounded() {
-                return Ok(None);
+                continue;
             }
             let (lo, hi) = (d.lo().next_down(), d.hi().next_up());
             last = lo.abs().max(hi.abs());

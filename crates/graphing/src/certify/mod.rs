@@ -336,6 +336,9 @@ fn rewrite(f: &Fun<'_>) -> Option<crate::ast::Expr> {
             let v = r.value().abs();
             v == v.trunc() && v <= 9007199254740992.0 && !typed.contains(&v)
         }
+        // An exact rational whose numerator or denominator no double
+        // holds: written back as rounded numbers (1 + 10⁻³⁰ would read 1).
+        Math::Num(q) => q.numer().unsigned_abs() > 1 << 53 || q.denom() > 1 << 53,
         _ => false,
     });
     (!unsound).then_some(s.expr)
