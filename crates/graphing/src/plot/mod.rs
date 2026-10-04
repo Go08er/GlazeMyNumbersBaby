@@ -53,9 +53,13 @@ pub struct PlotOptions {
     pub tolerance_px: f64,
     /// Maximum refinement depth below the seed spacing (2^depth subdivisions).
     pub max_depth: u32,
-    /// Evaluation budget per explicit curve; when exhausted the remaining
-    /// segments are drawn unrefined and `has_missing_data` is set.
-    pub max_evals: usize,
+    /// Work budget per explicit curve, in estimated nanoseconds of
+    /// evaluation (each evaluation is charged by the size of the curve's
+    /// program, an interval one many times a point one): about this long
+    /// on one core of a 2020s desktop. When it runs out, the rest is drawn
+    /// coarser — joined only where proven continuous or where the
+    /// heuristic sampler finds no jump — and `has_missing_data` is set.
+    pub max_work: usize,
     /// Size of a fine marching-squares cell for implicit relations, in pixels.
     pub implicit_cell_px: f64,
     /// Number of fine cells per coarse block side.
@@ -74,7 +78,7 @@ impl Default for PlotOptions {
             seed_px: 1.0,
             tolerance_px: 0.25,
             max_depth: 6,
-            max_evals: 200_000,
+            max_work: 100_000_000,
             implicit_cell_px: 2.0,
             implicit_block: 8,
             implicit_max_refined: 4.0e6,

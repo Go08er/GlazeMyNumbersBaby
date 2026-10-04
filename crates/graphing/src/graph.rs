@@ -401,7 +401,7 @@ impl Graph {
     /// [`Graph::plot_parallel`] for a worker thread: polls `cancel` and
     /// returns `None` soon after it is set (e.g. because the viewport moved
     /// on and a newer request superseded this one). The work itself is
-    /// bounded: explicit curves by [`PlotOptions::max_evals`], implicit
+    /// bounded: explicit curves by [`PlotOptions::max_work`], implicit
     /// relations by [`MAX_IMPLICIT_WORK`].
     ///
     /// ```

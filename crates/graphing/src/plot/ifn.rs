@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ast::Expr;
+use crate::ast::{BinOp, Expr, Func};
 use crate::compile::{CompileOptions, DEFAULT_VARIABLE_VALUE, VariableValues};
 use crate::functions::TrigUnit;
 use crate::interval::{Ctx, DecInterval, Interval, Literals, Series, enclose, taylor};
@@ -67,5 +67,36 @@ impl IntervalFn {
     /// Taylor coefficients `c[0..=n]` of f over [lo, hi].
     pub fn series(&self, lo: f64, hi: f64, n: usize) -> Series {
         self.with_ctx(|ctx| taylor(&self.expr, Interval::new(lo, hi), n, ctx))
+    }
+
+    /// Relative cost of one interval evaluation, in the units of
+    /// [`crate::compile::Program::cost`] (an addition is 1, a sine 8):
+    /// the same weights, but Γ and nCr/nPr no dearer than a sine, as
+    /// their interval forms are (their point forms are not).
+    pub(crate) fn cost(&self) -> usize {
+        fn c(e: &Expr) -> usize {
+            match e {
+                Expr::Num(_) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => 1,
+                Expr::Neg(a) | Expr::Degrees(a) => 1 + c(a),
+                Expr::Bin(op, a, b) => {
+                    let own = match op {
+                        BinOp::Add | BinOp::Sub | BinOp::Mul => 1,
+                        BinOp::Div => 2,
+                        BinOp::Pow => 8,
+                    };
+                    own + c(a) + c(b)
+                }
+                Expr::Call(f, args) => {
+                    let own = match f {
+                        Func::Abs | Func::Floor | Func::Ceil | Func::Round | Func::Sign => 1,
+                        Func::Min | Func::Max | Func::Mod => 2,
+                        Func::NCr | Func::NPr => 16,
+                        _ => 8,
+                    };
+                    own + args.iter().map(c).sum::<usize>()
+                }
+            }
+        }
+        c(&self.expr)
     }
 }

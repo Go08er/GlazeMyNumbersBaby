@@ -223,3 +223,81 @@ fn keyboard_tracing_climbs_very_steep_lines() {
         }
     }
 }
+
+/// Segments that join across a point where f is undefined, or (wider than
+/// a pixel) stray far from f between their ends: reviewer B's probe.
+fn suspicious_joins(
+    g: &Graph,
+    id: graphing::EquationId,
+    p: &graphing::Plot,
+    vp: &Viewport,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let (xpp, ypp) = (vp.x_per_px(), vp.y_per_px());
+    for c in &p.curves {
+        for w in c.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            if a.x == b.x {
+                continue;
+            }
+            let wide = (b.x - a.x).abs() > xpp;
+            for k in 1..64 {
+                let x = a.x + (b.x - a.x) * k as f64 / 64.0;
+                let y = g.evaluate(id, x).unwrap_or(f64::NAN);
+                let lin = a.y + (b.y - a.y) * (x - a.x) / (b.x - a.x);
+                let far = (y < a.y.min(b.y) - 50.0 * ypp || y > a.y.max(b.y) + 50.0 * ypp)
+                    && (y - lin).abs() > 50.0 * ypp
+                    && y.abs() < 1e300;
+                if !y.is_finite() || (wide && far) {
+                    out.push(format!("{a:?} -> {b:?}: f({x}) = {y}"));
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// PREREVIEW_C M2: removable holes at the default view of many canvas
+/// sizes (the per-curve budget ran out at most of them and the fallback
+/// joined across the hole, unmarked).
+#[test]
+fn holes_marked_and_unjoined_at_every_size() {
+    for (src, hole, val) in [
+        ("y=x/x", 0.0, 1.0),
+        ("y=(x^2-1)/(x-1)", 1.0, 2.0),
+        ("y=sin(x)/x", 0.0, 1.0),
+        ("y=x^2/x^2", 0.0, 1.0),
+        ("y=(x^3-8)/(x-2)", 2.0, 12.0),
+    ] {
+        let mut g = Graph::new();
+        let id = g.add_equation(src);
+        let mut sizes = 0;
+        for w in (300..=1900).step_by(53) {
+            for h in (300..=1100).step_by(61) {
+                let vp = Viewport::default_for_size(w as f64, h as f64);
+                if !vp.contains(hole, val) {
+                    continue;
+                }
+                sizes += 1;
+                let p = g.plot_equation(id, &vp).unwrap();
+                assert!(
+                    p.holes
+                        .iter()
+                        .any(|q| q.x == hole && (q.y - val).abs() < 1e-4),
+                    "{src} at {w}x{h}: holes {:?}",
+                    p.holes
+                );
+                for c in &p.curves {
+                    for s in c.windows(2) {
+                        let (a, b) = (s[0].x.min(s[1].x), s[0].x.max(s[1].x));
+                        assert!(!(a < hole && hole < b), "{src} at {w}x{h}: {s:?}");
+                    }
+                }
+                let bad = suspicious_joins(&g, id, &p, &vp);
+                assert!(bad.is_empty(), "{src} at {w}x{h}: {bad:?}");
+            }
+        }
+        assert!(sizes > 50, "{src}: {sizes}");
+    }
+}
