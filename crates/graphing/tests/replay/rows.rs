@@ -1497,9 +1497,13 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
             })
             .collect();
         let apart = vals.iter().any(|a| vals.iter().any(|b| a.2 < b.1));
+        // A limit at a tail: f's bands there, or a rational f's exact one.
         let limit = [Side::Left, Side::Right]
             .iter()
-            .any(|&s| !tail_bands(&rc.claims, s).is_empty());
+            .any(|&s| !tail_bands(&rc.claims, s).is_empty())
+            || rc.claims.iter().any(|c| {
+                matches!(c, Claim::Simplifier(f) if f.starts_with(claims::RATIONAL) && fact_limit(f).is_some())
+            });
         if !(to_inf || (limit && apart)) {
             out.problems
                 .push("not periodic, but the claims don't show it".into());
