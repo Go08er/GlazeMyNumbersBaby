@@ -1130,7 +1130,10 @@ fn check_with(
                 continue;
             }
             let (claimed, close) = member(&d.domain, d.period, *x, &end_slack);
-            let s = 1e-15 * x.abs().max(1.0);
+            // An excluded point is known to f's resolution there, like an
+            // end: 1/(1 + cos x) is undefined in doubles for every x within
+            // 2·10⁻⁸ of π, where 1 + cos x touches 0.
+            let s = (1e-15 * x.abs().max(1.0)).max(4.0 * f.res(*x));
             if close || d.excluded.iter().any(|fam| family_in(fam, x - s, x + s)) {
                 continue;
             }
