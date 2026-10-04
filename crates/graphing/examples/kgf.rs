@@ -68,6 +68,11 @@ fn main() {
                     println!("   {check}: {l}");
                 }
             }
+            for (check, lines) in &r.doubts {
+                for l in lines {
+                    println!("   (unverified) {check}: {l}");
+                }
+            }
         }
     }
 }
