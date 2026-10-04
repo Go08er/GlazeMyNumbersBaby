@@ -62,4 +62,4 @@ Local changes
 -------------
 
 binary64/pow/pow.c and binary64/lgamma/lgamma.c carry small GMNB patches,
-marked "GMNB patch" in the source and described in ../README.md.
+marked "GMNB patch" in the source and described in crates/crmath/README.md.
