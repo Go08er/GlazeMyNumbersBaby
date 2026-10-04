@@ -374,9 +374,15 @@ impl Display {
                 } else {
                     pango::Alignment::Left
                 });
+                // Over a see-through window, denser (3:1 or better over a
+                // black or a white desktop at the lowest opacity).
+                let see_through = self
+                    .root()
+                    .is_some_and(|r| r.has_css_class(crate::window::SEE_THROUGH));
+                let alpha = if see_through { 0.8 } else { 0.55 };
                 s.save();
                 s.translate(&graphene::Point::new(PAD_X, top));
-                s.append_layout(&layout, &rgba(scheme.fg, 0.55));
+                s.append_layout(&layout, &rgba(scheme.fg, alpha));
                 s.restore();
             }
             top += imp.expr_size.get() * 1.6 + 4.0;
