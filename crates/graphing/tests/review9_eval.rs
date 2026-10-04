@@ -54,10 +54,14 @@ fn values_beyond_a_double_are_values() {
     }
     // A batch gives the same values.
     let p = compile_str("exp(x)/exp(x)", TrigUnit::Radians).unwrap();
-    let xs = [-1e6, -800.0, 0.0, 800.0, 1e300];
+    let xs = [-1e6, -800.0, 0.0, 800.0, 1e15];
     let mut out = [0.0; 5];
     p.eval_batch(Input::Slice(&xs), Input::Scalar(0.0), &mut out);
     assert_eq!(out, [1.0; 5]);
+    // Beyond 2⁵³ binades (x past about 6.2·10¹⁵) e^x is only known to be
+    // beyond the doubles: a ratio of two such values is unknown (R11-M-02),
+    // not a 1 that two equally made-up mantissas happened to give.
+    assert!(at("exp(x)/exp(x)", 1e300).is_nan());
 }
 
 #[test]
@@ -304,11 +308,11 @@ fn tiny_angles_of_either_sign_in_every_unit() {
     for unit in [TrigUnit::Radians, TrigUnit::Degrees, TrigUnit::Grads] {
         for x in [2.0237e-320, 1e-323, 5e-324, 1e-300, 1e-20] {
             for x in [x, -x] {
+                // (Below the doubles the sine rounds to ±0, with the
+                // angle's sign: 5·10⁻³²⁴° is 8.6·10⁻³²⁶. Its reciprocals
+                // are then ±∞, not undefined.)
                 let s = sin_u(x, unit);
-                assert!(
-                    s != 0.0 && s.signum() == x.signum(),
-                    "{unit:?} sin({x}) = {s}"
-                );
+                assert!(s.is_sign_negative() == (x < 0.0), "{unit:?} sin({x}) = {s}");
                 for v in [csc_u(x, unit), cot_u(x, unit)] {
                     assert!(
                         !v.is_nan() && v.signum() == x.signum(),
