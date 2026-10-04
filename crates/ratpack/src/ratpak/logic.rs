@@ -22,6 +22,15 @@ use super::support::{intrat, rat_gt, rat_lt};
 use super::{BASEX, CalcResult, Ctx, Number, Rat, renormalize, sign};
 use crate::{CALC_E_DOMAIN, CALC_E_INDEFINITE};
 
+/// Deviation: the largest count a shift toward zero (rsh by a positive
+/// count, lsh by a negative one) computes. Upstream bounds only the other
+/// direction (by `rat_max_exp`, 100000) and computes 2^count for counts up to
+/// 2^31 - 1, which takes minutes past a few million. The C++ golden cases
+/// pin counts just past `rat_max_exp` as computed; 2^200000 takes well under
+/// 0.1 s. The calculator itself only shifts in Programmer mode, by less than
+/// the word size.
+const MAX_SHIFT_COUNT: i32 = 200_000;
+
 pub(crate) fn lshrat(
     ctx: &Ctx,
     pa: &mut Rat,
@@ -37,6 +46,9 @@ pub(crate) fn lshrat(
             return Err(CALC_E_DOMAIN);
         }
         let intb = rattoi32(ctx, b, radix, precision)?;
+        if intb < -MAX_SHIFT_COUNT {
+            return Err(CALC_E_DOMAIN);
+        }
         let mut pwr = ctx.rat_two.clone();
         ratpowi32(ctx, &mut pwr, intb, precision)?;
         mulrat(ctx, pa, &pwr, precision)?;
@@ -59,6 +71,9 @@ pub(crate) fn rshrat(
             return Err(CALC_E_DOMAIN);
         }
         let intb = rattoi32(ctx, b, radix, precision)?;
+        if intb > MAX_SHIFT_COUNT {
+            return Err(CALC_E_DOMAIN);
+        }
         let mut pwr = ctx.rat_two.clone();
         ratpowi32(ctx, &mut pwr, intb, precision)?;
         divrat(ctx, pa, &pwr, precision)?;
