@@ -412,9 +412,9 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         evaluated: evaluated(f),
         unit: unit_name(f.opts.trig_unit).into(),
         x_intercepts: rows::zeros(&c0, &scope, &gap_claims, clear0),
-        y_intercept: or_unknown(rows::y_intercept(f)),
+        y_intercept: or_unknown(rows::y_intercept(f, &dom)),
         parity: or_unknown(rows::parity(f, &dom)),
-        period: or_unknown(rows::period(f, &dom, &monotonicity)),
+        period: or_unknown(rows::period(f, &dom, &monotonicity, w)),
         extrema: with(or_unknown(rows::extrema(f, &c1, &boxes, &scope, clear1)), &gap_claims),
         inflections: with(
             or_unknown(rows::inflections(f, &c2, &boxes, &scope, clear2)),

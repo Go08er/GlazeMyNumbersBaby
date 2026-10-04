@@ -134,7 +134,40 @@ pub fn zeros(c0: &Cover, scope: &Scope, extra: &[Claim], clear: bool) -> Row<Vec
 
 // ---------------------------------------------------------- y-intercept
 
-pub fn y_intercept(f: &Fun<'_>) -> Result<Row<Option<Enc>>, Stop> {
+pub fn y_intercept(f: &Fun<'_>, dom: &Domain) -> Result<Row<Option<Enc>>, Stop> {
+    // 0 excluded by the certified domain (a member of an excluded family,
+    // or outside every piece): no y-intercept.
+    if let Row::Certified { cert, .. } = &dom.row {
+        let zero = Enc::point(0.0);
+        let in_family = dom.families.iter().any(|fam| {
+            fam.members(0.0, 0.0)
+                .iter()
+                .any(|m| m.is_point() && m.lo() == 0.0)
+        });
+        let outside = !dom.pieces.iter().any(|p| {
+            let lo_ok = match p.lo {
+                Bound::NegInf => true,
+                Bound::PosInf => false,
+                Bound::At { x, closed } => x.hi.0 < 0.0 || (closed && x == zero),
+            };
+            let hi_ok = match p.hi {
+                Bound::PosInf => true,
+                Bound::NegInf => false,
+                Bound::At { x, closed } => x.lo.0 > 0.0 || (closed && x == zero),
+            };
+            lo_ok && hi_ok
+        }) && dom.pieces.iter().all(|p| {
+            // Every piece provably misses 0.
+            let below = matches!(p.hi, Bound::At { x, closed } if x.hi.0 < 0.0 || (!closed && x == zero));
+            let above = matches!(p.lo, Bound::At { x, closed } if x.lo.0 > 0.0 || (!closed && x == zero));
+            below || above
+        });
+        if in_family || outside {
+            let mut c = Certificate::new(Region::Points);
+            c.extend(cert.claims.iter().cloned());
+            return Ok(Row::Certified { value: None, cert: c });
+        }
+    }
     // The original tree: 0 may be a hole the simplified form fills.
     let v = f.ser_of(&f.expr, Interval::point(0.0), 0)?[0];
     let mut c = Certificate::new(Region::Points);
@@ -561,6 +594,10 @@ pub fn gaps_clear(
         if !c.is_empty() && c.ne0() {
             continue;
         }
+        // f⁽ᵏ⁾ ≡ 0 (a rational f of lower degree): no change of sign.
+        if k > 0 && f.numerators.as_ref().is_some_and(|n| matches!(n[k], crate::ast::Expr::Num(v) if v == 0.0)) {
+            continue;
+        }
         if k > 0
             && use_derivs
             && let Some(d) = &f.derivs
@@ -707,7 +744,8 @@ pub fn vertical(f: &Fun<'_>, dom: &Domain, c0: &Cover, boxes: &[IBox], scope: &S
             Leaf::Band { cont, .. } | Leaf::Equal { cont, .. } => cont,
             Leaf::Flag { a, b, .. } => {
                 let v = f.val(Interval::new(a, b))?;
-                let ok = !v.is_empty() && v.dec >= Dec::Def && v.iv.is_bounded();
+                // Continuous there, or bounded: no asymptote inside.
+                let ok = !v.is_empty() && (v.dec >= Dec::Dac || (v.dec >= Dec::Def && v.iv.is_bounded()));
                 if ok {
                     cl.push(Claim::Value {
                         x: XBox::new(a, b),
@@ -955,7 +993,33 @@ fn primes_upto(n: u64) -> Vec<u64> {
 /// bounded over one) and two values V apart are reached within any T, so
 /// T ≥ V/L and n ≤ P·L/V; with one excluded family of period q, a period
 /// maps the family onto itself, so q divides T and n ≤ P/q.
-pub fn period(f: &Fun<'_>, dom: &Domain, mono: &Row<Vec<Monotone>>) -> Result<Row<Option<Enc>>, Stop> {
+/// Two values of f at some of `xs`, enclosed apart (f is not constant),
+/// as claims.
+fn apart(f: &Fun<'_>, xs: &[f64]) -> Result<Option<Vec<Claim>>, Stop> {
+    let mut vals = Vec::new();
+    for &x in xs {
+        let v = f.ser_of(&f.expr, Interval::point(x), 0)?[0];
+        if !v.is_empty() && v.dec >= Dec::Def && v.iv.is_bounded() {
+            vals.push((x, v));
+        }
+    }
+    for (i, (x, v)) in vals.iter().enumerate() {
+        for (y, u) in &vals[i + 1..] {
+            if u.hi() < v.lo() || v.hi() < u.lo() {
+                let claim = |p: f64, w: &DecInterval| Claim::Value {
+                    x: XBox::point(p),
+                    of: Subject::f(0),
+                    lo: R(w.lo()),
+                    hi: R(w.hi()),
+                };
+                return Ok(Some(vec![claim(*x, v), claim(*y, u)]));
+            }
+        }
+    }
+    Ok(None)
+}
+
+pub fn period(f: &Fun<'_>, dom: &Domain, mono: &Row<Vec<Monotone>>, w: f64) -> Result<Row<Option<Enc>>, Stop> {
     let line = super::side::line();
     if let Row::Certified { value: d, cert } = &dom.row
         && d.excluded.is_empty()
@@ -971,6 +1035,24 @@ pub fn period(f: &Fun<'_>, dom: &Domain, mono: &Row<Vec<Monotone>>) -> Result<Ro
         let mut c = Certificate::new(Region::Line);
         c.extend(cert.claims.iter().cloned());
         return Ok(Row::Certified { value: None, cert: c });
+    }
+    // A tail going to ±∞ can't repeat, nor can one with a limit unless f
+    // is constant (then f(x₀ + kP) = f(x₀) for every k).
+    if dom.row.is_certified() && dom.pieces == [line] {
+        for right in [false, true] {
+            let (end, claims) = tail_end(f, right, w)?;
+            let witness = match end {
+                TailEnd::Infinite(_) => Some(Vec::new()),
+                TailEnd::Level(..) => apart(f, &[0.5, 1.0, 1.7, 2.3, 3.1, -0.7, -1.9])?,
+                TailEnd::Unknown => None,
+            };
+            if let Some(w) = witness {
+                let mut c = Certificate::new(Region::Line);
+                c.extend(claims);
+                c.extend(w);
+                return Ok(Row::Certified { value: None, cert: c });
+            }
+        }
     }
     let Some(s) = f.settings() else {
         return Ok(Row::unknown("no period proven"));
@@ -1118,13 +1200,38 @@ fn tail_interval(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cl
         return Ok((TailEnd::Infinite(rising == right), vec![claim]));
     }
     let s = f.ser(tail(start), 1)?;
-    if !(usable(&s, 1) && s[1].ne0()) {
+    if !usable(&s, 1) {
         return Ok((TailEnd::Unknown, Vec::new()));
     }
     let d = s[1];
-    let rising = d.gt0();
+    let rising = if d.ne0() {
+        d.gt0()
+    } else {
+        // f′'s own tree: continuous on the tail with no factor reaching 0
+        // there (−csch² for coth), so of the sign it has at the start.
+        let Some(t) = f.derivs.as_ref().map(|d| &d[0]) else {
+            return Ok((TailEnd::Unknown, Vec::new()));
+        };
+        let whole = f.ser_of(t, tail(start), 0)?[0];
+        let mut nonzero = !whole.is_empty() && whole.dec >= Dec::Dac;
+        for h in super::fun::zero_factors(t) {
+            let v = f.ser_of(&h, tail(start), 0)?[0];
+            nonzero &= !v.is_empty() && v.ne0();
+        }
+        let at = f.ser_of(t, Interval::point(if right { start } else { -start }), 0)?[0];
+        if !(nonzero && !at.is_empty() && at.ne0()) {
+            return Ok((TailEnd::Unknown, Vec::new()));
+        }
+        at.gt0()
+    };
     // f′ bounded away from 0 (beyond half its bound): f goes to ±∞.
-    let c = if rising { d.lo() / 2.0 } else { d.hi() / 2.0 };
+    let c = if !d.ne0() {
+        0.0
+    } else if rising {
+        d.lo() / 2.0
+    } else {
+        d.hi() / 2.0
+    };
     if c != 0.0 {
         let claim = Claim::TailBeyond {
             side,

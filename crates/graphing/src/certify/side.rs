@@ -88,7 +88,26 @@ impl SideCond {
 pub fn sides(f: &Fun<'_>) -> Result<Vec<SideCond>, String> {
     let mut out = Vec::new();
     walk(f, &f.expr, &mut Vec::new(), &mut out)?;
-    Ok(out)
+    // |v| > 0 is v ≠ 0, |v| ≥ 0 always holds: on v itself, which is
+    // smooth where |v| has its corner.
+    let mut done = Vec::new();
+    for mut c in out {
+        if c.via == Via::Itself
+            && c.zero_if_exponent.is_none()
+            && let Expr::Call(Func::Abs, args) = &c.g
+        {
+            if c.allowed.as_slice() == NONNEG {
+                continue;
+            }
+            if c.allowed.as_slice() == POSITIVE || c.allowed.as_slice() == NONZERO {
+                c.g = args[0].clone();
+                c.path.push(0);
+                c.allowed = NONZERO.to_vec();
+            }
+        }
+        done.push(c);
+    }
+    Ok(done)
 }
 
 fn cond(path: &[u8], g: &Expr, allowed: &[Seg]) -> SideCond {
