@@ -1756,8 +1756,8 @@ fn tail_bands(claims: &[Claim], side: Side) -> Vec<(f64, f64, f64)> {
     out
 }
 
-/// Bounds that grow without settling: three or more, each beyond the
-/// last (in the direction `up`), gaining at least 1.
+/// Bounds that grow without settling: three or more records (each beyond
+/// every bound before it, in the direction `up`), gaining at least 1.
 fn growing(mut bs: Vec<(f64, f64)>, up: bool) -> bool {
     bs.sort_by(|a, b| a.0.total_cmp(&b.0));
     // Several bounds from one place (other rows' claims): the strongest.
@@ -1770,7 +1770,17 @@ fn growing(mut bs: Vec<(f64, f64)>, up: bool) -> bool {
             _ => one.push(b),
         }
     }
-    let bs = one;
+    // The records: each beyond every bound before it (a weaker bound
+    // further out, another row's, adds nothing).
+    let mut bs: Vec<(f64, f64)> = Vec::new();
+    for b in one {
+        let beyond = bs
+            .last()
+            .is_none_or(|l: &(f64, f64)| if up { b.1 > l.1 } else { b.1 < l.1 });
+        if beyond {
+            bs.push(b);
+        }
+    }
     if bs.len() < 3 {
         return false;
     }
