@@ -85,11 +85,16 @@ How numbers are written:
   f takes at an exact point; an exact limit (rational functions, the
   simplifier's limits and periods). A rounded pole or hole is never shown
   as exact.
-* **Otherwise to six significant digits, only when the enclosure fixes all
-  six** (every value in it rounds alike), marked "≈" when the text could
-  read as exact (`≈1`, `≈0.5`: trailing zeros trimmed). Accessibility reads
-  "≈" as "approximately".
-* **Not at all** when six digits aren't fixed: the row is unknown. A value
+* **Otherwise to as many significant digits as the enclosure fixes, up to
+  six and at least three** (every value in it rounds alike to that many),
+  marked "≈" when the text has fewer than six (`≈1`, `≈0.5`, `≈1.414`:
+  trailing zeros trimmed). Accessibility reads "≈" as "approximately". The
+  minimum is one switch, `MIN_SHOWN_DIGITS` in
+  `crates/graphing/src/analysis/certified.rs`: 6 restores the strict rule
+  (all six digits fixed, or the row is unknown).
+* **Not at all** when fewer than three digits are fixed: the row is
+  unknown. Two points or lines of a row that still read alike at fifteen
+  digits leave it unknown too (they can't be told apart). A value
   that may be 0 is never written "0" or "≈0", and a closed range bound (a
   value f takes) is written only when exact or known to its last few
   doubles: "0", "none" and "attained" get no rounding allowance.
