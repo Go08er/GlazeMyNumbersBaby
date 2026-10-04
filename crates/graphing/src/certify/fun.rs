@@ -216,6 +216,66 @@ impl<'a> Fun<'a> {
         args
     }
 
+    /// The exact point of the kink in the box `(l, r)`, one double either
+    /// side of a double p at which a kink argument is exactly 0: with every
+    /// kink argument strictly signed on each side of p (a nonzero value
+    /// over the box, or an exact zero at p with a strictly signed
+    /// derivative), f equals on `[l, p]` and on `[p, r]` the smooth form
+    /// with each |u| (min, max) resolved by those signs, and f′'s strict
+    /// sign on each side is that form's. `None` if any of it isn't
+    /// decided. (f is continuous across the box: a `Kink` claim.)
+    pub fn kink_at(&self, l: f64, r: f64) -> Result<Option<KinkPoint>, Stop> {
+        use crate::interval::Dec;
+        let p = l.next_up();
+        if p.next_up() != r || !p.is_finite() {
+            return Ok(None);
+        }
+        // (−0 is 0: the kink of |x| is at 0.)
+        let p = if p == 0.0 { 0.0 } else { p };
+        let around = Interval::new(l, r);
+        let mut sides: Vec<(Expr, bool, bool)> = Vec::new();
+        let mut at_zero = false;
+        for u in self.kink_args() {
+            let s = self.ser_of(&u, around, 1)?;
+            if s[0].dec >= Dec::Def && s[0].ne0() {
+                let pos = s[0].gt0();
+                sides.push((u, pos, pos));
+                continue;
+            }
+            let v = self.ser_of(&u, Interval::point(p), 0)?[0];
+            let zero = !v.is_empty() && v.lo() == 0.0 && v.hi() == 0.0 && v.dec >= Dec::Def;
+            let d = s[1];
+            if !(zero && s[0].dec >= Dec::Dac && d.dec >= Dec::Def && d.iv.is_bounded() && d.ne0())
+            {
+                return Ok(None);
+            }
+            at_zero = true;
+            let rising = d.gt0();
+            sides.push((u, !rising, rising));
+        }
+        if !at_zero {
+            return Ok(None);
+        }
+        for tree in [&self.expr, &self.eval] {
+            let slope = |left: bool, x: Interval| -> Result<Option<bool>, Stop> {
+                let e = one_sided(tree, &sides, left);
+                let s = self.ser_of(&e, x, 1)?;
+                let d = s[1];
+                Ok(
+                    (s[0].dec >= Dec::Dac && d.dec >= Dec::Def && d.iv.is_bounded() && d.ne0())
+                        .then(|| d.gt0()),
+                )
+            };
+            if let (Some(left), Some(right)) = (
+                slope(true, Interval::new(l, p))?,
+                slope(false, Interval::new(p, r))?,
+            ) {
+                return Ok(Some(KinkPoint { p, left, right }));
+            }
+        }
+        Ok(None)
+    }
+
     /// No kink of f in the box at which f is defined: each kink argument
     /// is away from 0 over it, or f with that kink's |u| set to 0 (its
     /// min, max to either side) is defined nowhere on it. The derivative
@@ -435,6 +495,57 @@ fn sound_constants(e: &Expr, exact: &crate::simplify::ExactLiterals) -> bool {
 
 /// The node budget of a symbolic derivative.
 const DIFF_NODES: usize = 4096;
+
+/// A kink placed exactly (see [`Fun::kink_at`]): at the double `p`, with
+/// f′ strictly positive (`true`) or negative on `[p⁻, p]` (`left`) and on
+/// `[p, p⁺]` (`right`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KinkPoint {
+    pub p: f64,
+    pub left: bool,
+    pub right: bool,
+}
+
+/// `e` on one side of a kink: each |u| as u or −u and each min(a, b),
+/// max(a, b) as the argument it picks, by the signs `sides` gives each
+/// kink argument (canonical u, or a − b) on that side; the rest as is.
+pub fn one_sided(e: &Expr, sides: &[(Expr, bool, bool)], left: bool) -> Expr {
+    let sign_of = |u: &Expr| {
+        sides
+            .iter()
+            .find(|(v, ..)| v == u)
+            .map(|(_, l, r)| if left { *l } else { *r })
+    };
+    e.map(&|n| match n {
+        Expr::Call(Func::Abs, a) if a[0].contains_x() => {
+            let inner = one_sided(&a[0], sides, left);
+            let pos = sign_of(&canonical(&a[0]))?;
+            Some(if pos {
+                inner
+            } else {
+                Expr::Neg(Box::new(inner))
+            })
+        }
+        Expr::Call(f @ (Func::Min | Func::Max), a)
+            if a.len() == 2 && a.iter().any(|v| v.contains_x()) =>
+        {
+            let d = canonical(&Expr::Bin(
+                BinOp::Sub,
+                Box::new(a[0].clone()),
+                Box::new(a[1].clone()),
+            ));
+            // a − b > 0: max picks a, min picks b.
+            let a_bigger = sign_of(&d)?;
+            let pick = if a_bigger == (*f == Func::Max) {
+                &a[0]
+            } else {
+                &a[1]
+            };
+            Some(one_sided(pick, sides, left))
+        }
+        _ => None,
+    })
+}
 
 /// E-graph nodes for each of an analysis's simplifier runs (several per
 /// analysis, so fewer than the simplifier's default): a count, not a time,

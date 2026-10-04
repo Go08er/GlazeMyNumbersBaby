@@ -277,6 +277,23 @@ fn walk(cover: &Cover, ib: &IBox) -> Vec<Seg> {
     }
     parts.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut out: Vec<Seg> = parts.into_iter().flat_map(|(_, s)| s).collect();
+    // A kink placed exactly (`Claim::KinkAt`) whose one-sided signs carry
+    // on the signs beside its box: the turn there is at that point.
+    for i in 1..out.len().saturating_sub(1) {
+        let Seg::Kink(x) = out[i] else { continue };
+        let placed = cover
+            .kinks
+            .iter()
+            .zip(&cover.kink_at)
+            .find(|((l, r), _)| *l == x.lo.0 && *r == x.hi.0)
+            .and_then(|(_, k)| *k);
+        if let Some(k) = placed
+            && out[i - 1] == Seg::Sign(k.left)
+            && out[i + 1] == Seg::Sign(k.right)
+        {
+            out[i] = Seg::Kink(Enc::point(k.p));
+        }
+    }
     // Merge runs of the same sign, and a zero seen from both sides (its
     // point leaf and the boxes ending there).
     out.dedup_by(|y, x| match (*x, *y) {

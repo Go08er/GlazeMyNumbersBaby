@@ -347,6 +347,19 @@ fn walk(fx: &Fx, claims: &[Claim], k: usize) -> Walk {
             }
             // f′, f″ undefined at a kink: a point the signs either side
             // decide (for f, its values are claimed elsewhere).
+            // A kink placed exactly: f′'s strict sign on each side (shown
+            // on the one-sided forms) up to the point itself.
+            Claim::KinkAt { x, at, left, right } if k == 1 => {
+                w.signs.push((x.0, *at, *left));
+                w.signs.push((*at, x.1, *right));
+                w.zeros.push(Zero {
+                    at: Enc { lo: *at, hi: *at },
+                    left: Some(*left),
+                    right: Some(*right),
+                    kink: true,
+                });
+                w.boxes.push(*x);
+            }
             Claim::Kink(x) if k > 0 => {
                 w.zeros.push(Zero {
                     at: Enc { lo: x.0, hi: x.1 },

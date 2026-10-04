@@ -342,13 +342,17 @@ fn roots_and_absolute_values() {
     assert_eq!(r.domain, "x ∈ [−1, 1]");
     assert_eq!(r.range, "y ∈ [0, 1]");
     assert_eq!(r.maxima, ["(0, 1)"]);
-    // |x| turns at a corner (no f′ there) and x^(1/3) has a vertical
-    // tangent at 0: the certifier proves turns and inflections from f′ and
-    // f″ only, so those rows are unknown.
+    // |x| turns at a corner, placed exactly at 0 with f′ of each side's
+    // form (−x, x) strictly signed there. x^(1/3) has a vertical tangent at
+    // 0: the certifier proves inflections from f″ only, so that row is
+    // unknown.
     let r = k("|x|");
-    assert!(r.too_complex_features & flags::MINIMA != 0);
-    assert!(r.minima.is_empty());
-    assert!(r.inflection_points.is_empty());
+    assert_eq!(r.too_complex_features & flags::MINIMA, 0);
+    assert_eq!(r.minima, ["(0, 0)"]);
+    assert_eq!(r.x_intercept, "0");
+    let r = k("|x-3|");
+    assert_eq!(r.minima, ["(3, 0)"]);
+    assert_eq!(r.x_intercept, "3");
     let r = k("x^(1/3)");
     assert_eq!(r.domain, "x ∈ ℝ");
     assert!(r.too_complex_features & flags::INFLECTION_POINTS != 0);

@@ -554,6 +554,7 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
         }),
         Claim::Unbounded { near, at } => unbounded(fx, *near, *at),
         Claim::Kink(x) => defined(fx, *x, Some(true)),
+        Claim::KinkAt { x, at, left, right } => kink_at(fx, *x, *at, *left, *right),
         Claim::Bounded { near, at, lo, hi } => {
             if !(near.0 <= at.0 && at.1 <= near.1) {
                 return Outcome::new(
@@ -582,6 +583,145 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
             }
             _ => Outcome::new(Class::Unsupported, "a gap claim on a side expression"),
         },
+    }
+}
+
+/// The kink arguments of `e`, from the spec: the u of each |u| and the
+/// a − b of each min(a, b), max(a, b) that varies with x.
+fn kink_args(e: &Expr, out: &mut Vec<Expr>) {
+    match e {
+        Expr::Call(Func::Abs, a) if contains_x(&a[0]) => {
+            if !out.contains(&a[0]) {
+                out.push(a[0].clone());
+            }
+            kink_args(&a[0], out);
+        }
+        Expr::Call(Func::Min | Func::Max, a) if a.len() == 2 && a.iter().any(contains_x) => {
+            let d = Expr::Bin(BinOp::Sub, Box::new(a[0].clone()), Box::new(a[1].clone()));
+            if !out.contains(&d) {
+                out.push(d);
+            }
+            a.iter().for_each(|v| kink_args(v, out));
+        }
+        Expr::Neg(a) | Expr::Degrees(a) => kink_args(a, out),
+        Expr::Bin(_, a, b) => {
+            kink_args(a, out);
+            kink_args(b, out);
+        }
+        Expr::Call(_, args) => args.iter().for_each(|v| kink_args(v, out)),
+        _ => {}
+    }
+}
+
+/// `e` on one side of a kink: each |u| as u or −u, each min, max as the
+/// argument it picks, by the sign each kink argument has on that side.
+fn one_sided(e: &Expr, sides: &[(Expr, bool, bool)], left: bool) -> Option<Expr> {
+    let sign = |u: &Expr| {
+        sides
+            .iter()
+            .find(|(v, ..)| v == u)
+            .map(|(_, l, r)| if left { *l } else { *r })
+    };
+    Some(match e {
+        Expr::Call(Func::Abs, a) if contains_x(&a[0]) => {
+            let inner = one_sided(&a[0], sides, left)?;
+            if sign(&a[0])? {
+                inner
+            } else {
+                Expr::Neg(Box::new(inner))
+            }
+        }
+        Expr::Call(f @ (Func::Min | Func::Max), a) if a.len() == 2 && a.iter().any(contains_x) => {
+            let d = Expr::Bin(BinOp::Sub, Box::new(a[0].clone()), Box::new(a[1].clone()));
+            let a_bigger = sign(&d)?;
+            let pick = if a_bigger == (*f == Func::Max) {
+                &a[0]
+            } else {
+                &a[1]
+            };
+            one_sided(pick, sides, left)?
+        }
+        Expr::Neg(a) => Expr::Neg(Box::new(one_sided(a, sides, left)?)),
+        Expr::Degrees(a) => Expr::Degrees(Box::new(one_sided(a, sides, left)?)),
+        Expr::Bin(op, a, b) => Expr::Bin(
+            *op,
+            Box::new(one_sided(a, sides, left)?),
+            Box::new(one_sided(b, sides, left)?),
+        ),
+        Expr::Call(f, args) => Expr::Call(
+            *f,
+            args.iter()
+                .map(|v| one_sided(v, sides, left))
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        _ => e.clone(),
+    })
+}
+
+/// A kink placed exactly (`KinkAt`): some kink argument is exactly 0 at
+/// `at`; every kink argument is strictly signed on each side of `at`
+/// inside the box (away from 0 over it, or 0 at `at` with a strictly
+/// signed derivative over it), so f is the one-sided form there; and that
+/// form's derivative has the claimed strict sign on [x.0, at], [at, x.1].
+fn kink_at(fx: &Fx, x: B, at: f64, left: bool, right: bool) -> Outcome {
+    if !(x.0 < at && at < x.1) {
+        return Outcome::new(Class::Refuted, "the kink's point is not inside its box");
+    }
+    if unmodelled(&fx.f) {
+        return Outcome::new(
+            Class::Unsupported,
+            "the tree uses a function the replay doesn't model",
+        );
+    }
+    let mut args = Vec::new();
+    kink_args(&fx.f, &mut args);
+    let v = ladder(|| {
+        let mut sides: Vec<(Expr, bool, bool)> = Vec::new();
+        let mut zero = false;
+        for u in &args {
+            let s = fx.series(u, x.0, x.1, 1);
+            if s[0].def && (s[0].gt(0.0) || s[0].lt(0.0)) {
+                let pos = s[0].gt(0.0);
+                sides.push((u.clone(), pos, pos));
+                continue;
+            }
+            let at_u = fx.series(u, at, at, 0);
+            let d = &s[1];
+            if !(at_u[0].def && at_u[0].is_exactly(0.0)) {
+                return unknown("a kink argument is not decided over the box");
+            }
+            if !(s[0].cont && d.def && d.bounded() && (d.gt(0.0) || d.lt(0.0))) {
+                return unknown("a kink argument's slope is not decided over the box");
+            }
+            zero = true;
+            let rising = d.gt(0.0);
+            sides.push((u.clone(), !rising, rising));
+        }
+        if !zero {
+            return V::No("no kink argument is 0 at the point".into());
+        }
+        for (on_left, lo, hi, want) in [(true, x.0, at, left), (false, at, x.1, right)] {
+            let Some(e) = one_sided(&fx.f, &sides, on_left) else {
+                return unknown("no one-sided form");
+            };
+            let s = fx.series(&e, lo, hi, 1);
+            let d = &s[1];
+            if !(s[0].cont && d.def && d.bounded()) {
+                return unknown("the one-sided form's slope is not decided");
+            }
+            if (want && d.lt(0.0)) || (!want && d.gt(0.0)) {
+                return V::No("the one-sided slope has the other sign".into());
+            }
+            if !((want && d.gt(0.0)) || (!want && d.lt(0.0))) {
+                return unknown("the one-sided slope is not strictly signed");
+            }
+        }
+        V::Yes
+    });
+    match v {
+        V::Yes => Outcome::new(Class::Strong, ""),
+        V::No(w) => Outcome::new(Class::Refuted, w),
+        V::Unknown(w) => Outcome::new(Class::Unconfirmed, w),
     }
 }
 

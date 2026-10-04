@@ -377,6 +377,34 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         spans.push((b.a, b.b));
     }
     f.allow(phase);
+    // The kinks of f (abs, min, max), where its derivative trees are not
+    // f′ (below). f's own boxes are cut at a kink placed at a double, so
+    // f is decided there exactly and the boxes beside it can touch it
+    // (|x − 3| is 0 at 3 alone).
+    let kinks_found = if f.kinked {
+        kinks(f, &spans)
+    } else {
+        Some(Vec::new())
+    };
+    let mut spans0 = spans.clone();
+    for &(l, r) in kinks_found.iter().flatten() {
+        let p = l.next_up();
+        if p.next_up() != r || !p.is_finite() {
+            continue;
+        }
+        let p = if p == 0.0 { 0.0 } else { p };
+        spans0 = spans0
+            .into_iter()
+            .flat_map(|(a, b)| {
+                if a < p && p < b {
+                    vec![(a, p), (p, p), (p, b)]
+                } else {
+                    vec![(a, b)]
+                }
+            })
+            .collect();
+    }
+    f.allow(phase);
     let c0 = Cover::run(
         f,
         &Target {
@@ -385,7 +413,7 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             in_domain: true,
         },
         &[0.0],
-        &spans,
+        &spans0,
     );
     // f is continuous on every box: the derivative's own tree may stand
     // for f′ (it equals f′ wherever f is differentiable, and f is monotone
@@ -451,7 +479,7 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             f.val(crate::interval::Interval::new(l, r))
                 .is_ok_and(|v| !v.is_empty() && v.dec >= crate::interval::Dec::Dac)
         };
-        match kinks(f, &spans) {
+        match kinks_found {
             Some(k) if k.iter().all(ok) => k,
             _ => {
                 tree_ok = false;
@@ -464,7 +492,7 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     for sp in kspans.iter_mut() {
         *sp = split_at_kinks(sp, &kink_boxes);
     }
-    let kink_claims: Vec<Claim> = kink_boxes
+    let mut kink_claims: Vec<Claim> = kink_boxes
         .iter()
         .map(|&(l, r)| Claim::Kink { x: XBox::new(l, r) })
         .collect();
@@ -510,6 +538,20 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     let (mut c1, mut c2) = (cover(1), cover(2));
     c1.kinks = kink_boxes.clone();
     c2.kinks = kink_boxes.clone();
+    // A kink at a double, placed exactly with f′'s strict sign on each
+    // side: a turn there is at exactly that point.
+    for &(l, r) in &kink_boxes {
+        let k = f.kink_at(l, r).ok().flatten();
+        if let Some(k) = k {
+            kink_claims.push(Claim::KinkAt {
+                x: XBox::new(l, r),
+                at: R(k.p),
+                left: k.left,
+                right: k.right,
+            });
+        }
+        c1.kink_at.push(k);
+    }
     if std::env::var_os("CERTIFY_DEBUG").is_some() {
         eprintln!("w = {w}, boxes = {spans:?}");
         for (k, c) in [&c0, &c1, &c2].iter().enumerate() {

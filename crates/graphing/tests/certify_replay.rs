@@ -679,6 +679,20 @@ const PLANTS: &[Plant] = &[
         hi["lo"] = serde_json::json!(2.0);
         hi["hi"] = serde_json::json!(2.0);
     }),
+    ("abs(x-3)", "a kink's slope flipped on one side", |v| {
+        let k = first(v, "extrema", "KinkAt");
+        k["left"] = serde_json::json!(!k["left"].as_bool().unwrap());
+    }),
+    ("abs(x-3)", "the kink placed a double off", |v| {
+        let k = first(v, "extrema", "KinkAt");
+        k["at"] = serde_json::json!(3.0f64.next_up());
+        k["x"]["b"] = serde_json::json!(3.0f64.next_up().next_up());
+    }),
+    ("abs(x-3)", "the minimum at a kink moved", |v| {
+        let x = &mut value_of(v, "extrema")[0]["x"];
+        x["lo"] = serde_json::json!(3.0f64.next_up());
+        x["hi"] = serde_json::json!(3.0f64.next_up());
+    }),
 ];
 
 #[test]
