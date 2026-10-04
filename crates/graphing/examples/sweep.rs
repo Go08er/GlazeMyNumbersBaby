@@ -1756,6 +1756,8 @@ fn why_certified(transforms: &[Aff], filter: Option<&str>) {
     let mut total = 0usize;
     let mut examples: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let ident = Aff { ..ID };
+    // `--why-dump`: every unknown row and its function, on stderr.
+    let dump = std::env::args().any(|a| a == "--why-dump");
     for base in BASES {
         if filter.is_some_and(|f| !base.contains(f)) {
             continue;
@@ -1801,6 +1803,9 @@ fn why_certified(transforms: &[Aff], filter: Option<&str>) {
                 };
                 entry.1 += 1;
                 *reasons.entry(key.clone()).or_default() += 1;
+                if dump {
+                    eprintln!("{key}\t{expr}");
+                }
                 let ex = examples.entry(key).or_default();
                 if ex.len() < 3 {
                     ex.push(expr.clone());
@@ -1923,6 +1928,18 @@ fn main() {
         k: 1e-6,
         c: 1e6,
     });
+    if args.iter().any(|a| a == "--list") {
+        // Every function the sweep analyses (radians), one per line.
+        let ident = Aff { ..ID };
+        for base in BASES {
+            if wanted(base) {
+                for t in std::iter::once(&ident).chain(&transforms) {
+                    println!("{}", t.apply(base));
+                }
+            }
+        }
+        return;
+    }
     if args.iter().any(|a| a == "--why-certified") {
         why_certified(&transforms, filter.as_deref());
         return;
