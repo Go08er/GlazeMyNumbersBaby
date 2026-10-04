@@ -247,6 +247,11 @@ pub enum Claim {
     /// simple zero of their cosine, a logarithm of an argument falling to
     /// 0, combined with factors bounded (and away from 0) on `near`.
     Unbounded { near: XBox, at: XBox },
+    /// f is bounded near the excluded point (or domain end) enclosed by
+    /// `at`: wherever f is defined on `near`, which holds `at`, its values
+    /// lie in `[lo, hi]`. (f need not be defined at the point itself, nor
+    /// anywhere else on `near`: this says nothing about where it is.)
+    Bounded { near: XBox, at: XBox, lo: R, hi: R },
     /// The evaluated tree (`Analysis::evaluated`, equal to f wherever f is
     /// defined) is defined and continuous on `near`, which holds `at`, and
     /// takes values in `[lo, hi]` on `at`: f's limit at the excluded point

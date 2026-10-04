@@ -1562,6 +1562,15 @@ fn vertical(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), St
         if let Claim::Unbounded { at, .. } | Claim::Removable { at, .. } = c {
             excluded.push(Enc { lo: at.0, hi: at.1 });
         }
+        // f bounded near a point: no asymptote may be listed there.
+        if let Claim::Bounded { at, .. } = c
+            && listed.iter().any(|(x, _)| x.lo <= at.1 && at.0 <= x.hi)
+        {
+            out.problems.push(format!(
+                "an asymptote is listed at {:e}, where f is bounded",
+                at.0
+            ));
+        }
     }
     for e in &excluded {
         let is_listed = listed.iter().any(|(x, _)| x.contains(e));

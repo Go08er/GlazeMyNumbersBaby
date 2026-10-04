@@ -143,6 +143,14 @@ pub enum Claim {
         near: B,
         at: B,
     },
+    /// Wherever f is defined on `near` (which holds `at`), its values lie
+    /// in [lo, hi].
+    Bounded {
+        near: B,
+        at: B,
+        lo: f64,
+        hi: f64,
+    },
     Removable {
         near: B,
         at: B,
@@ -171,6 +179,7 @@ impl Claim {
             Claim::TailChain { .. } => "TailChain",
             Claim::TailValue { .. } => "TailValue",
             Claim::Unbounded { .. } => "Unbounded",
+            Claim::Bounded { .. } => "Bounded",
             Claim::Removable { .. } => "Removable",
             Claim::Simplifier(_) => "Simplifier",
             Claim::Gap(_) => "Gap",
@@ -366,6 +375,12 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
         "Unbounded" => Claim::Unbounded {
             near: xbox(field(b, "near")?)?,
             at: xbox(field(b, "at")?)?,
+        },
+        "Bounded" => Claim::Bounded {
+            near: xbox(field(b, "near")?)?,
+            at: xbox(field(b, "at")?)?,
+            lo: rf(b, "lo")?,
+            hi: rf(b, "hi")?,
         },
         "Removable" => Claim::Removable {
             near: xbox(field(b, "near")?)?,

@@ -731,9 +731,9 @@ fn classify(
         let v = f.val(n)?;
         return Ok((
             Near::Bounded,
-            Some(Claim::Value {
-                x: near,
-                of: Subject::f(0),
+            Some(Claim::Bounded {
+                near,
+                at: XBox { a: x.lo, b: x.hi },
                 lo: R(v.lo()),
                 hi: R(v.hi()),
             }),
@@ -1000,9 +1000,9 @@ pub fn vertical(
             });
         } else if bounded_near(f, n)? {
             let v = f.val(n)?;
-            c.push(Claim::Value {
-                x: near,
-                of: Subject::f(0),
+            c.push(Claim::Bounded {
+                near,
+                at: XBox { a: x.lo, b: x.hi },
                 lo: R(v.lo()),
                 hi: R(v.hi()),
             });

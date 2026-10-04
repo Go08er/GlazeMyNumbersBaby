@@ -553,6 +553,15 @@ pub fn check(fx: &Fx, c: &Claim) -> Outcome {
             value(s, tail_box(*side, *from), *lo, *hi)
         }),
         Claim::Unbounded { near, at } => unbounded(fx, *near, *at),
+        Claim::Bounded { near, at, lo, hi } => {
+            if !(near.0 <= at.0 && at.1 <= near.1) {
+                return Outcome::new(
+                    Class::Refuted,
+                    "the excluded point's box is not inside near",
+                );
+            }
+            by_trees(fx, &Subject::F(0), |s| where_defined(s, *near, *lo, *hi))
+        }
         Claim::Removable { near, at, lo, hi } => removable(fx, *near, *at, *lo, *hi),
         Claim::Simplifier(fact) => simplifier(fx, fact),
         Claim::Gap(x) => gap(*x),
@@ -630,6 +639,23 @@ fn value(s: &Subj, x: B, lo: f64, hi: f64) -> V {
         }
     }
     v
+}
+
+/// Wherever the subject is defined on the box, its values lie in
+/// [lo, hi] (it need not be defined anywhere there): refuted only where it
+/// is defined on a whole piece with values outside.
+fn where_defined(s: &Subj, x: B, lo: f64, hi: f64) -> V {
+    on(x, &mut |a, b| {
+        let (c, _) = s.coeffs(a, b, 0);
+        let v = &c[0];
+        if v.empty || (v.ge(lo) && v.le(hi)) {
+            V::Yes
+        } else if s.tree == Tree::Orig && v.def && (v.lt(lo) || v.gt(hi)) {
+            V::No(format!("{} on [{a:e}, {b:e}]", show(v)))
+        } else {
+            unknown(format!("{} on [{a:e}, {b:e}]", show(v)))
+        }
+    })
 }
 
 /// The note on a Value claim false only as written: it holds wherever f

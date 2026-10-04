@@ -276,7 +276,6 @@ fn run(fs: Vec<(String, TrigUnit)>) -> Vec<String> {
     let mut done = done.into_inner().unwrap();
     done.sort_by_key(|(i, _)| *i);
     let mut fails = Vec::new();
-    let mut known = Vec::new();
     let mut tally: BTreeMap<(&str, Class), usize> = BTreeMap::new();
     let mut certificates = 0;
     // The certifier's trees: identical to f's exactly, or agreeing at points.
@@ -324,14 +323,6 @@ fn run(fs: Vec<(String, TrigUnit)>) -> Vec<String> {
         }
         for c in &r.claims {
             let bad = c.outcome.class == Class::Refuted;
-            // Known, reported to the certifier: a Value claim over a
-            // neighbourhood of an excluded point (the vertical row's
-            // "bounded near it") says f is valid on the whole box; it
-            // holds only where f is defined.
-            if bad && c.outcome.note.contains(replay::claims::WHERE_DEFINED) {
-                known.push(format!("{label}: {:?}: {}", c.claim, c.outcome.note));
-                continue;
-            }
             if bad {
                 fails.push(format!(
                     "{label}: refuted {:?} ({}): {}",
@@ -403,9 +394,6 @@ fn run(fs: Vec<(String, TrigUnit)>) -> Vec<String> {
         print!(" {n:>11}");
     }
     println!();
-    for k in &known {
-        println!("KNOWN {k}");
-    }
     // Most functions certified and replayed: a run that replays little
     // checks little.
     if filter.is_none() && certificates * 4 < want * 3 {
@@ -670,12 +658,6 @@ fn replay_catches_planted_errors() {
 /// the certifier is fixed the test fails, and the entry goes (with the
 /// issue's write-up).
 const KNOWN_ISSUES: &[(u32, &str, &str)] = &[
-    // 1: a Value claim over a neighbourhood of an excluded point says f is
-    // valid on the whole box; it holds only where f is defined.
-    (1, "x/ln(x)", "vertical"),
-    (1, "0/x", "vertical"),
-    (1, "atan(1/x)", "vertical"),
-    (1, "x^x", "vertical"),
     // 2: f″ claimed on the whole line for |x| (the derivative tree sign(x)
     // hides the kink; f′ doesn't exist at 0): unconfirmed.
     (2, "abs(x)", "inflections"),
