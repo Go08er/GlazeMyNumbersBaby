@@ -134,6 +134,29 @@ fn enc_of(l: f64, r: f64) -> Enc {
 // ---------------------------------------------------------- x-intercepts
 
 pub fn zeros(c0: &Cover, scope: &Scope, extra: &[Claim], clear: bool) -> Row<Vec<Spot>> {
+    // Zeros at doubles with nothing decided between them but undecided
+    // boxes may be points of a stretch where f ≡ 0 (|x| − x on [0, ∞), its
+    // zeros found at every halving point): not listed, so as not to stand
+    // for it. (One alone between undecided boxes, sign(x)'s at 0, stays.)
+    let zero_at = |p: f64| {
+        c0.leaves
+            .iter()
+            .any(|l| matches!(*l, Leaf::At { p: q, .. } if q == p))
+    };
+    let flag_beside = |p: f64, left: bool| {
+        c0.leaves.iter().find_map(|l| match *l {
+            Leaf::Flag { a, b, .. } if a < b && (if left { b == p } else { a == p }) => {
+                Some(if left { a } else { b })
+            }
+            _ => None,
+        })
+    };
+    let undecided = |p: f64, left: bool| flag_beside(p, left).is_some();
+    let chained = |p: f64| {
+        [true, false]
+            .into_iter()
+            .any(|left| flag_beside(p, left).is_some_and(zero_at))
+    };
     let mut out: Vec<Spot> = Vec::new();
     for l in &c0.leaves {
         match *l {
@@ -141,6 +164,7 @@ pub fn zeros(c0: &Cover, scope: &Scope, extra: &[Claim], clear: bool) -> Row<Vec
                 Some(p) => Enc::point(p),
                 None => enc_of(l, r),
             })),
+            Leaf::At { p, .. } if undecided(p, true) && undecided(p, false) && chained(p) => {}
             Leaf::At { p, .. } => out.push(Spot::At(Enc::point(p))),
             Leaf::Equal { .. } => return Row::unknown("f is 0 on a whole stretch"),
             _ => {}

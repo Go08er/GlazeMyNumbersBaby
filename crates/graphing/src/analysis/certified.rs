@@ -387,7 +387,9 @@ fn merge(items: Vec<(Num, Num, String)>) -> Vec<(Num, Num, String)> {
                                 .and_then(Ex::rational)
                                 .is_some_and(|t| t.is_int())
                     }
-                    _ => false,
+                    // The certifier's very enclosures twice (one family
+                    // from two side conditions): the same set.
+                    _ => a.0.enc == b.0.enc && a.1.enc == b.1.enc,
                 }
         });
         if dup {
@@ -607,8 +609,10 @@ impl<'a> Ctx<'a> {
         cancel: Option<&'a AtomicBool>,
     ) -> Ctx<'a> {
         let unit = opts.trig_unit;
-        let rf = honest_exponents(&f, lits)
-            .then(|| rational_form(&f, lits))
+        // (Sliders at their values: a/x with a at 0 is 0 off x = 0.)
+        let fv = with_values(&f, opts.variables);
+        let rf = honest_exponents(&fv, lits)
+            .then(|| rational_form(&fv, lits))
             .flatten();
         // Every x the certifier pinned to a double.
         let mut hints: Vec<Q> = Vec::new();
@@ -920,6 +924,34 @@ impl<'a> Ctx<'a> {
     /// and x̂₀ is a zero of the side expression inside x₀'s enclosure
     /// (narrower than the period: the only one there).
     fn table_family(&self, x0: Enc, period: Enc) -> Option<(Ex, Ex)> {
+        let (g, alpha, beta, p) = self.table_period(x0, period)?;
+        let h = self.half_turn();
+        let pf = p.to_f64();
+        if !(x0.hi.0 - x0.lo.0 < pf / 2.0) {
+            return None;
+        }
+        // Candidates: (u₀ − β)/α for the table's u₀, moved into x₀'s box.
+        let mut cands = nice(x0, self.unit);
+        let half = h.div(Ex::int(2))?;
+        for u0 in [Ex::int(0), half, h, half.neg()?] {
+            if let Some(c) = u0.sub(beta).and_then(|d| d.div(alpha)) {
+                let n = ((x0.mid() - c.to_f64()) / pf).round();
+                if n.is_finite() && n.abs() < 1e12 {
+                    cands.extend(p.mul(Ex::int(n as i128)).and_then(|s| c.add(s)));
+                }
+            }
+        }
+        let x = cands.into_iter().find(|&c| {
+            c.within(x0.lo.0, x0.hi.0) == Some(true) && self.eval(&g, c).is_some_and(Ex::is_zero)
+        })?;
+        Some((x, p))
+    }
+
+    /// A table family's period, exactly (a half or whole turn over |α| for
+    /// the argument α·x + β of its side expression g), with g, α and β:
+    /// exact even where x₀ has no closed form (tan(x + 0.5)'s poles every
+    /// π).
+    fn table_period(&self, x0: Enc, period: Enc) -> Option<(Expr, Ex, Ex, Ex)> {
         let (s, _, _) = self
             .fams
             .iter()
@@ -956,25 +988,10 @@ impl<'a> Ctx<'a> {
             }
         }
         let p = found?;
-        let pf = p.to_f64();
-        if !(x0.hi.0 - x0.lo.0 < pf / 2.0 && period.hi.0 - period.lo.0 < pf / 4.0) {
+        if !(period.hi.0 - period.lo.0 < p.to_f64() / 4.0) {
             return None;
         }
-        // Candidates: (u₀ − β)/α for the table's u₀, moved into x₀'s box.
-        let mut cands = nice(x0, self.unit);
-        let half = h.div(Ex::int(2))?;
-        for u0 in [Ex::int(0), half, h, half.neg()?] {
-            if let Some(c) = u0.sub(beta).and_then(|d| d.div(alpha)) {
-                let n = ((x0.mid() - c.to_f64()) / pf).round();
-                if n.is_finite() && n.abs() < 1e12 {
-                    cands.extend(p.mul(Ex::int(n as i128)).and_then(|s| c.add(s)));
-                }
-            }
-        }
-        let x = cands.into_iter().find(|&c| {
-            c.within(x0.lo.0, x0.hi.0) == Some(true) && self.eval(&g, c).is_some_and(Ex::is_zero)
-        })?;
-        Some((x, p))
+        Some((g, alpha, beta, p))
     }
 
     /// The domain equals its mirror image: no excluded families, and its
@@ -1140,7 +1157,11 @@ impl<'a> Ctx<'a> {
                     enc: x0,
                 },
                 Num {
-                    exact: self.xfam_period(p).or_else(|| self.period_in(p)),
+                    exact: self
+                        .table_period(x0, p)
+                        .map(|t| t.3)
+                        .or_else(|| self.xfam_period(p))
+                        .or_else(|| self.period_in(p)),
                     enc: p,
                 },
             ),
@@ -1747,9 +1768,13 @@ pub(super) fn features(
             }
             let was_cut = cut(&mut items);
             out.settle(flags::ZEROS, zeros_reach, items.is_empty(), was_cut);
+            // Two zeros that read alike get the digits that tell them
+            // apart (1 ± 10⁻¹⁵), as the points' rows do; if they still
+            // read alike, the row is unknown.
+            let xs: Vec<String> = items.iter().map(|(_, (x, _))| x.text()).collect();
             let mut texts = Vec::new();
             let mut any_family = false;
-            for (_, (x, p)) in &items {
+            for (i, (_, (x, p))) in items.iter().enumerate() {
                 match p {
                     Some(p) => {
                         any_family = true;
@@ -1760,10 +1785,14 @@ pub(super) fn features(
                         });
                     }
                     None => {
-                        texts.push(x.text());
+                        let twins = xs.iter().filter(|t| **t == xs[i]).count() > 1;
+                        texts.push(x.text_sig(if twins { 15 } else { 6 }));
                         data.zeros.push(DataFamily::single(x.value()));
                     }
                 }
+            }
+            if alike(&texts) {
+                UNFIXED.with(|u| u.set(true));
             }
             let mut t = texts.join(", ");
             if any_family {
@@ -1965,7 +1994,9 @@ pub(super) fn features(
             let mut lines: Vec<(Num, AsymptoteSide)> = Vec::new();
             for h in v.iter().rev() {
                 let n = Num {
-                    exact: cx.tail_limit(h.side, h.y),
+                    exact: cx
+                        .tail_limit(h.side, h.y)
+                        .or_else(|| constant_tail(&cx, a, h.side, h.y)),
                     enc: h.y,
                 };
                 let side = match h.side {
@@ -2367,10 +2398,69 @@ fn points(
     (texts, data, was_cut)
 }
 
+/// The limit at ±∞ of an f proven constant on a piece reaching it: f at a
+/// whole number inside the piece, exactly (atan(x) + atan(1/x) → π/2, as
+/// its range says).
+fn constant_tail(cx: &Ctx<'_>, a: &Analysis, side: Tail, y: Enc) -> Option<Ex> {
+    let Row::Certified { value, .. } = &a.monotonicity else {
+        return None;
+    };
+    let m = value.iter().find(|m| {
+        m.dir == Dir::Constant
+            && match side {
+                Tail::Right => m.on.hi == Bound::PosInf,
+                Tail::Left => m.on.lo == Bound::NegInf,
+            }
+    })?;
+    let c = match (side, m.on.lo, m.on.hi) {
+        (Tail::Right, Bound::At { x, .. }, _) => x.hi.0.floor() + 1.0,
+        (Tail::Left, _, Bound::At { x, .. }) => x.lo.0.ceil() - 1.0,
+        (Tail::Right, _, _) => 1.0,
+        (Tail::Left, _, _) => -1.0,
+    };
+    if !(c.abs() < 1e15) {
+        return None;
+    }
+    let v = cx.eval(&cx.f, Ex::int(c as i128))?;
+    v.agrees(y.lo.0, y.hi.0).then_some(v)
+}
+
+/// `e` with each slider at its value, where that is a whole number (the
+/// rational form takes exact literals only; it is the value exact
+/// evaluation uses too).
+fn with_values(e: &Expr, vars: &dyn VariableValues) -> Expr {
+    let go = |a: &Expr| Box::new(with_values(a, vars));
+    match e {
+        Expr::Var(name) => {
+            let v = vars
+                .value(name)
+                .unwrap_or(crate::compile::DEFAULT_VARIABLE_VALUE);
+            if v == v.trunc() && v.abs() <= 9007199254740992.0 {
+                Expr::Num(v)
+            } else {
+                e.clone()
+            }
+        }
+        Expr::Neg(a) => Expr::Neg(go(a)),
+        Expr::Degrees(a) => Expr::Degrees(go(a)),
+        Expr::Bin(op, a, b) => Expr::Bin(*op, go(a), go(b)),
+        Expr::Call(f, args) => Expr::Call(*f, args.iter().map(|a| with_values(a, vars)).collect()),
+        _ => e.clone(),
+    }
+}
+
 /// `y = m·x + b` in the panel's style: `y = x + 1`, `y = −2x`,
 /// `y = x/2 − 3`.
 fn line_text(m: &Num, b: &Num) -> String {
-    let mx = match m.exact.and_then(Ex::rational) {
+    // (A slope enclosed by one double is that double: y = x − 3.14159,
+    // not y = 1x − 3.14159.)
+    let exact = m.exact.or_else(|| {
+        m.enc
+            .is_point()
+            .then(|| Q::from_f64(m.enc.lo.0).map(Ex::q))
+            .flatten()
+    });
+    let mx = match exact.and_then(Ex::rational) {
         Some(q) => {
             let (p, d) = (q.numer(), q.denom());
             let sign = if p < 0 { MINUS } else { "" };
