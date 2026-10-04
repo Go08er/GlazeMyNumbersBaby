@@ -26,6 +26,7 @@
 
 #![allow(dead_code)]
 
+pub mod algebra;
 pub mod claims;
 pub mod eval;
 pub mod exact;
@@ -443,6 +444,8 @@ pub struct Fx {
     pub unit: Unit,
     pub lits: Lits,
     pub vars: Vec<(String, f64)>,
+    /// Which of the certifier's trees are exactly f's.
+    pub verified: algebra::Verified,
 }
 
 impl Fx {
@@ -521,14 +524,24 @@ pub fn function(a: &Value) -> Result<Fx, String> {
             .collect(),
         _ => Vec::new(),
     };
+    let lits = Lits::of_with(&text, comma);
+    let verified = algebra::verify(
+        &f,
+        f_eval.as_ref(),
+        [d[0].as_ref(), d[1].as_ref()],
+        &lits,
+        &vars,
+        unit,
+    );
     Ok(Fx {
-        lits: Lits::of_with(&text, comma),
+        lits,
         source,
         f,
         f_eval,
         d,
         unit,
         vars,
+        verified,
     })
 }
 
@@ -595,6 +608,10 @@ pub struct Report {
     pub claims: Vec<ClaimResult>,
     pub rows: Vec<RowResult>,
     pub binding: Vec<String>,
+    /// The certifier's trees against f's: identical exactly, agreeing at
+    /// points, or (a problem) apart somewhere.
+    pub trees: Vec<String>,
+    pub tree_problems: Vec<String>,
 }
 
 impl Report {
@@ -613,10 +630,12 @@ impl Report {
             .collect()
     }
 
+    /// The rows' problems, and a certifier's tree shown wrong.
     pub fn row_problems(&self) -> Vec<String> {
         self.rows
             .iter()
             .flat_map(|r| r.problems.iter().map(move |p| format!("{}: {p}", r.name)))
+            .chain(self.tree_problems.iter().map(|p| format!("trees: {p}")))
             .collect()
     }
 }
@@ -630,6 +649,7 @@ pub fn replay(a: &Value) -> Result<Report, String> {
         ..Default::default()
     };
     rep.binding = binding(a)?;
+    trees(&fx, &mut rep);
     let mut rows_in = Vec::new();
     for name in ROWS {
         // (A row an older certifier didn't write is unknown.)
@@ -721,4 +741,73 @@ fn binding(a: &Value) -> Result<Vec<String>, String> {
         return Err("binding: sliders not a map".into());
     }
     Ok(out)
+}
+
+/// The certifier's trees (f's simplified form, f′'s and f″'s) against f:
+/// shown identical exactly ([`algebra`]), else compared at points where
+/// f is defined (and k times differentiable). Enclosures apart at a point
+/// prove the tree wrong there.
+fn trees(fx: &Fx, rep: &mut Report) {
+    use claims::{Subj, Tree};
+    let names = ["f's simplified form", "f′'s tree", "f″'s tree"];
+    let present = [fx.f_eval.is_some(), fx.d[0].is_some(), fx.d[1].is_some()];
+    let exact = [fx.verified.f, fx.verified.d[0], fx.verified.d[1]];
+    let mut xs: Vec<f64> = vec![0.0];
+    let mut t = 1.0 / 1024.0;
+    while t < 1e7 {
+        xs.push(t);
+        xs.push(-t * 1.37);
+        t *= 2.9;
+    }
+    for k in 0..3 {
+        if !present[k] {
+            continue;
+        }
+        if exact[k] {
+            rep.trees
+                .push(format!("{}: identical to f's exactly", names[k]));
+            continue;
+        }
+        // The tree for f⁽ᵏ⁾: f's simplified form differentiated k times
+        // (k = 0), or the certifier's derivative tree.
+        let tree_subj = if k == 0 {
+            Subj::new(fx, &Subject::F(0), Tree::Eval)
+        } else {
+            let mut s = Subj::new(fx, &Subject::F(k), Tree::Orig).expect("f");
+            s.e = fx.d[k - 1].clone().expect("present");
+            s.k = 0;
+            Some(s)
+        };
+        let Some(ts) = tree_subj else { continue };
+        let fs = Subj::new(fx, &Subject::F(k), Tree::Orig).expect("f");
+        let mut agree = 0;
+        iv::set_prec(160);
+        for &x in &xs {
+            let (a, valid) = fs.at(x);
+            let b = fx.series(&ts.e, x, x, ts.k)[ts.k].clone();
+            let b = if ts.k > 0 {
+                iv::mul(&b, &iv::Iv::of((1..=ts.k).product::<usize>() as f64))
+            } else {
+                b
+            };
+            if !valid || a.empty || !a.def || b.empty || !b.def {
+                continue;
+            }
+            if a.hi < b.lo || b.hi < a.lo {
+                rep.tree_problems.push(format!(
+                    "{} is wrong at x = {x:e}: f{} ∈ [{:e}, {:e}], the tree gives [{:e}, {:e}]",
+                    names[k],
+                    ["", "′", "″"][k],
+                    a.lo.to_f64(),
+                    a.hi.to_f64(),
+                    b.lo.to_f64(),
+                    b.hi.to_f64()
+                ));
+                break;
+            }
+            agree += 1;
+        }
+        rep.trees
+            .push(format!("{}: agrees with f's at {agree} points", names[k]));
+    }
 }

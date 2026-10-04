@@ -276,6 +276,8 @@ fn run(fs: Vec<(String, TrigUnit)>) -> Vec<String> {
     let mut known = Vec::new();
     let mut tally: BTreeMap<(&str, Class), usize> = BTreeMap::new();
     let mut certificates = 0;
+    // The certifier's trees: identical to f's exactly, or agreeing at points.
+    let mut tree_tally: BTreeMap<String, usize> = BTreeMap::new();
     let mut rows_checked = 0;
     let (mut cms, mut rms) = (0.0, 0.0);
     for (_, d) in &done {
@@ -294,6 +296,15 @@ fn run(fs: Vec<(String, TrigUnit)>) -> Vec<String> {
             }
         };
         certificates += 1;
+        for t in &r.trees {
+            let (what, how) = t.split_once(": ").unwrap_or((t, ""));
+            let how = if how.starts_with("identical") {
+                "identical exactly"
+            } else {
+                "agrees at points"
+            };
+            *tree_tally.entry(format!("{what}: {how}")).or_insert(0) += 1;
+        }
         // The certifier writes a binding: one missing is a failure.
         for b in &r.binding {
             if b.starts_with("missing") {
@@ -352,6 +363,9 @@ fn run(fs: Vec<(String, TrigUnit)>) -> Vec<String> {
         cms / 1e3,
         rms / 1e3
     );
+    for (t, n) in &tree_tally {
+        println!("  {t}: {n}");
+    }
     let kinds: Vec<&str> = {
         let mut k: Vec<&str> = tally.keys().map(|(k, _)| *k).collect();
         k.dedup();

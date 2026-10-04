@@ -174,6 +174,17 @@ pub struct Subj<'a> {
 }
 
 impl<'a> Subj<'a> {
+    /// The certifier's tree this subject is read from was shown identical
+    /// to the canonical one exactly ([`super::algebra`]).
+    pub fn verified(&self) -> bool {
+        match (self.tree, &self.of) {
+            (Tree::Orig, _) => true,
+            (Tree::Eval, Subject::F(k)) if *k > 0 && self.k == 0 => self.fx.verified.d[k - 1],
+            (Tree::Eval, Subject::F(_)) => self.fx.verified.f,
+            (Tree::Eval, Subject::G(..)) => false,
+        }
+    }
+
     pub fn new(fx: &'a Fx, of: &Subject, tree: Tree) -> Option<Subj<'a>> {
         let (e, k) = match of {
             Subject::F(k) => match tree {
@@ -358,6 +369,12 @@ fn by_trees(fx: &Fx, of: &Subject, mut f: impl FnMut(&Subj) -> V) -> Outcome {
             v => v,
         })
     {
+        if t.verified() {
+            return Outcome::new(
+                Class::Strong,
+                "on the certifier's tree, shown identical to f's exactly",
+            );
+        }
         return Outcome::new(Class::Weak, "on the certifier's tree");
     }
     Outcome::new(Class::Unconfirmed, why)
