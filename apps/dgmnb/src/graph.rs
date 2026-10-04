@@ -850,20 +850,22 @@ impl GraphPage {
         }
         self.busy = false;
         self.plot_cancel = None;
+        let heavy = plots.is_some() && ms >= INLINE_PLOT_MS;
         if let Some(plots) = plots {
             self.plot_ms = ms;
             self.plot_weight = self.pending_weight;
             self.plots = plots;
-            // A heavy plot's scratch (and the plots it replaced, just
-            // freed) stays in the allocator's per-thread arenas: hand it
-            // back, off this thread (it takes ~15 ms).
-            if ms >= INLINE_PLOT_MS {
-                release_free_memory();
-            }
         }
         if self.again {
             self.again = false;
             self.dirty = true;
+        } else if heavy {
+            // A heavy plot's scratch (and the plots it replaced, just
+            // freed) stays in the allocator's per-thread arenas: hand it
+            // back, off this thread (it takes ~15 ms), once no newer plot
+            // is wanted (a trim during a pan would contend with its
+            // allocations).
+            release_free_memory();
         }
         self.update_trace();
     }
