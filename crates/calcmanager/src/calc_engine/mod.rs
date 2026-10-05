@@ -26,9 +26,10 @@ use ratpack::{AngleType, CalcResult, NumberFormat, Rational, rational_math};
 
 use crate::calc_display::{CalcDisplayRef, HistoryDisplayRef};
 use crate::calc_input::CalcInput;
+use crate::calc_utils::{is_bin_op_code, is_digit_op_code};
 use crate::ccommand::*;
 use crate::engine_strings::*;
-use crate::expression_command::ExpressionCommand;
+use crate::expression_command::{ExpressionCommand, OpndCommand};
 use crate::history::{HistoryCollector, MAXPRECDEPTH};
 use crate::radix_type::RadixType;
 use crate::resource::ResourceProvider;
@@ -77,6 +78,28 @@ pub const NUM_WIDTH_LENGTH: usize = 4;
 thread_local! {
     /// `CCalcEngine::s_engineStrings` — the string table shared across all instances.
     static S_ENGINE_STRINGS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+}
+
+/// Extension: what a saved session needs, beyond
+/// [`CalcEngine::get_history_collector_commands_snapshot`], to continue a
+/// calculation as it would have (see [`CalcEngine::continuation`]).
+#[derive(Clone, Debug, Default)]
+pub struct Continuation {
+    /// The display shows a value those commands don't produce.
+    pub shown: Option<ShownValue>,
+    /// After `=`: the operator and right operand another `=` repeats.
+    pub repeat: Option<(i32, OpndCommand)>,
+}
+
+/// Extension: where a shown value (see [`Continuation::shown`]) came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShownValue {
+    /// A result, a recalled value or a constant: the next digit replaces it.
+    Result,
+    /// A typed number whose entry a command that isn't recorded ended
+    /// (F-E, MS, a radix switch): the next digit replaces it too, but the
+    /// last command is still the digit (`(` multiplies it).
+    EndedEntry,
 }
 
 /// `CCalcEngine`
@@ -401,6 +424,52 @@ impl CalcEngine {
             ));
         }
         commands
+    }
+
+    /// Extension: the state a saved session needs to continue as this one
+    /// would. The display commands cover the pending expression and an
+    /// operand being typed; they don't cover a value shown without being
+    /// recorded (MR, π, a result, a typed number ended by F-E or MS), nor
+    /// what another `=` repeats. Nothing in an error.
+    pub fn continuation(&self) -> Continuation {
+        if self.b_error {
+            return Continuation::default();
+        }
+        // The current value is pending (not yet in the history) and not
+        // being typed, and the last command neither started the expression
+        // over (C, `(`: 0) nor was an operator (whose operand is recorded).
+        let shown = (!self.b_record
+            && !self.history_collector.f_opnd_added_to_history()
+            && self.n_temp_com != 0
+            && !is_bin_op_code(self.n_temp_com))
+        .then(|| {
+            if is_digit_op_code(self.n_temp_com)
+                || self.n_temp_com == IDC_PNT
+                || self.n_temp_com == IDC_SIGN
+            {
+                ShownValue::EndedEntry
+            } else {
+                ShownValue::Result
+            }
+        });
+        let repeat = if !self.b_no_prev_equ && self.n_op_code != 0 {
+            self.get_string_for_display(&self.hold_val, self.radix)
+                .ok()
+                .map(|text| {
+                    let operand = self
+                        .history_collector
+                        .get_operand_commands_from_string_rat(&text, &self.hold_val);
+                    (self.n_op_code, operand)
+                })
+        } else {
+            None
+        };
+        Continuation { shown, repeat }
+    }
+
+    /// Extension: see `CalculatorManager::set_history_suppressed`.
+    pub fn set_history_suppressed(&mut self, suppressed: bool) {
+        self.history_collector.set_history_suppressed(suppressed);
     }
 
     pub fn change_precision(&mut self, precision: i32) {

@@ -1,6 +1,7 @@
 mod keymap;
 mod launch;
 mod pages;
+mod paste;
 mod prefs;
 mod settings;
 mod theme;

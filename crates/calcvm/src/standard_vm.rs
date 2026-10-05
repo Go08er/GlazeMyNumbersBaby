@@ -64,6 +64,8 @@ pub(crate) mod cmd {
     pub const A: i32 = 140;
     pub const F: i32 = 145;
     pub const MEMORY: i32 = 146;
+    /// `CommandSET_RESULT`: like MR, with the value already entered.
+    pub const SET_RESULT: i32 = 147;
     pub const MODE_SCIENTIFIC: i32 = 201;
     pub const QWORD: i32 = 317;
     pub const DWORD: i32 = 318;

@@ -314,6 +314,14 @@ impl Window {
         }
 
         this.install_keyboard();
+        // Text fields paste through the bounded reader too (crate::paste);
+        // pages, rows and dialogs guard their fields as they make them, and
+        // a field that takes the focus is guarded if it wasn't.
+        win.connect_focus_widget_notify(|win| {
+            if let Some(focus) = gtk::prelude::GtkWindowExt::focus(win) {
+                crate::paste::guard(&focus);
+            }
+        });
         {
             let weak = Rc::downgrade(&this);
             let paste = gtk::gio::SimpleAction::new("paste", None);
@@ -360,6 +368,7 @@ impl Window {
         if self.win.content().is_none() {
             self.win.set_content(Some(&self.ctx.aurora));
         }
+        crate::paste::guard(&self.win);
     }
 
     pub fn ctx(&self) -> &Rc<Ctx> {
@@ -412,6 +421,7 @@ impl Window {
             PageKind::Graphing => pages::graphing::GraphingPage::handle(self.ctx.clone()),
         };
         self.stack.add_named(&page.widget(), Some(kind.key()));
+        crate::paste::guard(&page.widget());
         self.pages.borrow_mut().insert(kind, page.clone());
         page
     }
@@ -507,35 +517,14 @@ impl Window {
         let Some(display) = gdk::Display::default() else {
             return;
         };
-        // Every page's own limit is far below this (an equation is at most
-        // 1000 characters); a longer clipboard is cut here, while reading,
-        // instead of being read whole first.
-        const MAX_PASTE_BYTES: usize = 64 * 1024;
         let weak = Rc::downgrade(self);
         let clipboard = display.clipboard();
         glib::spawn_future_local(async move {
-            let Ok((stream, _)) = clipboard
-                .read_future(
-                    &["text/plain;charset=utf-8", "text/plain"],
-                    glib::Priority::DEFAULT,
-                )
-                .await
-            else {
+            let Some(text) = crate::paste::read_text(&clipboard).await else {
                 return;
             };
-            let mut bytes = Vec::new();
-            while bytes.len() <= MAX_PASTE_BYTES {
-                match stream
-                    .read_bytes_future(MAX_PASTE_BYTES + 1 - bytes.len(), glib::Priority::DEFAULT)
-                    .await
-                {
-                    Ok(chunk) if !chunk.is_empty() => bytes.extend_from_slice(&chunk),
-                    _ => break,
-                }
-            }
-            let _ = stream.close_future(glib::Priority::DEFAULT).await;
             if let Some(w) = weak.upgrade() {
-                w.current_page().paste(&String::from_utf8_lossy(&bytes));
+                w.current_page().paste(&text);
             }
         });
     }

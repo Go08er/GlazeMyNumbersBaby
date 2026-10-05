@@ -603,14 +603,20 @@ fn round_trip_after_equals_and_continue() {
     assert_eq!(vm.expression(), "7 × 6=");
     let mut restored = round_trip(&vm);
     assert_eq!(restored.display_value(), "42");
-    // Like a recalled history item, the expression is loaded into the engine
-    // ("7 × 6" pending), so "=" evaluates it.
-    restored.press(B::Equals);
-    assert_eq!(restored.display_value(), "42");
-    restored.press(B::Add);
-    restored.press(B::One);
-    restored.press(B::Equals);
-    assert_eq!(restored.display_value(), "43");
+    assert_eq!(restored.expression(), "7 × 6=");
+    // As without the restore, "=" repeats "× 6" (upstream loads the
+    // expression like a recalled history item, "7 × 6" pending, so "="
+    // evaluated it again: 42).
+    for vm in [&mut vm, &mut restored] {
+        vm.press(B::Equals);
+        assert_eq!(vm.display_value(), "252");
+        assert_eq!(vm.expression(), "42 × 6=");
+        vm.press(B::Add);
+        vm.press(B::One);
+        vm.press(B::Equals);
+        assert_eq!(vm.display_value(), "253");
+    }
+    assert_eq!(restored.history(), vm.history());
 }
 
 #[test]

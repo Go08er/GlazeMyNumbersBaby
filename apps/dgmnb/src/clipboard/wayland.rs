@@ -18,7 +18,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use sctk::data_device_manager::data_device::{DataDevice, DataDeviceHandler};
+use sctk::data_device_manager::data_device::{DataDevice, DataDeviceData, DataDeviceHandler};
 use sctk::data_device_manager::data_offer::{DataOfferHandler, DragOffer};
 use sctk::data_device_manager::data_source::{CopyPasteSource, DataSourceHandler};
 use sctk::data_device_manager::{DataDeviceManagerState, WritePipe};
@@ -86,6 +86,112 @@ fn transfer(job: impl FnOnce() + Send + 'static) {
 
 /// Data on offer: (MIME type, bytes).
 type Offers = Vec<(String, Arc<[u8]>)>;
+
+/// Sources kept on offer at most. A compositor may reject a source without
+/// saying so (weston, for one set with a serial no newer than the current
+/// selection's), and never cancels it.
+const MAX_SOURCES: usize = 4;
+
+/// Start of the private MIME type each source also offers, naming it, so a
+/// selection the compositor announces can be told to be that source (an
+/// offer carries no other trace of where it came from).
+const TAG_PREFIX: &str = "application/x-dgmnb-copy-";
+
+/// A source we've put on the clipboard.
+struct Kept<S, K> {
+    source: S,
+    offers: Offers,
+    /// The seat whose selection it was set as, with this serial.
+    seat: K,
+    serial: u32,
+    /// Its private MIME type (see [`TAG_PREFIX`]).
+    tag: String,
+    /// The compositor announced it as the seat's selection, and nothing
+    /// replaced it since.
+    live: bool,
+}
+
+/// What we've put on the clipboard, oldest first: each source with its data,
+/// so a request is answered from the source it names.
+///
+/// The newest isn't assumed to be the selection: the compositor may have
+/// rejected it (a stale serial). A source is known to be the selection once
+/// the compositor announces a selection offering its tag (it does to the
+/// focused client, and to a client that gets the focus).
+struct Sources<S, K> {
+    kept: Vec<Kept<S, K>>,
+}
+
+impl<S, K: PartialEq> Sources<S, K> {
+    fn new() -> Self {
+        Sources { kept: Vec::new() }
+    }
+
+    /// Whether setting `offers` as `seat`'s selection with `serial` could
+    /// change anything. Not if a source with them is the selection, nor if
+    /// one was set with the same serial: that got the answer this would.
+    /// (A held Ctrl+C repeats with the serial of the press.)
+    fn wants(&self, offers: &Offers, seat: &K, serial: u32) -> bool {
+        !self
+            .kept
+            .iter()
+            .any(|k| k.offers == *offers && k.seat == *seat && (k.live || k.serial == serial))
+    }
+
+    /// Keeps a source just set as the selection. Returns those let go to
+    /// stay within [`MAX_SOURCES`] (dropping a source destroys it): the
+    /// oldest, but not one known to be a selection.
+    fn push(&mut self, kept: Kept<S, K>) -> Vec<S> {
+        self.kept.push(kept);
+        let mut gone = Vec::new();
+        while self.kept.len() > MAX_SOURCES {
+            let i = self.kept.iter().position(|k| !k.live).unwrap_or(0);
+            gone.push(self.kept.remove(i).source);
+        }
+        gone
+    }
+
+    /// The compositor announced `seat`'s selection, offering `mimes`. If it
+    /// is one of ours, the ones set on that seat before it were replaced or
+    /// rejected (the compositor handled their requests first), and are let
+    /// go. Returns those.
+    fn selection(&mut self, seat: &K, mimes: &[String]) -> Vec<S> {
+        let current = self
+            .kept
+            .iter()
+            .position(|k| k.seat == *seat && mimes.contains(&k.tag));
+        let mut gone = Vec::new();
+        for (i, k) in std::mem::take(&mut self.kept).into_iter().enumerate() {
+            match current {
+                _ if k.seat != *seat => self.kept.push(k),
+                Some(c) if i < c => gone.push(k.source),
+                _ => self.kept.push(Kept {
+                    live: current == Some(i),
+                    ..k
+                }),
+            }
+        }
+        gone
+    }
+
+    /// Lets go of the source `is` picks (the compositor cancelled it).
+    fn cancelled(&mut self, is: impl Fn(&S) -> bool) -> Vec<S> {
+        let (gone, kept) = std::mem::take(&mut self.kept)
+            .into_iter()
+            .partition(|k| is(&k.source));
+        self.kept = kept;
+        gone.into_iter().map(|k| k.source).collect()
+    }
+
+    /// The data `source` offers as `mime`.
+    fn data(&self, is: impl Fn(&S) -> bool, mime: &str) -> Option<Arc<[u8]>> {
+        self.kept
+            .iter()
+            .find(|k| is(&k.source))
+            .and_then(|k| k.offers.iter().find(|o| o.0 == mime))
+            .map(|o| o.1.clone())
+    }
+}
 
 enum Command {
     Store(Offers),
@@ -220,9 +326,9 @@ struct State {
     seats: HashMap<ObjectId, SeatData>,
     latest: Option<ObjectId>,
     qh: QueueHandle<State>,
-    /// What we've put on the clipboard: each source with its data, so a
-    /// request is answered from the source it names.
-    sources: Vec<(CopyPasteSource, Offers)>,
+    sources: Sources<CopyPasteSource, ObjectId>,
+    /// Sources made so far (numbers their tags).
+    made: u64,
     exit: bool,
 }
 
@@ -242,7 +348,8 @@ impl State {
             seats,
             latest: None,
             qh: qh.clone(),
-            sources: Vec::new(),
+            sources: Sources::new(),
+            made: 0,
             exit: false,
         })
     }
@@ -251,32 +358,36 @@ impl State {
         self.seats.get(self.latest.as_ref()?)
     }
 
-    /// Puts `offers` on the clipboard. Copying what our newest source still
-    /// offers (a held Ctrl+C repeats) changes nothing, and older sources are
-    /// let go past a few: a compositor that doesn't cancel a source set
-    /// again with the same serial (weston) would otherwise keep them all.
+    /// Puts `offers` on the clipboard, unless that can't change anything
+    /// (see [`Sources::wants`]).
     fn store(&mut self, offers: Offers) {
-        const MAX_SOURCES: usize = 4;
-        if self
-            .sources
-            .last()
-            .is_some_and(|(_, newest)| *newest == offers)
-        {
+        let Some(seat_id) = self.latest.clone() else {
             return;
-        }
-        let Some(seat) = self.seat() else { return };
+        };
+        let Some(seat) = self.seats.get(&seat_id) else {
+            return;
+        };
         let (Some(device), serial) = (seat.device.as_ref(), seat.serial) else {
             return;
         };
-        let source = self
-            .manager
-            .create_copy_paste_source(&self.qh, offers.iter().map(|o| o.0.clone()));
-        source.set_selection(device, serial);
-        self.sources.push((source, offers));
-        if self.sources.len() > MAX_SOURCES {
-            // Dropping a source destroys it.
-            self.sources.drain(..self.sources.len() - MAX_SOURCES);
+        if !self.sources.wants(&offers, &seat_id, serial) {
+            return;
         }
+        self.made += 1;
+        let tag = format!("{TAG_PREFIX}{}-{}", std::process::id(), self.made);
+        let source = self.manager.create_copy_paste_source(
+            &self.qh,
+            offers.iter().map(|o| o.0.clone()).chain([tag.clone()]),
+        );
+        source.set_selection(device, serial);
+        drop(self.sources.push(Kept {
+            source,
+            offers,
+            seat: seat_id,
+            serial,
+            tag,
+            live: false,
+        }));
     }
 
     fn load_text(&mut self, reply: Sender<Option<String>>) {
@@ -313,12 +424,7 @@ impl State {
     }
 
     fn send(&mut self, source: &WlDataSource, mime: String, pipe: WritePipe) {
-        let data = self
-            .sources
-            .iter()
-            .find(|(s, _)| s.inner() == source)
-            .and_then(|(_, offers)| offers.iter().find(|o| o.0 == mime))
-            .map(|o| o.1.clone());
+        let data = self.sources.data(|s| s.inner() == source, &mime);
         let Some(data) = data else {
             return; // dropping the pipe tells the reader there's nothing
         };
@@ -463,7 +569,16 @@ impl DataDeviceHandler for State {
     }
     fn leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {}
     fn motion(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice, _: f64, _: f64) {}
-    fn selection(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {}
+    fn selection(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice) {
+        let Some(data) = device.data::<DataDeviceData>() else {
+            return;
+        };
+        let mimes = data
+            .selection_offer()
+            .map(|offer| offer.with_mime_types(<[String]>::to_vec))
+            .unwrap_or_default();
+        drop(self.sources.selection(&data.seat().id(), &mimes));
+    }
     fn drop_performed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {}
 }
 
@@ -487,7 +602,7 @@ impl DataSourceHandler for State {
         self.send(source, mime, pipe);
     }
     fn cancelled(&mut self, _: &Connection, _: &QueueHandle<Self>, source: &WlDataSource) {
-        self.sources.retain(|(s, _)| s.inner() != source);
+        drop(self.sources.cancelled(|s| s.inner() == source));
     }
     fn dnd_dropped(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {}
     fn dnd_finished(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {}
@@ -539,6 +654,88 @@ impl Drop for Clipboard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn kept(source: u32, text: &str, seat: u8, serial: u32) -> Kept<u32, u8> {
+        Kept {
+            source,
+            offers: vec![("text/plain".into(), Arc::from(text.as_bytes()))],
+            seat,
+            serial,
+            tag: format!("{TAG_PREFIX}{source}"),
+            live: false,
+        }
+    }
+
+    fn offers(text: &str) -> Offers {
+        vec![("text/plain".into(), Arc::from(text.as_bytes()))]
+    }
+
+    fn sources(s: &Sources<u32, u8>) -> Vec<(u32, bool)> {
+        s.kept.iter().map(|k| (k.source, k.live)).collect()
+    }
+
+    /// Review 12, question 2: the newest source may have been rejected (a
+    /// stale serial), so copying the same text again with a new serial must
+    /// set it again; with the same serial it would be rejected again.
+    #[test]
+    fn copying_again_after_a_rejection_sets_the_selection() {
+        let mut s = Sources::new();
+        assert!(s.wants(&offers("5"), &0, 7));
+        drop(s.push(kept(1, "5", 0, 7)));
+        // Nothing confirmed it.
+        assert!(!s.wants(&offers("5"), &0, 7));
+        assert!(s.wants(&offers("5"), &0, 8));
+        assert!(s.wants(&offers("5"), &1, 7));
+        assert!(s.wants(&offers("6"), &0, 7));
+        // Once it is the selection, the same text is already there.
+        drop(s.selection(&0, &["text/plain".into(), format!("{TAG_PREFIX}1")]));
+        assert!(!s.wants(&offers("5"), &0, 8));
+        assert!(s.wants(&offers("6"), &0, 8));
+        // Another client's selection: ours isn't the selection any more.
+        drop(s.selection(&0, &["text/plain".into()]));
+        assert!(s.wants(&offers("5"), &0, 9));
+    }
+
+    /// Past four sources the oldest are let go, but never the one the
+    /// compositor confirmed: newer ones may all have been rejected.
+    #[test]
+    fn the_selection_outlives_rejected_sources() {
+        let mut s = Sources::new();
+        drop(s.push(kept(1, "a", 0, 5)));
+        assert!(s.selection(&0, &[format!("{TAG_PREFIX}1")]).is_empty());
+        // Rejected (weston: the same serial), never cancelled.
+        let mut gone = Vec::new();
+        for (source, text) in [(2, "b"), (3, "c"), (4, "d"), (5, "e"), (6, "f")] {
+            gone.extend(s.push(kept(source, text, 0, 5)));
+        }
+        assert_eq!(gone, [2, 3]);
+        assert_eq!(sources(&s), [(1, true), (4, false), (5, false), (6, false)]);
+        // A newer source confirmed: the ones set before it were replaced or
+        // rejected.
+        assert_eq!(s.selection(&0, &[format!("{TAG_PREFIX}5")]), [1, 4]);
+        assert_eq!(sources(&s), [(5, true), (6, false)]);
+        // Cancelled sources go.
+        assert_eq!(s.cancelled(|&x| x == 5), [5]);
+        assert_eq!(sources(&s), [(6, false)]);
+        assert_eq!(
+            s.data(|&x| x == 6, "text/plain").as_deref(),
+            Some(&b"f"[..])
+        );
+        assert_eq!(s.data(|&x| x == 6, &format!("{TAG_PREFIX}6")), None);
+    }
+
+    /// Each seat has its own selection.
+    #[test]
+    fn seats_keep_their_own_selections() {
+        let mut s = Sources::new();
+        drop(s.push(kept(1, "a", 0, 5)));
+        drop(s.push(kept(2, "b", 1, 6)));
+        drop(s.push(kept(3, "c", 0, 7)));
+        assert_eq!(s.selection(&0, &[format!("{TAG_PREFIX}3")]), [1]);
+        assert_eq!(sources(&s), [(2, false), (3, true)]);
+        assert!(s.selection(&1, &[format!("{TAG_PREFIX}2")]).is_empty());
+        assert_eq!(sources(&s), [(2, true), (3, true)]);
+    }
 
     fn clipboard_threads() -> usize {
         std::fs::read_dir("/proc/self/task")
