@@ -5,9 +5,17 @@
 //! each size before fetching, treats INCR size hints as untrusted, caps the
 //! total and gives up after a deadline, whatever the owner or other clients
 //! do. Text past the cap is refused or cut ([`Overflow`]); either way no more
-//! than the cap (rounded up to whole 32-bit words) is ever transferred to
-//! this client or allocated for it: every property read asks the X server
-//! for at most what is still allowed.
+//! than the cap (rounded up to whole 32-bit words) of the selection's raw
+//! transfer is ever sent to this client or allocated for it: every property
+//! read asks the X server for at most what is still allowed.
+//!
+//! The other buffers have bounds of their own. The list of formats offered
+//! (TARGETS) is read under a separate cap of 64 KiB. Decoding makes text from
+//! the raw bytes that can be larger than them (Latin-1 doubles in UTF-8, and
+//! an invalid UTF-8 byte becomes a three-byte replacement character) and
+//! copies it once more to turn CRLF into LF, so a read briefly holds a few
+//! times the cap; with [`Overflow::Cut`] what it returns is cut back to the
+//! cap.
 //!
 //! An incremental (INCR) transfer stopped early is abandoned by
 //! [`read_text`], its window destroyed. Some owners serve one transfer at a
