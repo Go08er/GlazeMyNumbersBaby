@@ -300,19 +300,22 @@ CI also runs checks that need more than `cargo test --workspace`:
   periodicity and monotonicity) rather than "none". Numbers are exact
   (`√2`, `π/2 + kπ`, `−9/4`) only when exact arithmetic confirms them;
   otherwise they get as many significant digits as the proof fixes, from
-  three to six (large values too: never more than six), marked "≈"
-  because they aren't exact; a value the proof fixes to fewer than three
-  digits leaves its row unknown. This is more conservative than Windows'
-  symbolic engine: functions it can't prove (some poles and far features)
-  get fewer answers.
+  three to six (written m×10ⁿ from 10⁶), marked "≈" because they aren't
+  exact; two different numbers of a row that would read alike get up to
+  fifteen, to tell them apart, and a value the proof fixes to fewer than
+  three digits leaves its row unknown. A number typed in an equation is
+  the decimal typed (`0.1` is one tenth, not the double nearest it), for
+  the curve drawn, its trace and its analysis alike. This is more
+  conservative than Windows' symbolic engine: functions it can't prove
+  (some poles and far features) get fewer answers.
   Windows-parity of the analysis is not claimed; the conventions it
   follows where Windows' choice isn't known are in
   [docs/ti-conventions.md](docs/ti-conventions.md).
-- **Explicit curves are joined only where that is proven, within a work
-  budget.** Two plotted points of y = f(x) are joined only when interval
-  arithmetic proves f defined and continuous between them and the line
-  between them within about a pixel of the curve; elsewhere the sampler
-  subdivides, and leaves a gap where it can't prove that down to a
+- **Explicit curves: joins are proven until a work budget runs out.**
+  Within the budget, two plotted points of y = f(x) are joined only when
+  interval arithmetic proves f defined and continuous between them and the
+  line between them within about a pixel of the curve; elsewhere the
+  sampler subdivides, and leaves a gap where it can't prove that down to a
   hundred-thousandth of a pixel: at poles (`tan x`, `1/x`), jumps (`floor
   x`) and domain edges (`√x`). Spikes and oscillations narrower than a
   pixel (`sin(1/x)` near 0) are drawn through their true extremes. A
@@ -321,24 +324,30 @@ CI also runs checks that need more than `cargo test --workspace`:
   isn't a double (`tan x·cos x` at π/2) can't be proven undefined at any
   double, so it isn't marked: its gap is far narrower than a pixel. A
   circle needs f proven undefined at a number in a gap far narrower than a
-  pixel, proven defined on both sides, and meeting itself across it (a
-  pole of `x!` is never one). A pixel column with more poles than a pixel
-  shows (`tan 100x` at ±1000) is drawn as a stroke down the column, joined
-  to neither side. Each curve has a fixed work budget, counted rather than
-  timed (the same view draws the same on any machine), spent on the breaks
-  first and the shapes second. Where it runs out (very long or wildly
-  oscillating functions), the rest is drawn coarser: continuous parts are
-  still joined only where proven, undecided ones only where sampling finds
-  no jump, but chords there may stray from the curve by more than a pixel.
-  The plot is then flagged as having missing data (the apps don't show
-  that yet); so it is where the shape of a piece under a pixel wide can't
-  be bounded, as in the pixel beside a removable hole (`x/x` next to its
-  circle: the enclosure of x/x there doesn't know the two x are one),
-  which is joined as proven continuous through point samples. The boundary
-  of an explicit inequality (`y < tan x`) is drawn the same way, but
-  implicit plots and inequality regions are unchanged in 0.2: still
-  sampled in floating point (a certified plotter for them is planned for
-  0.3).
+  pixel, proven defined on both sides, and its enclosures on the two sides
+  closing in on one value as they near the gap. That is a check, not a
+  proof that the two limits are equal: a jump smaller than the enclosures
+  can resolve may still get a circle (a pole of `x!` never does). No point
+  is drawn or traced more than a quarter pixel outside f's enclosure at
+  its x: where the evaluated value falls outside a wider enclosure, the
+  curve breaks there (dense-pole columns and what's drawn past the budget
+  aren't checked, and are flagged as missing data). A pixel column with
+  more poles than a pixel shows (`tan 100x` at ±1000) is drawn as a stroke
+  down the column, joined to neither side. Each curve has a fixed work
+  budget, counted rather than timed (the same view draws the same on any
+  machine), spent on the breaks first and the shapes second. Where it runs
+  out (very long or wildly oscillating functions), the rest is drawn
+  coarser: continuous parts are still joined only where proven, undecided
+  ones only where sampling finds no jump, but chords there may stray from
+  the curve by more than a pixel. The plot is then flagged as having
+  missing data (the apps don't show that yet); so it is where the shape of
+  a piece under a pixel wide can't be bounded, as in the pixel beside a
+  removable hole (`x/x` next to its circle: the enclosure of x/x there
+  doesn't know the two x are one), which is joined as proven continuous
+  through point samples. The boundary of an explicit inequality (`y < tan
+  x`) is drawn the same way, but implicit plots and inequality regions are
+  unchanged in 0.2: still sampled in floating point (a certified plotter
+  for them is planned for 0.3).
 - **Tracing shows only what is determined.** On y = f(x) the traced x is
   the decimal shown, and y comes from f's interval enclosure there, to the
   digits it fixes: the view's precision, as in Windows; up to three more
