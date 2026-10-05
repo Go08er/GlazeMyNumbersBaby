@@ -208,6 +208,12 @@ enum Asy {
     Mid(i32, Option<Term>),
     /// Bounded within the interval, no limit known.
     Bounded(Interval),
+    /// The term (with k = 0) times e^R, R → ±∞ (the sign) more slowly
+    /// than ln x but faster than ln ln x: e^(ln x + √(ln x)) is x·e^√(ln x).
+    /// The factor e^R is x^o(1), so the power decides against other
+    /// powers; against the same power it is beyond (or below) every power
+    /// of ln x.
+    Slow(Term, i32),
     Unknown,
 }
 
@@ -257,9 +263,19 @@ impl Cx<'_> {
     }
 }
 
+/// Where a [`Asy::Slow`] goes: 1 to ±∞, −1 to 0 (its term's power
+/// decides, else the factor's sign).
+fn slow_growth(t: &Term, s: i32) -> i32 {
+    match t.p.signum() {
+        0 => s,
+        p => p,
+    }
+}
+
 fn neg(a: Asy) -> Asy {
     match a {
         Asy::Term(t) => Asy::Term(Term { c: t.c.neg(), ..t }),
+        Asy::Slow(t, s) => Asy::Slow(Term { c: t.c.neg(), ..t }, s),
         Asy::Huge(s) => Asy::Huge(-s),
         Asy::Mid(s, g) => Asy::Mid(-s, g),
         Asy::Bounded(i) => Asy::Bounded(-i),
@@ -329,6 +345,32 @@ fn add(a: Asy, b: Asy) -> Asy {
             }
         }
         (Small, Small) => Small,
+        // x^p·e^R, R = o(ln x): beyond every power of ln x but below every
+        // power of x (a Mid, beyond every power, outgrows it).
+        (Mid(s, g), Slow(..)) | (Slow(..), Mid(s, g)) => Mid(s, g),
+        (Slow(t, s), Term(u)) | (Term(u), Slow(t, s)) => match u.k.signum() {
+            1 => Term(u),
+            -1 => Slow(t, s),
+            _ => match u.p.cmp(&t.p) {
+                std::cmp::Ordering::Greater => Term(u),
+                std::cmp::Ordering::Less => Slow(t, s),
+                std::cmp::Ordering::Equal if s > 0 => Slow(t, s),
+                std::cmp::Ordering::Equal => Term(u),
+            },
+        },
+        (Slow(t, s), Small) | (Small, Slow(t, s)) => {
+            if slow_growth(&t, s) > 0 {
+                Slow(t, s)
+            } else {
+                Small
+            }
+        }
+        (Slow(t, s), Bounded(_)) | (Bounded(_), Slow(t, s)) if slow_growth(&t, s) > 0 => Slow(t, s),
+        (Slow(t, s), Slow(u, r)) => match t.p.cmp(&u.p) {
+            std::cmp::Ordering::Greater => Slow(t, s),
+            std::cmp::Ordering::Less => Slow(u, r),
+            std::cmp::Ordering::Equal => Unknown,
+        },
         _ => Unknown,
     }
 }
@@ -371,6 +413,38 @@ fn mul(a: Asy, b: Asy) -> Asy {
             }
         }
         (Small, Small) | (Small, Bounded(_)) | (Bounded(_), Small) => Small,
+        // Times a power (k = 0): the same factor e^R.
+        (Slow(t, s), Term(u)) | (Term(u), Slow(t, s)) if u.k.is_zero() => {
+            match (t.c.mul(u.c), t.p.add(u.p), t.m.add(u.m)) {
+                (Some(c), Some(p), Some(m)) => Slow(
+                    self::Term {
+                        c,
+                        k: Q::ZERO,
+                        p,
+                        m,
+                    },
+                    s,
+                ),
+                _ => Unknown,
+            }
+        }
+        (Slow(t, s), Slow(u, r)) if s == r => match (t.c.mul(u.c), t.p.add(u.p), t.m.add(u.m)) {
+            (Some(c), Some(p), Some(m)) => Slow(
+                self::Term {
+                    c,
+                    k: Q::ZERO,
+                    p,
+                    m,
+                },
+                s,
+            ),
+            _ => Unknown,
+        },
+        (Slow(t, s), Small | Bounded(_)) | (Small | Bounded(_), Slow(t, s))
+            if slow_growth(&t, s) < 0 =>
+        {
+            Small
+        }
         _ => Unknown,
     }
 }
@@ -379,6 +453,18 @@ fn recip(a: Asy) -> Asy {
     match a {
         Asy::Term(t) => match (t.c.recip(), t.k.neg(), t.p.neg(), t.m.neg()) {
             (Some(c), Some(k), Some(p), Some(m)) => Asy::Term(Term { c, k, p, m }),
+            _ => Asy::Unknown,
+        },
+        Asy::Slow(t, s) => match (t.c.recip(), t.p.neg(), t.m.neg()) {
+            (Some(c), Some(p), Some(m)) => Asy::Slow(
+                Term {
+                    c,
+                    k: Q::ZERO,
+                    p,
+                    m,
+                },
+                -s,
+            ),
             _ => Asy::Unknown,
         },
         Asy::Huge(_) | Asy::Mid(..) => Asy::Small,
@@ -398,6 +484,18 @@ fn pow(a: Asy, r: Q) -> Asy {
         }
         Asy::Term(t) => match (t.c.pow(r), t.k.mul(r), t.p.mul(r), t.m.mul(r)) {
             (Some(c), Some(k), Some(p), Some(m)) => Asy::Term(Term { c, k, p, m }),
+            _ => Asy::Unknown,
+        },
+        Asy::Slow(t, s) if r.signum() != 0 => match (t.c.pow(r), t.p.mul(r), t.m.mul(r)) {
+            (Some(c), Some(p), Some(m)) => Asy::Slow(
+                Term {
+                    c,
+                    k: Q::ZERO,
+                    p,
+                    m,
+                },
+                s * r.signum(),
+            ),
             _ => Asy::Unknown,
         },
         Asy::Small if r.signum() > 0 => Asy::Small,
@@ -450,7 +548,139 @@ fn exp_of(a: Asy) -> Asy {
         Asy::Mid(s, _) if s > 0 => Asy::Huge(1),
         Asy::Mid(..) => Asy::Small,
         Asy::Bounded(i) => Asy::Bounded(elem::exp(&DecInterval::new(i)).iv),
-        Asy::Unknown => Asy::Unknown,
+        Asy::Slow(..) | Asy::Unknown => Asy::Unknown,
+    }
+}
+
+/// e^(c·ln x + R) = x^c·e^R for a rational c ≠ 0, where `rest` is R
+/// ([`log_part`]): the factor e^R needs R's limit, not just R's scale
+/// against ln x (review 13, R13-L-01: e^(ln x + 1)/x was 1, not e). R → L
+/// gives e^L (1 for L = 0); R → ±∞ more slowly than ln x a factor beyond
+/// or below every power of ln x ([`Asy::Slow`]); R with no limit, or of
+/// ln x's own scale (not separated exactly), nothing. An R that outgrows
+/// ln x leads the exponent itself.
+fn exp_log(c: Q, rest: Asy) -> Asy {
+    use std::cmp::Ordering::*;
+    let one = Coef::Exact(PiQ { q: Q::ONE, k: 0 });
+    let power = |coef: Coef| {
+        Asy::Term(Term {
+            c: coef,
+            k: Q::ZERO,
+            p: c,
+            m: Q::ZERO,
+        })
+    };
+    let ln_x = Term {
+        c: one,
+        k: Q::ZERO,
+        p: Q::ZERO,
+        m: Q::ONE,
+    };
+    match rest {
+        Asy::Zero | Asy::Small => power(one),
+        Asy::Term(t) => match t.scale_cmp(&ln_x) {
+            Greater => exp_of(rest),
+            Equal => Asy::Unknown,
+            Less => match t.growth() {
+                g if g < 0 => power(one),
+                0 => {
+                    let e = elem::exp(&DecInterval::new(t.c.interval())).iv;
+                    Coef::approx(e).map_or(Asy::Unknown, power)
+                }
+                _ => match t.c.sign() {
+                    Some(s) => match power(one) {
+                        Asy::Term(p) => Asy::Slow(p, s),
+                        _ => unreachable!(),
+                    },
+                    None => Asy::Unknown,
+                },
+            },
+        },
+        Asy::Huge(_) | Asy::Mid(..) => exp_of(rest),
+        Asy::Bounded(_) | Asy::Slow(..) | Asy::Unknown => Asy::Unknown,
+    }
+}
+
+/// `e` as c·ln x + R, c rational, with R's asymptotic class: the
+/// logarithms of x taken out exactly where `e` is a sum of multiples of
+/// ln(u) with u ~ a·x^p (ln(u) = p·ln x + ln a + o(1)); anything else is
+/// all R (c = 0), so a logarithm hidden in it (ln(x)·(1 + 1/x), log x)
+/// leaves R of ln x's own scale.
+fn log_part(e: &Expr, cx: &Cx<'_>) -> (Q, Asy) {
+    let generic = || (Q::ZERO, asy(e, cx));
+    if !e.contains_x() {
+        return (Q::ZERO, cx.constant(e));
+    }
+    // A rational constant factor (the coefficient of c·ln x).
+    let rational = |k: &Expr| -> Option<Q> {
+        if k.contains_x() {
+            return None;
+        }
+        exact_constant(k, cx.lits).filter(|v| v.k == 0).map(|v| v.q)
+    };
+    let scaled = |(c, r): (Q, Asy), k: Q| -> Option<(Q, Asy)> {
+        let c = c.mul(k)?;
+        let r = if k.is_zero() {
+            Asy::Zero
+        } else {
+            mul(
+                r,
+                Asy::Term(Term::constant(Coef::Exact(PiQ { q: k, k: 0 }))),
+            )
+        };
+        Some((c, r))
+    };
+    match e {
+        Expr::Neg(a) => {
+            let (c, r) = log_part(a, cx);
+            match c.neg() {
+                Some(c) => (c, neg(r)),
+                None => generic(),
+            }
+        }
+        Expr::Bin(op @ (BinOp::Add | BinOp::Sub), a, b) => {
+            let (c1, r1) = log_part(a, cx);
+            let (c2, r2) = log_part(b, cx);
+            let (c, r2) = if *op == BinOp::Add {
+                (c1.add(c2), r2)
+            } else {
+                (c2.neg().and_then(|c2| c1.add(c2)), neg(r2))
+            };
+            match c {
+                Some(c) => (c, add(r1, r2)),
+                None => generic(),
+            }
+        }
+        Expr::Bin(BinOp::Mul, a, b) => {
+            let split = match (rational(a), rational(b)) {
+                (Some(k), _) => scaled(log_part(b, cx), k),
+                (_, Some(k)) => scaled(log_part(a, cx), k),
+                _ => None,
+            };
+            split.unwrap_or_else(generic)
+        }
+        Expr::Bin(BinOp::Div, a, b) => rational(b)
+            .filter(|k| !k.is_zero())
+            .and_then(|k| k.recip())
+            .and_then(|k| scaled(log_part(a, cx), k))
+            .unwrap_or_else(generic),
+        Expr::Call(Func::Ln, args) => match asy(&args[0], cx) {
+            // ln(a·x^p·(1 + o(1))) = p·ln x + ln a + o(1).
+            Asy::Term(t)
+                if t.c.sign() == Some(1) && t.k.is_zero() && t.m.is_zero() && !t.p.is_zero() =>
+            {
+                let ln_a = match t.c {
+                    Coef::Exact(v) if v.k == 0 && v.q == Q::ONE => Asy::Small,
+                    c => {
+                        let i = elem::ln(&DecInterval::new(c.interval())).iv;
+                        Coef::approx(i).map_or(Asy::Unknown, |c| Asy::Term(Term::constant(c)))
+                    }
+                };
+                (t.p, ln_a)
+            }
+            _ => generic(),
+        },
+        _ => generic(),
     }
 }
 
@@ -506,21 +736,21 @@ fn exp_of_growing(t: Term) -> Asy {
         return Asy::Huge(1);
     }
     if t.k.is_zero() && t.p.is_zero() && t.m == one {
-        return match t.c {
-            Coef::Exact(v) if v.k == 0 => Asy::Term(Term {
-                c: Coef::Exact(PiQ { q: one, k: 0 }),
-                k: Q::ZERO,
-                p: v.q,
-                m: Q::ZERO,
-            }),
-            _ => Asy::Unknown,
-        };
+        // e^(c·ln x + R) is x^c only when R → 0, which a leading term
+        // doesn't say (e^(ln x + 1) is e·x, e^(ln 2x) is 2x): only the
+        // exponent's logarithms taken out exactly do (`log_part`,
+        // `exp_log`).
+        return Asy::Unknown;
     }
     // x^p·(ln x)^m with 0 < p ≤ 1 (m ≤ 0 at p = 1), or p = 0 and m > 1.
     if t.p.signum() > 0 || (t.p.is_zero() && t.m > one) {
         return Asy::Mid(1, Some(t));
     }
-    // e^((ln x)^m), 0 < m < 1: slower than every power.
+    // e^((ln x)^m), 0 < m < 1: beyond every power of ln x, below every
+    // power of x.
+    if t.k.is_zero() && t.p.is_zero() && t.m.signum() > 0 && t.m < one {
+        return Asy::Slow(Term::constant(Coef::Exact(PiQ { q: one, k: 0 })), 1);
+    }
     Asy::Unknown
 }
 
@@ -560,7 +790,7 @@ fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
                     };
                     let base = asy(a, cx);
                     let positive = match base {
-                        Asy::Term(t) => t.c.sign() == Some(1),
+                        Asy::Term(t) | Asy::Slow(t, _) => t.c.sign() == Some(1),
                         Asy::Huge(s) | Asy::Mid(s, _) => s > 0,
                         _ => false,
                     };
@@ -608,7 +838,12 @@ fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
                             None => Asy::Unknown,
                         };
                     }
-                    exp_of(asy(a, cx))
+                    // e^(c·ln x + R) = x^c·e^R, the logarithms taken out
+                    // exactly: R's own limit decides the factor.
+                    match log_part(a, cx) {
+                        (c, rest) if !c.is_zero() => exp_log(c, rest),
+                        (_, rest) => exp_of(rest),
+                    }
                 }
                 Ln | Log => {
                     let r = match asy(a, cx) {
@@ -838,6 +1073,12 @@ fn read_limit(a: Asy) -> Limit {
                 None => Limit::Unknown,
             },
         },
+        Asy::Slow(t, s) => match (slow_growth(&t, s), t.c.sign()) {
+            (g, _) if g < 0 => Limit::Exact(PiQ { q: Q::ZERO, k: 0 }),
+            (_, Some(1)) => Limit::PosInf,
+            (_, Some(_)) => Limit::NegInf,
+            (_, None) => Limit::Unknown,
+        },
         Asy::Bounded(_) | Asy::Unknown => Limit::Unknown,
     }
 }
@@ -933,6 +1174,60 @@ mod tests {
         ] {
             let got = lim(f, PosInf);
             assert!(got == truth || got == Limit::Unknown, "{f}: {got:?}");
+        }
+    }
+
+    /// e^(c·ln x + R) is x^c·e^R: the factor needs R's limit, which the
+    /// exponent's leading term c·ln x doesn't keep (review 13, R13-L-01:
+    /// each of the first four was exactly 1).
+    #[test]
+    fn exponentials_of_logarithms_keep_the_remainder() {
+        use Dir::*;
+        let near = |f: &str, v: f64| match lim(f, PosInf) {
+            Limit::Approx(i) => assert!(
+                i.lo() <= v && v <= i.hi() && i.hi() - i.lo() < 1e-12,
+                "{f}: {i:?}"
+            ),
+            Limit::Exact(q) => assert!((q.to_f64() - v).abs() < 1e-12, "{f}: {q:?}"),
+            other => panic!("{f}: {other:?}, not {v}"),
+        };
+        near("exp(ln(x)+1)/x", std::f64::consts::E);
+        near("exp(ln(x)+atan(x))/x", std::f64::consts::FRAC_PI_2.exp());
+        assert_eq!(lim("exp(ln(x)+sqrt(ln(x)))/x", PosInf), Limit::PosInf);
+        assert_eq!(lim("exp(ln(x)+sin(x))/x", PosInf), Limit::Unknown);
+        // A logarithm's constant: ln 2x = ln x + ln 2.
+        near("exp(ln(2*x))/x", 2.0);
+        near("exp(2*ln(3*x)-1)/x^2", 9.0 / std::f64::consts::E);
+        near("exp(ln(x)/2+1/x)/sqrt(x)", 1.0);
+        // e^R beyond or below every power of ln x, below every power of x.
+        assert_eq!(lim("exp(ln(x)-sqrt(ln(x)))/x", PosInf), exact(0, 1, 0));
+        assert_eq!(lim("exp(ln(x)+sqrt(ln(x)))/x^2", PosInf), exact(0, 1, 0));
+        assert_eq!(lim("exp(sqrt(ln(x)))/ln(x)^5", PosInf), Limit::PosInf);
+        assert_eq!(lim("exp(sqrt(ln(x)))/x", PosInf), exact(0, 1, 0));
+        assert_eq!(lim("x-exp(ln(x)+sqrt(ln(x)))", PosInf), Limit::NegInf);
+        assert_eq!(lim("x^2-exp(ln(x)+sqrt(ln(x)))", PosInf), Limit::PosInf);
+        // Logarithms cancelling exactly, and powers as before.
+        near("exp(ln(x)-ln(x)+1)", std::f64::consts::E);
+        assert_eq!(lim("exp(ln(x))-x^2", PosInf), Limit::NegInf);
+        assert_eq!(lim("exp(-ln(x))*x", PosInf), exact(1, 1, 0));
+        // A logarithm not taken out exactly: undecided, never wrong.
+        for (f, truth) in [
+            ("exp(ln(x)*(1+1/x))/x", exact(1, 1, 0)),
+            ("exp(log(x))/x", exact(0, 1, 0)),
+            ("x^(1+1/x)/x", exact(1, 1, 0)),
+        ] {
+            let got = lim(f, PosInf);
+            assert!(got == truth || got == Limit::Unknown, "{f}: {got:?}");
+        }
+        // e^(ln x + 1)/x again, its logarithm inside a product: e.
+        let f = "exp(ln(x)*(1+1/ln(x)))/x";
+        match lim(f, PosInf) {
+            Limit::Unknown => {}
+            Limit::Approx(i) => assert!(
+                i.lo() <= std::f64::consts::E && std::f64::consts::E <= i.hi(),
+                "{f}: {i:?}"
+            ),
+            other => panic!("{f}: {other:?}"),
         }
     }
 }
