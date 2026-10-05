@@ -1284,6 +1284,10 @@ fn taylor_cases() -> Vec<(&'static str, TrigUnit)> {
         ("exp(-(x-100)^2)+exp(-x^2)", Radians),
         ("x^(-2)+x^3-x^(-3)", Radians),
         ("(x-1)^2/(x-1)^2", Radians),
+        // min and max are undefined wherever either argument is, even
+        // where the other one wins (review 12, R12-M-02).
+        ("min((x+1)^2,2+sqrt(sin(x)))", Radians),
+        ("max(-(x+1)^2,-2-sqrt(sin(x)))", Radians),
     ]
 }
 
@@ -1375,6 +1379,7 @@ fn run_taylor(n_boxes: usize, seed: u64) -> Tally {
         for &c in &[
             0.3,
             1.7,
+            -1.0,
             -2.4,
             3.0,
             47.0,
@@ -1478,4 +1483,48 @@ fn exact_literals_place_poles_exactly() {
     assert!(r.is_empty() && r.dec <= Dec::Trv, "{r:?}");
     let r = graphing::interval::enclose(ast, Interval::point(1000000000000.0), &ctx);
     assert_eq!(r.iv, Interval::point(0.0));
+}
+
+/// min and max where one argument decides the value and the other is
+/// undefined (review 12, R12-M-02): undefined, not the winner's series.
+#[test]
+fn min_max_keep_the_loser_undefined() {
+    let series = |src: &str, b: Interval| {
+        let text = format!("y={src}");
+        let eq = Equation::parse(&text).unwrap();
+        let (_, ast) = eq.explicit().unwrap();
+        let lits = Literals::of(&text, ParseOptions::default()).unwrap();
+        let ctx = Ctx::new(CompileOptions::default(), &lits);
+        taylor(ast, b, 3, &ctx)
+    };
+    for src in [
+        "min((x+1)^2,2+sqrt(sin(x)))",
+        "max(-(x+1)^2,-2-sqrt(sin(x)))",
+        "min(x,sqrt(x+0.5))",
+        "max(x,-sqrt(x+0.5))",
+    ] {
+        // At −1 the losing argument is undefined; about it, in part.
+        for b in [
+            Interval::point(-1.0),
+            Interval::new(-1.25, -0.75),
+            Interval::new(-1.0, -0.25),
+        ] {
+            let s = series(src, b);
+            assert!(
+                s[0].dec <= Dec::Trv,
+                "{src} on [{}, {}]: {:?}",
+                b.lo(),
+                b.hi(),
+                s[0]
+            );
+            assert!(!derivs_valid(&s, 1), "{src}: derivatives kept");
+        }
+        let s = series(src, Interval::point(-1.0));
+        assert!(s[0].is_empty(), "{src} at −1: {:?}", s[0]);
+    }
+    // A loser defined throughout the box changes nothing, kink and all:
+    // min(x, x + 1 + |x − 3|) is x there, derivative and all.
+    let s = series("min(x,x+1+abs(x-3))", Interval::new(2.5, 3.4));
+    assert!(s[0].dec >= Dec::Dac && derivs_valid(&s, 1), "{s:?}");
+    assert_eq!(s[1].iv, Interval::point(1.0));
 }

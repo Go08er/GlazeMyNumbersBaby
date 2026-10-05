@@ -438,6 +438,21 @@ fn inverse(f: Func, u: &Series, n: usize, unit: TrigUnit) -> Series {
     h
 }
 
+/// min or max where the ends decide that `winner` is the value on the whole
+/// box: its series, if the losing argument is defined throughout the box
+/// (a discontinuous but defined loser changes nothing); otherwise f may be
+/// undefined somewhere on the box, and its value alone is kept, decorated
+/// as the loser is (its derivatives then mean nothing, [`derivs_valid`]).
+fn keep_winner(winner: Series, loser: &DecInterval) -> Series {
+    if loser.dec >= Dec::Def {
+        return winner;
+    }
+    let n = winner.len() - 1;
+    let mut h0 = winner[0];
+    h0.dec = h0.dec.min(loser.dec);
+    flat(h0, n)
+}
+
 /// True if the step function `step` takes one value on `v` widened by an
 /// ulp each side (so it is constant on a neighbourhood of the box).
 fn constant_near(v: &DecInterval, step: impl Fn(&DecInterval) -> DecInterval) -> bool {
@@ -625,11 +640,20 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
             let mut acc = arg(0);
             for i in 1..args.len() {
                 let b = arg(i);
+                // min and max are eager: undefined wherever either argument
+                // is, whichever one wins elsewhere.
+                if acc[0].is_empty() || b[0].is_empty() {
+                    acc = flat(
+                        DecInterval::result(Interval::EMPTY, Dec::Trv, &[&acc[0], &b[0]]),
+                        n,
+                    );
+                    continue;
+                }
                 let a_below = acc[0].hi() < b[0].lo();
                 let b_below = b[0].hi() < acc[0].lo();
                 acc = match (f, a_below, b_below) {
-                    (Min, true, _) | (Max, _, true) => acc,
-                    (Min, _, true) | (Max, true, _) => b,
+                    (Min, true, _) | (Max, _, true) => keep_winner(acc, &b[0]),
+                    (Min, _, true) | (Max, true, _) => keep_winner(b, &acc[0]),
                     _ => flat(
                         if f == Min {
                             elem::min(&acc[0], &b[0])

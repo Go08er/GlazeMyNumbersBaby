@@ -752,6 +752,18 @@ const REVIEW: &[(&str, &str)] = &[
         "x+tan(x)-30000",
         "D=fam(pi/2,pi) | XI=inf | P=neither | T=none | MIN=none | MAX=none | INF=inf | VA=fam(pi/2,pi) | HA=none | R=R",
     ),
+    // Review 12, R12-M-02: min and max are undefined wherever either
+    // argument is (√sin x at −1), even where the other one would win; no
+    // zero or extremum at −1. Defined on [2kπ, (2k+1)π], where the √ side
+    // is between 2 and 3 and (x + 1)² wins only on [0, √2 − 1].
+    (
+        "min((x+1)^2,2+sqrt(sin(x)))",
+        "XI=none | YI=1 | VA=none | MAX=fam(pi/2,2*pi,3)",
+    ),
+    (
+        "max(-(x+1)^2,-2-sqrt(sin(x)))",
+        "XI=none | YI=-1 | VA=none | MIN=fam(pi/2,2*pi,-3)",
+    ),
 ];
 
 // ---------------------------------------------------------------- values
@@ -1771,4 +1783,51 @@ fn asymptotes_are_right() {
         "rows certified wrong:\n{}",
         wrong.join("\n")
     );
+}
+
+/// Review 12, R12-M-02: an eager min or max is undefined where either
+/// argument is, so nothing is listed at −1, where √sin x is undefined
+/// though (x + 1)² would win; nor does the panel show it.
+#[test]
+fn min_max_list_nothing_where_an_argument_is_undefined() {
+    for src in [
+        "min((x+1)^2,2+sqrt(sin(x)))",
+        "max(-(x+1)^2,-2-sqrt(sin(x)))",
+    ] {
+        let a = certify_text(src, CompileOptions::default(), DEFAULT_BUDGET, None)
+            .unwrap_or_else(|e| panic!("{src}: {e}"));
+        let near = |e: &Enc| e.lo.0 <= -0.5 && e.hi.0 >= -1.5;
+        if let Some(v) = a.x_intercepts.value() {
+            assert!(
+                !v.iter().any(|s| matches!(s, Spot::At(e) if near(e))),
+                "{src}: x-intercepts {v:?}"
+            );
+        }
+        if let Some(v) = a.extrema.value() {
+            assert!(
+                !v.iter().any(|e| e.every.is_none() && near(&e.x)),
+                "{src}: extrema {v:?}"
+            );
+        }
+        let k = analyze_str(&format!("y={src}"));
+        let at_minus_one = |t: &str| t == "\u{2212}1" || t.starts_with("(\u{2212}1,");
+        assert!(
+            !at_minus_one(&k.x_intercept)
+                && !k.minima.iter().chain(&k.maxima).any(|t| at_minus_one(t)),
+            "{src}: panel {:?} {:?} {:?}",
+            k.x_intercept,
+            k.minima,
+            k.maxima
+        );
+        assert!(
+            k.data
+                .minima
+                .iter()
+                .chain(&k.data.maxima)
+                .all(|(f, _)| (f.x + 1.0).abs() > 0.5)
+                && k.data.zeros.iter().all(|f| (f.x + 1.0).abs() > 0.5),
+            "{src}: panel data {:?}",
+            k.data
+        );
+    }
 }
