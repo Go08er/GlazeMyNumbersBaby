@@ -173,6 +173,18 @@ pub struct Frame<'a, 'p> {
     /// Something drawn this frame is already out of date (a scroll area
     /// was drawn at an offset its new content no longer allows): draw again.
     pub again: bool,
+    /// Where the topmost modal layer (everything drawn since the last
+    /// scrim) starts in `nodes`.
+    layer: usize,
+}
+
+/// The hits of the topmost modal layer: everything recorded since the last
+/// scrim (the whole frame if none is open). Whatever an overlay covers is
+/// inert: no pointer, keyboard focus or assistive-technology action reaches it.
+pub fn active_layer(hits: &[Hit]) -> &[Hit] {
+    let scrim = id("scrim");
+    let start = hits.iter().rposition(|h| h.id == scrim).unwrap_or(0);
+    &hits[start..]
 }
 
 /// A scroll area between `scroll_begin` and `scroll_end`.
@@ -210,7 +222,25 @@ impl<'a, 'p> Frame<'a, 'p> {
             clips: Vec::new(),
             scroll_stack: Vec::new(),
             again: false,
+            layer: 0,
         }
+    }
+
+    /// This frame's accessibility nodes, for the topmost modal layer only:
+    /// controls an overlay covers are inert, so assistive technology isn't
+    /// offered them. Covered announcers (live status nodes, which carry no
+    /// actions) still speak, from the window: a result typed while a sheet
+    /// is open is still read out.
+    pub fn take_nodes(&mut self) -> Option<Vec<Node>> {
+        let mut nodes = self.nodes.take()?;
+        let top = nodes.split_off(self.layer.min(nodes.len()));
+        let mut out: Vec<Node> = nodes
+            .into_iter()
+            .filter(|n| n.role == Role::Status && n.live && !n.clickable && !n.focusable)
+            .map(|n| Node { parent: 0, ..n })
+            .collect();
+        out.extend(top);
+        Some(out)
     }
 
     pub fn width(&self) -> f32 {
@@ -723,13 +753,16 @@ impl<'a, 'p> Frame<'a, 'p> {
         self.cv.rounded_border(r, radius, t.border, 1.0);
     }
 
-    /// Dim everything and close the overlay when clicked outside it.
+    /// Dim everything and close the overlay when clicked outside it. What
+    /// was drawn before is covered from here on: see [`active_layer`] and
+    /// [`Frame::take_nodes`].
     pub fn scrim(&mut self, msg: Msg, dim: bool) {
         let r = Rect::new(0.0, 0.0, self.width(), self.height());
         if dim {
             self.cv.fill_rect(r, Color([0.0, 0.0, 0.0, 0.30]));
         }
         self.hit(id("scrim"), r, Sense::Click, Some(msg), false);
+        self.layer = self.nodes.as_ref().map_or(0, Vec::len);
     }
 
     /// Begin a vertical scroll area; returns the scroll offset to subtract.

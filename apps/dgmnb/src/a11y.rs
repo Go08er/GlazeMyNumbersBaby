@@ -5,7 +5,29 @@ use accesskit::{
     Toggled, TreeId, TreeInfo, TreeUpdate,
 };
 
-use crate::ui::{Id, Node};
+use crate::ui::{Hit, Id, Node, Sense};
+
+/// The control an assistive-technology request reaches, if any: only one
+/// in the topmost modal layer, and only for an action it takes. A target
+/// that an overlay covers, or that is gone from the frame (a stale
+/// reference), gets nothing.
+pub fn target(hits: &[Hit], id: Id, action: Action) -> Option<&Hit> {
+    let h = crate::ui::active_layer(hits)
+        .iter()
+        .rev()
+        .find(|h| h.id == id)?;
+    let fits = match action {
+        Action::Click => h.msg.is_some() || h.sense == Sense::Text,
+        Action::Focus => h.focusable,
+        Action::ScrollIntoView => true,
+        Action::SetTextSelection | Action::ReplaceSelectedText => h.sense == Sense::Text,
+        Action::SetValue => matches!(h.sense, Sense::Text | Sense::Drag),
+        Action::Increment | Action::Decrement => h.sense == Sense::Drag,
+        Action::ScrollUp | Action::ScrollDown => h.sense == Sense::Scroll,
+        _ => false,
+    };
+    fits.then_some(h)
+}
 
 pub fn tree(nodes: &[Node], title: &str, focus: Option<Id>, scale: f64) -> TreeUpdate {
     let ids: std::collections::HashSet<Id> = nodes.iter().map(|n| n.id).collect();
@@ -253,7 +275,8 @@ mod tests {
             true,
         );
         draw(&mut f, Rect::new(0.0, 46.0, 760.0, 654.0));
-        (f.nodes.take().unwrap(), std::mem::take(&mut f.hits))
+        // What the app hands AccessKit: the topmost modal layer's nodes.
+        (f.take_nodes().unwrap(), std::mem::take(&mut f.hits))
     }
 
     fn press(p: &mut crate::calc::CalcPage, keys: &str) {
@@ -478,6 +501,235 @@ mod tests {
             .filter(|n| n.role == Role::ListBoxOption && n.selected == Some(true))
             .collect();
         assert_eq!(chosen.len(), 1, "exactly one day is the chosen one");
+    }
+
+    /// Run `m` through a page's `update` with a throwaway context.
+    fn with_cx(run: impl FnOnce(&mut crate::app::Cx)) {
+        let (mut toasts, mut focus) = (Vec::new(), None);
+        let mut cx = crate::app::Cx {
+            toasts: &mut toasts,
+            clipboard: None,
+            wide: true,
+            focus: &mut focus,
+        };
+        run(&mut cx);
+    }
+
+    fn full() -> Rect {
+        Rect::new(0.0, 0.0, 760.0, 700.0)
+    }
+
+    /// Every action assistive technology can request.
+    const ACTIONS: [Action; 10] = [
+        Action::Click,
+        Action::Focus,
+        Action::ScrollIntoView,
+        Action::SetValue,
+        Action::SetTextSelection,
+        Action::ReplaceSelectedText,
+        Action::Increment,
+        Action::Decrement,
+        Action::ScrollUp,
+        Action::ScrollDown,
+    ];
+
+    /// `draw(f, r, page, overlay)` draws a page, an overlay, or the overlay
+    /// over the page. Over the page, nothing the overlay covers is exported
+    /// (announcers aside) or answers any action, the overlay's own controls
+    /// answer the actions they advertise, and the tree is sound.
+    fn check_modal(what: &str, mut draw: impl FnMut(&mut Frame, Rect, bool, bool)) {
+        let (under, _) = frame_nodes(|f, r| draw(f, r, true, false));
+        let (alone, _) = frame_nodes(|f, r| draw(f, r, false, true));
+        let (nodes, hits) = frame_nodes(|f, r| draw(f, r, true, true));
+        let own: HashSet<Id> = alone.iter().map(|n| n.id).collect();
+        let covered: Vec<&Node> = under.iter().filter(|n| !own.contains(&n.id)).collect();
+        assert!(
+            covered.iter().any(|n| n.clickable),
+            "{what}: covers no control"
+        );
+        for n in covered {
+            let kept = nodes.iter().find(|m| m.id == n.id);
+            if n.role == Role::Status && n.live {
+                assert!(kept.is_some_and(|m| m.parent == 0), "{what}: announcer");
+                continue;
+            }
+            assert!(kept.is_none(), "{what}: covered {:?} exported", n.label);
+            for a in ACTIONS {
+                assert!(
+                    target(&hits, n.id, a).is_none(),
+                    "{what}: covered {:?} takes {a:?}",
+                    n.label
+                );
+            }
+        }
+        for n in &nodes {
+            if n.clickable {
+                assert!(
+                    target(&hits, n.id, Action::Click).is_some(),
+                    "{what}: {:?} can't be clicked",
+                    n.label
+                );
+            }
+            if n.focusable {
+                assert!(
+                    target(&hits, n.id, Action::Focus).is_some(),
+                    "{what}: {:?} can't be focused",
+                    n.label
+                );
+            }
+        }
+        let update = tree(&nodes, "test", None, 1.0);
+        let by_id: HashMap<_, _> = update.nodes.iter().map(|(i, n)| (*i, n)).collect();
+        let mut seen = HashSet::new();
+        let mut stack = vec![NodeId(0)];
+        while let Some(i) = stack.pop() {
+            assert!(seen.insert(i), "{what}: cycle at {i:?}");
+            stack.extend(by_id[&i].children().iter().copied());
+        }
+        assert_eq!(seen.len(), update.nodes.len(), "{what}: unreachable nodes");
+    }
+
+    /// R12-M-10, the review's case: the navigation open over 7 + 8. Only
+    /// the navigation is exported; Clear, under it, can't be clicked (looked
+    /// up afresh or from a stale reference), focused or scrolled to.
+    #[test]
+    fn the_navigation_covers_the_calculator_for_assistive_technology() {
+        let mut p = crate::calc::CalcPage::new(None);
+        press(&mut p, "7+8");
+        let (page, page_hits) = frame_nodes(|f, r| p.view(f, r, false));
+        let clear = page
+            .iter()
+            .find(|n| n.label == "Clear (Esc)")
+            .expect("the Clear key")
+            .id;
+        assert!(target(&page_hits, clear, Action::Click).is_some());
+
+        let (nodes, hits) = frame_nodes(|f, r| {
+            p.view(f, r, false);
+            crate::app::draw_nav(f, full(), appcore::modes::ViewMode::Standard, false);
+        });
+        let out = exported(&nodes);
+        for (_, name, _) in &out {
+            assert!(
+                !["Clear (Esc)", "Display is 8", "Expression is 7 + "].contains(&name.as_str()),
+                "{name:?} is under the navigation"
+            );
+        }
+        assert!(out.iter().any(|(_, name, _)| name == "Close navigation"));
+        for a in ACTIONS {
+            assert!(
+                target(&hits, clear, a).is_none(),
+                "covered Clear takes {a:?}"
+            );
+        }
+        let close = target(&hits, crate::ui::id("nav-close"), Action::Click).expect("close");
+        assert_eq!(close.msg, Some(crate::app::Msg::Nav(false)));
+        // Gone from the frame altogether, or asked for what it doesn't do.
+        assert!(target(&hits, crate::ui::id("no such control"), Action::Click).is_none());
+        assert!(target(&hits, crate::ui::id("nav-close"), Action::Increment).is_none());
+        // Results are still announced, from the window.
+        let announcer = nodes
+            .iter()
+            .find(|n| n.id == crate::ui::id("announcer"))
+            .expect("the announcer");
+        assert_eq!(announcer.parent, 0);
+        // Closed again, Clear is back.
+        let (_, hits) = frame_nodes(|f, r| p.view(f, r, false));
+        assert!(target(&hits, clear, Action::Click).is_some());
+    }
+
+    /// R12-M-10, every other overlay: the licences, the calculator's
+    /// flyouts, sheet and display menu, the unit picker, the calendar, and
+    /// the graph's style and window popups.
+    #[test]
+    fn every_overlay_is_all_assistive_technology_reaches() {
+        let mut p = crate::calc::CalcPage::new(None);
+        press(&mut p, "7+8");
+        check_modal("navigation", |f, r, page, over| {
+            if page {
+                p.view(f, r, false);
+            }
+            if over {
+                crate::app::draw_nav(f, full(), appcore::modes::ViewMode::Standard, false);
+            }
+        });
+        check_modal("licences", |f, r, page, over| {
+            if page {
+                p.view(f, r, false);
+            }
+            if over {
+                crate::app::draw_licences(f, full());
+            }
+        });
+        use crate::calc::Popup;
+        for (mode, popup) in [
+            (calcvm::CalcMode::Standard, Popup::Panel),
+            (calcvm::CalcMode::Standard, Popup::DisplayMenu(600.0, 200.0)),
+            (calcvm::CalcMode::Scientific, Popup::Trig),
+            (calcvm::CalcMode::Scientific, Popup::Functions),
+            (calcvm::CalcMode::Programmer, Popup::Bitwise),
+            (calcvm::CalcMode::Programmer, Popup::Shift),
+        ] {
+            let mut p = crate::calc::CalcPage::new(None);
+            p.set_mode(mode);
+            press(&mut p, "7+8");
+            p.popup = Some(popup);
+            check_modal(&format!("{popup:?}"), |f, r, page, over| {
+                if page {
+                    p.view(f, r, false);
+                }
+                if over {
+                    p.overlay(f, r);
+                }
+            });
+        }
+
+        let mut c = crate::conv::ConvPage::new(None);
+        with_cx(|cx| c.update(crate::conv::Msg::Units(Some(1)), cx));
+        check_modal("unit picker", |f, r, page, over| {
+            if page {
+                c.view(f, r);
+            }
+            if over {
+                c.overlay(f, r);
+            }
+        });
+
+        let mut d = crate::date::DatePage::new();
+        with_cx(|cx| d.update(crate::date::Msg::Calendar(Some(0)), cx));
+        check_modal("calendar", |f, r, page, over| {
+            if page {
+                d.view(f, r);
+            }
+            if over {
+                d.overlay(f, r);
+            }
+        });
+
+        let mut g = crate::graph::GraphPage::for_test(appcore::graph::from_list("x^2;sin(x)"));
+        let (_, hits) = frame_nodes(|f, r| g.view(f, r));
+        let style = hits
+            .iter()
+            .find_map(|h| match &h.msg {
+                Some(crate::app::Msg::Graph(crate::graph::Msg::StylePopup(Some(e)))) => Some(*e),
+                _ => None,
+            })
+            .expect("an equation's style button");
+        for m in [
+            crate::graph::Msg::StylePopup(Some(style)),
+            crate::graph::Msg::SettingsPopup(true),
+        ] {
+            let what = format!("{m:?}");
+            with_cx(|cx| g.update(m, cx));
+            check_modal(&what, |f, r, page, over| {
+                if page {
+                    g.view(f, r);
+                }
+                if over {
+                    g.overlay(f, r);
+                }
+            });
+        }
     }
 
     #[test]

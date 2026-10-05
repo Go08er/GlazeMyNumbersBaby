@@ -279,6 +279,9 @@ pub struct App {
     input: Input,
     scrolls: HashMap<ui::Id, Scroll>,
     hits: Vec<Hit>,
+    /// A redraw is pending, so `hits` may describe a frame that's out of
+    /// date (an overlay opened since, say).
+    hits_stale: std::cell::Cell<bool>,
     mods: ModifiersState,
     last_click: Option<(Instant, ui::Id)>,
     drag: Option<(ui::Id, f32, f32)>,
@@ -358,6 +361,7 @@ impl App {
             input: Input::default(),
             scrolls: HashMap::new(),
             hits: Vec::new(),
+            hits_stale: std::cell::Cell::new(false),
             mods: ModifiersState::empty(),
             last_click: None,
             drag: None,
@@ -512,6 +516,7 @@ impl App {
 
     fn redraw(&self) {
         if let Some(g) = &self.gfx {
+            self.hits_stale.set(true);
             g.window.request_redraw();
         }
     }
@@ -745,7 +750,7 @@ impl App {
                 n.live = true;
             }
         }
-        (std::mem::take(&mut f.hits), f.nodes.take(), f.again)
+        (std::mem::take(&mut f.hits), f.take_nodes(), f.again)
     }
 
     fn render(&mut self) {
@@ -772,6 +777,7 @@ impl App {
         let mut again = false;
         if let Some((hits, nodes, stale)) = drawn {
             self.hits = hits;
+            self.hits_stale.set(false);
             again = stale;
             // A focused scroll view whose content now fits isn't a stop
             // any more: let go of it.
@@ -830,6 +836,17 @@ impl App {
             .find(|h| h.visible && h.sense != Sense::Scroll && h.rect.contains(x, y))
     }
 
+    /// The keyboard focus, if it's in the topmost modal layer. A control
+    /// an overlay covers keeps its focus for when the overlay closes, but
+    /// takes no keys meanwhile.
+    fn live_focus(&self) -> Option<ui::Id> {
+        let f = self.input.focus?;
+        ui::active_layer(&self.hits)
+            .iter()
+            .any(|h| h.id == f)
+            .then_some(f)
+    }
+
     /// Scroll `id` into view within its scroll area (keyboard / AT focus).
     fn reveal(&mut self, id: ui::Id) {
         let Some(h) = self.hits.iter().rev().find(|h| h.id == id) else {
@@ -859,8 +876,8 @@ impl App {
 
     /// The scroll view itself, if it has keyboard focus.
     fn focused_scroll_view(&self) -> Option<ui::Id> {
-        let f = self.input.focus?;
-        self.hits
+        let f = self.live_focus()?;
+        ui::active_layer(&self.hits)
             .iter()
             .rev()
             .find(|h| h.id == f && h.sense == Sense::Scroll)
@@ -868,11 +885,13 @@ impl App {
     }
 
     /// The scroll area for keyboard scrolling: the focused scroll view or
-    /// the focused widget's area, else the one under the pointer.
+    /// the focused widget's area, else the one under the pointer (in the
+    /// topmost modal layer either way).
     fn scroll_target(&self) -> Option<ui::Id> {
+        let layer = ui::active_layer(&self.hits);
         let focused = self.focused_scroll_view().or_else(|| {
-            let f = self.input.focus?;
-            self.hits
+            let f = self.live_focus()?;
+            layer
                 .iter()
                 .rev()
                 .find(|h| h.id == f)
@@ -880,7 +899,7 @@ impl App {
         });
         focused.or_else(|| {
             let (x, y) = self.input.pointer?;
-            self.hits
+            layer
                 .iter()
                 .rev()
                 .find(|h| h.sense == Sense::Scroll && h.rect.contains(x, y))
@@ -1059,8 +1078,8 @@ impl App {
             self.redraw();
             return;
         }
-        let target = self
-            .hits
+        // Nothing under an open overlay scrolls.
+        let target = ui::active_layer(&self.hits)
             .iter()
             .rev()
             .find(|h| h.sense == Sense::Scroll && h.rect.contains(x, y))
@@ -1131,9 +1150,9 @@ impl App {
     /// Enable the input method while a text field has focus (only telling
     /// the compositor when something changed).
     fn sync_ime(&mut self) {
-        let focus = self.input.focus;
+        let focus = self.live_focus();
         let field = focus.and_then(|f| {
-            self.hits
+            ui::active_layer(&self.hits)
                 .iter()
                 .find(|h| h.id == f && h.sense == Sense::Text)
                 .map(|h| h.rect)
@@ -1160,7 +1179,7 @@ impl App {
             Cut,
             Paste,
         }
-        let Some(id) = self.input.focus else {
+        let Some(id) = self.live_focus() else {
             return false;
         };
         let (ctrl, shift, alt) = (kp.ctrl, kp.shift, kp.alt);
@@ -1241,8 +1260,10 @@ impl App {
     // ------------------------------------------------------------ keys
 
     fn key_press(&mut self, el: &ActiveEventLoop, kp: KeyPress, text: Option<String>) {
-        // Text fields first (except app-wide chords).
-        if self.field(self.input.focus.unwrap_or(0)).is_some()
+        // Text fields first (except app-wide chords). Keys reach only what
+        // the topmost overlay, if any, holds.
+        let focus = self.live_focus();
+        if self.field(focus.unwrap_or(0)).is_some()
             && !input::is_global_chord(&kp)
             && !matches!(
                 kp.key,
@@ -1271,8 +1292,8 @@ impl App {
                 }
             }
             Key::Char(' ') | Key::Named(Named::Enter) if !kp.ctrl && !kp.alt => {
-                let focused = self.input.focus.and_then(|f| {
-                    self.hits
+                let focused = focus.and_then(|f| {
+                    ui::active_layer(&self.hits)
                         .iter()
                         .rev()
                         .find(|h| h.id == f && h.sense == Sense::Click)
@@ -1288,7 +1309,7 @@ impl App {
                     return;
                 }
                 if enter
-                    && let Some(id) = self.input.focus
+                    && let Some(id) = focus
                     && self.field(id).is_some()
                 {
                     let page = self.mode.page();
@@ -1318,9 +1339,8 @@ impl App {
         // Home/End keys (trace, step) before anything scrolls.
         if self.mode.page() == PageKind::Graphing
             && let Key::Named(_) = kp.key
-            && let Some(f) = self.input.focus
-            && self
-                .hits
+            && let Some(f) = focus
+            && ui::active_layer(&self.hits)
                 .iter()
                 .any(|h| h.id == f && h.sense == Sense::Drag)
         {
@@ -1409,12 +1429,7 @@ impl App {
 
     fn move_focus(&mut self, forward: bool) {
         // Only cycle within the topmost overlay, if one is open.
-        let start = self
-            .hits
-            .iter()
-            .rposition(|h| h.id == id("scrim"))
-            .unwrap_or(0);
-        let ids: Vec<ui::Id> = self.hits[start..]
+        let ids: Vec<ui::Id> = ui::active_layer(&self.hits)
             .iter()
             .filter(|h| h.focusable)
             .map(|h| h.id)
@@ -1498,16 +1513,20 @@ impl App {
     }
 
     fn a11y_action(&mut self, el: &ActiveEventLoop, req: accesskit::ActionRequest) {
+        // Judge the request against the frame as it is now: an earlier
+        // request may have opened an overlay that isn't drawn yet.
+        if self.hits_stale.get() {
+            self.render();
+        }
         let target = req.target_node.0;
+        // Only the topmost modal layer's controls answer; covered or stale
+        // targets get nothing.
+        let Some(hit) = crate::a11y::target(&self.hits, target, req.action).cloned() else {
+            return;
+        };
         match req.action {
             accesskit::Action::Click => {
-                if let Some(m) = self
-                    .hits
-                    .iter()
-                    .rev()
-                    .find(|h| h.id == target)
-                    .and_then(|h| h.msg.clone())
-                {
+                if let Some(m) = hit.msg {
                     self.update(el, m);
                 } else if self.field(target).is_some() {
                     self.input.focus = Some(target);
@@ -1926,7 +1945,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.key_press(el, kp, text);
             }
             WindowEvent::Ime(ime) => {
-                let Some(id) = self.input.focus else { return };
+                let Some(id) = self.live_focus() else { return };
                 if let Some(e) = self.field(id) {
                     match ime {
                         Ime::Preedit(s, _) => e.preedit = s,
@@ -2098,7 +2117,7 @@ fn draw_header(
     let _ = rx;
 }
 
-fn draw_nav(f: &mut Frame, full: Rect, mode: ViewMode, settings: bool) {
+pub(crate) fn draw_nav(f: &mut Frame, full: Rect, mode: ViewMode, settings: bool) {
     let t = f.t;
     f.scrim(Msg::Nav(false), true);
     let panel = Rect::new(0.0, 0.0, NAV_W.min(full.w - 40.0), full.h);
