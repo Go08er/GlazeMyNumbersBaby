@@ -577,11 +577,17 @@ mod tests {
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(clipboard_threads(), before + 1);
         assert!(clip.shutdown(), "worker didn't confirm it stopped");
-        assert_eq!(
-            clipboard_threads(),
-            before,
-            "worker still running after shutdown"
-        );
+        // Joined, it has exited; the kernel drops its /proc entry a moment
+        // later (it clears the id join waits on before releasing the task).
+        let mut left = clipboard_threads();
+        for _ in 0..100 {
+            if left == before {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+            left = clipboard_threads();
+        }
+        assert_eq!(left, before, "worker still running after shutdown");
         drop(clip);
         conn.roundtrip()
             .expect("display still healthy after shutdown");
