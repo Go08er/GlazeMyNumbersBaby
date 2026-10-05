@@ -117,14 +117,15 @@ fn d(e: &Expr, cx: &mut Cx) -> Option<Expr> {
                         // (Exponents as typed: a typed p = 2.0000000000000001
                         // is no integer, and takes the general rule below,
                         // its own number copied.)
-                        let typed = crate::interval::Literals;
-                        if let Some((0, _)) = syntactic_rational(b, &typed) {
+                        if let Some((0, _)) = syntactic_rational(b, crate::compile::Reading::Typed)
+                        {
                             // g⁰ is 1 only where g ≠ 0 (0⁰ is undefined, as
                             // on the TI-84 Plus CE): so is its derivative 0,
                             // 0/g keeping g's zeros out of its domain.
                             return Some(Expr::bin(BinOp::Div, num(0.0), a.clone()));
                         }
-                        if let Some((p, q)) = syntactic_rational(b, &typed) {
+                        if let Some((p, q)) = syntactic_rational(b, crate::compile::Reading::Typed)
+                        {
                             // (p/q)·a^((p-q)/q)·a'
                             let coef = if q == 1 {
                                 num(p as f64)

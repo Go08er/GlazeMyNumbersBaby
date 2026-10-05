@@ -17,8 +17,7 @@ use graphing::Equation;
 use graphing::ast::{BinOp, Constant, Expr, Func, Lit};
 use graphing::compile::CompileOptions;
 use graphing::functions::TrigUnit;
-use graphing::interval::{Ctx, Dec, DecInterval, Interval, Literals, derivs_valid, elem, taylor};
-use graphing::lexer::ParseOptions;
+use graphing::interval::{Ctx, Dec, DecInterval, Interval, derivs_valid, elem, taylor};
 use rug::Float;
 use rug::float::Constant as MpConst;
 use rug::ops::Pow;
@@ -1550,12 +1549,11 @@ fn run_taylor(n_boxes: usize, seed: u64) -> Tally {
         let text = format!("y={src}");
         let eq = Equation::parse(&text).unwrap_or_else(|e| panic!("{src}: {e:?}"));
         let (_, ast) = eq.explicit().expect("explicit");
-        let lits = Literals::of(&text, ParseOptions::default()).unwrap();
         let opts = CompileOptions {
             trig_unit: unit,
             ..CompileOptions::default()
         };
-        let ctx = Ctx::new(opts, &lits);
+        let ctx = Ctx::new(opts);
         let mut bxs: Vec<Interval> = Vec::new();
         for &c in &[
             0.3,
@@ -1659,8 +1657,7 @@ fn exact_literals_place_poles_exactly() {
     let text = "y=(x-1000000000000)/(x-1000000000000.0625)";
     let eq = Equation::parse(text).unwrap();
     let (_, ast) = eq.explicit().unwrap();
-    let lits = Literals::of(text, ParseOptions::default()).unwrap();
-    let ctx = Ctx::new(CompileOptions::default(), &lits);
+    let ctx = Ctx::new(CompileOptions::default());
     let r = graphing::interval::enclose(ast, Interval::point(1000000000000.0625), &ctx);
     assert!(r.is_empty() && r.dec <= Dec::Trv, "{r:?}");
     let r = graphing::interval::enclose(ast, Interval::point(1000000000000.0), &ctx);
@@ -1675,8 +1672,7 @@ fn a_varying_degree_is_no_constant_root() {
     let text = "y=root(x,x)";
     let eq = Equation::parse(text).unwrap();
     let (_, ast) = eq.explicit().unwrap();
-    let lits = Literals::of(text, ParseOptions::default()).unwrap();
-    let ctx = Ctx::new(CompileOptions::default(), &lits);
+    let ctx = Ctx::new(CompileOptions::default());
     let s = taylor(ast, Interval::point(2.0), 3, &ctx);
     let two = Float::with_val(P, 2u32);
     let f = Float::with_val(P, two.clone().sqrt());
@@ -1701,8 +1697,7 @@ fn min_max_keep_the_loser_undefined() {
         let text = format!("y={src}");
         let eq = Equation::parse(&text).unwrap();
         let (_, ast) = eq.explicit().unwrap();
-        let lits = Literals::of(&text, ParseOptions::default()).unwrap();
-        let ctx = Ctx::new(CompileOptions::default(), &lits);
+        let ctx = Ctx::new(CompileOptions::default());
         taylor(ast, b, 3, &ctx)
     };
     for src in [
@@ -1792,8 +1787,7 @@ fn large_root_degrees_keep_their_odd_integers() {
         let text = format!("y={src}");
         let eq = Equation::parse(&text).unwrap();
         let (_, ast) = eq.explicit().unwrap();
-        let lits = Literals::of(&text, ParseOptions::default()).unwrap();
-        let ctx = Ctx::new(CompileOptions::default(), &lits);
+        let ctx = Ctx::new(CompileOptions::default());
         taylor(ast, Interval::point(x), 3, &ctx)
     };
     for (src, n) in [

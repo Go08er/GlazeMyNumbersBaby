@@ -6,8 +6,8 @@
 //! [`DecInterval`] adds IEEE 1788 decorations (whether the function is
 //! defined and continuous on the box) and strict-sign facts that survive
 //! underflow. [`taylor`] evaluates an expression's value and first
-//! derivatives over a box; [`Literals`] reads its numbers back to the exact
-//! decimals that were typed.
+//! derivatives over a box, each number read back to the exact value it
+//! stands for (`Lit::enclose`: the decimal typed).
 //!
 //! Rounding is outward by one ulp from correctly rounded results:
 //! CORE-MATH (MIT, correctly rounded in binary64) for the elementary
@@ -26,5 +26,4 @@ mod taylor;
 
 pub use arith::Interval;
 pub use dec::{Dec, DecInterval};
-pub use literal::Literals;
 pub use taylor::{Ctx, Series, derivs_valid, enclose, taylor};

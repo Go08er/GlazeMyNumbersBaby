@@ -1290,9 +1290,8 @@ mod tests {
         let p = compile_str(f, TrigUnit::Radians).unwrap();
         let text = format!("y={g}");
         let eq = crate::Equation::parse(&text).unwrap();
-        let lits = crate::interval::Literals::of(&text, Default::default()).unwrap();
         let opts = crate::compile::CompileOptions::default();
-        let iv = IntervalFn::new(eq.explicit().unwrap().1.clone(), lits, &opts);
+        let iv = IntervalFn::new(eq.explicit().unwrap().1.clone(), &opts);
         let mut s = ExplicitSampler::new(&p, Axis::X, v, &PlotOptions::default());
         s.set_interval(Some(&iv));
         s.run();

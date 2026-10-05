@@ -6,9 +6,8 @@
 use std::time::Instant;
 
 use graphing::compile::CompileOptions;
-use graphing::lexer::ParseOptions;
 use graphing::simplify::{
-    Dir, ExactLiterals, Settings, limit_at, prove_parity, prove_period, rational_form, simplify,
+    Dir, Settings, limit_at, prove_parity, prove_period, rational_form, simplify,
 };
 use graphing::{Equation, TrigUnit};
 
@@ -66,8 +65,7 @@ fn main() {
             println!("{s}: not a function of x");
             continue;
         };
-        let lits = ExactLiterals::of(&text, ParseOptions::default()).expect("parsed");
-        let settings = Settings::new(&opts, &lits);
+        let settings = Settings::new(&opts);
         let t = Instant::now();
         let r = match simplify(f, &settings) {
             Ok(r) => r,
@@ -86,7 +84,7 @@ fn main() {
         if let Some(p) = prove_period(f, &settings) {
             println!("  period      {:?} ≈ {}", p.value, p.to_f64());
         }
-        if let Some(rf) = rational_form(f, &lits) {
+        if let Some(rf) = rational_form(f) {
             println!(
                 "  rational    {}  (cancelled {})",
                 rf.reduced.to_expr(),

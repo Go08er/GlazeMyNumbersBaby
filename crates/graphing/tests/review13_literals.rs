@@ -13,7 +13,6 @@ use graphing::analysis::analyze_str;
 use graphing::analysis::truth::{R, reval_typed};
 use graphing::compile::{CompileOptions, compile_str};
 use graphing::equation::Equation;
-use graphing::interval::Literals;
 use graphing::plot::{PlotOptions, plot};
 use graphing::{Viewport, lexer::ParseOptions};
 
@@ -25,8 +24,7 @@ fn at(src: &str, x: f64) -> f64 {
 fn reference(src: &str, x: f64) -> R {
     let text = format!("y={src}");
     let eq = Equation::parse(&text).unwrap();
-    let lits = Literals::of(&text, ParseOptions::default()).unwrap();
-    reval_typed(eq.explicit().unwrap().1, x, TrigUnit::Radians, &lits)
+    reval_typed(eq.explicit().unwrap().1, x, TrigUnit::Radians)
 }
 
 /// The heights of the curve's vertices in [−10, 10]².

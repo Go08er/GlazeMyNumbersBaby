@@ -4,7 +4,7 @@
 //!
 //! Every claim is about the canonical tree of the function (see
 //! [`super::canonical`]) under the analysis' angle unit, with the typed
-//! literals read back exactly (`interval::Literals`). A box is a closed
+//! literals read back exactly (each number's own `ast::Lit`). A box is a closed
 //! interval of doubles `[a, b]`; a point is `a = b`. Sub-expressions are
 //! named by their *path*: child indices from the root (`Neg`/`Degrees`
 //! have child 0, a binary node 0 and 1, a call its arguments in order).

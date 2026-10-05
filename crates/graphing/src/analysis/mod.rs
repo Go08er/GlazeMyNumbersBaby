@@ -564,13 +564,7 @@ pub fn analyze_cancellable(
     {
         return error(AnalysisError::AnalysisCouldNotBePerformed);
     }
-    let (Ok(lits), Ok(ilits)) = (
-        crate::simplify::ExactLiterals::of(eq.text(), eq.parse_options()),
-        crate::interval::Literals::of(eq.text(), eq.parse_options()),
-    ) else {
-        return error(AnalysisError::AnalysisCouldNotBePerformed);
-    };
-    certified::features(f, opts, &lits, &ilits, &a, cancel)
+    certified::features(f, opts, &a, cancel)
 }
 
 /// The earlier numeric engine, checked by [`verify`] (what the panel showed

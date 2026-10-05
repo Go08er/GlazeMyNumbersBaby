@@ -15,8 +15,7 @@
 use graphing::Equation;
 use graphing::compile::{CompileOptions, Program};
 use graphing::functions::TrigUnit;
-use graphing::interval::{Ctx, DecInterval, Interval, Literals, derivs_valid, taylor};
-use graphing::lexer::ParseOptions;
+use graphing::interval::{Ctx, DecInterval, Interval, derivs_valid, taylor};
 use std::time::Instant;
 
 fn show(d: &DecInterval) -> String {
@@ -35,19 +34,17 @@ fn show(d: &DecInterval) -> String {
     s
 }
 
-fn parse(src: &str) -> (Equation, Literals) {
+fn parse(src: &str) -> Equation {
     let text = if src.contains('=') {
         src.to_string()
     } else {
         format!("y={src}")
     };
-    let eq = Equation::parse(&text).unwrap_or_else(|e| panic!("{src}: {e:?}"));
-    let lits = Literals::of(&text, ParseOptions::default()).expect("parsed once already");
-    (eq, lits)
+    Equation::parse(&text).unwrap_or_else(|e| panic!("{src}: {e:?}"))
 }
 
 fn print(src: &str, lo: f64, hi: f64, unit: TrigUnit) {
-    let (eq, lits) = parse(src);
+    let eq = parse(src);
     let Some((_, ast)) = eq.explicit() else {
         eprintln!("not an explicit function");
         return;
@@ -56,7 +53,7 @@ fn print(src: &str, lo: f64, hi: f64, unit: TrigUnit) {
         trig_unit: unit,
         ..CompileOptions::default()
     };
-    let ctx = Ctx::new(opts, &lits);
+    let ctx = Ctx::new(opts);
     let x = Interval::new(lo, hi);
     let s = taylor(ast, x, 3, &ctx);
     println!("f on [{lo:e}, {hi:e}]: {}", show(&s[0]));
@@ -97,11 +94,11 @@ fn bench() {
         "expression", "f64 ns", "o0 ns", "o1 ns", "o2 ns", "o3 ns"
     );
     for src in cases {
-        let (eq, lits) = parse(src);
+        let eq = parse(src);
         let (_, ast) = eq.explicit().expect("explicit");
         let opts = CompileOptions::default();
-        let ctx = Ctx::new(opts, &lits);
-        let prog = Program::compile_typed(ast, &opts, &lits).expect("compiles");
+        let ctx = Ctx::new(opts);
+        let prog = Program::compile_typed(ast, &opts).expect("compiles");
         let n = 20_000usize;
         let xs: Vec<f64> = (0..n).map(|i| 0.37 + i as f64 * 1e-3).collect();
         let t = Instant::now();

@@ -28,7 +28,7 @@ pub mod rules;
 pub mod side;
 
 pub use egraph::{Limits, Parity, Settings, Simplified, Stop, prove_parity, simplify};
-pub use lang::{ExactLiterals, Unsupported};
+pub use lang::Unsupported;
 pub use limit::Limit;
 pub use period::{Period, PiQ};
 pub use q::Q;
@@ -37,12 +37,12 @@ pub use side::{Cond, Jump, side_conditions};
 
 /// Proves a period of `e` in `settings`' angle unit (see [`period`]).
 pub fn prove_period(e: &Expr, settings: &Settings<'_>) -> Option<Period> {
-    period::prove_period(e, settings.unit, settings.literals)
+    period::prove_period(e, settings.unit)
 }
 
 /// The limit of `e` at ±∞ (see [`limit`]).
 pub fn limit_at(e: &Expr, dir: Dir, settings: &Settings<'_>) -> Limit {
-    limit::limit(e, dir, settings.unit, settings.literals, settings.variables)
+    limit::limit(e, dir, settings.unit, settings.variables)
 }
 
 use crate::ast::{BinOp, Expr, Func, Lit};

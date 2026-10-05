@@ -29,9 +29,7 @@ use std::sync::atomic::AtomicBool;
 use crate::Equation;
 use crate::compile::CompileOptions;
 use crate::equation::Axis;
-use crate::interval::Literals;
 use crate::lexer::ParseOptions;
-use crate::simplify::ExactLiterals;
 use cover::{Cover, Target};
 use serde::{Deserialize, Serialize};
 
@@ -204,15 +202,12 @@ pub fn certify_equation(
         return Err("not a function of x".into());
     };
     let binding = Binding::of(eq, &opts, budget);
-    let po: ParseOptions = eq.parse_options();
-    let lits = Literals::of(text, po).map_err(|e| format!("{e:?}"))?;
-    let exact = ExactLiterals::of(text, po).map_err(|e| format!("{e:?}"))?;
-    let mut f = Fun::new(expr, &lits, opts, budget, cancel);
-    f.exact = Some(&exact);
+    let mut f = Fun::new(expr, opts, budget, cancel);
+    f.simplifier = true;
     if let Some(g) = rewrite(&f) {
         f.eval = canonical(&g);
     }
-    f.eval = fun::recentre(&f.eval, &exact);
+    f.eval = fun::recentre(&f.eval);
     // A symbolic derivative only for f differentiable wherever defined: no
     // floor, round, sign, mod (their derivative 0 hides the jumps), and no
     // abs, min or max of x (their derivative's tree, sign(u)·u′, is defined
@@ -228,7 +223,7 @@ pub fn certify_equation(
             .map(|c| canonical(&c.g))
             .collect();
     }
-    f.numerators = fun::rational_numerators(&f.expr, &exact);
+    f.numerators = fun::rational_numerators(&f.expr);
     let mut a = certify(&f, text);
     a.binding = Some(binding);
     Ok(a)

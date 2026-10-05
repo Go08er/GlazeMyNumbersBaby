@@ -13,7 +13,6 @@
 //! (`sin(π·x)` has period 2, `sin(2x)` has π). Periods of different powers
 //! of π, or an inexact coefficient (`sin(√2·x)`), give no period.
 
-use super::lang::ExactLiterals;
 use super::q::Q;
 use crate::ast::{BinOp, Constant, Expr, Func};
 use crate::compile::syntactic_rational;
@@ -79,7 +78,7 @@ impl Period {
 }
 
 /// The exact value of an x-free expression, if it is q·πᵏ.
-pub fn exact_constant(e: &Expr, lits: &ExactLiterals) -> Option<PiQ> {
+pub fn exact_constant(e: &Expr) -> Option<PiQ> {
     Some(match e {
         Expr::Num(v, lit) => PiQ {
             q: lit.q(*v)?,
@@ -87,15 +86,15 @@ pub fn exact_constant(e: &Expr, lits: &ExactLiterals) -> Option<PiQ> {
         },
         Expr::Const(Constant::Pi) => PiQ { q: Q::ONE, k: 1 },
         Expr::Neg(a) => {
-            let a = exact_constant(a, lits)?;
+            let a = exact_constant(a)?;
             PiQ {
                 q: a.q.neg()?,
                 k: a.k,
             }
         }
-        Expr::Degrees(a) => exact_constant(a, lits)?,
+        Expr::Degrees(a) => exact_constant(a)?,
         Expr::Bin(op, a, b) => {
-            let (x, y) = (exact_constant(a, lits)?, exact_constant(b, lits)?);
+            let (x, y) = (exact_constant(a)?, exact_constant(b)?);
             match op {
                 BinOp::Add => x.add(y)?,
                 BinOp::Sub => x.add(PiQ {
@@ -105,7 +104,7 @@ pub fn exact_constant(e: &Expr, lits: &ExactLiterals) -> Option<PiQ> {
                 BinOp::Mul => x.mul(y)?,
                 BinOp::Div => x.div(y)?,
                 BinOp::Pow => {
-                    let (p, q) = syntactic_rational(b, lits)?;
+                    let (p, q) = syntactic_rational(b, crate::compile::Reading::Typed)?;
                     if q != 1 || p.unsigned_abs() > 64 {
                         return None;
                     }
@@ -121,8 +120,8 @@ pub fn exact_constant(e: &Expr, lits: &ExactLiterals) -> Option<PiQ> {
 }
 
 /// `e` as a·x + b with a exact (`None` if it isn't, or a = 0).
-pub fn affine(e: &Expr, lits: &ExactLiterals) -> Option<PiQ> {
-    fn coef(e: &Expr, lits: &ExactLiterals) -> Option<PiQ> {
+pub fn affine(e: &Expr) -> Option<PiQ> {
+    fn coef(e: &Expr) -> Option<PiQ> {
         // The coefficient of x, for an expression known to be affine.
         if !e.contains_x() {
             return Some(PiQ { q: Q::ZERO, k: 0 });
@@ -130,40 +129,38 @@ pub fn affine(e: &Expr, lits: &ExactLiterals) -> Option<PiQ> {
         match e {
             Expr::X => Some(PiQ { q: Q::ONE, k: 0 }),
             Expr::Neg(a) => {
-                let c = coef(a, lits)?;
+                let c = coef(a)?;
                 Some(PiQ {
                     q: c.q.neg()?,
                     k: c.k,
                 })
             }
-            Expr::Degrees(a) => coef(a, lits),
-            Expr::Bin(BinOp::Add, a, b) => coef(a, lits)?.add(coef(b, lits)?),
+            Expr::Degrees(a) => coef(a),
+            Expr::Bin(BinOp::Add, a, b) => coef(a)?.add(coef(b)?),
             Expr::Bin(BinOp::Sub, a, b) => {
-                let c = coef(b, lits)?;
-                coef(a, lits)?.add(PiQ {
+                let c = coef(b)?;
+                coef(a)?.add(PiQ {
                     q: c.q.neg()?,
                     k: c.k,
                 })
             }
             Expr::Bin(BinOp::Mul, a, b) => match (a.contains_x(), b.contains_x()) {
-                (true, false) => coef(a, lits)?.mul(exact_constant(b, lits)?),
-                (false, true) => exact_constant(a, lits)?.mul(coef(b, lits)?),
+                (true, false) => coef(a)?.mul(exact_constant(b)?),
+                (false, true) => exact_constant(a)?.mul(coef(b)?),
                 _ => None,
             },
-            Expr::Bin(BinOp::Div, a, b) if !b.contains_x() => {
-                coef(a, lits)?.div(exact_constant(b, lits)?)
-            }
+            Expr::Bin(BinOp::Div, a, b) if !b.contains_x() => coef(a)?.div(exact_constant(b)?),
             _ => None,
         }
     }
-    let c = coef(e, lits)?;
+    let c = coef(e)?;
     (!c.q.is_zero()).then_some(c)
 }
 
 /// Proves a period of `e`: a common multiple of the periods of the trig
 /// functions holding every x. `None`: not proven (`e` may still be
 /// periodic).
-pub fn prove_period(e: &Expr, unit: TrigUnit, lits: &ExactLiterals) -> Option<Period> {
+pub fn prove_period(e: &Expr, unit: TrigUnit) -> Option<Period> {
     if !e.contains_x() {
         // A constant: no period (the panel's convention).
         return None;
@@ -195,13 +192,7 @@ pub fn prove_period(e: &Expr, unit: TrigUnit, lits: &ExactLiterals) -> Option<Pe
     let mut periods: Vec<PiQ> = Vec::new();
     // Every x must be inside a periodic application with an affine
     // argument.
-    fn walk(
-        e: &Expr,
-        lits: &ExactLiterals,
-        full: PiQ,
-        half: PiQ,
-        out: &mut Vec<PiQ>,
-    ) -> Option<()> {
+    fn walk(e: &Expr, full: PiQ, half: PiQ, out: &mut Vec<PiQ>) -> Option<()> {
         if !e.contains_x() {
             return Some(());
         }
@@ -211,7 +202,7 @@ pub fn prove_period(e: &Expr, unit: TrigUnit, lits: &ExactLiterals) -> Option<Pe
                 f @ (Func::Sin | Func::Cos | Func::Sec | Func::Csc | Func::Tan | Func::Cot),
                 args,
             ) => {
-                let a = affine(&args[0], lits)?;
+                let a = affine(&args[0])?;
                 let turn = if matches!(f, Func::Tan | Func::Cot) {
                     half
                 } else {
@@ -224,21 +215,21 @@ pub fn prove_period(e: &Expr, unit: TrigUnit, lits: &ExactLiterals) -> Option<Pe
                 out.push(turn.div(abs)?);
                 Some(())
             }
-            Expr::Neg(a) | Expr::Degrees(a) => walk(a, lits, full, half, out),
+            Expr::Neg(a) | Expr::Degrees(a) => walk(a, full, half, out),
             Expr::Bin(_, a, b) => {
-                walk(a, lits, full, half, out)?;
-                walk(b, lits, full, half, out)
+                walk(a, full, half, out)?;
+                walk(b, full, half, out)
             }
             Expr::Call(_, args) => {
                 for a in args {
-                    walk(a, lits, full, half, out)?;
+                    walk(a, full, half, out)?;
                 }
                 Some(())
             }
             _ => Some(()),
         }
     }
-    walk(e, lits, full, half, &mut periods)?;
+    walk(e, full, half, &mut periods)?;
     let first = *periods.first()?;
     let mut p = first;
     for t in &periods[1..] {
@@ -261,8 +252,7 @@ mod tests {
     fn period(s: &str, unit: TrigUnit) -> Option<PiQ> {
         let text = format!("y={s}");
         let eq = Equation::parse(&text).unwrap();
-        let lits = ExactLiterals::of(&text, Default::default()).unwrap();
-        prove_period(eq.explicit().unwrap().1, unit, &lits).map(|p| p.value)
+        prove_period(eq.explicit().unwrap().1, unit).map(|p| p.value)
     }
 
     fn pi(n: i128, d: i128) -> Option<PiQ> {

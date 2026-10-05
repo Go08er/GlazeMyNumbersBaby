@@ -8,36 +8,12 @@
 //!
 //! Until review 13 the exact values were looked up by the double each
 //! literal parsed to, which two different decimals can share
-//! (`1.0000000000000001` and `1`, R13-M-01). [`Literals`] remains the
-//! handle the interval core and the compiler take, now holding nothing:
-//! every number reads as its own `Lit` says.
+//! (`1.0000000000000001` and `1`, R13-M-01): every number now reads as its
+//! own `Lit` says.
 
 use super::arith::Interval;
 use crate::ast::Lit;
-use crate::error::EquationError;
-use crate::lexer::{ParseOptions, literal_texts};
 use std::cmp::Ordering;
-
-/// How the numbers of a typed expression are read: each as its own [`Lit`]
-/// says (a decimal typed is that decimal, a number written by the program
-/// is what it was written as).
-#[derive(Clone, Debug, Default)]
-pub struct Literals;
-
-impl Literals {
-    /// The reading of the literals of `text` (as
-    /// [`crate::Equation::parse_with`] would read it): an error if it
-    /// doesn't scan.
-    pub fn of(text: &str, opts: ParseOptions) -> Result<Literals, EquationError> {
-        literal_texts(text, opts)?;
-        Ok(Literals)
-    }
-
-    /// The same reading, for a tree no text is known for.
-    pub fn none() -> Literals {
-        Literals
-    }
-}
 
 impl Lit {
     /// The tightest enclosure of the number `Num(v, self)` stands for: v

@@ -154,11 +154,11 @@ enum Exponent {
 /// integers, else by its exact value (the literals as typed, never their
 /// doubles), else by an enclosure that is an integer point or holds none.
 fn exponent(f: &Fun<'_>, b: &Expr) -> Exponent {
-    if let Some((p, q)) = syntactic_rational(b, f.lits) {
+    if let Some((p, q)) = syntactic_rational(b, crate::compile::Reading::Typed) {
         return Exponent::Rational(p, q);
     }
-    if let Some(exact) = f.exact
-        && let Some(v) = crate::simplify::period::exact_constant(b, exact)
+    if f.simplifier
+        && let Some(v) = crate::simplify::period::exact_constant(b)
     {
         if v.k == 0 {
             if let Some(n) = v.q.as_int().filter(|n| n.unsigned_abs() < 1_000_000) {

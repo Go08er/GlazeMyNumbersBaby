@@ -405,39 +405,40 @@ pub fn one(r: f64) -> R {
 /// The value of `e` at x, each number the double it holds (the compiled
 /// program's [`crate::compile::Program::compile`]).
 pub fn reval(e: &Expr, x: f64, u: TrigUnit) -> R {
-    reval_in(e, x, u, None)
+    reval_in(e, x, u, false)
 }
 
-/// The value of `e` at x, `e` typed with the literals `lits`, as the app
-/// computes it (`Program::compile_typed`): arithmetic on literals alone
-/// exact and rounded once, a constant exponent or root degree an integer
-/// or not by its exact value.
-pub fn reval_typed(e: &Expr, x: f64, u: TrigUnit, lits: &crate::interval::Literals) -> R {
-    reval_in(e, x, u, Some(lits))
+/// The value of `e` at x, its numbers read as typed (each by its own
+/// `Lit`), as the app computes it (`Program::compile_typed`): arithmetic on
+/// literals alone exact and rounded once, a constant exponent or root
+/// degree an integer or not by its exact value.
+pub fn reval_typed(e: &Expr, x: f64, u: TrigUnit) -> R {
+    reval_in(e, x, u, true)
 }
 
-fn reval_in(e: &Expr, x: f64, u: TrigUnit, lits: Option<&crate::interval::Literals>) -> R {
+fn reval_in(e: &Expr, x: f64, u: TrigUnit, typed: bool) -> R {
     use crate::compile::PowKind;
     let opts = CompileOptions {
         trig_unit: u,
         variables: &(),
     };
-    if lits.is_some()
-        && let Some(v) = crate::compile::typed_value(e, &opts)
-    {
+    if typed && let Some(v) = crate::compile::typed_value(e, &opts) {
         return match v {
             crate::compile::TypedValue::Value(v) => R::V(Xf::of(v)),
             crate::compile::TypedValue::DivZero => R::Undef,
             crate::compile::TypedValue::Unknown => R::Unknown,
         };
     }
-    let reval = |a: &Expr, x: f64, u: TrigUnit| reval_in(a, x, u, lits);
-    let kind = |b: &Expr| match lits {
-        Some(l) => crate::compile::typed_pow_kind(b, &opts, l),
-        None => match rational(b) {
-            Some((p, q)) => PowKind::Rational(p, q),
-            None => PowKind::Plain,
-        },
+    let reval = |a: &Expr, x: f64, u: TrigUnit| reval_in(a, x, u, typed);
+    let kind = |b: &Expr| {
+        if typed {
+            crate::compile::typed_pow_kind(b, &opts)
+        } else {
+            match rational(b) {
+                Some((p, q)) => PowKind::Rational(p, q),
+                None => PowKind::Plain,
+            }
+        }
     };
     match e {
         Expr::Num(v, _) => R::V(Xf::of(*v)),
@@ -470,13 +471,10 @@ fn reval_in(e: &Expr, x: f64, u: TrigUnit, lits: Option<&crate::interval::Litera
         // A root of a degree exactly no integer: the power 1/n, base ≥ 0.
         Expr::Call(Func::Root, args)
             if args.len() == 2
-                && lits.is_some_and(|_| {
-                    crate::compile::typed_root_power(&args[1], &opts).is_some()
-                }) =>
+                && typed
+                && crate::compile::typed_root_power(&args[1], &opts).is_some() =>
         {
-            let inv = lits
-                .and_then(|_| crate::compile::typed_root_power(&args[1], &opts))
-                .expect("checked");
+            let inv = crate::compile::typed_root_power(&args[1], &opts).expect("checked");
             match reval(&args[0], x, u) {
                 R::V(va) if va.sign() < 0.0 => R::Undef,
                 R::V(va) => pow_var(va, Xf::of(inv)),
@@ -487,7 +485,7 @@ fn reval_in(e: &Expr, x: f64, u: TrigUnit, lits: Option<&crate::interval::Litera
         // 2⁵³): the real root sign(a)·|a|^(1/n).
         Expr::Call(Func::Root, args)
             if args.len() == 2
-                && lits.is_some()
+                && typed
                 && crate::compile::typed_odd_root_power(&args[1], &opts).is_some() =>
         {
             let inv = crate::compile::typed_odd_root_power(&args[1], &opts).expect("checked");

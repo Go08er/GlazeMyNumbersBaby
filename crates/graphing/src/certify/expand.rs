@@ -129,7 +129,7 @@ impl<'a> Ex<'a> {
             t,
             right,
             m,
-            ctx: Ctx::new(f.opts, f.lits),
+            ctx: Ctx::new(f.opts),
         }
     }
 
@@ -446,7 +446,8 @@ impl<'a> Ex<'a> {
             return self.exp(&self.mul(&self.of(b)?, &la));
         }
         let u = self.of(a)?;
-        if let Some((n, d)) = crate::compile::syntactic_rational(b, self.ctx.literals) {
+        if let Some((n, d)) = crate::compile::syntactic_rational(b, crate::compile::Reading::Typed)
+        {
             return self.power(&u, i64::from(n), i64::from(d), b);
         }
         // Another constant exponent: a base tending to a positive value.

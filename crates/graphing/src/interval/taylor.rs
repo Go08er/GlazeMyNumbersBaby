@@ -15,7 +15,6 @@
 use super::arith::Interval;
 use super::dec::{Dec, DecInterval};
 use super::elem;
-use super::literal::Literals;
 use crate::ast::{BinOp, Constant, Expr, Func};
 use crate::compile::{CompileOptions, DEFAULT_VARIABLE_VALUE, syntactic_rational};
 use crate::functions::TrigUnit;
@@ -25,8 +24,6 @@ use crate::functions::TrigUnit;
 pub struct Ctx<'a> {
     /// Angle unit and slider values.
     pub opts: CompileOptions<'a>,
-    /// How the numbers are read ([`Literals`]: each by its own `Lit`).
-    pub literals: &'a Literals,
     /// The value(s) of y, for relations in x and y (no y-derivatives).
     pub y: DecInterval,
     /// Probe for poles: n! at a pole of Γ is [`f64::MAX`, +∞] instead of
@@ -37,10 +34,9 @@ pub struct Ctx<'a> {
 }
 
 impl<'a> Ctx<'a> {
-    pub fn new(opts: CompileOptions<'a>, literals: &'a Literals) -> Ctx<'a> {
+    pub fn new(opts: CompileOptions<'a>) -> Ctx<'a> {
         Ctx {
             opts,
-            literals,
             y: DecInterval::unknown(),
             pole_probe: false,
         }
@@ -352,7 +348,7 @@ fn powrat_ser(u: &Series, p: i32, q: i32) -> Series {
 
 fn pow(a: &Expr, b: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
     let u = ev(a, x, n, ctx);
-    if let Some((p, q)) = syntactic_rational(b, ctx.literals) {
+    if let Some((p, q)) = syntactic_rational(b, crate::compile::Reading::Typed) {
         return if q == 1 {
             powi_ser(&u, p)
         } else {

@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use crate::ast::{BinOp, Expr, Func, Lit};
 use crate::compile::{CompileOptions, DEFAULT_VARIABLE_VALUE, VariableValues};
 use crate::functions::TrigUnit;
-use crate::interval::{Ctx, DecInterval, Interval, Literals, Series, enclose, taylor};
+use crate::interval::{Ctx, DecInterval, Interval, Series, enclose, taylor};
 use crate::simplify::Q;
 
 /// Slider values captured when the curve was compiled.
@@ -26,16 +26,14 @@ impl VariableValues for Vars {
 #[derive(Clone, Debug)]
 pub struct IntervalFn {
     expr: Expr,
-    literals: Literals,
     unit: TrigUnit,
     vars: Vars,
 }
 
 impl IntervalFn {
-    /// `expr` in x (an `x = g(y)` curve already swapped), `literals` read
-    /// from the text it was parsed from, and the options it was compiled
-    /// with.
-    pub(crate) fn new(expr: Expr, literals: Literals, opts: &CompileOptions<'_>) -> IntervalFn {
+    /// `expr` in x (an `x = g(y)` curve already swapped; each number its
+    /// own exact value) and the options it was compiled with.
+    pub(crate) fn new(expr: Expr, opts: &CompileOptions<'_>) -> IntervalFn {
         let vars = expr
             .variables()
             .into_iter()
@@ -46,7 +44,6 @@ impl IntervalFn {
             .collect();
         IntervalFn {
             expr,
-            literals,
             unit: opts.trig_unit,
             vars: Vars(vars),
         }
@@ -57,7 +54,7 @@ impl IntervalFn {
             trig_unit: self.unit,
             variables: &self.vars,
         };
-        f(&Ctx::new(opts, &self.literals))
+        f(&Ctx::new(opts))
     }
 
     /// An enclosure of f over [lo, hi], decorated.
@@ -73,7 +70,7 @@ impl IntervalFn {
             trig_unit: self.unit,
             variables: &self.vars,
         };
-        let mut ctx = Ctx::new(opts, &self.literals);
+        let mut ctx = Ctx::new(opts);
         ctx.pole_probe = true;
         let e = enclose(&self.expr, Interval::point(x), &ctx);
         !e.is_empty() && !e.iv.is_bounded()

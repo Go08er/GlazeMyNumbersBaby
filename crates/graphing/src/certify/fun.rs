@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::ast::{BinOp, Expr, Func, Lit};
 use crate::compile::CompileOptions;
-use crate::interval::{Ctx, DecInterval, Interval, Literals, Series, taylor};
+use crate::interval::{Ctx, DecInterval, Interval, Series, taylor};
 use crate::simplify::q::Q;
 
 /// Why certification stopped early.
@@ -89,27 +89,27 @@ fn int_num(q: Q) -> Option<Expr> {
 }
 
 /// `e` as c·xᵏ (c exact, k whole ≤ 64) if it is a monomial.
-fn monomial(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<(Q, u32)> {
+fn monomial(e: &Expr) -> Option<(Q, u32)> {
     Some(match e {
         Expr::X => (Q::ONE, 1),
         Expr::Num(v, lit) => (lit.q(*v)?, 0),
         Expr::Neg(a) => {
-            let (c, k) = monomial(a, lits)?;
+            let (c, k) = monomial(a)?;
             (c.neg()?, k)
         }
         Expr::Bin(BinOp::Mul, a, b) => {
-            let ((c, k), (d, j)) = (monomial(a, lits)?, monomial(b, lits)?);
+            let ((c, k), (d, j)) = (monomial(a)?, monomial(b)?);
             (c.mul(d)?, k + j)
         }
         Expr::Bin(BinOp::Div, a, b) => {
-            let ((c, k), (d, 0)) = (monomial(a, lits)?, monomial(b, lits)?) else {
+            let ((c, k), (d, 0)) = (monomial(a)?, monomial(b)?) else {
                 return None;
             };
             (c.div(d)?, k)
         }
         Expr::Bin(BinOp::Pow, a, b) => {
-            let (c, k) = monomial(a, lits)?;
-            let n = crate::compile::syntactic_rational(b, lits)
+            let (c, k) = monomial(a)?;
+            let n = crate::compile::syntactic_rational(b, crate::compile::Reading::Typed)
                 .filter(|&(_, q)| q == 1)
                 .map(|(p, _)| p)
                 .filter(|&p| (0..=64).contains(&p))?;
@@ -121,19 +121,14 @@ fn monomial(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<(Q, u32)>
 }
 
 /// The terms of a sum of monomials (± each), as coefficients by power.
-fn monomial_sum(
-    e: &Expr,
-    lits: &crate::simplify::ExactLiterals,
-    sign: bool,
-    out: &mut Vec<Q>,
-) -> Option<()> {
+fn monomial_sum(e: &Expr, sign: bool, out: &mut Vec<Q>) -> Option<()> {
     match e {
         Expr::Bin(op @ (BinOp::Add | BinOp::Sub), a, b) => {
-            monomial_sum(a, lits, sign, out)?;
-            monomial_sum(b, lits, sign == (*op == BinOp::Add), out)
+            monomial_sum(a, sign, out)?;
+            monomial_sum(b, sign == (*op == BinOp::Add), out)
         }
         _ => {
-            let (c, k) = monomial(e, lits)?;
+            let (c, k) = monomial(e)?;
             let c = if sign { c } else { c.neg()? };
             let k = k as usize;
             if out.len() <= k {
@@ -168,12 +163,12 @@ fn q_num(q: Q) -> Option<Expr> {
 /// parts come expanded) in Horner's form, ((aₙx + aₙ₋₁)x + …)x + a₀: on a
 /// tail every product there has its factors of one sign, where the sum
 /// as written is ∞ − ∞ (x² + x on (−∞, −M]).
-fn horner(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<Expr> {
+fn horner(e: &Expr) -> Option<Expr> {
     if !matches!(e, Expr::Bin(BinOp::Add | BinOp::Sub, ..)) {
         return None;
     }
     let mut cs: Vec<Q> = Vec::new();
-    monomial_sum(e, lits, true, &mut cs)?;
+    monomial_sum(e, true, &mut cs)?;
     while cs.last().is_some_and(|c| c.is_zero()) {
         cs.pop();
     }
@@ -209,7 +204,7 @@ fn horner(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<Expr> {
 /// is [0, 2⁻⁵²]; as (x − 1000)/1000, 2⁻⁴³/1000 to an ulp.) And each sum of
 /// monomials of degree ≥ 2 in Horner's form ([`horner`]). The same real
 /// function, so f's evaluated tree may be written so.
-pub fn recentre(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Expr {
+pub fn recentre(e: &Expr) -> Expr {
     if !matches!(e, Expr::X)
         && let Some((a, b)) = affine(e)
         && !a.is_zero()
@@ -241,14 +236,14 @@ pub fn recentre(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Expr {
     {
         return form;
     }
-    if let Some(h) = horner(e, lits) {
+    if let Some(h) = horner(e) {
         return h;
     }
     match e {
-        Expr::Neg(a) => Expr::Neg(Box::new(recentre(a, lits))),
-        Expr::Degrees(a) => Expr::Degrees(Box::new(recentre(a, lits))),
-        Expr::Bin(op, a, b) => Expr::bin(*op, recentre(a, lits), recentre(b, lits)),
-        Expr::Call(f, args) => Expr::Call(*f, args.iter().map(|a| recentre(a, lits)).collect()),
+        Expr::Neg(a) => Expr::Neg(Box::new(recentre(a))),
+        Expr::Degrees(a) => Expr::Degrees(Box::new(recentre(a))),
+        Expr::Bin(op, a, b) => Expr::bin(*op, recentre(a), recentre(b)),
+        Expr::Call(f, args) => Expr::Call(*f, args.iter().map(recentre).collect()),
         _ => e.clone(),
     }
 }
@@ -268,7 +263,7 @@ pub fn at_path<'e>(e: &'e Expr, path: &[u8]) -> Option<&'e Expr> {
     at_path(child, rest)
 }
 
-/// The function, its literals and its budget.
+/// The function, its options and its budget.
 pub struct Fun<'a> {
     /// The canonical tree: where f is defined comes from its side
     /// conditions, and side expressions are paths into it.
@@ -305,10 +300,9 @@ pub struct Fun<'a> {
     /// For a rational f, the numerators of f, f′, f″ in lowest terms
     /// ([`rational_numerators`]).
     pub numerators: Option<[Expr; 3]>,
-    pub lits: &'a Literals,
-    /// The exact literals, for the simplifier's proofs (none: no
-    /// simplifier).
-    pub exact: Option<&'a crate::simplify::ExactLiterals>,
+    /// The simplifier may be used for proofs (`certify_equation`'s
+    /// analyses; not the panel's own checks).
+    pub simplifier: bool,
     pub opts: CompileOptions<'a>,
     evals: Cell<u64>,
     /// The current phase's limit.
@@ -321,7 +315,6 @@ pub struct Fun<'a> {
 impl<'a> Fun<'a> {
     pub fn new(
         expr: &Expr,
-        lits: &'a Literals,
         opts: CompileOptions<'a>,
         budget: u64,
         cancel: Option<&'a AtomicBool>,
@@ -337,8 +330,7 @@ impl<'a> Fun<'a> {
             kinked: false,
             nonzero: Vec::new(),
             numerators: None,
-            lits,
-            exact: None,
+            simplifier: false,
             opts,
             evals: Cell::new(0),
             budget: Cell::new(budget),
@@ -347,9 +339,12 @@ impl<'a> Fun<'a> {
         }
     }
 
-    /// The simplifier's settings for f, when it has its literals.
+    /// The simplifier's settings for f, when the simplifier may be used.
     pub fn settings(&self) -> Option<crate::simplify::Settings<'a>> {
-        let mut s = crate::simplify::Settings::new(&self.opts, self.exact?);
+        if !self.simplifier {
+            return None;
+        }
+        let mut s = crate::simplify::Settings::new(&self.opts);
         s.cancel = self.cancel;
         // Several runs per analysis: each kept small.
         s.limits.nodes = CERTIFY_NODES;
@@ -379,9 +374,11 @@ impl<'a> Fun<'a> {
     }
 
     fn build_derivs(&self, symbolic: bool) -> Option<[Expr; 2]> {
-        let exact = self.exact?;
+        if !self.simplifier {
+            return None;
+        }
         // (A rational f's, expanded exactly, in Horner's form.)
-        let rational = rational_derivs(&self.expr, exact).map(|d| d.map(|t| recentre(&t, exact)));
+        let rational = rational_derivs(&self.expr).map(|d| d.map(|t| recentre(&t)));
         rational.or_else(|| {
             if !symbolic {
                 return None;
@@ -392,7 +389,7 @@ impl<'a> Fun<'a> {
             // the derivative's exponents stay exact; and every constant in
             // the trees typed or an integer (none computed in floating
             // point).
-            let e = exact_exponents(&self.eval, exact);
+            let e = exact_exponents(&self.eval);
             let d = symbolic_derivs(&e, self.opts.trig_unit, Some(&s))?;
             d.iter().all(sound_constants).then_some(d)
         })
@@ -416,10 +413,15 @@ impl<'a> Fun<'a> {
             if b.contains_x() {
                 return None;
             }
-            if let Some((p, q)) = crate::compile::syntactic_rational(b, self.lits) {
+            if let Some((p, q)) =
+                crate::compile::syntactic_rational(b, crate::compile::Reading::Typed)
+            {
                 return (q != 1).then(|| p as f64 / q as f64);
             }
-            let v = crate::simplify::period::exact_constant(b, self.exact?)?;
+            if !self.simplifier {
+                return None;
+            }
+            let v = crate::simplify::period::exact_constant(b)?;
             (v.k == 0 && !v.q.is_int()).then(|| v.q.to_f64())
         };
         for e in [&self.expr, &self.eval] {
@@ -674,7 +676,7 @@ impl<'a> Fun<'a> {
     }
 
     fn ctx(&self) -> Ctx<'_> {
-        Ctx::new(self.opts, self.lits)
+        Ctx::new(self.opts)
     }
 
     /// Taylor coefficients of `e` (a sub-tree of `expr`) over the box, up
@@ -781,10 +783,10 @@ fn merge(mut s: Series, t: &Series) -> Series {
 
 /// f′ and f″ of a rational function from its exact form (see
 /// [`Fun::derivs`]); `None` if f isn't one or the arithmetic would overflow.
-pub fn rational_derivs(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<[Expr; 2]> {
+pub fn rational_derivs(e: &Expr) -> Option<[Expr; 2]> {
     use crate::simplify::q::Q;
     use crate::simplify::rational::Poly;
-    let rf = crate::simplify::rational_form(e, lits)?;
+    let rf = crate::simplify::rational_form(e)?;
     let (n, d) = (rf.reduced.num, rf.reduced.den);
     let deriv = |p: &Poly| -> Option<Poly> {
         let mut out = Poly::zero();
@@ -827,10 +829,10 @@ pub fn rational_derivs(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Optio
 /// The numerators of f, f′ and f″ in lowest terms, for a rational f: on
 /// f's domain each vanishes exactly where its function does (what is left
 /// of the denominator vanishes only at f's poles).
-pub fn rational_numerators(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<[Expr; 3]> {
+pub fn rational_numerators(e: &Expr) -> Option<[Expr; 3]> {
     use crate::simplify::q::Q;
     use crate::simplify::rational::Poly;
-    let rf = crate::simplify::rational_form(e, lits)?;
+    let rf = crate::simplify::rational_form(e)?;
     let (n, d) = (rf.reduced.num, rf.reduced.den);
     let deriv = |p: &Poly| -> Option<Poly> {
         let mut out = Poly::zero();
@@ -867,10 +869,12 @@ pub fn rational_numerators(e: &Expr, lits: &crate::simplify::ExactLiterals) -> O
 /// `e` with each constant exponent that is a typed decimal (`x^0.9`)
 /// written as the exact fraction it is (`x^(9/10)`). The two agree wherever
 /// the decimal power is defined (base ≥ 0, or an integer exponent).
-fn exact_exponents(e: &Expr, exact: &crate::simplify::ExactLiterals) -> Expr {
+fn exact_exponents(e: &Expr) -> Expr {
     e.map(&|n| match n {
         Expr::Bin(BinOp::Pow, a, b)
-            if !b.contains_x() && crate::compile::syntactic_rational(b, exact).is_none() =>
+            if !b.contains_x()
+                && crate::compile::syntactic_rational(b, crate::compile::Reading::Typed)
+                    .is_none() =>
         {
             let q = match &**b {
                 Expr::Num(v, lit) => lit.q(*v)?,
@@ -882,7 +886,7 @@ fn exact_exponents(e: &Expr, exact: &crate::simplify::ExactLiterals) -> Expr {
             };
             Some(Expr::bin(
                 BinOp::Pow,
-                exact_exponents(a, exact),
+                exact_exponents(a),
                 crate::simplify::rational::q_expr(q),
             ))
         }
@@ -1086,7 +1090,7 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
             // (At face value: an even power is ≥ 0, and so is a power of a
             // base ≥ 0 if the exponent is in fact no integer.)
             Expr::Bin(BinOp::Pow, a, p) => {
-                match crate::compile::syntactic_rational(p, &crate::compile::Doubles) {
+                match crate::compile::syntactic_rational(p, crate::compile::Reading::FaceValue) {
                     Some((n, 1)) if n % 2 == 0 => Some(never_zero(a)),
                     _ => sign_of(a).map(|pos| pos && never_zero(e)),
                 }
