@@ -269,6 +269,13 @@ const UNMODELLED: &[(&str, &str)] = &[
         "x!/x!",
         "XI=none | YI=1 | P=neither | MIN=none | MAX=none | INF=none | VA=none | R={1}",
     ),
+    // Review 12, R12-M-03: 99!! exceeds 6625061298371663·2²⁰⁸ by less
+    // than 10⁷⁰, so this is 1 everywhere (an enclosure of 99!! that stops
+    // at that double made it 0).
+    (
+        "ceil((99!!-6625061298371663*2^208)/10^70)",
+        "XI=none | YI=1 | P=even | MIN=none | MAX=none | INF=none | VA=none | R={1}",
+    ),
 ];
 
 /// The functions of review rounds 9–11 (REVIEW_9/10/11.md), with what is
@@ -751,6 +758,47 @@ const REVIEW: &[(&str, &str)] = &[
     (
         "x+tan(x)-30000",
         "D=fam(pi/2,pi) | XI=inf | P=neither | T=none | MIN=none | MAX=none | INF=inf | VA=fam(pi/2,pi) | HA=none | R=R",
+    ),
+    // Review 12, R12-M-02: min and max are undefined wherever either
+    // argument is (√sin x at −1), even where the other one would win; no
+    // zero or extremum at −1. Defined on [2kπ, (2k+1)π], where the √ side
+    // is between 2 and 3 and (x + 1)² wins only on [0, √2 − 1].
+    (
+        "min((x+1)^2,2+sqrt(sin(x)))",
+        "XI=none | YI=1 | VA=none | MAX=fam(pi/2,2*pi,3)",
+    ),
+    (
+        "max(-(x+1)^2,-2-sqrt(sin(x)))",
+        "XI=none | YI=-1 | VA=none | MIN=fam(pi/2,2*pi,-3)",
+    ),
+    // Review 12, R12-M-01: a literal is the decimal typed, never its double.
+    // 1.0000000000000001 is no integer (a power of a base ≥ 0 only), and
+    // 1.0000000000000001 − cos x is never 0 (domain ℝ, y-intercept 2·10¹⁶).
+    (
+        "x^1.0000000000000001",
+        "D=[0,inf) | XI=0 | YI=0 | P=neither | T=none | MIN=(0,0) | MAX=none | INF=none | VA=none | HA=none | R=[0,inf)",
+    ),
+    (
+        "x^2.0000000000000001",
+        "D=[0,inf) | XI=0 | YI=0 | P=neither | T=none | MIN=(0,0) | MAX=none | INF=none | VA=none | HA=none | R=[0,inf)",
+    ),
+    (
+        "2/(1.0000000000000001-cos(x))",
+        "D=R | XI=none | YI=2*10^16 | P=even | T=2*pi | MIN=fam(pi,2*pi,1~) | VA=none | HA=none",
+    ),
+    (
+        "2/(0.99999999999999999-cos(x))",
+        "XI=none | YI=-2*10^17 | P=even | T=2*pi",
+    ),
+    // And 0.1 + 0.9 is exactly 1: x¹, defined everywhere.
+    (
+        "x^(0.1+0.9)",
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
+    ),
+    // Review 12, R12-M-05: 0.1 + 0.2 − 0.3 is exactly 0, so this is x.
+    (
+        "10^17*(0.1+0.2-0.3)+x",
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
     ),
 ];
 
@@ -1771,4 +1819,121 @@ fn asymptotes_are_right() {
         "rows certified wrong:\n{}",
         wrong.join("\n")
     );
+}
+
+/// Review 12, R12-M-02: an eager min or max is undefined where either
+/// argument is, so nothing is listed at −1, where √sin x is undefined
+/// though (x + 1)² would win; nor does the panel show it.
+#[test]
+fn min_max_list_nothing_where_an_argument_is_undefined() {
+    for src in [
+        "min((x+1)^2,2+sqrt(sin(x)))",
+        "max(-(x+1)^2,-2-sqrt(sin(x)))",
+    ] {
+        let a = certify_text(src, CompileOptions::default(), DEFAULT_BUDGET, None)
+            .unwrap_or_else(|e| panic!("{src}: {e}"));
+        let near = |e: &Enc| e.lo.0 <= -0.5 && e.hi.0 >= -1.5;
+        if let Some(v) = a.x_intercepts.value() {
+            assert!(
+                !v.iter().any(|s| matches!(s, Spot::At(e) if near(e))),
+                "{src}: x-intercepts {v:?}"
+            );
+        }
+        if let Some(v) = a.extrema.value() {
+            assert!(
+                !v.iter().any(|e| e.every.is_none() && near(&e.x)),
+                "{src}: extrema {v:?}"
+            );
+        }
+        let k = analyze_str(&format!("y={src}"));
+        let at_minus_one = |t: &str| t == "\u{2212}1" || t.starts_with("(\u{2212}1,");
+        assert!(
+            !at_minus_one(&k.x_intercept)
+                && !k.minima.iter().chain(&k.maxima).any(|t| at_minus_one(t)),
+            "{src}: panel {:?} {:?} {:?}",
+            k.x_intercept,
+            k.minima,
+            k.maxima
+        );
+        assert!(
+            k.data
+                .minima
+                .iter()
+                .chain(&k.data.maxima)
+                .all(|(f, _)| (f.x + 1.0).abs() > 0.5)
+                && k.data.zeros.iter().all(|f| (f.x + 1.0).abs() > 0.5),
+            "{src}: panel data {:?}",
+            k.data
+        );
+    }
+}
+
+/// The bounds of each `(a, b)`-style interval in a panel text.
+fn bounds_of(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find(['(', '[']) {
+        let Some(j) = rest[i..].find([')', ']']) else {
+            break;
+        };
+        if let Some((a, b)) = rest[i + 1..i + j].split_once(", ") {
+            out.push((a.to_string(), b.to_string()));
+        }
+        rest = &rest[i + j + 1..];
+    }
+    out
+}
+
+/// Review 12, R12-M-04: two numbers a ten-millionth apart were written
+/// alike (a real range as one value, two excluded points as one, empty
+/// monotone pieces); a point now needs the numbers proven equal, and
+/// distinct numbers that read alike get the digits that tell them apart,
+/// or the row is unknown.
+#[test]
+fn numbers_that_read_alike_are_told_apart() {
+    let k = analyze_str("y=sin(1)+(sin(x)+2)/10000000");
+    assert!(!k.range.contains('{'), "range {}", k.range);
+    for (a, b) in bounds_of(&k.range) {
+        assert_ne!(a, b, "range {}", k.range);
+    }
+    for src in [
+        "y=1/((x-sin(1))*(x-sin(1)-0.0000001))",
+        "y=1/((x-ln(2))*(x-ln(2)-0.0000001))",
+        "y=1/((x-exp(1))*(x-exp(1)-0.000001))",
+    ] {
+        let k = analyze_str(src);
+        if let Some(set) = k
+            .domain
+            .split_once('{')
+            .and_then(|(_, s)| s.strip_suffix('}'))
+        {
+            let pts: Vec<&str> = set.split(", ").collect();
+            assert!(
+                pts.len() == 2 && pts[0] != pts[1],
+                "{src}: domain {}",
+                k.domain
+            );
+        }
+        for (t, _) in &k.monotonicity {
+            for (a, b) in bounds_of(t) {
+                assert_ne!(a, b, "{src}: monotonicity {:?}", k.monotonicity);
+            }
+        }
+    }
+    // Turns 1.15 apart at 10⁶: told apart to seven digits, not dropped.
+    let k = analyze_str("y=(x-1000000)*(x-1000001)*(x-1000002)");
+    assert_eq!(k.monotonicity.len(), 3, "{:?}", k.monotonicity);
+    for (t, _) in &k.monotonicity {
+        for (a, b) in bounds_of(t) {
+            assert_ne!(a, b, "{:?}", k.monotonicity);
+        }
+    }
+    // Ends of different pieces may read alike (they may be one number):
+    // csch x + 1 takes every value but 1.
+    let k = analyze_str("y=csch(x)+1");
+    assert!(k.range.starts_with("y ∈ (−∞, ≈1) ∪ (≈1, ∞)"), "{}", k.range);
+    // A constant is still one value, however it is enclosed.
+    for (src, want) in [("y=x/x", "y ∈ {1}"), ("y=sin(1)+0*x", "y ∈ {≈0.841471}")] {
+        assert_eq!(analyze_str(src).range, want, "{src}");
+    }
 }

@@ -105,7 +105,7 @@ pub fn exact_constant(e: &Expr, lits: &ExactLiterals) -> Option<PiQ> {
                 BinOp::Mul => x.mul(y)?,
                 BinOp::Div => x.div(y)?,
                 BinOp::Pow => {
-                    let (p, q) = syntactic_rational(b)?;
+                    let (p, q) = syntactic_rational(b, lits)?;
                     if q != 1 || p.unsigned_abs() > 64 {
                         return None;
                     }

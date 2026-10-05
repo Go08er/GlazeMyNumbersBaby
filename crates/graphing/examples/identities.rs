@@ -144,14 +144,17 @@ fn args() -> Vec<f64> {
     v
 }
 
+/// The program the app evaluates (its literals as typed).
 fn compile(src: &str, unit: TrigUnit) -> Option<(Expr, Program)> {
-    let eq = Equation::parse(&format!("y={src}")).ok()?;
+    let text = format!("y={src}");
+    let eq = Equation::parse(&text).ok()?;
     let (_, ast) = eq.explicit()?;
+    let lits = graphing::interval::Literals::of(&text, Default::default()).ok()?;
     let opts = CompileOptions {
         trig_unit: unit,
         ..CompileOptions::default()
     };
-    Some((ast.clone(), Program::compile(ast, &opts).ok()?))
+    Some((ast.clone(), Program::compile_typed(ast, &opts, &lits).ok()?))
 }
 
 fn within_ulps(a: f64, b: f64, n: f64) -> bool {

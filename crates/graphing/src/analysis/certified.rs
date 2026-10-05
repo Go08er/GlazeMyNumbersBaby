@@ -18,7 +18,9 @@
 //! exact point, or an exact limit (rational functions, the simplifier's
 //! limits and periods). Anything else is written to the digits its
 //! enclosure fixes (at most six significant; from 10⁶ on as m×10ⁿ),
-//! marked "≈": every value that isn't exact is.
+//! marked "≈": every value that isn't exact is. Two different numbers of
+//! a row that would read alike get up to fifteen, to tell them apart (or
+//! the row is unknown); equal texts never make two numbers one.
 
 use std::cell::OnceCell;
 use std::sync::atomic::AtomicBool;
@@ -1282,6 +1284,8 @@ struct End {
     /// ±∞ (`Some(true)` for +∞).
     inf: Option<bool>,
     value: f64,
+    /// The number, for a finite end.
+    num: Option<Num>,
 }
 
 fn infinite(up: bool) -> End {
@@ -1294,6 +1298,7 @@ fn infinite(up: bool) -> End {
         closed: false,
         inf: Some(up),
         value: if up { f64::INFINITY } else { f64::NEG_INFINITY },
+        num: None,
     }
 }
 
@@ -1303,7 +1308,116 @@ fn finite(n: Num, closed: bool) -> End {
         closed,
         inf: None,
         value: n.value(),
+        num: Some(n),
     }
+}
+
+/// Two numbers proven equal: exact and the same, or both exactly the same
+/// double. (Equal texts prove nothing: ≈0.841471 is a great many numbers.)
+fn identical(a: &Num, b: &Num) -> bool {
+    match (a.exact, b.exact) {
+        (Some(x), Some(y)) if same(x, y) => true,
+        _ => a.enc.is_point() && a.enc == b.enc,
+    }
+}
+
+/// What `n` reads as to `sig` significant digits, for telling numbers
+/// apart (an exact one by its value): `None` if its enclosure doesn't fix
+/// that many.
+fn reading(n: &Num, sig: i32) -> Option<String> {
+    if n.is_zero() {
+        return Some("0".into());
+    }
+    match n.exact {
+        Some(e) => Some(format_decimal_digits(e.to_f64(), sig)),
+        None => fixed_to(n.enc, sig),
+    }
+}
+
+/// The digits that tell `a` and `b` apart (7 to 15 significant), if any.
+fn apart(a: &Num, b: &Num) -> Option<i32> {
+    (7..=15).find(|&s| matches!((reading(a, s), reading(b, s)), (Some(x), Some(y)) if x != y))
+}
+
+/// Gives the ends of one row that would read alike where that would say
+/// something false the significant digits that tell them apart (up to 15,
+/// as the points' rows do; exact ones stay exact). `sets` (indices into
+/// `ends`) are where distinct numbers must read apart: an interval's two
+/// bounds, and the points a set lists (excluded points, or a range of
+/// single values). Ends in one class (`ends[i].0`) are one number, and
+/// so are numbers proven equal: never told apart. Two that still read
+/// alike can't be told apart: the row is shown as unknown.
+fn tell_apart(ends: &mut [(usize, &mut End)], sets: &[Vec<usize>]) {
+    use std::collections::{HashMap, HashSet};
+    let mut need: HashMap<usize, i32> = HashMap::new();
+    let mut done: HashSet<(usize, usize)> = HashSet::new();
+    for set in sets {
+        // One finite end per class, grouped by what it reads as (its text,
+        // and its value to six digits): only ends of one group read alike.
+        let mut classes_seen: HashSet<usize> = HashSet::new();
+        let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+        for &i in set {
+            let (c, e) = (&ends[i].0, &ends[i].1);
+            let Some(n) = e.num else { continue };
+            if !classes_seen.insert(*c) {
+                continue;
+            }
+            groups.entry(format!("t{}", e.text)).or_default().push(i);
+            if let Some(r) = reading(&n, 6) {
+                groups.entry(format!("r{r}")).or_default().push(i);
+            }
+        }
+        for g in groups.values().filter(|g| g.len() > 1) {
+            // So many numbers alike can't be told apart in a row.
+            if g.len() > 64 {
+                UNFIXED.with(|u| u.set(true));
+                continue;
+            }
+            for (k, &i) in g.iter().enumerate() {
+                for &j in &g[k + 1..] {
+                    let (Some(a), Some(b)) = (ends[i].1.num, ends[j].1.num) else {
+                        continue;
+                    };
+                    if !done.insert((i.min(j), i.max(j))) || identical(&a, &b) {
+                        continue;
+                    }
+                    match apart(&a, &b) {
+                        Some(s) => {
+                            for c in [ends[i].0, ends[j].0] {
+                                let e = need.entry(c).or_insert(6);
+                                *e = (*e).max(s);
+                            }
+                        }
+                        None => UNFIXED.with(|u| u.set(true)),
+                    }
+                }
+            }
+        }
+    }
+    // One class, one text.
+    for (c, e) in ends.iter_mut() {
+        if let Some(&s) = need.get(c)
+            && s > 6
+            && let Some(num) = e.num
+            && num.exact.and_then(Ex::text).is_none()
+        {
+            e.text = num.text_sig(s);
+        }
+    }
+}
+
+/// Classes for [`tell_apart`]: ends with the same enclosure (an excluded
+/// point that ends one piece and starts the next) are one number.
+fn classes(ends: &[&End]) -> Vec<usize> {
+    let mut seen: std::collections::HashMap<(u64, u64), usize> = Default::default();
+    (0..ends.len())
+        .map(|i| match ends[i].num {
+            Some(n) => *seen
+                .entry((n.enc.lo.0.to_bits(), n.enc.hi.0.to_bits()))
+                .or_insert(i),
+            None => i,
+        })
+        .collect()
 }
 
 impl Ctx<'_> {
@@ -1381,32 +1495,92 @@ fn interval_text(a: &End, b: &End) -> String {
 
 /// A union of disjoint intervals as `var ∈ …` (`x ∈ ℝ`, `x ∈ ℝ \ {0}`,
 /// `y ∈ {5}`, `x ∈ (−∞, −1] ∪ [1, ∞)`), like [`format::format_set`];
-/// `joined(i)`: pieces i and i + 1 meet at one excluded point.
-fn set_text(var: &str, parts: &[(End, End)], joined: &dyn Fn(usize) -> bool) -> String {
+/// `joined(i)`: pieces i and i + 1 meet at one excluded point; `one(i)`:
+/// piece i's two ends are proven one number (a single point). Ends that
+/// read alike are told apart, or the row is unknown.
+fn set_text(
+    var: &str,
+    parts: &mut [(End, End)],
+    joined: &dyn Fn(usize) -> bool,
+    one: &dyn Fn(usize) -> bool,
+) -> String {
     if parts.is_empty() {
         return format!("{var} ∈ ∅");
     }
     let n = parts.len();
+    // A single point only when its ends are proven one number.
+    let single: Vec<bool> = parts
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            p.0.inf.is_none()
+                && p.0.closed
+                && p.1.closed
+                && (one(i) || matches!((p.0.num, p.1.num), (Some(a), Some(b)) if identical(&a, &b)))
+        })
+        .collect();
     let all_but_points = parts[0].0.inf == Some(false)
         && parts[n - 1].1.inf == Some(true)
         && (0..n - 1).all(|i| joined(i) && !parts[i].1.closed && !parts[i + 1].0.closed);
+    {
+        // Where distinct numbers must read apart: an interval's two
+        // bounds, and the points a set lists (the excluded points of
+        // ℝ \ {…}, the single values of a range).
+        let mut sets: Vec<Vec<usize>> = (0..n)
+            .filter(|&i| !single[i])
+            .map(|i| vec![2 * i, 2 * i + 1])
+            .collect();
+        if all_but_points {
+            sets.push((0..n - 1).map(|i| 2 * i + 1).collect());
+        }
+        sets.push((0..n).filter(|&i| single[i]).map(|i| 2 * i).collect());
+        let refs: Vec<&End> = parts.iter().flat_map(|p| [&p.0, &p.1]).collect();
+        let mut cls = classes(&refs);
+        // A point's two ends are one number; an interval's never are.
+        for (i, p) in single.iter().enumerate() {
+            let (a, b) = (2 * i, 2 * i + 1);
+            if *p {
+                cls[b] = cls[a];
+            } else if cls[b] == cls[a] {
+                cls[b] = refs.len() + b;
+            }
+        }
+        let mut ends: Vec<(usize, &mut End)> = parts
+            .iter_mut()
+            .flat_map(|p| [&mut p.0, &mut p.1])
+            .enumerate()
+            .map(|(i, e)| (cls[i], e))
+            .collect();
+        tell_apart(&mut ends, &sets);
+    }
+    // An interval whose ends still read alike says nothing.
+    if parts
+        .iter()
+        .zip(&single)
+        .any(|(p, s)| !s && p.0.inf.is_none() && p.0.text == p.1.text)
+    {
+        UNFIXED.with(|u| u.set(true));
+    }
     if all_but_points {
         if n == 1 {
             return format!("{var} ∈ ℝ");
         }
-        let pts: Vec<&str> = parts[..n - 1].iter().map(|p| p.1.text.as_str()).collect();
+        let pts: Vec<String> = parts[..n - 1].iter().map(|p| p.1.text.clone()).collect();
+        // Two excluded points that read alike can't be told apart.
+        if alike(&pts) {
+            UNFIXED.with(|u| u.set(true));
+        }
         return format!("{var} ∈ ℝ \\ {{{}}}", pts.join(", "));
     }
-    let point =
-        |p: &(End, End)| p.0.inf.is_none() && p.0.text == p.1.text && p.0.closed && p.1.closed;
-    if parts.iter().all(point) {
+    if single.iter().all(|s| *s) {
         let pts: Vec<&str> = parts.iter().map(|p| p.0.text.as_str()).collect();
         return format!("{var} ∈ {{{}}}", pts.join(", "));
     }
     let items: Vec<String> = parts
         .iter()
-        .map(|p| {
-            if point(p) {
+        .zip(&single)
+        .map(|(p, point)| {
+            if *point {
                 format!("{{{}}}", p.0.text)
             } else {
                 interval_text(&p.0, &p.1)
@@ -1521,7 +1695,14 @@ pub(super) fn features(
     a: &Analysis,
     cancel: Option<&AtomicBool>,
 ) -> Option<KeyGraphFeatures> {
-    let cx = Ctx::new(certify::canonical(f), opts, lits, ilits, a, cancel);
+    let cx = Ctx::new(
+        certify::canonical_with(f, !ilits.shadows(2.0)),
+        opts,
+        lits,
+        ilits,
+        a,
+        cancel,
+    );
     let mut out = Out {
         k: KeyGraphFeatures::default(),
     };
@@ -1571,11 +1752,11 @@ pub(super) fn features(
     // Constant on its domain: the range is one value.
     let constant: Option<Enc> = match &a.range {
         _ if exact_const.is_some() => exact_const.map(const_enc),
-        Row::Certified { value, .. } if value.len() == 1 => match value[0] {
+        Row::Certified { value, .. } if value.len() == 1 && one_value(a, 0) => match value[0] {
             Piece {
-                lo: Bound::At { x: l, closed: true },
-                hi: Bound::At { x: h, closed: true },
-            } if l == h => Some(l),
+                lo: Bound::At { x: l, .. },
+                ..
+            } => Some(l),
             _ => None,
         },
         _ => None,
@@ -1600,7 +1781,7 @@ pub(super) fn features(
     let mut domain_whole = false;
     match &a.domain {
         Row::Certified { value, .. } => {
-            let parts: Vec<(End, End)> = value
+            let mut parts: Vec<(End, End)> = value
                 .pieces
                 .iter()
                 .map(|p| (cx.end(&p.lo), cx.end(&p.hi)))
@@ -1609,7 +1790,9 @@ pub(super) fn features(
                 (Bound::At { x: a, .. }, Bound::At { x: b, .. }) => a == b,
                 _ => false,
             };
-            let mut text = set_text("x", &parts, &joined);
+            // A piece written from one bound to itself is that one point.
+            let one = |i: usize| value.pieces[i].lo == value.pieces[i].hi;
+            let mut text = set_text("x", &mut parts, &joined, &one);
             domain_whole = value.pieces.len() == 1
                 && value.pieces[0].lo == Bound::NegInf
                 && value.pieces[0].hi == Bound::PosInf;
@@ -1661,7 +1844,7 @@ pub(super) fn features(
     };
     match &range_row {
         Row::Certified { value, .. } => {
-            let parts: Vec<(End, End)> = value
+            let mut parts: Vec<(End, End)> = value
                 .iter()
                 .enumerate()
                 .map(|(i, p)| {
@@ -1676,7 +1859,8 @@ pub(super) fn features(
                 (Bound::At { x: a, .. }, Bound::At { x: b, .. }) => a == b,
                 _ => false,
             };
-            out.k.range = set_text("y", &parts, &joined);
+            let one = |i: usize| one_value(a, i);
+            out.k.range = set_text("y", &mut parts, &joined, &one);
             data.range = parts.iter().map(|(a, b)| data_interval(a, b)).collect();
         }
         _ => match exact_const {
@@ -2219,13 +2403,52 @@ pub(super) fn features(
                         let (mut lo, mut hi) = (cx.end(&m.on.lo), cx.end(&m.on.hi));
                         lo.closed = false;
                         hi.closed = false;
-                        let t = interval_text(&lo, &hi);
-                        (lo, hi, t)
+                        // Written once the row's bounds are told apart.
+                        (lo, hi, String::new())
                     }
                 };
                 pieces.push((lo.value, (text, dir, lo, hi)));
             }
             pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+            // Bounds that read alike get the digits that tell them apart;
+            // a piece whose bounds still read alike says nothing.
+            {
+                let open: Vec<usize> = (0..pieces.len())
+                    .filter(|&i| pieces[i].1.0.is_empty())
+                    .collect();
+                let refs: Vec<&End> = open
+                    .iter()
+                    .flat_map(|&i| [&pieces[i].1.2, &pieces[i].1.3])
+                    .collect();
+                let mut cls = classes(&refs);
+                for k in 0..open.len() {
+                    if cls[2 * k + 1] == cls[2 * k] {
+                        cls[2 * k + 1] = refs.len() + 2 * k + 1;
+                    }
+                }
+                let mut ends: Vec<(usize, &mut End)> = Vec::new();
+                for (_, (text, _, lo, hi)) in pieces.iter_mut() {
+                    if text.is_empty() {
+                        ends.push((0, lo));
+                        ends.push((0, hi));
+                    }
+                }
+                for (k, e) in ends.iter_mut().enumerate() {
+                    e.0 = cls[k];
+                }
+                // Each piece's two bounds.
+                let sets: Vec<Vec<usize>> =
+                    (0..open.len()).map(|k| vec![2 * k, 2 * k + 1]).collect();
+                tell_apart(&mut ends, &sets);
+                for (_, (text, _, lo, hi)) in pieces.iter_mut() {
+                    if text.is_empty() {
+                        if lo.inf.is_none() && hi.inf.is_none() && lo.text == hi.text {
+                            UNFIXED.with(|u| u.set(true));
+                        }
+                        *text = interval_text(lo, hi);
+                    }
+                }
+            }
             out.settle(
                 flags::MONOTONE_INTERVALS,
                 reach(&a.monotonicity),
@@ -2255,6 +2478,30 @@ pub(super) fn features(
     out.k.data = data;
     // Cut short by the flag: rows may be missing what it stopped.
     (!cx.fun.cancelled()).then_some(out.k)
+}
+
+/// Whether range piece `i` is one value: both ends closed, the same
+/// enclosure, and either exactly one double or taken from one source (f
+/// at one place, one limit). Equal enclosures alone prove nothing: two
+/// values an ulp apart have the same.
+fn one_value(a: &Analysis, i: usize) -> bool {
+    let Row::Certified { value, .. } = &a.range else {
+        return false;
+    };
+    let Some(Piece {
+        lo: Bound::At { x: l, closed: true },
+        hi: Bound::At { x: h, closed: true },
+    }) = value.get(i)
+    else {
+        return false;
+    };
+    if l != h {
+        return false;
+    }
+    l.is_point()
+        || a.range_ends
+            .get(i)
+            .is_some_and(|[s0, s1]| s0.len() == 1 && s0 == s1 && !matches!(s0[0], EndSrc::Other))
 }
 
 /// `a` with the rows a constant c (on its domain) decides filled in where

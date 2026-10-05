@@ -603,7 +603,25 @@ pub fn root(x: &DecInterval, n: &DecInterval) -> DecInterval {
         return r.cap(n.dec);
     }
     // A general degree: x ≥ 0 (x > 0 for a negative degree).
-    let r = pow(x, &recip(n));
+    let mut r = pow(x, &recip(n));
+    // Unless the degree may be an odd integer, which takes a negative x
+    // too (root(x, x) is −1 at −1): there, −|x|^(1/n), maybe.
+    let (lo, hi) = (nv.lo(), nv.hi());
+    let first = lo.max(-1e300).ceil();
+    let odd = if first.rem_euclid(2.0) == 1.0 {
+        first
+    } else {
+        first + 1.0
+    };
+    if x.lo() < 0.0 && odd <= hi && first.abs() < 9007199254740992.0 {
+        let mirrored = DecInterval::new((-x.iv).intersect(Interval::new(0.0, INF)));
+        let m = neg(&pow(&mirrored, &recip(n)));
+        if !m.is_empty() {
+            r = DecInterval::result(r.iv.hull(m.iv), Dec::Trv, &[x, n]);
+        } else {
+            r = r.cap(Dec::Trv);
+        }
+    }
     if n.iv.contains_zero() && !n.ne0() {
         r.cap(Dec::Trv)
     } else {
@@ -1655,22 +1673,28 @@ pub fn factorial(x: &DecInterval) -> DecInterval {
     r.signs(pos, neg)
 }
 
-/// n!! for an integer n ≥ −1, from a point argument only.
+/// An exact count, enclosed by the doubles either side of it (a point
+/// when it is one); beyond the doubles, [`f64::MAX`, +∞].
+fn count_enclosure(c: crate::functions::Count) -> Interval {
+    match c {
+        crate::functions::Count::Exact(v) => {
+            let (lo, hi) = v.enclose();
+            Interval::new(lo, hi)
+        }
+        crate::functions::Count::Huge => Interval::new(f64::MAX, INF),
+    }
+}
+
+/// n!! for an integer n ≥ −1, from a point argument only: the exact
+/// integer, enclosed.
 pub fn double_factorial(x: &DecInterval) -> DecInterval {
     let iv = x.iv;
     if iv.is_point() {
-        let v = crate::functions::double_factorial(iv.lo());
-        if v.is_nan() {
+        let Some(c) = crate::functions::double_factorial_exact(iv.lo()) else {
             return DecInterval::result(Interval::EMPTY, Dec::Trv, &[x]);
-        }
-        // Exact while the product stays below 2⁵³.
-        let r = if v < 9007199254740992.0 {
-            Interval::point(v)
-        } else {
-            Interval::around(v)
         };
         // Defined only at isolated points: not continuous on any wider box.
-        return DecInterval::result(r, Dec::Com, &[x]);
+        return DecInterval::result(count_enclosure(c), Dec::Com, &[x]);
     }
     DecInterval::result(Interval::ENTIRE, Dec::Trv, &[x])
 }
@@ -1680,17 +1704,8 @@ pub fn ncr_npr(n: &DecInterval, r: &DecInterval, perm: bool) -> DecInterval {
     if n.iv.is_point() && r.iv.is_point() {
         let (nv, rv) = (n.iv.lo(), r.iv.lo());
         if nv == nv.trunc() && rv == rv.trunc() && (0.0..=60.0).contains(&nv) {
-            let v = if perm {
-                crate::functions::npr(nv, rv)
-            } else {
-                crate::functions::ncr(nv, rv)
-            };
-            let iv = if v.abs() < 9007199254740992.0 {
-                Interval::point(v)
-            } else {
-                Interval::around(v)
-            };
-            return DecInterval::result(iv, Dec::Com, &[n, r]);
+            let c = crate::functions::count_exact(nv, rv, perm).expect("whole n ≥ 0 and r");
+            return DecInterval::result(count_enclosure(c), Dec::Com, &[n, r]);
         }
     }
     if n.is_empty() || r.is_empty() {

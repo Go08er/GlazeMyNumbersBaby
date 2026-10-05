@@ -55,7 +55,17 @@ pub fn eval(
         Expr::Neg(a) => -ev(a)?,
         Expr::Degrees(a) => ev(a)?,
         Expr::Bin(BinOp::Pow, a, b) => {
-            let (p, q) = written_rational(b)?;
+            // Written as a ratio of integers, or exactly an integer.
+            let (p, q) = match written_rational(b, lits) {
+                Some(r) => r,
+                None => {
+                    let k = eval(b, None, lits, vars)?;
+                    if !k.is_integer() {
+                        return None;
+                    }
+                    (k.numer().to_i64()?, 1)
+                }
+            };
             let base = ev(a)?;
             if q == 1 {
                 pow_int(&base, p)?

@@ -256,7 +256,7 @@ fn add(e: &Expr, lits: &ExactLiterals, rec: &mut RecExpr<Math>) -> Result<Id, Un
         Expr::Bin(op, a, b) => {
             let ia = go(a, rec)?;
             if *op == BinOp::Pow
-                && let Some((p, q)) = syntactic_rational(b)
+                && let Some((p, q)) = syntactic_rational(b, lits)
             {
                 let k = rec.add(Math::Num(Q::new(p as i128, q as i128).expect("q ≠ 0")));
                 return Ok(rec.add(Math::PowQ([ia, k])));

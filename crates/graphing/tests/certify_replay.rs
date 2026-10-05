@@ -980,6 +980,52 @@ fn replay_catches_planted_errors() {
     assert!(missed.is_empty(), "planted errors not caught: {missed:#?}");
 }
 
+/// Review 12, R12-M-01: certificates that took a typed decimal for the
+/// integer its double is (1.0000000000000001 for 1). The replay passed
+/// them strong, making the same rounding; it must refute them on their
+/// claims (not refuse them on their binding).
+#[test]
+fn rounded_literals_are_refuted() {
+    let fixture = |text: &str| -> serde_json::Value { serde_json::from_str(text).unwrap() };
+    let mut square = certificate("x^2");
+    square["source"] = serde_json::json!("y=x^2.0000000000000001");
+    let cases = [
+        (
+            "the unaltered certificate of x^1.0000000000000001 (made at 278be22): ℝ, odd, no minimum",
+            fixture(include_str!(
+                "fixtures/certify/review12/power-rounded-exponent.json"
+            )),
+        ),
+        (
+            "x^2's certificate, its source made x^2.0000000000000001",
+            square,
+        ),
+        (
+            "2/(1.0000000000000001-cos(x))'s certificate (made at 278be22), its y-intercept withheld: \
+             a domain without 2kπ",
+            fixture(include_str!(
+                "fixtures/certify/review12/cosine-family-domain-only.json"
+            )),
+        ),
+    ];
+    for (what, v) in cases {
+        let r = replay::replay(&v).unwrap_or_else(|e| {
+            panic!("{what}: refused, not replayed ({e}): the claims must fail")
+        });
+        let refuted: Vec<String> = r
+            .claims
+            .iter()
+            .filter(|c| c.outcome.class == Class::Refuted)
+            .map(|c| format!("{:?}: {}", c.claim, c.outcome.note))
+            .collect();
+        assert!(
+            !refuted.is_empty() && !r.row_problems().is_empty(),
+            "{what}: not refuted"
+        );
+        println!("{what}: refuted ({})", refuted[0]);
+    }
+}
+
 // ------------------------------------------------------------ known issues
 
 /// Certifier issues the replay found (research/replay-issues.md, by

@@ -101,7 +101,7 @@ fn bench() {
         let (_, ast) = eq.explicit().expect("explicit");
         let opts = CompileOptions::default();
         let ctx = Ctx::new(opts, &lits);
-        let prog = Program::compile(ast, &opts).expect("compiles");
+        let prog = Program::compile_typed(ast, &opts, &lits).expect("compiles");
         let n = 20_000usize;
         let xs: Vec<f64> = (0..n).map(|i| 0.37 + i as f64 * 1e-3).collect();
         let t = Instant::now();

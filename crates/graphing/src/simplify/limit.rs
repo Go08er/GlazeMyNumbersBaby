@@ -200,6 +200,12 @@ enum Asy {
     Small,
     /// → ±∞ faster than every term.
     Huge(i32),
+    /// → ±∞ faster than every power x^p·(ln x)^m, but no faster than some
+    /// term e^{kx}: e^√x, e^(x + sin x), x^(ln x), times powers. It
+    /// outgrows a term with k ≤ 0 and loses to a [`Asy::Huge`]; against a
+    /// term with k > 0, the leading term of its exponent g (it is e^g
+    /// times a power), when known, decides.
+    Mid(i32, Option<Term>),
     /// Bounded within the interval, no limit known.
     Bounded(Interval),
     Unknown,
@@ -255,6 +261,7 @@ fn neg(a: Asy) -> Asy {
     match a {
         Asy::Term(t) => Asy::Term(Term { c: t.c.neg(), ..t }),
         Asy::Huge(s) => Asy::Huge(-s),
+        Asy::Mid(s, g) => Asy::Mid(-s, g),
         Asy::Bounded(i) => Asy::Bounded(-i),
         other => other,
     }
@@ -272,7 +279,33 @@ fn add(a: Asy, b: Asy) -> Asy {
                 Unknown
             }
         }
+        // (A Mid is no faster than some term, which a Huge outgrows.)
         (Huge(s), _) | (_, Huge(s)) => Huge(s),
+        (Mid(s, g), Mid(t, h)) => {
+            if s == t {
+                return Mid(s, None);
+            }
+            // e^g − e^h: the one whose exponent's leading term is larger.
+            match g.zip(h).and_then(|(g, h)| term_cmp(&g, &h)) {
+                Some(std::cmp::Ordering::Greater) => Mid(s, g),
+                Some(std::cmp::Ordering::Less) => Mid(t, h),
+                _ => Unknown,
+            }
+        }
+        (Mid(s, g), Term(t)) | (Term(t), Mid(s, g)) => {
+            // It outgrows a power (k = 0) or a decaying exponential; against
+            // a growing e^{kx}, its exponent's rate decides.
+            if t.k.signum() <= 0 {
+                return Mid(s, g);
+            }
+            match g.and_then(|g| below_exp(&g, t.k)) {
+                Some(true) => Term(t),
+                Some(false) => Mid(s, g),
+                None if t.c.sign() == Some(s) => Mid(s, None),
+                None => Unknown,
+            }
+        }
+        (Mid(s, g), Small | Bounded(_)) | (Small | Bounded(_), Mid(s, g)) => Mid(s, g),
         (Term(x), Term(y)) => match x.scale_cmp(&y) {
             std::cmp::Ordering::Greater => Term(x),
             std::cmp::Ordering::Less => Term(y),
@@ -310,6 +343,15 @@ fn mul(a: Asy, b: Asy) -> Asy {
             (true, Some(c)) => Huge(s * c),
             _ => Unknown,
         },
+        (Huge(s), Mid(t, _)) | (Mid(t, _), Huge(s)) => Huge(s * t),
+        (Mid(s, _), Mid(t, _)) => Mid(s * t, None),
+        // Times a power (even a decaying one: the exponent's rate is the
+        // same) or a growing exponential.
+        (Mid(s, g), Term(t)) | (Term(t), Mid(s, g)) => match (t.k.signum(), t.c.sign()) {
+            (0, Some(c)) => Mid(s * c, g),
+            (1, Some(c)) => Mid(s * c, None),
+            _ => Unknown,
+        },
         (Term(x), Term(y)) => match (x.c.mul(y.c), x.k.add(y.k), x.p.add(y.p), x.m.add(y.m)) {
             (Some(c), Some(k), Some(p), Some(m)) => Term(self::Term { c, k, p, m }),
             _ => Unknown,
@@ -339,7 +381,7 @@ fn recip(a: Asy) -> Asy {
             (Some(c), Some(k), Some(p), Some(m)) => Asy::Term(Term { c, k, p, m }),
             _ => Asy::Unknown,
         },
-        Asy::Huge(_) => Asy::Small,
+        Asy::Huge(_) | Asy::Mid(..) => Asy::Small,
         _ => Asy::Unknown,
     }
 }
@@ -369,6 +411,22 @@ fn pow(a: Asy, r: Q) -> Asy {
             }
         }
         Asy::Huge(_) if r.signum() < 0 => Asy::Small,
+        // (A positive power of something beyond every power still is.)
+        Asy::Mid(s, g) if r.signum() > 0 => {
+            // (e^g)ʳ = e^(r·g).
+            let g = g.and_then(|g| {
+                let c = g.c.mul(Coef::Exact(PiQ { q: r, k: 0 }))?;
+                Some(Term { c, ..g })
+            });
+            if s > 0 {
+                Asy::Mid(1, g)
+            } else if r.denom() % 2 == 1 {
+                Asy::Mid(if r.numer() % 2 == 0 { 1 } else { -1 }, g)
+            } else {
+                Asy::Unknown
+            }
+        }
+        Asy::Mid(..) if r.signum() < 0 => Asy::Small,
         _ => Asy::Unknown,
     }
 }
@@ -382,15 +440,88 @@ fn exp_of(a: Asy) -> Asy {
                 Coef::approx(i).map_or(Asy::Unknown, |c| Asy::Term(Term::constant(c)))
             }
             (g, _) if g < 0 => Asy::Term(Term::constant(Coef::Exact(PiQ { q: Q::ONE, k: 0 }))),
-            (_, Some(s)) if s > 0 => Asy::Huge(1),
-            (_, Some(_)) => Asy::Small,
+            (_, Some(s)) if s < 0 => Asy::Small,
+            (_, Some(_)) => exp_of_growing(t),
             _ => Asy::Unknown,
         },
         Asy::Huge(s) if s > 0 => Asy::Huge(1),
         Asy::Huge(_) => Asy::Small,
+        // e^A for an A beyond every power is beyond e^(x²), so every term.
+        Asy::Mid(s, _) if s > 0 => Asy::Huge(1),
+        Asy::Mid(..) => Asy::Small,
         Asy::Bounded(i) => Asy::Bounded(elem::exp(&DecInterval::new(i)).iv),
         Asy::Unknown => Asy::Unknown,
     }
+}
+
+/// e^(c·e^{kx}·x^p·(ln x)^m) for a term that grows with c > 0. Beyond every
+/// term only when the exponent outgrows x (k > 0, p > 1, or x times a
+/// growing power of ln x); e^√x, e^(x/ln x) and x^(ln x) are only beyond
+/// every power, and e^(c·ln x) is the power x^c itself.
+/// Two growing terms' order (the larger outgrows the other), when known.
+fn term_cmp(a: &Term, b: &Term) -> Option<std::cmp::Ordering> {
+    match a.scale_cmp(b) {
+        std::cmp::Ordering::Equal => {
+            let (x, y) = (a.c.interval(), b.c.interval());
+            if x.lo() > y.hi() {
+                Some(std::cmp::Ordering::Greater)
+            } else if x.hi() < y.lo() {
+                Some(std::cmp::Ordering::Less)
+            } else {
+                None
+            }
+        }
+        o => Some(o),
+    }
+}
+
+/// Whether e^g (times a power) is below e^{kx} for k > 0, by g's leading
+/// term (growing, with no exponential part): `Some(true)` when g grows
+/// slower than k·x, `Some(false)` faster, `None` when that isn't known.
+fn below_exp(g: &Term, k: Q) -> Option<bool> {
+    let one = Q::ONE;
+    if !g.k.is_zero() || g.p > one {
+        return None;
+    }
+    if g.p < one || g.m.signum() < 0 {
+        return Some(true);
+    }
+    if g.m.signum() > 0 {
+        return Some(false);
+    }
+    // c·x against k·x.
+    let (c, k) = (g.c.interval(), k.interval());
+    if c.hi() < k.lo() {
+        Some(true)
+    } else if c.lo() > k.hi() {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn exp_of_growing(t: Term) -> Asy {
+    let one = Q::ONE;
+    if t.k.signum() > 0 || t.p > one || (t.p == one && t.m.signum() > 0) {
+        return Asy::Huge(1);
+    }
+    if t.k.is_zero() && t.p.is_zero() && t.m == one {
+        return match t.c {
+            Coef::Exact(v) if v.k == 0 => Asy::Term(Term {
+                c: Coef::Exact(PiQ { q: one, k: 0 }),
+                k: Q::ZERO,
+                p: v.q,
+                m: Q::ZERO,
+            }),
+            _ => Asy::Unknown,
+        };
+    }
+    // x^p·(ln x)^m with 0 < p ≤ 1 (m ≤ 0 at p = 1), or p = 0 and m > 1.
+    if t.p.signum() > 0 || (t.p.is_zero() && t.m > one) {
+        return Asy::Mid(1, Some(t));
+    }
+    // e^((ln x)^m), 0 < m < 1: slower than every power.
+    Asy::Unknown
 }
 
 fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
@@ -418,7 +549,7 @@ fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
                 }
             }
             BinOp::Pow => {
-                if let Some((p, q)) = syntactic_rational(b) {
+                if let Some((p, q)) = syntactic_rational(b, cx.lits) {
                     let r = Q::new(p as i128, q as i128).expect("q ≠ 0");
                     return pow(asy(a, cx), r);
                 }
@@ -430,7 +561,7 @@ fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
                     let base = asy(a, cx);
                     let positive = match base {
                         Asy::Term(t) => t.c.sign() == Some(1),
-                        Asy::Huge(s) => s > 0,
+                        Asy::Huge(s) | Asy::Mid(s, _) => s > 0,
                         _ => false,
                     };
                     return if r.q.is_int() || positive {
@@ -553,7 +684,7 @@ fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
                             Some(s) => to(s),
                             None => Asy::Unknown,
                         },
-                        Asy::Huge(s) => to(s),
+                        Asy::Huge(s) | Asy::Mid(s, _) => to(s),
                         Asy::Zero | Asy::Small if *f != Acot => Asy::Small,
                         _ => Asy::Unknown,
                     }
@@ -567,7 +698,7 @@ fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
                 }
                 Sin | Cos => match asy(a, cx) {
                     Asy::Term(t) if t.growth() > 0 => Asy::Bounded(Interval::new(-1.0, 1.0)),
-                    Asy::Huge(_) => Asy::Bounded(Interval::new(-1.0, 1.0)),
+                    Asy::Huge(_) | Asy::Mid(..) => Asy::Bounded(Interval::new(-1.0, 1.0)),
                     Asy::Zero | Asy::Small if *f == Sin => Asy::Small,
                     Asy::Zero | Asy::Small => {
                         Asy::Term(Term::constant(Coef::Exact(PiQ { q: Q::ONE, k: 0 })))
@@ -581,13 +712,14 @@ fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
                         None => Asy::Unknown,
                     },
                     Asy::Huge(_) => Asy::Huge(1),
+                    Asy::Mid(_, g) => Asy::Mid(1, g),
                     other @ (Asy::Zero | Asy::Small) => other,
                     _ => Asy::Unknown,
                 },
                 Floor | Ceil | Round => match asy(a, cx) {
                     // ⌊A⌋ = A + O(1): the leading term of a growing A.
                     Asy::Term(t) if t.growth() > 0 => Asy::Term(t),
-                    h @ Asy::Huge(_) => h,
+                    h @ (Asy::Huge(_) | Asy::Mid(..)) => h,
                     _ => Asy::Unknown,
                 },
                 _ => Asy::Unknown,
@@ -687,7 +819,7 @@ pub fn centres(e: &Expr, lits: &ExactLiterals) -> Vec<f64> {
 fn read_limit(a: Asy) -> Limit {
     match a {
         Asy::Zero | Asy::Small => Limit::Exact(PiQ { q: Q::ZERO, k: 0 }),
-        Asy::Huge(s) => {
+        Asy::Huge(s) | Asy::Mid(s, _) => {
             if s > 0 {
                 Limit::PosInf
             } else {
@@ -763,5 +895,44 @@ mod tests {
         assert_eq!(lim("e^(x-1000)", NegInf), exact(0, 1, 0));
         assert_eq!(lim("e^(x-1000)/x", PosInf), Limit::PosInf);
         assert_eq!(lim("(x-1000000)*e^(-(x-1000000))", PosInf), exact(0, 1, 0));
+    }
+
+    /// e^g for a g that grows no faster than x outgrows every power but
+    /// not every exponential (review 12, R12-L-03: exp(√x) − exp(x) was
+    /// +∞).
+    #[test]
+    fn slow_exponentials_are_ordered() {
+        use Dir::*;
+        // Decided, and right.
+        for (f, want) in [
+            ("exp(sqrt(x))-exp(x)", Limit::NegInf),
+            ("exp(x)-exp(sqrt(x))", Limit::PosInf),
+            ("exp(sqrt(x))-x^100", Limit::PosInf),
+            ("x^100-exp(sqrt(x))", Limit::NegInf),
+            ("exp(sqrt(x))/x^1000", Limit::PosInf),
+            ("exp(x^2)-exp(sqrt(x))", Limit::PosInf),
+            ("exp(sqrt(x))-exp(x^2)", Limit::NegInf),
+            ("exp(sqrt(x))-exp(x^(1/3))", Limit::PosInf),
+            ("exp(-sqrt(x))", exact(0, 1, 0)),
+            ("atan(exp(sqrt(x)))", exact(1, 2, 1)),
+            // e^(ln x) is x, a power: it loses to x².
+            ("exp(ln(x))-x^2", Limit::NegInf),
+            ("exp(2*ln(x))-x^3", Limit::NegInf),
+            // e^(x + sin x) ≤ e^(x + 1), below e^(2x).
+            ("exp(x+sin(x))-exp(2x)", Limit::NegInf),
+            ("2^x-3^x", Limit::NegInf),
+            ("e^(x^2)-x", Limit::PosInf),
+        ] {
+            assert_eq!(lim(f, PosInf), want, "{f}");
+        }
+        // Undecided is allowed; wrong never.
+        for (f, truth) in [
+            ("exp(sqrt(x))*exp(-x)", exact(0, 1, 0)),
+            ("exp(exp(sqrt(x)))-exp(x^3)", Limit::PosInf),
+            ("exp(x+sin(x))-exp(x)", Limit::Unknown),
+        ] {
+            let got = lim(f, PosInf);
+            assert!(got == truth || got == Limit::Unknown, "{f}: {got:?}");
+        }
     }
 }

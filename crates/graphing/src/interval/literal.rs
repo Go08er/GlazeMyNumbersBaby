@@ -26,6 +26,9 @@ enum Side {
 #[derive(Clone, Debug, Default)]
 pub struct Literals {
     by_bits: HashMap<u64, Side>,
+    /// The decimal typed, when every literal that parsed to this double
+    /// was typed the same (a trailing `0` aside).
+    digits: HashMap<u64, Option<String>>,
 }
 
 impl Literals {
@@ -33,6 +36,7 @@ impl Literals {
     /// would read it).
     pub fn of(text: &str, opts: ParseOptions) -> Result<Literals, EquationError> {
         let mut by_bits: HashMap<u64, Side> = HashMap::new();
+        let mut texts: HashMap<u64, Option<String>> = HashMap::new();
         for (v, digits) in literal_texts(text, opts)? {
             let side = side_of(&digits, v);
             by_bits
@@ -43,8 +47,79 @@ impl Literals {
                     }
                 })
                 .or_insert(side);
+            let (i, f) = split_decimal(&digits);
+            let canonical = format!("{i}.{f}");
+            texts
+                .entry(v.to_bits())
+                .and_modify(|t| {
+                    if t.as_deref() != Some(canonical.as_str()) {
+                        *t = None;
+                    }
+                })
+                .or_insert(Some(canonical));
         }
-        Ok(Literals { by_bits })
+        Ok(Literals {
+            by_bits,
+            digits: texts,
+        })
+    }
+
+    /// The exact value `Num(v)` stands for, when it is known: the decimal
+    /// typed (or its negation, a folded sign), or an integer below 2⁵³
+    /// that no literal typed otherwise parsed to (one the parser or an
+    /// analysis wrote). `None` for anything else, and where literals typed
+    /// differently parsed to `v`.
+    pub(crate) fn exact(&self, v: f64) -> Option<crate::big::Rat> {
+        let typed = |bits: u64| -> Option<Option<crate::big::Rat>> {
+            let t = self.digits.get(&bits)?;
+            Some(t.as_deref().and_then(crate::big::Rat::from_decimal))
+        };
+        if let Some(r) = typed(v.to_bits()) {
+            return r;
+        }
+        if let Some(r) = typed((-v).to_bits()) {
+            return r.map(crate::big::Rat::neg);
+        }
+        if v == v.trunc() && v.abs() <= 9007199254740992.0 {
+            return crate::big::Rat::from_f64(v);
+        }
+        None
+    }
+
+    /// Reads `Num(v)` (v ≥ 0) as the exact value `r` too: a subtree of
+    /// literals folded exactly and rounded once to v
+    /// (`compile::fold_literals`). If something else already reads as v
+    /// from another side, `v` is enclosed by its neighbours; its exact
+    /// value is not known any more either way.
+    pub(crate) fn fold_in(&mut self, v: f64, r: &crate::big::Rat) {
+        use crate::big::Round;
+        let side = if r.to_f64(Round::Down) == r.to_f64(Round::Up) {
+            Side::Exact
+        } else if r.to_f64(Round::Up) == v {
+            Side::Below
+        } else {
+            Side::Above
+        };
+        self.by_bits
+            .entry(v.to_bits())
+            .and_modify(|s| {
+                if *s != side {
+                    *s = Side::Both;
+                }
+            })
+            .or_insert(side);
+        self.digits.insert(v.to_bits(), None);
+    }
+
+    /// Whether a literal typed as some other decimal parsed to the whole
+    /// number `v` (`2.0000000000000001` to 2): an integer written into a
+    /// tree (`a·a` as a²) would then read as that decimal.
+    pub(crate) fn shadows(&self, v: f64) -> bool {
+        [v, -v].iter().any(|w| {
+            self.by_bits
+                .get(&w.to_bits())
+                .is_some_and(|s| *s != Side::Exact)
+        })
     }
 
     /// No literals known: every number is taken at face value only when it

@@ -2,7 +2,7 @@
 //! comments) proved with the replay's own enclosures, by bisection of the
 //! box and, failing that, at a higher precision.
 
-use super::eval::{at_path, contains_x, written_rational};
+use super::eval::{Lits, at_path, contains_x, written_rational};
 use super::iv::{self, Iv, Unit};
 use super::series::{self as se};
 use super::{B, Claim, Class, Fx, Outcome, Side, Subject, Via, exact, growth};
@@ -848,7 +848,7 @@ fn singular_args(fx: &Fx, e: &Expr, out: &mut Vec<Expr>) {
         if contains_x(b) {
             return None;
         }
-        if let Some((p, q)) = super::eval::written_rational(b) {
+        if let Some((p, q)) = super::eval::written_rational(b, &fx.lits) {
             return (q != 1).then(|| p as f64 / q as f64);
         }
         let v = fx.series(b, 0.0, 0.0, 0)[0].clone();
@@ -962,7 +962,7 @@ fn open_sign(fx: &Fx, e: &Expr, lo: f64, hi: f64, at: f64, far: f64, depth: usiz
             Some(open_sign(fx, a, lo, hi, at, far, d)? == open_sign(fx, b, lo, hi, at, far, d)?)
         }
         Expr::Bin(BinOp::Pow, u, b) => {
-            let (p, q) = super::eval::written_rational(b)?;
+            let (p, q) = super::eval::written_rational(b, &fx.lits)?;
             let s = fx.series(u, lo, hi, 1);
             let at_u = fx.series(u, at, at, 0);
             let monotone =
@@ -1214,7 +1214,7 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
             Expr::Num(v) => *v >= 0.0,
             Expr::Const(_) => true,
             Expr::Bin(BinOp::Pow, _, p) => {
-                written_rational(p).is_some_and(|(n, d)| d == 1 && n % 2 == 0)
+                written_rational(p, &Lits::default()).is_some_and(|(n, d)| d == 1 && n % 2 == 0)
             }
             Expr::Bin(BinOp::Add, a, b) => nonneg(a) && nonneg(b),
             Expr::Call(Func::Abs | Func::Sqrt | Func::Exp | Func::Cosh, _) => true,
@@ -1253,7 +1253,9 @@ pub fn nonzero_where_defined(e: &Expr, out: &mut Vec<Expr>) {
             if *op == BinOp::Div {
                 out.push((**b).clone());
             }
-            if *op == BinOp::Pow && written_rational(b).is_some_and(|(p, _)| p < 0) {
+            if *op == BinOp::Pow
+                && written_rational(b, &Lits::default()).is_some_and(|(p, _)| p < 0)
+            {
                 out.push((**a).clone());
             }
             nonzero_where_defined(a, out);
@@ -1585,8 +1587,10 @@ fn affine_exact(e: &Expr, fx: &Fx) -> Option<(rug::Rational, rug::Rational)> {
 
 /// The zeros of g = s(u) for the table's s, in quarter turns: (first
 /// zero, spacing), as u = θ₀ + k·T.
-fn zero_table(g: &Expr) -> Option<(&Expr, i64, i64)> {
-    let one = |e: &Expr| matches!(e, Expr::Num(v) if *v == 1.0);
+fn zero_table<'e>(g: &'e Expr, lits: &Lits) -> Option<(&'e Expr, i64, i64)> {
+    // Exactly 1 as typed (a typed 1.0000000000000001 is held as the double
+    // 1 but is not 1).
+    let one = |e: &Expr| matches!(e, Expr::Num(v) if *v == 1.0 && lits.exact(1.0) == Some(rug::Rational::from(1)));
     fn trig(e: &Expr) -> Option<(Func, &Expr)> {
         match e {
             Expr::Call(f @ (Func::Sin | Func::Cos | Func::Tan | Func::Cot), args) => {
@@ -1633,7 +1637,16 @@ fn family(fx: &Fx, of: &Subject, x0: B, period: B) -> Outcome {
     let Some(g) = side_tree(&fx.f, path, *via) else {
         return Outcome::new(Class::Unsupported, "no such side expression");
     };
-    let Some((u, theta, step)) = zero_table(&g) else {
+    let Some((u, theta, step)) = zero_table(&g, &fx.lits) else {
+        // No table form: a member where g is not 0 refutes the family
+        // (1.0000000000000001 − cos x is 10⁻¹⁶ at 0).
+        let v = fx.series(&g, x0.0, x0.1, 0)[0].clone();
+        if !v.empty && v.def && (v.gt(0.0) || v.lt(0.0)) {
+            return Outcome::new(
+                Class::Refuted,
+                format!("g is {} at the family's member, not 0", show(&v)),
+            );
+        }
         return Outcome::new(
             Class::Unconfirmed,
             format!("not a table form: {}", g.formula()),
@@ -1777,7 +1790,7 @@ impl Near<'_> {
         match e {
             Expr::Neg(a) | Expr::Degrees(a) => self.vanishes(a),
             Expr::Bin(BinOp::Pow, a, k) => {
-                written_rational(k).is_some_and(|(p, _)| p > 0) && self.vanishes(a)
+                written_rational(k, &self.fx.lits).is_some_and(|(p, _)| p > 0) && self.vanishes(a)
             }
             Expr::Bin(BinOp::Mul, a, b) => {
                 (self.vanishes(a) && self.bounded(b)) || (self.vanishes(b) && self.bounded(a))
@@ -1805,7 +1818,7 @@ impl Near<'_> {
             Expr::Bin(BinOp::Div, a, b) => {
                 (self.vanishes(b) && self.away0(a)) || (self.blows(a) && self.bounded(b))
             }
-            Expr::Bin(BinOp::Pow, a, k) => match written_rational(k) {
+            Expr::Bin(BinOp::Pow, a, k) => match written_rational(k, &self.fx.lits) {
                 Some((p, _)) if p < 0 => self.vanishes(a),
                 Some((p, _)) if p > 0 => self.blows(a),
                 _ => false,
@@ -2140,40 +2153,40 @@ pub fn outward(x: &Iv) -> (f64, f64) {
 /// Structural parity, from the language's rules: x odd, constants even,
 /// sums keep a shared parity, products multiply, an integer (odd-root)
 /// power of an odd base goes with its exponent, odd/even functions.
-pub fn tree_parity(e: &Expr) -> Option<bool> {
+pub fn tree_parity(e: &Expr, lits: &Lits) -> Option<bool> {
     if !contains_x(e) {
         return Some(true);
     }
     Some(match e {
         Expr::X => false,
-        Expr::Neg(a) | Expr::Degrees(a) => tree_parity(a)?,
+        Expr::Neg(a) | Expr::Degrees(a) => tree_parity(a, lits)?,
         Expr::Bin(BinOp::Add | BinOp::Sub, a, b) => {
-            let (pa, pb) = (tree_parity(a)?, tree_parity(b)?);
+            let (pa, pb) = (tree_parity(a, lits)?, tree_parity(b, lits)?);
             (pa == pb).then_some(pa)?
         }
-        Expr::Bin(BinOp::Mul | BinOp::Div, a, b) => tree_parity(a)? == tree_parity(b)?,
+        Expr::Bin(BinOp::Mul | BinOp::Div, a, b) => tree_parity(a, lits)? == tree_parity(b, lits)?,
         Expr::Bin(BinOp::Pow, a, b) => {
-            let pa = tree_parity(a)?;
+            let pa = tree_parity(a, lits)?;
             if contains_x(b) {
-                (pa && tree_parity(b)?).then_some(true)?
+                (pa && tree_parity(b, lits)?).then_some(true)?
             } else if pa {
                 true
             } else {
-                match written_rational(b)? {
+                match written_rational(b, lits)? {
                     (p, q) if q % 2 == 1 => p % 2 == 0,
                     _ => return None,
                 }
             }
         }
         Expr::Call(Func::Root, args) if args.len() == 2 && !contains_x(&args[1]) => {
-            let pa = tree_parity(&args[0])?;
-            match written_rational(&args[1])? {
+            let pa = tree_parity(&args[0], lits)?;
+            match written_rational(&args[1], lits)? {
                 (n, 1) if pa || n % 2 != 0 => pa,
                 _ => return None,
             }
         }
         Expr::Call(f, args) if args.len() == 1 => {
-            if tree_parity(&args[0])? {
+            if tree_parity(&args[0], lits)? {
                 true
             } else {
                 match f {
@@ -2200,7 +2213,7 @@ pub fn tree_parity(e: &Expr) -> Option<bool> {
         }
         Expr::Call(_, args) => args
             .iter()
-            .all(|a| tree_parity(a) == Some(true))
+            .all(|a| tree_parity(a, lits) == Some(true))
             .then_some(true)?,
         _ => return None,
     })
@@ -2225,7 +2238,7 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
     {
         let even = rest.starts_with("even");
         // The structural rules are the replay's own: a proof.
-        if tree_parity(&fx.f) == Some(even) {
+        if tree_parity(&fx.f, &fx.lits) == Some(even) {
             return Outcome::new(Class::Strong, "by the tree's structure");
         }
         // f(−x) ≡ ±f(x) exactly (the domain's symmetry: its row).

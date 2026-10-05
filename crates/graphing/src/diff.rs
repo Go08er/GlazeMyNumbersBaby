@@ -113,13 +113,17 @@ fn d(e: &Expr, cx: &mut Cx) -> Option<Expr> {
                 BinOp::Pow => {
                     if free(b) {
                         let da = d(a, cx)?;
-                        if let Some((0, _)) = syntactic_rational(b) {
+                        // (Exponents at face value: a derivative is used only
+                        // where f is differentiable, and there p·aᵖ⁻¹·a′
+                        // with a typed p = 2.0000000000000001 read as 2
+                        // differs from the general rule by its rounding.)
+                        if let Some((0, _)) = syntactic_rational(b, &crate::compile::Doubles) {
                             // g⁰ is 1 only where g ≠ 0 (0⁰ is undefined, as
                             // on the TI-84 Plus CE): so is its derivative 0,
                             // 0/g keeping g's zeros out of its domain.
                             return Some(Expr::bin(BinOp::Div, Expr::Num(0.0), a.clone()));
                         }
-                        if let Some((p, q)) = syntactic_rational(b) {
+                        if let Some((p, q)) = syntactic_rational(b, &crate::compile::Doubles) {
                             // (p/q)·a^((p-q)/q)·a'
                             let coef = if q == 1 {
                                 num(p as f64)

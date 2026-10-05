@@ -719,7 +719,7 @@ impl Cx<'_, '_> {
     fn pow(&self, base: &Expr, k: &Expr) -> Asy {
         if !k.contains_x() {
             let a = self.asy(base);
-            if let Some((p, q)) = crate::compile::syntactic_rational(k)
+            if let Some((p, q)) = crate::compile::syntactic_rational(k, self.f.lits)
                 && let Some(kq) = Q::new(i128::from(p), i128::from(q))
             {
                 return pow_q(a, kq, q % 2 != 0);
@@ -745,7 +745,7 @@ impl Cx<'_, '_> {
         if args.len() != 1 {
             return match func {
                 Func::Root if args.len() == 2 && !args[1].contains_x() => {
-                    match crate::compile::syntactic_rational(&args[1]) {
+                    match crate::compile::syntactic_rational(&args[1], self.f.lits) {
                         Some((n, 1)) if n != 0 => match Q::new(1, i128::from(n)) {
                             Some(k) => pow_q(self.asy(&args[0]), k, n % 2 != 0),
                             None => Unknown,

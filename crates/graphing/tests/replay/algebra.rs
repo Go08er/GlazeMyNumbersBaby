@@ -482,7 +482,7 @@ impl<'a> Field<'a> {
             Expr::Degrees(a) => self.read(a)?,
             Expr::Bin(BinOp::Pow, a, b) => {
                 let base = self.read(a)?;
-                if let Some((p, q)) = written_rational(b) {
+                if let Some((p, q)) = written_rational(b, self.lits) {
                     if q == 1 {
                         return base.powi(p);
                     }

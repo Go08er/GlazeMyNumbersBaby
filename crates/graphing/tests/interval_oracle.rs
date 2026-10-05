@@ -1093,6 +1093,135 @@ fn factorials_enclose_mpfr() {
     assert!(t.violations.is_empty(), "{:#?}", t.violations);
 }
 
+/// An exact count, against the evaluator's value (rounded once to the
+/// nearest double) and the interval core's enclosure of it (the doubles
+/// either side, a point when it is one).
+fn check_count(
+    t: &mut Tally,
+    name: &str,
+    exact: &rug::Integer,
+    value: f64,
+    enclosure: Option<DecInterval>,
+) {
+    t.cases += 1;
+    let v = Float::with_val(8192, exact);
+    let nearest = Float::with_val(53, exact).to_f64();
+    if value.to_bits() != nearest.to_bits() {
+        t.fail(format!(
+            "{name} = {value:e}, not {nearest:e} (rounded once)"
+        ));
+    }
+    let Some(r) = enclosure else { return };
+    if r.dec < Dec::Def || !inside(&v, r.iv) {
+        t.fail(format!(
+            "{name} enclosed as [{:e}, {:e}] {:?}, missing {}",
+            r.lo(),
+            r.hi(),
+            r.dec,
+            exact
+        ));
+    } else if nearest.is_finite() && r.hi() > r.lo().next_up() {
+        t.fail(format!(
+            "{name} enclosed as [{:e}, {:e}], wider than the doubles either side",
+            r.lo(),
+            r.hi()
+        ));
+    }
+}
+
+/// n!!, nCr and nPr of whole numbers: the evaluator rounds the exact count
+/// once, and the interval core encloses it by the doubles either side
+/// (review 12, R12-M-03: 99!! was a rounded running product widened by an
+/// ulp, which missed the true value).
+#[test]
+fn counting_functions_are_exact() {
+    use graphing::functions::{double_factorial, ncr, npr};
+    use rug::Integer;
+    let mut t = Tally::default();
+    let pt = DecInterval::point;
+    for n in -1i32..=320 {
+        let exact = if n < 0 {
+            Integer::from(1)
+        } else {
+            Integer::from(Integer::factorial_2(n as u32))
+        };
+        let v = n as f64;
+        check_count(
+            &mut t,
+            &format!("{n}!!"),
+            &exact,
+            double_factorial(v),
+            Some(elem::double_factorial(&pt(v))),
+        );
+    }
+    // The review's case: 99!! is above 6625061298371663·2²⁰⁸.
+    let r = elem::double_factorial(&pt(99.0));
+    assert!(r.hi() > 6625061298371663.0 * 2f64.powi(208), "{r:?}");
+    let ns = [
+        61.0,
+        100.0,
+        1000.0,
+        1021.0,
+        1030.0,
+        1e6,
+        9007199254740992.0,
+        1e17,
+        1e300,
+    ];
+    let rs = [
+        0.0, 1.0, 2.0, 3.0, 5.0, 10.0, 50.0, 100.0, 500.0, 510.0, 515.0, 999.0,
+    ];
+    let mut pairs: Vec<(f64, f64, bool)> = Vec::new();
+    for n in 0..=60 {
+        for r in -1..=61 {
+            pairs.push((n as f64, r as f64, true));
+        }
+    }
+    for &n in &ns {
+        for &r in &rs {
+            pairs.push((n, r, false));
+        }
+    }
+    for (n, r, small) in pairs {
+        let ni = Integer::from_f64(n).expect("whole");
+        let ri = Integer::from_f64(r).expect("whole");
+        for perm in [false, true] {
+            let exact = if ri < 0 || ri > ni {
+                Integer::new()
+            } else if perm {
+                // n!/(n − r)! as a product of r factors (r ≤ 999), stopped
+                // once beyond the doubles.
+                let mut p = Integer::from(1);
+                let k = ri.to_u32().expect("small r");
+                for i in 0..k {
+                    p *= Integer::from(&ni - i);
+                    if p.significant_bits() > 1100 {
+                        break;
+                    }
+                }
+                p
+            } else {
+                let k = ri.to_u32().expect("small r");
+                Integer::from(ni.binomial_ref(k))
+            };
+            // Beyond the doubles the evaluator says +∞; keep the work small.
+            if exact.significant_bits() > 1100 {
+                let value = if perm { npr(n, r) } else { ncr(n, r) };
+                if value != f64::INFINITY {
+                    t.fail(format!("C/P({n}, {r}) = {value:e}, not +∞"));
+                }
+                continue;
+            }
+            let name = format!("{}({n}, {r})", if perm { "nPr" } else { "nCr" });
+            let value = if perm { npr(n, r) } else { ncr(n, r) };
+            let iv = small.then(|| elem::ncr_npr(&pt(n), &pt(r), perm));
+            check_count(&mut t, &name, &exact, value, iv);
+        }
+    }
+    report(&t);
+    assert!(t.violations.is_empty(), "{:#?}", t.violations);
+}
+
 #[test]
 fn constants_enclose_mpfr() {
     init();
@@ -1127,21 +1256,29 @@ fn literal_texts(src: &str) -> HashMap<u64, String> {
     out
 }
 
-fn syntactic_rational(e: &Expr) -> Option<(i32, i32)> {
-    fn int(e: &Expr) -> Option<i64> {
+/// An exponent written as a ratio of integers, each an integer as typed
+/// (`1.0000000000000001` is none, though its double is 1).
+fn syntactic_rational(e: &Expr, lits: &HashMap<u64, String>) -> Option<(i32, i32)> {
+    fn int(e: &Expr, lits: &HashMap<u64, String>) -> Option<i64> {
         match e {
-            Expr::Num(v) if *v == v.trunc() && v.abs() < 1e6 => Some(*v as i64),
-            Expr::Neg(a) => int(a).map(|v| -v),
+            Expr::Num(v) if *v == v.trunc() && v.abs() < 1e6 => {
+                let typed = lits.get(&v.to_bits()).is_none_or(|t| {
+                    let (i, f) = t.split_once('.').unwrap_or((t, ""));
+                    f.chars().all(|c| c == '0') && i.parse::<f64>().ok() == Some(*v)
+                });
+                typed.then_some(*v as i64)
+            }
+            Expr::Neg(a) => int(a, lits).map(|v| -v),
             _ => None,
         }
     }
     let (p, q) = match e {
         Expr::Neg(a) => {
-            let (p, q) = syntactic_rational(a)?;
+            let (p, q) = syntactic_rational(a, lits)?;
             return Some((-p, q));
         }
-        Expr::Bin(BinOp::Div, a, b) => (int(a)?, int(b)?),
-        _ => (int(e)?, 1),
+        Expr::Bin(BinOp::Div, a, b) => (int(a, lits)?, int(b, lits)?),
+        _ => (int(e, lits)?, 1),
     };
     if q == 0 {
         return None;
@@ -1181,7 +1318,7 @@ fn mp_eval(
         Expr::Degrees(a) => ev(a)?,
         Expr::Bin(BinOp::Pow, a, b) => {
             let u = ev(a)?;
-            if let Some((p, q)) = syntactic_rational(b) {
+            if let Some((p, q)) = syntactic_rational(b, lits) {
                 return if q == 1 {
                     mp_powi(&u, p)
                 } else {
@@ -1284,6 +1421,17 @@ fn taylor_cases() -> Vec<(&'static str, TrigUnit)> {
         ("exp(-(x-100)^2)+exp(-x^2)", Radians),
         ("x^(-2)+x^3-x^(-3)", Radians),
         ("(x-1)^2/(x-1)^2", Radians),
+        // min and max are undefined wherever either argument is, even
+        // where the other one wins (review 12, R12-M-02).
+        ("min((x+1)^2,2+sqrt(sin(x)))", Radians),
+        ("max(-(x+1)^2,-2-sqrt(sin(x)))", Radians),
+        // A root of varying degree: at x = 2 its degree is 2, but its
+        // derivative is x^(1/x)'s (review 12, R12-L-02).
+        ("root(x,x)", Radians),
+        // Literals are the decimals typed (review 12, R12-M-01): no
+        // integer power, and 1.0000000000000001 − cos x never 0.
+        ("x^1.0000000000000001", Radians),
+        ("2/(1.0000000000000001-cos(x))", Radians),
     ]
 }
 
@@ -1375,6 +1523,8 @@ fn run_taylor(n_boxes: usize, seed: u64) -> Tally {
         for &c in &[
             0.3,
             1.7,
+            2.0,
+            -1.0,
             -2.4,
             3.0,
             47.0,
@@ -1478,4 +1628,74 @@ fn exact_literals_place_poles_exactly() {
     assert!(r.is_empty() && r.dec <= Dec::Trv, "{r:?}");
     let r = graphing::interval::enclose(ast, Interval::point(1000000000000.0), &ctx);
     assert_eq!(r.iv, Interval::point(0.0));
+}
+
+/// root(x, x) at 2: degree 2 there, but varying: f′(2) is x^(1/x)'s,
+/// 2^(1/2)(1 − ln 2)/4 ≈ 0.10849, not the square root's 0.35355 (review
+/// 12, R12-L-02).
+#[test]
+fn a_varying_degree_is_no_constant_root() {
+    let text = "y=root(x,x)";
+    let eq = Equation::parse(text).unwrap();
+    let (_, ast) = eq.explicit().unwrap();
+    let lits = Literals::of(text, ParseOptions::default()).unwrap();
+    let ctx = Ctx::new(CompileOptions::default(), &lits);
+    let s = taylor(ast, Interval::point(2.0), 3, &ctx);
+    let two = Float::with_val(P, 2u32);
+    let f = Float::with_val(P, two.clone().sqrt());
+    let d1 = Float::with_val(P, &f * Float::with_val(P, 1u32 - two.clone().ln())) / 4u32;
+    assert!(inside(&f, s[0].iv) && derivs_valid(&s, 3), "{s:?}");
+    assert!(inside(&d1, s[1].iv), "f′ {:?}, not {}", s[1], d1.to_f64());
+    // And the square root itself keeps its series.
+    let text = "y=root(x,2)";
+    let eq = Equation::parse(text).unwrap();
+    let (_, ast) = eq.explicit().unwrap();
+    let s = taylor(ast, Interval::point(2.0), 3, &ctx);
+    assert!(derivs_valid(&s, 3));
+    let half = Float::with_val(P, f.clone().recip()) / 2u32;
+    assert!(inside(&half, s[1].iv), "{s:?}");
+}
+
+/// min and max where one argument decides the value and the other is
+/// undefined (review 12, R12-M-02): undefined, not the winner's series.
+#[test]
+fn min_max_keep_the_loser_undefined() {
+    let series = |src: &str, b: Interval| {
+        let text = format!("y={src}");
+        let eq = Equation::parse(&text).unwrap();
+        let (_, ast) = eq.explicit().unwrap();
+        let lits = Literals::of(&text, ParseOptions::default()).unwrap();
+        let ctx = Ctx::new(CompileOptions::default(), &lits);
+        taylor(ast, b, 3, &ctx)
+    };
+    for src in [
+        "min((x+1)^2,2+sqrt(sin(x)))",
+        "max(-(x+1)^2,-2-sqrt(sin(x)))",
+        "min(x,sqrt(x+0.5))",
+        "max(x,-sqrt(x+0.5))",
+    ] {
+        // At −1 the losing argument is undefined; about it, in part.
+        for b in [
+            Interval::point(-1.0),
+            Interval::new(-1.25, -0.75),
+            Interval::new(-1.0, -0.25),
+        ] {
+            let s = series(src, b);
+            assert!(
+                s[0].dec <= Dec::Trv,
+                "{src} on [{}, {}]: {:?}",
+                b.lo(),
+                b.hi(),
+                s[0]
+            );
+            assert!(!derivs_valid(&s, 1), "{src}: derivatives kept");
+        }
+        let s = series(src, Interval::point(-1.0));
+        assert!(s[0].is_empty(), "{src} at −1: {:?}", s[0]);
+    }
+    // A loser defined throughout the box changes nothing, kink and all:
+    // min(x, x + 1 + |x − 3|) is x there, derivative and all.
+    let s = series("min(x,x+1+abs(x-3))", Interval::new(2.5, 3.4));
+    assert!(s[0].dec >= Dec::Dac && derivs_valid(&s, 1), "{s:?}");
+    assert_eq!(s[1].iv, Interval::point(1.0));
 }

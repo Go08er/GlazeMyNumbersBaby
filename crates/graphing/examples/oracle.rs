@@ -12,12 +12,15 @@
 //! clean sweep can't vouch for those checks. This one shares none of them:
 //! it reads only the public analysis result (what the panel shows, and the
 //! numbers behind it), the panel's formatter (`format_nonzero`), the
-//! compiled program, and the reference evaluator `analysis::truth::reval`
-//! for *values* (a double with an unbounded exponent where an intermediate
-//! leaves the doubles). Nothing from `analysis::verify` is used: no noise
-//! estimate, rounding bound, sample set, rule or tolerance of the gate's.
-//! What it does share with the app is arithmetic: CORE-MATH's functions
-//! (`crates/crmath`) and `dd.rs` under both evaluators. A wrong primitive
+//! compiled program, and the reference evaluator
+//! `analysis::truth::reval_typed` for *values* (a double with an unbounded
+//! exponent where an intermediate leaves the doubles), both reading the
+//! literals as the decimals typed, as the app does. Nothing from
+//! `analysis::verify` is used: no noise estimate, rounding bound, sample
+//! set, rule or tolerance of the gate's. What it does share with the app is
+//! arithmetic: CORE-MATH's functions (`crates/crmath`), `dd.rs` under both
+//! evaluators, and the exact folding of literal arithmetic (`big.rs`,
+//! exact rationals rounded once). A wrong primitive
 //! both use agrees with itself, so the pool also compares equivalent
 //! spellings (below).
 //!
@@ -48,6 +51,11 @@
 //! * one to one: two crossings, or two turns of a kind, both matched to one
 //!   reported point and told apart by something resolvably different
 //!   between them (f away from 0; f below or above both);
+//! * the shapes the panel writes, comparing no digits with anything: a
+//!   range written as one value ({c}) needs f the same at every sample,
+//!   within their rounding; two elements of a set (excluded points), or
+//!   the two bounds of an interval, that read alike are a contradiction
+//!   whatever the numbers behind them;
 //! * an open range bound reached at a turn, to within f's tolerance;
 //! * horizontal and oblique asymptotes: |f − line| no smaller at all three
 //!   decades further out (the largest over nine points a decade: 10¹² and
@@ -134,13 +142,15 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering as AtOrd};
 
 use graphing::analysis::format::{format_decimal, format_nonzero};
-use graphing::analysis::truth::{R, Xf, reval};
+use graphing::analysis::truth::{R, Xf, reval, reval_typed};
 use graphing::analysis::{
     AnalysisError, Family, Interval, KeyGraphFeatures, Monotonicity, Parity, Periodicity, analyze,
     flags,
 };
 use graphing::ast::Expr;
 use graphing::compile::{CompileOptions, Program};
+use graphing::interval::Literals;
+use graphing::lexer::ParseOptions;
 use graphing::{Equation, TrigUnit};
 
 // ---------------------------------------------------------------- floats
@@ -262,6 +272,9 @@ impl Val {
 
 struct F {
     ast: Expr,
+    /// The literals as typed: f is what the app computes from them
+    /// (`Program::compile_typed`, `truth::reval_typed`).
+    lits: Literals,
     prog: Program,
     unit: TrigUnit,
     /// `tol` and `res` by x (each takes up to a hundred evaluations).
@@ -271,7 +284,7 @@ struct F {
 impl F {
     fn at(&self, x: f64) -> Val {
         let c = self.prog.eval(x, 0.0);
-        let r = reval(&self.ast, x, self.unit);
+        let r = reval_typed(&self.ast, x, self.unit, &self.lits);
         let mk = |k, v: f64, xf: Xf| Val {
             k,
             v,
@@ -363,7 +376,7 @@ impl F {
     fn error(&self, e: &Expr, x: f64) -> (f64, f64) {
         use graphing::ast::BinOp;
         let eps = f64::EPSILON;
-        let v = match reval(e, x, self.unit) {
+        let v = match reval_typed(e, x, self.unit, &self.lits) {
             R::V(xf) => xf.f(),
             _ => return (f64::NAN, 0.0),
         };
@@ -821,7 +834,7 @@ fn exclusion_unsupported(f: &F, e: f64, slack: i64) -> Option<Val> {
     for sub in &g {
         let mut sign = None;
         for &y in &pts {
-            match reval(sub, y, f.unit) {
+            match reval_typed(sub, y, f.unit, &f.lits) {
                 R::V(xf) if !xf.is_zero() => {
                     let s = xf.sign();
                     if sign.is_some_and(|t| t != s) {
@@ -1020,11 +1033,13 @@ fn check_with(
     let Some((_, ast)) = eq.explicit() else {
         return cx.out;
     };
-    let Ok(prog) = Program::compile(ast, &opts) else {
+    let lits = Literals::of(&format!("y={expr}"), ParseOptions::default()).unwrap_or_default();
+    let Ok(prog) = Program::compile_typed(ast, &opts, &lits) else {
         return cx.out;
     };
     let f = F {
         ast: ast.clone(),
+        lits,
         prog,
         unit,
         memo: Default::default(),
@@ -1049,7 +1064,7 @@ fn check_with(
                 format!(
                     "x={x:e}: compiled {:e}, reference {:?}",
                     v.c,
-                    reval(&f.ast, *x, unit)
+                    reval_typed(&f.ast, *x, unit, &f.lits)
                 ),
             );
         }
@@ -2272,7 +2287,106 @@ fn check_with(
             }
         }
     }
+    structure(&mut cx, &f, &k, &xs, &vals);
     cx.out
+}
+
+/// The elements of each `{…}` set in a panel text (families aside).
+fn set_elements(text: &str) -> Vec<Vec<&str>> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find('{') {
+        let Some(j) = rest[i..].find('}') else { break };
+        let inner = &rest[i + 1..i + j];
+        if !inner.contains("k ∈ ℤ") && !inner.contains('|') {
+            out.push(inner.split(", ").collect());
+        }
+        rest = &rest[i + j + 1..];
+    }
+    out
+}
+
+/// The two bounds of each interval `(a, b)`, `[a, b]`, … in a panel text
+/// (families aside).
+fn interval_bounds(text: &str) -> Vec<(&str, &str)> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find(['(', '[']) {
+        let Some(j) = rest[i..].find([')', ']']) else {
+            break;
+        };
+        let inner = &rest[i + 1..i + j];
+        if let Some((a, b)) = inner.split_once(", ")
+            && !b.contains(", ")
+            && !inner.contains('k')
+        {
+            out.push((a, b));
+        }
+        rest = &rest[i + 1..];
+    }
+    out
+}
+
+/// Structural checks of the sets and intervals the panel writes, with no
+/// digits compared to anything (review 12, R12-M-04: equal rounded texts
+/// made a real range a singleton, and two poles one): a range written as
+/// one value needs f to take one value at every sample, within its
+/// rounding; two excluded points, or the two bounds of an interval, that
+/// read alike are a contradiction whatever the numbers.
+fn structure(cx: &mut Ctx<'_>, f: &F, k: &KeyGraphFeatures, xs: &[f64], vals: &[Val]) {
+    // A one-value range: f the same everywhere it is defined.
+    let singleton = set_elements(&k.range)
+        .first()
+        .is_some_and(|s| s.len() == 1 && k.range.starts_with("y ∈ {"));
+    if singleton {
+        let defined: Vec<(f64, f64)> = xs
+            .iter()
+            .zip(vals)
+            .filter(|(_, v)| v.def() && v.v.is_finite())
+            .map(|(x, v)| (*x, v.v))
+            .collect();
+        let lo = defined.iter().min_by(|a, b| a.1.total_cmp(&b.1));
+        let hi = defined.iter().max_by(|a, b| a.1.total_cmp(&b.1));
+        if let (Some(&(xl, vl)), Some(&(xh, vh))) = (lo, hi)
+            && vh - vl > f.tol(xl) + f.tol(xh)
+        {
+            cx.fail_at(
+                "range-singleton-varies",
+                xh,
+                format!(
+                    "{}: f({xl:e}) = {vl:e} and f({xh:e}) = {vh:e}, apart beyond their rounding",
+                    k.range
+                ),
+            );
+        }
+    }
+    // Excluded points (any set's elements) that read alike.
+    for text in [&k.domain, &k.range] {
+        for set in set_elements(text) {
+            if set.iter().enumerate().any(|(i, e)| set[..i].contains(e)) {
+                cx.fail(
+                    "set-elements-alike",
+                    format!("{text}: two elements read alike"),
+                );
+            }
+        }
+    }
+    // Interval bounds that read alike: a nonempty interval has two
+    // different ends (a single point is written {a}).
+    let mono: Vec<&str> = k.monotonicity.iter().map(|(t, _)| t.as_str()).collect();
+    for text in [k.domain.as_str(), k.range.as_str()]
+        .into_iter()
+        .chain(mono)
+    {
+        for (a, b) in interval_bounds(text) {
+            if a == b {
+                cx.fail(
+                    "interval-bounds-alike",
+                    format!("{text}: ({a}, {b}) reads as one point"),
+                );
+            }
+        }
+    }
 }
 
 /// Two numbers the panel would show as the same claim.
@@ -2316,9 +2430,11 @@ fn check_pair(lhs: &str, rhs: &str, positive: bool) -> Vec<Finding> {
     let load = |s: &str| -> Option<(Equation, F)> {
         let eq = Equation::parse(&format!("y={s}")).ok()?;
         let (_, ast) = eq.explicit()?;
-        let prog = Program::compile(ast, &opts).ok()?;
+        let lits = Literals::of(&format!("y={s}"), ParseOptions::default()).unwrap_or_default();
+        let prog = Program::compile_typed(ast, &opts, &lits).ok()?;
         let f = F {
             ast: ast.clone(),
+            lits,
             prog,
             unit: TrigUnit::Radians,
             memo: Default::default(),
@@ -2683,6 +2799,29 @@ fn selftest() -> bool {
             "asymptote-not-approached",
             Box::new(|k| {
                 k.data.horizontal_asymptotes = vec![(0.5, AsymptoteSide::AnyInfinity)];
+            }),
+        ),
+        // Review 12, R12-M-04: a range written as one value it isn't
+        // (the numbers behind it left as they were: only the text lies).
+        (
+            "sin(1)+(sin(x)+2)/10000000",
+            "range-singleton-varies",
+            Box::new(|k| k.range = "y ∈ {≈0.841471}".into()),
+        ),
+        // Two excluded points, and an interval's two bounds, that read
+        // alike (the review's were 10⁻⁷ apart; here only the text lies).
+        (
+            "1/((x-1)*(x-2))",
+            "set-elements-alike",
+            Box::new(|k| k.domain = "x ∈ ℝ \\ {≈1.5, ≈1.5}".into()),
+        ),
+        (
+            "1/((x-1)*(x-2))",
+            "interval-bounds-alike",
+            Box::new(|k| {
+                if let Some(m) = k.monotonicity.get_mut(1) {
+                    m.0 = "(≈1.5, ≈1.5)".into();
+                }
             }),
         ),
     ];

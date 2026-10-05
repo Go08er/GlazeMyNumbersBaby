@@ -352,7 +352,7 @@ fn powrat_ser(u: &Series, p: i32, q: i32) -> Series {
 
 fn pow(a: &Expr, b: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
     let u = ev(a, x, n, ctx);
-    if let Some((p, q)) = syntactic_rational(b) {
+    if let Some((p, q)) = syntactic_rational(b, ctx.literals) {
         return if q == 1 {
             powi_ser(&u, p)
         } else {
@@ -361,16 +361,31 @@ fn pow(a: &Expr, b: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
     }
     let v = ev(b, x, n, ctx);
     // A constant integer exponent written otherwise (x^(1+1)) is still an
-    // integer power; an exponent that varies needs a positive base (TI).
-    if !b.contains_x()
-        && !b.contains_y()
-        && v[0].iv.is_point()
-        && v[0].lo() == v[0].lo().trunc()
-        && v[0].lo().abs() < 1e6
-    {
+    // integer power; an exponent that varies needs a positive base (TI),
+    // and so does a constant that is no integer.
+    let constant = !b.contains_x() && !b.contains_y();
+    if constant && v[0].iv.is_point() && v[0].lo() == v[0].lo().trunc() && v[0].lo().abs() < 1e6 {
         return powi_ser(&u, v[0].lo() as i32);
     }
     let c0 = elem::pow(&u[0], &v[0]);
+    // A constant whose enclosure holds an integer may be that integer
+    // (x^(0.1 + 0.9) is x¹; a typed 1.0000000000000001 is enclosed by 1 and
+    // the double after it): a negative base may then be defined, with an
+    // integer power's value. Possibly undefined, never claimed so.
+    let (k0, k1) = (v[0].lo().ceil(), v[0].hi().floor());
+    if constant && !v[0].is_empty() && k0 <= k1 && u[0].lo() < 0.0 && !u[0].gt0() {
+        let mut iv = c0.iv;
+        if k1 - k0 <= 4.0 && k0.abs() < 1e6 && k1.abs() < 1e6 {
+            let mut k = k0;
+            while k <= k1 {
+                iv = iv.hull(elem::powi(&u[0], k as i32).iv);
+                k += 1.0;
+            }
+        } else {
+            iv = Interval::ENTIRE;
+        }
+        return flat(DecInterval::result(iv, Dec::Trv, &[&u[0], &v[0]]), n);
+    }
     if u[0].gt0() {
         let mut h = exp(&mul(&v, &ln(&u)));
         h[0] = c0.refine(&h[0]);
@@ -436,6 +451,21 @@ fn inverse(f: Func, u: &Series, n: usize, unit: TrigUnit) -> Series {
         }
     }
     h
+}
+
+/// min or max where the ends decide that `winner` is the value on the whole
+/// box: its series, if the losing argument is defined throughout the box
+/// (a discontinuous but defined loser changes nothing); otherwise f may be
+/// undefined somewhere on the box, and its value alone is kept, decorated
+/// as the loser is (its derivatives then mean nothing, [`derivs_valid`]).
+fn keep_winner(winner: Series, loser: &DecInterval) -> Series {
+    if loser.dec >= Dec::Def {
+        return winner;
+    }
+    let n = winner.len() - 1;
+    let mut h0 = winner[0];
+    h0.dec = h0.dec.min(loser.dec);
+    flat(h0, n)
 }
 
 /// True if the step function `step` takes one value on `v` widened by an
@@ -551,7 +581,15 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
         Root => {
             let (u, k) = (arg(0), arg(1));
             let kv = k[0].iv;
-            if kv.is_point() && kv.lo() == kv.lo().trunc() && kv.lo().abs() < 1e6 && kv.lo() != 0.0
+            // A constant integer degree: its value a whole number and its
+            // derivatives 0 (root(x, x) at 2 is 2 there, but its degree
+            // varies: f′ is not the square root's).
+            let constant = k[1..].iter().all(|c| c.iv.is_point() && c.lo() == 0.0);
+            if constant
+                && kv.is_point()
+                && kv.lo() == kv.lo().trunc()
+                && kv.lo().abs() < 1e6
+                && kv.lo() != 0.0
             {
                 let d = kv.lo() as i32;
                 let mut h = match d {
@@ -563,7 +601,15 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
                 h[0] = elem::root(&u[0], &k[0]).refine(&h[0]);
                 h
             } else {
-                flat(elem::root(&u[0], &k[0]), n)
+                let c0 = elem::root(&u[0], &k[0]);
+                if u[0].gt0() && k[0].ne0() && c0.dec >= Dec::Dac {
+                    // u > 0: the root is e^(ln u / k), whatever k does.
+                    let mut h = exp(&div(&ln(&u), &k));
+                    h[0] = c0.refine(&h[0]);
+                    h
+                } else {
+                    flat(c0, n)
+                }
             }
         }
         Ln => ln(&arg(0)),
@@ -625,11 +671,20 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
             let mut acc = arg(0);
             for i in 1..args.len() {
                 let b = arg(i);
+                // min and max are eager: undefined wherever either argument
+                // is, whichever one wins elsewhere.
+                if acc[0].is_empty() || b[0].is_empty() {
+                    acc = flat(
+                        DecInterval::result(Interval::EMPTY, Dec::Trv, &[&acc[0], &b[0]]),
+                        n,
+                    );
+                    continue;
+                }
                 let a_below = acc[0].hi() < b[0].lo();
                 let b_below = b[0].hi() < acc[0].lo();
                 acc = match (f, a_below, b_below) {
-                    (Min, true, _) | (Max, _, true) => acc,
-                    (Min, _, true) | (Max, true, _) => b,
+                    (Min, true, _) | (Max, _, true) => keep_winner(acc, &b[0]),
+                    (Min, _, true) | (Max, true, _) => keep_winner(b, &acc[0]),
                     _ => flat(
                         if f == Min {
                             elem::min(&acc[0], &b[0])

@@ -353,7 +353,7 @@ fn parts(e: &Expr, lits: &ExactLiterals) -> Option<(Poly, Poly)> {
         Expr::Degrees(a) => parts(a, lits)?,
         Expr::Bin(op, a, b) => match op {
             BinOp::Pow => {
-                let (p, q) = syntactic_rational(b)?;
+                let (p, q) = syntactic_rational(b, lits)?;
                 if q != 1 || p.unsigned_abs() as usize > MAX_DEGREE {
                     return None;
                 }

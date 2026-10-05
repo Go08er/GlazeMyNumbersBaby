@@ -15,6 +15,8 @@ use std::f64::consts::PI;
 
 use core_math as cm;
 
+use crate::big::{Nat, Round};
+
 /// Angle unit used by trigonometric functions
 /// (`Graphing::EvalTrigUnitMode`). Hyperbolic functions are not affected.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -594,21 +596,105 @@ pub fn factorial(n: f64) -> f64 {
     gamma(n + 1.0)
 }
 
-/// `n!!` for integers n ≥ −1 (NaN otherwise).
+/// `n!!` for integers n ≥ −1 (NaN otherwise): the exact integer, rounded
+/// once.
 pub fn double_factorial(n: f64) -> f64 {
+    match double_factorial_exact(n) {
+        None => f64::NAN,
+        Some(Count::Exact(v)) => v.to_f64(Round::Nearest),
+        Some(Count::Huge) => f64::INFINITY,
+    }
+}
+
+/// An exact count (n!!, nCr, nPr of whole numbers), or one beyond the
+/// doubles (above 2¹⁰²⁵: +∞ once rounded).
+pub(crate) enum Count {
+    Exact(Nat),
+    Huge,
+}
+
+/// 2⁵³: products of whole numbers below it are exact in doubles.
+const EXACT: f64 = 9_007_199_254_740_992.0;
+
+/// The bits beyond which a count is +∞ in doubles.
+const HUGE_BITS: u64 = 1026;
+
+/// `n!!` exactly, for integers n ≥ −1 (`None` otherwise). From 301 on it
+/// is beyond the doubles (301!! > 10³⁰⁹; 300!! ≈ 8·10³⁰⁷ is not).
+pub(crate) fn double_factorial_exact(n: f64) -> Option<Count> {
     if n != n.trunc() || n < -1.0 {
-        return f64::NAN;
+        return None;
     }
     if n > 300.0 {
-        return f64::INFINITY;
+        return Some(Count::Huge);
     }
+    // In doubles while the product is exact, then in whole numbers.
     let mut r = 1.0;
     let mut k = n;
-    while k > 1.0 {
+    while k > 1.0 && r * k < EXACT {
         r *= k;
         k -= 2.0;
     }
-    r
+    let mut big = Nat::from_u64(r as u64);
+    while k > 1.0 {
+        big = big.mul_small(k as u32);
+        k -= 2.0;
+    }
+    Some(Count::Exact(big))
+}
+
+/// nCr (or nPr, `perm`) exactly, for a whole n ≥ 0 and a whole r (0 when
+/// r < 0 or r > n); `None` for other arguments (Γ's generalisation).
+pub(crate) fn count_exact(n: f64, r: f64, perm: bool) -> Option<Count> {
+    if !(n.is_finite() && r.is_finite() && n == n.trunc() && r == r.trunc() && n >= 0.0) {
+        return None;
+    }
+    if r < 0.0 || r > n {
+        return Some(Count::Exact(Nat::zero()));
+    }
+    let nat = |v: f64| Nat::from_f64(v).expect("a whole number ≥ 0");
+    if perm {
+        // n(n − 1)…(n − r + 1): factors ≥ 2 until the last, so a long
+        // product leaves the doubles within about 1100 of them.
+        let (mut acc, mut i) = (1.0, 0.0);
+        while i < r && n < EXACT && acc * (n - i) < EXACT {
+            acc *= n - i;
+            i += 1.0;
+        }
+        let mut big = Nat::from_u64(acc as u64);
+        let top = nat(n);
+        while i < r {
+            big = big.mul(&top.sub(&nat(i)));
+            if big.bits() > HUGE_BITS {
+                return Some(Count::Huge);
+            }
+            i += 1.0;
+        }
+        return Some(Count::Exact(big));
+    }
+    // C(n, r) = C(n, n − r): the smaller r. (n − r is exact where it is the
+    // smaller: r and n within a factor 2.)
+    let r = r.min(n - r);
+    // acc = C(n − r + i, i), increasing in i (C(n, i) ≥ 2^i for i ≤ n/2):
+    // multiplied, then divided exactly.
+    let (mut acc, mut i) = (1.0, 1.0);
+    while i <= r && n < EXACT && acc * (n - r + i) < EXACT {
+        acc = acc * (n - r + i) / i;
+        i += 1.0;
+    }
+    let mut big = Nat::from_u64(acc as u64);
+    let base = nat(n).sub(&nat(r));
+    while i <= r {
+        // i ≤ about 1100 here: past that the count is beyond the doubles.
+        let (q, rem) = big.mul(&base.add(&nat(i))).div_rem_small(i as u32);
+        debug_assert_eq!(rem, 0);
+        big = q;
+        if big.bits() > HUGE_BITS {
+            return Some(Count::Huge);
+        }
+        i += 1.0;
+    }
+    Some(Count::Exact(big))
 }
 
 /// True for odd integers. Every `f64` at or beyond 2^53 is an even integer
@@ -622,31 +708,11 @@ pub fn ncr(n: f64, r: f64) -> f64 {
     if !n.is_finite() || !r.is_finite() {
         return f64::NAN;
     }
-    if n == n.trunc() && r == r.trunc() && n >= 0.0 {
-        if r < 0.0 || r > n {
-            return 0.0;
-        }
-        let r = r.min(n - r);
-        let mut acc = 1.0;
-        let mut i = 1.0;
-        while i <= r {
-            // acc = C(n−r+i−1, i−1). Multiplying first keeps small results
-            // exact; when that product alone overflows, divide first, since
-            // the coefficient itself may still fit (nCr(1021, 510) ≈ 5.6e305).
-            let wide = acc * (n - r + i);
-            acc = if wide.is_finite() {
-                wide / i
-            } else {
-                acc / i * (n - r + i)
-            };
-            // C(n, r) ≥ 2^r here, so a long loop overflows within ~1100
-            // steps; stop there instead of iterating up to r (≤ 10^19…).
-            if !acc.is_finite() {
-                return f64::INFINITY;
-            }
-            i += 1.0;
-        }
-        return acc.round();
+    // Whole numbers: the exact count, rounded once.
+    match count_exact(n, r, false) {
+        Some(Count::Exact(v)) => return v.to_f64(Round::Nearest),
+        Some(Count::Huge) => return f64::INFINITY,
+        None => {}
     }
     let direct = factorial(n) / (factorial(r) * factorial(n - r));
     if direct.is_finite() || n + 1.0 <= 0.0 || r + 1.0 <= 0.0 || n - r + 1.0 <= 0.0 {
@@ -661,22 +727,11 @@ pub fn npr(n: f64, r: f64) -> f64 {
     if !n.is_finite() || !r.is_finite() {
         return f64::NAN;
     }
-    if n == n.trunc() && r == r.trunc() && n >= 0.0 {
-        if r < 0.0 || r > n {
-            return 0.0;
-        }
-        let mut acc = 1.0;
-        let mut i = 0.0;
-        while i < r {
-            acc *= n - i;
-            // Factors are ≥ 2 until the last one, so this overflows quickly
-            // whenever the loop would be long.
-            if !acc.is_finite() {
-                return f64::INFINITY;
-            }
-            i += 1.0;
-        }
-        return acc;
+    // Whole numbers: the exact count, rounded once.
+    match count_exact(n, r, true) {
+        Some(Count::Exact(v)) => return v.to_f64(Round::Nearest),
+        Some(Count::Huge) => return f64::INFINITY,
+        None => {}
     }
     let direct = factorial(n) / factorial(n - r);
     if direct.is_finite() || n + 1.0 <= 0.0 || n - r + 1.0 <= 0.0 {

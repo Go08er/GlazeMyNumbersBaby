@@ -27,19 +27,27 @@ pub const UNIT_WORK: usize = 64;
 /// (an interval product of a box with itself loses the correlation:
 /// `(x−c)·(x−c)` over a box around c straddles 0, `(x−c)²` doesn't).
 pub fn canonical(e: &Expr) -> Expr {
+    canonical_with(e, true)
+}
+
+/// [`canonical`], squares written only when `square`: not when a literal
+/// typed as some other decimal parsed to 2 (`2.0000000000000001`), whose
+/// `Num(2)` the written exponent would then read as.
+pub fn canonical_with(e: &Expr, square: bool) -> Expr {
+    let go = |a: &Expr| canonical_with(a, square);
     match e {
         Expr::Num(_) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => e.clone(),
-        Expr::Neg(a) => Expr::Neg(Box::new(canonical(a))),
-        Expr::Degrees(a) => Expr::Degrees(Box::new(canonical(a))),
+        Expr::Neg(a) => Expr::Neg(Box::new(go(a))),
+        Expr::Degrees(a) => Expr::Degrees(Box::new(go(a))),
         Expr::Bin(op, a, b) => {
-            let (a, b) = (canonical(a), canonical(b));
-            if *op == BinOp::Mul && a == b {
+            let (a, b) = (go(a), go(b));
+            if square && *op == BinOp::Mul && a == b {
                 Expr::bin(BinOp::Pow, a, Expr::Num(2.0))
             } else {
                 Expr::bin(*op, a, b)
             }
         }
-        Expr::Call(f, args) => Expr::Call(*f, args.iter().map(canonical).collect()),
+        Expr::Call(f, args) => Expr::Call(*f, args.iter().map(go).collect()),
     }
 }
 
@@ -106,7 +114,7 @@ fn monomial(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<(Q, u32)>
         }
         Expr::Bin(BinOp::Pow, a, b) => {
             let (c, k) = monomial(a, lits)?;
-            let n = crate::compile::syntactic_rational(b)
+            let n = crate::compile::syntactic_rational(b, lits)
                 .filter(|&(_, q)| q == 1)
                 .map(|(p, _)| p)
                 .filter(|&p| (0..=64).contains(&p))?;
@@ -323,7 +331,7 @@ impl<'a> Fun<'a> {
         budget: u64,
         cancel: Option<&'a AtomicBool>,
     ) -> Fun<'a> {
-        let expr = canonical(expr);
+        let expr = canonical_with(expr, !lits.shadows(2.0));
         Fun {
             eval: expr.clone(),
             expr,
@@ -413,7 +421,7 @@ impl<'a> Fun<'a> {
             if b.contains_x() {
                 return None;
             }
-            if let Some((p, q)) = crate::compile::syntactic_rational(b) {
+            if let Some((p, q)) = crate::compile::syntactic_rational(b, self.lits) {
                 return (q != 1).then(|| p as f64 / q as f64);
             }
             let v = crate::simplify::period::exact_constant(b, self.exact?)?;
@@ -867,7 +875,7 @@ pub fn rational_numerators(e: &Expr, lits: &crate::simplify::ExactLiterals) -> O
 fn exact_exponents(e: &Expr, exact: &crate::simplify::ExactLiterals) -> Expr {
     e.map(&|n| match n {
         Expr::Bin(BinOp::Pow, a, b)
-            if !b.contains_x() && crate::compile::syntactic_rational(b).is_none() =>
+            if !b.contains_x() && crate::compile::syntactic_rational(b, exact).is_none() =>
         {
             let v = match &**b {
                 Expr::Num(v) => *v,
@@ -1081,10 +1089,14 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
         match e {
             Expr::Num(v) => (*v >= 0.0).then_some(*v > 0.0),
             Expr::Const(_) => Some(true),
-            Expr::Bin(BinOp::Pow, a, p) => match crate::compile::syntactic_rational(p) {
-                Some((n, 1)) if n % 2 == 0 => Some(never_zero(a)),
-                _ => sign_of(a).map(|pos| pos && never_zero(e)),
-            },
+            // (At face value: an even power is ≥ 0, and so is a power of a
+            // base ≥ 0 if the exponent is in fact no integer.)
+            Expr::Bin(BinOp::Pow, a, p) => {
+                match crate::compile::syntactic_rational(p, &crate::compile::Doubles) {
+                    Some((n, 1)) if n % 2 == 0 => Some(never_zero(a)),
+                    _ => sign_of(a).map(|pos| pos && never_zero(e)),
+                }
+            }
             Expr::Bin(BinOp::Mul | BinOp::Div, a, b) => {
                 let (sa, sb) = (sign_of(a)?, sign_of(b)?);
                 Some(sa && sb)

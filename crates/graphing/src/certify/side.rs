@@ -137,6 +137,55 @@ fn constant(f: &Fun<'_>, e: &Expr) -> Option<DecInterval> {
     f.ser_of(e, Interval::point(0.0), 0).ok().map(|s| s[0])
 }
 
+/// What a constant exponent makes of a power, by its exact value.
+enum Exponent {
+    /// p/q in lowest terms: written so (integer powers, real odd roots),
+    /// or exactly an integer however written (`x^(0.1 + 0.9)` is x¹).
+    Rational(i32, i32),
+    /// Known not to be an integer (`x^0.2`, `x^π`, a typed
+    /// `x^1.0000000000000001` whose double is 1): the positive-base rule.
+    NonInteger,
+    /// Not known to be an integer or not (an enclosure holding one):
+    /// neither rule can be stated.
+    Unknown,
+}
+
+/// The class of the constant exponent `b` (x-free): written as a ratio of
+/// integers, else by its exact value (the literals as typed, never their
+/// doubles), else by an enclosure that is an integer point or holds none.
+fn exponent(f: &Fun<'_>, b: &Expr) -> Exponent {
+    if let Some((p, q)) = syntactic_rational(b, f.lits) {
+        return Exponent::Rational(p, q);
+    }
+    if let Some(exact) = f.exact
+        && let Some(v) = crate::simplify::period::exact_constant(b, exact)
+    {
+        if v.k == 0 {
+            if let Some(n) = v.q.as_int().filter(|n| n.unsigned_abs() < 1_000_000) {
+                return Exponent::Rational(n as i32, 1);
+            }
+            if !v.q.is_int() {
+                return Exponent::NonInteger;
+            }
+        } else if !v.q.is_zero() {
+            // q·πᵏ is irrational.
+            return Exponent::NonInteger;
+        }
+    }
+    match constant(f, b) {
+        Some(v) if !v.is_empty() && v.iv.is_bounded() && v.dec >= crate::interval::Dec::Def => {
+            if v.iv.is_point() && v.lo() == v.lo().trunc() && v.lo().abs() < 1e6 {
+                Exponent::Rational(v.lo() as i32, 1)
+            } else if v.lo().ceil() > v.hi() {
+                Exponent::NonInteger
+            } else {
+                Exponent::Unknown
+            }
+        }
+        _ => Exponent::Unknown,
+    }
+}
+
 /// The factors of g whose zeros are g's zeros (a product's factors, a
 /// positive power's base, a quotient's numerator; its divisor has a
 /// condition of its own). A constant factor that is exactly 0 makes g ≡ 0.
@@ -159,7 +208,16 @@ fn nonzero_factors(
             child(1, b, out)
         }
         Expr::Bin(BinOp::Div, a, _) => child(0, a, out),
-        Expr::Bin(BinOp::Pow, a, b) if matches!(syntactic_rational(b), Some((p, _)) if p > 0) => {
+        Expr::Bin(BinOp::Pow, a, b)
+            if !b.contains_x()
+                && !b.contains_y()
+                && match exponent(f, b) {
+                    Exponent::Rational(p, _) => p > 0,
+                    // a^c, c > 0 not an integer, is 0 only where a is.
+                    Exponent::NonInteger => constant(f, b).is_some_and(|v| v.gt0()),
+                    Exponent::Unknown => false,
+                } =>
+        {
             child(0, a, out)
         }
         e if e.contains_x() => {
@@ -226,16 +284,20 @@ fn walk(f: &Fun<'_>, e: &Expr, path: &mut Vec<u8>, out: &mut Vec<SideCond>) -> R
         }
         Expr::Bin(BinOp::Pow, a, b) => {
             let base = child_path(0);
-            // As `interval::taylor`: a literal integer or fraction, then a
-            // constant integer, then the general power.
-            let rational = syntactic_rational(b).or_else(|| {
-                if b.contains_x() {
-                    return None;
+            // As the compiler: written as a ratio of integers, or exactly an
+            // integer, then the positive-base rule (an exponent that varies,
+            // or a constant that is no integer).
+            let rational = if b.contains_x() {
+                None
+            } else {
+                match exponent(f, b) {
+                    Exponent::Rational(p, q) => Some((p, q)),
+                    Exponent::NonInteger => None,
+                    Exponent::Unknown => {
+                        return Err("a constant exponent not known to be an integer or not".into());
+                    }
                 }
-                let v = constant(f, b)?;
-                (v.iv.is_point() && v.lo() == v.lo().trunc() && v.lo().abs() < 1e6)
-                    .then_some((v.lo() as i32, 1))
-            });
+            };
             match rational {
                 Some((p, 1)) if p > 0 => {}
                 Some((_, 1)) => {
@@ -454,7 +516,9 @@ pub fn table_family(f: &Fun<'_>, g: &Expr) -> Option<(Interval, Interval)> {
             _ => None,
         }
     };
-    let is_one = |e: &Expr| matches!(e, Expr::Num(v) if *v == 1.0);
+    // Exactly 1: typed so, or written by the parser (a typed
+    // 1.0000000000000001 is held as the double 1 but is not 1).
+    let is_one = |e: &Expr| matches!(e, Expr::Num(v) if *v == 1.0 && f.lits.is_exact(1.0));
     if let Some((func, u)) = trig(g) {
         let u0 = match func {
             Func::Sin | Func::Tan => Interval::point(0.0),
