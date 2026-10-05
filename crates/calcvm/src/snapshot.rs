@@ -90,8 +90,8 @@
 //! nothing), and memory, the histories and the modes are kept. Such a
 //! state is either marked when saved (`"nr": true`: the engine knows its
 //! commands won't rebuild it: a number typed right after `)`, a word size
-//! switched mid-expression, a number begun with Exp after C or CE), or
-//! found when restored: the
+//! switched mid-expression, a number begun with Exp after C or CE,
+//! parentheses the expression doesn't hold), or found when restored: the
 //! restored calculation is saved again and compared with what was loaded
 //! (the display, the expression line, the display commands, `"k"` and the
 //! modes). An error the engine is in is restored as an error without that
