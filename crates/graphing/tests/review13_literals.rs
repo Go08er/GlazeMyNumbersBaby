@@ -209,6 +209,37 @@ fn a_digit_limit_rounds_typed_numbers_and_sliders_on_entry() {
     assert_eq!(a.binding.as_ref().and_then(|b| b.literal_digits), Some(14));
 }
 
+/// R13-M-04 at the point evaluator (deferred by the interval work): a
+/// root degree typed as the odd 9007199254740993 is odd, though both
+/// doubles about it are even. The program and its reference give the real
+/// root sign(a)·|a|^(1/n), as the curve and the panel do; typed even, or
+/// to 14 digits (where it rounds to 9007199254741000), a negative base
+/// has none.
+#[test]
+fn a_typed_odd_root_degree_past_the_doubles_is_odd() {
+    let want = -(8f64.ln() / 9007199254740993.0).exp();
+    for (src, x, y) in [
+        ("root(-8,9007199254740993)", 0.0, want),
+        ("root(x,9007199254740993)", -8.0, want),
+        ("root(x,9007199254740993)", 8.0, -want),
+        ("root(x,9007199254740993)", 0.0, 0.0),
+        ("root(x,-9007199254740993)", -8.0, 1.0 / want),
+    ] {
+        let v = at(src, x);
+        assert!((v - y).abs() <= 2.0 * f64::EPSILON, "{src} at {x}: {v}");
+        assert!(
+            matches!(reference(src, x), R::V(r) if (r.f() - y).abs() <= 2.0 * f64::EPSILON),
+            "{src} at {x}"
+        );
+    }
+    assert!(at("root(x,-9007199254740993)", 0.0).is_nan());
+    assert!(at("root(x,18014398509481986)", -8.0).is_nan());
+    let mut g = graphing::Graph::new();
+    g.set_literal_digits(Some(14));
+    let id = g.add_equation("y=root(x,9007199254740993)");
+    assert!(g.evaluate(id, -8.0).is_some_and(f64::is_nan));
+}
+
 #[test]
 fn a_value_beyond_the_doubles_alone_still_rounds_once() {
     // 10⁵⁰⁰⁰ and 171! are past the doubles however they are rounded: +∞,

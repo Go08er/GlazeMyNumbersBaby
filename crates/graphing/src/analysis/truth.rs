@@ -483,6 +483,25 @@ fn reval_in(e: &Expr, x: f64, u: TrigUnit, lits: Option<&crate::interval::Litera
                 r => r,
             }
         }
+        // A root of a degree exactly an odd integer its double isn't (past
+        // 2⁵³): the real root sign(a)·|a|^(1/n).
+        Expr::Call(Func::Root, args)
+            if args.len() == 2
+                && lits.is_some()
+                && crate::compile::typed_odd_root_power(&args[1], &opts).is_some() =>
+        {
+            let inv = crate::compile::typed_odd_root_power(&args[1], &opts).expect("checked");
+            match reval(&args[0], x, u) {
+                R::V(va) => {
+                    let neg = va.sign() < 0.0;
+                    match pow_var(if neg { va.neg() } else { va }, Xf::of(inv)) {
+                        R::V(m) if neg => R::V(m.neg()),
+                        r => r,
+                    }
+                }
+                r => r,
+            }
+        }
         Expr::Bin(op, a, b) => match (reval(a, x, u), reval(b, x, u)) {
             (R::Undef, _) | (_, R::Undef) => R::Undef,
             (R::V(va), R::V(vb)) => bin(*op, va, vb),

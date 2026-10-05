@@ -2811,6 +2811,17 @@ fn adversarial() -> Vec<String> {
         "nCr(61,62)",
         "nPr(61,62)",
         "abs(nCr(61,62))+1",
+        // A root degree typed as an odd integer past 2⁵³, whose doubles are
+        // even (R13-M-04), and ones even or no integer as typed.
+        "root(-8,9007199254740993)",
+        "root(x,9007199254740993)",
+        "root(x,-9007199254740993)",
+        "root(x,18014398509481986)",
+        "root(x,3.0000000000000001)",
+        // Decimals that share a double, each its own number (R13-M-01).
+        "10^16*(1.0000000000000001-1)+x",
+        "10^16*(1.0000000000000001-0.99999999999999999)+x",
+        "1.0000000000000001*x-1*x",
     ]
     .iter()
     .map(|s| s.to_string())

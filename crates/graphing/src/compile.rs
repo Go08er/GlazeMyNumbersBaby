@@ -1604,6 +1604,27 @@ pub(crate) fn typed_root_power(n: &Expr, opts: &CompileOptions<'_>) -> Option<f6
     }
 }
 
+/// For `root(a, n)` in a typed expression whose degree n is exactly an odd
+/// integer that its double isn't (past 2⁵³, where every double is even):
+/// 1/n rounded once (the root is then sign(a)·|a|^(1/n), as
+/// [`Program::compile_typed`] computes it). `None` for any other degree,
+/// which the degree's double decides as before.
+pub(crate) fn typed_odd_root_power(n: &Expr, opts: &CompileOptions<'_>) -> Option<f64> {
+    if n.any(&|m| matches!(m, Expr::X | Expr::Y)) {
+        return None;
+    }
+    match fold(n, opts) {
+        Fold::Value(r, _)
+            if r.is_integer()
+                && !r.is_even()
+                && Rat::from_f64(r.to_f64(crate::big::Round::Nearest)).is_none_or(|d| d != r) =>
+        {
+            Some(Rat::int(1).div(&r)?.to_f64(crate::big::Round::Nearest))
+        }
+        _ => None,
+    }
+}
+
 /// What a constant exponent makes of a power: written as an integer or a
 /// ratio of integers (`(p, q)`, the integer powers and real roots), or of
 /// a value known exactly not to be an integer (the positive-base rule,
@@ -1790,6 +1811,33 @@ fn lower_in(e: &Expr, opts: &CompileOptions<'_>, lx: Lx<'_>) -> Result<Piece, Eq
                 Piece::Code(mut c) => {
                     c.push(const_op(w));
                     c.push(Op::PowVar);
+                    Piece::Code(c)
+                }
+            }
+        }
+        // A root of a degree known exactly to be an odd integer that its
+        // double isn't (past 2⁵³ every double is even, R13-M-04): the real
+        // root sign(a)·|a|^(1/n), 1/n rounded once.
+        Expr::Call(Func::Root, args)
+            if args.len() == 2
+                && lx.0.is_some()
+                && typed_odd_root_power(&args[1], opts).is_some() =>
+        {
+            let inv = Wide::new(typed_odd_root_power(&args[1], opts).expect("checked"));
+            let var = args[1].any(&|n| matches!(n, Expr::Var(_)));
+            match rec(&args[0])? {
+                Piece::Const(v, va) => {
+                    let m = wide::pow_var(wide::apply1(Fn1::Abs, v), inv);
+                    Piece::Const(m.mul(wide::apply1(Fn1::Sign, v)), va || var)
+                }
+                Piece::Code(a) => {
+                    let mut c = a.clone();
+                    c.push(Op::F1(Fn1::Abs));
+                    c.push(const_op(inv));
+                    c.push(Op::PowVar);
+                    c.extend(a);
+                    c.push(Op::F1(Fn1::Sign));
+                    c.push(Op::Mul);
                     Piece::Code(c)
                 }
             }

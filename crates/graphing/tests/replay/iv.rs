@@ -783,13 +783,48 @@ pub fn rootn(a: &Iv, q: u32) -> Iv {
     })
 }
 
+/// ᵠ√a for a degree past `u32` (a typed 9007199254740993, review 13
+/// R13-M-04: MPFR's root takes a u32), as sign(a)·exp(ln|a|/q), each step
+/// rounded the way of the bound it gives (the magnitude's the other way
+/// for a negative end): a negative base only for odd q.
+pub fn rootn_big(a: &Iv, q: i64) -> Iv {
+    let lo = if q % 2 == 0 { Some((0.0, true)) } else { None };
+    on_domain_s(a, lo, None, true, Signs::Keep, move |v, r| {
+        use rug::ops::{DivAssignRound, NegAssign};
+        if v.is_zero() {
+            return Ordering::Equal;
+        }
+        let neg = v.is_sign_negative();
+        let rm = match (neg, r) {
+            (true, Round::Down) => Round::Up,
+            (true, _) => Round::Down,
+            (false, r) => r,
+        };
+        v.abs_mut();
+        v.ln_round(rm);
+        v.div_assign_round(Float::with_val(prec(), q), rm);
+        v.exp_round(rm);
+        if neg {
+            v.neg_assign();
+        }
+        if r == Round::Down {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        }
+    })
+}
+
 /// a^(p/q) in lowest terms, q > 1, real-root semantics: (ᵠ√a)^p, so a
 /// negative base only for odd q, and 0 only to a positive power.
 pub fn pow_rat(a: &Iv, p: i64, q: i64) -> Iv {
     if a.empty {
         return Iv::empty();
     }
-    let r = rootn(a, q as u32);
+    let r = match u32::try_from(q) {
+        Ok(q) => rootn(a, q),
+        Err(_) => rootn_big(a, q),
+    };
     if r.empty {
         return Iv::empty();
     }

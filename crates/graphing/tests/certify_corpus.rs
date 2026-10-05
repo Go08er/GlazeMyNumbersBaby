@@ -305,31 +305,6 @@ const UNMODELLED: &[(&str, &str)] = &[
         "nCr(200,100)/10^58",
         "D=R | XI=none | YI=9.054851465610328~ | P=even | MIN=none | MAX=none | INF=none | VA=none",
     ),
-    // Review 13, R13-M-04: a degree typed as an odd integer is odd, though
-    // the doubles either side of 9007199254740993 are even (the replay
-    // reads its degree as a double: not replayed). −8^(1/n) is just below
-    // −1, defined.
-    (
-        "root(-8,9007199254740993)",
-        "XI=none | YI=-1.0000000000000002~ | P=even | VA=none",
-    ),
-    (
-        "root(x,9007199254740993)",
-        "D=R | XI=0 | YI=0 | P=odd | MIN=none | MAX=none | VA=none | HA=none | R=R",
-    ),
-    (
-        "root(x,-9007199254740993)",
-        "D=(-inf,0)U(0,inf) | XI=none | YI=none | P=odd | MIN=none | MAX=none | VA=0",
-    ),
-    // Even, or no integer, as typed: x ≥ 0.
-    (
-        "root(x,18014398509481986)",
-        "D=[0,inf) | XI=0 | YI=0 | P=neither | MIN=(0,0) | MAX=none | VA=none | R=[0,inf)",
-    ),
-    (
-        "root(x,3.0000000000000001)",
-        "D=[0,inf) | XI=0 | YI=0 | P=neither | MIN=(0,0) | MAX=none | VA=none | R=[0,inf)",
-    ),
 ];
 
 /// The functions of review rounds 9–11 (REVIEW_9/10/11.md), with what is
@@ -879,6 +854,30 @@ const REVIEW: &[(&str, &str)] = &[
     (
         "root(x,1+floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30))))",
         "XI=none | YI=none | MIN=none | MAX=none | INF=none",
+    ),
+    // Review 13, R13-M-04: a degree typed as an odd integer is odd, though
+    // the doubles either side of 9007199254740993 are even. −8^(1/n) is
+    // just below −1, defined.
+    (
+        "root(-8,9007199254740993)",
+        "XI=none | YI=-1.0000000000000002~ | P=even | VA=none",
+    ),
+    (
+        "root(x,9007199254740993)",
+        "D=R | XI=0 | YI=0 | P=odd | MIN=none | MAX=none | VA=none | HA=none | R=R",
+    ),
+    (
+        "root(x,-9007199254740993)",
+        "D=(-inf,0)U(0,inf) | XI=none | YI=none | P=odd | MIN=none | MAX=none | VA=0",
+    ),
+    // Even, or no integer, as typed: x ≥ 0.
+    (
+        "root(x,18014398509481986)",
+        "D=[0,inf) | XI=0 | YI=0 | P=neither | MIN=(0,0) | MAX=none | VA=none | R=[0,inf)",
+    ),
+    (
+        "root(x,3.0000000000000001)",
+        "D=[0,inf) | XI=0 | YI=0 | P=neither | MIN=(0,0) | MAX=none | VA=none | R=[0,inf)",
     ),
 ];
 

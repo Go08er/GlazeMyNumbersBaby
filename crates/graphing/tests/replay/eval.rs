@@ -643,7 +643,9 @@ fn pow_rat(a: &S, p: i64, q: i64) -> S {
     if value.empty {
         return vec![Iv::empty(); n + 1];
     }
-    let e = iv::div(&Iv::of(p as f64), &Iv::of(q as f64));
+    // (p and q exactly: a degree past 2⁵³ is no double.)
+    let int = |k: i64| Iv::new(iv::fl(0.0) + k, iv::fl(0.0) + k);
+    let e = iv::div(&int(p), &int(q));
     if a[0].gt(0.0) {
         se::pow_real(a, &e, value)
     } else if a[0].lt(0.0) && q % 2 == 1 {
@@ -852,11 +854,27 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
             let ea = a();
             let en = eval(&args[1], x, n, ctx);
             let k = &en[0];
-            if contains_x(&args[1]) || !k.is_point() {
+            if contains_x(&args[1]) {
                 return se::only_value_unless(se::constant(Iv::unknown(), n), false);
             }
-            if k.lo.is_integer() {
-                let k = k.lo.to_f64() as i64;
+            // The degree exactly, where it has an exact value (a typed
+            // 9007199254740993 is odd, though its double is even; a typed
+            // 3.0000000000000001 is no integer, though no binary point
+            // holds it: review 13, R13-M-04); else its enclosure, when a
+            // point.
+            let whole = match super::exact::eval(&args[1], None, ctx.lits, ctx.vars) {
+                Some(q) if q.is_integer() => Some(q.numer().to_i64()),
+                Some(_) => None,
+                None if k.is_point() && k.lo.is_integer() => {
+                    Some(k.lo.to_integer().and_then(|k| k.to_i64()))
+                }
+                None if k.is_point() => None,
+                None => return se::only_value_unless(se::constant(Iv::unknown(), n), false),
+            };
+            if let Some(k) = whole {
+                let Some(k) = k else {
+                    return se::only_value_unless(se::constant(Iv::unknown(), n), false);
+                };
                 if k == 0 {
                     return vec![Iv::empty(); n + 1];
                 }
