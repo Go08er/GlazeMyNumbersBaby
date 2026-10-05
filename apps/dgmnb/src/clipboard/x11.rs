@@ -1,32 +1,24 @@
 //! X11 clipboard (the CLIPBOARD selection). Copying goes through
 //! x11-clipboard, which keeps its own X connections and serving thread
-//! (dropping it stops both). Pasting uses our own bounded reader on its
-//! "getter" connection: it asks which formats the owner offers, learns each
-//! size before fetching, treats INCR size hints as untrusted, caps the total
-//! and gives up after a deadline. It runs on a short-lived worker, so the UI
-//! waits at most `PASTE_TIMEOUT` whatever the owner or the X server does.
+//! (dropping it stops both). Pasting uses the shared bounded reader
+//! (`x11paste`) on its "getter" connection: it asks which formats the owner
+//! offers, learns each size before fetching, treats INCR size hints as
+//! untrusted, refuses anything past `MAX_PASTE` and gives up after a
+//! deadline. It runs on a short-lived worker, so the UI waits at most
+//! `PASTE_TIMEOUT` whatever the owner or the X server does.
 
-use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use x11_clipboard::{Atom, Context, RustConnection};
-use x11rb::connection::Connection as _;
-use x11rb::protocol::Event;
-use x11rb::protocol::xproto::{
-    AtomEnum, ConnectionExt as _, CreateWindowAux, EventMask, Property, Window, WindowClass,
-};
+use x11_clipboard::{Atom, Context};
+use x11paste::{Atoms as Reader, Limits, Overflow, Selection};
 
 use super::MAX_PASTE;
 
 /// How long one paste may take in total.
 const PASTE_TIMEOUT: Duration = Duration::from_secs(1);
-/// Largest TARGETS list we'll read.
-const MAX_TARGETS: usize = 64 * 1024;
-/// Most queued events discarded before a conversion.
-const MAX_DRAIN: usize = 1024;
 
 pub struct Clipboard {
     inner: Arc<x11_clipboard::Clipboard>,
@@ -40,7 +32,7 @@ impl Clipboard {
     pub fn new() -> Option<Clipboard> {
         let inner = x11_clipboard::Clipboard::new().ok()?;
         let png = inner.setter.get_atom("image/png").ok()?;
-        let reader = Reader::new(&inner.getter)?;
+        let reader = Reader::new(&inner.getter.connection)?;
         Some(Clipboard {
             inner: Arc::new(inner),
             png,
@@ -84,270 +76,14 @@ impl Clipboard {
     }
 }
 
-/// The text formats we ask for, best first.
-struct Reader {
-    utf8: Atom,
-    plain: Atom,
-    text: Atom,
-    string: Atom,
-}
-
-impl Reader {
-    fn new(cx: &Context) -> Option<Reader> {
-        Some(Reader {
-            utf8: cx.atoms.utf8_string,
-            plain: cx.get_atom("text/plain;charset=utf-8").ok()?,
-            text: cx.get_atom("TEXT").ok()?,
-            string: cx.atoms.string,
-        })
-    }
-
-    fn decode(&self, kind: Atom, data: &[u8]) -> String {
-        let latin1 = |d: &[u8]| d.iter().map(|&b| char::from(b)).collect();
-        if kind == self.string {
-            latin1(data) // STRING is ISO 8859-1
-        } else if kind == self.utf8 || kind == self.plain {
-            String::from_utf8_lossy(data).into_owned()
-        } else {
-            // TEXT lets the owner pick; anything that isn't UTF-8 is most
-            // likely Latin-1 (or ASCII-only COMPOUND_TEXT).
-            std::str::from_utf8(data).map_or_else(|_| latin1(data), str::to_string)
-        }
-    }
-}
-
+/// The CLIPBOARD's text, refused (not cut) past `MAX_PASTE`.
 fn read_text(cx: &Context, r: &Reader, timeout: Duration) -> Option<String> {
-    let deadline = Instant::now() + timeout;
-    let clipboard = cx.atoms.clipboard;
-    // Which formats does the owner offer? (Some owners don't answer
-    // TARGETS; then just try each in turn.)
-    let offered: Option<Vec<Atom>> = fetch(cx, clipboard, cx.atoms.targets, deadline, MAX_TARGETS)
-        .filter(|f| f.format == 32)
-        .map(|f| {
-            let (words, _) = f.data.as_chunks::<4>();
-            words.iter().map(|w| u32::from_ne_bytes(*w)).collect()
-        });
-    for target in [r.utf8, r.plain, r.text, r.string] {
-        if offered.as_ref().is_some_and(|o| !o.contains(&target)) {
-            continue;
-        }
-        if let Some(f) = fetch(cx, clipboard, target, deadline, MAX_PASTE)
-            && f.format == 8
-        {
-            return Some(r.decode(f.kind, &f.data).replace("\r\n", "\n"));
-        }
-        if Instant::now() >= deadline {
-            break;
-        }
-    }
-    None
-}
-
-struct Fetched {
-    kind: Atom,
-    format: u8,
-    data: Vec<u8>,
-}
-
-/// Convert `selection` to `target` and read the result, refusing anything
-/// larger than `max` bytes before allocating for it.
-fn fetch(
-    cx: &Context,
-    selection: Atom,
-    target: Atom,
-    deadline: Instant,
-    max: usize,
-) -> Option<Fetched> {
-    // A window of its own for this conversion, destroyed when it ends: an
-    // owner still writing to an abandoned one, or refusing it late, can't
-    // reach a later conversion.
-    let requestor = Requestor::new(cx)?;
-    let (c, win, prop) = (&cx.connection, requestor.0, cx.atoms.property);
-    drain(c, deadline)?;
-    c.convert_selection(win, selection, target, prop, x11rb::CURRENT_TIME)
-        .ok()?;
-    c.flush().ok()?;
-    loop {
-        if let Event::SelectionNotify(e) = next_event(c, deadline)?
-            && e.requestor == win
-            && e.selection == selection
-            && e.target == target
-        {
-            if e.property == prop {
-                break;
-            }
-            if e.property == x11rb::NONE {
-                return None; // refused
-            }
-            // Otherwise it answers an earlier request: not ours.
-        }
-    }
-    // Learn the type and size without transferring anything.
-    let head = c
-        .get_property(false, win, prop, AtomEnum::ANY, 0, 0)
-        .ok()?
-        .reply()
-        .ok()?;
-    if head.type_ == cx.atoms.incr {
-        return fetch_incr(cx, win, prop, deadline, max);
-    }
-    let size = head.bytes_after as usize;
-    if size > max {
-        let _ = c.delete_property(win, prop);
-        let _ = c.flush();
-        return None;
-    }
-    let reply = c
-        .get_property(true, win, prop, AtomEnum::ANY, 0, size.div_ceil(4) as u32)
-        .ok()?
-        .reply()
-        .ok()?;
-    // It grew between the two reads: someone is still writing into it.
-    if reply.bytes_after != 0 {
-        return None;
-    }
-    Some(Fetched {
-        kind: reply.type_,
-        format: reply.format,
-        data: reply.value,
-    })
-}
-
-/// The INCR protocol: the owner sends chunks as property updates and an
-/// empty chunk ends the transfer. Its advertised total is ignored, and every
-/// chunk must have the first one's type and format.
-fn fetch_incr(
-    cx: &Context,
-    win: Window,
-    prop: Atom,
-    deadline: Instant,
-    max: usize,
-) -> Option<Fetched> {
-    let c = &cx.connection;
-    // Deleting the INCR property tells the owner to start.
-    c.delete_property(win, prop).ok()?;
-    c.flush().ok()?;
-    let mut out: Option<Fetched> = None;
-    loop {
-        match next_event(c, deadline)? {
-            Event::PropertyNotify(e)
-                if e.window == win && e.atom == prop && e.state == Property::NEW_VALUE => {}
-            _ => continue,
-        }
-        let head = c
-            .get_property(false, win, prop, AtomEnum::ANY, 0, 0)
-            .ok()?
-            .reply()
-            .ok()?;
-        if head.type_ == x11rb::NONE {
-            // Gone already: a notice for a chunk we've read. (The end of the
-            // transfer is an empty property, not a missing one.)
-            continue;
-        }
-        let chunk = head.bytes_after as usize;
-        let have = out.as_ref().map_or(0, |o| o.data.len());
-        if have.saturating_add(chunk) > max {
-            // Leave the chunk there: deleting it would only ask for more.
-            return None;
-        }
-        let reply = c
-            .get_property(true, win, prop, AtomEnum::ANY, 0, chunk.div_ceil(4) as u32)
-            .ok()?
-            .reply()
-            .ok()?;
-        c.flush().ok()?;
-        if reply.bytes_after != 0 {
-            return None;
-        }
-        if reply.value.is_empty() {
-            return out.or(Some(Fetched {
-                kind: reply.type_,
-                format: 8,
-                data: Vec::new(),
-            }));
-        }
-        match &mut out {
-            None => {
-                out = Some(Fetched {
-                    kind: reply.type_,
-                    format: reply.format,
-                    data: reply.value,
-                })
-            }
-            Some(o) if o.kind == reply.type_ && o.format == reply.format => {
-                o.data.extend_from_slice(&reply.value)
-            }
-            Some(_) => return None, // the owner changed format mid-transfer
-        }
-    }
-}
-
-/// An input-only window that receives one conversion, destroyed on drop.
-struct Requestor<'a>(Window, &'a RustConnection);
-
-impl<'a> Requestor<'a> {
-    fn new(cx: &'a Context) -> Option<Requestor<'a>> {
-        let c = &cx.connection;
-        let root = c.setup().roots.get(cx.screen)?.root;
-        let win = c.generate_id().ok()?;
-        let watch = CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE);
-        c.create_window(
-            0,
-            win,
-            root,
-            0,
-            0,
-            1,
-            1,
-            0,
-            WindowClass::INPUT_ONLY,
-            0,
-            &watch,
-        )
-        .ok()?;
-        Some(Requestor(win, c))
-    }
-}
-
-impl Drop for Requestor<'_> {
-    fn drop(&mut self) {
-        let _ = self.1.destroy_window(self.0);
-        let _ = self.1.flush();
-    }
-}
-
-/// Discard queued events: a bounded number, and never past `deadline`.
-fn drain(c: &RustConnection, deadline: Instant) -> Option<()> {
-    for _ in 0..MAX_DRAIN {
-        if Instant::now() >= deadline {
-            return None;
-        }
-        if c.poll_for_event().ok()?.is_none() {
-            break;
-        }
-    }
-    Some(())
-}
-
-/// The next X event, or `None` once `deadline` passes, even while events
-/// keep arriving.
-fn next_event(c: &RustConnection, deadline: Instant) -> Option<Event> {
-    loop {
-        let left = deadline
-            .checked_duration_since(Instant::now())
-            .filter(|l| !l.is_zero())?;
-        if let Some(e) = c.poll_for_event().ok()? {
-            return Some(e);
-        }
-        let mut fd = libc::pollfd {
-            fd: c.stream().as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        let ms = left.as_millis().clamp(1, i32::MAX as u128) as i32;
-        // SAFETY: one valid pollfd for the duration of the call.
-        unsafe { libc::poll(&mut fd, 1, ms) };
-    }
+    let limits = Limits {
+        max_bytes: MAX_PASTE,
+        timeout,
+        overflow: Overflow::Refuse,
+    };
+    x11paste::read_text(&cx.connection, cx.screen, r, Selection::Clipboard, &limits)
 }
 
 #[cfg(test)]
@@ -357,10 +93,14 @@ mod tests {
     use std::process::{Child, Command, Stdio};
     use std::sync::mpsc;
     use std::thread::{self, JoinHandle};
-    use x11rb::connection::RequestConnection as _;
+    use std::time::Instant;
+    use x11_clipboard::RustConnection;
+    use x11paste::{drain, next_event};
+    use x11rb::connection::{Connection as _, RequestConnection as _};
+    use x11rb::protocol::Event;
     use x11rb::protocol::xproto::{
-        ChangeWindowAttributesAux, CreateWindowAux, EventMask, PropMode, SELECTION_NOTIFY_EVENT,
-        SelectionNotifyEvent, WindowClass,
+        AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, CreateWindowAux, EventMask,
+        PropMode, Property, SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, WindowClass,
     };
     use x11rb::wrapper::ConnectionExt as _;
 
@@ -650,7 +390,7 @@ mod tests {
             return;
         };
         let cx = Context::new(Some(&x.display)).unwrap();
-        let r = Reader::new(&cx).unwrap();
+        let r = Reader::new(&cx.connection).unwrap();
         let (owning, owned) = mpsc::channel();
         let spammer = {
             let (display, ours) = (x.display.clone(), cx.window);
@@ -729,7 +469,7 @@ mod tests {
             return;
         };
         let cx = Context::new(Some(&x.display)).unwrap();
-        let t = Reader::new(&cx).unwrap();
+        let t = Reader::new(&cx.connection).unwrap();
         let paste_counting = |offer: Offer| {
             let owner = own(&x.display, offer);
             let start = Instant::now();

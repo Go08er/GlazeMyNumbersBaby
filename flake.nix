@@ -108,7 +108,7 @@
             libxkbcommon
             # Runs appcore's private-bus D-Bus tests.
             dbus
-            # Runs DGMNB's X11 clipboard test.
+            # Runs the X11 clipboard tests (x11paste, DGMNB).
             xvfb
             # The graphing crate's `mpfr-oracle` feature (development only).
             gmp

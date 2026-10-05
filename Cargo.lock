@@ -713,6 +713,7 @@ dependencies = [
  "wayland-backend",
  "winit",
  "x11-clipboard",
+ "x11paste",
  "x11rb",
 ]
 
@@ -1206,6 +1207,7 @@ dependencies = [
  "serde",
  "serde_json",
  "unitconv",
+ "x11paste",
 ]
 
 [[package]]
@@ -3586,6 +3588,14 @@ dependencies = [
  "libc",
  "once_cell",
  "pkg-config",
+]
+
+[[package]]
+name = "x11paste"
+version = "0.2.0"
+dependencies = [
+ "libc",
+ "x11rb",
 ]
 
 [[package]]

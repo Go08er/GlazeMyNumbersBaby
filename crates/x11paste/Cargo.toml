@@ -1,0 +1,13 @@
+[package]
+name = "x11paste"
+description = "Bounded text reads of X11 selections (clipboard, primary, drag and drop), shared by GMNB and DGMNB"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Pure-Rust X connection, core protocol only.
+x11rb = { version = "0.13", default-features = false }
+libc = "0.2"

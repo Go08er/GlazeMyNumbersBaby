@@ -30,11 +30,13 @@ sctk = { package = "smithay-client-toolkit", version = "0.19", default-features 
 wayland-backend = { version = "0.3", default-features = false, features = ["client_system"] }
 # X11 sessions (pure-Rust X connection; nothing loaded on Wayland).
 x11-clipboard = "0.9"
-x11rb = { version = "0.13", default-features = false }
+x11paste.workspace = true
 libc = "0.2"
 accesskit = "0.25"
 accesskit_winit = { version = "0.34", default-features = false, features = ["accesskit_unix", "async-io", "rwh_06"] }
 
 [dev-dependencies]
+# The X11 clipboard tests' own selection owners.
+x11rb = { version = "0.13", default-features = false }
 # The tree the Linux adapter reads, to test what AT-SPI actually gets.
 accesskit_consumer = "0.39"
