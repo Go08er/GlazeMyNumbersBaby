@@ -4,6 +4,10 @@
 //! through a gradient mask with a soft glow behind it, auto-fitting its size
 //! to the available width. The expression line sits above it.
 //!
+//! The expression line is drawn by hand too, so assistive technology gets
+//! it from a separate, invisible child placed over it ("Expression is 7 +",
+//! as upstream names its CalculatorExpression text and DGMNB its node).
+//!
 //! Animations by change kind:
 //! * `Typing`  – newly appended characters pop in with a little overshoot.
 //! * `Result`  – the whole number rises in as a staggered wave + shimmer sweep.
@@ -50,6 +54,41 @@ pub enum Change {
     None,
 }
 
+/// What assistive technology hears for the pending expression (upstream's
+/// Format_CalculatorExpression).
+pub fn expression_label(expression: &str) -> String {
+    format!("Expression is {expression}")
+}
+
+mod expr_imp {
+    use super::*;
+
+    /// The expression line's accessible stand-in: draws nothing, takes no
+    /// input, sits over the drawn line so its extents match.
+    #[derive(Default)]
+    pub struct Expression;
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for Expression {
+        const NAME: &'static str = "GmnbDisplayExpression";
+        type Type = super::Expression;
+        type ParentType = gtk::Widget;
+
+        fn class_init(klass: &mut Self::Class) {
+            klass.set_accessible_role(gtk::AccessibleRole::Label);
+        }
+    }
+
+    impl ObjectImpl for Expression {}
+    impl WidgetImpl for Expression {}
+}
+
+glib::wrapper! {
+    pub struct Expression(ObjectSubclass<expr_imp::Expression>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
 #[derive(Clone)]
 pub struct Glyphs {
     size: f32,
@@ -65,6 +104,8 @@ mod imp {
         pub value: RefCell<String>,
         pub prev: RefCell<Option<Glyphs>>,
         pub expression: RefCell<String>,
+        /// The expression line for assistive technology.
+        pub expression_node: super::Expression,
         pub glyphs: RefCell<Option<Glyphs>>,
         pub max_size: Cell<f32>,
         pub min_size: Cell<f32>,
@@ -86,6 +127,7 @@ mod imp {
                 value: RefCell::new("0".into()),
                 prev: RefCell::new(None),
                 expression: RefCell::new(String::new()),
+                expression_node: glib::Object::new(),
                 glyphs: RefCell::new(None),
                 max_size: Cell::new(64.0),
                 min_size: Cell::new(18.0),
@@ -119,11 +161,17 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
             self.obj().set_hexpand(true);
+            let node = &self.expression_node;
+            node.set_can_target(false);
+            node.set_can_focus(false);
+            node.set_visible(false);
+            node.set_parent(&*self.obj());
         }
         fn dispose(&self) {
             if let Some(id) = self.tick.take() {
                 id.remove();
             }
+            self.expression_node.unparent();
         }
     }
 
@@ -140,6 +188,18 @@ mod imp {
         fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
             self.parent_size_allocate(width, height, baseline);
             self.glyphs.replace(None);
+            // Over the drawn expression line (see `draw`).
+            let node = &self.expression_node;
+            if node.is_visible() {
+                let _ = node.measure(gtk::Orientation::Horizontal, -1);
+                let _ = node.measure(gtk::Orientation::Vertical, -1);
+                let w = (width - 2 * PAD_X as i32).max(0);
+                let h = (self.expr_size.get() * 1.6).ceil() as i32;
+                let at = gsk::Transform::new()
+                    .translate(&graphene::Point::new(PAD_X, EXPR_TOP))
+                    .into();
+                node.allocate(w, h.min(height).max(0), -1, at);
+            }
         }
 
         fn snapshot(&self, s: &gtk::Snapshot) {
@@ -182,6 +242,8 @@ impl Default for Display {
 }
 
 const PAD_X: f32 = 14.0;
+/// Where the expression line starts.
+const EXPR_TOP: f32 = 4.0;
 
 impl Display {
     pub fn new(max_size: f32) -> Self {
@@ -200,6 +262,7 @@ impl Display {
 
     pub fn set_show_expression(&self, show: bool) {
         self.imp().show_expression.set(show);
+        self.sync_expression_node();
         self.queue_resize();
     }
 
@@ -234,11 +297,24 @@ impl Display {
         self.imp().value.borrow().clone()
     }
 
+    /// The pending expression ("7 +"). Assistive technology hears every
+    /// change, also one that leaves the value as it was (7 + → 7 −).
     pub fn set_expression(&self, text: &str) {
         if *self.imp().expression.borrow() != text {
             self.imp().expression.replace(text.to_string());
+            self.sync_expression_node();
             self.queue_draw();
         }
+    }
+
+    /// Name the expression line's accessible node, present only while the
+    /// line shows something (as DGMNB's).
+    fn sync_expression_node(&self) {
+        let imp = self.imp();
+        let text = imp.expression.borrow();
+        let node = &imp.expression_node;
+        node.update_property(&[gtk::accessible::Property::Label(&expression_label(&text))]);
+        node.set_visible(imp.show_expression.get() && !text.is_empty());
     }
 
     pub fn set_value(&self, text: &str, change: Change, is_error: bool) {
@@ -361,7 +437,7 @@ impl Display {
         let h = self.height() as f32;
 
         // Expression line.
-        let mut top = 4.0;
+        let mut top = EXPR_TOP;
         if imp.show_expression.get() {
             let expr = imp.expression.borrow();
             if !expr.is_empty() {
@@ -556,4 +632,13 @@ pub fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
         a[1] + (b[1] - a[1]) * t,
         a[2] + (b[2] - a[2]) * t,
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    /// Upstream's Format_CalculatorExpression, as DGMNB words it too.
+    #[test]
+    fn the_expression_is_named_as_upstream_names_it() {
+        assert_eq!(super::expression_label("7 + "), "Expression is 7 + ");
+    }
 }
