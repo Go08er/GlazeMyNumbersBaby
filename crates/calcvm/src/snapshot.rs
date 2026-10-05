@@ -52,8 +52,9 @@
 //! ended by a radix or angle switch, MS or M+), `"percent"` (the
 //! commands' last operand is a `%` result, added to the expression rather
 //! than typed) or `"signed"` (the number being typed had its sign changed
-//! last, which the operand records after its first digit); upstream
-//! replays all four as typed digits.
+//! last, which the operand records after its first digit). Upstream's
+//! restore replays the display commands of each of these states as a
+//! number typed digit by digit.
 //!
 //! The display isn't always the engine's. Selecting a History item shows
 //! the item's expression and result while the engine holds the item
