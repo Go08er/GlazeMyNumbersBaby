@@ -1502,6 +1502,18 @@ fn taylor_cases() -> Vec<(&'static str, TrigUnit)> {
             "root(x,18014398509481986)+root(x,3.0000000000000001)",
             Radians,
         ),
+        // Nowhere defined (√ of −10⁻³⁰), though the exponent's or the
+        // degree's enclosure is a whole number: possibly undefined, not
+        // an integer power's or root's value alone (review 13, R13-M-02).
+        ("x^floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30)))", Radians),
+        (
+            "root(x,1+floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30))))",
+            Radians,
+        ),
+        (
+            "2+0*root(x,2+floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30))))",
+            Radians,
+        ),
     ]
 }
 

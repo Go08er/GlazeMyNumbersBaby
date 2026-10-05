@@ -365,7 +365,10 @@ fn pow(a: &Expr, b: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
     // and so does a constant that is no integer.
     let constant = !b.contains_x() && !b.contains_y();
     if constant && v[0].iv.is_point() && v[0].lo() == v[0].lo().trunc() && v[0].lo().abs() < 1e6 {
-        return powi_ser(&u, v[0].lo() as i32);
+        // Defined only where the exponent is: x^⌊√(−10⁻³⁰)⌋ is nowhere
+        // defined, though its exponent's enclosure is the point 0 (review
+        // 13, R13-M-02: it was x⁰'s, 1 and continuous).
+        return with_operand(powi_ser(&u, v[0].lo() as i32), &v[0]);
     }
     let c0 = elem::pow(&u[0], &v[0]);
     // A constant whose enclosure holds an integer may be that integer
@@ -446,6 +449,29 @@ fn inverse(f: Func, u: &Series, n: usize, unit: TrigUnit) -> Series {
     let mut h = integ(h0, &w, &g);
     // The derivatives exist only where the function does.
     if h0.dec < Dec::Dac {
+        for c in h.iter_mut().skip(1) {
+            *c = DecInterval::unknown();
+        }
+    }
+    h
+}
+
+/// `h`, the series of an operation computed from some of its operands
+/// alone (an integer power's from its base, the exponent only telling
+/// which power), with the decoration of another operand `o` it leaves out:
+/// f is defined (continuous, bounded) only where `o` is too, and a
+/// possibly undefined `o` leaves f possibly undefined, its derivatives
+/// unknown. (Every fast path must keep every operand's decoration:
+/// [`DecInterval::refine`] keeps the better of two, so an enclosure that
+/// forgot one would promote the result.)
+fn with_operand(mut h: Series, o: &DecInterval) -> Series {
+    if o.dec == Dec::Ill {
+        h[0] = DecInterval::ill();
+    } else if o.dec < h[0].dec {
+        h[0].dec = o.dec;
+        h[0] = h[0].normalized();
+    }
+    if h[0].dec < Dec::Dac {
         for c in h.iter_mut().skip(1) {
             *c = DecInterval::unknown();
         }
@@ -619,7 +645,10 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
                     d => powrat_ser(&u, -1, -d),
                 };
                 h[0] = elem::root(&u[0], &k[0]).refine(&h[0]);
-                h
+                // The series is u's alone: defined only where the degree
+                // is too (root(x, 1 + ⌊√(−10⁻³⁰)⌋) is nowhere defined;
+                // refined by u's series, its value was x, Com: R13-M-02).
+                with_operand(h, &k[0])
             } else {
                 // A degree written as a number is known exactly to be odd
                 // or not where its enclosure can't say (a typed

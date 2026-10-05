@@ -848,6 +848,18 @@ const REVIEW: &[(&str, &str)] = &[
         "10^17*(0.1+0.2-0.3)+x",
         "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
     ),
+    // Review 13, R13-M-02: nowhere defined (the root's argument is
+    // −10⁻³⁰), though the exponent's and the degree's enclosures are whole
+    // numbers: the integer fast paths kept only the base's decoration, and
+    // the root was certified a y-intercept 0.
+    (
+        "x^floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30)))",
+        "XI=none | YI=none | MIN=none | MAX=none | INF=none",
+    ),
+    (
+        "root(x,1+floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30))))",
+        "XI=none | YI=none | MIN=none | MAX=none | INF=none",
+    ),
 ];
 
 // ---------------------------------------------------------------- values

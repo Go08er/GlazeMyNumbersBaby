@@ -797,7 +797,7 @@ impl<'a> ExplicitSampler<'a> {
         self.work += self.iv0_cost;
         let e = iv.enclose(t, t);
         let tol = self.opts.tolerance_px / self.d_px;
-        match super::drawn_value(d, e.lo(), e.hi(), tol) {
+        match super::drawn_value(d, e.lo(), e.hi(), tol, e.dec >= Dec::Def) {
             Some(v) => self.push(t, self.off_value_of(v)),
             None => {
                 self.partial = true;
