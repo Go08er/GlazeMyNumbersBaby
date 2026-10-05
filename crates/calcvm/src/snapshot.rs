@@ -36,13 +36,15 @@
 //! first), `"mem"` (memory as displayed, newest first), `"r"` (radix),
 //! `"w"` (word size in bits), `"a"` (angle unit), `"fe"`, `"sh"` (shift
 //! mode). Memory is restored by re-entering the displayed strings, so a value
-//! comes back with the precision it was displayed with.
+//! comes back with the precision it was displayed with, and each slot is
+//! shown in the form it was saved in (e-notation or not).
 //!
 //! `"k"` (absent before 0.2) holds what the display commands don't, so a
 //! restored calculation continues as the saved one would: `"dv"` says the
 //! engine shows a value they don't produce, `"result"` (a result, a
-//! recalled value, a constant) or `"entry"` (a typed number whose entry F-E,
-//! MS or a radix switch ended); `"eq"` is `[<binary command>, <operand>]`,
+//! recalled value, a constant), `"entry"` (a typed number whose entry F-E,
+//! MS or a radix switch ended) or `"sign"` (the same, with ± its last key);
+//! `"eq"` is `[<binary command>, <operand>]`,
 //! what another `=` repeats. Upstream restores neither: it shows the last
 //! operand instead of a recalled value, "0" instead of a result after MS,
 //! and re-opens an evaluated expression, so `=` evaluates it again. `"in"`
@@ -71,6 +73,30 @@
 //! restores none of this: after a selection it replays the display commands
 //! only, which show the item's first operand, and `=` then adds that
 //! operand to itself.
+//!
+//! `"cl": true` says the next key clears the expression line although `=`
+//! has nothing to repeat (`=` then `(`). Operands are replayed in the form
+//! (F-E or not) they were written into the expression in, and a value a
+//! trailing `(` kept (`2 + 3 = (`, `5 (`) is set up before it.
+//!
+//! # The contract
+//!
+//! A restored calculation shows what was saved and continues as the saved
+//! one would have, key for key; values that only came back to the digits
+//! they showed (memory, a shown result) can differ in the last digits. A
+//! state the restore can't rebuild that way comes back as a new
+//! calculation from the saved value instead: the expression is cleared,
+//! the value shown as a result (the next digit replaces it, `=` repeats
+//! nothing), and memory, the histories and the modes are kept. Such a
+//! state is either marked when saved (`"nr": true`: the engine knows its
+//! commands won't rebuild it: a number typed right after `)`, a word size
+//! switched mid-expression, a number begun with Exp after C or CE), or
+//! found when restored: the
+//! restored calculation is saved again and compared with what was loaded
+//! (the display, the expression line, the display commands, `"k"` and the
+//! modes). An error the engine is in is restored as an error without that
+//! check, since every key clears it. Snapshots without `"k"` are restored
+//! as before, unchecked.
 
 use std::rc::Rc;
 
@@ -282,6 +308,10 @@ pub(crate) struct ContinuationSnapshot {
     pub(crate) history_load: bool,
     /// `"in"`
     pub(crate) entry: Option<Entry>,
+    /// `"cl"`
+    pub(crate) clears: bool,
+    /// `"nr"`
+    pub(crate) unreplayable: bool,
 }
 
 /// `ApplicationSnapshot`
@@ -514,6 +544,7 @@ fn shown_name(s: ShownValue) -> &'static str {
     match s {
         ShownValue::Result => "result",
         ShownValue::EndedEntry => "entry",
+        ShownValue::EndedSign => "sign",
     }
 }
 
@@ -587,6 +618,12 @@ impl ApplicationSnapshot {
                 }
                 if let Some(e) = k.entry {
                     c.insert("in".into(), json!(entry_name(e)));
+                }
+                if k.clears {
+                    c.insert("cl".into(), json!(true));
+                }
+                if k.unreplayable {
+                    c.insert("nr".into(), json!(true));
                 }
                 o.insert("k".into(), Value::Object(c));
             }
@@ -702,6 +739,7 @@ impl ApplicationSnapshot {
                             None => None,
                             Some("result") => Some(ShownValue::Result),
                             Some("entry") => Some(ShownValue::EndedEntry),
+                            Some("sign") => Some(ShownValue::EndedSign),
                             Some(_) => return Err("unknown display value kind".into()),
                         };
                         let repeat = list(k.get("eq"), ExpressionCommandDeserializer::deserialize)?
@@ -719,6 +757,8 @@ impl ApplicationSnapshot {
                                 Some("signed") => Some(Entry::Signed),
                                 Some(_) => return Err("unknown entry state".into()),
                             },
+                            clears: boolean(k.get("cl"))?,
+                            unreplayable: boolean(k.get("nr"))?,
                         })
                     }
                 };
@@ -1012,6 +1052,59 @@ impl SnapshotValidator {
 // StandardCalculatorViewModel.Snapshot
 // ---------------------------------------------------------------------------
 
+/// Extension: `text` in e-notation ("-1.21e+2") written out ("-121"), if
+/// that takes at most `max_digits` digits; `None` otherwise or if it isn't
+/// e-notation.
+pub(crate) fn plain_decimal(text: &str, point: char, max_digits: usize) -> Option<String> {
+    let (negative, text) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    let (mantissa, exponent) = text.split_once('e')?;
+    let exponent: i64 = exponent.parse().ok()?;
+    let (int, frac) = mantissa.split_once(point).unwrap_or((mantissa, ""));
+    if int.is_empty() || !int.chars().chain(frac.chars()).all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let digits: String = format!("{int}{frac}");
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        return Some("0".into());
+    }
+    // Where the point goes in `digits` (leading zeros of the mantissa
+    // dropped with them).
+    let at = int.trim_start_matches('0').len() as i64 + exponent;
+    let digits = digits.trim_end_matches('0');
+    let len = digits.len() as i64;
+    let (whole, fraction) = if at <= 0 {
+        (
+            String::from("0"),
+            format!("{}{digits}", "0".repeat((-at) as usize)),
+        )
+    } else if at >= len {
+        (
+            format!("{digits}{}", "0".repeat((at - len) as usize)),
+            String::new(),
+        )
+    } else {
+        (
+            digits[..at as usize].to_string(),
+            digits[at as usize..].to_string(),
+        )
+    };
+    let count = whole.trim_start_matches('0').len() + fraction.len();
+    if count > max_digits {
+        return None;
+    }
+    let mut out = String::from(if negative { "-" } else { "" });
+    out.push_str(&whole);
+    if !fraction.is_empty() {
+        out.push(point);
+        out.push_str(&fraction);
+    }
+    Some(out)
+}
+
 fn view_mode_number(mode: CalcMode) -> i64 {
     match mode {
         CalcMode::Standard => 0,
@@ -1118,7 +1211,7 @@ impl StandardCalculatorViewModel {
         &mut self,
         snapshot: &StandardCalculatorSnapshot,
         extension: Option<&SnapshotExtension>,
-    ) {
+    ) -> bool {
         // Recall starts a separate session, including empty memory.
         let mode = self.get_calculator_mode();
         let _ = self.with_manager(|m| m.reset(true));
@@ -1134,10 +1227,26 @@ impl StandardCalculatorViewModel {
 
         match extension {
             Some(x) if x.standard_history.is_some() || x.scientific_history.is_some() => {
-                self.set_native_calculator_mode(CalcMode::Standard);
-                self.restore_history_items(x.standard_history.as_ref());
-                self.set_native_calculator_mode(CalcMode::Scientific);
-                self.restore_history_items(x.scientific_history.as_ref());
+                // Programmer mode keeps the history of the mode before it as
+                // the manager's own ("s"."m"): that mode's goes last.
+                let items = |h: &Option<Vec<CalcManagerHistoryItem>>| h.clone().unwrap_or_default();
+                let current = items(&snapshot.calc_manager.history_items);
+                let order = if mode == CalcMode::Programmer
+                    && items(&x.standard_history) == current
+                    && items(&x.scientific_history) != current
+                {
+                    [CalcMode::Scientific, CalcMode::Standard]
+                } else {
+                    [CalcMode::Standard, CalcMode::Scientific]
+                };
+                for m in order {
+                    self.set_native_calculator_mode(m);
+                    self.restore_history_items(if m == CalcMode::Standard {
+                        x.standard_history.as_ref()
+                    } else {
+                        x.scientific_history.as_ref()
+                    });
+                }
                 self.set_native_calculator_mode(mode);
             }
             _ => {
@@ -1166,6 +1275,13 @@ impl StandardCalculatorViewModel {
         let engine_value = continuation.and_then(|k| k.engine_value.as_deref());
         let value = engine_value.unwrap_or(display);
         let engine_error = is_error && engine_value.is_none();
+        if continuation.is_some_and(|k| k.unreplayable) {
+            // Extension: the commands wouldn't rebuild this calculation.
+            self.restore_new_calculation(mode, display, is_error);
+            self.with_manager(|m| m.set_history_suppressed(false));
+            self.drain();
+            return false;
+        }
         // Whether the pending expression was restored (no budget ran out).
         let whole = match &snapshot.expression_display {
             Some(expression) if snapshot.display_commands.is_empty() => {
@@ -1225,8 +1341,75 @@ impl StandardCalculatorViewModel {
         }
         // Extension: F-E as a History selection left it, or enabled.
         self.restore_history_load(continuation.is_some_and(|k| k.history_load));
+        if engine_error && let Some(expression) = &snapshot.expression_display {
+            // The parentheses the expression line leaves open, as shown
+            // while the error is (the engine's are gone with it).
+            let open = expression.commands.iter().fold(0i64, |n, c| match c {
+                ExpressionCommandWrapper::Parentheses(cmd::OPENP) => n + 1,
+                ExpressionCommandWrapper::Parentheses(cmd::CLOSEP) => n - 1,
+                _ => n,
+            });
+            self.set_parenthesis_count(u32::try_from(open.max(0)).unwrap_or(0));
+        }
+        // Extension: a calculation that doesn't save again as it was saved
+        // wouldn't continue as it would have; start a new one from the
+        // saved value instead (see the module docs). An engine error needs
+        // no check: every key clears it, as it would have. Snapshots
+        // without "k" (older, or upstream's) can't be checked.
+        let exact = continuation.is_none() || engine_error || self.saves_as(snapshot, extension);
+        if !exact {
+            self.restore_new_calculation(mode, display, is_error);
+        }
         self.with_manager(|m| m.set_history_suppressed(false));
         self.drain();
+        exact
+    }
+
+    /// Extension: whether the calculation saves as `snapshot` and
+    /// `extension` describe it: the display, the expression line, the
+    /// display commands, what `"k"` records and the modes. Memory and the
+    /// histories are restored as they were saved and not compared (a slot
+    /// comes back as the digits it showed).
+    fn saves_as(
+        &self,
+        snapshot: &StandardCalculatorSnapshot,
+        extension: Option<&SnapshotExtension>,
+    ) -> bool {
+        let now = self.snapshot();
+        let (Some(standard), Some(x)) = (now.standard_calculator, now.extension) else {
+            return false;
+        };
+        standard.primary_display == snapshot.primary_display
+            && standard.expression_display == snapshot.expression_display
+            && standard.display_commands == snapshot.display_commands
+            && extension.is_none_or(|e| {
+                e.continuation == x.continuation
+                    && e.radix.is_none_or(|r| Some(r) == x.radix)
+                    && e.word_size.is_none_or(|w| Some(w) == x.word_size)
+                    && e.angle.is_none_or(|a| Some(a) == x.angle)
+                    && e.fe == x.fe
+                    && e.shift_mode.is_none_or(|s| Some(s) == x.shift_mode)
+            })
+    }
+
+    /// Extension: the fallback for a calculation that can't be restored as
+    /// it was: the calculation is cleared and the saved value shown as a
+    /// result, so the next digit replaces it and "=" repeats nothing; an
+    /// error stays an error. Memory, the histories and the modes are kept.
+    fn restore_new_calculation(&mut self, mode: CalcMode, display: &str, is_error: bool) {
+        self.clear_unbudgeted();
+        if is_error {
+            self.restore_error_display(display);
+        } else {
+            self.show_value(mode, display, ShownValue::Result);
+            if self.display_value != display {
+                // As it was shown (a number being typed shows its digits
+                // even with F-E on).
+                self.set_primary_display(display, false);
+            }
+        }
+        self.set_expression_display(Vec::new(), Vec::new());
+        self.restore_history_load(false);
     }
 
     /// Extension: what the engine would save now, beside its display
@@ -1257,6 +1440,8 @@ impl StandardCalculatorViewModel {
             engine_value,
             history_load: self.is_last_operation_history_load(),
             entry: c.entry,
+            clears: c.clears,
+            unreplayable: c.unreplayable,
         }
     }
 
@@ -1281,7 +1466,8 @@ impl StandardCalculatorViewModel {
             && self.display_value == display
             && continuation.is_none_or(|k| {
                 let now = self.capture_continuation();
-                (k.shown, &k.repeat, k.entry) == (now.shown, &now.repeat, now.entry)
+                (k.shown, &k.repeat, k.entry, k.clears)
+                    == (now.shown, &now.repeat, now.entry, now.clears)
             });
         if !same {
             self.clear_unbudgeted();
@@ -1304,7 +1490,24 @@ impl StandardCalculatorViewModel {
         display: &str,
         continuation: Option<&ContinuationSnapshot>,
     ) -> bool {
-        if let Some([op, operand]) = continuation.map(|k| &k.repeat[..]) {
+        // After "=" with nothing to repeat ("(" came next), the next key
+        // still clears the expression line: "1 + 1 =" sets that up, and the
+        // "(" in the commands drops what it would repeat.
+        let one = [
+            ExpressionCommandWrapper::Binary(cmd::ADD),
+            ExpressionCommandWrapper::Operand {
+                commands: vec![cmd::ZERO + 1],
+                is_negative: false,
+                is_decimal_present: false,
+                is_sci_fmt: false,
+            },
+        ];
+        let repeat = match continuation.map(|k| &k.repeat[..]) {
+            Some(repeat @ [_, _]) => Some(repeat),
+            _ if continuation.is_some_and(|k| k.clears) => Some(&one[..]),
+            _ => None,
+        };
+        if let Some([op, operand]) = repeat {
             // "1 op operand =": the left operand doesn't matter (1 is valid in
             // every radix and every operator that evaluated before takes it).
             let within = self.within_work(VALUE_WORK, |vm| {
@@ -1320,6 +1523,14 @@ impl StandardCalculatorViewModel {
             }
         }
         let entry = continuation.and_then(|k| k.entry);
+        // "(" keeps the value shown before it (unless an operator came
+        // before it): the value a shown result or recalled value left is
+        // set up before the trailing "(", as it was.
+        let open = display_commands
+            .iter()
+            .rposition(|c| *c != ExpressionCommandWrapper::Parentheses(cmd::OPENP))
+            .map_or(0, |i| i + 1);
+        let (display_commands, parens) = display_commands.split_at(open);
         // The empty input's 0 isn't typed (see `restore_entry`). A number
         // whose sign was changed last is typed with the other sign, then
         // changed: the operand puts the sign after its first digit, which
@@ -1367,6 +1578,9 @@ impl StandardCalculatorViewModel {
             .or_else(|| (self.display_value != display).then_some(ShownValue::Result));
         if let Some(shown) = shown {
             self.show_value(mode, display, shown);
+        }
+        if whole && !parens.is_empty() {
+            whole = self.replay_within_budget(parens);
         }
         whole
     }
@@ -1460,6 +1674,13 @@ impl StandardCalculatorViewModel {
                 self.send_command(cmd::FE);
                 self.send_command(cmd::FE);
             }
+            ShownValue::EndedSign => {
+                // Its sign changed twice, so ± is the last command.
+                self.send_command(cmd::SIGN);
+                self.send_command(cmd::SIGN);
+                self.send_command(cmd::FE);
+                self.send_command(cmd::FE);
+            }
         }
     }
 
@@ -1497,8 +1718,15 @@ impl StandardCalculatorViewModel {
             ),
         };
         let locale = crate::localization::LocalizationSettings::get_instance().paste_locale();
+        // F-E shows numbers in e-notation; typed so, an integer isn't one
+        // to the engine ("1.21e+2" isn't 121 as an exponent of a negative
+        // base). Type it out where its digits fit.
+        let max_digits = if mode == CalcMode::Standard { 16 } else { 32 };
+        let plain = (mode != CalcMode::Programmer)
+            .then(|| plain_decimal(value, locale.decimal_separator, max_digits))
+            .flatten();
         let value = copypaste::validate_paste_expression_localized(
-            value,
+            plain.as_deref().unwrap_or(value),
             view_mode,
             view_mode.group_type(),
             number_base,
@@ -1518,23 +1746,46 @@ impl StandardCalculatorViewModel {
     }
 
     fn replay(&mut self, commands: &[ExpressionCommandWrapper]) {
-        for command in commands {
-            // A sign change recorded as an operation ("negate(3)") was made
-            // to a number whose entry had ended (F-E, MS, a History
-            // selection); sent right after its digits it would change the
-            // sign of the number being typed instead, and the next digit
-            // would extend it. End the entry first, as F-E does.
-            if let ExpressionCommandWrapper::Unary(ops) = command
-                && ops.last() == Some(&cmd::SIGN)
-                && self.standard_calculator_manager.is_engine_recording()
-            {
-                self.send_command(cmd::FE);
+        let fe = self.is_f_to_e_checked;
+        for (i, command) in commands.iter().enumerate() {
+            // An operand was written into the expression by the command
+            // after it, in the form F-E gave it then: e-notation, or plain
+            // (unless the number needs e-notation). F-E may have been
+            // switched since; write it in its own form, then switch back.
+            let switch = match i.checked_sub(1).map(|j| &commands[j]) {
+                Some(ExpressionCommandWrapper::Operand { is_sci_fmt, .. })
+                    if !matches!(command, ExpressionCommandWrapper::Operand { .. }) =>
+                {
+                    *is_sci_fmt != fe
+                }
+                _ => false,
+            };
+            if switch {
                 self.send_command(cmd::FE);
             }
-            let command = [command.to_command()];
-            for c in crate::standard_vm::get_commands_from_expression_commands(&command) {
-                self.send_command(c);
+            self.replay_one(command);
+            if switch {
+                self.send_command(cmd::FE);
             }
+        }
+    }
+
+    fn replay_one(&mut self, command: &ExpressionCommandWrapper) {
+        // A sign change recorded as an operation ("negate(3)") was made to a
+        // number whose entry had ended (F-E, MS, a History selection); sent
+        // right after its digits it would change the sign of the number
+        // being typed instead, and the next digit would extend it. End the
+        // entry first, as F-E does.
+        if let ExpressionCommandWrapper::Unary(ops) = command
+            && ops.last() == Some(&cmd::SIGN)
+            && self.standard_calculator_manager.is_engine_recording()
+        {
+            self.send_command(cmd::FE);
+            self.send_command(cmd::FE);
+        }
+        let command = [command.to_command()];
+        for c in crate::standard_vm::get_commands_from_expression_commands(&command) {
+            self.send_command(c);
         }
     }
 
@@ -1594,5 +1845,13 @@ impl StandardCalculatorViewModel {
             });
             vm.clear_unbudgeted();
         });
+        // A slot keeps the form it was shown in when it was stored (F-E or
+        // not) until the whole list is shown again (M+, M−, a mode or
+        // radix switch); the restored list was shown in today's form.
+        if self.memorized_numbers.len() == memory.len() {
+            for (slot, text) in self.memorized_numbers.iter_mut().zip(memory) {
+                slot.value.clone_from(text);
+            }
+        }
     }
 }

@@ -216,6 +216,8 @@ impl CalcEngine {
         // Add the implicit multiplication to history
         self.history_collector
             .add_bin_op_to_history(self.n_op_code, self.f_integer_mode, true);
+        // Extension: replaying it as an ordinary × wouldn't drop them.
+        self.history_collector.mark_unreplayable();
 
         self.b_change_op = true;
         self.n_prev_op_code = 0;
@@ -816,6 +818,11 @@ impl CalcEngine {
             }
 
             IDM_QWORD | IDM_DWORD | IDM_WORD | IDM_BYTE => {
+                // Extension: the pending expression's values were worked out
+                // in the old word size; replayed, they would be in the new.
+                if self.history_collector.last_command().is_some() {
+                    self.history_collector.mark_unreplayable();
+                }
                 if self.b_record {
                     self.current_val = self.input.to_rational(self.radix, self.precision)?;
                     self.b_record = false;
