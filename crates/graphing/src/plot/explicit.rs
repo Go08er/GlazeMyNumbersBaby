@@ -46,7 +46,7 @@
 use super::{Cancel, IntervalFn, PlotOptions, Polyline, axis_point, signed_area};
 use crate::compile::{Input, Program};
 use crate::equation::Axis;
-use crate::interval::{Dec, derivs_valid};
+use crate::interval::{Dec, DecInterval, derivs_valid};
 use crate::viewport::Viewport;
 
 /// Width of the first boxes the certified sampler classifies (pixels).
@@ -756,6 +756,10 @@ impl<'a> ExplicitSampler<'a> {
     /// 10⁻⁴), is no hole; nor is a factorial's pole where doubles see no
     /// growth at all ([`IntervalFn::pole_at`]: x! near −1000). Enclosures, not point values, close in, so a
     /// cancelling form (`(x³−8)/(x−2)`) isn't mistaken for growth.
+    ///
+    /// Nor is a jump, however small: the sides must meet, not merely come
+    /// within the tolerance (R12-L-01: `sign(x)·(x/x)/1000` jumps by a
+    /// fifteenth of a pixel). See [`sides_converge`].
     fn removable(&self, iv: &IntervalFn, p: f64, r: f64) -> Option<f64> {
         if iv.pole_at(p) {
             return None;
@@ -780,13 +784,11 @@ impl<'a> ExplicitSampler<'a> {
             a = a.next_down();
             b = b.next_up();
         }
-        [a, b]
-            .into_iter()
-            .all(|near| {
-                let d = dist(near);
-                d <= tol && d <= 2.0 * far + 4.0 * ulp(v)
-            })
-            .then_some(v)
+        ([a, b].into_iter().all(|near| {
+            let d = dist(near);
+            d <= tol && d <= 2.0 * far + 4.0 * ulp(v)
+        }) && sides_converge(iv, p, r))
+        .then_some(v)
     }
 
     /// f's value at an end of a box it is proven continuous on (so
@@ -1072,6 +1074,67 @@ fn ulp(t: f64) -> f64 {
     } else {
         f64::MAX
     }
+}
+
+/// Most rungs of [`sides_converge`]'s ladder above the doubles next to p.
+const CONVERGE_RUNGS: usize = 24;
+
+/// Whether f's one-sided enclosures beside p converge to one value within
+/// their own width, from `r` away down to the doubles next to p: f's
+/// enclosures either side at p ± r, p ± r/8, p ± r/64, … (to
+/// [`CONVERGE_RUNGS`] rungs, and at least four times further out than
+/// the next), eight doubles out and at the nearest doubles where f is
+/// defined. At each rung the sides overlap, or are apart by no more than
+/// their own widths and twice the gap one rung out scaled down by the
+/// distance (f's slope parting the values beside a hole closes the gap in
+/// step with the distance: `1/x!` at −1 is −2.2·10⁻¹⁶ and 1.1·10⁻¹⁶ at the
+/// nearest doubles, each enclosed to 10⁻³¹); a gap that stays wherever
+/// the enclosures are narrower than it is a jump (`sign(x)·(x/x)/1000`;
+/// `(x²−1)/(x−1) + sign(x−1)/1000`, whose enclosures widen past the jump
+/// only within 10⁻¹³ of 1). Not a proof that the limits are equal, which
+/// no enclosure at a double can give: a jump narrower than f's
+/// enclosures beside p, or than its change across a few doubles there,
+/// still passes.
+fn sides_converge(iv: &IntervalFn, p: f64, r: f64) -> bool {
+    let (mut a8, mut b8) = (p, p);
+    // The nearest doubles either side where f is defined.
+    let (mut left, mut right) = ((p, None), (p, None));
+    for _ in 0..8 {
+        a8 = a8.next_down();
+        b8 = b8.next_up();
+        if left.1.is_none() {
+            left = (a8, Some(iv.enclose(a8, a8)).filter(|e| !e.is_empty()));
+        }
+        if right.1.is_none() {
+            right = (b8, Some(iv.enclose(b8, b8)).filter(|e| !e.is_empty()));
+        }
+    }
+    let ((a1, Some(left)), (b1, Some(right))) = (left, right) else {
+        return false;
+    };
+    let d8 = (p - a8).max(b8 - p);
+    let mut rungs = Vec::with_capacity(CONVERGE_RUNGS + 1);
+    let mut d = r;
+    while rungs.len() < CONVERGE_RUNGS && d > 4.0 * d8 {
+        rungs.push((p - d, p + d));
+        d /= 8.0;
+    }
+    rungs.push((a8, b8));
+    // (Distance across, enclosures either side.)
+    let mut sides: Vec<(f64, DecInterval, DecInterval)> = rungs
+        .into_iter()
+        .map(|(a, b)| (b - a, iv.enclose(a, a), iv.enclose(b, b)))
+        .collect();
+    sides.push((b1 - a1, left, right));
+    if sides.iter().any(|(_, l, r)| l.is_empty() || r.is_empty()) {
+        return false;
+    }
+    let gap = |l: &DecInterval, r: &DecInterval| (l.lo().max(r.lo()) - l.hi().min(r.hi())).max(0.0);
+    sides.windows(2).all(|w| {
+        let ((d0, l0, r0), (d1, l1, r1)) = (&w[0], &w[1]);
+        let widths = (l1.hi() - l1.lo()) + (r1.hi() - r1.lo());
+        gap(l1, r1) - widths <= 2.0 * (d1 / d0) * gap(l0, r0)
+    })
 }
 
 /// A number in [g0, g1] at which f is proven undefined: the shortest
