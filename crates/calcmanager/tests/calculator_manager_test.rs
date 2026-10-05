@@ -2880,3 +2880,34 @@ fn paren_count_is_reported() {
     );
     assert_eq!(2, p_calculator_display.borrow().m_paren_display);
 }
+
+/// Extension: `engine_primary_display` reports what the engine last showed,
+/// including what history item load mode kept from the display (a History
+/// selection replays the item there, and the view model shows its result).
+#[test]
+fn engine_primary_display_includes_history_item_loads() {
+    let (p_calculator_display, mut m_calculator_manager) = common_setup();
+    m_calculator_manager.set_standard_mode().unwrap();
+    assert_eq!(
+        m_calculator_manager.engine_primary_display(),
+        Some(("0".to_string(), false))
+    );
+    m_calculator_manager.set_in_history_item_load_mode(true);
+    execute_commands(
+        &mut m_calculator_manager,
+        &[Command::Command2, Command::CommandADD, Command::Command3],
+    );
+    m_calculator_manager.set_in_history_item_load_mode(false);
+    assert_eq!(p_calculator_display.borrow().get_primary_display(), "0");
+    assert_eq!(
+        m_calculator_manager.engine_primary_display(),
+        Some(("3".to_string(), false))
+    );
+    execute_commands(
+        &mut m_calculator_manager,
+        &[Command::CommandDIV, Command::Command0, Command::CommandEQU],
+    );
+    let (text, is_error) = m_calculator_manager.engine_primary_display().unwrap();
+    assert!(is_error);
+    assert_eq!(text, p_calculator_display.borrow().get_primary_display());
+}

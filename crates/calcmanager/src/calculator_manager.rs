@@ -35,6 +35,8 @@ struct ManagerDisplay {
     in_history_item_load_mode: bool,
     /// Extension: see [`CalculatorManager::begin_deferred_display`].
     deferred: Option<DeferredDisplay>,
+    /// Extension: see [`CalculatorManager::engine_primary_display`].
+    engine_primary: Option<(String, bool)>,
 }
 
 /// The display updates held back while displays are deferred: the last
@@ -49,6 +51,7 @@ struct DeferredDisplay {
 impl CalcDisplay for ManagerDisplay {
     /// Used to set the primary display value on ViewModel
     fn set_primary_display(&mut self, display_string: &str, is_error: bool) {
+        self.engine_primary = Some((display_string.to_string(), is_error));
         if self.in_history_item_load_mode {
             return;
         }
@@ -183,6 +186,7 @@ impl CalculatorManager {
             display_callback: display_callback.clone(),
             in_history_item_load_mode: false,
             deferred: None,
+            engine_primary: None,
         }));
 
         CalculatorManager {
@@ -740,6 +744,16 @@ impl CalculatorManager {
             self.set_memorized_numbers_string()?;
         }
         Ok(())
+    }
+
+    /// Extension: the primary display the engines last asked for, and
+    /// whether it is an error, including one history item load mode or
+    /// deferred display held back (`None` before the first). The view model
+    /// shows another value after selecting a History item (the item's
+    /// result, while the engine shows the item's last operand) and after a
+    /// paste error (only the view model is in error).
+    pub fn engine_primary_display(&self) -> Option<(String, bool)> {
+        self.proxy.borrow().engine_primary.clone()
     }
 
     /// Extension: what a saved session needs besides the display commands
