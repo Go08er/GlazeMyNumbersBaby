@@ -508,6 +508,21 @@ mod tests {
             vec![("TEXT", "UTF8_STRING", "½".into())],
         );
         assert_eq!(paste(text).as_deref(), Some("½"));
+        // Plain `text/plain` alone (R13-L-02): UTF-8 when it is, else
+        // Latin-1; and it's taken over STRING.
+        let unlabelled = plain(
+            Some(&["TARGETS", "STRING", "text/plain"]),
+            vec![
+                ("STRING", "STRING", b"latin".to_vec()),
+                ("text/plain", "text/plain", "sin(x)·½".into()),
+            ],
+        );
+        assert_eq!(paste(unlabelled).as_deref(), Some("sin(x)·½"));
+        let unlabelled = plain(
+            Some(&["TARGETS", "text/plain"]),
+            vec![("text/plain", "text/plain", b"caf\xe9".to_vec())],
+        );
+        assert_eq!(paste(unlabelled).as_deref(), Some("café"));
         // An owner that won't say what it has still gets asked for STRING.
         let quiet = plain(None, vec![("STRING", "STRING", b"42".to_vec())]);
         assert_eq!(paste(quiet).as_deref(), Some("42"));

@@ -346,8 +346,28 @@ impl GraphingPage {
             });
         }
 
+        {
+            let weak = Rc::downgrade(&page);
+            ctx.precision.follow(move |p| {
+                if let Some(page) = weak.upgrade() {
+                    page.set_number_precision(p);
+                }
+            });
+        }
+        page.set_number_precision(ctx.precision.get());
         page.restore();
         page
+    }
+
+    /// Rounds each number typed in an equation to `p` (Settings' "Number
+    /// precision"), then plots and analyses afresh.
+    fn set_number_precision(self: &Rc<Self>, _p: appcore::graph::NumberPrecision) {
+        // Not wired yet: the engine's `Graph` setter for `literal_digits`
+        // (branch p5-literal) goes here, given `_p.digits()`. Until it
+        // lands the setting is saved and followed, and this re-plots and
+        // re-analyses as the setter will need.
+        self.graph_view.invalidate();
+        self.analysis_inputs_changed();
     }
 
     fn set_wide(&self, wide: bool) {
@@ -492,7 +512,6 @@ impl GraphingPage {
             .css_classes(["wc-eq-entry"])
             .build();
         entry.update_property(&[gtk::accessible::Property::Label("Equation")]);
-        crate::paste::guard(&entry);
         let analyze = small_button(paths::FUNCTION, "Analyze function");
         let remove = small_button(paths::CLOSE, "Remove equation");
         let style = gtk::MenuButton::builder()
@@ -746,7 +765,6 @@ impl GraphingPage {
             value.set_value(var.value());
             value.set_width_chars(6);
             value.add_css_class("wc-spin");
-            crate::paste::guard(&value);
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             row.add_css_class("wc-var-row");
             row.append(&label);
@@ -959,7 +977,6 @@ impl GraphingPage {
                 .css_classes(["wc-range-entry"])
                 .build();
             e.update_property(&[gtk::accessible::Property::Label(label)]);
-            crate::paste::guard(&e);
             e
         };
         let (xmin, xmax, ymin, ymax) = (mk("X-Min"), mk("X-Max"), mk("Y-Min"), mk("Y-Max"));

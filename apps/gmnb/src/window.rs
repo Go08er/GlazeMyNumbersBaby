@@ -161,6 +161,8 @@ impl Window {
             toasts: toasts.clone(),
             store: store.clone(),
             compact: Default::default(),
+            layers: crate::inert::Layers::new(&win),
+            precision: crate::pages::Followed::new(settings.literal_digits),
         });
 
         // Header.
@@ -239,6 +241,19 @@ impl Window {
             close_nav.connect_clicked(move |_| split.set_show_sidebar(false));
         }
 
+        {
+            // The sidebar overlays the content while collapsed.
+            let weak = split.downgrade();
+            ctx.layers.scrim(
+                &content,
+                &split,
+                &["show-sidebar", "collapsed"],
+                move || {
+                    weak.upgrade()
+                        .is_some_and(|s| s.is_collapsed() && s.shows_sidebar())
+                },
+            );
+        }
         toasts.set_child(Some(&split));
         {
             // The window gets its content in `present`.
@@ -314,14 +329,6 @@ impl Window {
         }
 
         this.install_keyboard();
-        // Text fields paste through the bounded reader too (crate::paste);
-        // pages, rows and dialogs guard their fields as they make them, and
-        // a field that takes the focus is guarded if it wasn't.
-        win.connect_focus_widget_notify(|win| {
-            if let Some(focus) = gtk::prelude::GtkWindowExt::focus(win) {
-                crate::paste::guard(&focus);
-            }
-        });
         {
             let weak = Rc::downgrade(&this);
             let paste = gtk::gio::SimpleAction::new("paste", None);
@@ -368,7 +375,6 @@ impl Window {
         if self.win.content().is_none() {
             self.win.set_content(Some(&self.ctx.aurora));
         }
-        crate::paste::guard(&self.win);
     }
 
     pub fn ctx(&self) -> &Rc<Ctx> {
@@ -421,7 +427,6 @@ impl Window {
             PageKind::Graphing => pages::graphing::GraphingPage::handle(self.ctx.clone()),
         };
         self.stack.add_named(&page.widget(), Some(kind.key()));
-        crate::paste::guard(&page.widget());
         self.pages.borrow_mut().insert(kind, page.clone());
         page
     }
@@ -476,7 +481,13 @@ impl Window {
                     return glib::Propagation::Proceed;
                 }
             }
-            if w.handle_key(&kp) {
+            // A page the sidebar, a sheet or a dialog covers is insensitive
+            // (crate::inert): no key reaches it then, only the window's
+            // shortcuts and Escape closing the sidebar.
+            let covered = !w.current_page().widget().is_sensitive();
+            let window_key = input::window_shortcut(&kp).is_some()
+                || (kp.is(Named::Escape) && w.split.shows_sidebar());
+            if (!covered || window_key) && w.handle_key(&kp) {
                 glib::Propagation::Stop
             } else {
                 glib::Propagation::Proceed

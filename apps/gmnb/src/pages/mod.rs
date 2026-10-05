@@ -5,6 +5,7 @@ pub mod converter;
 pub mod date;
 pub mod graphing;
 
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::gdk;
@@ -20,6 +21,41 @@ use appcore::modes::ViewMode;
 /// Enter/leave the compact window chrome.
 pub type CompactHook = Box<dyn Fn(bool)>;
 
+/// A setting pages follow live: Settings sets it, a page reads it when it
+/// is made and is told of every change after.
+pub struct Followed<T> {
+    value: Cell<T>,
+    followers: RefCell<Vec<Follower<T>>>,
+}
+
+type Follower<T> = Box<dyn Fn(T)>;
+
+impl<T: Copy + PartialEq> Followed<T> {
+    pub fn new(value: T) -> Self {
+        Followed {
+            value: Cell::new(value),
+            followers: RefCell::default(),
+        }
+    }
+
+    pub fn get(&self) -> T {
+        self.value.get()
+    }
+
+    /// Changes it, telling every follower if it changed.
+    pub fn set(&self, value: T) {
+        if self.value.replace(value) != value {
+            for f in self.followers.borrow().iter() {
+                f(value);
+            }
+        }
+    }
+
+    pub fn follow(&self, f: impl Fn(T) + 'static) {
+        self.followers.borrow_mut().push(Box::new(f));
+    }
+}
+
 /// Services every page can use.
 pub struct Ctx {
     pub hub: Rc<Hub>,
@@ -28,6 +64,11 @@ pub struct Ctx {
     pub store: Rc<Store>,
     /// Set by the window: enter/leave the compact "keep on top" chrome.
     pub compact: std::cell::RefCell<Option<CompactHook>>,
+    /// What covers what in the window, for assistive technology; a page
+    /// registers the layers it opens over itself.
+    pub layers: Rc<crate::inert::Layers>,
+    /// Graphing's number precision (Settings).
+    pub precision: Followed<appcore::graph::NumberPrecision>,
 }
 
 impl Ctx {

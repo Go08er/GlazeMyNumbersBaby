@@ -686,3 +686,24 @@ button.wc-swatch-pick {
   min-width: 24px;
   min-height: 24px;
 }
+
+/* What a dialog, the sidebar or a sheet covers is insensitive only so
+   that assistive technology can't operate it (inert.rs): it keeps its
+   look. What the app turned off itself (.wc-off meanwhile) stays faded. */
+.wc-inert {
+  --disabled-opacity: 100%;
+}
+.wc-inert .wc-off {
+  --disabled-opacity: 50%;
+}
+/* (Some fades are filters at a fixed opacity, such as a toggle's label.) */
+.wc-inert :disabled:not(.wc-off) {
+  filter: none;
+}
+.wc-inert button.wc-key:disabled:not(.wc-off),
+.wc-inert button.wc-bit:disabled:not(.wc-off) {
+  opacity: 1;
+}
+.wc-inert button.wc-mem:disabled:not(.wc-off) {
+  color: alpha(@wc_fg, 0.78);
+}
