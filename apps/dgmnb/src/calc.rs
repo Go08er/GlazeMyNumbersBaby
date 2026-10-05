@@ -100,6 +100,15 @@ impl CalcPage {
         serde_json::Value::String(self.vm.save_state())
     }
 
+    /// Back from another page: upstream sets the calculator up again
+    /// (`SetCalculatorType`) even in the mode it was in.
+    pub fn reactivate(&mut self, mode: CalcMode) {
+        if self.vm.mode() == mode {
+            self.vm.set_mode(mode);
+            self.vm.take_events();
+        }
+    }
+
     pub fn set_mode(&mut self, mode: CalcMode) {
         if self.vm.mode() != mode {
             self.vm.set_mode(mode);

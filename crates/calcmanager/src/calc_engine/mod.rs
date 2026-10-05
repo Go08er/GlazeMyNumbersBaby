@@ -92,6 +92,12 @@ pub struct Continuation {
     /// How the number being entered stands, where replaying those commands
     /// wouldn't leave it so.
     pub entry: Option<Entry>,
+    /// After `=` with nothing to repeat (`(` came next): the next key
+    /// clears the expression line, as it does after `=`.
+    pub clears: bool,
+    /// Replaying the commands wouldn't rebuild the calculation (see
+    /// `HistoryCollector::mark_unreplayable`).
+    pub unreplayable: bool,
 }
 
 /// Extension: see [`Continuation::entry`].
@@ -124,6 +130,9 @@ pub enum ShownValue {
     /// (F-E, MS, a radix switch): the next digit replaces it too, but the
     /// last command is still the digit (`(` multiplies it).
     EndedEntry,
+    /// The same, but the number's sign was changed last: the last command
+    /// is ± (`(` doesn't multiply it).
+    EndedSign,
 }
 
 /// `CCalcEngine`
@@ -462,29 +471,41 @@ impl CalcEngine {
         // The current value is pending (not yet in the history) and not
         // being typed, and the last command neither started the expression
         // over (C, `(`: 0) nor was an operator (whose operand is recorded).
-        let shown = (!self.b_record
-            && !self.history_collector.f_opnd_added_to_history()
-            && self.n_temp_com != 0
-            && !is_bin_op_code(self.n_temp_com))
+        // `(` keeps the value before it unless an operator came first: that
+        // value isn't recorded either (the commands end with the `(`).
+        let pending = !self.b_record && !self.history_collector.f_opnd_added_to_history();
+        let kept_by_paren = self.n_temp_com == 0
+            && !self.current_val.p().is_zero()
+            && matches!(
+                self.history_collector.last_command(),
+                Some(ExpressionCommand::Parentheses(p)) if p.get_command() == IDC_OPENP
+            );
+        let shown = (pending
+            && (kept_by_paren || (self.n_temp_com != 0 && !is_bin_op_code(self.n_temp_com))))
         .then(|| {
-            if is_digit_op_code(self.n_temp_com)
-                || self.n_temp_com == IDC_PNT
-                || self.n_temp_com == IDC_SIGN
-            {
+            if is_digit_op_code(self.n_temp_com) || self.n_temp_com == IDC_PNT {
                 ShownValue::EndedEntry
+            } else if self.n_temp_com == IDC_SIGN {
+                ShownValue::EndedSign
             } else {
                 ShownValue::Result
             }
         });
         let repeat = if !self.b_no_prev_equ && self.n_op_code != 0 {
-            self.get_string_for_display(&self.hold_val, self.radix)
-                .ok()
-                .map(|text| {
-                    let operand = self
-                        .history_collector
-                        .get_operand_commands_from_string_rat(&text, &self.hold_val);
-                    (self.n_op_code, operand)
-                })
+            // Written out without F-E's e-notation where the number allows:
+            // typed as "1.21e+2", 121 isn't the integer it was ((−7)^x).
+            let text = if self.f_integer_mode {
+                self.get_string_for_display(&self.hold_val, self.radix)
+            } else {
+                self.hold_val
+                    .to_string_radix(self.radix, NumberFormat::Float, self.precision)
+            };
+            text.ok().map(|text| {
+                let operand = self
+                    .history_collector
+                    .get_operand_commands_from_string_rat(&text, &self.hold_val);
+                (self.n_op_code, operand)
+            })
         } else {
             None
         };
@@ -493,9 +514,13 @@ impl CalcEngine {
         let entry = if self.b_record {
             if opnd_added {
                 None
-            } else if self.is_input_empty() && !is_digit_op_code(self.n_temp_com) {
+            } else if self.is_input_empty()
+                && !is_digit_op_code(self.n_temp_com)
+                && self.n_temp_com != IDC_PNT
+            {
                 // The empty input's 0 (a leading 0 typed isn't kept either,
-                // but leaves a digit as the last command).
+                // but leaves a digit as the last command; ⌫ doesn't change
+                // the last command).
                 Some(Entry::Empty)
             } else {
                 (self.n_temp_com == IDC_SIGN).then_some(Entry::Signed)
@@ -514,6 +539,20 @@ impl CalcEngine {
             shown,
             repeat,
             entry,
+            clears: !self.b_no_prev_equ && self.n_op_code == 0,
+            // A number typed after C or CE that starts with `Exp` keeps C
+            // or CE as the last command, which typing it again can't.
+            // Standard mode completes an equation at an operator even inside
+            // parentheses (pasted ones), leaving them open in the engine but
+            // not in the expression.
+            unreplayable: self.history_collector.is_unreplayable()
+                || self.history_collector.open_parentheses() != self.open_paren_count as i64
+                || (self.b_record
+                    && !opnd_added
+                    && !self.is_input_empty()
+                    && !is_digit_op_code(self.n_temp_com)
+                    && self.n_temp_com != IDC_PNT
+                    && self.n_temp_com != IDC_SIGN),
         }
     }
 

@@ -849,7 +849,7 @@ impl StandardCalculatorViewModel {
     }
 
     /// `SetParenthesisCount(uint parenthesisCount)`.
-    fn set_parenthesis_count(&mut self, parenthesis_count: u32) {
+    pub(crate) fn set_parenthesis_count(&mut self, parenthesis_count: u32) {
         if self.open_parenthesis_count == parenthesis_count {
             return;
         }

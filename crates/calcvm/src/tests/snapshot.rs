@@ -963,6 +963,158 @@ fn numbers_whose_sign_was_changed_last_restore_so() {
     }
 }
 
+/// States the randomized comparison (`restore_fuzz`) found continuing
+/// differently: a number ended (an angle or F-E switch) with ± its last
+/// key, which "(" doesn't multiply (C ± RAD, then "( 2 =" gave 0); a value
+/// a trailing "(" kept ("5 (" then ") =" gave 0, not 25); "=" then "(",
+/// after which the next key still clears the expression line; operands
+/// written into the expression before F-E was switched on; a repeated
+/// exponent shown in e-notation, which typed back that way wasn't the
+/// integer it was ((−7)^15 came out positive); a memory slot stored
+/// before F-E was switched on.
+#[test]
+fn more_entry_states_restore_and_continue() {
+    use Button::*;
+    let mut more = continuations_with_panels();
+    more.push(keys(&[CloseParenthesis, Equals]));
+    more.push(keys(&[Seven, Negate, Equals]));
+    for (mode, script) in [
+        (CalcMode::Scientific, &[Clear, Negate, Radians][..]),
+        (CalcMode::Scientific, &[Five, Negate, Negate, FToE]),
+        (CalcMode::Scientific, &[Five, OpenParenthesis]),
+        (
+            CalcMode::Scientific,
+            &[Two, Add, Three, Equals, OpenParenthesis],
+        ),
+        (
+            CalcMode::Programmer,
+            &[Two, And, Three, Equals, OpenParenthesis],
+        ),
+        (CalcMode::Scientific, &[Three, Add, FToE, Four, Multiply]),
+        (
+            CalcMode::Scientific,
+            &[One, XPowerY, One, Five, Equals, FToE],
+        ),
+        (CalcMode::Scientific, &[Nine, Memory, FToE]),
+    ] {
+        assert_acts_restore_and_continue(mode, &keys(script), &more);
+    }
+}
+
+/// An error the engine is in comes back with its expression line and the
+/// parentheses it left open ("2 ÷ CE %" then "(" divides by zero inside
+/// the implicit multiplication); every key clears it, as it would have.
+#[test]
+fn an_engine_error_restores_with_its_expression_and_parentheses() {
+    use Button::*;
+    let script = [Two, Divide, ClearEntry, Percent, OpenParenthesis];
+    let mut original = new_vm();
+    original.set_mode(CalcMode::Scientific);
+    press_all(&mut original, &script);
+    let state = original.save_state();
+    let before = observed(&original);
+    assert!(original.is_error());
+    assert_eq!(original.open_parens(), 1);
+    drop(original);
+    let mut restored = new_vm();
+    restored.restore_state(&state);
+    assert_eq!(observed(&restored), before);
+    for continuation in CONTINUATIONS {
+        let mut original = new_vm();
+        original.set_mode(CalcMode::Scientific);
+        press_all(&mut original, &script);
+        press_all(&mut original, continuation);
+        let expected = observed(&original);
+        drop(original);
+        let mut restored = new_vm();
+        restored.restore_state(&state);
+        press_all(&mut restored, continuation);
+        assert_eq!(observed(&restored), expected, "{continuation:?}");
+    }
+}
+
+/// The contract's fallback: a state the restore can't rebuild comes back as
+/// a new calculation from the saved value (the expression cleared, the next
+/// digit replacing the value, "=" repeating nothing), with memory and the
+/// histories kept. Marked when saved ("nr"): a number typed right after
+/// ")", whose implicit multiplication drops the operations pending before
+/// it (upstream gives 12 (5) 9 = 45), and a word size switched while an
+/// expression is pending. Found when restored: a saved state whose display
+/// its commands and "k" don't produce.
+#[test]
+fn unrebuildable_states_restore_as_a_new_calculation() {
+    use Button::*;
+    for (mode, script, shown) in [
+        (
+            CalcMode::Scientific,
+            &[
+                Nine,
+                Memory,
+                One,
+                Two,
+                OpenParenthesis,
+                Five,
+                CloseParenthesis,
+                Nine,
+            ][..],
+            "9",
+        ),
+        (CalcMode::Programmer, &[Nine, Memory, Five, Add, Byte], "5"),
+    ] {
+        let mut original = new_vm();
+        original.set_mode(mode);
+        press_all(&mut original, script);
+        let state = original.save_state();
+        assert!(state.contains(r#""nr":true"#), "{script:?}");
+        let (memory, history) = (original.memory(), original.history());
+        drop(original);
+        let mut restored = new_vm();
+        assert!(!restored.restore_state_checked(&state), "{script:?}");
+        assert_eq!(restored.display_value(), shown);
+        assert_eq!(restored.expression(), "");
+        assert_eq!((restored.memory(), restored.history()), (memory, history));
+        press_all(&mut restored, &[Equals]);
+        assert_eq!(
+            restored.display_value(),
+            shown,
+            "{script:?}: = repeats nothing"
+        );
+        press_all(&mut restored, &[Seven, Add, One, Equals]);
+        assert_eq!(restored.display_value(), "8", "{script:?}: 7 replaces it");
+    }
+
+    let mut vm = new_vm();
+    press_all(&mut vm, &[Two, Add, Three]);
+    let mut state: Value = serde_json::from_str(&vm.save_state()).unwrap();
+    state["s"]["p"]["d"] = json!("7");
+    let mut restored = new_vm();
+    assert!(!restored.restore_state_checked(&state.to_string()));
+    assert_eq!(
+        (restored.display_value(), restored.expression()),
+        ("7".into(), String::new())
+    );
+    press_all(&mut restored, &[Add, One, Equals]);
+    assert_eq!(restored.display_value(), "8");
+}
+
+#[test]
+fn e_notation_is_typed_out_where_it_fits() {
+    use crate::snapshot::plain_decimal;
+    for (text, max, plain) in [
+        ("1.21e+2", 32, Some("121")),
+        ("-1.21e+2", 32, Some("-121")),
+        ("3.e+0", 32, Some("3")),
+        ("0.e+0", 32, Some("0")),
+        ("1.5e-3", 32, Some("0.0015")),
+        ("1.234567890123456e+20", 16, None),
+        ("1.234567890123456e+20", 32, Some("123456789012345600000")),
+        ("1.e+40", 32, None),
+        ("121", 32, None),
+    ] {
+        assert_eq!(plain_decimal(text, '.', max).as_deref(), plain, "{text}");
+    }
+}
+
 /// While "=" can still be repeated, every key clears the expression line,
 /// and MS, M− or an angle switch don't show the engine's expression again:
 /// "5 + 3 =", √, MS shows an empty line over "√(8)". Restored, the line is
