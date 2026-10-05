@@ -77,23 +77,39 @@ enum Popup {
     Settings,
 }
 
+/// A worker plot job a test holds instead of running it.
+#[cfg(test)]
+struct HeldJob {
+    seq: u64,
+    graph: Graph,
+    vp: Viewport,
+    cancel: Arc<AtomicBool>,
+}
+
 pub struct GraphPage {
     graph: Graph,
     rows: Vec<Row>,
     next_color: usize,
     vp: Option<Viewport>,
     plots: Vec<EquationPlot>,
-    /// How long the last plot took, its `Graph::plot_weight`, and that of
+    /// How long the plot shown took, its `Graph::plot_weight`, and that of
     /// the plot running on the worker.
     plot_ms: f64,
     plot_weight: f64,
     pending_weight: f64,
     dirty: bool,
-    busy: bool,
-    again: bool,
+    /// The latest plot request (inline or not), and the one the running
+    /// worker job answers: a job's plots are shown only if no request came
+    /// after its own.
     plot_seq: u64,
-    /// Cancels the running plot job when a newer one is needed.
+    plot_job: Option<u64>,
+    /// A request is waiting for the running job to report back.
+    again: bool,
+    /// Cancels the running plot job when a newer request supersedes it.
     plot_cancel: Option<Arc<AtomicBool>>,
+    /// Tests: worker jobs are held here, to be reported back by hand.
+    #[cfg(test)]
+    held_jobs: Option<Vec<HeldJob>>,
     analysis_seq: u64,
     analysis_cancel: Option<Arc<AtomicBool>>,
     /// The analysed equation changed: re-run analysis at this time.
@@ -183,10 +199,12 @@ impl GraphPage {
             plot_weight: 0.0,
             pending_weight: 0.0,
             dirty: true,
-            busy: false,
-            again: false,
             plot_seq: 0,
+            plot_job: None,
+            again: false,
             plot_cancel: None,
+            #[cfg(test)]
+            held_jobs: None,
             analysis_seq: 0,
             analysis_cancel: None,
             reanalyze_at: None,
@@ -844,14 +862,19 @@ impl GraphPage {
     }
 
     /// A worker plot finished (`None`: it was cancelled for a newer one).
+    /// Its plots are shown only if no request came after its own, inline
+    /// or not (R12-M-06: an old job finishing after a quick inline plot
+    /// put its old graph's curves back).
     pub fn plot_done(&mut self, seq: u64, plots: Option<Vec<EquationPlot>>, ms: f64, _cx: &mut Cx) {
-        if seq != self.plot_seq {
+        if self.plot_job != Some(seq) {
             return;
         }
-        self.busy = false;
+        self.plot_job = None;
         self.plot_cancel = None;
         let heavy = plots.is_some() && ms >= INLINE_PLOT_MS;
-        if let Some(plots) = plots {
+        if seq == self.plot_seq
+            && let Some(plots) = plots
+        {
             self.plot_ms = ms;
             self.plot_weight = self.pending_weight;
             self.plots = plots;
@@ -870,17 +893,32 @@ impl GraphPage {
         self.update_trace();
     }
 
+    /// Whether plots can go to a worker (the app's; tests holding jobs).
+    fn can_spawn(&self) -> bool {
+        #[cfg(test)]
+        if self.held_jobs.is_some() {
+            return true;
+        }
+        self.proxy.is_some()
+    }
+
     fn replot(&mut self) {
         let Some(vp) = self.vp else { return };
         if !self.dirty {
             return;
         }
+        self.dirty = false;
+        // A new request: whatever runs now answers an older one.
+        self.plot_seq += 1;
+        if let Some(c) = &self.plot_cancel {
+            c.store(true, Ordering::Relaxed);
+        }
         // Inline only if this plot, scaled from the last by the graph's
         // weight, is quick: an edit to a heavy row goes to the worker.
         let weight = self.graph.plot_weight();
         let predicted = graphing::graph::predicted_plot_ms(self.plot_ms, self.plot_weight, weight);
-        if predicted < INLINE_PLOT_MS || self.proxy.is_none() {
-            self.dirty = false;
+        if predicted < INLINE_PLOT_MS || !self.can_spawn() {
+            self.again = false;
             let t = Instant::now();
             self.plots = self.graph.plot_parallel(&vp);
             self.plot_ms = t.elapsed().as_secs_f64() * 1e3;
@@ -890,22 +928,28 @@ impl GraphPage {
         }
         // Heavy graph: plot on a worker and keep drawing the last result
         // (curves are in graph coordinates, so they still line up while
-        // panning). A newer request cancels the running job, which then
-        // reports back so the latest state is plotted once.
-        self.dirty = false;
-        if self.busy {
+        // panning). One job at a time: a request made while one runs (and
+        // was cancelled above) is made again once it reports back.
+        if self.plot_job.is_some() {
             self.again = true;
-            if let Some(c) = &self.plot_cancel {
-                c.store(true, Ordering::Relaxed);
-            }
             return;
         }
-        self.busy = true;
+        let seq = self.plot_seq;
+        self.plot_job = Some(seq);
         self.pending_weight = weight;
-        self.plot_seq += 1;
         let cancel = Arc::new(AtomicBool::new(false));
         self.plot_cancel = Some(cancel.clone());
-        let (seq, graph) = (self.plot_seq, self.graph.clone());
+        let graph = self.graph.clone();
+        #[cfg(test)]
+        if let Some(held) = &mut self.held_jobs {
+            held.push(HeldJob {
+                seq,
+                graph,
+                vp,
+                cancel,
+            });
+            return;
+        }
         let Some(proxy) = self.proxy.clone() else {
             return;
         };
@@ -920,7 +964,7 @@ impl GraphPage {
         if spawned.is_err() {
             // No thread to be had: plot here, one equation after another
             // (plot_parallel would need threads too), rather than wait.
-            self.busy = false;
+            self.plot_job = None;
             self.plot_cancel = None;
             self.plots = self.graph.plot(&vp);
             self.update_trace();
@@ -2041,5 +2085,100 @@ mod tests {
             labels.iter().any(|l| l.contains("Increasing")),
             "{labels:?}"
         );
+    }
+
+    /// A row too long to plot inline with no plot before it to go by,
+    /// on a page that holds its worker jobs to report them back by hand.
+    fn heavy_page() -> (GraphPage, Viewport) {
+        let terms: Vec<String> = (1..=30).map(|k| format!("sin({k}x)")).collect();
+        let mut g = GraphPage::for_test(session::from_list(&format!("y={}", terms.join("+"))));
+        g.held_jobs = Some(Vec::new());
+        let vp = Viewport::default_for_size(760.0, 700.0);
+        g.vp = Some(vp);
+        (g, vp)
+    }
+
+    fn geometry(plots: &[EquationPlot]) -> Vec<(EquationId, &graphing::Plot)> {
+        plots.iter().map(|p| (p.id, &p.plot)).collect()
+    }
+
+    /// R12-M-06: a heavy plot goes to a worker; a quick edit while it runs
+    /// is plotted inline and cancels it; the worker's report, arriving
+    /// after (it finished before it saw the flag), is dropped: it plotted
+    /// the old row.
+    #[test]
+    fn a_stale_worker_never_replaces_a_newer_inline_plot() {
+        let (mut g, vp) = heavy_page();
+        g.replot();
+        let job = g.held_jobs.as_mut().unwrap().pop();
+        let job = job.expect("a heavy first plot is a worker's");
+        assert!(g.plots.is_empty());
+
+        let (mut toasts, mut focus) = (Vec::new(), None);
+        let mut cx = Cx {
+            toasts: &mut toasts,
+            clipboard: None,
+            wide: true,
+            focus: &mut focus,
+        };
+        let field = eq_field(g.rows[0].id);
+        g.field(field).unwrap().set_text("y=x");
+        g.field_changed(field, &mut cx);
+        g.replot();
+        assert!(g.held_jobs.as_ref().unwrap().is_empty(), "plotted inline");
+        assert!(
+            job.cancel.load(Ordering::Relaxed),
+            "the old job is cancelled"
+        );
+        let new = g.graph.plot_parallel(&vp);
+        assert_eq!(geometry(&g.plots), geometry(&new));
+
+        let stale = job
+            .graph
+            .plot_parallel_cancellable(&job.vp, &AtomicBool::new(false))
+            .expect("not cancelled");
+        assert_ne!(geometry(&stale), geometry(&new));
+        g.plot_done(job.seq, Some(stale), 900.0, &mut cx);
+        assert_eq!(geometry(&g.plots), geometry(&new));
+        assert!(!g.dirty, "nothing waits");
+        // The prediction is still the inline plot's.
+        g.dirty = true;
+        g.replot();
+        assert!(g.held_jobs.as_ref().unwrap().is_empty());
+    }
+
+    /// A request made while a job runs cancels it and waits; the job's
+    /// report (stale) is dropped and asks for the request again, which
+    /// then runs; a report from no running job changes nothing.
+    #[test]
+    fn a_request_during_a_job_is_made_again_after_it() {
+        let (mut g, vp) = heavy_page();
+        let (mut toasts, mut focus) = (Vec::new(), None);
+        let mut cx = Cx {
+            toasts: &mut toasts,
+            clipboard: None,
+            wide: true,
+            focus: &mut focus,
+        };
+        g.replot();
+        let first = g.held_jobs.as_mut().unwrap().pop().unwrap();
+        g.dirty = true;
+        g.replot();
+        assert!(g.held_jobs.as_ref().unwrap().is_empty(), "waits");
+        assert!(first.cancel.load(Ordering::Relaxed));
+        let plots = g.graph.plot_parallel(&vp);
+        g.plot_done(first.seq, Some(plots.clone()), 900.0, &mut cx);
+        assert!(g.plots.is_empty(), "a newer request came after it");
+        assert!(g.dirty, "the waiting request is made again");
+
+        g.replot();
+        let second = g.held_jobs.as_mut().unwrap().pop().unwrap();
+        assert!(second.seq > first.seq && !second.cancel.load(Ordering::Relaxed));
+        g.plot_done(second.seq, Some(plots.clone()), 900.0, &mut cx);
+        assert_eq!(geometry(&g.plots), geometry(&plots));
+        g.plot_done(second.seq, Some(Vec::new()), 1.0, &mut cx);
+        g.plot_done(first.seq, Some(Vec::new()), 1.0, &mut cx);
+        assert_eq!(geometry(&g.plots), geometry(&plots));
+        assert!(!g.dirty);
     }
 }

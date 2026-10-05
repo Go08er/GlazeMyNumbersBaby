@@ -41,7 +41,9 @@ mod imp {
         pub graph: RefCell<Option<Rc<RefCell<Graph>>>>,
         pub vp: Cell<Option<Viewport>>,
         pub anim: Cell<Option<(Viewport, Viewport, Instant)>>,
-        pub plots: RefCell<Vec<EquationPlot>>,
+        /// The geometry shown, and the plot requests and worker job that
+        /// replace it.
+        pub jobs: RefCell<PlotJobs>,
         pub dirty: Cell<bool>,
         pub colors: RefCell<HashMap<EquationId, [f32; 3]>>,
         pub scheme: Cell<Option<Scheme>>,
@@ -57,14 +59,6 @@ mod imp {
         pub tick: RefCell<Option<gtk::TickCallbackId>>,
         pub on_viewport: RefCell<Vec<ViewportFn>>,
         pub fitted: Cell<bool>,
-        /// How long the last plot took, and its `Graph::plot_weight`.
-        pub plot_ms: Cell<f64>,
-        pub plot_weight: Cell<f64>,
-        /// A worker plot is running / another was requested meanwhile.
-        pub plot_busy: Cell<bool>,
-        pub plot_again: Cell<bool>,
-        /// Cancels the running worker plot when a newer one is needed.
-        pub plot_cancel: RefCell<Option<Arc<AtomicBool>>>,
     }
 
     impl Default for GraphView {
@@ -73,7 +67,7 @@ mod imp {
                 graph: RefCell::new(None),
                 vp: Cell::new(None),
                 anim: Cell::new(None),
-                plots: RefCell::default(),
+                jobs: RefCell::default(),
                 dirty: Cell::new(true),
                 colors: RefCell::default(),
                 scheme: Cell::new(None),
@@ -88,11 +82,6 @@ mod imp {
                 tick: RefCell::new(None),
                 on_viewport: RefCell::default(),
                 fitted: Cell::new(false),
-                plot_ms: Cell::new(0.0),
-                plot_weight: Cell::new(0.0),
-                plot_busy: Cell::new(false),
-                plot_again: Cell::new(false),
-                plot_cancel: RefCell::new(None),
             }
         }
     }
@@ -510,53 +499,38 @@ impl GraphView {
         let (Some(vp), Some(graph)) = (imp.vp.get(), imp.graph.borrow().clone()) else {
             return;
         };
-        // Inline only if this plot, scaled from the last by the graph's
-        // weight, is quick: an edit to a heavy row goes to the worker.
         let weight = graph.borrow().plot_weight();
-        let predicted =
-            graphing::graph::predicted_plot_ms(imp.plot_ms.get(), imp.plot_weight.get(), weight);
-        if predicted < INLINE_PLOT_MS {
-            let started = Instant::now();
-            let plots = graph.borrow().plot_parallel(&vp);
-            imp.plot_ms.set(started.elapsed().as_secs_f64() * 1e3);
-            imp.plot_weight.set(weight);
-            imp.plots.replace(plots);
-            return;
+        let plan = imp.jobs.borrow_mut().request(weight);
+        match plan {
+            Plan::Inline => {
+                let started = Instant::now();
+                let plots = graph.borrow().plot_parallel(&vp);
+                let ms = started.elapsed().as_secs_f64() * 1e3;
+                imp.jobs.borrow_mut().install(plots, ms, weight);
+            }
+            Plan::Wait => {}
+            Plan::Worker(job, cancel) => {
+                // Heavy graph: plot on a worker and keep drawing the last
+                // result (curves are in graph coordinates, so they still
+                // line up while panning).
+                let graph = graph.borrow().clone();
+                let weak = self.downgrade();
+                glib::spawn_future_local(async move {
+                    let started = Instant::now();
+                    let plots =
+                        gio::spawn_blocking(move || graph.plot_parallel_cancellable(&vp, &cancel))
+                            .await;
+                    let Some(this) = weak.upgrade() else { return };
+                    let ms = started.elapsed().as_secs_f64() * 1e3;
+                    let imp = this.imp();
+                    if imp.jobs.borrow_mut().finish(job, plots.ok().flatten(), ms) {
+                        imp.dirty.set(true);
+                    }
+                    this.update_trace();
+                    this.queue_draw();
+                });
+            }
         }
-        // Heavy graph: plot on a worker and keep drawing the last result
-        // (curves are in graph coordinates, so they still line up while
-        // panning). One job at a time: a newer request cancels the running
-        // one, which then reports back so the latest state is plotted once.
-        if imp.plot_busy.replace(true) {
-            imp.plot_again.set(true);
-            if let Some(c) = imp.plot_cancel.borrow().as_ref() {
-                c.store(true, Ordering::Relaxed);
-            }
-            return;
-        }
-        let cancel = Arc::new(AtomicBool::new(false));
-        imp.plot_cancel.replace(Some(cancel.clone()));
-        let graph = graph.borrow().clone();
-        let weak = self.downgrade();
-        glib::spawn_future_local(async move {
-            let started = Instant::now();
-            let plots =
-                gio::spawn_blocking(move || graph.plot_parallel_cancellable(&vp, &cancel)).await;
-            let Some(this) = weak.upgrade() else { return };
-            let imp = this.imp();
-            imp.plot_busy.set(false);
-            imp.plot_cancel.replace(None);
-            if let Ok(Some(plots)) = plots {
-                imp.plot_ms.set(started.elapsed().as_secs_f64() * 1e3);
-                imp.plot_weight.set(weight);
-                imp.plots.replace(plots);
-            }
-            if imp.plot_again.replace(false) {
-                imp.dirty.set(true);
-            }
-            this.update_trace();
-            this.queue_draw();
-        });
     }
 
     fn update_trace(&self) {
@@ -572,7 +546,7 @@ impl GraphView {
         };
         let t = graph.borrow().trace(
             &vp,
-            &imp.plots.borrow(),
+            &imp.jobs.borrow().plots,
             px,
             py,
             graphing::trace::DEFAULT_TRACE_RADIUS_PX,
@@ -723,7 +697,7 @@ impl GraphView {
         // Curves.
         let graph = imp.graph.borrow().clone();
         let lw = imp.line_width.get() as f32;
-        for (i, ep) in imp.plots.borrow().iter().enumerate() {
+        for (i, ep) in imp.jobs.borrow().plots.iter().enumerate() {
             let color = imp
                 .colors
                 .borrow()
@@ -915,10 +889,179 @@ impl GraphView {
     }
 }
 
+/// The geometry a [`GraphView`] shows, and the plot requests that replace
+/// it: inline when the prediction from the last plot
+/// ([`graphing::graph::predicted_plot_ms`]) is quick, else on a worker,
+/// one job at a time. Every request supersedes all older work, even one
+/// plotted inline: it cancels the running job, and a job's plots are
+/// installed only if no request came after its own (R12-M-06: an old
+/// worker finishing after a quick inline plot put its old graph's curves
+/// back). A request made while a job runs waits for it to report back.
+#[derive(Default)]
+pub struct PlotJobs {
+    /// The geometry shown.
+    pub plots: Vec<EquationPlot>,
+    /// The latest request (requests are numbered from 1).
+    latest: u64,
+    /// The worker job running, if any.
+    running: Option<Job>,
+    /// A request is waiting for the running job to report back.
+    again: bool,
+    /// How long the plot shown took, and its `Graph::plot_weight`.
+    ms: f64,
+    weight: f64,
+}
+
+struct Job {
+    /// The request it answers.
+    request: u64,
+    cancel: Arc<AtomicBool>,
+    weight: f64,
+}
+
+/// How to answer a plot request.
+pub enum Plan {
+    /// Plot now, on this thread, then [`PlotJobs::install`].
+    Inline,
+    /// Plot on a worker, polling the flag, then [`PlotJobs::finish`] with
+    /// this request's number.
+    Worker(u64, Arc<AtomicBool>),
+    /// Nothing yet: a job is running; [`PlotJobs::finish`] asks for this
+    /// request to be made again.
+    Wait,
+}
+
+impl PlotJobs {
+    /// A new request, for a graph of `Graph::plot_weight` `weight`.
+    pub fn request(&mut self, weight: f64) -> Plan {
+        self.latest += 1;
+        // Whatever runs now answers an older request.
+        if let Some(job) = &self.running {
+            job.cancel.store(true, Ordering::Relaxed);
+        }
+        // Inline only if this plot, scaled from the last by the graph's
+        // weight, is quick: an edit to a heavy row goes to the worker.
+        if graphing::graph::predicted_plot_ms(self.ms, self.weight, weight) < INLINE_PLOT_MS {
+            self.again = false;
+            return Plan::Inline;
+        }
+        if self.running.is_some() {
+            self.again = true;
+            return Plan::Wait;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.running = Some(Job {
+            request: self.latest,
+            cancel: cancel.clone(),
+            weight,
+        });
+        Plan::Worker(self.latest, cancel)
+    }
+
+    /// Shows the inline plot of the latest request, which took `ms`.
+    pub fn install(&mut self, plots: Vec<EquationPlot>, ms: f64, weight: f64) {
+        self.plots = plots;
+        self.ms = ms;
+        self.weight = weight;
+    }
+
+    /// The worker job for request `request` reported back with its plots
+    /// (`None`: cancelled or failed) after `ms`. They are shown only if no
+    /// request came after it. True if a request is waiting: make it again.
+    pub fn finish(&mut self, request: u64, plots: Option<Vec<EquationPlot>>, ms: f64) -> bool {
+        let Some(job) = self.running.take_if(|j| j.request == request) else {
+            return false;
+        };
+        if request == self.latest
+            && let Some(plots) = plots
+        {
+            self.install(plots, ms, job.weight);
+        }
+        std::mem::take(&mut self.again)
+    }
+}
+
 /// Wheel units per scroll "line" (GTK reports discrete steps as ±1).
 trait WheelLine {
     const WHEEL_DELTA_LINE: f64;
 }
 impl WheelLine for Viewport {
     const WHEEL_DELTA_LINE: f64 = graphing::viewport::WHEEL_DELTA;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use graphing::plot::Plot;
+
+    /// A row too long to plot inline with no plot before it to go by.
+    fn heavy() -> String {
+        let terms: Vec<String> = (1..=30).map(|k| format!("sin({k}x)")).collect();
+        format!("y={}", terms.join("+"))
+    }
+
+    fn geometry(plots: &[EquationPlot]) -> Vec<(EquationId, &Plot)> {
+        plots.iter().map(|p| (p.id, &p.plot)).collect()
+    }
+
+    /// R12-M-06: a heavy plot goes to a worker; a quick edit while it runs
+    /// is plotted inline and cancels it; the worker's report, arriving
+    /// after (it finished before it saw the flag), is dropped: it plotted
+    /// the old row.
+    #[test]
+    fn a_stale_worker_never_replaces_a_newer_inline_plot() {
+        let vp = Viewport::default_for_size(760.0, 700.0);
+        let mut graph = Graph::new();
+        let id = graph.add_equation(&heavy());
+        let mut jobs = PlotJobs::default();
+        let Plan::Worker(job, cancel) = jobs.request(graph.plot_weight()) else {
+            panic!("a heavy first plot is a worker's");
+        };
+        let old = graph.clone();
+
+        graph.set_equation_text(id, "y=x");
+        assert!(matches!(jobs.request(graph.plot_weight()), Plan::Inline));
+        let new = graph.plot_parallel(&vp);
+        jobs.install(new.clone(), 1.0, graph.plot_weight());
+        assert!(cancel.load(Ordering::Relaxed), "the old job is cancelled");
+
+        let stale = old
+            .plot_parallel_cancellable(&vp, &AtomicBool::new(false))
+            .expect("not cancelled");
+        assert_ne!(geometry(&stale), geometry(&new));
+        assert!(!jobs.finish(job, Some(stale), 900.0), "nothing waits");
+        assert_eq!(geometry(&jobs.plots), geometry(&new));
+        // The prediction is still the inline plot's.
+        assert!(matches!(jobs.request(graph.plot_weight()), Plan::Inline));
+    }
+
+    /// A request made while a job runs cancels it and waits; the job's
+    /// report (stale) is dropped and asks for the request again, which
+    /// then runs; a report from no running job changes nothing.
+    #[test]
+    fn a_request_during_a_job_is_made_again_after_it() {
+        let vp = Viewport::default_for_size(760.0, 700.0);
+        let mut graph = Graph::new();
+        graph.add_equation(&heavy());
+        let weight = graph.plot_weight();
+        let mut jobs = PlotJobs::default();
+        let Plan::Worker(first, cancel) = jobs.request(weight) else {
+            panic!("a heavy first plot is a worker's");
+        };
+        assert!(matches!(jobs.request(weight), Plan::Wait));
+        assert!(cancel.load(Ordering::Relaxed));
+        let plots = graph.plot_parallel(&vp);
+        assert!(jobs.finish(first, Some(plots.clone()), 900.0));
+        assert!(jobs.plots.is_empty(), "a newer request came after it");
+
+        let Plan::Worker(second, cancel) = jobs.request(weight) else {
+            panic!("the waiting request runs");
+        };
+        assert!(second > first && !cancel.load(Ordering::Relaxed));
+        assert!(!jobs.finish(second, Some(plots.clone()), 900.0));
+        assert_eq!(geometry(&jobs.plots), geometry(&plots));
+        assert!(!jobs.finish(second, Some(Vec::new()), 1.0));
+        assert!(!jobs.finish(first, Some(Vec::new()), 1.0));
+        assert_eq!(geometry(&jobs.plots), geometry(&plots));
+    }
 }
