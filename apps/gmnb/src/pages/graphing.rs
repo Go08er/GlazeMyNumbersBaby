@@ -492,6 +492,7 @@ impl GraphingPage {
             .css_classes(["wc-eq-entry"])
             .build();
         entry.update_property(&[gtk::accessible::Property::Label("Equation")]);
+        crate::paste::guard(&entry);
         let analyze = small_button(paths::FUNCTION, "Analyze function");
         let remove = small_button(paths::CLOSE, "Remove equation");
         let style = gtk::MenuButton::builder()
@@ -745,6 +746,7 @@ impl GraphingPage {
             value.set_value(var.value());
             value.set_width_chars(6);
             value.add_css_class("wc-spin");
+            crate::paste::guard(&value);
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             row.add_css_class("wc-var-row");
             row.append(&label);
@@ -957,6 +959,7 @@ impl GraphingPage {
                 .css_classes(["wc-range-entry"])
                 .build();
             e.update_property(&[gtk::accessible::Property::Label(label)]);
+            crate::paste::guard(&e);
             e
         };
         let (xmin, xmax, ymin, ymax) = (mk("X-Min"), mk("X-Max"), mk("Y-Min"), mk("Y-Max"));
