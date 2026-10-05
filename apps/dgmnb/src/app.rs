@@ -2210,7 +2210,14 @@ pub(crate) fn draw_nav(f: &mut Frame, full: Rect, mode: ViewMode, settings: bool
     f.end_group();
 }
 
-fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: Desktop) {
+/// Why the accent switch can't be turned on, for assistive technology (the
+/// screen shows "(none shared)" after its label).
+pub(crate) const NO_ACCENT: &str =
+    "None shared: your desktop doesn't share an accent colour, so this can't be turned on";
+
+/// Settings, with its About card. Every text it shows is exported too, as
+/// passive text nodes (headings and labels) in reading order.
+pub(crate) fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: Desktop) {
     let t = f.t;
     let sid = id("settings-scroll");
     let area = body.inset_xy(0.0, 0.0);
@@ -2219,8 +2226,14 @@ fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: Desktop) {
     let x = area.x + (area.w - col_w) / 2.0;
     let mut y = area.y + 8.0 - off;
     let heading = |f: &mut Frame, y: &mut f32, s: &str| {
-        f.label(Rect::new(x, *y, col_w, 30.0), s, STRONG, t.fg, Align::Start);
+        let r = Rect::new(x, *y, col_w, 30.0);
+        f.label(r, s, STRONG, t.fg, Align::Start);
+        f.node(id(("settings-heading", s)), accesskit::Role::Heading, s, r);
         *y += 34.0;
+    };
+    // A text shown, as a label node.
+    let text = |f: &mut Frame, key: &str, s: &str, r: Rect| {
+        f.node(id(("settings-text", key)), accesskit::Role::Label, s, r);
     };
     heading(f, &mut y, "Appearance");
     let accent_ok = desktop.accent.is_some();
@@ -2235,13 +2248,9 @@ fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: Desktop) {
     let row_h = (lines.len() as f32 * line_h + 14.0).max(34.0);
     let card = Rect::new(x, y, col_w, 82.0 + row_h);
     f.cv.rounded(card, 12.0, t.surface);
-    f.label(
-        Rect::new(x + 14.0, y + 8.0, col_w, 24.0),
-        "Style",
-        SMALL,
-        t.fg_dim,
-        Align::Start,
-    );
+    let style = Rect::new(x + 14.0, y + 8.0, col_w, 24.0);
+    f.label(style, "Style", SMALL, t.fg_dim, Align::Start);
+    text(f, "style", "Style", style);
     let seg = Rect::new(x + 12.0, y + 34.0, col_w - 24.0, 34.0);
     for (i, (key, label)) in [("system", "System"), ("light", "Light"), ("dark", "Dark")]
         .into_iter()
@@ -2279,8 +2288,8 @@ fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: Desktop) {
         9.0,
         if on { t.on_accent } else { t.surface },
     );
+    let sid2 = id("accent-switch");
     if accent_ok {
-        let sid2 = id("accent-switch");
         f.hit(
             sid2,
             row,
@@ -2288,16 +2297,27 @@ fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: Desktop) {
             Some(Msg::SystemAccent(!s.system_accent)),
             true,
         );
-        if let Some(n) = f.node(
-            sid2,
-            accesskit::Role::Switch,
-            "Use the desktop's accent colour",
-            row,
-        ) {
-            n.toggled = Some(on);
+    }
+    if let Some(n) = f.node(
+        sid2,
+        accesskit::Role::Switch,
+        "Use the desktop's accent colour",
+        row,
+    ) {
+        n.toggled = Some(on);
+        if accent_ok {
             n.clickable = true;
             n.focusable = true;
+        } else {
+            // Shown greyed out, with the reason after its label: a disabled
+            // switch (no hit, so nothing reaches it) that the reason
+            // describes, and the reason as text of its own after it.
+            n.disabled = true;
+            n.description = Some((NO_ACCENT.into(), Some(id(("settings-text", "no-accent")))));
         }
+    }
+    if !accent_ok {
+        text(f, "no-accent", NO_ACCENT, row);
     }
     y += card.h + 20.0;
 
@@ -2333,28 +2353,24 @@ fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: Desktop) {
     let card = Rect::new(x, y, col_w, by + 34.0 + 28.0);
     f.cv.rounded(card, 12.0, t.surface);
     let inner = card.inset(14.0);
-    f.label(
-        Rect::new(inner.x, inner.y, inner.w, 28.0),
-        "DGMNB",
-        Style::new(22.0, 700.0),
-        t.fg,
-        Align::Start,
+    let r = Rect::new(inner.x, inner.y, inner.w, 28.0);
+    f.label(r, "DGMNB", Style::new(22.0, 700.0), t.fg, Align::Start);
+    text(f, "name", "DGMNB", r);
+    let r = Rect::new(inner.x, inner.y + 28.0, inner.w, 22.0);
+    let full = "Don't Glaze My Numbers, Baby";
+    f.label(r, full, BODY, t.fg_dim, Align::Start);
+    text(f, "full-name", full, r);
+    let r = Rect::new(inner.x, inner.y + 50.0, inner.w, 22.0);
+    let version = format!("Version {}", env!("CARGO_PKG_VERSION"));
+    f.label(r, &version, SMALL, t.fg_dim, Align::Start);
+    text(f, "version", &version, r);
+    let h = f.paragraph(inner.x, inner.y + 78.0, inner.w, ABOUT, SMALL, t.fg);
+    text(
+        f,
+        "about",
+        ABOUT,
+        Rect::new(inner.x, inner.y + 78.0, inner.w, h),
     );
-    f.label(
-        Rect::new(inner.x, inner.y + 28.0, inner.w, 22.0),
-        "Don't Glaze My Numbers, Baby",
-        BODY,
-        t.fg_dim,
-        Align::Start,
-    );
-    f.label(
-        Rect::new(inner.x, inner.y + 50.0, inner.w, 22.0),
-        &format!("Version {}", env!("CARGO_PKG_VERSION")),
-        SMALL,
-        t.fg_dim,
-        Align::Start,
-    );
-    f.paragraph(inner.x, inner.y + 78.0, inner.w, ABOUT, SMALL, t.fg);
     for (key, label, name, msg, bx, by, w) in placed {
         let r = Rect::new(inner.x + bx, inner.y + by, w, 34.0);
         f.button(id(key), r, label, SMALL, msg, true, None, true);

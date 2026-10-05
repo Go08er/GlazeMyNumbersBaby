@@ -146,6 +146,14 @@ pub fn tree(nodes: &[Node], title: &str, focus: Option<Id>, scale: f64) -> TreeU
         if n.disabled {
             node.set_disabled();
         }
+        if let Some((text, by)) = &n.description {
+            // The Linux adapter exports the text (AT-SPI's Description);
+            // the relation is for the other platforms.
+            node.set_description(text.as_str());
+            if let Some(by) = by.filter(|by| ids.contains(by)) {
+                node.set_described_by(vec![NodeId(by)]);
+            }
+        }
         if n.live {
             node.set_live(Live::Polite);
         }
@@ -737,6 +745,66 @@ mod tests {
                     g.overlay(f, r);
                 }
             });
+        }
+    }
+
+    /// R13-L-06: Settings exports what it shows: its headings, the About
+    /// card's name, version and description, and, when the desktop shares
+    /// no accent colour, why the accent switch is greyed out (as text, and
+    /// as the disabled switch's description).
+    #[test]
+    fn settings_exports_its_text_and_why_a_setting_is_off() {
+        let settings = crate::app::Settings::default();
+        for accent in [None, Some([0.2, 0.4, 0.8])] {
+            let desktop = crate::app::Desktop {
+                accent,
+                ..Default::default()
+            };
+            let draw = |f: &mut Frame, r: Rect| {
+                crate::app::draw_settings(f, r, &settings, desktop);
+            };
+            check(draw);
+            let (nodes, hits) = frame_nodes(draw);
+            check_actions("settings", &nodes, &hits);
+            let names: Vec<String> = exported(&nodes).into_iter().map(|(_, n, _)| n).collect();
+            for shown in [
+                "Appearance",
+                "Style",
+                "About",
+                "DGMNB",
+                "Don't Glaze My Numbers, Baby",
+                &format!("Version {}", env!("CARGO_PKG_VERSION")),
+            ] {
+                assert!(names.iter().any(|n| n == shown), "{shown:?} not exported");
+            }
+            assert!(
+                names
+                    .iter()
+                    .any(|n| n.starts_with("The lean twin of GMNB") && n.ends_with("Microsoft.")),
+                "the description isn't exported"
+            );
+            let update = tree(&nodes, "test", None, 1.0);
+            let switch = update
+                .nodes
+                .iter()
+                .find(|(_, n)| n.role() == Role::Switch)
+                .map(|(_, n)| n)
+                .expect("the accent switch");
+            assert_eq!(switch.label(), Some("Use the desktop's accent colour"));
+            let explained = names.iter().any(|n| n == crate::app::NO_ACCENT);
+            if accent.is_none() {
+                assert!(switch.is_disabled());
+                assert_eq!(switch.description(), Some(crate::app::NO_ACCENT));
+                assert_eq!(switch.described_by().len(), 1);
+                assert!(!switch.supports_action(Action::Click));
+                assert!(explained, "the reason isn't exported");
+                let id = nodes.iter().find(|n| n.role == Role::Switch).unwrap().id;
+                assert!(target(&hits, id, Action::Click).is_none());
+            } else {
+                assert!(!switch.is_disabled() && switch.description().is_none());
+                assert!(switch.supports_action(Action::Click));
+                assert!(!explained);
+            }
         }
     }
 
