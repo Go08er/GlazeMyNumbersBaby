@@ -1171,51 +1171,97 @@ fn counting_functions_are_exact() {
     let rs = [
         0.0, 1.0, 2.0, 3.0, 5.0, 10.0, 50.0, 100.0, 500.0, 510.0, 515.0, 999.0,
     ];
-    let mut pairs: Vec<(f64, f64, bool)> = Vec::new();
-    for n in 0..=60 {
-        for r in -1..=61 {
-            pairs.push((n as f64, r as f64, true));
+    let mut pairs: Vec<(f64, f64)> = Vec::new();
+    for n in 0..=130 {
+        for r in -1..=(n + 2).max(62) {
+            pairs.push((n as f64, r as f64));
         }
     }
     for &n in &ns {
         for &r in &rs {
-            pairs.push((n, r, false));
+            pairs.push((n, r));
         }
+        // Next to n, and past it (a count of 0, review 13: nCr(61, 62) was
+        // Γ(0) to the interval core, and empty).
+        for d in [-2.0, -1.0, 0.0, 1.0, 2.0, 1e3] {
+            if n + d >= 0.0 {
+                pairs.push((n, n + d));
+            }
+        }
+        pairs.push((n, -1.0));
+        pairs.push((n, -1e300));
+        pairs.push((n, 1e300));
     }
-    for (n, r, small) in pairs {
+    for (n, r) in pairs {
         let ni = Integer::from_f64(n).expect("whole");
         let ri = Integer::from_f64(r).expect("whole");
         for perm in [false, true] {
+            // The exact count, or None past the doubles (more than 1100
+            // bits: the evaluator says +∞ there).
             let exact = if ri < 0 || ri > ni {
-                Integer::new()
+                Some(Integer::new())
             } else if perm {
-                // n!/(n − r)! as a product of r factors (r ≤ 999), stopped
-                // once beyond the doubles.
+                // n!/(n − r)! as a product of r factors, stopped once
+                // beyond the doubles.
                 let mut p = Integer::from(1);
-                let k = ri.to_u32().expect("small r");
-                for i in 0..k {
-                    p *= Integer::from(&ni - i);
-                    if p.significant_bits() > 1100 {
-                        break;
-                    }
+                let mut i = Integer::new();
+                while i < ri && p.significant_bits() <= 1100 {
+                    p *= Integer::from(&ni - &i);
+                    i += 1;
                 }
-                p
+                (p.significant_bits() <= 1100).then_some(p)
             } else {
-                let k = ri.to_u32().expect("small r");
-                Integer::from(ni.binomial_ref(k))
+                // C(n, k) = C(n, n − k) ≥ 2^k for the smaller k: past the
+                // doubles once k is over 1100.
+                let k = Integer::from(&ni - &ri).min(ri.clone());
+                k.to_u32()
+                    .filter(|&k| k <= 1100 || ni.significant_bits() <= 12)
+                    .map(|k| Integer::from(ni.binomial_ref(k)))
+                    .filter(|c| c.significant_bits() <= 1100)
             };
-            // Beyond the doubles the evaluator says +∞; keep the work small.
-            if exact.significant_bits() > 1100 {
-                let value = if perm { npr(n, r) } else { ncr(n, r) };
-                if value != f64::INFINITY {
-                    t.fail(format!("C/P({n}, {r}) = {value:e}, not +∞"));
-                }
-                continue;
-            }
             let name = format!("{}({n}, {r})", if perm { "nPr" } else { "nCr" });
             let value = if perm { npr(n, r) } else { ncr(n, r) };
-            let iv = small.then(|| elem::ncr_npr(&pt(n), &pt(r), perm));
-            check_count(&mut t, &name, &exact, value, iv);
+            let iv = elem::ncr_npr(&pt(n), &pt(r), perm);
+            let Some(exact) = exact else {
+                if value != f64::INFINITY {
+                    t.fail(format!("{name} = {value:e}, not +∞"));
+                }
+                t.cases += 1;
+                if iv.dec < Dec::Def || iv.lo() != f64::MAX || iv.hi() != f64::INFINITY {
+                    t.fail(format!("{name} past the doubles enclosed as {iv:?}"));
+                }
+                continue;
+            };
+            check_count(&mut t, &name, &exact, value, Some(iv));
+        }
+    }
+    // Arguments that aren't whole numbers ≥ 0 go through Γ: the enclosure
+    // is empty only where the evaluator is undefined too (Γ at a pole).
+    let vals = [
+        -3.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 61.0, 61.5, 62.0, 62.5, 100.25,
+    ];
+    for &n in &vals {
+        for &r in &vals {
+            for perm in [false, true] {
+                let value = if perm { npr(n, r) } else { ncr(n, r) };
+                let iv = elem::ncr_npr(&pt(n), &pt(r), perm);
+                t.cases += 1;
+                if iv.is_empty() && !value.is_nan() {
+                    t.fail(format!(
+                        "{}({n}, {r}) = {value:e}, but enclosed as empty",
+                        if perm { "nPr" } else { "nCr" }
+                    ));
+                }
+                if value.is_finite() && !iv.is_empty() && !(iv.lo() <= value && value <= iv.hi()) {
+                    let w = (value.abs() * 1e-12).max(1e-300);
+                    if !(iv.lo() - w <= value && value <= iv.hi() + w) {
+                        t.fail(format!(
+                            "{}({n}, {r}) = {value:e} outside {iv:?}",
+                            if perm { "nPr" } else { "nCr" }
+                        ));
+                    }
+                }
+            }
         }
     }
     report(&t);

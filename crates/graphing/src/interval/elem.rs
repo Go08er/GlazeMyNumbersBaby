@@ -1699,14 +1699,16 @@ pub fn double_factorial(x: &DecInterval) -> DecInterval {
     DecInterval::result(Interval::ENTIRE, Dec::Trv, &[x])
 }
 
-/// nCr and nPr: only from point arguments with small integer values.
+/// nCr and nPr. Whole numbers n ≥ 0 and r, of any size, are counted
+/// exactly, as the evaluator counts them (`functions::count_exact`: 0 for
+/// r < 0 or r > n, a count past the doubles [`f64::MAX`, +∞]); other
+/// arguments go through Γ.
 pub fn ncr_npr(n: &DecInterval, r: &DecInterval, perm: bool) -> DecInterval {
-    if n.iv.is_point() && r.iv.is_point() {
-        let (nv, rv) = (n.iv.lo(), r.iv.lo());
-        if nv == nv.trunc() && rv == rv.trunc() && (0.0..=60.0).contains(&nv) {
-            let c = crate::functions::count_exact(nv, rv, perm).expect("whole n ≥ 0 and r");
-            return DecInterval::result(count_enclosure(c), Dec::Com, &[n, r]);
-        }
+    if n.iv.is_point()
+        && r.iv.is_point()
+        && let Some(c) = exact_count(n.iv.lo(), r.iv.lo(), perm)
+    {
+        return DecInterval::result(c, Dec::Com, &[n, r]);
     }
     if n.is_empty() || r.is_empty() {
         return DecInterval::result(Interval::EMPTY, Dec::Trv, &[n, r]);
@@ -1750,6 +1752,30 @@ pub fn ncr_npr(n: &DecInterval, r: &DecInterval, perm: bool) -> DecInterval {
         defined &= dr;
     }
     DecInterval::result(q, if defined { Dec::Com } else { Dec::Trv }, &[n, r])
+}
+
+/// nCr(n, r) (nPr, `perm`) of whole numbers n ≥ 0 and r, enclosed
+/// ([`count_enclosure`]); `None` for other arguments. A count in big
+/// integers costs microseconds, and one constant nCr(200, 100) is enclosed
+/// over and over (every box of a certificate): the last few are kept.
+fn exact_count(n: f64, r: f64, perm: bool) -> Option<Interval> {
+    type Recent = std::cell::RefCell<Vec<((u64, u64, bool), Interval)>>;
+    thread_local! {
+        static RECENT: Recent = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let key = (n.to_bits(), r.to_bits(), perm);
+    if let Some(iv) = RECENT.with(|c| c.borrow().iter().find(|e| e.0 == key).map(|e| e.1)) {
+        return Some(iv);
+    }
+    let iv = count_enclosure(crate::functions::count_exact(n, r, perm)?);
+    RECENT.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() >= 8 {
+            c.remove(0);
+        }
+        c.push((key, iv));
+    });
+    Some(iv)
 }
 
 /// r as a count 0 ≤ k ≤ 60 when it is that integer exactly.

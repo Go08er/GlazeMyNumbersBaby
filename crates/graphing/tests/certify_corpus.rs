@@ -276,6 +276,29 @@ const UNMODELLED: &[(&str, &str)] = &[
         "ceil((99!!-6625061298371663*2^208)/10^70)",
         "XI=none | YI=1 | P=even | MIN=none | MAX=none | INF=none | VA=none | R={1}",
     ),
+    // Review 13, R13-M-03: whole numbers are counted exactly at any size,
+    // r > n included (0): the interval core took nCr(61, 62) through
+    // Γ(0) and found it undefined, so no y-intercept.
+    (
+        "nCr(61,62)",
+        "D=R | XI=all | YI=0 | P=both | INF=none | VA=none | R={0}",
+    ),
+    (
+        "nPr(61,62)",
+        "D=R | XI=all | YI=0 | P=both | INF=none | VA=none | R={0}",
+    ),
+    (
+        "abs(nCr(61,62))+1",
+        "D=R | XI=none | YI=1 | P=even | MIN=none | MAX=none | INF=none | VA=none | R={1}",
+    ),
+    (
+        "nCr(1000,1001)+nPr(100,101)+x",
+        "D=R | XI=0 | YI=0 | P=odd | MIN=none | MAX=none | INF=none | VA=none | R=R",
+    ),
+    (
+        "nCr(200,100)/10^58",
+        "D=R | XI=none | YI=9.054851465610328~ | P=even | MIN=none | MAX=none | INF=none | VA=none",
+    ),
 ];
 
 /// The functions of review rounds 9–11 (REVIEW_9/10/11.md), with what is
@@ -1936,4 +1959,34 @@ fn numbers_that_read_alike_are_told_apart() {
     for (src, want) in [("y=x/x", "y ∈ {1}"), ("y=sin(1)+0*x", "y ∈ {≈0.841471}")] {
         assert_eq!(analyze_str(src).range, want, "{src}");
     }
+}
+
+/// Review 13, R13-M-03: whole numbers are counted exactly at any size,
+/// r > n included (0, under the whole-count convention): the interval
+/// core took nCr(61, 62) through Γ(0), found it undefined, and the panel
+/// said there was no y-intercept.
+#[test]
+fn whole_counts_past_sixty_are_exact() {
+    for (src, want) in [
+        ("y=nCr(61,62)", "0"),
+        ("y=nPr(61,62)", "0"),
+        ("y=abs(nCr(61,62))+1", "1"),
+        ("y=nCr(1000,1001)+1", "1"),
+        ("y=nPr(100,101)-2", "\u{2212}2"),
+    ] {
+        let k = analyze_str(src);
+        assert_eq!(k.y_intercept, want, "{src}");
+    }
+    let a = certify_text(
+        "nCr(61,62)",
+        CompileOptions::default(),
+        DEFAULT_BUDGET,
+        None,
+    )
+    .unwrap();
+    assert!(
+        matches!(&a.y_intercept, Row::Certified { value: Some(e), .. } if e.is_point() && e.lo.0 == 0.0),
+        "{:?}",
+        a.y_intercept
+    );
 }
