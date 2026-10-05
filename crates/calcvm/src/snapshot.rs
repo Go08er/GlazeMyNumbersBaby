@@ -45,7 +45,13 @@
 //! MS or a radix switch ended); `"eq"` is `[<binary command>, <operand>]`,
 //! what another `=` repeats. Upstream restores neither: it shows the last
 //! operand instead of a recalled value, "0" instead of a result after MS,
-//! and re-opens an evaluated expression, so `=` evaluates it again.
+//! and re-opens an evaluated expression, so `=` evaluates it again. `"in"`
+//! says how the number being entered stands where replaying the commands
+//! wouldn't leave it so: `"empty"` (nothing typed since C or CE, though
+//! the commands end with the empty input's 0), `"ended"` (that empty input
+//! ended by a radix or angle switch, MS or M+) or `"percent"` (the
+//! commands' last operand is a `%` result, added to the expression rather
+//! than typed); upstream replays all three as typed digits.
 //!
 //! The display isn't always the engine's. Selecting a History item shows
 //! the item's expression and result while the engine holds the item
@@ -66,7 +72,7 @@
 use std::rc::Rc;
 
 use calcmanager::{
-    BinaryCommand, CalculatorMode, ExpressionCommand, ExpressionToken, HistoryItem,
+    BinaryCommand, CalculatorMode, Entry, ExpressionCommand, ExpressionToken, HistoryItem,
     HistoryItemVector, OpndCommand, Parentheses, ShownValue, UnaryCommand,
 };
 use serde_json::{Map, Value, json};
@@ -271,6 +277,8 @@ pub(crate) struct ContinuationSnapshot {
     pub(crate) engine_value: Option<String>,
     /// `"hl"`
     pub(crate) history_load: bool,
+    /// `"in"`
+    pub(crate) entry: Option<Entry>,
 }
 
 /// `ApplicationSnapshot`
@@ -506,6 +514,14 @@ fn shown_name(s: ShownValue) -> &'static str {
     }
 }
 
+fn entry_name(e: Entry) -> &'static str {
+    match e {
+        Entry::Empty => "empty",
+        Entry::Ended => "ended",
+        Entry::Percent => "percent",
+    }
+}
+
 impl ApplicationSnapshot {
     pub(crate) fn to_json(&self) -> Value {
         let mut root = Map::new();
@@ -564,6 +580,9 @@ impl ApplicationSnapshot {
                 }
                 if k.history_load {
                     c.insert("hl".into(), json!(true));
+                }
+                if let Some(e) = k.entry {
+                    c.insert("in".into(), json!(entry_name(e)));
                 }
                 o.insert("k".into(), Value::Object(c));
             }
@@ -688,6 +707,13 @@ impl ApplicationSnapshot {
                             repeat,
                             engine_value: string(k.get("ev"))?,
                             history_load: boolean(k.get("hl"))?,
+                            entry: match string(k.get("in"))?.as_deref() {
+                                None => None,
+                                Some("empty") => Some(Entry::Empty),
+                                Some("ended") => Some(Entry::Ended),
+                                Some("percent") => Some(Entry::Percent),
+                                Some(_) => return Err("unknown entry state".into()),
+                            },
                         })
                     }
                 };
@@ -1216,6 +1242,7 @@ impl StandardCalculatorViewModel {
                 .unwrap_or_default(),
             engine_value,
             history_load: self.is_last_operation_history_load(),
+            entry: c.entry,
         }
     }
 
@@ -1240,7 +1267,7 @@ impl StandardCalculatorViewModel {
             && self.display_value == display
             && continuation.is_none_or(|k| {
                 let now = self.capture_continuation();
-                (k.shown, &k.repeat) == (now.shown, &now.repeat)
+                (k.shown, &k.repeat, k.entry) == (now.shown, &now.repeat, now.entry)
             });
         if !same {
             self.clear_unbudgeted();
@@ -1278,7 +1305,20 @@ impl StandardCalculatorViewModel {
                 self.clear_unbudgeted();
             }
         }
-        let whole = self.replay_within_budget(display_commands);
+        let entry = continuation.and_then(|k| k.entry);
+        // The empty input's 0 isn't typed (see `restore_entry`).
+        let commands = match display_commands {
+            [rest @ .., ExpressionCommandWrapper::Operand { .. }]
+                if entry == Some(Entry::Empty) =>
+            {
+                rest
+            }
+            all => all,
+        };
+        let whole = self.replay_within_budget(commands);
+        if whole {
+            self.restore_entry(entry);
+        }
         // Without the record (an older snapshot), or if the commands didn't
         // produce the display after all (a budget ran out), a value they
         // don't produce was shown, not typed: a typed operand is in them.
@@ -1289,6 +1329,35 @@ impl StandardCalculatorViewModel {
             self.show_value(mode, display, shown);
         }
         whole
+    }
+
+    /// Extension: leaves the number being entered as the saved engine had
+    /// it (`"in"`), where replaying the display commands doesn't: an empty
+    /// input after C or CE (the commands end with its 0, which typed would
+    /// be a digit that "(" multiplies; CE empties it, and the engine as
+    /// reset is already empty), an empty input that a radix or angle
+    /// switch, MS or M+ ended (F-E twice ends it), or a `%` result, which is
+    /// added to the expression rather than typed.
+    fn restore_entry(&mut self, entry: Option<Entry>) {
+        let recording = self
+            .standard_calculator_manager
+            .current_calculator_engine()
+            .is_some_and(|e| e.f_in_recording_state());
+        match entry {
+            Some(Entry::Empty)
+                if self.standard_calculator_manager.continuation().entry != Some(Entry::Empty) =>
+            {
+                self.send_command(cmd::CENTR);
+            }
+            Some(Entry::Ended) if recording => {
+                self.send_command(cmd::FE);
+                self.send_command(cmd::FE);
+            }
+            Some(Entry::Percent) if recording => {
+                let _ = self.with_manager(|m| m.add_entry_as_percent_result());
+            }
+            _ => {}
+        }
     }
 
     /// Replays the display commands within [`REPLAY_WORK`]; past it, the

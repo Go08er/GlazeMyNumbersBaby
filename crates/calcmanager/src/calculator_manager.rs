@@ -756,6 +756,11 @@ impl CalculatorManager {
         self.proxy.borrow().engine_primary.clone()
     }
 
+    /// Extension: see [`CalcEngine::add_entry_as_percent_result`].
+    pub fn add_entry_as_percent_result(&mut self) -> CalcResult<()> {
+        self.current_engine().add_entry_as_percent_result()
+    }
+
     /// Extension: what a saved session needs besides the display commands
     /// to continue as this one would (see [`CalcEngine::continuation`]).
     pub fn continuation(&self) -> Continuation {

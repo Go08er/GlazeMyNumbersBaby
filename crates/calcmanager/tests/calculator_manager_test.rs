@@ -2911,3 +2911,46 @@ fn engine_primary_display_includes_history_item_loads() {
     assert!(is_error);
     assert_eq!(text, p_calculator_display.borrow().get_primary_display());
 }
+
+/// Extension: `add_entry_as_percent_result` leaves a typed number as `%`
+/// leaves its result, in the expression and not being typed, so a restored
+/// session continues as the saved one would.
+#[test]
+fn a_typed_number_can_be_added_as_a_percent_result() {
+    use Command as C;
+    let run = |keys: &[Command], add: bool, more: &[Command]| {
+        let (display, mut manager) = common_setup();
+        manager.set_standard_mode().unwrap();
+        execute_commands(&mut manager, keys);
+        if add {
+            manager.add_entry_as_percent_result().unwrap();
+        }
+        let entry = manager.continuation().entry;
+        let commands = format!("{:?}", manager.get_display_commands_snapshot());
+        execute_commands(&mut manager, more);
+        let shown = (
+            display.borrow().get_primary_display().to_string(),
+            display.borrow().get_expression().to_string(),
+        );
+        (entry, commands, shown)
+    };
+    let percent = [C::Command2, C::CommandADD, C::Command3, C::CommandPERCENT];
+    let typed = [
+        C::Command2,
+        C::CommandADD,
+        C::Command0,
+        C::CommandPNT,
+        C::Command0,
+        C::Command6,
+    ];
+    for more in [
+        &[C::Command7, C::CommandEQU][..],
+        &[C::CommandSIGN, C::CommandEQU],
+        &[C::CommandOPENP, C::Command2, C::CommandEQU],
+    ] {
+        let saved = run(&percent, false, more);
+        assert_eq!(saved.0, Some(Entry::Percent));
+        assert_eq!(run(&typed, true, more), saved, "{more:?}");
+    }
+    assert_eq!(run(&percent, false, &[C::Command7, C::CommandEQU]).2.0, "9");
+}

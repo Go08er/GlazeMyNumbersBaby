@@ -908,6 +908,40 @@ fn sign_changes_of_finished_numbers_restore_as_operations() {
     }
 }
 
+/// The number being entered, where the display commands misdescribe it.
+/// After C, CE or at the start nothing is typed, but the commands end with
+/// the empty input's 0, which replayed was a typed digit: "(" then
+/// multiplied it (C, then "( 2 =" gave 0 instead of 2). A radix switch (on
+/// every page activation), MS or M+ ends that empty input, so ± negates 0
+/// ("negate(0)"). And a `%` result is added to the expression, not typed:
+/// replayed as typed, the next digit extended it ("2 + 3 %" then "7 ="
+/// gave 2.067 instead of 9), and without a pending operator the next digit
+/// no longer added the result to the History as an equation of its own.
+#[test]
+fn entries_restore_as_they_were() {
+    use Button::*;
+    let more = continuations_with_panels();
+    for mode in [CalcMode::Standard, CalcMode::Scientific] {
+        for script in [
+            &[][..],
+            &[Clear],
+            &[Two, Clear],
+            &[Two, Add, ClearEntry],
+            &[Two, Add, Three, Equals, ClearEntry],
+            &[Clear, MemoryAdd],
+            &[Two, Add, Three, Percent],
+            &[Nine, Memory, Two, Add, MemoryRecall, Percent],
+            &[Two, XPower2, Percent],
+            &[Two, Add, Three, Percent, Memory],
+        ] {
+            assert_acts_restore_and_continue(mode, &keys(script), &more);
+        }
+    }
+    for script in [&[][..], &[Two, Add, ClearEntry], &[Five, Byte]] {
+        assert_acts_restore_and_continue(CalcMode::Programmer, &keys(script), &more);
+    }
+}
+
 /// A paste error is the view model's only (`OnPaste`, `DisplayPasteError`):
 /// the engine's calculation goes on under it, and a memory slot, a paste
 /// or a page change (which shows the engine's value again) continue it.
@@ -1020,12 +1054,21 @@ fn a_malformed_repeated_operation_is_rejected() {
     vm.press(Button::Equals);
     assert_eq!(vm.display_value(), "10");
 
-    let mut vm = new_vm();
-    let mut state: Value = serde_json::from_str(&snapshot_json(0, json!([]), json!({}))).unwrap();
-    state["x"]["k"] = json!({ "dv": "typed?" });
-    press_all(&mut vm, &[Button::Four]);
-    vm.restore_state(&state.to_string());
-    assert_eq!(vm.display_value(), "4");
+    for k in [
+        json!({ "dv": "typed?" }),
+        json!({ "in": "typing" }),
+        json!({ "ev": 4 }),
+        json!({ "ev": "1".repeat(513) }),
+        json!({ "hl": "yes" }),
+    ] {
+        let mut vm = new_vm();
+        let mut state: Value =
+            serde_json::from_str(&snapshot_json(0, json!([]), json!({}))).unwrap();
+        state["x"]["k"] = k.clone();
+        press_all(&mut vm, &[Button::Four]);
+        vm.restore_state(&state.to_string());
+        assert_eq!(vm.display_value(), "4", "{k}");
+    }
 }
 
 /// A long calculation built from pastes (40 × a 100-term sum, about 12,000
