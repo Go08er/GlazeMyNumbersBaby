@@ -10,6 +10,7 @@
 
 mod gmnb;
 mod history;
+mod restore_fuzz;
 mod snapshot;
 mod standard;
 
