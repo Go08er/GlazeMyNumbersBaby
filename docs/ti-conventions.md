@@ -69,8 +69,14 @@ powers, |·| and the counts n!, n!!, nCr, nPr of whole numbers; a slider is
 the double it is set to) is done exactly and rounded once
 (`10^17·(0.1 + 0.2 − 0.3)` is 0, `0.1·3` is the double nearest 0.3, and
 `1/(0.1 + 0.2 − 0.3)` divides by zero), for the curve drawn, its trace and
-its analysis alike; anything else (π, e, sin, …) is computed in floating
-point as before. A literal the doubles can't tell from its
+its analysis alike, while every exact value on the way fits in 2¹⁴ bits
+(about 4,900 digits). Past that the arithmetic isn't carried out. A value
+proven beyond the doubles on its own (`10^5000`, `171!`, `(1/2)^100000`)
+is still the ±∞ or 0 it rounds to, but arithmetic on such a value has an
+unknown value, not what rounding step by step would make of it:
+`(10^5000 + 1) − 10^5000` is unknown, never 0. Nothing is drawn or traced
+for an unknown value except where f's enclosure itself places the curve.
+Anything else (π, e, sin, …) is computed in floating point as before. A literal the doubles can't tell from its
 neighbour (1 + 10⁻¹⁶ against 1) is enclosed by the doubles either side of
 it, so the analysis may leave a row unknown that only that difference
 decides (`2/(1.0000000000000001 − cos x)` is defined everywhere, but its

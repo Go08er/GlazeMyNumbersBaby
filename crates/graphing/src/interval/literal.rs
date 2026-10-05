@@ -86,6 +86,17 @@ impl Literals {
         None
     }
 
+    /// Whether `Num(v)` is a decimal typed (or its negation) whose exact
+    /// value is known but too long for [`crate::big`] to hold (thousands
+    /// of digits): [`Literals::exact`] is `None` for its length, not for
+    /// want of knowing it.
+    pub(crate) fn too_long(&self, v: f64) -> bool {
+        [v, -v].iter().any(|w| {
+            matches!(self.digits.get(&w.to_bits()), Some(Some(t))
+                if crate::big::Rat::from_decimal(t).is_none())
+        })
+    }
+
     /// Reads `Num(v)` (v ≥ 0) as the exact value `r` too: a subtree of
     /// literals folded exactly and rounded once to v
     /// (`compile::fold_literals`). If something else already reads as v

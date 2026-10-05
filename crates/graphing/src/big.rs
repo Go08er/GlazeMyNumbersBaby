@@ -436,6 +436,26 @@ impl Rat {
         Some((q, rem.is_zero()))
     }
 
+    /// Whether the value is below 0.
+    pub(crate) fn is_negative(&self) -> bool {
+        self.neg && !self.is_zero()
+    }
+
+    /// Whether the value is 1 or −1.
+    pub(crate) fn abs_is_one(&self) -> bool {
+        self.n == self.d
+    }
+
+    /// Whether the value is an even integer.
+    pub(crate) fn is_even(&self) -> bool {
+        Rat {
+            neg: false,
+            n: self.n.clone(),
+            d: self.d.shl(1),
+        }
+        .is_integer()
+    }
+
     pub(crate) fn neg(mut self) -> Rat {
         self.neg = !self.neg;
         self

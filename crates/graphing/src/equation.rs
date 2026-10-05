@@ -544,8 +544,8 @@ fn coefficient_sign(c: &Expr, lits: &crate::interval::Literals) -> Option<f64> {
             variables: &(),
         };
         let s = match crate::compile::typed_value(c, &opts, lits) {
-            Some(Ok(v)) if v != 0.0 => v.signum(),
-            // Exactly 0, or a division by 0.
+            Some(crate::compile::TypedValue::Value(v)) if v != 0.0 => v.signum(),
+            // Exactly 0, a division by 0, or too long to tell.
             Some(_) => return None,
             None => {
                 let e = enclose(c, Interval::point(0.0), &Ctx::new(opts, lits));

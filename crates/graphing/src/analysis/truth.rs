@@ -425,8 +425,9 @@ fn reval_in(e: &Expr, x: f64, u: TrigUnit, lits: Option<&crate::interval::Litera
         && let Some(v) = crate::compile::typed_value(e, &opts, l)
     {
         return match v {
-            Ok(v) => R::V(Xf::of(v)),
-            Err(()) => R::Undef,
+            crate::compile::TypedValue::Value(v) => R::V(Xf::of(v)),
+            crate::compile::TypedValue::DivZero => R::Undef,
+            crate::compile::TypedValue::Unknown => R::Unknown,
         };
     }
     let reval = |a: &Expr, x: f64, u: TrigUnit| reval_in(a, x, u, lits);

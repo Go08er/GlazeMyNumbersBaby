@@ -341,7 +341,8 @@ impl Program {
     /// `literals` (`interval::Literals::of` the same text): each literal
     /// is the decimal typed, as the analysis and the interval core read
     /// it. Arithmetic on literals alone (`10^17·(0.1 + 0.2 − 0.3)`) is
-    /// done exactly and rounded once, and a constant exponent or root
+    /// done exactly and rounded once (too long to carry exactly, past
+    /// `big::MAX_BITS` bits, its value is unknown), and a constant exponent or root
     /// degree is an integer or not by its exact value (`x^1.0000000000000001`
     /// is a non-integer power, defined for x ≥ 0 only; `x^(0.1 + 0.9)` is
     /// x¹).
@@ -1285,9 +1286,54 @@ enum Fold {
     /// A division by an exact 0 (or 0 to a negative power), and whether a
     /// slider is in it.
     DivZero(bool),
-    /// Not a rational computation on literals and sliders (π, sin x, 0⁰,
-    /// a degree outside degrees mode), or too long to carry.
+    /// A value too long to carry exactly (beyond `big::MAX_BITS` bits) that
+    /// the general path still gets right alone, and whether a slider is in
+    /// it: a decimal typed with thousands of digits (its double is it
+    /// rounded once), or a power or count proven beyond the doubles
+    /// (10⁵⁰⁰⁰, 2^−100000, 171!: ±∞ or 0, however it is rounded). Any
+    /// arithmetic on it is [`Fold::Big`].
+    Lone(bool),
+    /// A rational computation on literals and sliders too long to carry
+    /// exactly and not proven beyond the doubles ((1 + 2⁻²⁰)^800), or
+    /// arithmetic on a value too long to carry ((10⁵⁰⁰⁰ + 1) − 10⁵⁰⁰⁰), and
+    /// whether a slider is in it. It isn't computed: rounded step by step,
+    /// even in extended range, (10⁵⁰⁰⁰ + 1) − 10⁵⁰⁰⁰ would be 0, not 1
+    /// (review 13, R13-L-05). Its value is unknown.
+    Big(bool),
+    /// Not a rational computation on literals and sliders alone (π, sin x,
+    /// 0⁰, a degree outside degrees mode).
     No,
+}
+
+impl Fold {
+    fn var(&self) -> bool {
+        match self {
+            Fold::Value(_, v) | Fold::DivZero(v) | Fold::Lone(v) | Fold::Big(v) => *v,
+            Fold::No => false,
+        }
+    }
+}
+
+/// log₂|r| enclosed, from r's enclosure by doubles (−∞ for 0; a double's
+/// log₂ is within an ulp, far inside the margins of [`beyond`]).
+fn log2_bounds(r: &Rat) -> (f64, f64) {
+    let a = r.clone().abs();
+    let (lo, hi) = (
+        a.to_f64(crate::big::Round::Down),
+        a.to_f64(crate::big::Round::Up),
+    );
+    (lo.log2(), hi.log2())
+}
+
+/// [`Fold::Lone`] if log₂ of a value lies in `l`, proving it beyond the
+/// doubles (above 2¹¹⁰⁰, rounded to ±∞; below 2⁻¹²⁰⁰, to 0), else
+/// [`Fold::Big`].
+fn beyond(l: (f64, f64), var: bool) -> Fold {
+    if l.0 > 1100.0 || l.1 < -1200.0 {
+        Fold::Lone(var)
+    } else {
+        Fold::Big(var)
+    }
 }
 
 /// The exact value of an x- and y-free subtree of typed literals and
@@ -1300,6 +1346,7 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>, lits: &crate::interval::Literals) -
     match e {
         Expr::Num(v) => match lits.exact(*v) {
             Some(r) => Value(r, false),
+            None if lits.too_long(*v) => Lone(false),
             None => No,
         },
         Expr::Var(n) => {
@@ -1309,18 +1356,19 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>, lits: &crate::interval::Literals) -
             }
         }
         Expr::Degrees(a) if opts.trig_unit == TrigUnit::Degrees => go(a),
+        // (Exact on a value too long to carry too.)
         Expr::Neg(a) => match go(a) {
             Value(r, v) => Value(r.neg(), v),
             other => other,
         },
         Expr::Bin(op, a, b) => {
-            let (ra, va) = match go(a) {
-                Value(r, v) => (r, v),
-                other => return other,
-            };
-            let (rb, vb) = match go(b) {
-                Value(r, v) => (r, v),
-                other => return other,
+            let (ra, va, rb, vb) = match (go(a), go(b)) {
+                (Value(ra, va), Value(rb, vb)) => (ra, va, rb, vb),
+                // Not literals alone: the general path, step by step.
+                (No, _) | (_, No) => return No,
+                (DivZero(v), _) | (_, DivZero(v)) => return DivZero(v),
+                // Arithmetic on a value too long to carry: not done.
+                (fa, fb) => return Big(fa.var() || fb.var()),
             };
             let var = va || vb;
             let r = match op {
@@ -1332,21 +1380,55 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>, lits: &crate::interval::Literals) -
                 BinOp::Pow => {
                     // Whole powers only; 0⁰ is left to the general path
                     // (undefined, not an error).
-                    let Some(k) = rb.as_int().filter(|k| k.unsigned_abs() <= 1 << 16) else {
+                    if !rb.is_integer() {
                         return No;
-                    };
-                    if ra.is_zero() && k < 0 {
+                    }
+                    if ra.is_zero() && rb.is_negative() {
                         return DivZero(var);
                     }
-                    if ra.is_zero() && k == 0 {
+                    if ra.is_zero() && rb.is_zero() {
                         return No;
                     }
-                    ra.powi(k)
+                    match rb.as_int().filter(|k| k.unsigned_abs() <= 1 << 16) {
+                        Some(k) => ra.powi(k),
+                        // 0, 1 and −1 to any whole power.
+                        None if ra.is_zero() => Some(ra.clone()),
+                        None if ra.abs_is_one() => Some(if rb.is_even() {
+                            ra.clone().abs()
+                        } else {
+                            ra.clone()
+                        }),
+                        None => None,
+                    }
                 }
             };
             match r {
                 Some(r) => Value(r, var),
-                None => No,
+                // (Each operation above fails only for its length.) A
+                // product, quotient or power so long may still be proven
+                // beyond the doubles by its size.
+                None => {
+                    let ((al, ah), (bl, bh)) = (log2_bounds(&ra), log2_bounds(&rb));
+                    match op {
+                        BinOp::Mul => beyond((al + bl, ah + bh), var),
+                        BinOp::Div => beyond((al - bh, ah - bl), var),
+                        BinOp::Pow => {
+                            // log₂|aᵏ| = k·log₂|a|, k a whole number.
+                            let k = (
+                                rb.to_f64(crate::big::Round::Down),
+                                rb.to_f64(crate::big::Round::Up),
+                            );
+                            let c = [al * k.0, al * k.1, ah * k.0, ah * k.1];
+                            if c.iter().any(|v| v.is_nan()) {
+                                return Big(var);
+                            }
+                            let lo = c.iter().copied().fold(f64::INFINITY, f64::min);
+                            let hi = c.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                            beyond((lo, hi), var)
+                        }
+                        _ => Big(var),
+                    }
+                }
             }
         }
         Expr::Call(f, args) => match f {
@@ -1357,41 +1439,47 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>, lits: &crate::interval::Literals) -
             Func::Factorial | Func::DoubleFactorial => {
                 let (r, v) = match go(&args[0]) {
                     Value(r, v) => (r, v),
-                    other => return other,
+                    No => return No,
+                    other => return Big(other.var()),
                 };
                 let Some(n) = whole(&r) else { return No };
                 let count = if *f == Func::Factorial {
                     // n! up to 170! (beyond, past the doubles).
-                    (0..=170).contains(&n).then(|| {
-                        let mut p = Nat::from_u64(1);
-                        for k in 2..=n as u32 {
-                            p = p.mul_small(k);
+                    match n {
+                        0..=170 => {
+                            let mut p = Nat::from_u64(1);
+                            for k in 2..=n as u32 {
+                                p = p.mul_small(k);
+                            }
+                            Some(fns::Count::Exact(p))
                         }
-                        fns::Count::Exact(p)
-                    })
+                        171.. => Some(fns::Count::Huge),
+                        _ => None,
+                    }
                 } else {
                     fns::double_factorial_exact(n as f64)
                 };
                 match count {
                     Some(fns::Count::Exact(p)) => Value(Rat::nat(p), v),
-                    _ => No,
+                    // Past the doubles: alone it is +∞, but 171! − 171! is
+                    // no 0 to compute.
+                    Some(fns::Count::Huge) => Lone(v),
+                    None => No,
                 }
             }
             Func::NCr | Func::NPr if args.len() == 2 => {
-                let (rn, vn) = match go(&args[0]) {
-                    Value(r, v) => (r, v),
-                    other => return other,
-                };
-                let (rr, vr) = match go(&args[1]) {
-                    Value(r, v) => (r, v),
-                    other => return other,
+                let (rn, vn, rr, vr) = match (go(&args[0]), go(&args[1])) {
+                    (Value(rn, vn), Value(rr, vr)) => (rn, vn, rr, vr),
+                    (No, _) | (_, No) => return No,
+                    (fa, fb) => return Big(fa.var() || fb.var()),
                 };
                 let (Some(n), Some(r)) = (whole(&rn), whole(&rr)) else {
                     return No;
                 };
                 match fns::count_exact(n as f64, r as f64, *f == Func::NPr) {
                     Some(fns::Count::Exact(p)) => Value(Rat::nat(p), vn || vr),
-                    _ => No,
+                    Some(fns::Count::Huge) => Lone(vn || vr),
+                    None => No,
                 }
             }
             _ => No,
@@ -1456,16 +1544,25 @@ pub(crate) fn fold_literals(
     (out, lits)
 }
 
+/// What [`typed_value`] makes of a subtree.
+pub(crate) enum TypedValue {
+    /// Folded exactly and rounded once (within the doubles).
+    Value(f64),
+    /// A division by an exact 0.
+    DivZero,
+    /// Too long to fold ([`Fold::Big`]): not known.
+    Unknown,
+}
+
 /// The value of a typed expression's x- and y-free subtree as
-/// [`Program::compile_typed`] computes it: `Some(Ok(v))` folded exactly
-/// and rounded once (within the doubles), `Some(Err(()))` a division by an
-/// exact 0, `None` when it isn't folded (a leaf, π, sin, …). For the
-/// reference evaluator (`analysis::truth::reval_typed`).
+/// [`Program::compile_typed`] computes it, or `None` when it isn't folded
+/// (a leaf, π, sin, …). For the reference evaluator
+/// (`analysis::truth::reval_typed`).
 pub(crate) fn typed_value(
     e: &Expr,
     opts: &CompileOptions<'_>,
     lits: &crate::interval::Literals,
-) -> Option<Result<f64, ()>> {
+) -> Option<TypedValue> {
     if matches!(
         e,
         Expr::Num(_) | Expr::X | Expr::Y | Expr::Var(_) | Expr::Const(_)
@@ -1476,10 +1573,11 @@ pub(crate) fn typed_value(
     match fold(e, opts, lits) {
         Fold::Value(r, _) => {
             let v = r.to_f64(crate::big::Round::Nearest);
-            (v.is_finite() && (v != 0.0 || r.is_zero())).then_some(Ok(v))
+            (v.is_finite() && (v != 0.0 || r.is_zero())).then_some(TypedValue::Value(v))
         }
-        Fold::DivZero(_) => Some(Err(())),
-        Fold::No => None,
+        Fold::DivZero(_) => Some(TypedValue::DivZero),
+        Fold::Big(_) => Some(TypedValue::Unknown),
+        Fold::Lone(_) | Fold::No => None,
     }
 }
 
@@ -1543,7 +1641,9 @@ fn pow_kind(b: &Expr, opts: &CompileOptions<'_>, lx: Lx<'_>) -> PowKind {
 
 fn lower_in(e: &Expr, opts: &CompileOptions<'_>, lx: Lx<'_>) -> Result<Piece, EquationError> {
     let rec = |a: &Expr| lower_in(a, opts, lx);
-    // Typed literals: arithmetic on them alone is exact, rounded once.
+    // Typed literals: arithmetic on them alone is exact, rounded once. Too
+    // long to do exactly, it isn't done: the value is unknown (NaN, and
+    // `Redo::Unknown`), not what rounding each step would make of it.
     if let Some(lits) = lx.0
         && !matches!(e, Expr::X | Expr::Y | Expr::Var(_) | Expr::Const(_))
         && !e.any(&|n| matches!(n, Expr::X | Expr::Y))
@@ -1554,7 +1654,8 @@ fn lower_in(e: &Expr, opts: &CompileOptions<'_>, lx: Lx<'_>) -> Result<Piece, Eq
                 return Err(EquationError::eval(EvaluationErrorCode::DivideByZero, 0..0));
             }
             Fold::DivZero(true) => return Ok(Piece::Const(Wide::Undef, true)),
-            Fold::No => {}
+            Fold::Big(var) => return Ok(Piece::Const(Wide::Unknown, var)),
+            Fold::Lone(_) | Fold::No => {}
         }
     }
     Ok(match e {
