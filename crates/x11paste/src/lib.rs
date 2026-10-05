@@ -77,13 +77,16 @@ pub struct Atoms {
     /// The property each conversion is written to.
     property: Atom,
     utf8: Atom,
+    /// `text/plain;charset=utf-8`.
+    plain_utf8: Atom,
+    /// `text/plain`, no charset given.
     plain: Atom,
     text: Atom,
 }
 
 impl Atoms {
     pub fn new(c: &RustConnection) -> Option<Atoms> {
-        const NAMES: [&str; 8] = [
+        const NAMES: [&str; 9] = [
             "CLIPBOARD",
             "XdndSelection",
             "TARGETS",
@@ -91,6 +94,7 @@ impl Atoms {
             "X11PASTE_DATA",
             "UTF8_STRING",
             "text/plain;charset=utf-8",
+            "text/plain",
             "TEXT",
         ];
         // Every request, then every reply: one round trip.
@@ -106,6 +110,7 @@ impl Atoms {
             incr,
             property,
             utf8,
+            plain_utf8,
             plain,
             text,
         ] = atoms;
@@ -116,6 +121,7 @@ impl Atoms {
             incr,
             property,
             utf8,
+            plain_utf8,
             plain,
             text,
         })
@@ -129,20 +135,31 @@ impl Atoms {
         }
     }
 
-    /// The text formats asked for, best first.
-    fn formats(&self) -> [Atom; 4] {
-        [self.utf8, self.plain, self.text, AtomEnum::STRING.into()]
+    /// The text formats asked for, best first: those that say they're
+    /// UTF-8, then those that don't say (some owners offer only
+    /// `text/plain`), then Latin-1.
+    fn formats(&self) -> [Atom; 5] {
+        [
+            self.utf8,
+            self.plain_utf8,
+            self.plain,
+            self.text,
+            AtomEnum::STRING.into(),
+        ]
     }
 
     fn decode(&self, kind: Atom, data: &[u8]) -> String {
         let latin1 = |d: &[u8]| d.iter().map(|&b| char::from(b)).collect();
         if kind == u32::from(AtomEnum::STRING) {
             latin1(data) // STRING is ISO 8859-1
-        } else if kind == self.utf8 || kind == self.plain {
+        } else if kind == self.utf8 || kind == self.plain_utf8 {
             String::from_utf8_lossy(data).into_owned()
         } else {
-            // TEXT lets the owner pick; anything that isn't UTF-8 is most
-            // likely Latin-1 (or ASCII-only COMPOUND_TEXT).
+            // TEXT lets the owner pick, and `text/plain` names no charset:
+            // anything that isn't UTF-8 is most likely Latin-1 (or
+            // ASCII-only COMPOUND_TEXT). For ASCII, as nearly all of it is,
+            // that's GTK's reading of `text/plain` too (GTK 4.22 converts
+            // it from ASCII, with escapes for other bytes).
             std::str::from_utf8(data).map_or_else(|_| latin1(data), str::to_string)
         }
     }
@@ -865,6 +882,35 @@ mod tests {
         };
         let text = paste(latin1, cut(65_536));
         assert_eq!(text, "é".repeat(32_768));
+    }
+
+    /// An owner that offers only `text/plain` (no charset) is read: as
+    /// UTF-8 when it is, else as Latin-1 (R13-L-02).
+    #[test]
+    fn reads_plain_text_without_a_charset() {
+        let Some(x) = Xvfb::start() else {
+            eprintln!("no Xvfb; skipped");
+            return;
+        };
+        let (c, screen) = RustConnection::connect(Some(&x.display)).unwrap();
+        let atoms = Atoms::new(&c).unwrap();
+        let paste = |data: &[u8]| {
+            let owner = own(
+                &x.display,
+                Offer {
+                    selection: "CLIPBOARD",
+                    kind: "text/plain",
+                    data: data.to_vec(),
+                    incr: None,
+                },
+            );
+            let text = read_text(&c, screen, &atoms, Selection::Clipboard, &cut(64 << 10));
+            owner.join().unwrap();
+            text
+        };
+        assert_eq!(paste(b"sin(x)").as_deref(), Some("sin(x)"));
+        assert_eq!(paste("2×π é".as_bytes()).as_deref(), Some("2×π é"));
+        assert_eq!(paste(b"caf\xe9\r\n").as_deref(), Some("café\n"));
     }
 
     /// The primary selection and a drag's data are read alike, here on a
