@@ -56,6 +56,8 @@ pub struct HistoryCollector {
     /// Extension: while set, a completed equation is not added to the
     /// history (see `CalculatorManager::set_history_suppressed`).
     history_suppressed: bool,
+    /// Extension: see [`HistoryCollector::mark_unreplayable`].
+    unreplayable: bool,
 }
 
 impl HistoryCollector {
@@ -77,12 +79,14 @@ impl HistoryCollector {
             tokens: None,
             commands: None,
             history_suppressed: false,
+            unreplayable: false,
         };
         hc.reinit_history();
         hc
     }
 
     fn reinit_history(&mut self) {
+        self.unreplayable = false;
         self.last_op_start_index = -1;
         self.last_bin_op_start_index = -1;
         self.cur_operand_index = 0;
@@ -518,6 +522,34 @@ impl HistoryCollector {
 
     pub fn get_commands(&self) -> Vec<ExpressionCommand> {
         self.commands.clone().unwrap_or_default()
+    }
+
+    /// Extension: replaying the expression's commands wouldn't rebuild
+    /// the calculation: it has a multiplication the engine supplied for a
+    /// number typed right after ")" ("(8)2"), which also dropped the
+    /// operations pending before it (an ordinary × doesn't), or the word
+    /// size changed while it was pending (its values were worked out in
+    /// the old one). Cleared with the expression.
+    pub(crate) fn mark_unreplayable(&mut self) {
+        self.unreplayable = true;
+    }
+
+    /// Extension: see [`mark_unreplayable`](Self::mark_unreplayable).
+    pub(crate) fn is_unreplayable(&self) -> bool {
+        self.unreplayable
+    }
+
+    /// Extension: the parentheses the expression's commands leave open.
+    pub(crate) fn open_parentheses(&self) -> i64 {
+        self.commands
+            .iter()
+            .flatten()
+            .map(|c| match c {
+                ExpressionCommand::Parentheses(p) if p.get_command() == IDC_OPENP => 1,
+                ExpressionCommand::Parentheses(_) => -1,
+                _ => 0,
+            })
+            .sum()
     }
 
     /// Extension: the expression's last command (see

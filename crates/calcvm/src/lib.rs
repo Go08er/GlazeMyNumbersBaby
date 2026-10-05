@@ -610,22 +610,30 @@ impl CalculatorViewModel {
     /// input that fails `SnapshotValidator.ValidateProtocol` is ignored and
     /// leaves the calculator unchanged.
     pub fn restore_state(&mut self, state: &str) {
+        self.restore_state_checked(state);
+    }
+
+    /// [`restore_state`](Self::restore_state); returns false when the
+    /// calculation didn't come back as saved and a new calculation from
+    /// the saved value was set up instead (see the `snapshot` module).
+    pub(crate) fn restore_state_checked(&mut self, state: &str) -> bool {
         let Ok(snapshot) = snapshot::ApplicationSnapshot::from_json(state) else {
-            return;
+            return true;
         };
         if snapshot::SnapshotValidator::validate_protocol(&snapshot).is_err() {
-            return;
+            return true;
         }
         let (Ok(mode), Some(standard)) = (
             snapshot::SnapshotValidator::mode(&snapshot),
             snapshot.standard_calculator.as_ref(),
         ) else {
-            return;
+            return true;
         };
 
         self.vm.begin_op();
         self.apply_mode(mode);
-        self.vm
+        let exact = self
+            .vm
             .restore_snapshot(standard, snapshot.extension.as_ref());
         let vm = &mut self.vm;
         vm.history_vm
@@ -634,5 +642,6 @@ impl CalculatorViewModel {
         vm.force_history_changed();
         vm.force_memory_changed();
         self.vm.end_op(OpKind::Replace);
+        exact
     }
 }

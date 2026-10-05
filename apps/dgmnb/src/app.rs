@@ -436,6 +436,9 @@ impl App {
     }
 
     fn set_mode(&mut self, mode: ViewMode) {
+        // Coming back to the calculator from another page sets it up again,
+        // as upstream's `ApplicationViewModel.Mode` setter does.
+        let returning = self.calc.is_some() && self.mode.page() != PageKind::Calculator;
         self.mode = mode;
         self.nav = false;
         self.settings = false;
@@ -450,6 +453,9 @@ impl App {
                     .calc
                     .get_or_insert_with(|| CalcPage::new(store.page_state("calculator")));
                 if let Some(m) = mode.calc_mode() {
+                    if returning {
+                        page.reactivate(m);
+                    }
                     page.set_mode(m);
                 }
             }
