@@ -48,6 +48,11 @@
 //! * one to one: two crossings, or two turns of a kind, both matched to one
 //!   reported point and told apart by something resolvably different
 //!   between them (f away from 0; f below or above both);
+//! * the shapes the panel writes, comparing no digits with anything: a
+//!   range written as one value ({c}) needs f the same at every sample,
+//!   within their rounding; two elements of a set (excluded points), or
+//!   the two bounds of an interval, that read alike are a contradiction
+//!   whatever the numbers behind them;
 //! * an open range bound reached at a turn, to within f's tolerance;
 //! * horizontal and oblique asymptotes: |f − line| no smaller at all three
 //!   decades further out (the largest over nine points a decade: 10¹² and
@@ -2272,7 +2277,106 @@ fn check_with(
             }
         }
     }
+    structure(&mut cx, &f, &k, &xs, &vals);
     cx.out
+}
+
+/// The elements of each `{…}` set in a panel text (families aside).
+fn set_elements(text: &str) -> Vec<Vec<&str>> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find('{') {
+        let Some(j) = rest[i..].find('}') else { break };
+        let inner = &rest[i + 1..i + j];
+        if !inner.contains("k ∈ ℤ") && !inner.contains('|') {
+            out.push(inner.split(", ").collect());
+        }
+        rest = &rest[i + j + 1..];
+    }
+    out
+}
+
+/// The two bounds of each interval `(a, b)`, `[a, b]`, … in a panel text
+/// (families aside).
+fn interval_bounds(text: &str) -> Vec<(&str, &str)> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find(['(', '[']) {
+        let Some(j) = rest[i..].find([')', ']']) else {
+            break;
+        };
+        let inner = &rest[i + 1..i + j];
+        if let Some((a, b)) = inner.split_once(", ")
+            && !b.contains(", ")
+            && !inner.contains('k')
+        {
+            out.push((a, b));
+        }
+        rest = &rest[i + 1..];
+    }
+    out
+}
+
+/// Structural checks of the sets and intervals the panel writes, with no
+/// digits compared to anything (review 12, R12-M-04: equal rounded texts
+/// made a real range a singleton, and two poles one): a range written as
+/// one value needs f to take one value at every sample, within its
+/// rounding; two excluded points, or the two bounds of an interval, that
+/// read alike are a contradiction whatever the numbers.
+fn structure(cx: &mut Ctx<'_>, f: &F, k: &KeyGraphFeatures, xs: &[f64], vals: &[Val]) {
+    // A one-value range: f the same everywhere it is defined.
+    let singleton = set_elements(&k.range)
+        .first()
+        .is_some_and(|s| s.len() == 1 && k.range.starts_with("y ∈ {"));
+    if singleton {
+        let defined: Vec<(f64, f64)> = xs
+            .iter()
+            .zip(vals)
+            .filter(|(_, v)| v.def() && v.v.is_finite())
+            .map(|(x, v)| (*x, v.v))
+            .collect();
+        let lo = defined.iter().min_by(|a, b| a.1.total_cmp(&b.1));
+        let hi = defined.iter().max_by(|a, b| a.1.total_cmp(&b.1));
+        if let (Some(&(xl, vl)), Some(&(xh, vh))) = (lo, hi)
+            && vh - vl > f.tol(xl) + f.tol(xh)
+        {
+            cx.fail_at(
+                "range-singleton-varies",
+                xh,
+                format!(
+                    "{}: f({xl:e}) = {vl:e} and f({xh:e}) = {vh:e}, apart beyond their rounding",
+                    k.range
+                ),
+            );
+        }
+    }
+    // Excluded points (any set's elements) that read alike.
+    for text in [&k.domain, &k.range] {
+        for set in set_elements(text) {
+            if set.iter().enumerate().any(|(i, e)| set[..i].contains(e)) {
+                cx.fail(
+                    "set-elements-alike",
+                    format!("{text}: two elements read alike"),
+                );
+            }
+        }
+    }
+    // Interval bounds that read alike: a nonempty interval has two
+    // different ends (a single point is written {a}).
+    let mono: Vec<&str> = k.monotonicity.iter().map(|(t, _)| t.as_str()).collect();
+    for text in [k.domain.as_str(), k.range.as_str()]
+        .into_iter()
+        .chain(mono)
+    {
+        for (a, b) in interval_bounds(text) {
+            if a == b {
+                cx.fail(
+                    "interval-bounds-alike",
+                    format!("{text}: ({a}, {b}) reads as one point"),
+                );
+            }
+        }
+    }
 }
 
 /// Two numbers the panel would show as the same claim.
@@ -2683,6 +2787,29 @@ fn selftest() -> bool {
             "asymptote-not-approached",
             Box::new(|k| {
                 k.data.horizontal_asymptotes = vec![(0.5, AsymptoteSide::AnyInfinity)];
+            }),
+        ),
+        // Review 12, R12-M-04: a range written as one value it isn't
+        // (the numbers behind it left as they were: only the text lies).
+        (
+            "sin(1)+(sin(x)+2)/10000000",
+            "range-singleton-varies",
+            Box::new(|k| k.range = "y ∈ {≈0.841471}".into()),
+        ),
+        // Two excluded points, and an interval's two bounds, that read
+        // alike (the review's were 10⁻⁷ apart; here only the text lies).
+        (
+            "1/((x-1)*(x-2))",
+            "set-elements-alike",
+            Box::new(|k| k.domain = "x ∈ ℝ \\ {≈1.5, ≈1.5}".into()),
+        ),
+        (
+            "1/((x-1)*(x-2))",
+            "interval-bounds-alike",
+            Box::new(|k| {
+                if let Some(m) = k.monotonicity.get_mut(1) {
+                    m.0 = "(≈1.5, ≈1.5)".into();
+                }
             }),
         ),
     ];

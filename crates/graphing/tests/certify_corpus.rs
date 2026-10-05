@@ -1838,3 +1838,61 @@ fn min_max_list_nothing_where_an_argument_is_undefined() {
         );
     }
 }
+
+/// The bounds of each `(a, b)`-style interval in a panel text.
+fn bounds_of(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find(['(', '[']) {
+        let Some(j) = rest[i..].find([')', ']']) else {
+            break;
+        };
+        if let Some((a, b)) = rest[i + 1..i + j].split_once(", ") {
+            out.push((a.to_string(), b.to_string()));
+        }
+        rest = &rest[i + j + 1..];
+    }
+    out
+}
+
+/// Review 12, R12-M-04: two numbers a ten-millionth apart were written
+/// alike (a real range as one value, two excluded points as one, empty
+/// monotone pieces); a point now needs the numbers proven equal, and
+/// distinct numbers that read alike get the digits that tell them apart,
+/// or the row is unknown.
+#[test]
+fn numbers_that_read_alike_are_told_apart() {
+    let k = analyze_str("y=sin(1)+(sin(x)+2)/10000000");
+    assert!(!k.range.contains('{'), "range {}", k.range);
+    for (a, b) in bounds_of(&k.range) {
+        assert_ne!(a, b, "range {}", k.range);
+    }
+    for src in [
+        "y=1/((x-sin(1))*(x-sin(1)-0.0000001))",
+        "y=1/((x-ln(2))*(x-ln(2)-0.0000001))",
+        "y=1/((x-exp(1))*(x-exp(1)-0.000001))",
+    ] {
+        let k = analyze_str(src);
+        if let Some(set) = k
+            .domain
+            .split_once('{')
+            .and_then(|(_, s)| s.strip_suffix('}'))
+        {
+            let pts: Vec<&str> = set.split(", ").collect();
+            assert!(
+                pts.len() == 2 && pts[0] != pts[1],
+                "{src}: domain {}",
+                k.domain
+            );
+        }
+        for (t, _) in &k.monotonicity {
+            for (a, b) in bounds_of(t) {
+                assert_ne!(a, b, "{src}: monotonicity {:?}", k.monotonicity);
+            }
+        }
+    }
+    // A constant is still one value, however it is enclosed.
+    for (src, want) in [("y=x/x", "y ∈ {1}"), ("y=sin(1)+0*x", "y ∈ {≈0.841471}")] {
+        assert_eq!(analyze_str(src).range, want, "{src}");
+    }
+}

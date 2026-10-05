@@ -103,15 +103,22 @@ How numbers are written:
   rounded to those digits, so both ends of an enclosure straddling an
   integer or a power of ten read alike (`≈1×10⁶`); an exact integer keeps
   its exact text (`1000000`). Accessibility reads "≈" as
-  "approximately". Two items of a row that would read alike get up to
-  fifteen digits, to tell them apart. The minimum is one switch,
+  "approximately". **The one exception to six:** two different numbers of
+  a row that would read alike (two points, two excluded points, the two
+  bounds of a range or of a monotone piece) get the significant digits
+  that tell them apart, up to fifteen (`x ∈ ℝ \ {≈0.841471, ≈0.8414711}`,
+  `y ∈ [≈0.8414711, ≈0.8414713]`). Equal texts never make two numbers one:
+  a set is written as a single point `{c}` only when its ends are proven
+  one number (exact and equal, the same double, or one value f takes at
+  one place). The minimum is one switch,
   `MIN_SHOWN_DIGITS` in `crates/graphing/src/analysis/certified.rs`: 6
   restores the strict rule (all six digits fixed, or the row is unknown).
   Tracing shares it (`crates/graphing/src/trace.rs`): a traced value with
   fewer digits fixed reads "unknown".
 * **Not at all** when fewer than three digits are fixed: the row is
-  unknown. Two points or lines of a row that still read alike at fifteen
-  digits leave it unknown too (they can't be told apart). A value
+  unknown. Two different numbers (points, lines, excluded points or
+  bounds) of a row that still read alike at fifteen digits leave it
+  unknown too (they can't be told apart). A value
   that may be 0 is never written "0" or "≈0", and a closed range bound (a
   value f takes) is written only when exact or known to its last few
   doubles: "0", "none" and "attained" get no rounding allowance.
