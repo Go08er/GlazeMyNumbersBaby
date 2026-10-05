@@ -16,13 +16,40 @@ pub struct Q {
     d: i128,
 }
 
-fn gcd(mut a: i128, mut b: i128) -> i128 {
-    a = a.abs();
-    b = b.abs();
+/// gcd(|a|, |b|), unsigned: |i128::MIN| is 2¹²⁷, which no i128 holds.
+fn gcd(a: i128, b: i128) -> u128 {
+    let (mut a, mut b) = (a.unsigned_abs(), b.unsigned_abs());
     while b != 0 {
         (a, b) = (b, a % b);
     }
     a
+}
+
+/// gcd(|a|, |b|) as a divisor of both (1 for gcd(0, 0)), or `None` when it
+/// is 2¹²⁷ (both are i128::MIN or 0).
+fn divisor(a: i128, b: i128) -> Option<i128> {
+    i128::try_from(gcd(a, b).max(1)).ok()
+}
+
+/// a·b exactly, as (high, low) halves of a 256-bit two's-complement
+/// number: for comparing products that overflow an i128.
+fn wide_mul(a: i128, b: i128) -> (i128, u128) {
+    let neg = (a < 0) != (b < 0);
+    let (x, y) = (a.unsigned_abs(), b.unsigned_abs());
+    // Four 64×64 → 128-bit partial products.
+    let (x1, x0) = (x >> 64, x & u128::from(u64::MAX));
+    let (y1, y0) = (y >> 64, y & u128::from(u64::MAX));
+    let (p00, p01, p10, p11) = (x0 * y0, x0 * y1, x1 * y0, x1 * y1);
+    let mid = (p00 >> 64) + (p01 & u128::from(u64::MAX)) + (p10 & u128::from(u64::MAX));
+    let lo = (p00 & u128::from(u64::MAX)) | (mid << 64);
+    let hi = p11 + (p01 >> 64) + (p10 >> 64) + (mid >> 64);
+    if !neg || (hi == 0 && lo == 0) {
+        return (hi as i128, lo);
+    }
+    // −(hi·2¹²⁸ + lo) in two's complement.
+    let (nlo, borrow) = (!lo).overflowing_add(1);
+    let nhi = (!hi).wrapping_add(u128::from(borrow)) as i128;
+    (nhi, nlo)
 }
 
 // add, sub, mul, div and neg return `None` on overflow (or a zero
@@ -39,7 +66,10 @@ impl Q {
         if d == 0 {
             return None;
         }
-        let g = gcd(n, d).max(1);
+        if n == 0 {
+            return Some(Q::ZERO);
+        }
+        let g = divisor(n, d)?;
         let (mut n, mut d) = (n / g, d / g);
         if d < 0 {
             n = n.checked_neg()?;
@@ -89,7 +119,7 @@ impl Q {
 
     /// a + b.
     pub fn add(self, o: Q) -> Option<Q> {
-        let g = gcd(self.d, o.d).max(1);
+        let g = divisor(self.d, o.d)?;
         let (da, db) = (self.d / g, o.d / g);
         let n = self.n.checked_mul(db)?.checked_add(o.n.checked_mul(da)?)?;
         Q::new(n, self.d.checked_mul(db)?)
@@ -102,8 +132,7 @@ impl Q {
 
     /// a · b.
     pub fn mul(self, o: Q) -> Option<Q> {
-        let g1 = gcd(self.n, o.d).max(1);
-        let g2 = gcd(o.n, self.d).max(1);
+        let (g1, g2) = (divisor(self.n, o.d)?, divisor(o.n, self.d)?);
         Q::new(
             (self.n / g1).checked_mul(o.n / g2)?,
             (self.d / g2).checked_mul(o.d / g1)?,
@@ -160,9 +189,9 @@ impl Q {
         if self.n <= 0 || o.n <= 0 {
             return None;
         }
-        let g = gcd(self.n, o.n).max(1);
+        let g = divisor(self.n, o.n)?;
         let l = (self.n / g).checked_mul(o.n)?;
-        Q::new(l, gcd(self.d, o.d).max(1))
+        Q::new(l, divisor(self.d, o.d)?)
     }
 
     /// The exact decimal `digits` (digits and at most one `.`), if it
@@ -270,14 +299,11 @@ impl PartialOrd for Q {
 
 impl Ord for Q {
     fn cmp(&self, o: &Q) -> Ordering {
-        // n1/d1 vs n2/d2 with d > 0: compare n1·d2 and n2·d1, exactly.
+        // n1/d1 vs n2/d2 with d > 0: compare n1·d2 and n2·d1, exactly (in
+        // 256 bits when an i128 can't hold them).
         match (self.n.checked_mul(o.d), o.n.checked_mul(self.d)) {
             (Some(a), Some(b)) => a.cmp(&b),
-            _ => self
-                .to_f64()
-                .partial_cmp(&o.to_f64())
-                .unwrap_or(Ordering::Equal)
-                .then(self.n.cmp(&o.n)),
+            _ => wide_mul(self.n, o.d).cmp(&wide_mul(o.n, self.d)),
         }
     }
 }
@@ -326,6 +352,45 @@ mod tests {
             Q::new(3, 2).unwrap().lcm(Q::new(5, 4).unwrap()),
             Q::new(15, 2)
         );
+    }
+
+    /// Review 12, Q3: ordering past an i128 is exact, and i128::MIN has no
+    /// |·| to take.
+    #[test]
+    fn ordering_and_extremes() {
+        // Two rationals that agree to binary64 (and beyond): the products
+        // overflow, the order must still be exact.
+        let big = i128::MAX / 3;
+        let a = Q::new(big, big - 1).unwrap();
+        let b = Q::new(big - 1, big - 2).unwrap();
+        assert_eq!(a.to_f64(), b.to_f64());
+        assert!(a < b && b > a && a != b);
+        assert_eq!(a.cmp(&a), Ordering::Equal);
+        let (na, nb) = (a.neg().unwrap(), b.neg().unwrap());
+        assert!(na > nb);
+        assert!(na < a);
+        // i128::MIN: refused rather than a wrong value or a panic.
+        assert_eq!(Q::new(i128::MIN, 1), Some(Q::int(i128::MIN)));
+        assert_eq!(Q::new(i128::MIN, i128::MIN), None);
+        assert_eq!(Q::new(1, i128::MIN), None);
+        assert_eq!(Q::new(0, i128::MIN), Some(Q::ZERO));
+        let m = Q::int(i128::MIN);
+        assert_eq!(m.add(m), None);
+        assert_eq!(m.neg(), None);
+        assert_eq!(m.abs(), None);
+        assert!(m < Q::int(i128::MIN + 1));
+        for (x, y) in [(i128::MIN, 1), (-7, i128::MAX), (i128::MAX, i128::MAX)] {
+            let (hi, lo) = wide_mul(x, y);
+            let r = Q::int(x).mul(Q::int(y));
+            if let Some(r) = r {
+                assert_eq!(
+                    (hi, lo),
+                    (if r.numer() < 0 { -1 } else { 0 }, r.numer() as u128)
+                );
+            }
+        }
+        assert_eq!(wide_mul(-1, 1), (-1, u128::MAX));
+        assert_eq!(wide_mul(i128::MAX, i128::MAX).0, (1i128 << 126) - 1);
     }
 
     #[test]
