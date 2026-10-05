@@ -2415,7 +2415,10 @@ pub(super) fn features(
     };
     match a.monotonicity.value() {
         Some(v) => {
-            let mut pieces: Vec<(f64, (String, Monotonicity, End, End, bool))> = Vec::new();
+            // (Its first x; its text, direction, ends, and whether it is
+            // one piece of each period.)
+            type MonoPiece = (f64, (String, Monotonicity, End, End, bool));
+            let mut pieces: Vec<MonoPiece> = Vec::new();
             for m in v {
                 let dir = match m.dir {
                     Dir::Increasing => Monotonicity::Increasing,
