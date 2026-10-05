@@ -7,8 +7,15 @@
 //! do. Text past the cap is refused or cut ([`Overflow`]); either way no more
 //! than the cap (rounded up to whole 32-bit words) is ever transferred to
 //! this client or allocated for it: every property read asks the X server
-//! for at most what is still allowed, and a transfer cut short is abandoned,
-//! its window destroyed, rather than drained.
+//! for at most what is still allowed.
+//!
+//! An incremental (INCR) transfer stopped early is abandoned by
+//! [`read_text`], its window destroyed. Some owners serve one transfer at a
+//! time and then wait for that window forever (xclip does), so
+//! [`read_text_on`], which has a connection of its own, lets the rest of a
+//! transfer it cut go by instead: in the background, until the deadline,
+//! it deletes each remaining piece without reading it, as if read, so the
+//! owner gets to the end.
 //!
 //! Reads block until they have the text or the deadline passes: make them
 //! off the UI thread.
@@ -154,12 +161,51 @@ pub fn read_text(
     selection: Selection,
     limits: &Limits,
 ) -> Option<String> {
+    read(c, screen, atoms, selection, limits, false).map(|(text, _)| text)
+}
+
+/// [`read_text`] on a connection of its own to `display` (an X display name
+/// such as `:0`). Only the read is bounded by the deadline, not connecting:
+/// a local X server answers that at once (or isn't running). It returns as
+/// soon as it has the text; the rest of an INCR transfer it cut is let go
+/// by on a thread of its own, within a deadline as long again, before the
+/// connection closes.
+pub fn read_text_on(display: &str, selection: Selection, limits: &Limits) -> Option<String> {
+    let start = Instant::now();
+    let (c, screen) = RustConnection::connect(Some(display)).ok()?;
+    let atoms = Atoms::new(&c)?;
+    let limits = Limits {
+        timeout: limits.timeout.saturating_sub(start.elapsed()),
+        ..*limits
+    };
+    let (text, open) = read(&c, screen, &atoms, selection, &limits, true)?;
+    if let Some(win) = open {
+        let (prop, deadline) = (atoms.property, Instant::now() + limits.timeout);
+        // (Without a thread, closing the connection destroys the window.)
+        let _ = std::thread::Builder::new()
+            .name("x11paste-rest".into())
+            .spawn(move || let_go(&c, win, prop, deadline));
+    }
+    Some(text)
+}
+
+/// [`read_text`], and the window of an INCR transfer it cut if
+/// `keep_open` (else it's destroyed).
+fn read(
+    c: &RustConnection,
+    screen: usize,
+    atoms: &Atoms,
+    selection: Selection,
+    limits: &Limits,
+    keep_open: bool,
+) -> Option<(String, Option<Window>)> {
     let read = Read {
         c,
         screen,
         atoms,
         selection: atoms.selection(selection),
         deadline: Instant::now() + limits.timeout,
+        keep_open,
     };
     // Which formats does the owner offer? (Some owners don't answer
     // TARGETS; then just try each in turn.)
@@ -174,10 +220,15 @@ pub fn read_text(
         if offered.as_ref().is_some_and(|o| !o.contains(&target)) {
             continue;
         }
-        if let Some(f) = read.fetch(target, limits.max_bytes, limits.overflow)
-            && f.format == 8
-        {
-            return Some(text_of(atoms, f, limits));
+        match read.fetch(target, limits.max_bytes, limits.overflow) {
+            Some(f) if f.format == 8 => {
+                let open = f.open;
+                return Some((text_of(atoms, f, limits), open));
+            }
+            Some(Fetched {
+                open: Some(win), ..
+            }) => abandon(c, win),
+            _ => {}
         }
         if Instant::now() >= read.deadline {
             break;
@@ -186,19 +237,45 @@ pub fn read_text(
     None
 }
 
-/// [`read_text`] on a connection of its own to `display` (an X display name
-/// such as `:0`), closed when it returns. Only the read is bounded by the
-/// deadline, not connecting: a local X server answers that at once (or
-/// isn't running).
-pub fn read_text_on(display: &str, selection: Selection, limits: &Limits) -> Option<String> {
-    let start = Instant::now();
-    let (c, screen) = RustConnection::connect(Some(display)).ok()?;
-    let atoms = Atoms::new(&c)?;
-    let limits = Limits {
-        timeout: limits.timeout.saturating_sub(start.elapsed()),
-        ..*limits
-    };
-    read_text(&c, screen, &atoms, selection, &limits)
+/// The rest of an INCR transfer to `win` that was cut: each piece is deleted
+/// unread, as if read, so the owner gets to the end and can serve again.
+/// Only each piece's size is asked for, to know the empty one that ends it.
+/// Stops there or at `deadline`, then destroys `win`.
+fn let_go(c: &RustConnection, win: Window, prop: Atom, deadline: Instant) {
+    // The piece read last is still there: deleting it asks for the next.
+    let _ = c.delete_property(win, prop);
+    let _ = c.flush();
+    while let Some(e) = next_event(c, deadline) {
+        let Event::PropertyNotify(e) = e else {
+            continue;
+        };
+        if e.window != win || e.atom != prop || e.state != Property::NEW_VALUE {
+            continue;
+        }
+        let Some(head) = c
+            .get_property(false, win, prop, AtomEnum::ANY, 0, 0)
+            .ok()
+            .and_then(|r| r.reply().ok())
+        else {
+            break;
+        };
+        if head.type_ == x11rb::NONE {
+            continue;
+        }
+        let _ = c.delete_property(win, prop);
+        let _ = c.flush();
+        if head.bytes_after == 0 {
+            break; // the empty piece: the end
+        }
+    }
+    abandon(c, win);
+}
+
+/// Destroys a conversion's window: whatever its owner still writes there is
+/// refused.
+fn abandon(c: &RustConnection, win: Window) {
+    let _ = c.destroy_window(win);
+    let _ = c.flush();
 }
 
 /// What was fetched, decoded as `limits` say.
@@ -231,6 +308,8 @@ struct Fetched {
     data: Vec<u8>,
     /// More was offered than was read.
     cut: bool,
+    /// The window of an INCR transfer cut and kept open ([`Read::keep_open`]).
+    open: Option<Window>,
 }
 
 /// A read of one selection, with its deadline.
@@ -240,6 +319,8 @@ struct Read<'a> {
     atoms: &'a Atoms,
     selection: Atom,
     deadline: Instant,
+    /// An INCR transfer cut short keeps its window, for [`let_go`].
+    keep_open: bool,
 }
 
 impl Read<'_> {
@@ -278,7 +359,11 @@ impl Read<'_> {
             .reply()
             .ok()?;
         if head.type_ == self.atoms.incr {
-            return self.fetch_incr(win, max, overflow);
+            let fetched = self.fetch_incr(win, max, overflow);
+            if fetched.as_ref().is_some_and(|f| f.open.is_some()) {
+                requestor.keep();
+            }
+            return fetched;
         }
         let size = head.bytes_after as usize;
         let cut = size > max;
@@ -308,6 +393,7 @@ impl Read<'_> {
             format: reply.format,
             data,
             cut,
+            open: None,
         })
     }
 
@@ -365,6 +451,7 @@ impl Read<'_> {
                     format: 8,
                     data: Vec::new(),
                     cut: false,
+                    open: None,
                 }));
             }
             let mut value = reply.value;
@@ -376,6 +463,7 @@ impl Read<'_> {
                         format: reply.format,
                         data: value,
                         cut: false,
+                        open: None,
                     })
                 }
                 Some(o) if o.kind == reply.type_ && o.format == reply.format => {
@@ -384,9 +472,15 @@ impl Read<'_> {
                 Some(_) => return None, // the owner changed format mid-transfer
             }
             if full && overflow == Overflow::Cut {
-                // Abandoned here, whatever else there is (the last chunk may
-                // end inside a character).
-                return out.map(|o| Fetched { cut: true, ..o });
+                // Stopped here, whatever else there is (the last chunk may
+                // end inside a character). The chunk read last is still in
+                // place: the owner waits for its deletion.
+                let open = self.keep_open.then_some(win);
+                return out.map(|o| Fetched {
+                    cut: true,
+                    open,
+                    ..o
+                });
             }
         }
     }
@@ -421,12 +515,16 @@ impl<'a> Requestor<'a> {
         .ok()?;
         Some(Requestor(win, c))
     }
+
+    /// Leaves the window to whoever has its id.
+    fn keep(self) {
+        std::mem::forget(self);
+    }
 }
 
 impl Drop for Requestor<'_> {
     fn drop(&mut self) {
-        let _ = self.1.destroy_window(self.0);
-        let _ = self.1.flush();
+        abandon(self.1, self.0);
     }
 }
 
@@ -787,5 +885,27 @@ mod tests {
             owner.join().unwrap();
             assert_eq!(text, Some(format!("from {name}")));
         }
+    }
+
+    /// On a connection of its own, the rest of an INCR transfer that was cut
+    /// goes by unread to its end, so an owner that serves one transfer at a
+    /// time (like xclip, and the test owner) serves the next paste too.
+    #[test]
+    fn own_connection_lets_the_rest_of_a_cut_transfer_go_by() {
+        let Some(x) = Xvfb::start() else {
+            eprintln!("no Xvfb; skipped");
+            return;
+        };
+        const CAP: usize = 64 << 10;
+        // 70,000 bytes: five 16 KiB pieces and the empty one that ends them.
+        let owner = own(&x.display, utf8(vec![b'7'; 70_000], Some(16 << 10)));
+        for _ in 0..2 {
+            let text = read_text_on(&x.display, Selection::Clipboard, &cut(CAP));
+            assert_eq!(text, Some("7".repeat(CAP)));
+            // (The rest goes by on a thread of its own.)
+            thread::sleep(Duration::from_millis(300));
+        }
+        // Every piece of both transfers written: each was asked for.
+        assert_eq!(owner.join().unwrap(), 12);
     }
 }

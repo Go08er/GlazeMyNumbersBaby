@@ -15,7 +15,8 @@
 //! it, and holds it until then (GTK 4.22 `gdkselectioninputstream-x11.c`).
 //! So there another X client's selection is read by `x11paste` instead, on a
 //! connection of its own on a worker thread, which asks the X server for no
-//! more than the cap and abandons the transfer there.
+//! more than the cap; the rest of the transfer goes by unread (its pieces
+//! deleted as if read, so an owner like xclip isn't left waiting).
 //!
 //! Text dragged onto a field from another program is read the same way
 //! (GTK's drop target reads it whole, as its paste does): on X11 the drag's
