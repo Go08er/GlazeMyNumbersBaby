@@ -602,18 +602,20 @@ pub fn root(x: &DecInterval, n: &DecInterval) -> DecInterval {
         };
         return r.cap(n.dec);
     }
+    // A point degree is that number: an odd integer (only below 2⁵³:
+    // every double beyond is even) takes a negative x too. (An infinite
+    // one is no degree.)
+    if nv.is_point() && nv.lo() != 0.0 {
+        if !nv.lo().is_finite() {
+            return DecInterval::result(Interval::EMPTY, Dec::Trv, &[x, n]);
+        }
+        return root_of_parity(x, n, crate::functions::is_odd_integer(nv.lo()));
+    }
     // A general degree: x ≥ 0 (x > 0 for a negative degree).
     let mut r = pow(x, &recip(n));
     // Unless the degree may be an odd integer, which takes a negative x
     // too (root(x, x) is −1 at −1): there, −|x|^(1/n), maybe.
-    let (lo, hi) = (nv.lo(), nv.hi());
-    let first = lo.max(-1e300).ceil();
-    let odd = if first.rem_euclid(2.0) == 1.0 {
-        first
-    } else {
-        first + 1.0
-    };
-    if x.lo() < 0.0 && odd <= hi && first.abs() < 9007199254740992.0 {
+    if x.lo() < 0.0 && may_hold_odd(nv) {
         let mirrored = DecInterval::new((-x.iv).intersect(Interval::new(0.0, INF)));
         let m = neg(&pow(&mirrored, &recip(n)));
         if !m.is_empty() {
@@ -622,6 +624,57 @@ pub fn root(x: &DecInterval, n: &DecInterval) -> DecInterval {
             r = r.cap(Dec::Trv);
         }
     }
+    if n.iv.contains_zero() && !n.ne0() {
+        r.cap(Dec::Trv)
+    } else {
+        r
+    }
+}
+
+/// Whether the real interval `n` holds an odd integer. Beyond 2⁵³ every
+/// double is even, but the numbers between two of them aren't: the box
+/// [2⁵³, 2⁵³ + 2] holds the odd 2⁵³ + 1 (review 13, R13-M-04: such a box
+/// was taken to hold none, and root(−8, n) over it was empty).
+pub(crate) fn may_hold_odd(n: Interval) -> bool {
+    if n.is_empty() {
+        return false;
+    }
+    const BIG: f64 = 9007199254740992.0;
+    let first = n.lo().max(-1e300).ceil();
+    if first.abs() >= BIG {
+        // An even integer, the next number above it odd: any double above
+        // `first` is at least one more.
+        return n.hi() > first;
+    }
+    // first + 1 ≤ 2⁵³ is exact.
+    let odd = if first.rem_euclid(2.0) == 1.0 {
+        first
+    } else {
+        first + 1.0
+    };
+    odd <= n.hi()
+}
+
+/// root(x, n) for a degree known exactly to be an odd integer (`odd`) or
+/// not (an even integer, or no integer), whatever its enclosure `n` shows:
+/// a typed 9007199254740993 is odd, though enclosed by 2⁵³ and the double
+/// after it. Odd: sign(x)·|x|^(1/n), x ≠ 0 for n < 0. Otherwise x ≥ 0
+/// (x > 0 for n < 0), as for a degree that varies.
+pub fn root_of_parity(x: &DecInterval, n: &DecInterval, odd: bool) -> DecInterval {
+    let e = recip(n);
+    let r = if !odd || x.lo() >= 0.0 || x.gt0() {
+        pow(x, &e)
+    } else if x.hi() <= 0.0 || x.lt0() {
+        neg(&pow(&neg(x), &e))
+    } else {
+        // Both signs: each half, x = 0 in both.
+        let half = |iv: Interval| pow(&DecInterval::with_dec(iv, x.dec), &e);
+        let p = half(x.iv.intersect(Interval::new(0.0, INF)));
+        let m = neg(&half((-x.iv).intersect(Interval::new(0.0, INF))));
+        let dec = p.dec.min(m.dec);
+        DecInterval::result(p.iv.hull(m.iv), dec, &[x, n])
+    };
+    let r = if odd { r.signs(x.gt0(), x.lt0()) } else { r };
     if n.iv.contains_zero() && !n.ne0() {
         r.cap(Dec::Trv)
     } else {
@@ -1699,14 +1752,16 @@ pub fn double_factorial(x: &DecInterval) -> DecInterval {
     DecInterval::result(Interval::ENTIRE, Dec::Trv, &[x])
 }
 
-/// nCr and nPr: only from point arguments with small integer values.
+/// nCr and nPr. Whole numbers n ≥ 0 and r, of any size, are counted
+/// exactly, as the evaluator counts them (`functions::count_exact`: 0 for
+/// r < 0 or r > n, a count past the doubles [`f64::MAX`, +∞]); other
+/// arguments go through Γ.
 pub fn ncr_npr(n: &DecInterval, r: &DecInterval, perm: bool) -> DecInterval {
-    if n.iv.is_point() && r.iv.is_point() {
-        let (nv, rv) = (n.iv.lo(), r.iv.lo());
-        if nv == nv.trunc() && rv == rv.trunc() && (0.0..=60.0).contains(&nv) {
-            let c = crate::functions::count_exact(nv, rv, perm).expect("whole n ≥ 0 and r");
-            return DecInterval::result(count_enclosure(c), Dec::Com, &[n, r]);
-        }
+    if n.iv.is_point()
+        && r.iv.is_point()
+        && let Some(c) = exact_count(n.iv.lo(), r.iv.lo(), perm)
+    {
+        return DecInterval::result(c, Dec::Com, &[n, r]);
     }
     if n.is_empty() || r.is_empty() {
         return DecInterval::result(Interval::EMPTY, Dec::Trv, &[n, r]);
@@ -1750,6 +1805,30 @@ pub fn ncr_npr(n: &DecInterval, r: &DecInterval, perm: bool) -> DecInterval {
         defined &= dr;
     }
     DecInterval::result(q, if defined { Dec::Com } else { Dec::Trv }, &[n, r])
+}
+
+/// nCr(n, r) (nPr, `perm`) of whole numbers n ≥ 0 and r, enclosed
+/// ([`count_enclosure`]); `None` for other arguments. A count in big
+/// integers costs microseconds, and one constant nCr(200, 100) is enclosed
+/// over and over (every box of a certificate): the last few are kept.
+fn exact_count(n: f64, r: f64, perm: bool) -> Option<Interval> {
+    type Recent = std::cell::RefCell<Vec<((u64, u64, bool), Interval)>>;
+    thread_local! {
+        static RECENT: Recent = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let key = (n.to_bits(), r.to_bits(), perm);
+    if let Some(iv) = RECENT.with(|c| c.borrow().iter().find(|e| e.0 == key).map(|e| e.1)) {
+        return Some(iv);
+    }
+    let iv = count_enclosure(crate::functions::count_exact(n, r, perm)?);
+    RECENT.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() >= 8 {
+            c.remove(0);
+        }
+        c.push((key, iv));
+    });
+    Some(iv)
 }
 
 /// r as a count 0 ≤ k ≤ 60 when it is that integer exactly.

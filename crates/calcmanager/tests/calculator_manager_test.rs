@@ -2880,3 +2880,77 @@ fn paren_count_is_reported() {
     );
     assert_eq!(2, p_calculator_display.borrow().m_paren_display);
 }
+
+/// Extension: `engine_primary_display` reports what the engine last showed,
+/// including what history item load mode kept from the display (a History
+/// selection replays the item there, and the view model shows its result).
+#[test]
+fn engine_primary_display_includes_history_item_loads() {
+    let (p_calculator_display, mut m_calculator_manager) = common_setup();
+    m_calculator_manager.set_standard_mode().unwrap();
+    assert_eq!(
+        m_calculator_manager.engine_primary_display(),
+        Some(("0".to_string(), false))
+    );
+    m_calculator_manager.set_in_history_item_load_mode(true);
+    execute_commands(
+        &mut m_calculator_manager,
+        &[Command::Command2, Command::CommandADD, Command::Command3],
+    );
+    m_calculator_manager.set_in_history_item_load_mode(false);
+    assert_eq!(p_calculator_display.borrow().get_primary_display(), "0");
+    assert_eq!(
+        m_calculator_manager.engine_primary_display(),
+        Some(("3".to_string(), false))
+    );
+    execute_commands(
+        &mut m_calculator_manager,
+        &[Command::CommandDIV, Command::Command0, Command::CommandEQU],
+    );
+    let (text, is_error) = m_calculator_manager.engine_primary_display().unwrap();
+    assert!(is_error);
+    assert_eq!(text, p_calculator_display.borrow().get_primary_display());
+}
+
+/// Extension: `add_entry_as_percent_result` leaves a typed number as `%`
+/// leaves its result, in the expression and not being typed, so a restored
+/// session continues as the saved one would.
+#[test]
+fn a_typed_number_can_be_added_as_a_percent_result() {
+    use Command as C;
+    let run = |keys: &[Command], add: bool, more: &[Command]| {
+        let (display, mut manager) = common_setup();
+        manager.set_standard_mode().unwrap();
+        execute_commands(&mut manager, keys);
+        if add {
+            manager.add_entry_as_percent_result().unwrap();
+        }
+        let entry = manager.continuation().entry;
+        let commands = format!("{:?}", manager.get_display_commands_snapshot());
+        execute_commands(&mut manager, more);
+        let shown = (
+            display.borrow().get_primary_display().to_string(),
+            display.borrow().get_expression().to_string(),
+        );
+        (entry, commands, shown)
+    };
+    let percent = [C::Command2, C::CommandADD, C::Command3, C::CommandPERCENT];
+    let typed = [
+        C::Command2,
+        C::CommandADD,
+        C::Command0,
+        C::CommandPNT,
+        C::Command0,
+        C::Command6,
+    ];
+    for more in [
+        &[C::Command7, C::CommandEQU][..],
+        &[C::CommandSIGN, C::CommandEQU],
+        &[C::CommandOPENP, C::Command2, C::CommandEQU],
+    ] {
+        let saved = run(&percent, false, more);
+        assert_eq!(saved.0, Some(Entry::Percent));
+        assert_eq!(run(&typed, true, more), saved, "{more:?}");
+    }
+    assert_eq!(run(&percent, false, &[C::Command7, C::CommandEQU]).2.0, "9");
+}

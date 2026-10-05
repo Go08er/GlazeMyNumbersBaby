@@ -89,6 +89,30 @@ pub struct Continuation {
     pub shown: Option<ShownValue>,
     /// After `=`: the operator and right operand another `=` repeats.
     pub repeat: Option<(i32, OpndCommand)>,
+    /// How the number being entered stands, where replaying those commands
+    /// wouldn't leave it so.
+    pub entry: Option<Entry>,
+}
+
+/// Extension: see [`Continuation::entry`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Entry {
+    /// Nothing typed since C, CE or the start: the commands' last operand is
+    /// the empty input's 0, which replayed would be a typed digit (that `(`
+    /// then multiplies).
+    Empty,
+    /// No number is being entered and the commands have nothing that ends
+    /// one: the empty input was ended by a radix, word size or angle
+    /// switch, MS, M+ or M− (± then negates 0 rather than typing a sign).
+    Ended,
+    /// The commands' last operand is a `%` result, added to the expression
+    /// rather than typed: the next digit starts a new number (see
+    /// [`CalcEngine::add_entry_as_percent_result`]).
+    Percent,
+    /// The number being typed had its sign changed last; the commands'
+    /// operand carries the sign after its first digit, where `(` would
+    /// multiply it.
+    Signed,
 }
 
 /// Extension: where a shown value (see [`Continuation::shown`]) came from.
@@ -464,7 +488,53 @@ impl CalcEngine {
         } else {
             None
         };
-        Continuation { shown, repeat }
+        let opnd_added = self.history_collector.f_opnd_added_to_history();
+        let last = self.history_collector.last_command();
+        let entry = if self.b_record {
+            if opnd_added {
+                None
+            } else if self.is_input_empty() && !is_digit_op_code(self.n_temp_com) {
+                // The empty input's 0 (a leading 0 typed isn't kept either,
+                // but leaves a digit as the last command).
+                Some(Entry::Empty)
+            } else {
+                (self.n_temp_com == IDC_SIGN).then_some(Entry::Signed)
+            }
+        } else if shown.is_some() {
+            None
+        } else if last.is_none() {
+            Some(Entry::Ended)
+        } else {
+            (opnd_added
+                && self.n_temp_com == IDC_PERCENT
+                && matches!(last, Some(ExpressionCommand::Operand(_))))
+            .then_some(Entry::Percent)
+        };
+        Continuation {
+            shown,
+            repeat,
+            entry,
+        }
+    }
+
+    /// Extension: ends the number being typed and adds it to the expression
+    /// the way `%` adds its result (`ProcessCommandWorker`'s unary branch),
+    /// so a restored session whose display commands end with a `%` result
+    /// continues as it would have. Does nothing unless a number is being
+    /// typed.
+    pub fn add_entry_as_percent_result(&mut self) -> CalcResult<()> {
+        if !self.b_record || self.b_error {
+            return Ok(());
+        }
+        self.b_record = false;
+        self.current_val = self.input.to_rational(self.radix, self.precision)?;
+        self.display_num()?;
+        self.check_and_add_last_bin_op_to_history(true)?;
+        self.history_collector
+            .add_opnd_to_history(&self.number_string, &self.current_val, true);
+        self.n_last_com = self.n_temp_com;
+        self.n_temp_com = IDC_PERCENT;
+        Ok(())
     }
 
     /// Extension: see `CalculatorManager::set_history_suppressed`.

@@ -53,9 +53,13 @@
 //!   between them (f away from 0; f below or above both);
 //! * the shapes the panel writes, comparing no digits with anything: a
 //!   range written as one value ({c}) needs f the same at every sample,
-//!   within their rounding; two elements of a set (excluded points), or
-//!   the two bounds of an interval, that read alike are a contradiction
-//!   whatever the numbers behind them;
+//!   within their rounding; two elements of a set (excluded points or
+//!   families), or the two bounds of an interval (a monotone piece of
+//!   each period too), that read alike are a contradiction whatever the
+//!   numbers behind them; and across a row's pieces, two adjacent ones
+//!   sharing a closed end that reads alike, or ends that read alike about
+//!   a gap the panel's own numbers leave where f is undefined at a sample
+//!   inside it (a domain's, or the monotone pieces' about it);
 //! * an open range bound reached at a turn, to within f's tolerance;
 //! * horizontal and oblique asymptotes: |f − line| no smaller at all three
 //!   decades further out (the largest over nine points a decade: 10¹² and
@@ -2306,6 +2310,58 @@ fn set_elements(text: &str) -> Vec<Vec<&str>> {
     out
 }
 
+/// The members `x₀ + kP` of each `{… | k ∈ ℤ}` set of families in a
+/// panel text (a domain's excluded families).
+fn family_elements(text: &str) -> Vec<Vec<&str>> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find('{') {
+        let Some(j) = rest[i..].find('}') else { break };
+        if let Some((fams, _)) = rest[i + 1..i + j].split_once(" | ") {
+            out.push(fams.split(", ").collect());
+        }
+        rest = &rest[i + j + 1..];
+    }
+    out
+}
+
+/// One piece `(a, b]`, `[a, b)`, … (or a monotone piece of each period,
+/// `(a + kP, b + kP), k ∈ ℤ`): its ends' texts, each with whether it is
+/// closed.
+fn piece_ends(p: &str) -> Option<(&str, bool, &str, bool)> {
+    let p = p.strip_suffix(", k ∈ ℤ").unwrap_or(p);
+    let lo_closed = match p.chars().next()? {
+        '[' => true,
+        '(' => false,
+        _ => return None,
+    };
+    let hi_closed = match p.chars().last()? {
+        ']' => true,
+        ')' => false,
+        _ => return None,
+    };
+    let (a, b) = p[1..p.len() - 1].split_once(", ")?;
+    (!b.contains(", ")).then_some((a, lo_closed, b, hi_closed))
+}
+
+/// The pieces of a set written `var ∈ A ∪ B ∪ …`, in order (`{a}`: a,
+/// closed, as both ends); `None` for one written otherwise (ℝ, ℝ \ {…},
+/// excluded families, a set of single values).
+fn set_pieces(text: &str) -> Option<Vec<(&str, bool, &str, bool)>> {
+    let (_, body) = text.split_once(" ∈ ")?;
+    if body.contains('ℝ') || body.contains('|') || body.contains('\\') {
+        return None;
+    }
+    body.split(" ∪ ")
+        .map(
+            |p| match p.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+                Some(a) => (!a.contains(", ")).then_some((a, true, a, true)),
+                None => piece_ends(p),
+            },
+        )
+        .collect()
+}
+
 /// The two bounds of each interval `(a, b)`, `[a, b]`, … in a panel text
 /// (families aside).
 fn interval_bounds(text: &str) -> Vec<(&str, &str)> {
@@ -2332,7 +2388,9 @@ fn interval_bounds(text: &str) -> Vec<(&str, &str)> {
 /// made a real range a singleton, and two poles one): a range written as
 /// one value needs f to take one value at every sample, within its
 /// rounding; two excluded points, or the two bounds of an interval, that
-/// read alike are a contradiction whatever the numbers.
+/// read alike are a contradiction whatever the numbers; so are the ends
+/// of two adjacent pieces of a row that read alike where they can't be
+/// one number (review 13, R13-M-06).
 fn structure(cx: &mut Ctx<'_>, f: &F, k: &KeyGraphFeatures, xs: &[f64], vals: &[Val]) {
     // A one-value range: f the same everywhere it is defined.
     let singleton = set_elements(&k.range)
@@ -2360,9 +2418,10 @@ fn structure(cx: &mut Ctx<'_>, f: &F, k: &KeyGraphFeatures, xs: &[f64], vals: &[
             );
         }
     }
-    // Excluded points (any set's elements) that read alike.
+    // Excluded points (any set's elements), or excluded families, that
+    // read alike.
     for text in [&k.domain, &k.range] {
-        for set in set_elements(text) {
+        for set in set_elements(text).into_iter().chain(family_elements(text)) {
             if set.iter().enumerate().any(|(i, e)| set[..i].contains(e)) {
                 cx.fail(
                     "set-elements-alike",
@@ -2372,17 +2431,89 @@ fn structure(cx: &mut Ctx<'_>, f: &F, k: &KeyGraphFeatures, xs: &[f64], vals: &[
         }
     }
     // Interval bounds that read alike: a nonempty interval has two
-    // different ends (a single point is written {a}).
+    // different ends (a single point is written {a}); a monotone piece of
+    // each period too.
     let mono: Vec<&str> = k.monotonicity.iter().map(|(t, _)| t.as_str()).collect();
     for text in [k.domain.as_str(), k.range.as_str()]
         .into_iter()
-        .chain(mono)
+        .chain(mono.iter().copied())
     {
-        for (a, b) in interval_bounds(text) {
+        let periodic = piece_ends(text)
+            .filter(|_| text.ends_with("k ∈ ℤ"))
+            .map(|(a, _, b, _)| (a, b));
+        for (a, b) in interval_bounds(text).into_iter().chain(periodic) {
             if a == b {
                 cx.fail(
                     "interval-bounds-alike",
                     format!("{text}: ({a}, {b}) reads as one point"),
+                );
+            }
+        }
+    }
+    // The ends of adjacent pieces of a row that read alike (review 13,
+    // R13-M-06: `(−∞, ≈0.841471] ∪ [≈0.841471, ∞)` hid a gap 10⁻⁷ wide):
+    // two pieces can't share a closed end (they would be one piece), and
+    // where the panel's own numbers leave a gap between them, f undefined
+    // at a number inside it (a domain's gap, and the monotone pieces'
+    // about it) shows the two ends are different numbers written alike.
+    // Ends that may be one number may read alike (an excluded point
+    // between two pieces; two limits enclosed apart, csch x + 1's
+    // `(−∞, ≈1) ∪ (≈1, ∞)`), and no digits are compared.
+    let bounds = |v: &[Interval]| -> Vec<(f64, f64)> {
+        v.iter().map(|i| (i.lo.value, i.hi.value)).collect()
+    };
+    let mono_data: Vec<Interval> = k.data.monotonicity.iter().map(|(i, _)| *i).collect();
+    let rows = [
+        (
+            k.domain.as_str(),
+            set_pieces(&k.domain),
+            bounds(&k.data.domain),
+            true,
+        ),
+        (
+            k.range.as_str(),
+            set_pieces(&k.range),
+            bounds(&k.data.range),
+            false,
+        ),
+        (
+            "monotonicity",
+            mono.iter().map(|t| piece_ends(t)).collect(),
+            bounds(&mono_data),
+            true,
+        ),
+    ];
+    for (text, pieces, vals, x_row) in rows {
+        let Some(pieces) = pieces.filter(|p| p.len() == vals.len()) else {
+            continue;
+        };
+        for i in 1..pieces.len() {
+            let (_, _, b, b_closed) = pieces[i - 1];
+            let (c, c_closed, _, _) = pieces[i];
+            if b != c || b.contains('∞') {
+                continue;
+            }
+            if b_closed && c_closed {
+                cx.fail(
+                    "row-ends-alike",
+                    format!("{text}: two pieces share the closed end {b}"),
+                );
+                continue;
+            }
+            let (lo, hi) = (vals[i - 1].1, vals[i].0);
+            if !(x_row && lo < hi && lo.is_finite() && hi.is_finite()) {
+                continue;
+            }
+            if let Some(t) = (1..8)
+                .map(|j| lo + (hi - lo) * j as f64 / 8.0)
+                .find(|&t| lo < t && t < hi && f.at(t).k == K::Undef)
+            {
+                cx.fail_at(
+                    "row-ends-alike",
+                    t,
+                    format!(
+                        "{text}: the ends {lo:e} and {hi:e} of a gap (f undefined at {t:e}) both read {b}"
+                    ),
                 );
             }
         }
@@ -2670,6 +2801,16 @@ fn adversarial() -> Vec<String> {
         "ln(-exp(-(x+800)))+1",
         "(-exp(-(x+800)))^(1/2)+2",
         "x^2*exp(-1000)*exp(1000)",
+        // Review 13: a gap between pieces 10⁻⁷ wide (R13-M-06); an
+        // exponent and a degree nowhere defined, enclosed by whole numbers
+        // (R13-M-02); whole counts past 60, r > n (R13-M-03).
+        "sqrt((x-sin(1))*(x-sin(1)-0.0000001))",
+        "ln((x-sin(1))*(x-sin(1)-0.0000001))",
+        "x^floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30)))",
+        "root(x,1+floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30))))",
+        "nCr(61,62)",
+        "nPr(61,62)",
+        "abs(nCr(61,62))+1",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -2847,6 +2988,30 @@ fn selftest() -> bool {
             Box::new(|k| {
                 if let Some(m) = k.monotonicity.get_mut(1) {
                     m.0 = "(≈1.5, ≈1.5)".into();
+                }
+            }),
+        ),
+        // Review 13, R13-M-06: the two ends of a gap between pieces
+        // written alike, as they were (only the text lies): closed, they
+        // say two pieces share a point; open, f is undefined between the
+        // numbers behind them.
+        (
+            "sqrt((x-sin(1))*(x-sin(1)-0.0000001))",
+            "row-ends-alike",
+            Box::new(|k| k.domain = "x ∈ (−∞, ≈0.841471] ∪ [≈0.841471, ∞)".into()),
+        ),
+        (
+            "ln((x-sin(1))*(x-sin(1)-0.0000001))",
+            "row-ends-alike",
+            Box::new(|k| k.domain = "x ∈ (−∞, ≈0.841471) ∪ (≈0.841471, ∞)".into()),
+        ),
+        (
+            "sqrt((x-sin(1))*(x-sin(1)-0.0000001))",
+            "row-ends-alike",
+            Box::new(|k| {
+                if let [a, b] = k.monotonicity.as_mut_slice() {
+                    a.0 = "(−∞, ≈0.841471)".into();
+                    b.0 = "(≈0.841471, ∞)".into();
                 }
             }),
         ),

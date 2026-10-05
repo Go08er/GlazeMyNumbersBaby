@@ -444,6 +444,22 @@ fn mp_pow(b: &Float, e: &Float) -> Option<Float> {
     defined(Float::with_val(p(), b.clone().pow(e)))
 }
 
+/// root(x, n) for a degree n ≠ 0 of any size: an odd integer takes a
+/// negative x (sign(x)·|x|^(1/n)), anything else needs x ≥ 0 (x > 0 for
+/// n < 0).
+fn mp_root(x: &Float, n: &Float, prec: u32) -> Option<Float> {
+    if n.is_zero() {
+        return None;
+    }
+    let e = Float::with_val(prec, n.clone().recip());
+    let odd = n.to_integer().is_some_and(|k| n.is_integer() && k.is_odd());
+    if odd && *x < 0 {
+        let m = mp_pow(&Float::with_val(prec, x.clone().abs()), &e)?;
+        return Some(-m);
+    }
+    mp_pow(x, &e)
+}
+
 fn mp_mod(a: &Float, b: &Float) -> Option<Float> {
     if b.is_zero() {
         return None;
@@ -1171,51 +1187,97 @@ fn counting_functions_are_exact() {
     let rs = [
         0.0, 1.0, 2.0, 3.0, 5.0, 10.0, 50.0, 100.0, 500.0, 510.0, 515.0, 999.0,
     ];
-    let mut pairs: Vec<(f64, f64, bool)> = Vec::new();
-    for n in 0..=60 {
-        for r in -1..=61 {
-            pairs.push((n as f64, r as f64, true));
+    let mut pairs: Vec<(f64, f64)> = Vec::new();
+    for n in 0..=130 {
+        for r in -1..=(n + 2).max(62) {
+            pairs.push((n as f64, r as f64));
         }
     }
     for &n in &ns {
         for &r in &rs {
-            pairs.push((n, r, false));
+            pairs.push((n, r));
         }
+        // Next to n, and past it (a count of 0, review 13: nCr(61, 62) was
+        // Γ(0) to the interval core, and empty).
+        for d in [-2.0, -1.0, 0.0, 1.0, 2.0, 1e3] {
+            if n + d >= 0.0 {
+                pairs.push((n, n + d));
+            }
+        }
+        pairs.push((n, -1.0));
+        pairs.push((n, -1e300));
+        pairs.push((n, 1e300));
     }
-    for (n, r, small) in pairs {
+    for (n, r) in pairs {
         let ni = Integer::from_f64(n).expect("whole");
         let ri = Integer::from_f64(r).expect("whole");
         for perm in [false, true] {
+            // The exact count, or None past the doubles (more than 1100
+            // bits: the evaluator says +∞ there).
             let exact = if ri < 0 || ri > ni {
-                Integer::new()
+                Some(Integer::new())
             } else if perm {
-                // n!/(n − r)! as a product of r factors (r ≤ 999), stopped
-                // once beyond the doubles.
+                // n!/(n − r)! as a product of r factors, stopped once
+                // beyond the doubles.
                 let mut p = Integer::from(1);
-                let k = ri.to_u32().expect("small r");
-                for i in 0..k {
-                    p *= Integer::from(&ni - i);
-                    if p.significant_bits() > 1100 {
-                        break;
-                    }
+                let mut i = Integer::new();
+                while i < ri && p.significant_bits() <= 1100 {
+                    p *= Integer::from(&ni - &i);
+                    i += 1;
                 }
-                p
+                (p.significant_bits() <= 1100).then_some(p)
             } else {
-                let k = ri.to_u32().expect("small r");
-                Integer::from(ni.binomial_ref(k))
+                // C(n, k) = C(n, n − k) ≥ 2^k for the smaller k: past the
+                // doubles once k is over 1100.
+                let k = Integer::from(&ni - &ri).min(ri.clone());
+                k.to_u32()
+                    .filter(|&k| k <= 1100 || ni.significant_bits() <= 12)
+                    .map(|k| Integer::from(ni.binomial_ref(k)))
+                    .filter(|c| c.significant_bits() <= 1100)
             };
-            // Beyond the doubles the evaluator says +∞; keep the work small.
-            if exact.significant_bits() > 1100 {
-                let value = if perm { npr(n, r) } else { ncr(n, r) };
-                if value != f64::INFINITY {
-                    t.fail(format!("C/P({n}, {r}) = {value:e}, not +∞"));
-                }
-                continue;
-            }
             let name = format!("{}({n}, {r})", if perm { "nPr" } else { "nCr" });
             let value = if perm { npr(n, r) } else { ncr(n, r) };
-            let iv = small.then(|| elem::ncr_npr(&pt(n), &pt(r), perm));
-            check_count(&mut t, &name, &exact, value, iv);
+            let iv = elem::ncr_npr(&pt(n), &pt(r), perm);
+            let Some(exact) = exact else {
+                if value != f64::INFINITY {
+                    t.fail(format!("{name} = {value:e}, not +∞"));
+                }
+                t.cases += 1;
+                if iv.dec < Dec::Def || iv.lo() != f64::MAX || iv.hi() != f64::INFINITY {
+                    t.fail(format!("{name} past the doubles enclosed as {iv:?}"));
+                }
+                continue;
+            };
+            check_count(&mut t, &name, &exact, value, Some(iv));
+        }
+    }
+    // Arguments that aren't whole numbers ≥ 0 go through Γ: the enclosure
+    // is empty only where the evaluator is undefined too (Γ at a pole).
+    let vals = [
+        -3.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 61.0, 61.5, 62.0, 62.5, 100.25,
+    ];
+    for &n in &vals {
+        for &r in &vals {
+            for perm in [false, true] {
+                let value = if perm { npr(n, r) } else { ncr(n, r) };
+                let iv = elem::ncr_npr(&pt(n), &pt(r), perm);
+                t.cases += 1;
+                if iv.is_empty() && !value.is_nan() {
+                    t.fail(format!(
+                        "{}({n}, {r}) = {value:e}, but enclosed as empty",
+                        if perm { "nPr" } else { "nCr" }
+                    ));
+                }
+                if value.is_finite() && !iv.is_empty() && !(iv.lo() <= value && value <= iv.hi()) {
+                    let w = (value.abs() * 1e-12).max(1e-300);
+                    if !(iv.lo() - w <= value && value <= iv.hi() + w) {
+                        t.fail(format!(
+                            "{}({n}, {r}) = {value:e} outside {iv:?}",
+                            if perm { "nPr" } else { "nCr" }
+                        ));
+                    }
+                }
+            }
         }
     }
     report(&t);
@@ -1334,7 +1396,7 @@ fn mp_eval(e: &Expr, x: &Float, unit: TrigUnit, prec: u32) -> Option<Float> {
                             mp_powrat(&a0, -1, -k)
                         };
                     }
-                    return mp_pow(&a0, &Float::with_val(prec, n.recip()));
+                    return mp_root(&a0, &n, prec);
                 }
                 Func::Min | Func::Max => {
                     let mut acc = a0;
@@ -1399,6 +1461,26 @@ fn taylor_cases() -> Vec<(&'static str, TrigUnit)> {
         // integer power, and 1.0000000000000001 − cos x never 0.
         ("x^1.0000000000000001", Radians),
         ("2/(1.0000000000000001-cos(x))", Radians),
+        // A degree odd as typed, though both doubles about it are even
+        // (review 13, R13-M-04), and ones that aren't odd as typed.
+        ("root(x,9007199254740993)", Radians),
+        ("root(x,-9007199254740993)", Radians),
+        (
+            "root(x,18014398509481986)+root(x,3.0000000000000001)",
+            Radians,
+        ),
+        // Nowhere defined (√ of −10⁻³⁰), though the exponent's or the
+        // degree's enclosure is a whole number: possibly undefined, not
+        // an integer power's or root's value alone (review 13, R13-M-02).
+        ("x^floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30)))", Radians),
+        (
+            "root(x,1+floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30))))",
+            Radians,
+        ),
+        (
+            "2+0*root(x,2+floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30))))",
+            Radians,
+        ),
     ]
 }
 
@@ -1653,4 +1735,97 @@ fn min_max_keep_the_loser_undefined() {
     let s = series("min(x,x+1+abs(x-3))", Interval::new(2.5, 3.4));
     assert!(s[0].dec >= Dec::Dac && derivs_valid(&s, 1), "{s:?}");
     assert_eq!(s[1].iv, Interval::point(1.0));
+}
+
+/// root(x, n) where n is beyond 2⁵³, every double there even (review 13,
+/// R13-M-04): a box of degrees holds the odd integers between its doubles,
+/// so a negative x is possibly defined there, never proven undefined; a
+/// point degree is that even double; and a degree typed as an odd integer
+/// is odd, whatever doubles enclose it.
+#[test]
+fn large_root_degrees_keep_their_odd_integers() {
+    init();
+    const BIG: f64 = 9007199254740992.0;
+    let pt = DecInterval::point;
+    let truth = |x: f64, n: &rug::Integer| -> Float {
+        // (10³⁰⁰ + 1 needs about a thousand bits.)
+        let n = Float::with_val(2048, n);
+        mp_root(&mp(x), &n, P).expect("an odd degree")
+    };
+    let big = |s: &str| s.parse::<rug::Integer>().unwrap();
+    // Boxes, each with an odd integer inside.
+    for (lo, hi, odd) in [
+        (BIG, BIG + 2.0, big("9007199254740993")),
+        (BIG - 1.0, BIG, big("9007199254740991")),
+        (BIG - 2.0, BIG, big("9007199254740991")),
+        (-BIG - 2.0, -BIG, big("-9007199254740993")),
+        (2.0 * BIG, 2.0 * BIG + 4.0, big("18014398509481985")),
+        (
+            1e300,
+            1e300f64.next_up(),
+            rug::Integer::from_f64(1e300).unwrap() + 1u32,
+        ),
+    ] {
+        for x in [-8.0, -0.5, -1e-300] {
+            let r = elem::root(&pt(x), &DecInterval::new(Interval::new(lo, hi)));
+            let v = truth(x, &odd);
+            assert!(
+                !r.is_empty() && inside(&v, r.iv),
+                "root({x}, [{lo}, {hi}]) = {r:?} misses {} at the odd {odd}",
+                v.to_f64()
+            );
+            // Possibly defined only: the box's other numbers aren't odd.
+            assert!(r.dec <= Dec::Trv, "root({x}, [{lo}, {hi}]): {r:?}");
+        }
+    }
+    let r = elem::root(&pt(-8.0), &DecInterval::new(Interval::new(-INF, -BIG)));
+    assert!(!r.is_empty() && r.dec <= Dec::Trv, "{r:?}");
+    // A point degree is that double: even beyond 2⁵³, odd below it.
+    assert!(elem::root(&pt(-8.0), &pt(BIG)).is_empty());
+    assert!(elem::root(&pt(-8.0), &pt(2.0 * BIG + 4.0)).is_empty());
+    let r = elem::root(&pt(-8.0), &pt(BIG - 1.0));
+    assert!(r.dec == Dec::Com && inside(&truth(-8.0, &big("9007199254740991")), r.iv));
+    let r = elem::root(&pt(-8.0), &pt(1000001.0));
+    assert!(r.dec == Dec::Com && inside(&truth(-8.0, &big("1000001")), r.iv));
+    // Degrees as typed, through the Taylor evaluator.
+    let at = |src: &str, x: f64| {
+        let text = format!("y={src}");
+        let eq = Equation::parse(&text).unwrap();
+        let (_, ast) = eq.explicit().unwrap();
+        let lits = Literals::of(&text, ParseOptions::default()).unwrap();
+        let ctx = Ctx::new(CompileOptions::default(), &lits);
+        taylor(ast, Interval::point(x), 3, &ctx)
+    };
+    for (src, n) in [
+        ("root(x,9007199254740993)", "9007199254740993"),
+        ("root(x,-9007199254740993)", "-9007199254740993"),
+        ("root(x,18014398509481987)", "18014398509481987"),
+        ("root(x,1000001)", "1000001"),
+    ] {
+        for x in [-8.0, -1.5, -1e-300, 2.0] {
+            let s = at(src, x);
+            let v = truth(x, &big(n));
+            assert!(
+                s[0].dec == Dec::Com && inside(&v, s[0].iv),
+                "{src} at {x}: {:?} misses {}",
+                s[0],
+                v.to_f64()
+            );
+        }
+    }
+    let s = at("root(-8,9007199254740993)", 0.0);
+    let v = truth(-8.0, &big("9007199254740993"));
+    assert!(s[0].dec == Dec::Com && inside(&v, s[0].iv), "{:?}", s[0]);
+    // Even, or no integer, as typed: a negative x is undefined.
+    for src in [
+        "root(x,9007199254740994)",
+        "root(x,18014398509481986)",
+        "root(x,3.0000000000000001)",
+        "root(x,-18014398509481986)",
+    ] {
+        let s = at(src, -8.0);
+        assert!(s[0].is_empty(), "{src} at −8: {:?}", s[0]);
+        let s = at(src, 8.0);
+        assert!(s[0].dec == Dec::Com, "{src} at 8: {:?}", s[0]);
+    }
 }

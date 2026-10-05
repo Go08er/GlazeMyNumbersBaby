@@ -453,8 +453,8 @@ fn errored_scientific_engine_angle_mode_is_reset() {
 
 fn observed(vm: &CalculatorViewModel) -> String {
     format!(
-        "{:?} display {:?} expression {:?} error {} parens {} {:?} fe {} {:?} {:?} {:?}\n\
-         memory {:?}\nhistory {:?}",
+        "{:?} display {:?} expression {:?} error {} parens {} {:?} fe {} (enabled {}) \
+         {:?} {:?} {:?}\nmemory {:?}\nhistory {:?}",
         vm.mode(),
         vm.display_value(),
         vm.expression(),
@@ -462,6 +462,7 @@ fn observed(vm: &CalculatorViewModel) -> String {
         vm.open_parens(),
         vm.angle_unit(),
         vm.is_fe(),
+        vm.is_enabled(Button::FToE),
         vm.radix(),
         vm.word_size(),
         vm.shift_mode(),
@@ -474,6 +475,40 @@ fn press_all(vm: &mut CalculatorViewModel, buttons: &[Button]) {
     for b in buttons {
         vm.press(*b);
     }
+}
+
+/// What a user does, for the saved-state tests: a key, or something in the
+/// History or Memory panel, a paste, or coming back to the calculator from
+/// another page (GMNB sets the mode again, unchanged).
+#[derive(Clone, Copy, Debug)]
+enum Act {
+    Key(Button),
+    /// Select History item `i` (0 = the newest).
+    Recall(usize),
+    ClearHistory,
+    /// Click memory slot `i` (0 = the newest).
+    MemoryItem(usize),
+    Paste(&'static str),
+    Reactivate,
+}
+
+fn act_all(vm: &mut CalculatorViewModel, acts: &[Act]) {
+    for a in acts {
+        match *a {
+            Act::Key(b) => vm.press(b),
+            Act::Recall(i) => vm.history_recall(i),
+            Act::ClearHistory => vm.history_clear(),
+            Act::MemoryItem(i) => vm.memory_recall(i),
+            Act::Paste(text) => {
+                vm.paste(text);
+            }
+            Act::Reactivate => vm.set_mode(vm.mode()),
+        }
+    }
+}
+
+fn keys(buttons: &[Button]) -> Vec<Act> {
+    buttons.iter().map(|&b| Act::Key(b)).collect()
 }
 
 fn snapshot_json(mode: i64, display_commands: Value, x: Value) -> String {
@@ -495,13 +530,19 @@ fn operand(digits: &[i32]) -> Value {
 /// one is made (calculators on one thread share the engine's display
 /// cache), as in the app, which restores at startup.
 fn assert_restores_and_continues(mode: CalcMode, script: &[Button], more: &[&[Button]]) {
-    let run = |continuation: &[Button]| {
+    let more: Vec<Vec<Act>> = more.iter().map(|m| keys(m)).collect();
+    assert_acts_restore_and_continue(mode, &keys(script), &more);
+}
+
+/// [`assert_restores_and_continues`] for any [`Act`]s.
+fn assert_acts_restore_and_continue(mode: CalcMode, script: &[Act], more: &[Vec<Act>]) {
+    let run = |continuation: &[Act]| {
         let mut original = new_vm();
         original.set_mode(mode);
-        press_all(&mut original, script);
+        act_all(&mut original, script);
         let state = original.save_state();
         let before = observed(&original);
-        press_all(&mut original, continuation);
+        act_all(&mut original, continuation);
         (state, before, observed(&original))
     };
     let (state, before, _) = run(&[]);
@@ -513,13 +554,26 @@ fn assert_restores_and_continues(mode: CalcMode, script: &[Button], more: &[&[Bu
         let (_, _, after) = run(continuation);
         let mut restored = new_vm();
         restored.restore_state(&state);
-        press_all(&mut restored, continuation);
+        act_all(&mut restored, continuation);
         assert_eq!(
             observed(&restored),
             after,
             "{mode:?} {script:?} then {continuation:?}"
         );
     }
+}
+
+/// [`CONTINUATIONS`], then a memory slot clicked, a paste, a return from
+/// another page, F-E (disabled right after a History selection) and a
+/// History selection, each followed by "=".
+fn continuations_with_panels() -> Vec<Vec<Act>> {
+    use Act::*;
+    use Button::*;
+    let mut more: Vec<Vec<Act>> = CONTINUATIONS.iter().map(|c| keys(c)).collect();
+    for a in [MemoryItem(0), Paste("12"), Reactivate, Key(FToE), Recall(0)] {
+        more.push(vec![a, Key(Equals)]);
+    }
+    more
 }
 
 /// The continuations every saved state below is checked with: the next
@@ -732,6 +786,251 @@ fn restored_sessions_continue_as_the_original() {
     }
 }
 
+/// R13-M-05's case: a History selection shows the item's expression and
+/// result while the engine holds the item replayed without "=", its last
+/// operand typed (`SelectHistoryItem`, `Recalculate(fromHistory: true)`).
+/// Restored, the expression reads as it did and "=" evaluates the item
+/// again (5), instead of adding the shown result to its first operand (7).
+#[test]
+fn a_restored_history_selection_continues_as_the_original() {
+    use Button::*;
+    for mode in [CalcMode::Standard, CalcMode::Scientific] {
+        let mut original = new_vm();
+        original.set_mode(mode);
+        press_all(&mut original, &[Two, Add, Three, Equals]);
+        original.history_recall(0);
+        let state = original.save_state();
+        let before = observed(&original);
+        original.press(Equals);
+        assert_eq!(original.display_value(), "5", "{mode:?}");
+        let expected = observed(&original);
+        drop(original);
+
+        let mut restored = new_vm();
+        restored.restore_state(&state);
+        assert_eq!(restored.display_value(), "5", "{mode:?}");
+        assert_eq!(restored.expression(), "2 + 3=", "{mode:?}");
+        assert!(!restored.is_enabled(FToE), "{mode:?}");
+        assert_eq!(observed(&restored), before, "{mode:?}");
+        restored.press(Equals);
+        assert_eq!(restored.display_value(), "5", "{mode:?}");
+        assert_eq!(restored.expression(), "2 + 3=", "{mode:?}");
+        assert_eq!(observed(&restored), expected, "{mode:?}");
+    }
+}
+
+/// R13-M-05: states saved right after selecting a History item, the newest
+/// or an older one, or after a key or panel action that leaves the display
+/// the item's (backspace, MS, M+, clearing the History, an angle unit,
+/// coming back from another page) or the expression line the item's (a
+/// digit, MR, a memory slot, a paste), restore as they were saved and
+/// continue as the original would. Memory holds 9, so MR differs from both
+/// the item's result and the operand the engine holds.
+#[test]
+fn history_selections_restore_as_they_were_saved() {
+    use Act::*;
+    use Button::*;
+    let calculations = keys(&[
+        Nine, Memory, Two, Add, Three, Equals, Four, Multiply, Five, Equals,
+    ]);
+    let more = continuations_with_panels();
+    for mode in [CalcMode::Standard, CalcMode::Scientific] {
+        let mut thens: Vec<Vec<Act>> = vec![
+            vec![],
+            vec![Key(Seven)],
+            vec![Key(Backspace)],
+            vec![Key(Memory)],
+            vec![Key(MemoryRecall)],
+            vec![Key(MemoryAdd)],
+            vec![MemoryItem(0)],
+            vec![Key(Sqrt)],
+            vec![ClearHistory],
+            vec![Reactivate],
+            vec![Paste("12")],
+        ];
+        if mode == CalcMode::Scientific {
+            thens.push(vec![Key(Radians)]);
+        }
+        for item in [0, 1] {
+            for then in &thens {
+                let mut script = calculations.clone();
+                script.push(Recall(item));
+                script.extend_from_slice(then);
+                assert_acts_restore_and_continue(mode, &script, &more);
+            }
+        }
+    }
+    // Precedence (the engine holds "2 + 3 ×" and 4), a function in the
+    // item, and F-E (the engine's operand shows as "4.e+0").
+    for script in [
+        &[Two, Add, Three, Multiply, Four, Equals][..],
+        &[Two, Add, Nine, Sqrt, Equals],
+        &[FToE, Two, Add, Three, Multiply, Four, Equals],
+    ] {
+        let mut script = keys(script);
+        script.push(Recall(0));
+        assert_acts_restore_and_continue(CalcMode::Scientific, &script, &more);
+    }
+}
+
+/// A sign change made to a number whose entry had ended (by MS, F-E, a
+/// History selection) or to a shown value (MR, a result) is an operation,
+/// "negate(3)", in the display commands. Replayed straight after the
+/// number's digits it changed the sign of the number being typed instead,
+/// so the next digit extended it ("-37") and the expression read "-3".
+#[test]
+fn sign_changes_of_finished_numbers_restore_as_operations() {
+    use Act::*;
+    use Button::*;
+    let more = continuations_with_panels();
+    for (mode, script) in [
+        (CalcMode::Standard, keys(&[Two, Add, Three, Memory, Negate])),
+        (
+            CalcMode::Standard,
+            keys(&[Nine, Memory, Clear, Two, Add, MemoryRecall, Negate]),
+        ),
+        (CalcMode::Standard, keys(&[Two, Add, Three, Equals, Negate])),
+        (CalcMode::Scientific, keys(&[One, Two, FToE, Negate])),
+        (
+            CalcMode::Programmer,
+            keys(&[Two, Add, Three, Memory, Negate, Negate]),
+        ),
+    ] {
+        assert_acts_restore_and_continue(mode, &script, &more);
+    }
+    for mode in [CalcMode::Standard, CalcMode::Scientific] {
+        let script = [
+            keys(&[Two, Add, Three, Equals]),
+            vec![Recall(0), Key(Negate)],
+        ]
+        .concat();
+        assert_acts_restore_and_continue(mode, &script, &more);
+    }
+}
+
+/// The number being entered, where the display commands misdescribe it.
+/// After C, CE or at the start nothing is typed, but the commands end with
+/// the empty input's 0, which replayed was a typed digit: "(" then
+/// multiplied it (C, then "( 2 =" gave 0 instead of 2). A radix switch (on
+/// every page activation), MS or M+ ends that empty input, so ± negates 0
+/// ("negate(0)"). And a `%` result is added to the expression, not typed:
+/// replayed as typed, the next digit extended it ("2 + 3 %" then "7 ="
+/// gave 2.067 instead of 9), and without a pending operator the next digit
+/// no longer added the result to the History as an equation of its own.
+#[test]
+fn entries_restore_as_they_were() {
+    use Button::*;
+    let more = continuations_with_panels();
+    for mode in [CalcMode::Standard, CalcMode::Scientific] {
+        for script in [
+            &[][..],
+            &[Clear],
+            &[Two, Clear],
+            &[Two, Add, ClearEntry],
+            &[Two, Add, Three, Equals, ClearEntry],
+            &[Clear, MemoryAdd],
+            &[Two, Add, Three, Percent],
+            &[Nine, Memory, Two, Add, MemoryRecall, Percent],
+            &[Two, XPower2, Percent],
+            &[Two, Add, Three, Percent, Memory],
+        ] {
+            assert_acts_restore_and_continue(mode, &keys(script), &more);
+        }
+    }
+    for script in [&[][..], &[Two, Add, ClearEntry], &[Five, Byte]] {
+        assert_acts_restore_and_continue(CalcMode::Programmer, &keys(script), &more);
+    }
+}
+
+/// A number whose sign was changed last ("5 9 ±") ends in ±, so "(" starts
+/// a new number rather than multiplying it. Its operand puts the sign after
+/// the first digit; replayed so, the last command was a digit, and after a
+/// restore "( 2 =" gave -118 ("-59 × (2)") instead of 2.
+#[test]
+fn numbers_whose_sign_was_changed_last_restore_so() {
+    use Button::*;
+    let more = continuations_with_panels();
+    for (mode, script) in [
+        (CalcMode::Standard, &[Five, Nine, Negate][..]),
+        (CalcMode::Standard, &[Two, Add, Five, Negate, Nine, Negate]),
+        (
+            CalcMode::Scientific,
+            &[Two, Multiply, One, Decimal, Five, Negate],
+        ),
+        (CalcMode::Programmer, &[Two, Add, Five, Nine, Negate]),
+    ] {
+        assert_acts_restore_and_continue(mode, &keys(script), &more);
+    }
+}
+
+/// While "=" can still be repeated, every key clears the expression line,
+/// and MS, M− or an angle switch don't show the engine's expression again:
+/// "5 + 3 =", √, MS shows an empty line over "√(8)". Restored, the line is
+/// empty as it was, rather than the replayed "√(8)".
+#[test]
+fn an_expression_line_cleared_after_equals_restores_empty() {
+    use Button::*;
+    let more = continuations_with_panels();
+    for (mode, script) in [
+        (
+            CalcMode::Standard,
+            &[Five, Add, Three, Equals, Sqrt, Memory][..],
+        ),
+        (
+            CalcMode::Standard,
+            &[Add, Equals, Memory, Sqrt, MemorySubtract],
+        ),
+        (
+            CalcMode::Scientific,
+            &[Five, Add, Three, Equals, Sqrt, Radians],
+        ),
+    ] {
+        assert_acts_restore_and_continue(mode, &keys(script), &more);
+    }
+}
+
+/// A paste error is the view model's only (`OnPaste`, `DisplayPasteError`):
+/// the engine's calculation goes on under it, and a memory slot, a paste
+/// or a page change (which shows the engine's value again) continue it.
+/// Restored, it is shown over the restored calculation instead of putting
+/// the engine in error, which made those clear it ("2 + 3", a bad paste,
+/// then memory slot 9 and "=" gave 0 instead of 11). An engine error is
+/// still restored as one.
+#[test]
+fn paste_errors_restore_over_the_calculation() {
+    use Act::*;
+    use Button::*;
+    let more = continuations_with_panels();
+    for (mode, script) in [
+        (CalcMode::Standard, keys(&[Nine, Memory, Two, Add, Three])),
+        (
+            CalcMode::Standard,
+            keys(&[Nine, Memory, Two, Add, Three, Equals]),
+        ),
+        (
+            CalcMode::Scientific,
+            keys(&[Nine, Memory, Two, Add, Three, Memory]),
+        ),
+        (
+            CalcMode::Scientific,
+            [
+                keys(&[Nine, Memory, Two, Add, Three, Equals]),
+                vec![Recall(0)],
+            ]
+            .concat(),
+        ),
+        (CalcMode::Programmer, keys(&[Nine, Memory, Two, Add, Three])),
+    ] {
+        let script = [script, vec![Paste("zz")]].concat();
+        assert_acts_restore_and_continue(mode, &script, &more);
+    }
+    assert_acts_restore_and_continue(
+        CalcMode::Standard,
+        &keys(&[Nine, Memory, One, Divide, Zero, Equals]),
+        &more,
+    );
+}
+
 /// A snapshot from before "k" (or from upstream) has no record of what the
 /// display shows: a value the display commands don't produce is shown as a
 /// result, so the next digit replaces it, and an evaluated expression is
@@ -802,12 +1101,21 @@ fn a_malformed_repeated_operation_is_rejected() {
     vm.press(Button::Equals);
     assert_eq!(vm.display_value(), "10");
 
-    let mut vm = new_vm();
-    let mut state: Value = serde_json::from_str(&snapshot_json(0, json!([]), json!({}))).unwrap();
-    state["x"]["k"] = json!({ "dv": "typed?" });
-    press_all(&mut vm, &[Button::Four]);
-    vm.restore_state(&state.to_string());
-    assert_eq!(vm.display_value(), "4");
+    for k in [
+        json!({ "dv": "typed?" }),
+        json!({ "in": "typing" }),
+        json!({ "ev": 4 }),
+        json!({ "ev": "1".repeat(513) }),
+        json!({ "hl": "yes" }),
+    ] {
+        let mut vm = new_vm();
+        let mut state: Value =
+            serde_json::from_str(&snapshot_json(0, json!([]), json!({}))).unwrap();
+        state["x"]["k"] = k.clone();
+        press_all(&mut vm, &[Button::Four]);
+        vm.restore_state(&state.to_string());
+        assert_eq!(vm.display_value(), "4", "{k}");
+    }
 }
 
 /// A long calculation built from pastes (40 × a 100-term sum, about 12,000

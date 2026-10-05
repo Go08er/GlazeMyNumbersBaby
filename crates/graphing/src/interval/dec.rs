@@ -184,7 +184,10 @@ impl DecInterval {
     }
 
     /// Intersection of two enclosures of the same quantity (keeps the
-    /// better facts of both).
+    /// better facts of both). Both must be sound, decoration included: one
+    /// computed from some of an operation's operands alone, that says
+    /// "defined" without the others, makes the result say so too (the
+    /// Taylor evaluator's fast paths: `taylor::with_operand`).
     pub fn refine(&self, o: &DecInterval) -> DecInterval {
         let iv = self.iv.intersect(o.iv);
         let mut r = *self;
