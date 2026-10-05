@@ -6,6 +6,7 @@ use adw::prelude::*;
 
 use std::cell::{Cell, RefCell};
 
+use crate::pages::Ctx;
 use crate::settings::Persist;
 use crate::theme::{PaletteId, Scheme, complement, rgba, to_hex};
 use crate::window::{Window, apply_backdrop, apply_theme_setting};
@@ -324,26 +325,14 @@ pub fn show(win: &Rc<Window>) {
         opacity.add_suffix(&shown);
         {
             let (ctx, win, shown) = (ctx.clone(), win.widget(), shown.clone());
-            // Saved once the slider rests, not on every step of a drag.
-            let pending: Rc<RefCell<Option<gtk::glib::SourceId>>> = Rc::default();
+            let pending = Rc::default();
             scale.connect_value_changed(move |s| {
                 let v = s.value();
                 shown.set_text(&percent(v));
                 s.update_property(&[gtk::accessible::Property::ValueText(&percent(v))]);
                 apply_backdrop(&win, &ctx.aurora, crate::settings::backdrop_alpha(v));
                 ctx.store.data.borrow_mut().background_opacity = v;
-                if let Some(id) = pending.borrow_mut().take() {
-                    id.remove();
-                }
-                let (ctx, pending2) = (ctx.clone(), pending.clone());
-                let id = gtk::glib::timeout_add_local_once(
-                    std::time::Duration::from_millis(400),
-                    move || {
-                        pending2.borrow_mut().take();
-                        ctx.store.persist();
-                    },
-                );
-                *pending.borrow_mut() = Some(id);
+                persist_at_rest(&ctx, &pending);
             });
         }
         group.add(&opacity);
@@ -366,6 +355,8 @@ pub fn show(win: &Rc<Window>) {
         }
         group.add(&vulkan);
         page.add(&group);
+
+        page.add(&graphing_group(&ctx));
     }
 
     // About.
@@ -383,6 +374,105 @@ pub fn show(win: &Rc<Window>) {
 
     dialog.add(&page);
     dialog.present(Some(&win.widget()));
+}
+
+/// Saves `ctx`'s settings once a slider has rested for a moment, not on
+/// every step of a drag.
+fn persist_at_rest(ctx: &Rc<Ctx>, pending: &Rc<RefCell<Option<gtk::glib::SourceId>>>) {
+    if let Some(id) = pending.borrow_mut().take() {
+        id.remove();
+    }
+    let (ctx, pending2) = (ctx.clone(), pending.clone());
+    let id = gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(400), move || {
+        pending2.borrow_mut().take();
+        ctx.store.persist();
+    });
+    *pending.borrow_mut() = Some(id);
+}
+
+/// Graphing: "Number precision", a slider from 5 to 20 significant digits
+/// and then Off, with the calculators that round so labelled. Moving it
+/// re-plots and re-analyses at once (the graphing page follows
+/// `Ctx::precision`).
+fn graphing_group(ctx: &Rc<Ctx>) -> adw::PreferencesGroup {
+    use appcore::graph::{NUMBER_PRECISION_HELP, NumberPrecision as P};
+    let group = adw::PreferencesGroup::builder().title("Graphing").build();
+    let now = ctx.precision.get();
+    let title = adw::ActionRow::builder()
+        .title("Number precision")
+        .subtitle(NUMBER_PRECISION_HELP)
+        .activatable(false)
+        .build();
+    let (first, last) = (*P::POSITIONS.start(), *P::POSITIONS.end());
+    let scale = gtk::Scale::with_range(
+        gtk::Orientation::Horizontal,
+        f64::from(first),
+        f64::from(last),
+        1.0,
+    );
+    scale.set_round_digits(0);
+    scale.set_draw_value(false);
+    scale.set_hexpand(true);
+    scale.set_value(f64::from(now.position()));
+    // Labels alternate above and below: 14 and 15, 20 and Off, are
+    // neighbours.
+    let mut marks: Vec<(u8, &str, gtk::PositionType)> = P::NOTCHES
+        .iter()
+        .zip([
+            gtk::PositionType::Bottom,
+            gtk::PositionType::Top,
+            gtk::PositionType::Bottom,
+            gtk::PositionType::Top,
+        ])
+        .map(|(&(digits, short, _), side)| (digits, short, side))
+        .collect();
+    marks.push((first, "5", gtk::PositionType::Bottom));
+    marks.push((P::MAX, "20", gtk::PositionType::Top));
+    marks.push((last, "Off", gtk::PositionType::Bottom));
+    for (position, label, side) in marks {
+        let label = gtk::glib::markup_escape_text(label);
+        scale.add_mark(f64::from(position), side, Some(&label));
+    }
+    let shown = gtk::Label::new(Some(&now.describe()));
+    shown.add_css_class("caption");
+    shown.add_css_class("numeric");
+    scale.update_property(&[
+        gtk::accessible::Property::Label("Number precision"),
+        gtk::accessible::Property::ValueText(&now.describe()),
+        gtk::accessible::Property::Description(NUMBER_PRECISION_HELP),
+    ]);
+    {
+        let (ctx, shown) = (ctx.clone(), shown.clone());
+        let pending = Rc::default();
+        scale.connect_value_changed(move |s| {
+            let p = P::at_position(s.value());
+            shown.set_text(&p.describe());
+            s.update_property(&[gtk::accessible::Property::ValueText(&p.describe())]);
+            ctx.precision.set(p);
+            ctx.store.data.borrow_mut().literal_digits = p;
+            persist_at_rest(&ctx, &pending);
+        });
+    }
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    column.set_margin_top(6);
+    column.set_margin_bottom(10);
+    column.set_margin_start(12);
+    column.set_margin_end(12);
+    column.append(&scale);
+    column.append(&shown);
+    let slider = gtk::ListBoxRow::builder()
+        .child(&column)
+        .activatable(false)
+        .selectable(false)
+        .build();
+    let list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .build();
+    list.append(&title);
+    list.append(&slider);
+    group.add(&list);
+    group
 }
 
 pub fn about(parent: &adw::ApplicationWindow) {

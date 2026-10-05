@@ -162,6 +162,7 @@ impl Window {
             store: store.clone(),
             compact: Default::default(),
             layers: crate::inert::Layers::new(&win),
+            precision: crate::pages::Followed::new(settings.literal_digits),
         });
 
         // Header.

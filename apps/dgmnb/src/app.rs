@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use appcore::graph::NumberPrecision;
 use appcore::input::{self, WindowAction};
 use appcore::modes::{Group, PageKind, ViewMode};
 use appcore::settings::{HasPages, PageStates};
@@ -62,6 +63,9 @@ pub struct Settings {
     pub theme: String,
     /// Use the desktop's accent colour when it shares one.
     pub system_accent: bool,
+    /// Graphing: significant digits each typed number keeps ("Number
+    /// precision"); older files load the default, 14.
+    pub literal_digits: NumberPrecision,
     pub mode: String,
     pub width: i32,
     pub height: i32,
@@ -73,6 +77,7 @@ impl Default for Settings {
         Settings {
             theme: "system".into(),
             system_accent: true,
+            literal_digits: NumberPrecision::DEFAULT,
             mode: "standard".into(),
             width: 360,
             height: 600,
@@ -465,7 +470,12 @@ impl App {
                     None => appcore::graph::restore(store.page_state("graphing")),
                 };
                 let proxy = self.proxy.clone();
-                self.graph.get_or_insert_with(|| GraphPage::new(eqs, proxy));
+                let precision = store.data.borrow().literal_digits;
+                self.graph.get_or_insert_with(|| {
+                    let mut page = GraphPage::new(eqs, proxy);
+                    page.set_number_precision(precision);
+                    page
+                });
             }
         }
         self.store.data.borrow_mut().mode = mode.key().into();
@@ -1061,6 +1071,13 @@ impl App {
     }
 
     fn page_drag(&mut self, id: ui::Id, x: f32, y: f32, dx: f32, dy: f32, active: bool) {
+        if self.settings && id == precision_slider() {
+            let full = self.hits.iter().find(|h| h.id == id).map(|h| h.full);
+            if active && let Some(r) = full {
+                self.set_precision(precision_at(r, x));
+            }
+            return;
+        }
         let rect = self.hits.iter().find(|h| h.id == id).map(|h| h.rect);
         let Some(rect) = rect else { return };
         let (mut cx, _, _, _, graph) = self.cx_parts();
@@ -1335,6 +1352,18 @@ impl App {
             }
             _ => {}
         }
+        // The number precision slider in Settings takes the arrow, page
+        // and Home/End keys.
+        let precision = self.store.data.borrow().literal_digits;
+        if self.settings
+            && focus == Some(precision_slider())
+            && let Key::Named(n) = kp.key
+            && let Some(p) = precision_key(precision, n)
+        {
+            self.set_precision(p);
+            self.redraw();
+            return;
+        }
         // A focused slider or graph canvas takes the arrow, page and
         // Home/End keys (trace, step) before anything scrolls.
         if self.mode.page() == PageKind::Graphing
@@ -1493,14 +1522,44 @@ impl App {
         }
     }
 
-    /// An assistive-technology request on a graph variable's slider. False
-    /// if `target` isn't one (or the request doesn't apply).
+    /// Settings' number precision: saved, and the graph re-plotted and
+    /// re-analysed at once.
+    fn set_precision(&mut self, p: NumberPrecision) {
+        if self.store.data.borrow().literal_digits == p {
+            return;
+        }
+        self.store.data.borrow_mut().literal_digits = p;
+        persist(&self.store);
+        if let Some(g) = self.graph.as_mut() {
+            g.set_number_precision(p);
+        }
+        self.redraw();
+    }
+
+    /// An assistive-technology request on a graph variable's slider (or
+    /// Settings' number precision slider). False if `target` isn't one (or
+    /// the request doesn't apply).
     fn adjust_slider(
         &mut self,
         target: ui::Id,
         action: accesskit::Action,
         data: &Option<accesskit::ActionData>,
     ) -> bool {
+        if self.settings && target == precision_slider() {
+            let now = self.store.data.borrow().literal_digits;
+            let p = match (action, data) {
+                (accesskit::Action::Increment, _) => precision_key(now, Named::Right),
+                (accesskit::Action::Decrement, _) => precision_key(now, Named::Left),
+                (_, Some(accesskit::ActionData::NumericValue(v))) => {
+                    Some(NumberPrecision::at_position(*v))
+                }
+                _ => None,
+            };
+            if let Some(p) = p {
+                self.set_precision(p);
+            }
+            return p.is_some();
+        }
         let change = match (action, data) {
             (accesskit::Action::Increment, _) => graph::Adjust::Steps(1.0),
             (accesskit::Action::Decrement, _) => graph::Adjust::Steps(-1.0),
@@ -2321,6 +2380,9 @@ pub(crate) fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: De
     }
     y += card.h + 20.0;
 
+    heading(f, &mut y, "Graphing");
+    y += draw_precision(f, Rect::new(x, y, col_w, 0.0), s.literal_digits) + 20.0;
+
     heading(f, &mut y, "About");
     const ABOUT: &str = "The lean twin of GMNB: the Windows Calculator engine ported to Rust, drawn in software with nothing running while it waits. Not affiliated with or endorsed by Microsoft.";
     const SITE: &str = "https://github.com/Go08er/GlazeMyNumbersBaby";
@@ -2382,6 +2444,134 @@ pub(crate) fn draw_settings(f: &mut Frame, body: Rect, s: &Settings, desktop: De
     }
     y += card.h + 16.0;
     f.scroll_end(sid, area, y + off - area.y);
+}
+
+/// Settings' number precision slider.
+pub(crate) fn precision_slider() -> ui::Id {
+    id("number-precision")
+}
+
+/// Short labels at the slider's notches: position, label, above the track.
+const PRECISION_MARKS: [(u8, &str, bool); 7] = [
+    (NumberPrecision::MIN, "5", false),
+    (10, "Casio", false),
+    (12, "HP", true),
+    (14, "TI-84", false),
+    (15, "double", true),
+    (NumberPrecision::MAX, "20", true),
+    (NumberPrecision::MAX + 1, "Off", false),
+];
+
+/// The slider's position as a fraction of its track.
+fn precision_fraction(position: f32) -> f32 {
+    let first = f32::from(*NumberPrecision::POSITIONS.start());
+    let last = f32::from(*NumberPrecision::POSITIONS.end());
+    (position - first) / (last - first)
+}
+
+/// The setting at pointer `x` on a slider drawn in `r` (`Frame::slider`
+/// insets its track by 8 px).
+pub(crate) fn precision_at(r: Rect, x: f32) -> NumberPrecision {
+    let first = f32::from(*NumberPrecision::POSITIONS.start());
+    let last = f32::from(*NumberPrecision::POSITIONS.end());
+    let frac = ((x - r.x - 8.0) / (r.w - 16.0).max(1.0)).clamp(0.0, 1.0);
+    NumberPrecision::at_position(f64::from(first + frac * (last - first)))
+}
+
+/// The setting a key moves `now` to: arrows by one, Page Up/Down by five,
+/// Home to the fewest digits, End to Off.
+pub(crate) fn precision_key(now: NumberPrecision, key: Named) -> Option<NumberPrecision> {
+    let p = f64::from(now.position());
+    let to = match key {
+        Named::Right | Named::Up => p + 1.0,
+        Named::Left | Named::Down => p - 1.0,
+        Named::PageUp => p + 5.0,
+        Named::PageDown => p - 5.0,
+        Named::Home => f64::from(*NumberPrecision::POSITIONS.start()),
+        Named::End => f64::from(*NumberPrecision::POSITIONS.end()),
+        _ => return None,
+    };
+    Some(NumberPrecision::at_position(to))
+}
+
+/// Settings' Graphing card at `r` (its height is returned): "Number
+/// precision", what it does, and a slider from 5 to 20 digits and then
+/// Off, its notches labelled, with the setting in words under it. The
+/// Linux adapter exports a slider's value as a number only (AccessKit's
+/// AT-SPI Value has no Text), so the words ("Off: exact as typed") are
+/// also the start of the slider's description, and the text under it is
+/// a polite live label, read out when it changes.
+fn draw_precision(f: &mut Frame, r: Rect, p: NumberPrecision) -> f32 {
+    use appcore::graph::NUMBER_PRECISION_HELP as HELP;
+    let t = f.t;
+    let inner_w = r.w - 28.0;
+    let line = (SMALL.size * 1.4).round();
+    let help_h = f.wrap(HELP, inner_w, SMALL).len() as f32 * line;
+    let h = 14.0 + 24.0 + help_h + 12.0 + 18.0 + 30.0 + 18.0 + 22.0 + 12.0;
+    let card = Rect::new(r.x, r.y, r.w, h);
+    f.cv.rounded(card, 12.0, t.surface);
+    let (x, mut y) = (r.x + 14.0, r.y + 14.0);
+    let title = Rect::new(x, y, inner_w, 24.0);
+    f.label(title, "Number precision", BODY, t.fg, Align::Start);
+    y += 24.0;
+    f.paragraph(x, y, inner_w, HELP, SMALL, t.fg_dim);
+    let help = id(("settings-text", "precision-help"));
+    f.node(
+        help,
+        accesskit::Role::Label,
+        HELP,
+        Rect::new(x, y, inner_w, help_h),
+    );
+    y += help_h + 12.0;
+    let slider = Rect::new(x, y + 18.0, inner_w, 30.0);
+    let position = p.position();
+    f.slider(
+        precision_slider(),
+        slider,
+        precision_fraction(f32::from(position)),
+        "Number precision",
+        &p.describe(),
+        [
+            f64::from(position),
+            f64::from(*NumberPrecision::POSITIONS.start()),
+            f64::from(*NumberPrecision::POSITIONS.end()),
+            1.0,
+        ],
+    );
+    if let Some(n) = f.nodes.as_mut().and_then(|v| v.last_mut()) {
+        n.description = Some((format!("{}. {HELP}", p.describe()), Some(help)));
+    }
+    // Notches: a tick on the track and a short label above or below.
+    let track = (slider.x + 8.0, slider.w - 16.0);
+    for (position, label, above) in PRECISION_MARKS {
+        let mx = track.0 + track.1 * precision_fraction(f32::from(position));
+        let tick = Rect::new(
+            mx - 0.75,
+            slider.cy() + if above { -10.0 } else { 6.0 },
+            1.5,
+            4.0,
+        );
+        f.cv.rounded(tick, 0.75, t.fg_dim);
+        let ly = if above {
+            slider.y - 18.0
+        } else {
+            slider.bottom()
+        };
+        f.label(
+            Rect::new(mx - 40.0, ly, 80.0, 18.0),
+            label,
+            CAPTION,
+            t.fg_dim,
+            Align::Center,
+        );
+    }
+    let shown = Rect::new(x, slider.bottom() + 18.0, inner_w, 22.0);
+    f.label(shown, &p.describe(), SMALL, t.fg, Align::Center);
+    let words = id(("settings-text", "precision-value"));
+    if let Some(n) = f.node(words, accesskit::Role::Label, &p.describe(), shown) {
+        n.live = true;
+    }
+    h
 }
 
 const LICENCES: &str = concat!(
@@ -2496,6 +2686,44 @@ pub(crate) fn draw_licences(f: &mut Frame, full: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Older settings files load the default number precision; the slider
+    /// steps by keys, and a pointer anywhere on it picks a position.
+    #[test]
+    fn number_precision_setting() {
+        let old: Settings = serde_json::from_str(r#"{"theme": "dark"}"#).unwrap();
+        assert_eq!(old.literal_digits, NumberPrecision::DEFAULT);
+        let (s, complete) = appcore::settings::from_value_lenient::<Settings>(
+            serde_json::json!({"theme": "dark", "literal_digits": 30}),
+        );
+        assert!(!complete);
+        assert_eq!(
+            (s.theme.as_str(), s.literal_digits),
+            ("dark", NumberPrecision::DEFAULT)
+        );
+
+        let p = NumberPrecision::DEFAULT;
+        let step = |p, k| precision_key(p, k).unwrap();
+        assert_eq!(step(p, Named::Right).digits(), Some(15));
+        assert_eq!(step(p, Named::Down).digits(), Some(13));
+        assert_eq!(step(p, Named::PageUp).digits(), Some(19));
+        assert_eq!(step(p, Named::Home).digits(), Some(NumberPrecision::MIN));
+        assert_eq!(step(p, Named::End), NumberPrecision::OFF);
+        assert_eq!(
+            step(NumberPrecision::OFF, Named::Right),
+            NumberPrecision::OFF
+        );
+        assert_eq!(step(NumberPrecision::OFF, Named::Left).digits(), Some(20));
+        assert!(precision_key(p, Named::Enter).is_none());
+
+        // A 216 px slider: a 200 px track from x = 8, 12.5 px a position.
+        let r = Rect::new(0.0, 0.0, 216.0, 30.0);
+        assert_eq!(precision_at(r, 0.0).digits(), Some(5));
+        assert_eq!(precision_at(r, 8.0 + 9.0 * 12.5).digits(), Some(14));
+        assert_eq!(precision_at(r, 8.0 + 9.4 * 12.5).digits(), Some(14));
+        assert_eq!(precision_at(r, 208.0), NumberPrecision::OFF);
+        assert_eq!(precision_at(r, 999.0), NumberPrecision::OFF);
+    }
 
     /// The licence viewer's own wrapping keeps every word in order, and a
     /// line of several words fits the width (summing word widths is close

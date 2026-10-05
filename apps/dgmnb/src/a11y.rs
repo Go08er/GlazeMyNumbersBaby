@@ -805,6 +805,46 @@ mod tests {
                 assert!(switch.supports_action(Action::Click));
                 assert!(!explained);
             }
+            // Graphing's number precision: a slider from 5 to 21 (Off),
+            // its value said in full and what it does as its description;
+            // assistive technology can step and set it (check_actions).
+            let id = crate::app::precision_slider();
+            let slider = update
+                .nodes
+                .iter()
+                .find(|(n, _)| n.0 == id)
+                .map(|(_, n)| n)
+                .expect("the number precision slider");
+            assert_eq!(slider.role(), Role::Slider);
+            assert_eq!(slider.label(), Some("Number precision"));
+            assert_eq!(slider.value(), Some("14 digits (TI-84 Plus CE)"));
+            assert_eq!(
+                (
+                    slider.numeric_value(),
+                    slider.min_numeric_value(),
+                    slider.max_numeric_value()
+                ),
+                (Some(14.0), Some(5.0), Some(21.0))
+            );
+            let words = format!(
+                "14 digits (TI-84 Plus CE). {}",
+                appcore::graph::NUMBER_PRECISION_HELP
+            );
+            assert_eq!(slider.description(), Some(words.as_str()));
+            assert!(names.iter().any(|n| n == "14 digits (TI-84 Plus CE)"));
+            assert!(
+                names
+                    .iter()
+                    .any(|n| n == appcore::graph::NUMBER_PRECISION_HELP)
+            );
+            for a in [
+                Action::Increment,
+                Action::Decrement,
+                Action::SetValue,
+                Action::Focus,
+            ] {
+                assert!(target(&hits, id, a).is_some(), "{a:?}");
+            }
         }
     }
 

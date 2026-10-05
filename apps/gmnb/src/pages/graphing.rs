@@ -346,8 +346,28 @@ impl GraphingPage {
             });
         }
 
+        {
+            let weak = Rc::downgrade(&page);
+            ctx.precision.follow(move |p| {
+                if let Some(page) = weak.upgrade() {
+                    page.set_number_precision(p);
+                }
+            });
+        }
+        page.set_number_precision(ctx.precision.get());
         page.restore();
         page
+    }
+
+    /// Rounds each number typed in an equation to `p` (Settings' "Number
+    /// precision"), then plots and analyses afresh.
+    fn set_number_precision(self: &Rc<Self>, _p: appcore::graph::NumberPrecision) {
+        // Not wired yet: the engine's `Graph` setter for `literal_digits`
+        // (branch p5-literal) goes here, given `_p.digits()`. Until it
+        // lands the setting is saved and followed, and this re-plots and
+        // re-analyses as the setter will need.
+        self.graph_view.invalidate();
+        self.analysis_inputs_changed();
     }
 
     fn set_wide(&self, wide: bool) {

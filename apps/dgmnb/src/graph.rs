@@ -179,6 +179,17 @@ fn canvas_id() -> ui::Id {
 }
 
 impl GraphPage {
+    /// Rounds each number typed in an equation to `_p` (Settings' "Number
+    /// precision"), then plots and analyses afresh.
+    pub fn set_number_precision(&mut self, _p: appcore::graph::NumberPrecision) {
+        // Not wired yet: the engine's `Graph` setter for `literal_digits`
+        // (branch p5-literal) goes here, given `_p.digits()`. Until it lands
+        // the setting is saved and followed, and this re-plots and
+        // re-analyses as the setter will need.
+        self.dirty = true;
+        self.analysis_inputs_changed();
+    }
+
     pub fn new(saved: Vec<SavedEquation>, proxy: EventLoopProxy<UserEvent>) -> GraphPage {
         Self::build(saved, Some(proxy))
     }
