@@ -53,6 +53,9 @@ pub struct HistoryCollector {
     decimal_symbol: char,
     tokens: Option<Vec<ExpressionToken>>,
     commands: Option<Vec<ExpressionCommand>>,
+    /// Extension: while set, a completed equation is not added to the
+    /// history (see `CalculatorManager::set_history_suppressed`).
+    history_suppressed: bool,
 }
 
 impl HistoryCollector {
@@ -73,6 +76,7 @@ impl HistoryCollector {
             decimal_symbol,
             tokens: None,
             commands: None,
+            history_suppressed: false,
         };
         hc.reinit_history();
         hc
@@ -288,7 +292,9 @@ impl HistoryCollector {
     /// Responsible for clearing the top line of current running history display, as well as adding yet another element to
     /// history of equations
     pub fn complete_history_line(&mut self, num_str: &str) {
-        if let Some(history_display) = self.history_display.clone() {
+        if let Some(history_display) = self.history_display.clone()
+            && !self.history_suppressed
+        {
             let tokens = self.tokens.take().unwrap_or_default();
             let commands = self.commands.take().unwrap_or_default();
             let added_item_index = history_display
@@ -304,6 +310,11 @@ impl HistoryCollector {
         self.commands = None;
         self.i_cur_line_hist_start = -1; // It will get recomputed at the first Opnd
         self.reinit_history();
+    }
+
+    /// Extension: see `CalculatorManager::set_history_suppressed`.
+    pub fn set_history_suppressed(&mut self, suppressed: bool) {
+        self.history_suppressed = suppressed;
     }
 
     pub fn complete_equation(&mut self, num_str: &str) {

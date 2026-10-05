@@ -489,13 +489,70 @@ fn operand(digits: &[i32]) -> Value {
     json!({ "$t": 2, "n": false, "d": false, "s": false, "c": digits })
 }
 
+/// Saves `script`'s state, then checks that a calculator restored from it
+/// shows the same, saves the same, and continues the same way as the
+/// original for each of `more`. The original finishes before the restored
+/// one is made (calculators on one thread share the engine's display
+/// cache), as in the app, which restores at startup.
+fn assert_restores_and_continues(mode: CalcMode, script: &[Button], more: &[&[Button]]) {
+    let run = |continuation: &[Button]| {
+        let mut original = new_vm();
+        original.set_mode(mode);
+        press_all(&mut original, script);
+        let state = original.save_state();
+        let before = observed(&original);
+        press_all(&mut original, continuation);
+        (state, before, observed(&original))
+    };
+    let (state, before, _) = run(&[]);
+    let mut restored = new_vm();
+    restored.restore_state(&state);
+    assert_eq!(observed(&restored), before, "{mode:?} {script:?}");
+    assert_eq!(restored.save_state(), state, "{mode:?} {script:?}");
+    for continuation in more {
+        let (_, _, after) = run(continuation);
+        let mut restored = new_vm();
+        restored.restore_state(&state);
+        press_all(&mut restored, continuation);
+        assert_eq!(
+            observed(&restored),
+            after,
+            "{mode:?} {script:?} then {continuation:?}"
+        );
+    }
+}
+
+/// The continuations every saved state below is checked with: the next
+/// digit (typed into an operand, or replacing a shown value), "=" once and
+/// twice (repeating the last operation), "(" (which multiplies a typed
+/// number), an operator, backspace, memory recall, a sign change.
+const CONTINUATIONS: &[&[Button]] = {
+    use Button::*;
+    &[
+        &[Seven, Equals],
+        &[Equals],
+        &[Equals, Equals],
+        &[OpenParenthesis, Two, Equals],
+        &[Add, Two, Equals],
+        &[Multiply, Equals],
+        &[Backspace, Seven, Equals],
+        &[MemoryRecall, Equals],
+        &[Negate, Equals],
+    ]
+};
+
+/// R12-M-07: app-produced states restore as they were saved and continue as
+/// the original would. Values the display commands don't hold (a recalled
+/// value, a constant, a result, a typed number ended by F-E or MS) and the
+/// operation "=" repeats are restored too.
+///
+/// These compare a restore with the calculation it was saved from, not with
+/// upstream: upstream's restore doesn't continue them (see the snapshot
+/// module docs).
 #[test]
 fn app_states_restore_as_they_were_saved() {
     use Button::*;
-    // (mode, keys, whether the restored calculator saves the same state and
-    // continues the same way: a re-entered display value is an operand being
-    // typed, where the original showed a result)
-    let scripts: Vec<(CalcMode, Vec<Button>, bool)> = vec![
+    let scripts: Vec<(CalcMode, Vec<Button>)> = vec![
         // A pending operator and an operand being typed; grouped, negative
         // and long fractional memory slots.
         (
@@ -504,20 +561,43 @@ fn app_states_restore_as_they_were_saved() {
                 One, Two, Three, Four, Five, Six, Seven, Memory, Five, Negate, Memory, One, Divide,
                 Three, Equals, Memory, One, Two, Add, Three, Four, Multiply, Five,
             ],
-            true,
         ),
         // An error.
         (
             CalcMode::Standard,
             vec![Seven, Memory, One, Divide, Zero, Equals],
-            true,
         ),
         // A recalled value that the display commands do not describe.
         (
             CalcMode::Standard,
             vec![Nine, Memory, Clear, Two, Add, MemoryRecall],
-            false,
         ),
+        // ... and one equal to the operand before it.
+        (
+            CalcMode::Standard,
+            vec![Two, Memory, Clear, Two, Add, MemoryRecall],
+        ),
+        // Evaluated: "=" repeats "+ 1".
+        (CalcMode::Standard, vec![Two, Add, One, Equals]),
+        (CalcMode::Standard, vec![Two, Add, One, Equals, Equals]),
+        // Evaluated with an inexact operand: "1 ÷ 3" is exact as evaluated
+        // again, "0.3333333333333333 × 3" only as saved.
+        (CalcMode::Standard, vec![One, Divide, Three, Equals]),
+        (
+            CalcMode::Standard,
+            vec![One, Divide, Three, Equals, Multiply, Three, Equals],
+        ),
+        // Typing, and a recalled value, after "=".
+        (CalcMode::Standard, vec![Two, Add, One, Equals, Seven]),
+        (
+            CalcMode::Standard,
+            vec![Nine, Memory, Clear, Two, Add, One, Equals, MemoryRecall],
+        ),
+        // A typed number ended by MS (the last command is still a digit),
+        // equal to the operand before it.
+        (CalcMode::Standard, vec![Five, Add, Five, Memory]),
+        // A unary operation after "=".
+        (CalcMode::Standard, vec![Nine, Add, Seven, Equals, Sqrt]),
         // Parentheses, powers, an exponent in memory, gradians.
         (
             CalcMode::Scientific,
@@ -543,68 +623,191 @@ fn app_states_restore_as_they_were_saved() {
                 OpenParenthesis,
                 Seven,
             ],
-            true,
         ),
         (
             CalcMode::Scientific,
             vec![FToE, Two, Multiply, Pi, Equals, Memory, Add],
-            true,
         ),
-        // Evaluated in Programmer mode, in hex.
+        // Precedence: "=" repeats "+ 14".
+        (
+            CalcMode::Scientific,
+            vec![Two, Add, Three, Multiply, Four, Equals],
+        ),
+        // A typed number ended by F-E: "(" multiplies it.
+        (CalcMode::Scientific, vec![One, Two, FToE]),
+        // A result after MS in hex: "=" repeats "+ 1" (the expression is gone).
         (
             CalcMode::Programmer,
             vec![HexButton, F, F, Add, One, Equals, Memory],
-            false,
         ),
+        (
+            CalcMode::Programmer,
+            vec![HexButton, F, F, Add, One, Equals],
+        ),
+        // A typed number ended by a radix switch.
+        (CalcMode::Programmer, vec![One, Two, HexButton]),
         // A padded binary display and a pending shift in a byte.
         (
             CalcMode::Programmer,
             vec![Byte, BinButton, One, Zero, One, Memory, Lsh, One],
-            true,
         ),
         (
             CalcMode::Programmer,
             vec![Seven, RshL, Two, Equals, Memory, Not, Xor, Five],
-            true,
         ),
     ];
-    for (mode, script, exact) in scripts {
+    for (mode, script) in scripts {
+        assert_restores_and_continues(mode, &script, CONTINUATIONS);
+    }
+    // Constants. A shown value comes back with the digits it showed (like
+    // memory), and π and e have more: π × π, 2 + e + e or 2 − e can then
+    // differ in the last digit, so the continuations avoid revealing them.
+    assert_restores_and_continues(
+        CalcMode::Scientific,
+        &[Pi],
+        &[
+            &[Seven, Equals],
+            &[Equals],
+            &[OpenParenthesis, Two, Equals],
+            &[Add, Two, Equals],
+            &[Backspace, Seven, Equals],
+            &[MemoryRecall, Equals],
+            &[Negate, Equals],
+        ],
+    );
+    assert_restores_and_continues(
+        CalcMode::Scientific,
+        &[Two, Add, Euler],
+        &[
+            &[Seven, Equals],
+            &[Equals],
+            &[OpenParenthesis, Two, Equals],
+            &[Backspace, Seven, Equals],
+            &[MemoryRecall, Equals],
+        ],
+    );
+}
+
+/// R12-M-07's four cases (the review's table: saved state, keys after the
+/// restore, the original's result).
+#[test]
+fn restored_sessions_continue_as_the_original() {
+    use Button::*;
+    let cases: [(CalcMode, &[Button], &[Button], &str); 4] = [
+        (
+            CalcMode::Standard,
+            &[Nine, Memory, Clear, Two, Add, MemoryRecall],
+            &[Seven, Equals],
+            "9",
+        ),
+        (CalcMode::Standard, &[Two, Add, One, Equals], &[Equals], "4"),
+        (
+            CalcMode::Programmer,
+            &[HexButton, F, F, Add, One, Equals, Memory],
+            &[Equals],
+            "101",
+        ),
+        (
+            CalcMode::Programmer,
+            &[HexButton, F, F, Add, One, Equals, Memory],
+            &[Seven, Equals],
+            "8",
+        ),
+    ];
+    for (mode, saved, after, result) in cases {
         let mut original = new_vm();
         original.set_mode(mode);
-        press_all(&mut original, &script);
+        press_all(&mut original, saved);
         let state = original.save_state();
+        press_all(&mut original, after);
+        assert_eq!(original.display_value(), result, "{saved:?} then {after:?}");
+        let expected = observed(&original);
+        drop(original);
 
         let mut restored = new_vm();
         restored.restore_state(&state);
-        assert_eq!(
-            observed(&restored),
-            observed(&original),
-            "{mode:?} {script:?}"
-        );
-        if !exact {
-            continue;
-        }
-        assert_eq!(restored.save_state(), state, "{mode:?} {script:?}");
-
-        for more in [
-            &[Add, Two, Equals][..],
-            &[Backspace, Seven, Equals],
-            &[MemoryRecall, Equals],
-        ] {
-            let mut a = new_vm();
-            a.set_mode(mode);
-            press_all(&mut a, &script);
-            press_all(&mut a, more);
-            let mut b = new_vm();
-            b.restore_state(&state);
-            press_all(&mut b, more);
-            assert_eq!(
-                observed(&b),
-                observed(&a),
-                "{mode:?} {script:?} then {more:?}"
-            );
-        }
+        press_all(&mut restored, after);
+        assert_eq!(restored.display_value(), result, "{saved:?} then {after:?}");
+        assert_eq!(observed(&restored), expected, "{saved:?} then {after:?}");
     }
+}
+
+/// A snapshot from before "k" (or from upstream) has no record of what the
+/// display shows: a value the display commands don't produce is shown as a
+/// result, so the next digit replaces it, and an evaluated expression is
+/// evaluated again, so "=" repeats its operation.
+#[test]
+fn older_snapshots_show_values_as_results() {
+    use Button::*;
+    let old = |vm: &CalculatorViewModel| {
+        let mut state: Value = serde_json::from_str(&vm.save_state()).unwrap();
+        state["x"].as_object_mut().unwrap().remove("k");
+        state.to_string()
+    };
+    for (saved, after, result) in [
+        (
+            &[Nine, Memory, Clear, Two, Add, MemoryRecall][..],
+            &[Seven, Equals][..],
+            "9",
+        ),
+        (&[Two, Add, One, Equals], &[Equals], "4"),
+        (&[Two, Add, One, Equals], &[Seven, Equals], "8"),
+        // Without the record, "=" can't repeat what MS hid; 7 replaces.
+        (&[Two, Add, One, Equals, Memory], &[Seven, Equals], "7"),
+    ] {
+        let mut vm = new_vm();
+        press_all(&mut vm, saved);
+        let state = old(&vm);
+        drop(vm);
+        let mut restored = new_vm();
+        restored.restore_state(&state);
+        press_all(&mut restored, after);
+        assert_eq!(restored.display_value(), result, "{saved:?} then {after:?}");
+    }
+}
+
+/// The repeated operation is validated like the other commands: an operator
+/// and an operand, valid in the snapshot's mode.
+#[test]
+fn a_malformed_repeated_operation_is_rejected() {
+    let with_repeat = |mode: i64, eq: Value| {
+        snapshot_json(
+            mode,
+            json!([]),
+            json!({ "k": { "dv": "result", "eq": eq } }),
+        )
+    };
+    let shift = json!([{ "$t": 1, "c": 89 }, operand(&[131])]);
+    for (mode, eq) in [
+        (0, json!([operand(&[131]), { "$t": 1, "c": 93 }])),
+        (0, json!([{ "$t": 1, "c": 93 }])),
+        (
+            0,
+            json!([{ "$t": 1, "c": 93 }, operand(&[131]), operand(&[131])]),
+        ),
+        (0, json!([{ "$t": 0, "c": [110] }, operand(&[131])])),
+        (0, shift.clone()),
+    ] {
+        let mut vm = new_vm();
+        press_all(&mut vm, &[Button::Four]);
+        vm.restore_state(&with_repeat(mode, eq.clone()));
+        assert_eq!(vm.display_value(), "4", "{eq}");
+    }
+    // A shift repeats in Programmer mode.
+    let mut vm = new_vm();
+    let mut state: Value = serde_json::from_str(&with_repeat(2, shift)).unwrap();
+    state["s"]["p"]["d"] = json!("5");
+    vm.restore_state(&state.to_string());
+    assert_eq!(vm.mode(), CalcMode::Programmer);
+    vm.press(Button::Equals);
+    assert_eq!(vm.display_value(), "10");
+
+    let mut vm = new_vm();
+    let mut state: Value = serde_json::from_str(&snapshot_json(0, json!([]), json!({}))).unwrap();
+    state["x"]["k"] = json!({ "dv": "typed?" });
+    press_all(&mut vm, &[Button::Four]);
+    vm.restore_state(&state.to_string());
+    assert_eq!(vm.display_value(), "4");
 }
 
 /// A long calculation built from pastes (40 × a 100-term sum, about 12,000

@@ -83,7 +83,7 @@ mod resource;
 pub use calc_display::{
     CalcDisplay, CalcDisplayRef, ExpressionToken, HistoryDisplay, HistoryDisplayRef,
 };
-pub use calc_engine::{CalcEngine, NUM_WIDTH_LENGTH, NumWidth};
+pub use calc_engine::{CalcEngine, Continuation, NUM_WIDTH_LENGTH, NumWidth, ShownValue};
 pub use calc_input::{CalcInput, CalcNumSec, MAX_STRLEN};
 pub use calc_utils::{
     is_bin_op_code, is_digit_op_code, is_gui_setting_op_code, is_op_in_range, is_unary_op_code,

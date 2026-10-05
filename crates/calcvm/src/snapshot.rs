@@ -37,12 +37,21 @@
 //! `"w"` (word size in bits), `"a"` (angle unit), `"fe"`, `"sh"` (shift
 //! mode). Memory is restored by re-entering the displayed strings, so a value
 //! comes back with the precision it was displayed with.
+//!
+//! `"k"` (absent before 0.2) holds what the display commands don't, so a
+//! restored calculation continues as the saved one would: `"dv"` says the
+//! display shows a value they don't produce, `"result"` (a result, a
+//! recalled value, a constant) or `"entry"` (a typed number whose entry F-E,
+//! MS or a radix switch ended); `"eq"` is `[<binary command>, <operand>]`,
+//! what another `=` repeats. Upstream restores neither: it shows the last
+//! operand instead of a recalled value, "0" instead of a result after MS,
+//! and re-opens an evaluated expression, so `=` evaluates it again.
 
 use std::rc::Rc;
 
 use calcmanager::{
     BinaryCommand, CalculatorMode, ExpressionCommand, ExpressionToken, HistoryItem,
-    HistoryItemVector, OpndCommand, Parentheses, UnaryCommand,
+    HistoryItemVector, OpndCommand, Parentheses, ShownValue, UnaryCommand,
 };
 use serde_json::{Map, Value, json};
 
@@ -231,6 +240,17 @@ pub(crate) struct SnapshotExtension {
     pub(crate) angle: Option<AngleUnit>,
     pub(crate) fe: bool,
     pub(crate) shift_mode: Option<ShiftMode>,
+    /// `"k"`; `None` in snapshots that predate it.
+    pub(crate) continuation: Option<ContinuationSnapshot>,
+}
+
+/// The gmnb extension's `"k"`, see the module docs.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub(crate) struct ContinuationSnapshot {
+    /// `"dv"`
+    pub(crate) shown: Option<ShownValue>,
+    /// `"eq"`: empty, or a binary command and an operand.
+    pub(crate) repeat: Vec<ExpressionCommandWrapper>,
 }
 
 /// `ApplicationSnapshot`
@@ -459,6 +479,13 @@ fn shift_name(s: ShiftMode) -> &'static str {
     }
 }
 
+fn shown_name(s: ShownValue) -> &'static str {
+    match s {
+        ShownValue::Result => "result",
+        ShownValue::EndedEntry => "entry",
+    }
+}
+
 impl ApplicationSnapshot {
     pub(crate) fn to_json(&self) -> Value {
         let mut root = Map::new();
@@ -503,6 +530,16 @@ impl ApplicationSnapshot {
             o.insert("fe".into(), json!(x.fe));
             if let Some(s) = x.shift_mode {
                 o.insert("sh".into(), json!(shift_name(s)));
+            }
+            if let Some(k) = &x.continuation {
+                let mut c = Map::new();
+                if let Some(shown) = k.shown {
+                    c.insert("dv".into(), json!(shown_name(shown)));
+                }
+                if !k.repeat.is_empty() {
+                    c.insert("eq".into(), commands_to_json(&k.repeat));
+                }
+                o.insert("k".into(), Value::Object(c));
             }
             root.insert("x".into(), Value::Object(o));
         }
@@ -608,6 +645,21 @@ impl ApplicationSnapshot {
                     Some("rotate-carry") => Some(ShiftMode::RotateThroughCarry),
                     Some(_) => return Err("unknown shift mode".into()),
                 };
+                let continuation = match x.get("k") {
+                    None | Some(Value::Null) => None,
+                    Some(k) => {
+                        let k = object(k)?;
+                        let shown = match string(k.get("dv"))?.as_deref() {
+                            None => None,
+                            Some("result") => Some(ShownValue::Result),
+                            Some("entry") => Some(ShownValue::EndedEntry),
+                            Some(_) => return Err("unknown display value kind".into()),
+                        };
+                        let repeat = list(k.get("eq"), ExpressionCommandDeserializer::deserialize)?
+                            .unwrap_or_default();
+                        Some(ContinuationSnapshot { shown, repeat })
+                    }
+                };
                 Some(SnapshotExtension {
                     standard_history: list(x.get("hs"), history_item_from_json)?,
                     scientific_history: list(x.get("hc"), history_item_from_json)?,
@@ -617,6 +669,7 @@ impl ApplicationSnapshot {
                     angle,
                     fe: boolean(x.get("fe"))?,
                     shift_mode,
+                    continuation,
                 })
             }
         };
@@ -672,7 +725,9 @@ pub(crate) const MAX_RESTORED_MEMORY: usize = 100;
 pub(crate) const REPLAY_WORK: u64 = 180_000_000;
 /// All memory slots together, and one slot (one displayed number: a
 /// legible one costs well under a million units, one near 10^±9999 about
-/// three million).
+/// three million). The displayed value, and the operation "=" repeats (one
+/// operand and one operator), get one slot's budget each; past it, the
+/// value is cleared, or "=" repeats nothing.
 pub(crate) const MEMORY_WORK: u64 = 30_000_000;
 pub(crate) const VALUE_WORK: u64 = 8_000_000;
 
@@ -761,6 +816,23 @@ impl SnapshotValidator {
 
         if let Some(expression) = &standard.expression_display {
             Self::validate_commands(&expression.commands, mode, "expression")?;
+        }
+
+        if let Some(repeat) = snapshot
+            .extension
+            .as_ref()
+            .and_then(|x| x.continuation.as_ref())
+            .map(|k| &k.repeat[..])
+            .filter(|r| !r.is_empty())
+        {
+            let [
+                ExpressionCommandWrapper::Binary(_),
+                ExpressionCommandWrapper::Operand { .. },
+            ] = repeat
+            else {
+                return Err("the repeated operation is not an operator and an operand".into());
+            };
+            Self::validate_commands(repeat, mode, "repeated operation")?;
         }
 
         let display = &standard.primary_display.display_value;
@@ -959,6 +1031,7 @@ impl StandardCalculatorViewModel {
             angle: Some(self.angle_unit()),
             fe: self.is_f_to_e_checked,
             shift_mode: Some(self.shift_mode),
+            continuation: Some(self.capture_continuation()),
         };
 
         ApplicationSnapshot {
@@ -1008,62 +1081,142 @@ impl StandardCalculatorViewModel {
             self.restore_memory(mode, &x.memory);
         }
 
-        if let Some(expression_display) = &snapshot.expression_display {
-            let tokens = tokens_to_engine(&expression_display.tokens);
-            let commands: Vec<ExpressionCommand> = expression_display
-                .commands
-                .iter()
-                .map(ExpressionCommandWrapper::to_command)
-                .collect();
-            if snapshot.display_commands.is_empty() && mode == CalcMode::Programmer {
-                // Deviation: `Recalculate` (below) resets every engine and
-                // continues in the Standard one; upstream only ever uses it
-                // for history items, which Programmer mode does not have.
-                // Re-evaluate the expression in the Programmer engine instead,
-                // which leaves it exactly as it was after "=".
-                let within = self.within_work(REPLAY_WORK, |vm| {
-                    vm.with_deferred_display(|vm| {
-                        vm.replay(&expression_display.commands);
-                        vm.send_command(cmd::EQU);
-                    })
-                });
-                if within {
-                    self.set_expression_display(tokens, commands);
-                    self.set_primary_display(&snapshot.primary_display.display_value, false);
-                    self.drain();
-                } else {
-                    self.clear_unbudgeted();
-                    self.reenter_display_value(mode, &snapshot.primary_display.display_value);
-                }
-            } else if snapshot.display_commands.is_empty() {
-                // Expression was evaluated before. Load from history.
-                if self.set_history_expression_display(tokens.clone(), commands.clone()) {
-                    self.set_expression_display(tokens, commands);
-                    self.set_primary_display(&snapshot.primary_display.display_value, false);
-                    self.drain();
-                } else {
-                    self.reenter_display_value(mode, &snapshot.primary_display.display_value);
-                }
-            } else {
-                // Expression was not evaluated before, or it was an error.
-                self.replay_within_budget(&snapshot.display_commands);
+        // Extension: what the display commands don't hold (see the module
+        // docs); `None` for a snapshot that predates it.
+        let continuation = extension.and_then(|x| x.continuation.as_ref());
+        // The saved equations are in the restored history already: replaying
+        // them must not add them again.
+        self.with_manager(|m| m.set_history_suppressed(true));
+        let display = &snapshot.primary_display.display_value;
+        match &snapshot.expression_display {
+            Some(expression) if snapshot.display_commands.is_empty() => {
+                // Expression was evaluated before.
+                //
+                // Deviation: upstream loads it as a history item, which
+                // replays it without "=" (so the next "=" evaluates it again
+                // instead of repeating its last operation, and the next digit
+                // is typed into its last operand), and in Programmer mode
+                // continues in the Standard engine. It is evaluated again
+                // instead: the result is then exact, as it was, and "="
+                // repeats the same operation. Where that doesn't give the
+                // saved display and repeated operation back (an operand was
+                // only saved to the digits it showed), the value is shown and
+                // the saved repeated operation set up as below.
                 if snapshot.primary_display.is_error {
-                    self.restore_error_display(&snapshot.primary_display.display_value);
-                } else {
-                    self.reenter_display_value(mode, &snapshot.primary_display.display_value);
+                    self.restore_error_display(display);
+                } else if !self.reevaluate(&expression.commands, display, continuation) {
+                    self.restore_continuation(mode, &[], display, continuation);
                 }
+                let tokens = tokens_to_engine(&expression.tokens);
+                let commands: Vec<ExpressionCommand> = expression
+                    .commands
+                    .iter()
+                    .map(ExpressionCommandWrapper::to_command)
+                    .collect();
+                self.set_expression_display(tokens, commands);
             }
-        } else if snapshot.primary_display.is_error {
-            self.restore_error_display(&snapshot.primary_display.display_value);
-        } else {
-            self.replay_within_budget(&snapshot.display_commands);
-            self.reenter_display_value(mode, &snapshot.primary_display.display_value);
+            _ if snapshot.primary_display.is_error => {
+                // Expression was not evaluated before, or it was an error.
+                if snapshot.expression_display.is_some() {
+                    self.replay_within_budget(&snapshot.display_commands);
+                }
+                self.restore_error_display(display);
+            }
+            _ => self.restore_continuation(mode, &snapshot.display_commands, display, continuation),
+        }
+        self.with_manager(|m| m.set_history_suppressed(false));
+        self.drain();
+    }
+
+    /// Extension: what the engine would save now, beside its display commands.
+    fn capture_continuation(&self) -> ContinuationSnapshot {
+        let c = self.standard_calculator_manager.continuation();
+        ContinuationSnapshot {
+            shown: c.shown,
+            repeat: c
+                .repeat
+                .map(|(op, operand)| {
+                    vec![
+                        ExpressionCommandWrapper::Binary(op),
+                        ExpressionCommandWrapper::from_command(&ExpressionCommand::Operand(
+                            operand,
+                        )),
+                    ]
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Extension: evaluates a saved, evaluated expression again (within
+    /// [`REPLAY_WORK`]). Keeps the result if it shows `display` and leaves
+    /// the saved repeated operation (when the snapshot has one) and kind of
+    /// display; otherwise clears it and returns false.
+    fn reevaluate(
+        &mut self,
+        commands: &[ExpressionCommandWrapper],
+        display: &str,
+        continuation: Option<&ContinuationSnapshot>,
+    ) -> bool {
+        let within = self.within_work(REPLAY_WORK, |vm| {
+            vm.with_deferred_display(|vm| {
+                vm.replay(commands);
+                vm.send_command(cmd::EQU);
+            })
+        });
+        let same = within
+            && !self.is_in_error
+            && self.display_value == display
+            && continuation.is_none_or(|k| *k == self.capture_continuation());
+        if !same {
+            self.clear_unbudgeted();
+        }
+        same
+    }
+
+    /// Extension: restores a calculation that isn't in error from its
+    /// display commands and the saved continuation: the operation "="
+    /// repeats, then the pending expression and any operand being typed,
+    /// then the displayed value if they don't produce it (see
+    /// [`show_value`](Self::show_value)). Each step within its budget;
+    /// past one, the calculation is cleared and the value shown, so the
+    /// next digit replaces it and "=" doesn't repeat anything.
+    fn restore_continuation(
+        &mut self,
+        mode: CalcMode,
+        display_commands: &[ExpressionCommandWrapper],
+        display: &str,
+        continuation: Option<&ContinuationSnapshot>,
+    ) {
+        if let Some([op, operand]) = continuation.map(|k| &k.repeat[..]) {
+            // "1 op operand =": the left operand doesn't matter (1 is valid in
+            // every radix and every operator that evaluated before takes it).
+            let within = self.within_work(VALUE_WORK, |vm| {
+                vm.with_deferred_display(|vm| {
+                    vm.send_command(cmd::ZERO + 1);
+                    vm.replay(std::slice::from_ref(op));
+                    vm.replay(std::slice::from_ref(operand));
+                    vm.send_command(cmd::EQU);
+                })
+            });
+            if !within || self.is_in_error {
+                self.clear_unbudgeted();
+            }
+        }
+        self.replay_within_budget(display_commands);
+        // Without the record (an older snapshot), or if the commands didn't
+        // produce the display after all (a budget ran out), a value they
+        // don't produce was shown, not typed: a typed operand is in them.
+        let shown = continuation
+            .and_then(|k| k.shown)
+            .or_else(|| (self.display_value != display).then_some(ShownValue::Result));
+        if let Some(shown) = shown {
+            self.show_value(mode, display, shown);
         }
     }
 
     /// Replays the display commands within [`REPLAY_WORK`]; past it, the
-    /// pending expression is dropped (the displayed value is re-entered by
-    /// the caller).
+    /// pending expression is dropped (the displayed value is shown by the
+    /// caller).
     fn replay_within_budget(&mut self, commands: &[ExpressionCommandWrapper]) {
         let within = self.within_work(REPLAY_WORK, |vm| {
             vm.with_deferred_display(|vm| vm.replay(commands))
@@ -1100,13 +1253,24 @@ impl StandardCalculatorViewModel {
 
     /// Extension: the display commands only describe the expression and an
     /// operand that is still being typed, so a value the engine is merely
-    /// showing (after MR, F-E, π, a radix switch…) is not in them and
-    /// upstream restores "0". Re-enter the displayed value in that case.
-    fn reenter_display_value(&mut self, mode: CalcMode, display_value: &str) {
-        if self.is_in_error || self.display_value == display_value {
+    /// showing (after MR, π, "=", F-E, MS, a radix switch…) is not in them
+    /// and upstream restores "0" or the last operand. Enter the displayed
+    /// value and end its entry as the saved calculation's was: a result
+    /// like MR does (`IDC_SET_RESULT`, upstream's "set the result": the
+    /// last command is then a recall), a typed number like upstream's
+    /// history recall does (F-E twice, which leaves the last command a
+    /// digit). Either way the next digit replaces it, as it would have.
+    fn show_value(&mut self, mode: CalcMode, display_value: &str, shown: ShownValue) {
+        if self.is_in_error || !self.enter_value_within_budget(mode, display_value) {
             return;
         }
-        self.enter_value_within_budget(mode, display_value);
+        match shown {
+            ShownValue::Result => self.send_command(cmd::SET_RESULT),
+            ShownValue::EndedEntry => {
+                self.send_command(cmd::FE);
+                self.send_command(cmd::FE);
+            }
+        }
     }
 
     /// [`enter_value`](Self::enter_value) within [`VALUE_WORK`]; past it,

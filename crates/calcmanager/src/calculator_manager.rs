@@ -17,7 +17,7 @@ use std::rc::Rc;
 use ratpack::{CalcResult, Rational};
 
 use crate::calc_display::{CalcDisplay, CalcDisplayRef, ExpressionToken, HistoryDisplayRef};
-use crate::calc_engine::CalcEngine;
+use crate::calc_engine::{CalcEngine, Continuation};
 use crate::calculator_history::{CalculatorHistory, HistoryItem};
 use crate::ccommand::*;
 use crate::command::{CalculatorMode, CalculatorPrecision, Command};
@@ -165,6 +165,8 @@ pub struct CalculatorManager {
     std_history: Rc<RefCell<CalculatorHistory>>,
     sci_history: Rc<RefCell<CalculatorHistory>>,
     history: Option<HistorySlot>,
+    /// Extension: see [`CalculatorManager::set_history_suppressed`].
+    history_suppressed: bool,
 }
 
 impl CalculatorManager {
@@ -198,6 +200,7 @@ impl CalculatorManager {
             std_history: Rc::new(RefCell::new(CalculatorHistory::new(MAX_HISTORY_ITEMS))),
             sci_history: Rc::new(RefCell::new(CalculatorHistory::new(MAX_HISTORY_ITEMS))),
             history: None,
+            history_suppressed: false,
         }
     }
 
@@ -303,6 +306,8 @@ impl CalculatorManager {
         }
 
         self.current_calculator_engine = Some(EngineSlot::Standard);
+        let suppressed = self.history_suppressed;
+        self.current_engine().set_history_suppressed(suppressed);
         self.current_engine().process_command(IDC_DEC)?;
         self.current_engine().process_command(IDC_CLEAR)?;
         self.current_engine()
@@ -326,6 +331,8 @@ impl CalculatorManager {
         }
 
         self.current_calculator_engine = Some(EngineSlot::Scientific);
+        let suppressed = self.history_suppressed;
+        self.current_engine().set_history_suppressed(suppressed);
         self.current_engine().process_command(IDC_DEC)?;
         self.current_engine().process_command(IDC_CLEAR)?;
         self.current_engine()
@@ -733,6 +740,31 @@ impl CalculatorManager {
             self.set_memorized_numbers_string()?;
         }
         Ok(())
+    }
+
+    /// Extension: what a saved session needs besides the display commands
+    /// to continue as this one would (see [`CalcEngine::continuation`]).
+    pub fn continuation(&self) -> Continuation {
+        self.current_engine_ref()
+            .map(CalcEngine::continuation)
+            .unwrap_or_default()
+    }
+
+    /// Extension: while `true`, equations the engines complete are not
+    /// added to the history. A session restore replays saved calculations
+    /// whose equations are already in the restored history.
+    pub fn set_history_suppressed(&mut self, suppressed: bool) {
+        self.history_suppressed = suppressed;
+        for engine in [
+            &mut self.standard_calculator_engine,
+            &mut self.scientific_calculator_engine,
+            &mut self.programmer_calculator_engine,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            engine.set_history_suppressed(suppressed);
+        }
     }
 
     pub fn get_display_commands_snapshot(&self) -> Vec<ExpressionCommand> {
