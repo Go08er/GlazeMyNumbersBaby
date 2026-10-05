@@ -11,8 +11,8 @@
 
 use crate::analysis::MIN_SHOWN_DIGITS;
 use crate::equation::{Axis, CompiledEquation, CompiledForm};
-use crate::interval::{Dec, derivs_valid};
-use crate::plot::{IntervalFn, Plot, Point};
+use crate::interval::{Dec, DecInterval, derivs_valid};
+use crate::plot::{IntervalFn, Plot, PlotOptions, Point, drawn_value};
 use crate::simplify::Q;
 use crate::strings as s;
 use crate::viewport::Viewport;
@@ -359,7 +359,12 @@ fn value_text(lo: f64, hi: f64, n: i32) -> Option<String> {
 /// What the interval form says of the curve at the number enclosed by
 /// `[lo, hi]`, its value's digits to 10ⁿ.
 fn value_at(iv: &IntervalFn, lo: f64, hi: f64, n: i32) -> TraceValue {
-    let e = iv.enclose(lo, hi);
+    value_of(&iv.enclose(lo, hi), n)
+}
+
+/// What f's enclosure `e` at a number says of the curve there, its
+/// value's digits to 10ⁿ.
+fn value_of(e: &DecInterval, n: i32) -> TraceValue {
     if e.is_empty() {
         return TraceValue::Undefined;
     }
@@ -410,6 +415,20 @@ fn step_exponent(iv: &IntervalFn, t: f64, n0: i32, t_px: f64, d_px: f64) -> i32 
         n = (n - decades).max(finest);
     }
     n
+}
+
+/// Where the traced point sits on an explicit curve, by the drawn curve's
+/// rule ([`drawn_value`]), given the point evaluator's value `d` there: a
+/// proven value at `d` if its enclosure holds `d`, else at the enclosure's
+/// nearest end (`d` is wrong: R12-M-05); an unknown one at `d` where f's
+/// enclosure `e` holds it or is within `tol`, else nowhere (the curve
+/// isn't drawn through it either).
+fn traced_value(value: TraceValue, d: f64, e: Option<&DecInterval>, tol: f64) -> Option<f64> {
+    match (value, e) {
+        (TraceValue::Defined { lo, hi }, _) => drawn_value(d, lo, hi, f64::INFINITY),
+        (TraceValue::Unknown, Some(e)) => drawn_value(d, e.lo(), e.hi(), tol),
+        _ => Some(d),
+    }
 }
 
 /// The value at the decimal `t` exactly where the interval form allows
@@ -569,6 +588,8 @@ pub fn nearest_point(
                     Axis::X => (vp.x_per_px(), vp.y_per_px()),
                     Axis::Y => (vp.y_per_px(), vp.x_per_px()),
                 };
+                // The drawn curve's tolerance, in the value's units.
+                let tol = PlotOptions::default().tolerance_px * d_px;
                 // (traced, other) coordinates to (x, y), and back.
                 let point = |t: f64, d: f64| match axis {
                     Axis::X => (t, d),
@@ -603,9 +624,12 @@ pub fn nearest_point(
                     } else {
                         (t.next_down(), t.next_up())
                     };
-                    let value = match iv {
-                        Some(iv) => exact_value(iv, &shown, value_at(iv, lo, hi, n0)),
-                        None => TraceValue::Approximate,
+                    let (value, e) = match iv {
+                        Some(iv) => {
+                            let e = iv.enclose(lo, hi);
+                            (exact_value(iv, &shown, value_of(&e, n0)), Some(e))
+                        }
+                        None => (TraceValue::Approximate, None),
                     };
                     let d = match value {
                         TraceValue::Undefined => {
@@ -616,11 +640,7 @@ pub fn nearest_point(
                                 .find(|&(ht, _)| (ht - t).abs() <= half)?
                                 .1
                         }
-                        TraceValue::Defined { lo, hi } => {
-                            let d = f.eval(t, 0.0);
-                            if d.is_finite() { d } else { 0.5 * (lo + hi) }
-                        }
-                        _ => f.eval(t, 0.0),
+                        _ => traced_value(value, f.eval(t, 0.0), e.as_ref(), tol)?,
                     };
                     let steps = match axis {
                         Axis::X => (pow10(n), pow10(n0)),
@@ -658,8 +678,8 @@ pub fn nearest_point(
                             if let TraceValue::Defined { lo: a, hi: b } = value_at(iv, lo, hi, n0) {
                                 let value =
                                     exact_value(iv, &shown, TraceValue::Defined { lo: a, hi: b });
-                                let d = f.eval(t, 0.0);
-                                let d = if d.is_finite() { d } else { 0.5 * (a + b) };
+                                let d = traced_value(value, f.eval(t, 0.0), None, tol)
+                                    .unwrap_or(0.5 * (a + b));
                                 let c = (point(t, d), (pow10(n0), pow10(n0)), axis, value);
                                 offer(index, c, EDGE_SNAP_PX, &mut best);
                             }
@@ -796,6 +816,64 @@ mod tests {
         let (eq, p) = setup(src, &vp);
         let (px, py) = vp.to_screen(x, y);
         nearest_point(&vp, &[(&eq, &p)], px, py, radius)
+    }
+
+    /// `y = f` plotted with `g`'s interval form (a point evaluator at odds
+    /// with the function it stands for).
+    fn mismatched(f: &str, g: &str, vp: &Viewport) -> (CompiledEquation, Plot) {
+        let text = format!("y={g}");
+        let lits = crate::interval::Literals::of(&text, Default::default()).unwrap();
+        let expr = Equation::parse(&text)
+            .unwrap()
+            .explicit()
+            .unwrap()
+            .1
+            .clone();
+        let opts = CompileOptions::default();
+        let eq = CompiledEquation {
+            form: CompiledForm::Explicit {
+                axis: Axis::X,
+                f: crate::compile::compile_str(f, opts.trig_unit).unwrap(),
+                iv: Some(std::sync::Arc::new(IntervalFn::new(expr, lits, &opts))),
+            },
+        };
+        let p = plot(&eq, vp, &PlotOptions::default());
+        (eq, p)
+    }
+
+    /// R12-M-05: tracing puts the point where the drawn curve is: a point
+    /// value outside f's enclosure is moved into it, as the vertices are
+    /// (here the enclosure is exact, y = x, and the point evaluator's
+    /// x + 1 is wrong); within a wide enclosure the point value stands, as
+    /// on the curve; outside one, where the curve isn't drawn, nothing is
+    /// traced.
+    #[test]
+    fn traced_points_sit_on_the_drawn_curve() {
+        let vp = vp();
+        let (eq, p) = mismatched("x+1", "x", &vp);
+        assert!(p.curves.iter().flatten().all(|q| q.y == q.x));
+        let (px, py) = vp.to_screen(2.5, 2.5);
+        let t = nearest_point(&vp, &[(&eq, &p)], px, py, 50.0).unwrap();
+        assert_eq!((t.x, t.y), (2.5, 2.5));
+        assert_eq!(t.value, TraceValue::Defined { lo: 2.5, hi: 2.5 });
+
+        let (eq, p) = mismatched("x+1", "10^17*(0.1+0.2-0.3)+x", &vp);
+        let (px, py) = vp.to_screen(2.5, 3.5);
+        let t = nearest_point(&vp, &[(&eq, &p)], px, py, 50.0).unwrap();
+        assert_eq!((t.x, t.y, t.value), (2.5, 3.5, TraceValue::Unknown));
+
+        let wide = DecInterval::new(crate::interval::Interval::new(-11.0, 6.0));
+        let tol = 0.25 * vp.y_per_px();
+        assert_eq!(
+            traced_value(TraceValue::Unknown, 20.0, Some(&wide), tol),
+            None
+        );
+        assert_eq!(
+            traced_value(TraceValue::Unknown, 5.0, Some(&wide), tol),
+            Some(5.0)
+        );
+        let defined = TraceValue::Defined { lo: 1.0, hi: 1.5 };
+        assert_eq!(traced_value(defined, 20.0, None, tol), Some(1.5));
     }
 
     #[test]
