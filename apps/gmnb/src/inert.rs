@@ -27,6 +27,9 @@
 //! that holds, carries [`OFF`] meanwhile). What remains is the soft shadow
 //! libadwaita takes off a disabled toggle and switch knob.
 //!
+//! A covered text field's selection, which GTK drops, is given back when
+//! it is uncovered.
+//!
 //! Left: moving the caret or the selection in a covered text field (Text
 //! `SetSelection`, `SetCaretOffset`), which GTK does without any check
 //! (GtkText through two different interfaces) and which changes no value.
@@ -48,6 +51,9 @@ const OFF: &str = "wc-off";
 /// Marks a root [`Layers`] made insensitive, and a field it made read-only.
 const MADE_INSENSITIVE: &str = "gmnb-inert";
 const MADE_READ_ONLY: &str = "gmnb-inert-read-only";
+/// A covered text field's selection, to give back (GTK drops it when the
+/// field becomes insensitive).
+const SELECTION: &str = "gmnb-inert-selection";
 /// Marks a window [`Layers`] watches.
 const WATCHED: &str = "gmnb-layers-watched";
 
@@ -196,6 +202,7 @@ impl Layers {
             set_inert(w, false);
         }
         for w in now.iter().filter(|w| !before.contains(w)) {
+            keep_selections(w);
             set_inert(w, true);
         }
         // Layers nest (the content, and the sidebar's content in it): each
@@ -224,6 +231,12 @@ fn mark(w: &gtk::Widget, now: &[gtk::Widget], covered: bool, off: bool) {
     if w.is::<gtk::Text>() || w.is::<gtk::TextView>() {
         set_read_only(w, covered);
     }
+    if !covered && let Some(text) = w.downcast_ref::<gtk::Text>() {
+        // SAFETY: only ever set, and read, as (i32, i32) (keep_selections).
+        if let Some((start, end)) = unsafe { text.steal_data::<(i32, i32)>(SELECTION) } {
+            text.select_region(start, end);
+        }
+    }
     if covered && off {
         w.add_css_class(OFF);
     } else {
@@ -232,6 +245,23 @@ fn mark(w: &gtk::Widget, now: &[gtk::Widget], covered: bool, off: bool) {
     let mut child = w.first_child();
     while let Some(c) = child {
         mark(&c, now, covered, off);
+        child = c.next_sibling();
+    }
+}
+
+/// Remembers the selection of each text field in `root` that has one, to
+/// give back when it is uncovered ([`mark`]): GTK drops a text field's
+/// selection when it becomes insensitive (4.22 `gtk_text_state_flags_changed`).
+fn keep_selections(root: &gtk::Widget) {
+    if let Some(text) = root.downcast_ref::<gtk::Text>()
+        && let Some(bounds) = text.selection_bounds()
+    {
+        // SAFETY: only ever set, and read, as (i32, i32) (also in mark).
+        unsafe { text.set_data(SELECTION, bounds) };
+    }
+    let mut child = root.first_child();
+    while let Some(c) = child {
+        keep_selections(&c);
         child = c.next_sibling();
     }
 }
