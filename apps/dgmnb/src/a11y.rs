@@ -533,6 +533,29 @@ mod tests {
         Action::ScrollDown,
     ];
 
+    /// Every action an exported node advertises reaches it.
+    fn check_actions(what: &str, nodes: &[Node], hits: &[crate::ui::Hit]) {
+        for n in nodes {
+            for (on, a) in [
+                (n.clickable, Action::Click),
+                (n.focusable, Action::Focus),
+                (n.focusable, Action::ScrollIntoView),
+                (n.scrollable, Action::ScrollUp),
+                (n.scrollable, Action::ScrollDown),
+                (n.numeric.is_some(), Action::Increment),
+                (n.numeric.is_some(), Action::SetValue),
+                (n.role == Role::TextInput, Action::SetTextSelection),
+                (n.role == Role::TextInput, Action::SetValue),
+            ] {
+                assert!(
+                    !on || target(hits, n.id, a).is_some(),
+                    "{what}: {:?} doesn't take the {a:?} it offers",
+                    n.label
+                );
+            }
+        }
+    }
+
     /// `draw(f, r, page, overlay)` draws a page, an overlay, or the overlay
     /// over the page. Over the page, nothing the overlay covers is exported
     /// (announcers aside) or answers any action, the overlay's own controls
@@ -562,22 +585,7 @@ mod tests {
                 );
             }
         }
-        for n in &nodes {
-            if n.clickable {
-                assert!(
-                    target(&hits, n.id, Action::Click).is_some(),
-                    "{what}: {:?} can't be clicked",
-                    n.label
-                );
-            }
-            if n.focusable {
-                assert!(
-                    target(&hits, n.id, Action::Focus).is_some(),
-                    "{what}: {:?} can't be focused",
-                    n.label
-                );
-            }
-        }
+        check_actions(what, &nodes, &hits);
         let update = tree(&nodes, "test", None, 1.0);
         let by_id: HashMap<_, _> = update.nodes.iter().map(|(i, n)| (*i, n)).collect();
         let mut seen = HashSet::new();
@@ -742,11 +750,24 @@ mod tests {
             let mut p = crate::calc::CalcPage::new(None);
             p.set_mode(mode);
             check(|f, r| p.view(f, r, false));
+            let (nodes, hits) = frame_nodes(|f, r| p.view(f, r, false));
+            check_actions(&format!("{mode:?}"), &nodes, &hits);
         }
         let mut d = crate::date::DatePage::new();
         check(|f, r| d.view(f, r));
+        let (nodes, hits) = frame_nodes(|f, r| d.view(f, r));
+        check_actions("date", &nodes, &hits);
+        let mut c = crate::conv::ConvPage::new(None);
+        let (nodes, hits) = frame_nodes(|f, r| c.view(f, r));
+        check_actions("converter", &nodes, &hits);
         let mut g =
             crate::graph::GraphPage::for_test(appcore::graph::from_list("x^2;y<sin(x);a*x"));
         check(|f, r| g.view(f, r));
+        let (nodes, hits) = frame_nodes(|f, r| g.view(f, r));
+        check_actions("graphing", &nodes, &hits);
+        // The licences' text overflows: its view scrolls.
+        let (nodes, hits) = frame_nodes(crate::app::draw_licences);
+        check_actions("licences", &nodes, &hits);
+        assert!(nodes.iter().any(|n| n.scrollable));
     }
 }
