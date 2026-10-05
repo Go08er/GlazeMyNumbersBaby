@@ -75,6 +75,51 @@ fn arithmetic_too_long_to_fold_is_unknown_not_rounded() {
     assert_eq!(k.data.y_intercept, Some(1.0), "{:?}", k.y_intercept);
 }
 
+/// The digit limit on typed numbers (`ParseOptions::literal_digits`): the
+/// TI-84 Plus CE's 14 rounds `1.0000000000000001` to 1 on entry, for the
+/// curve and the analysis alike, and a slider the same way.
+#[test]
+fn a_digit_limit_rounds_typed_numbers_and_sliders_on_entry() {
+    use graphing::Graph;
+    use graphing::lexer::TI84_DIGITS;
+    let mut g = Graph::new();
+    assert_eq!(g.literal_digits(), None);
+    let id = g.add_equation("y=10^16*(1.0000000000000001-0.99999999999999999)+x");
+    let b = g.add_equation("y=a*x-1.0000000000000001*x");
+    g.set_variable("a", 0.1 + 0.2);
+    g.set_literal_digits(Some(TI84_DIGITS));
+    assert_eq!(g.literal_digits(), Some(14));
+    // Both decimals are 1 to 14 digits: f is x.
+    assert_eq!(g.evaluate(id, 0.0), Some(0.0));
+    assert_eq!(g.evaluate(id, -1.0), Some(-1.0));
+    let k = g.analyze(id);
+    assert_eq!(k.data.y_intercept, Some(0.0), "{:?}", k.y_intercept);
+    // The slider is 0.30000000000000004 rounded to 14 digits: 0.3, and
+    // the literal 1; so f is (0.3 − 1)·x.
+    assert_eq!(g.evaluate(b, 10.0), Some((0.3 - 1.0) * 10.0));
+    // The stored value is the slider's own; only its reading is rounded.
+    assert_eq!(g.variable("a").map(|v| v.value()), Some(0.1 + 0.2));
+    // Clamped to 5..=20.
+    g.set_literal_digits(Some(2));
+    assert_eq!(g.literal_digits(), Some(5));
+    g.set_literal_digits(Some(99));
+    assert_eq!(g.literal_digits(), Some(20));
+    // A certificate records the limit, for the replay to read alike.
+    let parse = ParseOptions {
+        literal_digits: Some(TI84_DIGITS),
+        ..Default::default()
+    };
+    let a = graphing::certify::certify_text_with(
+        "1.0000000000000001*x-1*x",
+        parse,
+        CompileOptions::default(),
+        graphing::certify::DEFAULT_BUDGET,
+        None,
+    )
+    .unwrap();
+    assert_eq!(a.binding.as_ref().and_then(|b| b.literal_digits), Some(14));
+}
+
 #[test]
 fn a_value_beyond_the_doubles_alone_still_rounds_once() {
     // 10⁵⁰⁰⁰ and 171! are past the doubles however they are rounded: +∞,

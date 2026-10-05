@@ -4,7 +4,8 @@
 //! With `--legacy`, the earlier engine's panel instead (behind its gate);
 //! with `--gate`, also what that engine alone said and why the gate
 //! (`analysis::verify`) dropped what it dropped; `--deg`, `--grad` set the
-//! angle unit (radians otherwise).
+//! angle unit (radians otherwise); `--digits=N` rounds each number typed to
+//! N significant digits on entry, as the apps' digit setting does.
 
 use graphing::Equation;
 use graphing::analysis::{
@@ -35,6 +36,14 @@ fn print(k: &KeyGraphFeatures) {
     }
 }
 
+/// `--digits=N`: each number typed rounded to N significant digits on
+/// entry (`ParseOptions::literal_digits`; the apps' default is 14).
+fn digits(args: &[String]) -> Option<u8> {
+    args.iter()
+        .find_map(|a| a.strip_prefix("--digits="))
+        .map(|n| n.parse().expect("--digits=N, N a number of digits"))
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let gate = args.iter().any(|a| a == "--gate");
@@ -50,10 +59,14 @@ fn main() {
         trig_unit,
         ..CompileOptions::default()
     };
+    let parse = graphing::lexer::ParseOptions {
+        literal_digits: digits(&args),
+        ..Default::default()
+    };
     for a in args.iter().filter(|a| !a.starts_with("--")) {
         let t = std::time::Instant::now();
         // `--legacy`: the earlier engine behind its gate, for comparison.
-        let k = match (legacy, Equation::parse(a)) {
+        let k = match (legacy, Equation::parse_with(a, parse)) {
             (true, Ok(eq)) => analyze_legacy(&eq, &opts, None).expect("not cancellable"),
             (false, Ok(eq)) => analyze(&eq, &opts),
             (_, Err(_)) => KeyGraphFeatures::error(AnalysisError::AnalysisCouldNotBePerformed),
@@ -64,7 +77,7 @@ fn main() {
         if !gate {
             continue;
         }
-        let Ok(eq) = Equation::parse(a) else {
+        let Ok(eq) = Equation::parse_with(a, parse) else {
             continue;
         };
         let t = std::time::Instant::now();

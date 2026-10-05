@@ -171,12 +171,24 @@ pub fn certify_text(
     budget: u64,
     cancel: Option<&AtomicBool>,
 ) -> Result<Analysis, String> {
+    certify_text_with(text, ParseOptions::default(), opts, budget, cancel)
+}
+
+/// [`certify_text`] with the text read under `parse` (a decimal comma, a
+/// digit limit on typed numbers: both recorded in the binding).
+pub fn certify_text_with(
+    text: &str,
+    parse: ParseOptions,
+    opts: CompileOptions<'_>,
+    budget: u64,
+    cancel: Option<&AtomicBool>,
+) -> Result<Analysis, String> {
     let text = if text.contains('=') {
         text.to_string()
     } else {
         format!("y={text}")
     };
-    let eq = Equation::parse(&text).map_err(|e| format!("{e:?}"))?;
+    let eq = Equation::parse_with(&text, parse).map_err(|e| format!("{e:?}"))?;
     certify_equation(&eq, opts, budget, cancel)
 }
 

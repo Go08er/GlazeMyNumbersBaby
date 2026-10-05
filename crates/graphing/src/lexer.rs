@@ -102,6 +102,86 @@ pub struct ParseOptions {
     /// Use `,` as the decimal separator and `;` as the argument separator
     /// (the original's `DecimalCommaAndListSemicolon` localization).
     pub decimal_comma: bool,
+    /// Each number typed is rounded on entry to this many significant
+    /// decimal digits, half away from zero (`round_decimal`), and the
+    /// rounded decimal is the number from then on: for the curve, its
+    /// trace, its analysis and its certificate alike. `None` ("off"): the
+    /// decimal exactly as typed. A calculator's precision: 14 is the TI-84
+    /// Plus CE's ([`TI84_DIGITS`]); with 15 or fewer, two numbers that read
+    /// differently never share a double. See [`LITERAL_DIGITS`].
+    pub literal_digits: Option<u8>,
+}
+
+/// The digit limits [`ParseOptions::literal_digits`] takes (besides off).
+pub const LITERAL_DIGITS: std::ops::RangeInclusive<u8> = 5..=20;
+
+/// The TI-84 Plus CE's precision: 14 significant digits (its numbers are
+/// 14-digit decimals; it shows 10). The apps' default for
+/// [`ParseOptions::literal_digits`].
+pub const TI84_DIGITS: u8 = 14;
+
+/// The decimal `digits` (ASCII digits and at most one `.`, no sign)
+/// rounded to `n` (≥ 1) significant digits, half away from zero: `0.1234567`
+/// to 3 is `0.123`, `99.95` is `100`, `1.0000000000000001` to 14 is `1`.
+/// A decimal with no more significant digits than that, or 0, comes back
+/// as given.
+pub fn round_decimal(digits: &str, n: u8) -> String {
+    let (int, frac) = digits.split_once('.').unwrap_or((digits, ""));
+    let mut all: Vec<u8> = int.bytes().chain(frac.bytes()).map(|b| b - b'0').collect();
+    let mut point = int.len();
+    let Some(first) = all.iter().position(|&d| d != 0) else {
+        return digits.to_string();
+    };
+    let keep = first + usize::from(n.max(1));
+    if keep >= all.len() || all[keep..].iter().all(|&d| d == 0) {
+        return digits.to_string();
+    }
+    let up = all[keep] >= 5;
+    all.truncate(keep);
+    if up {
+        let mut i = keep;
+        loop {
+            if i == 0 {
+                all.insert(0, 1);
+                point += 1;
+                break;
+            }
+            i -= 1;
+            if all[i] == 9 {
+                all[i] = 0;
+            } else {
+                all[i] += 1;
+                break;
+            }
+        }
+    }
+    // The places between the digits kept and the point are zeros.
+    while all.len() < point {
+        all.push(0);
+    }
+    let s: String = all.iter().map(|&d| char::from(d + b'0')).collect();
+    let (i, f) = s.split_at(point);
+    let i = match i.trim_start_matches('0') {
+        "" => "0",
+        i => i,
+    };
+    match f.trim_end_matches('0') {
+        "" => i.to_string(),
+        f => format!("{i}.{f}"),
+    }
+}
+
+/// The double nearest `v` rounded to `n` significant digits half away from
+/// zero, as a typed number is (a slider's value under a digit limit:
+/// [`ParseOptions::literal_digits`]). Exact on `v`'s decimal expansion.
+pub fn round_to_digits(v: f64, n: u8) -> f64 {
+    if !v.is_finite() || v == 0.0 {
+        return v;
+    }
+    let r: f64 = round_decimal(&format!("{:.1074}", v.abs()), n)
+        .parse()
+        .unwrap_or(v.abs());
+    r.copysign(v)
 }
 
 fn superscript_value(c: char) -> Option<char> {
@@ -225,6 +305,11 @@ fn tokenize_with(
                     start..i,
                 ));
             }
+            // Rounded on entry, under a digit limit: from here on the
+            // number is the rounded decimal.
+            if let Some(n) = opts.literal_digits {
+                digits = round_decimal(&digits, n);
+            }
             let v: f64 = digits
                 .parse()
                 .map_err(|_| EquationError::syntax(SyntaxErrorCode::InvalidToken, start..i))?;
@@ -244,11 +329,13 @@ fn tokenize_with(
                 inner.push(v);
                 i += 1;
             }
-            let sub = tokenize_with(&inner, ParseOptions::default(), lits).map_err(|e| {
-                EquationError {
-                    code: e.code,
-                    span: start..i,
-                }
+            let inner_opts = ParseOptions {
+                decimal_comma: false,
+                ..opts
+            };
+            let sub = tokenize_with(&inner, inner_opts, lits).map_err(|e| EquationError {
+                code: e.code,
+                span: start..i,
             })?;
             out.push(Token {
                 tok: Tok::Caret,
@@ -598,6 +685,7 @@ mod tests {
             "root(2,5; 3)",
             ParseOptions {
                 decimal_comma: true,
+                ..Default::default()
             },
         )
         .unwrap()
@@ -614,6 +702,52 @@ mod tests {
                 Tok::Num(3.0),
                 Tok::RParen
             ]
+        );
+    }
+
+    #[test]
+    fn rounding_to_significant_digits() {
+        let r = round_decimal;
+        assert_eq!(r("0.1234567", 3), "0.123");
+        assert_eq!(r("0.1235", 3), "0.124");
+        // Half away from zero, not to even.
+        assert_eq!(r("0.1225", 3), "0.123");
+        assert_eq!(r("2.5", 1), "3");
+        assert_eq!(r("99.95", 3), "100");
+        assert_eq!(r("0.0999", 2), "0.1");
+        assert_eq!(r("123456789", 3), "123000000");
+        assert_eq!(r("0.000123456", 3), "0.000123");
+        assert_eq!(r("1.0000000000000001", 14), "1");
+        assert_eq!(r("0.99999999999999999", 14), "1");
+        assert_eq!(r("1.00000000000005", 14), "1.0000000000001");
+        // Nothing beyond the digits kept: as typed.
+        assert_eq!(r("0.10", 14), "0.10");
+        assert_eq!(r("007", 1), "007");
+        assert_eq!(r("0", 5), "0");
+        assert_eq!(r(".5", 5), ".5");
+        assert_eq!(round_to_digits(0.1 + 0.2, 15), 0.3);
+        assert_eq!(round_to_digits(-(0.1 + 0.2), 14), -0.3);
+        assert_eq!(round_to_digits(1.0, 5), 1.0);
+    }
+
+    #[test]
+    fn numbers_are_rounded_on_entry_under_a_digit_limit() {
+        let ti = ParseOptions {
+            literal_digits: Some(TI84_DIGITS),
+            ..Default::default()
+        };
+        let nums =
+            |s: &str, o: ParseOptions| -> Vec<(f64, String)> { literal_texts(s, o).unwrap() };
+        assert_eq!(
+            nums("1.0000000000000001*x-1*x", ti),
+            vec![(1.0, "1".to_string()), (1.0, "1".to_string())]
+        );
+        // Superscripts too.
+        assert_eq!(nums("x^1.0000000000000001+x²", ti)[0].1, "1");
+        // Off: the decimal typed.
+        assert_eq!(
+            nums("1.0000000000000001", ParseOptions::default())[0].1,
+            "1.0000000000000001"
         );
     }
 }

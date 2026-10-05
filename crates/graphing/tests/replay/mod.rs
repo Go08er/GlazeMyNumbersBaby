@@ -605,14 +605,26 @@ pub fn function(a: &Value) -> Result<Fx, String> {
         .and_then(|b| b.get("decimal_comma"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    // Each number typed rounded to so many significant digits on entry,
+    // if the binding says so (absent: as typed).
+    let digits = match a.get("binding").and_then(|b| b.get("literal_digits")) {
+        None | Some(Value::Null) => None,
+        Some(d) => Some(
+            d.as_u64()
+                .and_then(|d| u8::try_from(d).ok())
+                .filter(|d| (1..=40).contains(d))
+                .ok_or_else(|| format!("binding: literal_digits {d} is no digit count"))?,
+        ),
+    };
     let po = graphing::lexer::ParseOptions {
         decimal_comma: comma,
+        literal_digits: digits,
     };
     let eq = graphing::Equation::parse_with(&text, po).map_err(|e| format!("parse: {e:?}"))?;
     let Some((graphing::equation::Axis::X, expr)) = eq.explicit() else {
         return Err("the source is not y = f(x)".into());
     };
-    let lits = Lits::of_with(&text, comma);
+    let lits = Lits::of_with(&text, comma, digits);
     let f = eval::canonical(expr, &lits);
     if f.formula() != formula {
         return Err(format!(

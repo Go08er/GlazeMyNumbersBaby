@@ -46,18 +46,78 @@ fn superscript_digit(c: char) -> Option<char> {
     })
 }
 
+/// The decimal `text` (digits and at most one `.`) rounded to `n`
+/// significant digits, half away from zero, as the binding's digit limit
+/// says each typed number was: worked in GMP rationals (q·10^(n−1−e)
+/// rounded to an integer, 10^e ≤ q < 10^(e+1)), apart from the lexer's
+/// digit-string rounding.
+pub fn round_sig(text: &str, n: u8) -> String {
+    use rug::{Integer, Rational};
+    let t = match (text.starts_with('.'), text.ends_with('.')) {
+        (true, _) => format!("0{text}"),
+        (_, true) => format!("{text}0"),
+        _ => text.to_string(),
+    };
+    let Some(q) = super::exact::decimal(&t) else {
+        return text.to_string();
+    };
+    if q == 0 {
+        return text.to_string();
+    }
+    let ten = |k: i64| -> Rational {
+        let p = Rational::from(Integer::u_pow_u(10, k.unsigned_abs() as u32));
+        if k < 0 { Rational::from(1) / p } else { p }
+    };
+    // The decimal exponent, from the text, then made exact.
+    let (int, frac) = t.split_once('.').unwrap_or((&t, ""));
+    let int = int.trim_start_matches('0');
+    let mut e: i64 = if int.is_empty() {
+        -((frac.len() - frac.trim_start_matches('0').len()) as i64) - 1
+    } else {
+        int.len() as i64 - 1
+    };
+    while q < ten(e) {
+        e -= 1;
+    }
+    while q >= ten(e + 1) {
+        e += 1;
+    }
+    let k = i64::from(n) - 1 - e;
+    // `round` takes a tie away from zero.
+    let m: Integer = (q * ten(k)).round().numer().clone();
+    // m·10^(−k) as a decimal.
+    let digits = m.to_string();
+    if k <= 0 {
+        return format!("{digits}{}", "0".repeat(k.unsigned_abs() as usize));
+    }
+    let k = k as usize;
+    let padded = format!("{digits:0>width$}", width = k + 1);
+    let (i, f) = padded.split_at(padded.len() - k);
+    let f = f.trim_end_matches('0');
+    if f.is_empty() {
+        i.to_string()
+    } else {
+        format!("{i}.{f}")
+    }
+}
+
 impl Lits {
     /// Every run of digits and `.` (and of superscript digits) in `text`.
     pub fn of(text: &str) -> Lits {
-        Lits::of_with(text, false)
+        Lits::of_with(text, false, None)
     }
 
-    /// The same with `,` as the decimal separator (`comma`).
-    pub fn of_with(text: &str, comma: bool) -> Lits {
+    /// The same with `,` as the decimal separator (`comma`), each number
+    /// rounded to `digits` significant digits when the binding says so.
+    pub fn of_with(text: &str, comma: bool, digits: Option<u8>) -> Lits {
         let sep = if comma { ',' } else { '.' };
         let mut by_bits: HashMap<u64, Vec<String>> = HashMap::new();
         let mut add = |s: &str| {
             let s = &s.replace(sep, ".");
+            let s = &match digits {
+                Some(n) if s.chars().any(|c| c.is_ascii_digit()) => round_sig(s, n),
+                _ => s.clone(),
+            };
             if s.chars().any(|c| c.is_ascii_digit())
                 && let Ok(v) = s.parse::<f64>()
             {

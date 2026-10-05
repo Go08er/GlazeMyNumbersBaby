@@ -7,7 +7,7 @@ use crate::compile::{CompileOptions, VariableValues};
 use crate::equation::{Axis, CompiledEquation, CompiledForm, Equation, EquationKind, LineStyle};
 use crate::error::EquationError;
 use crate::functions::TrigUnit;
-use crate::lexer::ParseOptions;
+use crate::lexer::{ParseOptions, round_to_digits};
 use crate::plot::{Cancel, Plot, PlotOptions, contour_cost, plot, plot_with};
 use crate::trace::{TracePoint, nearest_point};
 use crate::variable::Variable;
@@ -77,11 +77,27 @@ impl Entry {
     }
 }
 
-struct Vars<'a>(&'a BTreeMap<String, Variable>);
+/// The sliders' values as the equations read them: each its double, or
+/// under a digit limit the double nearest it rounded as a typed number is
+/// (`ParseOptions::literal_digits`).
+struct Vars(BTreeMap<String, f64>);
 
-impl VariableValues for Vars<'_> {
+impl Vars {
+    fn of(vars: &BTreeMap<String, Variable>, digits: Option<u8>) -> Vars {
+        Vars(
+            vars.iter()
+                .map(|(n, v)| {
+                    let x = v.value();
+                    (n.clone(), digits.map_or(x, |d| round_to_digits(x, d)))
+                })
+                .collect(),
+        )
+    }
+}
+
+impl VariableValues for Vars {
     fn value(&self, name: &str) -> Option<f64> {
-        self.0.get(name).map(|v| v.value())
+        self.0.get(name).copied()
     }
 }
 
@@ -259,7 +275,34 @@ impl Graph {
         }
     }
 
-    /// Changes the decimal/list separators (re-parses every equation).
+    /// How equations are read: the separators, and the digit limit on
+    /// typed numbers.
+    pub fn parse_options(&self) -> ParseOptions {
+        self.parse_options
+    }
+
+    /// The digit limit on numbers ([`ParseOptions::literal_digits`]): each
+    /// number typed in an equation, and each slider's value, is rounded to
+    /// that many significant digits, half away from zero; `None` is off
+    /// (the decimal exactly as typed, a slider its double). A new graph has
+    /// it off; the apps' default is [`crate::lexer::TI84_DIGITS`] (14).
+    pub fn literal_digits(&self) -> Option<u8> {
+        self.parse_options.literal_digits
+    }
+
+    /// Sets the digit limit (clamped to [`crate::lexer::LITERAL_DIGITS`]):
+    /// re-parses and recompiles every equation. Its analysis, plot and
+    /// trace are then of the numbers as rounded: ask for them again.
+    pub fn set_literal_digits(&mut self, digits: Option<u8>) {
+        let d = crate::lexer::LITERAL_DIGITS;
+        self.set_parse_options(ParseOptions {
+            literal_digits: digits.map(|n| n.clamp(*d.start(), *d.end())),
+            ..self.parse_options
+        });
+    }
+
+    /// Changes the decimal/list separators or the digit limit (re-parses
+    /// every equation).
     pub fn set_parse_options(&mut self, opts: ParseOptions) {
         if self.parse_options != opts {
             self.parse_options = opts;
@@ -312,15 +355,15 @@ impl Graph {
         true
     }
 
-    fn compile_options(&self) -> (TrigUnit, &BTreeMap<String, Variable>) {
-        (self.trig_unit, &self.variables)
+    fn vars(&self) -> Vars {
+        Vars::of(&self.variables, self.parse_options.literal_digits)
     }
 
     fn recompile(&mut self) {
-        let (unit, vars) = self.compile_options();
+        let vars = self.vars();
         let opts = CompileOptions {
-            trig_unit: unit,
-            variables: &Vars(vars),
+            trig_unit: self.trig_unit,
+            variables: &vars,
         };
         let compiled: Vec<Option<Result<CompiledEquation, EquationError>>> = self
             .entries
@@ -547,7 +590,7 @@ impl Graph {
         if !matches!(e.compiled, Some(Ok(_))) {
             return could_not();
         }
-        let vars = Vars(&self.variables);
+        let vars = self.vars();
         analyze_cancellable(
             p,
             &CompileOptions {
