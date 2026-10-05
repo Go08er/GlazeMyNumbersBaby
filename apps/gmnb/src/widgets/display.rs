@@ -60,6 +60,13 @@ pub fn expression_label(expression: &str) -> String {
     format!("Expression is {expression}")
 }
 
+/// What assistive technology hears for the value shown (upstream's
+/// Format_DisplayValue). A page with a name of its own for its display
+/// (the date results, the converter's values) sets that after each value.
+pub fn display_label(value: &str) -> String {
+    format!("Display is {value}")
+}
+
 mod expr_imp {
     use super::*;
 
@@ -161,6 +168,12 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
             self.obj().set_hexpand(true);
+            // Named from the start: the first value set is often the "0"
+            // already shown, which changes nothing.
+            self.obj()
+                .update_property(&[gtk::accessible::Property::Label(&display_label(
+                    &self.value.borrow(),
+                ))]);
             let node = &self.expression_node;
             node.set_can_target(false);
             node.set_can_focus(false);
@@ -333,9 +346,7 @@ impl Display {
         imp.value.replace(text.to_string());
         imp.error.set(is_error);
         imp.glyphs.replace(None);
-        self.update_property(&[gtk::accessible::Property::Label(&format!(
-            "Display is {text}"
-        ))]);
+        self.update_property(&[gtk::accessible::Property::Label(&display_label(text))]);
 
         let change = if is_error { Change::Error } else { change };
         imp.change.set(change);
@@ -640,5 +651,13 @@ mod tests {
     #[test]
     fn the_expression_is_named_as_upstream_names_it() {
         assert_eq!(super::expression_label("7 + "), "Expression is 7 + ");
+    }
+
+    /// Upstream's Format_DisplayValue, as DGMNB words it too; a new
+    /// display is named after the value it starts with.
+    #[test]
+    fn the_display_is_named_as_upstream_names_it() {
+        assert_eq!(super::display_label("0"), "Display is 0");
+        assert_eq!(super::display_label("1,234.5"), "Display is 1,234.5");
     }
 }
