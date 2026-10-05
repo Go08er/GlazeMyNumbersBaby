@@ -28,12 +28,17 @@
 //! before any refinement in the budget's order.
 //!
 //! Nothing is joined that isn't proven continuous, and no chord strays
-//! more than the tolerance from the curve. A continuous box the budget
-//! leaves unrefined is still joined (it's proven continuous), through
-//! point samples a seed spacing apart; a box whose structure the budget
-//! (or a cancel) leaves unknown falls back to the heuristic sampler below,
-//! which breaks rather than joins any jump it can't examine. Either sets
-//! `has_missing_data`.
+//! more than the tolerance from the curve. No vertex lies outside f's
+//! enclosure at its point (with the literals' exact decimals): a point
+//! value outside it is moved into it where the enclosure is within the
+//! tolerance, else the curve breaks there (`push_vertex`).
+//!
+//! A continuous box the budget leaves unrefined is still joined (it's
+//! proven continuous), through point samples a seed spacing apart; a box
+//! whose structure the budget (or a cancel) leaves unknown falls back to
+//! the heuristic sampler below, which breaks rather than joins any jump
+//! it can't examine, and draws its point values unchecked, as a dense
+//! column's stroke does. Each sets `has_missing_data`.
 //!
 //! The budget ([`PlotOptions::max_work`]) is a deterministic count of
 //! estimated cost, never a time: an evaluation is charged by the size of
@@ -46,7 +51,7 @@
 use super::{Cancel, IntervalFn, PlotOptions, Polyline, axis_point, signed_area};
 use crate::compile::{Input, Program};
 use crate::equation::Axis;
-use crate::interval::{Dec, derivs_valid};
+use crate::interval::{Dec, DecInterval, derivs_valid};
 use crate::viewport::Viewport;
 
 /// Width of the first boxes the certified sampler classifies (pixels).
@@ -575,9 +580,11 @@ impl<'a> ExplicitSampler<'a> {
             let (lo, hi, kind) = boxes[i];
             match kind {
                 Kind::Off => {
-                    let (fa, fb) = (self.off_value(lo), self.off_value(hi));
-                    self.push(lo, fa);
-                    self.push(hi, fb);
+                    self.work += 2 * self.pt_cost;
+                    for t in [lo, hi] {
+                        let d = self.f.eval(t, 0.0);
+                        self.push_vertex(iv, t, d);
+                    }
                 }
                 Kind::Dense => {
                     self.partial = true;
@@ -614,26 +621,15 @@ impl<'a> ExplicitSampler<'a> {
                         .eval_batch(Input::Slice(&ts), Input::Scalar(0.0), &mut fs);
                     self.work += ts.len() * self.pt_cost;
                     for (&t, &d) in ts.iter().zip(&fs) {
-                        if d.is_finite() {
-                            self.push(t, d);
-                        } else {
-                            self.break_piece();
-                        }
+                        self.push_vertex(iv, t, d);
                     }
                 }
                 Kind::Peak(a, b) => {
                     let (p, q) = if a.0 <= b.0 { (a, b) } else { (b, a) };
-                    let (fa, fb) = (self.continuous_value(lo), self.continuous_value(hi));
-                    if fa.is_none() {
-                        self.break_piece();
-                    }
-                    for (t, d) in [(lo, fa), (p.0, Some(p.1)), (q.0, Some(q.1)), (hi, fb)] {
-                        if let Some(d) = d {
-                            self.push(t, d);
-                        }
-                    }
-                    if fb.is_none() {
-                        self.break_piece();
+                    self.work += 2 * self.pt_cost;
+                    let (fa, fb) = (self.f.eval(lo, 0.0), self.f.eval(hi, 0.0));
+                    for (t, d) in [(lo, fa), p, q, (hi, fb)] {
+                        self.push_vertex(iv, t, d);
                     }
                 }
                 Kind::Steep | Kind::Continuous | Kind::Proven(..) => {
@@ -653,11 +649,8 @@ impl<'a> ExplicitSampler<'a> {
                         } else {
                             lo + (hi - lo) * k as f64 / n as f64
                         };
-                        if let Some(d) = self.continuous_value(t) {
-                            self.push(t, d);
-                        } else {
-                            self.break_piece();
-                        }
+                        let d = self.f.eval(t, 0.0);
+                        self.push_vertex(iv, t, d);
                     }
                 }
                 Kind::Gap | Kind::Undefined => {
@@ -728,12 +721,8 @@ impl<'a> ExplicitSampler<'a> {
         self.break_piece();
     }
 
-    /// f's value at t on an off box, made finite (beyond the band) where it
-    /// overflows: the stroke is clipped and fills clamp to the band.
-    fn off_value(&self, t: f64) -> f64 {
-        self.off_value_of(self.f.eval(t, 0.0))
-    }
-
+    /// A value beyond the band made finite (an overflow, `sinh(10²⁰x)`):
+    /// the stroke is clipped and fills clamp to the band.
     fn off_value_of(&self, d: f64) -> f64 {
         let h = self.band_hi - self.band_lo;
         if d.is_finite() {
@@ -756,6 +745,10 @@ impl<'a> ExplicitSampler<'a> {
     /// 10⁻⁴), is no hole; nor is a factorial's pole where doubles see no
     /// growth at all ([`IntervalFn::pole_at`]: x! near −1000). Enclosures, not point values, close in, so a
     /// cancelling form (`(x³−8)/(x−2)`) isn't mistaken for growth.
+    ///
+    /// Nor is a jump, however small: the sides must meet, not merely come
+    /// within the tolerance (R12-L-01: `sign(x)·(x/x)/1000` jumps by a
+    /// fifteenth of a pixel). See [`sides_converge`].
     fn removable(&self, iv: &IntervalFn, p: f64, r: f64) -> Option<f64> {
         if iv.pole_at(p) {
             return None;
@@ -780,24 +773,36 @@ impl<'a> ExplicitSampler<'a> {
             a = a.next_down();
             b = b.next_up();
         }
-        [a, b]
-            .into_iter()
-            .all(|near| {
-                let d = dist(near);
-                d <= tol && d <= 2.0 * far + 4.0 * ulp(v)
-            })
-            .then_some(v)
+        ([a, b].into_iter().all(|near| {
+            let d = dist(near);
+            d <= tol && d <= 2.0 * far + 4.0 * ulp(v)
+        }) && sides_converge(iv, p, r))
+        .then_some(v)
     }
 
-    /// f's value at an end of a box it is proven continuous on (so
-    /// defined: an infinite value is an overflow, `sinh(10²⁰x)`), made
-    /// finite beyond the band like [`Self::off_value`]. None for NaN.
-    fn continuous_value(&self, t: f64) -> Option<f64> {
-        let d = self.f.eval(t, 0.0);
-        if d.is_nan() {
-            None
-        } else {
-            Some(self.off_value_of(d))
+    /// Draws a vertex at t, on a box f is proven defined (and, but for an
+    /// off box, continuous) on, where the point evaluator gives `d`: never
+    /// outside f's enclosure at t ([`super::drawn_value`]: `d` where the
+    /// enclosure holds it, else a value in it if it is within the
+    /// tolerance), made finite beyond the band like
+    /// [`Self::off_value_of`]. Where `d` lies outside a wider enclosure
+    /// (or is NaN) the point is undecided: the curve breaks there, joined
+    /// neither into it nor out of it, and the plot is partial. An
+    /// interval evaluation, but for a box's first vertex (its
+    /// neighbour's last, drawn already).
+    fn push_vertex(&mut self, iv: &IntervalFn, t: f64, d: f64) {
+        if self.cur.last().is_some_and(|&(last, _)| last == t) {
+            return;
+        }
+        self.work += self.iv0_cost;
+        let e = iv.enclose(t, t);
+        let tol = self.opts.tolerance_px / self.d_px;
+        match super::drawn_value(d, e.lo(), e.hi(), tol) {
+            Some(v) => self.push(t, self.off_value_of(v)),
+            None => {
+                self.partial = true;
+                self.break_piece();
+            }
         }
     }
 
@@ -1074,6 +1079,67 @@ fn ulp(t: f64) -> f64 {
     }
 }
 
+/// Most rungs of [`sides_converge`]'s ladder above the doubles next to p.
+const CONVERGE_RUNGS: usize = 24;
+
+/// Whether f's one-sided enclosures beside p converge to one value within
+/// their own width, from `r` away down to the doubles next to p: f's
+/// enclosures either side at p ± r, p ± r/8, p ± r/64, … (to
+/// [`CONVERGE_RUNGS`] rungs, and at least four times further out than
+/// the next), eight doubles out and at the nearest doubles where f is
+/// defined. At each rung the sides overlap, or are apart by no more than
+/// their own widths and twice the gap one rung out scaled down by the
+/// distance (f's slope parting the values beside a hole closes the gap in
+/// step with the distance: `1/x!` at −1 is −2.2·10⁻¹⁶ and 1.1·10⁻¹⁶ at the
+/// nearest doubles, each enclosed to 10⁻³¹); a gap that stays wherever
+/// the enclosures are narrower than it is a jump (`sign(x)·(x/x)/1000`;
+/// `(x²−1)/(x−1) + sign(x−1)/1000`, whose enclosures widen past the jump
+/// only within 10⁻¹³ of 1). Not a proof that the limits are equal, which
+/// no enclosure at a double can give: a jump narrower than f's
+/// enclosures beside p, or than its change across a few doubles there,
+/// still passes.
+fn sides_converge(iv: &IntervalFn, p: f64, r: f64) -> bool {
+    let (mut a8, mut b8) = (p, p);
+    // The nearest doubles either side where f is defined.
+    let (mut left, mut right) = ((p, None), (p, None));
+    for _ in 0..8 {
+        a8 = a8.next_down();
+        b8 = b8.next_up();
+        if left.1.is_none() {
+            left = (a8, Some(iv.enclose(a8, a8)).filter(|e| !e.is_empty()));
+        }
+        if right.1.is_none() {
+            right = (b8, Some(iv.enclose(b8, b8)).filter(|e| !e.is_empty()));
+        }
+    }
+    let ((a1, Some(left)), (b1, Some(right))) = (left, right) else {
+        return false;
+    };
+    let d8 = (p - a8).max(b8 - p);
+    let mut rungs = Vec::with_capacity(CONVERGE_RUNGS + 1);
+    let mut d = r;
+    while rungs.len() < CONVERGE_RUNGS && d > 4.0 * d8 {
+        rungs.push((p - d, p + d));
+        d /= 8.0;
+    }
+    rungs.push((a8, b8));
+    // (Distance across, enclosures either side.)
+    let mut sides: Vec<(f64, DecInterval, DecInterval)> = rungs
+        .into_iter()
+        .map(|(a, b)| (b - a, iv.enclose(a, a), iv.enclose(b, b)))
+        .collect();
+    sides.push((b1 - a1, left, right));
+    if sides.iter().any(|(_, l, r)| l.is_empty() || r.is_empty()) {
+        return false;
+    }
+    let gap = |l: &DecInterval, r: &DecInterval| (l.lo().max(r.lo()) - l.hi().min(r.hi())).max(0.0);
+    sides.windows(2).all(|w| {
+        let ((d0, l0, r0), (d1, l1, r1)) = (&w[0], &w[1]);
+        let widths = (l1.hi() - l1.lo()) + (r1.hi() - r1.lo());
+        gap(l1, r1) - widths <= 2.0 * (d1 / d0) * gap(l0, r0)
+    })
+}
+
 /// A number in [g0, g1] at which f is proven undefined: the shortest
 /// decimal in the box (where a removable hole like x/x's sits), 0, then
 /// the box's middle and ends.
@@ -1215,6 +1281,47 @@ mod tests {
             let chord = 0.5 * (w[0].y + w[1].y);
             assert!((mid.sin() - chord).abs() / v.y_per_px() < 0.3);
         }
+    }
+
+    /// `f` sampled with `g`'s interval form (a point evaluator at odds
+    /// with the function it stands for): the strokes, and whether the
+    /// plot is partial.
+    fn sample_with(f: &str, g: &str, v: &Viewport) -> (Vec<Polyline>, bool) {
+        let p = compile_str(f, TrigUnit::Radians).unwrap();
+        let text = format!("y={g}");
+        let eq = crate::Equation::parse(&text).unwrap();
+        let lits = crate::interval::Literals::of(&text, Default::default()).unwrap();
+        let opts = crate::compile::CompileOptions::default();
+        let iv = IntervalFn::new(eq.explicit().unwrap().1.clone(), lits, &opts);
+        let mut s = ExplicitSampler::new(&p, Axis::X, v, &PlotOptions::default());
+        s.set_interval(Some(&iv));
+        s.run();
+        (s.stroke_polylines(), s.exhausted())
+    }
+
+    /// R12-M-05: no vertex is drawn outside f's point enclosure. Where the
+    /// point value is off and the enclosure is within the tolerance, the
+    /// vertex moves into it; where the enclosure is wider, the point is
+    /// undecided: nothing is drawn through it and the plot is partial.
+    /// Within a wide enclosure the point value stands (all that's known:
+    /// 10¹⁷·(0.1 + 0.2 − 0.3) is enclosed in [−11.1, 5.6]).
+    #[test]
+    fn vertices_stay_within_the_point_enclosure() {
+        let v = vp();
+        let decimals = "10^17*(0.1+0.2-0.3)+x";
+        let (lines, partial) = sample_with("x+1", "x", &v);
+        assert!(!lines.is_empty() && !partial);
+        assert!(lines.iter().flatten().all(|q| q.y == q.x), "{lines:?}");
+
+        let (lines, partial) = sample_with("x+20", decimals, &v);
+        assert!(lines.is_empty() && partial, "{lines:?}");
+
+        let (lines, partial) = sample_with("x+1", decimals, &v);
+        assert!(!lines.is_empty() && !partial);
+        assert!(
+            lines.iter().flatten().all(|q| q.y == q.x + 1.0),
+            "{lines:?}"
+        );
     }
 
     #[test]

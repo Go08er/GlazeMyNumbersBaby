@@ -395,6 +395,60 @@ fn holes_only_where_proven() {
     }
 }
 
+/// R12-L-01: a jump narrower than the tolerance is a break with no hole
+/// circle (sign(x)·(x/x)/1000: −0.001 and +0.001 either side of 0, a
+/// fifteenth of a pixel at the default view); the sides must meet, not
+/// just come within a pixel. Holes whose sides meet keep their circles.
+#[test]
+fn tiny_jumps_get_no_hole_circle() {
+    let sizes = [
+        (378.0, 644.0),
+        (760.0, 700.0),
+        (1000.0, 700.0),
+        (1920.0, 1080.0),
+    ];
+    for (src, at) in [
+        ("y=sign(x)*(x/x)/1000", 0.0),
+        ("y=sign(x)*(x/x)/1000000", 0.0),
+        ("y=2+sign(x-1)*((x-1)/(x-1))/1000", 1.0),
+        ("y=(x^2-1)/(x-1)+sign(x-1)/1000", 1.0),
+    ] {
+        let mut g = Graph::new();
+        let id = g.add_equation(src);
+        for (w, h) in sizes {
+            let vp = Viewport::default_for_size(w, h);
+            let p = g.plot_equation(id, &vp).unwrap();
+            assert!(p.holes.is_empty(), "{src} at {w}x{h}: {:?}", p.holes);
+            for c in &p.curves {
+                for s in c.windows(2) {
+                    let (a, b) = (s[0].x.min(s[1].x), s[0].x.max(s[1].x));
+                    assert!(!(a < at && at < b), "{src} at {w}x{h}: {s:?}");
+                }
+            }
+        }
+    }
+    for (src, hole) in [
+        ("y=x/x", (0.0, 1.0)),
+        ("y=(x^2-1)/(x-1)", (1.0, 2.0)),
+        ("y=sin(x)/x", (0.0, 1.0)),
+        ("y=(x^3-8)/(x-2)", (2.0, 12.0)),
+    ] {
+        let mut g = Graph::new();
+        let id = g.add_equation(src);
+        for (w, h) in sizes {
+            let vp = Viewport::default_for_size(w, h);
+            let p = g.plot_equation(id, &vp).unwrap();
+            assert!(
+                p.holes
+                    .iter()
+                    .any(|q| q.x == hole.0 && (q.y - hole.1).abs() < 1e-4),
+                "{src} at {w}x{h}: {:?}",
+                p.holes
+            );
+        }
+    }
+}
+
 /// PREREVIEW_B B-M2: factorials, nCr/nPr in x and dense poles are drawn
 /// without a join across a pole or a point where f is undefined, and with
 /// their shapes (x! was a few segments zig-zagging over its poles).

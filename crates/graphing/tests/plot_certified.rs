@@ -293,3 +293,32 @@ fn inequality_bounds_are_certified_too() {
     no_join_across(&p.curves, &poles, "y < tan(x)");
     assert!(!p.fill.is_empty());
 }
+
+/// R12-M-05: the drawn curve is f as its interval form (with the typed
+/// literals' exact decimals) encloses it, not as the point evaluator
+/// alone computes it. nCr(x, 3) far left is x(x − 1)(x − 2)/6, enclosed
+/// to a few doubles, where the point evaluator gives NaN (it went
+/// undrawn); x^(1/3) at −1000 is −10 exactly, where it gives
+/// −9.999999999999998 (tracing showed that): the drawn curve and the
+/// traced point both take values in the enclosure.
+#[test]
+fn drawn_and_traced_values_lie_in_the_enclosure() {
+    let v = Viewport::new(-1010.0, -990.0, -1.75e8, -1.6e8, 800.0, 800.0);
+    let p = geometry("y = nCr(x,3)", &v);
+    let poly = |x: f64| x * (x - 1.0) * (x - 2.0) / 6.0;
+    let drawn: Vec<_> = p.curves.iter().flatten().collect();
+    assert!(drawn.len() > 100, "{} points", drawn.len());
+    assert!(drawn.first().unwrap().x < -1009.0 && drawn.last().unwrap().x > -991.0);
+    for q in drawn {
+        assert!((q.y - poly(q.x)).abs() <= 1e-12 * q.y.abs(), "{q:?}");
+    }
+    chords_follow(&p.curves, poly, &v, "nCr(x,3)");
+
+    let mut g = graphing::Graph::new();
+    g.add_equation("y = x^(1/3)");
+    let v = Viewport::new(-1010.0, -990.0, -10.5, -9.5, 800.0, 800.0);
+    let plots = g.plot(&v);
+    let (px, py) = v.to_screen(-1000.0, -10.0);
+    let t = g.trace(&v, &plots, px, py, 10.0).unwrap().1;
+    assert_eq!((t.x, t.y), (-1000.0, -10.0));
+}
