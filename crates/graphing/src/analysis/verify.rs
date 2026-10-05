@@ -4414,7 +4414,7 @@ pub fn enclosure(e: &Expr, unit: TrigUnit) -> (f64, f64) {
     };
     let quarter = unit.full_turn() / 4.0;
     match e {
-        Expr::Num(v) => (*v, *v),
+        Expr::Num(v, _) => (*v, *v),
         Expr::Const(c) => (c.value(), c.value()),
         Expr::Neg(x) => {
             let (l, h) = enclosure(x, unit);

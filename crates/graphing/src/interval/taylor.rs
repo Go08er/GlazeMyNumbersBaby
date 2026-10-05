@@ -8,8 +8,8 @@
 //! jump, a root or rational power at 0) makes them unknown.
 //!
 //! The tree is the one the parser produced, not a simplified or compiled
-//! form: numbers are read back to their exact decimals through
-//! [`Literals`], and the app's semantics are those of `functions.rs`, with
+//! form: numbers are read back to their exact decimals (each by its own
+//! [`crate::ast::Lit`]), and the app's semantics are those of `functions.rs`, with
 //! the TI rule for a power whose exponent varies (base > 0).
 
 use super::arith::Interval;
@@ -25,7 +25,7 @@ use crate::functions::TrigUnit;
 pub struct Ctx<'a> {
     /// Angle unit and slider values.
     pub opts: CompileOptions<'a>,
-    /// The exact values of the input's numeric literals.
+    /// How the numbers are read ([`Literals`]: each by its own `Lit`).
     pub literals: &'a Literals,
     /// The value(s) of y, for relations in x and y (no y-derivatives).
     pub y: DecInterval,
@@ -482,7 +482,7 @@ fn constant_near(v: &DecInterval, step: impl Fn(&DecInterval) -> DecInterval) ->
 fn ev(e: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
     let unit = ctx.opts.trig_unit;
     match e {
-        Expr::Num(v) => konst(DecInterval::new(ctx.literals.enclose(*v)), n),
+        Expr::Num(v, lit) => konst(DecInterval::new(lit.enclose(*v)), n),
         Expr::Const(Constant::Pi) => konst(DecInterval::new(elem::pi()), n),
         Expr::Const(Constant::E) => konst(DecInterval::new(elem::e()), n),
         Expr::X => x.clone(),

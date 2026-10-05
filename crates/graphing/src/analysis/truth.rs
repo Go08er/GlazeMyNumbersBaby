@@ -26,7 +26,8 @@ use crate::functions::{self as fns, TrigUnit};
 pub fn bind_variables(e: &Expr, opts: &CompileOptions<'_>) -> Expr {
     let b = |a: &Expr| Box::new(bind_variables(a, opts));
     match e {
-        Expr::Var(n) => Expr::Num(opts.variables.value(n).unwrap_or(DEFAULT_VARIABLE_VALUE)),
+        // (A slider's value is its double, exactly.)
+        Expr::Var(n) => Expr::exact(opts.variables.value(n).unwrap_or(DEFAULT_VARIABLE_VALUE)),
         Expr::Neg(a) => Expr::Neg(b(a)),
         Expr::Degrees(a) => Expr::Degrees(b(a)),
         Expr::Bin(op, x, y) => Expr::Bin(*op, b(x), b(y)),
@@ -362,7 +363,7 @@ fn lost_bin(op: BinOp, a: Xf, b: Xf) -> R {
 pub fn rational(e: &Expr) -> Option<(i32, i32)> {
     pub fn int(e: &Expr) -> Option<i64> {
         match e {
-            Expr::Num(v) if *v == v.trunc() && v.abs() < 1e6 => Some(*v as i64),
+            Expr::Num(v, _) if *v == v.trunc() && v.abs() < 1e6 => Some(*v as i64),
             Expr::Neg(a) => int(a).map(|v| -v),
             _ => None,
         }
@@ -421,8 +422,8 @@ fn reval_in(e: &Expr, x: f64, u: TrigUnit, lits: Option<&crate::interval::Litera
         trig_unit: u,
         variables: &(),
     };
-    if let Some(l) = lits
-        && let Some(v) = crate::compile::typed_value(e, &opts, l)
+    if lits.is_some()
+        && let Some(v) = crate::compile::typed_value(e, &opts)
     {
         return match v {
             crate::compile::TypedValue::Value(v) => R::V(Xf::of(v)),
@@ -439,7 +440,7 @@ fn reval_in(e: &Expr, x: f64, u: TrigUnit, lits: Option<&crate::interval::Litera
         },
     };
     match e {
-        Expr::Num(v) => R::V(Xf::of(*v)),
+        Expr::Num(v, _) => R::V(Xf::of(*v)),
         Expr::Const(c) => R::V(Xf::of(c.value())),
         Expr::X => R::V(Xf::of(x)),
         Expr::Y => R::Unknown,
@@ -469,12 +470,12 @@ fn reval_in(e: &Expr, x: f64, u: TrigUnit, lits: Option<&crate::interval::Litera
         // A root of a degree exactly no integer: the power 1/n, base ≥ 0.
         Expr::Call(Func::Root, args)
             if args.len() == 2
-                && lits.is_some_and(|l| {
-                    crate::compile::typed_root_power(&args[1], &opts, l).is_some()
+                && lits.is_some_and(|_| {
+                    crate::compile::typed_root_power(&args[1], &opts).is_some()
                 }) =>
         {
             let inv = lits
-                .and_then(|l| crate::compile::typed_root_power(&args[1], &opts, l))
+                .and_then(|_| crate::compile::typed_root_power(&args[1], &opts))
                 .expect("checked");
             match reval(&args[0], x, u) {
                 R::V(va) if va.sign() < 0.0 => R::Undef,
@@ -1153,7 +1154,16 @@ pub fn exact_at(f: Func, a: f64, r: f64, u: TrigUnit) -> bool {
 pub fn eb(e: &Expr, x: f64, u: TrigUnit) -> (f64, f64) {
     pub const INF: f64 = f64::INFINITY;
     match e {
-        Expr::Num(v) => (*v, if v.fract() == 0.0 { 0.0 } else { 0.5 * ulp(*v) }),
+        // (A typed decimal is within half an ulp of its double, even one
+        // that is a whole number: 1.0000000000000001.)
+        Expr::Num(v, lit) => (
+            *v,
+            if v.fract() == 0.0 && lit.is_exact() {
+                0.0
+            } else {
+                0.5 * ulp(*v)
+            },
+        ),
         Expr::Const(c) => (c.value(), 0.5 * ulp(c.value())),
         Expr::X => (x, 0.0),
         Expr::Y => (f64::NAN, INF),

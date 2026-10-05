@@ -56,17 +56,32 @@ slider or an expression, takes the positive-base rule unless its value is
 an integer, even when it is a fraction with an odd denominator, so `x^0.2`
 has domain [0, ∞) while `x^(1/5)` is defined everywhere.
 
-**Literals are the decimals typed.** A number in an equation is the decimal
-it was typed as, not the double nearest it: `1.0000000000000001` is
-1 + 10⁻¹⁶, though a double holds it as 1, and `0.1` is one tenth. So
-whether an exponent (or a root's degree) is an integer is decided by its
-exact value, never by its double: `x^1.0000000000000001` and
-`x^2.0000000000000001` take the positive-base rule (domain [0, ∞), a
-minimum at 0), while `x^(0.1+0.9)` and `x^2.0` are integer powers; only the
-integers of the written form `p/q` must be typed exactly so to give odd
-roots. Arithmetic on literals and sliders alone (+, −, ×, ÷, whole
-powers, |·| and the counts n!, n!!, nCr, nPr of whole numbers; a slider is
-the double it is set to) is done exactly and rounded once
+**Literals are the decimals typed, to the digits set.** Each number typed in
+an equation is rounded on entry to a number of significant decimal digits,
+half away from zero, which a setting chooses: by default the TI-84 Plus
+CE's 14 (its numbers are 14-digit decimals; it shows 10). The settings
+slider also marks 10 (Casio's display), 12 (the HP Prime's Home view) and
+15 (Casio's internal precision, and the most digits every double tells
+apart); anything from 5 to 20 can be set, or off. The rounded decimal is
+the number from then on, for the curve drawn, its trace, its analysis and
+its certificate alike; off, the number is exactly the decimal typed. A
+slider's value is the double it is set to, under a digit limit the double
+nearest that value rounded the same way.
+
+A number is that decimal, not the double nearest it: `0.1` is one tenth;
+off (or at 16 digits or more) `1.0000000000000001` is 1 + 10⁻¹⁶, though a
+double holds it as 1, while to 14 digits it is 1. Two numbers that read
+differently to 15 digits or fewer are never the same double. With more
+digits, or off, they can be, and each occurrence is still its own number:
+off, `1.0000000000000001·x − 1·x` is 10⁻¹⁶·x, not 0, and beside a slider
+`a` at 1, `a·x − 1.0000000000000001·x` is −10⁻¹⁶·x. Whether an exponent (or
+a root's degree) is an integer is decided by its exact value, never by its
+double: off, `x^1.0000000000000001` and `x^2.0000000000000001` take the
+positive-base rule (domain [0, ∞), a minimum at 0), while `x^(0.1+0.9)` and
+`x^2.0` are integer powers; only the integers of the written form `p/q`
+must be typed exactly so to give odd roots. Arithmetic on literals and
+sliders alone (+, −, ×, ÷, whole powers, |·| and the counts n!, n!!, nCr,
+nPr of whole numbers) is done exactly and rounded once
 (`10^17·(0.1 + 0.2 − 0.3)` is 0, `0.1·3` is the double nearest 0.3, and
 `1/(0.1 + 0.2 − 0.3)` divides by zero), for the curve drawn, its trace and
 its analysis alike, while every exact value on the way fits in 2¹⁴ bits
@@ -76,11 +91,12 @@ is still the ±∞ or 0 it rounds to, but arithmetic on such a value has an
 unknown value, not what rounding step by step would make of it:
 `(10^5000 + 1) − 10^5000` is unknown, never 0. Nothing is drawn or traced
 for an unknown value except where f's enclosure itself places the curve.
-Anything else (π, e, sin, …) is computed in floating point as before. A literal the doubles can't tell from its
-neighbour (1 + 10⁻¹⁶ against 1) is enclosed by the doubles either side of
-it, so the analysis may leave a row unknown that only that difference
-decides (`2/(1.0000000000000001 − cos x)` is defined everywhere, but its
-domain row says it can't tell).
+Anything else (π, e, sin, …) is computed in floating point as before. A
+literal the doubles can't tell from its neighbour (off, 1 + 10⁻¹⁶ against
+1) is enclosed by the doubles either side of it, so the analysis may leave
+a row unknown that only that difference decides (off,
+`2/(1.0000000000000001 − cos x)` is defined everywhere, but its domain row
+says it can't tell).
 
 0⁰: the limit of x^y at (0, 0) doesn't exist, so a function graphed through
 it has no value there (x⁰ approaches 1 but 0^x approaches 0). The TI reports a

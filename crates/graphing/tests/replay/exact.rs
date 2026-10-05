@@ -48,7 +48,7 @@ pub fn eval(
 ) -> Option<Rational> {
     let ev = |e: &Expr| eval(e, x, lits, vars);
     Some(match e {
-        Expr::Num(v) => lits.exact(*v)?,
+        Expr::Num(v, lit) => lits.exact(*v, lit)?,
         Expr::X => x?.clone(),
         Expr::Var(n) => of_f64(vars.iter().find(|(m, _)| m == n)?.1)?,
         Expr::Y | Expr::Const(_) => return None,

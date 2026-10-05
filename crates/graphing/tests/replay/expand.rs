@@ -295,7 +295,7 @@ impl<'a> Tail<'a> {
 
     fn inverse(&self, u: &Lp) -> Option<Lp> {
         let (m, c, v) = self.split(u)?;
-        let g = Expr::Bin(BinOp::Div, Box::new(Expr::Num(1.0)), Box::new(Expr::X));
+        let g = Expr::Bin(BinOp::Div, Box::new(Expr::exact(1.0)), Box::new(Expr::X));
         let w = self.through(&g, &v)?;
         Some(Tail::times_t(&Tail::times(&w, &iv::recip(&c)), -m))
     }
@@ -446,16 +446,16 @@ impl<'a> Tail<'a> {
             Func::Sqrt => {
                 let half = Expr::Bin(
                     BinOp::Div,
-                    Box::new(Expr::Num(1.0)),
-                    Box::new(Expr::Num(2.0)),
+                    Box::new(Expr::exact(1.0)),
+                    Box::new(Expr::exact(2.0)),
                 );
                 self.root_power(&u, 1, 2, &half)
             }
             Func::Cbrt => {
                 let third = Expr::Bin(
                     BinOp::Div,
-                    Box::new(Expr::Num(1.0)),
-                    Box::new(Expr::Num(3.0)),
+                    Box::new(Expr::exact(1.0)),
+                    Box::new(Expr::exact(3.0)),
                 );
                 self.root_power(&u, 1, 3, &third)
             }

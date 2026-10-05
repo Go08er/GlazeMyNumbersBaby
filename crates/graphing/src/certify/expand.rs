@@ -313,7 +313,7 @@ impl<'a> Ex<'a> {
 
     fn recip(&self, u: &Tm) -> Option<Tm> {
         let (m, c, v) = self.factor(u)?;
-        let inv = Expr::bin(BinOp::Div, Expr::Num(1.0), Expr::X);
+        let inv = Expr::bin(BinOp::Div, Expr::exact(1.0), Expr::X);
         let w = self.compose(&inv, &v)?;
         Some(Ex::shift(&Ex::scale(&w, c.recip()), -m))
     }
@@ -464,11 +464,11 @@ impl<'a> Ex<'a> {
         match func {
             Func::Exp => self.exp(&u),
             Func::Sqrt => {
-                let half = Expr::bin(BinOp::Div, Expr::Num(1.0), Expr::Num(2.0));
+                let half = Expr::bin(BinOp::Div, Expr::exact(1.0), Expr::exact(2.0));
                 self.power(&u, 1, 2, &half)
             }
             Func::Cbrt => {
-                let third = Expr::bin(BinOp::Div, Expr::Num(1.0), Expr::Num(3.0));
+                let third = Expr::bin(BinOp::Div, Expr::exact(1.0), Expr::exact(3.0));
                 self.power(&u, 1, 3, &third)
             }
             Func::Abs => {

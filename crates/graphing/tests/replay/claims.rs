@@ -45,7 +45,7 @@ fn unknown(s: impl Into<String>) -> V {
 pub fn unmodelled(e: &Expr) -> bool {
     match e {
         Expr::Y => true,
-        Expr::Num(_) | Expr::Const(_) | Expr::X | Expr::Var(_) => false,
+        Expr::Num(..) | Expr::Const(_) | Expr::X | Expr::Var(_) => false,
         Expr::Neg(a) | Expr::Degrees(a) => unmodelled(a),
         Expr::Bin(_, a, b) => unmodelled(a) || unmodelled(b),
         Expr::Call(f, args) => {
@@ -423,7 +423,7 @@ fn product_of(fs: &[Expr]) -> Expr {
     fs.iter()
         .cloned()
         .reduce(|a, b| Expr::Bin(BinOp::Mul, Box::new(a), Box::new(b)))
-        .unwrap_or(Expr::Num(1.0))
+        .unwrap_or(Expr::exact(1.0))
 }
 
 /// e's strict sign over [lo, hi] (`true`: positive) from its parts: its
@@ -1122,7 +1122,7 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
     let mut out = Vec::new();
     fn go(e: &Expr, out: &mut Vec<Expr>) {
         match e {
-            Expr::Num(v) if *v != 0.0 => {}
+            Expr::Num(v, _) if *v != 0.0 => {}
             Expr::Const(_) => {}
             Expr::Neg(a) | Expr::Degrees(a) => go(a, out),
             Expr::Bin(BinOp::Mul, a, b) => {
@@ -1133,7 +1133,7 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
             Expr::Call(f, args) => {
                 let a = &args[0];
                 let minus_one =
-                    || Expr::Bin(BinOp::Sub, Box::new(a.clone()), Box::new(Expr::Num(1.0)));
+                    || Expr::Bin(BinOp::Sub, Box::new(a.clone()), Box::new(Expr::exact(1.0)));
                 match f {
                     Func::Sqrt
                     | Func::Cbrt
@@ -1164,7 +1164,7 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
                     Func::LogBase => out.push(Expr::Bin(
                         BinOp::Sub,
                         Box::new(args[1].clone()),
-                        Box::new(Expr::Num(1.0)),
+                        Box::new(Expr::exact(1.0)),
                     )),
                     _ => out.push(e.clone()),
                 }
@@ -1200,7 +1200,7 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
                 let join = |fs: Vec<Expr>| {
                     fs.into_iter()
                         .reduce(|x, y| Expr::Bin(BinOp::Mul, Box::new(x), Box::new(y)))
-                        .unwrap_or(Expr::Num(1.0))
+                        .unwrap_or(Expr::exact(1.0))
                 };
                 out.push(Expr::Bin(*op, Box::new(join(rest_a)), Box::new(join(pool))));
             }
@@ -1211,7 +1211,7 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
     /// a positive number, or a sum of these.
     fn nonneg(e: &Expr) -> bool {
         match e {
-            Expr::Num(v) => *v >= 0.0,
+            Expr::Num(v, _) => *v >= 0.0,
             Expr::Const(_) => true,
             Expr::Bin(BinOp::Pow, _, p) => {
                 written_rational(p, &Lits::default()).is_some_and(|(n, d)| d == 1 && n % 2 == 0)
@@ -1232,7 +1232,7 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
             }
             Expr::Neg(a) => {
                 let mut v = product(a);
-                v.push(Expr::Num(-1.0));
+                v.push(Expr::exact(-1.0));
                 v
             }
             _ => vec![e.clone()],
@@ -1247,7 +1247,7 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
 /// and sec (cot and csc), the argument of coth and csch.
 pub fn nonzero_where_defined(e: &Expr, out: &mut Vec<Expr>) {
     match e {
-        Expr::Num(_) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => {}
+        Expr::Num(..) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => {}
         Expr::Neg(a) | Expr::Degrees(a) => nonzero_where_defined(a, out),
         Expr::Bin(op, a, b) => {
             if *op == BinOp::Div {
@@ -1590,7 +1590,7 @@ fn affine_exact(e: &Expr, fx: &Fx) -> Option<(rug::Rational, rug::Rational)> {
 fn zero_table<'e>(g: &'e Expr, lits: &Lits) -> Option<(&'e Expr, i64, i64)> {
     // Exactly 1 as typed (a typed 1.0000000000000001 is held as the double
     // 1 but is not 1).
-    let one = |e: &Expr| matches!(e, Expr::Num(v) if *v == 1.0 && lits.exact(1.0) == Some(rug::Rational::from(1)));
+    let one = |e: &Expr| matches!(e, Expr::Num(v, lit) if *v == 1.0 && lits.exact(*v, lit) == Some(rug::Rational::from(1)));
     fn trig(e: &Expr) -> Option<(Func, &Expr)> {
         match e {
             Expr::Call(f @ (Func::Sin | Func::Cos | Func::Tan | Func::Cot), args) => {
@@ -1806,7 +1806,7 @@ impl Near<'_> {
     /// |e| → ∞ at a point of `at`, from within near.
     fn blows(&self, e: &Expr) -> bool {
         let call = |f: Func, a: &Expr| Expr::Call(f, vec![a.clone()]);
-        let one = Expr::Num(1.0);
+        let one = Expr::exact(1.0);
         match e {
             Expr::Neg(a) | Expr::Degrees(a) => self.blows(a),
             Expr::Bin(BinOp::Add | BinOp::Sub, a, b) => {
@@ -2454,7 +2454,7 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
         // No line: f/x doesn't settle on a nonzero slope far out.
         let mut scale: f64 = 1.0;
         fx.f.visit(&mut |n| {
-            if let graphing::ast::Expr::Num(v) = n
+            if let graphing::ast::Expr::Num(v, _) = n
                 && v.is_finite()
             {
                 scale = scale.max(v.abs());
@@ -2651,7 +2651,7 @@ pub enum Approach {
 fn approach_points(fx: &Fx, at: &str) -> Result<Vec<f64>, String> {
     let mut scale: f64 = 1.0;
     fx.f.visit(&mut |n| {
-        if let Expr::Num(v) = n
+        if let Expr::Num(v, _) = n
             && v.is_finite()
         {
             scale = scale.max(v.abs());

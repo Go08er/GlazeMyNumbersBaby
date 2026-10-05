@@ -1522,7 +1522,7 @@ fn enclosed_end(fx: &Fx, x: B, low: bool) -> Option<bool> {
         if v.empty || !v.def {
             continue;
         }
-        let edge = replace_with(&fx.f, &ed.path, Expr::Num(ed.c));
+        let edge = replace_with(&fx.f, &ed.path, Expr::exact(ed.c));
         let v = &fx.series(&edge, x.0, x.1, 0)[0];
         if v.empty {
             return Some(false);

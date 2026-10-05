@@ -653,7 +653,7 @@ impl Reader<'_> {
     fn linear(&self, e: &Expr) -> Option<(Rational, Rational)> {
         Some(match e {
             Expr::X => (rq(1, 1), rq(0, 1)),
-            Expr::Num(v) => (rq(0, 1), self.fx.lits.exact(*v)?),
+            Expr::Num(v, lit) => (rq(0, 1), self.fx.lits.exact(*v, lit)?),
             Expr::Neg(a) => {
                 let (a, b) = self.linear(a)?;
                 (-a, -b)
@@ -765,15 +765,15 @@ impl Reader<'_> {
             return power(w, &rq(p, q), q % 2 != 0);
         }
         // A typed decimal exponent: exact, a positive base only.
-        if let Expr::Num(v) = k
-            && let Some(q) = self.fx.lits.exact(*v)
+        if let Expr::Num(v, lit) = k
+            && let Some(q) = self.fx.lits.exact(*v, lit)
         {
             let whole = q.is_integer();
             return power(w, &q, whole);
         }
         if let Expr::Neg(inner) = k
-            && let Expr::Num(v) = inner.as_ref()
-            && let Some(q) = self.fx.lits.exact(*v)
+            && let Expr::Num(v, lit) = inner.as_ref()
+            && let Some(q) = self.fx.lits.exact(*v, lit)
         {
             let whole = q.is_integer();
             return power(w, &(-q), whole);

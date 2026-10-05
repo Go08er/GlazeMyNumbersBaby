@@ -625,8 +625,14 @@ pub fn function(a: &Value) -> Result<Fx, String> {
         return Err("the source is not y = f(x)".into());
     };
     let lits = Lits::of_with(&text, comma, digits);
-    let f = eval::canonical(expr, &lits);
-    if f.formula() != formula {
+    // Each number of the tree is the occurrence the parser read, with its
+    // own value; checked against the replay's own reading of the text.
+    lits.check(expr)?;
+    let f = eval::canonical(expr);
+    // The formula names the same tree: its shape and each number's double
+    // (its exact value is the source's; a certificate before round 13
+    // wrote a typed 1.0000000000000001 as 1).
+    if !eval::parse_formula(formula).is_some_and(|g| same_tree(&f, &g)) {
         return Err(format!(
             "binding: the source's tree {} is not the certificate's formula {formula}",
             f.formula()
@@ -674,6 +680,22 @@ pub fn function(a: &Value) -> Result<Fx, String> {
         verified,
         f_alt,
     })
+}
+
+/// The same tree: the same shape, and the same double for each number.
+fn same_tree(a: &Expr, b: &Expr) -> bool {
+    match (a, b) {
+        (Expr::Num(x, _), Expr::Num(y, _)) => x.to_bits() == y.to_bits(),
+        (Expr::Neg(x), Expr::Neg(y)) | (Expr::Degrees(x), Expr::Degrees(y)) => same_tree(x, y),
+        (Expr::Bin(o, x1, x2), Expr::Bin(p, y1, y2)) => {
+            o == p && same_tree(x1, y1) && same_tree(x2, y2)
+        }
+        (Expr::Call(f, xs), Expr::Call(g, ys)) => {
+            f == g && xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| same_tree(x, y))
+        }
+        (Expr::Num(..), _) | (_, Expr::Num(..)) => false,
+        _ => a == b,
+    }
 }
 
 // ------------------------------------------------------------ outcomes

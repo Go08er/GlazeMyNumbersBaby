@@ -81,8 +81,8 @@ impl Period {
 /// The exact value of an x-free expression, if it is q·πᵏ.
 pub fn exact_constant(e: &Expr, lits: &ExactLiterals) -> Option<PiQ> {
     Some(match e {
-        Expr::Num(v) => PiQ {
-            q: lits.exact(*v)?,
+        Expr::Num(v, lit) => PiQ {
+            q: lit.q(*v)?,
             k: 0,
         },
         Expr::Const(Constant::Pi) => PiQ { q: Q::ONE, k: 1 },

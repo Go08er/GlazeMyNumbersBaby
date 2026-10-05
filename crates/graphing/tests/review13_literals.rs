@@ -75,6 +75,95 @@ fn arithmetic_too_long_to_fold_is_unknown_not_rounded() {
     assert_eq!(k.data.y_intercept, Some(1.0), "{:?}", k.y_intercept);
 }
 
+/// Review 13's three functions, analysed with the digit limit `digits`
+/// (the slider `a` at 1).
+fn panel(src: &str, digits: Option<u8>) -> graphing::analysis::KeyGraphFeatures {
+    let mut g = graphing::Graph::new();
+    g.set_literal_digits(digits);
+    let id = g.add_equation(src);
+    g.analyze(id)
+}
+
+fn is_singleton(k: &graphing::analysis::KeyGraphFeatures) -> bool {
+    k.range.contains('{')
+}
+
+/// R13-M-01: two decimals that share a double are two numbers, each
+/// occurrence its own (`ast::Lit`), with the digit limit off: at the
+/// scalar, the panel and the certificate. `10^16*(1.0000000000000001-1)+x`
+/// is x + 1; 1.0000000000000001·x − 1·x is 10⁻¹⁶·x; beside a slider a at
+/// 1, a·x − 1.0000000000000001·x is −10⁻¹⁶·x. None is constant, none is 0
+/// everywhere, and the first isn't odd.
+#[test]
+fn literals_sharing_a_double_are_each_their_own_number() {
+    use graphing::analysis::{Monotonicity, Parity};
+    // The scalar the app plots, and its reference: x + 1.
+    let first = "10^16*(1.0000000000000001-1)+x";
+    assert_eq!(at(first, 0.0), 1.0);
+    assert_eq!(at(first, -1.0), 0.0);
+    assert!(matches!(reference(first, 0.0), R::V(v) if v.f() == 1.0));
+    let k = panel(&format!("y={first}"), None);
+    assert_eq!(k.data.y_intercept, Some(1.0), "{}", k.y_intercept);
+    assert!(
+        k.data
+            .zeros
+            .iter()
+            .all(|z| z.x == -1.0 && z.period.is_none()),
+        "{}",
+        k.x_intercept
+    );
+    assert!(!matches!(
+        k.parity,
+        Parity::Odd | Parity::Even | Parity::Both
+    ));
+    for src in ["y=1.0000000000000001*x-1*x", "y=a*x-1.0000000000000001*x"] {
+        let k = panel(src, None);
+        assert!(!is_singleton(&k), "{src}: range {}", k.range);
+        assert!(
+            !matches!(k.parity, Parity::Even | Parity::Both),
+            "{src}: {:?}",
+            k.parity
+        );
+        assert!(
+            k.monotonicity
+                .iter()
+                .all(|(_, m)| *m != Monotonicity::Constant),
+            "{src}: {:?}",
+            k.monotonicity
+        );
+        assert!(!k.x_intercept.contains('ℝ'), "{src}: {}", k.x_intercept);
+        assert!(k.data.zeros.iter().all(|z| z.x == 0.0), "{src}");
+    }
+    // The certificate: no row says otherwise.
+    let a = graphing::certify::certify_text(
+        "1.0000000000000001*x-1*x",
+        CompileOptions::default(),
+        graphing::certify::DEFAULT_BUDGET,
+        None,
+    )
+    .unwrap();
+    assert!(
+        !matches!(
+            a.parity,
+            graphing::certify::Row::Certified {
+                value: graphing::certify::Parity::Even,
+                ..
+            }
+        ),
+        "{:?}",
+        a.parity
+    );
+    // To 14 digits (the apps' default) each decimal is 1: x, 0 and 0.
+    let k = panel(&format!("y={first}"), Some(14));
+    assert_eq!(k.data.y_intercept, Some(0.0));
+    assert_eq!(k.parity, Parity::Odd);
+    for src in ["y=1.0000000000000001*x-1*x", "y=a*x-1.0000000000000001*x"] {
+        let k = panel(src, Some(14));
+        assert_eq!(k.range, "y ∈ {0}", "{src}");
+        assert_eq!(k.parity, Parity::Both, "{src}");
+    }
+}
+
 /// The digit limit on typed numbers (`ParseOptions::literal_digits`): the
 /// TI-84 Plus CE's 14 rounds `1.0000000000000001` to 1 on entry, for the
 /// curve and the analysis alike, and a slider the same way.

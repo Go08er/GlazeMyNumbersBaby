@@ -157,7 +157,7 @@ fn collect(e: &Expr, lits: &dyn crate::compile::Exactness, out: &mut Vec<Cond>) 
         }
     }
     match e {
-        Expr::Num(_) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => {}
+        Expr::Num(..) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => {}
         Expr::Neg(a) | Expr::Degrees(a) => collect(a, lits, out),
         Expr::Bin(op, a, b) => {
             collect(a, lits, out);
@@ -272,7 +272,7 @@ fn collect(e: &Expr, lits: &dyn crate::compile::Exactness, out: &mut Vec<Cond>) 
                     push(out, Cond::Positive(b.clone()), b);
                     push(
                         out,
-                        Cond::NonZero(Expr::bin(BinOp::Sub, b.clone(), Expr::Num(1.0))),
+                        Cond::NonZero(Expr::bin(BinOp::Sub, b.clone(), Expr::num(1.0))),
                         b,
                     );
                     push(out, Cond::Positive(x.clone()), x);

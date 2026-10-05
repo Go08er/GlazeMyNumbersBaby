@@ -604,8 +604,9 @@ impl Cx<'_, '_> {
 
     /// An x-free tree's value.
     fn constant(&self, e: &Expr) -> Asy {
-        if let Some(exact) = self.f.exact
-            && let Some((a, b)) = affine(e, exact)
+        // (With the simplifier's exact reading of numbers only.)
+        if self.f.exact.is_some()
+            && let Some((a, b)) = affine(e)
             && a.is_zero()
             && b.is_zero()
         {
@@ -678,8 +679,8 @@ impl Cx<'_, '_> {
         if !e.contains_x() {
             return self.constant(e);
         }
-        if let Some(exact) = self.f.exact
-            && let Some((a, b)) = affine(e, exact)
+        if self.f.exact.is_some()
+            && let Some((a, b)) = affine(e)
         {
             return self.affine(a, b);
         }

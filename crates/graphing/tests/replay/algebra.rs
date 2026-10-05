@@ -470,7 +470,7 @@ impl<'a> Field<'a> {
     /// many terms, a function read no way).
     pub fn read(&mut self, e: &Expr) -> Option<Frac> {
         Some(match e {
-            Expr::Num(v) => Frac::constant(self.lits.exact(*v)?),
+            Expr::Num(v, lit) => Frac::constant(self.lits.exact(*v, lit)?),
             Expr::Const(Constant::Pi) => self.pi(),
             Expr::Const(Constant::E) => self.atom("e".into(), Atom::Const),
             Expr::X => Frac::of(Poly::var(0)),
@@ -716,7 +716,8 @@ pub fn same_trees(
 /// The number (p/d)·πᵏ (k = 0 or 1) as a tree of integers.
 pub fn piq_expr(p: i64, d: i64, k: i32) -> Option<Expr> {
     let int = |v: i64| {
-        let n = Expr::Num(v.unsigned_abs() as f64);
+        // (Beyond 2⁵³ a whole number is no exact double: `Expr::num`.)
+        let n = Expr::num(v.unsigned_abs() as f64);
         if v < 0 { Expr::Neg(Box::new(n)) } else { n }
     };
     let q = if d == 1 {

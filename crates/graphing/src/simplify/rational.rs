@@ -184,7 +184,7 @@ impl Poly {
             let mono = match i {
                 0 => None,
                 1 => Some(Expr::X),
-                n => Some(Expr::bin(BinOp::Pow, Expr::X, Expr::Num(n as f64))),
+                n => Some(Expr::bin(BinOp::Pow, Expr::X, Expr::num(n as f64))),
             };
             let mag = c.abs().unwrap_or(*c);
             let coef = q_expr(mag);
@@ -201,7 +201,7 @@ impl Poly {
         }
         let mut it = terms.into_iter();
         let Some(first) = it.next() else {
-            return Expr::Num(0.0);
+            return Expr::num(0.0);
         };
         it.fold(first, |acc, t| match t {
             Expr::Neg(t) => Expr::bin(BinOp::Sub, acc, *t),
@@ -210,13 +210,14 @@ impl Poly {
     }
 }
 
-/// An exact rational as an expression (`p/q` or an integer).
+/// An exact rational as an expression (`p/q` or an integer), each part
+/// exactly (`Expr::int`).
 pub fn q_expr(q: Q) -> Expr {
-    let n = Expr::Num(q.numer().unsigned_abs() as f64);
+    let n = Expr::int(q.numer().unsigned_abs());
     let v = if q.is_int() {
         n
     } else {
-        Expr::bin(BinOp::Div, n, Expr::Num(q.denom() as f64))
+        Expr::bin(BinOp::Div, n, Expr::int(q.denom().unsigned_abs()))
     };
     if q.signum() < 0 {
         Expr::Neg(Box::new(v))
@@ -345,7 +346,7 @@ fn parts(e: &Expr, lits: &ExactLiterals) -> Option<(Poly, Poly)> {
     let one = || Poly::constant(Q::ONE);
     Some(match e {
         Expr::X => (Poly::x(), one()),
-        Expr::Num(v) => (Poly::constant(lits.exact(*v)?), one()),
+        Expr::Num(v, lit) => (Poly::constant(lit.q(*v)?), one()),
         Expr::Neg(a) => {
             let (n, d) = parts(a, lits)?;
             (n.neg()?, d)

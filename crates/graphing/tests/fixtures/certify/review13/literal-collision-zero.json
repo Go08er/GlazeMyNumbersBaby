@@ -1,0 +1,309 @@
+{
+  "source": "y=1.0000000000000001*x-1*x",
+  "formula": "Sub(Mul(1,x),Mul(1,x))",
+  "evaluated": "f = 0",
+  "unit": "radians",
+  "domain": {
+    "Certified": {
+      "value": {
+        "pieces": [
+          {
+            "lo": "NegInf",
+            "hi": "PosInf"
+          }
+        ],
+        "excluded": []
+      },
+      "cert": {
+        "covers": "Line",
+        "claims": []
+      }
+    }
+  },
+  "x_intercepts": {
+    "Unknown": {
+      "reason": "f is 0 on a whole stretch"
+    }
+  },
+  "y_intercept": {
+    "Certified": {
+      "value": {
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "cert": {
+        "covers": "Points",
+        "claims": [
+          {
+            "Value": {
+              "x": {
+                "a": 0.0,
+                "b": 0.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          }
+        ]
+      }
+    }
+  },
+  "parity": {
+    "Certified": {
+      "value": "Even",
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Simplifier": {
+              "fact": "f is even (simplifier): f(−x) = f(x), on a domain symmetric about 0"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "period": {
+    "Certified": {
+      "value": null,
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Value": {
+              "x": {
+                "a": "-inf",
+                "b": "inf"
+              },
+              "of": {
+                "F": "F1"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          }
+        ]
+      }
+    }
+  },
+  "extrema": {
+    "Certified": {
+      "value": [],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Value": {
+              "x": {
+                "a": "-inf",
+                "b": "inf"
+              },
+              "of": {
+                "F": "F1"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          }
+        ]
+      }
+    }
+  },
+  "inflections": {
+    "Certified": {
+      "value": [],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Value": {
+              "x": {
+                "a": "-inf",
+                "b": "inf"
+              },
+              "of": {
+                "F": "F2"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          }
+        ]
+      }
+    }
+  },
+  "monotonicity": {
+    "Certified": {
+      "value": [
+        {
+          "on": {
+            "lo": "NegInf",
+            "hi": "PosInf"
+          },
+          "dir": "Constant"
+        }
+      ],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Value": {
+              "x": {
+                "a": "-inf",
+                "b": "inf"
+              },
+              "of": {
+                "F": "F1"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          }
+        ]
+      }
+    }
+  },
+  "range": {
+    "Certified": {
+      "value": [
+        {
+          "lo": {
+            "At": {
+              "x": {
+                "lo": 0.0,
+                "hi": 0.0
+              },
+              "closed": true
+            }
+          },
+          "hi": {
+            "At": {
+              "x": {
+                "lo": 0.0,
+                "hi": 0.0
+              },
+              "closed": true
+            }
+          }
+        }
+      ],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Value": {
+              "x": {
+                "a": "-inf",
+                "b": "inf"
+              },
+              "of": {
+                "F": "F1"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          },
+          {
+            "Value": {
+              "x": {
+                "a": 0.0,
+                "b": 0.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          }
+        ]
+      }
+    }
+  },
+  "range_ends": [
+    [
+      [
+        {
+          "At": {
+            "lo": 0.0,
+            "hi": 0.0
+          }
+        }
+      ],
+      [
+        {
+          "At": {
+            "lo": 0.0,
+            "hi": 0.0
+          }
+        }
+      ]
+    ]
+  ],
+  "vertical": {
+    "Certified": {
+      "value": [],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Value": {
+              "x": {
+                "a": "-inf",
+                "b": "inf"
+              },
+              "of": {
+                "F": "F0"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          }
+        ]
+      }
+    }
+  },
+  "horizontal": {
+    "Certified": {
+      "value": [],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Simplifier": {
+              "fact": "f = 0·x + 0 on its domain (the simplifier's form): no asymptote"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "oblique": {
+    "Certified": {
+      "value": [],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Simplifier": {
+              "fact": "f = 0·x + 0 on its domain (the simplifier's form): no asymptote"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "binding": {
+    "certifier": "graphing 0.2.0",
+    "rules": "32045d7ad9dab698",
+    "power": "ti-real-1",
+    "sliders": {},
+    "decimal_comma": false,
+    "budget": 200000
+  },
+  "evals": 11,
+  "stopped": null
+}

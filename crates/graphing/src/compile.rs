@@ -5,7 +5,7 @@
 //! time (recompiling is a few microseconds, so moving a slider simply
 //! recompiles). The trig unit is baked in as well.
 
-use crate::ast::{BinOp, Constant, Expr, Func};
+use crate::ast::{BinOp, Constant, Expr, Func, Lit};
 use crate::big::{Nat, Rat};
 use crate::error::{EquationError, EvaluationErrorCode};
 use crate::functions::{self as fns, TrigUnit};
@@ -902,8 +902,8 @@ impl Piece {
 /// 1 but is no integer: an exponent written with it is not "written as an
 /// integer" (`syntactic_rational`).
 pub trait Exactness {
-    /// `Num(v)` is exactly v, and v is a whole number.
-    fn exact_integer(&self, v: f64) -> bool;
+    /// `Num(v, lit)` is exactly v, and v is a whole number.
+    fn exact_integer(&self, v: f64, lit: &Lit) -> bool;
 }
 
 /// Numbers at face value: each double is exactly itself (the earlier
@@ -911,23 +911,25 @@ pub trait Exactness {
 pub struct Doubles;
 
 impl Exactness for Doubles {
-    fn exact_integer(&self, v: f64) -> bool {
+    fn exact_integer(&self, v: f64, _: &Lit) -> bool {
         v == v.trunc()
     }
 }
 
+/// Each number as its own [`Lit`] says.
+fn exact_integer(v: f64, lit: &Lit) -> bool {
+    v == v.trunc() && lit.is_exact()
+}
+
 impl Exactness for crate::interval::Literals {
-    fn exact_integer(&self, v: f64) -> bool {
-        v == v.trunc() && self.is_exact(v)
+    fn exact_integer(&self, v: f64, lit: &Lit) -> bool {
+        exact_integer(v, lit)
     }
 }
 
 impl Exactness for crate::simplify::ExactLiterals {
-    fn exact_integer(&self, v: f64) -> bool {
-        v == v.trunc()
-            && self
-                .exact(v)
-                .is_some_and(|q| crate::simplify::Q::from_f64(v) == Some(q))
+    fn exact_integer(&self, v: f64, lit: &Lit) -> bool {
+        exact_integer(v, lit)
     }
 }
 
@@ -938,7 +940,9 @@ impl Exactness for crate::simplify::ExactLiterals {
 pub(crate) fn syntactic_rational(e: &Expr, lits: &dyn Exactness) -> Option<(i32, i32)> {
     fn int(e: &Expr, lits: &dyn Exactness) -> Option<i64> {
         match e {
-            Expr::Num(v) if *v == v.trunc() && v.abs() < 1e6 && lits.exact_integer(*v) => {
+            Expr::Num(v, lit)
+                if *v == v.trunc() && v.abs() < 1e6 && lits.exact_integer(*v, lit) =>
+            {
                 Some(*v as i64)
             }
             Expr::Neg(a) => int(a, lits).map(|v| -v),
@@ -1034,7 +1038,7 @@ fn fn2_for(f: Func) -> Option<Fn2> {
 /// (e^(1/x) just left of 0, (2e^x)² far left), not a zero.
 fn never_zero(e: &Expr) -> bool {
     match e {
-        Expr::Num(v) => *v != 0.0,
+        Expr::Num(v, _) => *v != 0.0,
         Expr::Const(_) => true,
         Expr::Neg(a) | Expr::Bin(BinOp::Div | BinOp::Pow, a, _) => never_zero(a),
         Expr::Bin(BinOp::Mul, a, b) => never_zero(a) && never_zero(b),
@@ -1339,15 +1343,18 @@ fn beyond(l: (f64, f64), var: bool) -> Fold {
 /// The exact value of an x- and y-free subtree of typed literals and
 /// sliders (a slider's value is the double it holds) under +, −, ×, ÷,
 /// whole powers, |·|, and the counts n!, n!!, nCr, nPr of whole numbers.
-fn fold(e: &Expr, opts: &CompileOptions<'_>, lits: &crate::interval::Literals) -> Fold {
+fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
     use Fold::*;
-    let go = |a: &Expr| fold(a, opts, lits);
+    let go = |a: &Expr| fold(a, opts);
     let whole = |r: &Rat| r.as_int().filter(|n| n.unsigned_abs() <= 1 << 53);
     match e {
-        Expr::Num(v) => match lits.exact(*v) {
+        // Each number by its own exact value: a decimal typed, a value
+        // folded, a double; not one known only to round to its double.
+        Expr::Num(v, lit) => match lit.rat(*v) {
             Some(r) => Value(r, false),
-            None if lits.too_long(*v) => Lone(false),
-            None => No,
+            None if *lit == Lit::Near => No,
+            // A decimal typed with thousands of digits.
+            None => Lone(false),
         },
         Expr::Var(n) => {
             match Rat::from_f64(opts.variables.value(n).unwrap_or(DEFAULT_VARIABLE_VALUE)) {
@@ -1489,40 +1496,41 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>, lits: &crate::interval::Literals) -
 }
 
 /// For interval evaluation of a typed expression: `e` with each largest
-/// x- and y-free subtree that [`fold`]s (sliders at their values) written as one number,
-/// and `lits` extended to read that number as the exact value folded
-/// (its double, or the doubles either side of it). Each literal enclosed
-/// alone, `10^17·(0.1 + 0.2 − 0.3)` is sixteen wide; folded, it is 0, as
-/// the program computes it ([`Program::compile_typed`]). An exponent
-/// written as a ratio of integers (`x^(1/3)`, a real root) is kept as
-/// written, and so is a value beyond the doubles.
+/// x- and y-free subtree that [`fold`]s (sliders at their values) written
+/// as one number that stands for the exact value folded ([`Lit::Folded`]:
+/// enclosed by its double, or the doubles either side of it). Each literal
+/// enclosed alone, `10^17·(0.1 + 0.2 − 0.3)` is sixteen wide; folded, it
+/// is 0, as the program computes it ([`Program::compile_typed`]). An
+/// exponent written as a ratio of integers (`x^(1/3)`, a real root) is
+/// kept as written, and so is a value beyond the doubles, and a subtree
+/// too long to fold.
 pub(crate) fn fold_literals(
     e: &Expr,
     opts: &CompileOptions<'_>,
     lits: &crate::interval::Literals,
-) -> (Expr, crate::interval::Literals) {
-    fn go(
-        e: &Expr,
-        opts: &CompileOptions<'_>,
-        lits: &crate::interval::Literals,
-        found: &mut Vec<(f64, Rat)>,
-    ) -> Expr {
+) -> Expr {
+    fn go(e: &Expr, opts: &CompileOptions<'_>, lits: &crate::interval::Literals) -> Expr {
         let candidate = !matches!(
             e,
-            Expr::Num(_) | Expr::X | Expr::Y | Expr::Var(_) | Expr::Const(_)
+            Expr::Num(..) | Expr::X | Expr::Y | Expr::Var(_) | Expr::Const(_)
         ) && !e.any(&|n| matches!(n, Expr::X | Expr::Y));
-        if candidate && let Fold::Value(r, _) = fold(e, opts, lits) {
+        if candidate && let Fold::Value(r, _) = fold(e, opts) {
             let v = r.to_f64(crate::big::Round::Nearest);
             if v.is_finite() && (v != 0.0 || r.is_zero()) {
                 let neg = v < 0.0;
-                found.push((v.abs(), r.abs()));
-                let n = Expr::Num(v.abs());
+                let r = r.abs();
+                let lit = if Rat::from_f64(v.abs()).is_some_and(|d| d == r) {
+                    Lit::Exact
+                } else {
+                    Lit::Folded(crate::ast::Folded(std::sync::Arc::new(r)))
+                };
+                let n = Expr::Num(v.abs(), lit);
                 return if neg { Expr::Neg(Box::new(n)) } else { n };
             }
         }
-        let mut rec = |a: &Expr| go(a, opts, lits, found);
+        let rec = |a: &Expr| go(a, opts, lits);
         match e {
-            Expr::Num(_) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => e.clone(),
+            Expr::Num(..) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => e.clone(),
             Expr::Neg(a) => Expr::Neg(Box::new(rec(a))),
             Expr::Degrees(a) => Expr::Degrees(Box::new(rec(a))),
             Expr::Bin(BinOp::Pow, a, b) if syntactic_rational(b, lits).is_some() => {
@@ -1535,13 +1543,7 @@ pub(crate) fn fold_literals(
             Expr::Call(f, args) => Expr::Call(*f, args.iter().map(rec).collect()),
         }
     }
-    let mut found = Vec::new();
-    let out = go(e, opts, lits, &mut found);
-    let mut lits = lits.clone();
-    for (v, r) in found {
-        lits.fold_in(v, &r);
-    }
-    (out, lits)
+    go(e, opts, lits)
 }
 
 /// What [`typed_value`] makes of a subtree.
@@ -1558,19 +1560,15 @@ pub(crate) enum TypedValue {
 /// [`Program::compile_typed`] computes it, or `None` when it isn't folded
 /// (a leaf, π, sin, …). For the reference evaluator
 /// (`analysis::truth::reval_typed`).
-pub(crate) fn typed_value(
-    e: &Expr,
-    opts: &CompileOptions<'_>,
-    lits: &crate::interval::Literals,
-) -> Option<TypedValue> {
+pub(crate) fn typed_value(e: &Expr, opts: &CompileOptions<'_>) -> Option<TypedValue> {
     if matches!(
         e,
-        Expr::Num(_) | Expr::X | Expr::Y | Expr::Var(_) | Expr::Const(_)
+        Expr::Num(..) | Expr::X | Expr::Y | Expr::Var(_) | Expr::Const(_)
     ) || e.any(&|n| matches!(n, Expr::X | Expr::Y))
     {
         return None;
     }
-    match fold(e, opts, lits) {
+    match fold(e, opts) {
         Fold::Value(r, _) => {
             let v = r.to_f64(crate::big::Round::Nearest);
             (v.is_finite() && (v != 0.0 || r.is_zero())).then_some(TypedValue::Value(v))
@@ -1594,15 +1592,11 @@ pub(crate) fn typed_pow_kind(
 /// For `root(a, n)` in a typed expression whose degree n is exactly known
 /// not to be an integer: 1/n rounded once (the root is then the power
 /// 1/n of a base ≥ 0, as [`Program::compile_typed`] computes it).
-pub(crate) fn typed_root_power(
-    n: &Expr,
-    opts: &CompileOptions<'_>,
-    lits: &crate::interval::Literals,
-) -> Option<f64> {
+pub(crate) fn typed_root_power(n: &Expr, opts: &CompileOptions<'_>) -> Option<f64> {
     if n.any(&|m| matches!(m, Expr::X | Expr::Y)) {
         return None;
     }
-    match fold(n, opts, lits) {
+    match fold(n, opts) {
         Fold::Value(r, _) if !r.is_integer() => {
             Some(Rat::int(1).div(&r)?.to_f64(crate::big::Round::Nearest))
         }
@@ -1625,9 +1619,9 @@ fn pow_kind(b: &Expr, opts: &CompileOptions<'_>, lx: Lx<'_>) -> PowKind {
     if let Some((p, q)) = syntactic_rational(b, lx.exactness()) {
         return PowKind::Rational(p, q);
     }
-    if let Some(lits) = lx.0
+    if lx.0.is_some()
         && !b.any(&|n| matches!(n, Expr::X | Expr::Y))
-        && let Fold::Value(r, _) = fold(b, opts, lits)
+        && let Fold::Value(r, _) = fold(b, opts)
     {
         if let Some(n) = r.as_int().filter(|n| n.unsigned_abs() < 1_000_000) {
             return PowKind::Rational(n as i32, 1);
@@ -1644,11 +1638,11 @@ fn lower_in(e: &Expr, opts: &CompileOptions<'_>, lx: Lx<'_>) -> Result<Piece, Eq
     // Typed literals: arithmetic on them alone is exact, rounded once. Too
     // long to do exactly, it isn't done: the value is unknown (NaN, and
     // `Redo::Unknown`), not what rounding each step would make of it.
-    if let Some(lits) = lx.0
+    if lx.0.is_some()
         && !matches!(e, Expr::X | Expr::Y | Expr::Var(_) | Expr::Const(_))
         && !e.any(&|n| matches!(n, Expr::X | Expr::Y))
     {
-        match fold(e, opts, lits) {
+        match fold(e, opts) {
             Fold::Value(r, var) => return Ok(Piece::Const(r.to_wide(), var)),
             Fold::DivZero(false) => {
                 return Err(EquationError::eval(EvaluationErrorCode::DivideByZero, 0..0));
@@ -1659,7 +1653,7 @@ fn lower_in(e: &Expr, opts: &CompileOptions<'_>, lx: Lx<'_>) -> Result<Piece, Eq
         }
     }
     Ok(match e {
-        Expr::Num(v) => Piece::Const(Wide::new(*v), false),
+        Expr::Num(v, _) => Piece::Const(Wide::new(*v), false),
         Expr::Const(Constant::Pi) => Piece::Const(Wide::new(std::f64::consts::PI), false),
         Expr::Const(Constant::E) => Piece::Const(Wide::new(std::f64::consts::E), false),
         Expr::X => Piece::Code(vec![Op::X]),
@@ -1780,12 +1774,13 @@ fn lower_in(e: &Expr, opts: &CompileOptions<'_>, lx: Lx<'_>) -> Result<Piece, Eq
         // A root of a degree known exactly not to be an integer is the
         // power 1/n of a base ≥ 0 (> 0 for n < 0): the positive-base rule.
         Expr::Call(Func::Root, args)
-            if args.len() == 2 && lx.0.is_some_and(|lits| {
-                !args[1].any(&|n| matches!(n, Expr::X | Expr::Y))
-                    && matches!(fold(&args[1], opts, lits), Fold::Value(r, _) if !r.is_integer())
-            }) =>
+            if args.len() == 2
+                && lx.0.is_some_and(|_| {
+                    !args[1].any(&|n| matches!(n, Expr::X | Expr::Y))
+                        && matches!(fold(&args[1], opts), Fold::Value(r, _) if !r.is_integer())
+                }) =>
         {
-            let Some(Fold::Value(r, var)) = lx.0.map(|lits| fold(&args[1], opts, lits)) else {
+            let Some(Fold::Value(r, var)) = lx.0.map(|_| fold(&args[1], opts)) else {
                 unreachable!()
             };
             let inv = Rat::int(1).div(&r).expect("a non-integer is not 0");

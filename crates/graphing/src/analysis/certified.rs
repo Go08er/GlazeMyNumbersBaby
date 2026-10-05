@@ -483,16 +483,15 @@ impl Rat {
     }
 }
 
-/// Every Num in the tree's exponents is the double it was typed as (a
-/// power's rational form and derivative read its exponent off the
-/// double).
-fn honest_exponents(e: &Expr, lits: &ExactLiterals) -> bool {
+/// Every number in the tree's exponents is exactly its double (a power's
+/// rational form and derivative read its exponent off the double).
+fn honest_exponents(e: &Expr, _: &ExactLiterals) -> bool {
     let mut ok = true;
     e.visit(&mut |n| {
         if let Expr::Bin(BinOp::Pow, _, b) = n {
             b.visit(&mut |m| {
-                if let Expr::Num(v) = m
-                    && lits.exact(*v) != Q::from_f64(*v)
+                if let Expr::Num(_, lit) = m
+                    && !lit.is_exact()
                 {
                     ok = false;
                 }
@@ -503,29 +502,24 @@ fn honest_exponents(e: &Expr, lits: &ExactLiterals) -> bool {
 }
 
 /// f′ and f″ as trees whose constants read back exactly: the derivative
-/// copies f's own numbers (read as typed), makes integers from exponents
-/// (checked honest), and multiplies in ln 10 and the angle-unit factor
-/// (no typed number may have their bits). Numbers typed with more than 15
-/// significant digits are refused: a constant folded from one could round
-/// to a different exact value.
+/// copies f's own numbers (each with its exact value), makes integers from
+/// exponents (checked honest), folds numbers only where that is exact, and
+/// multiplies in ln 10 and the angle-unit factor (numbers not known
+/// exactly, which no typed number is taken for). Numbers typed with more
+/// than 15 significant digits are refused.
 fn derivative_trees(f: &Expr, unit: TrigUnit, lits: &ExactLiterals) -> [Option<Expr>; 2] {
     let none = [None, None];
     if !honest_exponents(f, lits) {
         return none;
     }
     let mut ok = true;
-    // (In radians the unit factor is 1, which is no constant of its own.)
-    let mut reserved = vec![std::f64::consts::LN_10.to_bits()];
-    if unit != TrigUnit::Radians {
-        reserved.push(unit.to_radians_factor().to_bits());
-    }
     f.visit(&mut |n| {
-        if let Expr::Num(v) = n {
-            let short = lits.exact(*v).is_some_and(|q| {
+        if let Expr::Num(v, lit) = n {
+            let short = lit.q(*v).is_some_and(|q| {
                 q.denom() <= 1_000_000_000_000_000
                     && q.numer().unsigned_abs() <= 1_000_000_000_000_000
             });
-            if !short || reserved.contains(&v.to_bits()) {
+            if !short {
                 ok = false;
             }
         }
@@ -1695,14 +1689,7 @@ pub(super) fn features(
     a: &Analysis,
     cancel: Option<&AtomicBool>,
 ) -> Option<KeyGraphFeatures> {
-    let cx = Ctx::new(
-        certify::canonical_with(f, !ilits.shadows(2.0)),
-        opts,
-        lits,
-        ilits,
-        a,
-        cancel,
-    );
+    let cx = Ctx::new(certify::canonical(f), opts, lits, ilits, a, cancel);
     let mut out = Out {
         k: KeyGraphFeatures::default(),
     };
@@ -2663,7 +2650,9 @@ fn constant_tail(cx: &Ctx<'_>, a: &Analysis, side: Tail, y: Enc) -> Option<Ex> {
 
 /// `e` with each slider at its value, where that is a whole number (the
 /// rational form takes exact literals only; it is the value exact
-/// evaluation uses too).
+/// evaluation uses too). The value is a number of its own, exactly its
+/// double (`Lit::Exact`): never a typed literal that shares that double
+/// (a = 1 beside a typed 1.0000000000000001, review 13).
 fn with_values(e: &Expr, vars: &dyn VariableValues) -> Expr {
     let go = |a: &Expr| Box::new(with_values(a, vars));
     match e {
@@ -2672,7 +2661,7 @@ fn with_values(e: &Expr, vars: &dyn VariableValues) -> Expr {
                 .value(name)
                 .unwrap_or(crate::compile::DEFAULT_VARIABLE_VALUE);
             if v == v.trunc() && v.abs() <= 9007199254740992.0 {
-                Expr::Num(v)
+                Expr::exact(v)
             } else {
                 e.clone()
             }

@@ -589,7 +589,7 @@ fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
                     if let Some(s) = affine(a, cx.lits)
                         && s.k == 0
                     {
-                        let at0 = a.map(&|n| matches!(n, Expr::X).then_some(Expr::Num(0.0)));
+                        let at0 = a.map(&|n| matches!(n, Expr::X).then_some(Expr::num(0.0)));
                         let d = cx.constant(&at0);
                         let c = match d {
                             Asy::Zero => Some(Coef::Exact(PiQ { q: Q::ONE, k: 0 })),
@@ -694,7 +694,7 @@ fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
                     let e2 = Expr::Call(Exp, vec![Expr::Neg(Box::new(a.clone()))]);
                     let op = if *f == Sinh { BinOp::Sub } else { BinOp::Add };
                     let sum = Expr::bin(op, e1, e2);
-                    asy(&Expr::bin(BinOp::Div, sum, Expr::Num(2.0)), cx)
+                    asy(&Expr::bin(BinOp::Div, sum, Expr::num(2.0)), cx)
                 }
                 Sin | Cos => match asy(a, cx) {
                     Asy::Term(t) if t.growth() > 0 => Asy::Bounded(Interval::new(-1.0, 1.0)),
@@ -773,7 +773,7 @@ pub fn limit(
     // about its centre, where its constant part folds away exactly.
     for c in centres(&e, lits) {
         let shifted =
-            e.map(&|n| matches!(n, Expr::X).then(|| Expr::bin(BinOp::Add, Expr::X, Expr::Num(c))));
+            e.map(&|n| matches!(n, Expr::X).then(|| Expr::bin(BinOp::Add, Expr::X, Expr::num(c))));
         let l = read_limit(asy(&shifted, &cx));
         if l != Limit::Unknown {
             return l;
@@ -798,7 +798,7 @@ pub fn centres(e: &Expr, lits: &ExactLiterals) -> Vec<f64> {
         let Some(s) = affine(arg, lits).filter(|s| s.k == 0 && !s.q.is_zero()) else {
             return;
         };
-        let at0 = arg.map(&|m| matches!(m, Expr::X).then_some(Expr::Num(0.0)));
+        let at0 = arg.map(&|m| matches!(m, Expr::X).then_some(Expr::num(0.0)));
         let Some(d) = exact_constant(&at0, lits).filter(|d| d.k == 0) else {
             return;
         };

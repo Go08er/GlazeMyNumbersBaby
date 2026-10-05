@@ -444,7 +444,24 @@ fn pool_certificates_replay() {
 
 /// The certificate of `src` as JSON.
 fn certificate(src: &str) -> serde_json::Value {
-    let a = certify_text(src, CompileOptions::default(), DEFAULT_BUDGET, None).expect("certified");
+    certificate_with(src, None)
+}
+
+/// The certificate of `src` with each number typed rounded to `digits`
+/// significant digits (`ParseOptions::literal_digits`), as JSON.
+fn certificate_with(src: &str, digits: Option<u8>) -> serde_json::Value {
+    let parse = graphing::lexer::ParseOptions {
+        literal_digits: digits,
+        ..Default::default()
+    };
+    let a = graphing::certify::certify_text_with(
+        src,
+        parse,
+        CompileOptions::default(),
+        DEFAULT_BUDGET,
+        None,
+    )
+    .expect("certified");
     serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap()
 }
 
@@ -1007,6 +1024,22 @@ fn rounded_literals_are_refuted() {
                 "fixtures/certify/review12/cosine-family-domain-only.json"
             )),
         ),
+        // Review 13, R13-M-01: the reviewer's certificates (made at 1bddb79),
+        // unaltered. 10^16·(1.0000000000000001 − 1) + x is x + 1 (not odd,
+        // its zero −1); 1.0000000000000001·x − 1·x is 10⁻¹⁶·x (not 0).
+        (
+            "10^16*(1.0000000000000001-1)+x's certificate (made at 1bddb79): odd, \
+             0 at 0, the simplifier's form x",
+            fixture(include_str!(
+                "fixtures/certify/review13/literal-collision.json"
+            )),
+        ),
+        (
+            "1.0000000000000001*x-1*x's certificate (made at 1bddb79): 0 everywhere, even",
+            fixture(include_str!(
+                "fixtures/certify/review13/literal-collision-zero.json"
+            )),
+        ),
     ];
     for (what, v) in cases {
         let r = replay::replay(&v).unwrap_or_else(|e| {
@@ -1024,6 +1057,114 @@ fn rounded_literals_are_refuted() {
         );
         println!("{what}: refuted ({})", refuted[0]);
     }
+}
+
+/// Review 13: a certificate is bound to the digit limit it was made
+/// under, and the replay reads the source so (rounding each number itself,
+/// apart from the lexer). 1.0000000000000001·x − 1·x is 0 to 14 digits and
+/// 10⁻¹⁶·x off: each certificate replays under its own binding and is
+/// refuted under the other; so is x + 1's, made off, bound to 14 digits.
+#[test]
+fn certificates_are_bound_to_their_digit_limit() {
+    let zero = "1.0000000000000001*x-1*x";
+    let at14 = certificate_with(zero, Some(14));
+    assert_eq!(at14["binding"]["literal_digits"], serde_json::json!(14));
+    if let Some(why) = rejected(&at14) {
+        panic!("{zero} to 14 digits: {why}");
+    }
+    let off = certificate_with(zero, None);
+    assert_eq!(off["binding"]["literal_digits"], serde_json::Value::Null);
+    if let Some(why) = rejected(&off) {
+        panic!("{zero} off: {why}");
+    }
+    let mut swapped = at14.clone();
+    swapped["binding"]["literal_digits"] = serde_json::Value::Null;
+    let mut first = certificate_with("10^16*(1.0000000000000001-1)+x", None);
+    first["binding"]["literal_digits"] = serde_json::json!(14);
+    for (what, v) in [
+        ("0 everywhere (made to 14 digits), bound to none", swapped),
+        ("x + 1 (made off), bound to 14 digits", first),
+    ] {
+        let r = replay::replay(&v).unwrap_or_else(|e| panic!("{what}: refused ({e})"));
+        assert!(
+            r.claims.iter().any(|c| c.outcome.class == Class::Refuted)
+                && !r.row_problems().is_empty(),
+            "{what}: not refuted"
+        );
+    }
+}
+
+/// Review 13: the corpus's functions under a digit limit
+/// (`certify_corpus.rs`'s `DIGITS`, sliders aside), and review 12's and
+/// 13's literal cases to 14, 15 and 17 digits and off: every claim proven.
+#[test]
+fn digit_limits_replay() {
+    let start = CORPUS
+        .find("const DIGITS")
+        .expect("DIGITS in certify_corpus.rs");
+    let body = &CORPUS[start..];
+    let body = &body[..body.find("\n];").expect("end of DIGITS")];
+    let lines: Vec<&str> = body.lines().map(str::trim).collect();
+    let mut cases: Vec<(String, Option<u8>)> = Vec::new();
+    for w in lines.windows(3) {
+        if w[0] == "("
+            && let Some(src) = w[1].strip_prefix('"').and_then(|s| s.strip_suffix("\","))
+            && let Some(d) = w[2].strip_suffix(',').and_then(|d| d.parse().ok())
+        {
+            cases.push((src.to_string(), Some(d)));
+        }
+    }
+    assert!(cases.len() >= 8, "{cases:?}");
+    for src in [
+        "10^16*(1.0000000000000001-1)+x",
+        "1.0000000000000001*x-1*x",
+        "x^1.0000000000000001",
+        "1/(x-1.0000000000000001)",
+    ] {
+        for d in [Some(14), Some(15), Some(17), None] {
+            cases.push((src.to_string(), d));
+        }
+    }
+    // (To 15 digits or fewer this is 2/(1 − cos x), whose poles the
+    // replay's 160 bits can't resolve within 10⁻⁹⁶ of 0: unconfirmed, a
+    // limit of its precision, not of the literals.)
+    for d in [Some(17), None] {
+        cases.push(("2/(1.0000000000000001-cos(x))".to_string(), d));
+    }
+    let mut fails = Vec::new();
+    for (src, d) in &cases {
+        let v = certificate_with(src, *d);
+        assert_eq!(v["binding"]["literal_digits"], serde_json::json!(d));
+        if let Some(why) = rejected(&v) {
+            fails.push(format!("{src} ({d:?} digits): {why}"));
+        }
+    }
+    assert!(fails.is_empty(), "{fails:#?}");
+}
+
+/// The replay reads each number of the source's tree as the parser
+/// recorded it, checked against its own reading of the text: a tree that
+/// took a typed decimal for its double (as every layer did before review
+/// 13) is refused.
+#[test]
+fn a_tree_taking_a_decimal_for_its_double_is_refused() {
+    use graphing::ast::{BinOp, Expr, Lit};
+    let text = "y=1.0000000000000001*x-1*x";
+    let lits = replay::eval::Lits::of(text);
+    let eq = graphing::Equation::parse(text).unwrap();
+    let tree = eq.explicit().unwrap().1.clone();
+    assert_eq!(lits.check(&tree), Ok(()));
+    // Both 1s exactly 1.
+    let mul = |c: Expr| Expr::bin(BinOp::Mul, c, Expr::X);
+    let aliased = Expr::bin(BinOp::Sub, mul(Expr::exact(1.0)), mul(Expr::exact(1.0)));
+    assert!(lits.check(&aliased).is_err());
+    // A decimal the source doesn't have.
+    let made_up = Expr::bin(
+        BinOp::Sub,
+        mul(Expr::Num(1.0, Lit::Decimal("1.00000000000000011".into()))),
+        mul(Expr::exact(1.0)),
+    );
+    assert!(lits.check(&made_up).is_err());
 }
 
 // ------------------------------------------------------------ known issues

@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ast::{BinOp, Expr, Func};
+use crate::ast::{BinOp, Expr, Func, Lit};
 use crate::compile::{CompileOptions, DEFAULT_VARIABLE_VALUE, VariableValues};
 use crate::functions::TrigUnit;
 use crate::interval::{Ctx, DecInterval, Interval, Literals, Series, enclose, taylor};
@@ -91,7 +91,7 @@ impl IntervalFn {
     pub(crate) fn cost(&self) -> usize {
         fn c(e: &Expr) -> usize {
             match e {
-                Expr::Num(_) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => 1,
+                Expr::Num(..) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => 1,
                 Expr::Neg(a) | Expr::Degrees(a) => 1 + c(a),
                 Expr::Bin(op, a, b) => {
                     let own = match op {
@@ -122,7 +122,7 @@ impl IntervalFn {
     pub(crate) fn exact_at(&self, x: Q) -> Option<Q> {
         fn ev(e: &Expr, x: Q, f: &IntervalFn) -> Option<Q> {
             match e {
-                Expr::Num(v) if f.literals.is_exact(*v) => Q::from_f64(*v),
+                Expr::Num(v, Lit::Exact) => Q::from_f64(*v),
                 Expr::X => Some(x),
                 Expr::Var(n) => Q::from_f64(*f.vars.0.get(n)?),
                 Expr::Neg(a) => ev(a, x, f)?.neg(),

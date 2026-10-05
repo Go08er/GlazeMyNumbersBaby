@@ -681,7 +681,7 @@ fn affine_argument(expr: &Expr, opts: &CompileOptions<'_>) -> Option<(Expr, f64,
             return Some(if k == 1.0 {
                 Expr::X
             } else {
-                Expr::bin(BinOp::Mul, Expr::Num(k), Expr::X)
+                Expr::bin(BinOp::Mul, Expr::num(k), Expr::X)
             });
         }
         let mut go = |x: &Expr| rewrite(x, affine, base, smallest);
@@ -1702,7 +1702,7 @@ fn generators(e: &Expr, out: &mut Vec<Expr>) {
             out.push(g);
         }
     };
-    let shift = |u: &Expr, c: f64| Expr::bin(BinOp::Sub, u.clone(), Expr::Num(c));
+    let shift = |u: &Expr, c: f64| Expr::bin(BinOp::Sub, u.clone(), Expr::num(c));
     match e {
         Expr::Bin(op, a, b) => {
             match op {

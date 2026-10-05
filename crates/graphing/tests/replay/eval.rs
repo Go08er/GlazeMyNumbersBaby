@@ -20,13 +20,18 @@
 
 use super::iv::{self, Iv, Unit};
 use super::series::{self as se, S};
-use graphing::ast::{BinOp, Constant, Expr, Func};
-use std::collections::HashMap;
+use graphing::ast::{BinOp, Constant, Expr, Func, Lit};
 
-/// The typed literals of a source text, by the double each parses to.
+/// What the numbers of a tree stand for: each occurrence its own value,
+/// as the parser's tree records it (`graphing::ast::Lit`), never looked up
+/// by its double, which two decimals typed can share
+/// (`1.0000000000000001` and `1`: review 13, R13-M-01). The replay reads
+/// the source's literals itself too (each run of digits, rounded as the
+/// binding says) and checks the tree's against them ([`Lits::check`]).
 #[derive(Clone, Debug, Default)]
 pub struct Lits {
-    by_bits: HashMap<u64, Vec<String>>,
+    /// The decimals typed in the source, as the replay reads them.
+    typed: Vec<String>,
     untyped: std::cell::Cell<u32>,
 }
 
@@ -111,20 +116,15 @@ impl Lits {
     /// rounded to `digits` significant digits when the binding says so.
     pub fn of_with(text: &str, comma: bool, digits: Option<u8>) -> Lits {
         let sep = if comma { ',' } else { '.' };
-        let mut by_bits: HashMap<u64, Vec<String>> = HashMap::new();
+        let mut typed: Vec<String> = Vec::new();
         let mut add = |s: &str| {
             let s = &s.replace(sep, ".");
             let s = &match digits {
                 Some(n) if s.chars().any(|c| c.is_ascii_digit()) => round_sig(s, n),
                 _ => s.clone(),
             };
-            if s.chars().any(|c| c.is_ascii_digit())
-                && let Ok(v) = s.parse::<f64>()
-            {
-                let e = by_bits.entry(v.to_bits()).or_default();
-                if !e.iter().any(|t| t == s) {
-                    e.push(s.to_string());
-                }
+            if s.chars().any(|c| c.is_ascii_digit()) && !typed.contains(s) {
+                typed.push(s.to_string());
             }
         };
         let mut cur = String::new();
@@ -146,75 +146,119 @@ impl Lits {
         add(&cur);
         add(&sup);
         Lits {
-            by_bits,
+            typed,
             untyped: Default::default(),
         }
     }
 
-    /// The number a tree's `Num(v)` stands for: a typed decimal (the hull
-    /// if several decimals parsed to `v`), its negation, an integer the
-    /// parser wrote (exact below 2⁵³), or else anything rounding to `v`.
-    pub fn num(&self, v: f64) -> Iv {
-        let typed = |bits: u64| -> Option<Iv> {
-            let texts = self.by_bits.get(&bits)?;
-            let mut out: Option<Iv> = None;
-            for t in texts {
-                let d = iv::decimal(t);
-                out = Some(match out {
-                    None => d,
-                    Some(o) => o.hull(&d),
-                });
-            }
-            out
+    /// Checks the numbers of `e`, the parser's tree of the source, against
+    /// the replay's own reading of its text: each decimal the tree records
+    /// as typed was typed, and the double held is the one nearest it; and
+    /// each decimal typed that its double doesn't hold is in the tree as
+    /// typed (not taken for its double). Only whole numbers the parser
+    /// writes itself (∜'s 4) are in it untyped.
+    pub fn check(&self, e: &Expr) -> Result<(), String> {
+        let same = |a: &str, b: &str| {
+            let (a, b) = (literal_value(a), literal_value(b));
+            a.is_some() && a == b
         };
-        if let Some(i) = typed(v.to_bits()) {
-            return i;
+        let mut bad: Option<String> = None;
+        let mut seen: Vec<String> = Vec::new();
+        e.visit(&mut |n| {
+            if let Expr::Num(v, lit) = n {
+                match lit {
+                    Lit::Exact => {}
+                    Lit::Decimal(d) => {
+                        if !self.typed.iter().any(|t| same(t, d))
+                            || d.parse::<f64>().ok() != Some(*v)
+                        {
+                            bad = Some(format!("the tree's {d} (held as {v:e}) isn't typed in it"));
+                        }
+                        seen.push(d.to_string());
+                    }
+                    other => {
+                        bad = Some(format!(
+                            "the tree has a number not typed: {v:e} ({other:?})"
+                        ))
+                    }
+                }
+            }
+        });
+        if let Some(b) = bad {
+            return Err(format!("binding: {b}"));
         }
-        if let Some(i) = typed((-v).to_bits()) {
-            return iv::neg(&i);
+        for t in &self.typed {
+            let Some(q) = literal_value(t) else { continue };
+            let held = t.parse::<f64>().ok().and_then(rug::Rational::from_f64);
+            if held.as_ref() != Some(&q) && !seen.iter().any(|s| same(s, t)) {
+                return Err(format!(
+                    "binding: {t}, typed, is in the parser's tree only as its double"
+                ));
+            }
         }
-        if v == v.trunc() && v.abs() <= 9007199254740992.0 {
-            return Iv::of(v);
-        }
-        // A number nobody typed (only in a simplifier's tree): a few ulps
-        // either way, and noted.
-        self.untyped.set(self.untyped.get() + 1);
-        let w = v.abs() * 2f64.powi(-48);
-        Iv::of2(v - w, v + w)
+        Ok(())
     }
 
-    /// The exact value of a tree's `Num(v)`, when one decimal (or an
-    /// integer) stands for it.
-    pub fn exact(&self, v: f64) -> Option<rug::Rational> {
-        let one = |bits: u64| -> Option<Option<rug::Rational>> {
-            let texts = self.by_bits.get(&bits)?;
-            let qs: Vec<rug::Rational> = texts
-                .iter()
-                .filter_map(|t| super::exact::decimal(t))
-                .collect();
-            Some(
-                if qs.len() == texts.len() && qs.windows(2).all(|w| w[0] == w[1]) {
-                    qs.into_iter().next()
-                } else {
-                    None
-                },
-            )
-        };
-        if let Some(q) = one(v.to_bits()) {
-            return q;
+    /// The number `Num(v, lit)` stands for: the decimal typed, the double
+    /// itself, or for a number not known exactly (only in a certifier's
+    /// tree) anything rounding to `v`: a few ulps either way, and noted.
+    pub fn num(&self, v: f64, lit: &Lit) -> Iv {
+        match lit {
+            Lit::Exact if v.is_finite() => Iv::of(v),
+            Lit::Decimal(d) => match d.strip_prefix('-') {
+                Some(p) => iv::neg(&iv::decimal(p)),
+                None => iv::decimal(d),
+            },
+            _ => {
+                self.untyped.set(self.untyped.get() + 1);
+                let w = v.abs() * 2f64.powi(-48);
+                Iv::of2(v - w, v + w)
+            }
         }
-        if let Some(q) = one((-v).to_bits()) {
-            return q.map(|q| -q);
+    }
+
+    /// The exact value of `Num(v, lit)`, when it has one.
+    pub fn exact(&self, v: f64, lit: &Lit) -> Option<rug::Rational> {
+        match lit {
+            Lit::Exact => rug::Rational::from_f64(v),
+            Lit::Decimal(d) => literal_value(d),
+            _ => None,
         }
-        if v == v.trunc() && v.abs() <= 9007199254740992.0 {
-            return rug::Rational::from_f64(v);
-        }
-        None
     }
 
     /// How many numbers were enclosed without a typed decimal.
     pub fn untyped(&self) -> u32 {
         self.untyped.get()
+    }
+}
+
+/// A decimal (digits, at most one `.`, a `-` in front) exactly.
+fn literal_value(text: &str) -> Option<rug::Rational> {
+    let (neg, p) = match text.strip_prefix('-') {
+        Some(p) => (true, p),
+        None => (false, text),
+    };
+    let p = match (p.starts_with('.'), p.ends_with('.')) {
+        (true, _) => format!("0{p}"),
+        (_, true) => format!("{p}0"),
+        _ => p.to_string(),
+    };
+    let q = super::exact::decimal(&p)?;
+    Some(if neg { -q } else { q })
+}
+
+/// What a number written in a certificate's formula stands for: the
+/// decimal written (`Expr::formula` writes each number so that it reads
+/// back as itself), the double when that is it; a number written another
+/// way (∞, an exponent) is only near its double.
+fn written(t: &str, v: f64) -> Lit {
+    if !v.is_finite() || t.contains(['e', 'E']) {
+        return Lit::Near;
+    }
+    match literal_value(t) {
+        Some(q) if rug::Rational::from_f64(v) == Some(q.clone()) => Lit::Exact,
+        Some(_) => Lit::Decimal(t.into()),
+        None => Lit::Near,
     }
 }
 
@@ -229,7 +273,7 @@ pub struct Ctx<'a> {
 pub fn contains_x(e: &Expr) -> bool {
     match e {
         Expr::X | Expr::Y => true,
-        Expr::Num(_) | Expr::Const(_) | Expr::Var(_) => false,
+        Expr::Num(..) | Expr::Const(_) | Expr::Var(_) => false,
         Expr::Neg(a) | Expr::Degrees(a) => contains_x(a),
         Expr::Bin(_, a, b) => contains_x(a) || contains_x(b),
         Expr::Call(_, args) => args.iter().any(contains_x),
@@ -242,10 +286,10 @@ pub fn contains_x(e: &Expr) -> bool {
 pub fn written_rational(e: &Expr, lits: &Lits) -> Option<(i64, i64)> {
     fn int(e: &Expr, lits: &Lits) -> Option<i64> {
         match e {
-            Expr::Num(v)
+            Expr::Num(v, lit)
                 if *v == v.trunc()
                     && v.abs() < 1e6
-                    && lits.exact(*v) == Some(rug::Rational::from(*v as i64)) =>
+                    && lits.exact(*v, lit) == Some(rug::Rational::from(*v as i64)) =>
             {
                 Some(*v as i64)
             }
@@ -276,27 +320,24 @@ pub fn written_rational(e: &Expr, lits: &Lits) -> Option<(i64, i64)> {
     Some((p, q))
 }
 
-/// The tree claims refer to: the parser's, with `a·a` written `a²`.
-/// (Not when a literal typed as another decimal parsed to 2, as in
-/// `2.0000000000000001`: the written 2 would read as that decimal.)
-pub fn canonical(e: &Expr, lits: &Lits) -> Expr {
-    fn go(e: &Expr, square: bool) -> Expr {
-        match e {
-            Expr::Num(_) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => e.clone(),
-            Expr::Neg(a) => Expr::Neg(Box::new(go(a, square))),
-            Expr::Degrees(a) => Expr::Degrees(Box::new(go(a, square))),
-            Expr::Bin(op, a, b) => {
-                let (a, b) = (go(a, square), go(b, square));
-                if square && *op == BinOp::Mul && a == b {
-                    Expr::Bin(BinOp::Pow, Box::new(a), Box::new(Expr::Num(2.0)))
-                } else {
-                    Expr::Bin(*op, Box::new(a), Box::new(b))
-                }
+/// The tree claims refer to: the parser's, with `a·a` written `a²` (each
+/// number with its own value: two factors are the same only when their
+/// numbers are, and the written 2 is exactly 2).
+pub fn canonical(e: &Expr) -> Expr {
+    match e {
+        Expr::Num(..) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => e.clone(),
+        Expr::Neg(a) => Expr::Neg(Box::new(canonical(a))),
+        Expr::Degrees(a) => Expr::Degrees(Box::new(canonical(a))),
+        Expr::Bin(op, a, b) => {
+            let (a, b) = (canonical(a), canonical(b));
+            if *op == BinOp::Mul && a == b {
+                Expr::Bin(BinOp::Pow, Box::new(a), Box::new(Expr::exact(2.0)))
+            } else {
+                Expr::Bin(*op, Box::new(a), Box::new(b))
             }
-            Expr::Call(f, args) => Expr::Call(*f, args.iter().map(|a| go(a, square)).collect()),
         }
+        Expr::Call(f, args) => Expr::Call(*f, args.iter().map(canonical).collect()),
     }
-    go(e, lits.exact(2.0) == Some(rug::Rational::from(2)))
 }
 
 /// The sub-tree at `path` (child indices from the root).
@@ -386,7 +427,8 @@ fn term(cs: &[char], i: &mut usize) -> Option<Expr> {
             *i += 1;
         }
         let t: String = cs[start..*i].iter().collect();
-        return t.parse::<f64>().ok().map(Expr::Num);
+        let v = t.parse::<f64>().ok()?;
+        return Some(Expr::Num(v, written(&t, v)));
     }
     while *i < cs.len() && (cs[*i].is_alphanumeric() || cs[*i] == '_') {
         *i += 1;
@@ -401,7 +443,7 @@ fn term(cs: &[char], i: &mut usize) -> Option<Expr> {
             "e" => Expr::Const(Constant::E),
             "x" => Expr::X,
             "y" => Expr::Y,
-            "inf" => Expr::Num(f64::INFINITY),
+            "inf" => Expr::Num(f64::INFINITY, Lit::Near),
             _ => Expr::Var(name),
         });
     }
@@ -443,7 +485,7 @@ fn term(cs: &[char], i: &mut usize) -> Option<Expr> {
 /// A term of a sum as a monomial: its constant factor (an expression, its
 /// numbers kept as typed) and the power of x.
 fn monomial(e: &Expr, base: &Expr, lits: &Lits) -> Option<(Expr, u32)> {
-    let one = || Expr::Num(1.0);
+    let one = || Expr::exact(1.0);
     Some(match e {
         _ if e == base => (one(), 1),
         _ if !contains_x(e) => (e.clone(), 0),
@@ -534,7 +576,7 @@ pub fn horner(e: &Expr, lits: &Lits) -> Option<Expr> {
                         })
                     })
                 };
-                let mut acc = coef(n).unwrap_or(Expr::Num(0.0));
+                let mut acc = coef(n).unwrap_or(Expr::exact(0.0));
                 for k in (0..n).rev() {
                     let ax = Expr::Bin(BinOp::Mul, Box::new(acc), Box::new(base.clone()));
                     acc = match coef(k) {
@@ -552,11 +594,6 @@ pub fn horner(e: &Expr, lits: &Lits) -> Option<Expr> {
             Expr::Call(f, args) => Expr::Call(*f, args.iter().map(|a| go(a, lits)).collect()),
             _ => e.clone(),
         }
-    }
-    // (The form writes 0s and 1s, which must read as such.)
-    let plain = |v: i64| lits.exact(v as f64) == Some(rug::Rational::from(v));
-    if !(plain(0) && plain(1)) {
-        return None;
     }
     let h = go(e, lits);
     (h != *e).then_some(h)
@@ -622,7 +659,7 @@ fn pow_rat(a: &S, p: i64, q: i64) -> S {
 
 pub fn eval(e: &Expr, x: &S, n: usize, ctx: &Ctx<'_>) -> S {
     match e {
-        Expr::Num(v) => se::constant(ctx.lits.num(*v), n),
+        Expr::Num(v, lit) => se::constant(ctx.lits.num(*v, lit), n),
         Expr::Const(Constant::Pi) => se::constant(iv::pi(), n),
         Expr::Const(Constant::E) => se::constant(iv::e(), n),
         Expr::X => x.clone(),
@@ -933,5 +970,5 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
 }
 
 fn recip_expr(a: &Expr) -> Expr {
-    Expr::Bin(BinOp::Div, Box::new(Expr::Num(1.0)), Box::new(a.clone()))
+    Expr::Bin(BinOp::Div, Box::new(Expr::exact(1.0)), Box::new(a.clone()))
 }
