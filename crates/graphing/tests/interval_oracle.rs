@@ -1417,6 +1417,9 @@ fn taylor_cases() -> Vec<(&'static str, TrigUnit)> {
         // where the other one wins (review 12, R12-M-02).
         ("min((x+1)^2,2+sqrt(sin(x)))", Radians),
         ("max(-(x+1)^2,-2-sqrt(sin(x)))", Radians),
+        // A root of varying degree: at x = 2 its degree is 2, but its
+        // derivative is x^(1/x)'s (review 12, R12-L-02).
+        ("root(x,x)", Radians),
     ]
 }
 
@@ -1508,6 +1511,7 @@ fn run_taylor(n_boxes: usize, seed: u64) -> Tally {
         for &c in &[
             0.3,
             1.7,
+            2.0,
             -1.0,
             -2.4,
             3.0,
@@ -1612,6 +1616,32 @@ fn exact_literals_place_poles_exactly() {
     assert!(r.is_empty() && r.dec <= Dec::Trv, "{r:?}");
     let r = graphing::interval::enclose(ast, Interval::point(1000000000000.0), &ctx);
     assert_eq!(r.iv, Interval::point(0.0));
+}
+
+/// root(x, x) at 2: degree 2 there, but varying: f′(2) is x^(1/x)'s,
+/// 2^(1/2)(1 − ln 2)/4 ≈ 0.10849, not the square root's 0.35355 (review
+/// 12, R12-L-02).
+#[test]
+fn a_varying_degree_is_no_constant_root() {
+    let text = "y=root(x,x)";
+    let eq = Equation::parse(text).unwrap();
+    let (_, ast) = eq.explicit().unwrap();
+    let lits = Literals::of(text, ParseOptions::default()).unwrap();
+    let ctx = Ctx::new(CompileOptions::default(), &lits);
+    let s = taylor(ast, Interval::point(2.0), 3, &ctx);
+    let two = Float::with_val(P, 2u32);
+    let f = Float::with_val(P, two.clone().sqrt());
+    let d1 = Float::with_val(P, &f * Float::with_val(P, 1u32 - two.clone().ln())) / 4u32;
+    assert!(inside(&f, s[0].iv) && derivs_valid(&s, 3), "{s:?}");
+    assert!(inside(&d1, s[1].iv), "f′ {:?}, not {}", s[1], d1.to_f64());
+    // And the square root itself keeps its series.
+    let text = "y=root(x,2)";
+    let eq = Equation::parse(text).unwrap();
+    let (_, ast) = eq.explicit().unwrap();
+    let s = taylor(ast, Interval::point(2.0), 3, &ctx);
+    assert!(derivs_valid(&s, 3));
+    let half = Float::with_val(P, f.clone().recip()) / 2u32;
+    assert!(inside(&half, s[1].iv), "{s:?}");
 }
 
 /// min and max where one argument decides the value and the other is

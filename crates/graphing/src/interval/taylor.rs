@@ -566,7 +566,15 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
         Root => {
             let (u, k) = (arg(0), arg(1));
             let kv = k[0].iv;
-            if kv.is_point() && kv.lo() == kv.lo().trunc() && kv.lo().abs() < 1e6 && kv.lo() != 0.0
+            // A constant integer degree: its value a whole number and its
+            // derivatives 0 (root(x, x) at 2 is 2 there, but its degree
+            // varies: f′ is not the square root's).
+            let constant = k[1..].iter().all(|c| c.iv.is_point() && c.lo() == 0.0);
+            if constant
+                && kv.is_point()
+                && kv.lo() == kv.lo().trunc()
+                && kv.lo().abs() < 1e6
+                && kv.lo() != 0.0
             {
                 let d = kv.lo() as i32;
                 let mut h = match d {
@@ -578,7 +586,15 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
                 h[0] = elem::root(&u[0], &k[0]).refine(&h[0]);
                 h
             } else {
-                flat(elem::root(&u[0], &k[0]), n)
+                let c0 = elem::root(&u[0], &k[0]);
+                if u[0].gt0() && k[0].ne0() && c0.dec >= Dec::Dac {
+                    // u > 0: the root is e^(ln u / k), whatever k does.
+                    let mut h = exp(&div(&ln(&u), &k));
+                    h[0] = c0.refine(&h[0]);
+                    h
+                } else {
+                    flat(c0, n)
+                }
             }
         }
         Ln => ln(&arg(0)),

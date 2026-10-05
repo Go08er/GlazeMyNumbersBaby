@@ -603,7 +603,25 @@ pub fn root(x: &DecInterval, n: &DecInterval) -> DecInterval {
         return r.cap(n.dec);
     }
     // A general degree: x ≥ 0 (x > 0 for a negative degree).
-    let r = pow(x, &recip(n));
+    let mut r = pow(x, &recip(n));
+    // Unless the degree may be an odd integer, which takes a negative x
+    // too (root(x, x) is −1 at −1): there, −|x|^(1/n), maybe.
+    let (lo, hi) = (nv.lo(), nv.hi());
+    let first = lo.max(-1e300).ceil();
+    let odd = if first.rem_euclid(2.0) == 1.0 {
+        first
+    } else {
+        first + 1.0
+    };
+    if x.lo() < 0.0 && odd <= hi && first.abs() < 9007199254740992.0 {
+        let mirrored = DecInterval::new((-x.iv).intersect(Interval::new(0.0, INF)));
+        let m = neg(&pow(&mirrored, &recip(n)));
+        if !m.is_empty() {
+            r = DecInterval::result(r.iv.hull(m.iv), Dec::Trv, &[x, n]);
+        } else {
+            r = r.cap(Dec::Trv);
+        }
+    }
     if n.iv.contains_zero() && !n.ne0() {
         r.cap(Dec::Trv)
     } else {
