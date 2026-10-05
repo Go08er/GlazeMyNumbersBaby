@@ -59,6 +59,8 @@ pub struct CalculatorPage {
     compact_btn: gtk::ToggleButton,
     compact: Cell<bool>,
     mem_rows: RefCell<Vec<gtk::Box>>,
+    /// Another page was shown since the calculator was (see `switch_mode`).
+    left: Cell<bool>,
 }
 
 fn text_button(label: &str, tip: &str) -> gtk::Button {
@@ -165,6 +167,7 @@ impl CalculatorPage {
             compact_btn: icon_toggle(paths::KEEP_ON_TOP, "Keep on top (Alt+Up)"),
             compact: Cell::new(false),
             mem_rows: RefCell::default(),
+            left: Cell::new(false),
         });
         {
             let weak = Rc::downgrade(&page);
@@ -995,7 +998,14 @@ impl CalculatorPage {
             _ => CalcMode::Standard,
         };
         self.ensure_mode_built(calc_mode);
-        self.vm.borrow_mut().set_mode(calc_mode);
+        // Like upstream's `ApplicationViewModel.Mode` setter: the calculator
+        // is set up again (`SetCalculatorType`) when its mode changes or you
+        // come back to it from another page, not when the mode shown is
+        // chosen again (nor after the saved session was restored at start).
+        let returning = self.left.replace(false);
+        if returning || self.vm.borrow().mode() != calc_mode {
+            self.vm.borrow_mut().set_mode(calc_mode);
+        }
         let programmer = calc_mode == CalcMode::Programmer;
         self.programmer.set(programmer);
         if calc_mode != CalcMode::Standard {
@@ -1045,6 +1055,7 @@ impl Page for CalculatorHandle {
     }
 
     fn deactivate(&self) {
+        self.0.left.set(true);
         // Compact ("keep on top") is a Standard-only view; never strand the
         // window in compact chrome on another page.
         self.0.set_compact(false);
