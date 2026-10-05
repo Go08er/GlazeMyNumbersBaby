@@ -908,6 +908,48 @@ fn sign_changes_of_finished_numbers_restore_as_operations() {
     }
 }
 
+/// A paste error is the view model's only (`OnPaste`, `DisplayPasteError`):
+/// the engine's calculation goes on under it, and a memory slot, a paste
+/// or a page change (which shows the engine's value again) continue it.
+/// Restored, it is shown over the restored calculation instead of putting
+/// the engine in error, which made those clear it ("2 + 3", a bad paste,
+/// then memory slot 9 and "=" gave 0 instead of 11). An engine error is
+/// still restored as one.
+#[test]
+fn paste_errors_restore_over_the_calculation() {
+    use Act::*;
+    use Button::*;
+    let more = continuations_with_panels();
+    for (mode, script) in [
+        (CalcMode::Standard, keys(&[Nine, Memory, Two, Add, Three])),
+        (
+            CalcMode::Standard,
+            keys(&[Nine, Memory, Two, Add, Three, Equals]),
+        ),
+        (
+            CalcMode::Scientific,
+            keys(&[Nine, Memory, Two, Add, Three, Memory]),
+        ),
+        (
+            CalcMode::Scientific,
+            [
+                keys(&[Nine, Memory, Two, Add, Three, Equals]),
+                vec![Recall(0)],
+            ]
+            .concat(),
+        ),
+        (CalcMode::Programmer, keys(&[Nine, Memory, Two, Add, Three])),
+    ] {
+        let script = [script, vec![Paste("zz")]].concat();
+        assert_acts_restore_and_continue(mode, &script, &more);
+    }
+    assert_acts_restore_and_continue(
+        CalcMode::Standard,
+        &keys(&[Nine, Memory, One, Divide, Zero, Equals]),
+        &more,
+    );
+}
+
 /// A snapshot from before "k" (or from upstream) has no record of what the
 /// display shows: a value the display commands don't produce is shown as a
 /// result, so the next digit replaces it, and an evaluated expression is

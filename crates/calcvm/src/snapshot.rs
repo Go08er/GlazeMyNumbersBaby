@@ -50,15 +50,18 @@
 //! The display isn't always the engine's. Selecting a History item shows
 //! the item's expression and result while the engine holds the item
 //! replayed without `=`, its last operand typed (so `=` evaluates the item
-//! again, and a digit replaces that operand), and the engine's display can
-//! stay hidden after later keys. `"ev"` (absent when the display is the engine's)
-//! is the value the engine shows: the engine is restored to it and the saved
-//! display shown over it. `"hl": true` says a History item was the last
-//! thing loaded, which keeps F-E disabled until the next key. The expression
-//! line comes back as saved (`"s"."e"`), whether or not it is the engine's.
-//! Upstream restores none of this: after a selection it replays the display
-//! commands only, which show the item's first operand, and `=` then adds
-//! that operand to itself.
+//! again, and a digit replaces that operand), and some later keys leave the
+//! display the item's. After a paste error only the view model is in error
+//! (`OnPaste`), and the engine's calculation goes on under it: a memory
+//! slot or a paste continues it, and a page change shows it again. `"ev"`
+//! (absent when the display is the engine's) is the value the engine shows:
+//! the engine is restored to it and the saved display, or error, shown over
+//! it. `"hl": true` says a History item was the last thing loaded, which
+//! keeps F-E disabled until the next key. The expression line comes back
+//! as saved (`"s"."e"`), whether or not it is the engine's. Upstream
+//! restores none of this: after a selection it replays the display commands
+//! only, which show the item's first operand, and `=` then adds that
+//! operand to itself.
 
 use std::rc::Rc;
 
@@ -1126,12 +1129,12 @@ impl StandardCalculatorViewModel {
         let display = &snapshot.primary_display.display_value;
         let is_error = snapshot.primary_display.is_error;
         // Extension: the engine shows another value than the display (see
-        // the module docs). The engine is restored to its own value.
-        let engine_value = continuation
-            .and_then(|k| k.engine_value.as_deref())
-            .filter(|_| !is_error);
+        // the module docs). The engine is restored to its own value; an
+        // error that only the display shows (a paste error) isn't the
+        // engine's.
+        let engine_value = continuation.and_then(|k| k.engine_value.as_deref());
         let value = engine_value.unwrap_or(display);
-        let engine_error = is_error;
+        let engine_error = is_error && engine_value.is_none();
         // Whether the pending expression was restored (no budget ran out).
         let whole = match &snapshot.expression_display {
             Some(expression) if snapshot.display_commands.is_empty() => {
@@ -1190,14 +1193,14 @@ impl StandardCalculatorViewModel {
     /// commands, and what the display shows instead of the engine.
     fn capture_continuation(&self) -> ContinuationSnapshot {
         let c = self.standard_calculator_manager.continuation();
-        // The engine's value if the display shows another (a History
-        // item's result).
+        // The engine's value if the display shows another: a History item's
+        // result, or an error the engine isn't in.
         let engine_value = self
             .standard_calculator_manager
             .engine_primary_display()
-            .filter(|(_, engine_error)| !engine_error && !self.is_in_error)
+            .filter(|(_, engine_error)| !engine_error)
             .map(|(text, _)| self.localize_display_value(&text, false))
-            .filter(|value| *value != self.display_value);
+            .filter(|value| self.is_in_error || *value != self.display_value);
         ContinuationSnapshot {
             shown: c.shown,
             repeat: c
@@ -1312,14 +1315,17 @@ impl StandardCalculatorViewModel {
         let _ = self.with_manager(|m| m.end_deferred_display());
     }
 
-    /// `SetPrimaryDisplay(displayValue, true)` for a restored error.
+    /// `SetPrimaryDisplay(displayValue, true)` for a restored engine error.
     ///
     /// Deviation: upstream only puts the view model into the error state and
     /// leaves the engine running, so the next engine refresh (the radix reset
     /// of a page activation, for one) silently replaces the error with a
     /// number. The engine is put into its error state too
     /// (`CalculatorManager.DisplayPasteError`, which the C++ view model used
-    /// for paste errors) before the saved error text is shown.
+    /// for paste errors) before the saved error text is shown. A paste error
+    /// (`"ev"`, see the module docs) is only the view model's, as it was: the
+    /// engine's calculation is restored under it, so a memory recall or a
+    /// paste continues it as before.
     fn restore_error_display(&mut self, display_value: &str) {
         self.with_manager(|m| m.display_paste_error());
         self.set_primary_display(display_value, true);
