@@ -49,9 +49,11 @@
 //! says how the number being entered stands where replaying the commands
 //! wouldn't leave it so: `"empty"` (nothing typed since C or CE, though
 //! the commands end with the empty input's 0), `"ended"` (that empty input
-//! ended by a radix or angle switch, MS or M+) or `"percent"` (the
+//! ended by a radix or angle switch, MS or M+), `"percent"` (the
 //! commands' last operand is a `%` result, added to the expression rather
-//! than typed); upstream replays all three as typed digits.
+//! than typed) or `"signed"` (the number being typed had its sign changed
+//! last, which the operand records after its first digit); upstream
+//! replays all four as typed digits.
 //!
 //! The display isn't always the engine's. Selecting a History item shows
 //! the item's expression and result while the engine holds the item
@@ -519,6 +521,7 @@ fn entry_name(e: Entry) -> &'static str {
         Entry::Empty => "empty",
         Entry::Ended => "ended",
         Entry::Percent => "percent",
+        Entry::Signed => "signed",
     }
 }
 
@@ -712,6 +715,7 @@ impl ApplicationSnapshot {
                                 Some("empty") => Some(Entry::Empty),
                                 Some("ended") => Some(Entry::Ended),
                                 Some("percent") => Some(Entry::Percent),
+                                Some("signed") => Some(Entry::Signed),
                                 Some(_) => return Err("unknown entry state".into()),
                             },
                         })
@@ -1315,16 +1319,42 @@ impl StandardCalculatorViewModel {
             }
         }
         let entry = continuation.and_then(|k| k.entry);
-        // The empty input's 0 isn't typed (see `restore_entry`).
-        let commands = match display_commands {
+        // The empty input's 0 isn't typed (see `restore_entry`). A number
+        // whose sign was changed last is typed with the other sign, then
+        // changed: the operand puts the sign after its first digit, which
+        // would leave a digit the last command (that "(" multiplies).
+        let (commands, signed) = match display_commands {
             [rest @ .., ExpressionCommandWrapper::Operand { .. }]
                 if entry == Some(Entry::Empty) =>
             {
-                rest
+                (rest, None)
             }
-            all => all,
+            [
+                rest @ ..,
+                ExpressionCommandWrapper::Operand {
+                    commands,
+                    is_negative,
+                    is_decimal_present,
+                    is_sci_fmt: false,
+                },
+            ] if entry == Some(Entry::Signed) => (
+                rest,
+                Some(ExpressionCommandWrapper::Operand {
+                    commands: commands.clone(),
+                    is_negative: !is_negative,
+                    is_decimal_present: *is_decimal_present,
+                    is_sci_fmt: false,
+                }),
+            ),
+            all => (all, None),
         };
-        let whole = self.replay_within_budget(commands);
+        let mut whole = self.replay_within_budget(commands);
+        if let Some(operand) = signed.filter(|_| whole) {
+            whole = self.replay_within_budget(&[operand]);
+            if whole {
+                self.send_command(cmd::SIGN);
+            }
+        }
         if whole {
             self.restore_entry(entry);
         }

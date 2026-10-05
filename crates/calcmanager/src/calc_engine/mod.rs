@@ -109,6 +109,10 @@ pub enum Entry {
     /// rather than typed: the next digit starts a new number (see
     /// [`CalcEngine::add_entry_as_percent_result`]).
     Percent,
+    /// The number being typed had its sign changed last; the commands'
+    /// operand carries the sign after its first digit, where `(` would
+    /// multiply it.
+    Signed,
 }
 
 /// Extension: where a shown value (see [`Continuation::shown`]) came from.
@@ -487,10 +491,15 @@ impl CalcEngine {
         let opnd_added = self.history_collector.f_opnd_added_to_history();
         let last = self.history_collector.last_command();
         let entry = if self.b_record {
-            // The empty input's 0 (a leading 0 typed isn't kept either,
-            // but leaves a digit as the last command).
-            (!opnd_added && self.is_input_empty() && !is_digit_op_code(self.n_temp_com))
-                .then_some(Entry::Empty)
+            if opnd_added {
+                None
+            } else if self.is_input_empty() && !is_digit_op_code(self.n_temp_com) {
+                // The empty input's 0 (a leading 0 typed isn't kept either,
+                // but leaves a digit as the last command).
+                Some(Entry::Empty)
+            } else {
+                (self.n_temp_com == IDC_SIGN).then_some(Entry::Signed)
+            }
         } else if shown.is_some() {
             None
         } else if last.is_none() {

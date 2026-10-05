@@ -942,6 +942,27 @@ fn entries_restore_as_they_were() {
     }
 }
 
+/// A number whose sign was changed last ("5 9 ±") ends in ±, so "(" starts
+/// a new number rather than multiplying it. Its operand puts the sign after
+/// the first digit; replayed so, the last command was a digit, and after a
+/// restore "( 2 =" gave -118 ("-59 × (2)") instead of 2.
+#[test]
+fn numbers_whose_sign_was_changed_last_restore_so() {
+    use Button::*;
+    let more = continuations_with_panels();
+    for (mode, script) in [
+        (CalcMode::Standard, &[Five, Nine, Negate][..]),
+        (CalcMode::Standard, &[Two, Add, Five, Negate, Nine, Negate]),
+        (
+            CalcMode::Scientific,
+            &[Two, Multiply, One, Decimal, Five, Negate],
+        ),
+        (CalcMode::Programmer, &[Two, Add, Five, Nine, Negate]),
+    ] {
+        assert_acts_restore_and_continue(mode, &keys(script), &more);
+    }
+}
+
 /// While "=" can still be repeated, every key clears the expression line,
 /// and MS, M− or an angle switch don't show the engine's expression again:
 /// "5 + 3 =", √, MS shows an empty line over "√(8)". Restored, the line is
