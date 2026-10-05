@@ -87,8 +87,9 @@ Measured with [`tools/bench/mem.sh`](tools/bench) on NixOS with an RTX 3070
 full; PSS splits them between the processes using them. Numbers will differ
 with other GPUs, drivers and fonts. The Vulkan row most of all: it is mostly
 the driver's own memory, and it has measured anywhere from 205 to 267 MiB
-RSS (121 to 202 MiB PSS) on this machine while the other rows held within
-a few percent.
+RSS (121 to 202 MiB PSS) on this machine. The other rows' RSS has held
+within a few percent; PSS moves more, since it depends on which other
+processes share the same libraries at the time.
 
 ## Install
 
@@ -329,27 +330,30 @@ CI also runs checks that need more than `cargo test --workspace`:
   pixel, proven defined on both sides, and its enclosures on the two sides
   closing in on one value as they near the gap. That is a check, not a
   proof that the two limits are equal: a jump smaller than the enclosures
-  can resolve may still get a circle (a pole of `x!` never does). No point
-  is drawn or traced more than a quarter pixel outside f's enclosure at
-  its x: where the evaluated value falls outside a wider enclosure, the
-  curve breaks there (dense-pole columns and what's drawn past the budget
-  aren't checked, and are flagged as missing data). A pixel column with
-  more poles than a pixel shows (`tan 100x` at ±1000) is drawn as a stroke
-  down the column, joined to neither side. Each curve has a fixed work
-  budget, counted rather than timed (the same view draws the same on any
-  machine), spent on the breaks first and the shapes second. Where it runs
-  out (very long or wildly oscillating functions), the rest is drawn
-  coarser: continuous parts are still joined only where proven, undecided
-  ones only where sampling finds no jump, but chords there may stray from
-  the curve by more than a pixel. The plot is then flagged as having
-  missing data (the apps don't show that yet); so it is where the shape of
-  a piece under a pixel wide can't be bounded, as in the pixel beside a
-  removable hole (`x/x` next to its circle: the enclosure of x/x there
-  doesn't know the two x are one), which is joined as proven continuous
-  through point samples. The boundary of an explicit inequality (`y < tan
-  x`) is drawn the same way, but implicit plots and inequality regions are
-  unchanged in 0.2: still sampled in floating point (a certified plotter
-  for them is planned for 0.3).
+  can resolve may still get a circle (a pole of `x!` never does). No
+  sampled point is drawn or traced more than a quarter pixel outside f's
+  enclosure at its x: where the evaluated value falls outside a wider
+  enclosure, the curve breaks there. Not checked this way: dense-pole
+  columns and what's drawn past the budget (both flagged as missing data),
+  the points where a stroke is cut at the edge of the drawing area (on the
+  chord between two checked points), and a hole's circle, which marks a
+  point where f is undefined. A pixel column with more poles than a pixel
+  shows (`tan 100x` at ±1000) is drawn as a stroke down the column, joined
+  to neither side. Each curve has a fixed work budget, counted rather than
+  timed (the same view draws the same on any machine), spent on the breaks
+  first and the shapes second. Where it runs out (very long or wildly
+  oscillating functions), the rest is drawn coarser: continuous parts are
+  still joined only where proven, undecided ones only where sampling finds
+  no jump, but chords there may stray from the curve by more than a pixel.
+  The plot is then flagged as having missing data (the apps don't show
+  that yet); so it is where the shape of a piece under a pixel wide can't
+  be bounded, as in the pixel beside a removable hole (`x/x` next to its
+  circle: the enclosure of x/x there doesn't know the two x are one),
+  which is joined as proven continuous through point samples. The boundary
+  of an explicit inequality (`y < tan x`) is drawn the same way, but
+  implicit plots and inequality regions are unchanged in 0.2: still
+  sampled in floating point (a certified plotter for them is planned for
+  0.3).
 - **Tracing shows only what is determined.** On y = f(x) the traced x is
   the decimal shown, and y comes from f's interval enclosure there, to the
   digits it fixes: the view's precision, as in Windows; up to three more
