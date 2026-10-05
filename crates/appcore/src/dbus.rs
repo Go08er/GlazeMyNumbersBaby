@@ -25,8 +25,9 @@ const MAX_MESSAGE: usize = 1 << 20;
 const MAX_VALUES: usize = 16 * 1024;
 /// While a call waits for its reply, other incoming messages are kept for
 /// [`Connection::next_message`]. Signals a caller declared [`Wanted`] are
-/// kept up to the first pair of bounds (they come from one trusted sender),
-/// other signals up to the second (method calls to us and stale replies are
+/// kept up to the first pair of bounds (they come from one trusted sender,
+/// or, until it is known, on one object path), other signals up to the
+/// second (method calls to us and stale replies are
 /// dropped): a flood can neither push out an awaited signal nor queue more
 /// than this many messages and wire bytes. The bounds count wire bytes; the
 /// decoded messages take more heap than that, but each is bounded too (at
@@ -136,16 +137,23 @@ pub struct Message {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Wanted {
     /// The sending connection's unique name (the bus sets it, so no other
-    /// peer can match).
-    pub sender: String,
+    /// peer can match); `None` while it isn't known yet: any peer can then
+    /// send a matching signal, so `path` should narrow it down.
+    pub sender: Option<String>,
+    /// The object path, if only one is wanted.
+    pub path: Option<String>,
     pub interface: String,
     pub member: String,
 }
 
 impl Wanted {
     fn matches(&self, m: &Message) -> bool {
+        let field = |want: &Option<String>, got: &Option<String>| {
+            want.is_none() || got.as_deref() == want.as_deref()
+        };
         m.kind == SIGNAL
-            && m.sender.as_deref() == Some(self.sender.as_str())
+            && field(&self.sender, &m.sender)
+            && field(&self.path, &m.path)
             && m.interface.as_deref() == Some(self.interface.as_str())
             && m.member.as_deref() == Some(self.member.as_str())
     }
@@ -280,7 +288,11 @@ impl Connection {
             &[],
             deadline,
         )?;
-        conn.unique = hello.first().and_then(Value::as_str).map(str::to_string);
+        conn.unique = hello
+            .body
+            .first()
+            .and_then(Value::as_str)
+            .map(str::to_string);
         Ok(conn)
     }
 
@@ -344,6 +356,21 @@ impl Connection {
         member: &str,
         args: &[Arg],
     ) -> io::Result<Vec<Value>> {
+        self.call_reply(dest, path, interface, member, args)
+            .map(|reply| reply.body)
+    }
+
+    /// [`call_args`](Self::call_args), returning the whole reply: its
+    /// `sender` is the connection that took the call (the bus sets it, and
+    /// lets only the connection it delivered a call to answer it).
+    pub fn call_reply(
+        &mut self,
+        dest: &str,
+        path: &str,
+        interface: &str,
+        member: &str,
+        args: &[Arg],
+    ) -> io::Result<Message> {
         let deadline = self.timeout.map(|t| Instant::now() + t);
         self.call_by(dest, path, interface, member, args, deadline)
     }
@@ -356,7 +383,7 @@ impl Connection {
         member: &str,
         args: &[Arg],
         deadline: Option<Instant>,
-    ) -> io::Result<Vec<Value>> {
+    ) -> io::Result<Message> {
         self.serial = self.serial.wrapping_add(1).max(1);
         let serial = self.serial;
         let bytes = encode_call(serial, dest, path, interface, member, args);
@@ -364,7 +391,7 @@ impl Connection {
         loop {
             let msg = read_message(&mut self.stream, deadline)?;
             match msg.kind {
-                METHOD_RETURN if msg.reply_serial == Some(serial) => return Ok(msg.body),
+                METHOD_RETURN if msg.reply_serial == Some(serial) => return Ok(msg),
                 ERROR if msg.reply_serial == Some(serial) => {
                     let detail = msg.body.first().and_then(Value::as_str).unwrap_or("");
                     return Err(io::Error::other(format!(
@@ -378,9 +405,17 @@ impl Connection {
     }
 
     /// The signals to keep, whatever else arrives, while a call waits for
-    /// its reply.
+    /// its reply. Signals already kept are sorted again: one no longer
+    /// wanted (an impostor's, kept while its sender wasn't known) is kept
+    /// only as far as the other signals' bounds allow.
     pub fn set_wanted(&mut self, wanted: Vec<Wanted>) {
         self.wanted = wanted;
+        let queued = std::mem::take(&mut self.queued);
+        self.queued_wanted = (0, 0);
+        self.queued_other = (0, 0);
+        for (msg, _) in queued {
+            self.queue(msg);
+        }
     }
 
     /// Keeps a message that arrived while a call waited for its reply.
@@ -1067,11 +1102,18 @@ fn open_uri_on(mut conn: Connection, uri: &str, wait: Duration) -> io::Result<Op
         "type='signal',sender='{PORTAL}',interface='org.freedesktop.portal.Request',\
          member='Response',path='{expected}'"
     ))?;
-    // Only the portal's owner may answer; if it can't be named, the answer
-    // can't be trusted either. Naming it first (starting the portal if it
-    // isn't running) lets its answer be kept whatever else arrives while
-    // the calls below wait for their replies. If it can't be started that
-    // way, the OpenURI call starts it and it is named afterwards.
+    // Only the portal's owner may answer. Its answer is kept whatever else
+    // arrives while the calls below wait for their replies: from the owner
+    // if it can be named first (starting the portal if it isn't running),
+    // else, until the OpenURI call (which then starts it) is answered, any
+    // sender's on the request's path. The answer to the call names the
+    // owner; signals kept from anyone else are then let go.
+    let response = |sender: Option<String>, path: Option<String>| Wanted {
+        sender,
+        path,
+        interface: "org.freedesktop.portal.Request".into(),
+        member: "Response".into(),
+    };
     let mut owner = conn.name_owner(PORTAL);
     if owner.is_none() {
         let _ = conn.call_args(
@@ -1083,14 +1125,11 @@ fn open_uri_on(mut conn: Connection, uri: &str, wait: Duration) -> io::Result<Op
         );
         owner = conn.name_owner(PORTAL);
     }
-    if let Some(owner) = &owner {
-        conn.set_wanted(vec![Wanted {
-            sender: owner.clone(),
-            interface: "org.freedesktop.portal.Request".into(),
-            member: "Response".into(),
-        }]);
-    }
-    let reply = conn.call_args(
+    conn.set_wanted(vec![match &owner {
+        Some(owner) => response(Some(owner.clone()), None),
+        None => response(None, Some(expected.clone())),
+    }]);
+    let reply = conn.call_reply(
         PORTAL,
         PORTAL_PATH,
         "org.freedesktop.portal.OpenURI",
@@ -1101,10 +1140,19 @@ fn open_uri_on(mut conn: Connection, uri: &str, wait: Duration) -> io::Result<Op
             Arg::StrDict(&[("handle_token", &token)]),
         ],
     )?;
+    // The connection that answered is the one the bus gave the call to: the
+    // owner (it may have restarted since it was named).
+    let owner = reply
+        .sender
+        .clone()
+        .or(owner)
+        .ok_or_else(|| err("the portal has no owner"))?;
+    conn.set_wanted(vec![response(Some(owner.clone()), None)]);
     // Portals older than 0.9 (2017) ignore handle_token and pick their own
     // path; listen there too. (One that answered before this subscription
     // would be missed, and the wait ends Unanswered rather than wrongly.)
     let handle = reply
+        .body
         .first()
         .and_then(Value::as_str)
         .unwrap_or(&expected)
@@ -1115,12 +1163,6 @@ fn open_uri_on(mut conn: Connection, uri: &str, wait: Duration) -> io::Result<Op
              member='Response',path='{handle}'"
         ))?;
     }
-    let owner = match owner {
-        Some(owner) => owner,
-        None => conn
-            .name_owner(PORTAL)
-            .ok_or_else(|| err("the portal has no owner"))?,
-    };
     let deadline = Instant::now() + wait;
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
@@ -1172,12 +1214,14 @@ fn watch_settings_on(
     ))?;
     let wanted = |owner: &Option<String>| {
         let mut wanted = vec![Wanted {
-            sender: "org.freedesktop.DBus".into(),
+            sender: Some("org.freedesktop.DBus".into()),
+            path: None,
             interface: "org.freedesktop.DBus".into(),
             member: "NameOwnerChanged".into(),
         }];
         wanted.extend(owner.iter().map(|owner| Wanted {
-            sender: owner.clone(),
+            sender: Some(owner.clone()),
+            path: None,
             interface: "org.freedesktop.portal.Settings".into(),
             member: "SettingChanged".into(),
         }));
@@ -1616,6 +1660,12 @@ mod tests {
     impl PrivateBus {
         /// `None` (and the test skips) without a working `dbus-daemon`.
         fn start(name: &str) -> Option<PrivateBus> {
+            Self::start_with(name, "")
+        }
+
+        /// [`start`](Self::start) with `policy` (more `<allow>`/`<deny>`
+        /// rules) after the permissive default ones.
+        fn start_with(name: &str, policy: &str) -> Option<PrivateBus> {
             use std::io::BufRead;
             let dir = std::env::temp_dir().join(format!("appcore-{name}-{}", std::process::id()));
             let _ = std::fs::create_dir_all(&dir);
@@ -1633,6 +1683,7 @@ mod tests {
     <allow send_destination="*"/>
     <allow receive_sender="*"/>
     <allow own="*"/>
+    {policy}
   </policy>
 </busconfig>"#,
                     dir.join("bus").display()
@@ -1812,6 +1863,28 @@ mod tests {
         bytes
     }
 
+    /// `Request.Response(code, {})` on `path`, sent straight to `to` (a
+    /// signal with a destination reaches it whatever its match rules say).
+    fn response_to(path: &str, code: u32, to: &str) -> Vec<u8> {
+        let mut body = Writer(Vec::new());
+        body.u32(code);
+        body.u32(0); // an empty a{sv}
+        body.align(8);
+        let mut bytes = message(
+            SIGNAL,
+            |f| {
+                f.field(1, "o", |w| w.str(path));
+                f.field(2, "s", |w| w.str("org.freedesktop.portal.Request"));
+                f.field(3, "s", |w| w.str("Response"));
+                f.field(6, "s", |w| w.str(to));
+            },
+            "ua{sv}",
+            &body.0,
+        );
+        bytes[2] = 1; // NO_REPLY_EXPECTED
+        bytes
+    }
+
     /// Real bus with a stand-in portal: the call is marshalled as the spec
     /// says, the answer is read from the request object (only from the
     /// portal), and silence or a missing portal are told apart.
@@ -1877,6 +1950,81 @@ mod tests {
         let opener = std::thread::spawn(move || open_uri_on(conn, uri, t));
         let (call, path) = take_open_uri(&mut portal, uri);
         let to = call.sender.clone().unwrap();
+        let junk = vec![b'x'; 16 << 10];
+        for _ in 0..200 {
+            let mut body = Writer(Vec::new());
+            body.u32(junk.len() as u32);
+            body.0.extend_from_slice(&junk);
+            let signal = message(
+                SIGNAL,
+                |f| {
+                    f.field(1, "o", |w| w.str("/x"));
+                    f.field(2, "s", |w| w.str("x.Flood"));
+                    f.field(3, "s", |w| w.str("Junk"));
+                    f.field(6, "s", |w| w.str(&to));
+                },
+                "ay",
+                &body.0,
+            );
+            flooder.stream.write_all(&signal).unwrap();
+        }
+        // The answer comes before the reply to the call.
+        portal.stream.write_all(&response(&path, 0)).unwrap();
+        portal
+            .stream
+            .write_all(&request_handle(&call, &path))
+            .unwrap();
+        assert_eq!(opener.join().unwrap().unwrap(), Opened::Yes);
+    }
+
+    /// The portal can't be named or started beforehand (the bus refuses
+    /// GetNameOwner and StartServiceByName here; the OpenURI call itself
+    /// reaches it): its answer, coming before the reply under a flood, is
+    /// still kept, because the request's path marks it as wanted until the
+    /// reply names the portal. An impostor's answer on that path, sent
+    /// straight to the opener, is not taken for it.
+    #[test]
+    fn an_unnamed_portal_answer_survives_a_flood() {
+        let deny = |member: &str| {
+            format!(
+                r#"<deny send_destination="org.freedesktop.DBus" send_interface="org.freedesktop.DBus" send_member="{member}"/>"#
+            )
+        };
+        let Some(bus) = PrivateBus::start_with(
+            "unnamed",
+            &(deny("GetNameOwner") + &deny("StartServiceByName")),
+        ) else {
+            return;
+        };
+        let t = Duration::from_secs(5);
+        let uri = "https://example.org/";
+        let mut portal = fake_portal(&bus.addr);
+        // The fallback path really is taken: nobody can name the portal.
+        let mut probe = Connection::open_address(&bus.addr, t).unwrap();
+        assert_eq!(probe.name_owner(PORTAL), None);
+        assert!(
+            probe
+                .call_args(
+                    "org.freedesktop.DBus",
+                    "/org/freedesktop/DBus",
+                    "org.freedesktop.DBus",
+                    "StartServiceByName",
+                    &[Arg::Str(PORTAL), Arg::U32(0)],
+                )
+                .is_err()
+        );
+
+        let mut flooder = Connection::open_address(&bus.addr, t).unwrap();
+        let mut impostor = Connection::open_address(&bus.addr, t).unwrap();
+        let conn = Connection::open_address(&bus.addr, t).unwrap();
+        let opener = std::thread::spawn(move || open_uri_on(conn, uri, t));
+        let (call, path) = take_open_uri(&mut portal, uri);
+        let to = call.sender.clone().unwrap();
+        // The impostor answers first, on the right path.
+        impostor
+            .stream
+            .write_all(&response_to(&path, 2, &to))
+            .unwrap();
         let junk = vec![b'x'; 16 << 10];
         for _ in 0..200 {
             let mut body = Writer(Vec::new());
