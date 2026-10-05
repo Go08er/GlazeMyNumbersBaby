@@ -314,14 +314,6 @@ impl Window {
         }
 
         this.install_keyboard();
-        // Text fields paste through the bounded reader too (crate::paste);
-        // pages, rows and dialogs guard their fields as they make them, and
-        // a field that takes the focus is guarded if it wasn't.
-        win.connect_focus_widget_notify(|win| {
-            if let Some(focus) = gtk::prelude::GtkWindowExt::focus(win) {
-                crate::paste::guard(&focus);
-            }
-        });
         {
             let weak = Rc::downgrade(&this);
             let paste = gtk::gio::SimpleAction::new("paste", None);
@@ -368,7 +360,6 @@ impl Window {
         if self.win.content().is_none() {
             self.win.set_content(Some(&self.ctx.aurora));
         }
-        crate::paste::guard(&self.win);
     }
 
     pub fn ctx(&self) -> &Rc<Ctx> {
@@ -421,7 +412,6 @@ impl Window {
             PageKind::Graphing => pages::graphing::GraphingPage::handle(self.ctx.clone()),
         };
         self.stack.add_named(&page.widget(), Some(kind.key()));
-        crate::paste::guard(&page.widget());
         self.pages.borrow_mut().insert(kind, page.clone());
         page
     }

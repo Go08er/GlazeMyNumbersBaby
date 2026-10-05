@@ -382,7 +382,6 @@ pub fn show(win: &Rc<Window>) {
     page.add(&group);
 
     dialog.add(&page);
-    crate::paste::guard(&dialog);
     dialog.present(Some(&win.widget()));
 }
 
@@ -442,7 +441,6 @@ pub fn about(parent: &adw::ApplicationWindow) {
         }
         ours
     });
-    crate::paste::guard(&about);
     about.present(Some(parent));
 }
 
@@ -489,7 +487,6 @@ fn third_party_licences(parent: &impl IsA<gtk::Widget>) {
         .content_height(600)
         .child(&toolbar)
         .build();
-    crate::paste::guard(&dialog);
     dialog.present(Some(parent));
 }
 

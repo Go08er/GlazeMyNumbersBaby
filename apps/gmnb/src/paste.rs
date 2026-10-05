@@ -5,9 +5,12 @@
 //! `gdk_clipboard_read_text_async`, and a text view reads it into a text
 //! buffer even when it isn't editable), so a field's length limit only
 //! applies after the read: pasting a 100 MB clipboard into an equation
-//! took 600 MB. [`guard`] makes a field paste through [`read_text`]
-//! instead: Ctrl+V, Shift+Insert and the context menu's Paste (all the
-//! `paste-clipboard` signal) and a middle click (the primary selection).
+//! took 600 MB. [`guard_all`] makes every field paste through
+//! [`read_text`] instead: Ctrl+V, Shift+Insert and the context menu's Paste
+//! (all the `paste-clipboard` signal) and a middle click (the primary
+//! selection). Every field: GMNB's, and GTK's own in windows GTK makes, such
+//! as the colour chooser's (a toplevel of its own, with a hexadecimal entry
+//! and spin buttons), whenever they are made.
 //!
 //! On Wayland the read is the offer's pipe, which closing stops. On X11,
 //! GDK's selection stream can't be stopped: it fetches an incremental
@@ -21,10 +24,15 @@
 //! Text dragged onto a field from another program is read the same way
 //! (GTK's drop target reads it whole, as its paste does): on X11 the drag's
 //! selection through `x11paste`, elsewhere the drop's stream.
+//!
+//! One read is out of reach: an assistive technology's EditableText
+//! `PasteText` request, which GTK answers by reading the clipboard whole
+//! itself (GTK 4.22 `gtkatspieditabletext.c`), with no signal on the way.
 
 use std::rc::Rc;
 use std::time::Duration;
 
+use glib::translate::{Borrowed, FromGlibPtrBorrow, IntoGlib};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use x11paste::{Limits, Overflow, Selection};
@@ -150,20 +158,56 @@ fn cut(mut bytes: Vec<u8>) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-/// Makes every text field in `root` (`root` included) paste through
-/// [`read_text`]. Fields already guarded are left alone, so this can run
-/// again whenever widgets may have been added.
-pub fn guard(root: &impl IsA<gtk::Widget>) {
-    let root = root.as_ref();
-    if let Some(text) = root.downcast_ref::<gtk::Text>() {
-        guard_text(text);
-    } else if let Some(view) = root.downcast_ref::<gtk::TextView>() {
-        guard_text_view(view);
+/// Makes every text field the program shows paste through [`read_text`]:
+/// each GtkText and GtkTextView is guarded as it is realized, which a field
+/// is before it can take a key, a click or a drop. That covers every
+/// window, those GTK makes for itself included, and fields made at any
+/// time, without knowing where they are. Call once, before any widget is
+/// realized.
+pub fn guard_all() {
+    unsafe extern "C" fn realized(
+        _hint: *mut glib::gobject_ffi::GSignalInvocationHint,
+        n_values: u32,
+        values: *const glib::gobject_ffi::GValue,
+        _data: glib::ffi::gpointer,
+    ) -> glib::ffi::gboolean {
+        if n_values > 0 {
+            // SAFETY: an emission's first value is the instance emitting,
+            // here a GtkWidget (this hook is on GtkWidget::realize), alive
+            // for the emission.
+            let widget: Borrowed<gtk::Widget> = unsafe {
+                let instance = glib::gobject_ffi::g_value_get_object(values);
+                gtk::Widget::from_glib_borrow(instance.cast())
+            };
+            guard(&widget);
+        }
+        glib::ffi::GTRUE // stay installed
     }
-    let mut child = root.first_child();
-    while let Some(c) = child {
-        guard(&c);
-        child = c.next_sibling();
+    // A class's signals exist once the class does: maybe not yet, before
+    // the first widget.
+    let widget = gtk::Widget::static_type();
+    let _class = glib::Class::<gtk::Widget>::from_type(widget);
+    let realize = glib::subclass::signal::SignalId::lookup("realize", widget)
+        .expect("GtkWidget has a realize signal");
+    // SAFETY: the hook matches GSignalEmissionHook, and keeps no data.
+    unsafe {
+        glib::gobject_ffi::g_signal_add_emission_hook(
+            realize.into_glib(),
+            0,
+            Some(realized),
+            std::ptr::null_mut(),
+            None,
+        );
+    }
+}
+
+/// Makes `widget` paste through [`read_text`] if it is a text field. One
+/// already guarded is left alone.
+fn guard(widget: &gtk::Widget) {
+    if let Some(text) = widget.downcast_ref::<gtk::Text>() {
+        guard_text(text);
+    } else if let Some(view) = widget.downcast_ref::<gtk::TextView>() {
+        guard_text_view(view);
     }
 }
 

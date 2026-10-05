@@ -108,6 +108,8 @@ fn main() -> glib::ExitCode {
 }
 
 fn started_up() {
+    // Before any window is realized: every text field pastes within bounds.
+    paste::guard_all();
     register_fonts();
     launch::mark("fonts");
     load_static_css();
