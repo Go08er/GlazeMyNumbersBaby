@@ -170,15 +170,21 @@ pub fn read_text(
 /// soon as it has the text; the rest of an INCR transfer it cut is let go
 /// by on a thread of its own, within a deadline as long again, before the
 /// connection closes.
-pub fn read_text_on(display: &str, selection: Selection, limits: &Limits) -> Option<String> {
+pub fn read_text_on(
+    display: &str,
+    selection: Selection,
+    limits: &Limits,
+) -> Result<Option<String>, NoConnection> {
     let start = Instant::now();
-    let (c, screen) = RustConnection::connect(Some(display)).ok()?;
-    let atoms = Atoms::new(&c)?;
+    let (c, screen) = RustConnection::connect(Some(display)).map_err(|_| NoConnection)?;
+    let atoms = Atoms::new(&c).ok_or(NoConnection)?;
     let limits = Limits {
         timeout: limits.timeout.saturating_sub(start.elapsed()),
         ..*limits
     };
-    let (text, open) = read(&c, screen, &atoms, selection, &limits, true)?;
+    let Some((text, open)) = read(&c, screen, &atoms, selection, &limits, true) else {
+        return Ok(None);
+    };
     if let Some(win) = open {
         let (prop, deadline) = (atoms.property, Instant::now() + limits.timeout);
         // (Without a thread, closing the connection destroys the window.)
@@ -186,8 +192,12 @@ pub fn read_text_on(display: &str, selection: Selection, limits: &Limits) -> Opt
             .name("x11paste-rest".into())
             .spawn(move || let_go(&c, win, prop, deadline));
     }
-    Some(text)
+    Ok(Some(text))
 }
+
+/// [`read_text_on`] couldn't connect to the display.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NoConnection;
 
 /// [`read_text`], and the window of an INCR transfer it cut if
 /// `keep_open` (else it's destroyed).
@@ -865,8 +875,16 @@ mod tests {
         let limits = cut(64 << 10);
         // Nobody owns it: nothing, at once.
         let start = Instant::now();
-        assert_eq!(read_text_on(&x.display, Selection::Primary, &limits), None);
+        assert_eq!(
+            read_text_on(&x.display, Selection::Primary, &limits),
+            Ok(None)
+        );
         assert!(start.elapsed() < Duration::from_secs(1));
+        // No such display: no connection, rather than no text.
+        assert_eq!(
+            read_text_on(":59000", Selection::Primary, &limits),
+            Err(NoConnection)
+        );
         for (selection, name) in [
             (Selection::Primary, "PRIMARY"),
             (Selection::Drag, "XdndSelection"),
@@ -883,7 +901,7 @@ mod tests {
             );
             let text = read_text_on(&x.display, selection, &limits);
             owner.join().unwrap();
-            assert_eq!(text, Some(format!("from {name}")));
+            assert_eq!(text, Ok(Some(format!("from {name}"))));
         }
     }
 
@@ -899,12 +917,22 @@ mod tests {
         const CAP: usize = 64 << 10;
         // 70,000 bytes: five 16 KiB pieces and the empty one that ends them.
         let owner = own(&x.display, utf8(vec![b'7'; 70_000], Some(16 << 10)));
-        for _ in 0..2 {
-            let text = read_text_on(&x.display, Selection::Clipboard, &cut(CAP));
-            assert_eq!(text, Some("7".repeat(CAP)));
-            // (The rest goes by on a thread of its own.)
-            thread::sleep(Duration::from_millis(300));
-        }
+        let paste = |timeout| {
+            let limits = Limits {
+                timeout,
+                ..cut(CAP)
+            };
+            read_text_on(&x.display, Selection::Clipboard, &limits).unwrap()
+        };
+        assert_eq!(paste(Duration::from_secs(2)), Some("7".repeat(CAP)));
+        // The rest goes by on a thread of its own; until it has, the owner
+        // drops other requests (as xclip does), so a slow machine may need
+        // to ask again (each time within the owner's half-second patience).
+        let second = (0..3).find_map(|_| {
+            thread::sleep(Duration::from_millis(50));
+            paste(Duration::from_millis(400))
+        });
+        assert_eq!(second, Some("7".repeat(CAP)));
         // Every piece of both transfers written: each was asked for.
         assert_eq!(owner.join().unwrap(), 12);
     }

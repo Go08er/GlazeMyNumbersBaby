@@ -113,7 +113,9 @@ fn x11_selection(clipboard: &gdk::Clipboard) -> Option<Selection> {
 
 /// `selection`'s text on `display`, read by `x11paste` on a worker (it
 /// blocks until it has the text or [`X11_TIMEOUT`] passes) and cut to
-/// [`MAX_PASTE_BYTES`] as GDK's are.
+/// [`MAX_PASTE_BYTES`] as GDK's are. Without a connection of its own to the
+/// display nothing is pasted (GDK's read is unbounded there), with a
+/// warning.
 async fn read_x11(display: &gdk::Display, selection: Selection) -> Option<String> {
     let name = display.name().to_string();
     let limits = Limits {
@@ -121,10 +123,19 @@ async fn read_x11(display: &gdk::Display, selection: Selection) -> Option<String
         timeout: X11_TIMEOUT,
         overflow: Overflow::Cut,
     };
-    let text = gio::spawn_blocking(move || x11paste::read_text_on(&name, selection, &limits))
-        .await
-        .ok()??;
-    Some(cut(text.into_bytes()))
+    let read = gio::spawn_blocking({
+        let name = name.clone();
+        move || x11paste::read_text_on(&name, selection, &limits)
+    })
+    .await
+    .ok()?;
+    match read {
+        Ok(text) => Some(cut(text?.into_bytes())),
+        Err(x11paste::NoConnection) => {
+            glib::g_warning!("gmnb", "can't connect to X display {name}: nothing pasted");
+            None
+        }
+    }
 }
 
 /// `bytes` as text, at most [`MAX_PASTE_BYTES`] of them, without a
