@@ -594,9 +594,12 @@ mod tests {
     impl Xvfb {
         fn start() -> Option<Xvfb> {
             let child = Command::new("Xvfb")
+                // -noreset: a server that resets when its last client
+                // goes would drop the next test connection mid-setup.
                 .args([
                     "-displayfd",
                     "1",
+                    "-noreset",
                     "-nolisten",
                     "tcp",
                     "-screen",
