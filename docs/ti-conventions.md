@@ -66,7 +66,9 @@ minimum at 0), while `x^(0.1+0.9)` and `x^2.0` are integer powers; only the
 integers of the written form `p/q` must be typed exactly so to give odd
 roots. Likewise a root's degree typed as an odd integer is odd at any
 size: `root(−8, 9007199254740993)` is defined (just below −1), though the
-doubles either side of that degree are even. Arithmetic on literals and sliders alone (+, −, ×, ÷, whole
+doubles either side of that degree are even. (The point evaluator still
+reads that degree as its double 2⁵³ and gives no value there; the
+analysis, the curve and its trace take the enclosure.) Arithmetic on literals and sliders alone (+, −, ×, ÷, whole
 powers, |·| and the counts n!, n!!, nCr, nPr of whole numbers; a slider is
 the double it is set to) is done exactly and rounded once
 (`10^17·(0.1 + 0.2 − 0.3)` is 0, `0.1·3` is the double nearest 0.3, and
