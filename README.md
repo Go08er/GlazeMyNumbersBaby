@@ -261,13 +261,13 @@ CI also runs checks that need more than `cargo test --workspace`:
 
 - **Certificate replay** (`cargo test -p graphing --features mpfr-oracle
   --test certify_replay`): the certified analysis of each of the certify
-  corpus's 148 functions goes through JSON to a separate checker
+  corpus's 189 functions goes through JSON to a separate checker
   (`crates/graphing/tests/replay`) with its own MPFR interval arithmetic,
   sharing only graphing's parser and expression tree with the certifier. A
   claim is *strong* when it re-proves it on the function's own tree, *weak*
   when it can only prove it on a tree the certifier supplied (the
   simplifier's form, the derivatives) or check it at sample points, so it
-  rests on the simplifier: today 60,592 strong, 135 weak. A claim refuted
+  rests on the simplifier: today 74,079 strong, 154 weak. A claim refuted
   or left open, or a row that doesn't follow from its claims, fails it.
 - **MPFR oracles** (same feature): `interval_oracle` checks every interval
   operation's enclosure against MPFR at 256 bits on adversarial boxes,
@@ -294,26 +294,31 @@ CI also runs checks that need more than `cargo test --workspace`:
 - **Graphing uses a new numeric engine.** The original graphing engine is
   proprietary (open-source builds contain only a mock). This engine was
   written against the original's interfaces and reproduces its features:
-  explicit, implicit and inequality plots, variables with sliders, tracing,
-  and key-graph-feature analysis. The analysis panel shows only what is
-  proven: every row comes from a certified analysis (interval arithmetic
-  with directed rounding and an exact simplifier) that either proves the
-  answer complete, proves the items it lists but not that they are all
-  (the row then says where it is complete, or that there may be more), or
-  says it can't tell ("Unable to calculate …"; "… is unknown" for parity,
-  periodicity and monotonicity) rather than "none". Numbers are exact
-  (`√2`, `π/2 + kπ`, `−9/4`) only when exact arithmetic confirms them;
-  otherwise they get as many significant digits as the proof fixes, from
-  three to six (written m×10ⁿ from 10⁶), marked "≈" because they aren't
-  exact; two different numbers of a row that would read alike get up to
-  fifteen, to tell them apart, and a value the proof fixes to fewer than
-  three digits leaves its row unknown. A number typed in an equation is
-  the decimal typed (`0.1` is one tenth, not the double nearest it), for
-  the curve drawn, its trace and its analysis alike. This is more
-  conservative than Windows' symbolic engine: functions it can't prove
-  (some poles and far features) get fewer answers.
-  Windows-parity of the analysis is not claimed; the conventions it
-  follows where Windows' choice isn't known are in
+  explicit, implicit and inequality plots, variables with sliders,
+  tracing, and key-graph-feature analysis. The analysis panel shows only
+  what is proven: every row comes from a certified analysis (interval
+  arithmetic with directed rounding and an exact simplifier) that either
+  proves the answer complete, proves the items it lists but not that they
+  are all (the row then says where it is complete, or that there may be
+  more), or says it can't tell ("Unable to calculate …"; "… is unknown"
+  for parity, periodicity and monotonicity) rather than "none". Numbers
+  are exact (`√2`, `π/2 + kπ`, `−9/4`) only when exact arithmetic confirms
+  them; otherwise they get as many significant digits as the proof fixes,
+  from three to six (written m×10ⁿ from 10⁶), marked "≈" because they
+  aren't exact; two different numbers of a row that would read alike get
+  up to fifteen, to tell them apart, and a value the proof fixes to fewer
+  than three digits leaves its row unknown. A number typed in an equation,
+  and a slider's value, is a decimal (`0.1` is one tenth, not the double
+  nearest it), rounded to **Settings → Number precision**: 14 significant
+  digits by default, as the TI-84 Plus CE keeps them, from 5 to 20, or Off
+  for the decimal exactly as typed. Arithmetic on those numbers alone is
+  done exactly (or, if an exact value would outgrow 2¹⁴ bits, left unknown
+  rather than rounded), so `10^17·(0.1 + 0.2 − 0.3) + x` is the line y =
+  x, and the curve drawn, its trace and its analysis all read the same
+  function. This is more conservative than Windows' symbolic engine:
+  functions it can't prove (some poles and far features) get fewer
+  answers. Windows-parity of the analysis is not claimed; the conventions
+  it follows where Windows' choice isn't known are in
   [docs/ti-conventions.md](docs/ti-conventions.md).
 - **Explicit curves: joins are proven until a work budget runs out.**
   Within the budget, two plotted points of y = f(x) are joined only when
