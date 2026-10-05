@@ -80,6 +80,7 @@
 
 pub mod analysis;
 pub mod ast;
+pub(crate) mod big;
 pub mod certify;
 pub mod compile;
 pub(crate) mod dd;

@@ -269,6 +269,13 @@ const UNMODELLED: &[(&str, &str)] = &[
         "x!/x!",
         "XI=none | YI=1 | P=neither | MIN=none | MAX=none | INF=none | VA=none | R={1}",
     ),
+    // Review 12, R12-M-03: 99!! exceeds 6625061298371663·2²⁰⁸ by less
+    // than 10⁷⁰, so this is 1 everywhere (an enclosure of 99!! that stops
+    // at that double made it 0).
+    (
+        "ceil((99!!-6625061298371663*2^208)/10^70)",
+        "XI=none | YI=1 | P=even | MIN=none | MAX=none | INF=none | VA=none | R={1}",
+    ),
 ];
 
 /// The functions of review rounds 9–11 (REVIEW_9/10/11.md), with what is

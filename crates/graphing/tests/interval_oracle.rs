@@ -1093,6 +1093,135 @@ fn factorials_enclose_mpfr() {
     assert!(t.violations.is_empty(), "{:#?}", t.violations);
 }
 
+/// An exact count, against the evaluator's value (rounded once to the
+/// nearest double) and the interval core's enclosure of it (the doubles
+/// either side, a point when it is one).
+fn check_count(
+    t: &mut Tally,
+    name: &str,
+    exact: &rug::Integer,
+    value: f64,
+    enclosure: Option<DecInterval>,
+) {
+    t.cases += 1;
+    let v = Float::with_val(8192, exact);
+    let nearest = Float::with_val(53, exact).to_f64();
+    if value.to_bits() != nearest.to_bits() {
+        t.fail(format!(
+            "{name} = {value:e}, not {nearest:e} (rounded once)"
+        ));
+    }
+    let Some(r) = enclosure else { return };
+    if r.dec < Dec::Def || !inside(&v, r.iv) {
+        t.fail(format!(
+            "{name} enclosed as [{:e}, {:e}] {:?}, missing {}",
+            r.lo(),
+            r.hi(),
+            r.dec,
+            exact
+        ));
+    } else if nearest.is_finite() && r.hi() > r.lo().next_up() {
+        t.fail(format!(
+            "{name} enclosed as [{:e}, {:e}], wider than the doubles either side",
+            r.lo(),
+            r.hi()
+        ));
+    }
+}
+
+/// n!!, nCr and nPr of whole numbers: the evaluator rounds the exact count
+/// once, and the interval core encloses it by the doubles either side
+/// (review 12, R12-M-03: 99!! was a rounded running product widened by an
+/// ulp, which missed the true value).
+#[test]
+fn counting_functions_are_exact() {
+    use graphing::functions::{double_factorial, ncr, npr};
+    use rug::Integer;
+    let mut t = Tally::default();
+    let pt = DecInterval::point;
+    for n in -1i32..=320 {
+        let exact = if n < 0 {
+            Integer::from(1)
+        } else {
+            Integer::from(Integer::factorial_2(n as u32))
+        };
+        let v = n as f64;
+        check_count(
+            &mut t,
+            &format!("{n}!!"),
+            &exact,
+            double_factorial(v),
+            Some(elem::double_factorial(&pt(v))),
+        );
+    }
+    // The review's case: 99!! is above 6625061298371663·2²⁰⁸.
+    let r = elem::double_factorial(&pt(99.0));
+    assert!(r.hi() > 6625061298371663.0 * 2f64.powi(208), "{r:?}");
+    let ns = [
+        61.0,
+        100.0,
+        1000.0,
+        1021.0,
+        1030.0,
+        1e6,
+        9007199254740992.0,
+        1e17,
+        1e300,
+    ];
+    let rs = [
+        0.0, 1.0, 2.0, 3.0, 5.0, 10.0, 50.0, 100.0, 500.0, 510.0, 515.0, 999.0,
+    ];
+    let mut pairs: Vec<(f64, f64, bool)> = Vec::new();
+    for n in 0..=60 {
+        for r in -1..=61 {
+            pairs.push((n as f64, r as f64, true));
+        }
+    }
+    for &n in &ns {
+        for &r in &rs {
+            pairs.push((n, r, false));
+        }
+    }
+    for (n, r, small) in pairs {
+        let ni = Integer::from_f64(n).expect("whole");
+        let ri = Integer::from_f64(r).expect("whole");
+        for perm in [false, true] {
+            let exact = if ri < 0 || ri > ni {
+                Integer::new()
+            } else if perm {
+                // n!/(n − r)! as a product of r factors (r ≤ 999), stopped
+                // once beyond the doubles.
+                let mut p = Integer::from(1);
+                let k = ri.to_u32().expect("small r");
+                for i in 0..k {
+                    p *= Integer::from(&ni - i);
+                    if p.significant_bits() > 1100 {
+                        break;
+                    }
+                }
+                p
+            } else {
+                let k = ri.to_u32().expect("small r");
+                Integer::from(ni.binomial_ref(k))
+            };
+            // Beyond the doubles the evaluator says +∞; keep the work small.
+            if exact.significant_bits() > 1100 {
+                let value = if perm { npr(n, r) } else { ncr(n, r) };
+                if value != f64::INFINITY {
+                    t.fail(format!("C/P({n}, {r}) = {value:e}, not +∞"));
+                }
+                continue;
+            }
+            let name = format!("{}({n}, {r})", if perm { "nPr" } else { "nCr" });
+            let value = if perm { npr(n, r) } else { ncr(n, r) };
+            let iv = small.then(|| elem::ncr_npr(&pt(n), &pt(r), perm));
+            check_count(&mut t, &name, &exact, value, iv);
+        }
+    }
+    report(&t);
+    assert!(t.violations.is_empty(), "{:#?}", t.violations);
+}
+
 #[test]
 fn constants_enclose_mpfr() {
     init();
