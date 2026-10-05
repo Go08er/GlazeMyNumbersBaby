@@ -942,6 +942,32 @@ fn entries_restore_as_they_were() {
     }
 }
 
+/// While "=" can still be repeated, every key clears the expression line,
+/// and MS, M− or an angle switch don't show the engine's expression again:
+/// "5 + 3 =", √, MS shows an empty line over "√(8)". Restored, the line is
+/// empty as it was, rather than the replayed "√(8)".
+#[test]
+fn an_expression_line_cleared_after_equals_restores_empty() {
+    use Button::*;
+    let more = continuations_with_panels();
+    for (mode, script) in [
+        (
+            CalcMode::Standard,
+            &[Five, Add, Three, Equals, Sqrt, Memory][..],
+        ),
+        (
+            CalcMode::Standard,
+            &[Add, Equals, Memory, Sqrt, MemorySubtract],
+        ),
+        (
+            CalcMode::Scientific,
+            &[Five, Add, Three, Equals, Sqrt, Radians],
+        ),
+    ] {
+        assert_acts_restore_and_continue(mode, &keys(script), &more);
+    }
+}
+
 /// A paste error is the view model's only (`OnPaste`, `DisplayPasteError`):
 /// the engine's calculation goes on under it, and a memory slot, a paste
 /// or a page change (which shows the engine's value again) continue it.

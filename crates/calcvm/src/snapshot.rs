@@ -1198,16 +1198,25 @@ impl StandardCalculatorViewModel {
             self.set_primary_display(display, is_error);
         }
         // The expression line as it was: the engine's (the replay shows it
-        // too), or a History item's; unless a budget ran out and the
-        // pending expression was dropped.
-        if let Some(expression) = snapshot.expression_display.as_ref().filter(|_| whole) {
-            let tokens = tokens_to_engine(&expression.tokens);
-            let commands: Vec<ExpressionCommand> = expression
-                .commands
-                .iter()
-                .map(ExpressionCommandWrapper::to_command)
-                .collect();
-            self.set_expression_display(tokens, commands);
+        // too), a History item's, or empty though the engine has an
+        // expression (any key after "=" clears the line, and MS, M+ or an
+        // angle switch don't show it again); unless a budget ran out and
+        // the pending expression was dropped. A snapshot without "k"
+        // (older, or upstream's) shows an expression it doesn't hold as
+        // the replay does.
+        match (&snapshot.expression_display, continuation) {
+            _ if !whole => {}
+            (Some(expression), _) => {
+                let tokens = tokens_to_engine(&expression.tokens);
+                let commands: Vec<ExpressionCommand> = expression
+                    .commands
+                    .iter()
+                    .map(ExpressionCommandWrapper::to_command)
+                    .collect();
+                self.set_expression_display(tokens, commands);
+            }
+            (None, Some(_)) => self.set_expression_display(Vec::new(), Vec::new()),
+            (None, None) => {}
         }
         // Extension: F-E as a History selection left it, or enabled.
         self.restore_history_load(continuation.is_some_and(|k| k.history_load));
