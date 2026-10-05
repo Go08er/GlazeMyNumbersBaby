@@ -401,11 +401,17 @@ impl CalculatorPage {
             let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
             content.append(&name);
             content.append(&value);
+            // One of four, as upstream's radix RadioButtons: assistive
+            // technology hears which base is current ("checked").
             let button = gtk::Button::builder()
                 .child(&content)
                 .css_classes(["wc-radix-row", "flat"])
                 .focus_on_click(false)
+                .accessible_role(gtk::AccessibleRole::Radio)
                 .build();
+            button.update_state(&[gtk::accessible::State::Checked(
+                gtk::AccessibleTristate::False,
+            )]);
             let weak = Rc::downgrade(self);
             button.connect_clicked(move |_| {
                 if let Some(p) = weak.upgrade() {
@@ -868,11 +874,17 @@ impl CalculatorPage {
             CalcMode::Programmer => {
                 for (radix, button, label) in self.radix_rows.borrow().iter() {
                     label.set_text(&vm.radix_value(*radix));
-                    if *radix == vm.radix() {
+                    let current = *radix == vm.radix();
+                    if current {
                         button.add_css_class("wc-radix-active");
                     } else {
                         button.remove_css_class("wc-radix-active");
                     }
+                    button.update_state(&[gtk::accessible::State::Checked(if current {
+                        gtk::AccessibleTristate::True
+                    } else {
+                        gtk::AccessibleTristate::False
+                    })]);
                     button.update_property(&[gtk::accessible::Property::Label(&format!(
                         "{} {}",
                         radix.label(),

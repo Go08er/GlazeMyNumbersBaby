@@ -49,6 +49,25 @@ fn date_button() -> DateButton {
     }
 }
 
+impl DateButton {
+    /// Name the picker by its caption and the date it shows ("From Sunday,
+    /// October 4, 2026"), as upstream's CalendarDatePicker reads its header
+    /// and date. The menu button's inner toggle is what takes focus, so it
+    /// gets the same relation.
+    fn labelled_by(&self, caption: &gtk::Label) {
+        let by: [&gtk::Accessible; 2] = [caption.upcast_ref(), self.label.upcast_ref()];
+        let relation = [gtk::accessible::Relation::LabelledBy(&by)];
+        self.button.update_relation(&relation);
+        let mut child = self.button.first_child();
+        while let Some(c) = child {
+            if c.is::<gtk::ToggleButton>() {
+                c.update_relation(&relation);
+            }
+            child = c.next_sibling();
+        }
+    }
+}
+
 fn to_glib(d: NaiveDate) -> glib::DateTime {
     glib::DateTime::from_local(d.year(), d.month() as i32, d.day() as i32, 12, 0, 0.0)
         .expect("valid date")
@@ -67,11 +86,15 @@ fn section_label(text: &str) -> gtk::Label {
 
 fn spin(label: &str) -> (gtk::Box, gtk::SpinButton) {
     let b = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    b.append(&section_label(label));
+    let caption = section_label(label);
+    b.append(&caption);
     let spin = gtk::SpinButton::with_range(0.0, datecalc::MAX_OFFSET_VALUE as f64, 1.0);
     spin.set_numeric(true);
     spin.add_css_class("wc-spin");
-    spin.update_property(&[gtk::accessible::Property::Label(label)]);
+    // Upstream: LabeledBy the caption above it.
+    spin.update_relation(&[gtk::accessible::Relation::LabelledBy(&[
+        caption.upcast_ref()
+    ])]);
     b.append(&spin);
     (b, spin)
 }
@@ -116,9 +139,13 @@ impl DatePage {
         diff_days.set_selectable(true);
 
         let diff_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        diff_box.append(&section_label(S::DATE_DIFF_FROM_HEADER));
+        let from_caption = section_label(S::DATE_DIFF_FROM_HEADER);
+        from.labelled_by(&from_caption);
+        diff_box.append(&from_caption);
         diff_box.append(&from.button);
-        diff_box.append(&section_label(S::DATE_DIFF_TO_HEADER));
+        let to_caption = section_label(S::DATE_DIFF_TO_HEADER);
+        to.labelled_by(&to_caption);
+        diff_box.append(&to_caption);
         diff_box.append(&to.button);
         let res_panel = gtk::Box::new(gtk::Orientation::Vertical, 2);
         res_panel.add_css_class("wc-glass-panel");
@@ -160,7 +187,9 @@ impl DatePage {
         date_result.set_weight(300);
 
         let add_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        add_box.append(&section_label(S::ADD_SUBTRACT_FROM_HEADER));
+        let start_caption = section_label(S::ADD_SUBTRACT_FROM_HEADER);
+        start.labelled_by(&start_caption);
+        add_box.append(&start_caption);
         add_box.append(&start.button);
         add_box.append(&op);
         add_box.append(&spins);

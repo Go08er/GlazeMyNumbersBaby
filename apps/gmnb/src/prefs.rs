@@ -291,15 +291,35 @@ pub fn show(win: &Rc<Window>) {
         shown.add_css_class("numeric");
         shown.set_width_chars(4);
         shown.set_xalign(1.0);
-        let composited = WidgetExt::display(&win.widget()).is_composited();
-        let opacity = adw::ActionRow::builder()
-            .title("Background opacity")
-            .subtitle(if composited {
+        let opacity_hint = |composited: bool| {
+            if composited {
                 "Lower lets your desktop show through, frosted if your compositor blurs translucent windows"
             } else {
                 "Your display isn't compositing windows, so GMNB stays opaque until it does"
-            })
+            }
+        };
+        let display = WidgetExt::display(&win.widget());
+        let opacity = adw::ActionRow::builder()
+            .title("Background opacity")
+            .subtitle(opacity_hint(display.is_composited()))
             .build();
+        {
+            // A compositing manager can start or stop while this is open
+            // (X11); the window follows, so the explanation (the row's
+            // accessible description too) does as well.
+            let row = opacity.downgrade();
+            let handler = display.connect_composited_notify(move |d| {
+                if let Some(row) = row.upgrade() {
+                    row.set_subtitle(opacity_hint(d.is_composited()));
+                }
+            });
+            let handler = std::cell::Cell::new(Some(handler));
+            opacity.connect_destroy(move |_| {
+                if let Some(h) = handler.take() {
+                    display.disconnect(h);
+                }
+            });
+        }
         opacity.add_suffix(&scale);
         opacity.add_suffix(&shown);
         {
