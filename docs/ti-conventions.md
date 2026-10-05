@@ -127,10 +127,14 @@ How numbers are written:
   integer or a power of ten read alike (`≈1×10⁶`); an exact integer keeps
   its exact text (`1000000`). Accessibility reads "≈" as
   "approximately". **The one exception to six:** two different numbers of
-  a row that would read alike (two points, two excluded points, the two
-  bounds of a range or of a monotone piece) get the significant digits
-  that tell them apart, up to fifteen (`x ∈ ℝ \ {≈0.841471, ≈0.8414711}`,
-  `y ∈ [≈0.8414711, ≈0.8414713]`). Equal texts never make two numbers one:
+  a row that would read alike (two points, two excluded points or
+  families, the two bounds of a range or of a monotone piece, and the ends
+  of two pieces proven different, as about a gap) get the significant
+  digits that tell them apart, up to fifteen (`x ∈ ℝ \ {≈0.841471,
+  ≈0.8414711}`, `y ∈ [≈0.8414711, ≈0.8414713]`, `x ∈ (−∞, ≈0.841471] ∪
+  [≈0.8414711, ∞)`); two ends that may be one number may read alike
+  (`y ∈ (−∞, ≈1) ∪ (≈1, ∞)` for csch x + 1). Equal texts never make two
+  numbers one:
   a set is written as a single point `{c}` only when its ends are proven
   one number (exact and equal, the same double, or one value f takes at
   one place). The minimum is one switch,

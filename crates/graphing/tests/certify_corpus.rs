@@ -2063,3 +2063,50 @@ fn a_typed_odd_degree_is_odd() {
         a.y_intercept
     );
 }
+
+/// Review 13, R13-M-06: the two ends of a gap between pieces, sin 1 and
+/// sin 1 + 10⁻⁷, were written alike (`(−∞, ≈0.841471] ∪ [≈0.841471, ∞)`
+/// read as all of ℝ, the ln one as ℝ but a point), though each piece's
+/// own bounds read apart. Ends proven different read apart across a row;
+/// ends that may be one number may still read alike.
+#[test]
+fn the_ends_of_a_gap_read_apart() {
+    for (src, domain) in [
+        (
+            "y=sqrt((x-sin(1))*(x-sin(1)-0.0000001))",
+            "x ∈ (−∞, ≈0.841471] ∪ [≈0.8414711, ∞)",
+        ),
+        (
+            "y=ln((x-sin(1))*(x-sin(1)-0.0000001))",
+            "x ∈ (−∞, ≈0.841471) ∪ (≈0.8414711, ∞)",
+        ),
+    ] {
+        let k = analyze_str(src);
+        assert_eq!(k.domain, domain, "{src}");
+        // Monotone on each side of the gap: its ends read apart too.
+        let ends: Vec<String> = k
+            .monotonicity
+            .iter()
+            .flat_map(|(t, _)| bounds_of(t))
+            .flat_map(|(a, b)| [a, b])
+            .filter(|e| !e.contains('∞'))
+            .collect();
+        assert!(
+            ends.len() == 2 && ends[0] != ends[1],
+            "{src}: monotonicity {:?}",
+            k.monotonicity
+        );
+    }
+    // Two ends that may be one number (csch x + 1 takes every value but
+    // 1, its limits enclosed apart) still read alike; and an excluded
+    // point, one number, reads as one.
+    assert!(
+        analyze_str("y=csch(x)+1")
+            .range
+            .starts_with("y ∈ (−∞, ≈1) ∪ (≈1, ∞)")
+    );
+    assert_eq!(
+        analyze_str("y=sqrt(x^2-1)/(x-2)").domain,
+        "x ∈ (−∞, −1] ∪ [1, 2) ∪ (2, ∞)"
+    );
+}
