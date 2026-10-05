@@ -12,7 +12,7 @@
 //! "Unknown" is always allowed; a wrong limit never is.
 
 use super::analysis::{Facts, rec_interval};
-use super::lang::{ExactLiterals, to_rec};
+use super::lang::to_rec;
 use super::period::{PiQ, affine, exact_constant};
 use super::q::Q;
 use super::rational::{Dir, RationalLimit, rational_form};
@@ -217,22 +217,21 @@ enum Asy {
     Unknown,
 }
 
-struct Cx<'a> {
+struct Cx {
     unit: TrigUnit,
-    lits: &'a ExactLiterals,
     facts: Facts,
 }
 
-impl Cx<'_> {
+impl Cx {
     fn constant(&self, e: &Expr) -> Asy {
-        if let Some(v) = exact_constant(e, self.lits) {
+        if let Some(v) = exact_constant(e) {
             return if v.q.is_zero() {
                 Asy::Zero
             } else {
                 Asy::Term(Term::constant(Coef::Exact(v)))
             };
         }
-        let Ok(rec) = to_rec(e, self.lits) else {
+        let Ok(rec) = to_rec(e) else {
             return Asy::Unknown;
         };
         let i = rec_interval(&rec, &self.facts);
@@ -606,7 +605,7 @@ fn exp_log(c: Q, rest: Asy) -> Asy {
 /// ln(u) with u ~ a·x^p (ln(u) = p·ln x + ln a + o(1)); anything else is
 /// all R (c = 0), so a logarithm hidden in it (ln(x)·(1 + 1/x), log x)
 /// leaves R of ln x's own scale.
-fn log_part(e: &Expr, cx: &Cx<'_>) -> (Q, Asy) {
+fn log_part(e: &Expr, cx: &Cx) -> (Q, Asy) {
     let generic = || (Q::ZERO, asy(e, cx));
     if !e.contains_x() {
         return (Q::ZERO, cx.constant(e));
@@ -616,7 +615,7 @@ fn log_part(e: &Expr, cx: &Cx<'_>) -> (Q, Asy) {
         if k.contains_x() {
             return None;
         }
-        exact_constant(k, cx.lits).filter(|v| v.k == 0).map(|v| v.q)
+        exact_constant(k).filter(|v| v.k == 0).map(|v| v.q)
     };
     let scaled = |(c, r): (Q, Asy), k: Q| -> Option<(Q, Asy)> {
         let c = c.mul(k)?;
@@ -754,7 +753,7 @@ fn exp_of_growing(t: Term) -> Asy {
     Asy::Unknown
 }
 
-fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
+fn asy(e: &Expr, cx: &Cx) -> Asy {
     if !e.contains_x() {
         return cx.constant(e);
     }
@@ -779,13 +778,13 @@ fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
                 }
             }
             BinOp::Pow => {
-                if let Some((p, q)) = syntactic_rational(b, cx.lits) {
+                if let Some((p, q)) = syntactic_rational(b, crate::compile::Reading::Typed) {
                     let r = Q::new(p as i128, q as i128).expect("q ≠ 0");
                     return pow(asy(a, cx), r);
                 }
                 if !b.contains_x() {
                     // functions::pow: a non-integer exponent needs a base ≥ 0.
-                    let Some(r) = exact_constant(b, cx.lits).filter(|v| v.k == 0) else {
+                    let Some(r) = exact_constant(b).filter(|v| v.k == 0) else {
                         return Asy::Unknown;
                     };
                     let base = asy(a, cx);
@@ -816,7 +815,7 @@ fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
             match f {
                 Exp => {
                     // An exactly affine exponent gives the term e^d·e^{sx}.
-                    if let Some(s) = affine(a, cx.lits)
+                    if let Some(s) = affine(a)
                         && s.k == 0
                     {
                         let at0 = a.map(&|n| matches!(n, Expr::X).then_some(Expr::num(0.0)));
@@ -969,10 +968,9 @@ pub fn limit(
     e: &Expr,
     dir: Dir,
     unit: TrigUnit,
-    lits: &ExactLiterals,
     variables: &dyn crate::compile::VariableValues,
 ) -> Limit {
-    if let Some(f) = rational_form(e, lits) {
+    if let Some(f) = rational_form(e) {
         return match f.reduced.limit(dir) {
             Some(RationalLimit::Finite(q)) => Limit::Exact(PiQ { q, k: 0 }),
             Some(RationalLimit::PosInf) => Limit::PosInf,
@@ -991,14 +989,12 @@ pub fn limit(
             .variables()
             .into_iter()
             .map(|n| {
-                let v = variables
-                    .value(&n)
-                    .unwrap_or(crate::compile::DEFAULT_VARIABLE_VALUE);
-                (n, v)
+                let (v, lit) = crate::compile::slider(variables, &n);
+                (n, lit.enclose(v))
             })
             .collect(),
     };
-    let cx = Cx { unit, lits, facts };
+    let cx = Cx { unit, facts };
     let first = read_limit(asy(&e, &cx));
     if first != Limit::Unknown {
         return first;
@@ -1006,7 +1002,7 @@ pub fn limit(
     // The limit of f(x) at ±∞ is f(x + c)'s for any c: an exponential
     // centred far out (e^(x − 1000), whose e⁻¹⁰⁰⁰ is no double) is taken
     // about its centre, where its constant part folds away exactly.
-    for c in centres(&e, lits) {
+    for c in centres(&e) {
         let shifted =
             e.map(&|n| matches!(n, Expr::X).then(|| Expr::bin(BinOp::Add, Expr::X, Expr::num(c))));
         let l = read_limit(asy(&shifted, &cx));
@@ -1019,7 +1015,7 @@ pub fn limit(
 
 /// The integers c (|c| ≥ 2⁸, below 2⁵³) at which an exponential's affine
 /// exponent a·x + b in `e` is 0 (c = −b/a): where to take e^(…) about.
-pub fn centres(e: &Expr, lits: &ExactLiterals) -> Vec<f64> {
+pub fn centres(e: &Expr) -> Vec<f64> {
     let mut out: Vec<f64> = Vec::new();
     e.visit(&mut |n| {
         let arg = match n {
@@ -1030,11 +1026,11 @@ pub fn centres(e: &Expr, lits: &ExactLiterals) -> Vec<f64> {
             _ => None,
         };
         let Some(arg) = arg else { return };
-        let Some(s) = affine(arg, lits).filter(|s| s.k == 0 && !s.q.is_zero()) else {
+        let Some(s) = affine(arg).filter(|s| s.k == 0 && !s.q.is_zero()) else {
             return;
         };
         let at0 = arg.map(&|m| matches!(m, Expr::X).then_some(Expr::num(0.0)));
-        let Some(d) = exact_constant(&at0, lits).filter(|d| d.k == 0) else {
+        let Some(d) = exact_constant(&at0).filter(|d| d.k == 0) else {
             return;
         };
         let Some(c) = d.q.neg().and_then(|b| b.div(s.q)) else {
@@ -1091,8 +1087,7 @@ mod tests {
     fn lim(s: &str, dir: Dir) -> Limit {
         let text = format!("y={s}");
         let eq = Equation::parse(&text).unwrap();
-        let lits = ExactLiterals::of(&text, Default::default()).unwrap();
-        limit(eq.explicit().unwrap().1, dir, TrigUnit::Radians, &lits, &())
+        limit(eq.explicit().unwrap().1, dir, TrigUnit::Radians, &())
     }
 
     fn exact(n: i128, d: i128, k: i32) -> Limit {

@@ -7,7 +7,7 @@ use crate::compile::{CompileOptions, VariableValues};
 use crate::equation::{Axis, CompiledEquation, CompiledForm, Equation, EquationKind, LineStyle};
 use crate::error::EquationError;
 use crate::functions::TrigUnit;
-use crate::lexer::{ParseOptions, round_to_digits};
+use crate::lexer::ParseOptions;
 use crate::plot::{Cancel, Plot, PlotOptions, contour_cost, plot, plot_with};
 use crate::trace::{TracePoint, nearest_point};
 use crate::variable::Variable;
@@ -77,27 +77,14 @@ impl Entry {
     }
 }
 
-/// The sliders' values as the equations read them: each its double, or
-/// under a digit limit the double nearest it rounded as a typed number is
-/// (`ParseOptions::literal_digits`).
-struct Vars(BTreeMap<String, f64>);
+/// The sliders' values as set. Each equation reads them as it reads its
+/// numbers: under a digit limit, rounded to decimals (`compile::Sliders`,
+/// applied where an equation is compiled or analysed).
+struct Vars<'a>(&'a BTreeMap<String, Variable>);
 
-impl Vars {
-    fn of(vars: &BTreeMap<String, Variable>, digits: Option<u8>) -> Vars {
-        Vars(
-            vars.iter()
-                .map(|(n, v)| {
-                    let x = v.value();
-                    (n.clone(), digits.map_or(x, |d| round_to_digits(x, d)))
-                })
-                .collect(),
-        )
-    }
-}
-
-impl VariableValues for Vars {
+impl VariableValues for Vars<'_> {
     fn value(&self, name: &str) -> Option<f64> {
-        self.0.get(name).copied()
+        self.0.get(name).map(|v| v.value())
     }
 }
 
@@ -355,8 +342,8 @@ impl Graph {
         true
     }
 
-    fn vars(&self) -> Vars {
-        Vars::of(&self.variables, self.parse_options.literal_digits)
+    fn vars(&self) -> Vars<'_> {
+        Vars(&self.variables)
     }
 
     fn recompile(&mut self) {

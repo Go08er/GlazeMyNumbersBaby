@@ -11,9 +11,9 @@
 use crate::ast::{BinOp, Constant, Expr, Func, Lit};
 use crate::functions::TrigUnit;
 use crate::interval::{DecInterval, Interval, elem};
+use crate::simplify::PiQ;
 use crate::simplify::Q;
 use crate::simplify::rational::Poly;
-use crate::simplify::{ExactLiterals, PiQ};
 
 use super::format::{MINUS, Nice, superscript};
 
@@ -706,16 +706,15 @@ impl Ex {
 }
 
 /// `e` at x = `x`, exactly (`None` if undefined there, or not exactly
-/// computable here). `lits` gives the typed literals' exact values; a
+/// computable here). Each number is its own exact value (`Lit`); a
 /// slider is its double.
 pub fn eval(
     e: &Expr,
     x: Ex,
     unit: TrigUnit,
-    lits: &ExactLiterals,
     vars: &dyn crate::compile::VariableValues,
 ) -> Option<Ex> {
-    let ev = |a: &Expr| eval(a, x, unit, lits, vars);
+    let ev = |a: &Expr| eval(a, x, unit, vars);
     match e {
         Expr::Num(v, lit) => match lit.q(*v) {
             Some(q) => Some(Ex::q(q)),
@@ -737,10 +736,11 @@ pub fn eval(
         }),
         Expr::X => Some(x),
         Expr::Y => None,
-        Expr::Var(name) => Some(Ex::q(Q::from_f64(
-            vars.value(name)
-                .unwrap_or(crate::compile::DEFAULT_VARIABLE_VALUE),
-        )?)),
+        // A slider: its double, or the decimal a digit limit made it.
+        Expr::Var(name) => {
+            let (v, lit) = crate::compile::slider(vars, name);
+            Some(Ex::q(lit.q(v)?))
+        }
         Expr::Neg(a) => ev(a)?.neg(),
         Expr::Degrees(a) => (unit == TrigUnit::Degrees).then(|| ev(a)).flatten(),
         // eᵇ for b rational, or a + n·ln c.
@@ -752,7 +752,7 @@ pub fn eval(
                 BinOp::Sub => u.sub(ev(b)?),
                 BinOp::Mul => u.mul(ev(b)?),
                 BinOp::Div => u.div(ev(b)?),
-                BinOp::Pow => pow(u, b, x, unit, lits, vars),
+                BinOp::Pow => pow(u, b, x, unit, vars),
             }
         }
         Expr::Call(f, args) => {
@@ -870,10 +870,9 @@ fn pow(
     b: &Expr,
     x: Ex,
     unit: TrigUnit,
-    lits: &ExactLiterals,
     vars: &dyn crate::compile::VariableValues,
 ) -> Option<Ex> {
-    let v = eval(b, x, unit, lits, vars)?;
+    let v = eval(b, x, unit, vars)?;
     let r = v.rational()?;
     if b.contains_x() {
         let s = u.sign()?;
@@ -886,7 +885,7 @@ fn pow(
     }
     // A typed fraction p/q: real roots of negatives for odd q.
     let (p, q) = (r.numer(), r.denom());
-    let typed = crate::compile::syntactic_rational(b, lits).is_some();
+    let typed = crate::compile::syntactic_rational(b, crate::compile::Reading::Typed).is_some();
     if u.sign()? < 0 && (!typed || q % 2 == 0) {
         return None;
     }
@@ -1392,12 +1391,11 @@ mod tests {
 
     #[test]
     fn trig_values_at_special_angles() {
-        let lits = ExactLiterals::none();
         let vars = ();
         let f = |s: &str, x: Ex, u: TrigUnit| {
             let eq = crate::Equation::parse(&format!("y={s}")).unwrap();
             let (_, e) = eq.explicit().unwrap();
-            eval(e, x, u, &lits, &vars)
+            eval(e, x, u, &vars)
         };
         let half_pi = Ex::Pi(q(1, 2));
         assert_eq!(f("cos(x)", half_pi, TrigUnit::Radians), Some(Ex::int(0)));

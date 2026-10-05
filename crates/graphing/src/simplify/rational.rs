@@ -7,7 +7,6 @@
 //! overflow, or grow past [`MAX_DEGREE`], gives `None` rather than an
 //! approximation.
 
-use super::lang::ExactLiterals;
 use super::q::Q;
 use crate::ast::{BinOp, Expr};
 use crate::compile::syntactic_rational;
@@ -332,8 +331,8 @@ impl Rational {
 
 /// `e` as a rational function of x with exact coefficients, if it is one
 /// (x, exact constants, + − × ÷ and integer powers).
-pub fn rational_form(e: &Expr, lits: &ExactLiterals) -> Option<RationalForm> {
-    let (n, d) = parts(e, lits)?;
+pub fn rational_form(e: &Expr) -> Option<RationalForm> {
+    let (n, d) = parts(e)?;
     let (reduced, g) = Rational::new(n, d)?;
     Some(RationalForm {
         reduced,
@@ -342,23 +341,23 @@ pub fn rational_form(e: &Expr, lits: &ExactLiterals) -> Option<RationalForm> {
 }
 
 /// (numerator, denominator), not yet reduced.
-fn parts(e: &Expr, lits: &ExactLiterals) -> Option<(Poly, Poly)> {
+fn parts(e: &Expr) -> Option<(Poly, Poly)> {
     let one = || Poly::constant(Q::ONE);
     Some(match e {
         Expr::X => (Poly::x(), one()),
         Expr::Num(v, lit) => (Poly::constant(lit.q(*v)?), one()),
         Expr::Neg(a) => {
-            let (n, d) = parts(a, lits)?;
+            let (n, d) = parts(a)?;
             (n.neg()?, d)
         }
-        Expr::Degrees(a) => parts(a, lits)?,
+        Expr::Degrees(a) => parts(a)?,
         Expr::Bin(op, a, b) => match op {
             BinOp::Pow => {
-                let (p, q) = syntactic_rational(b, lits)?;
+                let (p, q) = syntactic_rational(b, crate::compile::Reading::Typed)?;
                 if q != 1 || p.unsigned_abs() as usize > MAX_DEGREE {
                     return None;
                 }
-                let (n, d) = parts(a, lits)?;
+                let (n, d) = parts(a)?;
                 if p >= 0 {
                     if p == 0 && n.is_zero() {
                         return None;
@@ -372,8 +371,8 @@ fn parts(e: &Expr, lits: &ExactLiterals) -> Option<(Poly, Poly)> {
                 }
             }
             _ => {
-                let (an, ad) = parts(a, lits)?;
-                let (bn, bd) = parts(b, lits)?;
+                let (an, ad) = parts(a)?;
+                let (bn, bd) = parts(b)?;
                 match op {
                     BinOp::Add => (an.mul(&bd)?.add(&bn.mul(&ad)?)?, ad.mul(&bd)?),
                     BinOp::Sub => (an.mul(&bd)?.sub(&bn.mul(&ad)?)?, ad.mul(&bd)?),
@@ -400,8 +399,7 @@ mod tests {
     fn form(s: &str) -> Option<RationalForm> {
         let text = format!("y={s}");
         let eq = Equation::parse(&text).unwrap();
-        let lits = ExactLiterals::of(&text, Default::default()).unwrap();
-        rational_form(eq.explicit().unwrap().1, &lits)
+        rational_form(eq.explicit().unwrap().1)
     }
 
     fn q(n: i128, d: i128) -> Q {

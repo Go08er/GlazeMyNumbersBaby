@@ -31,9 +31,7 @@ use egg::{Id, Language, RecExpr, Symbol, define_language};
 
 use super::q::Q;
 use crate::ast::{BinOp, Constant, Expr, Func, Lit};
-use crate::compile::syntactic_rational;
-use crate::error::EquationError;
-use crate::lexer::{ParseOptions, literal_texts};
+use crate::compile::{Reading, syntactic_rational};
 
 /// A number not known exactly (`ast::Lit::Near`): the double an analysis
 /// wrote, standing for some real within an ulp of it; and which occurrence
@@ -185,26 +183,6 @@ pub const PI: &str = "pi";
 /// The symbol for e.
 pub const E: &str = "e";
 
-/// How the simplifier reads a tree's numbers: each as its own [`Lit`]
-/// says. Until review 13 this keyed the decimals typed by the double each
-/// parsed to, which two decimals can share (R13-M-01); it remains the
-/// handle the simplifier's functions take, holding nothing.
-#[derive(Clone, Debug, Default)]
-pub struct ExactLiterals;
-
-impl ExactLiterals {
-    /// The reading of the literals of `text`: an error if it doesn't scan.
-    pub fn of(text: &str, opts: ParseOptions) -> Result<ExactLiterals, EquationError> {
-        literal_texts(text, opts)?;
-        Ok(ExactLiterals)
-    }
-
-    /// The same reading, for a tree no text is known for.
-    pub fn none() -> ExactLiterals {
-        ExactLiterals
-    }
-}
-
 impl Lit {
     /// The exact rational `Num(v, self)` stands for, if it is known and
     /// fits a [`Q`].
@@ -232,14 +210,14 @@ pub enum Unsupported {
 }
 
 /// Converts `e` (a function of x) to an e-graph term.
-pub fn to_rec(e: &Expr, lits: &ExactLiterals) -> Result<RecExpr<Math>, Unsupported> {
+pub fn to_rec(e: &Expr) -> Result<RecExpr<Math>, Unsupported> {
     let mut rec = RecExpr::default();
-    add(e, lits, &mut rec)?;
+    add(e, &mut rec)?;
     Ok(rec)
 }
 
-fn add(e: &Expr, lits: &ExactLiterals, rec: &mut RecExpr<Math>) -> Result<Id, Unsupported> {
-    let go = |e: &Expr, rec: &mut RecExpr<Math>| add(e, lits, rec);
+fn add(e: &Expr, rec: &mut RecExpr<Math>) -> Result<Id, Unsupported> {
+    let go = |e: &Expr, rec: &mut RecExpr<Math>| add(e, rec);
     Ok(match e {
         Expr::Num(v, lit) => match lit.q(*v) {
             Some(q) => rec.add(Math::Num(q)),
@@ -264,7 +242,7 @@ fn add(e: &Expr, lits: &ExactLiterals, rec: &mut RecExpr<Math>) -> Result<Id, Un
         Expr::Bin(op, a, b) => {
             let ia = go(a, rec)?;
             if *op == BinOp::Pow
-                && let Some((p, q)) = syntactic_rational(b, lits)
+                && let Some((p, q)) = syntactic_rational(b, Reading::Typed)
             {
                 let k = rec.add(Math::Num(Q::new(p as i128, q as i128).expect("q ≠ 0")));
                 return Ok(rec.add(Math::PowQ([ia, k])));

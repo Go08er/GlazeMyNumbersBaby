@@ -50,7 +50,7 @@ pub fn eval(
     Some(match e {
         Expr::Num(v, lit) => lits.exact(*v, lit)?,
         Expr::X => x?.clone(),
-        Expr::Var(n) => of_f64(vars.iter().find(|(m, _)| m == n)?.1)?,
+        Expr::Var(n) => lits.slider_exact(n, vars.iter().find(|(m, _)| m == n)?.1)?,
         Expr::Y | Expr::Const(_) => return None,
         Expr::Neg(a) => -ev(a)?,
         Expr::Degrees(a) => ev(a)?,

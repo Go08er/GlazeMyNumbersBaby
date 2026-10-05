@@ -7,18 +7,24 @@
 use std::collections::BTreeMap;
 
 use crate::ast::{BinOp, Expr, Func, Lit};
-use crate::compile::{CompileOptions, DEFAULT_VARIABLE_VALUE, VariableValues};
+use crate::compile::{CompileOptions, VariableValues};
 use crate::functions::TrigUnit;
-use crate::interval::{Ctx, DecInterval, Interval, Literals, Series, enclose, taylor};
+use crate::interval::{Ctx, DecInterval, Interval, Series, enclose, taylor};
 use crate::simplify::Q;
 
 /// Slider values captured when the curve was compiled.
 #[derive(Clone, Debug, Default)]
-struct Vars(BTreeMap<String, f64>);
+/// (Each its double and what it stands for: under a digit limit, the
+/// decimal it was rounded to.)
+struct Vars(BTreeMap<String, (f64, Lit)>);
 
 impl VariableValues for Vars {
     fn value(&self, name: &str) -> Option<f64> {
-        self.0.get(name).copied()
+        self.0.get(name).map(|(v, _)| *v)
+    }
+
+    fn lit(&self, name: &str) -> Lit {
+        self.0.get(name).map_or(Lit::Exact, |(_, l)| l.clone())
     }
 }
 
@@ -26,27 +32,24 @@ impl VariableValues for Vars {
 #[derive(Clone, Debug)]
 pub struct IntervalFn {
     expr: Expr,
-    literals: Literals,
     unit: TrigUnit,
     vars: Vars,
 }
 
 impl IntervalFn {
-    /// `expr` in x (an `x = g(y)` curve already swapped), `literals` read
-    /// from the text it was parsed from, and the options it was compiled
-    /// with.
-    pub(crate) fn new(expr: Expr, literals: Literals, opts: &CompileOptions<'_>) -> IntervalFn {
+    /// `expr` in x (an `x = g(y)` curve already swapped; each number its
+    /// own exact value) and the options it was compiled with.
+    pub(crate) fn new(expr: Expr, opts: &CompileOptions<'_>) -> IntervalFn {
         let vars = expr
             .variables()
             .into_iter()
             .map(|n| {
-                let v = opts.variables.value(&n).unwrap_or(DEFAULT_VARIABLE_VALUE);
-                (n, v)
+                let s = crate::compile::slider(opts.variables, &n);
+                (n, s)
             })
             .collect();
         IntervalFn {
             expr,
-            literals,
             unit: opts.trig_unit,
             vars: Vars(vars),
         }
@@ -57,7 +60,7 @@ impl IntervalFn {
             trig_unit: self.unit,
             variables: &self.vars,
         };
-        f(&Ctx::new(opts, &self.literals))
+        f(&Ctx::new(opts))
     }
 
     /// An enclosure of f over [lo, hi], decorated.
@@ -73,7 +76,7 @@ impl IntervalFn {
             trig_unit: self.unit,
             variables: &self.vars,
         };
-        let mut ctx = Ctx::new(opts, &self.literals);
+        let mut ctx = Ctx::new(opts);
         ctx.pole_probe = true;
         let e = enclose(&self.expr, Interval::point(x), &ctx);
         !e.is_empty() && !e.iv.is_bounded()
@@ -124,7 +127,10 @@ impl IntervalFn {
             match e {
                 Expr::Num(v, Lit::Exact) => Q::from_f64(*v),
                 Expr::X => Some(x),
-                Expr::Var(n) => Q::from_f64(*f.vars.0.get(n)?),
+                Expr::Var(n) => {
+                    let (v, lit) = f.vars.0.get(n)?;
+                    lit.q(*v)
+                }
                 Expr::Neg(a) => ev(a, x, f)?.neg(),
                 Expr::Bin(op, a, b) => {
                     let (a, b) = (ev(a, x, f)?, ev(b, x, f)?);

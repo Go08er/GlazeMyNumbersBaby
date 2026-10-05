@@ -4,16 +4,14 @@
 
 use graphing::ast::Expr;
 use graphing::compile::{CompileOptions, Program};
-use graphing::lexer::ParseOptions;
 use graphing::simplify::{
-    Cond, Dir, ExactLiterals, Limit, Parity, PiQ, Q, Settings, limit_at, prove_parity,
-    prove_period, rational_form, side::Trig, simplify,
+    Cond, Dir, Limit, Parity, PiQ, Q, Settings, limit_at, prove_parity, prove_period,
+    rational_form, side::Trig, simplify,
 };
 use graphing::{Equation, TrigUnit};
 
 struct Case {
     f: Expr,
-    lits: ExactLiterals,
 }
 
 fn case(s: &str) -> Case {
@@ -21,7 +19,6 @@ fn case(s: &str) -> Case {
     let eq = Equation::parse(&text).unwrap();
     Case {
         f: eq.explicit().unwrap().1.clone(),
-        lits: ExactLiterals::of(&text, ParseOptions::default()).unwrap(),
     }
 }
 
@@ -35,20 +32,20 @@ fn opts(unit: TrigUnit) -> CompileOptions<'static> {
 fn simplified(s: &str) -> (String, Vec<Cond>) {
     let c = case(s);
     let o = opts(TrigUnit::Radians);
-    let r = simplify(&c.f, &Settings::new(&o, &c.lits)).unwrap();
+    let r = simplify(&c.f, &Settings::new(&o)).unwrap();
     (r.expr.to_string(), r.conditions)
 }
 
 fn parity(s: &str) -> Option<Parity> {
     let c = case(s);
     let o = opts(TrigUnit::Radians);
-    prove_parity(&c.f, &Settings::new(&o, &c.lits))
+    prove_parity(&c.f, &Settings::new(&o))
 }
 
 fn period(s: &str, unit: TrigUnit) -> Option<PiQ> {
     let c = case(s);
     let o = opts(unit);
-    prove_period(&c.f, &Settings::new(&o, &c.lits)).map(|p| p.value)
+    prove_period(&c.f, &Settings::new(&o)).map(|p| p.value)
 }
 
 fn pi(n: i128, d: i128) -> Option<PiQ> {
@@ -94,7 +91,7 @@ fn extreme_constants_are_exact() {
     // acot(10¹⁵)·10¹⁵ = 1: the stable form evaluates to it.
     let c = case("acot(1000000000000000)*1000000000000000");
     let o = opts(TrigUnit::Radians);
-    let r = simplify(&c.f, &Settings::new(&o, &c.lits)).unwrap();
+    let r = simplify(&c.f, &Settings::new(&o)).unwrap();
     assert!(
         !r.expr
             .any(&|n| matches!(n, Expr::Call(graphing::ast::Func::Acot, _)))
@@ -145,12 +142,12 @@ fn periods_are_proven() {
 #[test]
 fn rational_forms_and_limits() {
     let c = case("(x^2-1)/(x-1)");
-    let f = rational_form(&c.f, &c.lits).unwrap();
+    let f = rational_form(&c.f).unwrap();
     assert_eq!(f.reduced.oblique(), Some((Q::ONE, Q::ONE)));
     let o = opts(TrigUnit::Radians);
     let lim = |s: &str, d: Dir| {
         let c = case(s);
-        limit_at(&c.f, d, &Settings::new(&o, &c.lits))
+        limit_at(&c.f, d, &Settings::new(&o))
     };
     assert_eq!(
         lim("atan(x)", Dir::PosInf),
@@ -223,7 +220,7 @@ fn the_forty_simplify_soundly() {
     for s in SET {
         let c = case(s);
         let t = std::time::Instant::now();
-        let r = simplify(&c.f, &Settings::new(&o, &c.lits)).unwrap();
+        let r = simplify(&c.f, &Settings::new(&o)).unwrap();
         let ms = t.elapsed().as_secs_f64() * 1e3;
         assert!(ms < 500.0, "{s}: {ms} ms");
         let a = Program::compile(&c.f, &o).unwrap();

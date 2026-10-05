@@ -113,10 +113,7 @@ impl Equation {
     pub fn parse_with(text: &str, opts: ParseOptions) -> Result<Equation, EquationError> {
         let parsed = parse_input(text, opts)?;
         let whole = 0..text.chars().count();
-        // The literals as typed: a coefficient solved for is the decimals'.
-        let lits = crate::interval::Literals::of(text, opts)
-            .unwrap_or_else(|_| crate::interval::Literals::none());
-        let form = classify(&parsed, whole, &lits)?;
+        let form = classify(&parsed, whole)?;
         let mut variables: Vec<String> = Vec::new();
         for side in &parsed.sides {
             for v in side.variables() {
@@ -233,6 +230,13 @@ impl Equation {
     /// Compiles the equation for plotting/tracing with the given variable
     /// values and trig unit.
     pub fn compile(&self, opts: &CompileOptions<'_>) -> Result<CompiledEquation, EquationError> {
+        // The sliders read as the equation's numbers are (under a digit
+        // limit, rounded to decimals).
+        let sliders = crate::compile::Sliders::of(self, opts.variables);
+        let opts = &CompileOptions {
+            trig_unit: opts.trig_unit,
+            variables: &sliders,
+        };
         let whole = 0..self.text.chars().count();
         let fix = |mut e: EquationError| {
             if e.span.is_empty() {
@@ -240,17 +244,11 @@ impl Equation {
             }
             e
         };
-        // The literals as typed, for the programs and interval evaluation
-        // alike (a literal that can't be read back is enclosed by its
-        // neighbours instead), so that the curve drawn, its trace and its
-        // analysis are of one function.
-        let lits = crate::interval::Literals::of(&self.text, self.parse)
-            .unwrap_or_else(|_| crate::interval::Literals::none());
         // The interval form folds arithmetic on literals alone exactly, as
         // the program does, into one tight enclosure.
         let interval = |e: Expr| {
-            let e = crate::compile::fold_literals(&e, opts, &lits);
-            Some(Arc::new(IntervalFn::new(e, lits.clone(), opts)))
+            let e = crate::compile::fold_literals(&e, opts);
+            Some(Arc::new(IntervalFn::new(e, opts)))
         };
         let form = match &self.form {
             Form::Explicit { axis, f } => {
@@ -262,12 +260,12 @@ impl Equation {
                 };
                 CompiledForm::Explicit {
                     axis: *axis,
-                    f: Program::compile_typed(&expr, opts, &lits).map_err(fix)?,
+                    f: Program::compile_typed(&expr, opts).map_err(fix)?,
                     iv: interval(expr),
                 }
             }
             Form::Implicit { f } => CompiledForm::Implicit {
-                f: Program::compile_typed(f, opts, &lits).map_err(fix)?,
+                f: Program::compile_typed(f, opts).map_err(fix)?,
             },
             Form::Inequality {
                 conditions,
@@ -278,7 +276,7 @@ impl Equation {
                 } else {
                     Expr::Call(Func::Max, conditions.iter().map(|c| c.g.clone()).collect())
                 };
-                let field = Program::compile_typed(&field_expr, opts, &lits).map_err(fix)?;
+                let field = Program::compile_typed(&field_expr, opts).map_err(fix)?;
                 let bound = match explicit {
                     Some(b) => {
                         let expr = if b.axis == Axis::Y {
@@ -288,7 +286,7 @@ impl Equation {
                         };
                         Some(CompiledBound {
                             axis: b.axis,
-                            f: Program::compile_typed(&expr, opts, &lits).map_err(fix)?,
+                            f: Program::compile_typed(&expr, opts).map_err(fix)?,
                             iv: interval(expr),
                             greater: b.greater,
                         })
@@ -300,12 +298,7 @@ impl Equation {
                 } else {
                     conditions
                         .iter()
-                        .map(|c| {
-                            Ok((
-                                Program::compile_typed(&c.g, opts, &lits).map_err(fix)?,
-                                c.strict,
-                            ))
-                        })
+                        .map(|c| Ok((Program::compile_typed(&c.g, opts).map_err(fix)?, c.strict)))
                         .collect::<Result<Vec<_>, EquationError>>()?
                 };
                 CompiledForm::Inequality {
@@ -534,7 +527,7 @@ fn linear(e: &Expr, is_var: &dyn Fn(&Expr) -> bool) -> Option<(Part, Part)> {
 /// nonzero, in every angle unit alike: exactly, from the literals as typed
 /// (`0.1 + 0.2 − 0.3` is 0), else by an enclosure that excludes 0
 /// (`sin(π)`, ±10⁻¹⁶ in doubles, is no proven nonzero).
-fn coefficient_sign(c: &Expr, lits: &crate::interval::Literals) -> Option<f64> {
+fn coefficient_sign(c: &Expr) -> Option<f64> {
     use crate::functions::TrigUnit;
     use crate::interval::{Ctx, Dec, Interval, enclose};
     let mut sign = None;
@@ -548,7 +541,7 @@ fn coefficient_sign(c: &Expr, lits: &crate::interval::Literals) -> Option<f64> {
             // Exactly 0, a division by 0, or too long to tell.
             Some(_) => return None,
             None => {
-                let e = enclose(c, Interval::point(0.0), &Ctx::new(opts, lits));
+                let e = enclose(c, Interval::point(0.0), &Ctx::new(opts));
                 match (e.dec >= Dec::Def, e.gt0(), e.lt0()) {
                     (true, true, _) => 1.0,
                     (true, _, true) => -1.0,
@@ -569,19 +562,14 @@ fn coefficient_sign(c: &Expr, lits: &crate::interval::Literals) -> Option<f64> {
 /// sign)`. A coefficient exactly 0 (`y·(0.1 + 0.2 − 0.3) = x`) drops the
 /// variable: there is nothing to solve for, and the relation stays
 /// implicit (here x = 0).
-fn solve_linear(
-    lhs: &Expr,
-    rhs: &Expr,
-    var_is: &dyn Fn(&Expr) -> bool,
-    lits: &crate::interval::Literals,
-) -> Option<(Expr, f64)> {
+fn solve_linear(lhs: &Expr, rhs: &Expr, var_is: &dyn Fn(&Expr) -> bool) -> Option<(Expr, f64)> {
     let diff = Expr::bin(crate::ast::BinOp::Sub, lhs.clone(), rhs.clone());
     let (c, r) = linear(&diff, var_is)?;
     let c = c.expr();
     if c.contains_x() || c.contains_y() || !c.variables().is_empty() {
         return None;
     }
-    let sign = coefficient_sign(&c, lits)?;
+    let sign = coefficient_sign(&c)?;
     // c·v + r = 0  →  v = −r / c (a written ±1, exact here, not divided by).
     let one = |e: &Expr| e.exact_value() == Some(1.0);
     let sol = match &c {
@@ -606,11 +594,7 @@ fn condition(a: &Expr, op: RelOp, b: &Expr) -> Condition {
     }
 }
 
-fn classify(
-    p: &ParsedInput,
-    whole: std::ops::Range<usize>,
-    lits: &crate::interval::Literals,
-) -> Result<Form, EquationError> {
+fn classify(p: &ParsedInput, whole: std::ops::Range<usize>) -> Result<Form, EquationError> {
     if p.rels.is_empty() {
         let e = &p.sides[0];
         if e.contains_y() {
@@ -663,7 +647,7 @@ fn classify(
         }
         // Prefer a function of x (analysis works on those): solve for y when
         // the equation is linear in y, e.g. `x = 2y` or `x + y = 1`.
-        if let Some((sol, _)) = solve_linear(lhs, rhs, &is_y, lits)
+        if let Some((sol, _)) = solve_linear(lhs, rhs, &is_y)
             && !sol.contains_y()
         {
             return Ok(Form::Explicit {
@@ -683,7 +667,7 @@ fn classify(
                 f: lhs.clone(),
             });
         }
-        if let Some((sol, _)) = solve_linear(lhs, rhs, &is_x, lits)
+        if let Some((sol, _)) = solve_linear(lhs, rhs, &is_x)
             && !sol.contains_x()
         {
             return Ok(Form::Explicit {
@@ -713,9 +697,7 @@ fn classify(
             greater: !greater_than,
             strict,
         })
-    } else if let Some((sol, c)) =
-        solve_linear(lhs, rhs, &is_y, lits).filter(|(s, _)| !s.contains_y())
-    {
+    } else if let Some((sol, c)) = solve_linear(lhs, rhs, &is_y).filter(|(s, _)| !s.contains_y()) {
         // c·y + r ⋚ 0: dividing by a negative c flips the direction.
         Some(ExplicitBound {
             axis: Axis::X,
@@ -737,9 +719,7 @@ fn classify(
             greater: !greater_than,
             strict,
         })
-    } else if let Some((sol, c)) =
-        solve_linear(lhs, rhs, &is_x, lits).filter(|(s, _)| !s.contains_x())
-    {
+    } else if let Some((sol, c)) = solve_linear(lhs, rhs, &is_x).filter(|(s, _)| !s.contains_x()) {
         Some(ExplicitBound {
             axis: Axis::Y,
             f: sol,

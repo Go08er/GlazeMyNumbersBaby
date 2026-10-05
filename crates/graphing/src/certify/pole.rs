@@ -65,7 +65,8 @@ fn vanishes(f: &Fun<'_>, g: &Expr, n: Interval) -> Result<bool, Stop> {
     }
     Ok(match g {
         Expr::Bin(BinOp::Pow, c, p) => {
-            matches!(syntactic_rational(p, f.lits), Some((p, 1)) if p > 0) && simple_zero(f, c, n)?
+            matches!(syntactic_rational(p, crate::compile::Reading::Typed), Some((p, 1)) if p > 0)
+                && simple_zero(f, c, n)?
         }
         Expr::Neg(c) => vanishes(f, c, n)?,
         _ => false,
@@ -86,11 +87,13 @@ pub fn pole(f: &Fun<'_>, e: &Expr, n: Interval) -> Result<bool, Stop> {
             (vanishes(f, b, n)? && nonzero_cont(f, a, n)?)
                 || (pole(f, a, n)? && nonzero_cont(f, b, n)?)
         }
-        Expr::Bin(BinOp::Pow, a, b) => match syntactic_rational(b, f.lits) {
-            Some((p, 1)) if p > 0 => pole(f, a, n)?,
-            Some((p, 1)) if p < 0 => simple_zero(f, a, n)?,
-            _ => false,
-        },
+        Expr::Bin(BinOp::Pow, a, b) => {
+            match syntactic_rational(b, crate::compile::Reading::Typed) {
+                Some((p, 1)) if p > 0 => pole(f, a, n)?,
+                Some((p, 1)) if p < 0 => simple_zero(f, a, n)?,
+                _ => false,
+            }
+        }
         Expr::Call(func, args) => {
             let u = &args[0];
             match func {
@@ -127,11 +130,13 @@ pub fn pole_free(f: &Fun<'_>, e: &Expr, n: Interval) -> Result<bool, Stop> {
             (vanishes(f, b, n)? && nonzero_cont(f, a, n)?)
                 || (pole_free(f, a, n)? && nonzero_cont(f, b, n)?)
         }
-        Expr::Bin(BinOp::Pow, a, b) => match syntactic_rational(b, f.lits) {
-            Some((p, 1)) if p < 0 => simple_zero(f, a, n)?,
-            Some((p, 1)) if p > 0 => pole_free(f, a, n)?,
-            _ => false,
-        },
+        Expr::Bin(BinOp::Pow, a, b) => {
+            match syntactic_rational(b, crate::compile::Reading::Typed) {
+                Some((p, 1)) if p < 0 => simple_zero(f, a, n)?,
+                Some((p, 1)) if p > 0 => pole_free(f, a, n)?,
+                _ => false,
+            }
+        }
         Expr::Call(Func::Tan | Func::Cot | Func::Sec | Func::Csc | Func::Csch | Func::Coth, _) => {
             pole(f, e, n)?
         }

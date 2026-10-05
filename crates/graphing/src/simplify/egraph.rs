@@ -6,12 +6,12 @@ use std::time::Duration;
 use egg::{BackoffScheduler, CostFunction, Extractor, Id, Language, RecExpr, Runner, StopReason};
 
 use super::analysis::{Facts, MathGraph};
-use super::lang::{ExactLiterals, Math, PI, Unsupported, from_rec, to_rec};
+use super::lang::{Math, PI, Unsupported, from_rec, to_rec};
 use super::q::Q;
 use super::rules::rewrites;
 use super::side::{Cond, Jump, jumps, side_conditions};
 use crate::ast::Expr;
-use crate::compile::{CompileOptions, DEFAULT_VARIABLE_VALUE};
+use crate::compile::CompileOptions;
 use crate::functions::TrigUnit;
 use crate::interval::Interval;
 
@@ -49,8 +49,6 @@ pub struct Settings<'a> {
     pub x: Interval,
     /// Slider values.
     pub variables: &'a dyn crate::compile::VariableValues,
-    /// The exact decimals typed for the literals.
-    pub literals: &'a ExactLiterals,
     /// Checked between rounds; a set flag stops the run.
     pub cancel: Option<&'a AtomicBool>,
     /// Saturation bounds.
@@ -58,13 +56,12 @@ pub struct Settings<'a> {
 }
 
 impl<'a> Settings<'a> {
-    /// Settings for `opts` with the given literals, over all of ℝ.
-    pub fn new(opts: &CompileOptions<'a>, literals: &'a ExactLiterals) -> Settings<'a> {
+    /// Settings for `opts`, over all of ℝ.
+    pub fn new(opts: &CompileOptions<'a>) -> Settings<'a> {
         Settings {
             unit: opts.trig_unit,
             x: Interval::ENTIRE,
             variables: opts.variables,
-            literals,
             cancel: None,
             limits: Limits::default(),
         }
@@ -78,8 +75,8 @@ impl<'a> Settings<'a> {
                 .variables()
                 .into_iter()
                 .map(|n| {
-                    let v = self.variables.value(&n).unwrap_or(DEFAULT_VARIABLE_VALUE);
-                    (n, v)
+                    let (v, lit) = crate::compile::slider(self.variables, &n);
+                    (n, lit.enclose(v))
                 })
                 .collect(),
         }
@@ -206,8 +203,8 @@ fn saturate(egraph: MathGraph, s: &Settings<'_>) -> (MathGraph, Stop) {
 
 /// Simplifies `e`, a function of x.
 pub fn simplify(e: &Expr, s: &Settings<'_>) -> Result<Simplified, Unsupported> {
-    let start = to_rec(e, s.literals)?;
-    let conditions = side_conditions(e, s.literals);
+    let start = to_rec(e)?;
+    let conditions = side_conditions(e);
     let jumps = jumps(e);
     let mut egraph = MathGraph::new(s.facts(e));
     let root = egraph.add_expr(&start);
@@ -256,12 +253,12 @@ pub fn prove_parity(e: &Expr, s: &Settings<'_>) -> Option<Parity> {
     let mut facts = s.facts(e);
     facts.x = Interval::ENTIRE;
     let mut egraph = MathGraph::new(facts);
-    let f = add_term(&mut egraph, &to_rec(e, s.literals).ok()?);
-    let fm = add_term(&mut egraph, &to_rec(&mirror(e), s.literals).ok()?);
+    let f = add_term(&mut egraph, &to_rec(e).ok()?);
+    let fm = add_term(&mut egraph, &to_rec(&mirror(e)).ok()?);
     let neg_f = egraph.add(Math::Neg(f));
     // Each condition's expression and its mirror, to show the domain is
     // symmetric.
-    let conds = side_conditions(e, s.literals);
+    let conds = side_conditions(e);
     let mut pairs = Vec::new();
     for c in &conds {
         let exprs: Vec<&Expr> = match c {
@@ -278,8 +275,8 @@ pub fn prove_parity(e: &Expr, s: &Settings<'_>) -> Option<Parity> {
         };
         let mut ids = Vec::new();
         for g in exprs {
-            let a = add_term(&mut egraph, &to_rec(g, s.literals).ok()?);
-            let b = add_term(&mut egraph, &to_rec(&mirror(g), s.literals).ok()?);
+            let a = add_term(&mut egraph, &to_rec(g).ok()?);
+            let b = add_term(&mut egraph, &to_rec(&mirror(g)).ok()?);
             let na = egraph.add(Math::Neg(a));
             ids.push((a, b, na));
         }

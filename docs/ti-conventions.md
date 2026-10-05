@@ -65,8 +65,13 @@ slider also marks 10 (Casio's display), 12 (the HP Prime's Home view) and
 apart); anything from 5 to 20 can be set, or off. The rounded decimal is
 the number from then on, for the curve drawn, its trace, its analysis and
 its certificate alike; off, the number is exactly the decimal typed. A
-slider's value is the double it is set to, under a digit limit the double
-nearest that value rounded the same way.
+slider is read the same way: off, its value is the double it is set to;
+under a digit limit it is, like a number typed, that value rounded to so
+many digits, and that decimal from then on (the TI stores the decimal
+too). To 14 digits a slider `a` set to 0.3 (or stepped to
+0.30000000000000004) is 3/10, so `10^17·(a − 0.3) + x` is the line y = x;
+off it is the double 0.299999999999999988897…, and that line is
+x − 1.11022….
 
 A number is that decimal, not the double nearest it: `0.1` is one tenth;
 off (or at 16 digits or more) `1.0000000000000001` is 1 + 10⁻¹⁶, though a

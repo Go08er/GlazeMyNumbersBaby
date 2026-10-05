@@ -922,6 +922,18 @@ const DIGITS: &[(&str, u8, &str)] = &[
         14,
         "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
     ),
+    // A slider (at its default, 1) beside a typed 1.0000000000000001: both
+    // are 1 to 14 digits; and 10^17·(a − 0.3) + x is 7·10¹⁶ + x.
+    (
+        "a*x-1.0000000000000001*x",
+        14,
+        "D=R | XI=all | YI=0 | P=both | T=none | INF=none | VA=none | R={0}",
+    ),
+    (
+        "10^17*(a-0.3)+x",
+        14,
+        "D=R | XI=-7*10^16 | YI=7*10^16 | P=neither | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
+    ),
     (
         "0.123456789012345678*x^2-1",
         14,

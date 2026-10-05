@@ -15,9 +15,8 @@
 use super::arith::Interval;
 use super::dec::{Dec, DecInterval};
 use super::elem;
-use super::literal::Literals;
 use crate::ast::{BinOp, Constant, Expr, Func};
-use crate::compile::{CompileOptions, DEFAULT_VARIABLE_VALUE, syntactic_rational};
+use crate::compile::{CompileOptions, syntactic_rational};
 use crate::functions::TrigUnit;
 
 /// What an evaluation needs besides the tree and the box.
@@ -25,8 +24,6 @@ use crate::functions::TrigUnit;
 pub struct Ctx<'a> {
     /// Angle unit and slider values.
     pub opts: CompileOptions<'a>,
-    /// How the numbers are read ([`Literals`]: each by its own `Lit`).
-    pub literals: &'a Literals,
     /// The value(s) of y, for relations in x and y (no y-derivatives).
     pub y: DecInterval,
     /// Probe for poles: n! at a pole of Γ is [`f64::MAX`, +∞] instead of
@@ -37,10 +34,9 @@ pub struct Ctx<'a> {
 }
 
 impl<'a> Ctx<'a> {
-    pub fn new(opts: CompileOptions<'a>, literals: &'a Literals) -> Ctx<'a> {
+    pub fn new(opts: CompileOptions<'a>) -> Ctx<'a> {
         Ctx {
             opts,
-            literals,
             y: DecInterval::unknown(),
             pole_probe: false,
         }
@@ -352,7 +348,7 @@ fn powrat_ser(u: &Series, p: i32, q: i32) -> Series {
 
 fn pow(a: &Expr, b: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
     let u = ev(a, x, n, ctx);
-    if let Some((p, q)) = syntactic_rational(b, ctx.literals) {
+    if let Some((p, q)) = syntactic_rational(b, crate::compile::Reading::Typed) {
         return if q == 1 {
             powi_ser(&u, p)
         } else {
@@ -532,15 +528,11 @@ fn ev(e: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
         Expr::Const(Constant::E) => konst(DecInterval::new(elem::e()), n),
         Expr::X => x.clone(),
         Expr::Y => konst(ctx.y, n),
-        Expr::Var(name) => konst(
-            DecInterval::point(
-                ctx.opts
-                    .variables
-                    .value(name)
-                    .unwrap_or(DEFAULT_VARIABLE_VALUE),
-            ),
-            n,
-        ),
+        // A slider: its double, or the decimal a digit limit made it.
+        Expr::Var(name) => {
+            let (v, lit) = crate::compile::slider(ctx.opts.variables, name);
+            konst(DecInterval::new(lit.enclose(v)), n)
+        }
         Expr::Neg(a) => neg(&ev(a, x, n, ctx)),
         Expr::Degrees(a) => {
             if unit != TrigUnit::Degrees {

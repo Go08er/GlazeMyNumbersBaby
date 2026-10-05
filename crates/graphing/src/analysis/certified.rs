@@ -40,9 +40,9 @@ use crate::certify::{
 };
 use crate::compile::{CompileOptions, VariableValues};
 use crate::functions::TrigUnit;
-use crate::interval::{Dec, Interval, Literals};
+use crate::interval::{Dec, Interval};
 use crate::simplify::rational::{Poly, Rational};
-use crate::simplify::{ExactLiterals, Limit, PiQ, Q, rational_form};
+use crate::simplify::{Limit, PiQ, Q, rational_form};
 use crate::strings as s;
 
 /// Lists longer than this are cut to the items nearest 0 (and then say
@@ -517,7 +517,7 @@ impl Rat {
 
 /// Every number in the tree's exponents is exactly its double (a power's
 /// rational form and derivative read its exponent off the double).
-fn honest_exponents(e: &Expr, _: &ExactLiterals) -> bool {
+fn honest_exponents(e: &Expr) -> bool {
     let mut ok = true;
     e.visit(&mut |n| {
         if let Expr::Bin(BinOp::Pow, _, b) = n {
@@ -539,9 +539,9 @@ fn honest_exponents(e: &Expr, _: &ExactLiterals) -> bool {
 /// multiplies in ln 10 and the angle-unit factor (numbers not known
 /// exactly, which no typed number is taken for). Numbers typed with more
 /// than 15 significant digits are refused.
-fn derivative_trees(f: &Expr, unit: TrigUnit, lits: &ExactLiterals) -> [Option<Expr>; 2] {
+fn derivative_trees(f: &Expr, unit: TrigUnit) -> [Option<Expr>; 2] {
     let none = [None, None];
-    if !honest_exponents(f, lits) {
+    if !honest_exponents(f) {
         return none;
     }
     let mut ok = true;
@@ -578,7 +578,6 @@ fn enc_of(b: &certify::XBox) -> Enc {
 struct Ctx<'a> {
     f: Expr,
     unit: TrigUnit,
-    lits: &'a ExactLiterals,
     vars: &'a dyn VariableValues,
     /// f with interval literals, for "finite here" checks.
     fun: Fun<'a>,
@@ -619,17 +618,13 @@ impl<'a> Ctx<'a> {
     fn new(
         f: Expr,
         opts: &'a CompileOptions<'a>,
-        lits: &'a ExactLiterals,
-        ilits: &'a Literals,
         a: &Analysis,
         cancel: Option<&'a AtomicBool>,
     ) -> Ctx<'a> {
         let unit = opts.trig_unit;
         // (Sliders at their values: a/x with a at 0 is 0 off x = 0.)
         let fv = with_values(&f, opts.variables);
-        let rf = honest_exponents(&fv, lits)
-            .then(|| rational_form(&fv, lits))
-            .flatten();
+        let rf = honest_exponents(&fv).then(|| rational_form(&fv)).flatten();
         // Every x the certifier pinned to a double.
         let mut hints: Vec<Q> = Vec::new();
         let mut hint = |e: Enc| {
@@ -655,7 +650,7 @@ impl<'a> Ctx<'a> {
         let d = if rat.is_some() {
             [None, None]
         } else {
-            derivative_trees(&f, unit, lits)
+            derivative_trees(&f, unit)
         };
         let mut certs: Vec<&Certificate> = Vec::new();
         certs.extend(cert_of(&a.domain));
@@ -685,16 +680,15 @@ impl<'a> Ctx<'a> {
                 }
             }
         }
-        let piq = crate::simplify::period::prove_period(&f, unit, lits).map(|p| p.value);
+        let piq = crate::simplify::period::prove_period(&f, unit).map(|p| p.value);
         let period = piq.and_then(Ex::from_piq);
         let period_enc = piq
             .and_then(certify::rows::piq_interval)
             .map(|iv| Enc::new(iv.lo(), iv.hi()));
-        let fun = Fun::new(&f, ilits, *opts, PANEL_BUDGET, cancel);
+        let fun = Fun::new(&f, *opts, PANEL_BUDGET, cancel);
         let mut cx = Ctx {
             f,
             unit,
-            lits,
             vars: opts.variables,
             fun,
             rat,
@@ -735,7 +729,7 @@ impl<'a> Ctx<'a> {
             return None;
         }
         self.work.set(work);
-        exact::eval(e, x, self.unit, self.lits, self.vars)
+        exact::eval(e, x, self.unit, self.vars)
     }
 
     /// e is defined, finite (and, with `nonzero`, away from 0) on the box.
@@ -871,10 +865,10 @@ impl<'a> Ctx<'a> {
                 let Some(g) = self.side(path, *via) else {
                     return Vec::new();
                 };
-                if !honest_exponents(&g, self.lits) {
+                if !honest_exponents(&g) {
                     return Vec::new();
                 }
-                let (Some(rf), Some(cq)) = (rational_form(&g, self.lits), Q::from_f64(c)) else {
+                let (Some(rf), Some(cq)) = (rational_form(&g), Q::from_f64(c)) else {
                     return Vec::new();
                 };
                 let r = rf.reduced;
@@ -1207,7 +1201,7 @@ impl<'a> Ctx<'a> {
             trig_unit: self.unit,
             variables: self.vars,
         };
-        crate::simplify::Settings::new(&opts, self.lits)
+        crate::simplify::Settings::new(&opts)
     }
 
     fn dir(side: Tail) -> crate::simplify::Dir {
@@ -1741,12 +1735,10 @@ impl Out {
 pub(super) fn features(
     f: &Expr,
     opts: &CompileOptions<'_>,
-    lits: &ExactLiterals,
-    ilits: &Literals,
     a: &Analysis,
     cancel: Option<&AtomicBool>,
 ) -> Option<KeyGraphFeatures> {
-    let cx = Ctx::new(certify::canonical(f), opts, lits, ilits, a, cancel);
+    let cx = Ctx::new(certify::canonical(f), opts, a, cancel);
     let mut out = Out {
         k: KeyGraphFeatures::default(),
     };
@@ -2720,20 +2712,20 @@ fn constant_tail(cx: &Ctx<'_>, a: &Analysis, side: Tail, y: Enc) -> Option<Ex> {
     v.agrees(y.lo.0, y.hi.0).then_some(v)
 }
 
-/// `e` with each slider at its value, where that is a whole number (the
-/// rational form takes exact literals only; it is the value exact
-/// evaluation uses too). The value is a number of its own, exactly its
-/// double (`Lit::Exact`): never a typed literal that shares that double
-/// (a = 1 beside a typed 1.0000000000000001, review 13).
+/// `e` with each slider at its value, where that is a whole number, or a
+/// decimal a digit limit rounded it to (the rational form takes exact
+/// values only; it is the value exact evaluation uses too). The value is a
+/// number of its own, with its own exact value (its double, or the
+/// decimal): never a typed literal that shares its double (a = 1 beside a
+/// typed 1.0000000000000001, review 13).
 fn with_values(e: &Expr, vars: &dyn VariableValues) -> Expr {
     let go = |a: &Expr| Box::new(with_values(a, vars));
     match e {
         Expr::Var(name) => {
-            let v = vars
-                .value(name)
-                .unwrap_or(crate::compile::DEFAULT_VARIABLE_VALUE);
-            if v == v.trunc() && v.abs() <= 9007199254740992.0 {
-                Expr::exact(v)
+            let (v, lit) = crate::compile::slider(vars, name);
+            let whole = lit.is_exact() && v == v.trunc() && v.abs() <= 9007199254740992.0;
+            if whole || lit.digits().is_some() {
+                Expr::Num(v, lit)
             } else {
                 e.clone()
             }

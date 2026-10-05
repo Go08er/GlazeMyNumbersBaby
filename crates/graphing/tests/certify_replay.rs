@@ -1311,6 +1311,82 @@ fn kinks_replay() {
     assert!(fails.is_empty(), "{fails:#?}");
 }
 
+/// Under a digit limit a slider is its value rounded like a number typed
+/// (the binding names the decimal; the replay checks the rounding itself).
+/// To 14 digits, a·x − x with a set to 1.0000000000000002 is 0 everywhere:
+/// its certificate replays, and is refuted when read as the double the
+/// slider was set to (2.2·10⁻¹⁶·x). 10^17·(a − 0.3) + x with a at
+/// 0.30000000000000004 replays with a the decimal 0.3 (the certifier
+/// encloses that subtree term by term, so its claims hold either way); a
+/// decimal dropped from its binding, or not the slider's, is refused.
+#[test]
+fn sliders_are_their_rounded_decimals_under_a_digit_limit() {
+    let make = |src: &str, a: f64| -> serde_json::Value {
+        let vars: BTreeMap<String, f64> = [("a".to_string(), a)].into();
+        let opts = CompileOptions {
+            variables: &vars,
+            ..CompileOptions::default()
+        };
+        let parse = graphing::lexer::ParseOptions {
+            literal_digits: Some(14),
+            ..Default::default()
+        };
+        let c = graphing::certify::certify_text_with(src, parse, opts, DEFAULT_BUDGET, None)
+            .expect("certified");
+        serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap()
+    };
+    let line = make("10^17*(a-0.3)+x", 0.1 + 0.2);
+    assert_eq!(line["binding"]["sliders"]["a"], serde_json::json!(0.3));
+    assert_eq!(
+        line["binding"]["slider_decimals"]["a"],
+        serde_json::json!("0.3")
+    );
+    let zero = make("a*x-x", 1.0000000000000002);
+    assert_eq!(zero["binding"]["sliders"]["a"], serde_json::json!(1.0));
+    for (what, v) in [("the line", &line), ("a·x − x", &zero)] {
+        if let Some(why) = rejected(v) {
+            panic!("{what} to 14 digits: {why}");
+        }
+    }
+    // Read as the doubles the sliders were set to, digit limit off.
+    let as_double = |v: &serde_json::Value, a: f64| {
+        let mut v = v.clone();
+        v["binding"]["literal_digits"] = serde_json::Value::Null;
+        v["binding"]["sliders"]["a"] = serde_json::json!(a);
+        if let Some(b) = v["binding"].as_object_mut() {
+            b.remove("slider_decimals");
+        }
+        v
+    };
+    let what = "a*x-x at a = 1.0000000000000002";
+    let r = replay::replay(&as_double(&zero, 1.0000000000000002))
+        .unwrap_or_else(|e| panic!("{what}: refused ({e})"));
+    let refuted: Vec<String> = r
+        .claims
+        .iter()
+        .filter(|c| c.outcome.class == Class::Refuted)
+        .map(|c| format!("{:?}: {}", c.claim, c.outcome.note))
+        .collect();
+    assert!(
+        !refuted.is_empty() && !r.row_problems().is_empty(),
+        "{what}: not refuted"
+    );
+    println!(
+        "{what}, its 14-digit certificate read off: refuted ({})",
+        refuted[0]
+    );
+    let mut dropped = line.clone();
+    if let Some(b) = dropped["binding"].as_object_mut() {
+        b.remove("slider_decimals");
+    }
+    let e = replay::replay(&dropped).expect_err("refused");
+    assert!(e.contains("not rounded to 14 digits"), "{e}");
+    let mut other = line.clone();
+    other["binding"]["slider_decimals"]["a"] = serde_json::json!("0.30000000000001");
+    let e = replay::replay(&other).expect_err("refused");
+    assert!(e.contains("no 14-digit decimal held as"), "{e}");
+}
+
 /// Sliders at values other than the default, in every angle unit: the
 /// replay evaluates them at the binding's values.
 #[test]

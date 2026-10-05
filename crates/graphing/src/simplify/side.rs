@@ -109,9 +109,9 @@ pub enum Jump {
 }
 
 /// The domain conditions of `e`, outermost first, without duplicates.
-pub fn side_conditions(e: &Expr, lits: &dyn crate::compile::Exactness) -> Vec<Cond> {
+pub fn side_conditions(e: &Expr) -> Vec<Cond> {
     let mut out = Vec::new();
-    collect(e, lits, &mut out);
+    collect(e, &mut out);
     let mut uniq: Vec<Cond> = Vec::with_capacity(out.len());
     for c in out {
         if !uniq.contains(&c) {
@@ -144,7 +144,7 @@ fn depends_on_x(e: &Expr) -> bool {
     e.contains_x()
 }
 
-fn collect(e: &Expr, lits: &dyn crate::compile::Exactness, out: &mut Vec<Cond>) {
+fn collect(e: &Expr, out: &mut Vec<Cond>) {
     // Conditions on x-free subexpressions are constants the evaluator
     // folds (a literal 1/0 is an error before analysis); keep them only
     // when they involve x or a slider.
@@ -158,14 +158,14 @@ fn collect(e: &Expr, lits: &dyn crate::compile::Exactness, out: &mut Vec<Cond>) 
     }
     match e {
         Expr::Num(..) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => {}
-        Expr::Neg(a) | Expr::Degrees(a) => collect(a, lits, out),
+        Expr::Neg(a) | Expr::Degrees(a) => collect(a, out),
         Expr::Bin(op, a, b) => {
-            collect(a, lits, out);
-            collect(b, lits, out);
+            collect(a, out);
+            collect(b, out);
             match op {
                 BinOp::Div => push(out, Cond::NonZero((**b).clone()), b),
                 BinOp::Pow => {
-                    if let Some((p, q)) = syntactic_rational(b, lits) {
+                    if let Some((p, q)) = syntactic_rational(b, crate::compile::Reading::Typed) {
                         if p <= 0 {
                             push(out, Cond::NonZero((**a).clone()), a);
                         }
@@ -189,7 +189,7 @@ fn collect(e: &Expr, lits: &dyn crate::compile::Exactness, out: &mut Vec<Cond>) 
         }
         Expr::Call(f, args) => {
             for a in args {
-                collect(a, lits, out);
+                collect(a, out);
             }
             let a = &args[0];
             let r = |v: f64, closed: bool| Some(End { value: v, closed });
@@ -280,7 +280,7 @@ fn collect(e: &Expr, lits: &dyn crate::compile::Exactness, out: &mut Vec<Cond>) 
                 Mod => push(out, Cond::NonZero(args[1].clone()), &args[1]),
                 Root => {
                     let n = &args[1];
-                    match syntactic_rational(n, lits) {
+                    match syntactic_rational(n, crate::compile::Reading::Typed) {
                         Some((k, 1)) if k % 2 != 0 && k > 0 => {}
                         Some((k, 1)) if k % 2 != 0 => push(out, Cond::NonZero(a.clone()), a),
                         Some((k, 1)) if k > 0 => push(out, Cond::NonNegative(a.clone()), a),
@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn holes_come_from_the_expression_as_written() {
-        let c = side_conditions(&f("tan(x)*cos(x)"), &crate::compile::Doubles);
+        let c = side_conditions(&f("tan(x)*cos(x)"));
         assert_eq!(
             c,
             vec![Cond::TrigNonZero {
@@ -321,28 +321,16 @@ mod tests {
                 arg: Expr::X
             }]
         );
+        assert_eq!(side_conditions(&f("x/x")), vec![Cond::NonZero(Expr::X)]);
+        assert_eq!(side_conditions(&f("ln(x)")), vec![Cond::Positive(Expr::X)]);
+        assert!(matches!(side_conditions(&f("x^x"))[0], Cond::PowVar { .. }));
+        assert_eq!(side_conditions(&f("x^0")), vec![Cond::NonZero(Expr::X)]);
+        assert!(side_conditions(&f("x^(1/3)")).is_empty());
         assert_eq!(
-            side_conditions(&f("x/x"), &crate::compile::Doubles),
-            vec![Cond::NonZero(Expr::X)]
-        );
-        assert_eq!(
-            side_conditions(&f("ln(x)"), &crate::compile::Doubles),
-            vec![Cond::Positive(Expr::X)]
-        );
-        assert!(matches!(
-            side_conditions(&f("x^x"), &crate::compile::Doubles)[0],
-            Cond::PowVar { .. }
-        ));
-        assert_eq!(
-            side_conditions(&f("x^0"), &crate::compile::Doubles),
-            vec![Cond::NonZero(Expr::X)]
-        );
-        assert!(side_conditions(&f("x^(1/3)"), &crate::compile::Doubles).is_empty());
-        assert_eq!(
-            side_conditions(&f("x^(1/2)"), &crate::compile::Doubles),
+            side_conditions(&f("x^(1/2)")),
             vec![Cond::NonNegative(Expr::X)]
         );
-        assert!(side_conditions(&f("sin(x)+1/2"), &crate::compile::Doubles).is_empty());
+        assert!(side_conditions(&f("sin(x)+1/2")).is_empty());
     }
 
     #[test]

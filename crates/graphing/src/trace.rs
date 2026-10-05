@@ -823,7 +823,6 @@ mod tests {
     /// with the function it stands for).
     fn mismatched(f: &str, g: &str, vp: &Viewport) -> (CompiledEquation, Plot) {
         let text = format!("y={g}");
-        let lits = crate::interval::Literals::of(&text, Default::default()).unwrap();
         let expr = Equation::parse(&text)
             .unwrap()
             .explicit()
@@ -835,7 +834,7 @@ mod tests {
             form: CompiledForm::Explicit {
                 axis: Axis::X,
                 f: crate::compile::compile_str(f, opts.trig_unit).unwrap(),
-                iv: Some(std::sync::Arc::new(IntervalFn::new(expr, lits, &opts))),
+                iv: Some(std::sync::Arc::new(IntervalFn::new(expr, &opts))),
             },
         };
         let p = plot(&eq, vp, &PlotOptions::default());

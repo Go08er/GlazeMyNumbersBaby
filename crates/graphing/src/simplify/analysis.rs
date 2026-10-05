@@ -43,8 +43,9 @@ pub struct Facts {
     pub unit: TrigUnit,
     /// The x values considered (ℝ to simplify a function globally).
     pub x: Interval,
-    /// Slider values (symbols `$name`), as point enclosures.
-    pub vars: Vec<(String, f64)>,
+    /// Slider values (symbols `$name`), enclosed (a point, or under a
+    /// digit limit the doubles either side of the decimal).
+    pub vars: Vec<(String, Interval)>,
 }
 
 impl Default for Facts {
@@ -225,9 +226,7 @@ impl Analysis<Math> for Facts {
                     .vars
                     .iter()
                     .find(|(n, _)| name == format!("${n}"))
-                    .map_or(Interval::new(f64::NEG_INFINITY, f64::INFINITY), |(_, v)| {
-                        Interval::point(*v)
-                    }),
+                    .map_or(Interval::new(f64::NEG_INFINITY, f64::INFINITY), |(_, v)| *v),
             },
             node => node_interval(node, unit, &iv, &q),
         };
@@ -340,7 +339,7 @@ pub fn rec_interval(rec: &egg::RecExpr<Math>, facts: &Facts) -> Interval {
                     .vars
                     .iter()
                     .find(|(n, _)| name == format!("${n}"))
-                    .map_or(Interval::ENTIRE, |(_, v)| Interval::point(*v)),
+                    .map_or(Interval::ENTIRE, |(_, v)| *v),
             },
             n => node_interval(n, facts.unit, &iv, &q),
         };

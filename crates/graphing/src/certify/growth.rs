@@ -605,7 +605,7 @@ impl Cx<'_, '_> {
     /// An x-free tree's value.
     fn constant(&self, e: &Expr) -> Asy {
         // (With the simplifier's exact reading of numbers only.)
-        if self.f.exact.is_some()
+        if self.f.simplifier
             && let Some((a, b)) = affine(e)
             && a.is_zero()
             && b.is_zero()
@@ -679,7 +679,7 @@ impl Cx<'_, '_> {
         if !e.contains_x() {
             return self.constant(e);
         }
-        if self.f.exact.is_some()
+        if self.f.simplifier
             && let Some((a, b)) = affine(e)
         {
             return self.affine(a, b);
@@ -720,13 +720,14 @@ impl Cx<'_, '_> {
     fn pow(&self, base: &Expr, k: &Expr) -> Asy {
         if !k.contains_x() {
             let a = self.asy(base);
-            if let Some((p, q)) = crate::compile::syntactic_rational(k, self.f.lits)
+            if let Some((p, q)) =
+                crate::compile::syntactic_rational(k, crate::compile::Reading::Typed)
                 && let Some(kq) = Q::new(i128::from(p), i128::from(q))
             {
                 return pow_q(a, kq, q % 2 != 0);
             }
-            if let Some(exact) = self.f.exact
-                && let Some(v) = crate::simplify::period::exact_constant(k, exact)
+            if self.f.simplifier
+                && let Some(v) = crate::simplify::period::exact_constant(k)
                 && v.k == 0
             {
                 return pow_q(a, v.q, v.q.is_int());
@@ -746,7 +747,10 @@ impl Cx<'_, '_> {
         if args.len() != 1 {
             return match func {
                 Func::Root if args.len() == 2 && !args[1].contains_x() => {
-                    match crate::compile::syntactic_rational(&args[1], self.f.lits) {
+                    match crate::compile::syntactic_rational(
+                        &args[1],
+                        crate::compile::Reading::Typed,
+                    ) {
                         Some((n, 1)) if n != 0 => match Q::new(1, i128::from(n)) {
                             Some(k) => pow_q(self.asy(&args[0]), k, n % 2 != 0),
                             None => Unknown,
@@ -946,7 +950,7 @@ pub fn limit(f: &Fun<'_>, at: Toward, over_x: bool) -> Option<To> {
     let cx = Cx {
         f,
         at,
-        ctx: Ctx::new(f.opts, f.lits),
+        ctx: Ctx::new(f.opts),
     };
     let a = cx.asy(&e);
     match a {

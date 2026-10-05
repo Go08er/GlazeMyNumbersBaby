@@ -1869,8 +1869,7 @@ fn main() {
             .ok()
             .and_then(|c| c.eval_explicit(x))
             .unwrap_or(f64::NAN);
-        let lits = graphing::interval::Literals::of(&text, Default::default()).expect("parses");
-        let typed = graphing::analysis::truth::reval_typed(&a.ast, x, unit, &lits);
+        let typed = graphing::analysis::truth::reval_typed(&a.ast, x, unit);
         println!("app {app:?} typed-reference {typed:?}");
         return;
     }

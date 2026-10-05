@@ -1228,8 +1228,8 @@ fn out_along(start: f64) -> Vec<f64> {
 /// a double only within 745 of 10⁹).
 fn far_points(f: &Fun<'_>, right: bool, start: f64) -> Vec<f64> {
     let mut ms = out_along(start);
-    if let Some(lits) = f.exact {
-        for c in crate::simplify::limit::centres(&f.expr, lits) {
+    if f.simplifier {
+        for c in crate::simplify::limit::centres(&f.expr) {
             if (c > 0.0) == right {
                 ms.extend((0..=12).map(|k| c.abs() + f64::from(1u32 << k)));
             }
@@ -1696,9 +1696,7 @@ pub const RATIONAL: &str = "f = N/D exactly: ";
 fn simplifier_limit(f: &Fun<'_>, right: bool) -> Option<(TailEnd, Claim)> {
     let at = if right { "+∞" } else { "−∞" };
     let (end, claim) = limit_of(f, &f.expr, right, at)?;
-    let rational = f
-        .exact
-        .is_some_and(|x| crate::simplify::rational_form(&f.expr, x).is_some());
+    let rational = f.simplifier && crate::simplify::rational_form(&f.expr).is_some();
     match claim {
         Claim::Simplifier { fact } if rational => Some((
             end,
@@ -2196,8 +2194,10 @@ fn tail_interval(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cl
 /// to a polynomial of degree ≤ 1), or the simplifier's form of f, an exact
 /// a·x + b (`e^(ln x)` is x where defined).
 fn own_line(f: &Fun<'_>) -> Option<Claim> {
-    let exact = f.exact?;
-    if let Some(rf) = crate::simplify::rational_form(&f.expr, exact) {
+    if !f.simplifier {
+        return None;
+    }
+    if let Some(rf) = crate::simplify::rational_form(&f.expr) {
         let (n, d) = (&rf.reduced.num, &rf.reduced.den);
         if d.degree() != Some(0) || n.degree().unwrap_or(0) > 1 {
             return None;
@@ -2659,8 +2659,8 @@ pub fn oblique(
         let iv = q.interval();
         Enc::new(iv.lo(), iv.hi())
     };
-    if let Some(exact) = f.exact
-        && let Some(rf) = crate::simplify::rational_form(&f.expr, exact)
+    if f.simplifier
+        && let Some(rf) = crate::simplify::rational_form(&f.expr)
     {
         let mut out = Vec::new();
         match rf.reduced.oblique() {
@@ -3325,7 +3325,7 @@ pub fn range(
 /// base is odd or even with the exponent, any function of an even
 /// argument is even, an odd (even) function of an odd argument is odd
 /// (even). Each step maps f(−x) to ±f(x), and defined to defined.
-fn structural_parity(e: &crate::ast::Expr, lits: &dyn crate::compile::Exactness) -> Option<bool> {
+fn structural_parity(e: &crate::ast::Expr) -> Option<bool> {
     use crate::ast::{BinOp, Expr, Func};
     use crate::compile::syntactic_rational;
     if !e.contains_x() {
@@ -3333,36 +3333,34 @@ fn structural_parity(e: &crate::ast::Expr, lits: &dyn crate::compile::Exactness)
     }
     Some(match e {
         Expr::X => false,
-        Expr::Neg(a) | Expr::Degrees(a) => structural_parity(a, lits)?,
+        Expr::Neg(a) | Expr::Degrees(a) => structural_parity(a)?,
         Expr::Bin(BinOp::Add | BinOp::Sub, a, b) => {
-            let (pa, pb) = (structural_parity(a, lits)?, structural_parity(b, lits)?);
+            let (pa, pb) = (structural_parity(a)?, structural_parity(b)?);
             (pa == pb).then_some(pa)?
         }
-        Expr::Bin(BinOp::Mul | BinOp::Div, a, b) => {
-            structural_parity(a, lits)? == structural_parity(b, lits)?
-        }
+        Expr::Bin(BinOp::Mul | BinOp::Div, a, b) => structural_parity(a)? == structural_parity(b)?,
         Expr::Bin(BinOp::Pow, a, b) => {
-            let pa = structural_parity(a, lits)?;
+            let pa = structural_parity(a)?;
             if b.contains_x() {
-                (pa && structural_parity(b, lits)?).then_some(true)?
+                (pa && structural_parity(b)?).then_some(true)?
             } else if pa {
                 true
             } else {
-                match syntactic_rational(b, lits)? {
+                match syntactic_rational(b, crate::compile::Reading::Typed)? {
                     (p, q) if q % 2 == 1 => p % 2 == 0,
                     _ => return None,
                 }
             }
         }
         Expr::Call(Func::Root, args) if args.len() == 2 && !args[1].contains_x() => {
-            let pa = structural_parity(&args[0], lits)?;
-            match syntactic_rational(&args[1], lits)? {
+            let pa = structural_parity(&args[0])?;
+            match syntactic_rational(&args[1], crate::compile::Reading::Typed)? {
                 (n, 1) if pa || n % 2 == 1 => pa,
                 _ => return None,
             }
         }
         Expr::Call(f, args) if args.len() == 1 => {
-            if structural_parity(&args[0], lits)? {
+            if structural_parity(&args[0])? {
                 true
             } else {
                 match f {
@@ -3390,7 +3388,7 @@ fn structural_parity(e: &crate::ast::Expr, lits: &dyn crate::compile::Exactness)
         Expr::Call(_, args) => {
             // min, max, … of even arguments.
             args.iter()
-                .all(|a| structural_parity(a, lits) == Some(true))
+                .all(|a| structural_parity(a) == Some(true))
                 .then_some(true)?
         }
         _ => return None,
@@ -3418,7 +3416,7 @@ pub fn parity(f: &Fun<'_>, dom: &Domain) -> Result<Row<Parity>, Stop> {
     {
         return Ok(proven(p == P::Even, "simplifier"));
     }
-    if let Some(even) = structural_parity(&f.expr, f.lits) {
+    if let Some(even) = structural_parity(&f.expr) {
         return Ok(proven(even, "its tree is built of even and odd parts"));
     }
     let mut c = Certificate::new(Region::Points);
