@@ -40,17 +40,42 @@
 //!
 //! `"k"` (absent before 0.2) holds what the display commands don't, so a
 //! restored calculation continues as the saved one would: `"dv"` says the
-//! display shows a value they don't produce, `"result"` (a result, a
+//! engine shows a value they don't produce, `"result"` (a result, a
 //! recalled value, a constant) or `"entry"` (a typed number whose entry F-E,
 //! MS or a radix switch ended); `"eq"` is `[<binary command>, <operand>]`,
 //! what another `=` repeats. Upstream restores neither: it shows the last
 //! operand instead of a recalled value, "0" instead of a result after MS,
-//! and re-opens an evaluated expression, so `=` evaluates it again.
+//! and re-opens an evaluated expression, so `=` evaluates it again. `"in"`
+//! says how the number being entered stands where replaying the commands
+//! wouldn't leave it so: `"empty"` (nothing typed since C or CE, though
+//! the commands end with the empty input's 0), `"ended"` (that empty input
+//! ended by a radix or angle switch, MS or M+), `"percent"` (the
+//! commands' last operand is a `%` result, added to the expression rather
+//! than typed) or `"signed"` (the number being typed had its sign changed
+//! last, which the operand records after its first digit). Upstream's
+//! restore replays the display commands of each of these states as a
+//! number typed digit by digit.
+//!
+//! The display isn't always the engine's. Selecting a History item shows
+//! the item's expression and result while the engine holds the item
+//! replayed without `=`, its last operand typed (so `=` evaluates the item
+//! again, and a digit replaces that operand), and some later keys leave the
+//! display the item's. After a paste error only the view model is in error
+//! (`OnPaste`), and the engine's calculation goes on under it: a memory
+//! slot or a paste continues it, and a page change shows it again. `"ev"`
+//! (absent when the display is the engine's) is the value the engine shows:
+//! the engine is restored to it and the saved display, or error, shown over
+//! it. `"hl": true` says a History item was the last thing loaded, which
+//! keeps F-E disabled until the next key. The expression line comes back
+//! as saved (`"s"."e"`), whether or not it is the engine's. Upstream
+//! restores none of this: after a selection it replays the display commands
+//! only, which show the item's first operand, and `=` then adds that
+//! operand to itself.
 
 use std::rc::Rc;
 
 use calcmanager::{
-    BinaryCommand, CalculatorMode, ExpressionCommand, ExpressionToken, HistoryItem,
+    BinaryCommand, CalculatorMode, Entry, ExpressionCommand, ExpressionToken, HistoryItem,
     HistoryItemVector, OpndCommand, Parentheses, ShownValue, UnaryCommand,
 };
 use serde_json::{Map, Value, json};
@@ -251,6 +276,12 @@ pub(crate) struct ContinuationSnapshot {
     pub(crate) shown: Option<ShownValue>,
     /// `"eq"`: empty, or a binary command and an operand.
     pub(crate) repeat: Vec<ExpressionCommandWrapper>,
+    /// `"ev"`: the engine's value, when the display shows another.
+    pub(crate) engine_value: Option<String>,
+    /// `"hl"`
+    pub(crate) history_load: bool,
+    /// `"in"`
+    pub(crate) entry: Option<Entry>,
 }
 
 /// `ApplicationSnapshot`
@@ -486,6 +517,15 @@ fn shown_name(s: ShownValue) -> &'static str {
     }
 }
 
+fn entry_name(e: Entry) -> &'static str {
+    match e {
+        Entry::Empty => "empty",
+        Entry::Ended => "ended",
+        Entry::Percent => "percent",
+        Entry::Signed => "signed",
+    }
+}
+
 impl ApplicationSnapshot {
     pub(crate) fn to_json(&self) -> Value {
         let mut root = Map::new();
@@ -538,6 +578,15 @@ impl ApplicationSnapshot {
                 }
                 if !k.repeat.is_empty() {
                     c.insert("eq".into(), commands_to_json(&k.repeat));
+                }
+                if let Some(v) = &k.engine_value {
+                    c.insert("ev".into(), json!(v));
+                }
+                if k.history_load {
+                    c.insert("hl".into(), json!(true));
+                }
+                if let Some(e) = k.entry {
+                    c.insert("in".into(), json!(entry_name(e)));
                 }
                 o.insert("k".into(), Value::Object(c));
             }
@@ -657,7 +706,20 @@ impl ApplicationSnapshot {
                         };
                         let repeat = list(k.get("eq"), ExpressionCommandDeserializer::deserialize)?
                             .unwrap_or_default();
-                        Some(ContinuationSnapshot { shown, repeat })
+                        Some(ContinuationSnapshot {
+                            shown,
+                            repeat,
+                            engine_value: string(k.get("ev"))?,
+                            history_load: boolean(k.get("hl"))?,
+                            entry: match string(k.get("in"))?.as_deref() {
+                                None => None,
+                                Some("empty") => Some(Entry::Empty),
+                                Some("ended") => Some(Entry::Ended),
+                                Some("percent") => Some(Entry::Percent),
+                                Some("signed") => Some(Entry::Signed),
+                                Some(_) => return Err("unknown entry state".into()),
+                            },
+                        })
                     }
                 };
                 Some(SnapshotExtension {
@@ -836,7 +898,15 @@ impl SnapshotValidator {
         }
 
         let display = &standard.primary_display.display_value;
-        if display.encode_utf16().count() > MAX_DISPLAY_LENGTH {
+        let engine_value = snapshot
+            .extension
+            .as_ref()
+            .and_then(|x| x.continuation.as_ref())
+            .and_then(|k| k.engine_value.as_ref());
+        if std::iter::once(display)
+            .chain(engine_value)
+            .any(|v| v.encode_utf16().count() > MAX_DISPLAY_LENGTH)
+        {
             return Err("display value is too long".into());
         }
 
@@ -1088,7 +1158,16 @@ impl StandardCalculatorViewModel {
         // them must not add them again.
         self.with_manager(|m| m.set_history_suppressed(true));
         let display = &snapshot.primary_display.display_value;
-        match &snapshot.expression_display {
+        let is_error = snapshot.primary_display.is_error;
+        // Extension: the engine shows another value than the display (see
+        // the module docs). The engine is restored to its own value; an
+        // error that only the display shows (a paste error) isn't the
+        // engine's.
+        let engine_value = continuation.and_then(|k| k.engine_value.as_deref());
+        let value = engine_value.unwrap_or(display);
+        let engine_error = is_error && engine_value.is_none();
+        // Whether the pending expression was restored (no budget ran out).
+        let whole = match &snapshot.expression_display {
             Some(expression) if snapshot.display_commands.is_empty() => {
                 // Expression was evaluated before.
                 //
@@ -1102,11 +1181,37 @@ impl StandardCalculatorViewModel {
                 // saved display and repeated operation back (an operand was
                 // only saved to the digits it showed), the value is shown and
                 // the saved repeated operation set up as below.
-                if snapshot.primary_display.is_error {
+                if engine_error {
                     self.restore_error_display(display);
-                } else if !self.reevaluate(&expression.commands, display, continuation) {
-                    self.restore_continuation(mode, &[], display, continuation);
+                } else if !self.reevaluate(&expression.commands, value, continuation) {
+                    self.restore_continuation(mode, &[], value, continuation);
                 }
+                // It is shown as saved either way.
+                true
+            }
+            _ if engine_error => {
+                // Expression was not evaluated before, or it was an error.
+                let whole = snapshot.expression_display.is_none()
+                    || self.replay_within_budget(&snapshot.display_commands);
+                self.restore_error_display(display);
+                whole
+            }
+            _ => self.restore_continuation(mode, &snapshot.display_commands, value, continuation),
+        };
+        if engine_value.is_some() {
+            // Extension: the display shown over the engine's value.
+            self.set_primary_display(display, is_error);
+        }
+        // The expression line as it was: the engine's (the replay shows it
+        // too), a History item's, or empty though the engine has an
+        // expression (any key after "=" clears the line, and MS, M+ or an
+        // angle switch don't show it again); unless a budget ran out and
+        // the pending expression was dropped. A snapshot without "k"
+        // (older, or upstream's) shows an expression it doesn't hold as
+        // the replay does.
+        match (&snapshot.expression_display, continuation) {
+            _ if !whole => {}
+            (Some(expression), _) => {
                 let tokens = tokens_to_engine(&expression.tokens);
                 let commands: Vec<ExpressionCommand> = expression
                     .commands
@@ -1115,22 +1220,27 @@ impl StandardCalculatorViewModel {
                     .collect();
                 self.set_expression_display(tokens, commands);
             }
-            _ if snapshot.primary_display.is_error => {
-                // Expression was not evaluated before, or it was an error.
-                if snapshot.expression_display.is_some() {
-                    self.replay_within_budget(&snapshot.display_commands);
-                }
-                self.restore_error_display(display);
-            }
-            _ => self.restore_continuation(mode, &snapshot.display_commands, display, continuation),
+            (None, Some(_)) => self.set_expression_display(Vec::new(), Vec::new()),
+            (None, None) => {}
         }
+        // Extension: F-E as a History selection left it, or enabled.
+        self.restore_history_load(continuation.is_some_and(|k| k.history_load));
         self.with_manager(|m| m.set_history_suppressed(false));
         self.drain();
     }
 
-    /// Extension: what the engine would save now, beside its display commands.
+    /// Extension: what the engine would save now, beside its display
+    /// commands, and what the display shows instead of the engine.
     fn capture_continuation(&self) -> ContinuationSnapshot {
         let c = self.standard_calculator_manager.continuation();
+        // The engine's value if the display shows another: a History item's
+        // result, or an error the engine isn't in.
+        let engine_value = self
+            .standard_calculator_manager
+            .engine_primary_display()
+            .filter(|(_, engine_error)| !engine_error)
+            .map(|(text, _)| self.localize_display_value(&text, false))
+            .filter(|value| self.is_in_error || *value != self.display_value);
         ContinuationSnapshot {
             shown: c.shown,
             repeat: c
@@ -1144,6 +1254,9 @@ impl StandardCalculatorViewModel {
                     ]
                 })
                 .unwrap_or_default(),
+            engine_value,
+            history_load: self.is_last_operation_history_load(),
+            entry: c.entry,
         }
     }
 
@@ -1166,27 +1279,31 @@ impl StandardCalculatorViewModel {
         let same = within
             && !self.is_in_error
             && self.display_value == display
-            && continuation.is_none_or(|k| *k == self.capture_continuation());
+            && continuation.is_none_or(|k| {
+                let now = self.capture_continuation();
+                (k.shown, &k.repeat, k.entry) == (now.shown, &now.repeat, now.entry)
+            });
         if !same {
             self.clear_unbudgeted();
         }
         same
     }
 
-    /// Extension: restores a calculation that isn't in error from its
-    /// display commands and the saved continuation: the operation "="
+    /// Extension: restores a calculation the engine isn't in error in from
+    /// its display commands and the saved continuation: the operation "="
     /// repeats, then the pending expression and any operand being typed,
-    /// then the displayed value if they don't produce it (see
-    /// [`show_value`](Self::show_value)). Each step within its budget;
+    /// then the value the engine showed (`display`) if they don't produce it
+    /// (see [`show_value`](Self::show_value)). Each step within its budget;
     /// past one, the calculation is cleared and the value shown, so the
-    /// next digit replaces it and "=" doesn't repeat anything.
+    /// next digit replaces it and "=" doesn't repeat anything. Returns
+    /// whether the display commands were replayed whole.
     fn restore_continuation(
         &mut self,
         mode: CalcMode,
         display_commands: &[ExpressionCommandWrapper],
         display: &str,
         continuation: Option<&ContinuationSnapshot>,
-    ) {
+    ) -> bool {
         if let Some([op, operand]) = continuation.map(|k| &k.repeat[..]) {
             // "1 op operand =": the left operand doesn't matter (1 is valid in
             // every radix and every operator that evaluated before takes it).
@@ -1202,7 +1319,46 @@ impl StandardCalculatorViewModel {
                 self.clear_unbudgeted();
             }
         }
-        self.replay_within_budget(display_commands);
+        let entry = continuation.and_then(|k| k.entry);
+        // The empty input's 0 isn't typed (see `restore_entry`). A number
+        // whose sign was changed last is typed with the other sign, then
+        // changed: the operand puts the sign after its first digit, which
+        // would leave a digit the last command (that "(" multiplies).
+        let (commands, signed) = match display_commands {
+            [rest @ .., ExpressionCommandWrapper::Operand { .. }]
+                if entry == Some(Entry::Empty) =>
+            {
+                (rest, None)
+            }
+            [
+                rest @ ..,
+                ExpressionCommandWrapper::Operand {
+                    commands,
+                    is_negative,
+                    is_decimal_present,
+                    is_sci_fmt: false,
+                },
+            ] if entry == Some(Entry::Signed) => (
+                rest,
+                Some(ExpressionCommandWrapper::Operand {
+                    commands: commands.clone(),
+                    is_negative: !is_negative,
+                    is_decimal_present: *is_decimal_present,
+                    is_sci_fmt: false,
+                }),
+            ),
+            all => (all, None),
+        };
+        let mut whole = self.replay_within_budget(commands);
+        if let Some(operand) = signed.filter(|_| whole) {
+            whole = self.replay_within_budget(&[operand]);
+            if whole {
+                self.send_command(cmd::SIGN);
+            }
+        }
+        if whole {
+            self.restore_entry(entry);
+        }
         // Without the record (an older snapshot), or if the commands didn't
         // produce the display after all (a budget ran out), a value they
         // don't produce was shown, not typed: a typed operand is in them.
@@ -1212,18 +1368,49 @@ impl StandardCalculatorViewModel {
         if let Some(shown) = shown {
             self.show_value(mode, display, shown);
         }
+        whole
+    }
+
+    /// Extension: leaves the number being entered as the saved engine had
+    /// it (`"in"`), where replaying the display commands doesn't: an empty
+    /// input after C or CE (the commands end with its 0, which typed would
+    /// be a digit that "(" multiplies; CE empties it, and the engine as
+    /// reset is already empty), an empty input that a radix or angle
+    /// switch, MS or M+ ended (F-E twice ends it), or a `%` result, which is
+    /// added to the expression rather than typed.
+    fn restore_entry(&mut self, entry: Option<Entry>) {
+        let recording = self
+            .standard_calculator_manager
+            .current_calculator_engine()
+            .is_some_and(|e| e.f_in_recording_state());
+        match entry {
+            Some(Entry::Empty)
+                if self.standard_calculator_manager.continuation().entry != Some(Entry::Empty) =>
+            {
+                self.send_command(cmd::CENTR);
+            }
+            Some(Entry::Ended) if recording => {
+                self.send_command(cmd::FE);
+                self.send_command(cmd::FE);
+            }
+            Some(Entry::Percent) if recording => {
+                let _ = self.with_manager(|m| m.add_entry_as_percent_result());
+            }
+            _ => {}
+        }
     }
 
     /// Replays the display commands within [`REPLAY_WORK`]; past it, the
     /// pending expression is dropped (the displayed value is shown by the
-    /// caller).
-    fn replay_within_budget(&mut self, commands: &[ExpressionCommandWrapper]) {
+    /// caller) and this returns false.
+    fn replay_within_budget(&mut self, commands: &[ExpressionCommandWrapper]) -> bool {
         let within = self.within_work(REPLAY_WORK, |vm| {
             vm.with_deferred_display(|vm| vm.replay(commands))
         });
         if !within {
             self.clear_unbudgeted();
         }
+        within
     }
 
     /// Extension: runs `f` with the engine's primary and expression display
@@ -1237,14 +1424,17 @@ impl StandardCalculatorViewModel {
         let _ = self.with_manager(|m| m.end_deferred_display());
     }
 
-    /// `SetPrimaryDisplay(displayValue, true)` for a restored error.
+    /// `SetPrimaryDisplay(displayValue, true)` for a restored engine error.
     ///
     /// Deviation: upstream only puts the view model into the error state and
     /// leaves the engine running, so the next engine refresh (the radix reset
     /// of a page activation, for one) silently replaces the error with a
     /// number. The engine is put into its error state too
     /// (`CalculatorManager.DisplayPasteError`, which the C++ view model used
-    /// for paste errors) before the saved error text is shown.
+    /// for paste errors) before the saved error text is shown. A paste error
+    /// (`"ev"`, see the module docs) is only the view model's, as it was: the
+    /// engine's calculation is restored under it, so a memory recall or a
+    /// paste continues it as before.
     fn restore_error_display(&mut self, display_value: &str) {
         self.with_manager(|m| m.display_paste_error());
         self.set_primary_display(display_value, true);
@@ -1328,12 +1518,23 @@ impl StandardCalculatorViewModel {
     }
 
     fn replay(&mut self, commands: &[ExpressionCommandWrapper]) {
-        let commands: Vec<ExpressionCommand> = commands
-            .iter()
-            .map(ExpressionCommandWrapper::to_command)
-            .collect();
-        for c in crate::standard_vm::get_commands_from_expression_commands(&commands) {
-            self.send_command(c);
+        for command in commands {
+            // A sign change recorded as an operation ("negate(3)") was made
+            // to a number whose entry had ended (F-E, MS, a History
+            // selection); sent right after its digits it would change the
+            // sign of the number being typed instead, and the next digit
+            // would extend it. End the entry first, as F-E does.
+            if let ExpressionCommandWrapper::Unary(ops) = command
+                && ops.last() == Some(&cmd::SIGN)
+                && self.standard_calculator_manager.is_engine_recording()
+            {
+                self.send_command(cmd::FE);
+                self.send_command(cmd::FE);
+            }
+            let command = [command.to_command()];
+            for c in crate::standard_vm::get_commands_from_expression_commands(&command) {
+                self.send_command(c);
+            }
         }
     }
 

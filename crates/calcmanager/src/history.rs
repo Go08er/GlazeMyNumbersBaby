@@ -520,6 +520,12 @@ impl HistoryCollector {
         self.commands.clone().unwrap_or_default()
     }
 
+    /// Extension: the expression's last command (see
+    /// `CalcEngine::continuation`).
+    pub(crate) fn last_command(&self) -> Option<&ExpressionCommand> {
+        self.commands.as_ref().and_then(|c| c.last())
+    }
+
     /// `m_iCurLineHistStart` (kept for parity; never read by the engine).
     pub fn cur_line_hist_start(&self) -> i32 {
         self.i_cur_line_hist_start
