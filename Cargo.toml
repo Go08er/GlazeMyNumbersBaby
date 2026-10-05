@@ -11,6 +11,7 @@ members = [
     "crates/graphing",
     "crates/calcvm",
     "crates/appcore",
+    "crates/x11paste",
     "apps/gmnb",
     "apps/gmnb-launcher",
     "apps/dgmnb",
@@ -33,6 +34,7 @@ copypaste = { path = "crates/copypaste" }
 graphing = { path = "crates/graphing" }
 calcvm = { path = "crates/calcvm" }
 appcore = { path = "crates/appcore" }
+x11paste = { path = "crates/x11paste" }
 
 # Arbitrary-precision math is painfully slow unoptimised; keep tests usable.
 [profile.dev]
