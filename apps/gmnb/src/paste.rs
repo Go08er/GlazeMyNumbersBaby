@@ -15,9 +15,13 @@
 //! it, and holds it until then (GTK 4.22 `gdkselectioninputstream-x11.c`).
 //! So there another X client's selection is read by `x11paste` instead, on a
 //! connection of its own on a worker thread, which asks the X server for no
-//! more than the cap and abandons the transfer there. Dragging text onto a
-//! field still goes through GTK's drop target.
+//! more than the cap and abandons the transfer there.
+//!
+//! Text dragged onto a field from another program is read the same way
+//! (GTK's drop target reads it whole, as its paste does): on X11 the drag's
+//! selection through `x11paste`, elsewhere the drop's stream.
 
+use std::rc::Rc;
 use std::time::Duration;
 
 use gtk::prelude::*;
@@ -39,6 +43,9 @@ const X11_TIMEOUT: Duration = Duration::from_secs(3);
 /// Marks a widget [`guard`] has seen.
 const GUARDED: &str = "gmnb-bounded-paste";
 
+/// The text formats read, best first.
+const TEXT_TYPES: [&str; 2] = ["text/plain;charset=utf-8", "text/plain"];
+
 /// The text on `clipboard`, cut to [`MAX_PASTE_BYTES`] (at a character
 /// boundary) while it is read. `None` if it has no text.
 pub async fn read_text(clipboard: &gdk::Clipboard) -> Option<String> {
@@ -46,10 +53,21 @@ pub async fn read_text(clipboard: &gdk::Clipboard) -> Option<String> {
         return read_x11(&clipboard.display(), selection).await;
     }
     let (stream, _) = clipboard
-        .read_future(
-            &["text/plain;charset=utf-8", "text/plain"],
-            glib::Priority::DEFAULT,
-        )
+        .read_future(&TEXT_TYPES, glib::Priority::DEFAULT)
+        .await
+        .ok()?;
+    Some(read_stream(&stream).await)
+}
+
+/// The text dropped from another program, read as [`read_text`] reads a
+/// clipboard.
+async fn read_drop(drop: &gdk::Drop) -> Option<String> {
+    let display = drop.display();
+    if is_x11(&display) {
+        return read_x11(&display, Selection::Drag).await;
+    }
+    let (stream, _) = drop
+        .read_future(&TEXT_TYPES, glib::Priority::DEFAULT)
         .await
         .ok()?;
     Some(read_stream(&stream).await)
@@ -175,6 +193,84 @@ fn middle_click(widget: &gtk::Widget, paste: impl Fn(&gtk::Widget, f64, f64) + '
     widget.add_controller(click);
 }
 
+/// A drop target that runs before the widget's own, which reads a drag's
+/// text whole before inserting any (GTK 4.22 `GtkDropTarget`), and takes
+/// the drop of text dragged from another program: read by [`read_drop`] and
+/// given to `insert` with where it was dropped, or, if the widget isn't
+/// editable, refused unread. Drags from GMNB itself (their text already in
+/// memory) are left to the widget's own target, and so is every drag's
+/// feedback until the drop (where the text would go, whether it's taken).
+fn drop_target(widget: &gtk::Widget, insert: impl Fn(&gtk::Widget, String, f64, f64) + 'static) {
+    let target = gtk::DropTargetAsync::new(None, gdk::DragAction::COPY | gdk::DragAction::MOVE);
+    target.set_propagation_phase(gtk::PropagationPhase::Capture);
+    target.connect_accept(|_, drop| {
+        let formats = drop.formats();
+        drop.drag().is_none()
+            && TEXT_TYPES.iter().any(|t| formats.contain_mime_type(t))
+            && drop_action(drop.actions()) != gdk::DragAction::empty()
+    });
+    // No preference: the widget's own target answers.
+    target.connect_drag_enter(|_, _, _, _| gdk::DragAction::empty());
+    target.connect_drag_motion(|_, _, _, _| gdk::DragAction::empty());
+    let insert = Rc::new(insert);
+    target.connect_drop(move |target, drop, x, y| {
+        let Some(widget) = target.widget() else {
+            return false;
+        };
+        forget_drop(&widget);
+        let (dnd, weak, insert) = (drop.clone(), widget.downgrade(), insert.clone());
+        let editable = is_editable(&widget);
+        glib::spawn_future_local(async move {
+            let dropped = match editable {
+                true => read_drop(&dnd).await,
+                false => None,
+            };
+            let action = match (dropped, weak.upgrade()) {
+                (Some(text), Some(widget)) if is_editable(&widget) => {
+                    insert(&widget, text, x, y);
+                    drop_action(dnd.actions())
+                }
+                _ => gdk::DragAction::empty(),
+            };
+            dnd.finish(action);
+        });
+        true
+    });
+    widget.add_controller(target);
+}
+
+/// The action a drop offering `actions` is finished with, as GTK's own
+/// targets pick it: a copy where the source allows one.
+fn drop_action(actions: gdk::DragAction) -> gdk::DragAction {
+    [gdk::DragAction::COPY, gdk::DragAction::MOVE]
+        .into_iter()
+        .find(|&a| actions.contains(a))
+        .unwrap_or(gdk::DragAction::empty())
+}
+
+/// Lets go of the drop `widget`'s own targets are holding: they saw the
+/// drag come in but not the drop, which [`drop_target`] took, so they would
+/// keep the finished drop until the pointer next leaves the widget. This
+/// leaves them as their own drop does.
+fn forget_drop(widget: &gtk::Widget) {
+    let controllers = widget.observe_controllers();
+    for target in (0..controllers.n_items())
+        .filter_map(|i| controllers.item(i).and_downcast::<gtk::DropTarget>())
+    {
+        target.reject();
+    }
+}
+
+fn is_editable(widget: &gtk::Widget) -> bool {
+    if let Some(text) = widget.downcast_ref::<gtk::Text>() {
+        text.is_editable()
+    } else {
+        widget
+            .downcast_ref::<gtk::TextView>()
+            .is_some_and(|view| view.is_editable())
+    }
+}
+
 fn guard_text(text: &gtk::Text) {
     if !first_time(text.upcast_ref()) {
         return;
@@ -198,6 +294,31 @@ fn guard_text(text: &gtk::Text) {
         }
         paste_into_text(text, text.primary_clipboard(), Some(at));
     });
+    drop_target(text.upcast_ref(), |widget, dropped, x, _| {
+        if let Some(text) = widget.downcast_ref::<gtk::Text>() {
+            drop_into_text(text, dropped, x);
+        }
+    });
+}
+
+/// GtkText's drop (`gtk_text_drag_drop`), with the text read by
+/// [`read_drop`]: inserted where it was dropped, or in place of the
+/// selection if dropped on it. The cursor stays where it was.
+fn drop_into_text(text: &gtk::Text, mut dropped: String, x: f64) {
+    if text.must_truncate_multiline()
+        && let Some(end) = dropped.find(['\n', '\r'])
+    {
+        dropped.truncate(end);
+    }
+    let at = position_at(text, x);
+    let mut position = match text.selection_bounds() {
+        Some((a, b)) if (a.min(b)..=a.max(b)).contains(&at) => {
+            text.delete_selection();
+            a.min(b)
+        }
+        _ => at,
+    };
+    text.insert_text(&dropped, &mut position);
 }
 
 /// The character position nearest to `x` (in `text`'s coordinates), as
@@ -270,6 +391,30 @@ fn guard_text_view(view: &gtk::TextView) {
         let at = view.iter_at_location(bx, by).map(|iter| iter.offset());
         paste_into_text_view(view, view.primary_clipboard(), at);
     });
+    drop_target(view.upcast_ref(), |widget, dropped, x, y| {
+        if let Some(view) = widget.downcast_ref::<gtk::TextView>() {
+            drop_into_text_view(view, &dropped, x, y);
+        }
+    });
+}
+
+/// A text view's drop (`gtk_text_view_drag_drop`), with the text read by
+/// [`read_drop`]: inserted where it was dropped, if text can go there, with
+/// the cursor after it.
+fn drop_into_text_view(view: &gtk::TextView, dropped: &str, x: f64, y: f64) {
+    let (bx, by) = view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
+    let editable = view.is_editable();
+    let Some(mut at) = view
+        .iter_at_location(bx, by)
+        .filter(|at| at.can_insert(editable))
+    else {
+        return;
+    };
+    let buffer = view.buffer();
+    buffer.begin_user_action();
+    buffer.insert_interactive(&mut at, dropped, editable);
+    buffer.place_cursor(&at);
+    buffer.end_user_action();
 }
 
 /// A text view's paste with the text read by [`read_text`]. One that isn't
