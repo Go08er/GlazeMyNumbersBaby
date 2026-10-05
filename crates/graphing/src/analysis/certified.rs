@@ -1339,55 +1339,57 @@ fn apart(a: &Num, b: &Num) -> Option<i32> {
     (7..=15).find(|&s| matches!((reading(a, s), reading(b, s)), (Some(x), Some(y)) if x != y))
 }
 
-/// Gives the ends of one row that read alike the significant digits that
-/// tell them apart (up to 15, as the points' rows do; exact ones stay
-/// exact). Ends in one class (`ends[i].0`) are one number and are never
-/// told apart; nor are numbers proven equal. Two that still read alike
-/// can't be told apart: the row is shown as unknown.
-fn tell_apart(ends: &mut [(usize, &mut End)]) {
+/// Gives the ends of one row that would read alike where that would say
+/// something false the significant digits that tell them apart (up to 15,
+/// as the points' rows do; exact ones stay exact). `sets` (indices into
+/// `ends`) are where distinct numbers must read apart: an interval's two
+/// bounds, and the points a set lists (excluded points, or a range of
+/// single values). Ends in one class (`ends[i].0`) are one number, and
+/// so are numbers proven equal: never told apart. Two that still read
+/// alike can't be told apart: the row is shown as unknown.
+fn tell_apart(ends: &mut [(usize, &mut End)], sets: &[Vec<usize>]) {
     use std::collections::{HashMap, HashSet};
-    // One finite end per class, grouped by what it reads as (its text, and
-    // its value to six digits): only ends of one group can read alike.
-    let mut first: HashMap<usize, usize> = HashMap::new();
-    for (i, (c, e)) in ends.iter().enumerate() {
-        if e.num.is_some() {
-            first.entry(*c).or_insert(i);
-        }
-    }
-    let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
-    let mut reps: Vec<usize> = first.into_values().collect();
-    reps.sort_unstable();
-    for &i in &reps {
-        let e = &ends[i].1;
-        groups.entry(format!("t{}", e.text)).or_default().push(i);
-        if let Some(r) = e.num.and_then(|n| reading(&n, 6)) {
-            groups.entry(format!("r{r}")).or_default().push(i);
-        }
-    }
     let mut need: HashMap<usize, i32> = HashMap::new();
     let mut done: HashSet<(usize, usize)> = HashSet::new();
-    for g in groups.values().filter(|g| g.len() > 1) {
-        // So many numbers alike can't be told apart in a row.
-        if g.len() > 64 {
-            UNFIXED.with(|u| u.set(true));
-            continue;
+    for set in sets {
+        // One finite end per class, grouped by what it reads as (its text,
+        // and its value to six digits): only ends of one group read alike.
+        let mut classes_seen: HashSet<usize> = HashSet::new();
+        let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+        for &i in set {
+            let (c, e) = (&ends[i].0, &ends[i].1);
+            let Some(n) = e.num else { continue };
+            if !classes_seen.insert(*c) {
+                continue;
+            }
+            groups.entry(format!("t{}", e.text)).or_default().push(i);
+            if let Some(r) = reading(&n, 6) {
+                groups.entry(format!("r{r}")).or_default().push(i);
+            }
         }
-        for (k, &i) in g.iter().enumerate() {
-            for &j in &g[k + 1..] {
-                let (Some(a), Some(b)) = (ends[i].1.num, ends[j].1.num) else {
-                    continue;
-                };
-                if !done.insert((i.min(j), i.max(j))) || identical(&a, &b) {
-                    continue;
-                }
-                match apart(&a, &b) {
-                    Some(s) => {
-                        for c in [ends[i].0, ends[j].0] {
-                            let e = need.entry(c).or_insert(6);
-                            *e = (*e).max(s);
-                        }
+        for g in groups.values().filter(|g| g.len() > 1) {
+            // So many numbers alike can't be told apart in a row.
+            if g.len() > 64 {
+                UNFIXED.with(|u| u.set(true));
+                continue;
+            }
+            for (k, &i) in g.iter().enumerate() {
+                for &j in &g[k + 1..] {
+                    let (Some(a), Some(b)) = (ends[i].1.num, ends[j].1.num) else {
+                        continue;
+                    };
+                    if !done.insert((i.min(j), i.max(j))) || identical(&a, &b) {
+                        continue;
                     }
-                    None => UNFIXED.with(|u| u.set(true)),
+                    match apart(&a, &b) {
+                        Some(s) => {
+                            for c in [ends[i].0, ends[j].0] {
+                                let e = need.entry(c).or_insert(6);
+                                *e = (*e).max(s);
+                            }
+                        }
+                        None => UNFIXED.with(|u| u.set(true)),
+                    }
                 }
             }
         }
@@ -1397,7 +1399,7 @@ fn tell_apart(ends: &mut [(usize, &mut End)]) {
         if let Some(&s) = need.get(c)
             && s > 6
             && let Some(num) = e.num
-            && num.exact.is_none()
+            && num.exact.and_then(Ex::text).is_none()
         {
             e.text = num.text_sig(s);
         }
@@ -1517,7 +1519,21 @@ fn set_text(
                 && (one(i) || matches!((p.0.num, p.1.num), (Some(a), Some(b)) if identical(&a, &b)))
         })
         .collect();
+    let all_but_points = parts[0].0.inf == Some(false)
+        && parts[n - 1].1.inf == Some(true)
+        && (0..n - 1).all(|i| joined(i) && !parts[i].1.closed && !parts[i + 1].0.closed);
     {
+        // Where distinct numbers must read apart: an interval's two
+        // bounds, and the points a set lists (the excluded points of
+        // ℝ \ {…}, the single values of a range).
+        let mut sets: Vec<Vec<usize>> = (0..n)
+            .filter(|&i| !single[i])
+            .map(|i| vec![2 * i, 2 * i + 1])
+            .collect();
+        if all_but_points {
+            sets.push((0..n - 1).map(|i| 2 * i + 1).collect());
+        }
+        sets.push((0..n).filter(|&i| single[i]).map(|i| 2 * i).collect());
         let refs: Vec<&End> = parts.iter().flat_map(|p| [&p.0, &p.1]).collect();
         let mut cls = classes(&refs);
         // A point's two ends are one number; an interval's never are.
@@ -1535,7 +1551,7 @@ fn set_text(
             .enumerate()
             .map(|(i, e)| (cls[i], e))
             .collect();
-        tell_apart(&mut ends);
+        tell_apart(&mut ends, &sets);
     }
     // An interval whose ends still read alike says nothing.
     if parts
@@ -1545,9 +1561,6 @@ fn set_text(
     {
         UNFIXED.with(|u| u.set(true));
     }
-    let all_but_points = parts[0].0.inf == Some(false)
-        && parts[n - 1].1.inf == Some(true)
-        && (0..n - 1).all(|i| joined(i) && !parts[i].1.closed && !parts[i + 1].0.closed);
     if all_but_points {
         if n == 1 {
             return format!("{var} ∈ ℝ");
@@ -2423,7 +2436,10 @@ pub(super) fn features(
                 for (k, e) in ends.iter_mut().enumerate() {
                     e.0 = cls[k];
                 }
-                tell_apart(&mut ends);
+                // Each piece's two bounds.
+                let sets: Vec<Vec<usize>> =
+                    (0..open.len()).map(|k| vec![2 * k, 2 * k + 1]).collect();
+                tell_apart(&mut ends, &sets);
                 for (_, (text, _, lo, hi)) in pieces.iter_mut() {
                     if text.is_empty() {
                         if lo.inf.is_none() && hi.inf.is_none() && lo.text == hi.text {

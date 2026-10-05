@@ -1920,6 +1920,18 @@ fn numbers_that_read_alike_are_told_apart() {
             }
         }
     }
+    // Turns 1.15 apart at 10⁶: told apart to seven digits, not dropped.
+    let k = analyze_str("y=(x-1000000)*(x-1000001)*(x-1000002)");
+    assert_eq!(k.monotonicity.len(), 3, "{:?}", k.monotonicity);
+    for (t, _) in &k.monotonicity {
+        for (a, b) in bounds_of(t) {
+            assert_ne!(a, b, "{:?}", k.monotonicity);
+        }
+    }
+    // Ends of different pieces may read alike (they may be one number):
+    // csch x + 1 takes every value but 1.
+    let k = analyze_str("y=csch(x)+1");
+    assert!(k.range.starts_with("y ∈ (−∞, ≈1) ∪ (≈1, ∞)"), "{}", k.range);
     // A constant is still one value, however it is enclosed.
     for (src, want) in [("y=x/x", "y ∈ {1}"), ("y=sin(1)+0*x", "y ∈ {≈0.841471}")] {
         assert_eq!(analyze_str(src).range, want, "{src}");
