@@ -1207,6 +1207,7 @@ dependencies = [
  "serde",
  "serde_json",
  "unitconv",
+ "x11paste",
 ]
 
 [[package]]
