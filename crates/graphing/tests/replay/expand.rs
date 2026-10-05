@@ -418,7 +418,7 @@ impl<'a> Tail<'a> {
             return self.exponential(&self.product(&self.of(k)?, &ln));
         }
         let u = self.of(base)?;
-        if let Some((n, d)) = written_rational(k) {
+        if let Some((n, d)) = written_rational(k, &self.fx.lits) {
             return self.root_power(&u, n, d, k);
         }
         let g = Expr::Bin(BinOp::Pow, Box::new(Expr::X), Box::new(k.clone()));

@@ -22,7 +22,7 @@ pub mod rows;
 pub mod side;
 
 pub use cert::*;
-pub use fun::{Fun, Stop, canonical};
+pub use fun::{Fun, Stop, canonical, canonical_with};
 
 use std::sync::atomic::AtomicBool;
 

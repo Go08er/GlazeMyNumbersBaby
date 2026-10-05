@@ -549,7 +549,7 @@ fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
                 }
             }
             BinOp::Pow => {
-                if let Some((p, q)) = syntactic_rational(b) {
+                if let Some((p, q)) = syntactic_rational(b, cx.lits) {
                     let r = Q::new(p as i128, q as i128).expect("q ≠ 0");
                     return pow(asy(a, cx), r);
                 }

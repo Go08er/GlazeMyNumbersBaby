@@ -3324,7 +3324,7 @@ pub fn range(
 /// base is odd or even with the exponent, any function of an even
 /// argument is even, an odd (even) function of an odd argument is odd
 /// (even). Each step maps f(−x) to ±f(x), and defined to defined.
-fn structural_parity(e: &crate::ast::Expr) -> Option<bool> {
+fn structural_parity(e: &crate::ast::Expr, lits: &dyn crate::compile::Exactness) -> Option<bool> {
     use crate::ast::{BinOp, Expr, Func};
     use crate::compile::syntactic_rational;
     if !e.contains_x() {
@@ -3332,34 +3332,36 @@ fn structural_parity(e: &crate::ast::Expr) -> Option<bool> {
     }
     Some(match e {
         Expr::X => false,
-        Expr::Neg(a) | Expr::Degrees(a) => structural_parity(a)?,
+        Expr::Neg(a) | Expr::Degrees(a) => structural_parity(a, lits)?,
         Expr::Bin(BinOp::Add | BinOp::Sub, a, b) => {
-            let (pa, pb) = (structural_parity(a)?, structural_parity(b)?);
+            let (pa, pb) = (structural_parity(a, lits)?, structural_parity(b, lits)?);
             (pa == pb).then_some(pa)?
         }
-        Expr::Bin(BinOp::Mul | BinOp::Div, a, b) => structural_parity(a)? == structural_parity(b)?,
+        Expr::Bin(BinOp::Mul | BinOp::Div, a, b) => {
+            structural_parity(a, lits)? == structural_parity(b, lits)?
+        }
         Expr::Bin(BinOp::Pow, a, b) => {
-            let pa = structural_parity(a)?;
+            let pa = structural_parity(a, lits)?;
             if b.contains_x() {
-                (pa && structural_parity(b)?).then_some(true)?
+                (pa && structural_parity(b, lits)?).then_some(true)?
             } else if pa {
                 true
             } else {
-                match syntactic_rational(b)? {
+                match syntactic_rational(b, lits)? {
                     (p, q) if q % 2 == 1 => p % 2 == 0,
                     _ => return None,
                 }
             }
         }
         Expr::Call(Func::Root, args) if args.len() == 2 && !args[1].contains_x() => {
-            let pa = structural_parity(&args[0])?;
-            match syntactic_rational(&args[1])? {
+            let pa = structural_parity(&args[0], lits)?;
+            match syntactic_rational(&args[1], lits)? {
                 (n, 1) if pa || n % 2 == 1 => pa,
                 _ => return None,
             }
         }
         Expr::Call(f, args) if args.len() == 1 => {
-            if structural_parity(&args[0])? {
+            if structural_parity(&args[0], lits)? {
                 true
             } else {
                 match f {
@@ -3387,7 +3389,7 @@ fn structural_parity(e: &crate::ast::Expr) -> Option<bool> {
         Expr::Call(_, args) => {
             // min, max, … of even arguments.
             args.iter()
-                .all(|a| structural_parity(a) == Some(true))
+                .all(|a| structural_parity(a, lits) == Some(true))
                 .then_some(true)?
         }
         _ => return None,
@@ -3415,7 +3417,7 @@ pub fn parity(f: &Fun<'_>, dom: &Domain) -> Result<Row<Parity>, Stop> {
     {
         return Ok(proven(p == P::Even, "simplifier"));
     }
-    if let Some(even) = structural_parity(&f.expr) {
+    if let Some(even) = structural_parity(&f.expr, f.lits) {
         return Ok(proven(even, "its tree is built of even and odd parts"));
     }
     let mut c = Certificate::new(Region::Points);

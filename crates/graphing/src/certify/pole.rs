@@ -65,7 +65,7 @@ fn vanishes(f: &Fun<'_>, g: &Expr, n: Interval) -> Result<bool, Stop> {
     }
     Ok(match g {
         Expr::Bin(BinOp::Pow, c, p) => {
-            matches!(syntactic_rational(p), Some((p, 1)) if p > 0) && simple_zero(f, c, n)?
+            matches!(syntactic_rational(p, f.lits), Some((p, 1)) if p > 0) && simple_zero(f, c, n)?
         }
         Expr::Neg(c) => vanishes(f, c, n)?,
         _ => false,
@@ -86,7 +86,7 @@ pub fn pole(f: &Fun<'_>, e: &Expr, n: Interval) -> Result<bool, Stop> {
             (vanishes(f, b, n)? && nonzero_cont(f, a, n)?)
                 || (pole(f, a, n)? && nonzero_cont(f, b, n)?)
         }
-        Expr::Bin(BinOp::Pow, a, b) => match syntactic_rational(b) {
+        Expr::Bin(BinOp::Pow, a, b) => match syntactic_rational(b, f.lits) {
             Some((p, 1)) if p > 0 => pole(f, a, n)?,
             Some((p, 1)) if p < 0 => simple_zero(f, a, n)?,
             _ => false,
@@ -127,7 +127,7 @@ pub fn pole_free(f: &Fun<'_>, e: &Expr, n: Interval) -> Result<bool, Stop> {
             (vanishes(f, b, n)? && nonzero_cont(f, a, n)?)
                 || (pole_free(f, a, n)? && nonzero_cont(f, b, n)?)
         }
-        Expr::Bin(BinOp::Pow, a, b) => match syntactic_rational(b) {
+        Expr::Bin(BinOp::Pow, a, b) => match syntactic_rational(b, f.lits) {
             Some((p, 1)) if p < 0 => simple_zero(f, a, n)?,
             Some((p, 1)) if p > 0 => pole_free(f, a, n)?,
             _ => false,

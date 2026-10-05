@@ -1438,8 +1438,9 @@ fn edges(fx: &Fx, e: &graphing::ast::Expr, path: &mut Vec<u8>, out: &mut Vec<Edg
             stand_in,
         });
     };
-    let even =
-        |k: &Expr| super::eval::written_rational(k).is_some_and(|(p, q)| q == 1 && p % 2 == 0);
+    let even = |k: &Expr| {
+        super::eval::written_rational(k, &fx.lits).is_some_and(|(p, q)| q == 1 && p % 2 == 0)
+    };
     match e {
         Expr::Call(f, args) => match f {
             Func::Sqrt | Func::Ln | Func::Log => push(0, 0.0, true),
@@ -1451,9 +1452,13 @@ fn edges(fx: &Fx, e: &graphing::ast::Expr, path: &mut Vec<u8>, out: &mut Vec<Edg
             Func::Acosh => push(0, 1.0, true),
             _ => {}
         },
-        Expr::Bin(BinOp::Pow, a, b) => match super::eval::written_rational(b) {
+        Expr::Bin(BinOp::Pow, a, b) => match super::eval::written_rational(b, &fx.lits) {
             Some((_, q)) if q % 2 == 0 => push(0, 0.0, true),
             Some(_) => {}
+            // A constant exactly an integer: an integer power.
+            None if !super::eval::contains_x(b)
+                && super::exact::eval(b, None, &fx.lits, &fx.vars)
+                    .is_some_and(|k| k.is_integer()) => {}
             None => {
                 push(0, 0.0, true);
                 let zero = !super::eval::contains_x(a) && {
@@ -1539,7 +1544,9 @@ fn divisor(f: &graphing::ast::Expr, path: &[u8]) -> bool {
     match super::eval::at_path(f, up) {
         Some(Expr::Bin(BinOp::Div, ..)) => *last == 1,
         Some(Expr::Bin(BinOp::Pow, _, k)) if *last == 0 => {
-            super::eval::written_rational(k).is_some_and(|(p, _)| p > 0) && divisor(f, up)
+            super::eval::written_rational(k, &super::eval::Lits::default())
+                .is_some_and(|(p, _)| p > 0)
+                && divisor(f, up)
         }
         _ => false,
     }

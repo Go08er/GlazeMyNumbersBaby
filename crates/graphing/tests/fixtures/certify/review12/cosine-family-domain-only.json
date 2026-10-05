@@ -1,0 +1,185 @@
+{
+  "source": "y=2/(1.0000000000000001-cos(x))",
+  "formula": "Div(2,Sub(1,cos(x)))",
+  "evaluated": null,
+  "unit": "radians",
+  "domain": {
+    "Certified": {
+      "value": {
+        "pieces": [
+          {
+            "lo": "NegInf",
+            "hi": "PosInf"
+          }
+        ],
+        "excluded": [
+          {
+            "x0": {
+              "lo": 0.0,
+              "hi": 0.0
+            },
+            "period": {
+              "lo": 6.283185307179586,
+              "hi": 6.283185307179587
+            }
+          }
+        ]
+      },
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Family": {
+              "of": {
+                "G": {
+                  "path": [
+                    1
+                  ],
+                  "via": "Itself"
+                }
+              },
+              "x0": {
+                "a": 0.0,
+                "b": 0.0
+              },
+              "period": {
+                "a": 6.283185307179586,
+                "b": 6.283185307179587
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "x_intercepts": {
+    "Unknown": {
+      "reason": "f's sign is not decided everywhere"
+    }
+  },
+  "y_intercept": {
+    "Unknown": {
+      "reason": "withheld for independent domain replay"
+    }
+  },
+  "parity": {
+    "Certified": {
+      "value": "Even",
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Simplifier": {
+              "fact": "f is even (simplifier): f(\u2212x) = f(x), on a domain symmetric about 0"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "period": {
+    "Certified": {
+      "value": {
+        "lo": 6.283185307179586,
+        "hi": 6.283185307179587
+      },
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Simplifier": {
+              "fact": "f(x + 2\u00b7\u03c0) = f(x) wherever f is defined"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "extrema": {
+    "Unknown": {
+      "reason": "f\u2032 is not decided everywhere"
+    }
+  },
+  "inflections": {
+    "Unknown": {
+      "reason": "f\u2033 is not decided everywhere"
+    }
+  },
+  "monotonicity": {
+    "Unknown": {
+      "reason": "f\u2032's sign is not decided everywhere"
+    }
+  },
+  "range": {
+    "Unknown": {
+      "reason": "f\u2032's sign is not decided everywhere"
+    }
+  },
+  "range_ends": [],
+  "vertical": {
+    "Unknown": {
+      "reason": "f is not proven continuous inside its domain"
+    }
+  },
+  "horizontal": {
+    "Certified": {
+      "value": [],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Value": {
+              "x": {
+                "a": -2.128429022807085,
+                "b": -2.128429022807085
+              },
+              "of": {
+                "F": "F0"
+              },
+              "lo": 1.3078913578631828,
+              "hi": 1.3078913578631834
+            }
+          },
+          {
+            "Value": {
+              "x": {
+                "a": -1.7357299411083607,
+                "b": -1.7357299411083607
+              },
+              "of": {
+                "F": "F0"
+              },
+              "lo": 1.717937293222714,
+              "hi": 1.7179372932227148
+            }
+          }
+        ]
+      }
+    }
+  },
+  "oblique": {
+    "Certified": {
+      "value": [],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Simplifier": {
+              "fact": "f is periodic: f \u2212 (m\u00b7x + b) does not tend to 0 for m \u2260 0"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "binding": {
+    "certifier": "graphing 0.2.0",
+    "rules": "32045d7ad9dab698",
+    "power": "ti-real-1",
+    "sliders": {},
+    "decimal_comma": false,
+    "budget": 200000
+  },
+  "evals": 75030,
+  "stopped": "out of budget"
+}

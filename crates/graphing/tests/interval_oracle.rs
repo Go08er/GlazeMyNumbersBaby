@@ -1256,21 +1256,29 @@ fn literal_texts(src: &str) -> HashMap<u64, String> {
     out
 }
 
-fn syntactic_rational(e: &Expr) -> Option<(i32, i32)> {
-    fn int(e: &Expr) -> Option<i64> {
+/// An exponent written as a ratio of integers, each an integer as typed
+/// (`1.0000000000000001` is none, though its double is 1).
+fn syntactic_rational(e: &Expr, lits: &HashMap<u64, String>) -> Option<(i32, i32)> {
+    fn int(e: &Expr, lits: &HashMap<u64, String>) -> Option<i64> {
         match e {
-            Expr::Num(v) if *v == v.trunc() && v.abs() < 1e6 => Some(*v as i64),
-            Expr::Neg(a) => int(a).map(|v| -v),
+            Expr::Num(v) if *v == v.trunc() && v.abs() < 1e6 => {
+                let typed = lits.get(&v.to_bits()).is_none_or(|t| {
+                    let (i, f) = t.split_once('.').unwrap_or((t, ""));
+                    f.chars().all(|c| c == '0') && i.parse::<f64>().ok() == Some(*v)
+                });
+                typed.then_some(*v as i64)
+            }
+            Expr::Neg(a) => int(a, lits).map(|v| -v),
             _ => None,
         }
     }
     let (p, q) = match e {
         Expr::Neg(a) => {
-            let (p, q) = syntactic_rational(a)?;
+            let (p, q) = syntactic_rational(a, lits)?;
             return Some((-p, q));
         }
-        Expr::Bin(BinOp::Div, a, b) => (int(a)?, int(b)?),
-        _ => (int(e)?, 1),
+        Expr::Bin(BinOp::Div, a, b) => (int(a, lits)?, int(b, lits)?),
+        _ => (int(e, lits)?, 1),
     };
     if q == 0 {
         return None;
@@ -1310,7 +1318,7 @@ fn mp_eval(
         Expr::Degrees(a) => ev(a)?,
         Expr::Bin(BinOp::Pow, a, b) => {
             let u = ev(a)?;
-            if let Some((p, q)) = syntactic_rational(b) {
+            if let Some((p, q)) = syntactic_rational(b, lits) {
                 return if q == 1 {
                     mp_powi(&u, p)
                 } else {
@@ -1420,6 +1428,10 @@ fn taylor_cases() -> Vec<(&'static str, TrigUnit)> {
         // A root of varying degree: at x = 2 its degree is 2, but its
         // derivative is x^(1/x)'s (review 12, R12-L-02).
         ("root(x,x)", Radians),
+        // Literals are the decimals typed (review 12, R12-M-01): no
+        // integer power, and 1.0000000000000001 − cos x never 0.
+        ("x^1.0000000000000001", Radians),
+        ("2/(1.0000000000000001-cos(x))", Radians),
     ]
 }
 

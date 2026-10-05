@@ -295,3 +295,43 @@ fn pathological_inputs_stay_bounded() {
         );
     }
 }
+
+/// Review 12, R12-M-05: 0.1 + 0.2 − 0.3 is exactly 0 as typed, so
+/// 10^17·(0.1 + 0.2 − 0.3) + x is the line y = x. The curve drawn went
+/// through (0, ≈5.55) (each operation rounded), and the trace, from an
+/// enclosure 16 wide, read "unknown": both are the analysis's y = x now.
+#[test]
+fn literal_arithmetic_is_drawn_and_traced_exactly() {
+    use graphing::trace::TraceValue;
+    let mut g = Graph::new();
+    let id = g.add_equation("y=10^17*(0.1+0.2-0.3)+x");
+    let v = vp();
+    let plots = g.plot(&v);
+    let p = &plots.iter().find(|p| p.id == id).expect("plotted").plot;
+    // Every vertex on y = x, so the line passes through (0, 0).
+    let vertices: Vec<_> = p.curves.iter().flatten().collect();
+    assert!(!vertices.is_empty());
+    assert!(vertices.iter().all(|q| q.y == q.x), "{vertices:?}");
+    assert!(vertices.iter().any(|q| q.x <= 0.0) && vertices.iter().any(|q| q.x >= 0.0));
+    // Traced anywhere: y = x to every digit shown.
+    for wx in [0.0, 1.25, -3.5, 7.0] {
+        let (px, py) = v.to_screen(wx, wx);
+        let (eq, t) = g.trace(&v, &plots, px, py, 20.0).expect("traced");
+        assert_eq!(eq, id);
+        match t.value {
+            TraceValue::Defined { lo, hi } => {
+                assert!(
+                    lo <= t.x && t.x <= hi && hi - lo <= 4.0 * f64::EPSILON * t.x.abs(),
+                    "{t:?}"
+                );
+            }
+            other => panic!("traced at {wx}: {other:?}, {}", t.text()),
+        }
+        let text = t.text();
+        let (x, y) = text
+            .trim_matches(|c| c == '(' || c == ')')
+            .split_once(", ")
+            .expect("(x, y)");
+        assert_eq!(x, y.trim_start_matches('≈'), "{text}");
+    }
+}

@@ -401,7 +401,42 @@ pub fn one(r: f64) -> R {
     }
 }
 
+/// The value of `e` at x, each number the double it holds (the compiled
+/// program's [`crate::compile::Program::compile`]).
 pub fn reval(e: &Expr, x: f64, u: TrigUnit) -> R {
+    reval_in(e, x, u, None)
+}
+
+/// The value of `e` at x, `e` typed with the literals `lits`, as the app
+/// computes it (`Program::compile_typed`): arithmetic on literals alone
+/// exact and rounded once, a constant exponent or root degree an integer
+/// or not by its exact value.
+pub fn reval_typed(e: &Expr, x: f64, u: TrigUnit, lits: &crate::interval::Literals) -> R {
+    reval_in(e, x, u, Some(lits))
+}
+
+fn reval_in(e: &Expr, x: f64, u: TrigUnit, lits: Option<&crate::interval::Literals>) -> R {
+    use crate::compile::PowKind;
+    let opts = CompileOptions {
+        trig_unit: u,
+        variables: &(),
+    };
+    if let Some(l) = lits
+        && let Some(v) = crate::compile::typed_value(e, &opts, l)
+    {
+        return match v {
+            Ok(v) => R::V(Xf::of(v)),
+            Err(()) => R::Undef,
+        };
+    }
+    let reval = |a: &Expr, x: f64, u: TrigUnit| reval_in(a, x, u, lits);
+    let kind = |b: &Expr| match lits {
+        Some(l) => crate::compile::typed_pow_kind(b, &opts, l),
+        None => match rational(b) {
+            Some((p, q)) => PowKind::Rational(p, q),
+            None => PowKind::Plain,
+        },
+    };
     match e {
         Expr::Num(v) => R::V(Xf::of(*v)),
         Expr::Const(c) => R::V(Xf::of(c.value())),
@@ -414,19 +449,38 @@ pub fn reval(e: &Expr, x: f64, u: TrigUnit) -> R {
             r => r,
         },
         // (No `if let` guard: it needs Rust 1.95, and the MSRV is 1.92.)
-        Expr::Bin(BinOp::Pow, a, b) if rational(b).is_some() => {
-            let Some((p, q)) = rational(b) else {
+        Expr::Bin(BinOp::Pow, a, b) if matches!(kind(b), PowKind::Rational(..)) => {
+            let PowKind::Rational(p, q) = kind(b) else {
                 unreachable!()
             };
             pow_rat(reval(a, x, u), p, q)
         }
-        // An exponent that varies with x: the TI rule (`fns::pow_var`).
-        Expr::Bin(BinOp::Pow, a, b) if varies(b) => match (reval(a, x, u), reval(b, x, u)) {
-            (R::Undef, _) | (_, R::Undef) => R::Undef,
-            (R::V(va), _) if va.sign() < 0.0 => R::Undef,
-            (R::V(va), R::V(vb)) => pow_var(va, vb),
-            _ => R::Unknown,
-        },
+        // An exponent that varies with x, or a constant that is exactly no
+        // integer: the TI rule (`fns::pow_var`).
+        Expr::Bin(BinOp::Pow, a, b) if varies(b) || matches!(kind(b), PowKind::NonInteger) => {
+            match (reval(a, x, u), reval(b, x, u)) {
+                (R::Undef, _) | (_, R::Undef) => R::Undef,
+                (R::V(va), _) if va.sign() < 0.0 => R::Undef,
+                (R::V(va), R::V(vb)) => pow_var(va, vb),
+                _ => R::Unknown,
+            }
+        }
+        // A root of a degree exactly no integer: the power 1/n, base ≥ 0.
+        Expr::Call(Func::Root, args)
+            if args.len() == 2
+                && lits.is_some_and(|l| {
+                    crate::compile::typed_root_power(&args[1], &opts, l).is_some()
+                }) =>
+        {
+            let inv = lits
+                .and_then(|l| crate::compile::typed_root_power(&args[1], &opts, l))
+                .expect("checked");
+            match reval(&args[0], x, u) {
+                R::V(va) if va.sign() < 0.0 => R::Undef,
+                R::V(va) => pow_var(va, Xf::of(inv)),
+                r => r,
+            }
+        }
         Expr::Bin(op, a, b) => match (reval(a, x, u), reval(b, x, u)) {
             (R::Undef, _) | (_, R::Undef) => R::Undef,
             (R::V(va), R::V(vb)) => bin(*op, va, vb),

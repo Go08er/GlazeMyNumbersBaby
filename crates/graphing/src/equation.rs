@@ -237,11 +237,17 @@ impl Equation {
             }
             e
         };
-        // The literals as typed, for interval evaluation (a literal that
-        // can't be read back is enclosed by its neighbours instead).
-        let literals = || {
-            crate::interval::Literals::of(&self.text, self.parse)
-                .unwrap_or_else(|_| crate::interval::Literals::none())
+        // The literals as typed, for the programs and interval evaluation
+        // alike (a literal that can't be read back is enclosed by its
+        // neighbours instead), so that the curve drawn, its trace and its
+        // analysis are of one function.
+        let lits = crate::interval::Literals::of(&self.text, self.parse)
+            .unwrap_or_else(|_| crate::interval::Literals::none());
+        // The interval form folds arithmetic on literals alone exactly, as
+        // the program does, into one tight enclosure.
+        let interval = |e: Expr| {
+            let (e, l) = crate::compile::fold_literals(&e, opts, &lits);
+            Some(Arc::new(IntervalFn::new(e, l, opts)))
         };
         let form = match &self.form {
             Form::Explicit { axis, f } => {
@@ -253,12 +259,12 @@ impl Equation {
                 };
                 CompiledForm::Explicit {
                     axis: *axis,
-                    f: Program::compile(&expr, opts).map_err(fix)?,
-                    iv: Some(Arc::new(IntervalFn::new(expr, literals(), opts))),
+                    f: Program::compile_typed(&expr, opts, &lits).map_err(fix)?,
+                    iv: interval(expr),
                 }
             }
             Form::Implicit { f } => CompiledForm::Implicit {
-                f: Program::compile(f, opts).map_err(fix)?,
+                f: Program::compile_typed(f, opts, &lits).map_err(fix)?,
             },
             Form::Inequality {
                 conditions,
@@ -269,7 +275,7 @@ impl Equation {
                 } else {
                     Expr::Call(Func::Max, conditions.iter().map(|c| c.g.clone()).collect())
                 };
-                let field = Program::compile(&field_expr, opts).map_err(fix)?;
+                let field = Program::compile_typed(&field_expr, opts, &lits).map_err(fix)?;
                 let bound = match explicit {
                     Some(b) => {
                         let expr = if b.axis == Axis::Y {
@@ -279,8 +285,8 @@ impl Equation {
                         };
                         Some(CompiledBound {
                             axis: b.axis,
-                            f: Program::compile(&expr, opts).map_err(fix)?,
-                            iv: Some(Arc::new(IntervalFn::new(expr, literals(), opts))),
+                            f: Program::compile_typed(&expr, opts, &lits).map_err(fix)?,
+                            iv: interval(expr),
                             greater: b.greater,
                         })
                     }
@@ -291,7 +297,12 @@ impl Equation {
                 } else {
                     conditions
                         .iter()
-                        .map(|c| Ok((Program::compile(&c.g, opts).map_err(fix)?, c.strict)))
+                        .map(|c| {
+                            Ok((
+                                Program::compile_typed(&c.g, opts, &lits).map_err(fix)?,
+                                c.strict,
+                            ))
+                        })
                         .collect::<Result<Vec<_>, EquationError>>()?
                 };
                 CompiledForm::Inequality {

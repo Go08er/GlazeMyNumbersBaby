@@ -1710,7 +1710,7 @@ fn generators(e: &Expr, out: &mut Vec<Expr>) {
                 BinOp::Pow => {
                     // A positive whole power is defined everywhere; g⁰ is
                     // undefined where g = 0 (0⁰, as on the TI-84 Plus CE).
-                    let integral_pos = matches!(syntactic_rational(b), Some((p, 1)) if p > 0);
+                    let integral_pos = matches!(syntactic_rational(b, &crate::compile::Doubles), Some((p, 1)) if p > 0);
                     if !integral_pos {
                         push((**a).clone(), out);
                     }
@@ -2320,7 +2320,7 @@ fn poly_coeffs(e: &Expr, opts: &CompileOptions<'_>) -> Option<Vec<f64>> {
             Some(poly_coeffs(a, opts)?.iter().map(|c| c / d).collect())
         }
         Expr::Bin(BinOp::Pow, a, b) => {
-            let (n, 1) = syntactic_rational(b)? else {
+            let (n, 1) = syntactic_rational(b, &crate::compile::Doubles)? else {
                 return None;
             };
             let n = usize::try_from(n).ok().filter(|&n| n <= MAX_DEGREE)?;

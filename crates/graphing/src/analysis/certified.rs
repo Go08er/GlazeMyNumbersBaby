@@ -1682,7 +1682,14 @@ pub(super) fn features(
     a: &Analysis,
     cancel: Option<&AtomicBool>,
 ) -> Option<KeyGraphFeatures> {
-    let cx = Ctx::new(certify::canonical(f), opts, lits, ilits, a, cancel);
+    let cx = Ctx::new(
+        certify::canonical_with(f, !ilits.shadows(2.0)),
+        opts,
+        lits,
+        ilits,
+        a,
+        cancel,
+    );
     let mut out = Out {
         k: KeyGraphFeatures::default(),
     };

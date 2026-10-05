@@ -12,12 +12,15 @@
 //! clean sweep can't vouch for those checks. This one shares none of them:
 //! it reads only the public analysis result (what the panel shows, and the
 //! numbers behind it), the panel's formatter (`format_nonzero`), the
-//! compiled program, and the reference evaluator `analysis::truth::reval`
-//! for *values* (a double with an unbounded exponent where an intermediate
-//! leaves the doubles). Nothing from `analysis::verify` is used: no noise
-//! estimate, rounding bound, sample set, rule or tolerance of the gate's.
-//! What it does share with the app is arithmetic: CORE-MATH's functions
-//! (`crates/crmath`) and `dd.rs` under both evaluators. A wrong primitive
+//! compiled program, and the reference evaluator
+//! `analysis::truth::reval_typed` for *values* (a double with an unbounded
+//! exponent where an intermediate leaves the doubles), both reading the
+//! literals as the decimals typed, as the app does. Nothing from
+//! `analysis::verify` is used: no noise estimate, rounding bound, sample
+//! set, rule or tolerance of the gate's. What it does share with the app is
+//! arithmetic: CORE-MATH's functions (`crates/crmath`), `dd.rs` under both
+//! evaluators, and the exact folding of literal arithmetic (`big.rs`,
+//! exact rationals rounded once). A wrong primitive
 //! both use agrees with itself, so the pool also compares equivalent
 //! spellings (below).
 //!
@@ -139,13 +142,15 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering as AtOrd};
 
 use graphing::analysis::format::{format_decimal, format_nonzero};
-use graphing::analysis::truth::{R, Xf, reval};
+use graphing::analysis::truth::{R, Xf, reval, reval_typed};
 use graphing::analysis::{
     AnalysisError, Family, Interval, KeyGraphFeatures, Monotonicity, Parity, Periodicity, analyze,
     flags,
 };
 use graphing::ast::Expr;
 use graphing::compile::{CompileOptions, Program};
+use graphing::interval::Literals;
+use graphing::lexer::ParseOptions;
 use graphing::{Equation, TrigUnit};
 
 // ---------------------------------------------------------------- floats
@@ -267,6 +272,9 @@ impl Val {
 
 struct F {
     ast: Expr,
+    /// The literals as typed: f is what the app computes from them
+    /// (`Program::compile_typed`, `truth::reval_typed`).
+    lits: Literals,
     prog: Program,
     unit: TrigUnit,
     /// `tol` and `res` by x (each takes up to a hundred evaluations).
@@ -276,7 +284,7 @@ struct F {
 impl F {
     fn at(&self, x: f64) -> Val {
         let c = self.prog.eval(x, 0.0);
-        let r = reval(&self.ast, x, self.unit);
+        let r = reval_typed(&self.ast, x, self.unit, &self.lits);
         let mk = |k, v: f64, xf: Xf| Val {
             k,
             v,
@@ -368,7 +376,7 @@ impl F {
     fn error(&self, e: &Expr, x: f64) -> (f64, f64) {
         use graphing::ast::BinOp;
         let eps = f64::EPSILON;
-        let v = match reval(e, x, self.unit) {
+        let v = match reval_typed(e, x, self.unit, &self.lits) {
             R::V(xf) => xf.f(),
             _ => return (f64::NAN, 0.0),
         };
@@ -826,7 +834,7 @@ fn exclusion_unsupported(f: &F, e: f64, slack: i64) -> Option<Val> {
     for sub in &g {
         let mut sign = None;
         for &y in &pts {
-            match reval(sub, y, f.unit) {
+            match reval_typed(sub, y, f.unit, &f.lits) {
                 R::V(xf) if !xf.is_zero() => {
                     let s = xf.sign();
                     if sign.is_some_and(|t| t != s) {
@@ -1025,11 +1033,13 @@ fn check_with(
     let Some((_, ast)) = eq.explicit() else {
         return cx.out;
     };
-    let Ok(prog) = Program::compile(ast, &opts) else {
+    let lits = Literals::of(&format!("y={expr}"), ParseOptions::default()).unwrap_or_default();
+    let Ok(prog) = Program::compile_typed(ast, &opts, &lits) else {
         return cx.out;
     };
     let f = F {
         ast: ast.clone(),
+        lits,
         prog,
         unit,
         memo: Default::default(),
@@ -1054,7 +1064,7 @@ fn check_with(
                 format!(
                     "x={x:e}: compiled {:e}, reference {:?}",
                     v.c,
-                    reval(&f.ast, *x, unit)
+                    reval_typed(&f.ast, *x, unit, &f.lits)
                 ),
             );
         }
@@ -2420,9 +2430,11 @@ fn check_pair(lhs: &str, rhs: &str, positive: bool) -> Vec<Finding> {
     let load = |s: &str| -> Option<(Equation, F)> {
         let eq = Equation::parse(&format!("y={s}")).ok()?;
         let (_, ast) = eq.explicit()?;
-        let prog = Program::compile(ast, &opts).ok()?;
+        let lits = Literals::of(&format!("y={s}"), ParseOptions::default()).unwrap_or_default();
+        let prog = Program::compile_typed(ast, &opts, &lits).ok()?;
         let f = F {
             ast: ast.clone(),
+            lits,
             prog,
             unit: TrigUnit::Radians,
             memo: Default::default(),

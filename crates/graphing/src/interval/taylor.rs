@@ -352,7 +352,7 @@ fn powrat_ser(u: &Series, p: i32, q: i32) -> Series {
 
 fn pow(a: &Expr, b: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
     let u = ev(a, x, n, ctx);
-    if let Some((p, q)) = syntactic_rational(b) {
+    if let Some((p, q)) = syntactic_rational(b, ctx.literals) {
         return if q == 1 {
             powi_ser(&u, p)
         } else {
@@ -361,16 +361,31 @@ fn pow(a: &Expr, b: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
     }
     let v = ev(b, x, n, ctx);
     // A constant integer exponent written otherwise (x^(1+1)) is still an
-    // integer power; an exponent that varies needs a positive base (TI).
-    if !b.contains_x()
-        && !b.contains_y()
-        && v[0].iv.is_point()
-        && v[0].lo() == v[0].lo().trunc()
-        && v[0].lo().abs() < 1e6
-    {
+    // integer power; an exponent that varies needs a positive base (TI),
+    // and so does a constant that is no integer.
+    let constant = !b.contains_x() && !b.contains_y();
+    if constant && v[0].iv.is_point() && v[0].lo() == v[0].lo().trunc() && v[0].lo().abs() < 1e6 {
         return powi_ser(&u, v[0].lo() as i32);
     }
     let c0 = elem::pow(&u[0], &v[0]);
+    // A constant whose enclosure holds an integer may be that integer
+    // (x^(0.1 + 0.9) is x¹; a typed 1.0000000000000001 is enclosed by 1 and
+    // the double after it): a negative base may then be defined, with an
+    // integer power's value. Possibly undefined, never claimed so.
+    let (k0, k1) = (v[0].lo().ceil(), v[0].hi().floor());
+    if constant && !v[0].is_empty() && k0 <= k1 && u[0].lo() < 0.0 && !u[0].gt0() {
+        let mut iv = c0.iv;
+        if k1 - k0 <= 4.0 && k0.abs() < 1e6 && k1.abs() < 1e6 {
+            let mut k = k0;
+            while k <= k1 {
+                iv = iv.hull(elem::powi(&u[0], k as i32).iv);
+                k += 1.0;
+            }
+        } else {
+            iv = Interval::ENTIRE;
+        }
+        return flat(DecInterval::result(iv, Dec::Trv, &[&u[0], &v[0]]), n);
+    }
     if u[0].gt0() {
         let mut h = exp(&mul(&v, &ln(&u)));
         h[0] = c0.refine(&h[0]);

@@ -612,7 +612,8 @@ pub fn function(a: &Value) -> Result<Fx, String> {
     let Some((graphing::equation::Axis::X, expr)) = eq.explicit() else {
         return Err("the source is not y = f(x)".into());
     };
-    let f = eval::canonical(expr);
+    let lits = Lits::of_with(&text, comma);
+    let f = eval::canonical(expr, &lits);
     if f.formula() != formula {
         return Err(format!(
             "binding: the source's tree {} is not the certificate's formula {formula}",
@@ -641,8 +642,7 @@ pub fn function(a: &Value) -> Result<Fx, String> {
             .collect(),
         _ => Vec::new(),
     };
-    let lits = Lits::of_with(&text, comma);
-    let f_alt = eval::horner(&f);
+    let f_alt = eval::horner(&f, &lits);
     let verified = algebra::verify(
         &f,
         f_eval.as_ref(),

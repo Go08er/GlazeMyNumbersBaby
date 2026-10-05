@@ -207,7 +207,7 @@ fn saturate(egraph: MathGraph, s: &Settings<'_>) -> (MathGraph, Stop) {
 /// Simplifies `e`, a function of x.
 pub fn simplify(e: &Expr, s: &Settings<'_>) -> Result<Simplified, Unsupported> {
     let start = to_rec(e, s.literals)?;
-    let conditions = side_conditions(e);
+    let conditions = side_conditions(e, s.literals);
     let jumps = jumps(e);
     let mut egraph = MathGraph::new(s.facts(e));
     let root = egraph.add_expr(&start);
@@ -261,7 +261,7 @@ pub fn prove_parity(e: &Expr, s: &Settings<'_>) -> Option<Parity> {
     let neg_f = egraph.add(Math::Neg(f));
     // Each condition's expression and its mirror, to show the domain is
     // symmetric.
-    let conds = side_conditions(e);
+    let conds = side_conditions(e, s.literals);
     let mut pairs = Vec::new();
     for c in &conds {
         let exprs: Vec<&Expr> = match c {

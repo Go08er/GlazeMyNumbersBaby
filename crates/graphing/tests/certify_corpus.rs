@@ -771,6 +771,35 @@ const REVIEW: &[(&str, &str)] = &[
         "max(-(x+1)^2,-2-sqrt(sin(x)))",
         "XI=none | YI=-1 | VA=none | MIN=fam(pi/2,2*pi,-3)",
     ),
+    // Review 12, R12-M-01: a literal is the decimal typed, never its double.
+    // 1.0000000000000001 is no integer (a power of a base ≥ 0 only), and
+    // 1.0000000000000001 − cos x is never 0 (domain ℝ, y-intercept 2·10¹⁶).
+    (
+        "x^1.0000000000000001",
+        "D=[0,inf) | XI=0 | YI=0 | P=neither | T=none | MIN=(0,0) | MAX=none | INF=none | VA=none | HA=none | R=[0,inf)",
+    ),
+    (
+        "x^2.0000000000000001",
+        "D=[0,inf) | XI=0 | YI=0 | P=neither | T=none | MIN=(0,0) | MAX=none | INF=none | VA=none | HA=none | R=[0,inf)",
+    ),
+    (
+        "2/(1.0000000000000001-cos(x))",
+        "D=R | XI=none | YI=2*10^16 | P=even | T=2*pi | MIN=fam(pi,2*pi,1~) | VA=none | HA=none",
+    ),
+    (
+        "2/(0.99999999999999999-cos(x))",
+        "XI=none | YI=-2*10^17 | P=even | T=2*pi",
+    ),
+    // And 0.1 + 0.9 is exactly 1: x¹, defined everywhere.
+    (
+        "x^(0.1+0.9)",
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
+    ),
+    // Review 12, R12-M-05: 0.1 + 0.2 − 0.3 is exactly 0, so this is x.
+    (
+        "10^17*(0.1+0.2-0.3)+x",
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
+    ),
 ];
 
 // ---------------------------------------------------------------- values

@@ -177,22 +177,29 @@ pub fn contains_x(e: &Expr) -> bool {
 }
 
 /// An exponent written as an integer or a ratio of integers, in lowest
-/// terms with a positive denominator.
-pub fn written_rational(e: &Expr) -> Option<(i64, i64)> {
-    fn int(e: &Expr) -> Option<i64> {
+/// terms with a positive denominator. Each integer is one exactly as typed
+/// (`lits`): `1.0000000000000001` is no integer, though its double is 1.
+pub fn written_rational(e: &Expr, lits: &Lits) -> Option<(i64, i64)> {
+    fn int(e: &Expr, lits: &Lits) -> Option<i64> {
         match e {
-            Expr::Num(v) if *v == v.trunc() && v.abs() < 1e6 => Some(*v as i64),
-            Expr::Neg(a) => int(a).map(|v| -v),
+            Expr::Num(v)
+                if *v == v.trunc()
+                    && v.abs() < 1e6
+                    && lits.exact(*v) == Some(rug::Rational::from(*v as i64)) =>
+            {
+                Some(*v as i64)
+            }
+            Expr::Neg(a) => int(a, lits).map(|v| -v),
             _ => None,
         }
     }
     let (p, q) = match e {
         Expr::Neg(a) => {
-            let (p, q) = written_rational(a)?;
+            let (p, q) = written_rational(a, lits)?;
             return Some((-p, q));
         }
-        Expr::Bin(BinOp::Div, a, b) => (int(a)?, int(b)?),
-        _ => (int(e)?, 1),
+        Expr::Bin(BinOp::Div, a, b) => (int(a, lits)?, int(b, lits)?),
+        _ => (int(e, lits)?, 1),
     };
     if q == 0 {
         return None;
@@ -210,21 +217,26 @@ pub fn written_rational(e: &Expr) -> Option<(i64, i64)> {
 }
 
 /// The tree claims refer to: the parser's, with `a·a` written `a²`.
-pub fn canonical(e: &Expr) -> Expr {
-    match e {
-        Expr::Num(_) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => e.clone(),
-        Expr::Neg(a) => Expr::Neg(Box::new(canonical(a))),
-        Expr::Degrees(a) => Expr::Degrees(Box::new(canonical(a))),
-        Expr::Bin(op, a, b) => {
-            let (a, b) = (canonical(a), canonical(b));
-            if *op == BinOp::Mul && a == b {
-                Expr::Bin(BinOp::Pow, Box::new(a), Box::new(Expr::Num(2.0)))
-            } else {
-                Expr::Bin(*op, Box::new(a), Box::new(b))
+/// (Not when a literal typed as another decimal parsed to 2, as in
+/// `2.0000000000000001`: the written 2 would read as that decimal.)
+pub fn canonical(e: &Expr, lits: &Lits) -> Expr {
+    fn go(e: &Expr, square: bool) -> Expr {
+        match e {
+            Expr::Num(_) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => e.clone(),
+            Expr::Neg(a) => Expr::Neg(Box::new(go(a, square))),
+            Expr::Degrees(a) => Expr::Degrees(Box::new(go(a, square))),
+            Expr::Bin(op, a, b) => {
+                let (a, b) = (go(a, square), go(b, square));
+                if square && *op == BinOp::Mul && a == b {
+                    Expr::Bin(BinOp::Pow, Box::new(a), Box::new(Expr::Num(2.0)))
+                } else {
+                    Expr::Bin(*op, Box::new(a), Box::new(b))
+                }
             }
+            Expr::Call(f, args) => Expr::Call(*f, args.iter().map(|a| go(a, square)).collect()),
         }
-        Expr::Call(f, args) => Expr::Call(*f, args.iter().map(canonical).collect()),
     }
+    go(e, lits.exact(2.0) == Some(rug::Rational::from(2)))
 }
 
 /// The sub-tree at `path` (child indices from the root).
@@ -370,25 +382,25 @@ fn term(cs: &[char], i: &mut usize) -> Option<Expr> {
 
 /// A term of a sum as a monomial: its constant factor (an expression, its
 /// numbers kept as typed) and the power of x.
-fn monomial(e: &Expr, base: &Expr) -> Option<(Expr, u32)> {
+fn monomial(e: &Expr, base: &Expr, lits: &Lits) -> Option<(Expr, u32)> {
     let one = || Expr::Num(1.0);
     Some(match e {
         _ if e == base => (one(), 1),
         _ if !contains_x(e) => (e.clone(), 0),
         Expr::Neg(a) => {
-            let (c, k) = monomial(a, base)?;
+            let (c, k) = monomial(a, base, lits)?;
             (Expr::Neg(Box::new(c)), k)
         }
         Expr::Bin(BinOp::Mul, a, b) => {
-            let ((c, k), (d, j)) = (monomial(a, base)?, monomial(b, base)?);
+            let ((c, k), (d, j)) = (monomial(a, base, lits)?, monomial(b, base, lits)?);
             (Expr::Bin(BinOp::Mul, Box::new(c), Box::new(d)), k + j)
         }
         Expr::Bin(BinOp::Div, a, b) if !contains_x(b) => {
-            let (c, k) = monomial(a, base)?;
+            let (c, k) = monomial(a, base, lits)?;
             (Expr::Bin(BinOp::Div, Box::new(c), b.clone()), k)
         }
         Expr::Bin(BinOp::Pow, a, b) if **a == *base => {
-            let (n, 1) = written_rational(b)? else {
+            let (n, 1) = written_rational(b, lits)? else {
                 return None;
             };
             (one(), u32::try_from(n).ok().filter(|n| *n <= 64)?)
@@ -399,12 +411,12 @@ fn monomial(e: &Expr, base: &Expr) -> Option<(Expr, u32)> {
 
 /// The bases a sum's terms may be monomials in: x, and each base of a
 /// whole power among them ((x − 1000)² + (x − 1000) + 1).
-fn bases(e: &Expr) -> Vec<Expr> {
+fn bases(e: &Expr, lits: &Lits) -> Vec<Expr> {
     let mut out = vec![Expr::X];
     e.visit(&mut |n| {
         if let Expr::Bin(BinOp::Pow, a, b) = n
             && contains_x(a)
-            && written_rational(b).is_some_and(|(_, q)| q == 1)
+            && written_rational(b, lits).is_some_and(|(_, q)| q == 1)
             && !out.contains(a)
         {
             out.push((**a).clone());
@@ -428,17 +440,17 @@ fn terms(e: &Expr, base: &Expr, sign: bool, out: &mut Vec<(bool, Expr)>) {
 /// ((cₙ·x + cₙ₋₁)·x + …)·x + c₀, each cₖ the (signed) sum of the constant
 /// factors of the terms in xᵏ. Only + and · rearranged: the same function
 /// on the same domain. `None` if nothing changes.
-pub fn horner(e: &Expr) -> Option<Expr> {
-    fn go(e: &Expr) -> Expr {
+pub fn horner(e: &Expr, lits: &Lits) -> Option<Expr> {
+    fn go(e: &Expr, lits: &Lits) -> Expr {
         if matches!(e, Expr::Bin(BinOp::Add | BinOp::Sub, ..)) {
-            let (ms, base) = bases(e)
+            let (ms, base) = bases(e, lits)
                 .into_iter()
                 .find_map(|b| {
                     let mut ts = Vec::new();
                     terms(e, &b, true, &mut ts);
                     let ms: Option<Vec<(bool, Expr, u32)>> = ts
                         .iter()
-                        .map(|(s, t)| monomial(t, &b).map(|(c, k)| (*s, c, k)))
+                        .map(|(s, t)| monomial(t, &b, lits).map(|(c, k)| (*s, c, k)))
                         .collect();
                     ms.filter(|m| m.iter().any(|t| t.2 >= 2)).map(|m| (m, b))
                 })
@@ -474,14 +486,19 @@ pub fn horner(e: &Expr) -> Option<Expr> {
             }
         }
         match e {
-            Expr::Neg(a) => Expr::Neg(Box::new(go(a))),
-            Expr::Degrees(a) => Expr::Degrees(Box::new(go(a))),
-            Expr::Bin(op, a, b) => Expr::Bin(*op, Box::new(go(a)), Box::new(go(b))),
-            Expr::Call(f, args) => Expr::Call(*f, args.iter().map(go).collect()),
+            Expr::Neg(a) => Expr::Neg(Box::new(go(a, lits))),
+            Expr::Degrees(a) => Expr::Degrees(Box::new(go(a, lits))),
+            Expr::Bin(op, a, b) => Expr::Bin(*op, Box::new(go(a, lits)), Box::new(go(b, lits))),
+            Expr::Call(f, args) => Expr::Call(*f, args.iter().map(|a| go(a, lits)).collect()),
             _ => e.clone(),
         }
     }
-    let h = go(e);
+    // (The form writes 0s and 1s, which must read as such.)
+    let plain = |v: i64| lits.exact(v as f64) == Some(rug::Rational::from(v));
+    if !(plain(0) && plain(1)) {
+        return None;
+    }
+    let h = go(e, lits);
     (h != *e).then_some(h)
 }
 
@@ -588,12 +605,23 @@ pub fn eval(e: &Expr, x: &S, n: usize, ctx: &Ctx<'_>) -> S {
 
 fn pow(a: &Expr, b: &Expr, x: &S, n: usize, ctx: &Ctx<'_>) -> S {
     let ea = eval(a, x, n, ctx);
-    if let Some((p, q)) = written_rational(b) {
+    if let Some((p, q)) = written_rational(b, ctx.lits) {
         return if q == 1 {
             se::powi(&ea, p)
         } else {
             pow_rat(&ea, p, q)
         };
+    }
+    // A constant exponent whose exact value is an integer (0.1 + 0.9) is
+    // an integer power, however written; any other constant allows a
+    // negative base only for an integer value, which the decimals typed
+    // decide (1.0000000000000001 is none, though its double is 1).
+    if !contains_x(b)
+        && let Some(k) = super::exact::eval(b, None, ctx.lits, ctx.vars)
+        && k.is_integer()
+        && let Some(k) = k.numer().to_i64().filter(|k| k.unsigned_abs() < 1 << 20)
+    {
+        return se::powi(&ea, k);
     }
     let eb = eval(b, x, n, ctx);
     if contains_x(b) {

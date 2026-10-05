@@ -761,7 +761,7 @@ impl Reader<'_> {
             return exp_of(times(self.way(k), ln_of(self.way(base))));
         }
         let w = self.way(base);
-        if let Some((p, q)) = written_rational(k) {
+        if let Some((p, q)) = written_rational(k, &self.fx.lits) {
             return power(w, &rq(p, q), q % 2 != 0);
         }
         // A typed decimal exponent: exact, a positive base only.
@@ -789,7 +789,7 @@ impl Reader<'_> {
         use Func::*;
         if args.len() == 2 {
             return match func {
-                Root if !contains_x(&args[1]) => match written_rational(&args[1]) {
+                Root if !contains_x(&args[1]) => match written_rational(&args[1], &self.fx.lits) {
                     Some((n, 1)) if n != 0 => power(self.way(&args[0]), &rq(1, n), n % 2 != 0),
                     _ => Lost,
                 },

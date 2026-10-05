@@ -36,7 +36,8 @@ calculator modes are unchanged (see 0⁰ below).
 | `(−2)^x` | — | non-real, nothing plotted, even at whole x | **Chosen:** undefined everywhere |
 | `0^0`, so `x^0` at x = 0 | 1 in the calculator modes | not documented for the CE (DOMAIN on the 82/83/85) | **Chosen:** undefined, so `x^0` is 1 with a hole at 0 |
 | `x^3`, `x^(1/3)`, `x^(−2/5)`, `(−8)^(1/3)` (exponent written as an integer or a ratio of integers) | real powers | real powers and odd roots | unchanged: real powers and odd roots (`x^(1/5)` is defined on all of ℝ; `(−8)^(1/3)` = −2) |
-| `x^0.2`, `x^a` with a slider at 0.2, `x^(0.5·2)` (any other constant exponent) | — | not established | **Chosen:** the rule for an exponent that varies with x: `x^0.2` has domain [0, ∞), and a slider set to 0.2 behaves the same |
+| `x^0.2`, `x^a` with a slider at 0.2, `x^1.0000000000000001` (any other constant exponent that is not exactly an integer) | — | not established | **Chosen:** the rule for an exponent that varies with x: `x^0.2` has domain [0, ∞), and a slider set to 0.2 behaves the same |
+| `x^(0.5·2)`, `x^2.0`, `x^(0.1+0.9)` (a constant exponent exactly an integer, written otherwise) | — | not established | **Chosen:** the integer power (`x^(0.1+0.9)` is x, defined everywhere) |
 | `x^0.5`, `x^π` at x < 0 | — | non-real | undefined (unchanged) |
 
 Why: a power whose exponent varies with x is `e^(exponent·ln base)` in real
@@ -51,9 +52,29 @@ different and follows IEEE 1788's `pown`/`rootn`: `x^3` and `x^(1/3)` are
 polynomial and root functions, defined for negative x, and both calculators
 graph them on both sides. Only that written form gets odd roots (the
 compiler's `syntactic_rational`): any other constant exponent, a decimal, a
-slider or an expression, takes the positive-base rule even when its value
-is a fraction with an odd denominator, so `x^0.2` has domain [0, ∞) while
-`x^(1/5)` is defined everywhere.
+slider or an expression, takes the positive-base rule unless its value is
+an integer, even when it is a fraction with an odd denominator, so `x^0.2`
+has domain [0, ∞) while `x^(1/5)` is defined everywhere.
+
+**Literals are the decimals typed.** A number in an equation is the decimal
+it was typed as, not the double nearest it: `1.0000000000000001` is
+1 + 10⁻¹⁶, though a double holds it as 1, and `0.1` is one tenth. So
+whether an exponent (or a root's degree) is an integer is decided by its
+exact value, never by its double: `x^1.0000000000000001` and
+`x^2.0000000000000001` take the positive-base rule (domain [0, ∞), a
+minimum at 0), while `x^(0.1+0.9)` and `x^2.0` are integer powers; only the
+integers of the written form `p/q` must be typed exactly so to give odd
+roots. Arithmetic on literals and sliders alone (+, −, ×, ÷, whole
+powers, |·| and the counts n!, n!!, nCr, nPr of whole numbers; a slider is
+the double it is set to) is done exactly and rounded once
+(`10^17·(0.1 + 0.2 − 0.3)` is 0, `0.1·3` is the double nearest 0.3, and
+`1/(0.1 + 0.2 − 0.3)` divides by zero), for the curve drawn, its trace and
+its analysis alike; anything else (π, e, sin, …) is computed in floating
+point as before. A literal the doubles can't tell from its
+neighbour (1 + 10⁻¹⁶ against 1) is enclosed by the doubles either side of
+it, so the analysis may leave a row unknown that only that difference
+decides (`2/(1.0000000000000001 − cos x)` is defined everywhere, but its
+domain row says it can't tell).
 
 0⁰: the limit of x^y at (0, 0) doesn't exist, so a function graphed through
 it has no value there (x⁰ approaches 1 but 0^x approaches 0). The TI reports a

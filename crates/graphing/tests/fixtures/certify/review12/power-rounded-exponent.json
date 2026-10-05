@@ -1,0 +1,466 @@
+{
+  "source": "y=x^1.0000000000000001",
+  "formula": "Pow(x,1)",
+  "evaluated": "f = x",
+  "unit": "radians",
+  "domain": {
+    "Certified": {
+      "value": {
+        "pieces": [
+          {
+            "lo": "NegInf",
+            "hi": "PosInf"
+          }
+        ],
+        "excluded": []
+      },
+      "cert": {
+        "covers": "Line",
+        "claims": []
+      }
+    }
+  },
+  "x_intercepts": {
+    "Certified": {
+      "value": [
+        {
+          "At": {
+            "lo": 0.0,
+            "hi": 0.0
+          }
+        }
+      ],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "TailBeyond": {
+              "side": "Left",
+              "from": -1.0,
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "above": false
+            }
+          },
+          {
+            "ExactAt": {
+              "x": {
+                "a": -1.0,
+                "b": 0.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "at": 0.0
+            }
+          },
+          {
+            "Value": {
+              "x": {
+                "a": 0.0,
+                "b": 0.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          },
+          {
+            "ExactAt": {
+              "x": {
+                "a": 0.0,
+                "b": 1.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "at": 0.0
+            }
+          },
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": 1.0,
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "above": true
+            }
+          }
+        ]
+      }
+    }
+  },
+  "y_intercept": {
+    "Certified": {
+      "value": {
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "cert": {
+        "covers": "Points",
+        "claims": [
+          {
+            "Value": {
+              "x": {
+                "a": 0.0,
+                "b": 0.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          }
+        ]
+      }
+    }
+  },
+  "parity": {
+    "Certified": {
+      "value": "Odd",
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Simplifier": {
+              "fact": "f is odd (simplifier): f(−x) = −f(x), on a domain symmetric about 0"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "period": {
+    "Certified": {
+      "value": null,
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": "-inf",
+              "of": {
+                "F": "F1"
+              },
+              "c": 0.0,
+              "above": true
+            }
+          }
+        ]
+      }
+    }
+  },
+  "extrema": {
+    "Certified": {
+      "value": [],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": "-inf",
+              "of": {
+                "F": "F1"
+              },
+              "c": 0.0,
+              "above": true
+            }
+          }
+        ]
+      }
+    }
+  },
+  "inflections": {
+    "Certified": {
+      "value": [],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Value": {
+              "x": {
+                "a": "-inf",
+                "b": "inf"
+              },
+              "of": {
+                "F": "F2"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          }
+        ]
+      }
+    }
+  },
+  "monotonicity": {
+    "Certified": {
+      "value": [
+        {
+          "on": {
+            "lo": "NegInf",
+            "hi": "PosInf"
+          },
+          "dir": "Increasing"
+        }
+      ],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": "-inf",
+              "of": {
+                "F": "F1"
+              },
+              "c": 0.0,
+              "above": true
+            }
+          }
+        ]
+      }
+    }
+  },
+  "range": {
+    "Certified": {
+      "value": [
+        {
+          "lo": "NegInf",
+          "hi": "PosInf"
+        }
+      ],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": "-inf",
+              "of": {
+                "F": "F1"
+              },
+              "c": 0.0,
+              "above": true
+            }
+          },
+          {
+            "TailBeyond": {
+              "side": "Left",
+              "from": -16.0,
+              "of": {
+                "F": "F1"
+              },
+              "c": 0.5,
+              "above": true
+            }
+          },
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": 16.0,
+              "of": {
+                "F": "F1"
+              },
+              "c": 0.5,
+              "above": true
+            }
+          },
+          {
+            "TailBeyond": {
+              "side": "Left",
+              "from": -1.0,
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "above": false
+            }
+          },
+          {
+            "ExactAt": {
+              "x": {
+                "a": -1.0,
+                "b": 0.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "at": 0.0
+            }
+          },
+          {
+            "Value": {
+              "x": {
+                "a": 0.0,
+                "b": 0.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          },
+          {
+            "ExactAt": {
+              "x": {
+                "a": 0.0,
+                "b": 1.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "at": 0.0
+            }
+          },
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": 1.0,
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "above": true
+            }
+          }
+        ]
+      }
+    }
+  },
+  "range_ends": [
+    [
+      [
+        "Other"
+      ],
+      [
+        "Other"
+      ]
+    ]
+  ],
+  "vertical": {
+    "Certified": {
+      "value": [],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "TailBeyond": {
+              "side": "Left",
+              "from": -1.0,
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "above": false
+            }
+          },
+          {
+            "ExactAt": {
+              "x": {
+                "a": -1.0,
+                "b": 0.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "at": 0.0
+            }
+          },
+          {
+            "Value": {
+              "x": {
+                "a": 0.0,
+                "b": 0.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          },
+          {
+            "ExactAt": {
+              "x": {
+                "a": 0.0,
+                "b": 1.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "at": 0.0
+            }
+          },
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": 1.0,
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "above": true
+            }
+          }
+        ]
+      }
+    }
+  },
+  "horizontal": {
+    "Certified": {
+      "value": [],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Simplifier": {
+              "fact": "f = N/D exactly: the line 1·x + 0 on its domain: no asymptote"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "oblique": {
+    "Certified": {
+      "value": [],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Simplifier": {
+              "fact": "f = N/D exactly: the line 1·x + 0 on its domain: no asymptote"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "binding": {
+    "certifier": "graphing 0.2.0",
+    "rules": "32045d7ad9dab698",
+    "power": "ti-real-1",
+    "sliders": {},
+    "decimal_comma": false,
+    "budget": 200000
+  },
+  "evals": 46,
+  "stopped": null
+}
