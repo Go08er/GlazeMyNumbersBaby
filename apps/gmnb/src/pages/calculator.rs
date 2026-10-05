@@ -120,6 +120,14 @@ impl CalculatorPage {
             .build();
         sheet_holder.append(&panel.root);
 
+        {
+            // An open sheet covers the calculator (it is modal by default).
+            let weak = sheet.downgrade();
+            ctx.layers
+                .scrim(&column, &sheet, &["open", "modal"], move || {
+                    weak.upgrade().is_some_and(|s| s.is_open() && s.is_modal())
+                });
+        }
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         sheet.set_hexpand(true);
         row.append(&sheet);

@@ -161,6 +161,7 @@ impl Window {
             toasts: toasts.clone(),
             store: store.clone(),
             compact: Default::default(),
+            layers: crate::inert::Layers::new(&win),
         });
 
         // Header.
@@ -239,6 +240,19 @@ impl Window {
             close_nav.connect_clicked(move |_| split.set_show_sidebar(false));
         }
 
+        {
+            // The sidebar overlays the content while collapsed.
+            let weak = split.downgrade();
+            ctx.layers.scrim(
+                &content,
+                &split,
+                &["show-sidebar", "collapsed"],
+                move || {
+                    weak.upgrade()
+                        .is_some_and(|s| s.is_collapsed() && s.shows_sidebar())
+                },
+            );
+        }
         toasts.set_child(Some(&split));
         {
             // The window gets its content in `present`.
@@ -466,7 +480,13 @@ impl Window {
                     return glib::Propagation::Proceed;
                 }
             }
-            if w.handle_key(&kp) {
+            // A page the sidebar, a sheet or a dialog covers is insensitive
+            // (crate::inert): no key reaches it then, only the window's
+            // shortcuts and Escape closing the sidebar.
+            let covered = !w.current_page().widget().is_sensitive();
+            let window_key = input::window_shortcut(&kp).is_some()
+                || (kp.is(Named::Escape) && w.split.shows_sidebar());
+            if (!covered || window_key) && w.handle_key(&kp) {
                 glib::Propagation::Stop
             } else {
                 glib::Propagation::Proceed

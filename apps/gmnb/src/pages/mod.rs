@@ -28,6 +28,9 @@ pub struct Ctx {
     pub store: Rc<Store>,
     /// Set by the window: enter/leave the compact "keep on top" chrome.
     pub compact: std::cell::RefCell<Option<CompactHook>>,
+    /// What covers what in the window, for assistive technology; a page
+    /// registers the layers it opens over itself.
+    pub layers: Rc<crate::inert::Layers>,
 }
 
 impl Ctx {
