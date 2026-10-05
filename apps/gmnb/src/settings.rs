@@ -1,6 +1,7 @@
 //! GMNB's persisted preferences + light session state (see
 //! `appcore::settings` for how they are stored).
 
+use appcore::graph::NumberPrecision;
 use appcore::settings::{HasPages, PageStates};
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +22,9 @@ pub struct Settings {
     /// Render with GTK's default GPU renderer (Vulkan, or GL where Vulkan
     /// isn't available); off renders in software. Read once at startup.
     pub vulkan: bool,
+    /// Graphing: significant digits each typed number keeps ("Number
+    /// precision"); older files load the default, 14.
+    pub literal_digits: NumberPrecision,
     pub mode: String,
     pub width: i32,
     pub height: i32,
@@ -38,6 +42,7 @@ impl Default for Settings {
             animated_background: true,
             background_opacity: 1.0,
             vulkan: true,
+            literal_digits: NumberPrecision::DEFAULT,
             mode: "standard".into(),
             width: 380,
             height: 640,
@@ -113,6 +118,7 @@ mod tests {
         assert!(s.vulkan);
         assert_eq!(s.background_opacity, 1.0);
         assert_eq!(s.theme, "dark");
+        assert_eq!(s.literal_digits.digits(), Some(14));
     }
 
     /// `"vulkan": "false"` (a string) used to fail the whole file, and the

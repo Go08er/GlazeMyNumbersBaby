@@ -123,6 +123,9 @@ pub struct Node {
     pub text_selection: Option<(usize, usize)>,
     /// Sliders: [value, min, max, step].
     pub numeric: Option<[f64; 4]>,
+    /// Text that explains the node, such as why it can't be used, and the
+    /// node that shows that text, if one does.
+    pub description: Option<(String, Option<Id>)>,
 }
 
 #[derive(Default)]
@@ -316,6 +319,7 @@ impl<'a, 'p> Frame<'a, 'p> {
             scrollable: false,
             text_selection: None,
             numeric: None,
+            description: None,
         });
         nodes.last_mut()
     }
