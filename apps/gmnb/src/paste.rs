@@ -379,15 +379,63 @@ fn drop_into_text(text: &gtk::Text, mut dropped: String, x: f64) {
 
 /// The character position nearest to `x` (in `text`'s coordinates), as
 /// GTK finds where a middle click pastes.
+///
+/// GTK's own lookup isn't public (nor its layout), so this asks GTK where
+/// the cursor would be, each answer costing a walk of the text. Text
+/// written one way has the cursor move one way along it, so a bisection
+/// asks a logarithmic number of times; text with right-to-left characters
+/// can mix directions, and there every position is asked (quadratic in
+/// the field's length, as before).
 fn position_at(text: &gtk::Text, x: f64) -> i32 {
-    let len = text.text().chars().count();
-    let distance = |position: usize| {
-        let (strong, _) = text.compute_cursor_extents(position);
-        (f64::from(strong.x()) - x).abs()
+    let content = text.text();
+    let len = content.chars().count();
+    let at = |position: usize| f64::from(text.compute_cursor_extents(position).0.x());
+    let position = if content.chars().any(right_to_left) {
+        let distance = |position: usize| (at(position) - x).abs();
+        (0..=len)
+            .min_by(|&a, &b| distance(a).total_cmp(&distance(b)))
+            .unwrap_or(0)
+    } else {
+        nearest_along(len, at, x)
     };
-    (0..=len)
-        .min_by(|&a, &b| distance(a).total_cmp(&distance(b)))
-        .map_or(0, |position| position as i32)
+    i32::try_from(position).unwrap_or(i32::MAX)
+}
+
+/// Whether `c` is written right to left (or forces that), so that text
+/// holding it may mix directions.
+fn right_to_left(c: char) -> bool {
+    matches!(c,
+        '\u{0590}'..='\u{08FF}' // Hebrew, Arabic, Syriac, Thaana, N'Ko...
+        | '\u{200F}' | '\u{202B}' | '\u{202E}' | '\u{2067}' // RLM, RLE, RLO, RLI
+        | '\u{FB1D}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}' // presentation forms
+        | '\u{10800}'..='\u{10FFF}' | '\u{1E800}'..='\u{1EFFF}')
+}
+
+/// Of the positions `0..=len`, whose x (`at`) runs one way, the first one
+/// nearest to `x`, found by bisection.
+fn nearest_along(len: usize, at: impl Fn(usize) -> f64, x: f64) -> usize {
+    let rising = at(len) >= at(0);
+    // The first position at or past x.
+    let (mut lo, mut hi) = (0, len);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let past = if rising { at(mid) >= x } else { at(mid) <= x };
+        if past {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    let mut best = lo;
+    if lo > 0 && (at(lo - 1) - x).abs() <= (at(lo) - x).abs() {
+        best = lo - 1;
+    }
+    // Several positions at one x (inside a cluster): the first of them.
+    let here = at(best);
+    while best > 0 && at(best - 1) == here {
+        best -= 1;
+    }
+    best
 }
 
 /// GtkText's paste (`paste_received`), with the text read by [`read_text`]:
@@ -505,6 +553,37 @@ fn paste_into_text_view(view: &gtk::TextView, clipboard: gdk::Clipboard, at: Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Bisection finds the first nearest position, as asking every
+    /// position would, in a logarithmic number of questions.
+    #[test]
+    fn nearest_position_by_bisection() {
+        let check = |xs: &[f64]| {
+            let len = xs.len() - 1;
+            for i in -10..=10 * xs.len() as i32 {
+                let x = f64::from(i) / 3.0 - 1.0;
+                let every = (0..=len)
+                    .min_by(|&a, &b| (xs[a] - x).abs().total_cmp(&(xs[b] - x).abs()))
+                    .unwrap();
+                assert_eq!(nearest_along(len, |p| xs[p], x), every, "{xs:?} at {x}");
+            }
+        };
+        check(&[0.0]);
+        check(&[0.0, 7.0]);
+        // Uneven advances, and a cluster (two positions at one x).
+        check(&[0.0, 5.0, 7.0, 7.0, 15.0, 16.0, 30.0]);
+        // Right-aligned right-to-left text: x falls along it.
+        check(&[30.0, 22.0, 21.0, 9.0, 9.0, 0.0]);
+        // A 64 KiB field: about 2 log2(n) questions, not n.
+        let asked = std::cell::Cell::new(0);
+        let at = |p: usize| {
+            asked.set(asked.get() + 1);
+            p as f64 * 7.5
+        };
+        assert_eq!(nearest_along(65_536, at, 1234.0 * 7.5 + 3.0), 1234);
+        assert!(asked.get() < 40, "{} questions", asked.get());
+        assert!(right_to_left('ש') && right_to_left('ب') && !right_to_left('x'));
+    }
 
     #[test]
     fn reads_are_cut_at_a_character_boundary() {
