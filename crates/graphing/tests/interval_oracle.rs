@@ -14,7 +14,7 @@
 #![cfg(feature = "mpfr-oracle")]
 
 use graphing::Equation;
-use graphing::ast::{BinOp, Constant, Expr, Func};
+use graphing::ast::{BinOp, Constant, Expr, Func, Lit};
 use graphing::compile::CompileOptions;
 use graphing::functions::TrigUnit;
 use graphing::interval::{Ctx, Dec, DecInterval, Interval, Literals, derivs_valid, elem, taylor};
@@ -1295,52 +1295,24 @@ fn constants_enclose_mpfr() {
 
 // ------------------------------------------------- the Taylor evaluator
 
-/// Decimal literal texts by the double they parse to (plain test inputs).
-fn literal_texts(src: &str) -> HashMap<u64, String> {
-    let mut out = HashMap::new();
-    let chars: Vec<char> = src.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let glued = i > 0 && (chars[i - 1].is_alphabetic() || chars[i - 1] == '_');
-        if chars[i].is_ascii_digit() && !glued {
-            let s = i;
-            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
-                i += 1;
-            }
-            let txt: String = chars[s..i].iter().collect();
-            if let Ok(v) = txt.parse::<f64>() {
-                out.insert(v.to_bits(), txt);
-            }
-        } else {
-            i += 1;
-        }
-    }
-    out
-}
-
 /// An exponent written as a ratio of integers, each an integer as typed
-/// (`1.0000000000000001` is none, though its double is 1).
-fn syntactic_rational(e: &Expr, lits: &HashMap<u64, String>) -> Option<(i32, i32)> {
-    fn int(e: &Expr, lits: &HashMap<u64, String>) -> Option<i64> {
+/// (`1.0000000000000001` is none, though its double is 1: each number of
+/// the tree carries the decimal typed, `Lit`).
+fn syntactic_rational(e: &Expr) -> Option<(i32, i32)> {
+    fn int(e: &Expr) -> Option<i64> {
         match e {
-            Expr::Num(v) if *v == v.trunc() && v.abs() < 1e6 => {
-                let typed = lits.get(&v.to_bits()).is_none_or(|t| {
-                    let (i, f) = t.split_once('.').unwrap_or((t, ""));
-                    f.chars().all(|c| c == '0') && i.parse::<f64>().ok() == Some(*v)
-                });
-                typed.then_some(*v as i64)
-            }
-            Expr::Neg(a) => int(a, lits).map(|v| -v),
+            Expr::Num(v, Lit::Exact) if *v == v.trunc() && v.abs() < 1e6 => Some(*v as i64),
+            Expr::Neg(a) => int(a).map(|v| -v),
             _ => None,
         }
     }
     let (p, q) = match e {
         Expr::Neg(a) => {
-            let (p, q) = syntactic_rational(a, lits)?;
+            let (p, q) = syntactic_rational(a)?;
             return Some((-p, q));
         }
-        Expr::Bin(BinOp::Div, a, b) => (int(a, lits)?, int(b, lits)?),
-        _ => (int(e, lits)?, 1),
+        Expr::Bin(BinOp::Div, a, b) => (int(a)?, int(b)?),
+        _ => (int(e)?, 1),
     };
     if q == 0 {
         return None;
@@ -1359,16 +1331,11 @@ fn syntactic_rational(e: &Expr, lits: &HashMap<u64, String>) -> Option<(i32, i32
 }
 
 /// The app's function at an exact point, in MPFR.
-fn mp_eval(
-    e: &Expr,
-    x: &Float,
-    unit: TrigUnit,
-    lits: &HashMap<u64, String>,
-    prec: u32,
-) -> Option<Float> {
-    let ev = |a: &Expr| mp_eval(a, x, unit, lits, prec);
+fn mp_eval(e: &Expr, x: &Float, unit: TrigUnit, prec: u32) -> Option<Float> {
+    let ev = |a: &Expr| mp_eval(a, x, unit, prec);
     Some(match e {
-        Expr::Num(v) => match lits.get(&v.to_bits()) {
+        // The decimal typed, as the tree records it for each number.
+        Expr::Num(v, lit) => match lit.digits() {
             Some(t) => Float::with_val(prec, Float::parse(t).ok()?),
             None => Float::with_val(prec, *v),
         },
@@ -1380,7 +1347,7 @@ fn mp_eval(
         Expr::Degrees(a) => ev(a)?,
         Expr::Bin(BinOp::Pow, a, b) => {
             let u = ev(a)?;
-            if let Some((p, q)) = syntactic_rational(b, lits) {
+            if let Some((p, q)) = syntactic_rational(b) {
                 return if q == 1 {
                     mp_powi(&u, p)
                 } else {
@@ -1519,39 +1486,28 @@ fn taylor_cases() -> Vec<(&'static str, TrigUnit)> {
 
 /// f at ξ, and its first three derivatives by central differences in MPFR
 /// at 512 bits (errors far below a double's ulp).
-fn mp_derivs(
-    e: &Expr,
-    xi: &Float,
-    unit: TrigUnit,
-    lits: &HashMap<u64, String>,
-) -> Option<[Float; 4]> {
+fn mp_derivs(e: &Expr, xi: &Float, unit: TrigUnit) -> Option<[Float; 4]> {
     let pr = 1024;
     PREC.set(pr);
-    let r = mp_derivs_at(e, xi, unit, lits, pr);
+    let r = mp_derivs_at(e, xi, unit, pr);
     PREC.set(P);
     r
 }
 
-fn mp_derivs_at(
-    e: &Expr,
-    xi: &Float,
-    unit: TrigUnit,
-    lits: &HashMap<u64, String>,
-    pr: u32,
-) -> Option<[Float; 4]> {
+fn mp_derivs_at(e: &Expr, xi: &Float, unit: TrigUnit, pr: u32) -> Option<[Float; 4]> {
     // Every evaluation at the full precision (an MPFR function keeps its
     // argument's).
     let xi = &Float::with_val(pr, xi);
     let f = |dx: f64, h: &Float| -> Option<Float> {
         let at = Float::with_val(pr, xi + Float::with_val(pr, h * dx));
-        mp_eval(e, &at, unit, lits, pr)
+        mp_eval(e, &at, unit, pr)
     };
     // Absolute steps (the features here are far wider), at a precision
     // where x + h is exact for any double x.
     let h1 = Float::with_val(pr, 2f64.powi(-120));
     let h2 = Float::with_val(pr, 2f64.powi(-100));
     let h3 = Float::with_val(pr, 2f64.powi(-90));
-    let f0 = mp_eval(e, xi, unit, lits, pr)?;
+    let f0 = mp_eval(e, xi, unit, pr)?;
     let d1 = Float::with_val(pr, (f(1.0, &h1)? - f(-1.0, &h1)?) / (2u32 * h1.clone()));
     let d2 = Float::with_val(
         pr,
@@ -1595,7 +1551,6 @@ fn run_taylor(n_boxes: usize, seed: u64) -> Tally {
         let eq = Equation::parse(&text).unwrap_or_else(|e| panic!("{src}: {e:?}"));
         let (_, ast) = eq.explicit().expect("explicit");
         let lits = Literals::of(&text, ParseOptions::default()).unwrap();
-        let mp_lits = literal_texts(&text);
         let opts = CompileOptions {
             trig_unit: unit,
             ..CompileOptions::default()
@@ -1631,7 +1586,7 @@ fn run_taylor(n_boxes: usize, seed: u64) -> Tally {
             let ok_d = derivs_valid(&s, 3);
             for xi in samples(b, &mut rng, &[]) {
                 t.samples += 1;
-                match mp_eval(ast, &xi, unit, &mp_lits, P) {
+                match mp_eval(ast, &xi, unit, P) {
                     Some(v) => {
                         if !inside(&v, s[0].iv) {
                             t.fail(format!(
@@ -1657,7 +1612,7 @@ fn run_taylor(n_boxes: usize, seed: u64) -> Tally {
                         }
                     }
                 }
-                if ok_d && let Some(d) = mp_derivs(ast, &xi, unit, &mp_lits) {
+                if ok_d && let Some(d) = mp_derivs(ast, &xi, unit) {
                     for k in 1..=3 {
                         if !inside_fd(&d[k], s[k].iv, &d[0]) {
                             t.fail(format!(

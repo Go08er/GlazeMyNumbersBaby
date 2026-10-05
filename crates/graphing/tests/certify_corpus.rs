@@ -17,7 +17,7 @@ use std::time::Instant;
 use graphing::analysis::{analyze_str, flags};
 use graphing::certify::{
     Analysis, Bound, DEFAULT_BUDGET, Dir, DomainValue, Enc, ExtKind, Monotone, Parity, Piece,
-    Region, Row, Spot, Tail, certify_text,
+    Region, Row, Spot, Tail, certify_text, certify_text_with,
 };
 use graphing::compile::{CompileOptions, compile_str};
 use graphing::functions::TrigUnit;
@@ -264,6 +264,12 @@ const TRUTH: &[(&str, &str)] = &[
 /// (Γ, through x!): checked against their truth here, but not in the
 /// replay's corpus, which reads `REVIEW` and wants every claim proven.
 const UNMODELLED: &[(&str, &str)] = &[
+    // Review 13, R13-M-01: a slider at 1 is 1 exactly, not the typed
+    // 1.0000000000000001 beside it: −10⁻¹⁶·x.
+    (
+        "a*x-1.0000000000000001*x",
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
+    ),
     // Pre-review A, F3: x!/x! is 1 where Γ(x + 1) is defined.
     (
         "x!/x!",
@@ -298,31 +304,6 @@ const UNMODELLED: &[(&str, &str)] = &[
     (
         "nCr(200,100)/10^58",
         "D=R | XI=none | YI=9.054851465610328~ | P=even | MIN=none | MAX=none | INF=none | VA=none",
-    ),
-    // Review 13, R13-M-04: a degree typed as an odd integer is odd, though
-    // the doubles either side of 9007199254740993 are even (the replay
-    // reads its degree as a double: not replayed). −8^(1/n) is just below
-    // −1, defined.
-    (
-        "root(-8,9007199254740993)",
-        "XI=none | YI=-1.0000000000000002~ | P=even | VA=none",
-    ),
-    (
-        "root(x,9007199254740993)",
-        "D=R | XI=0 | YI=0 | P=odd | MIN=none | MAX=none | VA=none | HA=none | R=R",
-    ),
-    (
-        "root(x,-9007199254740993)",
-        "D=(-inf,0)U(0,inf) | XI=none | YI=none | P=odd | MIN=none | MAX=none | VA=0",
-    ),
-    // Even, or no integer, as typed: x ≥ 0.
-    (
-        "root(x,18014398509481986)",
-        "D=[0,inf) | XI=0 | YI=0 | P=neither | MIN=(0,0) | MAX=none | VA=none | R=[0,inf)",
-    ),
-    (
-        "root(x,3.0000000000000001)",
-        "D=[0,inf) | XI=0 | YI=0 | P=neither | MIN=(0,0) | MAX=none | VA=none | R=[0,inf)",
     ),
 ];
 
@@ -848,6 +829,20 @@ const REVIEW: &[(&str, &str)] = &[
         "10^17*(0.1+0.2-0.3)+x",
         "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
     ),
+    // Review 13, R13-M-01: two decimals that share a double are two
+    // numbers (the digit limit off): x + 1, and 10⁻¹⁶·x.
+    (
+        "10^16*(1.0000000000000001-1)+x",
+        "D=R | XI=-1 | YI=1 | P=neither | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
+    ),
+    (
+        "1.0000000000000001*x-1*x",
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
+    ),
+    (
+        "10^16*(1.0000000000000001-0.99999999999999999)+x",
+        "D=R | XI=-1.1 | YI=1.1 | P=neither | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
+    ),
     // Review 13, R13-M-02: nowhere defined (the root's argument is
     // −10⁻³⁰), though the exponent's and the degree's enclosures are whole
     // numbers: the integer fast paths kept only the base's decoration, and
@@ -859,6 +854,78 @@ const REVIEW: &[(&str, &str)] = &[
     (
         "root(x,1+floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30))))",
         "XI=none | YI=none | MIN=none | MAX=none | INF=none",
+    ),
+    // Review 13, R13-M-04: a degree typed as an odd integer is odd, though
+    // the doubles either side of 9007199254740993 are even. −8^(1/n) is
+    // just below −1, defined.
+    (
+        "root(-8,9007199254740993)",
+        "XI=none | YI=-1.0000000000000002~ | P=even | VA=none",
+    ),
+    (
+        "root(x,9007199254740993)",
+        "D=R | XI=0 | YI=0 | P=odd | MIN=none | MAX=none | VA=none | HA=none | R=R",
+    ),
+    (
+        "root(x,-9007199254740993)",
+        "D=(-inf,0)U(0,inf) | XI=none | YI=none | P=odd | MIN=none | MAX=none | VA=0",
+    ),
+    // Even, or no integer, as typed: x ≥ 0.
+    (
+        "root(x,18014398509481986)",
+        "D=[0,inf) | XI=0 | YI=0 | P=neither | MIN=(0,0) | MAX=none | VA=none | R=[0,inf)",
+    ),
+    (
+        "root(x,3.0000000000000001)",
+        "D=[0,inf) | XI=0 | YI=0 | P=neither | MIN=(0,0) | MAX=none | VA=none | R=[0,inf)",
+    ),
+];
+
+/// Review 13: functions under a digit limit on typed numbers
+/// (`ParseOptions::literal_digits`): each decimal rounded to so many
+/// significant digits on entry is that rounded decimal. To 14 digits (the
+/// TI-84 Plus CE's, the apps' default) and 15, `1.0000000000000001` is 1;
+/// to 17 it is as typed.
+const DIGITS: &[(&str, u8, &str)] = &[
+    (
+        "10^16*(1.0000000000000001-1)+x",
+        14,
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
+    ),
+    (
+        "1.0000000000000001*x-1*x",
+        14,
+        "D=R | XI=all | YI=0 | P=both | T=none | INF=none | VA=none | R={0}",
+    ),
+    (
+        "1.0000000000000001*x-1*x",
+        15,
+        "D=R | XI=all | YI=0 | P=both | T=none | INF=none | VA=none | R={0}",
+    ),
+    (
+        "x^1.0000000000000001",
+        14,
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
+    ),
+    (
+        "x^1.0000000000000001",
+        17,
+        "D=[0,inf) | XI=0 | YI=0 | P=neither | T=none | MIN=(0,0) | MAX=none | INF=none | VA=none | HA=none | R=[0,inf)",
+    ),
+    (
+        "1.0000000000000001*x-1*x",
+        17,
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
+    ),
+    (
+        "10^17*(0.1+0.2-0.3)+x",
+        14,
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
+    ),
+    (
+        "0.123456789012345678*x^2-1",
+        14,
+        "D=R | YI=-1 | P=even | T=none | MAX=none | INF=none | VA=none | HA=none | R=[-1,inf)",
     ),
 ];
 
@@ -1594,9 +1661,20 @@ struct Run {
     evals: u64,
 }
 
-fn run(set: &'static str, label: String, src: &str, t: &Truth, engine: [char; 11]) -> Run {
+fn run(
+    set: &'static str,
+    label: String,
+    src: &str,
+    digits: Option<u8>,
+    t: &Truth,
+    engine: [char; 11],
+) -> Run {
     let start = Instant::now();
-    let a = certify_text(src, CompileOptions::default(), DEFAULT_BUDGET, None);
+    let parse = graphing::lexer::ParseOptions {
+        literal_digits: digits,
+        ..Default::default()
+    };
+    let a = certify_text_with(src, parse, CompileOptions::default(), DEFAULT_BUDGET, None);
     let ms = start.elapsed().as_secs_f64() * 1e3;
     let (checks, evals) = match a {
         Ok(a) => {
@@ -1645,10 +1723,35 @@ fn no_row_is_certified_wrong() {
             "adversarial"
         };
         let grades = engine_grades(id, variant).unwrap_or(['?'; 11]);
-        runs.push(run(set, format!("{id} {src}"), src, &truth(t.1), grades));
+        runs.push(run(
+            set,
+            format!("{id} {src}"),
+            src,
+            None,
+            &truth(t.1),
+            grades,
+        ));
     }
     for (src, t) in REVIEW.iter().chain(UNMODELLED) {
-        runs.push(run("review", src.to_string(), src, &truth(t), engine(src)));
+        runs.push(run(
+            "review",
+            src.to_string(),
+            src,
+            None,
+            &truth(t),
+            engine(src),
+        ));
+    }
+    for (src, digits, t) in DIGITS {
+        let label = format!("{src} ({digits} digits)");
+        runs.push(run(
+            "review",
+            label,
+            src,
+            Some(*digits),
+            &truth(t),
+            ['?'; 11],
+        ));
     }
 
     // Per function.

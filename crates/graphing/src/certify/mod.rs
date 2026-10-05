@@ -22,7 +22,7 @@ pub mod rows;
 pub mod side;
 
 pub use cert::*;
-pub use fun::{Fun, Stop, canonical, canonical_with};
+pub use fun::{Fun, Stop, canonical};
 
 use std::sync::atomic::AtomicBool;
 
@@ -171,12 +171,24 @@ pub fn certify_text(
     budget: u64,
     cancel: Option<&AtomicBool>,
 ) -> Result<Analysis, String> {
+    certify_text_with(text, ParseOptions::default(), opts, budget, cancel)
+}
+
+/// [`certify_text`] with the text read under `parse` (a decimal comma, a
+/// digit limit on typed numbers: both recorded in the binding).
+pub fn certify_text_with(
+    text: &str,
+    parse: ParseOptions,
+    opts: CompileOptions<'_>,
+    budget: u64,
+    cancel: Option<&AtomicBool>,
+) -> Result<Analysis, String> {
     let text = if text.contains('=') {
         text.to_string()
     } else {
         format!("y={text}")
     };
-    let eq = Equation::parse(&text).map_err(|e| format!("{e:?}"))?;
+    let eq = Equation::parse_with(&text, parse).map_err(|e| format!("{e:?}"))?;
     certify_equation(&eq, opts, budget, cancel)
 }
 
@@ -340,8 +352,10 @@ fn kinked(e: &crate::ast::Expr) -> bool {
 }
 
 /// The simplifier's form of f to enclose values with, if it changed f and
-/// every constant in it is enclosed soundly by [`Literals`]: an integer the
-/// simplifier computed from inexact numbers would be read back as exact.
+/// every constant in it is known exactly: the certificate names this tree
+/// (`evaluated`), and a checker reads each number in it as the decimal
+/// written. An opaque constant (a number not known exactly) could be
+/// anything near its double, and none is in f's own tree.
 fn rewrite(f: &Fun<'_>) -> Option<crate::ast::Expr> {
     use crate::simplify::lang::Math;
     let settings = f.settings()?;
@@ -349,17 +363,8 @@ fn rewrite(f: &Fun<'_>) -> Option<crate::ast::Expr> {
     if !s.changed {
         return None;
     }
-    let mut typed = Vec::new();
-    f.expr.visit(&mut |n| {
-        if let crate::ast::Expr::Num(v) = n {
-            typed.push(v.abs());
-        }
-    });
     let unsound = s.term.as_ref().iter().any(|n| match n {
-        Math::Real(r) => {
-            let v = r.value().abs();
-            v == v.trunc() && v <= 9007199254740992.0 && !typed.contains(&v)
-        }
+        Math::Real(_) => true,
         // An exact rational whose numerator or denominator no double
         // holds: written back as rounded numbers (1 + 10⁻³⁰ would read 1).
         Math::Num(q) => q.numer().unsigned_abs() > 1 << 53 || q.denom() > 1 << 53,

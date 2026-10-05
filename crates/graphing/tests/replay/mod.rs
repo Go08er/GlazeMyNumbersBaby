@@ -605,16 +605,34 @@ pub fn function(a: &Value) -> Result<Fx, String> {
         .and_then(|b| b.get("decimal_comma"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    // Each number typed rounded to so many significant digits on entry,
+    // if the binding says so (absent: as typed).
+    let digits = match a.get("binding").and_then(|b| b.get("literal_digits")) {
+        None | Some(Value::Null) => None,
+        Some(d) => Some(
+            d.as_u64()
+                .and_then(|d| u8::try_from(d).ok())
+                .filter(|d| (1..=40).contains(d))
+                .ok_or_else(|| format!("binding: literal_digits {d} is no digit count"))?,
+        ),
+    };
     let po = graphing::lexer::ParseOptions {
         decimal_comma: comma,
+        literal_digits: digits,
     };
     let eq = graphing::Equation::parse_with(&text, po).map_err(|e| format!("parse: {e:?}"))?;
     let Some((graphing::equation::Axis::X, expr)) = eq.explicit() else {
         return Err("the source is not y = f(x)".into());
     };
-    let lits = Lits::of_with(&text, comma);
-    let f = eval::canonical(expr, &lits);
-    if f.formula() != formula {
+    let lits = Lits::of_with(&text, comma, digits);
+    // Each number of the tree is the occurrence the parser read, with its
+    // own value; checked against the replay's own reading of the text.
+    lits.check(expr)?;
+    let f = eval::canonical(expr);
+    // The formula names the same tree: its shape and each number's double
+    // (its exact value is the source's; a certificate before round 13
+    // wrote a typed 1.0000000000000001 as 1).
+    if !eval::parse_formula(formula).is_some_and(|g| same_tree(&f, &g)) {
         return Err(format!(
             "binding: the source's tree {} is not the certificate's formula {formula}",
             f.formula()
@@ -662,6 +680,22 @@ pub fn function(a: &Value) -> Result<Fx, String> {
         verified,
         f_alt,
     })
+}
+
+/// The same tree: the same shape, and the same double for each number.
+fn same_tree(a: &Expr, b: &Expr) -> bool {
+    match (a, b) {
+        (Expr::Num(x, _), Expr::Num(y, _)) => x.to_bits() == y.to_bits(),
+        (Expr::Neg(x), Expr::Neg(y)) | (Expr::Degrees(x), Expr::Degrees(y)) => same_tree(x, y),
+        (Expr::Bin(o, x1, x2), Expr::Bin(p, y1, y2)) => {
+            o == p && same_tree(x1, y1) && same_tree(x2, y2)
+        }
+        (Expr::Call(f, xs), Expr::Call(g, ys)) => {
+            f == g && xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| same_tree(x, y))
+        }
+        (Expr::Num(..), _) | (_, Expr::Num(..)) => false,
+        _ => a == b,
+    }
 }
 
 // ------------------------------------------------------------ outcomes

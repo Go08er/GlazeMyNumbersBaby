@@ -896,7 +896,7 @@ pub fn gaps_clear(
         if k > 0
             && f.numerators
                 .as_ref()
-                .is_some_and(|n| matches!(n[k], crate::ast::Expr::Num(v) if v == 0.0))
+                .is_some_and(|n| n[k].exact_value() == Some(0.0))
         {
             continue;
         }
@@ -918,7 +918,7 @@ pub fn gaps_clear(
             _ => None,
         };
         if let Some(t) = tree
-            && (matches!(t, crate::ast::Expr::Num(v) if *v == 0.0) || factors_clear(f, t, iv)?)
+            && (t.exact_value() == Some(0.0) || factors_clear(f, t, iv)?)
         {
             continue;
         }
@@ -1870,12 +1870,13 @@ fn side_bands(
 /// The simplifier's one-sided limit at `p`, with its fact.
 fn side_limit_fact(f: &Fun<'_>, p: f64, right: bool) -> Option<(TailEnd, Claim)> {
     use crate::ast::{BinOp, Expr};
+    // (p is that double exactly, whatever a literal typed parsed to.)
     let pe = if p < 0.0 {
-        Expr::Neg(Box::new(Expr::Num(-p)))
+        Expr::Neg(Box::new(Expr::exact(-p)))
     } else {
-        Expr::Num(p)
+        Expr::exact(p)
     };
-    let inv = Expr::bin(BinOp::Div, Expr::Num(1.0), Expr::X);
+    let inv = Expr::bin(BinOp::Div, Expr::exact(1.0), Expr::X);
     let shifted = Expr::bin(if right { BinOp::Add } else { BinOp::Sub }, pe, inv);
     let e = f
         .expr
@@ -2212,7 +2213,7 @@ fn own_line(f: &Fun<'_>) -> Option<Claim> {
     if f.eval == f.expr {
         return None;
     }
-    let (m, b) = super::fun::affine(&f.eval, exact)?;
+    let (m, b) = super::fun::affine(&f.eval)?;
     Some(Claim::Simplifier {
         fact: format!("f = {m}·x + {b} on its domain (the simplifier's form): no asymptote"),
     })

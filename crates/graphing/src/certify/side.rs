@@ -240,7 +240,7 @@ fn nonzero_factors(
 fn walk(f: &Fun<'_>, e: &Expr, path: &mut Vec<u8>, out: &mut Vec<SideCond>) -> Result<(), String> {
     // Children first.
     match e {
-        Expr::Num(_) | Expr::Const(_) | Expr::X | Expr::Var(_) => {}
+        Expr::Num(..) | Expr::Const(_) | Expr::X | Expr::Var(_) => {}
         Expr::Y => return Err("involves y".into()),
         Expr::Neg(a) => {
             path.push(0);
@@ -518,7 +518,7 @@ pub fn table_family(f: &Fun<'_>, g: &Expr) -> Option<(Interval, Interval)> {
     };
     // Exactly 1: typed so, or written by the parser (a typed
     // 1.0000000000000001 is held as the double 1 but is not 1).
-    let is_one = |e: &Expr| matches!(e, Expr::Num(v) if *v == 1.0 && f.lits.is_exact(1.0));
+    let is_one = |e: &Expr| e.exact_value() == Some(1.0);
     if let Some((func, u)) = trig(g) {
         let u0 = match func {
             Func::Sin | Func::Tan => Interval::point(0.0),

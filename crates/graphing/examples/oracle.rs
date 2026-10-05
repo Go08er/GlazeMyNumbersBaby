@@ -390,7 +390,7 @@ impl F {
         // ε of the result, but never below the subnormals' spacing.
         let r = v.abs().max(f64::from_bits(1) / eps);
         let er = match e {
-            Expr::X | Expr::Num(_) => 0.0,
+            Expr::X | Expr::Num(..) => 0.0,
             Expr::Neg(a) | Expr::Degrees(a) => self.error(a, x).1,
             Expr::Bin(op, a, b) => {
                 let ((va, ea), (vb, eb)) = (self.error(a, x), self.error(b, x));
@@ -419,7 +419,7 @@ impl F {
                     let h = ea.max(1e-8 * va.abs().max(1.0));
                     let at = |t: f64| {
                         let mut a2 = args.clone();
-                        a2[i] = Expr::Num(t);
+                        a2[i] = Expr::exact(t);
                         match reval(&Expr::Call(*func, a2), x, self.unit) {
                             R::V(xf) => xf.f(),
                             _ => f64::NAN,
@@ -764,7 +764,7 @@ fn guarded(e: &Expr, out: &mut Vec<Expr>) {
         match func {
             Func::Tan | Func::Sec => out.push(Expr::Call(Func::Cos, vec![a.clone()])),
             Func::Cot | Func::Csc => out.push(Expr::Call(Func::Sin, vec![a.clone()])),
-            Func::LogBase => out.push(Expr::bin(BinOp::Sub, a.clone(), Expr::Num(1.0))),
+            Func::LogBase => out.push(Expr::bin(BinOp::Sub, a.clone(), Expr::exact(1.0))),
             _ => {}
         }
     }
@@ -777,7 +777,7 @@ fn guarded(e: &Expr, out: &mut Vec<Expr>) {
             match op {
                 BinOp::Div => out.push((**b).clone()),
                 BinOp::Pow => {
-                    let whole = matches!(**b, Expr::Num(n) if n >= 1.0 && n.fract() == 0.0);
+                    let whole = matches!(&**b, Expr::Num(n, lit) if lit.is_exact() && *n >= 1.0 && n.fract() == 0.0);
                     if !whole {
                         out.push((**a).clone());
                     }
@@ -2811,6 +2811,17 @@ fn adversarial() -> Vec<String> {
         "nCr(61,62)",
         "nPr(61,62)",
         "abs(nCr(61,62))+1",
+        // A root degree typed as an odd integer past 2⁵³, whose doubles are
+        // even (R13-M-04), and ones even or no integer as typed.
+        "root(-8,9007199254740993)",
+        "root(x,9007199254740993)",
+        "root(x,-9007199254740993)",
+        "root(x,18014398509481986)",
+        "root(x,3.0000000000000001)",
+        // Decimals that share a double, each its own number (R13-M-01).
+        "10^16*(1.0000000000000001-1)+x",
+        "10^16*(1.0000000000000001-0.99999999999999999)+x",
+        "1.0000000000000001*x-1*x",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -2941,6 +2952,32 @@ fn selftest() -> bool {
             Box::new(|k| {
                 k.data.horizontal_asymptotes = vec![(0.5, AsymptoteSide::AnyInfinity)];
             }),
+        ),
+        // Review 13, R13-M-01: what the panel said before, when two
+        // decimals sharing the double 1 were taken for one number:
+        // 10^16·(1.0000000000000001 − 1) + x is x + 1, not x (its
+        // y-intercept 1, its zero −1), and 10^16·(1.0000000000000001 − 1)·x
+        // is x, not 0. The reference reads each literal as typed.
+        (
+            "10^16*(1.0000000000000001-1)+x",
+            "y-intercept-wrong",
+            Box::new(|k| {
+                k.data.y_intercept = Some(0.0);
+                k.y_intercept = "0".into();
+            }),
+        ),
+        (
+            "10^16*(1.0000000000000001-1)+x",
+            "zero-not-zero",
+            Box::new(move |k| {
+                k.data.zeros = vec![one(0.0)];
+                k.x_intercept = "0".into();
+            }),
+        ),
+        (
+            "10^16*(1.0000000000000001-1)*x",
+            "range-singleton-varies",
+            Box::new(|k| k.range = "y ∈ {0}".into()),
         ),
         // Review 12, R12-M-04: a range written as one value it isn't
         // (the numbers behind it left as they were: only the text lies).

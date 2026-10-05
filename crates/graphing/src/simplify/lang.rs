@@ -13,29 +13,35 @@
 //! * `^v` — an exponent that varies with x (the TI rule,
 //!   `functions::pow_var`): base > 0, or base 0 to a positive power.
 //!
-//! Numbers are exact rationals ([`Q`]) when the literal was typed exactly
-//! (`0.000001` is 1/1000000) or is an integer the parser wrote; anything
-//! else is a [`Real`], an opaque constant enclosed by its double's
-//! neighbours. Angles are in the expression's unit (the e-graph analysis
+//! Numbers are exact rationals ([`Q`]): each occurrence's own exact value
+//! (`ast::Lit`: `0.000001` is 1/1000000, and `1.0000000000000001` is not
+//! the 1 beside it, though both are held as the double 1). A number not
+//! known exactly (one an analysis wrote, `Lit::Near`) is a [`Real`], an
+//! opaque constant enclosed by its double's neighbours; a number known
+//! exactly that no `Q` holds (a decimal of 40 digits) is refused rather
+//! than made opaque, where it could be taken for another number with the
+//! same double. Angles are in the expression's unit (the e-graph analysis
 //! knows which); `value°` is just the value, as degrees mode is the only
 //! mode that accepts it.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
 use egg::{Id, Language, RecExpr, Symbol, define_language};
 
 use super::q::Q;
-use crate::ast::{BinOp, Constant, Expr, Func};
+use crate::ast::{BinOp, Constant, Expr, Func, Lit};
 use crate::compile::syntactic_rational;
 use crate::error::EquationError;
 use crate::lexer::{ParseOptions, literal_texts};
 
-/// An inexact constant: the double a literal or computation gave, standing
-/// for some real within an ulp of it.
+/// A number not known exactly (`ast::Lit::Near`): the double an analysis
+/// wrote, standing for some real within an ulp of it; and which occurrence
+/// it is in the term. Two such numbers are never taken for one: their
+/// doubles may agree while the reals differ (10¹⁶ + 1 and 10¹⁶, both held
+/// as 10¹⁶), so x/x-style cancellation never applies between them.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
-pub struct Real(pub u64);
+pub struct Real(pub u64, pub u32);
 
 impl Real {
     /// The double.
@@ -46,7 +52,7 @@ impl Real {
 
 impl fmt::Display for Real {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "r{:x}", self.0)
+        write!(f, "r{:x}.{}", self.0, self.1)
     }
 }
 
@@ -54,7 +60,11 @@ impl FromStr for Real {
     type Err = ();
     fn from_str(s: &str) -> Result<Real, ()> {
         let h = s.strip_prefix('r').ok_or(())?;
-        u64::from_str_radix(h, 16).map(Real).map_err(|_| ())
+        let (b, k) = h.split_once('.').ok_or(())?;
+        Ok(Real(
+            u64::from_str_radix(b, 16).map_err(|_| ())?,
+            k.parse().map_err(|_| ())?,
+        ))
     }
 }
 
@@ -175,50 +185,38 @@ pub const PI: &str = "pi";
 /// The symbol for e.
 pub const E: &str = "e";
 
-/// The exact decimals typed for each literal of an input, by the double
-/// each parsed to.
+/// How the simplifier reads a tree's numbers: each as its own [`Lit`]
+/// says. Until review 13 this keyed the decimals typed by the double each
+/// parsed to, which two decimals can share (R13-M-01); it remains the
+/// handle the simplifier's functions take, holding nothing.
 #[derive(Clone, Debug, Default)]
-pub struct ExactLiterals {
-    by_bits: HashMap<u64, Option<Q>>,
-}
+pub struct ExactLiterals;
 
 impl ExactLiterals {
-    /// Reads the literals of `text` as the parser would.
+    /// The reading of the literals of `text`: an error if it doesn't scan.
     pub fn of(text: &str, opts: ParseOptions) -> Result<ExactLiterals, EquationError> {
-        let mut by_bits: HashMap<u64, Option<Q>> = HashMap::new();
-        for (v, digits) in literal_texts(text, opts)? {
-            let q = Q::from_decimal(&digits);
-            by_bits
-                .entry(v.to_bits())
-                // Two different decimals read as one double: neither is
-                // known exactly.
-                .and_modify(|e| {
-                    if *e != q {
-                        *e = None;
-                    }
-                })
-                .or_insert(q);
-        }
-        Ok(ExactLiterals { by_bits })
+        literal_texts(text, opts)?;
+        Ok(ExactLiterals)
     }
 
-    /// No typed literals known: only integers below 2⁵³ are exact.
+    /// The same reading, for a tree no text is known for.
     pub fn none() -> ExactLiterals {
-        ExactLiterals::default()
+        ExactLiterals
     }
+}
 
-    /// The exact value `Num(v)` stands for, if known.
-    pub fn exact(&self, v: f64) -> Option<Q> {
-        if let Some(q) = self.by_bits.get(&v.to_bits()) {
-            return *q;
+impl Lit {
+    /// The exact rational `Num(v, self)` stands for, if it is known and
+    /// fits a [`Q`].
+    pub fn q(&self, v: f64) -> Option<Q> {
+        match self {
+            Lit::Exact => Q::from_f64(v),
+            Lit::Decimal(d) => match d.strip_prefix('-') {
+                Some(p) => Q::from_decimal(p).and_then(Q::neg),
+                None => Q::from_decimal(d),
+            },
+            Lit::Folded(_) | Lit::Near => None,
         }
-        if let Some(q) = self.by_bits.get(&(-v).to_bits()) {
-            return q.and_then(Q::neg);
-        }
-        if v == v.trunc() && v.abs() <= 9007199254740992.0 {
-            return Q::from_f64(v);
-        }
-        None
     }
 }
 
@@ -227,6 +225,10 @@ impl ExactLiterals {
 pub enum Unsupported {
     /// It uses y (a relation, not a function of x).
     UsesY,
+    /// A number known exactly that no [`Q`] holds (a decimal of 40
+    /// digits): as an opaque constant it could be taken for another number
+    /// with the same double.
+    LongNumber,
 }
 
 /// Converts `e` (a function of x) to an e-graph term.
@@ -239,9 +241,15 @@ pub fn to_rec(e: &Expr, lits: &ExactLiterals) -> Result<RecExpr<Math>, Unsupport
 fn add(e: &Expr, lits: &ExactLiterals, rec: &mut RecExpr<Math>) -> Result<Id, Unsupported> {
     let go = |e: &Expr, rec: &mut RecExpr<Math>| add(e, lits, rec);
     Ok(match e {
-        Expr::Num(v) => match lits.exact(*v) {
+        Expr::Num(v, lit) => match lit.q(*v) {
             Some(q) => rec.add(Math::Num(q)),
-            None => rec.add(Math::Real(Real(v.to_bits()))),
+            // Only a number not known exactly is an opaque constant.
+            // (Its place in the term tells occurrences apart.)
+            None if *lit == Lit::Near => {
+                let k = u32::try_from(rec.as_ref().len()).unwrap_or(u32::MAX);
+                rec.add(Math::Real(Real(v.to_bits(), k)))
+            }
+            None => return Err(Unsupported::LongNumber),
         },
         Expr::Const(Constant::Pi) => rec.add(Math::Symbol(PI.into())),
         Expr::Const(Constant::E) => rec.add(Math::Symbol(E.into())),
@@ -319,19 +327,16 @@ pub fn from_rec(rec: &RecExpr<Math>) -> Expr {
 }
 
 fn num(q: Q) -> Expr {
+    // (Each part exactly, past 2⁵³ too: `Expr::int`.)
     let int = |v: i128| -> Expr {
-        let f = v.unsigned_abs() as f64;
-        if v < 0 {
-            Expr::Neg(Box::new(Expr::Num(f)))
-        } else {
-            Expr::Num(f)
-        }
+        let f = Expr::int(v.unsigned_abs());
+        if v < 0 { Expr::Neg(Box::new(f)) } else { f }
     };
     if q.is_int() {
         return int(q.numer());
     }
-    let d = Expr::Num(q.denom() as f64);
-    let n = Expr::Num(q.numer().unsigned_abs() as f64);
+    let d = Expr::int(q.denom().unsigned_abs());
+    let n = Expr::int(q.numer().unsigned_abs());
     let r = Expr::bin(BinOp::Div, n, d);
     if q.numer() < 0 {
         Expr::Neg(Box::new(r))
@@ -369,8 +374,8 @@ fn build(nodes: &[Math], id: Id) -> Expr {
             // the double it is, or kept apart from the fraction syntax.
             let exponent = match &nodes[usize::from(*k)] {
                 Math::Num(q) if !q.is_int() => match q.exact_f64() {
-                    Some(v) => Expr::Num(v),
-                    None => Expr::bin(BinOp::Add, num(*q), Expr::Num(0.0)),
+                    Some(v) => Expr::exact(v),
+                    None => Expr::bin(BinOp::Add, num(*q), Expr::exact(0.0)),
                 },
                 _ => b(k),
             };
@@ -404,9 +409,9 @@ fn build(nodes: &[Math], id: Id) -> Expr {
         Math::Real(r) => {
             let v = r.value();
             if v < 0.0 {
-                Expr::Neg(Box::new(Expr::Num(-v)))
+                Expr::Neg(Box::new(Expr::Num(-v, Lit::Near)))
             } else {
-                Expr::Num(v)
+                Expr::Num(v, Lit::Near)
             }
         }
         Math::Symbol(s) => match s.as_str() {

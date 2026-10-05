@@ -64,7 +64,8 @@ fn free(e: &Expr) -> bool {
 }
 
 fn unit_mul(k: f64, e: Expr) -> Expr {
-    if k == 1.0 { e } else { mul(Expr::Num(k), e) }
+    // (π/180 and π/200 are not doubles: the factor is only near its own.)
+    if k == 1.0 { e } else { mul(Expr::num(k), e) }
 }
 
 fn sq(e: Expr) -> Expr {
@@ -74,11 +75,11 @@ fn sq(e: Expr) -> Expr {
 fn d(e: &Expr, cx: &mut Cx) -> Option<Expr> {
     cx.charge(1)?;
     if free(e) {
-        return Some(Expr::Num(0.0));
+        return Some(num(0.0));
     }
     Some(match e {
-        Expr::X => Expr::Num(1.0),
-        Expr::Num(_) | Expr::Const(_) | Expr::Y | Expr::Var(_) => Expr::Num(0.0),
+        Expr::X => num(1.0),
+        Expr::Num(..) | Expr::Const(_) | Expr::Y | Expr::Var(_) => num(0.0),
         Expr::Neg(a) => neg(d(a, cx)?),
         Expr::Degrees(a) => d(a, cx)?,
         Expr::Bin(op, a, b) => {
@@ -113,36 +114,33 @@ fn d(e: &Expr, cx: &mut Cx) -> Option<Expr> {
                 BinOp::Pow => {
                     if free(b) {
                         let da = d(a, cx)?;
-                        // (Exponents at face value: a derivative is used only
-                        // where f is differentiable, and there p·aᵖ⁻¹·a′
-                        // with a typed p = 2.0000000000000001 read as 2
-                        // differs from the general rule by its rounding.)
-                        if let Some((0, _)) = syntactic_rational(b, &crate::compile::Doubles) {
+                        // (Exponents as typed: a typed p = 2.0000000000000001
+                        // is no integer, and takes the general rule below,
+                        // its own number copied.)
+                        let typed = crate::interval::Literals;
+                        if let Some((0, _)) = syntactic_rational(b, &typed) {
                             // g⁰ is 1 only where g ≠ 0 (0⁰ is undefined, as
                             // on the TI-84 Plus CE): so is its derivative 0,
                             // 0/g keeping g's zeros out of its domain.
-                            return Some(Expr::bin(BinOp::Div, Expr::Num(0.0), a.clone()));
+                            return Some(Expr::bin(BinOp::Div, num(0.0), a.clone()));
                         }
-                        if let Some((p, q)) = syntactic_rational(b, &crate::compile::Doubles) {
+                        if let Some((p, q)) = syntactic_rational(b, &typed) {
                             // (p/q)·a^((p-q)/q)·a'
                             let coef = if q == 1 {
                                 num(p as f64)
                             } else {
-                                div(num(p as f64), Expr::Num(q as f64))
+                                div(num(p as f64), num(q as f64))
                             };
                             let (np, nq) = reduce(p as i64 - q as i64, q as i64);
                             mul(mul(coef, pow_rat(a.clone(), np, nq)), da)
                         } else {
                             // b·a^(b-1)·a'
-                            mul(
-                                mul(b.clone(), pow(a.clone(), sub(b.clone(), Expr::Num(1.0)))),
-                                da,
-                            )
+                            mul(mul(b.clone(), pow(a.clone(), sub(b.clone(), num(1.0)))), da)
                         }
                     } else if free(a) {
                         // a^b·ln(a)·b'
                         let lna = if matches!(a, Expr::Const(Constant::E)) {
-                            Expr::Num(1.0)
+                            num(1.0)
                         } else {
                             call(Func::Ln, a.clone())
                         };
@@ -175,12 +173,12 @@ fn d_call(f: Func, args: &[Expr], cx: &mut Cx) -> Option<Expr> {
         let u = &args[0];
         let du = d(u, cx)?;
         if is_num(&du, 0.0) {
-            return Some(Expr::Num(0.0));
+            return Some(num(0.0));
         }
         // Every rule below copies u at most three times.
         cx.charge_copies(u, 3)?;
         let c = |f: Func| call(f, u.clone());
-        let one = || Expr::Num(1.0);
+        let one = || num(1.0);
         let inner = match f {
             Sin => unit_mul(k, c(Cos)),
             Cos => neg(unit_mul(k, c(Sin))),
@@ -220,13 +218,14 @@ fn d_call(f: Func, args: &[Expr], cx: &mut Cx) -> Option<Expr> {
                 one(),
                 mul(c(Abs), call(Sqrt, add(one(), sq(u.clone())))),
             )),
-            Sqrt => div(one(), mul(Expr::Num(2.0), c(Sqrt))),
-            Cbrt => div(one(), mul(Expr::Num(3.0), sq(c(Cbrt)))),
-            Log => div(one(), mul(u.clone(), Expr::Num(std::f64::consts::LN_10))),
+            Sqrt => div(one(), mul(num(2.0), c(Sqrt))),
+            Cbrt => div(one(), mul(num(3.0), sq(c(Cbrt)))),
+            // (ln 10 is no double: the number is only near it.)
+            Log => div(one(), mul(u.clone(), Expr::num(std::f64::consts::LN_10))),
             Ln => div(one(), u.clone()),
             Exp => c(Exp),
             Abs => c(Sign),
-            Floor | Ceil | Round | Sign => return Some(Expr::Num(0.0)),
+            Floor | Ceil | Round | Sign => return Some(num(0.0)),
             Min | Max => one(),
             Factorial | DoubleFactorial => return None,
             Root | LogBase | Mod | NCr | NPr => unreachable!("binary"),
@@ -285,10 +284,10 @@ fn d_call(f: Func, args: &[Expr], cx: &mut Cx) -> Option<Expr> {
                 cx.charge_copies(&db, 1)?;
                 cx.charge_copies(&acc, 1)?;
                 cx.charge_copies(b, 2)?;
-                let half_sum = div(add(dacc.clone(), db.clone()), Expr::Num(2.0));
+                let half_sum = div(add(dacc.clone(), db.clone()), num(2.0));
                 let half_diff = div(
                     mul(call(Func::Sign, sub(acc.clone(), b.clone())), sub(dacc, db)),
-                    Expr::Num(2.0),
+                    num(2.0),
                 );
                 dacc = if f == Max {
                     add(half_sum, half_diff)

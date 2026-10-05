@@ -1854,6 +1854,24 @@ fn main() {
             eb(&a.ast, x, a.unit),
             a.noise(x)
         );
+        // What the apps compute (`Equation::compile`: the literals as
+        // typed, arithmetic on them alone exact and rounded once) and the
+        // reference for it (`truth::reval_typed`). The line above reads
+        // every number as its double, as the legacy engine's gate does.
+        let text = format!("y={}", args[1]);
+        let opts = CompileOptions {
+            trig_unit: unit,
+            ..CompileOptions::default()
+        };
+        let eq = Equation::parse(&text).expect("parses");
+        let app = eq
+            .compile(&opts)
+            .ok()
+            .and_then(|c| c.eval_explicit(x))
+            .unwrap_or(f64::NAN);
+        let lits = graphing::interval::Literals::of(&text, Default::default()).expect("parses");
+        let typed = graphing::analysis::truth::reval_typed(&a.ast, x, unit, &lits);
+        println!("app {app:?} typed-reference {typed:?}");
         return;
     }
     let filter = args.iter().find(|a| !a.starts_with("--")).cloned();

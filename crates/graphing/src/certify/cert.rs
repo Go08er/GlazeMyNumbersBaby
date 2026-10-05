@@ -611,6 +611,13 @@ pub struct Binding {
     pub sliders: std::collections::BTreeMap<String, f64>,
     /// `,` was the decimal separator (and `;` the argument separator).
     pub decimal_comma: bool,
+    /// Each number typed was rounded on entry to this many significant
+    /// digits, half away from zero, and is that rounded decimal
+    /// (`lexer::ParseOptions::literal_digits`); `None` (absent in older
+    /// certificates): the decimal exactly as typed. (A `Graph` rounds its
+    /// sliders so too: the values above are those it used.)
+    #[serde(default)]
+    pub literal_digits: Option<u8>,
     /// Interval evaluations allowed per phase.
     pub budget: u64,
 }
@@ -639,6 +646,7 @@ impl Binding {
             power: POWER_CONVENTION.into(),
             sliders,
             decimal_comma: eq.parse_options().decimal_comma,
+            literal_digits: eq.parse_options().literal_digits,
             budget,
         }
     }

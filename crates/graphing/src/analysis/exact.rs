@@ -8,7 +8,7 @@
 //! rational multiple of an exact period) and then checked exactly (the
 //! function, or its derivative, evaluates to exactly 0 there).
 
-use crate::ast::{BinOp, Constant, Expr, Func};
+use crate::ast::{BinOp, Constant, Expr, Func, Lit};
 use crate::functions::TrigUnit;
 use crate::interval::{DecInterval, Interval, elem};
 use crate::simplify::Q;
@@ -717,12 +717,13 @@ pub fn eval(
 ) -> Option<Ex> {
     let ev = |a: &Expr| eval(a, x, unit, lits, vars);
     match e {
-        Expr::Num(v) => match lits.exact(*v) {
+        Expr::Num(v, lit) => match lit.q(*v) {
             Some(q) => Some(Ex::q(q)),
-            // The angle-unit factor a derivative carries (π/180, π/200):
-            // no typed number (callers check that none was typed with
-            // these bits).
-            None if unit != TrigUnit::Radians
+            // The angle-unit factor a derivative carries (π/180, π/200),
+            // written as a number not known exactly: a typed number with
+            // these bits is its own decimal.
+            None if *lit == Lit::Near
+                && unit != TrigUnit::Radians
                 && v.to_bits() == unit.to_radians_factor().to_bits() =>
             {
                 Some(Ex::Pi(Q::new(1, i128::from(unit.full_turn() as i64 / 2))?))

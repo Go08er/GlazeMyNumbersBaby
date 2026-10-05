@@ -320,6 +320,17 @@ pub(crate) struct Rat {
     d: Nat,
 }
 
+/// The same rational (not necessarily written alike): n₁·d₂ = n₂·d₁, with
+/// the same sign unless both are 0.
+impl PartialEq for Rat {
+    fn eq(&self, o: &Rat) -> bool {
+        if self.is_zero() || o.is_zero() {
+            return self.is_zero() && o.is_zero();
+        }
+        self.neg == o.neg && self.n.mul(&o.d) == o.n.mul(&self.d)
+    }
+}
+
 fn capped(r: Rat) -> Option<Rat> {
     (r.n.bits() <= MAX_BITS && r.d.bits() <= MAX_BITS).then_some(r)
 }
@@ -357,7 +368,10 @@ impl Rat {
         let (n, d) = if e >= 0 {
             (Nat::from_u64(m).shl(e as u64), Nat::from_u64(1))
         } else {
-            (Nat::from_u64(m), Nat::from_u64(1).shl((-e) as u64))
+            // In lowest terms: 10 is 10/1, not 5·2⁵⁰/2⁴⁹ (its powers would
+            // carry 53 bits a factor, and reach the cap).
+            let z = i64::from(m.trailing_zeros()).min(-e);
+            (Nat::from_u64(m >> z), Nat::from_u64(1).shl((-e - z) as u64))
         };
         Some(Rat { neg: v < 0.0, n, d })
     }
@@ -434,6 +448,26 @@ impl Rat {
             q = q.checked_add(1u64.checked_shl(s as u32)?)?;
         }
         Some((q, rem.is_zero()))
+    }
+
+    /// Whether the value is below 0.
+    pub(crate) fn is_negative(&self) -> bool {
+        self.neg && !self.is_zero()
+    }
+
+    /// Whether the value is 1 or −1.
+    pub(crate) fn abs_is_one(&self) -> bool {
+        self.n == self.d
+    }
+
+    /// Whether the value is an even integer.
+    pub(crate) fn is_even(&self) -> bool {
+        Rat {
+            neg: false,
+            n: self.n.clone(),
+            d: self.d.shl(1),
+        }
+        .is_integer()
     }
 
     pub(crate) fn neg(mut self) -> Rat {

@@ -8,8 +8,8 @@
 //! jump, a root or rational power at 0) makes them unknown.
 //!
 //! The tree is the one the parser produced, not a simplified or compiled
-//! form: numbers are read back to their exact decimals through
-//! [`Literals`], and the app's semantics are those of `functions.rs`, with
+//! form: numbers are read back to their exact decimals (each by its own
+//! [`crate::ast::Lit`]), and the app's semantics are those of `functions.rs`, with
 //! the TI rule for a power whose exponent varies (base > 0).
 
 use super::arith::Interval;
@@ -25,7 +25,7 @@ use crate::functions::TrigUnit;
 pub struct Ctx<'a> {
     /// Angle unit and slider values.
     pub opts: CompileOptions<'a>,
-    /// The exact values of the input's numeric literals.
+    /// How the numbers are read ([`Literals`]: each by its own `Lit`).
     pub literals: &'a Literals,
     /// The value(s) of y, for relations in x and y (no y-derivatives).
     pub y: DecInterval,
@@ -495,19 +495,18 @@ fn keep_winner(winner: Series, loser: &DecInterval) -> Series {
 }
 
 /// Whether a root degree written as a number (or its negative) is exactly
-/// an odd integer, by the decimal typed (`Literals::exact`); `None` when
-/// that isn't known (a degree computed otherwise, or a literal whose
-/// double other decimals parsed to).
-fn typed_odd(e: &Expr, lits: &Literals) -> Option<bool> {
-    let v = match e {
-        Expr::Num(v) => *v,
-        Expr::Neg(a) => match **a {
-            Expr::Num(v) => v,
+/// an odd integer, by its own exact value (the decimal typed: `Lit`);
+/// `None` when that isn't known (a degree computed otherwise, or a number
+/// known only to round to its double).
+fn typed_odd(e: &Expr) -> Option<bool> {
+    let r = match e {
+        Expr::Num(v, lit) => lit.rat(*v)?,
+        Expr::Neg(a) => match &**a {
+            Expr::Num(v, lit) => lit.rat(*v)?,
             _ => return None,
         },
         _ => return None,
     };
-    let r = lits.exact(v)?;
     if !r.is_integer() {
         return Some(false);
     }
@@ -528,7 +527,7 @@ fn constant_near(v: &DecInterval, step: impl Fn(&DecInterval) -> DecInterval) ->
 fn ev(e: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
     let unit = ctx.opts.trig_unit;
     match e {
-        Expr::Num(v) => konst(DecInterval::new(ctx.literals.enclose(*v)), n),
+        Expr::Num(v, lit) => konst(DecInterval::new(lit.enclose(*v)), n),
         Expr::Const(Constant::Pi) => konst(DecInterval::new(elem::pi()), n),
         Expr::Const(Constant::E) => konst(DecInterval::new(elem::e()), n),
         Expr::X => x.clone(),
@@ -655,7 +654,7 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
                 // 9007199254740993 is enclosed by 2⁵³ and the double after
                 // it, both even): asked only where that matters.
                 let odd = (u[0].lo() < 0.0 && elem::may_hold_odd(kv))
-                    .then(|| typed_odd(&args[1], ctx.literals))
+                    .then(|| typed_odd(&args[1]))
                     .flatten();
                 let c0 = match odd {
                     Some(odd) => elem::root_of_parity(&u[0], &k[0], odd),

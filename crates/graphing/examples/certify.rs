@@ -1,7 +1,7 @@
 //! What the certified analysis proves for a function, row by row.
 //!
 //! ```text
-//! cargo run --release -p graphing --example certify -- 'x^3-2x+1/(x-1)' [deg|grad] [--json]
+//! cargo run --release -p graphing --example certify -- 'x^3-2x+1/(x-1)' [deg|grad] [--json] [--digits=N]
 //! ```
 //!
 //! Each row is certified (proven complete), partial (proven items, maybe
@@ -9,7 +9,7 @@
 //! `--json` prints the whole analysis, certificates included.
 
 use graphing::certify::{
-    Analysis, Bound, Enc, ExtKind, Horizontal, Monotone, Piece, Row, Spot, certify_text,
+    Analysis, Bound, Enc, ExtKind, Horizontal, Monotone, Piece, Row, Spot, certify_text_with,
 };
 use graphing::compile::CompileOptions;
 use graphing::functions::TrigUnit;
@@ -162,12 +162,21 @@ fn main() {
         trig_unit: unit,
         ..CompileOptions::default()
     };
+    // `--digits=N`: each number typed rounded to N significant digits on
+    // entry (the apps' default is 14; recorded in the binding).
+    let parse = graphing::lexer::ParseOptions {
+        literal_digits: args
+            .iter()
+            .find_map(|a| a.strip_prefix("--digits="))
+            .map(|n| n.parse().expect("--digits=N, N a number of digits")),
+        ..Default::default()
+    };
     for src in args
         .iter()
         .filter(|a| !a.starts_with("--") && !["deg", "grad"].contains(&a.as_str()))
     {
         let t = Instant::now();
-        match certify_text(src, opts, graphing::certify::DEFAULT_BUDGET, None) {
+        match certify_text_with(src, parse, opts, graphing::certify::DEFAULT_BUDGET, None) {
             Ok(a) => {
                 let ms = t.elapsed().as_secs_f64() * 1e3;
                 if json {

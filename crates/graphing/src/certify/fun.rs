@@ -4,7 +4,7 @@
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::ast::{BinOp, Expr, Func};
+use crate::ast::{BinOp, Expr, Func, Lit};
 use crate::compile::CompileOptions;
 use crate::interval::{Ctx, DecInterval, Interval, Literals, Series, taylor};
 use crate::simplify::q::Q;
@@ -25,24 +25,19 @@ pub const UNIT_WORK: usize = 64;
 
 /// The tree every claim refers to: the parser's, with `a·a` written `a²`
 /// (an interval product of a box with itself loses the correlation:
-/// `(x−c)·(x−c)` over a box around c straddles 0, `(x−c)²` doesn't).
+/// `(x−c)·(x−c)` over a box around c straddles 0, `(x−c)²` doesn't). Its
+/// numbers are the parser's, each with its own exact value: the written 2
+/// is exactly 2, whatever a typed `2.0000000000000001` parsed to.
 pub fn canonical(e: &Expr) -> Expr {
-    canonical_with(e, true)
-}
-
-/// [`canonical`], squares written only when `square`: not when a literal
-/// typed as some other decimal parsed to 2 (`2.0000000000000001`), whose
-/// `Num(2)` the written exponent would then read as.
-pub fn canonical_with(e: &Expr, square: bool) -> Expr {
-    let go = |a: &Expr| canonical_with(a, square);
+    let go = canonical;
     match e {
-        Expr::Num(_) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => e.clone(),
+        Expr::Num(..) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => e.clone(),
         Expr::Neg(a) => Expr::Neg(Box::new(go(a))),
         Expr::Degrees(a) => Expr::Degrees(Box::new(go(a))),
         Expr::Bin(op, a, b) => {
             let (a, b) = (go(a), go(b));
-            if square && *op == BinOp::Mul && a == b {
-                Expr::bin(BinOp::Pow, a, Expr::Num(2.0))
+            if *op == BinOp::Mul && a == b {
+                Expr::bin(BinOp::Pow, a, Expr::exact(2.0))
             } else {
                 Expr::bin(*op, a, b)
             }
@@ -53,16 +48,16 @@ pub fn canonical_with(e: &Expr, square: bool) -> Expr {
 
 /// `e` as a·x + b with a, b exact rationals, if it is one (sliders and π
 /// aside).
-pub(crate) fn affine(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<(Q, Q)> {
+pub(crate) fn affine(e: &Expr) -> Option<(Q, Q)> {
     Some(match e {
         Expr::X => (Q::ONE, Q::ZERO),
-        Expr::Num(v) => (Q::ZERO, lits.exact(*v)?),
+        Expr::Num(v, lit) => (Q::ZERO, lit.q(*v)?),
         Expr::Neg(a) => {
-            let (a, b) = affine(a, lits)?;
+            let (a, b) = affine(a)?;
             (a.neg()?, b.neg()?)
         }
         Expr::Bin(op @ (BinOp::Add | BinOp::Sub), l, r) => {
-            let ((a, b), (c, d)) = (affine(l, lits)?, affine(r, lits)?);
+            let ((a, b), (c, d)) = (affine(l)?, affine(r)?);
             if *op == BinOp::Add {
                 (a.add(c)?, b.add(d)?)
             } else {
@@ -70,7 +65,7 @@ pub(crate) fn affine(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<
             }
         }
         Expr::Bin(BinOp::Mul, l, r) => {
-            let ((a, b), (c, d)) = (affine(l, lits)?, affine(r, lits)?);
+            let ((a, b), (c, d)) = (affine(l)?, affine(r)?);
             match (a.is_zero(), c.is_zero()) {
                 (true, _) => (c.mul(b)?, d.mul(b)?),
                 (_, true) => (a.mul(d)?, b.mul(d)?),
@@ -78,7 +73,7 @@ pub(crate) fn affine(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<
             }
         }
         Expr::Bin(BinOp::Div, l, r) => {
-            let ((a, b), (c, d)) = (affine(l, lits)?, affine(r, lits)?);
+            let ((a, b), (c, d)) = (affine(l)?, affine(r)?);
             if !c.is_zero() || d.is_zero() {
                 return None;
             }
@@ -90,14 +85,14 @@ pub(crate) fn affine(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<
 
 /// A whole number ≥ 0 that `Num` reads back exactly.
 fn int_num(q: Q) -> Option<Expr> {
-    (q.is_int() && q.signum() >= 0 && q.numer() <= 1 << 53).then(|| Expr::Num(q.numer() as f64))
+    (q.is_int() && q.signum() >= 0 && q.numer() <= 1 << 53).then(|| Expr::exact(q.numer() as f64))
 }
 
 /// `e` as c·xᵏ (c exact, k whole ≤ 64) if it is a monomial.
 fn monomial(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<(Q, u32)> {
     Some(match e {
         Expr::X => (Q::ONE, 1),
-        Expr::Num(v) => (lits.exact(*v)?, 0),
+        Expr::Num(v, lit) => (lit.q(*v)?, 0),
         Expr::Neg(a) => {
             let (c, k) = monomial(a, lits)?;
             (c.neg()?, k)
@@ -191,7 +186,7 @@ fn horner(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<Expr> {
             None => q_num(*c)?,
             Some(a) => {
                 let ax = match a {
-                    Expr::Num(v) if v == 1.0 => Expr::X,
+                    Expr::Num(v, Lit::Exact) if v == 1.0 => Expr::X,
                     a => Expr::bin(BinOp::Mul, a, Expr::X),
                 };
                 if c.is_zero() {
@@ -216,7 +211,7 @@ fn horner(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Option<Expr> {
 /// function, so f's evaluated tree may be written so.
 pub fn recentre(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Expr {
     if !matches!(e, Expr::X)
-        && let Some((a, b)) = affine(e, lits)
+        && let Some((a, b)) = affine(e)
         && !a.is_zero()
         && let Some(form) = (|| {
             let c = b.neg()?.div(a)?;
@@ -331,7 +326,7 @@ impl<'a> Fun<'a> {
         budget: u64,
         cancel: Option<&'a AtomicBool>,
     ) -> Fun<'a> {
-        let expr = canonical_with(expr, !lits.shadows(2.0));
+        let expr = canonical(expr);
         Fun {
             eval: expr.clone(),
             expr,
@@ -399,7 +394,7 @@ impl<'a> Fun<'a> {
             // point).
             let e = exact_exponents(&self.eval, exact);
             let d = symbolic_derivs(&e, self.opts.trig_unit, Some(&s))?;
-            d.iter().all(|t| sound_constants(t, exact)).then_some(d)
+            d.iter().all(sound_constants).then_some(d)
         })
     }
 
@@ -604,7 +599,7 @@ impl<'a> Fun<'a> {
             }
             let at = |e: &Expr| {
                 e.map(&|n| match n {
-                    Expr::Call(Func::Abs, a) if canonical(&a[0]) == u => Some(Expr::Num(0.0)),
+                    Expr::Call(Func::Abs, a) if canonical(&a[0]) == u => Some(Expr::num(0.0)),
                     Expr::Call(Func::Min | Func::Max, a)
                         if a.len() == 2
                             && canonical(&Expr::Bin(
@@ -812,7 +807,7 @@ pub fn rational_derivs(e: &Expr, lits: &crate::simplify::ExactLiterals) -> Optio
             Expr::bin(
                 BinOp::Div,
                 num.to_expr(),
-                Expr::bin(BinOp::Pow, d.to_expr(), Expr::Num(k)),
+                Expr::bin(BinOp::Pow, d.to_expr(), Expr::num(k)),
             )
         }
     };
@@ -877,15 +872,14 @@ fn exact_exponents(e: &Expr, exact: &crate::simplify::ExactLiterals) -> Expr {
         Expr::Bin(BinOp::Pow, a, b)
             if !b.contains_x() && crate::compile::syntactic_rational(b, exact).is_none() =>
         {
-            let v = match &**b {
-                Expr::Num(v) => *v,
+            let q = match &**b {
+                Expr::Num(v, lit) => lit.q(*v)?,
                 Expr::Neg(inner) => match &**inner {
-                    Expr::Num(v) => -*v,
+                    Expr::Num(v, lit) => lit.q(*v)?.neg()?,
                     _ => return None,
                 },
                 _ => return None,
             };
-            let q = exact.exact(v)?;
             Some(Expr::bin(
                 BinOp::Pow,
                 exact_exponents(a, exact),
@@ -898,11 +892,11 @@ fn exact_exponents(e: &Expr, exact: &crate::simplify::ExactLiterals) -> Expr {
 
 /// Every constant of `e` is an integer or a typed literal (enclosed as the
 /// decimal typed), never a value computed in floating point.
-fn sound_constants(e: &Expr, exact: &crate::simplify::ExactLiterals) -> bool {
+fn sound_constants(e: &Expr) -> bool {
     let mut ok = true;
     e.visit(&mut |n| {
-        if let Expr::Num(v) = n
-            && exact.exact(*v).is_none()
+        if let Expr::Num(v, lit) = n
+            && lit.q(*v).is_none()
         {
             ok = false;
         }
@@ -998,7 +992,7 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
     let mut out = Vec::new();
     fn go(e: &Expr, out: &mut Vec<Expr>) {
         match e {
-            Expr::Num(v) if *v != 0.0 => {}
+            Expr::Num(v, _) if *v != 0.0 => {}
             Expr::Const(_) => {}
             Expr::Neg(a) => go(a, out),
             Expr::Bin(BinOp::Mul, a, b) => {
@@ -1024,11 +1018,11 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
                 Func::Tan => out.push(Expr::call1(Func::Sin, args[0].clone())),
                 Func::Cot => out.push(Expr::call1(Func::Cos, args[0].clone())),
                 Func::Ln | Func::Log => {
-                    out.push(Expr::bin(BinOp::Sub, args[0].clone(), Expr::Num(1.0)))
+                    out.push(Expr::bin(BinOp::Sub, args[0].clone(), Expr::num(1.0)))
                 }
                 // log_b u = 0 where u = 1 (b a valid base wherever defined).
                 Func::LogBase if args.len() == 2 => {
-                    out.push(Expr::bin(BinOp::Sub, args[1].clone(), Expr::Num(1.0)))
+                    out.push(Expr::bin(BinOp::Sub, args[1].clone(), Expr::num(1.0)))
                 }
                 _ => out.push(e.clone()),
             },
@@ -1067,7 +1061,7 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
                     let p = left
                         .into_iter()
                         .reduce(|x, y| Expr::bin(BinOp::Mul, x, y))
-                        .unwrap_or(Expr::Num(1.0));
+                        .unwrap_or(Expr::num(1.0));
                     if neg { Expr::Neg(Box::new(p)) } else { p }
                 };
                 for c in &common {
@@ -1087,7 +1081,7 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
             fs.is_empty()
         };
         match e {
-            Expr::Num(v) => (*v >= 0.0).then_some(*v > 0.0),
+            Expr::Num(v, _) => (*v >= 0.0).then_some(*v > 0.0),
             Expr::Const(_) => Some(true),
             // (At face value: an even power is ≥ 0, and so is a power of a
             // base ≥ 0 if the exponent is in fact no integer.)

@@ -249,8 +249,8 @@ impl Equation {
         // The interval form folds arithmetic on literals alone exactly, as
         // the program does, into one tight enclosure.
         let interval = |e: Expr| {
-            let (e, l) = crate::compile::fold_literals(&e, opts, &lits);
-            Some(Arc::new(IntervalFn::new(e, l, opts)))
+            let e = crate::compile::fold_literals(&e, opts, &lits);
+            Some(Arc::new(IntervalFn::new(e, lits.clone(), opts)))
         };
         let form = match &self.form {
             Form::Explicit { axis, f } => {
@@ -440,8 +440,8 @@ enum Part {
 impl Part {
     fn expr(self) -> Expr {
         match self {
-            Part::Zero => Expr::Num(0.0),
-            Part::One => Expr::Num(1.0),
+            Part::Zero => Expr::exact(0.0),
+            Part::One => Expr::exact(1.0),
             Part::Tree(e) => e,
         }
     }
@@ -543,9 +543,9 @@ fn coefficient_sign(c: &Expr, lits: &crate::interval::Literals) -> Option<f64> {
             trig_unit: unit,
             variables: &(),
         };
-        let s = match crate::compile::typed_value(c, &opts, lits) {
-            Some(Ok(v)) if v != 0.0 => v.signum(),
-            // Exactly 0, or a division by 0.
+        let s = match crate::compile::typed_value(c, &opts) {
+            Some(crate::compile::TypedValue::Value(v)) if v != 0.0 => v.signum(),
+            // Exactly 0, a division by 0, or too long to tell.
             Some(_) => return None,
             None => {
                 let e = enclose(c, Interval::point(0.0), &Ctx::new(opts, lits));
@@ -575,11 +575,6 @@ fn solve_linear(
     var_is: &dyn Fn(&Expr) -> bool,
     lits: &crate::interval::Literals,
 ) -> Option<(Expr, f64)> {
-    // The solution may write 0 and 1: not where a literal typed as another
-    // decimal (1.0000000000000001) parsed to them, and would be read so.
-    if lits.shadows(0.0) || lits.shadows(1.0) {
-        return None;
-    }
     let diff = Expr::bin(crate::ast::BinOp::Sub, lhs.clone(), rhs.clone());
     let (c, r) = linear(&diff, var_is)?;
     let c = c.expr();
@@ -588,7 +583,7 @@ fn solve_linear(
     }
     let sign = coefficient_sign(&c, lits)?;
     // c·v + r = 0  →  v = −r / c (a written ±1, exact here, not divided by).
-    let one = |e: &Expr| matches!(e, Expr::Num(v) if *v == 1.0);
+    let one = |e: &Expr| e.exact_value() == Some(1.0);
     let sol = match &c {
         e if one(e) => r.neg().expr(),
         Expr::Neg(a) if one(a) => r.expr(),
@@ -837,10 +832,17 @@ mod tests {
         // Both coefficients exactly 0: no variable to solve for.
         let e = Equation::parse("y*(0.1+0.2-0.3)=x*(0.5-0.25-0.25)+1").unwrap();
         assert_eq!(e.kind(), EquationKind::Implicit);
-        // A typed 1.0000000000000001 is no 1: not divided away, not taken
-        // for the 1 a solution writes.
+        // A typed 1.0000000000000001 is no 1: it is not divided away, and
+        // the solution divides by it as typed, never by the 1 it would
+        // write (each number carries its own value: review 13).
         let e = Equation::parse("1.0000000000000001*y=x").unwrap();
-        assert_ne!(e.kind(), EquationKind::Function);
+        assert_eq!(e.kind(), EquationKind::Function);
+        let (_, f) = e.explicit().unwrap();
+        assert!(
+            f.formula().contains("1.0000000000000001"),
+            "{}",
+            f.formula()
+        );
         // Proven nonzero, exactly or by an enclosure: solved as before.
         for (src, x, y) in [
             ("(0.1+0.2)*y=x", 0.3, 1.0),
