@@ -1886,6 +1886,10 @@ mod tests {
         assert!(at("root(x,3.0000000000000001)", -8.0).is_nan());
         assert_eq!(at("root(x,3)", -8.0), -2.0);
         assert_eq!(at("root(x,1+2)", -8.0), -2.0);
+        // f⁻¹ is the inverse only for −1 as typed; otherwise a power of f.
+        assert_eq!(at("sin^-1(x)", 0.5), at("asin(x)", 0.5));
+        assert!(at("sin^-1.0000000000000001(x)", -1.0).is_nan());
+        assert!((at("sin^-1.0000000000000001(x)", 1.0) - 1.0 / 1f64.sin()).abs() < 1e-15);
         // Written as a ratio of integers: a real root, as before.
         assert_eq!(at("x^(1/3)", -8.0), -2.0);
         assert!(at("x^0.2", -32.0).is_nan());
