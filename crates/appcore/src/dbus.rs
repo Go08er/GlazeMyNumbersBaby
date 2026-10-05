@@ -27,8 +27,10 @@ const MAX_VALUES: usize = 16 * 1024;
 /// [`Connection::next_message`]. Signals a caller declared [`Wanted`] are
 /// kept up to the first pair of bounds (they come from one trusted sender),
 /// other signals up to the second (method calls to us and stale replies are
-/// dropped): a flood can neither push out an awaited signal nor hold more
-/// than this much memory.
+/// dropped): a flood can neither push out an awaited signal nor queue more
+/// than this many messages and wire bytes. The bounds count wire bytes; the
+/// decoded messages take more heap than that, but each is bounded too (at
+/// most [`MAX_VALUES`] values, see [`MAX_MESSAGE`]).
 const MAX_WANTED_QUEUED: (usize, usize) = (1024, 16 << 20);
 const MAX_OTHER_QUEUED: (usize, usize) = (64, 1 << 20);
 /// Deepest container nesting accepted (the specification's limit per kind).
