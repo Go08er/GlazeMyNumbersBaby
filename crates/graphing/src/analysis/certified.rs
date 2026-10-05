@@ -295,6 +295,38 @@ impl Num {
     }
 }
 
+/// `x₀ + k·P` with x₀ to up to `sig` significant digits (more than six to
+/// tell it from another family's).
+fn family_text_sig(x0: &Num, p: &Num, sig: i32) -> String {
+    if x0.is_zero() {
+        return times_k(p);
+    }
+    format!("{} + {}", x0.text_sig(sig), times_k(p))
+}
+
+/// The texts of distinct families (`texts`, of `fams`) where two would
+/// read alike: those two with the digits that tell their first members
+/// apart, up to 15 (review 13, R13-M-06); if none do, the row is unknown.
+fn families_apart(fams: &[(Num, Num, String)], texts: Vec<String>) -> Vec<String> {
+    if !alike(&texts) {
+        return texts;
+    }
+    let dups: Vec<usize> = (0..texts.len())
+        .filter(|&i| texts.iter().filter(|t| **t == texts[i]).count() > 1)
+        .collect();
+    for sig in 7..=15 {
+        let mut t = texts.clone();
+        for &i in &dups {
+            t[i] = family_text_sig(&fams[i].0, &fams[i].1, sig);
+        }
+        if !alike(&t) {
+            return t;
+        }
+    }
+    UNFIXED.with(|u| u.set(true));
+    texts
+}
+
 /// `k`-multiples of a period: `2kπ`, `kπ/2`, `360k`, `≈9.8696k` (an
 /// approximate period stays marked).
 fn times_k(p: &Num) -> String {
@@ -1339,19 +1371,39 @@ fn apart(a: &Num, b: &Num) -> Option<i32> {
     (7..=15).find(|&s| matches!((reading(a, s), reading(b, s)), (Some(x), Some(y)) if x != y))
 }
 
+/// Two numbers proven different: exact and unequal, or with disjoint
+/// enclosures.
+fn distinct(a: &Num, b: &Num) -> bool {
+    let exact_apart = match (a.exact, b.exact) {
+        (Some(x), Some(y)) => x.sub(y).is_some_and(|d| !d.is_zero()),
+        _ => false,
+    };
+    exact_apart || a.enc.hi.0 < b.enc.lo.0 || b.enc.hi.0 < a.enc.lo.0
+}
+
 /// Gives the ends of one row that would read alike where that would say
 /// something false the significant digits that tell them apart (up to 15,
 /// as the points' rows do; exact ones stay exact). `sets` (indices into
 /// `ends`) are where distinct numbers must read apart: an interval's two
 /// bounds, and the points a set lists (excluded points, or a range of
-/// single values). Ends in one class (`ends[i].0`) are one number, and
-/// so are numbers proven equal: never told apart. Two that still read
-/// alike can't be told apart: the row is shown as unknown.
-fn tell_apart(ends: &mut [(usize, &mut End)], sets: &[Vec<usize>]) {
+/// single values). `across` are where numbers proven different must:
+/// every end of the row, so the two ends of a gap between pieces, though
+/// each piece's own bounds read apart, don't read as one number (review
+/// 13, R13-M-06: `(−∞, ≈0.841471] ∪ [≈0.841471, ∞)` hid a gap of 10⁻⁷);
+/// ends that may be one number may read alike there (csch x + 1 takes
+/// every value but 1: `(−∞, ≈1) ∪ (≈1, ∞)`, its two ends enclosed
+/// separately). Ends in one class (`ends[i].0`) are one number, and so
+/// are numbers proven equal: never told apart. Two that still read alike
+/// can't be told apart: the row is shown as unknown.
+fn tell_apart(ends: &mut [(usize, &mut End)], sets: &[Vec<usize>], across: &[Vec<usize>]) {
     use std::collections::{HashMap, HashSet};
     let mut need: HashMap<usize, i32> = HashMap::new();
     let mut done: HashSet<(usize, usize)> = HashSet::new();
-    for set in sets {
+    let all = sets
+        .iter()
+        .map(|s| (s, true))
+        .chain(across.iter().map(|s| (s, false)));
+    for (set, strict) in all {
         // One finite end per class, grouped by what it reads as (its text,
         // and its value to six digits): only ends of one group read alike.
         let mut classes_seen: HashSet<usize> = HashSet::new();
@@ -1378,7 +1430,10 @@ fn tell_apart(ends: &mut [(usize, &mut End)], sets: &[Vec<usize>]) {
                     let (Some(a), Some(b)) = (ends[i].1.num, ends[j].1.num) else {
                         continue;
                     };
-                    if !done.insert((i.min(j), i.max(j))) || identical(&a, &b) {
+                    if identical(&a, &b)
+                        || (!strict && !distinct(&a, &b))
+                        || !done.insert((i.min(j), i.max(j)))
+                    {
                         continue;
                     }
                     match apart(&a, &b) {
@@ -1497,7 +1552,8 @@ fn interval_text(a: &End, b: &End) -> String {
 /// `y ∈ {5}`, `x ∈ (−∞, −1] ∪ [1, ∞)`), like [`format::format_set`];
 /// `joined(i)`: pieces i and i + 1 meet at one excluded point; `one(i)`:
 /// piece i's two ends are proven one number (a single point). Ends that
-/// read alike are told apart, or the row is unknown.
+/// read alike are told apart (a piece's two ends, the points a set lists,
+/// and any two ends of the row proven different), or the row is unknown.
 fn set_text(
     var: &str,
     parts: &mut [(End, End)],
@@ -1551,7 +1607,8 @@ fn set_text(
             .enumerate()
             .map(|(i, e)| (cls[i], e))
             .collect();
-        tell_apart(&mut ends, &sets);
+        // And across the pieces: the two ends of a gap.
+        tell_apart(&mut ends, &sets, &[(0..2 * n).collect()]);
     }
     // An interval whose ends still read alike says nothing.
     if parts
@@ -1805,7 +1862,8 @@ pub(super) fn features(
                         (x, p, String::new())
                     })
                     .collect();
-                let texts: Vec<String> = merge(fams)
+                let merged = merge(fams);
+                let texts: Vec<String> = merged
                     .iter()
                     .map(|(x, p, _)| {
                         data.excluded.push(DataFamily {
@@ -1815,6 +1873,7 @@ pub(super) fn features(
                         family_text(x, p)
                     })
                     .collect();
+                let texts = families_apart(&merged, texts);
                 let base = if domain_whole {
                     "x ∈ ℝ".to_string()
                 } else {
@@ -2356,7 +2415,10 @@ pub(super) fn features(
     };
     match a.monotonicity.value() {
         Some(v) => {
-            let mut pieces: Vec<(f64, (String, Monotonicity, End, End))> = Vec::new();
+            // (Its first x; its text, direction, ends, and whether it is
+            // one piece of each period.)
+            type MonoPiece = (f64, (String, Monotonicity, End, End, bool));
+            let mut pieces: Vec<MonoPiece> = Vec::new();
             for m in v {
                 let dir = match m.dir {
                     Dir::Increasing => Monotonicity::Increasing,
@@ -2392,61 +2454,71 @@ pub(super) fn features(
                     None => None,
                 };
                 // Strictly monotone pieces are written open (the panel's
-                // convention).
-                let (lo, hi, text) = match (ends, &per) {
-                    (Some((l, h)), Some(p)) => (
-                        finite(l, false),
-                        finite(h, false),
-                        format!("({}, {}), k ∈ ℤ", family_text(&l, p), family_text(&h, p)),
-                    ),
+                // convention); a piece of each period, `(a + kP, b + kP)`,
+                // by its members in the period about 0.
+                let (lo, hi, periodic) = match (ends, &per) {
+                    (Some((l, h)), Some(_)) => (finite(l, false), finite(h, false), true),
                     _ => {
                         let (mut lo, mut hi) = (cx.end(&m.on.lo), cx.end(&m.on.hi));
                         lo.closed = false;
                         hi.closed = false;
-                        // Written once the row's bounds are told apart.
-                        (lo, hi, String::new())
+                        (lo, hi, false)
                     }
                 };
-                pieces.push((lo.value, (text, dir, lo, hi)));
+                // Written once the row's bounds are told apart.
+                pieces.push((lo.value, (String::new(), dir, lo, hi, periodic)));
             }
             pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
-            // Bounds that read alike get the digits that tell them apart;
-            // a piece whose bounds still read alike says nothing.
+            // Bounds that read alike get the digits that tell them apart:
+            // a piece's own two, and any two of the row proven different
+            // (the ends of a gap between pieces, review 13, R13-M-06),
+            // the periodic pieces' members among themselves; a piece whose
+            // bounds still read alike says nothing.
             {
-                let open: Vec<usize> = (0..pieces.len())
-                    .filter(|&i| pieces[i].1.0.is_empty())
-                    .collect();
-                let refs: Vec<&End> = open
+                let count = pieces.len();
+                let refs: Vec<&End> = pieces
                     .iter()
-                    .flat_map(|&i| [&pieces[i].1.2, &pieces[i].1.3])
+                    .flat_map(|(_, (_, _, lo, hi, _))| [lo, hi])
                     .collect();
                 let mut cls = classes(&refs);
-                for k in 0..open.len() {
+                for k in 0..count {
                     if cls[2 * k + 1] == cls[2 * k] {
                         cls[2 * k + 1] = refs.len() + 2 * k + 1;
                     }
                 }
-                let mut ends: Vec<(usize, &mut End)> = Vec::new();
-                for (_, (text, _, lo, hi)) in pieces.iter_mut() {
-                    if text.is_empty() {
-                        ends.push((0, lo));
-                        ends.push((0, hi));
-                    }
-                }
-                for (k, e) in ends.iter_mut().enumerate() {
-                    e.0 = cls[k];
-                }
+                let periodic: Vec<bool> = pieces.iter().map(|(_, p)| p.4).collect();
+                let mut ends: Vec<(usize, &mut End)> = pieces
+                    .iter_mut()
+                    .flat_map(|(_, (_, _, lo, hi, _))| [lo, hi])
+                    .enumerate()
+                    .map(|(i, e)| (cls[i], e))
+                    .collect();
                 // Each piece's two bounds.
-                let sets: Vec<Vec<usize>> =
-                    (0..open.len()).map(|k| vec![2 * k, 2 * k + 1]).collect();
-                tell_apart(&mut ends, &sets);
-                for (_, (text, _, lo, hi)) in pieces.iter_mut() {
-                    if text.is_empty() {
-                        if lo.inf.is_none() && hi.inf.is_none() && lo.text == hi.text {
-                            UNFIXED.with(|u| u.set(true));
-                        }
-                        *text = interval_text(lo, hi);
+                let sets: Vec<Vec<usize>> = (0..count).map(|k| vec![2 * k, 2 * k + 1]).collect();
+                let across: Vec<Vec<usize>> = [false, true]
+                    .iter()
+                    .map(|&kind| {
+                        (0..count)
+                            .filter(|&k| periodic[k] == kind)
+                            .flat_map(|k| [2 * k, 2 * k + 1])
+                            .collect()
+                    })
+                    .collect();
+                tell_apart(&mut ends, &sets, &across);
+                for (_, (text, _, lo, hi, periodic)) in pieces.iter_mut() {
+                    if lo.inf.is_none() && hi.inf.is_none() && lo.text == hi.text {
+                        UNFIXED.with(|u| u.set(true));
                     }
+                    *text = match (&per, *periodic) {
+                        (Some(p), true) => {
+                            let member = |e: &End| match e.num {
+                                Some(n) if n.is_zero() => times_k(p),
+                                _ => format!("{} + {}", e.text, times_k(p)),
+                            };
+                            format!("({}, {}), k ∈ ℤ", member(lo), member(hi))
+                        }
+                        _ => interval_text(lo, hi),
+                    };
                 }
             }
             out.settle(
@@ -2459,7 +2531,7 @@ pub(super) fn features(
                 if data.period.is_none() {
                     data.repeat = per.map(|p| p.value());
                 }
-                for (_, (text, dir, lo, hi)) in pieces {
+                for (_, (text, dir, lo, hi, _)) in pieces {
                     data.monotonicity.push((data_interval(&lo, &hi), dir));
                     out.k.monotonicity.push((text, dir));
                 }

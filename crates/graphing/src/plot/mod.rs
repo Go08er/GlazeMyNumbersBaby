@@ -227,23 +227,28 @@ pub(crate) fn plot_with(
 
 /// Where an explicit curve is drawn, and traced, at a point where the
 /// point evaluator gives `d` and f's interval form (with the literals'
-/// exact decimals) encloses f in `[lo, hi]`: at `d` where the enclosure
-/// holds it (all that is known within a wide one); at the nearest end of
-/// the enclosure (its middle for a NaN) where `d` lies outside it but the
-/// enclosure is no wider than `tol` (the point evaluator's binary
-/// arithmetic parting from the exact literals and rules the interval form
-/// keeps: R12-M-05); `None` where `d` lies outside a wider enclosure: the
-/// point is undecided, and nothing is drawn through it (as where f is
-/// proven undefined: an empty enclosure, `lo > hi`).
-pub(crate) fn drawn_value(d: f64, lo: f64, hi: f64, tol: f64) -> Option<f64> {
+/// exact decimals) encloses f in `[lo, hi]`, `defined` if it proves f
+/// defined there: at `d` where the enclosure holds it (all that is known
+/// within a wide one); at the nearest end of the enclosure where `d` lies
+/// outside it but the enclosure is no wider than `tol` (the point
+/// evaluator's binary arithmetic parting from the exact literals and rules
+/// the interval form keeps: R12-M-05); at its middle for a NaN only where
+/// f is proven defined (an enclosure of f where it is defined says nothing
+/// of whether it is: x^⌊√(−10⁻³⁰)⌋, nowhere defined, is enclosed by 1,
+/// review 13, R13-M-02); `None` otherwise: the point is undecided, and
+/// nothing is drawn through it (as where f is proven undefined: an empty
+/// enclosure, `lo > hi`).
+pub(crate) fn drawn_value(d: f64, lo: f64, hi: f64, tol: f64, defined: bool) -> Option<f64> {
     if lo <= d && d <= hi {
         Some(d)
     } else if lo <= hi && hi - lo <= tol {
-        Some(if d.is_nan() {
-            lo + 0.5 * (hi - lo)
+        if !d.is_nan() {
+            Some(d.clamp(lo, hi))
+        } else if defined {
+            Some(lo + 0.5 * (hi - lo))
         } else {
-            d.clamp(lo, hi)
-        })
+            None
+        }
     } else {
         None
     }

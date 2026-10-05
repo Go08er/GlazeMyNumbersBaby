@@ -421,12 +421,13 @@ fn step_exponent(iv: &IntervalFn, t: f64, n0: i32, t_px: f64, d_px: f64) -> i32 
 /// rule ([`drawn_value`]), given the point evaluator's value `d` there: a
 /// proven value at `d` if its enclosure holds `d`, else at the enclosure's
 /// nearest end (`d` is wrong: R12-M-05); an unknown one at `d` where f's
-/// enclosure `e` holds it or is within `tol`, else nowhere (the curve
-/// isn't drawn through it either).
+/// enclosure `e` holds it or is within `tol` (for an undefined `d`, only
+/// where `e` proves f defined: R13-M-02), else nowhere (the curve isn't
+/// drawn through it either).
 fn traced_value(value: TraceValue, d: f64, e: Option<&DecInterval>, tol: f64) -> Option<f64> {
     match (value, e) {
-        (TraceValue::Defined { lo, hi }, _) => drawn_value(d, lo, hi, f64::INFINITY),
-        (TraceValue::Unknown, Some(e)) => drawn_value(d, e.lo(), e.hi(), tol),
+        (TraceValue::Defined { lo, hi }, _) => drawn_value(d, lo, hi, f64::INFINITY, true),
+        (TraceValue::Unknown, Some(e)) => drawn_value(d, e.lo(), e.hi(), tol, e.dec >= Dec::Def),
         _ => Some(d),
     }
 }
@@ -874,6 +875,57 @@ mod tests {
         );
         let defined = TraceValue::Defined { lo: 1.0, hi: 1.5 };
         assert_eq!(traced_value(defined, 20.0, None, tol), Some(1.5));
+    }
+
+    /// R13-M-02: x^⌊√(sin²4 + cos²4 − 1 − 10⁻³⁰)⌋ is nowhere defined (the
+    /// root's argument is −10⁻³⁰), though where it is defined it would be
+    /// 1: its enclosures are the point 1, possibly undefined. The integer
+    /// power's fast path called them defined, so the curve y = 1 was drawn
+    /// and traced through the point evaluator's NaN. Now neither: and an
+    /// undefined point value is never moved onto an enclosure that doesn't
+    /// prove f defined.
+    #[test]
+    fn a_possibly_undefined_enclosure_draws_and_traces_nothing() {
+        let vp = vp();
+        for src in [
+            "y=x^floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30)))",
+            "y=root(x,1+floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30))))",
+            "y=2+0*x^floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30)))",
+        ] {
+            let (eq, p) = setup(src, &vp);
+            assert!(
+                p.curves.iter().all(|c| c.len() < 2),
+                "{src}: drawn {:?}",
+                p.curves
+            );
+            for (x, y) in [
+                (1.19, 1.0),
+                (1.19, 1.19),
+                (1.19, 2.0),
+                (-3.0, 1.0),
+                (0.5, 0.5),
+            ] {
+                let (px, py) = vp.to_screen(x, y);
+                let t = nearest_point(&vp, &[(&eq, &p)], px, py, 50.0);
+                assert!(t.is_none(), "{src}: traced {t:?}");
+            }
+        }
+        let tol = 0.25 * vp.y_per_px();
+        let mut one = DecInterval::point(1.0);
+        assert_eq!(
+            traced_value(TraceValue::Unknown, f64::NAN, Some(&one), tol),
+            Some(1.0)
+        );
+        one.dec = Dec::Trv;
+        assert_eq!(
+            traced_value(TraceValue::Unknown, f64::NAN, Some(&one), tol),
+            None
+        );
+        // A defined point value is still kept, or moved into the enclosure.
+        assert_eq!(
+            traced_value(TraceValue::Unknown, 1.0, Some(&one), tol),
+            Some(1.0)
+        );
     }
 
     #[test]

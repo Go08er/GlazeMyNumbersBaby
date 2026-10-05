@@ -276,6 +276,54 @@ const UNMODELLED: &[(&str, &str)] = &[
         "ceil((99!!-6625061298371663*2^208)/10^70)",
         "XI=none | YI=1 | P=even | MIN=none | MAX=none | INF=none | VA=none | R={1}",
     ),
+    // Review 13, R13-M-03: whole numbers are counted exactly at any size,
+    // r > n included (0): the interval core took nCr(61, 62) through
+    // Γ(0) and found it undefined, so no y-intercept.
+    (
+        "nCr(61,62)",
+        "D=R | XI=all | YI=0 | P=both | INF=none | VA=none | R={0}",
+    ),
+    (
+        "nPr(61,62)",
+        "D=R | XI=all | YI=0 | P=both | INF=none | VA=none | R={0}",
+    ),
+    (
+        "abs(nCr(61,62))+1",
+        "D=R | XI=none | YI=1 | P=even | MIN=none | MAX=none | INF=none | VA=none | R={1}",
+    ),
+    (
+        "nCr(1000,1001)+nPr(100,101)+x",
+        "D=R | XI=0 | YI=0 | P=odd | MIN=none | MAX=none | INF=none | VA=none | R=R",
+    ),
+    (
+        "nCr(200,100)/10^58",
+        "D=R | XI=none | YI=9.054851465610328~ | P=even | MIN=none | MAX=none | INF=none | VA=none",
+    ),
+    // Review 13, R13-M-04: a degree typed as an odd integer is odd, though
+    // the doubles either side of 9007199254740993 are even (the replay
+    // reads its degree as a double: not replayed). −8^(1/n) is just below
+    // −1, defined.
+    (
+        "root(-8,9007199254740993)",
+        "XI=none | YI=-1.0000000000000002~ | P=even | VA=none",
+    ),
+    (
+        "root(x,9007199254740993)",
+        "D=R | XI=0 | YI=0 | P=odd | MIN=none | MAX=none | VA=none | HA=none | R=R",
+    ),
+    (
+        "root(x,-9007199254740993)",
+        "D=(-inf,0)U(0,inf) | XI=none | YI=none | P=odd | MIN=none | MAX=none | VA=0",
+    ),
+    // Even, or no integer, as typed: x ≥ 0.
+    (
+        "root(x,18014398509481986)",
+        "D=[0,inf) | XI=0 | YI=0 | P=neither | MIN=(0,0) | MAX=none | VA=none | R=[0,inf)",
+    ),
+    (
+        "root(x,3.0000000000000001)",
+        "D=[0,inf) | XI=0 | YI=0 | P=neither | MIN=(0,0) | MAX=none | VA=none | R=[0,inf)",
+    ),
 ];
 
 /// The functions of review rounds 9–11 (REVIEW_9/10/11.md), with what is
@@ -799,6 +847,18 @@ const REVIEW: &[(&str, &str)] = &[
     (
         "10^17*(0.1+0.2-0.3)+x",
         "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
+    ),
+    // Review 13, R13-M-02: nowhere defined (the root's argument is
+    // −10⁻³⁰), though the exponent's and the degree's enclosures are whole
+    // numbers: the integer fast paths kept only the base's decoration, and
+    // the root was certified a y-intercept 0.
+    (
+        "x^floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30)))",
+        "XI=none | YI=none | MIN=none | MAX=none | INF=none",
+    ),
+    (
+        "root(x,1+floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30))))",
+        "XI=none | YI=none | MIN=none | MAX=none | INF=none",
     ),
 ];
 
@@ -1936,4 +1996,117 @@ fn numbers_that_read_alike_are_told_apart() {
     for (src, want) in [("y=x/x", "y ∈ {1}"), ("y=sin(1)+0*x", "y ∈ {≈0.841471}")] {
         assert_eq!(analyze_str(src).range, want, "{src}");
     }
+}
+
+/// Review 13, R13-M-03: whole numbers are counted exactly at any size,
+/// r > n included (0, under the whole-count convention): the interval
+/// core took nCr(61, 62) through Γ(0), found it undefined, and the panel
+/// said there was no y-intercept.
+#[test]
+fn whole_counts_past_sixty_are_exact() {
+    for (src, want) in [
+        ("y=nCr(61,62)", "0"),
+        ("y=nPr(61,62)", "0"),
+        ("y=abs(nCr(61,62))+1", "1"),
+        ("y=nCr(1000,1001)+1", "1"),
+        ("y=nPr(100,101)-2", "\u{2212}2"),
+    ] {
+        let k = analyze_str(src);
+        assert_eq!(k.y_intercept, want, "{src}");
+    }
+    let a = certify_text(
+        "nCr(61,62)",
+        CompileOptions::default(),
+        DEFAULT_BUDGET,
+        None,
+    )
+    .unwrap();
+    assert!(
+        matches!(&a.y_intercept, Row::Certified { value: Some(e), .. } if e.is_point() && e.lo.0 == 0.0),
+        "{:?}",
+        a.y_intercept
+    );
+}
+
+/// Review 13, R13-M-04: a degree typed as the odd 9007199254740993 is odd,
+/// though both doubles about it are even: root(−8, n) is defined, just
+/// below −1 (the panel said there was no y-intercept).
+#[test]
+fn a_typed_odd_degree_is_odd() {
+    let a = certify_text(
+        "root(-8,9007199254740993)",
+        CompileOptions::default(),
+        DEFAULT_BUDGET,
+        None,
+    )
+    .unwrap();
+    assert!(
+        matches!(&a.y_intercept, Row::Certified { value: Some(e), .. } if e.hi.0 <= -1.0 && e.lo.0 > -1.000001),
+        "{:?}",
+        a.y_intercept
+    );
+    assert_eq!(
+        analyze_str("y=root(-8,9007199254740993)").y_intercept,
+        "≈\u{2212}1"
+    );
+    // Typed even: undefined at −8.
+    let a = certify_text(
+        "root(-8,18014398509481986)",
+        CompileOptions::default(),
+        DEFAULT_BUDGET,
+        None,
+    )
+    .unwrap();
+    assert!(
+        matches!(&a.y_intercept, Row::Certified { value: None, .. }),
+        "{:?}",
+        a.y_intercept
+    );
+}
+
+/// Review 13, R13-M-06: the two ends of a gap between pieces, sin 1 and
+/// sin 1 + 10⁻⁷, were written alike (`(−∞, ≈0.841471] ∪ [≈0.841471, ∞)`
+/// read as all of ℝ, the ln one as ℝ but a point), though each piece's
+/// own bounds read apart. Ends proven different read apart across a row;
+/// ends that may be one number may still read alike.
+#[test]
+fn the_ends_of_a_gap_read_apart() {
+    for (src, domain) in [
+        (
+            "y=sqrt((x-sin(1))*(x-sin(1)-0.0000001))",
+            "x ∈ (−∞, ≈0.841471] ∪ [≈0.8414711, ∞)",
+        ),
+        (
+            "y=ln((x-sin(1))*(x-sin(1)-0.0000001))",
+            "x ∈ (−∞, ≈0.841471) ∪ (≈0.8414711, ∞)",
+        ),
+    ] {
+        let k = analyze_str(src);
+        assert_eq!(k.domain, domain, "{src}");
+        // Monotone on each side of the gap: its ends read apart too.
+        let ends: Vec<String> = k
+            .monotonicity
+            .iter()
+            .flat_map(|(t, _)| bounds_of(t))
+            .flat_map(|(a, b)| [a, b])
+            .filter(|e| !e.contains('∞'))
+            .collect();
+        assert!(
+            ends.len() == 2 && ends[0] != ends[1],
+            "{src}: monotonicity {:?}",
+            k.monotonicity
+        );
+    }
+    // Two ends that may be one number (csch x + 1 takes every value but
+    // 1, its limits enclosed apart) still read alike; and an excluded
+    // point, one number, reads as one.
+    assert!(
+        analyze_str("y=csch(x)+1")
+            .range
+            .starts_with("y ∈ (−∞, ≈1) ∪ (≈1, ∞)")
+    );
+    assert_eq!(
+        analyze_str("y=sqrt(x^2-1)/(x-2)").domain,
+        "x ∈ (−∞, −1] ∪ [1, 2) ∪ (2, ∞)"
+    );
 }

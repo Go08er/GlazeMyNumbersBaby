@@ -64,7 +64,11 @@ exact value, never by its double: `x^1.0000000000000001` and
 `x^2.0000000000000001` take the positive-base rule (domain [0, ∞), a
 minimum at 0), while `x^(0.1+0.9)` and `x^2.0` are integer powers; only the
 integers of the written form `p/q` must be typed exactly so to give odd
-roots. Arithmetic on literals and sliders alone (+, −, ×, ÷, whole
+roots. Likewise a root's degree typed as an odd integer is odd at any
+size: `root(−8, 9007199254740993)` is defined (just below −1), though the
+doubles either side of that degree are even. (The point evaluator still
+reads that degree as its double 2⁵³ and gives no value there; the
+analysis, the curve and its trace take the enclosure.) Arithmetic on literals and sliders alone (+, −, ×, ÷, whole
 powers, |·| and the counts n!, n!!, nCr, nPr of whole numbers; a slider is
 the double it is set to) is done exactly and rounded once
 (`10^17·(0.1 + 0.2 − 0.3)` is 0, `0.1·3` is the double nearest 0.3, and
@@ -125,10 +129,14 @@ How numbers are written:
   integer or a power of ten read alike (`≈1×10⁶`); an exact integer keeps
   its exact text (`1000000`). Accessibility reads "≈" as
   "approximately". **The one exception to six:** two different numbers of
-  a row that would read alike (two points, two excluded points, the two
-  bounds of a range or of a monotone piece) get the significant digits
-  that tell them apart, up to fifteen (`x ∈ ℝ \ {≈0.841471, ≈0.8414711}`,
-  `y ∈ [≈0.8414711, ≈0.8414713]`). Equal texts never make two numbers one:
+  a row that would read alike (two points, two excluded points or
+  families, the two bounds of a range or of a monotone piece, and the ends
+  of two pieces proven different, as about a gap) get the significant
+  digits that tell them apart, up to fifteen (`x ∈ ℝ \ {≈0.841471,
+  ≈0.8414711}`, `y ∈ [≈0.8414711, ≈0.8414713]`, `x ∈ (−∞, ≈0.841471] ∪
+  [≈0.8414711, ∞)`); two ends that may be one number may read alike
+  (`y ∈ (−∞, ≈1) ∪ (≈1, ∞)` for csch x + 1). Equal texts never make two
+  numbers one:
   a set is written as a single point `{c}` only when its ends are proven
   one number (exact and equal, the same double, or one value f takes at
   one place). The minimum is one switch,
