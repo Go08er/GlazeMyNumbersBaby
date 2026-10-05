@@ -475,9 +475,10 @@ impl<'a> Field<'a> {
             Expr::Const(Constant::E) => self.atom("e".into(), Atom::Const),
             Expr::X => Frac::of(Poly::var(0)),
             Expr::Y => return None,
-            Expr::Var(n) => {
-                Frac::constant(exact::of_f64(self.vars.iter().find(|(m, _)| m == n)?.1)?)
-            }
+            Expr::Var(n) => Frac::constant(
+                self.lits
+                    .slider_exact(n, self.vars.iter().find(|(m, _)| m == n)?.1)?,
+            ),
             Expr::Neg(a) => self.read(a)?.neg(),
             Expr::Degrees(a) => self.read(a)?,
             Expr::Bin(BinOp::Pow, a, b) => {

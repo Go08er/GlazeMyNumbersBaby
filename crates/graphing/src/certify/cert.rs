@@ -607,8 +607,15 @@ pub struct Binding {
     pub rules: String,
     /// [`POWER_CONVENTION`].
     pub power: String,
-    /// The value each variable of the tree (a slider) took.
+    /// The value each variable of the tree (a slider) took: the double
+    /// it was read as.
     pub sliders: std::collections::BTreeMap<String, f64>,
+    /// The decimal a slider stands for where a digit limit
+    /// (`literal_digits`) rounded its value to one its double only rounds
+    /// (0.3 for a slider set to 0.30000000000000004, to 14 digits). Any
+    /// other slider is exactly its double.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub slider_decimals: std::collections::BTreeMap<String, String>,
     /// `,` was the decimal separator (and `;` the argument separator).
     pub decimal_comma: bool,
     /// Each number typed was rounded on entry to this many significant
@@ -640,11 +647,17 @@ impl Binding {
                 (v.clone(), value)
             })
             .collect();
+        let slider_decimals = eq
+            .variables()
+            .iter()
+            .filter_map(|v| Some((v.clone(), opts.variables.lit(v).digits()?.to_string())))
+            .collect();
         Binding {
             certifier: format!("graphing {}", env!("CARGO_PKG_VERSION")),
             rules: rules_hash(),
             power: POWER_CONVENTION.into(),
             sliders,
+            slider_decimals,
             decimal_comma: eq.parse_options().decimal_comma,
             literal_digits: eq.parse_options().literal_digits,
             budget,

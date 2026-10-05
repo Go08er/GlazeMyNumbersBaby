@@ -207,6 +207,80 @@ fn a_digit_limit_rounds_typed_numbers_and_sliders_on_entry() {
     assert_eq!(a.binding.as_ref().and_then(|b| b.literal_digits), Some(14));
 }
 
+/// Under a digit limit a slider is, like a number typed, its value rounded
+/// to so many digits: the decimal, not the double nearest it. At the
+/// default 14 digits, a slider a at 0.3 makes 10^17·(a − 0.3) + x the
+/// line y = x, at the scalar, the panel and the certificate (as the double
+/// it would be x − 1.11, R12-M-05's displaced line at our own default).
+/// Off, a slider is the double it is set to.
+#[test]
+fn a_slider_is_its_rounded_decimal_under_a_digit_limit() {
+    use graphing::Graph;
+    let line = |digits: Option<u8>, a: f64| {
+        let mut g = Graph::new();
+        g.set_literal_digits(digits);
+        let id = g.add_equation("y=10^17*(a-0.3)+x");
+        g.set_variable("a", a);
+        let ys: Vec<f64> = [0.0, 2.0, -3.5]
+            .iter()
+            .map(|&x| g.evaluate(id, x).unwrap())
+            .collect();
+        (ys, g.analyze(id))
+    };
+    for a in [0.3, 0.1 + 0.2, 0.3f64.next_down()] {
+        let (ys, k) = line(Some(14), a);
+        assert_eq!(ys, [0.0, 2.0, -3.5], "a = {a:e}");
+        assert_eq!(
+            k.data.y_intercept,
+            Some(0.0),
+            "a = {a:e}: {}",
+            k.y_intercept
+        );
+        assert!(k.data.zeros.iter().all(|z| z.x == 0.0), "{}", k.x_intercept);
+    }
+    // Off: the double 0.299999999999999988897769753748… is 3/10 − 1/(5·2⁵⁴),
+    // so f(0) is −10¹⁷/(5·2⁵⁴), exactly −2·10¹⁶/2⁵⁴.
+    let (ys, k) = line(None, 0.3);
+    assert_eq!(ys[0], -2e16 / 2f64.powi(54), "{ys:?}");
+    assert!(
+        k.data.y_intercept.is_none_or(|y| y != 0.0),
+        "{}",
+        k.y_intercept
+    );
+    // The aliasing case: at 14 digits a slider at 1.0000000000000002 is 1,
+    // as a typed 1.0000000000000001 is; off it is its double.
+    let mut g = Graph::new();
+    g.set_literal_digits(Some(14));
+    let id = g.add_equation("y=a*x-x");
+    let alias = g.add_equation("y=a*x-1.0000000000000001*x");
+    g.set_variable("a", 1.0000000000000002);
+    assert_eq!(g.evaluate(id, 1e16), Some(0.0));
+    assert_eq!(g.analyze(id).range, "y ∈ {0}");
+    assert_eq!(g.analyze(alias).range, "y ∈ {0}");
+    g.set_literal_digits(None);
+    assert_eq!(g.evaluate(id, 1e16), Some(2.0));
+    assert!(!g.analyze(id).range.contains('{'));
+    // The certificate records the decimal a slider was read as.
+    let vars: std::collections::HashMap<String, f64> = [("a".to_string(), 0.1 + 0.2)].into();
+    let a = graphing::certify::certify_text_with(
+        "10^17*(a-0.3)+x",
+        ParseOptions {
+            literal_digits: Some(14),
+            ..Default::default()
+        },
+        CompileOptions {
+            variables: &vars,
+            ..CompileOptions::default()
+        },
+        graphing::certify::DEFAULT_BUDGET,
+        None,
+    )
+    .unwrap();
+    let b = a.binding.unwrap();
+    assert_eq!(b.sliders.get("a"), Some(&0.3));
+    assert_eq!(b.slider_decimals.get("a").map(String::as_str), Some("0.3"));
+}
+
 /// R13-M-04 at the point evaluator (deferred by the interval work): a
 /// root degree typed as the odd 9007199254740993 is odd, though both
 /// doubles about it are even. The program and its reference give the real

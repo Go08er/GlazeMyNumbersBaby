@@ -32,6 +32,10 @@ use graphing::ast::{BinOp, Constant, Expr, Func, Lit};
 pub struct Lits {
     /// The decimals typed in the source, as the replay reads them.
     typed: Vec<String>,
+    /// The decimal each slider stands for, where a digit limit rounded its
+    /// value to one ([`Lits::with_sliders`]); any other slider is its
+    /// double.
+    sliders: Vec<(String, String)>,
     untyped: std::cell::Cell<u32>,
 }
 
@@ -147,7 +151,78 @@ impl Lits {
         add(&sup);
         Lits {
             typed,
+            sliders: Vec::new(),
             untyped: Default::default(),
+        }
+    }
+
+    /// The sliders `vars` (as the binding gives their doubles), and the
+    /// decimals some stand for (`decimals`), read under the digit limit
+    /// `digits`, checked: under a limit each slider is its value rounded to
+    /// so many significant digits, half away from zero (the replay rounds
+    /// for itself: a decimal given must have no more digits and its double
+    /// must be the slider's; a slider without one must be a double of so
+    /// few digits); off, each is exactly its double.
+    pub fn with_sliders(
+        mut self,
+        vars: &[(String, f64)],
+        decimals: &[(String, String)],
+        digits: Option<u8>,
+    ) -> Result<Lits, String> {
+        let Some(n) = digits else {
+            if let Some((name, _)) = decimals.first() {
+                return Err(format!(
+                    "binding: slider {name} given a decimal without a digit limit"
+                ));
+            }
+            return Ok(self);
+        };
+        for (name, v) in vars {
+            match decimals.iter().find(|(m, _)| m == name) {
+                Some((_, d)) => {
+                    let q =
+                        literal_value(d).ok_or_else(|| format!("binding: slider {name} = {d}"))?;
+                    let mag = d.trim_start_matches('-');
+                    if literal_value(&round_sig(mag, n)) != literal_value(mag)
+                        || d.parse::<f64>().ok() != Some(*v)
+                        || rug::Rational::from_f64(*v) == Some(q)
+                    {
+                        return Err(format!(
+                            "binding: slider {name} = {d} is no {n}-digit decimal held as {v:e}"
+                        ));
+                    }
+                }
+                None => {
+                    let exact = format!("{:.1074}", v.abs());
+                    if v.is_finite()
+                        && *v != 0.0
+                        && literal_value(&round_sig(&exact, n)) != literal_value(&exact)
+                    {
+                        return Err(format!(
+                            "binding: slider {name} = {v:e} is not rounded to {n} digits"
+                        ));
+                    }
+                }
+            }
+        }
+        self.sliders = decimals.to_vec();
+        Ok(self)
+    }
+
+    /// The decimal the slider `name` stands for, if a digit limit made it
+    /// one.
+    pub fn slider(&self, name: &str) -> Option<&str> {
+        self.sliders
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, d)| d.as_str())
+    }
+
+    /// The slider `name` exactly, from its double `v` in the binding.
+    pub fn slider_exact(&self, name: &str, v: f64) -> Option<rug::Rational> {
+        match self.slider(name) {
+            Some(d) => literal_value(d),
+            None => rug::Rational::from_f64(v),
         }
     }
 
@@ -233,7 +308,7 @@ impl Lits {
 }
 
 /// A decimal (digits, at most one `.`, a `-` in front) exactly.
-fn literal_value(text: &str) -> Option<rug::Rational> {
+pub fn literal_value(text: &str) -> Option<rug::Rational> {
     let (neg, p) = match text.strip_prefix('-') {
         Some(p) => (true, p),
         None => (false, text),
@@ -678,9 +753,20 @@ pub fn eval(e: &Expr, x: &S, n: usize, ctx: &Ctx<'_>) -> S {
         // sets a node's argument keeps beside an edge of its domain).
         Expr::Var(name) if name == "__unit" => se::constant(Iv::of2(-1.0, 1.0), n),
         Expr::Var(name) if name == "__ge1" => se::constant(Iv::of2(1.0, f64::INFINITY), n),
-        Expr::Var(name) => match ctx.vars.iter().find(|(v, _)| v == name) {
-            Some((_, v)) => se::constant(Iv::of(*v), n),
-            None => se::constant(Iv::unknown(), n),
+        // A slider: its double, or the decimal a digit limit made it.
+        Expr::Var(name) => match (
+            ctx.lits.slider(name),
+            ctx.vars.iter().find(|(v, _)| v == name),
+        ) {
+            (Some(d), _) => se::constant(
+                match d.strip_prefix('-') {
+                    Some(p) => iv::neg(&iv::decimal(p)),
+                    None => iv::decimal(d),
+                },
+                n,
+            ),
+            (None, Some((_, v))) => se::constant(Iv::of(*v), n),
+            (None, None) => se::constant(Iv::unknown(), n),
         },
         Expr::Y => se::constant(Iv::unknown(), n),
         Expr::Neg(a) => se::neg(&eval(a, x, n, ctx)),

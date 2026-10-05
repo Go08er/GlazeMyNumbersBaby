@@ -989,10 +989,8 @@ pub fn limit(
             .variables()
             .into_iter()
             .map(|n| {
-                let v = variables
-                    .value(&n)
-                    .unwrap_or(crate::compile::DEFAULT_VARIABLE_VALUE);
-                (n, v)
+                let (v, lit) = crate::compile::slider(variables, &n);
+                (n, lit.enclose(v))
             })
             .collect(),
     };

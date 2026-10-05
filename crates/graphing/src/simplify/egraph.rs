@@ -11,7 +11,7 @@ use super::q::Q;
 use super::rules::rewrites;
 use super::side::{Cond, Jump, jumps, side_conditions};
 use crate::ast::Expr;
-use crate::compile::{CompileOptions, DEFAULT_VARIABLE_VALUE};
+use crate::compile::CompileOptions;
 use crate::functions::TrigUnit;
 use crate::interval::Interval;
 
@@ -75,8 +75,8 @@ impl<'a> Settings<'a> {
                 .variables()
                 .into_iter()
                 .map(|n| {
-                    let v = self.variables.value(&n).unwrap_or(DEFAULT_VARIABLE_VALUE);
-                    (n, v)
+                    let (v, lit) = crate::compile::slider(self.variables, &n);
+                    (n, lit.enclose(v))
                 })
                 .collect(),
         }

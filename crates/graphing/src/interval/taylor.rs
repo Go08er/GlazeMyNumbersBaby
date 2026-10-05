@@ -16,7 +16,7 @@ use super::arith::Interval;
 use super::dec::{Dec, DecInterval};
 use super::elem;
 use crate::ast::{BinOp, Constant, Expr, Func};
-use crate::compile::{CompileOptions, DEFAULT_VARIABLE_VALUE, syntactic_rational};
+use crate::compile::{CompileOptions, syntactic_rational};
 use crate::functions::TrigUnit;
 
 /// What an evaluation needs besides the tree and the box.
@@ -528,15 +528,11 @@ fn ev(e: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
         Expr::Const(Constant::E) => konst(DecInterval::new(elem::e()), n),
         Expr::X => x.clone(),
         Expr::Y => konst(ctx.y, n),
-        Expr::Var(name) => konst(
-            DecInterval::point(
-                ctx.opts
-                    .variables
-                    .value(name)
-                    .unwrap_or(DEFAULT_VARIABLE_VALUE),
-            ),
-            n,
-        ),
+        // A slider: its double, or the decimal a digit limit made it.
+        Expr::Var(name) => {
+            let (v, lit) = crate::compile::slider(ctx.opts.variables, name);
+            konst(DecInterval::new(lit.enclose(v)), n)
+        }
         Expr::Neg(a) => neg(&ev(a, x, n, ctx)),
         Expr::Degrees(a) => {
             if unit != TrigUnit::Degrees {

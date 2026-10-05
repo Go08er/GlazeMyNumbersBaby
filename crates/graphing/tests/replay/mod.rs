@@ -653,13 +653,29 @@ pub fn function(a: &Value) -> Result<Fx, String> {
             }
         }
     }
-    let vars = match a.get("binding").and_then(|b| b.get("sliders")) {
+    let vars: Vec<(String, f64)> = match a.get("binding").and_then(|b| b.get("sliders")) {
         Some(Value::Object(m)) => m
             .iter()
             .filter_map(|(k, v)| v.as_f64().map(|v| (k.clone(), v)))
             .collect(),
         _ => Vec::new(),
     };
+    // Under a digit limit a slider is its value rounded like a number
+    // typed: the decimal, where the binding names one (checked).
+    let decimals: Vec<(String, String)> =
+        match a.get("binding").and_then(|b| b.get("slider_decimals")) {
+            Some(Value::Object(m)) => m
+                .iter()
+                .map(|(k, v)| {
+                    v.as_str()
+                        .map(|d| (k.clone(), d.to_string()))
+                        .ok_or_else(|| format!("binding: slider {k}'s decimal {v}"))
+                })
+                .collect::<Result<_, _>>()?,
+            None | Some(Value::Null) => Vec::new(),
+            Some(other) => return Err(format!("binding: slider_decimals {other}")),
+        };
+    let lits = lits.with_sliders(&vars, &decimals, digits)?;
     let f_alt = eval::horner(&f, &lits);
     let verified = algebra::verify(
         &f,

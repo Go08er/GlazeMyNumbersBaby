@@ -26,8 +26,12 @@ use crate::functions::{self as fns, TrigUnit};
 pub fn bind_variables(e: &Expr, opts: &CompileOptions<'_>) -> Expr {
     let b = |a: &Expr| Box::new(bind_variables(a, opts));
     match e {
-        // (A slider's value is its double, exactly.)
-        Expr::Var(n) => Expr::exact(opts.variables.value(n).unwrap_or(DEFAULT_VARIABLE_VALUE)),
+        // (A slider's value is its double, or under a digit limit the
+        // decimal it was rounded to: `compile::Sliders`.)
+        Expr::Var(n) => {
+            let (v, lit) = crate::compile::slider(opts.variables, n);
+            Expr::Num(v, lit)
+        }
         Expr::Neg(a) => Expr::Neg(b(a)),
         Expr::Degrees(a) => Expr::Degrees(b(a)),
         Expr::Bin(op, x, y) => Expr::Bin(*op, b(x), b(y)),

@@ -15,6 +15,88 @@ use crate::wide::{self, Wide};
 pub trait VariableValues {
     /// Value of the named variable, or `None` if unknown.
     fn value(&self, name: &str) -> Option<f64>;
+
+    /// What the named variable's value stands for exactly: the double
+    /// itself, unless a digit limit made it a decimal ([`Sliders`]).
+    fn lit(&self, _name: &str) -> Lit {
+        Lit::Exact
+    }
+}
+
+/// A slider's value as the equations read it: its double and what it
+/// stands for exactly (the default value, 1, for one not set).
+pub(crate) fn slider(vars: &dyn VariableValues, name: &str) -> (f64, Lit) {
+    match vars.value(name) {
+        Some(v) => (v, vars.lit(name)),
+        None => (DEFAULT_VARIABLE_VALUE, Lit::Exact),
+    }
+}
+
+/// An equation's sliders as it reads them. A slider is the double it is
+/// set to; under a digit limit on numbers
+/// (`lexer::ParseOptions::literal_digits`) it is, like a number typed, that
+/// value rounded to so many significant digits, half away from zero, and
+/// that decimal from then on (its double the nearest: with 14 digits, a
+/// slider set to 0.30000000000000004 is 3/10, and `a − 0.3` is 0).
+/// Rounding again changes nothing, so an analysis may take sliders already
+/// read so.
+pub struct Sliders(std::collections::BTreeMap<String, (f64, Lit)>);
+
+impl Sliders {
+    /// The sliders `names`, valued by `given`, read under `digits`.
+    pub fn new<'n>(
+        names: impl IntoIterator<Item = &'n String>,
+        given: &dyn VariableValues,
+        digits: Option<u8>,
+    ) -> Sliders {
+        Sliders(
+            names
+                .into_iter()
+                .filter_map(|n| {
+                    let v = given.value(n)?;
+                    let lit = given.lit(n);
+                    Some((
+                        n.clone(),
+                        match digits {
+                            Some(d) => round_slider(v, &lit, d),
+                            None => (v, lit),
+                        },
+                    ))
+                })
+                .collect(),
+        )
+    }
+
+    /// The sliders of `eq` valued by `given`, read under its digit limit.
+    pub fn of(eq: &crate::Equation, given: &dyn VariableValues) -> Sliders {
+        Sliders::new(eq.variables(), given, eq.parse_options().literal_digits)
+    }
+}
+
+impl VariableValues for Sliders {
+    fn value(&self, name: &str) -> Option<f64> {
+        self.0.get(name).map(|(v, _)| *v)
+    }
+
+    fn lit(&self, name: &str) -> Lit {
+        self.0.get(name).map_or(Lit::Exact, |(_, l)| l.clone())
+    }
+}
+
+/// `v` (exactly `lit`) rounded to `digits` significant digits, half away
+/// from zero: the double nearest, and the decimal it stands for.
+fn round_slider(v: f64, lit: &Lit, digits: u8) -> (f64, Lit) {
+    if !v.is_finite() || v == 0.0 {
+        return (v, Lit::Exact);
+    }
+    let exact = match lit.digits() {
+        Some(d) => d.trim_start_matches('-').to_string(),
+        None => format!("{:.1074}", v.abs()),
+    };
+    let r = crate::lexer::round_decimal(&exact, digits);
+    let w: f64 = r.parse().unwrap_or(v.abs());
+    let l = Lit::typed(w, &r);
+    if v < 0.0 { (-w, l.neg()) } else { (w, l) }
 }
 
 impl VariableValues for () {
@@ -1315,8 +1397,11 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
             // A decimal typed with thousands of digits.
             None => Lone(false),
         },
+        // A slider's exact value: its double, or the decimal a digit limit
+        // made it ([`Sliders`]).
         Expr::Var(n) => {
-            match Rat::from_f64(opts.variables.value(n).unwrap_or(DEFAULT_VARIABLE_VALUE)) {
+            let (v, lit) = slider(opts.variables, n);
+            match lit.rat(v) {
                 Some(r) => Value(r, true),
                 None => No,
             }

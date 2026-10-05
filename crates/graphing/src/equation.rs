@@ -230,6 +230,13 @@ impl Equation {
     /// Compiles the equation for plotting/tracing with the given variable
     /// values and trig unit.
     pub fn compile(&self, opts: &CompileOptions<'_>) -> Result<CompiledEquation, EquationError> {
+        // The sliders read as the equation's numbers are (under a digit
+        // limit, rounded to decimals).
+        let sliders = crate::compile::Sliders::of(self, opts.variables);
+        let opts = &CompileOptions {
+            trig_unit: opts.trig_unit,
+            variables: &sliders,
+        };
         let whole = 0..self.text.chars().count();
         let fix = |mut e: EquationError| {
             if e.span.is_empty() {

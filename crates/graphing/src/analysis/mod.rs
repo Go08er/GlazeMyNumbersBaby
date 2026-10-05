@@ -539,6 +539,12 @@ pub fn analyze_cancellable(
     let Some((Axis::X, f)) = eq.explicit() else {
         return error(AnalysisError::AnalysisCouldNotBePerformed);
     };
+    // The sliders read as the equation's numbers are (`compile::Sliders`).
+    let sliders = crate::compile::Sliders::of(eq, opts.variables);
+    let opts = &CompileOptions {
+        trig_unit: opts.trig_unit,
+        variables: &sliders,
+    };
     // What doesn't compile (0⁻¹ folded from constants) has no values.
     if crate::compile::Program::compile(f, opts).is_err() {
         return error(AnalysisError::AnalysisCouldNotBePerformed);
@@ -586,6 +592,11 @@ pub fn analyze_legacy(
     let Some((Axis::X, f)) = eq.explicit() else {
         return error(AnalysisError::AnalysisCouldNotBePerformed);
     };
+    let sliders = crate::compile::Sliders::of(eq, opts.variables);
+    let opts = &CompileOptions {
+        trig_unit: opts.trig_unit,
+        variables: &sliders,
+    };
     match engine::analyze_expr(f, opts, cancel) {
         Ok(k) => Some(k),
         Err(engine::Stop::Cancelled) => None,
@@ -600,6 +611,11 @@ pub fn analyze_legacy(
 pub fn analyze_ungated(eq: &Equation, opts: &CompileOptions<'_>) -> KeyGraphFeatures {
     match eq.explicit() {
         Some((Axis::X, f)) if eq.kind() == EquationKind::Function => {
+            let sliders = crate::compile::Sliders::of(eq, opts.variables);
+            let opts = &CompileOptions {
+                trig_unit: opts.trig_unit,
+                variables: &sliders,
+            };
             match engine::analyze_expr_ungated(f, opts, None) {
                 Ok(k) => k,
                 Err(engine::Stop::Error(e)) => KeyGraphFeatures::error(e),

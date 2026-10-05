@@ -736,10 +736,11 @@ pub fn eval(
         }),
         Expr::X => Some(x),
         Expr::Y => None,
-        Expr::Var(name) => Some(Ex::q(Q::from_f64(
-            vars.value(name)
-                .unwrap_or(crate::compile::DEFAULT_VARIABLE_VALUE),
-        )?)),
+        // A slider: its double, or the decimal a digit limit made it.
+        Expr::Var(name) => {
+            let (v, lit) = crate::compile::slider(vars, name);
+            Some(Ex::q(lit.q(v)?))
+        }
         Expr::Neg(a) => ev(a)?.neg(),
         Expr::Degrees(a) => (unit == TrigUnit::Degrees).then(|| ev(a)).flatten(),
         // eᵇ for b rational, or a + n·ln c.

@@ -201,6 +201,13 @@ pub fn certify_equation(
     let Some((Axis::X, expr)) = eq.explicit() else {
         return Err("not a function of x".into());
     };
+    // The sliders read as the equation's numbers are (under a digit
+    // limit, rounded to decimals: `compile::Sliders`).
+    let sliders = crate::compile::Sliders::of(eq, opts.variables);
+    let opts = CompileOptions {
+        trig_unit: opts.trig_unit,
+        variables: &sliders,
+    };
     let binding = Binding::of(eq, &opts, budget);
     let mut f = Fun::new(expr, opts, budget, cancel);
     f.simplifier = true;

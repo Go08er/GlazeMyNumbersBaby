@@ -2712,20 +2712,20 @@ fn constant_tail(cx: &Ctx<'_>, a: &Analysis, side: Tail, y: Enc) -> Option<Ex> {
     v.agrees(y.lo.0, y.hi.0).then_some(v)
 }
 
-/// `e` with each slider at its value, where that is a whole number (the
-/// rational form takes exact literals only; it is the value exact
-/// evaluation uses too). The value is a number of its own, exactly its
-/// double (`Lit::Exact`): never a typed literal that shares that double
-/// (a = 1 beside a typed 1.0000000000000001, review 13).
+/// `e` with each slider at its value, where that is a whole number, or a
+/// decimal a digit limit rounded it to (the rational form takes exact
+/// values only; it is the value exact evaluation uses too). The value is a
+/// number of its own, with its own exact value (its double, or the
+/// decimal): never a typed literal that shares its double (a = 1 beside a
+/// typed 1.0000000000000001, review 13).
 fn with_values(e: &Expr, vars: &dyn VariableValues) -> Expr {
     let go = |a: &Expr| Box::new(with_values(a, vars));
     match e {
         Expr::Var(name) => {
-            let v = vars
-                .value(name)
-                .unwrap_or(crate::compile::DEFAULT_VARIABLE_VALUE);
-            if v == v.trunc() && v.abs() <= 9007199254740992.0 {
-                Expr::exact(v)
+            let (v, lit) = crate::compile::slider(vars, name);
+            let whole = lit.is_exact() && v == v.trunc() && v.abs() <= 9007199254740992.0;
+            if whole || lit.digits().is_some() {
+                Expr::Num(v, lit)
             } else {
                 e.clone()
             }
