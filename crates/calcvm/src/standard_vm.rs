@@ -935,7 +935,7 @@ impl StandardCalculatorViewModel {
     ///
     /// Deviation: upstream also pads error messages ("00Cannot divide by
     /// zero") when the radix is binary; padding is only applied to numbers.
-    fn localize_display_value(&self, display_value: &str, is_error: bool) -> String {
+    pub(crate) fn localize_display_value(&self, display_value: &str, is_error: bool) -> String {
         let mut result = display_value.to_string();
 
         if self.is_programmer && self.current_radix_type == Radix::Bin && !is_error {
@@ -965,6 +965,20 @@ impl StandardCalculatorViewModel {
         self.with_manager(|m| m.set_in_history_item_load_mode(false));
         self.is_last_operation_history_load = true;
         within
+    }
+
+    /// Whether a History item was the last thing loaded (F-E is disabled
+    /// until the next key).
+    pub(crate) fn is_last_operation_history_load(&self) -> bool {
+        self.is_last_operation_history_load
+    }
+
+    /// Extension: for a restored session, the state
+    /// [`select_history_item`](Self::select_history_item) leaves F-E in
+    /// (disabled until the next key), or the usual one.
+    pub(crate) fn restore_history_load(&mut self, loaded: bool) {
+        self.is_last_operation_history_load = loaded;
+        self.is_f_to_e_enabled = !loaded;
     }
 
     /// `SetTokens(tokens)`: `ExpressionTokens` from the engine tokens.

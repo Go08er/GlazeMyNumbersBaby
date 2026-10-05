@@ -453,8 +453,8 @@ fn errored_scientific_engine_angle_mode_is_reset() {
 
 fn observed(vm: &CalculatorViewModel) -> String {
     format!(
-        "{:?} display {:?} expression {:?} error {} parens {} {:?} fe {} {:?} {:?} {:?}\n\
-         memory {:?}\nhistory {:?}",
+        "{:?} display {:?} expression {:?} error {} parens {} {:?} fe {} (enabled {}) \
+         {:?} {:?} {:?}\nmemory {:?}\nhistory {:?}",
         vm.mode(),
         vm.display_value(),
         vm.expression(),
@@ -462,6 +462,7 @@ fn observed(vm: &CalculatorViewModel) -> String {
         vm.open_parens(),
         vm.angle_unit(),
         vm.is_fe(),
+        vm.is_enabled(Button::FToE),
         vm.radix(),
         vm.word_size(),
         vm.shift_mode(),
@@ -474,6 +475,40 @@ fn press_all(vm: &mut CalculatorViewModel, buttons: &[Button]) {
     for b in buttons {
         vm.press(*b);
     }
+}
+
+/// What a user does, for the saved-state tests: a key, or something in the
+/// History or Memory panel, a paste, or coming back to the calculator from
+/// another page (GMNB sets the mode again, unchanged).
+#[derive(Clone, Copy, Debug)]
+enum Act {
+    Key(Button),
+    /// Select History item `i` (0 = the newest).
+    Recall(usize),
+    ClearHistory,
+    /// Click memory slot `i` (0 = the newest).
+    MemoryItem(usize),
+    Paste(&'static str),
+    Reactivate,
+}
+
+fn act_all(vm: &mut CalculatorViewModel, acts: &[Act]) {
+    for a in acts {
+        match *a {
+            Act::Key(b) => vm.press(b),
+            Act::Recall(i) => vm.history_recall(i),
+            Act::ClearHistory => vm.history_clear(),
+            Act::MemoryItem(i) => vm.memory_recall(i),
+            Act::Paste(text) => {
+                vm.paste(text);
+            }
+            Act::Reactivate => vm.set_mode(vm.mode()),
+        }
+    }
+}
+
+fn keys(buttons: &[Button]) -> Vec<Act> {
+    buttons.iter().map(|&b| Act::Key(b)).collect()
 }
 
 fn snapshot_json(mode: i64, display_commands: Value, x: Value) -> String {
@@ -495,13 +530,19 @@ fn operand(digits: &[i32]) -> Value {
 /// one is made (calculators on one thread share the engine's display
 /// cache), as in the app, which restores at startup.
 fn assert_restores_and_continues(mode: CalcMode, script: &[Button], more: &[&[Button]]) {
-    let run = |continuation: &[Button]| {
+    let more: Vec<Vec<Act>> = more.iter().map(|m| keys(m)).collect();
+    assert_acts_restore_and_continue(mode, &keys(script), &more);
+}
+
+/// [`assert_restores_and_continues`] for any [`Act`]s.
+fn assert_acts_restore_and_continue(mode: CalcMode, script: &[Act], more: &[Vec<Act>]) {
+    let run = |continuation: &[Act]| {
         let mut original = new_vm();
         original.set_mode(mode);
-        press_all(&mut original, script);
+        act_all(&mut original, script);
         let state = original.save_state();
         let before = observed(&original);
-        press_all(&mut original, continuation);
+        act_all(&mut original, continuation);
         (state, before, observed(&original))
     };
     let (state, before, _) = run(&[]);
@@ -513,13 +554,26 @@ fn assert_restores_and_continues(mode: CalcMode, script: &[Button], more: &[&[Bu
         let (_, _, after) = run(continuation);
         let mut restored = new_vm();
         restored.restore_state(&state);
-        press_all(&mut restored, continuation);
+        act_all(&mut restored, continuation);
         assert_eq!(
             observed(&restored),
             after,
             "{mode:?} {script:?} then {continuation:?}"
         );
     }
+}
+
+/// [`CONTINUATIONS`], then a memory slot clicked, a paste, a return from
+/// another page, F-E (disabled right after a History selection) and a
+/// History selection, each followed by "=".
+fn continuations_with_panels() -> Vec<Vec<Act>> {
+    use Act::*;
+    use Button::*;
+    let mut more: Vec<Vec<Act>> = CONTINUATIONS.iter().map(|c| keys(c)).collect();
+    for a in [MemoryItem(0), Paste("12"), Reactivate, Key(FToE), Recall(0)] {
+        more.push(vec![a, Key(Equals)]);
+    }
+    more
 }
 
 /// The continuations every saved state below is checked with: the next
@@ -729,6 +783,93 @@ fn restored_sessions_continue_as_the_original() {
         press_all(&mut restored, after);
         assert_eq!(restored.display_value(), result, "{saved:?} then {after:?}");
         assert_eq!(observed(&restored), expected, "{saved:?} then {after:?}");
+    }
+}
+
+/// R13-M-05's case: a History selection shows the item's expression and
+/// result while the engine holds the item replayed without "=", its last
+/// operand typed (`SelectHistoryItem`, `Recalculate(fromHistory: true)`).
+/// Restored, the expression reads as it did and "=" evaluates the item
+/// again (5), instead of adding the shown result to its first operand (7).
+#[test]
+fn a_restored_history_selection_continues_as_the_original() {
+    use Button::*;
+    for mode in [CalcMode::Standard, CalcMode::Scientific] {
+        let mut original = new_vm();
+        original.set_mode(mode);
+        press_all(&mut original, &[Two, Add, Three, Equals]);
+        original.history_recall(0);
+        let state = original.save_state();
+        let before = observed(&original);
+        original.press(Equals);
+        assert_eq!(original.display_value(), "5", "{mode:?}");
+        let expected = observed(&original);
+        drop(original);
+
+        let mut restored = new_vm();
+        restored.restore_state(&state);
+        assert_eq!(restored.display_value(), "5", "{mode:?}");
+        assert_eq!(restored.expression(), "2 + 3=", "{mode:?}");
+        assert!(!restored.is_enabled(FToE), "{mode:?}");
+        assert_eq!(observed(&restored), before, "{mode:?}");
+        restored.press(Equals);
+        assert_eq!(restored.display_value(), "5", "{mode:?}");
+        assert_eq!(restored.expression(), "2 + 3=", "{mode:?}");
+        assert_eq!(observed(&restored), expected, "{mode:?}");
+    }
+}
+
+/// R13-M-05: states saved right after selecting a History item, the newest
+/// or an older one, or after a key or panel action that leaves the display
+/// the item's (backspace, MS, M+, clearing the History, an angle unit,
+/// coming back from another page) or the expression line the item's (a
+/// digit, MR, a memory slot, a paste), restore as they were saved and
+/// continue as the original would. Memory holds 9, so MR differs from both
+/// the item's result and the operand the engine holds.
+#[test]
+fn history_selections_restore_as_they_were_saved() {
+    use Act::*;
+    use Button::*;
+    let calculations = keys(&[
+        Nine, Memory, Two, Add, Three, Equals, Four, Multiply, Five, Equals,
+    ]);
+    let more = continuations_with_panels();
+    for mode in [CalcMode::Standard, CalcMode::Scientific] {
+        let mut thens: Vec<Vec<Act>> = vec![
+            vec![],
+            vec![Key(Seven)],
+            vec![Key(Backspace)],
+            vec![Key(Memory)],
+            vec![Key(MemoryRecall)],
+            vec![Key(MemoryAdd)],
+            vec![MemoryItem(0)],
+            vec![Key(Sqrt)],
+            vec![ClearHistory],
+            vec![Reactivate],
+            vec![Paste("12")],
+        ];
+        if mode == CalcMode::Scientific {
+            thens.push(vec![Key(Radians)]);
+        }
+        for item in [0, 1] {
+            for then in &thens {
+                let mut script = calculations.clone();
+                script.push(Recall(item));
+                script.extend_from_slice(then);
+                assert_acts_restore_and_continue(mode, &script, &more);
+            }
+        }
+    }
+    // Precedence (the engine holds "2 + 3 ×" and 4), a function in the
+    // item, and F-E (the engine's operand shows as "4.e+0").
+    for script in [
+        &[Two, Add, Three, Multiply, Four, Equals][..],
+        &[Two, Add, Nine, Sqrt, Equals],
+        &[FToE, Two, Add, Three, Multiply, Four, Equals],
+    ] {
+        let mut script = keys(script);
+        script.push(Recall(0));
+        assert_acts_restore_and_continue(CalcMode::Scientific, &script, &more);
     }
 }
 
