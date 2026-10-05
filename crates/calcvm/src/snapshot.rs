@@ -1403,12 +1403,23 @@ impl StandardCalculatorViewModel {
     }
 
     fn replay(&mut self, commands: &[ExpressionCommandWrapper]) {
-        let commands: Vec<ExpressionCommand> = commands
-            .iter()
-            .map(ExpressionCommandWrapper::to_command)
-            .collect();
-        for c in crate::standard_vm::get_commands_from_expression_commands(&commands) {
-            self.send_command(c);
+        for command in commands {
+            // A sign change recorded as an operation ("negate(3)") was made
+            // to a number whose entry had ended (F-E, MS, a History
+            // selection); sent right after its digits it would change the
+            // sign of the number being typed instead, and the next digit
+            // would extend it. End the entry first, as F-E does.
+            if let ExpressionCommandWrapper::Unary(ops) = command
+                && ops.last() == Some(&cmd::SIGN)
+                && self.standard_calculator_manager.is_engine_recording()
+            {
+                self.send_command(cmd::FE);
+                self.send_command(cmd::FE);
+            }
+            let command = [command.to_command()];
+            for c in crate::standard_vm::get_commands_from_expression_commands(&command) {
+                self.send_command(c);
+            }
         }
     }
 

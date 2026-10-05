@@ -873,6 +873,41 @@ fn history_selections_restore_as_they_were_saved() {
     }
 }
 
+/// A sign change made to a number whose entry had ended (by MS, F-E, a
+/// History selection) or to a shown value (MR, a result) is an operation,
+/// "negate(3)", in the display commands. Replayed straight after the
+/// number's digits it changed the sign of the number being typed instead,
+/// so the next digit extended it ("-37") and the expression read "-3".
+#[test]
+fn sign_changes_of_finished_numbers_restore_as_operations() {
+    use Act::*;
+    use Button::*;
+    let more = continuations_with_panels();
+    for (mode, script) in [
+        (CalcMode::Standard, keys(&[Two, Add, Three, Memory, Negate])),
+        (
+            CalcMode::Standard,
+            keys(&[Nine, Memory, Clear, Two, Add, MemoryRecall, Negate]),
+        ),
+        (CalcMode::Standard, keys(&[Two, Add, Three, Equals, Negate])),
+        (CalcMode::Scientific, keys(&[One, Two, FToE, Negate])),
+        (
+            CalcMode::Programmer,
+            keys(&[Two, Add, Three, Memory, Negate, Negate]),
+        ),
+    ] {
+        assert_acts_restore_and_continue(mode, &script, &more);
+    }
+    for mode in [CalcMode::Standard, CalcMode::Scientific] {
+        let script = [
+            keys(&[Two, Add, Three, Equals]),
+            vec![Recall(0), Key(Negate)],
+        ]
+        .concat();
+        assert_acts_restore_and_continue(mode, &script, &more);
+    }
+}
+
 /// A snapshot from before "k" (or from upstream) has no record of what the
 /// display shows: a value the display commands don't produce is shown as a
 /// result, so the next digit replaces it, and an evaluated expression is
