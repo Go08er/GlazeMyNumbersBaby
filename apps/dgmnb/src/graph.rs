@@ -179,13 +179,10 @@ fn canvas_id() -> ui::Id {
 }
 
 impl GraphPage {
-    /// Rounds each number typed in an equation to `_p` (Settings' "Number
+    /// Rounds each number typed in an equation to `p` (Settings' "Number
     /// precision"), then plots and analyses afresh.
-    pub fn set_number_precision(&mut self, _p: appcore::graph::NumberPrecision) {
-        // Not wired yet: the engine's `Graph` setter for `literal_digits`
-        // (branch p5-literal) goes here, given `_p.digits()`. Until it lands
-        // the setting is saved and followed, and this re-plots and
-        // re-analyses as the setter will need.
+    pub fn set_number_precision(&mut self, p: appcore::graph::NumberPrecision) {
+        self.graph.set_literal_digits(p.digits());
         self.dirty = true;
         self.analysis_inputs_changed();
     }
@@ -1994,6 +1991,17 @@ mod tests {
 
     /// A proven hole is drawn as an open circle: the curve is stroked up
     /// to it and not through it.
+    #[test]
+    fn number_precision_rounds_typed_numbers() {
+        // 1.0000000000000001 is 1 + 10⁻¹⁶ as typed, and 1 at 14 digits.
+        let mut g = GraphPage::for_test(session::from_list("y=10^16*(1.0000000000000001-1)+x"));
+        let id = g.rows[0].id;
+        g.set_number_precision(session::NumberPrecision::OFF);
+        assert_eq!(g.graph.evaluate(id, 0.0), Some(1.0));
+        g.set_number_precision(session::NumberPrecision::DEFAULT);
+        assert_eq!(g.graph.evaluate(id, 0.0), Some(0.0));
+    }
+
     #[test]
     fn holes_are_open_circles() {
         let mut g = GraphPage::for_test(session::from_list("y=(x^2-1)/(x-1)"));
