@@ -444,6 +444,22 @@ fn mp_pow(b: &Float, e: &Float) -> Option<Float> {
     defined(Float::with_val(p(), b.clone().pow(e)))
 }
 
+/// root(x, n) for a degree n ≠ 0 of any size: an odd integer takes a
+/// negative x (sign(x)·|x|^(1/n)), anything else needs x ≥ 0 (x > 0 for
+/// n < 0).
+fn mp_root(x: &Float, n: &Float, prec: u32) -> Option<Float> {
+    if n.is_zero() {
+        return None;
+    }
+    let e = Float::with_val(prec, n.clone().recip());
+    let odd = n.to_integer().is_some_and(|k| n.is_integer() && k.is_odd());
+    if odd && *x < 0 {
+        let m = mp_pow(&Float::with_val(prec, x.clone().abs()), &e)?;
+        return Some(-m);
+    }
+    mp_pow(x, &e)
+}
+
 fn mp_mod(a: &Float, b: &Float) -> Option<Float> {
     if b.is_zero() {
         return None;
@@ -1413,7 +1429,7 @@ fn mp_eval(
                             mp_powrat(&a0, -1, -k)
                         };
                     }
-                    return mp_pow(&a0, &Float::with_val(prec, n.recip()));
+                    return mp_root(&a0, &n, prec);
                 }
                 Func::Min | Func::Max => {
                     let mut acc = a0;
@@ -1478,6 +1494,14 @@ fn taylor_cases() -> Vec<(&'static str, TrigUnit)> {
         // integer power, and 1.0000000000000001 − cos x never 0.
         ("x^1.0000000000000001", Radians),
         ("2/(1.0000000000000001-cos(x))", Radians),
+        // A degree odd as typed, though both doubles about it are even
+        // (review 13, R13-M-04), and ones that aren't odd as typed.
+        ("root(x,9007199254740993)", Radians),
+        ("root(x,-9007199254740993)", Radians),
+        (
+            "root(x,18014398509481986)+root(x,3.0000000000000001)",
+            Radians,
+        ),
     ]
 }
 
@@ -1744,4 +1768,97 @@ fn min_max_keep_the_loser_undefined() {
     let s = series("min(x,x+1+abs(x-3))", Interval::new(2.5, 3.4));
     assert!(s[0].dec >= Dec::Dac && derivs_valid(&s, 1), "{s:?}");
     assert_eq!(s[1].iv, Interval::point(1.0));
+}
+
+/// root(x, n) where n is beyond 2⁵³, every double there even (review 13,
+/// R13-M-04): a box of degrees holds the odd integers between its doubles,
+/// so a negative x is possibly defined there, never proven undefined; a
+/// point degree is that even double; and a degree typed as an odd integer
+/// is odd, whatever doubles enclose it.
+#[test]
+fn large_root_degrees_keep_their_odd_integers() {
+    init();
+    const BIG: f64 = 9007199254740992.0;
+    let pt = DecInterval::point;
+    let truth = |x: f64, n: &rug::Integer| -> Float {
+        // (10³⁰⁰ + 1 needs about a thousand bits.)
+        let n = Float::with_val(2048, n);
+        mp_root(&mp(x), &n, P).expect("an odd degree")
+    };
+    let big = |s: &str| s.parse::<rug::Integer>().unwrap();
+    // Boxes, each with an odd integer inside.
+    for (lo, hi, odd) in [
+        (BIG, BIG + 2.0, big("9007199254740993")),
+        (BIG - 1.0, BIG, big("9007199254740991")),
+        (BIG - 2.0, BIG, big("9007199254740991")),
+        (-BIG - 2.0, -BIG, big("-9007199254740993")),
+        (2.0 * BIG, 2.0 * BIG + 4.0, big("18014398509481985")),
+        (
+            1e300,
+            1e300f64.next_up(),
+            rug::Integer::from_f64(1e300).unwrap() + 1u32,
+        ),
+    ] {
+        for x in [-8.0, -0.5, -1e-300] {
+            let r = elem::root(&pt(x), &DecInterval::new(Interval::new(lo, hi)));
+            let v = truth(x, &odd);
+            assert!(
+                !r.is_empty() && inside(&v, r.iv),
+                "root({x}, [{lo}, {hi}]) = {r:?} misses {} at the odd {odd}",
+                v.to_f64()
+            );
+            // Possibly defined only: the box's other numbers aren't odd.
+            assert!(r.dec <= Dec::Trv, "root({x}, [{lo}, {hi}]): {r:?}");
+        }
+    }
+    let r = elem::root(&pt(-8.0), &DecInterval::new(Interval::new(-INF, -BIG)));
+    assert!(!r.is_empty() && r.dec <= Dec::Trv, "{r:?}");
+    // A point degree is that double: even beyond 2⁵³, odd below it.
+    assert!(elem::root(&pt(-8.0), &pt(BIG)).is_empty());
+    assert!(elem::root(&pt(-8.0), &pt(2.0 * BIG + 4.0)).is_empty());
+    let r = elem::root(&pt(-8.0), &pt(BIG - 1.0));
+    assert!(r.dec == Dec::Com && inside(&truth(-8.0, &big("9007199254740991")), r.iv));
+    let r = elem::root(&pt(-8.0), &pt(1000001.0));
+    assert!(r.dec == Dec::Com && inside(&truth(-8.0, &big("1000001")), r.iv));
+    // Degrees as typed, through the Taylor evaluator.
+    let at = |src: &str, x: f64| {
+        let text = format!("y={src}");
+        let eq = Equation::parse(&text).unwrap();
+        let (_, ast) = eq.explicit().unwrap();
+        let lits = Literals::of(&text, ParseOptions::default()).unwrap();
+        let ctx = Ctx::new(CompileOptions::default(), &lits);
+        taylor(ast, Interval::point(x), 3, &ctx)
+    };
+    for (src, n) in [
+        ("root(x,9007199254740993)", "9007199254740993"),
+        ("root(x,-9007199254740993)", "-9007199254740993"),
+        ("root(x,18014398509481987)", "18014398509481987"),
+        ("root(x,1000001)", "1000001"),
+    ] {
+        for x in [-8.0, -1.5, -1e-300, 2.0] {
+            let s = at(src, x);
+            let v = truth(x, &big(n));
+            assert!(
+                s[0].dec == Dec::Com && inside(&v, s[0].iv),
+                "{src} at {x}: {:?} misses {}",
+                s[0],
+                v.to_f64()
+            );
+        }
+    }
+    let s = at("root(-8,9007199254740993)", 0.0);
+    let v = truth(-8.0, &big("9007199254740993"));
+    assert!(s[0].dec == Dec::Com && inside(&v, s[0].iv), "{:?}", s[0]);
+    // Even, or no integer, as typed: a negative x is undefined.
+    for src in [
+        "root(x,9007199254740994)",
+        "root(x,18014398509481986)",
+        "root(x,3.0000000000000001)",
+        "root(x,-18014398509481986)",
+    ] {
+        let s = at(src, -8.0);
+        assert!(s[0].is_empty(), "{src} at −8: {:?}", s[0]);
+        let s = at(src, 8.0);
+        assert!(s[0].dec == Dec::Com, "{src} at 8: {:?}", s[0]);
+    }
 }

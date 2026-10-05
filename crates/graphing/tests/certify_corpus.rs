@@ -299,6 +299,31 @@ const UNMODELLED: &[(&str, &str)] = &[
         "nCr(200,100)/10^58",
         "D=R | XI=none | YI=9.054851465610328~ | P=even | MIN=none | MAX=none | INF=none | VA=none",
     ),
+    // Review 13, R13-M-04: a degree typed as an odd integer is odd, though
+    // the doubles either side of 9007199254740993 are even (the replay
+    // reads its degree as a double: not replayed). −8^(1/n) is just below
+    // −1, defined.
+    (
+        "root(-8,9007199254740993)",
+        "XI=none | YI=-1.0000000000000002~ | P=even | VA=none",
+    ),
+    (
+        "root(x,9007199254740993)",
+        "D=R | XI=0 | YI=0 | P=odd | MIN=none | MAX=none | VA=none | HA=none | R=R",
+    ),
+    (
+        "root(x,-9007199254740993)",
+        "D=(-inf,0)U(0,inf) | XI=none | YI=none | P=odd | MIN=none | MAX=none | VA=0",
+    ),
+    // Even, or no integer, as typed: x ≥ 0.
+    (
+        "root(x,18014398509481986)",
+        "D=[0,inf) | XI=0 | YI=0 | P=neither | MIN=(0,0) | MAX=none | VA=none | R=[0,inf)",
+    ),
+    (
+        "root(x,3.0000000000000001)",
+        "D=[0,inf) | XI=0 | YI=0 | P=neither | MIN=(0,0) | MAX=none | VA=none | R=[0,inf)",
+    ),
 ];
 
 /// The functions of review rounds 9–11 (REVIEW_9/10/11.md), with what is
@@ -1986,6 +2011,42 @@ fn whole_counts_past_sixty_are_exact() {
     .unwrap();
     assert!(
         matches!(&a.y_intercept, Row::Certified { value: Some(e), .. } if e.is_point() && e.lo.0 == 0.0),
+        "{:?}",
+        a.y_intercept
+    );
+}
+
+/// Review 13, R13-M-04: a degree typed as the odd 9007199254740993 is odd,
+/// though both doubles about it are even: root(−8, n) is defined, just
+/// below −1 (the panel said there was no y-intercept).
+#[test]
+fn a_typed_odd_degree_is_odd() {
+    let a = certify_text(
+        "root(-8,9007199254740993)",
+        CompileOptions::default(),
+        DEFAULT_BUDGET,
+        None,
+    )
+    .unwrap();
+    assert!(
+        matches!(&a.y_intercept, Row::Certified { value: Some(e), .. } if e.hi.0 <= -1.0 && e.lo.0 > -1.000001),
+        "{:?}",
+        a.y_intercept
+    );
+    assert_eq!(
+        analyze_str("y=root(-8,9007199254740993)").y_intercept,
+        "≈\u{2212}1"
+    );
+    // Typed even: undefined at −8.
+    let a = certify_text(
+        "root(-8,18014398509481986)",
+        CompileOptions::default(),
+        DEFAULT_BUDGET,
+        None,
+    )
+    .unwrap();
+    assert!(
+        matches!(&a.y_intercept, Row::Certified { value: None, .. }),
         "{:?}",
         a.y_intercept
     );

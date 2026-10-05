@@ -468,6 +468,26 @@ fn keep_winner(winner: Series, loser: &DecInterval) -> Series {
     flat(h0, n)
 }
 
+/// Whether a root degree written as a number (or its negative) is exactly
+/// an odd integer, by the decimal typed (`Literals::exact`); `None` when
+/// that isn't known (a degree computed otherwise, or a literal whose
+/// double other decimals parsed to).
+fn typed_odd(e: &Expr, lits: &Literals) -> Option<bool> {
+    let v = match e {
+        Expr::Num(v) => *v,
+        Expr::Neg(a) => match **a {
+            Expr::Num(v) => v,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let r = lits.exact(v)?;
+    if !r.is_integer() {
+        return Some(false);
+    }
+    Some(!r.div(&crate::big::Rat::int(2))?.is_integer())
+}
+
 /// True if the step function `step` takes one value on `v` widened by an
 /// ulp each side (so it is constant on a neighbourhood of the box).
 fn constant_near(v: &DecInterval, step: impl Fn(&DecInterval) -> DecInterval) -> bool {
@@ -601,10 +621,26 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
                 h[0] = elem::root(&u[0], &k[0]).refine(&h[0]);
                 h
             } else {
-                let c0 = elem::root(&u[0], &k[0]);
-                if u[0].gt0() && k[0].ne0() && c0.dec >= Dec::Dac {
-                    // u > 0: the root is e^(ln u / k), whatever k does.
-                    let mut h = exp(&div(&ln(&u), &k));
+                // A degree written as a number is known exactly to be odd
+                // or not where its enclosure can't say (a typed
+                // 9007199254740993 is enclosed by 2⁵³ and the double after
+                // it, both even): asked only where that matters.
+                let odd = (u[0].lo() < 0.0 && elem::may_hold_odd(kv))
+                    .then(|| typed_odd(&args[1], ctx.literals))
+                    .flatten();
+                let c0 = match odd {
+                    Some(odd) => elem::root_of_parity(&u[0], &k[0], odd),
+                    None => elem::root(&u[0], &k[0]),
+                };
+                let negative = odd == Some(true) && u[0].lt0();
+                if (u[0].gt0() || negative) && k[0].ne0() && c0.dec >= Dec::Dac {
+                    // u > 0: the root is e^(ln u / k), whatever k does; u < 0
+                    // and an odd (constant) k: −e^(ln(−u) / k).
+                    let mut h = if negative {
+                        neg(&exp(&div(&ln(&neg(&u)), &k)))
+                    } else {
+                        exp(&div(&ln(&u), &k))
+                    };
                     h[0] = c0.refine(&h[0]);
                     h
                 } else {
