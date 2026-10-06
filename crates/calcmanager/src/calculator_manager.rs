@@ -14,14 +14,14 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use ratpack::{CalcResult, Rational};
+use ratpack::{CalcResult, NumberFormat, Rational};
 
 use crate::calc_display::{CalcDisplay, CalcDisplayRef, ExpressionToken, HistoryDisplayRef};
-use crate::calc_engine::{CalcEngine, Continuation};
+use crate::calc_engine::{CalcEngine, Continuation, EngineState};
 use crate::calculator_history::{CalculatorHistory, HistoryItem};
 use crate::ccommand::*;
 use crate::command::{CalculatorMode, CalculatorPrecision, Command};
-use crate::expression_command::ExpressionCommand;
+use crate::expression_command::{ExpressionCommand, OpndCommand};
 use crate::history::E_BOUNDS;
 use crate::radix_type::RadixType;
 use crate::resource::ResourceProvider;
@@ -759,6 +759,44 @@ impl CalculatorManager {
     /// Extension: see [`CalcEngine::add_entry_as_percent_result`].
     pub fn add_entry_as_percent_result(&mut self) -> CalcResult<()> {
         self.current_engine().add_entry_as_percent_result()
+    }
+
+    /// Extension: see [`CalcEngine::set_carry`].
+    pub fn set_carry(&mut self, carry: bool) {
+        self.current_engine().set_carry(carry);
+    }
+
+    /// Extension, for tests: the current engine's [`CalcEngine::state`]
+    /// and the memory slots (as `values`, newest first).
+    #[doc(hidden)]
+    pub fn state(&self) -> EngineState {
+        self.current_engine_ref()
+            .map(|e| e.state(&self.memorized_numbers))
+            .unwrap_or_default()
+    }
+
+    /// Extension: puts F-E as `exponential` says, in the current engine
+    /// (see [`CalcEngine::set_number_format`]) and in the flag `Reset`
+    /// reads, without displaying anything: a restore that switched it to
+    /// write an operand in its form can't switch it back with F-E once the
+    /// command after the operand has ended in an error.
+    pub fn set_exponential_format(&mut self, exponential: bool) {
+        self.is_exponential_format = exponential;
+        self.current_engine().set_number_format(if exponential {
+            NumberFormat::Scientific
+        } else {
+            NumberFormat::Float
+        });
+    }
+
+    /// Extension: see [`CalcEngine::set_input_empty`].
+    pub fn set_input_empty(&mut self, empty: bool) {
+        self.current_engine().set_input_empty(empty);
+    }
+
+    /// Extension: see [`CalcEngine::set_left_operand`].
+    pub fn set_left_operand(&mut self, operand: &OpndCommand) -> CalcResult<bool> {
+        self.current_engine().set_left_operand(operand)
     }
 
     /// Extension: what a saved session needs besides the display commands

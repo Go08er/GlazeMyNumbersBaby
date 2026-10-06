@@ -19,7 +19,7 @@ use crate::snapshot::{
     ExpressionCommandSerializer, ExpressionCommandWrapper, ExpressionDisplaySnapshot,
     SnapshotValidator, StandardCalculatorSnapshot,
 };
-use crate::{AngleUnit, Button, CalcMode, CalculatorViewModel, Radix, WordSize};
+use crate::{AngleUnit, Button, CalcMode, CalculatorViewModel, Radix, ShiftMode, WordSize};
 
 const COMMAND_ADD: i32 = 93;
 
@@ -1095,6 +1095,246 @@ fn unrebuildable_states_restore_as_a_new_calculation() {
     );
     press_all(&mut restored, &[Add, One, Equals]);
     assert_eq!(restored.display_value(), "8");
+}
+
+/// Found auditing R14-M-05: in Standard mode with no operator pending, `%`
+/// multiplies by the left operand, which after `=` is the result and
+/// neither the display commands nor what `=` repeats rebuild. It is saved
+/// (`"lv"`) and set directly where the restore leaves another.
+#[test]
+fn the_left_operand_percent_reads_is_restored() {
+    use Button::*;
+    let percent: &[&[Button]] = &[&[Percent], &[Seven, Percent], &[Percent, Equals]];
+    for script in [
+        // 7 × 5% = 0.35; "1 + 3 =", what restores "=" repeating "+ 3",
+        // left 4 (0.28).
+        &[Two, Add, Three, Equals, Seven][..],
+        &[Two, Add, Three, Equals, Memory],
+        &[Two, Add, Three, Equals, Negate],
+        &[Two, Add, Three, Equals, Sqrt],
+        // Nothing to repeat: the restore begins with C, which left 0.
+        &[Five, Equals, Seven],
+        // A result of 0, where "1 − 2 =" would leave −1.
+        &[Two, Subtract, Two, Equals, Seven],
+        // Evaluated again on restore, exactly: 1/3, not 0.3333333333333333.
+        &[One, Divide, Three, Add, Zero, Equals],
+    ] {
+        assert_restores_and_continues(CalcMode::Standard, script, percent);
+    }
+
+    let mut vm = new_vm();
+    press_all(&mut vm, &[Two, Add, Three, Equals, Seven]);
+    let state = vm.save_state();
+    drop(vm);
+    let mut restored = new_vm();
+    restored.restore_state(&state);
+    restored.press(Percent);
+    assert_eq!(restored.display_value(), "0.35");
+
+    // An operand of Standard mode's digits, and only in Standard mode.
+    let unchanged = |k: Value, mode: i64| {
+        let mut vm = new_vm();
+        vm.press(Four);
+        let before = vm.save_state();
+        vm.restore_state(&snapshot_json(mode, json!([]), json!({ "k": k })));
+        vm.save_state() == before
+    };
+    assert!(!unchanged(json!({ "lv": operand(&[135]) }), 0));
+    assert!(unchanged(json!({ "lv": operand(&[135]) }), 1));
+    assert!(unchanged(json!({ "lv": operand(&[135]) }), 2));
+    assert!(unchanged(json!({ "lv": operand(&[140]) }), 0));
+    assert!(unchanged(json!({ "lv": { "$t": 1, "c": 93 } }), 0));
+    assert!(unchanged(json!({ "lv": operand(&[]) }), 0));
+}
+
+/// Found by the randomized restore tester: the display commands replay a
+/// trigonometric operation with the angle unit it was worked out in, which
+/// left the restored engine in degrees while Radians was shown (30 sin +,
+/// Radians, then 1 sin worked in degrees). And →deg of a typed number kept
+/// the value shown before it, which the radix refresh of a return to the
+/// calculator writes into the expression (see the gmnb tests).
+#[test]
+fn replayed_operations_leave_the_angle_unit_and_operands_as_shown() {
+    use Button::*;
+    assert_restores_and_continues(
+        CalcMode::Scientific,
+        &[Three, Zero, Sin, Add, Radians],
+        &[&[One, Sin, Equals], &[Equals], &[Cos]],
+    );
+    assert_acts_restore_and_continue(
+        CalcMode::Scientific,
+        &keys(&[Two, XPowerY, Three, Equals, Clear, Five, Degrees]),
+        &[
+            vec![Act::Reactivate, Act::Key(Equals)],
+            keys(&[Add, One, Equals]),
+        ],
+    );
+}
+
+/// Found by the randomized restore tester: the input keeps the number typed
+/// last until the next is begun, and while 0 is shown that makes the
+/// Scientific and Programmer C key CE (`IsInputEmpty`). `0 MS 7 + MR`
+/// shows 0 with 7 kept, so the key clears the entry and `2 =` gives 9;
+/// the restore typed the 0 shown, which left the input empty, and the key
+/// cleared everything (2). It is saved (`"ie"`) and set directly.
+#[test]
+fn the_number_kept_in_the_input_is_restored() {
+    use Button::*;
+    for mode in [CalcMode::Scientific, CalcMode::Programmer] {
+        let mut original = new_vm();
+        original.set_mode(mode);
+        press_all(&mut original, &[Zero, Memory, Seven, Add, MemoryRecall]);
+        assert!(original.shows_clear_entry(), "{mode:?}");
+        let state = original.save_state();
+        drop(original);
+        let mut restored = new_vm();
+        assert!(restored.restore_state_checked(&state), "{mode:?}");
+        assert!(restored.shows_clear_entry(), "{mode:?}: the C key is CE");
+        press_all(&mut restored, &[ClearEntry, Two, Equals]);
+        assert_eq!(restored.display_value(), "9", "{mode:?}");
+    }
+    // An input emptied by C stays so; an error keeps the input it had (the
+    // key is CE while 8 is kept, though both clear the error).
+    for (mode, script) in [
+        (
+            CalcMode::Scientific,
+            &[Seven, Clear, MemoryRecall, Memory][..],
+        ),
+        (CalcMode::Programmer, &[Multiply, Eight, Mod, Equals]),
+    ] {
+        let mut vm = new_vm();
+        vm.set_mode(mode);
+        press_all(&mut vm, script);
+        let state = vm.save_state();
+        let mut restored = new_vm();
+        restored.restore_state(&state);
+        assert_eq!(
+            restored.shows_clear_entry(),
+            vm.shows_clear_entry(),
+            "{script:?}"
+        );
+        assert_eq!(restored.save_state(), state, "{script:?}");
+    }
+}
+
+/// Found by the randomized restore tester: an operand written in
+/// e-notation is replayed with F-E switched on around the command after
+/// it, and when that command ends in an error, which ignores F-E, the
+/// engine stayed in e-notation: after C the restored calculator showed
+/// "0.e+0".
+#[test]
+fn an_error_in_the_replay_leaves_f_e_as_it_was() {
+    use Button::*;
+    assert_restores_and_continues(
+        CalcMode::Scientific,
+        &[One, Exp, Four, Zero, Zero, Sin],
+        &[&[Clear], &[Five], &[Clear, Five, Add, Two, Equals]],
+    );
+}
+
+/// Found by the randomized restore tester: in Programmer mode, what "="
+/// repeats keeps the bits of a larger word size it was worked out in,
+/// which no operand typed in the smaller one gives back: after 512 ÷ 256 =
+/// and BYTE, = divides by 0 (BYTE shows 256 as 0), but back in QWORD by
+/// 256 again. Such a state is marked as one the commands can't rebuild,
+/// so it comes back as a new calculation.
+#[test]
+fn a_repeated_operand_wider_than_the_word_size_falls_back() {
+    use Button::*;
+    let mut vm = new_vm();
+    vm.set_mode(CalcMode::Programmer);
+    press_all(
+        &mut vm,
+        &[Five, One, Two, Divide, Two, Five, Six, Equals, Byte],
+    );
+    let state = vm.save_state();
+    assert!(state.contains(r#""nr":true"#), "{state}");
+    press_all(&mut vm, &[Qword, Equals]);
+    assert_eq!(vm.display_value(), "0");
+    let mut restored = new_vm();
+    assert!(!restored.restore_state_checked(&state));
+    assert_eq!(restored.display_value(), "2");
+    // In the word size it was worked out in, it restores.
+    let mut vm = new_vm();
+    vm.set_mode(CalcMode::Programmer);
+    press_all(&mut vm, &[Five, One, Two, Divide, Two, Five, Six, Equals]);
+    let state = vm.save_state();
+    assert!(!state.contains(r#""nr":true"#), "{state}");
+}
+
+/// R14-M-05: RoL and RoR through carry shift in the carry the last one
+/// left, which no key sets: it is saved (`"cy"`) and set directly.
+#[test]
+fn the_carry_of_a_rotation_through_carry_is_restored() {
+    use Button::*;
+    // The review's case: in BYTE, 1 RoR leaves the carry 1, so the next 1
+    // RoR gives 0b1000_0000 (−128), not 0. RoL: 80 hex RoL leaves it 1, and
+    // 1 RoL then gives 3.
+    let cases: [(&[Button], Button, &str); 2] = [
+        (&[Byte, One, RorC, One], RorC, "-128"),
+        (&[Byte, HexButton, Eight, Zero, RolC, One], RolC, "3"),
+    ];
+    for (script, rotate, result) in cases {
+        let mut original = new_vm();
+        original.set_mode(CalcMode::Programmer);
+        original.set_shift_mode(ShiftMode::RotateThroughCarry);
+        press_all(&mut original, script);
+        let state = original.save_state();
+        assert!(state.contains(r#""cy":true"#), "{script:?}: {state}");
+        let before = observed(&original);
+        original.press(rotate);
+        assert_eq!(original.display_value(), result, "{script:?}");
+        let after = observed(&original);
+        drop(original);
+
+        let mut restored = new_vm();
+        assert!(restored.restore_state_checked(&state), "{script:?}");
+        assert_eq!(observed(&restored), before, "{script:?}");
+        assert_eq!(restored.save_state(), state, "{script:?}");
+        restored.press(rotate);
+        assert_eq!(observed(&restored), after, "{script:?}");
+    }
+
+    // Under a paste error only the view model is in error: a memory slot
+    // continues the engine's calculation, carry and all.
+    assert_acts_restore_and_continue(
+        CalcMode::Programmer,
+        &[
+            Act::Key(Byte),
+            Act::Key(One),
+            Act::Key(Memory),
+            Act::Key(RorC),
+            Act::Paste("zz"),
+        ],
+        &[vec![Act::MemoryItem(0), Act::Key(RorC)]],
+    );
+
+    // C clears it, as the engine does; so does a restore that falls back to
+    // a new calculation (a word size switched mid-expression).
+    let mut vm = new_vm();
+    vm.set_mode(CalcMode::Programmer);
+    press_all(&mut vm, &[Byte, One, RorC, Add, One, Word]);
+    let state = vm.save_state();
+    assert!(state.contains(r#""nr":true"#) && state.contains(r#""cy":true"#));
+    let mut restored = new_vm();
+    assert!(!restored.restore_state_checked(&state));
+    press_all(&mut restored, &[One, RorC]);
+    assert_eq!(restored.display_value(), "0");
+    press_all(&mut vm, &[One, Clear, One, RorC]);
+    assert_eq!(vm.display_value(), "0");
+
+    // Only a boolean, and only in Programmer mode.
+    let unchanged = |k: Value, mode: i64| {
+        let mut vm = new_vm();
+        vm.press(Four);
+        let before = vm.save_state();
+        vm.restore_state(&snapshot_json(mode, json!([]), json!({ "k": k })));
+        vm.save_state() == before
+    };
+    assert!(unchanged(json!({ "cy": 1 }), 2));
+    assert!(unchanged(json!({ "cy": true }), 0));
+    assert!(unchanged(json!({ "cy": true }), 1));
+    assert!(!unchanged(json!({ "cy": true }), 2));
 }
 
 #[test]

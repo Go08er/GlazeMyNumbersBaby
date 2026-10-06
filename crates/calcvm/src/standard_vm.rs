@@ -74,6 +74,8 @@ pub(crate) mod cmd {
     pub const DEG: i32 = 321;
     pub const RAD: i32 = 322;
     pub const GRAD: i32 = 323;
+    /// `CommandDegrees` (→deg, a unary operator).
+    pub const DEGREES: i32 = 324;
     pub const BINEDITSTART: i32 = 700;
     pub const BINEDITEND: i32 = 763;
 }
@@ -612,6 +614,33 @@ impl StandardCalculatorViewModel {
         }
     }
 
+    /// Deviation: a replayed trigonometric operation (a History selection,
+    /// a restored session) is sent with the angle unit it was worked out
+    /// in (`[DEG, SIN]`), which leaves the engine in that unit while the
+    /// view model shows another: after selecting "sin₀(30)" in radians, 30
+    /// sin gave 0.5. Send the view model's unit again. Only once the number
+    /// being typed is ended (an angle switch ends it).
+    pub(crate) fn resync_angle(&mut self) {
+        if self.is_scientific && !self.standard_calculator_manager.is_engine_recording() {
+            self.resync_scientific_engine();
+        }
+    }
+
+    /// Deviation: →deg is the one unary operator the engine doesn't end the
+    /// number being typed for before recording its operand
+    /// (`SciCalcFunctions` ends it later, through `IDC_INV`), so upstream
+    /// records the typed text with the value shown before it ("degrees(5)"
+    /// holding 8), and the radix refresh every return to the calculator
+    /// sends rewrites the expression as "degrees(8)". End the entry first,
+    /// as F-E twice does (History selections end theirs so); the result and
+    /// the expression are as before.
+    pub(crate) fn end_entry_for(&mut self, command: i32) {
+        if command == cmd::DEGREES && self.standard_calculator_manager.is_engine_recording() {
+            self.send_command(cmd::FE);
+            self.send_command(cmd::FE);
+        }
+    }
+
     /// Deviation: `CalculatorManager.Reset` (history recall in Standard or
     /// Scientific mode) sends QWORD to the Programmer engine, while
     /// `ValueBitLength` keeps the user's word size. Re-send it when entering
@@ -923,7 +952,7 @@ impl StandardCalculatorViewModel {
     }
 
     /// `OnInputChanged()`.
-    fn on_input_changed(&mut self) {
+    pub(crate) fn on_input_changed(&mut self) {
         self.is_input_empty = self.standard_calculator_manager.is_input_empty();
     }
 
@@ -1026,6 +1055,7 @@ impl StandardCalculatorViewModel {
                 self.is_last_operation_history_load = false;
             }
 
+            self.end_entry_for(cmdenum);
             self.send_command(cmdenum);
         }
     }
@@ -1074,6 +1104,7 @@ impl StandardCalculatorViewModel {
         self.send_command(current_degree_mode);
 
         for command in current_commands {
+            self.end_entry_for(command);
             self.send_command(command);
         }
 
@@ -1082,6 +1113,8 @@ impl StandardCalculatorViewModel {
             // Use the FE command to make the engine end recording.
             self.send_command(cmd::FE);
             self.send_command(cmd::FE);
+            // Deviation: see `resync_angle`.
+            self.resync_angle();
         }
 
         if self.is_in_error {

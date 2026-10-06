@@ -79,24 +79,43 @@
 //! (F-E or not) they were written into the expression in, and a value a
 //! trailing `(` kept (`2 + 3 = (`, `5 (`) is set up before it.
 //!
+//! `"cy": true` (Programmer only) is the carry bit RoL and RoR through
+//! carry shift in next: in BYTE, `1 RoR 1` leaves the carry 1, so the next
+//! RoR gives −128 rather than 0. No key sets it, so it is set directly.
+//! `"lv"` (Standard only, with no operator pending) is the left operand,
+//! an operand like `"eq"`'s: after `=` it is the result, which `%`
+//! multiplies by (`2 + 3 = 7 %` is 0.35), while what `"eq"` sets up leaves
+//! another; it is set directly where the restore didn't leave it so.
+//! `"ie": true` says no number is being typed and the input holds none;
+//! otherwise it keeps the number typed last, unseen, and whenever 0 is
+//! shown (`56 − 56 =`) Scientific and Programmer mode's C key is then CE
+//! (`IsInputEmpty`). It is set directly too. Upstream restores none of
+//! these.
+//!
 //! # The contract
 //!
 //! A restored calculation shows what was saved and continues as the saved
-//! one would have, key for key; values that only came back to the digits
-//! they showed (memory, a shown result) can differ in the last digits. A
-//! state the restore can't rebuild that way comes back as a new
-//! calculation from the saved value instead: the expression is cleared,
-//! the value shown as a result (the next digit replaces it, `=` repeats
-//! nothing), and memory, the histories and the modes are kept. Such a
-//! state is either marked when saved (`"nr": true`: the engine knows its
-//! commands won't rebuild it: a number typed right after `)`, a word size
-//! switched mid-expression, a number begun with Exp after C or CE,
+//! one would have, key for key, except that values come back as they were
+//! shown: memory, a shown result and the operands of the expression return
+//! with the digits the display gave them (a Programmer memory slot as the
+//! word size shows it, −0 as 0), so a later result that depends on more
+//! can differ, in the last digits or, after cancellation, wholly. A state
+//! the restore can't rebuild that way comes back as a new calculation from
+//! the saved value instead: the expression is cleared, the value shown as
+//! a result (the next digit replaces it, `=` repeats nothing, the carry is
+//! clear, as after C), and memory, the histories and the modes are kept.
+//! Such a state is either marked when saved (`"nr": true`: the engine
+//! knows its commands won't rebuild it: a number typed right after `)`, a
+//! word size switched mid-expression, or after `=` with what it repeats
+//! wider than the new one, a number begun with Exp after C or CE,
 //! parentheses the expression doesn't hold), or found when restored: the
 //! restored calculation is saved again and compared with what was loaded
 //! (the display, the expression line, the display commands, `"k"` and the
 //! modes). An error the engine is in is restored as an error without that
 //! check, since every key clears it. Snapshots without `"k"` are restored
-//! as before, unchecked.
+//! as before, unchecked. The check compares what is saved; the randomized
+//! restore tests (`tests/restore_fuzz.rs`) also compare the engine's own
+//! state.
 
 use std::rc::Rc;
 
@@ -312,6 +331,13 @@ pub(crate) struct ContinuationSnapshot {
     pub(crate) clears: bool,
     /// `"nr"`
     pub(crate) unreplayable: bool,
+    /// `"cy"`: the carry bit of RoL/RoR through carry (Programmer only).
+    pub(crate) carry: bool,
+    /// `"lv"`: the left operand, an operand (Standard only, with no
+    /// operator pending).
+    pub(crate) left: Option<ExpressionCommandWrapper>,
+    /// `"ie"`: no number is being typed and the input holds none.
+    pub(crate) empty_input: bool,
 }
 
 /// `ApplicationSnapshot`
@@ -625,6 +651,15 @@ impl ApplicationSnapshot {
                 if k.unreplayable {
                     c.insert("nr".into(), json!(true));
                 }
+                if k.carry {
+                    c.insert("cy".into(), json!(true));
+                }
+                if let Some(left) = &k.left {
+                    c.insert("lv".into(), ExpressionCommandSerializer::serialize(left));
+                }
+                if k.empty_input {
+                    c.insert("ie".into(), json!(true));
+                }
                 o.insert("k".into(), Value::Object(c));
             }
             root.insert("x".into(), Value::Object(o));
@@ -759,6 +794,13 @@ impl ApplicationSnapshot {
                             },
                             clears: boolean(k.get("cl"))?,
                             unreplayable: boolean(k.get("nr"))?,
+                            carry: boolean(k.get("cy"))?,
+                            left: k
+                                .get("lv")
+                                .filter(|v| !v.is_null())
+                                .map(ExpressionCommandDeserializer::deserialize)
+                                .transpose()?,
+                            empty_input: boolean(k.get("ie"))?,
                         })
                     }
                 };
@@ -935,6 +977,28 @@ impl SnapshotValidator {
                 return Err("the repeated operation is not an operator and an operand".into());
             };
             Self::validate_commands(repeat, mode, "repeated operation")?;
+        }
+
+        let continuation = snapshot
+            .extension
+            .as_ref()
+            .and_then(|x| x.continuation.as_ref());
+        // Extension: only the Programmer engine rotates through a carry.
+        if mode != CalcMode::Programmer && continuation.is_some_and(|k| k.carry) {
+            return Err("a carry outside Programmer mode".into());
+        }
+        // Extension: the left operand is saved in Standard mode only, and is
+        // a decimal number.
+        if let Some(left) = continuation.and_then(|k| k.left.as_ref()) {
+            let ExpressionCommandWrapper::Operand { commands, .. } = left else {
+                return Err("the left operand is not an operand".into());
+            };
+            if mode != CalcMode::Standard
+                || commands.iter().any(|&c| (cmd::A..=cmd::F).contains(&c))
+            {
+                return Err("the left operand is not a Standard mode number".into());
+            }
+            Self::validate_commands(std::slice::from_ref(left), mode, "left operand")?;
         }
 
         let display = &standard.primary_display.display_value;
@@ -1341,6 +1405,29 @@ impl StandardCalculatorViewModel {
         }
         // Extension: F-E as a History selection left it, or enabled.
         self.restore_history_load(continuation.is_some_and(|k| k.history_load));
+        // Extension: the carry the next RoL or RoR through carry shifts in
+        // (no key sets it; C, which the restore began with, cleared it). An
+        // error the engine is in has none: every key clears it.
+        if !engine_error && continuation.is_some_and(|k| k.carry) {
+            self.with_manager(|m| m.set_carry(true));
+        }
+        // Extension: the left operand `%` reads with no operator pending
+        // (after `=`, the result), where the restore didn't leave it as
+        // saved; an exact one an evaluation left is kept.
+        if !engine_error
+            && let Some(left) = continuation.and_then(|k| k.left.as_ref())
+            && self.capture_continuation().left.as_ref() != Some(left)
+            && let ExpressionCommand::Operand(operand) = left.to_command()
+        {
+            let _ = self.with_manager(|m| m.set_left_operand(&operand));
+        }
+        // Extension: whether the input holds the number typed last (which,
+        // with 0 shown, makes the C key CE), which what the restore typed
+        // needn't have left so. Snapshots without "k" are left as replayed.
+        if let Some(k) = continuation {
+            self.with_manager(|m| m.set_input_empty(k.empty_input));
+            self.on_input_changed();
+        }
         if engine_error && let Some(expression) = &snapshot.expression_display {
             // The parentheses the expression line leaves open, as shown
             // while the error is (the engine's are gone with it).
@@ -1442,6 +1529,11 @@ impl StandardCalculatorViewModel {
             entry: c.entry,
             clears: c.clears,
             unreplayable: c.unreplayable,
+            carry: c.carry,
+            left: c.left.map(|operand| {
+                ExpressionCommandWrapper::from_command(&ExpressionCommand::Operand(operand))
+            }),
+            empty_input: c.empty_input,
         }
     }
 
@@ -1768,6 +1860,15 @@ impl StandardCalculatorViewModel {
                 self.send_command(cmd::FE);
             }
         }
+        // An error ignores F-E, and a spent budget drops it, which would
+        // leave the engine in an operand's form once C clears either.
+        let engine_fe = self
+            .standard_calculator_manager
+            .current_calculator_engine()
+            .map(|e| e.number_format() != calcmanager::NumberFormat::Float);
+        if engine_fe.is_some_and(|engine_fe| engine_fe != fe) {
+            self.with_manager(|m| m.set_exponential_format(fe));
+        }
     }
 
     fn replay_one(&mut self, command: &ExpressionCommandWrapper) {
@@ -1783,9 +1884,17 @@ impl StandardCalculatorViewModel {
             self.send_command(cmd::FE);
             self.send_command(cmd::FE);
         }
+        let angled = matches!(command, ExpressionCommandWrapper::Unary(ops) if ops.len() == 2);
         let command = [command.to_command()];
         for c in crate::standard_vm::get_commands_from_expression_commands(&command) {
+            // →deg after a number being typed, as a key press sends it.
+            self.end_entry_for(c);
             self.send_command(c);
+        }
+        if angled {
+            // Back to the angle unit shown (the operation was sent with the
+            // one it was worked out in).
+            self.resync_angle();
         }
     }
 
