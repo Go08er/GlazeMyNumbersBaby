@@ -92,6 +92,79 @@ pub fn route(kp: &KeyPress, c: Cover) -> Route {
     }
 }
 
+/// What has the keyboard's focus, as far as the keys it takes before the
+/// page goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Focused {
+    /// A text field (graph equations, dialogs): every key but the
+    /// app-wide chords.
+    Text,
+    /// One of the calculator's own keys, upstream's `CalculatorButton`s
+    /// and bit `FlipButtons` ([`Page::is_calculator_key`]): Space presses
+    /// it and the arrows move on, but Enter is still "=", as upstream's
+    /// ignore it.
+    CalculatorKey,
+    /// Any other control ([`is_control`]): a button, a toggle or menu
+    /// button, a radio button, a list row, a switch, a calendar day, a
+    /// link. Its activation and navigation keys are its own: Enter on a
+    /// History item recalls it rather than evaluating (R16-M-03).
+    Control,
+    /// Nothing that takes keys (no focus, the window, a scroll view, a
+    /// label): every key is the page's.
+    Other,
+}
+
+/// Whether the focused widget (`focused`) gets `kp` before the page does.
+/// (Popovers, the date pickers' calendars included, hold the keyboard
+/// while open: their keys never reach the window's.)
+pub fn focus_takes(focused: Focused, kp: &KeyPress) -> bool {
+    use input::ControlKey;
+    match (focused, input::control_key(kp)) {
+        (Focused::Text, _) => !input::is_global_chord(kp),
+        (Focused::Control, key) => key.is_some(),
+        (Focused::CalculatorKey, Some(ControlKey::Navigate)) => true,
+        (Focused::CalculatorKey, Some(ControlKey::Activate)) => !kp.is(Named::Enter),
+        (Focused::CalculatorKey | Focused::Other, _) => false,
+    }
+}
+
+/// Whether `w` is a control that takes its own activation and navigation
+/// keys: GTK binds Enter and Space to activate a button (a toggle, a menu
+/// button's, a link), a check or radio button, a switch, a list or flow
+/// box row, a drop-down; the arrows move between rows, radio buttons or
+/// days, and change a slider. Widgets of the app's own drawing that act as
+/// one say so by their accessible role (a converter value field is a
+/// button, and takes Space and Enter itself).
+fn is_control(w: &gtk::Widget) -> bool {
+    use gtk::AccessibleRole as R;
+    w.is::<gtk::Button>()
+        || w.is::<gtk::CheckButton>()
+        || w.is::<gtk::Switch>()
+        || w.is::<gtk::ListBoxRow>()
+        || w.is::<gtk::FlowBoxChild>()
+        || w.is::<gtk::DropDown>()
+        || w.is::<gtk::Expander>()
+        || matches!(
+            w.accessible_role(),
+            R::Button
+                | R::ToggleButton
+                | R::Checkbox
+                | R::Radio
+                | R::Switch
+                | R::Link
+                | R::Tab
+                | R::ListItem
+                | R::Row
+                | R::Option
+                | R::TreeItem
+                | R::MenuItem
+                | R::MenuItemCheckbox
+                | R::MenuItemRadio
+                | R::ComboBox
+                | R::Slider
+        )
+}
+
 pub fn apply_theme_setting(theme: &str) {
     let sm = adw::StyleManager::default();
     sm.set_color_scheme(match theme {
@@ -624,13 +697,12 @@ impl Window {
                 return glib::Propagation::Proceed;
             };
             // Let text entries (graph equations, dialogs) type normally, but
-            // still honour the app-wide chords a text field has no use for.
-            if let Some(focus) = gtk::prelude::GtkWindowExt::focus(&w.win) {
-                let in_text =
-                    focus.is::<gtk::Text>() || focus.ancestor(gtk::Text::static_type()).is_some();
-                if in_text && !input::is_global_chord(&kp) {
-                    return glib::Propagation::Proceed;
-                }
+            // still honour the app-wide chords a text field has no use for;
+            // and let a focused control have its own keys (focus_takes).
+            if let Some(focus) = gtk::prelude::GtkWindowExt::focus(&w.win)
+                && focus_takes(w.focused(&focus), &kp)
+            {
+                return glib::Propagation::Proceed;
             }
             // What the key would change may be covered: handle_key asks.
             if w.handle_key(&kp) {
@@ -640,6 +712,22 @@ impl Window {
             }
         });
         self.win.add_controller(keys);
+    }
+
+    /// What `focus`, the window's focus, is ([`Focused`]).
+    fn focused(&self, focus: &gtk::Widget) -> Focused {
+        if focus.is::<gtk::Text>() || focus.ancestor(gtk::Text::static_type()).is_some() {
+            Focused::Text
+        } else if self
+            .shown_page()
+            .is_some_and(|p| p.is_calculator_key(focus))
+        {
+            Focused::CalculatorKey
+        } else if is_control(focus) {
+            Focused::Control
+        } else {
+            Focused::Other
+        }
     }
 
     /// A key, wherever it comes from (the keyboard, `GMNB_KEYS`), goes
@@ -788,5 +876,46 @@ mod tests {
             ..dialog
         };
         assert_eq!(route(&escape, dialog_over_sidebar), Route::Refused);
+    }
+
+    /// R16-M-03: a focused control (a History item, a toggle, a menu
+    /// button) takes Enter, Space and its navigation keys before the
+    /// calculator, so Enter on a History item recalls it; a calculator key
+    /// (and no focus in particular) leaves Enter to the calculator ("="),
+    /// as upstream's do. Everything else typed is the calculator's
+    /// wherever the focus is; a text field keeps all but the app-wide
+    /// chords.
+    #[test]
+    fn focused_controls_take_their_own_keys() {
+        use Focused::*;
+        let enter = KeyPress::named(Named::Enter);
+        let space = KeyPress::char(' ');
+        let down = KeyPress::named(Named::Down);
+        let page_down = KeyPress::named(Named::PageDown);
+        let seven = KeyPress::char('7');
+        let escape = KeyPress::named(Named::Escape);
+        let ctrl_h = KeyPress::char('h').ctrl();
+        let alt_up = KeyPress::named(Named::Up).alt();
+        let alt_2 = KeyPress::char('2').alt();
+
+        for k in [&enter, &space, &down, &page_down] {
+            assert!(focus_takes(Control, k), "{k:?}");
+        }
+        for k in [&seven, &escape, &ctrl_h, &alt_up, &alt_2, &enter.shift()] {
+            assert!(!focus_takes(Control, k), "{k:?}");
+        }
+
+        assert!(!focus_takes(CalculatorKey, &enter));
+        for k in [&space, &down, &page_down] {
+            assert!(focus_takes(CalculatorKey, k), "{k:?}");
+        }
+        assert!(!focus_takes(CalculatorKey, &seven));
+
+        for k in [&enter, &space, &down, &seven, &escape] {
+            assert!(!focus_takes(Other, k), "{k:?}");
+            assert!(focus_takes(Text, k), "{k:?}");
+        }
+        assert!(!focus_takes(Text, &alt_2));
+        assert!(!focus_takes(Text, &KeyPress::named(Named::Home).ctrl()));
     }
 }

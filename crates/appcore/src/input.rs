@@ -318,6 +318,42 @@ pub fn window_shortcut(kp: &KeyPress) -> Option<WindowAction> {
     None
 }
 
+/// What a key does to a focused control of its own (a button, a toggle or
+/// menu button, a radio button, a list row, a calendar day, a link).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlKey {
+    /// Enter or Space, unmodified: activates it, as a click does (a
+    /// History item recalls its result).
+    Activate,
+    /// The arrows, Home/End, Page Up/Down: move within it (between list
+    /// rows, radio buttons, a calendar's days and months).
+    Navigate,
+}
+
+/// The keys a focused control takes itself, before the page's shortcuts
+/// (R16-M-03). Upstream's calculator keys (`CalculatorButton`, the bit
+/// `FlipButtons`) ignore Enter, which stays "=" there; every other
+/// control handles its own, and the shortcut manager skips a key handled.
+pub fn control_key(kp: &KeyPress) -> Option<ControlKey> {
+    if kp.ctrl || kp.alt {
+        return None;
+    }
+    match kp.key {
+        Key::Named(Named::Enter) | Key::Char(' ') if !kp.shift => Some(ControlKey::Activate),
+        Key::Named(
+            Named::Up
+            | Named::Down
+            | Named::Left
+            | Named::Right
+            | Named::Home
+            | Named::End
+            | Named::PageUp
+            | Named::PageDown,
+        ) => Some(ControlKey::Navigate),
+        _ => None,
+    }
+}
+
 /// Shortcuts that work even while a text field has focus: mode switching
 /// (Alt+1…5) and upstream's Ctrl+Home "graph view". Everything else belongs
 /// to the text field.
@@ -514,6 +550,59 @@ mod tests {
         assert!(!is_global_chord(&KeyPress::named(Named::Home)));
         assert!(!is_global_chord(&KeyPress::char('c').ctrl()));
         assert!(!is_global_chord(&KeyPress::named(Named::Backspace)));
+    }
+
+    /// Enter and Space activate a focused control, the arrows, Home/End
+    /// and Page Up/Down move within it; with Ctrl or Alt they are chords.
+    /// Of those, only Enter is a calculator key too ("="), so it is the one
+    /// a focused control now takes from the calculator (R16-M-03).
+    #[test]
+    fn control_keys() {
+        use ControlKey::*;
+        let enter = KeyPress::named(Named::Enter);
+        assert_eq!(control_key(&enter), Some(Activate));
+        assert_eq!(control_key(&KeyPress::char(' ')), Some(Activate));
+        assert_eq!(control_key(&enter.shift()), None);
+        assert_eq!(control_key(&enter.ctrl()), None);
+        for n in [Named::Up, Named::Down, Named::Left, Named::Right] {
+            assert_eq!(control_key(&KeyPress::named(n)), Some(Navigate));
+            assert_eq!(control_key(&KeyPress::named(n).alt()), None);
+        }
+        for n in [Named::Home, Named::End, Named::PageUp, Named::PageDown] {
+            assert_eq!(control_key(&KeyPress::named(n)), Some(Navigate));
+            assert_eq!(control_key(&KeyPress::named(n).shift()), Some(Navigate));
+        }
+        for kp in [
+            KeyPress::char('7'),
+            KeyPress::char('='),
+            KeyPress::named(Named::Escape),
+            KeyPress::named(Named::Backspace),
+            KeyPress::named(Named::Delete),
+            KeyPress::named(Named::Tab),
+        ] {
+            assert_eq!(control_key(&kp), None, "{kp:?}");
+        }
+        for mode in [
+            CalcMode::Standard,
+            CalcMode::Scientific,
+            CalcMode::Programmer,
+        ] {
+            let calculator = |kp: KeyPress| shortcut(mode, &kp, ShiftMode::Arithmetic);
+            assert_eq!(calculator(enter), Some(Action::Press(B::Equals)));
+            for n in [
+                Named::Up,
+                Named::Down,
+                Named::Left,
+                Named::Right,
+                Named::Home,
+                Named::End,
+                Named::PageUp,
+                Named::PageDown,
+            ] {
+                assert_eq!(calculator(KeyPress::named(n)), None, "{n:?} in {mode:?}");
+            }
+            assert_eq!(calculator(KeyPress::char(' ')), None);
+        }
     }
 
     #[test]

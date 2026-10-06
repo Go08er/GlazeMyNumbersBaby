@@ -1175,6 +1175,24 @@ impl Page for CalculatorHandle {
         true
     }
 
+    /// Upstream's `CalculatorButton`s, which ignore Enter: every keypad's
+    /// keys (the flyouts' too) but the 2nd and hyp toggles (ToggleButtons
+    /// there, which Enter toggles), and the memory buttons MC, MR, M+, M−
+    /// and MS; and the bit toggles (`FlipButtons`, which ignore it too).
+    /// Not the angle, F-E, word size, radix, keypad kind or flyout buttons,
+    /// nor M▾, the History or Memory items and their buttons: plain
+    /// buttons, toggles, radio buttons and list items upstream.
+    fn is_calculator_key(&self, widget: &gtk::Widget) -> bool {
+        let p = &self.0;
+        let key = widget.ancestor(Keypad::static_type()).is_some()
+            && widget.accessible_role() != gtk::AccessibleRole::ToggleButton;
+        key || p.mem_buttons.borrow().iter().any(|(_, b)| b == widget)
+            || p.bitflip
+                .borrow()
+                .as_ref()
+                .is_some_and(|f| widget.is_ancestor(&f.root))
+    }
+
     fn target(&self) -> gtk::Widget {
         self.0.column.clone().upcast()
     }
