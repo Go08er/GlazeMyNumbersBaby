@@ -1417,9 +1417,10 @@ impl StandardCalculatorViewModel {
             let _ = self.with_manager(|m| m.set_left_operand(&operand));
         }
         // Extension: whether the input holds the number typed last (with 0
-        // shown, the C key is then CE), which what the restore typed needn't
-        // have left so. Snapshots without "k" are left as replayed.
-        if !engine_error && let Some(k) = continuation {
+        // shown, or in an error, the C key is then CE), which what the
+        // restore typed needn't have left so. Snapshots without "k" are left
+        // as replayed.
+        if let Some(k) = continuation {
             self.with_manager(|m| m.set_input_empty(k.empty_input));
             self.on_input_changed();
         }
@@ -1854,6 +1855,15 @@ impl StandardCalculatorViewModel {
             if switch {
                 self.send_command(cmd::FE);
             }
+        }
+        // An error ignores F-E, and a spent budget drops it, which would
+        // leave the engine in an operand's form once C clears either.
+        let engine_fe = self
+            .standard_calculator_manager
+            .current_calculator_engine()
+            .map(|e| e.number_format() != calcmanager::NumberFormat::Float);
+        if engine_fe.is_some_and(|engine_fe| engine_fe != fe) {
+            self.with_manager(|m| m.set_exponential_format(fe));
         }
     }
 

@@ -1193,15 +1193,73 @@ fn the_number_kept_in_the_input_is_restored() {
         press_all(&mut restored, &[ClearEntry, Two, Equals]);
         assert_eq!(restored.display_value(), "9", "{mode:?}");
     }
-    // An input emptied by C stays so.
+    // An input emptied by C stays so; an error keeps the input it had (the
+    // key is CE while 8 is kept, though both clear the error).
+    for (mode, script) in [
+        (
+            CalcMode::Scientific,
+            &[Seven, Clear, MemoryRecall, Memory][..],
+        ),
+        (CalcMode::Programmer, &[Multiply, Eight, Mod, Equals]),
+    ] {
+        let mut vm = new_vm();
+        vm.set_mode(mode);
+        press_all(&mut vm, script);
+        let state = vm.save_state();
+        let mut restored = new_vm();
+        restored.restore_state(&state);
+        assert_eq!(
+            restored.shows_clear_entry(),
+            vm.shows_clear_entry(),
+            "{script:?}"
+        );
+        assert_eq!(restored.save_state(), state, "{script:?}");
+    }
+}
+
+/// Found by the randomized restore tester: an operand written in
+/// e-notation is replayed with F-E switched on around the command after
+/// it, and when that command ends in an error, which ignores F-E, the
+/// engine stayed in e-notation: after C the restored calculator showed
+/// "0.e+0".
+#[test]
+fn an_error_in_the_replay_leaves_f_e_as_it_was() {
+    use Button::*;
+    assert_restores_and_continues(
+        CalcMode::Scientific,
+        &[One, Exp, Four, Zero, Zero, Sin],
+        &[&[Clear], &[Five], &[Clear, Five, Add, Two, Equals]],
+    );
+}
+
+/// Found by the randomized restore tester: in Programmer mode, what "="
+/// repeats keeps the bits of a larger word size it was worked out in,
+/// which no operand typed in the smaller one gives back: after 512 ÷ 256 =
+/// and BYTE, = divides by 0 (BYTE shows 256 as 0), but back in QWORD by
+/// 256 again. Such a state is marked as one the commands can't rebuild,
+/// so it comes back as a new calculation.
+#[test]
+fn a_repeated_operand_wider_than_the_word_size_falls_back() {
+    use Button::*;
     let mut vm = new_vm();
-    vm.set_mode(CalcMode::Scientific);
-    press_all(&mut vm, &[Seven, Clear, MemoryRecall, Memory]);
+    vm.set_mode(CalcMode::Programmer);
+    press_all(
+        &mut vm,
+        &[Five, One, Two, Divide, Two, Five, Six, Equals, Byte],
+    );
     let state = vm.save_state();
+    assert!(state.contains(r#""nr":true"#), "{state}");
+    press_all(&mut vm, &[Qword, Equals]);
+    assert_eq!(vm.display_value(), "0");
     let mut restored = new_vm();
-    restored.restore_state(&state);
-    assert_eq!(restored.shows_clear_entry(), vm.shows_clear_entry());
-    assert_eq!(restored.save_state(), state);
+    assert!(!restored.restore_state_checked(&state));
+    assert_eq!(restored.display_value(), "2");
+    // In the word size it was worked out in, it restores.
+    let mut vm = new_vm();
+    vm.set_mode(CalcMode::Programmer);
+    press_all(&mut vm, &[Five, One, Two, Divide, Two, Five, Six, Equals]);
+    let state = vm.save_state();
+    assert!(!state.contains(r#""nr":true"#), "{state}");
 }
 
 /// R14-M-05: RoL and RoR through carry shift in the carry the last one

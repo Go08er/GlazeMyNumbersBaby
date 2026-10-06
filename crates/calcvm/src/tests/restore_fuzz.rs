@@ -184,14 +184,31 @@ fn compare_states(original: &EngineState, restored: &EngineState) -> Result<bool
             names(restored)
         ));
     }
-    let mut rounded = false;
+    // Operands the expression only holds as shown make what was worked out
+    // from them differ as far as it may (see `EngineState::inexact`).
+    let mut rounded = original.inexact > 0;
+    let precision: i32 = original
+        .exact
+        .iter()
+        .find(|(name, _)| name == "precision")
+        .and_then(|(_, p)| p.parse().ok())
+        .unwrap_or(32);
+    // As the engine writes it out (the digits a display can show).
+    let written = |v: &Rational| {
+        v.to_string_radix(10, calcmanager::NumberFormat::Float, precision)
+            .ok()
+    };
     for ((name, o, o_shown), (_, r, r_shown)) in original.values.iter().zip(&restored.values) {
         if o == r {
             continue;
         }
         // Rounded to the digits shown, or (Programmer mode) a memory slot
         // stored in a larger word size, back as the word size showed it.
-        if !close(o, r) && !(name.starts_with("memory") && o_shown == r_shown) {
+        if !close(o, r)
+            && written(o) != written(r)
+            && !(name.starts_with("memory") && o_shown == r_shown)
+            && original.inexact == 0
+        {
             let show = |v: &Rational| {
                 v.to_string_radix(10, calcmanager::NumberFormat::Scientific, 20)
                     .unwrap_or_default()

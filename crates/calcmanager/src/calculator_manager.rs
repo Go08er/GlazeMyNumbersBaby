@@ -14,7 +14,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use ratpack::{CalcResult, Rational};
+use ratpack::{CalcResult, NumberFormat, Rational};
 
 use crate::calc_display::{CalcDisplay, CalcDisplayRef, ExpressionToken, HistoryDisplayRef};
 use crate::calc_engine::{CalcEngine, Continuation, EngineState};
@@ -773,6 +773,20 @@ impl CalculatorManager {
         self.current_engine_ref()
             .map(|e| e.state(&self.memorized_numbers))
             .unwrap_or_default()
+    }
+
+    /// Extension: puts F-E as `exponential` says, in the current engine
+    /// (see [`CalcEngine::set_number_format`]) and in the flag `Reset`
+    /// reads, without displaying anything: a restore that switched it to
+    /// write an operand in its form can't switch it back with F-E once the
+    /// command after the operand has ended in an error.
+    pub fn set_exponential_format(&mut self, exponential: bool) {
+        self.is_exponential_format = exponential;
+        self.current_engine().set_number_format(if exponential {
+            NumberFormat::Scientific
+        } else {
+            NumberFormat::Float
+        });
     }
 
     /// Extension: see [`CalcEngine::set_input_empty`].
