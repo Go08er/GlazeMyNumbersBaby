@@ -417,9 +417,7 @@ impl GraphingPage {
         for (r, row) in GRAPH_PAD.iter().enumerate() {
             for (c, (label, insert)) in row.iter().enumerate() {
                 let b = gtk::Button::with_label(label);
-                b.update_property(&[gtk::accessible::Property::Label(
-                    appcore::keys::graph_pad_name(label),
-                )]);
+                crate::a11y::name_button(&b, appcore::keys::graph_pad_name(label));
                 b.add_css_class("wc-key");
                 b.add_css_class(
                     if label.chars().all(|ch| ch.is_ascii_digit() || ch == '.') {

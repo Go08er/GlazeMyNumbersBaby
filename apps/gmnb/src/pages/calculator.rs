@@ -261,18 +261,36 @@ impl CalculatorPage {
     fn memory_row(self: &Rc<Self>, full: bool) -> gtk::Box {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         row.set_homogeneous(full);
-        let all: &[(B, &str, &str)] = &[
-            (B::MemoryClear, "MC", "Clear all memory (Ctrl+L)"),
-            (B::MemoryRecall, "MR", "Memory recall (Ctrl+R)"),
-            (B::MemoryAdd, "M+", "Memory add (Ctrl+P)"),
-            (B::MemorySubtract, "M−", "Memory subtract (Ctrl+Q)"),
-            (B::Memory, "MS", "Memory store (Ctrl+M)"),
+        // Named as upstream's (ClearMemoryButton "Clear all memory", ...),
+        // their tooltips read as descriptions.
+        let all: &[(B, &str, &str, &str)] = &[
+            (
+                B::MemoryClear,
+                "MC",
+                "Clear all memory",
+                "Clear all memory (Ctrl+L)",
+            ),
+            (
+                B::MemoryRecall,
+                "MR",
+                "Memory recall",
+                "Memory recall (Ctrl+R)",
+            ),
+            (B::MemoryAdd, "M+", "Memory add", "Memory add (Ctrl+P)"),
+            (
+                B::MemorySubtract,
+                "M−",
+                "Memory subtract",
+                "Memory subtract (Ctrl+Q)",
+            ),
+            (B::Memory, "MS", "Memory store", "Memory store (Ctrl+M)"),
         ];
-        for (b, label, tip) in all {
+        for (b, label, name, tip) in all {
             if !full && *b != B::Memory {
                 continue;
             }
             let button = text_button(label, tip);
+            crate::a11y::name_button(&button, name);
             let weak = Rc::downgrade(self);
             let id = *b;
             button.connect_clicked(move |w| {
@@ -284,6 +302,7 @@ impl CalculatorPage {
             self.mem_buttons.borrow_mut().push((*b, button));
         }
         let toggle = text_button("M▾", "Memory");
+        crate::a11y::name_button(&toggle, "Memory");
         let weak = Rc::downgrade(self);
         toggle.connect_clicked(move |_| {
             if let Some(p) = weak.upgrade() {

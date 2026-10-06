@@ -130,6 +130,18 @@ impl DatePage {
                 .build(),
         );
         mode.set_active_name(Some("diff"));
+        // Each reads as upstream's option ("Difference between dates"), as
+        // DGMNB's do, though it shows the short label.
+        let mut options = [S::DATE_DIFFERENCE_OPTION, S::DATE_ADD_SUBTRACT_OPTION].into_iter();
+        let mut child = mode.first_child();
+        while let Some(c) = child {
+            if let Some(b) = c.downcast_ref::<gtk::Button>()
+                && let Some(name) = options.next()
+            {
+                crate::a11y::name_button(b, name);
+            }
+            child = c.next_sibling();
+        }
         mode.add_css_class("wc-toggle-group");
         mode.upcast_ref::<gtk::Widget>()
             .update_property(&[gtk::accessible::Property::Label(
