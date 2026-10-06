@@ -1,0 +1,722 @@
+{
+  "source": "y=x^(1000001/3)",
+  "formula": "Pow(x,Div(1000001,3))",
+  "evaluated": "f = Pow(x,Add(Div(1000001,3),0)); f′ = Mul(Div(1000001,3),Pow(x,Add(Div(999998,3),0))); f″ = Mul(Pow(x,Add(Div(999995,3),0)),Div(999998999998,9))",
+  "unit": "radians",
+  "domain": {
+    "Certified": {
+      "value": {
+        "pieces": [
+          {
+            "lo": {
+              "At": {
+                "x": {
+                  "lo": 0.0,
+                  "hi": 0.0
+                },
+                "closed": true
+              }
+            },
+            "hi": "PosInf"
+          }
+        ],
+        "excluded": []
+      },
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "TailBeyond": {
+              "side": "Left",
+              "from": -1.0,
+              "of": {
+                "G": {
+                  "path": [
+                    0
+                  ],
+                  "via": "Itself"
+                }
+              },
+              "c": 0.0,
+              "above": false
+            }
+          },
+          {
+            "ExactAt": {
+              "x": {
+                "a": -1.0,
+                "b": 0.0
+              },
+              "of": {
+                "G": {
+                  "path": [
+                    0
+                  ],
+                  "via": "Itself"
+                }
+              },
+              "c": 0.0,
+              "at": 0.0
+            }
+          },
+          {
+            "Value": {
+              "x": {
+                "a": 0.0,
+                "b": 0.0
+              },
+              "of": {
+                "G": {
+                  "path": [
+                    0
+                  ],
+                  "via": "Itself"
+                }
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          },
+          {
+            "ExactAt": {
+              "x": {
+                "a": 0.0,
+                "b": 1.0
+              },
+              "of": {
+                "G": {
+                  "path": [
+                    0
+                  ],
+                  "via": "Itself"
+                }
+              },
+              "c": 0.0,
+              "at": 0.0
+            }
+          },
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": 1.0,
+              "of": {
+                "G": {
+                  "path": [
+                    0
+                  ],
+                  "via": "Itself"
+                }
+              },
+              "c": 0.0,
+              "above": true
+            }
+          }
+        ]
+      }
+    }
+  },
+  "x_intercepts": {
+    "Certified": {
+      "value": [
+        {
+          "At": {
+            "lo": 0.0,
+            "hi": 0.0
+          }
+        }
+      ],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Value": {
+              "x": {
+                "a": 0.0,
+                "b": 0.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          },
+          {
+            "Touch": {
+              "x": {
+                "a": 0.0,
+                "b": 1.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "at": 0.0,
+              "order": 0,
+              "above": true
+            }
+          },
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": 1.0,
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "above": true
+            }
+          }
+        ]
+      }
+    }
+  },
+  "y_intercept": {
+    "Certified": {
+      "value": {
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "cert": {
+        "covers": "Points",
+        "claims": [
+          {
+            "Value": {
+              "x": {
+                "a": 0.0,
+                "b": 0.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          }
+        ]
+      }
+    }
+  },
+  "parity": {
+    "Certified": {
+      "value": "Neither",
+      "cert": {
+        "covers": "Points",
+        "claims": [
+          {
+            "Value": {
+              "x": {
+                "a": 0.5,
+                "b": 0.5
+              },
+              "of": {
+                "F": "F0"
+              },
+              "lo": 0.0,
+              "hi": 5e-324
+            }
+          },
+          {
+            "Undefined": {
+              "x": {
+                "a": -0.5,
+                "b": -0.5
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "period": {
+    "Certified": {
+      "value": null,
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "TailBeyond": {
+              "side": "Left",
+              "from": -1.0,
+              "of": {
+                "G": {
+                  "path": [
+                    0
+                  ],
+                  "via": "Itself"
+                }
+              },
+              "c": 0.0,
+              "above": false
+            }
+          },
+          {
+            "ExactAt": {
+              "x": {
+                "a": -1.0,
+                "b": 0.0
+              },
+              "of": {
+                "G": {
+                  "path": [
+                    0
+                  ],
+                  "via": "Itself"
+                }
+              },
+              "c": 0.0,
+              "at": 0.0
+            }
+          },
+          {
+            "Value": {
+              "x": {
+                "a": 0.0,
+                "b": 0.0
+              },
+              "of": {
+                "G": {
+                  "path": [
+                    0
+                  ],
+                  "via": "Itself"
+                }
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          },
+          {
+            "ExactAt": {
+              "x": {
+                "a": 0.0,
+                "b": 1.0
+              },
+              "of": {
+                "G": {
+                  "path": [
+                    0
+                  ],
+                  "via": "Itself"
+                }
+              },
+              "c": 0.0,
+              "at": 0.0
+            }
+          },
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": 1.0,
+              "of": {
+                "G": {
+                  "path": [
+                    0
+                  ],
+                  "via": "Itself"
+                }
+              },
+              "c": 0.0,
+              "above": true
+            }
+          }
+        ]
+      }
+    }
+  },
+  "extrema": {
+    "Certified": {
+      "value": [
+        {
+          "x": {
+            "lo": 0.0,
+            "hi": 0.0
+          },
+          "y": {
+            "lo": 0.0,
+            "hi": 0.0
+          },
+          "kind": "Min",
+          "every": null
+        }
+      ],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": 5e-324,
+              "of": {
+                "F": "F1"
+              },
+              "c": 0.0,
+              "above": true
+            }
+          },
+          {
+            "Continuous": {
+              "x": {
+                "a": 0.0,
+                "b": "inf"
+              }
+            }
+          },
+          {
+            "Value": {
+              "x": {
+                "a": 0.0,
+                "b": 0.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          },
+          {
+            "Gap": {
+              "x": {
+                "a": 0.0,
+                "b": 5e-324
+              }
+            }
+          },
+          {
+            "GapClear": {
+              "x": {
+                "a": 0.0,
+                "b": 5e-324
+              },
+              "of": {
+                "F": "F1"
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "inflections": {
+    "Certified": {
+      "value": [],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": 5e-324,
+              "of": {
+                "F": "F2"
+              },
+              "c": 0.0,
+              "above": true
+            }
+          },
+          {
+            "Gap": {
+              "x": {
+                "a": 0.0,
+                "b": 5e-324
+              }
+            }
+          },
+          {
+            "GapClear": {
+              "x": {
+                "a": 0.0,
+                "b": 5e-324
+              },
+              "of": {
+                "F": "F2"
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "monotonicity": {
+    "Certified": {
+      "value": [
+        {
+          "on": {
+            "lo": {
+              "At": {
+                "x": {
+                  "lo": 0.0,
+                  "hi": 0.0
+                },
+                "closed": true
+              }
+            },
+            "hi": "PosInf"
+          },
+          "dir": "Increasing"
+        }
+      ],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": 5e-324,
+              "of": {
+                "F": "F1"
+              },
+              "c": 0.0,
+              "above": true
+            }
+          },
+          {
+            "Gap": {
+              "x": {
+                "a": 0.0,
+                "b": 5e-324
+              }
+            }
+          },
+          {
+            "GapClear": {
+              "x": {
+                "a": 0.0,
+                "b": 5e-324
+              },
+              "of": {
+                "F": "F1"
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "range": {
+    "Certified": {
+      "value": [
+        {
+          "lo": {
+            "At": {
+              "x": {
+                "lo": 0.0,
+                "hi": 0.0
+              },
+              "closed": true
+            }
+          },
+          "hi": "PosInf"
+        }
+      ],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": 5e-324,
+              "of": {
+                "F": "F1"
+              },
+              "c": 0.0,
+              "above": true
+            }
+          },
+          {
+            "Value": {
+              "x": {
+                "a": 0.0,
+                "b": 0.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          },
+          {
+            "Limit": {
+              "at": "PosInf",
+              "over_x": false,
+              "to": "PosInf"
+            }
+          },
+          {
+            "Value": {
+              "x": {
+                "a": 0.0,
+                "b": 0.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          },
+          {
+            "Touch": {
+              "x": {
+                "a": 0.0,
+                "b": 1.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "at": 0.0,
+              "order": 0,
+              "above": true
+            }
+          },
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": 1.0,
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "above": true
+            }
+          },
+          {
+            "Gap": {
+              "x": {
+                "a": 0.0,
+                "b": 5e-324
+              }
+            }
+          },
+          {
+            "GapClear": {
+              "x": {
+                "a": 0.0,
+                "b": 5e-324
+              },
+              "of": {
+                "F": "F1"
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "range_ends": [
+    [
+      [
+        {
+          "At": {
+            "lo": 0.0,
+            "hi": 0.0
+          }
+        }
+      ],
+      [
+        "Other"
+      ]
+    ]
+  ],
+  "vertical": {
+    "Certified": {
+      "value": [],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Value": {
+              "x": {
+                "a": 0.0,
+                "b": 0.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "lo": 0.0,
+              "hi": 0.0
+            }
+          },
+          {
+            "Touch": {
+              "x": {
+                "a": 0.0,
+                "b": 1.0
+              },
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "at": 0.0,
+              "order": 0,
+              "above": true
+            }
+          },
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": 1.0,
+              "of": {
+                "F": "F0"
+              },
+              "c": 0.0,
+              "above": true
+            }
+          }
+        ]
+      }
+    }
+  },
+  "horizontal": {
+    "Certified": {
+      "value": [],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Limit": {
+              "at": "PosInf",
+              "over_x": false,
+              "to": "PosInf"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "oblique": {
+    "Certified": {
+      "value": [],
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "TailBeyond": {
+              "side": "Right",
+              "from": 1.0,
+              "of": {
+                "F": "F2"
+              },
+              "c": 55555499999.888885,
+              "above": true
+            }
+          }
+        ]
+      }
+    }
+  },
+  "binding": {
+    "certifier": "graphing 0.2.0",
+    "rules": "32045d7ad9dab698",
+    "power": "ti-real-1",
+    "sliders": {},
+    "decimal_comma": false,
+    "literal_digits": 14,
+    "budget": 200000
+  },
+  "evals": 25428,
+  "stopped": null
+}

@@ -528,6 +528,54 @@ pub fn pow_rational(x: &DecInterval, p: i32, q: i32) -> DecInterval {
     }
 }
 
+/// x^(p/q) for an exponent written as a ratio p/q (lowest terms, q > 1)
+/// past [`pow_rational`]'s machine integers, `e` enclosing p/q (`neg`: p <
+/// 0): sign(x)ᵖ·|x|^(p/q), the same real-root semantics, by the parities
+/// of p and q (review 15, R15-M-01: x^(1000001/3) was enclosed by the
+/// positive-base rule, empty for x < 0).
+pub fn pow_ratio(x: &DecInterval, e: Interval, neg: bool, odd_p: bool, odd_q: bool) -> DecInterval {
+    let iv = x.iv;
+    if iv.is_empty() {
+        return DecInterval::result(iv, Dec::Trv, &[x]);
+    }
+    let ed = DecInterval::new(e);
+    // |x|^(p/q) on a part of x ≥ 0: there the positive-base rule's power
+    // is that function (0 at 0 for p > 0; toward 0, ∞ for p < 0).
+    let mag = |a: Interval| -> Interval {
+        if a.is_empty() {
+            return a;
+        }
+        pow(&DecInterval::new(a), &ed).iv
+    };
+    let pos_part = iv.intersect(Interval::new(0.0, INF));
+    let neg_part = iv.intersect(Interval::new(-INF, 0.0));
+    let mut r = Interval::EMPTY;
+    if !pos_part.is_empty() && !(neg && pos_part.hi() == 0.0) {
+        r = r.hull(mag(pos_part));
+    }
+    let mut left = false;
+    if !neg_part.is_empty() && neg_part.lo() < 0.0 {
+        if odd_q {
+            let m = mag(-neg_part);
+            r = r.hull(if odd_p { -m } else { m });
+        } else {
+            left = true;
+        }
+    }
+    let at_zero_undefined = neg && iv.contains_zero() && !x.ne0();
+    let local = if left || at_zero_undefined {
+        Dec::Trv
+    } else {
+        Dec::Com
+    };
+    let res = DecInterval::result(r, local, &[x]);
+    if odd_q && odd_p {
+        res.signs(x.gt0(), x.lt0())
+    } else {
+        res.signs(x.ne0() && (odd_q || x.gt0()), false)
+    }
+}
+
 /// b^e for a general exponent (IEEE 1788 `pow`, the TI rule for an
 /// exponent that varies): defined for b > 0, and for b = 0 with e > 0.
 pub fn pow(b: &DecInterval, e: &DecInterval) -> DecInterval {

@@ -690,29 +690,35 @@ pub fn abs(a: &Iv) -> Iv {
 
 /// Integer power aⁿ, 0 to a power ≤ 0 undefined.
 pub fn powi(a: &Iv, n: i64) -> Iv {
+    powi_big(a, &rug::Integer::from(n))
+}
+
+/// [`powi`] for an n of any size (MPFR's power to an integer, exactly
+/// rounded: an n past `i32` was clipped to `i32::MAX`, an odd number).
+pub fn powi_big(a: &Iv, n: &rug::Integer) -> Iv {
     if a.empty {
         return Iv::empty();
     }
-    if n == 0 {
+    if *n == 0 {
         if a.is_exactly(0.0) {
             return Iv::empty();
         }
         let ok = !a.has0();
         return Iv::of(1.0).deco(&[a], ok, ok);
     }
-    if n < 0 {
-        return recip(&powi(a, -n));
+    if *n < 0 {
+        return recip(&powi_big(a, &rug::Integer::from(-n)));
     }
-    if n == 1 {
+    if *n == 1 {
         return a.clone();
     }
-    let n32 = n.min(i32::MAX as i64) as i32;
     let pw = |x: &Float, r: Round| -> Float {
         let mut v = cp(x);
-        v.pow_assign_round(n32, r);
+        v.pow_assign_round(n, r);
         nan_to(v, r == Round::Up)
     };
-    let v = if n % 2 == 1 || a.lo >= 0 {
+    let odd = n.is_odd();
+    let v = if odd || a.lo >= 0 {
         Iv::new(pw(&a.lo, Round::Down), pw(&a.hi, Round::Up))
     } else if a.hi <= 0 {
         Iv::new(pw(&a.hi, Round::Down), pw(&a.lo, Round::Up))
@@ -720,7 +726,7 @@ pub fn powi(a: &Iv, n: i64) -> Iv {
         let m = max_f(pw(&a.lo, Round::Up), pw(&a.hi, Round::Up));
         Iv::new(fl(0.0), m)
     };
-    let (pos, neg) = if n % 2 == 0 {
+    let (pos, neg) = if !odd {
         (sp(a) || sn(a), false)
     } else {
         (sp(a), sn(a))
@@ -820,37 +826,27 @@ pub fn rootn_big(a: &Iv, q: &rug::Integer) -> Iv {
 }
 
 /// a^(p/q) in lowest terms, q > 1, real-root semantics: (ᵠ√a)^p, so a
-/// negative base only for odd q, and 0 only to a positive power.
-pub fn pow_rat(a: &Iv, p: i64, q: i64) -> Iv {
+/// negative base only for odd q, and 0 only to a positive power. p and q
+/// of any size (a typed 1000001/3, review 15, R15-M-01; a root's degree
+/// of hundreds of digits, review 14, R14-M-04).
+pub fn pow_ratio(a: &Iv, p: &rug::Integer, q: &rug::Integer) -> Iv {
     if a.empty {
         return Iv::empty();
     }
-    let r = match u32::try_from(q) {
-        Ok(q) => rootn(a, q),
-        Err(_) => rootn_big(a, &rug::Integer::from(q)),
+    let r = match q.to_u32() {
+        Some(q) => rootn(a, q),
+        None => rootn_big(a, q),
     };
     if r.empty {
         return Iv::empty();
     }
-    powi(&r, p)
-}
-
-/// [`pow_rat`] for a q past `i64` (p = ±1, a root's degree).
-pub fn pow_rat_big(a: &Iv, p: i64, q: &rug::Integer) -> Iv {
-    if a.empty {
-        return Iv::empty();
-    }
-    let r = rootn_big(a, q);
-    if r.empty {
-        return Iv::empty();
-    }
-    powi(&r, p)
+    powi_big(&r, p)
 }
 
 /// The rational p/q enclosed by the working precision, rounded outward
-/// (q however long).
-pub fn ratio(p: i64, q: &rug::Integer) -> Iv {
-    let r = rug::Rational::from((rug::Integer::from(p), q.clone()));
+/// (p and q however long).
+pub fn ratio(p: &rug::Integer, q: &rug::Integer) -> Iv {
+    let r = rug::Rational::from((p.clone(), q.clone()));
     let (lo, _) = Float::with_val_round(prec(), &r, Round::Down);
     let (hi, _) = Float::with_val_round(prec(), &r, Round::Up);
     Iv::new(lo, hi)

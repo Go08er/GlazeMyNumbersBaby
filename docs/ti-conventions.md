@@ -51,8 +51,12 @@ exactly what gets plotted. An exponent written as an integer or a ratio of
 integers (`3`, `−2`, `1/3`, `(2/3)`, `−1/3`; taken in lowest terms) is
 different and follows IEEE 1788's `pown`/`rootn`: `x^3` and `x^(1/3)` are
 polynomial and root functions, defined for negative x, and both calculators
-graph them on both sides. Only that written form gets odd roots (the
-compiler's `syntactic_rational`): any other constant exponent, a decimal, a
+graph them on both sides. The integers may be of any size and are reduced
+first: `x^(1000001/3000003)` is the cube root, `x^(1000001/3)` is odd and
+defined on ℝ (sign(x)·|x|^(1000001/3)), `x^(2000002/3)` even and
+`x^(1/1000002)` an even root (x ≥ 0), by the parities of p and q in
+lowest terms. Only that written form gets odd roots (the
+compiler's `written`): any other constant exponent, a decimal, a
 slider or an expression, takes the positive-base rule unless its value is
 an integer, even when it is a fraction with an odd denominator, so `x^0.2`
 has domain [0, ∞) while `x^(1/5)` is defined everywhere.
@@ -106,7 +110,9 @@ a root's degree) is an integer is decided by its exact value, never by its
 double: off, `x^1.0000000000000001` and `x^2.0000000000000001` take the
 positive-base rule (domain [0, ∞), a minimum at 0), while `x^(0.1+0.9)` and
 `x^2.0` are integer powers; only the integers of the written form `p/q`
-must be typed exactly so to give odd roots. Likewise an exponent or a
+must be typed exactly so to give odd roots, and they are the integers the
+digit limit leaves: to 5 digits `x^(1000001/3)` is `x^(1000000/3)`, even,
+and `x^(1/1000001)` is `x^(1/1000000)`, defined for x ≥ 0 only. Likewise an exponent or a
 root's degree typed as an odd integer is odd at any size: off (or at 16
 digits or more), `x^9007199254740993` is −1 at −1 and
 `root(−8, 9007199254740993)` is defined (just below −1), though the doubles

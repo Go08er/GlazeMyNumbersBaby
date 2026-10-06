@@ -885,7 +885,8 @@ fn pow(
     }
     // A typed fraction p/q: real roots of negatives for odd q.
     let (p, q) = (r.numer(), r.denom());
-    let typed = crate::compile::syntactic_rational(b, crate::compile::Reading::Typed).is_some();
+    // (Written so at any size: review 15, R15-M-01.)
+    let typed = crate::compile::written_ratio(b, crate::compile::Reading::Typed).is_some();
     if u.sign()? < 0 && (!typed || q % 2 == 0) {
         return None;
     }

@@ -16,7 +16,7 @@ use super::arith::Interval;
 use super::dec::{Dec, DecInterval};
 use super::elem;
 use crate::ast::{BinOp, Constant, Expr, Func};
-use crate::compile::{CompileOptions, syntactic_rational};
+use crate::compile::{CompileOptions, Ratio, Written, written};
 use crate::functions::TrigUnit;
 
 /// What an evaluation needs besides the tree and the box.
@@ -346,14 +346,59 @@ fn powrat_ser(u: &Series, p: i32, q: i32) -> Series {
     flat(c0, n)
 }
 
+/// u^(p/q) for a written ratio past (p, q) of machine integers, q > 1: the
+/// same real root as [`powrat_ser`], p/q enclosed.
+fn powratio_ser(u: &Series, r: &Ratio) -> Series {
+    let n = u.len() - 1;
+    let (lo, hi) = r.enclosure();
+    let e = Interval::new(lo, hi);
+    let c0 = elem::pow_ratio(&u[0], e, r.is_negative(), r.odd_p(), r.odd_q());
+    let k = DecInterval::new(e);
+    let pos_branch = |w: &Series| exp(&scale(&ln(w), &k));
+    if u[0].gt0() {
+        let mut h = pos_branch(u);
+        h[0] = c0.refine(&h[0]);
+        return h;
+    }
+    if u[0].lt0() && r.odd_q() {
+        let h = pos_branch(&neg(u));
+        let mut h = if r.odd_p() { neg(&h) } else { h };
+        h[0] = c0.refine(&h[0]);
+        return h;
+    }
+    flat(c0, n)
+}
+
 fn pow(a: &Expr, b: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
     let u = ev(a, x, n, ctx);
-    if let Some((p, q)) = syntactic_rational(b, crate::compile::Reading::Typed) {
-        return if q == 1 {
-            powi_ser(&u, p)
-        } else {
-            powrat_ser(&u, p, q)
-        };
+    match written(b, crate::compile::Reading::Typed) {
+        Some(Written::Ratio(r)) => {
+            if let Some((p, q)) = r.small() {
+                return if q == 1 {
+                    powi_ser(&u, p)
+                } else {
+                    powrat_ser(&u, p, q)
+                };
+            }
+            // Written as a ratio of any size: its real root, by the
+            // parities of p and q (review 15, R15-M-01: x^(1000001/3) was
+            // the positive-base rule's, empty for x < 0). (A whole number
+            // past 10⁶: by its value below, as before.)
+            if !r.is_integer() {
+                return powratio_ser(&u, &r);
+            }
+        }
+        // Written so, too long to carry: whether p and q are odd isn't
+        // known, so for a base that may be ≤ 0 nothing is.
+        Some(Written::Long) if !u[0].gt0() => {
+            let h0 = if u[0].is_empty() {
+                DecInterval::result(Interval::EMPTY, Dec::Trv, &[&u[0]])
+            } else {
+                DecInterval::result(Interval::ENTIRE, Dec::Trv, &[&u[0]])
+            };
+            return flat(h0, n);
+        }
+        _ => {}
     }
     let v = ev(b, x, n, ctx);
     // A constant integer exponent written otherwise (x^(1+1)) is still an

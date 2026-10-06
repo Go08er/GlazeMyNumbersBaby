@@ -363,37 +363,11 @@ fn lost_bin(op: BinOp, a: Xf, b: Xf) -> R {
 }
 
 /// An exponent written as an integer or a ratio of integers, as the
-/// compiler reads it (`syntactic_rational`): real-root semantics apply.
+/// compiler reads it at face value (`syntactic_rational`): real-root
+/// semantics apply. Its parts of any size, reduced; `(p, q)` when both are
+/// below 10⁶ (a larger ratio is `compile::face_pow_kind`'s).
 pub fn rational(e: &Expr) -> Option<(i32, i32)> {
-    pub fn int(e: &Expr) -> Option<i64> {
-        match e {
-            Expr::Num(v, _) if *v == v.trunc() && v.abs() < 1e6 => Some(*v as i64),
-            Expr::Neg(a) => int(a).map(|v| -v),
-            _ => None,
-        }
-    }
-    let (p, q) = match e {
-        Expr::Neg(a) => {
-            let (p, q) = rational(a)?;
-            return Some((-p, q));
-        }
-        Expr::Bin(BinOp::Div, a, b) => (int(a)?, int(b)?),
-        _ => (int(e)?, 1),
-    };
-    if q == 0 {
-        return None;
-    }
-    let mut g = (p.unsigned_abs(), q.unsigned_abs());
-    while g.1 != 0 {
-        g = (g.1, g.0 % g.1);
-    }
-    let g = g.0.max(1) as i64;
-    let (mut p, mut q) = (p / g, q / g);
-    if q < 0 {
-        p = -p;
-        q = -q;
-    }
-    Some((i32::try_from(p).ok()?, i32::try_from(q).ok()?))
+    crate::compile::syntactic_rational(e, crate::compile::Reading::FaceValue)
 }
 
 pub fn one(r: f64) -> R {
@@ -443,10 +417,7 @@ fn reval_in(e: &Expr, x: f64, u: TrigUnit, typed: bool) -> R {
         if typed {
             crate::compile::typed_pow_kind(b, &opts)
         } else {
-            match rational(b) {
-                Some((p, q)) => PowKind::Rational(p, q),
-                None => PowKind::Plain,
-            }
+            crate::compile::face_pow_kind(b)
         }
     };
     match e {
@@ -466,6 +437,14 @@ fn reval_in(e: &Expr, x: f64, u: TrigUnit, typed: bool) -> R {
                 unreachable!()
             };
             pow_rat(reval(a, x, u), p, q)
+        }
+        // Written as a ratio past (p, q) of machine integers: the same real
+        // root, by the parities of p and q (review 15, R15-M-01).
+        Expr::Bin(BinOp::Pow, a, b) if matches!(kind(b), PowKind::Ratio(..)) => {
+            let PowKind::Ratio(r) = kind(b) else {
+                unreachable!()
+            };
+            pow_ratio(reval(a, x, u), r)
         }
         // An exponent that varies with x, or a constant that is exactly no
         // integer: the TI rule (`fns::pow_var`).
@@ -656,6 +635,40 @@ pub fn pow_rat(b: R, p: i32, q: i32) -> R {
     match Xf::exp_dd(t) {
         R::V(m) if b.sign() < 0.0 && p % 2 != 0 => R::V(m.neg()),
         r => r,
+    }
+}
+
+/// b^(p/q) for a written ratio past (p, q) of machine integers
+/// (`fns::pow_ratio`): sign(b)ᵖ·|b|^(p/q), a negative b only for an odd q,
+/// 0 only to a positive power.
+pub(crate) fn pow_ratio(b: R, r: crate::compile::RatioPow) -> R {
+    let b = match b {
+        R::V(b) => b,
+        r => return r,
+    };
+    if b.is_zero() {
+        return if r.neg { R::Undef } else { R::V(Xf::ZERO) };
+    }
+    if b.sign() < 0.0 && !r.odd_q {
+        return R::Undef;
+    }
+    if b.lost() {
+        return R::Unknown;
+    }
+    let m = if r.e.hi.is_infinite() {
+        // p/q beyond the doubles: 1 stays 1; a magnitude below 1 goes to
+        // 0, one above to beyond anything held.
+        match b.abs().cmp(Xf::of(1.0)) {
+            std::cmp::Ordering::Equal => R::V(Xf::of(1.0)),
+            o if (o == std::cmp::Ordering::Greater) == (r.e.hi > 0.0) => R::Unknown,
+            _ => R::V(Xf::lost_of(1.0)),
+        }
+    } else {
+        Xf::exp_dd(b.abs().ln_dd().mul(r.e))
+    };
+    match m {
+        R::V(m) if b.sign() < 0.0 && r.odd_p => R::V(m.neg()),
+        m => m,
     }
 }
 
@@ -1256,6 +1269,21 @@ pub fn eb(e: &Expr, x: f64, u: TrigUnit) -> (f64, f64) {
                 (r * va.abs().ln()).abs() * ulp(p as f64 / q as f64)
             };
             (r, err + expo)
+        }
+        // A written ratio past (p, q) of machine integers: its power in
+        // double-double, within an ulp or two (review 15, R15-M-01).
+        Expr::Bin(BinOp::Pow, a, b)
+            if matches!(
+                crate::compile::face_pow_kind(b),
+                crate::compile::PowKind::Ratio(..)
+            ) =>
+        {
+            let crate::compile::PowKind::Ratio(rp) = crate::compile::face_pow_kind(b) else {
+                unreachable!()
+            };
+            let (va, ea) = eb(a, x, u);
+            let g = move |t: f64| fns::pow_ratio(t, &rp);
+            unary_err(&g, va, ea, 2.0, false, false)
         }
         Expr::Bin(op, a, b) => {
             let ((va, ea), (vb, ebb)) = (eb(a, x, u), eb(b, x, u));

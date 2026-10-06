@@ -432,6 +432,23 @@ fn mp_powrat(x: &Float, p: i32, q: i32) -> Option<Float> {
     Some(if neg && p % 2 != 0 { -m } else { m })
 }
 
+/// x^(p/q) in lowest terms for p and q of any size, real-root semantics:
+/// sign(x)ᵖ·|x|^(p/q), a negative x only for an odd q.
+fn mp_powratio(x: &Float, p: &rug::Integer, q: &rug::Integer) -> Option<Float> {
+    if x.is_zero() {
+        return if *p > 0 { Some(mp(0.0)) } else { None };
+    }
+    let neg = x.is_sign_negative();
+    if neg && q.is_even() {
+        return None;
+    }
+    let a = x.clone().abs();
+    let pr = PREC.get();
+    let e = Float::with_val(pr, rug::Rational::from((p.clone(), q.clone())));
+    let m = Float::with_val(pr, a.pow(&e));
+    Some(if neg && p.is_odd() { -m } else { m })
+}
+
 /// b^e for a general exponent: b > 0, or b = 0 with e > 0.
 fn mp_pow(b: &Float, e: &Float) -> Option<Float> {
     if b.is_zero() {
@@ -1296,37 +1313,29 @@ fn constants_enclose_mpfr() {
 
 /// An exponent written as a ratio of integers, each an integer as typed
 /// (`1.0000000000000001` is none, though its double is 1: each number of
-/// the tree carries the decimal typed, `Lit`).
-fn syntactic_rational(e: &Expr) -> Option<(i32, i32)> {
-    fn int(e: &Expr) -> Option<i64> {
+/// the tree carries the decimal typed, `Lit`), of any size, in lowest
+/// terms (review 15, R15-M-01: 1000001/3 is one, 1000001/3000003 is 1/3).
+fn written_ratio(e: &Expr) -> Option<(rug::Integer, rug::Integer)> {
+    fn int(e: &Expr) -> Option<rug::Integer> {
         match e {
-            Expr::Num(v, Lit::Exact) if *v == v.trunc() && v.abs() < 1e6 => Some(*v as i64),
+            Expr::Num(v, Lit::Exact) if *v == v.trunc() => rug::Integer::from_f64(*v),
+            Expr::Num(_, Lit::Decimal(d)) if !d.contains('.') => d.parse().ok(),
             Expr::Neg(a) => int(a).map(|v| -v),
             _ => None,
         }
     }
     let (p, q) = match e {
         Expr::Neg(a) => {
-            let (p, q) = syntactic_rational(a)?;
+            let (p, q) = written_ratio(a)?;
             return Some((-p, q));
         }
         Expr::Bin(BinOp::Div, a, b) => (int(a)?, int(b)?),
-        _ => (int(e)?, 1),
+        _ => (int(e)?, rug::Integer::from(1)),
     };
     if q == 0 {
         return None;
     }
-    let mut g = (p.abs(), q.abs());
-    while g.1 != 0 {
-        g = (g.1, g.0 % g.1);
-    }
-    let g = g.0.max(1);
-    let (mut p, mut q) = (p / g, q / g);
-    if q < 0 {
-        p = -p;
-        q = -q;
-    }
-    Some((p as i32, q as i32))
+    Some(rug::Rational::from((p, q)).into_numer_denom())
 }
 
 /// The app's function at an exact point, in MPFR.
@@ -1346,11 +1355,11 @@ fn mp_eval(e: &Expr, x: &Float, unit: TrigUnit, prec: u32) -> Option<Float> {
         Expr::Degrees(a) => ev(a)?,
         Expr::Bin(BinOp::Pow, a, b) => {
             let u = ev(a)?;
-            if let Some((p, q)) = syntactic_rational(b) {
-                return if q == 1 {
-                    mp_powi(&u, p)
-                } else {
-                    mp_powrat(&u, p, q)
+            if let Some((p, q)) = written_ratio(b) {
+                return match (p.to_i32(), q.to_i32()) {
+                    (Some(p), Some(1)) => mp_powi(&u, p),
+                    (Some(p), Some(q)) => mp_powrat(&u, p, q),
+                    _ => mp_powratio(&u, &p, &q),
                 };
             }
             let v = ev(b)?;
@@ -1932,6 +1941,146 @@ fn far_negative_root_degree_boxes_keep_their_odd_integers() {
         "{:?}",
         s[0]
     );
+}
+
+/// Exponents written as ratios of integers of 10⁶ or more (review 15,
+/// R15-M-01): the Taylor evaluator's enclosures hold the real root's power
+/// sign(x)ᵖ·|x|^(p/q), and its derivative, at points and over boxes on
+/// both sides of 0 and of ±1, at every digit limit (to 5 digits 1000001
+/// is the even 1000000); an even denominator leaves x < 0 undefined; and
+/// a ratio too long to carry is left any value for x ≤ 0, possibly
+/// undefined, never claimed undefined.
+#[test]
+fn written_ratios_of_any_size_are_enclosed() {
+    init();
+    use graphing::lexer::ParseOptions;
+    let one_minus = 1.0f64.next_down();
+    let one_plus = 1.0f64.next_up();
+    let points = [
+        -2.0, -one_plus, -1.0, -one_minus, -0.5, -1e-300, 0.0, 1e-300, 0.5, one_minus, 1.0,
+        one_plus, 2.0,
+    ];
+    let boxes = [
+        (-2.0, -0.5),
+        (-one_plus, -one_minus),
+        (-1.0, 1.0),
+        (-0.5, 0.0),
+        (0.0, 0.5),
+        (0.5, 2.0),
+        (one_minus, one_plus),
+    ];
+    for digits in [Some(5), Some(14), Some(20), None] {
+        for src in [
+            "x^(1000001/3)",
+            "x^(1/1000001)",
+            "x^(-1000001/3)",
+            "x^(2000002/3)",
+            "x^(1000001/3000003)",
+            "x^(-1/1000002)",
+            "x^(3/2000000)",
+            "x^(1/9007199254740993)",
+            "(x-1)^(1000001/3)",
+        ] {
+            let opts = ParseOptions {
+                literal_digits: digits,
+                ..Default::default()
+            };
+            let eq = Equation::parse_with(&format!("y={src}"), opts).unwrap();
+            let (_, f) = eq.explicit().unwrap();
+            let ctx = Ctx::new(CompileOptions::default());
+            let truth = |x: f64| mp_eval(f, &mp(x), TrigUnit::Radians, P);
+            for x in points {
+                let s = taylor(f, Interval::point(x), 1, &ctx);
+                match truth(x) {
+                    Some(v) => {
+                        assert!(
+                            inside(&v, s[0].iv) && s[0].dec >= Dec::Def,
+                            "{src} ({digits:?}) at {x:e}: {:?} misses {}",
+                            s[0],
+                            v.to_f64()
+                        );
+                        // f′ = (p/q)·f/x, where it is valid.
+                        if derivs_valid(&s, 1) && x != 0.0 {
+                            let (p, q) = written_ratio(match f {
+                                Expr::Bin(BinOp::Pow, _, b) => b,
+                                _ => unreachable!(),
+                            })
+                            .unwrap();
+                            let r = Float::with_val(P, rug::Rational::from((p, q)));
+                            let base = mp_eval(
+                                match f {
+                                    Expr::Bin(BinOp::Pow, a, _) => a,
+                                    _ => unreachable!(),
+                                },
+                                &mp(x),
+                                TrigUnit::Radians,
+                                P,
+                            )
+                            .unwrap();
+                            if !base.is_zero() {
+                                let d = Float::with_val(P, r * &v) / base;
+                                assert!(
+                                    inside(&d, s[1].iv),
+                                    "{src} ({digits:?}) f′ at {x:e}: {:?} misses {}",
+                                    s[1],
+                                    d.to_f64()
+                                );
+                            }
+                        }
+                    }
+                    None => assert!(
+                        s[0].is_empty() || s[0].dec <= Dec::Trv,
+                        "{src} ({digits:?}) at {x:e}: {:?}, undefined",
+                        s[0]
+                    ),
+                }
+            }
+            for (lo, hi) in boxes {
+                let s = taylor(f, Interval::new(lo, hi), 1, &ctx);
+                for x in [lo, hi, (lo + hi) / 2.0] {
+                    if let Some(v) = truth(x) {
+                        assert!(
+                            inside(&v, s[0].iv),
+                            "{src} ({digits:?}) on [{lo:e}, {hi:e}] at {x:e}: {:?} misses {}",
+                            s[0],
+                            v.to_f64()
+                        );
+                    } else {
+                        assert!(
+                            s[0].dec <= Dec::Trv,
+                            "{src} ({digits:?}) on [{lo:e}, {hi:e}]: {:?}, undefined at {x:e}",
+                            s[0]
+                        );
+                    }
+                }
+            }
+        }
+    }
+    // Too long to carry (an odd numerator of 5000 digits over 3: no typed
+    // equation is that long, but a tree may be): at −1 its value is −1,
+    // which the enclosure holds, possibly undefined.
+    let digits = format!("1{}1", "0".repeat(4998));
+    let long = Expr::Num(f64::INFINITY, Lit::Decimal(digits.as_str().into()));
+    let f = Expr::Bin(
+        BinOp::Pow,
+        Box::new(Expr::X),
+        Box::new(Expr::Bin(
+            BinOp::Div,
+            Box::new(long),
+            Box::new(Expr::Num(3.0, Lit::Exact)),
+        )),
+    );
+    let f = &f;
+    let ctx = Ctx::new(CompileOptions::default());
+    for (lo, hi) in [(-1.0, -1.0), (-2.0, -0.5), (-1.0, 1.0)] {
+        let s = taylor(f, Interval::new(lo, hi), 1, &ctx);
+        assert!(
+            s[0].dec <= Dec::Trv && inside(&mp(-1.0), s[0].iv) && inside(&mp(1.0), s[0].iv),
+            "on [{lo:e}, {hi:e}]: {:?}",
+            s[0]
+        );
+        assert!(!derivs_valid(&s, 1));
+    }
 }
 
 /// x^n for an exponent typed as the odd 2⁵³ + 1, which its enclosure

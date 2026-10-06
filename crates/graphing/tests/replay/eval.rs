@@ -356,17 +356,18 @@ pub fn contains_x(e: &Expr) -> bool {
 }
 
 /// An exponent written as an integer or a ratio of integers, in lowest
-/// terms with a positive denominator. Each integer is one exactly as typed
-/// (`lits`): `1.0000000000000001` is no integer, though its double is 1.
-pub fn written_rational(e: &Expr, lits: &Lits) -> Option<(i64, i64)> {
-    fn int(e: &Expr, lits: &Lits) -> Option<i64> {
+/// terms with a positive denominator, each part of any size. Each integer
+/// is one exactly as typed (`lits`): `1.0000000000000001` is no integer,
+/// though its double is 1, and a typed 1000001 or 9007199254740993 is
+/// that integer. Reduced first: 1000001/3000003 is 1/3 (review 15,
+/// R15-M-01: a part of 10⁶ or more wasn't read as written, and
+/// x^(1000001/3) took the positive-base rule here too).
+pub fn written_rational(e: &Expr, lits: &Lits) -> Option<(rug::Integer, rug::Integer)> {
+    fn int(e: &Expr, lits: &Lits) -> Option<rug::Integer> {
         match e {
-            Expr::Num(v, lit)
-                if *v == v.trunc()
-                    && v.abs() < 1e6
-                    && lits.exact(*v, lit) == Some(rug::Rational::from(*v as i64)) =>
-            {
-                Some(*v as i64)
+            Expr::Num(v, lit) => {
+                let r = lits.exact(*v, lit)?;
+                (*r.denom() == 1).then(|| r.numer().clone())
             }
             Expr::Neg(a) => int(a, lits).map(|v| -v),
             _ => None,
@@ -378,20 +379,13 @@ pub fn written_rational(e: &Expr, lits: &Lits) -> Option<(i64, i64)> {
             return Some((-p, q));
         }
         Expr::Bin(BinOp::Div, a, b) => (int(a, lits)?, int(b, lits)?),
-        _ => (int(e, lits)?, 1),
+        _ => (int(e, lits)?, rug::Integer::from(1)),
     };
     if q == 0 {
         return None;
     }
-    fn gcd(a: i64, b: i64) -> i64 {
-        if b == 0 { a.abs() } else { gcd(b, a % b) }
-    }
-    let g = gcd(p, q).max(1);
-    let (mut p, mut q) = (p / g, q / g);
-    if q < 0 {
-        p = -p;
-        q = -q;
-    }
+    // (A rational is kept in lowest terms, its denominator positive.)
+    let (p, q) = rug::Rational::from((p, q)).into_numer_denom();
     Some((p, q))
 }
 
@@ -577,10 +571,11 @@ fn monomial(e: &Expr, base: &Expr, lits: &Lits) -> Option<(Expr, u32)> {
             (Expr::Bin(BinOp::Div, Box::new(c), b.clone()), k)
         }
         Expr::Bin(BinOp::Pow, a, b) if **a == *base => {
-            let (n, 1) = written_rational(b, lits)? else {
+            let (n, q) = written_rational(b, lits)?;
+            if q != 1 {
                 return None;
-            };
-            (one(), u32::try_from(n).ok().filter(|n| *n <= 64)?)
+            }
+            (one(), n.to_u32().filter(|n| *n <= 64)?)
         }
         _ => return None,
     })
@@ -713,17 +708,15 @@ fn sin_cos(a: &S, unit: Unit) -> (S, S) {
 
 /// a^(p/q) (q > 1) with real-root semantics.
 fn pow_rat(a: &S, p: i64, q: i64) -> S {
-    pow_rat_int(a, p, &rug::Integer::from(q))
+    pow_ratio(a, &rug::Integer::from(p), &rug::Integer::from(q))
 }
 
-/// [`pow_rat`] for any q > 1, however long (a root's degree typed with
-/// hundreds of digits: review 14, R14-M-04).
-fn pow_rat_int(a: &S, p: i64, q: &rug::Integer) -> S {
+/// [`pow_rat`] for any p and q > 1, however long (a root's degree typed
+/// with hundreds of digits: review 14, R14-M-04; a typed 1000001/3:
+/// review 15, R15-M-01).
+fn pow_ratio(a: &S, p: &rug::Integer, q: &rug::Integer) -> S {
     let n = se::order(a);
-    let value = |a: &Iv| match q.to_i64() {
-        Some(q) => iv::pow_rat(a, p, q),
-        None => iv::pow_rat_big(a, p, q),
-    };
+    let value = |a: &Iv| iv::pow_ratio(a, p, q);
     let v = value(&a[0]);
     if v.empty {
         return vec![Iv::empty(); n + 1];
@@ -736,8 +729,27 @@ fn pow_rat_int(a: &S, p: i64, q: &rug::Integer) -> S {
         // (−a)^(p/q), negated for odd p.
         let na = se::neg(a);
         let s = se::pow_real(&na, &e, value(&na[0]));
-        let s = if p % 2 != 0 { se::neg(&s) } else { s };
+        let s = if p.is_odd() { se::neg(&s) } else { s };
         se::with_value(s, v)
+    } else if q.is_odd() && *p > rug::Integer::from(n) * q {
+        // a's values reach 0: g(u) = u^(p/q) with p/q > n is n times
+        // continuously differentiable through 0 (an odd q: on both
+        // sides), its j-th Taylor coefficient C(p/q, j)·u^((p − jq)/q),
+        // the same real root (review 15: x^(1000001/3)'s f′ is 0 at 0).
+        let mut gs = vec![v.clone()];
+        let mut binom = Iv::of(1.0);
+        for j in 1..=n {
+            binom = iv::div(
+                &iv::mul(&binom, &iv::sub(&e, &Iv::of((j - 1) as f64))),
+                &Iv::of(j as f64),
+            );
+            let pj: rug::Integer = p - rug::Integer::from(j) * q;
+            gs.push(iv::mul(&binom, &iv::pow_ratio(&a[0], &pj, q)));
+        }
+        if gs[1..].iter().any(|g| g.empty || !g.def || !g.bounded()) {
+            return se::only_value_unless(se::constant(v, n), false);
+        }
+        se::compose(&gs, a)
     } else {
         se::only_value_unless(se::constant(v, n), false)
     }
@@ -799,11 +811,12 @@ pub fn eval(e: &Expr, x: &S, n: usize, ctx: &Ctx<'_>) -> S {
 
 fn pow(a: &Expr, b: &Expr, x: &S, n: usize, ctx: &Ctx<'_>) -> S {
     let ea = eval(a, x, n, ctx);
+    // Written as a ratio of integers, any size: the integer power or real
+    // root by the parities of p and q.
     if let Some((p, q)) = written_rational(b, ctx.lits) {
-        return if q == 1 {
-            se::powi(&ea, p)
-        } else {
-            pow_rat(&ea, p, q)
+        return match p.to_i64() {
+            Some(p) if q == 1 => se::powi(&ea, p),
+            _ => pow_ratio(&ea, &p, &q),
         };
     }
     // A constant exponent whose exact value is an integer (0.1 + 0.9) is
@@ -976,7 +989,7 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
                 return if q == 1 {
                     se::powi(&ea, p)
                 } else {
-                    pow_rat_int(&ea, p, &q)
+                    pow_ratio(&ea, &rug::Integer::from(p), &q)
                 };
             }
             // A non-integer degree: x ≥ 0, x^(1/n).

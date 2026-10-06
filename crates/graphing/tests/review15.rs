@@ -10,6 +10,13 @@
 //! (the winner on a box taken for the winner beside it, though the loser
 //! jumps there, or is defined there alone).
 //!
+//! R15-M-01: an exponent written as a ratio of integers was read as one
+//! only while each part was below 10⁶, before reduction: x^(1000001/3),
+//! x^(1/1000001) and even x^(1000001/3000003), the cube root, took the
+//! positive-base rule (undefined at −1; domain [0, ∞), neither, a minimum
+//! at 0), in the evaluator, the interval core, the certifier and the
+//! replay alike. Each part is now an integer of any size, reduced first.
+//!
 //! R15-L-01: with c = ⌊√(sin²4 + cos²4 − 1 − 10⁻³⁰)⌋, nowhere defined
 //! (its radicand is −10⁻³⁰), `limit_at` gave c + 1 the limit 1 both ways
 //! and e^(ln x + c)/x the limit 1 at +∞: a constant's undecorated
@@ -118,6 +125,164 @@ fn a_winner_beside_the_box_needs_a_continuous_loser() {
         let s = series(src, x, x);
         assert!(derivs_valid(&s, 3), "{src}: {s:?}");
     }
+}
+
+/// The panel of `y=src` under `digits`, and the app's value at each x.
+fn panel(
+    src: &str,
+    xs: &[f64],
+    digits: Option<u8>,
+) -> (graphing::analysis::KeyGraphFeatures, Vec<f64>) {
+    let mut g = Graph::new();
+    g.set_literal_digits(digits);
+    let id = g.add_equation(&format!("y={src}"));
+    let vs = xs
+        .iter()
+        .map(|&x| g.evaluate(id, x).unwrap_or(f64::NAN))
+        .collect();
+    (g.analyze(id), vs)
+}
+
+/// R15-M-01: an exponent written as a ratio of integers is a real root's
+/// power at any size, reduced first, by the parities of p and q as the
+/// digit limit leaves them. To 5 digits 1000001 is the even 1000000:
+/// x^(1000000/3) is even, defined on ℝ; x^(1/1000000) an even root, x ≥ 0.
+#[test]
+fn written_ratios_of_any_size_are_real_roots() {
+    use graphing::analysis::Parity;
+    // (f(−1), f(−8), domain, range, parity, minima)
+    type Want = (
+        f64,
+        f64,
+        &'static str,
+        &'static str,
+        Parity,
+        &'static [&'static str],
+    );
+    let odd: Want = (-1.0, f64::NAN, "x ∈ ℝ", "y ∈ ℝ", Parity::Odd, &[]);
+    let even: Want = (
+        1.0,
+        f64::NAN,
+        "x ∈ ℝ",
+        "y ∈ [0, ∞)",
+        Parity::Even,
+        &["(0, 0)"],
+    );
+    let root: Want = (
+        f64::NAN,
+        f64::NAN,
+        "x ∈ [0, ∞)",
+        "y ∈ [0, ∞)",
+        Parity::Neither,
+        &["(0, 0)"],
+    );
+    let cube: Want = (-1.0, -2.0, "x ∈ ℝ", "y ∈ ℝ", Parity::Odd, &[]);
+    for digits in PRECISIONS {
+        let five = digits == Some(5);
+        for (src, want) in [
+            ("x^(1000001/3)", if five { even } else { odd }),
+            ("x^(1/1000001)", if five { root } else { odd }),
+            ("x^(1000001/3000003)", cube),
+            ("x^(2000002/3)", even),
+        ] {
+            let (k, v) = panel(src, &[-1.0, -8.0, 1.0], digits);
+            let same = |a: f64, b: f64| (a.is_nan() && b.is_nan()) || a == b;
+            assert!(same(v[0], want.0), "{src} ({digits:?}) at −1: {}", v[0]);
+            if !want.1.is_nan() {
+                assert!(
+                    (v[1] - want.1).abs() < 1e-12,
+                    "{src} ({digits:?}) at −8: {}",
+                    v[1]
+                );
+            }
+            assert_eq!(v[2], 1.0, "{src} ({digits:?}) at 1");
+            let r = reference(src, -1.0, digits);
+            let ok = match r {
+                R::V(x) => x.f() == want.0,
+                R::Undef => want.0.is_nan(),
+                R::Unknown => false,
+            };
+            assert!(ok, "{src} ({digits:?}): reference {r:?}");
+            assert_eq!(
+                (k.domain.as_str(), k.range.as_str(), k.parity),
+                (want.2, want.3, want.4),
+                "{src} ({digits:?})"
+            );
+            assert_eq!(k.minima, want.5, "{src} ({digits:?})");
+            assert_eq!(k.y_intercept, "0", "{src} ({digits:?})");
+        }
+        // Odd over odd: increasing through 0, its inflection there.
+        if !five {
+            let (k, _) = panel("x^(1000001/3)", &[], digits);
+            assert_eq!(k.inflection_points, ["(0, 0)"], "{digits:?}");
+            assert_eq!(k.maxima, Vec::<String>::new(), "{digits:?}");
+            assert_eq!(k.monotonicity.len(), 1, "{digits:?}");
+        }
+        // A negative odd ratio: undefined at 0 alone.
+        let (k, v) = panel("x^(-1000001/3)", &[-1.0], digits);
+        let want = if five { 1.0 } else { -1.0 };
+        assert_eq!(v[0], want, "x^(-1000001/3) ({digits:?})");
+        assert_eq!(k.domain, "x ∈ ℝ \\ {0}", "{digits:?}");
+    }
+    // Off, a part past 2⁵³: 1/9007199254740993 is an odd root (to 14
+    // digits its denominator is the even 9007199254741000).
+    let (k, v) = panel("x^(1/9007199254740993)", &[-1.0], None);
+    assert_eq!(
+        (v[0], k.domain.as_str(), k.parity),
+        (-1.0, "x ∈ ℝ", Parity::Odd)
+    );
+    let (k, v) = panel("x^(1/9007199254740993)", &[-1.0], Some(14));
+    assert!(v[0].is_nan());
+    assert_eq!(k.domain, "x ∈ [0, ∞)");
+}
+
+/// The curve drawn: x^(1000001/3) and x^(1/1000001) have their negative
+/// halves (to 14 digits, the apps' default), and the cube root as
+/// 1000001/3000003; to 5 digits x^(1/1000000) has none.
+#[test]
+fn written_ratios_draw_their_negative_half() {
+    let curve = |src: &str, digits: Option<u8>| -> Vec<(f64, f64)> {
+        let mut g = Graph::new();
+        g.set_literal_digits(digits);
+        let id = g.add_equation(&format!("y={src}"));
+        let v = graphing::Viewport::new(-2.0, 2.0, -2.0, 2.0, 400.0, 400.0);
+        let p = g.plot_equation(id, &v).unwrap();
+        p.curves.iter().flatten().map(|p| (p.x, p.y)).collect()
+    };
+    for (src, f) in [
+        (
+            "x^(1000001/3)",
+            (|x: f64| x.signum() * x.abs().powf(1000001.0 / 3.0)) as fn(f64) -> f64,
+        ),
+        ("x^(1/1000001)", |x: f64| {
+            x.signum() * x.abs().powf(1.0 / 1000001.0)
+        }),
+        ("x^(1000001/3000003)", |x: f64| x.cbrt()),
+    ] {
+        for digits in [Some(14), Some(20), None] {
+            let pts = curve(src, digits);
+            let neg: Vec<_> = pts.iter().filter(|(x, _)| *x < -0.01).collect();
+            // (x^(1000001/3) is −0 to the doubles on most of (−1, 0).)
+            assert!(
+                neg.len() > 10
+                    && neg.iter().all(|(_, y)| *y <= 0.0)
+                    && neg.iter().any(|(_, y)| *y < -0.5),
+                "{src} ({digits:?}): {} points left of 0",
+                neg.len()
+            );
+            for &&(x, y) in &neg {
+                let want = f(x);
+                if want.abs() < 2.0 {
+                    assert!(
+                        (y - want).abs() < 1e-6,
+                        "{src} ({digits:?}) at {x}: {y} vs {want}"
+                    );
+                }
+            }
+        }
+    }
+    let pts = curve("x^(1/1000001)", Some(5));
+    assert!(!pts.is_empty() && pts.iter().all(|(x, _)| *x >= 0.0));
 }
 
 /// R15-L-01: a limit only of a function proven defined on a tail, each of

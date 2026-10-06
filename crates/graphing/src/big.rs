@@ -166,6 +166,86 @@ impl Nat {
         n
     }
 
+    /// The value, if it fits a `u128`.
+    pub(crate) fn to_u128(&self) -> Option<u128> {
+        if self.0.len() > 4 {
+            return None;
+        }
+        Some(
+            self.0
+                .iter()
+                .rev()
+                .fold(0u128, |acc, &l| (acc << 32) | u128::from(l)),
+        )
+    }
+
+    pub(crate) fn from_u128(v: u128) -> Nat {
+        let mut n = Nat((0..4).map(|i| (v >> (32 * i)) as u32).collect());
+        n.trim();
+        n
+    }
+
+    /// The number of trailing zero bits (0 for 0).
+    pub(crate) fn trailing_zeros(&self) -> u64 {
+        let mut z = 0;
+        for &l in &self.0 {
+            if l != 0 {
+                return z + u64::from(l.trailing_zeros());
+            }
+            z += 32;
+        }
+        0
+    }
+
+    /// self·2⁻ᵏ, rounded down.
+    pub(crate) fn shr(&self, k: u64) -> Nat {
+        let (limbs, bits) = ((k / 32) as usize, (k % 32) as u32);
+        if limbs >= self.0.len() {
+            return Nat::zero();
+        }
+        let src = &self.0[limbs..];
+        let mut out = Vec::with_capacity(src.len());
+        for (i, &l) in src.iter().enumerate() {
+            let hi = if bits == 0 {
+                0
+            } else {
+                src.get(i + 1).map_or(0, |&h| h << (32 - bits))
+            };
+            out.push((l >> bits) | hi);
+        }
+        let mut n = Nat(out);
+        n.trim();
+        n
+    }
+
+    /// The greatest common divisor (binary: shifts and subtractions, at
+    /// most as many steps as the two have bits; both capped). gcd(0, n)
+    /// is n.
+    pub(crate) fn gcd(&self, o: &Nat) -> Nat {
+        if let (Some(a), Some(b)) = (self.to_u128(), o.to_u128()) {
+            return Nat::from_u128(gcd_u128(a, b));
+        }
+        if self.is_zero() {
+            return o.clone();
+        }
+        if o.is_zero() {
+            return self.clone();
+        }
+        let (za, zb) = (self.trailing_zeros(), o.trailing_zeros());
+        let (mut a, mut b) = (self.shr(za), o.shr(zb));
+        // Both odd from here on: their difference is even.
+        loop {
+            if a > b {
+                std::mem::swap(&mut a, &mut b);
+            }
+            b = b.sub(&a);
+            if b.is_zero() {
+                return a.shl(za.min(zb));
+            }
+            b = b.shr(b.trailing_zeros());
+        }
+    }
+
     pub(crate) fn mul_small(&self, m: u32) -> Nat {
         self.mul(&Nat::from_u64(u64::from(m)))
     }
@@ -332,6 +412,15 @@ fn round_f64(neg: bool, q: u64, e: i64, inexact: bool, mode: Round) -> f64 {
     };
     let v = f64::from_bits(bits);
     if neg { -v } else { v }
+}
+
+pub(crate) fn gcd_u128(mut a: u128, mut b: u128) -> u128 {
+    while b != 0 {
+        let t = a % b;
+        a = b;
+        b = t;
+    }
+    a
 }
 
 /// An exact rational ±n/d (d > 0; not necessarily in lowest terms).
@@ -634,6 +723,27 @@ mod tests {
 
     fn dec(s: &str) -> Rat {
         Rat::from_decimal(s).unwrap()
+    }
+
+    fn nat(s: &str) -> Nat {
+        dec(s).integer().unwrap().1
+    }
+
+    #[test]
+    fn gcd_shifts_and_reduces() {
+        assert_eq!(nat("1000001").gcd(&nat("3000003")), nat("1000001"));
+        assert_eq!(nat("12").gcd(&nat("18")), nat("6"));
+        assert_eq!(Nat::zero().gcd(&nat("7")), nat("7"));
+        assert_eq!(nat("7").gcd(&Nat::zero()), nat("7"));
+        // Past u128: (2¹⁶⁰·3·5)·(10³⁰ + 1) against (2¹⁶²·5)·(10³⁰ + 1).
+        let big = nat("1000000000000000000000000000001");
+        let a = nat("15").shl(160).mul(&big);
+        let b = nat("5").shl(162).mul(&big);
+        assert!(a.to_u128().is_none());
+        assert_eq!(a.gcd(&b), nat("5").shl(160).mul(&big));
+        assert_eq!(a.trailing_zeros(), 160);
+        assert_eq!(a.shr(160), nat("15").mul(&big));
+        assert_eq!(Nat::from_u128(u128::MAX).to_u128(), Some(u128::MAX));
     }
 
     #[test]

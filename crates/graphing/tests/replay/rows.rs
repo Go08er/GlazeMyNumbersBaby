@@ -1439,7 +1439,7 @@ fn edges(fx: &Fx, e: &graphing::ast::Expr, path: &mut Vec<u8>, out: &mut Vec<Edg
         });
     };
     let even = |k: &Expr| {
-        super::eval::written_rational(k, &fx.lits).is_some_and(|(p, q)| q == 1 && p % 2 == 0)
+        super::eval::written_rational(k, &fx.lits).is_some_and(|(p, q)| q == 1 && p.is_even())
     };
     match e {
         Expr::Call(f, args) => match f {
@@ -1453,7 +1453,7 @@ fn edges(fx: &Fx, e: &graphing::ast::Expr, path: &mut Vec<u8>, out: &mut Vec<Edg
             _ => {}
         },
         Expr::Bin(BinOp::Pow, a, b) => match super::eval::written_rational(b, &fx.lits) {
-            Some((_, q)) if q % 2 == 0 => push(0, 0.0, true),
+            Some((_, q)) if q.is_even() => push(0, 0.0, true),
             Some(_) => {}
             // A constant exactly an integer: an integer power.
             None if !super::eval::contains_x(b)

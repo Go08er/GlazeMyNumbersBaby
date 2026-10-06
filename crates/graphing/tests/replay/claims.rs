@@ -849,7 +849,17 @@ fn singular_args(fx: &Fx, e: &Expr, out: &mut Vec<Expr>) {
             return None;
         }
         if let Some((p, q)) = super::eval::written_rational(b, &fx.lits) {
-            return (q != 1).then(|| p as f64 / q as f64);
+            if q == 1 {
+                return None;
+            }
+            // (Below 1 exactly, though p/q may round to 1.)
+            let r = rug::Rational::from((p, q));
+            let v = r.to_f64();
+            return Some(if r < 1 && v >= 1.0 {
+                1.0f64.next_down()
+            } else {
+                v
+            });
         }
         let v = fx.series(b, 0.0, 0.0, 0)[0].clone();
         (v.is_point() && !v.lo.is_integer()).then(|| v.lo.to_f64())
@@ -963,6 +973,7 @@ fn open_sign(fx: &Fx, e: &Expr, lo: f64, hi: f64, at: f64, far: f64, depth: usiz
         }
         Expr::Bin(BinOp::Pow, u, b) => {
             let (p, q) = super::eval::written_rational(b, &fx.lits)?;
+            let (p_even, q_even) = (p.is_even(), q.is_even());
             let s = fx.series(u, lo, hi, 1);
             let at_u = fx.series(u, at, at, 0);
             let monotone =
@@ -978,10 +989,10 @@ fn open_sign(fx: &Fx, e: &Expr, lo: f64, hi: f64, at: f64, far: f64, depth: usiz
             } else {
                 return None;
             };
-            if q % 2 == 0 {
+            if q_even {
                 pos.then_some(true)
             } else {
-                Some(pos || p % 2 == 0)
+                Some(pos || p_even)
             }
         }
         _ => None,
@@ -1214,7 +1225,7 @@ pub fn zero_factors(e: &Expr) -> Vec<Expr> {
             Expr::Num(v, _) => *v >= 0.0,
             Expr::Const(_) => true,
             Expr::Bin(BinOp::Pow, _, p) => {
-                written_rational(p, &Lits::default()).is_some_and(|(n, d)| d == 1 && n % 2 == 0)
+                written_rational(p, &Lits::default()).is_some_and(|(n, d)| d == 1 && n.is_even())
             }
             Expr::Bin(BinOp::Add, a, b) => nonneg(a) && nonneg(b),
             Expr::Call(Func::Abs | Func::Sqrt | Func::Exp | Func::Cosh, _) => true,
@@ -2173,7 +2184,7 @@ pub fn tree_parity(e: &Expr, lits: &Lits) -> Option<bool> {
                 true
             } else {
                 match written_rational(b, lits)? {
-                    (p, q) if q % 2 == 1 => p % 2 == 0,
+                    (p, q) if q.is_odd() => p.is_even(),
                     _ => return None,
                 }
             }
@@ -2181,7 +2192,7 @@ pub fn tree_parity(e: &Expr, lits: &Lits) -> Option<bool> {
         Expr::Call(Func::Root, args) if args.len() == 2 && !contains_x(&args[1]) => {
             let pa = tree_parity(&args[0], lits)?;
             match written_rational(&args[1], lits)? {
-                (n, 1) if pa || n % 2 != 0 => pa,
+                (n, q) if q == 1 && (pa || n.is_odd()) => pa,
                 _ => return None,
             }
         }

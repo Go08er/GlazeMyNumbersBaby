@@ -762,7 +762,8 @@ impl Reader<'_> {
         }
         let w = self.way(base);
         if let Some((p, q)) = written_rational(k, &self.fx.lits) {
-            return power(w, &rq(p, q), q % 2 != 0);
+            let odd = q.is_odd();
+            return power(w, &Rational::from((p, q)), odd);
         }
         // A typed decimal exponent: exact, a positive base only.
         if let Expr::Num(v, lit) = k
@@ -790,7 +791,14 @@ impl Reader<'_> {
         if args.len() == 2 {
             return match func {
                 Root if !contains_x(&args[1]) => match written_rational(&args[1], &self.fx.lits) {
-                    Some((n, 1)) if n != 0 => power(self.way(&args[0]), &rq(1, n), n % 2 != 0),
+                    Some((n, q)) if q == 1 && n != 0 => {
+                        let odd = n.is_odd();
+                        power(
+                            self.way(&args[0]),
+                            &Rational::from((rug::Integer::from(1), n)),
+                            odd,
+                        )
+                    }
                     _ => Lost,
                 },
                 LogBase if !contains_x(&args[0]) => {

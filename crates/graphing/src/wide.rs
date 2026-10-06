@@ -543,6 +543,39 @@ pub(crate) fn pow_rational(b: Wide, p: i32, q: i32) -> Wide {
     if m < 0.0 && p % 2 != 0 { r.neg() } else { r }
 }
 
+/// `b^(p/q)` for a written ratio past the small fast path (as
+/// `functions::pow_ratio`): sign(b)ᵖ·|b|^(p/q), a negative b only for an
+/// odd q, 0 only to a positive power; p/q in double-double, so the
+/// magnitude keeps a double's precision however large p/q is.
+pub(crate) fn pow_ratio(b: Wide, r: crate::compile::RatioPow) -> Wide {
+    let Wide::Val(m, e) = b else {
+        return b;
+    };
+    if m == 0.0 {
+        return if r.neg {
+            Wide::Undef
+        } else {
+            Wide::Val(0.0, 0.0)
+        };
+    }
+    if m < 0.0 && !r.odd_q {
+        return Wide::Undef;
+    }
+    let mag = if r.e.hi.is_infinite() {
+        // p/q beyond a double: |b| = 1 stays 1, anything else leaves the
+        // range one way or the other.
+        let lb = e + cm::log2(m.abs());
+        if lb == 0.0 {
+            Wide::ONE
+        } else {
+            Wide::Val(1.0, (lb * r.e.hi).signum() * f64::INFINITY)
+        }
+    } else {
+        pow_mag(m.abs(), e, r.e)
+    };
+    if m < 0.0 && r.odd_p { mag.neg() } else { mag }
+}
+
 /// A built-in function of one argument (as `Fn1::apply`).
 pub(crate) fn apply1(f: Fn1, w: Wide) -> Wide {
     use Fn1::*;

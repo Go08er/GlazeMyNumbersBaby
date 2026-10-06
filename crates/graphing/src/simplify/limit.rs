@@ -17,7 +17,7 @@ use super::period::{PiQ, affine, exact_constant};
 use super::q::Q;
 use super::rational::{Dir, RationalLimit, rational_form};
 use crate::ast::{BinOp, Expr, Func};
-use crate::compile::syntactic_rational;
+use crate::compile::{Written, written};
 use crate::functions::TrigUnit;
 use crate::interval::{DecInterval, Interval, elem};
 
@@ -794,9 +794,18 @@ fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
                 }
             }
             BinOp::Pow => {
-                if let Some((p, q)) = syntactic_rational(b, crate::compile::Reading::Typed) {
-                    let r = Q::new(p as i128, q as i128).expect("q ≠ 0");
-                    return pow(asy(a, cx), r);
+                // Written as a ratio of integers, any size: its real root
+                // (review 15, R15-M-01), or unknown past what a `Q` holds
+                // (never the positive-base rule below).
+                match written(b, crate::compile::Reading::Typed) {
+                    Some(Written::Ratio(r)) => {
+                        return match r.parts().and_then(|(p, q)| Q::new(p, q)) {
+                            Some(r) => pow(asy(a, cx), r),
+                            None => Asy::Unknown,
+                        };
+                    }
+                    Some(Written::Long) => return Asy::Unknown,
+                    None => {}
                 }
                 if !b.contains_x() {
                     // functions::pow: a non-integer exponent needs a base ≥ 0.
