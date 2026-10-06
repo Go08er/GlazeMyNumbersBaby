@@ -968,6 +968,26 @@ const PLANTS: &[Plant] = &[
                 "cert": {"covers": "Line", "claims": []}}});
         },
     ),
+    // Review 15, R15-M-01: a written ratio of 10⁶ or more read with the
+    // positive-base rule (x ≥ 0 only), each of its rows on its own.
+    ("x^(1000001/3)", "the domain cut to [0, ∞)", |v| {
+        value_of(v, "domain")["pieces"][0]["lo"] =
+            serde_json::json!({"At": {"x": {"lo": 0.0, "hi": 0.0}, "closed": true}});
+    }),
+    ("x^(1000001/3)", "odd called neither", |v| {
+        *value_of(v, "parity") = serde_json::json!("Neither");
+    }),
+    ("x^(1000001/3)", "the range cut to [0, ∞)", |v| {
+        value_of(v, "range")[0]["lo"] =
+            serde_json::json!({"At": {"x": {"lo": 0.0, "hi": 0.0}, "closed": true}});
+    }),
+    ("x^(1/1000001)", "the domain cut to [0, ∞)", |v| {
+        value_of(v, "domain")["pieces"][0]["lo"] =
+            serde_json::json!({"At": {"x": {"lo": 0.0, "hi": 0.0}, "closed": true}});
+    }),
+    ("x^(1000001/3000003)", "odd called even", |v| {
+        *value_of(v, "parity") = serde_json::json!("Even");
+    }),
 ];
 
 /// The slope evidence the plants above alter, unaltered, replays.
@@ -1048,6 +1068,19 @@ fn rounded_literals_are_refuted() {
             "root(-8,-(10^301+1))'s certificate (made at dc8ddb5): no y-intercept",
             fixture(include_str!(
                 "fixtures/certify/review14/root-negative-huge.json"
+            )),
+        ),
+        // Review 15, R15-M-01: the reviewer's certificate (made at 80fe9c6,
+        // to 14 digits), unaltered. x^(1000001/3) is the real odd root's
+        // power, defined on ℝ and odd; it was read with the positive-base
+        // rule (domain [0, ∞), neither, a minimum at 0), and the replay's
+        // own reading of written ratios shared the cutoff: 18 claims
+        // strong.
+        (
+            "x^(1000001/3)'s certificate (made at 80fe9c6, to 14 digits): domain [0, ∞), \
+             neither, minimum (0, 0)",
+            fixture(include_str!(
+                "fixtures/certify/review15/written-ratio-above.json"
             )),
         ),
     ];

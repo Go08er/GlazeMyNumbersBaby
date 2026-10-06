@@ -11,9 +11,9 @@
 //! one is bounded by a node budget; over budget is `None` as well.
 
 use crate::ast::{BinOp, Constant, Expr, Func};
-use crate::compile::syntactic_rational;
+use crate::compile::{Written, written};
 use crate::functions::TrigUnit;
-use crate::simplify::{add, call, div, is_num, mul, neg, num, pow, pow_rat, sub};
+use crate::simplify::{add, call, div, int, is_num, mul, neg, num, pow, pow_rat, sub};
 
 /// Node budget of [`derivative`]: generous for anything typed by hand,
 /// small enough that a pathological input fails fast instead of exhausting
@@ -117,22 +117,27 @@ fn d(e: &Expr, cx: &mut Cx) -> Option<Expr> {
                         // (Exponents as typed: a typed p = 2.0000000000000001
                         // is no integer, and takes the general rule below,
                         // its own number copied.)
-                        if let Some((0, _)) = syntactic_rational(b, crate::compile::Reading::Typed)
-                        {
+                        // Written as a ratio of integers, any size: its own
+                        // rule (review 15, R15-M-01: past 10⁶ it took the
+                        // general rule, b·a^(b−1), whose exponent b − 1 is
+                        // no written ratio, so the positive-base rule's).
+                        // Past what an i128 holds, or too long to carry, no
+                        // derivative.
+                        let written = match written(b, crate::compile::Reading::Typed) {
+                            Some(Written::Ratio(r)) => Some(r.parts()?),
+                            Some(Written::Long) => return None,
+                            None => None,
+                        };
+                        if let Some((0, _)) = written {
                             // g⁰ is 1 only where g ≠ 0 (0⁰ is undefined, as
                             // on the TI-84 Plus CE): so is its derivative 0,
                             // 0/g keeping g's zeros out of its domain.
                             return Some(Expr::bin(BinOp::Div, num(0.0), a.clone()));
                         }
-                        if let Some((p, q)) = syntactic_rational(b, crate::compile::Reading::Typed)
-                        {
+                        if let Some((p, q)) = written {
                             // (p/q)·a^((p-q)/q)·a'
-                            let coef = if q == 1 {
-                                num(p as f64)
-                            } else {
-                                div(num(p as f64), num(q as f64))
-                            };
-                            let (np, nq) = reduce(p as i64 - q as i64, q as i64);
+                            let coef = if q == 1 { int(p) } else { div(int(p), int(q)) };
+                            let (np, nq) = reduce(p.checked_sub(q)?, q);
                             mul(mul(coef, pow_rat(a.clone(), np, nq)), da)
                         } else {
                             // b·a^(b-1)·a'
@@ -159,8 +164,8 @@ fn d(e: &Expr, cx: &mut Cx) -> Option<Expr> {
     })
 }
 
-fn reduce(p: i64, q: i64) -> (i64, i64) {
-    fn gcd(a: i64, b: i64) -> i64 {
+fn reduce(p: i128, q: i128) -> (i128, i128) {
+    fn gcd(a: i128, b: i128) -> i128 {
         if b == 0 { a.abs() } else { gcd(b, a % b) }
     }
     let g = gcd(p, q).max(1);

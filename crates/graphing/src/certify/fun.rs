@@ -421,10 +421,30 @@ impl<'a> Fun<'a> {
             if b.contains_x() {
                 return None;
             }
-            if let Some((p, q)) =
-                crate::compile::syntactic_rational(b, crate::compile::Reading::Typed)
-            {
-                return (q != 1).then(|| p as f64 / q as f64);
+            // Written as a ratio of integers, any size (review 15,
+            // R15-M-01), its order against 1 and 2 kept exactly though
+            // p/q rounds (to 1, say); too long to carry, as small as any.
+            match crate::compile::written(b, crate::compile::Reading::Typed) {
+                Some(crate::compile::Written::Ratio(r)) => {
+                    if r.is_integer() {
+                        return None;
+                    }
+                    let v = r.value();
+                    let below = |k: u64| {
+                        v.sub(&crate::big::Rat::int(k))
+                            .is_some_and(|d| d.is_negative())
+                    };
+                    let f = v.to_f64(crate::big::Round::Nearest);
+                    return Some(if below(1) {
+                        f.min(1f64.next_down())
+                    } else if below(2) {
+                        f.min(2f64.next_down())
+                    } else {
+                        f
+                    });
+                }
+                Some(crate::compile::Written::Long) => return Some(0.0),
+                None => {}
             }
             if !self.simplifier {
                 return None;
@@ -918,8 +938,7 @@ fn exact_exponents(e: &Expr) -> Expr {
     e.map(&|n| match n {
         Expr::Bin(BinOp::Pow, a, b)
             if !b.contains_x()
-                && crate::compile::syntactic_rational(b, crate::compile::Reading::Typed)
-                    .is_none() =>
+                && crate::compile::written(b, crate::compile::Reading::Typed).is_none() =>
         {
             let q = match &**b {
                 Expr::Num(v, lit) => lit.q(*v)?,

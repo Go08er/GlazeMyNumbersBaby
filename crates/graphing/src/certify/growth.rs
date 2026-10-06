@@ -722,11 +722,18 @@ impl Cx<'_, '_> {
     fn pow(&self, base: &Expr, k: &Expr) -> Asy {
         if !k.contains_x() {
             let a = self.asy(base);
-            if let Some((p, q)) =
-                crate::compile::syntactic_rational(k, crate::compile::Reading::Typed)
-                && let Some(kq) = Q::new(i128::from(p), i128::from(q))
-            {
-                return pow_q(a, kq, q % 2 != 0);
+            // Written as a ratio of integers, any size: its real root
+            // (review 15, R15-M-01), or unknown past what a `Q` holds
+            // (never the positive-base rule of an exponent read otherwise).
+            match crate::compile::written(k, crate::compile::Reading::Typed) {
+                Some(crate::compile::Written::Ratio(r)) => {
+                    return match r.parts().and_then(|(p, q)| Q::new(p, q)) {
+                        Some(kq) => pow_q(a, kq, r.odd_q()),
+                        None => Unknown,
+                    };
+                }
+                Some(crate::compile::Written::Long) => return Unknown,
+                None => {}
             }
             if self.f.simplifier
                 && let Some(v) = crate::simplify::period::exact_constant(k)

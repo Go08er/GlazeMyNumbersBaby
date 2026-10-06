@@ -191,9 +191,18 @@ pub(crate) fn div(a: Expr, b: Expr) -> Expr {
     }
 }
 
+/// The integer `v` exactly: its double, and past 2⁵³ its digits
+/// ([`Expr::int`]).
+pub(crate) fn int(v: i128) -> Expr {
+    let n = Expr::int(v.unsigned_abs());
+    if v < 0 { Expr::Neg(Box::new(n)) } else { n }
+}
+
 /// `a^k` for an integer or rational exponent written as `p/q`, keeping the
-/// syntactic-rational form the compiler recognises.
-pub(crate) fn pow_rat(a: Expr, p: i64, q: i64) -> Expr {
+/// syntactic-rational form the compiler recognises: each part exactly, so
+/// past 2⁵³ too (its double would be no written integer, and the power
+/// the positive-base rule's: review 15, R15-M-01).
+pub(crate) fn pow_rat(a: Expr, p: i128, q: i128) -> Expr {
     if q == 1 {
         if p == 0 {
             return num(1.0);
@@ -201,12 +210,12 @@ pub(crate) fn pow_rat(a: Expr, p: i64, q: i64) -> Expr {
         if p == 1 {
             return a;
         }
-        return Expr::bin(BinOp::Pow, a, num(p as f64));
+        return Expr::bin(BinOp::Pow, a, int(p));
     }
     let e = Expr::bin(
         BinOp::Div,
-        Expr::num(p.unsigned_abs() as f64),
-        Expr::num(q as f64),
+        Expr::int(p.unsigned_abs()),
+        Expr::int(q.unsigned_abs()),
     );
     let e = if p < 0 { Expr::Neg(Box::new(e)) } else { e };
     Expr::bin(BinOp::Pow, a, e)

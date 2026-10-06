@@ -314,6 +314,8 @@ pub(crate) enum Op {
     PowI(i32),
     /// Rational power p/q with real-root semantics for odd q.
     PowRat(i32, i32),
+    /// The same for a written ratio past [`Ratio::small`] (`fns::pow_ratio`).
+    PowRatio(RatioPow),
     Neg,
     F1(Fn1),
     F2(Fn2),
@@ -333,7 +335,8 @@ impl Op {
             | Op::PowVar
             | Op::PowOdd
             | Op::PowBeyond
-            | Op::PowRat(..) => true,
+            | Op::PowRat(..)
+            | Op::PowRatio(_) => true,
             Op::PowI(n) => !matches!(n, 0 | 1),
             // A tiny angle in degrees or grads: its sine is the angle times
             // π/180 (or π/200), which can fall below the doubles.
@@ -364,7 +367,12 @@ impl Op {
         match self {
             Op::Const(_) | Op::Big(..) | Op::X | Op::Y | Op::Add | Op::Sub | Op::Mul | Op::Neg => 1,
             Op::Div | Op::DivNz | Op::PowI(_) => 2,
-            Op::Pow | Op::PowVar | Op::PowOdd | Op::PowBeyond | Op::PowRat(..) => 8,
+            Op::Pow
+            | Op::PowVar
+            | Op::PowOdd
+            | Op::PowBeyond
+            | Op::PowRat(..)
+            | Op::PowRatio(_) => 8,
             Op::F1(Fn1::Factorial | Fn1::DoubleFactorial) => 60,
             Op::F1(Fn1::Abs | Fn1::Floor | Fn1::Ceil | Fn1::Round | Fn1::Sign) => 1,
             Op::F1(_) => 8,
@@ -477,7 +485,7 @@ impl Program {
                 | Op::PowOdd
                 | Op::PowBeyond
                 | Op::F2(_) => depth -= 1,
-                Op::PowI(_) | Op::PowRat(..) | Op::Neg | Op::F1(_) => {}
+                Op::PowI(_) | Op::PowRat(..) | Op::PowRatio(_) | Op::Neg | Op::F1(_) => {}
             }
             max_stack = max_stack.max(depth);
         }
@@ -695,6 +703,7 @@ impl Program {
                 }
                 Op::PowI(n) => stack[sp - 1] = powi(stack[sp - 1], n),
                 Op::PowRat(p, q) => stack[sp - 1] = fns::pow_rational(stack[sp - 1], p, q),
+                Op::PowRatio(r) => stack[sp - 1] = fns::pow_ratio(stack[sp - 1], &r),
                 Op::Neg => stack[sp - 1] = -stack[sp - 1],
                 Op::F1(f) => stack[sp - 1] = f.apply(stack[sp - 1]),
                 Op::F2(f) => {
@@ -889,6 +898,9 @@ impl Program {
                 Op::PowRat(p, q) => stack[sp - 1][..len]
                     .iter_mut()
                     .for_each(|a| *a = fns::pow_rational(*a, p, q)),
+                Op::PowRatio(r) => stack[sp - 1][..len]
+                    .iter_mut()
+                    .for_each(|a| *a = fns::pow_ratio(*a, &r)),
                 Op::Neg => stack[sp - 1][..len].iter_mut().for_each(|a| *a = -*a),
                 Op::F1(f) => {
                     let s = &mut stack[sp - 1][..len];
@@ -950,6 +962,7 @@ impl Program {
                 Op::Y => Wide::new(y),
                 Op::PowI(n) => wide::powi(stack[sp - 1], n),
                 Op::PowRat(p, q) => wide::pow_rational(stack[sp - 1], p, q),
+                Op::PowRatio(r) => wide::pow_ratio(stack[sp - 1], r),
                 Op::Neg => stack[sp - 1].neg(),
                 Op::F1(f) => wide::apply1(f, stack[sp - 1]),
                 _ => {
@@ -1029,51 +1042,262 @@ pub enum Reading {
     FaceValue,
 }
 
-/// Recognises an exponent written as an integer or a ratio of integers
-/// (`3`, `-2`, `1/3`, `(2/3)`, `-1/3`), returning `(p, q)` in lowest terms.
-/// Read as typed, each integer must be one exactly: `x^1.0000000000000001`
-/// is not written as an integer, whatever double holds its exponent.
-pub(crate) fn syntactic_rational(e: &Expr, reading: Reading) -> Option<(i32, i32)> {
-    fn int(e: &Expr, reading: Reading) -> Option<i64> {
-        match e {
-            Expr::Num(v, lit)
-                if *v == v.trunc()
-                    && v.abs() < 1e6
-                    && (reading == Reading::FaceValue || lit.is_exact()) =>
-            {
-                Some(*v as i64)
+/// An exponent written as an integer or a ratio of integers (`3`, `-2`,
+/// `1/3`, `(2/3)`, `-1/3`, `1000001/3`), of any size the exact arithmetic
+/// carries (`big::MAX_BITS`), taken in lowest terms p/q (q ≥ 1): a power
+/// to it is the integer power or real root that p's sign and the
+/// parities of p and q make it, sign(b)ᵖ·|b|^(p/q) (IEEE 1788's pown and
+/// rootn). Reduced first: 1000001/3000003 is 1/3.
+#[derive(Clone, Debug)]
+pub(crate) struct Ratio {
+    /// p < 0.
+    neg: bool,
+    /// p = 0 (q = 1).
+    zero: bool,
+    odd_p: bool,
+    odd_q: bool,
+    /// q = 1.
+    integer: bool,
+    /// (p, q) in lowest terms, when both fit an `i128`.
+    parts: Option<(i128, i128)>,
+    /// |p| and q (not necessarily reduced): p/q exactly, made on demand
+    /// (most consumers need only the parities, on every evaluation).
+    p: Nat,
+    q: Nat,
+}
+
+/// What [`written`] makes of an exponent.
+#[derive(Clone, Debug)]
+pub(crate) enum Written {
+    /// Written as an integer or a ratio of integers ([`Ratio`]).
+    Ratio(Ratio),
+    /// Written so, with an integer too long to carry exactly (a literal
+    /// of thousands of digits): whether p and q are odd isn't known, so a
+    /// negative base's power is unknown, never the positive-base rule's.
+    Long,
+}
+
+impl Ratio {
+    /// ±p/q (`neg`: below 0), q ≠ 0, reduced.
+    fn new(neg: bool, p: Nat, q: Nat) -> Ratio {
+        let zero = p.is_zero();
+        // In lowest terms at most one of p and q is even: the one with
+        // more factors 2.
+        let (zp, zq) = (p.trailing_zeros(), q.trailing_zeros());
+        let (odd_p, odd_q) = if zero {
+            (false, true)
+        } else {
+            (zp <= zq, zq <= zp)
+        };
+        let (integer, parts) = match (p.to_u128(), q.to_u128()) {
+            // Machine integers (nearly every exponent typed): no long
+            // division.
+            (Some(a), Some(b)) => {
+                let g = crate::big::gcd_u128(a, b).max(1);
+                let (a, b) = (a / g, b / g);
+                let parts = i128::try_from(a).ok().zip(i128::try_from(b).ok());
+                (zero || b == 1, parts)
             }
-            Expr::Neg(a) => int(a, reading).map(|v| -v),
+            _ => {
+                let g = p.gcd(&q);
+                // (Quotients of at most 128 bits: as many steps of long
+                // division.)
+                let part = |n: &Nat| {
+                    (n.bits() <= g.bits() + 127)
+                        .then(|| n.div_rem(&g).0.to_u128())
+                        .flatten()
+                        .and_then(|v| i128::try_from(v).ok())
+                };
+                (zero || q == g, part(&p).zip(part(&q)))
+            }
+        };
+        let parts = if zero { Some((0, 1)) } else { parts };
+        let neg = neg && !zero;
+        Ratio {
+            neg,
+            zero,
+            odd_p,
+            odd_q,
+            integer,
+            parts: parts.map(|(p, q)| (if neg { -p } else { p }, q)),
+            p,
+            q,
+        }
+    }
+
+    fn negated(mut self) -> Ratio {
+        if !self.zero {
+            self.neg = !self.neg;
+            self.parts = self.parts.map(|(p, q)| (-p, q));
+        }
+        self
+    }
+
+    /// (p, q) when both are below 10⁶ in magnitude: the fast path every
+    /// consumer of [`syntactic_rational`] handles with machine integers.
+    pub(crate) fn small(&self) -> Option<(i32, i32)> {
+        let (p, q) = self.parts?;
+        (p.unsigned_abs() < 1_000_000 && q < 1_000_000).then_some((p as i32, q as i32))
+    }
+
+    /// (p, q) in lowest terms, when both fit an `i128`.
+    pub(crate) fn parts(&self) -> Option<(i128, i128)> {
+        self.parts
+    }
+
+    /// p < 0.
+    pub(crate) fn is_negative(&self) -> bool {
+        self.neg
+    }
+
+    pub(crate) fn odd_p(&self) -> bool {
+        self.odd_p
+    }
+
+    pub(crate) fn odd_q(&self) -> bool {
+        self.odd_q
+    }
+
+    /// q = 1.
+    pub(crate) fn is_integer(&self) -> bool {
+        self.integer
+    }
+
+    /// p = 0.
+    pub(crate) fn is_zero(&self) -> bool {
+        self.zero
+    }
+
+    /// p/q exactly (each part within the cap, as every literal is).
+    pub(crate) fn value(&self) -> Rat {
+        let v = Rat::nat(self.p.clone())
+            .div(&Rat::nat(self.q.clone()))
+            .expect("q ≠ 0, its parts capped");
+        if self.neg { v.neg() } else { v }
+    }
+
+    /// The doubles below and above p/q (one, if it is a double).
+    pub(crate) fn enclosure(&self) -> (f64, f64) {
+        let v = self.value();
+        (
+            v.to_f64(crate::big::Round::Down),
+            v.to_f64(crate::big::Round::Up),
+        )
+    }
+
+    /// What a power to it computes ([`Op::PowRatio`]).
+    pub(crate) fn power(&self) -> RatioPow {
+        let v = self.value();
+        let hi = v.to_f64(crate::big::Round::Nearest);
+        let lo = if hi.is_finite() {
+            Rat::from_f64(hi)
+                .and_then(|h| v.sub(&h))
+                .map_or(0.0, |r| r.to_f64(crate::big::Round::Nearest))
+        } else {
+            0.0
+        };
+        RatioPow {
+            e: crate::dd::Dd { hi, lo },
+            neg: self.neg,
+            odd_p: self.odd_p,
+            odd_q: self.odd_q,
+        }
+    }
+}
+
+/// A power to a written ratio p/q past [`Ratio::small`]'s fast path, as the
+/// evaluators compute it (`functions::pow_ratio`, `wide::pow_ratio`):
+/// sign(b)ᵖ·|b|^(p/q), with p/q in double-double, defined for b < 0 only
+/// for an odd q, and for b = 0 only for p > 0.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct RatioPow {
+    /// p/q, to about 106 bits.
+    pub(crate) e: crate::dd::Dd,
+    /// p < 0.
+    pub(crate) neg: bool,
+    pub(crate) odd_p: bool,
+    pub(crate) odd_q: bool,
+}
+
+/// Recognises an exponent written as an integer or a ratio of integers, of
+/// any size ([`Written`]). Read as typed, each integer must be one exactly
+/// (`Lit`: a typed decimal past 2⁵³ by its digits): `x^1.0000000000000001`
+/// is not written as an integer, whatever double holds its exponent. At
+/// face value each number is its double.
+pub(crate) fn written(e: &Expr, reading: Reading) -> Option<Written> {
+    enum Int {
+        Exact(bool, Nat),
+        Long,
+    }
+    fn int(e: &Expr, reading: Reading) -> Option<Int> {
+        match e {
+            Expr::Num(v, lit) if reading == Reading::FaceValue || lit.is_exact() => {
+                if !(v.is_finite() && *v == v.trunc()) {
+                    return None;
+                }
+                if v.abs() < 18_446_744_073_709_551_616.0 {
+                    return Some(Int::Exact(*v < 0.0, Nat::from_u64(v.abs() as u64)));
+                }
+                let (neg, n) = Rat::from_f64(*v)?.integer()?;
+                Some(Int::Exact(neg, n))
+            }
+            // A decimal typed that its double only rounds: a whole number
+            // by its digits, however many.
+            Expr::Num(v, lit @ Lit::Decimal(d)) => {
+                if d.contains('.') {
+                    return None;
+                }
+                Some(match lit.rat(*v) {
+                    Some(r) => {
+                        let (neg, n) = r.integer()?;
+                        Int::Exact(neg, n)
+                    }
+                    None => Int::Long,
+                })
+            }
+            Expr::Neg(a) => Some(match int(a, reading)? {
+                Int::Exact(neg, n) => Int::Exact(!neg, n),
+                Int::Long => Int::Long,
+            }),
             _ => None,
         }
     }
     let (p, q) = match e {
         Expr::Neg(a) => {
-            let (p, q) = syntactic_rational(a, reading)?;
-            return Some((-p, q));
+            return Some(match written(a, reading)? {
+                Written::Ratio(r) => Written::Ratio(r.negated()),
+                Written::Long => Written::Long,
+            });
         }
         Expr::Bin(BinOp::Div, a, b) => (int(a, reading)?, int(b, reading)?),
-        _ => (int(e, reading)?, 1),
+        _ => (int(e, reading)?, Int::Exact(false, Nat::from_u64(1))),
     };
-    if q == 0 {
+    let (Int::Exact(pn, p), Int::Exact(qn, q)) = (p, q) else {
+        return Some(Written::Long);
+    };
+    // (x^(1/0) divides by zero: no ratio.)
+    if q.is_zero() {
         return None;
     }
-    let g = gcd(p.unsigned_abs(), q.unsigned_abs()) as i64;
-    let (mut p, mut q) = (p / g.max(1), q / g.max(1));
-    if q < 0 {
-        p = -p;
-        q = -q;
-    }
-    Some((i32::try_from(p).ok()?, i32::try_from(q).ok()?))
+    Some(Written::Ratio(Ratio::new(pn != qn, p, q)))
 }
 
-fn gcd(mut a: u64, mut b: u64) -> u64 {
-    while b != 0 {
-        let t = a % b;
-        a = b;
-        b = t;
+/// [`written`]'s ratio, if it is one.
+pub(crate) fn written_ratio(e: &Expr, reading: Reading) -> Option<Ratio> {
+    match written(e, reading)? {
+        Written::Ratio(r) => Some(r),
+        Written::Long => None,
     }
-    a
+}
+
+/// Recognises an exponent written as an integer or a ratio of integers
+/// (`3`, `-2`, `1/3`, `(2/3)`, `-1/3`, `1000001/3000003`), returning
+/// `(p, q)` in lowest terms when both are below 10⁶ ([`Ratio::small`]).
+/// Each integer may be of any size: reduced first (review 15, R15-M-01:
+/// a part of 10⁶ or more wasn't read as written at all). A larger ratio
+/// is [`written`]'s, which each consumer handles or abstains on.
+pub(crate) fn syntactic_rational(e: &Expr, reading: Reading) -> Option<(i32, i32)> {
+    written_ratio(e, reading)?.small()
 }
 
 fn fn1_for(f: Func, unit: TrigUnit) -> Option<Fn1> {
@@ -1377,7 +1601,7 @@ enum Fold {
     /// the general path still gets right alone, and whether a slider is in
     /// it: a decimal typed with thousands of digits (its double is it
     /// rounded once), or a power or count proven beyond the doubles
-    /// (10⁵⁰⁰⁰, 2^−100000, 171!: ±∞ or 0, however it is rounded), with
+    /// (10⁵⁰⁰⁰, 2^−100000, 2000!: ±∞ or 0, however it is rounded), with
     /// what is known of its parity (for a power of a negative base). Any
     /// arithmetic on it is [`Fold::Big`].
     Lone(bool, Parity),
@@ -1599,32 +1823,45 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                     // Γ's generalisation (floating point, as sin).
                     None if !r.is_integer() => return No,
                     // A whole number past 2⁵³: a pole of Γ if negative,
-                    // undefined however it rounds; else past 170 (and
-                    // 300), the count beyond the doubles, as it is from
-                    // the even double the general path rounds it to.
+                    // undefined however it rounds; else far past the cap
+                    // (and the doubles), as it is from the even double
+                    // the general path rounds it to.
                     None if r.is_negative() => return No,
                     None if *f == Func::Factorial => return Lone(v, Parity::Even),
                     None => return Lone(v, Parity::of(&r)),
                 };
-                let count = if *f == Func::Factorial {
-                    // n! up to 170! (beyond, past the doubles).
-                    match n {
-                        0..=170 => {
-                            let mut p = Nat::from_u64(1);
-                            for k in 2..=n as u32 {
-                                p = p.mul_small(k);
-                            }
-                            Some(fns::Count::Exact(p))
-                        }
-                        171.. => Some(fns::Count::Huge),
-                        _ => None,
-                    }
+                let step = if *f == Func::Factorial { 1 } else { 2 };
+                let count = if n < 0 && !(step == 2 && n == -1) {
+                    // A pole of Γ (n! for n < 0, n!! for n < −1).
+                    None
                 } else {
-                    fns::double_factorial_exact(n as f64)
+                    // n(n − 1)(n − 2)… (n(n − 2)… for n!!) exactly, within
+                    // the cap every exact value keeps (n! to about 1750!,
+                    // n!! to about 3400!!), as nCr and nPr: one cap for
+                    // every count (review 15, Q1: 171!/170! was unknown,
+                    // refused once past the doubles). Each factor is at
+                    // least 2, so the product passes the cap within
+                    // `MAX_BITS` steps.
+                    let mut p = Nat::from_u64(1);
+                    let mut k = n;
+                    let mut huge = false;
+                    while k > 1 {
+                        p = p.mul(&Nat::from_u64(k as u64));
+                        if p.bits() > crate::big::MAX_BITS {
+                            huge = true;
+                            break;
+                        }
+                        k -= step;
+                    }
+                    Some(if huge {
+                        fns::Count::Huge
+                    } else {
+                        fns::Count::Exact(p)
+                    })
                 };
                 match count {
                     Some(fns::Count::Exact(p)) => Value(Rat::nat(p), v),
-                    // Past the doubles: alone it is +∞, but 171! − 171! is
+                    // Past the cap: alone it is +∞, but 2000! − 2000! is
                     // no 0 to compute. (n! for n ≥ 2 is even; n!! is of n's
                     // parity.)
                     Some(fns::Count::Huge) if *f == Func::Factorial => Lone(v, Parity::Even),
@@ -1643,36 +1880,32 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                 if !rn.is_integer() || !rr.is_integer() {
                     return No;
                 }
-                // Whole numbers no double holds (past 2⁵³): the count of
-                // the numbers themselves, never of their doubles; too long
-                // to carry, unknown (the general path, from rounded whole
-                // numbers, could make 1 of C(2⁵³ + 50, 2⁵³ + 25)).
-                if !double(&rn) || !double(&rr) {
-                    let (Some((nneg, n)), Some((rneg, r))) = (rn.integer(), rr.integer()) else {
-                        return Big(vn || vr);
-                    };
-                    if nneg {
-                        // A pole of Γ, however n rounds (to a whole n < 0).
-                        return No;
-                    }
-                    if rneg || r > n {
-                        return Value(Rat::int(0), vn || vr);
-                    }
-                    return match fns::count_exact_big(&n, &r, perm) {
-                        Some(p) => Value(Rat::nat(p), vn || vr),
-                        None => Big(vn || vr),
-                    };
+                // The count of the whole numbers themselves, never of their
+                // doubles (past 2⁵³ no double holds them), exactly within
+                // the cap every exact value keeps, whether or not each is a
+                // double (review 15, Q1: C(2¹⁰⁰⁰, 2), of two doubles, was
+                // refused once past the doubles, so C(2¹⁰⁰⁰, 2) divided by
+                // its own value was unknown, while C(2⁵³ + 1, 400) of a
+                // number no double holds had the whole cap).
+                let (Some((nneg, n)), Some((rneg, r))) = (rn.integer(), rr.integer()) else {
+                    return Big(vn || vr);
+                };
+                if nneg {
+                    // A pole of Γ, however n rounds (to a whole n < 0); and
+                    // of a double, Γ's generalisation, in floating point.
+                    return No;
                 }
-                // Each a double: exactly, or beyond the doubles (+∞ from
-                // the same doubles on the general path).
-                let (n, r) = (
-                    rn.to_f64(crate::big::Round::Nearest),
-                    rr.to_f64(crate::big::Round::Nearest),
-                );
-                match fns::count_exact(n, r, perm) {
-                    Some(fns::Count::Exact(p)) => Value(Rat::nat(p), vn || vr),
-                    // (A product of r ≥ 2 consecutive integers is even.)
-                    Some(fns::Count::Huge) => Lone(
+                if rneg || r > n {
+                    return Value(Rat::int(0), vn || vr);
+                }
+                match fns::count_exact_big(&n, &r, perm) {
+                    Some(p) => Value(Rat::nat(p), vn || vr),
+                    // Past the cap. Of doubles, beyond them (+∞ from the
+                    // same doubles on the general path; a product of r ≥ 2
+                    // consecutive integers is even); else unknown (the
+                    // general path, from rounded whole numbers, could make
+                    // 1 of C(2⁵³ + 50, 2⁵³ + 25)).
+                    None if double(&rn) && double(&rr) => Lone(
                         vn || vr,
                         if *f == Func::NPr {
                             Parity::Even
@@ -1680,7 +1913,7 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                             Parity::Unknown
                         },
                     ),
-                    None => No,
+                    None => Big(vn || vr),
                 }
             }
             _ => No,
@@ -1723,7 +1956,8 @@ pub(crate) fn fold_literals(e: &Expr, opts: &CompileOptions<'_>) -> Expr {
             Expr::Num(..) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => e.clone(),
             Expr::Neg(a) => Expr::Neg(Box::new(rec(a))),
             Expr::Degrees(a) => Expr::Degrees(Box::new(rec(a))),
-            Expr::Bin(BinOp::Pow, a, b) if syntactic_rational(b, Reading::Typed).is_some() => {
+            // (Written as a ratio, any size: its parities, not its value.)
+            Expr::Bin(BinOp::Pow, a, b) if written(b, Reading::Typed).is_some() => {
                 Expr::Bin(BinOp::Pow, Box::new(rec(a)), b.clone())
             }
             Expr::Bin(op, a, b) => {
@@ -1814,6 +2048,12 @@ pub(crate) fn typed_pow_kind(b: &Expr, opts: &CompileOptions<'_>) -> PowKind {
     pow_kind(b, opts, Reading::Typed)
 }
 
+/// How [`Program::compile`] reads the exponent `b`, each number at face
+/// value (written as a ratio of integers, else its double decides).
+pub(crate) fn face_pow_kind(b: &Expr) -> PowKind {
+    pow_kind(b, &CompileOptions::default(), Reading::FaceValue)
+}
+
 /// For `root(a, n)` in a typed expression whose degree n is exactly known
 /// not to be an integer: 1/n rounded once (the root is then the power
 /// 1/n of a base ≥ 0, as [`Program::compile_typed`] computes it).
@@ -1860,6 +2100,10 @@ pub(crate) fn typed_odd_root_power(n: &Expr, opts: &CompileOptions<'_>) -> Optio
 /// double, and an even one past it is even as its double is).
 pub(crate) enum PowKind {
     Rational(i32, i32),
+    /// Written as a ratio p/q past [`Ratio::small`], q > 1: the same real
+    /// root, any size (review 15, R15-M-01: x^(1000001/3) took the
+    /// positive-base rule, undefined at −1).
+    Ratio(RatioPow),
     NonInteger,
     Odd,
     Beyond,
@@ -1867,8 +2111,20 @@ pub(crate) enum PowKind {
 }
 
 fn pow_kind(b: &Expr, opts: &CompileOptions<'_>, lx: Reading) -> PowKind {
-    if let Some((p, q)) = syntactic_rational(b, lx) {
-        return PowKind::Rational(p, q);
+    match written(b, lx) {
+        Some(Written::Ratio(r)) => {
+            if let Some((p, q)) = r.small() {
+                return PowKind::Rational(p, q);
+            }
+            // (A whole number past 10⁶: by its exact value below, as
+            // one written otherwise.)
+            if !r.is_integer() {
+                return PowKind::Ratio(r.power());
+            }
+        }
+        // Too long to carry: a negative base's power is unknown.
+        Some(Written::Long) => return PowKind::Beyond,
+        None => {}
     }
     if lx == Reading::Typed && !b.any(&|n| matches!(n, Expr::X | Expr::Y)) {
         match fold(b, opts) {
@@ -1888,9 +2144,9 @@ fn pow_kind(b: &Expr, opts: &CompileOptions<'_>, lx: Reading) -> PowKind {
                     return PowKind::Odd;
                 }
             }
-            // A value beyond the doubles too long to carry (3^20000, 171!,
+            // A value beyond the doubles too long to carry (3^20000, 2000!,
             // 1.5^100000), by its parity: its extended-range value, past
-            // 2⁵³, is even (as 10⁵⁰⁰⁰ and 171! are).
+            // 2⁵³, is even (as 10⁵⁰⁰⁰ and 2000! are).
             Fold::Lone(_, parity) => {
                 return match parity {
                     Parity::Even => PowKind::Plain,
@@ -1995,6 +2251,18 @@ fn lower_in(e: &Expr, opts: &CompileOptions<'_>, lx: Reading) -> Result<Piece, E
                         } else {
                             c.push(Op::PowRat(p, q));
                         }
+                        Piece::Code(c)
+                    }
+                });
+            }
+            if let PowKind::Ratio(r) = kind {
+                if r.neg && matches!(la, Piece::Const(v, false) if v.is_zero()) {
+                    return Err(EquationError::eval(EvaluationErrorCode::DivideByZero, 0..0));
+                }
+                return Ok(match la {
+                    Piece::Const(v, var) => Piece::Const(wide::pow_ratio(v, r), var),
+                    Piece::Code(mut c) => {
+                        c.push(Op::PowRatio(r));
                         Piece::Code(c)
                     }
                 });
@@ -2171,6 +2439,54 @@ mod tests {
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() <= 1e-12 * (1.0 + b.abs())
+    }
+
+    /// Written ratios of any size, reduced first (review 15, R15-M-01).
+    #[test]
+    fn written_ratios_of_any_size() {
+        let exponent = |src: &str| -> Expr {
+            let eq = crate::equation::Equation::parse(&format!("y=x^({src})")).unwrap();
+            match eq.explicit().unwrap().1 {
+                Expr::Bin(BinOp::Pow, _, b) => (**b).clone(),
+                e => panic!("{e:?}"),
+            }
+        };
+        let ratio = |src: &str| written_ratio(&exponent(src), Reading::Typed).unwrap();
+        // Reduced first: the cube root, and the old fast path's pairs.
+        assert_eq!(ratio("1000001/3000003").small(), Some((1, 3)));
+        assert_eq!(
+            syntactic_rational(&exponent("-2/4"), Reading::Typed),
+            Some((-1, 2))
+        );
+        // Past it: by p's sign and the parities of p and q.
+        let r = ratio("1000001/3");
+        assert_eq!((r.small(), r.parts()), (None, Some((1000001, 3))));
+        assert!(r.odd_p() && r.odd_q() && !r.is_negative() && !r.is_integer());
+        let r = ratio("-2000002/3");
+        assert!(!r.odd_p() && r.odd_q() && r.is_negative());
+        let r = ratio("1/1000002");
+        assert!(r.odd_p() && !r.odd_q());
+        // A part past 2⁵³, typed (its double is even, the integer odd).
+        let r = ratio("1/9007199254740993");
+        assert!(r.odd_q() && r.parts() == Some((1, 9007199254740993)));
+        // Not written so: a decimal, an expression.
+        assert!(written(&exponent("1.5/3"), Reading::Typed).is_none());
+        assert!(written(&exponent("10^6/3"), Reading::Typed).is_none());
+        // x^(1000001/3): sign(x)·|x|^(1000001/3), and at face value too.
+        for src in ["x^(1000001/3)", "x^(-1000001/3)", "x^(1/1000001)"] {
+            for (x, want) in [(-1.0, -1.0), (1.0, 1.0)] {
+                assert_eq!(ev(src, x), want, "{src} at {x}");
+            }
+        }
+        assert_eq!(ev("x^(2000002/3)", -1.0), 1.0);
+        assert!(ev("x^(1/1000002)", -1.0).is_nan());
+        assert!(close(ev("x^(1000001/3000003)", -8.0), -2.0));
+        assert!(close(
+            ev("x^(1/1000001)", -2.0),
+            -(2f64.powf(1.0 / 1000001.0))
+        ));
+        assert!(ev("x^(-1000001/3)", 0.0).is_nan());
+        assert_eq!(ev("x^(1000001/3)", 0.0), 0.0);
     }
 
     #[test]

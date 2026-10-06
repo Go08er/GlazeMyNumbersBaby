@@ -165,12 +165,21 @@ fn collect(e: &Expr, out: &mut Vec<Cond>) {
             match op {
                 BinOp::Div => push(out, Cond::NonZero((**b).clone()), b),
                 BinOp::Pow => {
-                    if let Some((p, q)) = syntactic_rational(b, crate::compile::Reading::Typed) {
-                        if p <= 0 {
+                    // Written as a ratio of integers, any size (review 15,
+                    // R15-M-01: x^(1000001/3) took the positive-base
+                    // condition).
+                    let written = crate::compile::written(b, crate::compile::Reading::Typed);
+                    if let Some(crate::compile::Written::Ratio(r)) = &written {
+                        if r.is_negative() || r.is_zero() {
                             push(out, Cond::NonZero((**a).clone()), a);
                         }
-                        if q % 2 == 0 {
+                        if !r.odd_q() {
                             push(out, Cond::NonNegative((**a).clone()), a);
+                        }
+                    } else if written.is_some() {
+                        // Too long to carry: its parities aren't known.
+                        if varies(a) {
+                            out.push(Cond::Opaque(e.clone()));
                         }
                     } else if b.contains_x() {
                         out.push(Cond::PowVar {

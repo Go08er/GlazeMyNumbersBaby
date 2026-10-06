@@ -447,6 +447,21 @@ pub fn step(value: Iv, n: usize, smooth: bool) -> S {
     }
 }
 
+/// min or max where the ends put `w` strictly beyond the other argument
+/// on the box: f is `w` there only where the other is defined too (min
+/// and max are undefined wherever either argument is), and its
+/// coefficients are `w`'s only where `w` stays the one beside the box, so
+/// where the other argument's own derivatives exist (it can't jump past
+/// `w`): min(x, 2⌊x⌋ − 0.5) at 1 jumps.
+pub fn winner(w: S, other: &S) -> S {
+    let mut s = w;
+    s[0] = s[0].clone().with(other[0].def, other[0].def);
+    if s.len() > 1 && !(other[0].cont && valid_upto(other, 1)) {
+        return invalid_from(s, 1);
+    }
+    s
+}
+
 pub fn with_value(mut s: S, v: Iv) -> S {
     s[0] = v;
     s

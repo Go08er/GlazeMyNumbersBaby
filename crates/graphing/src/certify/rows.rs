@@ -3346,8 +3346,9 @@ fn structural_parity(e: &crate::ast::Expr) -> Option<bool> {
             } else if pa {
                 true
             } else {
-                match syntactic_rational(b, crate::compile::Reading::Typed)? {
-                    (p, q) if q % 2 == 1 => p % 2 == 0,
+                // (Any size: x^(1000001/3) is odd, review 15, R15-M-01.)
+                match crate::compile::written_ratio(b, crate::compile::Reading::Typed)? {
+                    r if r.odd_q() => !r.odd_p(),
                     _ => return None,
                 }
             }

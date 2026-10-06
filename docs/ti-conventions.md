@@ -51,8 +51,12 @@ exactly what gets plotted. An exponent written as an integer or a ratio of
 integers (`3`, `−2`, `1/3`, `(2/3)`, `−1/3`; taken in lowest terms) is
 different and follows IEEE 1788's `pown`/`rootn`: `x^3` and `x^(1/3)` are
 polynomial and root functions, defined for negative x, and both calculators
-graph them on both sides. Only that written form gets odd roots (the
-compiler's `syntactic_rational`): any other constant exponent, a decimal, a
+graph them on both sides. The integers may be of any size and are reduced
+first: `x^(1000001/3000003)` is the cube root, `x^(1000001/3)` is odd and
+defined on ℝ (sign(x)·|x|^(1000001/3)), `x^(2000002/3)` even and
+`x^(1/1000002)` an even root (x ≥ 0), by the parities of p and q in
+lowest terms. Only that written form gets odd roots (the
+compiler's `written`): any other constant exponent, a decimal, a
 slider or an expression, takes the positive-base rule unless its value is
 an integer, even when it is a fraction with an odd denominator, so `x^0.2`
 has domain [0, ∞) while `x^(1/5)` is defined everywhere.
@@ -106,14 +110,16 @@ a root's degree) is an integer is decided by its exact value, never by its
 double: off, `x^1.0000000000000001` and `x^2.0000000000000001` take the
 positive-base rule (domain [0, ∞), a minimum at 0), while `x^(0.1+0.9)` and
 `x^2.0` are integer powers; only the integers of the written form `p/q`
-must be typed exactly so to give odd roots. Likewise an exponent or a
+must be typed exactly so to give odd roots, and they are the integers the
+digit limit leaves: to 5 digits `x^(1000001/3)` is `x^(1000000/3)`, even,
+and `x^(1/1000001)` is `x^(1/1000000)`, defined for x ≥ 0 only. Likewise an exponent or a
 root's degree typed as an odd integer is odd at any size: off (or at 16
 digits or more), `x^9007199254740993` is −1 at −1 and
 `root(−8, 9007199254740993)` is defined (just below −1), though the doubles
 either side of that number are even; so is `root(−8, n)` for an odd n of
 hundreds of digits. An exponent too long to carry exactly (`3^20000`) is
 odd, even or no integer as its form shows (3^20000 is odd, 10^5000 even,
-1.5^100000 no integer); where that isn't known (`x^nCr(2000, 1000)`), a
+1.5^100000 no integer); where that isn't known (`x^nCr(20000, 10000)`), a
 negative base's power is unknown. Arithmetic on literals and
 sliders alone (+, −, ×, ÷, whole powers, |·| and the counts n!, n!!, nCr,
 nPr of whole numbers of any size) is done exactly and rounded once
@@ -122,11 +128,14 @@ nPr of whole numbers of any size) is done exactly and rounded once
 `nCr(9007199254740993, 1) − 9007199254740992` is 1, though no double holds
 the first number), for the curve drawn, its trace and
 its analysis alike, while every exact value on the way fits in 2¹⁴ bits
-(about 4,900 digits). Past that the arithmetic isn't carried out. A value
-proven beyond the doubles on its own (`10^5000`, `171!`, `(1/2)^100000`)
-is still the ±∞ or 0 it rounds to, but arithmetic on such a value has an
-unknown value, not what rounding step by step would make of it:
-`(10^5000 + 1) − 10^5000` is unknown, never 0. Nothing is drawn or traced
+(about 4,900 digits), whether or not its numbers are doubles:
+`nCr(2^1000, 2)/(2^1000·(2^1000 − 1)/2)` is 1 and `171!/170!` is 171,
+though C(2¹⁰⁰⁰, 2) and 171! are beyond the doubles. Past that the
+arithmetic isn't carried out. A value proven beyond the doubles on its own
+(`10^5000`, `2000!`, `(1/2)^100000`) is still the ±∞ or 0 it rounds to,
+but arithmetic on such a value has an unknown value, not what rounding
+step by step would make of it: `(10^5000 + 1) − 10^5000` is unknown,
+never 0. Nothing is drawn or traced
 for an unknown value except where f's enclosure itself places the curve.
 Anything else (π, e, sin, a root or a power to an exponent no integer,
 the counts of numbers no whole number, …) is computed in floating point

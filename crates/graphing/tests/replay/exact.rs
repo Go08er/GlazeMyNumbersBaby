@@ -57,7 +57,7 @@ pub fn eval(
         Expr::Bin(BinOp::Pow, a, b) => {
             // Written as a ratio of integers, or exactly an integer.
             let (p, q) = match written_rational(b, lits) {
-                Some(r) => r,
+                Some((p, q)) => (p.to_i64()?, q.to_i64()?),
                 None => {
                     let k = eval(b, None, lits, vars)?;
                     if !k.is_integer() {

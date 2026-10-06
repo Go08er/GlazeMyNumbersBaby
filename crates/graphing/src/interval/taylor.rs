@@ -16,7 +16,7 @@ use super::arith::Interval;
 use super::dec::{Dec, DecInterval};
 use super::elem;
 use crate::ast::{BinOp, Constant, Expr, Func};
-use crate::compile::{CompileOptions, syntactic_rational};
+use crate::compile::{CompileOptions, Ratio, Written, written};
 use crate::functions::TrigUnit;
 
 /// What an evaluation needs besides the tree and the box.
@@ -346,14 +346,59 @@ fn powrat_ser(u: &Series, p: i32, q: i32) -> Series {
     flat(c0, n)
 }
 
+/// u^(p/q) for a written ratio past (p, q) of machine integers, q > 1: the
+/// same real root as [`powrat_ser`], p/q enclosed.
+fn powratio_ser(u: &Series, r: &Ratio) -> Series {
+    let n = u.len() - 1;
+    let (lo, hi) = r.enclosure();
+    let e = Interval::new(lo, hi);
+    let c0 = elem::pow_ratio(&u[0], e, r.is_negative(), r.odd_p(), r.odd_q());
+    let k = DecInterval::new(e);
+    let pos_branch = |w: &Series| exp(&scale(&ln(w), &k));
+    if u[0].gt0() {
+        let mut h = pos_branch(u);
+        h[0] = c0.refine(&h[0]);
+        return h;
+    }
+    if u[0].lt0() && r.odd_q() {
+        let h = pos_branch(&neg(u));
+        let mut h = if r.odd_p() { neg(&h) } else { h };
+        h[0] = c0.refine(&h[0]);
+        return h;
+    }
+    flat(c0, n)
+}
+
 fn pow(a: &Expr, b: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
     let u = ev(a, x, n, ctx);
-    if let Some((p, q)) = syntactic_rational(b, crate::compile::Reading::Typed) {
-        return if q == 1 {
-            powi_ser(&u, p)
-        } else {
-            powrat_ser(&u, p, q)
-        };
+    match written(b, crate::compile::Reading::Typed) {
+        Some(Written::Ratio(r)) => {
+            if let Some((p, q)) = r.small() {
+                return if q == 1 {
+                    powi_ser(&u, p)
+                } else {
+                    powrat_ser(&u, p, q)
+                };
+            }
+            // Written as a ratio of any size: its real root, by the
+            // parities of p and q (review 15, R15-M-01: x^(1000001/3) was
+            // the positive-base rule's, empty for x < 0). (A whole number
+            // past 10⁶: by its value below, as before.)
+            if !r.is_integer() {
+                return powratio_ser(&u, &r);
+            }
+        }
+        // Written so, too long to carry: whether p and q are odd isn't
+        // known, so for a base that may be ≤ 0 nothing is.
+        Some(Written::Long) if !u[0].gt0() => {
+            let h0 = if u[0].is_empty() {
+                DecInterval::result(Interval::EMPTY, Dec::Trv, &[&u[0]])
+            } else {
+                DecInterval::result(Interval::ENTIRE, Dec::Trv, &[&u[0]])
+            };
+            return flat(h0, n);
+        }
+        _ => {}
     }
     let v = ev(b, x, n, ctx);
     // A constant integer exponent written otherwise (x^(1+1)) is still an
@@ -476,17 +521,29 @@ fn with_operand(mut h: Series, o: &DecInterval) -> Series {
 }
 
 /// min or max where the ends decide that `winner` is the value on the whole
-/// box: its series, if the losing argument is defined throughout the box
-/// (a discontinuous but defined loser changes nothing); otherwise f may be
-/// undefined somewhere on the box, and its value alone is kept, decorated
-/// as the loser is (its derivatives then mean nothing, [`derivs_valid`]).
-fn keep_winner(winner: Series, loser: &DecInterval) -> Series {
-    if loser.dec >= Dec::Def {
-        return winner;
-    }
+/// box: if the losing argument is defined throughout the box, f is the
+/// winner there (a discontinuous but defined loser changes nothing on the
+/// box); otherwise f may be undefined somewhere on the box, and its value
+/// alone is kept, decorated as the loser is (its derivatives then mean
+/// nothing, [`derivs_valid`]).
+///
+/// The winner's derivatives are f's only where f stays the winner beside
+/// the box too: a loser continuous on a neighbourhood of the box
+/// (`steady`: on the box an ulp wider each side) can't cross it there, but
+/// one jumping at the box, or defined at the box alone, can (review 15:
+/// min(x, 2⌊x⌋ − 0.5) at 1 jumps to −0.5 just left of 1, and
+/// min(x, root(−1, 3 + x⁴) + 5) is defined at 0 alone; both had f′ = 1
+/// there).
+fn keep_winner(winner: Series, loser: &Series, steady: impl FnOnce() -> bool) -> Series {
     let n = winner.len() - 1;
+    if loser[0].dec >= Dec::Def {
+        if n == 0 || derivs_valid(loser, 1) || steady() {
+            return winner;
+        }
+        return flat(winner[0], n);
+    }
     let mut h0 = winner[0];
-    h0.dec = h0.dec.min(loser.dec);
+    h0.dec = h0.dec.min(loser[0].dec);
     flat(h0, n)
 }
 
@@ -618,10 +675,14 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
         Root => {
             let (u, k) = (arg(0), arg(1));
             let kv = k[0].iv;
-            // A constant integer degree: its value a whole number and its
-            // derivatives 0 (root(x, x) at 2 is 2 there, but its degree
-            // varies: f′ is not the square root's).
-            let constant = k[1..].iter().all(|c| c.iv.is_point() && c.lo() == 0.0);
+            // A constant integer degree: one free of x, its value a whole
+            // number (root(x, x) at 2 is 2 there, but its degree varies:
+            // f′ is not the square root's). Not merely one whose first n
+            // coefficients are 0: root(−1, 3 + x⁴) at 0 has the degree 3
+            // and those 0 to order 3, yet beside 0 the degree is no
+            // integer and the root undefined (review 15, R15-L-02: −1 with
+            // derivatives 0 there).
+            let constant = !args[1].contains_x();
             if constant
                 && kv.is_point()
                 && kv.lo() == kv.lo().trunc()
@@ -726,6 +787,15 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
             }
         }
         Min | Max => {
+            // Whether args[..=i] (the winner so far, `upto`) or args[i]
+            // alone is continuous on the box an ulp wider each side.
+            let steady = |range: std::ops::RangeInclusive<usize>| {
+                let w = Interval::new(x[0].lo().next_down(), x[0].hi().next_up());
+                let w = vec![DecInterval::new(w)];
+                args[range]
+                    .iter()
+                    .all(|a| ev(a, &w, 0, ctx)[0].dec >= Dec::Dac)
+            };
             let mut acc = arg(0);
             for i in 1..args.len() {
                 let b = arg(i);
@@ -741,8 +811,8 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
                 let a_below = acc[0].hi() < b[0].lo();
                 let b_below = b[0].hi() < acc[0].lo();
                 acc = match (f, a_below, b_below) {
-                    (Min, true, _) | (Max, _, true) => keep_winner(acc, &b[0]),
-                    (Min, _, true) | (Max, true, _) => keep_winner(b, &acc[0]),
+                    (Min, true, _) | (Max, _, true) => keep_winner(acc, &b, || steady(i..=i)),
+                    (Min, _, true) | (Max, true, _) => keep_winner(b, &acc, || steady(0..=i - 1)),
                     _ => flat(
                         if f == Min {
                             elem::min(&acc[0], &b[0])
@@ -768,7 +838,9 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
         NCr | NPr => {
             let (a, b) = (arg(0), arg(1));
             let h0 = elem::ncr_npr(&a[0], &b[0], f == NPr);
-            let constant = b[1..].iter().all(|c| c.iv.is_point() && c.lo() == 0.0);
+            // r free of x (as root's degree: zero coefficients to order n
+            // don't make it constant beside the box).
+            let constant = !args[1].contains_x();
             match elem::small_count(&b[0]) {
                 // A polynomial in n where it is defined: n(n−1)…(n−k+1),
                 // over k! for nCr.

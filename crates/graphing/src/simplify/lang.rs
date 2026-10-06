@@ -31,7 +31,7 @@ use egg::{Id, Language, RecExpr, Symbol, define_language};
 
 use super::q::Q;
 use crate::ast::{BinOp, Constant, Expr, Func, Lit};
-use crate::compile::{Reading, syntactic_rational};
+use crate::compile::{Reading, Written, written};
 
 /// A number not known exactly (`ast::Lit::Near`): the double an analysis
 /// wrote, standing for some real within an ulp of it; and which occurrence
@@ -241,11 +241,23 @@ fn add(e: &Expr, rec: &mut RecExpr<Math>) -> Result<Id, Unsupported> {
         }
         Expr::Bin(op, a, b) => {
             let ia = go(a, rec)?;
-            if *op == BinOp::Pow
-                && let Some((p, q)) = syntactic_rational(b, Reading::Typed)
-            {
-                let k = rec.add(Math::Num(Q::new(p as i128, q as i128).expect("q ≠ 0")));
-                return Ok(rec.add(Math::PowQ([ia, k])));
+            // Written as a ratio of integers, any size: a real root
+            // (`^`), never `^c`'s positive-base rule (review 15, R15-M-01:
+            // x^(1000001/3) was `^c`); past what a `Q` holds, not put in
+            // the e-graph (its parities can't be read off a double).
+            if *op == BinOp::Pow {
+                match written(b, Reading::Typed) {
+                    // (A whole number past 10⁶ as before: `^c` of it, an
+                    // integer power all the same.)
+                    Some(Written::Ratio(r)) if r.small().is_some() || !r.is_integer() => {
+                        let (p, q) = r.parts().ok_or(Unsupported::LongNumber)?;
+                        let q = Q::new(p, q).ok_or(Unsupported::LongNumber)?;
+                        let k = rec.add(Math::Num(q));
+                        return Ok(rec.add(Math::PowQ([ia, k])));
+                    }
+                    Some(Written::Long) => return Err(Unsupported::LongNumber),
+                    _ => {}
+                }
             }
             let ib = go(b, rec)?;
             rec.add(match op {

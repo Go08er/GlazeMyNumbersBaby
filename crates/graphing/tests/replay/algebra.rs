@@ -484,10 +484,13 @@ impl<'a> Field<'a> {
             Expr::Bin(BinOp::Pow, a, b) => {
                 let base = self.read(a)?;
                 if let Some((p, q)) = written_rational(b, self.lits) {
+                    // (Past these, not read: never as a constant exponent
+                    // below, the positive-base rule.)
+                    let (p, q) = (p.to_i64()?, q.to_u32()?);
                     if q == 1 {
                         return base.powi(p);
                     }
-                    return self.root(q as u32, base).powi(p);
+                    return self.root(q, base).powi(p);
                 }
                 if contains_x(b) {
                     let ex = self.read(b)?;

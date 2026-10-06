@@ -834,6 +834,15 @@ pub fn pow_rational(b: f64, p: i32, q: i32) -> f64 {
     if neg && p % 2 != 0 { -m } else { m }
 }
 
+/// `b^(p/q)` for an exponent written as a ratio of integers past
+/// [`pow_rational`]'s (`compile::Ratio::small`), any size: sign(b)ᵖ·|b|^(p/q)
+/// by the parities of p and q in lowest terms (a negative b only for an
+/// odd q; 0 only to a positive power), p/q in double-double (review 15,
+/// R15-M-01: x^(1000001/3) took the positive-base rule, undefined at −1).
+pub(crate) fn pow_ratio(b: f64, r: &crate::compile::RatioPow) -> f64 {
+    crate::wide::pow_ratio(crate::wide::Wide::new(b), *r).to_f64()
+}
+
 /// a^(p/q) for a > 0 where powf's rounded p/q would cost ulps (x^(1/3) at
 /// 10⁴⁵ was 17 ulps off): square and cube roots of small powers through
 /// sqrt/cbrt, the rest with the exponent in double-double.

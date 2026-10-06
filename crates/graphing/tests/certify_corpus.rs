@@ -905,6 +905,35 @@ const REVIEW: &[(&str, &str)] = &[
         "root(x,-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001)",
         "D=(-inf,0)U(0,inf) | XI=none | YI=none | P=odd | MIN=none | MAX=none | VA=0",
     ),
+    // Review 15, R15-M-01: an exponent written as a ratio of integers of
+    // 10⁶ or more is still a real root's power, reduced first: odd over
+    // odd is odd and defined on ℝ (it was the positive-base rule's, domain
+    // [0, ∞), neither); 1000001/3000003 is 1/3; an even numerator over an
+    // odd denominator is even.
+    (
+        "x^(1000001/3)",
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=(0,0) | VA=none | HA=none | R=R",
+    ),
+    (
+        "x^(1/1000001)",
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | VA=none | HA=none | R=R",
+    ),
+    (
+        "x^(1000001/3000003)",
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | VA=none | HA=none | R=R",
+    ),
+    (
+        "x^(2000002/3)",
+        "D=R | XI=0 | YI=0 | P=even | T=none | MIN=(0,0) | MAX=none | VA=none | HA=none | R=[0,inf)",
+    ),
+    (
+        "x^(-1000001/3)",
+        "D=(-inf,0)U(0,inf) | XI=none | YI=none | P=odd | T=none | MIN=none | MAX=none | VA=0 | HA=0 | R=(-inf,0)U(0,inf)",
+    ),
+    (
+        "x^(1/9007199254740993)",
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | VA=none | HA=none | R=R",
+    ),
 ];
 
 /// Review 13: functions under a digit limit on typed numbers
@@ -976,6 +1005,66 @@ const DIGITS: &[(&str, u8, &str)] = &[
         "root(-8,-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001)",
         20,
         "XI=none | YI=none | VA=none",
+    ),
+    // Review 15, R15-M-01: written ratios of 10⁶ or more under each digit
+    // limit. To 5 digits 1000001 is the even 1000000 (x^(1000000/3) is
+    // even, defined on ℝ; x^(1/1000000) an even root, x ≥ 0) and
+    // 1000001/3000003 is 1000000/3000000, 1/3 again; to 14 or more each is
+    // as typed.
+    (
+        "x^(1000001/3)",
+        5,
+        "D=R | XI=0 | YI=0 | P=even | T=none | MIN=(0,0) | MAX=none | VA=none | HA=none | R=[0,inf)",
+    ),
+    (
+        "x^(1000001/3)",
+        14,
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=(0,0) | VA=none | HA=none | R=R",
+    ),
+    (
+        "x^(1000001/3)",
+        15,
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=(0,0) | VA=none | HA=none | R=R",
+    ),
+    (
+        "x^(1000001/3)",
+        16,
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=(0,0) | VA=none | HA=none | R=R",
+    ),
+    (
+        "x^(1000001/3)",
+        20,
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=(0,0) | VA=none | HA=none | R=R",
+    ),
+    (
+        "x^(1/1000001)",
+        5,
+        "D=[0,inf) | XI=0 | YI=0 | P=neither | T=none | MIN=(0,0) | MAX=none | VA=none | HA=none | R=[0,inf)",
+    ),
+    (
+        "x^(1/1000001)",
+        14,
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | VA=none | HA=none | R=R",
+    ),
+    (
+        "x^(1/1000001)",
+        20,
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | VA=none | HA=none | R=R",
+    ),
+    (
+        "x^(1000001/3000003)",
+        5,
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | VA=none | HA=none | R=R",
+    ),
+    (
+        "x^(1000001/3000003)",
+        14,
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | VA=none | HA=none | R=R",
+    ),
+    (
+        "x^(1000001/3000003)",
+        20,
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | VA=none | HA=none | R=R",
     ),
 ];
 

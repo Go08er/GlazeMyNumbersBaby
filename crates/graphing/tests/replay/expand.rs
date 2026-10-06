@@ -306,16 +306,18 @@ impl<'a> Tail<'a> {
             return Some(Lp::number(Iv::of(1.0)));
         }
         let (m, c, v) = self.split(u)?;
-        let mk = i64::from(m) * n;
+        let mk = i64::from(m).checked_mul(n)?;
         if mk % d != 0 {
             return None;
         }
-        let e = (mk / d) as i32;
+        let e = i32::try_from(mk / d).ok()?;
         let negative = c.lt(0.0) != (self.sgn(m) < 0.0);
         if negative && d % 2 == 0 {
             return None;
         }
-        let ck = iv::pow_const(&iv::abs(&c), &iv::div(&Iv::of(n as f64), &Iv::of(d as f64)));
+        // (n/d exactly, rounded outward: past 2⁵³ no double is either.)
+        let nd = iv::ratio(&rug::Integer::from(n), &rug::Integer::from(d));
+        let ck = iv::pow_const(&iv::abs(&c), &nd);
         if !ok(&ck) {
             return None;
         }
@@ -418,7 +420,10 @@ impl<'a> Tail<'a> {
             return self.exponential(&self.product(&self.of(k)?, &ln));
         }
         let u = self.of(base)?;
-        if let Some((n, d)) = written_rational(k, &self.fx.lits) {
+        // (Past machine integers, through the power itself.)
+        if let Some((n, d)) = written_rational(k, &self.fx.lits)
+            && let (Some(n), Some(d)) = (n.to_i64(), d.to_i64())
+        {
             return self.root_power(&u, n, d, k);
         }
         let g = Expr::Bin(BinOp::Pow, Box::new(Expr::X), Box::new(k.clone()));
