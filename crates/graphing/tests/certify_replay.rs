@@ -288,6 +288,21 @@ fn run(fs: Vec<(String, TrigUnit)>, strict: bool) -> Vec<String> {
     let mut tree_tally: BTreeMap<String, usize> = BTreeMap::new();
     let mut rows_checked = 0;
     let (mut cms, mut rms) = (0.0, 0.0);
+    // The slowest replays, so a regression in the checker's cost shows up.
+    let mut slow: Vec<(f64, f64, String)> = done
+        .iter()
+        .map(|(_, d)| {
+            (
+                d.replay_ms,
+                d.certify_ms,
+                format!("{} [{:?}]", d.src, d.unit),
+            )
+        })
+        .collect();
+    slow.sort_by(|a, b| b.0.total_cmp(&a.0));
+    for (r, c, label) in slow.iter().take(5) {
+        println!("slowest: {label}: replay {r:.0} ms, certify {c:.0} ms");
+    }
     for (_, d) in &done {
         cms += d.certify_ms;
         rms += d.replay_ms;
