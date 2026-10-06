@@ -87,9 +87,12 @@ Measured with [`tools/bench/mem.sh`](tools/bench) on NixOS with an RTX 3070
 full; PSS splits them between the processes using them. Numbers will differ
 with other GPUs, drivers and fonts. The Vulkan row most of all: it is mostly
 the driver's own memory, and it has measured anywhere from 205 to 267 MiB
-RSS (121 to 202 MiB PSS) on this machine. The other rows' RSS has held
-within a few percent; PSS moves more, since it depends on which other
-processes share the same libraries at the time.
+RSS (121 to 202 MiB PSS) on this machine. It also takes a while to settle:
+measured 6 seconds after start (`mem.sh`'s default), GMNB on Vulkan has
+read 3–19% CPU and less memory while the GPU stack warms up; with
+`SETTLE=30` it reads the 0.2–0.3% idle and the range above. The other
+rows' RSS has held within a few percent; PSS moves more, since it depends
+on which other processes share the same libraries at the time.
 
 ## Install
 
@@ -413,7 +416,8 @@ CI also runs checks that need more than `cargo test --workspace`:
   their own history and settings, and the last one closed saves them.
 - DGMNB's clipboard works on Wayland and X11; copied graphs are offered as
   `image/png`. On X11 it pastes `UTF8_STRING`, `text/plain;charset=utf-8`,
-  `TEXT` or Latin-1 `STRING`, whichever the owner offers first in that order.
+  `text/plain`, `TEXT` or Latin-1 `STRING`, whichever the owner offers first
+  in that order.
   Pastes over 1 MiB are refused on both.
 - NVIDIA's driver busy-waits on GPU fences by default, which costs ~20% of a
   core even for gentle animation; GMNB sets `__GL_YIELD=USLEEP` for its own
