@@ -4,11 +4,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use chrono::{Datelike, Local, NaiveDate};
+use chrono::Local;
 use datecalc::{DateCalculatorState, strings as S};
 use gtk::glib;
 
 use super::{Ctx, Page};
+use crate::widgets::day_grid::DayGrid;
 use crate::widgets::display::{Change, Display};
 use crate::widgets::icon::{PathIcon, paths};
 use appcore::modes::ViewMode;
@@ -17,12 +18,14 @@ pub struct DatePage {
     root: gtk::Widget,
     ctx: Rc<Ctx>,
     state: Rc<RefCell<DateCalculatorState>>,
+    /// The pickers' days (their widgets hold them only weakly).
+    _days: [Rc<DayGrid>; 3],
 }
 
 struct DateButton {
     button: gtk::MenuButton,
     label: gtk::Label,
-    calendar: gtk::Calendar,
+    days: Rc<DayGrid>,
 }
 
 fn date_button() -> DateButton {
@@ -32,21 +35,26 @@ fn date_button() -> DateButton {
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     content.append(&label);
     content.append(&PathIcon::new(paths::DATE, 18));
-    // GTK 4.22's calendar is a generic widget (which can't be named) with
-    // no accessible objects for its days: a named group at least says what
-    // has the focus and how its keys work (the picker reads the date
-    // chosen).
-    let calendar = gtk::Calendar::builder()
-        .accessible_role(gtk::AccessibleRole::Group)
-        .build();
-    calendar.update_property(&[
-        gtk::accessible::Property::Label("Calendar"),
-        gtk::accessible::Property::Description("Arrow keys move between days, Space picks one"),
-    ]);
+    // Not GTK's calendar, which assistive technology can't read a day of:
+    // each day a named button (DayGrid).
+    let days = DayGrid::new();
     let popover = gtk::Popover::builder()
-        .child(&calendar)
+        .child(&days.widget())
         .css_classes(["wc-calendar-popover"])
         .build();
+    {
+        // Opened, the keys (and so the screen reader) start on the date
+        // chosen ("Tuesday, October 6, 2026, selected").
+        let days = Rc::downgrade(&days);
+        popover.connect_show(move |_| {
+            let days = days.clone();
+            glib::idle_add_local_once(move || {
+                if let Some(d) = days.upgrade() {
+                    d.focus_day();
+                }
+            });
+        });
+    }
     let button = gtk::MenuButton::builder()
         .child(&content)
         .popover(&popover)
@@ -55,7 +63,7 @@ fn date_button() -> DateButton {
     DateButton {
         button,
         label,
-        calendar,
+        days,
     }
 }
 
@@ -76,15 +84,6 @@ impl DateButton {
             child = c.next_sibling();
         }
     }
-}
-
-fn to_glib(d: NaiveDate) -> glib::DateTime {
-    glib::DateTime::from_local(d.year(), d.month() as i32, d.day() as i32, 12, 0, 0.0)
-        .expect("valid date")
-}
-
-fn from_glib(d: &glib::DateTime) -> Option<NaiveDate> {
-    NaiveDate::from_ymd_opt(d.year(), d.month() as u32, d.day_of_month() as u32)
 }
 
 fn section_label(text: &str) -> gtk::Label {
@@ -244,12 +243,13 @@ impl DatePage {
             .build();
 
         for (b, d) in [(&from, today), (&to, today), (&start, today)] {
-            b.calendar.select_day(&to_glib(d));
+            b.days.set_date(d);
         }
         let page = Rc::new(DatePage {
             root: scroll.upcast(),
             ctx: ctx.clone(),
             state: state.clone(),
+            _days: [from.days.clone(), to.days.clone(), start.days.clone()],
         });
 
         // Only while the displays live: the hub outlasts this page.
@@ -283,16 +283,12 @@ impl DatePage {
         };
         refresh(Change::None);
 
-        let limit = |c: &gtk::Calendar| -> Option<NaiveDate> {
-            let d = from_glib(&c.date())?;
-            Some(d.clamp(datecalc::picker_min_date(), datecalc::picker_max_date()))
-        };
         for (which, b) in [(0, &from), (1, &to), (2, &start)] {
-            // Weak button: it owns the popover that owns this calendar.
+            // Weak button: it owns the popover that owns these days.
             let (state, refresh, button) = (state.clone(), refresh.clone(), b.button.downgrade());
             let ctx = ctx.clone();
-            b.calendar.connect_day_selected(move |c| {
-                let (Some(d), Some(button)) = (limit(c), button.upgrade()) else {
+            b.days.connect_picked(move |d| {
+                let Some(button) = button.upgrade() else {
                     return;
                 };
                 {

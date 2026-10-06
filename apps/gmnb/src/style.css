@@ -433,6 +433,50 @@ button.wc-field {
   box-shadow: inset 0 1px alpha(white, 0.10), inset 0 0 0 1px @wc_glass_border;
 }
 
+/* The date pickers' month of days (widgets/day_grid.rs). */
+.wc-days {
+  padding: 4px;
+}
+
+.wc-days-title {
+  font-family: "Outfit";
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.wc-days-weekday {
+  font-size: 12px;
+  color: @wc_fg_dim;
+  min-height: 24px;
+}
+
+button.wc-day {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  font-feature-settings: "tnum";
+}
+
+button.wc-day.wc-day-other {
+  color: @wc_fg_faint;
+}
+
+button.wc-day.wc-day-today {
+  box-shadow: inset 0 0 0 1px @wc_accent;
+}
+
+button.wc-day.wc-day-selected {
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
+}
+
+/* The day the keys are on (a popover isn't told of keyboard use, so not
+   only :focus-visible). */
+button.wc-day:focus {
+  outline: 2px solid alpha(@wc_accent, 0.9);
+  outline-offset: 1px;
+}
+
 .wc-result-panel {
   padding: 10px 6px 14px 6px;
   margin-top: 10px;

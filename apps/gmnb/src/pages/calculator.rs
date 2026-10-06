@@ -386,6 +386,13 @@ impl CalculatorPage {
                 p.press_from(w, B::FToE);
             }
         });
+        // Named as upstream's ("Degrees toggle", "Scientific notation"):
+        // they show "DEG" and "F-E".
+        crate::a11y::name_button(
+            &angle,
+            appcore::keys::angle_button_name(self.vm.borrow().angle_unit()),
+        );
+        crate::a11y::name_button(fe.upcast_ref(), appcore::keys::FTOE_BUTTON_NAME);
         top.append(&angle);
         top.append(&fe);
         self.angle_btn.replace(Some(angle));
@@ -486,6 +493,11 @@ impl CalculatorPage {
         spacer.set_hexpand(true);
         bar.append(&spacer);
         bar.append(&self.memory_row(false));
+        // Named as upstream's ("Quadruple Word toggle"): it shows "QWORD".
+        crate::a11y::name_button(
+            &word,
+            appcore::keys::word_size_button_name(self.vm.borrow().word_size()),
+        );
         self.word_btn.replace(Some(word));
         b.append(&bar);
 
@@ -902,6 +914,7 @@ impl CalculatorPage {
             CalcMode::Scientific => {
                 if let Some(a) = self.angle_btn.borrow().as_ref() {
                     a.set_label(vm.angle_unit().label());
+                    crate::a11y::name_button(a, appcore::keys::angle_button_name(vm.angle_unit()));
                 }
                 if let Some(fe) = self.fe_btn.borrow().as_ref() {
                     fe.set_active(vm.is_fe());
@@ -929,6 +942,10 @@ impl CalculatorPage {
                 }
                 if let Some(w) = self.word_btn.borrow().as_ref() {
                     w.set_label(vm.word_size().label());
+                    crate::a11y::name_button(
+                        w,
+                        appcore::keys::word_size_button_name(vm.word_size()),
+                    );
                 }
                 for (m, c) in self.shift_radios.borrow().iter() {
                     if *m == vm.shift_mode() && !c.is_active() {

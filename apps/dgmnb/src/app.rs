@@ -1358,6 +1358,19 @@ impl App {
             }
             _ => {}
         }
+        // An open date picker's calendar takes the arrow, page and
+        // Home/End keys (DatePage::key).
+        if self.mode.page() == PageKind::Date {
+            let handled = {
+                let (mut cx, _, _, date, _) = self.cx_parts();
+                date.as_mut().is_some_and(|p| p.key(&kp, &mut cx))
+            };
+            if handled {
+                self.input.focus_visible = true;
+                self.redraw();
+                return;
+            }
+        }
         // The number precision slider in Settings takes the arrow, page
         // and Home/End keys.
         let precision = self.store.data.borrow().literal_digits;
