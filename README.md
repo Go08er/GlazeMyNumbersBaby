@@ -224,7 +224,7 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **940 tests** (counts include
+`nix develop -c cargo test --workspace` runs **951 tests** (counts include
 doctests; three more, a live currency fetch, the full metamorphic graph
 sweep and 20,000 random saved sessions, are `#[ignore]`d).
 `cargo run --release -p graphing --example sweep`
@@ -248,11 +248,11 @@ upstream sources with g++:
 | --- | --- |
 | ratpack (12) | 13,628 golden cases from the C++ Ratpack (every op and function, all angle types, radixes 2, 3, 8, 10, 16 and 36, formats, precisions, error codes), byte-for-byte; port of `RationalTest.cpp` |
 | calcmanager (79) | 3,500 golden command sequences replayed against the C++ `CalculatorManager` (every display callback, expression token, history and memory state); ports of `CalcEngineTests`, `CalcInputTest`, `CalculatorManagerTest` |
-| calcvm (152 + 1 ignored) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage |
+| calcvm (159 + 1 ignored) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage and the saved-state size budget (long pasted sessions keep their newest History, memory and modes) |
 | unitconv (140 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
 | datecalc (40), copypaste (40) | Ports of `DateCalculatorTests` and `CopyPasteManagerTests`, plus paste key-sequence tests |
 | graphing (348 + 1 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
-| appcore (50) | Keyboard map, key scripts, converter paste validation, settings storage (huge/corrupt files), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
+| appcore (54) | Keyboard map, key scripts, converter paste validation, settings storage (huge/corrupt files, per-section budgets, a long calculator session that used to cost the whole file), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
 | crmath (1) | The vendored CORE-MATH's two builds (baseline and x86-64-v3) give the same bits |
 | x11paste (5) | Against a private Xvfb: a read cut at its byte cap fetches no further and keeps whole characters, PRIMARY and drag selections, and the rest of a cut transfer goes by so the owner can serve again |
 | gmnb (16), gmnb-launcher (4), dgmnb (53) | GDK key translation, palette contrast for extreme accents, settings compatibility, licence text that parses as markup; the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it) and where it finds GMNB; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown, pipe deadlines, and X11 paste (formats, size caps, deadlines under event floods) against a private Xvfb |
@@ -402,6 +402,14 @@ CI also runs checks that need more than `cargo test --workspace`:
   from the value shown: the next digit replaces it, = repeats nothing, and
   memory, History and the modes are kept. That check compares what is
   saved; the randomized restore tests also compare the engine's own state.
+  A saved session takes at most 3 MiB, so the settings file always loads:
+  an ordinary History fits whole, but each item keeps every key of its
+  calculation (40 pastes of a 100-term sum make one of 0.72 MB), so past
+  that the oldest items go first, from whichever mode's History is larger;
+  a calculation too long to replay (over 16,384 keys) is saved as its
+  value. Memory, the modes, the equations and the other settings are never
+  dropped for it, and a damaged or oversized part of the settings file
+  resets only itself.
 - The port fixes a handful of upstream bugs and undefined behaviour (e.g.
   deleting a history item removed the wrong entry; C left the engine in
   E-notation); each is commented at the fix.
