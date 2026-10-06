@@ -13,12 +13,14 @@
 //! jump of the outer floor) and in nPr(n, 0) and a computed zero exponent
 //! (⌊x⌋^(1 − 1)). Each now keeps its derivatives only where its operand is
 //! differentiable on the box (so continuous beside it), or where it is
-//! defined and of one value on the box an ulp wider each side.
+//! defined and of one value on the box an ulp wider each side. It also
+//! found nCr(n, k) over a box of n below −10³⁰⁰ defined and continuous,
+//! though every double there is a negative integer, a pole of Γ.
 
 use graphing::Graph;
 use graphing::compile::CompileOptions;
 use graphing::equation::Equation;
-use graphing::interval::{Ctx, Dec, Interval, derivs_valid, taylor};
+use graphing::interval::{Ctx, Dec, DecInterval, Interval, derivs_valid, elem, taylor};
 
 /// f's Taylor coefficients through order 3 on the box [lo, hi].
 fn series(src: &str, lo: f64, hi: f64) -> graphing::interval::Series {
@@ -137,4 +139,43 @@ fn constant_beside_the_box_keeps_its_derivatives() {
     assert!(derivs_valid(&s, 3), "{s:?}");
     let s = series("min(x,nCr(floor(x),0)+100)", 0.25, 0.75);
     assert!(derivs_valid(&s, 3) && s[1].lo() == 1.0, "{s:?}");
+}
+
+/// nCr(n, k) and nPr(n, k) are undefined at the negative integers, and
+/// every double past 2⁵³ is an integer: a box of n far below −10³⁰⁰ holds
+/// only poles (it was taken to hold none, the least integer looked for
+/// from −10³⁰⁰ on).
+#[test]
+fn counts_far_below_zero_are_at_poles() {
+    for n in [-1e301, -1e308, -9007199254740992.0, -1.0] {
+        for k in [0.0, 1.0, 2.0] {
+            for perm in [false, true] {
+                let r = elem::ncr_npr(&DecInterval::point(n), &DecInterval::point(k), perm);
+                assert!(r.is_empty() && r.dec <= Dec::Trv, "{n} {k} {perm}: {r:?}");
+            }
+        }
+    }
+    for (lo, hi) in [(-1e302, -1e301), (-f64::MAX, -1e300), (-1e20, -1e19)] {
+        let n = DecInterval::new(Interval::new(lo, hi));
+        for k in [0.0, 1.0, 2.0] {
+            let r = elem::ncr_npr(&n, &DecInterval::point(k), false);
+            assert!(r.dec <= Dec::Trv, "[{lo}, {hi}] {k}: {r:?}");
+        }
+    }
+    for src in ["nCr(x,0)", "nCr(x,2)", "nPr(x,1)"] {
+        let s = series(src, -1e302, -1e301);
+        assert!(s[0].dec <= Dec::Trv, "{src}: {:?}", s[0]);
+        assert!(!derivs_valid(&s, 1), "{src}: {s:?}");
+        assert!(app(src, -1e301).is_nan(), "{src}");
+    }
+    // nCr(−10³⁰¹, 0) is undefined, as the app has it.
+    assert!(app("nCr(-10^301,0)", 0.0).is_nan());
+    let s = series("nCr(-10^301,0)", 0.0, 0.0);
+    assert!(s[0].dec <= Dec::Trv, "{:?}", s[0]);
+    // Between the poles, and right of them, as before.
+    for (lo, hi, k) in [(-1.75, -1.25, 2.0), (-0.5, 3.0, 0.0), (2.0, 5.0, 2.0)] {
+        let n = DecInterval::new(Interval::new(lo, hi));
+        let r = elem::ncr_npr(&n, &DecInterval::point(k), false);
+        assert!(r.dec >= Dec::Dac, "[{lo}, {hi}] {k}: {r:?}");
+    }
 }

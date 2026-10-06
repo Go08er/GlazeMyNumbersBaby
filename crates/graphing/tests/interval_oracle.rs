@@ -1115,6 +1115,19 @@ fn factorials_enclose_mpfr() {
             pairs.push((*n, Interval::point(r)));
         }
     }
+    // Far below 0 every double is a negative integer, Γ's pole: undefined
+    // there (review 16: a box below −10³⁰⁰ was taken to hold none).
+    for n in [
+        Interval::new(-1e302, -1e301),
+        Interval::new(-f64::MAX, -1e300),
+        Interval::new(-1e20, -1e19),
+        Interval::point(-1e301),
+        Interval::point(-9007199254740992.0),
+    ] {
+        for &r in &rs {
+            pairs.push((n, Interval::point(r)));
+        }
+    }
     for perm in [false, true] {
         let op = move |a: &DecInterval, b: &DecInterval| elem::ncr_npr(a, b, perm);
         let truth = move |a: &Float, b: &Float| mp_ncr(a, b, perm);

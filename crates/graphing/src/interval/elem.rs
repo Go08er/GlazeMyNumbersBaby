@@ -1834,8 +1834,13 @@ pub fn ncr_npr(n: &DecInterval, r: &DecInterval, perm: bool) -> DecInterval {
             }
             acc = acc / f;
         }
-        let first = n.iv.lo().max(-1e300).ceil();
-        let negative_integer = first <= n.iv.hi() && first <= -1.0;
+        // The least integer in n's box (−∞ for one reaching −∞; past 2⁵³
+        // every double is one): a negative one is Γ's pole. (Not clipped
+        // to −10³⁰⁰: a box below it was taken to hold none, and nCr(n, 0)
+        // over [−10³⁰², −10³⁰¹] was 1, continuous, where it is nowhere
+        // defined: review 16.)
+        let first = n.iv.lo().ceil();
+        let negative_integer = first <= n.iv.hi().min(-1.0);
         if negative_integer && n.iv.is_point() {
             // Undefined there, though the polynomial isn't: a hole.
             return DecInterval::result(Interval::EMPTY, Dec::Trv, &[n, r]);
