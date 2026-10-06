@@ -29,6 +29,9 @@ pub struct CalculatorPage {
     ctx: Rc<Ctx>,
     vm: RefCell<CalculatorViewModel>,
     root: WidthBin,
+    /// The display and keypad: what keys and pastes change, and what the
+    /// History sheet covers.
+    column: gtk::Box,
     display: Display,
     modes: gtk::Stack,
     keypads: RefCell<HashMap<CalcMode, Keypad>>,
@@ -147,6 +150,7 @@ impl CalculatorPage {
             ctx: ctx.clone(),
             vm: RefCell::new(CalculatorViewModel::new()),
             root: root.clone(),
+            column: column.clone(),
             display: display.clone(),
             modes: modes.clone(),
             keypads: RefCell::default(),
@@ -1039,6 +1043,24 @@ impl CalculatorPage {
         }
     }
 
+    /// Ctrl+H (the history, in the sheet while narrow) and Ctrl+Shift+D
+    /// (clear it).
+    fn history_key(self: &Rc<Self>, action: Action) {
+        match action {
+            Action::ToggleHistory => {
+                self.panel.show_tab("history");
+                if !self.wide.get() {
+                    self.sheet.set_open(!self.sheet.is_open());
+                }
+            }
+            Action::ClearHistory => {
+                self.vm.borrow_mut().history_clear();
+                self.sync(None);
+            }
+            _ => {}
+        }
+    }
+
     fn copy_value(&self) -> String {
         let text = self.vm.borrow().copy_text();
         self.ctx.copy_to_clipboard(&text);
@@ -1105,23 +1127,34 @@ impl Page for CalculatorHandle {
                 p.vm.borrow_mut().press(b);
                 p.sync(None);
             }
-            Action::ToggleHistory => {
-                if p.wide.get() {
-                    p.panel.show_tab("history");
-                } else {
-                    p.panel.show_tab("history");
-                    p.sheet.set_open(!p.sheet.is_open());
-                }
-            }
-            Action::ClearHistory => {
-                p.vm.borrow_mut().history_clear();
-                p.sync(None);
+            Action::ToggleHistory | Action::ClearHistory => {
+                p.history_key(action);
             }
             Action::Angle(u) => p.set_angle(u),
             Action::Radix(r) => p.set_radix(r),
             Action::Word(w) => p.set_word(w),
         }
         true
+    }
+
+    fn target(&self) -> gtk::Widget {
+        self.0.column.clone().upcast()
+    }
+
+    /// The History sheet's own keys, while it covers the calculator.
+    fn layer_key_pressed(&self, kp: &KeyPress) -> bool {
+        let p = &self.0;
+        let (mode, shift) = {
+            let vm = p.vm.borrow();
+            (vm.mode(), vm.shift_mode())
+        };
+        match input::shortcut(mode, kp, shift) {
+            Some(action @ (Action::ToggleHistory | Action::ClearHistory)) => {
+                p.history_key(action);
+                true
+            }
+            _ => false,
+        }
     }
 
     fn copy(&self) -> Option<String> {

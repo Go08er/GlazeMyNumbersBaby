@@ -18,8 +18,11 @@
 //!   EditableText change (`gtkatspieditabletext.c`; the bounded paste in
 //!   `crate::paste` doesn't paste into them either).
 //!
-//! Typed keys don't reach a covered page either (`Window::install_keyboard`
-//! asks whether it is insensitive), only the window's shortcuts.
+//! Nor do keys, pastes or the window's actions reach what is covered:
+//! the window and its pages ask [`Layers::covers`], from the same record
+//! (`Window::handle_key`, `Window::paste`; `win.paste` is disabled, so not
+//! offered to assistive technology, while it would paste into a covered
+//! page).
 //!
 //! It keeps its look: an insensitive widget is drawn faded, so a covered
 //! layer carries [`INERT`], whose style (style.css) undoes that for
@@ -76,6 +79,8 @@ pub struct Layers {
     dialogs: gtk::gio::ListModel,
     scrims: RefCell<Vec<Scrim>>,
     covered: RefCell<Vec<glib::WeakRef<gtk::Widget>>>,
+    /// Told after each [`Layers::update`].
+    changed: RefCell<Vec<Box<dyn Fn()>>>,
 }
 
 impl Layers {
@@ -85,6 +90,7 @@ impl Layers {
             dialogs: win.dialogs(),
             scrims: RefCell::default(),
             covered: RefCell::default(),
+            changed: RefCell::default(),
         });
         let update = {
             let weak = Rc::downgrade(&this);
@@ -157,6 +163,24 @@ impl Layers {
         self.update();
     }
 
+    /// Whether `w` is covered now: it, or a widget holding it, is a covered
+    /// layer. The one check of what keys, pastes and the window's actions
+    /// may change, from the record [`Layers::update`] keeps (the same that
+    /// makes those layers inert), not from any widget's sensitivity.
+    pub fn covers(&self, w: &impl IsA<gtk::Widget>) -> bool {
+        let w = w.as_ref();
+        self.covered
+            .borrow()
+            .iter()
+            .filter_map(|c| c.upgrade())
+            .any(|c| c == *w || w.is_ancestor(&c))
+    }
+
+    /// Calls `f` after each change of what is covered.
+    pub fn connect_changed(&self, f: impl Fn() + 'static) {
+        self.changed.borrow_mut().push(Box::new(f));
+    }
+
     /// What is covered now.
     fn covering(&self) -> Vec<gtk::Widget> {
         let mut out = Vec::new();
@@ -213,6 +237,11 @@ impl Layers {
             mark(root, &now, covered, off);
         }
         *self.covered.borrow_mut() = now.iter().map(|w| w.downgrade()).collect();
+        if now != before {
+            for f in self.changed.borrow().iter() {
+                f();
+            }
+        }
     }
 }
 
