@@ -10,15 +10,22 @@
 //! gets `row.activate`, offered while the row is activatable, which does
 //! what Enter does.
 //!
-//! That happens when a widget is realized, before assistive technology
-//! can reach it ([`install`]). Like every other action, it is refused
-//! while what holds it is covered (`crate::inert`: insensitive).
+//! A label offers every action GtkLabel installs (`gtklabel.c`) until it
+//! is selected for the first time, which a label that can't be never is:
+//! paste, cut and delete, which do nothing in a label, and copy,
+//! select-all and its menu, which need a selection or a selectable label.
+//! Each label offers only what it can do, by GTK's own rule for one that
+//! has been selected ([`quiet_label`]).
+//!
+//! Both happen when a widget is realized, before assistive technology
+//! can reach it ([`install`]). Like every other action, these are refused
+//! while what holds them is covered (`crate::inert`: insensitive).
 
 use adw::prelude::*;
 use glib::translate::{Borrowed, FromGlibPtrBorrow, IntoGlib};
 use gtk::{gio, glib};
 
-/// Marks a widget given its actions.
+/// Marks a widget given its actions, or a label watched.
 const DONE: &str = "gmnb-a11y-operable";
 
 /// Gives `widget` the action `group.name`, which calls `f`; returns it
@@ -42,9 +49,13 @@ pub fn operable<W: IsA<gtk::Widget>>(
     action
 }
 
-/// A row gets the action it lacks.
+/// A row gets the action it lacks; a label offers only what it can do.
 fn realized(widget: &gtk::Widget) {
-    // SAFETY: only ever set, and read, here, as ().
+    if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+        quiet_label(label);
+        return;
+    }
+    // SAFETY: only ever set, and read, here and in quiet_label, as ().
     unsafe {
         if widget.data::<()>(DONE).is_some() {
             return;
@@ -62,6 +73,39 @@ fn realized(widget: &gtk::Widget) {
     }
     // SAFETY: as above.
     unsafe { widget.set_data(DONE, ()) };
+}
+
+/// Enables a label's actions as GtkLabel does once it has been selected
+/// (`gtk_label_update_actions`): paste, cut and delete never; copy with a
+/// selection; select-all for a selectable label; its menu where it has one
+/// (it is selectable, or has links); a link's actions only for a label
+/// with links (GTK keeps those up to date itself). Again whenever it
+/// becomes selectable or gets new text.
+fn quiet_label(label: &gtk::Label) {
+    fn apply(l: &gtk::Label) {
+        let links = l.uses_markup() && l.label().contains("<a ");
+        for action in ["clipboard.cut", "clipboard.paste", "selection.delete"] {
+            l.action_set_enabled(action, false);
+        }
+        l.action_set_enabled("clipboard.copy", l.selection_bounds().is_some());
+        l.action_set_enabled("selection.select-all", l.is_selectable());
+        l.action_set_enabled("menu.popup", l.is_selectable() || links);
+        if !links {
+            l.action_set_enabled("link.open", false);
+            l.action_set_enabled("link.copy", false);
+        }
+    }
+    apply(label);
+    // SAFETY: only ever set, and read, here and in realized, as ().
+    unsafe {
+        if label.data::<()>(DONE).is_some() {
+            return;
+        }
+        label.set_data(DONE, ());
+    }
+    for property in ["selectable", "label", "use-markup"] {
+        label.connect_notify_local(Some(property), |l, _| apply(l));
+    }
 }
 
 /// Watches every widget as it is realized ([`realized`]). Call once, at
