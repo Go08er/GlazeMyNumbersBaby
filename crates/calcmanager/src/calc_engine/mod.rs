@@ -110,6 +110,13 @@ pub struct Continuation {
     /// the operand before it, in the commands; the other modes have no `%`,
     /// the one key that reads it with no operator pending.
     pub left: Option<OpndCommand>,
+    /// No number is being typed and the input holds none. Otherwise the
+    /// number typed last stays in it, unseen, until the next is begun;
+    /// whenever 0 is shown (`56 − 56 =`) that makes the engine's
+    /// `IsInputEmpty` false, so Scientific and Programmer mode show their C
+    /// key as CE and press CE with it. What the restore types needn't leave
+    /// the input so, so it is set with [`CalcEngine::set_input_empty`].
+    pub empty_input: bool,
 }
 
 /// Extension: see [`Continuation::entry`].
@@ -558,6 +565,22 @@ impl CalcEngine {
                     && self.n_temp_com != IDC_SIGN),
             carry: self.carry_bit != 0,
             left,
+            empty_input: !self.b_record && self.input.is_empty(),
+        }
+    }
+
+    /// Extension: empties the input, or keeps a number in it, while no
+    /// number is being typed (see [`Continuation::empty_input`]), for a
+    /// restored session. The kept number's digits are never read: the next
+    /// digit or point starts the input over. Nothing is displayed.
+    pub fn set_input_empty(&mut self, empty: bool) {
+        if self.b_record || empty == self.input.is_empty() {
+            return;
+        }
+        if empty {
+            self.input.clear();
+        } else {
+            self.input.try_add_decimal_pt();
         }
     }
 
@@ -762,6 +785,8 @@ impl CalcEngine {
         exact("last_command", last);
         if self.b_record {
             exact("input", self.input.to_string(self.radix));
+        } else {
+            exact("input_empty", self.input.is_empty().to_string());
         }
         // Each value as held (Programmer mode: in 64 bits, so -1 and 2^64 - 1
         // are one value) and as the word size shows it.

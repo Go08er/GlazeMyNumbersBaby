@@ -1171,6 +1171,39 @@ fn replayed_operations_leave_the_angle_unit_and_operands_as_shown() {
     );
 }
 
+/// Found by the randomized restore tester: the input keeps the number typed
+/// last until the next is begun, and while 0 is shown that makes the
+/// Scientific and Programmer C key CE (`IsInputEmpty`). `0 MS 7 + MR`
+/// shows 0 with 7 kept, so the key clears the entry and `2 =` gives 9;
+/// the restore typed the 0 shown, which left the input empty, and the key
+/// cleared everything (2). It is saved (`"ie"`) and set directly.
+#[test]
+fn the_number_kept_in_the_input_is_restored() {
+    use Button::*;
+    for mode in [CalcMode::Scientific, CalcMode::Programmer] {
+        let mut original = new_vm();
+        original.set_mode(mode);
+        press_all(&mut original, &[Zero, Memory, Seven, Add, MemoryRecall]);
+        assert!(original.shows_clear_entry(), "{mode:?}");
+        let state = original.save_state();
+        drop(original);
+        let mut restored = new_vm();
+        assert!(restored.restore_state_checked(&state), "{mode:?}");
+        assert!(restored.shows_clear_entry(), "{mode:?}: the C key is CE");
+        press_all(&mut restored, &[ClearEntry, Two, Equals]);
+        assert_eq!(restored.display_value(), "9", "{mode:?}");
+    }
+    // An input emptied by C stays so.
+    let mut vm = new_vm();
+    vm.set_mode(CalcMode::Scientific);
+    press_all(&mut vm, &[Seven, Clear, MemoryRecall, Memory]);
+    let state = vm.save_state();
+    let mut restored = new_vm();
+    restored.restore_state(&state);
+    assert_eq!(restored.shows_clear_entry(), vm.shows_clear_entry());
+    assert_eq!(restored.save_state(), state);
+}
+
 /// R14-M-05: RoL and RoR through carry shift in the carry the last one
 /// left, which no key sets: it is saved (`"cy"`) and set directly.
 #[test]

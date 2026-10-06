@@ -86,7 +86,11 @@
 //! an operand like `"eq"`'s: after `=` it is the result, which `%`
 //! multiplies by (`2 + 3 = 7 %` is 0.35), while what `"eq"` sets up leaves
 //! another; it is set directly where the restore didn't leave it so.
-//! Upstream restores neither.
+//! `"ie": true` says no number is being typed and the input holds none;
+//! otherwise it keeps the number typed last, unseen, and whenever 0 is
+//! shown (`56 − 56 =`) Scientific and Programmer mode's C key is then CE
+//! (`IsInputEmpty`). It is set directly too. Upstream restores none of
+//! these.
 //!
 //! # The contract
 //!
@@ -327,6 +331,8 @@ pub(crate) struct ContinuationSnapshot {
     /// `"lv"`: the left operand, an operand (Standard only, with no
     /// operator pending).
     pub(crate) left: Option<ExpressionCommandWrapper>,
+    /// `"ie"`: no number is being typed and the input holds none.
+    pub(crate) empty_input: bool,
 }
 
 /// `ApplicationSnapshot`
@@ -646,6 +652,9 @@ impl ApplicationSnapshot {
                 if let Some(left) = &k.left {
                     c.insert("lv".into(), ExpressionCommandSerializer::serialize(left));
                 }
+                if k.empty_input {
+                    c.insert("ie".into(), json!(true));
+                }
                 o.insert("k".into(), Value::Object(c));
             }
             root.insert("x".into(), Value::Object(o));
@@ -786,6 +795,7 @@ impl ApplicationSnapshot {
                                 .filter(|v| !v.is_null())
                                 .map(ExpressionCommandDeserializer::deserialize)
                                 .transpose()?,
+                            empty_input: boolean(k.get("ie"))?,
                         })
                     }
                 };
@@ -1406,6 +1416,13 @@ impl StandardCalculatorViewModel {
         {
             let _ = self.with_manager(|m| m.set_left_operand(&operand));
         }
+        // Extension: whether the input holds the number typed last (with 0
+        // shown, the C key is then CE), which what the restore typed needn't
+        // have left so. Snapshots without "k" are left as replayed.
+        if !engine_error && let Some(k) = continuation {
+            self.with_manager(|m| m.set_input_empty(k.empty_input));
+            self.on_input_changed();
+        }
         if engine_error && let Some(expression) = &snapshot.expression_display {
             // The parentheses the expression line leaves open, as shown
             // while the error is (the engine's are gone with it).
@@ -1511,6 +1528,7 @@ impl StandardCalculatorViewModel {
             left: c.left.map(|operand| {
                 ExpressionCommandWrapper::from_command(&ExpressionCommand::Operand(operand))
             }),
+            empty_input: c.empty_input,
         }
     }
 

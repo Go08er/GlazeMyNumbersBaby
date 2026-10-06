@@ -775,6 +775,11 @@ impl CalculatorManager {
             .unwrap_or_default()
     }
 
+    /// Extension: see [`CalcEngine::set_input_empty`].
+    pub fn set_input_empty(&mut self, empty: bool) {
+        self.current_engine().set_input_empty(empty);
+    }
+
     /// Extension: see [`CalcEngine::set_left_operand`].
     pub fn set_left_operand(&mut self, operand: &OpndCommand) -> CalcResult<bool> {
         self.current_engine().set_left_operand(operand)

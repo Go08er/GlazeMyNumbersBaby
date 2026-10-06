@@ -75,6 +75,13 @@ fn shift_key(mode: ShiftMode, left: bool) -> Button {
 fn act(vm: &mut CalculatorViewModel, acts: &[Act]) {
     for a in acts {
         match *a {
+            // Outside Standard mode one key is C or, while a number is
+            // being typed, CE; Esc presses it too.
+            Act::Key(Button::Clear)
+                if vm.mode() != CalcMode::Standard && vm.shows_clear_entry() =>
+            {
+                vm.press(Button::ClearEntry)
+            }
             // Both apps ignore a key whose button is disabled.
             Act::Key(b) if !vm.is_enabled(b) => {}
             Act::Key(b) => vm.press(b),
@@ -104,13 +111,14 @@ fn act(vm: &mut CalculatorViewModel, acts: &[Act]) {
 
 fn observed(vm: &CalculatorViewModel) -> String {
     let mut s = format!(
-        "{:?} {:?} expression {:?} error {} parens {} fe {} {} {:?} {:?} {:?} {:?}\n\
+        "{:?} {:?} expression {:?} error {} parens {} ce {} fe {} {} {:?} {:?} {:?} {:?}\n\
          memory {:?}\nhistory {:?}",
         vm.mode(),
         vm.display_value(),
         vm.expression(),
         vm.is_error(),
         vm.open_parens(),
+        vm.shows_clear_entry(),
         vm.is_fe(),
         vm.is_enabled(Button::FToE),
         vm.angle_unit(),

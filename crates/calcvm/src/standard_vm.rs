@@ -952,7 +952,7 @@ impl StandardCalculatorViewModel {
     }
 
     /// `OnInputChanged()`.
-    fn on_input_changed(&mut self) {
+    pub(crate) fn on_input_changed(&mut self) {
         self.is_input_empty = self.standard_calculator_manager.is_input_empty();
     }
 
