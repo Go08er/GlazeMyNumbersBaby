@@ -500,6 +500,22 @@ impl GraphingPage {
         }
     }
 
+    /// Shows whether a row's equation is drawn, as the graph has it (a
+    /// toggle, an edit, a restored session): its swatch full or faded,
+    /// and, to assistive technology, a toggle button pressed while the
+    /// equation is drawn, as in DGMNB (R15-L-03).
+    fn show_drawn(&self, row: &Row) {
+        let on = self.graph.borrow().is_line_enabled(row.id);
+        row.swatch.set_opacity(if on { 1.0 } else { 0.35 });
+        let pressed = if on {
+            gtk::AccessibleTristate::True
+        } else {
+            gtk::AccessibleTristate::False
+        };
+        row.swatch
+            .update_state(&[gtk::accessible::State::Pressed(pressed)]);
+    }
+
     fn add_equation(self: &Rc<Self>, text: &str) -> Option<Rc<Row>> {
         if self.graph.borrow().len() >= session::MAX_EQUATIONS {
             self.ctx.toast("You can graph up to 14 equations");
@@ -510,11 +526,15 @@ impl GraphingPage {
         let color = self.next_color.get();
         self.next_color.set(color + 1);
 
+        // A toggle for assistive technology: pressed while the equation
+        // is drawn (show_drawn).
         let swatch = gtk::Button::builder()
             .css_classes(["wc-swatch"])
             .tooltip_text("Show or hide")
+            .accessible_role(gtk::AccessibleRole::ToggleButton)
             .valign(gtk::Align::Center)
             .build();
+        swatch.update_property(&[gtk::accessible::Property::Label("Show or hide")]);
         let entry = gtk::Entry::builder()
             // Plenty for any real equation; also bounds parse/compile work.
             .max_length(session::MAX_EQUATION_CHARS as i32)
@@ -560,6 +580,7 @@ impl GraphingPage {
         });
         style.set_popover(Some(&self.style_popover(&row)));
         self.paint_swatch(&row);
+        self.show_drawn(&row);
         let s = self.ctx.hub.scheme();
         self.graph_view
             .set_color(id, s.series[color % s.series.len()]);
@@ -605,11 +626,13 @@ impl GraphingPage {
             }
         });
         let weak = Rc::downgrade(self);
-        swatch.connect_clicked(move |b| {
-            if let Some(p) = weak.upgrade() {
+        // Weak: the row holds this button, which holds this closure.
+        let r = Rc::downgrade(&row);
+        swatch.connect_clicked(move |_| {
+            if let (Some(p), Some(r)) = (weak.upgrade(), r.upgrade()) {
                 let on = !p.graph.borrow().is_line_enabled(id);
                 p.graph.borrow_mut().set_line_enabled(id, on);
-                b.set_opacity(if on { 1.0 } else { 0.35 });
+                p.show_drawn(&r);
                 // A hidden equation's variables aren't listed (kept, as
                 // they were, for when it is shown).
                 p.sync_variables();
@@ -724,7 +747,11 @@ impl GraphingPage {
             .borrow()
             .text(id)
             .is_none_or(|t| t.trim().is_empty());
+        // An edit draws a hidden equation again (as upstream's does).
         self.graph.borrow_mut().set_equation_text(id, text);
+        if let Some(row) = self.rows.borrow().iter().find(|r| r.id == id) {
+            self.show_drawn(row);
+        }
         let err = self.show_error(id);
         self.graph_view.invalidate();
         if was_empty && err.is_none() {
@@ -1167,7 +1194,7 @@ impl GraphingPage {
                 }
                 if eq.hidden {
                     self.graph.borrow_mut().set_line_enabled(row.id, false);
-                    row.swatch.set_opacity(0.35);
+                    self.show_drawn(&row);
                 }
             }
         }
