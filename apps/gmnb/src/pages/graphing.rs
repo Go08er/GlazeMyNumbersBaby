@@ -360,10 +360,25 @@ impl GraphingPage {
     }
 
     /// Rounds each number typed in an equation to `p` (Settings' "Number
-    /// precision"), then plots and analyses afresh.
+    /// precision"), then shows the equations as read afresh.
     fn set_number_precision(self: &Rc<Self>, p: appcore::graph::NumberPrecision) {
         self.graph.borrow_mut().set_literal_digits(p.digits());
+        self.equations_reread();
+    }
+
+    /// The graph read every equation afresh (Number precision, the trig
+    /// unit): each row's error, the variables, the plot and the analysis
+    /// follow, as after an edit (R14-M-01). A row's error can come or go
+    /// with no edit (14 digits make `1.0000000000000001-1` zero), and with
+    /// it the variables the graph lists (`Graph::refresh` keeps a slider
+    /// for an equation not drawn for now and lists it again as it was).
+    fn equations_reread(self: &Rc<Self>) {
+        let ids: Vec<EquationId> = self.rows.borrow().iter().map(|r| r.id).collect();
+        for id in ids {
+            self.show_error(id);
+        }
         self.graph_view.invalidate();
+        self.sync_variables();
         self.analysis_inputs_changed();
     }
 
@@ -595,6 +610,9 @@ impl GraphingPage {
                 let on = !p.graph.borrow().is_line_enabled(id);
                 p.graph.borrow_mut().set_line_enabled(id, on);
                 b.set_opacity(if on { 1.0 } else { 0.35 });
+                // A hidden equation's variables aren't listed (kept, as
+                // they were, for when it is shown).
+                p.sync_variables();
                 p.graph_view.invalidate();
                 if on {
                     p.graph_view.animate_draw(id);
@@ -707,9 +725,22 @@ impl GraphingPage {
             .text(id)
             .is_none_or(|t| t.trim().is_empty());
         self.graph.borrow_mut().set_equation_text(id, text);
+        let err = self.show_error(id);
+        self.graph_view.invalidate();
+        if was_empty && err.is_none() {
+            self.graph_view.animate_draw(id);
+        }
+        self.sync_variables();
+        if self.analysis_id.get() == Some(id) {
+            self.analysis_inputs_changed();
+        }
+    }
+
+    /// Shows the equation's error under its row, or none; returns it.
+    fn show_error(&self, id: EquationId) -> Option<graphing::EquationError> {
         let err = self.graph.borrow().error(id).cloned();
         if let Some(row) = self.rows.borrow().iter().find(|r| r.id == id) {
-            let show = err.is_some() && !text.trim().is_empty();
+            let show = err.is_some() && !row.entry.text().trim().is_empty();
             row.error.set_visible(show);
             if let Some(e) = &err {
                 row.error.set_text(e.message());
@@ -720,14 +751,7 @@ impl GraphingPage {
                 row.root.remove_css_class("wc-has-error");
             }
         }
-        self.graph_view.invalidate();
-        if was_empty && err.is_none() {
-            self.graph_view.animate_draw(id);
-        }
-        self.sync_variables();
-        if self.analysis_id.get() == Some(id) {
-            self.analysis_inputs_changed();
-        }
+        err
     }
 
     fn sync_variables(self: &Rc<Self>) {
@@ -1110,8 +1134,7 @@ impl GraphingPage {
                     _ => TrigUnit::Radians,
                 };
                 p.graph.borrow_mut().set_trig_unit(unit);
-                p.graph_view.invalidate();
-                p.analysis_inputs_changed();
+                p.equations_reread();
             }
         });
         let gv = self.graph_view.clone();
