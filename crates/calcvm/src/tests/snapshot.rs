@@ -1849,6 +1849,30 @@ fn over_long_snapshots_are_refused_or_restored_as_their_value() {
     assert!(start.elapsed() < std::time::Duration::from_secs(20));
 }
 
+/// An upstream snapshot (without `"x"`) loses a History item too long to
+/// replay and is restored otherwise (R17-L-01); only a calculation that long
+/// makes it refused (above), since it can't mark a new calculation.
+#[test]
+fn an_upstream_snapshot_loses_only_an_over_long_history_item() {
+    let long_item = json!({
+        "t": [{ "t": "1", "c": 0 }, { "t": "=", "c": -1 }],
+        "c": [operand(&[131; 16_384])], "e": "1 =", "r": "1",
+    });
+    let mut upstream: Value =
+        serde_json::from_str(&snapshot_json(1, json!([]), json!({}))).unwrap();
+    upstream.as_object_mut().unwrap().remove("x");
+    upstream["s"]["m"]["h"] = json!([long_item, one_plus_one_item()]);
+    upstream["s"]["p"]["d"] = json!("42");
+
+    let mut vm = new_vm();
+    vm.restore_state(&upstream.to_string());
+    assert_eq!(vm.mode(), CalcMode::Scientific);
+    assert_eq!(vm.display_value(), "42");
+    let history = vm.history();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].expression, "1 + 1 =");
+}
+
 /// Upstream accepts the Programmer-only operators in every mode; outside
 /// Programmer mode the integer guard is off and a right shift by 10^7 takes
 /// minutes (by 2^31 − 1, forever).

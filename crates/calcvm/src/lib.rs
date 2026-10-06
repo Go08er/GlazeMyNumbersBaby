@@ -615,8 +615,9 @@ impl CalculatorViewModel {
     /// leaves the calculator unchanged. What a save would have left out (a
     /// History item or calculation too long to replay, see "Size" in the
     /// `snapshot` module) is left out first, so a state saved before that
-    /// rule loses only it. A state of any size is restored; the next save
-    /// trims it.
+    /// rule loses only it; an upstream snapshot loses such a History item
+    /// too, but one with such a calculation is refused. A state of any size
+    /// is restored; the next save trims it.
     pub fn restore_state(&mut self, state: &str) {
         self.restore_state_checked(state);
     }

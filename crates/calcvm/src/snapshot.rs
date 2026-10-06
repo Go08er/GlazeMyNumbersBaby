@@ -142,8 +142,12 @@
 //!    whose commands replay more than [`MAX_RESTORED_KEYS`] keys is dropped,
 //!    and a calculation whose display commands or expression do is saved as
 //!    a new calculation from the value shown (`"nr"`, as the contract
-//!    above restores it). The restore does the same with a snapshot saved
-//!    before this rule (one with `"x"`; an upstream snapshot is refused).
+//!    above restores it). The restore does the same before it checks a
+//!    snapshot, so one saved before this rule loses only that. It drops
+//!    such a History item from any snapshot, an upstream one's
+//!    `"s"."m"."h"` too; but only `"x"` can mark a new calculation, so an
+//!    upstream snapshot (without it) whose calculation is that long is still
+//!    refused as a whole.
 //! 2. History items are dropped, oldest first, from whichever mode's
 //!    History takes more bytes (on a tie, from the mode not shown; in
 //!    Programmer mode, from the one `"hm"` doesn't name), until the state
@@ -932,10 +936,11 @@ pub(crate) struct SnapshotValidator;
 
 /// Extension: the most engine keys one command list (the display commands,
 /// the expression, a history item) may replay. A longer History item is
-/// left out, and a longer calculation comes back as a new calculation from
-/// the value shown, when saved and when restored (see "Size" in the module
-/// docs); an upstream snapshot (without `"x"`) with a longer one is rejected
-/// as a whole, like any other invalid snapshot. Hand-typed calculations stay
+/// left out, from any snapshot, and a longer calculation comes back as a new
+/// calculation from the value shown, when saved and when restored (see
+/// "Size" in the module docs). An upstream snapshot (without `"x"`) can't
+/// mark a new calculation, so one with a longer calculation is rejected as
+/// a whole, like any other invalid snapshot. Hand-typed calculations stay
 /// far below it, and 40 pastes of a 100-term sum (about 12,000 keys) still
 /// fit. With display updates deferred, replay is linear:
 /// at the limit, cheap keys restore in about 30 ms (Programmer, whose number
@@ -1291,10 +1296,12 @@ fn restorable(item: &CalcManagerHistoryItem) -> bool {
 impl ApplicationSnapshot {
     /// Step 1 of "Size" (see the module docs): leaves out what the restore
     /// can't take, which would make it refuse the whole snapshot. A History
-    /// item that replays more than [`MAX_RESTORED_KEYS`] keys is dropped; a
+    /// item that replays more than [`MAX_RESTORED_KEYS`] keys is dropped,
+    /// from any snapshot (an upstream one's `"s"."m"."h"` too); a
     /// calculation whose display commands or expression do becomes a new
     /// calculation from the value shown, if the snapshot is gmnb's (an
-    /// upstream one, without `"x"`, is left to be refused).
+    /// upstream one, without `"x"`, can't say so, and is left to be
+    /// refused).
     pub(crate) fn leave_out_unrestorable(&mut self) {
         let Some(standard) = self.standard_calculator.as_mut() else {
             return;
