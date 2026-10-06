@@ -10,6 +10,12 @@
 //! (the winner on a box taken for the winner beside it, though the loser
 //! jumps there, or is defined there alone).
 //!
+//! R15-L-01: with c = ⌊√(sin²4 + cos²4 − 1 − 10⁻³⁰)⌋, nowhere defined
+//! (its radicand is −10⁻³⁰), `limit_at` gave c + 1 the limit 1 both ways
+//! and e^(ln x + c)/x the limit 1 at +∞: a constant's undecorated
+//! enclosure, the point 0, was taken for a known 0, and the tail check
+//! asked only for a nonempty enclosure.
+//!
 //! Question 1: counts of whole numbers that are doubles were refused once
 //! past the doubles (1026 bits), those of numbers no double holds only past
 //! the 2¹⁴-bit cap: nCr(2¹⁰⁰⁰, 2) over its own value was unknown. Now one
@@ -111,6 +117,52 @@ fn a_winner_beside_the_box_needs_a_continuous_loser() {
     ] {
         let s = series(src, x, x);
         assert!(derivs_valid(&s, 3), "{src}: {s:?}");
+    }
+}
+
+/// R15-L-01: a limit only of a function proven defined on a tail, each of
+/// its constants proven defined (Def or better), not merely enclosed.
+#[test]
+fn a_limit_needs_its_constants_defined() {
+    use graphing::simplify::{Dir, Limit, PiQ, Q, Settings, limit_at};
+    let lim = |src: &str, dir: Dir| {
+        let eq = Equation::parse(&format!("y={src}")).unwrap();
+        let opts = CompileOptions::default();
+        limit_at(eq.explicit().unwrap().1, dir, &Settings::new(&opts))
+    };
+    let c = "floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30)))";
+    for (src, dirs) in [
+        (format!("{c}+1"), &[Dir::NegInf, Dir::PosInf][..]),
+        (format!("exp(ln(x)+{c})/x"), &[Dir::PosInf][..]),
+        (format!("{c}*x+1/x"), &[Dir::NegInf, Dir::PosInf][..]),
+        (format!("exp(-x)+{c}"), &[Dir::PosInf][..]),
+        (format!("atan(x)^({c}+2)"), &[Dir::NegInf, Dir::PosInf][..]),
+    ] {
+        for &dir in dirs {
+            assert_eq!(lim(&src, dir), Limit::Unknown, "{src} at {dir:?}");
+        }
+    }
+    // Its value nowhere: the scalar and the reference agree it is undefined.
+    let c1 = format!("{c}+1");
+    assert!(value(&c1, 0.0, None).is_nan());
+    assert!(matches!(reference(&c1, 0.0, None), R::Undef));
+    // Constants proven defined: as before.
+    let one = Limit::Exact(PiQ { q: Q::ONE, k: 0 });
+    assert_eq!(lim("1/(x^2-x)+1", Dir::PosInf), one);
+    for (src, want) in [
+        ("exp(-x)+1", 1.0),
+        ("floor(sqrt(2))+1/x", 1.0),
+        ("exp(ln(x)+1)/x", std::f64::consts::E),
+        (
+            "atan(x)+sqrt(2)",
+            std::f64::consts::FRAC_PI_2 + std::f64::consts::SQRT_2,
+        ),
+    ] {
+        match lim(src, Dir::PosInf) {
+            Limit::Approx(i) => assert!(i.lo() <= want && want <= i.hi(), "{src}: {i:?}"),
+            Limit::Exact(q) => assert!((q.to_f64() - want).abs() < 1e-12, "{src}: {q:?}"),
+            other => panic!("{src}: {other:?}"),
+        }
     }
 }
 

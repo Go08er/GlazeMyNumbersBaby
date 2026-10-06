@@ -217,13 +217,26 @@ enum Asy {
     Unknown,
 }
 
-struct Cx {
+struct Cx<'a> {
     unit: TrigUnit,
     facts: Facts,
+    /// The angle unit and sliders, for the decorated enclosures that
+    /// prove a constant defined.
+    opts: crate::compile::CompileOptions<'a>,
 }
 
-impl Cx {
+impl Cx<'_> {
+    /// An x-free part's term: only one proven defined (decorated Def or
+    /// better), for one possibly undefined makes f undefined everywhere.
+    /// ⌊√(sin²4 + cos²4 − 1 − 10⁻³⁰)⌋ is nowhere defined, though its
+    /// undecorated enclosure is the point 0 (review 15, R15-L-01: it was
+    /// taken for 0, and c + 1 had the limit 1).
     fn constant(&self, e: &Expr) -> Asy {
+        let ctx = crate::interval::Ctx::new(self.opts);
+        let d = crate::interval::enclose(e, Interval::point(0.0), &ctx);
+        if d.is_empty() || d.dec < crate::interval::Dec::Def {
+            return Asy::Unknown;
+        }
         if let Some(v) = exact_constant(e) {
             return if v.q.is_zero() {
                 Asy::Zero
@@ -605,7 +618,7 @@ fn exp_log(c: Q, rest: Asy) -> Asy {
 /// ln(u) with u ~ a·x^p (ln(u) = p·ln x + ln a + o(1)); anything else is
 /// all R (c = 0), so a logarithm hidden in it (ln(x)·(1 + 1/x), log x)
 /// leaves R of ln x's own scale.
-fn log_part(e: &Expr, cx: &Cx) -> (Q, Asy) {
+fn log_part(e: &Expr, cx: &Cx<'_>) -> (Q, Asy) {
     let generic = || (Q::ZERO, asy(e, cx));
     if !e.contains_x() {
         return (Q::ZERO, cx.constant(e));
@@ -756,7 +769,7 @@ fn exp_of_growing(t: Term) -> Asy {
     Asy::Unknown
 }
 
-fn asy(e: &Expr, cx: &Cx) -> Asy {
+fn asy(e: &Expr, cx: &Cx<'_>) -> Asy {
     if !e.contains_x() {
         return cx.constant(e);
     }
@@ -969,12 +982,15 @@ fn asy(e: &Expr, cx: &Cx) -> Asy {
 /// The limit of `e` as x → ±∞ (`Unknown` when not proven).
 ///
 /// A limit is a value f approaches on a tail of its domain, so one is
-/// given only where f is defined on a whole tail (x > M, or x < M at −∞):
-/// every leading term found stands for a part defined there ("unknown"
-/// covers anything not known to be), and as a check besides, f's
-/// enclosure over [2⁶⁴, +∞) (of f(−x) at −∞) must not be empty, as it is
-/// where f is defined nowhere out there (review 14, R14-L-01: e^(0·ln(−x))
-/// and e^(ln x + 0·ln(−x))/x had the limit 1 at +∞).
+/// given only where f is proven defined on a whole tail (x > M, or x < M
+/// at −∞): a rational function with exact coefficients is; anything else
+/// must have a decorated enclosure over [2⁶⁴, +∞) (of f(−x) at −∞) that
+/// is Def or better, not merely nonempty (review 14, R14-L-01:
+/// e^(0·ln(−x)) and e^(ln x + 0·ln(−x))/x had the limit 1 at +∞; review
+/// 15, R15-L-01: so did e^(ln x + c)/x for a constant c defined nowhere,
+/// its enclosure nonempty). Every leading term found stands for a part
+/// defined there ("unknown" covers anything not known to be), each
+/// constant one proven defined.
 pub fn limit(
     e: &Expr,
     dir: Dir,
@@ -989,13 +1005,8 @@ pub fn limit(
             (n, lit.enclose(v))
         })
         .collect();
-    let toward = match dir {
-        Dir::PosInf => e.clone(),
-        Dir::NegInf => e.map(&|n| matches!(n, Expr::X).then(|| Expr::Neg(Box::new(Expr::X)))),
-    };
-    if no_tail(&toward, unit, &vars) {
-        return Limit::Unknown;
-    }
+    // A rational function with exact coefficients is defined on a tail:
+    // its divisor, no zero polynomial, has finitely many zeros.
     if let Some(f) = rational_form(e) {
         return match f.reduced.limit(dir) {
             Some(RationalLimit::Finite(q)) => Limit::Exact(PiQ { q, k: 0 }),
@@ -1004,13 +1015,24 @@ pub fn limit(
             None => Limit::Unknown,
         };
     }
+    let toward = match dir {
+        Dir::PosInf => e.clone(),
+        Dir::NegInf => e.map(&|n| matches!(n, Expr::X).then(|| Expr::Neg(Box::new(Expr::X)))),
+    };
+    let opts = crate::compile::CompileOptions {
+        trig_unit: unit,
+        variables,
+    };
+    if !defined_tail(&toward, opts) {
+        return Limit::Unknown;
+    }
     let e = toward;
     let facts = Facts {
         unit,
         x: Interval::ENTIRE,
         vars,
     };
-    let cx = Cx { unit, facts };
+    let cx = Cx { unit, facts, opts };
     let first = read_limit(asy(&e, &cx));
     if first != Limit::Unknown {
         return first;
@@ -1029,19 +1051,15 @@ pub fn limit(
     Limit::Unknown
 }
 
-/// Whether `e` is proven defined nowhere on [2⁶⁴, +∞): its enclosure
-/// there is empty. (Not that it is defined on a tail: that is for the
-/// limit's own terms to show.)
-fn no_tail(e: &Expr, unit: TrigUnit, vars: &[(String, Interval)]) -> bool {
-    let Ok(rec) = to_rec(e) else {
-        return false;
-    };
-    let facts = Facts {
-        unit,
-        x: Interval::new(18446744073709551616.0, f64::INFINITY),
-        vars: vars.to_vec(),
-    };
-    rec_interval(&rec, &facts).is_empty()
+/// Whether `e` is proven defined on all of [2⁶⁴, +∞), a tail of its
+/// domain: its decorated enclosure there is Def or better. Not merely
+/// nonempty, which an enclosure of a part possibly undefined everywhere
+/// still is (review 15, R15-L-01: e^(ln x + ⌊√(−10⁻³⁰)⌋)/x, its constant
+/// enclosed by the point 0, had the limit 1 at +∞).
+fn defined_tail(e: &Expr, opts: crate::compile::CompileOptions<'_>) -> bool {
+    let tail = Interval::new(18446744073709551616.0, f64::INFINITY);
+    let d = crate::interval::enclose(e, tail, &crate::interval::Ctx::new(opts));
+    !d.is_empty() && d.dec >= crate::interval::Dec::Def
 }
 
 /// The integers c (|c| ≥ 2⁸, below 2⁵³) at which an exponential's affine
