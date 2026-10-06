@@ -304,6 +304,13 @@ pub struct Fun<'a> {
     /// analyses; not the panel's own checks).
     pub simplifier: bool,
     pub opts: CompileOptions<'a>,
+    /// Trees as evaluated: each with its arithmetic on literals and
+    /// sliders alone folded exactly (`compile::fold_literals`, as the plot's
+    /// interval form is), where that changes it. Off, the divisor
+    /// 1.0000000000000001 − 1 is 10⁻¹⁶, where each literal enclosed alone
+    /// gives [0, 2⁻⁵²]. (A few trees: f's, its simplified form, f′, f″, the
+    /// side conditions'.)
+    folds: std::cell::RefCell<Vec<(Expr, Option<std::sync::Arc<Expr>>)>>,
     evals: Cell<u64>,
     /// The current phase's limit.
     budget: Cell<u64>,
@@ -332,6 +339,7 @@ impl<'a> Fun<'a> {
             numerators: None,
             simplifier: false,
             opts,
+            folds: std::cell::RefCell::new(Vec::new()),
             evals: Cell::new(0),
             budget: Cell::new(budget),
             total: Cell::new(budget),
@@ -679,11 +687,46 @@ impl<'a> Fun<'a> {
         Ctx::new(self.opts)
     }
 
+    /// `e` with its arithmetic on literals alone folded ([`Fun::folds`]),
+    /// or `None` where nothing folds.
+    fn folded(&self, e: &Expr) -> Option<std::sync::Arc<Expr>> {
+        if let Some((_, f)) = self.folds.borrow().iter().find(|(k, _)| k == e) {
+            return f.clone();
+        }
+        let f = crate::compile::fold_literals(e, &self.opts);
+        let f = (f != *e).then(|| std::sync::Arc::new(f));
+        let mut folds = self.folds.borrow_mut();
+        // (Bounded: past that, folded afresh each time.)
+        if folds.len() < 64 {
+            folds.push((e.clone(), f.clone()));
+        }
+        f
+    }
+
+    /// Taylor coefficients of `e` over the box; where they leave e
+    /// possibly undefined there, merged with those of `e` with its literal
+    /// arithmetic folded exactly, if that changes it (off, f = x +
+    /// 10⁻¹⁶/(1.0000000000000001 − 1) is x + 1, though its divisor
+    /// enclosed literal by literal holds 0). Each encloses f's. (Not
+    /// otherwise: an enclosure as tight as the exact value can't be shown
+    /// any tighter at an open end, and the replay would leave a bound
+    /// there unconfirmed.)
+    fn taylor_of(&self, e: &Expr, x: Interval, n: usize) -> Series {
+        let s = taylor(e, x, n, &self.ctx());
+        if s[0].is_empty() || s[0].dec >= crate::interval::Dec::Def {
+            return s;
+        }
+        match self.folded(e) {
+            Some(f) => merge(s, &taylor(&f, x, n, &self.ctx())),
+            None => s,
+        }
+    }
+
     /// Taylor coefficients of `e` (a sub-tree of `expr`) over the box, up
     /// to order `n`.
     pub fn ser_of(&self, e: &Expr, x: Interval, n: usize) -> Result<Series, Stop> {
         self.charge(e, n)?;
-        let s = taylor(e, x, n, &self.ctx());
+        let s = self.taylor_of(e, x, n);
         // f's simplified form, and the formula as written: each encloses
         // f's coefficients where the formula is defined throughout the box,
         // and each is tighter in places (the simplified form cancels, the
@@ -691,13 +734,10 @@ impl<'a> Fun<'a> {
         // distributed it).
         // (Only where the simplified form leaves something to decide: a
         // coefficient not valid, unbounded, or holding 0.)
-        let decided = |c: &DecInterval| {
-            !c.is_empty() && c.dec >= crate::interval::Dec::Def && c.iv.is_bounded() && c.ne0()
-        };
         if std::ptr::eq(e, &self.eval) && self.eval != self.expr && !s.iter().all(decided) {
             // (A second evaluation, charged as one.)
             self.charge(&self.expr, n)?;
-            let t = taylor(&self.expr, x, n, &self.ctx());
+            let t = self.taylor_of(&self.expr, x, n);
             return Ok(merge(s, &t));
         }
         Ok(s)
@@ -745,6 +785,11 @@ impl<'a> Fun<'a> {
 /// intersection of the two, or the formula's alone where the simplified
 /// form's isn't valid. The formula defined throughout the box means the two
 /// trees are the same function there, so whatever either proves holds.
+/// A coefficient that leaves nothing to decide: valid, bounded and not 0.
+fn decided(c: &DecInterval) -> bool {
+    !c.is_empty() && c.dec >= crate::interval::Dec::Def && c.iv.is_bounded() && c.ne0()
+}
+
 fn merge(mut s: Series, t: &Series) -> Series {
     use crate::interval::Dec;
     let valid = |c: &DecInterval| !c.is_empty() && c.dec >= Dec::Def;

@@ -254,6 +254,63 @@ fn far_negative_root_degrees_hold_odd_integers() {
     }
 }
 
+/// Off, a·x + 10⁻¹⁶/(1.0000000000000001 − 1) with a = 0.3 is the line
+/// 0.3x + 1 (the constant folds exactly to 1), and the panel analyses it
+/// in full. Its check that f compiles read each number as its double, so
+/// the divisor was 0 and the whole panel was an error
+/// (`AnalysisCouldNotBePerformed`); and the certifier enclosed each
+/// literal alone, so 1.0000000000000001 − 1 might be 0 and every row was
+/// unknown. To 14 digits the literal is 1 and the equation divides by
+/// zero: an equation error, and no analysis, rightly.
+#[test]
+fn a_constant_folding_exactly_is_analysed() {
+    use graphing::analysis::AnalysisError;
+    // Each the panel of the line it is (a·x + 1, x + 1).
+    for (src, line) in [
+        ("y=a*x+10^(-16)/(1.0000000000000001-1)", "y=a*x+1"),
+        ("y=x+10^(-16)/(1.0000000000000001-1)", "y=x+1"),
+    ] {
+        for digits in [None, Some(17), Some(20)] {
+            let panel = |src: &str| {
+                let mut g = Graph::new();
+                g.set_literal_digits(digits);
+                let id = g.add_equation(src);
+                g.set_variable("a", 0.3);
+                assert_eq!(g.evaluate(id, 0.0), Some(1.0));
+                g.analyze(id)
+            };
+            let (k, want) = (panel(src), panel(line));
+            assert_eq!(k.analysis_error, AnalysisError::NoError, "{src}");
+            assert_eq!(k.domain, "x ∈ ℝ", "{src} ({digits:?})");
+            assert_eq!(k.y_intercept, "1", "{src} ({digits:?})");
+            assert_eq!(k.range, "y ∈ ℝ", "{src} ({digits:?})");
+            assert_eq!(
+                (
+                    &k.x_intercept,
+                    k.parity,
+                    &k.monotonicity,
+                    k.too_complex_features
+                ),
+                (
+                    &want.x_intercept,
+                    want.parity,
+                    &want.monotonicity,
+                    want.too_complex_features
+                ),
+                "{src} ({digits:?})"
+            );
+        }
+        let mut g = Graph::new();
+        g.set_literal_digits(Some(14));
+        let id = g.add_equation(src);
+        assert!(g.error(id).is_some(), "{src} to 14 digits");
+        assert_eq!(
+            g.analyze(id).analysis_error,
+            AnalysisError::AnalysisCouldNotBePerformed
+        );
+    }
+}
+
 /// The public limit helper gives a limit only where f has a tail of its
 /// domain to approach it on (R14-L-01).
 #[test]

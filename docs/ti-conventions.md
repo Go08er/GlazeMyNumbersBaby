@@ -135,7 +135,9 @@ literal the doubles can't tell from its neighbour (off, 1 + 10⁻¹⁶ against
 1) is enclosed by the doubles either side of it, so the analysis may leave
 a row unknown that only that difference decides (off,
 `2/(1.0000000000000001 − cos x)` is defined everywhere, but its domain row
-says it can't tell).
+says it can't tell). Arithmetic on literals alone is still exact there:
+off, `x + 10^(−16)/(1.0000000000000001 − 1)` is the line x + 1, analysed
+in full.
 
 0⁰: the limit of x^y at (0, 0) doesn't exist, so a function graphed through
 it has no value there (x⁰ approaches 1 but 0^x approaches 0). TI documents

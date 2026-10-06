@@ -1778,6 +1778,36 @@ pub(crate) fn typed_value(e: &Expr, opts: &CompileOptions<'_>) -> Option<TypedVa
     }
 }
 
+/// An x- and y-free subtree of a typed expression enclosed by its exact
+/// value ([`fold`]): the doubles either side of it (a point where it is
+/// one), empty for a division by an exact 0; `None` where it isn't folded
+/// (π, sin, a value too long to carry). Off, 1.0000000000000001 − 1 is
+/// 10⁻¹⁶, never 0, where its literal's own enclosure [1, 1 + 2⁻⁵²] can't
+/// tell.
+pub(crate) fn typed_enclosure(
+    e: &Expr,
+    opts: &CompileOptions<'_>,
+) -> Option<crate::interval::DecInterval> {
+    use crate::interval::{DecInterval, Interval};
+    if e.any(&|n| matches!(n, Expr::X | Expr::Y)) {
+        return None;
+    }
+    match fold(e, opts) {
+        Fold::Value(r, _) => {
+            let (lo, hi) = (
+                r.to_f64(crate::big::Round::Down),
+                r.to_f64(crate::big::Round::Up),
+            );
+            // (Its sign exactly, below the doubles too.)
+            let (neg, pos) = (r.is_negative(), !r.is_zero() && !r.is_negative());
+            (lo.is_finite() && hi.is_finite())
+                .then(|| DecInterval::new(Interval::new(lo, hi)).signs(pos, neg))
+        }
+        Fold::DivZero(_) => Some(DecInterval::new(Interval::EMPTY)),
+        _ => None,
+    }
+}
+
 /// How [`Program::compile_typed`] reads the constant exponent `b` of a
 /// typed expression ([`PowKind`]).
 pub(crate) fn typed_pow_kind(b: &Expr, opts: &CompileOptions<'_>) -> PowKind {

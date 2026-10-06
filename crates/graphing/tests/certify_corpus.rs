@@ -879,6 +879,14 @@ const REVIEW: &[(&str, &str)] = &[
         "root(x,3.0000000000000001)",
         "D=[0,inf) | XI=0 | YI=0 | P=neither | MIN=(0,0) | MAX=none | VA=none | R=[0,inf)",
     ),
+    // Review 14 (found by the apps): off, 10⁻¹⁶/(1.0000000000000001 − 1) is
+    // exactly 1, though each literal enclosed alone may make the divisor
+    // 0: the line x + 1, analysed in full (the panel was an error, then
+    // every row unknown).
+    (
+        "x+10^(-16)/(1.0000000000000001-1)",
+        "D=R | XI=-1 | YI=1 | P=neither | T=none | MIN=none | MAX=none | INF=none | VA=none | HA=none | R=R",
+    ),
     // Review 14, R14-M-02: an exponent typed as the odd 2⁵³ + 1 is odd,
     // though its double 2⁵³ is even: −1 at −1, an odd function.
     (
