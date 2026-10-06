@@ -37,7 +37,11 @@
 //! `"w"` (word size in bits), `"a"` (angle unit), `"fe"`, `"sh"` (shift
 //! mode). Memory is restored by re-entering the displayed strings, so a value
 //! comes back with the precision it was displayed with, and each slot is
-//! shown in the form it was saved in (e-notation or not).
+//! shown in the form it was saved in (e-notation or not). Of the newest 100
+//! slots, one that isn't a number as the display shows it (too long, other
+//! characters, an exponent of more than four digits, which only M+ or M−
+//! can reach and the paste validator refuses anyway) is left out when the
+//! snapshot is read.
 //!
 //! `"hm"` (`"s"` or `"c"`, absent before 0.2) says which mode's history
 //! `"s"."m"."h"` is (in Programmer mode, that of the mode before it), and
@@ -139,8 +143,12 @@
 //!    whose commands replay more than [`MAX_RESTORED_KEYS`] keys is dropped,
 //!    and a calculation whose display commands or expression do is saved as
 //!    a new calculation from the value shown (`"nr"`, as the contract
-//!    above restores it). The restore does the same with a snapshot saved
-//!    before this rule (one with `"x"`; an upstream snapshot is refused).
+//!    above restores it). The restore does the same before it checks a
+//!    snapshot, so one saved before this rule loses only that. It drops
+//!    such a History item from any snapshot, an upstream one's
+//!    `"s"."m"."h"` too; but only `"x"` can mark a new calculation, so an
+//!    upstream snapshot (without it) whose calculation is that long is still
+//!    refused as a whole.
 //! 2. History items are dropped, oldest first, from whichever mode's
 //!    History takes more bytes (on a tie, from the mode not shown; in
 //!    Programmer mode, from the one `"hm"` doesn't name), until the state
@@ -792,12 +800,16 @@ impl ApplicationSnapshot {
             None | Some(Value::Null) => None,
             Some(x) => {
                 let x = object(x)?;
-                let memory = list(x.get("mem"), |v| {
+                let mut memory = list(x.get("mem"), |v| {
                     v.as_str()
                         .map(str::to_string)
                         .ok_or_else(|| "memory entry is not a string".to_string())
                 })?
                 .unwrap_or_default();
+                // Extension: the newest slots the restore takes, and of
+                // those only the ones a display could have shown.
+                memory.truncate(MAX_RESTORED_MEMORY);
+                memory.retain(|m| is_memory_value(m));
                 let radix = match string(x.get("r"))?.as_deref() {
                     None => None,
                     Some("hex") => Some(Radix::Hex),
@@ -925,10 +937,11 @@ pub(crate) struct SnapshotValidator;
 
 /// Extension: the most engine keys one command list (the display commands,
 /// the expression, a history item) may replay. A longer History item is
-/// left out, and a longer calculation comes back as a new calculation from
-/// the value shown, when saved and when restored (see "Size" in the module
-/// docs); an upstream snapshot (without `"x"`) with a longer one is rejected
-/// as a whole, like any other invalid snapshot. Hand-typed calculations stay
+/// left out, from any snapshot, and a longer calculation comes back as a new
+/// calculation from the value shown, when saved and when restored (see
+/// "Size" in the module docs). An upstream snapshot (without `"x"`) can't
+/// mark a new calculation, so one with a longer calculation is rejected as
+/// a whole, like any other invalid snapshot. Hand-typed calculations stay
 /// far below it, and 40 pastes of a 100-term sum (about 12,000 keys) still
 /// fit. With display updates deferred, replay is linear:
 /// at the limit, cheap keys restore in about 30 ms (Programmer, whose number
@@ -943,6 +956,44 @@ pub(crate) const MAX_DISPLAY_LENGTH: usize = copypaste::MAX_PASTEABLE_LENGTH as 
 /// Extension: memory slots restored (`CalculatorManager`'s
 /// `MAXIMUM_MEMORY_SIZE`; the manager drops older ones anyway).
 pub(crate) const MAX_RESTORED_MEMORY: usize = 100;
+
+/// Extension: whether a saved memory slot is a number as the display shows
+/// one: at most [`MAX_DISPLAY_LENGTH`] long, an optional `-`, digits (A–F
+/// too) with the point and group separators, and an optional exponent, `e`,
+/// a sign and at most [`copypaste::MAX_EXPONENT_LENGTH`] digits. A slot
+/// that isn't is left out when the snapshot is read, before the restore
+/// enters any (the paste validator it is entered through would refuse most
+/// such text, but only after [`plain_decimal`] had read it, and takes an
+/// expression like `1+1`). The display overflows past four exponent
+/// digits, but M+ can take a slot past them (`9.e+9999`, MS, M+ shows
+/// 1.8e+10000); the validator refused such a slot before too, so it still
+/// isn't restored.
+fn is_memory_value(text: &str) -> bool {
+    let locale = crate::localization::LocalizationSettings::get_instance();
+    let is_digit = |c: char| c.is_ascii_digit() || locale.is_localized_digit(c);
+    let is_hex_digit = |c: char| is_digit(c) || locale.is_localized_hex_digit(c);
+    let is_mantissa_char = |c: char| {
+        is_hex_digit(c)
+            || matches!(c, '.' | ',' | ' ')
+            || c == locale.get_decimal_separator()
+            || c == locale.get_number_group_separator()
+    };
+    if text.encode_utf16().count() > MAX_DISPLAY_LENGTH {
+        return false;
+    }
+    let unsigned = text.strip_prefix('-').unwrap_or(text);
+    let (mantissa, exponent) = match unsigned.split_once('e') {
+        Some((mantissa, exponent)) => (mantissa, Some(exponent)),
+        None => (unsigned, None),
+    };
+    mantissa.chars().any(is_hex_digit)
+        && mantissa.chars().all(is_mantissa_char)
+        && exponent.is_none_or(|exponent| {
+            let digits = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
+            (1..=copypaste::MAX_EXPONENT_LENGTH as usize).contains(&digits.chars().count())
+                && digits.chars().all(is_digit)
+        })
+}
 
 /// Extension: arithmetic budgets for replaying saved state, in units of
 /// `ratpack::work_done` (digit operations). Keys are cheap, but one operator
@@ -1249,10 +1300,12 @@ fn restorable(item: &CalcManagerHistoryItem) -> bool {
 impl ApplicationSnapshot {
     /// Step 1 of "Size" (see the module docs): leaves out what the restore
     /// can't take, which would make it refuse the whole snapshot. A History
-    /// item that replays more than [`MAX_RESTORED_KEYS`] keys is dropped; a
+    /// item that replays more than [`MAX_RESTORED_KEYS`] keys is dropped,
+    /// from any snapshot (an upstream one's `"s"."m"."h"` too); a
     /// calculation whose display commands or expression do becomes a new
     /// calculation from the value shown, if the snapshot is gmnb's (an
-    /// upstream one, without `"x"`, is left to be refused).
+    /// upstream one, without `"x"`, can't say so, and is left to be
+    /// refused).
     pub(crate) fn leave_out_unrestorable(&mut self) {
         let Some(standard) = self.standard_calculator.as_mut() else {
             return;
@@ -1401,6 +1454,11 @@ impl ApplicationSnapshot {
 /// Extension: `text` in e-notation ("-1.21e+2") written out ("-121"), if
 /// that takes at most `max_digits` digits; `None` otherwise or if it isn't
 /// e-notation.
+///
+/// The text is saved state, so its exponent can be anything an `i64`
+/// holds: the digits written out are counted (with checked arithmetic)
+/// before any is, and past `max_digits` the text is left as it is, to the
+/// paste validator, which refuses an exponent of more than four digits.
 pub(crate) fn plain_decimal(text: &str, point: char, max_digits: usize) -> Option<String> {
     let (negative, text) = match text.strip_prefix('-') {
         Some(rest) => (true, rest),
@@ -1412,41 +1470,48 @@ pub(crate) fn plain_decimal(text: &str, point: char, max_digits: usize) -> Optio
     if int.is_empty() || !int.chars().chain(frac.chars()).all(|c| c.is_ascii_digit()) {
         return None;
     }
-    let digits: String = format!("{int}{frac}");
-    let digits = digits.trim_start_matches('0');
+    // The significant digits, and where the point goes in them: after the
+    // first `at` (before them if `at` is 0, and −`at` zeros before them if
+    // it is negative). The mantissa's leading zeros, in its fraction too
+    // ("0.05e+2"), are dropped with them.
+    let all = format!("{int}{frac}");
+    let zeros = all.len() - all.trim_start_matches('0').len();
+    let digits = all[zeros..].trim_end_matches('0');
     if digits.is_empty() {
         return Some("0".into());
     }
-    // Where the point goes in `digits` (leading zeros of the mantissa
-    // dropped with them).
-    let at = int.trim_start_matches('0').len() as i64 + exponent;
-    let digits = digits.trim_end_matches('0');
-    let len = digits.len() as i64;
-    let (whole, fraction) = if at <= 0 {
-        (
-            String::from("0"),
-            format!("{}{digits}", "0".repeat((-at) as usize)),
-        )
-    } else if at >= len {
-        (
-            format!("{digits}{}", "0".repeat((at - len) as usize)),
-            String::new(),
-        )
+    let at = i64::try_from(int.len())
+        .ok()?
+        .checked_sub(i64::try_from(zeros).ok()?)?
+        .checked_add(exponent)?;
+    let len = i64::try_from(digits.len()).ok()?;
+    // The digits written out, counted before any is: the zeros between the
+    // point and the digits, or after the digits up to the point.
+    let count = if at <= 0 {
+        len.checked_add(at.checked_neg()?)?
     } else {
-        (
-            digits[..at as usize].to_string(),
-            digits[at as usize..].to_string(),
-        )
+        at.max(len)
     };
-    let count = whole.trim_start_matches('0').len() + fraction.len();
-    if count > max_digits {
+    if count > i64::try_from(max_digits).ok()? {
         return None;
     }
-    let mut out = String::from(if negative { "-" } else { "" });
-    out.push_str(&whole);
-    if !fraction.is_empty() {
+    // At most `max_digits` now (and a sign, a 0 and the point).
+    let mut out = String::with_capacity(count as usize + 3);
+    if negative {
+        out.push('-');
+    }
+    if at <= 0 {
+        out.push('0');
         out.push(point);
-        out.push_str(&fraction);
+        out.extend(std::iter::repeat_n('0', at.unsigned_abs() as usize));
+        out.push_str(digits);
+    } else if at >= len {
+        out.push_str(digits);
+        out.extend(std::iter::repeat_n('0', (at - len) as usize));
+    } else {
+        out.push_str(&digits[..at as usize]);
+        out.push(point);
+        out.push_str(&digits[at as usize..]);
     }
     Some(out)
 }
@@ -2103,6 +2168,11 @@ impl StandardCalculatorViewModel {
             ),
         };
         let locale = crate::localization::LocalizationSettings::get_instance().paste_locale();
+        // The validator refuses text this long, and it isn't written out
+        // first (a History item's result, for one, is saved at any length).
+        if value.encode_utf16().count() > copypaste::MAX_PASTEABLE_LENGTH as usize {
+            return false;
+        }
         // F-E shows numbers in e-notation; typed so, an integer isn't one
         // to the engine ("1.21e+2" isn't 121 as an exponent of a negative
         // base). Type it out where its digits fit.
