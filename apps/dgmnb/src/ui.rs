@@ -85,7 +85,9 @@ pub struct Input {
     pub hover: Option<Id>,
     pub pressed: Option<Id>,
     pub focus: Option<Id>,
-    /// Draw focus rings (keyboard navigation in use).
+    /// Draw focus rings (keyboard navigation in use): drawing only. The
+    /// focused control takes its keys whether its ring shows or not
+    /// (R17-L-03), as in GTK.
     pub focus_visible: bool,
 }
 
