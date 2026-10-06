@@ -102,6 +102,14 @@ pub struct Continuation {
     /// set only by them in Programmer mode; C clears it). No command sets
     /// it, so it is restored with [`CalcEngine::set_carry`].
     pub carry: bool,
+    /// Standard mode with no operator pending: the left operand
+    /// (`m_lastVal`), which `%` multiplies by. After `=` it is the result
+    /// (`2 + 3 = 7 %` is 7 × 5%), which neither the commands nor what `=`
+    /// repeats rebuild, so it is restored with
+    /// [`CalcEngine::set_left_operand`]. With an operator pending it is
+    /// the operand before it, in the commands; the other modes have no `%`,
+    /// the one key that reads it with no operator pending.
+    pub left: Option<OpndCommand>,
 }
 
 /// Extension: see [`Continuation::entry`].
@@ -496,23 +504,14 @@ impl CalcEngine {
             }
         });
         let repeat = if !self.b_no_prev_equ && self.n_op_code != 0 {
-            // Written out without F-E's e-notation where the number allows:
-            // typed as "1.21e+2", 121 isn't the integer it was ((−7)^x).
-            let text = if self.f_integer_mode {
-                self.get_string_for_display(&self.hold_val, self.radix)
-            } else {
-                self.hold_val
-                    .to_string_radix(self.radix, NumberFormat::Float, self.precision)
-            };
-            text.ok().map(|text| {
-                let operand = self
-                    .history_collector
-                    .get_operand_commands_from_string_rat(&text, &self.hold_val);
-                (self.n_op_code, operand)
-            })
+            self.operand_for_text(&self.hold_val)
+                .map(|operand| (self.n_op_code, operand))
         } else {
             None
         };
+        let left = (!self.f_precedence && !self.b_change_op)
+            .then(|| self.operand_for_text(&self.last_val))
+            .flatten();
         let opnd_added = self.history_collector.f_opnd_added_to_history();
         let last = self.history_collector.last_command();
         let entry = if self.b_record {
@@ -558,7 +557,24 @@ impl CalcEngine {
                     && self.n_temp_com != IDC_PNT
                     && self.n_temp_com != IDC_SIGN),
             carry: self.carry_bit != 0,
+            left,
         }
+    }
+
+    /// Extension: `value` as the operand that typing it would give, for
+    /// [`Continuation`]. Written out without F-E's e-notation where the
+    /// number allows: typed as "1.21e+2", 121 isn't the integer it was
+    /// ((−7)^x).
+    fn operand_for_text(&self, value: &Rational) -> Option<OpndCommand> {
+        let text = if self.f_integer_mode {
+            self.get_string_for_display(value, self.radix)
+        } else {
+            value.to_string_radix(self.radix, NumberFormat::Float, self.precision)
+        };
+        text.ok().map(|text| {
+            self.history_collector
+                .get_operand_commands_from_string_rat(&text, value)
+        })
     }
 
     /// Extension: sets the carry bit RoL and RoR through carry use (see
@@ -566,6 +582,44 @@ impl CalcEngine {
     /// changes, and nothing is displayed.
     pub fn set_carry(&mut self, carry: bool) {
         self.carry_bit = u64::from(carry);
+    }
+
+    /// Extension: sets the left operand (see [`Continuation::left`]) to
+    /// `operand` as typed (its digits, point, exponent and sign entered as
+    /// keys would enter them), for a restored session. Nothing else
+    /// changes, and nothing is displayed. Returns false, changing nothing,
+    /// if the keys aren't a number this engine takes.
+    pub fn set_left_operand(&mut self, operand: &OpndCommand) -> CalcResult<bool> {
+        let mut input = CalcInput::new(self.decimal_separator);
+        let max = self.get_max_decimal_value_string();
+        // The sign follows the first command that isn't 0, as when the
+        // view model replays an operand.
+        let mut need_sign = operand.is_negative();
+        for &command in operand.get_commands() {
+            let typed = match command {
+                IDC_PNT => input.try_add_decimal_pt(),
+                IDC_EXP => !self.f_integer_mode && input.try_begin_exponent(),
+                IDC_SIGN => input.try_toggle_sign(self.f_integer_mode, &max),
+                digit if is_digit_op_code(digit) && ((digit - IDC_0) as u32) < self.radix => input
+                    .try_add_digit(
+                        (digit - IDC_0) as u32,
+                        self.radix,
+                        self.f_integer_mode,
+                        &max,
+                        self.dw_word_bit_width,
+                        self.c_int_digits_sav,
+                    ),
+                _ => false,
+            };
+            let signed =
+                !need_sign || command == IDC_0 || input.try_toggle_sign(self.f_integer_mode, &max);
+            if !typed || !signed {
+                return Ok(false);
+            }
+            need_sign &= command == IDC_0;
+        }
+        self.last_val = input.to_rational(self.radix, self.precision)?;
+        Ok(true)
     }
 
     /// Extension: ends the number being typed and adds it to the expression

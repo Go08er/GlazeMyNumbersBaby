@@ -82,7 +82,11 @@
 //! `"cy": true` (Programmer only) is the carry bit RoL and RoR through
 //! carry shift in next: in BYTE, `1 RoR 1` leaves the carry 1, so the next
 //! RoR gives −128 rather than 0. No key sets it, so it is set directly.
-//! Upstream doesn't restore it.
+//! `"lv"` (Standard only, with no operator pending) is the left operand,
+//! an operand like `"eq"`'s: after `=` it is the result, which `%`
+//! multiplies by (`2 + 3 = 7 %` is 0.35), while what `"eq"` sets up leaves
+//! another; it is set directly where the restore didn't leave it so.
+//! Upstream restores neither.
 //!
 //! # The contract
 //!
@@ -320,6 +324,9 @@ pub(crate) struct ContinuationSnapshot {
     pub(crate) unreplayable: bool,
     /// `"cy"`: the carry bit of RoL/RoR through carry (Programmer only).
     pub(crate) carry: bool,
+    /// `"lv"`: the left operand, an operand (Standard only, with no
+    /// operator pending).
+    pub(crate) left: Option<ExpressionCommandWrapper>,
 }
 
 /// `ApplicationSnapshot`
@@ -636,6 +643,9 @@ impl ApplicationSnapshot {
                 if k.carry {
                     c.insert("cy".into(), json!(true));
                 }
+                if let Some(left) = &k.left {
+                    c.insert("lv".into(), ExpressionCommandSerializer::serialize(left));
+                }
                 o.insert("k".into(), Value::Object(c));
             }
             root.insert("x".into(), Value::Object(o));
@@ -771,6 +781,11 @@ impl ApplicationSnapshot {
                             clears: boolean(k.get("cl"))?,
                             unreplayable: boolean(k.get("nr"))?,
                             carry: boolean(k.get("cy"))?,
+                            left: k
+                                .get("lv")
+                                .filter(|v| !v.is_null())
+                                .map(ExpressionCommandDeserializer::deserialize)
+                                .transpose()?,
                         })
                     }
                 };
@@ -949,15 +964,26 @@ impl SnapshotValidator {
             Self::validate_commands(repeat, mode, "repeated operation")?;
         }
 
+        let continuation = snapshot
+            .extension
+            .as_ref()
+            .and_then(|x| x.continuation.as_ref());
         // Extension: only the Programmer engine rotates through a carry.
-        if mode != CalcMode::Programmer
-            && snapshot
-                .extension
-                .as_ref()
-                .and_then(|x| x.continuation.as_ref())
-                .is_some_and(|k| k.carry)
-        {
+        if mode != CalcMode::Programmer && continuation.is_some_and(|k| k.carry) {
             return Err("a carry outside Programmer mode".into());
+        }
+        // Extension: the left operand is saved in Standard mode only, and is
+        // a decimal number.
+        if let Some(left) = continuation.and_then(|k| k.left.as_ref()) {
+            let ExpressionCommandWrapper::Operand { commands, .. } = left else {
+                return Err("the left operand is not an operand".into());
+            };
+            if mode != CalcMode::Standard
+                || commands.iter().any(|&c| (cmd::A..=cmd::F).contains(&c))
+            {
+                return Err("the left operand is not a Standard mode number".into());
+            }
+            Self::validate_commands(std::slice::from_ref(left), mode, "left operand")?;
         }
 
         let display = &standard.primary_display.display_value;
@@ -1370,6 +1396,16 @@ impl StandardCalculatorViewModel {
         if !engine_error && continuation.is_some_and(|k| k.carry) {
             self.with_manager(|m| m.set_carry(true));
         }
+        // Extension: the left operand `%` reads with no operator pending
+        // (after `=`, the result), where the restore didn't leave it as
+        // saved; an exact one an evaluation left is kept.
+        if !engine_error
+            && let Some(left) = continuation.and_then(|k| k.left.as_ref())
+            && self.capture_continuation().left.as_ref() != Some(left)
+            && let ExpressionCommand::Operand(operand) = left.to_command()
+        {
+            let _ = self.with_manager(|m| m.set_left_operand(&operand));
+        }
         if engine_error && let Some(expression) = &snapshot.expression_display {
             // The parentheses the expression line leaves open, as shown
             // while the error is (the engine's are gone with it).
@@ -1472,6 +1508,9 @@ impl StandardCalculatorViewModel {
             clears: c.clears,
             unreplayable: c.unreplayable,
             carry: c.carry,
+            left: c.left.map(|operand| {
+                ExpressionCommandWrapper::from_command(&ExpressionCommand::Operand(operand))
+            }),
         }
     }
 

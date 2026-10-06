@@ -21,7 +21,7 @@ use crate::calc_engine::{CalcEngine, Continuation};
 use crate::calculator_history::{CalculatorHistory, HistoryItem};
 use crate::ccommand::*;
 use crate::command::{CalculatorMode, CalculatorPrecision, Command};
-use crate::expression_command::ExpressionCommand;
+use crate::expression_command::{ExpressionCommand, OpndCommand};
 use crate::history::E_BOUNDS;
 use crate::radix_type::RadixType;
 use crate::resource::ResourceProvider;
@@ -764,6 +764,11 @@ impl CalculatorManager {
     /// Extension: see [`CalcEngine::set_carry`].
     pub fn set_carry(&mut self, carry: bool) {
         self.current_engine().set_carry(carry);
+    }
+
+    /// Extension: see [`CalcEngine::set_left_operand`].
+    pub fn set_left_operand(&mut self, operand: &OpndCommand) -> CalcResult<bool> {
+        self.current_engine().set_left_operand(operand)
     }
 
     /// Extension: what a saved session needs besides the display commands

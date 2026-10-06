@@ -1097,6 +1097,56 @@ fn unrebuildable_states_restore_as_a_new_calculation() {
     assert_eq!(restored.display_value(), "8");
 }
 
+/// Found auditing R14-M-05: in Standard mode with no operator pending, `%`
+/// multiplies by the left operand, which after `=` is the result and
+/// neither the display commands nor what `=` repeats rebuild. It is saved
+/// (`"lv"`) and set directly where the restore leaves another.
+#[test]
+fn the_left_operand_percent_reads_is_restored() {
+    use Button::*;
+    let percent: &[&[Button]] = &[&[Percent], &[Seven, Percent], &[Percent, Equals]];
+    for script in [
+        // 7 × 5% = 0.35; "1 + 3 =", what restores "=" repeating "+ 3",
+        // left 4 (0.28).
+        &[Two, Add, Three, Equals, Seven][..],
+        &[Two, Add, Three, Equals, Memory],
+        &[Two, Add, Three, Equals, Negate],
+        &[Two, Add, Three, Equals, Sqrt],
+        // Nothing to repeat: the restore begins with C, which left 0.
+        &[Five, Equals, Seven],
+        // A result of 0, where "1 − 2 =" would leave −1.
+        &[Two, Subtract, Two, Equals, Seven],
+        // Evaluated again on restore, exactly: 1/3, not 0.3333333333333333.
+        &[One, Divide, Three, Add, Zero, Equals],
+    ] {
+        assert_restores_and_continues(CalcMode::Standard, script, percent);
+    }
+
+    let mut vm = new_vm();
+    press_all(&mut vm, &[Two, Add, Three, Equals, Seven]);
+    let state = vm.save_state();
+    drop(vm);
+    let mut restored = new_vm();
+    restored.restore_state(&state);
+    restored.press(Percent);
+    assert_eq!(restored.display_value(), "0.35");
+
+    // An operand of Standard mode's digits, and only in Standard mode.
+    let unchanged = |k: Value, mode: i64| {
+        let mut vm = new_vm();
+        vm.press(Four);
+        let before = vm.save_state();
+        vm.restore_state(&snapshot_json(mode, json!([]), json!({ "k": k })));
+        vm.save_state() == before
+    };
+    assert!(!unchanged(json!({ "lv": operand(&[135]) }), 0));
+    assert!(unchanged(json!({ "lv": operand(&[135]) }), 1));
+    assert!(unchanged(json!({ "lv": operand(&[135]) }), 2));
+    assert!(unchanged(json!({ "lv": operand(&[140]) }), 0));
+    assert!(unchanged(json!({ "lv": { "$t": 1, "c": 93 } }), 0));
+    assert!(unchanged(json!({ "lv": operand(&[]) }), 0));
+}
+
 /// R14-M-05: RoL and RoR through carry shift in the carry the last one
 /// left, which no key sets: it is saved (`"cy"`) and set directly.
 #[test]
