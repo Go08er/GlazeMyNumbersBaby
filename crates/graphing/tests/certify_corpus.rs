@@ -879,6 +879,18 @@ const REVIEW: &[(&str, &str)] = &[
         "root(x,3.0000000000000001)",
         "D=[0,inf) | XI=0 | YI=0 | P=neither | MIN=(0,0) | MAX=none | VA=none | R=[0,inf)",
     ),
+    // Review 14, R14-M-04: a degree typed as the odd −(10³⁰¹ + 1), far
+    // past −10³⁰⁰, is odd: −8^(1/n) is just above −1, defined (the box
+    // test clipped the degree to −10³⁰⁰ and found no odd integer, and the
+    // panel said there was no y-intercept).
+    (
+        "root(-8,-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001)",
+        "XI=none | YI=-1~ | P=even | VA=none",
+    ),
+    (
+        "root(x,-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001)",
+        "D=(-inf,0)U(0,inf) | XI=none | YI=none | P=odd | MIN=none | MAX=none | VA=0",
+    ),
 ];
 
 /// Review 13: functions under a digit limit on typed numbers
@@ -938,6 +950,18 @@ const DIGITS: &[(&str, u8, &str)] = &[
         "0.123456789012345678*x^2-1",
         14,
         "D=R | YI=-1 | P=even | T=none | MAX=none | INF=none | VA=none | HA=none | R=[-1,inf)",
+    ),
+    // Review 14, R14-M-04: to 14 or 20 digits the typed −(10³⁰¹ + 1) is
+    // the even −10³⁰¹, and root(−8, n) is nowhere defined.
+    (
+        "root(-8,-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001)",
+        14,
+        "XI=none | YI=none | VA=none",
+    ),
+    (
+        "root(-8,-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001)",
+        20,
+        "XI=none | YI=none | VA=none",
     ),
 ];
 
@@ -2177,6 +2201,41 @@ fn a_typed_odd_degree_is_odd() {
         "{:?}",
         a.y_intercept
     );
+}
+
+/// Review 14, R14-M-04: a degree typed as the odd −(10³⁰¹ + 1), far past
+/// −10³⁰⁰, is odd: root(−8, n) = −8^(1/n) is defined, just above −1 (a
+/// clipped box test found no odd integer in its enclosure, and the panel
+/// said there was no y-intercept). To 14 or 20 digits it is the even
+/// −10³⁰¹, and there is none.
+#[test]
+fn a_typed_odd_degree_far_below_is_odd() {
+    let src = format!("root(-8,-1{}1)", "0".repeat(300));
+    let a = certify_text(&src, CompileOptions::default(), DEFAULT_BUDGET, None).unwrap();
+    assert!(
+        matches!(&a.y_intercept, Row::Certified { value: Some(e), .. } if e.hi.0 < 0.0 && e.lo.0 > -1.000001),
+        "{:?}",
+        a.y_intercept
+    );
+    assert_eq!(analyze_str(&format!("y={src}")).y_intercept, "≈\u{2212}1");
+    for digits in [14, 20] {
+        let a = graphing::certify::certify_text_with(
+            &src,
+            graphing::lexer::ParseOptions {
+                literal_digits: Some(digits),
+                ..Default::default()
+            },
+            CompileOptions::default(),
+            DEFAULT_BUDGET,
+            None,
+        )
+        .unwrap();
+        assert!(
+            matches!(&a.y_intercept, Row::Certified { value: None, .. }),
+            "{digits} digits: {:?}",
+            a.y_intercept
+        );
+    }
 }
 
 /// Review 13, R13-M-06: the two ends of a gap between pieces, sin 1 and

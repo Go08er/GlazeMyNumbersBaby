@@ -644,10 +644,12 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
                 // A degree written as a number is known exactly to be odd
                 // or not where its enclosure can't say (a typed
                 // 9007199254740993 is enclosed by 2⁵³ and the double after
-                // it, both even): asked only where that matters.
-                let odd = (u[0].lo() < 0.0 && elem::may_hold_odd(kv))
-                    .then(|| typed_odd(&args[1]))
-                    .flatten();
+                // it, both even): asked only where that matters, a base
+                // that may be negative. Its own value decides, never the
+                // enclosure (review 14, R14-M-04: the typed −(10³⁰¹ + 1)
+                // was asked only if its enclosure was thought to hold an
+                // odd integer, which a clipped test denied).
+                let odd = (u[0].lo() < 0.0).then(|| typed_odd(&args[1])).flatten();
                 let c0 = match odd {
                     Some(odd) => elem::root_of_parity(&u[0], &k[0], odd),
                     None => elem::root(&u[0], &k[0]),

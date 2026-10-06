@@ -1823,3 +1823,113 @@ fn large_root_degrees_keep_their_odd_integers() {
         assert!(s[0].dec == Dec::Com, "{src} at 8: {:?}", s[0]);
     }
 }
+
+/// root(x, n) over degree boxes far below −10³⁰⁰ (review 14, R14-M-04):
+/// the odd-integer test clipped a box's lower end to −10³⁰⁰, which put
+/// its first candidate above [−10³⁰², −10³⁰¹], and root(−8, n) over the
+/// box (each of its parts too) was empty. Every box there wider than a
+/// point holds odd integers, as does one reaching −∞; and a degree typed
+/// as the odd −(10³⁰¹ + 1) is odd, whatever its enclosure.
+#[test]
+fn far_negative_root_degree_boxes_keep_their_odd_integers() {
+    init();
+    let pt = DecInterval::point;
+    let truth = |x: f64, n: &rug::Integer| -> Float {
+        let n = Float::with_val(4096, n);
+        mp_root(&mp(x), &n, P).expect("an odd degree")
+    };
+    // An odd integer in [lo, hi] for lo a double past 2⁵³ (an even
+    // integer) below hi: lo + 1.
+    let odd_in = |lo: f64| -> rug::Integer { rug::Integer::from_f64(lo).unwrap() + 1u32 };
+    let ctx = Ctx::new(CompileOptions::default());
+    let eq = Equation::parse("y=root(-8,x)").unwrap();
+    let (_, root_of_x) = eq.explicit().unwrap();
+    for (lo, hi) in [
+        (-1e302, -1e301),
+        (-1e308, -1e307),
+        (-f64::MAX, -1e300),
+        (-1e301, -1e300),
+        ((-1e300f64).next_down().next_down(), -1e300),
+        (1e301, 1e302),
+        (1e307, f64::MAX),
+    ] {
+        for x in [-8.0, -0.5, -1e-300] {
+            let r = elem::root(&pt(x), &DecInterval::new(Interval::new(lo, hi)));
+            let v = truth(x, &odd_in(lo));
+            assert!(
+                !r.is_empty() && inside(&v, r.iv),
+                "root({x}, [{lo:e}, {hi:e}]) = {r:?} misses {}",
+                v.to_f64()
+            );
+            assert!(r.dec <= Dec::Trv, "root({x}, [{lo:e}, {hi:e}]): {r:?}");
+        }
+        // Through the Taylor evaluator, the degree varying over the box,
+        // whole and in ten parts.
+        let parts = (0..10).map(|i| {
+            let at = |k: f64| lo + (hi - lo) / 10.0 * k;
+            (at(i as f64), if i == 9 { hi } else { at(i as f64 + 1.0) })
+        });
+        // (A part that is a point is that even double: empty.)
+        for (a, b) in std::iter::once((lo, hi))
+            .chain(parts)
+            .filter(|(a, b)| a < b)
+        {
+            let s = taylor(root_of_x, Interval::new(a, b), 1, &ctx);
+            let v = truth(-8.0, &odd_in(a));
+            assert!(
+                !s[0].is_empty() && inside(&v, s[0].iv) && s[0].dec <= Dec::Trv,
+                "root(-8, x) on [{a:e}, {b:e}]: {:?}",
+                s[0]
+            );
+        }
+    }
+    // Boxes reaching −∞, and the whole line.
+    for (lo, hi) in [
+        (-INF, -1e300),
+        (-INF, -1e302),
+        (-INF, INF),
+        (-INF, -f64::MAX),
+    ] {
+        let r = elem::root(&pt(-8.0), &DecInterval::new(Interval::new(lo, hi)));
+        assert!(
+            !r.is_empty() && r.dec <= Dec::Trv,
+            "[{lo:e}, {hi:e}]: {r:?}"
+        );
+    }
+    // A point degree is that (even) double.
+    assert!(elem::root(&pt(-8.0), &pt(-1e302)).is_empty());
+    assert!(elem::root(&pt(-8.0), &pt(-f64::MAX)).is_empty());
+    // A degree typed as the odd −(10³⁰¹ + 1), and its even neighbour.
+    let odd = -(rug::Integer::from(rug::Integer::u_pow_u(10, 301)) + 1u32);
+    let at = |src: &str, x: f64| {
+        let text = format!("y={src}");
+        let eq = Equation::parse(&text).unwrap();
+        let (_, ast) = eq.explicit().unwrap();
+        taylor(ast, Interval::point(x), 3, &ctx)
+    };
+    let odd_src = format!("root(x,-1{}1)", "0".repeat(300));
+    let even_src = format!("root(x,-1{}2)", "0".repeat(300));
+    for x in [-8.0, -1.5, -1e-300, 2.0] {
+        let s = at(&odd_src, x);
+        let v = truth(x, &odd);
+        assert!(
+            s[0].dec == Dec::Com && inside(&v, s[0].iv),
+            "root(x, −(10³⁰¹ + 1)) at {x}: {:?} misses {}",
+            s[0],
+            v.to_f64()
+        );
+        let s = at(&even_src, x);
+        if x < 0.0 {
+            assert!(s[0].is_empty(), "an even degree at {x}: {:?}", s[0]);
+        } else {
+            assert!(s[0].dec == Dec::Com, "an even degree at {x}: {:?}", s[0]);
+        }
+    }
+    let s = at(&format!("root(-8,-1{}1)", "0".repeat(300)), 0.0);
+    let v = truth(-8.0, &odd);
+    assert!(
+        s[0].dec == Dec::Com && inside(&v, s[0].iv) && s[0].hi() < 0.0,
+        "{:?}",
+        s[0]
+    );
+}

@@ -634,16 +634,21 @@ pub fn root(x: &DecInterval, n: &DecInterval) -> DecInterval {
 /// Whether the real interval `n` holds an odd integer. Beyond 2⁵³ every
 /// double is even, but the numbers between two of them aren't: the box
 /// [2⁵³, 2⁵³ + 2] holds the odd 2⁵³ + 1 (review 13, R13-M-04: such a box
-/// was taken to hold none, and root(−8, n) over it was empty).
+/// was taken to hold none, and root(−8, n) over it was empty). So does
+/// any box past −10³⁰⁰ that is more than a point, and one reaching −∞
+/// (review 14, R14-M-04: the lower end was clipped to −10³⁰⁰, which put
+/// the first candidate above the box [−10³⁰², −10³⁰¹]).
 pub(crate) fn may_hold_odd(n: Interval) -> bool {
     if n.is_empty() {
         return false;
     }
     const BIG: f64 = 9007199254740992.0;
-    let first = n.lo().max(-1e300).ceil();
+    // The least integer in the box (−∞ for a box reaching −∞).
+    let first = n.lo().ceil();
     if first.abs() >= BIG {
-        // An even integer, the next number above it odd: any double above
-        // `first` is at least one more.
+        // An even integer (or −∞), the next number above it odd: any
+        // double above `first` is at least one more, and any real number
+        // above −∞ has an odd integer below it.
         return n.hi() > first;
     }
     // first + 1 ≤ 2⁵³ is exact.

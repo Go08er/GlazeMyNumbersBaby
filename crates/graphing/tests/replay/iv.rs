@@ -786,9 +786,13 @@ pub fn rootn(a: &Iv, q: u32) -> Iv {
 /// ᵠ√a for a degree past `u32` (a typed 9007199254740993, review 13
 /// R13-M-04: MPFR's root takes a u32), as sign(a)·exp(ln|a|/q), each step
 /// rounded the way of the bound it gives (the magnitude's the other way
-/// for a negative end): a negative base only for odd q.
-pub fn rootn_big(a: &Iv, q: i64) -> Iv {
-    let lo = if q % 2 == 0 { Some((0.0, true)) } else { None };
+/// for a negative end): a negative base only for odd q. Any q ≥ 2,
+/// however long (a typed 10³⁰¹ + 1, review 14, R14-M-04): divided by
+/// exactly, at as many bits as it has.
+pub fn rootn_big(a: &Iv, q: &rug::Integer) -> Iv {
+    let lo = if q.is_even() { Some((0.0, true)) } else { None };
+    let qf = Float::with_val(prec().max(q.significant_bits()), q);
+    let qf = &qf;
     on_domain_s(a, lo, None, true, Signs::Keep, move |v, r| {
         use rug::ops::{DivAssignRound, NegAssign};
         if v.is_zero() {
@@ -802,7 +806,7 @@ pub fn rootn_big(a: &Iv, q: i64) -> Iv {
         };
         v.abs_mut();
         v.ln_round(rm);
-        v.div_assign_round(Float::with_val(prec(), q), rm);
+        v.div_assign_round(qf, rm);
         v.exp_round(rm);
         if neg {
             v.neg_assign();
@@ -823,12 +827,33 @@ pub fn pow_rat(a: &Iv, p: i64, q: i64) -> Iv {
     }
     let r = match u32::try_from(q) {
         Ok(q) => rootn(a, q),
-        Err(_) => rootn_big(a, q),
+        Err(_) => rootn_big(a, &rug::Integer::from(q)),
     };
     if r.empty {
         return Iv::empty();
     }
     powi(&r, p)
+}
+
+/// [`pow_rat`] for a q past `i64` (p = ±1, a root's degree).
+pub fn pow_rat_big(a: &Iv, p: i64, q: &rug::Integer) -> Iv {
+    if a.empty {
+        return Iv::empty();
+    }
+    let r = rootn_big(a, q);
+    if r.empty {
+        return Iv::empty();
+    }
+    powi(&r, p)
+}
+
+/// The rational p/q enclosed by the working precision, rounded outward
+/// (q however long).
+pub fn ratio(p: i64, q: &rug::Integer) -> Iv {
+    let r = rug::Rational::from((rug::Integer::from(p), q.clone()));
+    let (lo, _) = Float::with_val_round(prec(), &r, Round::Down);
+    let (hi, _) = Float::with_val_round(prec(), &r, Round::Up);
+    Iv::new(lo, hi)
 }
 
 /// b^e for an exponent that varies with x: a positive base, or 0 to a

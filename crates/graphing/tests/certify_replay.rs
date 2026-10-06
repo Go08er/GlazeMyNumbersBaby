@@ -1040,6 +1040,16 @@ fn rounded_literals_are_refuted() {
                 "fixtures/certify/review13/literal-collision-zero.json"
             )),
         ),
+        // Review 14, R14-M-04: the reviewer's certificate (made at dc8ddb5),
+        // unaltered. root(−8, −(10³⁰¹ + 1)) is defined at 0 (the degree is
+        // odd as typed), not undefined; the replay left that unconfirmed
+        // while it read degrees past i64 as unknown.
+        (
+            "root(-8,-(10^301+1))'s certificate (made at dc8ddb5): no y-intercept",
+            fixture(include_str!(
+                "fixtures/certify/review14/root-negative-huge.json"
+            )),
+        ),
     ];
     for (what, v) in cases {
         let r = replay::replay(&v).unwrap_or_else(|e| {
