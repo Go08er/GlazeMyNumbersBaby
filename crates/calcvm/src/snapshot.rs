@@ -95,22 +95,27 @@
 //! # The contract
 //!
 //! A restored calculation shows what was saved and continues as the saved
-//! one would have, key for key; values that only came back to the digits
-//! they showed (memory, a shown result) can differ in the last digits. A
-//! state the restore can't rebuild that way comes back as a new
-//! calculation from the saved value instead: the expression is cleared,
-//! the value shown as a result (the next digit replaces it, `=` repeats
-//! nothing, the carry is clear, as after C), and memory, the histories and
-//! the modes are kept. Such a
-//! state is either marked when saved (`"nr": true`: the engine knows its
-//! commands won't rebuild it: a number typed right after `)`, a word size
-//! switched mid-expression, a number begun with Exp after C or CE,
+//! one would have, key for key, except that values come back as they were
+//! shown: memory, a shown result and the operands of the expression return
+//! with the digits the display gave them (a Programmer memory slot as the
+//! word size shows it, −0 as 0), so a later result that depends on more
+//! can differ, in the last digits or, after cancellation, wholly. A state
+//! the restore can't rebuild that way comes back as a new calculation from
+//! the saved value instead: the expression is cleared, the value shown as
+//! a result (the next digit replaces it, `=` repeats nothing, the carry is
+//! clear, as after C), and memory, the histories and the modes are kept.
+//! Such a state is either marked when saved (`"nr": true`: the engine
+//! knows its commands won't rebuild it: a number typed right after `)`, a
+//! word size switched mid-expression, or after `=` with what it repeats
+//! wider than the new one, a number begun with Exp after C or CE,
 //! parentheses the expression doesn't hold), or found when restored: the
 //! restored calculation is saved again and compared with what was loaded
 //! (the display, the expression line, the display commands, `"k"` and the
 //! modes). An error the engine is in is restored as an error without that
 //! check, since every key clears it. Snapshots without `"k"` are restored
-//! as before, unchecked.
+//! as before, unchecked. The check compares what is saved; the randomized
+//! restore tests (`tests/restore_fuzz.rs`) also compare the engine's own
+//! state.
 
 use std::rc::Rc;
 
@@ -1416,10 +1421,9 @@ impl StandardCalculatorViewModel {
         {
             let _ = self.with_manager(|m| m.set_left_operand(&operand));
         }
-        // Extension: whether the input holds the number typed last (with 0
-        // shown, or in an error, the C key is then CE), which what the
-        // restore typed needn't have left so. Snapshots without "k" are left
-        // as replayed.
+        // Extension: whether the input holds the number typed last (which,
+        // with 0 shown, makes the C key CE), which what the restore typed
+        // needn't have left so. Snapshots without "k" are left as replayed.
         if let Some(k) = continuation {
             self.with_manager(|m| m.set_input_empty(k.empty_input));
             self.on_input_changed();

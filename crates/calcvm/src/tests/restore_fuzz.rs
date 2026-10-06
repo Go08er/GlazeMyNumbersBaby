@@ -17,12 +17,16 @@
 //! memory slots).
 //!
 //! Values that only come back to the digits they showed (a memory slot, a
-//! shown result) can differ from the original's beyond those digits: that
-//! is the documented precision of a restore. Such a value must agree with
-//! the original's to 14 significant digits; the restore is then counted as
-//! rounded, and a later result that depends on the digits it lost (`1 ÷ 3
-//! =`, then − 0.3333333333333333) is counted too, not failed. Continuations
-//! of a restore that kept every value exactly must agree but for the last
+//! shown result, an operand of the expression) can differ from the
+//! original's beyond those digits: that is the documented precision of a
+//! restore. Such a value must agree with the original's as the engine
+//! writes it out (or to 14 significant digits; a Programmer memory slot,
+//! as the word size shows it); the restore is then counted as rounded, as
+//! it is when the expression holds an operand that isn't the number its
+//! digits type (1/3 shown as 0.3333333333333333, or −0), and a later
+//! result that depends on what was lost (`1 ÷ 3 =`, then −
+//! 0.3333333333333333) is counted too, not failed. Continuations of a
+//! restore that kept every value exactly must agree but for the last
 //! digits of numbers.
 //!
 //! The default test runs a few seconds' worth; the long run is

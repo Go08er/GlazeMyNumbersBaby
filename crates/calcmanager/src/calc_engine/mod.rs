@@ -837,6 +837,18 @@ impl CalcEngine {
             _ => "other".to_string(),
         };
         exact("last_command", last);
+        // Changing the operator just pressed checks for a precedence
+        // inversion against the operation that worked out the current
+        // value (`m_nPrevOpCode`); nothing else reads it before setting it.
+        if self.f_precedence && is_bin_op_code(self.n_temp_com) {
+            exact(
+                "previous_operator",
+                match self.n_prev_op_code {
+                    0 => "none".to_string(),
+                    op => scicomm::n_precedence_of_op(op).to_string(),
+                },
+            );
+        }
         if self.b_record {
             exact("input", self.input.to_string(self.radix));
         } else {

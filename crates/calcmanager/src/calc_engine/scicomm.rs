@@ -20,7 +20,7 @@ use crate::radix_type::RadixType;
 ///
 /// returns a virtual number for precedence for the operator. We expect binary operator only, otherwise the lowest number
 /// 0 is returned. Higher the number, higher the precedence of the operator.
-fn n_precedence_of_op(nop_code: i32) -> i32 {
+pub(super) fn n_precedence_of_op(nop_code: i32) -> i32 {
     match nop_code {
         IDC_OR | IDC_XOR => 0,
         IDC_AND | IDC_NAND | IDC_NOR => 1,
