@@ -1,6 +1,7 @@
 //! Date calculation (upstream DateCalculator.xaml).
 
-use chrono::{Datelike, Local, NaiveDate};
+use appcore::input::{Key, KeyPress, Named};
+use chrono::{Datelike, Days, Local, Months, NaiveDate};
 use datecalc::{DateCalculatorState, strings as S};
 
 use crate::app::{Cx, Msg as AppMsg};
@@ -24,6 +25,9 @@ pub struct DatePage {
     calendar: Option<u8>,
     /// First day of the month shown in the open calendar.
     shown: NaiveDate,
+    /// The day the keys are on in the open calendar (the one day Tab
+    /// reaches, and where the focus goes when it opens).
+    cursor: NaiveDate,
     offsets: [TextEdit; 3],
 }
 
@@ -33,6 +37,38 @@ fn msg(m: Msg) -> AppMsg {
 
 fn offset_id(i: usize) -> crate::ui::Id {
     id(("date-offset", i))
+}
+
+fn day_id(d: NaiveDate) -> crate::ui::Id {
+    id(("cal-day", d.num_days_from_ce()))
+}
+
+fn first_of_month(d: NaiveDate) -> NaiveDate {
+    d.with_day(1).unwrap_or(d)
+}
+
+fn clamp(d: NaiveDate) -> NaiveDate {
+    d.clamp(datecalc::picker_min_date(), datecalc::picker_max_date())
+}
+
+/// `d` moved by whole months (the day kept where the month has it, else
+/// its last), within the pickers' range.
+fn add_months(d: NaiveDate, months: i32) -> NaiveDate {
+    let moved = if months >= 0 {
+        d.checked_add_months(Months::new(months.unsigned_abs()))
+    } else {
+        d.checked_sub_months(Months::new(months.unsigned_abs()))
+    };
+    clamp(moved.unwrap_or(d))
+}
+
+fn add_days(d: NaiveDate, days: i64) -> NaiveDate {
+    let moved = if days >= 0 {
+        d.checked_add_days(Days::new(days as u64))
+    } else {
+        d.checked_sub_days(Days::new(days.unsigned_abs()))
+    };
+    clamp(moved.unwrap_or(d))
 }
 
 const MONTHS: [&str; 12] = [
@@ -56,6 +92,7 @@ impl DatePage {
         DatePage {
             state: DateCalculatorState::with_today(today),
             calendar: None,
+            cursor: today,
             shown: today.with_day(1).unwrap_or(today),
             offsets: std::array::from_fn(|_| TextEdit::new("0", 3)),
         }
@@ -70,7 +107,7 @@ impl DatePage {
         d.date_naive()
     }
 
-    pub fn update(&mut self, m: Msg, _cx: &mut Cx) {
+    pub fn update(&mut self, m: Msg, cx: &mut Cx) {
         match m {
             Msg::DiffMode(diff) => self.state.set_is_date_diff_mode(diff),
             Msg::Add(add) => self.state.set_is_add_mode(add),
@@ -79,19 +116,22 @@ impl DatePage {
                 self.set_offset(i as usize, v);
             }
             Msg::Calendar(which) => {
+                let was = self.calendar;
                 self.calendar = which;
                 if let Some(w) = which {
+                    // Opened, the keys (and assistive technology) start on
+                    // the date chosen.
                     let d = self.date(w);
-                    self.shown = d.with_day(1).unwrap_or(d);
+                    self.shown = first_of_month(d);
+                    self.cursor = d;
+                    *cx.focus = Some(day_id(d));
+                } else if let Some(w) = was {
+                    *cx.focus = Some(id(("date-btn", w)));
                 }
             }
             Msg::Month(delta) => {
-                let m0 = self.shown.year() * 12 + self.shown.month0() as i32 + delta;
-                if let Some(d) =
-                    NaiveDate::from_ymd_opt(m0.div_euclid(12), m0.rem_euclid(12) as u32 + 1, 1)
-                {
-                    self.shown = d;
-                }
+                self.cursor = add_months(self.cursor, delta);
+                self.shown = first_of_month(self.cursor);
             }
             Msg::Pick(which, d) => {
                 let d = d.clamp(datecalc::picker_min_date(), datecalc::picker_max_date());
@@ -102,6 +142,7 @@ impl DatePage {
                     _ => self.state.set_start_date(dt),
                 }
                 self.calendar = None;
+                *cx.focus = Some(id(("date-btn", which)));
             }
         }
     }
@@ -150,6 +191,35 @@ impl DatePage {
                 _ => self.state.set_days_offset(v),
             }
         }
+    }
+
+    /// The open calendar's keys: the arrows move a day or a week, Page
+    /// Up/Down a month (with Shift a year), Home/End to the week's ends,
+    /// into the months around as they go; the focus follows.
+    pub fn key(&mut self, kp: &KeyPress, cx: &mut Cx) -> bool {
+        if self.calendar.is_none() || kp.ctrl || kp.alt {
+            return false;
+        }
+        let c = self.cursor;
+        let weekday = i64::from(c.weekday().num_days_from_sunday());
+        let Key::Named(n) = kp.key else {
+            return false;
+        };
+        let to = match n {
+            Named::Left if !kp.shift => add_days(c, -1),
+            Named::Right if !kp.shift => add_days(c, 1),
+            Named::Up if !kp.shift => add_days(c, -7),
+            Named::Down if !kp.shift => add_days(c, 7),
+            Named::Home if !kp.shift => add_days(c, -weekday),
+            Named::End if !kp.shift => add_days(c, 6 - weekday),
+            Named::PageUp => add_months(c, if kp.shift { -12 } else { -1 }),
+            Named::PageDown => add_months(c, if kp.shift { 12 } else { 1 }),
+            _ => return false,
+        };
+        self.cursor = to;
+        self.shown = first_of_month(to);
+        *cx.focus = Some(day_id(to));
+        true
     }
 
     pub fn close_popup(&mut self) -> bool {
@@ -389,31 +459,66 @@ impl DatePage {
             MONTHS[self.shown.month0() as usize],
             self.shown.year()
         );
-        f.label(
-            head.inset_xy(40.0, 0.0),
+        let title_rect = head.inset_xy(76.0, 0.0);
+        f.label(title_rect, &title, STRONG, t.fg, Align::Center);
+        // The month, a heading (as GMNB's), said when it changes.
+        if let Some(n) = f.node(
+            id("cal-title"),
+            accesskit::Role::Heading,
             &title,
-            STRONG,
-            t.fg,
-            Align::Center,
-        );
-        f.icon_button(
-            id("cal-prev"),
-            head.take_left(36.0).0,
-            appcore::icons::CHEVRON_LEFT,
-            "Previous month",
-            msg(Msg::Month(-1)),
-            true,
-            None,
-        );
-        f.icon_button(
-            id("cal-next"),
-            head.take_right(36.0).0,
-            "M9 6l6 6-6 6",
-            "Next month",
-            msg(Msg::Month(1)),
-            true,
-            None,
-        );
+            title_rect,
+        ) {
+            n.live = true;
+        }
+        let (min, max) = (datecalc::picker_min_date(), datecalc::picker_max_date());
+        let (left, rest) = head.take_left(36.0);
+        let (left2, _) = rest.take_left(36.0);
+        let (right, rest) = head.take_right(36.0);
+        let (right2, _) = rest.take_right(36.0);
+        for (bid, r, icon, name, delta, enabled) in [
+            (
+                "cal-prev-year",
+                left,
+                "M17 6l-6 6 6 6M11 6l-6 6 6 6",
+                "Previous year",
+                -12,
+                self.shown > first_of_month(min),
+            ),
+            (
+                "cal-prev",
+                left2,
+                appcore::icons::CHEVRON_LEFT,
+                "Previous month",
+                -1,
+                self.shown > first_of_month(min),
+            ),
+            (
+                "cal-next",
+                right2,
+                "M9 6l6 6-6 6",
+                "Next month",
+                1,
+                self.shown < first_of_month(max),
+            ),
+            (
+                "cal-next-year",
+                right,
+                "M7 6l6 6-6 6M13 6l6 6-6 6",
+                "Next year",
+                12,
+                self.shown < first_of_month(max),
+            ),
+        ] {
+            f.icon_button(
+                id(bid),
+                r,
+                icon,
+                name,
+                msg(Msg::Month(delta)),
+                enabled,
+                None,
+            );
+        }
         let (dow, days) = grid.take_top(26.0);
         for (i, d) in ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
             .into_iter()
@@ -431,13 +536,12 @@ impl DatePage {
         let today = Local::now().date_naive();
         let lead = self.shown.weekday().num_days_from_sunday() as i64;
         let start = self.shown - chrono::Duration::days(lead);
-        let (min, max) = (datecalc::picker_min_date(), datecalc::picker_max_date());
         for i in 0..42 {
             let d = start + chrono::Duration::days(i);
             let c = days.cell(6, 7, (i / 7) as usize, (i % 7) as usize, 2.0);
             let in_month = d.month() == self.shown.month();
             let enabled = d >= min && d <= max;
-            let did = id(("cal-day", d.num_days_from_ce()));
+            let did = day_id(d);
             let sel = d == selected;
             let label = d.day().to_string();
             if sel {
@@ -453,9 +557,19 @@ impl DatePage {
                     false,
                     &datecalc::format_long_date(&datecalc::utc_midnight(d)),
                 );
-                // Drawn as the accent circle above; tell AT which it is.
+                // Drawn as the accent circle above; tell AT which it is,
+                // and which is today (as GMNB's). One day takes Tab: the
+                // one the keys are on.
+                let keys_here = d == self.cursor;
                 if let Some(n) = f.nodes.as_mut().and_then(|v| v.last_mut()) {
                     n.selected = Some(sel);
+                    n.focusable = keys_here;
+                    if d == today {
+                        n.description = Some(("Today".into(), None));
+                    }
+                }
+                if let Some(h) = f.hits.last_mut() {
+                    h.focusable = keys_here;
                 }
             }
             let color = if sel {
