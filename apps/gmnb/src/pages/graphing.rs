@@ -35,6 +35,59 @@ struct Row {
     pickers: RefCell<Vec<(gtk::Button, gtk::CssProvider)>>,
     error: gtk::Label,
     color: Cell<usize>,
+    /// The field's text, waiting to be told to the graph ([`Deferred`]).
+    edit: Deferred,
+}
+
+/// Runs an update once a toolkit operation is complete: on the next idle,
+/// at high idle priority (after the events at hand, before GTK lays out and
+/// draws the frame), however many times it is asked for meanwhile
+/// (R17-M-03).
+///
+/// An equation field's text property can change several times in one
+/// operation: GTK's undo or redo of a typed replacement reverses its
+/// deletion and its insertion one after the other, each notified, with the
+/// field empty in between. Told of that empty text, the graph would forget
+/// the sliders the restored text still uses (`Graph::refresh`); told once,
+/// of the text as it is when the operation is over, it keeps them. The
+/// same holds for any operation made of steps (a paste, a drop, an
+/// assistive technology's edit, an input method's commit), whatever it is.
+struct Deferred {
+    context: glib::MainContext,
+    pending: Rc<Cell<bool>>,
+}
+
+impl Deferred {
+    fn new(context: glib::MainContext) -> Self {
+        Deferred {
+            context,
+            pending: Rc::default(),
+        }
+    }
+
+    /// Runs `apply` on the next idle, unless a run is pending already:
+    /// that one does it, as `apply` reads the state as it is then.
+    fn ask(&self, apply: impl FnOnce() + 'static) {
+        if self.pending.replace(true) {
+            return;
+        }
+        let pending = self.pending.clone();
+        let task = self
+            .context
+            .spawn_local_with_priority(glib::Priority::HIGH_IDLE, async move {
+                if pending.replace(false) {
+                    apply();
+                }
+            });
+        // The handle isn't needed: dropped, it leaves the task to run.
+        drop(task);
+    }
+
+    /// Whether a run was pending; it no longer is (its idle finds nothing
+    /// to do), for the caller to do the update now, or not at all.
+    fn take(&self) -> bool {
+        self.pending.replace(false)
+    }
 }
 
 /// A style provider for a swatch's colour, attached once and reloaded on
@@ -592,6 +645,7 @@ impl GraphingPage {
             pickers: RefCell::default(),
             error,
             color: Cell::new(color),
+            edit: Deferred::new(glib::MainContext::default()),
         });
         style.set_popover(Some(&self.style_popover(&row)));
         self.paint_swatch(&row);
@@ -611,21 +665,20 @@ impl GraphingPage {
         });
         self.rows.borrow_mut().push(row.clone());
 
-        // The text, not each change: replacing it all (an assistive
-        // technology's SetTextContents, gtk_editable_set_text) deletes it
-        // and inserts the new one, `changed` each time, while the text
-        // property, frozen meanwhile, is told once, of the new text. So
-        // the graph never sees the empty text in between, which would
-        // forget the sliders the new text still uses (as DGMNB's direct
-        // replacement keeps them); a text that really is cleared still
-        // forgets them (Graph::refresh). Typing over a selection is one
-        // change already (GtkText's begin_change).
+        // The text once each operation is over, not each step of it
+        // (Deferred): the graph never sees a text that was only on the way
+        // (the empty field in the middle of an undone replacement, of an
+        // assistive technology's SetTextContents), which would forget the
+        // sliders the final text still uses, as DGMNB's direct replacement
+        // keeps them. A text the user really clears, or an equation
+        // removed, still forgets them (Graph::refresh): that is where the
+        // operation ends.
         let weak = Rc::downgrade(self);
-        entry.connect_text_notify(move |e| {
+        entry.connect_text_notify(move |_| {
             if let Some(p) = weak.upgrade()
                 && !p.building.get()
             {
-                p.equation_changed(id, &e.text());
+                p.text_changed(id);
             }
         });
         let weak = Rc::downgrade(self);
@@ -642,6 +695,7 @@ impl GraphingPage {
         entry.connect_activate(move |_| {
             if let Some(p) = weak.upgrade() {
                 // Enter plots and moves on to a fresh expression, like upstream.
+                p.tell_edits();
                 p.graph_view.animate_draw(id);
                 let last = p.rows.borrow().last().map(|r| r.id) == Some(id);
                 if last && let Some(r) = p.add_equation("") {
@@ -652,6 +706,9 @@ impl GraphingPage {
         let weak = Rc::downgrade(self);
         swatch.connect_clicked(move |_| {
             if let Some(p) = weak.upgrade() {
+                // Hiding (or showing) what was typed, not what was before:
+                // an edit draws an equation again.
+                p.tell_edits();
                 let on = !p.graph.borrow().is_line_enabled(id);
                 p.set_drawn(id, on);
             }
@@ -659,6 +716,7 @@ impl GraphingPage {
         let weak = Rc::downgrade(self);
         analyze.connect_clicked(move |_| {
             if let Some(p) = weak.upgrade() {
+                p.tell_edits();
                 p.show_analysis(id);
             }
         });
@@ -669,6 +727,10 @@ impl GraphingPage {
             let (Some(p), Some(rev)) = (weak.upgrade(), rev.upgrade()) else {
                 return;
             };
+            // Its text, whatever it was last, goes with it.
+            if let Some(row) = p.row(id) {
+                row.edit.take();
+            }
             p.graph.borrow_mut().remove_equation(id);
             p.rows.borrow_mut().retain(|r| r.id != id);
             p.graph_view.forget_color(id);
@@ -753,6 +815,49 @@ impl GraphingPage {
             .child(&col)
             .css_classes(["wc-flyout"])
             .build()
+    }
+
+    fn row(&self, id: EquationId) -> Option<Rc<Row>> {
+        self.rows.borrow().iter().find(|r| r.id == id).cloned()
+    }
+
+    /// An equation field's text property changed: the graph is told of the
+    /// text once the operation that changed it is over ([`Deferred`]).
+    fn text_changed(self: &Rc<Self>, id: EquationId) {
+        let Some(row) = self.row(id) else { return };
+        let weak = Rc::downgrade(self);
+        row.edit.ask(move || {
+            if let Some(p) = weak.upgrade() {
+                p.tell_graph(id);
+            }
+        });
+    }
+
+    /// Tells the graph the equation's text as its field has it now, if the
+    /// graph has another (nothing for an equation removed meanwhile).
+    fn tell_graph(self: &Rc<Self>, id: EquationId) {
+        let Some(text) = self.row(id).map(|r| r.entry.text()) else {
+            return;
+        };
+        if self.graph.borrow().text(id) != Some(text.as_str()) {
+            self.equation_changed(id, &text);
+        }
+    }
+
+    /// Tells the graph now of the texts still waiting for their idle, for
+    /// what reads the equations from the graph straight after a key or a
+    /// click (Enter, show/hide, analysis, saving).
+    fn tell_edits(self: &Rc<Self>) {
+        let waiting: Vec<EquationId> = self
+            .rows
+            .borrow()
+            .iter()
+            .filter(|r| r.edit.take())
+            .map(|r| r.id)
+            .collect();
+        for id in waiting {
+            self.tell_graph(id);
+        }
     }
 
     fn equation_changed(self: &Rc<Self>, id: EquationId, text: &str) {
@@ -1287,6 +1392,7 @@ impl Page for GraphingHandle {
 
     fn save(&self) {
         let p = &self.0;
+        p.tell_edits();
         let graph = p.graph.borrow();
         let saved: Vec<SavedEquation> = p
             .rows
@@ -1366,5 +1472,78 @@ mod tests {
         assert!(g.variables().is_empty());
         tell(&mut g, id, &["y = a*x+2"]);
         assert_eq!(g.variable("a").unwrap().value(), 1.0);
+    }
+
+    /// R17-M-03: what an equation field's text notifications tell the
+    /// graph, through the field's own `Deferred` on a main loop of its own.
+    /// One operation, GTK's undo of a typed replacement (the typed text
+    /// deleted, the old one inserted, each notified, the field empty in
+    /// between), is told once, on the next idle, as the field has it then:
+    /// the slider stays. A text taken for telling at once (Enter, a click)
+    /// isn't told again. A real clear, an operation of its own, still
+    /// forgets the slider.
+    #[test]
+    fn one_operation_is_told_once() {
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+
+        use gtk::glib;
+
+        let context = glib::MainContext::new();
+        context
+            .with_thread_default(|| {
+                let mut g = Graph::new();
+                let id = g.add_equation("y = a*x+1");
+                g.set_variable("a", 0.3);
+                let graph = Rc::new(RefCell::new(g));
+                let field = Rc::new(RefCell::new(String::from("y = a*x+1")));
+                let told = Rc::new(Cell::new(0));
+                let edit = super::Deferred::new(context.clone());
+                // The field's text property changing to `text`.
+                let notify = |text: &str| {
+                    *field.borrow_mut() = text.to_string();
+                    let (graph, field, told) = (graph.clone(), field.clone(), told.clone());
+                    edit.ask(move || {
+                        told.set(told.get() + 1);
+                        graph.borrow_mut().set_equation_text(id, &field.borrow());
+                    });
+                };
+                let idle = || while context.iteration(false) {};
+                let a = || graph.borrow().variable("a").map(|v| v.value());
+
+                // Ctrl+A, then a typed: one change (GtkText's begin_change).
+                notify("a");
+                idle();
+                assert_eq!((told.get(), a()), (1, Some(0.3)));
+
+                // One Ctrl+Z.
+                notify("");
+                notify("y = a*x+1");
+                assert_eq!(told.get(), 1, "told before the operation was over");
+                idle();
+                assert_eq!(told.get(), 2);
+                assert_eq!(graph.borrow().text(id), Some("y = a*x+1"));
+                assert_eq!(a(), Some(0.3));
+
+                // Redo, then taken at once: not told again on the idle.
+                notify("");
+                notify("a");
+                assert!(edit.take());
+                graph.borrow_mut().set_equation_text(id, &field.borrow());
+                idle();
+                assert_eq!(told.get(), 2);
+                assert!(!edit.take());
+                assert_eq!(a(), Some(0.3));
+
+                // A real clear forgets a; typed again, it starts at 1.
+                notify("");
+                idle();
+                assert_eq!(told.get(), 3);
+                assert!(graph.borrow().variables().is_empty());
+                notify("y = a*x+1");
+                idle();
+                assert_eq!(a(), Some(1.0));
+            })
+            .unwrap();
     }
 }

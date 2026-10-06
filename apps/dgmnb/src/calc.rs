@@ -492,8 +492,9 @@ impl CalcPage {
                 }
                 self.vm.is_enabled(b)
             });
+            let kid = id((group, k.id));
             f.key(
-                id((group, k.id)),
+                kid,
                 cell,
                 &label,
                 k.icon,
@@ -502,6 +503,11 @@ impl CalcPage {
                 msg(Msg::Key(k.id)),
                 enabled,
             );
+            // Every key here (the flyouts' too) but the 2nd and hyp
+            // toggles, upstream's ToggleButtons, which Enter toggles.
+            if k.kind != KeyKind::Toggle {
+                f.calculator_key(kid);
+            }
         }
         f.end_group();
     }
@@ -513,8 +519,9 @@ impl CalcPage {
         let cells = r.columns(n, 2.0);
         for (i, (b, label, name, tip)) in items.iter().enumerate() {
             let enabled = self.vm.is_enabled(*b);
+            let mid = id(("mem", *b as u32));
             f.button(
-                id(("mem", *b as u32)),
+                mid,
                 cells[i],
                 label,
                 CAPTION,
@@ -523,6 +530,7 @@ impl CalcPage {
                 None,
                 false,
             );
+            f.calculator_key(mid);
             describe(f, name, tip);
         }
         if toggle {
@@ -656,8 +664,9 @@ impl CalcPage {
         );
         describe(f, "Memory", "Memory");
         let (ms, _) = rest.take_right(40.0);
+        let mid = id(("mem", B::Memory as u32));
         f.button(
-            id(("mem", B::Memory as u32)),
+            mid,
             ms,
             "MS",
             CAPTION,
@@ -666,6 +675,7 @@ impl CalcPage {
             None,
             false,
         );
+        f.calculator_key(mid);
         describe(f, "Memory store", "Memory store (Ctrl+M)");
     }
 
@@ -686,8 +696,9 @@ impl CalcPage {
                     let bit = top - j;
                     let cell = bits_r.cell(1, 4, 0, j as usize, 2.0).inset_xy(0.0, 4.0);
                     let on = bit < width && self.vm.bit(bit);
+                    let bid = id(("bit", bit));
                     f.button(
-                        id(("bit", bit)),
+                        bid,
                         cell,
                         if on { "1" } else { "0" },
                         Style::new(16.0, if on { 700.0 } else { 400.0 }),
@@ -696,6 +707,7 @@ impl CalcPage {
                         Some(on),
                         false,
                     );
+                    f.calculator_key(bid);
                     if let Some(n) = f.nodes.as_mut().and_then(|v| v.last_mut()) {
                         n.label = format!("Bit {bit}");
                     }

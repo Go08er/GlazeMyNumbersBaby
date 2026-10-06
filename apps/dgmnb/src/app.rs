@@ -1326,10 +1326,12 @@ impl App {
                         .find(|h| h.id == f && h.sense == Sense::Click)
                         .cloned()
                 });
+                // The focused control's, ring drawn or not (R17-L-03): a
+                // pointer hides the ring, not the focus, which Escape also
+                // puts back on a calendar's opener without it.
                 let enter = kp.key == Key::Named(Named::Enter);
                 if let Some(h) = focused
-                    && self.input.focus_visible
-                    && !(enter && h.keypad)
+                    && h.activated_by(enter)
                     && let Some(m) = h.msg
                 {
                     self.update(el, m);
