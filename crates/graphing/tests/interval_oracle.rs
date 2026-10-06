@@ -1980,6 +1980,12 @@ fn written_ratios_of_any_size_are_enclosed() {
             "x^(3/2000000)",
             "x^(1/9007199254740993)",
             "(x-1)^(1000001/3)",
+            // Whole numbers of 10⁶ or more, q = 1.
+            "x^1000001",
+            "x^(-1000002)",
+            "x^2000000",
+            "x^(-1000001)",
+            "x^9007199254740993",
         ] {
             let opts = ParseOptions {
                 literal_digits: digits,

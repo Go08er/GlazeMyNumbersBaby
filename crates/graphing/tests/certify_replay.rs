@@ -988,6 +988,20 @@ const PLANTS: &[Plant] = &[
     ("x^(1000001/3000003)", "odd called even", |v| {
         *value_of(v, "parity") = serde_json::json!("Even");
     }),
+    // The follow-up: whole-number exponents of 10⁶ or more.
+    ("x^1000001", "the domain cut to [0, ∞)", |v| {
+        value_of(v, "domain")["pieces"][0]["lo"] =
+            serde_json::json!({"At": {"x": {"lo": 0.0, "hi": 0.0}, "closed": true}});
+    }),
+    ("x^1000001", "odd called even", |v| {
+        *value_of(v, "parity") = serde_json::json!("Even");
+    }),
+    ("x^(-1000002)", "even called odd", |v| {
+        *value_of(v, "parity") = serde_json::json!("Odd");
+    }),
+    ("x^(-1000002)", "the vertical asymptote left out", |v| {
+        value_of(v, "vertical").as_array_mut().unwrap().clear();
+    }),
 ];
 
 /// The slope evidence the plants above alter, unaltered, replays.

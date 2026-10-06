@@ -934,6 +934,28 @@ const REVIEW: &[(&str, &str)] = &[
         "x^(1/9007199254740993)",
         "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | VA=none | HA=none | R=R",
     ),
+    // The follow-up: whole-number exponents of 10⁶ or more, by the same
+    // reading (their domain, and all but parity, were unknown).
+    (
+        "x^1000001",
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=(0,0) | VA=none | HA=none | R=R",
+    ),
+    (
+        "x^2000000",
+        "D=R | XI=0 | YI=0 | P=even | T=none | MIN=(0,0) | MAX=none | VA=none | HA=none | R=[0,inf)",
+    ),
+    (
+        "x^(-1000002)",
+        "D=(-inf,0)U(0,inf) | XI=none | YI=none | P=even | T=none | MIN=none | MAX=none | VA=0 | HA=0 | R=(0,inf)",
+    ),
+    (
+        "x^(-1000001)",
+        "D=(-inf,0)U(0,inf) | XI=none | YI=none | P=odd | T=none | MIN=none | MAX=none | VA=0 | HA=0 | R=(-inf,0)U(0,inf)",
+    ),
+    (
+        "(x-1)^1000001",
+        "D=R | XI=1 | P=neither | T=none | MIN=none | MAX=none | INF=(1,0) | VA=none | HA=none | R=R",
+    ),
 ];
 
 /// Review 13: functions under a digit limit on typed numbers
@@ -1065,6 +1087,48 @@ const DIGITS: &[(&str, u8, &str)] = &[
         "x^(1000001/3000003)",
         20,
         "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | VA=none | HA=none | R=R",
+    ),
+    // Whole numbers: to 5 digits 1000001 is even; 9007199254740993 is odd
+    // from 16 digits on.
+    (
+        "x^1000001",
+        5,
+        "D=R | XI=0 | YI=0 | P=even | T=none | MIN=(0,0) | MAX=none | VA=none | HA=none | R=[0,inf)",
+    ),
+    (
+        "x^1000001",
+        14,
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=(0,0) | VA=none | HA=none | R=R",
+    ),
+    (
+        "x^(-1000001)",
+        5,
+        "D=(-inf,0)U(0,inf) | XI=none | YI=none | P=even | T=none | MIN=none | MAX=none | VA=0 | HA=0 | R=(0,inf)",
+    ),
+    (
+        "x^(-1000001)",
+        14,
+        "D=(-inf,0)U(0,inf) | XI=none | YI=none | P=odd | T=none | MIN=none | MAX=none | VA=0 | HA=0 | R=(-inf,0)U(0,inf)",
+    ),
+    (
+        "x^9007199254740993",
+        14,
+        "D=R | XI=0 | YI=0 | P=even | T=none | MIN=(0,0) | MAX=none | VA=none | HA=none | R=[0,inf)",
+    ),
+    (
+        "x^9007199254740993",
+        15,
+        "D=R | XI=0 | YI=0 | P=even | T=none | MIN=(0,0) | MAX=none | VA=none | HA=none | R=[0,inf)",
+    ),
+    (
+        "x^9007199254740993",
+        16,
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=(0,0) | VA=none | HA=none | R=R",
+    ),
+    (
+        "x^9007199254740993",
+        20,
+        "D=R | XI=0 | YI=0 | P=odd | T=none | MIN=none | MAX=none | INF=(0,0) | VA=none | HA=none | R=R",
     ),
 ];
 

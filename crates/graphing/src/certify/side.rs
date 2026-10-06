@@ -147,10 +147,15 @@ enum Exponent {
     /// p/q in lowest terms: written so (integer powers, real odd roots),
     /// or exactly an integer however written (`x^(0.1 + 0.9)` is x¹).
     Rational(i32, i32),
-    /// Written as a ratio p/q (q > 1) past those: the same real root, which
-    /// p's sign and q's parity decide (review 15, R15-M-01: x^(1000001/3)
-    /// had the positive-base rule's domain [0, ∞), not ℝ).
-    Ratio { negative: bool, even_q: bool },
+    /// Written as a ratio p/q past those (a whole number when q = 1): the
+    /// same real root or integer power, which p's sign and q's parity
+    /// decide (review 15, R15-M-01: x^(1000001/3) had the positive-base
+    /// rule's domain [0, ∞), not ℝ; x^1000001's was unknown).
+    Ratio {
+        negative: bool,
+        even_q: bool,
+        integer: bool,
+    },
     /// Known not to be an integer (`x^0.2`, `x^π`, a typed
     /// `x^1.0000000000000001` whose double is 1): the positive-base rule.
     NonInteger,
@@ -168,13 +173,11 @@ fn exponent(f: &Fun<'_>, b: &Expr) -> Exponent {
             if let Some((p, q)) = r.small() {
                 return Exponent::Rational(p, q);
             }
-            if !r.is_integer() {
-                return Exponent::Ratio {
-                    negative: r.is_negative(),
-                    even_q: !r.odd_q(),
-                };
-            }
-            // (A whole number past 10⁶: by its value, below.)
+            return Exponent::Ratio {
+                negative: r.is_negative(),
+                even_q: !r.odd_q(),
+                integer: r.is_integer(),
+            };
         }
         // Too long to carry: its parities aren't known.
         Some(Written::Long) => return Exponent::Unknown,
@@ -318,9 +321,20 @@ fn walk(f: &Fun<'_>, e: &Expr, path: &mut Vec<u8>, out: &mut Vec<SideCond>) -> R
                     Exponent::Rational(p, q) => Some((p, q)),
                     // As the one pair of machine integers with p's sign
                     // and q's parity: all that is read off it here.
-                    Exponent::Ratio { negative, even_q } => {
-                        Some((if negative { -1 } else { 1 }, if even_q { 2 } else { 3 }))
-                    }
+                    Exponent::Ratio {
+                        negative,
+                        even_q,
+                        integer,
+                    } => Some((
+                        if negative { -1 } else { 1 },
+                        if integer {
+                            1
+                        } else if even_q {
+                            2
+                        } else {
+                            3
+                        },
+                    )),
                     Exponent::NonInteger => None,
                     Exponent::Unknown => {
                         return Err("a constant exponent not known to be an integer or not".into());
