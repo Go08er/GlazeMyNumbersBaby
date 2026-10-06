@@ -1377,7 +1377,7 @@ enum Fold {
     /// the general path still gets right alone, and whether a slider is in
     /// it: a decimal typed with thousands of digits (its double is it
     /// rounded once), or a power or count proven beyond the doubles
-    /// (10⁵⁰⁰⁰, 2^−100000, 171!: ±∞ or 0, however it is rounded), with
+    /// (10⁵⁰⁰⁰, 2^−100000, 2000!: ±∞ or 0, however it is rounded), with
     /// what is known of its parity (for a power of a negative base). Any
     /// arithmetic on it is [`Fold::Big`].
     Lone(bool, Parity),
@@ -1599,32 +1599,45 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                     // Γ's generalisation (floating point, as sin).
                     None if !r.is_integer() => return No,
                     // A whole number past 2⁵³: a pole of Γ if negative,
-                    // undefined however it rounds; else past 170 (and
-                    // 300), the count beyond the doubles, as it is from
-                    // the even double the general path rounds it to.
+                    // undefined however it rounds; else far past the cap
+                    // (and the doubles), as it is from the even double
+                    // the general path rounds it to.
                     None if r.is_negative() => return No,
                     None if *f == Func::Factorial => return Lone(v, Parity::Even),
                     None => return Lone(v, Parity::of(&r)),
                 };
-                let count = if *f == Func::Factorial {
-                    // n! up to 170! (beyond, past the doubles).
-                    match n {
-                        0..=170 => {
-                            let mut p = Nat::from_u64(1);
-                            for k in 2..=n as u32 {
-                                p = p.mul_small(k);
-                            }
-                            Some(fns::Count::Exact(p))
-                        }
-                        171.. => Some(fns::Count::Huge),
-                        _ => None,
-                    }
+                let step = if *f == Func::Factorial { 1 } else { 2 };
+                let count = if n < 0 && !(step == 2 && n == -1) {
+                    // A pole of Γ (n! for n < 0, n!! for n < −1).
+                    None
                 } else {
-                    fns::double_factorial_exact(n as f64)
+                    // n(n − 1)(n − 2)… (n(n − 2)… for n!!) exactly, within
+                    // the cap every exact value keeps (n! to about 1750!,
+                    // n!! to about 3400!!), as nCr and nPr: one cap for
+                    // every count (review 15, Q1: 171!/170! was unknown,
+                    // refused once past the doubles). Each factor is at
+                    // least 2, so the product passes the cap within
+                    // `MAX_BITS` steps.
+                    let mut p = Nat::from_u64(1);
+                    let mut k = n;
+                    let mut huge = false;
+                    while k > 1 {
+                        p = p.mul(&Nat::from_u64(k as u64));
+                        if p.bits() > crate::big::MAX_BITS {
+                            huge = true;
+                            break;
+                        }
+                        k -= step;
+                    }
+                    Some(if huge {
+                        fns::Count::Huge
+                    } else {
+                        fns::Count::Exact(p)
+                    })
                 };
                 match count {
                     Some(fns::Count::Exact(p)) => Value(Rat::nat(p), v),
-                    // Past the doubles: alone it is +∞, but 171! − 171! is
+                    // Past the cap: alone it is +∞, but 2000! − 2000! is
                     // no 0 to compute. (n! for n ≥ 2 is even; n!! is of n's
                     // parity.)
                     Some(fns::Count::Huge) if *f == Func::Factorial => Lone(v, Parity::Even),
@@ -1643,36 +1656,32 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                 if !rn.is_integer() || !rr.is_integer() {
                     return No;
                 }
-                // Whole numbers no double holds (past 2⁵³): the count of
-                // the numbers themselves, never of their doubles; too long
-                // to carry, unknown (the general path, from rounded whole
-                // numbers, could make 1 of C(2⁵³ + 50, 2⁵³ + 25)).
-                if !double(&rn) || !double(&rr) {
-                    let (Some((nneg, n)), Some((rneg, r))) = (rn.integer(), rr.integer()) else {
-                        return Big(vn || vr);
-                    };
-                    if nneg {
-                        // A pole of Γ, however n rounds (to a whole n < 0).
-                        return No;
-                    }
-                    if rneg || r > n {
-                        return Value(Rat::int(0), vn || vr);
-                    }
-                    return match fns::count_exact_big(&n, &r, perm) {
-                        Some(p) => Value(Rat::nat(p), vn || vr),
-                        None => Big(vn || vr),
-                    };
+                // The count of the whole numbers themselves, never of their
+                // doubles (past 2⁵³ no double holds them), exactly within
+                // the cap every exact value keeps, whether or not each is a
+                // double (review 15, Q1: C(2¹⁰⁰⁰, 2), of two doubles, was
+                // refused once past the doubles, so C(2¹⁰⁰⁰, 2) divided by
+                // its own value was unknown, while C(2⁵³ + 1, 400) of a
+                // number no double holds had the whole cap).
+                let (Some((nneg, n)), Some((rneg, r))) = (rn.integer(), rr.integer()) else {
+                    return Big(vn || vr);
+                };
+                if nneg {
+                    // A pole of Γ, however n rounds (to a whole n < 0); and
+                    // of a double, Γ's generalisation, in floating point.
+                    return No;
                 }
-                // Each a double: exactly, or beyond the doubles (+∞ from
-                // the same doubles on the general path).
-                let (n, r) = (
-                    rn.to_f64(crate::big::Round::Nearest),
-                    rr.to_f64(crate::big::Round::Nearest),
-                );
-                match fns::count_exact(n, r, perm) {
-                    Some(fns::Count::Exact(p)) => Value(Rat::nat(p), vn || vr),
-                    // (A product of r ≥ 2 consecutive integers is even.)
-                    Some(fns::Count::Huge) => Lone(
+                if rneg || r > n {
+                    return Value(Rat::int(0), vn || vr);
+                }
+                match fns::count_exact_big(&n, &r, perm) {
+                    Some(p) => Value(Rat::nat(p), vn || vr),
+                    // Past the cap. Of doubles, beyond them (+∞ from the
+                    // same doubles on the general path; a product of r ≥ 2
+                    // consecutive integers is even); else unknown (the
+                    // general path, from rounded whole numbers, could make
+                    // 1 of C(2⁵³ + 50, 2⁵³ + 25)).
+                    None if double(&rn) && double(&rr) => Lone(
                         vn || vr,
                         if *f == Func::NPr {
                             Parity::Even
@@ -1680,7 +1689,7 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                             Parity::Unknown
                         },
                     ),
-                    None => No,
+                    None => Big(vn || vr),
                 }
             }
             _ => No,
@@ -1888,9 +1897,9 @@ fn pow_kind(b: &Expr, opts: &CompileOptions<'_>, lx: Reading) -> PowKind {
                     return PowKind::Odd;
                 }
             }
-            // A value beyond the doubles too long to carry (3^20000, 171!,
+            // A value beyond the doubles too long to carry (3^20000, 2000!,
             // 1.5^100000), by its parity: its extended-range value, past
-            // 2⁵³, is even (as 10⁵⁰⁰⁰ and 171! are).
+            // 2⁵³, is even (as 10⁵⁰⁰⁰ and 2000! are).
             Fold::Lone(_, parity) => {
                 return match parity {
                     Parity::Even => PowKind::Plain,

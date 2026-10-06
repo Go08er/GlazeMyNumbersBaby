@@ -6,7 +6,9 @@
 //! (10⁵⁰⁰⁰ + 1) − 10⁵⁰⁰⁰ was 0, not 1. Now such arithmetic isn't done: the
 //! value is unknown (NaN, and the reference says unknown, not undefined),
 //! so nothing is drawn or traced there. A value too long to carry that is
-//! proven beyond the doubles alone (10⁵⁰⁰⁰, 171!) still rounds to ±∞ or 0.
+//! proven beyond the doubles alone (10⁵⁰⁰⁰, 2000!) still rounds to ±∞ or 0.
+//! (171!, within the cap since review 15's one cap for every count, is
+//! exact: (171! + 1) − 171! is 1.)
 
 use graphing::TrigUnit;
 use graphing::analysis::analyze_str;
@@ -44,7 +46,7 @@ fn arithmetic_too_long_to_fold_is_unknown_not_rounded() {
         "(10^5000+1)-10^5000",
         "(10^5000+1)-10^5000+x",
         "2^20000/2^19999",
-        "(171!+1)-171!",
+        "(2000!+1)-2000!",
         "10^5000*(10^-5000)",
     ];
     for src in beyond.iter().chain(&["(1+1/2^20)^800"]) {
@@ -314,17 +316,19 @@ fn a_typed_odd_root_degree_past_the_doubles_is_odd() {
 
 #[test]
 fn a_value_beyond_the_doubles_alone_still_rounds_once() {
-    // 10⁵⁰⁰⁰ and 171! are past the doubles however they are rounded: +∞,
+    // 10⁵⁰⁰⁰, 171! and 2000! are past the doubles however they are rounded: +∞,
     // as before; and functions of them are evaluated as before.
     assert_eq!(at("10^5000", 0.0), f64::INFINITY);
     assert_eq!(at("-10^5000", 0.0), f64::NEG_INFINITY);
     assert_eq!(at("171!", 0.0), f64::INFINITY);
+    assert_eq!(at("2000!", 0.0), f64::INFINITY);
     assert_eq!(at("(1/2)^100000", 0.0), 0.0);
     assert_eq!(at("10^5000*x", 2.0), f64::INFINITY);
     let ln = at("ln(10^5000)", 0.0);
     assert!((ln - 5000.0 * std::f64::consts::LN_10).abs() < 1e-9, "{ln}");
     // Within the cap nothing changed: exact, then rounded once.
     assert_eq!(at("(10^300+1)-10^300", 0.0), 1.0);
+    assert_eq!(at("(171!+1)-171!", 0.0), 1.0);
     assert_eq!(at("(-1)^100001+(10^300+1)-10^300", 0.0), 0.0);
     assert_eq!(at("1^100000+x", 2.0), 3.0);
 }

@@ -113,7 +113,7 @@ digits or more), `x^9007199254740993` is −1 at −1 and
 either side of that number are even; so is `root(−8, n)` for an odd n of
 hundreds of digits. An exponent too long to carry exactly (`3^20000`) is
 odd, even or no integer as its form shows (3^20000 is odd, 10^5000 even,
-1.5^100000 no integer); where that isn't known (`x^nCr(2000, 1000)`), a
+1.5^100000 no integer); where that isn't known (`x^nCr(20000, 10000)`), a
 negative base's power is unknown. Arithmetic on literals and
 sliders alone (+, −, ×, ÷, whole powers, |·| and the counts n!, n!!, nCr,
 nPr of whole numbers of any size) is done exactly and rounded once
@@ -122,11 +122,14 @@ nPr of whole numbers of any size) is done exactly and rounded once
 `nCr(9007199254740993, 1) − 9007199254740992` is 1, though no double holds
 the first number), for the curve drawn, its trace and
 its analysis alike, while every exact value on the way fits in 2¹⁴ bits
-(about 4,900 digits). Past that the arithmetic isn't carried out. A value
-proven beyond the doubles on its own (`10^5000`, `171!`, `(1/2)^100000`)
-is still the ±∞ or 0 it rounds to, but arithmetic on such a value has an
-unknown value, not what rounding step by step would make of it:
-`(10^5000 + 1) − 10^5000` is unknown, never 0. Nothing is drawn or traced
+(about 4,900 digits), whether or not its numbers are doubles:
+`nCr(2^1000, 2)/(2^1000·(2^1000 − 1)/2)` is 1 and `171!/170!` is 171,
+though C(2¹⁰⁰⁰, 2) and 171! are beyond the doubles. Past that the
+arithmetic isn't carried out. A value proven beyond the doubles on its own
+(`10^5000`, `2000!`, `(1/2)^100000`) is still the ±∞ or 0 it rounds to,
+but arithmetic on such a value has an unknown value, not what rounding
+step by step would make of it: `(10^5000 + 1) − 10^5000` is unknown,
+never 0. Nothing is drawn or traced
 for an unknown value except where f's enclosure itself places the curve.
 Anything else (π, e, sin, a root or a power to an exponent no integer,
 the counts of numbers no whole number, …) is computed in floating point

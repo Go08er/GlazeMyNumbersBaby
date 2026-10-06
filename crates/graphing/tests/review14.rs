@@ -186,8 +186,10 @@ fn counts_of_whole_numbers_past_the_doubles_are_exact() {
 
 /// An exponent too long to fold, beyond the doubles: its parity, where
 /// known, decides a negative base's power (3^20000 is odd, 10^5000 and
-/// 171! even, 1.5^100000 no integer); where it isn't (C(2000, 1000)), the
-/// power is unknown, never the even one its extended-range value makes.
+/// 2000! even, 1.5^100000 no integer); where it isn't (C(20000, 10000)),
+/// the power is unknown, never the even one its extended-range value
+/// makes. (171! and C(2000, 1000), within the cap since review 15's one
+/// cap for every count, are exact, and even.)
 #[test]
 fn an_exponent_too_long_to_fold_keeps_its_parity_or_abstains() {
     for (src, want) in [
@@ -195,8 +197,10 @@ fn an_exponent_too_long_to_fold_keeps_its_parity_or_abstains() {
         ("x^(-(3^20000))", Some(-1.0)),
         ("x^(10^5000)", Some(1.0)),
         ("x^(171!)", Some(1.0)),
+        ("x^(2000!)", Some(1.0)),
         ("x^(1.5^100000)", None),
-        ("x^(nCr(2000,1000))", None),
+        ("x^(nCr(2000,1000))", Some(1.0)),
+        ("x^(nCr(20000,10000))", None),
     ] {
         let v = value(src, -1.0, None);
         match want {
@@ -210,7 +214,7 @@ fn an_exponent_too_long_to_fold_keeps_its_parity_or_abstains() {
     assert!(matches!(reference("x^(3^20000)", -1.0, None), R::V(v) if v.f() == -1.0));
     assert!(matches!(reference("x^(1.5^100000)", -1.0, None), R::Undef));
     assert!(matches!(
-        reference("x^(nCr(2000,1000))", -1.0, None),
+        reference("x^(nCr(20000,10000))", -1.0, None),
         R::Unknown
     ));
 }
