@@ -679,9 +679,72 @@ pub fn graph_pad_name(label: &str) -> &str {
     }
 }
 
+/// What upstream calls the angle button for assistive technology, by the
+/// unit it shows (CalculatorScientificAngleButtons: degButton, radButton,
+/// gradButton); the button shows "DEG", "RAD" or "GRAD".
+pub fn angle_button_name(unit: calcvm::AngleUnit) -> &'static str {
+    match unit {
+        calcvm::AngleUnit::Degrees => "Degrees toggle",
+        calcvm::AngleUnit::Radians => "Radians toggle",
+        calcvm::AngleUnit::Gradians => "Gradians toggle",
+    }
+}
+
+/// What upstream calls the word size button, by the size it shows
+/// (qwordButton ... byteButton); it shows "QWORD" ... "BYTE".
+pub fn word_size_button_name(size: calcvm::WordSize) -> &'static str {
+    match size {
+        calcvm::WordSize::Qword => "Quadruple Word toggle",
+        calcvm::WordSize::Dword => "Double Word toggle",
+        calcvm::WordSize::Word => "Word toggle",
+        calcvm::WordSize::Byte => "Byte toggle",
+    }
+}
+
+/// What upstream calls the F-E button (ftoeButton).
+pub const FTOE_BUTTON_NAME: &str = "Scientific notation";
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The buttons that show an abbreviation are named as upstream's
+    /// (en-US Resources.resw), in every state they show.
+    #[test]
+    fn abbreviated_buttons_have_upstream_names() {
+        use calcvm::{AngleUnit, WordSize};
+        let angles: Vec<_> = [AngleUnit::Degrees, AngleUnit::Radians, AngleUnit::Gradians]
+            .into_iter()
+            .map(|u| (u.label(), angle_button_name(u)))
+            .collect();
+        assert_eq!(
+            angles,
+            [
+                ("DEG", "Degrees toggle"),
+                ("RAD", "Radians toggle"),
+                ("GRAD", "Gradians toggle")
+            ]
+        );
+        let sizes: Vec<_> = [
+            WordSize::Qword,
+            WordSize::Dword,
+            WordSize::Word,
+            WordSize::Byte,
+        ]
+        .into_iter()
+        .map(|s| (s.label(), word_size_button_name(s)))
+        .collect();
+        assert_eq!(
+            sizes,
+            [
+                ("QWORD", "Quadruple Word toggle"),
+                ("DWORD", "Double Word toggle"),
+                ("WORD", "Word toggle"),
+                ("BYTE", "Byte toggle")
+            ]
+        );
+        assert_eq!(FTOE_BUTTON_NAME, "Scientific notation");
+    }
 
     #[test]
     fn plain_labels_strip_markup() {

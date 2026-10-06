@@ -315,7 +315,11 @@ impl CalcPage {
                 None,
                 false,
             );
-            describe(f, unit, "Switch angle unit (F3/F4/F5)");
+            describe(
+                f,
+                appcore::keys::angle_button_name(self.vm.angle_unit()),
+                "Switch angle unit (F3/F4/F5)",
+            );
             let (b, _) = row.take_left(52.0);
             f.button(
                 id("fe"),
@@ -327,7 +331,11 @@ impl CalcPage {
                 Some(self.vm.is_fe()),
                 false,
             );
-            describe(f, "F-E", "Scientific notation (V)");
+            describe(
+                f,
+                appcore::keys::FTOE_BUTTON_NAME,
+                "Scientific notation (V)",
+            );
         }
         if mode == CalcMode::Programmer {
             let (radix, r) = rest.take_top(4.0 * 26.0 + 4.0);
@@ -608,7 +616,11 @@ impl CalcPage {
             None,
             false,
         );
-        describe(f, word, "Word size (F2/F3/F4/F12)");
+        describe(
+            f,
+            appcore::keys::word_size_button_name(self.vm.word_size()),
+            "Word size (F2/F3/F4/F12)",
+        );
         let (bw, rest) = rest.take_left(86.0);
         f.button(
             id("bitwise-btn"),
