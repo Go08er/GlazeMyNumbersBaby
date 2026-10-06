@@ -39,7 +39,8 @@
 //! comes back with the precision it was displayed with, and each slot is
 //! shown in the form it was saved in (e-notation or not). Of the newest 100
 //! slots, one that isn't a number as the display shows it (too long, other
-//! characters, an exponent of more than four digits) is left out when the
+//! characters, an exponent of more than four digits, which only M+ or M−
+//! can reach and the paste validator refuses anyway) is left out when the
 //! snapshot is read.
 //!
 //! `"hm"` (`"s"` or `"c"`, absent before 0.2) says which mode's history
@@ -959,11 +960,14 @@ pub(crate) const MAX_RESTORED_MEMORY: usize = 100;
 /// Extension: whether a saved memory slot is a number as the display shows
 /// one: at most [`MAX_DISPLAY_LENGTH`] long, an optional `-`, digits (A–F
 /// too) with the point and group separators, and an optional exponent, `e`,
-/// a sign and at most [`copypaste::MAX_EXPONENT_LENGTH`] digits (a longer
-/// one overflows before it is shown). A slot that isn't is left out when
-/// the snapshot is read, before the restore enters any (the paste validator
-/// it is entered through would refuse most such text, but only after
-/// [`plain_decimal`] had read it, and takes an expression like `1+1`).
+/// a sign and at most [`copypaste::MAX_EXPONENT_LENGTH`] digits. A slot
+/// that isn't is left out when the snapshot is read, before the restore
+/// enters any (the paste validator it is entered through would refuse most
+/// such text, but only after [`plain_decimal`] had read it, and takes an
+/// expression like `1+1`). The display overflows past four exponent
+/// digits, but M+ can take a slot past them (`9.e+9999`, MS, M+ shows
+/// 1.8e+10000); the validator refused such a slot before too, so it still
+/// isn't restored.
 fn is_memory_value(text: &str) -> bool {
     let locale = crate::localization::LocalizationSettings::get_instance();
     let is_digit = |c: char| c.is_ascii_digit() || locale.is_localized_digit(c);
