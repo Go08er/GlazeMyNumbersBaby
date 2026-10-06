@@ -315,6 +315,7 @@ impl CalcPage {
                 None,
                 false,
             );
+            describe(f, unit, "Switch angle unit (F3/F4/F5)");
             let (b, _) = row.take_left(52.0);
             f.button(
                 id("fe"),
@@ -326,6 +327,7 @@ impl CalcPage {
                 Some(self.vm.is_fe()),
                 false,
             );
+            describe(f, "F-E", "Scientific notation (V)");
         }
         if mode == CalcMode::Programmer {
             let (radix, r) = rest.take_top(4.0 * 26.0 + 4.0);
@@ -498,16 +500,10 @@ impl CalcPage {
 
     fn memory_row(&mut self, f: &mut Frame, r: Rect, toggle: bool) {
         let has = !self.vm.memory().is_empty();
-        let items: &[(B, &str, &str)] = &[
-            (B::MemoryClear, "MC", "Clear all memory (Ctrl+L)"),
-            (B::MemoryRecall, "MR", "Memory recall (Ctrl+R)"),
-            (B::MemoryAdd, "M+", "Memory add (Ctrl+P)"),
-            (B::MemorySubtract, "M−", "Memory subtract (Ctrl+Q)"),
-            (B::Memory, "MS", "Memory store (Ctrl+M)"),
-        ];
+        let items = MEMORY;
         let n = items.len() + usize::from(toggle);
         let cells = r.columns(n, 2.0);
-        for (i, (b, label, tip)) in items.iter().enumerate() {
+        for (i, (b, label, name, tip)) in items.iter().enumerate() {
             let enabled = self.vm.is_enabled(*b);
             f.button(
                 id(("mem", *b as u32)),
@@ -519,9 +515,7 @@ impl CalcPage {
                 None,
                 false,
             );
-            if let Some(n) = f.nodes.as_mut().and_then(|v| v.last_mut()) {
-                n.label = tip.to_string();
-            }
+            describe(f, name, tip);
         }
         if toggle {
             f.button(
@@ -534,9 +528,7 @@ impl CalcPage {
                 None,
                 false,
             );
-            if let Some(n) = f.nodes.as_mut().and_then(|v| v.last_mut()) {
-                n.label = "Memory".into();
-            }
+            describe(f, "Memory", "Memory");
         }
     }
 
@@ -616,9 +608,7 @@ impl CalcPage {
             None,
             false,
         );
-        if let Some(n) = f.nodes.as_mut().and_then(|v| v.last_mut()) {
-            n.label = format!("Word size {word} (F2/F3/F4/F12)");
-        }
+        describe(f, word, "Word size (F2/F3/F4/F12)");
         let (bw, rest) = rest.take_left(86.0);
         f.button(
             id("bitwise-btn"),
@@ -652,6 +642,7 @@ impl CalcPage {
             None,
             false,
         );
+        describe(f, "Memory", "Memory");
         let (ms, _) = rest.take_right(40.0);
         f.button(
             id(("mem", B::Memory as u32)),
@@ -663,6 +654,7 @@ impl CalcPage {
             None,
             false,
         );
+        describe(f, "Memory store", "Memory store (Ctrl+M)");
     }
 
     fn bit_flip(&mut self, f: &mut Frame, r: Rect) {
@@ -1013,5 +1005,39 @@ impl CalcPage {
     /// Header buttons: keep on top (Standard) and the history sheet.
     pub fn wants_history_button(&self, wide: bool) -> bool {
         !wide && self.vm.mode() != CalcMode::Programmer
+    }
+}
+
+/// The memory buttons: shown, named (as upstream's: ClearMemoryButton
+/// "Clear all memory", ...) and their tooltip (GMNB's description).
+const MEMORY: &[(B, &str, &str, &str)] = &[
+    (
+        B::MemoryClear,
+        "MC",
+        "Clear all memory",
+        "Clear all memory (Ctrl+L)",
+    ),
+    (
+        B::MemoryRecall,
+        "MR",
+        "Memory recall",
+        "Memory recall (Ctrl+R)",
+    ),
+    (B::MemoryAdd, "M+", "Memory add", "Memory add (Ctrl+P)"),
+    (
+        B::MemorySubtract,
+        "M−",
+        "Memory subtract",
+        "Memory subtract (Ctrl+Q)",
+    ),
+    (B::Memory, "MS", "Memory store", "Memory store (Ctrl+M)"),
+];
+
+/// Names the node just made `name`, described by `tip` (what GMNB's
+/// tooltip is read as).
+fn describe(f: &mut Frame, name: &str, tip: &str) {
+    if let Some(n) = f.nodes.as_mut().and_then(|v| v.last_mut()) {
+        n.label = name.to_string();
+        n.description = Some((tip.to_string(), None));
     }
 }

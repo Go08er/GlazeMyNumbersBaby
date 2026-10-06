@@ -1114,6 +1114,10 @@ impl GraphPage {
             None,
             false,
         );
+        // Read without its "+", as GMNB's.
+        if let Some(n) = f.nodes.as_mut().and_then(|v| v.last_mut()) {
+            n.label = "Enter an expression".into();
+        }
         y += 44.0;
         if !self.vars.is_empty() {
             f.label(

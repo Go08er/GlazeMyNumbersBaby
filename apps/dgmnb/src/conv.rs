@@ -225,7 +225,10 @@ impl ConvPage {
         self.picker.take().is_some()
     }
 
-    fn matches(&self) -> Vec<(i32, String, String)> {
+    /// The units the search leaves: id, name shown, name spoken (as
+    /// upstream's Unit.AccessibleName: a currency without the dash),
+    /// abbreviation.
+    fn matches(&self) -> Vec<(i32, String, String, String)> {
         let q = self.search.text.trim().to_lowercase();
         self.vm
             .units()
@@ -235,7 +238,14 @@ impl ConvPage {
                     || u.name.to_lowercase().contains(&q)
                     || u.abbreviation.to_lowercase().contains(&q)
             })
-            .map(|u| (u.id, u.name.clone(), u.abbreviation.clone()))
+            .map(|u| {
+                (
+                    u.id,
+                    u.name.clone(),
+                    u.accessible_name.clone(),
+                    u.abbreviation.clone(),
+                )
+            })
             .collect()
     }
 
@@ -337,11 +347,20 @@ impl ConvPage {
                 Some(self.picker == Some(which)),
                 true,
             );
+            // Named after the unit it shows, as GMNB's drop-down (and
+            // upstream's ComboBox): which field it is, its description.
+            let spoken = unit.map(|u| u.accessible_name.clone()).unwrap_or_default();
             if let Some(n) = f.nodes.as_mut().and_then(|v| v.last_mut()) {
-                n.label = format!(
-                    "{} unit, {unit_name}",
-                    if which == 1 { "Input" } else { "Output" }
-                );
+                n.label = spoken;
+                n.description = Some((
+                    if which == 1 {
+                        "Input unit"
+                    } else {
+                        "Output unit"
+                    }
+                    .into(),
+                    None,
+                ));
             }
             y += 38.0;
             if which == 1 {
@@ -534,7 +553,7 @@ impl ConvPage {
         }
         let first = (off / row_h).floor().max(0.0) as usize;
         let last = ((off + list.h) / row_h).ceil() as usize + 1;
-        for (i, (uid, name, abbr)) in items.iter().enumerate().take(last).skip(first) {
+        for (i, (uid, name, spoken, abbr)) in items.iter().enumerate().take(last).skip(first) {
             let row = Rect::new(list.x, list.y - off + i as f32 * row_h, list.w, row_h - 2.0);
             let sel = Some(*uid) == current;
             f.row(
@@ -542,7 +561,7 @@ impl ConvPage {
                 row,
                 msg(Msg::Pick(which, *uid)),
                 sel,
-                name,
+                spoken,
             );
             let (a, n) = row.inset_xy(10.0, 0.0).take_right(70.0);
             f.label_fit(
