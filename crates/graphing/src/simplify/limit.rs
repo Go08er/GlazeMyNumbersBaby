@@ -620,7 +620,10 @@ fn log_part(e: &Expr, cx: &Cx) -> (Q, Asy) {
     let scaled = |(c, r): (Q, Asy), k: Q| -> Option<(Q, Asy)> {
         let c = c.mul(k)?;
         let r = if k.is_zero() {
-            Asy::Zero
+            // 0·R is 0 only where R is defined: an unknown R (ln(−x) at
+            // +∞, defined nowhere there) stays unknown (review 14,
+            // R14-L-01: e^(0·ln(−x)) had the limit 1 at +∞).
+            mul(r, Asy::Zero)
         } else {
             mul(
                 r,
@@ -964,12 +967,35 @@ fn asy(e: &Expr, cx: &Cx) -> Asy {
 }
 
 /// The limit of `e` as x → ±∞ (`Unknown` when not proven).
+///
+/// A limit is a value f approaches on a tail of its domain, so one is
+/// given only where f is defined on a whole tail (x > M, or x < M at −∞):
+/// every leading term found stands for a part defined there ("unknown"
+/// covers anything not known to be), and as a check besides, f's
+/// enclosure over [2⁶⁴, +∞) (of f(−x) at −∞) must not be empty, as it is
+/// where f is defined nowhere out there (review 14, R14-L-01: e^(0·ln(−x))
+/// and e^(ln x + 0·ln(−x))/x had the limit 1 at +∞).
 pub fn limit(
     e: &Expr,
     dir: Dir,
     unit: TrigUnit,
     variables: &dyn crate::compile::VariableValues,
 ) -> Limit {
+    let vars: Vec<(String, Interval)> = e
+        .variables()
+        .into_iter()
+        .map(|n| {
+            let (v, lit) = crate::compile::slider(variables, &n);
+            (n, lit.enclose(v))
+        })
+        .collect();
+    let toward = match dir {
+        Dir::PosInf => e.clone(),
+        Dir::NegInf => e.map(&|n| matches!(n, Expr::X).then(|| Expr::Neg(Box::new(Expr::X)))),
+    };
+    if no_tail(&toward, unit, &vars) {
+        return Limit::Unknown;
+    }
     if let Some(f) = rational_form(e) {
         return match f.reduced.limit(dir) {
             Some(RationalLimit::Finite(q)) => Limit::Exact(PiQ { q, k: 0 }),
@@ -978,21 +1004,11 @@ pub fn limit(
             None => Limit::Unknown,
         };
     }
-    let e = match dir {
-        Dir::PosInf => e.clone(),
-        Dir::NegInf => e.map(&|n| matches!(n, Expr::X).then(|| Expr::Neg(Box::new(Expr::X)))),
-    };
+    let e = toward;
     let facts = Facts {
         unit,
         x: Interval::ENTIRE,
-        vars: e
-            .variables()
-            .into_iter()
-            .map(|n| {
-                let (v, lit) = crate::compile::slider(variables, &n);
-                (n, lit.enclose(v))
-            })
-            .collect(),
+        vars,
     };
     let cx = Cx { unit, facts };
     let first = read_limit(asy(&e, &cx));
@@ -1011,6 +1027,21 @@ pub fn limit(
         }
     }
     Limit::Unknown
+}
+
+/// Whether `e` is proven defined nowhere on [2⁶⁴, +∞): its enclosure
+/// there is empty. (Not that it is defined on a tail: that is for the
+/// limit's own terms to show.)
+fn no_tail(e: &Expr, unit: TrigUnit, vars: &[(String, Interval)]) -> bool {
+    let Ok(rec) = to_rec(e) else {
+        return false;
+    };
+    let facts = Facts {
+        unit,
+        x: Interval::new(18446744073709551616.0, f64::INFINITY),
+        vars: vars.to_vec(),
+    };
+    rec_interval(&rec, &facts).is_empty()
 }
 
 /// The integers c (|c| ≥ 2⁸, below 2⁵³) at which an exponential's affine
@@ -1169,6 +1200,45 @@ mod tests {
         ] {
             let got = lim(f, PosInf);
             assert!(got == truth || got == Limit::Unknown, "{f}: {got:?}");
+        }
+    }
+
+    /// A limit needs f defined on a tail: 0·R is 0 only where R is defined,
+    /// and f defined nowhere out there has no limit there (review 14,
+    /// R14-L-01: e^(0·ln(−x)) and e^(ln x + 0·ln(−x))/x had the limit 1 at
+    /// +∞, where ln(−x) is undefined).
+    #[test]
+    fn an_absent_tail_has_no_limit() {
+        use Dir::*;
+        let one = exact(1, 1, 0);
+        let zero = exact(0, 1, 0);
+        for (f, pos, neg) in [
+            ("exp(0*ln(-x))", Limit::Unknown, one),
+            ("exp(ln(x)+0*ln(-x))/x", Limit::Unknown, Limit::Unknown),
+            ("exp(x+0*ln(-x))", Limit::Unknown, zero),
+            ("exp(0*ln(-x)+ln(x))", Limit::Unknown, Limit::Unknown),
+            ("0*ln(-x)+1", Limit::Unknown, one),
+            ("0*sqrt(-x)", Limit::Unknown, zero),
+            // Defined nowhere, though an enclosure over the tail can't
+            // show it (x − x is [−∞, ∞] there): the zero scaling keeps
+            // the logarithm's unknown.
+            ("exp(0*ln(-x^2-1+x-x))", Limit::Unknown, Limit::Unknown),
+            ("ln(x)", Limit::PosInf, Limit::Unknown),
+            ("1/ln(-x)", Limit::Unknown, zero),
+            // Defined on the tail: as before.
+            ("exp(0*ln(x))", one, Limit::Unknown),
+            ("exp(0*ln(x^2))", one, one),
+            ("exp(ln(x)+1)/x", Limit::Unknown, Limit::Unknown),
+        ] {
+            let (p, n) = (lim(f, PosInf), lim(f, NegInf));
+            if f == "exp(ln(x)+1)/x" {
+                // (≈e at +∞: covered above.)
+                assert!(matches!(p, Limit::Approx(_)), "{f}: {p:?}");
+                assert_eq!(n, neg, "{f} at −∞");
+                continue;
+            }
+            assert_eq!(p, pos, "{f} at +∞");
+            assert_eq!(n, neg, "{f} at −∞");
         }
     }
 

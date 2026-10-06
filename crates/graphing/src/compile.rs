@@ -304,6 +304,12 @@ pub(crate) enum Op {
     /// Power with an exponent that does (`fns::pow_var`: positive bases
     /// only, as on the TI-84 Plus CE).
     PowVar,
+    /// Power with a constant exponent exactly an odd integer that its
+    /// double isn't (`fns::pow_odd`: sign(b)·|b|^e).
+    PowOdd,
+    /// Power with a constant exponent beyond the doubles whose exact value
+    /// isn't carried (`fns::pow_beyond`: a negative base's is unknown).
+    PowBeyond,
     /// Integer power (exact for negative bases).
     PowI(i32),
     /// Rational power p/q with real-root semantics for odd q.
@@ -320,7 +326,14 @@ impl Op {
     fn may_leave_range(&self) -> bool {
         use Fn1::*;
         match self {
-            Op::Mul | Op::Div | Op::DivNz | Op::Pow | Op::PowVar | Op::PowRat(..) => true,
+            Op::Mul
+            | Op::Div
+            | Op::DivNz
+            | Op::Pow
+            | Op::PowVar
+            | Op::PowOdd
+            | Op::PowBeyond
+            | Op::PowRat(..) => true,
             Op::PowI(n) => !matches!(n, 0 | 1),
             // A tiny angle in degrees or grads: its sine is the angle times
             // π/180 (or π/200), which can fall below the doubles.
@@ -351,7 +364,7 @@ impl Op {
         match self {
             Op::Const(_) | Op::Big(..) | Op::X | Op::Y | Op::Add | Op::Sub | Op::Mul | Op::Neg => 1,
             Op::Div | Op::DivNz | Op::PowI(_) => 2,
-            Op::Pow | Op::PowVar | Op::PowRat(..) => 8,
+            Op::Pow | Op::PowVar | Op::PowOdd | Op::PowBeyond | Op::PowRat(..) => 8,
             Op::F1(Fn1::Factorial | Fn1::DoubleFactorial) => 60,
             Op::F1(Fn1::Abs | Fn1::Floor | Fn1::Ceil | Fn1::Round | Fn1::Sign) => 1,
             Op::F1(_) => 8,
@@ -461,6 +474,8 @@ impl Program {
                 | Op::DivNz
                 | Op::Pow
                 | Op::PowVar
+                | Op::PowOdd
+                | Op::PowBeyond
                 | Op::F2(_) => depth -= 1,
                 Op::PowI(_) | Op::PowRat(..) | Op::Neg | Op::F1(_) => {}
             }
@@ -470,11 +485,14 @@ impl Program {
         let cost = ops.iter().map(Op::cost).sum();
         // Only a rounded intermediate can mislead a later operation; the
         // last one's own overflow or underflow is what extended range gives.
+        // (A power of unknown sign is redone too, to tell its NaN unknown.)
         let last = ops.len() - 1;
         let scan: Box<[bool]> = ops
             .iter()
             .enumerate()
-            .map(|(i, op)| matches!(op, Op::Big(..)) || (i != last && op.may_leave_range()))
+            .map(|(i, op)| {
+                matches!(op, Op::Big(..) | Op::PowBeyond) || (i != last && op.may_leave_range())
+            })
             .collect();
         let wide =
             scan.iter().any(|&s| s) || ops[..last].iter().any(|op| matches!(op, Op::Add | Op::Sub));
@@ -667,6 +685,14 @@ impl Program {
                     sp -= 1;
                     stack[sp - 1] = fns::pow_var(stack[sp - 1], stack[sp]);
                 }
+                Op::PowOdd => {
+                    sp -= 1;
+                    stack[sp - 1] = fns::pow_odd(stack[sp - 1], stack[sp]);
+                }
+                Op::PowBeyond => {
+                    sp -= 1;
+                    stack[sp - 1] = fns::pow_beyond(stack[sp - 1], stack[sp]);
+                }
                 Op::PowI(n) => stack[sp - 1] = powi(stack[sp - 1], n),
                 Op::PowRat(p, q) => stack[sp - 1] = fns::pow_rational(stack[sp - 1], p, q),
                 Op::Neg => stack[sp - 1] = -stack[sp - 1],
@@ -685,6 +711,10 @@ impl Program {
                     // Exact.
                     Op::Const(_) | Op::X | Op::Y => {}
                     Op::Big(..) => return (v, true),
+                    // A negative base's power to an exponent of unknown
+                    // parity: unknown, not undefined (extended range says
+                    // which).
+                    Op::PowBeyond if v.is_nan() => return (v, true),
                     // Undefined, with nothing rounded before it: so is the
                     // result, as every operation keeps NaN.
                     _ if v.is_nan() => return (v, false),
@@ -823,6 +853,8 @@ impl Program {
                 | Op::DivNz
                 | Op::Pow
                 | Op::PowVar
+                | Op::PowOdd
+                | Op::PowBeyond
                 | Op::F2(_) => {
                     sp -= 1;
                     let (lo, hi) = stack.split_at_mut(sp);
@@ -839,6 +871,14 @@ impl Program {
                             .iter_mut()
                             .zip(b)
                             .for_each(|(a, b)| *a = fns::pow_var(*a, *b)),
+                        Op::PowOdd => a
+                            .iter_mut()
+                            .zip(b)
+                            .for_each(|(a, b)| *a = fns::pow_odd(*a, *b)),
+                        Op::PowBeyond => a
+                            .iter_mut()
+                            .zip(b)
+                            .for_each(|(a, b)| *a = fns::pow_beyond(*a, *b)),
                         Op::F2(f) => a.iter_mut().zip(b).for_each(|(a, b)| *a = f.apply(*a, *b)),
                         _ => unreachable!(),
                     }
@@ -941,6 +981,8 @@ fn wide_bin(op: &Op, a: Wide, b: Wide) -> Wide {
         Op::Div | Op::DivNz => a.div(b),
         Op::Pow => wide::pow(a, b),
         Op::PowVar => wide::pow_var(a, b),
+        Op::PowOdd => wide::pow_odd(a, b),
+        Op::PowBeyond => wide::pow_beyond(a, b),
         Op::F2(f) => wide::apply2(f, a, b),
         _ => unreachable!("not a binary instruction"),
     }
@@ -1335,9 +1377,10 @@ enum Fold {
     /// the general path still gets right alone, and whether a slider is in
     /// it: a decimal typed with thousands of digits (its double is it
     /// rounded once), or a power or count proven beyond the doubles
-    /// (10⁵⁰⁰⁰, 2^−100000, 171!: ±∞ or 0, however it is rounded). Any
+    /// (10⁵⁰⁰⁰, 2^−100000, 171!: ±∞ or 0, however it is rounded), with
+    /// what is known of its parity (for a power of a negative base). Any
     /// arithmetic on it is [`Fold::Big`].
-    Lone(bool),
+    Lone(bool, Parity),
     /// A rational computation on literals and sliders too long to carry
     /// exactly and not proven beyond the doubles ((1 + 2⁻²⁰)^800), or
     /// arithmetic on a value too long to carry ((10⁵⁰⁰⁰ + 1) − 10⁵⁰⁰⁰), and
@@ -1353,8 +1396,35 @@ enum Fold {
 impl Fold {
     fn var(&self) -> bool {
         match self {
-            Fold::Value(_, v) | Fold::DivZero(v) | Fold::Lone(v) | Fold::Big(v) => *v,
+            Fold::Value(_, v) | Fold::DivZero(v) | Fold::Lone(v, _) | Fold::Big(v) => *v,
             Fold::No => false,
+        }
+    }
+}
+
+/// Whether a value too long to carry ([`Fold::Lone`]) is an integer, and
+/// odd or even: all a power to it needs to know (a negative base's sign,
+/// or whether it has a real power at all), which the extended-range value
+/// it rounds to can't tell (its every value past 2⁵³ is even: 3^20000 is
+/// odd).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Parity {
+    Even,
+    Odd,
+    /// Not an integer.
+    Fraction,
+    Unknown,
+}
+
+impl Parity {
+    /// An exact value's.
+    fn of(r: &Rat) -> Parity {
+        if !r.is_integer() {
+            Parity::Fraction
+        } else if r.is_even() {
+            Parity::Even
+        } else {
+            Parity::Odd
         }
     }
 }
@@ -1370,12 +1440,12 @@ fn log2_bounds(r: &Rat) -> (f64, f64) {
     (lo.log2(), hi.log2())
 }
 
-/// [`Fold::Lone`] if log₂ of a value lies in `l`, proving it beyond the
-/// doubles (above 2¹¹⁰⁰, rounded to ±∞; below 2⁻¹²⁰⁰, to 0), else
-/// [`Fold::Big`].
-fn beyond(l: (f64, f64), var: bool) -> Fold {
+/// [`Fold::Lone`] (of `parity`) if log₂ of a value lies in `l`, proving
+/// it beyond the doubles (above 2¹¹⁰⁰, rounded to ±∞; below 2⁻¹²⁰⁰, to
+/// 0), else [`Fold::Big`].
+fn beyond(l: (f64, f64), var: bool, parity: Parity) -> Fold {
     if l.0 > 1100.0 || l.1 < -1200.0 {
-        Fold::Lone(var)
+        Fold::Lone(var, parity)
     } else {
         Fold::Big(var)
     }
@@ -1384,10 +1454,25 @@ fn beyond(l: (f64, f64), var: bool) -> Fold {
 /// The exact value of an x- and y-free subtree of typed literals and
 /// sliders (a slider's value is the double it holds) under +, −, ×, ÷,
 /// whole powers, |·|, and the counts n!, n!!, nCr, nPr of whole numbers.
+///
+/// Each of those is folded at any size, or refused for its length
+/// ([`Fold::Big`], unknown; or [`Fold::Lone`] where the general path is
+/// right alone): a whole number past 2⁵³ is not left to the general path,
+/// which would round it to an even double first (review 14, R14-M-03:
+/// C(2⁵³ + 1, 1) − 2⁵³ was 0, not 1). [`Fold::No`] is left only for what
+/// isn't a rational computation on literals and sliders, which the general
+/// path computes in floating point like sin: π, a function other than
+/// those, a power to an exponent no integer (a root: `8^(1/3)`), 0⁰
+/// (undefined), Γ's generalisation of a count to numbers no whole number,
+/// and a count at a pole of Γ (n! for a whole n < 0, nCr and nPr for a
+/// whole n < 0), undefined however its whole numbers are rounded.
 fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
     use Fold::*;
     let go = |a: &Expr| fold(a, opts);
     let whole = |r: &Rat| r.as_int().filter(|n| n.unsigned_abs() <= 1 << 53);
+    // Exactly a double (the general path reads it exactly).
+    let double =
+        |r: &Rat| Rat::from_f64(r.to_f64(crate::big::Round::Nearest)).is_some_and(|d| d == *r);
     match e {
         // Each number by its own exact value: a decimal typed, a value
         // folded, a double; not one known only to round to its double.
@@ -1395,7 +1480,7 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
             Some(r) => Value(r, false),
             None if *lit == Lit::Near => No,
             // A decimal typed with thousands of digits.
-            None => Lone(false),
+            None => Lone(false, Parity::Unknown),
         },
         // A slider's exact value: its double, or the decimal a digit limit
         // made it ([`Sliders`]).
@@ -1459,10 +1544,18 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                 // product, quotient or power so long may still be proven
                 // beyond the doubles by its size.
                 None => {
+                    use Parity::*;
                     let ((al, ah), (bl, bh)) = (log2_bounds(&ra), log2_bounds(&rb));
                     match op {
-                        BinOp::Mul => beyond((al + bl, ah + bh), var),
-                        BinOp::Div => beyond((al - bh, ah - bl), var),
+                        BinOp::Mul => {
+                            let parity = match (Parity::of(&ra), Parity::of(&rb)) {
+                                (Odd, Odd) => Odd,
+                                (Even, Even | Odd) | (Odd, Even) => Even,
+                                _ => Unknown,
+                            };
+                            beyond((al + bl, ah + bh), var, parity)
+                        }
+                        BinOp::Div => beyond((al - bh, ah - bl), var, Unknown),
                         BinOp::Pow => {
                             // log₂|aᵏ| = k·log₂|a|, k a whole number.
                             let k = (
@@ -1475,7 +1568,15 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                             }
                             let lo = c.iter().copied().fold(f64::INFINITY, f64::min);
                             let hi = c.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                            beyond((lo, hi), var)
+                            // aᵏ = (1/a)^|k| for k < 0; b^m, m ≥ 1, is an
+                            // integer just when b is, and then of b's parity.
+                            let base = if rb.is_negative() {
+                                Rat::int(1).div(&ra)
+                            } else {
+                                Some(ra.clone())
+                            };
+                            let parity = base.map_or(Unknown, |b| Parity::of(&b));
+                            beyond((lo, hi), var, parity)
                         }
                         _ => Big(var),
                     }
@@ -1493,7 +1594,18 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                     No => return No,
                     other => return Big(other.var()),
                 };
-                let Some(n) = whole(&r) else { return No };
+                let n = match whole(&r) {
+                    Some(n) => n,
+                    // Γ's generalisation (floating point, as sin).
+                    None if !r.is_integer() => return No,
+                    // A whole number past 2⁵³: a pole of Γ if negative,
+                    // undefined however it rounds; else past 170 (and
+                    // 300), the count beyond the doubles, as it is from
+                    // the even double the general path rounds it to.
+                    None if r.is_negative() => return No,
+                    None if *f == Func::Factorial => return Lone(v, Parity::Even),
+                    None => return Lone(v, Parity::of(&r)),
+                };
                 let count = if *f == Func::Factorial {
                     // n! up to 170! (beyond, past the doubles).
                     match n {
@@ -1513,8 +1625,10 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                 match count {
                     Some(fns::Count::Exact(p)) => Value(Rat::nat(p), v),
                     // Past the doubles: alone it is +∞, but 171! − 171! is
-                    // no 0 to compute.
-                    Some(fns::Count::Huge) => Lone(v),
+                    // no 0 to compute. (n! for n ≥ 2 is even; n!! is of n's
+                    // parity.)
+                    Some(fns::Count::Huge) if *f == Func::Factorial => Lone(v, Parity::Even),
+                    Some(fns::Count::Huge) => Lone(v, Parity::of(&r)),
                     None => No,
                 }
             }
@@ -1524,12 +1638,48 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                     (No, _) | (_, No) => return No,
                     (fa, fb) => return Big(fa.var() || fb.var()),
                 };
-                let (Some(n), Some(r)) = (whole(&rn), whole(&rr)) else {
+                let perm = *f == Func::NPr;
+                // Γ's generalisation (floating point, as sin).
+                if !rn.is_integer() || !rr.is_integer() {
                     return No;
-                };
-                match fns::count_exact(n as f64, r as f64, *f == Func::NPr) {
+                }
+                // Whole numbers no double holds (past 2⁵³): the count of
+                // the numbers themselves, never of their doubles; too long
+                // to carry, unknown (the general path, from rounded whole
+                // numbers, could make 1 of C(2⁵³ + 50, 2⁵³ + 25)).
+                if !double(&rn) || !double(&rr) {
+                    let (Some((nneg, n)), Some((rneg, r))) = (rn.integer(), rr.integer()) else {
+                        return Big(vn || vr);
+                    };
+                    if nneg {
+                        // A pole of Γ, however n rounds (to a whole n < 0).
+                        return No;
+                    }
+                    if rneg || r > n {
+                        return Value(Rat::int(0), vn || vr);
+                    }
+                    return match fns::count_exact_big(&n, &r, perm) {
+                        Some(p) => Value(Rat::nat(p), vn || vr),
+                        None => Big(vn || vr),
+                    };
+                }
+                // Each a double: exactly, or beyond the doubles (+∞ from
+                // the same doubles on the general path).
+                let (n, r) = (
+                    rn.to_f64(crate::big::Round::Nearest),
+                    rr.to_f64(crate::big::Round::Nearest),
+                );
+                match fns::count_exact(n, r, perm) {
                     Some(fns::Count::Exact(p)) => Value(Rat::nat(p), vn || vr),
-                    Some(fns::Count::Huge) => Lone(vn || vr),
+                    // (A product of r ≥ 2 consecutive integers is even.)
+                    Some(fns::Count::Huge) => Lone(
+                        vn || vr,
+                        if *f == Func::NPr {
+                            Parity::Even
+                        } else {
+                            Parity::Unknown
+                        },
+                    ),
                     None => No,
                 }
             }
@@ -1590,6 +1740,11 @@ pub(crate) fn fold_literals(e: &Expr, opts: &CompileOptions<'_>) -> Expr {
 pub(crate) enum TypedValue {
     /// Folded exactly and rounded once (within the doubles).
     Value(f64),
+    /// Folded exactly, a value beyond the doubles (10⁴⁰⁰, C(2⁵³ + 1, 21)):
+    /// its extended-range rounding, as the program holds it. (Not to be
+    /// recomputed from the doubles of its literals: from those, a count
+    /// of whole numbers past 2⁵³ is another number.)
+    Far(Wide),
     /// A division by an exact 0.
     DivZero,
     /// Too long to fold ([`Fold::Big`]): not known.
@@ -1611,11 +1766,45 @@ pub(crate) fn typed_value(e: &Expr, opts: &CompileOptions<'_>) -> Option<TypedVa
     match fold(e, opts) {
         Fold::Value(r, _) => {
             let v = r.to_f64(crate::big::Round::Nearest);
-            (v.is_finite() && (v != 0.0 || r.is_zero())).then_some(TypedValue::Value(v))
+            Some(if v.is_finite() && (v != 0.0 || r.is_zero()) {
+                TypedValue::Value(v)
+            } else {
+                TypedValue::Far(r.to_wide())
+            })
         }
         Fold::DivZero(_) => Some(TypedValue::DivZero),
         Fold::Big(_) => Some(TypedValue::Unknown),
-        Fold::Lone(_) | Fold::No => None,
+        Fold::Lone(..) | Fold::No => None,
+    }
+}
+
+/// An x- and y-free subtree of a typed expression enclosed by its exact
+/// value ([`fold`]): the doubles either side of it (a point where it is
+/// one), empty for a division by an exact 0; `None` where it isn't folded
+/// (π, sin, a value too long to carry). Off, 1.0000000000000001 − 1 is
+/// 10⁻¹⁶, never 0, where its literal's own enclosure [1, 1 + 2⁻⁵²] can't
+/// tell.
+pub(crate) fn typed_enclosure(
+    e: &Expr,
+    opts: &CompileOptions<'_>,
+) -> Option<crate::interval::DecInterval> {
+    use crate::interval::{DecInterval, Interval};
+    if e.any(&|n| matches!(n, Expr::X | Expr::Y)) {
+        return None;
+    }
+    match fold(e, opts) {
+        Fold::Value(r, _) => {
+            let (lo, hi) = (
+                r.to_f64(crate::big::Round::Down),
+                r.to_f64(crate::big::Round::Up),
+            );
+            // (Its sign exactly, below the doubles too.)
+            let (neg, pos) = (r.is_negative(), !r.is_zero() && !r.is_negative());
+            (lo.is_finite() && hi.is_finite())
+                .then(|| DecInterval::new(Interval::new(lo, hi)).signs(pos, neg))
+        }
+        Fold::DivZero(_) => Some(DecInterval::new(Interval::EMPTY)),
+        _ => None,
     }
 }
 
@@ -1664,11 +1853,16 @@ pub(crate) fn typed_odd_root_power(n: &Expr, opts: &CompileOptions<'_>) -> Optio
 /// What a constant exponent makes of a power: written as an integer or a
 /// ratio of integers (`(p, q)`, the integer powers and real roots), or of
 /// a value known exactly not to be an integer (the positive-base rule,
-/// as for an exponent that varies), or neither (its double decides, as
-/// `functions::pow`).
+/// as for an exponent that varies), or exactly an odd integer its double
+/// isn't (`Odd`: sign(b)·|b|^e), or beyond the doubles and not carried
+/// exactly (`Beyond`: a negative base's power unknown), or none of these
+/// (its double decides, as `functions::pow`: an integer below 2⁵³ is its
+/// double, and an even one past it is even as its double is).
 pub(crate) enum PowKind {
     Rational(i32, i32),
     NonInteger,
+    Odd,
+    Beyond,
     Plain,
 }
 
@@ -1676,15 +1870,36 @@ fn pow_kind(b: &Expr, opts: &CompileOptions<'_>, lx: Reading) -> PowKind {
     if let Some((p, q)) = syntactic_rational(b, lx) {
         return PowKind::Rational(p, q);
     }
-    if lx == Reading::Typed
-        && !b.any(&|n| matches!(n, Expr::X | Expr::Y))
-        && let Fold::Value(r, _) = fold(b, opts)
-    {
-        if let Some(n) = r.as_int().filter(|n| n.unsigned_abs() < 1_000_000) {
-            return PowKind::Rational(n as i32, 1);
-        }
-        if !r.is_integer() {
-            return PowKind::NonInteger;
+    if lx == Reading::Typed && !b.any(&|n| matches!(n, Expr::X | Expr::Y)) {
+        match fold(b, opts) {
+            Fold::Value(r, _) => {
+                if let Some(n) = r.as_int().filter(|n| n.unsigned_abs() < 1_000_000) {
+                    return PowKind::Rational(n as i32, 1);
+                }
+                if !r.is_integer() {
+                    return PowKind::NonInteger;
+                }
+                // An odd integer at any size, though every double past 2⁵³
+                // is even (review 14, R14-M-02: x^9007199254740993 was +1
+                // at −1, its exponent the even 2⁵³).
+                if !r.is_even()
+                    && Rat::from_f64(r.to_f64(crate::big::Round::Nearest)).is_none_or(|d| d != r)
+                {
+                    return PowKind::Odd;
+                }
+            }
+            // A value beyond the doubles too long to carry (3^20000, 171!,
+            // 1.5^100000), by its parity: its extended-range value, past
+            // 2⁵³, is even (as 10⁵⁰⁰⁰ and 171! are).
+            Fold::Lone(_, parity) => {
+                return match parity {
+                    Parity::Even => PowKind::Plain,
+                    Parity::Odd => PowKind::Odd,
+                    Parity::Fraction => PowKind::NonInteger,
+                    Parity::Unknown => PowKind::Beyond,
+                };
+            }
+            _ => {}
         }
     }
     PowKind::Plain
@@ -1706,7 +1921,7 @@ fn lower_in(e: &Expr, opts: &CompileOptions<'_>, lx: Reading) -> Result<Piece, E
             }
             Fold::DivZero(true) => return Ok(Piece::Const(Wide::Undef, true)),
             Fold::Big(var) => return Ok(Piece::Const(Wide::Unknown, var)),
-            Fold::Lone(_) | Fold::No => {}
+            Fold::Lone(..) | Fold::No => {}
         }
     }
     Ok(match e {
@@ -1787,6 +2002,10 @@ fn lower_in(e: &Expr, opts: &CompileOptions<'_>, lx: Reading) -> Result<Piece, E
             // A constant exponent known not to be an integer takes the
             // positive-base rule, as one that varies does.
             let non_integer = matches!(kind, PowKind::NonInteger);
+            let (odd, beyond) = (
+                matches!(kind, PowKind::Odd),
+                matches!(kind, PowKind::Beyond),
+            );
             let lb = rec(b)?;
             match (la, lb) {
                 (Piece::Const(x, va), Piece::Const(y, vb)) => {
@@ -1800,6 +2019,10 @@ fn lower_in(e: &Expr, opts: &CompileOptions<'_>, lx: Reading) -> Result<Piece, E
                     }
                     let v = if non_integer {
                         wide::pow_var(x, y)
+                    } else if odd {
+                        wide::pow_odd(x, y)
+                    } else if beyond {
+                        wide::pow_beyond(x, y)
                     } else {
                         apply_bin(*op, x, y)
                     };
@@ -1822,6 +2045,8 @@ fn lower_in(e: &Expr, opts: &CompileOptions<'_>, lx: Reading) -> Result<Piece, E
                         BinOp::Div if never_zero(b) => Op::DivNz,
                         BinOp::Div => Op::Div,
                         BinOp::Pow if varying || non_integer => Op::PowVar,
+                        BinOp::Pow if odd => Op::PowOdd,
+                        BinOp::Pow if beyond => Op::PowBeyond,
                         BinOp::Pow => Op::Pow,
                     });
                     Piece::Code(c)

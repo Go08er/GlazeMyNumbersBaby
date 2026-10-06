@@ -108,15 +108,20 @@ pub struct ParseOptions {
     /// trace, its analysis and its certificate alike. `None` ("off"): the
     /// decimal exactly as typed. A calculator's precision: 14 is the TI-84
     /// Plus CE's ([`TI84_DIGITS`]); with 15 or fewer, two numbers that read
-    /// differently never share a double. See [`LITERAL_DIGITS`].
+    /// differently never share a double while both are in the doubles'
+    /// normal range (beyond it they can: 10⁻⁴⁰⁰ and 2·10⁻⁴⁰⁰ both round
+    /// to 0, 10⁴⁰⁰ and 2·10⁴⁰⁰ to ∞, and a subnormal has fewer digits).
+    /// Each occurrence is its own number all the same (`ast::Lit`). See
+    /// [`LITERAL_DIGITS`].
     pub literal_digits: Option<u8>,
 }
 
 /// The digit limits [`ParseOptions::literal_digits`] takes (besides off).
 pub const LITERAL_DIGITS: std::ops::RangeInclusive<u8> = 5..=20;
 
-/// The TI-84 Plus CE's precision: 14 significant digits (its numbers are
-/// 14-digit decimals; it shows 10). The apps' default for
+/// The TI-84 Plus CE's precision: 14 significant digits (TI documents the
+/// TI-83 Plus and TI-84 Plus family as calculating with 14 digits:
+/// `docs/ti-conventions.md` has the source). The apps' default for
 /// [`ParseOptions::literal_digits`].
 pub const TI84_DIGITS: u8 = 14;
 

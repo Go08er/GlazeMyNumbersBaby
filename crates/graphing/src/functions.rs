@@ -216,6 +216,26 @@ pub fn pow(b: f64, e: f64) -> f64 {
     }
 }
 
+/// b^e for a constant exponent exactly an odd integer that its double `e`
+/// isn't (past 2⁵³ every double is even: a typed 9007199254740993 is held
+/// as 2⁵³): sign(b)·|b|^e, the odd power's sign kept (review 14,
+/// R14-M-02: (−1)^9007199254740993 came out +1). Its magnitude is |b|
+/// to the double, as for any power.
+#[inline]
+pub(crate) fn pow_odd(b: f64, e: f64) -> f64 {
+    let m = pow(b.abs(), e);
+    if b < 0.0 { -m } else { m }
+}
+
+/// b^e for a constant exponent beyond the doubles whose exact value isn't
+/// carried (3^20000, too long to fold): whether it is an integer, and odd
+/// or even, isn't known, so a negative base gives no value (NaN, which
+/// the program marks unknown, never undefined); any other base as [`pow`].
+#[inline]
+pub(crate) fn pow_beyond(b: f64, e: f64) -> f64 {
+    if b < 0.0 { f64::NAN } else { pow(b, e) }
+}
+
 /// b^e for an exponent that depends on x (x^x, 2^x, (x−1)^(x+1)): defined
 /// only for a positive base, or a zero base to a positive power, as in the
 /// TI-84 Plus CE's Real mode and IEEE 1788's pow. (−2)^x is undefined even
@@ -695,6 +715,50 @@ pub(crate) fn count_exact(n: f64, r: f64, perm: bool) -> Option<Count> {
         i += 1.0;
     }
     Some(Count::Exact(big))
+}
+
+/// nCr (or nPr, `perm`) exactly for whole numbers 0 ≤ r ≤ n of any size,
+/// such as a typed 9007199254740993 that no double holds (review 14,
+/// R14-M-03: rounded first, C(2⁵³ + 1, 1) − 2⁵³ was 0, not 1); `None` for
+/// a count longer than `big::MAX_BITS` bits (and so beyond the doubles).
+pub(crate) fn count_exact_big(n: &Nat, r: &Nat, perm: bool) -> Option<Nat> {
+    let cap = crate::big::MAX_BITS;
+    let small = |v: &Nat| -> Option<u64> {
+        let (lo, hi) = v.enclose();
+        (hi < EXACT && lo == hi).then_some(lo as u64)
+    };
+    if perm {
+        // n(n − 1)…(n − r + 1): r factors, each ≥ 1 and all but the last
+        // ≥ 2, so at least 2^(r − 1).
+        let r = small(r).filter(|&r| r <= cap + 1)?;
+        let mut acc = Nat::from_u64(1);
+        for i in 0..r {
+            acc = acc.mul(&n.sub(&Nat::from_u64(i)));
+            if acc.bits() > cap {
+                return None;
+            }
+        }
+        return Some(acc);
+    }
+    // C(n, r) = C(n, n − r): the smaller, r′ (C(n, r′) ≥ 2^r′).
+    let rest = n.sub(r);
+    let r = if rest < *r { rest } else { r.clone() };
+    let r = small(&r).filter(|&r| r <= cap)?;
+    // acc = C(n − r′ + i, i), increasing in i: multiplied, then divided
+    // exactly.
+    let base = n.sub(&Nat::from_u64(r));
+    let mut acc = Nat::from_u64(1);
+    for i in 1..=r {
+        let (q, rem) = acc
+            .mul(&base.add(&Nat::from_u64(i)))
+            .div_rem_small(i as u32);
+        debug_assert_eq!(rem, 0);
+        acc = q;
+        if acc.bits() > cap {
+            return None;
+        }
+    }
+    Some(acc)
 }
 
 /// True for odd integers. Every `f64` at or beyond 2^53 is an even integer

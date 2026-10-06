@@ -612,7 +612,9 @@ impl Cx<'_, '_> {
         {
             return Zero;
         }
-        let v = taylor(e, Interval::point(0.0), 0, &self.ctx)[0];
+        // (Literals and sliders alone by their exact value.)
+        let v = crate::compile::typed_enclosure(e, &self.ctx.opts)
+            .unwrap_or_else(|| taylor(e, Interval::point(0.0), 0, &self.ctx)[0]);
         if v.is_empty() || v.dec < Dec::Def || !v.iv.is_bounded() {
             return Unknown;
         }

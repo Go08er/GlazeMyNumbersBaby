@@ -400,7 +400,9 @@ impl<'a> Ex<'a> {
     /// The expansion of `e` over the tail.
     pub fn of(&self, e: &Expr) -> Option<Tm> {
         if !e.contains_x() {
-            let v = taylor(e, Interval::point(0.0), 0, &self.ctx)[0];
+            // (Literals and sliders alone by their exact value.)
+            let v = crate::compile::typed_enclosure(e, &self.ctx.opts)
+                .unwrap_or_else(|| taylor(e, Interval::point(0.0), 0, &self.ctx)[0]);
             if v.is_empty() || v.dec < Dec::Def || !v.iv.is_bounded() {
                 return None;
             }

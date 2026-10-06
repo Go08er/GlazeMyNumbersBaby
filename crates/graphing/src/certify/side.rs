@@ -132,8 +132,13 @@ fn cond(path: &[u8], g: &Expr, allowed: &[Seg]) -> SideCond {
     }
 }
 
-/// The value of an x-free sub-tree.
+/// The value of an x-free sub-tree: of literals and sliders alone, by its
+/// exact value (off, 1.0000000000000001 − 1 is 10⁻¹⁶, no divisor that may
+/// be 0, though each literal enclosed alone can't show it); else enclosed.
 fn constant(f: &Fun<'_>, e: &Expr) -> Option<DecInterval> {
+    if let Some(v) = crate::compile::typed_enclosure(e, &f.opts) {
+        return Some(v);
+    }
     f.ser_of(e, Interval::point(0.0), 0).ok().map(|s| s[0])
 }
 

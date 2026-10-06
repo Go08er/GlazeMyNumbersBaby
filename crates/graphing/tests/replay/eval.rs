@@ -713,24 +713,33 @@ fn sin_cos(a: &S, unit: Unit) -> (S, S) {
 
 /// a^(p/q) (q > 1) with real-root semantics.
 fn pow_rat(a: &S, p: i64, q: i64) -> S {
+    pow_rat_int(a, p, &rug::Integer::from(q))
+}
+
+/// [`pow_rat`] for any q > 1, however long (a root's degree typed with
+/// hundreds of digits: review 14, R14-M-04).
+fn pow_rat_int(a: &S, p: i64, q: &rug::Integer) -> S {
     let n = se::order(a);
-    let value = iv::pow_rat(&a[0], p, q);
-    if value.empty {
+    let value = |a: &Iv| match q.to_i64() {
+        Some(q) => iv::pow_rat(a, p, q),
+        None => iv::pow_rat_big(a, p, q),
+    };
+    let v = value(&a[0]);
+    if v.empty {
         return vec![Iv::empty(); n + 1];
     }
-    // (p and q exactly: a degree past 2⁵³ is no double.)
-    let int = |k: i64| Iv::new(iv::fl(0.0) + k, iv::fl(0.0) + k);
-    let e = iv::div(&int(p), &int(q));
+    // (p/q exactly, rounded outward: a degree past 2⁵³ is no double.)
+    let e = iv::ratio(p, q);
     if a[0].gt(0.0) {
-        se::pow_real(a, &e, value)
-    } else if a[0].lt(0.0) && q % 2 == 1 {
+        se::pow_real(a, &e, v)
+    } else if a[0].lt(0.0) && q.is_odd() {
         // (−a)^(p/q), negated for odd p.
         let na = se::neg(a);
-        let s = se::pow_real(&na, &e, iv::pow_rat(&na[0], p, q));
+        let s = se::pow_real(&na, &e, value(&na[0]));
         let s = if p % 2 != 0 { se::neg(&s) } else { s };
-        se::with_value(s, value)
+        se::with_value(s, v)
     } else {
-        se::only_value_unless(se::constant(value, n), false)
+        se::only_value_unless(se::constant(v, n), false)
     }
 }
 
@@ -948,12 +957,11 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
             // 3.0000000000000001 is no integer, though no binary point
             // holds it: review 13, R13-M-04); else its enclosure, when a
             // point.
+            // Any size: a typed −(10³⁰¹ + 1) is odd (review 14, R14-M-04).
             let whole = match super::exact::eval(&args[1], None, ctx.lits, ctx.vars) {
-                Some(q) if q.is_integer() => Some(q.numer().to_i64()),
+                Some(q) if q.is_integer() => Some(Some(q.numer().clone())),
                 Some(_) => None,
-                None if k.is_point() && k.lo.is_integer() => {
-                    Some(k.lo.to_integer().and_then(|k| k.to_i64()))
-                }
+                None if k.is_point() && k.lo.is_integer() => Some(k.lo.to_integer()),
                 None if k.is_point() => None,
                 None => return se::only_value_unless(se::constant(Iv::unknown(), n), false),
             };
@@ -968,7 +976,7 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
                 return if q == 1 {
                     se::powi(&ea, p)
                 } else {
-                    pow_rat(&ea, p, q)
+                    pow_rat_int(&ea, p, &q)
                 };
             }
             // A non-integer degree: x ≥ 0, x^(1/n).

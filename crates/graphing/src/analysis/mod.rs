@@ -545,8 +545,11 @@ pub fn analyze_cancellable(
         trig_unit: opts.trig_unit,
         variables: &sliders,
     };
-    // What doesn't compile (0⁻¹ folded from constants) has no values.
-    if crate::compile::Program::compile(f, opts).is_err() {
+    // What doesn't compile (0⁻¹ folded from constants) has no values: as
+    // the app compiles it, each number the decimal typed (off,
+    // 10^(−16)/(1.0000000000000001 − 1) is 1, though the doubles of its
+    // literals divide by zero; that check refused the whole panel).
+    if crate::compile::Program::compile_typed(f, opts).is_err() {
         return error(AnalysisError::AnalysisCouldNotBePerformed);
     }
     // Trees far beyond what anyone types (√ nested a hundred deep) would

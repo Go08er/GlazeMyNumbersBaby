@@ -1,0 +1,101 @@
+{
+  "source": "y=root(-8,-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001)",
+  "formula": "root(Neg(8),Neg(10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001))",
+  "evaluated": null,
+  "unit": "radians",
+  "domain": {
+    "Unknown": {
+      "reason": "a root of non-integer degree"
+    }
+  },
+  "x_intercepts": {
+    "Unknown": {
+      "reason": "the domain is not decided"
+    }
+  },
+  "y_intercept": {
+    "Certified": {
+      "value": null,
+      "cert": {
+        "covers": "Points",
+        "claims": [
+          {
+            "Undefined": {
+              "x": {
+                "a": 0.0,
+                "b": 0.0
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "parity": {
+    "Certified": {
+      "value": "Even",
+      "cert": {
+        "covers": "Line",
+        "claims": [
+          {
+            "Simplifier": {
+              "fact": "f is even (simplifier): f(−x) = f(x), on a domain symmetric about 0"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "period": {
+    "Unknown": {
+      "reason": "no period proven"
+    }
+  },
+  "extrema": {
+    "Unknown": {
+      "reason": "the domain is not decided"
+    }
+  },
+  "inflections": {
+    "Unknown": {
+      "reason": "the domain is not decided"
+    }
+  },
+  "monotonicity": {
+    "Unknown": {
+      "reason": "the domain is not decided"
+    }
+  },
+  "range": {
+    "Unknown": {
+      "reason": "the domain is not known"
+    }
+  },
+  "range_ends": [],
+  "vertical": {
+    "Unknown": {
+      "reason": "the domain is not known"
+    }
+  },
+  "horizontal": {
+    "Unknown": {
+      "reason": "the domain's tails are not known"
+    }
+  },
+  "oblique": {
+    "Unknown": {
+      "reason": "the domain's tails are not known"
+    }
+  },
+  "binding": {
+    "certifier": "graphing 0.2.0",
+    "rules": "32045d7ad9dab698",
+    "power": "ti-real-1",
+    "sliders": {},
+    "decimal_comma": false,
+    "literal_digits": null,
+    "budget": 200000
+  },
+  "evals": 5,
+  "stopped": null
+}

@@ -170,6 +170,28 @@ impl Nat {
         self.mul(&Nat::from_u64(u64::from(m)))
     }
 
+    /// (self div d, self mod d), d > 0, by long division a bit at a time
+    /// (both capped, so at most `MAX_BITS` steps).
+    pub(crate) fn div_rem(&self, d: &Nat) -> (Nat, Nat) {
+        debug_assert!(!d.is_zero());
+        if *self < *d {
+            return (Nat::zero(), self.clone());
+        }
+        let top = self.bits() - d.bits();
+        let mut q = vec![0u32; (top / 32 + 1) as usize];
+        let mut rem = self.clone();
+        for shift in (0..=top).rev() {
+            let t = d.shl(shift);
+            if rem >= t {
+                rem = rem.sub(&t);
+                q[(shift / 32) as usize] |= 1 << (shift % 32);
+            }
+        }
+        let mut q = Nat(q);
+        q.trim();
+        (q, rem)
+    }
+
     /// (self div d, self mod d), d > 0.
     pub(crate) fn div_rem_small(&self, d: u32) -> (Nat, u32) {
         let d = u64::from(d);
@@ -450,6 +472,20 @@ impl Rat {
         Some((q, rem.is_zero()))
     }
 
+    /// The value as a sign (true: below 0) and a magnitude, if it is an
+    /// integer, of any size.
+    pub(crate) fn integer(&self) -> Option<(bool, Nat)> {
+        if self.n.is_zero() {
+            return Some((false, Nat::zero()));
+        }
+        let (q, r) = if self.d == Nat::from_u64(1) {
+            (self.n.clone(), Nat::zero())
+        } else {
+            self.n.div_rem(&self.d)
+        };
+        r.is_zero().then_some((self.neg, q))
+    }
+
     /// Whether the value is below 0.
     pub(crate) fn is_negative(&self) -> bool {
         self.neg && !self.is_zero()
@@ -688,5 +724,29 @@ mod tests {
         let tie = Nat::from_u64((1 << 53) + 1);
         assert_eq!(tie.to_f64(Round::Nearest), 9007199254740992.0);
         assert_eq!(tie.enclose(), (9007199254740992.0, 9007199254740994.0));
+        // Long division.
+        let n = Nat::from_u64(10).shl(300).add(&Nat::from_u64(7));
+        let d = Nat::from_u64(3).shl(100).add(&Nat::from_u64(1));
+        let (q, r) = n.div_rem(&d);
+        assert!(r < d);
+        assert_eq!(q.mul(&d).add(&r), n);
+        assert_eq!(d.div_rem(&n), (Nat::zero(), d.clone()));
+        assert_eq!(n.div_rem(&n), (Nat::from_u64(1), Nat::zero()));
+    }
+
+    #[test]
+    fn integers_of_any_size() {
+        // (2⁵³ + 1)·4/4 written over 4, and −(10³⁰¹ + 1).
+        let big = dec("9007199254740993");
+        let over = big.mul(&Rat::int(4)).unwrap().div(&Rat::int(4)).unwrap();
+        assert_eq!(
+            over.integer(),
+            Some((false, Nat::from_u64(9007199254740993)))
+        );
+        let ten = dec(&format!("1{}1", "0".repeat(300))).neg();
+        let (neg, m) = ten.integer().unwrap();
+        assert!(neg && m.bits() == 1000 && m.div_rem_small(10).1 == 1);
+        assert_eq!(dec("2.5").integer(), None);
+        assert_eq!(dec("0").integer(), Some((false, Nat::zero())));
     }
 }
