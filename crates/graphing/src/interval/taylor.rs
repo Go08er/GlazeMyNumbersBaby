@@ -622,10 +622,11 @@ fn beside(e: &Expr, x: &Series, ctx: &Ctx<'_>) -> DecInterval {
 /// is 1, but just left of 1 it is 0⁰, undefined; nCr(⌊x⌋, 0) at 0 is 1,
 /// but just left of 0 at Γ's pole; min(x, ⌊x⌋⁰ + 100) had f′ = 1 there).
 ///
-/// The caller has shown f defined and constant on the box, and on the
-/// operand's own enclosure an ulp wider each side (u⁰: u ≠ 0 on the box;
-/// a step: [`constant_near`]). That holds beside the box where the
-/// operand `u` stays near its values on the box, so where it is
+/// The caller has shown f defined and of that value on an open set of the
+/// operand's values holding its values on the box (u⁰: u ≠ 0 there;
+/// nCr(u, 0): no negative integer; a step: its argument's enclosure an
+/// ulp wider each side, [`constant_near`]). That holds beside the box
+/// where the operand `u` stays near its values on the box, so where it is
 /// continuous beside the box: shown by its own derivative valid on the box
 /// (differentiable, so continuous, at each point). Else f must be defined
 /// and of one value over the box an ulp wider each side (`steady`, which
