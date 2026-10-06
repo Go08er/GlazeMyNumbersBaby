@@ -56,15 +56,41 @@ fn valid_upto(s: &S, k: usize) -> bool {
 fn restrict_validity(mut out: S, ins: &[&S]) -> S {
     for (k, c) in out.iter_mut().enumerate().skip(1) {
         if !ins.iter().all(|s| valid_upto(s, k)) && !c.empty {
-            *c = if lenient() {
-                // Where defined: the bounds hold where the inputs exist.
-                c.clone().with(false, false)
-            } else {
-                none()
-            };
+            *c = not_throughout(c);
         }
     }
     out
+}
+
+/// A coefficient that may not exist throughout the box: none, or (where
+/// defined) its bounds for the points where it does.
+fn not_throughout(c: &Iv) -> Iv {
+    if lenient() {
+        // Where defined: the bounds hold where the inputs exist.
+        c.clone().with(false, false)
+    } else {
+        none()
+    }
+}
+
+/// A series built from a value alone, constant near each point of the box
+/// where its argument `a` stays near its value there (u⁰ with u ≠ 0, a
+/// step clear of its jumps): its coefficients (0) exist only where `a` is
+/// continuous at each point of the box, beside it included. `a`'s own
+/// first derivative existing throughout the box shows that
+/// (differentiable, so continuous); the box's decoration doesn't, a point
+/// box being continuous restricted to itself (review 16, R16-L-01: ⌊x⌋⁰ at
+/// 1 had derivatives 0, though just left of 1 it is 0⁰, undefined; ⌊√x +
+/// 0.5⌋ at 0 too, though √x ends there).
+fn beside(mut s: S, a: &S) -> S {
+    if !valid_upto(a, 1) {
+        for c in s.iter_mut().skip(1) {
+            if !c.empty {
+                *c = not_throughout(c);
+            }
+        }
+    }
+    s
 }
 
 pub fn constant(c: Iv, n: usize) -> S {
@@ -208,7 +234,8 @@ pub fn powi(a: &S, n: i64) -> S {
         if !value.def {
             s = invalid_from(s, 1);
         }
-        return s;
+        // 1 where a ≠ 0: constant beside the box only where a stays ≠ 0.
+        return beside(s, a);
     }
     if n < 0 {
         let mut s = recip(&powi(a, -n));
@@ -432,16 +459,19 @@ pub fn only_value_unless(s: S, ok: bool) -> S {
     if ok { s } else { invalid_from(s, 1) }
 }
 
-/// A step function's series: constant (derivatives 0) where its argument
-/// stays strictly between jumps (`smooth`; a box ending at a jump is
-/// continuous on the box, but the derivative doesn't exist at the jump),
-/// else only the value.
-pub fn step(value: Iv, n: usize, smooth: bool) -> S {
+/// A step function's series of the argument `a`: constant (derivatives 0)
+/// where its argument stays strictly between jumps (`smooth`; a box ending
+/// at a jump is continuous on the box, but the derivative doesn't exist at
+/// the jump) and does so beside the box too ([`beside`]: ⌊⌊x⌋ + 0.5⌋ at 1
+/// takes one value on the box, but ⌊x⌋ + 0.5 jumps there), else only the
+/// value.
+pub fn step(a: &S, value: Iv, smooth: bool) -> S {
+    let n = order(a);
     if value.empty {
         return vec![Iv::empty(); n + 1];
     }
     if smooth && value.cont && value.is_point() {
-        constant(value, n)
+        beside(constant(value, n), a)
     } else {
         invalid_from(constant(value, n), 1)
     }
