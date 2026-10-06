@@ -12,7 +12,11 @@
 //! Keys: Tab reaches the four buttons and one day (the one the keys are
 //! on); the arrow keys move a day or a week, Page Up/Down a month (with
 //! Shift a year), Home/End to the week's ends, crossing into the months
-//! around as they go; Space or Enter picks the day, as a click does.
+//! around as they go; Space or Enter picks the day, as a click does. The
+//! focus, the keys' day and what the focused day is called stay in step:
+//! the month buttons move the focus with the keys when a day had it (an
+//! assistive technology's click), and each opening starts again on the
+//! date chosen ([`DayGrid::show_chosen`]).
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -162,7 +166,14 @@ impl DayGrid {
             let weak = Rc::downgrade(&this);
             b.connect_clicked(move |_| {
                 if let Some(g) = weak.upgrade() {
-                    g.move_cursor(add_months(g.cursor.get(), months), false);
+                    // Clicked from the keyboard, the button keeps the focus.
+                    // Clicked by assistive technology while a day has it,
+                    // the focus moves with the keys to the new month's day,
+                    // rather than stay on a button now showing another
+                    // date (R16-L-02).
+                    let from = g.focused_day();
+                    let c = from.unwrap_or(g.cursor.get());
+                    g.move_cursor(add_months(c, months), from.is_some());
                     // The heading changed under a button that kept the
                     // focus: say the month.
                     g.title
@@ -190,7 +201,9 @@ impl DayGrid {
                     return glib::Propagation::Proceed;
                 }
                 let shift = mods.contains(gdk::ModifierType::SHIFT_MASK);
-                let c = g.cursor.get();
+                // From the day focused (always the keys' own, but should
+                // they differ, the one announced).
+                let c = g.focused_day().unwrap_or(g.cursor.get());
                 let weekday = i64::from(c.weekday().num_days_from_sunday());
                 let by_days = |n: i64| {
                     let moved = if n >= 0 {
@@ -234,11 +247,27 @@ impl DayGrid {
         self.render();
     }
 
+    /// Shows the chosen date's month with the keys on it again, whatever
+    /// was browsed since: each time the picker opens, it starts on the
+    /// date chosen, shown and selected (R16-L-02).
+    pub fn show_chosen(&self) {
+        let d = self.selected.get();
+        self.cursor.set(d);
+        self.shown.set(first_of_month(d));
+        self.render();
+    }
+
     /// Puts the keyboard's focus on the day the keys are on.
     pub fn focus_day(&self) {
         if let Some(b) = self.button(self.cursor.get()) {
             b.grab_focus();
         }
+    }
+
+    /// The date of the day button that has the focus, if one has.
+    fn focused_day(&self) -> Option<NaiveDate> {
+        let i = self.days.iter().position(|b| b.is_focus())?;
+        Some(clamp(first_cell(self.shown.get()) + Days::new(i as u64)))
     }
 
     /// Calls `f` with each date picked (clicked, or Space/Enter).

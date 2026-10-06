@@ -44,9 +44,13 @@ fn date_button() -> DateButton {
         .build();
     {
         // Opened, the keys (and so the screen reader) start on the date
-        // chosen ("Tuesday, October 6, 2026, selected").
+        // chosen ("Tuesday, October 6, 2026, selected"), in its month,
+        // whatever was browsed the last time (R16-L-02).
         let days = Rc::downgrade(&days);
         popover.connect_show(move |_| {
+            if let Some(d) = days.upgrade() {
+                d.show_chosen();
+            }
             let days = days.clone();
             glib::idle_add_local_once(move || {
                 if let Some(d) = days.upgrade() {
