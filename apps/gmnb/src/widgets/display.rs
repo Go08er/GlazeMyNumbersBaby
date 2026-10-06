@@ -266,10 +266,13 @@ impl Display {
     }
 
     /// A display that is also a control (a converter field, picked to
-    /// type into): a button to assistive technology, not a label.
+    /// type into): a button to assistive technology, not a label, and a
+    /// stop for the keyboard's focus (Tab), ringed while it has it
+    /// (style.css).
     pub fn button(max_size: f32) -> Self {
         let d: Self = glib::Object::builder()
             .property("accessible-role", gtk::AccessibleRole::Button)
+            .property("focusable", true)
             .build();
         d.imp().max_size.set(max_size);
         d

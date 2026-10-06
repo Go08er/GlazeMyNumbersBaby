@@ -489,6 +489,13 @@ button.wc-icon-button {
   box-shadow: inset 3px 0 @wc_accent;
 }
 
+/* A value field the keyboard's focus is on (Tab; Space or Enter picks it). */
+.wc-conv-field calcdisplay:focus-visible {
+  outline: 2px solid alpha(@wc_accent, 0.9);
+  outline-offset: 2px;
+  border-radius: 12px;
+}
+
 .wc-currency-symbol {
   font-family: "Outfit";
   font-size: 26px;

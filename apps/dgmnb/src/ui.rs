@@ -555,7 +555,9 @@ impl<'a, 'p> Frame<'a, 'p> {
             self.hit(id, r, Sense::Click, Some(msg), true);
         }
         let plain = crate::app::plain(label);
-        if let Some(n) = self.node(id, Role::Button, &plain, r) {
+        // A trailing "▾" (a flyout) is drawn, not read.
+        let plain = plain.trim_end_matches('▾').trim_end();
+        if let Some(n) = self.node(id, Role::Button, plain, r) {
             n.toggled = on;
             n.disabled = !enabled;
             n.clickable = enabled;

@@ -2077,7 +2077,7 @@ fn draw_header(
             f,
             &mut x,
             appcore::icons::MENU,
-            "Open navigation",
+            "Open Navigation",
             Msg::Nav(true),
             None,
         );
@@ -2197,7 +2197,7 @@ pub(crate) fn draw_nav(f: &mut Frame, full: Rect, mode: ViewMode, settings: bool
         id("nav-close"),
         Rect::new(head.x, head.y, 36.0, 36.0),
         appcore::icons::MENU,
-        "Close navigation",
+        "Close Navigation",
         Msg::Nav(false),
         true,
         None,
@@ -2222,18 +2222,40 @@ pub(crate) fn draw_nav(f: &mut Frame, full: Rect, mode: ViewMode, settings: bool
                 Group::Calculator => "Calculator",
                 Group::Converter => "Converter",
             };
-            f.label(
-                Rect::new(list.x + 18.0, y, 200.0, 28.0),
-                label,
-                CAPTION,
-                t.fg_dim,
-                Align::Start,
+            let header = Rect::new(list.x + 18.0, y, 200.0, 28.0);
+            f.label(header, label, CAPTION, t.fg_dim, Align::Start);
+            // Named as upstream's NavCategoryGroup, as GMNB's.
+            f.node(
+                id(("nav-group", label)),
+                accesskit::Role::Heading,
+                match m.group() {
+                    Group::Calculator => "Calculators category",
+                    Group::Converter => "Converters category",
+                },
+                header,
             );
             y += 28.0;
         }
         let row = Rect::new(list.x + 6.0, y, list.w - 12.0, 40.0);
         let sel = m == mode && !settings;
-        f.row(id(("nav", m.key())), row, Msg::Mode(m), sel, m.title());
+        // Named as upstream's NavCategory, the mode and its group
+        // ("Standard Calculator"), with its shortcut, as GMNB's.
+        let group = match m.group() {
+            Group::Calculator => "Calculator",
+            Group::Converter => "Converter",
+        };
+        f.row(
+            id(("nav", m.key())),
+            row,
+            Msg::Mode(m),
+            sel,
+            &format!("{} {group}", m.title()),
+        );
+        if let Some(n) = m.alt_number()
+            && let Some(node) = f.nodes.as_mut().and_then(|v| v.last_mut())
+        {
+            node.description = Some((format!("{} (Alt+{n})", m.title()), None));
+        }
         f.icon(
             Rect::new(row.x + 8.0, row.y, 28.0, row.h),
             m.icon(),

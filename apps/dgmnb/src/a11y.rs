@@ -631,7 +631,7 @@ mod tests {
                 "{name:?} is under the navigation"
             );
         }
-        assert!(out.iter().any(|(_, name, _)| name == "Close navigation"));
+        assert!(out.iter().any(|(_, name, _)| name == "Close Navigation"));
         for a in ACTIONS {
             assert!(
                 target(&hits, clear, a).is_none(),

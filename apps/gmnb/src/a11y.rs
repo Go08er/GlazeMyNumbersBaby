@@ -82,6 +82,14 @@ fn realized(widget: &gtk::Widget) {
     unsafe { widget.set_data(DONE, ()) };
 }
 
+/// Names a button that shows a label: GTK names it by that label (a
+/// labelled-by relation, which outranks a name given), so the relation
+/// goes. ("MS" is read "Memory store", "(" "left parenthesis".)
+pub fn name_button(button: &gtk::Button, name: &str) {
+    button.reset_relation(gtk::AccessibleRelation::LabelledBy);
+    button.update_property(&[gtk::accessible::Property::Label(name)]);
+}
+
 /// Names a menu button, and the toggle inside it that takes focus: GTK
 /// would name both from what they hold, and an open popover is held too
 /// ("Trigonometry Inverse functions Sine (S)...").
