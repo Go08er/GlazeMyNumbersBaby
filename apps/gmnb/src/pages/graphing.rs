@@ -123,6 +123,7 @@ impl GraphingPage {
             .tooltip_text("Graph options")
             .css_classes(["flat", "wc-icon-button", "wc-small"])
             .build();
+        crate::a11y::name_menu_button(&settings, "Graph options");
         let tools = gtk::Box::new(gtk::Orientation::Vertical, 2);
         tools.add_css_class("wc-graph-tools");
         for w in [
@@ -567,6 +568,7 @@ impl GraphingPage {
             .css_classes(["flat", "wc-icon-button", "wc-small"])
             .valign(gtk::Align::Center)
             .build();
+        crate::a11y::name_menu_button(&style, "Line color and style");
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         line.append(&swatch);
         line.append(&entry);
@@ -823,6 +825,10 @@ impl GraphingPage {
                 "Variable {name}"
             ))]);
             let value = gtk::SpinButton::with_range(-1e9, 1e9, var.step().max(1e-9));
+            // Named as DGMNB's field.
+            value.update_property(&[gtk::accessible::Property::Label(&format!(
+                "Value of {name}"
+            ))]);
             value.set_digits(3);
             value.set_value(var.value());
             value.set_width_chars(6);

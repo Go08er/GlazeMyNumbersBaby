@@ -266,6 +266,20 @@ impl CalcPanel {
                 pop.popup();
             });
             row.add_controller(click);
+            // The context menu's Delete, which only a right click opens,
+            // for assistive technology: history.delete. After the request
+            // is answered, as it rebuilds this list.
+            let weak = Rc::downgrade(self);
+            crate::a11y::operable(&row, "history", "delete", move |_| {
+                let weak = weak.clone();
+                glib::idle_add_local_once(move || {
+                    if let Some(p) = weak.upgrade()
+                        && let Some(f) = &p.handlers.borrow().history_delete
+                    {
+                        f(i);
+                    }
+                });
+            });
             self.history_list.append(&row);
         }
         self.sync_trash();

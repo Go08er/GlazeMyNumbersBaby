@@ -1,6 +1,7 @@
 //! Unit / currency converter (upstream UnitConverter.xaml).
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -45,6 +46,9 @@ pub struct ConverterPage {
     keypad: Keypad,
     syncing: Cell<bool>,
     unit_ids: RefCell<Vec<i32>>,
+    /// Each unit's spoken name by its shown one ("United States Dollar"
+    /// for "United States - Dollar"), for the drop-downs' lists.
+    spoken: Rc<RefCell<HashMap<String, String>>>,
     wide: Cell<bool>,
     /// The converter is the page on screen (between activate and
     /// deactivate).
@@ -52,7 +56,9 @@ pub struct ConverterPage {
 }
 
 fn field(label: &str) -> Field {
-    let display = Display::new(44.0);
+    // A control too: picked (pointer or assistive technology), it is the
+    // field typed into.
+    let display = Display::button(44.0);
     display.set_show_expression(false);
     display.set_align_end(false);
     display.set_weight(300);
@@ -76,7 +82,10 @@ fn field(label: &str) -> Field {
         .css_classes(["wc-unit-dropdown"])
         .build();
     dropdown.set_search_match_mode(gtk::StringFilterMatchMode::Substring);
-    dropdown.update_property(&[gtk::accessible::Property::Label(label)]);
+    // GTK names the drop-down after the unit it shows (a labelled-by
+    // relation, which outranks a label), as upstream's reads; which field
+    // it is goes in its description.
+    dropdown.update_property(&[gtk::accessible::Property::Description(label)]);
     let frame = gtk::Box::new(gtk::Orientation::Vertical, 2);
     frame.add_css_class("wc-conv-field");
     frame.append(&top);
@@ -86,6 +95,50 @@ fn field(label: &str) -> Field {
         display,
         dropdown,
         symbol,
+    }
+}
+
+/// Names each unit in `dropdown`'s list as upstream's does, by its spoken
+/// name (`spoken`): GTK's own list items have none. And its search field.
+fn name_units(dropdown: &gtk::DropDown, spoken: &Rc<RefCell<HashMap<String, String>>>) {
+    // GTK's own factory, which shows the unit and marks the chosen one;
+    // this runs after it binds each row.
+    if let Some(factory) = dropdown
+        .factory()
+        .and_downcast::<gtk::SignalListItemFactory>()
+    {
+        let spoken = Rc::downgrade(spoken);
+        factory.connect_bind(move |_, item| {
+            let (Some(item), Some(spoken)) =
+                (item.downcast_ref::<gtk::ListItem>(), spoken.upgrade())
+            else {
+                return;
+            };
+            if let Some(unit) = item.item().and_downcast::<gtk::StringObject>() {
+                let shown = unit.string();
+                let spoken = spoken.borrow();
+                let name = spoken
+                    .get(shown.as_str())
+                    .map_or(shown.as_str(), String::as_str);
+                item.set_accessible_label(name);
+            }
+        });
+    }
+    let mut child = dropdown.first_child();
+    let mut todo = Vec::new();
+    while let Some(c) = child {
+        child = c.next_sibling();
+        todo.push(c);
+    }
+    while let Some(w) = todo.pop() {
+        if w.is::<gtk::SearchEntry>() {
+            w.update_property(&[gtk::accessible::Property::Label("Search units")]);
+        }
+        let mut child = w.first_child();
+        while let Some(c) = child {
+            child = c.next_sibling();
+            todo.push(c);
+        }
     }
 }
 
@@ -188,6 +241,7 @@ impl ConverterPage {
             keypad: keypad.clone(),
             syncing: Cell::new(false),
             unit_ids: RefCell::default(),
+            spoken: Rc::default(),
             wide: Cell::new(false),
             showing: Cell::new(false),
         });
@@ -213,22 +267,31 @@ impl ConverterPage {
         });
         for (which, f) in [(1, &page.f1), (2, &page.f2)] {
             ctx.layers.hold_list(&f.dropdown);
-            let click = gtk::GestureClick::new();
-            let weak = Rc::downgrade(&page);
-            click.connect_released(move |_, _, _, _| {
-                if let Some(p) = weak.upgrade() {
-                    {
-                        let mut vm = p.vm.borrow_mut();
-                        if which == 1 {
-                            vm.activate_value1();
-                        } else {
-                            vm.activate_value2();
+            name_units(&f.dropdown, &page.spoken);
+            let pick = {
+                let weak = Rc::downgrade(&page);
+                Rc::new(move || {
+                    if let Some(p) = weak.upgrade() {
+                        {
+                            let mut vm = p.vm.borrow_mut();
+                            if which == 1 {
+                                vm.activate_value1();
+                            } else {
+                                vm.activate_value2();
+                            }
                         }
+                        p.sync(Change::None, Change::None);
                     }
-                    p.sync(Change::None, Change::None);
-                }
-            });
+                })
+            };
+            let click = gtk::GestureClick::new();
+            {
+                let pick = pick.clone();
+                click.connect_released(move |_, _, _, _| pick());
+            }
             f.display.add_controller(click);
+            // The same for assistive technology (the click is pointer only).
+            crate::a11y::operable(&f.display, "value", "activate", move |_| pick());
             let weak = Rc::downgrade(&page);
             f.dropdown.connect_selected_notify(move |d| {
                 let Some(p) = weak.upgrade() else { return };
@@ -371,6 +434,12 @@ impl ConverterPage {
         let names: Vec<String> = units.iter().map(|u| u.name.clone()).collect();
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         self.unit_ids.replace(units.iter().map(|u| u.id).collect());
+        self.spoken.replace(
+            units
+                .iter()
+                .map(|u| (u.name.clone(), u.accessible_name.clone()))
+                .collect(),
+        );
         self.syncing.set(true);
         for f in [&self.f1, &self.f2] {
             f.dropdown.set_model(Some(&gtk::StringList::new(&refs)));
@@ -384,13 +453,14 @@ impl ConverterPage {
         let vm = self.vm.borrow();
         self.syncing.set(true);
         let ids = self.unit_ids.borrow();
-        for (f, unit, value, is_active, sym) in [
+        for (f, unit, value, is_active, sym, name) in [
             (
                 &self.f1,
                 vm.unit1(),
                 vm.value1(),
                 vm.value1_active(),
                 vm.currency_symbol1(),
+                vm.value1_automation_name(),
             ),
             (
                 &self.f2,
@@ -398,6 +468,7 @@ impl ConverterPage {
                 vm.value2(),
                 vm.value2_active(),
                 vm.currency_symbol2(),
+                vm.value2_automation_name(),
             ),
         ] {
             f.display
@@ -407,18 +478,19 @@ impl ConverterPage {
             } else {
                 f.frame.remove_css_class("wc-active");
             }
-            if let Some(u) = unit {
-                if let Some(pos) = ids.iter().position(|&id| id == u.id)
-                    && f.dropdown.selected() != pos as u32
-                {
-                    f.dropdown.set_selected(pos as u32);
-                }
-                f.display
-                    .update_property(&[gtk::accessible::Property::Label(&format!(
-                        "{value} {}",
-                        u.accessible_name
-                    ))]);
+            if let Some(u) = unit
+                && let Some(pos) = ids.iter().position(|&id| id == u.id)
+                && f.dropdown.selected() != pos as u32
+            {
+                f.dropdown.set_selected(pos as u32);
             }
+            // Named as upstream's (and DGMNB's) fields, "Convert from 5
+            // Centimeters", "Converts into 1.97 Inches"; selected while
+            // it is the one typed into.
+            f.display
+                .update_property(&[gtk::accessible::Property::Label(&name)]);
+            f.display
+                .update_state(&[gtk::accessible::State::Selected(Some(is_active))]);
             f.symbol
                 .set_visible(vm.currency_symbol_visible() && !sym.is_empty());
             f.symbol.set_text(sym);

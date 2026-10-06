@@ -1,3 +1,4 @@
+mod a11y;
 mod inert;
 mod keymap;
 mod launch;
@@ -116,6 +117,9 @@ fn started_up() {
     paste::guard_all();
     inert::refuse_insensitive_values();
     inert::guard_new_fields();
+    // Every activatable row can be activated by assistive technology,
+    // and a label offers only the actions it can carry out.
+    a11y::install();
     register_fonts();
     launch::mark("fonts");
     load_static_css();

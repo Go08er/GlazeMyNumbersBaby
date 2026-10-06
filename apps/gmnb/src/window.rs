@@ -495,6 +495,12 @@ impl Window {
                     .activatable(false)
                     .selectable(false)
                     .build();
+                // Named as upstream's NavCategoryGroup ("Calculators
+                // category").
+                hr.update_property(&[gtk::accessible::Property::Label(match mode.group() {
+                    Group::Calculator => "Calculators category",
+                    Group::Converter => "Converters category",
+                })]);
                 hr.add_css_class("wc-nav-section");
                 self.nav.append(&hr);
             }
@@ -505,8 +511,22 @@ impl Window {
             b.append(&icon);
             b.append(&label);
             let row = gtk::ListBoxRow::builder().child(&b).build();
+            // Named as upstream's NavCategory, the mode and its group
+            // ("Standard Calculator", "Length Converter"): GTK names a row
+            // only from its tooltip, which the converters have none of.
+            let group = match mode.group() {
+                Group::Calculator => "Calculator",
+                Group::Converter => "Converter",
+            };
+            row.update_property(&[gtk::accessible::Property::Label(&format!(
+                "{} {group}",
+                mode.title()
+            ))]);
             if let Some(n) = mode.alt_number() {
                 row.set_tooltip_text(Some(&format!("{} (Alt+{n})", mode.title())));
+                row.update_property(&[gtk::accessible::Property::KeyShortcuts(&format!(
+                    "Alt+{n}"
+                ))]);
             }
             self.nav.append(&row);
             rows.push((mode, row, icon));
