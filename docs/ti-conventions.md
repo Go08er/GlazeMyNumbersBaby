@@ -26,8 +26,9 @@ typed (the original tree), so `x^(1+x−x)` keeps the rule even though it
 simplifies to `x^1`.
 
 Applies to graphed equations and their analysis (`crates/graphing`:
-`functions::pow`, `pow_var`, `pow_int`, `pow_rational`, the compiler's `Pow`
-and `PowVar` instructions, the extended-range and reference evaluators). The
+`functions::pow`, `pow_var`, `pow_int`, `pow_rational`, `pow_odd`,
+`pow_beyond`, the compiler's `Pow`, `PowVar`, `PowOdd` and `PowBeyond`
+instructions, the extended-range and reference evaluators). The
 calculator modes are unchanged (see 0⁰ below).
 
 | Expression | Windows Calculator | TI-84 Plus CE (Real mode) | GMNB/DGMNB graphing |
@@ -58,11 +59,27 @@ has domain [0, ∞) while `x^(1/5)` is defined everywhere.
 
 **Literals are the decimals typed, to the digits set.** Each number typed in
 an equation is rounded on entry to a number of significant decimal digits,
-half away from zero, which a setting chooses: by default the TI-84 Plus
-CE's 14 (its numbers are 14-digit decimals; it shows 10). The settings
-slider also marks 10 (Casio's display), 12 (the HP Prime's Home view) and
-15 (Casio's internal precision, and the most digits every double tells
-apart); anything from 5 to 20 can be set, or off. The rounded decimal is
+half away from zero, which a setting chooses: by default 14, labelled
+"TI-84 Plus CE": TI documents the TI-83 Plus and TI-84 Plus family, the CE
+among them, as calculating with 14 digits ([TI knowledge base
+34616](https://education.ti.com/en/customer-support/knowledge-base/ti-83-84-plus-family/product-usage/34616)).
+The settings slider also marks:
+
+* 10, labelled "Casio display": the Casio fx-100MS, fx-570MS and fx-991MS
+  give a single calculation's result to about ±1 in the 10th digit
+  ([Casio manual, calculation
+  ranges](https://support.casio.com/global/en/calc/manual/fx-100MS_570MS_991MS_en/technical_informatoin/calculation_ranges/calculation_ranges.html));
+* 12, labelled "HP": the HP Prime shows results in Home view with 12
+  digits by default ([HP Prime Quick Start Guide, p. 13](https://ftp.hp.com/pub/calculators/Prime/Documentation/Calculator/EN/Quick_Start_Guide_EN_2017_11_20_1.pdf));
+* 15, labelled "Casio internal, double": the same Casio models calculate
+  with 15 digits internally (the page above), and 15 is the most digits
+  for which decimals that read differently always have different doubles
+  (in the doubles' normal range, below).
+
+Anything from 5 to 20 can be set, or off. These figures are each model's
+number of digits only, as its maker states it: the setting rounds the
+numbers typed to so many digits, and no more of that calculator's
+arithmetic is claimed. The rounded decimal is
 the number from then on, for the curve drawn, its trace, its analysis and
 its certificate alike; off, the number is exactly the decimal typed. A
 slider is read the same way: off, its value is the double it is set to;
@@ -76,8 +93,13 @@ x − 1.11022….
 A number is that decimal, not the double nearest it: `0.1` is one tenth;
 off (or at 16 digits or more) `1.0000000000000001` is 1 + 10⁻¹⁶, though a
 double holds it as 1, while to 14 digits it is 1. Two numbers that read
-differently to 15 digits or fewer are never the same double. With more
-digits, or off, they can be, and each occurrence is still its own number:
+differently to 15 digits or fewer are never the same double while both are
+in the doubles' normal range (magnitudes from about 2.2·10⁻³⁰⁸ to
+1.8·10³⁰⁸). Beyond it they can be: 10⁻⁴⁰⁰ and 2·10⁻⁴⁰⁰ both round to 0,
+10⁴⁰⁰ and 2·10⁴⁰⁰ both to ∞, and a subnormal double (below 2.2·10⁻³⁰⁸)
+has fewer significant bits, so nearby decimals there can share one. With
+more digits, or off, they can be anywhere. Either way each occurrence is
+still its own number:
 off, `1.0000000000000001·x − 1·x` is 10⁻¹⁶·x, not 0, and beside a slider
 `a` at 1, `a·x − 1.0000000000000001·x` is −10⁻¹⁶·x. Whether an exponent (or
 a root's degree) is an integer is decided by its exact value, never by its
@@ -106,7 +128,9 @@ is still the ±∞ or 0 it rounds to, but arithmetic on such a value has an
 unknown value, not what rounding step by step would make of it:
 `(10^5000 + 1) − 10^5000` is unknown, never 0. Nothing is drawn or traced
 for an unknown value except where f's enclosure itself places the curve.
-Anything else (π, e, sin, …) is computed in floating point as before. A
+Anything else (π, e, sin, a root or a power to an exponent no integer,
+the counts of numbers no whole number, …) is computed in floating point
+as before. A
 literal the doubles can't tell from its neighbour (off, 1 + 10⁻¹⁶ against
 1) is enclosed by the doubles either side of it, so the analysis may leave
 a row unknown that only that difference decides (off,
@@ -114,9 +138,12 @@ a row unknown that only that difference decides (off,
 says it can't tell).
 
 0⁰: the limit of x^y at (0, 0) doesn't exist, so a function graphed through
-it has no value there (x⁰ approaches 1 but 0^x approaches 0). The TI reports a
-domain error. Windows' calculator modes give 1, the common algebraic
-convention for a typed number, and keep doing so here: those modes are
+it has no value there (x⁰ approaches 1 but 0^x approaches 0). TI documents
+a domain error for the TI-82, 83 and 85 (and 1 for the TI-89 and 92), and
+doesn't document the CE's: undefined here is a chosen convention, not
+verified CE parity (see the status note above). Windows' calculator modes
+give 1, the common algebraic convention for a typed number, and keep doing
+so here: those modes are
 tested against Microsoft's own engine.
 
 ## The certified analysis
