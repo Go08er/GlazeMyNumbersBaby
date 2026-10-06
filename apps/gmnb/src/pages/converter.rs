@@ -56,7 +56,9 @@ pub struct ConverterPage {
 }
 
 fn field(label: &str) -> Field {
-    let display = Display::new(44.0);
+    // A control too: picked (pointer or assistive technology), it is the
+    // field typed into.
+    let display = Display::button(44.0);
     display.set_show_expression(false);
     display.set_align_end(false);
     display.set_weight(300);
@@ -266,22 +268,30 @@ impl ConverterPage {
         for (which, f) in [(1, &page.f1), (2, &page.f2)] {
             ctx.layers.hold_list(&f.dropdown);
             name_units(&f.dropdown, &page.spoken);
-            let click = gtk::GestureClick::new();
-            let weak = Rc::downgrade(&page);
-            click.connect_released(move |_, _, _, _| {
-                if let Some(p) = weak.upgrade() {
-                    {
-                        let mut vm = p.vm.borrow_mut();
-                        if which == 1 {
-                            vm.activate_value1();
-                        } else {
-                            vm.activate_value2();
+            let pick = {
+                let weak = Rc::downgrade(&page);
+                Rc::new(move || {
+                    if let Some(p) = weak.upgrade() {
+                        {
+                            let mut vm = p.vm.borrow_mut();
+                            if which == 1 {
+                                vm.activate_value1();
+                            } else {
+                                vm.activate_value2();
+                            }
                         }
+                        p.sync(Change::None, Change::None);
                     }
-                    p.sync(Change::None, Change::None);
-                }
-            });
+                })
+            };
+            let click = gtk::GestureClick::new();
+            {
+                let pick = pick.clone();
+                click.connect_released(move |_, _, _, _| pick());
+            }
             f.display.add_controller(click);
+            // The same for assistive technology (the click is pointer only).
+            crate::a11y::operable(&f.display, "value", "activate", move |_| pick());
             let weak = Rc::downgrade(&page);
             f.dropdown.connect_selected_notify(move |d| {
                 let Some(p) = weak.upgrade() else { return };
@@ -443,13 +453,14 @@ impl ConverterPage {
         let vm = self.vm.borrow();
         self.syncing.set(true);
         let ids = self.unit_ids.borrow();
-        for (f, unit, value, is_active, sym) in [
+        for (f, unit, value, is_active, sym, name) in [
             (
                 &self.f1,
                 vm.unit1(),
                 vm.value1(),
                 vm.value1_active(),
                 vm.currency_symbol1(),
+                vm.value1_automation_name(),
             ),
             (
                 &self.f2,
@@ -457,6 +468,7 @@ impl ConverterPage {
                 vm.value2(),
                 vm.value2_active(),
                 vm.currency_symbol2(),
+                vm.value2_automation_name(),
             ),
         ] {
             f.display
@@ -466,18 +478,19 @@ impl ConverterPage {
             } else {
                 f.frame.remove_css_class("wc-active");
             }
-            if let Some(u) = unit {
-                if let Some(pos) = ids.iter().position(|&id| id == u.id)
-                    && f.dropdown.selected() != pos as u32
-                {
-                    f.dropdown.set_selected(pos as u32);
-                }
-                f.display
-                    .update_property(&[gtk::accessible::Property::Label(&format!(
-                        "{value} {}",
-                        u.accessible_name
-                    ))]);
+            if let Some(u) = unit
+                && let Some(pos) = ids.iter().position(|&id| id == u.id)
+                && f.dropdown.selected() != pos as u32
+            {
+                f.dropdown.set_selected(pos as u32);
             }
+            // Named as upstream's (and DGMNB's) fields, "Convert from 5
+            // Centimeters", "Converts into 1.97 Inches"; selected while
+            // it is the one typed into.
+            f.display
+                .update_property(&[gtk::accessible::Property::Label(&name)]);
+            f.display
+                .update_state(&[gtk::accessible::State::Selected(Some(is_active))]);
             f.symbol
                 .set_visible(vm.currency_symbol_visible() && !sym.is_empty());
             f.symbol.set_text(sym);

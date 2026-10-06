@@ -79,12 +79,14 @@ fn chevron_menu(label: &str, icon: &str, popover: &gtk::Popover) -> gtk::MenuBut
     content.append(&PathIcon::new(icon, 16));
     content.append(&gtk::Label::new(Some(label)));
     content.append(&PathIcon::new(paths::CHEVRON_DOWN, 12));
-    gtk::MenuButton::builder()
+    let button = gtk::MenuButton::builder()
         .child(&content)
         .popover(popover)
         .css_classes(["wc-mem", "wc-flyout-button"])
         .focus_on_click(false)
-        .build()
+        .build();
+    crate::a11y::name_menu_button(&button, label);
+    button
 }
 
 impl CalculatorPage {

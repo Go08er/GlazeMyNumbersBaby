@@ -123,6 +123,22 @@ pub fn show(win: &Rc<Window>) {
         let secondary = gtk::ColorDialogButton::new(Some(color_dialog));
         secondary.set_rgba(&rgba(q0, 1.0));
         secondary.set_valign(gtk::Align::Center);
+        // GTK names neither the colour button nor the button inside it
+        // (that takes focus): only the colour it shows is read.
+        for (b, name) in [
+            (&primary, "Primary colour"),
+            (&secondary, "Secondary colour"),
+        ] {
+            let label = [gtk::accessible::Property::Label(name)];
+            b.update_property(&label);
+            let mut child = b.first_child();
+            while let Some(c) = child {
+                if c.is::<gtk::Button>() {
+                    c.update_property(&label);
+                }
+                child = c.next_sibling();
+            }
+        }
         let complement_btn = gtk::Button::builder()
             .label("Complement")
             .tooltip_text("Use the colour opposite the primary on the colour wheel")
@@ -533,6 +549,7 @@ fn graphing_group(ctx: &Rc<Ctx>) -> adw::PreferencesGroup {
         .activatable(false)
         .selectable(false)
         .build();
+    slider.update_property(&[gtk::accessible::Property::Label("Number precision slider")]);
     let list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
         .css_classes(["boxed-list"])
@@ -586,6 +603,9 @@ pub fn about(parent: &adw::ApplicationWindow) {
         Some(&gtk::glib::markup_escape_text(CORE_MATH)),
     );
     about.add_legal_section("Rust crates", None, gtk::License::Custom, Some(CRATES));
+    // The same, as a row: assistive technology can't follow a link in a
+    // label (GTK offers it no action), but can activate a row.
+    about.add_link("Third-party licences", THIRD_PARTY);
     about.add_legal_section(
         "Exchange rates",
         None,

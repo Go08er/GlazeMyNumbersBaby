@@ -8,7 +8,9 @@
 //! "About GMNB" and every row of libadwaita's own: a switch row, the
 //! About dialog's) has nothing to activate it by but the keyboard. Each
 //! gets `row.activate`, offered while the row is activatable, which does
-//! what Enter does.
+//! what Enter does. A menu button or a drop-down shows as a button or a
+//! combo box with no action of its own (the toggle inside it has one):
+//! each gets `popup.toggle`, which opens or closes it as Enter does.
 //!
 //! A label offers every action GtkLabel installs (`gtklabel.c`) until it
 //! is selected for the first time, which a label that can't be never is:
@@ -49,7 +51,8 @@ pub fn operable<W: IsA<gtk::Widget>>(
     action
 }
 
-/// A row gets the action it lacks; a label offers only what it can do.
+/// A row, a menu button or a drop-down gets the action it lacks; a label
+/// offers only what it can do.
 fn realized(widget: &gtk::Widget) {
     if let Some(label) = widget.downcast_ref::<gtk::Label>() {
         quiet_label(label);
@@ -68,11 +71,30 @@ fn realized(widget: &gtk::Widget) {
         // Offered only while the row is activatable.
         action.set_enabled(row.is_activatable());
         row.connect_activatable_notify(move |r| action.set_enabled(r.is_activatable()));
+    } else if widget.is::<gtk::MenuButton>() || widget.is::<gtk::DropDown>() {
+        operable(widget, "popup", "toggle", |w| {
+            w.activate();
+        });
     } else {
         return;
     }
     // SAFETY: as above.
     unsafe { widget.set_data(DONE, ()) };
+}
+
+/// Names a menu button, and the toggle inside it that takes focus: GTK
+/// would name both from what they hold, and an open popover is held too
+/// ("Trigonometry Inverse functions Sine (S)...").
+pub fn name_menu_button(button: &gtk::MenuButton, name: &str) {
+    let label = [gtk::accessible::Property::Label(name)];
+    button.update_property(&label);
+    let mut child = button.first_child();
+    while let Some(c) = child {
+        if c.is::<gtk::ToggleButton>() {
+            c.update_property(&label);
+        }
+        child = c.next_sibling();
+    }
 }
 
 /// Enables a label's actions as GtkLabel does once it has been selected
