@@ -62,7 +62,10 @@ pub fn enclose(e: &Expr, x: Interval, ctx: &Ctx<'_>) -> DecInterval {
 
 /// True when the coefficients up to `k` are usable on the box: f defined
 /// and continuous there and the coefficients bounded and from defined
-/// operations.
+/// operations. They are then f's ordinary derivatives at every point of
+/// the box, so f is defined on a neighbourhood of it (what min and max
+/// rely on, `keep_winner`); a series built from an operation's value
+/// alone must show that neighbourhood (`steady_beside`).
 pub fn derivs_valid(s: &Series, k: usize) -> bool {
     s[0].dec >= Dec::Dac
         && s[1..=k.min(s.len() - 1)]
@@ -294,6 +297,8 @@ fn tan(u: &Series, unit: TrigUnit, hyper: bool) -> Series {
 fn powi_ser(u: &Series, m: i32) -> Series {
     let n = u.len() - 1;
     if m == 0 {
+        // 1 where u ≠ 0 on the box; whether its derivatives are 0 depends
+        // on u beside the box, which `pow` decides.
         let mut r = one(n);
         r[0] = elem::powi(&u[0], 0);
         return r;
@@ -372,11 +377,22 @@ fn powratio_ser(u: &Series, r: &Ratio) -> Series {
 
 fn pow(a: &Expr, b: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
     let u = ev(a, x, n, ctx);
+    // u^m for an integer m. u⁰ is 1 wherever u ≠ 0: its derivatives 0 only
+    // where u stays ≠ 0 beside the box (⌊x⌋⁰ at 1 is 0⁰ just left of 1).
+    let powi = |m: i32| {
+        let h = powi_ser(&u, m);
+        if m != 0 {
+            return h;
+        }
+        steady_beside(h, &u, || {
+            defined_throughout(&elem::powi(&beside(a, x, ctx), 0))
+        })
+    };
     match written(b, crate::compile::Reading::Typed) {
         Some(Written::Ratio(r)) => {
             if let Some((p, q)) = r.small() {
                 return if q == 1 {
-                    powi_ser(&u, p)
+                    powi(p)
                 } else {
                     powrat_ser(&u, p, q)
                 };
@@ -391,7 +407,7 @@ fn pow(a: &Expr, b: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
                     .and_then(|(p, _)| i32::try_from(p).ok())
                     .filter(|p| *p != i32::MIN)
             {
-                return powi_ser(&u, p);
+                return powi(p);
             }
             // Written as a ratio of any size, or a whole number past those:
             // its real root (or power), by the parities of p and q (review
@@ -420,7 +436,7 @@ fn pow(a: &Expr, b: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
         // Defined only where the exponent is: x^⌊√(−10⁻³⁰)⌋ is nowhere
         // defined, though its exponent's enclosure is the point 0 (review
         // 13, R13-M-02: it was x⁰'s, 1 and continuous).
-        return with_operand(powi_ser(&u, v[0].lo() as i32), &v[0]);
+        return with_operand(powi(v[0].lo() as i32), &v[0]);
     }
     let c0 = elem::pow(&u[0], &v[0]);
     // A constant whose enclosure holds an integer may be that integer
@@ -578,7 +594,10 @@ fn typed_odd(e: &Expr) -> Option<bool> {
 }
 
 /// True if the step function `step` takes one value on `v` widened by an
-/// ulp each side (so it is constant on a neighbourhood of the box).
+/// ulp each side: constant on a neighbourhood of the box wherever its
+/// argument, of value `v` on the box, is continuous beside the box too
+/// (on the box alone is not enough: a point box is continuous restricted
+/// to it, ⌊x⌋ + 0.5 at 1 and √x at 0 alike, [`steady_beside`]).
 fn constant_near(v: &DecInterval, step: impl Fn(&DecInterval) -> DecInterval) -> bool {
     if v.is_empty() || v.dec < Dec::Dac {
         return false;
@@ -586,6 +605,43 @@ fn constant_near(v: &DecInterval, step: impl Fn(&DecInterval) -> DecInterval) ->
     let w = Interval::new(v.lo().next_down(), v.hi().next_up());
     let r = step(&DecInterval::new(w));
     !r.is_empty() && r.iv.is_point() && r.dec >= Dec::Dac
+}
+
+/// `e` over the box an ulp wider each side, at order 0: what it does
+/// beside the box (`x` is the evaluation's variable, its value the box).
+fn beside(e: &Expr, x: &Series, ctx: &Ctx<'_>) -> DecInterval {
+    let w = Interval::new(x[0].lo().next_down(), x[0].hi().next_up());
+    ev(e, &vec![DecInterval::new(w)], 0, ctx)[0]
+}
+
+/// `h`, the series of an operation whose value is constant wherever it is
+/// defined (u⁰, nCr(u, 0) and nPr(u, 0), a step between its jumps), built
+/// from its value on the box alone: derivatives 0. They are f's only
+/// where f is defined, and takes that value, on a neighbourhood of the
+/// box, which the box alone doesn't show (review 16, R16-L-01: ⌊x⌋⁰ at 1
+/// is 1, but just left of 1 it is 0⁰, undefined; nCr(⌊x⌋, 0) at 0 is 1,
+/// but just left of 0 at Γ's pole; min(x, ⌊x⌋⁰ + 100) had f′ = 1 there).
+///
+/// The caller has shown f defined and constant on the box, and on the
+/// operand's own enclosure an ulp wider each side (u⁰: u ≠ 0 on the box;
+/// a step: [`constant_near`]). That holds beside the box where the
+/// operand `u` stays near its values on the box, so where it is
+/// continuous beside the box: shown by its own derivative valid on the box
+/// (differentiable, so continuous, at each point). Else f must be defined
+/// and of one value over the box an ulp wider each side (`steady`, which
+/// evaluates it there: ⌊|x| + 0.5⌋ at 0). Otherwise the value alone.
+fn steady_beside(h: Series, u: &Series, steady: impl FnOnce() -> bool) -> Series {
+    let n = h.len() - 1;
+    if n == 0 || derivs_valid(u, 1) || steady() {
+        return h;
+    }
+    flat(h[0], n)
+}
+
+/// Defined throughout (so, for u⁰ and the counts nCr(u, 0), nPr(u, 0),
+/// 1 throughout).
+fn defined_throughout(v: &DecInterval) -> bool {
+    !v.is_empty() && v.dec >= Dec::Def
 }
 
 fn ev(e: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
@@ -776,9 +832,15 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
             let h0 = step(&u[0]);
             // Derivative 0 only where the step is constant on a neighbourhood
             // of the box: a point box at a jump is continuous (restricted to
-            // it) but not differentiable.
+            // it) but not differentiable. Its argument's values on the box
+            // being clear of the jumps is not enough where the argument
+            // itself jumps there, or ends: ⌊⌊x⌋ + 0.5⌋ at 1, ⌊√x + 0.5⌋ at 0
+            // (review 16).
             if !h0.is_empty() && constant_near(&u[0], step) {
-                konst(h0, n)
+                steady_beside(konst(h0, n), &u, || {
+                    let w = step(&beside(&args[0], x, ctx));
+                    defined_throughout(&w) && w.iv.is_point()
+                })
             } else {
                 flat(h0, n)
             }
@@ -801,11 +863,9 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
             // Whether args[..=i] (the winner so far, `upto`) or args[i]
             // alone is continuous on the box an ulp wider each side.
             let steady = |range: std::ops::RangeInclusive<usize>| {
-                let w = Interval::new(x[0].lo().next_down(), x[0].hi().next_up());
-                let w = vec![DecInterval::new(w)];
                 args[range]
                     .iter()
-                    .all(|a| ev(a, &w, 0, ctx)[0].dec >= Dec::Dac)
+                    .all(|a| beside(a, x, ctx).dec >= Dec::Dac)
             };
             let mut acc = arg(0);
             for i in 1..args.len() {
@@ -866,7 +926,18 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
                         h = scale(&h, &elem::recip(&fact));
                     }
                     h[0] = h0.refine(&h[0]);
-                    h
+                    if k > 0 {
+                        // n's own coefficients, through the product.
+                        return h;
+                    }
+                    // nCr(n, 0) = nPr(n, 0) = 1 wherever defined: derivatives
+                    // 0 only where n stays clear of Γ's poles (the negative
+                    // integers) beside the box too. nCr(⌊x⌋, 0) at 0 is 1,
+                    // but just left of 0 n is −1 (review 16, R16-L-01).
+                    steady_beside(h, &a, || {
+                        let w = beside(&args[0], x, ctx);
+                        defined_throughout(&elem::ncr_npr(&w, &b[0], f == NPr))
+                    })
                 }
                 _ => flat(h0, n),
             }

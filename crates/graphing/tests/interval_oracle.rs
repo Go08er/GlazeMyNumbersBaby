@@ -1394,6 +1394,7 @@ fn mp_eval(e: &Expr, x: &Float, unit: TrigUnit, prec: u32) -> Option<Float> {
                     Float::with_val(prec, x2.ln() / a0.ln())
                 }
                 Func::Mod => mp_mod(&a0, &ev(&args[1])?)?,
+                Func::NCr | Func::NPr => mp_ncr(&a0, &ev(&args[1])?, *f == Func::NPr)?,
                 Func::Root => {
                     let n = ev(&args[1])?;
                     if n.is_integer() && n.clone().abs() < 1e6 && !n.is_zero() {
@@ -1487,6 +1488,27 @@ fn taylor_cases() -> Vec<(&'static str, TrigUnit)> {
         ),
         (
             "2+0*root(x,2+floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-30))))",
+            Radians,
+        ),
+        // A value constant wherever defined, at a point with no
+        // neighbourhood (review 16, R16-L-01): just left of 2, ⌊x − 1⌋⁰ is
+        // 0⁰ and nCr(⌊x − 2⌋, 0) at Γ's pole, and √(x − 2) ends at 2; and
+        // the winners of min and max beside such losers. (At the end of
+        // the list: the cases before keep their random boxes.)
+        ("floor(x-1)^0", Radians),
+        ("min(x,floor(x-1)^0+100)", Radians),
+        ("max(x,-floor(x-1)^0-100)", Radians),
+        ("nCr(floor(x-2),0)+nPr(floor(x-2),0)", Radians),
+        ("min(x,nCr(floor(x-2),0)+100)", Radians),
+        ("max(x,-nCr(floor(x-2),0)-100)", Radians),
+        ("(sqrt(x-2)+1)^0+floor(sqrt(x-2)+0.5)", Radians),
+        ("min(x,floor(sqrt(x-2)+0.5)+5)", Radians),
+        // ⌊x − 1⌋ + 0.5 jumps at 2 where the outer floor doesn't.
+        ("2*floor(floor(x-1)+0.5)", Radians),
+        ("min(x,2*floor(floor(x-1)+0.5)-0.5)", Radians),
+        // Controls: the operand clear beside the box (a kink, not a jump).
+        (
+            "(abs(x-2)+1)^0+floor(abs(x-2)+0.5)+nCr(abs(x-2),0)",
             Radians,
         ),
     ]
@@ -1593,9 +1615,10 @@ fn run_taylor(n_boxes: usize, seed: u64) -> Tally {
             let ok_d = derivs_valid(&s, 3);
             for xi in samples(b, &mut rng, &[]) {
                 t.samples += 1;
-                match mp_eval(ast, &xi, unit, P) {
+                let value = mp_eval(ast, &xi, unit, P);
+                match &value {
                     Some(v) => {
-                        if !inside(&v, s[0].iv) {
+                        if !inside(v, s[0].iv) {
                             t.fail(format!(
                                 "taylor {src} [{:e},{:e}]: c0 [{:e},{:e}] misses f({}) = {}",
                                 b.lo(),
@@ -1619,19 +1642,35 @@ fn run_taylor(n_boxes: usize, seed: u64) -> Tally {
                         }
                     }
                 }
-                if ok_d && let Some(d) = mp_derivs(ast, &xi, unit) {
-                    for k in 1..=3 {
-                        if !inside_fd(&d[k], s[k].iv, &d[0]) {
-                            t.fail(format!(
-                                "taylor {src} [{:e},{:e}]: c{k} [{:e},{:e}] misses {} at {}",
-                                b.lo(),
-                                b.hi(),
-                                s[k].lo(),
-                                s[k].hi(),
-                                d[k].to_string_radix(10, Some(20)),
-                                xi.to_string_radix(10, Some(20))
-                            ));
-                        }
+                if !ok_d {
+                    continue;
+                }
+                let Some(d) = mp_derivs(ast, &xi, unit) else {
+                    // Defined at ξ but not within 2⁻⁸⁹ of it: no
+                    // derivatives there to claim (review 16, R16-L-01:
+                    // ⌊x⌋⁰ at 1, 0⁰ just left of it).
+                    if value.is_some() {
+                        t.fail(format!(
+                            "taylor {src} [{:e},{:e}] claims derivatives at {}, \
+                             where f is undefined beside it",
+                            b.lo(),
+                            b.hi(),
+                            xi.to_string_radix(10, Some(20))
+                        ));
+                    }
+                    continue;
+                };
+                for k in 1..=3 {
+                    if !inside_fd(&d[k], s[k].iv, &d[0]) {
+                        t.fail(format!(
+                            "taylor {src} [{:e},{:e}]: c{k} [{:e},{:e}] misses {} at {}",
+                            b.lo(),
+                            b.hi(),
+                            s[k].lo(),
+                            s[k].hi(),
+                            d[k].to_string_radix(10, Some(20)),
+                            xi.to_string_radix(10, Some(20))
+                        ));
                     }
                 }
             }
@@ -1739,6 +1778,76 @@ fn min_max_keep_the_loser_undefined() {
     let s = series("min(x,x+1+abs(x-3))", Interval::new(2.5, 3.4));
     assert!(s[0].dec >= Dec::Dac && derivs_valid(&s, 1), "{s:?}");
     assert_eq!(s[1].iv, Interval::point(1.0));
+}
+
+/// A value constant wherever it is defined (u⁰, nCr(u, 0), a step), at a
+/// point where it is defined but not just left of it (review 16, R16-L-01:
+/// ⌊x⌋⁰ at 1 is 0⁰ just left of 1; nCr(⌊x⌋, 0) at 0 is at Γ's pole just
+/// left of 0): MPFR finds f defined at the point and undefined 2⁻⁶⁰ left
+/// of it, and the interval core gives the value with no derivatives, nor
+/// does min or max beside it. Where the operand stays clear beside the
+/// box, the derivatives are claimed and MPFR's central differences agree.
+#[test]
+fn a_value_alone_has_no_derivatives_at_a_domain_end() {
+    init();
+    let parse = |src: &str| {
+        let eq = Equation::parse(&format!("y={src}")).unwrap();
+        eq.explicit().unwrap().1.clone()
+    };
+    let ctx = Ctx::new(CompileOptions::default());
+    for (src, x) in [
+        ("floor(x)^0", 1.0),
+        ("min(x,floor(x)^0+100)", 1.0),
+        ("max(x,-floor(x)^0-100)", 1.0),
+        ("min(floor(x)^0+100,x)", 1.0),
+        ("nCr(floor(x),0)", 0.0),
+        ("min(x,nCr(floor(x),0)+100)", 0.0),
+        ("max(x,-nCr(floor(x),0)-100)", 0.0),
+        ("min(nCr(floor(x),0)+100,x)", 0.0),
+        ("nPr(floor(x),0)", 0.0),
+        ("max(x,-nPr(floor(x),0)-100)", 0.0),
+        ("(sqrt(x)+1)^0", 0.0),
+        ("floor(x)^(1-1)", 1.0),
+        ("floor(sqrt(x)+0.5)", 0.0),
+        ("min(x,floor(sqrt(x)+0.5)+5)", 0.0),
+        ("max(x,-round(sqrt(x))-5)", 0.0),
+    ] {
+        let e = parse(src);
+        let at = mp_eval(&e, &mp(x), TrigUnit::Radians, P);
+        let left = Float::with_val(P, mp(x) - Float::with_val(P, 2f64.powi(-60)));
+        assert!(at.is_some(), "{src} undefined at {x}");
+        assert!(
+            mp_eval(&e, &left, TrigUnit::Radians, P).is_none(),
+            "{src} defined left of {x}"
+        );
+        let s = taylor(&e, Interval::point(x), 3, &ctx);
+        assert!(
+            s[0].dec >= Dec::Dac && inside(&at.unwrap(), s[0].iv),
+            "{src} at {x}: {:?}",
+            s[0]
+        );
+        assert!(!derivs_valid(&s, 1), "{src} at {x}: derivatives {s:?}");
+    }
+    for (src, x) in [
+        ("floor(x)^0", 1.5),
+        ("min(x,floor(x)^0+100)", 1.5),
+        ("max(x,-floor(x)^0-100)", 1.5),
+        ("nCr(floor(x),0)", 0.5),
+        ("min(x,nCr(floor(x),0)+100)", 0.5),
+        ("max(x,-nCr(floor(x),0)-100)", 0.5),
+        ("min(x,(abs(x)+1)^0+100)", 0.0),
+        ("max(x,-floor(abs(x)+0.5)-5)", 0.0),
+        ("min(x,nCr(abs(x),0)+100)", 0.0),
+        ("floor(sqrt(x)+0.5)", 1.0),
+    ] {
+        let e = parse(src);
+        let s = taylor(&e, Interval::point(x), 3, &ctx);
+        assert!(derivs_valid(&s, 3), "{src} at {x}: {s:?}");
+        let d = mp_derivs(&e, &mp(x), TrigUnit::Radians).expect("defined beside");
+        for k in 1..=3 {
+            assert!(inside_fd(&d[k], s[k].iv, &d[0]), "{src} at {x}: c{k} {s:?}");
+        }
+    }
 }
 
 /// root(x, n) where n is beyond 2⁵³, every double there even (review 13,
