@@ -79,6 +79,11 @@
 //! (F-E or not) they were written into the expression in, and a value a
 //! trailing `(` kept (`2 + 3 = (`, `5 (`) is set up before it.
 //!
+//! `"cy": true` (Programmer only) is the carry bit RoL and RoR through
+//! carry shift in next: in BYTE, `1 RoR 1` leaves the carry 1, so the next
+//! RoR gives −128 rather than 0. No key sets it, so it is set directly.
+//! Upstream doesn't restore it.
+//!
 //! # The contract
 //!
 //! A restored calculation shows what was saved and continues as the saved
@@ -87,7 +92,8 @@
 //! state the restore can't rebuild that way comes back as a new
 //! calculation from the saved value instead: the expression is cleared,
 //! the value shown as a result (the next digit replaces it, `=` repeats
-//! nothing), and memory, the histories and the modes are kept. Such a
+//! nothing, the carry is clear, as after C), and memory, the histories and
+//! the modes are kept. Such a
 //! state is either marked when saved (`"nr": true`: the engine knows its
 //! commands won't rebuild it: a number typed right after `)`, a word size
 //! switched mid-expression, a number begun with Exp after C or CE,
@@ -312,6 +318,8 @@ pub(crate) struct ContinuationSnapshot {
     pub(crate) clears: bool,
     /// `"nr"`
     pub(crate) unreplayable: bool,
+    /// `"cy"`: the carry bit of RoL/RoR through carry (Programmer only).
+    pub(crate) carry: bool,
 }
 
 /// `ApplicationSnapshot`
@@ -625,6 +633,9 @@ impl ApplicationSnapshot {
                 if k.unreplayable {
                     c.insert("nr".into(), json!(true));
                 }
+                if k.carry {
+                    c.insert("cy".into(), json!(true));
+                }
                 o.insert("k".into(), Value::Object(c));
             }
             root.insert("x".into(), Value::Object(o));
@@ -759,6 +770,7 @@ impl ApplicationSnapshot {
                             },
                             clears: boolean(k.get("cl"))?,
                             unreplayable: boolean(k.get("nr"))?,
+                            carry: boolean(k.get("cy"))?,
                         })
                     }
                 };
@@ -935,6 +947,17 @@ impl SnapshotValidator {
                 return Err("the repeated operation is not an operator and an operand".into());
             };
             Self::validate_commands(repeat, mode, "repeated operation")?;
+        }
+
+        // Extension: only the Programmer engine rotates through a carry.
+        if mode != CalcMode::Programmer
+            && snapshot
+                .extension
+                .as_ref()
+                .and_then(|x| x.continuation.as_ref())
+                .is_some_and(|k| k.carry)
+        {
+            return Err("a carry outside Programmer mode".into());
         }
 
         let display = &standard.primary_display.display_value;
@@ -1341,6 +1364,12 @@ impl StandardCalculatorViewModel {
         }
         // Extension: F-E as a History selection left it, or enabled.
         self.restore_history_load(continuation.is_some_and(|k| k.history_load));
+        // Extension: the carry the next RoL or RoR through carry shifts in
+        // (no key sets it; C, which the restore began with, cleared it). An
+        // error the engine is in has none: every key clears it.
+        if !engine_error && continuation.is_some_and(|k| k.carry) {
+            self.with_manager(|m| m.set_carry(true));
+        }
         if engine_error && let Some(expression) = &snapshot.expression_display {
             // The parentheses the expression line leaves open, as shown
             // while the error is (the engine's are gone with it).
@@ -1442,6 +1471,7 @@ impl StandardCalculatorViewModel {
             entry: c.entry,
             clears: c.clears,
             unreplayable: c.unreplayable,
+            carry: c.carry,
         }
     }
 

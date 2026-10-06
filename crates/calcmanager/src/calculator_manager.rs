@@ -761,6 +761,11 @@ impl CalculatorManager {
         self.current_engine().add_entry_as_percent_result()
     }
 
+    /// Extension: see [`CalcEngine::set_carry`].
+    pub fn set_carry(&mut self, carry: bool) {
+        self.current_engine().set_carry(carry);
+    }
+
     /// Extension: what a saved session needs besides the display commands
     /// to continue as this one would (see [`CalcEngine::continuation`]).
     pub fn continuation(&self) -> Continuation {

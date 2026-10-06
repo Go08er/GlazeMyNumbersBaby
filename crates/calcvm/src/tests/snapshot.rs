@@ -19,7 +19,7 @@ use crate::snapshot::{
     ExpressionCommandSerializer, ExpressionCommandWrapper, ExpressionDisplaySnapshot,
     SnapshotValidator, StandardCalculatorSnapshot,
 };
-use crate::{AngleUnit, Button, CalcMode, CalculatorViewModel, Radix, WordSize};
+use crate::{AngleUnit, Button, CalcMode, CalculatorViewModel, Radix, ShiftMode, WordSize};
 
 const COMMAND_ADD: i32 = 93;
 
@@ -1095,6 +1095,81 @@ fn unrebuildable_states_restore_as_a_new_calculation() {
     );
     press_all(&mut restored, &[Add, One, Equals]);
     assert_eq!(restored.display_value(), "8");
+}
+
+/// R14-M-05: RoL and RoR through carry shift in the carry the last one
+/// left, which no key sets: it is saved (`"cy"`) and set directly.
+#[test]
+fn the_carry_of_a_rotation_through_carry_is_restored() {
+    use Button::*;
+    // The review's case: in BYTE, 1 RoR leaves the carry 1, so the next 1
+    // RoR gives 0b1000_0000 (−128), not 0. RoL: 80 hex RoL leaves it 1, and
+    // 1 RoL then gives 3.
+    let cases: [(&[Button], Button, &str); 2] = [
+        (&[Byte, One, RorC, One], RorC, "-128"),
+        (&[Byte, HexButton, Eight, Zero, RolC, One], RolC, "3"),
+    ];
+    for (script, rotate, result) in cases {
+        let mut original = new_vm();
+        original.set_mode(CalcMode::Programmer);
+        original.set_shift_mode(ShiftMode::RotateThroughCarry);
+        press_all(&mut original, script);
+        let state = original.save_state();
+        assert!(state.contains(r#""cy":true"#), "{script:?}: {state}");
+        let before = observed(&original);
+        original.press(rotate);
+        assert_eq!(original.display_value(), result, "{script:?}");
+        let after = observed(&original);
+        drop(original);
+
+        let mut restored = new_vm();
+        assert!(restored.restore_state_checked(&state), "{script:?}");
+        assert_eq!(observed(&restored), before, "{script:?}");
+        assert_eq!(restored.save_state(), state, "{script:?}");
+        restored.press(rotate);
+        assert_eq!(observed(&restored), after, "{script:?}");
+    }
+
+    // Under a paste error only the view model is in error: a memory slot
+    // continues the engine's calculation, carry and all.
+    assert_acts_restore_and_continue(
+        CalcMode::Programmer,
+        &[
+            Act::Key(Byte),
+            Act::Key(One),
+            Act::Key(Memory),
+            Act::Key(RorC),
+            Act::Paste("zz"),
+        ],
+        &[vec![Act::MemoryItem(0), Act::Key(RorC)]],
+    );
+
+    // C clears it, as the engine does; so does a restore that falls back to
+    // a new calculation (a word size switched mid-expression).
+    let mut vm = new_vm();
+    vm.set_mode(CalcMode::Programmer);
+    press_all(&mut vm, &[Byte, One, RorC, Add, One, Word]);
+    let state = vm.save_state();
+    assert!(state.contains(r#""nr":true"#) && state.contains(r#""cy":true"#));
+    let mut restored = new_vm();
+    assert!(!restored.restore_state_checked(&state));
+    press_all(&mut restored, &[One, RorC]);
+    assert_eq!(restored.display_value(), "0");
+    press_all(&mut vm, &[One, Clear, One, RorC]);
+    assert_eq!(vm.display_value(), "0");
+
+    // Only a boolean, and only in Programmer mode.
+    let unchanged = |k: Value, mode: i64| {
+        let mut vm = new_vm();
+        vm.press(Four);
+        let before = vm.save_state();
+        vm.restore_state(&snapshot_json(mode, json!([]), json!({ "k": k })));
+        vm.save_state() == before
+    };
+    assert!(unchanged(json!({ "cy": 1 }), 2));
+    assert!(unchanged(json!({ "cy": true }), 0));
+    assert!(unchanged(json!({ "cy": true }), 1));
+    assert!(!unchanged(json!({ "cy": true }), 2));
 }
 
 #[test]

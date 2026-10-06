@@ -98,6 +98,10 @@ pub struct Continuation {
     /// Replaying the commands wouldn't rebuild the calculation (see
     /// `HistoryCollector::mark_unreplayable`).
     pub unreplayable: bool,
+    /// The carry bit RoL and RoR through carry shift in next (`m_carryBit`,
+    /// set only by them in Programmer mode; C clears it). No command sets
+    /// it, so it is restored with [`CalcEngine::set_carry`].
+    pub carry: bool,
 }
 
 /// Extension: see [`Continuation::entry`].
@@ -553,7 +557,15 @@ impl CalcEngine {
                     && !is_digit_op_code(self.n_temp_com)
                     && self.n_temp_com != IDC_PNT
                     && self.n_temp_com != IDC_SIGN),
+            carry: self.carry_bit != 0,
         }
+    }
+
+    /// Extension: sets the carry bit RoL and RoR through carry use (see
+    /// [`Continuation::carry`]), for a restored session. Nothing else
+    /// changes, and nothing is displayed.
+    pub fn set_carry(&mut self, carry: bool) {
+        self.carry_bit = u64::from(carry);
     }
 
     /// Extension: ends the number being typed and adds it to the expression
