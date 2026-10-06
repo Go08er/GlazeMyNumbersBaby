@@ -500,6 +500,21 @@ impl GraphingPage {
         }
     }
 
+    /// Draws or hides an equation: the show/hide toggle.
+    fn set_drawn(self: &Rc<Self>, id: EquationId, on: bool) {
+        self.graph.borrow_mut().set_line_enabled(id, on);
+        if let Some(row) = self.rows.borrow().iter().find(|r| r.id == id) {
+            self.show_drawn(row);
+        }
+        // A hidden equation's variables aren't listed (kept, as they were,
+        // for when it is shown).
+        self.sync_variables();
+        self.graph_view.invalidate();
+        if on {
+            self.graph_view.animate_draw(id);
+        }
+    }
+
     /// Shows whether a row's equation is drawn, as the graph has it (a
     /// toggle, an edit, a restored session): its swatch full or faded,
     /// and, to assistive technology, a toggle button pressed while the
@@ -635,20 +650,10 @@ impl GraphingPage {
             }
         });
         let weak = Rc::downgrade(self);
-        // Weak: the row holds this button, which holds this closure.
-        let r = Rc::downgrade(&row);
         swatch.connect_clicked(move |_| {
-            if let (Some(p), Some(r)) = (weak.upgrade(), r.upgrade()) {
+            if let Some(p) = weak.upgrade() {
                 let on = !p.graph.borrow().is_line_enabled(id);
-                p.graph.borrow_mut().set_line_enabled(id, on);
-                p.show_drawn(&r);
-                // A hidden equation's variables aren't listed (kept, as
-                // they were, for when it is shown).
-                p.sync_variables();
-                p.graph_view.invalidate();
-                if on {
-                    p.graph_view.animate_draw(id);
-                }
+                p.set_drawn(id, on);
             }
         });
         let weak = Rc::downgrade(self);
@@ -1190,6 +1195,7 @@ impl GraphingPage {
         };
         self.building.set(true);
         let mut first = None;
+        let mut hidden = Vec::new();
         for eq in &saved {
             if let Some(row) = self.add_equation(&eq.text) {
                 first.get_or_insert(row.id);
@@ -1202,8 +1208,7 @@ impl GraphingPage {
                     self.graph.borrow_mut().set_line_style(row.id, style);
                 }
                 if eq.hidden {
-                    self.graph.borrow_mut().set_line_enabled(row.id, false);
-                    self.show_drawn(&row);
+                    hidden.push(row.id);
                 }
             }
         }
@@ -1223,6 +1228,11 @@ impl GraphingPage {
             .collect();
         for (id, text) in rows {
             self.equation_changed(id, &text);
+        }
+        // Hidden only now, as an edit draws an equation again (DGMNB
+        // restores a hidden equation hidden too).
+        for id in hidden {
+            self.set_drawn(id, false);
         }
         if self.rows.borrow().is_empty() {
             self.add_equation("");
