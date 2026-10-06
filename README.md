@@ -261,13 +261,13 @@ CI also runs checks that need more than `cargo test --workspace`:
 
 - **Certificate replay** (`cargo test -p graphing --features mpfr-oracle
   --test certify_replay`): the certified analysis of each of the certify
-  corpus's 189 functions goes through JSON to a separate checker
+  corpus's 193 functions goes through JSON to a separate checker
   (`crates/graphing/tests/replay`) with its own MPFR interval arithmetic,
   sharing only graphing's parser and expression tree with the certifier. A
   claim is *strong* when it re-proves it on the function's own tree, *weak*
   when it can only prove it on a tree the certifier supplied (the
   simplifier's form, the derivatives) or check it at sample points, so it
-  rests on the simplifier: today 74,079 strong, 154 weak. A claim refuted
+  rests on the simplifier: today 74,096 strong, 154 weak. A claim refuted
   or left open, or a row that doesn't follow from its claims, fails it.
 - **MPFR oracles** (same feature): `interval_oracle` checks every interval
   operation's enclosure against MPFR at 256 bits on adversarial boxes,
