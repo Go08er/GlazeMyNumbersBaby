@@ -356,6 +356,21 @@ mod tests {
         );
     }
 
+    /// A History item is read as upstream's
+    /// (HistoryList.GetHistoryItemAutomationName) and GMNB's: the
+    /// expression, which ends in "=", then the result; "=" read once.
+    #[test]
+    fn a_history_item_reads_as_upstreams() {
+        let mut p = crate::calc::CalcPage::new(None);
+        press(&mut p, "2+3=");
+        let (nodes, _) = frame_nodes(|f, r| p.view(f, r, false));
+        let row = nodes
+            .iter()
+            .find(|n| n.id == crate::ui::id(("hist", 0usize)))
+            .expect("the History item");
+        assert_eq!(row.label, "2   +   3 = 5");
+    }
+
     /// Focusing each history row in turn (as Tab does) scrolls it into view.
     #[test]
     fn focusing_reveals_every_history_row() {

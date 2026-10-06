@@ -770,12 +770,15 @@ impl CalcPage {
                     let mut y = list.y - off;
                     for (i, h) in items.iter().enumerate() {
                         let row = Rect::new(list.x, y, list.w, 64.0);
+                        // Read as upstream's (HistoryList's
+                        // GetHistoryItemAutomationName) and GMNB's: the
+                        // expression, which ends in "=", then the result.
                         f.row(
                             id(("hist", i)),
                             row,
                             msg(Msg::HistoryRecall(i)),
                             false,
-                            &format!("{} = {}", h.expression, h.result),
+                            &format!("{} {}", h.expression, h.result),
                         );
                         let inner = row.inset_xy(10.0, 6.0);
                         let (e, v) = inner.take_top(20.0);
