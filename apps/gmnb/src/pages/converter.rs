@@ -212,6 +212,7 @@ impl ConverterPage {
             }
         });
         for (which, f) in [(1, &page.f1), (2, &page.f2)] {
+            ctx.layers.hold_list(&f.dropdown);
             let click = gtk::GestureClick::new();
             let weak = Rc::downgrade(&page);
             click.connect_released(move |_, _, _, _| {
@@ -232,6 +233,11 @@ impl ConverterPage {
             f.dropdown.connect_selected_notify(move |d| {
                 let Some(p) = weak.upgrade() else { return };
                 if p.syncing.get() {
+                    return;
+                }
+                if p.ctx.layers.covers(d) {
+                    // Covered, the unit stays (R15-M-02): back to the VM's.
+                    p.sync(Change::None, Change::None);
                     return;
                 }
                 let Some(&id) = p.unit_ids.borrow().get(d.selected() as usize) else {

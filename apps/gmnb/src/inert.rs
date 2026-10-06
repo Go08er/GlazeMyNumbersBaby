@@ -18,6 +18,19 @@
 //!   EditableText change (`gtkatspieditabletext.c`; the bounded paste in
 //!   `crate::paste` doesn't paste into them either).
 //!
+//! A Selection request (SelectChild, DeselectChild, DeselectSelectedChild,
+//! SelectAll, ClearSelection) GTK carries out on a list box, a flow box or
+//! a list or grid view without any check (`gtkatspiselection.c`; the other
+//! widgets with that interface, a combo box, a stack switcher and a
+//! notebook's tabs, GMNB has none of). Where the selection means nothing
+//! (selection mode none: Settings' groups, History, Memory, the
+//! converter's "About equal to") GTK ignores the request. Where it does,
+//! the widget's own handler asks [`Layers::covers`] and, covered, puts the
+//! selection back (R15-M-02): the palette grid in Settings (which then
+//! saves nothing), the navigation list, and the list in each unit
+//! drop-down's popup ([`Layers::hold_list`]). Settings' other controls ask
+//! too, though GTK refuses their requests already.
+//!
 //! Nor do keys, pastes or the window's actions reach what is covered:
 //! the window and its pages ask [`Layers::covers`], from the same record
 //! (`Window::handle_key`, `Window::paste`; `win.paste` is disabled, so not
@@ -191,6 +204,44 @@ impl Layers {
         self.changed.borrow_mut().push(Box::new(f));
     }
 
+    /// Keeps the list in `dropdown`'s popup on the drop-down's own choice
+    /// while the drop-down is covered (R15-M-02). The list has a selection
+    /// of its own, which GTK changes on a Selection request (module
+    /// docs); the drop-down takes it only when a row is activated, an
+    /// Action, refused while covered. Put back, the list shows the
+    /// drop-down's choice when it next opens. The list's model is
+    /// replaced with the drop-down's, so each one is watched.
+    pub fn hold_list(self: &Rc<Self>, dropdown: &gtk::DropDown) {
+        let Some(list) = descendant::<gtk::ListView>(dropdown.upcast_ref()) else {
+            return;
+        };
+        let hold = {
+            let (layers, dropdown) = (Rc::downgrade(self), dropdown.downgrade());
+            move |list: &gtk::ListView| {
+                let Some(model) = list.model().and_downcast::<gtk::SingleSelection>() else {
+                    return;
+                };
+                let (layers, dropdown) = (layers.clone(), dropdown.clone());
+                model.connect_selected_notify(move |m| {
+                    let (Some(layers), Some(dropdown)) = (layers.upgrade(), dropdown.upgrade())
+                    else {
+                        return;
+                    };
+                    let want = dropdown.selected_item();
+                    if layers.covers(&dropdown) && m.selected_item() != want {
+                        // The list may be filtered (a search): by item.
+                        let at = want.and_then(|w| {
+                            (0..m.n_items()).find(|&i| m.item(i).as_ref() == Some(&w))
+                        });
+                        m.set_selected(at.unwrap_or(gtk::INVALID_LIST_POSITION));
+                    }
+                });
+            }
+        };
+        hold(&list);
+        list.connect_model_notify(move |l| hold(l));
+    }
+
     /// What is covered now.
     fn covering(&self) -> Vec<gtk::Widget> {
         let mut out = Vec::new();
@@ -303,6 +354,21 @@ fn keep_selections(root: &gtk::Widget) {
         keep_selections(&c);
         child = c.next_sibling();
     }
+}
+
+/// The first `T` in `root`'s tree (popovers too), `root` included.
+fn descendant<T: IsA<gtk::Widget>>(root: &gtk::Widget) -> Option<T> {
+    if let Some(t) = root.downcast_ref::<T>() {
+        return Some(t.clone());
+    }
+    let mut child = root.first_child();
+    while let Some(c) = child {
+        if let Some(t) = descendant::<T>(&c) {
+            return Some(t);
+        }
+        child = c.next_sibling();
+    }
+    None
 }
 
 /// The windows in GTK's list of toplevels (a list of widgets).
