@@ -317,3 +317,24 @@ impl DayGrid {
         self.nav[3].set_sensitive(shown < last);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Six weeks from the Sunday on or before the 1st; whole months keep
+    /// the day where they have it, else take their last; nothing leaves
+    /// the pickers' range (1601-2550).
+    #[test]
+    fn days_and_months_move_as_a_calendar_does() {
+        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+        // October 2026 starts on a Thursday.
+        assert_eq!(first_cell(d(2026, 10, 1)), d(2026, 9, 27));
+        assert_eq!(first_cell(d(2026, 11, 1)), d(2026, 11, 1));
+        assert_eq!(add_months(d(2026, 1, 31), 1), d(2026, 2, 28));
+        assert_eq!(add_months(d(2024, 3, 31), -1), d(2024, 2, 29));
+        assert_eq!(add_months(d(2026, 10, 6), -12), d(2025, 10, 6));
+        assert_eq!(add_months(d(1601, 3, 1), -12), d(1601, 1, 1));
+        assert_eq!(add_months(d(2550, 11, 30), 12), d(2550, 12, 31));
+    }
+}

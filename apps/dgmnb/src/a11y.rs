@@ -511,6 +511,61 @@ mod tests {
         assert_eq!(chosen.len(), 1, "exactly one day is the chosen one");
     }
 
+    /// The date pickers' calendar by ear and keys: opened, the focus is on
+    /// the chosen day under a heading naming the month; the keys move it,
+    /// into other months too; one day takes Tab.
+    #[test]
+    fn the_calendar_is_read_and_moved_by_keys() {
+        use appcore::input::{KeyPress, Named};
+        let today = chrono::Local::now().date_naive();
+        let mut d = crate::date::DatePage::new();
+        let (mut toasts, mut focus) = (Vec::new(), None);
+        let mut cx = crate::app::Cx {
+            toasts: &mut toasts,
+            clipboard: None,
+            wide: true,
+            focus: &mut focus,
+        };
+        d.update(crate::date::Msg::Calendar(Some(1)), &mut cx);
+        let read = |d: &mut crate::date::DatePage, focus: Option<Id>| {
+            let (nodes, hits) = frame_nodes(|f, r| d.overlay(f, r));
+            let heading: Vec<_> = nodes
+                .iter()
+                .filter(|n| n.role == Role::Heading)
+                .map(|n| n.label.clone())
+                .collect();
+            let tab: Vec<_> = nodes
+                .iter()
+                .filter(|n| n.role == Role::ListBoxOption && n.focusable)
+                .map(|n| (n.id, n.label.clone()))
+                .collect();
+            assert_eq!(tab.len(), 1, "one day takes Tab");
+            assert_eq!(Some(tab[0].0), focus, "the focus is on it");
+            assert!(hits.iter().any(|h| h.id == tab[0].0 && h.focusable));
+            (heading, tab[0].1.clone())
+        };
+        let long = |d: chrono::NaiveDate| datecalc::format_long_date(&datecalc::utc_midnight(d));
+        let (heading, day) = read(&mut d, *cx.focus);
+        assert_eq!(heading, [today.format("%B %Y").to_string()]);
+        assert_eq!(day, long(today));
+        for (key, to) in [
+            (KeyPress::named(Named::Right), today.succ_opt().unwrap()),
+            (
+                KeyPress::named(Named::PageDown),
+                today
+                    .succ_opt()
+                    .unwrap()
+                    .checked_add_months(chrono::Months::new(1))
+                    .unwrap(),
+            ),
+        ] {
+            assert!(d.key(&key, &mut cx));
+            let (heading, day) = read(&mut d, *cx.focus);
+            assert_eq!(heading, [to.format("%B %Y").to_string()]);
+            assert_eq!(day, long(to));
+        }
+    }
+
     /// Run `m` through a page's `update` with a throwaway context.
     fn with_cx(run: impl FnOnce(&mut crate::app::Cx)) {
         let (mut toasts, mut focus) = (Vec::new(), None);
