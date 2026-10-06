@@ -44,6 +44,7 @@ mod standard_vm;
 mod tests;
 
 pub use buttons::{BIN_END, BIN_START, Button};
+pub use snapshot::MAX_STATE_BYTES;
 
 use standard_vm::{OpKind, StandardCalculatorViewModel, cmd};
 
@@ -602,13 +603,20 @@ impl CalculatorViewModel {
     }
     /// The upstream calculator snapshot (`ApplicationSnapshot` JSON) plus a
     /// gmnb extension carrying both histories, memory, radix, word size,
-    /// angle unit, F-E and shift mode (see the `snapshot` module).
+    /// angle unit, F-E and shift mode (see the `snapshot` module). Kept in
+    /// a JSON string, it takes at most [`MAX_STATE_BYTES`]: past that, the
+    /// oldest History items are left out (see "Size" in the `snapshot`
+    /// module).
     pub fn save_state(&self) -> String {
-        self.vm.snapshot().to_json().to_string()
+        self.vm.snapshot().into_json_within(MAX_STATE_BYTES)
     }
     /// `ApplicationViewModel.RestoreFromSnapshot`. Invalid or untrusted
     /// input that fails `SnapshotValidator.ValidateProtocol` is ignored and
-    /// leaves the calculator unchanged.
+    /// leaves the calculator unchanged. What a save would have left out (a
+    /// History item or calculation too long to replay, see "Size" in the
+    /// `snapshot` module) is left out first, so a state saved before that
+    /// rule loses only it. A state of any size is restored; the next save
+    /// trims it.
     pub fn restore_state(&mut self, state: &str) {
         self.restore_state_checked(state);
     }
@@ -617,9 +625,11 @@ impl CalculatorViewModel {
     /// calculation didn't come back as saved and a new calculation from
     /// the saved value was set up instead (see the `snapshot` module).
     pub(crate) fn restore_state_checked(&mut self, state: &str) -> bool {
-        let Ok(snapshot) = snapshot::ApplicationSnapshot::from_json(state) else {
+        let Ok(mut snapshot) = snapshot::ApplicationSnapshot::from_json(state) else {
             return true;
         };
+        // What a save leaves out, so that it doesn't refuse the rest.
+        snapshot.leave_out_unrestorable();
         if snapshot::SnapshotValidator::validate_protocol(&snapshot).is_err() {
             return true;
         }

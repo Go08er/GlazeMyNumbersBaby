@@ -11,6 +11,7 @@
 mod gmnb;
 mod history;
 mod restore_fuzz;
+mod size;
 mod snapshot;
 mod standard;
 

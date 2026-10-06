@@ -524,6 +524,14 @@ fn operand(digits: &[i32]) -> Value {
     json!({ "$t": 2, "n": false, "d": false, "s": false, "c": digits })
 }
 
+/// A History item "1 + 1 = 2".
+fn one_plus_one_item() -> Value {
+    json!({
+        "t": [{ "t": "1", "c": 0 }, { "t": " + ", "c": 1 }, { "t": "1", "c": 2 }, { "t": "=", "c": -1 }],
+        "c": [operand(&[131]), { "$t": 1, "c": 93 }, operand(&[131])], "e": "1 + 1 =", "r": "2",
+    })
+}
+
 /// Saves `script`'s state, then checks that a calculator restored from it
 /// shows the same, saves the same, and continues the same way as the
 /// original for each of `more`. The original finishes before the restored
@@ -1574,11 +1582,34 @@ fn over_long_snapshots_are_rejected() {
     vm.press(Button::Four);
     let before = vm.save_state();
 
-    // 16,385 keys of display commands.
+    // 16,385 keys of display commands, in an upstream snapshot.
     let mut commands = vec![operand(&[131; 16_383])];
     commands.push(json!({ "$t": 1, "c": 93 }));
-    vm.restore_state(&snapshot_json(1, Value::Array(commands), json!({})));
+    let mut upstream: Value =
+        serde_json::from_str(&snapshot_json(1, Value::Array(commands.clone()), json!({}))).unwrap();
+    upstream.as_object_mut().unwrap().remove("x");
+    vm.restore_state(&upstream.to_string());
     assert_eq!(vm.save_state(), before);
+
+    // In a gmnb snapshot, only the calculation is lost: it comes back as a
+    // new one from the value shown (see "Size" in the snapshot module),
+    // with memory and History.
+    let mut s: Value = serde_json::from_str(&snapshot_json(
+        1,
+        Value::Array(commands),
+        json!({ "mem": ["5"], "hc": [one_plus_one_item()] }),
+    ))
+    .unwrap();
+    s["s"]["p"]["d"] = json!("42");
+    let mut restored = new_vm();
+    assert!(!restored.restore_state_checked(&s.to_string()));
+    assert_eq!(restored.mode(), CalcMode::Scientific);
+    assert_eq!(restored.display_value(), "42");
+    assert_eq!(restored.expression(), "");
+    assert_eq!(restored.memory(), ["5"]);
+    assert_eq!(restored.history().len(), 1);
+    restored.press(Button::One);
+    assert_eq!(restored.display_value(), "1");
 
     // An over-long display value.
     let mut s: Value = serde_json::from_str(&snapshot_json(0, json!([]), json!({}))).unwrap();

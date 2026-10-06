@@ -585,6 +585,18 @@ impl CalculatorManager {
             .unwrap_or_default()
     }
 
+    /// Extension: the mode whose history [`get_history_items`] returns (in
+    /// Programmer mode, that of the mode before it; `None` before any mode
+    /// was set).
+    ///
+    /// [`get_history_items`]: Self::get_history_items
+    pub fn history_mode(&self) -> Option<CalculatorMode> {
+        self.history.map(|slot| match slot {
+            HistorySlot::Standard => CalculatorMode::Standard,
+            HistorySlot::Scientific => CalculatorMode::Scientific,
+        })
+    }
+
     /// `GetHistoryItems(CalculatorMode mode)`
     pub fn get_history_items_for_mode(&self, mode: CalculatorMode) -> Vec<Rc<HistoryItem>> {
         if mode == CalculatorMode::Standard {
