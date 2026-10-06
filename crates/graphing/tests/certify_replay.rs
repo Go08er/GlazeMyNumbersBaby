@@ -10,9 +10,10 @@
 //! when it can only prove it on a tree the certifier supplied (the
 //! simplifier's form, the derivatives) or check it at sample points: a
 //! weak claim rests on the simplifier being right. A claim the replay
-//! proves false, or a row that doesn't follow from its claims, fails the
-//! test; on the certify corpus so does a claim it can neither prove nor
-//! refute (unconfirmed) or doesn't model (unsupported).
+//! proves false, a claim it can neither prove nor refute (unconfirmed) or
+//! doesn't model (unsupported), or a row that doesn't follow from its
+//! claims fails the test, on the certify corpus and the pool alike: the
+//! standalone `replay` example's rule (since review 17, Question 2).
 //!
 //! `cargo test -p graphing --features mpfr-oracle --test certify_replay`
 //! replays the certify corpus (its fixtures and review rounds 9–11);
@@ -250,8 +251,9 @@ fn one(src: &str, unit: TrigUnit) -> Done {
 }
 
 /// Replays every function (in parallel), prints the tally, and returns
-/// what fails: with `strict`, unconfirmed and unsupported claims too.
-fn run(fs: Vec<(String, TrigUnit)>, strict: bool) -> Vec<String> {
+/// what fails: a claim refuted, unconfirmed or unsupported, a row that
+/// doesn't follow, a certifier's tree shown wrong, a missing binding.
+fn run(fs: Vec<(String, TrigUnit)>) -> Vec<String> {
     let want = fs.len();
     let filter = std::env::var("REPLAY_FILTER").ok();
     let verbose = std::env::var_os("REPLAY_VERBOSE").is_some();
@@ -344,8 +346,7 @@ fn run(fs: Vec<(String, TrigUnit)>, strict: bool) -> Vec<String> {
         }
         for c in &r.claims {
             let bad = match c.outcome.class {
-                Class::Refuted => true,
-                Class::Unconfirmed | Class::Unsupported => strict,
+                Class::Refuted | Class::Unconfirmed | Class::Unsupported => true,
                 Class::Strong | Class::Weak => false,
             };
             if bad {
@@ -441,8 +442,8 @@ fn corpus_certificates_replay() {
         review().len()
     );
     assert!(fs.len() >= 140, "only {} corpus functions", fs.len());
-    // Every claim of the corpus proved or refuted (none is left open today).
-    let fails = run(fs, true);
+    // Every claim of the corpus proved (none is left open).
+    let fails = run(fs);
     assert!(fails.is_empty(), "{} failures", fails.len());
 }
 
@@ -451,7 +452,9 @@ fn corpus_certificates_replay() {
 fn pool_certificates_replay() {
     let mut fs = units();
     fs.extend(pool());
-    let fails = run(fs, false);
+    // Every claim of the pool proved too: the standalone replay exits 0 on
+    // each of these genuine certificates (review 17, Question 2).
+    let fails = run(fs);
     assert!(fails.is_empty(), "{} failures", fails.len());
 }
 
@@ -1455,6 +1458,9 @@ fn kinks_replay() {
         "max(x,0)",
         "min(x^2,1)",
         "abs(sin(x))",
+        // Review 17, Question 2: f = x near 0, a step of a kink beside it
+        // (its ExactAt claims at 0 were unconfirmed).
+        "min(x,floor(abs(x)+0.5)+5)",
     ] {
         for unit in [TrigUnit::Radians, TrigUnit::Degrees] {
             let d = one(src, unit);
@@ -1592,7 +1598,9 @@ fn sliders_replay() {
 /// not just left of it, or where its argument jumps (review 16, R16-L-01:
 /// ⌊x⌋⁰ at 1 is 0⁰ just left of 1): no first coefficient, so no winner's
 /// coefficients for min and max beside it either. Where the argument stays
-/// clear beside the box, the derivatives are there.
+/// clear beside the box, the derivatives are there: a step's argument
+/// with no derivative of its own (|x| at 0) too, when its enclosure over
+/// a neighbourhood of the box is continuous and clear of the jumps.
 #[test]
 fn a_value_alone_has_no_derivatives_at_a_domain_end() {
     replay::iv::init();
@@ -1634,6 +1642,11 @@ fn a_value_alone_has_no_derivatives_at_a_domain_end() {
         ("floor(sqrt(x)+0.5)", 1.0, 0.0),
         ("floor(floor(x)+0.5)", 1.5, 0.0),
         ("min(x,floor(x)+5)", 0.5, 1.0),
+        // A step's argument with a kink but clear of the jumps beside it.
+        ("floor(abs(x)+0.5)", 0.0, 0.0),
+        ("min(x,floor(abs(x)+0.5)+5)", 0.0, 1.0),
+        ("round(abs(x))", 0.0, 0.0),
+        ("sign(abs(x)+1)", 0.0, 0.0),
     ] {
         let s = series(src, x);
         assert!(

@@ -1064,16 +1064,22 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
             } else {
                 iv::ceil(a0)
             };
-            se::step(&ea, v, iv::no_jump(a0, 0.0))
+            se::step(&ea, v, iv::no_jump(a0, 0.0), || {
+                steady(&args[0], x, ctx, |w| iv::no_jump(w, 0.0))
+            })
         }
         Round => {
             let ea = a();
-            se::step(&ea, iv::round(&ea[0]), iv::no_jump(&ea[0], 0.5))
+            se::step(&ea, iv::round(&ea[0]), iv::no_jump(&ea[0], 0.5), || {
+                steady(&args[0], x, ctx, |w| iv::no_jump(w, 0.5))
+            })
         }
         Sign => {
             let ea = a();
             let smooth = ea[0].ne0();
-            se::step(&ea, iv::sign(&ea[0]), smooth)
+            se::step(&ea, iv::sign(&ea[0]), smooth, || {
+                steady(&args[0], x, ctx, Iv::ne0)
+            })
         }
         Mod => {
             let ea = a();
@@ -1123,6 +1129,25 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
             se::only_value_unless(se::constant(Iv::unknown(), n), false)
         }
     }
+}
+
+/// A step's argument `a` on a neighbourhood of the box: its enclosure over
+/// x's box widened by an ulp of the working precision each side is
+/// defined and continuous there, and `clear` of the step's jumps. The step
+/// is then constant on a neighbourhood of each point of the box, so its
+/// derivatives (0) exist throughout, whether or not `a`'s own do (⌊|x| +
+/// 0.5⌋ at 0: |x| has no derivative there, but stays within [0, 0.5)
+/// beside it). (x is the variable's series: its value is the box.)
+fn steady(a: &Expr, x: &S, ctx: &Ctx<'_>, clear: impl Fn(&Iv) -> bool) -> bool {
+    let b = &x[0];
+    if !b.bounded() {
+        return false;
+    }
+    let (mut lo, mut hi) = (b.lo.clone(), b.hi.clone());
+    lo.next_down();
+    hi.next_up();
+    let w = eval(a, &se::var(Iv::new(lo, hi), 0), 0, ctx)[0].clone();
+    !w.empty && w.cont && clear(&w)
 }
 
 fn recip_expr(a: &Expr) -> Expr {
