@@ -75,6 +75,19 @@ impl NumWidth {
 
 pub const NUM_WIDTH_LENGTH: usize = 4;
 
+/// Extension: the largest exponent of ten a memory slot written out in
+/// e-notation is read back with ([`CalcEngine::written_value`]). The display
+/// overflows past four exponent digits, and a number is typed with at most
+/// four, but M+ and M− carry a slot a little past them, by adding values
+/// below 10^10000 (9.e+9999, MS, M+, M+ is 2.7e+10000) or by cancelling
+/// (1.0000000000000000000000000000001e-9999, MS, 1.e-9999, M− is 1.e-10030).
+/// Twice the display's range holds every slot keys can make: one past
+/// 10^20000 would take 10^10000 presses of M+, and a cancellation leaves a
+/// difference near the last digits its values carry, a few dozen past
+/// 10^-9999. Reading 10^19999 back costs about five million units of
+/// `ratpack::work_done` (the cost grows with the square of the exponent).
+pub const MAX_WRITTEN_EXPONENT: u32 = 19_999;
+
 thread_local! {
     /// `CCalcEngine::s_engineStrings` — the string table shared across all instances.
     static S_ENGINE_STRINGS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
@@ -644,6 +657,51 @@ impl CalcEngine {
     /// changes, and nothing is displayed.
     pub fn set_carry(&mut self, carry: bool) {
         self.carry_bit = u64::from(carry);
+    }
+
+    /// Extension: the value of a decimal number as the display writes it in
+    /// e-notation, read with an exponent of up to
+    /// [`MAX_WRITTEN_EXPONENT`] rather than the four digits the keys type
+    /// (for a memory slot M+ or M− took past them, in a restored session):
+    /// `mantissa` its digits and point (the engine's decimal separator) as
+    /// typed, at most as many digits as the input takes, and `exponent` the
+    /// power of ten. It is worked out as the input works out a typed number
+    /// (`CalcInput::ToRational`). `None` in Programmer mode, or for a
+    /// mantissa or exponent out of those bounds, which are checked first.
+    pub fn written_value(
+        &self,
+        negative: bool,
+        mantissa: &str,
+        exponent_negative: bool,
+        exponent: u32,
+    ) -> CalcResult<Option<Rational>> {
+        if self.f_integer_mode || self.radix != 10 || exponent > MAX_WRITTEN_EXPONENT {
+            return Ok(None);
+        }
+        // As the input counts them: the point and a leading 0 don't count.
+        let max_digits = usize::try_from(self.c_int_digits_sav).unwrap_or(0);
+        let (mut digits, mut points) = (0usize, 0usize);
+        for c in mantissa.chars() {
+            if c == self.decimal_separator {
+                points += 1;
+            } else if c.is_ascii_digit() {
+                digits += 1;
+            } else {
+                return Ok(None);
+            }
+        }
+        let leading_zero = usize::from(mantissa.starts_with('0'));
+        if digits == 0 || points > 1 || digits > max_digits + leading_zero {
+            return Ok(None);
+        }
+        ratpack::string_to_rat(
+            negative,
+            mantissa,
+            exponent_negative,
+            &exponent.to_string(),
+            self.radix,
+            self.precision,
+        )
     }
 
     /// Extension: sets the left operand (see [`Continuation::left`]) to

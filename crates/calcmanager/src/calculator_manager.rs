@@ -461,6 +461,38 @@ impl CalculatorManager {
         self.set_memorized_numbers_string()
     }
 
+    /// Extension: stores a new memory slot, as [`memorize_number`]
+    /// (MS) does, holding a decimal number as the display writes it in
+    /// e-notation (see [`CalcEngine::written_value`]), for a restored
+    /// session: M+ and M− carry a slot past the four exponent digits a
+    /// number is typed with, so such a slot can't be typed back. Nothing
+    /// else changes. Returns whether it was stored (not in Programmer mode,
+    /// in an error, or for a number out of `written_value`'s bounds).
+    ///
+    /// [`memorize_number`]: Self::memorize_number
+    pub fn memorize_written(
+        &mut self,
+        negative: bool,
+        mantissa: &str,
+        exponent_negative: bool,
+        exponent: u32,
+    ) -> CalcResult<bool> {
+        let engine = self.current_engine();
+        if engine.f_in_error_state() {
+            return Ok(false);
+        }
+        let Some(value) = engine.written_value(negative, mantissa, exponent_negative, exponent)?
+        else {
+            return Ok(false);
+        };
+        self.memorized_numbers.insert(0, value);
+        if self.memorized_numbers.len() > Self::MAXIMUM_MEMORY_SIZE {
+            self.memorized_numbers.truncate(Self::MAXIMUM_MEMORY_SIZE);
+        }
+        self.set_memorized_numbers_string()?;
+        Ok(true)
+    }
+
     /// Recall the memorized number.
     /// The memorized number gets loaded to the primary display
     pub fn memorized_number_load(&mut self, index_of_memory: u32) -> CalcResult<()> {

@@ -84,7 +84,8 @@ pub use calc_display::{
     CalcDisplay, CalcDisplayRef, ExpressionToken, HistoryDisplay, HistoryDisplayRef,
 };
 pub use calc_engine::{
-    CalcEngine, Continuation, EngineState, Entry, NUM_WIDTH_LENGTH, NumWidth, ShownValue,
+    CalcEngine, Continuation, EngineState, Entry, MAX_WRITTEN_EXPONENT, NUM_WIDTH_LENGTH, NumWidth,
+    ShownValue,
 };
 pub use calc_input::{CalcInput, CalcNumSec, MAX_STRLEN};
 pub use calc_utils::{

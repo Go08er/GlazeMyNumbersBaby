@@ -37,11 +37,15 @@
 //! `"w"` (word size in bits), `"a"` (angle unit), `"fe"`, `"sh"` (shift
 //! mode). Memory is restored by re-entering the displayed strings, so a value
 //! comes back with the precision it was displayed with, and each slot is
-//! shown in the form it was saved in (e-notation or not). Of the newest 100
-//! slots, one that isn't a number as the display shows it (too long, other
-//! characters, an exponent of more than four digits, which only M+ or M−
-//! can reach and the paste validator refuses anyway) is left out when the
-//! snapshot is read.
+//! shown in the form it was saved in (e-notation or not). A slot M+ or M−
+//! took past the four exponent digits a number is typed with (9.e+9999, MS,
+//! M+ shows 1.8e+10000; the display overflows instead) is read back directly
+//! rather than typed, with an exponent of up to 19,999
+//! (`calcmanager::MAX_WRITTEN_EXPONENT`, past any slot keys can make). Of the
+//! newest 100 slots, one that isn't a number as the display shows it (too
+//! long, other characters, an exponent past that) is left out when the
+//! snapshot is read. A value past ±9999 in the display is an overflow
+//! error, and is restored as one.
 //!
 //! `"hm"` (`"s"` or `"c"`, absent before 0.2) says which mode's history
 //! `"s"."m"."h"` is (in Programmer mode, that of the mode before it), and
@@ -960,14 +964,11 @@ pub(crate) const MAX_RESTORED_MEMORY: usize = 100;
 /// Extension: whether a saved memory slot is a number as the display shows
 /// one: at most [`MAX_DISPLAY_LENGTH`] long, an optional `-`, digits (A–F
 /// too) with the point and group separators, and an optional exponent, `e`,
-/// a sign and at most [`copypaste::MAX_EXPONENT_LENGTH`] digits. A slot
-/// that isn't is left out when the snapshot is read, before the restore
-/// enters any (the paste validator it is entered through would refuse most
-/// such text, but only after [`plain_decimal`] had read it, and takes an
-/// expression like `1+1`). The display overflows past four exponent
-/// digits, but M+ can take a slot past them (`9.e+9999`, MS, M+ shows
-/// 1.8e+10000); the validator refused such a slot before too, so it still
-/// isn't restored.
+/// a sign and digits: at most [`copypaste::MAX_EXPONENT_LENGTH`], as a
+/// number is typed, or a [`WrittenNumber`]'s. A slot that isn't is left out
+/// when the snapshot is read, before the restore enters any (the paste
+/// validator it is entered through would refuse most such text, but only
+/// after [`plain_decimal`] had read it, and takes an expression like `1+1`).
 fn is_memory_value(text: &str) -> bool {
     let locale = crate::localization::LocalizationSettings::get_instance();
     let is_digit = |c: char| c.is_ascii_digit() || locale.is_localized_digit(c);
@@ -990,9 +991,71 @@ fn is_memory_value(text: &str) -> bool {
         && mantissa.chars().all(is_mantissa_char)
         && exponent.is_none_or(|exponent| {
             let digits = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
-            (1..=copypaste::MAX_EXPONENT_LENGTH as usize).contains(&digits.chars().count())
-                && digits.chars().all(is_digit)
+            digits.chars().all(is_digit)
+                && match digits.chars().count() {
+                    0 => false,
+                    n if n <= copypaste::MAX_EXPONENT_LENGTH as usize => true,
+                    _ => WrittenNumber::parse(text).is_some(),
+                }
         })
+}
+
+/// Extension: a memory slot the keys can't type back: a decimal number in
+/// e-notation whose exponent has more digits than a number is typed with
+/// (four). The display overflows past them, but M+ and M− carry a slot a
+/// little past them (9.e+9999, MS, M+ shows 1.8e+10000), so such a slot is
+/// read back directly ([`CalculatorManager::memorize_written`]) rather than
+/// entered. Its exponent may be up to [`MAX_WRITTEN_EXPONENT`], which holds
+/// every slot keys can make; past that the slot is left out.
+///
+/// [`CalculatorManager::memorize_written`]: calcmanager::CalculatorManager::memorize_written
+/// [`MAX_WRITTEN_EXPONENT`]: calcmanager::MAX_WRITTEN_EXPONENT
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WrittenNumber {
+    negative: bool,
+    /// The digits and point, in the engine's decimal separator.
+    mantissa: String,
+    exponent_negative: bool,
+    exponent: u32,
+}
+
+impl WrittenNumber {
+    /// `text` as such a number, if it is one. The exponent's digits are
+    /// counted before they are read, so reading them can't overflow.
+    pub(crate) fn parse(text: &str) -> Option<WrittenNumber> {
+        let locale = crate::localization::LocalizationSettings::get_instance();
+        // Without group separators, then in ASCII digits and a '.' point.
+        let ungrouped = locale.remove_group_separators(text);
+        let english = locale.get_english_value_from_localized_digits(&ungrouped);
+        let (negative, unsigned) = match english.strip_prefix('-') {
+            Some(rest) => (true, rest),
+            None => (false, &english[..]),
+        };
+        let (mantissa, exponent) = unsigned.split_once('e')?;
+        let (exponent_negative, digits) = match exponent.strip_prefix('-') {
+            Some(digits) => (true, digits),
+            None => (false, exponent.strip_prefix('+').unwrap_or(exponent)),
+        };
+        let longest = calcmanager::MAX_WRITTEN_EXPONENT.to_string().len();
+        if !(copypaste::MAX_EXPONENT_LENGTH as usize + 1..=longest).contains(&digits.len())
+            || !digits.bytes().all(|b| b.is_ascii_digit())
+        {
+            return None;
+        }
+        let exponent: u32 = digits.parse().ok()?;
+        if exponent > calcmanager::MAX_WRITTEN_EXPONENT
+            || mantissa.is_empty()
+            || !mantissa.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        {
+            return None;
+        }
+        Some(WrittenNumber {
+            negative,
+            mantissa: mantissa.replace('.', &locale.get_decimal_separator().to_string()),
+            exponent_negative,
+            exponent,
+        })
+    }
 }
 
 /// Extension: arithmetic budgets for replaying saved state, in units of
@@ -2145,6 +2208,25 @@ impl StandardCalculatorViewModel {
         false
     }
 
+    /// Extension: stores `written` in a new memory slot
+    /// (`CalculatorManager::memorize_written`) within [`VALUE_WORK`] and any
+    /// budget around it: like a key, it is stored only while the budget
+    /// lasts, and otherwise left out.
+    fn memorize_written_within_budget(&mut self, written: &WrittenNumber) {
+        self.within_work(VALUE_WORK, |vm| {
+            if vm.work_left() {
+                let _ = vm.with_manager(|m| {
+                    m.memorize_written(
+                        written.negative,
+                        &written.mantissa,
+                        written.exponent_negative,
+                        written.exponent,
+                    )
+                });
+            }
+        });
+    }
+
     /// Types a displayed number (as `OnPaste` would) into the engine.
     /// Extension: like a paste, the text must pass
     /// `CopyPasteManager.ValidatePasteExpression` first, which bounds its
@@ -2299,7 +2381,9 @@ impl StandardCalculatorViewModel {
 
     /// Extension: re-enters the memory strings (oldest first) and stores
     /// each with MS, then clears the entry. Only the newest
-    /// [`MAX_RESTORED_MEMORY`] are kept, as the manager would.
+    /// [`MAX_RESTORED_MEMORY`] are kept, as the manager would. A slot M+ or
+    /// M− took past the exponents the keys type (a [`WrittenNumber`],
+    /// outside Programmer mode) is read back and stored directly.
     fn restore_memory(&mut self, mode: CalcMode, memory: &[String]) {
         if memory.is_empty() {
             return;
@@ -2310,7 +2394,12 @@ impl StandardCalculatorViewModel {
             // MEMORY_WORK; a slot past either is dropped.
             vm.within_work(MEMORY_WORK, |vm| {
                 for value in memory.iter().rev() {
-                    if vm.enter_value_within_budget(mode, value) {
+                    let written = (mode != CalcMode::Programmer)
+                        .then(|| WrittenNumber::parse(value))
+                        .flatten();
+                    if let Some(written) = written {
+                        vm.memorize_written_within_budget(&written);
+                    } else if vm.enter_value_within_budget(mode, value) {
                         let _ = vm.with_manager(|m| m.memorize_number());
                     }
                 }
