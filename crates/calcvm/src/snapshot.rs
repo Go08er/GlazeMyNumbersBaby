@@ -142,8 +142,9 @@
 //!    above restores it). The restore does the same with a snapshot saved
 //!    before this rule (one with `"x"`; an upstream snapshot is refused).
 //! 2. History items are dropped, oldest first, from whichever mode's
-//!    History takes more bytes (on a tie, from the mode not shown), until
-//!    the state fits.
+//!    History takes more bytes (on a tie, from the mode not shown; in
+//!    Programmer mode, from the one `"hm"` doesn't name), until the state
+//!    fits.
 //! 3. Only if the calculation doesn't fit even with no History is it saved
 //!    as a new calculation from the value shown, and the History then
 //!    trimmed as in 2.

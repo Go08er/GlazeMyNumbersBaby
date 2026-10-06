@@ -21,7 +21,8 @@
 //!   the file as `.bad` when it drops anything. The calculator's state
 //!   isn't bounded there beyond the file, so one saved before saves were
 //!   budgeted keeps its memory: the calculator restores it (leaving out
-//!   only what it can't replay) and its next save trims it.
+//!   only what it can't replay) and its next save trims it. Such a file,
+//!   over [`MAX_SETTINGS_BYTES`], is kept as `.bad` too, as it was.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -113,8 +114,9 @@ impl<T: Serialize + DeserializeOwned + Default> Store<T> {
     /// budget (see the module docs) is dropped, and the others are kept.
     /// When anything is lost (a bad field or section, a file that is not a
     /// JSON object, over [`MAX_READ_BYTES`] or unreadable: then everything
-    /// is default), the file is first kept as `<path>.bad`, since the next
-    /// save replaces it.
+    /// is default), or the file is over [`MAX_SETTINGS_BYTES`] (the next
+    /// save trims it), it is first kept as `<path>.bad`, since the next save
+    /// replaces it.
     pub fn load_from(path: PathBuf) -> Store<T> {
         let data = match std::fs::symlink_metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => T::default(),
@@ -127,7 +129,10 @@ impl<T: Serialize + DeserializeOwned + Default> Store<T> {
                         }
                         None => (T::default(), false),
                     };
-                    if !complete {
+                    // A file over what a save writes (one saved before
+                    // saves were budgeted) loads whole, but the next save
+                    // trims it: kept as well.
+                    if !complete || bytes.len() as u64 > MAX_SETTINGS_BYTES {
                         let _ = write_atomic(&bad_copy_path(&path), &bytes);
                     }
                     data
@@ -641,7 +646,9 @@ mod tests {
         std::fs::write(&path, &old).unwrap();
 
         let store = Store::<App>::load_from(path.clone());
-        assert!(!bad.exists(), "nothing is lost");
+        // Nothing is lost, but the next save trims it: kept as it was.
+        assert_eq!(std::fs::read(&bad).unwrap(), old);
+        std::fs::remove_file(&bad).unwrap();
         {
             let data = store.data.borrow();
             assert_eq!(

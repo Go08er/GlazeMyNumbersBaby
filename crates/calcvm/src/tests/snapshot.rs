@@ -1577,7 +1577,7 @@ fn hostile_memory_restores_quickly() {
 }
 
 #[test]
-fn over_long_snapshots_are_rejected() {
+fn over_long_snapshots_are_refused_or_restored_as_their_value() {
     let mut vm = new_vm();
     vm.press(Button::Four);
     let before = vm.save_state();

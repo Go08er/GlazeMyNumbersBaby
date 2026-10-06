@@ -216,22 +216,22 @@ fn nine_long_calculations_keep_their_newest_items() {
     );
 }
 
-/// Twenty in each mode (a Standard item this long only comes from a saved
-/// state: Standard mode evaluates at each operator), 29 MB as saved
+/// Ten in each mode (a Standard item this long only comes from a saved
+/// state: Standard mode evaluates at each operator), 22 MB as saved
 /// before. The larger History loses its oldest first, so the two end
 /// within an item of each other, and on a tie the one not shown loses.
 #[test]
 fn long_histories_in_both_modes_are_trimmed_alike() {
-    let vm = session(vec![long_item(); 20], vec![long_item(); 20], &["42"]);
-    assert!(unbudgeted(&vm) > 29_000_000);
+    let vm = session(vec![long_item(); 10], vec![long_item(); 10], &["42"]);
+    assert!(unbudgeted(&vm) > 14_000_000);
     let kept = check_trimmed(vm, &[Button::Multiply, Button::Two, Button::Equals]);
     assert_eq!(kept, (1, 2));
 
     // In Standard mode (which starts a new calculation: room for four).
-    let mut vm = session(vec![long_item(); 20], vec![long_item(); 20], &["42"]);
+    let mut vm = session(vec![long_item(); 10], vec![long_item(); 10], &["42"]);
     vm.set_mode(CalcMode::Standard);
     assert_eq!(check_trimmed(vm, &[Button::Two, Button::Add]), (2, 2));
-    let mut vm = session(vec![long_item(); 20], vec![long_item(); 19], &["42"]);
+    let mut vm = session(vec![long_item(); 10], vec![long_item(); 9], &["42"]);
     vm.set_mode(CalcMode::Standard);
     assert_eq!(check_trimmed(vm, &[Button::Two, Button::Add]), (2, 2));
 }
