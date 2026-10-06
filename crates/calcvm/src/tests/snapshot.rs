@@ -1660,10 +1660,18 @@ fn memory_is_checked_when_read() {
         "FF FF",
         "1111 0000",
         "-9,223,372,036,854,775,808",
+        // Past the exponents a number is typed with, as M+ and M− leave a
+        // slot, up to MAX_WRITTEN_EXPONENT.
+        "2.7e+10000",
+        "-1.e-10030",
+        "1.e+19999",
     ];
     // Not as a display shows a number.
     let not_shown = [
-        "1.e+10000",
+        "1.e+20000",
+        "1.e-20000",
+        "1.e+000001",
+        "1.e+-10000",
         "1.e+999999999999",
         "1e",
         "1e+",
@@ -1673,6 +1681,7 @@ fn memory_is_checked_when_read() {
         "1-",
         "",
     ];
+    assert_eq!(shown.len(), not_shown.len());
     let mut memory: Vec<String> = shown
         .iter()
         .zip(not_shown)
@@ -1793,6 +1802,160 @@ fn saved_operand_exponents_are_typed_within_four_digits() {
     bounded("Standard left operand", || vm.restore_state(&s.to_string()));
     vm.press(Button::Seven);
     assert_eq!(vm.display_value(), "7");
+}
+
+/// The smallest step above 1 × 10^-9999 a number can be typed with in
+/// `mode` (all its digits), and the slot it leaves after 1e-9999 M−.
+fn just_past_tiny(mode: CalcMode) -> (String, &'static str) {
+    match mode {
+        CalcMode::Standard => (format!("1.{}1e-9999", "0".repeat(14)), "1.e-10014"),
+        _ => (format!("1.{}1e-9999", "0".repeat(30)), "1.e-10030"),
+    }
+}
+
+/// M+ and M− carry a memory slot past the four exponent digits a number is
+/// typed with (the display shows an overflow instead): such slots, above
+/// and below, come back as the same numbers, and continue the same way.
+#[test]
+fn memory_past_the_typed_exponents_round_trips() {
+    use Button::*;
+    for mode in [CalcMode::Standard, CalcMode::Scientific] {
+        let (step, tiny) = just_past_tiny(mode);
+        let mut original = new_vm();
+        original.set_mode(mode);
+        assert!(original.paste("9e9999"));
+        original.press(Memory);
+        original.memory_add(0);
+        original.memory_add(0);
+        assert!(original.paste(&step));
+        original.press(Memory);
+        assert!(original.paste("1e-9999"));
+        original.memory_subtract(0);
+        original.press(Clear);
+        assert_eq!(original.memory(), [tiny, "2.7e+10000"], "{mode:?}");
+
+        let state = original.save_state();
+        let mut restored = new_vm();
+        bounded(&format!("{mode:?}"), || restored.restore_state(&state));
+        assert_eq!(observed(&restored), observed(&original), "{mode:?}");
+
+        // Exactly: 9e+9999 off the large one twice leaves 9.e+9999, and
+        // 1e-9999 added back to the small one the number it was typed as.
+        for vm in [&mut original, &mut restored] {
+            assert!(vm.paste("9e9999"));
+            vm.memory_subtract(1);
+            vm.memory_subtract(1);
+            assert!(vm.paste("1e-9999"));
+            vm.memory_add(0);
+        }
+        assert_eq!(restored.memory(), original.memory(), "{mode:?}");
+        restored.memory_recall(1);
+        assert_eq!(restored.display_value(), "9.e+9999", "{mode:?}");
+        restored.memory_recall(0);
+        assert_eq!(restored.display_value(), step, "{mode:?}");
+    }
+}
+
+/// A result past the display's exponents is an overflow error, so neither
+/// the display nor the engine's value under it (`"ev"`) holds one: recalling
+/// such a slot, or working one out, restores as that error, the slot kept.
+#[test]
+fn a_value_past_the_display_restores_as_its_overflow() {
+    use Button::*;
+    for mode in [CalcMode::Standard, CalcMode::Scientific] {
+        let mut recalled = new_vm();
+        recalled.set_mode(mode);
+        assert!(recalled.paste("9e9999"));
+        recalled.press(Memory);
+        recalled.memory_add(0);
+        recalled.memory_recall(0);
+        let mut worked_out = new_vm();
+        worked_out.set_mode(mode);
+        assert!(worked_out.paste("9e9999"));
+        worked_out.press(Add);
+        assert!(worked_out.paste("9e9999"));
+        worked_out.press(Equals);
+        for original in [recalled, worked_out] {
+            assert!(original.is_error(), "{mode:?}");
+            assert_eq!(original.display_value(), "Overflow", "{mode:?}");
+            let state = original.save_state();
+            let v: Value = serde_json::from_str(&state).unwrap();
+            assert!(v["x"]["k"].get("ev").is_none(), "{mode:?}: {state}");
+            let mut restored = new_vm();
+            restored.restore_state(&state);
+            assert_eq!(observed(&restored), observed(&original), "{mode:?}");
+        }
+    }
+}
+
+/// Programmer mode shows a memory slot as the word size takes it, so a
+/// slot past the display's exponents is saved, and restored, as that
+/// integer; written so anyway, it is left out, as any text a paste refuses.
+#[test]
+fn programmer_memory_is_restored_as_before() {
+    use Button::*;
+    let mut original = new_vm();
+    original.set_mode(CalcMode::Scientific);
+    assert!(original.paste("9e9999"));
+    original.press(Memory);
+    original.memory_add(0);
+    original.set_mode(CalcMode::Programmer);
+    assert_eq!(original.memory(), ["0"]);
+    let mut restored = new_vm();
+    restored.restore_state(&original.save_state());
+    assert_eq!(observed(&restored), observed(&original));
+
+    let state = snapshot_json(2, json!([]), json!({ "mem": ["2.7e+10000", "5"] }));
+    let mut vm = new_vm();
+    vm.restore_state(&state);
+    assert_eq!(vm.memory(), ["5"]);
+    vm.press(Clear);
+}
+
+/// A slot read back past the typed exponents is bounded as one entered:
+/// at most MAX_WRITTEN_EXPONENT and the digits the mode takes, each within
+/// its budget, so a hundred of the costliest restore quickly.
+#[test]
+fn written_memory_slots_are_bounded() {
+    use crate::snapshot::{MEMORY_WORK, VALUE_WORK};
+    for (mode, digits) in [(0, 16), (1, 32)] {
+        let all = format!("1.{}e+10000", "1".repeat(digits - 1));
+        let too_many = format!("1.{}e+10000", "1".repeat(digits));
+        let memory = [
+            "1.e+19999",
+            "-9.9e-19999",
+            "1.e+20000",
+            "1.e-20000",
+            &all,
+            &too_many,
+            "5",
+        ];
+        let state = snapshot_json(mode, json!([]), json!({ "mem": memory }));
+        let mut vm = new_vm();
+        bounded(&format!("mode {mode}"), || vm.restore_state(&state));
+        assert_eq!(
+            vm.memory(),
+            ["1.e+19999", "-9.9e-19999", &all, "5"],
+            "mode {mode}"
+        );
+    }
+
+    // A hundred slots near 10^±19999: the oldest that fit the memory budget
+    // are kept, the rest dropped, and the work and allocations bounded.
+    let costly = "-9.9999999999999999999999999999999e-19999";
+    let mut memory = vec![costly; 100];
+    memory[99] = "3"; // the oldest
+    let state = snapshot_json(1, json!([]), json!({ "mem": memory }));
+    let mut vm = new_vm();
+    let mut done = 0;
+    bounded("a hundred costly slots", || {
+        done = work(|| vm.restore_state(&state))
+    });
+    // The budget, one slot past it, and showing the kept slots.
+    assert!(done < 2 * MEMORY_WORK + VALUE_WORK, "{done}");
+    let kept = vm.memory();
+    assert!((2..100).contains(&kept.len()), "{}", kept.len());
+    assert_eq!(kept.last().map(String::as_str), Some("3"));
 }
 
 #[test]

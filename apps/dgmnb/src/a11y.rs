@@ -933,4 +933,157 @@ mod tests {
         check_actions("licences", &nodes, &hits);
         assert!(nodes.iter().any(|n| n.scrollable));
     }
+
+    /// R17-M-04: the focused controls that leave Enter to the calculator
+    /// ("=") are, on every page and overlay, those that press one of its
+    /// keys, as upstream's `CalculatorButton`s and bit `FlipButtons`: every
+    /// keypad's and flyout's key (`calc::Msg::Key`) but the 2nd and hyp
+    /// toggles, MC, MR, M+, M− and MS, and the bits. By what they do, not
+    /// by how they are drawn (2nd and hyp look like keys, MS and the bits
+    /// like buttons). Every other control (menus, toggles, the angle,
+    /// radix and word size, the History and Memory items and their
+    /// buttons, the converter's and the graph's keys, the navigation and
+    /// Settings) takes Enter itself, as in GMNB.
+    #[test]
+    fn enter_is_equals_on_the_calculators_own_keys() {
+        use crate::app::Msg as App;
+        use crate::calc::{Msg, Popup};
+        use crate::ui::{Hit, id};
+        use appcore::keys::{KEY_HYP, KEY_SECOND, KEY_TRIG_SECOND};
+        use calcvm::{Button as B, CalcMode};
+
+        let presses_a_key = |h: &Hit| match &h.msg {
+            Some(App::Calc(Msg::Key(k))) => ![KEY_SECOND, KEY_TRIG_SECOND, KEY_HYP].contains(k),
+            Some(App::Calc(Msg::FlipBit(_))) => true,
+            _ => false,
+        };
+        // Every focusable control drawn, by where it was drawn.
+        let mut all: Vec<(String, Hit)> = Vec::new();
+        let mut keep = |what: &str, hits: Vec<Hit>| {
+            for h in hits.into_iter().filter(|h| h.focusable) {
+                all.push((what.to_string(), h));
+            }
+        };
+        let wide = Rect::new(0.0, 46.0, 1000.0, 654.0);
+        let narrow = Rect::new(0.0, 46.0, 400.0, 654.0);
+        for mode in [
+            CalcMode::Standard,
+            CalcMode::Scientific,
+            CalcMode::Programmer,
+        ] {
+            for bits in [false, true] {
+                if bits && mode != CalcMode::Programmer {
+                    continue;
+                }
+                let mut p = crate::calc::CalcPage::new(None);
+                p.set_mode(mode);
+                // Memory and History hold an item each: their rows and
+                // buttons are drawn, and MC and MR are enabled.
+                press(&mut p, "2+3={ctrl+m}2+3");
+                if bits {
+                    with_cx(|cx| p.update(Msg::BitView(true), cx));
+                }
+                let what = format!("{mode:?}{}", if bits { " bits" } else { "" });
+                keep(&what, frame_nodes(|f, _| p.view(f, wide, false)).1);
+                keep(&what, frame_nodes(|f, _| p.view(f, narrow, false)).1);
+                let popups: &[Popup] = match mode {
+                    CalcMode::Standard => &[Popup::Panel, Popup::DisplayMenu(300.0, 200.0)],
+                    CalcMode::Scientific => &[Popup::Trig, Popup::Functions, Popup::Panel],
+                    CalcMode::Programmer => &[Popup::Bitwise, Popup::Shift, Popup::Panel],
+                };
+                for popup in popups {
+                    p.popup = Some(*popup);
+                    let r = if *popup == Popup::Panel { narrow } else { wide };
+                    let what = format!("{what} {popup:?}");
+                    keep(&what, frame_nodes(|f, _| p.overlay(f, r)).1);
+                }
+            }
+        }
+        let mut c = crate::conv::ConvPage::new(None);
+        keep("converter", frame_nodes(|f, r| c.view(f, r)).1);
+        let mut d = crate::date::DatePage::new();
+        keep("date", frame_nodes(|f, r| d.view(f, r)).1);
+        with_cx(|cx| d.update(crate::date::Msg::Calendar(Some(0)), cx));
+        keep("calendar", frame_nodes(|f, r| d.overlay(f, r)).1);
+        let mut g = crate::graph::GraphPage::for_test(appcore::graph::from_list("x^2;a*x"));
+        keep("graphing", frame_nodes(|f, r| g.view(f, r)).1);
+        keep(
+            "navigation",
+            frame_nodes(|f, _| {
+                crate::app::draw_nav(f, full(), appcore::modes::ViewMode::Standard, false)
+            })
+            .1,
+        );
+        let settings = crate::app::Settings::default();
+        let desktop = crate::app::Desktop::default();
+        keep(
+            "settings",
+            frame_nodes(|f, r| crate::app::draw_settings(f, r, &settings, desktop)).1,
+        );
+
+        for (what, h) in &all {
+            assert_eq!(
+                h.enter_is_equals,
+                presses_a_key(h),
+                "{what}: {:?} {:?}",
+                h.id,
+                h.msg
+            );
+            // Space presses every button, a calculator key too; Enter
+            // every button but a calculator key. (Fields, sliders, the
+            // graph and scroll views take their keys elsewhere.)
+            if h.sense == Sense::Click && h.msg.is_some() {
+                assert!(h.activated_by(false), "{what}: {:?}", h.msg);
+                assert_eq!(
+                    h.activated_by(true),
+                    !presses_a_key(h),
+                    "{what}: {:?}",
+                    h.msg
+                );
+            } else {
+                assert!(!h.activated_by(false) && !h.activated_by(true), "{what}");
+            }
+        }
+        let flag = |what: &str, hid: Id| {
+            let found: Vec<bool> = all
+                .iter()
+                .filter(|(w, h)| w == what && h.id == hid)
+                .map(|(_, h)| h.enter_is_equals)
+                .collect();
+            assert!(!found.is_empty(), "{what}: no {hid:?}");
+            found[0]
+        };
+        // The review's three, and their neighbours.
+        assert!(flag("Standard", id(("mem", B::Memory as u32))));
+        assert!(flag("Standard", id(("mem", B::MemoryClear as u32))));
+        assert!(flag("Standard", id(("keypad", B::Seven.id()))));
+        assert!(!flag("Standard", id("mem-toggle")));
+        assert!(!flag("Standard", id(("hist", 0usize))));
+        assert!(!flag("Programmer", id(("memrow", 0usize))));
+        assert!(!flag("Programmer", id(("memop", 0usize, 0usize))));
+        assert!(!flag("Scientific", id(("keypad", KEY_SECOND))));
+        assert!(!flag("Scientific", id("trig-btn")));
+        assert!(!flag("Scientific Trig", id(("trig", KEY_TRIG_SECOND))));
+        assert!(!flag("Scientific Trig", id(("trig", KEY_HYP))));
+        assert!(flag("Programmer bits", id(("bit", 0u32))));
+        assert!(flag("Programmer bits", id(("mem", B::Memory as u32))));
+        assert!(!flag("Programmer", id("word")));
+        assert!(!flag("Programmer Shift", id(("shift", 0usize))));
+        // Some of each kind on the calculator; none elsewhere.
+        assert!(
+            all.iter()
+                .any(|(w, h)| w == "Scientific Trig" && h.enter_is_equals)
+        );
+        assert!(
+            all.iter()
+                .any(|(w, h)| w == "Programmer Bitwise" && h.enter_is_equals)
+        );
+        for page in ["converter", "date", "calendar", "graphing"] {
+            assert!(all.iter().any(|(w, _)| w == page), "{page}: nothing drawn");
+            assert!(
+                all.iter().all(|(w, h)| w != page || !h.enter_is_equals),
+                "{page}"
+            );
+        }
+    }
 }

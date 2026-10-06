@@ -217,10 +217,7 @@ impl StandardCalculatorViewModel {
     /// `_standardCalculatorManager.SendCommand((CalculatorCommand)command)`
     /// followed by the replay of the callbacks it produced.
     pub(crate) fn send_command(&mut self, command: i32) {
-        if let Some(limit) = self.work_limit
-            && calcmanager::work_done() > limit
-        {
-            self.work_cut = true;
+        if !self.work_left() {
             return;
         }
         // The shipping app never catches engine exceptions; an `Err` leaves
@@ -244,6 +241,19 @@ impl StandardCalculatorViewModel {
         let within = !self.work_cut;
         (self.work_limit, self.work_cut) = (outer.0, outer.1 || !within);
         within
+    }
+
+    /// Extension: whether the budget [`within_work`](Self::within_work) set
+    /// still lasts. Each key checks it before it is sent, and so does a step
+    /// that sets a value directly; once it is spent, the run is marked cut.
+    pub(crate) fn work_left(&mut self) -> bool {
+        if let Some(limit) = self.work_limit
+            && calcmanager::work_done() > limit
+        {
+            self.work_cut = true;
+            return false;
+        }
+        true
     }
 
     /// Extension: `Clear`, sent even when a replay budget is spent.

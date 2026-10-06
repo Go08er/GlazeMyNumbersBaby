@@ -385,10 +385,11 @@ fn drop_into_text(text: &gtk::Text, mut dropped: String, x: f64) {
 /// Puts `with` in place of `text`'s selection (or at its cursor, with
 /// none), the cursor after it, as GtkText's own paste does
 /// (`paste_received`): one edit, which a caller holding `text`'s property
-/// notifications (`freeze_notify`) makes one change of its text property.
-/// (The graphing equation field follows that property: told of the empty
-/// text in between, it would forget the sliders the new text still uses,
-/// R16-M-02.)
+/// notifications (`freeze_notify`) makes one change of its text property,
+/// as GTK's own paste is. (The graphing equation field tells its graph of
+/// that property only once an operation is over anyway, R17-M-03: the
+/// empty text in between never forgets the sliders the new text still
+/// uses, R16-M-02.)
 ///
 /// Through GtkText's own key-binding signals, `delete-from-cursor` and
 /// `insert-at-cursor`, so that the edit is undone as GTK's paste is (the

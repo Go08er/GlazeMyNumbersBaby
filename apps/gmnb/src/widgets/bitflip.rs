@@ -36,7 +36,10 @@ impl BitFlip {
                     b.add_css_class("wc-bit");
                     b.set_focus_on_click(false);
                     b.set_tooltip_text(Some(&format!("Bit {bit}")));
-                    b.update_property(&[gtk::accessible::Property::Label(&format!("Bit {bit}"))]);
+                    // Named by which bit it is (as DGMNB's, and upstream's
+                    // "%1, value %2" puts the position first); its value,
+                    // shown, is the toggle's pressed state.
+                    crate::a11y::name_button(b.upcast_ref(), &format!("Bit {bit}"));
                     nb.append(&b);
                     bits[bit as usize] = Some(b);
                 }
@@ -84,7 +87,14 @@ impl BitFlip {
             let i = i as u32;
             let on = i < width && bit(i);
             b.set_active(on);
-            b.set_label(if on { "1" } else { "0" });
+            let shown = if on { "1" } else { "0" };
+            if b.label().as_deref() != Some(shown) {
+                b.set_label(shown);
+                // A new label names the button again (labelled-by, which
+                // outranks the name given): the name stays "Bit N"
+                // (R17-L-02), as the calendar's days keep theirs.
+                b.reset_relation(gtk::AccessibleRelation::LabelledBy);
+            }
             b.set_sensitive(i < width);
         }
         self.syncing.set(false);
