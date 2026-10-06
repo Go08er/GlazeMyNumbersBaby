@@ -1409,6 +1409,16 @@ fn taylor_touch(s: &Subj, x: B, at: f64, m: usize, above: bool) -> V {
             return unknown(format!("coefficient {j} {} at {at:e}", show(cj)));
         }
     }
+    // The order-m coefficient exists and is exactly 0 at `at`: however the
+    // box below is split, one piece holds `at`, and an enclosure over it
+    // holds that 0, so isn't of one sign. Splitting can't decide; it only
+    // halves toward `at` to the last double, a thousand boxes and more
+    // for each order (x^2000000 at 0: every order to 6 is 0 there, and
+    // each box's series takes twenty-odd squarings).
+    let pm = &pc[m];
+    if pm.is_exactly(0.0) && pm.def {
+        return unknown(format!("coefficient {m} 0 at {at:e}"));
+    }
     // The order-m coefficient over the box, of one sign τ.
     let left_end = at == x.0;
     let want = |tau: bool| -> bool {
