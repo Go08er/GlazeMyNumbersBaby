@@ -245,7 +245,7 @@ upstream sources with g++:
 | --- | --- |
 | ratpack (12) | 13,628 golden cases from the C++ Ratpack (every op and function, all angle types, radixes 2, 3, 8, 10, 16 and 36, formats, precisions, error codes), byte-for-byte; port of `RationalTest.cpp` |
 | calcmanager (79) | 3,500 golden command sequences replayed against the C++ `CalculatorManager` (every display callback, expression token, history and memory state); ports of `CalcEngineTests`, `CalcInputTest`, `CalculatorManagerTest` |
-| calcvm (144 + 1 ignored) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage |
+| calcvm (152 + 1 ignored) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage |
 | unitconv (140 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
 | datecalc (40), copypaste (40) | Ports of `DateCalculatorTests` and `CopyPasteManagerTests`, plus paste key-sequence tests |
 | graphing (328 + 1 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
@@ -384,11 +384,21 @@ CI also runs checks that need more than `cargo test --workspace`:
   last step. The twins also save what the display, the expression line and
   the engine hold apart from the keys typed (a shown or History-selected
   value, what = repeats, how the number being typed stands, a paste error
-  over a calculation), so after a restart every key does what it would have
-  done, with recalled values to the digits they showed. A state they can't
-  rebuild that way (checked on restore) comes back as a new calculation from
-  the value shown: the next digit replaces it, = repeats nothing, and memory
-  and History are kept.
+  over a calculation, the operand % takes after =, the carry of a rotation
+  through carry, whether the C key is CE), so after a restart the keys
+  carry on the same calculation. Its numbers come back as they were shown,
+  though: a result, an operand of the expression and a memory slot return
+  with the digits the display gave them (in Programmer mode a memory slot
+  as the word size shows it), so a later answer that depends on the digits
+  beyond those can change. After 9999999999999999 + 2 = (shown as
+  1.e+16) and −, subtracting 9999999999999999 gives 2, or 1 after a
+  restart; after 1 ÷ 3 = and −, subtracting 0.3333333333333333 gives
+  about 3.3×10⁻¹⁷, or 0. On restore the session is saved again and
+  compared with what was loaded; a state that doesn't come back the same,
+  or that the saved keys can't rebuild, comes back as a new calculation
+  from the value shown: the next digit replaces it, = repeats nothing, and
+  memory, History and the modes are kept. That check compares what is
+  saved; the randomized restore tests also compare the engine's own state.
 - The port fixes a handful of upstream bugs and undefined behaviour (e.g.
   deleting a history item removed the wrong entry; C left the engine in
   E-notation); each is commented at the fix.
