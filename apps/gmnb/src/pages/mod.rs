@@ -120,8 +120,24 @@ pub trait Page {
         Vec::new()
     }
 
+    /// What the page's keys and pastes change: the calculation, which a
+    /// layer of the page's own can cover (the calculator's History sheet
+    /// covers its display and keypad, not the page). The page by default.
+    /// While it is covered ([`crate::inert::Layers::covers`]) only
+    /// [`Page::layer_key_pressed`] gets keys, and nothing is pasted.
+    fn target(&self) -> gtk::Widget {
+        self.widget()
+    }
+
     /// Keyboard input; return true if handled.
     fn key_pressed(&self, _kp: &KeyPress) -> bool {
+        false
+    }
+
+    /// Keyboard input while a layer of the page's own covers
+    /// [`Page::target`]: only that layer's keys (the History sheet's
+    /// Ctrl+H and Ctrl+Shift+D); return true if handled.
+    fn layer_key_pressed(&self, _kp: &KeyPress) -> bool {
         false
     }
 

@@ -180,10 +180,22 @@ fn canvas_id() -> ui::Id {
 
 impl GraphPage {
     /// Rounds each number typed in an equation to `p` (Settings' "Number
-    /// precision"), then plots and analyses afresh.
+    /// precision"), then shows the equations as read afresh.
     pub fn set_number_precision(&mut self, p: appcore::graph::NumberPrecision) {
         self.graph.set_literal_digits(p.digits());
+        self.equations_reread();
+    }
+
+    /// The graph read every equation afresh (Number precision, the trig
+    /// unit): the variables, the plot and the analysis follow, as after an
+    /// edit (R14-M-01; errors are drawn from the graph each frame). An
+    /// equation can stop or start being drawn with no edit (14 digits make
+    /// `1.0000000000000001-1` zero), and with it the variables the graph
+    /// lists (`Graph::refresh` keeps a slider for an equation not drawn for
+    /// now and lists it again as it was).
+    fn equations_reread(&mut self) {
         self.dirty = true;
+        self.sync_vars();
         self.analysis_inputs_changed();
     }
 
@@ -480,6 +492,9 @@ impl GraphPage {
                 let on = !self.graph.is_line_enabled(id);
                 self.graph.set_line_enabled(id, on);
                 self.dirty = true;
+                // A hidden equation's variables aren't listed (kept, as
+                // they were, for when it is shown).
+                self.sync_vars();
             }
             Msg::Analyze(id) => {
                 self.show_graph = false;
@@ -508,8 +523,7 @@ impl GraphPage {
             Msg::ApplyRanges => self.apply_ranges(),
             Msg::Units(u) => {
                 self.graph.set_trig_unit(u);
-                self.dirty = true;
-                self.analysis_inputs_changed();
+                self.equations_reread();
             }
             Msg::Thickness(i) => {
                 self.line_width = graphing::graph::LINE_WIDTHS[i.min(3)];
@@ -1077,13 +1091,14 @@ impl GraphPage {
             );
             y += 42.0;
             if has_err && let Some(e) = err {
-                f.label_fit(
-                    Rect::new(r.x + 36.0, y - 2.0, r.w - 40.0, 18.0),
+                let er = Rect::new(r.x + 36.0, y - 2.0, r.w - 40.0, 18.0);
+                f.label_fit(er, e.message(), CAPTION, 9.0, t.danger, Align::Start);
+                // Read out as GMNB's error label is.
+                f.node(
+                    id(("eq-error", eid)),
+                    accesskit::Role::Label,
                     e.message(),
-                    CAPTION,
-                    9.0,
-                    t.danger,
-                    Align::Start,
+                    er,
                 );
                 y += 18.0;
             }
@@ -1989,8 +2004,8 @@ mod tests {
         );
     }
 
-    /// A proven hole is drawn as an open circle: the curve is stroked up
-    /// to it and not through it.
+    /// Number precision rounds each number typed: 1.0000000000000001 is
+    /// 1 + 10⁻¹⁶ Off and 1 at 14 digits.
     #[test]
     fn number_precision_rounds_typed_numbers() {
         // 1.0000000000000001 is 1 + 10⁻¹⁶ as typed, and 1 at 14 digits.
@@ -2000,6 +2015,99 @@ mod tests {
         assert_eq!(g.graph.evaluate(id, 0.0), Some(1.0));
         g.set_number_precision(session::NumberPrecision::DEFAULT);
         assert_eq!(g.graph.evaluate(id, 0.0), Some(0.0));
+    }
+
+    /// The accessibility nodes of one frame of the page.
+    fn frame_nodes(g: &mut GraphPage) -> Vec<ui::Node> {
+        let mut pm = tiny_skia::Pixmap::new(760, 700).unwrap();
+        let (mut text, mut icons, input) = (
+            crate::text::Text::new(),
+            ui::Icons::default(),
+            ui::Input::default(),
+        );
+        let mut scrolls = std::collections::HashMap::new();
+        let mut f = Frame::new(
+            crate::gfx::Canvas::new(pm.as_mut(), 1.0, false),
+            &mut text,
+            &mut icons,
+            crate::theme::Theme::new(false, None),
+            &input,
+            &mut scrolls,
+            true,
+        );
+        g.view(&mut f, Rect::new(0.0, 46.0, 760.0, 654.0));
+        f.nodes.take().unwrap()
+    }
+
+    /// R14-M-01: Number precision Off → 14 → Off, with an equation that
+    /// 14 digits make invalid for a while (its constant divides by zero),
+    /// keeps a = 0.3 in the graph, in its field and in its slider's
+    /// accessible value; at 14 the error is shown and a isn't.
+    #[test]
+    fn a_precision_change_keeps_variables_and_their_controls() {
+        let mut g = GraphPage::for_test(session::from_list("a*x+10^(-16)/(1.0000000000000001-1)"));
+        let id = g.rows[0].id;
+        g.set_number_precision(session::NumberPrecision::OFF);
+        let (mut toasts, mut focus) = (Vec::new(), None);
+        let mut cx = Cx {
+            toasts: &mut toasts,
+            clipboard: None,
+            wide: true,
+            focus: &mut focus,
+        };
+        g.field(var_field("a")).expect("a's field").set_text("0.3");
+        g.field_changed(var_field("a"), &mut cx);
+        let want = *g.graph.variable("a").unwrap();
+        assert_eq!(want.value(), 0.3);
+        let slider = |nodes: &[ui::Node]| {
+            nodes
+                .iter()
+                .find(|n| n.id == var_slider("a"))
+                .and_then(|n| n.numeric)
+        };
+        assert_eq!(slider(&frame_nodes(&mut g)).unwrap()[0], 0.3);
+
+        g.set_number_precision(session::NumberPrecision::DEFAULT);
+        assert_eq!(
+            g.graph.error(id).map(|e| e.message()),
+            Some("Cannot divide by zero")
+        );
+        assert!(!g.vars.contains_key("a"), "a isn't listed while not drawn");
+        let nodes = frame_nodes(&mut g);
+        assert_eq!(slider(&nodes), None);
+        assert!(
+            nodes.iter().any(|n| n.label == "Cannot divide by zero"),
+            "the error is shown"
+        );
+
+        g.set_number_precision(session::NumberPrecision::OFF);
+        assert!(g.graph.error(id).is_none());
+        assert_eq!(g.graph.variable("a"), Some(&want));
+        assert_eq!(g.vars["a"].text, "0.3");
+        assert_eq!(slider(&frame_nodes(&mut g)).unwrap()[0], 0.3);
+        assert!((g.graph.evaluate(id, 2.0).unwrap() - 1.6).abs() < 1e-12);
+    }
+
+    /// Hiding an equation unlists its variables; shown again, they are as
+    /// they were.
+    #[test]
+    fn hiding_an_equation_keeps_its_variables() {
+        let mut g = GraphPage::for_test(session::from_list("y=a*x"));
+        let id = g.rows[0].id;
+        g.graph.set_variable("a", 0.3);
+        g.sync_vars();
+        let (mut toasts, mut focus) = (Vec::new(), None);
+        let mut cx = Cx {
+            toasts: &mut toasts,
+            clipboard: None,
+            wide: true,
+            focus: &mut focus,
+        };
+        g.update(Msg::Toggle(id), &mut cx);
+        assert!(g.vars.is_empty());
+        g.update(Msg::Toggle(id), &mut cx);
+        assert_eq!(g.graph.variable("a").unwrap().value(), 0.3);
+        assert_eq!(g.vars["a"].text, "0.3");
     }
 
     #[test]

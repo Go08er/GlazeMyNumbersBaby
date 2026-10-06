@@ -18,8 +18,11 @@
 //!   EditableText change (`gtkatspieditabletext.c`; the bounded paste in
 //!   `crate::paste` doesn't paste into them either).
 //!
-//! Typed keys don't reach a covered page either (`Window::install_keyboard`
-//! asks whether it is insensitive), only the window's shortcuts.
+//! Nor do keys, pastes or the window's actions reach what is covered:
+//! the window and its pages ask [`Layers::covers`], from the same record
+//! (`Window::handle_key`, `Window::paste`; `win.paste` is disabled, so not
+//! offered to assistive technology, while it would paste into a covered
+//! page).
 //!
 //! It keeps its look: an insensitive widget is drawn faded, so a covered
 //! layer carries [`INERT`], whose style (style.css) undoes that for
@@ -30,16 +33,21 @@
 //! A covered text field's selection, which GTK drops, is given back when
 //! it is uncovered.
 //!
+//! A text field made while its layer is covered (a precision change from
+//! Settings rebuilds the graphing variables' spin buttons) is read-only
+//! from the start ([`guard_new_fields`]): an AT client learns of it from
+//! GTK's ChildrenChanged events, and GTK's EditableText checks only that.
+//!
 //! Left: moving the caret or the selection in a covered text field (Text
 //! `SetSelection`, `SetCaretOffset`), which GTK does without any check
 //! (GtkText through two different interfaces) and which changes no value.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use adw::prelude::*;
-use glib::translate::{FromGlibPtrBorrow, IntoGlib};
+use glib::translate::{Borrowed, FromGlibPtrBorrow, IntoGlib};
 use gtk::glib;
 
 /// The style class of a covered layer.
@@ -76,6 +84,8 @@ pub struct Layers {
     dialogs: gtk::gio::ListModel,
     scrims: RefCell<Vec<Scrim>>,
     covered: RefCell<Vec<glib::WeakRef<gtk::Widget>>>,
+    /// Told after each [`Layers::update`].
+    changed: RefCell<Vec<Box<dyn Fn()>>>,
 }
 
 impl Layers {
@@ -85,6 +95,12 @@ impl Layers {
             dialogs: win.dialogs(),
             scrims: RefCell::default(),
             covered: RefCell::default(),
+            changed: RefCell::default(),
+        });
+        ALL.with(|all| {
+            let mut all = all.borrow_mut();
+            all.retain(|l| l.strong_count() > 0);
+            all.push(Rc::downgrade(&this));
         });
         let update = {
             let weak = Rc::downgrade(&this);
@@ -157,6 +173,24 @@ impl Layers {
         self.update();
     }
 
+    /// Whether `w` is covered now: it, or a widget holding it, is a covered
+    /// layer. The one check of what keys, pastes and the window's actions
+    /// may change, from the record [`Layers::update`] keeps (the same that
+    /// makes those layers inert), not from any widget's sensitivity.
+    pub fn covers(&self, w: &impl IsA<gtk::Widget>) -> bool {
+        let w = w.as_ref();
+        self.covered
+            .borrow()
+            .iter()
+            .filter_map(|c| c.upgrade())
+            .any(|c| c == *w || w.is_ancestor(&c))
+    }
+
+    /// Calls `f` after each change of what is covered.
+    pub fn connect_changed(&self, f: impl Fn() + 'static) {
+        self.changed.borrow_mut().push(Box::new(f));
+    }
+
     /// What is covered now.
     fn covering(&self) -> Vec<gtk::Widget> {
         let mut out = Vec::new();
@@ -213,6 +247,11 @@ impl Layers {
             mark(root, &now, covered, off);
         }
         *self.covered.borrow_mut() = now.iter().map(|w| w.downgrade()).collect();
+        if now != before {
+            for f in self.changed.borrow().iter() {
+                f();
+            }
+        }
     }
 }
 
@@ -315,6 +354,60 @@ fn set_read_only(field: &gtk::Widget, on: bool) {
         } else if !on && field.steal_data::<()>(MADE_READ_ONLY).is_some() {
             set(field, true);
         }
+    }
+}
+
+thread_local! {
+    /// Every window's layers, for [`guard_new_fields`].
+    static ALL: RefCell<Vec<Weak<Layers>>> = RefCell::default();
+}
+
+/// Makes a text field realized under a covered layer read-only, as
+/// [`Layers::update`] made those there when it was covered, and gives it
+/// back when it is uncovered (the same mark). A field is realized before
+/// assistive technology can reach it. Call once, at startup, before any
+/// widget is realized.
+pub fn guard_new_fields() {
+    unsafe extern "C" fn realized(
+        _hint: *mut glib::gobject_ffi::GSignalInvocationHint,
+        n_values: u32,
+        values: *const glib::gobject_ffi::GValue,
+        _data: glib::ffi::gpointer,
+    ) -> glib::ffi::gboolean {
+        if n_values > 0 {
+            // SAFETY: an emission's first value is the instance emitting,
+            // here a GtkWidget (this hook is on GtkWidget::realize), alive
+            // for the emission.
+            let widget: Borrowed<gtk::Widget> = unsafe {
+                let instance = glib::gobject_ffi::g_value_get_object(values);
+                gtk::Widget::from_glib_borrow(instance.cast())
+            };
+            if (widget.is::<gtk::Text>() || widget.is::<gtk::TextView>())
+                && ALL.with(|all| {
+                    all.borrow()
+                        .iter()
+                        .filter_map(Weak::upgrade)
+                        .any(|l| l.covers(&*widget))
+                })
+            {
+                set_read_only(&widget, true);
+            }
+        }
+        glib::ffi::GTRUE // stay installed
+    }
+    let widget = gtk::Widget::static_type();
+    let _class = glib::Class::<gtk::Widget>::from_type(widget);
+    let realize = glib::subclass::signal::SignalId::lookup("realize", widget)
+        .expect("GtkWidget has a realize signal");
+    // SAFETY: the hook matches GSignalEmissionHook, and keeps no data.
+    unsafe {
+        glib::gobject_ffi::g_signal_add_emission_hook(
+            realize.into_glib(),
+            0,
+            Some(realized),
+            std::ptr::null_mut(),
+            None,
+        );
     }
 }
 

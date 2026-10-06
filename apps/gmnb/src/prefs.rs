@@ -446,6 +446,15 @@ fn graphing_group(ctx: &Rc<Ctx>) -> adw::PreferencesGroup {
         let pending = Rc::default();
         scale.connect_value_changed(move |s| {
             let p = P::at_position(s.value());
+            // GTK rounds only what the pointer and the keys set: a value
+            // between positions (an AT client's 20.4) moves to the
+            // setting's own, so the value read back is the setting's, as
+            // in DGMNB (R14-L-02). That comes back here, on a position.
+            let position = f64::from(p.position());
+            if s.value() != position {
+                s.set_value(position);
+                return;
+            }
             shown.set_text(&p.describe());
             s.update_property(&[gtk::accessible::Property::ValueText(&p.describe())]);
             ctx.precision.set(p);

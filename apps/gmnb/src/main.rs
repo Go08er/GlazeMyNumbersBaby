@@ -110,10 +110,12 @@ fn main() -> glib::ExitCode {
 
 fn started_up() {
     // Before any window is realized: every text field pastes within
-    // bounds, and an insensitive range takes no value from assistive
-    // technology (what a dialog covers is insensitive: crate::inert).
+    // bounds, an insensitive range takes no value from assistive
+    // technology (what a dialog covers is insensitive: crate::inert), and a
+    // text field made under a covered layer is read-only like those there.
     paste::guard_all();
     inert::refuse_insensitive_values();
+    inert::guard_new_fields();
     register_fonts();
     launch::mark("fonts");
     load_static_css();
