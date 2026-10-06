@@ -1206,13 +1206,13 @@ impl SnapshotValidator {
 
 /// Extension: the most a saved state takes as a JSON string, quotes and
 /// escapes counted, which is how the apps keep it in their settings file
-/// (see "Size" in the module docs).
+/// (see "Size" in the `snapshot` module).
 ///
 /// Without History, an app-made state takes at most about 1.4 MB: the
-/// expression line and the display commands at [`MAX_RESTORED_KEYS`]
-/// (about 58 and 26 bytes a key, tokens and escapes counted), memory (100
-/// slots of at most 79 characters) and a display of at most
-/// [`MAX_DISPLAY_LENGTH`]. History gets the rest, at least 1.7 MB: a typed
+/// expression line and the display commands at the restore's key cap
+/// (16,384 keys; about 58 and 26 bytes a key, tokens and escapes counted),
+/// memory (100 slots of at most 79 characters) and a display of at most
+/// 512 characters. History gets the rest, at least 1.7 MB: a typed
 /// calculation takes a few hundred bytes, so an ordinary session's 40 items
 /// fit whole, while one of 40 pastes of a 100-term sum takes 0.72 MB, so
 /// three such items are kept beside its expression line (0.69 MB, shown
