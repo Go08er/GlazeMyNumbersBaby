@@ -32,7 +32,17 @@ fn date_button() -> DateButton {
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     content.append(&label);
     content.append(&PathIcon::new(paths::DATE, 18));
-    let calendar = gtk::Calendar::new();
+    // GTK 4.22's calendar is a generic widget (which can't be named) with
+    // no accessible objects for its days: a named group at least says what
+    // has the focus and how its keys work (the picker reads the date
+    // chosen).
+    let calendar = gtk::Calendar::builder()
+        .accessible_role(gtk::AccessibleRole::Group)
+        .build();
+    calendar.update_property(&[
+        gtk::accessible::Property::Label("Calendar"),
+        gtk::accessible::Property::Description("Arrow keys move between days, Space picks one"),
+    ]);
     let popover = gtk::Popover::builder()
         .child(&calendar)
         .css_classes(["wc-calendar-popover"])

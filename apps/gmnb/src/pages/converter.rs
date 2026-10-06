@@ -290,7 +290,34 @@ impl ConverterPage {
                 click.connect_released(move |_, _, _, _| pick());
             }
             f.display.add_controller(click);
-            // The same for assistive technology (the click is pointer only).
+            // The same from the keyboard, once Tab has brought the focus
+            // here: Space, as upstream's OnValueKeyDown, or Enter. (The
+            // window lets both through: neither is a converter key.)
+            let keys = gtk::EventControllerKey::new();
+            {
+                let pick = pick.clone();
+                keys.connect_key_pressed(move |_, key, _, mods| {
+                    let plain = !mods.intersects(
+                        gtk::gdk::ModifierType::CONTROL_MASK
+                            | gtk::gdk::ModifierType::ALT_MASK
+                            | gtk::gdk::ModifierType::SHIFT_MASK,
+                    );
+                    use gtk::gdk::Key;
+                    if plain
+                        && matches!(
+                            key,
+                            Key::space | Key::Return | Key::KP_Enter | Key::KP_Space
+                        )
+                    {
+                        pick();
+                        glib::Propagation::Stop
+                    } else {
+                        glib::Propagation::Proceed
+                    }
+                });
+            }
+            f.display.add_controller(keys);
+            // And for assistive technology.
             crate::a11y::operable(&f.display, "value", "activate", move |_| pick());
             let weak = Rc::downgrade(&page);
             f.dropdown.connect_selected_notify(move |d| {
