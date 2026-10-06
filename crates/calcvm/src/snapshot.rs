@@ -39,6 +39,13 @@
 //! comes back with the precision it was displayed with, and each slot is
 //! shown in the form it was saved in (e-notation or not).
 //!
+//! `"hm"` (`"s"` or `"c"`, absent before 0.2) says which mode's history
+//! `"s"."m"."h"` is (in Programmer mode, that of the mode before it), and
+//! that history isn't written again under its own key: `"hm": "c"` leaves
+//! `"hc"` out (one written anyway makes the snapshot invalid). Upstream reads
+//! `"s"."m"."h"`, so that copy is the one kept; GMNB 0.1, which reads only
+//! `"hs"`/`"hc"`, restores such a snapshot without that history.
+//!
 //! `"k"` (absent before 0.2) holds what the display commands don't, so a
 //! restored calculation continues as the saved one would: `"dv"` says the
 //! engine shows a value they don't produce, `"result"` (a result, a
@@ -116,6 +123,35 @@
 //! as before, unchecked. The check compares what is saved; the randomized
 //! restore tests (`tests/restore_fuzz.rs`) also compare the engine's own
 //! state.
+//!
+//! # Size
+//!
+//! A saved state takes at most [`MAX_STATE_BYTES`] as the JSON string the
+//! apps keep it in (quotes and escapes counted), so the settings file it
+//! goes into always loads. Neither the History cap (20 items a mode) nor
+//! the restore's key cap bounds that: a History item keeps every command and
+//! token of its calculation (forty pastes of a 100-term sum make one of
+//! 0.72 MB), and nine such items saved 13.7 MB. Saving keeps a state
+//! within it, in this order:
+//!
+//! 1. What the restore can't take, which would make it refuse the whole
+//!    snapshot, memory and History with it, is left out: a History item
+//!    whose commands replay more than [`MAX_RESTORED_KEYS`] keys is dropped,
+//!    and a calculation whose display commands or expression do is saved as
+//!    a new calculation from the value shown (`"nr"`, as the contract
+//!    above restores it). The restore does the same with a snapshot saved
+//!    before this rule (one with `"x"`; an upstream snapshot is refused).
+//! 2. History items are dropped, oldest first, from whichever mode's
+//!    History takes more bytes (on a tie, from the mode not shown; in
+//!    Programmer mode, from the one `"hm"` doesn't name), until the state
+//!    fits.
+//! 3. Only if the calculation doesn't fit even with no History is it saved
+//!    as a new calculation from the value shown, and the History then
+//!    trimmed as in 2.
+//!
+//! Memory, the modes and the rest of `"x"` are never dropped: they take a
+//! few kilobytes at most. A state that fits is saved whole, so a state
+//! restored from a trimmed one saves the same text again.
 
 use std::rc::Rc;
 
@@ -166,6 +202,16 @@ impl ExpressionCommandWrapper {
             ExpressionCommand::Parentheses(p) => {
                 ExpressionCommandWrapper::Parentheses(p.get_command())
             }
+        }
+    }
+
+    /// The engine keys replaying it takes (see [`MAX_RESTORED_KEYS`]).
+    pub(crate) fn keys(&self) -> usize {
+        match self {
+            ExpressionCommandWrapper::Unary(c) => c.len(),
+            // The digits, plus a sign key.
+            ExpressionCommandWrapper::Operand { commands, .. } => commands.len() + 1,
+            _ => 1,
         }
     }
 
@@ -304,6 +350,10 @@ pub(crate) struct StandardCalculatorSnapshot {
 pub(crate) struct SnapshotExtension {
     pub(crate) standard_history: Option<Vec<CalcManagerHistoryItem>>,
     pub(crate) scientific_history: Option<Vec<CalcManagerHistoryItem>>,
+    /// `"hm"`: the mode whose history `"s"."m"."h"` is, which is then the
+    /// list above (read from there and not written again); `None` in
+    /// snapshots that predate it.
+    pub(crate) history_mode: Option<CalculatorMode>,
     pub(crate) memory: Vec<String>,
     pub(crate) radix: Option<Radix>,
     pub(crate) word_size: Option<WordSize>,
@@ -574,6 +624,13 @@ fn shown_name(s: ShownValue) -> &'static str {
     }
 }
 
+fn history_mode_name(m: CalculatorMode) -> &'static str {
+    match m {
+        CalculatorMode::Standard => "s",
+        CalculatorMode::Scientific => "c",
+    }
+}
+
 fn entry_name(e: Entry) -> &'static str {
     match e {
         Entry::Empty => "empty",
@@ -612,8 +669,16 @@ impl ApplicationSnapshot {
         );
         if let Some(x) = &self.extension {
             let mut o = Map::new();
-            o.insert("hs".into(), history_to_json(&x.standard_history));
-            o.insert("hc".into(), history_to_json(&x.scientific_history));
+            // The history "s"."m"."h" holds isn't written twice.
+            if x.history_mode != Some(CalculatorMode::Standard) {
+                o.insert("hs".into(), history_to_json(&x.standard_history));
+            }
+            if x.history_mode != Some(CalculatorMode::Scientific) {
+                o.insert("hc".into(), history_to_json(&x.scientific_history));
+            }
+            if let Some(m) = x.history_mode {
+                o.insert("hm".into(), json!(history_mode_name(m)));
+            }
             o.insert("mem".into(), json!(x.memory));
             if let Some(r) = x.radix {
                 o.insert("r".into(), json!(radix_name(r)));
@@ -804,9 +869,34 @@ impl ApplicationSnapshot {
                         })
                     }
                 };
+                let history_mode = match string(x.get("hm"))?.as_deref() {
+                    None => None,
+                    Some("s") => Some(CalculatorMode::Standard),
+                    Some("c") => Some(CalculatorMode::Scientific),
+                    Some(_) => return Err("unknown history mode".into()),
+                };
+                let mut standard_history = list(x.get("hs"), history_item_from_json)?;
+                let mut scientific_history = list(x.get("hc"), history_item_from_json)?;
+                if let Some(m) = history_mode {
+                    // That history is "s"."m"."h" (empty if it is null).
+                    let (key, history) = match m {
+                        CalculatorMode::Standard => ("hs", &mut standard_history),
+                        CalculatorMode::Scientific => ("hc", &mut scientific_history),
+                    };
+                    if x.get(key).is_some() {
+                        return Err("the current history is written twice".into());
+                    }
+                    *history = Some(
+                        standard_calculator
+                            .as_ref()
+                            .and_then(|s| s.calc_manager.history_items.clone())
+                            .unwrap_or_default(),
+                    );
+                }
                 Some(SnapshotExtension {
-                    standard_history: list(x.get("hs"), history_item_from_json)?,
-                    scientific_history: list(x.get("hc"), history_item_from_json)?,
+                    standard_history,
+                    scientific_history,
+                    history_mode,
                     memory,
                     radix,
                     word_size,
@@ -834,10 +924,13 @@ impl ApplicationSnapshot {
 pub(crate) struct SnapshotValidator;
 
 /// Extension: the most engine keys one command list (the display commands,
-/// the expression, a history item) may replay; a snapshot with a longer one
-/// is rejected as a whole, like any other invalid snapshot. Hand-typed
-/// calculations stay far below it, and 40 pastes of a 100-term sum (about
-/// 12,000 keys) still fit. With display updates deferred, replay is linear:
+/// the expression, a history item) may replay. A longer History item is
+/// left out, and a longer calculation comes back as a new calculation from
+/// the value shown, when saved and when restored (see "Size" in the module
+/// docs); an upstream snapshot (without `"x"`) with a longer one is rejected
+/// as a whole, like any other invalid snapshot. Hand-typed calculations stay
+/// far below it, and 40 pastes of a 100-term sum (about 12,000 keys) still
+/// fit. With display updates deferred, replay is linear:
 /// at the limit, cheap keys restore in about 30 ms (Programmer, whose number
 /// conversions cost more per key, about 0.2 s). Expensive arithmetic is
 /// bounded by [`REPLAY_WORK`] instead.
@@ -1050,12 +1143,7 @@ impl SnapshotValidator {
             if !is_valid {
                 return Err(format!("{location} command {i} is invalid."));
             }
-            keys += match command {
-                ExpressionCommandWrapper::Unary(c) => c.len(),
-                // The digits, plus a sign key.
-                ExpressionCommandWrapper::Operand { commands, .. } => commands.len() + 1,
-                _ => 1,
-            };
+            keys += command.keys();
             if keys > MAX_RESTORED_KEYS {
                 return Err(format!("{location} is too long."));
             }
@@ -1109,6 +1197,200 @@ impl SnapshotValidator {
                     || c == cmd::EXP
                     || (cmd::ZERO..=cmd::F).contains(&c)
             })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Extension: the size of a saved state (see "Size" in the module docs)
+// ---------------------------------------------------------------------------
+
+/// Extension: the most a saved state takes as a JSON string, quotes and
+/// escapes counted, which is how the apps keep it in their settings file
+/// (see "Size" in the `snapshot` module).
+///
+/// Without History, an app-made state takes at most about 1.4 MB: the
+/// expression line and the display commands at the restore's key cap
+/// (16,384 keys; about 58 and 26 bytes a key, tokens and escapes counted),
+/// memory (100 slots of at most 79 characters) and a display of at most
+/// 512 characters. History gets the rest, at least 1.7 MB: a typed
+/// calculation takes a few hundred bytes, so an ordinary session's 40 items
+/// fit whole, while one of 40 pastes of a 100-term sum takes 0.72 MB, so
+/// three such items are kept beside its expression line (0.69 MB, shown
+/// after "="), four without. The other sections of the settings file take
+/// at most half a megabyte (`appcore::settings`), which keeps it within its
+/// 4 MiB.
+pub const MAX_STATE_BYTES: usize = 3 << 20;
+
+/// The length of `text` written as a JSON string, quotes and escapes
+/// counted (as `serde_json` escapes it).
+pub(crate) fn json_string_len(text: &str) -> usize {
+    2 + escaped_len(text)
+}
+
+fn escaped_len(text: &str) -> usize {
+    text.bytes()
+        .map(|b| match b {
+            b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 2,
+            0..=0x1f => 6,
+            _ => 1,
+        })
+        .sum()
+}
+
+/// The engine keys replaying `commands` takes.
+fn replay_keys(commands: &[ExpressionCommandWrapper]) -> usize {
+    commands.iter().map(ExpressionCommandWrapper::keys).sum()
+}
+
+fn restorable(item: &CalcManagerHistoryItem) -> bool {
+    replay_keys(&item.commands) <= MAX_RESTORED_KEYS
+}
+
+impl ApplicationSnapshot {
+    /// Step 1 of "Size" (see the module docs): leaves out what the restore
+    /// can't take, which would make it refuse the whole snapshot. A History
+    /// item that replays more than [`MAX_RESTORED_KEYS`] keys is dropped; a
+    /// calculation whose display commands or expression do becomes a new
+    /// calculation from the value shown, if the snapshot is gmnb's (an
+    /// upstream one, without `"x"`, is left to be refused).
+    pub(crate) fn leave_out_unrestorable(&mut self) {
+        let Some(standard) = self.standard_calculator.as_mut() else {
+            return;
+        };
+        if let Some(items) = standard.calc_manager.history_items.as_mut() {
+            items.retain(restorable);
+        }
+        if let Some(x) = self.extension.as_mut() {
+            for items in [&mut x.standard_history, &mut x.scientific_history]
+                .into_iter()
+                .flatten()
+            {
+                items.retain(restorable);
+            }
+        }
+        let long = replay_keys(&standard.display_commands) > MAX_RESTORED_KEYS
+            || standard
+                .expression_display
+                .as_ref()
+                .is_some_and(|e| replay_keys(&e.commands) > MAX_RESTORED_KEYS);
+        if long {
+            self.as_new_calculation();
+        }
+    }
+
+    /// The calculation as a new one from the value shown (`"nr"`, see the
+    /// contract in the module docs): no expression or display commands, and
+    /// nothing else of `"k"`, which the restore of a new calculation
+    /// doesn't read. Memory, the histories and the modes are kept. Only a
+    /// gmnb snapshot (with `"x"`) can say so.
+    fn as_new_calculation(&mut self) {
+        let (Some(standard), Some(x)) =
+            (self.standard_calculator.as_mut(), self.extension.as_mut())
+        else {
+            return;
+        };
+        standard.display_commands.clear();
+        standard.expression_display = None;
+        x.continuation = Some(ContinuationSnapshot {
+            unreplayable: true,
+            ..Default::default()
+        });
+    }
+
+    /// The JSON text of a captured snapshot (`"s"."m"."h"` the `"hm"`
+    /// history, or null), within `budget` bytes as a JSON string: steps 1
+    /// to 3 of "Size" in the module docs. A snapshot that fits after step 1
+    /// is written whole. Each History item is written out once to size it,
+    /// and the text once more.
+    pub(crate) fn into_json_within(mut self, budget: usize) -> String {
+        self.leave_out_unrestorable();
+        let shown = match self.mode {
+            0 => Some(CalculatorMode::Standard),
+            1 => Some(CalculatorMode::Scientific),
+            _ => None,
+        };
+        let (Some(standard), Some(x)) =
+            (self.standard_calculator.as_mut(), self.extension.as_mut())
+        else {
+            return self.to_json().to_string();
+        };
+        // The History taken out (each list written as null), what's left
+        // is the base. "s"."m"."h" is the "hm" history, so it goes with it.
+        let current = x.history_mode;
+        let mut lists = [x.standard_history.take(), x.scientific_history.take()];
+        if current.is_some() {
+            standard.calc_manager.history_items = None;
+        }
+        let modes = [CalculatorMode::Standard, CalculatorMode::Scientific];
+        // Each item's length in the text.
+        let sizes = lists.each_ref().map(|items| {
+            items
+                .iter()
+                .flatten()
+                .map(|item| escaped_len(&history_item_to_json(item).to_string()))
+                .collect::<Vec<_>>()
+        });
+        // The text's length with the oldest `dropped` items of each list
+        // left out: each list where it's written ("x", or "s"."m"."h") in
+        // place of its null.
+        let len = |base: usize, dropped: [usize; 2]| {
+            let mut len = base;
+            for (i, mode) in modes.into_iter().enumerate() {
+                let kept = &sizes[i][dropped[i]..];
+                let list = 1 + kept.iter().sum::<usize>() + kept.len().max(1);
+                if lists[i].is_some() && current != Some(mode) {
+                    len = len + list - 4;
+                }
+                if current == Some(mode) && !kept.is_empty() {
+                    len = len + list - 4;
+                }
+            }
+            len
+        };
+        let mut base = json_string_len(&self.to_json().to_string());
+        let all = sizes.each_ref().map(Vec::len);
+        if len(base, all) > budget {
+            // Step 3: the calculation doesn't fit even without History.
+            self.as_new_calculation();
+            base = json_string_len(&self.to_json().to_string());
+        }
+        // Step 2: from the larger History (on a tie, the one not shown), its
+        // oldest item first.
+        let tie = usize::from(shown.or(current) == Some(CalculatorMode::Standard));
+        let mut dropped = [0, 0];
+        let mut kept = sizes.each_ref().map(|s| s.iter().sum::<usize>());
+        while len(base, dropped) > budget && dropped != all {
+            let i = match kept[0].cmp(&kept[1]) {
+                std::cmp::Ordering::Greater => 0,
+                std::cmp::Ordering::Less => 1,
+                std::cmp::Ordering::Equal => tie,
+            };
+            kept[i] -= sizes[i][dropped[i]];
+            dropped[i] += 1;
+        }
+        let expected = len(base, dropped);
+        for (items, dropped) in lists.iter_mut().zip(dropped) {
+            if let Some(items) = items {
+                items.drain(..dropped);
+            }
+        }
+        let [standard_history, scientific_history] = lists;
+        if let (Some(standard), Some(x)) =
+            (self.standard_calculator.as_mut(), self.extension.as_mut())
+        {
+            if let Some(m) = current {
+                let items = match m {
+                    CalculatorMode::Standard => &standard_history,
+                    CalculatorMode::Scientific => &scientific_history,
+                };
+                standard.calc_manager.history_items = items.clone().filter(|i| !i.is_empty());
+            }
+            x.standard_history = standard_history;
+            x.scientific_history = scientific_history;
+        }
+        let text = self.to_json().to_string();
+        debug_assert_eq!(json_string_len(&text), expected);
+        text
     }
 }
 
@@ -1248,6 +1530,8 @@ impl StandardCalculatorViewModel {
         let extension = SnapshotExtension {
             standard_history: history_for(CalculatorMode::Standard),
             scientific_history: history_for(CalculatorMode::Scientific),
+            // "s"."m"."h" (`GetHistoryItems()`) is that mode's history.
+            history_mode: self.standard_calculator_manager.history_mode(),
             memory: self
                 .memorized_numbers
                 .iter()
@@ -1292,13 +1576,22 @@ impl StandardCalculatorViewModel {
         match extension {
             Some(x) if x.standard_history.is_some() || x.scientific_history.is_some() => {
                 // Programmer mode keeps the history of the mode before it as
-                // the manager's own ("s"."m"): that mode's goes last.
-                let items = |h: &Option<Vec<CalcManagerHistoryItem>>| h.clone().unwrap_or_default();
-                let current = items(&snapshot.calc_manager.history_items);
-                let order = if mode == CalcMode::Programmer
-                    && items(&x.standard_history) == current
-                    && items(&x.scientific_history) != current
-                {
+                // the manager's own ("s"."m"): that mode's goes last. "hm"
+                // names it; before it, it was told by which one "s"."m" is.
+                let standard_last = match x.history_mode {
+                    Some(m) => m == CalculatorMode::Standard,
+                    None => {
+                        fn items(
+                            h: &Option<Vec<CalcManagerHistoryItem>>,
+                        ) -> &[CalcManagerHistoryItem] {
+                            h.as_deref().unwrap_or_default()
+                        }
+                        let current = items(&snapshot.calc_manager.history_items);
+                        items(&x.standard_history) == current
+                            && items(&x.scientific_history) != current
+                    }
+                };
+                let order = if mode == CalcMode::Programmer && standard_last {
                     [CalcMode::Scientific, CalcMode::Standard]
                 } else {
                     [CalcMode::Standard, CalcMode::Scientific]
