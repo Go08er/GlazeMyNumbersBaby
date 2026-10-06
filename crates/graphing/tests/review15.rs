@@ -17,6 +17,11 @@
 //! at 0), in the evaluator, the interval core, the certifier and the
 //! replay alike. Each part is now an integer of any size, reduced first.
 //!
+//! The deferred follow-up: whole-number exponents of 10⁶ or more
+//! (`x^1000001`) take the same reading, q = 1, in the side conditions,
+//! the Taylor core, the simplifier and pole detection, as the scalar and
+//! the replay already did.
+//!
 //! R15-L-01: with c = ⌊√(sin²4 + cos²4 − 1 − 10⁻³⁰)⌋, nowhere defined
 //! (its radicand is −10⁻³⁰), `limit_at` gave c + 1 the limit 1 both ways
 //! and e^(ln x + c)/x the limit 1 at +∞: a constant's undecorated
@@ -283,6 +288,100 @@ fn written_ratios_draw_their_negative_half() {
     }
     let pts = curve("x^(1/1000001)", Some(5));
     assert!(!pts.is_empty() && pts.iter().all(|(x, _)| *x >= 0.0));
+}
+
+/// Whole-number exponents of 10⁶ or more (`x^1000001`, `x^(−1000002)`,
+/// `x^2000000`) by the same written-ratio reading, q = 1: domain ℝ (ℝ \ {0}
+/// for a negative one), the parity the exponent's, every row (they took
+/// the old value-based path in the side conditions and the Taylor core,
+/// and the panel left all but parity and the y-intercept unknown). To 5
+/// digits 1000001 is the even 1000000; 9007199254740993 is odd only from
+/// 16 digits on.
+#[test]
+fn whole_exponents_of_any_size() {
+    use graphing::analysis::Parity;
+    // (f(−1), domain, range, parity, minima, inflections, vertical)
+    type Want = (
+        f64,
+        &'static str,
+        &'static str,
+        Parity,
+        &'static [&'static str],
+        &'static [&'static str],
+        &'static [&'static str],
+    );
+    let odd: Want = (-1.0, "x ∈ ℝ", "y ∈ ℝ", Parity::Odd, &[], &["(0, 0)"], &[]);
+    let even: Want = (
+        1.0,
+        "x ∈ ℝ",
+        "y ∈ [0, ∞)",
+        Parity::Even,
+        &["(0, 0)"],
+        &[],
+        &[],
+    );
+    let neg_even: Want = (
+        1.0,
+        "x ∈ ℝ \\ {0}",
+        "y ∈ (0, ∞)",
+        Parity::Even,
+        &[],
+        &[],
+        &["x = 0"],
+    );
+    let neg_odd: Want = (
+        -1.0,
+        "x ∈ ℝ \\ {0}",
+        "y ∈ ℝ \\ {0}",
+        Parity::Odd,
+        &[],
+        &[],
+        &["x = 0"],
+    );
+    for digits in PRECISIONS {
+        let five = digits == Some(5);
+        let past_doubles = matches!(digits, None | Some(16) | Some(20));
+        for (src, want) in [
+            ("x^1000001", if five { even } else { odd }),
+            ("x^2000000", even),
+            ("x^(-1000002)", neg_even),
+            ("x^(-1000001)", if five { neg_even } else { neg_odd }),
+            ("x^9007199254740993", if past_doubles { odd } else { even }),
+        ] {
+            let (k, v) = panel(src, &[-1.0, 1.0], digits);
+            assert_eq!((v[0], v[1]), (want.0, 1.0), "{src} ({digits:?})");
+            assert!(
+                matches!(reference(src, -1.0, digits), R::V(r) if r.f() == want.0),
+                "{src} ({digits:?})"
+            );
+            assert_eq!(
+                (k.domain.as_str(), k.range.as_str(), k.parity),
+                (want.1, want.2, want.3),
+                "{src} ({digits:?})"
+            );
+            assert_eq!(k.minima, want.4, "{src} ({digits:?})");
+            assert_eq!(k.inflection_points, want.5, "{src} ({digits:?})");
+            assert_eq!(k.vertical_asymptotes, want.6, "{src} ({digits:?})");
+            assert_eq!(k.too_complex_features, 0, "{src} ({digits:?})");
+        }
+    }
+    // The Taylor core: the integer power's series on either side of 0 and
+    // through it (it was any value for a base ≤ 0, possibly undefined).
+    for (src, x, lo, hi) in [
+        ("x^1000001", -1.0, -1.0, -1.0),
+        ("x^1000001", 0.0, 0.0, 0.0),
+        ("x^(-1000002)", -1.0, 1.0, 1.0),
+    ] {
+        let s = series(src, x, x);
+        assert!(
+            s[0].lo() == lo && s[0].hi() == hi,
+            "{src} at {x}: {:?}",
+            s[0]
+        );
+        assert!(derivs_valid(&s, 3), "{src} at {x}: {s:?}");
+    }
+    let s = series("x^(-1000002)", -0.5, 0.5);
+    assert!(s[0].dec <= Dec::Trv, "{:?}", s[0]);
 }
 
 /// R15-L-01: a limit only of a function proven defined on a tail, each of

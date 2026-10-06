@@ -247,16 +247,16 @@ fn add(e: &Expr, rec: &mut RecExpr<Math>) -> Result<Id, Unsupported> {
             // the e-graph (its parities can't be read off a double).
             if *op == BinOp::Pow {
                 match written(b, Reading::Typed) {
-                    // (A whole number past 10⁶ as before: `^c` of it, an
-                    // integer power all the same.)
-                    Some(Written::Ratio(r)) if r.small().is_some() || !r.is_integer() => {
+                    // (A whole number past 10⁶ too: `^c`'s interval of a
+                    // power past i32 was the positive-base rule's.)
+                    Some(Written::Ratio(r)) => {
                         let (p, q) = r.parts().ok_or(Unsupported::LongNumber)?;
                         let q = Q::new(p, q).ok_or(Unsupported::LongNumber)?;
                         let k = rec.add(Math::Num(q));
                         return Ok(rec.add(Math::PowQ([ia, k])));
                     }
                     Some(Written::Long) => return Err(Unsupported::LongNumber),
-                    _ => {}
+                    None => {}
                 }
             }
             let ib = go(b, rec)?;

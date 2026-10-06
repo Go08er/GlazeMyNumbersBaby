@@ -14,8 +14,16 @@
 use super::cover::side;
 use super::fun::{Fun, Stop, usable};
 use crate::ast::{BinOp, Expr, Func};
-use crate::compile::syntactic_rational;
+use crate::compile::written_ratio;
 use crate::interval::{Dec, Interval};
+
+/// The sign of an exponent written as a whole number, of any size (`x^3`,
+/// `x^(−1000002)`): `Some(true)` positive, `Some(false)` negative; `None`
+/// for 0 or anything else.
+fn whole_sign(e: &Expr) -> Option<bool> {
+    let r = written_ratio(e, crate::compile::Reading::Typed)?;
+    (r.is_integer() && !r.is_zero()).then(|| !r.is_negative())
+}
 
 /// How f behaves next to an excluded point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,10 +72,7 @@ fn vanishes(f: &Fun<'_>, g: &Expr, n: Interval) -> Result<bool, Stop> {
         return Ok(true);
     }
     Ok(match g {
-        Expr::Bin(BinOp::Pow, c, p) => {
-            matches!(syntactic_rational(p, crate::compile::Reading::Typed), Some((p, 1)) if p > 0)
-                && simple_zero(f, c, n)?
-        }
+        Expr::Bin(BinOp::Pow, c, p) => whole_sign(p) == Some(true) && simple_zero(f, c, n)?,
         Expr::Neg(c) => vanishes(f, c, n)?,
         _ => false,
     })
@@ -87,13 +92,11 @@ pub fn pole(f: &Fun<'_>, e: &Expr, n: Interval) -> Result<bool, Stop> {
             (vanishes(f, b, n)? && nonzero_cont(f, a, n)?)
                 || (pole(f, a, n)? && nonzero_cont(f, b, n)?)
         }
-        Expr::Bin(BinOp::Pow, a, b) => {
-            match syntactic_rational(b, crate::compile::Reading::Typed) {
-                Some((p, 1)) if p > 0 => pole(f, a, n)?,
-                Some((p, 1)) if p < 0 => simple_zero(f, a, n)?,
-                _ => false,
-            }
-        }
+        Expr::Bin(BinOp::Pow, a, b) => match whole_sign(b) {
+            Some(true) => pole(f, a, n)?,
+            Some(false) => simple_zero(f, a, n)?,
+            None => false,
+        },
         Expr::Call(func, args) => {
             let u = &args[0];
             match func {
@@ -130,13 +133,11 @@ pub fn pole_free(f: &Fun<'_>, e: &Expr, n: Interval) -> Result<bool, Stop> {
             (vanishes(f, b, n)? && nonzero_cont(f, a, n)?)
                 || (pole_free(f, a, n)? && nonzero_cont(f, b, n)?)
         }
-        Expr::Bin(BinOp::Pow, a, b) => {
-            match syntactic_rational(b, crate::compile::Reading::Typed) {
-                Some((p, 1)) if p < 0 => simple_zero(f, a, n)?,
-                Some((p, 1)) if p > 0 => pole_free(f, a, n)?,
-                _ => false,
-            }
-        }
+        Expr::Bin(BinOp::Pow, a, b) => match whole_sign(b) {
+            Some(false) => simple_zero(f, a, n)?,
+            Some(true) => pole_free(f, a, n)?,
+            None => false,
+        },
         Expr::Call(Func::Tan | Func::Cot | Func::Sec | Func::Csc | Func::Csch | Func::Coth, _) => {
             pole(f, e, n)?
         }

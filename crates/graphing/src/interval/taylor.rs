@@ -346,8 +346,9 @@ fn powrat_ser(u: &Series, p: i32, q: i32) -> Series {
     flat(c0, n)
 }
 
-/// u^(p/q) for a written ratio past (p, q) of machine integers, q > 1: the
-/// same real root as [`powrat_ser`], p/q enclosed.
+/// u^(p/q) for a written ratio past (p, q) of machine integers: the same
+/// real root as [`powrat_ser`] (q = 1: the integer power, its sign by p's
+/// parity), p/q enclosed.
 fn powratio_ser(u: &Series, r: &Ratio) -> Series {
     let n = u.len() - 1;
     let (lo, hi) = r.enclosure();
@@ -380,13 +381,23 @@ fn pow(a: &Expr, b: &Expr, x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
                     powrat_ser(&u, p, q)
                 };
             }
-            // Written as a ratio of any size: its real root, by the
-            // parities of p and q (review 15, R15-M-01: x^(1000001/3) was
-            // the positive-base rule's, empty for x < 0). (A whole number
-            // past 10⁶: by its value below, as before.)
-            if !r.is_integer() {
-                return powratio_ser(&u, &r);
+            // A whole number past 10⁶: the integer power, by repeated
+            // squaring while it is a machine integer (x^1000001,
+            // x^(−1000002): it was any value for a base ≤ 0, possibly
+            // undefined).
+            if r.is_integer()
+                && let Some(p) = r
+                    .parts()
+                    .and_then(|(p, _)| i32::try_from(p).ok())
+                    .filter(|p| *p != i32::MIN)
+            {
+                return powi_ser(&u, p);
             }
+            // Written as a ratio of any size, or a whole number past those:
+            // its real root (or power), by the parities of p and q (review
+            // 15, R15-M-01: x^(1000001/3) was the positive-base rule's,
+            // empty for x < 0).
+            return powratio_ser(&u, &r);
         }
         // Written so, too long to carry: whether p and q are odd isn't
         // known, so for a base that may be ≤ 0 nothing is.
