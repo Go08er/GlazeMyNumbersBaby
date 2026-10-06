@@ -1329,7 +1329,7 @@ impl App {
                 let enter = kp.key == Key::Named(Named::Enter);
                 if let Some(h) = focused
                     && self.input.focus_visible
-                    && !(enter && h.keypad)
+                    && h.activated_by(enter)
                     && let Some(m) = h.msg
                 {
                     self.update(el, m);

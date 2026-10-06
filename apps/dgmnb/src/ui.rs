@@ -62,8 +62,21 @@ pub struct Hit {
     pub sense: Sense,
     pub msg: Option<Msg>,
     pub focusable: bool,
-    /// Keypad keys leave Enter to the calculator ("=") when focused.
-    pub keypad: bool,
+    /// Enter means "=" here: one of the calculator's own keys
+    /// ([`Frame::calculator_key`]), which leaves Enter to the calculator
+    /// when focused, rather than taking it as its activation.
+    pub enter_is_equals: bool,
+}
+
+impl Hit {
+    /// Whether Space or Enter (`enter`), with this control focused, is its
+    /// activation (R16-M-03): a control's own keys come before the page's,
+    /// but a calculator key leaves Enter to the calculator ("="), as
+    /// upstream's `CalculatorButton` and `FlipButtons` ignore it (R17-M-04).
+    /// Whether the focus ring shows has nothing to do with it (R17-L-03).
+    pub fn activated_by(&self, enter: bool) -> bool {
+        self.sense == Sense::Click && self.msg.is_some() && !(enter && self.enter_is_equals)
+    }
 }
 
 #[derive(Default, Debug)]
@@ -295,8 +308,21 @@ impl<'a, 'p> Frame<'a, 'p> {
             sense,
             msg,
             focusable,
-            keypad: false,
+            enter_is_equals: false,
         });
+    }
+
+    /// Marks the control just recorded, `id`, as one of the calculator's
+    /// own keys: upstream's `CalculatorButton`s (every keypad's keys, the
+    /// flyouts' too, but the 2nd and hyp toggles; MC, MR, M+, M− and MS) and
+    /// bit `FlipButtons`, which ignore Enter, so that Enter on it, focused,
+    /// is still "=" ([`Hit::activated_by`]). By what the control does, as
+    /// GMNB's `Page::is_calculator_key`, not by how it is drawn. Nothing
+    /// for a control not recorded (a disabled one).
+    pub fn calculator_key(&mut self, id: Id) {
+        if let Some(h) = self.hits.last_mut().filter(|h| h.id == id) {
+            h.enter_is_equals = true;
+        }
     }
 
     /// Record an accessibility node under the current group.
@@ -445,7 +471,9 @@ impl<'a, 'p> Frame<'a, 'p> {
 
     // ------------------------------------------------------------ widgets
 
-    /// A keypad key.
+    /// A keypad key: how it looks. Whether Enter on it is "=" is the
+    /// caller's to say ([`Frame::calculator_key`]): the converter's and the
+    /// graph's keys are drawn alike and take Enter as GMNB's do.
     #[allow(clippy::too_many_arguments)]
     pub fn key(
         &mut self,
@@ -500,9 +528,6 @@ impl<'a, 'p> Frame<'a, 'p> {
         }
         if enabled {
             self.hit(id, r, Sense::Click, Some(msg), true);
-            if let Some(h) = self.hits.last_mut().filter(|h| h.id == id) {
-                h.keypad = true;
-            }
         }
         let toggled = match look {
             KeyLook::Toggle(on) => Some(on),
@@ -843,6 +868,49 @@ impl<'a, 'p> Frame<'a, 'p> {
             } else if bottom > s.offset + s.view {
                 s.offset = bottom - s.view;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hit(sense: Sense, msg: Option<Msg>, enter_is_equals: bool) -> Hit {
+        let r = Rect::new(0.0, 0.0, 40.0, 40.0);
+        Hit {
+            id: id("control"),
+            rect: r,
+            full: r,
+            visible: true,
+            scroll: None,
+            sense,
+            msg,
+            focusable: true,
+            enter_is_equals,
+        }
+    }
+
+    /// R16-M-03, R17-M-04: what Space and Enter do on the focused control.
+    /// A button takes both as its activation; a calculator key takes Space
+    /// and leaves Enter to the calculator ("="). A field, a slider or a
+    /// control that sends nothing isn't activated by either here.
+    #[test]
+    fn a_focused_control_takes_space_and_enter_and_a_calculator_key_leaves_enter() {
+        let press = || Some(Msg::Minimize);
+        let key = hit(Sense::Click, press(), true);
+        let button = hit(Sense::Click, press(), false);
+        assert!(key.activated_by(false));
+        assert!(!key.activated_by(true));
+        assert!(button.activated_by(false));
+        assert!(button.activated_by(true));
+        for h in [
+            hit(Sense::Click, None, false),
+            hit(Sense::Text, press(), false),
+            hit(Sense::Drag, press(), true),
+            hit(Sense::Scroll, None, false),
+        ] {
+            assert!(!h.activated_by(false) && !h.activated_by(true), "{h:?}");
         }
     }
 }
