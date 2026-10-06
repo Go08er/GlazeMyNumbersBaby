@@ -1486,3 +1486,59 @@ fn sliders_replay() {
     }
     assert!(fails.is_empty(), "{fails:#?}");
 }
+
+/// The replay's own series of a value constant wherever it is defined
+/// (u⁰, a step clear of its jumps), at a point where it is defined but
+/// not just left of it, or where its argument jumps (review 16, R16-L-01:
+/// ⌊x⌋⁰ at 1 is 0⁰ just left of 1): no first coefficient, so no winner's
+/// coefficients for min and max beside it either. Where the argument stays
+/// clear beside the box, the derivatives are there.
+#[test]
+fn a_value_alone_has_no_derivatives_at_a_domain_end() {
+    replay::iv::init();
+    let series = |src: &str, x: f64| {
+        let text = format!("y={src}");
+        let eq = graphing::Equation::parse(&text).unwrap();
+        let (_, e) = eq.explicit().unwrap();
+        let lits = replay::eval::Lits::of(&text);
+        let ctx = replay::eval::Ctx {
+            unit: replay::iv::Unit::Radians,
+            lits: &lits,
+            vars: &[],
+        };
+        replay::eval::series(&replay::eval::canonical(e), x, x, 3, &ctx)
+    };
+    for (src, x) in [
+        ("floor(x)^0", 1.0),
+        ("min(x,floor(x)^0+100)", 1.0),
+        ("max(x,-floor(x)^0-100)", 1.0),
+        ("min(floor(x)^0+100,x)", 1.0),
+        ("floor(x)^(1-1)", 1.0),
+        ("(sqrt(x)+1)^0", 0.0),
+        ("min(x,(sqrt(x)+1)^0+100)", 0.0),
+        ("floor(sqrt(x)+0.5)", 0.0),
+        ("round(sqrt(x))", 0.0),
+        ("sign(sqrt(x)+1)", 0.0),
+        ("min(x,floor(sqrt(x)+0.5)+5)", 0.0),
+        ("floor(floor(x)+0.5)", 1.0),
+        ("min(x,2*floor(floor(x)+0.5)-0.5)", 1.0),
+    ] {
+        let s = series(src, x);
+        assert!(!s[0].empty && s[0].def, "{src} at {x}: {:?}", s[0]);
+        assert!(!s[1].def, "{src} at {x}: f′ {:?}", s[1]);
+    }
+    for (src, x, d1) in [
+        ("floor(x)^0", 1.5, 0.0),
+        ("x^0", 1.0, 0.0),
+        ("min(x,floor(x)^0+100)", 1.5, 1.0),
+        ("floor(sqrt(x)+0.5)", 1.0, 0.0),
+        ("floor(floor(x)+0.5)", 1.5, 0.0),
+        ("min(x,floor(x)+5)", 0.5, 1.0),
+    ] {
+        let s = series(src, x);
+        assert!(
+            s[1..].iter().all(|c| c.def) && s[1].is_exactly(d1),
+            "{src} at {x}: {s:?}"
+        );
+    }
+}

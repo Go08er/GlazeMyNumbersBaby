@@ -1027,22 +1027,23 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
             }
         }
         Floor | Ceil => {
-            let a0 = a()[0].clone();
+            let ea = a();
+            let a0 = &ea[0];
             let v = if f == Floor {
-                iv::floor(&a0)
+                iv::floor(a0)
             } else {
-                iv::ceil(&a0)
+                iv::ceil(a0)
             };
-            se::step(v, n, iv::no_jump(&a0, 0.0))
+            se::step(&ea, v, iv::no_jump(a0, 0.0))
         }
         Round => {
-            let a0 = a()[0].clone();
-            se::step(iv::round(&a0), n, iv::no_jump(&a0, 0.5))
+            let ea = a();
+            se::step(&ea, iv::round(&ea[0]), iv::no_jump(&ea[0], 0.5))
         }
         Sign => {
-            let a0 = a()[0].clone();
-            let smooth = a0.ne0();
-            se::step(iv::sign(&a0), n, smooth)
+            let ea = a();
+            let smooth = ea[0].ne0();
+            se::step(&ea, iv::sign(&ea[0]), smooth)
         }
         Mod => {
             let ea = a();
