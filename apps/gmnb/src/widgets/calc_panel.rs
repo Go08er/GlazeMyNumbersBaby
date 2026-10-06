@@ -37,6 +37,15 @@ pub struct CalcPanel {
     handlers: RefCell<Handlers>,
     history_len: std::cell::Cell<usize>,
     memory_len: std::cell::Cell<usize>,
+    /// The History items shown, and which showing of them this is: every
+    /// [`CalcPanel::set_history`] (a History change, or a mode change,
+    /// which shows another History) is a new one, and a request made on
+    /// an earlier one's row is dropped ([`CalcPanel::history_row_current`]).
+    history: RefCell<Vec<HistoryEntry>>,
+    history_shown: std::cell::Cell<u64>,
+    /// A History item's context menu while open: closed and let go of
+    /// when the items are shown anew, so that no menu outlives its row.
+    history_menu: RefCell<Option<gtk::Popover>>,
 }
 
 fn empty_state(text: &str) -> gtk::Label {
@@ -123,6 +132,9 @@ impl CalcPanel {
             handlers: RefCell::default(),
             history_len: Default::default(),
             memory_len: Default::default(),
+            history: RefCell::default(),
+            history_shown: Default::default(),
+            history_menu: RefCell::default(),
         });
 
         let weak = Rc::downgrade(&panel);
@@ -200,9 +212,40 @@ impl CalcPanel {
         self.handlers.borrow_mut().memory_clear_all = Some(Box::new(f));
     }
 
+    /// Whether a request made on History row `row`, the `i`th of the
+    /// showing `shown` and holding `entry`, may still be carried out: that
+    /// showing is the current one (no History or mode change since, each
+    /// of which shows the items anew), the same item still at `i`, and the
+    /// row still in the list, shown and not covered (`crate::inert` makes
+    /// a covered layer insensitive). Else it is dropped: an index alone
+    /// could name another item by then (R16 Q1).
+    fn history_row_current(
+        &self,
+        shown: u64,
+        i: usize,
+        entry: &HistoryEntry,
+        row: &gtk::ListBoxRow,
+    ) -> bool {
+        self.history_shown.get() == shown
+            && self.history.borrow().get(i) == Some(entry)
+            && row.parent().as_ref() == Some(self.history_list.upcast_ref())
+            && usize::try_from(row.index()).ok() == Some(i)
+            && row.is_mapped()
+            && row.is_sensitive()
+    }
+
     pub fn set_history(self: &Rc<Self>, items: &[HistoryEntry]) {
         let grew = items.len() > self.history_len.get();
         self.history_len.set(items.len());
+        let shown = self.history_shown.get().wrapping_add(1);
+        self.history_shown.set(shown);
+        self.history.replace(items.to_vec());
+        // An open item menu goes with its row (which holds it, and must
+        // not be let go of holding it).
+        if let Some(menu) = self.history_menu.take() {
+            menu.popdown();
+            menu.unparent();
+        }
         self.history_list.remove_all();
         // remove_all() also drops the placeholder, so re-attach it.
         self.history_list
@@ -227,56 +270,85 @@ impl CalcPanel {
                 item.expression, item.result
             ))]);
 
+            // Every request on this row names its item by this showing,
+            // its place and the item itself, checked when it is carried
+            // out (history_row_current): a row the list no longer holds
+            // (one a menu or an assistive technology still has) does
+            // nothing.
+            let id = Rc::new((shown, i, item.clone()));
             let weak = Rc::downgrade(self);
-            row.connect_activate(move |_| {
+            let item_id = id.clone();
+            row.connect_activate(move |r| {
+                let (shown, i, entry) = &*item_id;
                 if let Some(p) = weak.upgrade()
+                    && p.history_row_current(*shown, *i, entry, r)
                     && let Some(f) = &p.handlers.borrow().history_recall
                 {
-                    f(i);
+                    f(*i);
                 }
             });
             // Context menu → delete.
             let click = gtk::GestureClick::builder().button(3).build();
             let weak = Rc::downgrade(self);
-            let anchor = row.clone();
+            let anchor = row.downgrade();
+            let item_id = id.clone();
             click.connect_pressed(move |_, _, x, y| {
-                let Some(p) = weak.upgrade() else { return };
+                let (Some(p), Some(anchor)) = (weak.upgrade(), anchor.upgrade()) else {
+                    return;
+                };
                 let del = gtk::Button::with_label("Delete");
                 del.add_css_class("flat");
                 let pop = gtk::Popover::builder().child(&del).has_arrow(false).build();
                 pop.set_parent(&anchor);
                 pop.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-                // Weak popover: it contains this button.
-                let pop_ = pop.downgrade();
+                // Weak popover and row: they hold this button.
+                let (pop_, row) = (pop.downgrade(), anchor.downgrade());
                 let weak = Rc::downgrade(&p);
+                let item_id = item_id.clone();
                 del.connect_clicked(move |_| {
                     if let Some(pop) = pop_.upgrade() {
                         pop.popdown();
                     }
-                    if let Some(p) = weak.upgrade()
+                    let (shown, i, entry) = &*item_id;
+                    if let (Some(p), Some(row)) = (weak.upgrade(), row.upgrade())
+                        && p.history_row_current(*shown, *i, entry, &row)
                         && let Some(f) = &p.handlers.borrow().history_delete
                     {
-                        f(i);
+                        f(*i);
                     }
                 });
-                pop.connect_closed(|p| {
-                    let p = p.clone();
-                    glib::idle_add_local_once(move || p.unparent());
+                let weak = Rc::downgrade(&p);
+                pop.connect_closed(move |pop| {
+                    if let Some(p) = weak.upgrade() {
+                        let mut menu = p.history_menu.borrow_mut();
+                        if menu.as_ref() == Some(pop) {
+                            menu.take();
+                        }
+                    }
+                    let pop = pop.clone();
+                    glib::idle_add_local_once(move || pop.unparent());
                 });
+                if let Some(old) = p.history_menu.replace(Some(pop.clone())) {
+                    old.popdown();
+                    old.unparent();
+                }
                 pop.popup();
             });
             row.add_controller(click);
             // The context menu's Delete, which only a right click opens,
             // for assistive technology: history.delete. After the request
-            // is answered, as it rebuilds this list.
+            // is answered, as it rebuilds this list, and only if this row
+            // still holds its item then (R16 Q1).
             let weak = Rc::downgrade(self);
-            crate::a11y::operable(&row, "history", "delete", move |_| {
-                let weak = weak.clone();
+            crate::a11y::operable(&row, "history", "delete", move |r| {
+                let (weak, row, item_id) = (weak.clone(), r.downgrade(), id.clone());
                 glib::idle_add_local_once(move || {
-                    if let Some(p) = weak.upgrade()
+                    let (shown, i, entry) = &*item_id;
+                    if let (Some(p), Some(row)) = (weak.upgrade(), row.upgrade())
+                        && p.history_row_current(*shown, *i, entry, &row)
                         && let Some(f) = &p.handlers.borrow().history_delete
                     {
-                        f(i);
+                        f(*i);
                     }
                 });
             });

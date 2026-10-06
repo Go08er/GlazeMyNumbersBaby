@@ -1470,7 +1470,10 @@ impl App {
         match self.mode.page() {
             PageKind::Calculator => self.calc.as_mut().is_some_and(|p| p.popup.take().is_some()),
             PageKind::Converter => self.conv.as_mut().is_some_and(|p| p.close_popup()),
-            PageKind::Date => self.date.as_mut().is_some_and(|p| p.close_popup()),
+            PageKind::Date => {
+                let (mut cx, _, _, date, _) = self.cx_parts();
+                date.as_mut().is_some_and(|p| p.close_popup(&mut cx))
+            }
             PageKind::Graphing => self.graph.as_mut().is_some_and(|p| p.close_popup()),
         }
     }

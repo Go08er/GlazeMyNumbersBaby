@@ -134,6 +134,14 @@ pub trait Page {
         false
     }
 
+    /// Whether `widget` is one of the page's own calculator keys, which
+    /// leave Enter to [`Page::key_pressed`] ("=") when focused, as
+    /// upstream's `CalculatorButton` does; any other focused control
+    /// activates on Enter itself (`crate::window::focus_takes`).
+    fn is_calculator_key(&self, _widget: &gtk::Widget) -> bool {
+        false
+    }
+
     /// Keyboard input while a layer of the page's own covers
     /// [`Page::target`]: only that layer's keys (the History sheet's
     /// Ctrl+H and Ctrl+Shift+D); return true if handled.

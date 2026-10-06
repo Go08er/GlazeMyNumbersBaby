@@ -359,7 +359,9 @@ fn guard_text(text: &gtk::Text) {
 
 /// GtkText's drop (`gtk_text_drag_drop`), with the text read by
 /// [`read_drop`]: inserted where it was dropped, or in place of the
-/// selection if dropped on it. The cursor stays where it was.
+/// selection if dropped on it, then as one edit ([`replace_selection`]).
+/// The cursor stays where it was (before the text, in place of a
+/// selection).
 fn drop_into_text(text: &gtk::Text, mut dropped: String, x: f64) {
     if text.must_truncate_multiline()
         && let Some(end) = dropped.find(['\n', '\r'])
@@ -367,14 +369,39 @@ fn drop_into_text(text: &gtk::Text, mut dropped: String, x: f64) {
         dropped.truncate(end);
     }
     let at = position_at(text, x);
-    let mut position = match text.selection_bounds() {
+    match text.selection_bounds() {
         Some((a, b)) if (a.min(b)..=a.max(b)).contains(&at) => {
-            text.delete_selection();
-            a.min(b)
+            let _one_edit = text.freeze_notify();
+            replace_selection(text, &dropped);
+            text.set_position(a.min(b));
         }
-        _ => at,
-    };
-    text.insert_text(&dropped, &mut position);
+        _ => {
+            let mut position = at;
+            text.insert_text(&dropped, &mut position);
+        }
+    }
+}
+
+/// Puts `with` in place of `text`'s selection (or at its cursor, with
+/// none), the cursor after it, as GtkText's own paste does
+/// (`paste_received`): one edit, which a caller holding `text`'s property
+/// notifications (`freeze_notify`) makes one change of its text property.
+/// (The graphing equation field follows that property: told of the empty
+/// text in between, it would forget the sliders the new text still uses,
+/// R16-M-02.)
+///
+/// Through GtkText's own key-binding signals, `delete-from-cursor` and
+/// `insert-at-cursor`, so that the edit is undone as GTK's paste is (the
+/// text, then the selection it replaced): GtkText takes a program's direct
+/// insertion or deletion, outside one of its own changes, as irreversible
+/// and clears its undo history for it (GTK 4.22 `gtk_text_insert_text`,
+/// `gtk_text_delete_text`).
+fn replace_selection(text: &gtk::Text, with: &str) {
+    if text.selection_bounds().is_some() {
+        // With a selection, it is what goes, whatever the count.
+        text.emit_delete_from_cursor(gtk::DeleteType::Chars, 1);
+    }
+    text.emit_insert_at_cursor(with);
 }
 
 /// The character position nearest to `x` (in `text`'s coordinates), as
@@ -439,8 +466,9 @@ fn nearest_along(len: usize, at: impl Fn(usize) -> f64, x: f64) -> usize {
 }
 
 /// GtkText's paste (`paste_received`), with the text read by [`read_text`]:
-/// replaces the selection, or inserts at the cursor; a middle click pastes
-/// at `at`, which moves the cursor there unless it is in the selection.
+/// replaces the selection, or inserts at the cursor, as one edit
+/// ([`replace_selection`]); a middle click pastes at `at`, which moves the
+/// cursor there unless it is in the selection.
 fn paste_into_text(text: &gtk::Text, clipboard: gdk::Clipboard, at: Option<i32>) {
     if !text.is_editable() {
         text.error_bell();
@@ -461,6 +489,7 @@ fn paste_into_text(text: &gtk::Text, clipboard: gdk::Clipboard, at: Option<i32>)
         {
             pasted.truncate(end);
         }
+        let _one_edit = text.freeze_notify();
         if let Some(at) = at {
             let in_selection = text
                 .selection_bounds()
@@ -469,10 +498,7 @@ fn paste_into_text(text: &gtk::Text, clipboard: gdk::Clipboard, at: Option<i32>)
                 text.select_region(at, at);
             }
         }
-        text.delete_selection();
-        let mut position = text.position();
-        text.insert_text(&pasted, &mut position);
-        text.set_position(position);
+        replace_selection(&text, &pasted);
     });
 }
 
@@ -521,9 +547,11 @@ fn drop_into_text_view(view: &gtk::TextView, dropped: &str, x: f64, y: f64) {
     buffer.end_user_action();
 }
 
-/// A text view's paste with the text read by [`read_text`]. One that isn't
-/// editable only inserts nothing in GTK (after reading the clipboard
-/// whole); here it reads nothing either.
+/// A text view's paste with the text read by [`read_text`], as one edit
+/// (`paste_from_buffer`: one user action, so one undo step) told once to
+/// the buffer's text property. One that isn't editable only inserts
+/// nothing in GTK (after reading the clipboard whole); here it reads
+/// nothing either.
 fn paste_into_text_view(view: &gtk::TextView, clipboard: gdk::Clipboard, at: Option<i32>) {
     if !view.is_editable() {
         return;
@@ -544,8 +572,13 @@ fn paste_into_text_view(view: &gtk::TextView, clipboard: gdk::Clipboard, at: Opt
             }
         }
         let editable = view.is_editable();
-        buffer.delete_selection(true, editable);
-        buffer.insert_interactive_at_cursor(&pasted, editable);
+        {
+            let _one_edit = buffer.freeze_notify();
+            buffer.begin_user_action();
+            buffer.delete_selection(true, editable);
+            buffer.insert_interactive_at_cursor(&pasted, editable);
+            buffer.end_user_action();
+        }
         view.scroll_mark_onscreen(&buffer.get_insert());
     });
 }
