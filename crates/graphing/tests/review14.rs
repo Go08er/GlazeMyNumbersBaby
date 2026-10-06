@@ -16,6 +16,9 @@
 //! integer (its lower end was clipped to −10³⁰⁰), so root(−8, n) over it
 //! was empty, and a degree typed as the odd −(10³⁰¹ + 1) left the panel
 //! with no y-intercept.
+//!
+//! R14-L-01: `limit_at` gave 1 at +∞ for e^(0·ln(−x)), defined nowhere
+//! there: zero scaling dropped the undefined logarithm.
 
 use graphing::Graph;
 use graphing::TrigUnit;
@@ -249,4 +252,27 @@ fn far_negative_root_degrees_hold_odd_integers() {
             );
         }
     }
+}
+
+/// The public limit helper gives a limit only where f has a tail of its
+/// domain to approach it on (R14-L-01).
+#[test]
+fn a_limit_needs_a_tail_of_the_domain() {
+    use graphing::simplify::{Dir, Limit, PiQ, Q, Settings, limit_at};
+    let lim = |src: &str, dir: Dir| {
+        let eq = Equation::parse(&format!("y={src}")).unwrap();
+        let opts = CompileOptions::default();
+        limit_at(eq.explicit().unwrap().1, dir, &Settings::new(&opts))
+    };
+    let one = Limit::Exact(PiQ { q: Q::ONE, k: 0 });
+    // Undefined for every x > 0: no limit at +∞ (it was 1); at −∞, where
+    // ln(−x) is defined, 0·ln(−x) is 0.
+    assert_eq!(lim("exp(0*ln(-x))", Dir::PosInf), Limit::Unknown);
+    assert_eq!(lim("exp(0*ln(-x))", Dir::NegInf), one);
+    // Nowhere defined: no limit either way (it was 1 at +∞).
+    for dir in [Dir::PosInf, Dir::NegInf] {
+        assert_eq!(lim("exp(ln(x)+0*ln(-x))/x", dir), Limit::Unknown);
+    }
+    // Defined: as before.
+    assert_eq!(lim("exp(0*ln(x))", Dir::PosInf), one);
 }
