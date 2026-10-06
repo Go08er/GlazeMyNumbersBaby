@@ -30,6 +30,66 @@ pub struct Window {
     nav_rows: RefCell<Vec<(ViewMode, gtk::ListBoxRow, PathIcon)>>,
     pages: RefCell<HashMap<PageKind, Rc<dyn Page>>>,
     mode: Cell<ViewMode>,
+    /// Bumped by every [`Window::set_mode`]: a paste whose read began on
+    /// another page, or before the page was set up again, is dropped.
+    page_generation: Cell<u64>,
+    /// `win.paste`, enabled only while the page it pastes into isn't
+    /// covered (an AT client is offered only enabled actions).
+    paste_action: gtk::gio::SimpleAction,
+}
+
+/// What covers the window's parts now, from [`crate::inert::Layers`]'s
+/// record.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Cover {
+    /// The navigation sidebar: only a dialog or a modal window covers it.
+    pub nav: bool,
+    /// The current page: also the open sidebar.
+    pub page: bool,
+    /// What the page's keys and pastes change ([`Page::target`]): also a
+    /// layer of the page's own (the History sheet).
+    pub target: bool,
+    /// The sidebar is open.
+    pub sidebar: bool,
+}
+
+/// Where a key goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Route {
+    Window(WindowAction),
+    CloseSidebar,
+    /// To the page's own layer over its target ([`Page::layer_key_pressed`]).
+    Layer,
+    /// To the page ([`Page::key_pressed`]).
+    Page,
+    /// Nowhere: what it would change is covered.
+    Refused,
+}
+
+/// Where `kp` goes, given what is covered (R14-M-06). Alt+1…5 is the
+/// navigation's: refused only while a dialog covers that too (under the
+/// sidebar it is the sidebar's own shortcut; under the History sheet the
+/// header's menu can switch as well). Copy and paste read and change the
+/// page's target: refused while it is covered. Escape closes an open
+/// sidebar nothing covers. Every other key is the page's: refused while
+/// the page is covered, and only its own layer's while just its target is.
+pub fn route(kp: &KeyPress, c: Cover) -> Route {
+    match input::window_shortcut(kp) {
+        Some(WindowAction::SwitchMode(_)) if c.nav => return Route::Refused,
+        Some(WindowAction::Copy | WindowAction::Paste) if c.target => return Route::Refused,
+        Some(action) => return Route::Window(action),
+        None => {}
+    }
+    if kp.is(Named::Escape) && c.sidebar && !c.nav {
+        return Route::CloseSidebar;
+    }
+    if c.page {
+        Route::Refused
+    } else if c.target {
+        Route::Layer
+    } else {
+        Route::Page
+    }
 }
 
 pub fn apply_theme_setting(theme: &str) {
@@ -273,6 +333,8 @@ impl Window {
             nav_rows: RefCell::default(),
             pages: RefCell::default(),
             mode: Cell::new(ViewMode::Standard),
+            page_generation: Cell::new(0),
+            paste_action: gtk::gio::SimpleAction::new("paste", None),
         });
 
         this.build_nav();
@@ -331,13 +393,12 @@ impl Window {
         this.install_keyboard();
         {
             let weak = Rc::downgrade(&this);
-            let paste = gtk::gio::SimpleAction::new("paste", None);
-            paste.connect_activate(move |_, _| {
+            this.paste_action.connect_activate(move |_, _| {
                 if let Some(w) = weak.upgrade() {
                     w.paste();
                 }
             });
-            win.add_action(&paste);
+            win.add_action(&this.paste_action);
         }
         {
             // This handler owns the Window for as long as the toplevel lives;
@@ -355,6 +416,15 @@ impl Window {
             .or_else(|| ViewMode::from_key(&settings.mode))
             .unwrap_or(ViewMode::Standard);
         this.set_mode(start);
+        {
+            let weak = Rc::downgrade(&this);
+            this.ctx.layers.connect_changed(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.sync_actions();
+                }
+            });
+        }
+        this.sync_actions();
         if std::env::var("GMNB_NAV").as_deref() == Ok("1") {
             split.set_show_sidebar(true);
         }
@@ -440,6 +510,7 @@ impl Window {
         }
         let page = self.page(mode.page());
         self.mode.set(mode);
+        self.page_generation.set(self.page_generation.get() + 1);
         self.ctx.store.data.borrow_mut().mode = mode.key().into();
         self.title.set_text(mode.title());
         page.activate(mode);
@@ -457,6 +528,39 @@ impl Window {
                 self.nav.select_row(Some(row));
                 icon.animate_draw();
             }
+        }
+        self.sync_actions();
+    }
+
+    /// The current page, if it is made already (never makes one).
+    fn shown_page(&self) -> Option<Rc<dyn Page>> {
+        let pages = self.pages.try_borrow().ok()?;
+        pages.get(&self.mode.get().page()).cloned()
+    }
+
+    /// What covers the window's parts now (crate::inert's record).
+    fn cover(&self, page: &Rc<dyn Page>) -> Cover {
+        let layers = &self.ctx.layers;
+        Cover {
+            nav: layers.covers(&self.nav),
+            page: layers.covers(&page.widget()),
+            target: layers.covers(&page.target()),
+            sidebar: self.split.shows_sidebar(),
+        }
+    }
+
+    /// Whether the current page's target is covered (or there is none).
+    fn target_covered(&self) -> bool {
+        self.shown_page()
+            .is_none_or(|p| self.ctx.layers.covers(&p.target()))
+    }
+
+    /// `win.paste` is enabled only while it would paste into a page
+    /// nothing covers.
+    fn sync_actions(&self) {
+        let enabled = !self.target_covered();
+        if self.paste_action.is_enabled() != enabled {
+            self.paste_action.set_enabled(enabled);
         }
     }
 
@@ -481,13 +585,8 @@ impl Window {
                     return glib::Propagation::Proceed;
                 }
             }
-            // A page the sidebar, a sheet or a dialog covers is insensitive
-            // (crate::inert): no key reaches it then, only the window's
-            // shortcuts and Escape closing the sidebar.
-            let covered = !w.current_page().widget().is_sensitive();
-            let window_key = input::window_shortcut(&kp).is_some()
-                || (kp.is(Named::Escape) && w.split.shows_sidebar());
-            if (!covered || window_key) && w.handle_key(&kp) {
+            // What the key would change may be covered: handle_key asks.
+            if w.handle_key(&kp) {
                 glib::Propagation::Stop
             } else {
                 glib::Propagation::Proceed
@@ -496,24 +595,30 @@ impl Window {
         self.win.add_controller(keys);
     }
 
+    /// A key, wherever it comes from (the keyboard, `GMNB_KEYS`), goes
+    /// where [`route`] says, given what crate::inert's record says is
+    /// covered: a dialog, a modal window, the sidebar or the History sheet
+    /// over what it would change refuses it (R14-M-06).
     pub fn handle_key(self: &Rc<Self>, kp: &KeyPress) -> bool {
-        match input::window_shortcut(kp) {
-            Some(WindowAction::SwitchMode(mode)) => {
+        let page = self.current_page();
+        match route(kp, self.cover(&page)) {
+            Route::Window(WindowAction::SwitchMode(mode)) => {
                 self.set_mode(mode);
-                return true;
+                true
             }
-            Some(WindowAction::Copy) => return self.current_page().copy().is_some(),
-            Some(WindowAction::Paste) => {
+            Route::Window(WindowAction::Copy) => page.copy().is_some(),
+            Route::Window(WindowAction::Paste) => {
                 self.paste();
-                return true;
+                true
             }
-            None => {}
+            Route::CloseSidebar => {
+                self.split.set_show_sidebar(false);
+                true
+            }
+            Route::Layer => page.layer_key_pressed(kp),
+            Route::Page => page.key_pressed(kp),
+            Route::Refused => false,
         }
-        if kp.is(Named::Escape) && self.split.shows_sidebar() {
-            self.split.set_show_sidebar(false);
-            return true;
-        }
-        self.current_page().key_pressed(kp)
     }
 
     /// Dev/screenshot helper: type a script (see `appcore::input::parse_key_script`)
@@ -524,18 +629,30 @@ impl Window {
         }
     }
 
+    /// Pastes the clipboard into the current page (Ctrl+V, Shift+Insert,
+    /// `win.paste`). Not while the page's target is covered; and the read
+    /// takes a while, so the text is dropped if by then the page changed
+    /// ([`Window::set_mode`]) or its target is covered (R14-M-06).
     pub fn paste(self: &Rc<Self>) {
+        if self.target_covered() {
+            return;
+        }
         let Some(display) = gdk::Display::default() else {
             return;
         };
+        let generation = self.page_generation.get();
         let weak = Rc::downgrade(self);
         let clipboard = display.clipboard();
         glib::spawn_future_local(async move {
             let Some(text) = crate::paste::read_text(&clipboard).await else {
                 return;
             };
-            if let Some(w) = weak.upgrade() {
-                w.current_page().paste(&text);
+            if let Some(w) = weak.upgrade()
+                && w.page_generation.get() == generation
+                && !w.target_covered()
+                && let Some(page) = w.shown_page()
+            {
+                page.paste(&text);
             }
         });
     }
@@ -552,5 +669,77 @@ impl Window {
             }
         }
         self.ctx.store.persist();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R14-M-06: a covered target takes no key, copy or paste (Settings,
+    /// the sidebar, the History sheet); Alt+1…5 is refused only under a
+    /// dialog; the History sheet takes its own keys; Escape closes an
+    /// open sidebar only when nothing covers it.
+    #[test]
+    fn keys_reach_nothing_covered() {
+        let open = Cover::default();
+        let dialog = Cover {
+            nav: true,
+            page: true,
+            target: true,
+            sidebar: false,
+        };
+        let sidebar = Cover {
+            nav: false,
+            page: true,
+            target: true,
+            sidebar: true,
+        };
+        let sheet = Cover {
+            nav: false,
+            page: false,
+            target: true,
+            sidebar: false,
+        };
+        let seven = KeyPress::char('7');
+        let ctrl_v = KeyPress::char('v').ctrl();
+        let shift_insert = KeyPress::named(Named::Insert).shift();
+        let ctrl_c = KeyPress::char('c').ctrl();
+        let alt_2 = KeyPress::char('2').alt();
+        let ctrl_h = KeyPress::char('h').ctrl();
+        let escape = KeyPress::named(Named::Escape);
+        let scientific = Route::Window(WindowAction::SwitchMode(ViewMode::Scientific));
+
+        assert_eq!(route(&seven, open), Route::Page);
+        assert_eq!(route(&ctrl_v, open), Route::Window(WindowAction::Paste));
+        assert_eq!(
+            route(&shift_insert, open),
+            Route::Window(WindowAction::Paste)
+        );
+        assert_eq!(route(&ctrl_c, open), Route::Window(WindowAction::Copy));
+        assert_eq!(route(&alt_2, open), scientific);
+        assert_eq!(route(&escape, open), Route::Page);
+
+        for c in [dialog, sidebar, sheet] {
+            for k in [&ctrl_v, &shift_insert, &ctrl_c] {
+                assert_eq!(route(k, c), Route::Refused, "{k:?} under {c:?}");
+            }
+        }
+        assert_eq!(route(&seven, dialog), Route::Refused);
+        assert_eq!(route(&seven, sidebar), Route::Refused);
+        assert_eq!(route(&seven, sheet), Route::Layer);
+        assert_eq!(route(&ctrl_h, sheet), Route::Layer);
+        assert_eq!(route(&ctrl_h, dialog), Route::Refused);
+
+        assert_eq!(route(&alt_2, dialog), Route::Refused);
+        assert_eq!(route(&alt_2, sidebar), scientific);
+        assert_eq!(route(&alt_2, sheet), scientific);
+
+        assert_eq!(route(&escape, sidebar), Route::CloseSidebar);
+        let dialog_over_sidebar = Cover {
+            sidebar: true,
+            ..dialog
+        };
+        assert_eq!(route(&escape, dialog_over_sidebar), Route::Refused);
     }
 }
