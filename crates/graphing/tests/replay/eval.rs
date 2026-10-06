@@ -277,6 +277,8 @@ impl Lits {
     /// The number `Num(v, lit)` stands for: the decimal typed, the double
     /// itself, or for a number not known exactly (only in a certifier's
     /// tree) anything rounding to `v`: a few ulps either way, and noted.
+    /// An ∞ there is no number: anything, not shown defined (its enclosure
+    /// was ∞ − ∞, a NaN end, decorated defined).
     pub fn num(&self, v: f64, lit: &Lit) -> Iv {
         match lit {
             Lit::Exact if v.is_finite() => Iv::of(v),
@@ -286,6 +288,9 @@ impl Lits {
             },
             _ => {
                 self.untyped.set(self.untyped.get() + 1);
+                if !v.is_finite() {
+                    return Iv::unknown();
+                }
                 let w = v.abs() * 2f64.powi(-48);
                 Iv::of2(v - w, v + w)
             }
@@ -791,7 +796,12 @@ pub fn eval(e: &Expr, x: &S, n: usize, ctx: &Ctx<'_>) -> S {
         },
         Expr::Y => se::constant(Iv::unknown(), n),
         Expr::Neg(a) => se::neg(&eval(a, x, n, ctx)),
-        Expr::Degrees(a) => eval(a, x, n, ctx),
+        // A degree mark: the angle as typed in degrees mode; the language
+        // refuses it in any other unit (RequireDegreesMode), so f has no
+        // value anywhere (review 17, R17-M-02: it was dropped, and
+        // (x + 1)^(1°) in radians was (x + 1)¹).
+        Expr::Degrees(a) if ctx.unit == Unit::Degrees => eval(a, x, n, ctx),
+        Expr::Degrees(_) => vec![Iv::empty(); n + 1],
         Expr::Bin(op, a, b) => {
             if *op == BinOp::Pow {
                 return pow(a, b, x, n, ctx);
@@ -823,8 +833,10 @@ fn pow(a: &Expr, b: &Expr, x: &S, n: usize, ctx: &Ctx<'_>) -> S {
     // an integer power, however written; any other constant allows a
     // negative base only for an integer value, which the decimals typed
     // decide (1.0000000000000001 is none, though its double is 1).
+    // (An exact value is a defined one: the exact reader has none where a
+    // step is undefined, a ° outside degrees mode included.)
     if !contains_x(b)
-        && let Some(k) = super::exact::eval(b, None, ctx.lits, ctx.vars)
+        && let Some(k) = super::exact::eval(b, None, ctx.lits, ctx.vars, ctx.unit)
         && k.is_integer()
         && let Some(k) = k.numer().to_i64().filter(|k| k.unsigned_abs() < 1 << 20)
     {
@@ -842,8 +854,12 @@ fn pow(a: &Expr, b: &Expr, x: &S, n: usize, ctx: &Ctx<'_>) -> S {
         return se::only_value_unless(se::constant(value, n), false);
     }
     let e0 = &eb[0];
+    // An exponent enclosed by an integer point: that integer power, but
+    // only where the exponent itself is defined (review 17, R17-M-02:
+    // ⌊√(sin²4 + cos²4 − 1 − 10⁻¹⁰⁰)⌋ is the point 0 at 160 bits, possibly
+    // undefined, and (x + 1) to it was proved 1 at 0).
     if e0.is_point() && e0.lo.is_integer() && e0.lo.to_f64().abs() < 1e9 {
-        return se::powi(&ea, e0.lo.to_f64() as i64);
+        return se::with_operand(se::powi(&ea, e0.lo.to_f64() as i64), e0);
     }
     let value = iv::pow_const(&ea[0], e0);
     if ea[0].gt(0.0) && e0.def {
@@ -971,13 +987,25 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
             // holds it: review 13, R13-M-04); else its enclosure, when a
             // point.
             // Any size: a typed −(10³⁰¹ + 1) is odd (review 14, R14-M-04).
-            let whole = match super::exact::eval(&args[1], None, ctx.lits, ctx.vars) {
-                Some(q) if q.is_integer() => Some(Some(q.numer().clone())),
-                Some(_) => None,
-                None if k.is_point() && k.lo.is_integer() => Some(k.lo.to_integer()),
-                None if k.is_point() => None,
-                None => return se::only_value_unless(se::constant(Iv::unknown(), n), false),
-            };
+            // A degree defined nowhere: so is the root.
+            if ea[0].empty || k.empty {
+                return vec![Iv::empty(); n + 1];
+            }
+            // (An exact degree is a defined one, the exact reader having
+            // none where a step is undefined; a degree read from its
+            // enclosure is defined only where that is, and the root with
+            // it: review 17, R17-M-02, root(4 + x, 2 + ⌊√(sin²4 + cos²4 −
+            // 1 − 10⁻¹⁰⁰)⌋) was proved 2 at 0, the degree's possibly
+            // undefined point 2 read as a defined 2.)
+            let (whole, exact) =
+                match super::exact::eval(&args[1], None, ctx.lits, ctx.vars, ctx.unit) {
+                    Some(q) if q.is_integer() => (Some(Some(q.numer().clone())), true),
+                    Some(_) => (None, true),
+                    None if k.is_point() && k.lo.is_integer() => (Some(k.lo.to_integer()), false),
+                    None if k.is_point() => (None, false),
+                    None => return se::only_value_unless(se::constant(Iv::unknown(), n), false),
+                };
+            let keep = |s: S| if exact { s } else { se::with_operand(s, k) };
             if let Some(k) = whole {
                 let Some(k) = k else {
                     return se::only_value_unless(se::constant(Iv::unknown(), n), false);
@@ -986,20 +1014,22 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
                     return vec![Iv::empty(); n + 1];
                 }
                 let (p, q) = if k > 0 { (1, k) } else { (-1, -k) };
-                return if q == 1 {
+                return keep(if q == 1 {
                     se::powi(&ea, p)
                 } else {
                     pow_ratio(&ea, &rug::Integer::from(p), &q)
-                };
+                });
             }
-            // A non-integer degree: x ≥ 0, x^(1/n).
+            // A non-integer degree: x ≥ 0, x^(1/n) (its value defined only
+            // where the degree is: [`iv::pow_const`] keeps the reciprocal's
+            // decoration, an integer point too).
             let e = iv::recip(k);
             let value = iv::pow_const(&ea[0], &e);
-            if ea[0].gt(0.0) {
+            keep(if ea[0].gt(0.0) {
                 se::pow_real(&ea, &e, value)
             } else {
                 se::only_value_unless(se::constant(value, n), false)
-            }
+            })
         }
         Ln => se::ln(&a()),
         Log => {

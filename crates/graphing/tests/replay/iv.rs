@@ -861,10 +861,16 @@ pub fn pow_var(b: &Iv, e: &Iv) -> Iv {
 /// b^e for a constant exponent that isn't written as a ratio of integers:
 /// a negative base only to an integer power, 0 only to a positive power.
 pub fn pow_const(b: &Iv, e: &Iv) -> Iv {
+    if b.empty || e.empty {
+        return Iv::empty();
+    }
+    // An exponent enclosed by an integer point: that integer power,
+    // defined only where the exponent is too (review 17, R17-M-02: a point
+    // may still be possibly undefined).
     if e.is_point() && e.lo.is_integer() {
         let n = e.lo.to_f64();
         if n.abs() < 1e9 {
-            return powi(b, n as i64);
+            return powi(b, n as i64).with(e.def, e.cont);
         }
     }
     // An exponent only enclosed, around an integer: whether a negative
@@ -1129,10 +1135,13 @@ pub fn tan(a: &Iv, unit: Unit) -> Iv {
         let t = Float::with_val(prec(), &a.lo / q);
         if t.is_integer() {
             let k = t.to_f64() as i64;
+            // (0 only where the argument is defined: its decoration kept,
+            // since a meet with this enclosure takes the better one; review
+            // 17. An odd quarter turn is undefined either way.)
             return if k.rem_euclid(2) == 1 {
                 Iv::empty()
             } else {
-                Iv::of(0.0)
+                Iv::of(0.0).deco(&[a], true, true)
             };
         }
     }

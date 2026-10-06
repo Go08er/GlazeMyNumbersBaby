@@ -563,6 +563,12 @@ pub struct Fx {
     /// (the replay's own rearrangement of + and ·: the same function, with
     /// the same domain), where f's tree is ∞ − ∞ on a tail.
     pub f_alt: Option<Expr>,
+    /// Why the language refuses f outright, if it does: a degree mark (°)
+    /// outside degrees mode (`RequireDegreesMode`). Then no row is
+    /// certified and no claim about f stands, however it reads: f's value
+    /// alone is no value ([`eval`]), but a structural rule (f's parity, an
+    /// identity) would read through the mark (review 17, R17-M-02).
+    pub refused: Option<String>,
 }
 
 impl Fx {
@@ -592,7 +598,8 @@ impl Fx {
 pub fn function(a: &Value) -> Result<Fx, String> {
     let source = field(a, "source")?.as_str().ok_or("source")?.to_string();
     let formula = field(a, "formula")?.as_str().ok_or("formula")?;
-    let unit = Unit::parse(field(a, "unit")?.as_str().ok_or("unit")?).ok_or("bad unit")?;
+    let unit_name = field(a, "unit")?.as_str().ok_or("unit")?;
+    let unit = Unit::parse(unit_name).ok_or("bad unit")?;
     let text = if source.contains('=') {
         source.clone()
     } else {
@@ -629,6 +636,10 @@ pub fn function(a: &Value) -> Result<Fx, String> {
     // own value; checked against the replay's own reading of the text.
     lits.check(expr)?;
     let f = eval::canonical(expr);
+    let mut marked = false;
+    f.visit(&mut |n| marked |= matches!(n, Expr::Degrees(_)));
+    let refused = (marked && unit != Unit::Degrees)
+        .then(|| format!("° outside degrees mode (in {unit_name})"));
     // The formula names the same tree: its shape and each number's double
     // (its exact value is the source's; a certificate before round 13
     // wrote a typed 1.0000000000000001 as 1).
@@ -695,6 +706,7 @@ pub fn function(a: &Value) -> Result<Fx, String> {
         vars,
         verified,
         f_alt,
+        refused,
     })
 }
 

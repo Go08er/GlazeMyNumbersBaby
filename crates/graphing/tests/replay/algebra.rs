@@ -480,7 +480,9 @@ impl<'a> Field<'a> {
                     .slider_exact(n, self.vars.iter().find(|(m, _)| m == n)?.1)?,
             ),
             Expr::Neg(a) => self.read(a)?.neg(),
-            Expr::Degrees(a) => self.read(a)?,
+            // (The language refuses ° outside degrees mode: no value.)
+            Expr::Degrees(a) if self.unit == Unit::Degrees => self.read(a)?,
+            Expr::Degrees(_) => return None,
             Expr::Bin(BinOp::Pow, a, b) => {
                 let base = self.read(a)?;
                 if let Some((p, q)) = written_rational(b, self.lits) {
@@ -498,7 +500,7 @@ impl<'a> Field<'a> {
                     return Some(self.atom(name, Atom::PowVar(base, ex)));
                 }
                 // A constant exponent with an exact rational value.
-                let q = exact::eval(b, None, self.lits, self.vars)?;
+                let q = exact::eval(b, None, self.lits, self.vars, self.unit)?;
                 let (p, d) = (q.numer().to_i64()?, q.denom().to_u32()?);
                 if d == 1 {
                     return base.powi(p);
@@ -527,7 +529,7 @@ impl<'a> Field<'a> {
                 // log_b u = ln u / ln b.
                 LogBase => self.of("ln", b).div(&self.of("ln", a)),
                 Root => {
-                    let n = exact::eval(&args[1], None, self.lits, self.vars)?;
+                    let n = exact::eval(&args[1], None, self.lits, self.vars, self.unit)?;
                     if contains_x(&args[1]) || !n.is_integer() || n == 0 {
                         return None;
                     }
