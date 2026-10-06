@@ -596,8 +596,17 @@ impl GraphingPage {
         });
         self.rows.borrow_mut().push(row.clone());
 
+        // The text, not each change: replacing it all (an assistive
+        // technology's SetTextContents, gtk_editable_set_text) deletes it
+        // and inserts the new one, `changed` each time, while the text
+        // property, frozen meanwhile, is told once, of the new text. So
+        // the graph never sees the empty text in between, which would
+        // forget the sliders the new text still uses (as DGMNB's direct
+        // replacement keeps them); a text that really is cleared still
+        // forgets them (Graph::refresh). Typing over a selection is one
+        // change already (GtkText's begin_change).
         let weak = Rc::downgrade(self);
-        entry.connect_changed(move |e| {
+        entry.connect_text_notify(move |e| {
             if let Some(p) = weak.upgrade()
                 && !p.building.get()
             {
@@ -1296,5 +1305,50 @@ fn spoken(l: &gtk::Label, text: &str) {
         l.update_property(&[gtk::accessible::Property::Label(&graphing::trace::spoken(
             text,
         ))]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use graphing::{EquationId, Graph};
+
+    fn tell(g: &mut Graph, id: EquationId, texts: &[&str]) {
+        for t in texts {
+            g.set_equation_text(id, t);
+        }
+    }
+
+    /// What the graph is told of a whole replacement (round 15, Question
+    /// 2). GTK's set_text (an AT client's SetTextContents) emits `changed`
+    /// for the deletion and for the insertion, the text property once
+    /// (checked natively over AT-SPI): told each change, the empty text
+    /// between forgets the slider; told the text, as the equation field
+    /// is now, the slider stays, value, range and step, as DGMNB's direct
+    /// replacement keeps it. A text really cleared still forgets it.
+    #[test]
+    fn a_whole_replacement_keeps_its_sliders() {
+        let setup = || {
+            let mut g = Graph::new();
+            let id = g.add_equation("y = a*x+1");
+            g.set_variable("a", 0.3);
+            g.update_variable("a", |v| {
+                v.set_min(-2.0);
+                v.set_max(3.0);
+                v.set_step(0.05);
+            });
+            (g, id)
+        };
+        let (mut g, id) = setup();
+        tell(&mut g, id, &["", "y = a*x+2"]);
+        assert_eq!(g.variable("a").unwrap().value(), 1.0);
+
+        let (mut g, id) = setup();
+        let kept = *g.variable("a").unwrap();
+        tell(&mut g, id, &["y = a*x+2"]);
+        assert_eq!(g.variable("a"), Some(&kept));
+        tell(&mut g, id, &[""]);
+        assert!(g.variables().is_empty());
+        tell(&mut g, id, &["y = a*x+2"]);
+        assert_eq!(g.variable("a").unwrap().value(), 1.0);
     }
 }
