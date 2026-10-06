@@ -381,6 +381,33 @@ impl Window {
             });
         }
         {
+            // A row is picked by activating it; selecting one (the keys
+            // move the selection) only marks it. GTK carries out an
+            // assistive technology's Selection request whether or not the
+            // list is covered (crate::inert): covered, or left with no
+            // row, the list marks the current mode again (R15-M-02).
+            let weak = Rc::downgrade(&this);
+            nav.connect_row_selected(move |nav, row| {
+                let Some(w) = weak.upgrade() else { return };
+                // set_mode has set the mode before it selects the mode's
+                // row, holding the rows (shared, so this borrow succeeds).
+                let Ok(rows) = w.nav_rows.try_borrow() else {
+                    return;
+                };
+                let current = rows
+                    .iter()
+                    .find(|(m, _, _)| *m == w.mode.get())
+                    .map(|(_, r, _)| r.clone());
+                drop(rows);
+                if let Some(current) = current
+                    && row != Some(&current)
+                    && (row.is_none() || w.ctx.layers.covers(nav))
+                {
+                    nav.select_row(Some(&current));
+                }
+            });
+        }
+        {
             let weak = Rc::downgrade(&this);
             settings_btn.connect_clicked(move |_| {
                 if let Some(w) = weak.upgrade() {

@@ -40,6 +40,14 @@ pub fn show(win: &Rc<Window>) {
     {
         let ctx = ctx.clone();
         theme.connect_active_name_notify(move |t| {
+            if ctx.layers.covers(t) {
+                // Covered, Settings changes nothing (R15-M-02).
+                let saved = ctx.store.data.borrow().theme.clone();
+                if t.active_name().as_deref() != Some(saved.as_str()) {
+                    t.set_active_name(Some(&saved));
+                }
+                return;
+            }
             let name = t
                 .active_name()
                 .map(|s| s.to_string())
@@ -186,6 +194,9 @@ pub fn show(win: &Rc<Window>) {
                 refresh();
             })
         };
+        // No cover check here, unlike Settings' other controls: a picked
+        // colour comes from the chooser, which covers Settings until it
+        // has closed. Covered, the buttons themselves refuse (an Action).
         for b in [&primary, &secondary] {
             let apply = apply_custom.clone();
             b.connect_rgba_notify(move |_| apply());
@@ -211,10 +222,25 @@ pub fn show(win: &Rc<Window>) {
             let ctx = ctx.clone();
             let (custom_reveal, system_reveal) = (custom_reveal.clone(), system_reveal.clone());
             flow.connect_selected_children_changed(move |f| {
-                let Some(child) = f.selected_children().into_iter().next() else {
+                // GTK carries out an assistive technology's Selection
+                // request (SelectChild, DeselectChild, ClearSelection...)
+                // whether or not the grid is covered (crate::inert), and
+                // a single-selection grid can be left with none. Covered,
+                // or left empty, it shows the saved palette again, and
+                // nothing is applied or saved (R15-M-02): GTK then answers
+                // that the child asked for isn't selected.
+                let saved = ctx.hub.palette();
+                let chosen = f
+                    .selected_children()
+                    .first()
+                    .map(|c| PaletteId::ALL[c.index() as usize]);
+                let Some(id) = chosen.filter(|&id| id == saved || !ctx.layers.covers(f)) else {
+                    let at = PaletteId::ALL.iter().position(|&id| id == saved);
+                    if let Some(child) = at.and_then(|i| f.child_at_index(i as i32)) {
+                        f.select_child(&child);
+                    }
                     return;
                 };
-                let id = PaletteId::ALL[child.index() as usize];
                 custom_reveal.set_reveal_child(id == PaletteId::Custom);
                 system_reveal.set_reveal_child(id == PaletteId::System);
                 if id != ctx.hub.palette() {
@@ -249,6 +275,14 @@ pub fn show(win: &Rc<Window>) {
         {
             let ctx = ctx.clone();
             anim.connect_active_notify(move |r| {
+                let saved = ctx.store.data.borrow().animated_background;
+                if ctx.layers.covers(r) {
+                    // Covered, Settings changes nothing (R15-M-02).
+                    if r.is_active() != saved {
+                        r.set_active(saved);
+                    }
+                    return;
+                }
                 ctx.aurora.set_animated(r.is_active());
                 ctx.store.data.borrow_mut().animated_background = r.is_active();
                 ctx.store.persist();
@@ -327,6 +361,15 @@ pub fn show(win: &Rc<Window>) {
             let (ctx, win, shown) = (ctx.clone(), win.widget(), shown.clone());
             let pending = Rc::default();
             scale.connect_value_changed(move |s| {
+                if ctx.layers.covers(s) {
+                    // Covered, Settings changes nothing (R15-M-02).
+                    let saved = ctx.store.data.borrow().background_opacity;
+                    let saved = f64::from(crate::settings::backdrop_alpha(saved));
+                    if s.value() != saved {
+                        s.set_value(saved);
+                    }
+                    return;
+                }
                 let v = s.value();
                 shown.set_text(&percent(v));
                 s.update_property(&[gtk::accessible::Property::ValueText(&percent(v))]);
@@ -349,6 +392,14 @@ pub fn show(win: &Rc<Window>) {
         {
             let ctx = ctx.clone();
             vulkan.connect_active_notify(move |r| {
+                let saved = ctx.store.data.borrow().vulkan;
+                if ctx.layers.covers(r) {
+                    // Covered, Settings changes nothing (R15-M-02).
+                    if r.is_active() != saved {
+                        r.set_active(saved);
+                    }
+                    return;
+                }
                 ctx.store.data.borrow_mut().vulkan = r.is_active();
                 ctx.store.persist();
             });
@@ -445,6 +496,14 @@ fn graphing_group(ctx: &Rc<Ctx>) -> adw::PreferencesGroup {
         let (ctx, shown) = (ctx.clone(), shown.clone());
         let pending = Rc::default();
         scale.connect_value_changed(move |s| {
+            if ctx.layers.covers(s) {
+                // Covered, Settings changes nothing (R15-M-02).
+                let saved = f64::from(ctx.precision.get().position());
+                if s.value() != saved {
+                    s.set_value(saved);
+                }
+                return;
+            }
             let p = P::at_position(s.value());
             // GTK rounds only what the pointer and the keys set: a value
             // between positions (an AT client's 20.4) moves to the

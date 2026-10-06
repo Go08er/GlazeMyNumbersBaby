@@ -500,6 +500,37 @@ impl GraphingPage {
         }
     }
 
+    /// Draws or hides an equation: the show/hide toggle.
+    fn set_drawn(self: &Rc<Self>, id: EquationId, on: bool) {
+        self.graph.borrow_mut().set_line_enabled(id, on);
+        if let Some(row) = self.rows.borrow().iter().find(|r| r.id == id) {
+            self.show_drawn(row);
+        }
+        // A hidden equation's variables aren't listed (kept, as they were,
+        // for when it is shown).
+        self.sync_variables();
+        self.graph_view.invalidate();
+        if on {
+            self.graph_view.animate_draw(id);
+        }
+    }
+
+    /// Shows whether a row's equation is drawn, as the graph has it (a
+    /// toggle, an edit, a restored session): its swatch full or faded,
+    /// and, to assistive technology, a toggle button pressed while the
+    /// equation is drawn, as in DGMNB (R15-L-03).
+    fn show_drawn(&self, row: &Row) {
+        let on = self.graph.borrow().is_line_enabled(row.id);
+        row.swatch.set_opacity(if on { 1.0 } else { 0.35 });
+        let pressed = if on {
+            gtk::AccessibleTristate::True
+        } else {
+            gtk::AccessibleTristate::False
+        };
+        row.swatch
+            .update_state(&[gtk::accessible::State::Pressed(pressed)]);
+    }
+
     fn add_equation(self: &Rc<Self>, text: &str) -> Option<Rc<Row>> {
         if self.graph.borrow().len() >= session::MAX_EQUATIONS {
             self.ctx.toast("You can graph up to 14 equations");
@@ -510,11 +541,15 @@ impl GraphingPage {
         let color = self.next_color.get();
         self.next_color.set(color + 1);
 
+        // A toggle for assistive technology: pressed while the equation
+        // is drawn (show_drawn).
         let swatch = gtk::Button::builder()
             .css_classes(["wc-swatch"])
             .tooltip_text("Show or hide")
+            .accessible_role(gtk::AccessibleRole::ToggleButton)
             .valign(gtk::Align::Center)
             .build();
+        swatch.update_property(&[gtk::accessible::Property::Label("Show or hide")]);
         let entry = gtk::Entry::builder()
             // Plenty for any real equation; also bounds parse/compile work.
             .max_length(session::MAX_EQUATION_CHARS as i32)
@@ -560,6 +595,7 @@ impl GraphingPage {
         });
         style.set_popover(Some(&self.style_popover(&row)));
         self.paint_swatch(&row);
+        self.show_drawn(&row);
         let s = self.ctx.hub.scheme();
         self.graph_view
             .set_color(id, s.series[color % s.series.len()]);
@@ -575,8 +611,17 @@ impl GraphingPage {
         });
         self.rows.borrow_mut().push(row.clone());
 
+        // The text, not each change: replacing it all (an assistive
+        // technology's SetTextContents, gtk_editable_set_text) deletes it
+        // and inserts the new one, `changed` each time, while the text
+        // property, frozen meanwhile, is told once, of the new text. So
+        // the graph never sees the empty text in between, which would
+        // forget the sliders the new text still uses (as DGMNB's direct
+        // replacement keeps them); a text that really is cleared still
+        // forgets them (Graph::refresh). Typing over a selection is one
+        // change already (GtkText's begin_change).
         let weak = Rc::downgrade(self);
-        entry.connect_changed(move |e| {
+        entry.connect_text_notify(move |e| {
             if let Some(p) = weak.upgrade()
                 && !p.building.get()
             {
@@ -605,18 +650,10 @@ impl GraphingPage {
             }
         });
         let weak = Rc::downgrade(self);
-        swatch.connect_clicked(move |b| {
+        swatch.connect_clicked(move |_| {
             if let Some(p) = weak.upgrade() {
                 let on = !p.graph.borrow().is_line_enabled(id);
-                p.graph.borrow_mut().set_line_enabled(id, on);
-                b.set_opacity(if on { 1.0 } else { 0.35 });
-                // A hidden equation's variables aren't listed (kept, as
-                // they were, for when it is shown).
-                p.sync_variables();
-                p.graph_view.invalidate();
-                if on {
-                    p.graph_view.animate_draw(id);
-                }
+                p.set_drawn(id, on);
             }
         });
         let weak = Rc::downgrade(self);
@@ -724,7 +761,11 @@ impl GraphingPage {
             .borrow()
             .text(id)
             .is_none_or(|t| t.trim().is_empty());
+        // An edit draws a hidden equation again (as upstream's does).
         self.graph.borrow_mut().set_equation_text(id, text);
+        if let Some(row) = self.rows.borrow().iter().find(|r| r.id == id) {
+            self.show_drawn(row);
+        }
         let err = self.show_error(id);
         self.graph_view.invalidate();
         if was_empty && err.is_none() {
@@ -1154,6 +1195,7 @@ impl GraphingPage {
         };
         self.building.set(true);
         let mut first = None;
+        let mut hidden = Vec::new();
         for eq in &saved {
             if let Some(row) = self.add_equation(&eq.text) {
                 first.get_or_insert(row.id);
@@ -1166,8 +1208,7 @@ impl GraphingPage {
                     self.graph.borrow_mut().set_line_style(row.id, style);
                 }
                 if eq.hidden {
-                    self.graph.borrow_mut().set_line_enabled(row.id, false);
-                    row.swatch.set_opacity(0.35);
+                    hidden.push(row.id);
                 }
             }
         }
@@ -1187,6 +1228,11 @@ impl GraphingPage {
             .collect();
         for (id, text) in rows {
             self.equation_changed(id, &text);
+        }
+        // Hidden only now, as an edit draws an equation again (DGMNB
+        // restores a hidden equation hidden too).
+        for id in hidden {
+            self.set_drawn(id, false);
         }
         if self.rows.borrow().is_empty() {
             self.add_equation("");
@@ -1269,5 +1315,50 @@ fn spoken(l: &gtk::Label, text: &str) {
         l.update_property(&[gtk::accessible::Property::Label(&graphing::trace::spoken(
             text,
         ))]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use graphing::{EquationId, Graph};
+
+    fn tell(g: &mut Graph, id: EquationId, texts: &[&str]) {
+        for t in texts {
+            g.set_equation_text(id, t);
+        }
+    }
+
+    /// What the graph is told of a whole replacement (round 15, Question
+    /// 2). GTK's set_text (an AT client's SetTextContents) emits `changed`
+    /// for the deletion and for the insertion, the text property once
+    /// (checked natively over AT-SPI): told each change, the empty text
+    /// between forgets the slider; told the text, as the equation field
+    /// is now, the slider stays, value, range and step, as DGMNB's direct
+    /// replacement keeps it. A text really cleared still forgets it.
+    #[test]
+    fn a_whole_replacement_keeps_its_sliders() {
+        let setup = || {
+            let mut g = Graph::new();
+            let id = g.add_equation("y = a*x+1");
+            g.set_variable("a", 0.3);
+            g.update_variable("a", |v| {
+                v.set_min(-2.0);
+                v.set_max(3.0);
+                v.set_step(0.05);
+            });
+            (g, id)
+        };
+        let (mut g, id) = setup();
+        tell(&mut g, id, &["", "y = a*x+2"]);
+        assert_eq!(g.variable("a").unwrap().value(), 1.0);
+
+        let (mut g, id) = setup();
+        let kept = *g.variable("a").unwrap();
+        tell(&mut g, id, &["y = a*x+2"]);
+        assert_eq!(g.variable("a"), Some(&kept));
+        tell(&mut g, id, &[""]);
+        assert!(g.variables().is_empty());
+        tell(&mut g, id, &["y = a*x+2"]);
+        assert_eq!(g.variable("a").unwrap().value(), 1.0);
     }
 }
