@@ -1195,7 +1195,7 @@ impl GraphingPage {
     fn restore(self: &Rc<Self>) {
         let saved: Vec<SavedEquation> = match std::env::var("GMNB_EQUATIONS") {
             Ok(list) => session::from_list(&list),
-            Err(_) => session::restore(self.ctx.store.page_state("graphing")),
+            Err(_) => session::restore(self.ctx.store.page_state(appcore::settings::GRAPHING_PAGE)),
         };
         self.building.set(true);
         let mut first = None;
@@ -1301,7 +1301,9 @@ impl Page for GraphingHandle {
             })
             .collect();
         if let Ok(v) = serde_json::to_value(saved) {
-            p.ctx.store.set_page_state("graphing", v);
+            p.ctx
+                .store
+                .set_page_state(appcore::settings::GRAPHING_PAGE, v);
         }
     }
 }

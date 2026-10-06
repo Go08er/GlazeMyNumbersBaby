@@ -225,7 +225,7 @@ impl CalculatorPage {
 
         if let Some(state) = ctx
             .store
-            .page_state("calculator")
+            .page_state(appcore::settings::CALCULATOR_PAGE)
             .and_then(|v| v.as_str().map(String::from))
         {
             page.vm.borrow_mut().restore_state(&state);
@@ -1107,9 +1107,10 @@ impl CalculatorPage {
 
     fn save_state(&self) {
         let state = self.vm.borrow().save_state();
-        self.ctx
-            .store
-            .set_page_state("calculator", serde_json::Value::String(state));
+        self.ctx.store.set_page_state(
+            appcore::settings::CALCULATOR_PAGE,
+            serde_json::Value::String(state),
+        );
     }
 }
 

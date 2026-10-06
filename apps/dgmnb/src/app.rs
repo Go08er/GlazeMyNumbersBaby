@@ -449,9 +449,9 @@ impl App {
         let store = &self.store;
         match mode.page() {
             PageKind::Calculator => {
-                let page = self
-                    .calc
-                    .get_or_insert_with(|| CalcPage::new(store.page_state("calculator")));
+                let page = self.calc.get_or_insert_with(|| {
+                    CalcPage::new(store.page_state(appcore::settings::CALCULATOR_PAGE))
+                });
                 if let Some(m) = mode.calc_mode() {
                     if returning {
                         page.reactivate(m);
@@ -473,7 +473,9 @@ impl App {
             PageKind::Graphing => {
                 let eqs = match env("EQUATIONS") {
                     Some(list) => appcore::graph::from_list(&list),
-                    None => appcore::graph::restore(store.page_state("graphing")),
+                    None => {
+                        appcore::graph::restore(store.page_state(appcore::settings::GRAPHING_PAGE))
+                    }
                 };
                 let proxy = self.proxy.clone();
                 let precision = store.data.borrow().literal_digits;
@@ -507,13 +509,15 @@ impl App {
 
     fn save(&mut self) {
         if let Some(p) = &self.calc {
-            self.store.set_page_state("calculator", p.save());
+            self.store
+                .set_page_state(appcore::settings::CALCULATOR_PAGE, p.save());
         }
         if let Some(p) = &self.conv {
             self.store.set_page_state("converter", p.save());
         }
         if let Some(p) = &self.graph {
-            self.store.set_page_state("graphing", p.save());
+            self.store
+                .set_page_state(appcore::settings::GRAPHING_PAGE, p.save());
         }
         if let Some(g) = &self.gfx
             && !self.compact
