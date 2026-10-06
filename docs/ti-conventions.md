@@ -94,9 +94,11 @@ odd, even or no integer as its form shows (3^20000 is odd, 10^5000 even,
 1.5^100000 no integer); where that isn't known (`x^nCr(2000, 1000)`), a
 negative base's power is unknown. Arithmetic on literals and
 sliders alone (+, −, ×, ÷, whole powers, |·| and the counts n!, n!!, nCr,
-nPr of whole numbers) is done exactly and rounded once
-(`10^17·(0.1 + 0.2 − 0.3)` is 0, `0.1·3` is the double nearest 0.3, and
-`1/(0.1 + 0.2 − 0.3)` divides by zero), for the curve drawn, its trace and
+nPr of whole numbers of any size) is done exactly and rounded once
+(`10^17·(0.1 + 0.2 − 0.3)` is 0, `0.1·3` is the double nearest 0.3,
+`1/(0.1 + 0.2 − 0.3)` divides by zero, and off
+`nCr(9007199254740993, 1) − 9007199254740992` is 1, though no double holds
+the first number), for the curve drawn, its trace and
 its analysis alike, while every exact value on the way fits in 2¹⁴ bits
 (about 4,900 digits). Past that the arithmetic isn't carried out. A value
 proven beyond the doubles on its own (`10^5000`, `171!`, `(1/2)^100000`)

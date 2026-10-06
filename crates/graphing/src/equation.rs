@@ -538,6 +538,9 @@ fn coefficient_sign(c: &Expr) -> Option<f64> {
         };
         let s = match crate::compile::typed_value(c, &opts) {
             Some(crate::compile::TypedValue::Value(v)) if v != 0.0 => v.signum(),
+            Some(crate::compile::TypedValue::Far(crate::wide::Wide::Val(m, _))) if m != 0.0 => {
+                m.signum()
+            }
             // Exactly 0, a division by 0, or too long to tell.
             Some(_) => return None,
             None => {

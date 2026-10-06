@@ -6,6 +6,12 @@
 //! isn't carried (an exponent too long to fold) a negative base's power
 //! is unknown, unless the parity is known otherwise.
 //!
+//! R14-M-03: a count of whole numbers past 2⁵³ (a typed 9007199254740993)
+//! was left to floating point, which rounded them first: off,
+//! nCr(9007199254740993, 1) − 9007199254740992 was 0, not 1, and with + x
+//! the line drawn was y = x. Such counts are now exact, or unknown when
+//! too long to carry.
+//!
 //! R14-M-04: a root degree box far below −10³⁰⁰ was taken to hold no odd
 //! integer (its lower end was clipped to −10³⁰⁰), so root(−8, n) over it
 //! was empty, and a degree typed as the odd −(10³⁰¹ + 1) left the panel
@@ -96,6 +102,83 @@ fn an_odd_exponent_past_the_doubles_is_odd() {
         assert!((s.is_nan() && o.is_nan()) || s == *o, "{x}: {s} vs {o}");
     }
     assert_eq!(p.eval(-1.0, 0.0), -2.0);
+}
+
+/// The heights of the curve of `y=src` (under `digits`) in [−10, 10]²,
+/// with their x.
+fn curve(src: &str, digits: Option<u8>) -> Vec<(f64, f64)> {
+    let mut g = Graph::new();
+    g.set_literal_digits(digits);
+    let id = g.add_equation(&format!("y={src}"));
+    let v = graphing::Viewport::new(-10.0, 10.0, -10.0, 10.0, 400.0, 400.0);
+    let p = g.plot_equation(id, &v).unwrap();
+    p.curves.iter().flatten().map(|p| (p.x, p.y)).collect()
+}
+
+#[test]
+fn counts_of_whole_numbers_past_the_doubles_are_exact() {
+    // Off, 16 and 20 digits the literals are as typed; to 14 they are
+    // 9007199254741000 (and the two of a difference alike).
+    for digits in PRECISIONS {
+        let exact = digits != Some(14);
+        for (src, want, want14) in [
+            ("nCr(9007199254740993,1)-9007199254740992", 1.0, 0.0),
+            ("nPr(9007199254740993,1)-9007199254740992", 1.0, 0.0),
+            // C(2⁵³ + 1, 2⁵³) = 2⁵³ + 1.
+            (
+                "nCr(9007199254740993,9007199254740992)-9007199254740992",
+                1.0,
+                -9007199254741000.0,
+            ),
+            // C(n, 2)/n = (n − 1)/2.
+            (
+                "nCr(9007199254740993,2)/9007199254740993-4503599627370496",
+                0.0,
+                -0.5,
+            ),
+            // r > n: none.
+            ("nCr(9007199254740992,9007199254740993)", 0.0, 1.0),
+            ("nPr(9007199254740992,9007199254740993)", 0.0, f64::INFINITY),
+            // C(2⁵³ + 1, 21) ≈ 2¹⁰⁴⁷: beyond the doubles, not 5·10³⁰⁰.
+            ("nCr(9007199254740993,9007199254740972)", f64::INFINITY, 1.0),
+        ] {
+            let want = if exact { want } else { want14 };
+            assert_eq!(value(src, 0.0, digits), want, "{src} ({digits:?})");
+            let r = reference(src, 0.0, digits);
+            // (A count beyond the doubles from doubles, n! for n past 170,
+            // is more than the reference holds: unknown.)
+            let ok = match r {
+                R::V(v) if want.is_infinite() => v.huge() && v.sign() > 0.0,
+                R::V(v) => v.f() == want,
+                R::Unknown => want.is_infinite() && !exact,
+                R::Undef => false,
+            };
+            assert!(ok, "{src} ({digits:?}): reference {r:?}");
+        }
+        // + x: the line y = x + 1 (off, 16, 20), drawn so.
+        let src = "nCr(9007199254740993,1)-9007199254740992+x";
+        let shift = if exact { 1.0 } else { 0.0 };
+        assert_eq!(value(src, 0.0, digits), shift);
+        assert_eq!(value(src, 2.5, digits), 2.5 + shift);
+        let pts = curve(src, digits);
+        assert!(!pts.is_empty());
+        assert!(
+            pts.iter().all(|(x, y)| (y - x - shift).abs() < 1e-9),
+            "{digits:?}: {:?}",
+            &pts[..pts.len().min(4)]
+        );
+    }
+    // Γ's generalisation, and the poles of Γ, as before.
+    assert!(value("(-9007199254740993)!", 0.0, None).is_nan());
+    assert_eq!(value("(9007199254740993)!", 0.0, None), f64::INFINITY);
+    assert!(value("nCr(-9007199254740993,2)", 0.0, None).is_nan());
+    // Too long to carry: unknown, not rounded (C(2⁵³ + 1, 400) has about
+    // 18,000 bits).
+    assert!(value("nCr(9007199254740993,400)-1", 0.0, None).is_nan());
+    assert!(matches!(
+        reference("nCr(9007199254740993,400)-1", 0.0, None),
+        R::Unknown
+    ));
 }
 
 /// An exponent too long to fold, beyond the doubles: its parity, where

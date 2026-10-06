@@ -717,6 +717,50 @@ pub(crate) fn count_exact(n: f64, r: f64, perm: bool) -> Option<Count> {
     Some(Count::Exact(big))
 }
 
+/// nCr (or nPr, `perm`) exactly for whole numbers 0 ≤ r ≤ n of any size,
+/// such as a typed 9007199254740993 that no double holds (review 14,
+/// R14-M-03: rounded first, C(2⁵³ + 1, 1) − 2⁵³ was 0, not 1); `None` for
+/// a count longer than `big::MAX_BITS` bits (and so beyond the doubles).
+pub(crate) fn count_exact_big(n: &Nat, r: &Nat, perm: bool) -> Option<Nat> {
+    let cap = crate::big::MAX_BITS;
+    let small = |v: &Nat| -> Option<u64> {
+        let (lo, hi) = v.enclose();
+        (hi < EXACT && lo == hi).then_some(lo as u64)
+    };
+    if perm {
+        // n(n − 1)…(n − r + 1): r factors, each ≥ 1 and all but the last
+        // ≥ 2, so at least 2^(r − 1).
+        let r = small(r).filter(|&r| r <= cap + 1)?;
+        let mut acc = Nat::from_u64(1);
+        for i in 0..r {
+            acc = acc.mul(&n.sub(&Nat::from_u64(i)));
+            if acc.bits() > cap {
+                return None;
+            }
+        }
+        return Some(acc);
+    }
+    // C(n, r) = C(n, n − r): the smaller, r′ (C(n, r′) ≥ 2^r′).
+    let rest = n.sub(r);
+    let r = if rest < *r { rest } else { r.clone() };
+    let r = small(&r).filter(|&r| r <= cap)?;
+    // acc = C(n − r′ + i, i), increasing in i: multiplied, then divided
+    // exactly.
+    let base = n.sub(&Nat::from_u64(r));
+    let mut acc = Nat::from_u64(1);
+    for i in 1..=r {
+        let (q, rem) = acc
+            .mul(&base.add(&Nat::from_u64(i)))
+            .div_rem_small(i as u32);
+        debug_assert_eq!(rem, 0);
+        acc = q;
+        if acc.bits() > cap {
+            return None;
+        }
+    }
+    Some(acc)
+}
+
 /// True for odd integers. Every `f64` at or beyond 2^53 is an even integer
 /// (a saturating `as i64` cast would wrongly report `i64::MAX`, i.e. odd).
 pub(crate) fn is_odd_integer(n: f64) -> bool {

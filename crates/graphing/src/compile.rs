@@ -1454,10 +1454,25 @@ fn beyond(l: (f64, f64), var: bool, parity: Parity) -> Fold {
 /// The exact value of an x- and y-free subtree of typed literals and
 /// sliders (a slider's value is the double it holds) under +, −, ×, ÷,
 /// whole powers, |·|, and the counts n!, n!!, nCr, nPr of whole numbers.
+///
+/// Each of those is folded at any size, or refused for its length
+/// ([`Fold::Big`], unknown; or [`Fold::Lone`] where the general path is
+/// right alone): a whole number past 2⁵³ is not left to the general path,
+/// which would round it to an even double first (review 14, R14-M-03:
+/// C(2⁵³ + 1, 1) − 2⁵³ was 0, not 1). [`Fold::No`] is left only for what
+/// isn't a rational computation on literals and sliders, which the general
+/// path computes in floating point like sin: π, a function other than
+/// those, a power to an exponent no integer (a root: `8^(1/3)`), 0⁰
+/// (undefined), Γ's generalisation of a count to numbers no whole number,
+/// and a count at a pole of Γ (n! for a whole n < 0, nCr and nPr for a
+/// whole n < 0), undefined however its whole numbers are rounded.
 fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
     use Fold::*;
     let go = |a: &Expr| fold(a, opts);
     let whole = |r: &Rat| r.as_int().filter(|n| n.unsigned_abs() <= 1 << 53);
+    // Exactly a double (the general path reads it exactly).
+    let double =
+        |r: &Rat| Rat::from_f64(r.to_f64(crate::big::Round::Nearest)).is_some_and(|d| d == *r);
     match e {
         // Each number by its own exact value: a decimal typed, a value
         // folded, a double; not one known only to round to its double.
@@ -1579,7 +1594,18 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                     No => return No,
                     other => return Big(other.var()),
                 };
-                let Some(n) = whole(&r) else { return No };
+                let n = match whole(&r) {
+                    Some(n) => n,
+                    // Γ's generalisation (floating point, as sin).
+                    None if !r.is_integer() => return No,
+                    // A whole number past 2⁵³: a pole of Γ if negative,
+                    // undefined however it rounds; else past 170 (and
+                    // 300), the count beyond the doubles, as it is from
+                    // the even double the general path rounds it to.
+                    None if r.is_negative() => return No,
+                    None if *f == Func::Factorial => return Lone(v, Parity::Even),
+                    None => return Lone(v, Parity::of(&r)),
+                };
                 let count = if *f == Func::Factorial {
                     // n! up to 170! (beyond, past the doubles).
                     match n {
@@ -1612,10 +1638,38 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                     (No, _) | (_, No) => return No,
                     (fa, fb) => return Big(fa.var() || fb.var()),
                 };
-                let (Some(n), Some(r)) = (whole(&rn), whole(&rr)) else {
+                let perm = *f == Func::NPr;
+                // Γ's generalisation (floating point, as sin).
+                if !rn.is_integer() || !rr.is_integer() {
                     return No;
-                };
-                match fns::count_exact(n as f64, r as f64, *f == Func::NPr) {
+                }
+                // Whole numbers no double holds (past 2⁵³): the count of
+                // the numbers themselves, never of their doubles; too long
+                // to carry, unknown (the general path, from rounded whole
+                // numbers, could make 1 of C(2⁵³ + 50, 2⁵³ + 25)).
+                if !double(&rn) || !double(&rr) {
+                    let (Some((nneg, n)), Some((rneg, r))) = (rn.integer(), rr.integer()) else {
+                        return Big(vn || vr);
+                    };
+                    if nneg {
+                        // A pole of Γ, however n rounds (to a whole n < 0).
+                        return No;
+                    }
+                    if rneg || r > n {
+                        return Value(Rat::int(0), vn || vr);
+                    }
+                    return match fns::count_exact_big(&n, &r, perm) {
+                        Some(p) => Value(Rat::nat(p), vn || vr),
+                        None => Big(vn || vr),
+                    };
+                }
+                // Each a double: exactly, or beyond the doubles (+∞ from
+                // the same doubles on the general path).
+                let (n, r) = (
+                    rn.to_f64(crate::big::Round::Nearest),
+                    rr.to_f64(crate::big::Round::Nearest),
+                );
+                match fns::count_exact(n, r, perm) {
                     Some(fns::Count::Exact(p)) => Value(Rat::nat(p), vn || vr),
                     // (A product of r ≥ 2 consecutive integers is even.)
                     Some(fns::Count::Huge) => Lone(
@@ -1686,6 +1740,11 @@ pub(crate) fn fold_literals(e: &Expr, opts: &CompileOptions<'_>) -> Expr {
 pub(crate) enum TypedValue {
     /// Folded exactly and rounded once (within the doubles).
     Value(f64),
+    /// Folded exactly, a value beyond the doubles (10⁴⁰⁰, C(2⁵³ + 1, 21)):
+    /// its extended-range rounding, as the program holds it. (Not to be
+    /// recomputed from the doubles of its literals: from those, a count
+    /// of whole numbers past 2⁵³ is another number.)
+    Far(Wide),
     /// A division by an exact 0.
     DivZero,
     /// Too long to fold ([`Fold::Big`]): not known.
@@ -1707,7 +1766,11 @@ pub(crate) fn typed_value(e: &Expr, opts: &CompileOptions<'_>) -> Option<TypedVa
     match fold(e, opts) {
         Fold::Value(r, _) => {
             let v = r.to_f64(crate::big::Round::Nearest);
-            (v.is_finite() && (v != 0.0 || r.is_zero())).then_some(TypedValue::Value(v))
+            Some(if v.is_finite() && (v != 0.0 || r.is_zero()) {
+                TypedValue::Value(v)
+            } else {
+                TypedValue::Far(r.to_wide())
+            })
         }
         Fold::DivZero(_) => Some(TypedValue::DivZero),
         Fold::Big(_) => Some(TypedValue::Unknown),

@@ -429,6 +429,11 @@ fn reval_in(e: &Expr, x: f64, u: TrigUnit, typed: bool) -> R {
     if typed && let Some(v) = crate::compile::typed_value(e, &opts) {
         return match v {
             crate::compile::TypedValue::Value(v) => R::V(Xf::of(v)),
+            // m·2^e, 1 ≤ |m| < 2.
+            crate::compile::TypedValue::Far(crate::wide::Wide::Val(m, e)) => {
+                R::V(Xf::norm(m, e as i64))
+            }
+            crate::compile::TypedValue::Far(_) => R::Unknown,
             crate::compile::TypedValue::DivZero => R::Undef,
             crate::compile::TypedValue::Unknown => R::Unknown,
         };
