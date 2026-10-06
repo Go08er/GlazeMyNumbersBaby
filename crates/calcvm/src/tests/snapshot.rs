@@ -1358,8 +1358,29 @@ fn e_notation_is_typed_out_where_it_fits() {
         ("1.234567890123456e+20", 32, Some("123456789012345600000")),
         ("1.e+40", 32, None),
         ("121", 32, None),
+        ("1.5e+15", 16, Some("1500000000000000")),
+        ("1.5e+16", 16, None),
+        ("1.e-16", 16, Some("0.0000000000000001")),
+        ("1.e-17", 16, None),
+        // A mantissa's leading zeros, in its fraction too.
+        ("0.05e+2", 32, Some("5")),
+        ("0.0012e+3", 32, Some("1.2")),
+        ("-00012.5e+1", 32, Some("-125")),
+        ("0.000e+999999999999", 32, Some("0")),
+        // Saved state can hold any exponent (R17-M-01): it is counted, not
+        // written out, and the text is left to the paste validator.
+        ("1.e+999999999999", 32, None),
+        ("1.e-999999999999", 32, None),
+        ("-9.9e+9223372036854775807", 32, None),
+        ("9.9e-9223372036854775808", 32, None),
+        ("0.01e-9223372036854775807", 32, None),
+        ("1.e+9223372036854775808", 32, None),
+        ("1.e-99999999", 32, None),
     ] {
-        assert_eq!(plain_decimal(text, '.', max).as_deref(), plain, "{text}");
+        let mut out = None;
+        let largest = super::largest_allocation(|| out = plain_decimal(text, '.', max));
+        assert_eq!(out.as_deref(), plain, "{text}");
+        assert!(largest < 256, "{text}: {largest} bytes");
     }
 }
 
@@ -1574,6 +1595,204 @@ fn hostile_memory_restores_quickly() {
         assert_eq!(restored[96], "97");
         assert_eq!(vm.display_value(), "0");
     }
+}
+
+/// The exponents saved state can hold, as short numbers (R17-M-01).
+const HUGE_EXPONENTS: [&str; 7] = [
+    "1.e+999999999999",
+    "1.e-999999999999",
+    "-9.9e+9223372036854775807",
+    "9.9e-9223372036854775808",
+    "1.e+9223372036854775808",
+    "1.e+99999999",
+    "1.e-99999999",
+];
+
+/// Most a restore of the small states below may ask for at once (writing
+/// out a 10^8 exponent asked for 100 MB, a 10^12 one for a terabyte).
+const SMALL_ALLOCATION: usize = 1 << 20;
+
+/// `f`, which must finish within seconds and allocate little.
+fn bounded(what: &str, f: impl FnOnce()) {
+    let start = std::time::Instant::now();
+    let largest = super::largest_allocation(f);
+    let elapsed = start.elapsed();
+    assert!(largest < SMALL_ALLOCATION, "{what}: {largest} bytes");
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "{what}: {elapsed:?}"
+    );
+}
+
+/// A memory slot with an exponent no display shows is left out when the
+/// snapshot is read, before the restore enters any; a slot with a short
+/// one is kept as the number it is.
+#[test]
+fn memory_with_huge_exponents_restores_quickly() {
+    for mode in [0, 1, 2] {
+        let mut memory: Vec<&str> = HUGE_EXPONENTS.to_vec();
+        memory.extend(["1.5e+3", "5"]);
+        let state = snapshot_json(mode, json!([]), json!({ "mem": memory }));
+        let mut vm = new_vm();
+        bounded(&format!("mode {mode}"), || vm.restore_state(&state));
+        // Programmer mode has no e-notation.
+        let kept: &[&str] = if mode == 2 { &["5"] } else { &["1.5e+3", "5"] };
+        assert_eq!(vm.memory(), kept, "mode {mode}");
+        vm.memory_recall(0);
+        let value = if mode == 2 { "5" } else { "1,500" };
+        assert_eq!(vm.display_value(), value, "mode {mode}");
+    }
+}
+
+/// Memory slots are checked when the snapshot is read: of the newest 100,
+/// what a display could show is kept, the rest left out (the snapshot
+/// isn't refused for them).
+#[test]
+fn memory_is_checked_when_read() {
+    use crate::snapshot::MAX_DISPLAY_LENGTH;
+    let shown = [
+        "0",
+        "-0.5",
+        "1,234.5",
+        "-1.5e+20",
+        "9.9999999999999999999999999999999e-9999",
+        "3.e+0",
+        "FF FF",
+        "1111 0000",
+        "-9,223,372,036,854,775,808",
+    ];
+    // Not as a display shows a number.
+    let not_shown = [
+        "1.e+10000",
+        "1.e+999999999999",
+        "1e",
+        "1e+",
+        "abc",
+        "1+1",
+        "--1",
+        "1-",
+        "",
+    ];
+    let mut memory: Vec<String> = shown
+        .iter()
+        .zip(not_shown)
+        .flat_map(|(slot, not)| [slot.to_string(), not.to_string()])
+        .collect();
+    memory.push("1".repeat(MAX_DISPLAY_LENGTH + 1));
+    memory.push("1".repeat(MAX_DISPLAY_LENGTH));
+    // Past the newest 100.
+    memory.extend((0..100).map(|i| i.to_string()));
+
+    let state = snapshot_json(1, json!([]), json!({ "mem": memory }));
+    let parsed = ApplicationSnapshot::from_json(&state).unwrap();
+    let mut expected: Vec<String> = shown.iter().map(|s| s.to_string()).collect();
+    expected.push("1".repeat(MAX_DISPLAY_LENGTH));
+    expected.extend((0..100 - 2 * shown.len() - 2).map(|i| i.to_string()));
+    assert_eq!(parsed.extension.unwrap().memory, expected);
+}
+
+/// The display, the engine's value under it (`"ev"`) and a History item's
+/// result (entered when its replay is over budget) go through the same
+/// writing out as memory: none of them makes the restore, or a click on the
+/// item, allocate for its exponent.
+#[test]
+fn saved_values_with_huge_exponents_are_not_written_out() {
+    for text in HUGE_EXPONENTS {
+        for mode in [0, 1, 2] {
+            // The display, with and without "k" (which a new calculation
+            // from the saved value falls back on).
+            for k in [None, Some(json!({}))] {
+                let mut s: Value =
+                    serde_json::from_str(&snapshot_json(mode, json!([]), json!({ "mem": ["5"] })))
+                        .unwrap();
+                s["s"]["p"]["d"] = json!(text);
+                if let Some(k) = &k {
+                    s["x"]["k"] = k.clone();
+                }
+                let mut vm = new_vm();
+                bounded(&format!("display {text} mode {mode} k {k:?}"), || {
+                    vm.restore_state(&s.to_string())
+                });
+                assert_eq!(vm.memory(), ["5"]);
+                vm.press(Button::Seven);
+                assert_eq!(vm.display_value(), "7", "{text} mode {mode}");
+            }
+
+            // The engine's value under a paste error.
+            let mut s: Value =
+                serde_json::from_str(&snapshot_json(mode, json!([]), json!({}))).unwrap();
+            s["s"]["p"] = json!({ "d": "Invalid input", "e": true });
+            s["x"]["k"] = json!({ "ev": text });
+            let mut vm = new_vm();
+            bounded(&format!("engine value {text} mode {mode}"), || {
+                vm.restore_state(&s.to_string())
+            });
+            vm.press(Button::Seven);
+            assert_eq!(vm.display_value(), "7", "{text} mode {mode}");
+        }
+    }
+
+    // A History item whose replay is over budget continues from its result
+    // as shown (each replay costs the whole budget, so two of them).
+    let fact = [
+        operand(&[130, 84, 135]),
+        json!({ "$t": 0, "c": [113] }),
+        json!({ "$t": 1, "c": 93 }),
+    ];
+    // A result longer than the paste validator takes isn't entered either,
+    // even where writing it out would shorten it (to 100).
+    let long = format!("1.{}e+2", "0".repeat(600));
+    for text in [HUGE_EXPONENTS[0], HUGE_EXPONENTS[3], &long] {
+        let item = json!({
+            "t": [{ "t": "x", "c": 0 }, { "t": "=", "c": -1 }],
+            "c": chain(&fact, 1000), "e": "x =", "r": text,
+        });
+        let mut vm = new_vm();
+        vm.restore_state(&snapshot_json(1, json!([]), json!({ "hc": [item] })));
+        assert_eq!(vm.history().len(), 1);
+        bounded(&format!("History result {text}"), || vm.history_recall(0));
+        assert_eq!(vm.display_value(), text);
+        for b in [Button::Add, Button::Seven, Button::Equals] {
+            vm.press(b);
+        }
+        assert_eq!(vm.display_value(), "7", "{text}");
+    }
+}
+
+/// The exponent of an operand in the saved commands is typed key by key,
+/// and the engine takes four digits of it, as from the keyboard: an
+/// operand at the key limit, an exponent all but one of its keys, restores
+/// quickly and allocates little, in the display commands, as what "="
+/// repeats and as the left operand.
+#[test]
+fn saved_operand_exponents_are_typed_within_four_digits() {
+    let long_exponent = || {
+        let mut keys = vec![131, 127];
+        keys.extend([139; 16_000]);
+        operand(&keys)
+    };
+    let mut s: Value = serde_json::from_str(&snapshot_json(
+        1,
+        json!([long_exponent()]),
+        json!({ "k": { "eq": [{ "$t": 1, "c": 93 }, long_exponent()] } }),
+    ))
+    .unwrap();
+    s["s"]["p"]["d"] = json!("1.e+9999");
+    let mut vm = new_vm();
+    bounded("Scientific operand", || vm.restore_state(&s.to_string()));
+    assert_eq!(vm.display_value(), "1.e+9999");
+
+    let mut s: Value = serde_json::from_str(&snapshot_json(
+        0,
+        json!([]),
+        json!({ "k": { "lv": long_exponent() } }),
+    ))
+    .unwrap();
+    s["s"]["p"]["d"] = json!("0");
+    let mut vm = new_vm();
+    bounded("Standard left operand", || vm.restore_state(&s.to_string()));
+    vm.press(Button::Seven);
+    assert_eq!(vm.display_value(), "7");
 }
 
 #[test]

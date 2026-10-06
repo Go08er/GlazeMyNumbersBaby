@@ -60,6 +60,69 @@ pub(super) fn validate_view_model_by_commands(
     }
 }
 
+/// The largest single allocation `f` asks for on this thread, in bytes: for
+/// the resource-bound tests, which check that nothing a saved state holds
+/// makes the restore allocate in proportion to a number in it (other
+/// threads, other tests among them, aren't counted).
+pub(super) fn largest_allocation(f: impl FnOnce()) -> usize {
+    alloc_probe::largest(f)
+}
+
+mod alloc_probe {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    thread_local! {
+        /// The largest request so far while measuring, `None` otherwise.
+        static LARGEST: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    fn note(size: usize) {
+        // `try_with`: allocations while the thread is being torn down.
+        let _ = LARGEST.try_with(|largest| {
+            if let Some(max) = largest.get()
+                && size > max
+            {
+                largest.set(Some(size));
+            }
+        });
+    }
+
+    /// The system allocator, noting each request's size first.
+    struct Probe;
+
+    // SAFETY: every call is passed on to `System` unchanged.
+    unsafe impl GlobalAlloc for Probe {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            note(layout.size());
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            note(layout.size());
+            unsafe { System.alloc_zeroed(layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            note(new_size);
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+    }
+
+    #[global_allocator]
+    static PROBE: Probe = Probe;
+
+    pub(super) fn largest(f: impl FnOnce()) -> usize {
+        LARGEST.with(|largest| largest.set(Some(0)));
+        f();
+        LARGEST.with(|largest| largest.replace(None)).unwrap_or(0)
+    }
+}
+
 /// `ValidateViewModelValueAndSecondaryExpression(value, expression)`.
 pub(super) fn validate_value_and_expression(
     vm: &CalculatorViewModel,
