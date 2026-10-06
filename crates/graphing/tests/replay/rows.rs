@@ -623,6 +623,14 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
     if rc.status == "Unknown" {
         return out;
     }
+    // The language refuses f outright (° outside degrees mode): no row of
+    // it is certified, whatever its claims (review 17, R17-M-02).
+    if let Some(why) = &fx.refused {
+        out.problems.push(format!(
+            "{why}: the language refuses f, so no row of it is certified"
+        ));
+        return out;
+    }
     // The claims' own outcomes.
     let mut weak = 0;
     let mut open = 0;
@@ -1457,7 +1465,7 @@ fn edges(fx: &Fx, e: &graphing::ast::Expr, path: &mut Vec<u8>, out: &mut Vec<Edg
             Some(_) => {}
             // A constant exactly an integer: an integer power.
             None if !super::eval::contains_x(b)
-                && super::exact::eval(b, None, &fx.lits, &fx.vars)
+                && super::exact::eval(b, None, &fx.lits, &fx.vars, fx.unit)
                     .is_some_and(|k| k.is_integer()) => {}
             None => {
                 push(0, 0.0, true);

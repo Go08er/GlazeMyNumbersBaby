@@ -93,12 +93,34 @@ fn beside(mut s: S, a: &S) -> S {
     s
 }
 
+/// A value constant in x: its derivatives 0, existing throughout the box
+/// only where the value is defined throughout it.
 pub fn constant(c: Iv, n: usize) -> S {
     let mut s = vec![c.clone()];
     for _ in 0..n {
         let mut z = zero();
-        z.def = c.def || !c.empty;
+        z.def = c.def;
         s.push(if c.empty { Iv::empty() } else { z });
+    }
+    s
+}
+
+/// `s`, worked out from its other operands with a constant operand `o`
+/// set aside (an integer power's exponent, a root's degree, read from its
+/// enclosure as a point): f exists only where `o` does, so the value is
+/// only as defined and continuous as `o` too, and the coefficients from 1
+/// on are f's only where `o` is defined and continuous throughout (then
+/// constant). An `o` defined nowhere leaves f defined nowhere. (Review 17,
+/// R17-M-02: (x + 1)^⌊√(sin²4 + cos²4 − 1 − 10⁻¹⁰⁰)⌋ at 160 bits has the
+/// exponent's enclosure the point 0, possibly undefined; read as x⁰ alone,
+/// f(0) = 1 was proved, though f is defined nowhere.)
+pub fn with_operand(mut s: S, o: &Iv) -> S {
+    if o.empty {
+        return vec![Iv::empty(); s.len()];
+    }
+    s[0] = s[0].clone().with(o.def, o.cont);
+    if !(o.def && o.cont) {
+        s = invalid_from(s, 1);
     }
     s
 }

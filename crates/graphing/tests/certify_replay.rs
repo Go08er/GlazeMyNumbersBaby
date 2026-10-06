@@ -465,18 +465,21 @@ fn certificate(src: &str) -> serde_json::Value {
 /// The certificate of `src` with each number typed rounded to `digits`
 /// significant digits (`ParseOptions::literal_digits`), as JSON.
 fn certificate_with(src: &str, digits: Option<u8>) -> serde_json::Value {
+    certificate_in(src, digits, TrigUnit::Radians)
+}
+
+/// The same in an angle unit.
+fn certificate_in(src: &str, digits: Option<u8>, unit: TrigUnit) -> serde_json::Value {
     let parse = graphing::lexer::ParseOptions {
         literal_digits: digits,
         ..Default::default()
     };
-    let a = graphing::certify::certify_text_with(
-        src,
-        parse,
-        CompileOptions::default(),
-        DEFAULT_BUDGET,
-        None,
-    )
-    .expect("certified");
+    let opts = CompileOptions {
+        trig_unit: unit,
+        ..CompileOptions::default()
+    };
+    let a = graphing::certify::certify_text_with(src, parse, opts, DEFAULT_BUDGET, None)
+        .expect("certified");
     serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap()
 }
 
@@ -553,6 +556,22 @@ fn slope_claims(mono: bool, value: Option<(f64, f64)>) -> Vec<serde_json::Value>
     out.push(serde_json::json!({"Simplifier": {"fact":
         "f/x → 0 as x → +∞ and f has no horizontal asymptote there"}}));
     out
+}
+
+/// The y-intercept row made up as Certified `y`, its one claim f(0) ∈
+/// [y, y], over a certificate whose rows are all Unknown (review 17,
+/// R17-M-02: so the full checker, not one helper, must refuse it). The
+/// certifier's simplified form of f dropped too, as in the review's plants
+/// (`keep`: left in).
+fn made_up_y_intercept(v: &mut serde_json::Value, y: f64, keep: bool) {
+    if !keep {
+        v["evaluated"] = serde_json::Value::Null;
+    }
+    v["y_intercept"] = serde_json::json!({"Certified": {
+        "value": {"lo": y, "hi": y},
+        "cert": {"covers": "Points", "claims": [{"Value": {
+            "x": {"a": 0.0, "b": 0.0}, "of": {"F": "F0"}, "lo": y, "hi": y}}]}
+    }});
 }
 
 /// False facts planted into real certificates: each must be caught.
@@ -1017,6 +1036,80 @@ const PLANTS: &[Plant] = &[
     ("x^(-1000002)", "the vertical asymptote left out", |v| {
         value_of(v, "vertical").as_array_mut().unwrap().clear();
     }),
+    // Review 17, R17-M-02: an operand set aside by a fast path, its
+    // definedness or angle unit dropped with it. sin²4 + cos²4 − 1 − 10⁻¹⁰⁰
+    // is −10⁻¹⁰⁰, so ⌊√(…)⌋ is defined nowhere, though at 160 bits its
+    // enclosure is the point 0; and the language refuses ° outside degrees
+    // mode. Each function is defined nowhere (or refused): its certificate
+    // has every row Unknown, and a value made up for it must be caught.
+    (
+        "(x+1)^floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-100)))",
+        "a y-intercept for an exponent defined nowhere",
+        |v| made_up_y_intercept(v, 1.0, false),
+    ),
+    (
+        "(x+1)^floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-100)))",
+        "a y-intercept for an exponent defined nowhere, its simplified form kept",
+        |v| made_up_y_intercept(v, 1.0, true),
+    ),
+    (
+        "root(4+x,2+floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-100))))",
+        "a y-intercept for a root's degree defined nowhere",
+        |v| made_up_y_intercept(v, 2.0, false),
+    ),
+    (
+        "(x+1)^(1°)",
+        "a y-intercept for ° outside degrees mode",
+        |v| made_up_y_intercept(v, 1.0, false),
+    ),
+    // The audit's: a non-integer degree whose reciprocal is an integer
+    // point (the interval power's own shortcut), ° in a sum (the
+    // evaluator's), and a structural rule reading through °.
+    (
+        "root(4+x,0.5+floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-100))))",
+        "a y-intercept for a non-integer root degree defined nowhere",
+        |v| made_up_y_intercept(v, 16.0, false),
+    ),
+    (
+        "x+1°",
+        "a y-intercept for ° in a sum outside degrees mode",
+        |v| made_up_y_intercept(v, 1.0, false),
+    ),
+    (
+        "sin(x°)",
+        "odd by structure through ° outside degrees mode",
+        |v| {
+            v["parity"] = serde_json::json!({"Certified": {"value": "Odd",
+            "cert": {"covers": "Line", "claims": [{"Simplifier": {"fact": "f is odd"}}]}}});
+        },
+    ),
+];
+
+/// A plant into a certificate made in an angle unit.
+type PlantIn = (
+    TrigUnit,
+    &'static str,
+    &'static str,
+    fn(&mut serde_json::Value),
+);
+
+/// False facts planted into real certificates made in another angle unit.
+const PLANTS_IN: &[PlantIn] = &[
+    // Review 17's audit: tan at an even quarter turn is 0, but only where
+    // its argument is defined (a meet with that enclosure keeps the better
+    // decoration).
+    (
+        TrigUnit::Degrees,
+        "tan(floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-100))))+x+1",
+        "a y-intercept for tan of an argument defined nowhere",
+        |v| made_up_y_intercept(v, 1.0, false),
+    ),
+    (
+        TrigUnit::Grads,
+        "x+1°",
+        "a y-intercept for ° in grads",
+        |v| made_up_y_intercept(v, 1.0, false),
+    ),
 ];
 
 /// The slope evidence the plants above alter, unaltered, replays.
@@ -1030,17 +1123,24 @@ fn written_slope_evidence_replays() {
 #[test]
 fn replay_catches_planted_errors() {
     let mut missed = Vec::new();
-    let mut cache: BTreeMap<&str, serde_json::Value> = BTreeMap::new();
-    for (src, what, plant) in PLANTS {
-        let base = cache.entry(src).or_insert_with(|| certificate(src)).clone();
+    let mut cache: BTreeMap<(&str, String), serde_json::Value> = BTreeMap::new();
+    let plants = PLANTS
+        .iter()
+        .map(|&(src, what, plant)| (TrigUnit::Radians, src, what, plant))
+        .chain(PLANTS_IN.iter().copied());
+    for (unit, src, what, plant) in plants {
+        let base = cache
+            .entry((src, format!("{unit:?}")))
+            .or_insert_with(|| certificate_in(src, None, unit))
+            .clone();
         if let Some(why) = rejected(&base) {
-            panic!("{src}: the true certificate is rejected: {why}");
+            panic!("{src} [{unit:?}]: the true certificate is rejected: {why}");
         }
         let mut v = base.clone();
         plant(&mut v);
         match rejected(&v) {
-            Some(why) => println!("{src}: {what}: caught ({why})"),
-            None => missed.push(format!("{src}: {what}")),
+            Some(why) => println!("{src} [{unit:?}]: {what}: caught ({why})"),
+            None => missed.push(format!("{src} [{unit:?}]: {what}")),
         }
     }
     assert!(missed.is_empty(), "planted errors not caught: {missed:#?}");
@@ -1540,5 +1640,77 @@ fn a_value_alone_has_no_derivatives_at_a_domain_end() {
             s[1..].iter().all(|c| c.def) && s[1].is_exactly(d1),
             "{src} at {x}: {s:?}"
         );
+    }
+}
+
+/// Review 17, R17-M-02: an operand a fast path sets aside (an integer
+/// power's exponent, a root's degree, tan's argument at an even quarter
+/// turn) keeps its definedness, and a degree mark has a value only in
+/// degrees mode. ⌊√(sin²4 + cos²4 − 1 − 10⁻¹⁰⁰)⌋ is defined nowhere: at
+/// 160 bits its enclosure is the point 0, possibly undefined, so f(0) is
+/// not shown defined there; at 640 bits it is shown defined nowhere, and
+/// f with it. The same functions with a defined operand keep their values
+/// and derivatives.
+#[test]
+fn operands_set_aside_keep_their_definedness() {
+    use replay::iv::Unit::{Degrees, Grads, Radians};
+    replay::iv::init();
+    let series = |src: &str, unit: replay::iv::Unit, prec: u32| {
+        let text = format!("y={src}");
+        let eq = graphing::Equation::parse(&text).unwrap();
+        let (_, e) = eq.explicit().unwrap();
+        let lits = replay::eval::Lits::of(&text);
+        let ctx = replay::eval::Ctx {
+            unit,
+            lits: &lits,
+            vars: &[],
+        };
+        replay::iv::set_prec(prec);
+        let s = replay::eval::series(&replay::eval::canonical(e), 0.0, 0.0, 2, &ctx);
+        replay::iv::set_prec(160);
+        s
+    };
+    let b = "floor(sqrt(sin(4)^2+cos(4)^2-1-10^(-100)))";
+    for (src, unit) in [
+        (format!("(x+1)^{b}"), Radians),
+        (format!("(x+1)^(1+{b})"), Radians),
+        (format!("root(4+x,2+{b})"), Radians),
+        (format!("root(4+x,0.5+{b})"), Radians),
+        (format!("tan({b})+x+1"), Degrees),
+        (format!("tan(200+{b})+x+1"), Grads),
+    ] {
+        let s = series(&src, unit, 160);
+        assert!(s[0].empty || !s[0].def, "{src} at 160 bits: {:?}", s[0]);
+        assert!(s[1..].iter().all(|c| !c.def), "{src} at 160 bits: {s:?}");
+        let s = series(&src, unit, 640);
+        assert!(s[0].empty, "{src} at 640 bits: {:?}", s[0]);
+    }
+    for (src, unit) in [
+        ("(x+1)^(1°)", Radians),
+        ("x+1°", Radians),
+        ("x+1°", Grads),
+        ("sin(x°)", Radians),
+    ] {
+        assert!(series(src, unit, 160)[0].empty, "{src} [{unit:?}]");
+    }
+    // Defined operands: the values and derivatives stay.
+    for (src, unit, v, d1) in [
+        ("(x+1)^floor(sqrt(2))", Radians, 1.0, Some(1.0)),
+        ("root(8+x,2+floor(sqrt(2)))", Radians, 2.0, None),
+        ("root(4+x,1/floor(sqrt(4)))", Radians, 16.0, Some(8.0)),
+        ("tan(floor(sqrt(2))*180)+x+1", Degrees, 1.0, Some(1.0)),
+        ("(x+1)^(1°)", Degrees, 1.0, Some(1.0)),
+        ("x+1°", Degrees, 1.0, Some(1.0)),
+    ] {
+        let s = series(src, unit, 160);
+        assert!(
+            !s[0].empty && s[0].def && s[0].lo <= v && s[0].hi >= v,
+            "{src} [{unit:?}]: {:?}",
+            s[0]
+        );
+        assert!(s[1].def, "{src} [{unit:?}]: f′ {:?}", s[1]);
+        if let Some(d1) = d1 {
+            assert!(s[1].is_exactly(d1), "{src} [{unit:?}]: f′ {:?}", s[1]);
+        }
     }
 }

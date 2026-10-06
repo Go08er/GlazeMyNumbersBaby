@@ -3398,6 +3398,16 @@ fn structural_parity(e: &crate::ast::Expr) -> Option<bool> {
 
 pub fn parity(f: &Fun<'_>, dom: &Domain) -> Result<Row<Parity>, Stop> {
     use crate::simplify::{Parity as P, prove_parity};
+    // A degree mark (°) outside degrees mode: the language refuses f
+    // (RequireDegreesMode), so it has no parity either. (Review 17: sin(x°)
+    // in radians was certified odd, by rules reading through the mark, the
+    // only row certified for such an f; the independent replay passed it
+    // by its own such rule.)
+    if f.opts.trig_unit != crate::functions::TrigUnit::Degrees
+        && f.expr.any(&|e| matches!(e, crate::ast::Expr::Degrees(_)))
+    {
+        return Ok(Row::unknown("° outside degrees mode"));
+    }
     let proven = |even: bool, by: &str| {
         let word = if even { "even" } else { "odd" };
         let mut c = Certificate::new(Region::Line);

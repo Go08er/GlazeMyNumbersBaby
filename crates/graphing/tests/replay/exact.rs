@@ -4,6 +4,7 @@
 //! equality (0.1·x − 1 at 10) or a point exactly (90/0.1).
 
 use super::eval::{Lits, written_rational};
+use super::iv::Unit;
 use graphing::ast::{BinOp, Expr, Func};
 use rug::{Integer, Rational};
 
@@ -39,27 +40,32 @@ fn sqrt_exact(q: &Rational) -> Option<Rational> {
 }
 
 /// e at x (exactly), where every step is exact; `None` otherwise (or
-/// where e is undefined).
+/// where e is undefined). Angles are in `unit`: a degree mark (°) only
+/// has a value in degrees, where it changes nothing; the language refuses
+/// it in any other unit (review 17, R17-M-02: (x + 1)^(1°) in radians
+/// was read as (x + 1)¹).
 pub fn eval(
     e: &Expr,
     x: Option<&Rational>,
     lits: &Lits,
     vars: &[(String, f64)],
+    unit: Unit,
 ) -> Option<Rational> {
-    let ev = |e: &Expr| eval(e, x, lits, vars);
+    let ev = |e: &Expr| eval(e, x, lits, vars, unit);
     Some(match e {
         Expr::Num(v, lit) => lits.exact(*v, lit)?,
         Expr::X => x?.clone(),
         Expr::Var(n) => lits.slider_exact(n, vars.iter().find(|(m, _)| m == n)?.1)?,
         Expr::Y | Expr::Const(_) => return None,
         Expr::Neg(a) => -ev(a)?,
-        Expr::Degrees(a) => ev(a)?,
+        Expr::Degrees(a) if unit == Unit::Degrees => ev(a)?,
+        Expr::Degrees(_) => return None,
         Expr::Bin(BinOp::Pow, a, b) => {
             // Written as a ratio of integers, or exactly an integer.
             let (p, q) = match written_rational(b, lits) {
                 Some((p, q)) => (p.to_i64()?, q.to_i64()?),
                 None => {
-                    let k = eval(b, None, lits, vars)?;
+                    let k = eval(b, None, lits, vars, unit)?;
                     if !k.is_integer() {
                         return None;
                     }

@@ -310,6 +310,7 @@ impl<'a> Subj<'a> {
                 exact::of_f64(x).as_ref(),
                 &self.fx.lits,
                 &self.fx.vars,
+                self.fx.unit,
             )?;
             return Some(exact::of_f64(c).is_some_and(|c| c == q));
         }
@@ -567,6 +568,12 @@ fn all(vs: impl IntoIterator<Item = V>) -> V {
 }
 
 pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
+    if let Some(why) = &fx.refused {
+        return Outcome::new(
+            Class::Unconfirmed,
+            format!("{why}: the language refuses f, so no claim about it stands"),
+        );
+    }
     match c {
         Claim::Defined(x) => defined(fx, *x, Some(false)),
         Claim::Continuous(x) => defined(fx, *x, Some(true)),
@@ -1566,7 +1573,7 @@ fn affine_exact(e: &Expr, fx: &Fx) -> Option<(rug::Rational, rug::Rational)> {
         if contains_x(e) {
             return None;
         }
-        exact::eval(e, None, &fx.lits, &fx.vars)
+        exact::eval(e, None, &fx.lits, &fx.vars, fx.unit)
     };
     match e {
         Expr::X => Some((Rational::from(1), Rational::from(0))),
