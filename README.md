@@ -409,7 +409,10 @@ CI also runs checks that need more than `cargo test --workspace`:
   a calculation too long to replay (over 16,384 keys) is saved as its
   value. Memory, the modes, the equations and the other settings are never
   dropped for it, and a damaged or oversized part of the settings file
-  resets only itself.
+  resets only itself. Memory comes back slot for slot (to the digits shown,
+  up to e±19999, beyond what keys can reach), within the restore's
+  arithmetic budget: only a crafted file, such as 100 slots all past
+  e±9999, comes back with fewer.
 - The port fixes a handful of upstream bugs and undefined behaviour (e.g.
   deleting a history item removed the wrong entry; C left the engine in
   E-notation); each is commented at the fix.
