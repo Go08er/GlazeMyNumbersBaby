@@ -39,6 +39,10 @@ fn offset_id(i: usize) -> crate::ui::Id {
     id(("date-offset", i))
 }
 
+/// The open calendar's previous year, previous month, next month and next
+/// year buttons.
+const NAV: [&str; 4] = ["cal-prev-year", "cal-prev", "cal-next", "cal-next-year"];
+
 fn day_id(d: NaiveDate) -> crate::ui::Id {
     id(("cal-day", d.num_days_from_ce()))
 }
@@ -130,8 +134,17 @@ impl DatePage {
                 }
             }
             Msg::Month(delta) => {
-                self.cursor = add_months(self.cursor, delta);
+                let from = self.focused_day(*cx.focus);
+                self.cursor = add_months(from.unwrap_or(self.cursor), delta);
                 self.shown = first_of_month(self.cursor);
+                // A month button the keyboard is on keeps the focus.
+                // Otherwise (an assistive technology's click, or the
+                // pointer's, while a day had it) the focus moves with the
+                // keys to the new month's day, rather than be lost with
+                // the old month's (R16-L-03, as GMNB's).
+                if !NAV.iter().any(|&b| *cx.focus == Some(id(b))) {
+                    *cx.focus = Some(day_id(self.cursor));
+                }
             }
             Msg::Pick(which, d) => {
                 let d = d.clamp(datecalc::picker_min_date(), datecalc::picker_max_date());
@@ -193,14 +206,38 @@ impl DatePage {
         }
     }
 
+    /// The open calendar's day that has the focus, if one has (only the
+    /// keys' day takes it).
+    fn focused_day(&self, focus: Option<crate::ui::Id>) -> Option<NaiveDate> {
+        let focus = focus?;
+        let lead = i64::from(self.shown.weekday().num_days_from_sunday());
+        let start = self.shown - chrono::Duration::days(lead);
+        (0..42)
+            .map(|i| start + chrono::Duration::days(i))
+            .find(|&d| day_id(d) == focus)
+    }
+
     /// The open calendar's keys: the arrows move a day or a week, Page
     /// Up/Down a month (with Shift a year), Home/End to the week's ends,
-    /// into the months around as they go; the focus follows.
+    /// into the months around as they go; the focus follows. Space and
+    /// Enter pick the focused day however the calendar was opened: an
+    /// assistive technology's click or the pointer puts the focus on the
+    /// chosen day without the keyboard's ring, which the app's own Space
+    /// and Enter wait for (R16-L-03).
     pub fn key(&mut self, kp: &KeyPress, cx: &mut Cx) -> bool {
         if self.calendar.is_none() || kp.ctrl || kp.alt {
             return false;
         }
-        let c = self.cursor;
+        if matches!(kp.key, Key::Char(' ') | Key::Named(Named::Enter)) {
+            return match (self.calendar, self.focused_day(*cx.focus)) {
+                (Some(which), Some(d)) if !kp.shift => {
+                    self.update(Msg::Pick(which, d), cx);
+                    true
+                }
+                _ => false,
+            };
+        }
+        let c = self.focused_day(*cx.focus).unwrap_or(self.cursor);
         let weekday = i64::from(c.weekday().num_days_from_sunday());
         let Key::Named(n) = kp.key else {
             return false;
@@ -222,8 +259,14 @@ impl DatePage {
         true
     }
 
-    pub fn close_popup(&mut self) -> bool {
-        self.calendar.take().is_some()
+    /// Closes the open calendar (Escape), the focus back on the button
+    /// that opened it, as a pick or a click outside leaves it (R16-L-03).
+    pub fn close_popup(&mut self, cx: &mut Cx) -> bool {
+        let Some(which) = self.calendar.take() else {
+            return false;
+        };
+        *cx.focus = Some(id(("date-btn", which)));
+        true
     }
 
     pub fn copy_text(&self) -> Option<String> {
@@ -477,7 +520,7 @@ impl DatePage {
         let (right2, _) = rest.take_right(36.0);
         for (bid, r, icon, name, delta, enabled) in [
             (
-                "cal-prev-year",
+                NAV[0],
                 left,
                 "M17 6l-6 6 6 6M11 6l-6 6 6 6",
                 "Previous year",
@@ -485,7 +528,7 @@ impl DatePage {
                 self.shown > first_of_month(min),
             ),
             (
-                "cal-prev",
+                NAV[1],
                 left2,
                 appcore::icons::CHEVRON_LEFT,
                 "Previous month",
@@ -493,7 +536,7 @@ impl DatePage {
                 self.shown > first_of_month(min),
             ),
             (
-                "cal-next",
+                NAV[2],
                 right2,
                 "M9 6l6 6-6 6",
                 "Next month",
@@ -501,7 +544,7 @@ impl DatePage {
                 self.shown < first_of_month(max),
             ),
             (
-                "cal-next-year",
+                NAV[3],
                 right,
                 "M7 6l6 6-6 6M13 6l6 6-6 6",
                 "Next year",
@@ -581,5 +624,68 @@ impl DatePage {
             };
             f.label(c, &label, SMALL, color, Align::Center);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R16-L-03: however the calendar was opened (an assistive technology's
+    /// click leaves the focus on the chosen day without the keyboard's
+    /// ring), Space and Enter pick the focused day; Escape, like a pick,
+    /// puts the focus back on the button that opened it; a month button
+    /// clicked while a day has the focus moves the focus with the keys to
+    /// the new month's day, and one the keyboard is on keeps it.
+    #[test]
+    fn the_calendar_picks_closes_and_keeps_the_focus() {
+        let today = Local::now().date_naive();
+        let mut d = DatePage::new();
+        let (mut toasts, mut focus) = (Vec::new(), None);
+        let mut cx = Cx {
+            toasts: &mut toasts,
+            clipboard: None,
+            wide: true,
+            focus: &mut focus,
+        };
+        let opener = id(("date-btn", 0u8));
+
+        d.update(Msg::Calendar(Some(0)), &mut cx);
+        assert_eq!(*cx.focus, Some(day_id(today)));
+        assert!(!d.key(&KeyPress::char(' ').shift(), &mut cx));
+        assert!(d.key(&KeyPress::char(' '), &mut cx));
+        assert_eq!(d.calendar, None);
+        assert_eq!(d.date(0), today);
+        assert_eq!(*cx.focus, Some(opener));
+
+        d.update(Msg::Calendar(Some(0)), &mut cx);
+        assert!(d.key(&KeyPress::named(Named::PageDown), &mut cx));
+        assert_ne!(*cx.focus, Some(day_id(today)));
+        assert!(d.close_popup(&mut cx));
+        assert_eq!(d.calendar, None);
+        assert_eq!(*cx.focus, Some(opener));
+        assert!(!d.close_popup(&mut cx));
+
+        // Reopened on the chosen date; "Next month" by assistive technology.
+        d.update(Msg::Calendar(Some(0)), &mut cx);
+        d.update(Msg::Month(1), &mut cx);
+        let next = add_months(today, 1);
+        assert_eq!((d.cursor, d.shown), (next, first_of_month(next)));
+        assert_eq!(*cx.focus, Some(day_id(next)));
+        assert!(d.key(&KeyPress::named(Named::Right), &mut cx));
+        assert_eq!(*cx.focus, Some(day_id(add_days(next, 1))));
+        assert!(d.key(&KeyPress::named(Named::Enter), &mut cx));
+        assert_eq!(d.date(0), add_days(next, 1));
+        assert_eq!(*cx.focus, Some(opener));
+
+        // From the keyboard, on the month button.
+        d.update(Msg::Calendar(Some(1)), &mut cx);
+        *cx.focus = Some(id(NAV[2]));
+        d.update(Msg::Month(1), &mut cx);
+        assert_eq!(*cx.focus, Some(id(NAV[2])));
+        assert_eq!(d.cursor, add_months(d.date(1), 1));
+        // Space there is the button's, not a pick.
+        assert!(!d.key(&KeyPress::char(' '), &mut cx));
+        assert_eq!(d.calendar, Some(1));
     }
 }
