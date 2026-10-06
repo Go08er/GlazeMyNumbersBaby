@@ -934,16 +934,17 @@ mod tests {
         assert!(nodes.iter().any(|n| n.scrollable));
     }
 
-    /// R17-M-04: the focused controls that leave Enter to the calculator
-    /// ("=") are, on every page and overlay, those that press one of its
-    /// keys, as upstream's `CalculatorButton`s and bit `FlipButtons`: every
-    /// keypad's and flyout's key (`calc::Msg::Key`) but the 2nd and hyp
-    /// toggles, MC, MR, M+, M− and MS, and the bits. By what they do, not
-    /// by how they are drawn (2nd and hyp look like keys, MS and the bits
-    /// like buttons). Every other control (menus, toggles, the angle,
-    /// radix and word size, the History and Memory items and their
-    /// buttons, the converter's and the graph's keys, the navigation and
-    /// Settings) takes Enter itself, as in GMNB.
+    /// R17-M-04: the focused controls that ignore Enter, leaving it to the
+    /// page ("=" on the calculator, nothing on the converter or the graph),
+    /// are, on every page and overlay, those that press one of its keys, as
+    /// upstream's `CalculatorButton`s and bit `FlipButtons`: every keypad's
+    /// and flyout's key (`calc::Msg::Key`) but the 2nd and hyp toggles, MC,
+    /// MR, M+, M− and MS, the bits, and the converter's and the graph's
+    /// keys. By what they do, not by how they are drawn (2nd and hyp look
+    /// like keys, MS and the bits like buttons). Every other control
+    /// (menus, toggles, the angle, radix and word size, the History and
+    /// Memory items and their buttons, the navigation and Settings) takes
+    /// Enter itself, as in GMNB.
     #[test]
     fn enter_is_equals_on_the_calculators_own_keys() {
         use crate::app::Msg as App;
@@ -955,6 +956,9 @@ mod tests {
         let presses_a_key = |h: &Hit| match &h.msg {
             Some(App::Calc(Msg::Key(k))) => ![KEY_SECOND, KEY_TRIG_SECOND, KEY_HYP].contains(k),
             Some(App::Calc(Msg::FlipBit(_))) => true,
+            Some(App::Conv(crate::conv::Msg::Key(_)) | App::Graph(crate::graph::Msg::Pad(_))) => {
+                true
+            }
             _ => false,
         };
         // Every focusable control drawn, by where it was drawn.
@@ -1069,16 +1073,20 @@ mod tests {
         assert!(flag("Programmer bits", id(("mem", B::Memory as u32))));
         assert!(!flag("Programmer", id("word")));
         assert!(!flag("Programmer Shift", id(("shift", 0usize))));
-        // Some of each kind on the calculator; none elsewhere.
-        assert!(
-            all.iter()
-                .any(|(w, h)| w == "Scientific Trig" && h.enter_is_equals)
-        );
-        assert!(
-            all.iter()
-                .any(|(w, h)| w == "Programmer Bitwise" && h.enter_is_equals)
-        );
-        for page in ["converter", "date", "calendar", "graphing"] {
+        // Some of each kind on the calculator, the converter's and the
+        // graph's keypads; none on the date page.
+        for page in [
+            "Scientific Trig",
+            "Programmer Bitwise",
+            "converter",
+            "graphing",
+        ] {
+            assert!(
+                all.iter().any(|(w, h)| w == page && h.enter_is_equals),
+                "{page}"
+            );
+        }
+        for page in ["date", "calendar"] {
             assert!(all.iter().any(|(w, _)| w == page), "{page}: nothing drawn");
             assert!(
                 all.iter().all(|(w, h)| w != page || !h.enter_is_equals),

@@ -134,10 +134,12 @@ pub trait Page {
         false
     }
 
-    /// Whether `widget` is one of the page's own calculator keys, which
-    /// leave Enter to [`Page::key_pressed`] ("=") when focused, as
-    /// upstream's `CalculatorButton` does; any other focused control
-    /// activates on Enter itself (`crate::window::focus_takes`).
+    /// Whether `widget` is one of the page's own keys, upstream's
+    /// `CalculatorButton`s (the calculator's, the converter's and the
+    /// graph's keypads) and bit `FlipButtons`, which ignore Enter when
+    /// focused: it is [`Page::key_pressed`]'s ("=" on the calculator, or
+    /// nothing); any other focused control activates on Enter itself
+    /// (`crate::window::focus_takes`, `crate::window::focus_ignores`).
     fn is_calculator_key(&self, _widget: &gtk::Widget) -> bool {
         false
     }
