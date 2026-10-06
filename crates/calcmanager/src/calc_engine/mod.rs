@@ -26,7 +26,7 @@ use ratpack::{AngleType, CalcResult, NumberFormat, Rational, rational_math};
 
 use crate::calc_display::{CalcDisplayRef, HistoryDisplayRef};
 use crate::calc_input::CalcInput;
-use crate::calc_utils::{is_bin_op_code, is_digit_op_code};
+use crate::calc_utils::{is_bin_op_code, is_digit_op_code, is_unary_op_code};
 use crate::ccommand::*;
 use crate::engine_strings::*;
 use crate::expression_command::{ExpressionCommand, OpndCommand};
@@ -709,4 +709,120 @@ impl CalcEngine {
     pub fn open_paren_count(&self) -> usize {
         self.open_paren_count
     }
+
+    /// Extension, for tests: the state a later key can read (see
+    /// [`EngineState`]), with `memory` (the manager's slots) among the
+    /// values. In an error only the error is reported: every key but C and
+    /// CE is ignored, and they clear the rest.
+    #[doc(hidden)]
+    pub fn state(&self, memory: &[Rational]) -> EngineState {
+        let mut state = EngineState::default();
+        let mut exact = |name: &str, value: String| state.exact.push((name.to_string(), value));
+        exact("error", self.b_error.to_string());
+        if self.b_error {
+            return state;
+        }
+        let opnd_added = self.history_collector.f_opnd_added_to_history();
+        exact("carry", self.carry_bit.to_string());
+        exact("operator", self.n_op_code.to_string());
+        exact("change_op", self.b_change_op.to_string());
+        exact("no_prev_equ", self.b_no_prev_equ.to_string());
+        exact("record", self.b_record.to_string());
+        exact("inv", self.b_inv.to_string());
+        exact("radix", self.radix.to_string());
+        exact("precision", self.precision.to_string());
+        exact("width", format!("{:?}", self.numwidth));
+        exact("angle", format!("{:?}", self.angletype));
+        exact("fe", format!("{:?}", self.n_fe));
+        exact("max_digits", self.c_int_digits_sav.to_string());
+        exact("parens", self.open_paren_count.to_string());
+        exact(
+            "paren_ops",
+            format!("{:?}", &self.n_op[..self.open_paren_count]),
+        );
+        exact(
+            "precedence_ops",
+            format!("{:?}", &self.n_prec_op[..self.precedence_op_count]),
+        );
+        exact("operand_added", opnd_added.to_string());
+        // The last command as the code that reads it tells it apart: an
+        // operator, a digit or point, ")", a unary operator (`%` separately,
+        // see `Continuation::entry`), ± where a new number would complete
+        // the expression before it (`CheckAndAddLastBinOpToHistory`), or
+        // anything else (C, "(" and CE alike).
+        let last = match self.n_temp_com {
+            c if is_bin_op_code(c) => format!("binary {c}"),
+            c if is_digit_op_code(c) || c == IDC_PNT => "digit".to_string(),
+            IDC_SIGN if opnd_added && !self.b_change_op => "sign".to_string(),
+            IDC_CLOSEP => "close".to_string(),
+            IDC_PERCENT => "percent".to_string(),
+            c if is_unary_op_code(c) => "unary".to_string(),
+            _ => "other".to_string(),
+        };
+        exact("last_command", last);
+        if self.b_record {
+            exact("input", self.input.to_string(self.radix));
+        }
+        // Each value as held (Programmer mode: in 64 bits, so -1 and 2^64 - 1
+        // are one value) and as the word size shows it.
+        let qword = &self.chop_numbers[0];
+        let held = |v: &Rational| -> Rational {
+            if !self.f_integer_mode {
+                return v.clone();
+            }
+            let in_64_bits = || -> CalcResult<Rational> {
+                let mut r = rational_math::integer(v)?;
+                if r < Rational::from(0) {
+                    r = (-&r).sub(&Rational::from(1))?.bitxor(qword)?;
+                }
+                r.bitand(qword)
+            };
+            in_64_bits().unwrap_or_else(|_| v.clone())
+        };
+        let mut value = |name: String, v: &Rational| {
+            let shown = self
+                .truncate_num_for_int_math(v)
+                .unwrap_or_else(|_| v.clone());
+            state.values.push((name, held(v), shown));
+        };
+        if !self.b_record {
+            value("current".into(), &self.current_val);
+        }
+        // `%` reads it in Standard mode (see `Continuation::left`); otherwise
+        // only a pending operator does.
+        if !self.f_precedence || self.b_change_op {
+            value("left".into(), &self.last_val);
+        }
+        if !self.b_no_prev_equ {
+            value("repeat".into(), &self.hold_val);
+        }
+        for i in 0..self.open_paren_count {
+            if self.n_op[i] != 0 {
+                value(format!("paren {i}"), &self.paren_vals[i]);
+            }
+        }
+        for i in 0..self.precedence_op_count {
+            if self.n_prec_op[i] != 0 {
+                value(format!("precedence {i}"), &self.precedence_vals[i]);
+            }
+        }
+        for (i, slot) in memory.iter().enumerate() {
+            value(format!("memory {i}"), slot);
+        }
+        state
+    }
+}
+
+/// Extension, for tests: what [`CalcEngine::state`] reports, to compare a
+/// restored engine with the one saved. `exact` (flags, operators, modes,
+/// the number being typed, what kind of key came last) must match;
+/// `values` (the shown value, the operands the engine holds where a later
+/// key reads them, the memory slots) may differ in the digits a restore
+/// doesn't keep: each is the value held and the value as shown (in
+/// Programmer mode, truncated to the word size).
+#[doc(hidden)]
+#[derive(Clone, Debug, Default)]
+pub struct EngineState {
+    pub exact: Vec<(String, String)>,
+    pub values: Vec<(String, Rational, Rational)>,
 }

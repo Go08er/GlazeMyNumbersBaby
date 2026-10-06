@@ -1,29 +1,42 @@
 // Rust port: GMNB contributors.
 
 //! Extension: randomized save/restore comparisons. Each script is a random
-//! sequence of what a user can do in the apps (keys of the mode shown, the
-//! History and Memory panels, pastes, mode switches, coming back from
+//! sequence of what a user can do in the apps (every key of the mode shown,
+//! the History and Memory panels, pastes, mode switches, coming back from
 //! another page); the state it leaves is saved, and a calculator restored
-//! from it must show the same, save the same and continue the same way as
-//! the original for every continuation below. A restore that falls back to
-//! a new calculation from the shown value (see the snapshot module docs) is
-//! counted separately and must show that value.
+//! from it must show the same, save the same, hold the same engine state
+//! and continue the same way as the original for every continuation below.
+//! A restore that falls back to a new calculation from the shown value (see
+//! the snapshot module docs) is counted separately and must show that value.
+//!
+//! Comparing what is saved can't find state the snapshot leaves out, and a
+//! continuation only finds it if it reads it. So the restored engine's
+//! state is compared with the original's too (`CalcEngine::state`: its
+//! flags, pending operators, parentheses, carry, the kind of key that came
+//! last, the number being typed and every value a later key reads, and the
+//! memory slots).
 //!
 //! Values that only come back to the digits they showed (a memory slot, a
-//! shown result) can round differently later: that is the documented
-//! precision of a restore, so continuations that differ only in the last
-//! digits of numbers are counted, not failed, and the scripts avoid the
-//! keys that make such values common (π, e, roots, trigonometry, division
-//! outside Programmer mode).
+//! shown result) can differ from the original's beyond those digits: that
+//! is the documented precision of a restore. Such a value must agree with
+//! the original's to 14 significant digits; the restore is then counted as
+//! rounded, and a later result that depends on the digits it lost (`1 ÷ 3
+//! =`, then − 0.3333333333333333) is counted too, not failed. Continuations
+//! of a restore that kept every value exactly must agree but for the last
+//! digits of numbers.
 //!
 //! The default test runs a few seconds' worth; the long run is
 //! `cargo test -p calcvm --release -- --ignored random_sessions`
 //! (`RESTORE_FUZZ_SEED`, `RESTORE_FUZZ_SCRIPTS`, and `RESTORE_FUZZ_OUT`, a
-//! file the failures and fallbacks are written to).
+//! file the failures are written to, with the fallbacks and the
+//! continuations of rounded restores that differed beyond the last digits
+//! in `.fallbacks` and `.rounded` beside it).
 
 use std::fmt::Write as _;
 
-use crate::{Button, CalcMode, CalculatorViewModel, Radix};
+use calcmanager::{EngineState, Rational};
+
+use crate::{Button, CalcMode, CalculatorViewModel, Radix, ShiftMode};
 
 #[derive(Clone, Copy, Debug)]
 enum Act {
@@ -38,6 +51,25 @@ enum Act {
     SlotSubtract(usize),
     SlotClear(usize),
     Paste(&'static str),
+    /// A shift-mode radio button (Programmer).
+    Shift(ShiftMode),
+    /// The left (`true`) or right shift key, which sends what the shift
+    /// mode selects.
+    ShiftKey(bool),
+    /// A key of the bit-flip keypad.
+    Flip(u32),
+}
+
+/// The two shift keys' buttons in a shift mode (`appcore::keys::shift_keys`,
+/// which the apps and their `<`/`>` keys use).
+fn shift_key(mode: ShiftMode, left: bool) -> Button {
+    let (l, r) = match mode {
+        ShiftMode::Arithmetic => (Button::Lsh, Button::Rsh),
+        ShiftMode::Logical => (Button::Lsh, Button::RshL),
+        ShiftMode::Rotate => (Button::Rol, Button::Ror),
+        ShiftMode::RotateThroughCarry => (Button::RolC, Button::RorC),
+    };
+    if left { l } else { r }
 }
 
 fn act(vm: &mut CalculatorViewModel, acts: &[Act]) {
@@ -58,6 +90,14 @@ fn act(vm: &mut CalculatorViewModel, acts: &[Act]) {
             Act::Paste(text) => {
                 vm.paste(text);
             }
+            Act::Shift(s) => vm.set_shift_mode(s),
+            Act::ShiftKey(left) => {
+                let b = shift_key(vm.shift_mode(), left);
+                if vm.is_enabled(b) {
+                    vm.press(b);
+                }
+            }
+            Act::Flip(bit) => vm.flip_bit(bit),
         }
     }
 }
@@ -86,6 +126,77 @@ fn observed(vm: &CalculatorViewModel) -> String {
         }
     }
     s
+}
+
+/// The engine state a later key can read (see the module docs).
+fn engine_state(vm: &CalculatorViewModel) -> EngineState {
+    vm.vm.standard_calculator_manager.state()
+}
+
+/// Whether `a` and `b` agree to 14 significant digits.
+fn close(a: &Rational, b: &Rational) -> bool {
+    let zero = Rational::from(0);
+    let abs = |r: &Rational| if *r < zero { -r } else { r.clone() };
+    let Ok(difference) = a.sub(b) else {
+        return false;
+    };
+    let larger = if abs(a) < abs(b) { abs(b) } else { abs(a) };
+    abs(&difference)
+        .mul(&Rational::from(10u64.pow(14)))
+        .is_ok_and(|d| d <= larger)
+}
+
+/// Compares the restored engine's state with the original's: an error if
+/// they differ in anything but values within [`close`], otherwise whether
+/// a value came back rounded.
+fn compare_states(original: &EngineState, restored: &EngineState) -> Result<bool, String> {
+    if original.exact != restored.exact {
+        let differences: Vec<String> = original
+            .exact
+            .iter()
+            .zip(&restored.exact)
+            .filter(|(o, r)| o != r)
+            .map(|(o, r)| format!("{} {} (restored {} {})", o.0, o.1, r.0, r.1))
+            .collect();
+        return Err(format!(
+            "engine state differs: {}{}",
+            differences.join(", "),
+            if original.exact.len() == restored.exact.len() {
+                String::new()
+            } else {
+                format!(" {:?} / {:?}", original.exact, restored.exact)
+            }
+        ));
+    }
+    let names = |s: &EngineState| s.values.iter().map(|v| v.0.clone()).collect::<Vec<_>>();
+    if names(original) != names(restored) {
+        return Err(format!(
+            "engine values differ: {:?} (restored {:?})",
+            names(original),
+            names(restored)
+        ));
+    }
+    let mut rounded = false;
+    for ((name, o, o_shown), (_, r, r_shown)) in original.values.iter().zip(&restored.values) {
+        if o == r {
+            continue;
+        }
+        // Rounded to the digits shown, or (Programmer mode) a memory slot
+        // stored in a larger word size, back as the word size showed it.
+        if !close(o, r) && !(name.starts_with("memory") && o_shown == r_shown) {
+            let show = |v: &Rational| {
+                v.to_string_radix(10, calcmanager::NumberFormat::Scientific, 20)
+                    .unwrap_or_default()
+            };
+            return Err(format!(
+                "engine value {name} differs: {} (restored {})",
+                show(o),
+                show(r)
+            ));
+        }
+        rounded = true;
+    }
+    Ok(rounded)
 }
 
 /// A saved state, without the display commands if it is an error the
@@ -144,30 +255,52 @@ fn differ_in_precision_only(a: &str, b: &str) -> bool {
             .all(|(x, y)| x == y || (x - y).abs() <= 1e-12 * x.abs().max(y.abs()))
 }
 
-/// What a user can do in `mode`.
+/// What a user can do in `mode`: every key the apps show in it
+/// (`appcore::keys`: the keypad of the mode, the 2nd functions, the
+/// trigonometry, function and bitwise flyouts, the angle, F-E, radix, word
+/// size and shift-mode buttons, the bit-flip keypad), the memory buttons
+/// (their Ctrl shortcuts work in every mode), the Memory panel and, but in
+/// Programmer mode, the History panel, pastes, the mode switches and coming
+/// back from another page. `act` skips a key the apps disable at the time
+/// (a digit the radix doesn't have, "." in Programmer mode, operators in an
+/// error, F-E right after a History selection), as the apps ignore it.
+///
+/// Left out: Rand, whose value is random, so the uninterrupted run each
+/// continuation is compared with (the script played again) can't repeat
+/// it. Neither app sends Hyp (its toggle picks the hyperbolic button), and
+/// `%` is a Standard key only (elsewhere it types Mod).
+///
+/// The keys that type and combine numbers appear twice in the larger
+/// pools, so scripts still build numbers between the functions.
 fn pool(mode: CalcMode) -> Vec<Act> {
     use Act::*;
     use Button::*;
-    let mut p = vec![
-        Key(Zero),
-        Key(One),
-        Key(Two),
-        Key(Three),
-        Key(Five),
-        Key(Nine),
-        Key(Add),
-        Key(Subtract),
-        Key(Multiply),
-        Key(Equals),
-        Key(Equals),
-        Key(Negate),
-        Key(Backspace),
+    let digits = [Zero, One, Two, Three, Four, Five, Six, Seven, Eight, Nine];
+    let mut core: Vec<Act> = digits.iter().map(|&d| Key(d)).collect();
+    core.extend(
+        [
+            Add, Subtract, Multiply, Divide, Equals, Equals, Negate, Backspace,
+        ]
+        .into_iter()
+        .map(Key),
+    );
+    if mode != CalcMode::Programmer {
+        core.push(Key(Decimal));
+    } else {
+        core.extend([A, B, C, D, E, F].into_iter().map(Key));
+    }
+    let mut p = core.clone();
+    if mode != CalcMode::Standard {
+        p.extend(core);
+    }
+    p.extend([
         Key(ClearEntry),
         Key(Clear),
         Key(Memory),
         Key(MemoryRecall),
         Key(MemoryAdd),
         Key(MemorySubtract),
+        Key(MemoryClear),
         MemoryItem(0),
         MemoryItem(1),
         SlotAdd(1),
@@ -177,65 +310,141 @@ fn pool(mode: CalcMode) -> Vec<Act> {
         Paste("zz"),
         Paste("3+4"),
         Reactivate,
-    ];
+    ]);
+    if mode != CalcMode::Programmer {
+        p.extend([Recall(0), Recall(1), ClearHistory, RemoveHistory(0)]);
+    }
     match mode {
-        CalcMode::Standard | CalcMode::Scientific => {
-            p.extend([
-                Key(Decimal),
-                Paste("(1+2"),
-                Key(Percent),
-                Key(XPower2),
-                Recall(0),
-                Recall(1),
-                ClearHistory,
-                RemoveHistory(0),
-            ]);
-            let other = if mode == CalcMode::Standard {
-                CalcMode::Scientific
-            } else {
-                CalcMode::Standard
-            };
-            p.extend([Mode(other), Mode(CalcMode::Programmer)]);
-            if mode == CalcMode::Scientific {
-                p.extend([
-                    Key(OpenParenthesis),
-                    Key(CloseParenthesis),
-                    Key(FToE),
-                    Key(XPowerY),
-                    Key(Mod),
-                    Key(Factorial),
-                    Key(Exp),
-                    Key(Radians),
-                    Key(Degree),
-                ]);
-            }
-        }
-        CalcMode::Programmer => p.extend([
-            Key(A),
-            Key(F),
-            Key(Divide),
-            Key(Mod),
-            Key(And),
-            Key(Or),
-            Key(Xor),
-            Key(Not),
-            Key(Lsh),
-            Key(Rsh),
-            Key(OpenParenthesis),
-            Key(CloseParenthesis),
-            Key(HexButton),
-            Key(DecButton),
-            Key(BinButton),
-            Key(Byte),
-            Key(Qword),
-            Mode(CalcMode::Standard),
+        CalcMode::Standard => p.extend([
+            Key(Percent),
+            Key(Invert),
+            Key(XPower2),
+            Key(Sqrt),
+            Paste("-0.5"),
+            Paste("1e5"),
             Mode(CalcMode::Scientific),
+            Mode(CalcMode::Programmer),
         ]),
+        CalcMode::Scientific => {
+            p.extend(
+                [
+                    OpenParenthesis,
+                    CloseParenthesis,
+                    Mod,
+                    Exp,
+                    Factorial,
+                    XPower2,
+                    Cube,
+                    Invert,
+                    Abs,
+                    Sqrt,
+                    CubeRoot,
+                    XPowerY,
+                    YRootX,
+                    TenPowerX,
+                    TwoPowerX,
+                    LogBase10,
+                    LogBaseY,
+                    LogBaseE,
+                    EPowerX,
+                    Pi,
+                    Euler,
+                    FToE,
+                    Degree,
+                    Radians,
+                    Grads,
+                    Sin,
+                    Cos,
+                    Tan,
+                    Sec,
+                    Csc,
+                    Cot,
+                    InvSin,
+                    InvCos,
+                    InvTan,
+                    InvSec,
+                    InvCsc,
+                    InvCot,
+                    Sinh,
+                    Cosh,
+                    Tanh,
+                    Sech,
+                    Csch,
+                    Coth,
+                    InvSinh,
+                    InvCosh,
+                    InvTanh,
+                    InvSech,
+                    InvCsch,
+                    InvCoth,
+                    Floor,
+                    Ceil,
+                    DMS,
+                    Degrees,
+                ]
+                .into_iter()
+                .map(Key),
+            );
+            p.extend([
+                Paste("(1+2"),
+                Paste("2^3"),
+                Mode(CalcMode::Standard),
+                Mode(CalcMode::Programmer),
+            ]);
+        }
+        CalcMode::Programmer => {
+            p.extend(
+                [
+                    OpenParenthesis,
+                    CloseParenthesis,
+                    Mod,
+                    And,
+                    Or,
+                    Xor,
+                    Not,
+                    Nand,
+                    Nor,
+                    HexButton,
+                    DecButton,
+                    OctButton,
+                    BinButton,
+                    Qword,
+                    Dword,
+                    Word,
+                    Byte,
+                ]
+                .into_iter()
+                .map(Key),
+            );
+            p.extend([
+                ShiftKey(true),
+                ShiftKey(false),
+                ShiftKey(true),
+                ShiftKey(false),
+                Shift(ShiftMode::Arithmetic),
+                Shift(ShiftMode::Logical),
+                Shift(ShiftMode::Rotate),
+                Shift(ShiftMode::RotateThroughCarry),
+                Flip(0),
+                Flip(1),
+                Flip(7),
+                Flip(15),
+                Flip(31),
+                Flip(63),
+                Paste("(1+2"),
+                Paste("FF"),
+                Mode(CalcMode::Standard),
+                Mode(CalcMode::Scientific),
+            ]);
+        }
     }
     p
 }
 
-/// The continuations every saved state is checked with.
+/// The continuations every saved state is checked with: each reads some of
+/// the state a restore must bring back (the number being typed, the
+/// pending operators and parentheses, what "=" repeats, memory, the left
+/// operand `%` reads, the carry, the modes).
 fn continuations(mode: CalcMode) -> Vec<Vec<Act>> {
     use Act::*;
     use Button::*;
@@ -246,6 +455,7 @@ fn continuations(mode: CalcMode) -> Vec<Vec<Act>> {
         vec![Key(Equals), Key(Equals)],
         vec![Key(Add), Key(Two), Key(Equals)],
         vec![Key(Multiply), Key(Equals)],
+        vec![Key(Subtract), Key(Two), Key(Multiply), Key(Equals)],
         vec![Key(Backspace), Key(Seven), Key(Equals)],
         vec![Key(MemoryRecall), Key(Equals)],
         vec![Key(Negate), Key(Equals)],
@@ -257,18 +467,39 @@ fn continuations(mode: CalcMode) -> Vec<Vec<Act>> {
         vec![Key(ClearEntry), Key(Equals)],
     ];
     match mode {
-        CalcMode::Standard => c.push(vec![Recall(0), Key(Equals)]),
+        CalcMode::Standard => c.extend([
+            vec![Recall(0), Key(Equals)],
+            vec![Key(Percent)],
+            vec![Key(Seven), Key(Percent)],
+            vec![Key(Percent), Key(Equals)],
+            vec![Key(Decimal), Key(Seven), Key(Equals)],
+            vec![Key(Sqrt), Key(Equals)],
+        ]),
         CalcMode::Scientific => c.extend([
             vec![Recall(0), Key(Equals)],
             vec![Key(OpenParenthesis), Key(Two), Key(Equals)],
             vec![Key(CloseParenthesis), Key(Equals)],
             vec![Key(FToE), Key(Equals)],
+            vec![Key(Decimal), Key(Seven), Key(Equals)],
+            vec![Key(Exp), Key(Seven), Key(Equals)],
+            vec![Key(XPowerY), Key(Two), Key(Equals)],
+            vec![Key(Sin), Key(Equals)],
         ]),
         CalcMode::Programmer => c.extend([
             vec![Key(OpenParenthesis), Key(Two), Key(Equals)],
             vec![Key(CloseParenthesis), Key(Equals)],
             vec![Key(HexButton), Key(Equals)],
             vec![Key(A), Key(Equals)],
+            vec![ShiftKey(true), Key(One), Key(Equals)],
+            vec![Shift(ShiftMode::RotateThroughCarry), ShiftKey(false)],
+            vec![
+                Shift(ShiftMode::RotateThroughCarry),
+                ShiftKey(true),
+                ShiftKey(true),
+            ],
+            vec![Flip(0), Key(Equals)],
+            vec![Key(Byte), Key(Equals)],
+            vec![Key(Qword), Key(Equals)],
         ]),
     }
     c
@@ -322,18 +553,23 @@ struct Counts {
     exact: usize,
     fell_back: usize,
     precision: usize,
+    /// Restores that brought a value back rounded to the digits it showed.
+    rounded: usize,
+    /// Continuations of those that differed by more than the last digits.
+    rounding_dependent: Vec<String>,
     fallbacks: Vec<String>,
     failures: Vec<String>,
 }
 
-fn run(mode: CalcMode, acts: &[Act], more: &[Act]) -> (String, String, String) {
+fn run(mode: CalcMode, acts: &[Act], more: &[Act]) -> (String, String, EngineState, String) {
     let mut vm = CalculatorViewModel::new();
     vm.set_mode(mode);
     act(&mut vm, acts);
     let saved = vm.save_state();
     let before = observed(&vm);
+    let state = engine_state(&vm);
     act(&mut vm, more);
-    (saved, before, observed(&vm))
+    (saved, before, state, observed(&vm))
 }
 
 /// Checks one script; the original finishes before the restored
@@ -341,7 +577,7 @@ fn run(mode: CalcMode, acts: &[Act], more: &[Act]) -> (String, String, String) {
 /// display cache), as in the apps, which restore at startup.
 fn check(start: CalcMode, acts: &[Act], counts: &mut Counts) {
     counts.scripts += 1;
-    let (saved, before, _) = run(start, acts, &[]);
+    let (saved, before, original_state, _) = run(start, acts, &[]);
     let (display, error) = {
         let mut original = CalculatorViewModel::new();
         original.set_mode(start);
@@ -399,16 +635,32 @@ fn check(start: CalcMode, acts: &[Act], counts: &mut Counts) {
         counts.failures.push(fail(format!("re-saved {resaved}")));
         return;
     }
+    let rounded = match compare_states(&original_state, &engine_state(&restored)) {
+        Ok(rounded) => rounded,
+        Err(why) => {
+            counts.failures.push(fail(why));
+            return;
+        }
+    };
+    counts.rounded += usize::from(rounded);
     let mode = restored.mode();
+    drop(restored);
     for more in continuations(mode) {
-        let (_, _, expected) = run(start, acts, &more);
+        let (_, _, _, expected) = run(start, acts, &more);
         let mut restored = CalculatorViewModel::new();
         restored.restore_state(&saved);
         act(&mut restored, &more);
         let actual = observed(&restored);
-        if actual != expected && differ_in_precision_only(&actual, &expected) {
+        if actual == expected {
+            continue;
+        }
+        if differ_in_precision_only(&actual, &expected) {
             counts.precision += 1;
-        } else if actual != expected {
+        } else if rounded {
+            counts.rounding_dependent.push(fail(format!(
+                "then {more:?}\n  expected {expected}\n  restored {actual}"
+            )));
+        } else {
             counts.failures.push(fail(format!(
                 "then {more:?}\n  expected {expected}\n  restored {actual}"
             )));
@@ -443,6 +695,8 @@ fn fuzz(seed: u64, n: u64, threads: u64) -> Counts {
         total.exact += c.exact;
         total.fell_back += c.fell_back;
         total.precision += c.precision;
+        total.rounded += c.rounded;
+        total.rounding_dependent.extend(c.rounding_dependent);
         total.failures.extend(c.failures);
         total.fallbacks.extend(c.fallbacks);
     }
@@ -452,14 +706,18 @@ fn fuzz(seed: u64, n: u64, threads: u64) -> Counts {
 fn assert_clean(counts: &Counts) {
     if let Ok(path) = std::env::var("RESTORE_FUZZ_OUT") {
         let _ = std::fs::write(&path, counts.failures.join("\n\n"));
-        let _ = std::fs::write(path + ".fallbacks", counts.fallbacks.join("\n\n"));
+        let _ = std::fs::write(path.clone() + ".fallbacks", counts.fallbacks.join("\n\n"));
+        let _ = std::fs::write(path + ".rounded", counts.rounding_dependent.join("\n\n"));
     }
     println!(
-        "{} scripts: {} restored exactly ({} continuations differing only in \
-         the last digits), {} fell back to the shown value, {} failed",
+        "{} scripts: {} restored exactly ({} with a value rounded to the digits it \
+         showed; {} continuations differing only in the last digits, {} more of the \
+         rounded ones differing beyond), {} fell back to the shown value, {} failed",
         counts.scripts,
         counts.exact,
+        counts.rounded,
         counts.precision,
+        counts.rounding_dependent.len(),
         counts.fell_back,
         counts.failures.len()
     );

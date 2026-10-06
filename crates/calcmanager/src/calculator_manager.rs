@@ -17,7 +17,7 @@ use std::rc::Rc;
 use ratpack::{CalcResult, Rational};
 
 use crate::calc_display::{CalcDisplay, CalcDisplayRef, ExpressionToken, HistoryDisplayRef};
-use crate::calc_engine::{CalcEngine, Continuation};
+use crate::calc_engine::{CalcEngine, Continuation, EngineState};
 use crate::calculator_history::{CalculatorHistory, HistoryItem};
 use crate::ccommand::*;
 use crate::command::{CalculatorMode, CalculatorPrecision, Command};
@@ -764,6 +764,15 @@ impl CalculatorManager {
     /// Extension: see [`CalcEngine::set_carry`].
     pub fn set_carry(&mut self, carry: bool) {
         self.current_engine().set_carry(carry);
+    }
+
+    /// Extension, for tests: the current engine's [`CalcEngine::state`]
+    /// and the memory slots (as `values`, newest first).
+    #[doc(hidden)]
+    pub fn state(&self) -> EngineState {
+        self.current_engine_ref()
+            .map(|e| e.state(&self.memorized_numbers))
+            .unwrap_or_default()
     }
 
     /// Extension: see [`CalcEngine::set_left_operand`].
