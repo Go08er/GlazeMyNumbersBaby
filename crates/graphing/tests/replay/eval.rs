@@ -1061,9 +1061,9 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
                     lo_b.lo > lo_a.hi
                 };
                 acc = if pick_a && !lo_a.empty && !lo_b.empty {
-                    acc
+                    se::winner(acc, &eb)
                 } else if pick_b && !lo_a.empty && !lo_b.empty {
-                    eb
+                    se::winner(eb, &acc)
                 } else {
                     let v = if f == Min {
                         iv::min2(lo_a, lo_b)
