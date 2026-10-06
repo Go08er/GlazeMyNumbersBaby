@@ -1147,6 +1147,30 @@ fn the_left_operand_percent_reads_is_restored() {
     assert!(unchanged(json!({ "lv": operand(&[]) }), 0));
 }
 
+/// Found by the randomized restore tester: the display commands replay a
+/// trigonometric operation with the angle unit it was worked out in, which
+/// left the restored engine in degrees while Radians was shown (30 sin +,
+/// Radians, then 1 sin worked in degrees). And →deg of a typed number kept
+/// the value shown before it, which the radix refresh of a return to the
+/// calculator writes into the expression (see the gmnb tests).
+#[test]
+fn replayed_operations_leave_the_angle_unit_and_operands_as_shown() {
+    use Button::*;
+    assert_restores_and_continues(
+        CalcMode::Scientific,
+        &[Three, Zero, Sin, Add, Radians],
+        &[&[One, Sin, Equals], &[Equals], &[Cos]],
+    );
+    assert_acts_restore_and_continue(
+        CalcMode::Scientific,
+        &keys(&[Two, XPowerY, Three, Equals, Clear, Five, Degrees]),
+        &[
+            vec![Act::Reactivate, Act::Key(Equals)],
+            keys(&[Add, One, Equals]),
+        ],
+    );
+}
+
 /// R14-M-05: RoL and RoR through carry shift in the carry the last one
 /// left, which no key sets: it is saved (`"cy"`) and set directly.
 #[test]

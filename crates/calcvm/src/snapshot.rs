@@ -1852,9 +1852,17 @@ impl StandardCalculatorViewModel {
             self.send_command(cmd::FE);
             self.send_command(cmd::FE);
         }
+        let angled = matches!(command, ExpressionCommandWrapper::Unary(ops) if ops.len() == 2);
         let command = [command.to_command()];
         for c in crate::standard_vm::get_commands_from_expression_commands(&command) {
+            // →deg after a number being typed, as a key press sends it.
+            self.end_entry_for(c);
             self.send_command(c);
+        }
+        if angled {
+            // Back to the angle unit shown (the operation was sent with the
+            // one it was worked out in).
+            self.resync_angle();
         }
     }
 
