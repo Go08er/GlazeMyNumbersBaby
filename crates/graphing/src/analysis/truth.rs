@@ -472,6 +472,31 @@ fn reval_in(e: &Expr, x: f64, u: TrigUnit, typed: bool) -> R {
                 _ => R::Unknown,
             }
         }
+        // A constant exponent exactly an odd integer that its double isn't
+        // (past 2⁵³ every double is even): the power of |a|, negative for
+        // a negative a (review 14, R14-M-02: x^9007199254740993 was +1 at
+        // −1, its exponent read as 2⁵³). One beyond the doubles and not
+        // carried exactly (3^20000): odd, even or no integer isn't known,
+        // so a negative a's power is unknown.
+        Expr::Bin(BinOp::Pow, a, b)
+            if typed && !varies(b) && matches!(kind(b), PowKind::Odd | PowKind::Beyond) =>
+        {
+            let odd = matches!(kind(b), PowKind::Odd);
+            match (reval(a, x, u), reval(b, x, u)) {
+                (R::Undef, _) | (_, R::Undef) => R::Undef,
+                (R::V(va), R::V(vb)) if va.sign() < 0.0 => {
+                    if !odd {
+                        return R::Unknown;
+                    }
+                    match pow_real(va.neg(), vb) {
+                        R::V(m) => R::V(m.neg()),
+                        r => r,
+                    }
+                }
+                (R::V(va), R::V(vb)) => pow_real(va, vb),
+                _ => R::Unknown,
+            }
+        }
         // A root of a degree exactly no integer: the power 1/n, base ≥ 0.
         Expr::Call(Func::Root, args)
             if args.len() == 2

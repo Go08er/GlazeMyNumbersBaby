@@ -216,6 +216,26 @@ pub fn pow(b: f64, e: f64) -> f64 {
     }
 }
 
+/// b^e for a constant exponent exactly an odd integer that its double `e`
+/// isn't (past 2⁵³ every double is even: a typed 9007199254740993 is held
+/// as 2⁵³): sign(b)·|b|^e, the odd power's sign kept (review 14,
+/// R14-M-02: (−1)^9007199254740993 came out +1). Its magnitude is |b|
+/// to the double, as for any power.
+#[inline]
+pub(crate) fn pow_odd(b: f64, e: f64) -> f64 {
+    let m = pow(b.abs(), e);
+    if b < 0.0 { -m } else { m }
+}
+
+/// b^e for a constant exponent beyond the doubles whose exact value isn't
+/// carried (3^20000, too long to fold): whether it is an integer, and odd
+/// or even, isn't known, so a negative base gives no value (NaN, which
+/// the program marks unknown, never undefined); any other base as [`pow`].
+#[inline]
+pub(crate) fn pow_beyond(b: f64, e: f64) -> f64 {
+    if b < 0.0 { f64::NAN } else { pow(b, e) }
+}
+
 /// b^e for an exponent that depends on x (x^x, 2^x, (x−1)^(x+1)): defined
 /// only for a positive base, or a zero base to a positive power, as in the
 /// TI-84 Plus CE's Real mode and IEEE 1788's pow. (−2)^x is undefined even

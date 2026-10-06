@@ -452,6 +452,26 @@ pub(crate) fn pow(b: Wide, t: Wide) -> Wide {
     if odd { r.neg() } else { r }
 }
 
+/// `b^t` for a constant exponent exactly an odd integer that `t` isn't (as
+/// `functions::pow_odd`): sign(b)·|b|^t.
+pub(crate) fn pow_odd(b: Wide, t: Wide) -> Wide {
+    match b {
+        Wide::Val(bm, be) if bm < 0.0 => pow(Wide::Val(-bm, be), t).neg(),
+        _ => pow(b, t),
+    }
+}
+
+/// `b^t` for a constant exponent beyond the doubles whose exact value
+/// isn't carried (as `functions::pow_beyond`): a negative base's power is
+/// unknown, its parity (or integrality) not known.
+pub(crate) fn pow_beyond(b: Wide, t: Wide) -> Wide {
+    match (b, t) {
+        (Wide::Undef, _) | (_, Wide::Undef) => Wide::Undef,
+        (Wide::Val(bm, _), _) if bm < 0.0 => Wide::Unknown,
+        _ => pow(b, t),
+    }
+}
+
 /// `b^t` for an exponent that varies with x (as `functions::pow_var`:
 /// positive bases only, or 0 to a positive power).
 pub(crate) fn pow_var(b: Wide, t: Wide) -> Wide {

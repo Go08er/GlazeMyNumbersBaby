@@ -84,10 +84,15 @@ a root's degree) is an integer is decided by its exact value, never by its
 double: off, `x^1.0000000000000001` and `x^2.0000000000000001` take the
 positive-base rule (domain [0, ∞), a minimum at 0), while `x^(0.1+0.9)` and
 `x^2.0` are integer powers; only the integers of the written form `p/q`
-must be typed exactly so to give odd roots. Likewise a root's degree typed
-as an odd integer is odd at any size: off (or at 16 digits or more),
+must be typed exactly so to give odd roots. Likewise an exponent or a
+root's degree typed as an odd integer is odd at any size: off (or at 16
+digits or more), `x^9007199254740993` is −1 at −1 and
 `root(−8, 9007199254740993)` is defined (just below −1), though the doubles
-either side of that degree are even. Arithmetic on literals and
+either side of that number are even; so is `root(−8, n)` for an odd n of
+hundreds of digits. An exponent too long to carry exactly (`3^20000`) is
+odd, even or no integer as its form shows (3^20000 is odd, 10^5000 even,
+1.5^100000 no integer); where that isn't known (`x^nCr(2000, 1000)`), a
+negative base's power is unknown. Arithmetic on literals and
 sliders alone (+, −, ×, ÷, whole powers, |·| and the counts n!, n!!, nCr,
 nPr of whole numbers) is done exactly and rounded once
 (`10^17·(0.1 + 0.2 − 0.3)` is 0, `0.1·3` is the double nearest 0.3, and

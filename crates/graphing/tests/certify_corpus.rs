@@ -879,6 +879,12 @@ const REVIEW: &[(&str, &str)] = &[
         "root(x,3.0000000000000001)",
         "D=[0,inf) | XI=0 | YI=0 | P=neither | MIN=(0,0) | MAX=none | VA=none | R=[0,inf)",
     ),
+    // Review 14, R14-M-02: an exponent typed as the odd 2⁵³ + 1 is odd,
+    // though its double 2⁵³ is even: −1 at −1, an odd function.
+    (
+        "x^9007199254740993",
+        "XI=0 | YI=0 | P=odd | VA=none | HA=none",
+    ),
     // Review 14, R14-M-04: a degree typed as the odd −(10³⁰¹ + 1), far
     // past −10³⁰⁰, is odd: −8^(1/n) is just above −1, defined (the box
     // test clipped the degree to −10³⁰⁰ and found no odd integer, and the

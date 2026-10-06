@@ -1933,3 +1933,56 @@ fn far_negative_root_degree_boxes_keep_their_odd_integers() {
         s[0]
     );
 }
+
+/// x^n for an exponent typed as the odd 2⁵³ + 1, which its enclosure
+/// (2⁵³ and the double after it, both even) can't tell from its even
+/// neighbours (review 14, R14-M-02): the Taylor evaluator's enclosure
+/// holds the odd power, sign(x)·|x|^n, at points and over boxes on both
+/// sides of 0 and of ±1 (on the negative side it abstains: possibly
+/// undefined, any value), and claims nothing it can't.
+#[test]
+fn an_odd_exponent_past_the_doubles_is_enclosed() {
+    init();
+    let n = rug::Integer::from(9007199254740993u64);
+    let truth = |x: &Float| -> Float {
+        let m = Float::with_val(P, x.clone().abs()).pow(&n);
+        if *x < 0 { -m } else { m }
+    };
+    let eq = Equation::parse("y=x^9007199254740993").unwrap();
+    let (_, f) = eq.explicit().unwrap();
+    let ctx = Ctx::new(CompileOptions::default());
+    let one_minus = 1.0f64.next_down();
+    let one_plus = 1.0f64.next_up();
+    let points = [
+        -2.0, -one_plus, -1.0, -one_minus, -0.5, -1e-300, 0.0, 1e-300, 0.5, one_minus, 1.0,
+        one_plus, 2.0,
+    ];
+    for x in points {
+        let s = taylor(f, Interval::point(x), 1, &ctx);
+        let v = truth(&mp(x));
+        assert!(
+            inside(&v, s[0].iv),
+            "at {x:e}: {:?} misses {}",
+            s[0],
+            v.to_f64()
+        );
+    }
+    for (lo, hi) in [
+        (-2.0, -0.5),
+        (-one_plus, -one_minus),
+        (-1.0, 1.0),
+        (0.5, 2.0),
+        (one_minus, one_plus),
+    ] {
+        let s = taylor(f, Interval::new(lo, hi), 1, &ctx);
+        for x in [lo, hi, (lo + hi) / 2.0] {
+            let v = truth(&mp(x));
+            assert!(
+                inside(&v, s[0].iv),
+                "on [{lo:e}, {hi:e}] at {x:e}: {:?} misses {}",
+                s[0],
+                v.to_f64()
+            );
+        }
+    }
+}
