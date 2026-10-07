@@ -21,6 +21,9 @@ use appcore::modes::ViewMode;
 /// Enter/leave the compact window chrome.
 pub type CompactHook = Box<dyn Fn(bool)>;
 
+/// Give a page's flyout the window's key routing and pointer handling.
+pub type FlyoutHook = Box<dyn Fn(&gtk::Popover)>;
+
 /// A setting pages follow live: Settings sets it, a page reads it when it
 /// is made and is told of every change after.
 pub struct Followed<T> {
@@ -64,6 +67,9 @@ pub struct Ctx {
     pub store: Rc<Store>,
     /// Set by the window: enter/leave the compact "keep on top" chrome.
     pub compact: std::cell::RefCell<Option<CompactHook>>,
+    /// Set by the window: what a flyout of a page's own keys needs
+    /// ([`Ctx::flyout`]).
+    pub flyouts: std::cell::RefCell<Option<FlyoutHook>>,
     /// What covers what in the window, for assistive technology; a page
     /// registers the layers it opens over itself.
     pub layers: Rc<crate::inert::Layers>,
@@ -83,6 +89,16 @@ impl Ctx {
     ) {
         if let Some(p) = widget.compute_point(&self.aurora, &graphene::Point::new(x, y)) {
             self.aurora.pulse(p.x(), p.y(), color, strength);
+        }
+    }
+
+    /// A flyout of the page's own keys, an autohide popover, which holds
+    /// a grab: its keys go the window's way (Enter on a key is "=", what
+    /// is typed is the calculator's), and a click in it draws no focus
+    /// ring, as in the window.
+    pub fn flyout(&self, popover: &gtk::Popover) {
+        if let Some(f) = self.flyouts.borrow().as_ref() {
+            f(popover);
         }
     }
 

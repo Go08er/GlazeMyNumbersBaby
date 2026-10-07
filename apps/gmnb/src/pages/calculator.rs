@@ -73,7 +73,7 @@ fn text_button(label: &str, tip: &str) -> gtk::Button {
     b
 }
 
-fn chevron_menu(label: &str, icon: &str, popover: &gtk::Popover) -> gtk::MenuButton {
+fn chevron_menu(ctx: &Ctx, label: &str, icon: &str, popover: &gtk::Popover) -> gtk::MenuButton {
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     content.append(&PathIcon::new(icon, 16));
     content.append(&gtk::Label::new(Some(label)));
@@ -84,9 +84,9 @@ fn chevron_menu(label: &str, icon: &str, popover: &gtk::Popover) -> gtk::MenuBut
         .css_classes(["wc-mem", "wc-flyout-button"])
         .build();
     crate::a11y::name_menu_button(&button, label);
-    // Its keys take the focus on a click, as the keypad's: without the
-    // ring, which the window's controller can't hide in a popover.
-    crate::window::hide_ring_on_press(popover);
+    // Its keys take the focus on a click, as the keypad's, without the
+    // ring, and the keys typed in it go the window's way (Ctx::flyout).
+    ctx.flyout(popover);
     button
 }
 
@@ -415,8 +415,18 @@ impl CalculatorPage {
             .css_classes(["wc-flyout"])
             .build();
         let flyrow = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        flyrow.append(&chevron_menu("Trigonometry", paths::ANGLE, &trig_pop));
-        flyrow.append(&chevron_menu("Function", paths::FUNCTION, &func_pop));
+        flyrow.append(&chevron_menu(
+            &self.ctx,
+            "Trigonometry",
+            paths::ANGLE,
+            &trig_pop,
+        ));
+        flyrow.append(&chevron_menu(
+            &self.ctx,
+            "Function",
+            paths::FUNCTION,
+            &func_pop,
+        ));
         b.append(&flyrow);
 
         let pad = self.add_keypad(keys::scientific(), Some(CalcMode::Scientific));
@@ -539,6 +549,15 @@ impl CalculatorPage {
                     && !p.syncing.get()
                 {
                     p.set_shift(mode);
+                    // Another mode closes the flyout, as upstream's
+                    // (BitshiftFlyout_Checked); the one already chosen
+                    // toggles nothing and leaves it open.
+                    if let Some(flyout) = c
+                        .ancestor(gtk::Popover::static_type())
+                        .and_downcast::<gtk::Popover>()
+                    {
+                        flyout.popdown();
+                    }
                 }
             });
             shift_box.append(&c);
@@ -549,8 +568,13 @@ impl CalculatorPage {
             .css_classes(["wc-flyout"])
             .build();
         let flyrow = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        flyrow.append(&chevron_menu("Bitwise", paths::BITS, &bw_pop));
-        flyrow.append(&chevron_menu("Bit shift", paths::SWAP, &shift_pop));
+        flyrow.append(&chevron_menu(&self.ctx, "Bitwise", paths::BITS, &bw_pop));
+        flyrow.append(&chevron_menu(
+            &self.ctx,
+            "Bit shift",
+            paths::SWAP,
+            &shift_pop,
+        ));
         b.append(&flyrow);
 
         let stack = gtk::Stack::new();
@@ -745,6 +769,16 @@ impl CalculatorPage {
             return;
         };
         self.press_resolved(button);
+        // A flyout closes when one of its keys is pressed (a click, Space,
+        // assistive technology; not the 2nd and hyp toggles), as
+        // upstream's (FlyoutButton_Clicked). GTK gives the focus back to
+        // the button that opened it: Enter after the click opens it again.
+        if let Some(flyout) = pad
+            .ancestor(gtk::Popover::static_type())
+            .and_downcast::<gtk::Popover>()
+        {
+            flyout.popdown();
+        }
     }
 
     /// Apply 2nd/hyp/shift-mode/C-CE remapping, then press.

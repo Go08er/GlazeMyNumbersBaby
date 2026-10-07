@@ -129,6 +129,14 @@ pub fn focus_takes(focused: Focused, kp: &KeyPress) -> bool {
     }
 }
 
+/// Whether the focused widget (`focused`, if any) gets `kp` before the
+/// window's routing does ([`focus_takes`]). In a flyout (`flyout`), whose
+/// grab keeps its keys from the window's controllers so that it routes
+/// them itself, Escape is the flyout's too: it closes it.
+pub fn widget_first(focused: Option<Focused>, kp: &KeyPress, flyout: bool) -> bool {
+    (flyout && kp.is(Named::Escape)) || focused.is_some_and(|f| focus_takes(f, kp))
+}
+
 /// Whether `kp`, which the page didn't take ([`Page::key_pressed`]), stops
 /// short of the focused widget: Enter on a calculator key. The key ignores
 /// it, as upstream's do, wherever the page has no Enter of its own (the
@@ -333,6 +341,7 @@ impl Window {
             toasts: toasts.clone(),
             store: store.clone(),
             compact: Default::default(),
+            flyouts: Default::default(),
             layers: crate::inert::Layers::new(&win),
             precision: crate::pages::Followed::new(settings.literal_digits),
         });
@@ -728,6 +737,28 @@ impl Window {
     }
 
     fn install_keyboard(self: &Rc<Self>) {
+        self.win.add_controller(self.key_router(false));
+        hide_ring_on_press(&self.win);
+        // A page's flyouts (autohide popovers) hold a grab: their keys and
+        // presses never reach the window's controllers, so they get their
+        // own, which do the same.
+        let weak = Rc::downgrade(self);
+        *self.ctx.flyouts.borrow_mut() = Some(Box::new(move |flyout| {
+            if let Some(w) = weak.upgrade() {
+                flyout.add_controller(w.key_router(true));
+            }
+            hide_ring_on_press(flyout);
+        }));
+    }
+
+    /// The keys' way through the window, before any widget has them
+    /// (capture): a text field's, a focused control's own (focus_takes),
+    /// else the app's and the page's (handle_key); Enter stops at a
+    /// calculator key, which ignores it (focus_ignores). In a flyout
+    /// (`flyout`) the same, but for Escape, which closes it: Enter on a
+    /// key there is "=", as upstream's flyout keys (CalculatorButtons)
+    /// leave it to the calculator, and what is typed goes into it.
+    fn key_router(self: &Rc<Self>, flyout: bool) -> gtk::EventControllerKey {
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let weak = Rc::downgrade(self);
@@ -739,9 +770,7 @@ impl Window {
             // still honour the app-wide chords a text field has no use for;
             // and let a focused control have its own keys (focus_takes).
             let focused = gtk::prelude::GtkWindowExt::focus(&w.win).map(|f| w.focused(&f));
-            if let Some(focused) = focused
-                && focus_takes(focused, &kp)
-            {
+            if widget_first(focused, &kp, flyout) {
                 return glib::Propagation::Proceed;
             }
             // What the key would change may be covered: handle_key asks.
@@ -751,9 +780,7 @@ impl Window {
                 glib::Propagation::Proceed
             }
         });
-        self.win.add_controller(keys);
-
-        hide_ring_on_press(&self.win);
+        keys
     }
 
     /// What `focus`, the window's focus, is ([`Focused`]).
@@ -981,6 +1008,33 @@ mod tests {
         }
         for f in [Text, Control, Other] {
             assert!(!focus_ignores(f, &enter), "{f:?}");
+        }
+    }
+
+    /// In an open flyout the keys go the window's way, as upstream's
+    /// shortcuts reach the calculator with a flyout open: Enter on a
+    /// focused key there is "=" (the key ignores it), what is typed is the
+    /// calculator's; the 2nd and hyp toggles (and Bit shift's radio
+    /// buttons) take their own Enter, Space and arrows. Escape, though, is
+    /// the flyout's, which closes it; in the window it is the page's.
+    #[test]
+    fn keys_in_a_flyout_go_the_windows_way() {
+        use Focused::*;
+        let enter = KeyPress::named(Named::Enter);
+        let escape = KeyPress::named(Named::Escape);
+        let seven = KeyPress::char('7');
+        let space = KeyPress::char(' ');
+        for flyout in [false, true] {
+            assert!(!widget_first(Some(CalculatorKey), &enter, flyout));
+            assert!(!widget_first(Some(CalculatorKey), &seven, flyout));
+            assert!(widget_first(Some(CalculatorKey), &space, flyout));
+            assert!(widget_first(Some(Control), &enter, flyout));
+            assert!(!widget_first(Some(Control), &seven, flyout));
+            assert!(!widget_first(None, &enter, flyout));
+        }
+        for f in [Some(CalculatorKey), Some(Control), Some(Other), None] {
+            assert!(widget_first(f, &escape, true), "{f:?}");
+            assert!(!widget_first(f, &escape, false), "{f:?}");
         }
     }
 }
