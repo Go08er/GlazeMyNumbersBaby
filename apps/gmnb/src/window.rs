@@ -99,10 +99,11 @@ pub enum Focused {
     /// A text field (graph equations, dialogs): every key but the
     /// app-wide chords.
     Text,
-    /// One of the calculator's own keys, upstream's `CalculatorButton`s
-    /// and bit `FlipButtons` ([`Page::is_calculator_key`]): Space presses
-    /// it and the arrows move on, but Enter is still "=", as upstream's
-    /// ignore it.
+    /// One of the page's own keys, upstream's `CalculatorButton`s and bit
+    /// `FlipButtons` ([`Page::is_calculator_key`]): Space presses it and
+    /// the arrows move on, but it ignores Enter, as upstream's do: Enter is
+    /// the page's ("=" on the calculator, nothing on the converter or the
+    /// graph's keypad; [`focus_ignores`]).
     CalculatorKey,
     /// Any other control ([`is_control`]): a button, a toggle or menu
     /// button, a radio button, a list row, a switch, a calendar day, a
@@ -126,6 +127,16 @@ pub fn focus_takes(focused: Focused, kp: &KeyPress) -> bool {
         (Focused::CalculatorKey, Some(ControlKey::Activate)) => !kp.is(Named::Enter),
         (Focused::CalculatorKey | Focused::Other, _) => false,
     }
+}
+
+/// Whether `kp`, which the page didn't take ([`Page::key_pressed`]), stops
+/// short of the focused widget: Enter on a calculator key. The key ignores
+/// it, as upstream's do, wherever the page has no Enter of its own (the
+/// converter's and the graph's keypads): GTK would press the key.
+pub fn focus_ignores(focused: Focused, kp: &KeyPress) -> bool {
+    focused == Focused::CalculatorKey
+        && input::control_key(kp) == Some(input::ControlKey::Activate)
+        && kp.is(Named::Enter)
 }
 
 /// Whether `w` is a control that takes its own activation and navigation
@@ -163,6 +174,34 @@ fn is_control(w: &gtk::Widget) -> bool {
                 | R::ComboBox
                 | R::Slider
         )
+}
+
+/// A pointer press in `widget` hides the focus ring, which only keyboard
+/// use shows (as DGMNB's and upstream's): a click that focuses a key or a
+/// button (focus-on-click) moves the focus without drawing it. GTK turns
+/// the ring on and off by keys only (and starts with it on), so a click
+/// after Tab would draw it around the clicked key. The controller runs
+/// first (capture), before the button takes the focus. For the window,
+/// and for each popover whose keys take the focus on a click: an
+/// autohide popover holds a grab, so presses in it never reach the
+/// window's controllers.
+pub fn hide_ring_on_press(widget: &impl IsA<gtk::Widget>) {
+    let pointer = gtk::EventControllerLegacy::new();
+    pointer.set_propagation_phase(gtk::PropagationPhase::Capture);
+    pointer.connect_event(|c, event| {
+        if matches!(
+            event.event_type(),
+            gdk::EventType::ButtonPress | gdk::EventType::TouchBegin
+        ) && let Some(win) = c
+            .widget()
+            .and_then(|w| w.root())
+            .and_downcast::<gtk::Window>()
+        {
+            win.set_focus_visible(false);
+        }
+        glib::Propagation::Proceed
+    });
+    widget.add_controller(pointer);
 }
 
 pub fn apply_theme_setting(theme: &str) {
@@ -699,19 +738,22 @@ impl Window {
             // Let text entries (graph equations, dialogs) type normally, but
             // still honour the app-wide chords a text field has no use for;
             // and let a focused control have its own keys (focus_takes).
-            if let Some(focus) = gtk::prelude::GtkWindowExt::focus(&w.win)
-                && focus_takes(w.focused(&focus), &kp)
+            let focused = gtk::prelude::GtkWindowExt::focus(&w.win).map(|f| w.focused(&f));
+            if let Some(focused) = focused
+                && focus_takes(focused, &kp)
             {
                 return glib::Propagation::Proceed;
             }
             // What the key would change may be covered: handle_key asks.
-            if w.handle_key(&kp) {
+            if w.handle_key(&kp) || focused.is_some_and(|f| focus_ignores(f, &kp)) {
                 glib::Propagation::Stop
             } else {
                 glib::Propagation::Proceed
             }
         });
         self.win.add_controller(keys);
+
+        hide_ring_on_press(&self.win);
     }
 
     /// What `focus`, the window's focus, is ([`Focused`]).
@@ -917,5 +959,28 @@ mod tests {
         }
         assert!(!focus_takes(Text, &alt_2));
         assert!(!focus_takes(Text, &KeyPress::named(Named::Home).ctrl()));
+    }
+
+    /// R17-M-04 follow-up: Enter the page doesn't take (the converter's,
+    /// the graph's keypad) still never reaches a focused calculator key,
+    /// which ignores it as upstream's `CalculatorButton` does; GTK would
+    /// press it. Every other key the page leaves goes on as before.
+    #[test]
+    fn a_calculator_key_ignores_enter() {
+        use Focused::*;
+        let enter = KeyPress::named(Named::Enter);
+        assert!(focus_ignores(CalculatorKey, &enter));
+        for k in [
+            &KeyPress::char(' '),
+            &KeyPress::named(Named::Down),
+            &KeyPress::char('7'),
+            &enter.shift(),
+            &enter.ctrl(),
+        ] {
+            assert!(!focus_ignores(CalculatorKey, k), "{k:?}");
+        }
+        for f in [Text, Control, Other] {
+            assert!(!focus_ignores(f, &enter), "{f:?}");
+        }
     }
 }

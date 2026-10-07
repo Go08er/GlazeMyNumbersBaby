@@ -356,6 +356,21 @@ mod tests {
         );
     }
 
+    /// A History item is read as upstream's
+    /// (HistoryList.GetHistoryItemAutomationName) and GMNB's: the
+    /// expression, which ends in "=", then the result; "=" read once.
+    #[test]
+    fn a_history_item_reads_as_upstreams() {
+        let mut p = crate::calc::CalcPage::new(None);
+        press(&mut p, "2+3=");
+        let (nodes, _) = frame_nodes(|f, r| p.view(f, r, false));
+        let row = nodes
+            .iter()
+            .find(|n| n.id == crate::ui::id(("hist", 0usize)))
+            .expect("the History item");
+        assert_eq!(row.label, "2   +   3 = 5");
+    }
+
     /// Focusing each history row in turn (as Tab does) scrolls it into view.
     #[test]
     fn focusing_reveals_every_history_row() {
@@ -934,16 +949,17 @@ mod tests {
         assert!(nodes.iter().any(|n| n.scrollable));
     }
 
-    /// R17-M-04: the focused controls that leave Enter to the calculator
-    /// ("=") are, on every page and overlay, those that press one of its
-    /// keys, as upstream's `CalculatorButton`s and bit `FlipButtons`: every
-    /// keypad's and flyout's key (`calc::Msg::Key`) but the 2nd and hyp
-    /// toggles, MC, MR, M+, M− and MS, and the bits. By what they do, not
-    /// by how they are drawn (2nd and hyp look like keys, MS and the bits
-    /// like buttons). Every other control (menus, toggles, the angle,
-    /// radix and word size, the History and Memory items and their
-    /// buttons, the converter's and the graph's keys, the navigation and
-    /// Settings) takes Enter itself, as in GMNB.
+    /// R17-M-04: the focused controls that ignore Enter, leaving it to the
+    /// page ("=" on the calculator, nothing on the converter or the graph),
+    /// are, on every page and overlay, those that press one of its keys, as
+    /// upstream's `CalculatorButton`s and bit `FlipButtons`: every keypad's
+    /// and flyout's key (`calc::Msg::Key`) but the 2nd and hyp toggles, MC,
+    /// MR, M+, M− and MS, the bits, and the converter's and the graph's
+    /// keys. By what they do, not by how they are drawn (2nd and hyp look
+    /// like keys, MS and the bits like buttons). Every other control
+    /// (menus, toggles, the angle, radix and word size, the History and
+    /// Memory items and their buttons, the navigation and Settings) takes
+    /// Enter itself, as in GMNB.
     #[test]
     fn enter_is_equals_on_the_calculators_own_keys() {
         use crate::app::Msg as App;
@@ -955,6 +971,9 @@ mod tests {
         let presses_a_key = |h: &Hit| match &h.msg {
             Some(App::Calc(Msg::Key(k))) => ![KEY_SECOND, KEY_TRIG_SECOND, KEY_HYP].contains(k),
             Some(App::Calc(Msg::FlipBit(_))) => true,
+            Some(App::Conv(crate::conv::Msg::Key(_)) | App::Graph(crate::graph::Msg::Pad(_))) => {
+                true
+            }
             _ => false,
         };
         // Every focusable control drawn, by where it was drawn.
@@ -1022,6 +1041,14 @@ mod tests {
         );
 
         for (what, h) in &all {
+            // A click focuses every control (Hit::focus_after_press)
+            // but the graph's keys, which type into the focused equation,
+            // and the Scientific 2nd, as upstream's.
+            let leaves_the_focus = matches!(
+                h.msg,
+                Some(App::Graph(crate::graph::Msg::Pad(_)) | App::Calc(Msg::Key(KEY_SECOND)))
+            );
+            assert_eq!(h.focus_on_click, !leaves_the_focus, "{what}: {:?}", h.msg);
             assert_eq!(
                 h.enter_is_equals,
                 presses_a_key(h),
@@ -1069,21 +1096,103 @@ mod tests {
         assert!(flag("Programmer bits", id(("mem", B::Memory as u32))));
         assert!(!flag("Programmer", id("word")));
         assert!(!flag("Programmer Shift", id(("shift", 0usize))));
-        // Some of each kind on the calculator; none elsewhere.
-        assert!(
-            all.iter()
-                .any(|(w, h)| w == "Scientific Trig" && h.enter_is_equals)
-        );
-        assert!(
-            all.iter()
-                .any(|(w, h)| w == "Programmer Bitwise" && h.enter_is_equals)
-        );
-        for page in ["converter", "date", "calendar", "graphing"] {
+        // Some of each kind on the calculator, the converter's and the
+        // graph's keypads; none on the date page.
+        for page in [
+            "Scientific Trig",
+            "Programmer Bitwise",
+            "converter",
+            "graphing",
+        ] {
+            assert!(
+                all.iter().any(|(w, h)| w == page && h.enter_is_equals),
+                "{page}"
+            );
+        }
+        for page in ["date", "calendar"] {
             assert!(all.iter().any(|(w, _)| w == page), "{page}: nothing drawn");
             assert!(
                 all.iter().all(|(w, h)| w != page || !h.enter_is_equals),
                 "{page}"
             );
         }
+        // The Scientific keypad's 2nd only, not the trig flyout's 2nd and
+        // hyp, nor any other toggle.
+        let click_focuses = |what: &str, hid: Id| {
+            let found: Vec<bool> = all
+                .iter()
+                .filter(|(w, h)| w == what && h.id == hid)
+                .map(|(_, h)| h.focus_on_click)
+                .collect();
+            assert!(!found.is_empty(), "{what}: no {hid:?}");
+            found[0]
+        };
+        assert!(!click_focuses("Scientific", id(("keypad", KEY_SECOND))));
+        assert!(click_focuses(
+            "Scientific Trig",
+            id(("trig", KEY_TRIG_SECOND))
+        ));
+        assert!(click_focuses("Scientific Trig", id(("trig", KEY_HYP))));
+        assert!(click_focuses("Scientific", id(("keypad", B::Two.id()))));
+        assert!(click_focuses("Programmer bits", id(("bit", 0u32))));
+    }
+
+    /// The header's window controls aren't focused by a click, as GTK's
+    /// (which can't take the focus at all): with the focus where it was,
+    /// Enter after maximizing doesn't restore, and is "=" after clicking a
+    /// key. Every other control in the header is, as GMNB's header bar
+    /// buttons. Each layout the header has: normal, maximized, compact,
+    /// Settings; each page's own buttons.
+    #[test]
+    fn window_controls_leave_the_focus_where_it_is() {
+        use crate::ui::id;
+        use appcore::modes::ViewMode;
+        let window_controls = ["Close", "Maximize", "Restore", "Minimize"].map(|n| id(("hdr", n)));
+        let mut calc = crate::calc::CalcPage::new(None);
+        let graph = crate::graph::GraphPage::for_test(appcore::graph::from_list("x^2"));
+        let (mut seen, mut others) = (Vec::new(), 0);
+        for mode in [
+            ViewMode::Standard,
+            ViewMode::Scientific,
+            ViewMode::Graphing,
+            ViewMode::Date,
+        ] {
+            if let Some(m) = mode.calc_mode() {
+                calc.set_mode(m);
+            }
+            for (settings, compact, maximized) in [
+                (false, false, false),
+                (false, false, true),
+                (false, true, false),
+                (true, false, false),
+            ] {
+                let (_, hits) = frame_nodes(|f, _| {
+                    crate::app::draw_header(
+                        f,
+                        Rect::new(0.0, 0.0, 420.0, 46.0),
+                        mode,
+                        settings,
+                        compact,
+                        maximized,
+                        false,
+                        Some(&calc),
+                        Some(&graph),
+                    )
+                });
+                for h in hits.iter().filter(|h| h.focusable) {
+                    let control = window_controls.contains(&h.id);
+                    assert_eq!(h.focus_on_click, !control, "{mode:?}: {:?}", h.msg);
+                    if control {
+                        seen.push(h.id);
+                    } else {
+                        others += 1;
+                    }
+                }
+            }
+        }
+        for c in window_controls {
+            assert!(seen.contains(&c), "{c:?} never drawn");
+        }
+        assert!(others > 0, "no other header control drawn");
     }
 }

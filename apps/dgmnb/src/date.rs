@@ -137,11 +137,12 @@ impl DatePage {
                 let from = self.focused_day(*cx.focus);
                 self.cursor = add_months(from.unwrap_or(self.cursor), delta);
                 self.shown = first_of_month(self.cursor);
-                // A month button the keyboard is on keeps the focus.
-                // Otherwise (an assistive technology's click, or the
-                // pointer's, while a day had it) the focus moves with the
-                // keys to the new month's day, rather than be lost with
-                // the old month's (R16-L-03, as GMNB's).
+                // A month button with the focus keeps it: the keyboard's,
+                // or the pointer's, whose press gave it the focus (as
+                // GMNB's). Otherwise (an assistive technology's click
+                // while a day had it) the focus moves with the keys to the
+                // new month's day, rather than be lost with the old
+                // month's (R16-L-03, as GMNB's).
                 if !NAV.iter().any(|&b| *cx.focus == Some(id(b))) {
                     *cx.focus = Some(day_id(self.cursor));
                 }

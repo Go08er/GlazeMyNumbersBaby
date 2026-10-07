@@ -615,6 +615,12 @@ impl Page for ConverterHandle {
         true
     }
 
+    /// The keypad's keys: upstream's converter keys are `CalculatorButton`s,
+    /// which ignore Enter (and the converter has no Enter of its own).
+    fn is_calculator_key(&self, widget: &gtk::Widget) -> bool {
+        widget.is_ancestor(&self.0.keypad)
+    }
+
     fn copy(&self) -> Option<String> {
         let text = self.0.vm.borrow().copy_text().to_string();
         self.0.ctx.copy_to_clipboard(&text);

@@ -494,8 +494,9 @@ impl ConvPage {
             } else {
                 KeyLook::Function
             };
+            let kid = id(("conv-key", k.id));
             f.key(
-                id(("conv-key", k.id)),
+                kid,
                 cell,
                 &k.label,
                 k.icon,
@@ -504,6 +505,9 @@ impl ConvPage {
                 msg(Msg::Key(k.id)),
                 enabled,
             );
+            // Upstream's converter keys are CalculatorButtons, which
+            // ignore Enter (the converter has none of its own).
+            f.calculator_key(kid);
         }
         f.end_group();
     }

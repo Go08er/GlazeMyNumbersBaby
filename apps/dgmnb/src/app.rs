@@ -1012,9 +1012,14 @@ impl App {
             .last_click
             .is_some_and(|(t, i)| i == hit.id && now - t < Duration::from_millis(400));
         self.last_click = Some((now, hit.id));
+        // A clicked control has the focus, as in GTK and upstream (its
+        // ring hidden: focus_visible is off above): Enter after clicking 2
+        // is "=", which the key ignores; after clicking DEG, DEG's. The
+        // graph's keys, the Scientific 2nd and the window controls leave
+        // it where it is, a field's included.
+        self.input.focus = hit.focus_after_press(self.input.focus);
         match hit.sense {
             Sense::Text => {
-                self.input.focus = Some(hit.id);
                 let shift = self.mods.shift_key();
                 if let Some(e) = self.field(hit.id) {
                     let _ = (e, shift);
@@ -1023,14 +1028,8 @@ impl App {
                 self.drag = Some((hit.id, x, y));
             }
             Sense::Drag => {
-                self.input.focus = Some(hit.id);
                 self.drag = Some((hit.id, x, y));
                 self.page_drag(hit.id, x, y, 0.0, 0.0, true);
-            }
-            Sense::Click
-                if hit.focusable && self.field(self.input.focus.unwrap_or(0)).is_some() =>
-            {
-                self.input.focus = None;
             }
             _ => {}
         }
@@ -2056,7 +2055,7 @@ impl ApplicationHandler<UserEvent> for App {
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
-fn draw_header(
+pub(crate) fn draw_header(
     f: &mut Frame,
     r: Rect,
     mode: ViewMode,
@@ -2120,8 +2119,12 @@ fn draw_header(
             f.icon_button(id(("hdr", name)), b, d, name, msg, true, on);
             *rx -= 2.0;
         };
+    // The window controls aren't focused by a click (GTK's can't take the
+    // focus): Enter after maximizing mustn't restore.
     rbtn(f, &mut rx, appcore::icons::CLOSE, "Close", Msg::Close, None);
+    f.no_focus_on_click(id(("hdr", "Close")));
     if !compact {
+        let max = if maximized { "Restore" } else { "Maximize" };
         rbtn(
             f,
             &mut rx,
@@ -2130,11 +2133,13 @@ fn draw_header(
             } else {
                 glyph::MAXIMIZE
             },
-            if maximized { "Restore" } else { "Maximize" },
+            max,
             Msg::Maximize,
             None,
         );
+        f.no_focus_on_click(id(("hdr", max)));
         rbtn(f, &mut rx, glyph::MINIMIZE, "Minimize", Msg::Minimize, None);
+        f.no_focus_on_click(id(("hdr", "Minimize")));
         rx -= 8.0;
     }
     if !settings && !compact {

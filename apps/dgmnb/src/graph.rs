@@ -1314,8 +1314,9 @@ impl GraphPage {
                     ui::KeyLook::Function
                 };
                 let icon = (*label == "⌫").then_some(appcore::icons::BACKSPACE);
+                let kid = id(("gpad", ri, ci));
                 f.key(
-                    id(("gpad", ri, ci)),
+                    kid,
                     cell,
                     label,
                     icon,
@@ -1324,6 +1325,12 @@ impl GraphPage {
                     msg(Msg::Pad(insert)),
                     true,
                 );
+                // Upstream's GraphingNumPad keys are CalculatorButtons,
+                // which ignore Enter (graphing has none of its own here)
+                // and can't take the focus: a click leaves it in the
+                // equation they type into.
+                f.calculator_key(kid);
+                f.no_focus_on_click(kid);
             }
         }
         f.end_group();

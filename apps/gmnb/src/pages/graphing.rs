@@ -128,6 +128,8 @@ pub struct GraphingPage {
     analysis_title: gtk::Label,
     analysis_body: gtk::Box,
     side_stack: gtk::Stack,
+    /// The keypad (upstream's GraphingNumPad).
+    pad: gtk::Grid,
     focused: RefCell<Option<glib::WeakRef<gtk::Entry>>>,
     mode_toggle: adw::ToggleGroup,
     next_color: Cell<usize>,
@@ -312,6 +314,7 @@ impl GraphingPage {
             analysis_title,
             analysis_body,
             side_stack: side_stack.clone(),
+            pad: pad.clone(),
             focused: RefCell::new(None),
             mode_toggle: mode_toggle.clone(),
             next_color: Cell::new(0),
@@ -480,6 +483,9 @@ impl GraphingPage {
                     },
                 );
                 b.add_css_class("wc-pad-key");
+                // Not focused by a click, unlike the calculator's keys: it
+                // types into the equation, which keeps the focus
+                // (upstream's GraphingNumPad keys can't take it at all).
                 b.set_focus_on_click(false);
                 let weak = Rc::downgrade(self);
                 let insert = insert.to_string();
@@ -1372,6 +1378,12 @@ impl Page for GraphingHandle {
             None => return false,
         }
         true
+    }
+
+    /// The keypad's keys: upstream's GraphingNumPad `CalculatorButton`s,
+    /// which ignore Enter (graphing mode has no Enter of its own there).
+    fn is_calculator_key(&self, widget: &gtk::Widget) -> bool {
+        widget.is_ancestor(&self.0.pad)
     }
 
     fn copy(&self) -> Option<String> {
