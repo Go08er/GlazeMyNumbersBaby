@@ -227,6 +227,18 @@ pub fn active_layer(hits: &[Hit]) -> &[Hit] {
     &hits[start..]
 }
 
+/// Where the focus goes in a popup the keys (or assistive technology)
+/// opened, given its layer's hits (`layer`, [`active_layer`]): `preferred`
+/// if it is one of its controls (a radio group's chosen one), else its
+/// first control, as GTK's popovers and upstream's flyouts put it there.
+pub fn first_focus(layer: &[Hit], preferred: Option<Id>) -> Option<Id> {
+    let mut controls = layer.iter().filter(|h| h.focusable);
+    match preferred {
+        Some(p) if layer.iter().any(|h| h.focusable && h.id == p) => Some(p),
+        _ => controls.next().map(|h| h.id),
+    }
+}
+
 /// A scroll area between `scroll_begin` and `scroll_end`.
 #[derive(Clone, Copy)]
 struct OpenScroll {
@@ -953,6 +965,33 @@ mod tests {
         ] {
             assert!(!h.activated_by(false) && !h.activated_by(true), "{h:?}");
         }
+    }
+
+    /// A popup opened from the keys has the focus on its first control
+    /// (not its card's blank area, which takes none), or on the one its
+    /// page prefers (Bit shift's chosen mode) if that is in it; nothing
+    /// if nothing in it takes the focus.
+    #[test]
+    fn a_popup_from_the_keys_focuses_its_first_control() {
+        let at = |name: &str, focusable| Hit {
+            id: id(name),
+            focusable,
+            ..hit(Sense::Click, Some(Msg::Minimize), false)
+        };
+        let layer = [
+            at("scrim", false),
+            at("card", false),
+            at("first", true),
+            at("chosen", true),
+        ];
+        assert_eq!(first_focus(&layer, None), Some(id("first")));
+        assert_eq!(first_focus(&layer, Some(id("chosen"))), Some(id("chosen")));
+        assert_eq!(first_focus(&layer, Some(id("card"))), Some(id("first")));
+        assert_eq!(
+            first_focus(&layer, Some(id("elsewhere"))),
+            Some(id("first"))
+        );
+        assert_eq!(first_focus(&layer[..2], None), None);
     }
 
     /// R17-M-04 follow-up: a pointer press gives the focus to a control a

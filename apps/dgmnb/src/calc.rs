@@ -73,6 +73,17 @@ pub struct CalcPage {
     announce: String,
 }
 
+/// The Bit shift flyout's modes, in order (rows `("shift", i)`).
+const SHIFT_MODES: [(ShiftMode, &str); 4] = [
+    (ShiftMode::Arithmetic, "Arithmetic shift"),
+    (ShiftMode::Logical, "Logical shift"),
+    (ShiftMode::Rotate, "Rotate circular shift"),
+    (
+        ShiftMode::RotateThroughCarry,
+        "Rotate through carry circular shift",
+    ),
+];
+
 fn msg(m: Msg) -> AppMsg {
     AppMsg::Calc(m)
 }
@@ -93,6 +104,20 @@ impl CalcPage {
             tab: Tab::History,
             bit_view: false,
             announce: String::new(),
+        }
+    }
+
+    /// Where the focus goes in the open popup when the keys open it, if
+    /// not on its first control: the Bit shift flyout's chosen mode, as
+    /// GMNB's radio buttons.
+    pub fn popup_focus(&self) -> Option<crate::ui::Id> {
+        let cur = self.vm.shift_mode();
+        match self.popup {
+            Some(Popup::Shift) => SHIFT_MODES
+                .iter()
+                .position(|(m, _)| *m == cur)
+                .map(|i| id(("shift", i))),
+            _ => None,
         }
     }
 
@@ -959,18 +984,7 @@ impl CalcPage {
                 );
                 f.card(r, 12.0);
                 let cur = self.vm.shift_mode();
-                for (i, (mode, label)) in [
-                    (ShiftMode::Arithmetic, "Arithmetic shift"),
-                    (ShiftMode::Logical, "Logical shift"),
-                    (ShiftMode::Rotate, "Rotate circular shift"),
-                    (
-                        ShiftMode::RotateThroughCarry,
-                        "Rotate through carry circular shift",
-                    ),
-                ]
-                .into_iter()
-                .enumerate()
-                {
+                for (i, (mode, label)) in SHIFT_MODES.into_iter().enumerate() {
                     let row = Rect::new(r.x + 6.0, r.y + 6.0 + i as f32 * 36.0, r.w - 12.0, 36.0);
                     f.row(
                         id(("shift", i)),
