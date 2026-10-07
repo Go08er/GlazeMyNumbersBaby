@@ -1276,36 +1276,110 @@ mod tests {
     }
 
     /// Upstream's checkDefaultBitShift
-    /// (CalculatorProgrammerRadixOperators.xaml.cs:44-58), run whenever
-    /// IsProgrammer turns true (Calculator.xaml.cs:408): Programmer shown
-    /// after another calculator mode, or first (a restored session's mode
-    /// included), starts on Arithmetic shift; shown again, or after another
-    /// page, it keeps the mode chosen.
+    /// (CalculatorProgrammerRadixOperators.xaml.cs:44-58), run when
+    /// IsProgrammer turns true (Calculator.xaml.cs:408): the calculator
+    /// turned to Programmer from Standard or Scientific starts on
+    /// Arithmetic shift; shown again, or after another page, it keeps the
+    /// mode chosen. A restored session goes on exactly as the uninterrupted
+    /// one would: its Programmer shown first keeps the saved shift mode,
+    /// and a switch into Programmer after it resets it as before. A fresh
+    /// start is on Arithmetic.
     #[test]
     fn programmer_starts_on_arithmetic_shift() {
-        use crate::calc::Msg;
+        use crate::calc::{CalcPage, Msg};
         use calcvm::{CalcMode, ShiftMode};
-        let mut p = crate::calc::CalcPage::new(None);
+        let mut fresh = CalcPage::new(None);
+        fresh.set_mode(CalcMode::Programmer);
+        assert_eq!(fresh.vm.shift_mode(), ShiftMode::Arithmetic, "fresh");
+
+        let mut p = CalcPage::new(None);
         p.set_mode(CalcMode::Programmer);
         with_cx(|cx| p.update(Msg::Shift(ShiftMode::Logical), cx));
-        assert_eq!(p.vm.shift_mode(), ShiftMode::Logical);
         p.set_mode(CalcMode::Programmer);
         assert_eq!(p.vm.shift_mode(), ShiftMode::Logical, "chosen again");
         p.reactivate(CalcMode::Programmer);
         p.set_mode(CalcMode::Programmer);
         assert_eq!(p.vm.shift_mode(), ShiftMode::Logical, "after another page");
-        let saved = p.save();
-        p.set_mode(CalcMode::Standard);
-        p.set_mode(CalcMode::Programmer);
-        assert_eq!(p.vm.shift_mode(), ShiftMode::Arithmetic, "after Standard");
-        let mut restored = crate::calc::CalcPage::new(Some(saved));
-        assert_eq!(restored.vm.shift_mode(), ShiftMode::Logical, "restored");
+
+        // Saved in Programmer: reopened there, as if never closed.
+        let mut restored = CalcPage::new(Some(p.save()));
         restored.set_mode(CalcMode::Programmer);
-        assert_eq!(
-            restored.vm.shift_mode(),
-            ShiftMode::Arithmetic,
-            "first shown"
-        );
+        assert_eq!(restored.vm.shift_mode(), ShiftMode::Logical, "restored");
+
+        // Saved in Standard after Logical: then on to Programmer, either way.
+        p.set_mode(CalcMode::Standard);
+        let mut restored = CalcPage::new(Some(p.save()));
+        restored.set_mode(CalcMode::Standard);
+        assert_eq!(restored.vm.shift_mode(), ShiftMode::Logical);
+        for q in [&mut p, &mut restored] {
+            q.set_mode(CalcMode::Programmer);
+            assert_eq!(q.vm.shift_mode(), ShiftMode::Arithmetic, "after Standard");
+        }
+    }
+
+    /// Upstream's OpenParenthesisButton_GotFocus (Scientific and
+    /// Programmer): "(" given the focus tells screen readers how many
+    /// parentheses are open, in upstream's words, through a live node there
+    /// while it has the focus, with the count it had when it got it; again
+    /// each time it gets it. Standard has no "(".
+    #[test]
+    fn the_open_parenthesis_count_is_announced_when_its_key_gets_the_focus() {
+        use crate::calc::CalcPage;
+        use crate::ui::id;
+        use calcvm::{Button as B, CalcMode};
+        let open = id(("keypad", B::OpenParenthesis.id()));
+        let announced = |p: &mut CalcPage, focus: Option<Id>| -> Option<String> {
+            let mut pm = tiny_skia::Pixmap::new(760, 700).unwrap();
+            let (mut text, mut icons, mut scrolls) =
+                (Text::new(), Icons::default(), HashMap::new());
+            let input = Input {
+                focus,
+                ..Input::default()
+            };
+            let canvas = Canvas::new(pm.as_mut(), 1.0, false);
+            let mut f = Frame::new(
+                canvas,
+                &mut text,
+                &mut icons,
+                Theme::new(false, None),
+                &input,
+                &mut scrolls,
+                true,
+            );
+            p.view(&mut f, Rect::new(0.0, 46.0, 760.0, 654.0), false);
+            let nodes = f.take_nodes().unwrap();
+            nodes
+                .iter()
+                .find(|n| n.id == id("paren-announcer"))
+                .map(|n| {
+                    assert!(n.live && n.role == Role::Status);
+                    n.label.clone()
+                })
+        };
+        let count = |n: u32| Some(format!("Open parenthesis count {n}"));
+        let mut p = CalcPage::new(None);
+        for mode in [CalcMode::Scientific, CalcMode::Programmer] {
+            p.set_mode(mode);
+            press(&mut p, "{escape}");
+            assert_eq!(announced(&mut p, None), None, "{mode:?}");
+            assert_eq!(announced(&mut p, Some(open)), count(0), "{mode:?}");
+            press(&mut p, "2*((");
+            assert_eq!(announced(&mut p, Some(open)), count(0), "still focused");
+            assert_eq!(announced(&mut p, None), None, "focus gone");
+            assert_eq!(announced(&mut p, Some(open)), count(2), "{mode:?}");
+            assert_eq!(announced(&mut p, None), None);
+            // A click: the press gives "(" the focus, the release presses
+            // it; the count told is the one before, as upstream's GotFocus.
+            with_cx(|cx| {
+                *cx.focus = Some(open);
+                p.update(crate::calc::Msg::Key(B::OpenParenthesis.id()), cx);
+            });
+            assert_eq!(announced(&mut p, Some(open)), count(2), "clicked");
+            assert_eq!(p.vm.open_parens(), 3);
+            assert_eq!(announced(&mut p, None), None);
+        }
+        p.set_mode(CalcMode::Standard);
+        assert_eq!(announced(&mut p, Some(open)), None, "Standard");
     }
 
     /// The header's window controls aren't focused by a click, as GTK's
