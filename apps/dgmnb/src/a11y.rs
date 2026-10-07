@@ -1137,6 +1137,41 @@ mod tests {
         assert!(click_focuses("Programmer bits", id(("bit", 0u32))));
     }
 
+    /// Upstream's flyouts close when one of their keys is pressed
+    /// (FlyoutButton_Clicked), not when their 2nd or hyp is toggled; the
+    /// Bit shift flyout when another mode is chosen
+    /// (BitshiftFlyout_Checked), not the one already chosen. As GMNB's.
+    #[test]
+    fn flyouts_close_as_upstreams_do() {
+        use crate::calc::{Msg, Popup};
+        use appcore::keys::{KEY_HYP, KEY_TRIG_SECOND};
+        use calcvm::{Button as B, CalcMode, ShiftMode};
+        let mut p = crate::calc::CalcPage::new(None);
+        p.set_mode(CalcMode::Scientific);
+        with_cx(|cx| {
+            p.popup = Some(Popup::Trig);
+            p.update(Msg::Key(KEY_TRIG_SECOND), cx);
+            p.update(Msg::Key(KEY_HYP), cx);
+            assert_eq!(p.popup, Some(Popup::Trig));
+            p.update(Msg::Key(B::Sin.id()), cx);
+            assert_eq!(p.popup, None);
+            p.popup = Some(Popup::Functions);
+            p.update(Msg::Key(B::Floor.id()), cx);
+            assert_eq!(p.popup, None);
+        });
+        p.set_mode(CalcMode::Programmer);
+        with_cx(|cx| {
+            p.popup = Some(Popup::Bitwise);
+            p.update(Msg::Key(B::And.id()), cx);
+            assert_eq!(p.popup, None);
+            p.popup = Some(Popup::Shift);
+            p.update(Msg::Shift(ShiftMode::Arithmetic), cx);
+            assert_eq!(p.popup, Some(Popup::Shift), "the mode already chosen");
+            p.update(Msg::Shift(ShiftMode::Logical), cx);
+            assert_eq!(p.popup, None);
+        });
+    }
+
     /// The header's window controls aren't focused by a click, as GTK's
     /// (which can't take the focus at all): with the focus where it was,
     /// Enter after maximizing doesn't restore, and is "=" after clicking a
