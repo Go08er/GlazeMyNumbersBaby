@@ -67,8 +67,6 @@ pub struct CalcPage {
     trig_inv: bool,
     hyp: bool,
     pub popup: Option<Popup>,
-    /// The calculator mode last shown ([`CalcPage::set_mode`]).
-    shown: Option<CalcMode>,
     tab: Tab,
     bit_view: bool,
     /// Text for assistive tech's live region after a result.
@@ -103,7 +101,6 @@ impl CalcPage {
             trig_inv: false,
             hyp: false,
             popup: None,
-            shown: None,
             tab: Tab::History,
             bit_view: false,
             announce: String::new(),
@@ -139,20 +136,22 @@ impl CalcPage {
 
     pub fn set_mode(&mut self, mode: CalcMode) {
         if self.vm.mode() != mode {
+            // Upstream's checkDefaultBitShift
+            // (CalculatorProgrammerRadixOperators.xaml.cs:44-58), which
+            // OnIsProgrammerPropertyChanged runs (Calculator.xaml.cs:408,
+            // by EnsureProgrammer and OperatorsPanel.EnsureProgrammerRadixOps)
+            // when the calculator turns to Programmer from Standard or
+            // Scientific: it starts on Arithmetic shift. Not when Programmer
+            // is shown again, after another page, nor when a restored
+            // session's Programmer is shown first: that session goes on
+            // with its shift mode, as it would have uninterrupted.
+            if mode == CalcMode::Programmer {
+                self.vm.set_shift_mode(ShiftMode::Arithmetic);
+            }
             self.vm.set_mode(mode);
             self.popup = None;
             self.vm.take_events();
         }
-        // Upstream's checkDefaultBitShift
-        // (CalculatorProgrammerRadixOperators.xaml.cs:44-58), which
-        // OnIsProgrammerPropertyChanged runs (Calculator.xaml.cs:408, by
-        // EnsureProgrammer and OperatorsPanel.EnsureProgrammerRadixOps):
-        // Programmer shown after another mode, or first, starts on
-        // Arithmetic shift. Not after another page (IsProgrammer stays).
-        if mode == CalcMode::Programmer && self.shown != Some(mode) {
-            self.vm.set_shift_mode(ShiftMode::Arithmetic);
-        }
-        self.shown = Some(mode);
         if mode == CalcMode::Programmer && self.tab == Tab::History {
             self.tab = Tab::Memory;
         }

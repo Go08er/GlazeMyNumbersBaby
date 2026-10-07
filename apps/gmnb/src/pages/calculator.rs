@@ -1122,18 +1122,22 @@ impl CalculatorPage {
         // come back to it from another page, not when the mode shown is
         // chosen again (nor after the saved session was restored at start).
         let returning = self.left.replace(false);
-        if returning || self.vm.borrow().mode() != calc_mode {
-            self.vm.borrow_mut().set_mode(calc_mode);
-        }
+        let switching = self.vm.borrow().mode() != calc_mode;
         let programmer = calc_mode == CalcMode::Programmer;
         // Upstream's checkDefaultBitShift
         // (CalculatorProgrammerRadixOperators.xaml.cs:44-58), which
         // OnIsProgrammerPropertyChanged runs (Calculator.xaml.cs:408, by
-        // EnsureProgrammer and OperatorsPanel.EnsureProgrammerRadixOps):
-        // Programmer shown after another mode, or first, starts on
-        // Arithmetic shift. Not after another page (IsProgrammer stays).
-        if programmer && !self.programmer.get() {
+        // EnsureProgrammer and OperatorsPanel.EnsureProgrammerRadixOps)
+        // when the calculator turns to Programmer from Standard or
+        // Scientific: it starts on Arithmetic shift. Not when Programmer is
+        // shown again, after another page, nor when a restored session's
+        // Programmer is shown first: that session goes on with its shift
+        // mode, as it would have uninterrupted.
+        if switching && programmer {
             self.set_shift(ShiftMode::Arithmetic);
+        }
+        if returning || switching {
+            self.vm.borrow_mut().set_mode(calc_mode);
         }
         self.programmer.set(programmer);
         if calc_mode != CalcMode::Standard {

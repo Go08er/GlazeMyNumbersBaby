@@ -92,7 +92,15 @@ fn act(vm: &mut CalculatorViewModel, acts: &[Act]) {
             Act::Recall(i) => vm.history_recall(i),
             Act::ClearHistory => vm.history_clear(),
             Act::RemoveHistory(i) => vm.history_remove(i),
-            Act::Mode(m) => vm.set_mode(m),
+            // Both apps, as upstream's checkDefaultBitShift: the calculator
+            // turned to Programmer from another mode starts on Arithmetic
+            // shift (shown again, or after another page, it keeps its own).
+            Act::Mode(m) => {
+                if m == CalcMode::Programmer && vm.mode() != m {
+                    vm.set_shift_mode(ShiftMode::Arithmetic);
+                }
+                vm.set_mode(m)
+            }
             Act::Reactivate => vm.set_mode(vm.mode()),
             Act::MemoryItem(i) => vm.memory_recall(i),
             Act::SlotAdd(i) => vm.memory_add(i),

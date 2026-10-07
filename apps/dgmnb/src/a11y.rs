@@ -1276,36 +1276,45 @@ mod tests {
     }
 
     /// Upstream's checkDefaultBitShift
-    /// (CalculatorProgrammerRadixOperators.xaml.cs:44-58), run whenever
-    /// IsProgrammer turns true (Calculator.xaml.cs:408): Programmer shown
-    /// after another calculator mode, or first (a restored session's mode
-    /// included), starts on Arithmetic shift; shown again, or after another
-    /// page, it keeps the mode chosen.
+    /// (CalculatorProgrammerRadixOperators.xaml.cs:44-58), run when
+    /// IsProgrammer turns true (Calculator.xaml.cs:408): the calculator
+    /// turned to Programmer from Standard or Scientific starts on
+    /// Arithmetic shift; shown again, or after another page, it keeps the
+    /// mode chosen. A restored session goes on exactly as the uninterrupted
+    /// one would: its Programmer shown first keeps the saved shift mode,
+    /// and a switch into Programmer after it resets it as before. A fresh
+    /// start is on Arithmetic.
     #[test]
     fn programmer_starts_on_arithmetic_shift() {
-        use crate::calc::Msg;
+        use crate::calc::{CalcPage, Msg};
         use calcvm::{CalcMode, ShiftMode};
-        let mut p = crate::calc::CalcPage::new(None);
+        let mut fresh = CalcPage::new(None);
+        fresh.set_mode(CalcMode::Programmer);
+        assert_eq!(fresh.vm.shift_mode(), ShiftMode::Arithmetic, "fresh");
+
+        let mut p = CalcPage::new(None);
         p.set_mode(CalcMode::Programmer);
         with_cx(|cx| p.update(Msg::Shift(ShiftMode::Logical), cx));
-        assert_eq!(p.vm.shift_mode(), ShiftMode::Logical);
         p.set_mode(CalcMode::Programmer);
         assert_eq!(p.vm.shift_mode(), ShiftMode::Logical, "chosen again");
         p.reactivate(CalcMode::Programmer);
         p.set_mode(CalcMode::Programmer);
         assert_eq!(p.vm.shift_mode(), ShiftMode::Logical, "after another page");
-        let saved = p.save();
-        p.set_mode(CalcMode::Standard);
-        p.set_mode(CalcMode::Programmer);
-        assert_eq!(p.vm.shift_mode(), ShiftMode::Arithmetic, "after Standard");
-        let mut restored = crate::calc::CalcPage::new(Some(saved));
-        assert_eq!(restored.vm.shift_mode(), ShiftMode::Logical, "restored");
+
+        // Saved in Programmer: reopened there, as if never closed.
+        let mut restored = CalcPage::new(Some(p.save()));
         restored.set_mode(CalcMode::Programmer);
-        assert_eq!(
-            restored.vm.shift_mode(),
-            ShiftMode::Arithmetic,
-            "first shown"
-        );
+        assert_eq!(restored.vm.shift_mode(), ShiftMode::Logical, "restored");
+
+        // Saved in Standard after Logical: then on to Programmer, either way.
+        p.set_mode(CalcMode::Standard);
+        let mut restored = CalcPage::new(Some(p.save()));
+        restored.set_mode(CalcMode::Standard);
+        assert_eq!(restored.vm.shift_mode(), ShiftMode::Logical);
+        for q in [&mut p, &mut restored] {
+            q.set_mode(CalcMode::Programmer);
+            assert_eq!(q.vm.shift_mode(), ShiftMode::Arithmetic, "after Standard");
+        }
     }
 
     /// The header's window controls aren't focused by a click, as GTK's
