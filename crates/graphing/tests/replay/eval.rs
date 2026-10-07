@@ -674,6 +674,84 @@ pub fn horner(e: &Expr, lits: &Lits) -> Option<Expr> {
     (h != *e).then_some(h)
 }
 
+/// `e` with the differences that cancel near u = 0 written without the
+/// cancellation: 1 − cos u as 2·sin²(u/2), eᵘ − 1 as 2·e^(u/2)·sinh(u/2)
+/// (and cos u − 1, 1 − eᵘ negated; exp(u) as eᵘ), u varying with x. Each
+/// is the same function on the same domain (both sides are defined
+/// wherever u is; the half angle is in the same unit, e > 0 to any power),
+/// but evaluated where 1 − cos u or eᵘ − 1 is below the working precision
+/// of 1 it keeps its sign (sin²x/(1 − cos x) in degrees at 10⁻¹⁵³: 1 −
+/// cos x is 10⁻³¹⁰, past 640 bits; (eˣ − 1)/(eˣ − 1) at 5·10⁻³²⁴). `None`
+/// if nothing changes.
+pub fn small_differences(e: &Expr, lits: &Lits) -> Option<Expr> {
+    fn is_one(e: &Expr, lits: &Lits) -> bool {
+        matches!(e, Expr::Num(v, lit) if lits.exact(*v, lit).is_some_and(|q| q == 1))
+    }
+    /// cos u (`true`) or eᵘ (`false`), u varying with x: (u, which).
+    fn near_one(e: &Expr) -> Option<(&Expr, bool)> {
+        match e {
+            Expr::Call(Func::Cos, args) if args.len() == 1 && contains_x(&args[0]) => {
+                Some((&args[0], true))
+            }
+            Expr::Call(Func::Exp, args) if args.len() == 1 && contains_x(&args[0]) => {
+                Some((&args[0], false))
+            }
+            Expr::Bin(BinOp::Pow, b, u) if **b == Expr::Const(Constant::E) && contains_x(u) => {
+                Some((u, false))
+            }
+            _ => None,
+        }
+    }
+    fn go(e: &Expr, lits: &Lits) -> Expr {
+        let two = || Box::new(Expr::exact(2.0));
+        // c(u) − 1 for c(u) = cos u or eᵘ: −2·sin²(u/2), 2·e^(u/2)·sinh(u/2).
+        let less_one = |u: &Expr, cos: bool| {
+            let half = Expr::Bin(BinOp::Div, Box::new(go(u, lits)), two());
+            if cos {
+                let sq = Expr::Bin(
+                    BinOp::Pow,
+                    Box::new(Expr::Call(Func::Sin, vec![half])),
+                    two(),
+                );
+                Expr::Neg(Box::new(Expr::Bin(BinOp::Mul, two(), Box::new(sq))))
+            } else {
+                let grow = Expr::Bin(
+                    BinOp::Pow,
+                    Box::new(Expr::Const(Constant::E)),
+                    Box::new(half.clone()),
+                );
+                let sinh = Expr::Call(Func::Sinh, vec![half]);
+                Expr::Bin(
+                    BinOp::Mul,
+                    Box::new(Expr::Bin(BinOp::Mul, two(), Box::new(grow))),
+                    Box::new(sinh),
+                )
+            }
+        };
+        let neg = |e: Expr| match e {
+            Expr::Neg(a) => *a,
+            e => Expr::Neg(Box::new(e)),
+        };
+        match e {
+            Expr::Bin(BinOp::Sub, a, b) if is_one(b, lits) && near_one(a).is_some() => {
+                let (u, cos) = near_one(a).expect("cos or exp");
+                less_one(u, cos)
+            }
+            Expr::Bin(BinOp::Sub, a, b) if is_one(a, lits) && near_one(b).is_some() => {
+                let (u, cos) = near_one(b).expect("cos or exp");
+                neg(less_one(u, cos))
+            }
+            Expr::Neg(a) => Expr::Neg(Box::new(go(a, lits))),
+            Expr::Degrees(a) => Expr::Degrees(Box::new(go(a, lits))),
+            Expr::Bin(op, a, b) => Expr::Bin(*op, Box::new(go(a, lits)), Box::new(go(b, lits))),
+            Expr::Call(f, args) => Expr::Call(*f, args.iter().map(|a| go(a, lits)).collect()),
+            _ => e.clone(),
+        }
+    }
+    let h = go(e, lits);
+    (h != *e).then_some(h)
+}
+
 /// f's series over `[lo, hi]` (endpoints doubles, ±∞ allowed) to order n.
 pub fn series(e: &Expr, lo: f64, hi: f64, n: usize, ctx: &Ctx<'_>) -> S {
     let x = se::var(Iv::of2(lo, hi), n);
@@ -1064,16 +1142,22 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
             } else {
                 iv::ceil(a0)
             };
-            se::step(&ea, v, iv::no_jump(a0, 0.0))
+            se::step(&ea, v, iv::no_jump(a0, 0.0), || {
+                steady(&args[0], x, ctx, |w| iv::no_jump(w, 0.0))
+            })
         }
         Round => {
             let ea = a();
-            se::step(&ea, iv::round(&ea[0]), iv::no_jump(&ea[0], 0.5))
+            se::step(&ea, iv::round(&ea[0]), iv::no_jump(&ea[0], 0.5), || {
+                steady(&args[0], x, ctx, |w| iv::no_jump(w, 0.5))
+            })
         }
         Sign => {
             let ea = a();
             let smooth = ea[0].ne0();
-            se::step(&ea, iv::sign(&ea[0]), smooth)
+            se::step(&ea, iv::sign(&ea[0]), smooth, || {
+                steady(&args[0], x, ctx, Iv::ne0)
+            })
         }
         Mod => {
             let ea = a();
@@ -1091,19 +1175,30 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
         }
         Min | Max => {
             let mut acc = eval(&args[0], x, n, ctx);
-            for b in &args[1..] {
+            for (i, b) in args.iter().enumerate().skip(1) {
                 let eb = eval(b, x, n, ctx);
                 let (lo_a, lo_b) = (&acc[0], &eb[0]);
-                let pick_a = if f == Min {
+                let mut pick_a = if f == Min {
                     lo_a.hi < lo_b.lo
                 } else {
                     lo_a.lo > lo_b.hi
                 };
-                let pick_b = if f == Min {
+                let mut pick_b = if f == Min {
                     lo_b.hi < lo_a.lo
                 } else {
                     lo_b.lo > lo_a.hi
                 };
+                // The enclosures overlap (x + 1 + |x − 3| against x on
+                // (−∞, 3): ∞ − ∞): the difference's sign, by its slope.
+                if !(pick_a || pick_b)
+                    && let Some(a_bigger) = monotone_sign(f, &args[..i], b, &acc, &eb, x, ctx)
+                {
+                    if a_bigger == (f == Max) {
+                        pick_a = true;
+                    } else {
+                        pick_b = true;
+                    }
+                }
                 acc = if pick_a && !lo_a.empty && !lo_b.empty {
                     se::winner(acc, &eb)
                 } else if pick_b && !lo_a.empty && !lo_b.empty {
@@ -1123,6 +1218,90 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
             se::only_value_unless(se::constant(Iv::unknown(), n), false)
         }
     }
+}
+
+/// A step's argument `a` on a neighbourhood of the box: its enclosure over
+/// x's box widened by an ulp of the working precision each side is
+/// defined and continuous there, and `clear` of the step's jumps. The step
+/// is then constant on a neighbourhood of each point of the box, so its
+/// derivatives (0) exist throughout, whether or not `a`'s own do (⌊|x| +
+/// 0.5⌋ at 0: |x| has no derivative there, but stays within [0, 0.5)
+/// beside it). (x is the variable's series: its value is the box.)
+fn steady(a: &Expr, x: &S, ctx: &Ctx<'_>, clear: impl Fn(&Iv) -> bool) -> bool {
+    let b = &x[0];
+    if !b.bounded() {
+        return false;
+    }
+    let (mut lo, mut hi) = (b.lo.clone(), b.hi.clone());
+    lo.next_down();
+    hi.next_up();
+    let w = eval(a, &se::var(Iv::new(lo, hi), 0), 0, ctx)[0].clone();
+    !w.empty && w.cont && clear(&w)
+}
+
+/// The strict sign of d = a − b throughout x's box (true: positive),
+/// where the enclosures of a and b overlap, `a` being min or max of
+/// `prefix` and `b` the next argument: d differentiable throughout the box
+/// (an interval) with a slope of one sign there is monotone on it, so it
+/// lies between its values at the box's ends. With d′ ≥ 0, d ≤ d(hi): d
+/// is negative throughout if d(hi) is, and positive if d(lo) is; with d′ ≤
+/// 0 the other way round. An end is used only if it is a point of the box
+/// (finite, not one left open beside an excluded 0), and d's value there
+/// is worked out afresh at that double. (min(x, x + 1 + |x − 3|) on
+/// (−∞, 3): x + 1 + 3 − x encloses to (−∞, ∞), but d′ = 1, and d is −4 at
+/// the box's right end.)
+fn monotone_sign(
+    f: Func,
+    prefix: &[Expr],
+    b: &Expr,
+    ea: &S,
+    eb: &S,
+    x: &S,
+    ctx: &Ctx<'_>,
+) -> Option<bool> {
+    let bx = &x[0];
+    if se::order(ea) == 0 || bx.empty || bx.is_point() {
+        return None;
+    }
+    let d = se::sub(ea, eb);
+    if !d[..=1].iter().all(|c| !c.empty && c.def) {
+        return None;
+    }
+    let (up, down) = (d[1].ge(0.0), d[1].le(0.0));
+    let lo_in = bx.lo.is_finite() && !(bx.pos && bx.lo <= 0);
+    let hi_in = bx.hi.is_finite() && !(bx.neg && bx.hi >= 0);
+    let a = match prefix {
+        [one] => one.clone(),
+        _ => Expr::Call(f, prefix.to_vec()),
+    };
+    let at = |p: &rug::Float| -> Option<Iv> {
+        let xs = se::var(Iv::point(p.clone()), 0);
+        let v = iv::sub(&eval(&a, &xs, 0, ctx)[0], &eval(b, &xs, 0, ctx)[0]);
+        (!v.empty && v.def).then_some(v)
+    };
+    // Negative throughout: at the end where d is largest.
+    let top = if up && hi_in {
+        Some(&bx.hi)
+    } else if down && lo_in {
+        Some(&bx.lo)
+    } else {
+        None
+    };
+    if top.and_then(at).is_some_and(|v| v.lt(0.0)) {
+        return Some(false);
+    }
+    // Positive throughout: at the end where d is smallest.
+    let bottom = if up && lo_in {
+        Some(&bx.lo)
+    } else if down && hi_in {
+        Some(&bx.hi)
+    } else {
+        None
+    };
+    if bottom.and_then(at).is_some_and(|v| v.gt(0.0)) {
+        return Some(true);
+    }
+    None
 }
 
 fn recip_expr(a: &Expr) -> Expr {

@@ -486,14 +486,22 @@ pub fn only_value_unless(s: S, ok: bool) -> S {
 /// at a jump is continuous on the box, but the derivative doesn't exist at
 /// the jump) and does so beside the box too ([`beside`]: ⌊⌊x⌋ + 0.5⌋ at 1
 /// takes one value on the box, but ⌊x⌋ + 0.5 jumps there), else only the
-/// value.
-pub fn step(a: &S, value: Iv, smooth: bool) -> S {
+/// value. Where `a` has no first derivative, `steady` may still show it
+/// continuous and clear of the jumps on a neighbourhood of the box (its
+/// own enclosure over a wider box): the step is then constant there too,
+/// its derivatives 0 (⌊|x| + 0.5⌋ at 0, though |x| has a kink there).
+pub fn step(a: &S, value: Iv, smooth: bool, steady: impl FnOnce() -> bool) -> S {
     let n = order(a);
     if value.empty {
         return vec![Iv::empty(); n + 1];
     }
     if smooth && value.cont && value.is_point() {
-        beside(constant(value, n), a)
+        let s = constant(value, n);
+        if n == 0 || valid_upto(a, 1) || !steady() {
+            beside(s, a)
+        } else {
+            s
+        }
     } else {
         invalid_from(constant(value, n), 1)
     }

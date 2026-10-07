@@ -771,6 +771,29 @@ fn coeffs(p: &Poly) -> Option<Vec<Rational>> {
     Some(out)
 }
 
+/// The numerator N of f⁽ᵏ⁾ = N/D, f a rational function of x alone (no
+/// atoms), as coefficients (index = power). Wherever f⁽ᵏ⁾ exists it is
+/// N/D with D ≠ 0: f is defined on a neighbourhood of the point, where
+/// each divisor of f's tree is nonzero, so is D (their product), and f is
+/// N/D there; so f⁽ᵏ⁾'s zeros are among N's.
+pub fn numerator(
+    f: &Expr,
+    k: usize,
+    lits: &Lits,
+    vars: &[(String, f64)],
+    unit: Unit,
+) -> Option<Vec<Rational>> {
+    let mut fld = Field::new(lits, vars, unit);
+    let mut fr = fld.read(f)?;
+    for _ in 0..k {
+        fr = fld.d(&fr)?;
+    }
+    if coeffs(&fr.d)?.is_empty() {
+        return None;
+    }
+    coeffs(&fr.n)
+}
+
 impl Rat {
     /// f as N/D over the rationals in x alone (no atoms), if it is one.
     pub fn of(f: &Expr, lits: &Lits, vars: &[(String, f64)], unit: Unit) -> Option<Rat> {

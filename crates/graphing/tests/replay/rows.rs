@@ -1639,14 +1639,21 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
         if mono_tail {
             return Ok(());
         }
-        // f′ ≡ 0 on the line: f is constant, every shift a period, none
-        // least (the corpus's convention: "none").
-        let constant = rc.claims.iter().any(|c| {
+        // f′ ≡ 0 on a stretch reaching −∞ and on one reaching +∞ (the
+        // line itself, or two tails either side of a kink's box: sign(|x| +
+        // 1)): f is constant on each tail. A periodic f takes at each x the
+        // value it has at x + kP far out on either side, so it is constant
+        // throughout, on the whole line (its domain holds every x − kP too):
+        // every shift a period, none least (the corpus's convention:
+        // "none"). Otherwise it is not periodic. Either way no least period.
+        let flat = |c: &Claim, left: bool| {
             matches!(c, Claim::Value { x, of: Subject::F(1), lo, hi }
-                if x.0 == f64::NEG_INFINITY && x.1 == f64::INFINITY && *lo == 0.0 && *hi == 0.0)
-        });
-        if constant {
-            out.notes.push("f is constant: no least period".into());
+                if *lo == 0.0 && *hi == 0.0
+                    && if left { x.0 == f64::NEG_INFINITY } else { x.1 == f64::INFINITY })
+        };
+        if rc.claims.iter().any(|c| flat(c, true)) && rc.claims.iter().any(|c| flat(c, false)) {
+            out.notes
+                .push("f′ ≡ 0 on both tails: no least period".into());
             return Ok(());
         }
         // A tail: to ±∞ (f′ beyond a nonzero c), or a limit with two
