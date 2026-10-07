@@ -1126,6 +1126,15 @@ impl CalculatorPage {
             self.vm.borrow_mut().set_mode(calc_mode);
         }
         let programmer = calc_mode == CalcMode::Programmer;
+        // Upstream's checkDefaultBitShift
+        // (CalculatorProgrammerRadixOperators.xaml.cs:44-58), which
+        // OnIsProgrammerPropertyChanged runs (Calculator.xaml.cs:408, by
+        // EnsureProgrammer and OperatorsPanel.EnsureProgrammerRadixOps):
+        // Programmer shown after another mode, or first, starts on
+        // Arithmetic shift. Not after another page (IsProgrammer stays).
+        if programmer && !self.programmer.get() {
+            self.set_shift(ShiftMode::Arithmetic);
+        }
         self.programmer.set(programmer);
         if calc_mode != CalcMode::Standard {
             self.set_compact(false);

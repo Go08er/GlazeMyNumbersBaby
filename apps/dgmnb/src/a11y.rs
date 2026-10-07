@@ -1275,6 +1275,39 @@ mod tests {
         assert_eq!(on(&mut p), Some(true));
     }
 
+    /// Upstream's checkDefaultBitShift
+    /// (CalculatorProgrammerRadixOperators.xaml.cs:44-58), run whenever
+    /// IsProgrammer turns true (Calculator.xaml.cs:408): Programmer shown
+    /// after another calculator mode, or first (a restored session's mode
+    /// included), starts on Arithmetic shift; shown again, or after another
+    /// page, it keeps the mode chosen.
+    #[test]
+    fn programmer_starts_on_arithmetic_shift() {
+        use crate::calc::Msg;
+        use calcvm::{CalcMode, ShiftMode};
+        let mut p = crate::calc::CalcPage::new(None);
+        p.set_mode(CalcMode::Programmer);
+        with_cx(|cx| p.update(Msg::Shift(ShiftMode::Logical), cx));
+        assert_eq!(p.vm.shift_mode(), ShiftMode::Logical);
+        p.set_mode(CalcMode::Programmer);
+        assert_eq!(p.vm.shift_mode(), ShiftMode::Logical, "chosen again");
+        p.reactivate(CalcMode::Programmer);
+        p.set_mode(CalcMode::Programmer);
+        assert_eq!(p.vm.shift_mode(), ShiftMode::Logical, "after another page");
+        let saved = p.save();
+        p.set_mode(CalcMode::Standard);
+        p.set_mode(CalcMode::Programmer);
+        assert_eq!(p.vm.shift_mode(), ShiftMode::Arithmetic, "after Standard");
+        let mut restored = crate::calc::CalcPage::new(Some(saved));
+        assert_eq!(restored.vm.shift_mode(), ShiftMode::Logical, "restored");
+        restored.set_mode(CalcMode::Programmer);
+        assert_eq!(
+            restored.vm.shift_mode(),
+            ShiftMode::Arithmetic,
+            "first shown"
+        );
+    }
+
     /// The header's window controls aren't focused by a click, as GTK's
     /// (which can't take the focus at all): with the focus where it was,
     /// Enter after maximizing doesn't restore, and is "=" after clicking a
