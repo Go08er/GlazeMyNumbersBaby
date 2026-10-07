@@ -776,7 +776,23 @@ impl CalculatorPage {
         let Some(button) = button_from_id(id) else {
             return;
         };
+        // One of the keys 2nd turned into its second function (x³, ³√x,
+        // ʸ√x, 2ˣ, logᵧx, eˣ), upstream's InvRow1 buttons, whose Click is
+        // ShiftButton_Uncheck (CalculatorScientificOperators.xaml:1089-1140,
+        // .xaml.cs:65): 2nd is unchecked and takes the focus (a click, Space,
+        // assistive technology; a typed shortcut runs the key's command
+        // alone, there as here: KeyboardShortcutManager.RunButtonCommand).
+        let second_function = self.second.get()
+            && self.vm.borrow().mode() == CalcMode::Scientific
+            && keys::SECOND_FLIPS.iter().any(|f| f.normal == button);
         self.press_resolved(button);
+        if second_function {
+            self.second.set(false);
+            self.relabel();
+            if let Some(second) = pad.button(KEY_SECOND) {
+                second.grab_focus();
+            }
+        }
         // A flyout closes when one of its keys is pressed (a click, Space,
         // assistive technology; not the 2nd and hyp toggles), as
         // upstream's (FlyoutButton_Clicked). GTK gives the focus back to

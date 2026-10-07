@@ -1225,6 +1225,56 @@ mod tests {
         assert_eq!(toggles(&mut p), (Some(true), Some(true)));
     }
 
+    /// Upstream's ShiftButton_Uncheck (CalculatorScientificOperators.xaml.cs:65),
+    /// the Click of the six keys 2nd shows (x³, ³√x, ʸ√x, 2ˣ, logᵧx, eˣ):
+    /// pressing one unchecks 2nd and gives it the focus. Another key with
+    /// 2nd on (a digit, π) leaves it on; so does a typed shortcut, which
+    /// upstream runs as the key's command alone.
+    #[test]
+    fn a_second_function_key_unchecks_2nd() {
+        use crate::calc::Msg;
+        use crate::ui::id;
+        use appcore::keys::KEY_SECOND;
+        use calcvm::{Button as B, CalcMode};
+        let wide = Rect::new(0.0, 46.0, 1000.0, 654.0);
+        let second = id(("keypad", KEY_SECOND));
+        let on = |p: &mut crate::calc::CalcPage| {
+            let (nodes, _) = frame_nodes(|f, _| p.view(f, wide, false));
+            nodes
+                .iter()
+                .find(|n| n.id == second)
+                .and_then(|n| n.toggled)
+        };
+        let mut p = crate::calc::CalcPage::new(None);
+        p.set_mode(CalcMode::Scientific);
+        for normal in [
+            B::XPower2,
+            B::Sqrt,
+            B::XPowerY,
+            B::TenPowerX,
+            B::LogBase10,
+            B::LogBaseE,
+        ] {
+            press(&mut p, "{escape}2");
+            with_cx(|cx| {
+                p.update(Msg::Key(KEY_SECOND), cx);
+                p.update(Msg::Key(B::Pi.id()), cx);
+                assert_eq!(*cx.focus, None, "π");
+            });
+            assert_eq!(on(&mut p), Some(true), "π leaves 2nd on");
+            with_cx(|cx| {
+                p.update(Msg::Key(normal.id()), cx);
+                assert_eq!(*cx.focus, Some(second), "{normal:?}");
+            });
+            assert_eq!(on(&mut p), Some(false), "{normal:?}");
+        }
+        // x³ typed (#) with 2nd on: it stays on.
+        with_cx(|cx| p.update(Msg::Key(KEY_SECOND), cx));
+        press(&mut p, "{escape}3#");
+        assert_eq!(p.vm.display_value(), "27");
+        assert_eq!(on(&mut p), Some(true));
+    }
+
     /// The header's window controls aren't focused by a click, as GTK's
     /// (which can't take the focus at all): with the focus where it was,
     /// Enter after maximizing doesn't restore, and is "=" after clicking a
