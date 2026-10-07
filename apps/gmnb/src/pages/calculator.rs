@@ -591,7 +591,15 @@ impl CalculatorPage {
                 p.sync(Some(Change::Typing));
             }
         });
-        stack.add_named(&flip.root, Some("bits"));
+        // In a box that fills the stack, the bits centred in it: GTK 4.22
+        // counts a stack child's place in the stack twice in what it tells
+        // assistive technology (the child's bounds, then its GtkStackPage's,
+        // which are the same), so a centred child's controls were reported
+        // that far below where they are drawn, and a click there missed.
+        let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        flip.root.set_vexpand(true);
+        holder.append(&flip.root);
+        stack.add_named(&holder, Some("bits"));
         stack.set_vexpand(true);
         {
             let stack = stack.clone();
