@@ -224,7 +224,7 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **958 tests** (counts include
+`nix develop -c cargo test --workspace` runs **982 tests** (counts include
 doctests; three more, a live currency fetch, the full metamorphic graph
 sweep and 20,000 random saved sessions, are `#[ignore]`d).
 `cargo run --release -p graphing --example sweep`
