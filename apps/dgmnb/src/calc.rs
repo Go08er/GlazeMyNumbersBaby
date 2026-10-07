@@ -209,9 +209,14 @@ impl CalcPage {
                 let next = self.vm.word_size().next();
                 self.vm.set_word_size(next);
             }
+            // Another mode closes the flyout, as upstream's
+            // (BitshiftFlyout_Checked); the one already chosen changes
+            // nothing and leaves it open, as GMNB's radio buttons.
             Msg::Shift(s) => {
-                self.vm.set_shift_mode(s);
-                self.popup = None;
+                if self.vm.shift_mode() != s {
+                    self.vm.set_shift_mode(s);
+                    self.popup = None;
+                }
             }
             Msg::BitView(on) => self.bit_view = on,
             Msg::FlipBit(i) => self.vm.flip_bit(i),

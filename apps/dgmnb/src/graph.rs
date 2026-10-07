@@ -315,6 +315,11 @@ impl GraphPage {
         (width < WIDE).then_some(self.show_graph)
     }
 
+    /// Whether an equation's style or the graph's settings are open.
+    pub fn popup_open(&self) -> bool {
+        self.popup.is_some()
+    }
+
     pub fn close_popup(&mut self) -> bool {
         if self.popup.take().is_some() {
             return true;
