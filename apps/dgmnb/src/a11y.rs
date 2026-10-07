@@ -1041,6 +1041,14 @@ mod tests {
         );
 
         for (what, h) in &all {
+            // A click focuses every control (Hit::focus_after_press)
+            // but the graph's keys, which type into the focused equation,
+            // and the Scientific 2nd, as upstream's.
+            let leaves_the_focus = matches!(
+                h.msg,
+                Some(App::Graph(crate::graph::Msg::Pad(_)) | App::Calc(Msg::Key(KEY_SECOND)))
+            );
+            assert_eq!(h.focus_on_click, !leaves_the_focus, "{what}: {:?}", h.msg);
             assert_eq!(
                 h.enter_is_equals,
                 presses_a_key(h),
@@ -1108,5 +1116,83 @@ mod tests {
                 "{page}"
             );
         }
+        // The Scientific keypad's 2nd only, not the trig flyout's 2nd and
+        // hyp, nor any other toggle.
+        let click_focuses = |what: &str, hid: Id| {
+            let found: Vec<bool> = all
+                .iter()
+                .filter(|(w, h)| w == what && h.id == hid)
+                .map(|(_, h)| h.focus_on_click)
+                .collect();
+            assert!(!found.is_empty(), "{what}: no {hid:?}");
+            found[0]
+        };
+        assert!(!click_focuses("Scientific", id(("keypad", KEY_SECOND))));
+        assert!(click_focuses(
+            "Scientific Trig",
+            id(("trig", KEY_TRIG_SECOND))
+        ));
+        assert!(click_focuses("Scientific Trig", id(("trig", KEY_HYP))));
+        assert!(click_focuses("Scientific", id(("keypad", B::Two.id()))));
+        assert!(click_focuses("Programmer bits", id(("bit", 0u32))));
+    }
+
+    /// The header's window controls aren't focused by a click, as GTK's
+    /// (which can't take the focus at all): with the focus where it was,
+    /// Enter after maximizing doesn't restore, and is "=" after clicking a
+    /// key. Every other control in the header is, as GMNB's header bar
+    /// buttons. Each layout the header has: normal, maximized, compact,
+    /// Settings; each page's own buttons.
+    #[test]
+    fn window_controls_leave_the_focus_where_it_is() {
+        use crate::ui::id;
+        use appcore::modes::ViewMode;
+        let window_controls = ["Close", "Maximize", "Restore", "Minimize"].map(|n| id(("hdr", n)));
+        let mut calc = crate::calc::CalcPage::new(None);
+        let graph = crate::graph::GraphPage::for_test(appcore::graph::from_list("x^2"));
+        let (mut seen, mut others) = (Vec::new(), 0);
+        for mode in [
+            ViewMode::Standard,
+            ViewMode::Scientific,
+            ViewMode::Graphing,
+            ViewMode::Date,
+        ] {
+            if let Some(m) = mode.calc_mode() {
+                calc.set_mode(m);
+            }
+            for (settings, compact, maximized) in [
+                (false, false, false),
+                (false, false, true),
+                (false, true, false),
+                (true, false, false),
+            ] {
+                let (_, hits) = frame_nodes(|f, _| {
+                    crate::app::draw_header(
+                        f,
+                        Rect::new(0.0, 0.0, 420.0, 46.0),
+                        mode,
+                        settings,
+                        compact,
+                        maximized,
+                        false,
+                        Some(&calc),
+                        Some(&graph),
+                    )
+                });
+                for h in hits.iter().filter(|h| h.focusable) {
+                    let control = window_controls.contains(&h.id);
+                    assert_eq!(h.focus_on_click, !control, "{mode:?}: {:?}", h.msg);
+                    if control {
+                        seen.push(h.id);
+                    } else {
+                        others += 1;
+                    }
+                }
+            }
+        }
+        for c in window_controls {
+            assert!(seen.contains(&c), "{c:?} never drawn");
+        }
+        assert!(others > 0, "no other header control drawn");
     }
 }

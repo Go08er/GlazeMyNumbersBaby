@@ -62,6 +62,11 @@ pub struct Hit {
     pub sense: Sense,
     pub msg: Option<Msg>,
     pub focusable: bool,
+    /// A pointer press on it, if it is `focusable`, gives it the focus, as
+    /// GTK's `focus-on-click` and upstream's `AllowFocusOnInteraction`
+    /// (the ring stays hidden): every control but those that leave the
+    /// focus where it is ([`Frame::no_focus_on_click`]).
+    pub focus_on_click: bool,
     /// Enter means the page's Enter here ("=" on the calculator): one of
     /// the page's own keys ([`Frame::calculator_key`]), which ignores Enter
     /// when focused, rather than taking it as its activation.
@@ -77,6 +82,22 @@ impl Hit {
     /// Whether the focus ring shows has nothing to do with it (R17-L-03).
     pub fn activated_by(&self, enter: bool) -> bool {
         self.sense == Sense::Click && self.msg.is_some() && !(enter && self.enter_is_equals)
+    }
+
+    /// The focus after a pointer press on this control, `focus` before.
+    /// A field, a slider or the graph takes it; so does a control a click
+    /// activates, as GTK's and upstream's do, so that the keys after the
+    /// click are as after Tab to it: Enter after clicking 2 is "=", which
+    /// the key ignores, and after clicking DEG, DEG's. Not a control that
+    /// isn't focused by a click ([`Frame::no_focus_on_click`]) or can't
+    /// take the focus at all: the focus stays where it is.
+    pub fn focus_after_press(&self, focus: Option<Id>) -> Option<Id> {
+        let takes = match self.sense {
+            Sense::Text | Sense::Drag => true,
+            Sense::Click => self.focusable && self.focus_on_click,
+            Sense::Scroll => false,
+        };
+        if takes { Some(self.id) } else { focus }
     }
 }
 
@@ -311,8 +332,22 @@ impl<'a, 'p> Frame<'a, 'p> {
             sense,
             msg,
             focusable,
+            focus_on_click: true,
             enter_is_equals: false,
         });
+    }
+
+    /// Keeps a pointer press on the control just recorded, `id`, from
+    /// focusing it ([`Hit::focus_after_press`]): the focus stays where it
+    /// was. For the graph's keys, which type into the focused equation
+    /// (upstream's GraphingNumPad keys can't take the focus), the
+    /// Scientific 2nd (upstream's `AllowFocusOnInteraction="False"`) and
+    /// the window controls (GTK's can't take the focus: Enter after
+    /// maximizing mustn't restore). Nothing for a control not recorded.
+    pub fn no_focus_on_click(&mut self, id: Id) {
+        if let Some(h) = self.hits.last_mut().filter(|h| h.id == id) {
+            h.focus_on_click = false;
+        }
     }
 
     /// Marks the control just recorded, `id`, as one of the page's own
@@ -892,6 +927,7 @@ mod tests {
             sense,
             msg,
             focusable: true,
+            focus_on_click: true,
             enter_is_equals,
         }
     }
@@ -916,6 +952,48 @@ mod tests {
             hit(Sense::Scroll, None, false),
         ] {
             assert!(!h.activated_by(false) && !h.activated_by(true), "{h:?}");
+        }
+    }
+
+    /// R17-M-04 follow-up: a pointer press gives the focus to a control a
+    /// click activates, a calculator key too, as GTK and upstream do, so
+    /// that Enter after clicking 2 is "=" and after clicking DEG is DEG's
+    /// (the ring is drawn by keyboard use only: `Input::focus_visible`).
+    /// A field, a slider or the graph takes it as before. The focus stays
+    /// where it is for a control that a click doesn't focus (the graph's
+    /// keys, typing into the focused equation; the Scientific 2nd; the
+    /// window controls), one that can't take the focus (a calendar's
+    /// other days, a card's blank area) and a scroll view.
+    #[test]
+    fn a_pointer_press_focuses_what_a_click_activates() {
+        let deg = id("deg");
+        let equation = id("equation");
+        let at = |id, sense, focusable, focus_on_click| Hit {
+            id,
+            focusable,
+            focus_on_click,
+            ..hit(sense, Some(Msg::Minimize), false)
+        };
+        let key = Hit {
+            enter_is_equals: true,
+            ..at(id("2"), Sense::Click, true, true)
+        };
+        for before in [None, Some(deg), Some(equation)] {
+            assert_eq!(key.focus_after_press(before), Some(key.id));
+            let button = at(deg, Sense::Click, true, true);
+            assert_eq!(button.focus_after_press(before), Some(deg));
+            for sense in [Sense::Text, Sense::Drag] {
+                let h = at(equation, sense, true, true);
+                assert_eq!(h.focus_after_press(before), Some(equation));
+            }
+            for h in [
+                at(id("x"), Sense::Click, true, false),
+                at(id("day"), Sense::Click, false, true),
+                at(id("card"), Sense::Click, false, true),
+                at(id("scroll"), Sense::Scroll, true, true),
+            ] {
+                assert_eq!(h.focus_after_press(before), before, "{h:?}");
+            }
         }
     }
 }

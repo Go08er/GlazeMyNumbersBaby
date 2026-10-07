@@ -508,6 +508,13 @@ impl CalcPage {
             if k.kind != KeyKind::Toggle {
                 f.calculator_key(kid);
             }
+            // Upstream's Scientific 2nd alone isn't focused by a click
+            // (AllowFocusOnInteraction="False"): Enter after it is still
+            // the focused control's, "=" after clicking a key. The
+            // flyout's 2nd and hyp are, as every other control.
+            if k.id == KEY_SECOND {
+                f.no_focus_on_click(kid);
+            }
         }
         f.end_group();
     }
