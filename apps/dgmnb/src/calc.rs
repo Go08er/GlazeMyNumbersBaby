@@ -67,6 +67,8 @@ pub struct CalcPage {
     trig_inv: bool,
     hyp: bool,
     pub popup: Option<Popup>,
+    /// The calculator mode last shown ([`CalcPage::set_mode`]).
+    shown: Option<CalcMode>,
     tab: Tab,
     bit_view: bool,
     /// Text for assistive tech's live region after a result.
@@ -101,6 +103,7 @@ impl CalcPage {
             trig_inv: false,
             hyp: false,
             popup: None,
+            shown: None,
             tab: Tab::History,
             bit_view: false,
             announce: String::new(),
@@ -140,6 +143,16 @@ impl CalcPage {
             self.popup = None;
             self.vm.take_events();
         }
+        // Upstream's checkDefaultBitShift
+        // (CalculatorProgrammerRadixOperators.xaml.cs:44-58), which
+        // OnIsProgrammerPropertyChanged runs (Calculator.xaml.cs:408, by
+        // EnsureProgrammer and OperatorsPanel.EnsureProgrammerRadixOps):
+        // Programmer shown after another mode, or first, starts on
+        // Arithmetic shift. Not after another page (IsProgrammer stays).
+        if mode == CalcMode::Programmer && self.shown != Some(mode) {
+            self.vm.set_shift_mode(ShiftMode::Arithmetic);
+        }
+        self.shown = Some(mode);
         if mode == CalcMode::Programmer && self.tab == Tab::History {
             self.tab = Tab::Memory;
         }
@@ -184,9 +197,23 @@ impl CalcPage {
             Msg::Key(KEY_SECOND) => self.second = !self.second,
             Msg::Key(KEY_TRIG_SECOND) => self.trig_inv = !self.trig_inv,
             Msg::Key(KEY_HYP) => self.hyp = !self.hyp,
-            Msg::Key(id) => {
-                if let Some(b) = B::from_id(id) {
+            Msg::Key(k) => {
+                if let Some(b) = B::from_id(k) {
+                    // One of the keys 2nd turned into its second function
+                    // (x³, ³√x, ʸ√x, 2ˣ, logᵧx, eˣ), upstream's InvRow1
+                    // buttons, whose Click is ShiftButton_Uncheck
+                    // (CalculatorScientificOperators.xaml:1089-1140,
+                    // .xaml.cs:65): 2nd is unchecked and takes the focus.
+                    // A typed shortcut runs the key's command alone, there
+                    // as here (KeyboardShortcutManager.RunButtonCommand).
+                    let second_function = self.second
+                        && self.vm.mode() == CalcMode::Scientific
+                        && keys::SECOND_FLIPS.iter().any(|f| f.normal == b);
                     self.press(b);
+                    if second_function {
+                        self.second = false;
+                        *cx.focus = Some(id(("keypad", KEY_SECOND)));
+                    }
                     // Upstream's FlyoutButton_Clicked
                     // (CalculatorScientificOperators.xaml.cs:82), every key
                     // of the Trigonometry and Function flyouts': the trig
