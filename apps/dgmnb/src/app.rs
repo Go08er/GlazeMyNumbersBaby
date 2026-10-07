@@ -306,6 +306,9 @@ pub struct App {
     conv: Option<ConvPage>,
     date: Option<DatePage>,
     graph: Option<GraphPage>,
+    /// While the page's popup is open, the focus to give back when it
+    /// closes ([`popup_focus`]).
+    popup_return: Option<Option<ui::Id>>,
     toasts: Vec<(String, Instant)>,
     dev: Dev,
 }
@@ -384,6 +387,7 @@ impl App {
             conv: None,
             date: None,
             graph: None,
+            popup_return: None,
             toasts: Vec::new(),
             dev: Dev {
                 keys: env("KEYS").map(|k| k.replace("\\n", "\n")),
@@ -446,6 +450,7 @@ impl App {
             self.set_compact(false);
         }
         self.input.focus = None;
+        self.popup_return = None;
         let store = &self.store;
         match mode.page() {
             PageKind::Calculator => {
@@ -565,7 +570,42 @@ impl App {
         )
     }
 
+    /// Whether the page's popup is open: a flyout, a menu, the narrow
+    /// History panel, the converter's unit picker, the graph's style or
+    /// settings. (The date page gives the focus back from its calendar
+    /// itself.)
+    fn page_popup_open(&self) -> bool {
+        if self.settings {
+            return false;
+        }
+        match self.mode.page() {
+            PageKind::Calculator => self.calc.as_ref().is_some_and(|p| p.popup.is_some()),
+            PageKind::Converter => self.conv.as_ref().is_some_and(ConvPage::picker_open),
+            PageKind::Graphing => self.graph.as_ref().is_some_and(GraphPage::popup_open),
+            PageKind::Date => false,
+        }
+    }
+
+    /// Runs `event`, giving the focus back to what had it when the page's
+    /// popup opened once it closes ([`popup_focus`]).
+    fn with_popup_focus<R>(&mut self, event: impl FnOnce(&mut Self) -> R) -> R {
+        let (was, before) = (self.page_popup_open(), self.input.focus);
+        let r = event(self);
+        let now = self.page_popup_open();
+        let focus = popup_focus(was, now, before, self.input.focus, &mut self.popup_return);
+        if focus != self.input.focus {
+            self.input.focus = focus;
+            self.sync_ime();
+            self.redraw();
+        }
+        r
+    }
+
     fn update(&mut self, el: &ActiveEventLoop, msg: Msg) {
+        self.with_popup_focus(|app| app.dispatch(el, msg));
+    }
+
+    fn dispatch(&mut self, el: &ActiveEventLoop, msg: Msg) {
         match msg {
             Msg::Nav(open) => self.nav = open,
             Msg::Mode(m) => self.set_mode(m),
@@ -1286,6 +1326,10 @@ impl App {
     // ------------------------------------------------------------ keys
 
     fn key_press(&mut self, el: &ActiveEventLoop, kp: KeyPress, text: Option<String>) {
+        self.with_popup_focus(|app| app.route_key(el, kp, text));
+    }
+
+    fn route_key(&mut self, el: &ActiveEventLoop, kp: KeyPress, text: Option<String>) {
         // Text fields first (except app-wide chords). Keys reach only what
         // the topmost overlay, if any, holds.
         let focus = self.live_focus();
@@ -1950,16 +1994,18 @@ impl ApplicationHandler<UserEvent> for App {
                     (MouseButton::Left, ElementState::Pressed) => self.pointer_pressed(el, x, y),
                     (MouseButton::Left, ElementState::Released) => self.pointer_released(el),
                     (MouseButton::Right, ElementState::Pressed) => {
-                        if self.mode.page() == PageKind::Calculator
-                            && !self.settings
-                            && let Some(c) = self.calc.as_mut()
-                        {
-                            let hit = self.hits.iter().rev().find(|h| h.rect.contains(x, y));
-                            if hit.is_some_and(|h| h.id == id("display")) {
-                                c.popup = Some(calc::Popup::DisplayMenu(x, y));
-                                self.redraw();
+                        self.with_popup_focus(|app| {
+                            if app.mode.page() == PageKind::Calculator
+                                && !app.settings
+                                && let Some(c) = app.calc.as_mut()
+                            {
+                                let hit = app.hits.iter().rev().find(|h| h.rect.contains(x, y));
+                                if hit.is_some_and(|h| h.id == id("display")) {
+                                    c.popup = Some(calc::Popup::DisplayMenu(x, y));
+                                    app.redraw();
+                                }
                             }
-                        }
+                        });
                     }
                     _ => {}
                 }
@@ -2517,6 +2563,32 @@ const PRECISION_MARKS: [(u8, &str, bool); 7] = [
     (NumberPrecision::MAX + 1, "Off", false),
 ];
 
+/// Where the focus goes as an event opens or closes the page's popup:
+/// `was` and `now`, whether it is open before and after the event;
+/// `before` and `focus`, the focus before and after it; `opener`, the focus
+/// kept while a popup is open. Opening keeps `before`, what the popup was
+/// opened from (its button, clicked or pressed from the keys, or what had
+/// the focus when a shortcut opened it); closing gives it back, as GTK's
+/// popovers and upstream's flyouts give the focus back to their opener,
+/// rather than leave it on a control gone with the popup. Anything else
+/// leaves the focus where the event left it.
+pub(crate) fn popup_focus(
+    was: bool,
+    now: bool,
+    before: Option<ui::Id>,
+    focus: Option<ui::Id>,
+    opener: &mut Option<Option<ui::Id>>,
+) -> Option<ui::Id> {
+    match (was, now) {
+        (false, true) => {
+            *opener = Some(before);
+            focus
+        }
+        (true, false) => opener.take().unwrap_or(focus),
+        _ => focus,
+    }
+}
+
 /// The slider's position as a fraction of its track.
 fn precision_fraction(position: f32) -> f32 {
     let first = f32::from(*NumberPrecision::POSITIONS.start());
@@ -2833,5 +2905,49 @@ mod tests {
         assert_eq!(size(65536, 65536, screen), (1920.0, 1080.0));
         assert_eq!(size(1200, 900, screen), (1200.0, 900.0));
         assert_eq!(size(100, 100, (1.0, Some((200.0, 200.0)))), (300.0, 400.0));
+    }
+
+    /// A popup gives the focus back to its opener when it closes, however
+    /// it closes (a key in it, Escape, a click outside), as GTK's popovers
+    /// and upstream's flyouts do; without one (a shortcut opened it with
+    /// nothing focused) nothing has it after. An event that neither opens
+    /// nor closes one leaves the focus where it put it.
+    #[test]
+    fn a_popup_gives_the_focus_back_to_its_opener() {
+        let (trig, sine, two) = (id("trig-btn"), id(("trig", 1u32)), id("2"));
+        let mut opener = None;
+        // Opened from Trigonometry (clicked or from the keys).
+        assert_eq!(
+            popup_focus(false, true, Some(trig), Some(trig), &mut opener),
+            Some(trig)
+        );
+        assert_eq!(opener, Some(Some(trig)));
+        // Tab into it: the focus moves on, the opener is kept.
+        assert_eq!(
+            popup_focus(true, true, Some(trig), Some(sine), &mut opener),
+            Some(sine)
+        );
+        // Sine pressed (or Escape, or a click outside): closed.
+        assert_eq!(
+            popup_focus(true, false, Some(sine), Some(sine), &mut opener),
+            Some(trig)
+        );
+        assert_eq!(opener, None);
+        // Nothing open: the event's focus stays.
+        assert_eq!(
+            popup_focus(false, false, Some(trig), Some(two), &mut opener),
+            Some(two)
+        );
+        // Opened by a shortcut with nothing focused, then closed.
+        popup_focus(false, true, None, None, &mut opener);
+        assert_eq!(
+            popup_focus(true, false, Some(sine), Some(sine), &mut opener),
+            None
+        );
+        // Closed with no opener kept (the page changed meanwhile).
+        assert_eq!(
+            popup_focus(true, false, Some(sine), Some(two), &mut opener),
+            Some(two)
+        );
     }
 }

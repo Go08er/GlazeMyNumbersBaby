@@ -221,6 +221,11 @@ impl ConvPage {
 
     pub fn field_changed(&mut self, _id: crate::ui::Id) {}
 
+    /// Whether a unit picker is open.
+    pub fn picker_open(&self) -> bool {
+        self.picker.is_some()
+    }
+
     pub fn close_popup(&mut self) -> bool {
         self.picker.take().is_some()
     }
