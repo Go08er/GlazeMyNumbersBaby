@@ -681,6 +681,12 @@ const PLANTS: &[Plant] = &[
     ("1/x", "the range's gap clearness dropped", |v| {
         claims_of(v, "range").retain(|c| c.get("GapClear").is_none());
     }),
+    // A factor exactly 0 inside a gap clears it only where f is undefined
+    // there (review 17, Question 2): x/(x² + 1) is 0 at 0.
+    ("x/(x^2+1)", "a gap's clearness about a zero", |v| {
+        claims_of(v, "x_intercepts").push(serde_json::json!({"GapClear": {
+            "x": {"a": -5e-324, "b": 5e-324}, "of": {"F": "F0"}}}));
+    }),
     (
         "ln(4-(x/0.001)^2)",
         "ends known to enclosures closed where f is undefined",
@@ -1039,6 +1045,21 @@ const PLANTS: &[Plant] = &[
     ("x^(-1000002)", "the vertical asymptote left out", |v| {
         value_of(v, "vertical").as_array_mut().unwrap().clear();
     }),
+    // Review 17, Question 2: no least period for f′ ≡ 0 on both tails, and
+    // a min decided on a tail by its difference's slope.
+    (
+        "sign(abs(x)+1)",
+        "no least period, with f′ ≡ 0 on the left tail only",
+        |v| {
+            claims_of(v, "period").retain(|c| {
+                !(c.get("Value")
+                    .is_some_and(|c| c["x"]["b"] == serde_json::json!("inf")))
+            });
+        },
+    ),
+    ("min(x,x+1+abs(x-3))", "f′ < 0 on the left tail", |v| {
+        first(v, "monotonicity", "TailBeyond")["above"] = serde_json::json!(false);
+    }),
     // Review 17, R17-M-02: an operand set aside by a fast path, its
     // definedness or angle unit dropped with it. sin²4 + cos²4 − 1 − 10⁻¹⁰⁰
     // is −10⁻¹⁰⁰, so ⌊√(…)⌋ is defined nowhere, though at 160 bits its
@@ -1112,6 +1133,16 @@ const PLANTS_IN: &[PlantIn] = &[
         "x+1°",
         "a y-intercept for ° in grads",
         |v| made_up_y_intercept(v, 1.0, false),
+    ),
+    // Review 17, Question 2: 1 − cos x evaluated as 2·sin²(x/2) beside the
+    // hole at 0.
+    (
+        TrigUnit::Degrees,
+        "(sin(x))^2/(1-cos(x))",
+        "f < 0 beside the hole at 0",
+        |v| {
+            first(v, "x_intercepts", "Beyond")["above"] = serde_json::json!(false);
+        },
     ),
 ];
 
@@ -1443,25 +1474,12 @@ fn fixed_certifier_issues_stay_fixed() {
     assert!(back.is_empty(), "fixed issues back: {back:#?}");
 }
 
-/// Kinks (replay issue 2): f′ and f″ are claimed only off them, each kink
-/// a box f is continuous on; every claim replays (strong, or weak only for
-/// the simplifier's own facts) and every row follows from its claims.
-#[test]
-fn kinks_replay() {
+/// Each of `srcs` in radians and degrees: every claim replays strong (or
+/// weak, for the simplifier's own facts only) and every row follows from
+/// its claims. What doesn't, as failures.
+fn all_strong(srcs: &[&str]) -> Vec<String> {
     let mut fails = Vec::new();
-    for src in [
-        "abs(x)",
-        "10^-12*abs(x)",
-        "abs(x-3)",
-        "x*abs(x)",
-        "abs(x^2-1)",
-        "max(x,0)",
-        "min(x^2,1)",
-        "abs(sin(x))",
-        // Review 17, Question 2: f = x near 0, a step of a kink beside it
-        // (its ExactAt claims at 0 were unconfirmed).
-        "min(x,floor(abs(x)+0.5)+5)",
-    ] {
+    for &src in srcs {
         for unit in [TrigUnit::Radians, TrigUnit::Degrees] {
             let d = one(src, unit);
             let Some(Ok(r)) = d.report else {
@@ -1486,6 +1504,54 @@ fn kinks_replay() {
             }
         }
     }
+    fails
+}
+
+/// Kinks (replay issue 2): f′ and f″ are claimed only off them, each kink
+/// a box f is continuous on; every claim replays (strong, or weak only for
+/// the simplifier's own facts) and every row follows from its claims.
+#[test]
+fn kinks_replay() {
+    let fails = all_strong(&[
+        "abs(x)",
+        "10^-12*abs(x)",
+        "abs(x-3)",
+        "x*abs(x)",
+        "abs(x^2-1)",
+        "max(x,0)",
+        "min(x^2,1)",
+        "abs(sin(x))",
+        // Review 17, Question 2: f = x near 0, a step of a kink beside it
+        // (its ExactAt claims at 0 were unconfirmed).
+        "min(x,floor(abs(x)+0.5)+5)",
+        // f = x, its min or max decided on each tail by the difference's
+        // slope: x + 1 + |x − 3| against x on (−∞, 3) is ∞ − ∞, and x − 2
+        // against x overlaps on any box over 2 wide (f′ > 0 and f″ ≡ 0 on
+        // the tails were unconfirmed).
+        "min(x,x+1+abs(x-3))",
+        "max(x,x-1-abs(x-3),x-2)",
+        // f ≡ 1, f′ ≡ 0 claimed on the two tails beside the kink's box:
+        // no least period (the period row didn't follow).
+        "sign(abs(x)+1)",
+    ]);
+    assert!(fails.is_empty(), "{fails:#?}");
+}
+
+/// Beside an excluded 0 (review 17, Question 2). 1 − cos u and eᵘ − 1
+/// cancel near u = 0 past the working precision (sin²x/(1 − cos x) in
+/// degrees: at x = 10⁻¹⁵³, 1 − cos x is 10⁻³¹⁰): the replay evaluates them
+/// as 2·sin²(u/2) and 2·e^(u/2)·sinh(u/2), the same functions on the same
+/// domain (f > 0 beside the hole, and (eˣ − 1)/(eˣ − 1) ≡ 1 on the tails,
+/// were unconfirmed). sin x/(1 − cos x)'s gap about its pole at 0 is clear:
+/// its factor sin x is 0 in it only at 0, where f is undefined (the gap's
+/// clearness was unconfirmed).
+#[test]
+fn beside_an_excluded_zero_replays() {
+    let fails = all_strong(&[
+        "(sin(x))^2/(1-cos(x))",
+        "(e^x-1)/(e^x-1)",
+        "sin(x)/(1-cos(x))",
+    ]);
     assert!(fails.is_empty(), "{fails:#?}");
 }
 

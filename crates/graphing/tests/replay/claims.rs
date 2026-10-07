@@ -220,7 +220,8 @@ impl<'a> Subj<'a> {
     /// to k; g defined), judged on the canonical tree.
     pub fn coeffs(&self, lo: f64, hi: f64, m: usize) -> (Vec<Iv>, bool) {
         let mut s = self.fx.series(&self.e, lo, hi, self.k + m);
-        // f's own tree ∞ − ∞ on a tail: its Horner form, the same function.
+        // f's own tree ∞ − ∞ on a tail, or 1 − cos u, eᵘ − 1 cancelling: its
+        // rearranged form ([`Fx::f_alt`]), the same function.
         if self.tree == Tree::Orig
             && matches!(self.of, Subject::F(_))
             && !valid_f(&s, self.k)
@@ -246,9 +247,10 @@ impl<'a> Subj<'a> {
                 if self.tree == Tree::Orig {
                     valid_f(&s, *k)
                 } else {
-                    // f's validity, as for its own tree: from its Horner
-                    // form where f's tree is ∞ − ∞ on a tail (the same
-                    // function on the same domain: 1/(x² + x + 1) at −∞).
+                    // f's validity, as for its own tree: from its
+                    // rearranged form where f's tree is ∞ − ∞ on a tail or
+                    // 1 − cos u, eᵘ − 1 cancels (the same function on the same
+                    // domain: 1/(x² + x + 1) at −∞).
                     let ok = |e: &Expr| valid_f(&self.fx.series(e, lo, hi, *k), *k);
                     (ok(&self.fx.f) || self.fx.f_alt.as_ref().is_some_and(ok))
                         && !c[0].empty
@@ -1025,8 +1027,10 @@ fn defined(fx: &Fx, x: B, want: Option<bool>) -> Outcome {
             let s = fx.series(&fx.f, lo, hi, 0);
             let v = &s[0];
             let at = format!("on [{lo:e}, {hi:e}]");
-            // f's Horner form, the same function on the same domain, where
-            // f's tree is ∞ − ∞ on a tail (x² + x + 1 at −∞).
+            // f's rearranged form, the same function on the same domain,
+            // where f's tree is ∞ − ∞ on a tail (x² + x + 1 at −∞) or
+            // 1 − cos u, eᵘ − 1 cancels (sin²x/(1 − cos x) in degrees
+            // near 0).
             let alt = |cont: bool| {
                 fx.f_alt.as_ref().is_some_and(|h| {
                     let w = &fx.series(h, lo, hi, 0)[0];
@@ -2943,13 +2947,26 @@ pub fn gap_clear(fx: &Fx, k: usize, g: B) -> Option<bool> {
         return Some(true);
     }
     // A factor exactly 0 at one of the gap's doubles and strictly monotone
-    // over the closed gap is 0 nowhere strictly inside it.
+    // over the closed gap is 0 nowhere else in it: nowhere strictly inside
+    // it if that double is an end, and only where f is undefined if f is
+    // undefined at that double inside (sin x/(1 − cos x)'s factor sin x at
+    // the excluded 0, in the gap about it).
     let end_root = |h: &Expr| -> bool {
         iv::set_prec(160);
-        let root = [g.0, g.1].into_iter().any(|e| {
-            let v = &fx.series_iv(h, Iv::of(e), 0)[0];
+        let zero_at = |p: f64| {
+            let v = &fx.series_iv(h, Iv::of(p), 0)[0];
             v.def && v.is_point() && v.lo == 0
-        });
+        };
+        let mut inside = Vec::new();
+        let mut p = g.0.next_up();
+        while p < g.1 && inside.len() < 8 {
+            inside.push(p);
+            p = p.next_up();
+        }
+        let root = [g.0, g.1].into_iter().any(zero_at)
+            || inside
+                .into_iter()
+                .any(|p| zero_at(p) && fx.series_iv(&fx.f, Iv::of(p), 0)[0].empty);
         root && {
             let s = fx.series_iv(h, Iv::of2(g.0, g.1), 1);
             s[0].cont && s[1].def && !s[1].empty && s[1].ne0()

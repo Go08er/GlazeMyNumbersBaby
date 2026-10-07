@@ -559,9 +559,11 @@ pub struct Fx {
     pub vars: Vec<(String, f64)>,
     /// Which of the certifier's trees are exactly f's.
     pub verified: algebra::Verified,
-    /// f's tree with each sum of monomials of degree ≥ 2 in Horner's form
-    /// (the replay's own rearrangement of + and ·: the same function, with
-    /// the same domain), where f's tree is ∞ − ∞ on a tail.
+    /// f's tree with each sum of monomials of degree ≥ 2 in Horner's form,
+    /// 1 − cos u as 2·sin²(u/2) and eᵘ − 1 as 2·e^(u/2)·sinh(u/2) (the
+    /// replay's own rearrangements: the same function, with the same
+    /// domain), where f's tree is ∞ − ∞ on a tail or such a difference
+    /// cancels past the working precision.
     pub f_alt: Option<Expr>,
     /// Why the language refuses f outright, if it does: a degree mark (°)
     /// outside degrees mode (`RequireDegreesMode`). Then no row is
@@ -687,7 +689,12 @@ pub fn function(a: &Value) -> Result<Fx, String> {
             Some(other) => return Err(format!("binding: slider_decimals {other}")),
         };
     let lits = lits.with_sliders(&vars, &decimals, digits)?;
-    let f_alt = eval::horner(&f, &lits);
+    // f rearranged by the replay itself: Horner's form, then the small
+    // differences 1 − cos u and eᵘ − 1 without their cancellation.
+    let f_alt = {
+        let h = eval::horner(&f, &lits);
+        eval::small_differences(h.as_ref().unwrap_or(&f), &lits).or(h)
+    };
     let verified = algebra::verify(
         &f,
         f_eval.as_ref(),
