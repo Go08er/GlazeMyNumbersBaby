@@ -144,11 +144,6 @@ impl CalcPage {
             return;
         }
         self.vm.press(b);
-        // Upstream: using an inverse/hyperbolic trig function resets the toggles.
-        if keys::TRIG.iter().any(|t| [t.1, t.2, t.3].contains(&b)) {
-            self.trig_inv = false;
-            self.hyp = false;
-        }
         self.after_press();
     }
 
@@ -167,6 +162,15 @@ impl CalcPage {
             Msg::Key(id) => {
                 if let Some(b) = B::from_id(id) {
                     self.press(b);
+                    // Upstream's FlyoutButton_Clicked
+                    // (CalculatorScientificOperators.xaml.cs:82), every key
+                    // of the Trigonometry and Function flyouts': the trig
+                    // flyout's 2nd and hyp are unchecked, whichever key it
+                    // was (a trig function or not), and the flyout closes.
+                    if matches!(self.popup, Some(Popup::Trig | Popup::Functions)) {
+                        self.trig_inv = false;
+                        self.hyp = false;
+                    }
                     if matches!(
                         self.popup,
                         Some(Popup::Trig | Popup::Functions | Popup::Bitwise)
