@@ -233,7 +233,13 @@ impl Keypad {
             } else {
                 gtk::AccessibleRole::Button
             })
-            .focus_on_click(false)
+            // A click focuses the key, as upstream's (all but the
+            // Scientific 2nd: CalculatorPage::build_scientific), so the
+            // keys after it are as after Tab to it: Enter after clicking 2
+            // is the page's ("="), which a calculator key ignores
+            // (window::focus_ignores). The ring stays hidden
+            // (window::hide_ring_on_press).
+            .focus_on_click(true)
             .hexpand(true)
             .vexpand(true)
             .css_classes(["wc-key", kind_css(key.kind)])

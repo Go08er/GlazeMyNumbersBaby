@@ -34,7 +34,6 @@ impl BitFlip {
                     let bit = top_bit - j;
                     let b = gtk::ToggleButton::with_label("0");
                     b.add_css_class("wc-bit");
-                    b.set_focus_on_click(false);
                     b.set_tooltip_text(Some(&format!("Bit {bit}")));
                     // Named by which bit it is (as DGMNB's, and upstream's
                     // "%1, value %2" puts the position first); its value,

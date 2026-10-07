@@ -69,7 +69,6 @@ pub struct CalculatorPage {
 fn text_button(label: &str, tip: &str) -> gtk::Button {
     let b = gtk::Button::with_label(label);
     b.add_css_class("wc-mem");
-    b.set_focus_on_click(false);
     b.set_tooltip_text(Some(tip));
     b
 }
@@ -83,9 +82,11 @@ fn chevron_menu(label: &str, icon: &str, popover: &gtk::Popover) -> gtk::MenuBut
         .child(&content)
         .popover(popover)
         .css_classes(["wc-mem", "wc-flyout-button"])
-        .focus_on_click(false)
         .build();
     crate::a11y::name_menu_button(&button, label);
+    // Its keys take the focus on a click, as the keypad's: without the
+    // ring, which the window's controller can't hide in a popover.
+    crate::window::hide_ring_on_press(popover);
     button
 }
 
@@ -376,7 +377,6 @@ impl CalculatorPage {
         });
         let fe = gtk::ToggleButton::with_label("F-E");
         fe.add_css_class("wc-mem");
-        fe.set_focus_on_click(false);
         fe.set_tooltip_text(Some("Scientific notation (V)"));
         let weak = Rc::downgrade(self);
         fe.connect_clicked(move |w| {
@@ -420,6 +420,13 @@ impl CalculatorPage {
         b.append(&flyrow);
 
         let pad = self.add_keypad(keys::scientific(), Some(CalcMode::Scientific));
+        // Upstream's 2nd alone isn't focused by a click
+        // (AllowFocusOnInteraction="False"): Enter after it is still the
+        // focused control's, "=" after clicking a key. The flyout's 2nd
+        // and hyp are, as every other key.
+        if let Some(second) = pad.button(KEY_SECOND) {
+            second.set_focus_on_click(false);
+        }
         pad.set_vexpand(true);
         pad.set_size_request(-1, 330);
         b.append(&pad);
@@ -449,7 +456,6 @@ impl CalculatorPage {
             let button = gtk::Button::builder()
                 .child(&content)
                 .css_classes(["wc-radix-row", "flat"])
-                .focus_on_click(false)
                 .accessible_role(gtk::AccessibleRole::Radio)
                 .build();
             button.update_state(&[gtk::accessible::State::Checked(

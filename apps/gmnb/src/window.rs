@@ -176,6 +176,34 @@ fn is_control(w: &gtk::Widget) -> bool {
         )
 }
 
+/// A pointer press in `widget` hides the focus ring, which only keyboard
+/// use shows (as DGMNB's and upstream's): a click that focuses a key or a
+/// button (focus-on-click) moves the focus without drawing it. GTK turns
+/// the ring on and off by keys only (and starts with it on), so a click
+/// after Tab would draw it around the clicked key. The controller runs
+/// first (capture), before the button takes the focus. For the window,
+/// and for each popover whose keys take the focus on a click: an
+/// autohide popover holds a grab, so presses in it never reach the
+/// window's controllers.
+pub fn hide_ring_on_press(widget: &impl IsA<gtk::Widget>) {
+    let pointer = gtk::EventControllerLegacy::new();
+    pointer.set_propagation_phase(gtk::PropagationPhase::Capture);
+    pointer.connect_event(|c, event| {
+        if matches!(
+            event.event_type(),
+            gdk::EventType::ButtonPress | gdk::EventType::TouchBegin
+        ) && let Some(win) = c
+            .widget()
+            .and_then(|w| w.root())
+            .and_downcast::<gtk::Window>()
+        {
+            win.set_focus_visible(false);
+        }
+        glib::Propagation::Proceed
+    });
+    widget.add_controller(pointer);
+}
+
 pub fn apply_theme_setting(theme: &str) {
     let sm = adw::StyleManager::default();
     sm.set_color_scheme(match theme {
@@ -724,6 +752,8 @@ impl Window {
             }
         });
         self.win.add_controller(keys);
+
+        hide_ring_on_press(&self.win);
     }
 
     /// What `focus`, the window's focus, is ([`Focused`]).

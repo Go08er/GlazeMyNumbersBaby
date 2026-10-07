@@ -483,6 +483,9 @@ impl GraphingPage {
                     },
                 );
                 b.add_css_class("wc-pad-key");
+                // Not focused by a click, unlike the calculator's keys: it
+                // types into the equation, which keeps the focus
+                // (upstream's GraphingNumPad keys can't take it at all).
                 b.set_focus_on_click(false);
                 let weak = Rc::downgrade(self);
                 let insert = insert.to_string();
