@@ -71,6 +71,8 @@ pub struct CalcPage {
     bit_view: bool,
     /// Text for assistive tech's live region after a result.
     announce: String,
+    /// While "(" has the focus, what was announced when it got it.
+    paren_announcement: Option<String>,
 }
 
 /// The Bit shift flyout's modes, in order (rows `("shift", i)`).
@@ -104,6 +106,7 @@ impl CalcPage {
             tab: Tab::History,
             bit_view: false,
             announce: String::new(),
+            paren_announcement: None,
         }
     }
 
@@ -208,6 +211,19 @@ impl CalcPage {
                     let second_function = self.second
                         && self.vm.mode() == CalcMode::Scientific
                         && keys::SECOND_FLIPS.iter().any(|f| f.normal == b);
+                    // A click on "(" gave it the focus just before it
+                    // pressed it: its focus tells the count then, as
+                    // upstream's GotFocus comes before the Click (the view
+                    // announces it, CalcPage::view).
+                    if b == B::OpenParenthesis
+                        && self.vm.mode() != CalcMode::Standard
+                        && *cx.focus == Some(id(("keypad", k)))
+                        && self.paren_announcement.is_none()
+                    {
+                        self.paren_announcement = Some(keys::open_parenthesis_count_announcement(
+                            self.vm.open_parens(),
+                        ));
+                    }
                     self.press(b);
                     if second_function {
                         self.second = false;
@@ -446,6 +462,24 @@ impl CalcPage {
             };
             let gap = if compact { 3.0 } else { 4.0 };
             self.keypad(f, pad, &layout, gap, "keypad");
+        }
+        // Upstream's OpenParenthesisButton_GotFocus (Scientific and
+        // Programmer): each time "(" gets the focus (Tab, a click), screen
+        // readers are told how many parentheses are open ("Open parenthesis
+        // count 2"), after the key's own name. A live node that is there
+        // only while "(" has the focus, with the count it had when it got
+        // it: AccessKit announces it as it comes.
+        let open = id(("keypad", B::OpenParenthesis.id()));
+        if mode != CalcMode::Standard && f.focused(open) {
+            let text = self.paren_announcement.get_or_insert_with(|| {
+                keys::open_parenthesis_count_announcement(self.vm.open_parens())
+            });
+            if let Some(n) = f.node(id("paren-announcer"), accesskit::Role::Status, text, pad) {
+                n.value = Some(text.clone());
+                n.live = true;
+            }
+        } else {
+            self.paren_announcement = None;
         }
         if let Some(p) = panel {
             self.side_panel(f, p.inset_xy(0.0, 4.0).take_right(PANEL_W - 8.0).0);

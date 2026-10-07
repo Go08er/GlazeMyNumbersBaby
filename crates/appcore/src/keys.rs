@@ -704,6 +704,18 @@ pub fn word_size_button_name(size: calcvm::WordSize) -> &'static str {
 /// What upstream calls the F-E button (ftoeButton).
 pub const FTOE_BUTTON_NAME: &str = "Scientific notation";
 
+/// What upstream tells screen readers when "(" gets the focus, Scientific
+/// and Programmer, `count` parentheses open (OpenParenthesisButton_GotFocus,
+/// CalculatorScientificOperators.xaml.cs:43 and
+/// CalculatorProgrammerRadixOperators.xaml.cs:192, to
+/// SetOpenParenthesisCountNarratorAnnouncement,
+/// StandardCalculatorViewModel.cs:953; en-US
+/// Format_OpenParenthesisCountAutomationNamePrefix, "Open parenthesis
+/// count %1"). Zero too.
+pub fn open_parenthesis_count_announcement(count: u32) -> String {
+    format!("Open parenthesis count {count}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
