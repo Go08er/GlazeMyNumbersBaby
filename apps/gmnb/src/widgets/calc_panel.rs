@@ -46,7 +46,14 @@ pub struct CalcPanel {
     /// A History item's context menu while open: closed and let go of
     /// when the items are shown anew, so that no menu outlives its row.
     history_menu: RefCell<Option<gtk::Popover>>,
+    /// What activating each History and Memory row does (recall it), by
+    /// row, for the list's row-activated ([`CalcPanel::activate_row`]).
+    history_actions: RefCell<Vec<(gtk::ListBoxRow, RowAction)>>,
+    memory_actions: RefCell<Vec<(gtk::ListBoxRow, RowAction)>>,
 }
+
+/// What activating a row does, given the row.
+type RowAction = Rc<dyn Fn(&gtk::ListBoxRow)>;
 
 fn empty_state(text: &str) -> gtk::Label {
     let l = gtk::Label::new(Some(text));
@@ -135,6 +142,25 @@ impl CalcPanel {
             history: RefCell::default(),
             history_shown: Default::default(),
             history_menu: RefCell::default(),
+            history_actions: RefCell::default(),
+            memory_actions: RefCell::default(),
+        });
+
+        // A row is activated through its list's row-activated, whichever
+        // way: a click emits only that (not the row's own activate, which
+        // Enter, Space and assistive technology emit, and which ends in
+        // it too). Upstream recalls an item on a click.
+        let weak = Rc::downgrade(&panel);
+        panel.history_list.connect_row_activated(move |_, row| {
+            if let Some(p) = weak.upgrade() {
+                Self::activate_row(&p.history_actions, row);
+            }
+        });
+        let weak = Rc::downgrade(&panel);
+        panel.memory_list.connect_row_activated(move |_, row| {
+            if let Some(p) = weak.upgrade() {
+                Self::activate_row(&p.memory_actions, row);
+            }
         });
 
         let weak = Rc::downgrade(&panel);
@@ -212,6 +238,20 @@ impl CalcPanel {
         self.handlers.borrow_mut().memory_clear_all = Some(Box::new(f));
     }
 
+    /// Carries out what activating `row` does, if it is one of `actions`'
+    /// rows (the items shown now): no borrow is held meanwhile, as recalling
+    /// shows the items anew.
+    fn activate_row(actions: &RefCell<Vec<(gtk::ListBoxRow, RowAction)>>, row: &gtk::ListBoxRow) {
+        let action = actions
+            .borrow()
+            .iter()
+            .find(|(r, _)| r == row)
+            .map(|(_, a)| a.clone());
+        if let Some(action) = action {
+            action(row);
+        }
+    }
+
     /// Whether a request made on History row `row`, the `i`th of the
     /// showing `shown` and holding `entry`, may still be carried out: that
     /// showing is the current one (no History or mode change since, each
@@ -247,6 +287,7 @@ impl CalcPanel {
             menu.unparent();
         }
         self.history_list.remove_all();
+        self.history_actions.borrow_mut().clear();
         // remove_all() also drops the placeholder, so re-attach it.
         self.history_list
             .set_placeholder(Some(&empty_state("There's no history yet")));
@@ -278,7 +319,7 @@ impl CalcPanel {
             let id = Rc::new((shown, i, item.clone()));
             let weak = Rc::downgrade(self);
             let item_id = id.clone();
-            row.connect_activate(move |r| {
+            let recall: RowAction = Rc::new(move |r| {
                 let (shown, i, entry) = &*item_id;
                 if let Some(p) = weak.upgrade()
                     && p.history_row_current(*shown, *i, entry, r)
@@ -287,6 +328,9 @@ impl CalcPanel {
                     f(*i);
                 }
             });
+            self.history_actions
+                .borrow_mut()
+                .push((row.clone(), recall));
             // Context menu → delete.
             let click = gtk::GestureClick::builder().button(3).build();
             let weak = Rc::downgrade(self);
@@ -361,6 +405,7 @@ impl CalcPanel {
         let grew = items.len() > self.memory_len.get();
         self.memory_len.set(items.len());
         self.memory_list.remove_all();
+        self.memory_actions.borrow_mut().clear();
         self.memory_list
             .set_placeholder(Some(&empty_state("There's nothing saved in memory")));
         for (i, value) in items.iter().enumerate() {
@@ -398,13 +443,14 @@ impl CalcPanel {
             row.add_css_class("wc-mem-row");
             row.update_property(&[gtk::accessible::Property::Label(value)]);
             let weak = Rc::downgrade(self);
-            row.connect_activate(move |_| {
+            let recall: RowAction = Rc::new(move |_| {
                 if let Some(p) = weak.upgrade()
                     && let Some(f) = &p.handlers.borrow().memory_op
                 {
                     f(i, MemOp::Recall);
                 }
             });
+            self.memory_actions.borrow_mut().push((row.clone(), recall));
             self.memory_list.append(&row);
         }
         self.sync_trash();
