@@ -785,6 +785,17 @@ impl CalculatorPage {
             .ancestor(gtk::Popover::static_type())
             .and_downcast::<gtk::Popover>()
         {
+            // Upstream's FlyoutButton_Clicked
+            // (CalculatorScientificOperators.xaml.cs:82), every key of the
+            // Trigonometry and Function flyouts': the trig flyout's 2nd
+            // and hyp are unchecked, whichever key it was (a trig function
+            // or not). (Programmer's Bitwise flyout keeps its own handler,
+            // which leaves them be.)
+            if self.vm.borrow().mode() == CalcMode::Scientific {
+                self.trig_inv.set(false);
+                self.hyp.set(false);
+                self.relabel();
+            }
             flyout.popdown();
         }
     }
@@ -809,12 +820,6 @@ impl CalculatorPage {
             b = B::ClearEntry;
         }
         self.vm.borrow_mut().press(b);
-        // Upstream: using a trig function or the 2nd variant resets the toggles.
-        if keys::TRIG.iter().any(|t| [t.1, t.2, t.3].contains(&b)) {
-            self.trig_inv.set(false);
-            self.hyp.set(false);
-            self.relabel();
-        }
         self.sync(None);
     }
 

@@ -1172,6 +1172,59 @@ mod tests {
         });
     }
 
+    /// Upstream's FlyoutButton_Clicked (CalculatorScientificOperators.xaml.cs:82):
+    /// any key of the Trigonometry or Function flyout unchecks the trig
+    /// flyout's 2nd and hyp, a trig function or not; the toggles
+    /// themselves, and the Bitwise flyout's keys, leave them be.
+    #[test]
+    fn a_flyout_key_unchecks_the_trig_2nd_and_hyp() {
+        use crate::calc::{Msg, Popup};
+        use crate::ui::id;
+        use appcore::keys::{KEY_HYP, KEY_TRIG_SECOND};
+        use calcvm::{Button as B, CalcMode};
+        let wide = Rect::new(0.0, 46.0, 1000.0, 654.0);
+        let toggles = |p: &mut crate::calc::CalcPage| {
+            p.popup = Some(Popup::Trig);
+            let (nodes, _) = frame_nodes(|f, _| p.overlay(f, wide));
+            let on = |k: u32| {
+                nodes
+                    .iter()
+                    .find(|n| n.id == id(("trig", k)))
+                    .and_then(|n| n.toggled)
+            };
+            (on(KEY_TRIG_SECOND), on(KEY_HYP))
+        };
+        let both_on = |p: &mut crate::calc::CalcPage| {
+            p.popup = Some(Popup::Trig);
+            with_cx(|cx| {
+                p.update(Msg::Key(KEY_TRIG_SECOND), cx);
+                p.update(Msg::Key(KEY_HYP), cx);
+            });
+            assert_eq!(toggles(p), (Some(true), Some(true)));
+        };
+        let mut p = crate::calc::CalcPage::new(None);
+        p.set_mode(CalcMode::Scientific);
+        for (popup, key) in [
+            (Popup::Trig, B::Sin),
+            (Popup::Trig, B::Sec),
+            (Popup::Functions, B::Floor),
+            (Popup::Functions, B::Abs),
+        ] {
+            both_on(&mut p);
+            p.popup = Some(popup);
+            with_cx(|cx| p.update(Msg::Key(key.id()), cx));
+            assert_eq!(p.popup, None, "{key:?}");
+            assert_eq!(toggles(&mut p), (Some(false), Some(false)), "{key:?}");
+        }
+        // Typed (a shortcut), not a flyout's key: they stay.
+        both_on(&mut p);
+        p.popup = None;
+        with_cx(|cx| {
+            p.key(&appcore::KeyPress::char('5'), cx);
+        });
+        assert_eq!(toggles(&mut p), (Some(true), Some(true)));
+    }
+
     /// The header's window controls aren't focused by a click, as GTK's
     /// (which can't take the focus at all): with the focus where it was,
     /// Enter after maximizing doesn't restore, and is "=" after clicking a

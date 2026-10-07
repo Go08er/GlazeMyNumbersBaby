@@ -73,6 +73,17 @@ pub struct CalcPage {
     announce: String,
 }
 
+/// The Bit shift flyout's modes, in order (rows `("shift", i)`).
+const SHIFT_MODES: [(ShiftMode, &str); 4] = [
+    (ShiftMode::Arithmetic, "Arithmetic shift"),
+    (ShiftMode::Logical, "Logical shift"),
+    (ShiftMode::Rotate, "Rotate circular shift"),
+    (
+        ShiftMode::RotateThroughCarry,
+        "Rotate through carry circular shift",
+    ),
+];
+
 fn msg(m: Msg) -> AppMsg {
     AppMsg::Calc(m)
 }
@@ -93,6 +104,20 @@ impl CalcPage {
             tab: Tab::History,
             bit_view: false,
             announce: String::new(),
+        }
+    }
+
+    /// Where the focus goes in the open popup when the keys open it, if
+    /// not on its first control: the Bit shift flyout's chosen mode, as
+    /// GMNB's radio buttons.
+    pub fn popup_focus(&self) -> Option<crate::ui::Id> {
+        let cur = self.vm.shift_mode();
+        match self.popup {
+            Some(Popup::Shift) => SHIFT_MODES
+                .iter()
+                .position(|(m, _)| *m == cur)
+                .map(|i| id(("shift", i))),
+            _ => None,
         }
     }
 
@@ -144,11 +169,6 @@ impl CalcPage {
             return;
         }
         self.vm.press(b);
-        // Upstream: using an inverse/hyperbolic trig function resets the toggles.
-        if keys::TRIG.iter().any(|t| [t.1, t.2, t.3].contains(&b)) {
-            self.trig_inv = false;
-            self.hyp = false;
-        }
         self.after_press();
     }
 
@@ -167,6 +187,15 @@ impl CalcPage {
             Msg::Key(id) => {
                 if let Some(b) = B::from_id(id) {
                     self.press(b);
+                    // Upstream's FlyoutButton_Clicked
+                    // (CalculatorScientificOperators.xaml.cs:82), every key
+                    // of the Trigonometry and Function flyouts': the trig
+                    // flyout's 2nd and hyp are unchecked, whichever key it
+                    // was (a trig function or not), and the flyout closes.
+                    if matches!(self.popup, Some(Popup::Trig | Popup::Functions)) {
+                        self.trig_inv = false;
+                        self.hyp = false;
+                    }
                     if matches!(
                         self.popup,
                         Some(Popup::Trig | Popup::Functions | Popup::Bitwise)
@@ -955,18 +984,7 @@ impl CalcPage {
                 );
                 f.card(r, 12.0);
                 let cur = self.vm.shift_mode();
-                for (i, (mode, label)) in [
-                    (ShiftMode::Arithmetic, "Arithmetic shift"),
-                    (ShiftMode::Logical, "Logical shift"),
-                    (ShiftMode::Rotate, "Rotate circular shift"),
-                    (
-                        ShiftMode::RotateThroughCarry,
-                        "Rotate through carry circular shift",
-                    ),
-                ]
-                .into_iter()
-                .enumerate()
-                {
+                for (i, (mode, label)) in SHIFT_MODES.into_iter().enumerate() {
                     let row = Rect::new(r.x + 6.0, r.y + 6.0 + i as f32 * 36.0, r.w - 12.0, 36.0);
                     f.row(
                         id(("shift", i)),

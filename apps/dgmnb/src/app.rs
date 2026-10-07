@@ -309,6 +309,12 @@ pub struct App {
     /// While the page's popup is open, the focus to give back when it
     /// closes ([`popup_focus`]).
     popup_return: Option<Option<ui::Id>>,
+    /// The event in hand is the pointer's (a click's release, a right
+    /// click): a popup it opens leaves the focus where it is.
+    pointer_event: bool,
+    /// A popup the keys or assistive technology just opened: the next
+    /// frame puts the focus in it ([`ui::first_focus`]).
+    focus_into_popup: bool,
     toasts: Vec<(String, Instant)>,
     dev: Dev,
 }
@@ -388,6 +394,8 @@ impl App {
             date: None,
             graph: None,
             popup_return: None,
+            pointer_event: false,
+            focus_into_popup: false,
             toasts: Vec::new(),
             dev: Dev {
                 keys: env("KEYS").map(|k| k.replace("\\n", "\n")),
@@ -587,11 +595,17 @@ impl App {
     }
 
     /// Runs `event`, giving the focus back to what had it when the page's
-    /// popup opened once it closes ([`popup_focus`]).
+    /// popup opened once it closes ([`popup_focus`]). A popup the keys or
+    /// assistive technology open gets the focus on its first control,
+    /// one the pointer opens doesn't (`focus_into_popup`).
     fn with_popup_focus<R>(&mut self, event: impl FnOnce(&mut Self) -> R) -> R {
         let (was, before) = (self.page_popup_open(), self.input.focus);
         let r = event(self);
         let now = self.page_popup_open();
+        if !was && now && !self.pointer_event {
+            self.focus_into_popup = true;
+            self.redraw();
+        }
         let focus = popup_focus(was, now, before, self.input.focus, &mut self.popup_return);
         if focus != self.input.focus {
             self.input.focus = focus;
@@ -849,6 +863,25 @@ impl App {
             {
                 self.input.focus = None;
             }
+            // A popup the keys or assistive technology opened has the
+            // focus on its first control (or the radio chosen), its ring
+            // drawn, as GTK's popovers and upstream's flyouts: a screen
+            // reader reads it. Unless its page put the focus in it already
+            // (the unit picker's search field).
+            if std::mem::take(&mut self.focus_into_popup)
+                && self.page_popup_open()
+                && self.live_focus().is_none()
+            {
+                let preferred = match self.mode.page() {
+                    PageKind::Calculator => self.calc.as_ref().and_then(CalcPage::popup_focus),
+                    _ => None,
+                };
+                if let Some(f) = ui::first_focus(ui::active_layer(&self.hits), preferred) {
+                    self.input.focus = Some(f);
+                    self.input.focus_visible = true;
+                    again = true;
+                }
+            }
             self.dev.frames += 1;
             if let Some(nodes) = nodes {
                 let title = format!("{} — {}", APP_NAME, self.mode.title());
@@ -1089,7 +1122,9 @@ impl App {
                 .find(|h| h.id == p && h.sense == Sense::Click)
                 .and_then(|h| h.msg.clone())
         {
+            self.pointer_event = true;
             self.update(el, msg);
+            self.pointer_event = false;
         }
         if let Some(p) = pressed {
             self.page_drag(p, 0.0, 0.0, 0.0, 0.0, false);
@@ -1994,6 +2029,7 @@ impl ApplicationHandler<UserEvent> for App {
                     (MouseButton::Left, ElementState::Pressed) => self.pointer_pressed(el, x, y),
                     (MouseButton::Left, ElementState::Released) => self.pointer_released(el),
                     (MouseButton::Right, ElementState::Pressed) => {
+                        self.pointer_event = true;
                         self.with_popup_focus(|app| {
                             if app.mode.page() == PageKind::Calculator
                                 && !app.settings
@@ -2006,6 +2042,7 @@ impl ApplicationHandler<UserEvent> for App {
                                 }
                             }
                         });
+                        self.pointer_event = false;
                     }
                     _ => {}
                 }
