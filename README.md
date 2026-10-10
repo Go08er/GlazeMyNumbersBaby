@@ -392,11 +392,13 @@ CI also runs checks that need more than `cargo test --workspace`:
   `ListViewBase::OnKeyDown`, `Slider`'s `KeyDown` in
   `SliderKeyProcess.h`), what else is held makes no difference to a
   focused control's own keys: Enter with Shift, Ctrl or Alt, and Space
-  with Shift or Ctrl, activate a button, a toggle or a list item and
-  submit a text field as the bare key does, a calculator key ignores
-  Enter, only the bare Enter is "=", and a slider moves by the arrows,
-  Home and End with Shift, Ctrl or Alt held as without (Ctrl+Right is one
-  step; Ctrl+Home on a focused slider is its Home). What differs:
+  with Shift or Ctrl, activate a button, a toggle or a list item as the
+  bare key does; Enter with any of them submits a text field (Space is
+  typed into one, with Shift too, and does nothing there with Ctrl); a
+  calculator key ignores Enter, and only the bare Enter is "="; a slider
+  moves by the arrows, Home and End with Shift, Ctrl or Alt held as
+  without (Ctrl+Right is one step; Ctrl+Home on a focused slider is its
+  Home). What differs:
   **Alt+Space** is never a control's key. Windows opens the window's menu
   with it before the original has the key (`ListViewBase::OnKeyDown`
   skips it for that reason); here it is left to the window manager the
