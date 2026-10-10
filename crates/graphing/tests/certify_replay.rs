@@ -1160,6 +1160,38 @@ const PLANTS: &[Plant] = &[
         "the zero function supplied as f's simplified form",
         |v| v["evaluated"] = serde_json::json!("f = 0"),
     ),
+    // The audit's (the same family: a number narrowed on its way into a
+    // proof). A rational limit that is no double, listed as a point: the
+    // double a written integer rounds to (2⁵³ + 1 read as 2⁵³) …
+    (
+        "(9007199254740993x+1)/(x+1)",
+        "a horizontal asymptote one below the exact limit 2⁵³ + 1",
+        |v| {
+            rational_horizontal(
+                v,
+                "horizontal",
+                (9007199254740992.0, 9007199254740992.0),
+                "9007199254740993",
+            )
+        },
+    ),
+    // … or the double the exact limit rounds to (1/3 as 0.333…3148).
+    (
+        "(x+1)/(3x)",
+        "a horizontal asymptote at the double nearest the exact limit 1/3",
+        |v| {
+            let d = 1.0 / 3.0;
+            rational_horizontal(v, "horizontal", (d, d), &format!("in [{d:?}, {d:?}]"))
+        },
+    ),
+    (
+        "(x+1)/(3x)",
+        "a horizontal asymptote at the double nearest 1/3, the limit written exactly",
+        |v| {
+            let d = 1.0 / 3.0;
+            rational_horizontal(v, "horizontal", (d, d), "1/3")
+        },
+    ),
 ];
 
 /// A plant into a certificate made in an angle unit.
@@ -1966,4 +1998,179 @@ fn the_least_integer_exponent_replays() {
     c["hi"] = serde_json::json!(2.0);
     *value_of(&mut planted, "y_intercept") = serde_json::json!({"lo": 2.0, "hi": 2.0});
     assert!(rejected(&planted).is_some(), "{src}: f(0) = 2 not caught");
+}
+
+/// The audit of review 18: tan at a whole number of quarter turns (in
+/// degrees and grads) decided its parity from a double cast to i64. Past
+/// 2⁵³ the double is the wrong whole number (90·(2⁵³ + 1)° is an odd
+/// quarter turn, a pole, read as an even one: tan = 0, defined); past 2⁶³
+/// the cast saturates to an odd number (9·10²¹° is 10²⁰ quarter turns, tan
+/// = 0, read as a pole); and past the working precision a quotient that is
+/// no whole number rounds to one (2²⁰⁰° is no quarter turn).
+#[test]
+fn tan_at_a_quarter_turn_past_the_doubles() {
+    use replay::iv::{self, Iv, Unit};
+    use rug::{Float, Integer};
+    iv::init();
+    let at = |n: Integer| Iv::point(Float::with_val(iv::prec(), n));
+    let two53 = Integer::from(1) << 53u32;
+    for (unit, quarter) in [(Unit::Degrees, 90), (Unit::Grads, 100)] {
+        iv::set_prec(160);
+        // Odd quarter turns: poles.
+        for k in [
+            Integer::from(1),
+            Integer::from(-3),
+            two53.clone() + 1,
+            -two53.clone() - 1,
+            (Integer::from(1) << 80u32) + 1,
+        ] {
+            let v = iv::tan(&at(k.clone() * quarter), unit);
+            assert!(v.empty, "tan at {k} quarter turns [{unit:?}]: {v:?}");
+        }
+        // Even quarter turns: 0 exactly.
+        for k in [
+            Integer::from(0),
+            Integer::from(2),
+            two53.clone() + 2,
+            Integer::from(Integer::u_pow_u(10, 20)),
+            -(Integer::from(1) << 80u32),
+        ] {
+            let v = iv::tan(&at(k.clone() * quarter), unit);
+            assert!(
+                v.def && v.is_exactly(0.0),
+                "tan at {k} quarter turns [{unit:?}]: {v:?}"
+            );
+        }
+        // No whole number of quarter turns, though the quotient rounds to
+        // one at 160 bits (2²⁰⁰° is 256° and 176 grads, turns aside):
+        // neither a pole nor 0 there, and decided with more bits.
+        let v = iv::tan(&at(Integer::from(1) << 200u32), unit);
+        assert!(
+            !v.empty && !(v.def && v.is_exactly(0.0)),
+            "tan at 2²⁰⁰ [{unit:?}]: {v:?}"
+        );
+        iv::set_prec(640);
+        let v = iv::tan(&at(Integer::from(1) << 200u32), unit);
+        assert!(v.def && v.ne0(), "tan at 2²⁰⁰ [{unit:?}], 640 bits: {v:?}");
+    }
+    iv::set_prec(160);
+    // And through the evaluator, from a typed number.
+    let (e, lits) = read("tan(x+810647932926689370)");
+    let ctx = replay::eval::Ctx {
+        unit: Unit::Degrees,
+        lits: &lits,
+        vars: &[],
+    };
+    let s = replay::eval::series(&e, 0.0, 0.0, 0, &ctx);
+    assert!(s[0].empty, "tan(90·(2⁵³ + 1)°): {:?}", s[0]);
+}
+
+/// The audit of review 18: what a certificate writes is read whole or
+/// refused. A path names a child by a byte (the 257th argument of a max was
+/// read as the first), a Taylor order is one the certifier writes, a power
+/// of π in a fact is a small one, and a whole number in a fact is the one
+/// written (not the double it rounds to).
+#[test]
+fn certificate_fields_out_of_range_are_refused() {
+    let beyond = |path: serde_json::Value| {
+        replay::claim(&serde_json::json!({"Beyond": {
+            "x": {"a": 0.0, "b": 1.0},
+            "of": {"G": {"path": path, "via": "Itself"}},
+            "c": 0.0, "above": true}}))
+    };
+    assert!(beyond(serde_json::json!([0, 255])).is_ok());
+    for bad in [
+        serde_json::json!([256]),
+        serde_json::json!([0, 4294967296u64]),
+        serde_json::json!([-1]),
+        serde_json::json!([0.5]),
+    ] {
+        assert!(beyond(bad.clone()).is_err(), "path {bad} read");
+    }
+    let touch = |order: serde_json::Value| {
+        replay::claim(&serde_json::json!({"Touch": {
+            "x": {"a": 0.0, "b": 1.0}, "of": {"F": "F0"},
+            "c": 0.0, "at": 0.5, "order": order, "above": true}}))
+    };
+    let chain = |order: serde_json::Value| {
+        replay::claim(&serde_json::json!({"TailChain": {
+            "side": "Right", "from": 1.0, "of": {"F": "F0"},
+            "c": 0.0, "above": true, "order": order}}))
+    };
+    assert!(touch(serde_json::json!(2)).is_ok() && chain(serde_json::json!(3)).is_ok());
+    for bad in [
+        serde_json::json!(256),
+        serde_json::json!(1u64 << 40),
+        serde_json::json!(-1),
+    ] {
+        assert!(touch(bad.clone()).is_err(), "Touch order {bad} read");
+        assert!(chain(bad.clone()).is_err(), "TailChain order {bad} read");
+    }
+    replay::iv::init();
+    replay::iv::set_prec(160);
+    assert!(replay::claims::pi_q("1/2·π^2").is_some());
+    assert!(replay::claims::pi_q("1/2·π^2147483647").is_none());
+    assert!(replay::claims::pi_q("1/2·π^-2147483648").is_none());
+    // A whole number past 2⁵³ in a fact is enclosed, not rounded to a
+    // double; a tree of it for the exact algebra is not made at all.
+    let v = replay::claims::pi_q("9007199254740993").unwrap();
+    assert!(v.lo == v.hi && v.lo > 9007199254740992.0 && v.lo < 9007199254740994.0);
+    let v = replay::claims::pi_q("9007199254740993/3").unwrap();
+    assert!(v.lo == 3002399751580331.0 && v.hi == 3002399751580331.0);
+    let v = replay::claims::pi_q("-1/3").unwrap();
+    assert!(v.lo < v.hi && v.hi < -0.333 && v.lo > -0.334);
+    assert!(replay::claims::pi_q("1/0").is_none_or(|v| v.empty));
+    assert!(replay::algebra::piq_expr(9007199254740992, 1, 0).is_some());
+    assert!(replay::algebra::piq_expr(9007199254740993, 1, 0).is_none());
+    assert!(replay::algebra::piq_expr(1, -9007199254740993, 1).is_none());
+    assert!(replay::algebra::piq_expr(i64::MIN, 1, 0).is_none());
+}
+
+/// The audit of review 18: the least period's proof tries P/q for each
+/// prime q up to a bound read off the certificate (P over a family's
+/// period, or over f′'s bound). A family period of 10⁻³⁰⁰ made that bound
+/// 3·10³⁰⁰, cast to u64::MAX primes to sieve: the replay never returned.
+/// Past what the certifier itself tries the row is not confirmed.
+#[test]
+fn a_period_bound_past_any_sieve_is_refused() {
+    let mut v = certificate("tan(x)");
+    assert_eq!(rejected(&v), None);
+    let fam = &mut value_of(&mut v, "domain")["excluded"][0]["period"];
+    assert!(
+        fam["lo"].is_number(),
+        "tan(x)'s domain lists no family: retarget"
+    );
+    fam["lo"] = serde_json::json!(1e-300);
+    let r = replay::replay(&v).expect("replayed");
+    let period = r.rows.iter().find(|r| r.name == "period").unwrap();
+    assert!(
+        period.problems.iter().any(|p| p.contains("past any sieve")),
+        "{:?}",
+        period.problems
+    );
+    // A family period not shown positive bounds nothing either (P over a
+    // negative low end was a negative bound: no prime to try, and the
+    // least period stood unchecked), nor does a period not shown positive.
+    for (lo, row_lo) in [
+        (-1.0, None),
+        (0.0, None),
+        (f64::NAN, None),
+        (1.0, Some(-4.0)),
+    ] {
+        let mut v = certificate("tan(x)");
+        value_of(&mut v, "domain")["excluded"][0]["period"]["lo"] = if lo.is_nan() {
+            serde_json::json!("nan")
+        } else {
+            serde_json::json!(lo)
+        };
+        if let Some(l) = row_lo {
+            value_of(&mut v, "period")["lo"] = serde_json::json!(l);
+        }
+        let r = replay::replay(&v).expect("replayed");
+        let period = r.rows.iter().find(|r| r.name == "period").unwrap();
+        assert!(
+            !period.problems.is_empty(),
+            "a family period from {lo}, the period from {row_lo:?}: the least period stands"
+        );
+    }
 }

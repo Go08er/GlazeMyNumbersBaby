@@ -31,6 +31,11 @@ use graphing::ast::{BinOp, Constant, Expr, Func};
 
 /// Orders kept: below t^TOP.
 const TOP: i32 = 4;
+/// The largest order (either way) an expansion may have: past it nothing
+/// is expanded. The orders are i32s, added where expansions are multiplied
+/// and shifted; x^2147483647·x^2147483647·x³ wrapped to order −1, a line's
+/// (review 18's audit). Any one typed power below 2²⁴ still expands.
+const MAX_ORDER: u32 = 1 << 24;
 /// Terms of a composed function's series.
 const TERMS: usize = 5;
 
@@ -310,7 +315,9 @@ impl<'a> Tail<'a> {
         if mk % d != 0 {
             return None;
         }
-        let e = i32::try_from(mk / d).ok()?;
+        let e = i32::try_from(mk / d)
+            .ok()
+            .filter(|e| e.unsigned_abs() <= MAX_ORDER)?;
         let negative = c.lt(0.0) != (self.sgn(m) < 0.0);
         if negative && d % 2 == 0 {
             return None;
@@ -374,7 +381,15 @@ impl<'a> Tail<'a> {
         Some(Lp::only_rest(TOP, r))
     }
 
+    /// The expansion of `e` over the tail, its orders within
+    /// [`MAX_ORDER`]: each node's are sums of a few of its operands', so
+    /// none overflows.
     pub fn of(&self, e: &Expr) -> Option<Lp> {
+        self.unbounded(e)
+            .filter(|x| x.lo.unsigned_abs() <= MAX_ORDER && x.p.unsigned_abs() <= MAX_ORDER)
+    }
+
+    fn unbounded(&self, e: &Expr) -> Option<Lp> {
         if !contains_x(e) {
             let v = self.fx.series_iv(e, Iv::of(0.0), 0)[0].clone();
             if !ok(&v) || !v.def {

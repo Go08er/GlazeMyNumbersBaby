@@ -676,7 +676,7 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
         "parity" => parity(rc, all, results, &mut out),
         "period" => period(fx, rc, all, &mut out),
         "vertical" => vertical(rc, all, &mut out),
-        "horizontal" => horizontal(rc, all, &mut out),
+        "horizontal" => horizontal(fx, rc, all, &mut out),
         "oblique" => oblique(rc, all, &mut out),
         "range" => range(fx, rc, all, &mut out),
         _ => Ok(()),
@@ -1487,7 +1487,12 @@ fn edges(fx: &Fx, e: &graphing::ast::Expr, path: &mut Vec<u8>, out: &mut Vec<Edg
         _ => Vec::new(),
     };
     for (i, k) in kids.into_iter().enumerate() {
-        path.push(i as u8);
+        // A path names a child by a byte: the edges under a child past the
+        // 256th (of a min or max) have no path, and are left out, not
+        // found under another child's (the 257th's index wrapped to the
+        // first's: review 18's audit). Fewer edges show less, never more.
+        let Ok(i) = u8::try_from(i) else { break };
+        path.push(i);
         edges(fx, k, path, out);
         path.pop();
     }
@@ -1690,6 +1695,16 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
         return Ok(());
     }
     let p = enc(&rc.value)?;
+    // The least period is a positive number: a negative shift f repeats
+    // under is no least period, and below it the bound n on a smaller one
+    // was negative, with no prime to try (review 18's audit).
+    if p.lo.is_nan() || p.lo <= 0.0 {
+        out.problems.push(format!(
+            "the period [{:e}, {:e}] is not shown positive",
+            p.lo, p.hi
+        ));
+        return Ok(());
+    }
     // A period: the simplifier's fact (weak), then the least: every
     // P/q for a prime q up to the bound n shown no period.
     let fact = rc.claims.iter().find_map(|c| match c {
@@ -1803,14 +1818,27 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
                     .collect()
             })
             .unwrap_or_default();
-        if fams.len() != 1 {
+        // (A family period not shown positive bounds nothing: P over a
+        // negative low end was a negative bound, with no prime to try.)
+        if fams.len() != 1 || fams[0].lo.is_nan() || fams[0].lo <= 0.0 {
             out.problems
                 .push("no bound on a smaller period from the claims".into());
             return Ok(());
         }
         (p.hi / fams[0].lo * (1.0 + 1e-12)).floor()
     };
-    // Each prime q ≤ n: two values, at x and x + P/q, apart.
+    // A bound the certifier itself never passes (10⁶, and no NaN): one read
+    // off the claims past it is no bound a sieve reaches. (Review 18's
+    // audit: cast to u64, a family period of 10⁻³⁰⁰ under P made it 2⁶⁴ − 1
+    // primes to try, and the replay never returned.)
+    if n.is_nan() || n > 1e6 {
+        out.problems.push(format!(
+            "a smaller period is ruled out only by the primes to {n:e}: past any sieve"
+        ));
+        return Ok(());
+    }
+    // Each prime q ≤ n: two values, at x and x + P/q, apart. (n ≤ 10⁶, a
+    // whole number or below 2: exact as a u64.)
     let primes: Vec<u64> = (2..=(n.max(1.0) as u64))
         .filter(|&q| (2..).take_while(|d| d * d <= q).all(|d| q % d != 0))
         .collect();
@@ -2406,7 +2434,7 @@ fn not_affine(claims: &[Claim]) -> bool {
     })
 }
 
-fn horizontal(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
+fn horizontal(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
     let _ = all;
     // A line's graph is the line itself: no asymptote (a constant, m·x +
     // b, holes aside). One listed needs f shown to be no constant.
@@ -2452,17 +2480,17 @@ fn horizontal(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), 
             matches!(c, Claim::Simplifier(f) if f.starts_with(claims::RATIONAL) && f.ends_with(&format!("as x → {at}")))
         });
         if rational {
-            // N/D's limit, exactly (its fact checked so): the listed one.
-            let fact = rc.claims.iter().find_map(|c| match c {
-                Claim::Simplifier(f)
-                    if f.starts_with(claims::RATIONAL) && f.ends_with(&format!("as x → {at}")) =>
-                {
-                    fact_limit(f)
-                }
-                _ => None,
-            });
-            match fact {
-                Some(v) if y.lo <= v.hi && v.lo <= y.hi => {}
+            // N/D's limit, exactly (its fact checked so): the listed
+            // enclosure holds it. The limit is the replay's own, from N/D's
+            // degrees and leading coefficients, compared as a rational:
+            // read back from the fact's text as doubles and only met with
+            // the listing, a limit that is no double was listed as the
+            // double beside it (2⁵³ for 2⁵³ + 1, 0.333…3148 for 1/3: review
+            // 18's audit).
+            let limit = super::algebra::Rat::of(&fx.f, &fx.lits, &fx.vars, fx.unit)
+                .and_then(|r| r.limit(side == Side::Right).ok());
+            match limit {
+                Some(l) if l >= y.lo && l <= y.hi => {}
                 _ => out.problems.push(format!(
                     "the limit at {at} is listed in [{:e}, {:e}], not N/D's",
                     y.lo, y.hi

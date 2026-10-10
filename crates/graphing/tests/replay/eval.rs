@@ -61,53 +61,60 @@ fn superscript_digit(c: char) -> Option<char> {
 /// rounded to an integer, 10^e ≤ q < 10^(e+1)), apart from the lexer's
 /// digit-string rounding.
 pub fn round_sig(text: &str, n: u8) -> String {
+    // (A text no decimal, 0, or longer than its powers of ten are taken
+    // of, 2³² digits: as it is.)
+    round_sig_checked(text, n).unwrap_or_else(|| text.to_string())
+}
+
+fn round_sig_checked(text: &str, n: u8) -> Option<String> {
     use rug::{Integer, Rational};
     let t = match (text.starts_with('.'), text.ends_with('.')) {
         (true, _) => format!("0{text}"),
         (_, true) => format!("{text}0"),
         _ => text.to_string(),
     };
-    let Some(q) = super::exact::decimal(&t) else {
-        return text.to_string();
-    };
+    let q = super::exact::decimal(&t)?;
     if q == 0 {
-        return text.to_string();
+        return None;
     }
-    let ten = |k: i64| -> Rational {
-        let p = Rational::from(Integer::u_pow_u(10, k.unsigned_abs() as u32));
-        if k < 0 { Rational::from(1) / p } else { p }
+    // 10^k, the exponent's size converted with a check (never cut to its
+    // low 32 bits).
+    let ten = |k: i64| -> Option<Rational> {
+        let p = Rational::from(Integer::u_pow_u(10, u32::try_from(k.unsigned_abs()).ok()?));
+        Some(if k < 0 { Rational::from(1) / p } else { p })
     };
     // The decimal exponent, from the text, then made exact.
     let (int, frac) = t.split_once('.').unwrap_or((&t, ""));
     let int = int.trim_start_matches('0');
+    let len = |s: &str| i64::try_from(s.len()).ok();
     let mut e: i64 = if int.is_empty() {
-        -((frac.len() - frac.trim_start_matches('0').len()) as i64) - 1
+        -(len(frac)? - len(frac.trim_start_matches('0'))?) - 1
     } else {
-        int.len() as i64 - 1
+        len(int)? - 1
     };
-    while q < ten(e) {
+    while q < ten(e)? {
         e -= 1;
     }
-    while q >= ten(e + 1) {
+    while q >= ten(e + 1)? {
         e += 1;
     }
     let k = i64::from(n) - 1 - e;
     // `round` takes a tie away from zero.
-    let m: Integer = (q * ten(k)).round().numer().clone();
+    let m: Integer = (q * ten(k)?).round().numer().clone();
     // m·10^(−k) as a decimal.
     let digits = m.to_string();
+    let places = usize::try_from(k.unsigned_abs()).ok()?;
     if k <= 0 {
-        return format!("{digits}{}", "0".repeat(k.unsigned_abs() as usize));
+        return Some(format!("{digits}{}", "0".repeat(places)));
     }
-    let k = k as usize;
-    let padded = format!("{digits:0>width$}", width = k + 1);
-    let (i, f) = padded.split_at(padded.len() - k);
+    let padded = format!("{digits:0>width$}", width = places + 1);
+    let (i, f) = padded.split_at(padded.len() - places);
     let f = f.trim_end_matches('0');
-    if f.is_empty() {
+    Some(if f.is_empty() {
         i.to_string()
     } else {
         format!("{i}.{f}")
-    }
+    })
 }
 
 impl Lits {

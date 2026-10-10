@@ -307,6 +307,17 @@ fn xbox(v: &Value) -> Result<B, String> {
     Ok((rf(v, "a")?, rf(v, "b")?))
 }
 
+/// A Taylor order as the certifier writes one (a byte; its orders are 3 at
+/// most): a larger one is refused, not expanded to (the series' cost grows
+/// with its square).
+fn order(v: &Value) -> Result<usize, String> {
+    field(v, "order")?
+        .as_u64()
+        .and_then(|o| u8::try_from(o).ok())
+        .map(usize::from)
+        .ok_or_else(|| "bad order".into())
+}
+
 fn side(v: &Value) -> Result<Side, String> {
     match v.as_str() {
         Some("Left") => Ok(Side::Left),
@@ -325,11 +336,17 @@ fn subject(v: &Value) -> Result<Subject, String> {
         };
     }
     if let Some(g) = v.get("G") {
+        // (Each step a child's index, a byte: one past 255 is no path the
+        // replay follows, never its low byte, another child's.)
         let path = field(g, "path")?
             .as_array()
             .ok_or("path not an array")?
             .iter()
-            .map(|p| p.as_u64().map(|p| p as u8).ok_or("bad path"))
+            .map(|p| {
+                p.as_u64()
+                    .and_then(|p| u8::try_from(p).ok())
+                    .ok_or("bad path")
+            })
             .collect::<Result<Vec<u8>, _>>()?;
         let via = match field(g, "via")?.as_str() {
             Some("Itself") => Via::Itself,
@@ -387,7 +404,7 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
             of: of()?,
             c: rf(b, "c")?,
             at: rf(b, "at")?,
-            order: field(b, "order")?.as_u64().ok_or("bad order")? as usize,
+            order: order(b)?,
             above: bf(b, "above")?,
         },
         "Value" => Claim::Value {
@@ -414,7 +431,7 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
             of: of()?,
             c: rf(b, "c")?,
             above: bf(b, "above")?,
-            order: field(b, "order")?.as_u64().ok_or("bad order")? as usize,
+            order: order(b)?,
         },
         "TailValue" => Claim::TailValue {
             side: side(field(b, "side")?)?,
