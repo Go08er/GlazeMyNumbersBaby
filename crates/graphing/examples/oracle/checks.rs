@@ -30,15 +30,20 @@ pub struct Setting<'a> {
     pub unit: TrigUnit,
     pub parse: ParseOptions,
     pub vars: &'a dyn VariableValues,
+    /// Sample f at about a quarter of the points ([`samples`]): for a
+    /// tester that trades points for functions. The example's pool never
+    /// does.
+    pub sparse: bool,
 }
 
 impl Setting<'_> {
-    /// `unit`, the numbers exactly as typed, no sliders.
+    /// `unit`, the numbers exactly as typed, no sliders, every sample.
     pub fn of(unit: TrigUnit) -> Setting<'static> {
         Setting {
             unit,
             parse: ParseOptions::default(),
             vars: &(),
+            sparse: false,
         }
     }
 }
@@ -777,6 +782,8 @@ pub struct Finding {
     pub expr: String,
     pub detail: String,
     pub rank: f64,
+    /// The x the finding is about (NaN: the function as a whole).
+    pub at: f64,
     /// Not a contradiction: an answer sampling can neither confirm nor
     /// refute, or points the reference can't evaluate (listed, not
     /// failed).
@@ -790,7 +797,12 @@ pub struct Ctx<'a> {
 
 impl Ctx<'_> {
     pub fn fail(&mut self, class: &'static str, detail: String) {
-        self.fail_at(class, 0.0, detail);
+        self.push_at(class, 0.0, f64::NAN, detail, false);
+    }
+
+    /// [`Ctx::fail`] about the point x (ranked as `fail` ranks: first).
+    pub fn fail_point(&mut self, class: &'static str, x: f64, detail: String) {
+        self.push_at(class, 0.0, x, detail, false);
     }
 
     pub fn fail_at(&mut self, class: &'static str, x: f64, detail: String) {
@@ -803,11 +815,16 @@ impl Ctx<'_> {
 
     /// Keeps the three witnesses per class and function nearest the origin.
     pub fn push(&mut self, class: &'static str, x: f64, detail: String, note: bool) {
+        self.push_at(class, x.abs(), x, detail, note);
+    }
+
+    fn push_at(&mut self, class: &'static str, rank: f64, at: f64, detail: String, note: bool) {
         self.out.push(Finding {
             class,
             expr: self.expr.to_string(),
             detail,
-            rank: x.abs(),
+            rank,
+            at,
             note,
         });
         let mut mine: Vec<usize> = (0..self.out.len())
@@ -870,19 +887,26 @@ pub fn probes(p: f64, window: bool, xs: &mut Vec<f64>) {
     }
 }
 
-pub fn samples(f: &F, k: &KeyGraphFeatures, extra: &[f64], wide: bool) -> Vec<f64> {
+pub fn samples(f: &F, k: &KeyGraphFeatures, extra: &[f64], wide: bool, sparse: bool) -> Vec<f64> {
     let mut xs: Vec<f64> = Vec::new();
-    for i in -640..=640 {
-        xs.push(i as f64 / 64.0);
+    // (Sparse: steps of 1/16 to ±10, 1/2 to ±100, integers to ±400, 8 a
+    // decade, and 16 constants.)
+    let (fine, coarse, whole, decade, most) = if sparse {
+        (16, 2, 400, 8, 16)
+    } else {
+        (64, 4, 2000, 24, 64)
+    };
+    for i in -10 * fine..=10 * fine {
+        xs.push(i as f64 / fine as f64);
     }
-    for i in -400..=400 {
-        xs.push(i as f64 / 4.0);
+    for i in -100 * coarse..=100 * coarse {
+        xs.push(i as f64 / coarse as f64);
     }
-    for i in -2000..=2000 {
+    for i in -whole..=whole {
         xs.push(i as f64);
     }
-    for e in (-8 * 24)..=(15 * 24) {
-        let v = 10f64.powf(e as f64 / 24.0);
+    for e in (-8 * decade)..=(15 * decade) {
+        let v = 10f64.powf(e as f64 / decade as f64);
         xs.push(v);
         xs.push(-v);
     }
@@ -895,7 +919,7 @@ pub fn samples(f: &F, k: &KeyGraphFeatures, extra: &[f64], wide: bool) -> Vec<f6
     constants(&f.ast, f.unit, &mut cs);
     cs.sort_by(f64::total_cmp);
     cs.dedup();
-    for &c in cs.iter().take(64) {
+    for &c in cs.iter().take(most) {
         probes(c, true, &mut xs);
         probes(-c, true, &mut xs);
     }
@@ -952,30 +976,47 @@ pub fn check_in(
     wide: bool,
     plant: &dyn Fn(&mut KeyGraphFeatures),
 ) -> Vec<Finding> {
-    let mut cx = Ctx {
-        expr,
-        out: Vec::new(),
-    };
-    let unit = set.unit;
     let (eq, f, sliders) = match load(expr, set) {
         Ok(l) => l,
-        Err(NoFunction::NotCompiled) => return cx.out,
+        Err(NoFunction::NotCompiled) => return Vec::new(),
         Err(NoFunction::Parse) => {
+            let mut cx = Ctx {
+                expr,
+                out: Vec::new(),
+            };
             cx.fail("does-not-parse", String::new());
             return cx.out;
         }
     };
     let opts = CompileOptions {
-        trig_unit: unit,
+        trig_unit: set.unit,
         variables: &sliders,
     };
     let mut k = analyze(&eq, &opts);
     plant(&mut k);
+    check_analysed(expr, &f, &k, extra, wide, set.sparse)
+}
+
+/// The checks of `k`, the analysis of the function `f` ([`load`]) that
+/// `expr` names.
+pub fn check_analysed(
+    expr: &str,
+    f: &F,
+    k: &KeyGraphFeatures,
+    extra: &[f64],
+    wide: bool,
+    sparse: bool,
+) -> Vec<Finding> {
+    let mut cx = Ctx {
+        expr,
+        out: Vec::new(),
+    };
+    let unit = f.unit;
     if k.analysis_error != AnalysisError::NoError {
         return cx.out;
     }
     let d = &k.data;
-    let xs = samples(&f, &k, extra, wide);
+    let xs = samples(f, k, extra, wide, sparse);
     let mut centres = extra.to_vec();
     constants(&f.ast, f.unit, &mut centres);
     let vals: Vec<Val> = xs.iter().map(|&x| f.at(x)).collect();
@@ -1009,11 +1050,13 @@ pub fn check_in(
     }
 
     // Y-intercept.
-    if definite(&k, flags::Y_INTERCEPT) {
+    if definite(k, flags::Y_INTERCEPT) {
         let v0 = f.at(0.0);
         match (d.y_intercept, v0.k) {
             (None, K::Def) => cx.fail("y-intercept-missing", format!("f(0)={:e}", v0.v)),
-            (Some(y), K::Undef) => cx.fail("y-intercept-undefined", format!("claimed {y}")),
+            (Some(y), K::Undef) => {
+                cx.fail_point("y-intercept-undefined", 0.0, format!("claimed {y}"))
+            }
             (Some(y), K::Def) => {
                 // f(0) is one exact value: 0 only if it is 0, or within its
                 // rounding of 0 among the normal doubles.
@@ -1039,7 +1082,7 @@ pub fn check_in(
     }
 
     // Range.
-    if definite(&k, flags::RANGE) && !d.range.is_empty() {
+    if definite(k, flags::RANGE) && !d.range.is_empty() {
         for (x, v) in xs.iter().zip(&vals) {
             if !v.def() || d.range.iter().any(|i| in_interval(i, v.v)) {
                 continue;
@@ -1074,7 +1117,7 @@ pub fn check_in(
         |e: f64| 1e-12 * e.abs() + slacks.iter().find(|s| s.0 == e).map_or(0.0, |s| s.1);
 
     // Domain.
-    if definite(&k, flags::DOMAIN) && !d.domain.is_empty() {
+    if definite(k, flags::DOMAIN) && !d.domain.is_empty() {
         for (x, v) in xs.iter().zip(&vals) {
             if !(v.def() || v.k == K::Undef) || (d.period.is_some() && x.abs() > 1e6) {
                 continue;
@@ -1112,7 +1155,7 @@ pub fn check_in(
                 // A copy k periods out is rounded by about k·ulp(P).
                 let kp = (j as f64 - 2.0).abs() * if fam.period.is_some() { 1.0 } else { 0.0 };
                 let slack = ((kp * 4.0 * ulp(p)) / ulp(e).max(f64::MIN_POSITIVE)).min(1e6) as i64;
-                if let Some(v) = exclusion_unsupported(&f, e, slack) {
+                if let Some(v) = exclusion_unsupported(f, e, slack) {
                     cx.fail_at(
                         "excluded-point-defined",
                         e,
@@ -1130,8 +1173,22 @@ pub fn check_in(
     // Zeros.
     let mut poles: Vec<Family> = d.vertical_asymptotes.clone();
     poles.extend(d.excluded.iter().copied());
+    // An open end of the domain is a point the panel says f is undefined
+    // at (a hole or a pole written as two pieces, with the asymptotes
+    // unknown): a change of sign across it is no crossing to report
+    // missing. (The domain's own checks are the judge of the end.)
+    let open_ends: Vec<Family> = if definite(k, flags::DOMAIN) && d.period.is_none() {
+        d.domain
+            .iter()
+            .flat_map(|i| [i.lo, i.hi])
+            .filter(|b| b.value.is_finite() && !b.closed)
+            .map(|b| Family::single(b.value))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let zero_points =
-        definite(&k, flags::ZEROS) && !(d.zeros.is_empty() && !k.x_intercept.is_empty());
+        definite(k, flags::ZEROS) && !(d.zeros.is_empty() && !k.x_intercept.is_empty());
     if zero_points {
         for z in &d.zeros {
             for x in members(z) {
@@ -1150,14 +1207,14 @@ pub fn check_in(
         (flags::MINIMA, &d.minima, 1.0, "minimum"),
         (flags::MAXIMA, &d.maxima, -1.0, "maximum"),
     ] {
-        if !definite(&k, flag) {
+        if !definite(k, flag) {
             continue;
         }
         for (fam, y) in list {
             for x in members(fam) {
                 let v = f.at(x);
                 if v.k == K::Undef {
-                    cx.fail("extremum-undefined", format!("{name} ({x:e}, {y})"));
+                    cx.fail_point("extremum-undefined", x, format!("{name} ({x:e}, {y})"));
                     continue;
                 }
                 if !v.def() {
@@ -1236,7 +1293,7 @@ pub fn check_in(
     }
 
     // Parity.
-    if definite(&k, flags::PARITY) && matches!(k.parity, Parity::Odd | Parity::Even) {
+    if definite(k, flags::PARITY) && matches!(k.parity, Parity::Odd | Parity::Even) {
         let odd = k.parity == Parity::Odd;
         for (x, v) in xs.iter().zip(&vals) {
             if *x <= 0.0 {
@@ -1278,7 +1335,7 @@ pub fn check_in(
             {
                 // Defined on one side only, and not just at a boundary.
                 let (u, e) = if v.def() { (-x, *x) } else { (*x, -x) };
-                let edge = defined_nearby(&f, u) || (-4..=4).any(|j| !f.at(step(e, j)).def());
+                let edge = defined_nearby(f, u) || (-4..=4).any(|j| !f.at(step(e, j)).def());
                 if !edge {
                     cx.fail_at(
                         "parity-witness",
@@ -1291,7 +1348,7 @@ pub fn check_in(
     }
 
     // Period.
-    if definite(&k, flags::PERIODICITY)
+    if definite(k, flags::PERIODICITY)
         && k.periodicity_direction == Periodicity::Periodic
         && let Some(p) = d.period
     {
@@ -1331,7 +1388,7 @@ pub fn check_in(
                         format!("P={p:e}: f({x:e}) = {:e}, f(x+P) = {:e}", v.v, w.v),
                     );
                 }
-            } else if w.k == K::Undef && !defined_nearby(&f, y) {
+            } else if w.k == K::Undef && !defined_nearby(f, y) {
                 cx.fail_at(
                     "period-witness",
                     *x,
@@ -1342,7 +1399,7 @@ pub fn check_in(
     }
 
     // Monotonicity.
-    if definite(&k, flags::MONOTONE_INTERVALS) && !d.monotonicity.is_empty() {
+    if definite(k, flags::MONOTONE_INTERVALS) && !d.monotonicity.is_empty() {
         let mut breaks: Vec<f64> = Vec::new();
         for fam in d.vertical_asymptotes.iter().chain(&d.excluded) {
             breaks.extend(members(fam));
@@ -1414,12 +1471,12 @@ pub fn check_in(
             .ceil() as i32
             + 2;
         let mut lines: Vec<(f64, f64, AsymptoteSide, &str, i32)> = Vec::new();
-        if definite(&k, flags::HORIZONTAL_ASYMPTOTES) {
+        if definite(k, flags::HORIZONTAL_ASYMPTOTES) {
             for &(c, side) in &d.horizontal_asymptotes {
                 lines.push((0.0, c, side, "horizontal", 12.max(reach)));
             }
         }
-        if definite(&k, flags::OBLIQUE_ASYMPTOTES) {
+        if definite(k, flags::OBLIQUE_ASYMPTOTES) {
             for &(m, b, side) in &d.oblique_asymptotes {
                 lines.push((m, b, side, "oblique", 6.max(reach)));
             }
@@ -1472,12 +1529,12 @@ pub fn check_in(
     // inflection), where it is told from rounding (64× the rounding bounds
     // of the three values): the same sign on both sides at every such
     // scale, at least three of them, is no inflection.
-    if definite(&k, flags::INFLECTION_POINTS) {
+    if definite(k, flags::INFLECTION_POINTS) {
         for (fam, y) in &d.inflection_points {
             for x in members(fam) {
                 let v = f.at(x);
                 if v.k == K::Undef {
-                    cx.fail("inflection-undefined", format!("({x:e}, {y})"));
+                    cx.fail_point("inflection-undefined", x, format!("({x:e}, {y})"));
                     continue;
                 }
                 if !v.cmp_ok() || !v.v.is_finite() {
@@ -1546,7 +1603,7 @@ pub fn check_in(
     // by 10⁶ times that tolerance (an invisible part of f with the longer period, below the
     // doubles' resolution, would make this a false alarm: none is known in
     // the pool).
-    if definite(&k, flags::PERIODICITY)
+    if definite(k, flags::PERIODICITY)
         && k.periodicity_direction == Periodicity::Periodic
         && let Some(p) = d.period
     {
@@ -1591,7 +1648,7 @@ pub fn check_in(
     // What sampling can't refute, noted when it isn't even supported:
     // "neither" parity without a witness against each of even and odd, and
     // "not periodic" for an f that keeps a circular period at every sample.
-    if definite(&k, flags::PARITY) && k.parity == Parity::Neither {
+    if definite(k, flags::PARITY) && k.parity == Parity::Neither {
         let (mut not_even, mut not_odd) = (false, false);
         for (x, v) in xs.iter().zip(&vals) {
             if *x <= 0.0 || (not_even && not_odd) {
@@ -1633,7 +1690,7 @@ pub fn check_in(
             );
         }
     }
-    if definite(&k, flags::PERIODICITY) && k.periodicity_direction == Periodicity::NotPeriodic {
+    if definite(k, flags::PERIODICITY) && k.periodicity_direction == Periodicity::NotPeriodic {
         let turn = match unit {
             TrigUnit::Radians => std::f64::consts::TAU,
             TrigUnit::Degrees => 360.0,
@@ -1676,7 +1733,7 @@ pub fn check_in(
     }
 
     // Poles, crossings and turns between the samples.
-    let va_definite = definite(&k, flags::VERTICAL_ASYMPTOTES);
+    let va_definite = definite(k, flags::VERTICAL_ASYMPTOTES);
     let pole_at = |xu: f64| -> bool {
         let u = ulp(xu).max(f64::MIN_POSITIVE);
         let dist = (1e-3 * xu.abs().max(1.0)).max(1e4 * u);
@@ -1870,7 +1927,7 @@ pub fn check_in(
         // from the expression's own numbers), or beside a reported pole, a
         // sign change can't be classified.
         let resolved = l.abs() <= 1e7 || centres.iter().any(|c| (l - c).abs() <= 1e4);
-        if !resolved || near(&poles, l, xs[i - 1], xs[i]) {
+        if !resolved || near(&poles, l, xs[i - 1], xs[i]) || near(&open_ends, l, xs[i - 1], xs[i]) {
             continue;
         }
         if crossing {
@@ -1908,7 +1965,7 @@ pub fn check_in(
             );
         }
     }
-    for (a, b) in merged(&f, &matched, Kind::Zero) {
+    for (a, b) in merged(f, &matched, Kind::Zero) {
         cx.fail_at(
             "zeros-merged",
             a,
@@ -1923,14 +1980,14 @@ pub fn check_in(
     // and must be a continuous turn; then it is a reported extremum (one
     // per reported point), and it tells whether an open range bound is
     // reached.
-    let range_definite = definite(&k, flags::RANGE) && !d.range.is_empty();
+    let range_definite = definite(k, flags::RANGE) && !d.range.is_empty();
     // Values of found turns, for the range's closed bounds.
     let mut turn_values: Vec<(f64, f64)> = Vec::new();
     for (flag, list, sign, name) in [
         (flags::MAXIMA, &d.maxima, 1.0, "maximum"),
         (flags::MINIMA, &d.minima, -1.0, "minimum"),
     ] {
-        let ext_definite = definite(&k, flag);
+        let ext_definite = definite(k, flag);
         if !(ext_definite || range_definite) {
             continue;
         }
@@ -2164,7 +2221,7 @@ pub fn check_in(
                 ),
             }
         }
-        for (a, b) in merged(&f, &matched, Kind::Turn(sign)) {
+        for (a, b) in merged(f, &matched, Kind::Turn(sign)) {
             cx.fail_at(
                 "extrema-merged",
                 a,
@@ -2212,7 +2269,7 @@ pub fn check_in(
             }
         }
     }
-    structure(&mut cx, &f, &k, &xs, &vals);
+    structure(&mut cx, f, k, &xs, &vals);
     cx.out
 }
 
@@ -2458,13 +2515,14 @@ pub fn same_intervals(a: &[Interval], b: &[Interval]) -> bool {
 
 pub fn same_families(a: &[Family], b: &[Family]) -> bool {
     a.len() == b.len()
-        && a.iter().zip(b).all(|(p, q)| {
-            same(p.x, q.x)
-                && match (p.period, q.period) {
-                    (Some(s), Some(t)) => same(s, t),
-                    (None, None) => true,
-                    _ => false,
-                }
+        && a.iter().zip(b).all(|(p, q)| match (p.period, q.period) {
+            // (One family whichever of its members stands for it: π/2 + kπ
+            // is −π/2 + kπ.)
+            (Some(s), Some(t)) => {
+                same(s, t) && (same(p.x, q.x) || same(p.x, q.x + ((p.x - q.x) / t).round() * t))
+            }
+            (None, None) => same(p.x, q.x),
+            _ => false,
         })
 }
 
@@ -2494,8 +2552,8 @@ pub fn check_pair_in(lhs: &str, rhs: &str, positive: bool, set: &Setting<'_>) ->
     let (kl, kr) = (analyze(&el, &opts(&sl)), analyze(&er, &opts(&sr)));
 
     // Values.
-    let mut xs = samples(&fl, &kl, &[], false);
-    xs.extend(samples(&fr, &kr, &[], false));
+    let mut xs = samples(&fl, &kl, &[], false, set.sparse);
+    xs.extend(samples(&fr, &kr, &[], false, set.sparse));
     xs.sort_by(f64::total_cmp);
     xs.dedup();
     for x in xs {
