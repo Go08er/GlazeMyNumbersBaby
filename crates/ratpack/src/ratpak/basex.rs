@@ -15,6 +15,9 @@
 //
 //-----------------------------------------------------------------------------
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use super::conv::{createnum, i32tonum};
 use super::num::{addnum, addnum_self, finish_division, lessnum, zernum};
 use super::{BASEX, BASEXPWR, CalcResult, Ctx, Number};
@@ -155,6 +158,100 @@ pub(crate) fn numpowi32x(proot: &mut Number, mut power: i32) -> CalcResult<()> {
     Ok(())
 }
 
+thread_local! {
+    /// Extension: see [`with_powers_kept`].
+    static POWERS: RefCell<Option<Powers>> = const { RefCell::new(None) };
+}
+
+/// Extension: the powers of a radix [`radix_power`] has worked out since
+/// [`with_powers_kept`] began.
+#[derive(Default)]
+struct Powers {
+    /// By radix: the radix to the power 2^k at index k, each the square of
+    /// the one before, as `numpowi32x` squares its root.
+    squares: HashMap<u32, Vec<Number>>,
+    /// By radix and power: the radix to that power.
+    powers: HashMap<(u32, i32), Number>,
+}
+
+/// Extension: runs `f` keeping the powers of a radix that the numbers read
+/// in it (`string_to_rat`) are scaled by, so that numbers read together
+/// share them, and forgets them afterwards. A hundred memory slots near
+/// 10^±9999 each need 10^9999 or a power near it, a number of 33,000 bits
+/// that takes fourteen squarings to reach, 1.2 million units of work each
+/// time. With a power worked out once, and its squares once, the hundred
+/// take 4 million units between them where they have one exponent and 21
+/// million where no two have the same.
+///
+/// It changes no number read: a power is the same `Number`, digit for
+/// digit, whether `numpowi32x` works it out or it was kept (multiplying
+/// reads nothing but its two numbers). What it changes is how much is
+/// worked out, and so [`work_done`](super::work_done): a caller that bounds
+/// a computation by that mustn't share powers across what it bounds, which
+/// is why they are kept only inside `f`.
+pub(crate) fn with_powers_kept<R>(f: impl FnOnce() -> R) -> R {
+    struct Forget(bool);
+    impl Drop for Forget {
+        fn drop(&mut self) {
+            if self.0 {
+                POWERS.with(|powers| *powers.borrow_mut() = None);
+            }
+        }
+    }
+    let outermost = POWERS.with(|powers| {
+        let mut powers = powers.borrow_mut();
+        let outermost = powers.is_none();
+        if outermost {
+            *powers = Some(Powers::default());
+        }
+        outermost
+    });
+    let _forget = Forget(outermost);
+    f()
+}
+
+/// Extension: `radix` to the power `power` in the internal base, as
+/// `numpowi32x` makes it of `i32tonum(radix, BASEX)` (1 for a power below
+/// 1), reusing what [`with_powers_kept`] keeps when inside it.
+pub(crate) fn radix_power(radix: u32, power: i32) -> CalcResult<Number> {
+    POWERS.with(|kept| {
+        let mut kept = kept.borrow_mut();
+        let Some(kept) = kept.as_mut() else {
+            let mut root = i32tonum(radix as i32, BASEX);
+            numpowi32x(&mut root, power)?;
+            return Ok(root);
+        };
+        if let Some(known) = kept.powers.get(&(radix, power)) {
+            return Ok(known.clone());
+        }
+        // `numpowi32x`, step for step, with the root's squares kept: bit k
+        // of the power multiplies the result by the root squared k times,
+        // and the next square is made whether or not a bit is left to use
+        // it (as there, where it can also be what fails).
+        let squares = kept
+            .squares
+            .entry(radix)
+            .or_insert_with(|| vec![i32tonum(radix as i32, BASEX)]);
+        let mut lret = i32tonum(1, BASEX);
+        let mut left = power;
+        let mut k = 0;
+        while left > 0 {
+            if left & 1 != 0 {
+                mulnumx(&mut lret, &squares[k])?;
+            }
+            if squares.len() == k + 1 {
+                let mut next = squares[k].clone();
+                mulnumx_self(&mut next)?;
+                squares.push(next);
+            }
+            k += 1;
+            left >>= 1;
+        }
+        kept.powers.insert((radix, power), lret.clone());
+        Ok(lret)
+    })
+}
+
 //----------------------------------------------------------------------------
 //
 //    FUNCTION: divnumx
@@ -256,4 +353,88 @@ fn divnumx_core(ctx: &Ctx, a: &Number, b: &Number, precision: i32) -> CalcResult
     }
 
     Ok(finish_division(c, thismax, cdigits, c_exp, c_sign))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::work_done;
+    use super::*;
+
+    fn alone(radix: u32, power: i32) -> CalcResult<Number> {
+        let mut root = i32tonum(radix as i32, BASEX);
+        numpowi32x(&mut root, power).map(|()| root)
+    }
+
+    fn work(f: impl FnOnce()) -> u64 {
+        let before = work_done();
+        f();
+        work_done() - before
+    }
+
+    /// A power kept is the power `numpowi32x` works out, digit for digit:
+    /// in every radix numbers are read in, powers in any order, asked for
+    /// again, and below 1.
+    #[test]
+    fn a_power_kept_is_the_power_worked_out() {
+        let powers = [
+            0,
+            1,
+            2,
+            3,
+            7,
+            8,
+            31,
+            32,
+            33,
+            100,
+            255,
+            256,
+            1000,
+            4095,
+            4096,
+            9998,
+            9999,
+            19_999,
+            9999,
+            1,
+            5000,
+            -1,
+            i32::MIN,
+        ];
+        with_powers_kept(|| {
+            for radix in [2, 8, 10, 16] {
+                for power in powers {
+                    assert_eq!(
+                        radix_power(radix, power),
+                        alone(radix, power),
+                        "{radix}^{power}"
+                    );
+                }
+            }
+            // Kept across one begun inside another, until the outer ends.
+            with_powers_kept(|| assert_eq!(radix_power(10, 9999), alone(10, 9999)));
+            assert_eq!(work(|| drop(radix_power(10, 9999))), 0);
+            // A power not asked for yet shares the squares: less work.
+            let shared = work(|| drop(radix_power(10, 9997)));
+            assert!(shared > 0 && shared < work(|| drop(alone(10, 9997))) / 3);
+        });
+    }
+
+    /// Outside `with_powers_kept` nothing is kept: a power costs what
+    /// `numpowi32x` costs, each time; and inside, the first does too.
+    #[test]
+    fn a_power_costs_the_same_where_none_is_kept() {
+        let once = work(|| drop(alone(10, 9999)));
+        assert!(once > 100_000, "{once}");
+        for _ in 0..2 {
+            assert_eq!(work(|| drop(radix_power(10, 9999))), once);
+        }
+        for _ in 0..2 {
+            with_powers_kept(|| {
+                assert_eq!(work(|| drop(radix_power(10, 9999))), once);
+                assert_eq!(work(|| drop(radix_power(10, 9999))), 0);
+            });
+        }
+        assert_eq!(work(|| drop(radix_power(10, 9999))), once);
+    }
 }

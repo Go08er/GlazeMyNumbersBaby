@@ -191,6 +191,18 @@ pub fn with_ratio_of<R>(radix: u32, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// Extension: runs `f` keeping the powers of the radix that the numbers
+/// [`string_to_rat`] reads in it are scaled by, so that numbers read
+/// together share them (a hundred near 10^±9999 are read with a sixth of
+/// the work, or a thirtieth where they have one exponent), and forgets
+/// them afterwards. No number read changes, digit for digit;
+/// [`work_done`] does, by the work shared, so what a caller bounds by it
+/// shouldn't share powers with what came before: they are kept only
+/// inside `f`.
+pub fn with_powers_kept<R>(f: impl FnOnce() -> R) -> R {
+    ratpak::basex::with_powers_kept(f)
+}
+
 /// `SetDecimalSeparator(ch)`
 pub fn set_decimal_separator(sep: char) {
     ratpak::with_ctx_mut(|ctx| ctx.decimal_separator = sep)

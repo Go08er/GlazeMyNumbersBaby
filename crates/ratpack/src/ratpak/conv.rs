@@ -15,7 +15,7 @@
 //
 //---------------------------------------------------------------------------
 
-use super::basex::{divnumx, mulnumx, numpowi32x};
+use super::basex::{divnumx, mulnumx, numpowi32x, radix_power};
 use super::logic::{andrat, rshrat};
 use super::num::{addnum, addnum_self, divnum, lessnum, mulnum, mulnum_self, remnum, zernum};
 use super::rat::{divrat, mulrat, mulrat_self};
@@ -267,8 +267,9 @@ pub(crate) fn string_to_rat(
     }
 
     // Convert native integral exponent form to rational multiplier form.
-    let mut pnumexp = i32tonum(radix as i32, BASEX);
-    numpowi32x(&mut pnumexp, expt.wrapping_abs())?;
+    // C++: i32tonum(radix, BASEX), then numpowi32x; `radix_power` is that,
+    // sharing the work among numbers read together (`with_powers_kept`).
+    let pnumexp = radix_power(radix, expt.wrapping_abs())?;
 
     let pratexp = Rat {
         pp: pnumexp,

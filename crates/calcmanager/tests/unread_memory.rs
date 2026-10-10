@@ -424,6 +424,86 @@ fn the_costliest_unread_slot_is_bounded() {
     }
 }
 
+/// Slots read together (the list shown again) are the slots read one by
+/// one (MR on each), digit for digit, though together they share the
+/// powers of ten they are scaled by and so take less work: slots of one
+/// exponent, of exponents next to each other and of exponents far apart,
+/// typed ones and written ones.
+#[test]
+fn slots_read_together_are_the_slots_read_alone() {
+    let work = |f: &mut dyn FnMut()| {
+        let before = work_done();
+        f();
+        work_done() - before
+    };
+    let exponents: [fn(u32) -> u32; 3] = [|_| 9999, |i| 9999 - i, |i| 9999 - 397 * i];
+    for exponent in exponents {
+        let stored = || {
+            let (display, mut manager) = new_manager(Command::ModeScientific);
+            for i in 0..24 {
+                let mantissa = format!("9.{i:02}{}", "9".repeat(29));
+                if i % 3 == 0 {
+                    // 10^-19999 to 10^-10000, which no number typed is.
+                    let far = exponent(i) + 10_000;
+                    assert!(
+                        manager
+                            .memorize_written(i % 2 == 0, &mantissa, true, far)
+                            .unwrap()
+                    );
+                } else {
+                    press(&mut manager, &mantissa);
+                    press(&mut manager, &format!("e{}", exponent(i)));
+                    press(&mut manager, if i % 2 == 0 { "-" } else { "" });
+                    assert!(manager.memorize_unread().unwrap());
+                    press(&mut manager, "c");
+                }
+            }
+            assert_eq!(manager.unread_memory(), 24);
+            (display, manager)
+        };
+        // One by one (C after each: a number too small to work with is
+        // recalled as an error, in which nothing more is recalled).
+        let one_by_one = |manager: &mut CalculatorManager| {
+            for i in 0..24 {
+                manager.memorized_number_load(i).unwrap();
+                press(manager, "c");
+            }
+        };
+
+        let (_, mut alone) = stored();
+        let alone_work = work(&mut || one_by_one(&mut alone));
+        assert_eq!(alone.unread_memory(), 0);
+        let (_, mut together) = stored();
+        let together_work = work(&mut || together.read_memory());
+        assert_eq!(together.unread_memory(), 0);
+        assert_eq!(
+            format!("{:?}", together.state()),
+            format!("{:?}", alone.state())
+        );
+        // MR also displays each slot it recalls; reading is most of it.
+        assert!(
+            together_work < alone_work / 2,
+            "{together_work} {alone_work}"
+        );
+
+        // Shown by MS, the list reads as it does when each was recalled.
+        let (shown, mut by_ms) = stored();
+        press(&mut by_ms, "7");
+        by_ms.memorize_number().unwrap();
+        assert_eq!(by_ms.unread_memory(), 0);
+        let (shown_alone, mut again) = stored();
+        one_by_one(&mut again);
+        press(&mut again, "7");
+        again.memorize_number().unwrap();
+        assert_eq!(shown.borrow().memory, shown_alone.borrow().memory);
+        assert_eq!(shown.borrow().memory.len(), 25);
+        assert_eq!(
+            format!("{:?}", by_ms.state()),
+            format!("{:?}", again.state())
+        );
+    }
+}
+
 /// A Scientific calculator with `mantissa` and an exponent of 9999 typed
 /// and stored unread.
 fn manager_typed(
