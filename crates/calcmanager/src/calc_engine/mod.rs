@@ -222,6 +222,16 @@ pub struct Continuation {
     /// key as CE and press CE with it. What the restore types needn't leave
     /// the input so, so it is set with [`CalcEngine::set_input_empty`].
     pub empty_input: bool,
+    /// The engine holds an expression line of its own that is empty (see
+    /// `HistoryCollector::has_line`): a radix command shows it, and the
+    /// view model sends DEC whenever the calculator is shown again, which
+    /// then clears the expression line where the view model had put a
+    /// History item's there. A line was begun since the last `=` completed
+    /// one (or since the start) and cleared again; nothing the restore
+    /// replays goes through that, so it is restored with
+    /// [`CalcEngine::set_empty_expression_line`]. An error keeps it too:
+    /// C clears a line and still holds it.
+    pub empty_line: bool,
 }
 
 /// Extension: see [`Continuation::entry`].
@@ -597,6 +607,7 @@ impl CalcEngine {
             return Continuation {
                 empty_input: self.input.is_empty(),
                 clears: !self.b_no_prev_equ,
+                empty_line: self.history_collector.has_empty_line(),
                 ..Continuation::default()
             };
         }
@@ -687,7 +698,15 @@ impl CalcEngine {
             carry: self.carry_bit != 0,
             left,
             empty_input: !self.b_record && self.input.is_empty(),
+            empty_line: self.history_collector.has_empty_line(),
         }
+    }
+
+    /// Extension: makes the engine hold an empty expression line of its
+    /// own, or none (see [`Continuation::empty_line`]), for a restored
+    /// session. A line with tokens is left alone, and nothing is displayed.
+    pub fn set_empty_expression_line(&mut self, held: bool) {
+        self.history_collector.set_empty_line(held);
     }
 
     /// Extension: makes the next command clear the expression line, as
@@ -963,14 +982,18 @@ impl CalcEngine {
 
     /// Extension, for tests: the state a later key can read (see
     /// [`EngineState`]), with `memory` (the manager's slots) among the
-    /// values. In an error only the error and the memory slots are
-    /// reported: every key but C and CE is ignored, and they clear the
-    /// rest, but for memory, which an error leaves as it is.
+    /// values. In an error only the error, whether the engine holds an
+    /// expression line and the memory slots are reported: every key but C
+    /// and CE is ignored, and they clear the rest, but for those, which an
+    /// error leaves as they are.
     #[doc(hidden)]
     pub fn state(&self, memory: &[Rational]) -> EngineState {
         let mut state = EngineState::default();
         let mut exact = |name: &str, value: String| state.exact.push((name.to_string(), value));
         exact("error", self.b_error.to_string());
+        // Whether the engine holds an expression line of its own (an
+        // error keeps it): a radix command shows it.
+        exact("line", self.history_collector.has_line().to_string());
         if self.b_error {
             for (i, slot) in memory.iter().enumerate() {
                 let shown = self

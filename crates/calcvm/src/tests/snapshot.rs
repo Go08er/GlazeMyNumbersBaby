@@ -3066,6 +3066,112 @@ fn an_error_after_equals_restores_with_what_clears_its_expression() {
     }
 }
 
+/// The engine holds an expression line of its own, or none, and a radix
+/// command shows the one it holds. DEC is sent whenever the calculator is
+/// shown again, so with a History item selected (the view model puts its
+/// expression on the line, not the engine) coming back to the calculator
+/// clears the line when the engine holds an empty one (a line was begun
+/// since the last "=" and cleared: here by the reset a selection begins
+/// with, or by C), and leaves it when the engine holds none (nothing since
+/// the "=" that completed the last). A restored session does as the
+/// original: it used to hold none whatever the original held, and kept
+/// the line. That goes for a selection made after the restore too, and
+/// after an error.
+#[test]
+fn a_restore_keeps_the_expression_line_the_engine_holds() {
+    use Button::*;
+    // The item "9 =", wherever it is in History.
+    fn select_nine(vm: &mut CalculatorViewModel) {
+        let index = vm
+            .history()
+            .iter()
+            .position(|item| item.expression == "9 =")
+            .unwrap();
+        vm.history_recall(index);
+        assert_eq!(vm.expression(), "9=");
+    }
+    fn shown_again(vm: &mut CalculatorViewModel) -> String {
+        vm.set_mode(vm.mode());
+        vm.expression()
+    }
+    // What is typed after 9 =, and whether the engine then holds an empty
+    // line.
+    let sessions: [(&[Button], bool); 7] = [
+        (&[], false),
+        (&[Two, Add, Three, Equals], false),
+        (&[Six, Subtract], true),
+        (&[Six, Subtract, Clear], true),
+        (&[Six, Subtract, Clear, Seven], true),
+        (&[Six, Subtract, Two, Equals, Seven], false),
+        // A function after "=" begins a line.
+        (&[Six, Subtract, Two, Equals, Sqrt], true),
+    ];
+    for mode in [CalcMode::Standard, CalcMode::Scientific] {
+        for (keys, held) in sessions {
+            let begin = || {
+                let mut vm = new_vm();
+                vm.set_mode(mode);
+                press_all(&mut vm, &[Nine, Equals]);
+                press_all(&mut vm, keys);
+                vm
+            };
+            let what = format!("{mode:?} {keys:?}");
+
+            // The item selected, saved, and the calculator shown again.
+            let mut original = begin();
+            select_nine(&mut original);
+            let state = original.save_state();
+            let before = observed(&original);
+            let line = shown_again(&mut original);
+            assert_eq!(line, if held { "" } else { "9=" }, "{what}");
+            let after = observed(&original);
+            drop(original);
+            let saved: Value = serde_json::from_str(&state).unwrap();
+            assert_eq!(saved["x"]["k"]["el"] == json!(true), held, "{what}");
+            let mut restored = new_vm();
+            assert!(restored.restore_state_checked(&state), "{what}");
+            assert_eq!(observed(&restored), before, "{what}");
+            assert_eq!(restored.save_state(), state, "{what}");
+            assert_eq!(shown_again(&mut restored), line, "{what}");
+            assert_eq!(observed(&restored), after, "{what}");
+            drop(restored);
+
+            // Saved before the selection, which is made after the restore.
+            let mut original = begin();
+            let state = original.save_state();
+            select_nine(&mut original);
+            let line = shown_again(&mut original);
+            let after = observed(&original);
+            drop(original);
+            let mut restored = new_vm();
+            restored.restore_state(&state);
+            select_nine(&mut restored);
+            assert_eq!(shown_again(&mut restored), line, "{what}");
+            assert_eq!(observed(&restored), after, "{what}");
+            drop(restored);
+
+            // Saved in an error, which C clears before the selection.
+            let mut original = begin();
+            press_all(&mut original, &[One, Divide, Zero, Equals]);
+            assert!(original.is_error(), "{what}");
+            let state = original.save_state();
+            original.press(Clear);
+            select_nine(&mut original);
+            let line = shown_again(&mut original);
+            let after = observed(&original);
+            drop(original);
+            let mut restored = new_vm();
+            restored.restore_state(&state);
+            assert!(restored.is_error(), "{what}");
+            assert_eq!(restored.save_state(), state, "{what}");
+            restored.press(Clear);
+            select_nine(&mut restored);
+            assert_eq!(shown_again(&mut restored), line, "{what}");
+            assert_eq!(observed(&restored), after, "{what}");
+        }
+    }
+}
+
 /// The C key comes back reading what it read. The view model keeps it from
 /// the last key that told it the input changed, and MS, M+ and M− end a
 /// number without telling it: with F-E on, 0 MS leaves "0.e+0" shown (not

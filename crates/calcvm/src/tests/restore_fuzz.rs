@@ -49,7 +49,9 @@
 //! The default tests run a few seconds' worth; the long run is
 //! `cargo test -p calcvm --release -- --ignored random_sessions`
 //! (`RESTORE_FUZZ_SEED`, `RESTORE_FUZZ_SCRIPTS`,
-//! `RESTORE_FUZZ_MEMORY_SCRIPTS`, and `RESTORE_FUZZ_OUT`, a file the
+//! `RESTORE_FUZZ_MEMORY_SCRIPTS`; `RESTORE_FUZZ_ONLY` and
+//! `RESTORE_FUZZ_MEMORY_ONLY`, the numbers of the only scripts to run,
+//! separated by commas; and `RESTORE_FUZZ_OUT`, a file the
 //! failures are written to, with the fallbacks and the continuations of
 //! rounded restores that differed beyond the last digits in `.fallbacks`
 //! and `.rounded` beside it, and in `.classes` every script with how its
@@ -979,8 +981,9 @@ fn check(start: CalcMode, acts: &[Act], counts: &mut Counts) {
     counts.exact += 1;
 }
 
-/// Runs scripts `0..n` of `seed` on `threads` threads.
-fn fuzz(kind: Kind, seed: u64, n: u64, threads: u64) -> Counts {
+/// Runs scripts `0..n` of `seed` on `threads` threads, or only those of
+/// them numbered in `only`.
+fn fuzz(kind: Kind, seed: u64, n: u64, threads: u64, only: Option<&[u64]>) -> Counts {
     let results: Vec<Counts> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..threads)
             .map(|t| {
@@ -988,6 +991,10 @@ fn fuzz(kind: Kind, seed: u64, n: u64, threads: u64) -> Counts {
                     let mut counts = Counts::default();
                     let mut i = t;
                     while i < n {
+                        if only.is_some_and(|only| !only.contains(&i)) {
+                            i += threads;
+                            continue;
+                        }
                         let (start, acts) = script(kind, seed, i);
                         let before = (counts.failures.len(), counts.fell_back, counts.rounded);
                         check(start, &acts, &mut counts);
@@ -1086,7 +1093,7 @@ fn threads() -> u64 {
 /// A few seconds' worth of scripts on every test run.
 #[test]
 fn random_sessions_restore_and_continue() {
-    let counts = fuzz(Kind::Any, 1, 96, threads());
+    let counts = fuzz(Kind::Any, 1, 96, threads(), None);
     report(&counts, "");
     assert_clean(&counts);
 }
@@ -1094,7 +1101,7 @@ fn random_sessions_restore_and_continue() {
 /// And of sessions that mostly work with memory.
 #[test]
 fn random_memory_sessions_restore_and_continue() {
-    let counts = fuzz(Kind::Memory { ends: false }, 1, 32, threads());
+    let counts = fuzz(Kind::Memory { ends: false }, 1, 32, threads(), None);
     report(&counts, ".memory");
     assert_clean(&counts);
 }
@@ -1106,10 +1113,22 @@ fn env(key: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+/// The script numbers `key` lists, if it is set.
+fn only(key: &str) -> Option<Vec<u64>> {
+    let listed = std::env::var(key).ok()?;
+    Some(
+        listed
+            .split(',')
+            .filter_map(|n| n.trim().parse().ok())
+            .collect(),
+    )
+}
+
 /// The long run (`cargo test -p calcvm --release -- --ignored`): 20,000
 /// scripts, then 2,000 memory sessions, numbers at the ends of the range
 /// among theirs. `RESTORE_FUZZ_SEED`, `RESTORE_FUZZ_SCRIPTS` and
-/// `RESTORE_FUZZ_MEMORY_SCRIPTS` change them.
+/// `RESTORE_FUZZ_MEMORY_SCRIPTS` change them; `RESTORE_FUZZ_ONLY` and
+/// `RESTORE_FUZZ_MEMORY_ONLY` run only the scripts they number.
 #[test]
 #[ignore]
 fn random_sessions_restore_and_continue_long() {
@@ -1119,6 +1138,7 @@ fn random_sessions_restore_and_continue_long() {
         seed,
         env("RESTORE_FUZZ_SCRIPTS", 20_000),
         threads(),
+        only("RESTORE_FUZZ_ONLY").as_deref(),
     );
     report(&any, "");
     let memory = fuzz(
@@ -1126,6 +1146,7 @@ fn random_sessions_restore_and_continue_long() {
         seed,
         env("RESTORE_FUZZ_MEMORY_SCRIPTS", 2_000),
         threads(),
+        only("RESTORE_FUZZ_MEMORY_ONLY").as_deref(),
     );
     report(&memory, ".memory");
     assert_clean(&any);

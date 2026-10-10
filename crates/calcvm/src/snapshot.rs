@@ -129,8 +129,16 @@
 //! input changed, and MS, M+ and M− end a number without telling it (with
 //! F-E on, a 0 typed and stored is shown as 0.e+0, which isn't an empty
 //! input's 0, and the key still reads C). The key comes back as it read;
-//! the next key refreshes it in either session. Upstream restores none of
-//! these.
+//! the next key refreshes it in either session. `"el": true` says the
+//! engine holds an expression line of its own that is empty (one was
+//! begun since the last `=` and cleared again), where a calculator just
+//! started, or one whose last line `=` completed, holds none. A radix
+//! command shows the line the engine holds, and DEC is sent whenever the
+//! calculator is shown again: with a History item selected (its
+//! expression is put on the line by the view model, not the engine)
+//! coming back to the calculator then clears the line, or leaves it. No
+//! key the restore types leaves the engine so, so it is set directly.
+//! Upstream restores none of these.
 //!
 //! # The contract
 //!
@@ -428,6 +436,8 @@ pub(crate) struct ContinuationSnapshot {
     pub(crate) left: Option<ExpressionCommandWrapper>,
     /// `"ie"`: no number is being typed and the input holds none.
     pub(crate) empty_input: bool,
+    /// `"el"`: the engine holds an expression line of its own, empty.
+    pub(crate) empty_line: bool,
 }
 
 /// `ApplicationSnapshot`
@@ -768,6 +778,9 @@ impl ApplicationSnapshot {
                 if let Some(clear_entry) = k.c_key {
                     c.insert("ce".into(), json!(clear_entry));
                 }
+                if k.empty_line {
+                    c.insert("el".into(), json!(true));
+                }
                 o.insert("k".into(), Value::Object(c));
             }
             root.insert("x".into(), Value::Object(o));
@@ -913,6 +926,7 @@ impl ApplicationSnapshot {
                                 .map(ExpressionCommandDeserializer::deserialize)
                                 .transpose()?,
                             empty_input: boolean(k.get("ie"))?,
+                            empty_line: boolean(k.get("el"))?,
                             c_key: match k.get("ce") {
                                 None | Some(Value::Null) => None,
                                 Some(v) => Some(v.as_bool().ok_or("expected a boolean")?),
@@ -1900,6 +1914,11 @@ impl StandardCalculatorViewModel {
         if engine_error && continuation.is_some_and(|k| k.clears) {
             self.with_manager(|m| m.set_clears_expression());
         }
+        // Extension: the empty expression line the engine holds, or holds
+        // none (see "el" in the module docs).
+        if let Some(k) = continuation {
+            self.with_manager(|m| m.set_empty_expression_line(k.empty_line));
+        }
         if engine_error && let Some(expression) = &snapshot.expression_display {
             // The parentheses the expression line leaves open, as shown
             // while the error is (the engine's are gone with it).
@@ -2006,6 +2025,7 @@ impl StandardCalculatorViewModel {
                 ExpressionCommandWrapper::from_command(&ExpressionCommand::Operand(operand))
             }),
             empty_input: c.empty_input,
+            empty_line: c.empty_line,
             c_key: (self.is_input_empty() != self.standard_calculator_manager.is_input_empty_now())
                 .then(|| !self.is_input_empty()),
         }

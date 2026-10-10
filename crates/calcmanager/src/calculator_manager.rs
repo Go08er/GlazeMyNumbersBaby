@@ -964,6 +964,11 @@ impl CalculatorManager {
         });
     }
 
+    /// Extension: see [`CalcEngine::set_empty_expression_line`].
+    pub fn set_empty_expression_line(&mut self, held: bool) {
+        self.current_engine().set_empty_expression_line(held);
+    }
+
     /// Extension: see [`CalcEngine::set_clears_expression`].
     pub fn set_clears_expression(&mut self) {
         self.current_engine().set_clears_expression();
