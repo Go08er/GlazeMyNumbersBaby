@@ -2,7 +2,7 @@
 //! upstream XAML and Resources.resw), the converter keypad and the graphing
 //! keypad. Labels use a tiny markup subset: `<sup>…</sup>` and `<sub>…</sub>`.
 
-use calcvm::{Button as B, ShiftMode};
+use calcvm::{Button as B, CalcMode, ShiftMode};
 
 use crate::icons as paths;
 
@@ -716,9 +716,48 @@ pub fn open_parenthesis_count_announcement(count: u32) -> String {
     format!("Open parenthesis count {count}")
 }
 
+/// What upstream tells screen readers when the open-parenthesis count
+/// changes from `was` to `now` (`SetParenthesisCount`,
+/// StandardCalculatorViewModel.cs:1092-1103): nothing if it is the same
+/// count, and nothing in Standard (`IsProgrammer || IsScientific`);
+/// otherwise the words "(" says on getting the focus, with the new count
+/// (`SetOpenParenthesisCountNarratorAnnouncement`). Zero too: Clear and
+/// "=" close what was open.
+pub fn open_parenthesis_count_change(mode: CalcMode, was: u32, now: u32) -> Option<String> {
+    (was != now && mode != CalcMode::Standard).then(|| open_parenthesis_count_announcement(now))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Upstream's SetParenthesisCount: a change of the open-parenthesis
+    /// count is announced in Scientific and Programmer, in the words "("
+    /// says when focused, zero included; the same count again isn't, and
+    /// nothing is in Standard.
+    #[test]
+    fn a_changed_open_parenthesis_count_is_announced_outside_standard() {
+        let said = |n: u32| Some(format!("Open parenthesis count {n}"));
+        for mode in [CalcMode::Scientific, CalcMode::Programmer] {
+            assert_eq!(open_parenthesis_count_change(mode, 0, 1), said(1));
+            assert_eq!(open_parenthesis_count_change(mode, 1, 2), said(2));
+            assert_eq!(open_parenthesis_count_change(mode, 2, 1), said(1));
+            assert_eq!(open_parenthesis_count_change(mode, 3, 0), said(0));
+            for n in [0, 1, 7] {
+                assert_eq!(open_parenthesis_count_change(mode, n, n), None);
+            }
+        }
+        for (was, now) in [(0, 1), (2, 0), (1, 1)] {
+            assert_eq!(
+                open_parenthesis_count_change(CalcMode::Standard, was, now),
+                None
+            );
+        }
+        assert_eq!(
+            open_parenthesis_count_change(CalcMode::Scientific, 0, 1),
+            Some(open_parenthesis_count_announcement(1))
+        );
+    }
 
     /// The buttons that show an abbreviation are named as upstream's
     /// (en-US Resources.resw), in every state they show.

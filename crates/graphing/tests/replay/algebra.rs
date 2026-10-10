@@ -20,7 +20,7 @@ use super::eval::{Lits, contains_x, written_rational};
 use super::exact;
 use super::iv::Unit;
 use graphing::ast::{BinOp, Constant, Expr, Func};
-use rug::Rational;
+use rug::{Integer, Rational};
 use std::collections::BTreeMap;
 
 /// A monomial: (variable, exponent) pairs by variable; variable 0 is x.
@@ -32,13 +32,16 @@ pub struct Poly(BTreeMap<Mono, Rational>);
 /// The most terms a polynomial may grow to before the check gives up.
 const MAX_TERMS: usize = 1500;
 
-fn mono_mul(a: &Mono, b: &Mono) -> Mono {
+/// The product of two monomials, or None past the exponents a monomial
+/// holds: a sum of exponents is never wrapped (x^(2³⁶) read as x⁰, and
+/// x^(2³⁶) − x^(2³⁵) as 0: review 18's audit).
+fn mono_mul(a: &Mono, b: &Mono) -> Option<Mono> {
     let mut out: Mono = Vec::with_capacity(a.len() + b.len());
     let (mut i, mut j) = (0, 0);
     while i < a.len() || j < b.len() {
         match (a.get(i), b.get(j)) {
             (Some(x), Some(y)) if x.0 == y.0 => {
-                out.push((x.0, x.1 + y.1));
+                out.push((x.0, x.1.checked_add(y.1)?));
                 i += 1;
                 j += 1;
             }
@@ -61,7 +64,7 @@ fn mono_mul(a: &Mono, b: &Mono) -> Mono {
             (None, None) => unreachable!(),
         }
     }
-    out
+    Some(out)
 }
 
 impl Poly {
@@ -115,7 +118,7 @@ impl Poly {
         let mut m: BTreeMap<Mono, Rational> = BTreeMap::new();
         for (a, x) in &self.0 {
             for (b, y) in &o.0 {
-                let k = mono_mul(a, b);
+                let k = mono_mul(a, b)?;
                 let e = m.entry(k).or_insert_with(|| Rational::from(0));
                 *e += Rational::from(x * y);
             }
@@ -295,12 +298,18 @@ enum Atom {
     Const,
     /// f(u) for a named function of one argument.
     Of(&'static str, Frac),
-    /// ᵠ√u.
-    Root(u32, Frac),
+    /// ᵠ√u, q ≥ 2 of any size (the atom's name holds every digit: a degree
+    /// cut to u32 made ᵏ√u, k = 2³² + 3, the atom ∛u; review 18, R18-M-02).
+    Root(Integer, Frac),
     /// a^b for an exponent varying with x.
     PowVar(Frac, Frac),
     /// mod(a, b)'s floor(a/b).
     Steps,
+}
+
+/// The variable of atom `i` (i + 1: 0 is x), if a monomial can name it.
+fn var_of(i: usize) -> Option<u16> {
+    u16::try_from(i).ok()?.checked_add(1)
 }
 
 /// The atoms met so far (variable i + 1 is atoms[i]), by name.
@@ -323,7 +332,9 @@ impl<'a> Field<'a> {
         }
     }
 
-    fn atom(&mut self, name: String, a: Atom) -> Frac {
+    /// The atom `name` as a variable, or None past the atoms a monomial
+    /// can name (variable 0 is x: never wrapped onto another's number).
+    fn atom(&mut self, name: String, a: Atom) -> Option<Frac> {
         let i = match self.names.iter().position(|n| *n == name) {
             Some(i) => i,
             None => {
@@ -332,7 +343,7 @@ impl<'a> Field<'a> {
                 self.names.len() - 1
             }
         };
-        Frac::of(Poly::var(i as u16 + 1))
+        Some(Frac::of(Poly::var(var_of(i)?)))
     }
 
     /// f(u) as an atom, its argument in a normal form: a fraction with a
@@ -341,23 +352,23 @@ impl<'a> Field<'a> {
     /// = −sin u) and take the argument's sign out (sin(−u) = −sin u,
     /// cos(−u) = cos u), as do the odd functions (sinh, atan, asin,
     /// asinh, atanh) and the even ones (cosh, abs).
-    fn of(&mut self, f: &'static str, u: Frac) -> Frac {
+    fn of(&mut self, f: &'static str, u: Frac) -> Option<Frac> {
         let u = u.norm();
         if matches!(f, "sin" | "cos")
             && let Some(r) = self.trig(f == "cos", &u)
         {
-            return r;
+            return Some(r);
         }
         let odd = matches!(f, "sinh" | "atan" | "asin" | "asinh" | "atanh");
         let even = matches!(f, "cosh" | "abs");
         if (odd || even) && u.leading_negative() {
-            let a = self.plain(f, u.neg().norm());
-            return if odd { a.neg() } else { a };
+            let a = self.plain(f, u.neg().norm())?;
+            return Some(if odd { a.neg() } else { a });
         }
         self.plain(f, u)
     }
 
-    fn plain(&mut self, f: &'static str, u: Frac) -> Frac {
+    fn plain(&mut self, f: &'static str, u: Frac) -> Option<Frac> {
         let name = format!("{f}{}", u.key());
         self.atom(name, Atom::Of(f, u))
     }
@@ -370,11 +381,10 @@ impl<'a> Field<'a> {
             return None;
         }
         // The constant part in half turns.
-        let pi_var = self
-            .names
-            .iter()
-            .position(|n| n == "π")
-            .map(|i| i as u16 + 1);
+        let pi_var = match self.names.iter().position(|n| n == "π") {
+            Some(i) => Some(var_of(i)?),
+            None => None,
+        };
         let half = match self.unit {
             Unit::Radians => None,
             Unit::Degrees => Some(Rational::from(180)),
@@ -434,31 +444,37 @@ impl<'a> Field<'a> {
         } else {
             (shifted, false)
         };
-        let a = self.plain(if base_cos { "cos" } else { "sin" }, v);
+        let a = self.plain(if base_cos { "cos" } else { "sin" }, v)?;
         Some(if negate != flip { a.neg() } else { a })
     }
 
-    fn root(&mut self, q: u32, u: Frac) -> Frac {
+    /// ᵠ√u as an atom, named by its whole degree (q ≥ 2, of any size).
+    fn root(&mut self, q: Integer, u: Frac) -> Option<Frac> {
         let name = format!("root{q}{}", u.key());
         self.atom(name, Atom::Root(q, u))
     }
 
-    fn pi(&mut self) -> Frac {
+    /// u^(p/q) for p/q in lowest terms, q > 0: the integer power (q = 1),
+    /// or the atom ᵠ√u to the p. A power the algebra doesn't multiply out
+    /// (p past i64, or past [`Frac::powi`]'s bound) reads as nothing.
+    fn pow_ratio(&mut self, u: Frac, p: &Integer, q: &Integer) -> Option<Frac> {
+        let p = p.to_i64()?;
+        if *q == 1 {
+            return u.powi(p);
+        }
+        self.root(q.clone(), u)?.powi(p)
+    }
+
+    fn pi(&mut self) -> Option<Frac> {
         self.atom("π".into(), Atom::Const)
     }
 
     /// One unit in radians (π/180 in degrees), as a fraction.
-    fn unit_rad(&mut self) -> Frac {
+    fn unit_rad(&mut self) -> Option<Frac> {
         match self.unit {
-            Unit::Radians => Frac::constant(Rational::from(1)),
-            Unit::Degrees => self
-                .pi()
-                .div(&Frac::constant(Rational::from(180)))
-                .expect("180"),
-            Unit::Grads => self
-                .pi()
-                .div(&Frac::constant(Rational::from(200)))
-                .expect("200"),
+            Unit::Radians => Some(Frac::constant(Rational::from(1))),
+            Unit::Degrees => self.pi()?.div(&Frac::constant(Rational::from(180))),
+            Unit::Grads => self.pi()?.div(&Frac::constant(Rational::from(200))),
         }
     }
 
@@ -471,8 +487,8 @@ impl<'a> Field<'a> {
     pub fn read(&mut self, e: &Expr) -> Option<Frac> {
         Some(match e {
             Expr::Num(v, lit) => Frac::constant(self.lits.exact(*v, lit)?),
-            Expr::Const(Constant::Pi) => self.pi(),
-            Expr::Const(Constant::E) => self.atom("e".into(), Atom::Const),
+            Expr::Const(Constant::Pi) => self.pi()?,
+            Expr::Const(Constant::E) => self.atom("e".into(), Atom::Const)?,
             Expr::X => Frac::of(Poly::var(0)),
             Expr::Y => return None,
             Expr::Var(n) => Frac::constant(
@@ -486,26 +502,19 @@ impl<'a> Field<'a> {
             Expr::Bin(BinOp::Pow, a, b) => {
                 let base = self.read(a)?;
                 if let Some((p, q)) = written_rational(b, self.lits) {
-                    // (Past these, not read: never as a constant exponent
-                    // below, the positive-base rule.)
-                    let (p, q) = (p.to_i64()?, q.to_u32()?);
-                    if q == 1 {
-                        return base.powi(p);
-                    }
-                    return self.root(q, base).powi(p);
+                    // (A power not multiplied out is not read: never as a
+                    // constant exponent below, the positive-base rule.)
+                    return self.pow_ratio(base, &p, &q);
                 }
                 if contains_x(b) {
                     let ex = self.read(b)?;
                     let name = format!("pow{}{}", base.key(), ex.key());
-                    return Some(self.atom(name, Atom::PowVar(base, ex)));
+                    return self.atom(name, Atom::PowVar(base, ex));
                 }
-                // A constant exponent with an exact rational value.
+                // A constant exponent with an exact rational value (in
+                // lowest terms, its denominator positive).
                 let q = exact::eval(b, None, self.lits, self.vars, self.unit)?;
-                let (p, d) = (q.numer().to_i64()?, q.denom().to_u32()?);
-                if d == 1 {
-                    return base.powi(p);
-                }
-                return self.root(d, base).powi(p);
+                return self.pow_ratio(base, q.numer(), q.denom());
             }
             Expr::Bin(op, a, b) => {
                 let (a, b) = (self.read(a)?, self.read(b)?);
@@ -527,21 +536,22 @@ impl<'a> Field<'a> {
             let (a, b) = (self.read(&args[0])?, self.read(&args[1])?);
             return match f {
                 // log_b u = ln u / ln b.
-                LogBase => self.of("ln", b).div(&self.of("ln", a)),
+                LogBase => self.of("ln", b)?.div(&self.of("ln", a)?),
                 Root => {
                     let n = exact::eval(&args[1], None, self.lits, self.vars, self.unit)?;
                     if contains_x(&args[1]) || !n.is_integer() || n == 0 {
                         return None;
                     }
-                    let k = n.numer().to_i64()?;
-                    if k == 1 || k == -1 {
-                        return a.powi(k);
-                    }
-                    self.root(k.unsigned_abs() as u32, a).powi(k.signum())
+                    // ᵏ√a for the degree k > 0, its reciprocal for k < 0:
+                    // a^(1/k), k whole, whatever its size (review 18,
+                    // R18-M-02: |k| was cast to u32, 2³² + 3 to 3).
+                    let sign = Integer::from(n.numer().signum_ref());
+                    let degree = Integer::from(n.numer().abs_ref());
+                    self.pow_ratio(a, &sign, &degree)
                 }
                 Mod => {
                     // a − b·⌊a/b⌋, the floor an atom (derivative 0).
-                    let fl = self.atom(format!("floor{}", a.div(&b)?.key()), Atom::Steps);
+                    let fl = self.atom(format!("floor{}", a.div(&b)?.key()), Atom::Steps)?;
                     a.sub(&b.mul(&fl)?)
                 }
                 _ => None,
@@ -552,19 +562,19 @@ impl<'a> Field<'a> {
         }
         let u = self.read(&args[0])?;
         let one = Field::one();
-        Some(match f {
+        match f {
             Sin => self.of("sin", u),
             Cos => self.of("cos", u),
-            Tan => self.of("sin", u.clone()).div(&self.of("cos", u))?,
-            Cot => self.of("cos", u.clone()).div(&self.of("sin", u))?,
-            Sec => one.div(&self.of("cos", u))?,
-            Csc => one.div(&self.of("sin", u))?,
+            Tan => self.of("sin", u.clone())?.div(&self.of("cos", u)?),
+            Cot => self.of("cos", u.clone())?.div(&self.of("sin", u)?),
+            Sec => one.div(&self.of("cos", u)?),
+            Csc => one.div(&self.of("sin", u)?),
             Sinh => self.of("sinh", u),
             Cosh => self.of("cosh", u),
-            Tanh => self.of("sinh", u.clone()).div(&self.of("cosh", u))?,
-            Coth => self.of("cosh", u.clone()).div(&self.of("sinh", u))?,
-            Sech => one.div(&self.of("cosh", u))?,
-            Csch => one.div(&self.of("sinh", u))?,
+            Tanh => self.of("sinh", u.clone())?.div(&self.of("cosh", u)?),
+            Coth => self.of("cosh", u.clone())?.div(&self.of("sinh", u)?),
+            Sech => one.div(&self.of("cosh", u)?),
+            Csch => one.div(&self.of("sinh", u)?),
             Asin => self.of("asin", u),
             Acos => self.of("acos", u),
             Atan => self.of("atan", u),
@@ -577,21 +587,21 @@ impl<'a> Field<'a> {
             Asech => self.of("acosh", one.div(&u)?),
             Acsch => self.of("asinh", one.div(&u)?),
             Acoth => self.of("atanh", one.div(&u)?),
-            Sqrt => self.root(2, u),
-            Cbrt => self.root(3, u),
+            Sqrt => self.root(Integer::from(2), u),
+            Cbrt => self.root(Integer::from(3), u),
             Exp => self.of("exp", u),
             Ln => self.of("ln", u),
             Log => {
                 let ten = Frac::constant(Rational::from(10));
-                self.of("ln", u).div(&self.of("ln", ten))?
+                self.of("ln", u)?.div(&self.of("ln", ten)?)
             }
             Abs => self.of("abs", u),
             Sign => self.atom(format!("sign{}", u.key()), Atom::Steps),
             Floor => self.atom(format!("floor{}", u.key()), Atom::Steps),
             Ceil => self.atom(format!("ceil{}", u.key()), Atom::Steps),
             Round => self.atom(format!("round{}", u.key()), Atom::Steps),
-            _ => return None,
-        })
+            _ => None,
+        }
     }
 
     /// d/dx of variable i (x or an atom), where the atom is differentiable.
@@ -613,28 +623,29 @@ impl<'a> Field<'a> {
             Atom::PowVar(a, b) => {
                 // d aᵇ = aᵇ·(b′·ln a + b·a′/a).
                 let (da, db) = (self.d(&a)?, self.d(&b)?);
-                let ln = self.of("ln", a.clone());
+                let ln = self.of("ln", a.clone())?;
                 me.mul(&db.mul(&ln)?.add(&b.mul(&da)?.div(&a)?)?)?
             }
             Atom::Of(f, u) => {
                 let du = self.d(&u)?;
-                let k = self.unit_rad();
+                let k = self.unit_rad()?;
                 let sq = u.mul(&u)?;
+                let two = || Integer::from(2);
                 let inner = match f {
-                    "sin" => self.of("cos", u.clone()).mul(&k)?,
-                    "cos" => self.of("sin", u.clone()).mul(&k)?.neg(),
-                    "sinh" => self.of("cosh", u.clone()),
-                    "cosh" => self.of("sinh", u.clone()),
+                    "sin" => self.of("cos", u.clone())?.mul(&k)?,
+                    "cos" => self.of("sin", u.clone())?.mul(&k)?.neg(),
+                    "sinh" => self.of("cosh", u.clone())?,
+                    "cosh" => self.of("sinh", u.clone())?,
                     "exp" => me.clone(),
                     "ln" => one.div(&u)?,
-                    "abs" => self.atom(format!("sign{}", u.key()), Atom::Steps),
+                    "abs" => self.atom(format!("sign{}", u.key()), Atom::Steps)?,
                     // Inverse trig gives the unit: 1/k times the radian rate.
                     "atan" => one.div(&one.add(&sq)?)?.div(&k)?,
                     "acot" => one.div(&one.add(&sq)?)?.div(&k)?.neg(),
-                    "asin" => one.div(&self.root(2, one.sub(&sq)?))?.div(&k)?,
-                    "acos" => one.div(&self.root(2, one.sub(&sq)?))?.div(&k)?.neg(),
-                    "asinh" => one.div(&self.root(2, sq.add(&one)?))?,
-                    "acosh" => one.div(&self.root(2, sq.sub(&one)?))?,
+                    "asin" => one.div(&self.root(two(), one.sub(&sq)?)?)?.div(&k)?,
+                    "acos" => one.div(&self.root(two(), one.sub(&sq)?)?)?.div(&k)?.neg(),
+                    "asinh" => one.div(&self.root(two(), sq.add(&one)?)?)?,
+                    "acosh" => one.div(&self.root(two(), sq.sub(&one)?)?)?,
                     "atanh" => one.div(&one.sub(&sq)?)?,
                     _ => return None,
                 };
@@ -719,17 +730,23 @@ pub fn same_trees(
     x.same(&y) == Some(true)
 }
 
-/// The number (p/d)·πᵏ (k = 0 or 1) as a tree of integers.
+/// The number (p/d)·πᵏ (k = 0 or 1) as a tree of integers; None for a
+/// part past 2⁵³, which a tree's double doesn't hold (the cast would round
+/// it: the tree of another number than the one written).
 pub fn piq_expr(p: i64, d: i64, k: i32) -> Option<Expr> {
-    let int = |v: i64| {
-        // (Beyond 2⁵³ a whole number is no exact double: `Expr::num`.)
-        let n = Expr::num(v.unsigned_abs() as f64);
-        if v < 0 { Expr::Neg(Box::new(n)) } else { n }
+    let int = |v: i64| -> Option<Expr> {
+        let m = v.unsigned_abs();
+        if m > 1 << 53 {
+            return None;
+        }
+        // (Exact: m ≤ 2⁵³.)
+        let n = Expr::exact(m as f64);
+        Some(if v < 0 { Expr::Neg(Box::new(n)) } else { n })
     };
     let q = if d == 1 {
-        int(p)
+        int(p)?
     } else {
-        Expr::Bin(BinOp::Div, Box::new(int(p)), Box::new(int(d)))
+        Expr::Bin(BinOp::Div, Box::new(int(p)?), Box::new(int(d)?))
     };
     match k {
         0 => Some(q),

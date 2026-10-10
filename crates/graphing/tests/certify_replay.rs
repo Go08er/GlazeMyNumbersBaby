@@ -577,6 +577,40 @@ fn made_up_y_intercept(v: &mut serde_json::Value, y: f64, keep: bool) {
     }});
 }
 
+/// The horizontal row made up as Certified, y ∈ `y` at both tails, each
+/// limit by the fact "f = N/D exactly: f → `limit` as x → ±∞" (a rational
+/// function's limit, which the replay decides exactly), with the producer's
+/// own point values of f from the row `values_from` showing f is no
+/// constant: nothing else in the certificate changes (review 18, R18-M-02).
+fn rational_horizontal(v: &mut serde_json::Value, values_from: &str, y: (f64, f64), limit: &str) {
+    let values: Vec<serde_json::Value> = claims_of(v, values_from)
+        .iter()
+        .filter(|c| c.get("Value").is_some_and(|c| c["of"]["F"] == "F0"))
+        .cloned()
+        .collect();
+    assert!(
+        values.len() >= 2,
+        "the plant needs two point values of f in {values_from}, which the certifier no longer \
+         writes for this function: retarget the plant"
+    );
+    let item = |side: &str| {
+        serde_json::json!({"side": side, "y": {"lo": y.0, "hi": y.1},
+        "exact": null, "looks_like": null})
+    };
+    let mut claims: Vec<serde_json::Value> = ["−∞", "+∞"]
+        .iter()
+        .map(|at| {
+            serde_json::json!({"Simplifier": {"fact":
+            format!("f = N/D exactly: f → {limit} as x → {at}")}})
+        })
+        .collect();
+    claims.extend(values);
+    v["horizontal"] = serde_json::json!({"Certified": {
+        "value": [item("Left"), item("Right")],
+        "cert": {"covers": "Line", "claims": claims}
+    }});
+}
+
 /// False facts planted into real certificates: each must be caught.
 const PLANTS: &[Plant] = &[
     ("x^3-2x+1/(x-1)", "an x-intercept left out", |v| {
@@ -1105,6 +1139,57 @@ const PLANTS: &[Plant] = &[
         |v| {
             v["parity"] = serde_json::json!({"Certified": {"value": "Odd",
             "cert": {"covers": "Line", "claims": [{"Simplifier": {"fact": "f is odd"}}]}}});
+        },
+    ),
+    // Review 18, R18-M-02: a root's degree past u32 cut to its low 32 bits
+    // in the exact algebra (2³² + 3 read as 3), so the two roots were one
+    // atom and cancelled: f read as the rational function 0, and false
+    // limits at ±∞ were proved "exactly". (The cube root grows faster: f →
+    // −∞ at +∞ and +∞ at −∞, no horizontal asymptote.) Only the horizontal
+    // row is changed, as in the review's variant.
+    (
+        "root(x+1,4294967299)-root(x+1,3)",
+        "a horizontal asymptote y = 0 at both tails, as a rational function's exact limits",
+        |v| rational_horizontal(v, "parity", (0.0, 0.0), "0"),
+    ),
+    // The same reader declared a zero tree supplied as f's simplified form
+    // identical to f exactly (any claim proved on it would then stand as
+    // proved on f).
+    (
+        "root(x+1,4294967299)-root(x+1,3)",
+        "the zero function supplied as f's simplified form",
+        |v| v["evaluated"] = serde_json::json!("f = 0"),
+    ),
+    // The audit's (the same family: a number narrowed on its way into a
+    // proof). A rational limit that is no double, listed as a point: the
+    // double a written integer rounds to (2⁵³ + 1 read as 2⁵³) …
+    (
+        "(9007199254740993x+1)/(x+1)",
+        "a horizontal asymptote one below the exact limit 2⁵³ + 1",
+        |v| {
+            rational_horizontal(
+                v,
+                "horizontal",
+                (9007199254740992.0, 9007199254740992.0),
+                "9007199254740993",
+            )
+        },
+    ),
+    // … or the double the exact limit rounds to (1/3 as 0.333…3148).
+    (
+        "(x+1)/(3x)",
+        "a horizontal asymptote at the double nearest the exact limit 1/3",
+        |v| {
+            let d = 1.0 / 3.0;
+            rational_horizontal(v, "horizontal", (d, d), &format!("in [{d:?}, {d:?}]"))
+        },
+    ),
+    (
+        "(x+1)/(3x)",
+        "a horizontal asymptote at the double nearest 1/3, the limit written exactly",
+        |v| {
+            let d = 1.0 / 3.0;
+            rational_horizontal(v, "horizontal", (d, d), "1/3")
         },
     ),
 ];
@@ -1792,4 +1877,828 @@ fn operands_set_aside_keep_their_definedness() {
             assert!(s[1].is_exactly(d1), "{src} [{unit:?}]: f′ {:?}", s[1]);
         }
     }
+}
+
+// ------------------------------------------------------------ review 18
+
+/// The replay's own reading of `src`: its canonical tree and literals.
+fn read(src: &str) -> (graphing::ast::Expr, replay::eval::Lits) {
+    let text = format!("y={src}");
+    let eq = graphing::Equation::parse(&text).unwrap();
+    let (_, e) = eq.explicit().unwrap();
+    (replay::eval::canonical(e), replay::eval::Lits::of(&text))
+}
+
+/// Review 18, R18-M-02: the exact algebra keeps a root's degree whole. A
+/// degree past u32 was cut to its low 32 bits (2³² + 3 read as 3), so
+/// ᵏ√u and ∛u were one atom: their difference read as the rational
+/// function 0, their trees as identical. Past its own bounds (a monomial's
+/// exponent, the atoms it can name) the algebra reads nothing, rather than
+/// wrap: x^(2³⁶) − x^(2³⁵) was 0 too in a release build.
+#[test]
+fn the_exact_algebra_keeps_degrees_and_exponents_whole() {
+    use replay::algebra::{Rat, same_trees};
+    use replay::iv::Unit::Radians;
+    let rational = |src: &str| {
+        let (e, lits) = read(src);
+        Rat::of(&e, &lits, &[], Radians).map(|r| (r.n.len(), r.d.len()))
+    };
+    let same = |a: &str, b: &str| {
+        let ((ea, lits), (eb, _)) = (read(a), read(b));
+        same_trees(&ea, &eb, false, &lits, &[], Radians)
+    };
+    // Roots of different degrees are different atoms, however long.
+    for (a, b) in [
+        ("root(x+1,4294967299)", "root(x+1,3)"),
+        ("root(x+1,4294967298)", "sqrt(x+1)"),
+        ("root(x+1,-4294967299)", "root(x+1,-3)"),
+        ("root(x+1,18446744073709551619)", "root(x+1,3)"),
+        ("(x+1)^(1/4294967299)", "(x+1)^(1/3)"),
+        ("(x+1)^(2/8589934598)", "(x+1)^(1/3)"),
+        ("(x+1)^(1/(4294967296+3))", "(x+1)^(1/3)"),
+    ] {
+        assert!(!same(a, b), "{a} read as {b}");
+        assert_eq!(rational(&format!("{a}-({b})")), None, "{a} − {b}");
+    }
+    // The same degree, however written, is one atom still.
+    for (a, b) in [
+        ("root(x+1,4294967299)", "root(x+1,4294967299)"),
+        ("root(x+1,4294967299)", "(x+1)^(1/4294967299)"),
+        ("root(x+1,4294967299)", "(x+1)^(1/(4294967296+3))"),
+        ("root(x+1,4294967299)^2", "(x+1)^(2/4294967299)"),
+        ("root(x+1,-4294967299)", "1/root(x+1,4294967299)"),
+        (
+            "root(x+1,18446744073709551619)",
+            "(x+1)^(1/18446744073709551619)",
+        ),
+        ("root(x+1,3)", "cbrt(x+1)"),
+        ("root(x+1,3)", "(x+1)^(1/3)"),
+        ("root(x+1,2)", "sqrt(x+1)"),
+    ] {
+        assert!(same(a, b), "{a} not read as {b}");
+    }
+    assert_eq!(
+        rational("root(x+1,4294967299)-(x+1)^(1/4294967299)"),
+        Some((0, 1))
+    );
+    // A monomial's exponent past u32: nothing read (x^(2³⁶) and x^(2³⁵)
+    // wrapped to x⁰ both, and their difference to 0).
+    let (hi, lo) = (
+        "((((((x^64)^64)^64)^64)^64)^64)",
+        "((((((x^64)^64)^64)^64)^64)^32)",
+    );
+    assert_eq!(rational(&format!("{hi}-{lo}")), None);
+    assert!(!same(hi, lo));
+    // Within the bounds the polynomial is read: (x⁶⁴)⁶⁴ is x⁴⁰⁹⁶.
+    assert_eq!(rational("(x^64)^64"), Some((4097, 1)));
+}
+
+/// Review 18, R18-L-01: the series of an integer power negated its
+/// exponent to take the reciprocal, which i64::MIN has no negation for
+/// (an overflow, or in a release build the same exponent again, for ever).
+/// A typed −9223372036854775808 is that exponent; the y-intercept of
+/// (x + 1) to it is 1.
+#[test]
+fn the_least_integer_exponent_replays() {
+    replay::iv::init();
+    for src in [
+        "(x+1)^(-9223372036854775808)",
+        "(x+1)^(0-9223372036854775808)",
+        "(x+1)^(-9223372036854775807)",
+        "(x+1)^9223372036854775807",
+    ] {
+        let (e, lits) = read(src);
+        let ctx = replay::eval::Ctx {
+            unit: replay::iv::Unit::Radians,
+            lits: &lits,
+            vars: &[],
+        };
+        let s = replay::eval::series(&e, 0.0, 0.0, 2, &ctx);
+        assert!(s[0].def && s[0].is_exactly(1.0), "{src} at 0: {:?}", s[0]);
+        assert!(s[1].def && s[1].bounded(), "{src} at 0: f′ {:?}", s[1]);
+        // At −1 the base is 0: a negative power is undefined there.
+        let s = replay::eval::series(&e, -1.0, -1.0, 2, &ctx);
+        assert_eq!(s[0].empty, src.contains('-'), "{src} at −1: {:?}", s[0]);
+    }
+    // The certificate itself replays in full: the y-intercept 1 is proved
+    // on f's own tree, and a false y-intercept is caught.
+    let src = "(x+1)^(-9223372036854775808)";
+    let v = certificate(src);
+    assert_eq!(rejected(&v), None, "{src}");
+    let r = replay::replay(&v).expect("replayed");
+    let y = r
+        .claims
+        .iter()
+        .find(|c| c.rows.iter().any(|r| r == "y_intercept"))
+        .expect("the y-intercept's claim");
+    assert_eq!(y.outcome.class, Class::Strong, "{:?}", y.claim);
+    let mut planted = v.clone();
+    let c = first(&mut planted, "y_intercept", "Value");
+    c["lo"] = serde_json::json!(2.0);
+    c["hi"] = serde_json::json!(2.0);
+    *value_of(&mut planted, "y_intercept") = serde_json::json!({"lo": 2.0, "hi": 2.0});
+    assert!(rejected(&planted).is_some(), "{src}: f(0) = 2 not caught");
+}
+
+/// The audit of review 18: tan at a whole number of quarter turns (in
+/// degrees and grads) decided its parity from a double cast to i64. Past
+/// 2⁵³ the double is the wrong whole number (90·(2⁵³ + 1)° is an odd
+/// quarter turn, a pole, read as an even one: tan = 0, defined); past 2⁶³
+/// the cast saturates to an odd number (9·10²¹° is 10²⁰ quarter turns, tan
+/// = 0, read as a pole); and past the working precision a quotient that is
+/// no whole number rounds to one (2²⁰⁰° is no quarter turn).
+#[test]
+fn tan_at_a_quarter_turn_past_the_doubles() {
+    use replay::iv::{self, Iv, Unit};
+    use rug::{Float, Integer};
+    iv::init();
+    let at = |n: Integer| Iv::point(Float::with_val(iv::prec(), n));
+    let two53 = Integer::from(1) << 53u32;
+    for (unit, quarter) in [(Unit::Degrees, 90), (Unit::Grads, 100)] {
+        iv::set_prec(160);
+        // Odd quarter turns: poles.
+        for k in [
+            Integer::from(1),
+            Integer::from(-3),
+            two53.clone() + 1,
+            -two53.clone() - 1,
+            (Integer::from(1) << 80u32) + 1,
+        ] {
+            let v = iv::tan(&at(k.clone() * quarter), unit);
+            assert!(v.empty, "tan at {k} quarter turns [{unit:?}]: {v:?}");
+        }
+        // Even quarter turns: 0 exactly.
+        for k in [
+            Integer::from(0),
+            Integer::from(2),
+            two53.clone() + 2,
+            Integer::from(Integer::u_pow_u(10, 20)),
+            -(Integer::from(1) << 80u32),
+        ] {
+            let v = iv::tan(&at(k.clone() * quarter), unit);
+            assert!(
+                v.def && v.is_exactly(0.0),
+                "tan at {k} quarter turns [{unit:?}]: {v:?}"
+            );
+        }
+        // No whole number of quarter turns, though the quotient rounds to
+        // one at 160 bits (2²⁰⁰° is 256° and 176 grads, turns aside):
+        // neither a pole nor 0 there, and decided with more bits.
+        let v = iv::tan(&at(Integer::from(1) << 200u32), unit);
+        assert!(
+            !v.empty && !(v.def && v.is_exactly(0.0)),
+            "tan at 2²⁰⁰ [{unit:?}]: {v:?}"
+        );
+        iv::set_prec(640);
+        let v = iv::tan(&at(Integer::from(1) << 200u32), unit);
+        assert!(v.def && v.ne0(), "tan at 2²⁰⁰ [{unit:?}], 640 bits: {v:?}");
+    }
+    iv::set_prec(160);
+    // And through the evaluator, from a typed number.
+    let (e, lits) = read("tan(x+810647932926689370)");
+    let ctx = replay::eval::Ctx {
+        unit: Unit::Degrees,
+        lits: &lits,
+        vars: &[],
+    };
+    let s = replay::eval::series(&e, 0.0, 0.0, 0, &ctx);
+    assert!(s[0].empty, "tan(90·(2⁵³ + 1)°): {:?}", s[0]);
+}
+
+/// The audit of review 18: what a certificate writes is read whole or
+/// refused. A path names a child by a byte (the 257th argument of a max was
+/// read as the first), a Taylor order is one the certifier writes, a power
+/// of π in a fact is a small one, and a whole number in a fact is the one
+/// written (not the double it rounds to).
+#[test]
+fn certificate_fields_out_of_range_are_refused() {
+    let beyond = |path: serde_json::Value| {
+        replay::claim(&serde_json::json!({"Beyond": {
+            "x": {"a": 0.0, "b": 1.0},
+            "of": {"G": {"path": path, "via": "Itself"}},
+            "c": 0.0, "above": true}}))
+    };
+    assert!(beyond(serde_json::json!([0, 255])).is_ok());
+    for bad in [
+        serde_json::json!([256]),
+        serde_json::json!([0, 4294967296u64]),
+        serde_json::json!([-1]),
+        serde_json::json!([0.5]),
+    ] {
+        assert!(beyond(bad.clone()).is_err(), "path {bad} read");
+    }
+    let touch = |order: serde_json::Value| {
+        replay::claim(&serde_json::json!({"Touch": {
+            "x": {"a": 0.0, "b": 1.0}, "of": {"F": "F0"},
+            "c": 0.0, "at": 0.5, "order": order, "above": true}}))
+    };
+    let chain = |order: serde_json::Value| {
+        replay::claim(&serde_json::json!({"TailChain": {
+            "side": "Right", "from": 1.0, "of": {"F": "F0"},
+            "c": 0.0, "above": true, "order": order}}))
+    };
+    assert!(touch(serde_json::json!(2)).is_ok() && chain(serde_json::json!(3)).is_ok());
+    for bad in [
+        serde_json::json!(256),
+        serde_json::json!(1u64 << 40),
+        serde_json::json!(-1),
+    ] {
+        assert!(touch(bad.clone()).is_err(), "Touch order {bad} read");
+        assert!(chain(bad.clone()).is_err(), "TailChain order {bad} read");
+    }
+    replay::iv::init();
+    replay::iv::set_prec(160);
+    assert!(replay::claims::pi_q("1/2·π^2").is_some());
+    assert!(replay::claims::pi_q("1/2·π^2147483647").is_none());
+    assert!(replay::claims::pi_q("1/2·π^-2147483648").is_none());
+    // A whole number past 2⁵³ in a fact is enclosed, not rounded to a
+    // double; a tree of it for the exact algebra is not made at all.
+    let v = replay::claims::pi_q("9007199254740993").unwrap();
+    assert!(v.lo == v.hi && v.lo > 9007199254740992.0 && v.lo < 9007199254740994.0);
+    let v = replay::claims::pi_q("9007199254740993/3").unwrap();
+    assert!(v.lo == 3002399751580331.0 && v.hi == 3002399751580331.0);
+    let v = replay::claims::pi_q("-1/3").unwrap();
+    assert!(v.lo < v.hi && v.hi < -0.333 && v.lo > -0.334);
+    assert!(replay::claims::pi_q("1/0").is_none_or(|v| v.empty));
+    assert!(replay::algebra::piq_expr(9007199254740992, 1, 0).is_some());
+    assert!(replay::algebra::piq_expr(9007199254740993, 1, 0).is_none());
+    assert!(replay::algebra::piq_expr(1, -9007199254740993, 1).is_none());
+    assert!(replay::algebra::piq_expr(i64::MIN, 1, 0).is_none());
+}
+
+/// The audit of review 18: the least period's proof tries P/q for each
+/// prime q up to a bound read off the certificate (P over a family's
+/// period, or over f′'s bound). A family period of 10⁻³⁰⁰ made that bound
+/// 3·10³⁰⁰, cast to u64::MAX primes to sieve: the replay never returned.
+/// Past what the certifier itself tries the row is not confirmed.
+#[test]
+fn a_period_bound_past_any_sieve_is_refused() {
+    let mut v = certificate("tan(x)");
+    assert_eq!(rejected(&v), None);
+    let fam = &mut value_of(&mut v, "domain")["excluded"][0]["period"];
+    assert!(
+        fam["lo"].is_number(),
+        "tan(x)'s domain lists no family: retarget"
+    );
+    fam["lo"] = serde_json::json!(1e-300);
+    let r = replay::replay(&v).expect("replayed");
+    let period = r.rows.iter().find(|r| r.name == "period").unwrap();
+    assert!(
+        period.problems.iter().any(|p| p.contains("past any sieve")),
+        "{:?}",
+        period.problems
+    );
+    // A family period not shown positive bounds nothing either (P over a
+    // negative low end was a negative bound: no prime to try, and the
+    // least period stood unchecked), nor does a period not shown positive.
+    for (lo, row_lo) in [
+        (-1.0, None),
+        (0.0, None),
+        (f64::NAN, None),
+        (1.0, Some(-4.0)),
+    ] {
+        let mut v = certificate("tan(x)");
+        value_of(&mut v, "domain")["excluded"][0]["period"]["lo"] = if lo.is_nan() {
+            serde_json::json!("nan")
+        } else {
+            serde_json::json!(lo)
+        };
+        if let Some(l) = row_lo {
+            value_of(&mut v, "period")["lo"] = serde_json::json!(l);
+        }
+        let r = replay::replay(&v).expect("replayed");
+        let period = r.rows.iter().find(|r| r.name == "period").unwrap();
+        assert!(
+            !period.problems.is_empty(),
+            "a family period from {lo}, the period from {row_lo:?}: the least period stands"
+        );
+    }
+}
+
+// ------------------------------------------------- review 18: listings
+
+/// The double below 1/3 (the nearest): 0.333…3148.
+const THIRD: f64 = 1.0 / 3.0;
+
+/// The enclosure [d, d].
+fn point(d: f64) -> serde_json::Value {
+    serde_json::json!({"lo": d, "hi": d})
+}
+
+/// The body of a certified or partial row (mutable).
+fn body_of<'v>(v: &'v mut serde_json::Value, row: &str) -> &'v mut serde_json::Value {
+    v[row].as_object_mut().unwrap().values_mut().next().unwrap()
+}
+
+/// The claims of a kind in a row (copies).
+fn claims_of_kind(v: &mut serde_json::Value, row: &str, kind: &str) -> Vec<serde_json::Value> {
+    let found: Vec<serde_json::Value> = claims_of(v, row)
+        .iter()
+        .filter(|c| c.get(kind).is_some())
+        .cloned()
+        .collect();
+    assert!(
+        !found.is_empty(),
+        "the plant needs a {kind} claim in {row}, which the certifier no longer writes for this \
+         function: retarget the plant"
+    );
+    found
+}
+
+/// The range row made up as Certified, (−∞, e) ∪ (e, ∞) with e listed as
+/// `e` (open) or the same closed on its upper piece, each tail's limit the
+/// source of an end, on the true claims `claims` and f unbounded at its
+/// pole (the vertical row's claim).
+fn range_about(v: &mut serde_json::Value, e: (f64, f64), mut claims: Vec<serde_json::Value>) {
+    claims.extend(claims_of_kind(v, "vertical", "Unbounded"));
+    let end = serde_json::json!({"At": {"x": {"lo": e.0, "hi": e.1}, "closed": false}});
+    v["range"] = serde_json::json!({"Certified": {
+        "value": [{"lo": "NegInf", "hi": end}, {"lo": end, "hi": "PosInf"}],
+        "cert": {"covers": "Line", "claims": claims}
+    }});
+    v["range_ends"] = serde_json::json!([[["Other"], [{"Tail": "Left"}]],
+        [[{"Tail": "Right"}], ["Other"]]]);
+}
+
+/// The two facts "f = N/D exactly: f → `limit` as x → ±∞".
+fn rational_limits(limit: &str) -> Vec<serde_json::Value> {
+    ["−∞", "+∞"]
+        .iter()
+        .map(|at| {
+            serde_json::json!({"Simplifier": {"fact":
+            format!("f = N/D exactly: f → {limit} as x → {at}")}})
+        })
+        .collect()
+}
+
+/// Review 18's follow-up: listings that miss the true value. Each row of a
+/// certificate lists numbers (a zero, an end, a period, a slope) as
+/// enclosures [lo, hi]; the claims and facts beside them are left true, and
+/// the listing is made a point at a double the true value is not (1/3
+/// listed at 0.333…3148, 2⁵³ + 1 at 2⁵³, π at 3.14159…793), or an interval
+/// that leaves it out. Each must be refused: a listing holds the value its
+/// claims prove, compared exactly where a fact gives it exactly.
+const LISTINGS: &[Plant] = &[
+    // ---- the range
+    (
+        "(9007199254740993x+1)/(x+1)",
+        "range: 2⁵³ left out, not the limit 2⁵³ + 1 (the tails' structural limits)",
+        |v| {
+            let limits = claims_of_kind(v, "horizontal", "Limit");
+            range_about(v, (9007199254740992.0, 9007199254740992.0), limits)
+        },
+    ),
+    (
+        "(9007199254740993x+1)/(x+1)",
+        "range: 2⁵³ left out, not the limit 2⁵³ + 1 (a rational's exact limits)",
+        |v| {
+            range_about(
+                v,
+                (9007199254740992.0, 9007199254740992.0),
+                rational_limits("9007199254740993"),
+            )
+        },
+    ),
+    (
+        "(x+1)/(3x)",
+        "range: the double nearest 1/3 left out (the tails' structural limits)",
+        |v| {
+            let limits = claims_of_kind(v, "horizontal", "Limit");
+            range_about(v, (THIRD, THIRD), limits)
+        },
+    ),
+    (
+        "(x+1)/(3x)",
+        "range: the double nearest 1/3 left out (a rational's exact limits)",
+        |v| range_about(v, (THIRD, THIRD), rational_limits("1/3")),
+    ),
+    (
+        "(x+1)/(3x)",
+        "range: an interval beside 1/3 left out (a rational's exact limits)",
+        |v| {
+            range_about(
+                v,
+                (THIRD.next_up(), THIRD.next_up().next_up()),
+                rational_limits("1/3"),
+            )
+        },
+    ),
+    (
+        "atan(x)",
+        "range: the ends at the doubles nearest ∓π/2",
+        |v| {
+            let p = &mut value_of(v, "range")[0];
+            let d = std::f64::consts::FRAC_PI_2;
+            p["lo"]["At"]["x"] = point(-d);
+            p["hi"]["At"]["x"] = point(d);
+        },
+    ),
+    (
+        "(3x-1)^2+1/3",
+        "range: the least value 1/3 listed at the double nearest it",
+        |v| value_of(v, "range")[0]["lo"]["At"]["x"] = point(THIRD),
+    ),
+    (
+        "(3x-1)^2+1/3",
+        "range: the least value listed above 1/3",
+        |v| value_of(v, "range")[0]["lo"]["At"]["x"] = point(THIRD.next_up()),
+    ),
+    (
+        "((x-1)^2+1/3)*(x-1)/(x-1)",
+        "range: the hole's value 1/3, the open end, listed at the double nearest it",
+        |v| value_of(v, "range")[0]["lo"]["At"]["x"] = point(THIRD),
+    ),
+    (
+        "((x-1)^2+1/3)*(x-1)/(x-1)",
+        "range: the hole's value 1/3 called attained",
+        |v| value_of(v, "range")[0]["lo"]["At"]["closed"] = serde_json::json!(true),
+    ),
+    // An end on the wrong side: closed where the value is only approached,
+    // open where it is taken; with the ends' sources, and without them.
+    ("1/(x^2+1)", "range: the limit 0 called attained", |v| {
+        value_of(v, "range")[0]["lo"]["At"]["closed"] = serde_json::json!(true)
+    }),
+    (
+        "1/(x^2+1)",
+        "range: the greatest value 1 called not attained",
+        |v| value_of(v, "range")[0]["hi"]["At"]["closed"] = serde_json::json!(false),
+    ),
+    (
+        "1/(x^2+1)",
+        "range: the limit 0 called attained, the ends' sources left out",
+        |v| {
+            value_of(v, "range")[0]["lo"]["At"]["closed"] = serde_json::json!(true);
+            v.as_object_mut().unwrap().remove("range_ends");
+        },
+    ),
+    (
+        "1/(x^2+1)",
+        "range: the greatest value 1 called not attained, the ends' sources left out",
+        |v| {
+            value_of(v, "range")[0]["hi"]["At"]["closed"] = serde_json::json!(false);
+            v.as_object_mut().unwrap().remove("range_ends");
+        },
+    ),
+    (
+        "1/(x^2+1)",
+        "range: the limit 0 called attained, its source called another",
+        |v| {
+            value_of(v, "range")[0]["lo"]["At"]["closed"] = serde_json::json!(true);
+            v["range_ends"][0][0] = serde_json::json!(["Other"]);
+        },
+    ),
+    // ---- the horizontal asymptotes
+    (
+        "(x+1)/(3x)",
+        "horizontal: the double nearest 1/3, beside a (true) fact that the limit is 1/3",
+        |v| {
+            for item in value_of(v, "horizontal").as_array_mut().unwrap() {
+                item["y"] = point(THIRD);
+            }
+            for at in ["−∞", "+∞"] {
+                claims_of(v, "horizontal").push(serde_json::json!({"Simplifier": {"fact":
+                    format!("f → 1/3 as x → {at}")}}));
+            }
+        },
+    ),
+    ("atan(x)", "horizontal: the doubles nearest ∓π/2", |v| {
+        for item in value_of(v, "horizontal").as_array_mut().unwrap() {
+            let d = std::f64::consts::FRAC_PI_2;
+            item["y"] = point(if item["side"] == "Left" { -d } else { d });
+        }
+    }),
+    // (The exact form beside the enclosure is what the panel shows as the
+    // limit; "looks like" a number inside the enclosure, no more.)
+    (
+        "(x+1)/(3x)",
+        "horizontal: the limit written exactly as the double below 1/3",
+        |v| {
+            for item in value_of(v, "horizontal").as_array_mut().unwrap() {
+                item["exact"] = serde_json::json!("6004799503160661/18014398509481984");
+            }
+        },
+    ),
+    (
+        "atan(x)",
+        "horizontal: the limits written exactly as the doubles nearest ∓π/2",
+        |v| {
+            for item in value_of(v, "horizontal").as_array_mut().unwrap() {
+                let d = "884279719003555/562949953421312";
+                item["exact"] = serde_json::json!(if item["side"] == "Left" {
+                    format!("-{d}")
+                } else {
+                    d.to_string()
+                });
+            }
+        },
+    ),
+    (
+        "(x+1)/(3x)",
+        "horizontal: the limit said to look like 1/2",
+        |v| {
+            for item in value_of(v, "horizontal").as_array_mut().unwrap() {
+                item["looks_like"] = serde_json::json!(0.5);
+            }
+        },
+    ),
+    // ---- the oblique asymptotes
+    (
+        "(x^2+x+1)/(3x)",
+        "oblique: the slope 1/3 listed at the double nearest it",
+        |v| {
+            for item in value_of(v, "oblique").as_array_mut().unwrap() {
+                item["m"] = point(THIRD);
+            }
+        },
+    ),
+    (
+        "(x^2+x+1)/(3x)",
+        "oblique: the intercept 1/3 listed at the double nearest it",
+        |v| {
+            for item in value_of(v, "oblique").as_array_mut().unwrap() {
+                item["b"] = point(THIRD);
+            }
+        },
+    ),
+    ("(x^2+x+1)/(3x)", "oblique: the slope listed as 5", |v| {
+        for item in value_of(v, "oblique").as_array_mut().unwrap() {
+            item["m"] = point(5.0);
+        }
+    }),
+    (
+        "sqrt(x^2+1)/3",
+        "oblique: the slopes ∓1/3 listed at the doubles nearest them",
+        |v| {
+            for item in value_of(v, "oblique").as_array_mut().unwrap() {
+                item["m"] = point(if item["side"] == "Left" {
+                    -THIRD
+                } else {
+                    THIRD
+                });
+            }
+        },
+    ),
+    // ---- the x-intercepts
+    (
+        "3x-1",
+        "x-intercepts: the zero 1/3 listed at the double nearest it",
+        |v| value_of(v, "x_intercepts")[0]["At"] = point(THIRD),
+    ),
+    (
+        "sin(x)",
+        "x-intercepts: repeating every 6.28318…586, the double nearest 2π",
+        |v| {
+            for item in value_of(v, "x_intercepts").as_array_mut().unwrap() {
+                item["Every"]["period"] = point(std::f64::consts::TAU);
+            }
+        },
+    ),
+    (
+        "sin(x)",
+        "x-intercepts: one period's window cut at 1, the zero at π left out",
+        |v| {
+            let b = body_of(v, "x_intercepts");
+            b["cert"]["covers"]["Period"]["b"] = serde_json::json!(1.0);
+            b["cert"]["claims"].as_array_mut().unwrap().retain(|c| {
+                c.as_object()
+                    .and_then(|o| o.values().next())
+                    .and_then(|c| c.get("x"))
+                    .is_none_or(|x| x["a"].as_f64().unwrap() <= 1.0)
+            });
+            b["value"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|i| i["Every"]["x0"]["lo"] == 0.0);
+        },
+    ),
+    // ---- the vertical asymptotes
+    (
+        "1/(3x-1)",
+        "vertical: the pole 1/3 listed at the double nearest it",
+        |v| value_of(v, "vertical")[0]["At"] = point(THIRD),
+    ),
+    (
+        "1/(3x-1)",
+        "vertical: the pole 1/3 listed at the double nearest it, its claim's box too",
+        |v| {
+            value_of(v, "vertical")[0]["At"] = point(THIRD);
+            first(v, "vertical", "Unbounded")["at"] = serde_json::json!({"a": THIRD, "b": THIRD});
+        },
+    ),
+    (
+        "tan(x)",
+        "vertical: the poles from the double nearest π/2",
+        |v| value_of(v, "vertical")[0]["Every"]["x0"] = point(std::f64::consts::FRAC_PI_2),
+    ),
+    (
+        "tan(x)",
+        "vertical: the poles every 3.14159…793, the double nearest π",
+        |v| value_of(v, "vertical")[0]["Every"]["period"] = point(std::f64::consts::PI),
+    ),
+    // ---- the domain and its ends
+    (
+        "sqrt(3x-1)",
+        "domain: the end 1/3 listed closed at the double above it",
+        |v| value_of(v, "domain")["pieces"][0]["lo"]["At"]["x"] = point(THIRD.next_up()),
+    ),
+    (
+        "sqrt(3x-1)",
+        "domain: the end 1/3 listed closed at the double below it",
+        |v| value_of(v, "domain")["pieces"][0]["lo"]["At"]["x"] = point(THIRD),
+    ),
+    (
+        "sqrt(3x-1)",
+        "domain: the end 1/3 listed in an interval beside it",
+        |v| {
+            value_of(v, "domain")["pieces"][0]["lo"]["At"]["x"] = serde_json::json!({
+                "lo": THIRD.next_up(), "hi": THIRD.next_up().next_up()})
+        },
+    ),
+    (
+        "ln(3x-1)",
+        "domain: the end 1/3 listed open at the double below it",
+        |v| value_of(v, "domain")["pieces"][0]["lo"]["At"]["x"] = point(THIRD),
+    ),
+    (
+        "ln(3x-1)",
+        "domain: the end 1/3 listed open at the double above it",
+        |v| value_of(v, "domain")["pieces"][0]["lo"]["At"]["x"] = point(THIRD.next_up()),
+    ),
+    (
+        "1/(3x-1)",
+        "domain: the hole 1/3 listed at the double nearest it",
+        |v| {
+            let ps = &mut value_of(v, "domain")["pieces"];
+            ps[0]["hi"]["At"]["x"] = point(THIRD);
+            ps[1]["lo"]["At"]["x"] = point(THIRD);
+        },
+    ),
+    (
+        "x^2+x",
+        "domain: a hole made up, in an interval about 1/3",
+        |v| {
+            let end = serde_json::json!({"At": {
+                "x": {"lo": THIRD, "hi": THIRD.next_up()}, "closed": false}});
+            value_of(v, "domain")["pieces"] =
+                serde_json::json!([{"lo": "NegInf", "hi": end}, {"lo": end, "hi": "PosInf"}]);
+        },
+    ),
+    (
+        "tan(x)",
+        "domain: the excluded family every 3.14159…793, its claim's box too",
+        |v| {
+            let d = std::f64::consts::PI;
+            value_of(v, "domain")["excluded"][0]["period"] = point(d);
+            first(v, "domain", "Family")["period"] = serde_json::json!({"a": d, "b": d});
+        },
+    ),
+    // ---- extrema, inflections and the monotone pieces
+    (
+        "(3x-1)^2+1/3",
+        "extrema: the minimum's place 1/3 listed at the double nearest it",
+        |v| value_of(v, "extrema")[0]["x"] = point(THIRD),
+    ),
+    (
+        "(3x-1)^2+1/3",
+        "extrema: the minimum's value 1/3 listed at the double nearest it",
+        |v| value_of(v, "extrema")[0]["y"] = point(THIRD),
+    ),
+    (
+        "sin(x)",
+        "extrema: repeating every 6.28318…586, the double nearest 2π",
+        |v| {
+            for item in value_of(v, "extrema").as_array_mut().unwrap() {
+                item["every"] = point(std::f64::consts::TAU);
+            }
+        },
+    ),
+    (
+        "(3x-1)^3+x",
+        "inflections: the place 1/3 listed at the double nearest it",
+        |v| value_of(v, "inflections")[0]["x"] = point(THIRD),
+    ),
+    (
+        "(3x-1)^3+x",
+        "inflections: the value 1/3 listed at the double nearest it",
+        |v| value_of(v, "inflections")[0]["y"] = point(THIRD),
+    ),
+    (
+        "(3x-1)^2+1/3",
+        "monotonicity: the pieces meeting at the double nearest 1/3",
+        |v| {
+            let ps = value_of(v, "monotonicity");
+            ps[0]["on"]["hi"]["At"]["x"] = point(THIRD);
+            ps[1]["on"]["lo"]["At"]["x"] = point(THIRD);
+        },
+    ),
+    (
+        "(3x-1)^2+1/3",
+        "monotonicity: the pieces meeting at the double above 1/3",
+        |v| {
+            let ps = value_of(v, "monotonicity");
+            ps[0]["on"]["hi"]["At"]["x"] = point(THIRD.next_up());
+            ps[1]["on"]["lo"]["At"]["x"] = point(THIRD.next_up());
+        },
+    ),
+    (
+        "sqrt(3x-1)",
+        "monotonicity: the piece from the double below the domain's end 1/3",
+        |v| value_of(v, "monotonicity")[0]["on"]["lo"]["At"]["x"] = point(THIRD),
+    ),
+    (
+        "sqrt(3x-1)",
+        "monotonicity: the piece from −1, outside the domain",
+        |v| value_of(v, "monotonicity")[0]["on"]["lo"]["At"]["x"] = point(-1.0),
+    ),
+    (
+        "1/(3x-1)",
+        "monotonicity: the pieces meeting at the double nearest the pole 1/3",
+        |v| {
+            let ps = value_of(v, "monotonicity");
+            ps[0]["on"]["hi"]["At"]["x"] = point(THIRD);
+            ps[1]["on"]["lo"]["At"]["x"] = point(THIRD);
+        },
+    ),
+    (
+        "(3x-1)^2+1/3",
+        "monotonicity: the increasing piece left out",
+        |v| {
+            value_of(v, "monotonicity")
+                .as_array_mut()
+                .unwrap()
+                .truncate(1)
+        },
+    ),
+    // ---- what a row leaves out or lets in beside its listings
+    (
+        "sin(x)",
+        "x-intercepts: the family through π from the double nearest it",
+        |v| value_of(v, "x_intercepts")[1]["Every"]["x0"] = point(std::f64::consts::PI),
+    ),
+    (
+        "1/(3x-1)",
+        "domain: the pole 1/3 let in (an end closed where the pieces meet)",
+        |v| value_of(v, "domain")["pieces"][0]["hi"]["At"]["closed"] = serde_json::json!(true),
+    ),
+    (
+        "(x^2+x+1)/(3x)",
+        "oblique: the line on the right left out",
+        |v| {
+            value_of(v, "oblique")
+                .as_array_mut()
+                .unwrap()
+                .retain(|i| i["side"] == "Left")
+        },
+    ),
+    ("tan(x)", "vertical: the poles left out", |v| {
+        value_of(v, "vertical").as_array_mut().unwrap().clear()
+    }),
+    // ---- the period and the y-intercept
+    (
+        "sin(6*pi*x)",
+        "period: 1/3 listed at the double nearest it",
+        |v| *value_of(v, "period") = point(THIRD),
+    ),
+    (
+        "sin(x)",
+        "period: 2π listed at the double nearest it",
+        |v| *value_of(v, "period") = point(std::f64::consts::TAU),
+    ),
+    (
+        "x+1/3",
+        "y-intercept: 1/3 listed at the double nearest it",
+        |v| *value_of(v, "y_intercept") = point(THIRD),
+    ),
+    (
+        "x+1/3",
+        "y-intercept: 1/3 listed at the double nearest it, its claim's value too",
+        |v| {
+            *value_of(v, "y_intercept") = point(THIRD);
+            let c = first(v, "y_intercept", "Value");
+            c["lo"] = serde_json::json!(THIRD);
+            c["hi"] = serde_json::json!(THIRD);
+        },
+    ),
+];
+
+#[test]
+fn listings_that_miss_the_true_value_are_refused() {
+    let mut missed = Vec::new();
+    let mut cache: BTreeMap<&str, serde_json::Value> = BTreeMap::new();
+    for &(src, what, plant) in LISTINGS {
+        let base = cache.entry(src).or_insert_with(|| certificate(src)).clone();
+        if let Some(why) = rejected(&base) {
+            panic!("{src}: the true certificate is rejected: {why}");
+        }
+        let mut v = base.clone();
+        plant(&mut v);
+        match rejected(&v) {
+            Some(why) => println!("{src}: {what}: caught ({why})"),
+            None => {
+                println!("{src}: {what}: MISSED");
+                missed.push(format!("{src}: {what}"));
+            }
+        }
+    }
+    assert!(missed.is_empty(), "listings not refused: {missed:#?}");
 }

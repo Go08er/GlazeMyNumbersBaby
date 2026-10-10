@@ -463,7 +463,16 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     // defined in [-w, w], and list what they find there alone.
     let decided = dom.row.is_certified();
     let (win, period) = match periodic {
-        Some((s, p)) => (Some((s, s + p.hi.0)), Some(p)),
+        // (The window's end rounded up: no shorter than the period's
+        // enclosure. s + P rounded to nearest can fall half an ulp short
+        // of it, and a row complete "over one period" then covered a
+        // little less than one: sin(2π·10¹²·x)'s window was 5·10⁻¹⁷ of a
+        // period short. Review 18's follow-up.)
+        Some((s, p)) => {
+            use crate::interval::Interval;
+            let end = (Interval::point(s) + Interval::point(p.hi.0)).hi();
+            (Some((s, end)), Some(p))
+        }
         None if !dom.families.is_empty() || !decided => {
             let c = cut_window(&dom, w);
             (Some((-c, c)), None)

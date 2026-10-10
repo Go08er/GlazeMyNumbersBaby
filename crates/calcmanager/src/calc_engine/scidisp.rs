@@ -87,27 +87,32 @@ fn wcstoul10(s: &[char], start: usize) -> (u64, usize) {
     )
 }
 
+/// `TruncateNumForIntMath` in INT mode, with the word size's `chop` number
+/// (the largest it holds): truncates if too big, makes it a non negative.
+pub(super) fn truncate_for_int_math(rat: &Rational, chop: &Rational) -> CalcResult<Rational> {
+    // Truncate to an integer. Do not round here.
+    let mut result = rational_math::integer(rat)?;
+
+    // Can be converting a dec negative number to Hex/Oct/Bin rep. Use 2's complement form
+    // Check the range.
+    if result < Rational::from(0) {
+        // if negative make positive by doing a twos complement
+        result = (-&result).sub(&Rational::from(1))?;
+        result = result.bitxor(chop)?;
+    }
+
+    result = result.bitand(chop)?;
+
+    Ok(result)
+}
+
 impl CalcEngine {
     /// Truncates if too big, makes it a non negative - the number in rat. Doesn't do anything if not in INT mode
     pub(super) fn truncate_num_for_int_math(&self, rat: &Rational) -> CalcResult<Rational> {
         if !self.f_integer_mode {
             return Ok(rat.clone());
         }
-
-        // Truncate to an integer. Do not round here.
-        let mut result = rational_math::integer(rat)?;
-
-        // Can be converting a dec negative number to Hex/Oct/Bin rep. Use 2's complement form
-        // Check the range.
-        if result < Rational::from(0) {
-            // if negative make positive by doing a twos complement
-            result = (-&result).sub(&Rational::from(1))?;
-            result = result.bitxor(&self.get_chop_number())?;
-        }
-
-        result = result.bitand(&self.get_chop_number())?;
-
-        Ok(result)
+        truncate_for_int_math(rat, &self.get_chop_number())
     }
 
     /****************************************************************************\

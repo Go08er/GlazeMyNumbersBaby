@@ -19,6 +19,14 @@
 //! model (unsupported). `--lenient` keeps the old rule (review 17,
 //! Question 2): open claims are noted, not failures, so its status 0 says
 //! only that nothing was shown wrong, not that every claim was confirmed.
+//!
+//! What the replay can't check: functions that use the factorial `n!`, the
+//! double factorial `n!!`, `nCr` or `nPr` anywhere, a constant like `5!`
+//! included. It has no Γ of its own for them, so every claim about such a
+//! function is unsupported and the strict status is 1 for its certificate,
+//! genuine or not (`nCr(x,1)`: 37 claims, all unsupported; review 18,
+//! Question 1): not checked, rather than checked and wrong. Everything
+//! else in the language is modelled (`tests/replay/mod.rs` has the scope).
 
 #[path = "../tests/replay/mod.rs"]
 mod replay;
@@ -28,8 +36,25 @@ use graphing::compile::CompileOptions;
 use graphing::functions::TrigUnit;
 use replay::Class;
 
+const USAGE: &str = "\
+usage: replay 'EXPR' [deg|grad] [--all] [--lenient] [--json FILE]
+
+Replays the certificate of y = EXPR (or the one saved in FILE) claim by
+claim. Status 0: every claim behind a certified or partial row is proved
+and every row follows; 1: a claim is refuted or left open, or a row
+doesn't follow (--lenient passes open claims); 2: nothing to replay.
+
+Not checked: functions that use n!, n!!, nCr or nPr anywhere (a constant
+like 5! included). The replay has no gamma function of its own, so every
+claim about such a function is unsupported and its certificate gets status
+1, genuine or not: not checked, rather than checked and wrong.";
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{USAGE}");
+        return;
+    }
     let all = args.iter().any(|a| a == "--all");
     let lenient = args.iter().any(|a| a == "--lenient");
     let unit = if args.iter().any(|a| a == "deg") {
@@ -53,7 +78,7 @@ fn main() {
                 .iter()
                 .find(|a| !a.starts_with("--") && *a != "deg" && *a != "grad")
             else {
-                eprintln!("usage: replay 'EXPR' [deg|grad] [--all] [--lenient] [--json FILE]");
+                eprintln!("{USAGE}");
                 std::process::exit(2);
             };
             let opts = CompileOptions {

@@ -1638,7 +1638,8 @@ fn memory_with_huge_exponents_restores_quickly() {
         // Programmer mode has no e-notation.
         let kept: &[&str] = if mode == 2 { &["5"] } else { &["1.5e+3", "5"] };
         assert_eq!(vm.memory(), kept, "mode {mode}");
-        vm.memory_recall(0);
+        // A kept slot is worked out when it is read: that is bounded too.
+        bounded(&format!("mode {mode}, recalled"), || vm.memory_recall(0));
         let value = if mode == 2 { "5" } else { "1,500" };
         assert_eq!(vm.display_value(), value, "mode {mode}");
     }
@@ -1913,11 +1914,10 @@ fn programmer_memory_is_restored_as_before() {
 }
 
 /// A slot read back past the typed exponents is bounded as one entered:
-/// at most MAX_WRITTEN_EXPONENT and the digits the mode takes, each within
-/// its budget, so a hundred of the costliest restore quickly.
+/// at most MAX_WRITTEN_EXPONENT and the digits the mode takes. A hundred
+/// of the costliest all come back, at no cost to the restore.
 #[test]
 fn written_memory_slots_are_bounded() {
-    use crate::snapshot::{MEMORY_WORK, VALUE_WORK};
     for (mode, digits) in [(0, 16), (1, 32)] {
         let all = format!("1.{}e+10000", "1".repeat(digits - 1));
         let too_many = format!("1.{}e+10000", "1".repeat(digits));
@@ -1940,22 +1940,22 @@ fn written_memory_slots_are_bounded() {
         );
     }
 
-    // A hundred slots near 10^±19999: the oldest that fit the memory budget
-    // are kept, the rest dropped, and the work and allocations bounded.
+    // A hundred slots near 10^±19999, the costliest there are.
     let costly = "-9.9999999999999999999999999999999e-19999";
     let mut memory = vec![costly; 100];
     memory[99] = "3"; // the oldest
     let state = snapshot_json(1, json!([]), json!({ "mem": memory }));
-    let mut vm = new_vm();
-    let mut done = 0;
-    bounded("a hundred costly slots", || {
-        done = work(|| vm.restore_state(&state))
-    });
-    // The budget, one slot past it, and showing the kept slots.
-    assert!(done < 2 * MEMORY_WORK + VALUE_WORK, "{done}");
-    let kept = vm.memory();
-    assert!((2..100).contains(&kept.len()), "{}", kept.len());
-    assert_eq!(kept.last().map(String::as_str), Some("3"));
+    let (mut vm, done) = restore_measured("a hundred costly slots", &state);
+    assert!(done < MEMORY_RESTORE_WORK, "{done}");
+    assert_eq!(vm.memory(), memory);
+    assert_eq!(unread(&vm), 100);
+    // Such a number is past the display: recalled, it is an overflow.
+    bounded("a costly slot recalled", || vm.memory_recall(0));
+    assert_eq!(vm.display_value(), "Overflow");
+    assert_eq!(unread(&vm), 99);
+    vm.press(Button::Clear);
+    vm.memory_recall(99);
+    assert_eq!(vm.display_value(), "3");
 }
 
 #[test]
@@ -2186,21 +2186,616 @@ fn a_costly_crafted_history_item_is_replayed_within_the_budget() {
     assert_eq!(vm.display_value(), "78");
 }
 
-/// Memory slots near 10^-9999 cost millions of units each: the oldest that
-/// fit the memory budget are kept, the rest dropped, and the work bounded.
+/// The most arithmetic a restore may do for the memory it brings back,
+/// whatever that is. Outside Programmer mode it does none: a slot's number
+/// is worked out when it is first read. There, the entry cleared after
+/// the last slot shows 0 in the four radixes (700 units), and a key may
+/// end a number's entry as it is typed back (± in a radix other than ten),
+/// which works out a number the word size holds. A slot near 10^±9999
+/// costs over a million units to work out.
+const MEMORY_RESTORE_WORK: u64 = 10_000;
+
+/// A calculator restored from `state`, within the bounds of [`bounded`],
+/// and the arithmetic the restore did for the state's memory: what it took
+/// beyond restoring the same state without its memory (measured after one
+/// such restore: the first calculator of a thread in a mode sets the
+/// engine's constants up, at a cost of its own).
+fn restore_measured(what: &str, state: &str) -> (CalculatorViewModel, u64) {
+    let mut without: Value = serde_json::from_str(state).unwrap();
+    without["x"]["mem"] = json!([]);
+    let without = without.to_string();
+    let restore = |state: &str| {
+        let mut vm = new_vm();
+        let mut done = 0;
+        bounded(what, || done = work(|| vm.restore_state(state)));
+        (vm, done)
+    };
+    restore(&without);
+    let (_, without) = restore(&without);
+    let (vm, with) = restore(state);
+    (vm, with.saturating_sub(without))
+}
+
+/// How many restored memory slots haven't been read yet.
+fn unread(vm: &CalculatorViewModel) -> usize {
+    vm.vm.standard_calculator_manager.unread_memory()
+}
+
+/// A hundred numbers of 32 digits near 10^-9999, each its own, so that
+/// their order shows: what a slot costs most to hold among the numbers
+/// that are typed, a hundred times.
+fn costly_memory() -> Vec<String> {
+    (0..100)
+        .map(|i| format!("9.{i:02}{}e-9999", "9".repeat(29)))
+        .collect()
+}
+
+/// R18-M-01: memory any session can leave (MS pressed a hundred times on
+/// such a number) used to come back short. The restore entered the slots
+/// oldest first within a budget of 30 million units, each such slot cost 6
+/// million (worked out, shown, and written out again for the list), and
+/// the newer 91 were dropped without a word. Every slot comes back now, in
+/// its order, with no arithmetic done for it: a slot's number is worked
+/// out when the slot is first read, and is the number it was saved as.
 #[test]
-fn costly_crafted_memory_is_restored_within_the_budget() {
-    use crate::snapshot::{MEMORY_WORK, VALUE_WORK};
-    let tiny = "9.9999999999999999999999999999999e-9999";
-    let mut memory = vec![tiny; 100];
-    memory[99] = "3"; // the oldest
-    let mut vm = new_vm();
-    let done = work(|| vm.restore_state(&snapshot_json(1, json!([]), json!({ "mem": memory }))));
-    // The budget, one slot past it, and showing the kept slots (formatting
-    // each costs about what entering it did).
-    assert!(done < 2 * MEMORY_WORK + VALUE_WORK, "{done}");
-    let kept = vm.memory();
-    assert!((2..100).contains(&kept.len()), "{kept:?}");
-    assert_eq!(kept.last().map(String::as_str), Some("3"));
+fn a_hundred_costly_memory_slots_all_come_back() {
+    use crate::snapshot::VALUE_WORK;
+    let memory = costly_memory();
+    let state = snapshot_json(1, json!([]), json!({ "mem": memory }));
+    let (mut vm, done) = restore_measured("the restore", &state);
+    assert_eq!(done, 0);
+    assert_eq!(vm.memory(), memory);
+    assert_eq!(unread(&vm), 100);
     assert_eq!(vm.display_value(), "0");
+
+    // Saved again as it was, no slot read for it.
+    let saved: Value = serde_json::from_str(&vm.save_state()).unwrap();
+    assert_eq!(saved["x"]["mem"], json!(memory));
+    assert_eq!(unread(&vm), 100);
+
+    // Each slot recalls as its number, in any order, and reads only
+    // itself: one number worked out, and written out for the display.
+    for (read, i) in (0..100).map(|k| k * 37 % 100).enumerate() {
+        let mut done = 0;
+        bounded(&format!("slot {i}"), || done = work(|| vm.memory_recall(i)));
+        assert_eq!(vm.display_value(), memory[i], "slot {i}");
+        assert!(done < 2 * VALUE_WORK, "slot {i}: {done}");
+        assert_eq!(unread(&vm), 99 - read, "slot {i}");
+    }
+    // Recalling doesn't show the list again: it is as it was saved.
+    assert_eq!(vm.memory(), memory);
+    let saved: Value = serde_json::from_str(&vm.save_state()).unwrap();
+    assert_eq!(saved["x"]["mem"], json!(memory));
+}
+
+/// The first key that shows the whole list again (MS, M+ and M−, a mode,
+/// radix or word size switch) reads every slot: a hundred numbers worked
+/// out, once, besides the writing out of every slot each such key does
+/// anyway. The slots are then as any others.
+#[test]
+fn the_whole_list_is_read_when_it_is_first_shown_again() {
+    use crate::snapshot::VALUE_WORK;
+    let memory = costly_memory();
+    let state = snapshot_json(1, json!([]), json!({ "mem": memory }));
+    let mut vm = new_vm();
+    vm.restore_state(&state);
+    vm.press(Button::Seven);
+    let mut first = 0;
+    bounded("the first MS", || first = work(|| vm.press(Button::Memory)));
+    assert_eq!(unread(&vm), 0);
+    // The oldest slot makes room; the others are written out as they were
+    // saved.
+    let mut shown = vec!["7".to_string()];
+    shown.extend_from_slice(&memory[..99]);
+    assert_eq!(vm.memory(), shown);
+
+    // The next one writes them all out again, and works none out.
+    vm.press(Button::Eight);
+    let again = work(|| vm.press(Button::Memory));
+    assert!(again < first, "{again} / {first}");
+    assert!(first - again < 100 * VALUE_WORK, "{first} / {again}");
+    shown.insert(0, "8".to_string());
+    shown.pop();
+    assert_eq!(vm.memory(), shown);
+    vm.memory_recall(99);
+    assert_eq!(vm.display_value(), memory[97]);
+}
+
+/// The reviewer's session, through the keys: 3 stored, then a number near
+/// 10^-9999 stored again and again (25 slots here: every MS writes out the
+/// whole list, so a hundred take the uninterrupted session itself nine
+/// seconds). The old budget kept nine.
+#[test]
+fn memory_stored_by_repeated_ms_comes_back() {
+    use Button::*;
+    let tiny = "9.9999999999999999999999999999999e-9999";
+    let session = |more: &dyn Fn(&mut CalculatorViewModel)| {
+        let mut original = new_vm();
+        original.set_mode(CalcMode::Scientific);
+        original.press(Three);
+        original.press(Memory);
+        assert!(original.paste(tiny));
+        for _ in 0..24 {
+            original.press(Memory);
+        }
+        original.press(Clear);
+        let state = original.save_state();
+        let before = observed(&original);
+        more(&mut original);
+        (state, before, observed(&original))
+    };
+    let (state, before, _) = session(&|_| {});
+    let (restored, done) = restore_measured("the restore", &state);
+    assert_eq!(done, 0);
+    assert_eq!(observed(&restored), before);
+    assert_eq!(restored.memory().len(), 25);
+    assert_eq!(restored.memory()[24], "3");
+    assert!(restored.memory()[..24].iter().all(|slot| slot == tiny));
+    assert_eq!(unread(&restored), 25);
+    assert_eq!(restored.save_state(), state);
+    drop(restored);
+
+    // It goes on as the session would have.
+    let continuations: [&dyn Fn(&mut CalculatorViewModel); 5] = [
+        &|vm| vm.memory_recall(24),
+        &|vm| {
+            vm.memory_recall(7);
+            vm.press(Multiply);
+            vm.memory_recall(24);
+            vm.press(Equals);
+        },
+        &|vm| {
+            vm.press(Two);
+            vm.memory_add(24);
+            vm.memory_recall(24);
+        },
+        &|vm| {
+            vm.memory_clear(0);
+            vm.memory_subtract(23);
+            vm.memory_recall(23);
+        },
+        &|vm| {
+            vm.press(Nine);
+            vm.press(Memory);
+            vm.set_mode(CalcMode::Standard);
+            vm.memory_recall(25);
+        },
+    ];
+    for (i, more) in continuations.into_iter().enumerate() {
+        let (_, _, after) = session(more);
+        let mut restored = new_vm();
+        restored.restore_state(&state);
+        more(&mut restored);
+        assert_eq!(observed(&restored), after, "continuation {i}");
+        assert_eq!(unread(&restored), [24, 23, 0, 0, 0][i], "continuation {i}");
+    }
+}
+
+/// What one slot costs to work out is bounded by what a slot may hold (the
+/// digits its mode takes, an exponent of at most MAX_WRITTEN_EXPONENT),
+/// not by a budget cut short: the costliest of each kind stays within the
+/// budget one displayed number gets.
+#[test]
+fn the_costliest_slot_is_worked_out_within_the_value_budget() {
+    use crate::snapshot::VALUE_WORK;
+    let nines = |digits: usize, exponent: &str| format!("9.{}e{exponent}", "9".repeat(digits - 1));
+    let slots = [
+        (0, nines(16, "+9999")),
+        (0, format!("-{}", nines(16, "-9999"))),
+        (0, nines(16, "+19999")),
+        (0, nines(16, "-19999")),
+        (1, nines(32, "+9999")),
+        (1, nines(32, "-9999")),
+        (1, nines(32, "+19999")),
+        (1, format!("-{}", nines(32, "-19999"))),
+        (2, "-9,223,372,036,854,775,808".to_string()),
+    ];
+    let mut costliest = 0;
+    for (mode, text) in slots {
+        let state = snapshot_json(mode, json!([]), json!({ "mem": [text] }));
+        let (mut vm, done) = restore_measured(&text, &state);
+        assert!(done < MEMORY_RESTORE_WORK, "mode {mode} {text}: {done}");
+        assert_eq!(vm.memory(), [text.as_str()], "mode {mode}");
+        assert_eq!(unread(&vm), 1, "mode {mode} {text}");
+        let done = work(|| vm.vm.standard_calculator_manager.read_memory());
+        assert_eq!(unread(&vm), 0);
+        assert!(done < VALUE_WORK, "mode {mode} {text}: {done}");
+        costliest = costliest.max(done);
+    }
+    // The bound isn't idle: the costliest takes a good part of it.
+    assert!(costliest > VALUE_WORK / 8, "{costliest}");
+}
+
+/// A calculator restored from `state`, its memory read at once if
+/// `at_once` (as the restore used to work every slot out) or as `more`
+/// comes to it: what it shows and every number its engine holds after
+/// `more`, and how many slots are still unread.
+fn after_restore(
+    state: &str,
+    at_once: bool,
+    more: &dyn Fn(&mut CalculatorViewModel),
+) -> (String, String, usize) {
+    let mut vm = new_vm();
+    vm.restore_state(state);
+    if at_once {
+        vm.vm.standard_calculator_manager.read_memory();
+    }
+    more(&mut vm);
+    let engine = format!("{:?}", vm.vm.standard_calculator_manager.state());
+    (observed(&vm), engine, unread(&vm))
+}
+
+/// A slot's number doesn't depend on when it is worked out, nor on the
+/// mode, radix or word size the calculator is in by then: after each of
+/// these, a restored calculator whose slots are read as they are come to is
+/// exactly as one whose slots were all read when it was restored, in what
+/// it shows and in every number its engine holds.
+#[test]
+fn slots_read_late_are_the_numbers_read_at_once() {
+    use Button::*;
+    type More<'a> = &'a dyn Fn(&mut CalculatorViewModel);
+    let sessions: [(CalcMode, More); 3] = [
+        (CalcMode::Standard, &|vm| {
+            for text in [
+                "9.999999999999999e9999",
+                "-1.000000000000001e-9999",
+                "0.0000000000000123",
+                "1234567890123456",
+                "-0.5",
+            ] {
+                assert!(vm.paste(text));
+                vm.press(Memory);
+            }
+            // Past the exponents a number is typed with.
+            assert!(vm.paste("9e9999"));
+            vm.memory_add(4);
+            vm.press(Clear);
+        }),
+        (CalcMode::Scientific, &|vm| {
+            for text in [
+                "9.9999999999999999999999999999999e9999",
+                "-1.0000000000000000000000000000001e-9999",
+                "0.00000000000000000000000000000123",
+                "12345678901234567890123456789012",
+                "-0.5",
+            ] {
+                assert!(vm.paste(text));
+                vm.press(Memory);
+            }
+            // Below them: the second slot is left at -1.e-10030.
+            assert!(vm.paste("1e-9999"));
+            vm.memory_add(3);
+            vm.press(Pi);
+            vm.press(Memory);
+            // Shown in e-notation from here on, the older ones as before.
+            vm.press(FToE);
+            vm.press(Two);
+            vm.press(Memory);
+        }),
+        (CalcMode::Programmer, &|vm| {
+            for text in ["9223372036854775807", "-9223372036854775808", "-1", "255"] {
+                assert!(vm.paste(text));
+                vm.press(Memory);
+            }
+            vm.set_word_size(WordSize::Word);
+            vm.set_radix(Radix::Hex);
+            assert!(vm.paste("7FFF"));
+            vm.press(Memory);
+            vm.press(Clear);
+        }),
+    ];
+    let continuations: [(&str, More); 14] = [
+        ("nothing", &|_| {}),
+        ("MR", &|vm| vm.press(MemoryRecall)),
+        ("a click on each slot", &|vm| {
+            for i in (0..vm.memory().len()).rev() {
+                vm.memory_recall(i);
+                vm.press(Add);
+            }
+            vm.press(Equals);
+        }),
+        ("M+ on an older slot", &|vm| {
+            vm.press(Three);
+            vm.memory_add(2);
+            vm.memory_recall(2);
+        }),
+        ("M− on the newest", &|vm| {
+            vm.memory_recall(1);
+            vm.press(MemorySubtract);
+            vm.press(MemoryRecall);
+        }),
+        ("a slot cleared", &|vm| {
+            vm.memory_clear(1);
+            vm.memory_recall(1);
+            vm.memory_add(3);
+        }),
+        ("MC, then M+", &|vm| {
+            vm.press(MemoryClear);
+            vm.press(Five);
+            vm.press(MemoryAdd);
+        }),
+        ("MS", &|vm| {
+            vm.press(Seven);
+            vm.press(Memory);
+            vm.memory_recall(3);
+        }),
+        ("shown again", &|vm| {
+            vm.set_mode(vm.mode());
+            vm.memory_recall(4);
+        }),
+        ("Standard", &|vm| {
+            vm.set_mode(CalcMode::Standard);
+            vm.memory_recall(3);
+            vm.memory_subtract(0);
+        }),
+        ("Scientific", &|vm| {
+            vm.set_mode(CalcMode::Scientific);
+            vm.memory_recall(2);
+            vm.press(FToE);
+            vm.memory_add(1);
+        }),
+        ("Programmer, binary", &|vm| {
+            vm.set_mode(CalcMode::Programmer);
+            vm.set_radix(Radix::Bin);
+            vm.memory_recall(3);
+            vm.memory_add(0);
+        }),
+        ("Programmer, in bytes", &|vm| {
+            vm.set_mode(CalcMode::Programmer);
+            vm.set_word_size(WordSize::Byte);
+            vm.memory_recall(2);
+            vm.set_radix(Radix::Oct);
+        }),
+        ("there and back", &|vm| {
+            let mode = vm.mode();
+            vm.memory_recall(1);
+            vm.set_mode(CalcMode::Programmer);
+            vm.set_radix(Radix::Bin);
+            vm.set_mode(CalcMode::Standard);
+            vm.set_mode(mode);
+            vm.memory_recall(4);
+        }),
+    ];
+    for (mode, session) in sessions {
+        let mut original = new_vm();
+        original.set_mode(mode);
+        session(&mut original);
+        let state = original.save_state();
+        let (memory, before) = (original.memory(), observed(&original));
+        drop(original);
+        for (name, more) in continuations {
+            let late = after_restore(&state, false, more);
+            let at_once = after_restore(&state, true, more);
+            assert_eq!(late.0, at_once.0, "{mode:?}, {name}");
+            assert_eq!(late.1, at_once.1, "{mode:?}, {name}");
+            assert_eq!(at_once.2, 0);
+            match name {
+                // Every slot comes back, shown as it was, and unread.
+                "nothing" => {
+                    assert_eq!(late.0, before, "{mode:?}");
+                    assert_eq!(late.2, memory.len(), "{mode:?}");
+                }
+                // One slot read.
+                "MR" => assert_eq!(late.2, memory.len() - 1, "{mode:?}"),
+                _ => assert_eq!(late.2, 0, "{mode:?}, {name}"),
+            }
+        }
+    }
+}
+
+/// Saves `original`, and checks that every slot comes back as it is shown,
+/// unread, at no cost, and recalls as the original's does.
+#[track_caller]
+fn assert_memory_comes_back(original: &mut CalculatorViewModel, what: &str) {
+    let state = original.save_state();
+    let memory = original.memory();
+    let (mut restored, done) = restore_measured(what, &state);
+    assert!(done < MEMORY_RESTORE_WORK, "{what}: {done}");
+    assert_eq!(restored.memory(), memory, "{what}");
+    assert_eq!(unread(&restored), memory.len(), "{what}");
+    assert_eq!(restored.save_state(), state, "{what}");
+    let recalled = |vm: &mut CalculatorViewModel| -> Vec<(String, bool)> {
+        (0..memory.len())
+            .map(|i| {
+                vm.press(Button::Clear);
+                vm.memory_recall(i);
+                (vm.display_value(), vm.is_error())
+            })
+            .collect()
+    };
+    let recalls = recalled(&mut restored);
+    assert_eq!(unread(&restored), 0, "{what}");
+    assert_eq!(restored.memory(), memory, "{what}");
+    drop(restored);
+    assert_eq!(recalls, recalled(original), "{what}");
+}
+
+/// No slot the keys can make is left out: every one is shown as text the
+/// restore types back (or, past the typed exponents, reads back). The
+/// longest and the outermost of each mode, in each form it is shown in:
+/// all its digits, both ends of the exponents and what M+ and M− leave
+/// past them, F-E's notation, every radix and word size.
+#[test]
+fn memory_at_the_ends_of_each_mode_comes_back() {
+    use Button::*;
+    for (mode, digits) in [(CalcMode::Standard, 16), (CalcMode::Scientific, 32)] {
+        let mut vm = new_vm();
+        vm.set_mode(mode);
+        let nines = "9".repeat(digits);
+        let step = format!("1.{}1", "0".repeat(digits - 2));
+        for text in [
+            nines.clone(),
+            format!("-{nines}"),
+            format!("0.{nines}"),
+            format!("-0.{}1", "0".repeat(digits - 1)),
+            format!("9.{}e9999", &nines[1..]),
+            format!("-9.{}e9999", &nines[1..]),
+            format!("9.{}e-9999", &nines[1..]),
+            format!("-{step}e-9999"),
+            format!("{step}e-9999"),
+            "1e-9999".to_string(),
+            "0".to_string(),
+        ] {
+            assert!(vm.paste(&text), "{mode:?} {text}");
+            vm.press(Memory);
+        }
+        // Results, which hold more digits than they show.
+        for keys in [
+            &[One, Divide, Three, Equals][..],
+            &[Two, Sqrt, Negate],
+            &[Two, Divide, Three, Equals, Invert],
+        ] {
+            press_all(&mut vm, keys);
+            vm.press(Memory);
+        }
+        // Past the largest number shown, and below the smallest, of
+        // either sign: ±3.e+10000 and ∓1.e-10014 (or -10030).
+        assert!(vm.paste(&format!("9.{}e9999", &nines[1..])));
+        vm.memory_add(9);
+        vm.memory_add(9);
+        vm.memory_subtract(8);
+        vm.memory_subtract(8);
+        assert!(vm.paste("1e-9999"));
+        vm.memory_add(6);
+        vm.memory_subtract(5);
+        vm.press(Clear);
+        let memory = vm.memory();
+        assert_eq!(memory.len(), 14, "{mode:?}");
+        let past: Vec<&str> = memory
+            .iter()
+            .filter(|slot| slot.split_once('e').is_some_and(|(_, e)| e.len() > 5))
+            .map(String::as_str)
+            .collect();
+        let tiny = digits - 1 + 9999;
+        assert_eq!(
+            past,
+            [
+                format!("1.e-{tiny}"),
+                format!("-1.e-{tiny}"),
+                "-3.e+10000".to_string(),
+                "3.e+10000".to_string()
+            ],
+            "{mode:?}"
+        );
+        assert_memory_comes_back(&mut vm, &format!("{mode:?}"));
+    }
+
+    // F-E's notation: the whole list in it (M+ shows the list again), or
+    // only the slots stored since. (Numbers F-E writes out whole: like
+    // upstream's, it gives a number below 1 fewer digits the smaller it is,
+    // down to "0.e-40", and a slot comes back as it was shown.)
+    let mut vm = new_vm();
+    vm.set_mode(CalcMode::Scientific);
+    for text in [
+        "12345678901234567890123456789012",
+        "-9.9999999999999999999999999999999e9999",
+        "1.5e-9999",
+        "-2.25e-30",
+        "0",
+    ] {
+        assert!(vm.paste(text));
+        vm.press(Memory);
+    }
+    vm.press(FToE);
+    vm.press(MemoryAdd);
+    assert!(vm.memory().iter().all(|slot| slot.contains('e')));
+    assert_memory_comes_back(&mut vm, "F-E");
+    for keys in [&[Pi][..], &[Seven, Negate], &[Two, Zero, Zero, Exp, Nine]] {
+        press_all(&mut vm, keys);
+        vm.press(Memory);
+    }
+    assert!(vm.memory()[..3].iter().all(|slot| !slot.contains('e')));
+    assert_memory_comes_back(&mut vm, "after F-E");
+    vm.press(FToE);
+    vm.press(Five);
+    vm.press(Memory);
+    assert_eq!(vm.memory()[0], "5.e+0");
+    assert_memory_comes_back(&mut vm, "F-E again");
+
+    // Programmer mode: the ends of each word size, in each radix.
+    for word in [
+        WordSize::Qword,
+        WordSize::Dword,
+        WordSize::Word,
+        WordSize::Byte,
+    ] {
+        let mut vm = new_vm();
+        vm.set_mode(CalcMode::Programmer);
+        vm.set_word_size(word);
+        let largest = (1u64 << (word.bits() - 1)) - 1;
+        // The largest number, the smallest (one more wraps round), -1, 0
+        // and 1, and a number stored in the largest word size.
+        assert!(vm.paste(&largest.to_string()));
+        vm.press(Memory);
+        press_all(&mut vm, &[Add, One, Equals, Memory]);
+        press_all(&mut vm, &[Zero, Not, Memory, Zero, Memory, One, Memory]);
+        vm.set_word_size(WordSize::Qword);
+        assert!(vm.paste("1234567890123456789"));
+        vm.press(Memory);
+        vm.set_word_size(word);
+        vm.press(Clear);
+        assert_eq!(vm.memory().len(), 6, "{word:?}");
+        for radix in [Radix::Dec, Radix::Hex, Radix::Oct, Radix::Bin] {
+            vm.set_radix(radix);
+            assert_memory_comes_back(&mut vm, &format!("{word:?} {radix:?}"));
+        }
+    }
+}
+
+/// Typing a slot back does no arithmetic, whatever a file holds: a number
+/// being typed is only digits until something reads it. Where a key does
+/// end the entry (± in a radix other than ten), the number is one the
+/// word size holds.
+#[test]
+fn crafted_memory_costs_the_restore_nothing() {
+    let lists: [(i64, Value, &[&str]); 5] = [
+        (
+            0,
+            json!({}),
+            &["9.999999999999999e-9999", "-0.0000000000000001", "1e+9999"],
+        ),
+        (
+            1,
+            json!({ "fe": true, "a": "rad" }),
+            &[
+                "99999999999999999999999999999999e+9999",
+                "-1.e-19999",
+                "0.00000000000000000000000000000001e-9999",
+            ],
+        ),
+        (
+            2,
+            json!({ "r": "hex", "w": 64 }),
+            &["-7FFF FFFF FFFF FFFF", "FFFF FFFF FFFF FFFF", "-1"],
+        ),
+        (
+            2,
+            json!({ "r": "bin", "w": 8 }),
+            &["-0111 1111", "1111 1111", "1e1"],
+        ),
+        (
+            2,
+            json!({ "r": "oct", "w": 16 }),
+            &["-77 777", "177 777", "7"],
+        ),
+    ];
+    for (mode, mut x, slots) in lists {
+        let memory: Vec<&str> = slots.iter().copied().cycle().take(100).collect();
+        x["mem"] = json!(memory);
+        let state = snapshot_json(mode, json!([]), x);
+        let (mut vm, done) = restore_measured(&format!("mode {mode}"), &state);
+        assert!(done < MEMORY_RESTORE_WORK, "mode {mode} {slots:?}: {done}");
+        assert_eq!(vm.display_value(), "0", "mode {mode} {slots:?}");
+        assert!(!vm.is_error(), "mode {mode} {slots:?}");
+        // What was kept is used as any memory, within bounds.
+        let kept = vm.memory().len();
+        bounded(&format!("mode {mode}, used"), || {
+            vm.press(Button::MemoryRecall);
+            vm.press(Button::Clear);
+            vm.press(Button::Seven);
+            vm.press(Button::MemoryAdd);
+        });
+        assert_eq!(vm.memory().len(), kept, "mode {mode} {slots:?}");
+        assert_eq!(unread(&vm), 0);
+    }
 }

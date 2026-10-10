@@ -1963,8 +1963,19 @@ fn side_limit_fact(f: &Fun<'_>, p: f64, right: bool) -> Option<(TailEnd, Claim)>
     limit_of(f, &e, true, &at)
 }
 
-/// An enclosure of q·πᵏ.
+/// The largest power of π (either way) an exact value is multiplied out
+/// to: π²⁵⁶ is 10¹²⁷, and a tree of that many products is as deep as the
+/// parser's own. The power is an i32 the simplifier multiplies up (π⁶⁴ to
+/// the 64th, five times over, is π^(2³⁰)): one product a step, that was
+/// over a minute here, and as many nodes in [`periodic_rest`]'s tree
+/// (review 18's audit).
+const MAX_PI_POWER: u32 = 256;
+
+/// An enclosure of q·πᵏ (none past [`MAX_PI_POWER`]).
 pub fn piq_interval(v: crate::simplify::PiQ) -> Option<Interval> {
+    if v.k.unsigned_abs() > MAX_PI_POWER {
+        return None;
+    }
     let mut iv = v.q.interval();
     for _ in 0..v.k.unsigned_abs() {
         iv = if v.k > 0 {
@@ -2915,6 +2926,8 @@ fn periodic_rest(
     let Some(s) = f.settings() else {
         return Ok(None);
     };
+    // (Enclosed: so its power of π is at most `MAX_PI_POWER`, the factors
+    // of the tree below.)
     let Some(mv) = piq_interval(m) else {
         return Ok(None);
     };

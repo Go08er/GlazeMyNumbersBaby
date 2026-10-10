@@ -243,7 +243,10 @@ pub fn recip(b: &S) -> S {
 }
 
 /// aⁿ for an integer n by repeated squaring of the series (the value from
-/// the interval power, which knows x² ≥ 0).
+/// the interval power, which knows x² ≥ 0). A negative power is the
+/// reciprocal of the power of n's magnitude, taken unsigned: i64::MIN has
+/// no negation (review 18, R18-L-01: `-n` overflowed, or wrapped to n again
+/// and never ended; a typed −9223372036854775808 is that exponent).
 pub fn powi(a: &S, n: i64) -> S {
     let ord = order(a);
     let value = iv::powi(&a[0], n);
@@ -259,14 +262,27 @@ pub fn powi(a: &S, n: i64) -> S {
         // 1 where a ≠ 0: constant beside the box only where a stays ≠ 0.
         return beside(s, a);
     }
+    let mag = n.unsigned_abs();
     if n < 0 {
-        let mut s = recip(&powi(a, -n));
+        // a^|n| first (its own value met as a positive power's is; one
+        // defined nowhere leaves the reciprocal so).
+        let up = iv::powi_big(&a[0], &rug::Integer::from(mag));
+        if up.empty {
+            return vec![Iv::empty(); ord + 1];
+        }
+        let mut s = recip(&pow_mag(a, mag, &up));
         s[0] = s[0].meet(&value);
         return s;
     }
+    pow_mag(a, mag, &value)
+}
+
+/// aᵐ for a whole m ≥ 1 by repeated squaring, its value met with `value`
+/// (the interval power's enclosure of it).
+fn pow_mag(a: &S, m: u64, value: &Iv) -> S {
     let mut result: Option<S> = None;
     let mut base = a.clone();
-    let mut e = n;
+    let mut e = m;
     while e > 0 {
         if e & 1 == 1 {
             result = Some(match result {
@@ -279,8 +295,8 @@ pub fn powi(a: &S, n: i64) -> S {
             base = mul(&base, &base);
         }
     }
-    let mut s = result.expect("n > 0");
-    s[0] = s[0].meet(&value);
+    let mut s = result.expect("m ≥ 1");
+    s[0] = s[0].meet(value);
     s
 }
 

@@ -29,6 +29,12 @@ use crate::interval::{Ctx, Dec, DecInterval, Interval, elem, taylor};
 
 /// Coefficients are kept below t^P.
 const P: i32 = 4;
+/// The largest order (either way) an expansion may have: past it nothing
+/// is expanded. The orders are i32s, added where expansions are multiplied
+/// and shifted, and a power's is its base's times the exponent: within
+/// this bound none overflows or is cut short (review 18's audit). Any one
+/// typed power (an exponent below 10⁶) still expands.
+const MAX_ORDER: u32 = 1 << 24;
 /// Terms of a composed function's series.
 const J: usize = 5;
 
@@ -330,11 +336,16 @@ impl<'a> Ex<'a> {
             return Some(Tm::constant(Interval::point(1.0)));
         }
         let (m, c, v) = self.factor(u)?;
-        let mk = i64::from(m) * n;
+        let mk = i64::from(m).checked_mul(n)?;
         if mk % d != 0 {
             return None;
         }
-        let e = (mk / d) as i32;
+        // (The order m·n/d itself, or nothing: cast to i32, the order
+        // −999998000001 of (x^999999)^999999 was +729379967, a power of t
+        // that tends to 0. Review 18's audit.)
+        let e = i32::try_from(mk / d)
+            .ok()
+            .filter(|e| e.unsigned_abs() <= MAX_ORDER)?;
         // u's sign on T, and |t|^e = sign(t)^e·tᵉ.
         let neg = (c.lt0()) != (self.t_sign(m) < 0.0);
         if neg && d % 2 == 0 {
@@ -397,8 +408,15 @@ impl<'a> Ex<'a> {
         Some(Tm::rest(P, r))
     }
 
-    /// The expansion of `e` over the tail.
+    /// The expansion of `e` over the tail, its orders within
+    /// [`MAX_ORDER`]: each node's are sums of a few of its operands', so
+    /// none overflows.
     pub fn of(&self, e: &Expr) -> Option<Tm> {
+        self.unbounded(e)
+            .filter(|a| a.lo.unsigned_abs() <= MAX_ORDER && a.p.unsigned_abs() <= MAX_ORDER)
+    }
+
+    fn unbounded(&self, e: &Expr) -> Option<Tm> {
         if !e.contains_x() {
             // (Literals and sliders alone by their exact value.)
             let v = crate::compile::typed_enclosure(e, &self.ctx.opts)

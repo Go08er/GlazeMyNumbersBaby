@@ -1078,7 +1078,13 @@ fn grows(e: &Expr, opts: &CompileOptions<'_>, side: f64) -> Option<f64> {
             } else if s > 0.0 {
                 Some(1.0)
             } else if k.fract() == 0.0 {
-                Some(if (k as i64) % 2 == 0 { 1.0 } else { -1.0 })
+                // (A whole double past 2⁵³ is even: cast to i64 one past 2⁶³
+                // was i64::MAX, odd. Review 18's audit.)
+                Some(if crate::functions::is_odd_integer(k) {
+                    -1.0
+                } else {
+                    1.0
+                })
             } else {
                 None
             }
@@ -4810,6 +4816,24 @@ fn analyze_periodic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review 18's audit: the sign a whole power grows with at −∞ came
+    /// from its exponent cast to i64, i64::MAX (odd) for any double past
+    /// 2⁶³, though each of those is even.
+    #[test]
+    fn a_whole_power_past_i64_grows_as_an_even_one() {
+        let opts = CompileOptions::default();
+        let at_minus_inf = |src: &str| {
+            let eq = crate::Equation::parse(&format!("y={src}")).unwrap();
+            let (_, e) = eq.explicit().unwrap();
+            grows(e, &opts, -1.0)
+        };
+        assert_eq!(at_minus_inf("x^3"), Some(-1.0));
+        assert_eq!(at_minus_inf("x^4"), Some(1.0));
+        assert_eq!(at_minus_inf("x^9223372036854775808"), Some(1.0));
+        assert_eq!(at_minus_inf("x^10000000000000000000"), Some(1.0));
+        assert_eq!(at_minus_inf("x^100000000000000000000000000000"), Some(1.0));
+    }
 
     const ORDINARY: [&str; 14] = [
         "x^3 - 2x + 1",

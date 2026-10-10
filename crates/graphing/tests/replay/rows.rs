@@ -10,6 +10,19 @@
 //! sign) must be the row's items, one to one. The domain is checked
 //! directly with the replay's own evaluation; the other rows from the
 //! facts their claims state.
+//!
+//! What a row lists (a zero, an end, a limit, a slope, a period) is an
+//! enclosure [lo, hi] of a number, and the number is in it. So a listing
+//! *holds* what proves it: all of the box or enclosure a claim proves the
+//! number in, or the number itself where it is known exactly (a rational
+//! a fact writes, N/D's own limit or line by the replay's algebra). To
+//! meet the proof, or to lie inside it, is not enough: a point at a double
+//! beside the number does both (1/3 at 0.333…3148, 2⁵³ + 1 at 2⁵³, π at
+//! 3.14159…793). Review 18's follow-up went through every row for that;
+//! [`Stated`] and `listing_follows` are the rule for limits and range
+//! ends, `match_items` for the items of the sign walks, `families_follow`
+//! and `one_period` for what repeats, the anchors in `monotonicity` for
+//! the pieces' ends, and the ends beside their enclosures in `domain`.
 
 use super::claims::{self, Subj, Tree, split};
 use super::growth::At;
@@ -563,6 +576,24 @@ fn meets_member(x0: &Enc, p: &Enc, d: &Enc) -> bool {
         })
 }
 
+/// Does `x` hold the enclosure `a` moved on k periods, a + k·p for every
+/// a and p in their enclosures? Exactly, in rationals.
+fn holds_shifted(x: &Enc, a: &Enc, p: &Enc, k: i32) -> bool {
+    use rug::Rational;
+    let q = Rational::from_f64;
+    let (Some(alo), Some(ahi), Some(plo), Some(phi)) = (q(a.lo), q(a.hi), q(p.lo), q(p.hi)) else {
+        return false;
+    };
+    let k = Rational::from(k);
+    // k·p's ends swap for k < 0.
+    let (kp_lo, kp_hi) = if k >= 0 {
+        (Rational::from(&k * &plo), Rational::from(&k * &phi))
+    } else {
+        (Rational::from(&k * &phi), Rational::from(&k * &plo))
+    };
+    alo + kp_lo >= x.lo && ahi + kp_hi <= x.hi
+}
+
 /// Is `x` (enclosed) a repeat of one of `xs` by a whole number of periods?
 fn repeat_of(xs: &[Enc], x: &Enc, period: &Enc) -> bool {
     xs.iter().any(|e| meets_member(e, period, x))
@@ -666,6 +697,7 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
     if let Err(e) = in_domain(rc, all, results, &mut out) {
         out.problems.push(format!("unreadable value: {e}"));
     }
+    one_period(rc, &mut out);
     let r = match rc.name.as_str() {
         "domain" => domain(fx, rc, &mut out),
         "x_intercepts" => zeros_row(fx, rc, all, &mut out),
@@ -675,9 +707,9 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
         "y_intercept" => y_intercept(fx, rc, &mut out),
         "parity" => parity(rc, all, results, &mut out),
         "period" => period(fx, rc, all, &mut out),
-        "vertical" => vertical(rc, all, &mut out),
-        "horizontal" => horizontal(rc, all, &mut out),
-        "oblique" => oblique(rc, all, &mut out),
+        "vertical" => vertical(fx, rc, all, &mut out),
+        "horizontal" => horizontal(fx, rc, all, &mut out),
+        "oblique" => oblique(fx, rc, all, &mut out),
         "range" => range(fx, rc, all, &mut out),
         _ => Ok(()),
     };
@@ -685,6 +717,85 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
         out.problems.push(format!("unreadable value: {e}"));
     }
     out
+}
+
+/// The period a row rests on: its fact "f(x + P) = f(x) …" (checked as a
+/// claim), P enclosed: the bracket the fact puts it in, or the q·πᵏ it
+/// writes, at 160 bits, rounded out to the doubles about it.
+fn row_period(rc: &RowCert) -> Option<Enc> {
+    rc.claims.iter().find_map(|c| {
+        let Claim::Simplifier(f) = c else {
+            return None;
+        };
+        let (p, rest) = f.strip_prefix("f(x + ")?.split_once(") = f(x)")?;
+        if p == "P" {
+            let (a, b) = rest
+                .split_once("P ∈ [")?
+                .1
+                .split_once(']')?
+                .0
+                .split_once(", ")?;
+            return Some(Enc {
+                lo: a.trim().parse().ok()?,
+                hi: b.trim().parse().ok()?,
+            });
+        }
+        iv::set_prec(160);
+        let (lo, hi) = claims::outward(&claims::pi_q(p)?);
+        Some(Enc { lo, hi })
+    })
+}
+
+/// A row decided over one period of f (`Region::Period`) speaks for the
+/// whole line only if f has that period, by a fact of the row, and the
+/// window is as wide as it: a window cut short leaves out what repeats
+/// beyond it (sin's zeros over a window ending at 1, the one at π
+/// dropped, were "every zero": review 18's follow-up).
+fn one_period(rc: &RowCert, out: &mut RowResult) {
+    let Some(Region::Period(a, b)) = rc.region else {
+        return;
+    };
+    let Some(p) = row_period(rc) else {
+        out.problems
+            .push("the row covers one period, with no fact that f has one".into());
+        return;
+    };
+    let q = rug::Rational::from_f64;
+    let wide = match (q(a), q(b), q(p.hi)) {
+        (Some(a), Some(b), Some(p)) => p > 0 && b - a >= p,
+        _ => false,
+    };
+    if !wide {
+        out.problems.push(format!(
+            "the window [{a:e}, {b:e}] is not as wide as the period, in [{:e}, {:e}]",
+            p.lo, p.hi
+        ));
+    }
+}
+
+/// The families a row lists (each item "every `period`") repeat by the
+/// period of the row's fact: each listed period holds it. A family listed
+/// with another period (2π at the double below it), or with no fact of a
+/// period beside it, says where infinitely many items are with nothing
+/// behind it (review 18's follow-up).
+fn families_follow(what: &str, rc: &RowCert, periods: &[Enc], out: &mut RowResult) {
+    if periods.is_empty() {
+        return;
+    }
+    let Some(p) = row_period(rc) else {
+        out.problems.push(format!(
+            "{what} listed as repeating, with no fact that f has a period"
+        ));
+        return;
+    };
+    for per in periods {
+        if !per.contains(&p) {
+            out.problems.push(format!(
+                "{what} listed as repeating every [{:e}, {:e}], not the period in [{:e}, {:e}]",
+                per.lo, per.hi, p.lo, p.hi
+            ));
+        }
+    }
 }
 
 /// Items only where f is defined. With the domain row certified, each
@@ -800,6 +911,8 @@ fn zeros_row(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Res
         .collect::<Result<_, _>>()?;
     let derived: Vec<Enc> = w.zeros.iter().map(|z| z.at).collect();
     match_items("an x-intercept", &derived, &listed, complete(rc), out);
+    let periods: Vec<Enc> = listed.iter().filter_map(|(_, p)| *p).collect();
+    families_follow("an x-intercept", rc, &periods, out);
     Ok(())
 }
 
@@ -878,6 +991,8 @@ fn turns(
         "an inflection"
     };
     match_items(what, &derived, &listed, complete(rc), out);
+    let periods: Vec<Enc> = listed.iter().filter_map(|(_, p)| *p).collect();
+    families_follow(what, rc, &periods, out);
     Ok(())
 }
 
@@ -962,10 +1077,98 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
     out.problems.extend(w.problems.iter().cloned());
     coverage(rc, all, &w.boxes, out);
     holes(rc, 1, complete(rc), out);
+    // Where a piece may end: at a turn or kink of f (a zero of the walk),
+    // at an end of a stretch where f′ ≡ 0, at an end of the domain (its
+    // row's enclosure), at a pole a claim places or a zero of an excluded
+    // family's g, or at one of those a whole number of periods on (a row
+    // over one period): the listed end holds that enclosure whole, the
+    // place being somewhere in it. Or at a double inside a stretch of the
+    // piece's own sign (a window's edge). And a piece lies in the domain.
+    // (A piece of √(3x − 1) was listed from the double below the domain's
+    // end 1/3, or from −1; the two of 1/(3x − 1) as meeting at the double
+    // beside its pole. Review 18's follow-up.)
+    let mut anchors: Vec<Enc> = w.zeros.iter().map(|z| z.at).collect();
+    for f in &w.flat {
+        anchors.push(Enc { lo: f.0, hi: f.0 });
+        anchors.push(Enc { lo: f.1, hi: f.1 });
+    }
+    let domain = domain_pieces(all);
+    for d in domain.iter().flatten() {
+        for b in [d.lo, d.hi] {
+            if let Bound::At { x, .. } = b {
+                anchors.push(x);
+            }
+        }
+    }
+    for r in all {
+        for c in &r.claims {
+            if let Claim::Unbounded { at, .. } = c {
+                anchors.push(Enc { lo: at.0, hi: at.1 });
+            }
+        }
+    }
+    let period = match rc.region {
+        Some(Region::Period(..)) => row_period(rc),
+        _ => None,
+    };
+    // The excluded families' zeros (the certificate's Family claims): a
+    // member is in an enclosure its g changes sign across, monotone.
+    let families: Vec<&Subject> = all
+        .iter()
+        .flat_map(|r| &r.claims)
+        .filter_map(|c| match c {
+            Claim::Family { of, .. } => Some(of),
+            _ => None,
+        })
+        .fold(Vec::new(), |mut v, s| {
+            if !v.contains(&s) {
+                v.push(s);
+            }
+            v
+        });
+    let anchored = |x: &Enc| {
+        anchors.iter().any(|a| x.contains(a))
+            || period.is_some_and(|p| {
+                anchors
+                    .iter()
+                    .any(|a| [-2, -1, 1, 2].iter().any(|k| holds_shifted(x, a, &p, *k)))
+            })
+            || families
+                .iter()
+                .any(|g| claims::one_zero_in(fx, g, (x.lo, x.hi)))
+    };
+    // A complete row's pieces are all of them: over the line or a window,
+    // they leave none of the domain out (over one period they are cut
+    // where the period's features are, not at the window: not compared).
+    if let Some(rg @ (Region::Line | Region::Window(..))) = &rc.region {
+        let extents: Vec<B> = list(&rc.value)?
+            .iter()
+            .filter_map(|i| piece(i.get("on")?).ok())
+            .map(|p| extent(&p))
+            .collect();
+        for t in targets(rg, all) {
+            if let Some((a, b)) = uncovered(t, &extents) {
+                out.problems.push(format!(
+                    "the pieces leave [{a:e}, {b:e}] of the domain out, yet the row is complete"
+                ));
+                break;
+            }
+        }
+    }
     for item in list(&rc.value)? {
         let p = piece(item.get("on").ok_or("on")?)?;
         let dir = item.get("dir").and_then(Value::as_str).unwrap_or("");
         let (a, b) = extent(&p);
+        if let Some(ds) = &domain
+            && !ds.iter().any(|d| {
+                let (da, db) = extent(d);
+                da <= a && b <= db
+            })
+        {
+            out.problems.push(format!(
+                "the piece on [{a:e}, {b:e}] reaches outside the domain's pieces"
+            ));
+        }
         // Inside the piece (its ends' enclosures aside), f′ keeps the
         // listed sign, but at isolated zeros; ≡ 0 for a constant piece.
         let inner_lo = match p.lo {
@@ -981,6 +1184,27 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
             "Decreasing" => Some(false),
             _ => None,
         };
+        // (Or the end is a double inside a stretch where f′ has the
+        // piece's sign: f is monotone from there on, the way it is listed.
+        // A piece cut at a window's edge ends so.)
+        let within = |d: f64| match want {
+            Some(up) => w
+                .signs
+                .iter()
+                .any(|(sa, sb, s)| *s == up && *sa <= d && d <= *sb),
+            None => w.flat.iter().any(|f| f.0 <= d && d <= f.1),
+        };
+        for end in [p.lo, p.hi] {
+            if let Bound::At { x, .. } = end
+                && !(anchored(&x) || (x.lo == x.hi && within(x.lo)))
+            {
+                out.problems.push(format!(
+                    "a piece ends in [{:e}, {:e}], which holds no turn of f, end of its domain \
+                     or pole the claims place",
+                    x.lo, x.hi
+                ));
+            }
+        }
         for (sa, sb, s) in &w.signs {
             let overlaps = *sa < inner_hi && *sb > inner_lo;
             if overlaps && want.is_some_and(|d| d != *s) {
@@ -995,8 +1219,14 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
                 ));
             }
         }
+        // A change of f′'s sign is where one piece ends and the next
+        // begins: its enclosure lies in the ends' enclosures, none of it
+        // inside a piece. (Only a zero wholly inside was looked at: pieces
+        // listed as meeting at a double beside the turn, 1/3 at
+        // 0.333…3148, held the turn's enclosure across their ends. Review
+        // 18's follow-up.)
         for z in &w.zeros {
-            let inside = z.at.lo > inner_lo && z.at.hi < inner_hi;
+            let inside = z.at.hi > inner_lo && z.at.lo < inner_hi;
             if inside && z.left.is_some() && z.right.is_some() && z.left != z.right {
                 out.problems.push(format!(
                     "f′ changes sign at {:e}, inside a piece listed {dir}",
@@ -1366,6 +1596,51 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
                 )),
             }
         }
+        // The end is in its listed enclosure, not beside it. Above, f is
+        // checked at the doubles outside the enclosure and inside the
+        // piece, which an end strictly between two doubles slips past: an
+        // edge of one of f's nodes crossed strictly between the enclosure
+        // and the double next to it (√(3x − 1)'s end 1/3, listed closed at
+        // the double above it or in an interval from there) puts the end
+        // there, outside the listing. And an enclosure f is defined
+        // throughout holds no end at all. (Review 18's follow-up.)
+        for (b, low) in [(p.lo, true), (p.hi, false)] {
+            let Bound::At { x, .. } = b else { continue };
+            for beside in [(x.lo.next_down(), x.lo), (x.hi, x.hi.next_up())] {
+                if enclosed_end(fx, beside, low).is_some() {
+                    out.problems.push(format!(
+                        "the end listed in [{:e}, {:e}] is strictly between {:e} and {:e}",
+                        x.lo, x.hi, beside.0, beside.1
+                    ));
+                }
+            }
+            if x.lo < x.hi && matches!(defined_on(&fx.f, (x.lo, x.hi)), claims::V::Yes) {
+                out.problems.push(format!(
+                    "no end of the domain in [{:e}, {:e}]: f is defined throughout it",
+                    x.lo, x.hi
+                ));
+            }
+        }
+    }
+    // Two pieces meeting in one enclosure, an end of them closed: the point
+    // they meet at is in the domain, so f is defined throughout the
+    // enclosure (and nothing separates the pieces), or the listing lets in
+    // a point f is undefined at (the pole of 1/(3x − 1), its left piece
+    // listed closed: review 18's follow-up).
+    for pair in sorted.windows(2) {
+        if let (Bound::At { x, closed: c0 }, Bound::At { x: y, closed: c1 }) =
+            (pair[0].hi, pair[1].lo)
+            && x == y
+            && x.lo < x.hi
+            && (c0 || c1)
+            && !matches!(defined_on(&fx.f, (x.lo, x.hi)), claims::V::Yes)
+        {
+            out.problems.push(format!(
+                "two pieces meet in [{:e}, {:e}] with an end closed, yet f is not shown \
+                 defined throughout it",
+                x.lo, x.hi
+            ));
+        }
     }
     // Between pieces, and beyond the outer ones: undefined. (Doubles only
     // outside an end's enclosure; an open end at a double is outside.)
@@ -1487,7 +1762,12 @@ fn edges(fx: &Fx, e: &graphing::ast::Expr, path: &mut Vec<u8>, out: &mut Vec<Edg
         _ => Vec::new(),
     };
     for (i, k) in kids.into_iter().enumerate() {
-        path.push(i as u8);
+        // A path names a child by a byte: the edges under a child past the
+        // 256th (of a min or max) have no path, and are left out, not
+        // found under another child's (the 257th's index wrapped to the
+        // first's: review 18's audit). Fewer edges show less, never more.
+        let Ok(i) = u8::try_from(i) else { break };
+        path.push(i);
         edges(fx, k, path, out);
         path.pop();
     }
@@ -1690,6 +1970,16 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
         return Ok(());
     }
     let p = enc(&rc.value)?;
+    // The least period is a positive number: a negative shift f repeats
+    // under is no least period, and below it the bound n on a smaller one
+    // was negative, with no prime to try (review 18's audit).
+    if p.lo.is_nan() || p.lo <= 0.0 {
+        out.problems.push(format!(
+            "the period [{:e}, {:e}] is not shown positive",
+            p.lo, p.hi
+        ));
+        return Ok(());
+    }
     // A period: the simplifier's fact (weak), then the least: every
     // P/q for a prime q up to the bound n shown no period.
     let fact = rc.claims.iter().find_map(|c| match c {
@@ -1803,14 +2093,27 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
                     .collect()
             })
             .unwrap_or_default();
-        if fams.len() != 1 {
+        // (A family period not shown positive bounds nothing: P over a
+        // negative low end was a negative bound, with no prime to try.)
+        if fams.len() != 1 || fams[0].lo.is_nan() || fams[0].lo <= 0.0 {
             out.problems
                 .push("no bound on a smaller period from the claims".into());
             return Ok(());
         }
         (p.hi / fams[0].lo * (1.0 + 1e-12)).floor()
     };
-    // Each prime q ≤ n: two values, at x and x + P/q, apart.
+    // A bound the certifier itself never passes (10⁶, and no NaN): one read
+    // off the claims past it is no bound a sieve reaches. (Review 18's
+    // audit: cast to u64, a family period of 10⁻³⁰⁰ under P made it 2⁶⁴ − 1
+    // primes to try, and the replay never returned.)
+    if n.is_nan() || n > 1e6 {
+        out.problems.push(format!(
+            "a smaller period is ruled out only by the primes to {n:e}: past any sieve"
+        ));
+        return Ok(());
+    }
+    // Each prime q ≤ n: two values, at x and x + P/q, apart. (n ≤ 10⁶, a
+    // whole number or below 2: exact as a u64.)
     let primes: Vec<u64> = (2..=(n.max(1.0) as u64))
         .filter(|&q| (2..).take_while(|d| d * d <= q).all(|d| q % d != 0))
         .collect();
@@ -2057,14 +2360,21 @@ fn limit_at(claims: &[Claim], at: At, over_x: bool) -> Option<Toward> {
 /// the left): unbounded there by structure, or beyond bounds on boxes
 /// beside p that grow as the boxes shrink.
 fn side_infinite(claims: &[Claim], p: f64, right: bool) -> bool {
-    let at = if right { At::Right(p) } else { At::Left(p) };
-    let structural = claims
+    claims
         .iter()
         .any(|c| matches!(c, Claim::Unbounded { at, .. } if at.0 <= p && p <= at.1))
-        || matches!(
-            limit_at(claims, at, false),
-            Some(Toward::PosInf | Toward::NegInf)
-        );
+        || side_grows(claims, p, right)
+}
+
+/// Whether the claims show f → ±∞ beside the very double p: its one-sided
+/// limit there by the tree's structure, or bounds on boxes from the double
+/// next to p that grow as the boxes shrink.
+fn side_grows(claims: &[Claim], p: f64, right: bool) -> bool {
+    let at = if right { At::Right(p) } else { At::Left(p) };
+    let structural = matches!(
+        limit_at(claims, at, false),
+        Some(Toward::PosInf | Toward::NegInf)
+    );
     let near = |x: &B| {
         if right {
             x.0 == p.next_up()
@@ -2271,19 +2581,26 @@ fn bends_away(claims: &[Claim], side: Side) -> bool {
 
 // ------------------------------------------------------------ asymptotes
 
-fn vertical(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
+fn vertical(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
     let listed: Vec<(Enc, Option<Enc>)> = list(&rc.value)?
         .iter()
         .map(spot)
         .collect::<Result<_, _>>()?;
+    let _ = fx;
+    let periods: Vec<Enc> = listed.iter().filter_map(|(_, p)| *p).collect();
+    families_follow("a vertical asymptote", rc, &periods, out);
     for (x, _) in &listed {
+        // The listed enclosure is the box of a claim that f is unbounded
+        // at a point in it (which the claim's check places there), or the
+        // very double beside which f is shown to grow. (A double inside
+        // such a claim's wider box is not where the pole is: π/2 listed at
+        // the double nearest it passed for tan's. Review 18's follow-up.)
         let unbounded = rc
             .claims
             .iter()
             .any(|c| matches!(c, Claim::Unbounded { at, .. } if at.0 == x.lo && at.1 == x.hi))
             || (x.lo == x.hi
-                && (side_infinite(&rc.claims, x.lo, true)
-                    || side_infinite(&rc.claims, x.lo, false)));
+                && (side_grows(&rc.claims, x.lo, true) || side_grows(&rc.claims, x.lo, false)));
         if !unbounded {
             out.problems.push(format!(
                 "a vertical asymptote at {:e} with no claim it is one",
@@ -2310,12 +2627,18 @@ fn vertical(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), St
         }
     }
     for e in &excluded {
-        let is_listed = listed.iter().any(|(x, _)| x.contains(e));
+        // (Listed itself, or a repeat of a listed family's. A row over one
+        // period was let off this altogether: tan's poles could all be
+        // left out.)
+        let is_listed = listed.iter().any(|(x, _)| x.contains(e))
+            || listed
+                .iter()
+                .any(|(x, p)| p.is_some_and(|p| meets_member(x, &p, e)));
         let unb = rc
             .claims
             .iter()
             .any(|c| matches!(c, Claim::Unbounded { at, .. } if at.0 == e.lo && at.1 == e.hi));
-        if unb && !is_listed && !matches!(rc.region, Some(Region::Period(..))) {
+        if unb && !is_listed {
             out.problems.push(format!(
                 "f is unbounded at {:e}, but no asymptote is listed there",
                 e.mid()
@@ -2406,7 +2729,7 @@ fn not_affine(claims: &[Claim]) -> bool {
     })
 }
 
-fn horizontal(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
+fn horizontal(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
     let _ = all;
     // A line's graph is the line itself: no asymptote (a constant, m·x +
     // b, holes aside). One listed needs f shown to be no constant.
@@ -2445,34 +2768,62 @@ fn horizontal(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), 
         } else {
             "−∞"
         };
-        let fact = rc.claims.iter().any(|c| {
-            matches!(c, Claim::Simplifier(f) if f.starts_with("f → ") && f.ends_with(&format!("as x → {at}")))
+        let fact_text = rc.claims.iter().find_map(|c| match c {
+            Claim::Simplifier(f)
+                if f.starts_with("f → ") && f.ends_with(&format!("as x → {at}")) =>
+            {
+                Some(f.as_str())
+            }
+            _ => None,
         });
+        let fact = fact_text.is_some();
         let rational = rc.claims.iter().any(|c| {
             matches!(c, Claim::Simplifier(f) if f.starts_with(claims::RATIONAL) && f.ends_with(&format!("as x → {at}")))
         });
+        // What the item says besides its enclosure: the limit written
+        // exactly, or a closed form it looks like (not proven: a number
+        // inside the enclosure, no more).
+        let exact = item.get("exact").and_then(Value::as_str);
+        if let Some(l) = item.get("looks_like").filter(|l| !l.is_null()) {
+            let l = r(l)?;
+            if !(y.lo <= l && l <= y.hi) {
+                out.problems.push(format!(
+                    "the limit at {at} is said to look like {l:e}, outside its listed [{:e}, {:e}]",
+                    y.lo, y.hi
+                ));
+            }
+        }
         if rational {
-            // N/D's limit, exactly (its fact checked so): the listed one.
-            let fact = rc.claims.iter().find_map(|c| match c {
-                Claim::Simplifier(f)
-                    if f.starts_with(claims::RATIONAL) && f.ends_with(&format!("as x → {at}")) =>
-                {
-                    fact_limit(f)
-                }
-                _ => None,
-            });
-            match fact {
-                Some(v) if y.lo <= v.hi && v.lo <= y.hi => {}
+            // N/D's limit, exactly (its fact checked so): the listed
+            // enclosure holds it. The limit is the replay's own, from N/D's
+            // degrees and leading coefficients, compared as a rational:
+            // read back from the fact's text as doubles and only met with
+            // the listing, a limit that is no double was listed as the
+            // double beside it (2⁵³ for 2⁵³ + 1, 0.333…3148 for 1/3: review
+            // 18's audit).
+            let limit = super::algebra::Rat::of(&fx.f, &fx.lits, &fx.vars, fx.unit)
+                .and_then(|r| r.limit(side == Side::Right).ok());
+            match &limit {
+                Some(l) if *l >= y.lo && *l <= y.hi => {}
                 _ => out.problems.push(format!(
                     "the limit at {at} is listed in [{:e}, {:e}], not N/D's",
                     y.lo, y.hi
                 )),
             }
+            if let Some(text) = exact
+                && (limit.is_none() || claims::rational(text.trim()) != limit)
+            {
+                out.problems
+                    .push(format!("the limit at {at} is written {text}, not N/D's"));
+            }
             continue;
         }
         // By the tree's structure (its claim checked so): the limit lies
-        // in the claim's enclosure; a narrower listing only with the
-        // simplifier's exact value.
+        // in the claim's enclosure, and the listing holds all of it; a
+        // narrower listing only beside the simplifier's fact, and then it
+        // holds the value the fact states (exactly, for a rational: met
+        // only, 1/3 was listed at the double below it beside the true fact
+        // "f → 1/3". Review 18's follow-up).
         let toward = if side == Side::Right {
             At::PosInf
         } else {
@@ -2480,26 +2831,30 @@ fn horizontal(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), 
         };
         match limit_at(&rc.claims, toward, false) {
             Some(Toward::In(lo, hi)) => {
+                let shown = Enc { lo, hi };
+                // The replay's own limit by the tree's structure, at 160
+                // bits: apart from the listing, the listing is wrong
+                // whatever stands beside it.
+                let own = own_limit(fx, toward);
                 if !(y.lo <= hi && lo <= y.hi) {
                     out.problems.push(format!(
                         "the limit at {at} is listed in [{:e}, {:e}], outside [{lo:e}, {hi:e}]",
                         y.lo, y.hi
                     ));
-                } else if !(y.lo <= lo && hi <= y.hi) && !fact {
+                } else if let Err(why) = listing_follows(&y, &shown, fact_text) {
+                    out.problems.push(format!("the limit at {at}: {why}"));
+                } else if own.as_ref().is_some_and(|v| v.hi < y.lo || v.lo > y.hi) {
                     out.problems.push(format!(
-                        "the limit at {at}: [{:e}, {:e}] is narrower than the claims show",
+                        "the limit at {at} is listed in [{:e}, {:e}], apart from the limit by \
+                         f's structure",
                         y.lo, y.hi
                     ));
                 }
-                // An exact form shown for it lies in the enclosure.
-                if let Some(text) = item.get("exact").and_then(Value::as_str) {
-                    iv::set_prec(160);
-                    match claims::pi_q(text) {
-                        Some(v) if v.hi >= lo && v.lo <= hi => {}
-                        _ => out.problems.push(format!(
-                            "the limit at {at} is written {text}, outside [{lo:e}, {hi:e}]"
-                        )),
-                    }
+                if let Some(text) = exact
+                    && let Err(why) = exact_form(text, Some(&shown), fact_text, own.as_ref())
+                {
+                    out.problems
+                        .push(format!("the limit at {at} is written {text}: {why}"));
                 }
                 continue;
             }
@@ -2517,11 +2872,8 @@ fn horizontal(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), 
         ) {
             Err(why) => out.problems.push(why),
             Ok(b) => {
-                if !(b.lo >= y.lo && b.hi <= y.hi) && !fact {
-                    out.problems.push(format!(
-                        "the limit at {at}: [{:e}, {:e}] is narrower than the claims show",
-                        y.lo, y.hi
-                    ));
+                if let Err(why) = listing_follows(&y, &b, fact_text) {
+                    out.problems.push(format!("the limit at {at}: {why}"));
                 }
                 if !mono && !fact {
                     out.problems
@@ -2532,10 +2884,68 @@ fn horizontal(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), 
                         "the limit at {at}: the simplifier's, borne out by f's bands far out"
                     ));
                 }
+                if let Some(text) = exact
+                    && let Err(why) = exact_form(text, Some(&b), fact_text, None)
+                {
+                    out.problems
+                        .push(format!("the limit at {at} is written {text}: {why}"));
+                }
             }
         }
     }
     Ok(())
+}
+
+/// The replay's own enclosure, at 160 bits, of f's limit at `at` by the
+/// tree's structure ([`super::growth`]); None where that decides no finite
+/// one.
+fn own_limit(fx: &Fx, at: At) -> Option<Iv> {
+    iv::set_prec(160);
+    match super::growth::limit(fx, at, false)? {
+        super::growth::Goes::To(v) if !v.empty && v.bounded() => Some(v),
+        _ => None,
+    }
+}
+
+/// Why the exact form `text` written for a limit doesn't stand (Ok: it
+/// does). The form is what the panel shows as the limit itself, so it is
+/// the limit, not a number near it: the same form a fact of the row
+/// states (the fact its claim, checked as one); or the point the claims'
+/// enclosure `shown` is; or, at 160 bits, a number the replay's own limit
+/// by the tree's structure (`own`) can be (about 48 digits: no proof of
+/// equality, but no double beside the limit passes for it).
+fn exact_form(
+    text: &str,
+    shown: Option<&Enc>,
+    fact: Option<&str>,
+    own: Option<&Iv>,
+) -> Result<(), String> {
+    let stated_by_fact = fact
+        .map(|f| f.strip_prefix(claims::RATIONAL).unwrap_or(f))
+        .and_then(|f| f.strip_prefix("f → "))
+        .and_then(|f| f.split_once(" as x → "))
+        .is_some_and(|(l, _)| l.trim() == text.trim());
+    if stated_by_fact {
+        return Ok(());
+    }
+    iv::set_prec(160);
+    let Some(v) = claims::pi_q(text.trim()) else {
+        return Err("no number the replay reads".into());
+    };
+    if let Some(s) = shown
+        && s.lo == s.hi
+    {
+        return if v.is_exactly(s.lo) {
+            Ok(())
+        } else {
+            Err(format!("the claims show {:e}", s.lo))
+        };
+    }
+    match own {
+        Some(o) if !(v.hi < o.lo || o.hi < v.lo) => Ok(()),
+        Some(_) => Err("apart from the limit by f's structure".into()),
+        None => Err("no fact states it, and no claim shows it exactly".into()),
+    }
 }
 
 // ------------------------------------------------------------ range
@@ -2550,24 +2960,32 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
         .iter()
         .map(piece)
         .collect::<Result<_, _>>()?;
-    // Each finite end: the value its source's claims give (one source, or
-    // several whose hull the end is) lies in the end's enclosure; an
-    // attained (closed) end is a value taken. An infinite end: f
+    // Each finite end names where it comes from (`range_ends`: f's value at
+    // a point, a tail's limit, a hole's, a one-sided limit; several where
+    // it is the hull of ends not told apart). The listed enclosure holds
+    // the value each source's claims give: all of a proven enclosure, the
+    // number itself where it is known exactly. (Met only, or held by the
+    // source's enclosure, an end was listed at the double beside the value:
+    // the range of (x + 1)/(3x) leaving out 0.333…3148, not 1/3. Review
+    // 18's follow-up.) An end is closed just when its sources are values
+    // taken; without its sources neither follows. An infinite end: f
     // unbounded somewhere, by a claim.
-    let ends = rc.extra.as_array();
-    if let Some(e) = ends
-        && e.len() != pieces.len()
-    {
+    let Some(ends) = rc.extra.as_array() else {
+        out.problems
+            .push("the range's ends name no sources (no range_ends)".into());
+        return Ok(());
+    };
+    if ends.len() != pieces.len() {
         out.problems.push(format!(
             "{} range pieces but {} pairs of end sources",
             pieces.len(),
-            e.len()
+            ends.len()
         ));
     }
     let unbounded = shows_unbounded(&rc.claims);
     for (i, p) in pieces.iter().enumerate() {
         for (j, b) in [p.lo, p.hi].into_iter().enumerate() {
-            let x = match b {
+            let (x, closed) = match b {
                 Bound::NegInf | Bound::PosInf => {
                     if !unbounded {
                         out.problems
@@ -2575,54 +2993,41 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
                     }
                     continue;
                 }
-                Bound::At { x, closed } => {
-                    let srcs: Vec<&Value> = ends
-                        .and_then(|e| e.get(i))
-                        .and_then(|pair| pair.get(j))
-                        .and_then(Value::as_array)
-                        .map(|s| s.iter().collect())
-                        .unwrap_or_default();
-                    if srcs.iter().any(|s| s.get("At").is_some()) != closed
-                        && !srcs.is_empty()
-                        && srcs.iter().all(|s| s.as_str() != Some("Other"))
-                    {
-                        out.problems.push(format!(
-                            "a range end at {:e} {} but its sources say otherwise",
-                            x.mid(),
-                            if closed { "closed" } else { "open" }
-                        ));
-                    }
-                    if srcs.is_empty() || srcs.iter().any(|s| s.as_str() == Some("Other")) {
-                        // No single source named: some claim must give it.
-                        if !end_given(rc, &x) {
-                            out.problems.push(format!(
-                                "a range end [{:e}, {:e}] no claim gives",
-                                x.lo, x.hi
-                            ));
-                        }
-                        continue;
-                    }
-                    x
-                }
+                Bound::At { x, closed } => (x, closed),
             };
-            let srcs = ends
-                .and_then(|e| e.get(i))
+            let srcs: Vec<&Value> = ends
+                .get(i)
                 .and_then(|pair| pair.get(j))
-                .and_then(Value::as_array);
-            for src in srcs.into_iter().flatten() {
-                match source_value(rc, src) {
+                .and_then(Value::as_array)
+                .map(|s| s.iter().collect())
+                .unwrap_or_default();
+            if srcs.is_empty() || srcs.iter().any(|s| s.as_str() == Some("Other")) {
+                out.problems.push(format!(
+                    "a range end [{:e}, {:e}] with no source named: neither its value nor \
+                     whether it is taken follows",
+                    x.lo, x.hi
+                ));
+                continue;
+            }
+            let taken = srcs.iter().filter(|s| s.get("At").is_some()).count();
+            if (closed && taken != srcs.len()) || (!closed && taken != 0) {
+                out.problems.push(format!(
+                    "a range end at {:e} {} but its sources say otherwise",
+                    x.mid(),
+                    if closed { "closed" } else { "open" }
+                ));
+            }
+            for src in srcs {
+                match source_value(fx, rc, src) {
                     Err(why) => out.problems.push(why),
+                    Ok(v) if v.held_by(&x) => {}
                     Ok(v) => {
-                        if !(x.lo <= v.hi && v.lo <= x.hi)
-                            || (srcs.is_some_and(|s| s.len() == 1)
-                                && !x.contains(&v)
-                                && !v.contains(&x))
-                        {
-                            out.problems.push(format!(
-                                "a range end [{:e}, {:e}], but its source gives [{:e}, {:e}]",
-                                x.lo, x.hi, v.lo, v.hi
-                            ));
-                        }
+                        let e = v.enc();
+                        out.problems.push(format!(
+                            "a range end [{:e}, {:e}] doesn't hold the value its source gives, \
+                             in [{:e}, {:e}]",
+                            x.lo, x.hi, e.lo, e.hi
+                        ));
                     }
                 }
             }
@@ -2685,20 +3090,92 @@ fn shows_unbounded(claims: &[Claim]) -> bool {
         })
 }
 
-/// Some claim's value (or a fact's limit) lies in `e`.
-fn end_given(rc: &RowCert, e: &Enc) -> bool {
-    rc.claims.iter().any(|c| match c {
-        Claim::Value {
-            lo,
-            hi,
-            of: Subject::F(0),
-            ..
+/// What a listing must hold: a number known exactly (a rational a fact
+/// writes out, the replay's own limit of N/D), or every point of an
+/// enclosure a claim proves (the number is somewhere in it).
+///
+/// A listing is an enclosure too, and the number it lists is in it: so it
+/// holds the exact number, or all of the proven enclosure. Met only (an
+/// overlap), or held by the proven enclosure, a listing could be a point
+/// at a double the number is not: 1/3 listed as [0.333…3148, 0.333…3148]
+/// beside the true fact that it is 1/3 (review 18's follow-up).
+#[derive(Clone, Debug)]
+enum Stated {
+    Exact(rug::Rational),
+    Within(Enc),
+}
+
+impl Stated {
+    fn held_by(&self, y: &Enc) -> bool {
+        match self {
+            Stated::Exact(l) => *l >= y.lo && *l <= y.hi,
+            Stated::Within(v) => y.contains(v),
         }
-        | Claim::Removable { lo, hi, .. }
-        | Claim::TailValue { lo, hi, .. } => e.lo <= *lo && *hi <= e.hi,
-        Claim::Simplifier(f) => fact_limit(f).is_some_and(|v| e.contains(&v) || v.contains(e)),
-        _ => false,
-    })
+    }
+
+    /// The doubles about it (for a message, or to meet bands with).
+    fn enc(&self) -> Enc {
+        match self {
+            Stated::Exact(l) => {
+                iv::set_prec(160);
+                let (lo, hi) = claims::outward(&iv::ratio(l.numer(), l.denom()));
+                Enc { lo, hi }
+            }
+            Stated::Within(v) => *v,
+        }
+    }
+
+    /// The part of it inside the proven enclosure `shown` (both hold the
+    /// same number); None if they are apart.
+    fn within(&self, shown: &Enc) -> Option<Stated> {
+        match self {
+            Stated::Exact(l) => (*l >= shown.lo && *l <= shown.hi).then(|| self.clone()),
+            Stated::Within(v) => {
+                let (lo, hi) = (shown.lo.max(v.lo), shown.hi.min(v.hi));
+                (lo <= hi).then_some(Stated::Within(Enc { lo, hi }))
+            }
+        }
+    }
+}
+
+/// The finite limit a "f → L as x → …" fact states: exactly, when L is
+/// written as a rational; else enclosed (q·πᵏ at 160 bits, rounded out to
+/// the doubles about it; or the bracket "in [lo, hi]").
+fn fact_stated(f: &str) -> Option<Stated> {
+    let f = f.strip_prefix(claims::RATIONAL).unwrap_or(f);
+    let (l, _) = f.strip_prefix("f → ")?.split_once(" as x → ")?;
+    match claims::rational(l.trim()) {
+        Some(q) => Some(Stated::Exact(q)),
+        None => fact_limit(f).map(Stated::Within),
+    }
+}
+
+/// Why the listing `y` doesn't follow from the enclosure `shown` its claims
+/// prove (Ok: it does). It holds all of `shown`; or, beside a fact that
+/// states the number (`fact`), the part of `shown` the stated value is in,
+/// the stated value itself when that is exact.
+fn listing_follows(y: &Enc, shown: &Enc, fact: Option<&str>) -> Result<(), String> {
+    if y.contains(shown) {
+        return Ok(());
+    }
+    let listed = format!("[{:e}, {:e}]", y.lo, y.hi);
+    let Some(stated) = fact.and_then(fact_stated) else {
+        return Err(format!("{listed} is narrower than the claims show"));
+    };
+    match stated.within(shown) {
+        None => Err(format!(
+            "the fact's value is outside the claims' [{:e}, {:e}]",
+            shown.lo, shown.hi
+        )),
+        Some(s) if s.held_by(y) => Ok(()),
+        Some(s) => {
+            let e = s.enc();
+            Err(format!(
+                "{listed} doesn't hold the value the fact states, in [{:e}, {:e}]",
+                e.lo, e.hi
+            ))
+        }
+    }
 }
 
 /// The finite limit a "f → L as x → …" fact states, enclosed.
@@ -2720,9 +3197,11 @@ fn fact_limit(f: &str) -> Option<Enc> {
     Some(Enc { lo, hi })
 }
 
-/// The value a range end's source gives, from the row's claims.
-fn source_value(rc: &RowCert, src: &Value) -> Result<Enc, String> {
-    let fact_at = |at: &str| -> Option<Enc> {
+/// The value a range end's source gives, from the row's claims: what the
+/// listed end must hold.
+fn source_value(fx: &Fx, rc: &RowCert, src: &Value) -> Result<Stated, String> {
+    // The fact stating a limit as x → `at` (a rational f's marked so).
+    let fact_at = |at: &str| -> Option<&str> {
         rc.claims.iter().find_map(|c| match c {
             Claim::Simplifier(f)
                 if f.strip_prefix(claims::RATIONAL)
@@ -2730,7 +3209,7 @@ fn source_value(rc: &RowCert, src: &Value) -> Result<Enc, String> {
                     .starts_with("f → ")
                     && f.ends_with(&format!("as x → {at}")) =>
             {
-                fact_limit(f)
+                Some(f.as_str())
             }
             _ => None,
         })
@@ -2742,17 +3221,17 @@ fn source_value(rc: &RowCert, src: &Value) -> Result<Enc, String> {
     };
     // A limit by the tree's structure (its claim checked so), narrowed by
     // the simplifier's exact value where they meet.
-    let structural = |toward: At, at: &str| -> Option<Enc> {
+    let structural = |toward: At, at: &str| -> Option<Stated> {
         let Some(Toward::In(lo, hi)) = limit_at(&rc.claims, toward, false) else {
             return None;
         };
-        Some(match fact_at(at) {
-            Some(f) if f.lo <= hi && lo <= f.hi => Enc {
-                lo: lo.max(f.lo),
-                hi: hi.min(f.hi),
-            },
-            _ => Enc { lo, hi },
-        })
+        let shown = Enc { lo, hi };
+        Some(
+            fact_at(at)
+                .and_then(fact_stated)
+                .and_then(|s| s.within(&shown))
+                .unwrap_or(Stated::Within(shown)),
+        )
     };
     if let Some(x) = src.get("At") {
         let x = enc(x)?;
@@ -2765,7 +3244,7 @@ fn source_value(rc: &RowCert, src: &Value) -> Result<Enc, String> {
                     of: Subject::F(0),
                     lo,
                     hi,
-                } if bx.0 == x.lo && bx.1 == x.hi => Some(Enc { lo: *lo, hi: *hi }),
+                } if bx.0 == x.lo && bx.1 == x.hi => Some(Stated::Within(Enc { lo: *lo, hi: *hi })),
                 _ => None,
             })
             .ok_or_else(|| {
@@ -2792,27 +3271,32 @@ fn source_value(rc: &RowCert, src: &Value) -> Result<Enc, String> {
         if let Some(v) = structural(toward, at) {
             return Ok(v);
         }
-        let bands = tail_bands(&rc.claims, s);
-        let fact = fact_at(at);
-        if rational_at(at)
-            && let Some(f) = fact
-        {
-            return Ok(f);
+        if rational_at(at) {
+            // N/D's limit there, the replay's own, exactly (its fact
+            // checked so): not the fact's text read back as doubles.
+            return super::algebra::Rat::of(&fx.f, &fx.lits, &fx.vars, fx.unit)
+                .and_then(|r| r.limit(s == Side::Right).ok())
+                .map(Stated::Exact)
+                .ok_or_else(|| {
+                    format!("a range end from the {side} tail, where N/D has no finite limit")
+                });
         }
+        let bands = tail_bands(&rc.claims, s);
         if bands.len() < 2 {
             return Err(format!(
                 "a range end from the {side} tail with no bands of f's values there"
             ));
         }
-        let lo = bands.iter().map(|b| b.1).fold(f64::NEG_INFINITY, f64::max);
-        let hi = bands.iter().map(|b| b.2).fold(f64::INFINITY, f64::min);
-        return Ok(match fact {
-            Some(f) => Enc {
-                lo: lo.max(f.lo),
-                hi: hi.min(f.hi),
-            },
-            None => Enc { lo, hi },
-        });
+        let shown = Enc {
+            lo: bands.iter().map(|b| b.1).fold(f64::NEG_INFINITY, f64::max),
+            hi: bands.iter().map(|b| b.2).fold(f64::INFINITY, f64::min),
+        };
+        return match fact_at(at).and_then(fact_stated) {
+            Some(f) => f.within(&shown).ok_or_else(|| {
+                format!("a range end from the {side} tail: the fact's limit is outside f's bands")
+            }),
+            None => Ok(Stated::Within(shown)),
+        };
     }
     if let Some(x) = src.get("Hole") {
         let x = enc(x)?;
@@ -2821,7 +3305,7 @@ fn source_value(rc: &RowCert, src: &Value) -> Result<Enc, String> {
             .iter()
             .find_map(|c| match c {
                 Claim::Removable { at, lo, hi, .. } if at.0 == x.lo && at.1 == x.hi => {
-                    Some(Enc { lo: *lo, hi: *hi })
+                    Some(Stated::Within(Enc { lo: *lo, hi: *hi }))
                 }
                 _ => None,
             })
@@ -2839,11 +3323,14 @@ fn source_value(rc: &RowCert, src: &Value) -> Result<Enc, String> {
             .and_then(Value::as_bool)
             .ok_or("side right")?;
         let toward = if right { At::Right(at) } else { At::Left(at) };
-        if let Some(v) = structural(toward, &format!("{at}{}", if right { "⁺" } else { "⁻" })) {
+        let name = format!("{at}{}", if right { "⁺" } else { "⁻" });
+        if let Some(v) = structural(toward, &name) {
             return Ok(v);
         }
-        let fact = fact_at(&format!("{at}{}", if right { "⁺" } else { "⁻" }))
+        let stated = fact_at(&name)
+            .and_then(fact_stated)
             .ok_or_else(|| format!("a range end from a one-sided limit at {at:e} with no fact"))?;
+        let fact = stated.enc();
         // Borne out by f's bands on boxes beside the point (p left out):
         // settling, and closing in on the limit.
         let bands = side_bands(&rc.claims, at, right);
@@ -2866,7 +3353,7 @@ fn source_value(rc: &RowCert, src: &Value) -> Result<Enc, String> {
                 "a one-sided limit at {at:e}: f's bands beside it don't close in on it"
             ));
         }
-        return Ok(fact);
+        return Ok(stated);
     }
     Err(format!("an unread range end source {src}"))
 }
@@ -2874,7 +3361,7 @@ fn source_value(rc: &RowCert, src: &Value) -> Result<Enc, String> {
 /// Oblique asymptotes: each listed line from the simplifier's facts
 /// (weak), each tail without one ruled out by a fact, a horizontal
 /// asymptote there, or the domain not reaching it.
-fn oblique(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
+fn oblique(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
     let facts: Vec<&String> = rc
         .claims
         .iter()
@@ -2890,6 +3377,12 @@ fn oblique(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), Str
         .iter()
         .any(|f| f.starts_with("f = N/D exactly with deg N ≠ deg D + 1"));
     let periodic = facts.iter().any(|f| f.starts_with("f is periodic"));
+    // N/D − (m·x + b) → 0: the replay's own m and b, exactly.
+    let exact_line = rational_line
+        .then(|| super::algebra::Rat::of(&fx.f, &fx.lits, &fx.vars, fx.unit))
+        .flatten()
+        .and_then(|r| r.line());
+    let holds = |y: &Enc, v: &rug::Rational| *v >= y.lo && *v <= y.hi;
     let mut sides = Vec::new();
     // A line's graph is the line itself: no asymptote. One listed needs f
     // shown to be no m·x + b.
@@ -2935,7 +3428,20 @@ fn oblique(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), Str
                 "the oblique asymptote at {at} is listed outside its expansion's slope or intercept"
             ));
         }
-        let backed = rational_line || expanded;
+        // A rational f's line (its fact checked so): the listed slope and
+        // intercept hold N/D's own, the replay's, exactly. (The fact's
+        // presence alone backed any listing beside it: the slope 1/3 of
+        // (x² + x + 1)/(3x) at the double below it, or as 5. Review 18's
+        // follow-up.)
+        let on_line = exact_line
+            .as_ref()
+            .is_some_and(|(gm, gb)| holds(&m, gm) && holds(&b, gb));
+        if rational_line && lines.is_empty() && !on_line {
+            out.problems.push(format!(
+                "the oblique asymptote at {at} is listed off N/D's line"
+            ));
+        }
+        let backed = on_line || expanded;
         if !backed {
             out.problems
                 .push(format!("an oblique asymptote at {at} with no fact for it"));
@@ -2974,8 +3480,9 @@ fn oblique(rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), Str
                 .iter()
                 .any(|f| f.starts_with(head) && f.contains(&format!("as x → {at}")))
         };
+        // (A rational f with a line has it at both tails: its fact rules
+        // none out. It did, and the line on one side could be left out.)
         let ruled_out = !reaches
-            || rational_line
             || rational_none
             || periodic
             || horizontal.iter().any(|h| h == side)
