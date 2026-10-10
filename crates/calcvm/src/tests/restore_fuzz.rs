@@ -20,21 +20,54 @@
 //! shown result, an operand of the expression) can differ from the
 //! original's beyond those digits: that is the documented precision of a
 //! restore. Such a value must agree with the original's as the engine
-//! writes it out (or to 14 significant digits; a Programmer memory slot,
-//! as the word size shows it); the restore is then counted as rounded, as
-//! it is when the expression holds an operand that isn't the number its
-//! digits type (1/3 shown as 0.3333333333333333, or −0), and a later
-//! result that depends on what was lost (`1 ÷ 3 =`, then −
-//! 0.3333333333333333) is counted too, not failed. Continuations of a
+//! writes it out, with F-E or without (or to 14 significant digits; a
+//! Programmer memory slot, as the word size shows it); the restore is then
+//! counted as rounded, as it is when the expression holds an operand that
+//! isn't the number its digits type (1/3 shown as 0.3333333333333333, or
+//! −0), and a later result that depends on what was lost (`1 ÷ 3 =`, then
+//! − 0.3333333333333333) is counted too, not failed. Continuations of a
 //! restore that kept every value exactly must agree but for the last
 //! digits of numbers.
 //!
-//! The default test runs a few seconds' worth; the long run is
+//! F-E shows less than the plain notation does of a number below 1: like
+//! upstream's, it writes fewer digits the smaller the number is, and none
+//! of a number of 32 digits near 10^-99, "0.e-99". A memory slot keeps
+//! the notation the list was last shown in, so such a slot comes back as
+//! 0: as it was shown.
+//!
+//! One thing shown isn't asked of the engine each time: whether the C key
+//! reads C or CE (`IsInputEmpty`), which the view model keeps from the last
+//! key that told it the input changed. M+, M− and MS end the number being
+//! typed without telling it, so after them it can still read C where the
+//! engine, asked again, says CE: with F-E on, a 0 typed is then shown as
+//! "0.e+0", which isn't the "0" of an empty input. A restore asks the
+//! engine, as the next key does in either session. Until then the two
+//! differ in that label and in nothing else, which is counted separately,
+//! not failed.
+//!
+//! A restore doesn't work a memory slot's number out: what first reads the
+//! slot does (see the snapshot module docs). So a restored calculator that
+//! holds memory is also taken through every continuation twice, its slots
+//! read as the continuation comes to them and all read at once, as the
+//! restore would have: the two must be the same exactly, in what they show
+//! and in every number their engines hold. That includes continuations
+//! that go to another mode first, which are not compared with the
+//! original (see `in_another_mode`).
+//!
+//! Two kinds of script are played: anything a user can do, and sessions
+//! that mostly work with memory (several slots, numbers at the ends of the
+//! range, every action of the Memory panel, and the switches that change
+//! how a slot is shown), since few of the first kind leave more than one
+//! slot. The continuations use the restored slots every way there is.
+//!
+//! The default tests run a few seconds' worth; the long run is
 //! `cargo test -p calcvm --release -- --ignored random_sessions`
-//! (`RESTORE_FUZZ_SEED`, `RESTORE_FUZZ_SCRIPTS`, and `RESTORE_FUZZ_OUT`, a
-//! file the failures are written to, with the fallbacks and the
-//! continuations of rounded restores that differed beyond the last digits
-//! in `.fallbacks` and `.rounded` beside it).
+//! (`RESTORE_FUZZ_SEED`, `RESTORE_FUZZ_SCRIPTS`,
+//! `RESTORE_FUZZ_MEMORY_SCRIPTS`, and `RESTORE_FUZZ_OUT`, a file the
+//! failures are written to, with the fallbacks and the continuations of
+//! rounded restores that differed beyond the last digits in `.fallbacks`
+//! and `.rounded` beside it; the memory sessions' in the same names with
+//! `.memory` after the file's).
 
 use std::fmt::Write as _;
 
@@ -153,6 +186,27 @@ fn engine_state(vm: &CalculatorViewModel) -> EngineState {
     vm.vm.standard_calculator_manager.state()
 }
 
+/// How many memory slots of a restored calculator haven't been read yet (a
+/// restore doesn't work a slot's number out; what first reads it does).
+fn unread(vm: &CalculatorViewModel) -> usize {
+    vm.vm.standard_calculator_manager.unread_memory()
+}
+
+/// A calculator restored from `saved`, every slot read at once if
+/// `at_once`, after `more`: what it shows, and its engine's state.
+fn restored_then(saved: &str, at_once: bool, more: &[Act]) -> (String, String) {
+    let mut restored = CalculatorViewModel::new();
+    restored.restore_state(saved);
+    if at_once {
+        restored.vm.standard_calculator_manager.read_memory();
+    }
+    act(&mut restored, more);
+    (
+        observed(&restored),
+        format!("{:?}", engine_state(&restored)),
+    )
+}
+
 /// Whether `a` and `b` agree to 14 significant digits.
 fn close(a: &Rational, b: &Rational) -> bool {
     let zero = Rational::from(0);
@@ -210,14 +264,28 @@ fn compare_states(original: &EngineState, restored: &EngineState) -> Result<bool
         v.to_string_radix(10, calcmanager::NumberFormat::Float, precision)
             .ok()
     };
+    // And as F-E writes it, which a memory slot shown while F-E was on
+    // keeps: like upstream's, it gives a number below 1 fewer digits the
+    // smaller it is, down to none ("0.e-99" for one of 32 digits near
+    // 10^-99, in the C++ golden cases too), which comes back as 0.
+    let written_in_fe = |v: &Rational| {
+        v.to_string_radix(10, calcmanager::NumberFormat::Scientific, precision)
+            .ok()
+            .map(|text| match text.trim_start_matches('-') {
+                zero if zero.starts_with("0.e") => "0".to_string(),
+                _ => text,
+            })
+    };
     for ((name, o, o_shown), (_, r, r_shown)) in original.values.iter().zip(&restored.values) {
         if o == r {
             continue;
         }
-        // Rounded to the digits shown, or (Programmer mode) a memory slot
-        // stored in a larger word size, back as the word size showed it.
+        // Rounded to the digits shown (in either notation), or (Programmer
+        // mode) a memory slot stored in a larger word size, back as the
+        // word size showed it.
         if !close(o, r)
             && written(o) != written(r)
+            && written_in_fe(o) != written_in_fe(r)
             && !(name.starts_with("memory") && o_shown == r_shown)
             && original.inexact == 0
         {
@@ -478,10 +546,109 @@ fn pool(mode: CalcMode) -> Vec<Act> {
     p
 }
 
+/// What a session that mostly works with memory does in `mode`: numbers
+/// (short ones, ones of every digit the mode takes, far ones), the memory
+/// buttons, every action of the Memory panel on the newest four slots, and
+/// what changes how a slot is shown or held (F-E, the radix, the word
+/// size, the mode, coming back from another page). These scripts leave
+/// several slots, which the ordinary ones rarely do.
+///
+/// With `ends`, now and then a number at an end of the range too, past
+/// which M+ and M− then carry a slot. Only the long run plays those: they
+/// are slow (each key that shows the list writes every slot out, at two
+/// milliseconds a slot there, a mode switch truncates each, and a script
+/// is played again for every continuation).
+fn memory_pool(mode: CalcMode, ends: bool) -> Vec<Act> {
+    use Act::*;
+    use Button::*;
+    let mut p: Vec<Act> = [
+        One, Two, Three, Seven, Nine, Zero, Negate, Add, Equals, Clear,
+    ]
+    .into_iter()
+    .map(Key)
+    .collect();
+    for _ in 0..4 {
+        p.push(Key(Memory));
+    }
+    for _ in 0..2 {
+        p.extend([Key(MemoryRecall), Key(MemoryAdd), Key(MemorySubtract)]);
+    }
+    for i in 0..4 {
+        p.extend([MemoryItem(i), SlotAdd(i), SlotSubtract(i)]);
+    }
+    p.extend([SlotClear(0), SlotClear(2), Key(MemoryClear), Reactivate]);
+    match mode {
+        CalcMode::Standard => {
+            p.extend([
+                Key(Decimal),
+                Paste("9.999999999999999e99"),
+                Paste("1.000000000000001e-99"),
+                Paste("1e-99"),
+                Paste("-0.0000000000000123"),
+                Paste("1234567890123456"),
+                Mode(CalcMode::Scientific),
+                Mode(CalcMode::Programmer),
+            ]);
+            if ends {
+                // One action in sixty.
+                p = p.repeat(4);
+                p.extend([
+                    Paste("9.999999999999999e9999"),
+                    Paste("1.000000000000001e-9999"),
+                    Paste("1e-9999"),
+                ]);
+            }
+        }
+        CalcMode::Scientific => {
+            p.extend([
+                Key(Decimal),
+                Key(Exp),
+                Key(Pi),
+                Key(FToE),
+                Paste("9.9999999999999999999999999999999e99"),
+                Paste("1.0000000000000000000000000000001e-99"),
+                Paste("1e-99"),
+                Paste("-0.00000000000000000000000000000123"),
+                Paste("12345678901234567890123456789012"),
+                Mode(CalcMode::Standard),
+                Mode(CalcMode::Programmer),
+            ]);
+            if ends {
+                p = p.repeat(4);
+                p.extend([
+                    Paste("9.9999999999999999999999999999999e9999"),
+                    Paste("1.0000000000000000000000000000001e-9999"),
+                    Paste("1e-9999"),
+                ]);
+            }
+        }
+        CalcMode::Programmer => p.extend([
+            Key(A),
+            Key(F),
+            Key(Not),
+            Key(HexButton),
+            Key(DecButton),
+            Key(OctButton),
+            Key(BinButton),
+            Key(Qword),
+            Key(Dword),
+            Key(Word),
+            Key(Byte),
+            Paste("7FFFFFFFFFFFFFFF"),
+            Paste("9223372036854775807"),
+            Paste("-128"),
+            Paste("FF"),
+            Mode(CalcMode::Standard),
+            Mode(CalcMode::Scientific),
+        ]),
+    }
+    p
+}
+
 /// The continuations every saved state is checked with: each reads some of
 /// the state a restore must bring back (the number being typed, the
-/// pending operators and parentheses, what "=" repeats, memory, the left
-/// operand `%` reads, the carry, the modes).
+/// pending operators and parentheses, what "=" repeats, memory and every
+/// way of using a slot, the left operand `%` reads, the carry, the modes).
 fn continuations(mode: CalcMode) -> Vec<Vec<Act>> {
     use Act::*;
     use Button::*;
@@ -502,6 +669,20 @@ fn continuations(mode: CalcMode) -> Vec<Vec<Act>> {
         vec![Reactivate, Key(Equals)],
         vec![Key(Memory), MemoryItem(0), Key(Equals)],
         vec![Key(ClearEntry), Key(Equals)],
+        // Every way a restored memory slot is read, changed or moved: M+
+        // and M− on the newest and on an older slot (each shows the whole
+        // list again), a new slot before an older one is recalled, a slot
+        // or all of them cleared, the calculator shown again.
+        vec![Key(MemoryAdd), Key(MemoryRecall), Key(Equals)],
+        vec![Key(MemorySubtract), MemoryItem(0), Key(Equals)],
+        vec![SlotAdd(1), MemoryItem(1), Key(Equals)],
+        vec![SlotSubtract(1), Key(MemoryRecall), MemoryItem(1)],
+        vec![Key(Seven), Key(Memory), MemoryItem(1), Key(Equals)],
+        vec![Key(Seven), Key(Memory), SlotAdd(2), MemoryItem(2)],
+        vec![SlotClear(0), Key(MemoryRecall), Key(Equals)],
+        vec![SlotClear(1), MemoryItem(1), Key(MemoryAdd)],
+        vec![Key(MemoryClear), Key(MemoryAdd), Key(MemoryRecall)],
+        vec![Reactivate, MemoryItem(1), Key(MemorySubtract), Key(Equals)],
     ];
     match mode {
         CalcMode::Standard => c.extend([
@@ -521,6 +702,9 @@ fn continuations(mode: CalcMode) -> Vec<Vec<Act>> {
             vec![Key(Exp), Key(Seven), Key(Equals)],
             vec![Key(XPowerY), Key(Two), Key(Equals)],
             vec![Key(Sin), Key(Equals)],
+            // F-E changes the form the next whole list is shown in.
+            vec![Key(FToE), Key(MemoryAdd), MemoryItem(1)],
+            vec![Key(FToE), MemoryItem(0), Key(MemorySubtract)],
         ]),
         CalcMode::Programmer => c.extend([
             vec![Key(OpenParenthesis), Key(Two), Key(Equals)],
@@ -537,7 +721,47 @@ fn continuations(mode: CalcMode) -> Vec<Vec<Act>> {
             vec![Flip(0), Key(Equals)],
             vec![Key(Byte), Key(Equals)],
             vec![Key(Qword), Key(Equals)],
+            // A slot read in another radix or word size than it was
+            // saved in.
+            vec![Key(HexButton), Key(MemoryRecall), Key(Equals)],
+            vec![Key(BinButton), MemoryItem(1), Key(MemoryAdd)],
+            vec![Key(OctButton), Key(MemorySubtract), MemoryItem(0)],
+            vec![Key(DecButton), SlotAdd(1), MemoryItem(1)],
+            vec![Key(Byte), Key(MemoryRecall), Key(Equals)],
+            vec![Key(Word), MemoryItem(1), Key(MemoryAdd)],
+            vec![Key(Dword), Key(MemorySubtract), Key(MemoryRecall)],
+            vec![Key(Qword), SlotAdd(1), MemoryItem(1), Key(Equals)],
         ]),
+    }
+    c
+}
+
+/// Continuations that go to another mode first, which shows every slot as
+/// that mode does. A restored calculator goes through these with its slots
+/// read late and with them read at once ([`check`]), not beside the
+/// original: across a mode switch the uninterrupted session shows what a
+/// saved one doesn't hold. A slot holds its digits beyond those shown
+/// (2⁶⁴ − 74 is 1.844674407370955e+19 in Standard mode, and −1,616 back in
+/// a Programmer double word instead of −74); and an engine left while it
+/// showed an error keeps the radix or F-E it had, whatever its buttons
+/// show when it is come back to (the switch's own commands are ignored in
+/// an error), where a restored session's is as its buttons show.
+fn in_another_mode(mode: CalcMode) -> Vec<Vec<Act>> {
+    use Act::*;
+    use Button::*;
+    let mut c = Vec::new();
+    for other in [
+        CalcMode::Standard,
+        CalcMode::Scientific,
+        CalcMode::Programmer,
+    ] {
+        if other != mode {
+            c.extend([
+                vec![Mode(other), Key(MemoryRecall), Key(Equals)],
+                vec![Mode(other), MemoryItem(1), Key(MemoryAdd)],
+                vec![Mode(other), Key(Seven), SlotSubtract(1), MemoryItem(1)],
+            ]);
+        }
     }
     c
 }
@@ -558,9 +782,19 @@ impl Rng {
     }
 }
 
-/// Script `index` of the run seeded `seed`: a starting mode and 2–13
+/// Which scripts a run plays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// Anything a user can do ([`pool`]), 2–13 actions.
+    Any,
+    /// Mostly memory ([`memory_pool`]), 6–29 actions; with `ends`, with
+    /// numbers at the ends of the range among them.
+    Memory { ends: bool },
+}
+
+/// Script `index` of the run seeded `seed`: a starting mode and its
 /// actions (switching modes changes what the following ones can be).
-fn script(seed: u64, index: u64) -> (CalcMode, Vec<Act>) {
+fn script(kind: Kind, seed: u64, index: u64) -> (CalcMode, Vec<Act>) {
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15 ^ seed.wrapping_mul(0x1000_0000_01B3) ^ index);
     for _ in 0..4 {
         rng.next();
@@ -571,10 +805,16 @@ fn script(seed: u64, index: u64) -> (CalcMode, Vec<Act>) {
         CalcMode::Programmer,
     ][rng.below(3)];
     let mut mode = start;
-    let len = 2 + rng.below(12);
+    let len = match kind {
+        Kind::Any => 2 + rng.below(12),
+        Kind::Memory { .. } => 6 + rng.below(24),
+    };
     let mut acts = Vec::with_capacity(len);
     for _ in 0..len {
-        let p = pool(mode);
+        let p = match kind {
+            Kind::Any => pool(mode),
+            Kind::Memory { ends } => memory_pool(mode, ends),
+        };
         let a = p[rng.below(p.len())];
         if let Act::Mode(m) = a {
             mode = m;
@@ -594,8 +834,21 @@ struct Counts {
     rounded: usize,
     /// Continuations of those that differed by more than the last digits.
     rounding_dependent: Vec<String>,
+    /// Restores that differ from the original only in the C key's label,
+    /// stale in the original (see the module docs).
+    stale_labels: usize,
+    /// Restores that left memory slots unread, each compared, through
+    /// every continuation, with the same restore read at once.
+    read_late: usize,
     fallbacks: Vec<String>,
     failures: Vec<String>,
+}
+
+/// What a calculator shows ([`observed`]) without the C key's label.
+fn without_the_c_key(shown: &str) -> String {
+    shown
+        .replacen(" ce true fe ", " ce fe ", 1)
+        .replacen(" ce false fe ", " ce fe ", 1)
 }
 
 fn run(mode: CalcMode, acts: &[Act], more: &[Act]) -> (String, String, EngineState, String) {
@@ -661,7 +914,10 @@ fn check(start: CalcMode, acts: &[Act], counts: &mut Counts) {
         return;
     }
     let restored_now = observed(&restored);
-    if restored_now != before {
+    // The original's label for the C key is stale (see the module docs).
+    let stale_label =
+        restored_now != before && without_the_c_key(&restored_now) == without_the_c_key(&before);
+    if restored_now != before && !stale_label {
         counts.failures.push(fail(format!(
             "restored {restored_now}\n  original {before}"
         )));
@@ -680,14 +936,40 @@ fn check(start: CalcMode, acts: &[Act], counts: &mut Counts) {
         }
     };
     counts.rounded += usize::from(rounded);
+    counts.stale_labels += usize::from(stale_label);
     let mode = restored.mode();
+    let unread = unread(&restored);
     drop(restored);
+    // A slot's number is worked out when the slot is first read. Whenever
+    // that is, and in whatever mode, radix or word size, the calculator
+    // must be exactly as one whose slots were all read when it was
+    // restored: in what it shows and in every number its engine holds.
+    if unread > 0 {
+        counts.read_late += 1;
+        for more in continuations(mode).into_iter().chain(in_another_mode(mode)) {
+            let late = restored_then(&saved, false, &more);
+            let at_once = restored_then(&saved, true, &more);
+            if late != at_once {
+                counts.failures.push(fail(format!(
+                    "then {more:?}, its slots read late\n  {}\n  {}\n  and at once\n  {}\n  {}",
+                    late.0, late.1, at_once.0, at_once.1
+                )));
+                return;
+            }
+        }
+    }
     for more in continuations(mode) {
         let (_, _, _, expected) = run(start, acts, &more);
         let mut restored = CalculatorViewModel::new();
         restored.restore_state(&saved);
         act(&mut restored, &more);
-        let actual = observed(&restored);
+        let mut actual = observed(&restored);
+        let mut expected = expected;
+        if stale_label {
+            // It stays so until a key tells the view model.
+            actual = without_the_c_key(&actual);
+            expected = without_the_c_key(&expected);
+        }
         if actual == expected {
             continue;
         }
@@ -708,7 +990,7 @@ fn check(start: CalcMode, acts: &[Act], counts: &mut Counts) {
 }
 
 /// Runs scripts `0..n` of `seed` on `threads` threads.
-fn fuzz(seed: u64, n: u64, threads: u64) -> Counts {
+fn fuzz(kind: Kind, seed: u64, n: u64, threads: u64) -> Counts {
     let results: Vec<Counts> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..threads)
             .map(|t| {
@@ -716,7 +998,7 @@ fn fuzz(seed: u64, n: u64, threads: u64) -> Counts {
                     let mut counts = Counts::default();
                     let mut i = t;
                     while i < n {
-                        let (start, acts) = script(seed, i);
+                        let (start, acts) = script(kind, seed, i);
                         check(start, &acts, &mut counts);
                         i += threads;
                     }
@@ -733,6 +1015,8 @@ fn fuzz(seed: u64, n: u64, threads: u64) -> Counts {
         total.fell_back += c.fell_back;
         total.precision += c.precision;
         total.rounded += c.rounded;
+        total.stale_labels += c.stale_labels;
+        total.read_late += c.read_late;
         total.rounding_dependent.extend(c.rounding_dependent);
         total.failures.extend(c.failures);
         total.fallbacks.extend(c.fallbacks);
@@ -740,8 +1024,12 @@ fn fuzz(seed: u64, n: u64, threads: u64) -> Counts {
     total
 }
 
-fn assert_clean(counts: &Counts) {
+/// Prints what a run counted and, with `RESTORE_FUZZ_OUT`, writes its
+/// failures to that file (its name with `suffix`), and the fallbacks and
+/// the rounded continuations beside it.
+fn report(counts: &Counts, suffix: &str) {
     if let Ok(path) = std::env::var("RESTORE_FUZZ_OUT") {
+        let path = path + suffix;
         let _ = std::fs::write(&path, counts.failures.join("\n\n"));
         let _ = std::fs::write(path.clone() + ".fallbacks", counts.fallbacks.join("\n\n"));
         let _ = std::fs::write(path + ".rounded", counts.rounding_dependent.join("\n\n"));
@@ -749,15 +1037,22 @@ fn assert_clean(counts: &Counts) {
     println!(
         "{} scripts: {} restored exactly ({} with a value rounded to the digits it \
          showed; {} continuations differing only in the last digits, {} more of the \
-         rounded ones differing beyond), {} fell back to the shown value, {} failed",
+         rounded ones differing beyond; {} but for the C key's label, stale in the \
+         original), {} fell back to the shown value, {} failed; {} with memory, each \
+         the same with its slots read late as read at once",
         counts.scripts,
         counts.exact,
         counts.rounded,
         counts.precision,
         counts.rounding_dependent.len(),
+        counts.stale_labels,
         counts.fell_back,
-        counts.failures.len()
+        counts.failures.len(),
+        counts.read_late
     );
+}
+
+fn assert_clean(counts: &Counts) {
     assert!(
         counts.failures.is_empty(),
         "{} of {} failed; the first:\n{}",
@@ -774,24 +1069,48 @@ fn threads() -> u64 {
 /// A few seconds' worth of scripts on every test run.
 #[test]
 fn random_sessions_restore_and_continue() {
-    assert_clean(&fuzz(1, 96, threads()));
+    let counts = fuzz(Kind::Any, 1, 96, threads());
+    report(&counts, "");
+    assert_clean(&counts);
+}
+
+/// And of sessions that mostly work with memory.
+#[test]
+fn random_memory_sessions_restore_and_continue() {
+    let counts = fuzz(Kind::Memory { ends: false }, 1, 32, threads());
+    report(&counts, ".memory");
+    assert_clean(&counts);
+}
+
+fn env(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 
 /// The long run (`cargo test -p calcvm --release -- --ignored`): 20,000
-/// scripts. `RESTORE_FUZZ_SEED` and `RESTORE_FUZZ_SCRIPTS` change them.
+/// scripts, then 2,000 memory sessions, numbers at the ends of the range
+/// among theirs. `RESTORE_FUZZ_SEED`, `RESTORE_FUZZ_SCRIPTS` and
+/// `RESTORE_FUZZ_MEMORY_SCRIPTS` change them.
 #[test]
 #[ignore]
 fn random_sessions_restore_and_continue_long() {
-    let env = |k: &str, d: u64| {
-        std::env::var(k)
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(d)
-    };
-    let counts = fuzz(
-        env("RESTORE_FUZZ_SEED", 2),
+    let seed = env("RESTORE_FUZZ_SEED", 2);
+    let any = fuzz(
+        Kind::Any,
+        seed,
         env("RESTORE_FUZZ_SCRIPTS", 20_000),
         threads(),
     );
-    assert_clean(&counts);
+    report(&any, "");
+    let memory = fuzz(
+        Kind::Memory { ends: true },
+        seed,
+        env("RESTORE_FUZZ_MEMORY_SCRIPTS", 2_000),
+        threads(),
+    );
+    report(&memory, ".memory");
+    assert_clean(&any);
+    assert_clean(&memory);
 }
