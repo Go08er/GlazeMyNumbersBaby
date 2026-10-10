@@ -821,7 +821,7 @@ impl GraphingPage {
             .child(&col)
             .css_classes(["wc-flyout"])
             .build();
-        crate::window::own_activation(&pop);
+        crate::window::own_keys(&pop);
         pop
     }
 
@@ -1213,7 +1213,7 @@ impl GraphingPage {
             .child(&col)
             .css_classes(["wc-flyout"])
             .build();
-        crate::window::own_activation(&pop);
+        crate::window::own_keys(&pop);
 
         // Weak both ways: the GraphView keeps this callback, and the entries'
         // handlers reach the GraphView.

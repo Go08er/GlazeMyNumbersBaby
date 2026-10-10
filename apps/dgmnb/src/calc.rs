@@ -3,9 +3,7 @@
 use appcore::KeyPress;
 use appcore::input::{self, Action};
 use appcore::keys::{self, KEY_HYP, KEY_SECOND, KEY_TRIG_SECOND, Key, KeyKind};
-use calcvm::{
-    AngleUnit, Button as B, CalcMode, CalculatorViewModel, Event, Radix, ShiftMode, WordSize,
-};
+use calcvm::{AngleUnit, Button as B, CalcMode, CalculatorViewModel, Radix, ShiftMode, WordSize};
 
 use crate::app::{Cx, Msg as AppMsg};
 use crate::gfx::Rect;
@@ -69,13 +67,34 @@ pub struct CalcPage {
     pub popup: Option<Popup>,
     tab: Tab,
     bit_view: bool,
-    /// Text for assistive tech's live region after a result.
-    announce: String,
+    /// What is still to be told to assistive tech, oldest first
+    /// ([`CalcPage::display`]): a frame tells one thing.
+    say: std::collections::VecDeque<String>,
+    /// How many frames have told something: each one's live node is a new
+    /// one.
+    told: u64,
     /// While "(" has the focus, what was announced when it got it.
     paren_announcement: Option<String>,
-    /// How many parentheses were open when the page was last drawn: a
-    /// change is announced ([`CalcPage::view`]).
-    open_parens: u32,
+}
+
+/// What of the History and Memory panel has the focus: a History row (or
+/// its Delete), a Memory row (or the `j`th of its MC, M+, M−), the key
+/// that clears either list, or the keypad's MC or MR, which an empty
+/// memory disables.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PanelFocus {
+    History(usize, bool),
+    HistoryClear,
+    Memory(usize, Option<usize>),
+    MemoryClear,
+    MemoryKey,
+}
+
+/// [`PanelFocus`] before a change, and how long the lists were.
+struct PanelBefore {
+    at: Option<PanelFocus>,
+    history: usize,
+    memory: usize,
 }
 
 /// The Bit shift flyout's modes, in order (rows `("shift", i)`).
@@ -100,8 +119,8 @@ impl CalcPage {
             vm.restore_state(&s);
         }
         vm.take_events();
-        // The count a restored session starts with isn't a change.
-        let open_parens = vm.open_parens();
+        // What a restored session shows at the start isn't told as news.
+        vm.take_announcements();
         CalcPage {
             vm,
             second: false,
@@ -110,9 +129,9 @@ impl CalcPage {
             popup: None,
             tab: Tab::History,
             bit_view: false,
-            announce: String::new(),
+            say: std::collections::VecDeque::new(),
+            told: 0,
             paren_announcement: None,
-            open_parens,
         }
     }
 
@@ -194,13 +213,105 @@ impl CalcPage {
     }
 
     fn after_press(&mut self) {
-        let events = self.vm.take_events();
-        if events.contains(&Event::Result) || events.contains(&Event::Error) {
-            self.announce = format!("Display is {}", self.vm.display_value());
+        self.vm.take_events();
+    }
+
+    /// What of the History or Memory list (or the keys that empty them)
+    /// has the focus now, and how long the lists are: for
+    /// [`CalcPage::follow_panel`], after a change.
+    fn panel_focus(&self, focus: Option<ui::Id>) -> PanelBefore {
+        let (history, memory) = (self.vm.history().len(), self.vm.memory().len());
+        let at = focus.and_then(|f| {
+            use PanelFocus::*;
+            let row = |n: usize, of: &dyn Fn(usize) -> Option<PanelFocus>| (0..n).find_map(of);
+            if f == id("hist-clear") {
+                Some(HistoryClear)
+            } else if f == id("mem-clear") {
+                Some(MemoryClear)
+            } else if [B::MemoryClear, B::MemoryRecall]
+                .iter()
+                .any(|b| f == id(("mem", *b as u32)))
+            {
+                Some(MemoryKey)
+            } else {
+                row(history, &|i| {
+                    (f == id(("hist", i)))
+                        .then_some(History(i, false))
+                        .or((f == id(("hist-del", i))).then_some(History(i, true)))
+                })
+                .or_else(|| {
+                    row(memory, &|i| {
+                        (f == id(("memrow", i)))
+                            .then_some(Memory(i, None))
+                            .or_else(|| {
+                                (0..3).find_map(|j| {
+                                    (f == id(("memop", i, j))).then_some(Memory(i, Some(j)))
+                                })
+                            })
+                    })
+                })
+            }
+        });
+        PanelBefore {
+            at,
+            history,
+            memory,
+        }
+    }
+
+    /// Keeps the focus somewhere sensible when the History or Memory row
+    /// it was on (`before`) goes or moves, as upstream's does
+    /// (HistoryList.xaml.cs:71-95, Memory.xaml.cs:68-93,
+    /// Calculator.xaml.cs:714-744): on the item now in the deleted one's
+    /// place, or the last one; when the list is emptied, on the History
+    /// tab (upstream's docked pivot) or on M+ (`MemPlus`), the Memory
+    /// sheet closed first if it was open over the keys. A row keeps the
+    /// focus when items are added above it. The same when a whole list is
+    /// cleared with the focus in it, or on the key that cleared it.
+    fn follow_panel(&mut self, before: PanelBefore, cx: &mut Cx) {
+        use PanelFocus::*;
+        let (history, memory) = (self.vm.history().len(), self.vm.memory().len());
+        // The same item if items came above it; else its place, or the last.
+        let moved = input::item_after;
+        let memory_emptied = |page: &mut CalcPage, cx: &mut Cx| {
+            if page.popup == Some(Popup::Panel) {
+                page.popup = None;
+            }
+            *cx.focus = Some(id(("mem", B::MemoryAdd as u32)));
+        };
+        match before.at {
+            Some(History(..) | HistoryClear) if history == 0 && before.history > 0 => {
+                *cx.focus = Some(id("tab-history"));
+            }
+            Some(History(row, delete)) if history != before.history => {
+                let row = moved(row, before.history, history);
+                *cx.focus = Some(if delete {
+                    id(("hist-del", row))
+                } else {
+                    id(("hist", row))
+                });
+            }
+            Some(Memory(..) | MemoryClear | MemoryKey) if memory == 0 && before.memory > 0 => {
+                memory_emptied(self, cx);
+            }
+            Some(Memory(row, op)) if memory != before.memory => {
+                let row = moved(row, before.memory, memory);
+                *cx.focus = Some(match op {
+                    Some(j) => id(("memop", row, j)),
+                    None => id(("memrow", row)),
+                });
+            }
+            _ => {}
         }
     }
 
     pub fn update(&mut self, m: Msg, cx: &mut Cx) {
+        let before = self.panel_focus(*cx.focus);
+        self.update_page(m, cx);
+        self.follow_panel(before, cx);
+    }
+
+    fn update_page(&mut self, m: Msg, cx: &mut Cx) {
         match m {
             Msg::Key(KEY_SECOND) => self.second = !self.second,
             Msg::Key(KEY_TRIG_SECOND) => self.trig_inv = !self.trig_inv,
@@ -323,6 +434,13 @@ impl CalcPage {
 
     /// Keyboard input; true if handled.
     pub fn key(&mut self, kp: &KeyPress, cx: &mut Cx) -> bool {
+        let before = self.panel_focus(*cx.focus);
+        let handled = self.key_page(kp, cx);
+        self.follow_panel(before, cx);
+        handled
+    }
+
+    fn key_page(&mut self, kp: &KeyPress, cx: &mut Cx) -> bool {
         let (mode, shift) = (self.vm.mode(), self.vm.shift_mode());
         let Some(action) = input::shortcut(mode, kp, shift) else {
             return false;
@@ -487,28 +605,6 @@ impl CalcPage {
         } else {
             self.paren_announcement = None;
         }
-        // Upstream's SetParenthesisCount (StandardCalculatorViewModel.cs:
-        // 1092-1103): the count is also told each time it changes, in
-        // Scientific and Programmer ("Open parenthesis count 1" after "(",
-        // 0 after Clear or "="), whatever changed it and wherever the
-        // focus is. A live node of its own, there in the frame that shows
-        // the change only: AccessKit announces it as it comes, or as its
-        // words change when one change follows another, and the same
-        // count can be told again later.
-        let open_parens = self.vm.open_parens();
-        let told = keys::open_parenthesis_count_change(mode, self.open_parens, open_parens);
-        self.open_parens = open_parens;
-        if let Some(text) = told
-            && let Some(n) = f.node(
-                id("paren-count-announcer"),
-                accesskit::Role::Status,
-                &text,
-                pad,
-            )
-        {
-            n.value = Some(text.clone());
-            n.live = true;
-        }
         if let Some(p) = panel {
             self.side_panel(f, p.inset_xy(0.0, 4.0).take_right(PANEL_W - 8.0).0);
         }
@@ -531,18 +627,44 @@ impl CalcPage {
             Align::End,
         );
         // Right-click menu (copy / paste). The display always reports what it
-        // shows (AccessKit names a label from its value); results are spoken
-        // through a separate live node that changes only when one arrives, so
-        // typing digits isn't read out.
+        // shows (AccessKit names a label from its value).
         let did = id("display");
         f.hit(did, r, crate::ui::Sense::Click, None, false);
         let current = format!("Display is {shown}");
         if let Some(n) = f.node(did, accesskit::Role::Label, &current, r) {
             n.value = Some(current.clone());
         }
-        if let Some(n) = f.node(id("announcer"), accesskit::Role::Status, &self.announce, r) {
-            n.value = Some(self.announce.clone());
-            n.live = true;
+        // What upstream's view model tells a screen reader, as it does
+        // (calcvm::Announcement, each `Announcement = …` of
+        // StandardCalculatorViewModel): the display each time the value
+        // shown changes, typed digits too, and after a binary operator
+        // ("Display is 7 plus"); the open-parenthesis count each time it
+        // changes, in Scientific and Programmer; a ")" with none open.
+        // Each is a live node there for one frame only, under a name no
+        // earlier frame's had: AccessKit announces a live node as it comes,
+        // so the same words can be said again. One a frame, with another
+        // frame asked for while more wait: AccessKit reports the nodes one
+        // update adds in no particular order (it keeps them in a hash set),
+        // and what one step says has an order (a paste's "Open parenthesis
+        // count 1", "Display is 1", "Open parenthesis count 0").
+        let said = self.vm.take_announcements();
+        self.say.extend(said.iter().map(keys::announcement));
+        if f.nodes.is_none() {
+            // Nobody is listening.
+            self.say.clear();
+        }
+        if let Some(text) = self.say.pop_front() {
+            self.told = self.told.wrapping_add(1);
+            if let Some(n) = f.node(
+                id(("announcer", self.told)),
+                accesskit::Role::Status,
+                &text,
+                r,
+            ) {
+                n.value = Some(text.clone());
+                n.live = true;
+            }
+            f.again |= !self.say.is_empty();
         }
         if !e.is_empty()
             && let Some(n) = f.node(
