@@ -577,6 +577,40 @@ fn made_up_y_intercept(v: &mut serde_json::Value, y: f64, keep: bool) {
     }});
 }
 
+/// The horizontal row made up as Certified, y ∈ `y` at both tails, each
+/// limit by the fact "f = N/D exactly: f → `limit` as x → ±∞" (a rational
+/// function's limit, which the replay decides exactly), with the producer's
+/// own point values of f from the row `values_from` showing f is no
+/// constant: nothing else in the certificate changes (review 18, R18-M-02).
+fn rational_horizontal(v: &mut serde_json::Value, values_from: &str, y: (f64, f64), limit: &str) {
+    let values: Vec<serde_json::Value> = claims_of(v, values_from)
+        .iter()
+        .filter(|c| c.get("Value").is_some_and(|c| c["of"]["F"] == "F0"))
+        .cloned()
+        .collect();
+    assert!(
+        values.len() >= 2,
+        "the plant needs two point values of f in {values_from}, which the certifier no longer \
+         writes for this function: retarget the plant"
+    );
+    let item = |side: &str| {
+        serde_json::json!({"side": side, "y": {"lo": y.0, "hi": y.1},
+        "exact": null, "looks_like": null})
+    };
+    let mut claims: Vec<serde_json::Value> = ["−∞", "+∞"]
+        .iter()
+        .map(|at| {
+            serde_json::json!({"Simplifier": {"fact":
+            format!("f = N/D exactly: f → {limit} as x → {at}")}})
+        })
+        .collect();
+    claims.extend(values);
+    v["horizontal"] = serde_json::json!({"Certified": {
+        "value": [item("Left"), item("Right")],
+        "cert": {"covers": "Line", "claims": claims}
+    }});
+}
+
 /// False facts planted into real certificates: each must be caught.
 const PLANTS: &[Plant] = &[
     ("x^3-2x+1/(x-1)", "an x-intercept left out", |v| {
@@ -1106,6 +1140,25 @@ const PLANTS: &[Plant] = &[
             v["parity"] = serde_json::json!({"Certified": {"value": "Odd",
             "cert": {"covers": "Line", "claims": [{"Simplifier": {"fact": "f is odd"}}]}}});
         },
+    ),
+    // Review 18, R18-M-02: a root's degree past u32 cut to its low 32 bits
+    // in the exact algebra (2³² + 3 read as 3), so the two roots were one
+    // atom and cancelled: f read as the rational function 0, and false
+    // limits at ±∞ were proved "exactly". (The cube root grows faster: f →
+    // −∞ at +∞ and +∞ at −∞, no horizontal asymptote.) Only the horizontal
+    // row is changed, as in the review's variant.
+    (
+        "root(x+1,4294967299)-root(x+1,3)",
+        "a horizontal asymptote y = 0 at both tails, as a rational function's exact limits",
+        |v| rational_horizontal(v, "parity", (0.0, 0.0), "0"),
+    ),
+    // The same reader declared a zero tree supplied as f's simplified form
+    // identical to f exactly (any claim proved on it would then stand as
+    // proved on f).
+    (
+        "root(x+1,4294967299)-root(x+1,3)",
+        "the zero function supplied as f's simplified form",
+        |v| v["evaluated"] = serde_json::json!("f = 0"),
     ),
 ];
 
@@ -1792,4 +1845,78 @@ fn operands_set_aside_keep_their_definedness() {
             assert!(s[1].is_exactly(d1), "{src} [{unit:?}]: f′ {:?}", s[1]);
         }
     }
+}
+
+// ------------------------------------------------------------ review 18
+
+/// The replay's own reading of `src`: its canonical tree and literals.
+fn read(src: &str) -> (graphing::ast::Expr, replay::eval::Lits) {
+    let text = format!("y={src}");
+    let eq = graphing::Equation::parse(&text).unwrap();
+    let (_, e) = eq.explicit().unwrap();
+    (replay::eval::canonical(e), replay::eval::Lits::of(&text))
+}
+
+/// Review 18, R18-M-02: the exact algebra keeps a root's degree whole. A
+/// degree past u32 was cut to its low 32 bits (2³² + 3 read as 3), so
+/// ᵏ√u and ∛u were one atom: their difference read as the rational
+/// function 0, their trees as identical. Past its own bounds (a monomial's
+/// exponent, the atoms it can name) the algebra reads nothing, rather than
+/// wrap: x^(2³⁶) − x^(2³⁵) was 0 too in a release build.
+#[test]
+fn the_exact_algebra_keeps_degrees_and_exponents_whole() {
+    use replay::algebra::{Rat, same_trees};
+    use replay::iv::Unit::Radians;
+    let rational = |src: &str| {
+        let (e, lits) = read(src);
+        Rat::of(&e, &lits, &[], Radians).map(|r| (r.n.len(), r.d.len()))
+    };
+    let same = |a: &str, b: &str| {
+        let ((ea, lits), (eb, _)) = (read(a), read(b));
+        same_trees(&ea, &eb, false, &lits, &[], Radians)
+    };
+    // Roots of different degrees are different atoms, however long.
+    for (a, b) in [
+        ("root(x+1,4294967299)", "root(x+1,3)"),
+        ("root(x+1,4294967298)", "sqrt(x+1)"),
+        ("root(x+1,-4294967299)", "root(x+1,-3)"),
+        ("root(x+1,18446744073709551619)", "root(x+1,3)"),
+        ("(x+1)^(1/4294967299)", "(x+1)^(1/3)"),
+        ("(x+1)^(2/8589934598)", "(x+1)^(1/3)"),
+        ("(x+1)^(1/(4294967296+3))", "(x+1)^(1/3)"),
+    ] {
+        assert!(!same(a, b), "{a} read as {b}");
+        assert_eq!(rational(&format!("{a}-({b})")), None, "{a} − {b}");
+    }
+    // The same degree, however written, is one atom still.
+    for (a, b) in [
+        ("root(x+1,4294967299)", "root(x+1,4294967299)"),
+        ("root(x+1,4294967299)", "(x+1)^(1/4294967299)"),
+        ("root(x+1,4294967299)", "(x+1)^(1/(4294967296+3))"),
+        ("root(x+1,4294967299)^2", "(x+1)^(2/4294967299)"),
+        ("root(x+1,-4294967299)", "1/root(x+1,4294967299)"),
+        (
+            "root(x+1,18446744073709551619)",
+            "(x+1)^(1/18446744073709551619)",
+        ),
+        ("root(x+1,3)", "cbrt(x+1)"),
+        ("root(x+1,3)", "(x+1)^(1/3)"),
+        ("root(x+1,2)", "sqrt(x+1)"),
+    ] {
+        assert!(same(a, b), "{a} not read as {b}");
+    }
+    assert_eq!(
+        rational("root(x+1,4294967299)-(x+1)^(1/4294967299)"),
+        Some((0, 1))
+    );
+    // A monomial's exponent past u32: nothing read (x^(2³⁶) and x^(2³⁵)
+    // wrapped to x⁰ both, and their difference to 0).
+    let (hi, lo) = (
+        "((((((x^64)^64)^64)^64)^64)^64)",
+        "((((((x^64)^64)^64)^64)^64)^32)",
+    );
+    assert_eq!(rational(&format!("{hi}-{lo}")), None);
+    assert!(!same(hi, lo));
+    // Within the bounds the polynomial is read: (x⁶⁴)⁶⁴ is x⁴⁰⁹⁶.
+    assert_eq!(rational("(x^64)^64"), Some((4097, 1)));
 }
