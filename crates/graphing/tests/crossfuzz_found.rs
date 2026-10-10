@@ -30,6 +30,19 @@ fn enclosure(src: &str, lo: f64, hi: f64) -> DecInterval {
     )
 }
 
+/// The claims the asymptote rows of a certificate rest on.
+fn asymptote_claims(a: &graphing::certify::Analysis) -> Vec<graphing::certify::Claim> {
+    use graphing::certify::Row;
+    let mut all = Vec::new();
+    if let Row::Certified { cert, .. } | Row::Partial { cert, .. } = &a.horizontal {
+        all.extend(cert.claims.iter().cloned());
+    }
+    if let Row::Certified { cert, .. } | Row::Partial { cert, .. } = &a.oblique {
+        all.extend(cert.claims.iter().cloned());
+    }
+    all
+}
+
 /// The reference evaluator called a power undefined where y·ln|a| leaves
 /// the doubles: the product overflowed to a NaN, read as "undefined". The
 /// compiled program had it right both times.
@@ -411,4 +424,34 @@ fn a_kink_box_f_dips_inside_is_not_read_as_a_point() {
     let k = panel("x^(1/3)");
     assert_eq!(k.too_complex_features & flags::MONOTONE_INTERVALS, 0);
     assert_eq!(k.monotonicity.len(), 1, "{:?}", k.monotonicity);
+}
+
+/// The certifier's simplified form of f is f only where f is defined, and
+/// has values where f has none. Its values at −15 and −13 were taken for
+/// min(0·acosh x, x), whose domain is [1, ∞): they "showed" a function
+/// that is 0 on all its domain to be no constant, gave its certificate the
+/// asymptote y = 0, and were refuted by the replay.
+#[test]
+fn a_value_of_the_simplified_form_outside_the_domain_is_no_witness() {
+    use graphing::certify::{Claim, DEFAULT_BUDGET, Row, certify_text};
+    let f = "min(0*acosh(x),x)";
+    let a = certify_text(f, CompileOptions::default(), DEFAULT_BUDGET, None).expect("certifies");
+    for c in asymptote_claims(&a) {
+        if let Claim::Value { x, .. } = &c {
+            assert!(x.a.0 >= 1.0, "{f}: {c:?}, outside the domain [1, ∞)");
+        }
+    }
+    // A constant on its domain has no asymptote, or the row is unknown.
+    if let Row::Certified { value, .. } = &a.horizontal {
+        assert!(value.is_empty(), "{f}: {value:?}");
+    }
+    // Where f is defined the witnesses are taken as before.
+    let a = certify_text(
+        "e^(-x)+0*x",
+        CompileOptions::default(),
+        DEFAULT_BUDGET,
+        None,
+    )
+    .expect("certifies");
+    assert!(a.horizontal.is_certified(), "{:?}", a.horizontal);
 }

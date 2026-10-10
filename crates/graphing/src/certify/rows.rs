@@ -2260,14 +2260,35 @@ fn own_line(f: &Fun<'_>) -> Option<Claim> {
     })
 }
 
+/// f's value at the double x, where f is defined there: a bounded
+/// enclosure from the simplified form, and f's own tree defined there
+/// too. The simplified form is f only where f is defined, and has values
+/// where f has none: min(0·acosh x, x) is min(0, x) for x ≥ 1 only, and
+/// its values at −15 and −13 "showed" a function that is 0 on all its
+/// domain to be no constant (a `Value` claim the replay refuted, and an
+/// asymptote y = 0 in the certificate of a constant: found by
+/// `tests/crossfuzz.rs`).
+fn value_at(f: &Fun<'_>, x: f64) -> Result<Option<DecInterval>, Stop> {
+    let v = f.val(Interval::point(x))?;
+    if v.is_empty() || v.dec < Dec::Def || !v.iv.is_bounded() {
+        return Ok(None);
+    }
+    if f.eval != f.expr {
+        let own = f.ser_of(&f.expr, Interval::point(x), 0)?[0];
+        if own.is_empty() || own.dec < Dec::Def {
+            return Ok(None);
+        }
+    }
+    Ok(Some(v))
+}
+
 /// Sample points of the window where f is defined, with its values.
 fn samples(f: &Fun<'_>, scope: &Scope) -> Result<Vec<(f64, DecInterval)>, Stop> {
     let (a, b) = scope.window;
     let mut vals = Vec::new();
     for i in 0..16 {
         let x = a + (b - a) * (i as f64 + 0.5) / 16.0;
-        let v = f.val(Interval::point(x))?;
-        if !v.is_empty() && v.dec >= Dec::Def && v.iv.is_bounded() {
+        if let Some(v) = value_at(f, x)? {
             vals.push((x, v));
         }
     }
@@ -2293,8 +2314,7 @@ fn not_constant(f: &Fun<'_>, scope: &Scope) -> Result<Option<Vec<Claim>>, Stop> 
         for right in [false, true] {
             for m in thin(&far_points(f, right, 1.0), 24) {
                 let x = if right { m } else { -m };
-                let v = f.val(Interval::point(x))?;
-                if !v.is_empty() && v.dec >= Dec::Def && v.iv.is_bounded() {
+                if let Some(v) = value_at(f, x)? {
                     vals.push((x, v));
                 }
             }
