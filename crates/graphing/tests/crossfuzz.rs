@@ -39,9 +39,11 @@
 //! the long run's default is 20 000), `CROSSFUZZ_START` (the first case's
 //! index), `CROSSFUZZ_THREADS`, `CROSSFUZZ_LOG` (a file: one line per
 //! finding, tab separated), `CROSSFUZZ_MINIMISE=0` (don't shrink failing
-//! cases), `CROSSFUZZ_REPLAY_SECONDS` (how long a replay is waited for:
-//! 30). A run is a function of the seed and the range of cases alone,
-//! but for the replays given up on, which are counted and never fail it.
+//! cases), `CROSSFUZZ_REPLAY_SECONDS` (how long a replay may take: 30;
+//! each runs in a process of its own, this binary's `replay_child`, and
+//! is stopped then). A run is a function of the seed and the range of
+//! cases alone, but for the replays given up on, which are counted,
+//! listed in the log and never fail it.
 //! `-- --ignored one` checks one expression: `CROSSFUZZ_EXPR='x^(1/3)'`,
 //! with `CROSSFUZZ_DIGITS` (5–20 or `off`), `CROSSFUZZ_SLIDERS='a=0.3,b=2'`,
 //! `CROSSFUZZ_UNIT` (`deg`, `grad`), `CROSSFUZZ_PAIR` (an equal spelling)
@@ -331,6 +333,38 @@ fn root_far_in(case: &Case, f: &Finding) -> bool {
         && position(&f.detail).is_some_and(|x| x != 0.0 && x.abs() <= 1e-300)
 }
 
+/// A claim about f′ or f″ on a box that starts at a closed end of the
+/// domain: f has a value at the box's low end and none at the double
+/// below it.
+fn derivative_from_a_domain_end(case: &Case, f: &Finding) -> bool {
+    let derivative = f.detail.contains("of: F(1)") || f.detail.contains("of: F(2)");
+    let low = f
+        .detail
+        .split("x: (")
+        .nth(1)
+        .and_then(|t| t.split(',').next())
+        .and_then(|t| t.trim().parse::<f64>().ok());
+    let Some(a) = low.filter(|_| derivative) else {
+        return false;
+    };
+    let set = setup(case);
+    let text = case.expr.text();
+    views::defined_at(&text, &set, a) == Some(true)
+        && views::defined_at(&text, &set, checks::step(a, -1)) == Some(false)
+}
+
+/// The fact that a periodic f has no oblique asymptote, tested by f/x at
+/// far points.
+fn periodic_and_huge(_: &Case, f: &Finding) -> bool {
+    f.detail.contains("f is periodic") && f.detail.contains("stays apart from 0")
+}
+
+/// A `OneCross` of f refuted at its high end with the low end unplaced
+/// (said by `views::mp::low_end_unplaced`, from the replay's own f).
+fn one_cross_from_an_unplaced_end(_: &Case, f: &Finding) -> bool {
+    f.detail.starts_with("OneCross") && f.detail.contains("on neither side of")
+}
+
 /// In degrees or grads, far out.
 fn a_turn_far_out(case: &Case, f: &Finding) -> bool {
     case.unit != TrigUnit::Radians && position(&f.detail).is_some_and(|x| x.abs() >= 1e17)
@@ -360,6 +394,43 @@ const KNOWN: &[(&str, Matches, &str)] = &[
         root_of_degree_a_half,
         "the replay's own root(x, 0.5) is x² for a negative x too, where the engine has it \
          undefined (tests/replay/eval.rs)",
+    ),
+    // tests/replay/claims.rs: f′ of the source tree is ∞ − ∞ at a closed
+    // end of the domain where the certifier's simplified form is smooth
+    // (acosh x − acosh x + sin x at 1), and a OneCross of f′ on a box from
+    // that end comes out refuted, not unconfirmed. The claim holds of the
+    // one-sided derivative; whether a box of f′ may start at a domain's
+    // end is the certifier's and the replay's to settle between them.
+    (
+        "replay/refuted",
+        derivative_from_a_domain_end,
+        "a claim about f′ on a box from a closed end of the domain, where the source tree's \
+         derivative is ∞ − ∞ and the simplified form's is not: the replay refutes it \
+         (tests/replay/claims.rs), the certifier claims it of the one-sided derivative \
+         (certify/mod.rs); the row's answer is right in the cases seen",
+    ),
+    // tests/replay/claims.rs: "f is periodic, so no oblique asymptote" is
+    // tested by f/x at points up to 10²⁴⁰, where tan(x) + cosh(2³¹ + 1),
+    // periodic with a constant of 10⁹³²⁶³⁰⁰⁰⁰, is nowhere near 0.
+    (
+        "replay/refuted",
+        periodic_and_huge,
+        "the replay tests \"f is periodic: no oblique asymptote\" by f/x at far points and \
+         refutes it for a periodic f with a constant beyond them (tests/replay/claims.rs): \
+         the fact is true",
+    ),
+    // tests/replay/claims.rs, `Claim::OneCross`: `below_first = !a.yes()`
+    // reads a low end not shown above c as one below it, and the check of
+    // the other end then refutes a claim that only wasn't confirmed:
+    // min(10^5000 + a − 10^5000 + ln x, x − x³ + 0.3) crosses 0 once in
+    // [1, 4], and the replay encloses its first operand by ∞ − ∞, so f(1)
+    // by (−∞, 0.3] and f(4) by (−∞, −59.7].
+    (
+        "replay/refuted",
+        one_cross_from_an_unplaced_end,
+        "the replay's OneCross takes a low end it can't place (its own f there on neither side \
+         of c) for one below c, and refutes the claim at the high end for being below c too \
+         (tests/replay/claims.rs, `below_first`): the claim is only unconfirmed",
     ),
     (
         "replay/refuted",
@@ -784,6 +855,18 @@ impl Report {
                     ));
                 }
             }
+            // And the replays given up on, which a later run may not.
+            for d in &self.done {
+                if let Some(s) = d.outcome.note_samples.get("replay/gave-up-waiting") {
+                    text.push_str(&format!(
+                        "{}\t{}\tnote: replay/gave-up-waiting\t{}\t{}\t\t\n",
+                        d.case.index,
+                        d.case.family,
+                        describe(&d.case),
+                        s.replace(['\t', '\n'], " "),
+                    ));
+                }
+            }
             std::fs::write(&path, text).unwrap_or_else(|e| panic!("CROSSFUZZ_LOG={path}: {e}"));
             println!("findings written to {path}");
         }
@@ -910,6 +993,16 @@ fn list_cases() {
         let c = generate::case(seed, i);
         println!("{i}\t{}\t{}", c.family, describe(&c));
     }
+}
+
+/// The process a certificate's replay runs in: the tester starts this
+/// binary for it, and stops it when the replay runs over
+/// (`CROSSFUZZ_REPLAY_SECONDS`). Does nothing when run by hand.
+#[cfg(feature = "mpfr-oracle")]
+#[test]
+#[ignore = "the replay's own process: the tester starts it"]
+fn replay_child() {
+    views::replay_child();
 }
 
 /// The generator is a function of the seed and the index, its texts

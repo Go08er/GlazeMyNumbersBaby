@@ -172,6 +172,19 @@ impl Loaded {
     }
 }
 
+/// The replay's own process ([`mp::replayed`] starts it).
+#[cfg(feature = "mpfr-oracle")]
+pub fn replay_child() {
+    mp::replay_child();
+}
+
+/// Whether the compiled `y = text` has a value at x (`None`: no such
+/// function).
+pub fn defined_at(text: &str, set: &Setup, x: f64) -> Option<bool> {
+    let l = load(text, set).ok()?;
+    Some(!l.f.prog.eval(x, 0.0).is_nan())
+}
+
 fn load(text: &str, set: &Setup) -> Result<Loaded, NoFunction> {
     let vars = set.vars();
     let setting = Setting {
@@ -547,6 +560,37 @@ mod mp {
         }
     }
 
+    /// What the replay's `OneCross` does with a low end it can't place:
+    /// it reads "not shown above c there" as "below c there", and then
+    /// calls the claim refuted at the high end for being below c too
+    /// (tests/replay/claims.rs). Where the replay's own f at the low end
+    /// (at [`PREC`] bits) lies on neither side of c and the refutation
+    /// names the high end, this says so: nothing was refuted, an end was
+    /// left open. (A refutation with both ends placed is said nothing of.)
+    fn low_end_unplaced(fx: &Fx, claim: &replay::Claim, note: &str) -> Option<String> {
+        let replay::Claim::OneCross {
+            x,
+            of: replay::Subject::F(0),
+            c,
+        } = claim
+        else {
+            return None;
+        };
+        if !note.ends_with(&format!(" at {:e}", x.1)) {
+            return None;
+        }
+        let m = at_prec(|| fx.series(&fx.f, x.0, x.0, 0)).swap_remove(0);
+        let (lo, hi) = bounds(&m);
+        let placed = !m.empty && m.def && (lo > *c || hi < *c);
+        (!placed).then(|| {
+            format!(
+                "the replay's own f at the low end {:e} is {}, on neither side of {c:e}",
+                x.0,
+                show(&m)
+            )
+        })
+    }
+
     /// The replay's reading of the function, from the certificate: its
     /// own scan of the source's numbers, checked against the parser's.
     pub fn function(json: &serde_json::Value, out: &mut Outcome) -> Option<Fx> {
@@ -815,54 +859,160 @@ mod mp {
     /// counting functions, which the replay doesn't model, is counted.
     ///
     /// The replay has no budget of its own and can't be cancelled (a
-    /// claim it can't decide may be bisected for minutes): it runs on a
-    /// thread of its own, given up on after [`replay_seconds`] and counted
+    /// claim it can't decide may be bisected for minutes): it runs in a
+    /// process of its own (this test binary's `replay_child`, which
+    /// [`replay_child`] is), stopped after [`replay_seconds`] and counted
     /// (`replay/gave-up-waiting`: a matter of time, so not a failure).
-    /// With [`ABANDONED_MOST`] such threads still running, further
-    /// replays are skipped and counted.
+    /// (On a thread it ran on after it was given up on, and a run's slow
+    /// replays piled up until the others had to be skipped.)
+    ///
+    /// A refuted `OneCross` of f says so when the replay's own f at the
+    /// box's low end is on neither side of c and the refutation is at the
+    /// high end ([`low_end_unplaced`]).
     pub fn replayed(json: &serde_json::Value, fx: &Fx, out: &mut Outcome) {
-        use replay::Class;
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-        static ABANDONED: AtomicUsize = AtomicUsize::new(0);
-        const ABANDONED_MOST: usize = 6;
-        let counting = replay::claims::unmodelled(&fx.f);
-        if ABANDONED.load(Ordering::Relaxed) >= ABANDONED_MOST {
-            out.note("replay/skipped-while-others-run-on", || fx.source.clone());
-            return;
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        let given_up = Arc::new(AtomicBool::new(false));
-        let (theirs, flag) = (json.clone(), given_up.clone());
-        std::thread::Builder::new()
-            .stack_size(256 << 20)
-            .spawn(move || {
-                let r = std::panic::catch_unwind(|| replay::replay(&theirs));
-                if flag.load(Ordering::Relaxed) {
-                    ABANDONED.fetch_sub(1, Ordering::Relaxed);
-                }
-                let _ = tx.send(r);
-            })
-            .expect("a replay thread");
-        let r = match rx.recv_timeout(std::time::Duration::from_secs(replay_seconds())) {
-            Ok(Ok(Ok(r))) => r,
-            Ok(Ok(Err(e))) => {
-                out.fail("replay/rejected", e);
-                return;
-            }
-            Ok(Err(e)) => {
-                out.fail("panic/replay", panic_text(e));
-                return;
-            }
-            Err(_) => {
-                ABANDONED.fetch_add(1, Ordering::Relaxed);
-                given_up.store(true, Ordering::Relaxed);
-                out.note("replay/gave-up-waiting", || {
-                    format!("{} after {} s", fx.source, replay_seconds())
-                });
+        use std::io::{Read, Write};
+        use std::process::{Command, Stdio};
+        let spawned = std::env::current_exe().and_then(|exe| {
+            Command::new(exe)
+                .args(["replay_child", "--exact", "--ignored", "--nocapture"])
+                .env(CHILD, "1")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+        });
+        let mut child = match spawned {
+            Ok(c) => c,
+            Err(e) => {
+                out.fail("replay/no-process", e.to_string());
                 return;
             }
         };
+        // Fed and read on threads of their own: the wait is for the answer
+        // alone.
+        let (mut input, mut output) = (
+            child.stdin.take().expect("piped"),
+            child.stdout.take().expect("piped"),
+        );
+        let certificate = json.to_string();
+        let feeder = std::thread::spawn(move || {
+            let _ = input.write_all(certificate.as_bytes());
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut said = String::new();
+            let _ = output.read_to_string(&mut said);
+            let _ = tx.send(said);
+        });
+        let said = rx.recv_timeout(std::time::Duration::from_secs(replay_seconds()));
+        if said.is_err() {
+            let _ = child.kill();
+        }
+        let status = child.wait();
+        let _ = feeder.join();
+        let Ok(said) = said else {
+            out.note("replay/gave-up-waiting", || {
+                format!("{} after {} s", fx.source, replay_seconds())
+            });
+            return;
+        };
+        let answer = said
+            .lines()
+            .find_map(|l| l.find(ANSWER).map(|i| &l[i + ANSWER.len()..]))
+            .and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok());
+        let Some(answer) = answer else {
+            out.fail(
+                "panic/replay",
+                format!("the replay's process ended with no answer ({status:?})"),
+            );
+            return;
+        };
+        for f in answer["findings"].as_array().into_iter().flatten() {
+            if let (Some(class), Some(detail)) = (f[0].as_str(), f[1].as_str()) {
+                out.fail(class, detail.to_string());
+            }
+        }
+        for (class, n) in answer["notes"].as_object().into_iter().flatten() {
+            *out.notes.entry(class.clone()).or_insert(0) += n.as_u64().unwrap_or(0) as usize;
+            if let Some(sample) = answer["samples"][class.as_str()].as_str() {
+                out.note_samples
+                    .entry(class.clone())
+                    .or_insert_with(|| sample.to_string());
+            }
+        }
+        for (what, n) in answer["tally"].as_object().into_iter().flatten() {
+            out.count(what, n.as_u64().unwrap_or(0) as usize);
+        }
+    }
+
+    /// Set for the replay's process alone.
+    const CHILD: &str = "CROSSFUZZ_REPLAY_CHILD";
+
+    /// What the line the replay's process answers with starts with.
+    const ANSWER: &str = "@@crossfuzz-replay@@";
+
+    /// The replay's process: a certificate read from its input is
+    /// replayed, and what that found and counted is its answer, one line.
+    /// Nothing unless [`replayed`] started it.
+    pub fn replay_child() {
+        use std::io::Read;
+        if std::env::var_os(CHILD).is_none() {
+            return;
+        }
+        let mut certificate = String::new();
+        std::io::stdin()
+            .read_to_string(&mut certificate)
+            .expect("a certificate on the input");
+        let json: serde_json::Value = serde_json::from_str(&certificate).expect("JSON");
+        let out = std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(move || {
+                let mut out = Outcome::default();
+                // (What reading the function finds, the tester has.)
+                if let Some(fx) = function(&json, &mut Outcome::default()) {
+                    judge(&json, &fx, &mut out);
+                }
+                out
+            })
+            .expect("a replay thread")
+            .join()
+            .unwrap_or_else(|e| {
+                let mut out = Outcome::default();
+                out.fail("panic/replay", panic_text(e));
+                out
+            });
+        let findings: Vec<(&str, &str)> = out
+            .findings
+            .iter()
+            .map(|f| (f.class.as_str(), f.detail.as_str()))
+            .collect();
+        println!(
+            "\n{ANSWER}{}",
+            serde_json::json!({
+                "findings": findings,
+                "notes": out.notes,
+                "samples": out.note_samples,
+                "tally": out.tally,
+            })
+        );
+    }
+
+    /// The certificate through the replay, and what it says onto `out`.
+    fn judge(json: &serde_json::Value, fx: &Fx, out: &mut Outcome) {
+        use replay::Class;
+        let counting = replay::claims::unmodelled(&fx.f);
+        let r =
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| replay::replay(json))) {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    out.fail("replay/rejected", e);
+                    return;
+                }
+                Err(e) => {
+                    out.fail("panic/replay", panic_text(e));
+                    return;
+                }
+            };
         for b in &r.binding {
             if b.starts_with("missing") {
                 out.fail("replay/binding", b.clone());
@@ -878,7 +1028,13 @@ mod mp {
             let line = || format!("{:?} ({}): {}", c.claim, c.rows.join(","), c.outcome.note);
             match c.outcome.class {
                 Class::Strong | Class::Weak => {}
-                Class::Refuted => out.fail("replay/refuted", line()),
+                Class::Refuted => {
+                    let detail = match low_end_unplaced(fx, &c.claim, &c.outcome.note) {
+                        Some(guess) => format!("{}; {guess}", line()),
+                        None => line(),
+                    };
+                    out.fail("replay/refuted", detail);
+                }
                 Class::Unsupported if counting => {
                     out.note("replay/unsupported-counting", line);
                 }
@@ -900,6 +1056,9 @@ mod mp {
         for p in r.row_problems() {
             if counting {
                 out.note("replay/row-problem-counting", || p.clone());
+            } else if p.contains("it rests on") && p.contains("refuted claims") {
+                // (The refuted claims are findings already.)
+                out.note("replay/row-rests-on-refuted-claims", || p.clone());
             } else {
                 out.fail("replay/row-problem", p);
             }
