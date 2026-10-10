@@ -80,9 +80,8 @@ impl Hit {
     /// (R16-M-03): Space or Enter, which are a control's own before the
     /// page's, but a calculator key leaves Enter to the page ("=" on the
     /// calculator), as upstream's `CalculatorButton` and `FlipButtons`
-    /// ignore it (R17-M-04). With Shift or Ctrl held as without, and not
-    /// with Alt, by the rule GMNB routes by too (`input::focus_key`,
-    /// R18-L-02).
+    /// ignore it (R17-M-04). Whatever is held with them, but Alt+Space,
+    /// by the rule GMNB routes by too (`input::focus_key`, R18-L-02).
     /// Whether the focus ring shows has nothing to do with it (R17-L-03).
     pub fn activated_by(&self, kp: &KeyPress) -> bool {
         let focus = if self.enter_is_equals {
@@ -959,9 +958,9 @@ mod tests {
     /// A button takes both as its activation; a calculator key takes Space
     /// and leaves Enter to the calculator ("="). A field, a slider or a
     /// control that sends nothing isn't activated by either here.
-    /// R18-L-02: with Shift or Ctrl held as without (upstream's controls
-    /// read the key alone), and never with Alt; a calculator key leaves
-    /// Enter whatever is held.
+    /// R18-L-02: whatever is held with them (upstream's controls read the
+    /// key alone), but Alt+Space, the window's menu; a calculator key
+    /// leaves Enter whatever is held.
     #[test]
     fn a_focused_control_takes_space_and_enter_and_a_calculator_key_leaves_enter() {
         use appcore::Named;
@@ -976,11 +975,13 @@ mod tests {
             assert!(!key.activated_by(&k.alt()), "{k:?} with Alt");
             assert!(!button.activated_by(&k.alt()), "{k:?} with Alt");
         }
+        // Enter whatever is held, Alt too (upstream's buttons read the key
+        // alone); Alt+Space above is the window's menu, nobody's here.
         for k in held(enter) {
             assert!(!key.activated_by(&k), "{k:?}");
             assert!(button.activated_by(&k), "{k:?}");
             assert!(!key.activated_by(&k.alt()), "{k:?} with Alt");
-            assert!(!button.activated_by(&k.alt()), "{k:?} with Alt");
+            assert!(button.activated_by(&k.alt()), "{k:?} with Alt");
         }
         for k in [
             KeyPress::char('7'),

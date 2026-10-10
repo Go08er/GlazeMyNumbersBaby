@@ -8,6 +8,7 @@
 //! tests for the gmnb contract (programmer strings, bit flips,
 //! enablement, paste, persistence, events).
 
+mod announce;
 mod gmnb;
 mod history;
 mod restore_fuzz;

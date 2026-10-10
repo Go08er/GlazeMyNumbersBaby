@@ -229,8 +229,8 @@ impl DatePage {
         if self.calendar.is_none() {
             return false;
         }
-        // Space and Enter pick with Shift or Ctrl held too, as they
-        // activate any control (`input::control_key`, R18-L-02).
+        // Space and Enter pick whatever is held with them (but Alt+Space),
+        // as they activate any control (`input::control_key`, R18-L-02).
         if matches!(kp.key, Key::Char(' ') | Key::Named(Named::Enter)) {
             let picks = input::control_key(kp) == Some(input::ControlKey::Activate);
             return match (self.calendar, self.focused_day(*cx.focus)) {
@@ -659,9 +659,10 @@ mod tests {
 
         d.update(Msg::Calendar(Some(0)), &mut cx);
         assert_eq!(*cx.focus, Some(day_id(today)));
-        // Not with Alt; with Shift or Ctrl held as bare (R18-L-02).
+        // Not Alt+Space, the window's menu; whatever else is held, as
+        // bare (R18-L-02).
         assert!(!d.key(&KeyPress::char(' ').alt(), &mut cx));
-        assert!(!d.key(&KeyPress::named(Named::Enter).alt(), &mut cx));
+        assert!(!d.key(&KeyPress::char(' ').alt().shift(), &mut cx));
         assert_eq!(d.calendar, Some(0));
         assert!(d.key(&KeyPress::char(' '), &mut cx));
         assert_eq!(d.calendar, None);
@@ -672,6 +673,7 @@ mod tests {
             KeyPress::char(' ').ctrl(),
             KeyPress::named(Named::Enter).shift(),
             KeyPress::named(Named::Enter).ctrl().shift(),
+            KeyPress::named(Named::Enter).alt(),
         ] {
             d.update(Msg::Calendar(Some(0)), &mut cx);
             assert!(d.key(&KeyPress::named(Named::Right), &mut cx));
