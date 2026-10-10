@@ -192,7 +192,13 @@ pub struct Continuation {
     /// wouldn't leave it so.
     pub entry: Option<Entry>,
     /// After `=` with nothing to repeat (`(` came next): the next key
-    /// clears the expression line, as it does after `=`.
+    /// clears the expression line, as it does after `=`. In an error, where
+    /// nothing else is recorded: the next command clears the line, as
+    /// every command does after `=` (`m_bNoPrevEqu`), even one the error
+    /// has ignored. A radix command is one: the view model sends DEC when
+    /// the calculator is shown again, so coming back to it clears the line
+    /// above an error that followed an `=`. Restored with
+    /// [`CalcEngine::set_clears_expression`].
     pub clears: bool,
     /// Replaying the commands wouldn't rebuild the calculation (see
     /// `HistoryCollector::mark_unreplayable`).
@@ -585,9 +591,12 @@ impl CalcEngine {
     pub fn continuation(&self) -> Continuation {
         if self.b_error {
             // Every key clears an error (C and CE alike), so nothing else
-            // is read; the input decides until then what the C key is.
+            // is read; the input decides until then what the C key is, and
+            // an `=` before the error whether the next command, ignored
+            // as it is, clears the expression line.
             return Continuation {
                 empty_input: self.input.is_empty(),
+                clears: !self.b_no_prev_equ,
                 ..Continuation::default()
             };
         }
@@ -679,6 +688,14 @@ impl CalcEngine {
             left,
             empty_input: !self.b_record && self.input.is_empty(),
         }
+    }
+
+    /// Extension: makes the next command clear the expression line, as
+    /// every command does after `=` (see [`Continuation::clears`]), for a
+    /// restored session in an error, which takes no key that could set it
+    /// up. Nothing else changes, and nothing is displayed.
+    pub fn set_clears_expression(&mut self) {
+        self.b_no_prev_equ = false;
     }
 
     /// Extension: empties the input, or keeps a number in it, while no
@@ -946,14 +963,24 @@ impl CalcEngine {
 
     /// Extension, for tests: the state a later key can read (see
     /// [`EngineState`]), with `memory` (the manager's slots) among the
-    /// values. In an error only the error is reported: every key but C and
-    /// CE is ignored, and they clear the rest.
+    /// values. In an error only the error and the memory slots are
+    /// reported: every key but C and CE is ignored, and they clear the
+    /// rest, but for memory, which an error leaves as it is.
     #[doc(hidden)]
     pub fn state(&self, memory: &[Rational]) -> EngineState {
         let mut state = EngineState::default();
         let mut exact = |name: &str, value: String| state.exact.push((name.to_string(), value));
         exact("error", self.b_error.to_string());
         if self.b_error {
+            for (i, slot) in memory.iter().enumerate() {
+                let shown = self
+                    .truncate_num_for_int_math(slot)
+                    .unwrap_or_else(|_| slot.clone());
+                state
+                    .values
+                    .push((format!("memory {i}"), self.in_64_bits(slot), shown));
+            }
+            state.inexact = self.wide_memory(memory);
             return state;
         }
         let opnd_added = self.history_collector.f_opnd_added_to_history();
@@ -1072,16 +1099,19 @@ impl CalcEngine {
             .iter()
             .filter(|(_, v, _)| negative_zero(v))
             .count();
-        // And, in Programmer mode, memory slots that hold more than the 64
-        // bits the mode works with (a fraction, a negative number or one
-        // past them, stored in another mode): another mode shows the
-        // number held, where the restored slot holds what this one showed.
-        let wide_memory = memory
+        state.inexact = inexact_operands + negative_zeros + self.wide_memory(memory);
+        state
+    }
+
+    /// How many of the `memory` slots hold, in Programmer mode, more than
+    /// the 64 bits the mode works with (a fraction, a negative number or
+    /// one past them, stored in another mode): another mode shows the
+    /// number held, where a restored slot holds what this one showed.
+    fn wide_memory(&self, memory: &[Rational]) -> usize {
+        memory
             .iter()
             .filter(|slot| self.f_integer_mode && self.in_64_bits(slot) != **slot)
-            .count();
-        state.inexact = inexact_operands + negative_zeros + wide_memory;
-        state
+            .count()
     }
 }
 

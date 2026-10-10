@@ -258,7 +258,7 @@ impl CalculatorViewModel {
     /// [`set_angle_unit`](Self::set_angle_unit), MR/M+/M− → slot 0, MC →
     /// clear all memory. `FToE` is ignored while disabled (the toggle is
     /// disabled upstream, and pressing it would desynchronise the flag from
-    /// the engine).
+    /// the engine), and outside Scientific mode, which alone has the key.
     pub fn press(&mut self, button: Button) {
         match button {
             Button::IsStandardMode => self.set_mode(CalcMode::Standard),
@@ -433,7 +433,9 @@ impl CalculatorViewModel {
     /// Mirrors upstream's bindings: A–F need `AreHEXButtonsEnabled`, 2–9 / 8–9
     /// are disabled in BIN / OCT (`NumberPad.OnCurrentRadixTypePropertyChanged`),
     /// "." is disabled in Programmer (`IsDecimalEnabled`), MR/MC need memory
-    /// (`IsMemoryEmpty`), F-E needs `IsFToEEnabled`; while an error is shown
+    /// (`IsMemoryEmpty`), F-E needs `IsFToEEnabled` and Scientific mode (the
+    /// only one whose panel has the key: no saved state has F-E on in
+    /// another, nor could one be restored); while an error is shown
     /// the `ErrorLayout` visual states disable every operator, function,
     /// memory, angle, F-E and word-size button and ".", leaving digits,
     /// `=`, C, CE, ⌫ and the radix/mode buttons usable.
@@ -456,7 +458,9 @@ impl CalculatorViewModel {
         match button {
             Button::Decimal => !vm.is_programmer() && !in_error,
             Button::MemoryRecall | Button::MemoryClear => !vm.is_memory_empty() && !in_error,
-            Button::FToE => vm.is_f_to_e_enabled() && !in_error,
+            Button::FToE => {
+                self.mode() == CalcMode::Scientific && vm.is_f_to_e_enabled() && !in_error
+            }
             Button::Equals
             | Button::Clear
             | Button::ClearEntry

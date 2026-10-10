@@ -105,9 +105,13 @@
 //! operand to itself.
 //!
 //! `"cl": true` says the next key clears the expression line although `=`
-//! has nothing to repeat (`=` then `(`). Operands are replayed in the form
-//! (F-E or not) they were written into the expression in, and a value a
-//! trailing `(` kept (`2 + 3 = (`, `5 (`) is set up before it.
+//! has nothing to repeat (`=` then `(`). With an error the engine is in,
+//! it says the error followed an `=`: the next command then clears the
+//! expression line though the error ignores it, and coming back to the
+//! calculator sends one (DEC), so the line above the error is cleared, in
+//! a restored session as in the uninterrupted one. Operands are replayed
+//! in the form (F-E or not) they were written into the expression in, and
+//! a value a trailing `(` kept (`2 + 3 = (`, `5 (`) is set up before it.
 //!
 //! `"cy": true` (Programmer only) is the carry bit RoL and RoR through
 //! carry shift in next: in BYTE, `1 RoR 1` leaves the carry 1, so the next
@@ -119,7 +123,13 @@
 //! `"ie": true` says no number is being typed and the input holds none;
 //! otherwise it keeps the number typed last, unseen, and whenever 0 is
 //! shown (`56 − 56 =`) Scientific and Programmer mode's C key is then CE
-//! (`IsInputEmpty`). It is set directly too. Upstream restores none of
+//! (`IsInputEmpty`). It is set directly too. `"ce"` is what the C key
+//! reads (`true`: CE) where that isn't what the engine would say now: the
+//! view model keeps `IsInputEmpty` from the last key that told it the
+//! input changed, and MS, M+ and M− end a number without telling it (with
+//! F-E on, a 0 typed and stored is shown as 0.e+0, which isn't an empty
+//! input's 0, and the key still reads C). The key comes back as it read;
+//! the next key refreshes it in either session. Upstream restores none of
 //! these.
 //!
 //! # The contract
@@ -406,6 +416,9 @@ pub(crate) struct ContinuationSnapshot {
     pub(crate) entry: Option<Entry>,
     /// `"cl"`
     pub(crate) clears: bool,
+    /// `"ce"`: whether the C key reads CE, where the engine would say
+    /// otherwise now.
+    pub(crate) c_key: Option<bool>,
     /// `"nr"`
     pub(crate) unreplayable: bool,
     /// `"cy"`: the carry bit of RoL/RoR through carry (Programmer only).
@@ -752,6 +765,9 @@ impl ApplicationSnapshot {
                 if k.empty_input {
                     c.insert("ie".into(), json!(true));
                 }
+                if let Some(clear_entry) = k.c_key {
+                    c.insert("ce".into(), json!(clear_entry));
+                }
                 o.insert("k".into(), Value::Object(c));
             }
             root.insert("x".into(), Value::Object(o));
@@ -897,6 +913,10 @@ impl ApplicationSnapshot {
                                 .map(ExpressionCommandDeserializer::deserialize)
                                 .transpose()?,
                             empty_input: boolean(k.get("ie"))?,
+                            c_key: match k.get("ce") {
+                                None | Some(Value::Null) => None,
+                                Some(v) => Some(v.as_bool().ok_or("expected a boolean")?),
+                            },
                         })
                     }
                 };
@@ -1869,6 +1889,16 @@ impl StandardCalculatorViewModel {
         if let Some(k) = continuation {
             self.with_manager(|m| m.set_input_empty(k.empty_input));
             self.on_input_changed();
+            // Extension: the C key as it read, where that isn't what the
+            // engine says now (see "ce" in the module docs).
+            if let Some(clear_entry) = k.c_key {
+                self.set_is_input_empty(!clear_entry);
+            }
+        }
+        // Extension: an error that followed an "=": the next command clears
+        // the expression line (see "cl" in the module docs).
+        if engine_error && continuation.is_some_and(|k| k.clears) {
+            self.with_manager(|m| m.set_clears_expression());
         }
         if engine_error && let Some(expression) = &snapshot.expression_display {
             // The parentheses the expression line leaves open, as shown
@@ -1976,6 +2006,8 @@ impl StandardCalculatorViewModel {
                 ExpressionCommandWrapper::from_command(&ExpressionCommand::Operand(operand))
             }),
             empty_input: c.empty_input,
+            c_key: (self.is_input_empty() != self.standard_calculator_manager.is_input_empty_now())
+                .then(|| !self.is_input_empty()),
         }
     }
 

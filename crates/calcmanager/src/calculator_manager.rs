@@ -861,6 +861,13 @@ impl CalculatorManager {
         self.current_engine().is_input_empty()
     }
 
+    /// Extension: [`is_input_empty`](Self::is_input_empty) without changing
+    /// anything (false before a mode is set).
+    pub fn is_input_empty_now(&self) -> bool {
+        self.current_engine_ref()
+            .is_some_and(CalcEngine::is_input_empty)
+    }
+
     pub fn set_in_history_item_load_mode(&mut self, is_history_item_load_mode: bool) {
         self.proxy.borrow_mut().in_history_item_load_mode = is_history_item_load_mode;
     }
@@ -944,6 +951,11 @@ impl CalculatorManager {
         } else {
             NumberFormat::Float
         });
+    }
+
+    /// Extension: see [`CalcEngine::set_clears_expression`].
+    pub fn set_clears_expression(&mut self) {
+        self.current_engine().set_clears_expression();
     }
 
     /// Extension: see [`CalcEngine::set_input_empty`].
