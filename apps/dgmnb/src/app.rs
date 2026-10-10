@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use appcore::graph::NumberPrecision;
-use appcore::input::{self, WindowAction};
+use appcore::input::{self, Focus, FocusKey, WindowAction};
 use appcore::modes::{Group, PageKind, ViewMode};
 use appcore::settings::{HasPages, PageStates};
 use appcore::{Key, KeyPress, Named};
@@ -1379,10 +1379,15 @@ impl App {
             return;
         }
         match kp.key {
-            Key::Named(Named::Tab) if !kp.ctrl && !kp.alt => {
+            // Tab moves the focus on, with Shift back; with Ctrl held too,
+            // as GTK's (GMNB's) does.
+            Key::Named(Named::Tab) if !kp.alt => {
                 self.move_focus(!kp.shift);
                 return;
             }
+            // Escape closes an overlay whatever is held with it, as GTK
+            // closes a popover (GMNB's flyouts). Only the bare one is the
+            // calculator's Clear (input::shortcut).
             Key::Named(Named::Escape) => {
                 if self.close_overlay() {
                     self.redraw();
@@ -1396,7 +1401,7 @@ impl App {
                     return;
                 }
             }
-            Key::Char(' ') | Key::Named(Named::Enter) if !kp.ctrl && !kp.alt => {
+            Key::Char(' ') | Key::Named(Named::Enter) => {
                 let focused = focus.and_then(|f| {
                     ui::active_layer(&self.hits)
                         .iter()
@@ -1406,16 +1411,17 @@ impl App {
                 });
                 // The focused control's, ring drawn or not (R17-L-03): a
                 // pointer hides the ring, not the focus, which Escape also
-                // puts back on a calendar's opener without it.
-                let enter = kp.key == Key::Named(Named::Enter);
+                // puts back on a calendar's opener without it. With Shift
+                // or Ctrl held as without, not with Alt (R18-L-02).
                 if let Some(h) = focused
-                    && h.activated_by(enter)
+                    && h.activated_by(&kp)
                     && let Some(m) = h.msg
                 {
                     self.update(el, m);
                     return;
                 }
-                if enter
+                // Enter in a text field submits it, by the same rule.
+                if input::focus_key(Focus::Text, &kp) == FocusKey::Activate
                     && let Some(id) = focus
                     && self.field(id).is_some()
                 {
@@ -1456,10 +1462,13 @@ impl App {
             }
         }
         // The number precision slider in Settings takes the arrow, page
-        // and Home/End keys.
+        // and Home/End keys: bare or with Shift, as a graph variable's
+        // slider (GraphPage::key) and any control's navigation keys; with
+        // Ctrl or Alt they are chords (it took those too, R18-L-02).
         let precision = self.store.data.borrow().literal_digits;
         if self.settings
             && focus == Some(precision_slider())
+            && input::control_key(&kp) == Some(input::ControlKey::Navigate)
             && let Key::Named(n) = kp.key
             && let Some(p) = precision_key(precision, n)
         {

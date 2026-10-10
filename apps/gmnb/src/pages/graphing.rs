@@ -817,10 +817,12 @@ impl GraphingPage {
         col.append(&colors);
         col.append(&h("Line style"));
         col.append(&styles);
-        gtk::Popover::builder()
+        let pop = gtk::Popover::builder()
             .child(&col)
             .css_classes(["wc-flyout"])
-            .build()
+            .build();
+        crate::window::own_activation(&pop);
+        pop
     }
 
     fn row(&self, id: EquationId) -> Option<Rc<Row>> {
@@ -1211,6 +1213,7 @@ impl GraphingPage {
             .child(&col)
             .css_classes(["wc-flyout"])
             .build();
+        crate::window::own_activation(&pop);
 
         // Weak both ways: the GraphView keeps this callback, and the entries'
         // handlers reach the GraphView.

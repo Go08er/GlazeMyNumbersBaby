@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use accesskit::Role;
+use appcore::KeyPress;
+use appcore::input::{self, Focus, FocusKey};
 use tiny_skia::{Path, Transform};
 
 use crate::app::Msg;
@@ -74,14 +76,23 @@ pub struct Hit {
 }
 
 impl Hit {
-    /// Whether Space or Enter (`enter`), with this control focused, is its
-    /// activation (R16-M-03): a control's own keys come before the page's,
-    /// but a calculator key leaves Enter to the page ("=" on the
+    /// Whether `kp`, with this control focused, is its activation
+    /// (R16-M-03): Space or Enter, which are a control's own before the
+    /// page's, but a calculator key leaves Enter to the page ("=" on the
     /// calculator), as upstream's `CalculatorButton` and `FlipButtons`
-    /// ignore it (R17-M-04).
+    /// ignore it (R17-M-04). With Shift or Ctrl held as without, and not
+    /// with Alt, by the rule GMNB routes by too (`input::focus_key`,
+    /// R18-L-02).
     /// Whether the focus ring shows has nothing to do with it (R17-L-03).
-    pub fn activated_by(&self, enter: bool) -> bool {
-        self.sense == Sense::Click && self.msg.is_some() && !(enter && self.enter_is_equals)
+    pub fn activated_by(&self, kp: &KeyPress) -> bool {
+        let focus = if self.enter_is_equals {
+            Focus::CalculatorKey
+        } else {
+            Focus::Control
+        };
+        self.sense == Sense::Click
+            && self.msg.is_some()
+            && input::focus_key(focus, kp) == FocusKey::Activate
     }
 
     /// The focus after a pointer press on this control, `focus` before.
@@ -948,22 +959,46 @@ mod tests {
     /// A button takes both as its activation; a calculator key takes Space
     /// and leaves Enter to the calculator ("="). A field, a slider or a
     /// control that sends nothing isn't activated by either here.
+    /// R18-L-02: with Shift or Ctrl held as without (upstream's controls
+    /// read the key alone), and never with Alt; a calculator key leaves
+    /// Enter whatever is held.
     #[test]
     fn a_focused_control_takes_space_and_enter_and_a_calculator_key_leaves_enter() {
+        use appcore::Named;
         let press = || Some(Msg::Minimize);
         let key = hit(Sense::Click, press(), true);
         let button = hit(Sense::Click, press(), false);
-        assert!(key.activated_by(false));
-        assert!(!key.activated_by(true));
-        assert!(button.activated_by(false));
-        assert!(button.activated_by(true));
+        let (space, enter) = (KeyPress::char(' '), KeyPress::named(Named::Enter));
+        let held = |k: KeyPress| [k, k.shift(), k.ctrl(), k.ctrl().shift()];
+        for k in held(space) {
+            assert!(key.activated_by(&k), "{k:?}");
+            assert!(button.activated_by(&k), "{k:?}");
+            assert!(!key.activated_by(&k.alt()), "{k:?} with Alt");
+            assert!(!button.activated_by(&k.alt()), "{k:?} with Alt");
+        }
+        for k in held(enter) {
+            assert!(!key.activated_by(&k), "{k:?}");
+            assert!(button.activated_by(&k), "{k:?}");
+            assert!(!key.activated_by(&k.alt()), "{k:?} with Alt");
+            assert!(!button.activated_by(&k.alt()), "{k:?} with Alt");
+        }
+        for k in [
+            KeyPress::char('7'),
+            KeyPress::named(Named::Down),
+            KeyPress::named(Named::Tab),
+            KeyPress::named(Named::Escape),
+        ] {
+            assert!(!key.activated_by(&k) && !button.activated_by(&k), "{k:?}");
+        }
         for h in [
             hit(Sense::Click, None, false),
             hit(Sense::Text, press(), false),
             hit(Sense::Drag, press(), true),
             hit(Sense::Scroll, None, false),
         ] {
-            assert!(!h.activated_by(false) && !h.activated_by(true), "{h:?}");
+            for k in held(space).into_iter().chain(held(enter)) {
+                assert!(!h.activated_by(&k), "{h:?} {k:?}");
+            }
         }
     }
 

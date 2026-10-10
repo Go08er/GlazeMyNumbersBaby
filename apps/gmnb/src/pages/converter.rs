@@ -293,22 +293,16 @@ impl ConverterPage {
             // The same from the keyboard, once Tab has brought the focus
             // here: Space, as upstream's OnValueKeyDown, or Enter. (The
             // window lets both through: neither is a converter key.)
+            // With Shift or Ctrl held too, as any control's
+            // (input::control_key): upstream's compares the key alone.
             let keys = gtk::EventControllerKey::new();
             {
                 let pick = pick.clone();
                 keys.connect_key_pressed(move |_, key, _, mods| {
-                    let plain = !mods.intersects(
-                        gtk::gdk::ModifierType::CONTROL_MASK
-                            | gtk::gdk::ModifierType::ALT_MASK
-                            | gtk::gdk::ModifierType::SHIFT_MASK,
-                    );
-                    use gtk::gdk::Key;
-                    if plain
-                        && matches!(
-                            key,
-                            Key::space | Key::Return | Key::KP_Enter | Key::KP_Space
-                        )
-                    {
+                    let activates = crate::keymap::key_press(key, mods).is_some_and(|kp| {
+                        input::control_key(&kp) == Some(input::ControlKey::Activate)
+                    });
+                    if activates {
                         pick();
                         glib::Propagation::Stop
                     } else {

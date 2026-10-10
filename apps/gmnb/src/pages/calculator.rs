@@ -64,6 +64,9 @@ pub struct CalculatorPage {
     mem_rows: RefCell<Vec<gtk::Box>>,
     /// Another page was shown since the calculator was (see `switch_mode`).
     left: Cell<bool>,
+    /// How many parentheses were open at the last sync (none yet: `None`):
+    /// a change is announced ([`CalculatorPage::sync`]).
+    open_parens: Cell<Option<u32>>,
 }
 
 fn text_button(label: &str, tip: &str) -> gtk::Button {
@@ -183,6 +186,7 @@ impl CalculatorPage {
             compact: Cell::new(false),
             mem_rows: RefCell::default(),
             left: Cell::new(false),
+            open_parens: Cell::new(None),
         });
         {
             let weak = Rc::downgrade(&page);
@@ -658,6 +662,7 @@ impl CalculatorPage {
             col.append(&copy);
             col.append(&paste);
             let pop = gtk::Popover::builder().child(&col).has_arrow(false).build();
+            crate::window::own_activation(&pop);
             pop.set_parent(&p.display);
             pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
             // Weak popover: it contains these buttons.
@@ -1054,8 +1059,23 @@ impl CalculatorPage {
             }
             CalcMode::Standard => {}
         }
+        let open = vm.open_parens();
         drop(vm);
         self.syncing.set(false);
+
+        // Upstream's SetParenthesisCount (StandardCalculatorViewModel.cs:
+        // 1092-1103): screen readers are told the open-parenthesis count
+        // each time it changes, in Scientific and Programmer ("Open
+        // parenthesis count 1" after "(", 0 after Clear or "="), whatever
+        // changed it and wherever the focus is; before a result, as the
+        // engine closes what is open before it shows one. Not the count a
+        // restored session starts with.
+        if let Some(was) = self.open_parens.replace(Some(open))
+            && let Some(text) = keys::open_parenthesis_count_change(mode, was, open)
+        {
+            self.display
+                .announce(&text, gtk::AccessibleAnnouncementPriority::Medium);
+        }
 
         if matches!(change, Change::Result | Change::Error) {
             // Upstream NarratorNotifier: announce computed results.

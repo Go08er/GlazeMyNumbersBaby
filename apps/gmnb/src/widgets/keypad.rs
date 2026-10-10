@@ -237,7 +237,7 @@ impl Keypad {
             // Scientific 2nd: CalculatorPage::build_scientific), so the
             // keys after it are as after Tab to it: Enter after clicking 2
             // is the page's ("="), which a calculator key ignores
-            // (window::focus_ignores). The ring stays hidden
+            // (window::Step::PageOnly). The ring stays hidden
             // (window::hide_ring_on_press).
             .focus_on_click(true)
             .hexpand(true)

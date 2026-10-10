@@ -73,6 +73,9 @@ pub struct CalcPage {
     announce: String,
     /// While "(" has the focus, what was announced when it got it.
     paren_announcement: Option<String>,
+    /// How many parentheses were open when the page was last drawn: a
+    /// change is announced ([`CalcPage::view`]).
+    open_parens: u32,
 }
 
 /// The Bit shift flyout's modes, in order (rows `("shift", i)`).
@@ -97,6 +100,8 @@ impl CalcPage {
             vm.restore_state(&s);
         }
         vm.take_events();
+        // The count a restored session starts with isn't a change.
+        let open_parens = vm.open_parens();
         CalcPage {
             vm,
             second: false,
@@ -107,6 +112,7 @@ impl CalcPage {
             bit_view: false,
             announce: String::new(),
             paren_announcement: None,
+            open_parens,
         }
     }
 
@@ -480,6 +486,28 @@ impl CalcPage {
             }
         } else {
             self.paren_announcement = None;
+        }
+        // Upstream's SetParenthesisCount (StandardCalculatorViewModel.cs:
+        // 1092-1103): the count is also told each time it changes, in
+        // Scientific and Programmer ("Open parenthesis count 1" after "(",
+        // 0 after Clear or "="), whatever changed it and wherever the
+        // focus is. A live node of its own, there in the frame that shows
+        // the change only: AccessKit announces it as it comes, or as its
+        // words change when one change follows another, and the same
+        // count can be told again later.
+        let open_parens = self.vm.open_parens();
+        let told = keys::open_parenthesis_count_change(mode, self.open_parens, open_parens);
+        self.open_parens = open_parens;
+        if let Some(text) = told
+            && let Some(n) = f.node(
+                id("paren-count-announcer"),
+                accesskit::Role::Status,
+                &text,
+                pad,
+            )
+        {
+            n.value = Some(text.clone());
+            n.live = true;
         }
         if let Some(p) = panel {
             self.side_panel(f, p.inset_xy(0.0, 4.0).take_right(PANEL_W - 8.0).0);

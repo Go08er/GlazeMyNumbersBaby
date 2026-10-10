@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use appcore::input::{self, WindowAction};
+use appcore::input::{self, Focus, FocusKey, WindowAction};
 use appcore::modes::{Group, PageKind, ViewMode};
 use appcore::{KeyPress, Named};
 use gtk::{gdk, glib};
@@ -71,8 +71,10 @@ pub enum Route {
 /// sidebar it is the sidebar's own shortcut; under the History sheet the
 /// header's menu can switch as well). Copy and paste read and change the
 /// page's target: refused while it is covered. Escape closes an open
-/// sidebar nothing covers. Every other key is the page's: refused while
-/// the page is covered, and only its own layer's while just its target is.
+/// sidebar nothing covers, whatever is held with it (as it closes a GTK
+/// popover, a flyout included, and DGMNB's overlays). Every other key is
+/// the page's: refused while the page is covered, and only its own
+/// layer's while just its target is.
 pub fn route(kp: &KeyPress, c: Cover) -> Route {
     match input::window_shortcut(kp) {
         Some(WindowAction::SwitchMode(_)) if c.nav => return Route::Refused,
@@ -92,59 +94,147 @@ pub fn route(kp: &KeyPress, c: Cover) -> Route {
     }
 }
 
-/// What has the keyboard's focus, as far as the keys it takes before the
-/// page goes.
+/// What the window does with a key press, before any widget has it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Focused {
-    /// A text field (graph equations, dialogs): every key but the
-    /// app-wide chords.
-    Text,
-    /// One of the page's own keys, upstream's `CalculatorButton`s and bit
-    /// `FlipButtons` ([`Page::is_calculator_key`]): Space presses it and
-    /// the arrows move on, but it ignores Enter, as upstream's do: Enter is
-    /// the page's ("=" on the calculator, nothing on the converter or the
-    /// graph's keypad; [`focus_ignores`]).
-    CalculatorKey,
-    /// Any other control ([`is_control`]): a button, a toggle or menu
-    /// button, a radio button, a list row, a switch, a calendar day, a
-    /// link. Its activation and navigation keys are its own: Enter on a
-    /// History item recalls it rather than evaluating (R16-M-03).
-    Control,
-    /// Nothing that takes keys (no focus, the window, a scroll view, a
-    /// label): every key is the page's.
-    Other,
+pub enum Step {
+    /// It goes on to the focused widget, whose GTK's bindings do the
+    /// rest: a text field's typing, a control's bare Enter or Space, its
+    /// arrows.
+    Widget,
+    /// The focused widget's activation, which the window carries out
+    /// itself ([`activate`]): Enter or Space with Shift or Ctrl held,
+    /// which are the control's as the bare keys are
+    /// ([`input::control_key`]) but which GTK, binding the bare keys
+    /// only, would do nothing with.
+    Activate,
+    /// The app's and the page's ([`Window::handle_key`]); GTK's if they
+    /// have no use for it (Tab).
+    Page,
+    /// The app's and the page's, and nobody's if they have no use for it:
+    /// Enter on a calculator key, whatever is held. The key ignores it, as
+    /// upstream's do, wherever the page has no Enter of its own (the
+    /// converter's and the graph's keypads): GTK would press the key.
+    PageOnly,
 }
 
-/// Whether the focused widget (`focused`) gets `kp` before the page does.
-/// (Popovers, the date pickers' calendars included, hold the keyboard
-/// while open: their keys never reach the window's.)
-pub fn focus_takes(focused: Focused, kp: &KeyPress) -> bool {
-    use input::ControlKey;
-    match (focused, input::control_key(kp)) {
-        (Focused::Text, _) => !input::is_global_chord(kp),
-        (Focused::Control, key) => key.is_some(),
-        (Focused::CalculatorKey, Some(ControlKey::Navigate)) => true,
-        (Focused::CalculatorKey, Some(ControlKey::Activate)) => !kp.is(Named::Enter),
-        (Focused::CalculatorKey | Focused::Other, _) => false,
+/// What the window does with `kp`, given what has the focus (`focused`,
+/// if anything): whose it is by the rule both apps share
+/// ([`input::focus_key`]). (Popovers hold the keyboard while open: their
+/// keys never reach the window's controllers. A page's flyouts get the
+/// window's routing through [`Ctx::flyout`], its other popovers the
+/// activation alone, [`own_activation`].) In a flyout (`flyout`) Escape
+/// is the flyout's too: it closes it, whatever is held with it (GTK's
+/// popovers close so).
+pub fn step(focused: Option<Focus>, kp: &KeyPress, flyout: bool) -> Step {
+    if flyout && kp.is(Named::Escape) {
+        return Step::Widget;
+    }
+    match focused.map(|f| input::focus_key(f, kp)) {
+        Some(FocusKey::Activate) if kp.shift || kp.ctrl => Step::Activate,
+        Some(FocusKey::Activate | FocusKey::Navigate | FocusKey::Edit) => Step::Widget,
+        Some(FocusKey::PageOnly) => Step::PageOnly,
+        Some(FocusKey::Page) | None => Step::Page,
     }
 }
 
-/// Whether the focused widget (`focused`, if any) gets `kp` before the
-/// window's routing does ([`focus_takes`]). In a flyout (`flyout`), whose
-/// grab keeps its keys from the window's controllers so that it routes
-/// them itself, Escape is the flyout's too: it closes it.
-pub fn widget_first(focused: Option<Focused>, kp: &KeyPress, flyout: bool) -> bool {
-    (flyout && kp.is(Named::Escape)) || focused.is_some_and(|f| focus_takes(f, kp))
+/// What `w`, a window's focus, is to the keys ([`Focus`]), `key` saying
+/// whether it is one of the page's own keys ([`Page::is_calculator_key`]).
+fn focus_kind(w: &gtk::Widget, key: impl FnOnce(&gtk::Widget) -> bool) -> Focus {
+    if w.is::<gtk::Text>() || w.ancestor(gtk::Text::static_type()).is_some() {
+        Focus::Text
+    } else if key(w) {
+        Focus::CalculatorKey
+    } else if is_control(w) {
+        Focus::Control
+    } else {
+        Focus::Other
+    }
 }
 
-/// Whether `kp`, which the page didn't take ([`Page::key_pressed`]), stops
-/// short of the focused widget: Enter on a calculator key. The key ignores
-/// it, as upstream's do, wherever the page has no Enter of its own (the
-/// converter's and the graph's keypads): GTK would press the key.
-pub fn focus_ignores(focused: Focused, kp: &KeyPress) -> bool {
-    focused == Focused::CalculatorKey
-        && input::control_key(kp) == Some(input::ControlKey::Activate)
-        && kp.is(Named::Enter)
+/// Activates `focus` as its bare Enter or Space would ([`Step::Activate`]):
+/// GTK's activation signal, the one those keys are bound to (a button's
+/// click, a row's activation). A text field's Enter is bound to its own
+/// `activate` signal instead, which an entry or a spin button passes on
+/// (`gtk_widget_activate` does nothing for it). False if the widget has
+/// neither, as one of the app's own that takes its keys itself (a
+/// converter value field): the key then goes on to it.
+fn activate(focus: &gtk::Widget) -> bool {
+    let text = focus.downcast_ref::<gtk::Text>().cloned().or_else(|| {
+        focus
+            .ancestor(gtk::Text::static_type())
+            .and_downcast::<gtk::Text>()
+    });
+    match text {
+        Some(text) => {
+            text.emit_activate();
+            true
+        }
+        None => focus.activate(),
+    }
+}
+
+/// What the window does with a navigation key on a focused slider (a
+/// `GtkScale`: a graph variable's, Settings'), where GTK's bindings differ
+/// from the rule both apps share ([`input::control_key`]: a control's
+/// navigation keys are its own bare or with Shift, never with Ctrl or
+/// Alt). GTK binds none of them with Shift, and pages with Ctrl.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slide {
+    /// The bare key's move, made by the window: the key with Shift held.
+    Move(gtk::ScrollType),
+    /// Nothing, once the page has had it (Ctrl+Home is the graph's chord):
+    /// the key with Ctrl held, which would page.
+    Nothing,
+}
+
+/// [`Slide`] for `kp` on a focused slider, if GTK's own binding isn't
+/// already right (the bare keys: `None`; Alt, which GTK binds nothing
+/// to; any other key).
+pub fn slide(kp: &KeyPress) -> Option<Slide> {
+    use gtk::ScrollType as S;
+    let appcore::Key::Named(key) = kp.key else {
+        return None;
+    };
+    // The scroll each key is bound to bare (gtkrange.c).
+    let bare = match key {
+        Named::Left => S::StepLeft,
+        Named::Right => S::StepRight,
+        Named::Up => S::StepUp,
+        Named::Down => S::StepDown,
+        Named::PageUp => S::PageUp,
+        Named::PageDown => S::PageDown,
+        Named::Home => S::Start,
+        Named::End => S::End,
+        _ => return None,
+    };
+    match (kp.alt, kp.ctrl, kp.shift) {
+        (true, ..) | (false, false, false) => None,
+        (false, true, _) => Some(Slide::Nothing),
+        (false, false, true) => Some(Slide::Move(bare)),
+    }
+}
+
+/// Gives `popover`, one the window doesn't route the keys of, the part of
+/// that routing its controls need: Enter or Space with Shift or Ctrl held
+/// activates the focused one, as in the window ([`Step::Activate`]). For
+/// a page's popovers that aren't flyouts of its own keys (the date
+/// pickers' calendars, the graph's settings and line styles, a History
+/// item's menu): GTK's own (a drop-down's list, a colour dialog) keep
+/// GTK's bindings.
+pub fn own_activation(popover: &impl IsA<gtk::Widget>) {
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    keys.connect_key_pressed(|c, key, _code, mods| {
+        let focus = c.widget().and_then(|w| w.root()).and_then(|r| r.focus());
+        if let (Some(kp), Some(focus)) = (key_press(key, mods), focus)
+            && step(Some(focus_kind(&focus, |_| false)), &kp, true) == Step::Activate
+            && activate(&focus)
+        {
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+    popover.add_controller(keys);
 }
 
 /// Whether `w` is a control that takes its own activation and navigation
@@ -752,12 +842,12 @@ impl Window {
     }
 
     /// The keys' way through the window, before any widget has them
-    /// (capture): a text field's, a focused control's own (focus_takes),
-    /// else the app's and the page's (handle_key); Enter stops at a
-    /// calculator key, which ignores it (focus_ignores). In a flyout
-    /// (`flyout`) the same, but for Escape, which closes it: Enter on a
-    /// key there is "=", as upstream's flyout keys (CalculatorButtons)
-    /// leave it to the calculator, and what is typed goes into it.
+    /// (capture), as [`step`] says: a text field's, a focused control's
+    /// own, else the app's and the page's (handle_key); Enter stops at a
+    /// calculator key, which ignores it. In a flyout (`flyout`) the same,
+    /// but for Escape, which closes it: Enter on a key there is "=", as
+    /// upstream's flyout keys (CalculatorButtons) leave it to the
+    /// calculator, and what is typed goes into it.
     fn key_router(self: &Rc<Self>, flyout: bool) -> gtk::EventControllerKey {
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -768,13 +858,29 @@ impl Window {
             };
             // Let text entries (graph equations, dialogs) type normally, but
             // still honour the app-wide chords a text field has no use for;
-            // and let a focused control have its own keys (focus_takes).
-            let focused = gtk::prelude::GtkWindowExt::focus(&w.win).map(|f| w.focused(&f));
-            if widget_first(focused, &kp, flyout) {
-                return glib::Propagation::Proceed;
-            }
-            // What the key would change may be covered: handle_key asks.
-            if w.handle_key(&kp) || focused.is_some_and(|f| focus_ignores(f, &kp)) {
+            // and let a focused control have its own keys.
+            let focus = gtk::prelude::GtkWindowExt::focus(&w.win);
+            let focused = focus.as_ref().map(|f| w.focused(f));
+            // A slider's navigation keys with Shift or Ctrl (slide).
+            let slider = focus.as_ref().and_then(|f| f.downcast_ref::<gtk::Range>());
+            let slide = slider.and_then(|_| slide(&kp));
+            let handled = match step(focused, &kp, flyout) {
+                Step::Widget => match (slider, slide) {
+                    (Some(slider), Some(Slide::Move(to))) => {
+                        slider.emit_move_slider(to);
+                        true
+                    }
+                    _ => false,
+                },
+                Step::Activate => focus.as_ref().is_some_and(activate),
+                // What the key would change may be covered: handle_key asks.
+                Step::Page => w.handle_key(&kp) || slide == Some(Slide::Nothing),
+                Step::PageOnly => {
+                    w.handle_key(&kp);
+                    true
+                }
+            };
+            if handled {
                 glib::Propagation::Stop
             } else {
                 glib::Propagation::Proceed
@@ -783,20 +889,11 @@ impl Window {
         keys
     }
 
-    /// What `focus`, the window's focus, is ([`Focused`]).
-    fn focused(&self, focus: &gtk::Widget) -> Focused {
-        if focus.is::<gtk::Text>() || focus.ancestor(gtk::Text::static_type()).is_some() {
-            Focused::Text
-        } else if self
-            .shown_page()
-            .is_some_and(|p| p.is_calculator_key(focus))
-        {
-            Focused::CalculatorKey
-        } else if is_control(focus) {
-            Focused::Control
-        } else {
-            Focused::Other
-        }
+    /// What `focus`, the window's focus, is ([`Focus`]).
+    fn focused(&self, focus: &gtk::Widget) -> Focus {
+        focus_kind(focus, |f| {
+            self.shown_page().is_some_and(|p| p.is_calculator_key(f))
+        })
     }
 
     /// A key, wherever it comes from (the keyboard, `GMNB_KEYS`), goes
@@ -956,7 +1053,8 @@ mod tests {
     /// chords.
     #[test]
     fn focused_controls_take_their_own_keys() {
-        use Focused::*;
+        use Focus::*;
+        let at = |f, k: &KeyPress| step(Some(f), k, false);
         let enter = KeyPress::named(Named::Enter);
         let space = KeyPress::char(' ');
         let down = KeyPress::named(Named::Down);
@@ -968,46 +1066,156 @@ mod tests {
         let alt_2 = KeyPress::char('2').alt();
 
         for k in [&enter, &space, &down, &page_down] {
-            assert!(focus_takes(Control, k), "{k:?}");
+            assert_eq!(at(Control, k), Step::Widget, "{k:?}");
         }
-        for k in [&seven, &escape, &ctrl_h, &alt_up, &alt_2, &enter.shift()] {
-            assert!(!focus_takes(Control, k), "{k:?}");
+        for k in [&seven, &escape, &ctrl_h, &alt_up, &alt_2, &enter.alt()] {
+            assert_eq!(at(Control, k), Step::Page, "{k:?}");
         }
 
-        assert!(!focus_takes(CalculatorKey, &enter));
+        assert_eq!(at(CalculatorKey, &enter), Step::PageOnly);
         for k in [&space, &down, &page_down] {
-            assert!(focus_takes(CalculatorKey, k), "{k:?}");
+            assert_eq!(at(CalculatorKey, k), Step::Widget, "{k:?}");
         }
-        assert!(!focus_takes(CalculatorKey, &seven));
+        assert_eq!(at(CalculatorKey, &seven), Step::Page);
 
         for k in [&enter, &space, &down, &seven, &escape] {
-            assert!(!focus_takes(Other, k), "{k:?}");
-            assert!(focus_takes(Text, k), "{k:?}");
+            assert_eq!(at(Other, k), Step::Page, "{k:?}");
+            assert_eq!(step(None, k, false), Step::Page, "{k:?}");
+            assert_eq!(at(Text, k), Step::Widget, "{k:?}");
         }
-        assert!(!focus_takes(Text, &alt_2));
-        assert!(!focus_takes(Text, &KeyPress::named(Named::Home).ctrl()));
+        assert_eq!(at(Text, &alt_2), Step::Page);
+        assert_eq!(at(Text, &KeyPress::named(Named::Home).ctrl()), Step::Page);
+    }
+
+    /// R18-L-02: Enter and Space with Shift or Ctrl held are the focused
+    /// control's as the bare keys are, as upstream's controls read the key
+    /// alone. GTK binds the bare keys only, so the window activates the
+    /// control itself; with Alt it is nobody's. Shift+Return on the
+    /// pressed 2nd unpresses it and evaluates nothing (it gave 5).
+    #[test]
+    fn enter_and_space_with_shift_or_ctrl_activate_as_bare() {
+        use Focus::*;
+        let enter = KeyPress::named(Named::Enter);
+        let space = KeyPress::char(' ');
+        for flyout in [false, true] {
+            let at = |f, k: &KeyPress| step(Some(f), k, flyout);
+            for key in [enter, space] {
+                for k in [key.shift(), key.ctrl(), key.ctrl().shift()] {
+                    assert_eq!(at(Control, &k), Step::Activate, "{k:?}");
+                    assert_eq!(at(Other, &k), Step::Page, "{k:?}");
+                }
+                for k in [key.alt(), key.alt().shift(), key.alt().ctrl()] {
+                    assert_eq!(at(Control, &k), Step::Page, "{k:?}");
+                }
+            }
+            // A calculator key: Space presses it whatever is held; a text
+            // field: Enter submits it whatever is held, Space is typed.
+            for k in [space.shift(), space.ctrl(), space.ctrl().shift()] {
+                assert_eq!(at(CalculatorKey, &k), Step::Activate, "{k:?}");
+                assert_eq!(at(Text, &k), Step::Widget, "{k:?}");
+            }
+            assert_eq!(at(CalculatorKey, &space.alt()), Step::Page);
+            for k in [enter.shift(), enter.ctrl(), enter.ctrl().shift()] {
+                assert_eq!(at(Text, &k), Step::Activate, "{k:?}");
+            }
+            assert_eq!(at(Text, &enter.alt()), Step::Widget);
+        }
     }
 
     /// R17-M-04 follow-up: Enter the page doesn't take (the converter's,
     /// the graph's keypad) still never reaches a focused calculator key,
     /// which ignores it as upstream's `CalculatorButton` does; GTK would
-    /// press it. Every other key the page leaves goes on as before.
+    /// press it. Whatever is held with it (R18-L-02): upstream's reads the
+    /// key alone. Every other key the page leaves goes on as before.
     #[test]
     fn a_calculator_key_ignores_enter() {
-        use Focused::*;
+        use Focus::*;
+        let at = |f, k: &KeyPress| step(Some(f), k, false);
         let enter = KeyPress::named(Named::Enter);
-        assert!(focus_ignores(CalculatorKey, &enter));
+        for k in [
+            enter,
+            enter.shift(),
+            enter.ctrl(),
+            enter.ctrl().shift(),
+            enter.alt(),
+        ] {
+            assert_eq!(at(CalculatorKey, &k), Step::PageOnly, "{k:?}");
+        }
         for k in [
             &KeyPress::char(' '),
             &KeyPress::named(Named::Down),
             &KeyPress::char('7'),
-            &enter.shift(),
-            &enter.ctrl(),
         ] {
-            assert!(!focus_ignores(CalculatorKey, k), "{k:?}");
+            assert_ne!(at(CalculatorKey, k), Step::PageOnly, "{k:?}");
         }
         for f in [Text, Control, Other] {
-            assert!(!focus_ignores(f, &enter), "{f:?}");
+            assert_ne!(at(f, &enter), Step::PageOnly, "{f:?}");
+        }
+    }
+
+    /// R18-L-02's audit: a slider's navigation keys are its own bare or
+    /// with Shift and never with Ctrl, as DGMNB's sliders take them
+    /// (`input::control_key`). GTK binds none with Shift (the window makes
+    /// the bare key's move) and pages with Ctrl (the window stops it).
+    #[test]
+    fn a_sliders_keys_move_with_shift_as_bare_and_not_with_ctrl() {
+        use gtk::ScrollType as S;
+        for (key, bare) in [
+            (Named::Left, S::StepLeft),
+            (Named::Right, S::StepRight),
+            (Named::Up, S::StepUp),
+            (Named::Down, S::StepDown),
+            (Named::PageUp, S::PageUp),
+            (Named::PageDown, S::PageDown),
+            (Named::Home, S::Start),
+            (Named::End, S::End),
+        ] {
+            let k = KeyPress::named(key);
+            assert_eq!(slide(&k), None, "{k:?}: GTK's own");
+            assert_eq!(slide(&k.shift()), Some(Slide::Move(bare)), "{k:?}");
+            assert_eq!(slide(&k.ctrl()), Some(Slide::Nothing), "{k:?}");
+            assert_eq!(slide(&k.ctrl().shift()), Some(Slide::Nothing), "{k:?}");
+            assert_eq!(slide(&k.alt()), None, "{k:?}");
+            // The window gets to make the move, and the page the chord.
+            assert_eq!(step(Some(Focus::Control), &k.shift(), false), Step::Widget);
+            assert_eq!(step(Some(Focus::Control), &k.ctrl(), false), Step::Page);
+        }
+        for k in [
+            KeyPress::char('7').shift(),
+            KeyPress::char(' ').shift(),
+            KeyPress::named(Named::Enter).ctrl(),
+            KeyPress::named(Named::Tab).ctrl(),
+            KeyPress::named(Named::Escape).shift(),
+        ] {
+            assert_eq!(slide(&k), None, "{k:?}");
+        }
+    }
+
+    /// Escape closes whatever is held with it (R18-L-02's audit): GTK
+    /// closes a popover on Escape with any modifier, so a flyout's Escape
+    /// is the flyout's with any, and the sidebar closes the same way (as
+    /// DGMNB's overlays do). Only the calculator's Clear is the bare
+    /// Escape's alone (`input::shortcut`).
+    #[test]
+    fn escape_closes_whatever_is_held() {
+        let sidebar = Cover {
+            nav: false,
+            page: true,
+            target: true,
+            sidebar: true,
+        };
+        let escape = KeyPress::named(Named::Escape);
+        for k in [
+            escape,
+            escape.shift(),
+            escape.ctrl(),
+            escape.ctrl().shift(),
+            escape.alt(),
+        ] {
+            assert_eq!(route(&k, sidebar), Route::CloseSidebar, "{k:?}");
+            for f in [Focus::CalculatorKey, Focus::Control, Focus::Text] {
+                assert_eq!(step(Some(f), &k, true), Step::Widget, "{f:?} {k:?}");
+            }
         }
     }
 
@@ -1019,22 +1227,23 @@ mod tests {
     /// the flyout's, which closes it; in the window it is the page's.
     #[test]
     fn keys_in_a_flyout_go_the_windows_way() {
-        use Focused::*;
+        use Focus::*;
         let enter = KeyPress::named(Named::Enter);
         let escape = KeyPress::named(Named::Escape);
         let seven = KeyPress::char('7');
         let space = KeyPress::char(' ');
         for flyout in [false, true] {
-            assert!(!widget_first(Some(CalculatorKey), &enter, flyout));
-            assert!(!widget_first(Some(CalculatorKey), &seven, flyout));
-            assert!(widget_first(Some(CalculatorKey), &space, flyout));
-            assert!(widget_first(Some(Control), &enter, flyout));
-            assert!(!widget_first(Some(Control), &seven, flyout));
-            assert!(!widget_first(None, &enter, flyout));
+            let at = |f, k: &KeyPress| step(f, k, flyout);
+            assert_eq!(at(Some(CalculatorKey), &enter), Step::PageOnly);
+            assert_eq!(at(Some(CalculatorKey), &seven), Step::Page);
+            assert_eq!(at(Some(CalculatorKey), &space), Step::Widget);
+            assert_eq!(at(Some(Control), &enter), Step::Widget);
+            assert_eq!(at(Some(Control), &seven), Step::Page);
+            assert_eq!(at(None, &enter), Step::Page);
         }
         for f in [Some(CalculatorKey), Some(Control), Some(Other), None] {
-            assert!(widget_first(f, &escape, true), "{f:?}");
-            assert!(!widget_first(f, &escape, false), "{f:?}");
+            assert_eq!(step(f, &escape, true), Step::Widget, "{f:?}");
+            assert_eq!(step(f, &escape, false), Step::Page, "{f:?}");
         }
     }
 }
