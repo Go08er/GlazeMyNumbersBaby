@@ -1398,6 +1398,74 @@ mod tests {
         assert_eq!(announced(&mut p, Some(open)), None, "Standard");
     }
 
+    /// Upstream's SetParenthesisCount (Scientific and Programmer): the
+    /// open-parenthesis count is told each time it changes, whatever
+    /// changed it and wherever the focus is, in the words "(" says when
+    /// focused: through a live node of its own, there in the frame that
+    /// shows the change and gone in the next, so that the same count can
+    /// be told again. Nothing in Standard, nothing while it stays, and
+    /// nothing for the count the page starts with.
+    #[test]
+    fn the_open_parenthesis_count_is_announced_when_it_changes() {
+        use crate::calc::CalcPage;
+        use crate::ui::id;
+        use calcvm::CalcMode;
+        // What the frame after `keys` tells.
+        let told = |p: &mut CalcPage, keys: &str| -> Option<String> {
+            press(p, keys);
+            let nodes = frame_nodes(|f, r| p.view(f, r, false)).0;
+            nodes
+                .iter()
+                .find(|n| n.id == id("paren-count-announcer"))
+                .map(|n| {
+                    assert!(n.live && n.role == Role::Status);
+                    assert!(!n.clickable && !n.focusable);
+                    assert_eq!(n.value.as_deref(), Some(n.label.as_str()));
+                    n.label.clone()
+                })
+        };
+        let count = |n: u32| Some(format!("Open parenthesis count {n}"));
+        let mut p = CalcPage::new(None);
+        assert_eq!(told(&mut p, ""), None, "at the start");
+        for mode in [CalcMode::Scientific, CalcMode::Programmer] {
+            p.set_mode(mode);
+            assert_eq!(told(&mut p, "{escape}"), None, "{mode:?}");
+            assert_eq!(told(&mut p, "("), count(1), "{mode:?}");
+            assert_eq!(told(&mut p, ""), None, "told once");
+            assert_eq!(told(&mut p, "2"), None, "no change");
+            assert_eq!(told(&mut p, "+("), count(2), "{mode:?}");
+            assert_eq!(told(&mut p, "3)"), count(1), "{mode:?}");
+            // Two changes before a frame: the count the frame shows.
+            assert_eq!(told(&mut p, "(("), count(3), "{mode:?}");
+            assert_eq!(told(&mut p, "{escape}"), count(0), "Clear closes them");
+            assert_eq!(told(&mut p, "(2+3"), count(1), "{mode:?}");
+            assert_eq!(told(&mut p, "="), count(0), "= closes it");
+            assert_eq!(told(&mut p, "1+2="), None, "no parenthesis");
+            assert_eq!(told(&mut p, "("), count(1), "the same count again");
+            assert_eq!(told(&mut p, "{escape}"), count(0));
+        }
+        // Standard tells nothing, whatever the count does there.
+        p.set_mode(CalcMode::Scientific);
+        told(&mut p, "{escape}");
+        assert_eq!(told(&mut p, "("), count(1));
+        p.set_mode(CalcMode::Standard);
+        assert_eq!(told(&mut p, ""), None, "Standard");
+        assert_eq!(told(&mut p, "1+2="), None, "Standard");
+        assert_eq!(told(&mut p, "{escape}"), None, "Standard");
+        p.set_mode(CalcMode::Scientific);
+        told(&mut p, "");
+        let open = p.vm.open_parens();
+        assert_eq!(told(&mut p, "("), count(open + 1), "Scientific again");
+
+        // A restored session's count is where it starts, not a change.
+        let mut restored = CalcPage::new(Some(p.save()));
+        let open = restored.vm.open_parens();
+        assert_eq!(open, p.vm.open_parens(), "the session comes back");
+        assert_ne!(open, 0);
+        assert_eq!(told(&mut restored, ""), None, "restored");
+        assert_eq!(told(&mut restored, "("), count(open + 1), "restored");
+    }
+
     /// The header's window controls aren't focused by a click, as GTK's
     /// (which can't take the focus at all): with the focus where it was,
     /// Enter after maximizing doesn't restore, and is "=" after clicking a
