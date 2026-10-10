@@ -449,7 +449,8 @@ CI also runs checks that need more than `cargo test --workspace`:
   the engine hold apart from the keys typed (a shown or History-selected
   value, what = repeats, how the number being typed stands, a paste error
   over a calculation, the operand % takes after =, the carry of a rotation
-  through carry, whether the C key is CE), so after a restart the keys
+  through carry, whether the C key is CE, whether coming back to the
+  calculator clears the expression line), so after a restart the keys
   carry on the same calculation. Its numbers come back as they were shown,
   though: a result, an operand of the expression and a memory slot return
   with the digits the display gave them (in Programmer mode a memory slot
