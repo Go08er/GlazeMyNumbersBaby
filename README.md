@@ -379,6 +379,14 @@ CI also runs checks that need more than `cargo test --workspace`:
 - **Keep on top** switches to the original's compact overlay, but Wayland
   has no client-side "always on top": pin it with your compositor (e.g. a
   niri window rule for the app ID).
+- **The graphing keypad can be used from the keyboard.** The original
+  marks every key of its graphing keypad `IsTabStop="False"`: none of them
+  can take the keyboard focus, by Tab, the arrows or otherwise, so that
+  pad is for the pointer and touch only. Here its keys stay in the Tab
+  order: Space presses the focused key, which types into the equation and
+  gives it the focus back. A click still leaves the focus in the equation,
+  and Enter on a key does nothing, both as in the original. Nothing
+  depends on the pad: everything it inserts can be typed (`pi` for π).
 - Dates use the Gregorian calendar; strings are en-US.
 - **A restored session continues where it left off.** The original's
   saved session shows the operand before a recalled value instead of the
