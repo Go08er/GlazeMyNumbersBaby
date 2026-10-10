@@ -3112,7 +3112,10 @@ fn the_c_key_comes_back_reading_what_it_read() {
 /// off (its text is typed back, digits and exponent). After each of these,
 /// either no slot is unread or the calculator is in the mode, radix and
 /// word size it was restored in; saved then and restored again, its slots
-/// hold the numbers they held.
+/// hold the numbers they held, and the list reads as it read, in the mode,
+/// radix and word size it was saved in (which a mode left on an error and
+/// entered again used not to be: the list was then written in the radix
+/// the engine had kept, beside the one the buttons showed).
 #[test]
 fn an_unread_slot_is_saved_again_only_as_it_was_written() {
     use Button::*;
@@ -3143,7 +3146,7 @@ fn an_unread_slot_is_saved_again_only_as_it_was_written() {
             press_all(vm, &[Two, Add, Three, Equals]);
         }),
     ];
-    let changes: [Change; 16] = [
+    let changes: [Change; 17] = [
         ("nothing", &|_| {}),
         ("F-E", &|vm| vm.press(FToE)),
         ("F-E and a recall", &|vm| {
@@ -3170,6 +3173,17 @@ fn an_unread_slot_is_saved_again_only_as_it_was_written() {
                 CalcMode::Standard
             });
             vm.set_mode(mode);
+        }),
+        ("a mode in an error, and back, and MS", &|vm| {
+            let mode = vm.mode();
+            press_all(vm, &[One, Divide, Zero, Equals]);
+            vm.set_mode(if mode == CalcMode::Programmer {
+                CalcMode::Scientific
+            } else {
+                CalcMode::Programmer
+            });
+            vm.set_mode(mode);
+            press_all(vm, &[One, Zero, Memory]);
         }),
         ("a History item", &|vm| vm.history_recall(0)),
         ("C, a paste and a slot cleared", &|vm| {
@@ -3211,9 +3225,18 @@ fn an_unread_slot_is_saved_again_only_as_it_was_written() {
                 let unread = unread(&vm);
                 let now = (vm.mode(), vm.radix(), vm.word_size());
                 let (held, again) = (memory(&vm), vm.save_state());
+                let shown = vm.memory();
                 drop(vm);
                 let mut second = new_vm();
                 second.restore_state(&again);
+                // Saved again, the list reads as it read, in the mode, radix
+                // and word size it was saved in.
+                assert_eq!(second.memory(), shown, "{mode:?}, {name}");
+                assert_eq!(
+                    (second.mode(), second.radix(), second.word_size()),
+                    now,
+                    "{mode:?}, {name}"
+                );
                 (unread, restored_in == now, held, memory(&second))
             };
             let (unread, as_restored, held, held_again) = outcome(false);

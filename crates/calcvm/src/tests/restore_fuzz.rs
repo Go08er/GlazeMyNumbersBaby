@@ -52,8 +52,9 @@
 //! `RESTORE_FUZZ_MEMORY_SCRIPTS`, and `RESTORE_FUZZ_OUT`, a file the
 //! failures are written to, with the fallbacks and the continuations of
 //! rounded restores that differed beyond the last digits in `.fallbacks`
-//! and `.rounded` beside it; the memory sessions' in the same names with
-//! `.memory` after the file's).
+//! and `.rounded` beside it, and in `.classes` every script with how its
+//! restore came out, to compare two runs script by script; the memory
+//! sessions' in the same names with `.memory` after the file's).
 
 use std::fmt::Write as _;
 
@@ -816,6 +817,9 @@ struct Counts {
     exact: usize,
     fell_back: usize,
     precision: usize,
+    /// Those of `precision` whose continuation went to another mode first,
+    /// which shows every number again in that mode's digits.
+    precision_elsewhere: usize,
     /// Restores that brought a value back rounded to the digits it showed.
     rounded: usize,
     /// Continuations of those that differed by more than the last digits.
@@ -825,6 +829,13 @@ struct Counts {
     read_late: usize,
     fallbacks: Vec<String>,
     failures: Vec<String>,
+    /// Every script by its number, with how its restore came out.
+    classes: Vec<(u64, String)>,
+}
+
+/// Whether a continuation goes to another mode first.
+fn elsewhere(more: &[Act]) -> bool {
+    matches!(more.first(), Some(Act::Mode(_)))
 }
 
 fn run(mode: CalcMode, acts: &[Act], more: &[Act]) -> (String, String, EngineState, String) {
@@ -953,6 +964,7 @@ fn check(start: CalcMode, acts: &[Act], counts: &mut Counts) {
         }
         if differ_in_precision_only(&actual, &expected) {
             counts.precision += 1;
+            counts.precision_elsewhere += usize::from(elsewhere(&more));
         } else if rounded {
             counts.rounding_dependent.push(fail(format!(
                 "then {more:?}\n  expected {expected}\n  restored {actual}"
@@ -977,7 +989,20 @@ fn fuzz(kind: Kind, seed: u64, n: u64, threads: u64) -> Counts {
                     let mut i = t;
                     while i < n {
                         let (start, acts) = script(kind, seed, i);
+                        let before = (counts.failures.len(), counts.fell_back, counts.rounded);
                         check(start, &acts, &mut counts);
+                        let class = if counts.failures.len() > before.0 {
+                            "failed"
+                        } else if counts.fell_back > before.1 {
+                            "fell back"
+                        } else if counts.rounded > before.2 {
+                            "rounded"
+                        } else {
+                            "exact"
+                        };
+                        counts
+                            .classes
+                            .push((i, format!("{i}\t{class}\t{start:?} {acts:?}")));
                         i += threads;
                     }
                     counts
@@ -992,35 +1017,52 @@ fn fuzz(kind: Kind, seed: u64, n: u64, threads: u64) -> Counts {
         total.exact += c.exact;
         total.fell_back += c.fell_back;
         total.precision += c.precision;
+        total.precision_elsewhere += c.precision_elsewhere;
         total.rounded += c.rounded;
         total.read_late += c.read_late;
         total.rounding_dependent.extend(c.rounding_dependent);
         total.failures.extend(c.failures);
         total.fallbacks.extend(c.fallbacks);
+        total.classes.extend(c.classes);
     }
+    total.classes.sort();
     total
 }
 
 /// Prints what a run counted and, with `RESTORE_FUZZ_OUT`, writes its
-/// failures to that file (its name with `suffix`), and the fallbacks and
-/// the rounded continuations beside it.
+/// failures to that file (its name with `suffix`), and the fallbacks, the
+/// rounded continuations and every script's outcome beside it.
 fn report(counts: &Counts, suffix: &str) {
     if let Ok(path) = std::env::var("RESTORE_FUZZ_OUT") {
         let path = path + suffix;
+        let classes: Vec<&str> = counts.classes.iter().map(|(_, c)| c.as_str()).collect();
         let _ = std::fs::write(&path, counts.failures.join("\n\n"));
         let _ = std::fs::write(path.clone() + ".fallbacks", counts.fallbacks.join("\n\n"));
-        let _ = std::fs::write(path + ".rounded", counts.rounding_dependent.join("\n\n"));
+        let _ = std::fs::write(
+            path.clone() + ".rounded",
+            counts.rounding_dependent.join("\n\n"),
+        );
+        let _ = std::fs::write(path + ".classes", classes.join("\n"));
     }
+    // Of the rounded ones' continuations, those that went to another mode.
+    let dependent_elsewhere = counts
+        .rounding_dependent
+        .iter()
+        .filter(|c| c.contains("\nthen [Mode("))
+        .count();
     println!(
         "{} scripts: {} restored exactly ({} with a value rounded to the digits it \
-         showed; {} continuations differing only in the last digits, {} more of the \
-         rounded ones differing beyond), {} fell back to the shown value, {} failed; {} \
-         with memory, each the same with its slots read late as read at once",
+         showed; {} continuations differing only in the last digits, {} of them in \
+         another mode; {} more of the rounded ones differing beyond, {} in another \
+         mode), {} fell back to the shown value, {} failed; {} with memory, each the \
+         same with its slots read late as read at once",
         counts.scripts,
         counts.exact,
         counts.rounded,
         counts.precision,
+        counts.precision_elsewhere,
         counts.rounding_dependent.len(),
+        dependent_elsewhere,
         counts.fell_back,
         counts.failures.len(),
         counts.read_late
