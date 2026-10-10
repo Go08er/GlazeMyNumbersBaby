@@ -2801,10 +2801,10 @@ fn crafted_memory_costs_the_restore_nothing() {
 }
 
 /// F-E keeps a number's digits below 1, wherever its text goes: upstream
-/// cut a digit for every decade below 1 (1 ÷ 3 ÷ 1e40 was 0.e-41), on the
-/// display (which is what is spoken and copied), in the memory list, the
-/// expression line and History, and so in a saved session, from which the
-/// memory slot came back as 0.
+/// cut a digit for every decade below 1 (Scientific, F-E, 1 ÷ 3 ÷ 1e40 =
+/// read 0.e-41), on the display, in what a screen reader is told and what
+/// Copy takes, in History, the memory list and the expression line, and so
+/// in a saved session, from which the memory slot came back as 0.
 #[test]
 fn f_e_keeps_the_digits_of_a_small_number_wherever_they_go() {
     use Button::*;
@@ -2813,34 +2813,51 @@ fn f_e_keeps_the_digits_of_a_small_number_wherever_they_go() {
     vm.set_mode(CalcMode::Scientific);
     press_all(
         &mut vm,
-        &[
-            One, Divide, Three, Divide, One, Exp, Four, Zero, Equals, FToE,
-        ],
+        &[FToE, One, Divide, Three, Divide, One, Exp, Four, Zero],
     );
+    vm.take_announcements();
+    vm.press(Equals);
     assert_eq!(vm.display_value(), third);
+    assert_eq!(
+        vm.take_announcements(),
+        [crate::Announcement::Display {
+            value: third.into(),
+            feedback: Option::None
+        }]
+    );
     assert_eq!(vm.copy_text(), third);
+    assert_eq!(vm.expression(), "1.e+0 ÷ 3.e+0 ÷ 1.e+40=");
+    assert_eq!(vm.history()[0].result, third);
     vm.press(Memory);
     assert_eq!(vm.memory(), [third]);
+
+    // Saved and restored: MR recalls the number the slot showed.
+    let state = vm.save_state();
+    let saved: Value = serde_json::from_str(&state).unwrap();
+    assert_eq!(saved["x"]["mem"], json!([third]));
+    assert_eq!(saved["s"]["p"]["d"], json!(third));
+    let mut restored = new_vm();
+    assert!(restored.restore_state_checked(&state));
+    assert_eq!(observed(&restored), observed(&vm));
+    assert_eq!(restored.history()[0].result, third);
+    restored.press(MemoryRecall);
+    assert_eq!(restored.display_value(), third);
+    // It is that number, 32 threes: three of it are 32 nines (where the
+    // uninterrupted session, which holds the quotient itself, shows 1).
+    press_all(&mut restored, &[Multiply, Three, Equals]);
+    assert_eq!(
+        restored.display_value(),
+        "9.9999999999999999999999999999999e-41"
+    );
+
     // As an operand of the expression line, and then of a History item.
+    vm.press(MemoryRecall);
     vm.press(Multiply);
     assert_eq!(vm.expression(), format!("{third} × "));
     press_all(&mut vm, &[Three, Equals]);
     assert_eq!(vm.display_value(), "1.e-40");
     assert_eq!(vm.history()[0].expression, format!("{third}   ×   3.e+0 ="));
     assert_eq!(vm.history()[0].result, "1.e-40");
-
-    // Saved and restored: the slot is the number it showed.
-    let state = vm.save_state();
-    let mut restored = new_vm();
-    restored.restore_state(&state);
-    assert_eq!(observed(&restored), observed(&vm));
-    restored.press(MemoryRecall);
-    assert_eq!(restored.display_value(), third);
-    press_all(&mut restored, &[Multiply, Three, Equals]);
-    assert_eq!(
-        restored.display_value(),
-        "9.9999999999999999999999999999999e-41"
-    );
 
     // At every distance below 1, in both modes; and a number typed short.
     for (mode, digits) in [(CalcMode::Scientific, 32), (CalcMode::Standard, 16)] {
