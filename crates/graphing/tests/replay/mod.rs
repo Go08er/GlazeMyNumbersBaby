@@ -23,6 +23,41 @@
 //!
 //! Then each row: its claims' boxes must cover the region it declares,
 //! and its value must follow from them ([`rows`]).
+//!
+//! # What the replay can't check
+//!
+//! The counting family is not modelled: the factorial `n!`, the double
+//! factorial `n!!`, `nCr(n, r)` and `nPr(n, r)`
+//! (`Func::Factorial`, `DoubleFactorial`, `NCr`, `NPr`). The language
+//! extends them to the reals through Γ (n! = Γ(n + 1), poles at the
+//! negative integers; nCr and nPr as quotients of those, but the exact
+//! count at whole numbers, 0 for r < 0 or r > n; n!! at the integers from
+//! −1 only), and the replay has no Γ of its own to enclose them or their
+//! derivatives with. So for a function whose tree uses one of them
+//! anywhere, a constant like `5!` or `nCr(5, 2)` included
+//! ([`claims::unmodelled`]):
+//!
+//! * every claim that needs f's values (a value, a sign, defined or
+//!   undefined, a limit, a line, a gap's sign, a simplifier fact), or a
+//!   side expression's that uses one, is **unsupported**: neither proved
+//!   nor refuted (only what is read off the claim alone is still decided:
+//!   a gap's width, a box that doesn't hold its own point);
+//! * a row resting on such claims is not derived, and the strict replay
+//!   (the `replay` example's exit status, the corpus test) rejects the
+//!   certificate, genuine or not: `nCr(x, 1)`'s, with 37 claims, all
+//!   unsupported (review 18, Question 1). That status says *not checked*,
+//!   not *checked and wrong*; `--lenient` lists the claims and passes them.
+//!
+//! Nothing else in the language is left out: the other functions, powers
+//! and roots of any typed size, the angle units, sliders (their values
+//! from the certificate's binding) and digit limits are modelled. An
+//! equation that is not y = f(x) has no certificate to replay.
+//!
+//! Where the replay's own exact algebra, expansions or work bounds don't
+//! reach (a monomial's exponent past u32, an expansion's order past 2²⁴, a
+//! power the algebra doesn't multiply out), a claim is left to its other
+//! proofs or comes out **unconfirmed**: nothing is narrowed or wrapped to
+//! fit (review 18, R18-M-02 and its audit).
 
 #![allow(dead_code)]
 

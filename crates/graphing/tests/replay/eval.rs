@@ -15,8 +15,12 @@
 //!   real n-th root (odd n accepts negative x), `mod` floored (the sign of
 //!   the divisor), `round` half away from zero, `sign(0)` = 0.
 //!
-//! Factorials, nCr, nPr and sliders are not modelled: anything built on
-//! them is left unconfirmed.
+//! The counting family is not modelled: n!, n!!, nCr and nPr (the
+//! language's extensions of them through Γ) have no value here, a constant
+//! `5!` included. A claim about a tree that uses one is unsupported
+//! (`claims::unmodelled`), so the strict replay doesn't pass its
+//! certificate: see the module's "What the replay can't check". A slider
+//! is its value in the certificate's binding (any other name is unknown).
 
 use super::iv::{self, Iv, Unit};
 use super::series::{self as se, S};
