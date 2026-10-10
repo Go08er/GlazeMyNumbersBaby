@@ -787,10 +787,44 @@ pub(crate) fn number_to_string(
         // If there is a chance a round has to occur, round.
         // - if number is zero no rounding
         // - if number of digits is less than the maximum output no rounding
+        //
+        // Deviation (an upstream bug): scientific notation keeps `precision`
+        // significant digits whatever the exponent. For a number below 1
+        // (`exponent <= 0`) upstream rounds scientific and engineering
+        // notation at `precision + exponent` digits instead, as if the
+        // zeros a plain decimal writes after its point took their room
+        // (the `else` below):
+        //
+        //     round->exp = ... - precision - exponent;
+        //     length = precision + exponent;
+        //
+        // so a number of full precision loses a digit for every decade it
+        // is below 1, and ends as none at all. With F-E on, 1 ÷ 3 ÷ 1e10
+        // showed 3.333333333333333333333e-11, ÷ 1e20 3.33333333333e-21,
+        // ÷ 1e31 3.e-32 and ÷ 1e32 0.e-33, a wrong number, while without
+        // F-E the same value is written with all 32 digits
+        // (3.3333333333333333333333333333333e-33); a number typed short
+        // (1.2345e-50) was untouched, one of 32 digits became 0.e-50. That
+        // text is what the display, the memory list, History and a saved
+        // session hold, so a memory slot shown so came back as 0.
+        //
+        // Scientific notation is rounded here where plain notation is: one
+        // digit past the last one kept. And only a number of `precision`
+        // digits or more is rounded: a shorter one is rounded only by plain
+        // notation, to make room for the zeros after its point, which
+        // scientific notation doesn't write (upstream cut a number of 31
+        // digits below 0.01 to 30).
+        //
+        // This is for what the engine writes: scientific notation in radix
+        // 10 (F-E; Programmer mode has neither F-E nor fractions).
+        // Engineering notation and scientific notation in another radix,
+        // which it never asks for, are left as upstream has them.
+        let keeps_precision = format == NumberFormat::Scientific && radix == 10;
         let mut round: Option<Number> = None;
         if !zernum(pnum)
             && (pnum.cdigit() >= precision
-                || (length.wrapping_sub(exponent) > precision
+                || (!keeps_precision
+                    && length.wrapping_sub(exponent) > precision
                     && exponent >= -MAX_ZEROS_AFTER_DECIMAL))
         {
             // Otherwise round.
@@ -798,7 +832,7 @@ pub(crate) fn number_to_string(
             divnum(&mut r, &ctx.num_two, radix, precision)?;
 
             // Make round number exponent one below the LSD for the number.
-            if exponent > 0 || format == NumberFormat::Float {
+            if exponent > 0 || format == NumberFormat::Float || keeps_precision {
                 r.exp = pnum
                     .exp
                     .wrapping_add(pnum.cdigit())

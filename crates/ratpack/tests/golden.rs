@@ -35,6 +35,8 @@
 //! Results: `R:P/Q`, `S:string`, `U:u64`, `C:bits`, `NULL`, `ok`, or
 //! `E:XXXXXXXX` for a thrown `CALC_E_*` code.
 
+mod exact;
+
 use std::collections::HashMap;
 
 use ratpack::rational_math as rm;
@@ -234,6 +236,71 @@ fn execute(t: &[&str], regs: &HashMap<String, Rational>) -> (String, Option<Rati
     }
 }
 
+/// Deviation from the oracle (see `number_to_string`): scientific notation
+/// keeps `precision` significant digits of a number below 1, where upstream
+/// keeps a digit fewer for every decade below 1, and none past that
+/// (`0.e-10`). The golden file stays the oracle's. A case may differ from
+/// it only if it is such a case, and only as the fix says, which is
+/// checked exactly, with whole-number arithmetic (`exact`):
+///
+/// - it is `STR 10 sci <precision>` of a number below 1 (in another radix,
+///   and in engineering notation, the port writes what upstream does);
+/// - our text is the value rounded half away from zero to `precision`
+///   significant digits;
+/// - the oracle's is the same value rounded to the digits upstream leaves
+///   it, `precision` less the zeros a plain decimal has after its point
+///   (and one: 0.0333 has a digit less), or has no digit but a 0.
+///
+/// Returns why the case isn't one, if it isn't.
+fn scientific_deviation(
+    tokens: &[&str],
+    regs: &HashMap<String, Rational>,
+    expected: &str,
+    actual: &str,
+) -> Result<(), String> {
+    let ["STR", "10", "sci", precision, value] = tokens else {
+        return Err("not a number written in decimal scientific notation".into());
+    };
+    let radix = 10;
+    let precision: u32 = precision.parse().unwrap();
+    let value = parse_rat(value, regs);
+    let (Some(ours), Some(upstream)) = (actual.strip_prefix("S:"), expected.strip_prefix("S:"))
+    else {
+        return Err("not a text".into());
+    };
+    // As `exact` reads them: with a point, whatever `SEP` set.
+    let separator = ratpack::decimal_separator();
+    let (ours, upstream) = (
+        &ours.replace(separator, "."),
+        &upstream.replace(separator, "."),
+    );
+    exact::check_rounded(&value, ours, radix, precision)?;
+    let written = exact::Scientific::parse(ours, radix).ok_or("ours isn't scientific")?;
+    // The power of the radix of the value's first digit (ours may have
+    // been rounded up to the next).
+    let leading = exact::leading_exponent(&value, radix, written.exponent);
+    if leading >= 0 {
+        return Err("the number isn't below 1".into());
+    }
+    // Upstream: `length = precision + exponent`, `exponent` the digits
+    // left of the point (none, or less than none).
+    let kept = i64::from(precision) + leading + 1;
+    if kept >= 1 {
+        exact::check_rounded(&value, upstream, radix, kept as u32)
+            .map_err(|why| format!("the oracle's text: {why}"))
+    } else {
+        let upstream =
+            exact::Scientific::parse(upstream, radix).ok_or("the oracle's isn't scientific")?;
+        (upstream.digits == "0")
+            .then_some(())
+            .ok_or_else(|| "the oracle's text has digits it has no room for".into())
+    }
+}
+
+/// How many golden cases differ from the oracle by [`scientific_deviation`]:
+/// pinned, so that the set can't grow or shrink unnoticed.
+const SCIENTIFIC_DEVIATIONS: usize = 87;
+
 #[test]
 fn golden_against_cpp_oracle() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/ratpack_golden.txt");
@@ -241,6 +308,7 @@ fn golden_against_cpp_oracle() {
 
     let mut regs: HashMap<String, Rational> = HashMap::new();
     let mut cases = 0usize;
+    let mut deviations = 0usize;
     let mut failures: Vec<String> = Vec::new();
     // RATPACK_GOLDEN_SLOW_MS=<ms>: report cases slower than that (profiling aid).
     let slow_ms: Option<f64> = std::env::var("RATPACK_GOLDEN_SLOW_MS")
@@ -281,13 +349,16 @@ fn golden_against_cpp_oracle() {
         }
         cases += 1;
         if actual != expected {
-            failures.push(format!(
-                "line {}: {}\n    expected: {}\n    actual:   {}",
-                lineno + 1,
-                cmd,
-                expected,
-                actual
-            ));
+            match scientific_deviation(&tokens, &regs, expected, &actual) {
+                Ok(()) => deviations += 1,
+                Err(why) => failures.push(format!(
+                    "line {}: {}\n    expected: {}\n    actual:   {}\n    ({why})",
+                    lineno + 1,
+                    cmd,
+                    expected,
+                    actual
+                )),
+            }
         }
     }
 
@@ -306,5 +377,13 @@ fn golden_against_cpp_oracle() {
         );
     }
     assert!(cases > 1000, "golden file looks truncated ({cases} cases)");
-    eprintln!("{cases} golden cases match the C++ oracle");
+    assert_eq!(
+        deviations, SCIENTIFIC_DEVIATIONS,
+        "cases that differ from the oracle as scientific notation of a number below 1 does"
+    );
+    eprintln!(
+        "{} golden cases match the C++ oracle; {deviations} more are numbers below 1 in \
+         scientific notation, which upstream cuts short",
+        cases - deviations
+    );
 }

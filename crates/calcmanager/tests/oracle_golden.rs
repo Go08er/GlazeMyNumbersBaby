@@ -14,6 +14,7 @@
 //! ratpack state is pristine, matching the oracle's fork-per-sequence.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::rc::Rc;
 
@@ -344,16 +345,131 @@ fn parse(text: &str) -> Vec<Sequence> {
     seqs
 }
 
+/// Deviations from the oracle, by sequence (`<suite> <index>`): numbers
+/// below 1 in scientific notation, as upstream wrote them and as the port
+/// does (see `tests/data/golden_scientific_deviations.txt`).
+type Deviations = HashMap<String, Vec<(String, String)>>;
+
+fn deviations() -> Deviations {
+    let path = format!(
+        "{}/tests/data/golden_scientific_deviations.txt",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
+    let mut table = Deviations::new();
+    for line in text
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.is_empty())
+    {
+        let [sequence, upstream, ours] = line.split('\t').collect::<Vec<_>>()[..] else {
+            panic!("{path}: {line:?} isn't `sequence<TAB>upstream<TAB>ours`");
+        };
+        // Each is a number below 1 in scientific notation, and upstream's
+        // has fewer digits (or none but a 0).
+        let parts = |text: &str| {
+            let (mantissa, exponent) = text.split_once('e')?;
+            let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+            exponent.starts_with('-').then_some(digits)
+        };
+        let (Some(theirs), Some(mine)) = (parts(upstream), parts(ours)) else {
+            panic!("{path}: {line:?} isn't a number below 1 in scientific notation");
+        };
+        assert!(
+            theirs.len() < mine.len() && (theirs == "0" || !theirs.starts_with('0')),
+            "{path}: {line:?} isn't upstream's number cut short"
+        );
+        table
+            .entry(sequence.to_string())
+            .or_default()
+            .push((upstream.to_string(), ours.to_string()));
+    }
+    table
+}
+
+/// `line` with each number the port writes whole (`ours` of an entry)
+/// written as upstream did, where `oracle`, the oracle's line, has it so
+/// (a number below 1 is also written without F-E, by both in full), and
+/// `met` set for the entries found. A number is matched whole: not within
+/// a longer one.
+fn as_upstream(line: &str, oracle: &str, entries: &[(String, String)], met: &mut [bool]) -> String {
+    let part_of_number = |c: Option<char>| c.is_some_and(|c| c.is_ascii_digit());
+    // The longest first, so that a negative number isn't taken for the
+    // positive one after its sign.
+    let mut order: Vec<usize> = (0..entries.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(entries[i].1.len()));
+    let mut out = String::with_capacity(line.len());
+    // What is left of both lines, read in step while they agree.
+    let (mut rest, mut theirs) = (line, Some(oracle));
+    let mut before: Option<char> = None;
+    'scan: while let Some(c) = rest.chars().next() {
+        if let Some(oracle) = theirs
+            && !part_of_number(before)
+            && !matches!(before, Some('.' | ','))
+        {
+            for &i in &order {
+                let (upstream, ours) = &entries[i];
+                if let Some(after) = rest.strip_prefix(ours.as_str())
+                    && !part_of_number(after.chars().next())
+                    && !oracle.starts_with(ours.as_str())
+                    && let Some(oracle_after) = oracle.strip_prefix(upstream.as_str())
+                    && !part_of_number(oracle_after.chars().next())
+                {
+                    out.push_str(upstream);
+                    met[i] = true;
+                    before = ours.chars().last();
+                    (rest, theirs) = (after, Some(oracle_after));
+                    continue 'scan;
+                }
+            }
+        }
+        out.push(c);
+        before = Some(c);
+        rest = &rest[c.len_utf8()..];
+        // Past a difference the lines are no longer in step.
+        theirs = theirs.and_then(|oracle| oracle.strip_prefix(c));
+    }
+    out
+}
+
 /// Replays one sequence; returns `None` on success or a mismatch report.
-fn replay(seq: &Sequence) -> Option<String> {
+/// A sequence with `deviations` must differ from the oracle by exactly
+/// those numbers, every one of them.
+fn replay(seq: &Sequence, deviations: Option<&[(String, String)]>) -> Option<String> {
     let suite = seq.header.split(' ').nth(1).unwrap_or("");
     let mut session = Session::new(suite);
     for line in seq.body.iter().filter(|l| l.starts_with("> ")) {
         session.run(line);
     }
     let actual_text = std::mem::take(&mut session.display.borrow_mut().out);
-    let actual: Vec<&str> = actual_text.lines().collect();
     let expected: Vec<&str> = seq.body.iter().map(|s| s.as_str()).collect();
+    let patched: Vec<String>;
+    let actual: Vec<&str> = match deviations {
+        None => actual_text.lines().collect(),
+        Some(entries) => {
+            if actual_text.lines().eq(expected.iter().copied()) {
+                return Some(format!(
+                    "{}\n  matches the oracle: its deviations are no longer needed",
+                    seq.header
+                ));
+            }
+            let mut met = vec![false; entries.len()];
+            patched = actual_text
+                .lines()
+                .enumerate()
+                .map(|(i, line)| {
+                    let oracle = expected.get(i).copied().unwrap_or_default();
+                    as_upstream(line, oracle, entries, &mut met)
+                })
+                .collect();
+            if let Some(i) = met.iter().position(|met| !met) {
+                return Some(format!(
+                    "{}\n  doesn't write {:?} (upstream's {:?}): that deviation is no longer needed",
+                    seq.header, entries[i].1, entries[i].0
+                ));
+            }
+            patched.iter().map(String::as_str).collect()
+        }
+    };
     if actual == expected {
         return None;
     }
@@ -392,11 +508,23 @@ fn replay(seq: &Sequence) -> Option<String> {
     Some(report)
 }
 
+/// The key of a sequence in the deviation table: `<suite> <index>`.
+fn sequence_key(seq: &Sequence) -> String {
+    seq.header
+        .split(' ')
+        .skip(1)
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn run_golden(name: &str) {
     let path = format!("{}/tests/data/{}", env!("CARGO_MANIFEST_DIR"), name);
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
     let seqs = parse(&text);
     assert!(!seqs.is_empty(), "{path} contains no sequences");
+    let deviations = deviations();
+    let deviations = &deviations;
 
     let workers = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -411,7 +539,9 @@ fn run_golden(name: &str) {
                     // One fresh thread per sequence => pristine thread-local state.
                     std::thread::Builder::new()
                         .stack_size(16 * 1024 * 1024)
-                        .spawn_scoped(scope, move || replay(seq))
+                        .spawn_scoped(scope, move || {
+                            replay(seq, deviations.get(&sequence_key(seq)).map(Vec::as_slice))
+                        })
                         .expect("spawn")
                 })
                 .collect();
@@ -448,7 +578,39 @@ fn run_golden(name: &str) {
                 .join("\n")
         );
     }
-    eprintln!("{name}: {} sequences match the C++ oracle", seqs.len());
+    let deviating = seqs
+        .iter()
+        .filter(|seq| deviations.contains_key(&sequence_key(seq)))
+        .count();
+    eprintln!(
+        "{name}: {} sequences match the C++ oracle, {deviating} of them but for numbers below 1 \
+         in scientific notation",
+        seqs.len()
+    );
+}
+
+/// Every sequence the deviation table names is one of a golden file (so
+/// that no entry is left unused by a misspelt key).
+#[test]
+fn every_deviation_names_a_golden_sequence() {
+    let mut known = std::collections::HashSet::new();
+    for name in [
+        "golden_std.txt",
+        "golden_sci.txt",
+        "golden_prog.txt",
+        "golden_mix.txt",
+        "golden_loc.txt",
+    ] {
+        let path = format!("{}/tests/data/{}", env!("CARGO_MANIFEST_DIR"), name);
+        let text = std::fs::read_to_string(&path).unwrap();
+        known.extend(parse(&text).iter().map(sequence_key));
+    }
+    let deviations = deviations();
+    for sequence in deviations.keys() {
+        assert!(known.contains(sequence), "no golden sequence {sequence:?}");
+    }
+    let numbers: usize = deviations.values().map(Vec::len).sum();
+    assert_eq!((deviations.len(), numbers), (46, 83));
 }
 
 #[test]
