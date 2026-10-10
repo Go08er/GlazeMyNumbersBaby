@@ -455,3 +455,55 @@ fn a_value_of_the_simplified_form_outside_the_domain_is_no_witness() {
     .expect("certifies");
     assert!(a.horizontal.is_certified(), "{:?}", a.horizontal);
 }
+
+/// The tails' starts took no account of the domain, and the claims on a
+/// tail are made from the simplified form: f″ beyond a bound on [1, ∞)
+/// for 0·(x − 8)⁰ + 2ˣ, across its hole at 8, and the values of
+/// 0.2/x·(4x)^(0·log(x, 2)) on [1, ∞), through 1 where the base of its
+/// logarithm is 1. The replay refuted both.
+#[test]
+fn a_tail_starts_past_the_last_end_of_the_domain() {
+    use graphing::certify::{Claim, DEFAULT_BUDGET, Tail, certify_text};
+    let g = "0*(x-8)^0+2^x";
+    let a = certify_text(g, CompileOptions::default(), DEFAULT_BUDGET, None).expect("certifies");
+    assert!(a.oblique.is_certified(), "{g}: {:?}", a.oblique);
+    for c in asymptote_claims(&a) {
+        if let Claim::TailBeyond {
+            side: Tail::Right,
+            from,
+            ..
+        } = &c
+        {
+            assert!(from.0 > 8.0, "{g}: {c:?}, a tail across the hole at 8");
+        }
+    }
+    let h = "0.2/x*(4*x)^(0*log(x,2))";
+    let a = certify_text(h, CompileOptions::default(), DEFAULT_BUDGET, None).expect("certifies");
+    for c in asymptote_claims(&a) {
+        match &c {
+            Claim::TailValue {
+                side: Tail::Right,
+                from,
+                ..
+            }
+            | Claim::TailBeyond {
+                side: Tail::Right,
+                from,
+                ..
+            } => assert!(from.0 > 1.0, "{h}: {c:?}, a tail through 1"),
+            _ => {}
+        }
+    }
+    // Without a break in the domain the tails start where they did.
+    let a =
+        certify_text("2^x", CompileOptions::default(), DEFAULT_BUDGET, None).expect("certifies");
+    assert!(a.oblique.is_certified() && a.horizontal.is_certified());
+    assert!(asymptote_claims(&a).iter().any(|c| matches!(
+        c,
+        Claim::TailBeyond {
+            side: Tail::Right,
+            from,
+            ..
+        } if from.0 == 1.0
+    )));
+}

@@ -453,6 +453,8 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     let phase = f.left() / 8;
     f.allow(phase);
     let dom = side::domain(f);
+    f.tails_past
+        .set([rows::tail_past(&dom, false), rows::tail_past(&dom, true)]);
     let w = window(f, &dom);
     // One period of a periodic f stands for the line; a domain with
     // excluded families otherwise gets a window.

@@ -1264,10 +1264,48 @@ fn out_along(start: f64) -> Vec<f64> {
     ms
 }
 
+/// How far out a tail on one side must start to lie wholly inside the
+/// domain: past the last end of the domain on that side (a tail [M, ∞) or
+/// (−∞, −M] with M greater than this), −∞ where that side's piece has no
+/// other end; ∞ (no tail does) with excluded families, which recur along
+/// every tail, or with no piece reaching that side.
+pub fn tail_past(dom: &Domain, right: bool) -> f64 {
+    if !dom.families.is_empty() {
+        return f64::INFINITY;
+    }
+    let piece = dom.pieces.iter().find(|p| {
+        if right {
+            p.hi == Bound::PosInf
+        } else {
+            p.lo == Bound::NegInf
+        }
+    });
+    match piece.map(|p| if right { p.lo } else { p.hi }) {
+        Some(Bound::At { x, .. }) => {
+            if right {
+                x.hi.0
+            } else {
+                -x.lo.0
+            }
+        }
+        Some(_) => f64::NEG_INFINITY,
+        None => f64::INFINITY,
+    }
+}
+
 /// The tails' starts for f on one side: [`out_along`], and beside each
 /// far centre of an exponential in f on that side (c + 2ᵏ: e^(x − 10⁹) is
 /// a double only within 745 of 10⁹).
+///
+/// Only those past the domain's last end on that side ([`tail_past`]): a
+/// tail from any other holds a point where f is undefined, and the claims
+/// on it are made from the simplified form, which has values there
+/// (0·(x − 8)⁰ + 2ˣ is 2ˣ with a hole at 8; f″ beyond a bound on [1, ∞)
+/// was claimed across it, and 0.2/x·(4x)^(0·log(x, 2)) had its values on
+/// [1, ∞) claimed through 1, where the base of its logarithm is 1: the
+/// replay refuted both, found by `tests/crossfuzz.rs`).
 fn far_points(f: &Fun<'_>, right: bool, start: f64) -> Vec<f64> {
+    let past = f.tails_past.get()[usize::from(right)];
     let mut ms = out_along(start);
     if f.simplifier {
         for c in crate::simplify::limit::centres(&f.expr) {
@@ -1278,6 +1316,7 @@ fn far_points(f: &Fun<'_>, right: bool, start: f64) -> Vec<f64> {
         ms.sort_by(f64::total_cmp);
         ms.dedup();
     }
+    ms.retain(|m| *m > past);
     ms
 }
 
