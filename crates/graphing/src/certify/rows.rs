@@ -940,9 +940,18 @@ pub fn gaps_clear(
     Ok(true)
 }
 
-/// `e` has no zero strictly between the doubles of the box `g`: each of
-/// its zero factors ([`super::fun::zero_factors`]) is away from 0 over the
-/// box, or is exactly 0 at one of its doubles and strictly monotone there.
+/// `e` has no zero of f's strictly inside the box `g`: each of its zero
+/// factors ([`super::fun::zero_factors`]) is away from 0 over the box, or
+/// is exactly 0 at one of its doubles and strictly monotone there (so 0
+/// nowhere else in it), that double being an end of the box (which the
+/// claims beside the gap decide) or a point where f is undefined.
+///
+/// A double strictly inside the box where f may be defined is a zero the
+/// gap holds: √(0.1 + 0.9 + x) is 0 at −1, its domain's end, which the
+/// certifier encloses by the doubles either side (the sum of the two
+/// literals is 1 only exactly), so the gap is three doubles wide with the
+/// zero in the middle; taken for clear, the x-intercepts were certified
+/// "none" (found by `tests/crossfuzz.rs`).
 fn factors_clear(f: &Fun<'_>, e: &crate::ast::Expr, g: Interval) -> Result<bool, Stop> {
     for h in f.factors(e) {
         let s = f.ser_of(&h, g, 1)?;
@@ -950,17 +959,22 @@ fn factors_clear(f: &Fun<'_>, e: &crate::ast::Expr, g: Interval) -> Result<bool,
             continue;
         }
         let mono = usable(&s, 1) && s[1].ne0();
-        let mut exact = false;
+        let mut zero = None;
         let mut q = g.lo();
         for _ in 0..8 {
-            if !mono || q > g.hi() || exact {
+            if !mono || q > g.hi() || zero.is_some() {
                 break;
             }
             let v = f.ser_of(&h, Interval::point(q), 0)?[0];
-            exact = v.lo() == 0.0 && v.hi() == 0.0;
+            if v.lo() == 0.0 && v.hi() == 0.0 {
+                zero = Some(q);
+            }
             q = q.next_up();
         }
-        if !exact {
+        let Some(z) = zero else {
+            return Ok(false);
+        };
+        if g.lo() < z && z < g.hi() && !f.ser_of(&f.expr, Interval::point(z), 0)?[0].is_empty() {
             return Ok(false);
         }
     }

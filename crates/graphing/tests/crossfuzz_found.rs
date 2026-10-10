@@ -296,3 +296,42 @@ fn a_root_of_a_whole_degree_keeps_its_digits_far_out() {
     assert_eq!(root(2.0, 1.0), 2.0);
     assert_eq!(root(4.0, -2.0), 0.5);
 }
+
+/// √(0.1 + 0.9 + x) is 0 at −1, the closed end of its domain: the sum of
+/// the two literals is exactly 1. The certifier encloses that end by the
+/// doubles either side, and took the gap about it for free of zeros
+/// because the radicand is exactly 0 at a double of it: the panel said
+/// "no x-intercepts".
+#[test]
+fn a_zero_at_a_domain_end_between_two_doubles_is_not_certified_away() {
+    use graphing::analysis::{analyze, flags};
+    for src in [
+        "sqrt(0.1+0.9+x)",
+        "sqrt((0.1+0.9)+(x+x))",
+        "sqrt(x+0.1+0.9)",
+        "(0.1+0.9+x)^(1/2)",
+        "sqrt(0.1+0.9+x)+0*x",
+    ] {
+        for digits in [None, Some(14)] {
+            let opts = graphing::lexer::ParseOptions {
+                decimal_comma: false,
+                literal_digits: digits,
+            };
+            let eq = Equation::parse_with(&format!("y={src}"), opts).expect("parses");
+            let k = analyze(&eq, &CompileOptions::default());
+            let unknown = k.too_complex_features & flags::ZEROS != 0;
+            assert!(
+                unknown || !k.data.zeros.is_empty(),
+                "{src} at {digits:?}: x-intercepts {:?} (none), but f is 0 at its domain's end",
+                k.x_intercept
+            );
+            for z in &k.data.zeros {
+                assert!((scalar(src, z.x)).abs() < 1e-7, "{src}: a zero at {}", z.x);
+            }
+        }
+    }
+    // A zero at an end the certifier knows exactly is still found.
+    let eq = Equation::parse("y=sqrt(0.25+0.75+x)").expect("parses");
+    let k = analyze(&eq, &CompileOptions::default());
+    assert_eq!(k.x_intercept, "−1", "{k:?}");
+}
