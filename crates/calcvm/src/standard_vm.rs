@@ -586,11 +586,11 @@ impl StandardCalculatorViewModel {
             && (self.is_standard || self.is_scientific || self.is_programmer);
         if !same_mode {
             // Deviation (an upstream bug): the engine being left is taken
-            // out of its error first. Upstream only clears `IsInError` (its
-            // C++ view model says why: "so that commands caused by the mode
-            // change are still sent"), but the engine ignores every command
-            // but C and CE while it is in an error, so they are sent and
-            // have no effect: leaving Scientific turns the F-E button off
+            // out of its error first. Upstream only clears `IsInError`, the
+            // view model's own flag, so that the mode change's commands are
+            // sent; but the engine ignores every command but C and CE while
+            // it is in an error (`ProcessCommandWorker`), so they are sent
+            // and have no effect: leaving Scientific turns the F-E button off
             // and the engine stays in F-E, and `SetProgrammerMode`'s DEC is
             // ignored by a Programmer engine still in the error it was left
             // in (the CLEAR after it comes too late). The buttons then show
