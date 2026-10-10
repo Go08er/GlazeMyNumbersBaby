@@ -1920,3 +1920,50 @@ fn the_exact_algebra_keeps_degrees_and_exponents_whole() {
     // Within the bounds the polynomial is read: (x⁶⁴)⁶⁴ is x⁴⁰⁹⁶.
     assert_eq!(rational("(x^64)^64"), Some((4097, 1)));
 }
+
+/// Review 18, R18-L-01: the series of an integer power negated its
+/// exponent to take the reciprocal, which i64::MIN has no negation for
+/// (an overflow, or in a release build the same exponent again, for ever).
+/// A typed −9223372036854775808 is that exponent; the y-intercept of
+/// (x + 1) to it is 1.
+#[test]
+fn the_least_integer_exponent_replays() {
+    replay::iv::init();
+    for src in [
+        "(x+1)^(-9223372036854775808)",
+        "(x+1)^(0-9223372036854775808)",
+        "(x+1)^(-9223372036854775807)",
+        "(x+1)^9223372036854775807",
+    ] {
+        let (e, lits) = read(src);
+        let ctx = replay::eval::Ctx {
+            unit: replay::iv::Unit::Radians,
+            lits: &lits,
+            vars: &[],
+        };
+        let s = replay::eval::series(&e, 0.0, 0.0, 2, &ctx);
+        assert!(s[0].def && s[0].is_exactly(1.0), "{src} at 0: {:?}", s[0]);
+        assert!(s[1].def && s[1].bounded(), "{src} at 0: f′ {:?}", s[1]);
+        // At −1 the base is 0: a negative power is undefined there.
+        let s = replay::eval::series(&e, -1.0, -1.0, 2, &ctx);
+        assert_eq!(s[0].empty, src.contains('-'), "{src} at −1: {:?}", s[0]);
+    }
+    // The certificate itself replays in full: the y-intercept 1 is proved
+    // on f's own tree, and a false y-intercept is caught.
+    let src = "(x+1)^(-9223372036854775808)";
+    let v = certificate(src);
+    assert_eq!(rejected(&v), None, "{src}");
+    let r = replay::replay(&v).expect("replayed");
+    let y = r
+        .claims
+        .iter()
+        .find(|c| c.rows.iter().any(|r| r == "y_intercept"))
+        .expect("the y-intercept's claim");
+    assert_eq!(y.outcome.class, Class::Strong, "{:?}", y.claim);
+    let mut planted = v.clone();
+    let c = first(&mut planted, "y_intercept", "Value");
+    c["lo"] = serde_json::json!(2.0);
+    c["hi"] = serde_json::json!(2.0);
+    *value_of(&mut planted, "y_intercept") = serde_json::json!({"lo": 2.0, "hi": 2.0});
+    assert!(rejected(&planted).is_some(), "{src}: f(0) = 2 not caught");
+}
