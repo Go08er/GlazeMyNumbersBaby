@@ -124,12 +124,17 @@ impl Ctx {
 //
 //----------------------------------------------------------------------------
 
+/// `g_ratio` for `radix`, as `ChangeConstants` sets it.
+pub(crate) fn ratio_of(radix: u32) -> i32 {
+    (BASEXPWR as f64 / (radix as f64).log2()).ceil() as i32 - 1
+}
+
 pub(crate) fn change_constants(ctx: &mut Ctx, radix: u32, precision: i32) -> CalcResult<()> {
     // ratio is set to the number of digits in the current radix, you can get
     // in the internal BASEX radix, this is important for length calculations
     // in translating from radix to BASEX and back.
 
-    ctx.g_ratio = (BASEXPWR as f64 / (radix as f64).log2()).ceil() as i32 - 1;
+    ctx.g_ratio = ratio_of(radix);
 
     ctx.rat_nradix = i32torat(radix as i32);
 
