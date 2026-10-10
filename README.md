@@ -246,9 +246,9 @@ upstream sources with g++:
 
 | Crate | What's checked |
 | --- | --- |
-| ratpack (12) | 13,628 golden cases from the C++ Ratpack (every op and function, all angle types, radixes 2, 3, 8, 10, 16 and 36, formats, precisions, error codes), byte-for-byte; port of `RationalTest.cpp` |
-| calcmanager (84) | 3,500 golden command sequences replayed against the C++ `CalculatorManager` (every display callback, expression token, history and memory state); ports of `CalcEngineTests`, `CalcInputTest`, `CalculatorManagerTest` |
-| calcvm (175 + 1 ignored) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage and the saved-state size budget (long pasted sessions keep their newest History, memory and modes) |
+| ratpack (19) | 13,628 golden cases from the C++ Ratpack (every op and function, all angle types, radixes 2, 3, 8, 10, 16 and 36, formats, precisions, error codes), byte-for-byte but for the 87 that write a number below 1 in scientific notation, where the port keeps the digits upstream cuts (each checked to be the value rounded to the precision exactly, and upstream's to be the same value cut); that rounding checked with whole-number arithmetic for random values, exponents to ±9999; port of `RationalTest.cpp` |
+| calcmanager (86) | 3,500 golden command sequences replayed against the C++ `CalculatorManager` (every display callback, expression token, history and memory state; 46 of them show a number F-E cut short upstream, 83 numbers listed with upstream's text and ours in `tests/data/golden_scientific_deviations.txt`, and nothing else may differ); ports of `CalcEngineTests`, `CalcInputTest`, `CalculatorManagerTest` |
+| calcvm (181 + 1 ignored) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage and the saved-state size budget (long pasted sessions keep their newest History, memory and modes) |
 | unitconv (140 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
 | datecalc (40), copypaste (40) | Ports of `DateCalculatorTests` and `CopyPasteManagerTests`, plus paste key-sequence tests |
 | graphing (357 + 1 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
@@ -434,7 +434,18 @@ CI also runs checks that need more than `cargo test --workspace`:
   display shows, as in a crafted file, is left out, slot by slot.
 - The port fixes a handful of upstream bugs and undefined behaviour (e.g.
   deleting a history item removed the wrong entry; C left the engine in
-  E-notation); each is commented at the fix.
+  E-notation); each is commented at the fix. Two of them show in what the
+  calculator displays. F-E keeps a number's digits below 1: upstream's
+  scientific notation loses a digit for every decade below 1, so with F-E
+  on 1 ÷ 3 ÷ 1e10 = reads 3.333333333333333333333e-11, 1 ÷ 3 ÷ 1e40 = reads
+  0.e-41, and MS stores that text in the memory list; here both read 3.
+  and 31 threes, as they do without F-E and as a TI-84 Plus CE's Sci mode
+  keeps its mantissa. And a mode left while it shows an error comes back
+  as its buttons show: upstream sends the mode change's commands to an
+  engine that ignores them in an error, so Programmer, HEX, 1 ÷ 0 =,
+  Scientific, Programmer shows DEC selected and takes A as a digit, and
+  Scientific, F-E, 1 ÷ 0 =, Standard, Scientific shows F-E off and gives
+  7.e+0 for 7 =; here the error is cleared before the mode changes.
 
 ## Notes
 
