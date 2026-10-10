@@ -272,6 +272,12 @@ CI also runs checks that need more than `cargo test --workspace`:
   simplifier's form, the derivatives) or check it at sample points, so it
   rests on the simplifier: today 74,363 strong, 195 weak. A claim refuted
   or left open, or a row that doesn't follow from its claims, fails it.
+  The checker has no Γ of its own, so it doesn't model `n!`, `n!!`, `nCr`
+  or `nPr`: a function that uses one anywhere, a constant like `5!`
+  included, comes out *unsupported* (not checked, rather than wrong), and
+  neither the replayed corpus nor the pool contains one. Those functions'
+  rows rest on the certifier alone; the handful the review rounds turned up
+  are checked against a hand-written truth table instead.
 - **MPFR oracles** (same feature): `interval_oracle` checks every interval
   operation's enclosure against MPFR at 256 bits on adversarial boxes,
   `simplify_rules` checks every simplifier rule on both sides wherever its
