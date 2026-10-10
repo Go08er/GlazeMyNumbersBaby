@@ -1058,17 +1058,33 @@ mod tests {
             );
             // Space presses every button, a calculator key too; Enter
             // every button but a calculator key. (Fields, sliders, the
-            // graph and scroll views take their keys elsewhere.)
-            if h.sense == Sense::Click && h.msg.is_some() {
-                assert!(h.activated_by(false), "{what}: {:?}", h.msg);
-                assert_eq!(
-                    h.activated_by(true),
-                    !presses_a_key(h),
-                    "{what}: {:?}",
-                    h.msg
+            // graph and scroll views take their keys elsewhere.) With
+            // Shift or Ctrl held as without, and never with Alt
+            // (R18-L-02).
+            let space = appcore::KeyPress::char(' ');
+            let enter = appcore::KeyPress::named(appcore::Named::Enter);
+            for held in [
+                |k: appcore::KeyPress| k,
+                |k: appcore::KeyPress| k.shift(),
+                |k: appcore::KeyPress| k.ctrl(),
+                |k: appcore::KeyPress| k.ctrl().shift(),
+            ] {
+                let (space, enter) = (held(space), held(enter));
+                if h.sense == Sense::Click && h.msg.is_some() {
+                    assert!(h.activated_by(&space), "{what}: {:?}", h.msg);
+                    assert_eq!(
+                        h.activated_by(&enter),
+                        !presses_a_key(h),
+                        "{what}: {:?}",
+                        h.msg
+                    );
+                } else {
+                    assert!(!h.activated_by(&space) && !h.activated_by(&enter), "{what}");
+                }
+                assert!(
+                    !h.activated_by(&space.alt()) && !h.activated_by(&enter.alt()),
+                    "{what}: with Alt"
                 );
-            } else {
-                assert!(!h.activated_by(false) && !h.activated_by(true), "{what}");
             }
         }
         let flag = |what: &str, hid: Id| {

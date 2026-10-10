@@ -1,6 +1,6 @@
 //! Date calculation (upstream DateCalculator.xaml).
 
-use appcore::input::{Key, KeyPress, Named};
+use appcore::input::{self, Key, KeyPress, Named};
 use chrono::{Datelike, Days, Local, Months, NaiveDate};
 use datecalc::{DateCalculatorState, strings as S};
 
@@ -226,17 +226,23 @@ impl DatePage {
     /// chosen day without the keyboard's ring, which the app's own Space
     /// and Enter wait for (R16-L-03).
     pub fn key(&mut self, kp: &KeyPress, cx: &mut Cx) -> bool {
-        if self.calendar.is_none() || kp.ctrl || kp.alt {
+        if self.calendar.is_none() {
             return false;
         }
+        // Space and Enter pick with Shift or Ctrl held too, as they
+        // activate any control (`input::control_key`, R18-L-02).
         if matches!(kp.key, Key::Char(' ') | Key::Named(Named::Enter)) {
+            let picks = input::control_key(kp) == Some(input::ControlKey::Activate);
             return match (self.calendar, self.focused_day(*cx.focus)) {
-                (Some(which), Some(d)) if !kp.shift => {
+                (Some(which), Some(d)) if picks => {
                     self.update(Msg::Pick(which, d), cx);
                     true
                 }
                 _ => false,
             };
+        }
+        if kp.ctrl || kp.alt {
+            return false;
         }
         let c = self.focused_day(*cx.focus).unwrap_or(self.cursor);
         let weekday = i64::from(c.weekday().num_days_from_sunday());
@@ -653,11 +659,29 @@ mod tests {
 
         d.update(Msg::Calendar(Some(0)), &mut cx);
         assert_eq!(*cx.focus, Some(day_id(today)));
-        assert!(!d.key(&KeyPress::char(' ').shift(), &mut cx));
+        // Not with Alt; with Shift or Ctrl held as bare (R18-L-02).
+        assert!(!d.key(&KeyPress::char(' ').alt(), &mut cx));
+        assert!(!d.key(&KeyPress::named(Named::Enter).alt(), &mut cx));
+        assert_eq!(d.calendar, Some(0));
         assert!(d.key(&KeyPress::char(' '), &mut cx));
         assert_eq!(d.calendar, None);
         assert_eq!(d.date(0), today);
         assert_eq!(*cx.focus, Some(opener));
+        for held in [
+            KeyPress::char(' ').shift(),
+            KeyPress::char(' ').ctrl(),
+            KeyPress::named(Named::Enter).shift(),
+            KeyPress::named(Named::Enter).ctrl().shift(),
+        ] {
+            d.update(Msg::Calendar(Some(0)), &mut cx);
+            assert!(d.key(&KeyPress::named(Named::Right), &mut cx));
+            let day = d.cursor;
+            assert!(d.key(&held, &mut cx), "{held:?}");
+            assert_eq!((d.calendar, d.date(0)), (None, day), "{held:?}");
+            assert_eq!(*cx.focus, Some(opener));
+        }
+        d.update(Msg::Calendar(Some(0)), &mut cx);
+        d.update(Msg::Pick(0, today), &mut cx);
 
         d.update(Msg::Calendar(Some(0)), &mut cx);
         assert!(d.key(&KeyPress::named(Named::PageDown), &mut cx));

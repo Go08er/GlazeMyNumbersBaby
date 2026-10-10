@@ -658,6 +658,7 @@ impl CalculatorPage {
             col.append(&copy);
             col.append(&paste);
             let pop = gtk::Popover::builder().child(&col).has_arrow(false).build();
+            crate::window::own_activation(&pop);
             pop.set_parent(&p.display);
             pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
             // Weak popover: it contains these buttons.

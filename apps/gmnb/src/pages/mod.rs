@@ -155,7 +155,7 @@ pub trait Page {
     /// graph's keypads) and bit `FlipButtons`, which ignore Enter when
     /// focused: it is [`Page::key_pressed`]'s ("=" on the calculator, or
     /// nothing); any other focused control activates on Enter itself
-    /// (`crate::window::focus_takes`, `crate::window::focus_ignores`).
+    /// (`crate::window::step`, `appcore::input::focus_key`).
     fn is_calculator_key(&self, _widget: &gtk::Widget) -> bool {
         false
     }

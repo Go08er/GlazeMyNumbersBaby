@@ -42,6 +42,9 @@ fn date_button() -> DateButton {
         .child(&days.widget())
         .css_classes(["wc-calendar-popover"])
         .build();
+    // A day is picked by Enter or Space with Shift or Ctrl held too, as
+    // in the window.
+    crate::window::own_activation(&popover);
     {
         // Opened, the keys (and so the screen reader) start on the date
         // chosen ("Tuesday, October 6, 2026, selected"), in its month,
