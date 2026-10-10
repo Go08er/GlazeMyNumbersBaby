@@ -528,7 +528,21 @@ pub fn analyze_cancellable(
     opts: &CompileOptions<'_>,
     cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Option<KeyGraphFeatures> {
-    let error = |e| Some(KeyGraphFeatures::error(e));
+    analyze_certified(eq, opts, cancel).map(|(k, _)| k)
+}
+
+/// [`analyze_cancellable`], and the certified analysis the panel was
+/// written from, where one was made (not for an equation that is no
+/// function of x, doesn't compile or is too big). For the tools that
+/// replay the certificate of the very panel they check
+/// (`tests/crossfuzz.rs`).
+#[doc(hidden)]
+pub fn analyze_certified(
+    eq: &Equation,
+    opts: &CompileOptions<'_>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Option<(KeyGraphFeatures, Option<crate::certify::Analysis>)> {
+    let error = |e| Some((KeyGraphFeatures::error(e), None));
     match eq.kind() {
         EquationKind::Function => {}
         EquationKind::InverseFunction => return error(AnalysisError::VariableIsNotX),
@@ -571,9 +585,13 @@ pub fn analyze_cancellable(
     if let crate::certify::Row::Certified { value, .. } = &a.domain
         && value.pieces.is_empty()
     {
-        return error(AnalysisError::AnalysisCouldNotBePerformed);
+        return Some((
+            KeyGraphFeatures::error(AnalysisError::AnalysisCouldNotBePerformed),
+            Some(a),
+        ));
     }
-    certified::features(f, opts, &a, cancel)
+    let k = certified::features(f, opts, &a, cancel)?;
+    Some((k, Some(a)))
 }
 
 /// The earlier numeric engine, checked by [`verify`] (what the panel showed
