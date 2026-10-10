@@ -153,11 +153,24 @@ fn focus_kind(w: &gtk::Widget, key: impl FnOnce(&gtk::Widget) -> bool) -> Focus 
 
 /// Activates `focus` as its bare Enter or Space would ([`Step::Activate`]):
 /// GTK's activation signal, the one those keys are bound to (a button's
-/// click, a row's activation, an entry's `activate`). False if it has
-/// none, as a widget of the app's own that takes its keys itself (a
+/// click, a row's activation). A text field's Enter is bound to its own
+/// `activate` signal instead, which an entry or a spin button passes on
+/// (`gtk_widget_activate` does nothing for it). False if the widget has
+/// neither, as one of the app's own that takes its keys itself (a
 /// converter value field): the key then goes on to it.
 fn activate(focus: &gtk::Widget) -> bool {
-    focus.activate()
+    let text = focus.downcast_ref::<gtk::Text>().cloned().or_else(|| {
+        focus
+            .ancestor(gtk::Text::static_type())
+            .and_downcast::<gtk::Text>()
+    });
+    match text {
+        Some(text) => {
+            text.emit_activate();
+            true
+        }
+        None => focus.activate(),
+    }
 }
 
 /// What the window does with a navigation key on a focused slider (a
