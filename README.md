@@ -477,7 +477,10 @@ CI also runs checks that need more than `cargo test --workspace`:
   slot to fall outside, and a full memory doesn't slow startup. The
   number is worked out when the slot is first read (MR, a click on it) or
   the whole list is next written out (MS, M+, M−, a mode, radix or word
-  size switch), and is the number the slot showed. Only text that no
+  size switch), and is the number the slot showed. Slots read together
+  share the powers of ten they are scaled by, so with a hundred slots
+  near e±9999 that first writing out takes at most half as long again as
+  every later one (it took over three times as long). Only text that no
   display shows, as in a crafted file, is left out, slot by slot.
 - The port fixes a handful of upstream bugs and undefined behaviour (e.g.
   deleting a history item removed the wrong entry; C left the engine in
