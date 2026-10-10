@@ -19,7 +19,8 @@ pub fn decimal(text: &str) -> Option<Rational> {
         return None;
     }
     let n = Integer::from_str_radix(&digits, 10).ok()?;
-    let d = Integer::from(Integer::u_pow_u(10, frac.len() as u32));
+    // (The places counted with a check: never cut to their low 32 bits.)
+    let d = Integer::from(Integer::u_pow_u(10, u32::try_from(frac.len()).ok()?));
     Some(Rational::from((n, d)))
 }
 

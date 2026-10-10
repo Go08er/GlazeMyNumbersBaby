@@ -2146,6 +2146,40 @@ pub fn piq_parts(text: &str) -> Option<(i64, i64, i32)> {
     Some((n, d, k))
 }
 
+/// A whole number written in digits (a `-` in front), of any size: the
+/// certifier writes a rational's parts so, to 2¹²⁷.
+fn whole(text: &str) -> Option<rug::Integer> {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    rug::Integer::from_str_radix(text, 10).ok()
+}
+
+/// The rational `p` or `p/d` exactly, each part a whole number of any
+/// size (d ≠ 0).
+pub fn rational(text: &str) -> Option<rug::Rational> {
+    Some(match text.split_once('/') {
+        Some((n, d)) => {
+            let (n, d) = (whole(n)?, whole(d)?);
+            if d == 0 {
+                return None;
+            }
+            rug::Rational::from((n, d))
+        }
+        None => rug::Rational::from(whole(text)?),
+    })
+}
+
+/// The most π's a number in a fact may be a power of: the certifier's are
+/// one or two (a period, an area). One past it is not multiplied out (the
+/// power is an i32 in the text: 2³¹ products of π would never end).
+const MAX_PI_POWER: u32 = 64;
+
+/// A number written `p/d·π^k` enclosed: p/d exactly, rounded outward once
+/// (a whole number past 2⁵³ was parsed as the double nearest it, and
+/// 9007199254740993 enclosed as the point 2⁵³: review 18's audit), then
+/// times πᵏ. A part written another way (`0.5`, `1e-7`) is its double.
 pub fn pi_q(text: &str) -> Option<Iv> {
     let (q, k) = match text.split_once('·') {
         Some((q, rest)) => {
@@ -2158,12 +2192,16 @@ pub fn pi_q(text: &str) -> Option<Iv> {
         }
         None => (text, 0),
     };
-    let q = match q.split_once('/') {
-        Some((n, d)) => iv::div(
+    if k.unsigned_abs() > MAX_PI_POWER {
+        return None;
+    }
+    let q = match (rational(q), q.split_once('/')) {
+        (Some(r), _) => iv::ratio(r.numer(), r.denom()),
+        (None, Some((n, d))) => iv::div(
             &Iv::of(n.parse::<f64>().ok()?),
             &Iv::of(d.parse::<f64>().ok()?),
         ),
-        None => Iv::of(q.parse::<f64>().ok()?),
+        (None, None) => Iv::of(q.parse::<f64>().ok()?),
     };
     let mut v = q;
     for _ in 0..k.unsigned_abs() {
@@ -2594,10 +2632,10 @@ fn rational_fact(fx: &Fx, fact: &str) -> Option<Outcome> {
         return claims_rational
             .then(|| Outcome::new(Class::Refuted, "f is no rational function of x"));
     };
-    let q = |t: &str| -> Option<Rational> {
-        let (n, d, k) = piq_parts(t.trim())?;
-        (k == 0).then(|| Rational::from((n, d)))
-    };
+    // A rational written out, its parts of any size (the certifier's are
+    // i128s: read as i64s, a true limit past 2⁶³ was refuted, and a zero
+    // denominator divided by).
+    let q = |t: &str| -> Option<Rational> { rational(t.trim()) };
     let verdict = |ok: bool, what: String| {
         if ok {
             Outcome::new(Class::Strong, format!("exactly: {what}"))
@@ -2621,9 +2659,11 @@ fn rational_fact(fx: &Fx, fact: &str) -> Option<Outcome> {
         let ok = match (lim, &got) {
             ("+∞", Err(true)) | ("−∞", Err(false)) => true,
             (l, Ok(v)) if l.starts_with("in ") => {
+                // The limit itself against the bracket's ends, exactly
+                // (rounded to a double first, 1/3 was "in" the point
+                // bracket at the double below it: review 18's audit).
                 let b = bracket(l.strip_prefix("in ")?)?;
-                let v = v.to_f64();
-                b.lo.to_f64() <= v && v <= b.hi.to_f64()
+                b.lo <= *v && b.hi >= *v
             }
             (l, Ok(v)) => q(l).is_some_and(|w| w == *v),
             _ => false,

@@ -1124,6 +1124,24 @@ pub fn sin_cos(a: &Iv, unit: Unit, cos: bool) -> Iv {
     Iv::new(lo, hi).deco(&[a], true, true)
 }
 
+/// Whether the point `x` is a whole number of quarter turns (`q` units
+/// each), and then whether that number is odd; None when it is none.
+/// Decided exactly: the quotient x/q must be exact (past the working
+/// precision an inexact one rounds to a whole number all the same: 2²⁰⁰/90
+/// at 160 bits), and its parity is read from its half, exact in binary.
+/// (Review 18's audit: the parity came from the quotient's double cast to
+/// i64, the wrong whole number past 2⁵³, where 90·(2⁵³ + 1)° was an even
+/// quarter turn, and i64::MAX, an odd one, past 2⁶³, where 9·10²¹° was a
+/// pole.)
+fn whole_quarter_turns(x: &Float, q: f64) -> Option<bool> {
+    let (t, rounded) = Float::with_val_round(prec(), x / q, Round::Nearest);
+    if rounded != Ordering::Equal || !t.is_integer() {
+        return None;
+    }
+    let (half, rounded) = Float::with_val_round(prec(), &t / 2u32, Round::Nearest);
+    (rounded == Ordering::Equal).then(|| !half.is_integer())
+}
+
 /// tan over a box in the unit: undefined at odd quarter turns.
 pub fn tan(a: &Iv, unit: Unit) -> Iv {
     if a.empty {
@@ -1131,19 +1149,16 @@ pub fn tan(a: &Iv, unit: Unit) -> Iv {
     }
     if a.is_point()
         && let Some(q) = unit.quarter()
+        && let Some(odd) = whole_quarter_turns(&a.lo, q)
     {
-        let t = Float::with_val(prec(), &a.lo / q);
-        if t.is_integer() {
-            let k = t.to_f64() as i64;
-            // (0 only where the argument is defined: its decoration kept,
-            // since a meet with this enclosure takes the better one; review
-            // 17. An odd quarter turn is undefined either way.)
-            return if k.rem_euclid(2) == 1 {
-                Iv::empty()
-            } else {
-                Iv::of(0.0).deco(&[a], true, true)
-            };
-        }
+        // (0 only where the argument is defined: its decoration kept,
+        // since a meet with this enclosure takes the better one; review
+        // 17. An odd quarter turn is undefined either way.)
+        return if odd {
+            Iv::empty()
+        } else {
+            Iv::of(0.0).deco(&[a], true, true)
+        };
     }
     if !a.lo.is_finite() || !a.hi.is_finite() || unreducible(a) || may_contain(a, unit, 1.0, 2.0) {
         return Iv::unknown().deco(&[a], false, false);
