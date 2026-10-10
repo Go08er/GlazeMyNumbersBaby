@@ -184,3 +184,53 @@ fn counts_of_a_small_whole_r_are_the_polynomial_in_n() {
         }
     }
 }
+
+/// nPr of whole numbers n ≥ 0 and r < 0 is the count 0, where Γ's
+/// quotient beside them is 1/((n + 1)…(n − r)): a box holding such a pair
+/// holds that 0. nPr(|x|, ⌊x⌋) over [−62, −61] was enclosed as
+/// [3·10⁻¹²⁴, 3·10⁻¹¹⁸], defined, though it is 0 at both ends.
+#[test]
+fn a_box_holding_a_zero_count_of_npr_encloses_it() {
+    let f = "nPr(abs(x),floor(x))";
+    assert_eq!(scalar(f, -62.0), 0.0);
+    assert_eq!(scalar(f, -61.0), 0.0);
+    let e = enclosure(f, -62.0, -61.0);
+    assert!(
+        e.lo() <= 0.0 && 0.0 <= e.hi(),
+        "[{:e}, {:e}]",
+        e.lo(),
+        e.hi()
+    );
+    assert!(e.dec <= Dec::Def, "{:?}", e.dec);
+    // A point r: 1/(n + 1) between the whole n, 0 at them.
+    let g = "nPr(x,-1)";
+    assert_eq!(scalar(g, 5.0), 0.0);
+    assert!((scalar(g, 5.5) - 1.0 / 6.5).abs() < 1e-15);
+    let e = enclosure(g, 5.0, 6.0);
+    assert!(
+        e.lo() <= 0.0 && e.hi() >= 1.0 / 6.0,
+        "[{:e}, {:e}]",
+        e.lo(),
+        e.hi()
+    );
+    assert!(e.dec <= Dec::Def, "{:?}", e.dec);
+    // Clear of the whole numbers nothing changes: continuous, away from 0.
+    let e = enclosure(g, 5.25, 5.75);
+    assert!(
+        e.lo() > 0.0 && e.dec >= Dec::Dac,
+        "[{:e}, {:e}] {:?}",
+        e.lo(),
+        e.hi(),
+        e.dec
+    );
+    // nCr of a whole n ≥ 0 and r < 0 is 0 too, and undefined beside it
+    // (Γ(r + 1) is at a pole): a box holding the whole n is not empty.
+    assert_eq!(scalar("exp(nCr(x,-1))", 0.0), 1.0);
+    let e = enclosure("exp(nCr(x,-1))", -5e-324, 0.0);
+    assert!(
+        !e.is_empty() && e.lo() <= 1.0 && 1.0 <= e.hi() && e.dec <= Dec::Trv,
+        "{:?}",
+        e
+    );
+    assert!(enclosure("nCr(x,-1)", 0.25, 0.75).dec <= Dec::Trv);
+}

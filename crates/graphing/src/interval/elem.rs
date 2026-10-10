@@ -1862,7 +1862,21 @@ pub fn ncr_npr(n: &DecInterval, r: &DecInterval, perm: bool) -> DecInterval {
         q = q / gr;
         defined &= dr;
     }
-    DecInterval::result(q, if defined { Dec::Com } else { Dec::Trv }, &[n, r])
+    let mut local = if defined { Dec::Com } else { Dec::Trv };
+    // Whole numbers n ≥ 0 and r < 0 have the count 0
+    // (`functions::count_exact`). Γ's quotient beside them is another
+    // thing: for nPr 1/((n + 1)…(n − r)), for nCr nothing (Γ(r + 1) is at a
+    // pole for every n). A box holding such a pair holds that 0: with a
+    // jump to it for nPr, alone where f is defined at all for nCr. (For
+    // r > n, Γ(n − r + 1)'s pole brings the quotient's box to 0 by
+    // itself.) The tester `tests/crossfuzz.rs` found nPr(|x|, ⌊x⌋) over
+    // [−62, −61] enclosed away from 0, which it is at both ends, and
+    // nCr(x, −1) over [−5·10⁻³²⁴, 0] enclosed as empty, where it is 0 at 0.
+    if r.iv.lo().ceil() <= r.iv.hi().min(-1.0) && n.iv.lo().max(0.0).ceil() <= n.iv.hi() {
+        q = q.hull(Interval::point(0.0));
+        local = local.min(if perm { Dec::Def } else { Dec::Trv });
+    }
+    DecInterval::result(q, local, &[n, r])
 }
 
 /// nCr(n, r) (nPr, `perm`) of whole numbers n ≥ 0 and r, enclosed
