@@ -97,3 +97,26 @@ fn a_root_of_a_degree_beyond_the_doubles_is_not_undefined_to_the_reference() {
         R::Unknown
     ));
 }
+
+/// The extended-range power kept a mantissa of noise where t·log₂|b| is
+/// past 2⁵³ through b's mantissa alone (a base in [1, 2), whose binary
+/// exponent is 0): 1.5^x + 1 was ∞ at −10³⁰⁰ and 1 at 10³⁰⁰.
+#[test]
+fn a_power_far_beyond_the_doubles_keeps_its_side() {
+    for (f, x, want) in [
+        ("1.5^x+1", -1e300, 1.0),
+        ("1.5^x+1", 1e300, f64::INFINITY),
+        ("1.5^x+1", -1e17, 1.0),
+        ("1.5^x+1", 1e17, f64::INFINITY),
+        ("1.75^x+1", -1e300, 1.0),
+        ("1.25^(-x)+1", -1e300, f64::INFINITY),
+        ("1/(1.5^x)+1", 1e300, 1.0),
+        ("0.75^x+1", 1e300, 1.0),
+        ("0.75^x+1", -1e300, f64::INFINITY),
+        ("2^x+1", -1e300, 1.0),
+        ("1.5^x+1", -1e20, 1.0),
+    ] {
+        assert_eq!(scalar(f, x), want, "{f} at {x:e}");
+    }
+    assert_eq!(scalar("1.5^x", -1e300), 0.0);
+}
