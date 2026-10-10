@@ -767,6 +767,55 @@ pub(crate) fn is_odd_integer(n: f64) -> bool {
     n == n.trunc() && n.abs() < 9_007_199_254_740_992.0 && n % 2.0 != 0.0
 }
 
+/// The most factors [`falling`] multiplies: the interval form's bound
+/// (`interval::elem::small_count`).
+pub(crate) const SMALL_COUNT: f64 = 60.0;
+
+/// nPr(n, k) = n(n − 1)…(n − k + 1), and nCr(n, k) that over k!, for a
+/// whole 0 ≤ k ≤ [`SMALL_COUNT`] and an n that is no whole number ≥ 0
+/// (those are counted exactly): what Γ's quotient is there, as the interval
+/// form has it (`interval::elem::ncr_npr`, the same operations in the same
+/// order, so the value lies in its enclosure). `None` for another r. A
+/// negative integer n is undefined (Γ(n + 1) at a pole: a hole in the
+/// polynomial).
+///
+/// Γ's quotient itself loses everything here: in doubles n − k + 1 rounds
+/// onto a pole beside a whole n (nCr(1 − 2⁻⁵³, 2) was undefined), Γ of a
+/// large negative n underflows (nCr(−172.5, 1) was off in its twelfth
+/// digit), and past where Γ overflows the difference of its logarithms
+/// keeps no digit (nCr(5.6·10¹⁴ + 1/16, 2) was 2.15 times too large): the
+/// tester `tests/crossfuzz.rs` found each against the interval form.
+fn falling(n: f64, r: f64, perm: bool) -> Option<f64> {
+    if !(r == r.trunc() && (0.0..=SMALL_COUNT).contains(&r)) {
+        return None;
+    }
+    if n == n.trunc() && n < 0.0 {
+        return Some(f64::NAN);
+    }
+    let k = r as u32;
+    let mut acc = 1.0;
+    for i in 0..k {
+        acc *= n - f64::from(i);
+    }
+    if perm {
+        return Some(acc);
+    }
+    let mut f = 1.0;
+    for i in 2..=k {
+        f *= f64::from(i);
+    }
+    if acc.is_finite() {
+        return Some(acc / f);
+    }
+    // The product left the doubles before k! brought it back: divided as
+    // it goes (|C(n, i)| grows with i this far out).
+    let mut acc = 1.0;
+    for i in 0..k {
+        acc = acc * (n - f64::from(i)) / f64::from(i + 1);
+    }
+    Some(acc)
+}
+
 /// Number of combinations `nCr(n, r)` (generalised through Γ).
 pub fn ncr(n: f64, r: f64) -> f64 {
     if !n.is_finite() || !r.is_finite() {
@@ -777,6 +826,9 @@ pub fn ncr(n: f64, r: f64) -> f64 {
         Some(Count::Exact(v)) => return v.to_f64(Round::Nearest),
         Some(Count::Huge) => return f64::INFINITY,
         None => {}
+    }
+    if let Some(v) = falling(n, r, false) {
+        return v;
     }
     let direct = factorial(n) / (factorial(r) * factorial(n - r));
     if direct.is_finite() || n + 1.0 <= 0.0 || r + 1.0 <= 0.0 || n - r + 1.0 <= 0.0 {
@@ -796,6 +848,9 @@ pub fn npr(n: f64, r: f64) -> f64 {
         Some(Count::Exact(v)) => return v.to_f64(Round::Nearest),
         Some(Count::Huge) => return f64::INFINITY,
         None => {}
+    }
+    if let Some(v) = falling(n, r, true) {
+        return v;
     }
     let direct = factorial(n) / factorial(n - r);
     if direct.is_finite() || n + 1.0 <= 0.0 || n - r + 1.0 <= 0.0 {

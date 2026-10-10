@@ -4,7 +4,7 @@
 use graphing::Equation;
 use graphing::analysis::truth::{R, reval_typed};
 use graphing::compile::{CompileOptions, Program};
-use graphing::functions::TrigUnit;
+use graphing::functions::{TrigUnit, ncr, npr};
 use graphing::interval::{Ctx, Dec, DecInterval, Interval, enclose};
 
 fn ast(src: &str) -> graphing::ast::Expr {
@@ -119,4 +119,68 @@ fn a_power_far_beyond_the_doubles_keeps_its_side() {
         assert_eq!(scalar(f, x), want, "{f} at {x:e}");
     }
     assert_eq!(scalar("1.5^x", -1e300), 0.0);
+}
+
+/// nCr(n, k) and nPr(n, k) of a whole 0 ≤ k ≤ 60 are polynomials in n.
+/// Γ's quotient lost them in doubles: undefined beside a whole n, wrong
+/// in the twelfth digit at −172.5, 2.15 times too large at 5.6·10¹⁴.
+#[test]
+fn counts_of_a_small_whole_r_are_the_polynomial_in_n() {
+    // n − k + 1 rounded onto Γ's pole.
+    let n = 1.0 - f64::EPSILON / 2.0;
+    assert_eq!(ncr(n, 2.0), n * (n - 1.0) / 2.0);
+    assert!(scalar("nCr(abs(x),2)+sign(0.3)", -n).is_finite());
+    // nCr(n, 1) is n.
+    for n in [-172.5, -171.5, -0.5, 0.5, 1e-300, -5.5e-17, 12345.678] {
+        assert_eq!(ncr(n, 1.0), n, "nCr({n}, 1)");
+        assert_eq!(npr(n, 1.0), n, "nPr({n}, 1)");
+        assert_eq!(ncr(n, 0.0), 1.0);
+        assert_eq!(npr(n, 0.0), 1.0);
+    }
+    // Far out: n(n − 1)/2 to the last digits, not e^(a difference of two
+    // logarithms of Γ near 10¹⁶).
+    let n = 562_341_325_190_349.06_f64;
+    let want = n * (n - 1.0) / 2.0;
+    assert_eq!(ncr(n, 2.0), want);
+    assert!((ncr(-n, 2.0) - (-n) * (-n - 1.0) / 2.0).abs() <= want * 1e-15);
+    // A negative integer n is Γ's pole still: undefined.
+    for k in [0.0, 1.0, 2.0, 60.0] {
+        assert!(ncr(-3.0, k).is_nan() && npr(-3.0, k).is_nan());
+    }
+    // Whole n ≥ 0 are counted exactly, as before.
+    assert_eq!(ncr(61.0, 62.0), 0.0);
+    assert_eq!(ncr(10.0, 3.0), 120.0);
+    assert_eq!(npr(10.0, 3.0), 720.0);
+    // A product that leaves the doubles before k! brings it back.
+    let big = ncr(1e30 + 0.5e15, 11.0);
+    assert!(big.is_infinite() || big > 1e300, "{big:e}");
+    let fits = ncr(1.5e27, 11.0);
+    assert!(
+        fits.is_finite() && (fits / (1.5e27f64.powi(11) / 39916800.0) - 1.0).abs() < 1e-12,
+        "{fits:e}"
+    );
+
+    // The value lies in the interval form's point enclosure, whatever n:
+    // the same operations in the same order.
+    for (f, perm) in [("nCr", false), ("nPr", true)] {
+        for k in [0u32, 1, 2, 3, 7, 20, 60] {
+            let src = format!("{f}(x,{k})");
+            for i in -400..=400 {
+                let x = f64::from(i) * 0.37 + 0.013;
+                let v = if perm {
+                    npr(x, f64::from(k))
+                } else {
+                    ncr(x, f64::from(k))
+                };
+                let e = enclosure(&src, x, x);
+                assert!(
+                    v.is_finite() && e.lo() <= v && v <= e.hi(),
+                    "{src} at {x}: {v:e} outside [{:e}, {:e}]",
+                    e.lo(),
+                    e.hi()
+                );
+                assert_eq!(scalar(&src, x), v);
+            }
+        }
+    }
 }

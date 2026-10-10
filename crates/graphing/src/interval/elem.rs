@@ -1892,5 +1892,6 @@ fn exact_count(n: f64, r: f64, perm: bool) -> Option<Interval> {
 /// r as a count 0 ≤ k ≤ 60 when it is that integer exactly.
 pub(crate) fn small_count(r: &DecInterval) -> Option<u32> {
     let v = r.iv.lo();
-    (r.iv.is_point() && v == v.trunc() && (0.0..=60.0).contains(&v)).then_some(v as u32)
+    (r.iv.is_point() && v == v.trunc() && (0.0..=crate::functions::SMALL_COUNT).contains(&v))
+        .then_some(v as u32)
 }
