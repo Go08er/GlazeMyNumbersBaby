@@ -558,6 +558,28 @@ fn monotone(s: &Subj, x: B) -> V {
     last
 }
 
+/// The subject (a side expression g) has a zero in the box `x`, one only:
+/// strictly of opposite signs at its ends, continuous and strictly
+/// monotone across it. (A member of the family of g's zeros is placed in
+/// `x` so, by g itself: the family's own enclosure moved on k periods is
+/// wider than the member's.)
+pub fn one_zero_in(fx: &Fx, of: &Subject, x: B) -> bool {
+    let Some(s) = Subj::new(fx, of, Tree::Orig) else {
+        return false;
+    };
+    iv::set_prec(PRECS[0]);
+    if x.0 == x.1 {
+        // A double: g is 0 there exactly.
+        return s.exactly(x.0, 0.0) == Some(true);
+    }
+    if x.0.is_nan() || x.1.is_nan() || x.0 > x.1 {
+        return false;
+    }
+    let ((va, _), (vb, _)) = (s.at(x.0), s.at(x.1));
+    let opposite = (va.gt(0.0) && vb.lt(0.0)) || (va.lt(0.0) && vb.gt(0.0));
+    opposite && monotone(&s, x).yes()
+}
+
 fn all(vs: impl IntoIterator<Item = V>) -> V {
     let mut out = V::Yes;
     for v in vs {

@@ -164,3 +164,64 @@ fn a_huge_power_of_pi_is_not_multiplied_out() {
     }
     assert!(t.elapsed() < Duration::from_secs(120), "{:?}", t.elapsed());
 }
+
+/// The follow-up's finding in the library: a row decided over one period
+/// of f covers a window [s, e], and speaks for the line because e − s is a
+/// whole period. e was s + P (P the upper end of the period's enclosure)
+/// rounded to nearest, which can be half an ulp less: for
+/// sin(2π·10¹²·x), cos(2π·10¹⁵·x) and tan(2π·10¹²·x) the window was
+/// 5·10⁻¹⁷ of a period short of the enclosure's upper end. The replay
+/// accepted any window; asked for one no shorter than the period it
+/// refused these three. The end is now rounded up.
+#[test]
+fn a_window_over_one_period_is_no_shorter_than_the_period() {
+    // b − a ≥ p exactly: the double difference, and the sign of what its
+    // rounding left out (TwoSum).
+    let at_least = |a: f64, b: f64, p: f64| {
+        let w = b - a;
+        let bb = w - b;
+        let err = (b - (w - bb)) + (-a - bb);
+        w > p || (w == p && err >= 0.0)
+    };
+    let mut seen = 0;
+    for src in [
+        "sin(x)",
+        "tan(x)",
+        "sin(6*pi*x)",
+        "sin(2*pi*10^12*x)",
+        "cos(2*pi*10^15*x)",
+        "tan(2*pi*10^12*x)",
+        "sin(x/7)+cos(x/3)",
+    ] {
+        let a = certified(src);
+        let period = a.period.value().and_then(|p| p.as_ref());
+        let v: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
+        for row in [
+            "x_intercepts",
+            "extrema",
+            "inflections",
+            "monotonicity",
+            "range",
+            "vertical",
+        ] {
+            let Some(body) = v[row].as_object().and_then(|o| o.values().next()) else {
+                continue;
+            };
+            let w = &body["cert"]["covers"]["Period"];
+            let (Some(s), Some(e)) = (w["a"].as_f64(), w["b"].as_f64()) else {
+                continue;
+            };
+            let p = period.unwrap_or_else(|| panic!("{src}: a period window with no period"));
+            assert!(
+                at_least(s, e, p.hi.0),
+                "{src}, {row}: the window [{s:e}, {e:e}] is shorter than the period's \
+                 enclosure [{:e}, {:e}]",
+                p.lo.0,
+                p.hi.0
+            );
+            seen += 1;
+        }
+    }
+    assert!(seen >= 12, "only {seen} rows over one period seen");
+}
