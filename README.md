@@ -252,10 +252,10 @@ upstream sources with g++:
 | unitconv (140 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
 | datecalc (40), copypaste (40) | Ports of `DateCalculatorTests` and `CopyPasteManagerTests`, plus paste key-sequence tests |
 | graphing (352 + 1 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
-| appcore (59) | Keyboard map, key scripts, converter paste validation, settings storage (huge/corrupt files, per-section budgets, a long calculator session that used to cost the whole file), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
+| appcore (60) | Keyboard map, key scripts, converter paste validation, settings storage (huge/corrupt files, per-section budgets, a long calculator session that used to cost the whole file), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
 | crmath (1) | The vendored CORE-MATH's two builds (baseline and x86-64-v3) give the same bits |
 | x11paste (5) | Against a private Xvfb: a read cut at its byte cap fetches no further and keeps whole characters, PRIMARY and drag selections, and the rest of a cut transfer goes by so the owner can serve again |
-| gmnb (23), gmnb-launcher (4), dgmnb (67) | GDK key translation, palette contrast for extreme accents, settings compatibility, licence text that parses as markup; the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it) and where it finds GMNB; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown, pipe deadlines, and X11 paste (formats, size caps, deadlines under event floods) against a private Xvfb |
+| gmnb (23), gmnb-launcher (4), dgmnb (68) | GDK key translation, palette contrast for extreme accents, settings compatibility, licence text that parses as markup; the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it) and where it finds GMNB; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown, pipe deadlines, and X11 paste (formats, size caps, deadlines under event floods) against a private Xvfb |
 
 The oracles live in `tools/oracle/` and need the upstream repository checked
 out at `reference/calculator` to regenerate the golden files.
@@ -387,6 +387,51 @@ CI also runs checks that need more than `cargo test --workspace`:
   gives it the focus back. A click still leaves the focus in the equation,
   and Enter on a key does nothing, both as in the original. Nothing
   depends on the pad: everything it inserts can be typed (`pi` for π).
+- **Keys on a focused control: three small differences.** As in the
+  original, whose controls read the key alone (`ButtonBase`'s `IsPress`,
+  `ListViewBase::OnKeyDown`, `Slider`'s `KeyDown` in
+  `SliderKeyProcess.h`), what else is held makes no difference to a
+  focused control's own keys: Enter with Shift, Ctrl or Alt, and Space
+  with Shift or Ctrl, activate a button, a toggle or a list item and
+  submit a text field as the bare key does, a calculator key ignores
+  Enter, only the bare Enter is "=", and a slider moves by the arrows,
+  Home and End with Shift, Ctrl or Alt held as without (Ctrl+Right is one
+  step; Ctrl+Home on a focused slider is its Home). What differs:
+  **Alt+Space** is never a control's key. Windows opens the window's menu
+  with it before the original has the key (`ListViewBase::OnKeyDown`
+  skips it for that reason); here it is left to the window manager the
+  same way, and does nothing where the window manager has no use for it.
+  **Page Up and Page Down** also move a slider, whatever is held: a graph
+  variable's by ten steps (GTK's binding for a scale, which DGMNB
+  follows), Settings' number precision by five digits. The original's
+  slider has no page keys.
+  **GTK's own popups** in GMNB (a drop-down's list of units, the colour
+  chooser) keep GTK's bindings: there only the bare Enter and Space
+  activate.
+- **Where the focus goes when its History or Memory item goes.** As in
+  the original (`OnDeleteMenuItemClicked`, `OnHistoryEmptied`,
+  `OnMemoryEmptied`), deleting an item leaves the focus on the item now
+  in its place (or the last one), and emptying the memory puts it on M+,
+  the Memory sheet closed first in a narrow window. Two differences: when
+  the History is emptied the focus goes to the History tab in both
+  layouts (the original's narrow layout puts it on the header's History
+  button), and clearing a whole list with the focus in it is treated the
+  same way (the original handles a deleted item only).
+- **What a screen reader is told** about the display and the parentheses
+  follows the original's view model (`SetPrimaryDisplay`,
+  `OnBinaryOperatorReceived`, `SetParenthesisCount`,
+  `OnNoRightParenAdded`): the display each time the value shown changes
+  and after a binary operator ("Display is 7 plus"), the open-parenthesis
+  count each time it changes, and "There are no open parentheses to
+  close." The display's own wording is simpler in two cases: while a
+  decimal point has just been typed the original says "Display is 7
+  point", and it spells out a hexadecimal, octal or binary value digit by
+  digit (`CalculateNarratorDisplayValue`,
+  `GetNarratorStringReadRawNumbers`); the twins read the value as shown.
+  The original's other announcements aren't made: "Max digits reached",
+  a memory slot changed or cleared, the history cleared, always on top,
+  the Settings page opened, currency rates updating. (A copy shows a
+  toast, "Copied to clipboard", in both twins.)
 - Dates use the Gregorian calendar; strings are en-US.
 - **A restored session continues where it left off.** The original's
   saved session shows the operand before a recalled value instead of the
@@ -433,6 +478,10 @@ CI also runs checks that need more than `cargo test --workspace`:
   and Date's "today" are local.
 - GMNB is a single-instance app; DGMNB isn't. Two DGMNB windows each keep
   their own history and settings, and the last one closed saves them.
+- **Arrow keys in DGMNB.** GMNB and the original move the keyboard focus
+  with the arrow keys within a key panel and within a History or Memory
+  list. DGMNB doesn't yet: every control is reached with Tab and
+  Shift+Tab. Arrow-key movement in DGMNB is planned for 0.3.
 - DGMNB's clipboard works on Wayland and X11; copied graphs are offered as
   `image/png`. On X11 it pastes `UTF8_STRING`, `text/plain;charset=utf-8`,
   `text/plain`, `TEXT` or Latin-1 `STRING`, whichever the owner offers first
