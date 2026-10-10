@@ -953,12 +953,18 @@ mod mp {
 
     /// The replay's process: a certificate read from its input is
     /// replayed, and what that found and counted is its answer, one line.
-    /// Nothing unless [`replayed`] started it.
+    /// Nothing unless [`replayed`] started it. It ends by itself soon
+    /// after the time it is given, so that none is left running when the
+    /// tester that would have stopped it is stopped first.
     pub fn replay_child() {
         use std::io::Read;
         if std::env::var_os(CHILD).is_none() {
             return;
         }
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(replay_seconds() + 5));
+            std::process::exit(3);
+        });
         let mut certificate = String::new();
         std::io::stdin()
             .read_to_string(&mut certificate)
