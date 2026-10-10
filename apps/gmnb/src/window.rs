@@ -160,6 +160,47 @@ fn activate(focus: &gtk::Widget) -> bool {
     focus.activate()
 }
 
+/// What the window does with a navigation key on a focused slider (a
+/// `GtkScale`: a graph variable's, Settings'), where GTK's bindings differ
+/// from the rule both apps share ([`input::control_key`]: a control's
+/// navigation keys are its own bare or with Shift, never with Ctrl or
+/// Alt). GTK binds none of them with Shift, and pages with Ctrl.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slide {
+    /// The bare key's move, made by the window: the key with Shift held.
+    Move(gtk::ScrollType),
+    /// Nothing, once the page has had it (Ctrl+Home is the graph's chord):
+    /// the key with Ctrl held, which would page.
+    Nothing,
+}
+
+/// [`Slide`] for `kp` on a focused slider, if GTK's own binding isn't
+/// already right (the bare keys: `None`; Alt, which GTK binds nothing
+/// to; any other key).
+pub fn slide(kp: &KeyPress) -> Option<Slide> {
+    use gtk::ScrollType as S;
+    let appcore::Key::Named(key) = kp.key else {
+        return None;
+    };
+    // The scroll each key is bound to bare (gtkrange.c).
+    let bare = match key {
+        Named::Left => S::StepLeft,
+        Named::Right => S::StepRight,
+        Named::Up => S::StepUp,
+        Named::Down => S::StepDown,
+        Named::PageUp => S::PageUp,
+        Named::PageDown => S::PageDown,
+        Named::Home => S::Start,
+        Named::End => S::End,
+        _ => return None,
+    };
+    match (kp.alt, kp.ctrl, kp.shift) {
+        (true, ..) | (false, false, false) => None,
+        (false, true, _) => Some(Slide::Nothing),
+        (false, false, true) => Some(Slide::Move(bare)),
+    }
+}
+
 /// Gives `popover`, one the window doesn't route the keys of, the part of
 /// that routing its controls need: Enter or Space with Shift or Ctrl held
 /// activates the focused one, as in the window ([`Step::Activate`]). For
@@ -807,11 +848,20 @@ impl Window {
             // and let a focused control have its own keys.
             let focus = gtk::prelude::GtkWindowExt::focus(&w.win);
             let focused = focus.as_ref().map(|f| w.focused(f));
+            // A slider's navigation keys with Shift or Ctrl (slide).
+            let slider = focus.as_ref().and_then(|f| f.downcast_ref::<gtk::Range>());
+            let slide = slider.and_then(|_| slide(&kp));
             let handled = match step(focused, &kp, flyout) {
-                Step::Widget => false,
+                Step::Widget => match (slider, slide) {
+                    (Some(slider), Some(Slide::Move(to))) => {
+                        slider.emit_move_slider(to);
+                        true
+                    }
+                    _ => false,
+                },
                 Step::Activate => focus.as_ref().is_some_and(activate),
                 // What the key would change may be covered: handle_key asks.
-                Step::Page => w.handle_key(&kp),
+                Step::Page => w.handle_key(&kp) || slide == Some(Slide::Nothing),
                 Step::PageOnly => {
                     w.handle_key(&kp);
                     true
@@ -1087,6 +1137,44 @@ mod tests {
         }
         for f in [Text, Control, Other] {
             assert_ne!(at(f, &enter), Step::PageOnly, "{f:?}");
+        }
+    }
+
+    /// R18-L-02's audit: a slider's navigation keys are its own bare or
+    /// with Shift and never with Ctrl, as DGMNB's sliders take them
+    /// (`input::control_key`). GTK binds none with Shift (the window makes
+    /// the bare key's move) and pages with Ctrl (the window stops it).
+    #[test]
+    fn a_sliders_keys_move_with_shift_as_bare_and_not_with_ctrl() {
+        use gtk::ScrollType as S;
+        for (key, bare) in [
+            (Named::Left, S::StepLeft),
+            (Named::Right, S::StepRight),
+            (Named::Up, S::StepUp),
+            (Named::Down, S::StepDown),
+            (Named::PageUp, S::PageUp),
+            (Named::PageDown, S::PageDown),
+            (Named::Home, S::Start),
+            (Named::End, S::End),
+        ] {
+            let k = KeyPress::named(key);
+            assert_eq!(slide(&k), None, "{k:?}: GTK's own");
+            assert_eq!(slide(&k.shift()), Some(Slide::Move(bare)), "{k:?}");
+            assert_eq!(slide(&k.ctrl()), Some(Slide::Nothing), "{k:?}");
+            assert_eq!(slide(&k.ctrl().shift()), Some(Slide::Nothing), "{k:?}");
+            assert_eq!(slide(&k.alt()), None, "{k:?}");
+            // The window gets to make the move, and the page the chord.
+            assert_eq!(step(Some(Focus::Control), &k.shift(), false), Step::Widget);
+            assert_eq!(step(Some(Focus::Control), &k.ctrl(), false), Step::Page);
+        }
+        for k in [
+            KeyPress::char('7').shift(),
+            KeyPress::char(' ').shift(),
+            KeyPress::named(Named::Enter).ctrl(),
+            KeyPress::named(Named::Tab).ctrl(),
+            KeyPress::named(Named::Escape).shift(),
+        ] {
+            assert_eq!(slide(&k), None, "{k:?}");
         }
     }
 
