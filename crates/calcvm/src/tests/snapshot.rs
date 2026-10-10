@@ -3150,24 +3150,42 @@ fn a_restore_keeps_the_expression_line_the_engine_holds() {
             assert_eq!(observed(&restored), after, "{what}");
             drop(restored);
 
-            // Saved in an error, which C clears before the selection.
-            let mut original = begin();
-            press_all(&mut original, &[One, Divide, Zero, Equals]);
-            assert!(original.is_error(), "{what}");
-            let state = original.save_state();
-            original.press(Clear);
-            select_nine(&mut original);
-            let line = shown_again(&mut original);
-            let after = observed(&original);
-            drop(original);
-            let mut restored = new_vm();
-            restored.restore_state(&state);
-            assert!(restored.is_error(), "{what}");
-            assert_eq!(restored.save_state(), state, "{what}");
-            restored.press(Clear);
-            select_nine(&mut restored);
-            assert_eq!(shown_again(&mut restored), line, "{what}");
-            assert_eq!(observed(&restored), after, "{what}");
+            // Saved in an error, which C clears before the selection: an
+            // error with its expression above it, and one whose expression
+            // the calculator shown again has cleared from the display
+            // (the engine still holds it, and C leaves it held, empty).
+            let errors: [(&[Button], bool); 2] = [
+                (&[One, Divide, Zero, Equals], false),
+                (&[Two, Add, Three, Equals, Negate, Sqrt], true),
+            ];
+            for (error, again) in errors {
+                let what = format!("{what}, {error:?}");
+                let mut original = begin();
+                press_all(&mut original, error);
+                assert!(original.is_error(), "{what}");
+                if again {
+                    assert_eq!(shown_again(&mut original), "", "{what}");
+                }
+                let state = original.save_state();
+                original.press(Clear);
+                select_nine(&mut original);
+                let line = shown_again(&mut original);
+                assert_eq!(line, "", "{what}");
+                let after = observed(&original);
+                drop(original);
+                let mut restored = new_vm();
+                restored.restore_state(&state);
+                assert!(restored.is_error(), "{what}");
+                // (An error restored without its expression doesn't hold
+                // the commands that led to it, which nothing reads.)
+                if !again {
+                    assert_eq!(restored.save_state(), state, "{what}");
+                }
+                restored.press(Clear);
+                select_nine(&mut restored);
+                assert_eq!(shown_again(&mut restored), line, "{what}");
+                assert_eq!(observed(&restored), after, "{what}");
+            }
         }
     }
 }

@@ -138,6 +138,8 @@
 //! expression is put on the line by the view model, not the engine)
 //! coming back to the calculator then clears the line, or leaves it. No
 //! key the restore types leaves the engine so, so it is set directly.
+//! With an error the engine is in, it says the engine holds a line, empty
+//! or not: C, which the error needs, empties it and still holds it.
 //! Upstream restores none of these.
 //!
 //! # The contract

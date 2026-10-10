@@ -229,8 +229,11 @@ pub struct Continuation {
     /// History item's there. A line was begun since the last `=` completed
     /// one (or since the start) and cleared again; nothing the restore
     /// replays goes through that, so it is restored with
-    /// [`CalcEngine::set_empty_expression_line`]. An error keeps it too:
-    /// C clears a line and still holds it.
+    /// [`CalcEngine::set_empty_expression_line`]. In an error it says the
+    /// engine holds a line, empty or not: the error ignores a radix
+    /// command, and C, which every key sends first, empties the line and
+    /// still holds it (a restored error's line isn't always replayed: not
+    /// when the calculator shown again has cleared it from the display).
     pub empty_line: bool,
 }
 
@@ -607,7 +610,9 @@ impl CalcEngine {
             return Continuation {
                 empty_input: self.input.is_empty(),
                 clears: !self.b_no_prev_equ,
-                empty_line: self.history_collector.has_empty_line(),
+                // Whatever the line holds: C, which the error needs,
+                // empties it and still holds it.
+                empty_line: self.history_collector.has_line(),
                 ..Continuation::default()
             };
         }
