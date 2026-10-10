@@ -945,7 +945,7 @@ pub fn gaps_clear(
             _ => None,
         };
         if let Some(t) = tree
-            && (t.exact_value() == Some(0.0) || factors_clear(f, t, iv)?)
+            && (t.exact_value() == Some(0.0) || factors_clear(f, t, iv, boxes)?)
         {
             continue;
         }
@@ -979,7 +979,26 @@ pub fn gaps_clear(
 /// literals is 1 only exactly), so the gap is three doubles wide with the
 /// zero in the middle; taken for clear, the x-intercepts were certified
 /// "none" (found by `tests/crossfuzz.rs`).
-fn factors_clear(f: &Fun<'_>, e: &crate::ast::Expr, g: Interval) -> Result<bool, Stop> {
+///
+/// f is undefined at such a double where the boxes leave it out as a point
+/// known exactly (an open end the domain decided, or a member of an
+/// excluded family at a double, which has its `Undefined` claim), or
+/// where f's own tree is empty there. The first is what a pole needs: an
+/// enclosure of cot(2x) at 0 is the whole line, not empty, and the factor
+/// sin(x + x) its second derivative's tree keeps is 0 there.
+fn factors_clear(
+    f: &Fun<'_>,
+    e: &crate::ast::Expr,
+    g: Interval,
+    boxes: &[IBox],
+) -> Result<bool, Stop> {
+    let left_out = |z: f64| {
+        boxes.iter().any(|ib| {
+            [ib.lo, ib.hi].iter().any(
+                |b| matches!(*b, Bound::At { x, closed: false } if x.is_point() && x.lo.0 == z),
+            )
+        })
+    };
     for h in f.factors(e) {
         let s = f.ser_of(&h, g, 1)?;
         if !s[0].is_empty() && s[0].ne0() {
@@ -1001,7 +1020,11 @@ fn factors_clear(f: &Fun<'_>, e: &crate::ast::Expr, g: Interval) -> Result<bool,
         let Some(z) = zero else {
             return Ok(false);
         };
-        if g.lo() < z && z < g.hi() && !f.ser_of(&f.expr, Interval::point(z), 0)?[0].is_empty() {
+        if g.lo() < z
+            && z < g.hi()
+            && !left_out(z)
+            && !f.ser_of(&f.expr, Interval::point(z), 0)?[0].is_empty()
+        {
             return Ok(false);
         }
     }

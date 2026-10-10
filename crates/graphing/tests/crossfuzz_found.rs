@@ -347,6 +347,33 @@ fn a_zero_at_a_domain_end_between_two_doubles_is_not_certified_away() {
     let eq = Equation::parse("y=sqrt(0.25+0.75+x)").expect("parses");
     let k = analyze(&eq, &CompileOptions::default());
     assert_eq!(k.x_intercept, "−1", "{k:?}");
+    // And a factor that is 0 at a double where f is undefined is no zero
+    // of f's: the pole of cot(2x) at 0, where the sin(x + x) its second
+    // derivative's tree keeps is 0, and the hole of x·cot(2x) there. (An
+    // enclosure of either at 0 isn't empty: the cover's `Undefined` claim
+    // is what says so.)
+    use graphing::certify::{Claim, DEFAULT_BUDGET, Row, certify_text};
+    for src in ["cot(2*x)", "cot(x/0.5)", "cot(x/0.001)"] {
+        let a = certify_text(src, CompileOptions::default(), DEFAULT_BUDGET, None).expect(src);
+        assert!(a.inflections.is_certified(), "{src}: {:?}", a.inflections);
+    }
+    let a = certify_text(
+        "x*cot(2*x)",
+        CompileOptions::default(),
+        DEFAULT_BUDGET,
+        None,
+    )
+    .expect("certifies");
+    let (Row::Certified { cert, .. } | Row::Partial { cert, .. }) = &a.x_intercepts else {
+        panic!("x*cot(2*x): {:?}", a.x_intercepts);
+    };
+    assert!(
+        cert.claims.iter().any(|c| matches!(
+            c,
+            Claim::GapClear { x, .. } if x.a.0 < 0.0 && 0.0 < x.b.0
+        )),
+        "x*cot(2*x): no claim for the gap about its hole at 0"
+    );
 }
 
 /// A row on f′ reads a kink box as one point, by f′'s signs on either
