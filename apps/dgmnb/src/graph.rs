@@ -565,10 +565,11 @@ impl GraphPage {
     }
 
     pub fn key(&mut self, kp: &KeyPress, cx: &mut Cx) -> bool {
+        use appcore::input::{Focus, FocusKey};
         use appcore::{Key, Named};
-        if let (Key::Named(n), false, false) = (kp.key, kp.ctrl, kp.alt) {
+        if let Key::Named(n) = kp.key {
             let focus = *cx.focus;
-            if focus == Some(canvas_id()) {
+            if focus == Some(canvas_id()) && !kp.ctrl && !kp.alt {
                 let d = if kp.shift { 1.0 } else { 5.0 };
                 let moved = match n {
                     Named::Left => self.trace_key(-d, 0.0),
@@ -581,7 +582,13 @@ impl GraphPage {
                     return true;
                 }
             }
-            if let Some(f) = focus {
+            // A variable's slider takes its keys whatever is held with
+            // them, as upstream's Slider reads the key alone
+            // (input::Focus::Slider): Ctrl+Right steps as Right does, and
+            // Ctrl+Home is its Home, before the graph's chord below.
+            if let Some(f) = focus
+                && input::focus_key(Focus::Slider, kp) == FocusKey::Navigate
+            {
                 let change = match n {
                     Named::Left | Named::Down => Some(Adjust::Steps(-1.0)),
                     Named::Right | Named::Up => Some(Adjust::Steps(1.0)),

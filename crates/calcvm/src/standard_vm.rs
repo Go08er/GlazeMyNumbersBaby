@@ -34,7 +34,7 @@ use crate::display::{CalculatorDisplay, CalculatorDisplayRef, DisplayCallback};
 use crate::history_vm::{HistoryItemViewModel, HistoryViewModel};
 use crate::localization::LocalizationSettings;
 use crate::memory_vm::MemoryItemViewModel;
-use crate::{AngleUnit, Button, CalcMode, Event, Radix, ShiftMode, WordSize};
+use crate::{AngleUnit, Announcement, Button, CalcMode, Event, Radix, ShiftMode, WordSize};
 
 const STANDARD_MODE_PRECISION: i32 = 16;
 const SCIENTIFIC_MODE_PRECISION: i32 = 32;
@@ -147,6 +147,11 @@ pub(crate) struct StandardCalculatorViewModel {
     pub(crate) current_radix_type: Radix,
     is_input_empty: bool,
     open_parenthesis_count: u32,
+    /// `_feedbackForButtonPress`: the pressed button's auditory feedback,
+    /// said with the next display announcement.
+    feedback_for_button_press: Option<&'static str>,
+    /// Each `Announcement = …` since they were last taken, in order.
+    announcements: Vec<Announcement>,
 
     // Port plumbing
     programmer_panel_dirty: bool,
@@ -202,6 +207,8 @@ impl StandardCalculatorViewModel {
             // C# default(bool); the first `OnInputChanged` sets the real value.
             is_input_empty: false,
             open_parenthesis_count: 0,
+            feedback_for_button_press: None,
+            announcements: Vec::new(),
             programmer_panel_dirty: false,
             trace: OpTrace::default(),
             events: Vec::new(),
@@ -886,6 +893,9 @@ impl StandardCalculatorViewModel {
 
         if self.display_value != localized_display_string_value {
             self.display_value = localized_display_string_value;
+            // `HandlePropertySideEffects(nameof(DisplayValue))`: the
+            // property changed, so the display is announced.
+            self.announce_display();
         }
 
         self.set_is_in_error(is_error);
@@ -917,11 +927,48 @@ impl StandardCalculatorViewModel {
             return;
         }
         self.open_parenthesis_count = parenthesis_count;
-        // (narrator announcement)
+        if self.is_programmer || self.is_scientific {
+            // `SetOpenParenthesisCountNarratorAnnouncement()`.
+            self.announce(Announcement::OpenParenthesisCount(parenthesis_count));
+        }
     }
 
-    /// `OnNoRightParenAdded()` — narrator only.
-    fn on_no_right_paren_added(&mut self) {}
+    /// `OnNoRightParenAdded()`: `SetNoParenAddedNarratorAnnouncement()`.
+    fn on_no_right_paren_added(&mut self) {
+        self.announce(Announcement::NoRightParenthesis);
+    }
+
+    /// `_feedbackForButtonPress = …` in `OnButtonPressed(object parameter)`,
+    /// the buttons' command: the button's auditory feedback, or none,
+    /// which forgets one not yet said.
+    pub(crate) fn set_feedback_for_button_press(&mut self, feedback: Option<&'static str>) {
+        self.feedback_for_button_press = feedback;
+    }
+
+    /// `Announcement = GetDisplayUpdatedNarratorAnnouncement()`: the value
+    /// shown, with the feedback of the button pressed, said once.
+    fn announce_display(&mut self) {
+        let feedback = self.feedback_for_button_press.take();
+        self.announce(Announcement::Display {
+            value: self.display_value.clone(),
+            feedback,
+        });
+    }
+
+    /// `Announcement = …`. Only the latest are kept if nobody takes them
+    /// (a restore replays a whole session): a screen reader is told the
+    /// most recent anyway.
+    fn announce(&mut self, announcement: Announcement) {
+        const KEPT: usize = 64;
+        if self.announcements.len() >= KEPT {
+            self.announcements.remove(0);
+        }
+        self.announcements.push(announcement);
+    }
+
+    pub(crate) fn take_announcements(&mut self) -> Vec<Announcement> {
+        std::mem::take(&mut self.announcements)
+    }
 
     /// `SetIsInError(bool isError)` / the `IsInError` setter.
     pub(crate) fn set_is_in_error(&mut self, is_error: bool) {
@@ -975,9 +1022,11 @@ impl StandardCalculatorViewModel {
     /// `OnMaxDigitsReached()` — narrator only.
     fn on_max_digits_reached(&mut self) {}
 
-    /// `OnBinaryOperatorReceived()` — narrator only upstream.
+    /// `OnBinaryOperatorReceived()`: the display is announced, changed or
+    /// not.
     fn on_binary_operator_received(&mut self) {
         self.trace.binary_operator = true;
+        self.announce_display();
     }
 
     /// `OnMemoryItemChanged(uint indexOfMemory)` — narrator only upstream.

@@ -2,7 +2,7 @@
 //! upstream XAML and Resources.resw), the converter keypad and the graphing
 //! keypad. Labels use a tiny markup subset: `<sup>…</sup>` and `<sub>…</sub>`.
 
-use calcvm::{Button as B, CalcMode, ShiftMode};
+use calcvm::{Button as B, ShiftMode};
 
 use crate::icons as paths;
 
@@ -716,46 +716,64 @@ pub fn open_parenthesis_count_announcement(count: u32) -> String {
     format!("Open parenthesis count {count}")
 }
 
-/// What upstream tells screen readers when the open-parenthesis count
-/// changes from `was` to `now` (`SetParenthesisCount`,
-/// StandardCalculatorViewModel.cs:1092-1103): nothing if it is the same
-/// count, and nothing in Standard (`IsProgrammer || IsScientific`);
-/// otherwise the words "(" says on getting the focus, with the new count
-/// (`SetOpenParenthesisCountNarratorAnnouncement`). Zero too: Clear and
-/// "=" close what was open.
-pub fn open_parenthesis_count_change(mode: CalcMode, was: u32, now: u32) -> Option<String> {
-    (was != now && mode != CalcMode::Standard).then(|| open_parenthesis_count_announcement(now))
+/// The words for what the calculator's view model tells screen readers
+/// ([`calcvm::Announcement`], each an `Announcement = …` of upstream's
+/// `StandardCalculatorViewModel`), en-US Resources.resw:
+/// - the display: Format_CalculatorResults, "Display is %1" (:932), and
+///   with the pressed button's auditory feedback
+///   Format_ButtonPressAuditoryFeedback, "%1 %2" (:3070): "Display is 7
+///   plus";
+/// - the open-parenthesis count, as "(" says it on getting the focus
+///   ([`open_parenthesis_count_announcement`]);
+/// - ")" with none open: NoRightParenthesisAdded_Announcement (:1312).
+pub fn announcement(a: &calcvm::Announcement) -> String {
+    use calcvm::Announcement as A;
+    match a {
+        A::Display {
+            value,
+            feedback: None,
+        } => format!("Display is {value}"),
+        A::Display {
+            value,
+            feedback: Some(feedback),
+        } => format!("Display is {value} {feedback}"),
+        A::OpenParenthesisCount(count) => open_parenthesis_count_announcement(*count),
+        A::NoRightParenthesis => "There are no open parentheses to close.".to_string(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Upstream's SetParenthesisCount: a change of the open-parenthesis
-    /// count is announced in Scientific and Programmer, in the words "("
-    /// says when focused, zero included; the same count again isn't, and
-    /// nothing is in Standard.
+    /// What the view model's announcements say, in upstream's words.
     #[test]
-    fn a_changed_open_parenthesis_count_is_announced_outside_standard() {
-        let said = |n: u32| Some(format!("Open parenthesis count {n}"));
-        for mode in [CalcMode::Scientific, CalcMode::Programmer] {
-            assert_eq!(open_parenthesis_count_change(mode, 0, 1), said(1));
-            assert_eq!(open_parenthesis_count_change(mode, 1, 2), said(2));
-            assert_eq!(open_parenthesis_count_change(mode, 2, 1), said(1));
-            assert_eq!(open_parenthesis_count_change(mode, 3, 0), said(0));
-            for n in [0, 1, 7] {
-                assert_eq!(open_parenthesis_count_change(mode, n, n), None);
-            }
-        }
-        for (was, now) in [(0, 1), (2, 0), (1, 1)] {
-            assert_eq!(
-                open_parenthesis_count_change(CalcMode::Standard, was, now),
-                None
-            );
-        }
+    fn announcements_in_upstreams_words() {
+        use calcvm::Announcement as A;
+        let display = |value: &str, feedback| A::Display {
+            value: value.into(),
+            feedback,
+        };
+        assert_eq!(announcement(&display("7", None)), "Display is 7");
         assert_eq!(
-            open_parenthesis_count_change(CalcMode::Scientific, 0, 1),
-            Some(open_parenthesis_count_announcement(1))
+            announcement(&display("7", Some("plus"))),
+            "Display is 7 plus"
+        );
+        assert_eq!(
+            announcement(&display("Cannot divide by zero", None)),
+            "Display is Cannot divide by zero"
+        );
+        assert_eq!(
+            announcement(&A::OpenParenthesisCount(2)),
+            "Open parenthesis count 2"
+        );
+        assert_eq!(
+            announcement(&A::OpenParenthesisCount(0)),
+            open_parenthesis_count_announcement(0)
+        );
+        assert_eq!(
+            announcement(&A::NoRightParenthesis),
+            "There are no open parentheses to close."
         );
     }
 

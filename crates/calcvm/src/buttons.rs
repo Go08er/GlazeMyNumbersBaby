@@ -272,6 +272,33 @@ impl Button {
         Self::ALL.iter().copied().find(|b| b.id() == id)
     }
 
+    /// The button's `AuditoryFeedback` (en-US Resources.resw:3086-3131,
+    /// 3718-3771, the `…Button.[…]CalculatorButton.AuditoryFeedback`
+    /// entries): what a screen reader is told after the display when the
+    /// button is pressed ("Display is 7 plus"). The binary operators have
+    /// one. (Upstream's logical-shift "≪" button says "Left shift" with a
+    /// capital; it is this same button here.)
+    pub fn auditory_feedback(self) -> Option<&'static str> {
+        Some(match self {
+            Button::Divide => "divided by",
+            Button::Multiply => "times",
+            Button::Subtract => "minus",
+            Button::Add => "plus",
+            Button::XPowerY => "to the power of",
+            Button::YRootX => "y root",
+            Button::Mod => "mod",
+            Button::Lsh => "left shift",
+            Button::Rsh => "right shift",
+            Button::RshL => "Right shift",
+            Button::Or => "or",
+            Button::Xor => "x or",
+            Button::And => "and",
+            Button::Nand => "Nand",
+            Button::Nor => "Nor",
+            _ => return None,
+        })
+    }
+
     /// Digit buttons 0–F in order.
     pub const DIGITS: [Button; 16] = [
         Button::Zero,

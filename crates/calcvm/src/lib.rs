@@ -185,6 +185,30 @@ pub enum Event {
     HistoryChanged,
 }
 
+/// What upstream's view model tells a screen reader (each `Announcement =
+/// …` of `StandardCalculatorViewModel`), in the order it does, for the UI
+/// to say ([`CalculatorViewModel::take_announcements`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Announcement {
+    /// `GetDisplayUpdatedNarratorAnnouncement()`: the value shown, each
+    /// time it changes (`HandlePropertySideEffects`, the `DisplayValue`
+    /// property: typed digits too) and after a binary operator, changed
+    /// or not (`OnBinaryOperatorReceived`); with the pressed button's
+    /// auditory feedback if it has one ("Display is 7 plus",
+    /// Format_ButtonPressAuditoryFeedback).
+    Display {
+        value: String,
+        feedback: Option<&'static str>,
+    },
+    /// `SetOpenParenthesisCountNarratorAnnouncement()` from
+    /// `SetParenthesisCount`: the count changed, in Scientific or
+    /// Programmer.
+    OpenParenthesisCount(u32),
+    /// `SetNoParenAddedNarratorAnnouncement()` from `OnNoRightParenAdded`:
+    /// ")" with no parenthesis open.
+    NoRightParenthesis,
+}
+
 /// The calculator view-model shared by Standard, Scientific and Programmer.
 pub struct CalculatorViewModel {
     vm: StandardCalculatorViewModel,
@@ -308,11 +332,17 @@ impl CalculatorViewModel {
                 self.vm.end_op(OpKind::Quiet);
             }
             Button::Clear | Button::ClearEntry => {
+                self.vm.set_feedback_for_button_press(None);
                 self.vm.begin_op();
                 self.vm.on_button_pressed(button.id() as i32);
                 self.vm.end_op(OpKind::Replace);
             }
-            _ => self.press_command(button.id() as i32),
+            _ => {
+                // The buttons' command, `OnButtonPressed(object parameter)`.
+                self.vm
+                    .set_feedback_for_button_press(button.auditory_feedback());
+                self.press_command(button.id() as i32)
+            }
         }
     }
 
@@ -604,6 +634,11 @@ impl CalculatorViewModel {
     // ---- events / persistence
     pub fn take_events(&mut self) -> Vec<Event> {
         self.vm.take_events()
+    }
+    /// What a screen reader is to be told since the last call, in order
+    /// ([`Announcement`]). At most the latest 64 are kept.
+    pub fn take_announcements(&mut self) -> Vec<Announcement> {
+        self.vm.take_announcements()
     }
     /// The upstream calculator snapshot (`ApplicationSnapshot` JSON) plus a
     /// gmnb extension carrying both histories, memory, radix, word size,
