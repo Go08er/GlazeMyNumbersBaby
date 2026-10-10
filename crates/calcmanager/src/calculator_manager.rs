@@ -17,7 +17,7 @@ use std::rc::Rc;
 use ratpack::{CalcResult, NumberFormat, Rational};
 
 use crate::calc_display::{CalcDisplay, CalcDisplayRef, ExpressionToken, HistoryDisplayRef};
-use crate::calc_engine::{CalcEngine, Continuation, EngineState};
+use crate::calc_engine::{CalcEngine, Continuation, EngineState, PendingNumber};
 use crate::calculator_history::{CalculatorHistory, HistoryItem};
 use crate::ccommand::*;
 use crate::command::{CalculatorMode, CalculatorPrecision, Command};
@@ -142,6 +142,37 @@ enum HistorySlot {
     Scientific,
 }
 
+/// A memory slot (`m_memorizedNumbers` holds a `Rational` each).
+///
+/// Extension: a restored session's slot is kept as it was written until it
+/// is first read (see [`CalculatorManager::memorize_unread`]).
+#[derive(Clone, Debug)]
+enum MemorySlot {
+    Value(Rational),
+    Unread(PendingNumber),
+}
+
+impl MemorySlot {
+    /// The slot's number, worked out now, and kept, if it wasn't yet.
+    fn read(&mut self) -> &Rational {
+        if let MemorySlot::Unread(number) = self {
+            *self = MemorySlot::Value(number.value());
+        }
+        match self {
+            MemorySlot::Value(value) => value,
+            MemorySlot::Unread(_) => unreachable!("the slot was just read"),
+        }
+    }
+
+    /// The slot's number, without keeping it if it had to be worked out.
+    fn value(&self) -> Rational {
+        match self {
+            MemorySlot::Value(value) => value.clone(),
+            MemorySlot::Unread(number) => number.value(),
+        }
+    }
+}
+
 /// `CalculationManager::CalculatorManager`.
 ///
 /// Owns the standard / scientific / programmer engines, the memory list and
@@ -160,7 +191,7 @@ pub struct CalculatorManager {
     programmer_calculator_engine: Option<CalcEngine>,
     resource_provider: Rc<dyn ResourceProvider>,
 
-    memorized_numbers: Vec<Rational>,
+    memorized_numbers: Vec<MemorySlot>,
     persisted_primary_value: Rational,
     is_exponential_format: bool,
     current_degree_mode: Command,
@@ -452,7 +483,8 @@ impl CalculatorManager {
         self.current_engine().process_command(IDC_STORE)?;
 
         if let Some(memory_object) = self.current_engine().persisted_mem_object() {
-            self.memorized_numbers.insert(0, memory_object);
+            self.memorized_numbers
+                .insert(0, MemorySlot::Value(memory_object));
         }
 
         if self.memorized_numbers.len() > Self::MAXIMUM_MEMORY_SIZE {
@@ -461,15 +493,60 @@ impl CalculatorManager {
         self.set_memorized_numbers_string()
     }
 
-    /// Extension: stores a new memory slot, as [`memorize_number`]
-    /// (MS) does, holding a decimal number as the display writes it in
-    /// e-notation (see [`CalcEngine::written_value`]), for a restored
-    /// session: M+ and M− carry a slot past the four exponent digits a
-    /// number is typed with, so such a slot can't be typed back. Nothing
-    /// else changes. Returns whether it was stored (not in Programmer mode,
-    /// in an error, or for a number out of `written_value`'s bounds).
+    /// Extension: stores the number being typed in a new memory slot, as
+    /// [`memorize_number`] (MS) does, without working it out, for a
+    /// restored session, which types each saved slot back: the slot holds
+    /// the number as typed ([`CalcEngine::typed_number`]) until it is
+    /// first read. Working out a hundred numbers near 10^±9999 and writing
+    /// each out again for the list takes 350 million units of
+    /// `ratpack::work_done`, a third of a second; a restore that stopped
+    /// at a budget instead dropped the slots past it.
+    ///
+    /// A slot is read, and from then on holds its value as any other, by
+    /// what reads that slot (MR, M+, M−, a click on it) or shows the whole
+    /// list again (MS, M+ and M−, a mode, radix or word size switch): what
+    /// the list is then shown as is each slot written out afresh. The
+    /// value doesn't depend on when that is (see [`PendingNumber`]), so the
+    /// session goes on as if every slot had been worked out when stored.
+    /// The first key that shows the list again pays for working the unread
+    /// slots out (a hundred near 10^±9999: 120 million units), besides the
+    /// writing out of every slot that every such key pays (230 million).
+    ///
+    /// The entry isn't ended and nothing is displayed, the list neither:
+    /// the caller clears the entry and shows the slot as the text it typed.
+    /// Returns whether a slot was stored (not in an error, as MS). When no
+    /// number is being typed, the value shown is stored, as MS does.
     ///
     /// [`memorize_number`]: Self::memorize_number
+    pub fn memorize_unread(&mut self) -> CalcResult<bool> {
+        let engine = self.current_engine();
+        if engine.f_in_error_state() {
+            return Ok(false);
+        }
+        let slot = match engine.typed_number() {
+            Some(number) => MemorySlot::Unread(number),
+            None => {
+                engine.process_command(IDC_STORE)?;
+                match engine.persisted_mem_object() {
+                    Some(value) => MemorySlot::Value(value),
+                    None => return Ok(false),
+                }
+            }
+        };
+        self.insert_unshown(slot);
+        Ok(true)
+    }
+
+    /// Extension: stores a new memory slot, as [`memorize_unread`] does,
+    /// holding a decimal number as the display writes it in e-notation (see
+    /// [`CalcEngine::written_number`]), for a restored session: M+ and M−
+    /// carry a slot past the four exponent digits a number is typed with,
+    /// so such a slot can't be typed back. Like that slot, it is worked out
+    /// when it is first read, and not displayed here. Nothing else changes.
+    /// Returns whether it was stored (not in Programmer mode, in an error,
+    /// or for a number out of `written_number`'s bounds).
+    ///
+    /// [`memorize_unread`]: Self::memorize_unread
     pub fn memorize_written(
         &mut self,
         negative: bool,
@@ -481,16 +558,36 @@ impl CalculatorManager {
         if engine.f_in_error_state() {
             return Ok(false);
         }
-        let Some(value) = engine.written_value(negative, mantissa, exponent_negative, exponent)?
+        let Some(number) = engine.written_number(negative, mantissa, exponent_negative, exponent)
         else {
             return Ok(false);
         };
-        self.memorized_numbers.insert(0, value);
-        if self.memorized_numbers.len() > Self::MAXIMUM_MEMORY_SIZE {
-            self.memorized_numbers.truncate(Self::MAXIMUM_MEMORY_SIZE);
-        }
-        self.set_memorized_numbers_string()?;
+        self.insert_unshown(MemorySlot::Unread(number));
         Ok(true)
+    }
+
+    /// A new newest slot, the list kept to its size, and not shown.
+    fn insert_unshown(&mut self, slot: MemorySlot) {
+        self.memorized_numbers.insert(0, slot);
+        self.memorized_numbers.truncate(Self::MAXIMUM_MEMORY_SIZE);
+    }
+
+    /// Extension, for tests: how many slots haven't been read since
+    /// [`memorize_unread`](Self::memorize_unread) stored them.
+    #[doc(hidden)]
+    pub fn unread_memory(&self) -> usize {
+        self.memorized_numbers
+            .iter()
+            .filter(|slot| matches!(slot, MemorySlot::Unread(_)))
+            .count()
+    }
+
+    /// Extension, for tests: reads every slot now, showing nothing.
+    #[doc(hidden)]
+    pub fn read_memory(&mut self) {
+        for slot in &mut self.memorized_numbers {
+            slot.read();
+        }
     }
 
     /// Recall the memorized number.
@@ -582,11 +679,13 @@ impl CalculatorManager {
             return Ok(());
         }
 
+        // Extension: a slot restored unread is worked out here, and kept.
         let memory_object = self
             .memorized_numbers
-            .get(index_of_memory as usize)
-            .cloned()
-            .ok_or(E_BOUNDS)?;
+            .get_mut(index_of_memory as usize)
+            .ok_or(E_BOUNDS)?
+            .read()
+            .clone();
         self.current_engine()
             .set_persisted_mem_object(&memory_object);
         Ok(())
@@ -604,7 +703,7 @@ impl CalculatorManager {
                 .memorized_numbers
                 .get_mut(index_of_memory as usize)
                 .ok_or(E_BOUNDS)?;
-            *slot = memory_object;
+            *slot = MemorySlot::Value(memory_object);
         }
         Ok(())
     }
@@ -684,11 +783,19 @@ impl CalculatorManager {
             deferred.memory = true;
             return Ok(());
         }
+        // Extension: slots restored unread are worked out here, and kept:
+        // the list shows each as its value is written out now.
+        for slot in &mut self.memorized_numbers {
+            slot.read();
+        }
         let mut result_vector: Vec<String> = Vec::new();
         let engine = self
             .current_engine_ref()
             .expect("CalculatorManager: no current calculator engine (set a mode first)");
         for memory_item in &self.memorized_numbers {
+            let MemorySlot::Value(memory_item) = memory_item else {
+                continue;
+            };
             let radix = engine.get_current_radix();
             let string_value = engine.get_string_for_display(memory_item, radix)?;
 
@@ -814,8 +921,14 @@ impl CalculatorManager {
     /// and the memory slots (as `values`, newest first).
     #[doc(hidden)]
     pub fn state(&self) -> EngineState {
+        // A slot not read yet is worked out for this, and stays unread.
+        let memory: Vec<Rational> = self
+            .memorized_numbers
+            .iter()
+            .map(MemorySlot::value)
+            .collect();
         self.current_engine_ref()
-            .map(|e| e.state(&self.memorized_numbers))
+            .map(|e| e.state(&memory))
             .unwrap_or_default()
     }
 

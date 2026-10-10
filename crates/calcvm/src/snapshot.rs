@@ -44,8 +44,23 @@
 //! (`calcmanager::MAX_WRITTEN_EXPONENT`, past any slot keys can make). Of the
 //! newest 100 slots, one that isn't a number as the display shows it (too
 //! long, other characters, an exponent past that) is left out when the
-//! snapshot is read. A value past ±9999 in the display is an overflow
-//! error, and is restored as one.
+//! snapshot is read, and one the mode it was saved in can't be typed (more
+//! digits than it takes, a number past the word size) when it is restored;
+//! every other slot comes back, whatever it holds and however many there
+//! are. A value past ±9999 in the display is an overflow error, and is
+//! restored as one.
+//!
+//! A slot's number is worked out not when it is restored but when it is
+//! first read: by MR, M+, M− or a click on the slot, or when the whole
+//! list is shown again (MS, M+ and M−, a mode, radix or word size switch).
+//! Until then the slot is shown, and saved again, as the text it was saved
+//! as. Its number is what working it out during the restore would have
+//! given (the mode, radix and word size of the restore are kept with it),
+//! so a restored session goes on as if every slot had been worked out
+//! then. Working out a number near 10^±9999 takes a millisecond, and
+//! writing it out again two more, so a restore that did it for a hundred
+//! slots would take a third of a second; it used to stop at a budget and
+//! drop the newer slots instead.
 //!
 //! `"hm"` (`"s"` or `"c"`, absent before 0.2) says which mode's history
 //! `"s"."m"."h"` is (in Programmer mode, that of the mode before it), and
@@ -1065,21 +1080,27 @@ impl WrittenNumber {
 /// key limit replayed for half a minute. A replay that goes past its budget
 /// stops, and only what it was restoring is dropped: the pending expression
 /// (the displayed value is kept), a history item's replay (its result is
-/// kept), a memory slot (and, once the slots together are past theirs, the
-/// newer ones).
+/// kept).
 ///
 /// In a release build heavy arithmetic runs at 1–4.5 ns a unit, so the
-/// costliest crafted states (n! of fractions, after 100 memory slots near
-/// 10^-9999) restore in under a second. The costliest of 1,506
-/// app-produced states replays 166 million units (an n! of a fraction among
-/// others, 0.35 s); 40 pastes of a 100-term sum, 59 million.
+/// costliest crafted states (n! of fractions) restore in under a second.
+/// The costliest of 1,506 app-produced states replays 166 million units (an
+/// n! of a fraction among others, 0.35 s); 40 pastes of a 100-term sum, 59
+/// million.
+///
+/// Memory has no budget, and no slot is dropped for one: the restore works
+/// no slot's number out (see `restore_memory`). A slot costs what its
+/// number does when it is first read, which what a slot may hold bounds
+/// (the digits its mode takes and an exponent of at most
+/// `MAX_WRITTEN_EXPONENT`: under [`VALUE_WORK`], as the tests measure),
+/// and a hundred of them at most a hundred times that, once, when the list
+/// is first shown again: about what showing it costs every time anyway
+/// (each MS, M+ or M− writes every slot out).
 pub(crate) const REPLAY_WORK: u64 = 180_000_000;
-/// All memory slots together, and one slot (one displayed number: a
-/// legible one costs well under a million units, one near 10^±9999 about
-/// three million). The displayed value, and the operation "=" repeats (one
-/// operand and one operator), get one slot's budget each; past it, the
-/// value is cleared, or "=" repeats nothing.
-pub(crate) const MEMORY_WORK: u64 = 30_000_000;
+/// One displayed number: a legible one costs well under a million units to
+/// enter, one near 10^±9999 about three million. The displayed value, and
+/// the operation "=" repeats (one operand and one operator), get this
+/// budget each; past it, the value is cleared, or "=" repeats nothing.
 pub(crate) const VALUE_WORK: u64 = 8_000_000;
 
 impl SnapshotValidator {
@@ -2208,25 +2229,6 @@ impl StandardCalculatorViewModel {
         false
     }
 
-    /// Extension: stores `written` in a new memory slot
-    /// (`CalculatorManager::memorize_written`) within [`VALUE_WORK`] and any
-    /// budget around it: like a key, it is stored only while the budget
-    /// lasts, and otherwise left out.
-    fn memorize_written_within_budget(&mut self, written: &WrittenNumber) {
-        self.within_work(VALUE_WORK, |vm| {
-            if vm.work_left() {
-                let _ = vm.with_manager(|m| {
-                    m.memorize_written(
-                        written.negative,
-                        &written.mantissa,
-                        written.exponent_negative,
-                        written.exponent,
-                    )
-                });
-            }
-        });
-    }
-
     /// Types a displayed number (as `OnPaste` would) into the engine.
     /// Extension: like a paste, the text must pass
     /// `CopyPasteManager.ValidatePasteExpression` first, which bounds its
@@ -2379,40 +2381,61 @@ impl StandardCalculatorViewModel {
         }
     }
 
-    /// Extension: re-enters the memory strings (oldest first) and stores
-    /// each with MS, then clears the entry. Only the newest
-    /// [`MAX_RESTORED_MEMORY`] are kept, as the manager would. A slot M+ or
-    /// M− took past the exponents the keys type (a [`WrittenNumber`],
-    /// outside Programmer mode) is read back and stored directly.
+    /// Extension: types the memory strings back (oldest first), storing
+    /// each as MS would but for working its number out
+    /// (`CalculatorManager::memorize_unread`), then clears the entry. Only
+    /// the newest [`MAX_RESTORED_MEMORY`] are kept, as the manager would. A
+    /// slot M+ or M− took past the exponents the keys type (a
+    /// [`WrittenNumber`], outside Programmer mode) is stored the same way
+    /// without being typed (`CalculatorManager::memorize_written`).
+    ///
+    /// A slot's number is worked out when the slot is first read (MR, M+,
+    /// M−, a click on it) or the whole list is shown again (MS, M+ and M−,
+    /// a mode, radix or word size switch), and is then what working it out
+    /// here would have given. So this does no arithmetic, however many
+    /// slots there are and whatever they hold, and needs no budget that
+    /// could leave one out: a hundred slots near 10^±9999, which MS makes
+    /// of any such number, cost 350 million units to work out and write
+    /// out again, and all but nine were dropped. What the restore can't
+    /// type back (text the paste validator refuses: more digits than the
+    /// mode takes, a number past the word size) is left out, alone, here.
     fn restore_memory(&mut self, mode: CalcMode, memory: &[String]) {
         if memory.is_empty() {
             return;
         }
         let memory = &memory[..memory.len().min(MAX_RESTORED_MEMORY)];
+        // The slots stored, oldest first.
+        let mut stored: Vec<&String> = Vec::with_capacity(memory.len());
         self.with_deferred_display(|vm| {
-            // Extension: each slot within VALUE_WORK, all within
-            // MEMORY_WORK; a slot past either is dropped.
-            vm.within_work(MEMORY_WORK, |vm| {
-                for value in memory.iter().rev() {
-                    let written = (mode != CalcMode::Programmer)
-                        .then(|| WrittenNumber::parse(value))
-                        .flatten();
-                    if let Some(written) = written {
-                        vm.memorize_written_within_budget(&written);
-                    } else if vm.enter_value_within_budget(mode, value) {
-                        let _ = vm.with_manager(|m| m.memorize_number());
-                    }
+            for value in memory.iter().rev() {
+                let written = (mode != CalcMode::Programmer)
+                    .then(|| WrittenNumber::parse(value))
+                    .flatten();
+                let is_stored = match written {
+                    Some(written) => vm.with_manager(|m| {
+                        m.memorize_written(
+                            written.negative,
+                            &written.mantissa,
+                            written.exponent_negative,
+                            written.exponent,
+                        )
+                    }),
+                    None if vm.enter_value(mode, value) => vm.with_manager(|m| m.memorize_unread()),
+                    None => Ok(false),
+                };
+                if is_stored.unwrap_or(false) {
+                    stored.push(value);
                 }
-            });
+            }
             vm.clear_unbudgeted();
         });
-        // A slot keeps the form it was shown in when it was stored (F-E or
-        // not) until the whole list is shown again (M+, M−, a mode or
-        // radix switch); the restored list was shown in today's form.
-        if self.memorized_numbers.len() == memory.len() {
-            for (slot, text) in self.memorized_numbers.iter_mut().zip(memory) {
-                slot.value.clone_from(text);
-            }
+        // Each slot is shown as it was saved: a slot keeps the form it was
+        // shown in when it was stored (F-E or not) until the whole list is
+        // shown again, which writes each out in the form of the day.
+        let shown: Vec<String> = stored.into_iter().rev().cloned().collect();
+        self.set_memorized_numbers(&shown);
+        for (slot, text) in self.memorized_numbers.iter_mut().zip(&shown) {
+            slot.value.clone_from(text);
         }
     }
 }

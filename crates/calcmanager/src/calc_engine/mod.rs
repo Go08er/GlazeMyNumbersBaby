@@ -76,7 +76,7 @@ impl NumWidth {
 pub const NUM_WIDTH_LENGTH: usize = 4;
 
 /// Extension: the largest exponent of ten a memory slot written out in
-/// e-notation is read back with ([`CalcEngine::written_value`]). The display
+/// e-notation is read back with ([`CalcEngine::written_number`]). The display
 /// overflows past four exponent digits, and a number is typed with at most
 /// four, but M+ and M− carry a slot a little past them, by adding values
 /// below 10^10000 (9.e+9999, MS, M+, M+ is 2.7e+10000) or by cancelling
@@ -87,6 +87,92 @@ pub const NUM_WIDTH_LENGTH: usize = 4;
 /// 10^-9999. Reading 10^19999 back costs about five million units of
 /// `ratpack::work_done` (the cost grows with the square of the exponent).
 pub const MAX_WRITTEN_EXPONENT: u32 = 19_999;
+
+/// Extension: a number as it is written, its value not worked out yet: what
+/// MS would store of the number being typed ([`CalcEngine::typed_number`]),
+/// or a number read back from e-notation ([`CalcEngine::written_number`]).
+/// A restored session's memory slots are kept so until they are first read
+/// (see `CalculatorManager::memorize_unread`): near 10^±9999 a number
+/// costs over a million units of `ratpack::work_done` to work out, and
+/// about twice that again to write out.
+///
+/// It holds everything its value depends on (its digits, and the radix,
+/// precision and word size of the engine when it was written), so the
+/// value is the same whenever it is worked out, and whatever mode, radix
+/// or word size the engines are in by then.
+///
+/// Both ways of making one bound it as the engine bounds a number typed:
+/// the digits the mode takes (at most [`MAX_STRLEN`](crate::MAX_STRLEN))
+/// and an exponent of at most [`MAX_WRITTEN_EXPONENT`]. That bounds what
+/// working one out costs (under eight million units, which
+/// `tests/unread_memory.rs` measures), and it can't fail: ratpack refuses
+/// only a number too long for its arithmetic.
+#[derive(Clone, Debug)]
+pub struct PendingNumber {
+    digits: Digits,
+    radix: u32,
+    precision: i32,
+    /// Programmer mode: the word size's chop number, which MS truncates
+    /// what it stores with (`TruncateNumForIntMath`).
+    chop: Option<Rational>,
+}
+
+/// What a [`PendingNumber`] is read from.
+#[derive(Clone, Debug)]
+enum Digits {
+    /// The number being typed.
+    Input(CalcInput),
+    /// A decimal number in e-notation: its mantissa as typed (in the
+    /// engine's decimal separator) and its power of ten.
+    Written {
+        negative: bool,
+        mantissa: String,
+        exponent_negative: bool,
+        exponent: u32,
+    },
+}
+
+impl PendingNumber {
+    /// The number's value, as the engine works out a typed number when its
+    /// entry ends and MS stores it: `CalcInput::ToRational`, then in
+    /// Programmer mode the truncation to the word size.
+    ///
+    /// No number made within the bounds above fails (see the type); should
+    /// ratpack refuse one anyway, it reads as 0, as the engine's own memory
+    /// does when it holds nothing.
+    pub fn value(&self) -> Rational {
+        let value = self.work_out();
+        debug_assert!(value.is_ok(), "{self:?}: {value:?}");
+        value.unwrap_or_default()
+    }
+
+    fn work_out(&self) -> CalcResult<Rational> {
+        // As when it was written: with the constants in its engine's radix.
+        ratpack::with_ratio_of(self.radix, || {
+            let value = match &self.digits {
+                Digits::Input(input) => input.to_rational(self.radix, self.precision)?,
+                Digits::Written {
+                    negative,
+                    mantissa,
+                    exponent_negative,
+                    exponent,
+                } => ratpack::string_to_rat(
+                    *negative,
+                    mantissa,
+                    *exponent_negative,
+                    &exponent.to_string(),
+                    self.radix,
+                    self.precision,
+                )?
+                .unwrap_or_default(),
+            };
+            match &self.chop {
+                Some(chop) => scidisp::truncate_for_int_math(&value, chop),
+                None => Ok(value),
+            }
+        })
+    }
+}
 
 thread_local! {
     /// `CCalcEngine::s_engineStrings` — the string table shared across all instances.
@@ -659,24 +745,37 @@ impl CalcEngine {
         self.carry_bit = u64::from(carry);
     }
 
-    /// Extension: the value of a decimal number as the display writes it in
-    /// e-notation, read with an exponent of up to
-    /// [`MAX_WRITTEN_EXPONENT`] rather than the four digits the keys type
-    /// (for a memory slot M+ or M− took past them, in a restored session):
-    /// `mantissa` its digits and point (the engine's decimal separator) as
-    /// typed, at most as many digits as the input takes, and `exponent` the
-    /// power of ten. It is worked out as the input works out a typed number
+    /// Extension: the number being typed as MS would store it now, not
+    /// worked out (MS ends the entry, works the number out and stores it as
+    /// the word size holds it): for a restored session's memory. `None`
+    /// unless a number is being typed; MS then stores the value shown.
+    pub fn typed_number(&self) -> Option<PendingNumber> {
+        (self.b_record && !self.b_error).then(|| PendingNumber {
+            digits: Digits::Input(self.input.clone()),
+            radix: self.radix,
+            precision: self.precision,
+            chop: self.f_integer_mode.then(|| self.get_chop_number()),
+        })
+    }
+
+    /// Extension: a decimal number as the display writes it in e-notation,
+    /// read with an exponent of up to [`MAX_WRITTEN_EXPONENT`] rather than
+    /// the four digits the keys type (for a memory slot M+ or M− took past
+    /// them, in a restored session), not worked out: `mantissa` its digits
+    /// and point (the engine's decimal separator) as typed, at most as many
+    /// digits as the input takes, and `exponent` the power of ten. Its
+    /// value is worked out as the input works out a typed number
     /// (`CalcInput::ToRational`). `None` in Programmer mode, or for a
-    /// mantissa or exponent out of those bounds, which are checked first.
-    pub fn written_value(
+    /// mantissa or exponent out of those bounds.
+    pub fn written_number(
         &self,
         negative: bool,
         mantissa: &str,
         exponent_negative: bool,
         exponent: u32,
-    ) -> CalcResult<Option<Rational>> {
+    ) -> Option<PendingNumber> {
         if self.f_integer_mode || self.radix != 10 || exponent > MAX_WRITTEN_EXPONENT {
-            return Ok(None);
+            return None;
         }
         // As the input counts them: the point and a leading 0 don't count.
         let max_digits = usize::try_from(self.c_int_digits_sav).unwrap_or(0);
@@ -687,21 +786,24 @@ impl CalcEngine {
             } else if c.is_ascii_digit() {
                 digits += 1;
             } else {
-                return Ok(None);
+                return None;
             }
         }
         let leading_zero = usize::from(mantissa.starts_with('0'));
         if digits == 0 || points > 1 || digits > max_digits + leading_zero {
-            return Ok(None);
+            return None;
         }
-        ratpack::string_to_rat(
-            negative,
-            mantissa,
-            exponent_negative,
-            &exponent.to_string(),
-            self.radix,
-            self.precision,
-        )
+        Some(PendingNumber {
+            digits: Digits::Written {
+                negative,
+                mantissa: mantissa.to_string(),
+                exponent_negative,
+                exponent,
+            },
+            radix: self.radix,
+            precision: self.precision,
+            chop: None,
+        })
     }
 
     /// Extension: sets the left operand (see [`Continuation::left`]) to
