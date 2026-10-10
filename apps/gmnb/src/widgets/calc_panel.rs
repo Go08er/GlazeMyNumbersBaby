@@ -343,7 +343,7 @@ impl CalcPanel {
                 let del = gtk::Button::with_label("Delete");
                 del.add_css_class("flat");
                 let pop = gtk::Popover::builder().child(&del).has_arrow(false).build();
-                crate::window::own_activation(&pop);
+                crate::window::own_keys(&pop);
                 pop.set_parent(&anchor);
                 pop.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
                 // Weak popover and row: they hold this button.

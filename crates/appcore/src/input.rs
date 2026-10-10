@@ -333,12 +333,13 @@ pub fn window_shortcut(kp: &KeyPress) -> Option<WindowAction> {
 /// menu button, a radio button, a list row, a calendar day, a link).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlKey {
-    /// Enter or Space: activates it, as a click does (a History item
-    /// recalls its result). With Shift or Ctrl held too.
+    /// Enter, whatever is held with it, or Space, unless Alt is: activates
+    /// it, as a click does (a History item recalls its result).
     Activate,
     /// The arrows, Home/End, Page Up/Down: move within it (between list
     /// rows, radio buttons, a calendar's days and months). With Shift
-    /// held too (a calendar's Shift+Page Up is a year), not with Ctrl.
+    /// held too (a calendar's Shift+Page Up is a year), not with Ctrl or
+    /// Alt. (A slider takes them whatever is held: [`Focus::Slider`].)
     Navigate,
 }
 
@@ -347,34 +348,40 @@ pub enum ControlKey {
 /// `FlipButtons`) ignore Enter, which stays "=" there; every other
 /// control handles its own, and the shortcut manager skips a key handled.
 ///
-/// Shift and Ctrl make no difference to Enter and Space (R18-L-02):
+/// What is held makes no difference to Enter and Space (R18-L-02):
 /// upstream's controls read the key alone. A button or a toggle is
 /// pressed by Space, Enter or a gamepad's A whatever is held
 /// (`KeyPress::ButtonBase::IsPress`, ButtonBaseKeyProcess.h, called from
 /// `ButtonBase::OnKeyDown` with the key only), a list item is clicked by
 /// Enter, by Space and, where the list selects nothing as History and
-/// Memory do, by Ctrl+Space (`ListViewBase::OnKeyDown`), and the
-/// app's own handlers compare `e.Key` (`MathRichEditBox.OnKeyUp`,
-/// `UnitConverter.OnValueKeyDown`). With Alt a key is a chord, never the
-/// control's: Alt+Space is the window's menu, which that list ignores.
+/// Memory do, by Ctrl+Space (`ListViewBase::OnKeyDown`), and the app's
+/// own handlers compare `e.Key` (`MathRichEditBox.OnKeyUp`,
+/// `UnitConverter.OnValueKeyDown`). Alt too, then, for Enter. Not for
+/// Space: Alt+Space is the window's menu, which Windows opens before a
+/// control has the key and which that list skips by name; here it is the
+/// window manager's the same way, and no control's.
 pub fn control_key(kp: &KeyPress) -> Option<ControlKey> {
-    if kp.alt {
-        return None;
-    }
     match kp.key {
-        Key::Named(Named::Enter) | Key::Char(' ') => Some(ControlKey::Activate),
-        Key::Named(
-            Named::Up
+        Key::Named(Named::Enter) => Some(ControlKey::Activate),
+        Key::Char(' ') if !kp.alt => Some(ControlKey::Activate),
+        Key::Named(n) if is_navigation(n) && !kp.ctrl && !kp.alt => Some(ControlKey::Navigate),
+        _ => None,
+    }
+}
+
+/// The arrows, Home/End and Page Up/Down.
+fn is_navigation(key: Named) -> bool {
+    matches!(
+        key,
+        Named::Up
             | Named::Down
             | Named::Left
             | Named::Right
             | Named::Home
             | Named::End
             | Named::PageUp
-            | Named::PageDown,
-        ) if !kp.ctrl => Some(ControlKey::Navigate),
-        _ => None,
-    }
+            | Named::PageDown
+    )
 }
 
 /// What has the keyboard's focus, as far as the keys it takes before the
@@ -391,6 +398,12 @@ pub enum Focus {
     /// page's ("=" on the calculator, nothing on the converter or the
     /// graph's keypad).
     CalculatorKey,
+    /// A slider (a graph variable's, Settings'): the arrows, Home/End and
+    /// Page Up/Down move it whatever is held with them, as upstream's
+    /// `Slider` reads the key alone (`KeyPress::Slider::KeyDown`,
+    /// SliderKeyProcess.h: Ctrl+Right steps as Right does, and Ctrl+Home
+    /// is its Home, not the graph's chord). Enter and Space aren't its.
+    Slider,
     /// Any other control: a button, a toggle or menu button, a radio
     /// button, a list row, a switch, a calendar day, a link. Its
     /// activation and navigation keys are its own: Enter on a History
@@ -408,7 +421,7 @@ pub enum FocusKey {
     /// Enter in a text field, which submits it).
     Activate,
     /// The focused control's: it moves within it
-    /// ([`ControlKey::Navigate`]).
+    /// ([`ControlKey::Navigate`]), or moves it (a slider).
     Navigate,
     /// The focused text field's: typed, or an editing key.
     Edit,
@@ -430,10 +443,12 @@ pub fn focus_key(focus: Focus, kp: &KeyPress) -> FocusKey {
     let own = control_key(kp);
     match focus {
         Focus::Text if is_global_chord(kp) => FocusKey::Page,
-        Focus::Text if own == Some(ControlKey::Activate) && kp.is(Named::Enter) => {
-            FocusKey::Activate
-        }
+        Focus::Text if kp.is(Named::Enter) => FocusKey::Activate,
         Focus::Text => FocusKey::Edit,
+        Focus::Slider => match kp.key {
+            Key::Named(n) if is_navigation(n) => FocusKey::Navigate,
+            _ => FocusKey::Page,
+        },
         Focus::CalculatorKey if kp.is(Named::Enter) => FocusKey::PageOnly,
         Focus::CalculatorKey | Focus::Control => match own {
             Some(ControlKey::Activate) => FocusKey::Activate,
@@ -666,19 +681,21 @@ mod tests {
     /// Enter and Space activate a focused control, the arrows, Home/End
     /// and Page Up/Down move within it. Of those, only Enter is a
     /// calculator key too ("="), so it is the one a focused control takes
-    /// from the calculator (R16-M-03). Shift and Ctrl make no difference
-    /// to Enter and Space, as to upstream's controls, which read the key
-    /// alone (R18-L-02); with Alt neither is the control's. The navigation
-    /// keys are a control's with Shift too, not with Ctrl or Alt.
+    /// from the calculator (R16-M-03). What is held makes no difference
+    /// to Enter, as to upstream's controls, which read the key alone
+    /// (R18-L-02), nor to Space but for Alt: Alt+Space is the window's
+    /// menu. The navigation keys are a control's with Shift too, not with
+    /// Ctrl or Alt.
     #[test]
     fn control_keys() {
         use ControlKey::*;
         let enter = KeyPress::named(Named::Enter);
-        for key in [enter, KeyPress::char(' ')] {
-            for kp in held(key) {
-                let want = (!kp.alt).then_some(Activate);
-                assert_eq!(control_key(&kp), want, "{kp:?}");
-            }
+        for kp in held(enter) {
+            assert_eq!(control_key(&kp), Some(Activate), "{kp:?}");
+        }
+        for kp in held(KeyPress::char(' ')) {
+            let want = (!kp.alt).then_some(Activate);
+            assert_eq!(control_key(&kp), want, "{kp:?}");
         }
         for n in NAVIGATION {
             for kp in held(KeyPress::named(n)) {
@@ -712,20 +729,20 @@ mod tests {
 
     /// R18-L-02: whose Enter and Space are, by what has the focus, with
     /// every modifier held: the rule both apps route by. A button, a
-    /// toggle or a list row is activated by both, Shift or Ctrl held or
-    /// not (upstream's read the key alone); a calculator key is pressed by
-    /// Space the same way and ignores Enter whatever is held, which only
-    /// bare is "="; a text field submits on Enter and types Space. With
-    /// Alt neither is the control's.
+    /// toggle or a list row is activated by Enter whatever is held, Alt
+    /// too (upstream's read the key alone), and by Space unless Alt is
+    /// held (the window's menu); a calculator key is pressed by Space the
+    /// same way and ignores Enter whatever is held, which only bare is
+    /// "="; a text field submits on Enter and types Space; a slider takes
+    /// neither.
     #[test]
     fn enter_and_space_by_focus_and_modifier() {
         use FocusKey::*;
         for kp in held(KeyPress::named(Named::Enter)) {
-            let own = if kp.alt { Page } else { Activate };
-            assert_eq!(focus_key(Focus::Control, &kp), own, "{kp:?}");
+            assert_eq!(focus_key(Focus::Control, &kp), Activate, "{kp:?}");
             assert_eq!(focus_key(Focus::CalculatorKey, &kp), PageOnly, "{kp:?}");
-            let field = if kp.alt { Edit } else { Activate };
-            assert_eq!(focus_key(Focus::Text, &kp), field, "{kp:?}");
+            assert_eq!(focus_key(Focus::Text, &kp), Activate, "{kp:?}");
+            assert_eq!(focus_key(Focus::Slider, &kp), Page, "{kp:?}");
             assert_eq!(focus_key(Focus::Other, &kp), Page, "{kp:?}");
             // "=" is the bare Enter alone, wherever the focus is.
             let bare = !kp.ctrl && !kp.shift && !kp.alt;
@@ -747,17 +764,19 @@ mod tests {
             assert_eq!(focus_key(Focus::Control, &kp), own, "{kp:?}");
             assert_eq!(focus_key(Focus::CalculatorKey, &kp), own, "{kp:?}");
             assert_eq!(focus_key(Focus::Text, &kp), Edit, "{kp:?}");
+            assert_eq!(focus_key(Focus::Slider, &kp), Page, "{kp:?}");
             assert_eq!(focus_key(Focus::Other, &kp), Page, "{kp:?}");
             assert_eq!(sc(CalcMode::Scientific, kp), None, "{kp:?}");
         }
     }
 
     /// The other keys routed by focus: the navigation keys are a focused
-    /// control's (a calculator key's too) bare or with Shift, and a text
-    /// field's whatever is held, but for Ctrl+Home, the graph view's
-    /// chord. Everything else (what is typed, Escape, Backspace, Tab) is
-    /// the page's from a control and the field's from a text field, but
-    /// for Alt+1…5.
+    /// control's (a calculator key's too) bare or with Shift, a slider's
+    /// whatever is held (upstream's reads the key alone: Ctrl+Right steps,
+    /// Ctrl+Home is its Home), and a text field's whatever is held, but
+    /// for Ctrl+Home, the graph view's chord. Everything else (what is
+    /// typed, Escape, Backspace, Tab) is the page's from a control and the
+    /// field's from a text field, but for Alt+1…5.
     #[test]
     fn the_other_keys_by_focus() {
         use FocusKey::*;
@@ -766,6 +785,7 @@ mod tests {
                 let own = if kp.alt || kp.ctrl { Page } else { Navigate };
                 assert_eq!(focus_key(Focus::Control, &kp), own, "{kp:?}");
                 assert_eq!(focus_key(Focus::CalculatorKey, &kp), own, "{kp:?}");
+                assert_eq!(focus_key(Focus::Slider, &kp), Navigate, "{kp:?}");
                 assert_eq!(focus_key(Focus::Other, &kp), Page, "{kp:?}");
                 let field = if is_global_chord(&kp) { Page } else { Edit };
                 assert_eq!(focus_key(Focus::Text, &kp), field, "{kp:?}");
@@ -781,7 +801,12 @@ mod tests {
             KeyPress::named(Named::F(9)),
         ] {
             for kp in held(key) {
-                for focus in [Focus::Control, Focus::CalculatorKey, Focus::Other] {
+                for focus in [
+                    Focus::Control,
+                    Focus::CalculatorKey,
+                    Focus::Slider,
+                    Focus::Other,
+                ] {
                     assert_eq!(focus_key(focus, &kp), Page, "{focus:?} {kp:?}");
                 }
                 assert_eq!(focus_key(Focus::Text, &kp), Edit, "{kp:?}");

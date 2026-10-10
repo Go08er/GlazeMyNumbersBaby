@@ -1058,9 +1058,9 @@ mod tests {
             );
             // Space presses every button, a calculator key too; Enter
             // every button but a calculator key. (Fields, sliders, the
-            // graph and scroll views take their keys elsewhere.) With
-            // Shift or Ctrl held as without, and never with Alt
-            // (R18-L-02).
+            // graph and scroll views take their keys elsewhere.) Whatever
+            // is held with them (R18-L-02), but Alt+Space, the window's
+            // menu, which presses nothing.
             let space = appcore::KeyPress::char(' ');
             let enter = appcore::KeyPress::named(appcore::Named::Enter);
             for held in [
@@ -1070,21 +1070,20 @@ mod tests {
                 |k: appcore::KeyPress| k.ctrl().shift(),
             ] {
                 let (space, enter) = (held(space), held(enter));
-                if h.sense == Sense::Click && h.msg.is_some() {
-                    assert!(h.activated_by(&space), "{what}: {:?}", h.msg);
-                    assert_eq!(
-                        h.activated_by(&enter),
-                        !presses_a_key(h),
-                        "{what}: {:?}",
-                        h.msg
-                    );
-                } else {
-                    assert!(!h.activated_by(&space) && !h.activated_by(&enter), "{what}");
+                for enter in [enter, enter.alt()] {
+                    if h.sense == Sense::Click && h.msg.is_some() {
+                        assert!(h.activated_by(&space), "{what}: {:?}", h.msg);
+                        assert_eq!(
+                            h.activated_by(&enter),
+                            !presses_a_key(h),
+                            "{what}: {:?} {enter:?}",
+                            h.msg
+                        );
+                    } else {
+                        assert!(!h.activated_by(&space) && !h.activated_by(&enter), "{what}");
+                    }
                 }
-                assert!(
-                    !h.activated_by(&space.alt()) && !h.activated_by(&enter.alt()),
-                    "{what}: with Alt"
-                );
+                assert!(!h.activated_by(&space.alt()), "{what}: Alt+Space");
             }
         }
         let flag = |what: &str, hid: Id| {

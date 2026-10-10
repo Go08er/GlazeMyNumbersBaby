@@ -1462,13 +1462,13 @@ impl App {
             }
         }
         // The number precision slider in Settings takes the arrow, page
-        // and Home/End keys: bare or with Shift, as a graph variable's
-        // slider (GraphPage::key) and any control's navigation keys; with
-        // Ctrl or Alt they are chords (it took those too, R18-L-02).
+        // and Home/End keys whatever is held with them, as a graph
+        // variable's slider (GraphPage::key) and upstream's Slider, which
+        // reads the key alone (input::Focus::Slider).
         let precision = self.store.data.borrow().literal_digits;
         if self.settings
             && focus == Some(precision_slider())
-            && input::control_key(&kp) == Some(input::ControlKey::Navigate)
+            && input::focus_key(Focus::Slider, &kp) == FocusKey::Navigate
             && let Key::Named(n) = kp.key
             && let Some(p) = precision_key(precision, n)
         {

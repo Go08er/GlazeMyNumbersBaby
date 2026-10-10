@@ -440,6 +440,8 @@ pub fn show(win: &Rc<Window>) {
     page.add(&group);
 
     dialog.add(&page);
+    // A dialog's keys never reach the window's controllers.
+    crate::window::own_keys(&dialog);
     dialog.present(Some(&win.widget()));
 }
 
@@ -481,6 +483,19 @@ fn graphing_group(ctx: &Rc<Ctx>) -> adw::PreferencesGroup {
     scale.set_draw_value(false);
     scale.set_hexpand(true);
     scale.set_value(f64::from(now.position()));
+    // Page Up and Page Down move by five, as DGMNB's slider. (GTK's own
+    // page, ten steps, stops at a mark on the way on a scale that has
+    // marks: from 10, Page Up went to 12 and Page Down to 5.)
+    scale.connect_move_slider(|s, scroll| {
+        use gtk::ScrollType as S;
+        let by = match scroll {
+            S::PageUp | S::PageRight | S::PageForward => 5.0,
+            S::PageDown | S::PageLeft | S::PageBackward => -5.0,
+            _ => return,
+        };
+        s.stop_signal_emission_by_name("move-slider");
+        s.set_value(s.value() + by);
+    });
     // Labels alternate above and below: 14 and 15, 20 and Off, are
     // neighbours.
     let mut marks: Vec<(u8, &str, gtk::PositionType)> = P::NOTCHES
@@ -619,6 +634,7 @@ pub fn about(parent: &adw::ApplicationWindow) {
         }
         ours
     });
+    crate::window::own_keys(&about);
     about.present(Some(parent));
 }
 
@@ -665,6 +681,7 @@ fn third_party_licences(parent: &impl IsA<gtk::Widget>) {
         .content_height(600)
         .child(&toolbar)
         .build();
+    crate::window::own_keys(&dialog);
     dialog.present(Some(parent));
 }
 
