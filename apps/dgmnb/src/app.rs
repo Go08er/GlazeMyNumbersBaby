@@ -2616,8 +2616,11 @@ const PRECISION_MARKS: [(u8, &str, bool); 7] = [
 /// opened from (its button, clicked or pressed from the keys, or what had
 /// the focus when a shortcut opened it); closing gives it back, as GTK's
 /// popovers and upstream's flyouts give the focus back to their opener,
-/// rather than leave it on a control gone with the popup. Anything else
-/// leaves the focus where the event left it.
+/// rather than leave it on a control gone with the popup; unless the event
+/// that closed it put the focus on something itself (the Memory sheet
+/// closes as the memory is emptied from it, and the focus goes to M+, as
+/// upstream's: `CalcPage::follow_panel`). Anything else leaves the focus
+/// where the event left it.
 pub(crate) fn popup_focus(
     was: bool,
     now: bool,
@@ -2630,7 +2633,10 @@ pub(crate) fn popup_focus(
             *opener = Some(before);
             focus
         }
-        (true, false) => opener.take().unwrap_or(focus),
+        (true, false) => match opener.take() {
+            Some(opener) if focus == before || focus.is_none() => opener,
+            _ => focus,
+        },
         _ => focus,
     }
 }
@@ -2994,6 +3000,22 @@ mod tests {
         assert_eq!(
             popup_focus(true, false, Some(sine), Some(two), &mut opener),
             Some(two)
+        );
+        // Closed by an event that put the focus on something itself (the
+        // memory emptied from its sheet: M+): it stays there, and the
+        // opener is forgotten.
+        popup_focus(false, true, Some(trig), Some(trig), &mut opener);
+        assert_eq!(
+            popup_focus(true, false, Some(sine), Some(two), &mut opener),
+            Some(two)
+        );
+        assert_eq!(opener, None);
+        // Closed by an event that took the focus off what went with the
+        // popup (the unit picker's search field): the opener's again.
+        popup_focus(false, true, Some(trig), Some(trig), &mut opener);
+        assert_eq!(
+            popup_focus(true, false, Some(sine), None, &mut opener),
+            Some(trig)
         );
     }
 }
