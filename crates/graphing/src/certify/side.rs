@@ -292,7 +292,27 @@ fn walk(f: &Fun<'_>, e: &Expr, path: &mut Vec<u8>, out: &mut Vec<SideCond>) -> R
         }
         Expr::Call(_, args) => {
             for (i, a) in args.iter().enumerate() {
-                path.push(i as u8);
+                // A path names a child by a byte. A min or max of more
+                // than 256 arguments has children it can't name: cast, the
+                // 257th's index was the first's, and a condition under it
+                // was looked up (and written to the certificate) under the
+                // first argument (review 18's audit: max(x + 1, 0, …, 0,
+                // x^(x − 5)) had the domain [0, ∞), 0 let in by the "1" of
+                // x + 1 read as the power's exponent).
+                let Ok(i) = u8::try_from(i) else {
+                    // No byte names this child: nothing is lost while
+                    // nothing under it has a condition to be named by.
+                    let mut under = Vec::new();
+                    path.push(u8::MAX);
+                    let r = walk(f, a, path, &mut under);
+                    path.pop();
+                    r?;
+                    if !under.is_empty() {
+                        return Err("more arguments than a path can name".into());
+                    }
+                    continue;
+                };
+                path.push(i);
                 walk(f, a, path, out)?;
                 path.pop();
             }
@@ -372,7 +392,7 @@ fn walk(f: &Fun<'_>, e: &Expr, path: &mut Vec<u8>, out: &mut Vec<SideCond>) -> R
         }
         Expr::Call(func, args) => {
             use Func::*;
-            let arg = |i: usize| (child_path(i as u8), &args[i]);
+            let arg = |i: u8| (child_path(i), &args[usize::from(i)]);
             match func {
                 Tan | Sec | Cot | Csc => {
                     let (s, via) = if matches!(func, Tan | Sec) {
