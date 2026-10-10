@@ -284,6 +284,10 @@ enum Seg {
     Flat,
     /// A kink of f (enclosed): f′ and f″ undecided there, f continuous.
     Kink(Enc),
+    /// A kink box inside which f leaves the span of its end values
+    /// (`Cover::kink_dent`): a turn where the signs beside it differ, not
+    /// decided otherwise.
+    Dent(Enc),
     /// Not decided.
     Unknown,
 }
@@ -291,8 +295,13 @@ enum Seg {
 fn walk(cover: &Cover, ib: &IBox) -> Vec<Seg> {
     // Each leaf's segments, and each kink's, in x order.
     let mut parts: Vec<(f64, Vec<Seg>)> = Vec::new();
-    for &(l, r) in cover.kinks.iter().filter(|(l, r)| *l >= ib.a && *r <= ib.b) {
-        parts.push((l, vec![Seg::Kink(Enc::new(l, r))]));
+    for (i, &(l, r)) in cover.kinks.iter().enumerate() {
+        if !(l >= ib.a && r <= ib.b) {
+            continue;
+        }
+        let x = Enc::new(l, r);
+        let dent = cover.kink_dent.get(i).copied().unwrap_or(false);
+        parts.push((l, vec![if dent { Seg::Dent(x) } else { Seg::Kink(x) }]));
     }
     for l in cover.leaves.iter().filter(|l| {
         let (a, b) = l.span();
@@ -344,7 +353,11 @@ fn walk(cover: &Cover, ib: &IBox) -> Vec<Seg> {
     // A kink placed exactly (`Claim::KinkAt`) whose one-sided signs carry
     // on the signs beside its box: the turn there is at that point.
     for i in 1..out.len().saturating_sub(1) {
-        let Seg::Kink(x) = out[i] else { continue };
+        // (Placed exactly, f is strictly monotone on each side of the
+        // point inside the box: nothing else happens in it.)
+        let (Seg::Kink(x) | Seg::Dent(x)) = out[i] else {
+            continue;
+        };
         let placed = cover
             .kinks
             .iter()
@@ -404,6 +417,20 @@ fn changes(segs: &[Seg], kink_turns: bool) -> (Vec<(Enc, bool)>, bool) {
                         }
                     }
                     (Some(Seg::Flat), Some(Seg::Flat)) => {}
+                    _ => complete = false,
+                }
+            }
+            Seg::Dent(x) => {
+                let before = i.checked_sub(1).and_then(|j| segs.get(j));
+                let after = segs.get(i + 1);
+                match (before, after) {
+                    (Some(Seg::Sign(p)), Some(Seg::Sign(q))) if p != q => {
+                        if kink_turns {
+                            out.push((*x, *p));
+                        } else {
+                            complete = false;
+                        }
+                    }
                     _ => complete = false,
                 }
             }
@@ -679,7 +706,7 @@ fn monotone_pieces(c1: &Cover, boxes: &[IBox]) -> Option<Vec<(Monotone, bool, bo
                         dir = Some(p);
                     }
                 }
-                Seg::Zero(x) | Seg::Kink(x) => {
+                Seg::Zero(x) | Seg::Kink(x) | Seg::Dent(x) => {
                     let after = segs.get(i + 1);
                     if let (Some(d), Some(Seg::Sign(q))) = (dir, after)
                         && *q != d

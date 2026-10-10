@@ -335,3 +335,80 @@ fn a_zero_at_a_domain_end_between_two_doubles_is_not_certified_away() {
     let k = analyze(&eq, &CompileOptions::default());
     assert_eq!(k.x_intercept, "−1", "{k:?}");
 }
+
+/// A row on f′ reads a kink box as one point, by f′'s signs on either
+/// side. x^(2/1000003) crosses 0.01 at ±10⁻¹⁰⁰⁰⁰⁰³, between 0 and the
+/// doubles beside it, so min(x^(2/1000003), 0.01) is 0.01 at every double
+/// but 0, where it is 0: with f′ ≡ 0 on both sides of the box about 0 it
+/// was certified constant with range {0}, and x + that, which drops by
+/// 0.01 inside the box, "increasing on ℝ, no extrema".
+#[test]
+fn a_kink_box_f_dips_inside_is_not_read_as_a_point() {
+    use graphing::analysis::{Monotonicity, analyze, flags};
+    let panel = |src: &str| {
+        let eq = Equation::parse(&format!("y={src}")).expect("parses");
+        analyze(&eq, &CompileOptions::default())
+    };
+    let f = "min(x^(2/1000003),0.01)";
+    assert_eq!(scalar(f, 0.0), 0.0);
+    assert_eq!(scalar(f, 5e-324), 0.01);
+    assert_eq!(scalar(f, -5e-324), 0.01);
+    assert_eq!(scalar(f, 3.0), 0.01);
+    let k = panel(f);
+    let unknown = |flag: u32| k.too_complex_features & flag != 0;
+    assert!(
+        unknown(flags::RANGE)
+            || k.data
+                .range
+                .iter()
+                .any(|i| i.lo.value <= 0.0 && i.hi.value >= 0.01),
+        "{f}: range {:?}",
+        k.range
+    );
+    assert!(
+        unknown(flags::MONOTONE_INTERVALS)
+            || !k.monotonicity.iter().any(|m| m.1 == Monotonicity::Constant),
+        "{f}: {:?}",
+        k.monotonicity
+    );
+
+    let g = "x+min(x^(2/1000003),0.01)";
+    assert!(scalar(g, -5e-324) > scalar(g, 0.0));
+    let k = panel(g);
+    assert!(
+        k.too_complex_features & flags::MONOTONE_INTERVALS != 0 || k.monotonicity.len() > 1,
+        "{g}: {:?}",
+        k.monotonicity
+    );
+    assert!(
+        (k.too_complex_features | k.partial_features) & flags::MINIMA != 0
+            || !k.data.minima.is_empty(),
+        "{g}: no minima, but f drops to 0 at 0"
+    );
+
+    // One kink in its box, f monotone on each side of it: as before.
+    // (About 1, f's enclosure over the box alone is past its end values:
+    // the test is of f at the box's doubles.)
+    for src in ["x*abs(x)", "(x-1)*abs((x-1))"] {
+        let k = panel(src);
+        assert_eq!(
+            k.too_complex_features & flags::MONOTONE_INTERVALS,
+            0,
+            "{src}"
+        );
+        assert_eq!(k.too_complex_features & flags::RANGE, 0, "{src}");
+        assert_eq!(k.monotonicity.len(), 1, "{src}: {:?}", k.monotonicity);
+    }
+    let k = panel("x*abs(x)");
+    assert_eq!(k.too_complex_features & flags::MONOTONE_INTERVALS, 0);
+    assert_eq!(k.monotonicity.len(), 1, "{:?}", k.monotonicity);
+    assert_eq!(k.monotonicity[0].1, Monotonicity::Increasing);
+    let k = panel("abs(x)");
+    assert_eq!(k.data.minima.len(), 1, "{:?}", k.minima);
+    let k = panel("x^(2/3)");
+    assert_eq!(k.data.minima.len(), 1, "{:?}", k.minima);
+    assert_eq!(k.too_complex_features & flags::INFLECTION_POINTS, 0);
+    let k = panel("x^(1/3)");
+    assert_eq!(k.too_complex_features & flags::MONOTONE_INTERVALS, 0);
+    assert_eq!(k.monotonicity.len(), 1, "{:?}", k.monotonicity);
+}
