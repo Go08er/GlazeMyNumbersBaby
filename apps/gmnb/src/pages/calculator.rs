@@ -64,9 +64,6 @@ pub struct CalculatorPage {
     mem_rows: RefCell<Vec<gtk::Box>>,
     /// Another page was shown since the calculator was (see `switch_mode`).
     left: Cell<bool>,
-    /// How many parentheses were open at the last sync (none yet: `None`):
-    /// a change is announced ([`CalculatorPage::sync`]).
-    open_parens: Cell<Option<u32>>,
 }
 
 fn text_button(label: &str, tip: &str) -> gtk::Button {
@@ -186,7 +183,6 @@ impl CalculatorPage {
             compact: Cell::new(false),
             mem_rows: RefCell::default(),
             left: Cell::new(false),
-            open_parens: Cell::new(None),
         });
         {
             let weak = Rc::downgrade(&page);
@@ -235,6 +231,8 @@ impl CalculatorPage {
         {
             page.vm.borrow_mut().restore_state(&state);
         }
+        // What a restored session shows at the start isn't told as news.
+        page.vm.borrow_mut().take_announcements();
         page.sync_all(Change::None);
         page
     }
@@ -932,17 +930,22 @@ impl CalculatorPage {
 
     fn sync_all(self: &Rc<Self>, change: Change) {
         let vm = self.vm.borrow();
-        self.panel.set_history(&vm.history());
-        self.panel.set_memory(&vm.memory());
+        let history_emptied = self.panel.set_history(&vm.history());
+        let memory_emptied = self.panel.set_memory(&vm.memory());
         drop(vm);
         self.relabel();
         self.sync(Some(change));
+        // Another mode's lists, shown with the focus in the one before's.
+        self.focus_after_emptied(history_emptied, memory_emptied);
     }
 
     /// Pull state from the VM into the widgets. `force` overrides the change
     /// kind derived from VM events.
     fn sync(self: &Rc<Self>, force: Option<Change>) {
-        let events = self.vm.borrow_mut().take_events();
+        let (events, said) = {
+            let mut vm = self.vm.borrow_mut();
+            (vm.take_events(), vm.take_announcements())
+        };
         self.syncing.set(true);
         let vm = self.vm.borrow();
         let mode = vm.mode();
@@ -963,16 +966,20 @@ impl CalculatorPage {
             .set_value(&vm.display_value(), change, vm.is_error());
         self.display.set_expression(&vm.expression());
 
-        if events.contains(&Event::HistoryChanged) {
-            self.panel.set_history(&vm.history());
-        }
-        if events.contains(&Event::MemoryChanged) {
-            self.panel.set_memory(&vm.memory());
-        }
-        for (b, w) in self.mem_buttons.borrow().iter() {
-            w.set_sensitive(vm.is_enabled(*b) && !vm.is_error());
-        }
+        // The focus was in a list (or on what clears it) that is now empty:
+        // it goes where upstream's does, below.
+        let history_emptied =
+            events.contains(&Event::HistoryChanged) && self.panel.set_history(&vm.history());
+        let mut memory_emptied =
+            events.contains(&Event::MemoryChanged) && self.panel.set_memory(&vm.memory());
         let has_memory = !vm.memory().is_empty();
+        for (b, w) in self.mem_buttons.borrow().iter() {
+            let enabled = vm.is_enabled(*b) && !vm.is_error();
+            // MC or MR focused as the memory empties: disabled, it would
+            // keep the focus no key can use.
+            memory_emptied |= !enabled && !has_memory && w.is_focus();
+            w.set_sensitive(enabled);
+        }
         for t in self.mem_toggles.borrow().iter() {
             t.set_sensitive(has_memory);
         }
@@ -1059,29 +1066,26 @@ impl CalculatorPage {
             }
             CalcMode::Standard => {}
         }
-        let open = vm.open_parens();
         drop(vm);
         self.syncing.set(false);
 
-        // Upstream's SetParenthesisCount (StandardCalculatorViewModel.cs:
-        // 1092-1103): screen readers are told the open-parenthesis count
-        // each time it changes, in Scientific and Programmer ("Open
-        // parenthesis count 1" after "(", 0 after Clear or "="), whatever
-        // changed it and wherever the focus is; before a result, as the
-        // engine closes what is open before it shows one. Not the count a
-        // restored session starts with.
-        if let Some(was) = self.open_parens.replace(Some(open))
-            && let Some(text) = keys::open_parenthesis_count_change(mode, was, open)
-        {
-            self.display
-                .announce(&text, gtk::AccessibleAnnouncementPriority::Medium);
+        // What upstream's view model tells a screen reader, as it does
+        // (calcvm::Announcement, each `Announcement = …` of
+        // StandardCalculatorViewModel, which its NarratorNotifier says):
+        // the display each time the value shown changes, typed digits too,
+        // and after a binary operator ("Display is 7 plus"); the
+        // open-parenthesis count each time it changes, in Scientific and
+        // Programmer; a ")" with none open. In the order they came: a
+        // paste's "Open parenthesis count 1", "Display is 1", "Open
+        // parenthesis count 0".
+        for a in &said {
+            self.display.announce(
+                &keys::announcement(a),
+                gtk::AccessibleAnnouncementPriority::Medium,
+            );
         }
 
         if matches!(change, Change::Result | Change::Error) {
-            // Upstream NarratorNotifier: announce computed results.
-            let text = format!("Display is {}", self.display.value());
-            self.display
-                .announce(&text, gtk::AccessibleAnnouncementPriority::Medium);
             let s = self.ctx.hub.scheme();
             let (w, h) = (self.display.width() as f32, self.display.height() as f32);
             let color = if change == Change::Error {
@@ -1091,6 +1095,44 @@ impl CalculatorPage {
             };
             self.ctx
                 .pulse_at(&self.display, w * 0.8, h * 0.65, color, 1.1);
+        }
+
+        self.focus_after_emptied(history_emptied, memory_emptied);
+    }
+
+    /// The focus was in a list (or on what clears it) that is now empty.
+    /// History: the focus goes to the panel's History tab, as upstream's
+    /// docked panel's (`OnHistoryEmptied`, Calculator.xaml.cs:714-730:
+    /// `DockPivot.Focus`); with no tabs to take it (Programmer shows
+    /// Memory alone), and for Memory, to M+.
+    fn focus_after_emptied(&self, history: bool, memory: bool) {
+        if memory || (history && !self.panel.focus_tabs()) {
+            self.focus_after_memory_emptied();
+        }
+    }
+
+    /// The memory was emptied with the focus in its list, on what clears
+    /// it or on MC or MR, which are disabled now: the focus goes to M+, as
+    /// upstream's (`OnMemoryEmptied`, Calculator.xaml.cs:732-744:
+    /// `MemPlus.Focus`, the Memory flyout closed first while narrow, the
+    /// keys being under it).
+    fn focus_after_memory_emptied(&self) {
+        if !self.wide.get() {
+            self.sheet.set_open(false);
+        }
+        let add = self
+            .mem_buttons
+            .borrow()
+            .iter()
+            .find(|(b, w)| *b == B::MemoryAdd && w.is_mapped())
+            .map(|(_, w)| w.clone());
+        // Once the closing sheet has uncovered it, if it hasn't yet.
+        if let Some(add) = add
+            && !add.grab_focus()
+        {
+            glib::idle_add_local_once(move || {
+                add.grab_focus();
+            });
         }
     }
 

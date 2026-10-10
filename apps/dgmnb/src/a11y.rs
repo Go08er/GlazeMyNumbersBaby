@@ -301,31 +301,106 @@ mod tests {
         }
     }
 
-    /// The round-3 review's sequence: 7, =, 9.
+    /// What a frame tells assistive tech: its live Status nodes' words, in
+    /// order ("(" telling its count on getting the focus aside).
+    fn told(nodes: &[Node]) -> Vec<String> {
+        nodes
+            .iter()
+            .filter(|n| n.role == Role::Status && n.live)
+            .filter(|n| n.id != crate::ui::id("paren-announcer"))
+            .map(|n| {
+                assert!(!n.clickable && !n.focusable, "{:?}", n.label);
+                assert_eq!(n.value.as_deref(), Some(n.label.as_str()));
+                n.label.clone()
+            })
+            .collect()
+    }
+
+    /// What `p` tells assistive tech from here, in order: a frame tells one
+    /// thing (AccessKit reports the nodes one update adds in no order) and
+    /// asks for another while more wait, until a frame has nothing to tell.
+    /// With the first frame's nodes.
+    fn hear(p: &mut crate::calc::CalcPage) -> (Vec<Node>, Vec<String>) {
+        let (mut first, mut all, mut asked) = (None, Vec::new(), true);
+        loop {
+            let mut again = false;
+            let (nodes, _) = frame_nodes(|f, r| {
+                p.view(f, r, false);
+                again = f.again;
+            });
+            let t = told(&nodes);
+            assert!(t.len() <= 1, "one thing a frame: {t:?}");
+            assert!(t.is_empty() || asked, "{t:?} waited for no frame");
+            let nodes = first.get_or_insert(nodes);
+            if t.is_empty() {
+                return (std::mem::take(nodes), all);
+            }
+            all.extend(t);
+            asked = again;
+        }
+    }
+
+    /// The round-3 review's sequence: 7, =, 9. The display always says
+    /// what it shows. What is announced is what upstream's view model
+    /// announces (calcvm::Announcement): the display each time the value
+    /// shown changes, typed digits too, and after a binary operator with
+    /// its name, changed or not; each in a frame of its own, so the same
+    /// words are said again when they come again.
     #[test]
     fn display_reports_current_value_and_announces_results() {
         let mut p = crate::calc::CalcPage::new(None);
-        let label = |p: &mut crate::calc::CalcPage| {
-            let (nodes, _) = frame_nodes(|f, r| p.view(f, r, false));
+        let label = |p: &mut crate::calc::CalcPage, keys: &str| {
+            press(p, keys);
+            let (nodes, heard) = hear(p);
             let d = nodes
                 .iter()
                 .find(|n| n.id == crate::ui::id("display"))
                 .unwrap();
-            let a = nodes
-                .iter()
-                .find(|n| n.id == crate::ui::id("announcer"))
-                .unwrap();
-            (d.value.clone().unwrap(), a.value.clone().unwrap())
+            (d.value.clone().unwrap(), heard)
         };
-        press(&mut p, "7");
-        assert_eq!(label(&mut p), ("Display is 7".into(), String::new()));
-        press(&mut p, "=");
+        let said = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        assert_eq!(label(&mut p, ""), ("Display is 0".into(), said(&[])));
         assert_eq!(
-            label(&mut p),
-            ("Display is 7".into(), "Display is 7".into())
+            label(&mut p, "7"),
+            ("Display is 7".into(), said(&["Display is 7"]))
         );
-        press(&mut p, "9");
-        assert_eq!(label(&mut p).0, "Display is 9");
+        assert_eq!(label(&mut p, ""), ("Display is 7".into(), said(&[])));
+        // "=" shows the same 7: nothing new to tell.
+        assert_eq!(label(&mut p, "="), ("Display is 7".into(), said(&[])));
+        assert_eq!(
+            label(&mut p, "9"),
+            ("Display is 9".into(), said(&["Display is 9"]))
+        );
+        assert_eq!(
+            label(&mut p, "+"),
+            ("Display is 9".into(), said(&["Display is 9 plus"]))
+        );
+        // The same words again, in a frame of their own.
+        assert_eq!(
+            label(&mut p, "+"),
+            ("Display is 9".into(), said(&["Display is 9 plus"]))
+        );
+        assert_eq!(
+            label(&mut p, "1="),
+            (
+                "Display is 10".into(),
+                said(&["Display is 1", "Display is 10"])
+            )
+        );
+        // Each frame's nodes are new ones: AccessKit announces a live node
+        // as it comes, and wouldn't one whose words stayed.
+        let ids = |p: &mut crate::calc::CalcPage, keys: &str| -> Vec<Id> {
+            press(p, keys);
+            frame_nodes(|f, r| p.view(f, r, false))
+                .0
+                .iter()
+                .filter(|n| n.role == Role::Status && n.live)
+                .map(|n| n.id)
+                .collect()
+        };
+        let (first, second) = (ids(&mut p, "+"), ids(&mut p, "+"));
+        assert_eq!((first.len(), second.len()), (1, 1));
+        assert_ne!(first, second);
     }
 
     /// Every actionable node (including history rows scrolled out of view)
@@ -648,10 +723,15 @@ mod tests {
             covered.iter().any(|n| n.clickable),
             "{what}: covers no control"
         );
+        // An announcer under the overlay still speaks, from the window. (One
+        // is there in the frame that has something to tell only: the page
+        // drawn first, alone, told what there was.)
+        for n in nodes.iter().filter(|n| n.role == Role::Status && n.live) {
+            assert!(own.contains(&n.id) || n.parent == 0, "{what}: announcer");
+        }
         for n in covered {
             let kept = nodes.iter().find(|m| m.id == n.id);
             if n.role == Role::Status && n.live {
-                assert!(kept.is_some_and(|m| m.parent == 0), "{what}: announcer");
                 continue;
             }
             assert!(kept.is_none(), "{what}: covered {:?} exported", n.label);
@@ -713,10 +793,17 @@ mod tests {
         // Gone from the frame altogether, or asked for what it doesn't do.
         assert!(target(&hits, crate::ui::id("no such control"), Action::Click).is_none());
         assert!(target(&hits, crate::ui::id("nav-close"), Action::Increment).is_none());
-        // Results are still announced, from the window.
+        // What the calculator has to tell is still told, from the window.
+        hear(&mut p);
+        press(&mut p, "5");
+        let (nodes, _) = frame_nodes(|f, r| {
+            p.view(f, r, false);
+            crate::app::draw_nav(f, full(), appcore::modes::ViewMode::Standard, false);
+        });
+        assert_eq!(told(&nodes), ["Display is 85"]);
         let announcer = nodes
             .iter()
-            .find(|n| n.id == crate::ui::id("announcer"))
+            .find(|n| n.role == Role::Status && n.live)
             .expect("the announcer");
         assert_eq!(announcer.parent, 0);
         // Closed again, Clear is back.
@@ -1400,69 +1487,181 @@ mod tests {
     /// Upstream's SetParenthesisCount (Scientific and Programmer): the
     /// open-parenthesis count is told each time it changes, whatever
     /// changed it and wherever the focus is, in the words "(" says when
-    /// focused: through a live node of its own, there in the frame that
-    /// shows the change and gone in the next, so that the same count can
-    /// be told again. Nothing in Standard, nothing while it stays, and
-    /// nothing for the count the page starts with.
+    /// focused, each change of a step in turn; OnNoRightParenAdded: and a
+    /// ")" with none open. Nothing in Standard, nothing while it stays,
+    /// and nothing for what a restored session starts with.
     #[test]
-    fn the_open_parenthesis_count_is_announced_when_it_changes() {
+    fn parentheses_are_announced_as_they_open_and_close() {
         use crate::calc::CalcPage;
-        use crate::ui::id;
         use calcvm::CalcMode;
-        // What the frame after `keys` tells.
-        let told = |p: &mut CalcPage, keys: &str| -> Option<String> {
+        // What the frame after `keys` tells of parentheses.
+        let said = |p: &mut CalcPage, keys: &str| -> Vec<String> {
             press(p, keys);
-            let nodes = frame_nodes(|f, r| p.view(f, r, false)).0;
-            nodes
-                .iter()
-                .find(|n| n.id == id("paren-count-announcer"))
-                .map(|n| {
-                    assert!(n.live && n.role == Role::Status);
-                    assert!(!n.clickable && !n.focusable);
-                    assert_eq!(n.value.as_deref(), Some(n.label.as_str()));
-                    n.label.clone()
-                })
+            hear(p)
+                .1
+                .into_iter()
+                .filter(|t| !t.starts_with("Display is "))
+                .collect()
         };
-        let count = |n: u32| Some(format!("Open parenthesis count {n}"));
+        let count = |n: u32| format!("Open parenthesis count {n}");
+        let none = "There are no open parentheses to close.".to_string();
         let mut p = CalcPage::new(None);
-        assert_eq!(told(&mut p, ""), None, "at the start");
+        assert!(said(&mut p, "").is_empty(), "at the start");
         for mode in [CalcMode::Scientific, CalcMode::Programmer] {
             p.set_mode(mode);
-            assert_eq!(told(&mut p, "{escape}"), None, "{mode:?}");
-            assert_eq!(told(&mut p, "("), count(1), "{mode:?}");
-            assert_eq!(told(&mut p, ""), None, "told once");
-            assert_eq!(told(&mut p, "2"), None, "no change");
-            assert_eq!(told(&mut p, "+("), count(2), "{mode:?}");
-            assert_eq!(told(&mut p, "3)"), count(1), "{mode:?}");
-            // Two changes before a frame: the count the frame shows.
-            assert_eq!(told(&mut p, "(("), count(3), "{mode:?}");
-            assert_eq!(told(&mut p, "{escape}"), count(0), "Clear closes them");
-            assert_eq!(told(&mut p, "(2+3"), count(1), "{mode:?}");
-            assert_eq!(told(&mut p, "="), count(0), "= closes it");
-            assert_eq!(told(&mut p, "1+2="), None, "no parenthesis");
-            assert_eq!(told(&mut p, "("), count(1), "the same count again");
-            assert_eq!(told(&mut p, "{escape}"), count(0));
+            said(&mut p, "{escape}");
+            assert_eq!(said(&mut p, ")"), [none.as_str()], "{mode:?}");
+            assert_eq!(said(&mut p, "("), [count(1)], "{mode:?}");
+            assert!(said(&mut p, "").is_empty(), "told once");
+            assert!(said(&mut p, "2").is_empty(), "no change");
+            assert_eq!(said(&mut p, "+("), [count(2)], "{mode:?}");
+            assert_eq!(said(&mut p, "3)"), [count(1)], "{mode:?}");
+            // Two changes before a frame: both, in turn, a frame each.
+            assert_eq!(said(&mut p, "(("), [count(2), count(3)], "{mode:?}");
+            assert_eq!(said(&mut p, "{escape}"), [count(0)], "Clear closes them");
+            assert_eq!(said(&mut p, "(2+3"), [count(1)], "{mode:?}");
+            assert_eq!(said(&mut p, "="), [count(0)], "= closes it");
+            assert!(said(&mut p, "1+2=").is_empty(), "no parenthesis");
+            assert_eq!(said(&mut p, "("), [count(1)], "the same count again");
+            assert_eq!(said(&mut p, "{escape}"), [count(0)]);
+            // A paste that opens and closes one: both changes, in the
+            // order they came, the display's between them.
+            p.paste("(1)");
+            assert_eq!(
+                hear(&mut p).1,
+                [count(1), "Display is 1".to_string(), count(0)],
+                "{mode:?}"
+            );
+            said(&mut p, "{escape}");
         }
-        // Standard tells nothing, whatever the count does there.
+        // Standard tells no count, whatever it does there.
         p.set_mode(CalcMode::Scientific);
-        told(&mut p, "{escape}");
-        assert_eq!(told(&mut p, "("), count(1));
+        said(&mut p, "{escape}");
+        assert_eq!(said(&mut p, "("), [count(1)]);
         p.set_mode(CalcMode::Standard);
-        assert_eq!(told(&mut p, ""), None, "Standard");
-        assert_eq!(told(&mut p, "1+2="), None, "Standard");
-        assert_eq!(told(&mut p, "{escape}"), None, "Standard");
+        assert!(said(&mut p, "").is_empty(), "Standard");
+        assert!(said(&mut p, "1+2=").is_empty(), "Standard");
         p.set_mode(CalcMode::Scientific);
-        told(&mut p, "");
-        let open = p.vm.open_parens();
-        assert_eq!(told(&mut p, "("), count(open + 1), "Scientific again");
+        said(&mut p, "{escape}");
+        assert_eq!(said(&mut p, "(("), [count(1), count(2)], "Scientific again");
 
-        // A restored session's count is where it starts, not a change.
+        // What a restored session starts with is not news.
         let mut restored = CalcPage::new(Some(p.save()));
         let open = restored.vm.open_parens();
-        assert_eq!(open, p.vm.open_parens(), "the session comes back");
-        assert_ne!(open, 0);
-        assert_eq!(told(&mut restored, ""), None, "restored");
-        assert_eq!(told(&mut restored, "("), count(open + 1), "restored");
+        assert_eq!(open, 2, "the session comes back");
+        let nodes = frame_nodes(|f, r| restored.view(f, r, false)).0;
+        assert!(told(&nodes).is_empty(), "restored: {:?}", told(&nodes));
+        assert_eq!(said(&mut restored, "("), [count(3)], "restored");
+    }
+
+    /// The focus stays on something when its History or Memory item goes,
+    /// as upstream's does (HistoryList.xaml.cs:71-95, Memory.xaml.cs:68-93,
+    /// Calculator.xaml.cs:714-744): on the item now in its place, or the
+    /// last one; on the History tab, or on M+, when none is left.
+    /// Whatever made it go: the item's own button, the list's clear
+    /// button, Ctrl+Shift+D or Ctrl+L with the focus on the keypad's MC.
+    /// And each time on a control the next frame has.
+    #[test]
+    fn the_focus_follows_a_history_or_memory_item_that_goes() {
+        use crate::calc::{CalcPage, MemOp, Msg, Tab};
+        use crate::ui::id;
+        use calcvm::Button as B;
+        enum Do {
+            Msg(Msg),
+            Keys(&'static str),
+        }
+        // The focus after `what` with it on `at`.
+        fn go(p: &mut CalcPage, at: Id, what: Do) -> Id {
+            let (mut toasts, mut focus) = (Vec::new(), Some(at));
+            let mut cx = crate::app::Cx {
+                toasts: &mut toasts,
+                clipboard: None,
+                wide: true,
+                focus: &mut focus,
+            };
+            match what {
+                Do::Msg(m) => p.update(m, &mut cx),
+                Do::Keys(keys) => {
+                    for k in appcore::input::parse_key_script(keys) {
+                        p.key(&k, &mut cx);
+                    }
+                }
+            }
+            let focus = focus.expect("the focus");
+            let (_, hits) = frame_nodes(|f, r| p.view(f, r, false));
+            assert!(
+                hits.iter().any(|h| h.id == focus && h.focusable),
+                "the focus is on nothing"
+            );
+            focus
+        }
+        let (hist, del) = (|i: usize| id(("hist", i)), |i: usize| id(("hist-del", i)));
+        let (mem, op) = (
+            |i: usize| id(("memrow", i)),
+            |i: usize, j: usize| id(("memop", i, j)),
+        );
+        let (tab, add) = (id("tab-history"), id(("mem", B::MemoryAdd as u32)));
+        let five = id(("keypad", B::Five.id()));
+        let mut p = CalcPage::new(None);
+
+        // History: 3 + 0, 2 + 0, 1 + 0 (the newest first).
+        let three = |p: &mut CalcPage| {
+            press(p, "{escape}{ctrl+shift+d}1+0=2+0=3+0={escape}");
+            assert_eq!(p.vm.history().len(), 3);
+        };
+        three(&mut p);
+        // An item's Delete: the one now in its place; the last one's: the
+        // last; the only one's: the History tab.
+        let remove = |i| Do::Msg(Msg::HistoryRemove(i));
+        assert_eq!(go(&mut p, del(1), remove(1)), del(1));
+        assert_eq!(go(&mut p, del(1), remove(1)), del(0));
+        assert_eq!(go(&mut p, del(0), remove(0)), tab);
+        // An item, as another comes above it: the same item.
+        three(&mut p);
+        assert_eq!(go(&mut p, hist(1), Do::Keys("4+0=")), hist(2));
+        // Cleared: from an item, from a Delete, from the clear button.
+        const CLEAR_HISTORY: Do = Do::Keys("{ctrl+shift+d}");
+        assert_eq!(go(&mut p, hist(2), CLEAR_HISTORY), tab);
+        three(&mut p);
+        assert_eq!(go(&mut p, del(0), CLEAR_HISTORY), tab);
+        three(&mut p);
+        let all = Do::Msg(Msg::HistoryClear);
+        assert_eq!(go(&mut p, id("hist-clear"), all), tab);
+        // From elsewhere, the focus stays where it is.
+        three(&mut p);
+        assert_eq!(go(&mut p, five, CLEAR_HISTORY), five);
+
+        // Memory: 3, 2, 1 (the newest first).
+        let store = |p: &mut CalcPage| {
+            press(p, "{escape}{ctrl+l}1{ctrl+m}2{ctrl+m}3{ctrl+m}{escape}");
+            with_cx(|cx| p.update(Msg::Tab(Tab::Memory), cx));
+            assert_eq!(p.vm.memory().len(), 3);
+        };
+        store(&mut p);
+        let mc = |i| Do::Msg(Msg::Memory(MemOp::Clear, i));
+        assert_eq!(go(&mut p, op(1, 0), mc(1)), op(1, 0));
+        assert_eq!(go(&mut p, op(1, 0), mc(1)), op(0, 0));
+        assert_eq!(go(&mut p, op(0, 0), mc(0)), add);
+        // An item's M+ changes it in place: the focus stays on that M+.
+        store(&mut p);
+        let plus = Do::Msg(Msg::Memory(MemOp::Add, 1));
+        assert_eq!(go(&mut p, op(1, 1), plus), op(1, 1));
+        // Another stored above the item: the same item.
+        assert_eq!(go(&mut p, mem(0), Do::Keys("{ctrl+m}")), mem(1));
+        // Cleared: from an item, from the clear button, from the keypad's
+        // MC and MR, which an empty memory disables.
+        const CLEAR_MEMORY: Do = Do::Keys("{ctrl+l}");
+        assert_eq!(go(&mut p, mem(2), CLEAR_MEMORY), add);
+        store(&mut p);
+        let all = Do::Msg(Msg::MemoryClearAll);
+        assert_eq!(go(&mut p, id("mem-clear"), all), add);
+        for k in [B::MemoryClear, B::MemoryRecall] {
+            store(&mut p);
+            assert_eq!(go(&mut p, id(("mem", k as u32)), CLEAR_MEMORY), add);
+        }
+        // From elsewhere, the focus stays where it is.
+        store(&mut p);
+        assert_eq!(go(&mut p, five, CLEAR_MEMORY), five);
     }
 
     /// The header's window controls aren't focused by a click, as GTK's

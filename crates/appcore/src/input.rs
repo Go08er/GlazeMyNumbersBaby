@@ -459,6 +459,16 @@ pub fn focus_key(focus: Focus, kp: &KeyPress) -> FocusKey {
     }
 }
 
+/// Which item of a History or Memory list takes the keyboard focus when
+/// the one that had it, the `item`th of `was`, went or moved, `now` items
+/// being left (not none): the same item if items came above it (the
+/// newest is first), else the one now in its place, or the last one, as
+/// upstream's lists (HistoryList.xaml.cs:84, Memory.xaml.cs:82: the
+/// deleted index, or the last).
+pub fn item_after(item: usize, was: usize, now: usize) -> usize {
+    (if now > was { item + (now - was) } else { item }).min(now.saturating_sub(1))
+}
+
 /// Shortcuts that work even while a text field has focus: mode switching
 /// (Alt+1…5) and upstream's Ctrl+Home "graph view". Everything else belongs
 /// to the text field.
@@ -886,6 +896,24 @@ mod tests {
             sc(CalcMode::Standard, KeyPress::char('@').shift()),
             Some(Action::Press(B::Sqrt))
         );
+    }
+
+    /// The focus after its History or Memory item went: the item now in
+    /// its place, or the last; the same item when others came above it.
+    #[test]
+    fn the_item_that_takes_the_focus_of_one_that_went() {
+        // One deleted: the 2nd of 3 (its place), the last of 3 (the last).
+        assert_eq!(item_after(1, 3, 2), 1);
+        assert_eq!(item_after(2, 3, 2), 1);
+        assert_eq!(item_after(0, 3, 2), 0);
+        assert_eq!(item_after(0, 2, 1), 0);
+        // One added above (the newest is first): the same item.
+        assert_eq!(item_after(0, 2, 3), 1);
+        assert_eq!(item_after(2, 3, 5), 4);
+        // The same number (an item changed in place): where it was.
+        assert_eq!(item_after(1, 3, 3), 1);
+        // Several went (a list that holds fewer).
+        assert_eq!(item_after(4, 5, 2), 1);
     }
 
     #[test]

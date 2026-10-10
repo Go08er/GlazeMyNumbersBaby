@@ -50,6 +50,8 @@ pub struct CalcPanel {
     /// row, for the list's row-activated ([`CalcPanel::activate_row`]).
     history_actions: RefCell<Vec<(gtk::ListBoxRow, RowAction)>>,
     memory_actions: RefCell<Vec<(gtk::ListBoxRow, RowAction)>>,
+    /// Each Memory row's own buttons (MC, M+, M−), by row.
+    memory_buttons: RefCell<Vec<Vec<gtk::Button>>>,
 }
 
 /// What activating a row does, given the row.
@@ -144,6 +146,7 @@ impl CalcPanel {
             history_menu: RefCell::default(),
             history_actions: RefCell::default(),
             memory_actions: RefCell::default(),
+            memory_buttons: RefCell::default(),
         });
 
         // A row is activated through its list's row-activated, whichever
@@ -195,6 +198,52 @@ impl CalcPanel {
 
     pub fn show_tab(&self, name: &str) {
         self.switcher.set_active_name(Some(name));
+    }
+
+    /// Puts the keyboard focus on the History/Memory tabs (upstream's
+    /// docked pivot, where its focus goes when the History is emptied);
+    /// false if they aren't shown or didn't take it.
+    pub fn focus_tabs(&self) -> bool {
+        self.switcher.is_mapped() && self.switcher.grab_focus()
+    }
+
+    /// Where the keyboard focus is in `list`, if it is: the row's place
+    /// and, if it is on one of the row's own `buttons`, which. (A row's
+    /// open menu is in the row.)
+    fn focus_in(
+        list: &gtk::ListBox,
+        buttons: &[Vec<gtk::Button>],
+    ) -> Option<(usize, Option<usize>)> {
+        let focus = list.root().and_then(|r| r.focus())?;
+        let row = focus
+            .downcast_ref::<gtk::ListBoxRow>()
+            .cloned()
+            .or_else(|| {
+                focus
+                    .ancestor(gtk::ListBoxRow::static_type())
+                    .and_downcast::<gtk::ListBoxRow>()
+            })?;
+        if row.parent().as_ref() != Some(list.upcast_ref()) {
+            return None;
+        }
+        let i = usize::try_from(row.index()).ok()?;
+        let button = buttons.get(i).and_then(|row| {
+            row.iter()
+                .position(|b| b.upcast_ref::<gtk::Widget>() == &focus)
+        });
+        Some((i, button))
+    }
+
+    /// Takes the keyboard focus off `list`'s rows, which are about to go.
+    /// Left to find out that its focus went, GTK keeps the way to it as
+    /// each ancestor's focus child (it forgets them walking up from the
+    /// widget that had the focus, which has no parent by then), and Tab
+    /// goes by what it remembers: once the other list was the one shown,
+    /// Tab passed it by.
+    fn let_go(list: &gtk::ListBox) {
+        if let Some(root) = list.root() {
+            root.set_focus(gtk::Widget::NONE);
+        }
     }
 
     /// Programmer mode has no history upstream (the History pivot item is
@@ -274,7 +323,21 @@ impl CalcPanel {
             && row.is_sensitive()
     }
 
-    pub fn set_history(self: &Rc<Self>, items: &[HistoryEntry]) {
+    /// Shows `items`. A list shown anew has new rows: if the focus was on
+    /// one (or in its menu), it goes to the row that follows it
+    /// ([`appcore::input::item_after`]), so that no key is typed at a row that
+    /// is gone (GTK sends a key to the focus, and one sent to a widget out
+    /// of the window reaches nothing: the first key typed after Clear
+    /// History with a row focused was lost). True if the focus was in the
+    /// list, or on the button that clears it, and no item is left: the
+    /// page says where it goes then.
+    pub fn set_history(self: &Rc<Self>, items: &[HistoryEntry]) -> bool {
+        let focused = Self::focus_in(&self.history_list, &[]);
+        if focused.is_some() {
+            Self::let_go(&self.history_list);
+        }
+        let was = self.history_len.get();
+        let cleared = self.trash.is_focus() && self.current_tab() == "history";
         let grew = items.len() > self.history_len.get();
         self.history_len.set(items.len());
         let shown = self.history_shown.get().wrapping_add(1);
@@ -400,13 +463,35 @@ impl CalcPanel {
             self.history_list.append(&row);
         }
         self.sync_trash();
+        match focused {
+            Some(_) if items.is_empty() => true,
+            Some((row, _)) => {
+                let to = appcore::input::item_after(row, was, items.len());
+                if let Some(row) = self.history_list.row_at_index(to as i32) {
+                    row.grab_focus();
+                }
+                false
+            }
+            None => cleared && items.is_empty(),
+        }
     }
 
-    pub fn set_memory(self: &Rc<Self>, items: &[String]) {
+    /// Shows `items`; the focus follows as in [`CalcPanel::set_history`],
+    /// on the same button of the row if it was on one (M+ pressed again
+    /// adds again). True if the focus was in the list, or on the button
+    /// that clears it, and no item is left.
+    pub fn set_memory(self: &Rc<Self>, items: &[String]) -> bool {
+        let focused = Self::focus_in(&self.memory_list, &self.memory_buttons.borrow());
+        if focused.is_some() {
+            Self::let_go(&self.memory_list);
+        }
+        let was = self.memory_len.get();
+        let cleared = self.trash.is_focus() && self.current_tab() == "memory";
         let grew = items.len() > self.memory_len.get();
         self.memory_len.set(items.len());
         self.memory_list.remove_all();
         self.memory_actions.borrow_mut().clear();
+        let mut buttons = Vec::with_capacity(items.len());
         self.memory_list
             .set_placeholder(Some(&empty_state("There's nothing saved in memory")));
         for (i, value) in items.iter().enumerate() {
@@ -418,6 +503,7 @@ impl CalcPanel {
             let actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
             actions.set_halign(gtk::Align::End);
             actions.add_css_class("wc-mem-actions");
+            let mut own = Vec::with_capacity(3);
             for (text, op, tip) in [
                 ("MC", MemOp::Clear, "Clear memory item"),
                 ("M+", MemOp::Add, "Add to memory item"),
@@ -436,7 +522,9 @@ impl CalcPanel {
                     }
                 });
                 actions.append(&b);
+                own.push(b);
             }
+            buttons.push(own);
             let b = gtk::Box::new(gtk::Orientation::Vertical, 2);
             b.append(&label);
             b.append(&actions);
@@ -455,6 +543,26 @@ impl CalcPanel {
             self.memory_list.append(&row);
         }
         self.sync_trash();
+        self.memory_buttons.replace(buttons);
+        match focused {
+            Some(_) if items.is_empty() => true,
+            Some((row, button)) => {
+                let to = appcore::input::item_after(row, was, items.len());
+                let own = self.memory_buttons.borrow();
+                match button.and_then(|j| own.get(to).and_then(|b| b.get(j))) {
+                    Some(b) => {
+                        b.grab_focus();
+                    }
+                    None => {
+                        if let Some(row) = self.memory_list.row_at_index(to as i32) {
+                            row.grab_focus();
+                        }
+                    }
+                }
+                false
+            }
+            None => cleared && items.is_empty(),
+        }
     }
 
     fn make_row(&self, content: &gtk::Box, animate: bool) -> gtk::ListBoxRow {
