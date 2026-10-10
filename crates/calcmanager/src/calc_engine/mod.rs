@@ -970,7 +970,15 @@ impl CalcEngine {
             .iter()
             .filter(|(_, v, _)| negative_zero(v))
             .count();
-        state.inexact = inexact_operands + negative_zeros;
+        // And, in Programmer mode, memory slots that hold more than the 64
+        // bits the mode works with (a fraction, a negative number or one
+        // past them, stored in another mode): another mode shows the
+        // number held, where the restored slot holds what this one showed.
+        let wide_memory = memory
+            .iter()
+            .filter(|slot| self.f_integer_mode && self.in_64_bits(slot) != **slot)
+            .count();
+        state.inexact = inexact_operands + negative_zeros + wide_memory;
         state
     }
 }

@@ -29,12 +29,20 @@
 //! restore that kept every value exactly must agree but for the last
 //! digits of numbers.
 //!
-//! The default test runs a few seconds' worth; the long run is
+//! Two kinds of script are played: anything a user can do, and sessions
+//! that mostly work with memory (several slots, numbers at the ends of the
+//! range, every action of the Memory panel, and the switches that change
+//! how a slot is shown), since few of the first kind leave more than one
+//! slot. The continuations use the restored slots every way there is.
+//!
+//! The default tests run a few seconds' worth; the long run is
 //! `cargo test -p calcvm --release -- --ignored random_sessions`
-//! (`RESTORE_FUZZ_SEED`, `RESTORE_FUZZ_SCRIPTS`, and `RESTORE_FUZZ_OUT`, a
-//! file the failures are written to, with the fallbacks and the
-//! continuations of rounded restores that differed beyond the last digits
-//! in `.fallbacks` and `.rounded` beside it).
+//! (`RESTORE_FUZZ_SEED`, `RESTORE_FUZZ_SCRIPTS`,
+//! `RESTORE_FUZZ_MEMORY_SCRIPTS`, and `RESTORE_FUZZ_OUT`, a file the
+//! failures are written to, with the fallbacks and the continuations of
+//! rounded restores that differed beyond the last digits in `.fallbacks`
+//! and `.rounded` beside it; the memory sessions' in the same names with
+//! `.memory` after the file's).
 
 use std::fmt::Write as _;
 
@@ -478,10 +486,109 @@ fn pool(mode: CalcMode) -> Vec<Act> {
     p
 }
 
+/// What a session that mostly works with memory does in `mode`: numbers
+/// (short ones, ones of every digit the mode takes, far ones), the memory
+/// buttons, every action of the Memory panel on the newest four slots, and
+/// what changes how a slot is shown or held (F-E, the radix, the word
+/// size, the mode, coming back from another page). These scripts leave
+/// several slots, which the ordinary ones rarely do.
+///
+/// With `ends`, now and then a number at an end of the range too, past
+/// which M+ and M− then carry a slot. Only the long run plays those: they
+/// are slow (each key that shows the list writes every slot out, at two
+/// milliseconds a slot there, a mode switch truncates each, and a script
+/// is played again for every continuation).
+fn memory_pool(mode: CalcMode, ends: bool) -> Vec<Act> {
+    use Act::*;
+    use Button::*;
+    let mut p: Vec<Act> = [
+        One, Two, Three, Seven, Nine, Zero, Negate, Add, Equals, Clear,
+    ]
+    .into_iter()
+    .map(Key)
+    .collect();
+    for _ in 0..4 {
+        p.push(Key(Memory));
+    }
+    for _ in 0..2 {
+        p.extend([Key(MemoryRecall), Key(MemoryAdd), Key(MemorySubtract)]);
+    }
+    for i in 0..4 {
+        p.extend([MemoryItem(i), SlotAdd(i), SlotSubtract(i)]);
+    }
+    p.extend([SlotClear(0), SlotClear(2), Key(MemoryClear), Reactivate]);
+    match mode {
+        CalcMode::Standard => {
+            p.extend([
+                Key(Decimal),
+                Paste("9.999999999999999e99"),
+                Paste("1.000000000000001e-99"),
+                Paste("1e-99"),
+                Paste("-0.0000000000000123"),
+                Paste("1234567890123456"),
+                Mode(CalcMode::Scientific),
+                Mode(CalcMode::Programmer),
+            ]);
+            if ends {
+                // One action in sixty.
+                p = p.repeat(4);
+                p.extend([
+                    Paste("9.999999999999999e9999"),
+                    Paste("1.000000000000001e-9999"),
+                    Paste("1e-9999"),
+                ]);
+            }
+        }
+        CalcMode::Scientific => {
+            p.extend([
+                Key(Decimal),
+                Key(Exp),
+                Key(Pi),
+                Key(FToE),
+                Paste("9.9999999999999999999999999999999e99"),
+                Paste("1.0000000000000000000000000000001e-99"),
+                Paste("1e-99"),
+                Paste("-0.00000000000000000000000000000123"),
+                Paste("12345678901234567890123456789012"),
+                Mode(CalcMode::Standard),
+                Mode(CalcMode::Programmer),
+            ]);
+            if ends {
+                p = p.repeat(4);
+                p.extend([
+                    Paste("9.9999999999999999999999999999999e9999"),
+                    Paste("1.0000000000000000000000000000001e-9999"),
+                    Paste("1e-9999"),
+                ]);
+            }
+        }
+        CalcMode::Programmer => p.extend([
+            Key(A),
+            Key(F),
+            Key(Not),
+            Key(HexButton),
+            Key(DecButton),
+            Key(OctButton),
+            Key(BinButton),
+            Key(Qword),
+            Key(Dword),
+            Key(Word),
+            Key(Byte),
+            Paste("7FFFFFFFFFFFFFFF"),
+            Paste("9223372036854775807"),
+            Paste("-128"),
+            Paste("FF"),
+            Mode(CalcMode::Standard),
+            Mode(CalcMode::Scientific),
+        ]),
+    }
+    p
+}
+
 /// The continuations every saved state is checked with: each reads some of
 /// the state a restore must bring back (the number being typed, the
-/// pending operators and parentheses, what "=" repeats, memory, the left
-/// operand `%` reads, the carry, the modes).
+/// pending operators and parentheses, what "=" repeats, memory and every
+/// way of using a slot, the left operand `%` reads, the carry, the modes).
 fn continuations(mode: CalcMode) -> Vec<Vec<Act>> {
     use Act::*;
     use Button::*;
@@ -502,7 +609,35 @@ fn continuations(mode: CalcMode) -> Vec<Vec<Act>> {
         vec![Reactivate, Key(Equals)],
         vec![Key(Memory), MemoryItem(0), Key(Equals)],
         vec![Key(ClearEntry), Key(Equals)],
+        // Every way a restored memory slot is read, changed or moved: M+
+        // and M− on the newest and on an older slot (each shows the whole
+        // list again), a new slot before an older one is recalled, a slot
+        // or all of them cleared, the calculator shown again.
+        vec![Key(MemoryAdd), Key(MemoryRecall), Key(Equals)],
+        vec![Key(MemorySubtract), MemoryItem(0), Key(Equals)],
+        vec![SlotAdd(1), MemoryItem(1), Key(Equals)],
+        vec![SlotSubtract(1), Key(MemoryRecall), MemoryItem(1)],
+        vec![Key(Seven), Key(Memory), MemoryItem(1), Key(Equals)],
+        vec![Key(Seven), Key(Memory), SlotAdd(2), MemoryItem(2)],
+        vec![SlotClear(0), Key(MemoryRecall), Key(Equals)],
+        vec![SlotClear(1), MemoryItem(1), Key(MemoryAdd)],
+        vec![Key(MemoryClear), Key(MemoryAdd), Key(MemoryRecall)],
+        vec![Reactivate, MemoryItem(1), Key(MemorySubtract), Key(Equals)],
     ];
+    // In another mode, which shows every slot as that mode does.
+    for other in [
+        CalcMode::Standard,
+        CalcMode::Scientific,
+        CalcMode::Programmer,
+    ] {
+        if other != mode {
+            c.extend([
+                vec![Mode(other), Key(MemoryRecall), Key(Equals)],
+                vec![Mode(other), MemoryItem(1), Key(MemoryAdd)],
+                vec![Mode(other), Key(Seven), SlotSubtract(1), MemoryItem(1)],
+            ]);
+        }
+    }
     match mode {
         CalcMode::Standard => c.extend([
             vec![Recall(0), Key(Equals)],
@@ -521,6 +656,9 @@ fn continuations(mode: CalcMode) -> Vec<Vec<Act>> {
             vec![Key(Exp), Key(Seven), Key(Equals)],
             vec![Key(XPowerY), Key(Two), Key(Equals)],
             vec![Key(Sin), Key(Equals)],
+            // F-E changes the form the next whole list is shown in.
+            vec![Key(FToE), Key(MemoryAdd), MemoryItem(1)],
+            vec![Key(FToE), MemoryItem(0), Key(MemorySubtract)],
         ]),
         CalcMode::Programmer => c.extend([
             vec![Key(OpenParenthesis), Key(Two), Key(Equals)],
@@ -537,6 +675,16 @@ fn continuations(mode: CalcMode) -> Vec<Vec<Act>> {
             vec![Flip(0), Key(Equals)],
             vec![Key(Byte), Key(Equals)],
             vec![Key(Qword), Key(Equals)],
+            // A slot read in another radix or word size than it was
+            // saved in.
+            vec![Key(HexButton), Key(MemoryRecall), Key(Equals)],
+            vec![Key(BinButton), MemoryItem(1), Key(MemoryAdd)],
+            vec![Key(OctButton), Key(MemorySubtract), MemoryItem(0)],
+            vec![Key(DecButton), SlotAdd(1), MemoryItem(1)],
+            vec![Key(Byte), Key(MemoryRecall), Key(Equals)],
+            vec![Key(Word), MemoryItem(1), Key(MemoryAdd)],
+            vec![Key(Dword), Key(MemorySubtract), Key(MemoryRecall)],
+            vec![Key(Qword), SlotAdd(1), MemoryItem(1), Key(Equals)],
         ]),
     }
     c
@@ -558,9 +706,19 @@ impl Rng {
     }
 }
 
-/// Script `index` of the run seeded `seed`: a starting mode and 2–13
+/// Which scripts a run plays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// Anything a user can do ([`pool`]), 2–13 actions.
+    Any,
+    /// Mostly memory ([`memory_pool`]), 6–29 actions; with `ends`, with
+    /// numbers at the ends of the range among them.
+    Memory { ends: bool },
+}
+
+/// Script `index` of the run seeded `seed`: a starting mode and its
 /// actions (switching modes changes what the following ones can be).
-fn script(seed: u64, index: u64) -> (CalcMode, Vec<Act>) {
+fn script(kind: Kind, seed: u64, index: u64) -> (CalcMode, Vec<Act>) {
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15 ^ seed.wrapping_mul(0x1000_0000_01B3) ^ index);
     for _ in 0..4 {
         rng.next();
@@ -571,10 +729,16 @@ fn script(seed: u64, index: u64) -> (CalcMode, Vec<Act>) {
         CalcMode::Programmer,
     ][rng.below(3)];
     let mut mode = start;
-    let len = 2 + rng.below(12);
+    let len = match kind {
+        Kind::Any => 2 + rng.below(12),
+        Kind::Memory { .. } => 6 + rng.below(24),
+    };
     let mut acts = Vec::with_capacity(len);
     for _ in 0..len {
-        let p = pool(mode);
+        let p = match kind {
+            Kind::Any => pool(mode),
+            Kind::Memory { ends } => memory_pool(mode, ends),
+        };
         let a = p[rng.below(p.len())];
         if let Act::Mode(m) = a {
             mode = m;
@@ -708,7 +872,7 @@ fn check(start: CalcMode, acts: &[Act], counts: &mut Counts) {
 }
 
 /// Runs scripts `0..n` of `seed` on `threads` threads.
-fn fuzz(seed: u64, n: u64, threads: u64) -> Counts {
+fn fuzz(kind: Kind, seed: u64, n: u64, threads: u64) -> Counts {
     let results: Vec<Counts> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..threads)
             .map(|t| {
@@ -716,7 +880,7 @@ fn fuzz(seed: u64, n: u64, threads: u64) -> Counts {
                     let mut counts = Counts::default();
                     let mut i = t;
                     while i < n {
-                        let (start, acts) = script(seed, i);
+                        let (start, acts) = script(kind, seed, i);
                         check(start, &acts, &mut counts);
                         i += threads;
                     }
@@ -740,8 +904,12 @@ fn fuzz(seed: u64, n: u64, threads: u64) -> Counts {
     total
 }
 
-fn assert_clean(counts: &Counts) {
+/// Prints what a run counted and, with `RESTORE_FUZZ_OUT`, writes its
+/// failures to that file (its name with `suffix`), and the fallbacks and
+/// the rounded continuations beside it.
+fn report(counts: &Counts, suffix: &str) {
     if let Ok(path) = std::env::var("RESTORE_FUZZ_OUT") {
+        let path = path + suffix;
         let _ = std::fs::write(&path, counts.failures.join("\n\n"));
         let _ = std::fs::write(path.clone() + ".fallbacks", counts.fallbacks.join("\n\n"));
         let _ = std::fs::write(path + ".rounded", counts.rounding_dependent.join("\n\n"));
@@ -758,6 +926,9 @@ fn assert_clean(counts: &Counts) {
         counts.fell_back,
         counts.failures.len()
     );
+}
+
+fn assert_clean(counts: &Counts) {
     assert!(
         counts.failures.is_empty(),
         "{} of {} failed; the first:\n{}",
@@ -774,24 +945,48 @@ fn threads() -> u64 {
 /// A few seconds' worth of scripts on every test run.
 #[test]
 fn random_sessions_restore_and_continue() {
-    assert_clean(&fuzz(1, 96, threads()));
+    let counts = fuzz(Kind::Any, 1, 96, threads());
+    report(&counts, "");
+    assert_clean(&counts);
+}
+
+/// And of sessions that mostly work with memory.
+#[test]
+fn random_memory_sessions_restore_and_continue() {
+    let counts = fuzz(Kind::Memory { ends: false }, 1, 32, threads());
+    report(&counts, ".memory");
+    assert_clean(&counts);
+}
+
+fn env(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 
 /// The long run (`cargo test -p calcvm --release -- --ignored`): 20,000
-/// scripts. `RESTORE_FUZZ_SEED` and `RESTORE_FUZZ_SCRIPTS` change them.
+/// scripts, then 2,000 memory sessions, numbers at the ends of the range
+/// among theirs. `RESTORE_FUZZ_SEED`, `RESTORE_FUZZ_SCRIPTS` and
+/// `RESTORE_FUZZ_MEMORY_SCRIPTS` change them.
 #[test]
 #[ignore]
 fn random_sessions_restore_and_continue_long() {
-    let env = |k: &str, d: u64| {
-        std::env::var(k)
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(d)
-    };
-    let counts = fuzz(
-        env("RESTORE_FUZZ_SEED", 2),
+    let seed = env("RESTORE_FUZZ_SEED", 2);
+    let any = fuzz(
+        Kind::Any,
+        seed,
         env("RESTORE_FUZZ_SCRIPTS", 20_000),
         threads(),
     );
-    assert_clean(&counts);
+    report(&any, "");
+    let memory = fuzz(
+        Kind::Memory { ends: true },
+        seed,
+        env("RESTORE_FUZZ_MEMORY_SCRIPTS", 2_000),
+        threads(),
+    );
+    report(&memory, ".memory");
+    assert_clean(&any);
+    assert_clean(&memory);
 }
