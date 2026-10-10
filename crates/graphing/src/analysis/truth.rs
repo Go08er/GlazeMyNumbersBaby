@@ -730,17 +730,31 @@ pub fn pow_real(a: Xf, b: Xf) -> R {
     if !y.is_finite() {
         return R::Unknown;
     }
+    if a.sign() < 0.0 && y != y.trunc() {
+        return R::Undef;
+    }
+    // y·ln|a| beyond the doubles (0.29^(10³⁰⁸), (−10¹¹)^(170!)): the power
+    // is below every double (a lost value) or above every one (unknown),
+    // as for an exponent beyond them. The product would overflow, and
+    // e^(a NaN) read as undefined: the tester `tests/crossfuzz.rs` found
+    // tanh(0.3)^(x^x) "undefined" at 143, where it is 10^(−10³⁰⁷). (Such a
+    // y is past 2⁵³, an even integer: a negative base's power is positive.)
+    let l = a.abs().ln_dd();
+    if (l.hi * y).is_infinite() {
+        return if (l.hi > 0.0) == (y > 0.0) {
+            R::Unknown
+        } else {
+            R::V(Xf::lost_of(1.0))
+        };
+    }
     if a.sign() < 0.0 {
-        if y != y.trunc() {
-            return R::Undef;
-        }
         let odd = y.abs() < 9007199254740992.0 && y % 2.0 != 0.0;
-        return match Xf::exp_dd(a.abs().ln_dd().mul_f(y)) {
+        return match Xf::exp_dd(l.mul_f(y)) {
             R::V(m) if odd => R::V(m.neg()),
             r => r,
         };
     }
-    Xf::exp_dd(a.ln_dd().mul_f(y))
+    Xf::exp_dd(l.mul_f(y))
 }
 
 pub fn root_x(x: Xf, n: Xf) -> R {
@@ -754,11 +768,23 @@ pub fn root_x(x: Xf, n: Xf) -> R {
         }
     }
     let nf = n.f();
-    if nf == 0.0 || !nf.is_finite() {
+    if nf == 0.0 || nf.is_nan() {
         return R::Undef;
     }
     if x.is_zero() {
         return if nf < 0.0 { R::Undef } else { R::V(Xf::ZERO) };
+    }
+    if nf.is_infinite() {
+        // A degree beyond the doubles (root(u, 6 + xˣ) from x = 144 on):
+        // 1/n is below every double, so a positive x a double holds has
+        // the root 1 to every digit; the parity of such an n isn't known
+        // (a negative x), nor what it does to a lost x. Not undefined: the
+        // interval form has the 1 (found by `tests/crossfuzz.rs`).
+        return if x.sign() > 0.0 && x.normal() {
+            R::V(Xf::of(1.0))
+        } else {
+            R::Unknown
+        };
     }
     let odd = nf.fract() == 0.0 && nf.abs() < 9e15 && (nf % 2.0).abs() == 1.0;
     if x.sign() < 0.0 && !odd {
@@ -767,7 +793,18 @@ pub fn root_x(x: Xf, n: Xf) -> R {
     if x.lost() {
         return R::Unknown;
     }
-    match Xf::exp_dd(x.abs().ln_dd().div_f(nf)) {
+    // ln|x|/n beyond the doubles (a degree near 0): the root is below
+    // every double or above every one, not undefined (as in `pow_real`:
+    // root(2x, 2x) at 2⁻¹⁰²² is e^(−1.6·10³¹⁰)).
+    let l = x.abs().ln_dd();
+    if (l.hi / nf).is_infinite() {
+        return if (l.hi > 0.0) == (nf > 0.0) {
+            R::Unknown
+        } else {
+            R::V(Xf::lost_of(1.0))
+        };
+    }
+    match Xf::exp_dd(l.div_f(nf)) {
         R::V(m) if x.sign() < 0.0 => R::V(m.neg()),
         r => r,
     }
