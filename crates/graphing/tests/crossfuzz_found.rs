@@ -234,3 +234,65 @@ fn a_box_holding_a_zero_count_of_npr_encloses_it() {
     );
     assert!(enclosure("nCr(x,-1)", 0.25, 0.75).dec <= Dec::Trv);
 }
+
+/// root(x, n) of a whole degree other than 2 and 3 went through `pow`
+/// with 1/n rounded, which |ln x|/n magnifies: 14 ulps at 10⁸⁵, 40 at
+/// 10²⁰⁰, outside f's enclosure. It is the power 1/n as `x^(1/n)` has it.
+#[test]
+fn a_root_of_a_whole_degree_keeps_its_digits_far_out() {
+    use graphing::functions::root;
+    let ulps = |v: f64, lo: f64, hi: f64| {
+        let u = f64::from_bits(v.abs().to_bits() + 1) - v.abs();
+        if v < lo {
+            (lo - v) / u
+        } else if v > hi {
+            (v - hi) / u
+        } else {
+            0.0
+        }
+    };
+    for n in [4, 5, 6, 7, 10, 11, 100, 1001, -4, -5, -7] {
+        let src = format!("root(x,{n})");
+        for x in [
+            1e-300, 1e-100, 1e-17, 0.5, 2.0, 10.0, 1e17, 1e85, 1e100, 1e200, 1e300,
+        ] {
+            let v = root(x, f64::from(n));
+            let e = enclosure(&src, x, x);
+            assert!(
+                ulps(v, e.lo(), e.hi()) <= 2.0,
+                "{src} at {x:e}: {v:e} against [{:e}, {:e}]",
+                e.lo(),
+                e.hi()
+            );
+            assert_eq!(scalar(&src, x), v, "{src} at {x:e}");
+            // The same real root as the power 1/n written out.
+            let p = scalar(&format!("x^(1/{n})"), x);
+            assert_eq!(v, p, "{src} against x^(1/{n}) at {x:e}");
+        }
+        if n % 2 != 0 {
+            let x = -1e100;
+            let v = root(x, f64::from(n));
+            let e = enclosure(&src, x, x);
+            assert!(
+                v < 0.0 && ulps(v, e.lo(), e.hi()) <= 2.0,
+                "{src} at {x:e}: {v:e}"
+            );
+        } else {
+            assert!(root(-2.0, f64::from(n)).is_nan());
+        }
+    }
+    assert_eq!(root(-1e100, 5.0), -1e20);
+    assert_eq!(root(1e85, 5.0), 1e17);
+    // A case found.
+    let v = scalar("root(-(x^2),5)+0.25", -1e100);
+    assert!((v / -1e40 - 1.0).abs() < 4e-16, "{v:e}");
+    // What root always was: square and cube roots, 0, a degree of 0.
+    assert_eq!(root(9.0, 2.0), 3.0);
+    assert_eq!(root(-27.0, 3.0), -3.0);
+    assert_eq!(root(0.0, 5.0), 0.0);
+    assert!(root(0.0, -5.0).is_nan() && root(2.0, 0.0).is_nan() && root(-2.0, 2.0).is_nan());
+    assert_eq!(root(32.0, 5.0), 2.0);
+    assert_eq!(root(-32.0, 5.0), -2.0);
+    assert_eq!(root(2.0, 1.0), 2.0);
+    assert_eq!(root(4.0, -2.0), 0.5);
+}

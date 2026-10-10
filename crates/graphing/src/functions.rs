@@ -526,18 +526,27 @@ pub fn root(x: f64, n: f64) -> f64 {
     if n == 0.0 || !n.is_finite() || x.is_nan() || (x == 0.0 && n < 0.0) {
         return f64::NAN;
     }
+    if n == 3.0 {
+        return cm::cbrt(x);
+    }
+    if n == 2.0 {
+        return x.sqrt();
+    }
+    // Another whole degree: the power 1/n as [`pow_rational`] takes it
+    // (the same real root: a negative x for an odd n only), which doesn't
+    // let 1/n's rounding through. Through `pow` alone that rounding is
+    // magnified by |ln x|/n: root(x⁵, 5) at 10¹⁷ was 14 ulps off and
+    // root(−x², 5) at 10¹⁰⁰ 40, outside f's enclosure (found by
+    // `tests/crossfuzz.rs`).
+    if n == n.trunc() && n.abs() <= f64::from(i32::MAX) {
+        return pow_rational(x, if n > 0.0 { 1 } else { -1 }, n.abs() as i32);
+    }
     if is_odd_integer(n) {
-        if n == 3.0 {
-            return cm::cbrt(x);
-        }
         let r = cm::pow(x.abs(), 1.0 / n);
         return if x < 0.0 { -r } else { r };
     }
     if x < 0.0 {
         return f64::NAN;
-    }
-    if n == 2.0 {
-        return x.sqrt();
     }
     cm::pow(x, 1.0 / n)
 }
