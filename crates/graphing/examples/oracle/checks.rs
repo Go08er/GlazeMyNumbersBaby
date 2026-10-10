@@ -30,10 +30,25 @@ pub struct Setting<'a> {
     pub unit: TrigUnit,
     pub parse: ParseOptions,
     pub vars: &'a dyn VariableValues,
-    /// Sample f at about a quarter of the points ([`samples`]): for a
-    /// tester that trades points for functions. The example's pool never
-    /// does.
-    pub sparse: bool,
+    /// How densely f is sampled ([`samples`]). The example's pool takes
+    /// every sample.
+    pub density: Density,
+}
+
+/// How densely f is sampled: every sample, or fewer for a tester that
+/// trades points for functions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Density {
+    /// Steps of 1/64 to ±10, 1/4 to ±100, integers to ±2000, 24 a decade,
+    /// and 64 constants.
+    Full,
+    /// About a quarter: steps of 1/16, 1/2, integers to ±400, 8 a decade,
+    /// 16 constants.
+    Quarter,
+    /// About a sixteenth, where one value of f is slow (a power p/q of
+    /// long integers costs the reference a hundred microseconds): steps
+    /// of 1/4, 1, integers to ±100, 3 a decade, 4 constants.
+    Sparse,
 }
 
 impl Setting<'_> {
@@ -43,7 +58,7 @@ impl Setting<'_> {
             unit,
             parse: ParseOptions::default(),
             vars: &(),
-            sparse: false,
+            density: Density::Full,
         }
     }
 }
@@ -887,14 +902,18 @@ pub fn probes(p: f64, window: bool, xs: &mut Vec<f64>) {
     }
 }
 
-pub fn samples(f: &F, k: &KeyGraphFeatures, extra: &[f64], wide: bool, sparse: bool) -> Vec<f64> {
+pub fn samples(
+    f: &F,
+    k: &KeyGraphFeatures,
+    extra: &[f64],
+    wide: bool,
+    density: Density,
+) -> Vec<f64> {
     let mut xs: Vec<f64> = Vec::new();
-    // (Sparse: steps of 1/16 to ±10, 1/2 to ±100, integers to ±400, 8 a
-    // decade, and 16 constants.)
-    let (fine, coarse, whole, decade, most) = if sparse {
-        (16, 2, 400, 8, 16)
-    } else {
-        (64, 4, 2000, 24, 64)
+    let (fine, coarse, whole, decade, most) = match density {
+        Density::Full => (64, 4, 2000, 24, 64),
+        Density::Quarter => (16, 2, 400, 8, 16),
+        Density::Sparse => (4, 1, 100, 3, 4),
     };
     for i in -10 * fine..=10 * fine {
         xs.push(i as f64 / fine as f64);
@@ -994,7 +1013,7 @@ pub fn check_in(
     };
     let mut k = analyze(&eq, &opts);
     plant(&mut k);
-    check_analysed(expr, &f, &k, extra, wide, set.sparse)
+    check_analysed(expr, &f, &k, extra, wide, set.density)
 }
 
 /// The checks of `k`, the analysis of the function `f` ([`load`]) that
@@ -1005,7 +1024,7 @@ pub fn check_analysed(
     k: &KeyGraphFeatures,
     extra: &[f64],
     wide: bool,
-    sparse: bool,
+    density: Density,
 ) -> Vec<Finding> {
     let mut cx = Ctx {
         expr,
@@ -1016,7 +1035,7 @@ pub fn check_analysed(
         return cx.out;
     }
     let d = &k.data;
-    let xs = samples(f, k, extra, wide, sparse);
+    let xs = samples(f, k, extra, wide, density);
     let mut centres = extra.to_vec();
     constants(&f.ast, f.unit, &mut centres);
     let vals: Vec<Val> = xs.iter().map(|&x| f.at(x)).collect();
@@ -1193,8 +1212,9 @@ pub fn check_analysed(
         for z in &d.zeros {
             for x in members(z) {
                 if f.zero_holds(x, &poles) == Some(false) {
-                    cx.fail(
+                    cx.fail_point(
                         "zero-not-zero",
+                        x,
                         format!("{}: f({x:e}) = {}", k.x_intercept, show(&f.at(x))),
                     );
                 }
@@ -1226,8 +1246,9 @@ pub fn check_analysed(
                     (y - v.v).abs() > f.tol(x) && !alike(*y, v.v)
                 };
                 if wrong {
-                    cx.fail(
+                    cx.fail_point(
                         "extremum-value-wrong",
+                        x,
                         format!("{name} ({x:e}, {}) but f there = {}", fmt(*y), show(&v)),
                     );
                 }
@@ -1267,6 +1288,14 @@ pub fn check_analysed(
                         // Only where f is resolved near the claim: a first
                         // resolvable change far out may be another basin.
                         if dd > 1e-6 * x.abs().max(1.0) {
+                            break;
+                        }
+                        // And not across a break of the domain: beyond a
+                        // pole or a hole f is another piece (x² − x^(−7/p),
+                        // p odd, is 1 + … left of 0 and −1 + … right of
+                        // it; its minimum 2·10⁻⁸ left of 0 is local).
+                        let (lo, hi) = (x.min(x + s * dd * 4.0), x.max(x + s * dd * 4.0));
+                        if poles.iter().chain(&open_ends).any(|p| family_in(p, lo, hi)) {
                             break;
                         }
                         let on = [2.0, 4.0].iter().all(|m| {
@@ -1541,8 +1570,9 @@ pub fn check_analysed(
                     continue;
                 }
                 if (y - v.v).abs() > f.tol(x) && !alike(*y, v.v) {
-                    cx.fail(
+                    cx.fail_point(
                         "inflection-value-wrong",
+                        x,
                         format!("({x:e}, {}) but f there = {}", fmt(*y), show(&v)),
                     );
                 }
@@ -2514,7 +2544,7 @@ pub fn same_intervals(a: &[Interval], b: &[Interval]) -> bool {
 }
 
 pub fn same_families(a: &[Family], b: &[Family]) -> bool {
-    a.len() == b.len()
+    let pairwise = a.len() == b.len()
         && a.iter().zip(b).all(|(p, q)| match (p.period, q.period) {
             // (One family whichever of its members stands for it: π/2 + kπ
             // is −π/2 + kπ.)
@@ -2523,7 +2553,44 @@ pub fn same_families(a: &[Family], b: &[Family]) -> bool {
             }
             (None, None) => same(p.x, q.x),
             _ => false,
-        })
+        });
+    pairwise || same_point_sets(a, b)
+}
+
+/// Two lists of periodic families as sets of points: π/2 + kπ is
+/// −π/2 + 2kπ with π/2 + 2kπ. Their members over one common period (the
+/// longest, which each family's period must divide a whole number of
+/// times, at most 64), matched one to one.
+fn same_point_sets(a: &[Family], b: &[Family]) -> bool {
+    let periods: Vec<f64> = a.iter().chain(b).filter_map(|f| f.period).collect();
+    if periods.len() != a.len() + b.len() || periods.is_empty() {
+        return false;
+    }
+    let whole = periods.iter().copied().fold(0.0, f64::max);
+    let over = |fams: &[Family]| -> Option<Vec<f64>> {
+        let mut xs = Vec::new();
+        for f in fams {
+            let p = f.period?;
+            let n = (whole / p).round();
+            if !(1.0..=64.0).contains(&n) || !same(n * p, whole) {
+                return None;
+            }
+            for j in 0..n as usize {
+                xs.push((f.x + j as f64 * p).rem_euclid(whole));
+            }
+        }
+        xs.sort_by(f64::total_cmp);
+        Some(xs)
+    };
+    let (Some(xa), Some(xb)) = (over(a), over(b)) else {
+        return false;
+    };
+    // (A member at 0 may have come out just under the period.)
+    let near = |p: f64, q: f64| {
+        let d = (p - q).abs();
+        same(p, q) || same(d, whole) || d.min(whole - d) <= 1e-9 * whole
+    };
+    xa.len() == xb.len() && xa.iter().zip(&xb).all(|(p, q)| near(*p, *q))
 }
 
 /// Two spellings of one function: `lhs`'s compiled value (what the app
@@ -2552,8 +2619,8 @@ pub fn check_pair_in(lhs: &str, rhs: &str, positive: bool, set: &Setting<'_>) ->
     let (kl, kr) = (analyze(&el, &opts(&sl)), analyze(&er, &opts(&sr)));
 
     // Values.
-    let mut xs = samples(&fl, &kl, &[], false, set.sparse);
-    xs.extend(samples(&fr, &kr, &[], false, set.sparse));
+    let mut xs = samples(&fl, &kl, &[], false, set.density);
+    xs.extend(samples(&fr, &kr, &[], false, set.density));
     xs.sort_by(f64::total_cmp);
     xs.dedup();
     for x in xs {
@@ -2673,11 +2740,20 @@ pub fn check_pair_in(lhs: &str, rhs: &str, positive: bool, set: &Setting<'_>) ->
             "inflection points",
         ),
     ] {
-        let ok = a.len() == b.len()
+        // One to one; or, where every one has the same value, the same
+        // points however split into families (0 + kπ is −π + 2kπ with
+        // 0 + 2kπ).
+        let fams = |l: &[(Family, f64)]| l.iter().map(|p| p.0).collect::<Vec<_>>();
+        let one_value = a
+            .iter()
+            .chain(b.iter())
+            .all(|p| a.first().is_some_and(|f| same(p.1, f.1)));
+        let ok = (a.len() == b.len()
             && a.iter().zip(b.iter()).all(|(p, q)| {
                 same_families(std::slice::from_ref(&p.0), std::slice::from_ref(&q.0))
                     && same(p.1, q.1)
-            });
+            }))
+            || (!a.is_empty() && !b.is_empty() && one_value && same_families(&fams(a), &fams(b)));
         if both(flag) && !ok {
             differ(what, format!("{a:?}"), format!("{b:?}"));
         }

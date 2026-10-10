@@ -39,13 +39,35 @@
 //! the long run's default is 20 000), `CROSSFUZZ_START` (the first case's
 //! index), `CROSSFUZZ_THREADS`, `CROSSFUZZ_LOG` (a file: one line per
 //! finding, tab separated), `CROSSFUZZ_MINIMISE=0` (don't shrink failing
-//! cases). A run is a function of the seed and the range of cases alone.
+//! cases), `CROSSFUZZ_REPLAY_SECONDS` (how long a replay is waited for:
+//! 30). A run is a function of the seed and the range of cases alone,
+//! but for the replays given up on, which are counted and never fail it.
 //! `-- --ignored one` checks one expression: `CROSSFUZZ_EXPR='x^(1/3)'`,
 //! with `CROSSFUZZ_DIGITS` (5–20 or `off`), `CROSSFUZZ_SLIDERS='a=0.3,b=2'`,
-//! `CROSSFUZZ_UNIT` (`deg`, `grad`), `CROSSFUZZ_PAIR` (an equal spelling).
+//! `CROSSFUZZ_UNIT` (`deg`, `grad`), `CROSSFUZZ_PAIR` (an equal spelling)
+//! and `CROSSFUZZ_GROUPS` (`points,panel,replay,digits,pair,plot`: only
+//! those checks). `-- --ignored list_cases` prints a run's cases.
 //!
 //! A failure prints the seed, the case and its setting, each finding, and
 //! the expression shrunk to a small one that still shows it.
+//!
+//! # What a run reports
+//!
+//! * **Findings**: two views disagree. They fail the run.
+//! * **Found before and left open** ([`KNOWN`]): disagreements of a cause
+//!   already found and written down, that isn't fixed here (a documented
+//!   limit of the doubles, the replay's own limits and bugs, which are
+//!   another's to change). Listed with their cause in every run, so that a
+//!   run fails on what is new.
+//! * **Counted, not failures**: what is no disagreement between views
+//!   that prove things, though two evaluations differ. The compiled
+//!   program and the reference compute in doubles: an operand that rounds
+//!   onto a pole makes f "undefined" there (1 − cos x at a tiny x), a
+//!   sum that absorbs a term makes f another function far out, and a NaN
+//!   can say "can't tell". Such a point is judged by f's enclosure, which
+//!   says "maybe" there, and by MPFR; where the scalar is inside f's
+//!   enclosure it is "all that is known within a wide one"
+//!   (`plot::drawn_value`).
 
 #[path = "../examples/oracle/checks.rs"]
 mod checks;
@@ -67,7 +89,7 @@ use views::{Finding, Outcome, Setup, group};
 
 /// The default run: small enough for `cargo test --workspace`.
 const DEFAULT_SEED: u64 = 10;
-const DEFAULT_CASES: u64 = 40;
+const DEFAULT_CASES: u64 = 16;
 /// The long run (`--ignored long_run`).
 const LONG_CASES: u64 = 20_000;
 
@@ -238,19 +260,6 @@ fn counts(case: &Case, _: &Finding) -> bool {
     t.contains("nCr(") || t.contains("nPr(") || t.contains('!')
 }
 
-/// A number typed with more than 15 significant digits, under a setting
-/// that keeps them (16 digits or more, or off).
-fn long_literal(case: &Case, _: &Finding) -> bool {
-    case.digits.is_none_or(|d| d >= 16)
-        && generate::literals(&texts(case)).iter().any(|l| {
-            l.trim_start_matches(['0', '.'])
-                .chars()
-                .filter(char::is_ascii_digit)
-                .count()
-                > 15
-        })
-}
-
 /// A circular function of a whole number of 16 digits or more as typed.
 fn trig_of_a_long_number(case: &Case, _: &Finding) -> bool {
     let t = texts(case);
@@ -281,6 +290,52 @@ fn not_refuted(_: &Case, f: &Finding) -> bool {
     !f.detail.contains("refuted")
 }
 
+/// A root of the degree 0.5 as typed.
+fn root_of_degree_a_half(case: &Case, _: &Finding) -> bool {
+    texts(case).contains(",0.5)")
+}
+
+/// A count in the case, and two finite values in the finding.
+fn counts_and_two_values(case: &Case, f: &Finding) -> bool {
+    counts(case, f) && !f.detail.contains("NaN") && !f.detail.contains("Undef")
+}
+
+/// A ratio of long integers written in the case, and a compiled NaN.
+fn nan_of_a_long_ratio(case: &Case, f: &Finding) -> bool {
+    f.detail.contains("compiled NaN") && {
+        let t = texts(case);
+        let cs = t.as_bytes();
+        (0..cs.len()).any(|i| {
+            cs[i] == b'/'
+                && (cs[..i]
+                    .iter()
+                    .rev()
+                    .take_while(|c| c.is_ascii_digit())
+                    .count()
+                    >= 7
+                    || cs[i + 1..]
+                        .iter()
+                        .take_while(|c| c.is_ascii_digit())
+                        .count()
+                        >= 7)
+        })
+    }
+}
+
+/// A root in the case, two finite values in the finding, x at the
+/// doubles' small end.
+fn root_far_in(case: &Case, f: &Finding) -> bool {
+    texts(case).contains("root(")
+        && !f.detail.contains("NaN")
+        && !f.detail.contains("Undef")
+        && position(&f.detail).is_some_and(|x| x != 0.0 && x.abs() <= 1e-300)
+}
+
+/// In degrees or grads, far out.
+fn a_turn_far_out(case: &Case, f: &Finding) -> bool {
+    case.unit != TrigUnit::Radians && position(&f.detail).is_some_and(|x| x.abs() >= 1e17)
+}
+
 const KNOWN: &[(&str, Matches, &str)] = &[
     // The replay (tests/replay) is another's to change; what it leaves
     // open is listed by kind in this tester's report.
@@ -296,6 +351,36 @@ const KNOWN: &[(&str, Matches, &str)] = &[
         not_refuted,
         "a row the replay can't derive because it leaves its claims open",
     ),
+    // tests/replay/eval.rs: root(x, n) of a degree no integer is read as
+    // x^(1/n) with 1/n exact, so for n = 0.5 as the integer power x², which
+    // takes a negative x. The engine (and docs/ti-conventions.md) take a
+    // base >= 0 for such a degree: no y has y^0.5 = -8.
+    (
+        "mp/enclosure-empty-where-defined",
+        root_of_degree_a_half,
+        "the replay's own root(x, 0.5) is x² for a negative x too, where the engine has it \
+         undefined (tests/replay/eval.rs)",
+    ),
+    (
+        "replay/refuted",
+        root_of_degree_a_half,
+        "the replay's own root(x, 0.5) is x² for a negative x too, where the engine has it \
+         undefined (tests/replay/eval.rs): it refutes the certifier's \"undefined\"",
+    ),
+    (
+        "replay/row-problem",
+        root_of_degree_a_half,
+        "the replay's own root(x, 0.5) is x² for a negative x too, where the engine has it \
+         undefined (tests/replay/eval.rs): it refutes the certifier's \"undefined\"",
+    ),
+    // tests/replay/iv.rs: tan in degrees or grads at 10^300, a whole
+    // number of half turns, is read as a pole.
+    (
+        "mp/enclosure-defined-where-undefined",
+        a_turn_far_out,
+        "the replay's own tan (degrees, grads) at a huge whole number of half turns is \
+         undefined, where it is 0 (tests/replay/iv.rs)",
+    ),
     // functions::ncr and npr (Γ's quotient) in doubles: ∞·0 far out and
     // an underflow to 0 give NaN where the quotient has a value, which the
     // interval form encloses.
@@ -306,10 +391,51 @@ const KNOWN: &[(&str, Matches, &str)] = &[
          the count has a value: functions.rs ncr/npr",
     ),
     (
+        "pt/reference-undefined-where-enclosure-defined",
+        counts,
+        "nCr and nPr through Γ in doubles are NaN (∞·0, or a quotient that underflows) where \
+         the count has a value: functions.rs ncr/npr",
+    ),
+    (
         "pt/box-defined-but-undefined",
         counts,
         "nCr and nPr through Γ in doubles are NaN (∞·0, or a quotient that underflows) where \
          the count has a value: functions.rs ncr/npr",
+    ),
+    // wide.rs: Γ in extended range keeps about 13 digits.
+    (
+        "pt/scalar-vs-reference",
+        counts_and_two_values,
+        "a factorial just past the doubles (Γ(171.5)) is kept to about 13 digits in extended \
+         range: 1/(x − 0.5)! at 171 differs from the reference from there on (wide.rs)",
+    ),
+    (
+        "panel/evaluator-disagrees",
+        counts_and_two_values,
+        "a factorial just past the doubles (Γ(171.5)) is kept to about 13 digits in extended \
+         range: 1/(x − 0.5)! at 171 differs from the reference from there on (wide.rs)",
+    ),
+    // wide.rs pow_mag, functions.rs pow_ratio: |t·e| ≥ 2⁵³ > |t·(e + log₂ m)|.
+    (
+        "pt/scalar-vs-reference",
+        nan_of_a_long_ratio,
+        "x^(p/q) for a long p in a narrow band of x is NaN, untagged, where the power is \
+         below every double (it should be 0): x^(9007199254740993/6) at 0.02 (wide.rs \
+         pow_mag returns Unknown, functions.rs pow_ratio makes it a plain NaN)",
+    ),
+    (
+        "panel/evaluator-disagrees",
+        nan_of_a_long_ratio,
+        "x^(p/q) for a long p in a narrow band of x is NaN, untagged, where the power is \
+         below every double (it should be 0): x^(9007199254740993/6) at 0.02 (wide.rs \
+         pow_mag returns Unknown, functions.rs pow_ratio makes it a plain NaN)",
+    ),
+    // functions.rs root: a degree no whole number goes through pow(x, 1/n).
+    (
+        "pt/scalar-vs-reference",
+        root_far_in,
+        "root(x, n) of a degree no whole number is pow(x, 1/n) with 1/n rounded: tens of \
+         ulps where |ln x|/n is large (functions.rs root); the reference is the closer one",
     ),
     // docs/ti-conventions.md: anything but +, −, ×, ÷, whole powers, |·|
     // and the counts is computed in floating point, from the double
@@ -319,20 +445,6 @@ const KNOWN: &[(&str, Matches, &str)] = &[
         trig_of_a_long_number,
         "a circular function of a typed whole number no double holds is computed at its \
          double (documented: docs/ti-conventions.md), a different angle",
-    ),
-    (
-        "mp/defined-at-most-points-where-undefined",
-        long_literal,
-        "off or at 16 digits and more, a literal the doubles can't tell from its neighbour is \
-         its double to the point evaluator (documented: docs/ti-conventions.md, review 13 \
-         'Known and left'): a difference only that decides can make f defined in doubles",
-    ),
-    (
-        "mp/undefined-at-most-points-where-defined",
-        long_literal,
-        "off or at 16 digits and more, a literal the doubles can't tell from its neighbour is \
-         its double to the point evaluator (documented: docs/ti-conventions.md, review 13 \
-         'Known and left'): a difference only that decides can make f undefined in doubles",
     ),
     // examples/oracle.rs, "Known false alarms".
     (

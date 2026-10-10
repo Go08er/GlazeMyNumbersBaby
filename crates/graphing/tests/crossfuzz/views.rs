@@ -32,7 +32,7 @@ use graphing::lexer::ParseOptions;
 use graphing::plot::{PlotOptions, plot};
 use graphing::{Equation, TrigUnit, Viewport};
 
-use crate::checks::{self, F, K, NoFunction, Setting, Val};
+use crate::checks::{self, Density, F, K, NoFunction, Setting, Val};
 use crate::generate::{rounded_text, slider_unrounded, unrounded};
 
 /// What a function is read and evaluated under.
@@ -178,7 +178,7 @@ fn load(text: &str, set: &Setup) -> Result<Loaded, NoFunction> {
         unit: set.unit,
         parse: set.parse(),
         vars: &vars,
-        sparse: true,
+        density: Density::Quarter,
     };
     let (eq, f, sliders) = checks::load(text, &setting)?;
     Ok(Loaded {
@@ -279,6 +279,23 @@ fn rounding(l: &Loaded, noisy_ast: &Expr, x: f64, c: f64) -> f64 {
     4.0 * ulp(c) + 2.0 * err
 }
 
+/// Whether the compiled value `c` is f's, which MPFR encloses in
+/// `[lo, hi]`, to a few ulps: what the oracle's checks, which judge f by
+/// its doubles, take for granted. (Not within its own rounding bound,
+/// which is the size of what cancelled: off, 2⁵³ + 1 times cosh x less 2⁵³
+/// times it is cosh x, and 0 in doubles with a bound of 8.)
+fn faithful(c: f64, lo: f64, hi: f64) -> bool {
+    if c.is_nan() {
+        return false;
+    }
+    if lo <= c && c <= hi {
+        return true;
+    }
+    // (The nearer end: the other may be beyond the doubles.)
+    let end = if c < lo { lo } else { hi };
+    c.is_finite() && end.is_finite() && (c - end).abs() <= 8.0 * ulp(c.abs().max(end.abs()))
+}
+
 fn distance(c: f64, lo: f64, hi: f64) -> f64 {
     if c < lo {
         lo - c
@@ -369,8 +386,15 @@ fn points(l: &Loaded, out: &mut Outcome) -> Sampled {
             }
         } else {
             if e.dec >= Dec::Def && v.k == K::Undef {
+                // (A compiled NaN that says "can't tell" leaves the
+                // reference alone against the enclosure.)
+                let class = if f.prog.undecided(x, 0.0) {
+                    "pt/reference-undefined-where-enclosure-defined"
+                } else {
+                    "pt/undefined-where-enclosure-defined"
+                };
                 out.fail(
-                    "pt/undefined-where-enclosure-defined",
+                    class,
                     format!(
                         "x={x:e}: compiled NaN, reference undefined, enclosure {}",
                         show_enc(&e)
@@ -614,9 +638,7 @@ mod mp {
                 }
                 // A number there is the doubles' (√(g) where g rounds to
                 // 0 from below): no claim about f unless f's enclosure
-                // says so too (above). Counted; a function the doubles
-                // give values at most of the points it is undefined at
-                // fails below.
+                // says so too (above). Counted.
                 undefined += 1;
                 let reference = || match reval_typed(&l.f.ast, x, l.unit) {
                     R::V(r) => Some(r.f()),
@@ -656,8 +678,7 @@ mod mp {
                 // In doubles an operand can round onto a pole or a domain
                 // end (1 − cos x at a tiny x): undefined there is the
                 // doubles', not a claim about f, unless f's enclosure
-                // says so too (checked above). Counted; a function the
-                // doubles lose at most of its points fails below.
+                // says so too (checked above). Counted.
                 lost += 1;
                 if lost_at.is_empty() {
                     lost_at = format!(
@@ -766,19 +787,23 @@ mod mp {
                 }
             }
         }
+        // The doubles losing f at most of the points looked at: still the
+        // doubles' (7/(1 − cos(x/2³¹)) is undefined in them for |x| < 32,
+        // where the cosine rounds to 1; off, √(0.99999999999999999·e⁷ − e⁷)
+        // is 0 in them everywhere and defined nowhere), and f's enclosure
+        // says "maybe" throughout. Counted apart, to be seen.
         if lost >= 8 && 2 * lost > defined {
-            out.fail(
-                "mp/undefined-at-most-points-where-defined",
-                format!("{lost} of {defined} points MPFR proves f defined at, e.g. {lost_at}"),
+            out.note(
+                "mp/undefined-in-doubles-at-most-points-where-defined",
+                || format!("{lost} of {defined} points MPFR proves f defined at, e.g. {lost_at}"),
             );
         }
         if phantom >= 8 && 2 * phantom > undefined {
-            out.fail(
-                "mp/defined-at-most-points-where-undefined",
+            out.note("mp/number-in-doubles-at-most-points-where-undefined", || {
                 format!(
                     "{phantom} of {undefined} points MPFR proves f undefined at, e.g. {phantom_at}"
-                ),
-            );
+                )
+            });
         }
         out.count("mpfr points", checked);
         out.count("mpfr derivative points", derivs);
@@ -916,6 +941,120 @@ fn proven_undefined(l: &Loaded, mp: Mp<'_>, x: f64) -> Option<bool> {
     mp.and_then(|m| m(x).undefined)
 }
 
+/// How densely the oracle's checks sample a function typed as `text`: a
+/// quarter of their points, and a sixteenth where a ratio of long
+/// integers is written (`x^(1/1000001)`: each value costs the reference
+/// evaluator a hundred microseconds, and the checks take hundreds of
+/// thousands).
+fn density(text: &str) -> Density {
+    let cs = text.as_bytes();
+    let long = |digits: usize| digits >= 7;
+    let ratio = (0..cs.len()).any(|i| {
+        cs[i] == b'/' && {
+            let before = cs[..i]
+                .iter()
+                .rev()
+                .take_while(|c| c.is_ascii_digit())
+                .count();
+            let after = cs[i + 1..]
+                .iter()
+                .take_while(|c| c.is_ascii_digit())
+                .count();
+            long(before) || long(after)
+        }
+    });
+    if ratio {
+        Density::Sparse
+    } else {
+        Density::Quarter
+    }
+}
+
+/// The items of a partial list ("these are some of them"): each is
+/// proven, so each listed zero is a zero of f and each listed turn or
+/// inflection has f's value. (The oracle's checks take complete answers
+/// only.) Judged as the oracle judges a complete list's items, where the
+/// doubles have f's value ([`Mp`], when there is one), and against (c):
+/// an item fails only if f's enclosure over the doubles about it doesn't
+/// hold what the item says either. (A zero of −|cos x|^(−p/7) + x³ beside
+/// π, p past 2⁵³, is right to nine digits while f in doubles is −4.6
+/// there: the cosine's last bit moves f by a seventh.)
+fn partial_items(l: &Loaded, k: &KeyGraphFeatures, mp: Mp<'_>, out: &mut Outcome) {
+    use graphing::analysis::flags;
+    if k.analysis_error != AnalysisError::NoError || k.partial_features == 0 {
+        return;
+    }
+    let d = &k.data;
+    let f = &l.f;
+    // Whether the doubles' f at x is f's (as far as MPFR tells).
+    let sound = |x: f64| match mp.and_then(|m| m(x).value) {
+        Some((lo, hi)) => faithful(f.prog.eval(x, 0.0), lo, hi),
+        None => true,
+    };
+    let poles: Vec<graphing::analysis::Family> = d
+        .vertical_asymptotes
+        .iter()
+        .chain(&d.excluded)
+        .copied()
+        .collect();
+    let ctx = Ctx::new(l.opts());
+    // Whether f's enclosure over the doubles about x holds y.
+    let enclosed = |x: f64, y: f64| {
+        let around = Interval::new(checks::step(x, -16), checks::step(x, 16));
+        let e = enclose(l.ast(), around, &ctx);
+        !e.is_empty() && e.lo() <= y && y <= e.hi()
+    };
+    if k.partial_features & flags::ZEROS != 0 {
+        for z in &d.zeros {
+            for x in checks::members(z) {
+                out.count("items of partial lists", 1);
+                if sound(x) && f.zero_holds(x, &poles) == Some(false) && !enclosed(x, 0.0) {
+                    out.fail(
+                        "panel/partial-zero-not-zero",
+                        format!("{}: f({x:e}) = {:e}", k.x_intercept, f.at(x).v),
+                    );
+                }
+            }
+        }
+    }
+    for (flag, list, name) in [
+        (flags::MINIMA, &d.minima, "minimum"),
+        (flags::MAXIMA, &d.maxima, "maximum"),
+        (flags::INFLECTION_POINTS, &d.inflection_points, "inflection"),
+    ] {
+        if k.partial_features & flag == 0 {
+            continue;
+        }
+        for (fam, y) in list {
+            for x in checks::members(fam) {
+                out.count("items of partial lists", 1);
+                let v = f.at(x);
+                if !sound(x) {
+                    continue;
+                }
+                if v.k == K::Undef && proven_undefined(l, mp, x) == Some(true) {
+                    out.fail(
+                        "panel/partial-item-undefined",
+                        format!("{name} ({x:e}, {y}), where f is undefined"),
+                    );
+                } else if v.k == K::Def && v.v.is_finite() && !v.sat {
+                    let wrong = if *y == 0.0 {
+                        f.zero_holds(x, &poles) == Some(false)
+                    } else {
+                        (y - v.v).abs() > f.tol(x) && !checks::alike(*y, v.v)
+                    };
+                    if wrong && !enclosed(x, *y) {
+                        out.fail(
+                            "panel/partial-item-value-wrong",
+                            format!("{name} ({x:e}, {y:e}), but f there = {:e}", v.v),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// (d) against (a) and (b) sampled, by the oracle's checks; and against
 /// (c) at 0.
 fn panel(
@@ -926,8 +1065,7 @@ fn panel(
     mp: Mp<'_>,
     out: &mut Outcome,
 ) {
-    let noisy_ast = noisy(&l.f.ast);
-    for f in checks::check_analysed(text, &l.f, k, &[], false, true) {
+    for f in checks::check_analysed(text, &l.f, k, &[], false, density(text)) {
         let class = format!("panel/{}", f.class);
         if f.note {
             out.note(&class, || f.detail.clone());
@@ -947,7 +1085,7 @@ fn panel(
             && let Some((lo, hi)) = mp.and_then(|m| m(at).value)
         {
             let c = l.f.prog.eval(at, 0.0);
-            if c.is_nan() || distance(c, lo, hi) > rounding(l, &noisy_ast, at, c) {
+            if !faithful(c, lo, hi) {
                 out.note(&format!("{class}-where-the-doubles-miss-f"), || {
                     format!(
                         "{} (f({at:e}) = [{lo:e}, {hi:e}], compiled {c:e})",
@@ -957,7 +1095,30 @@ fn panel(
                 continue;
             }
         }
+        // f's enclosure over the doubles about x, to hold y: a zero so
+        // sharp that f is far from 0 at the doubles beside it
+        // (tan(x)^(2/1000001) at the double nearest π is 0.99993) is a
+        // zero of the enclosure there all the same.
+        let ctx = Ctx::new(l.opts());
+        let enclosed = |x: f64, y: f64| {
+            let around = Interval::new(checks::step(x, -16), checks::step(x, 16));
+            let e = enclose(l.ast(), around, &ctx);
+            !e.is_empty() && e.lo() <= y && y <= e.hi()
+        };
         match f.class {
+            "zero-not-zero" if f.at.is_finite() && enclosed(f.at, 0.0) => {
+                out.note("panel/zero-not-zero-in-doubles", || f.detail.clone());
+            }
+            // f(x + P) against f(x), where x + P lands beside such a point.
+            "period-witness"
+                if f.at.is_finite()
+                    && k.data.period.is_some_and(|p| {
+                        let v = l.f.prog.eval(f.at, 0.0);
+                        !v.is_nan() && enclosed(f.at + p, v)
+                    }) =>
+            {
+                out.note("panel/period-witness-in-doubles", || f.detail.clone());
+            }
             // The compiled NaN there may say "can't tell".
             "evaluator-disagrees"
                 if l.f.prog.eval(f.at, 0.0).is_nan() && l.f.prog.undecided(f.at, 0.0) =>
@@ -981,6 +1142,7 @@ fn panel(
             _ => out.fail(&class, f.detail),
         }
     }
+    partial_items(l, k, mp, out);
     let Some(a) = cert else { return };
     let rows = [
         a.domain.value().is_some(),
@@ -1268,6 +1430,15 @@ fn plotted(l: &Loaded, out: &mut Outcome) {
     }
 }
 
+/// Whether f is 0 at every sample it has a value at (and so even and odd
+/// at once, as far as sampling tells).
+fn nowhere_but_zero(f: &F) -> bool {
+    sample_xs(f).into_iter().all(|x| {
+        let v = f.at(x);
+        v.k != K::Def || v.xf.is_zero()
+    })
+}
+
 // --------------------------------------------------------------------- run
 
 /// Every check of `groups` on `y = text` under `set` (and, for
@@ -1390,17 +1561,21 @@ pub fn run(text: &str, pair: Option<&str>, set: &Setup, groups: u32) -> Outcome 
                 unit: set.unit,
                 parse: set.parse(),
                 vars: &vars,
-                sparse: true,
+                density: density(&format!("{text} {other}")),
             };
             out.count("pairs", 1);
             for f in checks::check_pair_in(text, other, false, &setting) {
                 // "Even" (or "odd") of the zero function is true, though
                 // not the whole answer ("both"): one spelling proving
                 // more than the other is no contradiction.
-                let weaker = f.class == "equivalent-answers-differ"
-                    && f.detail.starts_with("parity:")
-                    && f.detail.contains("says Both")
-                    && (f.detail.contains("says Even") || f.detail.contains("says Odd"));
+                // (And "even" against "odd" both hold of a function that
+                // is 0 wherever it is defined: x·√(x − x).)
+                let parity =
+                    f.class == "equivalent-answers-differ" && f.detail.starts_with("parity:");
+                let says = |p: &str| f.detail.contains(&format!("says {p}"));
+                let weaker = parity
+                    && ((says("Both") && (says("Even") || says("Odd")))
+                        || (says("Even") && says("Odd") && nowhere_but_zero(&l.f)));
                 let cannot_tell = f.class == "spelling-value-differs"
                     && f.at.is_finite()
                     && l.f.prog.eval(f.at, 0.0).is_nan()
