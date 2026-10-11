@@ -390,19 +390,23 @@ const KNOWN: &[(&str, Matches, &str)] = &[
         "the replay's own root(x, 0.5) is x² for a negative x too, where the engine has it \
          undefined (tests/replay/eval.rs)",
     ),
-    // tests/replay/claims.rs: f′ of the source tree is ∞ − ∞ at a closed
-    // end of the domain where the certifier's simplified form is smooth
-    // (acosh x − acosh x + sin x at 1), and a OneCross of f′ on a box from
-    // that end comes out refuted, not unconfirmed. The claim holds of the
-    // one-sided derivative; whether a box of f′ may start at a domain's
-    // end is the certifier's and the replay's to settle between them.
+    // tests/replay/claims.rs, `Claim::OneCross` (`below_first`, as the
+    // entry after next): f′ or f″ of the source tree is ∞ − ∞ at the
+    // first point of the domain, where the certifier's simplified form is
+    // smooth (acosh x − acosh x + sin x at 1, log(x, 2) − log(x, 2) + x² −
+    // x³ + 6 at 5·10⁻³²⁴), so the replay can't place the low end of a
+    // OneCross of f′ or f″ from there, reads it as below c, and refutes
+    // the claim at the high end, which is below c as claimed. Unconfirmed
+    // is what it is. (Whether a box of f′ may start where the source
+    // tree's derivative has no value is the certifier's and the replay's
+    // to settle: the `Beyond` at that point alone is left unconfirmed.)
     (
         "replay/refuted",
         derivative_from_a_domain_end,
-        "a claim about f′ on a box from a closed end of the domain, where the source tree's \
-         derivative is ∞ − ∞ and the simplified form's is not: the replay refutes it \
-         (tests/replay/claims.rs), the certifier claims it of the one-sided derivative \
-         (certify/mod.rs); the row's answer is right in the cases seen",
+        "a OneCross of f′ or f″ on a box from the first point of the domain, where the \
+         source tree's derivative is ∞ − ∞ and the simplified form's is not: the replay \
+         can't place that end, takes it for one below c and refutes the claim at the other \
+         (tests/replay/claims.rs, `below_first`): the claim is true and only unconfirmed",
     ),
     // tests/replay/claims.rs: "f is periodic, so no oblique asymptote" is
     // tested by f/x at points up to 10²⁴⁰, where tan(x) + cosh(2³¹ + 1),
