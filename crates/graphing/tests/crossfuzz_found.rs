@@ -1003,3 +1003,38 @@ fn a_kink_box_is_continuous_by_fs_own_tree_too() {
     .expect("certifies");
     assert!(a.extrema.is_certified(), "{:?}", a.extrema);
 }
+
+/// A degree below every double and not 0 has the double 0, and the root
+/// of degree 0 is undefined: root(x, 0.2ˣ) at 562, whose degree is
+/// 10⁻³⁹³, was "undefined" to the reference and "can't tell" to the
+/// compiled evaluator, where the interval form has the root past every
+/// double. It keeps its side; a degree that is 0 stays undefined.
+#[test]
+fn a_root_of_a_degree_below_the_doubles_keeps_its_side() {
+    let f = "root(x,0.2^x)";
+    for x in [562.0, 1000.0] {
+        assert_eq!(scalar(f, x), f64::INFINITY, "{f} at {x}");
+        assert!(!matches!(reference(f, x), R::Undef), "{f} at {x}");
+    }
+    assert_eq!(scalar("1^(2/3)-root(x-8,0.2^x)", 1000.0), f64::NEG_INFINITY);
+    // Below 1 the root is below every double; of 1 it is 1; a negative
+    // degree turns the two about; a negative x has no such root.
+    assert_eq!(scalar("root(x/1000,0.2^x)", 562.0), 0.0);
+    match reference("root(x/1000,0.2^x)", 562.0) {
+        R::V(v) => assert!(v.sign() > 0.0 && v.f() == 0.0, "{v:?}"),
+        r => panic!("{r:?}"),
+    }
+    assert_eq!(scalar("root(x/x,0.2^x)", 562.0), 1.0);
+    assert_eq!(scalar("root(x,-(0.2^x))", 562.0), 0.0);
+    assert_eq!(scalar("root(x/1000,-(0.2^x))", 562.0), f64::INFINITY);
+    assert!(scalar("root(-x,0.2^x)", 562.0).is_nan());
+    assert!(matches!(reference("root(-x,0.2^x)", 562.0), R::Undef));
+    // A degree that is 0 is no degree.
+    for g in ["root(x,x-x)", "root(x,0*x)", "root(x,0)"] {
+        assert!(scalar(g, 562.0).is_nan(), "{g}");
+        assert!(matches!(reference(g, 562.0), R::Undef), "{g}");
+    }
+    // And a degree the doubles hold is as it was.
+    let v = scalar("root(x,0.2^x)", 2.0);
+    assert!((v - 2f64.powi(25)).abs() < 1e-3, "{v}");
+}
