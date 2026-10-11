@@ -746,6 +746,17 @@ impl Program {
         self.eval(x, 0.0)
     }
 
+    /// Whether the NaN [`Program::eval`] gives at a point says "can't
+    /// tell", not "undefined": an intermediate left the doubles and the
+    /// extended-range evaluation couldn't decide either (the sine of
+    /// e^1000, arithmetic on a value too long to fold). For the tools that
+    /// compare evaluators (`tests/crossfuzz.rs`): a value another view has
+    /// there contradicts "undefined", not "can't tell".
+    #[doc(hidden)]
+    pub fn undecided(&self, x: f64, y: f64) -> bool {
+        self.eval_tagged(x, y).1 == Redo::Unknown
+    }
+
     /// Evaluates many points at once. `out.len()` points are computed;
     /// slice inputs must be at least that long. Instructions are applied to
     /// chunks of points at a time, amortising dispatch.

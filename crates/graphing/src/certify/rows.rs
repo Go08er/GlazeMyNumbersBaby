@@ -284,6 +284,10 @@ enum Seg {
     Flat,
     /// A kink of f (enclosed): f′ and f″ undecided there, f continuous.
     Kink(Enc),
+    /// A kink box inside which f leaves the span of its end values
+    /// (`Cover::kink_dent`): a turn where the signs beside it differ, not
+    /// decided otherwise.
+    Dent(Enc),
     /// Not decided.
     Unknown,
 }
@@ -291,8 +295,13 @@ enum Seg {
 fn walk(cover: &Cover, ib: &IBox) -> Vec<Seg> {
     // Each leaf's segments, and each kink's, in x order.
     let mut parts: Vec<(f64, Vec<Seg>)> = Vec::new();
-    for &(l, r) in cover.kinks.iter().filter(|(l, r)| *l >= ib.a && *r <= ib.b) {
-        parts.push((l, vec![Seg::Kink(Enc::new(l, r))]));
+    for (i, &(l, r)) in cover.kinks.iter().enumerate() {
+        if !(l >= ib.a && r <= ib.b) {
+            continue;
+        }
+        let x = Enc::new(l, r);
+        let dent = cover.kink_dent.get(i).copied().unwrap_or(false);
+        parts.push((l, vec![if dent { Seg::Dent(x) } else { Seg::Kink(x) }]));
     }
     for l in cover.leaves.iter().filter(|l| {
         let (a, b) = l.span();
@@ -344,7 +353,11 @@ fn walk(cover: &Cover, ib: &IBox) -> Vec<Seg> {
     // A kink placed exactly (`Claim::KinkAt`) whose one-sided signs carry
     // on the signs beside its box: the turn there is at that point.
     for i in 1..out.len().saturating_sub(1) {
-        let Seg::Kink(x) = out[i] else { continue };
+        // (Placed exactly, f is strictly monotone on each side of the
+        // point inside the box: nothing else happens in it.)
+        let (Seg::Kink(x) | Seg::Dent(x)) = out[i] else {
+            continue;
+        };
         let placed = cover
             .kinks
             .iter()
@@ -407,6 +420,20 @@ fn changes(segs: &[Seg], kink_turns: bool) -> (Vec<(Enc, bool)>, bool) {
                     _ => complete = false,
                 }
             }
+            Seg::Dent(x) => {
+                let before = i.checked_sub(1).and_then(|j| segs.get(j));
+                let after = segs.get(i + 1);
+                match (before, after) {
+                    (Some(Seg::Sign(p)), Some(Seg::Sign(q))) if p != q => {
+                        if kink_turns {
+                            out.push((*x, *p));
+                        } else {
+                            complete = false;
+                        }
+                    }
+                    _ => complete = false,
+                }
+            }
             Seg::Zero(x) => {
                 let before = i.checked_sub(1).and_then(|j| segs.get(j));
                 let after = segs.get(i + 1);
@@ -434,6 +461,26 @@ fn changes(segs: &[Seg], kink_turns: bool) -> (Vec<(Enc, bool)>, bool) {
 }
 
 // ---------------------------------------------------------- extrema
+
+/// Whether a claim about f on `span`, a box that holds the closed domain
+/// end (or the isolated point of the domain) `x`, may be made from the
+/// certifier's tree. An end at a double: yes, the box lies in the domain.
+/// An end known only to an enclosure:
+/// the box reaches outside the domain, where the simplified form may be
+/// defined and f not, so f's own tree must be defined there as far as
+/// `need` too (which, of a tree not simplified, the caller's own test
+/// asks already). (4 + 5x)^(x⁰) is (4 + 5x)¹ to the certifier and is
+/// undefined left of −0.8, which no double is: its minimum at that end
+/// was certified on "f is continuous on [−0.8000000000000003, −5·10⁻³²⁴]"
+/// and "f's values on [−0.8000000000000003, −0.7999999999999998]", which
+/// the replay refuted (found by `tests/crossfuzz.rs`).
+fn own_tree_too(f: &Fun<'_>, x: Enc, span: Interval, need: Dec) -> Result<bool, Stop> {
+    if x.is_point() || f.eval == f.expr {
+        return Ok(true);
+    }
+    let own = f.ser_of(&f.expr, span, 0)?[0];
+    Ok(!own.is_empty() && own.dec >= need)
+}
 
 /// A local extremum at a closed end of the domain (a domain bound, not a
 /// window edge), like √x's minimum at 0 or asin's at ±1: f is continuous
@@ -500,7 +547,7 @@ fn end_extremum(
         Interval::new(a, x.hi.0)
     };
     let over = f.val(span)?;
-    if over.is_empty() || over.dec < Dec::Dac {
+    if over.is_empty() || over.dec < Dec::Dac || !own_tree_too(f, x, span, Dec::Dac)? {
         return Ok(None);
     }
     let y = f.val_tight(Interval::new(x.lo.0, x.hi.0))?;
@@ -679,7 +726,7 @@ fn monotone_pieces(c1: &Cover, boxes: &[IBox]) -> Option<Vec<(Monotone, bool, bo
                         dir = Some(p);
                     }
                 }
-                Seg::Zero(x) | Seg::Kink(x) => {
+                Seg::Zero(x) | Seg::Kink(x) | Seg::Dent(x) => {
                     let after = segs.get(i + 1);
                     if let (Some(d), Some(Seg::Sign(q))) = (dir, after)
                         && *q != d
@@ -918,7 +965,7 @@ pub fn gaps_clear(
             _ => None,
         };
         if let Some(t) = tree
-            && (t.exact_value() == Some(0.0) || factors_clear(f, t, iv)?)
+            && (t.exact_value() == Some(0.0) || factors_clear(f, t, iv, boxes)?)
         {
             continue;
         }
@@ -940,27 +987,64 @@ pub fn gaps_clear(
     Ok(true)
 }
 
-/// `e` has no zero strictly between the doubles of the box `g`: each of
-/// its zero factors ([`super::fun::zero_factors`]) is away from 0 over the
-/// box, or is exactly 0 at one of its doubles and strictly monotone there.
-fn factors_clear(f: &Fun<'_>, e: &crate::ast::Expr, g: Interval) -> Result<bool, Stop> {
+/// `e` has no zero of f's strictly inside the box `g`: each of its zero
+/// factors ([`super::fun::zero_factors`]) is away from 0 over the box, or
+/// is exactly 0 at one of its doubles and strictly monotone there (so 0
+/// nowhere else in it), that double being an end of the box (which the
+/// claims beside the gap decide) or a point where f is undefined.
+///
+/// A double strictly inside the box where f may be defined is a zero the
+/// gap holds: √(0.1 + 0.9 + x) is 0 at −1, its domain's end, which the
+/// certifier encloses by the doubles either side (the sum of the two
+/// literals is 1 only exactly), so the gap is three doubles wide with the
+/// zero in the middle; taken for clear, the x-intercepts were certified
+/// "none" (found by `tests/crossfuzz.rs`).
+///
+/// f is undefined at such a double where the boxes leave it out as a point
+/// known exactly (an open end the domain decided, or a member of an
+/// excluded family at a double, which has its `Undefined` claim), or
+/// where f's own tree is empty there. The first is what a pole needs: an
+/// enclosure of cot(2x) at 0 is the whole line, not empty, and the factor
+/// sin(x + x) its second derivative's tree keeps is 0 there.
+fn factors_clear(
+    f: &Fun<'_>,
+    e: &crate::ast::Expr,
+    g: Interval,
+    boxes: &[IBox],
+) -> Result<bool, Stop> {
+    let left_out = |z: f64| {
+        boxes.iter().any(|ib| {
+            [ib.lo, ib.hi].iter().any(
+                |b| matches!(*b, Bound::At { x, closed: false } if x.is_point() && x.lo.0 == z),
+            )
+        })
+    };
     for h in f.factors(e) {
         let s = f.ser_of(&h, g, 1)?;
         if !s[0].is_empty() && s[0].ne0() {
             continue;
         }
         let mono = usable(&s, 1) && s[1].ne0();
-        let mut exact = false;
+        let mut zero = None;
         let mut q = g.lo();
         for _ in 0..8 {
-            if !mono || q > g.hi() || exact {
+            if !mono || q > g.hi() || zero.is_some() {
                 break;
             }
             let v = f.ser_of(&h, Interval::point(q), 0)?[0];
-            exact = v.lo() == 0.0 && v.hi() == 0.0;
+            if v.lo() == 0.0 && v.hi() == 0.0 {
+                zero = Some(q);
+            }
             q = q.next_up();
         }
-        if !exact {
+        let Some(z) = zero else {
+            return Ok(false);
+        };
+        if g.lo() < z
+            && z < g.hi()
+            && !left_out(z)
+            && !f.ser_of(&f.expr, Interval::point(z), 0)?[0].is_empty()
+        {
             return Ok(false);
         }
     }
@@ -1223,10 +1307,48 @@ fn out_along(start: f64) -> Vec<f64> {
     ms
 }
 
+/// How far out a tail on one side must start to lie wholly inside the
+/// domain: past the last end of the domain on that side (a tail [M, ∞) or
+/// (−∞, −M] with M greater than this), −∞ where that side's piece has no
+/// other end; ∞ (no tail does) with excluded families, which recur along
+/// every tail, or with no piece reaching that side.
+pub fn tail_past(dom: &Domain, right: bool) -> f64 {
+    if !dom.families.is_empty() {
+        return f64::INFINITY;
+    }
+    let piece = dom.pieces.iter().find(|p| {
+        if right {
+            p.hi == Bound::PosInf
+        } else {
+            p.lo == Bound::NegInf
+        }
+    });
+    match piece.map(|p| if right { p.lo } else { p.hi }) {
+        Some(Bound::At { x, .. }) => {
+            if right {
+                x.hi.0
+            } else {
+                -x.lo.0
+            }
+        }
+        Some(_) => f64::NEG_INFINITY,
+        None => f64::INFINITY,
+    }
+}
+
 /// The tails' starts for f on one side: [`out_along`], and beside each
 /// far centre of an exponential in f on that side (c + 2ᵏ: e^(x − 10⁹) is
 /// a double only within 745 of 10⁹).
+///
+/// Only those past the domain's last end on that side ([`tail_past`]): a
+/// tail from any other holds a point where f is undefined, and the claims
+/// on it are made from the simplified form, which has values there
+/// (0·(x − 8)⁰ + 2ˣ is 2ˣ with a hole at 8; f″ beyond a bound on [1, ∞)
+/// was claimed across it, and 0.2/x·(4x)^(0·log(x, 2)) had its values on
+/// [1, ∞) claimed through 1, where the base of its logarithm is 1: the
+/// replay refuted both, found by `tests/crossfuzz.rs`).
 fn far_points(f: &Fun<'_>, right: bool, start: f64) -> Vec<f64> {
+    let past = f.tails_past.get()[usize::from(right)];
     let mut ms = out_along(start);
     if f.simplifier {
         for c in crate::simplify::limit::centres(&f.expr) {
@@ -1237,6 +1359,7 @@ fn far_points(f: &Fun<'_>, right: bool, start: f64) -> Vec<f64> {
         ms.sort_by(f64::total_cmp);
         ms.dedup();
     }
+    ms.retain(|m| *m > past);
     ms
 }
 
@@ -2230,14 +2353,35 @@ fn own_line(f: &Fun<'_>) -> Option<Claim> {
     })
 }
 
+/// f's value at the double x, where f is defined there: a bounded
+/// enclosure from the simplified form, and f's own tree defined there
+/// too. The simplified form is f only where f is defined, and has values
+/// where f has none: min(0·acosh x, x) is min(0, x) for x ≥ 1 only, and
+/// its values at −15 and −13 "showed" a function that is 0 on all its
+/// domain to be no constant (a `Value` claim the replay refuted, and an
+/// asymptote y = 0 in the certificate of a constant: found by
+/// `tests/crossfuzz.rs`).
+fn value_at(f: &Fun<'_>, x: f64) -> Result<Option<DecInterval>, Stop> {
+    let v = f.val(Interval::point(x))?;
+    if v.is_empty() || v.dec < Dec::Def || !v.iv.is_bounded() {
+        return Ok(None);
+    }
+    if f.eval != f.expr {
+        let own = f.ser_of(&f.expr, Interval::point(x), 0)?[0];
+        if own.is_empty() || own.dec < Dec::Def {
+            return Ok(None);
+        }
+    }
+    Ok(Some(v))
+}
+
 /// Sample points of the window where f is defined, with its values.
 fn samples(f: &Fun<'_>, scope: &Scope) -> Result<Vec<(f64, DecInterval)>, Stop> {
     let (a, b) = scope.window;
     let mut vals = Vec::new();
     for i in 0..16 {
         let x = a + (b - a) * (i as f64 + 0.5) / 16.0;
-        let v = f.val(Interval::point(x))?;
-        if !v.is_empty() && v.dec >= Dec::Def && v.iv.is_bounded() {
+        if let Some(v) = value_at(f, x)? {
             vals.push((x, v));
         }
     }
@@ -2263,8 +2407,7 @@ fn not_constant(f: &Fun<'_>, scope: &Scope) -> Result<Option<Vec<Claim>>, Stop> 
         for right in [false, true] {
             for m in thin(&far_points(f, right, 1.0), 24) {
                 let x = if right { m } else { -m };
-                let v = f.val(Interval::point(x))?;
-                if !v.is_empty() && v.dec >= Dec::Def && v.iv.is_bounded() {
+                if let Some(v) = value_at(f, x)? {
                     vals.push((x, v));
                 }
             }
@@ -3101,7 +3244,19 @@ fn end_value(
                 TailEnd::Unknown => None,
             }
         }
-        Bound::At { x, closed: true } => attained(f, x, cl)?,
+        Bound::At { x, closed: true } => {
+            // A closed end of the domain (not a turning point between two
+            // monotone pieces, which lies inside it) known only to an
+            // enclosure: [`own_tree_too`].
+            let domain_end = boxes
+                .iter()
+                .any(|ib| (ib.lo == b && !ib.lo_clipped) || (ib.hi == b && !ib.hi_clipped));
+            if domain_end && !own_tree_too(f, x, Interval::new(x.lo.0, x.hi.0), Dec::Def)? {
+                None
+            } else {
+                attained(f, x, cl)?
+            }
+        }
         Bound::At { x, closed: false } => {
             // The box this end belongs to.
             let Some(ib) = boxes
@@ -3279,6 +3434,10 @@ pub fn range(
         if p.lo == p.hi
             && let Bound::At { x, closed: true } = p.lo
         {
+            // (Known only to an enclosure: [`own_tree_too`].)
+            if !own_tree_too(f, x, Interval::new(x.lo.0, x.hi.0), Dec::Def)? {
+                return unknown("an isolated point's value");
+            }
             let Some(e) = attained(f, x, &mut cl)? else {
                 return unknown("an isolated point's value");
             };

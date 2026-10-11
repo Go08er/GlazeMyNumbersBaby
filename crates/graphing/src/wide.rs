@@ -123,8 +123,19 @@ fn ln_dd(m: f64, e: f64) -> dd::Dd {
 /// nothing that would land back within 2⁵³ binades.
 fn pow_mag(m: f64, e: f64, t: dd::Dd) -> Wide {
     let p = t.hi * e;
-    if !p.is_finite() || p.abs() >= TWO53 || !e.is_finite() || e.abs() > TWO53 {
-        let n = p + t.hi * cm::log2(m.abs());
+    // The result's binades: t·(e + log₂|m|). Past 2⁵³ of them through the
+    // mantissa alone too (1.5^(−10³⁰⁰): e is 0): `dd::exp` holds t·ln|b|
+    // to a fraction of an ulp only below that, and beyond it gave a
+    // mantissa of noise, 0 or ∞ by chance (1.5^x + 1 was ∞ at −10³⁰⁰ and 1
+    // at 10³⁰⁰: found by `tests/crossfuzz.rs`).
+    let n = p + t.hi * cm::log2(m.abs());
+    if !p.is_finite()
+        || p.abs() >= TWO53
+        || !e.is_finite()
+        || e.abs() > TWO53
+        || n.is_nan()
+        || n.abs() >= TWO53
+    {
         return if n.is_nan() {
             Wide::Unknown
         } else if n.is_infinite() || n.abs() > TWO53 {

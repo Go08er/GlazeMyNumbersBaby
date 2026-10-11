@@ -311,6 +311,10 @@ pub struct Fun<'a> {
     /// gives [0, 2⁻⁵²]. (A few trees: f's, its simplified form, f′, f″, the
     /// side conditions'.)
     folds: std::cell::RefCell<Vec<(Expr, Option<std::sync::Arc<Expr>>)>>,
+    /// How far out a tail must start to lie inside the domain, on the left
+    /// and on the right (`rows::tail_past`; −∞ until the domain is
+    /// known): the tails' starts are taken past it (`rows::far_points`).
+    pub tails_past: Cell<[f64; 2]>,
     evals: Cell<u64>,
     /// The current phase's limit.
     budget: Cell<u64>,
@@ -340,6 +344,7 @@ impl<'a> Fun<'a> {
             simplifier: false,
             opts,
             folds: std::cell::RefCell::new(Vec::new()),
+            tails_past: Cell::new([f64::NEG_INFINITY; 2]),
             evals: Cell::new(0),
             budget: Cell::new(budget),
             total: Cell::new(budget),
