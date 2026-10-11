@@ -229,3 +229,37 @@ fn nothing_is_drawn_from_an_enclosure_that_does_not_prove_f_defined() {
     assert!(d.plot.curves.is_empty(), "{} pieces", d.plot.curves.len());
     assert!(d.plot.holes.is_empty());
 }
+
+/// A column with more breaks than are located is drawn as a stroke, and
+/// the column right after it, in its run, gets a short allowance. Only
+/// that one: root(x, 7 + ln(4 − x²)) + x has such columns where its degree
+/// runs through the whole numbers, beside −2, and its curve starts at 0,
+/// fifty pixels on, rising from 0 with a vertical tangent. The start was
+/// a stroke down its first column from 0.49 up, the rise below it gone.
+#[test]
+fn a_dense_column_far_off_does_not_cut_a_curve_s_start_short() {
+    let vp = reset_view();
+    let d = drawn("root(x,7+ln(4-x^2))+x", &vp);
+    let px = vp.x_per_px();
+    // The piece that starts at the domain's end.
+    let piece = d
+        .plot
+        .curves
+        .iter()
+        .find(|line| line[0].x >= 0.0 && line[0].x < px)
+        .expect("a piece starting in the first column right of 0");
+    // Within a hundredth of a pixel of 0, low on the rise (f is 0.17
+    // there; the stroke began at 0.49), and on through the middle of the
+    // domain in one piece.
+    assert!(piece[0].x < 0.01 * px, "starts at {}", piece[0].x);
+    assert!(piece[0].y < 0.2, "starts at height {}", piece[0].y);
+    assert!(
+        piece[piece.len() - 1].x > 1.9,
+        "ends at {}",
+        piece[piece.len() - 1].x
+    );
+    for q in piece.iter().filter(|q| q.y > vp.y_min && q.y < vp.y_max) {
+        let (lo, hi) = d.enclosure(q.x);
+        assert!(lo - 1e-12 <= q.y && q.y <= hi + 1e-12, "({}, {})", q.x, q.y);
+    }
+}
