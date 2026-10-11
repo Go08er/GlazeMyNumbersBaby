@@ -2229,7 +2229,9 @@ fn rounds_onto(a: &Expr, opts: &CompileOptions<'_>) -> Option<(Rat, f64)> {
 /// arithmetic on literals and sliders) that rounds onto a number the
 /// function turns on without being it: a quarter turn in degrees or grads
 /// (off, `tan(90.00000000000000000001)`, or `tan(90 + 10^(-30))` at any
-/// setting). The argument's double sits on that number, so the general
+/// setting), 1 under a logarithm or as its base
+/// (`ln(1.00000000000000000001)`). The argument's double sits on that
+/// number, so the general
 /// path would give the function there (a pole for a value beside it, an
 /// exact 0 for a value that isn't): the exact value decides instead
 /// (review 19, R19-M-04's family). The same value is written from the
@@ -2285,6 +2287,45 @@ pub(crate) fn exact_call(f: Func, args: &[Expr], opts: &CompileOptions<'_>) -> O
             };
             let delta = Expr::bin(BinOp::Sub, args[0].clone(), num(d));
             Some(Exact::As(signed(sign, Expr::call1(g, delta))))
+        }
+        // A logarithm turns at 1, its zero: off, ln(1.00000000000000000001)
+        // is 10⁻²⁰, not the 0 of its double, and 1 over it is 10²⁰, not a
+        // division by zero. ln a = 2·artanh((a − 1)/(a + 1)), whose
+        // argument is folded exactly.
+        Ln | Log => {
+            let (_, d) = rounds_onto(&args[0], opts)?;
+            if d != 1.0 {
+                return None;
+            }
+            let a = &args[0];
+            let z = Expr::bin(
+                BinOp::Div,
+                Expr::bin(BinOp::Sub, a.clone(), num(1.0)),
+                Expr::bin(BinOp::Add, a.clone(), num(1.0)),
+            );
+            let ln = Expr::bin(BinOp::Mul, num(2.0), Expr::call1(Atanh, z));
+            Some(Exact::As(if f == Ln {
+                ln
+            } else {
+                Expr::bin(BinOp::Div, ln, Expr::call1(Ln, num(10.0)))
+            }))
+        }
+        // log(b, t) = ln t/ln b: undefined at a base of 1, 0 at a t of 1.
+        LogBase if args.len() == 2 => {
+            let turns = |a: &Expr| rounds_onto(a, opts).is_some_and(|(_, d)| d == 1.0);
+            let (b, t) = (&args[0], &args[1]);
+            let ln = |a: &Expr| Expr::call1(Ln, a.clone());
+            if turns(b) {
+                // (The base's logarithm, written as above, is not 0.)
+                Some(Exact::As(Expr::bin(BinOp::Div, ln(t), ln(b))))
+            } else if turns(t) {
+                // ln t times 1/ln b, which is log(b, e): the logarithm
+                // itself keeps the base's rules (b > 0 and not 1).
+                let per = Expr::Call(LogBase, vec![b.clone(), Expr::Const(Constant::E)]);
+                Some(Exact::As(Expr::bin(BinOp::Mul, ln(t), per)))
+            } else {
+                None
+            }
         }
         _ => None,
     }

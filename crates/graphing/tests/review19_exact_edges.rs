@@ -556,3 +556,81 @@ fn an_exact_angle_beside_a_quarter_turn_is_not_on_it() {
     plots_as("5+floor(sin(180.00000000000000000001))", OFF, Degrees, |_| 4.0);
     plots_as("x*sign(cos(90+10^(-30)))", TI, Degrees, |x| -x);
 }
+
+/// A logarithm turns at 1: of an exact value a hair off 1 it is that
+/// hair, not the 0 of the value's double, and as a base such a value is a
+/// base, not the 1 no logarithm has.
+#[test]
+fn a_logarithm_of_an_exact_value_beside_one() {
+    use std::f64::consts::{LN_2, LN_10};
+    let ln5 = 5f64.ln();
+    for (text, x, off, ti) in [
+        ("ln(1.00000000000000000001)", 0.0, V::Is(1e-20), V::Is(0.0)),
+        ("ln(0.99999999999999999999)", 0.0, V::Is(-1e-20), V::Is(0.0)),
+        ("10^20*ln(1.00000000000000000001)", 0.0, V::Is(1.0), V::Is(0.0)),
+        ("log(0.99999999999999999999)", 0.0, V::Is(-1e-20 / LN_10), V::Is(0.0)),
+        ("log(1.00000000000000000001)", 0.0, V::Is(1e-20 / LN_10), V::Is(0.0)),
+        ("sign(ln(1.00000000000000000001))", 0.0, V::Is(1.0), V::Is(0.0)),
+        ("floor(ln(0.99999999999999999999))", 0.0, V::Is(-1.0), V::Is(0.0)),
+        // 1 over it was a division by zero.
+        ("1/ln(1.00000000000000000001)", 0.0, V::Is(1e20), V::Refused),
+        ("1/log(0.99999999999999999999)", 0.0, V::Is(-1e20 * LN_10), V::Refused),
+        // As a base: log(b, x) is ln x/ln b.
+        ("log(1.00000000000000000001,x)", 2.0, V::Is(LN_2 * 1e20), V::Undefined),
+        ("log(0.99999999999999999999,x)", 2.0, V::Is(-LN_2 * 1e20), V::Undefined),
+        ("log(0.99999999999999999999,5)", 0.0, V::Is(-ln5 * 1e20), V::Undefined),
+        ("log(1.00000000000000000001,1)", 0.0, V::Is(0.0), V::Undefined),
+        ("log(1.00000000000000000001,-3)", 0.0, V::Undefined, V::Undefined),
+        ("log(1.00000000000000000001,0)", 0.0, V::Undefined, V::Undefined),
+        (
+            "log(1.00000000000000000001,1.00000000000000000001)",
+            0.0,
+            V::Is(1.0),
+            V::Undefined,
+        ),
+        // Under one: 10⁻²⁰ over the base's logarithm.
+        ("log(x,1.00000000000000000001)", 2.0, V::Is(1e-20 / LN_2), V::Is(0.0)),
+        ("log(10,1.00000000000000000001)", 0.0, V::Is(1e-20 / LN_10), V::Is(0.0)),
+        ("log(2,0.99999999999999999999)", 0.0, V::Is(-1e-20 / LN_2), V::Is(0.0)),
+        ("1/log(2,1.00000000000000000001)", 0.0, V::Is(LN_2 * 1e20), V::Refused),
+        // The base's own rules still hold: no base 1, 0 or below.
+        ("log(1,1.00000000000000000001)", 0.0, V::Undefined, V::Undefined),
+        ("log(0,1.00000000000000000001)", 0.0, V::Undefined, V::Undefined),
+        ("log(-2,1.00000000000000000001)", 0.0, V::Undefined, V::Undefined),
+    ] {
+        check_at(text, OFF, TrigUnit::Radians, x, off);
+        check_at(text, TI, TrigUnit::Radians, x, ti);
+    }
+    for digits in [OFF, TI] {
+        // Arithmetic on short numbers lands beside 1 at any setting.
+        check("ln(1+10^(-30))", digits, V::Is(1e-30));
+        check("10^30*ln(1-10^(-30))", digits, V::Is(-1.0));
+        check_at("log(1+10^(-30),x)", digits, TrigUnit::Radians, 2.0, V::Is(LN_2 * 1e30));
+        // On 1 itself, and away from it, nothing changes.
+        check("ln(1)", digits, V::Is(0.0));
+        check("ln(0.5+0.5)", digits, V::Is(0.0));
+        check("1/ln(0.1+0.9)", digits, V::Refused);
+        check("log(1,5)", digits, V::Undefined);
+        check("ln(1.5)", digits, V::Is(1.5f64.ln()));
+        // Nor at 0, where a value below every double keeps its side.
+        check("ln(10^(-400))", digits, V::Is(-400.0 * LN_10));
+        check("ln(-(10^(-400)))", digits, V::Undefined);
+        check("ln(0.1+0.2-0.3)", digits, V::Undefined);
+        check("log(10^(-400),5)", digits, V::Is(ln5 / (-400.0 * LN_10)));
+        check("log(5,10^(-400))", digits, V::Is(-400.0 * LN_10 / ln5));
+        check("log(-(10^(-400)),5)", digits, V::Undefined);
+        // With x in it the logarithm is the program's, in doubles.
+        let v = views_at("ln(x+0.00000000000000000001)", digits, TrigUnit::Radians, 1.0, 1.0);
+        assert_eq!(v.compiled, V::Is(0.0));
+    }
+    plots_as("10^20*ln(1.00000000000000000001)+sin(x)", OFF, TrigUnit::Radians, |x| {
+        1.0 + x.sin()
+    });
+    plots_as(
+        "x+log(1.00000000000000000001,1.00000000000000000001)",
+        OFF,
+        TrigUnit::Radians,
+        |x| x + 1.0,
+    );
+    plots_as("x+10^(-30)/ln(1+10^(-30))", TI, TrigUnit::Radians, |x| x + 1.0);
+}
