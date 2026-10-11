@@ -1329,6 +1329,21 @@ fn partial_items(l: &Loaded, k: &KeyGraphFeatures, mp: Mp<'_>, out: &mut Outcome
     }
 }
 
+/// The enclosures of the single zeros the certificate lists.
+fn zero_enclosures(cert: Option<&Analysis>) -> Vec<(f64, f64)> {
+    use graphing::certify::{Row, Spot};
+    match cert.map(|a| &a.x_intercepts) {
+        Some(Row::Certified { value, .. } | Row::Partial { value, .. }) => value
+            .iter()
+            .filter_map(|s| match s {
+                Spot::At(x) => Some((x.lo.0, x.hi.0)),
+                Spot::Every(_) => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Whether the y-intercept, which the oracle's check found off f(0) (it
 /// reads the panel's number, to six digits), is right as shown. A value
 /// the certificate knows to an enclosure is shown to as many significant
@@ -1433,6 +1448,24 @@ fn panel(
         match f.class {
             "zero-not-zero" if f.at.is_finite() && enclosed(f.at, 0.0) => {
                 out.note("panel/zero-not-zero-in-doubles", || f.detail.clone());
+            }
+            // A zero the certificate knows to an enclosure is shown to
+            // the digits the enclosure fixes, and the panel's number is
+            // the enclosure's middle: 10¹⁷·(x − 0.3) + (2¹²⁸ + 1)·x has its
+            // zero in an enclosure a part in 10⁶ wide, is shown as
+            // ≈8.816×10⁻²³, and is 4·10¹⁰ at the middle, its slope being
+            // 3·10³⁸. The claim is the enclosure: where f's own enclosure
+            // over it holds 0, nothing says the zero isn't there.
+            "zero-not-zero"
+                if f.at.is_finite()
+                    && zero_enclosures(cert).iter().any(|&(lo, hi)| {
+                        lo < hi && lo <= f.at && f.at <= hi && {
+                            let e = enclose(l.ast(), Interval::new(lo, hi), &ctx);
+                            !e.is_empty() && e.lo() <= 0.0 && 0.0 <= e.hi()
+                        }
+                    }) =>
+            {
+                out.note("panel/zero-shown-to-the-digits-known", || f.detail.clone());
             }
             // f(x + P) against f(x), where x + P lands beside such a point.
             "period-witness"
