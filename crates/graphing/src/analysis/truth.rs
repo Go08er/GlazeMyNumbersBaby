@@ -768,11 +768,38 @@ pub fn root_x(x: Xf, n: Xf) -> R {
         }
     }
     let nf = n.f();
-    if nf == 0.0 || nf.is_nan() {
+    if n.is_zero() || nf.is_nan() {
         return R::Undef;
     }
     if x.is_zero() {
-        return if nf < 0.0 { R::Undef } else { R::V(Xf::ZERO) };
+        return if n.sign() < 0.0 {
+            R::Undef
+        } else {
+            R::V(Xf::ZERO)
+        };
+    }
+    if nf == 0.0 {
+        // A degree below every double and not 0 (0.2ˣ from x = 463 on):
+        // its double is 0, and the root of degree 0 undefined, but 1/n is
+        // past every double. No whole number, so a negative x has no
+        // root; 1's is 1; any other positive x's is above every double
+        // or below them all, by the signs of ln x and n (found by
+        // `tests/crossfuzz.rs`: root(x, 0.2ˣ) was "undefined" at 562,
+        // where the interval form has it past the doubles).
+        if x.sign() < 0.0 {
+            return R::Undef;
+        }
+        if x.lost() {
+            return R::Unknown;
+        }
+        let l = x.ln_dd();
+        return if l.hi == 0.0 && l.lo == 0.0 {
+            R::V(Xf::of(1.0))
+        } else if (l.hi > 0.0) == (n.sign() > 0.0) {
+            R::Unknown
+        } else {
+            R::V(Xf::lost_of(1.0))
+        };
     }
     if nf.is_infinite() {
         // A degree beyond the doubles (root(u, 6 + xˣ) from x = 144 on):

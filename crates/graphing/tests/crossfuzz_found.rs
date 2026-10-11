@@ -1003,3 +1003,73 @@ fn a_kink_box_is_continuous_by_fs_own_tree_too() {
     .expect("certifies");
     assert!(a.extrema.is_certified(), "{:?}", a.extrema);
 }
+
+/// A degree below every double and not 0 has the double 0, and the root
+/// of degree 0 is undefined: root(x, 0.2ˣ) at 562, whose degree is
+/// 10⁻³⁹³, was "undefined" to the reference and "can't tell" to the
+/// compiled evaluator, where the interval form has the root past every
+/// double. It keeps its side; a degree that is 0 stays undefined.
+#[test]
+fn a_root_of_a_degree_below_the_doubles_keeps_its_side() {
+    let f = "root(x,0.2^x)";
+    for x in [562.0, 1000.0] {
+        assert_eq!(scalar(f, x), f64::INFINITY, "{f} at {x}");
+        assert!(!matches!(reference(f, x), R::Undef), "{f} at {x}");
+    }
+    assert_eq!(scalar("1^(2/3)-root(x-8,0.2^x)", 1000.0), f64::NEG_INFINITY);
+    // Below 1 the root is below every double; of 1 it is 1; a negative
+    // degree turns the two about; a negative x has no such root.
+    assert_eq!(scalar("root(x/1000,0.2^x)", 562.0), 0.0);
+    match reference("root(x/1000,0.2^x)", 562.0) {
+        R::V(v) => assert!(v.sign() > 0.0 && v.f() == 0.0, "{v:?}"),
+        r => panic!("{r:?}"),
+    }
+    assert_eq!(scalar("root(x/x,0.2^x)", 562.0), 1.0);
+    assert_eq!(scalar("root(x,-(0.2^x))", 562.0), 0.0);
+    assert_eq!(scalar("root(x/1000,-(0.2^x))", 562.0), f64::INFINITY);
+    assert!(scalar("root(-x,0.2^x)", 562.0).is_nan());
+    assert!(matches!(reference("root(-x,0.2^x)", 562.0), R::Undef));
+    // A degree that is 0 is no degree.
+    for g in ["root(x,x-x)", "root(x,0*x)", "root(x,0)"] {
+        assert!(scalar(g, 562.0).is_nan(), "{g}");
+        assert!(matches!(reference(g, 562.0), R::Undef), "{g}");
+    }
+    // And a degree the doubles hold is as it was.
+    let v = scalar("root(x,0.2^x)", 2.0);
+    assert!((v - 2f64.powi(25)).abs() < 1e-3, "{v}");
+}
+
+/// What a limit "looks like" is a closed form recognised in its proven
+/// enclosure, and was taken with two ulps of slack: beside y ∈
+/// [0.30000000000000004, 0.3000000000000001] the certificate said "looks
+/// like 0.3", which the enclosure rules out.
+#[test]
+fn what_a_limit_looks_like_lies_in_its_enclosure() {
+    use graphing::certify::{DEFAULT_BUDGET, Row, certify_text_with};
+    let twenty = graphing::lexer::ParseOptions {
+        decimal_comma: false,
+        literal_digits: Some(20),
+    };
+    let mut hinted = 0;
+    for src in [
+        "min(18014398509481985*x,0.30000000000000004441)",
+        "min(18014398509481985*x,0.3)",
+        "min(18014398509481985*x,0.29999999999999998)",
+        "max(-18014398509481985*x,0.5000000000000001)",
+    ] {
+        let a = certify_text_with(src, twenty, CompileOptions::default(), DEFAULT_BUDGET, None)
+            .expect(src);
+        let Row::Certified { value, .. } = &a.horizontal else {
+            panic!("{src}: {:?}", a.horizontal);
+        };
+        assert!(!value.is_empty(), "{src}");
+        for h in value {
+            if let Some(v) = h.looks_like {
+                assert!(h.y.lo.0 <= v.0 && v.0 <= h.y.hi.0, "{src}: {h:?}");
+                hinted += 1;
+            }
+        }
+    }
+    // (The hint is still given where the closed form is in the enclosure.)
+    assert!(hinted > 0);
+}

@@ -704,7 +704,34 @@ pub(crate) fn apply2(f: Fn2, a: Wide, b: Wide) -> Wide {
     match f {
         Fn2::Root => {
             let Some(n) = b.normal() else {
-                return Wide::Unknown;
+                // A degree below every double and not 0 (0.2ˣ far out:
+                // an exact 0 is `normal`, and undefined below): 1/n is
+                // past every double, and the root keeps its side. No
+                // whole number, so a negative x has none; 0's is 0 for a
+                // positive degree; 1's is 1; any other positive x's is
+                // above every double or below them all, by the signs of
+                // ln x and n. (root(x, 0.2ˣ) at 562 was "can't tell", and
+                // "undefined" to the reference: found by
+                // `tests/crossfuzz.rs`.)
+                if bm == 0.0 || be >= 0.0 {
+                    return Wide::Unknown;
+                }
+                if am < 0.0 {
+                    return Wide::Undef;
+                }
+                if am == 0.0 {
+                    return if bm < 0.0 { Wide::Undef } else { a };
+                }
+                let above_one = match a.normal() {
+                    Some(x) if x == 1.0 => return Wide::ONE,
+                    Some(x) => x > 1.0,
+                    None => ae > 0.0,
+                };
+                return if above_one == (bm > 0.0) {
+                    Wide::HUGE
+                } else {
+                    Wide::Val(1.0, f64::NEG_INFINITY)
+                };
             };
             if n == 0.0 {
                 return Wide::Undef;
