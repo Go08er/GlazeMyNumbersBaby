@@ -148,6 +148,20 @@ impl CalculatorPage {
             .bidirectional()
             .sync_create()
             .build();
+        {
+            // The button names History: clicked, it shows that list,
+            // whichever the sheet showed last (M▾ leaves it on Memory, and
+            // the sheet then opened on Memory from this button too:
+            // R19-L-01's other half). On the click, not on the state: the
+            // button's state follows the sheet however that opens.
+            let panel = panel.clone();
+            history_btn.connect_clicked(move |b| {
+                if b.is_active() {
+                    panel.show_tab("history");
+                }
+            });
+        }
+
         let page = Rc::new(CalculatorPage {
             ctx: ctx.clone(),
             vm: RefCell::new(CalculatorViewModel::new()),
