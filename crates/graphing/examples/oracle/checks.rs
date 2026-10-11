@@ -430,10 +430,23 @@ impl F {
                             0.0f64,
                             |m, d| if d.is_nan() { f64::INFINITY } else { m.max(d) },
                         );
-                    total += if slope.is_finite() {
-                        (slope * ea).max(spread)
-                    } else {
-                        f64::INFINITY
+                    // A circular function of an argument out by a tenth of
+                    // a turn or more is anywhere in its range: and the
+                    // doubles beside 2⁶³ are 2048 apart, 326 turns less a
+                    // twentieth, so the function at them says little of it
+                    // between them.
+                    use graphing::ast::Func;
+                    let turn = match self.unit {
+                        TrigUnit::Radians => std::f64::consts::TAU,
+                        TrigUnit::Degrees => 360.0,
+                        TrigUnit::Grads => 400.0,
+                    };
+                    let lost = ea >= turn / 10.0;
+                    total += match func {
+                        Func::Sin | Func::Cos if lost => 2.0,
+                        Func::Tan | Func::Cot | Func::Sec | Func::Csc if lost => f64::INFINITY,
+                        _ if slope.is_finite() => (slope * ea).max(spread),
+                        _ => f64::INFINITY,
                     };
                 }
                 total
