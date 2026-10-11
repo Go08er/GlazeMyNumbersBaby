@@ -1528,11 +1528,19 @@ fn tail_sign_k(
     Ok(Some((at.gt0(), d)))
 }
 
-/// f's bands on the tails [M, ∞) of the far sequence (M ≥ `start`), each
-/// with its claims: its enclosure there where bounded (`TailValue`); else,
-/// f monotone on the tail (`rising`), its value at M one way — f moves
-/// away from f(M) out along the tail — and its enclosure's bound the other
-/// (`Value` at M, `TailBeyond` on [M, ∞)): x·e⁻ˣ in (0, M·e⁻ᴹ].
+/// f's bands on the tails [M, ∞) of the far sequence, each with its
+/// claims: its enclosure there where bounded (`TailValue`); else, f
+/// monotone on the tail (`rising`, proven on [`start`, ∞): so for M ≥
+/// `start` only), its value at M one way — f moves away from f(M) out
+/// along the tail — and its enclosure's bound the other (`Value` at M,
+/// `TailBeyond` on [M, ∞)): x·e⁻ˣ in (0, M·e⁻ᴹ].
+///
+/// (The far sequence starts at 1 whatever `start` is. With f′ < 0 proven
+/// from 16 on, 3 + (x − c)·e⁻ˣ with c = 1 + 2·10⁻¹⁵ had the band
+/// [.., f(1)] from M = 1, before its maximum at 2: f(1) is 3 − 7·10⁻¹⁶,
+/// below the limit 3, and the right asymptote was certified at
+/// y ∈ [2.9999999999999996, 2.9999999999999996]. Found by the round-19
+/// audit of premises.)
 fn far_bands(
     f: &Fun<'_>,
     right: bool,
@@ -1560,6 +1568,9 @@ fn far_bands(
             continue;
         }
         let Some(rising) = rising else { continue };
+        if m < start {
+            continue;
+        }
         let away_up = rising == right;
         let p = f.val(Interval::point(x))?;
         if p.is_empty() || p.dec < Dec::Def || !p.iv.is_bounded() {
@@ -1702,7 +1713,11 @@ fn infinite_bounds(
         return Ok(None);
     }
     let mut pts: Vec<(f64, f64, f64)> = Vec::new();
-    for m in far_points(f, right, start) {
+    // (Its values from where it is proven monotone on.)
+    for m in far_points(f, right, start)
+        .into_iter()
+        .filter(|m| *m >= start)
+    {
         let x = if right { m } else { -m };
         let v = f.val(Interval::point(x))?;
         if v.is_empty() || v.dec < Dec::Def || !v.iv.is_bounded() {
@@ -2581,7 +2596,11 @@ fn slope_monotone(
     };
     if grow {
         let mut pts: Vec<(f64, f64, f64)> = Vec::new();
-        for m in far_points(f, right, start) {
+        // (Its values from where it is proven monotone on.)
+        for m in far_points(f, right, start)
+            .into_iter()
+            .filter(|m| *m >= start)
+        {
             let x = if right { m } else { -m };
             if let Some(v) = at(x)? {
                 pts.push((x, v.lo(), v.hi()));
@@ -2608,7 +2627,10 @@ fn slope_monotone(
     }
     // Bands about 0: f′(M) one way, f′'s enclosure on [M, ∞) the other.
     let mut last = f64::INFINITY;
-    let ms = far_points(f, right, start);
+    let ms: Vec<f64> = far_points(f, right, start)
+        .into_iter()
+        .filter(|m| *m >= start)
+        .collect();
     for &m in &ms[ms.len().saturating_sub(3)..] {
         let x = if right { m } else { -m };
         let Some(p) = at(x)? else { continue };
