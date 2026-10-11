@@ -1267,15 +1267,19 @@ fn narrow(v: &DecInterval) -> bool {
 }
 
 /// A closed form the panel would recognise in a narrow enclosure of a
-/// limit: shown as what the limit looks like, never as proven.
+/// limit: shown as what the limit looks like, never as proven. Inside the
+/// enclosure: the limit is in it, so a value outside is not what it looks
+/// like (two ulps of slack let min(18014398509481985·x, a), a slider a at
+/// 0.30000000000000004 read to 20 digits, "look like 0.3" beside its
+/// proven y ∈ [0.30000000000000004, 0.3000000000000001]: found by
+/// `tests/crossfuzz.rs` through the replay, which refuses the row).
 fn looks_like(y: Enc) -> Option<R> {
     let m = y.mid();
     if y.contains(0.0) {
         return Some(R(0.0));
     }
     let v = Nice::of(m).value();
-    let slack = 2.0 * super::fun::ulp(v);
-    (y.lo.0 - slack <= v && v <= y.hi.0 + slack).then_some(R(v))
+    (y.lo.0 <= v && v <= y.hi.0).then_some(R(v))
 }
 
 /// What f does on a tail: tends to ±∞, tends to a limit (enclosed, and

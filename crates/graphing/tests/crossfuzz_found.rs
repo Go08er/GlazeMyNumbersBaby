@@ -1038,3 +1038,38 @@ fn a_root_of_a_degree_below_the_doubles_keeps_its_side() {
     let v = scalar("root(x,0.2^x)", 2.0);
     assert!((v - 2f64.powi(25)).abs() < 1e-3, "{v}");
 }
+
+/// What a limit "looks like" is a closed form recognised in its proven
+/// enclosure, and was taken with two ulps of slack: beside y ∈
+/// [0.30000000000000004, 0.3000000000000001] the certificate said "looks
+/// like 0.3", which the enclosure rules out.
+#[test]
+fn what_a_limit_looks_like_lies_in_its_enclosure() {
+    use graphing::certify::{DEFAULT_BUDGET, Row, certify_text_with};
+    let twenty = graphing::lexer::ParseOptions {
+        decimal_comma: false,
+        literal_digits: Some(20),
+    };
+    let mut hinted = 0;
+    for src in [
+        "min(18014398509481985*x,0.30000000000000004441)",
+        "min(18014398509481985*x,0.3)",
+        "min(18014398509481985*x,0.29999999999999998)",
+        "max(-18014398509481985*x,0.5000000000000001)",
+    ] {
+        let a = certify_text_with(src, twenty, CompileOptions::default(), DEFAULT_BUDGET, None)
+            .expect(src);
+        let Row::Certified { value, .. } = &a.horizontal else {
+            panic!("{src}: {:?}", a.horizontal);
+        };
+        assert!(!value.is_empty(), "{src}");
+        for h in value {
+            if let Some(v) = h.looks_like {
+                assert!(h.y.lo.0 <= v.0 && v.0 <= h.y.hi.0, "{src}: {h:?}");
+                hinted += 1;
+            }
+        }
+    }
+    // (The hint is still given where the closed form is in the enclosure.)
+    assert!(hinted > 0);
+}
