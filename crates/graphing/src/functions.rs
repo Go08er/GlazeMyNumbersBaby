@@ -273,7 +273,17 @@ pub fn pow_int(b: f64, n: i32) -> f64 {
         3 => b * b * b,
         _ => cm::pow(b, f64::from(m)),
     };
-    if n < 0 { 1.0 / p } else { p }
+    if n >= 0 {
+        return p;
+    }
+    // bⁿ past the largest double: 1/∞ is 0, and the power may be a
+    // subnormal double yet ((9007199254740993¹⁰)⁻² is 8.1·10⁻³²⁰, and was
+    // 0 where the reference had it right: found by `tests/crossfuzz.rs`).
+    // pow has it, correctly rounded.
+    if p.is_infinite() && b.is_finite() {
+        return cm::pow(b, f64::from(n));
+    }
+    1.0 / p
 }
 
 /// atanh, undefined (NaN rather than ±∞) at its poles ±1.

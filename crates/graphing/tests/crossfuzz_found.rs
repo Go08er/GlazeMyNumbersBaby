@@ -881,3 +881,36 @@ fn a_min_of_three_arguments_has_its_kinks() {
         assert_eq!(a.len(), b.len(), "{a:?} against {b:?}");
     }
 }
+
+/// A negative whole power was 1/bⁿ, and where bⁿ is past the largest
+/// double that is 1/∞: (9007199254740993¹⁰)⁻², 8.1·10⁻³²⁰ and a
+/// (subnormal) double, was 0 in the compiled evaluator and right in the
+/// reference.
+#[test]
+fn a_negative_whole_power_past_the_doubles_is_not_zero_too_soon() {
+    use graphing::functions::pow_int;
+    let f = "(9007199254740993^x)^(-2)";
+    let v = scalar(f, 10.0);
+    assert!(v > 0.0 && v < f64::MIN_POSITIVE, "{f} at 10: {v:e}");
+    match reference(f, 10.0) {
+        R::V(r) => assert_eq!(r.f(), v, "{r:?}"),
+        r => panic!("{r:?}"),
+    }
+    // b⁻ⁿ where bⁿ overflows and the power is a double; and where it is
+    // below them all.
+    let v = pow_int(3e159, -2);
+    assert!(v > 1.1e-319 && v < 1.2e-319, "{v:e}");
+    assert_eq!(pow_int(-3e159, -2), v);
+    let v = pow_int(-1e105, -3);
+    assert!(v < -0.9e-315 && v > -1.1e-315, "{v:e}");
+    assert_eq!(pow_int(1e200, -2), 0.0);
+    // Where bⁿ is a double the power is the division, as it was.
+    for (b, n) in [(3.0f64, -2), (-7.5, -3), (1e100, -3), (2.5e-200, -1)] {
+        let p = match n {
+            -1 => b,
+            -2 => b * b,
+            _ => b * b * b,
+        };
+        assert_eq!(pow_int(b, n), 1.0 / p, "{b}^{n}");
+    }
+}
