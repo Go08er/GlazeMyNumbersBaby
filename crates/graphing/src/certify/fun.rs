@@ -619,6 +619,314 @@ impl<'a> Fun<'a> {
         Ok(None)
     }
 
+    /// What f′ and f″ do on each side of the one kink in the box
+    /// `[l, r]` (`Claim::KinkSides`, whose statement this proves), on f's
+    /// formula as typed or as evaluated (the same function across a box
+    /// f is continuous on): every kink argument of that formula strictly
+    /// signed over the box, or vanishing at one point of it (all of them
+    /// exactly at one double, or one of them between two); f's two
+    /// branches there, each smooth; and the sign of each branch's first
+    /// and second derivative on its side. Or, with no corner in the box,
+    /// f″ on each side of a point where it is singular. Nothing here is a
+    /// value of f at a sample: `None` where any of it isn't proven.
+    pub fn kink_sides(&self, l: f64, r: f64) -> Result<Option<KinkSides>, Stop> {
+        if !(l < r && l.is_finite() && r.is_finite()) {
+            return Ok(None);
+        }
+        let mut out: Option<KinkSides> = None;
+        for tree in [&self.expr, &self.eval] {
+            if let Some(s) = self.kink_sides_of(tree, l, r)? {
+                match &mut out {
+                    None => out = Some(s),
+                    Some(o) if o.at == s.at => {
+                        o.d1 = o.d1.or(s.d1);
+                        o.d2 = o.d2.or(s.d2);
+                        o.joined |= s.joined;
+                    }
+                    Some(_) => {}
+                }
+            }
+            if self.expr == self.eval || out.is_some_and(|o| o.d1.is_some() && o.d2.is_some()) {
+                break;
+            }
+        }
+        match out {
+            Some(o) => Ok((o.d1.is_some() || o.d2.is_some()).then_some(o)),
+            None => self.singular_sides(l, r),
+        }
+    }
+
+    /// [`Fun::kink_sides`] on one formula of f.
+    fn kink_sides_of(&self, tree: &Expr, l: f64, r: f64) -> Result<Option<KinkSides>, Stop> {
+        use super::cert::KinkSign;
+        use crate::interval::Dec;
+        let around = Interval::new(l, r);
+        // Each |u|'s u, and each two arguments of each min and max that
+        // varies with x (the two that don't, too: which of three it picks
+        // needs every pair).
+        let mut args: Vec<Expr> = Vec::new();
+        tree.visit(&mut |n| {
+            let us: Vec<Expr> = match n {
+                Expr::Call(Func::Abs, a) if a[0].contains_x() => vec![canonical(&a[0])],
+                Expr::Call(Func::Min | Func::Max, a) if a.iter().any(|v| v.contains_x()) => (0..a
+                    .len())
+                    .flat_map(|i| (i + 1..a.len()).map(move |j| (i, j)))
+                    .map(|(i, j)| difference(&a[i], &a[j]))
+                    .collect(),
+                _ => return,
+            };
+            for u in us {
+                if !args.contains(&u) {
+                    args.push(u);
+                }
+            }
+        });
+        // The middle double of a box of three, where a kink can be placed.
+        let middle = {
+            let p = l.next_up();
+            (p.next_up() == r).then_some(if p == 0.0 { 0.0 } else { p })
+        };
+        let mut sides: Vec<(Expr, bool, bool)> = Vec::new();
+        let (mut at, mut vanishing, mut between) = (None, 0usize, 0usize);
+        for u in args {
+            let s = self.ser_of(&u, around, 1)?;
+            if s[0].dec >= Dec::Def && s[0].ne0() {
+                let pos = s[0].gt0();
+                sides.push((u, pos, pos));
+                continue;
+            }
+            if s[0].is_empty() || s[0].dec < Dec::Dac {
+                return Ok(None);
+            }
+            let point = |p: f64| Ok::<_, Stop>(self.ser_of(&u, Interval::point(p), 0)?[0]);
+            // Exactly 0 at the middle double: its sign on each side of it
+            // (a zero of any order: |x³| at 0).
+            if let Some(p) = middle {
+                let v = point(p)?;
+                if !v.is_empty() && v.dec >= Dec::Def && v.lo() == 0.0 && v.hi() == 0.0 {
+                    let strict = |k: Option<KinkSign>| match k {
+                        Some(KinkSign::Pos) => Some(true),
+                        Some(KinkSign::Neg) => Some(false),
+                        _ => None,
+                    };
+                    let before = strict(self.signs_on(&u, Interval::new(l, p), Some(p))?[0]);
+                    let after = strict(self.signs_on(&u, Interval::new(p, r), Some(p))?[0]);
+                    let (Some(before), Some(after)) = (before, after) else {
+                        return Ok(None);
+                    };
+                    at = middle;
+                    vanishing += 1;
+                    sides.push((u, before, after));
+                    continue;
+                }
+            }
+            // Strictly monotone, and of opposite signs at the two ends: 0
+            // at one point strictly between them.
+            let d = s[1];
+            if !(d.dec >= Dec::Def && d.iv.is_bounded() && d.ne0()) {
+                return Ok(None);
+            }
+            let rising = d.gt0();
+            let (a, b) = (point(l)?, point(r)?);
+            let apart = !a.is_empty()
+                && !b.is_empty()
+                && a.dec >= Dec::Def
+                && b.dec >= Dec::Def
+                && a.ne0()
+                && b.ne0()
+                && a.gt0() != rising
+                && b.gt0() == rising;
+            if !apart {
+                return Ok(None);
+            }
+            between += 1;
+            vanishing += 1;
+            sides.push((u, !rising, rising));
+        }
+        // One kink: all at the one double, or one argument between two.
+        if vanishing == 0 || (between > 0 && (vanishing != 1 || at.is_some())) {
+            return Ok(None);
+        }
+        let (gl, gr) = (
+            one_sided(tree, &sides, true),
+            one_sided(tree, &sides, false),
+        );
+        // (Every corner resolved: a branch is a formula without one.)
+        let mut corner = false;
+        for g in [&gl, &gr] {
+            g.visit(&mut |n| {
+                corner |= match n {
+                    Expr::Call(Func::Abs, a) => a[0].contains_x(),
+                    Expr::Call(Func::Min | Func::Max, a) => a.iter().any(|v| v.contains_x()),
+                    _ => false,
+                }
+            });
+        }
+        if corner {
+            return Ok(None);
+        }
+        // With the kink at a double p: each branch up to p. Between two:
+        // each over the whole box, the kink being anywhere in it.
+        let (xl, xr) = match at {
+            Some(p) => (Interval::new(l, p), Interval::new(p, r)),
+            None => (around, around),
+        };
+        let (sl, sr) = (self.signs_on(&gl, xl, at)?, self.signs_on(&gr, xr, at)?);
+        let mut joined = false;
+        if let Some(p) = at {
+            let (a, b) = (
+                self.ser_of(&gl, Interval::point(p), 1)?,
+                self.ser_of(&gr, Interval::point(p), 1)?,
+            );
+            let exact = |v: crate::interval::DecInterval| {
+                !v.is_empty() && v.dec >= Dec::Def && v.lo() == v.hi() && v.lo().is_finite()
+            };
+            joined = a[0].dec >= Dec::Dac
+                && b[0].dec >= Dec::Dac
+                && exact(a[1])
+                && exact(b[1])
+                && a[1].lo() == b[1].lo();
+        }
+        Ok(Some(KinkSides {
+            at,
+            d1: sl[1].zip(sr[1]),
+            d2: sl[2].zip(sr[2]),
+            joined,
+        }))
+    }
+
+    /// The signs of g, g′ and g″ on the box `x`, on which g is smooth; or,
+    /// with `end` (one of its ends), on the box without that end. There,
+    /// where a derivative isn't strictly signed over the box: g⁽ᵏ⁾, …,
+    /// g⁽ᵐ⁻¹⁾ all exactly 0 at the end p and g⁽ᵐ⁾ strictly signed over the
+    /// box make g⁽ᵏ⁾(t) = g⁽ᵐ⁾(ξ)·(t − p)ᵐ⁻ᵏ/(m − k)! for a ξ between
+    /// (Taylor), of g⁽ᵐ⁾'s sign after p and of that sign times (−1)ᵐ⁻ᵏ
+    /// before it. (x·|x| at 0: f′ = 2|x| is 0 at the kink alone.)
+    fn signs_on(
+        &self,
+        g: &Expr,
+        x: Interval,
+        end: Option<f64>,
+    ) -> Result<[Option<super::cert::KinkSign>; 3], Stop> {
+        use super::cert::KinkSign;
+        use crate::interval::Dec;
+        // (How far past the derivative asked for the rule looks.)
+        const PAST: usize = 3;
+        let n = 2 + if end.is_some() { PAST } else { 0 };
+        let s = self.ser_of(g, x, n)?;
+        if s[0].is_empty() || s[0].dec < Dec::Dac {
+            return Ok([None; 3]);
+        }
+        let valid = |c: crate::interval::DecInterval| {
+            !c.is_empty() && c.dec >= Dec::Def && c.iv.is_bounded()
+        };
+        let at = match end {
+            Some(p) => {
+                let v = self.ser_of(g, Interval::point(p), n)?;
+                (!v[0].is_empty() && v[0].dec >= Dec::Dac).then_some((p, v))
+            }
+            None => None,
+        };
+        let sign = |k: usize| -> Option<KinkSign> {
+            // (A Taylor coefficient: g⁽ᵏ⁾/k!, of g⁽ᵏ⁾'s sign.)
+            let c = s[k];
+            if !valid(c) {
+                return None;
+            }
+            if c.lo() == 0.0 && c.hi() == 0.0 {
+                return Some(KinkSign::Zero);
+            }
+            if c.ne0() {
+                return Some(if c.gt0() {
+                    KinkSign::Pos
+                } else {
+                    KinkSign::Neg
+                });
+            }
+            let (p, v) = at.as_ref()?;
+            for m in k + 1..=n {
+                let z = v[m - 1];
+                if !(valid(z) && z.lo() == 0.0 && z.hi() == 0.0) || !valid(s[m]) {
+                    return None;
+                }
+                if s[m].ne0() {
+                    let before = *p == x.hi();
+                    let flip = before && (m - k) % 2 == 1;
+                    return Some(if s[m].gt0() != flip {
+                        KinkSign::Pos
+                    } else {
+                        KinkSign::Neg
+                    });
+                }
+            }
+            None
+        };
+        Ok([sign(0), sign(1), sign(2)])
+    }
+
+    /// f″ on each side of a point where it is singular and f has no
+    /// corner (x^(2/3), x^(4/3) at 0): every kink argument away from 0
+    /// over the box; the base of a fractional power u^r (r < 2) exactly 0
+    /// at the double p, every such base away from 0 over the box or 0 at
+    /// p with a strictly signed derivative, so f″ exists on the box but at
+    /// p; and f″'s enclosure over [l, p] and over [p, r] — where it
+    /// exists — strictly signed.
+    fn singular_sides(&self, l: f64, r: f64) -> Result<Option<KinkSides>, Stop> {
+        use super::cert::KinkSign;
+        use crate::interval::Dec;
+        let p = l.next_up();
+        if p.next_up() != r {
+            return Ok(None);
+        }
+        let p = if p == 0.0 { 0.0 } else { p };
+        let around = Interval::new(l, r);
+        for u in self.kink_args() {
+            let v = self.ser_of(&u, around, 0)?[0];
+            if v.is_empty() || v.dec < Dec::Def || !v.ne0() {
+                return Ok(None);
+            }
+        }
+        let mut at_zero = false;
+        for (u, _) in self.singular_args() {
+            let s = self.ser_of(&u, around, 1)?;
+            if s[0].dec >= Dec::Def && s[0].ne0() {
+                continue;
+            }
+            let v = self.ser_of(&u, Interval::point(p), 0)?[0];
+            let zero = !v.is_empty() && v.lo() == 0.0 && v.hi() == 0.0 && v.dec >= Dec::Def;
+            let d = s[1];
+            if !(zero && d.dec >= Dec::Def && d.iv.is_bounded() && d.ne0()) {
+                return Ok(None);
+            }
+            at_zero = true;
+        }
+        if !at_zero {
+            return Ok(None);
+        }
+        let Some(d) = self.derivs().map(|d| d[1].clone()) else {
+            return Ok(None);
+        };
+        let sign = |x: Interval| -> Result<Option<KinkSign>, Stop> {
+            let v = self.ser_of(&d, x, 0)?[0];
+            Ok(if v.is_empty() {
+                None
+            } else if v.gt0() {
+                Some(KinkSign::Pos)
+            } else if v.lt0() {
+                Some(KinkSign::Neg)
+            } else {
+                None
+            })
+        };
+        let d2 = sign(Interval::new(l, p))?.zip(sign(Interval::new(p, r))?);
+        Ok(d2.map(|d2| KinkSides {
+            at: Some(p),
+            d1: None,
+            d2: Some(d2),
+            joined: false,
+        }))
+    }
+
     /// A singular point of f′ placed exactly (`kink_at`'s, for x^(2/3)):
     /// the base of a fractional power u^r (r < 1) exactly 0 at the double
     /// p, every such base strictly signed on each side of p within the box
@@ -1030,6 +1338,29 @@ fn sound_constants(e: &Expr) -> bool {
 /// The node budget of a symbolic derivative.
 const DIFF_NODES: usize = 4096;
 
+/// What f′ and f″ do on each side of the one kink in a box (see
+/// [`Fun::kink_sides`]): where the kink is, when at a double; the signs
+/// of the two branches' first and second derivatives over the box, where
+/// proven; and whether the branches' slopes agree at the kink.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KinkSides {
+    pub at: Option<f64>,
+    pub d1: Option<(super::cert::KinkSign, super::cert::KinkSign)>,
+    pub d2: Option<(super::cert::KinkSign, super::cert::KinkSign)>,
+    pub joined: bool,
+}
+
+/// One derivative's part of a [`KinkSides`], for its cover.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KinkSide {
+    pub at: Option<f64>,
+    pub left: super::cert::KinkSign,
+    pub right: super::cert::KinkSign,
+    /// (f″ only.) The slopes agree at the kink: opposite strict signs are
+    /// an inflection there.
+    pub joined: bool,
+}
+
 /// A kink placed exactly (see [`Fun::kink_at`]): at the double `p`, with
 /// f′ strictly positive (`true`) or negative on `[p⁻, p]` (`left`) and on
 /// `[p, p⁺]` (`right`).
@@ -1072,6 +1403,20 @@ pub fn one_sided(e: &Expr, sides: &[(Expr, bool, bool)], left: bool) -> Expr {
                 &a[1]
             };
             Some(one_sided(pick, sides, left))
+        }
+        // Of three or more: the argument that every difference it is in
+        // puts first (each of them known on this side, or it stays).
+        Expr::Call(f @ (Func::Min | Func::Max), a) if a.len() > 2 => {
+            let first = |k: usize| {
+                (0..a.len()).filter(|&j| j != k).all(|j| {
+                    let (i, j, k_first) = if k < j { (k, j, true) } else { (j, k, false) };
+                    // a_i − a_j > 0: max puts a_i first, min a_j.
+                    sign_of(&difference(&a[i], &a[j]))
+                        .is_some_and(|i_bigger| (i_bigger == (*f == Func::Max)) == k_first)
+                })
+            };
+            let k = (0..a.len()).find(|&k| first(k))?;
+            Some(one_sided(&a[k], sides, left))
         }
         _ => None,
     })

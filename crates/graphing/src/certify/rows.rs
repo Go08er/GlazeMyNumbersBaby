@@ -282,9 +282,11 @@ enum Seg {
     Zero(Enc),
     /// ≡ 0 on a stretch.
     Flat,
-    /// A kink placed at a point, with f′'s strict signs proven on both
-    /// sides throughout the original box (`Claim::KinkAt`).
-    Kink(Enc),
+    /// A kink at a point (placed, or enclosed), with f⁽ᵏ⁾'s sign proven
+    /// on each side of it throughout its box (`Claim::KinkAt`,
+    /// `Claim::KinkSides`). Set where f′ is continuous across it (a
+    /// `KinkSides` joined): a change of f″'s sign there is an inflection.
+    Kink(Enc, bool),
     /// A box where f is continuous but its derivatives are not decided.
     /// Signs or zero derivatives outside it prove nothing inside: a
     /// valley can lie entirely between adjacent doubles.
@@ -368,8 +370,37 @@ fn walk(cover: &Cover, ib: &IBox) -> Vec<Seg> {
             && out[i - 1] == Seg::Sign(k.left)
             && out[i + 1] == Seg::Sign(k.right)
         {
-            out[i] = Seg::Kink(Enc::point(k.p));
+            out[i] = Seg::Kink(Enc::point(k.p), false);
         }
+    }
+    // A kink whose two sides are proven on f's branches
+    // (`Claim::KinkSides`), each side's sign that of the stretch beside
+    // the box: one point of the walk, the kink (enclosed by the box, or
+    // at its double).
+    for i in 1..out.len().saturating_sub(1) {
+        let Seg::KinkBox(x) = out[i] else {
+            continue;
+        };
+        let Some(s) = cover
+            .kinks
+            .iter()
+            .zip(&cover.kink_sides)
+            .find(|((l, r), _)| *l == x.lo.0 && *r == x.hi.0)
+            .and_then(|(_, s)| *s)
+        else {
+            continue;
+        };
+        use super::cert::KinkSign;
+        let is = |seg: Seg, k: KinkSign| match (seg, k) {
+            (Seg::Sign(p), KinkSign::Pos) => p,
+            (Seg::Sign(p), KinkSign::Neg) => !p,
+            (Seg::Flat, KinkSign::Zero) => true,
+            _ => false,
+        };
+        if !(is(out[i - 1], s.left) && is(out[i + 1], s.right)) {
+            continue;
+        }
+        out[i] = Seg::Kink(s.at.map_or(x, Enc::point), s.joined);
     }
     // Merge runs of the same sign, and a zero seen from both sides (its
     // point leaf and the boxes ending there).
@@ -391,11 +422,12 @@ fn flat(segs: &[Seg]) -> bool {
     segs.contains(&Seg::Flat)
         && segs
             .iter()
-            .all(|s| matches!(s, Seg::Flat | Seg::Zero(_) | Seg::Kink(_)))
+            .all(|s| matches!(s, Seg::Flat | Seg::Zero(_) | Seg::Kink(..)))
 }
 
 /// With `kink_turns` (f′), a kink between strict opposite signs is a
-/// change (f, continuous there, turns); without it (f″), such a kink
+/// change (f, continuous there, turns); without it (f″), such a kink is
+/// a change where f′ is continuous across it (x·|x| at 0) and otherwise
 /// leaves the walk incomplete (an inflection at a corner is not decided).
 /// The same strict sign on both sides, or f⁽ᵏ⁾ ≡ 0 on both, is no change.
 fn changes(segs: &[Seg], kink_turns: bool) -> (Vec<(Enc, bool)>, bool) {
@@ -403,13 +435,13 @@ fn changes(segs: &[Seg], kink_turns: bool) -> (Vec<(Enc, bool)>, bool) {
     let mut complete = true;
     for (i, s) in segs.iter().enumerate() {
         match s {
-            Seg::Kink(x) => {
+            Seg::Kink(x, joined) => {
                 let before = i.checked_sub(1).and_then(|j| segs.get(j));
                 let after = segs.get(i + 1);
                 match (before, after) {
                     (Some(Seg::Sign(p)), Some(Seg::Sign(q))) => {
                         if p != q {
-                            if kink_turns {
+                            if kink_turns || *joined {
                                 out.push((*x, *p));
                             } else {
                                 complete = false;
@@ -713,7 +745,7 @@ fn monotone_pieces(c1: &Cover, boxes: &[IBox]) -> Option<Vec<(Monotone, bool, bo
                         dir = Some(p);
                     }
                 }
-                Seg::Zero(x) | Seg::Kink(x) => {
+                Seg::Zero(x) | Seg::Kink(x, _) => {
                     let after = segs.get(i + 1);
                     if let (Some(d), Some(Seg::Sign(q))) = (dir, after)
                         && *q != d
