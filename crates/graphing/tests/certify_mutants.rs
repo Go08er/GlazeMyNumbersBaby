@@ -15,10 +15,13 @@
 //!
 //! A mutant is **killed** when the replay refuses the mutated row itself
 //! (a claim of it refuted or left open, or the row not following from its
-//! claims), in each of three settings: the certificate as it is, with
-//! every other row withheld but the domain, and with every other row
-//! withheld. (A row that is refused only for what another row says would
-//! pass once that row is left out, which a certificate is free to do.) A
+//! claims), in each of four settings: the certificate as it is, with
+//! every other row withheld but the domain, with every other row withheld,
+//! and with every claim of the genuine certificate given to the row as its
+//! own. (A row that is refused only for what another row says would pass
+//! once that row is left out, which a certificate is free to do; and a row
+//! that is refused only for want of a claim would pass with it, true as
+//! every claim of the genuine certificate is.) A
 //! mutant that is not killed is **accepted**: a finding, unless the
 //! operator is content-preserving for that row, which each operator
 //! decides and says why ([`Mutant::benign`]). Those are run too and
@@ -32,7 +35,17 @@
 //!
 //! `MUTANTS_FILTER=text` keeps the functions whose source contains `text`;
 //! `MUTANTS_LOG=file` writes every accepted mutant (tab separated: source,
-//! row, operator, what, setting); `MUTANTS_ROW=name` keeps one row's.
+//! row, operator, what, setting); `MUTANTS_ROW=name` keeps one row's;
+//! `MUTANTS_PROGRESS=1` says each certificate as it is done.
+//!
+//! A list of more than `MUTANTS_ITEMS` items (16 unless set; `all`: no
+//! limit) has the operators that go item by item (an item removed, each
+//! number, end and kind of an item changed) applied to its first and last
+//! eight: a partial list of two hundred zeros of sin x² is two hundred
+//! items the certifier found one way and the replay checks one way, and
+//! every one of them mutated is some 2,500 mutants of one certificate. The
+//! operators on the list as a whole, its status, scope and claims are
+//! applied whatever its length.
 #![cfg(feature = "mpfr-oracle")]
 
 mod certificates;
@@ -168,6 +181,44 @@ fn paths(v: &Value, is: &dyn Fn(&Value) -> bool) -> Vec<Vec<Seg>> {
     out
 }
 
+/// How many items of a long list the item-by-item operators take
+/// (`MUTANTS_ITEMS`): None, all of them.
+fn item_cap() -> Option<usize> {
+    match std::env::var("MUTANTS_ITEMS") {
+        Ok(v) if v == "all" => None,
+        Ok(v) => Some(v.parse().expect("MUTANTS_ITEMS: a number, or all")),
+        Err(_) => Some(16),
+    }
+}
+
+/// Whether item `i` of a list of `n` is one the item-by-item operators
+/// take: all of a list within the cap, the first and last half-caps of a
+/// longer one.
+fn taken(i: usize, n: usize) -> bool {
+    item_cap().is_none_or(|cap| n <= cap || i < cap / 2 || i >= n - cap / 2)
+}
+
+/// [`paths`], but through items the item-by-item operators take.
+fn sampled_paths(v: &Value, is: &dyn Fn(&Value) -> bool) -> Vec<Vec<Seg>> {
+    paths(v, is)
+        .into_iter()
+        .filter(|p| {
+            let mut cur = v;
+            p.iter().all(|seg| match seg {
+                Seg::K(k) => {
+                    cur = &cur[k.as_str()];
+                    true
+                }
+                Seg::I(i) => {
+                    let n = cur.as_array().map_or(0, Vec::len);
+                    cur = &cur[*i];
+                    taken(*i, n)
+                }
+            })
+        })
+        .collect()
+}
+
 /// A piece's end `{"At": {"x": enclosure, "closed": bool}}`.
 fn is_end(v: &Value) -> bool {
     v.get("At").is_some_and(|a| a.get("closed").is_some())
@@ -267,10 +318,14 @@ fn shifted(v: &Value, by: f64) -> Value {
 
 /// Every mutant of the row `row` of the certificate `base`; `other`: a
 /// certificate of another function, for its row.
-fn mutants_of(base: &Value, row: &'static str, other: Option<&Value>) -> Vec<Mutant> {
-    let mut out: Vec<Mutant> = Vec::new();
+fn mutants_of(
+    base: &Value,
+    row: &'static str,
+    other: Option<&Value>,
+    sink: &mut dyn FnMut(Mutant),
+) {
     let Some((status, b)) = body(base, row) else {
-        return out;
+        return;
     };
     let certified = status == "Certified";
     let value = b["value"].clone();
@@ -282,7 +337,7 @@ fn mutants_of(base: &Value, row: &'static str, other: Option<&Value>) -> Vec<Mut
         let mut v = base.clone();
         edit(&mut v);
         if v != *base {
-            out.push(Mutant {
+            sink(Mutant {
                 op,
                 what,
                 v,
@@ -323,7 +378,7 @@ fn mutants_of(base: &Value, row: &'static str, other: Option<&Value>) -> Vec<Mut
             );
         }
         if items.len() > 1 {
-            for i in 0..items.len() {
+            for i in (0..items.len()).filter(|i| taken(*i, items.len())) {
                 let mut rest = items.clone();
                 rest.remove(i);
                 let ends = ends.clone().map(|mut e| {
@@ -338,6 +393,68 @@ fn mutants_of(base: &Value, row: &'static str, other: Option<&Value>) -> Vec<Mut
                     fewer,
                     &listed(rest, ends),
                 );
+            }
+        }
+        // The same with one kind of the row's claims withheld. A list that
+        // is refused only because a claim says what it leaves out (f is
+        // unbounded at 1; f′ changes sign in this box) passes once that
+        // claim is left out too, which a certificate is free to do: the
+        // rest of its claims are as true as before.
+        let mut kinds: Vec<String> = Vec::new();
+        for c in b["cert"]["claims"].as_array().into_iter().flatten() {
+            if let Some(k) = c.as_object().and_then(|o| o.keys().next())
+                && !kinds.contains(k)
+            {
+                kinds.push(k.clone());
+            }
+        }
+        for kind in &kinds {
+            let without = |v: &mut Value| {
+                if let Some(cs) = body_mut(v, row)["cert"]["claims"].as_array_mut() {
+                    cs.retain(|c| c.get(kind.as_str()).is_none());
+                }
+            };
+            if !items.is_empty() {
+                let emptied = listed(Vec::new(), ends.as_ref().map(|_| json!([])));
+                push(
+                    "items removed, a claim kind withheld",
+                    format!(
+                        "{}: its {} items removed, with none of its {kind} claims",
+                        show(&p),
+                        items.len()
+                    ),
+                    fewer,
+                    &|v: &mut Value| {
+                        emptied(v);
+                        without(v);
+                    },
+                );
+            }
+            if items.len() > 1 {
+                for i in 0..items.len().min(3) {
+                    let mut rest = items.clone();
+                    rest.remove(i);
+                    let ends = ends.clone().map(|mut e| {
+                        if i < e.len() {
+                            e.remove(i);
+                        }
+                        Value::Array(e)
+                    });
+                    let removed = listed(rest, ends);
+                    push(
+                        "items removed, a claim kind withheld",
+                        format!(
+                            "{}: item {i} of {} removed, with none of its {kind} claims",
+                            show(&p),
+                            items.len()
+                        ),
+                        fewer,
+                        &|v: &mut Value| {
+                            removed(v);
+                            without(v);
+                        },
+                    );
+                }
             }
         }
         // An item nothing proves, and that says something the list did
@@ -441,7 +558,7 @@ fn mutants_of(base: &Value, row: &'static str, other: Option<&Value>) -> Vec<Mut
     }
 
     // ---- enclosures: moved, narrowed, widened, exchanged
-    let encs = paths(&value, &|n| enc_of(n).is_some());
+    let encs = sampled_paths(&value, &|n| enc_of(n).is_some());
     for p in &encs {
         let (lo, hi) = enc_of(at(&mut value.clone(), p)).expect("an enclosure");
         if !(lo.is_finite() && hi.is_finite()) {
@@ -535,7 +652,7 @@ fn mutants_of(base: &Value, row: &'static str, other: Option<&Value>) -> Vec<Mut
     }
 
     // ---- ends of pieces: open or closed, to infinity, in from infinity
-    for p in paths(&value, &is_end) {
+    for p in sampled_paths(&value, &is_end) {
         let e = at(&mut value.clone(), &p).clone();
         let closed = e["At"]["closed"] == json!(true);
         let mut flipped = e.clone();
@@ -555,7 +672,7 @@ fn mutants_of(base: &Value, row: &'static str, other: Option<&Value>) -> Vec<Mut
         );
     }
     if certified {
-        for p in paths(&value, &|n| n == "NegInf" || n == "PosInf") {
+        for p in sampled_paths(&value, &|n| n == "NegInf" || n == "PosInf") {
             let low = *at(&mut value.clone(), &p) == json!("NegInf");
             let x = if low { -12345.678 } else { 12345.678 };
             for closed in [false, true] {
@@ -571,7 +688,7 @@ fn mutants_of(base: &Value, row: &'static str, other: Option<&Value>) -> Vec<Mut
 
     // ---- directions, kinds, sides, parities
     for set_of in [&DIRECTIONS[..], &KINDS[..], &SIDES[..], &PARITIES[..]] {
-        for p in paths(&value, &|n| n.as_str().is_some_and(|s| set_of.contains(&s))) {
+        for p in sampled_paths(&value, &|n| n.as_str().is_some_and(|s| set_of.contains(&s))) {
             let was = at(&mut value.clone(), &p).as_str().unwrap_or("").to_string();
             for other in set_of.iter().filter(|o| **o != was) {
                 push(
@@ -585,7 +702,7 @@ fn mutants_of(base: &Value, row: &'static str, other: Option<&Value>) -> Vec<Mut
     }
 
     // ---- one item or a family of them, every so far
-    for p in paths(&value, &|n| {
+    for p in sampled_paths(&value, &|n| {
         n.as_object().is_some_and(|o| {
             o.len() == 1
                 && (o.get("At").is_some_and(|a| enc_of(a).is_some()) || o.contains_key("Every"))
@@ -608,7 +725,7 @@ fn mutants_of(base: &Value, row: &'static str, other: Option<&Value>) -> Vec<Mut
             );
         }
     }
-    for p in paths(&value, &|_| true)
+    for p in sampled_paths(&value, &|_| true)
         .into_iter()
         .filter(|p| p.last() == Some(&Seg::K("every".into())))
     {
@@ -650,7 +767,7 @@ fn mutants_of(base: &Value, row: &'static str, other: Option<&Value>) -> Vec<Mut
     }
 
     // ---- how a horizontal asymptote reads
-    for p in paths(&value, &|_| true) {
+    for p in sampled_paths(&value, &|_| true) {
         match p.last() {
             Some(Seg::K(k)) if k == "exact" => {
                 let was = at(&mut value.clone(), &p).clone();
@@ -850,15 +967,14 @@ fn mutants_of(base: &Value, row: &'static str, other: Option<&Value>) -> Vec<Mut
             );
         }
     }
-    out
 }
 
 // ------------------------------------------------------------ the run
 
 /// The settings a mutant is replayed in: with every row, with the domain
 /// alone beside it, with nothing beside it, and with every row and every
-/// claim of the certificate as its own (all of them true: no number of
-/// true claims makes a false row follow).
+/// claim of the genuine certificate as its own (all of them true: no
+/// number of true claims makes a false row follow).
 const SETTINGS: [&str; 4] = [
     "whole",
     "with the domain alone",
@@ -868,11 +984,12 @@ const SETTINGS: [&str; 4] = [
 
 /// Every claim of the certificate, once each.
 fn every_claim(v: &Value) -> Vec<Value> {
+    let mut seen = std::collections::HashSet::new();
     let mut out: Vec<Value> = Vec::new();
     for row in replay::ROWS {
         if let Some((_, b)) = body(v, row) {
             for c in b["cert"]["claims"].as_array().into_iter().flatten() {
-                if !out.contains(c) {
+                if seen.insert(c.to_string()) {
                     out.push(c.clone());
                 }
             }
@@ -883,15 +1000,20 @@ fn every_claim(v: &Value) -> Vec<Value> {
 
 /// Why the replay refuses the row `row` of `v` in a setting, if it does.
 /// (A replay that panics refuses nothing: said so.)
-fn refused(v: &Value, row: &str, setting: usize, s: &mut replay::Session) -> Option<String> {
+fn refused(
+    v: &Value,
+    row: &str,
+    setting: usize,
+    every: &[Value],
+    s: &mut replay::Session,
+) -> Option<String> {
     let mut v = v.clone();
     match setting {
         1 => withhold_all_but(&mut v, &[row, "domain"]),
         2 => withhold_all_but(&mut v, &[row]),
         3 => {
             if body(&v, row).is_some() {
-                let all = every_claim(&v);
-                body_mut(&mut v, row)["cert"]["claims"] = Value::Array(all);
+                body_mut(&mut v, row)["cert"]["claims"] = Value::Array(every.to_vec());
             }
         }
         _ => {}
@@ -937,6 +1059,8 @@ struct Run {
     accepted: Vec<Accepted>,
     /// (row, status, covers) of the genuine rows.
     shapes: BTreeMap<(&'static str, String, String), usize>,
+    /// (seconds, certificate, mutants) of each certificate.
+    took: Vec<(f64, String, usize)>,
 }
 
 fn covers_kind(c: &Value) -> String {
@@ -967,6 +1091,7 @@ fn mutate(src: &str, unit: TrigUnit, other: Option<&Value>, run: &mut Run) {
         }
     }
     run.functions += 1;
+    let every = every_claim(&base);
     let only = std::env::var("MUTANTS_ROW").ok();
     for row in replay::ROWS {
         if only.as_ref().is_some_and(|r| r != row) {
@@ -978,7 +1103,7 @@ fn mutate(src: &str, unit: TrigUnit, other: Option<&Value>, run: &mut Run) {
         *run.shapes
             .entry((row, status.to_string(), covers_kind(&b["cert"]["covers"])))
             .or_insert(0) += 1;
-        for m in mutants_of(&base, row, other) {
+        mutants_of(&base, row, other, &mut |m: Mutant| {
             let t = run.tally.entry((row, m.op)).or_default();
             // Killed: refused in every setting. (The domain row alone and
             // with itself are one setting.)
@@ -993,7 +1118,7 @@ fn mutate(src: &str, unit: TrigUnit, other: Option<&Value>, run: &mut Run) {
             let mut accepted_in = None;
             let mut unreadable = true;
             for &s in settings {
-                match refused(&m.v, row, s, &mut session) {
+                match refused(&m.v, row, s, &every, &mut session) {
                     None => {
                         accepted_in = Some(SETTINGS[s]);
                         break;
@@ -1004,7 +1129,7 @@ fn mutate(src: &str, unit: TrigUnit, other: Option<&Value>, run: &mut Run) {
             if m.benign.is_some() {
                 t.benign += 1;
                 t.benign_accepted += usize::from(accepted_in.is_some());
-                continue;
+                return;
             }
             t.generated += 1;
             match accepted_in {
@@ -1023,7 +1148,7 @@ fn mutate(src: &str, unit: TrigUnit, other: Option<&Value>, run: &mut Run) {
                     });
                 }
             }
-        }
+        });
     }
 }
 
@@ -1050,7 +1175,19 @@ fn run(fs: Vec<(String, TrigUnit)>) -> Run {
                         let (os, ou) = &fs[(i + 2) % fs.len()];
                         let other = (os != s).then(|| certificate(os, *ou)).flatten();
                         let mut one = Run::default();
+                        let t0 = std::time::Instant::now();
                         mutate(s, *u, other.as_ref(), &mut one);
+                        let mutants: usize =
+                            one.tally.values().map(|t| t.generated + t.benign).sum();
+                        let secs = t0.elapsed().as_secs_f64();
+                        if std::env::var_os("MUTANTS_PROGRESS").is_some() {
+                            eprintln!(
+                                "{}/{}: {s} [{u:?}]: {mutants} mutants, {secs:.1} s",
+                                i + 1,
+                                fs.len()
+                            );
+                        }
+                        one.took.push((secs, format!("{s} [{u:?}]"), mutants));
                         done.lock().unwrap().push((i, one));
                     }
                 })
@@ -1064,6 +1201,7 @@ fn run(fs: Vec<(String, TrigUnit)>) -> Run {
         all.functions += one.functions;
         all.refused.extend(one.refused);
         all.accepted.extend(one.accepted);
+        all.took.extend(one.took);
         for (k, t) in one.tally {
             let a = all.tally.entry(k).or_default();
             a.generated += t.generated;
@@ -1089,6 +1227,11 @@ fn report(r: &Run) {
     );
     for f in &r.refused {
         println!("  refused as it is: {f}");
+    }
+    let mut took: Vec<&(f64, String, usize)> = r.took.iter().collect();
+    took.sort_by(|a, b| b.0.total_cmp(&a.0));
+    for (secs, label, mutants) in took.into_iter().take(5) {
+        println!("slowest: {label}: {mutants} mutants, {secs:.1} s");
     }
     println!("\nthe genuine rows: row, status, covers: how many");
     for ((row, status, covers), n) in &r.shapes {

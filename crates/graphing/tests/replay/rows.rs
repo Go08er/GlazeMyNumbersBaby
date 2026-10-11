@@ -830,15 +830,21 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
     if let Some(why) = off_form(rc) {
         out.problems.push(why);
     }
-    // The claims' own outcomes.
+    // The claims' own outcomes (looked up by key: a row has thousands).
+    let outcomes: std::collections::HashMap<String, &ClaimResult> = results
+        .iter()
+        .map(|r| (super::claim_key(&r.claim), r))
+        .collect();
     let mut weak = 0;
     let mut open = 0;
+    let mut refuted = 0;
     for c in &rc.claims {
-        if let Some(res) = results.iter().find(|r| r.claim == *c) {
+        if let Some(res) = outcomes.get(&super::claim_key(c)) {
             match res.outcome.class {
                 Class::Weak => weak += 1,
                 Class::Unconfirmed | Class::Unsupported => open += 1,
-                _ => {}
+                Class::Refuted => refuted += 1,
+                Class::Strong => {}
             }
         }
     }
@@ -849,15 +855,6 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
     if open > 0 {
         out.notes.push(format!("{open} claims are unconfirmed"));
     }
-    let refuted = rc
-        .claims
-        .iter()
-        .filter(|c| {
-            results
-                .iter()
-                .any(|r| r.claim == **c && r.outcome.class == Class::Refuted)
-        })
-        .count();
     if refuted > 0 {
         out.problems
             .push(format!("it rests on {refuted} refuted claims"));
@@ -1135,8 +1132,21 @@ fn turns(
     }
     if k == 1 {
         // Extrema at closed domain ends (a maximum is "from positive").
-        for (x, min) in end_extrema(rc, all, &w) {
+        let (ends, open) = end_extrema(fx, rc, all, &w);
+        for (x, min) in ends {
             ch.push((x, !min));
+        }
+        // (An end no claim spoke of was no extremum: √x's "no extrema",
+        // complete, with the claims of its other rows. Round 19's
+        // mutation tester.)
+        if let Some(x) = open.first()
+            && complete(rc)
+        {
+            out.problems.push(format!(
+                "f at the closed end [{:e}, {:e}] of its domain is not decided (an extremum, or \
+                 f constant beside it), yet the row is complete",
+                x.lo, x.hi
+            ));
         }
     }
     let mut listed = Vec::new();
@@ -1201,10 +1211,17 @@ fn domain_pieces(all: &[RowCert]) -> Option<Vec<Piece>> {
 /// from a low end (or falling toward a high one) makes it a minimum.
 /// (f′ must also have no zero in the gap beside the end: its GapClear
 /// claim, which [`holes`] asks of a complete row.) Returns (where, is a
-/// minimum).
-fn end_extrema(rc: &RowCert, all: &[RowCert], w: &Walk) -> Vec<(Enc, bool)> {
+/// minimum), and the closed ends left undecided: f not shown continuous
+/// from the end into the stretch (by a claim, or by the replay itself),
+/// nor constant beside it.
+fn end_extrema(
+    fx: &Fx,
+    rc: &RowCert,
+    all: &[RowCert],
+    w: &Walk,
+) -> (Vec<(Enc, bool)>, Vec<Enc>) {
     let Some(pieces) = domain_pieces(all) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let conts: Vec<B> = rc
         .claims
@@ -1215,6 +1232,7 @@ fn end_extrema(rc: &RowCert, all: &[RowCert], w: &Walk) -> Vec<(Enc, bool)> {
         })
         .collect();
     let mut out = Vec::new();
+    let mut open = Vec::new();
     for p in &pieces {
         if p.lo == p.hi {
             continue;
@@ -1223,6 +1241,23 @@ fn end_extrema(rc: &RowCert, all: &[RowCert], w: &Walk) -> Vec<(Enc, bool)> {
             let Bound::At { x, closed: true } = b else {
                 continue;
             };
+            // Outside the row's region: not asked.
+            if let Some((a, b)) = rc.region.as_ref().and_then(region_box)
+                && (x.hi < a || x.lo > b)
+            {
+                continue;
+            }
+            // f constant from the end: no extremum of its own there.
+            let flat = w.flat.iter().any(|f| {
+                if low {
+                    f.0 <= x.hi.next_up() && f.1 > x.hi
+                } else {
+                    f.1 >= x.lo.next_down() && f.0 < x.lo
+                }
+            });
+            if flat {
+                continue;
+            }
             // The first strict sign of f′ inward from the end.
             let stretch = if low {
                 w.signs
@@ -1236,16 +1271,22 @@ fn end_extrema(rc: &RowCert, all: &[RowCert], w: &Walk) -> Vec<(Enc, bool)> {
                     .max_by(|a, b| a.1.total_cmp(&b.1))
             };
             let Some(&(sa, sb, sign)) = stretch else {
+                open.push(x);
                 continue;
             };
-            // f continuous from the end into that stretch.
+            // f continuous from the end into that stretch: a claim's, or
+            // the replay's own.
             let joined = conts.iter().any(|c| {
                 if low {
                     c.0 <= x.lo && c.1 >= sa
                 } else {
                     c.1 >= x.hi && c.0 <= sb
                 }
-            });
+            }) || {
+                let span = if low { (x.lo, sa) } else { (sb, x.hi) };
+                span.0 <= span.1
+                    && claims::check(fx, &Claim::Continuous(span), &[]).class == Class::Strong
+            };
             // Nothing between but a zero at the end itself.
             let between = |z: &Zero| {
                 if low {
@@ -1256,10 +1297,12 @@ fn end_extrema(rc: &RowCert, all: &[RowCert], w: &Walk) -> Vec<(Enc, bool)> {
             };
             if joined && !w.zeros.iter().any(between) {
                 out.push((x, sign == low));
+            } else if !joined {
+                open.push(x);
             }
         }
     }
-    out
+    (out, open)
 }
 
 /// A box and nearby translations guaranteed for every value of the
@@ -1872,6 +1915,120 @@ fn parity(
 
 // ------------------------------------------------------------ domain
 
+/// f over the reals strictly between the double p and the double beside
+/// it (on its right, or its left), p itself left out: x − p keeps its
+/// strict sign there (x − p written in f is that difference exactly: 1/(x
+/// − 1) beside 1 is 1/t, t > 0). An enclosure of f's values where it is
+/// defined; `def` where it is shown defined throughout.
+fn over_open_gap(fx: &Fx, p: f64, right: bool) -> Iv {
+    iv::set_prec(160);
+    let q = if right { p.next_up() } else { p.next_down() };
+    let (lo, hi) = if right { (p, q) } else { (q, p) };
+    let ctx = fx.ctx();
+    let (e, x) = if p == 0.0 {
+        (fx.f.clone(), Iv::of2(lo, hi).strict(right, !right))
+    } else {
+        (
+            super::eval::recentered(&fx.f, p, &ctx),
+            iv::sub(&Iv::of2(lo, hi), &Iv::of(p)).strict(right, !right),
+        )
+    };
+    super::series::where_defined(|| {
+        super::eval::eval(&e, &super::series::var(x, 0), 0, &ctx)[0].clone()
+    })
+}
+
+/// Whether f is shown defined at every real strictly between the double p,
+/// where it is not, and the double beside it: nothing else is excluded
+/// there. By f's own enclosure over those reals ([`over_open_gap`]); or by
+/// the nodes that exclude p: each is 0 at p exactly where f has no value
+/// at its zeros (a divisor), or at the edge of its function's domain there
+/// (ln's 0), and is continuous and strictly monotone from p to that
+/// double, so it is nonzero, or inside its domain, at every real between;
+/// and with those nodes stood in for, by any value they may take there,
+/// the rest of f is defined over the whole of it.
+///
+/// (The pieces were shown defined from the double beside an open end on.
+/// 1/((x − 1)·(x − 1.00000000000000001)) has a second pole strictly
+/// between 1 and that double: its domain passed as x ≠ 1, and every other
+/// row with it. Round 19's follow-up.)
+fn open_gap_defined(fx: &Fx, p: f64, right: bool) -> bool {
+    use graphing::ast::Expr;
+    if claims::unmodelled(&fx.f) {
+        return false;
+    }
+    let v = over_open_gap(fx, p, right);
+    if !v.empty && v.def {
+        return true;
+    }
+    iv::set_prec(160);
+    let q = if right { p.next_up() } else { p.next_down() };
+    let (lo, hi) = if right { (p, q) } else { (q, p) };
+    let at = |g: &Expr, x: f64| fx.series(g, x, x, 0)[0].clone();
+    let monotone = |g: &Expr| {
+        let s = fx.series(g, lo, hi, 1);
+        s[0].cont && !s[1].empty && s[1].def && s[1].ne0()
+    };
+    // (path, stand-in): shortest paths first, none inside another.
+    let mut stood: Vec<(Vec<u8>, &'static str)> = Vec::new();
+    let mut zeros = Vec::new();
+    paths_where(
+        &fx.f,
+        &|g, path| {
+            let excluded = divisor(&fx.f, path) || {
+                let zeroed = replace_with(&fx.f, path, Expr::exact(0.0));
+                fx.series(&zeroed, f64::NEG_INFINITY, f64::INFINITY, 0)[0].empty
+            };
+            excluded && at(g, p).is_exactly(0.0) && monotone(g)
+        },
+        &mut Vec::new(),
+        &mut zeros,
+    );
+    for path in zeros {
+        let Some(g) = super::eval::at_path(&fx.f, &path) else {
+            continue;
+        };
+        let far = at(g, q);
+        if far.gt(0.0) {
+            stood.push((path, "__pos"));
+        } else if far.lt(0.0) {
+            stood.push((path, "__neg"));
+        }
+    }
+    let mut es = Vec::new();
+    edges(fx, &fx.f, &mut Vec::new(), &mut es);
+    for ed in es {
+        let Some(g) = super::eval::at_path(&fx.f, &ed.path) else {
+            continue;
+        };
+        let far = at(g, q);
+        let allowed = if ed.above {
+            far.gt(ed.c)
+        } else {
+            far.lt(ed.c)
+        };
+        let inside = ed.stand_in != "__unit" || (far.gt(-1.0) && far.lt(1.0));
+        if at(g, p).is_exactly(ed.c) && monotone(g) && allowed && inside {
+            stood.push((ed.path, ed.stand_in));
+        }
+    }
+    if stood.is_empty() {
+        return false;
+    }
+    stood.sort_by_key(|(path, _)| path.len());
+    let mut done: Vec<Vec<u8>> = Vec::new();
+    let mut t = fx.f.clone();
+    for (path, stand_in) in stood {
+        if done.iter().any(|d| path.starts_with(d)) {
+            continue;
+        }
+        t = replace(&t, &path, stand_in);
+        done.push(path);
+    }
+    let v = &fx.series(&t, lo, hi, 0)[0];
+    !v.empty && v.def
+}
+
 /// The domain checked directly: f defined on each piece (but at its
 /// families' members), undefined between pieces, its ends as listed.
 fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
@@ -2088,6 +2245,21 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
             {
                 out.problems
                     .push(format!("an open end at {:e}, yet {w}", x.lo));
+            }
+        }
+        // Between an open end at a double and the double beside it, inside
+        // the piece, f is defined too: the boxes above start at that next
+        // double.
+        for (b, low) in [(p.lo, true), (p.hi, false)] {
+            if let Bound::At { x, closed: false } = b
+                && x.lo == x.hi
+                && lo <= hi
+                && !open_gap_defined(fx, x.lo, low)
+            {
+                out.problems.push(format!(
+                    "f is not shown defined between its open end {:e} and the double beside it",
+                    x.lo
+                ));
             }
         }
         // Ends known only to an enclosure: the end inside it, and whether
@@ -2870,16 +3042,6 @@ fn limit_at(claims: &[Claim], at: At, over_x: bool) -> Option<Toward> {
     })
 }
 
-/// Whether the claims show f → ±∞ beside the point p (from the right, or
-/// the left): unbounded there by structure, or beyond bounds on boxes
-/// beside p that grow as the boxes shrink.
-fn side_infinite(claims: &[Claim], p: f64, right: bool) -> bool {
-    claims
-        .iter()
-        .any(|c| matches!(c, Claim::Unbounded { at, .. } if at.0 <= p && p <= at.1))
-        || side_grows(claims, p, right)
-}
-
 /// Whether the claims show f → ±∞ beside the very double p: its one-sided
 /// limit there by the tree's structure. (Bounds on boxes from the double
 /// next to p that "grew" as the boxes shrank counted too: (x + 1)/(x² − 1)
@@ -3156,10 +3318,17 @@ fn vertical(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Resu
 /// * on a box where f is valid it is bounded near each point: a value
 ///   claim bounds it there, or f is continuous on the box (built without
 ///   steps, so continuous wherever defined; else shown so on the box);
-/// * each undefined point and each gap is classified by a claim: f
-///   bounded near it (`Bounded`, `Removable`, a finite one-sided limit), or
-///   unbounded (`Unbounded`, an infinite one-sided limit, bounds growing
-///   beside it), and then listed.
+/// * each point where f is undefined, from each side the domain reaches
+///   it, is at a listed asymptote, or f is shown bounded beside it: a
+///   `Bounded` or `Removable` claim, a finite one-sided limit by the
+///   tree's structure, a band (bounds above and below) on the box from the
+///   double beside it, or the replay's own continuous extension of f at
+///   the point; a gap that holds an excluded point between two doubles
+///   has a claim that places it, unbounded (and listed) or bounded.
+///
+/// The reals strictly between an undefined double and the double beside it
+/// (a `Gap`) are the one place nothing is derived: no row shows that f has
+/// no second excluded point there.
 ///
 /// (The row was checked only where it listed something: "none" passed for
 /// any f with no claims at all, x³ − 2x + 1/(x − 1) among them. Round 19's
@@ -3265,27 +3434,21 @@ fn no_other_asymptote(
             sides.push((u.0, false));
         }
     }
-    // A claim that f stays within bounds about p, on that side of it.
-    let kept = |p: f64, right: bool| {
-        rc.claims.iter().any(|c| match c {
-            Claim::Bounded { near, at, .. } | Claim::Removable { near, at, .. } => {
-                at.0 <= p && p <= at.1 && if right { near.1 > p } else { near.0 < p }
-            }
-            _ => false,
-        })
+    // f bounded between p and the double beside it, where it is defined
+    // (the domain row's): a removable point (its claim's check: f's limit
+    // there), or the replay's own enclosure of f over those reals. (A
+    // bound on the box from that next double on says nothing of them: 1/(x
+    // − 1) is below 5·10¹⁵ on [1 + 2⁻⁵², 2]. Such bands, and a `Bounded`
+    // claim, which leaves the same reals out, passed for "no asymptote at
+    // 1" once the claim that it is one was left out.)
+    let removable = |p: f64| {
+        rc.claims.iter().any(
+            |c| matches!(c, Claim::Removable { at, .. } if at.0 <= p && p <= at.1),
+        )
     };
-    // f within finite bounds on a box from the double beside p: a value
-    // claim, or a bound above and one below.
-    let banded = |p: f64, right: bool| {
-        !side_bands(&rc.claims, p, right).is_empty()
-            || valid.iter().any(|(b, bounded)| {
-                *bounded
-                    && if right {
-                        b.0 == p.next_up()
-                    } else {
-                        b.1 == p.next_down()
-                    }
-            })
+    let own_bound = |p: f64, right: bool| {
+        let v = over_open_gap(fx, p, right);
+        !v.empty && v.bounded()
     };
     for (p, right) in sides {
         let at = Enc { lo: p, hi: p };
@@ -3299,7 +3462,7 @@ fn no_other_asymptote(
             iv::set_prec(160);
             claims::limit_at(fx, p).is_some()
         };
-        if kept(p, right) || finite || banded(p, right) || own() {
+        if finite || removable(p) || own() || own_bound(p, right) {
             continue;
         }
         let unbounded = rc
@@ -3707,9 +3870,551 @@ fn exact_form(
 
 // ------------------------------------------------------------ range
 
-/// The range: every listed end is a value a claim proves (taken, a
-/// limit, or ±∞ by a claim), and no value of f at sample points falls
-/// outside the listed pieces.
+/// f's value at a place, or its limit toward one: an enclosure in the
+/// extended reals (±∞ at both ends for an infinite limit), and whether it
+/// is a value f takes.
+#[derive(Clone, Copy, Debug)]
+struct Seen {
+    lo: f64,
+    hi: f64,
+    taken: bool,
+}
+
+/// An end of a stretch of the domain on which f is continuous.
+#[derive(Clone, Copy, Debug)]
+enum Brink {
+    /// f is defined there (a closed end, an edge of the period's window).
+    Taken(B),
+    /// An excluded point or an open end, approached from its right (true)
+    /// or its left.
+    Toward(B, bool),
+    Tail(Side),
+}
+
+impl Brink {
+    fn at(&self) -> B {
+        match self {
+            Brink::Taken(b) | Brink::Toward(b, _) => *b,
+            Brink::Tail(Side::Left) => (f64::NEG_INFINITY, f64::NEG_INFINITY),
+            Brink::Tail(Side::Right) => (f64::INFINITY, f64::INFINITY),
+        }
+    }
+}
+
+/// The values f takes on one stretch where it is continuous: every value
+/// strictly between `lo` and `hi` for certain (and `lo` or `hi` itself
+/// where `closed`), none outside `hull`; with what was seen at its ends
+/// and turns.
+struct Image {
+    lo: f64,
+    hi: f64,
+    closed: (bool, bool),
+    hull: B,
+    seen: Vec<Seen>,
+}
+
+/// The range derived, and the listed pieces held to it.
+///
+/// The domain row's pieces, cut at the excluded points inside them, are
+/// the stretches on which f is continuous; the row's walk of f′ (which
+/// covers them: [`coverage`], [`gap_ends`], [`holes`]) cuts each into
+/// finitely many monotone parts, at f′'s zeros and f's kinks. So on a
+/// stretch f's least and greatest values are among: f at those zeros and
+/// kinks and at a closed end (taken), and f's limits at an open end, an
+/// excluded point or a tail (not taken). Each is enclosed here (`Seen`),
+/// from the replay's own evaluation where f is defined and from the
+/// row's claims where it is a limit; f is continuous on the stretch, so it
+/// takes every value strictly between the least and the greatest. Then:
+///
+/// * no value falls outside the list: each stretch's hull lies in one
+///   listed piece;
+/// * the list holds no value f doesn't take: each listed piece, between
+///   its ends' enclosures, is covered by the stretches' certain images;
+/// * a finite end is closed just when the value there is taken.
+///
+/// (The row was checked at its ends alone, each against the source it
+/// names, and at sample points: √x's range passed as (−∞, ∞), a third of
+/// x³ − 2x + 1/(x − 1)'s as everything above it. Round 19's mutation
+/// tester.)
+fn images(
+    fx: &Fx,
+    rc: &RowCert,
+    all: &[RowCert],
+    w: &Walk,
+    pieces: &[Piece],
+    out: &mut RowResult,
+) {
+    let Some((ra, rb)) = rc.region.as_ref().and_then(region_box) else {
+        return;
+    };
+    let Some(domain) = domain_pieces(all) else {
+        out.problems
+            .push("the range is not derived: no domain row places the stretches of f".into());
+        return;
+    };
+    if claims::unmodelled(&fx.f) {
+        out.problems
+            .push("the range is not derived: f uses a function the replay doesn't model".into());
+        return;
+    }
+    // The excluded places: the boxes where f is undefined, and the gaps
+    // that hold an excluded point between two doubles (beside no undefined
+    // box), those that overlap as one.
+    let mut excluded: Vec<B> = w.holes.clone();
+    for g in &w.gaps {
+        let beside = w
+            .holes
+            .iter()
+            .any(|u| u.1 == g.0 || u.0 == g.1 || (u.0 <= g.0 && g.1 <= u.1));
+        if !beside {
+            excluded.push(*g);
+        }
+    }
+    excluded.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut merged: Vec<B> = Vec::new();
+    for e in excluded {
+        match merged.last_mut() {
+            Some(l) if e.0 <= l.1 => l.1 = l.1.max(e.1),
+            _ => merged.push(e),
+        }
+    }
+    // The stretches.
+    let mut stretches: Vec<(Brink, Brink)> = Vec::new();
+    for d in &domain {
+        let (dlo, dhi) = extent(d);
+        if dlo.max(ra) > dhi.min(rb) {
+            continue;
+        }
+        let low = if dlo < ra {
+            Brink::Taken((ra, ra))
+        } else {
+            match d.lo {
+                Bound::NegInf => Brink::Tail(Side::Left),
+                Bound::PosInf => continue,
+                Bound::At { x, closed: true } => Brink::Taken((x.lo, x.hi)),
+                Bound::At { x, closed: false } => Brink::Toward((x.lo, x.hi), true),
+            }
+        };
+        let high = if dhi > rb {
+            Brink::Taken((rb, rb))
+        } else {
+            match d.hi {
+                Bound::PosInf => Brink::Tail(Side::Right),
+                Bound::NegInf => continue,
+                Bound::At { x, closed: true } => Brink::Taken((x.lo, x.hi)),
+                Bound::At { x, closed: false } => Brink::Toward((x.lo, x.hi), false),
+            }
+        };
+        let mut from = low;
+        for e in &merged {
+            if e.0 > from.at().1 && e.1 < high.at().0 {
+                stretches.push((from, Brink::Toward(*e, false)));
+                from = Brink::Toward(*e, true);
+            }
+        }
+        stretches.push((from, high));
+    }
+    iv::set_prec(160);
+    // f over a box where it is defined: the replay's own enclosure, within
+    // any value claim on that very box.
+    let taken = |b: B| -> Option<Seen> {
+        let v = super::series::where_defined(|| fx.series(&fx.f, b.0, b.1, 0)[0].clone());
+        let mut seen = (!v.empty && v.bounded()).then(|| {
+            let (lo, hi) = claims::outward(&v);
+            Seen {
+                lo,
+                hi,
+                taken: true,
+            }
+        });
+        for c in &rc.claims {
+            if let Claim::Value {
+                x,
+                of: Subject::F(0),
+                lo,
+                hi,
+            } = c
+                && *x == b
+                && lo.is_finite()
+                && hi.is_finite()
+            {
+                seen = Some(match seen {
+                    Some(s) => Seen {
+                        lo: s.lo.max(*lo),
+                        hi: s.hi.min(*hi),
+                        taken: true,
+                    },
+                    None => Seen {
+                        lo: *lo,
+                        hi: *hi,
+                        taken: true,
+                    },
+                });
+            }
+        }
+        seen.filter(|s| s.lo <= s.hi)
+    };
+    // f constant on [lo, hi] (f′ ≡ 0 there, no excluded point inside):
+    // its one value, within every value claim on a box of it; with none,
+    // the replay's own at a point.
+    let constant = |lo: f64, hi: f64| -> Option<Seen> {
+        let mut seen: Option<Seen> = None;
+        for c in &rc.claims {
+            if let Claim::Value {
+                x,
+                of: Subject::F(0),
+                lo: l,
+                hi: h,
+            } = c
+                && lo <= x.0
+                && x.1 <= hi
+                && l.is_finite()
+                && h.is_finite()
+            {
+                seen = Some(match seen {
+                    Some(s) => Seen {
+                        lo: s.lo.max(*l),
+                        hi: s.hi.min(*h),
+                        taken: true,
+                    },
+                    None => Seen {
+                        lo: *l,
+                        hi: *h,
+                        taken: true,
+                    },
+                });
+            }
+        }
+        seen.filter(|s| s.lo <= s.hi).or_else(|| {
+            [0.0, lo, hi, lo + 1.0, hi - 1.0]
+                .into_iter()
+                .filter(|x| x.is_finite() && lo <= *x && *x <= hi)
+                .find_map(|x| taken((x, x)))
+        })
+    };
+    // f constant on a stretch that reaches the edge: its value there.
+    let flat_to = |e: &Brink| -> Option<Seen> {
+        let b = w.flat.iter().find(|b| match e {
+            Brink::Tail(Side::Left) => b.0 == f64::NEG_INFINITY,
+            Brink::Tail(Side::Right) => b.1 == f64::INFINITY,
+            Brink::Toward(x, true) => b.0 <= x.1.next_up() && x.1 < b.1,
+            Brink::Toward(x, false) => b.1 >= x.0.next_down() && x.0 > b.0,
+            Brink::Taken(_) => false,
+        })?;
+        match e {
+            Brink::Toward(x, true) => constant(x.1.next_up().max(b.0), b.1),
+            Brink::Toward(x, false) => constant(b.0, x.0.next_down().min(b.1)),
+            _ => constant(b.0, b.1),
+        }
+    };
+    let infinite = |up: bool| {
+        let v = if up {
+            f64::INFINITY
+        } else {
+            f64::NEG_INFINITY
+        };
+        Seen {
+            lo: v,
+            hi: v,
+            taken: false,
+        }
+    };
+    let limit = |v: Enc| Seen {
+        lo: v.lo,
+        hi: v.hi,
+        taken: false,
+    };
+    // f′'s sign on the stretch beside x (f's direction there).
+    let rising_beside = |x: f64, right: bool| -> Option<bool> {
+        let q = if right { x.next_up() } else { x.next_down() };
+        w.signs
+            .iter()
+            .find(|s| (s.0 <= q && q <= s.1) || (s.0 <= x && x <= s.1))
+            .map(|s| s.2)
+    };
+    let toward = |b: B, right: bool| -> Option<Seen> {
+        let point = (b.0 == b.1).then_some(b.0);
+        let at = point.map(|p| if right { At::Right(p) } else { At::Left(p) });
+        // An infinite limit by the tree's structure.
+        match at.and_then(|at| limit_at(&rc.claims, at, false)) {
+            Some(Toward::PosInf) => return Some(infinite(true)),
+            Some(Toward::NegInf) => return Some(infinite(false)),
+            _ => {}
+        }
+        // A finite one: every enclosure of it that is proven, together.
+        let mut shown: Vec<Enc> = Vec::new();
+        if let Some(p) = point {
+            let side = serde_json::json!({"Side": {"at": p, "right": right}});
+            if let Ok(v) = source_value(fx, rc, &side) {
+                shown.push(v.enc());
+            }
+            iv::set_prec(160);
+            if let Some(v) = claims::limit_at(fx, p) {
+                let (lo, hi) = claims::outward(&v);
+                shown.push(Enc { lo, hi });
+            }
+            // (f's own enclosure between p and the double beside it holds
+            // the limit; a band on the box from that double on does not.)
+            let v = over_open_gap(fx, p, right);
+            if !v.empty && v.bounded() {
+                let (lo, hi) = claims::outward(&v);
+                shown.push(Enc { lo, hi });
+            }
+        }
+        for c in &rc.claims {
+            if let Claim::Removable { at, lo, hi, .. } = c
+                && ((at.0 <= b.0 && b.1 <= at.1) || (b.0 <= at.0 && at.1 <= b.1))
+            {
+                shown.push(Enc { lo: *lo, hi: *hi });
+            }
+        }
+        if !shown.is_empty() {
+            let v = Enc {
+                lo: shown.iter().map(|e| e.lo).fold(f64::NEG_INFINITY, f64::max),
+                hi: shown.iter().map(|e| e.hi).fold(f64::INFINITY, f64::min),
+            };
+            return (v.lo <= v.hi).then(|| limit(v));
+        }
+        // A pole: |f| → ∞ there (a claim's proof, or the replay's own at a
+        // double), and f monotone beside it, so to +∞ or to −∞: up, coming
+        // from the right, where f falls away from it.
+        let pole = rc.claims.iter().any(|c| {
+            matches!(c, Claim::Unbounded { at, .. }
+                if (at.0 <= b.0 && b.1 <= at.1) || (b.0 <= at.0 && at.1 <= b.1))
+        }) || point.is_some_and(|p| {
+            let about = Claim::Unbounded {
+                near: (p.next_down(), p.next_up()),
+                at: (p, p),
+            };
+            claims::check(fx, &about, &[]).class == Class::Strong
+        });
+        let rising = rising_beside(if right { b.1 } else { b.0 }, right)?;
+        pole.then(|| infinite(rising != right))
+    };
+    let tail = |side: Side| -> Option<Seen> {
+        let right = side == Side::Right;
+        let at = if right { At::PosInf } else { At::NegInf };
+        match limit_at(&rc.claims, at, false) {
+            Some(Toward::PosInf) => return Some(infinite(true)),
+            Some(Toward::NegInf) => return Some(infinite(false)),
+            _ => {}
+        }
+        for up in [true, false] {
+            if tail_infinite(&rc.claims, side, up) {
+                return Some(infinite(up));
+            }
+        }
+        // A rational f's own limit, exactly.
+        if let Some(r) = super::algebra::Rat::of(&fx.f, &fx.lits, &fx.vars, fx.unit) {
+            match r.limit(right) {
+                Err(up) => return Some(infinite(up)),
+                Ok(q) => return Some(limit(Stated::Exact(q).enc())),
+            }
+        }
+        let name = if right { "Right" } else { "Left" };
+        source_value(fx, rc, &serde_json::json!({"Tail": name}))
+            .ok()
+            .map(|v| limit(v.enc()))
+    };
+    let see = |e: &Brink| -> Option<Seen> {
+        match e {
+            Brink::Taken(b) => taken(*b),
+            Brink::Toward(b, right) => flat_to(e).or_else(|| toward(*b, *right)),
+            Brink::Tail(side) => flat_to(e).or_else(|| tail(*side)),
+        }
+    };
+    let name = |e: &Brink| match e {
+        Brink::Taken(b) => format!("at [{:e}, {:e}]", b.0, b.1),
+        Brink::Toward(b, right) => format!(
+            "{} [{:e}, {:e}]",
+            if *right { "right of" } else { "left of" },
+            b.0,
+            b.1
+        ),
+        Brink::Tail(Side::Left) => "toward −∞".to_string(),
+        Brink::Tail(Side::Right) => "toward +∞".to_string(),
+    };
+    let mut found: Vec<(B, Vec<Seen>)> = Vec::new();
+    for (lo, hi) in &stretches {
+        let (a, b) = (lo.at().0, hi.at().1);
+        let mut seen = Vec::new();
+        for e in [lo, hi] {
+            match see(e) {
+                Some(s) => seen.push(s),
+                None => {
+                    out.problems.push(format!(
+                        "the range is not derived: f {} is not placed",
+                        name(e)
+                    ));
+                    return;
+                }
+            }
+        }
+        // Where f is constant on the stretch.
+        for f in &w.flat {
+            // (Off the stretch's own ends, where f may be undefined.)
+            let lo = f.0.max(if lo.at().0 == a { a.next_up() } else { a });
+            let hi = f.1.min(if hi.at().1 == b { b.next_down() } else { b });
+            if lo > hi {
+                continue;
+            }
+            match constant(lo, hi) {
+                Some(s) => seen.push(s),
+                None => {
+                    out.problems.push(format!(
+                        "the range is not derived: f, constant on [{lo:e}, {hi:e}], is not enclosed"
+                    ));
+                    return;
+                }
+            }
+        }
+        // f′'s zeros and f's kinks on the stretch.
+        let inside: Vec<B> = w
+            .zeros
+            .iter()
+            .map(|z| (z.at.lo, z.at.hi))
+            .filter(|z| a <= z.0 && z.1 <= b)
+            .collect();
+        for z in inside {
+            match taken(z) {
+                Some(s) => seen.push(s),
+                None => {
+                    out.problems.push(format!(
+                        "the range is not derived: f on [{:e}, {:e}] is not enclosed",
+                        z.0, z.1
+                    ));
+                    return;
+                }
+            }
+        }
+        found.push(((a, b), seen));
+    }
+    // Over one period: f at the window's low edge is f a period on, a
+    // point of the stretch that holds it (and so for the high edge).
+    if let Some(Region::Period(wa, wb)) = rc.region
+        && let Some(per) = row_period(rc)
+    {
+        let q = rug::Rational::from_f64;
+        for (edge, sign) in [(wa, 1), (wb, -1)] {
+            let (Some(e), Some(plo), Some(phi)) = (q(edge), q(per.lo), q(per.hi)) else {
+                continue;
+            };
+            let (lo, hi) = if sign > 0 {
+                (rug::Rational::from(&e + &plo), rug::Rational::from(&e + &phi))
+            } else {
+                (rug::Rational::from(&e - &phi), rug::Rational::from(&e - &plo))
+            };
+            let Some(v) = taken((edge, edge)) else {
+                continue;
+            };
+            if let Some((_, seen)) = found.iter_mut().find(|((a, b), _)| *a < lo && hi < *b) {
+                seen.push(v);
+            }
+        }
+    }
+    let imgs: Vec<Image> = found
+        .into_iter()
+        .map(|(_, seen)| {
+            let least = |f: fn(&Seen) -> f64| seen.iter().map(f).fold(f64::INFINITY, f64::min);
+            let most = |f: fn(&Seen) -> f64| seen.iter().map(f).fold(f64::NEG_INFINITY, f64::max);
+            let (lo, hi) = (least(|s| s.hi), most(|s| s.lo));
+            Image {
+                lo,
+                hi,
+                closed: (
+                    seen.iter().any(|s| s.taken && s.hi == lo),
+                    seen.iter().any(|s| s.taken && s.lo == hi),
+                ),
+                hull: (least(|s| s.lo), most(|s| s.hi)),
+                seen,
+            }
+        })
+        .collect();
+    // No value outside the list.
+    let within = |hull: B, p: &Piece| {
+        let (a, b) = extent(p);
+        a <= hull.0 && hull.1 <= b
+    };
+    for im in &imgs {
+        if !pieces.iter().any(|p| within(im.hull, p)) {
+            out.problems.push(format!(
+                "f takes values in [{:e}, {:e}] on one stretch, not all inside a listed piece",
+                im.hull.0, im.hull.1
+            ));
+            return;
+        }
+    }
+    for p in pieces {
+        let mine: Vec<&Image> = imgs.iter().filter(|im| within(im.hull, p)).collect();
+        // No listed value untaken: from the low end's enclosure up to the
+        // high end's, covered by the certain images (an exact point taken
+        // is one too).
+        let (from, to) = (
+            match p.lo {
+                Bound::At { x, .. } => x.hi,
+                _ => f64::NEG_INFINITY,
+            },
+            match p.hi {
+                Bound::At { x, .. } => x.lo,
+                _ => f64::INFINITY,
+            },
+        );
+        let (mut reach, mut reached) = (from, true);
+        while reach < to {
+            // The image that carries on from `reach`, furthest.
+            let next = mine
+                .iter()
+                .filter(|im| {
+                    im.lo < im.hi
+                        && (im.lo < reach || (im.lo == reach && (reached || im.closed.0)))
+                        && im.hi > reach
+                })
+                .max_by(|x, y| x.hi.total_cmp(&y.hi).then(x.closed.1.cmp(&y.closed.1)));
+            let Some(next) = next else {
+                out.problems.push(format!(
+                    "the listed range holds values about {reach:e} that f is not shown to take"
+                ));
+                return;
+            };
+            (reach, reached) = (next.hi, next.closed.1);
+        }
+        // A finite end closed just when it is taken: the least value of
+        // the stretches in the piece is among what was seen no higher than
+        // the lowest of their upper bounds.
+        let seen: Vec<&Seen> = mine.iter().flat_map(|im| &im.seen).collect();
+        for (b, low) in [(p.lo, true), (p.hi, false)] {
+            let Bound::At { x, closed } = b else { continue };
+            let may: Vec<&&Seen> = if low {
+                let top = seen.iter().map(|s| s.hi).fold(f64::INFINITY, f64::min);
+                seen.iter().filter(|s| s.lo <= top).collect()
+            } else {
+                let bottom = seen.iter().map(|s| s.lo).fold(f64::NEG_INFINITY, f64::max);
+                seen.iter().filter(|s| s.hi >= bottom).collect()
+            };
+            if may.is_empty() {
+                continue;
+            }
+            let (all_taken, none_taken) = (may.iter().all(|s| s.taken), may.iter().all(|s| !s.taken));
+            if (closed && none_taken) || (!closed && all_taken) {
+                out.problems.push(format!(
+                    "the range's end in [{:e}, {:e}] is listed {}, yet f {} it",
+                    x.lo,
+                    x.hi,
+                    if closed { "closed" } else { "open" },
+                    if closed {
+                        "only tends to"
+                    } else {
+                        "takes"
+                    }
+                ));
+            }
+        }
+    }
+}
+
+/// The range: the listed pieces are the images of f's continuous stretches
+/// ([`images`]), and every finite end holds the value its named source
+/// gives.
 fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
     // The monotone pieces' images need a decided derivative walk, not
     // just continuity in the boxes left around unplaced kinks.
@@ -3722,6 +4427,9 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
         .iter()
         .map(piece)
         .collect::<Result<_, _>>()?;
+    if out.problems.is_empty() {
+        images(fx, rc, all, &w, &pieces, out);
+    }
     // Each finite end names where it comes from (`range_ends`: f's value at
     // a point, a tail's limit, a hole's, a one-sided limit; several where
     // it is the hull of ends not told apart). The listed enclosure holds
@@ -3730,8 +4438,8 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
     // source's enclosure, an end was listed at the double beside the value:
     // the range of (x + 1)/(3x) leaving out 0.333…3148, not 1/3. Review
     // 18's follow-up.) An end is closed just when its sources are values
-    // taken; without its sources neither follows. An infinite end: f
-    // unbounded somewhere, by a claim.
+    // taken; without its sources neither follows. (An infinite end is
+    // [`images`]': a stretch whose image reaches it.)
     let Some(ends) = rc.extra.as_array() else {
         out.problems
             .push("the range's ends name no sources (no range_ends)".into());
@@ -3744,17 +4452,10 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
             ends.len()
         ));
     }
-    let unbounded = shows_unbounded(&rc.claims);
     for (i, p) in pieces.iter().enumerate() {
         for (j, b) in [p.lo, p.hi].into_iter().enumerate() {
             let (x, closed) = match b {
-                Bound::NegInf | Bound::PosInf => {
-                    if !unbounded {
-                        out.problems
-                            .push("an infinite range end with no claim f is unbounded".into());
-                    }
-                    continue;
-                }
+                Bound::NegInf | Bound::PosInf => continue,
                 Bound::At { x, closed } => (x, closed),
             };
             let srcs: Vec<&Value> = ends
@@ -3822,37 +4523,8 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
             break;
         }
     }
-    let _ = (all, split);
+    let _ = split;
     Ok(())
-}
-
-/// Whether some claim shows f unbounded: structurally at a point, f′
-/// beyond a nonzero bound on a tail, f′'s sign chain, or bounds that grow
-/// out along a tail or beside a point. (A simplifier's "→ ±∞" alone never
-/// does.)
-fn shows_unbounded(claims: &[Claim]) -> bool {
-    claims.iter().any(|c| matches!(c, Claim::Unbounded { .. }))
-        || claims.iter().any(|c| {
-            matches!(c, Claim::Limit { over_x: false, to: Toward::PosInf | Toward::NegInf, .. })
-        })
-        || claims.iter().any(|c| {
-            matches!(c, Claim::Simplifier(f)
-                if f.strip_prefix(claims::RATIONAL).is_some_and(|r| r.starts_with("f → +∞") || r.starts_with("f → −∞")))
-        })
-        || [Side::Left, Side::Right]
-            .iter()
-            .any(|&s| tail_infinite(claims, s, true) || tail_infinite(claims, s, false))
-        || claims.iter().any(|c| match c {
-            Claim::Beyond {
-                x,
-                of: Subject::F(0),
-                ..
-            } => {
-                side_infinite(claims, x.0.next_down(), true)
-                    || side_infinite(claims, x.1.next_up(), false)
-            }
-            _ => false,
-        })
 }
 
 /// What a listing must hold: a number known exactly (a rational a fact

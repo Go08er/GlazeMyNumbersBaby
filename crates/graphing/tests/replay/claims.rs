@@ -2423,23 +2423,6 @@ fn tight(v: &Iv) -> bool {
     width <= 1e-6 || width <= size
 }
 
-/// Whether f is defined at both or at neither of ±x at each sample point:
-/// `Some(false)` where it is shown defined at only one of a pair (its
-/// domain is not symmetric about 0), `Some(true)` where no pair shows that
-/// and some pair has it defined at both, `None` where it is placed at
-/// none.
-pub fn mirrored_at_points(fx: &Fx) -> Option<bool> {
-    let mut both = false;
-    for &x in &SAMPLES {
-        let (a, b) = (f_at(fx, &Iv::of(x)), f_at(fx, &Iv::of(-x)));
-        if a.empty != b.empty && (a.def || b.def) {
-            return Some(false);
-        }
-        both |= !a.empty && a.def && b.def;
-    }
-    both.then_some(true)
-}
-
 /// Points a symmetry or a period is tested at: near 0, ordinary, and far
 /// out.
 const SAMPLES: [f64; 20] = [

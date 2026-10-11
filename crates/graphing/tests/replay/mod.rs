@@ -917,7 +917,14 @@ impl Report {
 pub struct Session {
     key: String,
     fx: Option<Fx>,
-    decided: Vec<(Claim, Outcome)>,
+    decided: std::collections::HashMap<String, Outcome>,
+}
+
+/// A claim as a key to look it up by (its written form: equal claims have
+/// one). A row of thousands of claims, each searched for among the others,
+/// was a quadratic replay.
+pub fn claim_key(c: &Claim) -> String {
+    format!("{c:?}")
 }
 
 /// Whether a claim's check reads the certificate's other claims too: a
@@ -984,30 +991,30 @@ pub fn replay_in(a: &Value, session: &mut Session, only: Option<&str>) -> Result
         trees(fx, &all, &mut rep);
     }
     let asked = |rc: &RowCert| only.is_none_or(|name| rc.name == name);
-    let mut seen: Vec<(Claim, usize)> = Vec::new();
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for rc in rows_in.iter().filter(|rc| asked(rc)) {
         for c in &rc.claims {
-            if let Some((_, i)) = seen.iter().find(|(d, _)| d == c) {
-                let i = *i;
+            let key = claim_key(c);
+            if let Some(&i) = seen.get(&key) {
                 if !rep.claims[i].rows.contains(&rc.name) {
                     rep.claims[i].rows.push(rc.name.clone());
                 }
                 continue;
             }
             let kept = (!reads_the_certificate(c))
-                .then(|| decided.iter().find(|(d, _)| d == c).map(|(_, o)| o.clone()))
+                .then(|| decided.get(&key).cloned())
                 .flatten();
             let outcome = match kept {
                 Some(o) => o,
                 None => {
                     let o = claims::check(fx, c, &all);
                     if !reads_the_certificate(c) {
-                        decided.push((c.clone(), o.clone()));
+                        decided.insert(key.clone(), o.clone());
                     }
                     o
                 }
             };
-            seen.push((c.clone(), rep.claims.len()));
+            seen.insert(key, rep.claims.len());
             rep.claims.push(ClaimResult {
                 rows: vec![rc.name.clone()],
                 claim: c.clone(),
