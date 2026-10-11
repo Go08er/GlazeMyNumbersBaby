@@ -534,3 +534,58 @@ fn a_tail_starts_past_the_last_end_of_the_domain() {
         } if from.0 == 1.0
     )));
 }
+
+/// A closed end of the domain that no double holds is known to the
+/// certifier by an enclosure, and a box about it reaches outside the
+/// domain. (4 + 5x)^(x⁰) is (4 + 5x)¹ to the certifier, which has values
+/// there: its minimum at −0.8 was certified on "f is continuous on
+/// [−0.8000000000000003, −5·10⁻³²⁴]" and on f's values over the end's
+/// enclosure, though f is undefined left of −0.8. The replay refuted both
+/// claims. √(4 + 5x), whose tree is its own, never had the row.
+#[test]
+fn a_claim_about_f_at_an_enclosed_end_needs_f_defined_there() {
+    use graphing::certify::{Claim, DEFAULT_BUDGET, Row, Subject, certify_text};
+    for src in [
+        "(4+5*x)^(x^0)",
+        "1*x-(x^4+5*x)^((x-6)^0)",
+        "(x-0.1)^(x^0)",
+        "(x-0.3)^((x-6)^0)+x",
+    ] {
+        let a = certify_text(src, CompileOptions::default(), DEFAULT_BUDGET, None).expect(src);
+        let mut claims = Vec::new();
+        if let Row::Certified { cert, .. } | Row::Partial { cert, .. } = &a.extrema {
+            claims.extend(cert.claims.iter().cloned());
+        }
+        if let Row::Certified { cert, .. } | Row::Partial { cert, .. } = &a.range {
+            claims.extend(cert.claims.iter().cloned());
+        }
+        for c in &claims {
+            let x = match c {
+                Claim::Continuous { x } => x,
+                Claim::Value { x, of, .. } if *of == Subject::f(0) => x,
+                _ => continue,
+            };
+            for end in [x.a.0, x.b.0] {
+                assert!(
+                    !scalar(src, end).is_nan(),
+                    "{src}: {c:?}, and f is undefined at {end:e}"
+                );
+            }
+        }
+        // What doesn't rest on the end's value is certified as before.
+        assert!(
+            a.domain.is_certified() && a.monotonicity.is_certified(),
+            "{src}"
+        );
+    }
+    // An end at a double is a point of the domain: its minimum as before.
+    let a = certify_text(
+        "(4+x)^(x^0)",
+        CompileOptions::default(),
+        DEFAULT_BUDGET,
+        None,
+    )
+    .expect("certifies");
+    assert!(a.extrema.is_certified(), "{:?}", a.extrema);
+    assert!(a.range.is_certified(), "{:?}", a.range);
+}

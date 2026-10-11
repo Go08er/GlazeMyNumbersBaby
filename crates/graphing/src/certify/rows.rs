@@ -462,6 +462,26 @@ fn changes(segs: &[Seg], kink_turns: bool) -> (Vec<(Enc, bool)>, bool) {
 
 // ---------------------------------------------------------- extrema
 
+/// Whether a claim about f on `span`, a box that holds the closed domain
+/// end (or the isolated point of the domain) `x`, may be made from the
+/// certifier's tree. An end at a double: yes, the box lies in the domain.
+/// An end known only to an enclosure:
+/// the box reaches outside the domain, where the simplified form may be
+/// defined and f not, so f's own tree must be defined there as far as
+/// `need` too (which, of a tree not simplified, the caller's own test
+/// asks already). (4 + 5x)^(x⁰) is (4 + 5x)¹ to the certifier and is
+/// undefined left of −0.8, which no double is: its minimum at that end
+/// was certified on "f is continuous on [−0.8000000000000003, −5·10⁻³²⁴]"
+/// and "f's values on [−0.8000000000000003, −0.7999999999999998]", which
+/// the replay refuted (found by `tests/crossfuzz.rs`).
+fn own_tree_too(f: &Fun<'_>, x: Enc, span: Interval, need: Dec) -> Result<bool, Stop> {
+    if x.is_point() || f.eval == f.expr {
+        return Ok(true);
+    }
+    let own = f.ser_of(&f.expr, span, 0)?[0];
+    Ok(!own.is_empty() && own.dec >= need)
+}
+
 /// A local extremum at a closed end of the domain (a domain bound, not a
 /// window edge), like √x's minimum at 0 or asin's at ±1: f is continuous
 /// from the end to the first box f′ decides, and f′ keeps one strict sign
@@ -527,7 +547,7 @@ fn end_extremum(
         Interval::new(a, x.hi.0)
     };
     let over = f.val(span)?;
-    if over.is_empty() || over.dec < Dec::Dac {
+    if over.is_empty() || over.dec < Dec::Dac || !own_tree_too(f, x, span, Dec::Dac)? {
         return Ok(None);
     }
     let y = f.val_tight(Interval::new(x.lo.0, x.hi.0))?;
@@ -3224,7 +3244,19 @@ fn end_value(
                 TailEnd::Unknown => None,
             }
         }
-        Bound::At { x, closed: true } => attained(f, x, cl)?,
+        Bound::At { x, closed: true } => {
+            // A closed end of the domain (not a turning point between two
+            // monotone pieces, which lies inside it) known only to an
+            // enclosure: [`own_tree_too`].
+            let domain_end = boxes
+                .iter()
+                .any(|ib| (ib.lo == b && !ib.lo_clipped) || (ib.hi == b && !ib.hi_clipped));
+            if domain_end && !own_tree_too(f, x, Interval::new(x.lo.0, x.hi.0), Dec::Def)? {
+                None
+            } else {
+                attained(f, x, cl)?
+            }
+        }
         Bound::At { x, closed: false } => {
             // The box this end belongs to.
             let Some(ib) = boxes
@@ -3402,6 +3434,10 @@ pub fn range(
         if p.lo == p.hi
             && let Bound::At { x, closed: true } = p.lo
         {
+            // (Known only to an enclosure: [`own_tree_too`].)
+            if !own_tree_too(f, x, Interval::new(x.lo.0, x.hi.0), Dec::Def)? {
+                return unknown("an isolated point's value");
+            }
             let Some(e) = attained(f, x, &mut cl)? else {
                 return unknown("an isolated point's value");
             };
