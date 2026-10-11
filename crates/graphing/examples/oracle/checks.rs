@@ -361,7 +361,7 @@ impl F {
     /// functions), plus its operands' errors carried through it (a
     /// function's by its slope there, measured over the error or 10⁻⁸ of
     /// its argument, so a jump within reach counts whole, or by its change
-    /// over the error at four points of it if that is more). x and the
+    /// over the error at twelve points of it if that is more). x and the
     /// literals are exact.
     pub fn error(&self, e: &Expr, x: f64) -> (f64, f64) {
         use graphing::ast::BinOp;
@@ -413,14 +413,19 @@ impl F {
                     };
                     let slope = ((at(va + h) - at(va - h)) / (2.0 * h)).abs();
                     // And the function's change over the error itself, at
-                    // four points of it: a slope over an error of many
+                    // twelve points of it: a slope over an error of many
                     // periods says nothing (8/cos(x − 2⁶³) at −1.8·10¹⁴,
                     // where x − 2⁶³ is rounded by up to 1024: the slope
                     // gave 10⁻⁷ for a value that is anyone's).
+                    // (At every scale of it, halving twelve times: 2048
+                    // and 848 are both within a third of a radian of whole
+                    // turns.)
                     let here = at(va);
-                    let spread = [1.0, -1.0, 0.41421356, -0.41421356]
-                        .iter()
-                        .map(|t| (at(va + t * ea) - here).abs())
+                    let spread = (0..12)
+                        .map(|j| {
+                            let t = if j % 2 == 0 { 1.0 } else { -1.0 } / f64::from(1 << j);
+                            (at(va + t * ea) - here).abs()
+                        })
                         .fold(
                             0.0f64,
                             |m, d| if d.is_nan() { f64::INFINITY } else { m.max(d) },

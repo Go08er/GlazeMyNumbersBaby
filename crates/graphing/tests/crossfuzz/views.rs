@@ -864,10 +864,19 @@ mod mp {
                 && lo.abs() < f64::MAX
                 && hi.abs() < f64::MAX
             {
-                out.fail(
-                    "mp/scalar-off-value",
-                    format!("x={x:e}: compiled {c:e}, MPFR: f = {}", show(&m)),
-                );
+                // (Inside f's own enclosure, as for a finite value:
+                // x²/1.0000000000000001ˣ is ∞ in doubles at 10³⁰⁰, the
+                // base a 1 to them, and its enclosure there is [0, ∞].)
+                if !e.iv.is_entire() && !e.is_empty() && e.lo() <= c && c <= e.hi() {
+                    out.note("mp/scalar-off-value-within-enclosure", || {
+                        format!("x={x:e}: compiled {c:e}, MPFR: f = {}", show(&m))
+                    });
+                } else {
+                    out.fail(
+                        "mp/scalar-off-value",
+                        format!("x={x:e}: compiled {c:e}, MPFR: f = {}", show(&m)),
+                    );
+                }
             }
 
             // Derivatives, at a third of these points.
