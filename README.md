@@ -224,9 +224,10 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **982 tests** (counts include
-doctests; three more, a live currency fetch, the full metamorphic graph
-sweep and 20,000 random saved sessions, are `#[ignore]`d).
+`nix develop -c cargo test --workspace` runs **1,054 tests** (counts include
+doctests; six more are `#[ignore]`d: a live currency fetch, the full
+metamorphic graph sweep, 20,000 random saved sessions, and the
+cross-checking tester's long run, single-expression check and case list).
 `cargo run --release -p graphing --example sweep`
 checks graph analysis against about 3,400 generated functions (shifted,
 offset, scaled and stretched variants, close and far centres, jumps,
@@ -270,7 +271,7 @@ CI also runs checks that need more than `cargo test --workspace`:
   claim is *strong* when it re-proves it on the function's own tree, *weak*
   when it can only prove it on a tree the certifier supplied (the
   simplifier's form, the derivatives) or check it at sample points, so it
-  rests on the simplifier: today 74,363 strong, 195 weak. A claim refuted
+  rests on the simplifier: today 74,386 strong, 172 weak. A claim refuted
   or left open, or a row that doesn't follow from its claims, fails it.
   The checker has no Γ of its own, so it doesn't model `n!`, `n!!`, `nCr`
   or `nPr`: a function that uses one anywhere, a constant like `5!`
@@ -298,7 +299,7 @@ CI also runs checks that need more than `cargo test --workspace`:
   don't resolve (made sound since), some of them engine faults. Each
   engine fault it found is a test in `crossfuzz_found`. What it can't
   show: a claim the checker can neither prove nor refute (about one case
-  in twenty has one) is set aside, not failed, so a false claim the checker
+  in thirty has one) is set aside, not failed, so a false claim the checker
   can't decide would pass; and causes found but not fixed are listed in its
   known-open table and counted in every run. Those are all in the compiled
   evaluator, the one that draws (the panel and tracing read enclosures,
