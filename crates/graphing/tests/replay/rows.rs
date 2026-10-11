@@ -1553,9 +1553,12 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
     }
     // Each family: a Family claim with these boxes, about a node whose
     // condition is g ≠ 0 (a divisor, or the cosine or sine under tan, sec,
-    // cot, csc). Its node stands in as "any value" (any nonzero value for
-    // a divisor) when the rest of f is checked defined.
-    let mut stand_ins: Vec<(Vec<u8>, bool)> = Vec::new();
+    // cot, csc). Every node of f with that condition stands in as "any
+    // value" (any nonzero value, of one sign, for g itself) when the rest
+    // of f is checked defined: the claim names one, and f may hold more
+    // (tan x + sec x, sec³ x written as a product: with one stood in, the
+    // others kept the piece from being shown defined).
+    let mut stand_ins: Vec<(Paths, Paths)> = Vec::new();
     for (x0, per) in &families {
         let claim = rc.claims.iter().find_map(|c| match c {
             Claim::Family {
@@ -1574,37 +1577,69 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
             ));
             continue;
         };
-        match via {
-            super::Via::CosOfArg | super::Via::SinOfArg => stand_ins.push((path, false)),
-            super::Via::Itself => {
-                // g itself must be a divisor, or the base of a positive
-                // power that is (g ≠ 0 ⟺ gⁿ ≠ 0): only those are read.
-                let parent_div = divisor(&fx.f, &path);
-                if parent_div {
-                    stand_ins.push((path, true));
-                } else {
-                    // (Not read is not checked: the pieces listed beside
-                    // such a family were let through with a note.)
-                    out.problems.push(format!(
-                        "the family at {:e}: its node's condition is not read (not a divisor), \
-                         so the domain is not derived",
-                        x0.mid()
-                    ));
-                    return Ok(());
-                }
+        let Some(g) = claims::side_tree(&fx.f, &path, via) else {
+            out.problems
+                .push(format!("the family at {:e}: no such node of f", x0.mid()));
+            return Ok(());
+        };
+        // g itself, where f has no value at its zeros: a divisor, the base
+        // of a negative power (or of a positive one that is such a node),
+        // or any node f is undefined everywhere with 0 in the place of
+        // (tan(x)⁰, a root of a negative degree, the divisor |tan x|).
+        let zero_excluded = |at: &[u8]| {
+            divisor(&fx.f, at) || {
+                iv::set_prec(160);
+                let zeroed = replace_with(&fx.f, at, graphing::ast::Expr::exact(0.0));
+                fx.series(&zeroed, f64::NEG_INFINITY, f64::INFINITY, 0)[0].empty
             }
+        };
+        if via == super::Via::Itself && !zero_excluded(&path) {
+            // (Not read is not checked: the pieces listed beside such a
+            // family were let through with a note.)
+            out.problems.push(format!(
+                "the family at {:e}: its node's condition is not read (f has a value with 0 \
+                 in its place), so the domain is not derived",
+                x0.mid()
+            ));
+            return Ok(());
         }
+        let (mut signed, mut any) = (Vec::new(), Vec::new());
+        paths_where(
+            &fx.f,
+            &|e, at| *e == g && zero_excluded(at),
+            &mut Vec::new(),
+            &mut signed,
+        );
+        paths_where(
+            &fx.f,
+            &|e, _| {
+                use graphing::ast::{Expr, Func};
+                let of = |f: Func, a: &Expr| Expr::Call(f, vec![a.clone()]);
+                match e {
+                    Expr::Call(Func::Tan | Func::Sec, a) => of(Func::Cos, &a[0]) == g,
+                    Expr::Call(Func::Cot | Func::Csc, a) => of(Func::Sin, &a[0]) == g,
+                    _ => false,
+                }
+            },
+            &mut Vec::new(),
+            &mut any,
+        );
+        stand_ins.push((signed, any));
     }
     // The tree(s) to check definedness on.
     let mut trees: Vec<graphing::ast::Expr> = vec![fx.f.clone()];
-    for (path, nonzero) in &stand_ins {
+    for (signed, any) in &stand_ins {
+        let all = |t: &graphing::ast::Expr, paths: &[Vec<u8>], name: &str| {
+            paths.iter().fold(t.clone(), |t, at| replace(&t, at, name))
+        };
         let mut next = Vec::new();
         for t in &trees {
-            if *nonzero {
-                next.push(replace(t, path, "__pos"));
-                next.push(replace(t, path, "__neg"));
+            let t = all(t, any, "__any");
+            if signed.is_empty() {
+                next.push(t);
             } else {
-                next.push(replace(t, path, "__any"));
+                next.push(all(&t, signed, "__pos"));
+                next.push(all(&t, signed, "__neg"));
             }
         }
         trees = next;
@@ -1982,6 +2017,36 @@ fn divisor(f: &graphing::ast::Expr, path: &[u8]) -> bool {
             }
         }
         _ => false,
+    }
+}
+
+/// Paths to nodes of f's tree.
+type Paths = Vec<Vec<u8>>;
+
+/// The paths of the nodes of `e` that `is` holds of, none inside another
+/// (a path names a child by a byte: those past the 256th are left out).
+fn paths_where(
+    e: &graphing::ast::Expr,
+    is: &dyn Fn(&graphing::ast::Expr, &[u8]) -> bool,
+    path: &mut Vec<u8>,
+    out: &mut Paths,
+) {
+    use graphing::ast::Expr;
+    if is(e, path) {
+        out.push(path.clone());
+        return;
+    }
+    let kids: Vec<&Expr> = match e {
+        Expr::Neg(a) | Expr::Degrees(a) => vec![&**a],
+        Expr::Bin(_, a, b) => vec![&**a, &**b],
+        Expr::Call(_, args) => args.iter().collect(),
+        _ => Vec::new(),
+    };
+    for (i, k) in kids.into_iter().enumerate() {
+        let Ok(i) = u8::try_from(i) else { break };
+        path.push(i);
+        paths_where(k, is, path, out);
+        path.pop();
     }
 }
 
