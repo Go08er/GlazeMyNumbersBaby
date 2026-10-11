@@ -735,3 +735,64 @@ fn a_power_with_a_written_ratio_is_within_an_ulp() {
         }
     }
 }
+
+/// A quotient of polynomials N/D has its oblique asymptote where N's
+/// degree is D's and one more, and the certifier took "the exact
+/// arithmetic has no line to give" for "the degrees differ": x²/(0.75 − 9007200000000000·x), whose line is
+/// y = −x/9007200000000000 − 0.75/9007200000000000², the intercept's
+/// denominator past 64 bits, was certified to have no oblique asymptote.
+/// The replay refuted the fact (deg N − deg D = 1).
+#[test]
+fn no_oblique_asymptote_is_said_by_the_degrees_alone() {
+    use graphing::certify::{Claim, DEFAULT_BUDGET, Row, certify_text, certify_text_with};
+    let wrong = "f = N/D exactly with deg N ≠ deg D + 1";
+    let says_degrees_differ = |row: &Row<Vec<graphing::certify::Oblique>>| {
+        matches!(row, Row::Certified { cert, .. } | Row::Partial { cert, .. }
+            if cert.claims.iter().any(|c| matches!(c, Claim::Simplifier { fact } if fact.starts_with(wrong))))
+    };
+    // The tester's case (seed 152, case 3071: five digits), and as rounded.
+    let five = graphing::lexer::ParseOptions {
+        decimal_comma: false,
+        literal_digits: Some(5),
+    };
+    let a = certify_text_with(
+        "x^2/((0.25+0.5)-x*9007199254740992)",
+        five,
+        CompileOptions::default(),
+        DEFAULT_BUDGET,
+        None,
+    )
+    .expect("certifies");
+    assert!(!says_degrees_differ(&a.oblique), "{:?}", a.oblique);
+    for src in [
+        "x^2/(0.75-x*9007200000000000)",
+        "x^2/(3-x*9007199254740993)",
+        "(x^3+1)/(x^2*10^12-7)",
+    ] {
+        let a = certify_text(src, CompileOptions::default(), DEFAULT_BUDGET, None).expect(src);
+        assert!(!says_degrees_differ(&a.oblique), "{src}: {:?}", a.oblique);
+        // Its line, or nothing said: never "none".
+        if let Row::Certified { value, .. } = &a.oblique {
+            assert!(
+                !value.is_empty(),
+                "{src}: certified to have no oblique asymptote"
+            );
+        }
+    }
+    // Where the degrees do differ, and where the line is short, as before.
+    let a = certify_text("x^3/(x-1)", CompileOptions::default(), DEFAULT_BUDGET, None)
+        .expect("certifies");
+    assert!(says_degrees_differ(&a.oblique), "{:?}", a.oblique);
+    let a = certify_text(
+        "x^2/(0.75-x*1000)",
+        CompileOptions::default(),
+        DEFAULT_BUDGET,
+        None,
+    )
+    .expect("certifies");
+    assert!(
+        matches!(&a.oblique, Row::Certified { value, .. } if value.len() == 2),
+        "{:?}",
+        a.oblique
+    );
+}

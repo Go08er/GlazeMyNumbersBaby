@@ -2813,8 +2813,20 @@ pub fn oblique(
         let iv = q.interval();
         Enc::new(iv.lo(), iv.hi())
     };
+    // (A quotient N/D has its line for deg N = deg D + 1, and `oblique`
+    // has none to give either where the degrees differ or where the
+    // line's coefficients are past the exact arithmetic: x²/(0.75 −
+    // 9007200000000000·x) has the intercept −0.75/9007200000000000², and
+    // was certified "no oblique asymptote" for its degrees, 2 and 1
+    // (found by `tests/crossfuzz.rs`; the replay refuted the fact). The
+    // second is left to the tails, below.)
+    let line_too_long = |r: &crate::simplify::rational::Rational| {
+        r.oblique().is_none()
+            && matches!((r.num.degree(), r.den.degree()), (Some(n), Some(d)) if n == d + 1)
+    };
     if f.simplifier
         && let Some(rf) = crate::simplify::rational_form(&f.expr)
+        && !line_too_long(&rf.reduced)
     {
         let mut out = Vec::new();
         match rf.reduced.oblique() {
