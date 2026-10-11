@@ -365,11 +365,6 @@ fn one_cross_from_an_unplaced_end(_: &Case, f: &Finding) -> bool {
     f.detail.starts_with("OneCross") && f.detail.contains("on neither side of")
 }
 
-/// In degrees or grads, far out.
-fn a_turn_far_out(case: &Case, f: &Finding) -> bool {
-    case.unit != TrigUnit::Radians && position(&f.detail).is_some_and(|x| x.abs() >= 1e17)
-}
-
 const KNOWN: &[(&str, Matches, &str)] = &[
     // The replay (tests/replay) is another's to change; what it leaves
     // open is listed by kind in this tester's report.
@@ -443,14 +438,6 @@ const KNOWN: &[(&str, Matches, &str)] = &[
         root_of_degree_a_half,
         "the replay's own root(x, 0.5) is x² for a negative x too, where the engine has it \
          undefined (tests/replay/eval.rs): it refutes the certifier's \"undefined\"",
-    ),
-    // tests/replay/iv.rs: tan in degrees or grads at 10^300, a whole
-    // number of half turns, is read as a pole.
-    (
-        "mp/enclosure-defined-where-undefined",
-        a_turn_far_out,
-        "the replay's own tan (degrees, grads) at a huge whole number of half turns is \
-         undefined, where it is 0 (tests/replay/iv.rs)",
     ),
     // functions::ncr and npr (Γ's quotient) in doubles: ∞·0 far out and
     // an underflow to 0 give NaN where the quotient has a value, which the
