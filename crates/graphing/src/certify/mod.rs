@@ -271,45 +271,6 @@ fn kinks(f: &Fun<'_>, spans: &[(f64, f64)], args: &[crate::ast::Expr]) -> Option
     Some(merged(boxes))
 }
 
-/// Whether f, inside the kink box `(l, r)`, leaves the span of its values
-/// at the box's two ends: at a double of the box (each of them, or
-/// sixteen spread over a wider box) f's value lies wholly outside that
-/// span, by more than a few ulps. f turns inside the box, or dips and
-/// comes back.
-///
-/// A row on f′ reads a kink box as one point, by f′'s signs on either
-/// side. That is sound for the one kink of an |u|, min or max there, f
-/// monotone on each side of it. It isn't where more happens inside:
-/// x + min(x^(2/1000003), 0.01) has f′ = 1 on both sides of the box about
-/// 0 (the power's singular point), but the power crosses 0.01 at
-/// ±10⁻¹⁰⁰⁰⁰⁰³, between 0 and the doubles beside it, and f drops from 0.01
-/// to 0 at 0: certified "increasing on ℝ, no extrema", and the same
-/// without the x "constant, range {0}" (found by `tests/crossfuzz.rs`).
-/// (f's enclosure over the whole box can't say: its dependency alone
-/// takes (x − 1)·|x − 1| about 1 past its end values.) Not decided:
-/// dented.
-fn dented(f: &Fun<'_>, l: f64, r: f64) -> bool {
-    use crate::interval::Interval;
-    let at = |x: f64| f.val(Interval::point(x)).ok().filter(|v| !v.is_empty());
-    let (Some(a), Some(b)) = (at(l), at(r)) else {
-        return true;
-    };
-    let (lo, hi) = (a.lo().min(b.lo()), a.hi().max(b.hi()));
-    let slack = 4.0 * crate::analysis::truth::ulp(lo.abs().max(hi.abs()));
-    let inside = crate::analysis::truth::floats_between(l, r).max(1);
-    let step = (inside / 16).max(1);
-    let mut k = step;
-    while k < inside {
-        let x = crate::analysis::truth::nudge(l, k);
-        match at(x) {
-            Some(v) if v.hi() >= lo - slack && v.lo() <= hi + slack => {}
-            _ => return true,
-        }
-        k += step;
-    }
-    false
-}
-
 /// Boxes sorted and merged where they meet.
 fn merged(mut boxes: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
     boxes.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -696,10 +657,6 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     let (mut c1, mut c2) = (cover(1), cover(2));
     c1.kinks = kbox[0].clone();
     c2.kinks = kbox[1].clone();
-    // (For f′'s rows only: f's values say what f does inside a box, a turn
-    // or a dent, not what f′ does, and a cusp like x^(2/3)'s is a turn of
-    // f with f″ of one sign on both sides, as before.)
-    c1.kink_dent = kbox[0].iter().map(|&(l, r)| dented(f, l, r)).collect();
     // A kink at a double, placed exactly with f′'s strict sign on each
     // side: a turn there is at exactly that point.
     for &(l, r) in &kbox[0] {

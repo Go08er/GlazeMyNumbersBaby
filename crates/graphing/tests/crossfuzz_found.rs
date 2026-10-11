@@ -447,7 +447,15 @@ fn a_kink_box_f_dips_inside_is_not_read_as_a_point() {
     assert_eq!(k.data.minima.len(), 1, "{:?}", k.minima);
     let k = panel("x^(2/3)");
     assert_eq!(k.data.minima.len(), 1, "{:?}", k.minima);
-    assert_eq!(k.too_complex_features & flags::INFLECTION_POINTS, 0);
+    // The function has no inflections, but generic continuity of its
+    // kink box does not prove f″ has no other event inside. Until an
+    // order-two proof covers that box, an unknown row is sound; a listed
+    // inflection would be wrong. The exact minimum above stays proven.
+    assert!(
+        k.data.inflection_points.is_empty(),
+        "{:?}",
+        k.inflection_points
+    );
     let k = panel("x^(1/3)");
     assert_eq!(k.too_complex_features & flags::MONOTONE_INTERVALS, 0);
     assert_eq!(k.monotonicity.len(), 1, "{:?}", k.monotonicity);

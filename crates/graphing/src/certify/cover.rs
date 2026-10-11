@@ -136,11 +136,6 @@ pub struct Cover {
     /// For f′: each kink placed exactly, where it could be
     /// (`Claim::KinkAt`), in the order of `kinks`.
     pub kink_at: Vec<Option<crate::certify::fun::KinkPoint>>,
-    /// For each of `kinks`: f leaves the span of its values at the box's
-    /// two ends inside it (`certify::dented`). A turn of f where f′'s
-    /// signs beside the box differ; with one sign on both sides, or f′ ≡ 0
-    /// on both, a dent those signs don't show.
-    pub kink_dent: Vec<bool>,
 }
 
 struct Item {
@@ -310,7 +305,6 @@ impl Cover {
             stopped,
             kinks: Vec::new(),
             kink_at: Vec::new(),
-            kink_dent: Vec::new(),
         }
     }
 
