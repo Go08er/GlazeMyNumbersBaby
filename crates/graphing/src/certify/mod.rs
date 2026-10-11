@@ -383,6 +383,20 @@ fn split_at_kinks(spans: &[(f64, f64)], kinks: &[(f64, f64)]) -> Vec<(f64, f64)>
     out
 }
 
+/// Whether f is continuous on `[l, r]`, by its enclosure there, and by
+/// its own tree's too where the certifier evaluates a simplified form:
+/// that one has values where f has none. |x|·(2x + 0·x^0.5) is |x|·2x to
+/// it, and the box about the kink of |x| at 0, the closed end of f's
+/// domain, was claimed a `Kink` (f continuous across it) with f undefined
+/// on its left half: found by `tests/crossfuzz.rs`, refuted by the replay.
+fn continuous_on(f: &Fun<'_>, l: f64, r: f64) -> bool {
+    let iv = crate::interval::Interval::new(l, r);
+    let dac = |v: Result<crate::interval::DecInterval, fun::Stop>| {
+        v.is_ok_and(|v| !v.is_empty() && v.dec >= crate::interval::Dec::Dac)
+    };
+    dac(f.val(iv)) && (f.eval == f.expr || dac(f.ser_of(&f.expr, iv, 0).map(|s| s[0])))
+}
+
 /// Whether f has a kink: abs, min or max of something depending on x.
 fn kinked(e: &crate::ast::Expr) -> bool {
     use crate::ast::{Expr, Func};
@@ -602,8 +616,7 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             }
         }
         for g in &kgaps[i] {
-            let v = f.val(crate::interval::Interval::new(g.a.0, g.b.0));
-            if !v.is_ok_and(|v| !v.is_empty() && v.dec >= crate::interval::Dec::Dac) {
+            if !continuous_on(f, g.a.0, g.b.0) {
                 kcont[i] = false;
             }
         }
@@ -614,10 +627,7 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     // f's Taylor coefficients (undecided at the kink).
     let mut tree_ok = true;
     let kink_boxes: Vec<(f64, f64)> = if f.kinked {
-        let ok = |&(l, r): &(f64, f64)| {
-            f.val(crate::interval::Interval::new(l, r))
-                .is_ok_and(|v| !v.is_empty() && v.dec >= crate::interval::Dec::Dac)
-        };
+        let ok = |&(l, r): &(f64, f64)| continuous_on(f, l, r);
         match kinks_found {
             Some(k) if k.iter().all(ok) => k,
             _ => {

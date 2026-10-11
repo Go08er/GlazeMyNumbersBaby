@@ -150,6 +150,52 @@ pub fn fmt(v: f64) -> String {
     format_nonzero(v)
 }
 
+/// The number a panel text shows ("≈208060", "≈8.32289×10⁻⁶", "−2"), and
+/// how many significant digits it is written with.
+pub fn panel_number(text: &str) -> Option<(f64, usize)> {
+    let t = text.trim().trim_start_matches('≈').replace('−', "-");
+    let (mantissa, power) = match t.split_once("×10") {
+        Some((m, p)) => {
+            let p: String = p
+                .chars()
+                .map(|c| match c {
+                    '⁻' => Some('-'),
+                    '⁰' => Some('0'),
+                    '¹' => Some('1'),
+                    '²' => Some('2'),
+                    '³' => Some('3'),
+                    '⁴'..='⁹' => char::from_digit(c as u32 - '⁰' as u32, 10),
+                    _ => None,
+                })
+                .collect::<Option<String>>()?;
+            (m.to_string(), p.parse::<i32>().ok()?)
+        }
+        None => (t.clone(), 0),
+    };
+    let value = mantissa.parse::<f64>().ok()? * 10f64.powi(power);
+    let digits = mantissa
+        .trim_start_matches(['-', '0', '.'])
+        .chars()
+        .filter(char::is_ascii_digit)
+        .count();
+    Some((value, digits.max(1)))
+}
+
+/// Two approximate panel texts ("≈…") that are one value written to
+/// different numbers of digits: the longer rounds to the shorter (at
+/// least three digits of it).
+pub fn shown_alike(a: &str, b: &str) -> bool {
+    if !(a.starts_with('≈') && b.starts_with('≈')) {
+        return false;
+    }
+    let (Some((va, da)), Some((vb, db))) = (panel_number(a), panel_number(b)) else {
+        return false;
+    };
+    let digits = da.min(db);
+    let to = |v: f64| format!("{:.*e}", digits - 1, v);
+    digits >= 3 && to(va) == to(vb)
+}
+
 /// Two values the panel would show alike: the same closed form or text,
 /// or the same six significant digits (an approximate value is written
 /// to at most six, its form chosen from the rounded value: 1000000 and
@@ -314,7 +360,8 @@ impl F {
     /// operation's own rounding (ε of its result, 2ε for library
     /// functions), plus its operands' errors carried through it (a
     /// function's by its slope there, measured over the error or 10⁻⁸ of
-    /// its argument, so a jump within reach counts whole). x and the
+    /// its argument, so a jump within reach counts whole, or by its change
+    /// over the error at twelve points of it if that is more). x and the
     /// literals are exact.
     pub fn error(&self, e: &Expr, x: f64) -> (f64, f64) {
         use graphing::ast::BinOp;
@@ -336,7 +383,12 @@ impl F {
                 match op {
                     BinOp::Add | BinOp::Sub => ea + eb + eps * r,
                     BinOp::Mul => va.abs() * eb + vb.abs() * ea + eps * r,
-                    BinOp::Div => (ea + r * eb) / vb.abs() + eps * r,
+                    // (A divisor not told from 0 by its own error leaves
+                    // the quotient anywhere: 8/(1 − cos(x − 2⁶³)), whose
+                    // cosine is anyone's, is 8.1 in doubles at −30 and
+                    // 783 in fact.)
+                    BinOp::Div if eb >= vb.abs() => f64::INFINITY,
+                    BinOp::Div => (ea + r * eb) / (vb.abs() - eb) + eps * r,
                     BinOp::Pow => {
                         let base = if va == 0.0 {
                             0.0
@@ -365,10 +417,41 @@ impl F {
                         }
                     };
                     let slope = ((at(va + h) - at(va - h)) / (2.0 * h)).abs();
-                    total += if slope.is_finite() {
-                        slope * ea
-                    } else {
-                        f64::INFINITY
+                    // And the function's change over the error itself, at
+                    // twelve points of it: a slope over an error of many
+                    // periods says nothing (8/cos(x − 2⁶³) at −1.8·10¹⁴,
+                    // where x − 2⁶³ is rounded by up to 1024: the slope
+                    // gave 10⁻⁷ for a value that is anyone's).
+                    // (At every scale of it, halving twelve times: 2048
+                    // and 848 are both within a third of a radian of whole
+                    // turns.)
+                    let here = at(va);
+                    let spread = (0..12)
+                        .map(|j| {
+                            let t = if j % 2 == 0 { 1.0 } else { -1.0 } / f64::from(1 << j);
+                            (at(va + t * ea) - here).abs()
+                        })
+                        .fold(
+                            0.0f64,
+                            |m, d| if d.is_nan() { f64::INFINITY } else { m.max(d) },
+                        );
+                    // A circular function of an argument out by a tenth of
+                    // a turn or more is anywhere in its range: and the
+                    // doubles beside 2⁶³ are 2048 apart, 326 turns less a
+                    // twentieth, so the function at them says little of it
+                    // between them.
+                    use graphing::ast::Func;
+                    let turn = match self.unit {
+                        TrigUnit::Radians => std::f64::consts::TAU,
+                        TrigUnit::Degrees => 360.0,
+                        TrigUnit::Grads => 400.0,
+                    };
+                    let lost = ea >= turn / 10.0;
+                    total += match func {
+                        Func::Sin | Func::Cos if lost => 2.0,
+                        Func::Tan | Func::Cot | Func::Sec | Func::Csc if lost => f64::INFINITY,
+                        _ if slope.is_finite() => (slope * ea).max(spread),
+                        _ => f64::INFINITY,
                     };
                 }
                 total
@@ -1264,8 +1347,16 @@ pub fn check_analysed(
                     if normal(&v) && normal(w) {
                         (w.v - v.v).abs() > 2.0 * (f.tol(x) + f.tol(y))
                     } else {
+                        // Beyond the doubles: past a part in 10⁹ of the
+                        // value, and past the rounding of both values
+                        // too. (The reference keeps 53 bits: x² − 100 +
+                        // 100 − x⁴ is −x⁴ to it beside 0, x² lost in
+                        // the 100, and "lower than the minimum 0 at 0" by
+                        // 2⁻⁴⁰⁷¹ with a rounding of 10⁻¹⁴.)
                         let dif = w.xf.add(v.xf.neg()).abs();
+                        let rounding = 2.0 * (f.error(&f.ast, x).1 + f.error(&f.ast, y).1);
                         cmp_xf(dif, v.xf.abs().mul(Xf::of(1e-9))) == Ordering::Greater
+                            && cmp_xf(dif, Xf::of(rounding)) == Ordering::Greater
                     }
                 };
                 let better = |w: &Val| match cmp_xf(w.xf, v.xf) {
@@ -1517,8 +1608,9 @@ pub fn check_analysed(
                 _ => &[1.0, -1.0],
             };
             for &s in sides {
-                let resid = |k: i32| -> Option<(f64, f64)> {
-                    let (mut r, mut t) = (0.0f64, 0.0f64);
+                // (The largest residual, the tolerance, and where it was.)
+                let resid = |k: i32| -> Option<(f64, f64, f64)> {
+                    let (mut r, mut t, mut at) = (0.0f64, 0.0f64, f64::NAN);
                     for j in 0..=8 {
                         let x = s * 10f64.powi(k) * (1.0 + j as f64 / 8.0);
                         // A value too small to size is its double, 0.
@@ -1527,17 +1619,22 @@ pub fn check_analysed(
                             return None;
                         }
                         let line = m * x + b;
-                        r = r.max((v.v - line).abs());
+                        if (v.v - line).abs() >= r {
+                            (r, at) = ((v.v - line).abs(), x);
+                        }
                         t = t.max(f.tol(x) + 8.0 * ulp(line) + 8.0 * ulp(m * x));
                     }
-                    Some((r, t))
+                    Some((r, t, at))
                 };
-                let (Some((r1, _)), Some((r2, t2))) = (resid(k1), resid(k1 + 3)) else {
+                let (Some((r1, _, _)), Some((r2, t2, far))) = (resid(k1), resid(k1 + 3)) else {
                     continue;
                 };
                 if r2 > 8.0 * t2 && r2 >= r1 && !same(b, b + r2) && !same(b, b - r2) {
-                    cx.fail(
+                    // (About the far point: f's doubles there are what the
+                    // verdict rests on.)
+                    cx.fail_point(
                         "asymptote-not-approached",
+                        far,
                         format!(
                             "{what} y = {}{} as x → {}∞: |f − line| is {r1:e} near 10^{k1}, {r2:e} near 10^{}",
                             if m != 0.0 { format!("{m}·x + ") } else { String::new() },
@@ -2679,7 +2776,12 @@ pub fn check_pair_in(lhs: &str, rhs: &str, positive: bool, set: &Setting<'_>) ->
     };
     if both(flags::Y_INTERCEPT) {
         let ok = match (dl.y_intercept, dr.y_intercept) {
-            (Some(a), Some(b)) => same(a, b),
+            // (Or shown to different numbers of digits, the longer one
+            // rounding to the shorter: a value known to an enclosure is
+            // written to the digits the enclosure fixes, and
+            // sin((0.1 + 0.9)·(−2147483649)) is ≈0.3247 where
+            // sin(1·(−2147483649)) is ≈0.324686.)
+            (Some(a), Some(b)) => same(a, b) || shown_alike(&kl.y_intercept, &kr.y_intercept),
             (None, None) => true,
             _ => false,
         };
@@ -2725,8 +2827,14 @@ pub fn check_pair_in(lhs: &str, rhs: &str, positive: bool, set: &Setting<'_>) ->
         if !ok {
             differ(
                 "period",
-                kl.periodicity_expression.clone(),
-                kr.periodicity_expression.clone(),
+                format!(
+                    "{:?} {}",
+                    kl.periodicity_direction, kl.periodicity_expression
+                ),
+                format!(
+                    "{:?} {}",
+                    kr.periodicity_direction, kr.periodicity_expression
+                ),
             );
         }
     }
@@ -2773,9 +2881,30 @@ pub fn check_pair_in(lhs: &str, rhs: &str, positive: bool, set: &Setting<'_>) ->
         d.range.len() == 1 && d.range[0].lo.value == d.range[0].hi.value
     };
     let constant = point(dl) || point(dr);
+    // Way by way (toward +∞, toward −∞, and where the way isn't known): a
+    // line listed once for both ways is the answer that lists it for each.
+    // (9/x − (sin²4 − sin²4 + x + 1 − 2.5) has y = −x + ≈1.5 on each side,
+    // the intercept enclosed apart on the two, and 9/x − (x + 1 − 2.5) has
+    // y = −x + 3/2 once, for both.)
+    use graphing::analysis::AsymptoteSide as Way;
+    let ways = [Way::PositiveInfinity, Way::NegativeInfinity, Way::Unknown];
+    let toward =
+        |side: Way, way: Way| side == way || (side == Way::AnyInfinity && way != Way::Unknown);
+    let alike_lines = |x: &[(f64, f64)], y: &[(f64, f64)]| {
+        x.len() == y.len()
+            && x.iter()
+                .zip(y)
+                .all(|(p, q)| same(p.0, q.0) && same(p.1, q.1))
+    };
     if both(flags::HORIZONTAL_ASYMPTOTES) && !constant {
         let (a, b) = (&dl.horizontal_asymptotes, &dr.horizontal_asymptotes);
-        let ok = a.len() == b.len() && a.iter().zip(b).all(|(p, q)| same(p.0, q.0) && p.1 == q.1);
+        let on = |v: &[(f64, Way)], way: Way| -> Vec<(f64, f64)> {
+            v.iter()
+                .filter(|l| toward(l.1, way))
+                .map(|l| (0.0, l.0))
+                .collect()
+        };
+        let ok = ways.iter().all(|&w| alike_lines(&on(a, w), &on(b, w)));
         if !ok {
             differ(
                 "horizontal asymptotes",
@@ -2786,10 +2915,13 @@ pub fn check_pair_in(lhs: &str, rhs: &str, positive: bool, set: &Setting<'_>) ->
     }
     if both(flags::OBLIQUE_ASYMPTOTES) && !constant {
         let (a, b) = (&dl.oblique_asymptotes, &dr.oblique_asymptotes);
-        let ok = a.len() == b.len()
-            && a.iter()
-                .zip(b)
-                .all(|(p, q)| same(p.0, q.0) && same(p.1, q.1) && p.2 == q.2);
+        let on = |v: &[(f64, f64, Way)], way: Way| -> Vec<(f64, f64)> {
+            v.iter()
+                .filter(|l| toward(l.2, way))
+                .map(|l| (l.0, l.1))
+                .collect()
+        };
+        let ok = ways.iter().all(|&w| alike_lines(&on(a, w), &on(b, w)));
         if !ok {
             differ(
                 "oblique asymptotes",

@@ -262,18 +262,30 @@ fn counts(case: &Case, _: &Finding) -> bool {
     t.contains("nCr(") || t.contains("nPr(") || t.contains('!')
 }
 
-/// A circular function of a whole number of 16 digits or more as typed.
+/// A circular function whose argument doesn't vary with x and holds a
+/// whole number of 16 digits or more as typed: the number itself, or
+/// arithmetic on numbers alone around it (cos(|n|), which is cos(n)).
 fn trig_of_a_long_number(case: &Case, _: &Finding) -> bool {
     let t = texts(case);
     ["sin(", "cos(", "tan(", "cot(", "sec(", "csc("]
         .iter()
         .any(|name| {
             t.match_indices(name).any(|(i, _)| {
+                // The argument: up to the parenthesis that closes the call.
+                let mut depth = 1;
                 let arg: String = t[i + name.len()..]
                     .chars()
-                    .take_while(char::is_ascii_digit)
+                    .take_while(|c| {
+                        depth += i32::from(*c == '(') - i32::from(*c == ')');
+                        depth > 0
+                    })
                     .collect();
-                arg.len() >= 16 && t[i + name.len() + arg.len()..].starts_with(')')
+                let mut run = 0;
+                let long = arg.chars().any(|c| {
+                    run = if c.is_ascii_digit() { run + 1 } else { 0 };
+                    run >= 16
+                });
+                long && !arg.contains('x')
             })
         })
 }

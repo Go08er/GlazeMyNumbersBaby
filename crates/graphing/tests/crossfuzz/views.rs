@@ -260,15 +260,38 @@ fn sample_xs(f: &F) -> Vec<f64> {
     xs
 }
 
-/// `e` with each number that is not exactly its double written `v·1`: to
-/// the oracle's first-order rounding bound (`F::error`, which takes
-/// numbers for exact) the product's rounding stands for the literal's own,
-/// half an ulp of it.
-fn noisy(e: &Expr) -> Expr {
+/// Whether `e` is arithmetic on numbers alone (sums, products,
+/// quotients, whole powers), which is folded exactly as typed and
+/// rounded once.
+fn literal_arithmetic(e: &Expr) -> bool {
     match e {
-        Expr::Num(v, lit) if !lit.is_exact() => {
-            Expr::bin(BinOp::Mul, Expr::exact(*v), Expr::exact(1.0))
+        Expr::Num(..) => true,
+        Expr::Neg(a) => literal_arithmetic(a),
+        Expr::Bin(BinOp::Pow, a, b) => {
+            literal_arithmetic(a) && matches!(**b, Expr::Num(n, _) if n == n.trunc())
         }
+        Expr::Bin(_, a, b) => literal_arithmetic(a) && literal_arithmetic(b),
+        _ => false,
+    }
+}
+
+/// `e` with each number that is not exactly its double, and each piece of
+/// arithmetic on numbers alone, written `v·1`: to the oracle's first-order
+/// rounding bound (`F::error`, which takes numbers for exact) the
+/// product's rounding stands for the one rounding of the value, half an
+/// ulp of it. The numbers stay as typed, so the bound is of f itself:
+/// with each at its double, 1.0000000000000001·10¹⁶ − 10¹⁶ was 0 for the
+/// 1 it is, 0.25/(that − tanh x) was −0.25 for 3·10⁹ at 12, and the
+/// bound, 6.8, a thousandth of what 1 − tanh 12 costs in doubles.
+fn noisy(e: &Expr) -> Expr {
+    if literal_arithmetic(e) {
+        return if matches!(e, Expr::Num(_, lit) if lit.is_exact()) {
+            e.clone()
+        } else {
+            Expr::bin(BinOp::Mul, e.clone(), Expr::exact(1.0))
+        };
+    }
+    match e {
         Expr::Neg(a) => Expr::Neg(Box::new(noisy(a))),
         Expr::Degrees(a) => Expr::Degrees(Box::new(noisy(a))),
         Expr::Bin(op, a, b) => Expr::bin(*op, noisy(a), noisy(b)),
@@ -283,6 +306,15 @@ fn noisy(e: &Expr) -> Expr {
 fn rounding(l: &Loaded, noisy_ast: &Expr, x: f64, c: f64) -> f64 {
     let (_, err) = l.f.error(noisy_ast, x);
     4.0 * ulp(c) + 2.0 * err
+}
+
+/// Whether the compiled value `c` and the reference's `p`, two numbers,
+/// are apart by no more than the rounding of both ([`rounding`]: its
+/// first-order bound carries each operation's error through the slopes
+/// of what follows, so an ill-conditioned f is allowed what its
+/// conditioning costs, and no more).
+fn within_both_roundings(l: &Loaded, noisy_ast: &Expr, x: f64, c: f64, p: f64) -> bool {
+    c.is_finite() && p.is_finite() && (c - p).abs() <= 2.0 * rounding(l, noisy_ast, x, c)
 }
 
 /// Whether the compiled value `c` is f's, which MPFR encloses in
@@ -364,6 +396,24 @@ fn points(l: &Loaded, out: &mut Outcome) -> Sampled {
                 )
             });
             v.k = K::Unknown;
+        }
+        // Two double evaluations of f, each within its own rounding of
+        // f(x), are apart by no more than both, which is no disagreement
+        // (the oracle's 8 ulp are for a well-conditioned f): (3 − 7x)·(1 −
+        // cos(log x)) at 5·10⁻³²⁴, where an ulp of the logarithm, −323.3,
+        // is 45 of the result's, had them 53 ulps apart. (A compiled value
+        // outside f's own enclosure is found below, whatever the
+        // reference's.)
+        if v.k == K::Disagree && within_both_roundings(l, &noisy_ast, x, c, v.v) {
+            out.note("pt/scalar-vs-reference-within-their-rounding", || {
+                format!(
+                    "x={x:e}: compiled {c:e}, reference {:e}, each within {:e} of f",
+                    v.v,
+                    rounding(l, &noisy_ast, x, c)
+                )
+            });
+            v.k = K::Def;
+            v.v = c;
         }
         if v.k == K::Disagree {
             out.fail(
@@ -553,6 +603,87 @@ mod mp {
         }
     }
 
+    /// What three values say of a slow infinite limit: within 10⁻⁶ of
+    /// each other next to the point they are "f settles" to the replay,
+    /// which leaves the limit open as spoken against
+    /// (tests/replay/claims.rs), and a·ln x for a small a does that at
+    /// every double there is. Where the
+    /// replay's own (x − a)·f′(x) at those three points (x·f′(x) for a
+    /// limit far out) keeps one sign, the one the limit needs, and
+    /// doesn't shrink toward the point, f is still moving as a logarithm
+    /// does, and this says so: the values aren't against the limit. (For
+    /// a function that does settle it tends to 0, and nothing is said.)
+    fn still_moving(fx: &Fx, claim: &replay::Claim, note: &str) -> Option<String> {
+        let replay::Claim::Simplifier(fact) = claim else {
+            return None;
+        };
+        let (to, at) = fact.strip_prefix("f → ")?.split_once(" as x → ")?;
+        let up = match to {
+            "+∞" => true,
+            "−∞" => false,
+            _ => return None,
+        };
+        if !note.contains("f settles (") {
+            return None;
+        }
+        let at = at.split(':').next()?.trim();
+        // The point approached: finite (from one side), or far out.
+        let a = match at {
+            "+∞" | "−∞" => None,
+            _ => Some(
+                at.trim_end_matches(['⁺', '⁻'])
+                    .replace('−', "-")
+                    .parse::<f64>()
+                    .ok()?,
+            ),
+        };
+        let xs: Vec<f64> = note
+            .split(" at ")
+            .skip(1)
+            .filter_map(|t| {
+                t.split([',', ')'])
+                    .next()?
+                    .trim()
+                    .replace('−', "-")
+                    .parse()
+                    .ok()
+            })
+            .collect();
+        if xs.len() != 3 {
+            return None;
+        }
+        // (x − a)·f′(x) > 0 beside a is f falling toward it; x·f′(x) > 0
+        // far out is f rising outward.
+        let want_positive = if a.is_some() { !up } else { up };
+        let mut g = Vec::new();
+        for &x in &xs {
+            let d = at_prec(|| fx.series(&fx.f, x, x, 1)).swap_remove(1);
+            if d.empty || !d.def {
+                return None;
+            }
+            let (lo, hi) = bounds(&d);
+            let w = x - a.unwrap_or(0.0);
+            let (glo, ghi) = if w >= 0.0 {
+                (lo * w, hi * w)
+            } else {
+                (hi * w, lo * w)
+            };
+            if !(glo.is_finite() && ghi.is_finite())
+                || (want_positive && glo <= 0.0)
+                || (!want_positive && ghi >= 0.0)
+            {
+                return None;
+            }
+            g.push(if want_positive { glo } else { -ghi });
+        }
+        (g[2] >= g[0] / 2.0).then(|| {
+            format!(
+                "the replay's own (x − a)·f′(x) at those points is {:e}, {:e}, {:e} in size: f is still moving as a logarithm does",
+                g[0], g[1], g[2]
+            )
+        })
+    }
+
     /// The replay's reading of the function, from the certificate: its
     /// own scan of the source's numbers, checked against the parser's.
     pub fn function(json: &serde_json::Value, out: &mut Outcome) -> Option<Fx> {
@@ -733,10 +864,19 @@ mod mp {
                 && lo.abs() < f64::MAX
                 && hi.abs() < f64::MAX
             {
-                out.fail(
-                    "mp/scalar-off-value",
-                    format!("x={x:e}: compiled {c:e}, MPFR: f = {}", show(&m)),
-                );
+                // (Inside f's own enclosure, as for a finite value:
+                // x²/1.0000000000000001ˣ is ∞ in doubles at 10³⁰⁰, the
+                // base a 1 to them, and its enclosure there is [0, ∞].)
+                if !e.iv.is_entire() && !e.is_empty() && e.lo() <= c && c <= e.hi() {
+                    out.note("mp/scalar-off-value-within-enclosure", || {
+                        format!("x={x:e}: compiled {c:e}, MPFR: f = {}", show(&m))
+                    });
+                } else {
+                    out.fail(
+                        "mp/scalar-off-value",
+                        format!("x={x:e}: compiled {c:e}, MPFR: f = {}", show(&m)),
+                    );
+                }
             }
 
             // Derivatives, at a third of these points.
@@ -827,6 +967,10 @@ mod mp {
     /// (`replay/gave-up-waiting`: a matter of time, so not a failure).
     /// (On a thread it ran on after it was given up on, and a run's slow
     /// replays piled up until the others had to be skipped.)
+    ///
+    /// A limit the replay leaves open with f's values against it fails
+    /// the run (`replay/values-against`), unless f is still moving there
+    /// as a logarithm does ([`still_moving`]).
     pub fn replayed(json: &serde_json::Value, fx: &Fx, out: &mut Outcome) {
         use std::io::{Read, Write};
         use std::process::{Command, Stdio};
@@ -995,9 +1139,16 @@ mod mp {
                 Class::Refuted => out.fail("replay/refuted", line()),
                 // A limit left open with f's values at the points tried
                 // against it: no proof (so not refuted), but to look at
-                // like one, not one of the replay's known limits.
+                // like one, not one of the replay's known limits. Unless
+                // the values aren't against it: 10⁻¹⁶·ln x "settles" at
+                // every double beside 0, and goes to −∞.
                 Class::Unconfirmed if c.outcome.note.starts_with(replay::claims::AGAINST) => {
-                    out.fail("replay/values-against", line());
+                    match still_moving(fx, &c.claim, &c.outcome.note) {
+                        Some(more) => out.note("replay/values-of-a-slow-limit", || {
+                            format!("{}; {more}", line())
+                        }),
+                        None => out.fail("replay/values-against", line()),
+                    }
                 }
                 Class::Unsupported if counting => {
                     out.note("replay/unsupported-counting", line);
@@ -1178,6 +1329,57 @@ fn partial_items(l: &Loaded, k: &KeyGraphFeatures, mp: Mp<'_>, out: &mut Outcome
     }
 }
 
+/// Whether the y-intercept, which the oracle's check found off f(0) (it
+/// reads the panel's number, to six digits), is right as shown. A value
+/// the certificate knows to an enclosure is shown to as many significant
+/// digits (three to six) as every value in the enclosure rounds to alike
+/// (`analysis::certified::approx`), marked "≈", and the panel's number is
+/// the enclosure's middle: 10¹⁷·(b − 0.3) + ∛2⁵³ with a slider b at 0.3,
+/// whose enclosure at 0 is five wide, is "≈208060" with the number
+/// 208061.06, and f(0) is 208062.72. Right when the text is the
+/// enclosure's ends to the digits they share, and f(0) (MPFR's, or the
+/// doubles' without it) rounds to it too.
+fn shown_as_enclosed(
+    l: &Loaded,
+    k: &KeyGraphFeatures,
+    cert: Option<&Analysis>,
+    mp: Mp<'_>,
+) -> bool {
+    let Some(graphing::certify::Row::Certified { value: Some(e), .. }) =
+        cert.map(|a| &a.y_intercept)
+    else {
+        return false;
+    };
+    let (lo, hi) = (e.lo.0, e.hi.0);
+    if lo.is_nan()
+        || hi.is_nan()
+        || lo >= hi
+        || (lo <= 0.0 && 0.0 <= hi)
+        || !k.y_intercept.starts_with('≈')
+    {
+        return false;
+    }
+    let to = |v: f64, digits: usize| format!("{:.*e}", digits - 1, v);
+    let Some(digits) = (3..=6).rev().find(|&d| to(lo, d) == to(hi, d)) else {
+        return false;
+    };
+    let (flo, fhi) = match mp.and_then(|m| m(0.0).value) {
+        Some(v) => v,
+        None => {
+            let v = l.f.at(0.0);
+            if v.k != K::Def {
+                return false;
+            }
+            (v.v, v.v)
+        }
+    };
+    let shown = to(lo, digits);
+    checks::panel_number(&k.y_intercept)
+        .is_some_and(|(p, _)| to(p, 6) == to(shown.parse().unwrap_or(f64::NAN), 6))
+        && to(flo, digits) == shown
+        && to(fhi, digits) == shown
+}
+
 /// (d) against (a) and (b) sampled, by the oracle's checks; and against
 /// (c) at 0.
 fn panel(
@@ -1247,6 +1449,94 @@ fn panel(
                 if l.f.prog.eval(f.at, 0.0).is_nan() && l.f.prog.undecided(f.at, 0.0) =>
             {
                 out.note("pt/scalar-cannot-tell", || f.detail.clone());
+            }
+            // Or the two are apart by their own rounding, as at a point.
+            "evaluator-disagrees"
+                if matches!(
+                    reval_typed(&l.f.ast, f.at, l.unit),
+                    R::V(p) if within_both_roundings(
+                        l,
+                        &noisy(&l.f.ast),
+                        f.at,
+                        l.f.prog.eval(f.at, 0.0),
+                        p.f(),
+                    )
+                ) =>
+            {
+                out.note("pt/scalar-vs-reference-within-their-rounding", || {
+                    f.detail.clone()
+                });
+            }
+            // "A pole is missing": f grows toward a point where it is
+            // undefined, at the doubles. A pole is f unbounded there, and
+            // f's enclosure over the doubles about the point says whether
+            // it can be: min((3 − x)^(−2000002/2000004), 1000001ˣ) is
+            // 2·10¹⁵ and rising at the double before 3, and never past
+            // 1000001³.
+            "vertical-asymptote-missing"
+                if f.at.is_finite() && {
+                    let around = Interval::new(checks::step(f.at, -4), checks::step(f.at, 4));
+                    let e = enclose(l.ast(), around, &ctx);
+                    !e.is_empty() && e.iv.is_bounded()
+                } =>
+            {
+                out.note("panel/no-pole-where-the-enclosure-is-bounded", || {
+                    f.detail.clone()
+                });
+            }
+            // "y = c is not approached": f is far from c at the farthest
+            // samples. That refutes the limit only if f stays away, which
+            // samples can't say and f's enclosure over the rest of the
+            // tail can: min(acosh x, 2⁶³ − 1) is acosh x, 56, at 10²⁴, and
+            // 2⁶³ − 1 from e^(2⁶³) on, past every double; its limit is
+            // 2⁶³ − 1. Where every such line of that side lies in f's
+            // enclosure from the sample outward, nothing is refuted.
+            "asymptote-not-approached"
+                if f.detail.starts_with("horizontal") && f.at.is_finite() && f.at != 0.0 && {
+                    let tail = if f.at > 0.0 {
+                        Interval::new(f.at, f64::INFINITY)
+                    } else {
+                        Interval::new(f64::NEG_INFINITY, f.at)
+                    };
+                    let e = enclose(l.ast(), tail, &ctx);
+                    let way = if f.at > 0.0 {
+                        graphing::analysis::AsymptoteSide::PositiveInfinity
+                    } else {
+                        graphing::analysis::AsymptoteSide::NegativeInfinity
+                    };
+                    let mut lines = k.data.horizontal_asymptotes.iter().filter(|h| {
+                        h.1 == way || h.1 == graphing::analysis::AsymptoteSide::AnyInfinity
+                    });
+                    !e.is_empty() && lines.all(|h| e.lo() <= h.0 && h.0 <= e.hi())
+                } =>
+            {
+                out.note("panel/asymptote-not-reached-within-the-doubles", || {
+                    f.detail.clone()
+                });
+            }
+            // "0 shown for a value below every double": the value is the
+            // reference's, which keeps 53 bits. f(0) is not 0 only where
+            // f's enclosure there says so (strictly signed, or 0 outside
+            // it): e^(−10⁶) is; sin(π)^(2⁵³/6) is 0, and (1.2·10⁻¹⁶) to
+            // that power to the reference, which takes the sine at π's
+            // double.
+            "y-intercept-underflow-shown-as-0"
+                if {
+                    let e = enclose(l.ast(), Interval::point(0.0), &ctx);
+                    !(e.is_empty() || e.gt0() || e.lt0() || e.lo() > 0.0 || e.hi() < 0.0)
+                } =>
+            {
+                out.note("panel/y-intercept-0-and-f-not-proven-nonzero", || {
+                    f.detail.clone()
+                });
+            }
+            // The panel's number for a value known to an enclosure is the
+            // enclosure's middle, and its text as many digits as the
+            // enclosure fixes: the text is the claim.
+            "y-intercept-wrong" if shown_as_enclosed(l, k, cert, mp) => {
+                out.note("panel/y-intercept-shown-to-the-digits-known", || {
+                    format!("{}, shown as {}", f.detail, k.y_intercept)
+                });
             }
             // "Undefined" at a sample, as the doubles have it: a
             // contradiction only where f is undefined in fact, or (with

@@ -481,28 +481,28 @@ impl<'a> Fun<'a> {
         args
     }
 
-    /// Where f's kinks are: the arguments u of its |u| (and a − b of its
-    /// min(a, b), max(a, b)) that vary with x, canonical, each once. A kink
-    /// is where one is 0.
+    /// Where f's kinks are: the arguments u of its |u| (and a − b for
+    /// each two arguments a, b of its min, max) that vary with x,
+    /// canonical, each once. A kink is where one is 0. (Every two of three
+    /// or more arguments: with none listed for them, min(x, 1, 2 − x) had
+    /// no kink the rows knew of, and its f″, 0 off the kink at 1, was
+    /// claimed 0 on the whole line; found by the replay.)
     pub fn kink_args(&self) -> Vec<Expr> {
         let mut args: Vec<Expr> = Vec::new();
         for e in [&self.expr, &self.eval] {
             e.visit(&mut |n| {
-                let u = match n {
-                    Expr::Call(Func::Abs, a) if a[0].contains_x() => canonical(&a[0]),
-                    Expr::Call(Func::Min | Func::Max, a)
-                        if a.len() == 2 && a.iter().any(|v| v.contains_x()) =>
-                    {
-                        canonical(&Expr::Bin(
-                            BinOp::Sub,
-                            Box::new(a[0].clone()),
-                            Box::new(a[1].clone()),
-                        ))
-                    }
+                let us: Vec<Expr> = match n {
+                    Expr::Call(Func::Abs, a) if a[0].contains_x() => vec![canonical(&a[0])],
+                    Expr::Call(Func::Min | Func::Max, a) => min_max_pairs(a)
+                        .into_iter()
+                        .map(|(i, j)| difference(&a[i], &a[j]))
+                        .collect(),
                     _ => return,
                 };
-                if !args.contains(&u) {
-                    args.push(u);
+                for u in us {
+                    if !args.contains(&u) {
+                        args.push(u);
+                    }
                 }
             });
         }
@@ -528,6 +528,21 @@ impl<'a> Fun<'a> {
         let around = Interval::new(l, r);
         let mut sides: Vec<(Expr, bool, bool)> = Vec::new();
         let mut at_zero = false;
+        // The kink arguments of a min or max of three or more.
+        let mut several: Vec<Expr> = Vec::new();
+        for e in [&self.expr, &self.eval] {
+            e.visit(&mut |n| {
+                if let Expr::Call(Func::Min | Func::Max, a) = n
+                    && a.len() > 2
+                {
+                    several.extend(
+                        min_max_pairs(a)
+                            .into_iter()
+                            .map(|(i, j)| difference(&a[i], &a[j])),
+                    );
+                }
+            });
+        }
         for u in self.kink_args() {
             let s = self.ser_of(&u, around, 1)?;
             if s[0].dec >= Dec::Def && s[0].ne0() {
@@ -540,6 +555,13 @@ impl<'a> Fun<'a> {
             let d = s[1];
             if !(zero && s[0].dec >= Dec::Dac && d.dec >= Dec::Def && d.iv.is_bounded() && d.ne0())
             {
+                return Ok(None);
+            }
+            // (A kink of a min or max of three or more arguments is a
+            // kink, and what f does on its two sides is left open: the
+            // independent checker has no rule for it, and the claim that
+            // says it would stand unchecked.)
+            if several.contains(&u) {
                 return Ok(None);
             }
             at_zero = true;
@@ -1013,11 +1035,7 @@ pub fn one_sided(e: &Expr, sides: &[(Expr, bool, bool)], left: bool) -> Expr {
         Expr::Call(f @ (Func::Min | Func::Max), a)
             if a.len() == 2 && a.iter().any(|v| v.contains_x()) =>
         {
-            let d = canonical(&Expr::Bin(
-                BinOp::Sub,
-                Box::new(a[0].clone()),
-                Box::new(a[1].clone()),
-            ));
+            let d = difference(&a[0], &a[1]);
             // a − b > 0: max picks a, min picks b.
             let a_bigger = sign_of(&d)?;
             let pick = if a_bigger == (*f == Func::Max) {
@@ -1029,6 +1047,28 @@ pub fn one_sided(e: &Expr, sides: &[(Expr, bool, bool)], left: bool) -> Expr {
         }
         _ => None,
     })
+}
+
+/// a − b, canonical: the kink argument of min(a, b), max(a, b).
+fn difference(a: &Expr, b: &Expr) -> Expr {
+    canonical(&Expr::Bin(
+        BinOp::Sub,
+        Box::new(a.clone()),
+        Box::new(b.clone()),
+    ))
+}
+
+/// Each two of a min's or max's arguments of which one varies with x.
+fn min_max_pairs(a: &[Expr]) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    for i in 0..a.len() {
+        for j in i + 1..a.len() {
+            if a[i].contains_x() || a[j].contains_x() {
+                out.push((i, j));
+            }
+        }
+    }
+    out
 }
 
 /// E-graph nodes for each of an analysis's simplifier runs (several per

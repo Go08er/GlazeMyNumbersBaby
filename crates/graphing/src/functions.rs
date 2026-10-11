@@ -273,7 +273,17 @@ pub fn pow_int(b: f64, n: i32) -> f64 {
         3 => b * b * b,
         _ => cm::pow(b, f64::from(m)),
     };
-    if n < 0 { 1.0 / p } else { p }
+    if n >= 0 {
+        return p;
+    }
+    // bⁿ past the largest double: 1/∞ is 0, and the power may be a
+    // subnormal double yet ((9007199254740993¹⁰)⁻² is 8.1·10⁻³²⁰, and was
+    // 0 where the reference had it right: found by `tests/crossfuzz.rs`).
+    // pow has it, correctly rounded.
+    if p.is_infinite() && b.is_finite() {
+        return cm::pow(b, f64::from(n));
+    }
+    1.0 / p
 }
 
 /// atanh, undefined (NaN rather than ±∞) at its poles ±1.
@@ -869,7 +879,9 @@ pub fn npr(n: f64, r: f64) -> f64 {
 }
 
 /// `b^(p/q)` with real-root semantics: a negative base is allowed when q is
-/// odd (e.g. `(-8)^(1/3) = -2`, `(-8)^(2/3) = 4`).
+/// odd (e.g. `(-8)^(1/3) = -2`, `(-8)^(2/3) = 4`). Within an ulp, and the
+/// exact value wherever that is a double ([`ratio_power`]): `x^(1/3)` is
+/// `cbrt(x)` and `root(x, 3)` to the bit.
 #[inline]
 pub fn pow_rational(b: f64, p: i32, q: i32) -> f64 {
     if b.is_nan() || (b == 0.0 && p <= 0) {
@@ -883,19 +895,113 @@ pub fn pow_rational(b: f64, p: i32, q: i32) -> f64 {
         return b.sqrt();
     }
     let a = b.abs();
-    // p/q as a double is rounded (1/3 by 2⁻⁵⁶), and pow, though itself
-    // correctly rounded, magnifies that by |ln a·p/q|. Up to |ln a·p/q| ≈ 4
-    // that costs at most about 2 ulps and pow is used (|ln a| judged by a's
-    // binary exponent, no logarithm); beyond, see [`root_power`].
-    let t = p as f64 / q as f64;
-    let binades = ((a.to_bits() >> 52) & 0x7ff) as i64 - 1023;
-    let m = if !(a > 0.0 && a.is_finite()) || (binades.unsigned_abs() as f64 + 1.0) * t.abs() <= 5.7
-    {
-        cm::pow(a, t)
+    let m = if a > 0.0 && a.is_finite() && p != 0 {
+        ratio_power(a, p, q)
     } else {
-        root_power(a, p, q)
+        cm::pow(a, p as f64 / q as f64)
     };
     if neg && p % 2 != 0 { -m } else { m }
+}
+
+/// p and q below this are held in 20 bits: q times half of a double's
+/// mantissa is then exact.
+const SMALL_PART: i32 = 1 << 20;
+
+/// a^(p/q) for a finite a > 0 and p ≠ 0 (p/q in lowest terms), within an
+/// ulp, and exactly where it is a double.
+///
+/// p/q as a double is rounded (1/3 by 2⁻⁵⁶), and pow, though itself
+/// correctly rounded, magnifies that by |ln a·p/q|: pow(1000, 1/3) is
+/// 9.999999999999998, so ⌊x^(1/3)⌋ was 9 at 1000 and (x^(1/3))! had a
+/// value at −1000, where the cube root is −10 and the factorial undefined
+/// (found by `tests/crossfuzz.rs`); 10⁷^(1/7) was the same number, and
+/// far from 1 the error was many ulps (x^(1/5) at 10⁴⁵: 17).
+///
+/// * q a power of two: p/q is a double and pow is correctly rounded.
+/// * The cube root and its reciprocal: cbrt, correctly rounded itself.
+/// * Otherwise pow at the double t nearest p/q, times a^(p/q − t) = 1 +
+///   (p/q − t)·ln a to within its square (below 10⁻²⁶): half an ulp of
+///   pow's and half of the sum's. When the true value V is a double, that
+///   is V or a double next to it, and [`exact_beside`] says when it could
+///   be the one next to it: then the double-double form
+///   ([`root_power`]) decides, which is V itself whenever V is a double.
+///   (As it does where pow's value has left the normal doubles.)
+/// * A part past 20 bits (a root of a huge degree): pow alone near 1,
+///   where |p/q − t|·ln a is below 10⁻¹⁹ and only 1 has a double for its
+///   root; the double-double form far from it.
+fn ratio_power(a: f64, p: i32, q: i32) -> f64 {
+    let t = p as f64 / q as f64;
+    if q & (q - 1) == 0 {
+        return cm::pow(a, t);
+    }
+    if q == 3 && p.abs() == 1 {
+        let r = cm::cbrt(a);
+        return if p == 1 { r } else { 1.0 / r };
+    }
+    if q >= SMALL_PART || p.abs() >= SMALL_PART {
+        let binades = ((a.to_bits() >> 52) & 0x7ff) as i64 - 1023;
+        return if (binades.unsigned_abs() as f64 + 1.0) * t.abs() <= 5.7 {
+            cm::pow(a, t)
+        } else {
+            root_power(a, p, q)
+        };
+    }
+    let m = cm::pow(a, t);
+    if !(m.is_finite() && m >= f64::MIN_POSITIVE) {
+        return root_power(a, p, q);
+    }
+    // p − q·t exactly, t in two halves of at most 27 bits: each product
+    // and each difference is a multiple of t's last place that 53 bits
+    // hold.
+    let (pf, qf) = (p as f64, q as f64);
+    let th = f64::from_bits(t.to_bits() & !0x7ff_ffff);
+    let rest = ((pf - qf * th) - qf * (t - th)) / qf;
+    let v = m + m * (rest * cm::log(a));
+    if exact_beside(a, v, p, q) {
+        root_power(a, p, q)
+    } else {
+        v
+    }
+}
+
+/// Whether a^(p/q) may be a double other than `v`, which is within an ulp
+/// of it (a finite a > 0, p/q in lowest terms, q no power of two).
+///
+/// With a = s·2^e for an odd s, a^(p/q) is rational only for s = g^q and
+/// q dividing e, and is then g^p·2^(pe/q). For g = 1, a is a power of two.
+/// Otherwise g ≥ 3: for p < 0 that is no double, and g^q ≤ s < 2⁵³ leaves
+/// none for q ≥ 34 (3³⁴ > 2⁵³). Else g^p has at most ⌊53·p/q⌋ + 1 bits:
+/// for p < q a double so short has none next to it as short, so if `v`
+/// isn't one and a neighbour is, the value may be that neighbour; and for
+/// p > q, g^p < 2⁵³ leaves s = g^q at most ⌊53·q/p⌋ + 1 bits.
+fn exact_beside(a: f64, v: f64, p: i32, q: i32) -> bool {
+    // The bits from a double's first set bit to its last.
+    let bits = |x: f64| -> u64 {
+        let b = x.to_bits();
+        let frac = b & ((1 << 52) - 1);
+        let m = if (b >> 52) & 0x7ff == 0 {
+            frac
+        } else {
+            frac | (1 << 52)
+        };
+        if m == 0 {
+            0
+        } else {
+            u64::from(64 - m.leading_zeros() - m.trailing_zeros())
+        }
+    };
+    if bits(a) == 1 {
+        return true;
+    }
+    if p < 0 || q >= 34 {
+        return false;
+    }
+    let (p, q) = (p as u64, q as u64);
+    if p > q {
+        return bits(a) <= 53 * q / p + 1;
+    }
+    let most = 53 * p / q + 1;
+    bits(v) > most && (bits(v.next_up()) <= most || bits(v.next_down()) <= most)
 }
 
 /// `b^(p/q)` for an exponent written as a ratio of integers past
@@ -907,24 +1013,15 @@ pub(crate) fn pow_ratio(b: f64, r: &crate::compile::RatioPow) -> f64 {
     crate::wide::pow_ratio(crate::wide::Wide::new(b), *r).to_f64()
 }
 
-/// a^(p/q) for a > 0 where powf's rounded p/q would cost ulps (x^(1/3) at
-/// 10⁴⁵ was 17 ulps off): square and cube roots of small powers through
-/// sqrt/cbrt, the rest with the exponent in double-double.
+/// a^(p/q) for a finite a > 0 with the exponent in double-double. Within
+/// an ulp, and the exact value whenever that is a double: ln a·p/q is
+/// held to 2⁻¹⁰⁰, and of the reduced argument's low part, below 2⁻⁵⁵,
+/// [`crate::dd::exp`] keeps nothing, so the mantissa is the correctly
+/// rounded exponential of a number within 2⁻⁵⁵ of the true one's
+/// logarithm: less than half a last place away.
 #[cold]
 #[inline(never)]
 fn root_power(a: f64, p: i32, q: i32) -> f64 {
-    if p.abs() <= 3 && (q == 2 || q == 3) {
-        let r = if q == 2 { a.sqrt() } else { cm::cbrt(a) };
-        return match p {
-            1 => r,
-            2 => r * r,
-            3 => r * r * r,
-            -1 => 1.0 / r,
-            -2 => 1.0 / (r * r),
-            -3 => 1.0 / (r * r * r),
-            _ => 1.0,
-        };
-    }
     let l = crate::dd::ln(a).mul_f(p as f64).div_f(q as f64);
     let (r, n) = crate::dd::exp(l);
     scale2(r, n)
