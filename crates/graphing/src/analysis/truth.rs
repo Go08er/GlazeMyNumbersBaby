@@ -412,6 +412,17 @@ fn reval_in(e: &Expr, x: f64, u: TrigUnit, typed: bool) -> R {
             crate::compile::TypedValue::Unknown => R::Unknown,
         };
     }
+    // A function of an exact value that rounds onto a number the function
+    // turns on (off, tan(90.00000000000000000001) in degrees): from the
+    // value's exact distance to that number, as the program computes it
+    // (`compile::exact_call`).
+    if typed
+        && let Expr::Call(f, args) = e
+        && let Some(crate::compile::Exact::As(rewritten)) =
+            crate::compile::exact_call(*f, args, &opts)
+    {
+        return reval_in(&rewritten, x, u, typed);
+    }
     let reval = |a: &Expr, x: f64, u: TrigUnit| reval_in(a, x, u, typed);
     let kind = |b: &Expr| {
         if typed {

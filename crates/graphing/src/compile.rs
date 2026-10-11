@@ -2104,6 +2104,14 @@ pub(crate) fn fold_literals(e: &Expr, opts: &CompileOptions<'_>) -> Expr {
                 return if neg { Expr::Neg(Box::new(n)) } else { n };
             }
         }
+        // A function of an exact value that rounds onto a number the
+        // function turns on, as the program computes it: from the value's
+        // exact distance to that number ([`exact_call`]).
+        if let Expr::Call(f, args) = e
+            && let Some(Exact::As(rewritten)) = exact_call(*f, args, opts)
+        {
+            return go(&rewritten, opts);
+        }
         let rec = |a: &Expr| go(a, opts);
         match e {
             Expr::Num(..) | Expr::Const(_) | Expr::X | Expr::Y | Expr::Var(_) => e.clone(),
@@ -2191,6 +2199,93 @@ pub(crate) fn typed_enclosure(
                 .then(|| DecInterval::new(Interval::new(lo, hi)).signs(pos, neg))
         }
         Fold::DivZero(_) => Some(DecInterval::new(Interval::EMPTY)),
+        _ => None,
+    }
+}
+
+/// What [`exact_call`] makes of a call.
+pub(crate) enum Exact {
+    /// The same value, written from the argument's exact distance to the
+    /// number it rounds onto.
+    As(Expr),
+}
+
+/// An x- and y-free argument's exact value ([`fold`]) and the double it
+/// rounds to, when that double is another number: the value rounds onto
+/// it. (Never onto 0: a value nearer 0 than every double stays itself in
+/// extended range, its sign and that it isn't 0 kept: [`Wide`].)
+fn rounds_onto(a: &Expr, opts: &CompileOptions<'_>) -> Option<(Rat, f64)> {
+    if a.any(&|n| matches!(n, Expr::X | Expr::Y)) {
+        return None;
+    }
+    let Fold::Value(r, _) = fold(a, opts) else {
+        return None;
+    };
+    let d = r.to_f64(crate::big::Round::Nearest);
+    (d.is_finite() && d != 0.0 && Rat::from_f64(d).is_some_and(|x| x != r)).then_some((r, d))
+}
+
+/// A function of an argument known exactly ([`fold`]: a typed decimal,
+/// arithmetic on literals and sliders) that rounds onto a number the
+/// function turns on without being it: a quarter turn in degrees or grads
+/// (off, `tan(90.00000000000000000001)`, or `tan(90 + 10^(-30))` at any
+/// setting). The argument's double sits on that number, so the general
+/// path would give the function there (a pole for a value beside it, an
+/// exact 0 for a value that isn't): the exact value decides instead
+/// (review 19, R19-M-04's family). The same value is written from the
+/// argument's exact distance to that number, in the language itself
+/// (`tan(90 + δ)` in degrees is `−cot(δ)`), so every view computes it
+/// alike from that distance, folded exactly and rounded once: the
+/// program ([`lower_in`]), the reference (`analysis::truth::reval_typed`)
+/// and the interval form ([`fold_literals`]).
+///
+/// `None` for any other call: an argument not known exactly, one that is
+/// its double, or a double the function doesn't turn on. There the
+/// function of the double is the function of the value to rounding, as it
+/// always was, and nothing moves.
+pub(crate) fn exact_call(f: Func, args: &[Expr], opts: &CompileOptions<'_>) -> Option<Exact> {
+    use Func::*;
+    let unit = opts.trig_unit;
+    let num = |v: f64| {
+        if v < 0.0 {
+            Expr::Neg(Box::new(Expr::exact(-v)))
+        } else {
+            Expr::exact(v)
+        }
+    };
+    let signed = |s: f64, e: Expr| {
+        if s < 0.0 { Expr::Neg(Box::new(e)) } else { e }
+    };
+    match f {
+        // Degrees and grads: sin and cos turn (a zero, or their
+        // reciprocal's pole) at whole quarter turns, which are doubles.
+        // With (s, c) the sine and cosine there, one 0 and the other ±1,
+        // sin(d + δ) = s·cos δ + c·sin δ and cos(d + δ) = c·cos δ − s·sin δ.
+        // (In radians no rational but 0 is a quarter turn.)
+        Sin | Cos | Tan | Sec | Csc | Cot if unit != TrigUnit::Radians => {
+            let (_, d) = rounds_onto(&args[0], opts)?;
+            if d % (unit.full_turn() / 4.0) != 0.0 {
+                return None;
+            }
+            let (s, c) = fns::sin_cos(d, unit);
+            let (g, sign) = match (f, s != 0.0) {
+                (Sin, true) => (Cos, s),
+                (Sin, false) => (Sin, c),
+                (Cos, true) => (Sin, -s),
+                (Cos, false) => (Cos, c),
+                (Tan, true) => (Cot, -1.0),
+                (Tan, false) => (Tan, 1.0),
+                (Cot, true) => (Tan, -1.0),
+                (Cot, false) => (Cot, 1.0),
+                (Sec, true) => (Csc, -s),
+                (Sec, false) => (Sec, c),
+                (Csc, true) => (Sec, s),
+                (Csc, false) => (Csc, c),
+                _ => unreachable!("a trigonometric function"),
+            };
+            let delta = Expr::bin(BinOp::Sub, args[0].clone(), num(d));
+            Some(Exact::As(signed(sign, Expr::call1(g, delta))))
+        }
         _ => None,
     }
 }
@@ -2335,6 +2430,19 @@ fn lower_in(e: &Expr, opts: &CompileOptions<'_>, lx: Reading) -> Result<Piece, E
             Fold::Big(var) => return Ok(Piece::Const(Wide::Unknown, var)),
             Fold::Lone(..) | Fold::Long | Fold::No => {}
         }
+    }
+    // A function of an exact value that rounds onto a number the function
+    // turns on: from the value's exact distance to that number.
+    if lx == Reading::Typed
+        && let Expr::Call(f, args) = e
+        && let Some(Exact::As(rewritten)) = exact_call(*f, args, opts)
+    {
+        // (A slider in it is still one in what it is rewritten as.)
+        let var = e.any(&|n| matches!(n, Expr::Var(_)));
+        return Ok(match rec(&rewritten)? {
+            Piece::Const(w, v) => Piece::Const(w, v || var),
+            code => code,
+        });
     }
     Ok(match e {
         Expr::Num(v, _) => Piece::Const(Wide::new(*v), false),

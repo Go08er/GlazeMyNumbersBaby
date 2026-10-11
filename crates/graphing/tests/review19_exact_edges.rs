@@ -9,7 +9,8 @@ use graphing::ast::{Expr, Func, Lit};
 use graphing::compile::{CompileOptions, Program, Sliders};
 use graphing::interval::{Ctx, Dec, Interval, enclose};
 use graphing::lexer::ParseOptions;
-use graphing::{Equation, TrigUnit};
+use graphing::plot::{PlotOptions, plot};
+use graphing::{Equation, TrigUnit, Viewport};
 
 /// What a view makes of a function at a point.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -147,6 +148,44 @@ fn check_at(text: &str, digits: Option<u8>, unit: TrigUnit, x: f64, want: V) {
 #[track_caller]
 fn check(text: &str, digits: Option<u8>, want: V) {
     check_at(text, digits, TrigUnit::Radians, 0.0, want);
+}
+
+/// `y = text` plotted at the apps' reset view, 760×500, is one whole
+/// curve along `y = f(x)`: nothing missing, and it spans the view.
+#[track_caller]
+fn plots_as(text: &str, digits: Option<u8>, unit: TrigUnit, f: impl Fn(f64) -> f64) {
+    let parse = ParseOptions {
+        decimal_comma: false,
+        literal_digits: digits,
+    };
+    let eq = Equation::parse_with(&format!("y={text}"), parse).expect("parses");
+    let opts = CompileOptions {
+        trig_unit: unit,
+        variables: &(),
+    };
+    let compiled = eq.compile(&opts).unwrap_or_else(|e| panic!("{text}: {e:?}"));
+    let vp = Viewport::default_for_size(760.0, 500.0);
+    let p = plot(&compiled, &vp, &PlotOptions::default());
+    let label = format!("{text} ({digits:?}, {unit:?})");
+    assert!(!p.has_missing_data, "{label}: missing data");
+    assert_eq!(p.curves.len(), 1, "{label}: pieces");
+    let line = &p.curves[0];
+    let px = vp.x_span() / vp.width;
+    assert!(
+        line[0].x <= vp.x_min + px && line[line.len() - 1].x >= vp.x_max - px,
+        "{label}: drawn from {} to {}",
+        line[0].x,
+        line[line.len() - 1].x
+    );
+    for q in line {
+        let want = f(q.x);
+        assert!(
+            (q.y - want).abs() <= 1e-9 * (1.0 + want.abs()),
+            "{label}: ({}, {}) drawn, f there is {want}",
+            q.x,
+            q.y
+        );
+    }
 }
 
 /// A step of a value proven beyond the doubles is decided by where that
@@ -410,4 +449,110 @@ fn the_least_and_greatest_of_exact_values_are_exact() {
         );
         assert_eq!((v.compiled, v.reference), (V::Is(want), V::Is(want)), "{a}");
     }
+}
+
+/// In degrees and grads an exact angle a hair off a quarter turn is not
+/// the quarter turn its double is: the tangent beside its pole is a
+/// (large) number, not undefined, and the sine beside its zero is not 0.
+/// Each is computed from the angle's exact distance to the quarter turn.
+#[test]
+fn an_exact_angle_beside_a_quarter_turn_is_not_on_it() {
+    use std::f64::consts::PI;
+    use TrigUnit::{Degrees, Grads, Radians};
+    // The sine of an angle of 10⁻²⁰ and of 10⁻³⁰, in each unit.
+    let (d20, g20) = (1e-20 * PI / 180.0, 1e-20 * PI / 200.0);
+    let d30 = 1e-30 * PI / 180.0;
+    let at = |text: &str, digits, unit, want| check_at(text, digits, unit, 0.0, want);
+    for (text, unit, off) in [
+        ("tan(90.00000000000000000001)", Degrees, -1.0 / d20),
+        ("tan(89.99999999999999999999)", Degrees, 1.0 / d20),
+        ("tan(-90.00000000000000000001)", Degrees, 1.0 / d20),
+        ("tan(270.00000000000000000001)", Degrees, -1.0 / d20),
+        ("tan(90.00000000000000000001°)", Degrees, -1.0 / d20),
+        ("1/tan(90.00000000000000000001)", Degrees, -d20),
+        ("sec(90.00000000000000000001)", Degrees, -1.0 / d20),
+        ("sec(269.99999999999999999999)", Degrees, -1.0 / d20),
+        ("cot(180.00000000000000000001)", Degrees, 1.0 / d20),
+        ("cot(359.99999999999999999999)", Degrees, -1.0 / d20),
+        ("csc(359.99999999999999999999)", Degrees, -1.0 / d20),
+        ("csc(180.00000000000000000001)", Degrees, -1.0 / d20),
+        ("tan(100.00000000000000000001)", Grads, -1.0 / g20),
+        ("sec(299.99999999999999999999)", Grads, -1.0 / g20),
+        ("cot(199.99999999999999999999)", Grads, -1.0 / g20),
+    ] {
+        at(text, OFF, unit, V::Is(off));
+        // To 14 digits the angle is the quarter turn: a pole.
+        at(text, TI, unit, V::Undefined);
+    }
+    for (text, unit, off, ti) in [
+        ("sin(180.00000000000000000001)", Degrees, -d20, 0.0),
+        ("sin(359.99999999999999999999)", Degrees, -d20, 0.0),
+        ("cos(90.00000000000000000001)", Degrees, -d20, 0.0),
+        ("cos(270.00000000000000000001)", Degrees, d20, 0.0),
+        ("cos(-90.00000000000000000001)", Degrees, -d20, 0.0),
+        ("sin(200.00000000000000000001)", Grads, -g20, 0.0),
+        ("cos(99.99999999999999999999)", Grads, g20, 0.0),
+        // What reads the sine's side of 0.
+        ("sign(sin(180.00000000000000000001))", Degrees, -1.0, 0.0),
+        ("5+floor(sin(180.00000000000000000001))", Degrees, 4.0, 5.0),
+        ("ceil(cos(270.00000000000000000001))", Degrees, 1.0, 0.0),
+        // Beside a quarter turn where the function is ±1 it rounds to it.
+        ("sin(90.00000000000000000001)", Degrees, 1.0, 1.0),
+        ("cos(180.00000000000000000001)", Degrees, -1.0, -1.0),
+        ("sec(360.00000000000000000001)", Degrees, 1.0, 1.0),
+        ("tan(180.00000000000000000001)", Degrees, d20, 0.0),
+        ("cot(90.00000000000000000001)", Degrees, -d20, 0.0),
+    ] {
+        at(text, OFF, unit, V::Is(off));
+        at(text, TI, unit, V::Is(ti));
+    }
+    for digits in [OFF, TI] {
+        // Arithmetic on short numbers lands beside a quarter turn at any
+        // setting.
+        at("tan(90+10^(-30))", digits, Degrees, V::Is(-1.0 / d30));
+        at("1/sin(180-10^(-30))", digits, Degrees, V::Is(1.0 / d30));
+        at("sign(cos(90+10^(-30)))", digits, Degrees, V::Is(-1.0));
+        at("sin(3*60+10^(-30))", digits, Degrees, V::Is(-d30));
+        // On the quarter turn itself nothing changes: a pole, an exact 0.
+        at("tan(90)", digits, Degrees, V::Undefined);
+        at("tan(45+45)", digits, Degrees, V::Undefined);
+        at("cot(0.1+0.2-0.3)", digits, Degrees, V::Undefined);
+        at("sin(180)", digits, Degrees, V::Is(0.0));
+        at("sec(300)", digits, Grads, V::Undefined);
+        // Nor below every double, where the angle keeps its side of 0.
+        at("sign(sin(10^(-400)))", digits, Degrees, V::Is(1.0));
+        at("sign(tan(-(10^(-400))))", digits, Grads, V::Is(-1.0));
+        // With x in the angle it is the program's, in doubles.
+        let v = views_at("tan(x+0.00000000000000000001)", digits, Degrees, 90.0, 1.0);
+        assert_eq!(v.compiled, V::Undefined);
+    }
+    // A whole number of quarter turns no double holds past 2⁵³: the
+    // double beside it is one (2⁵³ + 58 is 90 more than a whole turn).
+    at(
+        "tan(9007199254741050.5)",
+        OFF,
+        Degrees,
+        V::Is(-1.0 / 0.5f64.to_radians().tan()),
+    );
+    // In radians no number typed is a quarter turn: nothing changes.
+    let v = views_at(
+        "tan(1.5707963267948966192313216916397514420985846996875)",
+        OFF,
+        Radians,
+        0.0,
+        1.0,
+    );
+    assert!(
+        matches!(v.compiled, V::Is(c) if close(c, 1.633123935319537e16)),
+        "{:?}",
+        v.compiled
+    );
+    // A slider alone is a number.
+    let v = views_at("tan(a+0.00000000000000000001)", OFF, Degrees, 0.0, 90.0);
+    assert!(matches!(v.compiled, V::Is(c) if close(c, -1.0 / d20)), "{:?}", v.compiled);
+    assert_eq!(v.reference, v.compiled);
+    // The curves at the reset view: both were missing.
+    plots_as("x+1/tan(90.00000000000000000001)", OFF, Degrees, |x| x);
+    plots_as("5+floor(sin(180.00000000000000000001))", OFF, Degrees, |_| 4.0);
+    plots_as("x*sign(cos(90+10^(-30)))", TI, Degrees, |x| -x);
 }
