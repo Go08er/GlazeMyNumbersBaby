@@ -224,6 +224,10 @@ struct Walk {
     holes: Vec<B>,
     /// Every box a claim decides (for coverage).
     boxes: Vec<B>,
+    /// The gaps among them (`Gap` claims), which decide nothing.
+    gaps: Vec<B>,
+    /// The boxes of every other claim: what is decided.
+    solid: Vec<B>,
     problems: Vec<String>,
 }
 
@@ -364,6 +368,9 @@ fn walk(fx: &Fx, claims: &[Claim], k: usize) -> Walk {
             Claim::Undefined(x) | Claim::Gap(x) => {
                 w.holes.push(*x);
                 w.boxes.push(*x);
+                if matches!(c, Claim::Gap(_)) {
+                    w.gaps.push(*x);
+                }
             }
             // f′, f″ undefined at a kink: a point the signs either side
             // decide (for f, its values are claimed elsewhere).
@@ -390,6 +397,17 @@ fn walk(fx: &Fx, claims: &[Claim], k: usize) -> Walk {
                 w.boxes.push(*x);
             }
             _ => {}
+        }
+    }
+    // (What the claims other than gaps decide: every box but one of each
+    // gap's.)
+    let mut gaps_left = w.gaps.clone();
+    for b in &w.boxes {
+        match gaps_left.iter().position(|g| g == b) {
+            Some(i) => {
+                gaps_left.swap_remove(i);
+            }
+            None => w.solid.push(*b),
         }
     }
     // Each crossing: its innermost box is the zero, the outer ones carry
@@ -424,8 +442,13 @@ fn walk(fx: &Fx, claims: &[Claim], k: usize) -> Walk {
                     kink: false,
                 });
             }
+            // (Not decided is not "the same sign": said apart.)
+            (Some(_), Some(_)) => w.problems.push(format!(
+                "a crossing in [{:e}, {:e}] with one sign at both its ends",
+                outer.0, outer.1
+            )),
             _ => w.problems.push(format!(
-                "a crossing in [{:e}, {:e}] without opposite signs at its ends",
+                "a crossing in [{:e}, {:e}] whose signs at its ends are not decided",
                 outer.0, outer.1
             )),
         }
@@ -535,6 +558,80 @@ fn coverage(rc: &RowCert, all: &[RowCert], boxes: &[B], out: &mut RowResult) {
         if let Some((a, b)) = uncovered(t, boxes) {
             out.problems.push(format!(
                 "its claims leave [{a:e}, {b:e}] of the region {rg:?} undecided"
+            ));
+            return;
+        }
+    }
+}
+
+/// f has no value at the double x (shown by the replay's own evaluation).
+fn no_value(fx: &Fx, x: f64) -> bool {
+    iv::set_prec(160);
+    fx.series(&fx.f, x, x, 0)[0].empty
+}
+
+/// A gap decides nothing and stands for the reals strictly inside it
+/// (`claims::gap_clear` clears those): each of its two ends is a double
+/// some other claim of the row decides (a sign, a zero, a kink, f
+/// undefined there) or one strictly inside another gap, unless there is
+/// nothing to decide at it: f has no value there, or it lies outside the
+/// row's region, or (for f′ and f″) it is an end of the region, where no
+/// derivative is asked. Counted as covered like any box, two gaps meeting
+/// at a double left it out of the row: x²'s f′ "had no zero" and x² "no
+/// extremum", 0 between the gaps (−5·10⁻³²⁴, 0) and (0, 5·10⁻³²⁴) (the
+/// third pass's audit).
+fn gap_ends(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk, k: usize, out: &mut RowResult) {
+    let Some(rg) = &rc.region else { return };
+    let ts = targets(rg, all);
+    for g in &w.gaps {
+        for e in [g.0, g.1] {
+            // (Or strictly inside another gap, a real that one stands
+            // for: the certifier's gaps about one excluded point nest.)
+            let decided = w.solid.iter().any(|b| b.0 <= e && e <= b.1)
+                || w.gaps.iter().any(|h| h.0 < e && e < h.1);
+            let asked = ts
+                .iter()
+                .any(|t| (t.0 < e && e < t.1) || (k == 0 && (t.0 == e || t.1 == e)));
+            if decided || !asked || !e.is_finite() || no_value(fx, e) {
+                continue;
+            }
+            out.problems.push(format!(
+                "no claim decides f{} at {e:e}, an end of the gap [{:e}, {:e}]",
+                ["", "′", "″"][k],
+                g.0,
+                g.1
+            ));
+            return;
+        }
+    }
+}
+
+/// In a complete row on f′ or f″, each zero's two sides are decided: a
+/// zero with a side no claim signs (a gap beside it) is no "no change of
+/// sign". Nothing is asked of a side outside the row's region, where f has
+/// no value, or where f⁽ᵏ⁾ ≡ 0 on a stretch. (x²'s f′, its zero at 0
+/// between two gaps, changed sign nowhere: the third pass's audit.)
+fn sides_decided(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk, k: usize, out: &mut RowResult) {
+    let Some(rg) = &rc.region else { return };
+    if !complete(rc) {
+        return;
+    }
+    let ts = targets(rg, all);
+    for z in &w.zeros {
+        let sides = [
+            ("before", z.left, z.at.lo.next_down()),
+            ("after", z.right, z.at.hi.next_up()),
+        ];
+        for (side, sign, beside) in sides {
+            let asked = ts.iter().any(|t| t.0 <= beside && beside <= t.1);
+            let flat = w.flat.iter().any(|b| b.0 <= beside && beside <= b.1);
+            if sign.is_some() || !asked || flat || no_value(fx, beside) {
+                continue;
+            }
+            out.problems.push(format!(
+                "f{}'s sign {side} its zero at {:e} is not decided, yet the row is complete",
+                ["", "′", "″"][k],
+                z.at.mid()
             ));
             return;
         }
@@ -900,6 +997,7 @@ fn zeros_row(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Res
     let w = walk(fx, &rc.claims, 0);
     out.problems.extend(w.problems.iter().cloned());
     coverage(rc, all, &w.boxes, out);
+    gap_ends(fx, rc, all, &w, 0, out);
     holes(rc, 0, complete(rc), out);
     if !w.flat.is_empty() {
         out.problems
@@ -928,6 +1026,8 @@ fn turns(
     let w = walk(fx, &rc.claims, k);
     out.problems.extend(w.problems.iter().cloned());
     coverage(rc, all, &w.boxes, out);
+    gap_ends(fx, rc, all, &w, k, out);
+    sides_decided(fx, rc, all, &w, k, out);
     holes(rc, k, complete(rc), out);
     let mut ch: Vec<(Enc, bool)> = Vec::new();
     for (x, from_pos, kink) in changes(&w) {
@@ -1076,6 +1176,7 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
     let w = walk(fx, &rc.claims, 1);
     out.problems.extend(w.problems.iter().cloned());
     coverage(rc, all, &w.boxes, out);
+    gap_ends(fx, rc, all, &w, 1, out);
     holes(rc, 1, complete(rc), out);
     // Where a piece may end: at a turn or kink of f (a zero of the walk),
     // at an end of a stretch where f′ ≡ 0, at an end of the domain (its

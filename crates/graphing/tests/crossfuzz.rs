@@ -292,11 +292,6 @@ fn not_refuted(_: &Case, f: &Finding) -> bool {
     !f.detail.contains("refuted")
 }
 
-/// A root of the degree 0.5 as typed.
-fn root_of_degree_a_half(case: &Case, _: &Finding) -> bool {
-    texts(case).contains(",0.5)")
-}
-
 /// A count in the case, and two finite values in the finding.
 fn counts_and_two_values(case: &Case, f: &Finding) -> bool {
     counts(case, f) && !f.detail.contains("NaN") && !f.detail.contains("Undef")
@@ -333,38 +328,6 @@ fn root_far_in(case: &Case, f: &Finding) -> bool {
         && position(&f.detail).is_some_and(|x| x != 0.0 && x.abs() <= 1e-300)
 }
 
-/// A claim about f′ or f″ on a box that starts at a closed end of the
-/// domain: f has a value at the box's low end and none at the double
-/// below it.
-fn derivative_from_a_domain_end(case: &Case, f: &Finding) -> bool {
-    let derivative = f.detail.contains("of: F(1)") || f.detail.contains("of: F(2)");
-    let low = f
-        .detail
-        .split("x: (")
-        .nth(1)
-        .and_then(|t| t.split(',').next())
-        .and_then(|t| t.trim().parse::<f64>().ok());
-    let Some(a) = low.filter(|_| derivative) else {
-        return false;
-    };
-    let set = setup(case);
-    let text = case.expr.text();
-    views::defined_at(&text, &set, a) == Some(true)
-        && views::defined_at(&text, &set, checks::step(a, -1)) == Some(false)
-}
-
-/// The fact that a periodic f has no oblique asymptote, tested by f/x at
-/// far points.
-fn periodic_and_huge(_: &Case, f: &Finding) -> bool {
-    f.detail.contains("f is periodic") && f.detail.contains("stays apart from 0")
-}
-
-/// A `OneCross` of f refuted at its high end with the low end unplaced
-/// (said by `views::mp::low_end_unplaced`, from the replay's own f).
-fn one_cross_from_an_unplaced_end(_: &Case, f: &Finding) -> bool {
-    f.detail.starts_with("OneCross") && f.detail.contains("on neither side of")
-}
-
 const KNOWN: &[(&str, Matches, &str)] = &[
     // The replay (tests/replay) is another's to change; what it leaves
     // open is listed by kind in this tester's report.
@@ -379,69 +342,6 @@ const KNOWN: &[(&str, Matches, &str)] = &[
         "replay/row-problem",
         not_refuted,
         "a row the replay can't derive because it leaves its claims open",
-    ),
-    // tests/replay/eval.rs: root(x, n) of a degree no integer is read as
-    // x^(1/n) with 1/n exact, so for n = 0.5 as the integer power x², which
-    // takes a negative x. The engine (and docs/ti-conventions.md) take a
-    // base >= 0 for such a degree: no y has y^0.5 = -8.
-    (
-        "mp/enclosure-empty-where-defined",
-        root_of_degree_a_half,
-        "the replay's own root(x, 0.5) is x² for a negative x too, where the engine has it \
-         undefined (tests/replay/eval.rs)",
-    ),
-    // tests/replay/claims.rs, `Claim::OneCross` (`below_first`, as the
-    // entry after next): f′ or f″ of the source tree is ∞ − ∞ at the
-    // first point of the domain, where the certifier's simplified form is
-    // smooth (acosh x − acosh x + sin x at 1, log(x, 2) − log(x, 2) + x² −
-    // x³ + 6 at 5·10⁻³²⁴), so the replay can't place the low end of a
-    // OneCross of f′ or f″ from there, reads it as below c, and refutes
-    // the claim at the high end, which is below c as claimed. Unconfirmed
-    // is what it is. (Whether a box of f′ may start where the source
-    // tree's derivative has no value is the certifier's and the replay's
-    // to settle: the `Beyond` at that point alone is left unconfirmed.)
-    (
-        "replay/refuted",
-        derivative_from_a_domain_end,
-        "a OneCross of f′ or f″ on a box from the first point of the domain, where the \
-         source tree's derivative is ∞ − ∞ and the simplified form's is not: the replay \
-         can't place that end, takes it for one below c and refutes the claim at the other \
-         (tests/replay/claims.rs, `below_first`): the claim is true and only unconfirmed",
-    ),
-    // tests/replay/claims.rs: "f is periodic, so no oblique asymptote" is
-    // tested by f/x at points up to 10²⁴⁰, where tan(x) + cosh(2³¹ + 1),
-    // periodic with a constant of 10⁹³²⁶³⁰⁰⁰⁰, is nowhere near 0.
-    (
-        "replay/refuted",
-        periodic_and_huge,
-        "the replay tests \"f is periodic: no oblique asymptote\" by f/x at far points and \
-         refutes it for a periodic f with a constant beyond them (tests/replay/claims.rs): \
-         the fact is true",
-    ),
-    // tests/replay/claims.rs, `Claim::OneCross`: `below_first = !a.yes()`
-    // reads a low end not shown above c as one below it, and the check of
-    // the other end then refutes a claim that only wasn't confirmed:
-    // min(10^5000 + a − 10^5000 + ln x, x − x³ + 0.3) crosses 0 once in
-    // [1, 4], and the replay encloses its first operand by ∞ − ∞, so f(1)
-    // by (−∞, 0.3] and f(4) by (−∞, −59.7].
-    (
-        "replay/refuted",
-        one_cross_from_an_unplaced_end,
-        "the replay's OneCross takes a low end it can't place (its own f there on neither side \
-         of c) for one below c, and refutes the claim at the high end for being below c too \
-         (tests/replay/claims.rs, `below_first`): the claim is only unconfirmed",
-    ),
-    (
-        "replay/refuted",
-        root_of_degree_a_half,
-        "the replay's own root(x, 0.5) is x² for a negative x too, where the engine has it \
-         undefined (tests/replay/eval.rs): it refutes the certifier's \"undefined\"",
-    ),
-    (
-        "replay/row-problem",
-        root_of_degree_a_half,
-        "the replay's own root(x, 0.5) is x² for a negative x too, where the engine has it \
-         undefined (tests/replay/eval.rs): it refutes the certifier's \"undefined\"",
     ),
     // functions::ncr and npr (Γ's quotient) in doubles: ∞·0 far out and
     // an underflow to 0 give NaN where the quotient has a value, which the
