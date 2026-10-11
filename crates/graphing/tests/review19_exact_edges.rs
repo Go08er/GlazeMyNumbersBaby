@@ -634,3 +634,88 @@ fn a_logarithm_of_an_exact_value_beside_one() {
     );
     plots_as("x+10^(-30)/ln(1+10^(-30))", TI, TrigUnit::Radians, |x| x + 1.0);
 }
+
+/// The inverse functions that turn at ±1 (the end of a domain, or a
+/// pole): an exact value a hair inside or outside is on its own side.
+#[test]
+fn an_inverse_function_of_an_exact_value_beside_one() {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    use TrigUnit::{Degrees, Radians};
+    let (und, is) = (V::Undefined, V::Is);
+    // arccos(1 − 10⁻²⁰) = √(2·10⁻²⁰), to its square; artanh of it.
+    let s = 2e-20f64.sqrt();
+    let t = 0.5 * 2e20f64.ln();
+    for (text, off, ti) in [
+        ("asin(1.00000000000000000001)", und, is(FRAC_PI_2)),
+        ("asin(0.99999999999999999999)", is(FRAC_PI_2 - s), is(FRAC_PI_2)),
+        ("asin(-1.00000000000000000001)", und, is(-FRAC_PI_2)),
+        ("asin(-0.99999999999999999999)", is(s - FRAC_PI_2), is(-FRAC_PI_2)),
+        ("acos(1.00000000000000000001)", und, is(0.0)),
+        ("acos(0.99999999999999999999)", is(s), is(0.0)),
+        ("acos(-1.00000000000000000001)", und, is(PI)),
+        ("acos(-0.99999999999999999999)", is(PI - s), is(PI)),
+        ("10^10*acos(0.99999999999999999999)", is(1e10 * s), is(0.0)),
+        ("acosh(0.99999999999999999999)", und, is(0.0)),
+        ("acosh(1.00000000000000000001)", is(s), is(0.0)),
+        ("acosh(-1.00000000000000000001)", und, und),
+        ("atanh(0.99999999999999999999)", is(t), und),
+        ("atanh(-0.99999999999999999999)", is(-t), und),
+        ("atanh(1.00000000000000000001)", und, und),
+        ("atanh(-1.00000000000000000001)", und, und),
+        ("acoth(1.00000000000000000001)", is(t), und),
+        ("acoth(-1.00000000000000000001)", is(-t), und),
+        ("acoth(0.99999999999999999999)", und, und),
+        ("asec(0.99999999999999999999)", und, is(0.0)),
+        ("asec(1.00000000000000000001)", is(s), is(0.0)),
+        ("asec(-1.00000000000000000001)", is(PI - s), is(PI)),
+        ("asec(-0.99999999999999999999)", und, is(PI)),
+        ("acsc(0.99999999999999999999)", und, is(FRAC_PI_2)),
+        ("acsc(1.00000000000000000001)", is(FRAC_PI_2 - s), is(FRAC_PI_2)),
+        ("acsc(-1.00000000000000000001)", is(s - FRAC_PI_2), is(-FRAC_PI_2)),
+        ("asech(1.00000000000000000001)", und, is(0.0)),
+        ("asech(0.99999999999999999999)", is(s), is(0.0)),
+        ("asech(-0.99999999999999999999)", und, und),
+        // What reads the side.
+        ("sign(acos(0.99999999999999999999))", is(1.0), is(0.0)),
+        ("1/acosh(1.00000000000000000001)", is(1.0 / s), V::Refused),
+    ] {
+        check_at(text, OFF, Radians, 0.0, off);
+        check_at(text, TI, Radians, 0.0, ti);
+    }
+    // An angle comes out in the unit.
+    for (text, off, ti) in [
+        ("acos(0.99999999999999999999)", is(s.to_degrees()), is(0.0)),
+        ("asin(0.99999999999999999999)", is(90.0 - s.to_degrees()), is(90.0)),
+        ("asec(-1.00000000000000000001)", is(180.0 - s.to_degrees()), is(180.0)),
+        ("acsc(-1.00000000000000000001)", is(s.to_degrees() - 90.0), is(-90.0)),
+        ("asin(1.00000000000000000001)", und, is(90.0)),
+    ] {
+        check_at(text, OFF, Degrees, 0.0, off);
+        check_at(text, TI, Degrees, 0.0, ti);
+    }
+    for digits in [OFF, TI] {
+        // Arithmetic on short numbers lands beside ±1 at any setting.
+        check("acos(1-10^(-30))", digits, is(2e-30f64.sqrt()));
+        check("asin(1+10^(-30))", digits, und);
+        check("atanh(10^(-30)-1)", digits, is(-0.5 * 2e30f64.ln()));
+        check("acosh(1-10^(-30))", digits, und);
+        // On ±1 itself, away from it, and beside 0, nothing changes.
+        check("asin(1)", digits, is(FRAC_PI_2));
+        check("acos(0.5+0.5)", digits, is(0.0));
+        check("atanh(1)", digits, und);
+        check("acosh(1)", digits, is(0.0));
+        check("asin(0.5)", digits, is(0.5f64.asin()));
+        check("asech(10^(-400))", digits, is((2.0f64).ln() + 400.0 * 10f64.ln()));
+        check("asech(-(10^(-400)))", digits, und);
+        check("acsc(10^(-400))", digits, und);
+        // With x in it the function is the program's, in doubles.
+        let v = views_at("acos(x-0.00000000000000000001)", digits, Radians, 1.0, 1.0);
+        assert_eq!(v.compiled, is(0.0));
+    }
+    plots_as("10^10*acos(0.99999999999999999999)+sin(x)", OFF, Radians, |x| {
+        1e10 * s + x.sin()
+    });
+    plots_as("atanh(0.99999999999999999999)-20+sin(x)", OFF, Radians, |x| {
+        t - 20.0 + x.sin()
+    });
+}

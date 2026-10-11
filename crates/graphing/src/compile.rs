@@ -2230,7 +2230,9 @@ fn rounds_onto(a: &Expr, opts: &CompileOptions<'_>) -> Option<(Rat, f64)> {
 /// function turns on without being it: a quarter turn in degrees or grads
 /// (off, `tan(90.00000000000000000001)`, or `tan(90 + 10^(-30))` at any
 /// setting), 1 under a logarithm or as its base
-/// (`ln(1.00000000000000000001)`). The argument's double sits on that
+/// (`ln(1.00000000000000000001)`), ±1 where an inverse function's domain
+/// ends or it has a pole (`arcsin(1.00000000000000000001)`,
+/// `artanh(0.99999999999999999999)`). The argument's double sits on that
 /// number, so the general
 /// path would give the function there (a pole for a value beside it, an
 /// exact 0 for a value that isn't): the exact value decides instead
@@ -2326,6 +2328,76 @@ pub(crate) fn exact_call(f: Func, args: &[Expr], opts: &CompileOptions<'_>) -> O
             } else {
                 None
             }
+        }
+        // The inverse functions that turn at ±1, the end of a domain or a
+        // pole: off, arcsin(1.00000000000000000001) is undefined, not the
+        // quarter turn of its double, arccos(0.99999999999999999999) is
+        // 1.4·10⁻¹⁰, not 0, and artanh of it is 23.4, not a pole. With u
+        // the argument or its negative, whichever rounds onto 1, each is
+        // written from 1 − u or u − 1, folded exactly:
+        // arccos u = 2·arcsin √((1 − u)/2), arcosh u = 2·arsinh √((u − 1)/2),
+        // artanh u = ½·ln((1 + u)/(1 − u)), and the others from those
+        // (arcsin u = arcsin 1 − arccos u; arcsec, arccsc, arsech and
+        // arcoth are those of 1/u).
+        Asin | Acos | Acosh | Atanh | Acoth | Asec | Acsc | Asech => {
+            let (r, d) = rounds_onto(&args[0], opts)?;
+            if d.abs() != 1.0 {
+                return None;
+            }
+            let neg = d < 0.0;
+            if neg && matches!(f, Acosh | Asech) {
+                // Undefined either side of −1, as at −1.
+                return None;
+            }
+            let inside = r.abs().cmp(&Rat::int(1)) == std::cmp::Ordering::Less;
+            let u = signed(if neg { -1.0 } else { 1.0 }, args[0].clone());
+            let bin = Expr::bin;
+            let (one, two) = (|| num(1.0), || num(2.0));
+            // 1 − u inside the ends, u − 1 outside: above 0.
+            let off = if inside {
+                bin(BinOp::Sub, one(), u.clone())
+            } else {
+                bin(BinOp::Sub, u.clone(), one())
+            };
+            // 2·g(√(v/2)), for arccos (g = arcsin) and arcosh (g = arsinh).
+            let twice = |g: Func, v: Expr| {
+                let root = Expr::call1(Sqrt, bin(BinOp::Div, v, two()));
+                bin(BinOp::Mul, two(), Expr::call1(g, root))
+            };
+            // ½·ln((1 + u)/v), v = |1 − u|.
+            let half_ln = |v: Expr| {
+                let q = bin(BinOp::Div, bin(BinOp::Add, one(), u.clone()), v);
+                bin(BinOp::Div, Expr::call1(Ln, q), two())
+            };
+            let sign = if neg { -1.0 } else { 1.0 };
+            let quarter = || Expr::call1(Asin, one());
+            let half = || Expr::call1(Acos, num(-1.0));
+            // arccos of u, or of −u (half a turn less it).
+            let acos = |t: Expr| {
+                if neg {
+                    bin(BinOp::Sub, half(), t)
+                } else {
+                    t
+                }
+            };
+            let over_u = |v: Expr| bin(BinOp::Div, v, u.clone());
+            let rewritten = match (f, inside) {
+                (Asin, true) => signed(sign, bin(BinOp::Sub, quarter(), twice(Asin, off))),
+                (Acos, true) => acos(twice(Asin, off)),
+                (Atanh, true) => signed(sign, half_ln(off)),
+                (Asech, true) => twice(Asinh, over_u(off)),
+                (Acosh, false) => twice(Asinh, off),
+                (Acoth, false) => signed(sign, half_ln(off)),
+                (Asec, false) => acos(twice(Asin, over_u(off))),
+                (Acsc, false) => signed(
+                    sign,
+                    bin(BinOp::Sub, quarter(), twice(Asin, over_u(off))),
+                ),
+                // The other side of the end: undefined (as √−1 is, in
+                // every view).
+                _ => Expr::call1(Sqrt, num(-1.0)),
+            };
+            Some(Exact::As(rewritten))
         }
         _ => None,
     }
