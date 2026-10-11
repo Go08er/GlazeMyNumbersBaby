@@ -150,6 +150,52 @@ pub fn fmt(v: f64) -> String {
     format_nonzero(v)
 }
 
+/// The number a panel text shows ("≈208060", "≈8.32289×10⁻⁶", "−2"), and
+/// how many significant digits it is written with.
+pub fn panel_number(text: &str) -> Option<(f64, usize)> {
+    let t = text.trim().trim_start_matches('≈').replace('−', "-");
+    let (mantissa, power) = match t.split_once("×10") {
+        Some((m, p)) => {
+            let p: String = p
+                .chars()
+                .map(|c| match c {
+                    '⁻' => Some('-'),
+                    '⁰' => Some('0'),
+                    '¹' => Some('1'),
+                    '²' => Some('2'),
+                    '³' => Some('3'),
+                    '⁴'..='⁹' => char::from_digit(c as u32 - '⁰' as u32, 10),
+                    _ => None,
+                })
+                .collect::<Option<String>>()?;
+            (m.to_string(), p.parse::<i32>().ok()?)
+        }
+        None => (t.clone(), 0),
+    };
+    let value = mantissa.parse::<f64>().ok()? * 10f64.powi(power);
+    let digits = mantissa
+        .trim_start_matches(['-', '0', '.'])
+        .chars()
+        .filter(char::is_ascii_digit)
+        .count();
+    Some((value, digits.max(1)))
+}
+
+/// Two approximate panel texts ("≈…") that are one value written to
+/// different numbers of digits: the longer rounds to the shorter (at
+/// least three digits of it).
+pub fn shown_alike(a: &str, b: &str) -> bool {
+    if !(a.starts_with('≈') && b.starts_with('≈')) {
+        return false;
+    }
+    let (Some((va, da)), Some((vb, db))) = (panel_number(a), panel_number(b)) else {
+        return false;
+    };
+    let digits = da.min(db);
+    let to = |v: f64| format!("{:.*e}", digits - 1, v);
+    digits >= 3 && to(va) == to(vb)
+}
+
 /// Two values the panel would show alike: the same closed form or text,
 /// or the same six significant digits (an approximate value is written
 /// to at most six, its form chosen from the rounded value: 1000000 and
@@ -314,7 +360,8 @@ impl F {
     /// operation's own rounding (ε of its result, 2ε for library
     /// functions), plus its operands' errors carried through it (a
     /// function's by its slope there, measured over the error or 10⁻⁸ of
-    /// its argument, so a jump within reach counts whole). x and the
+    /// its argument, so a jump within reach counts whole, or by its change
+    /// over the error at four points of it if that is more). x and the
     /// literals are exact.
     pub fn error(&self, e: &Expr, x: f64) -> (f64, f64) {
         use graphing::ast::BinOp;
@@ -365,8 +412,21 @@ impl F {
                         }
                     };
                     let slope = ((at(va + h) - at(va - h)) / (2.0 * h)).abs();
+                    // And the function's change over the error itself, at
+                    // four points of it: a slope over an error of many
+                    // periods says nothing (8/cos(x − 2⁶³) at −1.8·10¹⁴,
+                    // where x − 2⁶³ is rounded by up to 1024: the slope
+                    // gave 10⁻⁷ for a value that is anyone's).
+                    let here = at(va);
+                    let spread = [1.0, -1.0, 0.41421356, -0.41421356]
+                        .iter()
+                        .map(|t| (at(va + t * ea) - here).abs())
+                        .fold(
+                            0.0f64,
+                            |m, d| if d.is_nan() { f64::INFINITY } else { m.max(d) },
+                        );
                     total += if slope.is_finite() {
-                        slope * ea
+                        (slope * ea).max(spread)
                     } else {
                         f64::INFINITY
                     };
@@ -2693,7 +2753,12 @@ pub fn check_pair_in(lhs: &str, rhs: &str, positive: bool, set: &Setting<'_>) ->
     };
     if both(flags::Y_INTERCEPT) {
         let ok = match (dl.y_intercept, dr.y_intercept) {
-            (Some(a), Some(b)) => same(a, b),
+            // (Or shown to different numbers of digits, the longer one
+            // rounding to the shorter: a value known to an enclosure is
+            // written to the digits the enclosure fixes, and
+            // sin((0.1 + 0.9)·(−2147483649)) is ≈0.3247 where
+            // sin(1·(−2147483649)) is ≈0.324686.)
+            (Some(a), Some(b)) => same(a, b) || shown_alike(&kl.y_intercept, &kr.y_intercept),
             (None, None) => true,
             _ => false,
         };

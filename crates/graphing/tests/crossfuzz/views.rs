@@ -1320,28 +1320,6 @@ fn partial_items(l: &Loaded, k: &KeyGraphFeatures, mp: Mp<'_>, out: &mut Outcome
     }
 }
 
-/// The number a panel text shows: "≈208060", "≈8.32289×10⁻⁶", "−2".
-fn panel_number(text: &str) -> Option<f64> {
-    let t = text.trim().trim_start_matches('≈').replace('−', "-");
-    let Some((mantissa, power)) = t.split_once("×10") else {
-        return t.parse().ok();
-    };
-    let power: String = power
-        .chars()
-        .map(|c| match c {
-            '⁻' => Some('-'),
-            '⁰'..='⁹' if c != '¹' && c != '²' && c != '³' => {
-                char::from_digit(c as u32 - '⁰' as u32, 10)
-            }
-            '¹' => Some('1'),
-            '²' => Some('2'),
-            '³' => Some('3'),
-            _ => None,
-        })
-        .collect::<Option<String>>()?;
-    Some(mantissa.parse::<f64>().ok()? * 10f64.powi(power.parse().ok()?))
-}
-
 /// Whether the y-intercept, which the oracle's check found off f(0) (it
 /// reads the panel's number, to six digits), is right as shown. A value
 /// the certificate knows to an enclosure is shown to as many significant
@@ -1387,8 +1365,8 @@ fn shown_as_enclosed(
         }
     };
     let shown = to(lo, digits);
-    panel_number(&k.y_intercept)
-        .is_some_and(|p| to(p, 6) == to(shown.parse().unwrap_or(f64::NAN), 6))
+    checks::panel_number(&k.y_intercept)
+        .is_some_and(|(p, _)| to(p, 6) == to(shown.parse().unwrap_or(f64::NAN), 6))
         && to(flo, digits) == shown
         && to(fhi, digits) == shown
 }
