@@ -48,10 +48,18 @@ impl Scope {
     }
 }
 
-/// Is `x` (enclosed) a repeat of one of `xs` by a multiple of the period:
-/// does it meet e + k·P for the nearest k ≠ 0, over e's and the period's
-/// enclosures (rounded outward)? Nothing looser: a period of 10⁻¹² keeps
-/// its members apart.
+/// Can `x` (enclosed) not be told from a repeat of one of `xs` by a
+/// multiple of the period: does it meet e + k·P for the nearest k ≠ 0,
+/// over e's and the period's enclosures (rounded outward)?
+///
+/// The rows list what they find in one period [s, s + P], whose start
+/// was chosen with f, f′ and f″ nonzero within 10⁻⁶·P of it
+/// (`periodic_window`): nothing found there is within that of either
+/// end, so no two things found are a period apart, and each is its own
+/// family. Two that meet a period apart are enclosed too widely to say
+/// so: the row is then not decided. (They used to be taken for one
+/// family, and the second dropped: enclosures that meet are not one
+/// point. Round-19 audit of premises.)
 fn repeats(xs: &[Enc], x: &Enc, period: &Enc) -> bool {
     let p = Interval::new(period.lo.0, period.hi.0);
     xs.iter().any(|e| {
@@ -174,14 +182,14 @@ pub fn zeros(c0: &Cover, scope: &Scope, extra: &[Claim], clear: bool) -> Row<Vec
     if let Some(period) = scope.period {
         // Over one period: each zero repeats.
         let mut seen: Vec<Enc> = Vec::new();
-        out.retain(|s| match s {
-            Spot::At(x) => {
-                let keep = !repeats(&seen, x, &period);
+        for s in &out {
+            if let Spot::At(x) = s {
+                if repeats(&seen, x, &period) {
+                    return Row::unknown("two zeros of one period are not told apart");
+                }
                 seen.push(*x);
-                keep
             }
-            Spot::Every(_) => true,
-        });
+        }
         for s in out.iter_mut() {
             if let Spot::At(x) = *s {
                 *s = Spot::Every(Family { x0: x, period });
@@ -626,6 +634,7 @@ pub fn extrema(
                     &p,
                 )
             {
+                complete = false;
                 continue;
             }
             let y = f.val_tight(Interval::new(x.lo.0, x.hi.0))?;
@@ -680,6 +689,7 @@ pub fn inflections(
                     &p,
                 )
             {
+                complete = false;
                 continue;
             }
             let y = f.val_tight(Interval::new(x.lo.0, x.hi.0))?;
@@ -1261,9 +1271,12 @@ pub fn vertical(
         let mut seen: Vec<Enc> = Vec::new();
         let mut fams = Vec::new();
         for s in out {
-            if let Spot::At(x) = s
-                && !repeats(&seen, &x, &period)
-            {
+            if let Spot::At(x) = s {
+                if repeats(&seen, &x, &period) {
+                    return Ok(Row::unknown(
+                        "two asymptotes of one period are not told apart",
+                    ));
+                }
                 seen.push(x);
                 fams.push(Spot::Every(Family { x0: x, period }));
             }
