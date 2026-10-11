@@ -397,7 +397,7 @@ fn drop_into_text(text: &gtk::Text, mut dropped: String, x: f64) {
 /// insertion or deletion, outside one of its own changes, as irreversible
 /// and clears its undo history for it (GTK 4.22 `gtk_text_insert_text`,
 /// `gtk_text_delete_text`).
-fn replace_selection(text: &gtk::Text, with: &str) {
+pub(crate) fn replace_selection(text: &gtk::Text, with: &str) {
     if text.selection_bounds().is_some() {
         // With a selection, it is what goes, whatever the count.
         text.emit_delete_from_cursor(gtk::DeleteType::Chars, 1);
