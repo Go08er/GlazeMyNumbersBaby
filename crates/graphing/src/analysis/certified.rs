@@ -2349,8 +2349,25 @@ pub(super) fn features(
         }
     };
 
-    // Period.
-    if constant.is_some() && domain_whole {
+    // Period. (A constant by its one value, or by f′ ≡ 0 on the whole line
+    // where the value has no enclosure: sin x − sin x + e^(10¹⁶) was "not
+    // periodic" in this row and "(−∞, ∞) constant" in the monotonicity
+    // row, and e^(10¹⁶) alone "constant" in both; found by
+    // `tests/crossfuzz.rs`.)
+    let constant_line = matches!(
+        &a.monotonicity,
+        Row::Certified { value, .. } if matches!(
+            value.as_slice(),
+            [certify::Monotone {
+                on: Piece {
+                    lo: Bound::NegInf,
+                    hi: Bound::PosInf,
+                },
+                dir: certify::Dir::Constant,
+            }]
+        )
+    );
+    if (constant.is_some() || constant_line) && domain_whole {
         out.k.periodicity_direction = Periodicity::Constant;
     } else {
         match a.period.value() {

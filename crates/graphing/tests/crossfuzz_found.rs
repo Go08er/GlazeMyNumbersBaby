@@ -796,3 +796,28 @@ fn no_oblique_asymptote_is_said_by_the_degrees_alone() {
         a.oblique
     );
 }
+
+/// A function constant on the whole line is "constant" in the panel's
+/// period row (every shift is a period). The panel knew a constant by its
+/// value, and e^(10¹⁶) has none in the doubles: sin x − sin x + e^(10¹⁶)
+/// was "not periodic" there, beside "(−∞, ∞) constant" in the
+/// monotonicity row, while e^(10¹⁶) alone was "constant".
+#[test]
+fn a_constant_whose_value_is_past_the_doubles_is_constant_in_the_period_row() {
+    use graphing::analysis::{Periodicity, analyze};
+    for src in [
+        "sin(x)-sin(x)+exp(10^16)",
+        "exp(10^16)",
+        "cos(x)-cos(x)+10^400",
+        "sin(x)-sin(x)+exp(2)",
+        "exp(2)+0*x",
+    ] {
+        let eq = Equation::parse(&format!("y={src}")).expect("parses");
+        let k = analyze(&eq, &CompileOptions::default());
+        assert_eq!(k.periodicity_direction, Periodicity::Constant, "{src}");
+    }
+    // A function that isn't constant keeps its row.
+    let eq = Equation::parse("y=x+exp(10^16)-exp(10^16)+x^2").expect("parses");
+    let k = analyze(&eq, &CompileOptions::default());
+    assert_ne!(k.periodicity_direction, Periodicity::Constant);
+}
