@@ -383,7 +383,12 @@ impl F {
                 match op {
                     BinOp::Add | BinOp::Sub => ea + eb + eps * r,
                     BinOp::Mul => va.abs() * eb + vb.abs() * ea + eps * r,
-                    BinOp::Div => (ea + r * eb) / vb.abs() + eps * r,
+                    // (A divisor not told from 0 by its own error leaves
+                    // the quotient anywhere: 8/(1 − cos(x − 2⁶³)), whose
+                    // cosine is anyone's, is 8.1 in doubles at −30 and
+                    // 783 in fact.)
+                    BinOp::Div if eb >= vb.abs() => f64::INFINITY,
+                    BinOp::Div => (ea + r * eb) / (vb.abs() - eb) + eps * r,
                     BinOp::Pow => {
                         let base = if va == 0.0 {
                             0.0
