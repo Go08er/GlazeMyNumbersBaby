@@ -589,3 +589,149 @@ fn a_claim_about_f_at_an_enclosed_end_needs_f_defined_there() {
     assert!(a.extrema.is_certified(), "{:?}", a.extrema);
     assert!(a.range.is_certified(), "{:?}", a.range);
 }
+
+/// A power's written ratio went into pow as the double nearest it, and
+/// pow(1000, 1/3) is 9.999999999999998: (x^(1/3))! had a value at −1000,
+/// where the cube root is −10 and the factorial undefined (the interval
+/// form, which takes cube roots exactly, had it right), ⌊x^(1/3)⌋ was 9 at
+/// 1000, and ⌊x^(1/7)⌋ and ⌊root(x, 7)⌋ were 9 at 10⁷.
+#[test]
+fn a_power_with_a_written_ratio_is_the_root_where_that_is_a_double() {
+    use graphing::functions::pow_rational;
+    // The tester's case, and its minimised form.
+    assert!(scalar("(x^(1/3))!", -1000.0).is_nan());
+    assert!(scalar("1/(x^(1/3))!", -1000.0).is_nan());
+    assert!(matches!(reference("(x^(1/3))!", -1000.0), R::Undef));
+    // One function, three spellings: the same number to the bit.
+    for x in [
+        1000.0, -1000.0, 27.0, 0.001, 2.0, -7.5, 0.1, 1e-5, 1e10, 123456.789, 1e45, -1e-300, 3e200,
+        5e-324,
+    ] {
+        let (a, b, c) = (
+            scalar("x^(1/3)", x),
+            scalar("root(x,3)", x),
+            scalar("cbrt(x)", x),
+        );
+        assert_eq!(
+            a.to_bits(),
+            c.to_bits(),
+            "x^(1/3) and cbrt(x) at {x:e}: {a:e}, {c:e}"
+        );
+        assert_eq!(
+            b.to_bits(),
+            c.to_bits(),
+            "root(x,3) and cbrt(x) at {x:e}: {b:e}, {c:e}"
+        );
+    }
+    for (f, x, want) in [
+        ("floor(x^(1/3))", 1000.0, 10.0),
+        ("floor(x^(1/7))", 1e7, 10.0),
+        ("floor(root(x,7))", 1e7, 10.0),
+        ("x^(2/3)", 8.0, 4.0),
+        ("x^(2/3)", -1000.0, 100.0),
+        ("x^(1/5)", 100000.0, 10.0),
+        ("x^(1/5)", -100000.0, -10.0),
+        ("x^(3/5)", 32.0, 8.0),
+        ("x^(7/5)", 243.0, 2187.0),
+        ("x^(-1/5)", 32.0, 0.5),
+        ("x^(-2/3)", 8.0, 0.25),
+        ("x^(3/2)", 1e300, 1e300f64.powf(1.5)),
+    ] {
+        assert_eq!(scalar(f, x), want, "{f} at {x:e}");
+    }
+    // Every q-th power of an odd g (and of g times a power of two) a
+    // double holds has g for its root, and g² for the power 2/q.
+    for q in [3i32, 5, 6, 7, 9, 10, 11, 12, 13, 15, 20, 33] {
+        let most = 2f64.powi(53);
+        let mut g = 3.0f64;
+        let mut checked = 0;
+        while g.powi(q) < most && checked < 3000 {
+            for k in [-3i32, 0, 2] {
+                let a = g.powi(q) * 2f64.powi(q * k);
+                let root = g * 2f64.powi(k);
+                assert_eq!(pow_rational(a, 1, q), root, "({a:e})^(1/{q})");
+                if q % 2 != 0 {
+                    assert_eq!(pow_rational(-a, 1, q), -root, "(-{a:e})^(1/{q})");
+                    assert_eq!(pow_rational(a, 2, q), root * root, "({a:e})^(2/{q})");
+                }
+                if q > 3 {
+                    assert_eq!(pow_rational(a, 3, q), root * root * root, "({a:e})^(3/{q})");
+                }
+            }
+            checked += 1;
+            // (Every g while there are few, then a spread of them.)
+            g += if checked < 600 {
+                2.0
+            } else {
+                2.0 * (1.0 + (g / 300.0).floor())
+            };
+        }
+        assert!(checked > 0, "q = {q}");
+    }
+}
+
+/// The rational power against MPFR: within an ulp at random bases, for
+/// ratios of every kind (a double, a cube root, small and large parts,
+/// near 1 and far).
+#[cfg(feature = "mpfr-oracle")]
+#[test]
+fn a_power_with_a_written_ratio_is_within_an_ulp() {
+    use graphing::functions::pow_rational;
+    use rug::Float;
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = move || {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    for (p, q) in [
+        (1, 3),
+        (2, 3),
+        (-1, 3),
+        (-2, 3),
+        (4, 3),
+        (1, 5),
+        (2, 5),
+        (-3, 5),
+        (7, 5),
+        (1, 6),
+        (5, 6),
+        (1, 7),
+        (3, 4),
+        (7, 4),
+        (37, 100),
+        (-9, 10),
+        (22, 7),
+        (1, 33),
+        (32, 33),
+        (1, 34),
+        (999_999, 1_000_000),
+        (1, 999_983),
+        (123_457, 3),
+    ] {
+        for i in 0..4000 {
+            // Near 1, ordinary sizes, and all of the doubles' range.
+            let a = match i % 4 {
+                0 => 0.5 + next(),
+                1 => 1000.0 * next() + 1e-3,
+                2 => 2f64.powf(60.0 * next() - 30.0),
+                _ => 2f64.powf(2000.0 * next() - 1000.0),
+            };
+            let got = pow_rational(a, p, q);
+            let mut l = Float::with_val(240, a);
+            l.ln_mut();
+            l *= p;
+            l /= q;
+            l.exp_mut();
+            let want = l.to_f64();
+            if !(want.is_finite() && want > f64::MIN_POSITIVE) {
+                continue;
+            }
+            assert!(
+                got == want || got == want.next_up() || got == want.next_down(),
+                "({a:e})^({p}/{q}): {got:e}, and MPFR has {want:e}"
+            );
+        }
+    }
+}
