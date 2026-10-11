@@ -2799,3 +2799,585 @@ fn crafted_memory_costs_the_restore_nothing() {
         assert_eq!(unread(&vm), 0);
     }
 }
+
+/// F-E keeps a number's digits below 1, wherever its text goes: upstream
+/// cut a digit for every decade below 1 (Scientific, F-E, 1 ÷ 3 ÷ 1e40 =
+/// read 0.e-41), on the display, in what a screen reader is told and what
+/// Copy takes, in History, the memory list and the expression line, and so
+/// in a saved session, from which the memory slot came back as 0.
+#[test]
+fn f_e_keeps_the_digits_of_a_small_number_wherever_they_go() {
+    use Button::*;
+    let third = "3.3333333333333333333333333333333e-41";
+    let mut vm = new_vm();
+    vm.set_mode(CalcMode::Scientific);
+    press_all(
+        &mut vm,
+        &[FToE, One, Divide, Three, Divide, One, Exp, Four, Zero],
+    );
+    vm.take_announcements();
+    vm.press(Equals);
+    assert_eq!(vm.display_value(), third);
+    assert_eq!(
+        vm.take_announcements(),
+        [crate::Announcement::Display {
+            value: third.into(),
+            feedback: Option::None
+        }]
+    );
+    assert_eq!(vm.copy_text(), third);
+    assert_eq!(vm.expression(), "1.e+0 ÷ 3.e+0 ÷ 1.e+40=");
+    assert_eq!(vm.history()[0].result, third);
+    vm.press(Memory);
+    assert_eq!(vm.memory(), [third]);
+
+    // Saved and restored: MR recalls the number the slot showed.
+    let state = vm.save_state();
+    let saved: Value = serde_json::from_str(&state).unwrap();
+    assert_eq!(saved["x"]["mem"], json!([third]));
+    assert_eq!(saved["s"]["p"]["d"], json!(third));
+    let mut restored = new_vm();
+    assert!(restored.restore_state_checked(&state));
+    assert_eq!(observed(&restored), observed(&vm));
+    assert_eq!(restored.history()[0].result, third);
+    restored.press(MemoryRecall);
+    assert_eq!(restored.display_value(), third);
+    // It is that number, 32 threes: three of it are 32 nines (where the
+    // uninterrupted session, which holds the quotient itself, shows 1).
+    press_all(&mut restored, &[Multiply, Three, Equals]);
+    assert_eq!(
+        restored.display_value(),
+        "9.9999999999999999999999999999999e-41"
+    );
+
+    // As an operand of the expression line, and then of a History item.
+    vm.press(MemoryRecall);
+    vm.press(Multiply);
+    assert_eq!(vm.expression(), format!("{third} × "));
+    press_all(&mut vm, &[Three, Equals]);
+    assert_eq!(vm.display_value(), "1.e-40");
+    assert_eq!(vm.history()[0].expression, format!("{third}   ×   3.e+0 ="));
+    assert_eq!(vm.history()[0].result, "1.e-40");
+
+    // At every distance below 1, in both modes; and a number typed short.
+    for (mode, digits) in [(CalcMode::Scientific, 32), (CalcMode::Standard, 16)] {
+        for k in [0, 2, 10, 20, 31, 32, 40, 99, 9998] {
+            let mut vm = new_vm();
+            vm.set_mode(CalcMode::Scientific);
+            press_all(&mut vm, &[One, Divide, Three, Divide]);
+            assert!(vm.paste(&format!("1e{k}")));
+            press_all(&mut vm, &[Equals, FToE, Memory]);
+            // Standard mode has an engine of its own, which F-E doesn't
+            // reach: it shows the slot in its 16 digits, with an exponent
+            // once plain notation would take more than them.
+            vm.set_mode(mode);
+            let shown = format!("3.{}e-{}", "3".repeat(digits - 1), k + 1);
+            if mode == CalcMode::Scientific {
+                assert!(vm.is_fe());
+                vm.press(MemoryRecall);
+                assert_eq!(vm.display_value(), shown, "k {k}");
+                vm.press(MemoryAdd);
+                assert_eq!(vm.memory()[0], format!("6.{}7e-{}", "6".repeat(30), k + 1));
+            } else if k >= 3 {
+                assert_eq!(vm.memory(), [shown.as_str()], "k {k}");
+            }
+        }
+    }
+    let mut vm = new_vm();
+    vm.set_mode(CalcMode::Scientific);
+    assert!(vm.paste("1.2345e-50"));
+    vm.press(FToE);
+    assert_eq!(vm.display_value(), "1.2345e-50");
+}
+
+/// F-E is a key of Scientific mode alone: the other modes' panels don't
+/// have it (nor the keyboard, there), and a state saved with it on in one
+/// of them is one no restore brings back. Pressed there it does nothing.
+#[test]
+fn f_e_is_a_key_of_scientific_mode_alone() {
+    use Button::*;
+    for mode in [CalcMode::Standard, CalcMode::Programmer] {
+        let mut vm = new_vm();
+        vm.set_mode(mode);
+        press_all(&mut vm, &[Five, Memory]);
+        let before = observed(&vm);
+        assert!(!vm.is_enabled(FToE), "{mode:?}");
+        vm.press(FToE);
+        assert!(!vm.is_fe(), "{mode:?}");
+        assert_eq!(observed(&vm), before, "{mode:?}");
+        let mut restored = new_vm();
+        assert!(restored.restore_state_checked(&vm.save_state()), "{mode:?}");
+        assert_eq!(observed(&restored), before, "{mode:?}");
+    }
+    let mut vm = new_vm();
+    vm.set_mode(CalcMode::Scientific);
+    assert!(vm.is_enabled(FToE));
+    press_all(&mut vm, &[Five, FToE]);
+    assert!(vm.is_fe());
+    assert_eq!(vm.display_value(), "5.e+0");
+}
+
+/// A mode left while it showed an error comes back as its buttons show.
+/// Upstream's mode switch sends its commands to an engine that ignores
+/// them in an error: Programmer, HEX, 1 ÷ 0 =, Scientific, Programmer
+/// showed DEC selected with the engine in radix 16 (A was a digit, the
+/// memory list hexadecimal), and Scientific, F-E, 1 ÷ 0 =, Standard,
+/// Scientific showed F-E off while 7 = gave 7.e+0.
+#[test]
+fn a_mode_left_on_an_error_comes_back_as_its_buttons_show() {
+    use Button::*;
+    let engine = |vm: &CalculatorViewModel| {
+        let engine = vm
+            .vm
+            .standard_calculator_manager
+            .current_calculator_engine()
+            .unwrap();
+        (
+            engine.radix(),
+            engine.number_format(),
+            engine.num_width(),
+            engine.f_in_error_state(),
+        )
+    };
+    let divide_by_zero = [One, Divide, Zero, Equals];
+    for other in [CalcMode::Standard, CalcMode::Scientific] {
+        let mut vm = new_vm();
+        vm.set_mode(CalcMode::Programmer);
+        vm.set_word_size(WordSize::Byte);
+        vm.set_radix(Radix::Hex);
+        press_all(&mut vm, &divide_by_zero);
+        assert!(vm.is_error());
+        vm.set_mode(other);
+        assert!(!vm.is_error());
+        press_all(&mut vm, &[Five, Memory]);
+        vm.set_mode(CalcMode::Programmer);
+        assert_eq!(
+            (vm.radix(), vm.word_size(), vm.is_error()),
+            (Radix::Dec, WordSize::Byte, false)
+        );
+        assert_eq!(
+            engine(&vm),
+            (
+                10,
+                calcmanager::NumberFormat::Float,
+                calcmanager::NumWidth::ByteWidth,
+                false
+            )
+        );
+        assert!(!vm.is_enabled(A));
+        assert_eq!(vm.memory(), ["5"]);
+        press_all(&mut vm, &[Nine, Nine, Memory]);
+        assert_eq!(vm.display_value(), "99");
+        assert_eq!(vm.memory(), ["99", "5"]);
+        assert_eq!(vm.radix_value(Radix::Hex), "63");
+    }
+    for other in [CalcMode::Standard, CalcMode::Programmer] {
+        let mut vm = new_vm();
+        vm.set_mode(CalcMode::Scientific);
+        vm.press(Radians);
+        vm.press(FToE);
+        press_all(&mut vm, &divide_by_zero);
+        assert!(vm.is_error());
+        vm.set_mode(other);
+        assert!(!vm.is_error() && !vm.is_fe());
+        vm.set_mode(CalcMode::Scientific);
+        assert!(!vm.is_fe());
+        assert_eq!(vm.angle_unit(), AngleUnit::Radians);
+        assert_eq!(engine(&vm).1, calcmanager::NumberFormat::Float);
+        press_all(&mut vm, &[Seven, Equals]);
+        assert_eq!(vm.display_value(), "7");
+    }
+    // A paste error is the view model's alone: the engine wasn't in one,
+    // and its calculation is left to the mode switch, as before.
+    let mut vm = new_vm();
+    vm.set_mode(CalcMode::Scientific);
+    vm.press(FToE);
+    assert!(!vm.paste("x"));
+    vm.set_mode(CalcMode::Standard);
+    vm.set_mode(CalcMode::Scientific);
+    assert!(!vm.is_fe() && !vm.is_error());
+    press_all(&mut vm, &[Seven, Equals]);
+    assert_eq!(vm.display_value(), "7");
+}
+
+/// An error that followed an "=" which worked something out: coming back
+/// to the calculator clears the expression line above it (the engine
+/// clears the line on the first command after such an "=", before the
+/// error makes it ignore the command, and the calculator shown again sends
+/// one). A restored session does the same; it used to keep the line until
+/// a key cleared the error. With no such "=" before it, both keep it.
+#[test]
+fn an_error_after_equals_restores_with_what_clears_its_expression() {
+    use Button::*;
+    let scripts: [&[Button]; 5] = [
+        &[One, Divide, Zero, Equals],
+        &[Two, Add, Three, Equals, Negate, Sqrt],
+        &[Subtract, Five, OpenParenthesis, Equals, InvSech],
+        &[Five, Negate, Sqrt],
+        &[Five, Negate, Equals, Sqrt],
+    ];
+    for (i, keys) in scripts.into_iter().enumerate() {
+        let mut original = new_vm();
+        original.set_mode(CalcMode::Scientific);
+        press_all(&mut original, keys);
+        assert!(original.is_error(), "{keys:?}");
+        let line = original.expression();
+        assert!(!line.is_empty(), "{keys:?}");
+        let state = original.save_state();
+        let before = observed(&original);
+
+        // The uninterrupted session, shown again.
+        original.set_mode(CalcMode::Scientific);
+        assert!(original.is_error(), "{keys:?}");
+        let cleared = original.expression().is_empty();
+        assert!(cleared || original.expression() == line, "{keys:?}");
+        assert_eq!(cleared, i < 3, "{keys:?}");
+        let after = observed(&original);
+        drop(original);
+
+        // What says so is saved, and the restored session does the same.
+        let saved: Value = serde_json::from_str(&state).unwrap();
+        assert_eq!(saved["x"]["k"]["cl"] == json!(true), cleared, "{keys:?}");
+        let mut restored = new_vm();
+        restored.restore_state(&state);
+        assert_eq!(observed(&restored), before, "{keys:?}");
+        assert_eq!(restored.save_state(), state, "{keys:?}");
+        restored.set_mode(CalcMode::Scientific);
+        assert_eq!(observed(&restored), after, "{keys:?}");
+        // Saved again with the line cleared, it stays so.
+        let state = restored.save_state();
+        drop(restored);
+        let mut restored = new_vm();
+        restored.restore_state(&state);
+        assert_eq!(observed(&restored), after, "{keys:?}");
+        restored.set_mode(CalcMode::Scientific);
+        assert_eq!(observed(&restored), after, "{keys:?}");
+        // A key clears the error and the rest, as ever.
+        restored.press(Seven);
+        assert_eq!(
+            (
+                restored.display_value(),
+                restored.expression(),
+                restored.is_error()
+            ),
+            ("7".to_string(), String::new(), false),
+            "{keys:?}"
+        );
+    }
+}
+
+/// The engine holds an expression line of its own, or none, and a radix
+/// command shows the one it holds. DEC is sent whenever the calculator is
+/// shown again, so with a History item selected (the view model puts its
+/// expression on the line, not the engine) coming back to the calculator
+/// clears the line when the engine holds an empty one (a line was begun
+/// since the last "=" and cleared: here by the reset a selection begins
+/// with, or by C), and leaves it when the engine holds none (nothing since
+/// the "=" that completed the last). A restored session does as the
+/// original: it used to hold none whatever the original held, and kept
+/// the line. That goes for a selection made after the restore too, and
+/// after an error.
+#[test]
+fn a_restore_keeps_the_expression_line_the_engine_holds() {
+    use Button::*;
+    // The item "9 =", wherever it is in History.
+    fn select_nine(vm: &mut CalculatorViewModel) {
+        let index = vm
+            .history()
+            .iter()
+            .position(|item| item.expression == "9 =")
+            .unwrap();
+        vm.history_recall(index);
+        assert_eq!(vm.expression(), "9=");
+    }
+    fn shown_again(vm: &mut CalculatorViewModel) -> String {
+        vm.set_mode(vm.mode());
+        vm.expression()
+    }
+    // What is typed after 9 =, and whether the engine then holds an empty
+    // line.
+    let sessions: [(&[Button], bool); 7] = [
+        (&[], false),
+        (&[Two, Add, Three, Equals], false),
+        (&[Six, Subtract], true),
+        (&[Six, Subtract, Clear], true),
+        (&[Six, Subtract, Clear, Seven], true),
+        (&[Six, Subtract, Two, Equals, Seven], false),
+        // A function after "=" begins a line.
+        (&[Six, Subtract, Two, Equals, Sqrt], true),
+    ];
+    for mode in [CalcMode::Standard, CalcMode::Scientific] {
+        for (keys, held) in sessions {
+            let begin = || {
+                let mut vm = new_vm();
+                vm.set_mode(mode);
+                press_all(&mut vm, &[Nine, Equals]);
+                press_all(&mut vm, keys);
+                vm
+            };
+            let what = format!("{mode:?} {keys:?}");
+
+            // The item selected, saved, and the calculator shown again.
+            let mut original = begin();
+            select_nine(&mut original);
+            let state = original.save_state();
+            let before = observed(&original);
+            let line = shown_again(&mut original);
+            assert_eq!(line, if held { "" } else { "9=" }, "{what}");
+            let after = observed(&original);
+            drop(original);
+            let saved: Value = serde_json::from_str(&state).unwrap();
+            assert_eq!(saved["x"]["k"]["el"] == json!(true), held, "{what}");
+            let mut restored = new_vm();
+            assert!(restored.restore_state_checked(&state), "{what}");
+            assert_eq!(observed(&restored), before, "{what}");
+            assert_eq!(restored.save_state(), state, "{what}");
+            assert_eq!(shown_again(&mut restored), line, "{what}");
+            assert_eq!(observed(&restored), after, "{what}");
+            drop(restored);
+
+            // Saved before the selection, which is made after the restore.
+            let mut original = begin();
+            let state = original.save_state();
+            select_nine(&mut original);
+            let line = shown_again(&mut original);
+            let after = observed(&original);
+            drop(original);
+            let mut restored = new_vm();
+            restored.restore_state(&state);
+            select_nine(&mut restored);
+            assert_eq!(shown_again(&mut restored), line, "{what}");
+            assert_eq!(observed(&restored), after, "{what}");
+            drop(restored);
+
+            // Saved in an error, which C clears before the selection: an
+            // error with its expression above it, and one whose expression
+            // the calculator shown again has cleared from the display
+            // (the engine still holds it, and C leaves it held, empty).
+            let errors: [(&[Button], bool); 2] = [
+                (&[One, Divide, Zero, Equals], false),
+                (&[Two, Add, Three, Equals, Negate, Sqrt], true),
+            ];
+            for (error, again) in errors {
+                let what = format!("{what}, {error:?}");
+                let mut original = begin();
+                press_all(&mut original, error);
+                assert!(original.is_error(), "{what}");
+                if again {
+                    assert_eq!(shown_again(&mut original), "", "{what}");
+                }
+                let state = original.save_state();
+                original.press(Clear);
+                select_nine(&mut original);
+                let line = shown_again(&mut original);
+                assert_eq!(line, "", "{what}");
+                let after = observed(&original);
+                drop(original);
+                let mut restored = new_vm();
+                restored.restore_state(&state);
+                assert!(restored.is_error(), "{what}");
+                // (An error restored without its expression doesn't hold
+                // the commands that led to it, which nothing reads.)
+                if !again {
+                    assert_eq!(restored.save_state(), state, "{what}");
+                }
+                restored.press(Clear);
+                select_nine(&mut restored);
+                assert_eq!(shown_again(&mut restored), line, "{what}");
+                assert_eq!(observed(&restored), after, "{what}");
+            }
+        }
+    }
+}
+
+/// The C key comes back reading what it read. The view model keeps it from
+/// the last key that told it the input changed, and MS, M+ and M− end a
+/// number without telling it: with F-E on, 0 MS leaves "0.e+0" shown (not
+/// an empty input's "0") and the key still reading C. A restore asked the
+/// engine instead, and read CE.
+#[test]
+fn the_c_key_comes_back_reading_what_it_read() {
+    use Button::*;
+    for store in [Memory, MemoryAdd, MemorySubtract] {
+        let mut original = new_vm();
+        original.set_mode(CalcMode::Scientific);
+        press_all(&mut original, &[FToE, Zero, store]);
+        assert_eq!(original.display_value(), "0.e+0");
+        // C, though the engine would now say CE.
+        assert!(!original.shows_clear_entry());
+        assert!(!original.vm.standard_calculator_manager.is_input_empty_now());
+        let state = original.save_state();
+        let saved: Value = serde_json::from_str(&state).unwrap();
+        assert_eq!(saved["x"]["k"]["ce"], json!(false), "{store:?}");
+
+        let mut restored = new_vm();
+        assert!(restored.restore_state_checked(&state), "{store:?}");
+        assert!(!restored.shows_clear_entry(), "{store:?}");
+        assert_eq!(observed(&restored), observed(&original), "{store:?}");
+        assert_eq!(restored.save_state(), state, "{store:?}");
+        // The next key tells both.
+        for vm in [&mut original, &mut restored] {
+            vm.press(Negate);
+            assert!(vm.shows_clear_entry(), "{store:?}");
+        }
+    }
+    // Where the key reads what the engine says, nothing is saved for it.
+    let mut vm = new_vm();
+    vm.set_mode(CalcMode::Scientific);
+    press_all(&mut vm, &[Zero, Memory, Five]);
+    let saved: Value = serde_json::from_str(&vm.save_state()).unwrap();
+    assert!(saved["x"]["k"].get("ce").is_none());
+}
+
+/// No unread slot's text goes back to disk beside a mode, radix or word
+/// size it wasn't written under: whatever changes one of them shows the
+/// whole list again first, which reads every slot and writes it out anew.
+/// Only F-E changes without that, and a slot reads the same with it on or
+/// off (its text is typed back, digits and exponent). After each of these,
+/// either no slot is unread or the calculator is in the mode, radix and
+/// word size it was restored in; saved then and restored again, its slots
+/// hold the numbers they held, and the list reads as it read, in the mode,
+/// radix and word size it was saved in (which a mode left on an error and
+/// entered again used not to be: the list was then written in the radix
+/// the engine had kept, beside the one the buttons showed).
+#[test]
+fn an_unread_slot_is_saved_again_only_as_it_was_written() {
+    use Button::*;
+    type Change<'a> = (&'a str, &'a dyn Fn(&mut CalculatorViewModel));
+    type Session<'a> = (CalcMode, &'a dyn Fn(&mut CalculatorViewModel));
+    let sessions: [Session; 3] = [
+        (CalcMode::Standard, &|vm| {
+            for text in ["0.0000000000000123", "-9.999999999999999e-9999", "42"] {
+                assert!(vm.paste(text));
+                vm.press(Memory);
+            }
+            press_all(vm, &[Two, Add, Three, Equals]);
+        }),
+        (CalcMode::Scientific, &|vm| {
+            for text in ["1.2345678901234567890123456789012e-50", "-7.5", "1e9999"] {
+                assert!(vm.paste(text));
+                vm.press(Memory);
+            }
+            press_all(vm, &[FToE, Two, Add, Three, Equals]);
+        }),
+        (CalcMode::Programmer, &|vm| {
+            vm.set_word_size(WordSize::Word);
+            vm.set_radix(Radix::Hex);
+            for text in ["7FFF", "FFFF", "12"] {
+                assert!(vm.paste(text));
+                vm.press(Memory);
+            }
+            press_all(vm, &[Two, Add, Three, Equals]);
+        }),
+    ];
+    let changes: [Change; 17] = [
+        ("nothing", &|_| {}),
+        ("F-E", &|vm| vm.press(FToE)),
+        ("F-E and a recall", &|vm| {
+            vm.press(FToE);
+            vm.memory_recall(1);
+        }),
+        ("an angle unit", &|vm| vm.press(Grads)),
+        ("the calculator shown again", &|vm| vm.set_mode(vm.mode())),
+        ("Standard", &|vm| vm.set_mode(CalcMode::Standard)),
+        ("Scientific", &|vm| vm.set_mode(CalcMode::Scientific)),
+        ("Programmer", &|vm| vm.set_mode(CalcMode::Programmer)),
+        ("a radix", &|vm| vm.set_radix(Radix::Oct)),
+        ("a word size", &|vm| vm.set_word_size(WordSize::Byte)),
+        ("a word size in an error", &|vm| {
+            press_all(vm, &[One, Divide, Zero, Equals]);
+            vm.set_word_size(WordSize::Byte);
+        }),
+        ("a mode in an error, and back", &|vm| {
+            let mode = vm.mode();
+            press_all(vm, &[One, Divide, Zero, Equals]);
+            vm.set_mode(if mode == CalcMode::Standard {
+                CalcMode::Scientific
+            } else {
+                CalcMode::Standard
+            });
+            vm.set_mode(mode);
+        }),
+        ("a mode in an error, and back, and MS", &|vm| {
+            let mode = vm.mode();
+            press_all(vm, &[One, Divide, Zero, Equals]);
+            vm.set_mode(if mode == CalcMode::Programmer {
+                CalcMode::Scientific
+            } else {
+                CalcMode::Programmer
+            });
+            vm.set_mode(mode);
+            press_all(vm, &[One, Zero, Memory]);
+        }),
+        ("a History item", &|vm| vm.history_recall(0)),
+        ("C, a paste and a slot cleared", &|vm| {
+            vm.press(Clear);
+            vm.paste("12");
+            vm.memory_clear(0);
+        }),
+        ("a bit flipped", &|vm| vm.flip_bit(3)),
+        ("a recall, then a shift mode", &|vm| {
+            vm.memory_recall(2);
+            vm.set_shift_mode(ShiftMode::Rotate);
+        }),
+    ];
+    for (mode, session) in sessions {
+        let mut original = new_vm();
+        original.set_mode(mode);
+        session(&mut original);
+        let state = original.save_state();
+        drop(original);
+        for (name, change) in changes {
+            // Its slots read as they come, and all read at once.
+            let outcome = |at_once: bool| {
+                let mut vm = new_vm();
+                vm.restore_state(&state);
+                let restored_in = (vm.mode(), vm.radix(), vm.word_size());
+                if at_once {
+                    vm.vm.standard_calculator_manager.read_memory();
+                }
+                change(&mut vm);
+                let memory = |vm: &CalculatorViewModel| {
+                    let state = vm.vm.standard_calculator_manager.state();
+                    let slots: Vec<_> = state
+                        .values
+                        .into_iter()
+                        .filter(|(name, ..)| name.starts_with("memory"))
+                        .collect();
+                    format!("{slots:?}")
+                };
+                let unread = unread(&vm);
+                let now = (vm.mode(), vm.radix(), vm.word_size());
+                let (held, again) = (memory(&vm), vm.save_state());
+                let shown = vm.memory();
+                drop(vm);
+                let mut second = new_vm();
+                second.restore_state(&again);
+                // Saved again, the list reads as it read, in the mode, radix
+                // and word size it was saved in.
+                assert_eq!(second.memory(), shown, "{mode:?}, {name}");
+                assert_eq!(
+                    (second.mode(), second.radix(), second.word_size()),
+                    now,
+                    "{mode:?}, {name}"
+                );
+                (unread, restored_in == now, held, memory(&second))
+            };
+            let (unread, as_restored, held, held_again) = outcome(false);
+            assert!(unread == 0 || as_restored, "{mode:?}, {name}");
+            // With slots unread, what is saved for them is what was
+            // restored: read again, they are the same numbers. (With none
+            // unread, the list was written out anew, as any session's is.)
+            if unread > 0 {
+                assert_eq!(held, held_again, "{mode:?}, {name}");
+            }
+            let at_once = outcome(true);
+            assert_eq!(at_once.0, 0, "{mode:?}, {name}");
+            assert_eq!(held, at_once.2, "{mode:?}, {name}");
+            // F-E, and what doesn't touch memory, leaves the slots unread.
+            if matches!(name, "nothing" | "F-E" | "an angle unit" | "a bit flipped") {
+                assert_eq!(unread, 3, "{mode:?}, {name}");
+            }
+        }
+    }
+}

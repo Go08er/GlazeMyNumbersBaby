@@ -316,6 +316,39 @@ impl HistoryCollector {
         self.reinit_history();
     }
 
+    /// Extension: whether the collector holds an expression line, even
+    /// an empty one (`m_spTokens` isn't null). It holds none until the
+    /// first token of a session and after each line completed by `=`; a
+    /// line that was cleared (C, an error, the reset before a History item
+    /// is loaded) is still held, empty. Only
+    /// [`update_history_expression`](Self::update_history_expression) tells
+    /// the two apart: a radix command shows the line held, so an empty one
+    /// clears an expression line the collector didn't write (a History
+    /// item's), and none leaves it.
+    pub(crate) fn has_line(&self) -> bool {
+        self.tokens.is_some()
+    }
+
+    /// Extension: whether the collector holds an expression line that is
+    /// empty (see [`has_line`](Self::has_line)).
+    pub(crate) fn has_empty_line(&self) -> bool {
+        self.tokens.as_ref().is_some_and(Vec::is_empty)
+    }
+
+    /// Extension: makes the collector hold an empty expression line where
+    /// it holds none (`held`), or none where it holds an empty one, for a
+    /// restored session, whose engine wasn't taken through what left the
+    /// saved one's so. A line with tokens is left as it is.
+    pub(crate) fn set_empty_line(&mut self, held: bool) {
+        if held {
+            self.tokens.get_or_insert_with(Vec::new);
+            self.commands.get_or_insert_with(Vec::new);
+        } else if self.has_empty_line() {
+            self.tokens = None;
+            self.commands = None;
+        }
+    }
+
     /// Extension: see `CalculatorManager::set_history_suppressed`.
     pub fn set_history_suppressed(&mut self, suppressed: bool) {
         self.history_suppressed = suppressed;

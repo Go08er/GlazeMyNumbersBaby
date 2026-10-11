@@ -585,6 +585,30 @@ impl StandardCalculatorViewModel {
         let same_mode = target_state == self.get_calculator_mode()
             && (self.is_standard || self.is_scientific || self.is_programmer);
         if !same_mode {
+            // Deviation (an upstream bug): the engine being left is taken
+            // out of its error first. Upstream only clears `IsInError`, the
+            // view model's own flag, so that the mode change's commands are
+            // sent; but the engine ignores every command but C and CE while
+            // it is in an error (`ProcessCommandWorker`), so they are sent
+            // and have no effect: leaving Scientific turns the F-E button off
+            // and the engine stays in F-E, and `SetProgrammerMode`'s DEC is
+            // ignored by a Programmer engine still in the error it was left
+            // in (the CLEAR after it comes too late). The buttons then show
+            // one thing and the engine does another: Programmer, HEX,
+            // 1 ÷ 0 =, Scientific, Programmer shows DEC selected and takes
+            // A as a digit; Scientific, F-E, 1 ÷ 0 =, Standard, Scientific
+            // shows F-E off and 7 = gives 7.e+0. (The C++
+            // `CalculatorManager` does both, sent the commands upstream's
+            // view model sends: `tools/oracle/calcmanager`.) Nothing is lost
+            // by clearing: any key clears an error, and a mode's
+            // calculation is cleared when the mode is entered again.
+            let engine_in_error = self
+                .standard_calculator_manager
+                .current_calculator_engine()
+                .is_some_and(|engine| engine.f_in_error_state());
+            if engine_in_error {
+                self.send_command(cmd::CLEAR);
+            }
             self.set_is_in_error(false);
         }
 
@@ -1013,6 +1037,14 @@ impl StandardCalculatorViewModel {
     /// `OnInputChanged()`.
     pub(crate) fn on_input_changed(&mut self) {
         self.is_input_empty = self.standard_calculator_manager.is_input_empty();
+    }
+
+    /// Extension: `IsInputEmpty` as a saved session's view model had it
+    /// (the C key reads C when it is true), for a restore: it is kept from
+    /// the last `OnInputChanged`, which MS, M+ and M− don't raise though
+    /// they end the number being typed.
+    pub(crate) fn set_is_input_empty(&mut self, empty: bool) {
+        self.is_input_empty = empty;
     }
 
     // ------------------------------------------------------------------

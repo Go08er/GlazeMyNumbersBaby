@@ -509,8 +509,13 @@ impl CalculatorManager {
     /// value doesn't depend on when that is (see [`PendingNumber`]), so the
     /// session goes on as if every slot had been worked out when stored.
     /// The first key that shows the list again pays for working the unread
-    /// slots out (a hundred near 10^±9999: 120 million units), besides the
-    /// writing out of every slot that every such key pays (230 million).
+    /// slots out, besides the writing out of every slot that every such
+    /// key pays (a hundred near 10^±9999: 230 million units). Read
+    /// together they share the powers of ten they are scaled by
+    /// (`ratpack::with_powers_kept`), so that costs 4 million units where
+    /// the hundred have one exponent and 21 million where no two do (120
+    /// million when each worked its own power out), and the first such key
+    /// takes little longer than any later one.
     ///
     /// The entry isn't ended and nothing is displayed, the list neither:
     /// the caller clears the entry and shows the slot as the text it typed.
@@ -582,12 +587,20 @@ impl CalculatorManager {
             .count()
     }
 
-    /// Extension, for tests: reads every slot now, showing nothing.
+    /// Extension: reads every slot now, showing nothing (what showing the
+    /// list begins with; alone, for tests). Read together, the slots share
+    /// the powers of ten they are scaled by (`ratpack::with_powers_kept`):
+    /// each is the number it would be read as alone.
     #[doc(hidden)]
     pub fn read_memory(&mut self) {
-        for slot in &mut self.memorized_numbers {
-            slot.read();
+        if self.unread_memory() == 0 {
+            return;
         }
+        ratpack::with_powers_kept(|| {
+            for slot in &mut self.memorized_numbers {
+                slot.read();
+            }
+        });
     }
 
     /// Recall the memorized number.
@@ -785,9 +798,7 @@ impl CalculatorManager {
         }
         // Extension: slots restored unread are worked out here, and kept:
         // the list shows each as its value is written out now.
-        for slot in &mut self.memorized_numbers {
-            slot.read();
-        }
+        self.read_memory();
         let mut result_vector: Vec<String> = Vec::new();
         let engine = self
             .current_engine_ref()
@@ -859,6 +870,13 @@ impl CalculatorManager {
 
     pub fn is_input_empty(&mut self) -> bool {
         self.current_engine().is_input_empty()
+    }
+
+    /// Extension: [`is_input_empty`](Self::is_input_empty) without changing
+    /// anything (false before a mode is set).
+    pub fn is_input_empty_now(&self) -> bool {
+        self.current_engine_ref()
+            .is_some_and(CalcEngine::is_input_empty)
     }
 
     pub fn set_in_history_item_load_mode(&mut self, is_history_item_load_mode: bool) {
@@ -944,6 +962,16 @@ impl CalculatorManager {
         } else {
             NumberFormat::Float
         });
+    }
+
+    /// Extension: see [`CalcEngine::set_empty_expression_line`].
+    pub fn set_empty_expression_line(&mut self, held: bool) {
+        self.current_engine().set_empty_expression_line(held);
+    }
+
+    /// Extension: see [`CalcEngine::set_clears_expression`].
+    pub fn set_clears_expression(&mut self) {
+        self.current_engine().set_clears_expression();
     }
 
     /// Extension: see [`CalcEngine::set_input_empty`].
