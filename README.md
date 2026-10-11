@@ -301,13 +301,17 @@ CI also runs checks that need more than `cargo test --workspace`:
   show: a claim the checker can neither prove nor refute (about one case
   in thirty has one) is set aside, not failed, so a false claim the checker
   can't decide would pass; and causes found but not fixed are listed in its
-  known-open table and counted in every run. Those are all in the compiled
-  evaluator, the one that draws (the panel and tracing read enclosures,
-  which are right in each): `nCr` and `nPr` far out or next to zero are
+  known-open table and counted in every run. Those in the engine are all in
+  the compiled evaluator, the one that draws (the panel and tracing read
+  enclosures, which are right in each): `nCr` and `nPr` far out or next to zero are
   undefined in doubles where the count has a value; Γ past a double's range
   keeps about 13 digits; a power with a written ratio past 2⁵³ as its
   exponent is undefined where its value is 0; and a root of a non-whole
-  degree can be tens of ulps off next to zero.
+  degree can be tens of ulps off next to zero. The table's other entries
+  are a documented limit (a circular function of a typed whole number of
+  16 or more digits is taken at the number's double) and the tester's own
+  reference evaluator on subnormal operands, where the compiled value is
+  the closer one.
 - **MPFR oracles** (same feature): `interval_oracle` checks every interval
   operation's enclosure against MPFR at 256 bits on adversarial boxes,
   `simplify_rules` checks every simplifier rule on both sides wherever its
