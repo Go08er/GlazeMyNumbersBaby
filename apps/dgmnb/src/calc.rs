@@ -473,16 +473,14 @@ impl CalcPage {
                 self.vm.press(b);
                 self.after_press();
             }
-            Action::ToggleHistory => {
-                self.tab = Tab::History;
-                if !cx.wide {
-                    self.popup = if self.popup == Some(Popup::Panel) {
-                        None
-                    } else {
-                        Some(Popup::Panel)
-                    };
-                }
-            }
+            // Ctrl+H. Docked, it chooses the History list. In a narrow
+            // window it is the header's History button (OpenPanel): the
+            // sheet opens on History, shows History if it was showing
+            // Memory, and closes if History is what it was showing, as
+            // upstream's key shows the History flyout unless that is the
+            // one open (ToggleHistoryFlyout).
+            Action::ToggleHistory if cx.wide => self.tab = Tab::History,
+            Action::ToggleHistory => self.update_page(Msg::OpenPanel(Tab::History), cx),
             Action::ClearHistory => self.vm.history_clear(),
             Action::Angle(u) => self.vm.set_angle_unit(u),
             Action::Radix(r) => self.vm.set_radix(r),
@@ -1314,5 +1312,84 @@ fn describe(f: &mut Frame, name: &str, tip: &str) {
     if let Some(n) = f.nodes.as_mut().and_then(|v| v.last_mut()) {
         n.label = name.to_string();
         n.description = Some((tip.to_string(), None));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_cx<R>(wide: bool, run: impl FnOnce(&mut Cx) -> R) -> R {
+        let (mut toasts, mut focus) = (Vec::new(), None);
+        let mut cx = Cx {
+            toasts: &mut toasts,
+            clipboard: None,
+            wide,
+            focus: &mut focus,
+        };
+        run(&mut cx)
+    }
+
+    /// R19-L-01: each opener of the narrow window's sheet shows the list
+    /// it names, whatever list was shown before: M▾ Memory, the header's
+    /// History button and Ctrl+H History. (M▾ opened History the first
+    /// time, and the History button Memory after Memory had been chosen.)
+    /// The same opener again closes the sheet; Ctrl+H over Memory shows
+    /// History, as upstream's key shows the History flyout unless it is
+    /// the one open. Docked, Ctrl+H chooses History. Programmer, which has
+    /// no History, has no Ctrl+H.
+    #[test]
+    fn each_opener_of_the_sheet_shows_the_list_it_names() {
+        let ctrl_h = input::parse_chord("ctrl+h").unwrap();
+        let state = |p: &CalcPage| (p.popup, p.tab);
+        let open = Some(Popup::Panel);
+        let mut p = CalcPage::new(None);
+        assert_eq!(state(&p), (None, Tab::History));
+        // First use.
+        with_cx(false, |cx| p.update(Msg::OpenPanel(Tab::Memory), cx));
+        assert_eq!(state(&p), (open, Tab::Memory));
+        with_cx(false, |cx| p.update(Msg::OpenPanel(Tab::Memory), cx));
+        assert_eq!(state(&p), (None, Tab::Memory), "the same opener closes");
+        with_cx(false, |cx| p.update(Msg::OpenPanel(Tab::History), cx));
+        assert_eq!(state(&p), (open, Tab::History));
+        // The other list chosen by hand, the sheet closed (Escape, a
+        // click outside): each opener still shows its own.
+        for (hand, opener) in [(Tab::Memory, Tab::History), (Tab::History, Tab::Memory)] {
+            with_cx(false, |cx| {
+                p.update(Msg::OpenPanel(opener), cx);
+                if p.popup.is_none() {
+                    p.update(Msg::OpenPanel(opener), cx);
+                }
+                p.update(Msg::Tab(hand), cx);
+                p.update(Msg::Popup(None), cx);
+            });
+            assert_eq!(state(&p), (None, hand));
+            with_cx(false, |cx| p.update(Msg::OpenPanel(opener), cx));
+            assert_eq!(state(&p), (open, opener), "after {hand:?} by hand");
+            with_cx(false, |cx| p.update(Msg::Popup(None), cx));
+        }
+        // Ctrl+H: opens on History whatever was shown last; closes
+        // History's sheet; over Memory shows History.
+        assert_eq!(state(&p), (None, Tab::Memory));
+        assert!(with_cx(false, |cx| p.key(&ctrl_h, cx)));
+        assert_eq!(state(&p), (open, Tab::History));
+        assert!(with_cx(false, |cx| p.key(&ctrl_h, cx)));
+        assert_eq!(state(&p), (None, Tab::History));
+        with_cx(false, |cx| p.update(Msg::OpenPanel(Tab::Memory), cx));
+        assert!(with_cx(false, |cx| p.key(&ctrl_h, cx)));
+        assert_eq!(state(&p), (open, Tab::History), "over Memory");
+        with_cx(false, |cx| p.update(Msg::Popup(None), cx));
+        // Docked: no sheet, the History list chosen.
+        with_cx(true, |cx| {
+            p.update(Msg::Tab(Tab::Memory), cx);
+            assert!(p.key(&ctrl_h, cx));
+        });
+        assert_eq!(state(&p), (None, Tab::History));
+        // Programmer has Memory alone.
+        p.set_mode(CalcMode::Programmer);
+        assert!(!with_cx(false, |cx| p.key(&ctrl_h, cx)), "no Ctrl+H");
+        assert_eq!(p.popup, None);
+        with_cx(false, |cx| p.update(Msg::OpenPanel(Tab::Memory), cx));
+        assert_eq!(state(&p), (open, Tab::Memory));
     }
 }
