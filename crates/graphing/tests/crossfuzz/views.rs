@@ -292,6 +292,15 @@ fn rounding(l: &Loaded, noisy_ast: &Expr, x: f64, c: f64) -> f64 {
     4.0 * ulp(c) + 2.0 * err
 }
 
+/// Whether the compiled value `c` and the reference's `p`, two numbers,
+/// are apart by no more than the rounding of both ([`rounding`]: its
+/// first-order bound carries each operation's error through the slopes
+/// of what follows, so an ill-conditioned f is allowed what its
+/// conditioning costs, and no more).
+fn within_both_roundings(l: &Loaded, noisy_ast: &Expr, x: f64, c: f64, p: f64) -> bool {
+    c.is_finite() && p.is_finite() && (c - p).abs() <= 2.0 * rounding(l, noisy_ast, x, c)
+}
+
 /// Whether the compiled value `c` is f's, which MPFR encloses in
 /// `[lo, hi]`, to a few ulps: what the oracle's checks, which judge f by
 /// its doubles, take for granted. (Not within its own rounding bound,
@@ -371,6 +380,24 @@ fn points(l: &Loaded, out: &mut Outcome) -> Sampled {
                 )
             });
             v.k = K::Unknown;
+        }
+        // Two double evaluations of f, each within its own rounding of
+        // f(x), are apart by no more than both, which is no disagreement
+        // (the oracle's 8 ulp are for a well-conditioned f): (3 − 7x)·(1 −
+        // cos(log x)) at 5·10⁻³²⁴, where an ulp of the logarithm, −323.3,
+        // is 45 of the result's, had them 53 ulps apart. (A compiled value
+        // outside f's own enclosure is found below, whatever the
+        // reference's.)
+        if v.k == K::Disagree && within_both_roundings(l, &noisy_ast, x, c, v.v) {
+            out.note("pt/scalar-vs-reference-within-their-rounding", || {
+                format!(
+                    "x={x:e}: compiled {c:e}, reference {:e}, each within {:e} of f",
+                    v.v,
+                    rounding(l, &noisy_ast, x, c)
+                )
+            });
+            v.k = K::Def;
+            v.v = c;
         }
         if v.k == K::Disagree {
             out.fail(
@@ -1289,6 +1316,23 @@ fn panel(
                 if l.f.prog.eval(f.at, 0.0).is_nan() && l.f.prog.undecided(f.at, 0.0) =>
             {
                 out.note("pt/scalar-cannot-tell", || f.detail.clone());
+            }
+            // Or the two are apart by their own rounding, as at a point.
+            "evaluator-disagrees"
+                if matches!(
+                    reval_typed(&l.f.ast, f.at, l.unit),
+                    R::V(p) if within_both_roundings(
+                        l,
+                        &noisy(&l.f.ast),
+                        f.at,
+                        l.f.prog.eval(f.at, 0.0),
+                        p.f(),
+                    )
+                ) =>
+            {
+                out.note("pt/scalar-vs-reference-within-their-rounding", || {
+                    f.detail.clone()
+                });
             }
             // "Undefined" at a sample, as the doubles have it: a
             // contradiction only where f is undefined in fact, or (with

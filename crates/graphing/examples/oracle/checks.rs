@@ -1264,8 +1264,16 @@ pub fn check_analysed(
                     if normal(&v) && normal(w) {
                         (w.v - v.v).abs() > 2.0 * (f.tol(x) + f.tol(y))
                     } else {
+                        // Beyond the doubles: past a part in 10⁹ of the
+                        // value, and past the rounding of both values
+                        // too. (The reference keeps 53 bits: x² − 100 +
+                        // 100 − x⁴ is −x⁴ to it beside 0, x² lost in
+                        // the 100, and "lower than the minimum 0 at 0" by
+                        // 2⁻⁴⁰⁷¹ with a rounding of 10⁻¹⁴.)
                         let dif = w.xf.add(v.xf.neg()).abs();
+                        let rounding = 2.0 * (f.error(&f.ast, x).1 + f.error(&f.ast, y).1);
                         cmp_xf(dif, v.xf.abs().mul(Xf::of(1e-9))) == Ordering::Greater
+                            && cmp_xf(dif, Xf::of(rounding)) == Ordering::Greater
                     }
                 };
                 let better = |w: &Val| match cmp_xf(w.xf, v.xf) {
