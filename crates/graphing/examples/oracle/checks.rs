@@ -2739,8 +2739,14 @@ pub fn check_pair_in(lhs: &str, rhs: &str, positive: bool, set: &Setting<'_>) ->
         if !ok {
             differ(
                 "period",
-                kl.periodicity_expression.clone(),
-                kr.periodicity_expression.clone(),
+                format!(
+                    "{:?} {}",
+                    kl.periodicity_direction, kl.periodicity_expression
+                ),
+                format!(
+                    "{:?} {}",
+                    kr.periodicity_direction, kr.periodicity_expression
+                ),
             );
         }
     }
