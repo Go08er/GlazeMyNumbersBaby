@@ -1713,8 +1713,8 @@ fn beyond(l: (f64, f64), var: bool, parity: Parity, neg: bool) -> Fold {
 
 /// The exact value of an x- and y-free subtree of typed literals and
 /// sliders (a slider's value is the double it holds) under +, −, ×, ÷,
-/// whole powers, |·|, floor, ceil, round, sign, and the counts n!, n!!,
-/// nCr, nPr of whole numbers.
+/// whole powers, |·|, floor, ceil, round, sign, mod, and the counts n!,
+/// n!!, nCr, nPr of whole numbers.
 ///
 /// Each of those is folded at any size, or refused for its length
 /// ([`Fold::Big`], unknown; or [`Fold::Lone`] where the general path is
@@ -1911,6 +1911,29 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                 // number it is on isn't known.
                 other => Big(other.var()),
             },
+            // The floored remainder a − b·⌊a/b⌋ of two exact values is
+            // one too, and jumps wherever a passes a multiple of b: which
+            // multiple lies below a is theirs to say, not their doubles'
+            // (review 19: mod(0.3, 0.1) was 0.1 less an ulp for the 0 it
+            // is, and off, mod(5, 1.00000000000000000001) 0 for 1 less
+            // 4·10⁻²⁰). Any other argument, and b = 0 (undefined), are the
+            // general path's as before.
+            Func::Mod if args.len() == 2 => {
+                let (ra, va, rb, vb) = match (go(&args[0]), go(&args[1])) {
+                    (Value(ra, va), Value(rb, vb)) if !rb.is_zero() => (ra, va, rb, vb),
+                    _ => return No,
+                };
+                let r = ra
+                    .div(&rb)
+                    .map(|q| q.floor())
+                    .and_then(|q| rb.mul(&q))
+                    .and_then(|m| ra.sub(&m));
+                match r {
+                    Some(r) => Value(r, va || vb),
+                    // (Each step fails only for its length.)
+                    None => Big(va || vb),
+                }
+            }
             Func::Factorial | Func::DoubleFactorial => {
                 let (r, v) = match go(&args[0]) {
                     Value(r, v) => (r, v),

@@ -289,3 +289,64 @@ fn exact_steps_within_the_bound() {
         assert_eq!((v.compiled, v.reference), (V::Is(want), V::Is(want)));
     }
 }
+
+/// The floored remainder of two exact values is exact: which multiple of
+/// b lies below a is decided by them, never by their doubles. At the
+/// default 14 digits too: `mod(0.3, 0.1)` was 0.1 less an ulp for the 0 it
+/// is, 0.3's double being below three times 0.1's.
+#[test]
+fn the_remainder_of_exact_values_is_exact() {
+    for digits in [OFF, TI] {
+        for (text, want) in [
+            ("mod(0.3,0.1)", 0.0),
+            ("mod(0.7,0.1)", 0.0),
+            ("mod(1,0.1)", 0.0),
+            ("mod(-0.3,0.1)", 0.0),
+            ("mod(1,0.3)", 0.1),
+            ("mod(5.5,2)", 1.5),
+            ("mod(-7,3)", 2.0),
+            ("mod(7,-3)", -2.0),
+            ("mod(-7,-3)", -1.0),
+            // 10³⁰⁰ is 1 more than a multiple of 3 (its double is not).
+            ("mod(10^300,3)", 1.0),
+            // Below every double and not 0: a hair under 3, and 0's side.
+            ("mod(-(10^(-400)),3)", 3.0),
+            ("floor(mod(-(10^(-400)),3))", 2.0),
+            ("mod(10^(-400),-3)", -3.0),
+            ("sign(mod(10^(-400),3))", 1.0),
+            ("mod(7,10^(-400))", 0.0),
+            ("10^400*mod(7,3*10^(-400))", 1.0),
+        ] {
+            check(text, digits, V::Is(want));
+        }
+        // By an exact 0: undefined, as before (not a division to refuse).
+        check("mod(7,0.1+0.2-0.3)", digits, V::Undefined);
+        check("mod(7,0)", digits, V::Undefined);
+        // With x in it the remainder is the program's, in doubles.
+        let v = views_at("mod(x,0.1)", digits, TrigUnit::Radians, 0.3, 1.0);
+        assert_eq!(v.compiled, V::Is(0.3 % 0.1));
+        assert_eq!(v.reference, V::Is(0.3 % 0.1));
+    }
+    // Off, a number typed a hair off a multiple keeps its side of it.
+    for (text, off, ti) in [
+        ("mod(1.00000000000000000001,1)", 1e-20, 0.0),
+        ("mod(0.99999999999999999999,1)", 1.0, 0.0),
+        ("floor(mod(0.99999999999999999999,1))", 0.0, 0.0),
+        ("mod(5,1.00000000000000000001)", 1.0, 0.0),
+        ("floor(mod(5,1.00000000000000000001))", 0.0, 0.0),
+        ("mod(5,0.99999999999999999999)", 5e-20, 0.0),
+        ("mod(-1.00000000000000000001,1)", 1.0, 0.0),
+    ] {
+        check(text, OFF, V::Is(off));
+        check(text, TI, V::Is(ti));
+    }
+    // A slider is a number: under a digit limit the decimal it is rounded
+    // to (0.3, three times 0.1), off the double it holds (below 0.3).
+    let at = |digits| views_at("mod(a,0.1)", digits, TrigUnit::Radians, 0.0, 0.3);
+    assert_eq!((at(TI).compiled, at(TI).reference), (V::Is(0.0), V::Is(0.0)));
+    let V::Is(c) = at(OFF).compiled else {
+        panic!("a value")
+    };
+    assert!(c > 0.09 && c < 0.1, "{c:e}");
+    assert_eq!(at(OFF).reference, V::Is(c));
+}
