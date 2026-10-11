@@ -377,9 +377,11 @@ impl DatePage {
                 let line = Rect::new(col.x, y, col.w, 24.0);
                 let days = self.state.str_date_diff_result_in_days();
                 f.label(line, days, BODY, t.fg_dim, Align::Start);
-                if let Some(n) = f.node(id("date-diff-days"), accesskit::Role::Label, days, line) {
-                    n.live = true;
-                }
+                // Not a live one: upstream's DateDiffByDaysResultLabel
+                // isn't (DateCalculator.xaml; only the result above is,
+                // :1089), and two live nodes changed in one frame are
+                // told in no particular order (R19-L-03's kind).
+                f.node(id("date-diff-days"), accesskit::Role::Label, days, line);
             }
         } else {
             self.date_button(
