@@ -825,6 +825,24 @@ fn one_sided(e: &Expr, sides: &[(Expr, bool, bool)], left: bool) -> Option<Expr>
     })
 }
 
+/// A branch whose slope is zero only at the end `at`: its second
+/// derivative keeps one strict sign on the closed half-box, so the slope
+/// is strictly monotone. Its exact endpoint zero and the far-end sign
+/// prove that strict sign on the punctured half (x·|x|'s branches ±x²).
+fn slope_off_endpoint(fx: &Fx, e: &Expr, lo: f64, hi: f64, at: f64, want: bool) -> bool {
+    let s = fx.series(e, lo, hi, 2);
+    if !valid_f(&s, 2) || !s[2].ne0() {
+        return false;
+    }
+    let end = fx.series(e, at, at, 1);
+    if !valid_f(&end, 1) || !end[1].is_exactly(0.0) {
+        return false;
+    }
+    let far = if lo == at { hi } else { lo };
+    let there = fx.series(e, far, far, 1);
+    valid_f(&there, 1) && there[1].beyond(0.0, want)
+}
+
 /// A kink placed exactly (`KinkAt`): some kink argument is exactly 0 at
 /// `at`; every kink argument is strictly signed on each side of `at`
 /// inside the box (away from 0 over it, or 0 at `at` with a strictly
@@ -883,7 +901,9 @@ fn kink_at(fx: &Fx, x: B, at: f64, left: bool, right: bool) -> Outcome {
             if (want && d.lt(0.0)) || (!want && d.gt(0.0)) {
                 return V::No("the one-sided slope has the other sign".into());
             }
-            if !((want && d.gt(0.0)) || (!want && d.lt(0.0))) {
+            if !((want && d.gt(0.0)) || (!want && d.lt(0.0)))
+                && !slope_off_endpoint(fx, &e, lo, hi, at, want)
+            {
                 return unknown("the one-sided slope is not strictly signed");
             }
         }

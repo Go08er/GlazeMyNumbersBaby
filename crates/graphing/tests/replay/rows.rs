@@ -388,13 +388,27 @@ fn walk(fx: &Fx, claims: &[Claim], k: usize) -> Walk {
                 w.boxes.push(*x);
             }
             Claim::Kink(x) if k > 0 => {
-                w.zeros.push(Zero {
-                    at: Enc { lo: x.0, hi: x.1 },
-                    left: None,
-                    right: None,
-                    kink: true,
-                });
-                w.boxes.push(*x);
+                // Continuity on a box says nothing about derivative events
+                // inside it. Only a placed, one-sided kink or the original
+                // derivative's own sign/flat enclosure decides this box.
+                if k == 1
+                    && claims
+                        .iter()
+                        .any(|c| matches!(c, Claim::KinkAt { x: at, .. } if at == x))
+                {
+                    continue;
+                }
+                let Some(subject) = Subj::new(fx, &of, Tree::Orig) else {
+                    continue;
+                };
+                let (v, valid) = subject.coeffs(x.0, x.1, 0);
+                if valid && v[0].ne0() {
+                    w.signs.push((x.0, x.1, v[0].gt(0.0)));
+                    w.boxes.push(*x);
+                } else if valid && v[0].is_exactly(0.0) {
+                    w.flat.push(*x);
+                    w.boxes.push(*x);
+                }
             }
             _ => {}
         }
@@ -1172,6 +1186,153 @@ fn end_extrema(rc: &RowCert, all: &[RowCert], w: &Walk) -> Vec<(Enc, bool)> {
     out
 }
 
+/// A box and nearby translations guaranteed for every value of the
+/// proven period. The largest possible low end and smallest possible high
+/// end shrink a translated proof; outward sums could conceal a tiny gap.
+fn repeated_boxes(b: B, period: Option<Enc>) -> Vec<B> {
+    let Some(p) = period else { return vec![b] };
+    iv::set_prec(160);
+    (-2..=2)
+        .filter_map(|k| {
+            if k == 0 {
+                return Some(b);
+            }
+            let shift = iv::scale(&Iv::of2(p.lo, p.hi), f64::from(k));
+            let lo = iv::add(&Iv::of(b.0), &Iv::point(shift.hi))
+                .hi
+                .to_f64_round(rug::float::Round::Up);
+            let hi = iv::add(&Iv::of(b.1), &Iv::point(shift.lo))
+                .lo
+                .to_f64_round(rug::float::Round::Down);
+            (lo <= hi).then_some((lo, hi))
+        })
+        .collect()
+}
+
+/// No excluded periodic point lies strictly inside this span. Work with
+/// enclosures and integer indices; an uncertain member is never discarded.
+fn families_clear_span(all: &[RowCert], x: B) -> bool {
+    let Some(domain) = all
+        .iter()
+        .find(|r| r.name == "domain" && r.status == "Certified")
+    else {
+        return false;
+    };
+    let Some(families) = domain.value.get("excluded").and_then(Value::as_array) else {
+        return false;
+    };
+    for f in families {
+        let (Some(origin), Some(period)) = (
+            f.get("x0").and_then(|v| enc(v).ok()),
+            f.get("period").and_then(|v| enc(v).ok()),
+        ) else {
+            return false;
+        };
+        if period.lo <= 0.0 || !period.hi.is_finite() {
+            return false;
+        }
+        let k = iv::div(
+            &iv::sub(&Iv::of2(x.0, x.1), &Iv::of2(origin.lo, origin.hi)),
+            &Iv::of2(period.lo, period.hi),
+        );
+        let (Some(mut a), Some(b)) = (k.lo.ceil().to_integer(), k.hi.floor().to_integer()) else {
+            return false;
+        };
+        if rug::Integer::from(&b - &a) > 4 {
+            return false;
+        }
+        while a <= b {
+            let member = iv::add(
+                &Iv::of2(origin.lo, origin.hi),
+                &iv::mul(
+                    &Iv::of2(period.lo, period.hi),
+                    &iv::ratio(&a, &rug::Integer::from(1)),
+                ),
+            );
+            if member.hi > x.0 && member.lo < x.1 {
+                return false;
+            }
+            a += 1;
+        }
+    }
+    true
+}
+
+/// Bridge a missing derivative span without omitting any interval. Ordinary
+/// elementary operations are continuous on each connected component of
+/// their domains; steps and modulo need direct continuity evidence. A
+/// certified domain's guaranteed interior and excluded families keep the
+/// structural fallback from crossing a hole. A derivative bound where it
+/// exists then proves the direction, including a continuous domain end.
+fn monotone_bridge(fx: &Fx, all: &[RowCert], x: B, want: Option<bool>) -> bool {
+    if claims::unmodelled(&fx.f) {
+        return false;
+    }
+    iv::set_prec(160);
+    let closed = fx.series(&fx.f, x.0, x.1, 0)[0].clone();
+    let mut continuous = !closed.empty && closed.def && closed.cont;
+    if !continuous {
+        let mut steps = false;
+        fx.f.visit(&mut |e| {
+            steps |= matches!(
+                e,
+                graphing::ast::Expr::Call(
+                    graphing::ast::Func::Floor
+                        | graphing::ast::Func::Ceil
+                        | graphing::ast::Func::Round
+                        | graphing::ast::Func::Sign
+                        | graphing::ast::Func::Mod,
+                    _
+                )
+            )
+        });
+        let inside = domain_pieces(all).is_some_and(|ds| {
+            ds.iter().any(|p| {
+                let lo = match p.lo {
+                    Bound::At { x, .. } => x.hi,
+                    _ => extent(p).0,
+                };
+                let hi = match p.hi {
+                    Bound::At { x, .. } => x.lo,
+                    _ => extent(p).1,
+                };
+                lo <= x.0 && x.1 <= hi
+            })
+        });
+        continuous = !steps && inside && families_clear_span(all, x);
+    }
+    if !continuous {
+        return false;
+    }
+    if want.is_none() && super::algebra::zero_derivative(&fx.f, &fx.lits, &fx.vars, fx.unit) {
+        return true;
+    }
+    let origin = if x.0.is_finite() {
+        x.0
+    } else if x.1.is_finite() {
+        x.1
+    } else {
+        0.0
+    };
+    let ctx = fx.ctx();
+    let e = super::eval::recentered(&fx.f, origin, &ctx);
+    let dx = iv::sub(&Iv::of2(x.0, x.1), &Iv::of(origin));
+    let xb = dx.strict(x.0 == origin && x.1 > origin, x.1 == origin && x.0 < origin);
+    let s = super::series::where_defined(|| {
+        super::eval::eval(&e, &super::series::var(xb.clone(), 1), 1, &ctx)
+    });
+    let d = &s[1];
+    if !d.empty
+        && match want {
+            Some(up) => d.beyond(0.0, up),
+            None => d.is_exactly(0.0),
+        }
+    {
+        return true;
+    }
+    want.is_some_and(|up| super::eval::sqrt_log_slope(&e, &xb, &ctx) == Some(up))
+}
+
 fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
     let w = walk(fx, &rc.claims, 1);
     out.problems.extend(w.problems.iter().cloned());
@@ -1238,14 +1399,13 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
                 .iter()
                 .any(|g| claims::one_zero_in(fx, g, (x.lo, x.hi)))
     };
-    // A complete row's pieces are all of them: over the line or a window,
-    // they leave none of the domain out (over one period they are cut
-    // where the period's features are, not at the window: not compared).
-    if let Some(rg @ (Region::Line | Region::Window(..))) = &rc.region {
+    // The listed pieces, repeated by the proven period where appropriate,
+    // must cover every part of a complete row's domain.
+    if let Some(rg @ (Region::Line | Region::Window(..) | Region::Period(..))) = &rc.region {
         let extents: Vec<B> = list(&rc.value)?
             .iter()
             .filter_map(|i| piece(i.get("on")?).ok())
-            .map(|p| extent(&p))
+            .flat_map(|p| repeated_boxes(extent(&p), period))
             .collect();
         for t in targets(rg, all) {
             if let Some((a, b)) = uncovered(t, &extents) {
@@ -1283,8 +1443,57 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
         let want = match dir {
             "Increasing" => Some(true),
             "Decreasing" => Some(false),
-            _ => None,
+            "Constant" => None,
+            _ => return Err(format!("bad direction {dir:?}")),
         };
+        // A partial row too proves each piece throughout its interior:
+        // signed stretches of its direction, or flat ones for Constant.
+        let mut decided: Vec<B> = match want {
+            Some(up) => w
+                .signs
+                .iter()
+                .filter(|(_, _, s)| *s == up)
+                .map(|(a, b, _)| (*a, *b))
+                .collect(),
+            None => w.flat.clone(),
+        };
+        if let Some(up) = want {
+            for g in &w.gaps {
+                let clear = rc.claims.iter().any(|c| {
+                    matches!(c,
+                    Claim::GapClear { x, of: Subject::F(1) } if x.0 <= g.0 && g.1 <= x.1)
+                });
+                let signed_beside = w
+                    .signs
+                    .iter()
+                    .any(|(sa, sb, s)| *s == up && (*sb == g.0 || *sa == g.1));
+                // A hole strictly inside the piece must not hide a jump
+                // or split its domain, even when f′ has no zero there.
+                let interior = inner_lo < g.0 && g.1 < inner_hi;
+                let continuous = !interior
+                    || claims::check(fx, &Claim::Continuous(*g), &rc.claims).class == Class::Strong;
+                if clear && signed_beside && continuous {
+                    decided.push(*g);
+                }
+            }
+        }
+        let proof: Vec<B> = decided
+            .iter()
+            .flat_map(|b| repeated_boxes(*b, period))
+            .collect();
+        let mut covered = proof;
+        while let Some((lo, hi)) = uncovered((inner_lo, inner_hi), &covered) {
+            // Endpoints are kept: there are reals between adjacent doubles.
+            // Re-evaluate the whole missing span; only a continuous f with
+            // this derivative sign (where it exists) can bridge it.
+            if !monotone_bridge(fx, all, (lo, hi), want) {
+                out.problems.push(format!(
+                    "the claims leave [{lo:e}, {hi:e}] of a listed {dir} piece undecided"
+                ));
+                break;
+            }
+            covered.push((lo, hi));
+        }
         // (Or the end is a double inside a stretch where f′ has the
         // piece's sign: f is monotone from there on, the way it is listed.
         // A piece cut at a window's edge ends so.)
@@ -1296,6 +1505,23 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
             None => w.flat.iter().any(|f| f.0 <= d && d <= f.1),
         };
         for end in [p.lo, p.hi] {
+            if let Bound::At { x, closed: true } = end
+                && x.lo == x.hi
+                && no_value(fx, x.lo)
+            {
+                out.problems.push(format!(
+                    "a monotone piece includes its undefined endpoint {:e}",
+                    x.lo
+                ));
+            }
+            if let Bound::At { x, closed: true } = end
+                && domain.iter().flatten().flat_map(|d| [d.lo, d.hi]).any(|b|
+                    matches!(b, Bound::At { x: excluded, closed: false } if x.contains(&excluded)))
+            {
+                out.problems.push(format!(
+                    "a closed monotone endpoint [{:e}, {:e}] contains an open domain end",
+                    x.lo, x.hi));
+            }
             if let Bound::At { x, .. } = end
                 && !(anchored(&x) || (x.lo == x.hi && within(x.lo)))
             {
@@ -1307,7 +1533,9 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
             }
         }
         for (sa, sb, s) in &w.signs {
-            let overlaps = *sa < inner_hi && *sb > inner_lo;
+            let overlaps = repeated_boxes((*sa, *sb), period)
+                .iter()
+                .any(|(a, b)| *a < inner_hi && *b > inner_lo);
             if overlaps && want.is_some_and(|d| d != *s) {
                 out.problems.push(format!(
                     "f′ is {} on [{sa:e}, {sb:e}], inside a piece listed {dir}",
@@ -1327,7 +1555,9 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
         // 0.333…3148, held the turn's enclosure across their ends. Review
         // 18's follow-up.)
         for z in &w.zeros {
-            let inside = z.at.hi > inner_lo && z.at.lo < inner_hi;
+            let inside = repeated_boxes((z.at.lo, z.at.hi), period)
+                .iter()
+                .any(|(a, b)| *b > inner_lo && *a < inner_hi);
             if inside && z.left.is_some() && z.right.is_some() && z.left != z.right {
                 out.problems.push(format!(
                     "f′ changes sign at {:e}, inside a piece listed {dir}",
@@ -3164,7 +3394,12 @@ fn exact_form(
 /// limit, or ±∞ by a claim), and no value of f at sample points falls
 /// outside the listed pieces.
 fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
-    // The monotone pieces' images: f′'s sign decided in the gaps too.
+    // The monotone pieces' images need a decided derivative walk, not
+    // just continuity in the boxes left around unplaced kinks.
+    let w = walk(fx, &rc.claims, 1);
+    out.problems.extend(w.problems.iter().cloned());
+    coverage(rc, all, &w.boxes, out);
+    gap_ends(fx, rc, all, &w, 1, out);
     holes(rc, 1, complete(rc), out);
     let pieces: Vec<Piece> = list(&rc.value)?
         .iter()

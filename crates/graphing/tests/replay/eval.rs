@@ -361,6 +361,61 @@ pub struct Ctx<'a> {
     pub vars: &'a [(String, f64)],
 }
 
+/// Reparameterize x=t+origin. Cancel an affine difference only when its
+/// x-free operand equals origin exactly; this keeps strict t>0 beside an
+/// open end such as x=1000, without omitting any between-double interval.
+pub fn recentered(e: &Expr, origin: f64, ctx: &Ctx<'_>) -> Expr {
+    let Some(q) = rug::Rational::from_f64(origin) else {
+        return e.clone();
+    };
+    let equals = |a: &Expr, negative: bool| {
+        let Some(v) = super::exact::eval(a, None, ctx.lits, ctx.vars, ctx.unit) else {
+            return false;
+        };
+        v == if negative { -q.clone() } else { q.clone() }
+    };
+    e.map(&|n| match n {
+        Expr::Bin(BinOp::Sub, a, b) if **a == Expr::X && equals(b, false) => Some(Expr::X),
+        Expr::Bin(BinOp::Sub, a, b) if **b == Expr::X && equals(a, false) => {
+            Some(Expr::Neg(Box::new(Expr::X)))
+        }
+        Expr::Bin(BinOp::Add, a, b) if **a == Expr::X && equals(b, true) => Some(Expr::X),
+        Expr::Bin(BinOp::Add, a, b) if **b == Expr::X && equals(a, true) => Some(Expr::X),
+        Expr::X => Some(Expr::Bin(
+            BinOp::Add,
+            Box::new(Expr::X),
+            Box::new(Expr::exact(origin)),
+        )),
+        _ => None,
+    })
+}
+
+/// The exact derivative identity (sqrt(u)·ln(u))′ = u′(ln(u)+2)/(2sqrt(u)).
+/// Every factor is enclosed on the full box; nothing follows from a sample.
+pub fn sqrt_log_slope(e: &Expr, x: &Iv, ctx: &Ctx<'_>) -> Option<bool> {
+    let Expr::Bin(BinOp::Mul, a, b) = e else {
+        return None;
+    };
+    let parts = |a: &Expr, b: &Expr| -> Option<(Expr, Expr)> {
+        match (a, b) {
+            (Expr::Call(Func::Sqrt, u), Expr::Call(Func::Ln, v)) => {
+                Some((u[0].clone(), v[0].clone()))
+            }
+            _ => None,
+        }
+    };
+    let (u, v) = parts(a, b).or_else(|| parts(b, a))?;
+    if !super::algebra::same_trees(&u, &v, false, ctx.lits, ctx.vars, ctx.unit) {
+        return None;
+    }
+    let u = eval(&u, &se::var(x.clone(), 1), 1, ctx);
+    if u[0].empty || !u[0].def || !u[0].gt(0.0) || u[1].empty || !u[1].def || !u[1].ne0() {
+        return None;
+    }
+    let factor = iv::add(&iv::ln(&u[0]), &Iv::of(2.0));
+    factor.ne0().then(|| factor.gt(0.0) == u[1].gt(0.0))
+}
+
 pub fn contains_x(e: &Expr) -> bool {
     match e {
         Expr::X | Expr::Y => true,
