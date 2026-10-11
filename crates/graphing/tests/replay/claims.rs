@@ -2322,11 +2322,17 @@ pub fn tree_parity(e: &Expr, lits: &Lits) -> Option<bool> {
                 }
             }
         }
+        // A root of a constant degree: of an even radicand, even whatever
+        // the degree (root(x² − 3, 0.5)); of an odd one, odd for an odd
+        // whole degree as written.
         Expr::Call(Func::Root, args) if args.len() == 2 && !contains_x(&args[1]) => {
-            let pa = tree_parity(&args[0], lits)?;
-            match written_rational(&args[1], lits)? {
-                (n, q) if q == 1 && (pa || n.is_odd()) => pa,
-                _ => return None,
+            if tree_parity(&args[0], lits)? {
+                true
+            } else {
+                match written_rational(&args[1], lits)? {
+                    (n, q) if q == 1 && n.is_odd() => false,
+                    _ => return None,
+                }
             }
         }
         Expr::Call(f, args) if args.len() == 1 => {

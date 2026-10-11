@@ -802,7 +802,7 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
         "inflections" => turns(fx, rc, all, 2, &mut out),
         "monotonicity" => monotonicity(fx, rc, all, &mut out),
         "y_intercept" => y_intercept(fx, rc, &mut out),
-        "parity" => parity(rc, all, results, &mut out),
+        "parity" => parity(fx, rc, all, results, &mut out),
         "period" => period(fx, rc, all, &mut out),
         "vertical" => vertical(fx, rc, all, &mut out),
         "horizontal" => horizontal(fx, rc, all, &mut out),
@@ -1423,6 +1423,7 @@ fn domain_symmetric(all: &[RowCert]) -> Option<bool> {
 }
 
 fn parity(
+    fx: &Fx,
     rc: &RowCert,
     all: &[RowCert],
     results: &[ClaimResult],
@@ -1436,7 +1437,19 @@ fn parity(
                 Some(false) => out
                     .problems
                     .push(format!("{p}, but the domain is not symmetric about 0")),
-                None => out.notes.push("the domain's symmetry is not known".into()),
+                // No domain row to read it from: f's own structure may
+                // still say it (built of even and odd parts, f is defined
+                // at −x wherever it is at x). The fact f(−x) = ±f(x) alone
+                // doesn't: the algebra shows it where both sides are
+                // defined, with what cancels cancelled (ln x − ln x + x²
+                // was "even", on x > 0, its other rows withheld: the third
+                // pass's audit).
+                None if claims::tree_parity(&fx.f, &fx.lits) == Some(p == "Even") => out
+                    .notes
+                    .push("the domain's symmetry: by f's structure, with no domain row".into()),
+                None => out.problems.push(format!(
+                    "{p}, but the domain is not known to be symmetric about 0"
+                )),
             }
             let word = if p == "Even" { "even" } else { "odd" };
             let fact = rc.claims.iter().find(
@@ -1559,8 +1572,11 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
                 if parent_div {
                     stand_ins.push((path, true));
                 } else {
-                    out.notes.push(format!(
-                        "the family at {:e}: its node's condition is not read (not a divisor)",
+                    // (Not read is not checked: the pieces listed beside
+                    // such a family were let through with a note.)
+                    out.problems.push(format!(
+                        "the family at {:e}: its node's condition is not read (not a divisor), \
+                         so the domain is not derived",
                         x0.mid()
                     ));
                     return Ok(());
@@ -1648,15 +1664,28 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
                 claims::V::No(w) => out
                     .problems
                     .push(format!("f is not defined on its piece: {w}")),
-                claims::V::Unknown(w) => out.notes.push(format!("a piece not shown defined: {w}")),
+                // Not shown on f's tree as written: as a `Defined` claim
+                // is (its rearranged form where the tree is ∞ − ∞ on a
+                // tail: 1/(x² + x + 1)). A piece shown no way is not the
+                // row's to list: it was noted and let through, and any
+                // domain passed for an f the replay places nowhere
+                // (√(10^5000 + 1 − 10^5000 − 1 + x) on all of ℝ: the third
+                // pass's audit).
+                claims::V::Unknown(_) if claims::orig_defined(fx, (lo, hi)) => {}
+                claims::V::Unknown(w) => out
+                    .problems
+                    .push(format!("f is not shown defined on its piece: {w}")),
             }
         } else {
             for t in &trees {
                 match defined_on(t, (lo, hi)) {
                     claims::V::Yes => {}
+                    // (Not shown is not let through: a piece reaching past
+                    // √x's end beside tan's poles was noted and passed.)
                     claims::V::No(w) | claims::V::Unknown(w) => {
-                        out.notes
-                            .push(format!("off its families, a piece not shown defined: {w}"));
+                        out.problems.push(format!(
+                            "off its families, f is not shown defined on its piece: {w}"
+                        ));
                         break;
                     }
                 }
@@ -1923,8 +1952,10 @@ fn enclosed_end(fx: &Fx, x: B, low: bool) -> Option<bool> {
     None
 }
 
-/// Whether the node at `path` is a divisor of `f`, or the base of a
-/// positive power (a chain of them) that is one.
+/// Whether the node at `path` is one f has no value at the zeros of: a
+/// divisor of `f`, the base of a negative written power (0 to it is 1/0:
+/// cos(x)^(−9007199254740993/1000001) at cos's zeros), or the base of a
+/// positive power (a chain of them) that is one of these.
 fn divisor(f: &graphing::ast::Expr, path: &[u8]) -> bool {
     use graphing::ast::{BinOp, Expr};
     let Some((last, up)) = path.split_last() else {
@@ -1933,9 +1964,11 @@ fn divisor(f: &graphing::ast::Expr, path: &[u8]) -> bool {
     match super::eval::at_path(f, up) {
         Some(Expr::Bin(BinOp::Div, ..)) => *last == 1,
         Some(Expr::Bin(BinOp::Pow, _, k)) if *last == 0 => {
-            super::eval::written_rational(k, &super::eval::Lits::default())
-                .is_some_and(|(p, _)| p > 0)
-                && divisor(f, up)
+            match super::eval::written_rational(k, &super::eval::Lits::default()) {
+                Some((p, _)) if p < 0 => true,
+                Some((p, _)) if p > 0 => divisor(f, up),
+                _ => false,
+            }
         }
         _ => false,
     }

@@ -3012,6 +3012,35 @@ fn parity_called(v: &mut serde_json::Value, kind: &str, text: &str) {
         "value": kind, "cert": {"covers": "Line", "claims": [fact(text)]}}});
 }
 
+/// Every row but `keep` withheld (unknown).
+fn withhold_all_but(v: &mut serde_json::Value, keep: &str) {
+    for row in [
+        "domain",
+        "x_intercepts",
+        "y_intercept",
+        "parity",
+        "period",
+        "extrema",
+        "inflections",
+        "monotonicity",
+        "range",
+        "vertical",
+        "horizontal",
+        "oblique",
+    ] {
+        if row != keep {
+            v[row] = serde_json::json!({"Unknown": {"reason": "withheld"}});
+        }
+    }
+}
+
+/// Parity made up as `kind` by the simplifier's fact alone, every other
+/// row withheld.
+fn parity_alone(v: &mut serde_json::Value, kind: &str, text: &str) {
+    withhold_all_but(v, "parity");
+    parity_called(v, kind, text);
+}
+
 /// The false version of each claim the third pass stopped refuting, and
 /// what its audit of unknowns read as answers found accepted: each must
 /// still be (or now is) refused.
@@ -3150,6 +3179,25 @@ const FOUND: &[Plant] = &[
             minimum_walled_off(v, false);
         },
     ),
+    // ---- a piece of the domain beside an excluded family
+    (
+        "tan(x)*sqrt(x)",
+        "domain: [0, ∞) less tan's poles extended to the line less them",
+        |v| {
+            value_of(v, "domain")["pieces"] = serde_json::json!([{"lo": "NegInf", "hi": "PosInf"}]);
+        },
+    ),
+    // ---- a parity with no domain known symmetric
+    (
+        "ln(x)-ln(x)+x^2",
+        "parity: x² on x > 0 called even, every other row withheld",
+        |v| parity_alone(v, "Even", EVEN),
+    ),
+    (
+        "ln(x)-ln(x)+x^3",
+        "parity: x³ on x > 0 called odd, every other row withheld",
+        |v| parity_alone(v, "Odd", ODD),
+    ),
 ];
 
 /// A fact tested at sample points is borne out only by values the replay
@@ -3178,6 +3226,17 @@ fn samples_that_place_nothing_bear_nothing_out() {
     for (c, class) in &lines {
         assert_eq!(*class, Class::Unconfirmed, "{c}");
     }
+    // Nor is a piece of a domain shown by not being refuted: √x typed so
+    // that the replay places its radicand nowhere, "defined on all of ℝ",
+    // every other row withheld, was let through with a note.
+    let src = "sqrt((10^5000+1)-(10^5000)-1+x)";
+    let mut v = certificate(src);
+    withhold_all_but(&mut v, "domain");
+    v["domain"] = serde_json::json!({"Certified": {
+        "value": {"pieces": [{"lo": "NegInf", "hi": "PosInf"}], "excluded": []},
+        "cert": {"covers": "Line", "claims": []}}});
+    let why = rejected(&v).expect("a domain of ℝ for √x, not placed: accepted");
+    assert!(why.contains("not shown defined"), "{why}");
     // Where f is placed, the same facts are judged as before: x² + 1 typed
     // so that it is, even (weakly, or by its tree) and not odd.
     let src = "x^2+(1-1+1)";
