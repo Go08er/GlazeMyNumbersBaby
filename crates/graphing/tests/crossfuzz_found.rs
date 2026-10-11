@@ -821,3 +821,63 @@ fn a_constant_whose_value_is_past_the_doubles_is_constant_in_the_period_row() {
     let k = analyze(&eq, &CompileOptions::default());
     assert_ne!(k.periodicity_direction, Periodicity::Constant);
 }
+
+/// A min or max of three or more arguments has its kinks where two of
+/// them meet, and the certifier listed kinks for two arguments only: for
+/// min(x, 1, 2 − x) no row knew of the kink at 1, and "no inflection
+/// points" rested on the claim that f″, which is 0 off the kink and
+/// doesn't exist at it, is 0 on the whole line (the replay left it
+/// open, so the genuine certificate failed the strict replay).
+#[test]
+fn a_min_of_three_arguments_has_its_kinks() {
+    use graphing::certify::{Claim, DEFAULT_BUDGET, Row, Subject, certify_text};
+    let f = "min(x,1,2-x)";
+    let a = certify_text(f, CompileOptions::default(), DEFAULT_BUDGET, None).expect("certifies");
+    let mut claims = Vec::new();
+    if let Row::Certified { cert, .. } | Row::Partial { cert, .. } = &a.inflections {
+        claims.extend(cert.claims.iter().cloned());
+    }
+    if let Row::Certified { cert, .. } | Row::Partial { cert, .. } = &a.extrema {
+        claims.extend(cert.claims.iter().cloned());
+    }
+    // Nothing is said of f″ (or f′) as a value on a box with the kink
+    // strictly inside it.
+    for c in &claims {
+        if let Claim::Value { x, of, .. } = c
+            && (*of == Subject::f(1) || *of == Subject::f(2))
+        {
+            assert!(
+                !(x.a.0 < 1.0 && 1.0 < x.b.0),
+                "{f}: {c:?}, across the kink at 1"
+            );
+        }
+    }
+    // The maximum is at the kink, and is found (or the row is not shown).
+    if let Row::Certified { value, .. } = &a.extrema {
+        assert_eq!(value.len(), 1, "{value:?}");
+        let e = &value[0];
+        assert!(e.x.lo.0 <= 1.0 && 1.0 <= e.x.hi.0, "{e:?}");
+        assert!(e.y.lo.0 <= 1.0 && 1.0 <= e.y.hi.0, "{e:?}");
+    }
+    // Three arguments, the third never the greatest: the two-argument
+    // function's extrema, as many.
+    let three = certify_text(
+        "max(x^2,2-x^2,-5)",
+        CompileOptions::default(),
+        DEFAULT_BUDGET,
+        None,
+    )
+    .expect("certifies");
+    let two = certify_text(
+        "max(x^2,2-x^2)",
+        CompileOptions::default(),
+        DEFAULT_BUDGET,
+        None,
+    )
+    .expect("certifies");
+    if let (Row::Certified { value: a, .. }, Row::Certified { value: b, .. }) =
+        (&three.extrema, &two.extrema)
+    {
+        assert_eq!(a.len(), b.len(), "{a:?} against {b:?}");
+    }
+}
