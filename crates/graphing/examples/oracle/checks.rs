@@ -1525,8 +1525,9 @@ pub fn check_analysed(
                 _ => &[1.0, -1.0],
             };
             for &s in sides {
-                let resid = |k: i32| -> Option<(f64, f64)> {
-                    let (mut r, mut t) = (0.0f64, 0.0f64);
+                // (The largest residual, the tolerance, and where it was.)
+                let resid = |k: i32| -> Option<(f64, f64, f64)> {
+                    let (mut r, mut t, mut at) = (0.0f64, 0.0f64, f64::NAN);
                     for j in 0..=8 {
                         let x = s * 10f64.powi(k) * (1.0 + j as f64 / 8.0);
                         // A value too small to size is its double, 0.
@@ -1535,17 +1536,22 @@ pub fn check_analysed(
                             return None;
                         }
                         let line = m * x + b;
-                        r = r.max((v.v - line).abs());
+                        if (v.v - line).abs() >= r {
+                            (r, at) = ((v.v - line).abs(), x);
+                        }
                         t = t.max(f.tol(x) + 8.0 * ulp(line) + 8.0 * ulp(m * x));
                     }
-                    Some((r, t))
+                    Some((r, t, at))
                 };
-                let (Some((r1, _)), Some((r2, t2))) = (resid(k1), resid(k1 + 3)) else {
+                let (Some((r1, _, _)), Some((r2, t2, far))) = (resid(k1), resid(k1 + 3)) else {
                     continue;
                 };
                 if r2 > 8.0 * t2 && r2 >= r1 && !same(b, b + r2) && !same(b, b - r2) {
-                    cx.fail(
+                    // (About the far point: f's doubles there are what the
+                    // verdict rests on.)
+                    cx.fail_point(
                         "asymptote-not-approached",
+                        far,
                         format!(
                             "{what} y = {}{} as x → {}∞: |f − line| is {r1:e} near 10^{k1}, {r2:e} near 10^{}",
                             if m != 0.0 { format!("{m}·x + ") } else { String::new() },
