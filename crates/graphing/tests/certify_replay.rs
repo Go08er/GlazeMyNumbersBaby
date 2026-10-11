@@ -3293,3 +3293,42 @@ fn the_false_versions_of_what_the_third_pass_let_through_are_refused() {
     );
     refuted("x+1/x", "oblique: its line denied, by a period 2π");
 }
+
+/// mod(a, b) where b is 0 has no value (`graphing::functions::modulo`): at
+/// a point where the divisor is 0 throughout, the replay's is undefined
+/// too, not unknown (the tester's largest class of true claims it left
+/// unconfirmed: mod(x, x) "undefined at 0").
+#[test]
+fn a_remainder_by_zero_is_undefined() {
+    replay::iv::init();
+    let at = |src: &str, x: f64| {
+        let (e, lits) = read(src);
+        let ctx = replay::eval::Ctx {
+            unit: replay::iv::Unit::Radians,
+            lits: &lits,
+            vars: &[],
+        };
+        replay::eval::series(&e, x, x, 0, &ctx).swap_remove(0)
+    };
+    assert!(at("mod(x,x)", 0.0).empty);
+    assert!(at("mod(5,x)", 0.0).empty);
+    assert!(at("mod(x,x-x)", 3.0).empty);
+    let v = at("mod(x,3)", 7.0);
+    assert!(v.def && v.is_exactly(1.0), "{v:?}");
+    let v = at("mod(x,x)", 2.5);
+    assert!(v.def && v.is_exactly(0.0), "{v:?}");
+    // A divisor that only may be 0 on the box leaves it open.
+    let (e, lits) = read("mod(5,x)");
+    let ctx = replay::eval::Ctx {
+        unit: replay::iv::Unit::Radians,
+        lits: &lits,
+        vars: &[],
+    };
+    let v = replay::eval::series(&e, -1.0, 1.0, 0, &ctx).swap_remove(0);
+    assert!(!v.empty && !v.def, "{v:?}");
+    // The certifier's "undefined at 0" is proved.
+    let v = certificate("mod(x,x)+x");
+    for (c, class) in judged(&v, "Undefined") {
+        assert_eq!(class, Class::Strong, "{c}");
+    }
+}

@@ -2385,6 +2385,23 @@ fn tight(v: &Iv) -> bool {
     width <= 1e-6 || width <= size
 }
 
+/// Whether f is defined at both or at neither of ±x at each sample point:
+/// `Some(false)` where it is shown defined at only one of a pair (its
+/// domain is not symmetric about 0), `Some(true)` where no pair shows that
+/// and some pair has it defined at both, `None` where it is placed at
+/// none.
+pub fn mirrored_at_points(fx: &Fx) -> Option<bool> {
+    let mut both = false;
+    for &x in &SAMPLES {
+        let (a, b) = (f_at(fx, &Iv::of(x)), f_at(fx, &Iv::of(-x)));
+        if a.empty != b.empty && (a.def || b.def) {
+            return Some(false);
+        }
+        both |= !a.empty && a.def && b.def;
+    }
+    both.then_some(true)
+}
+
 /// Points a symmetry or a period is tested at: near 0, ordinary, and far
 /// out.
 const SAMPLES: [f64; 20] = [
@@ -2412,12 +2429,10 @@ fn simplifier(fx: &Fx, fact: &str, cert: &[Claim]) -> Outcome {
         if tree_parity(&fx.f, &fx.lits) == Some(even) {
             return Outcome::new(Class::Strong, "by the tree's structure");
         }
-        // f(−x) ≡ ±f(x) exactly (the domain's symmetry: its row).
-        let mirror =
-            fx.f.map(&|n| matches!(n, Expr::X).then(|| Expr::Neg(Box::new(Expr::X))));
-        if super::algebra::same_trees(&fx.f, &mirror, !even, &fx.lits, &fx.vars, fx.unit) {
-            return Outcome::new(Class::Strong, "f(−x) ≡ ±f(x) exactly");
-        }
+        // The points first: f defined at only one of ±x, or with values
+        // apart there, is a proof against, which the exact identity below
+        // is no answer to (it holds where both sides are defined, with
+        // what cancels cancelled: ln x − ln x + x² ≡ its mirror).
         let mut compared = 0;
         for &x in &SAMPLES {
             let (a, b) = (f_at(fx, &Iv::of(x)), f_at(fx, &Iv::of(-x)));
@@ -2435,6 +2450,12 @@ fn simplifier(fx: &Fx, fact: &str, cert: &[Claim]) -> Outcome {
                 );
             }
             compared += usize::from(tight(&a) && tight(&other));
+        }
+        // f(−x) ≡ ±f(x) exactly (the domain's symmetry: its row).
+        let mirror =
+            fx.f.map(&|n| matches!(n, Expr::X).then(|| Expr::Neg(Box::new(Expr::X))));
+        if super::algebra::same_trees(&fx.f, &mirror, !even, &fx.lits, &fx.vars, fx.unit) {
+            return Outcome::new(Class::Strong, "f(−x) ≡ ±f(x) exactly");
         }
         // (Agreement at no point is no agreement: an f the replay places
         // at none of them was "even" and "odd" alike.)

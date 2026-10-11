@@ -492,6 +492,34 @@ pub fn tan_ode(a: &S, t0: Iv) -> S {
     restrict_validity(t, &[a])
 }
 
+/// tanh(a) from its value `t0` and sech²(a)'s `p0`, by tanh′ = (1 −
+/// tanh²)·a′: t_k = (1/k) Σ_{j=1..k} j a_j p_{k−j} with p = 1 − t² (p₀
+/// given, as 1/cosh²: 1 − t₀² of an enclosure of t₀ near ±1 is all
+/// rounding).
+pub fn tanh_ode(a: &S, t0: Iv, p0: Iv) -> S {
+    let n = order(a);
+    let mut t = vec![t0];
+    let mut p: Vec<Iv> = Vec::new();
+    for k in 1..=n {
+        let m = k - 1;
+        p.push(if m == 0 {
+            p0.clone()
+        } else {
+            let mut acc = zero();
+            for i in 0..=m {
+                acc = iv::add(&acc, &iv::mul(&t[i], &t[m - i]));
+            }
+            iv::neg(&acc)
+        });
+        let mut acc = zero();
+        for j in 1..=k {
+            acc = iv::add(&acc, &iv::mul(&iv::scale(&a[j], j as f64), &p[k - j]));
+        }
+        t.push(iv::div(&acc, &Iv::of(k as f64)));
+    }
+    restrict_validity(t, &[a])
+}
+
 /// Replaces coefficients from 1 on as nonexistent unless `ok`.
 pub fn only_value_unless(s: S, ok: bool) -> S {
     if ok { s } else { invalid_from(s, 1) }

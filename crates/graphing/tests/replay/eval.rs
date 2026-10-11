@@ -1031,6 +1031,14 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
             let (s, c) = se::sinh_cosh(&ea);
             let t = se::div(&s, &c);
             let v = t[0].meet(&iv::tanh(&ea[0]));
+            // Again from tanh′ = 1 − tanh² = sech², which keeps the
+            // coefficients' signs far out, where sinh/cosh's are a wide
+            // number over a wide one (c₀ − t₀·s₀ of two enclosures a box
+            // apart: tanh(x)³'s f″ at 18 took the whole budget at every
+            // precision, undecided).
+            let sech2 = iv::recip(&iv::powi(&c[0], 2));
+            let ode = se::tanh_ode(&ea, v.clone(), sech2);
+            let t = t.iter().zip(&ode).map(|(a, b)| a.meet(b)).collect();
             se::with_value(t, v)
         }
         Sech => se::recip(&se::sinh_cosh(&a()).1),

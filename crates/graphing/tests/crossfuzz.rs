@@ -58,9 +58,9 @@
 //! * **Findings**: two views disagree. They fail the run.
 //! * **Found before and left open** ([`KNOWN`]): disagreements of a cause
 //!   already found and written down, that isn't fixed here (a documented
-//!   limit of the doubles, the replay's own limits and bugs, which are
-//!   another's to change). Listed with their cause in every run, so that a
-//!   run fails on what is new.
+//!   limit of the doubles, the replay's own limits, which are another's
+//!   to change). Listed with their cause in every run, so that a run
+//!   fails on what is new.
 //! * **Counted, not failures**: what is no disagreement between views
 //!   that prove things, though two evaluations differ. The compiled
 //!   program and the reference compute in doubles: an operand that rounds
@@ -330,18 +330,22 @@ fn root_far_in(case: &Case, f: &Finding) -> bool {
 
 const KNOWN: &[(&str, Matches, &str)] = &[
     // The replay (tests/replay) is another's to change; what it leaves
-    // open is listed by kind in this tester's report.
+    // open is listed by kind in this tester's report. (A claim it refutes
+    // is a finding, `replay/refuted`, and so is a limit it leaves open
+    // with f's values at points against it, `replay/values-against`.)
     (
         "replay/unconfirmed",
         any,
         "the replay leaves a claim behind a shown row open (its own limits: a point between \
-         two doubles, exact literal arithmetic, a root of a varying degree, a number past i64 \
-         in a simplifier fact, a gap over 64 doubles)",
+         two doubles, exact literal arithmetic past what it carries (an f it places nowhere \
+         bears out no fact tested at points), a root of a varying degree where the radicand \
+         may be negative, a number past i64 in a simplifier fact, a gap over 64 doubles)",
     ),
     (
         "replay/row-problem",
         not_refuted,
-        "a row the replay can't derive because it leaves its claims open",
+        "a row the replay can't derive: its claims are left open, or what it rests on is not \
+         shown (a piece of the domain defined, the domain's symmetry under a parity)",
     ),
     // functions::ncr and npr (Γ's quotient) in doubles: ∞·0 far out and
     // an underflow to 0 give NaN where the quotient has a value, which the

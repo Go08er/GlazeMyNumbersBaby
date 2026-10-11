@@ -1447,9 +1447,20 @@ fn parity(
                 None if claims::tree_parity(&fx.f, &fx.lits) == Some(p == "Even") => out
                     .notes
                     .push("the domain's symmetry: by f's structure, with no domain row".into()),
-                None => out.problems.push(format!(
-                    "{p}, but the domain is not known to be symmetric about 0"
-                )),
+                // Else as far as points go: f defined at both or neither
+                // of ±x at each, and at both of some (weak, as a fact
+                // tested at points is; an f placed at none shows nothing).
+                None => match claims::mirrored_at_points(fx) {
+                    Some(true) => out.notes.push(
+                        "the domain's symmetry: tested at points only, with no domain row".into(),
+                    ),
+                    Some(false) => out.problems.push(format!(
+                        "{p}, but f is defined at only one of ±x at a sample point"
+                    )),
+                    None => out.problems.push(format!(
+                        "{p}, but the domain is not known to be symmetric about 0"
+                    )),
+                },
             }
             let word = if p == "Even" { "even" } else { "odd" };
             let fact = rc.claims.iter().find(
