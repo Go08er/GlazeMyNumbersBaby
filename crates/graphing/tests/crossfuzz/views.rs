@@ -178,13 +178,6 @@ pub fn replay_child() {
     mp::replay_child();
 }
 
-/// Whether the compiled `y = text` has a value at x (`None`: no such
-/// function).
-pub fn defined_at(text: &str, set: &Setup, x: f64) -> Option<bool> {
-    let l = load(text, set).ok()?;
-    Some(!l.f.prog.eval(x, 0.0).is_nan())
-}
-
 fn load(text: &str, set: &Setup) -> Result<Loaded, NoFunction> {
     let vars = set.vars();
     let setting = Setting {
@@ -560,37 +553,6 @@ mod mp {
         }
     }
 
-    /// What the replay's `OneCross` does with a low end it can't place:
-    /// it reads "not shown above c there" as "below c there", and then
-    /// calls the claim refuted at the high end for being below c too
-    /// (tests/replay/claims.rs). Where the replay's own f at the low end
-    /// (at [`PREC`] bits) lies on neither side of c and the refutation
-    /// names the high end, this says so: nothing was refuted, an end was
-    /// left open. (A refutation with both ends placed is said nothing of.)
-    fn low_end_unplaced(fx: &Fx, claim: &replay::Claim, note: &str) -> Option<String> {
-        let replay::Claim::OneCross {
-            x,
-            of: replay::Subject::F(0),
-            c,
-        } = claim
-        else {
-            return None;
-        };
-        if !note.ends_with(&format!(" at {:e}", x.1)) {
-            return None;
-        }
-        let m = at_prec(|| fx.series(&fx.f, x.0, x.0, 0)).swap_remove(0);
-        let (lo, hi) = bounds(&m);
-        let placed = !m.empty && m.def && (lo > *c || hi < *c);
-        (!placed).then(|| {
-            format!(
-                "the replay's own f at the low end {:e} is {}, on neither side of {c:e}",
-                x.0,
-                show(&m)
-            )
-        })
-    }
-
     /// The replay's reading of the function, from the certificate: its
     /// own scan of the source's numbers, checked against the parser's.
     pub fn function(json: &serde_json::Value, out: &mut Outcome) -> Option<Fx> {
@@ -865,10 +827,6 @@ mod mp {
     /// (`replay/gave-up-waiting`: a matter of time, so not a failure).
     /// (On a thread it ran on after it was given up on, and a run's slow
     /// replays piled up until the others had to be skipped.)
-    ///
-    /// A refuted `OneCross` of f says so when the replay's own f at the
-    /// box's low end is on neither side of c and the refutation is at the
-    /// high end ([`low_end_unplaced`]).
     pub fn replayed(json: &serde_json::Value, fx: &Fx, out: &mut Outcome) {
         use std::io::{Read, Write};
         use std::process::{Command, Stdio};
@@ -1034,12 +992,12 @@ mod mp {
             let line = || format!("{:?} ({}): {}", c.claim, c.rows.join(","), c.outcome.note);
             match c.outcome.class {
                 Class::Strong | Class::Weak => {}
-                Class::Refuted => {
-                    let detail = match low_end_unplaced(fx, &c.claim, &c.outcome.note) {
-                        Some(guess) => format!("{}; {guess}", line()),
-                        None => line(),
-                    };
-                    out.fail("replay/refuted", detail);
+                Class::Refuted => out.fail("replay/refuted", line()),
+                // A limit left open with f's values at the points tried
+                // against it: no proof (so not refuted), but to look at
+                // like one, not one of the replay's known limits.
+                Class::Unconfirmed if c.outcome.note.starts_with(replay::claims::AGAINST) => {
+                    out.fail("replay/values-against", line());
                 }
                 Class::Unsupported if counting => {
                     out.note("replay/unsupported-counting", line);

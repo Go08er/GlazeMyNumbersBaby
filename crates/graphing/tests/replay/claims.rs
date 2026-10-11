@@ -505,7 +505,13 @@ fn beyond(s: &Subj, x: B, c: f64, above: bool, cont: bool) -> V {
 
 /// The subject at a double strictly on side `above` of c.
 fn end_beyond(s: &Subj, x: f64, c: f64, above: bool) -> V {
-    let (v, valid) = s.at(x);
+    placed(s, x, &s.at(x), c, above)
+}
+
+/// [`end_beyond`] from the subject's value `at` the double x (and whether
+/// it is valid there), worked out once.
+fn placed(s: &Subj, x: f64, at: &(Iv, bool), c: f64, above: bool) -> V {
+    let (v, valid) = (&at.0, at.1);
     if !valid {
         if s.tree == Tree::Orig && s.nowhere(x, x) {
             return V::No(format!("undefined at {x:e}"));
@@ -517,9 +523,30 @@ fn end_beyond(s: &Subj, x: f64, c: f64, above: bool) -> V {
     }
     let wrong = if above { v.le(c) } else { v.ge(c) };
     if s.tree == Tree::Orig && wrong {
-        return V::No(format!("{} at {x:e}", show(&v)));
+        return V::No(format!("{} at {x:e}", show(v)));
     }
-    unknown(format!("{} at {x:e}", show(&v)))
+    unknown(format!("{} at {x:e}", show(v)))
+}
+
+/// The subject strictly on opposite sides of c at the box's two ends:
+/// above at the low end and below at the high, or the other way round.
+/// False only when both ways are shown not to hold; an end the replay
+/// can't place (its enclosure of the subject there reaching c, or not
+/// shown valid) leaves the claim open. (The side of the low end was read
+/// off `!end_beyond(low, above)`, so a low end not placed counted as
+/// below c, and a true crossing from above was refuted at its high end:
+/// log(x, 2) − log(x, 2) + x² − x³ + 6's f″ on [5·10⁻³²⁴, 1), ∞ − ∞ at the
+/// low end and −4 at the high; found by `tests/crossfuzz.rs`.)
+fn opposite_ends(s: &Subj, x: B, c: f64) -> V {
+    let (lo, hi) = (s.at(x.0), s.at(x.1));
+    let falls = all([placed(s, x.0, &lo, c, true), placed(s, x.1, &hi, c, false)]);
+    let rises = all([placed(s, x.0, &lo, c, false), placed(s, x.1, &hi, c, true)]);
+    match (falls, rises) {
+        (V::Yes, _) | (_, V::Yes) => V::Yes,
+        (V::No(a), V::No(b)) if a == b => V::No(a),
+        (V::No(a), V::No(b)) => V::No(format!("{a}; {b}")),
+        (V::Unknown(w), _) | (_, V::Unknown(w)) => V::Unknown(w),
+    }
 }
 
 /// The subject continuous and strictly monotone on the box: c[1] valid
@@ -618,13 +645,7 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
             ])
         }),
         Claim::OneCross { x, of, c } => by_trees(fx, of, &[*x], |s| {
-            let a = end_beyond(s, x.0, *c, true);
-            let below_first = !a.yes();
-            all([
-                end_beyond(s, x.0, *c, !below_first),
-                end_beyond(s, x.1, *c, below_first),
-                monotone(s, *x),
-            ])
+            all([opposite_ends(s, *x, *c), monotone(s, *x)])
         }),
         Claim::ExactAt { x, of, c, at } => by_trees(fx, of, &[*x], |s| {
             if !(x.0 <= *at && *at <= x.1) {
@@ -702,7 +723,7 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
             })
         }
         Claim::Removable { near, at, lo, hi } => removable(fx, *near, *at, *lo, *hi),
-        Claim::Simplifier(fact) => simplifier(fx, fact),
+        Claim::Simplifier(fact) => simplifier(fx, fact, cert),
         Claim::Limit { at, over_x, to } => limit(fx, *at, *over_x, *to),
         Claim::TailLine {
             side,
@@ -1901,7 +1922,20 @@ impl Near<'_> {
                         !contains_x(a) && self.away0(&call(Func::Ln, a)) && self.vanishes(&args[1])
                     }
                     Func::Sqrt | Func::Cbrt | Func::Abs | Func::Sinh | Func::Cosh => self.blows(a),
-                    Func::Root => !contains_x(&args[1]) && self.blows(a),
+                    // root(a, d) is a^(1/d): it grows with |a| for a
+                    // degree d > 0, and as a → 0 for d < 0 (the degree's
+                    // sign was not asked: root(1/x, −2), √x beside 0, was
+                    // shown unbounded there).
+                    Func::Root => {
+                        let d = self.over(&args[1]);
+                        if contains_x(&args[1]) || d.empty || !d.def {
+                            false
+                        } else if d.gt(0.0) {
+                            self.blows(a)
+                        } else {
+                            d.lt(0.0) && self.vanishes(a)
+                        }
+                    }
                     Func::Atanh | Func::Acoth => {
                         self.vanishes(&Expr::Bin(
                             BinOp::Sub,
@@ -2043,8 +2077,13 @@ fn tail_line(fx: &Fx, side: Side, from: f64, m: B, b: B, lo: f64, hi: f64) -> Ou
             "the tree uses a function the replay doesn't model",
         );
     }
+    // (A tail through 0 is beyond an expansion in 1/x, which says nothing
+    // of whether f keeps to the line on it: left open, not refuted.)
     if (from > 0.0) != (side == Side::Right) || from == 0.0 {
-        return Outcome::new(Class::Refuted, "the tail starts on the other side of 0");
+        return Outcome::new(
+            Class::Unconfirmed,
+            "the tail reaches 0, where an expansion in 1/x says nothing",
+        );
     }
     let Some((ms, bs, band)) = super::expand::line(fx, from) else {
         return Outcome::new(
@@ -2283,11 +2322,17 @@ pub fn tree_parity(e: &Expr, lits: &Lits) -> Option<bool> {
                 }
             }
         }
+        // A root of a constant degree: of an even radicand, even whatever
+        // the degree (root(x² − 3, 0.5)); of an odd one, odd for an odd
+        // whole degree as written.
         Expr::Call(Func::Root, args) if args.len() == 2 && !contains_x(&args[1]) => {
-            let pa = tree_parity(&args[0], lits)?;
-            match written_rational(&args[1], lits)? {
-                (n, q) if q == 1 && (pa || n.is_odd()) => pa,
-                _ => return None,
+            if tree_parity(&args[0], lits)? {
+                true
+            } else {
+                match written_rational(&args[1], lits)? {
+                    (n, q) if q == 1 && n.is_odd() => false,
+                    _ => return None,
+                }
             }
         }
         Expr::Call(f, args) if args.len() == 1 => {
@@ -2324,6 +2369,39 @@ pub fn tree_parity(e: &Expr, lits: &Lits) -> Option<bool> {
     })
 }
 
+/// An enclosure that places its value: bounded, and narrow beside the
+/// value's size (or beside 1). Two enclosures that only overlap show
+/// nothing unless they are: (10^5000 + 1) − 10^5000 + x, enclosed within
+/// 10⁴⁹⁵² of anything at 160 bits, "agreed" with itself mirrored and with
+/// its negative at every point, even and odd at once (the third pass's
+/// audit).
+fn tight(v: &Iv) -> bool {
+    if !v.bounded() {
+        return false;
+    }
+    // (In MPFR: a value past the doubles may be placed as well as any.)
+    let width = iv::sub(&Iv::point(v.hi.clone()), &Iv::point(v.lo.clone())).hi;
+    let size = iv::scale(&iv::abs(v), 1e-6).hi;
+    width <= 1e-6 || width <= size
+}
+
+/// Whether f is defined at both or at neither of ±x at each sample point:
+/// `Some(false)` where it is shown defined at only one of a pair (its
+/// domain is not symmetric about 0), `Some(true)` where no pair shows that
+/// and some pair has it defined at both, `None` where it is placed at
+/// none.
+pub fn mirrored_at_points(fx: &Fx) -> Option<bool> {
+    let mut both = false;
+    for &x in &SAMPLES {
+        let (a, b) = (f_at(fx, &Iv::of(x)), f_at(fx, &Iv::of(-x)));
+        if a.empty != b.empty && (a.def || b.def) {
+            return Some(false);
+        }
+        both |= !a.empty && a.def && b.def;
+    }
+    both.then_some(true)
+}
+
 /// Points a symmetry or a period is tested at: near 0, ordinary, and far
 /// out.
 const SAMPLES: [f64; 20] = [
@@ -2331,7 +2409,12 @@ const SAMPLES: [f64; 20] = [
     2.9e9, 1.13e12, 3.7e15, 7.7e30,
 ];
 
-fn simplifier(fx: &Fx, fact: &str) -> Outcome {
+/// How the note of a limit left open begins when f's values at the points
+/// tried speak against it: no proof it is false (three points far out
+/// refute no limit), but not the replay running out of reach either.
+pub const AGAINST: &str = "its values at points speak against it: ";
+
+fn simplifier(fx: &Fx, fact: &str, cert: &[Claim]) -> Outcome {
     if unmodelled(&fx.f) {
         return Outcome::new(
             Class::Unsupported,
@@ -2346,12 +2429,11 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
         if tree_parity(&fx.f, &fx.lits) == Some(even) {
             return Outcome::new(Class::Strong, "by the tree's structure");
         }
-        // f(−x) ≡ ±f(x) exactly (the domain's symmetry: its row).
-        let mirror =
-            fx.f.map(&|n| matches!(n, Expr::X).then(|| Expr::Neg(Box::new(Expr::X))));
-        if super::algebra::same_trees(&fx.f, &mirror, !even, &fx.lits, &fx.vars, fx.unit) {
-            return Outcome::new(Class::Strong, "f(−x) ≡ ±f(x) exactly");
-        }
+        // The points first: f defined at only one of ±x, or with values
+        // apart there, is a proof against, which the exact identity below
+        // is no answer to (it holds where both sides are defined, with
+        // what cancels cancelled: ln x − ln x + x² ≡ its mirror).
+        let mut compared = 0;
         for &x in &SAMPLES {
             let (a, b) = (f_at(fx, &Iv::of(x)), f_at(fx, &Iv::of(-x)));
             if a.empty != b.empty && (a.def || b.def) {
@@ -2367,6 +2449,21 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
                     format!("f(−{x}) ≠ {}f({x})", if even { "" } else { "−" }),
                 );
             }
+            compared += usize::from(tight(&a) && tight(&other));
+        }
+        // f(−x) ≡ ±f(x) exactly (the domain's symmetry: its row).
+        let mirror =
+            fx.f.map(&|n| matches!(n, Expr::X).then(|| Expr::Neg(Box::new(Expr::X))));
+        if super::algebra::same_trees(&fx.f, &mirror, !even, &fx.lits, &fx.vars, fx.unit) {
+            return Outcome::new(Class::Strong, "f(−x) ≡ ±f(x) exactly");
+        }
+        // (Agreement at no point is no agreement: an f the replay places
+        // at none of them was "even" and "odd" alike.)
+        if compared == 0 {
+            return Outcome::new(
+                Class::Unconfirmed,
+                "f is decided at no pair of sample points",
+            );
         }
         return Outcome::new(Class::Weak, "agrees at sample points");
     }
@@ -2377,7 +2474,9 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
         // f(x + P) ≡ f(x) exactly, for P written q·πᵏ, or (P only
         // enclosed) a q·πᵏ with a small denominator inside the enclosure:
         // a period there. (The domain's invariance: its row.)
-        let mut candidates: Vec<(i64, i64, i32)> = piq_parts(p).into_iter().collect();
+        // (A period is not 0: f(x + 0) ≡ f(x) whatever f is.)
+        let mut candidates: Vec<(i64, i64, i32)> =
+            piq_parts(p).into_iter().filter(|(n, ..)| *n != 0).collect();
         if p == "P"
             && let Some(b) = fact.split_once("P ∈ ").and_then(|(_, b)| bracket(b))
         {
@@ -2422,6 +2521,19 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
         let Some(per) = per else {
             return Outcome::new(Class::Unconfirmed, format!("unread period: {fact}"));
         };
+        // The points test one positive number: f at x against f over x +
+        // a box that holds 0, or is wide, agrees whatever f is (x² − 1
+        // "repeated" by a P in [−1, 1], and a window of that width clear
+        // of its zeros stood for the line).
+        let (lo, hi) = outward(&per);
+        let one = lo > 0.0 && hi.is_finite() && hi - lo <= 1e-9 * lo;
+        if !one {
+            return Outcome::new(
+                Class::Unconfirmed,
+                format!("{} encloses no one positive period", show(&per)),
+            );
+        }
+        let mut compared = 0;
         for &x in SAMPLES.iter().chain(&[-0.7, -2.2, -9.1]) {
             let a = f_at(fx, &Iv::of(x));
             let shifted = iv::add(&Iv::of(x), &per);
@@ -2432,17 +2544,31 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
             if b.def && (b.hi < a.lo || a.hi < b.lo) {
                 return Outcome::new(Class::Refuted, format!("f({x}) ≠ f({x} + P)"));
             }
+            compared += usize::from(b.def && tight(&a) && tight(&b));
+        }
+        // (Agreement at no point is no agreement.)
+        if compared == 0 {
+            return Outcome::new(
+                Class::Unconfirmed,
+                "f is decided at no sample point and its shift by P",
+            );
         }
         return Outcome::new(Class::Weak, "agrees at sample points");
     }
     // Weak only when f's values at every point tested, far out (or near
-    // the point), bear the limit out; refuted when they settle elsewhere.
+    // the point), bear the limit out. Values that settle elsewhere leave it
+    // unconfirmed, marked [`AGAINST`]: a limit says what f does past every
+    // point, and the few tried prove nothing of that either way (a true
+    // one was refuted so: a periodic f too large far out for f/x to look
+    // like 0 there, [`periodic_no_line`]).
     let weak = |ok: Approach, what: &str| match ok {
         Approach::Consistent(how) => Outcome::new(
             Class::Weak,
             format!("agrees at points approaching {what}: {how}"),
         ),
-        Approach::Inconsistent(why) => Outcome::new(Class::Refuted, format!("{what}: {why}")),
+        Approach::Inconsistent(why) => {
+            Outcome::new(Class::Unconfirmed, format!("{AGAINST}{what}: {why}"))
+        }
         Approach::Undecided(why) => Outcome::new(Class::Unconfirmed, format!("{what}: {why}")),
     };
     // A rational f: its behaviour at ±∞ exactly, from N/D's degrees and
@@ -2464,6 +2590,7 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
         let (Some(m), Some(b)) = (pi_q(m), pi_q(b)) else {
             return Outcome::new(Class::Unconfirmed, format!("unread line: {fact}"));
         };
+        let mut compared = 0;
         for &x in SAMPLES.iter().chain(&[-0.7, -2.2, -9.1, -1e3, -3.7e9]) {
             let v = f_at(fx, &Iv::of(x));
             if v.empty || !v.def {
@@ -2473,6 +2600,10 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
             if v.hi < line.lo || line.hi < v.lo {
                 return Outcome::new(Class::Refuted, format!("f({x}) is off the line"));
             }
+            compared += usize::from(tight(&v) && tight(&line));
+        }
+        if compared == 0 {
+            return Outcome::new(Class::Unconfirmed, "f is decided at no sample point");
         }
         return Outcome::new(Class::Weak, "on the line at sample points");
     }
@@ -2486,15 +2617,7 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
     // Oblique asymptotes (and their absence).
     let over_x = |x: f64, v: Iv| iv::div(&v, &Iv::of(x));
     if fact.starts_with("f is periodic: f − (m·x + b) does not tend to 0") {
-        // A periodic f is bounded where defined: f/x → 0 both ways, so no
-        // line with m ≠ 0 is approached. Tested far out on both sides.
-        for at in ["+∞", "−∞"] {
-            let o = weak(approaches(fx, at, &over_x, "0"), "f/x → 0");
-            if o.class != Class::Weak {
-                return o;
-            }
-        }
-        return Outcome::new(Class::Weak, "f/x → 0 at points far out both ways");
+        return periodic_no_line(fx, cert);
     }
     if let Some(rest) = fact.strip_prefix("f/x → ±∞ as x → ") {
         let at = rest.split_once(':').map_or(rest, |(a, _)| a);
@@ -2591,6 +2714,76 @@ fn simplifier(fx: &Fx, fact: &str) -> Outcome {
     Outcome::new(Class::Unconfirmed, format!("unread fact: {fact}"))
 }
 
+/// "f is periodic, so f − (m·x + b) tends to 0 for no m ≠ 0": as far as
+/// f's period is shown. Were f(x) − (m·x + b) → 0 along f's domain, so
+/// would f(x + P) − (m·(x + P) + b), and where f(x + P) = f(x) the two
+/// differ by m·P: m·P = 0. So it follows from a fact of the certificate
+/// "f(x + P) = f(x) wherever f is defined" with P ≠ 0, as that fact itself
+/// replays: strong where f(x + P) ≡ f(x) exactly, weak where it agrees at
+/// sample points. A certificate with no such fact has only f's values far
+/// out to go by, f/x near 0 both ways (weak); values that don't look so
+/// leave it unconfirmed. Never refuted: f's size far out says nothing of
+/// its period (tan(x) + cosh(2147483649) is about 10⁹³²⁶⁴⁰⁰⁰⁰ everywhere,
+/// and cos(x)^(−9007199254740993/1000001) past every double at each point
+/// tried: both were refuted by f/x there; found by `tests/crossfuzz.rs`).
+fn periodic_no_line(fx: &Fx, cert: &[Claim]) -> Outcome {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut weak = false;
+    for c in cert {
+        let Claim::Simplifier(pf) = c else { continue };
+        let Some(rest) = pf.strip_prefix("f(x + ") else {
+            continue;
+        };
+        if seen.contains(&pf.as_str()) {
+            continue;
+        }
+        seen.push(pf);
+        // The period away from 0 (f(x + 0) = f(x) says nothing).
+        let Some((p, _)) = rest.split_once(") = f(x)") else {
+            continue;
+        };
+        let per = if p == "P" {
+            pf.split_once("P ∈ ").and_then(|(_, b)| bracket(b))
+        } else {
+            pi_q(p)
+        };
+        if !per.is_some_and(|v| v.bounded() && v.ne0()) {
+            continue;
+        }
+        match simplifier(fx, pf, &[]).class {
+            Class::Strong => {
+                return Outcome::new(
+                    Class::Strong,
+                    format!("f's period, shown exactly ({pf}): m·P = 0"),
+                );
+            }
+            Class::Weak => weak = true,
+            _ => {}
+        }
+    }
+    if weak {
+        return Outcome::new(Class::Weak, "f's period agrees at sample points: m·P = 0");
+    }
+    // No period shown (no fact of one, a period of 0, or one not borne
+    // out): what the conclusion itself needs, f/x → 0 both ways.
+    let over_x = |x: f64, v: Iv| iv::div(&v, &Iv::of(x));
+    for at in ["+∞", "−∞"] {
+        match approaches(fx, at, &over_x, "0") {
+            Approach::Consistent(_) => {}
+            Approach::Inconsistent(why) | Approach::Undecided(why) => {
+                return Outcome::new(
+                    Class::Unconfirmed,
+                    format!("no period of f is shown, and f/x → 0 is not seen at {at}: {why}"),
+                );
+            }
+        }
+    }
+    Outcome::new(
+        Class::Weak,
+        "no period of f is shown; f/x → 0 at points far out both ways",
+    )
+}
+
 /// f − m·x is G, of period P: each by the field of fractions in x and
 /// atoms (strong), or else at sample points (weak).
 fn periodic_rest(fx: &Fx, m: &str, g: &str, p: &str, fact: &str) -> Outcome {
@@ -2598,6 +2791,11 @@ fn periodic_rest(fx: &Fx, m: &str, g: &str, p: &str, fact: &str) -> Outcome {
     let (Some((mn, md, mk)), Some((pn, pd, pk))) = (piq_parts(m), piq_parts(p)) else {
         return unread();
     };
+    // (A period is not 0: G(x + 0) ≡ G(x) whatever G is, and x + 1/x, "x
+    // and a rest 1/x of period 0", had no oblique asymptote.)
+    if pn == 0 {
+        return Outcome::new(Class::Unconfirmed, format!("a period of 0 is none: {fact}"));
+    }
     let (Some(me), Some(pe), Some(gt)) = (
         super::algebra::piq_expr(mn, md, mk),
         super::algebra::piq_expr(pn, pd, pk),
@@ -2622,16 +2820,27 @@ fn periodic_rest(fx: &Fx, m: &str, g: &str, p: &str, fact: &str) -> Outcome {
     // At sample points: f − m·x against G, and G against G shifted.
     let ctx = fx.ctx();
     let at = |e: &Expr, x: &Iv| super::eval::eval(e, &se::var(x.clone(), 0), 0, &ctx)[0].clone();
+    let (mut rests, mut repeats) = (0, 0);
     for &x in SAMPLES.iter().chain(&[-0.7, -2.2, -9.1]) {
         let xv = Iv::of(x);
         let (a, b) = (at(&rest, &xv), at(&gt, &xv));
-        if !a.empty && a.def && !b.empty && b.def && (a.hi < b.lo || b.hi < a.lo) {
+        let decided = |v: &Iv| !v.empty && v.def;
+        if decided(&a) && decided(&b) && (a.hi < b.lo || b.hi < a.lo) {
             return Outcome::new(Class::Refuted, format!("f − m·x is not G at {x}"));
         }
         let c = at(&shifted, &xv);
-        if !b.empty && b.def && !c.empty && c.def && (b.hi < c.lo || c.hi < b.lo) {
+        if decided(&b) && decided(&c) && (b.hi < c.lo || c.hi < b.lo) {
             return Outcome::new(Class::Refuted, format!("G(x + P) ≠ G(x) at {x}"));
         }
+        rests += usize::from(decided(&a) && decided(&b) && tight(&a) && tight(&b));
+        repeats += usize::from(decided(&b) && decided(&c) && tight(&b) && tight(&c));
+    }
+    // (Agreement at no point is no agreement.)
+    if rests == 0 || repeats == 0 {
+        return Outcome::new(
+            Class::Unconfirmed,
+            "f − m·x, G and G shifted are decided together at no sample point",
+        );
     }
     Outcome::new(Class::Weak, "agrees at sample points")
 }
