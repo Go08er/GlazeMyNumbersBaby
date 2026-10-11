@@ -1467,6 +1467,23 @@ fn panel(
                     f.detail.clone()
                 });
             }
+            // "A pole is missing": f grows toward a point where it is
+            // undefined, at the doubles. A pole is f unbounded there, and
+            // f's enclosure over the doubles about the point says whether
+            // it can be: min((3 − x)^(−2000002/2000004), 1000001ˣ) is
+            // 2·10¹⁵ and rising at the double before 3, and never past
+            // 1000001³.
+            "vertical-asymptote-missing"
+                if f.at.is_finite() && {
+                    let around = Interval::new(checks::step(f.at, -4), checks::step(f.at, 4));
+                    let e = enclose(l.ast(), around, &ctx);
+                    !e.is_empty() && e.iv.is_bounded()
+                } =>
+            {
+                out.note("panel/no-pole-where-the-enclosure-is-bounded", || {
+                    f.detail.clone()
+                });
+            }
             // "y = c is not approached": f is far from c at the farthest
             // samples. That refutes the limit only if f stays away, which
             // samples can't say and f's enclosure over the rest of the
