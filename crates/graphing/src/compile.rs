@@ -2450,9 +2450,16 @@ pub(crate) fn exact_call(f: Func, args: &[Expr], opts: &CompileOptions<'_>) -> O
         // exact 0 for a value that isn't; and nCr(−1.00000000000000000001,
         // 2), which is 1, was undefined as nCr(−1, 2) is.)
         NCr | NPr if args.len() == 2 => {
-            let exact = |a: &Expr| match fold(a, opts) {
-                Fold::Value(r, _) if !a.any(&|n| matches!(n, Expr::X | Expr::Y)) => Some(r),
-                _ => None,
+            // (An argument with x in it is not folded at all: the
+            // reference asks this at every point.)
+            let exact = |a: &Expr| {
+                if a.any(&|n| matches!(n, Expr::X | Expr::Y)) {
+                    return None;
+                }
+                match fold(a, opts) {
+                    Fold::Value(r, _) => Some(r),
+                    _ => None,
+                }
             };
             let (n, k) = (exact(&args[0])?, exact(&args[1])?);
             let rest = n.sub(&k)?;
