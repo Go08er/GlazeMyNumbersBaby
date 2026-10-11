@@ -1321,11 +1321,17 @@ impl App {
                     clip = Clip::Copy;
                     changed = false;
                 }
+                // Undo and redo, as GTK's fields (GMNB's) and upstream's
+                // RichEditBox have them; Ctrl+Y is redo too.
+                Key::Char('z' | 'Z') if ctrl && !alt => {
+                    changed = if shift { e.redo() } else { e.undo() };
+                }
+                Key::Char('y' | 'Y') if ctrl && !alt && !shift => changed = e.redo(),
                 Key::Char('x' | 'X') if ctrl && !alt => clip = Clip::Cut,
                 Key::Char('v' | 'V') if ctrl && !alt => clip = Clip::Paste,
                 Key::Named(Named::Insert) if shift => clip = Clip::Paste,
                 _ if !ctrl && !alt => match text {
-                    Some(t) if !t.is_empty() && !t.chars().any(char::is_control) => e.insert(t),
+                    Some(t) if !t.is_empty() && !t.chars().any(char::is_control) => e.type_in(t),
                     _ => return false,
                 },
                 _ => return false,
