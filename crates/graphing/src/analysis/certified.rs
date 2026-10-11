@@ -392,8 +392,12 @@ fn shift(x: Num, p: &Num, n: f64) -> Num {
 /// with period P/n (the zeros of sin at 0 and π every 2π: kπ). `tag`
 /// must agree too (an extremum's value).
 fn merge(items: Vec<(Num, Num, String)>) -> Vec<(Num, Num, String)> {
-    // The same family twice (tan's poles from tan itself and from it as a
-    // divisor): once.
+    // The same family twice: once. The same when its exact forms say
+    // so, or it is the same two doubles. (Enclosures that coincide are
+    // not one set: tan(x + 10⁻³⁰) + tan(x + 2·10⁻³⁰) excludes two
+    // families, both within one enclosure, and its domain read
+    // ℝ \ {≈1.5708 + kπ}, one of them. The certifier lists a family
+    // once whose side expression occurs twice, as in tan x + sec x.)
     let mut items = items;
     let mut i = 0;
     while i < items.len() {
@@ -409,9 +413,12 @@ fn merge(items: Vec<(Num, Num, String)>) -> Vec<(Num, Num, String)> {
                                 .and_then(Ex::rational)
                                 .is_some_and(|t| t.is_int())
                     }
-                    // The certifier's very enclosures twice (one family
-                    // from two side conditions): the same set.
-                    _ => a.0.enc == b.0.enc && a.1.enc == b.1.enc,
+                    _ => {
+                        a.0.enc == b.0.enc
+                            && a.1.enc == b.1.enc
+                            && a.0.enc.is_point()
+                            && a.1.enc.is_point()
+                    }
                 }
         });
         if dup {
