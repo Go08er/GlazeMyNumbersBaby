@@ -418,10 +418,12 @@ fn reval_in(e: &Expr, x: f64, u: TrigUnit, typed: bool) -> R {
     // (`compile::exact_call`).
     if typed
         && let Expr::Call(f, args) = e
-        && let Some(crate::compile::Exact::As(rewritten)) =
-            crate::compile::exact_call(*f, args, &opts)
+        && let Some(exact) = crate::compile::exact_call(*f, args, &opts)
     {
-        return reval_in(&rewritten, x, u, typed);
+        return match exact {
+            crate::compile::Exact::As(rewritten) => reval_in(&rewritten, x, u, typed),
+            crate::compile::Exact::Unknown => R::Unknown,
+        };
     }
     let reval = |a: &Expr, x: f64, u: TrigUnit| reval_in(a, x, u, typed);
     let kind = |b: &Expr| {

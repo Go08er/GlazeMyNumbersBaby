@@ -2208,7 +2208,15 @@ pub(crate) enum Exact {
     /// The same value, written from the argument's exact distance to the
     /// number it rounds onto.
     As(Expr),
+    /// Too long to carry out so: not known.
+    Unknown,
 }
+
+/// The most factors [`exact_call`] writes out beside a pole of Γ. Each
+/// factor is of a number no double holds, of more than forty bits, so a
+/// product of more than these is past the bound every exact value keeps
+/// (`big::MAX_BITS`): not known, written out or not.
+const POLE_FACTORS: f64 = 400.0;
 
 /// An x- and y-free argument's exact value ([`fold`]) and the double it
 /// rounds to, when that double is another number: the value rounds onto
@@ -2232,8 +2240,9 @@ fn rounds_onto(a: &Expr, opts: &CompileOptions<'_>) -> Option<(Rat, f64)> {
 /// setting), 1 under a logarithm or as its base
 /// (`ln(1.00000000000000000001)`), ±1 where an inverse function's domain
 /// ends or it has a pole (`arcsin(1.00000000000000000001)`,
-/// `artanh(0.99999999999999999999)`). The argument's double sits on that
-/// number, so the general
+/// `artanh(0.99999999999999999999)`), a whole number at a pole of Γ under
+/// a factorial or a count (`(−1.00000000000000000001)!`), a whole number
+/// under `n!!`. The argument's double sits on that number, so the general
 /// path would give the function there (a pole for a value beside it, an
 /// exact 0 for a value that isn't): the exact value decides instead
 /// (review 19, R19-M-04's family). The same value is written from the
@@ -2260,6 +2269,8 @@ pub(crate) fn exact_call(f: Func, args: &[Expr], opts: &CompileOptions<'_>) -> O
     let signed = |s: f64, e: Expr| {
         if s < 0.0 { Expr::Neg(Box::new(e)) } else { e }
     };
+    // Undefined, as √−1 is in every view.
+    let undefined = || Expr::call1(Sqrt, num(-1.0));
     match f {
         // Degrees and grads: sin and cos turn (a zero, or their
         // reciprocal's pole) at whole quarter turns, which are doubles.
@@ -2393,11 +2404,72 @@ pub(crate) fn exact_call(f: Func, args: &[Expr], opts: &CompileOptions<'_>) -> O
                     sign,
                     bin(BinOp::Sub, quarter(), twice(Asin, over_u(off))),
                 ),
-                // The other side of the end: undefined (as √−1 is, in
-                // every view).
-                _ => Expr::call1(Sqrt, num(-1.0)),
+                // The other side of the end.
+                _ => undefined(),
             };
             Some(Exact::As(rewritten))
+        }
+        // n! is Γ(n + 1), with a pole at each whole n below 0: off,
+        // (−1.00000000000000000001)! is Γ(−10⁻²⁰), near −10²⁰, not the
+        // pole its double is at. Γ(a + 1) = Γ(a + n + 1)/((a + 1)(a + 2)…
+        // (a + n)) for the pole at −n: the product is folded exactly, its
+        // last factor the exact distance to the pole, and Γ is taken
+        // beside 1.
+        Factorial => {
+            let (_, d) = rounds_onto(&args[0], opts)?;
+            if !(d <= -1.0 && d == d.trunc()) {
+                return None;
+            }
+            let n = -d;
+            if n > POLE_FACTORS {
+                return Some(Exact::Unknown);
+            }
+            let plus = |j: f64| Expr::bin(BinOp::Add, args[0].clone(), num(j));
+            let mut product = plus(1.0);
+            let mut j = 2.0;
+            while j <= n {
+                product = Expr::bin(BinOp::Mul, product, plus(j));
+                j += 1.0;
+            }
+            let top = Expr::call1(Factorial, plus(n));
+            Some(Exact::As(Expr::bin(BinOp::Div, top, product)))
+        }
+        // n!! is of whole numbers alone: a value that only rounds onto
+        // one has none.
+        DoubleFactorial => {
+            let (r, d) = rounds_onto(&args[0], opts)?;
+            (d >= -1.0 && d == d.trunc() && !r.is_integer()).then(|| Exact::As(undefined()))
+        }
+        // nCr(n, k) is n!/(k!·(n − k)!) and nPr(n, k) is n!/(n − k)! where
+        // the numbers are no whole ones: beside a pole of one of those
+        // factorials (off, nCr(5, 6.00000000000000000001) has (n − k)!
+        // beside −1's), written so, n − k folded exactly, each factorial
+        // then taken as above. (The doubles' count, C(5, 6) = 0, is an
+        // exact 0 for a value that isn't; and nCr(−1.00000000000000000001,
+        // 2), which is 1, was undefined as nCr(−1, 2) is.)
+        NCr | NPr if args.len() == 2 => {
+            let exact = |a: &Expr| match fold(a, opts) {
+                Fold::Value(r, _) if !a.any(&|n| matches!(n, Expr::X | Expr::Y)) => Some(r),
+                _ => None,
+            };
+            let (n, k) = (exact(&args[0])?, exact(&args[1])?);
+            let rest = n.sub(&k)?;
+            let beside_pole = |r: &Rat| {
+                let d = r.to_f64(crate::big::Round::Nearest);
+                d <= -1.0 && d == d.trunc() && !r.is_integer()
+            };
+            if !(beside_pole(&n) || beside_pole(&k) || beside_pole(&rest)) {
+                return None;
+            }
+            let fact = |e: Expr| Expr::call1(Factorial, e);
+            let (a, b) = (args[0].clone(), args[1].clone());
+            let rest = fact(Expr::bin(BinOp::Sub, a.clone(), b.clone()));
+            let below = if f == NCr {
+                Expr::bin(BinOp::Mul, fact(b), rest)
+            } else {
+                rest
+            };
+            Some(Exact::As(Expr::bin(BinOp::Div, fact(a), below)))
         }
         _ => None,
     }
@@ -2548,13 +2620,16 @@ fn lower_in(e: &Expr, opts: &CompileOptions<'_>, lx: Reading) -> Result<Piece, E
     // turns on: from the value's exact distance to that number.
     if lx == Reading::Typed
         && let Expr::Call(f, args) = e
-        && let Some(Exact::As(rewritten)) = exact_call(*f, args, opts)
+        && let Some(exact) = exact_call(*f, args, opts)
     {
         // (A slider in it is still one in what it is rewritten as.)
         let var = e.any(&|n| matches!(n, Expr::Var(_)));
-        return Ok(match rec(&rewritten)? {
-            Piece::Const(w, v) => Piece::Const(w, v || var),
-            code => code,
+        return Ok(match exact {
+            Exact::Unknown => Piece::Const(Wide::Unknown, var),
+            Exact::As(rewritten) => match rec(&rewritten)? {
+                Piece::Const(w, v) => Piece::Const(w, v || var),
+                code => code,
+            },
         });
     }
     Ok(match e {

@@ -719,3 +719,70 @@ fn an_inverse_function_of_an_exact_value_beside_one() {
         t - 20.0 + x.sin()
     });
 }
+
+/// n! is Γ(n + 1), with a pole at each whole number below 0: an exact
+/// value beside one is beside the pole, not on it, and the counts nCr and
+/// nPr, quotients of such factorials, likewise. n!! is of whole numbers
+/// alone: a value that only rounds onto one has none.
+#[test]
+fn a_factorial_of_an_exact_value_beside_a_pole() {
+    let (und, is) = (V::Undefined, V::Is);
+    for (text, off, ti) in [
+        // Γ(−10⁻²⁰) and Γ(10⁻²⁰): ∓10²⁰.
+        ("(-1.00000000000000000001)!", is(-1e20), und),
+        ("(-0.99999999999999999999)!", is(1e20), und),
+        ("1/(-1.00000000000000000001)!", is(-1e-20), und),
+        // Γ(−2 ∓ 10⁻²⁰) = ∓1/(2·10⁻²⁰), Γ(−3 − 10⁻²⁰) = 1/(6·10⁻²⁰).
+        ("(-3.00000000000000000001)!", is(-5e19), und),
+        ("(-2.99999999999999999999)!", is(5e19), und),
+        ("(-4.00000000000000000001)!", is(1e20 / 6.0), und),
+        ("sign((-170.00000000000000000001)!)", is(1.0), und),
+        ("sign((-171.00000000000000000001)!)", is(-1.0), und),
+        // Away from a pole a factorial is the double's, as before.
+        ("(3.00000000000000000001)!", is(6.0), is(6.0)),
+        ("(-0.50000000000000000001)!", is(std::f64::consts::PI.sqrt()), is(std::f64::consts::PI.sqrt())),
+        // n!! has no value beside a whole number.
+        ("(3.00000000000000000001)!!", und, is(3.0)),
+        ("(-0.99999999999999999999)!!", und, is(1.0)),
+        ("(6.99999999999999999999)!!", und, is(105.0)),
+        // The counts, where one of n!, k!, (n − k)! is beside a pole.
+        ("nCr(-1.00000000000000000001,2)", is(1.0), und),
+        ("nPr(-1.00000000000000000001,1)", is(-1.0), und),
+        ("nCr(4.99999999999999999999,6)", is(-1e-20 / 6.0), is(0.0)),
+        ("nCr(5,6.00000000000000000001)", is(-1e-20 / 6.0), is(0.0)),
+        ("nCr(5,-1.00000000000000000001)", is(-1e-20 / 6.0), is(0.0)),
+        ("nPr(5,6.00000000000000000001)", is(-1.2e-18), is(0.0)),
+        ("sign(nCr(5,6.00000000000000000001))", is(-1.0), is(0.0)),
+        ("1/nCr(5,6.00000000000000000001)", is(-6e20), V::Refused),
+        // Away from the poles a count is the doubles', as before.
+        ("nCr(5.00000000000000000001,2)", is(10.0), is(10.0)),
+        ("nCr(5,2.00000000000000000001)", is(10.0), is(10.0)),
+    ] {
+        check(text, OFF, off);
+        check(text, TI, ti);
+    }
+    for digits in [OFF, TI] {
+        // Arithmetic on short numbers lands beside a pole at any setting.
+        check("(10^(-30)-1)!", digits, is(1e30));
+        check("10^30*nCr(5,6+10^(-30))", digits, is(-1.0 / 6.0));
+        check("(3+10^(-30))!!", digits, und);
+        // On a pole itself nothing changes, nor for whole numbers.
+        check("(-1)!", digits, und);
+        check("(0.5-1.5)!", digits, und);
+        check("nCr(-1,2)", digits, und);
+        check("nCr(5,6)", digits, is(0.0));
+        check("nCr(5.5,2)", digits, is(12.375));
+        check("7!!", digits, is(105.0));
+        check("(2.5)!!", digits, und);
+        // With x in it a factorial is the program's, in doubles.
+        let v = views_at("(x-0.00000000000000000001)!", digits, TrigUnit::Radians, -1.0, 1.0);
+        assert_eq!(v.compiled, und);
+    }
+    // Beside a pole so far down that the product to it is past the bound
+    // every exact value keeps: not known (never "undefined").
+    check("(-350.00000000000000000001)!", OFF, V::Unknown);
+    check("(-500.00000000000000000001)!", OFF, V::Unknown);
+    // The line y = x, which had no curve.
+    plots_as("x+1/(-1.00000000000000000001)!", OFF, TrigUnit::Radians, |x| x);
+    plots_as("x*nCr(-1.00000000000000000001,2)", OFF, TrigUnit::Radians, |x| x);
+}
