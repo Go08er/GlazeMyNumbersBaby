@@ -1514,6 +1514,36 @@ fn panel(
                     f.detail.clone()
                 });
             }
+            // "y = c is not approached": f is far from c at the farthest
+            // samples. That refutes the limit only if f stays away, which
+            // samples can't say and f's enclosure over the rest of the
+            // tail can: min(acosh x, 2⁶³ − 1) is acosh x, 56, at 10²⁴, and
+            // 2⁶³ − 1 from e^(2⁶³) on, past every double; its limit is
+            // 2⁶³ − 1. Where every such line of that side lies in f's
+            // enclosure from the sample outward, nothing is refuted.
+            "asymptote-not-approached"
+                if f.detail.starts_with("horizontal") && f.at.is_finite() && f.at != 0.0 && {
+                    let tail = if f.at > 0.0 {
+                        Interval::new(f.at, f64::INFINITY)
+                    } else {
+                        Interval::new(f64::NEG_INFINITY, f.at)
+                    };
+                    let e = enclose(l.ast(), tail, &ctx);
+                    let way = if f.at > 0.0 {
+                        graphing::analysis::AsymptoteSide::PositiveInfinity
+                    } else {
+                        graphing::analysis::AsymptoteSide::NegativeInfinity
+                    };
+                    let mut lines = k.data.horizontal_asymptotes.iter().filter(|h| {
+                        h.1 == way || h.1 == graphing::analysis::AsymptoteSide::AnyInfinity
+                    });
+                    !e.is_empty() && lines.all(|h| e.lo() <= h.0 && h.0 <= e.hi())
+                } =>
+            {
+                out.note("panel/asymptote-not-reached-within-the-doubles", || {
+                    f.detail.clone()
+                });
+            }
             // "0 shown for a value below every double": the value is the
             // reference's, which keeps 53 bits. f(0) is not 0 only where
             // f's enclosure there says so (strictly signed, or 0 outside
