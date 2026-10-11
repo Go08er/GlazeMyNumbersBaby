@@ -882,6 +882,12 @@ pub struct Finding {
     pub rank: f64,
     /// The x the finding is about (NaN: the function as a whole).
     pub at: f64,
+    /// The stretch of x the finding rests on, where that is more than
+    /// `at` (NaN: none): the samples a turn was found between, the two
+    /// crossings matched to one zero. For one who would judge the finding
+    /// by something other than f sampled (`tests/crossfuzz`: by f's
+    /// enclosure over the stretch).
+    pub span: (f64, f64),
     /// Not a contradiction: an answer sampling can neither confirm nor
     /// refute, or points the reference can't evaluate (listed, not
     /// failed).
@@ -907,6 +913,11 @@ impl Ctx<'_> {
         self.push(class, x, detail, false);
     }
 
+    /// [`Ctx::fail_at`], resting on the stretch `span` of x.
+    pub fn fail_over(&mut self, class: &'static str, x: f64, span: (f64, f64), detail: String) {
+        self.push_over(class, x.abs(), x, span, detail, false);
+    }
+
     pub fn note(&mut self, class: &'static str, x: f64, detail: String) {
         self.push(class, x, detail, true);
     }
@@ -917,12 +928,25 @@ impl Ctx<'_> {
     }
 
     fn push_at(&mut self, class: &'static str, rank: f64, at: f64, detail: String, note: bool) {
+        self.push_over(class, rank, at, (f64::NAN, f64::NAN), detail, note);
+    }
+
+    fn push_over(
+        &mut self,
+        class: &'static str,
+        rank: f64,
+        at: f64,
+        span: (f64, f64),
+        detail: String,
+        note: bool,
+    ) {
         self.out.push(Finding {
             class,
             expr: self.expr.to_string(),
             detail,
             rank,
             at,
+            span,
             note,
         });
         let mut mine: Vec<usize> = (0..self.out.len())
@@ -1553,9 +1577,10 @@ pub fn check_analysed(
                         Monotonicity::Unknown => false,
                     };
                     if bad && (v.v - v1.v).abs() > f.tol(x1) + f.tol(*x) {
-                        cx.fail_at(
+                        cx.fail_over(
                             "monotonicity-reversal",
                             *x,
+                            (x1, *x),
                             format!(
                                 "{m:?} on {:?}: f({x1:e}) = {}, f({x:e}) = {}",
                                 (iv.lo.value, iv.hi.value),
@@ -1712,8 +1737,9 @@ pub fn check_analysed(
                     }
                 }
                 if told >= 3 && same_side {
-                    cx.fail(
+                    cx.fail_point(
                         "inflection-not-inflection",
+                        x,
                         format!(
                             "({x:e}, {}): f is concave the same way on both sides",
                             fmt(*y)
@@ -2067,9 +2093,10 @@ pub fn check_analysed(
                         matched.push((key, l));
                     }
                 } else if !in_noise_of_reported(l) {
-                    cx.fail_at(
+                    cx.fail_over(
                         "zero-missing",
                         l,
+                        (xs[i - 1], xs[i]),
                         format!(
                             "sign change at {l:e}; claimed: {}",
                             if k.x_intercept.is_empty() {
@@ -2093,9 +2120,10 @@ pub fn check_analysed(
         }
     }
     for (a, b) in merged(f, &matched, Kind::Zero) {
-        cx.fail_at(
+        cx.fail_over(
             "zeros-merged",
             a,
+            (a, b),
             format!(
                 "crossings at {a:e} and {b:e} are both matched to one reported zero; claimed: {}",
                 k.x_intercept
@@ -2335,9 +2363,10 @@ pub fn check_analysed(
             match (bracketed || near(&fams, xm, xm, xm), member_key(&fams, xm, xm, xm)) {
                 (true, Some(key)) => matched.push((key, xm)),
                 (true, None) => {}
-                (false, _) => cx.fail_at(
+                (false, _) => cx.fail_over(
                     "extremum-missing",
                     xm,
+                    (xl, xr),
                     format!(
                         "{name} near {xm:e} (f = {}; {} and {} at {xl:e} and {xr:e}); claimed: {:?}",
                         show(&vm),
@@ -2513,9 +2542,10 @@ pub fn structure(cx: &mut Ctx<'_>, f: &F, k: &KeyGraphFeatures, xs: &[f64], vals
         if let (Some(&(xl, vl)), Some(&(xh, vh))) = (lo, hi)
             && vh - vl > f.tol(xl) + f.tol(xh)
         {
-            cx.fail_at(
+            cx.fail_over(
                 "range-singleton-varies",
                 xh,
+                (xl, xh),
                 format!(
                     "{}: f({xl:e}) = {vl:e} and f({xh:e}) = {vh:e}, apart beyond their rounding",
                     k.range

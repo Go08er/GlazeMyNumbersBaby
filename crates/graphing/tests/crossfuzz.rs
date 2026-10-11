@@ -982,12 +982,216 @@ fn planted_disagreements_are_found() {
     assert!(out.findings.is_empty(), "{:?}", out.findings);
 }
 
+/// The oracle's checks sample f in doubles. What they conclude from the
+/// samples is a finding of this tester only where a view that proves
+/// things bears it out (`views::Proofs::stands`): f's enclosure over the
+/// stretch in question. The false answers the oracle's own self-test
+/// plants, planted here: still findings where an enclosure proves them
+/// false, and counted where none can (a pole, a shorter period, two turns
+/// for one, a bound reached, a line not approached).
+#[test]
+fn planted_false_answers_are_findings_where_proven() {
+    use graphing::analysis::{AsymptoteSide, Family, KeyGraphFeatures};
+    type Plant = Box<dyn Fn(&mut KeyGraphFeatures)>;
+    let set = Setup {
+        digits: None,
+        sliders: Vec::new(),
+        unit: TrigUnit::Radians,
+    };
+    let one = Family::single;
+    // What is planted in whose panel, and the class it is found as
+    // (`true`) or counted as.
+    let cases: Vec<(&str, &str, bool, Plant)> = vec![
+        // f″ = 6x keeps its sign about 1.
+        (
+            "x^3",
+            "panel/inflection-not-inflection",
+            true,
+            Box::new(move |k| k.data.inflection_points.push((one(1.0), 1.0))),
+        ),
+        (
+            "x^3",
+            "panel/inflection-value-wrong",
+            true,
+            Box::new(|k| {
+                for p in &mut k.data.inflection_points {
+                    p.1 += 0.5;
+                }
+            }),
+        ),
+        // Continuous between two samples, and lower at 1 than at both.
+        (
+            "(x-1)^2",
+            "panel/extremum-missing",
+            true,
+            Box::new(|k| k.data.minima.clear()),
+        ),
+        // f's enclosure from the sample out to ∞ leaves the line out.
+        (
+            "atan(x)",
+            "panel/asymptote-not-approached",
+            true,
+            Box::new(|k| {
+                for a in &mut k.data.horizontal_asymptotes {
+                    a.0 *= 0.99;
+                }
+            }),
+        ),
+        (
+            "exp(-x^2)",
+            "panel/asymptote-not-approached",
+            true,
+            Box::new(|k| {
+                k.data.horizontal_asymptotes = vec![(0.5, AsymptoteSide::AnyInfinity)];
+            }),
+        ),
+        // Defined on every real about 2.
+        (
+            "x^2+1",
+            "panel/excluded-point-defined",
+            true,
+            Box::new(move |k| k.data.excluded.push(one(2.0))),
+        ),
+        // 0 exactly at 0; continuous and of opposite signs at 1 and 2.
+        (
+            "x^2",
+            "panel/zero-missing",
+            true,
+            Box::new(|k| {
+                k.data.zeros.clear();
+                k.x_intercept.clear();
+            }),
+        ),
+        (
+            "x^2-2",
+            "panel/zero-missing",
+            true,
+            Box::new(|k| k.data.zeros.retain(|z| z.x < 0.0)),
+        ),
+        // f is 1 and more about 0.
+        (
+            "x^2+1",
+            "panel/zero-not-zero",
+            true,
+            Box::new(move |k| {
+                k.data.zeros = vec![one(0.0)];
+                k.x_intercept = "0".into();
+            }),
+        ),
+        // And here f is 1 about 0 to MPFR, which reads the decimals as
+        // typed; f's enclosure in doubles there is [0, 2.3], which leaves
+        // the zero standing.
+        (
+            "10^16*(1.0000000000000001-1)+x",
+            if cfg!(feature = "mpfr-oracle") {
+                "panel/zero-not-zero"
+            } else {
+                "panel/zero-not-zero-in-doubles"
+            },
+            cfg!(feature = "mpfr-oracle"),
+            Box::new(move |k| {
+                k.data.zeros = vec![one(0.0)];
+                k.x_intercept = "0".into();
+            }),
+        ),
+        // A value at a point is a witness.
+        (
+            "10^16*(1.0000000000000001-1)+x",
+            "panel/y-intercept-wrong",
+            true,
+            Box::new(|k| {
+                k.data.y_intercept = Some(0.0);
+                k.y_intercept = "0".into();
+            }),
+        ),
+        // That f is unbounded beside 0 no enclosure proves.
+        (
+            "1/x",
+            "panel/vertical-asymptote-missing-not-proven",
+            false,
+            Box::new(|k| {
+                k.data.vertical_asymptotes.clear();
+                k.data.excluded.clear();
+            }),
+        ),
+        // f undefined between two ends that read alike.
+        (
+            "ln((x-sin(1))*(x-sin(1)-0.0000001))",
+            "panel/row-ends-alike",
+            true,
+            Box::new(|k| k.domain = "x ∈ (−∞, ≈0.841471) ∪ (≈0.841471, ∞)".into()),
+        ),
+        // f(x + P/2) = f(x) at every sample proves no period.
+        (
+            "sin(x)",
+            "panel/period-not-fundamental-not-proven",
+            false,
+            Box::new(|k| k.data.period = k.data.period.map(|p| 2.0 * p)),
+        ),
+        // 1 at the double beside π/2 is sin's value there rounded: the
+        // sine is below 1 at every double.
+        (
+            "sin(x)",
+            "panel/range-open-bound-reached-not-proven",
+            false,
+            Box::new(|k| {
+                for i in &mut k.data.range {
+                    i.hi.closed = false;
+                }
+            }),
+        ),
+        (
+            "(x-1)^2*(x-1.000001)^2",
+            "panel/extrema-merged-not-proven",
+            false,
+            Box::new(move |k| k.data.minima = vec![(one(1.0), 0.0)]),
+        ),
+        // f less a line of a double's slope, at three decades.
+        (
+            "x+1/x",
+            "panel/asymptote-not-approached-not-proven",
+            false,
+            Box::new(|k| {
+                for a in &mut k.data.oblique_asymptotes {
+                    a.1 += 1.0;
+                }
+            }),
+        ),
+    ];
+    for (text, class, finding, plant) in &cases {
+        let out = views::panel_planted(text, &set, plant.as_ref());
+        let found = out.has(class);
+        let counted = out.notes.contains_key(*class);
+        assert!(
+            if *finding { found } else { counted && !found },
+            "y={text}: expected {class} {}; findings {:?}, counted {:?}",
+            if *finding { "found" } else { "counted" },
+            out.findings,
+            out.notes
+        );
+        // Counted means not a finding under the oracle's own name either.
+        if let Some(of) = class.strip_suffix("-not-proven") {
+            assert!(!out.has(of), "y={text}: {:?}", out.findings);
+        }
+    }
+    // And a true panel has neither.
+    for text in ["x^3", "atan(x)", "1/x", "sin(x)", "x^2-2", "x+1/x"] {
+        let out = views::panel_planted(text, &set, &|_| {});
+        assert!(out.findings.is_empty(), "y={text}: {:?}", out.findings);
+    }
+}
+
 /// A positive radicand gives a genuine open neighborhood at x=2, however
 /// small: its domain end is 2-10^-100. A fixed MPFR probe farther away
-/// must not turn the correct derivative into a tester failure.
+/// must not turn the correct derivative into a tester failure. The
+/// neighbourhood is there and is proven, by f's enclosure over a box about
+/// 2 inside it: the derivative at 2 is looked at (the point 2⁻²⁹⁹ below
+/// it, where f is undefined, is what the count below is of), and nothing
+/// is left open.
 #[test]
 #[cfg(feature = "mpfr-oracle")]
 fn a_domain_edge_near_a_derivative_point_is_not_at_that_point() {
+    use views::Beside;
     let set = Setup {
         digits: None,
         sliders: Vec::new(),
@@ -996,4 +1200,45 @@ fn a_domain_edge_near_a_derivative_point_is_not_at_that_point() {
     let out = views::run("sqrt(x-2+10^(-100))", None, &set, group::POINTS);
     assert!(out.findings.is_empty(), "{:?}", out.findings);
     assert!(out.tally["mpfr derivative points"] > 0);
+    assert_eq!(
+        out.tally["mpfr derivative points with a neighbourhood proven"],
+        out.tally["mpfr derivative points"]
+    );
+    assert_eq!(
+        out.tally["mpfr derivative neighbourhoods proven only nearer than 2⁻³⁰⁰ of the point"],
+        1
+    );
+    assert!(out.notes.is_empty(), "{:?}", out.notes);
+
+    // What is and isn't proven of the reals beside a point.
+    let beside = |text: &str, x: f64| views::beside(text, &set, x).expect("a certificate");
+    assert_eq!(beside("x^2", 0.0), Beside::Defined { bits: 300 });
+    assert_eq!(beside("x^2", 1e300), Beside::Defined { bits: 300 });
+    assert_eq!(
+        beside("sqrt(x-2+10^(-100))", 2.0),
+        Beside::Defined { bits: 1150 }
+    );
+    assert_eq!(
+        beside("sqrt(x-2+10^(-1000))", 2.0),
+        Beside::Defined { bits: 4900 }
+    );
+    // A domain that ends nearer than any distance tried: a neighbourhood
+    // all the same, and nothing here proves it. Open, which is counted,
+    // never a finding.
+    assert_eq!(
+        beside("sqrt(x-2+10^(-2000))", 2.0),
+        Beside::Open { probe: Some(true) }
+    );
+    // The domain ends at the point: no neighbourhood. Proven at 0, where
+    // the reals on one side can be enclosed without 0 itself; elsewhere a
+    // box holds the point, and it is left open.
+    assert_eq!(beside("x*sqrt(x)", 0.0), Beside::Undefined { below: true });
+    assert_eq!(beside("x*sqrt(-x)", 0.0), Beside::Undefined { below: false });
+    assert_eq!(
+        beside("(x-2)*sqrt(x-2)", 2.0),
+        Beside::Open { probe: Some(true) }
+    );
+    // Defined at 0 alone (review 15): undefined on each side, the first
+    // tried is told.
+    assert_eq!(beside("sqrt(-x^2)", 0.0), Beside::Undefined { below: true });
 }
