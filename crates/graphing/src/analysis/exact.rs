@@ -841,7 +841,16 @@ pub fn eval(
                                 fl + 1
                             }
                         }
-                        _ => floor_q(r.add(Q::new(1, 2)?)?),
+                        // Half away from zero, as the language's round
+                        // (`functions::round`): the nearest whole number
+                        // to |r|, signed. (⌊r + ½⌋ took −5/2 to −2: the
+                        // panel had y = −2 for round(−2.5), drawn at −3;
+                        // found by `tests/crossfuzz.rs`.)
+                        _ => {
+                            let (n, d) = (r.numer(), r.denom());
+                            let whole = (2 * n.abs() + d).div_euclid(2 * d);
+                            if n < 0 { -whole } else { whole }
+                        }
                     }))
                 }
                 Func::Min | Func::Max => {

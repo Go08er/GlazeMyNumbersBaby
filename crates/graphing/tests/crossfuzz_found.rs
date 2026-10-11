@@ -914,3 +914,38 @@ fn a_negative_whole_power_past_the_doubles_is_not_zero_too_soon() {
         assert_eq!(pow_int(b, n), 1.0 / p, "{b}^{n}");
     }
 }
+
+/// round is half away from zero (round(−2.5) is −3: the compiled
+/// evaluator's, the reference's and the certificate's), and the panel's
+/// exact arithmetic on constants had ⌊r + ½⌋: for a slider b at −2.5,
+/// 8 + 1.5 − (round(b) − 0.99999999999999999) was shown with the range
+/// {≈12.5} and drawn at 13.5, and round(−2.5) alone as y = −2.
+#[test]
+fn the_panels_round_of_a_negative_half_is_away_from_zero() {
+    use graphing::analysis::analyze;
+    for (src, want) in [
+        ("round(-2.5)", -3.0),
+        ("round(-2.5)+0*x", -3.0),
+        ("round(-0.5)", -1.0),
+        ("round(-7/2)", -4.0),
+        ("round(2.5)", 3.0),
+        ("round(-2.4)", -2.0),
+        ("round(-2.6)", -3.0),
+        ("round(0.5)", 1.0),
+        ("8+1.5-(round(-2.5)-1)", 13.5),
+    ] {
+        assert_eq!(scalar(src, 0.0), want, "{src}");
+        let eq = Equation::parse(&format!("y={src}")).expect("parses");
+        let k = analyze(&eq, &CompileOptions::default());
+        assert_eq!(k.data.y_intercept, Some(want), "{src}: {}", k.y_intercept);
+        // (The range where the panel has one: of a constant with no x.)
+        assert!(
+            src.contains('x') || k.data.range.len() == 1,
+            "{src}: {:?}",
+            k.range
+        );
+        if let Some(r) = k.data.range.first() {
+            assert_eq!(r.lo.value, want, "{src}: {:?}", k.range);
+        }
+    }
+}
