@@ -461,12 +461,10 @@ pub fn factor_sign_over(fx: &Fx, e: &Expr, x: &Iv, depth: usize) -> Option<bool>
         return None;
     }
     let d = depth - 1;
-    let (lo, hi) = outward(x);
-    let factor_sign = |fx: &Fx, e: &Expr, _: f64, _: f64, d: usize| factor_sign_over(fx, e, x, d);
     match e {
-        Expr::Neg(a) => factor_sign(fx, a, lo, hi, d).map(|s| !s),
+        Expr::Neg(a) => factor_sign_over(fx, a, x, d).map(|s| !s),
         Expr::Bin(BinOp::Mul | BinOp::Div, a, b) => {
-            Some(factor_sign(fx, a, lo, hi, d)? == factor_sign(fx, b, lo, hi, d)?)
+            Some(factor_sign_over(fx, a, x, d)? == factor_sign_over(fx, b, x, d)?)
         }
         Expr::Bin(op @ (BinOp::Add | BinOp::Sub), a, b) => {
             let (mut fa, mut fb) = (Vec::new(), Vec::new());
@@ -478,7 +476,7 @@ pub fn factor_sign_over(fx: &Fx, e: &Expr, x: &Iv, depth: usize) -> Option<bool>
             fa.remove(ia);
             fb.remove(ib);
             let rest = Expr::Bin(*op, Box::new(product_of(&fa)), Box::new(product_of(&fb)));
-            Some(factor_sign(fx, &c, lo, hi, d)? == factor_sign(fx, &rest, lo, hi, d)?)
+            Some(factor_sign_over(fx, &c, x, d)? == factor_sign_over(fx, &rest, x, d)?)
         }
         _ => None,
     }

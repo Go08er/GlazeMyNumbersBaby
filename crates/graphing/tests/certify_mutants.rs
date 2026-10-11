@@ -1036,9 +1036,7 @@ fn run(fs: Vec<(String, TrigUnit)>) -> Run {
         .filter(|(s, _)| filter.as_ref().is_none_or(|f| s.contains(f.as_str())))
         .collect();
     // (Each function's "other", for its rows: the one two along.)
-    let threads = std::thread::available_parallelism()
-        .map_or(4, |n| n.get())
-        .min(16);
+    let threads = certificates::threads();
     let next = std::sync::atomic::AtomicUsize::new(0);
     let done = std::sync::Mutex::new(Vec::new());
     std::thread::scope(|sc| {

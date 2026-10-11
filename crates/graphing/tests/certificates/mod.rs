@@ -12,6 +12,22 @@ const CASES: &str = include_str!("../fixtures/certify/cases.tsv");
 /// The certify corpus's test file (its REVIEW and issue tables are read).
 pub const CORPUS: &str = include_str!("../certify_corpus.rs");
 
+/// The worker threads a test spreads its certificates over: the machine's,
+/// 16 at most, and no more than the test harness was allowed
+/// (`RUST_TEST_THREADS`: a run under a CPU cap sets it, and these threads
+/// are the run's real load).
+pub fn threads() -> usize {
+    let allowed = std::env::var("RUST_TEST_THREADS")
+        .ok()
+        .and_then(|n| n.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(16);
+    std::thread::available_parallelism()
+        .map_or(4, |n| n.get())
+        .min(16)
+        .min(allowed)
+}
+
 /// The review rounds' functions, read from `certify_corpus.rs`'s REVIEW
 /// table (the first string of each entry).
 pub fn review() -> Vec<String> {

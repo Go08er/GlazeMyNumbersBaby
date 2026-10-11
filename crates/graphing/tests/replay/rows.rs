@@ -755,6 +755,60 @@ fn complete(rc: &RowCert) -> bool {
 
 // ------------------------------------------------------------ rows
 
+/// A row's status and scope are part of what it says, and each kind of row
+/// says it one way:
+///
+/// * a list (the zeros, the turns, the inflections, the monotone pieces)
+///   is **Certified** when it is all of them: over the line, or over one
+///   period of a periodic f (and so over the line); **Partial** when it is
+///   all of them on a window only, or some of them (points);
+/// * the vertical asymptotes and the range are Certified, over the line or
+///   one period: a part of either is not a row;
+/// * the domain, the period and the horizontal and oblique asymptotes are
+///   statements about the whole line, Certified over it;
+/// * the y-intercept is a value at one point; so is "neither even nor
+///   odd" (two witnesses), where "even" and "odd" are about the line.
+///
+/// Anything else says what its scope can't bear: "all of f's zeros"
+/// (Certified) over points, where nothing shows there are no others, was
+/// let through for every list; a y-intercept, a parity or a period under
+/// any scope at all. (Round 19's mutation tester.) Why the row is off its
+/// form, or None.
+fn off_form(rc: &RowCert) -> Option<String> {
+    let certified = rc.status == "Certified";
+    let whole = matches!(rc.region, Some(Region::Line | Region::Period(..)));
+    let line = matches!(rc.region, Some(Region::Line));
+    let points = matches!(rc.region, Some(Region::Points));
+    let ok = match rc.name.as_str() {
+        "x_intercepts" | "extrema" | "inflections" | "monotonicity" => certified == whole,
+        "vertical" | "range" => certified && whole,
+        "domain" | "period" | "horizontal" | "oblique" => certified && line,
+        "y_intercept" => certified && points,
+        "parity" => {
+            certified
+                && if rc.value.as_str() == Some("Neither") {
+                    points
+                } else {
+                    line
+                }
+        }
+        _ => true,
+    };
+    (!ok).then(|| {
+        let scope = match rc.region {
+            Some(Region::Line) => "the line",
+            Some(Region::Period(..)) => "one period",
+            Some(Region::Window(..)) => "a window",
+            Some(Region::Points) => "points",
+            None => "no scope",
+        };
+        format!(
+            "a {} row {} over {scope}: its status and scope say what this kind of row can't",
+            rc.name, rc.status
+        )
+    })
+}
+
 pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) -> RowResult {
     let mut out = RowResult {
         name: rc.name.clone(),
@@ -772,6 +826,9 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
             "{why}: the language refuses f, so no row of it is certified"
         ));
         return out;
+    }
+    if let Some(why) = off_form(rc) {
+        out.problems.push(why);
     }
     // The claims' own outcomes.
     let mut weak = 0;
@@ -1738,20 +1795,14 @@ fn parity(
                 None if claims::tree_parity(&fx.f, &fx.lits) == Some(p == "Even") => out
                     .notes
                     .push("the domain's symmetry: by f's structure, with no domain row".into()),
-                // Else as far as points go: f defined at both or neither
-                // of ±x at each, and at both of some (weak, as a fact
-                // tested at points is; an f placed at none shows nothing).
-                None => match claims::mirrored_at_points(fx) {
-                    Some(true) => out.notes.push(
-                        "the domain's symmetry: tested at points only, with no domain row".into(),
-                    ),
-                    Some(false) => out.problems.push(format!(
-                        "{p}, but f is defined at only one of ±x at a sample point"
-                    )),
-                    None => out.problems.push(format!(
-                        "{p}, but the domain is not known to be symmetric about 0"
-                    )),
-                },
+                // Else it is not derived. (As far as sample points went, f
+                // defined at both or neither of ±x at each, it was noted
+                // and passed: a domain is not symmetric by what a few
+                // points show.)
+                None => out.problems.push(format!(
+                    "{p}, but the domain is not known to be symmetric about 0 (no domain row, \
+                     and f's structure doesn't say)"
+                )),
             }
             let word = if p == "Even" { "even" } else { "odd" };
             let fact = rc.claims.iter().find(
@@ -1838,8 +1889,9 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
         })
         .collect::<Result<_, String>>()?;
     if claims::unmodelled(&fx.f) {
-        out.notes
-            .push("not checked: the tree uses a function the replay doesn't model".into());
+        // (Noted and passed: a domain for any such f, its claims withheld.)
+        out.problems
+            .push("not derived: the tree uses a function the replay doesn't model".into());
         return Ok(());
     }
     // Each family: a Family claim with these boxes, about a node whose
@@ -2055,7 +2107,9 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
                     shut(c)
                 )),
                 Some(_) => {}
-                None => out.notes.push(format!(
+                // (Noted and passed: the end open or closed as listed,
+                // whichever it was.)
+                None => out.problems.push(format!(
                     "the end in [{:e}, {:e}]: not shown {}",
                     x.lo,
                     x.hi,
@@ -2764,44 +2818,14 @@ fn tail_bands(claims: &[Claim], side: Side) -> Vec<(f64, f64, f64)> {
     out
 }
 
-/// Bounds that grow without settling: three or more records (each beyond
-/// every bound before it, in the direction `up`), gaining at least 1.
-fn growing(mut bs: Vec<(f64, f64)>, up: bool) -> bool {
-    bs.sort_by(|a, b| a.0.total_cmp(&b.0));
-    // Several bounds from one place (other rows' claims): the strongest.
-    let mut one: Vec<(f64, f64)> = Vec::new();
-    for b in bs {
-        match one.last_mut() {
-            Some(l) if l.0 == b.0 => {
-                l.1 = if up { l.1.max(b.1) } else { l.1.min(b.1) };
-            }
-            _ => one.push(b),
-        }
-    }
-    // The records: each beyond every bound before it (a weaker bound
-    // further out, another row's, adds nothing).
-    let mut bs: Vec<(f64, f64)> = Vec::new();
-    for b in one {
-        let beyond = bs
-            .last()
-            .is_none_or(|l: &(f64, f64)| if up { b.1 > l.1 } else { b.1 < l.1 });
-        if beyond {
-            bs.push(b);
-        }
-    }
-    if bs.len() < 3 {
-        return false;
-    }
-    let ok = bs
-        .windows(2)
-        .all(|w| if up { w[1].1 > w[0].1 } else { w[1].1 < w[0].1 });
-    let (first, last) = (bs[0].1, bs[bs.len() - 1].1);
-    ok && (last - first).abs() >= 1.0
-}
-
 /// Whether the claims show f → +∞ (`up`) or −∞ on the tail: f′ beyond a
-/// nonzero bound of the matching sign, or f′'s sign chain (f′ moving away
-/// from 0); or f beyond bounds on [M, ∞) that grow out along the tail.
+/// nonzero bound of the matching sign, f′'s sign chain (f′ moving away
+/// from 0), or the limit by the tree's structure. (Bounds on f over tails
+/// [M, ∞) that "grew" with M counted too, and f's values at points of a
+/// monotone tail: a finite list of either shows no limit. −1/x on [1, ∞)
+/// is above −1, then −1/10, then −1/100. One genuine certificate of the
+/// corpus and pool rested on such bounds, beside a pole: the vertical row
+/// derives that pole itself now.)
 fn tail_infinite(claims: &[Claim], side: Side, up: bool) -> bool {
     let right = side == Side::Right;
     let proof = claims.iter().any(|c| match c {
@@ -2828,46 +2852,10 @@ fn tail_infinite(claims: &[Claim], side: Side, up: bool) -> bool {
         }
         _ => false,
     });
-    let bounds: Vec<(f64, f64)> = claims
-        .iter()
-        .filter_map(|c| match c {
-            Claim::TailBeyond {
-                side: s,
-                from,
-                of: Subject::F(0),
-                c,
-                above,
-            } if *s == side && *above == up => Some((from.abs(), *c)),
-            _ => None,
-        })
-        .collect();
-    // f monotone on the tail, moving that way, past values that grow.
-    let points = || -> Vec<(f64, f64)> {
-        let Some((rising, start)) = tail_mono(claims, side) else {
-            return Vec::new();
-        };
-        if (rising == right) != up {
-            return Vec::new();
-        }
-        claims
-            .iter()
-            .filter_map(|c| match c {
-                Claim::Value {
-                    x,
-                    of: Subject::F(0),
-                    lo,
-                    hi,
-                } if x.0 == x.1 && (x.0 > 0.0) == right && on_tail(x.0, start, right) => {
-                    Some((x.0.abs(), if up { *lo } else { *hi }))
-                }
-                _ => None,
-            })
-            .collect()
-    };
     let at = if right { At::PosInf } else { At::NegInf };
     let structure =
         limit_at(claims, at, false) == Some(if up { Toward::PosInf } else { Toward::NegInf });
-    structure || proof || growing(bounds, up) || growing(points(), up)
+    structure || proof
 }
 
 /// What a `Limit` claim says f (or f/x, `over_x`) tends to as x → `at`.
@@ -2893,36 +2881,16 @@ fn side_infinite(claims: &[Claim], p: f64, right: bool) -> bool {
 }
 
 /// Whether the claims show f → ±∞ beside the very double p: its one-sided
-/// limit there by the tree's structure, or bounds on boxes from the double
-/// next to p that grow as the boxes shrink.
+/// limit there by the tree's structure. (Bounds on boxes from the double
+/// next to p that "grew" as the boxes shrank counted too: (x + 1)/(x² − 1)
+/// is above −10¹⁵, then −10⁹, then −2252 on boxes closing in on its hole
+/// at −1, where it tends to −1/2. Round 19's follow-up.)
 fn side_grows(claims: &[Claim], p: f64, right: bool) -> bool {
     let at = if right { At::Right(p) } else { At::Left(p) };
-    let structural = matches!(
+    matches!(
         limit_at(claims, at, false),
         Some(Toward::PosInf | Toward::NegInf)
-    );
-    let near = |x: &B| {
-        if right {
-            x.0 == p.next_up()
-        } else {
-            x.1 == p.next_down()
-        }
-    };
-    let bounds = |up: bool| -> Vec<(f64, f64)> {
-        claims
-            .iter()
-            .filter_map(|c| match c {
-                Claim::Beyond {
-                    x,
-                    of: Subject::F(0),
-                    c,
-                    above,
-                } if near(x) && *above == up => Some((-(x.1 - x.0), *c)),
-                _ => None,
-            })
-            .collect()
-    };
-    structural || growing(bounds(true), true) || growing(bounds(false), false)
+    )
 }
 
 /// f's bands on boxes beside p (from the right, or the left, p left
@@ -2998,12 +2966,11 @@ fn borne_out(bands: &[(f64, f64, f64)], y: &Enc, what: &str) -> Result<Enc, Stri
     Ok(Enc { lo, hi })
 }
 
-/// f′ on the tail shown beyond bounds growing in size (`to_zero` false:
-/// f′ → ±∞, so f/x → ±∞) or within bands about 0 narrowing to 10⁻¹²
-/// (f′ → 0, so f/x → 0): from bounds on f′ over tails, or, f′ monotone
-/// there (f″ of one sign), from its values at points of the tail, beyond
-/// which it moves.
-fn slope_shown(claims: &[Claim], side: Side, to_zero: bool) -> bool {
+/// f′ on the tail shown within bands about 0 narrowing to 10⁻¹² (f′ → 0,
+/// so f/x → 0): from bounds on f′ over tails, or, f′ monotone there (f″ of
+/// one sign), from its values at points of the tail, beyond which it
+/// moves. (Evidence for the simplifier's fact, which is the claim.)
+fn slope_to_zero(claims: &[Claim], side: Side) -> bool {
     let right = side == Side::Right;
     let bs: Vec<(f64, f64, bool)> = claims
         .iter()
@@ -3040,46 +3007,35 @@ fn slope_shown(claims: &[Claim], side: Side, to_zero: bool) -> bool {
         ),
         None => (Vec::new(), false),
     };
-    if to_zero {
-        // The farthest tail with a bound each way: two bounds there, or
-        // one and f′'s value at its start, moving towards it.
-        let mut bands: Vec<(f64, f64, f64)> = Vec::new();
-        for &(m, _, _) in &bs {
-            let above = bs
-                .iter()
-                .filter(|b| b.0 == m && b.2)
-                .map(|b| b.1)
-                .fold(f64::NEG_INFINITY, f64::max);
-            let below = bs
-                .iter()
-                .filter(|b| b.0 == m && !b.2)
-                .map(|b| b.1)
-                .fold(f64::INFINITY, f64::min);
-            let at = points.iter().find(|p| p.0 == m);
-            let lo = match at {
-                Some(p) if away_up => above.max(p.1),
-                _ => above,
-            };
-            let hi = match at {
-                Some(p) if !away_up => below.min(p.2),
-                _ => below,
-            };
-            bands.push((m, lo, hi));
-        }
-        bands
+    // The farthest tail with a bound each way: two bounds there, or
+    // one and f′'s value at its start, moving towards it.
+    let mut bands: Vec<(f64, f64, f64)> = Vec::new();
+    for &(m, _, _) in &bs {
+        let above = bs
             .iter()
-            .max_by(|a, b| a.0.total_cmp(&b.0))
-            .is_some_and(|b| b.1 >= -1e-12 && b.2 <= 1e-12)
-    } else {
-        let up: Vec<(f64, f64)> = bs.iter().filter(|b| b.2).map(|b| (b.0, b.1)).collect();
-        let down: Vec<(f64, f64)> = bs.iter().filter(|b| !b.2).map(|b| (b.0, b.1)).collect();
-        // f′ monotone, moving away from values that grow past 0.
-        let moving: Vec<(f64, f64)> = points
+            .filter(|b| b.0 == m && b.2)
+            .map(|b| b.1)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let below = bs
             .iter()
-            .map(|p| (p.0, if away_up { p.1 } else { p.2 }))
-            .collect();
-        growing(up, true) || growing(down, false) || growing(moving, away_up)
+            .filter(|b| b.0 == m && !b.2)
+            .map(|b| b.1)
+            .fold(f64::INFINITY, f64::min);
+        let at = points.iter().find(|p| p.0 == m);
+        let lo = match at {
+            Some(p) if away_up => above.max(p.1),
+            _ => above,
+        };
+        let hi = match at {
+            Some(p) if !away_up => below.min(p.2),
+            _ => below,
+        };
+        bands.push((m, lo, hi));
     }
+    bands
+        .iter()
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .is_some_and(|b| b.1 >= -1e-12 && b.2 <= 1e-12)
 }
 
 /// f″ beyond a nonzero bound on the tail (a `TailBeyond` or a sign chain
@@ -3112,7 +3068,6 @@ fn vertical(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Resu
         .iter()
         .map(spot)
         .collect::<Result<_, _>>()?;
-    let _ = fx;
     let periods: Vec<Enc> = listed.iter().filter_map(|(_, p)| *p).collect();
     families_follow("a vertical asymptote", rc, &periods, out);
     repeats_listed("a vertical asymptote", rc, &listed, out);
@@ -3122,12 +3077,25 @@ fn vertical(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Resu
         // very double beside which f is shown to grow. (A double inside
         // such a claim's wider box is not where the pole is: π/2 listed at
         // the double nearest it passed for tan's. Review 18's follow-up.)
+        // (Or the replay's own derivation at a double, between the
+        // doubles beside it: f = a/b with b(p) = 0 and a away from 0, ln of
+        // something vanishing there, …, by `claims`' rules for a pole.)
+        let own = || {
+            x.lo == x.hi && {
+                let about = Claim::Unbounded {
+                    near: (x.lo.next_down(), x.lo.next_up()),
+                    at: (x.lo, x.lo),
+                };
+                claims::check(fx, &about, &[]).class == Class::Strong
+            }
+        };
         let unbounded = rc
             .claims
             .iter()
             .any(|c| matches!(c, Claim::Unbounded { at, .. } if at.0 == x.lo && at.1 == x.hi))
             || (x.lo == x.hi
-                && (side_grows(&rc.claims, x.lo, true) || side_grows(&rc.claims, x.lo, false)));
+                && (side_grows(&rc.claims, x.lo, true) || side_grows(&rc.claims, x.lo, false)))
+            || own();
         if !unbounded {
             out.problems.push(format!(
                 "a vertical asymptote at {:e} with no claim it is one",
@@ -3283,77 +3251,114 @@ fn no_other_asymptote(
             }
         }
     }
-    // Each undefined point and each gap, classified.
+    // Each excluded point of the region, from each side the domain reaches
+    // it: at a listed asymptote, or f shown bounded beside it.
     let Some(rg) = &rc.region else { return };
     let ts = targets(rg, all);
-    let near = |h: &B| {
-        rc.claims.iter().find_map(|c| match c {
-            Claim::Unbounded { near, at } if near.0 <= h.0 && h.1 <= near.1 => {
+    // (p, from the right): the ends of the boxes where f is undefined.
+    let mut sides: Vec<(f64, bool)> = Vec::new();
+    for u in &w.holes {
+        if u.1.is_finite() && ts.iter().any(|t| t.0 <= u.1 && u.1 < t.1) {
+            sides.push((u.1, true));
+        }
+        if u.0.is_finite() && ts.iter().any(|t| t.0 < u.0 && u.0 <= t.1) {
+            sides.push((u.0, false));
+        }
+    }
+    // A claim that f stays within bounds about p, on that side of it.
+    let kept = |p: f64, right: bool| {
+        rc.claims.iter().any(|c| match c {
+            Claim::Bounded { near, at, .. } | Claim::Removable { near, at, .. } => {
+                at.0 <= p && p <= at.1 && if right { near.1 > p } else { near.0 < p }
+            }
+            _ => false,
+        })
+    };
+    // f within finite bounds on a box from the double beside p: a value
+    // claim, or a bound above and one below.
+    let banded = |p: f64, right: bool| {
+        !side_bands(&rc.claims, p, right).is_empty()
+            || valid.iter().any(|(b, bounded)| {
+                *bounded
+                    && if right {
+                        b.0 == p.next_up()
+                    } else {
+                        b.1 == p.next_down()
+                    }
+            })
+    };
+    for (p, right) in sides {
+        let at = Enc { lo: p, hi: p };
+        if is_listed(&at) {
+            continue;
+        }
+        let toward = if right { At::Right(p) } else { At::Left(p) };
+        let finite = matches!(limit_at(&rc.claims, toward, false), Some(Toward::In(..)));
+        // (The replay's own: f's continuous extension at p, by series.)
+        let own = || {
+            iv::set_prec(160);
+            claims::limit_at(fx, p).is_some()
+        };
+        if kept(p, right) || finite || banded(p, right) || own() {
+            continue;
+        }
+        let unbounded = rc
+            .claims
+            .iter()
+            .any(|c| matches!(c, Claim::Unbounded { at, .. } if at.0 <= p && p <= at.1))
+            || matches!(
+                limit_at(&rc.claims, toward, false),
+                Some(Toward::PosInf | Toward::NegInf)
+            );
+        out.problems.push(if unbounded {
+            format!("f is unbounded at {p:e}, but no asymptote is listed there")
+        } else {
+            format!(
+                "f is not shown bounded {} {p:e}, where it is undefined: an asymptote there \
+                 is not ruled out",
+                if right { "right of" } else { "left of" }
+            )
+        });
+        return;
+    }
+    // A gap beside no undefined double holds an excluded point between two
+    // doubles: one a claim places there, f unbounded at it (and listed) or
+    // bounded about it.
+    for g in &w.gaps {
+        let asked = ts.iter().any(|t| t.0 <= g.1 && g.0 <= t.1);
+        let beside = w.holes.iter().any(|u| u.1 == g.0 || u.0 == g.1);
+        if !asked || beside {
+            continue;
+        }
+        let placed = rc.claims.iter().find_map(|c| match c {
+            Claim::Unbounded { at, .. } if g.0 <= at.0 && at.1 <= g.1 => {
                 Some((true, Enc { lo: at.0, hi: at.1 }))
             }
             Claim::Bounded { near, at, .. } | Claim::Removable { near, at, .. }
-                if near.0 <= h.0 && h.1 <= near.1 =>
+                if g.0 <= at.0 && at.1 <= g.1 && near.0 <= g.0 && g.1 <= near.1 =>
             {
                 Some((false, Enc { lo: at.0, hi: at.1 }))
             }
             _ => None,
-        })
-    };
-    // (A one-sided limit at the double p, from the side the hole or gap
-    // lies on; `None`: no claim of one.)
-    let side = |p: f64, right: bool| -> Option<bool> {
-        let at = if right { At::Right(p) } else { At::Left(p) };
-        match limit_at(&rc.claims, at, false) {
-            Some(Toward::In(..)) => Some(false),
-            Some(Toward::PosInf | Toward::NegInf) => Some(true),
-            None => side_grows(&rc.claims, p, right).then_some(true),
-        }
-    };
-    let undefined_at = |p: f64| w.holes.iter().any(|h| h.0 <= p && p <= h.1);
-    for h in w.holes.iter().chain(&w.gaps) {
-        let asked = ts.iter().any(|t| t.0 <= h.1 && h.0 <= t.1);
-        if !asked {
-            continue;
-        }
-        // The excluded point the hole is, or the gap lies beside.
-        let (unbounded, at) = match near(h) {
-            Some(found) => found,
-            None => {
-                let is_gap = w.gaps.contains(h);
-                let found = if !is_gap && h.0 == h.1 {
-                    // A point: by either side's limit (the other side's
-                    // gap, if it is in the region, has its own).
-                    [true, false]
-                        .into_iter()
-                        .filter_map(|right| side(h.0, right))
-                        .reduce(|a, b| a || b)
-                        .map(|u| (u, Enc { lo: h.0, hi: h.0 }))
-                } else if is_gap && undefined_at(h.0) {
-                    side(h.0, true).map(|u| (u, Enc { lo: h.0, hi: h.0 }))
-                } else if is_gap && undefined_at(h.1) {
-                    side(h.1, false).map(|u| (u, Enc { lo: h.1, hi: h.1 }))
-                } else {
-                    None
-                };
-                match found {
-                    Some(found) => found,
-                    None => {
-                        out.problems.push(format!(
-                            "f beside [{:e}, {:e}] is shown neither bounded nor unbounded: an \
-                             asymptote there is not ruled out",
-                            h.0, h.1
-                        ));
-                        return;
-                    }
-                }
+        });
+        match placed {
+            Some((false, _)) => {}
+            Some((true, at)) if is_listed(&at) => {}
+            Some((true, at)) => {
+                out.problems.push(format!(
+                    "f is unbounded at {:e}, but no asymptote is listed there",
+                    at.mid()
+                ));
+                return;
             }
-        };
-        if unbounded && !is_listed(&at) {
-            out.problems.push(format!(
-                "f is unbounded at {:e}, but no asymptote is listed there",
-                at.mid()
-            ));
-            return;
+            None => {
+                out.problems.push(format!(
+                    "f in the gap [{:e}, {:e}] is not shown bounded: an asymptote there is not \
+                     ruled out",
+                    g.0, g.1
+                ));
+                return;
+            }
         }
     }
 }
@@ -4270,8 +4275,7 @@ fn oblique(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Resul
                 },
                 true,
             ) == Some(Toward::In(0.0, 0.0))
-            || (fact("f/x → ±∞") && slope_shown(&rc.claims, s, false))
-            || (fact("f/x → 0") && slope_shown(&rc.claims, s, true));
+            || (fact("f/x → 0") && slope_to_zero(&rc.claims, s));
         if !ruled_out {
             out.problems.push(format!(
                 "no oblique asymptote at {at}, but nothing rules one out"
