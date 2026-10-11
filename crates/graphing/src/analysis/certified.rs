@@ -274,8 +274,11 @@ impl Num {
 
     fn value(&self) -> f64 {
         match self.exact {
-            Some(e) => e.to_f64(),
-            None => self.enc.mid(),
+            // (Its double, where that is in its enclosure: one that
+            // cancels need not be.)
+            Some(e) if self.enc.contains(e.to_f64()) || !self.enc.lo.0.is_finite() => e.to_f64(),
+            Some(e) if !self.enc.hi.0.is_finite() => e.to_f64(),
+            _ => self.enc.mid(),
         }
     }
 
@@ -1778,18 +1781,16 @@ pub(super) fn features(
                 .then(|| cx.eval(&cx.f, Ex::int(0)))
                 .flatten()
         })
-        .filter(|_| domain_nonempty);
+        .filter(|_| domain_nonempty)
+        // (With an enclosure to show it by where its form is unwieldy.)
+        .filter(|c| c.interval().is_some());
+    // The constant's enclosure: of its form. (Its double with a few
+    // doubles either side is not one: y = ln(1.00000000000000000001),
+    // off, is 10⁻²⁰, its double is ln of the double beside 1, and its
+    // range read {≈2.22045×10⁻¹⁶}.)
     let const_enc = |c: Ex| -> Enc {
-        match c.rational() {
-            Some(q) => {
-                let iv = q.interval();
-                Enc::new(iv.lo(), iv.hi())
-            }
-            None => {
-                let (lo, hi) = widen(c.to_f64(), c.to_f64());
-                Enc::new(lo, hi)
-            }
-        }
+        let iv = c.interval().expect("kept with one");
+        Enc::new(iv.lo(), iv.hi())
     };
 
     // Constant on its domain: the range is one value.
