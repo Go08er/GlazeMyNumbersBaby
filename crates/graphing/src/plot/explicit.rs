@@ -162,8 +162,10 @@ pub(crate) struct ExplicitSampler<'a> {
     /// outside one), and the most it may spend.
     column: Option<usize>,
     column_limit: usize,
-    /// The last column structured was dense.
-    dense_run: bool,
+    /// Where the last dense column ended: the column starting there is
+    /// right after it, in its run. (None: the last column structured
+    /// wasn't dense.)
+    dense_end: Option<f64>,
     /// Costs of a point and an order-0 and order-2 interval evaluation.
     pt_cost: usize,
     iv0_cost: usize,
@@ -225,7 +227,7 @@ impl<'a> ExplicitSampler<'a> {
             fallback_work: 0,
             column: None,
             column_limit: COLUMN_EVALS,
-            dense_run: false,
+            dense_end: None,
             pt_cost,
             iv0_cost: 0,
             iv2_cost: 0,
@@ -409,10 +411,14 @@ impl<'a> ExplicitSampler<'a> {
                 out.push((lo, hi, Kind::Gap));
             } else if self.column.is_none() && (hi - lo) * self.t_px <= 1.0 {
                 // A column: its breaks are located within COLUMN_EVALS
-                // (fewer next to a dense one).
+                // (fewer right after a dense one, in its run: a column
+                // further on starts afresh. A dense column at one end of
+                // a domain used to leave the short allowance to the next
+                // unresolved column however far off, which made a stroke
+                // of the curve's start at the domain's other end).
                 let mark = out.len();
                 self.column = Some(0);
-                self.column_limit = if self.dense_run {
+                self.column_limit = if self.dense_end == Some(lo) {
                     DENSE_RUN_EVALS
                 } else {
                     COLUMN_EVALS
@@ -420,8 +426,9 @@ impl<'a> ExplicitSampler<'a> {
                 self.structure(iv, lo, m, out);
                 self.structure(iv, m, hi, out);
                 let n = self.column.take().unwrap_or(0);
-                self.dense_run = n > self.column_limit;
-                if self.dense_run {
+                let dense = n > self.column_limit;
+                self.dense_end = dense.then_some(hi);
+                if dense {
                     out.truncate(mark);
                     out.push((lo, hi, Kind::Dense));
                 }

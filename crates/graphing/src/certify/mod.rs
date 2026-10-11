@@ -673,6 +673,43 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         }
         c1.kink_at.push(k);
     }
+    // What each derivative does on the two sides of a kink, by f's two
+    // branches there (`Claim::KinkSides`): the kink at a double, or
+    // between two.
+    // (Each box once, for both derivatives.)
+    let mut sides_of: Vec<((f64, f64), fun::KinkSides)> = Vec::new();
+    for (i, c) in [&mut c1, &mut c2].into_iter().enumerate() {
+        for (j, &(l, r)) in kbox[i].iter().enumerate() {
+            // (f′ at a kink already placed with its two signs: a `KinkAt`
+            // says it.)
+            if i == 0 && c.kink_at.get(j).is_some_and(|k| k.is_some()) {
+                c.kink_sides.push(None);
+                continue;
+            }
+            let sides = match sides_of.iter().find(|(b, _)| *b == (l, r)) {
+                Some((_, s)) => *s,
+                None => {
+                    let s = f
+                        .kink_sides(l, r)
+                        .unwrap_or(fun::KinkSides { d1: None, d2: None });
+                    sides_of.push(((l, r), s));
+                    s
+                }
+            };
+            let side = if i == 0 { sides.d1 } else { sides.d2 };
+            if let Some(s) = side {
+                kink_claims[i].push(Claim::KinkSides {
+                    x: XBox::new(l, r),
+                    at: s.at.map(R),
+                    order: i as u8 + 1,
+                    left: s.left,
+                    right: s.right,
+                    joined: s.joined,
+                });
+            }
+            c.kink_sides.push(side);
+        }
+    }
     if std::env::var_os("CERTIFY_DEBUG").is_some() {
         eprintln!("w = {w}, boxes = {spans:?}");
         for (k, c) in [&c0, &c1, &c2].iter().enumerate() {

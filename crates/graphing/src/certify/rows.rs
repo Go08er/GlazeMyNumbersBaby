@@ -48,10 +48,18 @@ impl Scope {
     }
 }
 
-/// Is `x` (enclosed) a repeat of one of `xs` by a multiple of the period:
-/// does it meet e + k·P for the nearest k ≠ 0, over e's and the period's
-/// enclosures (rounded outward)? Nothing looser: a period of 10⁻¹² keeps
-/// its members apart.
+/// Can `x` (enclosed) not be told from a repeat of one of `xs` by a
+/// multiple of the period: does it meet e + k·P for the nearest k ≠ 0,
+/// over e's and the period's enclosures (rounded outward)?
+///
+/// The rows list what they find in one period [s, s + P], whose start
+/// was chosen with f, f′ and f″ nonzero within 10⁻⁶·P of it
+/// (`periodic_window`): nothing found there is within that of either
+/// end, so no two things found are a period apart, and each is its own
+/// family. Two that meet a period apart are enclosed too widely to say
+/// so: the row is then not decided. (They used to be taken for one
+/// family, and the second dropped: enclosures that meet are not one
+/// point. Round-19 audit of premises.)
 fn repeats(xs: &[Enc], x: &Enc, period: &Enc) -> bool {
     let p = Interval::new(period.lo.0, period.hi.0);
     xs.iter().any(|e| {
@@ -174,14 +182,14 @@ pub fn zeros(c0: &Cover, scope: &Scope, extra: &[Claim], clear: bool) -> Row<Vec
     if let Some(period) = scope.period {
         // Over one period: each zero repeats.
         let mut seen: Vec<Enc> = Vec::new();
-        out.retain(|s| match s {
-            Spot::At(x) => {
-                let keep = !repeats(&seen, x, &period);
+        for s in &out {
+            if let Spot::At(x) = s {
+                if repeats(&seen, x, &period) {
+                    return Row::unknown("two zeros of one period are not told apart");
+                }
                 seen.push(*x);
-                keep
             }
-            Spot::Every(_) => true,
-        });
+        }
         for s in out.iter_mut() {
             if let Spot::At(x) = *s {
                 *s = Spot::Every(Family { x0: x, period });
@@ -282,9 +290,11 @@ enum Seg {
     Zero(Enc),
     /// ≡ 0 on a stretch.
     Flat,
-    /// A kink placed at a point, with f′'s strict signs proven on both
-    /// sides throughout the original box (`Claim::KinkAt`).
-    Kink(Enc),
+    /// A kink at a point (placed, or enclosed), with f⁽ᵏ⁾'s sign proven
+    /// on each side of it throughout its box (`Claim::KinkAt`,
+    /// `Claim::KinkSides`). Set where f′ is continuous across it (a
+    /// `KinkSides` joined): a change of f″'s sign there is an inflection.
+    Kink(Enc, bool),
     /// A box where f is continuous but its derivatives are not decided.
     /// Signs or zero derivatives outside it prove nothing inside: a
     /// valley can lie entirely between adjacent doubles.
@@ -368,8 +378,37 @@ fn walk(cover: &Cover, ib: &IBox) -> Vec<Seg> {
             && out[i - 1] == Seg::Sign(k.left)
             && out[i + 1] == Seg::Sign(k.right)
         {
-            out[i] = Seg::Kink(Enc::point(k.p));
+            out[i] = Seg::Kink(Enc::point(k.p), false);
         }
+    }
+    // A kink whose two sides are proven on f's branches
+    // (`Claim::KinkSides`), each side's sign that of the stretch beside
+    // the box: one point of the walk, the kink (enclosed by the box, or
+    // at its double).
+    for i in 1..out.len().saturating_sub(1) {
+        let Seg::KinkBox(x) = out[i] else {
+            continue;
+        };
+        let Some(s) = cover
+            .kinks
+            .iter()
+            .zip(&cover.kink_sides)
+            .find(|((l, r), _)| *l == x.lo.0 && *r == x.hi.0)
+            .and_then(|(_, s)| *s)
+        else {
+            continue;
+        };
+        use super::cert::KinkSign;
+        let is = |seg: Seg, k: KinkSign| match (seg, k) {
+            (Seg::Sign(p), KinkSign::Pos) => p,
+            (Seg::Sign(p), KinkSign::Neg) => !p,
+            (Seg::Flat, KinkSign::Zero) => true,
+            _ => false,
+        };
+        if !(is(out[i - 1], s.left) && is(out[i + 1], s.right)) {
+            continue;
+        }
+        out[i] = Seg::Kink(s.at.map_or(x, Enc::point), s.joined);
     }
     // Merge runs of the same sign, and a zero seen from both sides (its
     // point leaf and the boxes ending there).
@@ -391,11 +430,12 @@ fn flat(segs: &[Seg]) -> bool {
     segs.contains(&Seg::Flat)
         && segs
             .iter()
-            .all(|s| matches!(s, Seg::Flat | Seg::Zero(_) | Seg::Kink(_)))
+            .all(|s| matches!(s, Seg::Flat | Seg::Zero(_) | Seg::Kink(..)))
 }
 
 /// With `kink_turns` (f′), a kink between strict opposite signs is a
-/// change (f, continuous there, turns); without it (f″), such a kink
+/// change (f, continuous there, turns); without it (f″), such a kink is
+/// a change where f′ is continuous across it (x·|x| at 0) and otherwise
 /// leaves the walk incomplete (an inflection at a corner is not decided).
 /// The same strict sign on both sides, or f⁽ᵏ⁾ ≡ 0 on both, is no change.
 fn changes(segs: &[Seg], kink_turns: bool) -> (Vec<(Enc, bool)>, bool) {
@@ -403,13 +443,13 @@ fn changes(segs: &[Seg], kink_turns: bool) -> (Vec<(Enc, bool)>, bool) {
     let mut complete = true;
     for (i, s) in segs.iter().enumerate() {
         match s {
-            Seg::Kink(x) => {
+            Seg::Kink(x, joined) => {
                 let before = i.checked_sub(1).and_then(|j| segs.get(j));
                 let after = segs.get(i + 1);
                 match (before, after) {
                     (Some(Seg::Sign(p)), Some(Seg::Sign(q))) => {
                         if p != q {
-                            if kink_turns {
+                            if kink_turns || *joined {
                                 out.push((*x, *p));
                             } else {
                                 complete = false;
@@ -594,6 +634,7 @@ pub fn extrema(
                     &p,
                 )
             {
+                complete = false;
                 continue;
             }
             let y = f.val_tight(Interval::new(x.lo.0, x.hi.0))?;
@@ -648,6 +689,7 @@ pub fn inflections(
                     &p,
                 )
             {
+                complete = false;
                 continue;
             }
             let y = f.val_tight(Interval::new(x.lo.0, x.hi.0))?;
@@ -713,7 +755,7 @@ fn monotone_pieces(c1: &Cover, boxes: &[IBox]) -> Option<Vec<(Monotone, bool, bo
                         dir = Some(p);
                     }
                 }
-                Seg::Zero(x) | Seg::Kink(x) => {
+                Seg::Zero(x) | Seg::Kink(x, _) => {
                     let after = segs.get(i + 1);
                     if let (Some(d), Some(Seg::Sign(q))) = (dir, after)
                         && *q != d
@@ -1229,9 +1271,12 @@ pub fn vertical(
         let mut seen: Vec<Enc> = Vec::new();
         let mut fams = Vec::new();
         for s in out {
-            if let Spot::At(x) = s
-                && !repeats(&seen, &x, &period)
-            {
+            if let Spot::At(x) = s {
+                if repeats(&seen, &x, &period) {
+                    return Ok(Row::unknown(
+                        "two asymptotes of one period are not told apart",
+                    ));
+                }
                 seen.push(x);
                 fams.push(Spot::Every(Family { x0: x, period }));
             }
@@ -1496,11 +1541,19 @@ fn tail_sign_k(
     Ok(Some((at.gt0(), d)))
 }
 
-/// f's bands on the tails [M, ∞) of the far sequence (M ≥ `start`), each
-/// with its claims: its enclosure there where bounded (`TailValue`); else,
-/// f monotone on the tail (`rising`), its value at M one way — f moves
-/// away from f(M) out along the tail — and its enclosure's bound the other
-/// (`Value` at M, `TailBeyond` on [M, ∞)): x·e⁻ˣ in (0, M·e⁻ᴹ].
+/// f's bands on the tails [M, ∞) of the far sequence, each with its
+/// claims: its enclosure there where bounded (`TailValue`); else, f
+/// monotone on the tail (`rising`, proven on [`start`, ∞): so for M ≥
+/// `start` only), its value at M one way — f moves away from f(M) out
+/// along the tail — and its enclosure's bound the other (`Value` at M,
+/// `TailBeyond` on [M, ∞)): x·e⁻ˣ in (0, M·e⁻ᴹ].
+///
+/// (The far sequence starts at 1 whatever `start` is. With f′ < 0 proven
+/// from 16 on, 3 + (x − c)·e⁻ˣ with c = 1 + 2·10⁻¹⁵ had the band
+/// [.., f(1)] from M = 1, before its maximum at 2: f(1) is 3 − 7·10⁻¹⁶,
+/// below the limit 3, and the right asymptote was certified at
+/// y ∈ [2.9999999999999996, 2.9999999999999996]. Found by the round-19
+/// audit of premises.)
 fn far_bands(
     f: &Fun<'_>,
     right: bool,
@@ -1528,6 +1581,9 @@ fn far_bands(
             continue;
         }
         let Some(rising) = rising else { continue };
+        if m < start {
+            continue;
+        }
         let away_up = rising == right;
         let p = f.val(Interval::point(x))?;
         if p.is_empty() || p.dec < Dec::Def || !p.iv.is_bounded() {
@@ -1670,7 +1726,11 @@ fn infinite_bounds(
         return Ok(None);
     }
     let mut pts: Vec<(f64, f64, f64)> = Vec::new();
-    for m in far_points(f, right, start) {
+    // (Its values from where it is proven monotone on.)
+    for m in far_points(f, right, start)
+        .into_iter()
+        .filter(|m| *m >= start)
+    {
         let x = if right { m } else { -m };
         let v = f.val(Interval::point(x))?;
         if v.is_empty() || v.dec < Dec::Def || !v.iv.is_bounded() {
@@ -2549,7 +2609,11 @@ fn slope_monotone(
     };
     if grow {
         let mut pts: Vec<(f64, f64, f64)> = Vec::new();
-        for m in far_points(f, right, start) {
+        // (Its values from where it is proven monotone on.)
+        for m in far_points(f, right, start)
+            .into_iter()
+            .filter(|m| *m >= start)
+        {
             let x = if right { m } else { -m };
             if let Some(v) = at(x)? {
                 pts.push((x, v.lo(), v.hi()));
@@ -2576,7 +2640,10 @@ fn slope_monotone(
     }
     // Bands about 0: f′(M) one way, f′'s enclosure on [M, ∞) the other.
     let mut last = f64::INFINITY;
-    let ms = far_points(f, right, start);
+    let ms: Vec<f64> = far_points(f, right, start)
+        .into_iter()
+        .filter(|m| *m >= start)
+        .collect();
     for &m in &ms[ms.len().saturating_sub(3)..] {
         let x = if right { m } else { -m };
         let Some(p) = at(x)? else { continue };
