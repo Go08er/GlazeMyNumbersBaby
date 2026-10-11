@@ -390,32 +390,6 @@ pub fn recentered(e: &Expr, origin: f64, ctx: &Ctx<'_>) -> Expr {
     })
 }
 
-/// The exact derivative identity (sqrt(u)·ln(u))′ = u′(ln(u)+2)/(2sqrt(u)).
-/// Every factor is enclosed on the full box; nothing follows from a sample.
-pub fn sqrt_log_slope(e: &Expr, x: &Iv, ctx: &Ctx<'_>) -> Option<bool> {
-    let Expr::Bin(BinOp::Mul, a, b) = e else {
-        return None;
-    };
-    let parts = |a: &Expr, b: &Expr| -> Option<(Expr, Expr)> {
-        match (a, b) {
-            (Expr::Call(Func::Sqrt, u), Expr::Call(Func::Ln, v)) => {
-                Some((u[0].clone(), v[0].clone()))
-            }
-            _ => None,
-        }
-    };
-    let (u, v) = parts(a, b).or_else(|| parts(b, a))?;
-    if !super::algebra::same_trees(&u, &v, false, ctx.lits, ctx.vars, ctx.unit) {
-        return None;
-    }
-    let u = eval(&u, &se::var(x.clone(), 1), 1, ctx);
-    if u[0].empty || !u[0].def || !u[0].gt(0.0) || u[1].empty || !u[1].def || !u[1].ne0() {
-        return None;
-    }
-    let factor = iv::add(&iv::ln(&u[0]), &Iv::of(2.0));
-    factor.ne0().then(|| factor.gt(0.0) == u[1].gt(0.0))
-}
-
 pub fn contains_x(e: &Expr) -> bool {
     match e {
         Expr::X | Expr::Y => true,

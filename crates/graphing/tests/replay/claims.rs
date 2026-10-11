@@ -149,7 +149,7 @@ fn tail_box(side: Side, from: f64) -> B {
     }
 }
 
-fn show(v: &Iv) -> String {
+pub fn show(v: &Iv) -> String {
     if v.empty {
         "undefined".into()
     } else {
@@ -441,7 +441,13 @@ fn product_of(fs: &[Expr]) -> Expr {
 /// negative on [16, ∞) though its enclosure there holds 0.) Identities
 /// and the sign rules of products only: the replay's own.
 fn factor_sign(fx: &Fx, e: &Expr, lo: f64, hi: f64, depth: usize) -> Option<bool> {
-    let v = fx.series(e, lo, hi, 0)[0].clone();
+    factor_sign_over(fx, e, &Iv::of2(lo, hi), depth)
+}
+
+/// [`factor_sign`] over an x interval of the replay's own (strictly
+/// signed, say: the reals beside an open end, the end left out).
+pub fn factor_sign_over(fx: &Fx, e: &Expr, x: &Iv, depth: usize) -> Option<bool> {
+    let v = fx.series_iv(e, x.clone(), 0)[0].clone();
     if v.empty || !v.def {
         return None;
     }
@@ -455,6 +461,8 @@ fn factor_sign(fx: &Fx, e: &Expr, lo: f64, hi: f64, depth: usize) -> Option<bool
         return None;
     }
     let d = depth - 1;
+    let (lo, hi) = outward(x);
+    let factor_sign = |fx: &Fx, e: &Expr, _: f64, _: f64, d: usize| factor_sign_over(fx, e, x, d);
     match e {
         Expr::Neg(a) => factor_sign(fx, a, lo, hi, d).map(|s| !s),
         Expr::Bin(BinOp::Mul | BinOp::Div, a, b) => {
@@ -2080,10 +2088,22 @@ fn limit(fx: &Fx, at: growth::At, over_x: bool, to: super::Toward) -> Outcome {
                 )
             }
         }
-        (got, to) => Outcome::new(
-            Class::Refuted,
-            format!("the limit is {got:?} by the tree's structure, not {to:?}"),
-        ),
+        (got, to) => {
+            let got = match &got {
+                Goes::PosInf => "+∞".to_string(),
+                Goes::NegInf => "−∞".to_string(),
+                Goes::To(v) => show(v),
+            };
+            let to = match to {
+                Toward::PosInf => "+∞".to_string(),
+                Toward::NegInf => "−∞".to_string(),
+                Toward::In(lo, hi) => format!("in [{lo:e}, {hi:e}]"),
+            };
+            Outcome::new(
+                Class::Refuted,
+                format!("the limit is {got} by the tree's structure, not {to}"),
+            )
+        }
     }
 }
 

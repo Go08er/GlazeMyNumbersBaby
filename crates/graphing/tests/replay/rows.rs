@@ -884,6 +884,23 @@ fn one_period(rc: &RowCert, out: &mut RowResult) {
     }
 }
 
+/// A row complete over one period speaks for the line by f's period:
+/// each thing it lists repeats with f, so each is listed as a family. One
+/// listed alone says there is no other like it, which is false of every
+/// repeat (sin's zero at 0 "alone", in a row complete over a period,
+/// passed: round 19's mutation tester).
+fn repeats_listed(what: &str, rc: &RowCert, listed: &[(Enc, Option<Enc>)], out: &mut RowResult) {
+    if !matches!(rc.region, Some(Region::Period(..))) || rc.status != "Certified" {
+        return;
+    }
+    if let Some((x, _)) = listed.iter().find(|(_, p)| p.is_none()) {
+        out.problems.push(format!(
+            "{what} at {:e} listed alone, in a row complete over one period of f",
+            x.mid()
+        ));
+    }
+}
+
 /// The families a row lists (each item "every `period`") repeat by the
 /// period of the row's fact: each listed period holds it. A family listed
 /// with another period (2π at the double below it), or with no fact of a
@@ -1025,6 +1042,7 @@ fn zeros_row(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Res
     match_items("an x-intercept", &derived, &listed, complete(rc), out);
     let periods: Vec<Enc> = listed.iter().filter_map(|(_, p)| *p).collect();
     families_follow("an x-intercept", rc, &periods, out);
+    repeats_listed("an x-intercept", rc, &listed, out);
     Ok(())
 }
 
@@ -1107,6 +1125,7 @@ fn turns(
     match_items(what, &derived, &listed, complete(rc), out);
     let periods: Vec<Enc> = listed.iter().filter_map(|(_, p)| *p).collect();
     families_follow(what, rc, &periods, out);
+    repeats_listed(what, rc, &listed, out);
     Ok(())
 }
 
@@ -1330,7 +1349,12 @@ fn monotone_bridge(fx: &Fx, all: &[RowCert], x: B, want: Option<bool>) -> bool {
     {
         return true;
     }
-    want.is_some_and(|up| super::eval::sqrt_log_slope(&e, &xb, &ctx) == Some(up))
+    // f′'s own exact form, its sign factor by factor, where the series'
+    // sum of terms is ∞ − ∞ (beside an open end of the domain).
+    want.is_some_and(|up| {
+        super::algebra::derivative_tree(&e, &fx.lits, &fx.vars, fx.unit)
+            .is_some_and(|d| claims::factor_sign_over(fx, &d, &xb, 6) == Some(up))
+    })
 }
 
 fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
@@ -1504,6 +1528,32 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
                 .any(|(sa, sb, s)| *s == up && *sa <= d && d <= *sb),
             None => w.flat.iter().any(|f| f.0 <= d && d <= f.1),
         };
+        // A closed end belongs to the piece: f is defined there and
+        // continuous to it from the piece (on the end's enclosure, or from
+        // the double beside a point end), so the direction shown inside
+        // holds up to and at the end. (Only an end shown undefined, or one
+        // that is an open end of the domain's pieces, was refused: tan's
+        // piece closed at its poles, which are an excluded family, passed.
+        // Round 19's mutation tester.)
+        for (end, low) in [(p.lo, true), (p.hi, false)] {
+            let Bound::At { x, closed: true } = end else {
+                continue;
+            };
+            let beside = if x.lo < x.hi {
+                (x.lo, x.hi)
+            } else if low {
+                (x.lo, x.lo.next_up())
+            } else {
+                (x.lo.next_down(), x.lo)
+            };
+            if claims::check(fx, &Claim::Continuous(beside), &[]).class != Class::Strong {
+                out.problems.push(format!(
+                    "a monotone piece is closed at [{:e}, {:e}], where f is not shown defined \
+                     and continuous from the piece",
+                    x.lo, x.hi
+                ));
+            }
+        }
         for end in [p.lo, p.hi] {
             if let Bound::At { x, closed: true } = end
                 && x.lo == x.hi
@@ -1575,9 +1625,20 @@ fn y_intercept(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String>
     iv::set_prec(160);
     let (v, valid) = s.at(0.0);
     if rc.value.is_null() {
+        // (Shown undefined, on f itself: an f(0) the replay can't place
+        // was "no y-intercept" too.)
+        if !v.empty && !valid {
+            out.problems.push(format!(
+                "no y-intercept listed, yet f(0) is not shown undefined: {}",
+                claims::show(&v)
+            ));
+        }
         if !v.empty && valid {
             out.problems
-                .push(format!("no y-intercept listed, yet f(0) is defined: {v:?}"));
+                .push(format!(
+                    "no y-intercept listed, yet f(0) is defined: {}",
+                    claims::show(&v)
+                ));
         }
         return Ok(());
     }
@@ -2377,8 +2438,12 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
             return Ok(());
         }
         // A tail: to ±∞ (f′ beyond a nonzero c), or a limit with two
-        // values apart.
-        let to_inf = shows_unbounded(&rc.claims);
+        // values apart. (A tail, not a pole: tan is unbounded and periodic.
+        // And a limit, not a bound: sin is within [−1, 1] far out, with
+        // two values apart, and periodic.)
+        let to_inf = [Side::Left, Side::Right]
+            .iter()
+            .any(|&s| tail_infinite(&rc.claims, s, true) || tail_infinite(&rc.claims, s, false));
         let vals: Vec<(f64, f64, f64)> = rc
             .claims
             .iter()
@@ -2393,16 +2458,29 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
             })
             .collect();
         let apart = vals.iter().any(|a| vals.iter().any(|b| a.2 < b.1));
-        // A limit at a tail: f's bands there, or a rational f's exact one.
-        let limit = [Side::Left, Side::Right]
+        // A limit at a tail: by the tree's structure, a rational f's exact
+        // one, f bounded and monotone there, or the simplifier's with f's
+        // bands closing in on it.
+        let limit = [(Side::Left, At::NegInf, "−∞"), (Side::Right, At::PosInf, "+∞")]
             .iter()
-            .any(|&s| !tail_bands(&rc.claims, s).is_empty())
-            || rc.claims.iter().any(|c| {
-                matches!(c, Claim::Simplifier(f) if f.starts_with(claims::RATIONAL) && fact_limit(f).is_some())
-            })
-            || [At::PosInf, At::NegInf]
-                .iter()
-                .any(|&at| matches!(limit_at(&rc.claims, at, false), Some(Toward::In(..))));
+            .any(|&(s, toward, at)| {
+                let bands = tail_bands(&rc.claims, s);
+                let fact = rc.claims.iter().find_map(|c| match c {
+                    Claim::Simplifier(f)
+                        if f.starts_with("f → ") && f.ends_with(&format!("as x → {at}")) =>
+                    {
+                        fact_limit(f)
+                    }
+                    _ => None,
+                });
+                matches!(limit_at(&rc.claims, toward, false), Some(Toward::In(..)))
+                    || rc.claims.iter().any(|c| {
+                        matches!(c, Claim::Simplifier(f) if f.starts_with(claims::RATIONAL)
+                            && f.ends_with(&format!("as x → {at}")) && fact_limit(f).is_some())
+                    })
+                    || (!bands.is_empty() && tail_mono(&rc.claims, s).is_some())
+                    || fact.is_some_and(|y| borne_out(&bands, &y, "the limit").is_ok())
+            });
         if !(to_inf || (limit && apart)) {
             out.problems
                 .push("not periodic, but the claims don't show it".into());
@@ -2463,8 +2541,10 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
     match stated {
         Some(v) if v.ge(p.lo) && v.le(p.hi) => {}
         Some(v) => out.problems.push(format!(
-            "the period is listed in [{:e}, {:e}], the fact says {v:?}",
-            p.lo, p.hi
+            "the period is listed in [{:e}, {:e}], the fact says {}",
+            p.lo,
+            p.hi,
+            claims::show(&v)
         )),
         None => out.problems.push(format!("unread period fact: {fact}")),
     }
@@ -2734,12 +2814,18 @@ fn tail_infinite(claims: &[Claim], side: Side, up: bool) -> bool {
         } if *s == side && *c != 0.0 => {
             (*above && *c > 0.0 || !*above && *c < 0.0) && (*above == right) == up
         }
+        // (f′ moving away from c on its side of it: away from 0 only for
+        // a c on that side of 0, or 0 itself. 1/x's f′ rises from above
+        // −5 on the right tail, toward 0.)
         Claim::TailChain {
             side: s,
             of: Subject::F(1),
+            c,
             above,
             ..
-        } if *s == side => (*above == right) == up,
+        } if *s == side && (if *above { *c >= 0.0 } else { *c <= 0.0 }) => {
+            (*above == right) == up
+        }
         _ => false,
     });
     let bounds: Vec<(f64, f64)> = claims
@@ -3029,6 +3115,7 @@ fn vertical(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Resu
     let _ = fx;
     let periods: Vec<Enc> = listed.iter().filter_map(|(_, p)| *p).collect();
     families_follow("a vertical asymptote", rc, &periods, out);
+    repeats_listed("a vertical asymptote", rc, &listed, out);
     for (x, _) in &listed {
         // The listed enclosure is the box of a claim that f is unbounded
         // at a point in it (which the claim's check places there), or the
@@ -3066,27 +3153,209 @@ fn vertical(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Resu
             ));
         }
     }
-    for e in &excluded {
+    let is_listed = |e: &Enc| {
         // (Listed itself, or a repeat of a listed family's. A row over one
         // period was let off this altogether: tan's poles could all be
         // left out.)
-        let is_listed = listed.iter().any(|(x, _)| x.contains(e))
+        listed.iter().any(|(x, _)| x.contains(e))
             || listed
                 .iter()
-                .any(|(x, p)| p.is_some_and(|p| meets_member(x, &p, e)));
+                .any(|(x, p)| p.is_some_and(|p| meets_member(x, &p, e)))
+    };
+    for e in &excluded {
         let unb = rc
             .claims
             .iter()
             .any(|c| matches!(c, Claim::Unbounded { at, .. } if at.0 == e.lo && at.1 == e.hi));
-        if unb && !is_listed {
+        if unb && !is_listed(e) {
             out.problems.push(format!(
                 "f is unbounded at {:e}, but no asymptote is listed there",
                 e.mid()
             ));
         }
     }
-    let _ = all;
+    if complete(rc) {
+        no_other_asymptote(fx, rc, all, &is_listed, out);
+    }
     Ok(())
+}
+
+/// A complete vertical row lists every asymptote: nowhere else in its
+/// region does |f| grow without bound beside a point. The row's claims
+/// place every x of the region (within the domain) in a box where f is
+/// valid, at a point where f is undefined, or in a gap beside one; then
+///
+/// * on a box where f is valid it is bounded near each point: a value
+///   claim bounds it there, or f is continuous on the box (built without
+///   steps, so continuous wherever defined; else shown so on the box);
+/// * each undefined point and each gap is classified by a claim: f
+///   bounded near it (`Bounded`, `Removable`, a finite one-sided limit), or
+///   unbounded (`Unbounded`, an infinite one-sided limit, bounds growing
+///   beside it), and then listed.
+///
+/// (The row was checked only where it listed something: "none" passed for
+/// any f with no claims at all, x³ − 2x + 1/(x − 1) among them. Round 19's
+/// mutation tester.)
+fn no_other_asymptote(
+    fx: &Fx,
+    rc: &RowCert,
+    all: &[RowCert],
+    is_listed: &dyn Fn(&Enc) -> bool,
+    out: &mut RowResult,
+) {
+    if !all
+        .iter()
+        .any(|r| r.name == "domain" && r.status == "Certified")
+    {
+        out.problems
+            .push("the domain is not decided, yet the row is complete".into());
+        return;
+    }
+    if claims::unmodelled(&fx.f) {
+        return;
+    }
+    // Where the claims say f is valid, with a bound if they give one.
+    let f0 = Subject::F(0);
+    let mut w = Walk::default();
+    let mut valid: Vec<(B, bool)> = Vec::new();
+    for c in &rc.claims {
+        match c {
+            Claim::Beyond { x, of, .. }
+            | Claim::NoCross { x, of, .. }
+            | Claim::Factors { x, of, .. }
+            | Claim::OneCross { x, of, .. }
+            | Claim::ExactAt { x, of, .. }
+            | Claim::Touch { x, of, .. }
+                if *of == f0 =>
+            {
+                valid.push((*x, false));
+            }
+            Claim::Value { x, of, lo, hi } if *of == f0 => {
+                valid.push((*x, lo.is_finite() && hi.is_finite()));
+            }
+            Claim::TailBeyond { side, from, of, .. } | Claim::TailChain { side, from, of, .. }
+                if *of == f0 =>
+            {
+                valid.push((tail(*side, *from), false));
+            }
+            Claim::TailValue { side, from, lo, hi } => {
+                valid.push((tail(*side, *from), lo.is_finite() && hi.is_finite()));
+            }
+            Claim::Undefined(x) => {
+                w.holes.push(*x);
+                w.solid.push(*x);
+            }
+            Claim::Gap(x) => w.gaps.push(*x),
+            _ => {}
+        }
+    }
+    w.solid.extend(valid.iter().map(|(b, _)| *b));
+    w.boxes = w.solid.iter().chain(&w.gaps).copied().collect();
+    coverage(rc, all, &w.boxes, out);
+    gap_ends(fx, rc, all, &w, 0, out);
+    // Bounded near each point of a box where f is valid.
+    let mut steps = false;
+    fx.f.visit(&mut |e| {
+        use graphing::ast::{Expr, Func};
+        steps |= matches!(
+            e,
+            Expr::Call(
+                Func::Floor | Func::Ceil | Func::Round | Func::Sign | Func::Mod,
+                _
+            )
+        );
+    });
+    if steps {
+        for (b, bounded) in &valid {
+            let within = valid
+                .iter()
+                .any(|(v, vb)| *vb && v.0 <= b.0 && b.1 <= v.1);
+            if *bounded || within {
+                continue;
+            }
+            if claims::check(fx, &Claim::Continuous(*b), &[]).class != Class::Strong {
+                out.problems.push(format!(
+                    "f is not shown continuous or bounded on [{:e}, {:e}]: an asymptote there \
+                     is not ruled out",
+                    b.0, b.1
+                ));
+                break;
+            }
+        }
+    }
+    // Each undefined point and each gap, classified.
+    let Some(rg) = &rc.region else { return };
+    let ts = targets(rg, all);
+    let near = |h: &B| {
+        rc.claims.iter().find_map(|c| match c {
+            Claim::Unbounded { near, at } if near.0 <= h.0 && h.1 <= near.1 => {
+                Some((true, Enc { lo: at.0, hi: at.1 }))
+            }
+            Claim::Bounded { near, at, .. } | Claim::Removable { near, at, .. }
+                if near.0 <= h.0 && h.1 <= near.1 =>
+            {
+                Some((false, Enc { lo: at.0, hi: at.1 }))
+            }
+            _ => None,
+        })
+    };
+    // (A one-sided limit at the double p, from the side the hole or gap
+    // lies on; `None`: no claim of one.)
+    let side = |p: f64, right: bool| -> Option<bool> {
+        let at = if right { At::Right(p) } else { At::Left(p) };
+        match limit_at(&rc.claims, at, false) {
+            Some(Toward::In(..)) => Some(false),
+            Some(Toward::PosInf | Toward::NegInf) => Some(true),
+            None => side_grows(&rc.claims, p, right).then_some(true),
+        }
+    };
+    let undefined_at = |p: f64| w.holes.iter().any(|h| h.0 <= p && p <= h.1);
+    for h in w.holes.iter().chain(&w.gaps) {
+        let asked = ts.iter().any(|t| t.0 <= h.1 && h.0 <= t.1);
+        if !asked {
+            continue;
+        }
+        // The excluded point the hole is, or the gap lies beside.
+        let (unbounded, at) = match near(h) {
+            Some(found) => found,
+            None => {
+                let is_gap = w.gaps.contains(h);
+                let found = if !is_gap && h.0 == h.1 {
+                    // A point: by either side's limit (the other side's
+                    // gap, if it is in the region, has its own).
+                    [true, false]
+                        .into_iter()
+                        .filter_map(|right| side(h.0, right))
+                        .reduce(|a, b| a || b)
+                        .map(|u| (u, Enc { lo: h.0, hi: h.0 }))
+                } else if is_gap && undefined_at(h.0) {
+                    side(h.0, true).map(|u| (u, Enc { lo: h.0, hi: h.0 }))
+                } else if is_gap && undefined_at(h.1) {
+                    side(h.1, false).map(|u| (u, Enc { lo: h.1, hi: h.1 }))
+                } else {
+                    None
+                };
+                match found {
+                    Some(found) => found,
+                    None => {
+                        out.problems.push(format!(
+                            "f beside [{:e}, {:e}] is shown neither bounded nor unbounded: an \
+                             asymptote there is not ruled out",
+                            h.0, h.1
+                        ));
+                        return;
+                    }
+                }
+            }
+        };
+        if unbounded && !is_listed(&at) {
+            out.problems.push(format!(
+                "f is unbounded at {:e}, but no asymptote is listed there",
+                at.mid()
+            ));
+            return;
+        }
+    }
 }
 
 /// A fact that f is a line on its domain (a constant, m·x + b, holes
@@ -3169,8 +3438,51 @@ fn not_affine(claims: &[Claim]) -> bool {
     })
 }
 
+/// Whether the domain's pieces reach the tail (`None`: no domain row to
+/// say; then it may, for all that is known).
+fn reaches_tail(all: &[RowCert], side: Side) -> bool {
+    domain_pieces(all).is_none_or(|ps| {
+        ps.iter().any(|p| match side {
+            Side::Right => p.hi == Bound::PosInf,
+            Side::Left => p.lo == Bound::NegInf,
+        })
+    })
+}
+
+/// A fact, in any row of the certificate, that f has a period (each is
+/// checked as a claim of its row).
+fn periodic(all: &[RowCert]) -> bool {
+    all.iter()
+        .flat_map(|r| &r.claims)
+        .any(|c| matches!(c, Claim::Simplifier(f) if f.starts_with("f(x + ")))
+}
+
 fn horizontal(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
-    let _ = all;
+    // A tail with no asymptote listed has none: the domain doesn't reach
+    // it, f is a line (its own graph), f → ±∞ there, or f is periodic and
+    // no constant (it has no limit at all). A row that listed nothing was
+    // let through whatever f does far out: atan's two asymptotes removed,
+    // "none" for any f with no claims (round 19's mutation tester).
+    for (side, name, at) in [(Side::Left, "Left", "−∞"), (Side::Right, "Right", "+∞")] {
+        let n = list(&rc.value)?
+            .iter()
+            .filter(|h| h.get("side").and_then(Value::as_str) == Some(name))
+            .count();
+        if n > 1 {
+            out.problems
+                .push(format!("{n} horizontal asymptotes listed at {at}"));
+        }
+        let ruled_out = !reaches_tail(all, side)
+            || line_fact(&rc.claims)
+            || tail_infinite(&rc.claims, side, true)
+            || tail_infinite(&rc.claims, side, false)
+            || (periodic(all) && not_constant(&rc.claims));
+        if n == 0 && !ruled_out {
+            out.problems.push(format!(
+                "no horizontal asymptote at {at}, but nothing rules one out"
+            ));
+        }
+    }
     // A line's graph is the line itself: no asymptote (a constant, m·x +
     // b, holes aside). One listed needs f shown to be no constant.
     if !list(&rc.value)?.is_empty() {
@@ -3498,7 +3810,10 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
         let (v, valid) = s.at(x);
         if valid && !v.empty && v.bounded() && !inside(&v) {
             out.problems
-                .push(format!("f({x:e}) ∈ {v:?} is outside the listed range"));
+                .push(format!(
+                    "f({x:e}) ∈ {} is outside the listed range",
+                    claims::show(&v)
+                ));
             break;
         }
     }
@@ -3903,23 +4218,23 @@ fn oblique(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Resul
                 .collect()
         })
         .unwrap_or_default();
-    let pieces = domain_pieces(all).unwrap_or_default();
     for (side, at) in [("Left", "−∞"), ("Right", "+∞")] {
-        if sides.iter().any(|s| s == side) {
+        let n = sides.iter().filter(|s| *s == side).count();
+        if n > 1 {
+            out.problems
+                .push(format!("{n} oblique asymptotes listed at {at}"));
+        }
+        if n > 0 {
             continue;
         }
-        let reaches = pieces.iter().any(|p| {
-            if side == "Right" {
-                p.hi == Bound::PosInf
-            } else {
-                p.lo == Bound::NegInf
-            }
-        });
         let s = if side == "Right" {
             Side::Right
         } else {
             Side::Left
         };
+        // (With no domain row the tail may be reached, for all that is
+        // known: read as "not reached", a row alone ruled every line out.)
+        let reaches = reaches_tail(all, s);
         let fact = |head: &str| {
             facts
                 .iter()

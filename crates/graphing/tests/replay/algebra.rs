@@ -675,6 +675,177 @@ impl<'a> Field<'a> {
     }
 }
 
+impl Field<'_> {
+    /// The variable `i` as a tree: x, or the atom's function of its
+    /// argument's tree. None for an atom that has no tree of its own (a
+    /// step), or a degree no double holds.
+    fn var_tree(&self, i: u16) -> Option<Expr> {
+        if i == 0 {
+            return Some(Expr::X);
+        }
+        let k = i as usize - 1;
+        let call = |f: Func, a: Expr| Expr::Call(f, vec![a]);
+        Some(match self.atoms.get(k)? {
+            Atom::Const => match self.names[k].as_str() {
+                "π" => Expr::Const(Constant::Pi),
+                "e" => Expr::Const(Constant::E),
+                _ => return None,
+            },
+            Atom::Steps => return None,
+            Atom::Root(q, u) => {
+                let q = q.to_u32().filter(|q| *q >= 2)?;
+                let u = self.tree(u)?;
+                match q {
+                    2 => call(Func::Sqrt, u),
+                    3 => call(Func::Cbrt, u),
+                    _ => Expr::Call(Func::Root, vec![u, Expr::exact(f64::from(q))]),
+                }
+            }
+            Atom::PowVar(a, b) => Expr::Bin(
+                BinOp::Pow,
+                Box::new(self.tree(a)?),
+                Box::new(self.tree(b)?),
+            ),
+            Atom::Of(f, u) => {
+                let f = match *f {
+                    "sin" => Func::Sin,
+                    "cos" => Func::Cos,
+                    "sinh" => Func::Sinh,
+                    "cosh" => Func::Cosh,
+                    "exp" => Func::Exp,
+                    "ln" => Func::Ln,
+                    "abs" => Func::Abs,
+                    "atan" => Func::Atan,
+                    "acot" => Func::Acot,
+                    "asin" => Func::Asin,
+                    "acos" => Func::Acos,
+                    "asinh" => Func::Asinh,
+                    "acosh" => Func::Acosh,
+                    "atanh" => Func::Atanh,
+                    _ => return None,
+                };
+                call(f, self.tree(u)?)
+            }
+        })
+    }
+
+    /// A monomial as a tree: the product of its variables' powers (1 for
+    /// none).
+    fn mono_tree(&self, m: &Mono) -> Option<Expr> {
+        let mut out: Option<Expr> = None;
+        for (v, k) in m {
+            let var = self.var_tree(*v)?;
+            let power = if *k == 1 {
+                var
+            } else {
+                Expr::Bin(BinOp::Pow, Box::new(var), Box::new(Expr::exact(f64::from(*k))))
+            };
+            out = Some(match out {
+                None => power,
+                Some(o) => Expr::Bin(BinOp::Mul, Box::new(o), Box::new(power)),
+            });
+        }
+        Some(out.unwrap_or(Expr::exact(1.0)))
+    }
+
+    /// A polynomial as a tree, the monomial every one of its terms holds
+    /// taken out as a factor: g·(the rest), a product whose parts may have
+    /// signs where the sum written out is ∞ − ∞. None for a coefficient no
+    /// double holds, or past a few dozen terms.
+    fn poly_tree(&self, p: &Poly) -> Option<Expr> {
+        if p.0.is_empty() {
+            return Some(Expr::exact(0.0));
+        }
+        if p.0.len() > 48 {
+            return None;
+        }
+        // The common monomial: each variable to its least exponent.
+        let mut common: Mono = p.0.keys().next()?.clone();
+        for m in p.0.keys() {
+            common = common
+                .iter()
+                .filter_map(|(v, k)| {
+                    m.iter()
+                        .find(|(w, _)| w == v)
+                        .map(|(_, j)| (*v, (*k).min(*j)))
+                })
+                .collect();
+        }
+        let whole = |q: &Integer| -> Option<Expr> {
+            let v = q.to_f64();
+            (Integer::from_f64(v).as_ref() == Some(q) && v.abs() <= 9007199254740992.0)
+                .then(|| Expr::exact(v.abs()))
+        };
+        let mut sum: Option<Expr> = None;
+        for (m, c) in &p.0 {
+            let rest: Mono = m
+                .iter()
+                .filter_map(|(v, k)| {
+                    let taken = common.iter().find(|(w, _)| w == v).map_or(0, |(_, j)| *j);
+                    (*k > taken).then_some((*v, *k - taken))
+                })
+                .collect();
+            let mut term = whole(c.numer())?;
+            if *c.denom() != 1 {
+                term = Expr::Bin(BinOp::Div, Box::new(term), Box::new(whole(c.denom())?));
+            }
+            if !rest.is_empty() {
+                term = Expr::Bin(BinOp::Mul, Box::new(term), Box::new(self.mono_tree(&rest)?));
+            }
+            let negative = *c < 0;
+            sum = Some(match sum {
+                None if negative => Expr::Neg(Box::new(term)),
+                None => term,
+                Some(s) => Expr::Bin(
+                    if negative { BinOp::Sub } else { BinOp::Add },
+                    Box::new(s),
+                    Box::new(term),
+                ),
+            });
+        }
+        let sum = sum?;
+        Some(if common.is_empty() {
+            sum
+        } else {
+            Expr::Bin(BinOp::Mul, Box::new(self.mono_tree(&common)?), Box::new(sum))
+        })
+    }
+
+    /// N/D as a tree, each of N and D with its common monomial out front.
+    fn tree(&self, f: &Frac) -> Option<Expr> {
+        let n = self.poly_tree(&f.n)?;
+        if f.d == Poly::constant(Rational::from(1)) {
+            return Some(n);
+        }
+        Some(Expr::Bin(
+            BinOp::Div,
+            Box::new(n),
+            Box::new(self.poly_tree(&f.d)?),
+        ))
+    }
+}
+
+/// f′ as a tree of the replay's own: f read as a fraction of polynomials
+/// in x and the atoms, differentiated in that field (each atom by its
+/// rule, where the atom is differentiable), and written back with the
+/// monomial common to the numerator's terms, and to the denominator's,
+/// out front. Its value is f′'s wherever every atom's rule holds: an
+/// enclosure of it over a box, or of its factors, is one of f′ there.
+/// (√u·ln u's f′ is √u·(ln u + 2)/(2u), each factor of one sign beside u =
+/// 0, where the series' √u′·ln u + √u·ln u′ is −∞ + ∞.) None where the
+/// field doesn't read f, or an atom has no tree (a step).
+pub fn derivative_tree(
+    f: &Expr,
+    lits: &Lits,
+    vars: &[(String, f64)],
+    unit: Unit,
+) -> Option<Expr> {
+    let mut field = Field::new(lits, vars, unit);
+    let value = field.read(f)?;
+    let derivative = field.d(&value)?;
+    field.tree(&derivative)
+}
+
 /// Which of the certifier's trees are exactly the canonical tree's (f's
 /// simplified form ≡ f, f′'s tree ≡ f′, f″'s ≡ f″).
 #[derive(Clone, Copy, Debug, Default)]
