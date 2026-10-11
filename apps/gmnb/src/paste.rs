@@ -369,15 +369,26 @@ fn drop_into_text(text: &gtk::Text, mut dropped: String, x: f64) {
         dropped.truncate(end);
     }
     let at = position_at(text, x);
+    let _one_edit = text.freeze_notify();
     match text.selection_bounds() {
         Some((a, b)) if (a.min(b)..=a.max(b)).contains(&at) => {
-            let _one_edit = text.freeze_notify();
             replace_selection(text, &dropped);
             text.set_position(a.min(b));
         }
-        _ => {
-            let mut position = at;
-            text.insert_text(&dropped, &mut position);
+        selection => {
+            // An edit like any other ([`replace_selection`], with nothing
+            // selected at the place): GtkText's own insertion, asked of it
+            // directly, ended the field's undo history (R19-M-03's kind).
+            // The cursor and the selection stay on the text they were on.
+            let (cursor, before) = (text.position(), i32::from(text.text_length()));
+            text.select_region(at, at);
+            replace_selection(text, &dropped);
+            let added = i32::from(text.text_length()) - before;
+            let moved = |p: i32| if p >= at { p + added } else { p };
+            match selection {
+                Some((a, b)) => text.select_region(moved(a), moved(b)),
+                None => text.set_position(moved(cursor)),
+            }
         }
     }
 }
