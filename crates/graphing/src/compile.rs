@@ -1890,7 +1890,16 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                 // with. (Review 19: each was unknown, as arithmetic on it
                 // is, where ⌊10⁵⁰⁰⁰⌋ had been +∞ and sign(10⁵⁰⁰⁰) 1.)
                 Lone(v, parity, far) => {
-                    let int = |n: u64| Value(if far.neg { Rat::int(n).neg() } else { Rat::int(n) }, v);
+                    let int = |n: u64| {
+                        Value(
+                            if far.neg {
+                                Rat::int(n).neg()
+                            } else {
+                                Rat::int(n)
+                            },
+                            v,
+                        )
+                    };
                     match f {
                         Func::Sign => int(1),
                         _ if far.huge => Lone(
@@ -2385,11 +2394,7 @@ pub(crate) fn exact_call(f: Func, args: &[Expr], opts: &CompileOptions<'_>) -> O
             let half = || Expr::call1(Acos, num(-1.0));
             // arccos of u, or of −u (half a turn less it).
             let acos = |t: Expr| {
-                if neg {
-                    bin(BinOp::Sub, half(), t)
-                } else {
-                    t
-                }
+                if neg { bin(BinOp::Sub, half(), t) } else { t }
             };
             let over_u = |v: Expr| bin(BinOp::Div, v, u.clone());
             let rewritten = match (f, inside) {
@@ -2400,10 +2405,7 @@ pub(crate) fn exact_call(f: Func, args: &[Expr], opts: &CompileOptions<'_>) -> O
                 (Acosh, false) => twice(Asinh, off),
                 (Acoth, false) => signed(sign, half_ln(off)),
                 (Asec, false) => acos(twice(Asin, over_u(off))),
-                (Acsc, false) => signed(
-                    sign,
-                    bin(BinOp::Sub, quarter(), twice(Asin, over_u(off))),
-                ),
+                (Acsc, false) => signed(sign, bin(BinOp::Sub, quarter(), twice(Asin, over_u(off)))),
                 // The other side of the end.
                 _ => undefined(),
             };

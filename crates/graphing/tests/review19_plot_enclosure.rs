@@ -39,7 +39,8 @@ fn drawn(text: &str, vp: &Viewport) -> Drawn {
         variables: &(),
     };
     let compiled = eq.compile(&opts).expect("compiles");
-    let program = Program::compile_typed(eq.explicit().expect("y = f(x)").1, &opts).expect("compiles");
+    let program =
+        Program::compile_typed(eq.explicit().expect("y = f(x)").1, &opts).expect("compiles");
     Drawn {
         plot: plot(&compiled, vp, &PlotOptions::default()),
         program,
@@ -53,7 +54,11 @@ impl Drawn {
             trig_unit: TrigUnit::Radians,
             variables: &(),
         };
-        let e = enclose(self.eq.explicit().unwrap().1, Interval::point(x), &Ctx::new(opts));
+        let e = enclose(
+            self.eq.explicit().unwrap().1,
+            Interval::point(x),
+            &Ctx::new(opts),
+        );
         assert!(!e.is_empty(), "{x}");
         (e.lo(), e.hi())
     }
@@ -144,9 +149,18 @@ fn a_step_of_a_constant_the_enclosure_cannot_place_is_still_one_curve() {
 #[test]
 fn a_step_with_x_in_it_still_breaks_at_its_jumps() {
     let vp = reset_view();
-    for text in ["floor(x)", "x-floor(sqrt(x^2))", "sign(sin(x))", "mod(x,pi)"] {
+    for text in [
+        "floor(x)",
+        "x-floor(sqrt(x^2))",
+        "sign(sin(x))",
+        "mod(x,pi)",
+    ] {
         let d = drawn(text, &vp);
-        assert!(d.plot.curves.len() >= 9, "{text}: {} pieces", d.plot.curves.len());
+        assert!(
+            d.plot.curves.len() >= 9,
+            "{text}: {} pieces",
+            d.plot.curves.len()
+        );
         for line in &d.plot.curves {
             for w in line.windows(2) {
                 // No chord climbs a jump: within a piece the curve moves

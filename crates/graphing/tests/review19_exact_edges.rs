@@ -163,7 +163,9 @@ fn plots_as(text: &str, digits: Option<u8>, unit: TrigUnit, f: impl Fn(f64) -> f
         trig_unit: unit,
         variables: &(),
     };
-    let compiled = eq.compile(&opts).unwrap_or_else(|e| panic!("{text}: {e:?}"));
+    let compiled = eq
+        .compile(&opts)
+        .unwrap_or_else(|e| panic!("{text}: {e:?}"));
     let vp = Viewport::default_for_size(760.0, 500.0);
     let p = plot(&compiled, &vp, &PlotOptions::default());
     let label = format!("{text} ({digits:?}, {unit:?})");
@@ -240,7 +242,10 @@ fn a_step_of_a_value_beyond_the_doubles_is_decided_by_where_it_lies() {
         ] {
             let p = Program::compile_typed(&e, &CompileOptions::default()).expect("compiles");
             assert!(p.eval(0.0, 0.0).is_nan() && p.undecided(0.0, 0.0), "{f:?}");
-            assert!(matches!(reval_typed(&e, 0.0, TrigUnit::Radians), R::Unknown));
+            assert!(matches!(
+                reval_typed(&e, 0.0, TrigUnit::Radians),
+                R::Unknown
+            ));
         }
     }
 }
@@ -312,19 +317,39 @@ fn exact_steps_within_the_bound() {
     );
     // With x in it a step is the program's, in doubles: 1 + 10⁻²⁰ is 1
     // there, and the step moves with x.
-    let at = |x: f64| views_at("ceil(x+0.00000000000000000001)", OFF, TrigUnit::Radians, x, 1.0);
+    let at = |x: f64| {
+        views_at(
+            "ceil(x+0.00000000000000000001)",
+            OFF,
+            TrigUnit::Radians,
+            x,
+            1.0,
+        )
+    };
     assert_eq!(at(1.0).compiled, V::Is(1.0));
     assert_eq!(at(1.5).compiled, V::Is(2.0));
     // A slider alone is a number like one typed: its value's step, again
     // when it moves.
     for (a, want) in [(1.0, 2.0), (2.0, 3.0), (-1.0, 0.0), (0.5, 1.0)] {
-        let v = views_at("ceil(a+0.00000000000000000001)", OFF, TrigUnit::Radians, 0.0, a);
+        let v = views_at(
+            "ceil(a+0.00000000000000000001)",
+            OFF,
+            TrigUnit::Radians,
+            0.0,
+            a,
+        );
         assert_eq!((v.compiled, v.reference), (V::Is(want), V::Is(want)), "{a}");
     }
     // Under a digit limit a slider is the decimal it is rounded to: one
     // set a hair past 0.3 is 3/10, so 10·a is exactly 3.
     for (digits, want) in [(TI, 3.0), (OFF, 4.0)] {
-        let v = views_at("ceil(10*a)", digits, TrigUnit::Radians, 0.0, 0.30000000000000004);
+        let v = views_at(
+            "ceil(10*a)",
+            digits,
+            TrigUnit::Radians,
+            0.0,
+            0.30000000000000004,
+        );
         assert_eq!((v.compiled, v.reference), (V::Is(want), V::Is(want)));
     }
 }
@@ -382,7 +407,10 @@ fn the_remainder_of_exact_values_is_exact() {
     // A slider is a number: under a digit limit the decimal it is rounded
     // to (0.3, three times 0.1), off the double it holds (below 0.3).
     let at = |digits| views_at("mod(a,0.1)", digits, TrigUnit::Radians, 0.0, 0.3);
-    assert_eq!((at(TI).compiled, at(TI).reference), (V::Is(0.0), V::Is(0.0)));
+    assert_eq!(
+        (at(TI).compiled, at(TI).reference),
+        (V::Is(0.0), V::Is(0.0))
+    );
     let V::Is(c) = at(OFF).compiled else {
         panic!("a value")
     };
@@ -457,8 +485,8 @@ fn the_least_and_greatest_of_exact_values_are_exact() {
 /// Each is computed from the angle's exact distance to the quarter turn.
 #[test]
 fn an_exact_angle_beside_a_quarter_turn_is_not_on_it() {
-    use std::f64::consts::PI;
     use TrigUnit::{Degrees, Grads, Radians};
+    use std::f64::consts::PI;
     // The sine of an angle of 10⁻²⁰ and of 10⁻³⁰, in each unit.
     let (d20, g20) = (1e-20 * PI / 180.0, 1e-20 * PI / 200.0);
     let d30 = 1e-30 * PI / 180.0;
@@ -549,11 +577,20 @@ fn an_exact_angle_beside_a_quarter_turn_is_not_on_it() {
     );
     // A slider alone is a number.
     let v = views_at("tan(a+0.00000000000000000001)", OFF, Degrees, 0.0, 90.0);
-    assert!(matches!(v.compiled, V::Is(c) if close(c, -1.0 / d20)), "{:?}", v.compiled);
+    assert!(
+        matches!(v.compiled, V::Is(c) if close(c, -1.0 / d20)),
+        "{:?}",
+        v.compiled
+    );
     assert_eq!(v.reference, v.compiled);
     // The curves at the reset view: both were missing.
     plots_as("x+1/tan(90.00000000000000000001)", OFF, Degrees, |x| x);
-    plots_as("5+floor(sin(180.00000000000000000001))", OFF, Degrees, |_| 4.0);
+    plots_as(
+        "5+floor(sin(180.00000000000000000001))",
+        OFF,
+        Degrees,
+        |_| 4.0,
+    );
     plots_as("x*sign(cos(90+10^(-30)))", TI, Degrees, |x| -x);
 }
 
@@ -567,21 +604,81 @@ fn a_logarithm_of_an_exact_value_beside_one() {
     for (text, x, off, ti) in [
         ("ln(1.00000000000000000001)", 0.0, V::Is(1e-20), V::Is(0.0)),
         ("ln(0.99999999999999999999)", 0.0, V::Is(-1e-20), V::Is(0.0)),
-        ("10^20*ln(1.00000000000000000001)", 0.0, V::Is(1.0), V::Is(0.0)),
-        ("log(0.99999999999999999999)", 0.0, V::Is(-1e-20 / LN_10), V::Is(0.0)),
-        ("log(1.00000000000000000001)", 0.0, V::Is(1e-20 / LN_10), V::Is(0.0)),
-        ("sign(ln(1.00000000000000000001))", 0.0, V::Is(1.0), V::Is(0.0)),
-        ("floor(ln(0.99999999999999999999))", 0.0, V::Is(-1.0), V::Is(0.0)),
+        (
+            "10^20*ln(1.00000000000000000001)",
+            0.0,
+            V::Is(1.0),
+            V::Is(0.0),
+        ),
+        (
+            "log(0.99999999999999999999)",
+            0.0,
+            V::Is(-1e-20 / LN_10),
+            V::Is(0.0),
+        ),
+        (
+            "log(1.00000000000000000001)",
+            0.0,
+            V::Is(1e-20 / LN_10),
+            V::Is(0.0),
+        ),
+        (
+            "sign(ln(1.00000000000000000001))",
+            0.0,
+            V::Is(1.0),
+            V::Is(0.0),
+        ),
+        (
+            "floor(ln(0.99999999999999999999))",
+            0.0,
+            V::Is(-1.0),
+            V::Is(0.0),
+        ),
         // 1 over it was a division by zero.
         ("1/ln(1.00000000000000000001)", 0.0, V::Is(1e20), V::Refused),
-        ("1/log(0.99999999999999999999)", 0.0, V::Is(-1e20 * LN_10), V::Refused),
+        (
+            "1/log(0.99999999999999999999)",
+            0.0,
+            V::Is(-1e20 * LN_10),
+            V::Refused,
+        ),
         // As a base: log(b, x) is ln x/ln b.
-        ("log(1.00000000000000000001,x)", 2.0, V::Is(LN_2 * 1e20), V::Undefined),
-        ("log(0.99999999999999999999,x)", 2.0, V::Is(-LN_2 * 1e20), V::Undefined),
-        ("log(0.99999999999999999999,5)", 0.0, V::Is(-ln5 * 1e20), V::Undefined),
-        ("log(1.00000000000000000001,1)", 0.0, V::Is(0.0), V::Undefined),
-        ("log(1.00000000000000000001,-3)", 0.0, V::Undefined, V::Undefined),
-        ("log(1.00000000000000000001,0)", 0.0, V::Undefined, V::Undefined),
+        (
+            "log(1.00000000000000000001,x)",
+            2.0,
+            V::Is(LN_2 * 1e20),
+            V::Undefined,
+        ),
+        (
+            "log(0.99999999999999999999,x)",
+            2.0,
+            V::Is(-LN_2 * 1e20),
+            V::Undefined,
+        ),
+        (
+            "log(0.99999999999999999999,5)",
+            0.0,
+            V::Is(-ln5 * 1e20),
+            V::Undefined,
+        ),
+        (
+            "log(1.00000000000000000001,1)",
+            0.0,
+            V::Is(0.0),
+            V::Undefined,
+        ),
+        (
+            "log(1.00000000000000000001,-3)",
+            0.0,
+            V::Undefined,
+            V::Undefined,
+        ),
+        (
+            "log(1.00000000000000000001,0)",
+            0.0,
+            V::Undefined,
+            V::Undefined,
+        ),
         (
             "log(1.00000000000000000001,1.00000000000000000001)",
             0.0,
@@ -589,14 +686,49 @@ fn a_logarithm_of_an_exact_value_beside_one() {
             V::Undefined,
         ),
         // Under one: 10⁻²⁰ over the base's logarithm.
-        ("log(x,1.00000000000000000001)", 2.0, V::Is(1e-20 / LN_2), V::Is(0.0)),
-        ("log(10,1.00000000000000000001)", 0.0, V::Is(1e-20 / LN_10), V::Is(0.0)),
-        ("log(2,0.99999999999999999999)", 0.0, V::Is(-1e-20 / LN_2), V::Is(0.0)),
-        ("1/log(2,1.00000000000000000001)", 0.0, V::Is(LN_2 * 1e20), V::Refused),
+        (
+            "log(x,1.00000000000000000001)",
+            2.0,
+            V::Is(1e-20 / LN_2),
+            V::Is(0.0),
+        ),
+        (
+            "log(10,1.00000000000000000001)",
+            0.0,
+            V::Is(1e-20 / LN_10),
+            V::Is(0.0),
+        ),
+        (
+            "log(2,0.99999999999999999999)",
+            0.0,
+            V::Is(-1e-20 / LN_2),
+            V::Is(0.0),
+        ),
+        (
+            "1/log(2,1.00000000000000000001)",
+            0.0,
+            V::Is(LN_2 * 1e20),
+            V::Refused,
+        ),
         // The base's own rules still hold: no base 1, 0 or below.
-        ("log(1,1.00000000000000000001)", 0.0, V::Undefined, V::Undefined),
-        ("log(0,1.00000000000000000001)", 0.0, V::Undefined, V::Undefined),
-        ("log(-2,1.00000000000000000001)", 0.0, V::Undefined, V::Undefined),
+        (
+            "log(1,1.00000000000000000001)",
+            0.0,
+            V::Undefined,
+            V::Undefined,
+        ),
+        (
+            "log(0,1.00000000000000000001)",
+            0.0,
+            V::Undefined,
+            V::Undefined,
+        ),
+        (
+            "log(-2,1.00000000000000000001)",
+            0.0,
+            V::Undefined,
+            V::Undefined,
+        ),
     ] {
         check_at(text, OFF, TrigUnit::Radians, x, off);
         check_at(text, TI, TrigUnit::Radians, x, ti);
@@ -605,7 +737,13 @@ fn a_logarithm_of_an_exact_value_beside_one() {
         // Arithmetic on short numbers lands beside 1 at any setting.
         check("ln(1+10^(-30))", digits, V::Is(1e-30));
         check("10^30*ln(1-10^(-30))", digits, V::Is(-1.0));
-        check_at("log(1+10^(-30),x)", digits, TrigUnit::Radians, 2.0, V::Is(LN_2 * 1e30));
+        check_at(
+            "log(1+10^(-30),x)",
+            digits,
+            TrigUnit::Radians,
+            2.0,
+            V::Is(LN_2 * 1e30),
+        );
         // On 1 itself, and away from it, nothing changes.
         check("ln(1)", digits, V::Is(0.0));
         check("ln(0.5+0.5)", digits, V::Is(0.0));
@@ -620,36 +758,55 @@ fn a_logarithm_of_an_exact_value_beside_one() {
         check("log(5,10^(-400))", digits, V::Is(-400.0 * LN_10 / ln5));
         check("log(-(10^(-400)),5)", digits, V::Undefined);
         // With x in it the logarithm is the program's, in doubles.
-        let v = views_at("ln(x+0.00000000000000000001)", digits, TrigUnit::Radians, 1.0, 1.0);
+        let v = views_at(
+            "ln(x+0.00000000000000000001)",
+            digits,
+            TrigUnit::Radians,
+            1.0,
+            1.0,
+        );
         assert_eq!(v.compiled, V::Is(0.0));
     }
-    plots_as("10^20*ln(1.00000000000000000001)+sin(x)", OFF, TrigUnit::Radians, |x| {
-        1.0 + x.sin()
-    });
+    plots_as(
+        "10^20*ln(1.00000000000000000001)+sin(x)",
+        OFF,
+        TrigUnit::Radians,
+        |x| 1.0 + x.sin(),
+    );
     plots_as(
         "x+log(1.00000000000000000001,1.00000000000000000001)",
         OFF,
         TrigUnit::Radians,
         |x| x + 1.0,
     );
-    plots_as("x+10^(-30)/ln(1+10^(-30))", TI, TrigUnit::Radians, |x| x + 1.0);
+    plots_as("x+10^(-30)/ln(1+10^(-30))", TI, TrigUnit::Radians, |x| {
+        x + 1.0
+    });
 }
 
 /// The inverse functions that turn at ±1 (the end of a domain, or a
 /// pole): an exact value a hair inside or outside is on its own side.
 #[test]
 fn an_inverse_function_of_an_exact_value_beside_one() {
-    use std::f64::consts::{FRAC_PI_2, PI};
     use TrigUnit::{Degrees, Radians};
+    use std::f64::consts::{FRAC_PI_2, PI};
     let (und, is) = (V::Undefined, V::Is);
     // arccos(1 − 10⁻²⁰) = √(2·10⁻²⁰), to its square; artanh of it.
     let s = 2e-20f64.sqrt();
     let t = 0.5 * 2e20f64.ln();
     for (text, off, ti) in [
         ("asin(1.00000000000000000001)", und, is(FRAC_PI_2)),
-        ("asin(0.99999999999999999999)", is(FRAC_PI_2 - s), is(FRAC_PI_2)),
+        (
+            "asin(0.99999999999999999999)",
+            is(FRAC_PI_2 - s),
+            is(FRAC_PI_2),
+        ),
         ("asin(-1.00000000000000000001)", und, is(-FRAC_PI_2)),
-        ("asin(-0.99999999999999999999)", is(s - FRAC_PI_2), is(-FRAC_PI_2)),
+        (
+            "asin(-0.99999999999999999999)",
+            is(s - FRAC_PI_2),
+            is(-FRAC_PI_2),
+        ),
         ("acos(1.00000000000000000001)", und, is(0.0)),
         ("acos(0.99999999999999999999)", is(s), is(0.0)),
         ("acos(-1.00000000000000000001)", und, is(PI)),
@@ -670,8 +827,16 @@ fn an_inverse_function_of_an_exact_value_beside_one() {
         ("asec(-1.00000000000000000001)", is(PI - s), is(PI)),
         ("asec(-0.99999999999999999999)", und, is(PI)),
         ("acsc(0.99999999999999999999)", und, is(FRAC_PI_2)),
-        ("acsc(1.00000000000000000001)", is(FRAC_PI_2 - s), is(FRAC_PI_2)),
-        ("acsc(-1.00000000000000000001)", is(s - FRAC_PI_2), is(-FRAC_PI_2)),
+        (
+            "acsc(1.00000000000000000001)",
+            is(FRAC_PI_2 - s),
+            is(FRAC_PI_2),
+        ),
+        (
+            "acsc(-1.00000000000000000001)",
+            is(s - FRAC_PI_2),
+            is(-FRAC_PI_2),
+        ),
         ("asech(1.00000000000000000001)", und, is(0.0)),
         ("asech(0.99999999999999999999)", is(s), is(0.0)),
         ("asech(-0.99999999999999999999)", und, und),
@@ -685,9 +850,21 @@ fn an_inverse_function_of_an_exact_value_beside_one() {
     // An angle comes out in the unit.
     for (text, off, ti) in [
         ("acos(0.99999999999999999999)", is(s.to_degrees()), is(0.0)),
-        ("asin(0.99999999999999999999)", is(90.0 - s.to_degrees()), is(90.0)),
-        ("asec(-1.00000000000000000001)", is(180.0 - s.to_degrees()), is(180.0)),
-        ("acsc(-1.00000000000000000001)", is(s.to_degrees() - 90.0), is(-90.0)),
+        (
+            "asin(0.99999999999999999999)",
+            is(90.0 - s.to_degrees()),
+            is(90.0),
+        ),
+        (
+            "asec(-1.00000000000000000001)",
+            is(180.0 - s.to_degrees()),
+            is(180.0),
+        ),
+        (
+            "acsc(-1.00000000000000000001)",
+            is(s.to_degrees() - 90.0),
+            is(-90.0),
+        ),
         ("asin(1.00000000000000000001)", und, is(90.0)),
     ] {
         check_at(text, OFF, Degrees, 0.0, off);
@@ -705,19 +882,29 @@ fn an_inverse_function_of_an_exact_value_beside_one() {
         check("atanh(1)", digits, und);
         check("acosh(1)", digits, is(0.0));
         check("asin(0.5)", digits, is(0.5f64.asin()));
-        check("asech(10^(-400))", digits, is((2.0f64).ln() + 400.0 * 10f64.ln()));
+        check(
+            "asech(10^(-400))",
+            digits,
+            is((2.0f64).ln() + 400.0 * 10f64.ln()),
+        );
         check("asech(-(10^(-400)))", digits, und);
         check("acsc(10^(-400))", digits, und);
         // With x in it the function is the program's, in doubles.
         let v = views_at("acos(x-0.00000000000000000001)", digits, Radians, 1.0, 1.0);
         assert_eq!(v.compiled, is(0.0));
     }
-    plots_as("10^10*acos(0.99999999999999999999)+sin(x)", OFF, Radians, |x| {
-        1e10 * s + x.sin()
-    });
-    plots_as("atanh(0.99999999999999999999)-20+sin(x)", OFF, Radians, |x| {
-        t - 20.0 + x.sin()
-    });
+    plots_as(
+        "10^10*acos(0.99999999999999999999)+sin(x)",
+        OFF,
+        Radians,
+        |x| 1e10 * s + x.sin(),
+    );
+    plots_as(
+        "atanh(0.99999999999999999999)-20+sin(x)",
+        OFF,
+        Radians,
+        |x| t - 20.0 + x.sin(),
+    );
 }
 
 /// n! is Γ(n + 1), with a pole at each whole number below 0: an exact
@@ -740,7 +927,11 @@ fn a_factorial_of_an_exact_value_beside_a_pole() {
         ("sign((-171.00000000000000000001)!)", is(-1.0), und),
         // Away from a pole a factorial is the double's, as before.
         ("(3.00000000000000000001)!", is(6.0), is(6.0)),
-        ("(-0.50000000000000000001)!", is(std::f64::consts::PI.sqrt()), is(std::f64::consts::PI.sqrt())),
+        (
+            "(-0.50000000000000000001)!",
+            is(std::f64::consts::PI.sqrt()),
+            is(std::f64::consts::PI.sqrt()),
+        ),
         // n!! has no value beside a whole number.
         ("(3.00000000000000000001)!!", und, is(3.0)),
         ("(-0.99999999999999999999)!!", und, is(1.0)),
@@ -775,7 +966,13 @@ fn a_factorial_of_an_exact_value_beside_a_pole() {
         check("7!!", digits, is(105.0));
         check("(2.5)!!", digits, und);
         // With x in it a factorial is the program's, in doubles.
-        let v = views_at("(x-0.00000000000000000001)!", digits, TrigUnit::Radians, -1.0, 1.0);
+        let v = views_at(
+            "(x-0.00000000000000000001)!",
+            digits,
+            TrigUnit::Radians,
+            -1.0,
+            1.0,
+        );
         assert_eq!(v.compiled, und);
     }
     // Beside a pole so far down that the product to it is past the bound
@@ -783,6 +980,16 @@ fn a_factorial_of_an_exact_value_beside_a_pole() {
     check("(-350.00000000000000000001)!", OFF, V::Unknown);
     check("(-500.00000000000000000001)!", OFF, V::Unknown);
     // The line y = x, which had no curve.
-    plots_as("x+1/(-1.00000000000000000001)!", OFF, TrigUnit::Radians, |x| x);
-    plots_as("x*nCr(-1.00000000000000000001,2)", OFF, TrigUnit::Radians, |x| x);
+    plots_as(
+        "x+1/(-1.00000000000000000001)!",
+        OFF,
+        TrigUnit::Radians,
+        |x| x,
+    );
+    plots_as(
+        "x*nCr(-1.00000000000000000001,2)",
+        OFF,
+        TrigUnit::Radians,
+        |x| x,
+    );
 }
