@@ -1456,11 +1456,11 @@ mod tests {
                     .filter(|n| n.live && n.role == Role::Status)
                     .collect();
                 assert!(live.len() <= 1, "one ordered announcement per frame");
-                words.extend(live.into_iter().filter_map(|n| {
-                    n.label
-                        .starts_with("Open parenthesis count ")
-                        .then(|| n.label.clone())
-                }));
+                words.extend(
+                    live.into_iter()
+                        .filter(|n| n.label.starts_with("Open parenthesis count "))
+                        .map(|n| n.label.clone()),
+                );
                 if !again {
                     break;
                 }
