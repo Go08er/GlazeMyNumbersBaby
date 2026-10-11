@@ -1514,6 +1514,22 @@ fn panel(
                     f.detail.clone()
                 });
             }
+            // "0 shown for a value below every double": the value is the
+            // reference's, which keeps 53 bits. f(0) is not 0 only where
+            // f's enclosure there says so (strictly signed, or 0 outside
+            // it): e^(−10⁶) is; sin(π)^(2⁵³/6) is 0, and (1.2·10⁻¹⁶) to
+            // that power to the reference, which takes the sine at π's
+            // double.
+            "y-intercept-underflow-shown-as-0"
+                if {
+                    let e = enclose(l.ast(), Interval::point(0.0), &ctx);
+                    !(e.is_empty() || e.gt0() || e.lt0() || e.lo() > 0.0 || e.hi() < 0.0)
+                } =>
+            {
+                out.note("panel/y-intercept-0-and-f-not-proven-nonzero", || {
+                    f.detail.clone()
+                });
+            }
             // The panel's number for a value known to an enclosure is the
             // enclosure's middle, and its text as many digits as the
             // enclosure fixes: the text is the claim.

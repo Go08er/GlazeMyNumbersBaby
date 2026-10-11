@@ -2787,9 +2787,30 @@ pub fn check_pair_in(lhs: &str, rhs: &str, positive: bool, set: &Setting<'_>) ->
         d.range.len() == 1 && d.range[0].lo.value == d.range[0].hi.value
     };
     let constant = point(dl) || point(dr);
+    // Way by way (toward +∞, toward −∞, and where the way isn't known): a
+    // line listed once for both ways is the answer that lists it for each.
+    // (9/x − (sin²4 − sin²4 + x + 1 − 2.5) has y = −x + ≈1.5 on each side,
+    // the intercept enclosed apart on the two, and 9/x − (x + 1 − 2.5) has
+    // y = −x + 3/2 once, for both.)
+    use graphing::analysis::AsymptoteSide as Way;
+    let ways = [Way::PositiveInfinity, Way::NegativeInfinity, Way::Unknown];
+    let toward =
+        |side: Way, way: Way| side == way || (side == Way::AnyInfinity && way != Way::Unknown);
+    let alike_lines = |x: &[(f64, f64)], y: &[(f64, f64)]| {
+        x.len() == y.len()
+            && x.iter()
+                .zip(y)
+                .all(|(p, q)| same(p.0, q.0) && same(p.1, q.1))
+    };
     if both(flags::HORIZONTAL_ASYMPTOTES) && !constant {
         let (a, b) = (&dl.horizontal_asymptotes, &dr.horizontal_asymptotes);
-        let ok = a.len() == b.len() && a.iter().zip(b).all(|(p, q)| same(p.0, q.0) && p.1 == q.1);
+        let on = |v: &[(f64, Way)], way: Way| -> Vec<(f64, f64)> {
+            v.iter()
+                .filter(|l| toward(l.1, way))
+                .map(|l| (0.0, l.0))
+                .collect()
+        };
+        let ok = ways.iter().all(|&w| alike_lines(&on(a, w), &on(b, w)));
         if !ok {
             differ(
                 "horizontal asymptotes",
@@ -2800,10 +2821,13 @@ pub fn check_pair_in(lhs: &str, rhs: &str, positive: bool, set: &Setting<'_>) ->
     }
     if both(flags::OBLIQUE_ASYMPTOTES) && !constant {
         let (a, b) = (&dl.oblique_asymptotes, &dr.oblique_asymptotes);
-        let ok = a.len() == b.len()
-            && a.iter()
-                .zip(b)
-                .all(|(p, q)| same(p.0, q.0) && same(p.1, q.1) && p.2 == q.2);
+        let on = |v: &[(f64, f64, Way)], way: Way| -> Vec<(f64, f64)> {
+            v.iter()
+                .filter(|l| toward(l.2, way))
+                .map(|l| (l.0, l.1))
+                .collect()
+        };
+        let ok = ways.iter().all(|&w| alike_lines(&on(a, w), &on(b, w)));
         if !ok {
             differ(
                 "oblique asymptotes",
