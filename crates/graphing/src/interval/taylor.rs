@@ -31,6 +31,15 @@ pub struct Ctx<'a> {
     /// removable point from a pole (x!) where the values beside it, all
     /// that doubles reach, can't (x! near −1000 underflows to ±0).
     pub pole_probe: bool,
+    /// A step (floor, ceil, round, sign, mod) of arguments free of x and
+    /// y is one number wherever it is defined, whatever x is: constant in
+    /// x, so continuous there with derivatives 0, even where the
+    /// arguments' enclosure straddles a jump and can't say which number
+    /// (⌈ln e⌉ is 1 or 2 to it, ⌊√2²⌋ 1 or 2). For the plotter, which
+    /// joins only what is proven continuous and would otherwise draw
+    /// nothing for such a constant (review 19); the certifier's claims
+    /// are replayed without it.
+    pub steady_constants: bool,
 }
 
 impl<'a> Ctx<'a> {
@@ -39,6 +48,7 @@ impl<'a> Ctx<'a> {
             opts,
             y: DecInterval::unknown(),
             pole_probe: false,
+            steady_constants: false,
         }
     }
 }
@@ -639,6 +649,27 @@ fn steady_beside(h: Series, u: &Series, steady: impl FnOnce() -> bool) -> Series
     flat(h[0], n)
 }
 
+/// [`Ctx::steady_constants`]: the series of a step whose arguments are
+/// all free of x and y, from its value `h0` over their enclosure, where
+/// that proves it defined but not one number (the enclosure straddles a
+/// jump). Each argument is then one real number, whatever x is, and the
+/// step of it another: a constant function of x, continuous, with
+/// derivatives 0, its value somewhere in `h0`. `None` for any other step
+/// (an argument with x in it, a step possibly undefined, or already one
+/// number).
+fn steady_constant(h0: &DecInterval, args: &[Expr], n: usize, ctx: &Ctx<'_>) -> Option<Series> {
+    if !(ctx.steady_constants
+        && h0.dec == Dec::Def
+        && !h0.is_empty()
+        && args.iter().all(|a| !a.contains_x() && !a.contains_y()))
+    {
+        return None;
+    }
+    let mut value = *h0;
+    value.dec = Dec::Dac;
+    Some(konst(value, n))
+}
+
 /// Defined throughout (so, for u⁰ and the counts nCr(u, 0), nPr(u, 0),
 /// 1 throughout).
 fn defined_throughout(v: &DecInterval) -> bool {
@@ -842,6 +873,8 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
                     let w = step(&beside(&args[0], x, ctx));
                     defined_throughout(&w) && w.iv.is_point()
                 })
+            } else if let Some(h) = steady_constant(&h0, args, n, ctx) {
+                h
             } else {
                 flat(h0, n)
             }
@@ -855,6 +888,8 @@ fn call(f: Func, args: &[Expr], x: &Series, n: usize, ctx: &Ctx<'_>) -> Series {
                 let k = elem::floor(&elem::div(&a[0], &b[0]));
                 let mut h = sub(&a, &scale(&b, &k));
                 h[0] = h0.refine(&h[0]);
+                h
+            } else if let Some(h) = steady_constant(&h0, args, n, ctx) {
                 h
             } else {
                 flat(h0, n)

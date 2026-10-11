@@ -631,6 +631,23 @@ impl Rat {
         self.integral(|remainder| remainder.shl(1) >= self.d)
     }
 
+    /// The order of two values (their cross products compared: both are
+    /// capped, so those have at most twice the cap's bits).
+    pub(crate) fn cmp(&self, o: &Rat) -> Ordering {
+        match (self.is_negative(), o.is_negative()) {
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            (neg, _) => {
+                let magnitudes = self.n.mul(&o.d).cmp(&o.n.mul(&self.d));
+                if neg {
+                    magnitudes.reverse()
+                } else {
+                    magnitudes
+                }
+            }
+        }
+    }
+
     pub(crate) fn add(&self, o: &Rat) -> Option<Rat> {
         if self.n.bits() + o.d.bits() > MAX_BITS + 64 || o.n.bits() + self.d.bits() > MAX_BITS + 64
         {
