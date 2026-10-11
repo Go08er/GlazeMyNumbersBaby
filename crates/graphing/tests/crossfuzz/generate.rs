@@ -663,7 +663,17 @@ impl Gen<'_> {
             }
             5 => {
                 let f = self.r.pick(&["min", "max", "mod"]);
-                call(f, vec![self.ordinary(depth - 1), self.ordinary(depth - 1)])
+                let a = self.ordinary(depth - 1);
+                // One min or max in three has three arguments, a tent:
+                // min(u, c, k − u) has its maximum at a kink and
+                // max(u, c, k − u) its minimum, and the monotone pieces
+                // change there (the certifier had kinks for two arguments
+                // only).
+                if f != "mod" && self.r.below(3) == 0 {
+                    let (c, k) = (self.small(), self.small());
+                    return call(f, vec![a.clone(), c, bin('-', k, a)]);
+                }
+                call(f, vec![a, self.ordinary(depth - 1)])
             }
             _ => neg(self.ordinary(depth - 1)),
         }
