@@ -949,3 +949,57 @@ fn the_panels_round_of_a_negative_half_is_away_from_zero() {
         }
     }
 }
+
+/// A kink box is claimed continuous (a `Kink`) so that the rows may read
+/// f′ on either side of it, and the certifier asked its simplified form,
+/// which has values where f has none: |x|·(2x + 0·x^0.5) is |x|·2x to it,
+/// the kink of |x| is at 0, the closed end of the domain [0, ∞), and f is
+/// undefined on the left half of the box. The replay refuted the claim.
+#[test]
+fn a_kink_box_is_continuous_by_fs_own_tree_too() {
+    use graphing::certify::{Claim, DEFAULT_BUDGET, Row, certify_text};
+    for src in [
+        "abs(x)*(x+x+0*x^0.5)",
+        "abs(x)*(0*x^0.5)",
+        "abs(x)+0*sqrt(x)",
+    ] {
+        let a = certify_text(src, CompileOptions::default(), DEFAULT_BUDGET, None).expect(src);
+        let mut claims = Vec::new();
+        for row in [
+            &a.extrema as &dyn std::any::Any,
+            &a.inflections,
+            &a.monotonicity,
+        ] {
+            if let Some(Row::Certified { cert, .. } | Row::Partial { cert, .. }) =
+                row.downcast_ref::<Row<Vec<graphing::certify::Extremum>>>()
+            {
+                claims.extend(cert.claims.iter().cloned());
+            }
+            if let Some(Row::Certified { cert, .. } | Row::Partial { cert, .. }) =
+                row.downcast_ref::<Row<Vec<graphing::certify::Monotone>>>()
+            {
+                claims.extend(cert.claims.iter().cloned());
+            }
+        }
+        for c in &claims {
+            if let Claim::Kink { x } = c {
+                for end in [x.a.0, x.b.0] {
+                    assert!(
+                        !scalar(src, end).is_nan(),
+                        "{src}: {c:?}, and f is undefined at {end:e}"
+                    );
+                }
+            }
+        }
+        assert!(a.domain.is_certified(), "{src}");
+    }
+    // A kink inside the domain is claimed as before.
+    let a = certify_text(
+        "abs(x)*(x+1)",
+        CompileOptions::default(),
+        DEFAULT_BUDGET,
+        None,
+    )
+    .expect("certifies");
+    assert!(a.extrema.is_certified(), "{:?}", a.extrema);
+}
