@@ -2222,13 +2222,19 @@ pub(super) fn features(
                     Tail::Left => AsymptoteSide::NegativeInfinity,
                     Tail::Right => AsymptoteSide::PositiveInfinity,
                 };
-                // (Limits that agree to fifteen places are one line.)
+                // (Limits that agree are one line: both exact and equal;
+                // or both the same double; or both shown "≈" to the
+                // fifteen places they share, which says no more of
+                // either than its own line would. Never an exact one
+                // with one only enclosed: its exact text would then
+                // stand for the other side too, where nothing proves it.)
                 let agree = |m: &Num| match (m.exact, n.exact) {
                     (Some(a), Some(b)) => same(a, b),
-                    _ => {
-                        (m.enc == n.enc && m.enc.is_point())
-                            || fixed_to(m.enc, 15).is_some_and(|t| Some(t) == fixed_to(n.enc, 15))
+                    _ if m.enc == n.enc && m.enc.is_point() => true,
+                    (None, None) => {
+                        fixed_to(m.enc, 15).is_some_and(|t| Some(t) == fixed_to(n.enc, 15))
                     }
+                    _ => false,
                 };
                 if let Some(l) = lines.iter_mut().find(|(m, _)| agree(m)) {
                     l.1 = AsymptoteSide::AnyInfinity;
