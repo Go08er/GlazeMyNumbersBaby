@@ -47,6 +47,7 @@ pub enum Msg {
     HistoryClear,
     Memory(MemOp, usize),
     MemoryClearAll,
+    OpenPanel(Tab),
     Popup(Option<Popup>),
     Angle,
     FToE,
@@ -73,8 +74,8 @@ pub struct CalcPage {
     /// How many frames have told something: each one's live node is a new
     /// one.
     told: u64,
-    /// While "(" has the focus, what was announced when it got it.
-    paren_announcement: Option<String>,
+    /// Whether this showing of "(" with the focus has been announced.
+    paren_focused: bool,
 }
 
 /// What of the History and Memory panel has the focus: a History row (or
@@ -131,7 +132,7 @@ impl CalcPage {
             bit_view: false,
             say: std::collections::VecDeque::new(),
             told: 0,
-            paren_announcement: None,
+            paren_focused: false,
         }
     }
 
@@ -214,6 +215,20 @@ impl CalcPage {
 
     fn after_press(&mut self) {
         self.vm.take_events();
+    }
+
+    /// A focus change follows anything the engine has already said, and
+    /// precedes what pressing the newly focused key will say. Keep it in
+    /// the same one-at-a-time queue: two live nodes added in one frame
+    /// reach AccessKit in no particular order.
+    fn announce_paren_focus(&mut self) {
+        let said = self.vm.take_announcements();
+        self.say.extend(said.iter().map(keys::announcement));
+        self.say
+            .push_back(keys::open_parenthesis_count_announcement(
+                self.vm.open_parens(),
+            ));
+        self.paren_focused = true;
     }
 
     /// What of the History or Memory list (or the keys that empty them)
@@ -335,11 +350,9 @@ impl CalcPage {
                     if b == B::OpenParenthesis
                         && self.vm.mode() != CalcMode::Standard
                         && *cx.focus == Some(id(("keypad", k)))
-                        && self.paren_announcement.is_none()
+                        && !self.paren_focused
                     {
-                        self.paren_announcement = Some(keys::open_parenthesis_count_announcement(
-                            self.vm.open_parens(),
-                        ));
+                        self.announce_paren_focus();
                     }
                     self.press(b);
                     if second_function {
@@ -386,6 +399,13 @@ impl CalcPage {
                 }
             }
             Msg::MemoryClearAll => self.press(B::MemoryClear),
+            Msg::OpenPanel(tab) => {
+                // The same opener closes its sheet; the other selects
+                // the list it names instead of keeping the previous tab.
+                let close = self.popup == Some(Popup::Panel) && self.tab == tab;
+                self.tab = tab;
+                self.popup = (!close).then_some(Popup::Panel);
+            }
             Msg::Popup(p) => self.popup = if self.popup == p { None } else { p },
             Msg::Angle => {
                 let next = self.vm.angle_unit().next();
@@ -493,6 +513,12 @@ impl CalcPage {
                 CalcMode::Programmer => 84.0,
             }
         };
+        let open = id(("keypad", B::OpenParenthesis.id()));
+        if f.nodes.is_none() || mode == CalcMode::Standard || !f.focused(open) {
+            self.paren_focused = false;
+        } else if !self.paren_focused {
+            self.announce_paren_focus();
+        }
         let (display, mut rest) = main.take_top(display_h);
         self.display(f, display, compact);
 
@@ -586,24 +612,6 @@ impl CalcPage {
             };
             let gap = if compact { 3.0 } else { 4.0 };
             self.keypad(f, pad, &layout, gap, "keypad");
-        }
-        // Upstream's OpenParenthesisButton_GotFocus (Scientific and
-        // Programmer): each time "(" gets the focus (Tab, a click), screen
-        // readers are told how many parentheses are open ("Open parenthesis
-        // count 2"), after the key's own name. A live node that is there
-        // only while "(" has the focus, with the count it had when it got
-        // it: AccessKit announces it as it comes.
-        let open = id(("keypad", B::OpenParenthesis.id()));
-        if mode != CalcMode::Standard && f.focused(open) {
-            let text = self.paren_announcement.get_or_insert_with(|| {
-                keys::open_parenthesis_count_announcement(self.vm.open_parens())
-            });
-            if let Some(n) = f.node(id("paren-announcer"), accesskit::Role::Status, text, pad) {
-                n.value = Some(text.clone());
-                n.live = true;
-            }
-        } else {
-            self.paren_announcement = None;
         }
         if let Some(p) = panel {
             self.side_panel(f, p.inset_xy(0.0, 4.0).take_right(PANEL_W - 8.0).0);
@@ -790,7 +798,7 @@ impl CalcPage {
                 cells[n - 1],
                 "M▾",
                 CAPTION,
-                msg(Msg::Popup(Some(Popup::Panel))),
+                msg(Msg::OpenPanel(Tab::Memory)),
                 has,
                 None,
                 false,
@@ -908,7 +916,7 @@ impl CalcPage {
             mt,
             "M▾",
             CAPTION,
-            msg(Msg::Popup(Some(Popup::Panel))),
+            msg(Msg::OpenPanel(Tab::Memory)),
             !self.vm.memory().is_empty(),
             None,
             false,

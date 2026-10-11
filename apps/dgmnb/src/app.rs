@@ -2245,7 +2245,7 @@ pub(crate) fn draw_header(
                         &mut rx,
                         appcore::icons::HISTORY,
                         "History (Ctrl+H)",
-                        Msg::Calc(calc::Msg::Popup(Some(calc::Popup::Panel))),
+                        Msg::Calc(calc::Msg::OpenPanel(calc::Tab::History)),
                         None,
                     );
                 }
@@ -2267,7 +2267,7 @@ pub(crate) fn draw_header(
                         &mut rx,
                         appcore::icons::HISTORY,
                         "History (Ctrl+H)",
-                        Msg::Calc(calc::Msg::Popup(Some(calc::Popup::Panel))),
+                        Msg::Calc(calc::Msg::OpenPanel(calc::Tab::History)),
                         None,
                     );
                 }

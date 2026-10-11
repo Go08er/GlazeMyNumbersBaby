@@ -302,12 +302,11 @@ mod tests {
     }
 
     /// What a frame tells assistive tech: its live Status nodes' words, in
-    /// order ("(" telling its count on getting the focus aside).
+    /// order, including "(" telling its count on getting the focus.
     fn told(nodes: &[Node]) -> Vec<String> {
         nodes
             .iter()
             .filter(|n| n.role == Role::Status && n.live)
-            .filter(|n| n.id != crate::ui::id("paren-announcer"))
             .map(|n| {
                 assert!(!n.clickable && !n.focusable, "{:?}", n.label);
                 assert_eq!(n.value.as_deref(), Some(n.label.as_str()));
@@ -1419,18 +1418,17 @@ mod tests {
         }
     }
 
-    /// Upstream's OpenParenthesisButton_GotFocus (Scientific and
-    /// Programmer): "(" given the focus tells screen readers how many
-    /// parentheses are open, in upstream's words, through a live node there
-    /// while it has the focus, with the count it had when it got it; again
-    /// each time it gets it. Standard has no "(".
+    /// Focus feedback and the key's count change use the same ordered
+    /// live queue: a click says the old count before the new count, never
+    /// two new live nodes in one frame. Staying focused does not repeat
+    /// old focus feedback as the count changes.
     #[test]
     fn the_open_parenthesis_count_is_announced_when_its_key_gets_the_focus() {
-        use crate::calc::CalcPage;
+        use crate::calc::{CalcPage, Msg};
         use crate::ui::id;
         use calcvm::{Button as B, CalcMode};
         let open = id(("keypad", B::OpenParenthesis.id()));
-        let announced = |p: &mut CalcPage, focus: Option<Id>| -> Option<String> {
+        let announced = |p: &mut CalcPage, focus: Option<Id>| -> Vec<String> {
             let mut pm = tiny_skia::Pixmap::new(760, 700).unwrap();
             let (mut text, mut icons, mut scrolls) =
                 (Text::new(), Icons::default(), HashMap::new());
@@ -1438,50 +1436,63 @@ mod tests {
                 focus,
                 ..Input::default()
             };
-            let canvas = Canvas::new(pm.as_mut(), 1.0, false);
-            let mut f = Frame::new(
-                canvas,
-                &mut text,
-                &mut icons,
-                Theme::new(false, None),
-                &input,
-                &mut scrolls,
-                true,
-            );
-            p.view(&mut f, Rect::new(0.0, 46.0, 760.0, 654.0), false);
-            let nodes = f.take_nodes().unwrap();
-            nodes
-                .iter()
-                .find(|n| n.id == id("paren-announcer"))
-                .map(|n| {
-                    assert!(n.live && n.role == Role::Status);
-                    n.label.clone()
-                })
+            let mut words = Vec::new();
+            loop {
+                let canvas = Canvas::new(pm.as_mut(), 1.0, false);
+                let mut f = Frame::new(
+                    canvas,
+                    &mut text,
+                    &mut icons,
+                    Theme::new(false, None),
+                    &input,
+                    &mut scrolls,
+                    true,
+                );
+                p.view(&mut f, Rect::new(0.0, 46.0, 760.0, 654.0), false);
+                let again = f.again;
+                let nodes = f.take_nodes().unwrap();
+                let live: Vec<_> = nodes
+                    .iter()
+                    .filter(|n| n.live && n.role == Role::Status)
+                    .collect();
+                assert!(live.len() <= 1, "one ordered announcement per frame");
+                words.extend(live.into_iter().filter_map(|n| {
+                    n.label
+                        .starts_with("Open parenthesis count ")
+                        .then(|| n.label.clone())
+                }));
+                if !again {
+                    break;
+                }
+            }
+            words
         };
-        let count = |n: u32| Some(format!("Open parenthesis count {n}"));
+        let count = |n: u32| format!("Open parenthesis count {n}");
         let mut p = CalcPage::new(None);
         for mode in [CalcMode::Scientific, CalcMode::Programmer] {
             p.set_mode(mode);
             press(&mut p, "{escape}");
-            assert_eq!(announced(&mut p, None), None, "{mode:?}");
-            assert_eq!(announced(&mut p, Some(open)), count(0), "{mode:?}");
+            announced(&mut p, None);
+            assert_eq!(announced(&mut p, Some(open)), [count(0)], "{mode:?}");
+            assert!(announced(&mut p, Some(open)).is_empty(), "still focused");
             press(&mut p, "2*((");
-            assert_eq!(announced(&mut p, Some(open)), count(0), "still focused");
-            assert_eq!(announced(&mut p, None), None, "focus gone");
-            assert_eq!(announced(&mut p, Some(open)), count(2), "{mode:?}");
-            assert_eq!(announced(&mut p, None), None);
-            // A click: the press gives "(" the focus, the release presses
-            // it; the count told is the one before, as upstream's GotFocus.
+            assert_eq!(announced(&mut p, Some(open)), [count(1), count(2)]);
+            assert!(announced(&mut p, None).is_empty(), "focus gone");
+            assert_eq!(announced(&mut p, Some(open)), [count(2)], "{mode:?}");
+            assert!(announced(&mut p, None).is_empty());
+            // The click's press focuses the key and its release opens a
+            // parenthesis before the next frame is drawn.
             with_cx(|cx| {
                 *cx.focus = Some(open);
-                p.update(crate::calc::Msg::Key(B::OpenParenthesis.id()), cx);
+                p.update(Msg::Key(B::OpenParenthesis.id()), cx);
             });
-            assert_eq!(announced(&mut p, Some(open)), count(2), "clicked");
-            assert_eq!(p.vm.open_parens(), 3);
-            assert_eq!(announced(&mut p, None), None);
+            assert_eq!(announced(&mut p, Some(open)), [count(2), count(3)]);
+            assert!(announced(&mut p, Some(open)).is_empty());
+            assert!(announced(&mut p, None).is_empty());
         }
         p.set_mode(CalcMode::Standard);
-        assert_eq!(announced(&mut p, Some(open)), None, "Standard");
+        announced(&mut p, None);
+        assert!(announced(&mut p, Some(open)).is_empty(), "Standard");
     }
 
     /// Upstream's SetParenthesisCount (Scientific and Programmer): the
