@@ -267,15 +267,38 @@ fn sample_xs(f: &F) -> Vec<f64> {
     xs
 }
 
-/// `e` with each number that is not exactly its double written `v·1`: to
-/// the oracle's first-order rounding bound (`F::error`, which takes
-/// numbers for exact) the product's rounding stands for the literal's own,
-/// half an ulp of it.
-fn noisy(e: &Expr) -> Expr {
+/// Whether `e` is arithmetic on numbers alone (sums, products,
+/// quotients, whole powers), which is folded exactly as typed and
+/// rounded once.
+fn literal_arithmetic(e: &Expr) -> bool {
     match e {
-        Expr::Num(v, lit) if !lit.is_exact() => {
-            Expr::bin(BinOp::Mul, Expr::exact(*v), Expr::exact(1.0))
+        Expr::Num(..) => true,
+        Expr::Neg(a) => literal_arithmetic(a),
+        Expr::Bin(BinOp::Pow, a, b) => {
+            literal_arithmetic(a) && matches!(**b, Expr::Num(n, _) if n == n.trunc())
         }
+        Expr::Bin(_, a, b) => literal_arithmetic(a) && literal_arithmetic(b),
+        _ => false,
+    }
+}
+
+/// `e` with each number that is not exactly its double, and each piece of
+/// arithmetic on numbers alone, written `v·1`: to the oracle's first-order
+/// rounding bound (`F::error`, which takes numbers for exact) the
+/// product's rounding stands for the one rounding of the value, half an
+/// ulp of it. The numbers stay as typed, so the bound is of f itself:
+/// with each at its double, 1.0000000000000001·10¹⁶ − 10¹⁶ was 0 for the
+/// 1 it is, 0.25/(that − tanh x) was −0.25 for 3·10⁹ at 12, and the
+/// bound, 6.8, a thousandth of what 1 − tanh 12 costs in doubles.
+fn noisy(e: &Expr) -> Expr {
+    if literal_arithmetic(e) {
+        return if matches!(e, Expr::Num(_, lit) if lit.is_exact()) {
+            e.clone()
+        } else {
+            Expr::bin(BinOp::Mul, e.clone(), Expr::exact(1.0))
+        };
+    }
+    match e {
         Expr::Neg(a) => Expr::Neg(Box::new(noisy(a))),
         Expr::Degrees(a) => Expr::Degrees(Box::new(noisy(a))),
         Expr::Bin(op, a, b) => Expr::bin(*op, noisy(a), noisy(b)),
@@ -618,6 +641,86 @@ mod mp {
         })
     }
 
+    /// What the replay's test of an infinite limit does with a slow one:
+    /// three values next to the point within 10⁻⁶ of each other are "f
+    /// settles", and the limit refuted (tests/replay/claims.rs). a·ln x
+    /// for a small a does that at every double there is. Where the
+    /// replay's own (x − a)·f′(x) at those three points (x·f′(x) for a
+    /// limit far out) keeps one sign, the one the limit needs, and
+    /// doesn't shrink toward the point, f is still moving as a logarithm
+    /// does, and this says so: nothing was refuted. (For a function that
+    /// does settle it tends to 0, and nothing is said.)
+    fn still_moving(fx: &Fx, claim: &replay::Claim, note: &str) -> Option<String> {
+        let replay::Claim::Simplifier(fact) = claim else {
+            return None;
+        };
+        let (to, at) = fact.strip_prefix("f → ")?.split_once(" as x → ")?;
+        let up = match to {
+            "+∞" => true,
+            "−∞" => false,
+            _ => return None,
+        };
+        if !note.contains("f settles (") {
+            return None;
+        }
+        let at = at.split(':').next()?.trim();
+        // The point approached: finite (from one side), or far out.
+        let a = match at {
+            "+∞" | "−∞" => None,
+            _ => Some(
+                at.trim_end_matches(['⁺', '⁻'])
+                    .replace('−', "-")
+                    .parse::<f64>()
+                    .ok()?,
+            ),
+        };
+        let xs: Vec<f64> = note
+            .split(" at ")
+            .skip(1)
+            .filter_map(|t| {
+                t.split([',', ')'])
+                    .next()?
+                    .trim()
+                    .replace('−', "-")
+                    .parse()
+                    .ok()
+            })
+            .collect();
+        if xs.len() != 3 {
+            return None;
+        }
+        // (x − a)·f′(x) > 0 beside a is f falling toward it; x·f′(x) > 0
+        // far out is f rising outward.
+        let want_positive = if a.is_some() { !up } else { up };
+        let mut g = Vec::new();
+        for &x in &xs {
+            let d = at_prec(|| fx.series(&fx.f, x, x, 1)).swap_remove(1);
+            if d.empty || !d.def {
+                return None;
+            }
+            let (lo, hi) = bounds(&d);
+            let w = x - a.unwrap_or(0.0);
+            let (glo, ghi) = if w >= 0.0 {
+                (lo * w, hi * w)
+            } else {
+                (hi * w, lo * w)
+            };
+            if !(glo.is_finite() && ghi.is_finite())
+                || (want_positive && glo <= 0.0)
+                || (!want_positive && ghi >= 0.0)
+            {
+                return None;
+            }
+            g.push(if want_positive { glo } else { -ghi });
+        }
+        (g[2] >= g[0] / 2.0).then(|| {
+            format!(
+                "the replay's own (x − a)·f′(x) at those points is {:e}, {:e}, {:e} in size: f is still moving as a logarithm does",
+                g[0], g[1], g[2]
+            )
+        })
+    }
+
     /// The replay's reading of the function, from the certificate: its
     /// own scan of the source's numbers, checked against the parser's.
     pub fn function(json: &serde_json::Value, out: &mut Outcome) -> Option<Fx> {
@@ -895,7 +998,9 @@ mod mp {
     ///
     /// A refuted `OneCross` of f says so when the replay's own f at the
     /// box's low end is on neither side of c and the refutation is at the
-    /// high end ([`low_end_unplaced`]).
+    /// high end ([`low_end_unplaced`]); a refuted infinite limit, when f
+    /// "settles" and is still moving as a logarithm does
+    /// ([`still_moving`]).
     pub fn replayed(json: &serde_json::Value, fx: &Fx, out: &mut Outcome) {
         use std::io::{Read, Write};
         use std::process::{Command, Stdio};
@@ -1062,8 +1167,10 @@ mod mp {
             match c.outcome.class {
                 Class::Strong | Class::Weak => {}
                 Class::Refuted => {
-                    let detail = match low_end_unplaced(fx, &c.claim, &c.outcome.note) {
-                        Some(guess) => format!("{}; {guess}", line()),
+                    let said = low_end_unplaced(fx, &c.claim, &c.outcome.note)
+                        .or_else(|| still_moving(fx, &c.claim, &c.outcome.note));
+                    let detail = match said {
+                        Some(more) => format!("{}; {more}", line()),
                         None => line(),
                     };
                     out.fail("replay/refuted", detail);
@@ -1247,6 +1354,79 @@ fn partial_items(l: &Loaded, k: &KeyGraphFeatures, mp: Mp<'_>, out: &mut Outcome
     }
 }
 
+/// The number a panel text shows: "≈208060", "≈8.32289×10⁻⁶", "−2".
+fn panel_number(text: &str) -> Option<f64> {
+    let t = text.trim().trim_start_matches('≈').replace('−', "-");
+    let Some((mantissa, power)) = t.split_once("×10") else {
+        return t.parse().ok();
+    };
+    let power: String = power
+        .chars()
+        .map(|c| match c {
+            '⁻' => Some('-'),
+            '⁰'..='⁹' if c != '¹' && c != '²' && c != '³' => {
+                char::from_digit(c as u32 - '⁰' as u32, 10)
+            }
+            '¹' => Some('1'),
+            '²' => Some('2'),
+            '³' => Some('3'),
+            _ => None,
+        })
+        .collect::<Option<String>>()?;
+    Some(mantissa.parse::<f64>().ok()? * 10f64.powi(power.parse().ok()?))
+}
+
+/// Whether the y-intercept, which the oracle's check found off f(0) (it
+/// reads the panel's number, to six digits), is right as shown. A value
+/// the certificate knows to an enclosure is shown to as many significant
+/// digits (three to six) as every value in the enclosure rounds to alike
+/// (`analysis::certified::approx`), marked "≈", and the panel's number is
+/// the enclosure's middle: 10¹⁷·(b − 0.3) + ∛2⁵³ with a slider b at 0.3,
+/// whose enclosure at 0 is five wide, is "≈208060" with the number
+/// 208061.06, and f(0) is 208062.72. Right when the text is the
+/// enclosure's ends to the digits they share, and f(0) (MPFR's, or the
+/// doubles' without it) rounds to it too.
+fn shown_as_enclosed(
+    l: &Loaded,
+    k: &KeyGraphFeatures,
+    cert: Option<&Analysis>,
+    mp: Mp<'_>,
+) -> bool {
+    let Some(graphing::certify::Row::Certified { value: Some(e), .. }) =
+        cert.map(|a| &a.y_intercept)
+    else {
+        return false;
+    };
+    let (lo, hi) = (e.lo.0, e.hi.0);
+    if lo.is_nan()
+        || hi.is_nan()
+        || lo >= hi
+        || (lo <= 0.0 && 0.0 <= hi)
+        || !k.y_intercept.starts_with('≈')
+    {
+        return false;
+    }
+    let to = |v: f64, digits: usize| format!("{:.*e}", digits - 1, v);
+    let Some(digits) = (3..=6).rev().find(|&d| to(lo, d) == to(hi, d)) else {
+        return false;
+    };
+    let (flo, fhi) = match mp.and_then(|m| m(0.0).value) {
+        Some(v) => v,
+        None => {
+            let v = l.f.at(0.0);
+            if v.k != K::Def {
+                return false;
+            }
+            (v.v, v.v)
+        }
+    };
+    let shown = to(lo, digits);
+    panel_number(&k.y_intercept)
+        .is_some_and(|p| to(p, 6) == to(shown.parse().unwrap_or(f64::NAN), 6))
+        && to(flo, digits) == shown
+        && to(fhi, digits) == shown
+}
+
 /// (d) against (a) and (b) sampled, by the oracle's checks; and against
 /// (c) at 0.
 fn panel(
@@ -1332,6 +1512,14 @@ fn panel(
             {
                 out.note("pt/scalar-vs-reference-within-their-rounding", || {
                     f.detail.clone()
+                });
+            }
+            // The panel's number for a value known to an enclosure is the
+            // enclosure's middle, and its text as many digits as the
+            // enclosure fixes: the text is the claim.
+            "y-intercept-wrong" if shown_as_enclosed(l, k, cert, mp) => {
+                out.note("panel/y-intercept-shown-to-the-digits-known", || {
+                    format!("{}, shown as {}", f.detail, k.y_intercept)
                 });
             }
             // "Undefined" at a sample, as the doubles have it: a

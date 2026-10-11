@@ -365,6 +365,13 @@ fn one_cross_from_an_unplaced_end(_: &Case, f: &Finding) -> bool {
     f.detail.starts_with("OneCross") && f.detail.contains("on neither side of")
 }
 
+/// An infinite limit refuted because f "settles", where the replay's own
+/// f′ says it is still moving as a logarithm does (said by
+/// `views::mp::still_moving`).
+fn settled_but_still_moving(_: &Case, f: &Finding) -> bool {
+    f.detail.contains("f settles (") && f.detail.contains("still moving as a logarithm does")
+}
+
 const KNOWN: &[(&str, Matches, &str)] = &[
     // The replay (tests/replay) is another's to change; what it leaves
     // open is listed by kind in this tester's report.
@@ -408,6 +415,18 @@ const KNOWN: &[(&str, Matches, &str)] = &[
          can't place that end, takes it for one below c and refutes the claim at the other \
          (tests/replay/claims.rs, `below_first`): the claim is true and only unconfirmed",
     ),
+    // tests/replay/claims.rs, the test of a limit ±∞ ("Settled: the
+    // nearest three within 10⁻⁶ of each other" is `Inconsistent`): a true
+    // infinite limit reached slowly is refuted. 1.0000000000000001·ln x −
+    // ln x is 10⁻¹⁶·ln x: −7.4·10⁻¹⁴ at the least double, and −∞ at 0.
+    (
+        "replay/refuted",
+        settled_but_still_moving,
+        "the replay refutes an infinite limit when three values next to the point agree to \
+         10⁻⁶ (tests/replay/claims.rs, \"f settles\"), which a small multiple of a logarithm \
+         does at every double: its own (x − a)·f′(x) there doesn't shrink, the limit is \
+         infinite, and unconfirmed is all three values can say",
+    ),
     // tests/replay/claims.rs: "f is periodic, so no oblique asymptote" is
     // tested by f/x at points up to 10²⁴⁰, where tan(x) + cosh(2³¹ + 1),
     // periodic with a constant of 10⁹³²⁶³⁰⁰⁰⁰, is nowhere near 0.
@@ -442,6 +461,15 @@ const KNOWN: &[(&str, Matches, &str)] = &[
         root_of_degree_a_half,
         "the replay's own root(x, 0.5) is x² for a negative x too, where the engine has it \
          undefined (tests/replay/eval.rs): it refutes the certifier's \"undefined\"",
+    ),
+    // (The same, where f's enclosure is of what is left of f there:
+    // sign(root(−x², 0.5)) at 2·10⁻³⁰⁸, x² below every double, is [0, 0]
+    // and maybe undefined to the engine, and 1 to the replay.)
+    (
+        "mp/enclosure-misses-value",
+        root_of_degree_a_half,
+        "the replay's own root(x, 0.5) is x² for a negative x too, where the engine has it \
+         undefined (tests/replay/eval.rs)",
     ),
     // functions::ncr and npr (Γ's quotient) in doubles: ∞·0 far out and
     // an underflow to 0 give NaN where the quotient has a value, which the
