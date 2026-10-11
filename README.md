@@ -251,7 +251,7 @@ upstream sources with g++:
 | calcvm (187 + 1 ignored) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage and the saved-state size budget (long pasted sessions keep their newest History, memory and modes) |
 | unitconv (140 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
 | datecalc (40), copypaste (40) | Ports of `DateCalculatorTests` and `CopyPasteManagerTests`, plus paste key-sequence tests |
-| graphing (372 + 4 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
+| graphing (379 + 4 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
 | appcore (60) | Keyboard map, key scripts, converter paste validation, settings storage (huge/corrupt files, per-section budgets, a long calculator session that used to cost the whole file), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
 | crmath (1) | The vendored CORE-MATH's two builds (baseline and x86-64-v3) give the same bits |
 | x11paste (5) | Against a private Xvfb: a read cut at its byte cap fetches no further and keeps whole characters, PRIMARY and drag selections, and the rest of a cut transfer goes by so the owner can serve again |
@@ -291,9 +291,12 @@ CI also runs checks that need more than `cargo test --workspace`:
   dense sampling, the certificate through the strict replay, the text at N
   digits against the same text rounded by hand, and the plot against the
   enclosure. CI runs a short fixed run; the long run (`-- --ignored
-  long_run`, release) is a function of its seed and range alone, and its
-  24,000 cases at seed 10 end with no disagreement. The ten engine bugs it
-  found when it was written are tests in `crossfuzz_found`. What it can't
+  long_run`, release) is a function of its seed and range alone. It has
+  not stopped finding things: of the fresh seeds of 4,000 cases run since
+  it was written, about one in two turned up a kind of disagreement not
+  seen before, most of them its own checks judging by a value the doubles
+  don't resolve (made sound since), some of them engine faults. Each
+  engine fault it found is a test in `crossfuzz_found`. What it can't
   show: a claim the checker can neither prove nor refute (about one case
   in twenty has one) is set aside, not failed, so a false claim the checker
   can't decide would pass; and causes found but not fixed are listed in its
