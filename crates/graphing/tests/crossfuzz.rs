@@ -415,9 +415,9 @@ const KNOWN: &[(&str, Matches, &str)] = &[
         "root(x, n) of a degree no whole number is pow(x, 1/n) with 1/n rounded: tens of \
          ulps where |ln x|/n is large (functions.rs root); the reference is the closer one",
     ),
-    // docs/ti-conventions.md: anything but +, −, ×, ÷, whole powers, |·|
-    // and the counts is computed in floating point, from the double
-    // nearest a literal.
+    // docs/ti-conventions.md: circular functions are computed in floating
+    // point, from the double nearest a literal. Exact literal arithmetic
+    // and integer steps do not change that policy for trigonometry.
     (
         "mp/scalar-off-value",
         trig_of_a_long_number,
@@ -980,4 +980,20 @@ fn planted_disagreements_are_found() {
     assert!(out.has("gen/does-not-parse"), "{:?}", out.findings);
     let out = views::run("x^3-2*x+1/(x-1)", None, &set, group::ALL);
     assert!(out.findings.is_empty(), "{:?}", out.findings);
+}
+
+/// A positive radicand gives a genuine open neighborhood at x=2, however
+/// small: its domain end is 2-10^-100. A fixed MPFR probe farther away
+/// must not turn the correct derivative into a tester failure.
+#[test]
+#[cfg(feature = "mpfr-oracle")]
+fn a_domain_edge_near_a_derivative_point_is_not_at_that_point() {
+    let set = Setup {
+        digits: None,
+        sliders: Vec::new(),
+        unit: TrigUnit::Radians,
+    };
+    let out = views::run("sqrt(x-2+10^(-100))", None, &set, group::POINTS);
+    assert!(out.findings.is_empty(), "{:?}", out.findings);
+    assert!(out.tally["mpfr derivative points"] > 0);
 }

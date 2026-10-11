@@ -121,8 +121,9 @@ hundreds of digits. An exponent too long to carry exactly (`3^20000`) is
 odd, even or no integer as its form shows (3^20000 is odd, 10^5000 even,
 1.5^100000 no integer); where that isn't known (`x^nCr(20000, 10000)`), a
 negative base's power is unknown. Arithmetic on literals and
-sliders alone (+, −, ×, ÷, whole powers, |·| and the counts n!, n!!, nCr,
-nPr of whole numbers of any size) is done exactly and rounded once
+sliders alone (+, −, ×, ÷, whole powers, |·|, floor, ceil, round, sign and
+the counts n!, n!!, nCr, nPr of whole numbers of any size) is done exactly
+and rounded once
 (`10^17·(0.1 + 0.2 − 0.3)` is 0, `0.1·3` is the double nearest 0.3,
 `1/(0.1 + 0.2 − 0.3)` divides by zero, and off
 `nCr(9007199254740993, 1) − 9007199254740992` is 1, though no double holds

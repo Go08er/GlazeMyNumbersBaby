@@ -148,6 +148,19 @@ impl CalculatorPage {
             .bidirectional()
             .sync_create()
             .build();
+        {
+            // The button names History: clicked, it shows that list,
+            // whichever the sheet showed last (M▾ leaves it on Memory, and
+            // the sheet then opened on Memory from this button too:
+            // R19-L-01's other half). On the click, not on the state: the
+            // button's state follows the sheet however that opens.
+            let panel = panel.clone();
+            history_btn.connect_clicked(move |b| {
+                if b.is_active() {
+                    panel.show_tab("history");
+                }
+            });
+        }
 
         let page = Rc::new(CalculatorPage {
             ctx: ctx.clone(),
@@ -1257,9 +1270,14 @@ impl CalculatorPage {
     fn history_key(self: &Rc<Self>, action: Action) {
         match action {
             Action::ToggleHistory => {
+                // The sheet showing History closes; closed, or showing
+                // Memory, it shows History, as upstream's key shows the
+                // History flyout unless that is the one open
+                // (ToggleHistoryFlyout) and as DGMNB's does.
+                let showing = self.sheet.is_open() && self.panel.current_tab() == "history";
                 self.panel.show_tab("history");
                 if !self.wide.get() {
-                    self.sheet.set_open(!self.sheet.is_open());
+                    self.sheet.set_open(!showing);
                 }
             }
             Action::ClearHistory => {

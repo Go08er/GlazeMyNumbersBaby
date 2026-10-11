@@ -905,7 +905,13 @@ mod mp {
                     );
                 }
             }
-            // A derivative at x needs f defined on both sides of x.
+            // Look beside the derivative point as well. An undefined
+            // value at a fixed distance does not refute a neighborhood:
+            // sqrt(x - 2 + 10^-100) is differentiable at 2, but its
+            // domain ends closer than the probe's 2^-300 step. Without a
+            // proof locating the domain edge at x this is unresolved,
+            // not a finding. The coefficient comparisons above remain
+            // checks of the claimed derivatives.
             for side in [-1.0, 1.0] {
                 let beside = at_prec(|| {
                     let mut p = Float::with_val(PREC, x);
@@ -922,14 +928,13 @@ mod mp {
                     fx.series_iv(&fx.f, iv::Iv::point(p), 0).swap_remove(0)
                 });
                 if beside.empty {
-                    out.fail(
-                        "mp/derivative-without-neighbourhood",
+                    out.note("mp/derivative-neighbourhood-not-resolved", || {
                         format!(
                             "x={x:e}: f′ enclosed as {}, but MPFR: f is undefined just {} it",
                             show_enc(&t[1]),
                             if side < 0.0 { "below" } else { "above" }
-                        ),
-                    );
+                        )
+                    });
                 }
             }
         }

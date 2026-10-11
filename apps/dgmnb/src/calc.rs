@@ -47,6 +47,7 @@ pub enum Msg {
     HistoryClear,
     Memory(MemOp, usize),
     MemoryClearAll,
+    OpenPanel(Tab),
     Popup(Option<Popup>),
     Angle,
     FToE,
@@ -73,8 +74,8 @@ pub struct CalcPage {
     /// How many frames have told something: each one's live node is a new
     /// one.
     told: u64,
-    /// While "(" has the focus, what was announced when it got it.
-    paren_announcement: Option<String>,
+    /// Whether this showing of "(" with the focus has been announced.
+    paren_focused: bool,
 }
 
 /// What of the History and Memory panel has the focus: a History row (or
@@ -131,7 +132,7 @@ impl CalcPage {
             bit_view: false,
             say: std::collections::VecDeque::new(),
             told: 0,
-            paren_announcement: None,
+            paren_focused: false,
         }
     }
 
@@ -214,6 +215,20 @@ impl CalcPage {
 
     fn after_press(&mut self) {
         self.vm.take_events();
+    }
+
+    /// A focus change follows anything the engine has already said, and
+    /// precedes what pressing the newly focused key will say. Keep it in
+    /// the same one-at-a-time queue: two live nodes added in one frame
+    /// reach AccessKit in no particular order.
+    fn announce_paren_focus(&mut self) {
+        let said = self.vm.take_announcements();
+        self.say.extend(said.iter().map(keys::announcement));
+        self.say
+            .push_back(keys::open_parenthesis_count_announcement(
+                self.vm.open_parens(),
+            ));
+        self.paren_focused = true;
     }
 
     /// What of the History or Memory list (or the keys that empty them)
@@ -335,11 +350,9 @@ impl CalcPage {
                     if b == B::OpenParenthesis
                         && self.vm.mode() != CalcMode::Standard
                         && *cx.focus == Some(id(("keypad", k)))
-                        && self.paren_announcement.is_none()
+                        && !self.paren_focused
                     {
-                        self.paren_announcement = Some(keys::open_parenthesis_count_announcement(
-                            self.vm.open_parens(),
-                        ));
+                        self.announce_paren_focus();
                     }
                     self.press(b);
                     if second_function {
@@ -386,6 +399,13 @@ impl CalcPage {
                 }
             }
             Msg::MemoryClearAll => self.press(B::MemoryClear),
+            Msg::OpenPanel(tab) => {
+                // The same opener closes its sheet; the other selects
+                // the list it names instead of keeping the previous tab.
+                let close = self.popup == Some(Popup::Panel) && self.tab == tab;
+                self.tab = tab;
+                self.popup = (!close).then_some(Popup::Panel);
+            }
             Msg::Popup(p) => self.popup = if self.popup == p { None } else { p },
             Msg::Angle => {
                 let next = self.vm.angle_unit().next();
@@ -453,16 +473,14 @@ impl CalcPage {
                 self.vm.press(b);
                 self.after_press();
             }
-            Action::ToggleHistory => {
-                self.tab = Tab::History;
-                if !cx.wide {
-                    self.popup = if self.popup == Some(Popup::Panel) {
-                        None
-                    } else {
-                        Some(Popup::Panel)
-                    };
-                }
-            }
+            // Ctrl+H. Docked, it chooses the History list. In a narrow
+            // window it is the header's History button (OpenPanel): the
+            // sheet opens on History, shows History if it was showing
+            // Memory, and closes if History is what it was showing, as
+            // upstream's key shows the History flyout unless that is the
+            // one open (ToggleHistoryFlyout).
+            Action::ToggleHistory if cx.wide => self.tab = Tab::History,
+            Action::ToggleHistory => self.update_page(Msg::OpenPanel(Tab::History), cx),
             Action::ClearHistory => self.vm.history_clear(),
             Action::Angle(u) => self.vm.set_angle_unit(u),
             Action::Radix(r) => self.vm.set_radix(r),
@@ -493,6 +511,12 @@ impl CalcPage {
                 CalcMode::Programmer => 84.0,
             }
         };
+        let open = id(("keypad", B::OpenParenthesis.id()));
+        if f.nodes.is_none() || mode == CalcMode::Standard || !f.focused(open) {
+            self.paren_focused = false;
+        } else if !self.paren_focused {
+            self.announce_paren_focus();
+        }
         let (display, mut rest) = main.take_top(display_h);
         self.display(f, display, compact);
 
@@ -586,24 +610,6 @@ impl CalcPage {
             };
             let gap = if compact { 3.0 } else { 4.0 };
             self.keypad(f, pad, &layout, gap, "keypad");
-        }
-        // Upstream's OpenParenthesisButton_GotFocus (Scientific and
-        // Programmer): each time "(" gets the focus (Tab, a click), screen
-        // readers are told how many parentheses are open ("Open parenthesis
-        // count 2"), after the key's own name. A live node that is there
-        // only while "(" has the focus, with the count it had when it got
-        // it: AccessKit announces it as it comes.
-        let open = id(("keypad", B::OpenParenthesis.id()));
-        if mode != CalcMode::Standard && f.focused(open) {
-            let text = self.paren_announcement.get_or_insert_with(|| {
-                keys::open_parenthesis_count_announcement(self.vm.open_parens())
-            });
-            if let Some(n) = f.node(id("paren-announcer"), accesskit::Role::Status, text, pad) {
-                n.value = Some(text.clone());
-                n.live = true;
-            }
-        } else {
-            self.paren_announcement = None;
         }
         if let Some(p) = panel {
             self.side_panel(f, p.inset_xy(0.0, 4.0).take_right(PANEL_W - 8.0).0);
@@ -790,7 +796,7 @@ impl CalcPage {
                 cells[n - 1],
                 "M▾",
                 CAPTION,
-                msg(Msg::Popup(Some(Popup::Panel))),
+                msg(Msg::OpenPanel(Tab::Memory)),
                 has,
                 None,
                 false,
@@ -908,7 +914,7 @@ impl CalcPage {
             mt,
             "M▾",
             CAPTION,
-            msg(Msg::Popup(Some(Popup::Panel))),
+            msg(Msg::OpenPanel(Tab::Memory)),
             !self.vm.memory().is_empty(),
             None,
             false,
@@ -1306,5 +1312,84 @@ fn describe(f: &mut Frame, name: &str, tip: &str) {
     if let Some(n) = f.nodes.as_mut().and_then(|v| v.last_mut()) {
         n.label = name.to_string();
         n.description = Some((tip.to_string(), None));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_cx<R>(wide: bool, run: impl FnOnce(&mut Cx) -> R) -> R {
+        let (mut toasts, mut focus) = (Vec::new(), None);
+        let mut cx = Cx {
+            toasts: &mut toasts,
+            clipboard: None,
+            wide,
+            focus: &mut focus,
+        };
+        run(&mut cx)
+    }
+
+    /// R19-L-01: each opener of the narrow window's sheet shows the list
+    /// it names, whatever list was shown before: M▾ Memory, the header's
+    /// History button and Ctrl+H History. (M▾ opened History the first
+    /// time, and the History button Memory after Memory had been chosen.)
+    /// The same opener again closes the sheet; Ctrl+H over Memory shows
+    /// History, as upstream's key shows the History flyout unless it is
+    /// the one open. Docked, Ctrl+H chooses History. Programmer, which has
+    /// no History, has no Ctrl+H.
+    #[test]
+    fn each_opener_of_the_sheet_shows_the_list_it_names() {
+        let ctrl_h = input::parse_chord("ctrl+h").unwrap();
+        let state = |p: &CalcPage| (p.popup, p.tab);
+        let open = Some(Popup::Panel);
+        let mut p = CalcPage::new(None);
+        assert_eq!(state(&p), (None, Tab::History));
+        // First use.
+        with_cx(false, |cx| p.update(Msg::OpenPanel(Tab::Memory), cx));
+        assert_eq!(state(&p), (open, Tab::Memory));
+        with_cx(false, |cx| p.update(Msg::OpenPanel(Tab::Memory), cx));
+        assert_eq!(state(&p), (None, Tab::Memory), "the same opener closes");
+        with_cx(false, |cx| p.update(Msg::OpenPanel(Tab::History), cx));
+        assert_eq!(state(&p), (open, Tab::History));
+        // The other list chosen by hand, the sheet closed (Escape, a
+        // click outside): each opener still shows its own.
+        for (hand, opener) in [(Tab::Memory, Tab::History), (Tab::History, Tab::Memory)] {
+            with_cx(false, |cx| {
+                p.update(Msg::OpenPanel(opener), cx);
+                if p.popup.is_none() {
+                    p.update(Msg::OpenPanel(opener), cx);
+                }
+                p.update(Msg::Tab(hand), cx);
+                p.update(Msg::Popup(None), cx);
+            });
+            assert_eq!(state(&p), (None, hand));
+            with_cx(false, |cx| p.update(Msg::OpenPanel(opener), cx));
+            assert_eq!(state(&p), (open, opener), "after {hand:?} by hand");
+            with_cx(false, |cx| p.update(Msg::Popup(None), cx));
+        }
+        // Ctrl+H: opens on History whatever was shown last; closes
+        // History's sheet; over Memory shows History.
+        assert_eq!(state(&p), (None, Tab::Memory));
+        assert!(with_cx(false, |cx| p.key(&ctrl_h, cx)));
+        assert_eq!(state(&p), (open, Tab::History));
+        assert!(with_cx(false, |cx| p.key(&ctrl_h, cx)));
+        assert_eq!(state(&p), (None, Tab::History));
+        with_cx(false, |cx| p.update(Msg::OpenPanel(Tab::Memory), cx));
+        assert!(with_cx(false, |cx| p.key(&ctrl_h, cx)));
+        assert_eq!(state(&p), (open, Tab::History), "over Memory");
+        with_cx(false, |cx| p.update(Msg::Popup(None), cx));
+        // Docked: no sheet, the History list chosen.
+        with_cx(true, |cx| {
+            p.update(Msg::Tab(Tab::Memory), cx);
+            assert!(p.key(&ctrl_h, cx));
+        });
+        assert_eq!(state(&p), (None, Tab::History));
+        // Programmer has Memory alone.
+        p.set_mode(CalcMode::Programmer);
+        assert!(!with_cx(false, |cx| p.key(&ctrl_h, cx)), "no Ctrl+H");
+        assert_eq!(p.popup, None);
+        with_cx(false, |cx| p.update(Msg::OpenPanel(Tab::Memory), cx));
+        assert_eq!(state(&p), (open, Tab::Memory));
     }
 }

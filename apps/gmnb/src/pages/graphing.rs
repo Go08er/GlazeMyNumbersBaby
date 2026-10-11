@@ -507,7 +507,7 @@ impl GraphingPage {
         }
     }
 
-    /// Type into the focused equation (or a new one) at its cursor.
+    /// Type into the focused equation (or a new one), replacing its selection.
     fn insert_text(self: &Rc<Self>, text: &str) {
         let focused = self.focused.borrow().as_ref().and_then(|w| w.upgrade());
         // Only a live row's entry: a removed one stays mapped while it
@@ -530,14 +530,19 @@ impl GraphingPage {
                 e
             }
         };
-        let mut pos = entry.position();
-        if text == "\u{8}" {
-            if pos > 0 {
-                entry.delete_text(pos - 1, pos);
+        let Some(field) = entry.delegate().and_downcast::<gtk::Text>() else {
+            return;
+        };
+        {
+            // The keypad and page paste edit like the field's own keys:
+            // replace the selection, retain undo, and notify only the final
+            // text (as bounded field paste does, R16-M-02 / R17-M-03).
+            let _one_edit = field.freeze_notify();
+            if text == "\u{8}" {
+                field.emit_backspace();
+            } else {
+                crate::paste::replace_selection(&field, text);
             }
-        } else {
-            entry.insert_text(text, &mut pos);
-            entry.set_position(pos);
         }
         entry.grab_focus_without_selecting();
     }

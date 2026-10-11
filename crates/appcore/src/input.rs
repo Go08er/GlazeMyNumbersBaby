@@ -139,7 +139,10 @@ pub fn shortcut(mode: CalcMode, kp: &KeyPress, shift_mode: ShiftMode) -> Option<
             return None;
         }
         return match (lower?, shift) {
-            ('h', false) => Some(ToggleHistory),
+            // Not in Programmer, which has no History: upstream's
+            // ToggleHistoryFlyout returns at once there.
+            ('h', false) if std_or_sci => Some(ToggleHistory),
+            ('h', false) => None,
             ('d', true) => Some(ClearHistory),
             ('m', false) => Some(Press(B::Memory)),
             ('l', false) => Some(Press(B::MemoryClear)),
@@ -914,6 +917,19 @@ mod tests {
         assert_eq!(item_after(1, 3, 3), 1);
         // Several went (a list that holds fewer).
         assert_eq!(item_after(4, 5, 2), 1);
+    }
+
+    /// Ctrl+H is the History's key where there is a History: not in
+    /// Programmer, as upstream's ToggleHistoryFlyout returns at once there
+    /// (in a narrow window it opened the Memory sheet, History being
+    /// what Programmer hasn't).
+    #[test]
+    fn ctrl_h_is_the_historys_except_in_programmer() {
+        let ctrl_h = KeyPress::char('h').ctrl();
+        for mode in [CalcMode::Standard, CalcMode::Scientific] {
+            assert_eq!(sc(mode, ctrl_h), Some(Action::ToggleHistory), "{mode:?}");
+        }
+        assert_eq!(sc(CalcMode::Programmer, ctrl_h), None);
     }
 
     #[test]

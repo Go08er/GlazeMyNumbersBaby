@@ -1688,7 +1688,8 @@ fn beyond(l: (f64, f64), var: bool, parity: Parity) -> Fold {
 
 /// The exact value of an x- and y-free subtree of typed literals and
 /// sliders (a slider's value is the double it holds) under +, −, ×, ÷,
-/// whole powers, |·|, and the counts n!, n!!, nCr, nPr of whole numbers.
+/// whole powers, |·|, floor, ceil, round, sign, and the counts n!, n!!,
+/// nCr, nPr of whole numbers.
 ///
 /// Each of those is folded at any size, or refused for its length
 /// ([`Fold::Big`], unknown; or [`Fold::Lone`] where the general path is
@@ -1822,6 +1823,26 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
             Func::Abs => match go(&args[0]) {
                 Value(r, v) => Value(r.abs(), v),
                 other => other,
+            },
+            // These steps depend on which side of an integer (or a half)
+            // the typed number lies. Rounding it to a double first can
+            // change the result by one, even at an ordinary graph scale.
+            Func::Floor | Func::Ceil | Func::Round | Func::Sign => match go(&args[0]) {
+                Value(r, v) => Value(
+                    match f {
+                        Func::Floor => r.floor(),
+                        Func::Ceil => r.ceil(),
+                        Func::Round => r.round(),
+                        Func::Sign if r.is_zero() => Rat::int(0),
+                        Func::Sign if r.is_negative() => Rat::int(1).neg(),
+                        Func::Sign => Rat::int(1),
+                        _ => unreachable!("integer step"),
+                    },
+                    v,
+                ),
+                No => No,
+                DivZero(v) => DivZero(v),
+                other => Big(other.var()),
             },
             Func::Factorial | Func::DoubleFactorial => {
                 let (r, v) = match go(&args[0]) {

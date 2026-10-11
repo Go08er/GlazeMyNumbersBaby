@@ -605,6 +605,32 @@ impl Rat {
         self
     }
 
+    /// Rounds to an integer from the exact quotient and remainder. The
+    /// result stays within the numerator's bit cap: when there is a
+    /// remainder, d >= 2 and (n div d) + 1 <= n.
+    fn integral(&self, increment: impl FnOnce(&Nat) -> bool) -> Rat {
+        let (mut whole, remainder) = self.n.div_rem(&self.d);
+        if !remainder.is_zero() && increment(&remainder) {
+            whole = whole.add(&Nat::from_u64(1));
+        }
+        let mut result = Rat::nat(whole);
+        result.neg = self.is_negative() && !result.is_zero();
+        result
+    }
+
+    pub(crate) fn floor(&self) -> Rat {
+        self.integral(|_| self.is_negative())
+    }
+
+    pub(crate) fn ceil(&self) -> Rat {
+        self.integral(|_| !self.is_negative())
+    }
+
+    /// Nearest integer, with halves away from zero, as the language's round.
+    pub(crate) fn round(&self) -> Rat {
+        self.integral(|remainder| remainder.shl(1) >= self.d)
+    }
+
     pub(crate) fn add(&self, o: &Rat) -> Option<Rat> {
         if self.n.bits() + o.d.bits() > MAX_BITS + 64 || o.n.bits() + self.d.bits() > MAX_BITS + 64
         {

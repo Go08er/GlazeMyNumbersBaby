@@ -574,12 +574,40 @@ impl<'a> Fun<'a> {
         for tree in [&self.expr, &self.eval] {
             let slope = |left: bool, x: Interval| -> Result<Option<bool>, Stop> {
                 let e = one_sided(tree, &sides, left);
-                let s = self.ser_of(&e, x, 1)?;
+                let s = self.ser_of(&e, x, 2)?;
                 let d = s[1];
-                Ok(
-                    (s[0].dec >= Dec::Dac && d.dec >= Dec::Def && d.iv.is_bounded() && d.ne0())
-                        .then(|| d.gt0()),
-                )
+                if s[0].dec < Dec::Dac || d.dec < Dec::Def || !d.iv.is_bounded() {
+                    return Ok(None);
+                }
+                if d.ne0() {
+                    return Ok(Some(d.gt0()));
+                }
+                // Strictly monotone up to the kink even if f′ is 0 at
+                // that endpoint: x·|x| has f′=2|x|, which vanishes at 0
+                // alone. A strict sign of f″ on this entire half makes
+                // f′ strictly monotone; its exact endpoint zero and its
+                // strict sign at the other end prove that sign on the
+                // punctured half. No sampled values replace that proof.
+                let dd = s[2];
+                if dd.dec < Dec::Def || !dd.iv.is_bounded() || !dd.ne0() {
+                    return Ok(None);
+                }
+                let at = self.ser_of(&e, Interval::point(p), 1)?;
+                if at[0].dec < Dec::Dac
+                    || at[1].dec < Dec::Def
+                    || at[1].lo() != 0.0
+                    || at[1].hi() != 0.0
+                {
+                    return Ok(None);
+                }
+                let far = if left { x.lo() } else { x.hi() };
+                let end = self.ser_of(&e, Interval::point(far), 1)?;
+                let want = if left { dd.lt0() } else { dd.gt0() };
+                Ok((end[0].dec >= Dec::Dac
+                    && end[1].dec >= Dec::Def
+                    && end[1].ne0()
+                    && end[1].gt0() == want)
+                    .then_some(want))
             };
             if let (Some(left), Some(right)) = (
                 slope(true, Interval::new(l, p))?,

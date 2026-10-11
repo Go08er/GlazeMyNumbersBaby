@@ -1085,14 +1085,22 @@ const PLANTS: &[Plant] = &[
         "sign(abs(x)+1)",
         "no least period, with f′ ≡ 0 on the left tail only",
         |v| {
-            claims_of(v, "period").retain(|c| {
-                !(c.get("Value")
-                    .is_some_and(|c| c["x"]["b"] == serde_json::json!("inf")))
-            });
+            // This row is now Unknown in the producer: keep the exact
+            // premise-completeness plant instead of editing a missing cert.
+            v["period"] = serde_json::json!({"Certified": {"value": null,
+                "cert": {"covers": "Line", "claims": [{"Value": {
+                    "x": {"a": "-inf", "b": -1.0}, "of": {"F": "F1"},
+                    "lo": 0.0, "hi": 0.0}}]}}});
         },
     ),
     ("min(x,x+1+abs(x-3))", "f′ < 0 on the left tail", |v| {
-        first(v, "monotonicity", "TailBeyond")["above"] = serde_json::json!(false);
+        // Continuity of the unused corner no longer supplies a complete
+        // monotone row; the false tail claim itself must still be caught.
+        v["monotonicity"] = serde_json::json!({"Certified": {"value": [{
+            "on": {"lo": "NegInf", "hi": "PosInf"}, "dir": "Increasing"}],
+            "cert": {"covers": "Line", "claims": [{"TailBeyond": {
+                "side": "Left", "from": -16.0, "of": {"F": "F1"}, "c": 0.0,
+                "above": false}}]}}});
     }),
     // Review 17, R17-M-02: an operand set aside by a fast path, its
     // definedness or angle unit dropped with it. sin²4 + cos²4 − 1 − 10⁻¹⁰⁰
@@ -3330,5 +3338,128 @@ fn a_remainder_by_zero_is_undefined() {
     let v = certificate("mod(x,x)+x");
     for (c, class) in judged(&v, "Undefined") {
         assert_eq!(class, Class::Strong, "{c}");
+    }
+}
+
+/// Each shown monotone piece needs a sign walk, and a complete periodic
+/// listing covers its domain too. True claims cannot justify omitting a
+/// half of sin's pieces or calling x² increasing on the whole line.
+#[test]
+fn monotone_listings_need_coverage_and_direction() {
+    let base = certificate("sin(x)");
+    assert_eq!(rejected(&base), None);
+    for remove_all in [false, true] {
+        let mut v = base.clone();
+        let pieces = value_of(&mut v, "monotonicity").as_array_mut().unwrap();
+        if remove_all {
+            pieces.clear();
+        } else {
+            pieces.remove(0);
+        }
+        let why = rejected(&v).expect("an incomplete periodic monotone listing accepted");
+        assert!(why.contains("pieces leave"), "{why}");
+    }
+    let mut shifted = base.clone();
+    value_of(&mut shifted, "monotonicity").as_array_mut().unwrap().push(serde_json::json!({
+        "on": {"lo": {"At": {"x": {"lo": 10.99557428756427, "hi": 10.995574287564285}, "closed": true}},
+            "hi": {"At": {"x": {"lo": 14.137166941154058, "hi": 14.137166941154083}, "closed": true}}},
+        "dir": "Decreasing"}));
+    assert!(
+        rejected(&shifted).is_some(),
+        "the increasing piece shifted by 2P called decreasing"
+    );
+    assert_eq!(
+        rejected(&certificate("x^3")),
+        None,
+        "a same-sign isolated derivative zero does not break a monotone piece"
+    );
+    assert_eq!(
+        rejected(&certificate("sqrt(x-1000)*ln(x-1000)")),
+        None,
+        "the complete interval beside a shifted open end is decided"
+    );
+    let base = certificate("x^2");
+    let mut v = base.clone();
+    withhold_all_but(&mut v, "domain");
+    v["monotonicity"] = serde_json::json!({"Partial": {"value": [{
+        "on": {"lo": "NegInf", "hi": "PosInf"}, "dir": "Increasing"}],
+        "cert": {"covers": "Points", "claims": []}}});
+    let why = rejected(&v).expect("an unproven partial monotone piece accepted");
+    assert!(why.contains("piece undecided"), "{why}");
+    // A real partial piece keeps its original sign evidence.
+    let mut v = base.clone();
+    withhold_all_but(&mut v, "domain");
+    let mono = &base["monotonicity"]["Certified"];
+    v["monotonicity"] = serde_json::json!({"Partial": {
+        "value": [mono["value"][1].clone()], "cert": {
+            "covers": "Points", "claims": mono["cert"]["claims"].clone()}}});
+    assert_eq!(rejected(&v), None);
+    let mut hole = certificate("x/x");
+    value_of(&mut hole, "monotonicity")[0]["on"]["hi"]["At"]["closed"] = serde_json::json!(true);
+    let why = rejected(&hole).expect("the excluded endpoint 0 included in a monotone piece");
+    assert!(why.contains("undefined endpoint"), "{why}");
+    let mut v = certificate("1");
+    value_of(&mut v, "monotonicity")[0]["dir"] = serde_json::json!("Increasing");
+    assert!(
+        rejected(&v).is_some(),
+        "a constant called strictly increasing"
+    );
+}
+
+/// Continuity in a finite-width kink box cannot rule out events inside.
+/// The ordinary shifted dent has a true minimum and reaches zero between
+/// the surrounding doubles, although both tails are the same plateau.
+#[test]
+fn continuity_in_a_kink_box_does_not_complete_a_derivative_walk() {
+    let base = certificate_at("min((x-sin(1))^(2/1000003),0.01)", Some(14), &[]);
+    let claims = serde_json::json!([
+        {"Value": {"x": {"a": "-inf", "b": 0.8414709848078963},
+            "of": {"F": "F1"}, "lo": 0.0, "hi": 0.0}},
+        {"Value": {"x": {"a": 0.8414709848078967, "b": "inf"},
+            "of": {"F": "F1"}, "lo": 0.0, "hi": 0.0}},
+        {"Kink": {"x": {"a": 0.8414709848078963, "b": 0.8414709848078967}}}
+    ]);
+    for row in ["extrema", "monotonicity", "range"] {
+        let mut v = base.clone();
+        withhold_all_but(&mut v, "domain");
+        let mut cs = claims.clone();
+        let value = match row {
+            "extrema" => serde_json::json!([]),
+            "monotonicity" => serde_json::json!([{
+                "on": {"lo": "NegInf", "hi": "PosInf"}, "dir": "Constant"}]),
+            "range" => {
+                let y = serde_json::json!({"lo": 0.009999999999999998, "hi": 0.01});
+                cs.as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!({"Value": {
+                    "x": {"a": 0.0, "b": 0.0}, "of": {"F": "F0"},
+                    "lo": y["lo"], "hi": y["hi"]}}));
+                v["range_ends"] = serde_json::json!([[[{"At": {"lo": 0.0, "hi": 0.0}}],
+                    [{"At": {"lo": 0.0, "hi": 0.0}}]]]);
+                serde_json::json!([{"lo": {"At": {"x": y, "closed": true}},
+                    "hi": {"At": {"x": y, "closed": true}}}])
+            }
+            _ => unreachable!(),
+        };
+        v[row] = serde_json::json!({"Certified": {"value": value,
+            "cert": {"covers": "Line", "claims": cs}}});
+        let r = replay::replay(&v).expect("replayed");
+        assert!(
+            r.claims.iter().all(|c| c.outcome.class == Class::Strong),
+            "{row}: these premises really are true"
+        );
+        let why = rejected(&v).expect("a false row derived from continuity alone");
+        assert!(why.contains("undecided"), "{row}: {why}");
+    }
+}
+
+#[test]
+fn a_placed_kink_can_have_zero_slope_at_its_endpoint() {
+    for src in ["x*abs(x)", "(x-1)*abs(x-1)"] {
+        let v = certificate(src);
+        assert_eq!(rejected(&v), None, "{src}");
+        let facts = judged(&v, "KinkAt");
+        assert!(!facts.is_empty(), "{src}: no exact one-sided kink proof");
+        assert!(facts.iter().all(|(_, c)| *c == Class::Strong));
     }
 }

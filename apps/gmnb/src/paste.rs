@@ -369,40 +369,74 @@ fn drop_into_text(text: &gtk::Text, mut dropped: String, x: f64) {
         dropped.truncate(end);
     }
     let at = position_at(text, x);
+    let _one_edit = text.freeze_notify();
     match text.selection_bounds() {
         Some((a, b)) if (a.min(b)..=a.max(b)).contains(&at) => {
-            let _one_edit = text.freeze_notify();
             replace_selection(text, &dropped);
             text.set_position(a.min(b));
         }
-        _ => {
-            let mut position = at;
-            text.insert_text(&dropped, &mut position);
+        selection => {
+            // An edit like any other ([`replace_selection`], with nothing
+            // selected at the place): GtkText's own insertion, asked of it
+            // directly, ended the field's undo history (R19-M-03's kind).
+            // The cursor and the selection stay on the text they were on.
+            let (cursor, before) = (text.position(), i32::from(text.text_length()));
+            text.select_region(at, at);
+            replace_selection(text, &dropped);
+            let added = i32::from(text.text_length()) - before;
+            let moved = |p: i32| if p >= at { p + added } else { p };
+            match selection {
+                Some((a, b)) => text.select_region(moved(a), moved(b)),
+                None => text.set_position(moved(cursor)),
+            }
         }
     }
 }
 
 /// Puts `with` in place of `text`'s selection (or at its cursor, with
-/// none), the cursor after it, as GtkText's own paste does
-/// (`paste_received`): one edit, which a caller holding `text`'s property
-/// notifications (`freeze_notify`) makes one change of its text property,
-/// as GTK's own paste is. (The graphing equation field tells its graph of
-/// that property only once an operation is over anyway, R17-M-03: the
-/// empty text in between never forgets the sliders the new text still
-/// uses, R16-M-02.)
+/// none), the cursor after it, as typing it there does: one edit, one
+/// change of its text property for a caller holding its notifications
+/// (`freeze_notify`), and one step of its undo. Ctrl+Z takes it back
+/// whole, the text gone and what it replaced there again, selected, as
+/// GTK takes back a selection typed over. (The graphing equation field
+/// tells its graph of its text only once an operation is over, R17-M-03;
+/// with one step of undo the field is not left empty between two Ctrl+Z
+/// either, where the graph would forget the sliders the text still uses,
+/// R19-M-03.)
 ///
-/// Through GtkText's own key-binding signals, `delete-from-cursor` and
-/// `insert-at-cursor`, so that the edit is undone as GTK's paste is (the
-/// text, then the selection it replaced): GtkText takes a program's direct
-/// insertion or deletion, outside one of its own changes, as irreversible
-/// and clears its undo history for it (GTK 4.22 `gtk_text_insert_text`,
-/// `gtk_text_delete_text`).
-fn replace_selection(text: &gtk::Text, with: &str) {
-    if text.selection_bounds().is_some() {
-        // With a selection, it is what goes, whatever the count.
-        text.emit_delete_from_cursor(gtk::DeleteType::Chars, 1);
+/// As the text's input method does it: GtkText takes what is typed from
+/// its input method context's `commit` ([`im_context`]), and makes of it
+/// one undoable change, selection replaced (GTK 4.22 `gtk_text_commit_cb`,
+/// `gtk_text_enter_text`). No other way in is one step: GtkText takes a
+/// program's direct insertion or deletion as irreversible and clears its
+/// undo history for it (`gtk_text_insert_text`, `gtk_text_delete_text`),
+/// and its key-binding signals `delete-from-cursor` and `insert-at-cursor`
+/// are a step each, with the field as the first left it between two
+/// Ctrl+Z. Those are what is left without an input method context.
+pub(crate) fn replace_selection(text: &gtk::Text, with: &str) {
+    match im_context(text) {
+        Some(typed) if !with.is_empty() => typed.emit_by_name::<()>("commit", &[&with]),
+        _ => {
+            if text.selection_bounds().is_some() {
+                // With a selection, it is what goes, whatever the count.
+                text.emit_delete_from_cursor(gtk::DeleteType::Chars, 1);
+            }
+            if !with.is_empty() {
+                text.emit_insert_at_cursor(with);
+            }
+        }
     }
-    text.emit_insert_at_cursor(with);
+}
+
+/// The input method context `text` types from: the one its own key
+/// controller has (GtkText gives it its context so that the keys go
+/// through the input method first).
+fn im_context(text: &gtk::Text) -> Option<gtk::IMContext> {
+    text.observe_controllers()
+        .iter::<glib::Object>()
+        .flatten()
+        .filter_map(|c| c.downcast::<gtk::EventControllerKey>().ok())
+        .find_map(|keys| keys.im_context())
 }
 
 /// The character position nearest to `x` (in `text`'s coordinates), as

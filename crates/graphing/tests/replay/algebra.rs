@@ -788,6 +788,20 @@ fn coeffs(p: &Poly) -> Option<Vec<Rational>> {
     Some(out)
 }
 
+/// The derivative is identically zero wherever f is defined, by the
+/// replay's own field of fractions (including cancellation of atoms such
+/// as (exp(x)−1)/(exp(x)−1)). Domain continuity is checked by the caller.
+pub fn zero_derivative(f: &Expr, lits: &Lits, vars: &[(String, f64)], unit: Unit) -> bool {
+    let mut field = Field::new(lits, vars, unit);
+    let Some(value) = field.read(f) else {
+        return false;
+    };
+    let Some(derivative) = field.d(&value) else {
+        return false;
+    };
+    derivative.n.is_zero()
+}
+
 /// The numerator N of f⁽ᵏ⁾ = N/D, f a rational function of x alone (no
 /// atoms), as coefficients (index = power). Wherever f⁽ᵏ⁾ exists it is
 /// N/D with D ≠ 0: f is defined on a neighbourhood of the point, where

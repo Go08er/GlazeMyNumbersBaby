@@ -1,5 +1,5 @@
-//! A single-line text editing model (caret, selection, word motion). The
-//! UI layer draws it; this file only knows about strings.
+//! A single-line text editing model (caret, selection, word motion, undo).
+//! The UI layer draws it; this file only knows about strings.
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TextEdit {
@@ -12,7 +12,26 @@ pub struct TextEdit {
     pub max_chars: usize,
     /// Uncommitted input-method text shown at the caret.
     pub preedit: String,
+    /// What Ctrl+Z goes back to, the latest last: the text and the
+    /// selection before each edit ([`TextEdit::undo`]).
+    undone: Vec<Was>,
+    /// What Ctrl+Shift+Z goes forward to again, after an undo.
+    redone: Vec<Was>,
+    /// Where the last typed character left the caret, while typing goes
+    /// on: one typed there next is taken back together with it.
+    typed: Option<usize>,
 }
+
+/// A text and its selection, as an undo or a redo puts them back.
+#[derive(Clone, Debug, PartialEq)]
+struct Was {
+    text: String,
+    cursor: usize,
+    anchor: usize,
+}
+
+/// How many edits a field remembers.
+const UNDO_STEPS: usize = 200;
 
 fn prev_boundary(s: &str, i: usize) -> usize {
     s[..i].char_indices().next_back().map_or(0, |(j, _)| j)
@@ -36,10 +55,77 @@ impl TextEdit {
         e
     }
 
+    /// Replaces the text from outside (a value the page shows, a session
+    /// restored): not an edit of the user's, so there is nothing to undo
+    /// after it, as after GTK's `set_text`.
     pub fn set_text(&mut self, text: &str) {
         self.text = self.clamp(text).to_string();
         self.cursor = self.text.len();
         self.anchor = self.cursor;
+        self.undone.clear();
+        self.redone.clear();
+        self.typed = None;
+    }
+
+    fn now(&self) -> Was {
+        Was {
+            text: self.text.clone(),
+            cursor: self.cursor,
+            anchor: self.anchor,
+        }
+    }
+
+    /// Makes `change`, remembering the text and the selection before it if
+    /// it changes the text: one edit for [`TextEdit::undo`], whatever it
+    /// is made of (a selection deleted and a text put in its place are
+    /// one). A character typed (`typing`) where the last one typed left
+    /// the caret joins that one's edit: a run of typing is taken back
+    /// whole, as GTK's fields take it.
+    fn edit(&mut self, typing: bool, change: impl FnOnce(&mut Self)) {
+        let was = self.now();
+        change(self);
+        if self.text == was.text {
+            return;
+        }
+        let joins = typing && was.cursor == was.anchor && self.typed == Some(was.cursor);
+        if !joins {
+            if self.undone.len() == UNDO_STEPS {
+                self.undone.remove(0);
+            }
+            self.undone.push(was);
+        }
+        self.redone.clear();
+        self.typed = typing.then_some(self.cursor);
+    }
+
+    /// Takes the last edit back (Ctrl+Z): the text as it was before it,
+    /// with the selection it had (what a replacement replaced is selected
+    /// again). False if there is none.
+    pub fn undo(&mut self) -> bool {
+        let Some(was) = self.undone.pop() else {
+            return false;
+        };
+        self.redone.push(self.now());
+        self.restore(was);
+        true
+    }
+
+    /// Makes the edit last taken back again (Ctrl+Shift+Z, Ctrl+Y). False
+    /// if there is none: any new edit forgets them.
+    pub fn redo(&mut self) -> bool {
+        let Some(was) = self.redone.pop() else {
+            return false;
+        };
+        self.undone.push(self.now());
+        self.restore(was);
+        true
+    }
+
+    fn restore(&mut self, was: Was) {
+        self.text = was.text;
+        self.cursor = was.cursor;
+        self.anchor = was.anchor;
+        self.typed = None;
     }
 
     fn clamp<'a>(&self, text: &'a str) -> &'a str {
@@ -68,9 +154,21 @@ impl TextEdit {
     pub fn select_all(&mut self) {
         self.anchor = 0;
         self.cursor = self.text.len();
+        self.typed = None;
     }
 
+    /// Deletes the selection (a cut): an edit of its own.
     pub fn delete_selection(&mut self) -> bool {
+        if !self.has_selection() {
+            return false;
+        }
+        self.edit(false, |e| {
+            e.remove_selection();
+        });
+        true
+    }
+
+    fn remove_selection(&mut self) -> bool {
         if !self.has_selection() {
             return false;
         }
@@ -82,9 +180,21 @@ impl TextEdit {
     }
 
     /// Insert at the caret (replacing any selection); newlines and control
-    /// characters are dropped and the length limit is respected.
+    /// characters are dropped and the length limit is respected. One edit
+    /// (a paste, a keypad key, an assistive technology's text).
     pub fn insert(&mut self, s: &str) {
-        self.delete_selection();
+        self.edit(false, |e| e.put(s));
+    }
+
+    /// [`TextEdit::insert`] for what the keyboard types: a character typed
+    /// straight after another is one edit with it.
+    pub fn type_in(&mut self, s: &str) {
+        let one = s.chars().count() == 1;
+        self.edit(one, |e| e.put(s));
+    }
+
+    fn put(&mut self, s: &str) {
+        self.remove_selection();
         let clean: String = s.chars().filter(|c| !c.is_control()).collect();
         let room = if self.max_chars == 0 {
             usize::MAX
@@ -98,30 +208,34 @@ impl TextEdit {
     }
 
     pub fn backspace(&mut self, word: bool) {
-        if self.delete_selection() || self.cursor == 0 {
-            return;
-        }
-        let start = if word {
-            self.word_left(self.cursor)
-        } else {
-            prev_boundary(&self.text, self.cursor)
-        };
-        self.text.replace_range(start..self.cursor, "");
-        self.cursor = start;
-        self.anchor = start;
+        self.edit(false, |e| {
+            if e.remove_selection() || e.cursor == 0 {
+                return;
+            }
+            let start = if word {
+                e.word_left(e.cursor)
+            } else {
+                prev_boundary(&e.text, e.cursor)
+            };
+            e.text.replace_range(start..e.cursor, "");
+            e.cursor = start;
+            e.anchor = start;
+        });
     }
 
     pub fn delete(&mut self, word: bool) {
-        if self.delete_selection() || self.cursor >= self.text.len() {
-            return;
-        }
-        let end = if word {
-            self.word_right(self.cursor)
-        } else {
-            next_boundary(&self.text, self.cursor)
-        };
-        self.text.replace_range(self.cursor..end, "");
-        self.anchor = self.cursor;
+        self.edit(false, |e| {
+            if e.remove_selection() || e.cursor >= e.text.len() {
+                return;
+            }
+            let end = if word {
+                e.word_right(e.cursor)
+            } else {
+                next_boundary(&e.text, e.cursor)
+            };
+            e.text.replace_range(e.cursor..end, "");
+            e.anchor = e.cursor;
+        });
     }
 
     fn word_left(&self, mut i: usize) -> usize {
@@ -147,6 +261,7 @@ impl TextEdit {
     }
 
     pub fn left(&mut self, select: bool, word: bool) {
+        self.typed = None;
         if !select && self.has_selection() {
             self.cursor = self.selection().0;
         } else {
@@ -162,6 +277,7 @@ impl TextEdit {
     }
 
     pub fn right(&mut self, select: bool, word: bool) {
+        self.typed = None;
         if !select && self.has_selection() {
             self.cursor = self.selection().1;
         } else {
@@ -177,6 +293,7 @@ impl TextEdit {
     }
 
     pub fn home(&mut self, select: bool) {
+        self.typed = None;
         self.cursor = 0;
         if !select {
             self.anchor = 0;
@@ -184,6 +301,7 @@ impl TextEdit {
     }
 
     pub fn end(&mut self, select: bool) {
+        self.typed = None;
         self.cursor = self.text.len();
         if !select {
             self.anchor = self.cursor;
@@ -192,6 +310,7 @@ impl TextEdit {
 
     /// Put the caret at `offset` (snapped to a char boundary).
     pub fn place(&mut self, mut offset: usize, select: bool) {
+        self.typed = None;
         offset = offset.min(self.text.len());
         while !self.text.is_char_boundary(offset) {
             offset -= 1;
@@ -247,6 +366,82 @@ mod tests {
         assert_eq!(e.text, "π");
         e.place(1, false); // inside π: snaps back
         assert_eq!(e.cursor, 0);
+    }
+
+    /// Undo and redo (Ctrl+Z, Ctrl+Shift+Z), as GTK's fields and
+    /// upstream's RichEditBox have them: each edit is taken back whole,
+    /// the selection it replaced selected again; a run of typing is one
+    /// edit; a paste, a keypad key, a cut and a backspace are each their
+    /// own; a new edit forgets what was undone; a text set from outside
+    /// forgets everything.
+    #[test]
+    fn undo_and_redo() {
+        let state = |e: &TextEdit| (e.text.clone(), e.selected_text().to_string());
+        let mut e = TextEdit::new("y=a*x+1", 0);
+        assert!(!e.undo() && !e.redo(), "nothing yet");
+        // A keypad key over the whole text selected: one edit.
+        e.select_all();
+        e.insert("7");
+        assert_eq!(e.text, "7");
+        assert!(e.undo());
+        assert_eq!(state(&e), ("y=a*x+1".into(), "y=a*x+1".into()));
+        assert!(e.redo());
+        assert_eq!(state(&e), ("7".into(), String::new()));
+        assert!(!e.redo());
+        assert!(e.undo());
+        // Backspace over a selection, a cut, a paste over a part.
+        e.backspace(false);
+        assert_eq!(e.text, "");
+        assert!(e.undo());
+        e.end(false);
+        e.left(true, false);
+        assert!(e.delete_selection());
+        assert_eq!(e.text, "y=a*x+");
+        e.insert("22");
+        assert_eq!(e.text, "y=a*x+22");
+        assert!(e.undo());
+        assert_eq!(e.text, "y=a*x+");
+        assert!(e.undo());
+        assert_eq!(state(&e), ("y=a*x+1".into(), "1".into()));
+        assert!(e.redo() && e.redo() && !e.redo());
+        assert_eq!(e.text, "y=a*x+22");
+        // Typing is one edit while it goes on; a move ends the run, and so
+        // does anything that isn't typed.
+        let mut e = TextEdit::new("", 0);
+        for c in ["s", "i", "n"] {
+            e.type_in(c);
+        }
+        e.insert("(");
+        e.type_in("x");
+        e.type_in(")");
+        e.left(false, false);
+        e.type_in("2");
+        assert_eq!(e.text, "sin(x2)");
+        let mut back = Vec::new();
+        while e.undo() {
+            back.push(e.text.clone());
+        }
+        assert_eq!(back, ["sin(x)", "sin(", "sin", ""]);
+        // A new edit forgets what was undone.
+        assert!(e.redo());
+        assert_eq!(e.text, "sin");
+        e.type_in("h");
+        assert!(!e.redo());
+        assert!(e.undo());
+        assert_eq!(e.text, "sin");
+        // What changes nothing is no edit: nothing to take back for it.
+        let mut e = TextEdit::new("x", 1);
+        e.home(false);
+        e.backspace(false);
+        e.end(false);
+        e.delete(false);
+        e.insert("y");
+        assert!(!e.undo(), "{}", e.text);
+        // A text set from outside is not an edit, and ends the history.
+        e.select_all();
+        e.type_in("z");
+        e.set_text("w");
+        assert!(!e.undo() && !e.redo());
     }
 
     #[test]
