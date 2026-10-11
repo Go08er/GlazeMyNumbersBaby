@@ -278,6 +278,32 @@ CI also runs checks that need more than `cargo test --workspace`:
   neither the replayed corpus nor the pool contains one. Those functions'
   rows rest on the certifier alone; the handful the review rounds turned up
   are checked against a hand-written truth table instead.
+- **Random cross-checking** (`--test crossfuzz`, same feature): the checks
+  above take ordinary functions, shifted and scaled. This one generates
+  expressions aimed at the families the review rounds kept finding bugs in
+  (how a typed number is read, definedness lost in a shortcut, counting
+  functions and roots at extremes, numbers a hair apart, two spellings of
+  one function), each under a random number-precision setting, with and
+  without sliders, and compares every pair of the engine's views of the
+  function that should agree: the compiled evaluator, the typed reference
+  evaluator, the interval form and its decorations, the checker's own MPFR
+  evaluation of f, f′ and f″ at 1280 bits, the certified panel against
+  dense sampling, the certificate through the strict replay, the text at N
+  digits against the same text rounded by hand, and the plot against the
+  enclosure. CI runs a short fixed run; the long run (`-- --ignored
+  long_run`, release) is a function of its seed and range alone, and its
+  24,000 cases at seed 10 end with no disagreement. The ten engine bugs it
+  found when it was written are tests in `crossfuzz_found`. What it can't
+  show: a claim the checker can neither prove nor refute (about one case
+  in twenty has one) is set aside, not failed, so a false claim the checker
+  can't decide would pass; and causes found but not fixed are listed in its
+  known-open table and counted in every run. Those are all in the compiled
+  evaluator, the one that draws (the panel and tracing read enclosures,
+  which are right in each): `nCr` and `nPr` far out or next to zero are
+  undefined in doubles where the count has a value; Γ past a double's range
+  keeps about 13 digits; a power with a written ratio past 2⁵³ as its
+  exponent is undefined where its value is 0; and a root of a non-whole
+  degree can be tens of ulps off next to zero.
 - **MPFR oracles** (same feature): `interval_oracle` checks every interval
   operation's enclosure against MPFR at 256 bits on adversarial boxes,
   `simplify_rules` checks every simplifier rule on both sides wherever its

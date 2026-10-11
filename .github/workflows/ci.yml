@@ -116,9 +116,14 @@ jobs:
           # (unconfirmed, unsupported), on a row that doesn't follow from its
           # claims, and if false facts planted into real certificates go
           # uncaught. interval_oracle checks the interval core against MPFR,
-          # simplify_rules every simplifier rule.
+          # simplify_rules every simplifier rule. crossfuzz is the random
+          # cross-checking tester's short fixed run, here with the replay and
+          # the checker's own MPFR evaluation among the views it compares
+          # (its long run is `-- --ignored long_run`, not run here);
+          # crossfuzz_found keeps the bugs it found fixed.
           nix develop -c cargo test --locked -p graphing --features mpfr-oracle \
-            --test certify_replay --test interval_oracle --test simplify_rules
+            --test certify_replay --test interval_oracle --test simplify_rules \
+            --test crossfuzz --test crossfuzz_found
       - name: Clippy (all targets, warnings are errors)
         run: |
           nix develop -c cargo clippy --workspace --all-targets --locked -- -D warnings
