@@ -1031,6 +1031,14 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
             let (s, c) = se::sinh_cosh(&ea);
             let t = se::div(&s, &c);
             let v = t[0].meet(&iv::tanh(&ea[0]));
+            // Again from tanh′ = 1 − tanh² = sech², which keeps the
+            // coefficients' signs far out, where sinh/cosh's are a wide
+            // number over a wide one (c₀ − t₀·s₀ of two enclosures a box
+            // apart: tanh(x)³'s f″ at 18 took the whole budget at every
+            // precision, undecided).
+            let sech2 = iv::recip(&iv::powi(&c[0], 2));
+            let ode = se::tanh_ode(&ea, v.clone(), sech2);
+            let t = t.iter().zip(&ode).map(|(a, b)| a.meet(b)).collect();
             se::with_value(t, v)
         }
         Sech => se::recip(&se::sinh_cosh(&a()).1),
@@ -1063,62 +1071,113 @@ fn call(f: Func, args: &[Expr], x: &S, n: usize, ctx: &Ctx<'_>) -> S {
         Acoth => eval(&Expr::Call(Atanh, vec![recip_expr(&args[0])]), x, n, ctx),
         Sqrt => se::sqrt(&a()),
         Cbrt => pow_rat(&a(), 1, 3),
+        // root(a, d), the language's rule (`graphing::functions::root`,
+        // and `interval::elem::root` over boxes), by the degree d's value:
+        //
+        // * d = 0, or no number (±∞, undefined): no root, whatever a is;
+        // * d a whole number: the real d-th root a^(1/d), which an odd d
+        //   takes of a negative a too (−|a|^(1/d)) and an even d of a ≥ 0
+        //   only; a = 0 only for d > 0;
+        // * any other d: a ≥ 0 only (a = 0 only for d > 0), a^(1/d): a
+        //   negative a has no root, though 1/d may itself be whole
+        //   (root(−8, 0.5) is no (−8)², found by `tests/crossfuzz.rs`);
+        // * a degree that varies with x: the same at each x, by its value
+        //   there (root(x, x) is −1 at −1 and nothing at −½).
+        //
+        // Whether d is whole is its exact value's to say, never its
+        // double's or its enclosure's (docs/ti-conventions.md, "Literals
+        // are the decimals typed": a typed 9007199254740993 is odd, a
+        // typed 3.0000000000000001 no integer).
         Root => {
             let ea = a();
             let en = eval(&args[1], x, n, ctx);
             let k = &en[0];
-            if contains_x(&args[1]) {
-                return se::only_value_unless(se::constant(Iv::unknown(), n), false);
-            }
-            // The degree exactly, where it has an exact value (a typed
-            // 9007199254740993 is odd, though its double is even; a typed
-            // 3.0000000000000001 is no integer, though no binary point
-            // holds it: review 13, R13-M-04); else its enclosure, when a
-            // point.
-            // Any size: a typed −(10³⁰¹ + 1) is odd (review 14, R14-M-04).
-            // A degree defined nowhere: so is the root.
+            // A radicand or a degree defined nowhere: so is the root.
             if ea[0].empty || k.empty {
                 return vec![Iv::empty(); n + 1];
             }
+            let open = || se::only_value_unless(se::constant(Iv::unknown(), n), false);
+            let varies = contains_x(&args[1]);
+            // The degree exactly, where it is one number with an exact
+            // value (a typed 9007199254740993 is odd, though its double is
+            // even; a typed 3.0000000000000001 is no integer, though no
+            // binary point holds it: review 13, R13-M-04; any size, a typed
+            // −(10³⁰¹ + 1) is odd: review 14, R14-M-04); else by its
+            // enclosure over the box: a point is that number, a box
+            // holding no integer is nowhere whole.
+            let exact = if varies {
+                None
+            } else {
+                super::exact::eval(&args[1], None, ctx.lits, ctx.vars, ctx.unit)
+            };
+            let whole: Option<rug::Integer> = match &exact {
+                Some(q) => q.is_integer().then(|| q.numer().clone()),
+                None if k.is_point() && k.lo.is_infinite() => {
+                    // (An infinite degree is no degree.)
+                    return vec![Iv::empty(); n + 1];
+                }
+                None if k.is_point() && k.lo.is_integer() => match k.lo.to_integer() {
+                    Some(d) => Some(d),
+                    None => return open(),
+                },
+                None => None,
+            };
             // (An exact degree is a defined one, the exact reader having
             // none where a step is undefined; a degree read from its
             // enclosure is defined only where that is, and the root with
             // it: review 17, R17-M-02, root(4 + x, 2 + ⌊√(sin²4 + cos²4 −
             // 1 − 10⁻¹⁰⁰)⌋) was proved 2 at 0, the degree's possibly
             // undefined point 2 read as a defined 2.)
-            let (whole, exact) =
-                match super::exact::eval(&args[1], None, ctx.lits, ctx.vars, ctx.unit) {
-                    Some(q) if q.is_integer() => (Some(Some(q.numer().clone())), true),
-                    Some(_) => (None, true),
-                    None if k.is_point() && k.lo.is_integer() => (Some(k.lo.to_integer()), false),
-                    None if k.is_point() => (None, false),
-                    None => return se::only_value_unless(se::constant(Iv::unknown(), n), false),
-                };
-            let keep = |s: S| if exact { s } else { se::with_operand(s, k) };
-            if let Some(k) = whole {
-                let Some(k) = k else {
-                    return se::only_value_unless(se::constant(Iv::unknown(), n), false);
-                };
-                if k == 0 {
+            let keep = |s: S| {
+                if exact.is_some() {
+                    s
+                } else {
+                    se::with_operand(s, k)
+                }
+            };
+            if let Some(d) = whole {
+                if d == 0 {
                     return vec![Iv::empty(); n + 1];
                 }
-                let (p, q) = if k > 0 { (1, k) } else { (-1, -k) };
-                return keep(if q == 1 {
+                let (p, q) = if d > 0 { (1, d) } else { (-1, -d) };
+                let s = keep(if q == 1 {
                     se::powi(&ea, p)
                 } else {
                     pow_ratio(&ea, &rug::Integer::from(p), &q)
                 });
+                // A varying degree that is this whole number over the box
+                // may be another beside it (root(x, ⌊x⌋) at 2): the value
+                // alone.
+                return se::only_value_unless(s, !varies);
             }
-            // A non-integer degree: x ≥ 0, x^(1/n) (its value defined only
-            // where the degree is: [`iv::pow_const`] keeps the reciprocal's
-            // decoration, an integer point too).
+            // No whole degree known. Nowhere whole on the box (an exact
+            // value that is no integer, a point that is none, an enclosure
+            // holding none): a ≥ 0 only, a^(1/d). Else the degree may be
+            // whole somewhere, which matters to a negative a alone: with
+            // a ≥ 0 throughout and d away from 0 every rule above gives
+            // a^(1/d).
+            let fractional = exact.is_some() || k.is_point() || iv::no_jump(k, 0.0);
+            if !(k.ne0() && k.bounded() && (fractional || ea[0].ge(0.0))) {
+                return open();
+            }
+            // (The positive-base power: its value is defined only where
+            // the degree is, the reciprocal keeping the degree's
+            // decoration. Not [`iv::pow_const`], which takes a negative
+            // base to an exponent that is a whole point: 1/0.5.)
             let e = iv::recip(k);
-            let value = iv::pow_const(&ea[0], &e);
-            keep(if ea[0].gt(0.0) {
-                se::pow_real(&ea, &e, value)
-            } else {
-                se::only_value_unless(se::constant(value, n), false)
-            })
+            let value = iv::pow_var(&ea[0], &e);
+            if !ea[0].gt(0.0) {
+                let s = se::only_value_unless(se::constant(value, n), false);
+                return if varies { s } else { keep(s) };
+            }
+            if varies {
+                // a > 0 and d ≠ 0 on the box, so beside each of its points
+                // too where both have derivatives: e^(ln a / d) there.
+                let s = se::exp(&se::div(&se::ln(&ea), &en));
+                let v = s[0].meet(&value);
+                return se::with_value(s, v);
+            }
+            keep(se::pow_real(&ea, &e, value))
         }
         Ln => se::ln(&a()),
         Log => {

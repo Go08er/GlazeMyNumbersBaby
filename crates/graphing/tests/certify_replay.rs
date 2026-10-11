@@ -2702,3 +2702,633 @@ fn listings_that_miss_the_true_value_are_refused() {
     }
     assert!(missed.is_empty(), "listings not refused: {missed:#?}");
 }
+
+// ------------------------------------------------------------ the tester's findings
+
+/// The certificate of `src` typed to `digits` digits with the sliders
+/// `vars`, as JSON.
+fn certificate_at(src: &str, digits: Option<u8>, vars: &[(&str, f64)]) -> serde_json::Value {
+    let parse = graphing::lexer::ParseOptions {
+        literal_digits: digits,
+        ..Default::default()
+    };
+    let vars: BTreeMap<String, f64> = vars.iter().map(|(n, v)| (n.to_string(), *v)).collect();
+    let opts = CompileOptions {
+        trig_unit: TrigUnit::Radians,
+        variables: &vars,
+    };
+    let a = graphing::certify::certify_text_with(src, parse, opts, DEFAULT_BUDGET, None)
+        .expect("certified");
+    serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap()
+}
+
+/// The claims of a kind the replay judged, with their classes.
+fn judged(v: &serde_json::Value, kind: &str) -> Vec<(String, Class)> {
+    replay::replay(v)
+        .expect("replayed")
+        .claims
+        .iter()
+        .map(|c| (format!("{:?}", c.claim), c.outcome.class))
+        .filter(|(c, _)| c.starts_with(kind))
+        .collect()
+}
+
+/// `tests/crossfuzz.rs`, the replay's root: root(a, d) takes a negative a
+/// for an odd whole degree d alone. A degree no whole number was read as
+/// the power 1/d by the rule for a constant exponent, which takes a
+/// negative base to a whole one: root(−8, 0.5) was (−8)² = 64, and the
+/// certifier's true "undefined" refuted. The rule is the language's
+/// (`graphing::functions::root`): d = 0 or infinite, nothing; d whole, the
+/// real d-th root (odd d: of any a; even d: of a ≥ 0); any other d, a ≥ 0
+/// only; a = 0 only for d > 0; a degree that varies with x, the same at
+/// each x.
+#[test]
+fn a_root_takes_a_negative_number_to_an_odd_whole_degree_alone() {
+    replay::iv::init();
+    let at = |src: &str, lo: f64, hi: f64, vars: &[(String, f64)]| {
+        let (e, lits) = read(src);
+        let ctx = replay::eval::Ctx {
+            unit: replay::iv::Unit::Radians,
+            lits: &lits,
+            vars,
+        };
+        replay::eval::series(&e, lo, hi, 1, &ctx)
+    };
+    // (source, x, f(x): None where f is undefined.)
+    let table: &[(&str, f64, Option<f64>)] = &[
+        // No whole degree: a ≥ 0 only, though 1/d is whole.
+        ("root(x,0.5)", -8.0, None),
+        ("root(x,0.5)", 4.0, Some(16.0)),
+        ("root(x,0.5)", 0.0, Some(0.0)),
+        ("root(x-6,0.5)", 0.0, None),
+        ("root(-8,0.5)", 0.0, None),
+        ("root(ln(x),0.5)", 0.5, None),
+        ("root(x,0.25)", -2.0, None),
+        ("root(x,0.25)", 2.0, Some(16.0)),
+        ("root(x,-0.5)", -2.0, None),
+        ("root(x,-0.5)", 2.0, Some(0.25)),
+        ("root(x,-0.5)", 0.0, None),
+        ("root(x,1/4)", -2.0, None),
+        ("root(x,1/4)", 2.0, Some(16.0)),
+        ("root(x,2.5)", -32.0, None),
+        ("root(x,2.5)", 32.0, Some(4.0)),
+        // (Read from its enclosure, a point: √¼.)
+        ("root(x,sqrt(1/4))", -2.0, None),
+        ("root(x,sqrt(1/4))", 2.0, Some(4.0)),
+        // A whole degree: odd of any a, even of a ≥ 0.
+        ("root(x,3)", -8.0, Some(-2.0)),
+        ("root(x,-3)", -8.0, Some(-0.5)),
+        ("root(x,2)", -4.0, None),
+        ("root(x,2)", 4.0, Some(2.0)),
+        ("root(x,-2)", 4.0, Some(0.5)),
+        ("root(x,-2)", 0.0, None),
+        ("root(x,-3)", 0.0, None),
+        ("root(x,0.5*6)", -8.0, Some(-2.0)),
+        ("root(x,sqrt(4))", 4.0, Some(2.0)),
+        ("root(x,sqrt(4))", -4.0, None),
+        ("root(x,sqrt(9))", -8.0, Some(-2.0)),
+        // No degree.
+        ("root(x,0)", 4.0, None),
+        ("root(x,0.1+0.2-0.3)", 4.0, None),
+        // A degree that varies: by its value at each x.
+        ("root(x,x)", -1.0, Some(-1.0)),
+        ("root(x,x)", -0.5, None),
+        ("root(x,x)", -2.0, None),
+        ("root(x,x)", 0.0, None),
+        ("root(x,x)", 0.5, Some(0.25)),
+        ("root(x,x)", 2.0, Some(std::f64::consts::SQRT_2)),
+        ("root(-8,x)", 3.0, Some(-2.0)),
+        ("root(-8,x)", 2.0, None),
+        ("root(-8,x)", 0.5, None),
+        ("root(2,x)", 0.5, Some(4.0)),
+        ("root(2,x)", -0.5, Some(0.25)),
+        ("root(x,floor(x))", -0.5, Some(-2.0)),
+        ("root(x,floor(x))", 0.5, None),
+        ("root(x,1/x)", 0.5, Some(std::f64::consts::FRAC_1_SQRT_2)),
+        ("root(x,1/x)", -0.5, None),
+    ];
+    for &(src, x, want) in table {
+        let v = &at(src, x, x, &[])[0];
+        match want {
+            None => assert!(v.empty, "{src} at {x}: {v:?}, not undefined"),
+            Some(y) => {
+                let (lo, hi) = (v.lo.to_f64(), v.hi.to_f64());
+                let near = lo <= y.next_up() && y.next_down() <= hi && hi - lo <= 1e-12;
+                assert!(!v.empty && v.def && near, "{src} at {x}: {v:?}, not {y}");
+            }
+        }
+    }
+    // An infinite degree is none (a slider there).
+    let inf = [("a".to_string(), f64::INFINITY)];
+    assert!(at("root(x,a)", 4.0, 4.0, &inf)[0].empty);
+    // A degree only enclosed (e): no whole number, so a ≥ 0 only.
+    assert!(at("root(x,e)", -2.0, -2.0, &[])[0].empty);
+    let v = &at("root(x,e)", 2.0, 2.0, &[])[0];
+    assert!(v.def && v.gt(1.2904) && v.lt(1.2905), "root(2, e): {v:?}");
+    // Derivatives: of the power where the degree is constant (root(x, 0.5)
+    // is x² on x > 0: f′(4) = 8); of e^(ln a / d) where it varies over a
+    // box with a > 0 and d ≠ 0 (x^(1/x) at 2.5: f·(1 − ln x)/x²); none
+    // where a varying degree is whole on the box (it may be another
+    // beside it), nor where the radicand may be negative and the degree
+    // whole somewhere.
+    let s = at("root(x,0.5)", 4.0, 4.0, &[]);
+    assert!(s[1].def && s[1].gt(7.999) && s[1].lt(8.001), "{:?}", s[1]);
+    let s = at("root(x,x)", 2.5, 2.5, &[]);
+    assert!(s[1].def && s[1].gt(0.0193) && s[1].lt(0.0194), "{:?}", s[1]);
+    let s = at("root(x,x)", 1.5, 2.5, &[]);
+    assert!(
+        s[0].def && s[0].gt(1.0) && s[0].lt(2.0) && s[1].def,
+        "{s:?}"
+    );
+    let s = at("root(x,x)", 2.0, 2.0, &[]);
+    assert!(s[0].def && !s[1].def, "{s:?}");
+    let s = at("root(x,x)", -3.5, -2.5, &[]);
+    assert!(!s[0].empty && !s[0].def, "{:?}", s[0]);
+    // The certificates the tester's cases stand for replay in full, their
+    // "undefined" proved.
+    for src in [
+        "root(x-6,0.5)",
+        "root(-8,0.5)",
+        "root(ln(x),0.5)",
+        "exp(root(x-6,0.5))",
+        "root(x^2-3,0.5)",
+        "root(x,x)",
+        "root(2,x)",
+        "root(x,e)",
+    ] {
+        assert_eq!(rejected(&certificate(src)), None, "{src}");
+    }
+    let v = certificate("root(-8,0.5)");
+    assert_eq!(
+        judged(&v, "Undefined"),
+        [("Undefined((0.0, 0.0))".to_string(), Class::Strong)]
+    );
+}
+
+/// `tests/crossfuzz.rs`, the replay's `OneCross`: a crossing is refuted
+/// only when neither way across holds. The low end's side was read off
+/// "not shown above c", so an end the replay couldn't place counted as
+/// below c, and a true crossing from above was refuted at its high end.
+#[test]
+fn a_crossing_from_an_end_not_placed_is_not_refuted() {
+    // f″ = 2 − 6x on (0, ∞), through ∞ − ∞ at the first double: proved
+    // (the series over the box cancel it), no longer refuted.
+    let src = "log(x,2)-log(x,2)+(x^2-x^3+6)";
+    let v = certificate(src);
+    assert_eq!(rejected(&v), None, "{src}");
+    let crossings = judged(&v, "OneCross");
+    assert!(
+        crossings.iter().any(|(c, _)| c.contains("x: (5e-324,")),
+        "the crossing from the first double is no longer claimed: retarget ({crossings:?})"
+    );
+    for (c, class) in &crossings {
+        assert!(
+            matches!(class, Class::Strong | Class::Weak),
+            "{c}: {class:?}"
+        );
+    }
+    // f′ of the source's tree has no value at 1, the first point of the
+    // domain (acosh′ there): the crossing on [1, 2.5] is left open.
+    let src = "acosh(x)-acosh(x)+sin(x)";
+    let v = certificate(src);
+    let crossings = judged(&v, "OneCross");
+    assert!(
+        crossings
+            .iter()
+            .any(|(c, _)| c.contains("x: (1.0, 2.5), of: F(1)")),
+        "the crossing from the domain's end is no longer claimed: retarget ({crossings:?})"
+    );
+    let r = replay::replay(&v).expect("replayed");
+    for c in &r.claims {
+        assert_ne!(c.outcome.class, Class::Refuted, "{src}: {:?}", c.claim);
+    }
+    // f(1) is (−∞, 0.3] to the replay (10^5000 + a − 10^5000 has no known
+    // value), f(4) below 0: weak, by the certifier's tree.
+    let src = "min((10^5000)+a-(10^5000)+ln(x),x-x^3+0.3)";
+    let v = certificate_at(src, Some(16), &[("a", 1.0)]);
+    let crossings = judged(&v, "OneCross");
+    assert!(
+        !crossings.is_empty(),
+        "{src}: no crossing claimed: retarget"
+    );
+    for (c, class) in &crossings {
+        assert_eq!(*class, Class::Weak, "{src}: {c}");
+    }
+    for c in &replay::replay(&v).expect("replayed").claims {
+        assert_ne!(c.outcome.class, Class::Refuted, "{src}: {:?}", c.claim);
+    }
+}
+
+/// `tests/crossfuzz.rs`, "f is periodic, so no oblique asymptote": it
+/// follows from f's period (m·P = 0), as far as the certificate's fact of
+/// one replays, and is never refuted by f's size at points far out.
+#[test]
+fn a_periodic_function_has_no_oblique_asymptote_whatever_its_size() {
+    const FACT: &str = "Simplifier(\"f is periodic";
+    // About 10⁹³²⁶⁴⁰⁰⁰⁰ everywhere: f/x is nowhere near 0 at any double.
+    let v = certificate_at("tan(x)+cosh(a)", None, &[("a", 2147483649.0)]);
+    assert_eq!(rejected(&v), None);
+    let facts = judged(&v, FACT);
+    assert_eq!(facts.len(), 1, "{facts:?}");
+    assert_eq!(facts[0].1, Class::Strong, "{facts:?}");
+    // Past every double at each point tried; its period only agrees at
+    // points (the algebra doesn't multiply the power out), so weak.
+    let v = certificate("cos(x)^(-9007199254740993/1000001)");
+    assert_eq!(rejected(&v), None);
+    let facts = judged(&v, FACT);
+    assert_eq!(facts.len(), 1, "{facts:?}");
+    assert!(
+        matches!(facts[0].1, Class::Strong | Class::Weak),
+        "{facts:?}"
+    );
+    // Ordinary ones are proved by their period now (weak before, by f/x
+    // at points).
+    for src in ["sin(x)", "tan(x)", "sin(x)+cos(2x)", "1/(2+cos(x))"] {
+        let v = certificate(src);
+        assert_eq!(rejected(&v), None, "{src}");
+        let facts = judged(&v, FACT);
+        assert_eq!(facts.len(), 1, "{src}: {facts:?}");
+        assert_eq!(facts[0].1, Class::Strong, "{src}");
+    }
+}
+
+const PERIODIC: &str = "f is periodic: f − (m·x + b) does not tend to 0 for m ≠ 0";
+const EVEN: &str = "f is even (simplifier): f(−x) = f(x), on a domain symmetric about 0";
+const ODD: &str = "f is odd (simplifier): f(−x) = −f(x), on a domain symmetric about 0";
+
+fn fact(text: &str) -> serde_json::Value {
+    serde_json::json!({"Simplifier": {"fact": text}})
+}
+
+/// The oblique row made up as "none", f called periodic, with the facts
+/// `extra` beside.
+fn line_denied(v: &mut serde_json::Value, extra: &[&str]) {
+    let mut claims = vec![fact(PERIODIC)];
+    claims.extend(extra.iter().map(|f| fact(f)));
+    v["oblique"] = serde_json::json!({"Certified": {
+        "value": [], "cert": {"covers": "Line", "claims": claims}}});
+}
+
+/// The x-intercepts row made up as "none" for x² − 1: negative over the
+/// window [−½, ½], said to be one period of f by `period`.
+fn no_zeros_over_a_window(v: &mut serde_json::Value, period: &str) {
+    v["x_intercepts"] = serde_json::json!({"Certified": {"value": [], "cert": {
+        "covers": {"Period": {"a": -0.5, "b": 0.5}}, "claims": [
+            {"Beyond": {"x": {"a": -0.5, "b": 0.5}, "of": {"F": "F0"},
+                "c": 0.0, "above": false}},
+            fact(period)]}}});
+}
+
+/// The extrema row made up as "none" for x²: f′ negative up to the last
+/// double below 0 and positive from the first above it, 0 itself between
+/// two gaps, each cleared of zeros (truly: none lies strictly inside);
+/// `zero`: with f′(0) = 0 claimed too.
+fn minimum_walled_off(v: &mut serde_json::Value, zero: bool) {
+    let f1 = serde_json::json!({"F": "F1"});
+    let tiny = 5e-324;
+    let mut claims = vec![
+        serde_json::json!({"TailBeyond": {"side": "Left", "from": -tiny, "of": f1,
+            "c": 0.0, "above": false}}),
+        serde_json::json!({"TailBeyond": {"side": "Right", "from": tiny, "of": f1,
+            "c": 0.0, "above": true}}),
+    ];
+    for (a, b) in [(-tiny, 0.0), (0.0, tiny)] {
+        claims.push(serde_json::json!({"Gap": {"x": {"a": a, "b": b}}}));
+        claims.push(serde_json::json!({"GapClear": {"x": {"a": a, "b": b}, "of": f1}}));
+    }
+    if zero {
+        claims.push(
+            serde_json::json!({"Value": {"x": {"a": 0.0, "b": 0.0}, "of": f1,
+            "lo": 0.0, "hi": 0.0}}),
+        );
+    }
+    v["extrema"] = serde_json::json!({"Certified": {
+        "value": [], "cert": {"covers": "Line", "claims": claims}}});
+}
+
+/// The parity row made up as `kind` by the simplifier's fact alone.
+fn parity_called(v: &mut serde_json::Value, kind: &str, text: &str) {
+    v["parity"] = serde_json::json!({"Certified": {
+        "value": kind, "cert": {"covers": "Line", "claims": [fact(text)]}}});
+}
+
+/// Every row but `keep` withheld (unknown).
+fn withhold_all_but(v: &mut serde_json::Value, keep: &str) {
+    for row in [
+        "domain",
+        "x_intercepts",
+        "y_intercept",
+        "parity",
+        "period",
+        "extrema",
+        "inflections",
+        "monotonicity",
+        "range",
+        "vertical",
+        "horizontal",
+        "oblique",
+    ] {
+        if row != keep {
+            v[row] = serde_json::json!({"Unknown": {"reason": "withheld"}});
+        }
+    }
+}
+
+/// Parity made up as `kind` by the simplifier's fact alone, every other
+/// row withheld.
+fn parity_alone(v: &mut serde_json::Value, kind: &str, text: &str) {
+    withhold_all_but(v, "parity");
+    parity_called(v, kind, text);
+}
+
+/// The false version of each claim the third pass stopped refuting, and
+/// what its audit of unknowns read as answers found accepted: each must
+/// still be (or now is) refused.
+const FOUND: &[Plant] = &[
+    // ---- a root of a degree no whole number, at a negative radicand
+    ("root(x-6,0.5)", "root: f(0) = (−6)² claimed", |v| {
+        made_up_y_intercept(v, 36.0, true);
+    }),
+    ("root(-8,0.5)", "root: f(0) = 64 claimed", |v| {
+        made_up_y_intercept(v, 64.0, true);
+    }),
+    (
+        "root(x-6,0.5)",
+        "root: defined at a negative radicand",
+        |v| {
+            let cs = claims_of(v, "parity");
+            let i = cs
+                .iter()
+                .position(|c| c.get("Undefined").is_some())
+                .expect("an Undefined claim in parity: retarget the plant");
+            cs[i] = serde_json::json!({"Defined": cs[i]["Undefined"].clone()});
+        },
+    ),
+    ("root(x,0.5)", "root: x² on x ≥ 0 called even", |v| {
+        parity_called(v, "Even", EVEN);
+    }),
+    // ---- a crossing
+    (
+        "log(x,2)-log(x,2)+(x^2-x^3+6)",
+        "crossing: claimed where f″ is below 0 at both ends",
+        |v| {
+            first(v, "inflections", "OneCross")["x"] =
+                serde_json::json!({"a": 0.5, "b": 0.9999999999999999});
+        },
+    ),
+    (
+        "log(x,2)-log(x,2)+(x^2-x^3+6)",
+        "crossing: claimed from an end not placed to one f″ is above 0 at",
+        |v| {
+            // (f″ = 2 − 6x > 0 up to 1/3: no zero in (0, 1/4].)
+            for c in claims_of(v, "inflections").iter_mut() {
+                if let Some(o) = c.get_mut("OneCross") {
+                    o["x"] = serde_json::json!({"a": 5e-324, "b": 0.25});
+                }
+            }
+            *value_of(v, "inflections") = serde_json::json!([]);
+        },
+    ),
+    // ---- no oblique asymptote, by a period
+    (
+        "x+1/x",
+        "oblique: its line denied, f called periodic",
+        |v| {
+            line_denied(v, &[]);
+        },
+    ),
+    ("x+1/x", "oblique: its line denied, by a period of 0", |v| {
+        line_denied(v, &["f(x + 0) = f(x) wherever f is defined"]);
+    }),
+    (
+        "x+1/x",
+        "oblique: its line denied, by a period in [0, 0]",
+        |v| {
+            line_denied(
+                v,
+                &["f(x + P) = f(x) wherever f is defined, P ∈ [0e0, 0e0]"],
+            );
+        },
+    ),
+    (
+        "x+1/x",
+        "oblique: its line denied, by a period in [−1, 1]",
+        |v| {
+            line_denied(
+                v,
+                &["f(x + P) = f(x) wherever f is defined, P ∈ [-1e0, 1e0]"],
+            );
+        },
+    ),
+    ("x+1/x", "oblique: its line denied, by a period 2π", |v| {
+        line_denied(v, &["f(x + 2·π) = f(x) wherever f is defined"]);
+    }),
+    (
+        "x+1/x",
+        "oblique: its line denied, the rest 1/x of period 0",
+        |v| {
+            let val = |x: f64, y: f64| {
+                serde_json::json!({"Value": {"x": {"a": x, "b": x}, "of": {"F": "F0"},
+                    "lo": y, "hi": y}})
+            };
+            v["oblique"] = serde_json::json!({"Certified": {"value": [], "cert": {
+                "covers": "Line", "claims": [val(1.0, 2.0), val(2.0, 2.5),
+                    fact("f − 1·x = Div(1,x) has period 0: no oblique asymptote")]}}});
+        },
+    ),
+    // ---- a period that is none
+    (
+        "x^2-1",
+        "period: no zeros, over a window clear of them and a period in [−1, 1]",
+        |v| {
+            no_zeros_over_a_window(v, "f(x + P) = f(x) wherever f is defined, P ∈ [-1e0, 1e0]");
+        },
+    ),
+    (
+        "x^2-1",
+        "period: no zeros, over a window clear of them and a period of 0",
+        |v| no_zeros_over_a_window(v, "f(x + 0) = f(x) wherever f is defined"),
+    ),
+    // ---- unbounded, by a root of a negative degree
+    (
+        "root(1/x,-2)",
+        "pole: √x called unbounded beside 0",
+        |v| {
+            let cs = claims_of(v, "vertical");
+            let i = cs
+                .iter()
+                .position(|c| c.get("Bounded").is_some())
+                .expect("a Bounded claim in vertical: retarget the plant");
+            let b = cs[i]["Bounded"].clone();
+            cs[i] = serde_json::json!({"Unbounded": {"near": b["near"], "at": b["at"]}});
+            *value_of(v, "vertical") = serde_json::json!([{"At": {"lo": 0.0, "hi": 0.0}}]);
+        },
+    ),
+    // ---- a zero between two gaps
+    (
+        "x^2",
+        "gaps: the minimum walled off, f′(0) = 0 claimed",
+        |v| {
+            minimum_walled_off(v, true);
+        },
+    ),
+    (
+        "x^2",
+        "gaps: the minimum walled off, 0 left to the gaps",
+        |v| {
+            minimum_walled_off(v, false);
+        },
+    ),
+    // ---- a piece of the domain beside an excluded family
+    (
+        "tan(x)*sqrt(x)",
+        "domain: [0, ∞) less tan's poles extended to the line less them",
+        |v| {
+            value_of(v, "domain")["pieces"] = serde_json::json!([{"lo": "NegInf", "hi": "PosInf"}]);
+        },
+    ),
+    // ---- a parity with no domain known symmetric
+    (
+        "ln(x)-ln(x)+x^2",
+        "parity: x² on x > 0 called even, every other row withheld",
+        |v| parity_alone(v, "Even", EVEN),
+    ),
+    (
+        "ln(x)-ln(x)+x^3",
+        "parity: x³ on x > 0 called odd, every other row withheld",
+        |v| parity_alone(v, "Odd", ODD),
+    ),
+];
+
+/// A fact tested at sample points is borne out only by values the replay
+/// places there. (10^5000 + 1) − 10^5000 + x is x + 1 (the simplifier's
+/// form), but the replay's own enclosure of it at 160 bits is 10⁴⁹⁵² wide:
+/// it overlapped itself mirrored, and its negative, at every point, so f
+/// was "even" and "odd" alike, weakly, and either parity made up for it
+/// was accepted (the third pass's audit). Nothing placed, nothing
+/// confirmed: such a fact is left open, the true ones of its certificate
+/// (f is the line x + 1) with it.
+#[test]
+fn samples_that_place_nothing_bear_nothing_out() {
+    let src = "(10^5000+1)-(10^5000)+x";
+    let base = certificate(src);
+    for (kind, text) in [("Even", EVEN), ("Odd", ODD)] {
+        let mut v = base.clone();
+        parity_called(&mut v, kind, text);
+        let facts = judged(&v, "Simplifier(\"f is ");
+        assert_eq!(facts.len(), 1, "{src}: {facts:?}");
+        assert_eq!(facts[0].1, Class::Unconfirmed, "{src} called {kind}");
+        assert!(rejected(&v).is_some(), "{src} called {kind}: accepted");
+    }
+    // Its own line is not refuted, and not confirmed by overlap either.
+    let lines = judged(&base, "Simplifier(\"f = 1·x + 1");
+    assert!(!lines.is_empty(), "{src}: no line fact: retarget");
+    for (c, class) in &lines {
+        assert_eq!(*class, Class::Unconfirmed, "{c}");
+    }
+    // Nor is a piece of a domain shown by not being refuted: √x typed so
+    // that the replay places its radicand nowhere, "defined on all of ℝ",
+    // every other row withheld, was let through with a note.
+    let src = "sqrt((10^5000+1)-(10^5000)-1+x)";
+    let mut v = certificate(src);
+    withhold_all_but(&mut v, "domain");
+    v["domain"] = serde_json::json!({"Certified": {
+        "value": {"pieces": [{"lo": "NegInf", "hi": "PosInf"}], "excluded": []},
+        "cert": {"covers": "Line", "claims": []}}});
+    let why = rejected(&v).expect("a domain of ℝ for √x, not placed: accepted");
+    assert!(why.contains("not shown defined"), "{why}");
+    // Where f is placed, the same facts are judged as before: x² + 1 typed
+    // so that it is, even (weakly, or by its tree) and not odd.
+    let src = "x^2+(1-1+1)";
+    let base = certificate(src);
+    assert_eq!(rejected(&base), None, "{src}");
+    let mut v = base.clone();
+    parity_called(&mut v, "Odd", ODD);
+    let facts = judged(&v, "Simplifier(\"f is odd");
+    assert_eq!(facts.len(), 1, "{facts:?}");
+    assert_eq!(facts[0].1, Class::Refuted, "{src} called odd");
+}
+
+#[test]
+fn the_false_versions_of_what_the_third_pass_let_through_are_refused() {
+    let mut missed = Vec::new();
+    let mut cache: BTreeMap<&str, serde_json::Value> = BTreeMap::new();
+    for &(src, what, plant) in FOUND {
+        let base = cache.entry(src).or_insert_with(|| certificate(src)).clone();
+        if let Some(why) = rejected(&base) {
+            panic!("{src}: the true certificate is rejected: {why}");
+        }
+        let mut v = base.clone();
+        plant(&mut v);
+        match rejected(&v) {
+            Some(why) => println!("{src}: {what}: caught ({why})"),
+            None => {
+                println!("{src}: {what}: MISSED");
+                missed.push(format!("{src}: {what}"));
+            }
+        }
+    }
+    assert!(missed.is_empty(), "not refused: {missed:#?}");
+    // What is refuted is proved false: the root's value at a negative
+    // radicand, a crossing with one sign at both ends, a made-up period.
+    let refuted = |src: &str, what: &str| {
+        let (_, _, plant) = FOUND
+            .iter()
+            .find(|(s, w, _)| *s == src && *w == what)
+            .expect("the plant");
+        let mut v = certificate(src);
+        plant(&mut v);
+        let r = replay::replay(&v).expect("replayed");
+        assert!(
+            r.claims.iter().any(|c| c.outcome.class == Class::Refuted),
+            "{src}: {what}: nothing refuted"
+        );
+    };
+    refuted("root(x-6,0.5)", "root: f(0) = (−6)² claimed");
+    refuted("root(x-6,0.5)", "root: defined at a negative radicand");
+    refuted("root(x,0.5)", "root: x² on x ≥ 0 called even");
+    refuted(
+        "log(x,2)-log(x,2)+(x^2-x^3+6)",
+        "crossing: claimed where f″ is below 0 at both ends",
+    );
+    refuted("x+1/x", "oblique: its line denied, by a period 2π");
+}
+
+/// mod(a, b) where b is 0 has no value (`graphing::functions::modulo`): at
+/// a point where the divisor is 0 throughout, the replay's is undefined
+/// too, not unknown (the tester's largest class of true claims it left
+/// unconfirmed: mod(x, x) "undefined at 0").
+#[test]
+fn a_remainder_by_zero_is_undefined() {
+    replay::iv::init();
+    let at = |src: &str, x: f64| {
+        let (e, lits) = read(src);
+        let ctx = replay::eval::Ctx {
+            unit: replay::iv::Unit::Radians,
+            lits: &lits,
+            vars: &[],
+        };
+        replay::eval::series(&e, x, x, 0, &ctx).swap_remove(0)
+    };
+    assert!(at("mod(x,x)", 0.0).empty);
+    assert!(at("mod(5,x)", 0.0).empty);
+    assert!(at("mod(x,x-x)", 3.0).empty);
+    let v = at("mod(x,3)", 7.0);
+    assert!(v.def && v.is_exactly(1.0), "{v:?}");
+    let v = at("mod(x,x)", 2.5);
+    assert!(v.def && v.is_exactly(0.0), "{v:?}");
+    // A divisor that only may be 0 on the box leaves it open.
+    let (e, lits) = read("mod(5,x)");
+    let ctx = replay::eval::Ctx {
+        unit: replay::iv::Unit::Radians,
+        lits: &lits,
+        vars: &[],
+    };
+    let v = replay::eval::series(&e, -1.0, 1.0, 0, &ctx).swap_remove(0);
+    assert!(!v.empty && !v.def, "{v:?}");
+    // The certifier's "undefined at 0" is proved.
+    let v = certificate("mod(x,x)+x");
+    for (c, class) in judged(&v, "Undefined") {
+        assert_eq!(class, Class::Strong, "{c}");
+    }
+}

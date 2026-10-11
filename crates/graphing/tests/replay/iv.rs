@@ -965,7 +965,13 @@ pub fn modulo(a: &Iv, b: &Iv) -> Iv {
         return Iv::empty();
     }
     let q = div(a, b);
-    if q.empty || !q.def {
+    // No quotient anywhere on the box (b is 0 throughout: mod(x, x) at 0):
+    // no remainder either. (It was left unknown, as where b only may be
+    // 0, and the certifier's "undefined" there unconfirmed.)
+    if q.empty {
+        return Iv::empty();
+    }
+    if !q.def {
         return Iv::unknown().deco(&[a, b], false, false);
     }
     let fq = floor(&q);

@@ -224,6 +224,10 @@ struct Walk {
     holes: Vec<B>,
     /// Every box a claim decides (for coverage).
     boxes: Vec<B>,
+    /// The gaps among them (`Gap` claims), which decide nothing.
+    gaps: Vec<B>,
+    /// The boxes of every other claim: what is decided.
+    solid: Vec<B>,
     problems: Vec<String>,
 }
 
@@ -364,6 +368,9 @@ fn walk(fx: &Fx, claims: &[Claim], k: usize) -> Walk {
             Claim::Undefined(x) | Claim::Gap(x) => {
                 w.holes.push(*x);
                 w.boxes.push(*x);
+                if matches!(c, Claim::Gap(_)) {
+                    w.gaps.push(*x);
+                }
             }
             // f′, f″ undefined at a kink: a point the signs either side
             // decide (for f, its values are claimed elsewhere).
@@ -390,6 +397,17 @@ fn walk(fx: &Fx, claims: &[Claim], k: usize) -> Walk {
                 w.boxes.push(*x);
             }
             _ => {}
+        }
+    }
+    // (What the claims other than gaps decide: every box but one of each
+    // gap's.)
+    let mut gaps_left = w.gaps.clone();
+    for b in &w.boxes {
+        match gaps_left.iter().position(|g| g == b) {
+            Some(i) => {
+                gaps_left.swap_remove(i);
+            }
+            None => w.solid.push(*b),
         }
     }
     // Each crossing: its innermost box is the zero, the outer ones carry
@@ -424,8 +442,13 @@ fn walk(fx: &Fx, claims: &[Claim], k: usize) -> Walk {
                     kink: false,
                 });
             }
+            // (Not decided is not "the same sign": said apart.)
+            (Some(_), Some(_)) => w.problems.push(format!(
+                "a crossing in [{:e}, {:e}] with one sign at both its ends",
+                outer.0, outer.1
+            )),
             _ => w.problems.push(format!(
-                "a crossing in [{:e}, {:e}] without opposite signs at its ends",
+                "a crossing in [{:e}, {:e}] whose signs at its ends are not decided",
                 outer.0, outer.1
             )),
         }
@@ -535,6 +558,80 @@ fn coverage(rc: &RowCert, all: &[RowCert], boxes: &[B], out: &mut RowResult) {
         if let Some((a, b)) = uncovered(t, boxes) {
             out.problems.push(format!(
                 "its claims leave [{a:e}, {b:e}] of the region {rg:?} undecided"
+            ));
+            return;
+        }
+    }
+}
+
+/// f has no value at the double x (shown by the replay's own evaluation).
+fn no_value(fx: &Fx, x: f64) -> bool {
+    iv::set_prec(160);
+    fx.series(&fx.f, x, x, 0)[0].empty
+}
+
+/// A gap decides nothing and stands for the reals strictly inside it
+/// (`claims::gap_clear` clears those): each of its two ends is a double
+/// some other claim of the row decides (a sign, a zero, a kink, f
+/// undefined there) or one strictly inside another gap, unless there is
+/// nothing to decide at it: f has no value there, or it lies outside the
+/// row's region, or (for f′ and f″) it is an end of the region, where no
+/// derivative is asked. Counted as covered like any box, two gaps meeting
+/// at a double left it out of the row: x²'s f′ "had no zero" and x² "no
+/// extremum", 0 between the gaps (−5·10⁻³²⁴, 0) and (0, 5·10⁻³²⁴) (the
+/// third pass's audit).
+fn gap_ends(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk, k: usize, out: &mut RowResult) {
+    let Some(rg) = &rc.region else { return };
+    let ts = targets(rg, all);
+    for g in &w.gaps {
+        for e in [g.0, g.1] {
+            // (Or strictly inside another gap, a real that one stands
+            // for: the certifier's gaps about one excluded point nest.)
+            let decided = w.solid.iter().any(|b| b.0 <= e && e <= b.1)
+                || w.gaps.iter().any(|h| h.0 < e && e < h.1);
+            let asked = ts
+                .iter()
+                .any(|t| (t.0 < e && e < t.1) || (k == 0 && (t.0 == e || t.1 == e)));
+            if decided || !asked || !e.is_finite() || no_value(fx, e) {
+                continue;
+            }
+            out.problems.push(format!(
+                "no claim decides f{} at {e:e}, an end of the gap [{:e}, {:e}]",
+                ["", "′", "″"][k],
+                g.0,
+                g.1
+            ));
+            return;
+        }
+    }
+}
+
+/// In a complete row on f′ or f″, each zero's two sides are decided: a
+/// zero with a side no claim signs (a gap beside it) is no "no change of
+/// sign". Nothing is asked of a side outside the row's region, where f has
+/// no value, or where f⁽ᵏ⁾ ≡ 0 on a stretch. (x²'s f′, its zero at 0
+/// between two gaps, changed sign nowhere: the third pass's audit.)
+fn sides_decided(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk, k: usize, out: &mut RowResult) {
+    let Some(rg) = &rc.region else { return };
+    if !complete(rc) {
+        return;
+    }
+    let ts = targets(rg, all);
+    for z in &w.zeros {
+        let sides = [
+            ("before", z.left, z.at.lo.next_down()),
+            ("after", z.right, z.at.hi.next_up()),
+        ];
+        for (side, sign, beside) in sides {
+            let asked = ts.iter().any(|t| t.0 <= beside && beside <= t.1);
+            let flat = w.flat.iter().any(|b| b.0 <= beside && beside <= b.1);
+            if sign.is_some() || !asked || flat || no_value(fx, beside) {
+                continue;
+            }
+            out.problems.push(format!(
+                "f{}'s sign {side} its zero at {:e} is not decided, yet the row is complete",
+                ["", "′", "″"][k],
+                z.at.mid()
             ));
             return;
         }
@@ -705,7 +802,7 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
         "inflections" => turns(fx, rc, all, 2, &mut out),
         "monotonicity" => monotonicity(fx, rc, all, &mut out),
         "y_intercept" => y_intercept(fx, rc, &mut out),
-        "parity" => parity(rc, all, results, &mut out),
+        "parity" => parity(fx, rc, all, results, &mut out),
         "period" => period(fx, rc, all, &mut out),
         "vertical" => vertical(fx, rc, all, &mut out),
         "horizontal" => horizontal(fx, rc, all, &mut out),
@@ -900,6 +997,7 @@ fn zeros_row(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Res
     let w = walk(fx, &rc.claims, 0);
     out.problems.extend(w.problems.iter().cloned());
     coverage(rc, all, &w.boxes, out);
+    gap_ends(fx, rc, all, &w, 0, out);
     holes(rc, 0, complete(rc), out);
     if !w.flat.is_empty() {
         out.problems
@@ -928,6 +1026,8 @@ fn turns(
     let w = walk(fx, &rc.claims, k);
     out.problems.extend(w.problems.iter().cloned());
     coverage(rc, all, &w.boxes, out);
+    gap_ends(fx, rc, all, &w, k, out);
+    sides_decided(fx, rc, all, &w, k, out);
     holes(rc, k, complete(rc), out);
     let mut ch: Vec<(Enc, bool)> = Vec::new();
     for (x, from_pos, kink) in changes(&w) {
@@ -1076,6 +1176,7 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
     let w = walk(fx, &rc.claims, 1);
     out.problems.extend(w.problems.iter().cloned());
     coverage(rc, all, &w.boxes, out);
+    gap_ends(fx, rc, all, &w, 1, out);
     holes(rc, 1, complete(rc), out);
     // Where a piece may end: at a turn or kink of f (a zero of the walk),
     // at an end of a stretch where f′ ≡ 0, at an end of the domain (its
@@ -1322,6 +1423,7 @@ fn domain_symmetric(all: &[RowCert]) -> Option<bool> {
 }
 
 fn parity(
+    fx: &Fx,
     rc: &RowCert,
     all: &[RowCert],
     results: &[ClaimResult],
@@ -1335,7 +1437,30 @@ fn parity(
                 Some(false) => out
                     .problems
                     .push(format!("{p}, but the domain is not symmetric about 0")),
-                None => out.notes.push("the domain's symmetry is not known".into()),
+                // No domain row to read it from: f's own structure may
+                // still say it (built of even and odd parts, f is defined
+                // at −x wherever it is at x). The fact f(−x) = ±f(x) alone
+                // doesn't: the algebra shows it where both sides are
+                // defined, with what cancels cancelled (ln x − ln x + x²
+                // was "even", on x > 0, its other rows withheld: the third
+                // pass's audit).
+                None if claims::tree_parity(&fx.f, &fx.lits) == Some(p == "Even") => out
+                    .notes
+                    .push("the domain's symmetry: by f's structure, with no domain row".into()),
+                // Else as far as points go: f defined at both or neither
+                // of ±x at each, and at both of some (weak, as a fact
+                // tested at points is; an f placed at none shows nothing).
+                None => match claims::mirrored_at_points(fx) {
+                    Some(true) => out.notes.push(
+                        "the domain's symmetry: tested at points only, with no domain row".into(),
+                    ),
+                    Some(false) => out.problems.push(format!(
+                        "{p}, but f is defined at only one of ±x at a sample point"
+                    )),
+                    None => out.problems.push(format!(
+                        "{p}, but the domain is not known to be symmetric about 0"
+                    )),
+                },
             }
             let word = if p == "Even" { "even" } else { "odd" };
             let fact = rc.claims.iter().find(
@@ -1428,9 +1553,12 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
     }
     // Each family: a Family claim with these boxes, about a node whose
     // condition is g ≠ 0 (a divisor, or the cosine or sine under tan, sec,
-    // cot, csc). Its node stands in as "any value" (any nonzero value for
-    // a divisor) when the rest of f is checked defined.
-    let mut stand_ins: Vec<(Vec<u8>, bool)> = Vec::new();
+    // cot, csc). Every node of f with that condition stands in as "any
+    // value" (any nonzero value, of one sign, for g itself) when the rest
+    // of f is checked defined: the claim names one, and f may hold more
+    // (tan x + sec x, sec³ x written as a product: with one stood in, the
+    // others kept the piece from being shown defined).
+    let mut stand_ins: Vec<(Paths, Paths)> = Vec::new();
     for (x0, per) in &families {
         let claim = rc.claims.iter().find_map(|c| match c {
             Claim::Family {
@@ -1449,34 +1577,69 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
             ));
             continue;
         };
-        match via {
-            super::Via::CosOfArg | super::Via::SinOfArg => stand_ins.push((path, false)),
-            super::Via::Itself => {
-                // g itself must be a divisor, or the base of a positive
-                // power that is (g ≠ 0 ⟺ gⁿ ≠ 0): only those are read.
-                let parent_div = divisor(&fx.f, &path);
-                if parent_div {
-                    stand_ins.push((path, true));
-                } else {
-                    out.notes.push(format!(
-                        "the family at {:e}: its node's condition is not read (not a divisor)",
-                        x0.mid()
-                    ));
-                    return Ok(());
-                }
+        let Some(g) = claims::side_tree(&fx.f, &path, via) else {
+            out.problems
+                .push(format!("the family at {:e}: no such node of f", x0.mid()));
+            return Ok(());
+        };
+        // g itself, where f has no value at its zeros: a divisor, the base
+        // of a negative power (or of a positive one that is such a node),
+        // or any node f is undefined everywhere with 0 in the place of
+        // (tan(x)⁰, a root of a negative degree, the divisor |tan x|).
+        let zero_excluded = |at: &[u8]| {
+            divisor(&fx.f, at) || {
+                iv::set_prec(160);
+                let zeroed = replace_with(&fx.f, at, graphing::ast::Expr::exact(0.0));
+                fx.series(&zeroed, f64::NEG_INFINITY, f64::INFINITY, 0)[0].empty
             }
+        };
+        if via == super::Via::Itself && !zero_excluded(&path) {
+            // (Not read is not checked: the pieces listed beside such a
+            // family were let through with a note.)
+            out.problems.push(format!(
+                "the family at {:e}: its node's condition is not read (f has a value with 0 \
+                 in its place), so the domain is not derived",
+                x0.mid()
+            ));
+            return Ok(());
         }
+        let (mut signed, mut any) = (Vec::new(), Vec::new());
+        paths_where(
+            &fx.f,
+            &|e, at| *e == g && zero_excluded(at),
+            &mut Vec::new(),
+            &mut signed,
+        );
+        paths_where(
+            &fx.f,
+            &|e, _| {
+                use graphing::ast::{Expr, Func};
+                let of = |f: Func, a: &Expr| Expr::Call(f, vec![a.clone()]);
+                match e {
+                    Expr::Call(Func::Tan | Func::Sec, a) => of(Func::Cos, &a[0]) == g,
+                    Expr::Call(Func::Cot | Func::Csc, a) => of(Func::Sin, &a[0]) == g,
+                    _ => false,
+                }
+            },
+            &mut Vec::new(),
+            &mut any,
+        );
+        stand_ins.push((signed, any));
     }
     // The tree(s) to check definedness on.
     let mut trees: Vec<graphing::ast::Expr> = vec![fx.f.clone()];
-    for (path, nonzero) in &stand_ins {
+    for (signed, any) in &stand_ins {
+        let all = |t: &graphing::ast::Expr, paths: &[Vec<u8>], name: &str| {
+            paths.iter().fold(t.clone(), |t, at| replace(&t, at, name))
+        };
         let mut next = Vec::new();
         for t in &trees {
-            if *nonzero {
-                next.push(replace(t, path, "__pos"));
-                next.push(replace(t, path, "__neg"));
+            let t = all(t, any, "__any");
+            if signed.is_empty() {
+                next.push(t);
             } else {
-                next.push(replace(t, path, "__any"));
+                next.push(all(&t, signed, "__pos"));
+                next.push(all(&t, signed, "__neg"));
             }
         }
         trees = next;
@@ -1547,15 +1710,28 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
                 claims::V::No(w) => out
                     .problems
                     .push(format!("f is not defined on its piece: {w}")),
-                claims::V::Unknown(w) => out.notes.push(format!("a piece not shown defined: {w}")),
+                // Not shown on f's tree as written: as a `Defined` claim
+                // is (its rearranged form where the tree is ∞ − ∞ on a
+                // tail: 1/(x² + x + 1)). A piece shown no way is not the
+                // row's to list: it was noted and let through, and any
+                // domain passed for an f the replay places nowhere
+                // (√(10^5000 + 1 − 10^5000 − 1 + x) on all of ℝ: the third
+                // pass's audit).
+                claims::V::Unknown(_) if claims::orig_defined(fx, (lo, hi)) => {}
+                claims::V::Unknown(w) => out
+                    .problems
+                    .push(format!("f is not shown defined on its piece: {w}")),
             }
         } else {
             for t in &trees {
                 match defined_on(t, (lo, hi)) {
                     claims::V::Yes => {}
+                    // (Not shown is not let through: a piece reaching past
+                    // √x's end beside tan's poles was noted and passed.)
                     claims::V::No(w) | claims::V::Unknown(w) => {
-                        out.notes
-                            .push(format!("off its families, a piece not shown defined: {w}"));
+                        out.problems.push(format!(
+                            "off its families, f is not shown defined on its piece: {w}"
+                        ));
                         break;
                     }
                 }
@@ -1822,8 +1998,10 @@ fn enclosed_end(fx: &Fx, x: B, low: bool) -> Option<bool> {
     None
 }
 
-/// Whether the node at `path` is a divisor of `f`, or the base of a
-/// positive power (a chain of them) that is one.
+/// Whether the node at `path` is one f has no value at the zeros of: a
+/// divisor of `f`, the base of a negative written power (0 to it is 1/0:
+/// cos(x)^(−9007199254740993/1000001) at cos's zeros), or the base of a
+/// positive power (a chain of them) that is one of these.
 fn divisor(f: &graphing::ast::Expr, path: &[u8]) -> bool {
     use graphing::ast::{BinOp, Expr};
     let Some((last, up)) = path.split_last() else {
@@ -1832,11 +2010,43 @@ fn divisor(f: &graphing::ast::Expr, path: &[u8]) -> bool {
     match super::eval::at_path(f, up) {
         Some(Expr::Bin(BinOp::Div, ..)) => *last == 1,
         Some(Expr::Bin(BinOp::Pow, _, k)) if *last == 0 => {
-            super::eval::written_rational(k, &super::eval::Lits::default())
-                .is_some_and(|(p, _)| p > 0)
-                && divisor(f, up)
+            match super::eval::written_rational(k, &super::eval::Lits::default()) {
+                Some((p, _)) if p < 0 => true,
+                Some((p, _)) if p > 0 => divisor(f, up),
+                _ => false,
+            }
         }
         _ => false,
+    }
+}
+
+/// Paths to nodes of f's tree.
+type Paths = Vec<Vec<u8>>;
+
+/// The paths of the nodes of `e` that `is` holds of, none inside another
+/// (a path names a child by a byte: those past the 256th are left out).
+fn paths_where(
+    e: &graphing::ast::Expr,
+    is: &dyn Fn(&graphing::ast::Expr, &[u8]) -> bool,
+    path: &mut Vec<u8>,
+    out: &mut Paths,
+) {
+    use graphing::ast::Expr;
+    if is(e, path) {
+        out.push(path.clone());
+        return;
+    }
+    let kids: Vec<&Expr> = match e {
+        Expr::Neg(a) | Expr::Degrees(a) => vec![&**a],
+        Expr::Bin(_, a, b) => vec![&**a, &**b],
+        Expr::Call(_, args) => args.iter().collect(),
+        _ => Vec::new(),
+    };
+    for (i, k) in kids.into_iter().enumerate() {
+        let Ok(i) = u8::try_from(i) else { break };
+        path.push(i);
+        paths_where(k, is, path, out);
+        path.pop();
     }
 }
 

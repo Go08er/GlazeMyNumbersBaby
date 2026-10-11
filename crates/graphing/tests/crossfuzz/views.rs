@@ -178,13 +178,6 @@ pub fn replay_child() {
     mp::replay_child();
 }
 
-/// Whether the compiled `y = text` has a value at x (`None`: no such
-/// function).
-pub fn defined_at(text: &str, set: &Setup, x: f64) -> Option<bool> {
-    let l = load(text, set).ok()?;
-    Some(!l.f.prog.eval(x, 0.0).is_nan())
-}
-
 fn load(text: &str, set: &Setup) -> Result<Loaded, NoFunction> {
     let vars = set.vars();
     let setting = Setting {
@@ -610,46 +603,16 @@ mod mp {
         }
     }
 
-    /// What the replay's `OneCross` does with a low end it can't place:
-    /// it reads "not shown above c there" as "below c there", and then
-    /// calls the claim refuted at the high end for being below c too
-    /// (tests/replay/claims.rs). Where the replay's own f at the low end
-    /// (at [`PREC`] bits) lies on neither side of c and the refutation
-    /// names the high end, this says so: nothing was refuted, an end was
-    /// left open. (A refutation with both ends placed is said nothing of.)
-    fn low_end_unplaced(fx: &Fx, claim: &replay::Claim, note: &str) -> Option<String> {
-        let replay::Claim::OneCross {
-            x,
-            of: replay::Subject::F(0),
-            c,
-        } = claim
-        else {
-            return None;
-        };
-        if !note.ends_with(&format!(" at {:e}", x.1)) {
-            return None;
-        }
-        let m = at_prec(|| fx.series(&fx.f, x.0, x.0, 0)).swap_remove(0);
-        let (lo, hi) = bounds(&m);
-        let placed = !m.empty && m.def && (lo > *c || hi < *c);
-        (!placed).then(|| {
-            format!(
-                "the replay's own f at the low end {:e} is {}, on neither side of {c:e}",
-                x.0,
-                show(&m)
-            )
-        })
-    }
-
-    /// What the replay's test of an infinite limit does with a slow one:
-    /// three values next to the point within 10⁻⁶ of each other are "f
-    /// settles", and the limit refuted (tests/replay/claims.rs). a·ln x
-    /// for a small a does that at every double there is. Where the
+    /// What three values say of a slow infinite limit: within 10⁻⁶ of
+    /// each other next to the point they are "f settles" to the replay,
+    /// which leaves the limit open as spoken against
+    /// (tests/replay/claims.rs), and a·ln x for a small a does that at
+    /// every double there is. Where the
     /// replay's own (x − a)·f′(x) at those three points (x·f′(x) for a
     /// limit far out) keeps one sign, the one the limit needs, and
     /// doesn't shrink toward the point, f is still moving as a logarithm
-    /// does, and this says so: nothing was refuted. (For a function that
-    /// does settle it tends to 0, and nothing is said.)
+    /// does, and this says so: the values aren't against the limit. (For
+    /// a function that does settle it tends to 0, and nothing is said.)
     fn still_moving(fx: &Fx, claim: &replay::Claim, note: &str) -> Option<String> {
         let replay::Claim::Simplifier(fact) = claim else {
             return None;
@@ -996,11 +959,9 @@ mod mp {
     /// (On a thread it ran on after it was given up on, and a run's slow
     /// replays piled up until the others had to be skipped.)
     ///
-    /// A refuted `OneCross` of f says so when the replay's own f at the
-    /// box's low end is on neither side of c and the refutation is at the
-    /// high end ([`low_end_unplaced`]); a refuted infinite limit, when f
-    /// "settles" and is still moving as a logarithm does
-    /// ([`still_moving`]).
+    /// A limit the replay leaves open with f's values against it fails
+    /// the run (`replay/values-against`), unless f is still moving there
+    /// as a logarithm does ([`still_moving`]).
     pub fn replayed(json: &serde_json::Value, fx: &Fx, out: &mut Outcome) {
         use std::io::{Read, Write};
         use std::process::{Command, Stdio};
@@ -1166,14 +1127,19 @@ mod mp {
             let line = || format!("{:?} ({}): {}", c.claim, c.rows.join(","), c.outcome.note);
             match c.outcome.class {
                 Class::Strong | Class::Weak => {}
-                Class::Refuted => {
-                    let said = low_end_unplaced(fx, &c.claim, &c.outcome.note)
-                        .or_else(|| still_moving(fx, &c.claim, &c.outcome.note));
-                    let detail = match said {
-                        Some(more) => format!("{}; {more}", line()),
-                        None => line(),
-                    };
-                    out.fail("replay/refuted", detail);
+                Class::Refuted => out.fail("replay/refuted", line()),
+                // A limit left open with f's values at the points tried
+                // against it: no proof (so not refuted), but to look at
+                // like one, not one of the replay's known limits. Unless
+                // the values aren't against it: 10⁻¹⁶·ln x "settles" at
+                // every double beside 0, and goes to −∞.
+                Class::Unconfirmed if c.outcome.note.starts_with(replay::claims::AGAINST) => {
+                    match still_moving(fx, &c.claim, &c.outcome.note) {
+                        Some(more) => out.note("replay/values-of-a-slow-limit", || {
+                            format!("{}; {more}", line())
+                        }),
+                        None => out.fail("replay/values-against", line()),
+                    }
                 }
                 Class::Unsupported if counting => {
                     out.note("replay/unsupported-counting", line);
