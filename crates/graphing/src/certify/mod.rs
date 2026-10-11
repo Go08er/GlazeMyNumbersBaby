@@ -677,7 +677,7 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     // branches there (`Claim::KinkSides`): the kink at a double, or
     // between two.
     // (Each box once, for both derivatives.)
-    let mut sides_of: Vec<((f64, f64), Option<fun::KinkSides>)> = Vec::new();
+    let mut sides_of: Vec<((f64, f64), fun::KinkSides)> = Vec::new();
     for (i, c) in [&mut c1, &mut c2].into_iter().enumerate() {
         for (j, &(l, r)) in kbox[i].iter().enumerate() {
             // (f′ at a kink already placed with its two signs: a `KinkAt`
@@ -689,20 +689,14 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             let sides = match sides_of.iter().find(|(b, _)| *b == (l, r)) {
                 Some((_, s)) => *s,
                 None => {
-                    let s = f.kink_sides(l, r).ok().flatten();
+                    let s = f
+                        .kink_sides(l, r)
+                        .unwrap_or(fun::KinkSides { d1: None, d2: None });
                     sides_of.push(((l, r), s));
                     s
                 }
             };
-            let side = sides.and_then(|s| {
-                let (left, right) = if i == 0 { s.d1 } else { s.d2 }?;
-                Some(fun::KinkSide {
-                    at: s.at,
-                    left,
-                    right,
-                    joined: i == 1 && s.joined,
-                })
-            });
+            let side = if i == 0 { sides.d1 } else { sides.d2 };
             if let Some(s) = side {
                 kink_claims[i].push(Claim::KinkSides {
                     x: XBox::new(l, r),

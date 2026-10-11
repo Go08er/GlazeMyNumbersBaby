@@ -331,21 +331,23 @@ pub enum Claim {
     ///
     /// **The claim.** c is the double `at` when given (l < `at` < r), and
     /// otherwise some point of the open (l, r), known no more closely.
-    /// f is k times differentiable at every point of [l, r] but c;
-    /// f⁽ᵏ⁾ has the sign `left` at every point of [l, c) and the sign
-    /// `right` at every point of (c, r] (`Pos`: > 0, `Neg`: < 0, `Zero`:
-    /// = 0). With `joined` (only with `at`): f′ exists at c too and is
-    /// continuous there. (f is continuous on [l, r]: the box's `Kink`.)
+    /// f⁽ᵏ⁾ exists at all but finitely many points of [l, r]; wherever
+    /// it exists on [l, c) it has the sign `left`, and wherever it exists
+    /// on (c, r] the sign `right` (`Pos`: > 0, `Neg`: < 0, `Zero`: = 0).
+    /// With `joined` (only with `at`): f′ exists at c too and is
+    /// continuous on [l, r]. (f is continuous on [l, r]: the box's
+    /// `Kink`.)
     ///
-    /// **What a row takes from it.** k = 1: f is strictly monotone on
-    /// [l, c] and on [c, r] where the sign is strict, so two different
-    /// strict signs are a strict extremum at c (at `at`, or enclosed by
-    /// `x`) and the same strict sign is no extremum in the box. k = 2:
-    /// the same sign on both sides is no inflection in the box; two
-    /// different strict signs are an inflection at c when `joined`, and
-    /// are not decided otherwise (a corner).
+    /// **What a row takes from it.** k = 1: f, continuous, with f′ of one
+    /// strict sign at all but finitely many points of [l, c], is strictly
+    /// monotone there, and so on [c, r]: two different strict signs are a
+    /// strict extremum at c (at `at`, or enclosed by `x`), and the same
+    /// strict sign is no extremum in the box. k = 2: the same sign on
+    /// both sides is no change of f″'s sign in the box, so no inflection
+    /// there; two different strict signs are an inflection at c when
+    /// `joined`, and are not decided otherwise (a corner).
     ///
-    /// **Proven in one of two ways**, neither by values of f at samples.
+    /// **Proven in one of three ways**, none by values of f at samples.
     ///
     /// *A corner.* F is a formula of f: the one typed, or the
     /// certificate's evaluated f (the same function wherever f is
@@ -375,7 +377,8 @@ pub enum Claim {
     ///    f′ = 2|x|.) Without `at`: g₋ and g₊ are each k times
     ///    continuously differentiable on all of [l, r], g₋⁽ᵏ⁾ with the
     ///    sign `left` on all of it and g₊⁽ᵏ⁾ with `right` on all of it
-    ///    (so each on its side of c, wherever c is).
+    ///    (so each on its side of c, wherever c is). f⁽ᵏ⁾ then exists
+    ///    at every point of [l, r] but c.
     /// 4. *Joined.* g₋′(p) = g₊′(p).
     ///
     /// *No corner* (k = 2, `at` = p, not `joined`): every kink argument
@@ -383,9 +386,19 @@ pub enum Claim {
     /// power u^s in f with s < 2 not an integer (√u is u^(1/2), ∛u is
     /// u^(1/3)) is exactly 0 at p, and each such base is nonzero
     /// throughout [l, r] or is exactly 0 at p with u′ strictly signed on
-    /// [l, r]; so f″ exists on [l, r] but at p (x^(2/3), x^(4/3) at 0).
+    /// [l, r] (x^(2/3), x^(4/3) at 0: f″ exists on each side of p).
     /// f″, wherever it exists on [l, p], has the sign `left`, and
-    /// wherever it exists on [p, r] the sign `right`.
+    /// wherever it exists on [p, r] the sign `right`: the enclosure over
+    /// each of f″'s formula, which is not empty. (A formula made of
+    /// functions analytic inside their domains fails to have a second
+    /// derivative at finitely many points of a box it is continuous on.)
+    ///
+    /// *No corner, not placed* (`at` absent, `left` = `right`, not
+    /// `joined`): every kink argument of f's formulas is nonzero
+    /// throughout [l, r]; f⁽ᵏ⁾, wherever it exists on [l, r], has the one
+    /// strict sign `left`: the enclosure over [l, r] of f⁽ᵏ⁾'s formula,
+    /// which is not empty (∛(x − 0.1): f′ > 0 on both sides of a vertical
+    /// tangent no double holds).
     ///
     /// (How the certifier shows a sign on [l, p), for a check that wants
     /// the same route: g⁽ᵏ⁾'s enclosure over [l, p] strictly signed or
