@@ -1713,8 +1713,8 @@ fn beyond(l: (f64, f64), var: bool, parity: Parity, neg: bool) -> Fold {
 
 /// The exact value of an x- and y-free subtree of typed literals and
 /// sliders (a slider's value is the double it holds) under +, −, ×, ÷,
-/// whole powers, |·|, floor, ceil, round, sign, mod, and the counts n!,
-/// n!!, nCr, nPr of whole numbers.
+/// whole powers, |·|, floor, ceil, round, sign, mod, min, max, and the
+/// counts n!, n!!, nCr, nPr of whole numbers.
 ///
 /// Each of those is folded at any size, or refused for its length
 /// ([`Fold::Big`], unknown; or [`Fold::Lone`] where the general path is
@@ -2039,6 +2039,34 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                         Far::HUGE,
                     ),
                     None => Big(vn || vr),
+                }
+            }
+            // The least or greatest of exact values is one of them, by
+            // their own order: two that share a double are still apart
+            // (review 19: off, max(1.00000000000000000001, 1) was the
+            // double 1, and its ceiling 1 for 2). Any other argument is
+            // the general path's as before.
+            Func::Min | Func::Max => {
+                let mut best: Option<Rat> = None;
+                let mut var = false;
+                for a in args {
+                    let Value(r, v) = go(a) else {
+                        return No;
+                    };
+                    var |= v;
+                    let better = if *f == Func::Min {
+                        std::cmp::Ordering::Less
+                    } else {
+                        std::cmp::Ordering::Greater
+                    };
+                    best = Some(match best {
+                        Some(b) if r.cmp(&b) != better => b,
+                        _ => r,
+                    });
+                }
+                match best {
+                    Some(r) => Value(r, var),
+                    None => No,
                 }
             }
             _ => No,

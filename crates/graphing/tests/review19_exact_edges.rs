@@ -350,3 +350,64 @@ fn the_remainder_of_exact_values_is_exact() {
     assert!(c > 0.09 && c < 0.1, "{c:e}");
     assert_eq!(at(OFF).reference, V::Is(c));
 }
+
+/// The least and the greatest of exact values are chosen by their own
+/// order: two numbers that share a double are still apart, and a tie is
+/// one only when they are one number.
+#[test]
+fn the_least_and_greatest_of_exact_values_are_exact() {
+    for (text, off, ti) in [
+        ("ceil(max(1.00000000000000000001,1))", 2.0, 1.0),
+        ("ceil(max(1,1.00000000000000000001))", 2.0, 1.0),
+        ("ceil(max(1,0.5,1.00000000000000000001,-3))", 2.0, 1.0),
+        ("floor(min(0.99999999999999999999,1))", 0.0, 1.0),
+        ("floor(min(1,2,0.99999999999999999999))", 0.0, 1.0),
+        ("10^20*(max(1.00000000000000000001,1)-1)", 1.0, 0.0),
+        ("10^20*(min(1.00000000000000000001,1)-1)", 0.0, 0.0),
+        ("10^20*(1-min(0.99999999999999999999,1))", 1.0, 0.0),
+    ] {
+        check(text, OFF, V::Is(off));
+        check(text, TI, V::Is(ti));
+    }
+    for digits in [OFF, TI] {
+        for (text, want) in [
+            // Below every double and not 0, against 0.
+            ("sign(min(10^(-400),0))", 0.0),
+            ("sign(max(10^(-400),0))", 1.0),
+            ("sign(min(-(10^(-400)),0))", -1.0),
+            ("sign(max(-(10^(-400)),0))", 0.0),
+            // A true tie: 0.1 + 0.2 is 0.3.
+            ("10^17*(min(0.1+0.2,0.3)-0.3)", 0.0),
+            ("10^17*(max(0.1+0.2,0.3)-0.3)", 0.0),
+            ("max(3)", 3.0),
+            ("min(-2,5)", -2.0),
+            ("max(-2,5,7/2)", 5.0),
+            // Any other argument, as before.
+            ("min(10^5000,3)", 3.0),
+            ("max(-(10^5000),3)", 3.0),
+            ("max(sin(1),2)", 2.0),
+        ] {
+            check(text, digits, V::Is(want));
+        }
+        // With x in it the choice is the program's, in doubles.
+        let v = views_at(
+            "ceil(max(x,1.00000000000000000001))",
+            digits,
+            TrigUnit::Radians,
+            1.0,
+            1.0,
+        );
+        assert_eq!(v.compiled, V::Is(1.0));
+    }
+    // A slider alone is a number.
+    for (a, want) in [(1.0, 2.0), (1.5, 2.0), (2.0, 2.0), (2.5, 3.0)] {
+        let v = views_at(
+            "ceil(max(a,1.00000000000000000001))",
+            OFF,
+            TrigUnit::Radians,
+            0.0,
+            a,
+        );
+        assert_eq!((v.compiled, v.reference), (V::Is(want), V::Is(want)), "{a}");
+    }
+}
