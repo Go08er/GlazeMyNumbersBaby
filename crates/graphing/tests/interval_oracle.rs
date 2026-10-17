@@ -1342,15 +1342,16 @@ fn counts_through_gamma_are_within_a_few_ulps() {
                 let ulp = (want.abs().next_up() - want.abs()).min(f64::MAX);
                 let off = Float::with_val(P, Float::with_val(P, v) - &truth).to_f64() / ulp;
                 worst = worst.max(off.abs());
-                if !(off.abs() <= 4.0) {
+                if off.is_nan() || off.abs() > 4.0 {
                     t.fail(format!("{name} = {v:e}, not {want:e} ({off:.1} ulps)"));
                 }
             } else if want.is_infinite() {
                 if v != want && !(v.is_finite() && v.abs() == f64::MAX) {
                     t.fail(format!("{name} = {v:e}, beyond the doubles: {want:e}"));
                 }
-            } else if !((v - want).abs() <= 2.0 * f64::from_bits(1)
-                && (v == 0.0 || v.signum() == want.signum()))
+            } else if v.is_nan()
+                || (v - want).abs() > 2.0 * f64::from_bits(1)
+                || (v != 0.0 && v.signum() != want.signum())
             {
                 t.fail(format!(
                     "{name} = {v:e}, below the normal doubles: {want:e}"
