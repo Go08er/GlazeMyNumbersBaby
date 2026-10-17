@@ -387,27 +387,6 @@ const KNOWN: &[(&str, Matches, &str)] = &[
          shown (a piece of the domain defined, the domain's symmetry under a parity; anything \
          resting on a KinkSides claim, which the replay doesn't read yet)",
     ),
-    // functions::ncr and npr (Γ's quotient) in doubles: ∞·0 far out and
-    // an underflow to 0 give NaN where the quotient has a value, which the
-    // interval form encloses.
-    (
-        "pt/undefined-where-enclosure-defined",
-        counts,
-        "nCr and nPr through Γ in doubles are NaN (∞·0, or a quotient that underflows) where \
-         the count has a value: functions.rs ncr/npr",
-    ),
-    (
-        "pt/reference-undefined-where-enclosure-defined",
-        counts,
-        "nCr and nPr through Γ in doubles are NaN (∞·0, or a quotient that underflows) where \
-         the count has a value: functions.rs ncr/npr",
-    ),
-    (
-        "pt/box-defined-but-undefined",
-        counts,
-        "nCr and nPr through Γ in doubles are NaN (∞·0, or a quotient that underflows) where \
-         the count has a value: functions.rs ncr/npr",
-    ),
     // wide.rs: Γ in extended range keeps about 13 digits.
     (
         "pt/scalar-vs-reference",
