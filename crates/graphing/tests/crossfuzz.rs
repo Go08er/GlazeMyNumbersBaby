@@ -1362,7 +1362,10 @@ fn a_domain_edge_near_a_derivative_point_is_not_at_that_point() {
     // the reals on one side can be enclosed without 0 itself; elsewhere a
     // box holds the point, and it is left open.
     assert_eq!(beside("x*sqrt(x)", 0.0), Beside::Undefined { below: true });
-    assert_eq!(beside("x*sqrt(-x)", 0.0), Beside::Undefined { below: false });
+    assert_eq!(
+        beside("x*sqrt(-x)", 0.0),
+        Beside::Undefined { below: false }
+    );
     assert_eq!(
         beside("(x-2)*sqrt(x-2)", 2.0),
         Beside::Open { probe: Some(true) }

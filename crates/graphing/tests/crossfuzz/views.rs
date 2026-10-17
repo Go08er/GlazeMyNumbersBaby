@@ -1869,7 +1869,11 @@ impl<'a> Proofs<'a> {
         lists
             .iter()
             .flat_map(|l| l.iter())
-            .find(|(fam, _)| checks::members(fam).iter().any(|m| m.to_bits() == x.to_bits()))
+            .find(|(fam, _)| {
+                checks::members(fam)
+                    .iter()
+                    .any(|m| m.to_bits() == x.to_bits())
+            })
             .map(|(_, y)| *y)
     }
 
@@ -1903,8 +1907,7 @@ impl<'a> Proofs<'a> {
             // zero where f is continuous between two points it is proven
             // of opposite signs at.
             "zero-missing" if f.span.0 < f.span.1 => proven_if(
-                self.zero_between(at, checks::step(at, 1))
-                    || self.zero_between(f.span.0, f.span.1),
+                self.zero_between(at, checks::step(at, 1)) || self.zero_between(f.span.0, f.span.1),
             ),
             "zero-missing" => proven_if(self.zero_about(at)),
             "zeros-merged" => {
@@ -2004,10 +2007,8 @@ impl<'a> Proofs<'a> {
                 } else {
                     self.range(f64::NEG_INFINITY, at)
                 };
-                let certified: Option<Vec<(f64, f64)>> = self
-                    .cert
-                    .and_then(|a| a.horizontal.value())
-                    .map(|hs| {
+                let certified: Option<Vec<(f64, f64)>> =
+                    self.cert.and_then(|a| a.horizontal.value()).map(|hs| {
                         hs.iter()
                             .filter(|h| (h.side == Tail::Right) == right)
                             .map(|h| (h.y.lo.0, h.y.hi.0))
@@ -2061,9 +2062,7 @@ impl<'a> Proofs<'a> {
             // the stretch it is claimed in (an end of the domain at sin 1
             // is not undefined for the double below it being so).
             "extremum-undefined" => proven_if(self.undefined_about(at, &self.places.extrema)),
-            "inflection-undefined" => {
-                proven_if(self.undefined_about(at, &self.places.inflections))
-            }
+            "inflection-undefined" => proven_if(self.undefined_about(at, &self.places.inflections)),
             // "The point the panel leaves out is in the domain": f is
             // defined at the doubles about it. Refuted where f is defined
             // on every real there: over the doubles about the point, and
@@ -2072,7 +2071,11 @@ impl<'a> Proofs<'a> {
                 let rounding = d
                     .excluded
                     .iter()
-                    .filter(|fam| checks::members(fam).iter().any(|m| m.to_bits() == at.to_bits()))
+                    .filter(|fam| {
+                        checks::members(fam)
+                            .iter()
+                            .any(|m| m.to_bits() == at.to_bits())
+                    })
                     .map(|fam| fam.period.map_or(0.0, |p| 4.0 * ulp(p) + 2.0 * ulp(fam.x)))
                     .fold(0.0, f64::max);
                 let r = 16.0 * ulp(at) + rounding;
@@ -2115,9 +2118,7 @@ impl<'a> Proofs<'a> {
                     Bound::At { x, closed: false } => hi <= x.lo.0,
                     _ => false,
                 };
-                proven_if(
-                    !pieces.is_empty() && pieces.iter().all(|p| above(&p.hi) || below(&p.lo)),
-                )
+                proven_if(!pieces.is_empty() && pieces.iter().all(|p| above(&p.hi) || below(&p.lo)))
             }
             // The y listed with a turn or an inflection against f at the
             // number shown: f's over the stretch the point is claimed in
@@ -2130,9 +2131,7 @@ impl<'a> Proofs<'a> {
                     (&self.places.inflections, [&d.inflection_points, &[]])
                 };
                 match self.listed(at, &lists) {
-                    Some(y) if self.takes(at, y, places).is_some() => {
-                        open("within-the-enclosure")
-                    }
+                    Some(y) if self.takes(at, y, places).is_some() => open("within-the-enclosure"),
                     Some(_) => Proven,
                     None => Witness,
                 }
@@ -2306,12 +2305,8 @@ fn panel(
                 .filter(|_| x.is_finite())
                 .and_then(|m| m.over(x, x).value)?;
             let c = l.f.prog.eval(x, 0.0);
-            (!faithful(c, lo, hi)).then(|| {
-                format!(
-                    "{} (f({x:e}) = [{lo:e}, {hi:e}], compiled {c:e})",
-                    f.detail
-                )
-            })
+            (!faithful(c, lo, hi))
+                .then(|| format!("{} (f({x:e}) = [{lo:e}, {hi:e}], compiled {c:e})", f.detail))
         });
         match proofs.stands(&f, at) {
             Stands::Proven => out.fail(&class, f.detail),
@@ -2341,8 +2336,7 @@ fn panel(
                     }
                     // The compiled NaN there may say "can't tell".
                     "evaluator-disagrees"
-                        if l.f.prog.eval(f.at, 0.0).is_nan()
-                            && l.f.prog.undecided(f.at, 0.0) =>
+                        if l.f.prog.eval(f.at, 0.0).is_nan() && l.f.prog.undecided(f.at, 0.0) =>
                     {
                         out.note("pt/scalar-cannot-tell", || f.detail.clone());
                     }
@@ -2868,14 +2862,19 @@ pub fn run(text: &str, pair: Option<&str>, set: &Setup, groups: u32) -> Outcome 
                 let weaker = parity
                     && ((says("Both") && (says("Even") || says("Odd")))
                         || (says("Even") && says("Odd") && !somewhere_not_zero(&l)));
-                let cannot_tell = f.class == "spelling-value-differs"
+                let nan = f.class == "spelling-value-differs"
                     && f.at.is_finite()
-                    && l.f.prog.eval(f.at, 0.0).is_nan()
-                    && l.f.prog.undecided(f.at, 0.0);
+                    && l.f.prog.eval(f.at, 0.0).is_nan();
+                let cannot_tell = nan && l.f.prog.undecided(f.at, 0.0);
                 if f.note {
                     out.note(&format!("pair/{}", f.class), || f.detail.clone());
                 } else if cannot_tell {
                     out.note("pt/scalar-cannot-tell", || f.detail.clone());
+                } else if nan && proven_undefined(&l, mp_defined, f.at) != Some(true) {
+                    // "The first spelling is undefined there", as its
+                    // doubles have it (an operand rounded onto a pole):
+                    // the two differ only where it is proven undefined.
+                    out.note("pair/spelling-undefined-in-doubles", || f.detail.clone());
                 } else if weaker {
                     out.note("pair/parity-both-against-one", || f.detail.clone());
                 } else {

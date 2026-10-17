@@ -883,10 +883,11 @@ pub struct Finding {
     /// The x the finding is about (NaN: the function as a whole).
     pub at: f64,
     /// The stretch of x the finding rests on, where that is more than
-    /// `at` (NaN: none): the samples a turn was found between, the two
-    /// crossings matched to one zero. For one who would judge the finding
-    /// by something other than f sampled (`tests/crossfuzz`: by f's
-    /// enclosure over the stretch).
+    /// `at` (NaN: none): the samples a change of sign or a turn was found
+    /// between, the two crossings matched to one zero, the two points
+    /// whose values are compared. For one who would judge the finding by
+    /// something other than f sampled (`tests/crossfuzz`: by f's
+    /// enclosure over the stretch, and MPFR's values at its ends).
     pub span: (f64, f64),
     /// Not a contradiction: an answer sampling can neither confirm nor
     /// refute, or points the reference can't evaluate (listed, not
