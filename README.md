@@ -327,7 +327,9 @@ CI also runs checks that need more than `cargo test --workspace`:
   in thirty has one) is set aside, not failed, so a false claim the checker
   can't decide would pass; what the samples suggest but
   no proof bears out (a turn as flat as x⁴'s, a pole without MPFR, a
-  shorter period, an oblique line not approached) is counted, not found;
+  shorter period, an oblique line not approached, a parity, period, range,
+  monotonicity or y-intercept read off computed values that no enclosure
+  or MPFR value separates) is counted, not found;
   and causes found but not fixed are listed in its
   known-open table and counted in every run. Those in the engine are all in
   the compiled evaluator, the one that draws (the panel and tracing read
