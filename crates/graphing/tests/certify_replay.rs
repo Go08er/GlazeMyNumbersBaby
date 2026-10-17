@@ -3913,7 +3913,11 @@ fn a_constant_ranges_over_its_one_value() {
         // (Its range row; f″ at the domain's ends, which asin's form has
         // no value for, is another matter: a claim left open.)
         let r = replay::replay(&v).expect("replayed");
-        let range = r.rows.iter().find(|row| row.name == "range").expect("a range row");
+        let range = r
+            .rows
+            .iter()
+            .find(|row| row.name == "range")
+            .expect("a range row");
         assert!(
             range.status != "Unknown" && range.problems.is_empty(),
             "{src} at {digits:?} digits: {:?}",
