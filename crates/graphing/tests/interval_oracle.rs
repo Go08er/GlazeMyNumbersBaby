@@ -1134,6 +1134,235 @@ fn factorials_enclose_mpfr() {
         let name = if perm { "nPr" } else { "nCr" };
         check_binary(&mut t, name, &op, &truth, &pairs, 64, &mut rng);
     }
+    // A whole count k past the polynomial's 60, n across its zeros 0, 1, …,
+    // k − 1 (where Γ(n − k + 1) has its poles: the reflection formula's
+    // enclosure) and beside them. (At a point n the argument k − n is no
+    // double: Γ over the doubles about it is ψ(k)·ulp(k) wide, 130 ulps
+    // at 62, 500 at 200.)
+    let mut pairs = Vec::new();
+    for k in [61.0, 62.0, 63.0, 100.0, 200.0] {
+        let mut ns = vec![
+            Interval::point(1e-90),
+            Interval::point(-1e-90),
+            Interval::point(1e-300),
+            Interval::point(5e-324),
+            Interval::point(1.0 + f64::EPSILON),
+            Interval::point(k - 1.0 - 1e-13),
+            Interval::new(-0.5, 0.5),
+            Interval::new(-1e-3, 2e-3),
+            Interval::new(-0.9, -0.1),
+            Interval::new(0.25, 1.75),
+            Interval::new(k - 1.5, k - 0.5),
+            Interval::new(k - 1.25, k - 0.75),
+        ];
+        for j in [0.0, 1.0, 2.0, 17.0, (k / 2.0).floor(), k - 1.0] {
+            ns.push(Interval::new(j - 0.028, j + 4e-15));
+            ns.push(Interval::new(j - 1e-12, j + 1e-12));
+            ns.push(Interval::point(j + 0.5));
+        }
+        for n in ns {
+            pairs.push((n, Interval::point(k)));
+        }
+    }
+    for perm in [false, true] {
+        let op = move |a: &DecInterval, b: &DecInterval| elem::ncr_npr(a, b, perm);
+        let truth = move |a: &Float, b: &Float| mp_ncr(a, b, perm);
+        let name = if perm {
+            "nPr (a whole count)"
+        } else {
+            "nCr (a whole count)"
+        };
+        check_binary(&mut t, name, &op, &truth, &pairs, 1024, &mut rng);
+        for &(n, r) in &pairs {
+            if n.lo() > -1.0 && n.hi() < r.lo() {
+                let e = op(&DecInterval::new(n), &DecInterval::new(r));
+                if e.dec < Dec::Dac {
+                    t.fail(format!(
+                        "{name}([{:e}, {:e}], {}) is a polynomial there, not {:?}",
+                        n.lo(),
+                        n.hi(),
+                        r.lo(),
+                        e.dec
+                    ));
+                }
+            }
+        }
+    }
+    report(&t);
+    assert!(t.violations.is_empty(), "{:#?}", t.violations);
+}
+
+/// nCr(n, r) and nPr(n, r) through Γ as `functions` defines them, from
+/// ln |Γ| at 2400 bits (each argument exact: a sum of doubles needs up to
+/// about 2100 bits), so that arguments past 10¹⁸, whose Γ is beyond even
+/// MPFR's exponents, have their quotient too; `None` at a pole.
+fn mp_count_from_logs(n: f64, r: f64, perm: bool) -> Option<Float> {
+    const W: u32 = 2400;
+    let (n, r) = (Float::with_val(W, n), Float::with_val(W, r));
+    let ln_gamma = |v: Float| -> Option<(Float, bool)> {
+        if v <= 0 && v.is_integer() {
+            return None;
+        }
+        let (l, sign) = v.ln_abs_gamma();
+        Some((l, sign == std::cmp::Ordering::Less))
+    };
+    let n1 = Float::with_val(W, &n + 1u32);
+    let (top, top_neg) = ln_gamma(n1.clone())?;
+    let (rest, rest_neg) = ln_gamma(Float::with_val(W, &n1 - &r))?;
+    let mut l = Float::with_val(W, &top - &rest);
+    let mut neg = top_neg != rest_neg;
+    if !perm {
+        let (k, k_neg) = ln_gamma(Float::with_val(W, &r + 1u32))?;
+        l -= k;
+        neg ^= k_neg;
+    }
+    let v = Float::with_val(P, l.exp_ref());
+    Some(if neg { -v } else { v })
+}
+
+/// nCr and nPr through Γ (neither a count of whole numbers nor a whole
+/// r ≤ 60, the polynomial) against MPFR: within a few ulps wherever the
+/// value is a normal double, ±∞ beyond them and 0 below, undefined exactly
+/// at Γ's poles. Γ's quotient in doubles was undefined or wrong far out
+/// and next to zero, where the count has a value: nPr(x, 62) beside 0 (x −
+/// 61 rounded onto Γ's pole), nCr(7, 123456.7) (an overflow times an
+/// underflow), nPr(2x, ½) far below 0 (two underflows), nPr(10¹⁵ + ½, ½)
+/// (3.6 times too small: two logarithms of Γ near 3·10¹⁶), nPr(169.3, 0.7)
+/// (297 ulps: n − r + 1 rounded), as the tester `tests/crossfuzz.rs` found.
+#[test]
+fn counts_through_gamma_are_within_a_few_ulps() {
+    use graphing::functions::{ncr, npr};
+    init();
+    let mut pairs: Vec<(f64, f64)> = Vec::new();
+    // The tester's cases, and each kind beside them.
+    for x in [
+        -17.7,
+        -2.5,
+        -1e-90,
+        1e-300,
+        5e-324,
+        1e-20,
+        0.5,
+        1.0 + f64::EPSILON,
+        3.3,
+        17.2,
+        1000.5,
+        -562_341_325_190_349.06,
+        1e15 + 0.5,
+    ] {
+        pairs.push((x, 62.0));
+        pairs.push((x, 61.0));
+        pairs.push((x, 200.0));
+    }
+    for x in [-1e15, -562_341_325_190_349.06, -316_227_766_016_837.94] {
+        pairs.push((4.0, x - 0.5));
+        pairs.push((1.0, x - 0.5));
+        pairs.push((2.0 * x, 0.5));
+    }
+    for p in [
+        (7.0, 123_456.7),
+        (1e15 + 0.5, 0.5),
+        (1e300, 0.5),
+        (0.5, 1e15 + 0.5),
+        (-0.5, 123_456.7),
+        (200.5, 100.25),
+        (1000.5, 3.5),
+        (-200.5, 100.25),
+        (0.5, 1e6),
+        (172.0, 172.999_999_999_999_97),
+        (169.3, 0.7),
+        (5.5, 2.5),
+        (0.1, 1e20),
+        (2f64.powi(60), 2f64.powi(-60)),
+        (1029.5, 514.5),
+        (1e6 + 0.5, 3.25),
+        (-1e6 - 0.5, 3.25),
+        (-1e6 - 0.5, -3.25),
+        (10.5, -1e6 - 0.25),
+        (-100.5, -200.0),
+        (3.0, 0.5 + f64::EPSILON),
+        (-2.5, -1e-300),
+        (-1.0 + f64::EPSILON / 2.0, 0.5),
+        (1e-300, 62.5),
+    ] {
+        pairs.push(p);
+    }
+    // Random arguments over magnitudes and signs, next to the whole
+    // numbers, and half of them a whole r past 60.
+    let mut rng = Rng(0xC0FF_EE15_BAD5_EED5);
+    for i in 0..500 {
+        let arg = |rng: &mut Rng| match rng.next() % 4 {
+            0 => rng.double(),
+            1 => {
+                let k = (rng.next() % 400) as f64 - 200.0;
+                let d = 10f64.powf(-(rng.unit() * 300.0));
+                k + if rng.next().is_multiple_of(2) { d } else { -d }
+            }
+            2 => (rng.next() % 2000) as f64 / 8.0 - 125.0,
+            _ => {
+                10f64.powf(rng.unit() * 300.0)
+                    * if rng.next().is_multiple_of(2) {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+            }
+        };
+        let n = arg(&mut rng);
+        let r = if i % 2 == 0 {
+            61.0 + (rng.next() % 300) as f64
+        } else {
+            arg(&mut rng)
+        };
+        pairs.push((n, r));
+    }
+    let mut t = Tally::default();
+    let mut worst: f64 = 0.0;
+    for (n, r) in pairs {
+        if !(n.is_finite() && r.is_finite()) {
+            continue;
+        }
+        // Counted exactly, or the polynomial: tested above.
+        let whole = |v: f64| v == v.trunc();
+        if (whole(n) && whole(r) && n >= 0.0) || (whole(r) && (0.0..=60.0).contains(&r)) {
+            continue;
+        }
+        for perm in [false, true] {
+            t.cases += 1;
+            let name = format!("{}({n:e}, {r:e})", if perm { "nPr" } else { "nCr" });
+            let v = if perm { npr(n, r) } else { ncr(n, r) };
+            let Some(truth) = mp_count_from_logs(n, r, perm) else {
+                if !v.is_nan() {
+                    t.fail(format!("{name} = {v:e} at a pole of Γ"));
+                }
+                continue;
+            };
+            let want = truth.to_f64();
+            if want.is_normal() {
+                let ulp = (want.abs().next_up() - want.abs()).min(f64::MAX);
+                let off = Float::with_val(P, Float::with_val(P, v) - &truth).to_f64() / ulp;
+                worst = worst.max(off.abs());
+                if off.is_nan() || off.abs() > 4.0 {
+                    t.fail(format!("{name} = {v:e}, not {want:e} ({off:.1} ulps)"));
+                }
+            } else if want.is_infinite() {
+                if v != want && !(v.is_finite() && v.abs() == f64::MAX) {
+                    t.fail(format!("{name} = {v:e}, beyond the doubles: {want:e}"));
+                }
+            } else if v.is_nan()
+                || (v - want).abs() > 2.0 * f64::from_bits(1)
+                || (v != 0.0 && v.signum() != want.signum())
+            {
+                t.fail(format!(
+                    "{name} = {v:e}, below the normal doubles: {want:e}"
+                ));
+            }
+        }
+    }
+    eprintln!(
+        "nCr, nPr through Γ: {} cases, at most {worst:.2} ulps",
+        t.cases
+    );
     report(&t);
     assert!(t.violations.is_empty(), "{:#?}", t.violations);
 }

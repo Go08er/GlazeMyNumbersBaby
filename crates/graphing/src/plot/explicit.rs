@@ -10,8 +10,9 @@
 //!   width w ≤ √(8·tol/M) stay within `tol` (the tolerance, in pixels) of
 //!   the curve, and points that far apart are drawn;
 //! * **steep**: a box at most a pixel wide on which f is continuous and
-//!   stays within its end values (± tol): the chord across it is within a
-//!   pixel of the curve in every direction;
+//!   stays within its end values (± tol) as far as it is in the band (the
+//!   stroke is clipped to it): the chord across it is within a pixel of
+//!   the curve in every direction;
 //! * **peak**: a box at most a pixel wide on which f is continuous but
 //!   leaves its end values (a spike narrower than a pixel, an oscillation):
 //!   its lowest and highest values are found to within `tol` by branch and
@@ -559,7 +560,8 @@ impl<'a> ExplicitSampler<'a> {
     }
 
     /// Whether the enclosure [flo, fhi] of f over [lo, hi] lies within the
-    /// hull of f's values at the ends, widened by tol.
+    /// hull of f's values at the ends, widened by tol, as far as it lies
+    /// in the band.
     fn within_ends(
         &mut self,
         iv: &IntervalFn,
@@ -577,7 +579,13 @@ impl<'a> ExplicitSampler<'a> {
         if a.is_empty() || b.is_empty() {
             return false;
         }
-        flo >= a.lo().min(b.lo()) - tol && fhi <= a.hi().max(b.hi()) + tol
+        // The stroke is clipped to the band: only what of f lies in it
+        // need lie between the ends. (nPr(x, 62) crosses the band within
+        // 10⁻⁸² of 0, from beyond 10⁸⁰ either side: no enclosure is within
+        // the tolerance of its ends there, and the column at 0 was left
+        // unresolved.)
+        let band = |v: f64| v.clamp(self.band_lo, self.band_hi);
+        band(flo) >= band(a.lo().min(b.lo())) - tol && band(fhi) <= band(a.hi().max(b.hi())) + tol
     }
 
     /// Draws the classified boxes, in order.

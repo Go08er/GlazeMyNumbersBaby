@@ -55,7 +55,7 @@ fn pow2(k: i32) -> f64 {
 }
 
 /// v = m·2^e with 1 ≤ |m| < 2, for a finite nonzero v.
-fn frexp(v: f64) -> (f64, f64) {
+pub(crate) fn frexp(v: f64) -> (f64, f64) {
     let (v, adj) = if v.abs() < f64::MIN_POSITIVE {
         (v * pow2(64), -64)
     } else {
@@ -68,7 +68,7 @@ fn frexp(v: f64) -> (f64, f64) {
 }
 
 /// m·2^e as a double, rounded once (to 0 or ±∞ beyond its range).
-fn ldexp(m: f64, e: f64) -> f64 {
+pub(crate) fn ldexp(m: f64, e: f64) -> f64 {
     if e > 1023.0 {
         m * f64::INFINITY
     } else if e >= -1022.0 {
@@ -222,6 +222,18 @@ impl Wide {
     fn normal(self) -> Option<f64> {
         match self {
             Wide::Val(m, e) if m == 0.0 || e.abs() <= NORMAL => Some(ldexp(m, e)),
+            _ => None,
+        }
+    }
+
+    /// The double, when this is one exactly, a subnormal one too.
+    fn double(self) -> Option<f64> {
+        match self {
+            Wide::Val(m, _) if m == 0.0 => Some(m),
+            Wide::Val(m, e) if (-1074.0..=1023.0).contains(&e) => {
+                let v = ldexp(m, e);
+                (v != 0.0 && frexp(v) == (m, e)).then_some(v)
+            }
             _ => None,
         }
     }
@@ -798,7 +810,11 @@ pub(crate) fn apply2(f: Fn2, a: Wide, b: Wide) -> Wide {
                 _ => Wide::Unknown,
             }
         }
-        Fn2::NCr | Fn2::NPr => match normal {
+        // Two doubles, a subnormal one too: the count of the doubles,
+        // which `functions` has wherever it is defined (nCr(7, 2x) next to
+        // 0 was "can't tell", for 1: 2x is redone here, and was no
+        // `normal` double).
+        Fn2::NCr | Fn2::NPr => match a.double().zip(b.double()) {
             Some((x, y)) => Wide::new(f.apply(x, y)),
             None => Wide::Unknown,
         },

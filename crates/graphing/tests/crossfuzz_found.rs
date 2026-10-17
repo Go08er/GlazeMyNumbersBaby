@@ -248,6 +248,125 @@ fn a_box_holding_a_zero_count_of_npr_encloses_it() {
     assert!(enclosure("nCr(x,-1)", 0.25, 0.75).dec <= Dec::Trv);
 }
 
+/// nCr and nPr through Γ far out and next to zero, where the count has a
+/// value: Γ's quotient in doubles was undefined there (an overflow times
+/// an underflow, two underflows, n − r + 1 rounded onto a pole) or wrong
+/// (two logarithms of Γ near 3·10¹⁶ subtracted), in the compiled
+/// evaluator and the reference both, and nPr(x, 62)'s enclosure was ℝ,
+/// possibly undefined, beside each of its zeros. (Values from MPFR.)
+#[test]
+fn counts_through_gamma_have_their_values_far_out_and_next_to_zero() {
+    let within = |got: f64, want: f64, ulps: f64| {
+        let ulp = want.abs().next_up() - want.abs();
+        (got - want).abs() <= ulps * ulp
+    };
+    let x = -562_341_325_190_349.06_f64;
+    for (f, v, want) in [
+        // x − 61 rounds onto −61 next to 0, onto −60 next to 1.
+        ("nPr(1e-90,62)", npr(1e-90, 62.0), -5.075_802_138_772_248e-7),
+        (
+            "nPr(-1e-90,62)",
+            npr(-1e-90, 62.0),
+            5.075_802_138_772_248e-7,
+        ),
+        (
+            "nPr(5e-324,62)",
+            npr(5e-324, 62.0),
+            -2.507_779_461_854_891_4e-240,
+        ),
+        (
+            "nPr(1+ε,62)",
+            npr(1.0 + f64::EPSILON, 62.0),
+            1.847_630_296_034_937_4e66,
+        ),
+        (
+            "nCr(1e-300,62)",
+            ncr(1e-300, 62.0),
+            -1.612_903_225_806_451_7e-302,
+        ),
+        // Γ(123457.7) overflows, 1/Γ(−123448.7) underflows.
+        (
+            "nCr(7,123456.7)",
+            ncr(7.0, 123_456.7),
+            -2.405_578_290_225_185_4e-38,
+        ),
+        (
+            "nCr(-0.5,123456.7)",
+            ncr(-0.5, 123_456.7),
+            -9.438_130_482_289_52e-4,
+        ),
+        ("nCr(0.5,1e6)", ncr(0.5, 1e6), -2.820_948_975_594_801_3e-10),
+        ("nCr(0.1,1e20)", ncr(0.1, 1e20), -9.357_787_209_128_726e-24),
+        (
+            "nCr(4,x-0.5)",
+            ncr(4.0, -1e15 - 0.5),
+            7.639_437_268_410_881e-75,
+        ),
+        (
+            "nCr(1,x-0.5)",
+            ncr(1.0, -1e15 - 0.5),
+            3.183_098_861_837_9e-31,
+        ),
+        // Two underflows.
+        ("nPr(2x,0.5)", npr(2.0 * x, 0.5), 8.096_376_267_324_966e7),
+        (
+            "nPr(-200.5,100.25)",
+            npr(-200.5, 100.25),
+            9.327_598_513_520_478e239,
+        ),
+        // Two logarithms of Γ near 3·10¹⁶, and past the doubles' Γ.
+        (
+            "nPr(1e15+0.5,0.5)",
+            npr(1e15 + 0.5, 0.5),
+            3.162_277_660_168_380_7e7,
+        ),
+        (
+            "nCr(1e300,0.5)",
+            ncr(1e300, 0.5),
+            1.128_379_167_095_512_7e150,
+        ),
+        (
+            "nPr(172,173-2^-45)",
+            npr(172.0, 172.999_999_999_999_97),
+            6.066_759_058_212_55e297,
+        ),
+        // n − r + 1 rounded: 297 ulps.
+        ("nPr(169.3,0.7)", npr(169.3, 0.7), 36.335_348_186_115_574),
+    ] {
+        assert!(within(v, want, 4.0), "{f} = {v:e}, not {want:e}");
+    }
+    // Beyond the doubles, at a pole, below the doubles: as they are.
+    assert_eq!(npr(x, 62.0), f64::INFINITY);
+    assert!(npr(-2e15, 0.5).is_nan() && ncr(-100.5, -200.0).is_nan());
+    assert!(ncr(0.5, 1e15 + 0.5).is_nan(), "n − r + 1 = −10¹⁵, a pole");
+    assert_eq!(npr(10.5, -1e6 - 0.25), 0.0);
+    // The compiled program and the reference have them, and the interval
+    // form encloses nPr(x, 62) next to its zeros, continuous.
+    assert_eq!(scalar("x*nCr(7,123456.7)", 2.0), 2.0 * ncr(7.0, 123_456.7));
+    // A count of a subnormal argument computed in x (redone in extended
+    // range, where it was no double to take the count of: "can't tell").
+    assert_eq!(scalar("nCr(7,2*x)", -5e-324), 1.0);
+    assert_eq!(scalar("nPr(3.5,x/2)", 1e-320), 1.0);
+    for (src, at) in [("nPr(x,62)", 1e-90), ("nPr(2*x,0.5)", x)] {
+        let v = scalar(src, at);
+        assert!(v.is_finite(), "{src} at {at:e}");
+        match reference(src, at) {
+            R::V(r) => assert_eq!(r.f(), v, "{src} at {at:e}"),
+            r => panic!("{src} at {at:e}: {r:?}"),
+        }
+    }
+    for at in [1e-90, -1e-300, 1.0 + f64::EPSILON, 17.0 - 1e-14] {
+        let v = npr(at, 62.0);
+        let e = enclosure("nPr(x,62)", at, at);
+        assert!(
+            e.dec >= Dec::Dac && e.lo() <= v && v <= e.hi() && e.hi() - e.lo() <= 1e-12 * v.abs(),
+            "nPr({at:e}, 62) = {v:e}: {e:?}"
+        );
+    }
+    let e = enclosure("nPr(x,62)", -0.01, 0.01);
+    assert!(e.dec >= Dec::Dac && e.lo() < 0.0 && 0.0 < e.hi(), "{e:?}");
+}
+
 /// root(x, n) of a whole degree other than 2 and 3 went through `pow`
 /// with 1/n rounded, which |ln x|/n magnifies: 14 ulps at 10⁸⁵, 40 at
 /// 10²⁰⁰, outside f's enclosure. It is the power 1/n as `x^(1/n)` has it.

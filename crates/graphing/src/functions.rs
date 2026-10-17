@@ -16,6 +16,7 @@ use std::f64::consts::PI;
 use core_math as cm;
 
 use crate::big::{Nat, Round};
+use crate::dd::Dd;
 
 /// Angle unit used by trigonometric functions
 /// (`Graphing::EvalTrigUnitMode`). Hyperbolic functions are not affected.
@@ -837,45 +838,338 @@ fn falling(n: f64, r: f64, perm: bool) -> Option<f64> {
 
 /// Number of combinations `nCr(n, r)` (generalised through Γ).
 pub fn ncr(n: f64, r: f64) -> f64 {
-    if !n.is_finite() || !r.is_finite() {
-        return f64::NAN;
-    }
-    // Whole numbers: the exact count, rounded once.
-    match count_exact(n, r, false) {
-        Some(Count::Exact(v)) => return v.to_f64(Round::Nearest),
-        Some(Count::Huge) => return f64::INFINITY,
-        None => {}
-    }
-    if let Some(v) = falling(n, r, false) {
-        return v;
-    }
-    let direct = factorial(n) / (factorial(r) * factorial(n - r));
-    if direct.is_finite() || n + 1.0 <= 0.0 || r + 1.0 <= 0.0 || n - r + 1.0 <= 0.0 {
-        return direct;
-    }
-    // Γ(n+1) overflows long before the quotient does.
-    cm::exp(ln_gamma(n + 1.0) - ln_gamma(r + 1.0) - ln_gamma(n - r + 1.0))
+    count(n, r, false)
 }
 
 /// Number of permutations `nPr(n, r)` (generalised through Γ).
 pub fn npr(n: f64, r: f64) -> f64 {
+    count(n, r, true)
+}
+
+/// nCr (nPr, `perm`): whole numbers counted exactly, a small whole r as the
+/// polynomial in n, and else Γ's quotient: as it is in doubles where that
+/// is right to a few ulps ([`gamma_direct`]), and in extended range where
+/// it isn't ([`gamma_count`]).
+fn count(n: f64, r: f64, perm: bool) -> f64 {
     if !n.is_finite() || !r.is_finite() {
         return f64::NAN;
     }
     // Whole numbers: the exact count, rounded once.
-    match count_exact(n, r, true) {
+    match count_exact(n, r, perm) {
         Some(Count::Exact(v)) => return v.to_f64(Round::Nearest),
         Some(Count::Huge) => return f64::INFINITY,
         None => {}
     }
-    if let Some(v) = falling(n, r, true) {
+    if let Some(v) = falling(n, r, perm) {
         return v;
     }
-    let direct = factorial(n) / factorial(n - r);
-    if direct.is_finite() || n + 1.0 <= 0.0 || n - r + 1.0 <= 0.0 {
-        return direct;
+    if let Some(v) = gamma_direct(n, r, perm) {
+        return v;
     }
-    cm::exp(ln_gamma(n + 1.0) - ln_gamma(n - r + 1.0))
+    match gamma_count(n, r, perm) {
+        Some((m, e)) => crate::wide::ldexp(m, e),
+        None => f64::NAN,
+    }
+}
+
+/// a + b exactly in doubles?
+fn sum_is_exact(a: f64, b: f64) -> bool {
+    let s = a + b;
+    let bb = s - a;
+    (a - (s - bb)) + (b - bb) == 0.0
+}
+
+/// Γ(n + 1)/Γ(n − r + 1) (over Γ(r + 1) for nCr) in doubles, as it always
+/// was, where that is right to a few ulps: each argument of Γ exact in
+/// doubles (n − r + 1 rounded is another argument: nPr(169.3, 0.7) was 297
+/// ulps off) and each Γ, product and quotient a normal double (each then
+/// correctly rounded or rounded once: 2½ ulps at most). `None` elsewhere.
+fn gamma_direct(n: f64, r: f64, perm: bool) -> Option<f64> {
+    let rest = n - r;
+    if !(sum_is_exact(n, 1.0)
+        && sum_is_exact(n, -r)
+        && sum_is_exact(rest, 1.0)
+        && (perm || sum_is_exact(r, 1.0)))
+    {
+        return None;
+    }
+    let (top, below) = (factorial(n), factorial(rest));
+    if !(top.is_normal() && below.is_normal()) {
+        return None;
+    }
+    let v = if perm {
+        top / below
+    } else {
+        let k = factorial(r);
+        let d = k * below;
+        if !(k.is_normal() && d.is_normal()) {
+            return None;
+        }
+        top / d
+    };
+    v.is_normal().then_some(v)
+}
+
+/// ½·ln 2π and ln π to about 106 bits.
+const HALF_LN_2PI: Dd = Dd {
+    hi: 0.9189385332046728,
+    lo: -3.8782941580672414e-17,
+};
+const LN_PI: Dd = Dd {
+    hi: 1.1447298858494002,
+    lo: 1.0265951162707826e-17,
+};
+
+/// From here on ln Γ is Stirling's series ([`stirling_tail`]).
+const STIRLING_FROM: f64 = 16.0;
+
+/// An argument of Γ beyond which ln Γ of it alone (above 2²⁰⁰·138) is
+/// only a sign: a count that holds one is beyond the extended range.
+const FAR_ARGUMENT: f64 = 1.606_938_044_258_990_3e60;
+
+/// a·n + b·r + c for a, b, c ∈ {−1, 0, 1}, as a double-double (exact but
+/// for a rounding at 2⁻¹⁰⁶ of it).
+fn linear(n: f64, r: f64, (a, b, c): (f64, f64, f64)) -> Dd {
+    Dd::of(a * n).add(Dd::of(b * r)).add(Dd::of(c))
+}
+
+/// ln x for a double-double x > 0.
+fn ln_dd(x: Dd) -> Dd {
+    crate::dd::ln(x.hi).add(Dd::of(x.lo / x.hi))
+}
+
+/// s·ln(1 + δ/q) for double-doubles with |δ/q| ≤ ¼, to about 2⁻¹⁰⁰ of
+/// itself.
+fn times_ln_ratio(s: Dd, delta: Dd, q: Dd) -> Dd {
+    let t = delta.div(q);
+    if t.hi.abs() < 9.5e-7 {
+        // ln(1 + t) = 2·atanh(y), y = t/(2 + t): 2y(1 + y²/3 + y⁴/5), the
+        // next term below 2⁻¹²⁰ of it; s·2y taken as (s/q)·δ·2/(2 + t),
+        // so that nothing is subnormal however large q is.
+        let w = Dd::of(2.0).add(t);
+        let y = t.div(w);
+        let z = y.mul(y);
+        let series = Dd::of(1.0).add(z.div_f(3.0)).add(Dd::of(z.hi * z.hi / 5.0));
+        return s.div(q).mul(delta).mul_f(2.0).div(w).mul(series);
+    }
+    // 1 + t = h + l: ln h + ln(1 + l/h), |l/h| ≤ 2⁻⁵³. (h + l holds t to
+    // 2⁻¹⁰⁶ absolute, 2⁻⁸⁶ of t here.)
+    let u = Dd::of(1.0).add(t);
+    let c = Dd::of(u.lo).div_f(u.hi);
+    s.mul(crate::dd::ln(u.hi).add(c).add(Dd::of(-0.5 * c.hi * c.hi)))
+}
+
+/// ln Γ(x) − ((x − ½)·ln x − x + ½·ln 2π) for x ≥ [`STIRLING_FROM`]:
+/// Stirling's series to B₁₆, within 3·10⁻²⁰.
+fn stirling_tail(x: f64) -> f64 {
+    let z = 1.0 / (x * x);
+    let s: f64 = -3617.0 / 122_400.0;
+    let s = s.mul_add(z, 1.0 / 156.0);
+    let s = s.mul_add(z, -691.0 / 360_360.0);
+    let s = s.mul_add(z, 1.0 / 1188.0);
+    let s = s.mul_add(z, -1.0 / 1680.0);
+    let s = s.mul_add(z, 1.0 / 1260.0);
+    let s = s.mul_add(z, -1.0 / 360.0);
+    let s = s.mul_add(z, 1.0 / 12.0);
+    s / x
+}
+
+/// ln Γ(x) for x ≥ [`STIRLING_FROM`], to about 2⁻¹⁰⁰ of its size.
+fn ln_gamma_stirling(x: Dd) -> Dd {
+    x.add(Dd::of(-0.5))
+        .mul(ln_dd(x))
+        .add(x.neg())
+        .add(HALF_LN_2PI)
+        .add(Dd::of(stirling_tail(x.hi)))
+}
+
+/// ln Γ(x) for a double-double x ≥ ½, to about 2⁻¹⁰⁰ of its size; `None`
+/// past [`FAR_ARGUMENT`].
+fn ln_gamma_dd(x: Dd) -> Option<Dd> {
+    if x.hi > FAR_ARGUMENT {
+        return None;
+    }
+    if x.hi >= STIRLING_FROM {
+        return Some(ln_gamma_stirling(x));
+    }
+    // Γ(x) = Γ(x + m)/(x(x + 1)…(x + m − 1)).
+    let one = Dd::of(1.0);
+    let mut product = x;
+    let mut y = x.add(one);
+    while y.hi < STIRLING_FROM {
+        product = product.mul(y);
+        y = y.add(one);
+    }
+    Some(ln_gamma_stirling(y).add(ln_dd(product).neg()))
+}
+
+/// ln Γ(p) − ln Γ(q) for double-doubles p, q ≥ ½ apart by δ = p − q
+/// (given exactly). Two large arguments close together are taken as one
+/// ratio, whose logarithm is about δ·ln q however large q is: through
+/// Stirling, (p − ½)·ln(1 + δ/q) + δ·(ln q − 1) and the difference of the
+/// series. `None` where a lone ln Γ is past [`FAR_ARGUMENT`].
+fn ln_gamma_ratio(p: Dd, q: Dd, delta: Dd) -> Option<Dd> {
+    if p.hi >= STIRLING_FROM && q.hi >= STIRLING_FROM && delta.hi.abs() <= 0.25 * q.hi {
+        return Some(
+            times_ln_ratio(p.add(Dd::of(-0.5)), delta, q)
+                .add(delta.mul(ln_dd(q).add(Dd::of(-1.0))))
+                .add(Dd::of(stirling_tail(p.hi) - stirling_tail(q.hi))),
+        );
+    }
+    Some(ln_gamma_dd(p)?.add(ln_gamma_dd(q)?.neg()))
+}
+
+/// |sin πd| for 0 < |d| ≤ ½ as m·2^e, 1 ≤ m < 2 (πd itself below 2⁻⁹⁰⁰,
+/// to 2⁻¹⁸⁰⁰ of it).
+fn sinpi_scaled(d: f64) -> (f64, f64) {
+    let d = d.abs();
+    if d < 1.2e-271 {
+        let (m, e) = crate::wide::frexp(d);
+        let (m, k) = crate::wide::frexp(PI * m);
+        return (m, e + k);
+    }
+    crate::wide::frexp(cm::sinpi(d))
+}
+
+/// nPr(n, r) = Γ(n + 1)/Γ(n − r + 1), and nCr(n, r) that over Γ(r + 1),
+/// for any doubles n and r, as m·2^e (1 ≤ |m| < 2; e = ±∞ for a magnitude
+/// beyond even that); `None` where an argument of Γ is at a pole.
+///
+/// Each argument is a·n + b·r + 1, held exactly (as a double-double, not
+/// rounded onto or beside a pole). One below ½ is reflected: Γ(x) =
+/// π/(sin πx · Γ(1 − x)), sin πx from n and r reduced modulo 2 exactly, so
+/// a pole is where it is 0 and its neighbourhood keeps every digit. What is
+/// left is Γ of arguments ≥ ½ to a power ±1: the largest is taken with the
+/// largest on the other side of the fraction as one ratio
+/// ([`ln_gamma_ratio`], two large arguments apart by an exact a·n + b·r +
+/// c), the rest alone, all as logarithms in double-double. So nothing
+/// overflows on the way, and the result is within a few ulps: each sine
+/// and the exponential correctly rounded, the logarithm to about 2⁻⁹⁰.
+///
+/// Γ's quotient in doubles loses it all far out and next to the poles:
+/// nPr(x, 62) was undefined at 10⁻⁹⁰ (x − 61 rounds onto −61), as were
+/// nCr(7, 123456.7) (an overflow times an underflow) and nPr(2x, ½) far
+/// below 0 (two underflows), and nPr(10¹⁵ + ½, ½) was 3.6 times too small
+/// (the difference of two logarithms near 3·10¹⁶): the tester
+/// `tests/crossfuzz.rs` found them against the interval form.
+pub(crate) fn gamma_count(n: f64, r: f64, perm: bool) -> Option<(f64, f64)> {
+    // (a, b, c) of each argument, and its power in the quotient.
+    const TOP: (f64, f64, f64) = (1.0, 0.0, 1.0);
+    const REST: (f64, f64, f64) = (1.0, -1.0, 1.0);
+    const COUNT: (f64, f64, f64) = (0.0, 1.0, 1.0);
+    let forms: &[((f64, f64, f64), i32)] = if perm {
+        &[(TOP, 1), (REST, -1)]
+    } else {
+        &[(TOP, 1), (REST, -1), (COUNT, -1)]
+    };
+    // n and r modulo 2, exactly (fmod is exact).
+    let (n2, r2) = (n % 2.0, r % 2.0);
+    let mut sign = 1.0;
+    let mut log = Dd::of(0.0);
+    // The sines' product, m·2^e.
+    let (mut m, mut e) = (1.0, 0.0);
+    // The arguments ≥ ½: (a, b, c), the value, the power.
+    let mut args = [((0.0, 0.0, 0.0), Dd::of(0.0), 0); 3];
+    let mut len = 0;
+    for &((a, b, c), power) in forms {
+        let x = linear(n, r, (a, b, c));
+        if x.hi >= 0.5 {
+            args[len] = ((a, b, c), x, power);
+            len += 1;
+            continue;
+        }
+        // sin πx = −sin π(a·n + b·r) (c = 1), a·n + b·r ≡ s + t modulo 2
+        // exactly, and that k + d with k whole and |d| ≤ ½ (s − k is
+        // exact: |s| < 4).
+        let st = Dd::of(a * n2).add(Dd::of(b * r2));
+        let k = st.hi.round();
+        let d = (st.hi - k) + st.lo;
+        if d == 0.0 {
+            // x is a whole number ≤ 0.
+            return None;
+        }
+        // Γ(x) has the sign of sin πx = −(−1)^k·sin πd.
+        if (d > 0.0) != (k % 2.0 != 0.0) {
+            sign = -sign;
+        }
+        // Γ(x)^power = (π/|sin πx|)^power · Γ(1 − x)^−power.
+        let (sm, se) = sinpi_scaled(d);
+        if power > 0 {
+            m /= sm;
+            e -= se;
+            log = log.add(LN_PI);
+        } else {
+            m *= sm;
+            e += se;
+            log = log.add(LN_PI.neg());
+        }
+        let (mm, me) = crate::wide::frexp(m);
+        (m, e) = (mm, e + me);
+        args[len] = ((-a, -b, 1.0 - c), linear(n, r, (-a, -b, 1.0 - c)), -power);
+        len += 1;
+    }
+    let args = &args[..len];
+    // The largest argument with the largest on the other side, as one
+    // ratio; the rest alone.
+    let largest = |of: &mut dyn Iterator<Item = usize>| {
+        of.max_by(|&i, &j| args[i].1.hi.total_cmp(&args[j].1.hi))
+    };
+    let big = largest(&mut (0..args.len())).expect("an argument");
+    let other = largest(&mut (0..args.len()).filter(|&i| args[i].2 != args[big].2));
+    let mut far = false;
+    if let Some(other) = other {
+        let (up, down) = if args[big].2 > 0 {
+            (big, other)
+        } else {
+            (other, big)
+        };
+        let ((a, b, c), p, _) = args[up];
+        let ((a2, b2, c2), q, _) = args[down];
+        let delta = linear(n, r, (a - a2, b - b2, c - c2));
+        match ln_gamma_ratio(p, q, delta) {
+            Some(l) => log = log.add(l),
+            None => far = true,
+        }
+    }
+    for (i, &(_, x, power)) in args.iter().enumerate() {
+        if Some(i) == other || (i == big && other.is_some()) {
+            continue;
+        }
+        match ln_gamma_dd(x) {
+            Some(l) => log = log.add(if power > 0 { l } else { l.neg() }),
+            None => far = true,
+        }
+    }
+    if far || !log.hi.is_finite() {
+        // Arguments past 2²⁰⁰ that no ratio brings together, or a ratio of
+        // two past 10³⁰⁵ apart by a quarter of them or more: the count is
+        // beyond the extended range either way, as the sign of
+        // Σ ±x·(ln x − 1), each taken over the largest x, says.
+        let top = args.iter().map(|a| a.1.hi).fold(0.0, f64::max);
+        let s: f64 = args
+            .iter()
+            .map(|&(_, x, power)| f64::from(power) * (x.hi / top) * (cm::log(x.hi) - 1.0))
+            .sum();
+        return Some((
+            sign,
+            if s > 0.0 {
+                f64::INFINITY
+            } else {
+                f64::NEG_INFINITY
+            },
+        ));
+    }
+    if log.hi.abs() > 1e9 {
+        let far = if log.hi > 0.0 {
+            f64::INFINITY
+        } else {
+            f64::NEG_INFINITY
+        };
+        return Some((sign, far));
+    }
+    let (x, k) = crate::dd::exp(log);
+    let (mm, me) = crate::wide::frexp(m * x);
+    Some((sign * mm, e + k + me))
 }
 
 /// `b^(p/q)` with real-root semantics: a negative base is allowed when q is
