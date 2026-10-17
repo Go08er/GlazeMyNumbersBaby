@@ -33,12 +33,9 @@ Package: dgmnb
 Architecture: any
 # libxkbcommon is loaded at run time, so shlibs can't see it.
 Depends: ${shlibs:Depends}, ${misc:Depends}, libxkbcommon0
-Recommends: libx11-6, libxcursor1, libxrandr2, libxi6
 Description: Don't Glaze My Numbers, Baby - the lean twin of GMNB
  DGMNB is the same Rust port of the open-source Windows Calculator as GMNB,
  with every mode and feature, drawn in software with a plain interface. It
  needs no GPU, uses around 13 MB of memory and stays idle while unused.
- .
- The X11 libraries are only needed in X11 sessions.
  .
  Not affiliated with or endorsed by Microsoft.

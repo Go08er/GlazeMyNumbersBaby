@@ -72,7 +72,6 @@ package_dgmnb() {
   license=('MIT' 'OFL-1.1' 'Apache-2.0' 'BSD-2-Clause' 'BSD-3-Clause' 'CDLA-Permissive-2.0'
            'ISC' 'Unicode-3.0' 'Zlib')
   depends=('wayland' 'libxkbcommon' 'gcc-libs' 'glibc' 'hicolor-icon-theme')
-  optdepends=('libx11: X11 sessions' 'libxcursor: X11 sessions' 'libxrandr: X11 sessions' 'libxi: X11 sessions')
   local app=io.github.Go08er.DontGlazeMyNumbersBaby
   cd "$_src"
   install -Dm755 target/lean/dgmnb -t "$pkgdir/usr/bin"

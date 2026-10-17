@@ -36,24 +36,18 @@ jobs:
             wayland-test.log
           grep -q "^test result: ok\. 1 passed; 0 failed;" wayland-test.log
           if grep -q "skipped" wayland-test.log; then exit 1; fi
-      - name: D-Bus and X11 tests ran (private dbus-daemon and Xvfb)
+      - name: D-Bus tests ran (private dbus-daemon)
         run: |
           set -o pipefail
           # The test suite skips these, with a note, if the dev shell's
-          # dbus-daemon or Xvfb can't start; here a skip fails the job.
+          # dbus-daemon can't start; here a skip fails the job.
           nix develop -c cargo test -p appcore --locked --lib dbus:: -- --nocapture 2>&1 \
             | tee dbus-test.log
-          nix develop -c cargo test -p dgmnb --locked clipboard::x11:: -- --nocapture 2>&1 \
-            | tee x11-test.log
-          nix develop -c cargo test -p x11paste --locked --lib -- --nocapture 2>&1 \
-            | tee x11paste-test.log
-          for log in dbus-test.log x11-test.log x11paste-test.log; do
-            grep -Eq "^test result: ok\. [1-9][0-9]* passed; 0 failed;" "$log"
-            if grep -q "skipped" "$log"; then
-              echo "::error::a test in $log skipped"
-              exit 1
-            fi
-          done
+          grep -Eq "^test result: ok\. [1-9][0-9]* passed; 0 failed;" dbus-test.log
+          if grep -q "skipped" dbus-test.log; then
+            echo "::error::a test in dbus-test.log skipped"
+            exit 1
+          fi
       - name: GMNB launcher on an emulated CPU without AVX2 (Nehalem)
         run: |
           # GMNB is shipped for x86-64-v3 behind gmnb-launcher, which must

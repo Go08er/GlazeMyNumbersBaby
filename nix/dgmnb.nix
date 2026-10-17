@@ -6,24 +6,13 @@
   patchelf,
   wayland,
   libxkbcommon,
-  libx11,
-  libxcursor,
-  libxrandr,
-  libxi,
-  libxcb,
 }:
 let
   appId = "io.github.Go08er.DontGlazeMyNumbersBaby";
-  # Loaded at run time rather than linked: the keymap library always, and
-  # Xlib/XCB only in X11 sessions.
+  # Loaded at run time rather than linked.
   runtimeLibs = [
     libxkbcommon
     wayland
-    libx11
-    libxcursor
-    libxrandr
-    libxi
-    libxcb
   ];
 in
 rustPlatform.buildRustPackage {
