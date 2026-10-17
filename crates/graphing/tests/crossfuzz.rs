@@ -1115,15 +1115,38 @@ fn planted_false_answers_are_findings_where_proven() {
                 k.x_intercept = "0".into();
             }),
         ),
-        // A value at a point is a witness.
+        // A value at a point is a witness where f's enclosure there
+        // (MPFR's: 1) leaves the number out; f's enclosure in doubles
+        // there is [0, 2.3].
         (
             "10^16*(1.0000000000000001-1)+x",
-            "panel/y-intercept-wrong",
-            true,
+            if cfg!(feature = "mpfr-oracle") {
+                "panel/y-intercept-wrong"
+            } else {
+                "panel/y-intercept-wrong-not-proven"
+            },
+            cfg!(feature = "mpfr-oracle"),
             Box::new(|k| {
                 k.data.y_intercept = Some(0.0);
                 k.y_intercept = "0".into();
             }),
+        ),
+        // f(1) = 1 and f(−1) = 1, which an odd f can't have.
+        (
+            "x^2",
+            "panel/parity-witness",
+            true,
+            Box::new(|k| k.parity = graphing::analysis::Parity::Odd),
+        ),
+        // Odd in fact, though not in doubles: 1 + (x − 1) cancels, to a
+        // different rounding of x − 1 either side of 1, and cosh 2³² is
+        // past the doubles, where no enclosure tells f(x) from −f(−x).
+        // Counted, with the panel as it is.
+        (
+            "cosh(4294967296)*(1+(x-1))",
+            "panel/parity-witness-not-proven",
+            false,
+            Box::new(|_| {}),
         ),
         // That f is unbounded beside 0 no enclosure proves, and no
         // values; the replay's own rule does (a divisor with a zero

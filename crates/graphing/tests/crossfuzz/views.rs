@@ -2141,6 +2141,83 @@ impl<'a> Proofs<'a> {
                 (self.undefined(at), self.undefined(-at)),
                 (Some(true), Some(false)) | (Some(false), Some(true))
             )),
+            // Even or odd, from f(x) and f(−x) computed: refuted only
+            // where f's enclosures at x and −x (after the sign, for odd)
+            // are apart. Computed values don't show it: 1 + (x − 1) near
+            // 0 is the rounding of x − 1 on either side of 1, and a
+            // multiple of it is far from odd in doubles and odd in fact.
+            "parity-witness" => {
+                use graphing::analysis::Parity;
+                let (Some(a), Some(b)) = (self.value(at), self.value(-at)) else {
+                    return unproven();
+                };
+                let a = if self.k.parity == Parity::Odd {
+                    (-a.1, -a.0)
+                } else {
+                    a
+                };
+                proven_if(apart(a, b, 0.0))
+            }
+            // Monotone on a stretch, from two samples in the wrong order:
+            // refuted where f's enclosures at the two are.
+            "monotonicity-reversal" => {
+                let (Some(early), Some(late)) = (self.value(f.span.0), self.value(at)) else {
+                    return unproven();
+                };
+                let t = &f.detail;
+                proven_if(if t.starts_with("Increasing") {
+                    late.1 < early.0
+                } else if t.starts_with("Decreasing") {
+                    late.0 > early.1
+                } else {
+                    apart(early, late, 0.0)
+                })
+            }
+            // A value outside the range listed: f's enclosure there lies
+            // beyond every piece listed, to the digits the panel shows.
+            "range-excludes-value" => {
+                let Some(v) = self.value(at) else {
+                    return unproven();
+                };
+                proven_if(
+                    !d.range.is_empty()
+                        && d.range.iter().all(|i| {
+                            let (lo, hi) = (i.lo.value, i.hi.value);
+                            let w = [lo, hi]
+                                .iter()
+                                .filter(|e| e.is_finite())
+                                .fold(0.0f64, |m, e| m.max(e.abs()))
+                                * 1e-5;
+                            v.1 < lo - w || v.0 > hi + w
+                        }),
+                )
+            }
+            // The y-intercept shown against f(0): f's enclosure there
+            // leaves the number out, to the digits shown (or is shown to
+            // the digits known).
+            "y-intercept-wrong" => {
+                if shown_as_enclosed(self.l, self.k, self.cert, self.mp) {
+                    return Open("panel/y-intercept-shown-to-the-digits-known".into());
+                }
+                match (d.y_intercept, self.value(0.0)) {
+                    (Some(y), Some(v)) => proven_if(apart(v, (y, y), 1e-5 * y.abs())),
+                    _ => unproven(),
+                }
+            }
+            // Periodic, f(x) and f(x + P) computed apart: refuted where
+            // f's enclosure at x and over where x + P, rounded, may be
+            // are.
+            "period-witness" if !f.detail.ends_with("f(x+P) not") => {
+                let Some(p) = d.period else {
+                    return unproven();
+                };
+                let y = at + p;
+                let r = 16.0 * ulp(y) + 4.0 * ulp(p);
+                match (self.value(at), self.range(y - r, y + r)) {
+                    (Some(v), Some(w)) => proven_if(apart(v, w, 0.0)),
+                    _ => unproven(),
+                }
+            }
             // Periodic, with f defined at x and not at x + P: undefined
             // on all of where x + P, rounded, may be.
             "period-witness" if f.detail.ends_with("f(x+P) not") => {
@@ -2194,6 +2271,12 @@ impl<'a> Proofs<'a> {
             _ => Witness,
         }
     }
+}
+
+/// Whether two enclosures are apart by more than `slack`: no value of
+/// one is within it of a value of the other (NaN is never apart).
+fn apart(a: (f64, f64), b: (f64, f64), slack: f64) -> bool {
+    a.1 + slack < b.0 || b.1 + slack < a.0
 }
 
 /// The items of a partial list ("these are some of them"): each is
@@ -2375,20 +2458,6 @@ fn panel(
                     continue;
                 }
                 match f.class {
-                    // f(x + P) against f(x), where x + P lands beside a
-                    // point so sharp that f's enclosure over the doubles
-                    // about it holds f(x) all the same.
-                    "period-witness"
-                        if f.at.is_finite()
-                            && k.data.period.is_some_and(|p| {
-                                let v = l.f.prog.eval(f.at, 0.0);
-                                let y = f.at + p;
-                                let e = proofs.over(checks::step(y, -16), checks::step(y, 16));
-                                !v.is_nan() && !e.is_empty() && e.lo() <= v && v <= e.hi()
-                            }) =>
-                    {
-                        out.note("panel/period-witness-in-doubles", || f.detail.clone());
-                    }
                     // The compiled NaN there may say "can't tell".
                     "evaluator-disagrees"
                         if l.f.prog.eval(f.at, 0.0).is_nan() && l.f.prog.undecided(f.at, 0.0) =>
@@ -2427,15 +2496,6 @@ fn panel(
                     {
                         out.note("panel/y-intercept-0-and-f-not-proven-nonzero", || {
                             f.detail.clone()
-                        });
-                    }
-                    // The panel's number for a value known to an
-                    // enclosure is the enclosure's middle, and its text as
-                    // many digits as the enclosure fixes: the text is the
-                    // claim.
-                    "y-intercept-wrong" if shown_as_enclosed(l, k, cert, mp) => {
-                        out.note("panel/y-intercept-shown-to-the-digits-known", || {
-                            format!("{}, shown as {}", f.detail, k.y_intercept)
                         });
                     }
                     _ => out.fail(&class, f.detail),
