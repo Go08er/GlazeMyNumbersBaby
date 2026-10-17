@@ -327,11 +327,9 @@ pub fn apply_theme_setting(theme: &str) {
 pub const SEE_THROUGH: &str = "wc-see-through";
 
 /// Show the backdrop at `alpha`: below 1 it, and the window under it, are
-/// see-through, where the display composites windows. Without that (X11
-/// with no compositing manager) a see-through window shows black, so it
-/// stays opaque.
+/// see-through (a Wayland compositor always composites windows).
 pub fn apply_backdrop(win: &adw::ApplicationWindow, aurora: &Aurora, alpha: f32) {
-    let see_through = alpha < 1.0 && WidgetExt::display(win).is_composited();
+    let see_through = alpha < 1.0;
     aurora.set_backdrop_alpha(if see_through { alpha } else { 1.0 });
     if see_through == win.has_css_class(SEE_THROUGH) {
         return;
@@ -426,16 +424,6 @@ impl Window {
             &aurora,
             crate::settings::backdrop_alpha(settings.background_opacity),
         );
-        {
-            // A compositing manager can start or stop while GMNB runs (X11).
-            let (w, a, st) = (win.downgrade(), aurora.downgrade(), Rc::downgrade(&store));
-            WidgetExt::display(&win).connect_composited_notify(move |_| {
-                if let (Some(w), Some(a), Some(st)) = (w.upgrade(), a.upgrade(), st.upgrade()) {
-                    let v = st.data.borrow().background_opacity;
-                    apply_backdrop(&w, &a, crate::settings::backdrop_alpha(v));
-                }
-            });
-        }
         let toasts = adw::ToastOverlay::new();
         let ctx = Rc::new(Ctx {
             hub: hub.clone(),

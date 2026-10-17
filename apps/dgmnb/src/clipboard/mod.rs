@@ -1,9 +1,8 @@
 //! The clipboard: copy text or images (the graph) and paste text, on
-//! Wayland or X11, behind one interface.
+//! Wayland.
 
 mod pipe;
 mod wayland;
-mod x11;
 
 use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 use winit::window::Window;
@@ -12,10 +11,7 @@ use winit::window::Window;
 /// truncated).
 pub const MAX_PASTE: usize = 1 << 20;
 
-pub enum Clipboard {
-    Wayland(wayland::Clipboard),
-    X11(Box<x11::Clipboard>),
-}
+pub struct Clipboard(wayland::Clipboard);
 
 impl Clipboard {
     /// The clipboard for `window`'s display server.
@@ -28,46 +24,31 @@ impl Clipboard {
         match window.display_handle().ok()?.as_raw() {
             // SAFETY: forwarded from the caller.
             RawDisplayHandle::Wayland(h) => unsafe {
-                wayland::Clipboard::new(h.display.as_ptr()).map(Clipboard::Wayland)
+                wayland::Clipboard::new(h.display.as_ptr()).map(Clipboard)
             },
-            RawDisplayHandle::Xlib(_) | RawDisplayHandle::Xcb(_) => {
-                x11::Clipboard::new().map(|c| Clipboard::X11(Box::new(c)))
-            }
             _ => None,
         }
     }
 
     pub fn copy_text(&self, text: &str) {
-        match self {
-            Clipboard::Wayland(c) => c.copy_text(text),
-            Clipboard::X11(c) => c.copy_text(text),
-        }
+        self.0.copy_text(text)
     }
 
     pub fn copy_png(&self, png: Vec<u8>) {
-        match self {
-            Clipboard::Wayland(c) => c.copy_png(png),
-            Clipboard::X11(c) => c.copy_png(png),
-        }
+        self.0.copy_png(png)
     }
 
     /// Clipboard text, if there is any (waits up to a second for its owner).
     pub fn paste_text(&self) -> Option<String> {
-        match self {
-            Clipboard::Wayland(c) => c.paste_text(),
-            Clipboard::X11(c) => c.paste_text(),
-        }
+        self.0.paste_text()
     }
 
-    /// Stop the backend's worker (and, on Wayland, release everything it
-    /// holds on the display) before the display goes away.
+    /// Stop the worker and release everything it holds on the display
+    /// before the display goes away.
     ///
-    /// False if the Wayland worker didn't stop in time (see
+    /// False if the worker didn't stop in time (see
     /// `wayland::Clipboard::shutdown`).
     pub fn shutdown(&mut self) -> bool {
-        match self {
-            Clipboard::Wayland(c) => c.shutdown(),
-            Clipboard::X11(_) => true,
-        }
+        self.0.shutdown()
     }
 }
