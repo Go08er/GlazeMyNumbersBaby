@@ -33,9 +33,24 @@
 //!     --include-ignored --nocapture                                           # the corpus and the pool
 //! ```
 //!
+//! The long runs assert more than an empty accepted list. A few mutants are
+//! accepted because the mutated row is a true statement (a row borrowed
+//! from another function that happens to hold; a proven enclosure narrowed
+//! onto the number it holds): each is reviewed by hand in [`KNOWN`], with
+//! the reason it is true. A long run fails on an accepted mutant that is not
+//! there, and on an entry there that it did not accept (stale), so that the
+//! table can neither miss a new finding nor keep a fixed one. (With
+//! `MUTANTS_FILTER`, `_ROW`, `_SKIP` or `_ITEMS` set, only the first holds.)
+//! The fixed few have no table: none is accepted. An end of a partial
+//! monotone piece moved strictly inward is content-preserving by
+//! construction ([`DRAWN_IN`]), decided from the mutation's numbers alone.
+//!
 //! `MUTANTS_FILTER=text` keeps the functions whose source contains `text`;
-//! `MUTANTS_LOG=file` writes every accepted mutant (tab separated: source,
-//! row, operator, what, setting); `MUTANTS_ROW=name` keeps one row's;
+//! `MUTANTS_LOG=file` writes every accepted mutant, tabled or not (tab
+//! separated: source, row, operator, what, setting) to `file.<run>`
+//! (`file.corpus`, `file.pool`, `file.a_fixed_few`), one file per test, so
+//! that tests run together don't truncate each other's; `MUTANTS_ROW=name`
+//! keeps one row's;
 //! `MUTANTS_PROGRESS=1` says each certificate as it is done; `MUTANTS_SKIP=a;b`
 //! leaves those sources out (and says so); `MUTANTS_SLOW=seconds` names
 //! each mutant replay that takes longer.
@@ -226,6 +241,48 @@ fn is_end(v: &Value) -> bool {
     v.get("At").is_some_and(|a| a.get("closed").is_some())
 }
 
+/// Whether replacing the enclosure `old` at `p` in `value` (a monotonicity
+/// row's value) by `new` draws a piece's end strictly inward: `p` is
+/// `[i].on.lo.At.x` or `[i].on.hi.At.x`, the new enclosure lies wholly on
+/// the piece's side of the old one (past every number the old one holds),
+/// and still wholly short of the piece's other end, so that the piece is
+/// non-empty. Decided from the numbers alone, not from the replay.
+fn drawn_in(value: &Value, p: &[Seg], old: (f64, f64), new: (f64, f64)) -> bool {
+    let n = p.len();
+    let [.., Seg::K(on), Seg::K(which), Seg::K(at), Seg::K(x)] = p else {
+        return false;
+    };
+    if on != "on" || at != "At" || x != "x" {
+        return false;
+    }
+    let mut cur = value;
+    for s in &p[..n - 3] {
+        cur = match s {
+            Seg::K(k) => &cur[k.as_str()],
+            Seg::I(i) => &cur[*i],
+        };
+    }
+    match which.as_str() {
+        // The low end up: past the old enclosure, short of the high end.
+        "lo" => {
+            new.0 >= old.1
+                && match &cur["hi"] {
+                    Value::String(s) => s == "PosInf",
+                    h => enc_of(&h["At"]["x"]).is_some_and(|(hl, _)| new.1 < hl),
+                }
+        }
+        // The high end down.
+        "hi" => {
+            new.1 <= old.0
+                && match &cur["lo"] {
+                    Value::String(s) => s == "NegInf",
+                    l => enc_of(&l["At"]["x"]).is_some_and(|(_, lh)| lh < new.0),
+                }
+        }
+        _ => false,
+    }
+}
+
 // ------------------------------------------------------------ mutants
 
 struct Mutant {
@@ -254,6 +311,9 @@ const SMALLER_SCOPE: &str = "complete over less: the same items, proven, and not
 const OPEN_END: &str = "f is monotone on a piece with an end left out as on the piece with it";
 const CUT_SHORTER: &str = "a monotone piece cut shorter at an end is monotone still, and the \
                            piece beside it starts within the turn's enclosure as before";
+const DRAWN_IN: &str = "an end of a piece of a partial monotone row moved strictly inward, the piece \
+                        left non-empty: a sub-piece of a piece f is monotone on is one it is \
+                        monotone on, and a partial row says nothing of the rest";
 const ON_F_ITSELF: &str = "the row is checked on f itself (each piece of the domain and each of \
                            its ends; f at 0): it rests on no claim, and stands without them";
 const BY_ANOTHER_ROW: &str = "not periodic follows from another row alone (a domain no shift \
@@ -583,18 +643,25 @@ fn mutants_of(
             continue;
         }
         let name = show(p);
+        // (A partial monotonicity row's end drawn in: DRAWN_IN. Not in a
+        // complete row, where the pieces are all there are; not outward.)
+        let inward = |new: (f64, f64)| {
+            (row == "monotonicity" && !certified && drawn_in(&value, p, (lo, hi), new))
+                .then_some(DRAWN_IN)
+        };
         if lo == hi {
+            let (up, down) = (lo.next_up(), lo.next_down());
             push(
                 "number moved a double",
                 format!("{name}: {lo:e} to the double above"),
-                None,
-                &set(p, enc(lo.next_up(), lo.next_up())),
+                inward((up, up)),
+                &set(p, enc(up, up)),
             );
             push(
                 "number moved a double",
                 format!("{name}: {lo:e} to the double below"),
-                None,
-                &set(p, enc(lo.next_down(), lo.next_down())),
+                inward((down, down)),
+                &set(p, enc(down, down)),
             );
         } else {
             let w = hi - lo;
@@ -636,7 +703,7 @@ fn mutants_of(
         push(
             "number moved far",
             format!("{name}: [{lo:e}, {hi:e}] moved by 1"),
-            None,
+            inward((lo + 1.0, hi + 1.0)),
             &set(p, enc(lo + 1.0, hi + 1.0)),
         );
         push(
@@ -1285,7 +1352,7 @@ fn mutate(src: &str, unit: TrigUnit, other: Option<&Value>, run: &mut Run) {
 
 /// Mutates every function of `fs` (in parallel), prints the table, and
 /// returns the run.
-fn run(fs: Vec<(String, TrigUnit)>) -> Run {
+fn run(name: &str, fs: Vec<(String, TrigUnit)>) -> Run {
     let filter = std::env::var("MUTANTS_FILTER").ok();
     // (MUTANTS_SKIP=a;b: those sources left out, said so in the report.)
     let skip: Vec<String> = std::env::var("MUTANTS_SKIP")
@@ -1357,11 +1424,11 @@ fn run(fs: Vec<(String, TrigUnit)>) -> Run {
             *all.shapes.entry(k).or_insert(0) += n;
         }
     }
-    report(&all);
+    report(name, &all);
     all
 }
 
-fn report(r: &Run) {
+fn report(name: &str, r: &Run) {
     println!(
         "\n{} certificates mutated ({} refused as they are, not mutated)",
         r.functions,
@@ -1421,6 +1488,9 @@ fn report(r: &Run) {
         }
     }
     if let Ok(path) = std::env::var("MUTANTS_LOG") {
+        // (One file per run: `file.name`, so that tests running at once
+        // don't truncate each other's.)
+        let path = format!("{path}.{name}");
         let mut text = String::new();
         for a in &r.accepted {
             text.push_str(&format!(
@@ -1456,7 +1526,7 @@ fn a_fixed_few_certificates_mutated_are_refused() {
         .iter()
         .map(|s| (s.to_string(), TrigUnit::Radians))
         .collect();
-    let r = run(fs);
+    let r = run("a_fixed_few", fs);
     assert!(r.refused.is_empty(), "{:#?}", r.refused);
     assert_eq!(r.functions, FEW.len());
     assert!(
@@ -1466,16 +1536,242 @@ fn a_fixed_few_certificates_mutated_are_refused() {
     );
 }
 
+// ------------------------------------------------------------ reviewed
+
+/// Mutants a long run accepts, each reviewed: the mutated row is a TRUE
+/// statement about f (the replay proved it), so accepting it is right. The
+/// long runs fail on any accepted mutant not here, and on any entry here
+/// that the run did not accept (stale: the table can't rot). An entry names
+/// the run, the function with its trig unit, the row, the operator and the
+/// mutant's `what`, and says why the statement is true.
+///
+/// `what` is matched exactly. Where it holds a double's digits (a number
+/// moved, an enclosure borrowed from the next item) that is on purpose: the
+/// statement is true of those numbers, and a changed enclosure is another
+/// statement that has not been reviewed. Where it names only a row of
+/// another function it is stable text, and the borrowed row is the one
+/// the entry's reason was written for. The setting a mutant was first
+/// accepted in is not part of the key: it depends on the order of the
+/// settings, not on the statement.
+struct Known {
+    /// "corpus" or "pool".
+    run: &'static str,
+    src: &'static str,
+    row: &'static str,
+    op: &'static str,
+    what: &'static str,
+    why: &'static str,
+}
+
+// (Reasons shared by several entries.)
+const ZERO_LIMIT: &str = "f → 0 on each side, as the borrowed row's enclosures (each holding 0, \
+                          looks like 0) say";
+const NO_ZEROS_NO_POLES: &str = "f is continuous and positive everywhere (≥ 1 or ≥ 10¹³−1), so \
+                                 \"none\" is true";
+const ATAN_ROW_ALONE: &str = "the row is the genuine one, which is true; without its claims the \
+                              replay re-derives it from f alone (f′ < 0 on each side of the pole)";
+const CSCH_LIKE_1_OVER: &str = "csch(x−1000) and 1/(x−c) both have range ℝ∖{0} (pieces open at \
+                                an end enclosing 0) and tend to 0 on each side";
+
+#[rustfmt::skip]
+const KNOWN: &[Known] = &[
+    // ---- the corpus: rows borrowed from another function that are true of f
+    Known { run: "corpus", src: "10^16*(1.0000000000000001-1)+x [Radians]", row: "y_intercept",
+        op: "row of another function",
+        what: r#"the y_intercept row of "y=10^16*(1.0000000000000001-0.99999999999999999)+x""#,
+        why: "f(0) = 1, which the borrowed enclosure [0, 3.33] holds" },
+    Known { run: "corpus", src: "10^17*(0.1+0.2-0.3)+x [Radians]", row: "x_intercepts",
+        op: "row of another function",
+        what: r#"the x_intercepts row of "y=1.0000000000000001*x-1*x""#,
+        why: "f = x (the constant is 0 exactly): zero at 0 alone; the borrowed row lists 0 as a partial list over points" },
+    Known { run: "corpus", src: "10^17*(0.1+0.2-0.3)+x [Radians]", row: "y_intercept",
+        op: "row of another function",
+        what: r#"the y_intercept row of "y=1.0000000000000001*x-1*x""#,
+        why: "f(0) = 0, the borrowed row's value exactly" },
+    Known { run: "corpus", src: "10^17*(0.1+0.2-0.3)+x [Radians]", row: "y_intercept",
+        op: "number moved far",
+        what: "value: [-1.1102230246251565e1, 5.551115123125783e0] moved by 1",
+        why: "f(0) = 0 exactly, and the moved enclosure [-10.1, 6.55] still holds it" },
+    Known { run: "corpus", src: "1/(x-1000000000000001) [Radians]", row: "horizontal",
+        op: "row of another function",
+        what: r#"the horizontal row of "y=csch(x-1000)""#,
+        why: ZERO_LIMIT },
+    Known { run: "corpus", src: "1/(x-1000000000000001) [Radians]", row: "range",
+        op: "row of another function",
+        what: r#"the range row of "y=csch(x-1000)""#,
+        why: CSCH_LIKE_1_OVER },
+    Known { run: "corpus", src: "cos(x)^2/cos(x)^2 [Radians]", row: "y_intercept",
+        op: "row of another function",
+        what: r#"the y_intercept row of "y=2*exp(-(x-1522756)^2/(1/1000000))+exp(-x^2)""#,
+        why: "f(0) = 1, which the borrowed [1, 1.0000000000000002] holds" },
+    Known { run: "corpus", src: "ln(exp(1000000000000000)^4)-4000000000000000 [Radians]", row: "extrema",
+        op: "row of another function",
+        what: r#"the extrema row of "y=cos(x)^2/cos(x)^2""#,
+        why: "f is the zero function; the borrowed row is no extremum within [-16, 16], as the genuine row (none) says" },
+    Known { run: "corpus", src: "ln(exp(1000000000000000)^4)-4000000000000000 [Radians]", row: "inflections",
+        op: "row of another function",
+        what: r#"the inflections row of "y=cos(x)^2/cos(x)^2""#,
+        why: "f is the zero function; no inflection within [-16, 16], as the genuine row (none) says" },
+    Known { run: "corpus", src: "ln(exp(1000000000000000)^4)-4000000000000000 [Radians]", row: "parity",
+        op: "row of another function",
+        what: r#"the parity row of "y=tan(x)""#,
+        why: "the zero function on the whole line is odd (f(−x) = −f(x) = 0), as well as even" },
+    Known { run: "corpus", src: "sin(x)+10000000000000 [Radians]", row: "vertical",
+        op: "row of another function",
+        what: r#"the vertical row of "y=exp(-(x-100)^2)+exp(-x^2)""#,
+        why: "f is continuous on the line: no vertical asymptote, as the borrowed \"none\" says" },
+    Known { run: "corpus", src: "sin(x)+10000000000000 [Radians]", row: "x_intercepts",
+        op: "row of another function",
+        what: r#"the x_intercepts row of "y=exp(-(x-100)^2)+exp(-x^2)""#,
+        why: "sin x + 10¹³ ≥ 10¹³ − 1 > 0: no zeros, as the borrowed \"none\" says" },
+    Known { run: "corpus", src: "sqrt(exp(-(x+800)))*exp((x+800)/2) [Radians]", row: "y_intercept",
+        op: "row of another function",
+        what: r#"the y_intercept row of "y=exp(-1000)*(x+1)*exp(500)*exp(500)""#,
+        why: "f(0) = 1, which the borrowed [0, 1.9e108] holds" },
+    Known { run: "corpus", src: "x^(0.1+0.9) [Radians]", row: "y_intercept",
+        op: "row of another function",
+        what: r#"the y_intercept row of "y=10^16*(1.0000000000000001-1)+x""#,
+        why: "f(0) = 0, which the borrowed [0, 2.22] holds" },
+    Known { run: "corpus", src: "(x-1000000000)/(x-1000000000.0625) [Radians]", row: "y_intercept",
+        op: "row of another function",
+        what: r#"the y_intercept row of "y=sqrt(exp(-(x+800)))*exp((x+800)/2)""#,
+        why: "f(0) = 0.99999999993…, which the borrowed [0, 1.16e12] holds" },
+    Known { run: "corpus", src: "(x-1000000)^2+1/10000000+(x/1000000000)^2 [Radians]", row: "inflections",
+        op: "row of another function",
+        what: r#"the inflections row of "y=atan(tan(x))+1""#,
+        why: "f is a quadratic with positive leading coefficient (f″ > 0): no inflection within [-16, 16], as the borrowed row (none over that window) says" },
+    Known { run: "corpus", src: "(x-1000000)^2+1+(x/1000000000)^2 [Radians]", row: "inflections",
+        op: "row of another function",
+        what: r#"the inflections row of "y=atan(tan(x))+1""#,
+        why: "f is a quadratic with positive leading coefficient (f″ > 0): no inflection within [-16, 16], as the borrowed row (none over that window) says" },
+
+    // ---- the pool
+    Known { run: "pool", src: "atan(1/x) [Degrees]", row: "monotonicity",
+        op: "claims withheld",
+        what: "the row as it is, with none of its claims",
+        why: ATAN_ROW_ALONE },
+    Known { run: "pool", src: "atan(1/x) [Grads]", row: "monotonicity",
+        op: "claims withheld",
+        what: "the row as it is, with none of its claims",
+        why: ATAN_ROW_ALONE },
+    Known { run: "pool", src: "csch(x) [Degrees]", row: "monotonicity",
+        op: "row of another function",
+        what: r#"the monotonicity row of "y=atan(1/x)""#,
+        why: "csch decreases on (−∞, 0) and on (0, ∞), as atan(1/x) does" },
+    Known { run: "pool", src: "csch(x) [Grads]", row: "monotonicity",
+        op: "row of another function",
+        what: r#"the monotonicity row of "y=atan(1/x)""#,
+        why: "csch decreases on (−∞, 0) and on (0, ∞), as atan(1/x) does" },
+    Known { run: "pool", src: "csch(x) [Degrees]", row: "horizontal",
+        op: "row of another function",
+        what: r#"the horizontal row of "y=atan(1/x)""#,
+        why: ZERO_LIMIT },
+    Known { run: "pool", src: "csch(x) [Grads]", row: "horizontal",
+        op: "row of another function",
+        what: r#"the horizontal row of "y=atan(1/x)""#,
+        why: ZERO_LIMIT },
+    Known { run: "pool", src: "csch((x/1000)) [Radians]", row: "horizontal",
+        op: "row of another function",
+        what: r#"the horizontal row of "y=atan(1/(x-1000))""#,
+        why: ZERO_LIMIT },
+    Known { run: "pool", src: "(x-1)*(x-2)*(x+3) [Radians]", row: "monotonicity",
+        op: "row of another function",
+        what: r#"the monotonicity row of "y=((x-1)*(x-2)*(x+3))+0.0000001""#,
+        why: "adding a constant leaves f′ = 3x²−7 and so the turns at ±√(7/3), which the borrowed end enclosures hold" },
+    Known { run: "pool", src: "(e^x-x)+0.0000001 [Radians]", row: "monotonicity",
+        op: "row of another function",
+        what: r#"the monotonicity row of "y=e^(x/1000)-(x/1000)""#,
+        why: "f′ = e^x − 1 turns at 0, decreasing before and increasing after, as the borrowed row (turn enclosure [-1.8e-12, 1.4e-12] holds 0) says" },
+    Known { run: "pool", src: "(sin(x)^2+1)+0.0000001 [Radians]", row: "x_intercepts",
+        op: "row of another function",
+        what: r#"the x_intercepts row of "y=sin((x/1000))^2+1""#,
+        why: NO_ZEROS_NO_POLES },
+    Known { run: "pool", src: "(sin(x)^2+1)+0.0000001 [Radians]", row: "vertical",
+        op: "row of another function",
+        what: r#"the vertical row of "y=sin((x/1000))^2+1""#,
+        why: NO_ZEROS_NO_POLES },
+    Known { run: "pool", src: "sqrt((x/1000)) [Radians]", row: "y_intercept",
+        op: "row of another function",
+        what: r#"the y_intercept row of "y=e^(x-1000)""#,
+        why: "f(0) = 0, which the borrowed [0, 5e-324] holds" },
+    Known { run: "pool", src: "(x/1000)^4-(x/1000)^2 [Radians]", row: "y_intercept",
+        op: "row of another function",
+        what: r#"the y_intercept row of "y=(x-1000)*e^(x-1000)""#,
+        why: "f(0) = 0, which the borrowed [-4.9e-321, 0] holds" },
+    // Exact matches on the digits below: the statement is true of these numbers.
+    Known { run: "pool", src: "(1/x)+0.0000001 [Radians]", row: "horizontal",
+        op: "number moved to the next item's",
+        what: r#"[0].y: [9.999999999999998e-8, 1.0000000000000001e-7] to {"hi":1.0000000000000001e-7,"lo":1e-7}"#,
+        why: "the limit is 10⁻⁷ exactly, which lies between the double 1e-7 (just below it) and the one above, 1.0000000000000001e-7: the narrowed enclosure holds it" },
+    Known { run: "pool", src: "(1/(x-2))+0.0000001 [Radians]", row: "horizontal",
+        op: "number moved to the next item's",
+        what: r#"[0].y: [9.999999999999998e-8, 1.0000000000000001e-7] to {"hi":1.0000000000000001e-7,"lo":1e-7}"#,
+        why: "the limit is 10⁻⁷ exactly, which lies between the double 1e-7 (just below it) and the one above, 1.0000000000000001e-7: the narrowed enclosure holds it" },
+    Known { run: "pool", src: "1/((x-1000)^2+(x-1000)+1) [Radians]", row: "inflections",
+        op: "number moved far",
+        what: "[0].x: [9.99e2, 9.99e2] moved by 1",
+        why: "the list is partial, with inflections at 999 and 1000 and f = 1 at both (f″ ∝ u(u+1), u = x−1000): item 0 moved onto (1000, 1), the other inflection" },
+];
+
+/// Fails on an accepted mutant not in [`KNOWN`] and, in a run unfiltered
+/// (no `MUTANTS_FILTER`, `MUTANTS_ROW`, `MUTANTS_SKIP`, `MUTANTS_ITEMS`),
+/// on an entry of this run that was not accepted.
+fn assert_only_known(name: &str, r: &Run) {
+    let mine = || KNOWN.iter().filter(|k| k.run == name);
+    let is = |a: &Accepted, k: &Known| {
+        a.src == k.src && a.row == k.row && a.op == k.op && a.what == k.what
+    };
+    let new: Vec<String> = r
+        .accepted
+        .iter()
+        .filter(|a| !mine().any(|k| is(a, k)))
+        .map(|a| format!("{}\t{}\t{}\t{}\t{}", a.src, a.row, a.op, a.what, a.setting))
+        .collect();
+    let filtered = ["FILTER", "ROW", "SKIP", "ITEMS"]
+        .iter()
+        .any(|v| std::env::var_os(format!("MUTANTS_{v}")).is_some());
+    let stale: Vec<String> = if filtered {
+        Vec::new()
+    } else {
+        mine()
+            .filter(|k| !r.accepted.iter().any(|a| is(a, k)))
+            .map(|k| format!("{}\t{}\t{}\t{}", k.src, k.row, k.op, k.what))
+            .collect()
+    };
+    let known = r
+        .accepted
+        .iter()
+        .filter(|a| mine().any(|k| is(a, k)))
+        .count();
+    println!(
+        "{name}: {known} accepted mutants reviewed true ({} entries), {} new, {} stale",
+        mine().count(),
+        new.len(),
+        stale.len()
+    );
+    for k in mine() {
+        println!(
+            "  reviewed true: {} / {} / {}: {}: {}",
+            k.src, k.row, k.op, k.what, k.why
+        );
+    }
+    assert!(
+        new.is_empty() && stale.is_empty(),
+        "{} mutants accepted that are not in KNOWN (source, row, operator, what, setting):\n{}\n\
+         {} entries of KNOWN not accepted this run (stale):\n{}",
+        new.len(),
+        new.join("\n"),
+        stale.len(),
+        stale.join("\n")
+    );
+}
+
 #[test]
 #[ignore = "long: every mutant of the corpus's certificates"]
 fn the_corpus_mutated_is_refused() {
-    let r = run(certificates::corpus());
+    let r = run("corpus", certificates::corpus());
     assert!(r.functions >= 150, "only {} mutated", r.functions);
-    assert!(
-        r.accepted.is_empty(),
-        "{} mutants accepted",
-        r.accepted.len()
-    );
+    assert_only_known("corpus", &r);
 }
 
 #[test]
@@ -1483,11 +1779,7 @@ fn the_corpus_mutated_is_refused() {
 fn the_pool_mutated_is_refused() {
     let mut fs = certificates::units();
     fs.extend(certificates::pool());
-    let r = run(fs);
+    let r = run("pool", fs);
     assert!(r.functions >= 450, "only {} mutated", r.functions);
-    assert!(
-        r.accepted.is_empty(),
-        "{} mutants accepted",
-        r.accepted.len()
-    );
+    assert_only_known("pool", &r);
 }
