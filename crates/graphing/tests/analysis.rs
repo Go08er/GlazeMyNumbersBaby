@@ -602,3 +602,39 @@ fn domain_family_meeting_a_bounded_piece_is_listed() {
         "x ∈ [−3.14159265358979, 0) ∪ (0, 3.14159265358979]"
     );
 }
+
+/// The domain row (and whether it is unknown) for `y = src`, computed on
+/// another thread: a hang fails the test instead of running away.
+fn domain_promptly(src: &str, deg: bool) -> (String, bool) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let src = src.to_string();
+    let name = src.clone();
+    std::thread::spawn(move || {
+        let eq = Equation::parse(&format!("y = {src}")).unwrap();
+        let opts = CompileOptions {
+            trig_unit: if deg {
+                TrigUnit::Degrees
+            } else {
+                TrigUnit::Radians
+            },
+            variables: &(),
+        };
+        let r = analyze(&eq, &opts);
+        let _ = tx.send((r.domain, r.too_complex_features & flags::DOMAIN != 0));
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(30))
+        .unwrap_or_else(|_| panic!("{name}: the domain row did not return"))
+}
+
+/// A bounded piece far out (members of the family near 2⁵³ periods) is
+/// handled in finite time, whatever it is written as.
+#[test]
+fn domain_family_far_out_returns() {
+    for deg in [true, false] {
+        for f in ["sin(x)", "sin(sqrt(2)*x)"] {
+            let (d, unknown) = domain_promptly(&format!("sqrt(1-(x-10^19)^2)/{f}"), deg);
+            println!("deg {deg} {f}: {d} (unknown {unknown})");
+            assert!(unknown || d.starts_with("x ∈ ["), "{f} deg {deg}: {d}");
+        }
+    }
+}

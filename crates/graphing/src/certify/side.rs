@@ -631,16 +631,30 @@ impl XFamily {
         let k0 = ((lo - self.x0.hi()) / p.lo()).floor() - 1.0;
         let k1 = ((hi - self.x0.lo()) / p.lo()).ceil() + 1.0;
         let mut out = Vec::new();
-        if !(k0.is_finite() && k1.is_finite()) || k1 - k0 > MAX_MEMBERS {
+        // The estimate counts in doubles: past 2⁵³ a step of 1.0 changes
+        // nothing (and a loop on it never ends), and well before that its
+        // rounding is a good part of a member. So no list unless
+        // |k| ≤ 2⁴⁰, where every integer is a double and the quotient's
+        // rounding is far below the one member of margin.
+        const K_LIMIT: f64 = 1_099_511_627_776.0;
+        if !(k0.abs() <= K_LIMIT && k1.abs() <= K_LIMIT) || k1 - k0 > MAX_MEMBERS {
             return None;
         }
-        let mut k = k0;
-        while k <= k1 {
-            let m = self.x0 + Interval::point(k) * p;
+        let (k0, k1) = (k0 as i64, k1 as i64);
+        let member = |k: i64| self.x0 + Interval::point(k as f64) * p;
+        // The margin is not assumed: the member before the first (k0 − 1)
+        // is proven below the window and the one after the last (k1 + 1)
+        // above it, and members only grow with k (x₀ + k·P, P > 0), so
+        // every other is outside too. (A period known only roughly could
+        // otherwise move the estimate by more than the margin.)
+        if member(k0 - 1).hi() >= lo || member(k1 + 1).lo() <= hi {
+            return None;
+        }
+        for k in k0..=k1 {
+            let m = member(k);
             if m.hi() >= lo && m.lo() <= hi {
                 out.push(m);
             }
-            k += 1.0;
         }
         Some(out)
     }
@@ -1249,5 +1263,50 @@ pub fn family_value(fam: &XFamily) -> Family {
     Family {
         x0: Enc::new(fam.x0.lo(), fam.x0.hi()),
         period: Enc::new(fam.period.lo(), fam.period.hi()),
+    }
+}
+
+#[cfg(test)]
+mod members_tests {
+    use super::*;
+
+    fn fam(x0: (f64, f64), p: (f64, f64)) -> XFamily {
+        XFamily {
+            x0: Interval::new(x0.0, x0.1),
+            period: Interval::new(p.0, p.1),
+            subject: Subject::f(0),
+        }
+    }
+
+    /// `members(lo, hi)` on another thread: a hang fails instead of
+    /// running away.
+    fn promptly(f: XFamily, lo: f64, hi: f64) -> Option<usize> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f.members(lo, hi).map(|m| m.len()));
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap_or_else(|_| panic!("members({lo:e}, {hi:e}) did not return"))
+    }
+
+    const TAU: (f64, f64) = (std::f64::consts::TAU, std::f64::consts::TAU + 8.9e-16);
+
+    #[test]
+    fn members_near_the_origin() {
+        // 0 and ±2π within [−7, 7].
+        assert_eq!(promptly(fam((0.0, 0.0), TAU), -7.0, 7.0), Some(3));
+        assert_eq!(promptly(fam((0.0, 0.0), TAU), 1.0, 2.0), Some(0));
+        assert_eq!(promptly(fam((1.0, 1.0), TAU), 0.0, 0.0), Some(0));
+        assert_eq!(promptly(fam((0.0, 0.0), TAU), 0.0, 0.0), Some(1));
+    }
+
+    #[test]
+    fn members_far_out_return_promptly() {
+        // Members ~10¹⁹ periods away: the step count is beyond what doubles
+        // count in, so there is no list.
+        assert_eq!(promptly(fam((0.0, 0.0), TAU), 1e20, 1e20), None);
+        assert_eq!(promptly(fam((0.0, 0.0), TAU), 1e20, 1e20 + 1e5), None);
+        assert_eq!(promptly(fam((1e20, 1e20 + 16384.0), TAU), 0.0, 0.0), None);
+        assert_eq!(promptly(fam((1e20, 1e20), TAU), -1.0, 1.0), None);
     }
 }

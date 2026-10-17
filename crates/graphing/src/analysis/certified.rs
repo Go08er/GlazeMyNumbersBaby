@@ -1701,18 +1701,29 @@ fn split_at_members(pcs: &[Piece2], x: &Num, p: &Num) -> Option<Vec<Piece2>> {
             return None;
         }
         let (lo, hi) = (pc.lo.num?, pc.hi.num?);
+        // The members that can reach the piece are k0 ..= k1 (estimated in
+        // doubles, with two periods to spare). The estimate is trusted only
+        // where every integer is a double and the quotient's rounding
+        // (about k·2⁻⁵³ periods) is far below that margin: |k| ≤ 2⁴⁰. It is
+        // not assumed outside either: member k0 must be proven below the
+        // piece and member k1 above it, and the members (increasing in k)
+        // beyond them then are too.
+        const K_LIMIT: f64 = 1_099_511_627_776.0; // 2⁴⁰
         let k0 = ((pc.lo.value - x.value()) / pv).floor() - 2.0;
         let k1 = ((pc.hi.value - x.value()) / pv).ceil() + 2.0;
-        if !(k0.is_finite() && k1.is_finite()) || k1 - k0 > 400.0 {
+        if !(k0.abs() <= K_LIMIT && k1.abs() <= K_LIMIT) || k1 - k0 > 400.0 {
             return None;
         }
+        let (k0, k1) = (k0 as i64, k1 as i64);
         let (mut lo_end, mut hi_end) = (pc.lo.clone(), pc.hi.clone());
         let mut cuts: Vec<Num> = Vec::new();
-        let mut k = k0;
-        while k <= k1 {
+        for k in k0..=k1 {
             // x + k·p.
-            let m = shift(*x, p, -k);
+            let m = shift(*x, p, -(k as f64));
             let (below, above) = (compare(&m, &lo)?, compare(&m, &hi)?);
+            if (k == k0 && below >= 0) || (k == k1 && above <= 0) {
+                return None;
+            }
             if below < 0 || above > 0 {
                 // Outside.
             } else if below == 0 || above == 0 {
@@ -1729,7 +1740,6 @@ fn split_at_members(pcs: &[Piece2], x: &Num, p: &Num) -> Option<Vec<Piece2>> {
             } else {
                 cuts.push(m);
             }
-            k += 1.0;
         }
         inside += cuts.len();
         if inside > MAX_ITEMS {
@@ -3006,5 +3016,52 @@ mod tests {
             "[−1.6, 0]"
         );
         assert_eq!(approx(Enc::new(0.851, 1.05)), "[0.85, 1.1]");
+    }
+
+    /// A piece far out (members near 2⁵³ periods and beyond) neither hangs
+    /// `split_at_members` nor is listed; one near the origin is.
+    #[test]
+    fn split_at_members_far_out() {
+        let num = |v: f64| Num {
+            exact: Q::from_f64(v).map(Ex::q),
+            enc: Enc::point(v),
+        };
+        let piece = |a: f64, b: f64| {
+            vec![Piece2 {
+                lo: finite(num(a), true),
+                hi: finite(num(b), true),
+                joined: false,
+                one: false,
+            }]
+        };
+        let promptly = |pcs: Vec<Piece2>, x: Num, p: Num| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(split_at_members(&pcs, &x, &p).map(|v| v.len()));
+            });
+            rx.recv_timeout(std::time::Duration::from_secs(20))
+                .expect("split_at_members did not return")
+        };
+        let zero = num(0.0);
+        // 180k (exact period).
+        let deg = num(180.0);
+        // kπ: exact, and the same known only to its enclosure.
+        let pi_enc = Enc::new(std::f64::consts::PI, std::f64::consts::PI.next_up());
+        let pi = Num {
+            exact: Some(Ex::Pi(Q::ONE)),
+            enc: pi_enc,
+        };
+        let pi_approx = Num {
+            exact: None,
+            enc: pi_enc,
+        };
+        for (a, b) in [(1e19, 1e19 + 2048.0), (1e17, 1e17 + 16.0), (1e20, 1e20)] {
+            for p in [deg, pi, pi_approx] {
+                assert_eq!(promptly(piece(a, b), zero, p), None, "{a:e} {b:e}");
+            }
+        }
+        // Near the origin: 0 splits [−1, 1] in two.
+        assert_eq!(promptly(piece(-1.0, 1.0), zero, deg), Some(2));
+        assert_eq!(promptly(piece(-1.0, 1.0), zero, pi), Some(2));
     }
 }
