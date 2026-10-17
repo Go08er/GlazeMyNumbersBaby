@@ -525,3 +525,80 @@ fn e_and_ln_closed_forms() {
     let r = k("x*2^x");
     assert!(r.minima[0].starts_with("(≈−1.44"), "{:?}", r.minima);
 }
+
+/// The domain row for `y = src` in degrees or radians.
+fn domain_of(src: &str, deg: bool) -> String {
+    let eq = Equation::parse(&format!("y = {src}")).unwrap();
+    let opts = CompileOptions {
+        trig_unit: if deg {
+            TrigUnit::Degrees
+        } else {
+            TrigUnit::Radians
+        },
+        variables: &(),
+    };
+    let r = analyze(&eq, &opts);
+    assert_eq!(r.analysis_error, AnalysisError::NoError, "{src}");
+    assert_eq!(r.too_complex_features & flags::DOMAIN, 0, "{src}");
+    r.domain
+}
+
+/// A family of excluded points that meets a bounded piece in finitely
+/// many members is written as those points (the piece split at them), the
+/// same however the certifier got there; unbounded pieces, undecided
+/// members and too many members keep the family.
+#[test]
+fn domain_family_meeting_a_bounded_piece_is_listed() {
+    // Two forms of one function read alike, in degrees and in radians.
+    for deg in [true, false] {
+        let a = domain_of("acos(x)/(0.7*sin(x)+0.7*sin(x))", deg);
+        let b = domain_of("acos(x)/(2*0.7*sin(x))", deg);
+        assert_eq!(a, "x ∈ [−1, 0) ∪ (0, 1]", "deg {deg}");
+        assert_eq!(b, a, "deg {deg}");
+    }
+    // Several members inside: 180k from −900 to 900 inside [−1000, 1000].
+    assert_eq!(
+        domain_of("acos(x/1000)/sin(x)", true),
+        "x ∈ [−1000, −900) ∪ (−900, −720) ∪ (−720, −540) ∪ (−540, −360) ∪ (−360, −180) \
+         ∪ (−180, 0) ∪ (0, 180) ∪ (180, 360) ∪ (360, 540) ∪ (540, 720) ∪ (720, 900) ∪ (900, 1000]"
+    );
+    assert_eq!(
+        domain_of("acos(x/10)/sin(x)", false),
+        "x ∈ [−10, −3π) ∪ (−3π, −2π) ∪ (−2π, −π) ∪ (−π, 0) ∪ (0, π) ∪ (π, 2π) ∪ (2π, 3π) ∪ (3π, 10]"
+    );
+    // A member exactly at a closed end opens it.
+    assert_eq!(
+        domain_of("acos(x/180)/sin(x)", true),
+        "x ∈ (−180, 0) ∪ (0, 180)"
+    );
+    assert_eq!(
+        domain_of("acos(x/pi)/sin(x)", false),
+        "x ∈ (−π, 0) ∪ (0, π)"
+    );
+    // Two families at once (the zeros and the poles of tan).
+    assert_eq!(
+        domain_of("acos(x/3)/tan(x)", false),
+        "x ∈ [−3, −π/2) ∪ (−π/2, 0) ∪ (0, π/2) ∪ (π/2, 3]"
+    );
+    // Too many members to list (more than the lists' cap): the family.
+    assert_eq!(
+        domain_of("acos(x/10000)/sin(x)", true),
+        "x ∈ [−10000, 10000] \\ {180k | k ∈ ℤ}"
+    );
+    // An unbounded piece: the family.
+    assert_eq!(
+        domain_of("ln(x)/sin(x)", false),
+        "x ∈ (0, ∞) \\ {kπ | k ∈ ℤ}"
+    );
+    // A piece end not proven apart from a member (3.141592653589793 is
+    // within the doubles of π): the family stays. One proven apart
+    // (3.14159265358979 < π) lists the members that are inside.
+    assert_eq!(
+        domain_of("acos(x/3.141592653589793)/sin(x)", false),
+        "x ∈ [−3.141592653589793, 3.141592653589793] \\ {kπ | k ∈ ℤ}"
+    );
+    assert_eq!(
+        domain_of("acos(x/3.14159265358979)/sin(x)", false),
+        "x ∈ [−3.14159265358979, 0) ∪ (0, 3.14159265358979]"
+    );
+}

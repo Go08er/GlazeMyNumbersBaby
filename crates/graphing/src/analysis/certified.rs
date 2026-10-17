@@ -1988,10 +1988,8 @@ pub(super) fn features(
                     }
                 }
             }
-            let mut parts: Vec<(End, End)> = pcs
-                .iter()
-                .map(|p| (p.lo.clone(), p.hi.clone()))
-                .collect();
+            let mut parts: Vec<(End, End)> =
+                pcs.iter().map(|p| (p.lo.clone(), p.hi.clone())).collect();
             let joined = |i: usize| pcs[i].joined;
             let one = |i: usize| pcs[i].one;
             let mut text = set_text("x", &mut parts, &joined, &one);
