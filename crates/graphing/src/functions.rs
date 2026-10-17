@@ -897,24 +897,42 @@ pub fn count_beyond(n: f64, r: f64, perm: bool) -> Option<(f64, f64)> {
 }
 
 /// n! (Γ(n + 1)) of a double where [`factorial`] has it as 0, a subnormal
-/// or +∞, as [`count_beyond`] has a count: nPr(n, n). Within an ulp or two
-/// (`wide::apply1` took e^(ln Γ(n + 1)) with ln Γ a double, about 13
-/// digits: x!/(x·(x − 1)!) at 10⁶ was 1.00000000000017).
-pub(crate) fn factorial_beyond(n: f64) -> Option<(f64, f64)> {
-    gamma_count(n, n, true)
+/// or +∞, as [`count_beyond`] has a count: nPr(n, n), and for n + 1 past
+/// [`STIRLING_FROM`] e^(ln Γ(n + 1)) with that logarithm in double-double
+/// alone (the same, without ln Γ(1)). Within an ulp or two (`wide::apply1`
+/// took ln Γ(n + 1) as a double, about 13 digits: x!/(x·(x − 1)!) at 10⁶
+/// was 1.00000000000017). (Public for `tests/interval_oracle.rs`.)
+#[doc(hidden)]
+pub fn factorial_beyond(n: f64) -> Option<(f64, f64)> {
+    // (Exact: n + 1 of a double.)
+    let x = Dd::of(n).add(Dd::of(1.0));
+    if x.hi < STIRLING_FROM {
+        return gamma_count(n, n, true);
+    }
+    match ln_gamma_dd(x) {
+        Some(l) if l.hi <= FAR_LOG => {
+            let (m, k) = crate::dd::exp(l);
+            let (m, s) = crate::wide::frexp(m);
+            Some((m, k + s))
+        }
+        // Past 2⁴⁷ for its logarithm, or an argument past `FAR_ARGUMENT`.
+        _ => Some((1.0, f64::INFINITY)),
+    }
 }
 
 /// n!! of a double where [`double_factorial`] has it as +∞ (a whole n past
 /// 300): 2^k·k! for n = 2k, and (2k + 1)!/(2^k·k!) = nPr(2k + 1, k + 1)/2^k
-/// for n = 2k + 1. `None` for any other n.
-pub(crate) fn double_factorial_beyond(n: f64) -> Option<(f64, f64)> {
+/// for n = 2k + 1. `None` for any other n. (Public for
+/// `tests/interval_oracle.rs`.)
+#[doc(hidden)]
+pub fn double_factorial_beyond(n: f64) -> Option<(f64, f64)> {
     if !(n.is_finite() && n == n.trunc() && n > 300.0) {
         return None;
     }
     // (Exact: every double from 2⁵³ on is even.)
     let k = (n / 2.0).floor();
     if n % 2.0 == 0.0 {
-        let (m, e) = gamma_count(k, k, true)?;
+        let (m, e) = factorial_beyond(k)?;
         Some((m, e + k))
     } else {
         let (m, e) = gamma_count(n, k + 1.0, true)?;
