@@ -42,11 +42,17 @@ fn read_desktop() -> Desktop {
 fn main() {
     // SAFETY: first thing in main; no other thread exists yet.
     unsafe { appcore::tz::fix_sandbox_timezone() };
+    // Wayland only: say so at once, before the portal is asked anything.
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("WAYLAND_SOCKET").is_none()
+    {
+        eprintln!("dgmnb: needs a Wayland session (WAYLAND_DISPLAY is not set)");
+        std::process::exit(1);
+    }
     let desktop = read_desktop();
     let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
         Ok(el) => el,
-        Err(e) => {
-            eprintln!("dgmnb: no display: {e}");
+        Err(_) => {
+            eprintln!("dgmnb: needs a Wayland session, but cannot connect to a Wayland display");
             std::process::exit(1);
         }
     };

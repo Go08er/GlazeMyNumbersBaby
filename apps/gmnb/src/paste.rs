@@ -12,42 +12,24 @@
 //! as the colour chooser's (a toplevel of its own, with a hexadecimal entry
 //! and spin buttons), whenever they are made.
 //!
-//! On Wayland the read is the offer's pipe, which closing stops. On X11,
-//! GDK's selection stream can't be stopped: it fetches an incremental
-//! (INCR) transfer to its end once it has started, whatever is read from
-//! it, and holds it until then (GTK 4.22 `gdkselectioninputstream-x11.c`).
-//! So there another X client's selection is read by `x11paste` instead, on a
-//! connection of its own on a worker thread, which asks the X server for no
-//! more than the cap; the rest of the transfer goes by unread (its pieces
-//! deleted as if read, so an owner like xclip isn't left waiting).
-//!
-//! Text dragged onto a field from another program is read the same way
-//! (GTK's drop target reads it whole, as its paste does): on X11 the drag's
-//! selection through `x11paste`, elsewhere the drop's stream.
+//! The read is the offer's pipe, which closing stops. Text dragged onto a
+//! field from another program is read the same way (GTK's drop target reads
+//! it whole, as its paste does): from the drop's stream.
 //!
 //! One read is out of reach: an assistive technology's EditableText
 //! `PasteText` request, which GTK answers by reading the clipboard whole
 //! itself (GTK 4.22 `gtkatspieditabletext.c`), with no signal on the way.
 
 use std::rc::Rc;
-use std::time::Duration;
 
 use glib::translate::{Borrowed, FromGlibPtrBorrow, IntoGlib};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
-use x11paste::{Limits, Overflow, Selection};
 
 /// Every field's and page's own limit is far below this (an equation is at
 /// most 1000 characters); a longer clipboard is cut here, while reading,
 /// instead of being read whole first.
 pub const MAX_PASTE_BYTES: usize = 64 * 1024;
-
-/// How long reading another X client's selection may take. The window stays
-/// responsive meanwhile (the read is on a worker), but text that takes
-/// longer than this, from a stuck or trickling owner, is dropped rather than
-/// landing long after the paste. (DGMNB, whose window waits, allows one
-/// second.)
-const X11_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Marks a widget [`guard`] has seen.
 const GUARDED: &str = "gmnb-bounded-paste";
@@ -58,9 +40,6 @@ const TEXT_TYPES: [&str; 2] = ["text/plain;charset=utf-8", "text/plain"];
 /// The text on `clipboard`, cut to [`MAX_PASTE_BYTES`] (at a character
 /// boundary) while it is read. `None` if it has no text.
 pub async fn read_text(clipboard: &gdk::Clipboard) -> Option<String> {
-    if let Some(selection) = x11_selection(clipboard) {
-        return read_x11(&clipboard.display(), selection).await;
-    }
     let (stream, _) = clipboard
         .read_future(&TEXT_TYPES, glib::Priority::DEFAULT)
         .await
@@ -71,10 +50,6 @@ pub async fn read_text(clipboard: &gdk::Clipboard) -> Option<String> {
 /// The text dropped from another program, read as [`read_text`] reads a
 /// clipboard.
 async fn read_drop(drop: &gdk::Drop) -> Option<String> {
-    let display = drop.display();
-    if is_x11(&display) {
-        return read_x11(&display, Selection::Drag).await;
-    }
     let (stream, _) = drop
         .read_future(&TEXT_TYPES, glib::Priority::DEFAULT)
         .await
@@ -97,53 +72,6 @@ async fn read_stream(stream: &gio::InputStream) -> String {
     }
     let _ = stream.close_future(glib::Priority::DEFAULT).await;
     cut(bytes)
-}
-
-/// Whether `display` is GDK's X11 backend's (asked by type name, so as not
-/// to link that backend's bindings).
-fn is_x11(display: &gdk::Display) -> bool {
-    display.type_().name() == "GdkX11Display"
-}
-
-/// The X selection `clipboard` stands for, if it is to be read from another
-/// X client. GMNB's own copy, already in memory, is read from GDK.
-fn x11_selection(clipboard: &gdk::Clipboard) -> Option<Selection> {
-    let display = clipboard.display();
-    if !is_x11(&display) || clipboard.is_local() {
-        return None;
-    }
-    Some(if *clipboard == display.primary_clipboard() {
-        Selection::Primary
-    } else {
-        Selection::Clipboard
-    })
-}
-
-/// `selection`'s text on `display`, read by `x11paste` on a worker (it
-/// blocks until it has the text or [`X11_TIMEOUT`] passes) and cut to
-/// [`MAX_PASTE_BYTES`] as GDK's are. Without a connection of its own to the
-/// display nothing is pasted (GDK's read is unbounded there), with a
-/// warning.
-async fn read_x11(display: &gdk::Display, selection: Selection) -> Option<String> {
-    let name = display.name().to_string();
-    let limits = Limits {
-        max_bytes: MAX_PASTE_BYTES,
-        timeout: X11_TIMEOUT,
-        overflow: Overflow::Cut,
-    };
-    let read = gio::spawn_blocking({
-        let name = name.clone();
-        move || x11paste::read_text_on(&name, selection, &limits)
-    })
-    .await
-    .ok()?;
-    match read {
-        Ok(text) => Some(cut(text?.into_bytes())),
-        Err(x11paste::NoConnection) => {
-            glib::g_warning!("gmnb", "can't connect to X display {name}: nothing pasted");
-            None
-        }
-    }
 }
 
 /// `bytes` as text, at most [`MAX_PASTE_BYTES`] of them, without a

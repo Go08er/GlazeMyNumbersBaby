@@ -118,6 +118,10 @@ it. On any other it says so and stops, rather than crashing:
 then runs the real program from `libexec/gmnb/` (`lib/gmnb/` on Arch).
 DGMNB runs on any 64-bit PC. ARM builds of both have no such requirement.
 
+**Display:** both apps need a Wayland session. There is no X11 support, not
+even through XWayland: started without a Wayland display, each prints a
+one-line message saying so and exits with status 1.
+
 ### NixOS module
 
 ```nix
@@ -162,8 +166,8 @@ Everything goes through the flake; you don't need Rust installed.
 Without Nix: Rust ≥ 1.92 and a C compiler for the vendored CORE-MATH (on
 x86-64 one that knows `-march=x86-64-v3`: GCC ≥ 11 or Clang ≥ 12), then
 
-- GMNB: GTK ≥ 4.18, libadwaita ≥ 1.7 and Pango ≥ 1.56, and
-  `cargo build --release -p gmnb`;
+- GMNB: GTK ≥ 4.18 (with its Wayland backend), libadwaita ≥ 1.7 and
+  Pango ≥ 1.56, and `cargo build --release -p gmnb`;
 - DGMNB: libwayland-client (and libxkbcommon at run time), and
   `cargo build --profile lean -p dgmnb`. The `lean` profile optimises for
   size, since DGMNB's own code is most of its memory, but keeps the number
@@ -213,7 +217,6 @@ crates/crmath       CORE-MATH's correctly rounded functions (vendored C),
 crates/appcore      Everything the twins share that isn't drawing: modes, key
                     layouts and the keyboard map, settings, colour maths,
                     graph sessions, a tiny D-Bus client, time zone fix
-crates/x11paste     X11 clipboard and drop reads with a byte cap (both apps)
 apps/gmnb           The GTK 4 / libadwaita application
 apps/gmnb-launcher  Installed as `gmnb`: checks the CPU, then runs GMNB
 apps/dgmnb          The software-drawn application (winit, softbuffer,
@@ -224,7 +227,7 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **1,054 tests** (counts include
+`nix develop -c cargo test --workspace` runs **1,047 tests** (counts include
 doctests; six more are `#[ignore]`d: a live currency fetch, the full
 metamorphic graph sweep, 20,000 random saved sessions, and the
 cross-checking tester's long run, single-expression check and case list).
@@ -237,11 +240,11 @@ function's own values contradict, and exits with an error if it finds one;
 `--ungated` that engine alone.
 `cargo run --release -p graphing --example oracle` is a second, deliberately
 independent check of the same answers (it shares none of the app's checking
-code, only its formatter and reference evaluator). The D-Bus and
-X11 tests start their own `dbus-daemon` and `Xvfb` from the dev shell (and
-skip without them). DGMNB's Wayland clipboard test copies text, so it only
+code, only its formatter and reference evaluator). The D-Bus
+tests start their own `dbus-daemon` from the dev shell (and skip without
+it). DGMNB's Wayland clipboard test copies text, so it only
 runs against a compositor named in `DGMNB_TEST_WAYLAND_DISPLAY` (a headless
-weston's socket, say), never your session's. The heart of it
+weston's socket, say), never your session's. [`tools/native`](tools/native) drives either app by real keystrokes in a headless private sway session and reads the display over AT-SPI, for development checks. The heart of it
 is differential testing against the *real* C++ engine, compiled from the
 upstream sources with g++:
 
@@ -255,8 +258,7 @@ upstream sources with g++:
 | graphing (381 + 4 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
 | appcore (62) | Keyboard map, key scripts, converter paste validation, settings storage (huge/corrupt files, per-section budgets, a long calculator session that used to cost the whole file), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
 | crmath (1) | The vendored CORE-MATH's two builds (baseline and x86-64-v3) give the same bits |
-| x11paste (5) | Against a private Xvfb: a read cut at its byte cap fetches no further and keeps whole characters, PRIMARY and drag selections, and the rest of a cut transfer goes by so the owner can serve again |
-| gmnb (24), gmnb-launcher (4), dgmnb (70) | GDK key translation, palette contrast for extreme accents, settings compatibility, licence text that parses as markup; the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it) and where it finds GMNB; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown, pipe deadlines, and X11 paste (formats, size caps, deadlines under event floods) against a private Xvfb |
+| gmnb (24), gmnb-launcher (4), dgmnb (68) | GDK key translation, palette contrast for extreme accents, settings compatibility, licence text that parses as markup; the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it) and where it finds GMNB; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown and pipe deadlines |
 
 The oracles live in `tools/oracle/` and need the upstream repository checked
 out at `reference/calculator` to regenerate the golden files.
@@ -324,7 +326,7 @@ CI also runs checks that need more than `cargo test --workspace`:
   at extreme arguments (subnormals to 10³⁰⁰, both sides of ±1, the edge of
   eˣ) must read the same in the panel's formatting.
 - The launcher on an emulated Nehalem must refuse with its message, and the
-  D-Bus, X11 and Wayland tests must run rather than skip.
+  D-Bus and Wayland tests must run rather than skip.
 
 ## Deliberate differences from the original
 
@@ -570,11 +572,8 @@ CI also runs checks that need more than `cargo test --workspace`:
   with the arrow keys within a key panel and within a History or Memory
   list. DGMNB doesn't yet: every control is reached with Tab and
   Shift+Tab. Arrow-key movement in DGMNB is planned for 0.3.
-- DGMNB's clipboard works on Wayland and X11; copied graphs are offered as
-  `image/png`. On X11 it pastes `UTF8_STRING`, `text/plain;charset=utf-8`,
-  `text/plain`, `TEXT` or Latin-1 `STRING`, whichever the owner offers first
-  in that order.
-  Pastes over 1 MiB are refused on both.
+- DGMNB's clipboard is the Wayland one; copied graphs are offered as
+  `image/png`. Pastes over 1 MiB are refused.
 - NVIDIA's driver busy-waits on GPU fences by default, which costs ~20% of a
   core even for gentle animation; GMNB sets `__GL_YIELD=USLEEP` for its own
   process unless you've set it yourself. DGMNB doesn't touch the GPU.

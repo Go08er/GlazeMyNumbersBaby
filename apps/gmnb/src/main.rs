@@ -55,6 +55,9 @@ fn main() -> glib::ExitCode {
         unsafe { std::env::set_var("GSK_RENDERER", "cairo") };
         RENDERER_SET.store(true, std::sync::atomic::Ordering::Relaxed);
     }
+    // Wayland only: GDK must not fall back to its X11 backend, so that
+    // without a Wayland session there is no display, rather than an X one.
+    gdk::set_allowed_backends("wayland");
     // Initialise libadwaita before the application starts up. AdwApplication
     // would do it after GtkApplication's startup, which has already loaded
     // the icon theme; libadwaita then adds its own icon path, and GTK loads
@@ -64,7 +67,7 @@ fn main() -> glib::ExitCode {
     // activation to the running GMNB, which needs no display. Otherwise
     // fail as GTK would, before any startup code runs without one.
     if !display && !already_running() {
-        eprintln!("gmnb: cannot open a display");
+        eprintln!("gmnb: needs a Wayland session, but cannot connect to a Wayland display");
         return glib::ExitCode::FAILURE;
     }
     if display && icon_installed() {
@@ -86,7 +89,7 @@ fn main() -> glib::ExitCode {
             launch::mark("startup");
             // Only reachable if the running instance quit in the meantime.
             if !display || gdk::Display::default().is_none() {
-                eprintln!("gmnb: cannot open a display");
+                eprintln!("gmnb: needs a Wayland session, but cannot connect to a Wayland display");
                 no_display.set(true);
                 app.quit();
                 return;

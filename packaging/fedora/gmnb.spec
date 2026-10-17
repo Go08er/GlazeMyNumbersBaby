@@ -44,7 +44,6 @@ License:        MIT AND OFL-1.1 AND Apache-2.0 AND BSD-2-Clause AND BSD-3-Clause
 Requires:       hicolor-icon-theme
 # Loaded at run time, so not picked up automatically.
 Requires:       libxkbcommon
-Recommends:     libX11 libXcursor libXrandr libXi
 
 %description -n dgmnb
 DGMNB is the same Rust port of the open-source Windows Calculator as GMNB,

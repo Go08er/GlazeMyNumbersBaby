@@ -342,7 +342,7 @@ Apache License
 
 ------------------------------------------------------------------------
 Apache License 2.0
-Used by: gethostname 1.1.0, ring 0.17.14
+Used by: ring 0.17.14
 
                               Apache License
                         Version 2.0, January 2004
@@ -795,25 +795,24 @@ Used by: adler2 2.0.1, allocator-api2 0.2.21, async-channel 2.5.0,
   async-executor 1.14.0, async-io 2.6.0, async-lock 3.4.2, async-process
   2.5.0, async-recursion 1.1.1, async-signal 0.2.14, async-task 4.7.1,
   async-trait 0.1.92, atomic-waker 1.1.2, blocking 1.7.0, cairo-rs
-  0.22.9, cairo-sys-rs 0.22.9, concurrent-queue 2.5.0, ctor 0.10.1, endi
-  1.1.1, env_logger 0.9.3, event-listener 5.4.2, event-listener-strategy
-  0.5.4, fastrand 2.5.0, futures-lite 2.6.1, gdk-pixbuf 0.22.0,
-  gdk-pixbuf-sys 0.22.9, gdk4 0.11.5, gdk4-sys 0.11.5, gio 0.22.10,
-  gio-sys 0.22.9, glib 0.22.10, glib-macros 0.22.9, glib-sys 0.22.9,
-  gobject-sys 0.22.9, graphene-rs 0.22.8, graphene-sys 0.22.9, gsk4
-  0.11.5, gsk4-sys 0.11.5, gtk4 0.11.5, gtk4-macros 0.11.5, gtk4-sys
-  0.11.5, itoa 1.0.18, libadwaita 0.9.2, libadwaita-sys 0.9.2,
-  linux-raw-sys 0.12.1, linux-raw-sys 0.4.15, once_cell 1.21.4,
-  ordered-stream 0.2.0, pango 0.22.9, pango-sys 0.22.9, pangocairo
-  0.22.9, pangocairo-sys 0.22.9, parking 2.2.1, pin-project-lite 0.2.17,
-  piper 0.2.5, polling 3.11.0, proc-macro-crate 3.5.0, proc-macro2
-  1.0.107, quote 1.0.47, rustc-hash 2.1.3, rustix 0.38.44, rustix 1.1.5,
-  serde 1.0.229, serde_core 1.0.229, serde_derive 1.0.229, serde_json
-  1.0.151, serde_repr 0.1.21, siphasher 1.0.4, smol_str 0.2.2, syn
-  2.0.119, syn 3.0.6, thiserror 1.0.69, thiserror-impl 1.0.69,
-  unicode-ident 1.0.26, utf8-zero 0.8.1, winnow 1.0.4, x11-dl 2.21.0,
-  zbus-lockstep 0.5.2, zbus-lockstep-macros 0.5.2, zmij 1.0.23,
-  zvariant_utils 4.2.0
+  0.22.9, cairo-sys-rs 0.22.9, concurrent-queue 2.5.0, endi 1.1.1,
+  env_logger 0.9.3, event-listener 5.4.2, event-listener-strategy 0.5.4,
+  fastrand 2.5.0, futures-lite 2.6.1, gdk-pixbuf 0.22.0, gdk-pixbuf-sys
+  0.22.9, gdk4 0.11.5, gdk4-sys 0.11.5, gio 0.22.10, gio-sys 0.22.9,
+  glib 0.22.10, glib-macros 0.22.9, glib-sys 0.22.9, gobject-sys 0.22.9,
+  graphene-rs 0.22.8, graphene-sys 0.22.9, gsk4 0.11.5, gsk4-sys 0.11.5,
+  gtk4 0.11.5, gtk4-macros 0.11.5, gtk4-sys 0.11.5, itoa 1.0.18,
+  libadwaita 0.9.2, libadwaita-sys 0.9.2, linux-raw-sys 0.12.1,
+  linux-raw-sys 0.4.15, once_cell 1.21.4, ordered-stream 0.2.0, pango
+  0.22.9, pango-sys 0.22.9, pangocairo 0.22.9, pangocairo-sys 0.22.9,
+  parking 2.2.1, pin-project-lite 0.2.17, piper 0.2.5, polling 3.11.0,
+  proc-macro-crate 3.5.0, proc-macro2 1.0.107, quote 1.0.47, rustc-hash
+  2.1.3, rustix 0.38.44, rustix 1.1.5, serde 1.0.229, serde_core
+  1.0.229, serde_derive 1.0.229, serde_json 1.0.151, serde_repr 0.1.21,
+  siphasher 1.0.4, smol_str 0.2.2, syn 2.0.119, syn 3.0.6, thiserror
+  1.0.69, thiserror-impl 1.0.69, unicode-ident 1.0.26, utf8-zero 0.8.1,
+  winnow 1.0.4, zbus-lockstep 0.5.2, zbus-lockstep-macros 0.5.2, zmij
+  1.0.23, zvariant_utils 4.2.0
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -900,36 +899,6 @@ MIT License
 Used by: arrayvec 0.7.8
 
 Copyright (c) Ulrik Sverdrup "bluss" 2015-2023
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-------------------------------------------------------------------------
-MIT License
-Used by: as-raw-xcb-connection 1.0.1
-
-Copyright 2019 as-raw-xcb-connection Contributers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -2548,32 +2517,6 @@ SOFTWARE.
 
 ------------------------------------------------------------------------
 MIT License
-Used by: tiny-xlib 0.2.5
-
-MIT License
-
-Copyright (c) 2023 John Nunley
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-------------------------------------------------------------------------
-MIT License
 Used by: toml_datetime 1.1.1+spec-1.1.0, toml_edit 0.25.15+spec-1.1.0,
   toml_parser 1.1.3+spec-1.1.0
 
@@ -2722,49 +2665,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-
-------------------------------------------------------------------------
-MIT License
-Used by: x11-clipboard 0.9.3
-
-MIT License
-Copyright (c) 2017 quininer@live.com
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-------------------------------------------------------------------------
-MIT License
-Used by: x11rb 0.13.2, x11rb-protocol 0.13.2
-
-Copyright 2019 x11rb Contributers
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------
 MIT License

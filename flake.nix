@@ -108,24 +108,17 @@
             libxkbcommon
             # Runs appcore's private-bus D-Bus tests.
             dbus
-            # Runs the X11 clipboard tests (x11paste, DGMNB).
-            xvfb
             # The graphing crate's `mpfr-oracle` feature (development only).
             gmp
             mpfr
           ];
           RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
-          # DGMNB loads the keymap library (and Xlib on X11) at run time.
+          # DGMNB loads the keymap library at run time.
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (
             with pkgs;
             [
               libxkbcommon
               wayland
-              libx11
-              libxcursor
-              libxrandr
-              libxi
-              libxcb
             ]
           );
           shellHook = ''

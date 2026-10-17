@@ -17,26 +17,21 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Windowing and software rendering: Wayland first, X11 as a fallback.
+# Windowing and software rendering, Wayland only.
 # libwayland-client is linked (not dlopened) so packages pick up the
 # dependency automatically; libxkbcommon is always loaded at runtime.
-winit = { version = "0.30", default-features = false, features = ["rwh_06", "wayland", "x11"] }
-softbuffer = { version = "0.4", default-features = false, features = ["wayland", "x11", "x11-dlopen"] }
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "wayland"] }
+softbuffer = { version = "0.4", default-features = false, features = ["wayland"] }
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd", "png-format"] }
 swash = "0.2"
 unicode-bidi = "0.3"
 # Clipboard: smithay-client-toolkit at winit's version (no duplicate copy).
 sctk = { package = "smithay-client-toolkit", version = "0.19", default-features = false, features = ["calloop"] }
 wayland-backend = { version = "0.3", default-features = false, features = ["client_system"] }
-# X11 sessions (pure-Rust X connection; nothing loaded on Wayland).
-x11-clipboard = "0.9"
-x11paste.workspace = true
 libc = "0.2"
 accesskit = "0.25"
 accesskit_winit = { version = "0.34", default-features = false, features = ["accesskit_unix", "async-io", "rwh_06"] }
 
 [dev-dependencies]
-# The X11 clipboard tests' own selection owners.
-x11rb = { version = "0.13", default-features = false }
 # The tree the Linux adapter reads, to test what AT-SPI actually gets.
 accesskit_consumer = "0.39"

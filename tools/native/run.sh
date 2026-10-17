@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# Native check of GMNB or DGMNB on Wayland: a headless private session, real
+# keystrokes (with modifiers) and the display read back over AT-SPI.
+# FOR DEVELOPMENT CHECKS ONLY: not part of the build, the tests or CI.
+#
+#     tools/native/run.sh gmnb  target/debug/gmnb
+#     tools/native/run.sh dgmnb target/debug/dgmnb
+#
+# It never touches your desktop: WAYLAND_DISPLAY and DISPLAY are unset, and
+# everything runs in a private XDG_RUNTIME_DIR (keep its path short: Unix
+# sockets are limited to 108 bytes), temporary XDG config/data/cache/state
+# directories, a private D-Bus session, and its own accessibility bus. It
+# starts, and in the end kills by PID:
+#   sway (WLR_BACKENDS=headless, no input devices)  the compositor
+#   at-spi-bus-launcher                             the accessibility bus
+#   wtype, kept running to hold a keyboard on the seat
+#   the app, and short-lived wtype (typing) and atspi.py (reading) runs.
+#
+# Needs: bash, dbus-run-session, sway, wtype, at-spi-bus-launcher and
+# at-spi2-registryd (from at-spi2-core), and python3 with PyGObject and the
+# Atspi-2.0 typelib. From the Nix binary cache, for example:
+#     nix build nixpkgs#sway nixpkgs#wtype nixpkgs#at-spi2-core
+# then point SWAY, WTYPE, ATSPI_LAUNCHER, ATSPI_REGISTRYD, PYTHON and
+# GI_TYPELIB_PATH at them (each defaults to what is on PATH). Optional:
+# PRIVBUS_CONF, a dbus-daemon config without service directories, to use
+# instead of the built-in one; NATIVE_TMP, where the private directory goes
+# (default /tmp); NATIVE_DUMP=1 to print the accessibility tree on failure.
+#
+# Steps: type "2+3=" and expect the display to say 5; clear with Escape; type
+# "2+3", Tab to the 7 key and press Shift+Enter there (with Shift held it is
+# not "=", as in the original: the display stays 3), then plain Enter (5).
+# Pointer input (wlrctl, swaymsg) has not been tried.
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+app=${1:?usage: run.sh gmnb|dgmnb BINARY}
+bin=$(realpath "${2:?usage: run.sh gmnb|dgmnb BINARY}")
+SWAY=${SWAY:-sway}
+WTYPE=${WTYPE:-wtype}
+ATSPI_LAUNCHER=${ATSPI_LAUNCHER:-at-spi-bus-launcher}
+ATSPI_REGISTRYD=${ATSPI_REGISTRYD:-at-spi2-registryd}
+PYTHON=${PYTHON:-python3}
+
+if [ -z "${NATIVE_INNER:-}" ]; then
+  unset WAYLAND_DISPLAY DISPLAY WAYLAND_SOCKET DBUS_SESSION_BUS_ADDRESS AT_SPI_BUS_ADDRESS
+  rt=$(mktemp -d "${NATIVE_TMP:-/tmp}/nat.XXXXXX")
+  chmod 700 "$rt"
+  conf=${PRIVBUS_CONF:-$rt/bus.conf}
+  if [ ! -f "$conf" ]; then
+    cat > "$conf" <<EOF
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <keep_umask/>
+  <listen>unix:tmpdir=$rt</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+EOF
+  fi
+  export XDG_RUNTIME_DIR=$rt NATIVE_RT=$rt NATIVE_INNER=1
+  export XDG_CONFIG_HOME=$rt/config XDG_DATA_HOME=$rt/data
+  export XDG_CACHE_HOME=$rt/cache XDG_STATE_HOME=$rt/state
+  mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME"
+  rc=0
+  dbus-run-session --config-file="$conf" -- bash "$0" "$@" || rc=$?
+  rm -rf "$rt"
+  exit "$rc"
+fi
+
+# ---- inside the private session bus ---------------------------------------
+rt=$NATIVE_RT
+pids=()
+cleanup() {
+  for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
+  for p in "${pids[@]}"; do wait "$p" 2>/dev/null || true; done
+}
+trap cleanup EXIT
+fail() {
+  echo "FAIL: $*" >&2
+  echo "--- applications on the accessibility bus:" >&2
+  atspi apps >&2 || true
+  if [ -n "${NATIVE_DUMP:-}" ]; then atspi dump "$app" >&2 || true; fi
+  [ -n "${apppid:-}" ] && { kill -0 "$apppid" 2>/dev/null && echo "(the app is running)" >&2 || echo "(the app has exited)" >&2; }
+  for f in sway app atspi registryd; do
+    [ -s "$rt/$f.log" ] && { echo "--- $f.log" >&2; tail -n 15 "$rt/$f.log" >&2; }
+  done
+  exit 1
+}
+atspi() { "$PYTHON" "$here/atspi.py" "$@"; }
+
+# The accessibility bus (its registry daemon is started by the launcher).
+# The launcher keeps its enabled flags in GSettings: keep them in memory.
+GSETTINGS_BACKEND=memory "$ATSPI_LAUNCHER" --launch-immediately >"$rt/atspi.log" 2>&1 &
+pids+=($!)
+atspi enable
+# Nothing here activates services on demand, so the registry is started too.
+"$ATSPI_REGISTRYD" >"$rt/registryd.log" 2>&1 &
+pids+=($!)
+sleep 0.5
+
+# The compositor: wlroots' headless backend, no libinput, software rendering.
+cat > "$rt/sway.conf" <<EOF
+output HEADLESS-1 resolution 1280x1024
+default_border none
+focus_follows_mouse no
+EOF
+WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman \
+  "$SWAY" --unsupported-gpu -c "$rt/sway.conf" >"$rt/sway.log" 2>&1 &
+pids+=($!)
+sock=
+for _ in $(seq 100); do
+  sock=$(cd "$rt" && ls -d wayland-[0-9]* 2>/dev/null | grep -v '\.lock$' | head -n1 || true)
+  [ -n "$sock" ] && [ -S "$rt/$sock" ] && break
+  sleep 0.1
+done
+[ -S "$rt/${sock:-none}" ] || { cat "$rt/sway.log" >&2; fail "the compositor did not start"; }
+export WAYLAND_DISPLAY=$sock
+
+# The seat has no keyboard until wtype makes one, and a window is focused (and
+# says so over AT-SPI) only while the seat has one. Each wtype makes a keyboard
+# of its own and drops it on exit, so one is kept alive for the whole run by a
+# wtype that only sleeps; the keys come from short-lived ones.
+"$WTYPE" -s 3600000 &
+pids+=($!)
+sleep 1.5
+
+# The app. GMNB is told not to look for a GPU.
+GSK_RENDERER=cairo GMNB_STILL=1 "$bin" >"$rt/app.log" 2>&1 &
+apppid=$!
+pids+=($apppid)
+atspi display "$app" >/dev/null || fail "$app never showed a display"
+keys() { "$WTYPE" -s 150 "$@"; }
+settle() { sleep 0.6; }
+
+echo "start: display = $(atspi display "$app")"
+
+got=
+for _ in 1 2 3 4 5; do
+  keys -k Escape
+  keys "2+3="
+  settle
+  got=$(atspi display "$app")
+  [ "$got" = 5 ] && break
+done
+echo "typed 2+3=: display = $got"
+[ "$got" = 5 ] || fail "expected 5"
+
+keys -k Escape
+settle
+cleared=$(atspi display "$app")
+echo "Escape: display = $cleared"
+[ "$cleared" = 0 ] || fail "expected the display to clear to 0"
+
+# Shift+Enter on a focused button: Tab to the 7 key, with "2+3" typed. Enter
+# on a calculator key is "=" (here 5); with Shift held it is nothing, as in the
+# original (R18-L-02): the display stays 3. The modifier gets through.
+keys -k Escape
+keys "2+3"
+settle
+echo "typed 2+3: display = $(atspi display "$app")"
+button=
+for _ in $(seq 40); do
+  keys -k Tab
+  button=$(atspi focused "$app" 2>/dev/null || true)
+  case $button in 7 | Seven*) break ;; esac
+done
+echo "Tab: focused = $button"
+case $button in 7 | Seven*) ;; *) fail "never reached the 7 key by Tab" ;; esac
+keys -M shift -k Return -m shift
+settle
+held=$(atspi display "$app")
+echo "Shift+Enter on '$button': display = $held"
+[ "$held" = 3 ] || fail "expected Shift+Enter to leave 3"
+keys -k Return
+settle
+plain=$(atspi display "$app")
+echo "Enter on '$button': display = $plain"
+[ "$plain" = 5 ] || fail "expected Enter to give 5"
+
+kill -0 "$apppid" 2>/dev/null || fail "the app exited"
+echo "OK: $app"
