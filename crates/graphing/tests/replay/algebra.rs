@@ -752,15 +752,10 @@ impl Field<'_> {
     /// taken out as a factor: g·(the rest), a product whose parts may have
     /// signs where the sum written out is ∞ − ∞. None for a coefficient no
     /// double holds, or past a few dozen terms.
-    fn poly_tree(&self, p: &Poly) -> Option<Expr> {
-        if p.0.is_empty() {
-            return Some(Expr::exact(0.0));
-        }
-        if p.0.len() > 48 {
-            return None;
-        }
-        // The common monomial: each variable to its least exponent.
-        let mut common: Mono = p.0.keys().next()?.clone();
+    /// The monomial every term of p holds: each variable to its least
+    /// exponent.
+    fn common(p: &Poly) -> Mono {
+        let mut common: Mono = p.0.keys().next().cloned().unwrap_or_default();
         for m in p.0.keys() {
             common = common
                 .iter()
@@ -771,6 +766,32 @@ impl Field<'_> {
                 })
                 .collect();
         }
+        common
+    }
+
+    /// m less the monomial `less` (which divides it).
+    fn less(m: &Mono, less: &Mono) -> Mono {
+        m.iter()
+            .filter_map(|(v, k)| {
+                let taken = less.iter().find(|(w, _)| w == v).map_or(0, |(_, j)| *j);
+                (*k > taken).then_some((*v, *k - taken))
+            })
+            .collect()
+    }
+
+    fn poly_tree(&self, p: &Poly) -> Option<Expr> {
+        self.poly_tree_less(p, &Mono::new())
+    }
+
+    /// p / `cut` as a tree (`cut` divides every term of p).
+    fn poly_tree_less(&self, p: &Poly, cut: &Mono) -> Option<Expr> {
+        if p.0.is_empty() {
+            return Some(Expr::exact(0.0));
+        }
+        if p.0.len() > 48 {
+            return None;
+        }
+        let common = Self::less(&Self::common(p), cut);
         // (An integer a double holds exactly, of any size: 9·10¹⁸ is one,
         // its odd part under 2⁵³.)
         let whole = |q: &Integer| -> Option<Expr> {
@@ -779,13 +800,7 @@ impl Field<'_> {
         };
         let mut sum: Option<Expr> = None;
         for (m, c) in &p.0 {
-            let rest: Mono = m
-                .iter()
-                .filter_map(|(v, k)| {
-                    let taken = common.iter().find(|(w, _)| w == v).map_or(0, |(_, j)| *j);
-                    (*k > taken).then_some((*v, *k - taken))
-                })
-                .collect();
+            let rest = Self::less(&Self::less(m, cut), &common);
             let mut term = whole(c.numer())?;
             if *c.denom() != 1 {
                 term = Expr::Bin(BinOp::Div, Box::new(term), Box::new(whole(c.denom())?));
@@ -812,17 +827,28 @@ impl Field<'_> {
         })
     }
 
-    /// N/D as a tree, each of N and D with its common monomial out front.
+    /// N/D as a tree, each of N and D with its common monomial out front,
+    /// the monomial both hold cancelled (the same quotient wherever N/D is
+    /// defined: ln x·u/ln x is u).
     fn tree(&self, f: &Frac) -> Option<Expr> {
-        let n = self.poly_tree(&f.n)?;
         if f.d == Poly::constant(Rational::from(1)) {
+            return self.poly_tree(&f.n);
+        }
+        let shared = if f.n.0.is_empty() {
+            Mono::new()
+        } else {
+            let cd = Self::common(&f.d);
+            Self::common(&f.n)
+                .iter()
+                .filter_map(|(v, k)| cd.iter().find(|(w, _)| w == v).map(|(_, j)| (*v, (*k).min(*j))))
+                .collect()
+        };
+        let n = self.poly_tree_less(&f.n, &shared)?;
+        let d = self.poly_tree_less(&f.d, &shared)?;
+        if d == Expr::exact(1.0) {
             return Some(n);
         }
-        Some(Expr::Bin(
-            BinOp::Div,
-            Box::new(n),
-            Box::new(self.poly_tree(&f.d)?),
-        ))
+        Some(Expr::Bin(BinOp::Div, Box::new(n), Box::new(d)))
     }
 }
 
@@ -845,6 +871,15 @@ pub fn derivative_tree(
     let value = field.read(f)?;
     let derivative = field.d(&value)?;
     field.tree(&derivative)
+}
+
+/// f read in the replay's field and written back: f wherever f is defined
+/// (log(x, 2) − log(x, 2) + x² is x², 1 too where x = 1, f is not). None
+/// where the field doesn't read f, or an atom has no tree (a step).
+pub fn reduced_tree(f: &Expr, lits: &Lits, vars: &[(String, f64)], unit: Unit) -> Option<Expr> {
+    let mut field = Field::new(lits, vars, unit);
+    let value = field.read(f)?;
+    field.tree(&value)
 }
 
 /// f⁽ᵏ⁾ as a tree of the replay's own ([`derivative_tree`] k times, in one

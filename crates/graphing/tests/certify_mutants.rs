@@ -1092,6 +1092,8 @@ fn mutate(src: &str, unit: TrigUnit, other: Option<&Value>, run: &mut Run) {
     }
     run.functions += 1;
     let every = every_claim(&base);
+    // (MUTANTS_SLOW=seconds: say each replay of a mutant that takes longer.)
+    let slow: Option<f64> = std::env::var("MUTANTS_SLOW").ok().and_then(|v| v.parse().ok());
     let only = std::env::var("MUTANTS_ROW").ok();
     for row in replay::ROWS {
         if only.as_ref().is_some_and(|r| r != row) {
@@ -1118,12 +1120,24 @@ fn mutate(src: &str, unit: TrigUnit, other: Option<&Value>, run: &mut Run) {
             let mut accepted_in = None;
             let mut unreadable = true;
             for &s in settings {
+                let t1 = std::time::Instant::now();
                 match refused(&m.v, row, s, &every, &mut session) {
                     None => {
                         accepted_in = Some(SETTINGS[s]);
                         break;
                     }
                     Some(why) => unreadable &= why.starts_with("unreadable"),
+                }
+                if let Some(slow) = slow
+                    && t1.elapsed().as_secs_f64() > slow
+                {
+                    eprintln!(
+                        "slow: {label}: {row} / {}: {} ({}): {:.1} s",
+                        m.op,
+                        m.what,
+                        SETTINGS[s],
+                        t1.elapsed().as_secs_f64()
+                    );
                 }
             }
             if m.benign.is_some() {

@@ -665,6 +665,10 @@ pub struct Fx {
     /// alone is no value ([`eval`]), but a structural rule (f's parity, an
     /// identity) would read through the mark (review 17, R17-M-02).
     pub refused: Option<String>,
+    /// What checks that read f alone have found already, by a key of
+    /// their own (a family member's place: the same ends come back in
+    /// each mutant of a certificate).
+    pub memo: std::cell::RefCell<std::collections::HashMap<String, bool>>,
 }
 
 impl Fx {
@@ -808,6 +812,7 @@ pub fn function(a: &Value) -> Result<Fx, String> {
         verified,
         f_alt,
         refused,
+        memo: Default::default(),
     })
 }
 

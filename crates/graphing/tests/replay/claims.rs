@@ -597,6 +597,16 @@ fn monotone(s: &Subj, x: B) -> V {
 /// `x` so, by g itself: the family's own enclosure moved on k periods is
 /// wider than the member's.)
 pub fn one_zero_in(fx: &Fx, of: &Subject, x: B) -> bool {
+    let key = format!("one zero of {of:?} in [{:e}, {:e}]", x.0, x.1);
+    if let Some(&found) = fx.memo.borrow().get(&key) {
+        return found;
+    }
+    let found = one_zero_in_uncached(fx, of, x);
+    fx.memo.borrow_mut().insert(key, found);
+    found
+}
+
+fn one_zero_in_uncached(fx: &Fx, of: &Subject, x: B) -> bool {
     let Some(s) = Subj::new(fx, of, Tree::Orig) else {
         return false;
     };
@@ -959,7 +969,7 @@ fn kink_at(fx: &Fx, x: B, at: f64, left: bool, right: bool) -> Outcome {
 
 /// Whether `e` uses a step (floor, ceil, round, sign, mod): where it may
 /// jump, nothing smooth is read off its form.
-fn has_steps(e: &Expr) -> bool {
+pub fn has_steps(e: &Expr) -> bool {
     match e {
         Expr::Call(Func::Floor | Func::Ceil | Func::Round | Func::Sign | Func::Mod, _) => true,
         Expr::Neg(a) | Expr::Degrees(a) => has_steps(a),

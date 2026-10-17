@@ -1521,6 +1521,38 @@ fn monotone_bridge(fx: &Fx, all: &[RowCert], x: B, want: Option<bool>) -> bool {
     })
 }
 
+/// Boxes sorted by their low ends, each with the greatest high end of
+/// those before it: the boxes that meet [a, b] are found from the last one
+/// starting at or below b, going down while that running high end reaches
+/// a. (Boxes that hardly overlap: about log n and those that meet.)
+struct Spans<T> {
+    items: Vec<(f64, f64, T)>,
+    reach: Vec<f64>,
+}
+
+impl<T: Copy> Spans<T> {
+    fn new(mut items: Vec<(f64, f64, T)>) -> Spans<T> {
+        items.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut reach = Vec::with_capacity(items.len());
+        let mut top = f64::NEG_INFINITY;
+        for it in &items {
+            top = top.max(it.1);
+            reach.push(top);
+        }
+        Spans { items, reach }
+    }
+
+    /// The boxes [lo, hi] with lo ≤ b and hi ≥ a.
+    fn meeting(&self, a: f64, b: f64) -> impl Iterator<Item = &(f64, f64, T)> {
+        let end = self.items.partition_point(|x| x.0 <= b);
+        (0..end)
+            .rev()
+            .take_while(move |&j| self.reach[j] >= a)
+            .map(move |j| &self.items[j])
+            .filter(move |x| x.1 >= a)
+    }
+}
+
 fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
     let w = walk(fx, &rc.claims, 1);
     out.problems.extend(w.problems.iter().cloned());
@@ -1576,8 +1608,11 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
             }
             v
         });
+    let anchor_index = Spans::new(anchors.iter().map(|a| (a.lo, a.hi, ())).collect());
     let anchored = |x: &Enc| {
-        anchors.iter().any(|a| x.contains(a))
+        anchor_index
+            .meeting(x.lo, x.hi)
+            .any(|a| x.lo <= a.0 && a.1 <= x.hi)
             || period.is_some_and(|p| {
                 anchors
                     .iter()
@@ -1604,6 +1639,66 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
             }
         }
     }
+    // Each gap once: cleared of f′'s zeros, and of which sign beside. And
+    // the walk's boxes indexed, each repeat by the period with its own.
+    // (Asked again of every box for each of a thousand pieces, x +
+    // tan(200x)'s row took a second a replay.)
+    let clears = Spans::new(
+        rc.claims
+            .iter()
+            .filter_map(|c| match c {
+                Claim::GapClear {
+                    x,
+                    of: Subject::F(1),
+                } => Some((x.0, x.1, ())),
+                _ => None,
+            })
+            .collect(),
+    );
+    let sign_index = Spans::new(
+        w.signs
+            .iter()
+            .flat_map(|&(a, b, s)| {
+                repeated_boxes((a, b), period)
+                    .into_iter()
+                    .map(move |r| (r.0, r.1, (s, (a, b))))
+            })
+            .collect(),
+    );
+    let gap_facts = Spans::new(
+        w.gaps
+            .iter()
+            .flat_map(|g| {
+                let clear = clears.meeting(g.0, g.1).any(|c| c.0 <= g.0 && g.1 <= c.1);
+                let beside = |up: bool| {
+                    sign_index
+                        .meeting(g.0, g.1)
+                        .any(|(sa, sb, (s, _))| *s == up && (*sb == g.0 || *sa == g.1))
+                };
+                let facts = (clear, beside(true), beside(false), *g);
+                repeated_boxes(*g, period)
+                    .into_iter()
+                    .map(move |r| (r.0, r.1, facts))
+            })
+            .collect(),
+    );
+    let flat_index = Spans::new(
+        w.flat
+            .iter()
+            .flat_map(|&f| repeated_boxes(f, period).into_iter().map(|r| (r.0, r.1, ())))
+            .collect(),
+    );
+    let zero_index = Spans::new(
+        w.zeros
+            .iter()
+            .enumerate()
+            .flat_map(|(i, z)| {
+                repeated_boxes((z.at.lo, z.at.hi), period)
+                    .into_iter()
+                    .map(move |r| (r.0, r.1, i))
+            })
+            .collect(),
+    );
     for item in list(&rc.value)? {
         let p = piece(item.get("on").ok_or("on")?)?;
         let dir = item.get("dir").and_then(Value::as_str).unwrap_or("");
@@ -1636,40 +1731,35 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
         };
         // A partial row too proves each piece throughout its interior:
         // signed stretches of its direction, or flat ones for Constant.
-        let mut decided: Vec<B> = match want {
-            Some(up) => w
-                .signs
-                .iter()
-                .filter(|(_, _, s)| *s == up)
+        // (Only what meets the piece, or one of its repeats, can cover it:
+        // the repeats are in the indexes.)
+        let mut covered: Vec<B> = match want {
+            Some(up) => sign_index
+                .meeting(inner_lo, inner_hi)
+                .filter(|(_, _, (s, _))| *s == up)
                 .map(|(a, b, _)| (*a, *b))
                 .collect(),
-            None => w.flat.clone(),
+            None => flat_index
+                .meeting(inner_lo, inner_hi)
+                .map(|(a, b, _)| (*a, *b))
+                .collect(),
         };
         if let Some(up) = want {
-            for g in &w.gaps {
-                let clear = rc.claims.iter().any(|c| {
-                    matches!(c,
-                    Claim::GapClear { x, of: Subject::F(1) } if x.0 <= g.0 && g.1 <= x.1)
-                });
-                let signed_beside = w
-                    .signs
-                    .iter()
-                    .any(|(sa, sb, s)| *s == up && (*sb == g.0 || *sa == g.1));
+            for &(ra, rb, (clear, pos, neg, g)) in gap_facts.meeting(inner_lo, inner_hi) {
+                let signed_beside = if up { pos } else { neg };
+                if !(clear && signed_beside) {
+                    continue;
+                }
                 // A hole strictly inside the piece must not hide a jump
                 // or split its domain, even when f′ has no zero there.
                 let interior = inner_lo < g.0 && g.1 < inner_hi;
                 let continuous = !interior
-                    || claims::check(fx, &Claim::Continuous(*g), &rc.claims).class == Class::Strong;
-                if clear && signed_beside && continuous {
-                    decided.push(*g);
+                    || claims::check(fx, &Claim::Continuous(g), &rc.claims).class == Class::Strong;
+                if continuous {
+                    covered.push((ra, rb));
                 }
             }
         }
-        let proof: Vec<B> = decided
-            .iter()
-            .flat_map(|b| repeated_boxes(*b, period))
-            .collect();
-        let mut covered = proof;
         while let Some((lo, hi)) = uncovered((inner_lo, inner_hi), &covered) {
             // Endpoints are kept: there are reals between adjacent doubles.
             // Re-evaluate the whole missing span; only a continuous f with
@@ -1686,10 +1776,9 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
         // piece's sign: f is monotone from there on, the way it is listed.
         // A piece cut at a window's edge ends so.)
         let within = |d: f64| match want {
-            Some(up) => w
-                .signs
-                .iter()
-                .any(|(sa, sb, s)| *s == up && *sa <= d && d <= *sb),
+            Some(up) => sign_index
+                .meeting(d, d)
+                .any(|(a, b, (s, orig))| *s == up && (*a, *b) == *orig),
             None => w.flat.iter().any(|f| f.0 <= d && d <= f.1),
         };
         // A closed end belongs to the piece: f is defined there and
@@ -1703,6 +1792,21 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
             let Bound::At { x, closed: true } = end else {
                 continue;
             };
+            // (An end shown undefined is said so below.)
+            if x.lo == x.hi && no_value(fx, x.lo) {
+                continue;
+            }
+            // A closed end of the domain known only to an enclosure (the
+            // domain row shows f defined at it and on the piece beside it):
+            // f, built without steps, is continuous where it is defined.
+            let domain_end = domain.iter().flatten().any(|d| {
+                [d.lo, d.hi]
+                    .iter()
+                    .any(|b| matches!(b, Bound::At { x: e, closed: true } if *e == x))
+            });
+            if x.lo < x.hi && domain_end && !claims::has_steps(&fx.f) {
+                continue;
+            }
             let beside = if x.lo < x.hi {
                 (x.lo, x.hi)
             } else if low {
@@ -1746,17 +1850,22 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
                 ));
             }
         }
-        for (sa, sb, s) in &w.signs {
-            let overlaps = repeated_boxes((*sa, *sb), period)
-                .iter()
-                .any(|(a, b)| *a < inner_hi && *b > inner_lo);
-            if overlaps && want.is_some_and(|d| d != *s) {
+        // (Each sign box once, though its repeats meet the piece.)
+        let mut against: Vec<(B, bool)> = sign_index
+            .meeting(inner_lo, inner_hi)
+            .filter(|(a, b, _)| *a < inner_hi && *b > inner_lo)
+            .map(|(_, _, (s, orig))| (*orig, *s))
+            .collect();
+        against.sort_by(|x, y| x.0.0.total_cmp(&y.0.0).then(x.0.1.total_cmp(&y.0.1)));
+        against.dedup();
+        for ((sa, sb), s) in against {
+            if want.is_some_and(|d| d != s) {
                 out.problems.push(format!(
                     "f′ is {} on [{sa:e}, {sb:e}], inside a piece listed {dir}",
-                    if *s { "positive" } else { "negative" }
+                    if s { "positive" } else { "negative" }
                 ));
             }
-            if overlaps && want.is_none() {
+            if want.is_none() {
                 out.problems.push(format!(
                     "f′ ≠ 0 on [{sa:e}, {sb:e}], inside a piece listed constant"
                 ));
@@ -1768,11 +1877,15 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
         // listed as meeting at a double beside the turn, 1/3 at
         // 0.333…3148, held the turn's enclosure across their ends. Review
         // 18's follow-up.)
-        for z in &w.zeros {
-            let inside = repeated_boxes((z.at.lo, z.at.hi), period)
-                .iter()
-                .any(|(a, b)| *b > inner_lo && *a < inner_hi);
-            if inside && z.left.is_some() && z.right.is_some() && z.left != z.right {
+        let mut inside_zeros: Vec<usize> = zero_index
+            .meeting(inner_lo, inner_hi)
+            .filter(|(a, b, _)| *b > inner_lo && *a < inner_hi)
+            .map(|(_, _, i)| *i)
+            .collect();
+        inside_zeros.sort_unstable();
+        inside_zeros.dedup();
+        for z in inside_zeros.into_iter().map(|i| &w.zeros[i]) {
+            if z.left.is_some() && z.right.is_some() && z.left != z.right {
                 out.problems.push(format!(
                     "f′ changes sign at {:e}, inside a piece listed {dir}",
                     z.at.mid()
@@ -2017,7 +2130,7 @@ fn over_open_gap(fx: &Fx, p: f64, right: bool) -> Iv {
 /// between 1 and that double: its domain passed as x ≠ 1, and every other
 /// row with it. Round 19's follow-up.)
 fn open_gap_defined(fx: &Fx, p: f64, right: bool) -> bool {
-    use graphing::ast::Expr;
+    use graphing::ast::{BinOp, Expr, Func};
     if claims::unmodelled(&fx.f) {
         return false;
     }
@@ -2028,51 +2141,62 @@ fn open_gap_defined(fx: &Fx, p: f64, right: bool) -> bool {
     iv::set_prec(160);
     let q = if right { p.next_up() } else { p.next_down() };
     let (lo, hi) = if right { (p, q) } else { (q, p) };
-    let at = |g: &Expr, x: f64| fx.series(g, x, x, 0)[0].clone();
-    let monotone = |g: &Expr| {
+    // (log(a, b) as ln b / ln a, the same function on the same domain: its
+    // a ≠ 1 is then a divisor's.)
+    let f = fx.f.map(&|n| match n {
+        Expr::Call(Func::LogBase, a) if a.len() == 2 => Some(Expr::Bin(
+            BinOp::Div,
+            Box::new(Expr::Call(Func::Ln, vec![a[1].clone()])),
+            Box::new(Expr::Call(Func::Ln, vec![a[0].clone()])),
+        )),
+        _ => None,
+    });
+    // g − c's sign between p and q: g is c exactly at p and strictly
+    // monotone over [lo, hi], so it moves off c the way it slopes. (Not g
+    // at q: e^q − 1 at 160 bits is no more than 0, q being 5·10⁻³²⁴.)
+    let off = |g: &Expr, c: f64| -> Option<bool> {
+        let at = fx.series(g, p, p, 0)[0].clone();
+        if !(at.def && at.is_exactly(c)) {
+            return None;
+        }
         let s = fx.series(g, lo, hi, 1);
-        s[0].cont && !s[1].empty && s[1].def && s[1].ne0()
+        if !(s[0].cont && !s[1].empty && s[1].def && s[1].ne0()) {
+            return None;
+        }
+        Some(s[1].gt(0.0) == right)
     };
     // (path, stand-in): shortest paths first, none inside another.
     let mut stood: Vec<(Vec<u8>, &'static str)> = Vec::new();
     let mut zeros = Vec::new();
     paths_where(
-        &fx.f,
+        &f,
         &|g, path| {
-            let excluded = divisor(&fx.f, path) || {
-                let zeroed = replace_with(&fx.f, path, Expr::exact(0.0));
+            let excluded = divisor(&f, path) || {
+                let zeroed = replace_with(&f, path, Expr::exact(0.0));
                 fx.series(&zeroed, f64::NEG_INFINITY, f64::INFINITY, 0)[0].empty
             };
-            excluded && at(g, p).is_exactly(0.0) && monotone(g)
+            excluded && off(g, 0.0).is_some()
         },
         &mut Vec::new(),
         &mut zeros,
     );
     for path in zeros {
-        let Some(g) = super::eval::at_path(&fx.f, &path) else {
+        let Some(g) = super::eval::at_path(&f, &path) else {
             continue;
         };
-        let far = at(g, q);
-        if far.gt(0.0) {
-            stood.push((path, "__pos"));
-        } else if far.lt(0.0) {
-            stood.push((path, "__neg"));
+        match off(g, 0.0) {
+            Some(true) => stood.push((path, "__pos")),
+            Some(false) => stood.push((path, "__neg")),
+            None => {}
         }
     }
     let mut es = Vec::new();
-    edges(fx, &fx.f, &mut Vec::new(), &mut es);
+    edges(fx, &f, &mut Vec::new(), &mut es);
     for ed in es {
-        let Some(g) = super::eval::at_path(&fx.f, &ed.path) else {
+        let Some(g) = super::eval::at_path(&f, &ed.path) else {
             continue;
         };
-        let far = at(g, q);
-        let allowed = if ed.above {
-            far.gt(ed.c)
-        } else {
-            far.lt(ed.c)
-        };
-        let inside = ed.stand_in != "__unit" || (far.gt(-1.0) && far.lt(1.0));
-        if at(g, p).is_exactly(ed.c) && monotone(g) && allowed && inside {
+        if off(g, ed.c) == Some(ed.above) {
             stood.push((ed.path, ed.stand_in));
         }
     }
@@ -2081,7 +2205,7 @@ fn open_gap_defined(fx: &Fx, p: f64, right: bool) -> bool {
     }
     stood.sort_by_key(|(path, _)| path.len());
     let mut done: Vec<Vec<u8>> = Vec::new();
-    let mut t = fx.f.clone();
+    let mut t = f.clone();
     for (path, stand_in) in stood {
         if done.iter().any(|d| path.starts_with(d)) {
             continue;
@@ -2492,8 +2616,18 @@ fn edges(fx: &Fx, e: &graphing::ast::Expr, path: &mut Vec<u8>, out: &mut Vec<Edg
             Func::Acosh => push(0, 1.0, true),
             _ => {}
         },
+        // (f has no value where a divisor is 0: an end of the domain at a
+        // pole known only to an enclosure is open, from either side of it.)
+        Expr::Bin(BinOp::Div, _, b) if super::eval::contains_x(b) => {
+            push(1, 0.0, true);
+            push(1, 0.0, false);
+        }
         Expr::Bin(BinOp::Pow, a, b) => match super::eval::written_rational(b, &fx.lits) {
             Some((_, q)) if q.is_even() => push(0, 0.0, true),
+            Some((k, _)) if k < 0 && super::eval::contains_x(a) => {
+                push(0, 0.0, true);
+                push(0, 0.0, false);
+            }
             Some(_) => {}
             // A constant exactly an integer: an integer power.
             None if !super::eval::contains_x(b)
@@ -3510,9 +3644,28 @@ fn no_other_asymptote(
             |c| matches!(c, Claim::Removable { at, .. } if at.0 <= p && p <= at.1),
         )
     };
+    // (Or f's reduced form, f wherever f is defined, bounded over a box:
+    // log(x, 2) − log(x, 2) + x² beside its hole at 1.)
+    let reduced = super::algebra::reduced_tree(&fx.f, &fx.lits, &fx.vars, fx.unit);
+    let reduced_bound = |b: B| {
+        reduced.as_ref().is_some_and(|g| {
+            iv::set_prec(160);
+            let v = &fx.series(g, b.0, b.1, 0)[0];
+            !v.empty && v.def && v.bounded()
+        })
+    };
     let own_bound = |p: f64, right: bool| {
         let v = over_open_gap(fx, p, right);
-        !v.empty && v.bounded()
+        let b = if right { (p, p.next_up()) } else { (p.next_down(), p) };
+        (!v.empty && v.bounded()) || reduced_bound(b)
+    };
+    // f where it is defined over a box, bounded: the box holds no
+    // asymptote (a domain end strictly between two doubles: √(3x − 1)'s,
+    // asin(x/0.3)'s).
+    let bounded_over = |b: B| {
+        iv::set_prec(160);
+        let v = super::series::where_defined(|| fx.series(&fx.f, b.0, b.1, 0)[0].clone());
+        (!v.empty && v.bounded()) || reduced_bound(b)
     };
     for (p, right) in sides {
         let at = Enc { lo: p, hi: p };
@@ -3578,6 +3731,7 @@ fn no_other_asymptote(
                 ));
                 return;
             }
+            None if bounded_over(*g) => {}
             None => {
                 out.problems.push(format!(
                     "f in the gap [{:e}, {:e}] is not shown bounded: an asymptote there is not \
