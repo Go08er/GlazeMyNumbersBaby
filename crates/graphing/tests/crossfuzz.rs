@@ -384,8 +384,7 @@ const KNOWN: &[(&str, Matches, &str)] = &[
         "replay/row-problem",
         not_refuted,
         "a row the replay can't derive: its claims are left open, or what it rests on is not \
-         shown (a piece of the domain defined, the domain's symmetry under a parity; anything \
-         resting on a KinkSides claim, which the replay doesn't read yet)",
+         shown (a piece of the domain defined, the domain's symmetry under a parity)",
     ),
     // wide.rs: Γ in extended range keeps about 13 digits.
     (
@@ -1278,7 +1277,7 @@ fn row_problems_are_found_by_what_they_say() {
         ),
         // (Mirrors compared as listed: an excluded 0 enclosed off-centre.)
         (
-            "parity: Even, but the domain is not symmetric about 0",
+            "parity: Even, but the domain is not shown symmetric about 0",
             "replay/row-problem",
         ),
         // A text the replay has learnt since: read, and added to a list.
@@ -1289,19 +1288,6 @@ fn row_problems_are_found_by_what_they_say() {
     ] {
         assert_eq!(views::row_problem(text), class, "{text}");
     }
-    let cert: serde_json::Value = serde_json::from_str(
-        r#"{"extrema": {"Certified": {"value": [], "cert": {"claims": [
-            {"KinkSides": {"order": 1}}, {"Kink": {"x": [0, 1]}}, {"KinkSides": {"order": 2}}
-        ]}}}, "range": {"Certified": {"cert": {"claims": [{"Defined": [0, 1]}]}}}}"#,
-    )
-    .expect("JSON");
-    let (rest, n) = views::without_unread(&cert);
-    assert_eq!(n, 2);
-    assert_eq!(
-        rest["extrema"]["Certified"]["cert"]["claims"],
-        serde_json::json!([{"Kink": {"x": [0, 1]}}])
-    );
-    assert_eq!(rest["range"], cert["range"]);
 }
 
 /// A positive radicand gives a genuine open neighborhood at x=2, however

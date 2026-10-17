@@ -189,7 +189,7 @@ pub fn replay_child() {
 }
 
 #[cfg(feature = "mpfr-oracle")]
-pub use mp::{Beside, row_problem, without_unread};
+pub use mp::{Beside, row_problem};
 
 /// What MPFR proves of `y = text` on the reals beside x ([`Beside`]);
 /// `None` where there is no certificate to read the function from.
@@ -1334,40 +1334,6 @@ mod mp {
         );
     }
 
-    /// A kind of claim the certifier writes that the replay doesn't read
-    /// yet: it refuses the whole certificate for one ("unknown claim kind
-    /// KinkSides", tests/replay/mod.rs).
-    const UNREAD: &str = "KinkSides";
-
-    /// `json` without its claims of kind [`UNREAD`], and how many they
-    /// were.
-    pub fn without_unread(json: &serde_json::Value) -> (serde_json::Value, usize) {
-        use serde_json::Value;
-        fn strip(v: &mut Value, n: &mut usize) {
-            match v {
-                Value::Object(m) => {
-                    for (key, w) in m.iter_mut() {
-                        if let (true, Value::Array(claims)) = (key == "claims", &mut *w) {
-                            let before = claims.len();
-                            claims.retain(|c| {
-                                c.as_object()
-                                    .is_none_or(|o| !(o.len() == 1 && o.contains_key(UNREAD)))
-                            });
-                            *n += before - claims.len();
-                        } else {
-                            strip(w, n);
-                        }
-                    }
-                }
-                Value::Array(vs) => vs.iter_mut().for_each(|w| strip(w, n)),
-                _ => {}
-            }
-        }
-        let (mut rest, mut n) = (json.clone(), 0);
-        strip(&mut rest, &mut n);
-        (rest, n)
-    }
-
     /// What a row's problem (`replay::Report::row_problems`) is found as.
     /// The replay derives each shown row from the claims it has proven,
     /// and a problem either leaves the row open (a claim behind it not
@@ -1417,10 +1383,9 @@ mod mp {
             // (The replay's `domain_symmetric` compares each piece's
             // mirror with the pieces as listed, enclosures and all: an
             // excluded point enclosed off-centre, as 0 is in
-            // x/(sin(4)² − sin(4)² + x), reads "not symmetric" though the
-            // domain is ℝ \ {0}. Not shown symmetric, nor shown otherwise.
-            // Seed 1451, case 718.)
-            "but the domain is not symmetric",
+            // x/(sin(4)² − sin(4)² + x), is not shown symmetric though the
+            // domain is ℝ \ {0}; the replay says "not shown symmetric",
+            // under "not shown" above. Seed 1451, case 718.)
         ];
         // What the replay says against a row (tests/replay/rows.rs).
         const AGAINST: &[&str] = &[
@@ -1484,20 +1449,7 @@ mod mp {
         let run = |json: &serde_json::Value| {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| replay::replay(json)))
         };
-        let mut replayed = run(json);
-        // A certificate refused for a kind of claim the replay doesn't
-        // read is replayed without those claims: the rest of it is
-        // checked, and the rows that rest on them come out as not derived
-        // (row problems, which are listed). Counted, a certificate once.
-        if let Ok(Err(e)) = &replayed
-            && e.contains(&format!("unknown claim kind {UNREAD}"))
-        {
-            let (rest, n) = without_unread(json);
-            out.note("replay/kink-sides-unread", || {
-                format!("{} ({n} claims left out)", fx.source)
-            });
-            replayed = run(&rest);
-        }
+        let replayed = run(json);
         let r = match replayed {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => {

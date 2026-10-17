@@ -387,6 +387,70 @@ fn walk(fx: &Fx, claims: &[Claim], k: usize) -> Walk {
                 });
                 w.boxes.push(*x);
             }
+            // What f⁽ᵏ⁾ does on each side of a kink (its claim checked so):
+            // a strict sign wherever it exists is a stretch of that sign (f
+            // continuous, so strictly monotone there for f′), 0 a flat
+            // stretch. Placed at a double: the two stretches meet there,
+            // a zero of the walk; a change of sign of f″ across it is an
+            // inflection only when f′ is continuous there (`joined`), else
+            // a corner, which no complete row of inflections gets past.
+            // Not placed: one sign either side is one stretch over the box;
+            // two are a zero enclosed by it (a turn somewhere inside).
+            Claim::KinkSides {
+                x,
+                at,
+                order,
+                left,
+                right,
+                joined,
+            } if *order == k => {
+                use super::KinkSign;
+                let strict = |s: &KinkSign| match s {
+                    KinkSign::Pos => Some(true),
+                    KinkSign::Neg => Some(false),
+                    KinkSign::Zero => None,
+                };
+                match at {
+                    Some(p) => {
+                        for (a, b, side) in [(x.0, *p, left), (*p, x.1, right)] {
+                            match strict(side) {
+                                Some(pos) => w.signs.push((a, b, pos)),
+                                None => w.flat.push((a, b)),
+                            }
+                        }
+                        w.zeros.push(Zero {
+                            at: Enc { lo: *p, hi: *p },
+                            left: strict(left),
+                            right: strict(right),
+                            kink: !(k == 2 && *joined),
+                        });
+                        w.boxes.push(*x);
+                    }
+                    None => match (strict(left), strict(right)) {
+                        (Some(a), Some(b)) if a == b => {
+                            w.signs.push((x.0, x.1, a));
+                            w.boxes.push(*x);
+                        }
+                        (Some(a), Some(b)) => {
+                            w.zeros.push(Zero {
+                                at: Enc { lo: x.0, hi: x.1 },
+                                left: Some(a),
+                                right: Some(b),
+                                kink: true,
+                            });
+                            w.boxes.push(*x);
+                        }
+                        (None, None) => {
+                            w.flat.push(*x);
+                            w.boxes.push(*x);
+                        }
+                        // (0 on one side, a sign on the other, the point
+                        // unknown: nothing to place. The box stays
+                        // undecided.)
+                        _ => {}
+                    },
+                }
+            }
             Claim::Kink(x) if k > 0 => {
                 // Continuity on a box says nothing about derivative events
                 // inside it. Only a placed, one-sided kink or the original
@@ -755,6 +819,60 @@ fn complete(rc: &RowCert) -> bool {
 
 // ------------------------------------------------------------ rows
 
+/// A row's status and scope are part of what it says, and each kind of row
+/// says it one way:
+///
+/// * a list (the zeros, the turns, the inflections, the monotone pieces)
+///   is **Certified** when it is all of them: over the line, or over one
+///   period of a periodic f (and so over the line); **Partial** when it is
+///   all of them on a window only, or some of them (points);
+/// * the vertical asymptotes and the range are Certified, over the line or
+///   one period: a part of either is not a row;
+/// * the domain, the period and the horizontal and oblique asymptotes are
+///   statements about the whole line, Certified over it;
+/// * the y-intercept is a value at one point; so is "neither even nor
+///   odd" (two witnesses), where "even" and "odd" are about the line.
+///
+/// Anything else says what its scope can't bear: "all of f's zeros"
+/// (Certified) over points, where nothing shows there are no others, was
+/// let through for every list; a y-intercept, a parity or a period under
+/// any scope at all. (Round 19's mutation tester.) Why the row is off its
+/// form, or None.
+fn off_form(rc: &RowCert) -> Option<String> {
+    let certified = rc.status == "Certified";
+    let whole = matches!(rc.region, Some(Region::Line | Region::Period(..)));
+    let line = matches!(rc.region, Some(Region::Line));
+    let points = matches!(rc.region, Some(Region::Points));
+    let ok = match rc.name.as_str() {
+        "x_intercepts" | "extrema" | "inflections" | "monotonicity" => certified == whole,
+        "vertical" | "range" => certified && whole,
+        "domain" | "period" | "horizontal" | "oblique" => certified && line,
+        "y_intercept" => certified && points,
+        "parity" => {
+            certified
+                && if rc.value.as_str() == Some("Neither") {
+                    points
+                } else {
+                    line
+                }
+        }
+        _ => true,
+    };
+    (!ok).then(|| {
+        let scope = match rc.region {
+            Some(Region::Line) => "the line",
+            Some(Region::Period(..)) => "one period",
+            Some(Region::Window(..)) => "a window",
+            Some(Region::Points) => "points",
+            None => "no scope",
+        };
+        format!(
+            "a {} row {} over {scope}: its status and scope say what this kind of row can't",
+            rc.name, rc.status
+        )
+    })
+}
+
 pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) -> RowResult {
     let mut out = RowResult {
         name: rc.name.clone(),
@@ -773,15 +891,24 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
         ));
         return out;
     }
-    // The claims' own outcomes.
+    if let Some(why) = off_form(rc) {
+        out.problems.push(why);
+    }
+    // The claims' own outcomes (looked up by key: a row has thousands).
+    let outcomes: std::collections::HashMap<String, &ClaimResult> = results
+        .iter()
+        .map(|r| (super::claim_key(&r.claim), r))
+        .collect();
     let mut weak = 0;
     let mut open = 0;
+    let mut refuted = 0;
     for c in &rc.claims {
-        if let Some(res) = results.iter().find(|r| r.claim == *c) {
+        if let Some(res) = outcomes.get(&super::claim_key(c)) {
             match res.outcome.class {
                 Class::Weak => weak += 1,
                 Class::Unconfirmed | Class::Unsupported => open += 1,
-                _ => {}
+                Class::Refuted => refuted += 1,
+                Class::Strong => {}
             }
         }
     }
@@ -792,15 +919,6 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
     if open > 0 {
         out.notes.push(format!("{open} claims are unconfirmed"));
     }
-    let refuted = rc
-        .claims
-        .iter()
-        .filter(|c| {
-            results
-                .iter()
-                .any(|r| r.claim == **c && r.outcome.class == Class::Refuted)
-        })
-        .count();
     if refuted > 0 {
         out.problems
             .push(format!("it rests on {refuted} refuted claims"));
@@ -880,6 +998,23 @@ fn one_period(rc: &RowCert, out: &mut RowResult) {
         out.problems.push(format!(
             "the window [{a:e}, {b:e}] is not as wide as the period, in [{:e}, {:e}]",
             p.lo, p.hi
+        ));
+    }
+}
+
+/// A row complete over one period speaks for the line by f's period:
+/// each thing it lists repeats with f, so each is listed as a family. One
+/// listed alone says there is no other like it, which is false of every
+/// repeat (sin's zero at 0 "alone", in a row complete over a period,
+/// passed: round 19's mutation tester).
+fn repeats_listed(what: &str, rc: &RowCert, listed: &[(Enc, Option<Enc>)], out: &mut RowResult) {
+    if !matches!(rc.region, Some(Region::Period(..))) || rc.status != "Certified" {
+        return;
+    }
+    if let Some((x, _)) = listed.iter().find(|(_, p)| p.is_none()) {
+        out.problems.push(format!(
+            "{what} at {:e} listed alone, in a row complete over one period of f",
+            x.mid()
         ));
     }
 }
@@ -1025,6 +1160,7 @@ fn zeros_row(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Res
     match_items("an x-intercept", &derived, &listed, complete(rc), out);
     let periods: Vec<Enc> = listed.iter().filter_map(|(_, p)| *p).collect();
     families_follow("an x-intercept", rc, &periods, out);
+    repeats_listed("an x-intercept", rc, &listed, out);
     Ok(())
 }
 
@@ -1060,8 +1196,21 @@ fn turns(
     }
     if k == 1 {
         // Extrema at closed domain ends (a maximum is "from positive").
-        for (x, min) in end_extrema(rc, all, &w) {
+        let (ends, open) = end_extrema(fx, rc, all, &w);
+        for (x, min) in ends {
             ch.push((x, !min));
+        }
+        // (An end no claim spoke of was no extremum: √x's "no extrema",
+        // complete, with the claims of its other rows. Round 19's
+        // mutation tester.)
+        if let Some(x) = open.first()
+            && complete(rc)
+        {
+            out.problems.push(format!(
+                "f at the closed end [{:e}, {:e}] of its domain is not decided (an extremum, or \
+                 f constant beside it), yet the row is complete",
+                x.lo, x.hi
+            ));
         }
     }
     let mut listed = Vec::new();
@@ -1107,6 +1256,7 @@ fn turns(
     match_items(what, &derived, &listed, complete(rc), out);
     let periods: Vec<Enc> = listed.iter().filter_map(|(_, p)| *p).collect();
     families_follow(what, rc, &periods, out);
+    repeats_listed(what, rc, &listed, out);
     Ok(())
 }
 
@@ -1125,10 +1275,12 @@ fn domain_pieces(all: &[RowCert]) -> Option<Vec<Piece>> {
 /// from a low end (or falling toward a high one) makes it a minimum.
 /// (f′ must also have no zero in the gap beside the end: its GapClear
 /// claim, which [`holes`] asks of a complete row.) Returns (where, is a
-/// minimum).
-fn end_extrema(rc: &RowCert, all: &[RowCert], w: &Walk) -> Vec<(Enc, bool)> {
+/// minimum), and the closed ends left undecided: f not shown continuous
+/// from the end into the stretch (by a claim, or by the replay itself),
+/// nor constant beside it.
+fn end_extrema(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk) -> (Vec<(Enc, bool)>, Vec<Enc>) {
     let Some(pieces) = domain_pieces(all) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let conts: Vec<B> = rc
         .claims
@@ -1139,6 +1291,7 @@ fn end_extrema(rc: &RowCert, all: &[RowCert], w: &Walk) -> Vec<(Enc, bool)> {
         })
         .collect();
     let mut out = Vec::new();
+    let mut open = Vec::new();
     for p in &pieces {
         if p.lo == p.hi {
             continue;
@@ -1147,6 +1300,23 @@ fn end_extrema(rc: &RowCert, all: &[RowCert], w: &Walk) -> Vec<(Enc, bool)> {
             let Bound::At { x, closed: true } = b else {
                 continue;
             };
+            // Outside the row's region: not asked.
+            if let Some((a, b)) = rc.region.as_ref().and_then(region_box)
+                && (x.hi < a || x.lo > b)
+            {
+                continue;
+            }
+            // f constant from the end: no extremum of its own there.
+            let flat = w.flat.iter().any(|f| {
+                if low {
+                    f.0 <= x.hi.next_up() && f.1 > x.hi
+                } else {
+                    f.1 >= x.lo.next_down() && f.0 < x.lo
+                }
+            });
+            if flat {
+                continue;
+            }
             // The first strict sign of f′ inward from the end.
             let stretch = if low {
                 w.signs
@@ -1160,16 +1330,22 @@ fn end_extrema(rc: &RowCert, all: &[RowCert], w: &Walk) -> Vec<(Enc, bool)> {
                     .max_by(|a, b| a.1.total_cmp(&b.1))
             };
             let Some(&(sa, sb, sign)) = stretch else {
+                open.push(x);
                 continue;
             };
-            // f continuous from the end into that stretch.
+            // f continuous from the end into that stretch: a claim's, or
+            // the replay's own.
             let joined = conts.iter().any(|c| {
                 if low {
                     c.0 <= x.lo && c.1 >= sa
                 } else {
                     c.1 >= x.hi && c.0 <= sb
                 }
-            });
+            }) || {
+                let span = if low { (x.lo, sa) } else { (sb, x.hi) };
+                span.0 <= span.1
+                    && claims::check(fx, &Claim::Continuous(span), &[]).class == Class::Strong
+            };
             // Nothing between but a zero at the end itself.
             let between = |z: &Zero| {
                 if low {
@@ -1180,10 +1356,12 @@ fn end_extrema(rc: &RowCert, all: &[RowCert], w: &Walk) -> Vec<(Enc, bool)> {
             };
             if joined && !w.zeros.iter().any(between) {
                 out.push((x, sign == low));
+            } else if !joined {
+                open.push(x);
             }
         }
     }
-    out
+    (out, open)
 }
 
 /// A box and nearby translations guaranteed for every value of the
@@ -1209,9 +1387,26 @@ fn repeated_boxes(b: B, period: Option<Enc>) -> Vec<B> {
         .collect()
 }
 
+/// Whether the domain row excludes a family of points (tan's poles).
+fn domain_families(all: &[RowCert]) -> bool {
+    all.iter()
+        .find(|r| r.name == "domain" && r.status == "Certified")
+        .and_then(|d| d.value.get("excluded"))
+        .and_then(Value::as_array)
+        .is_some_and(|e| !e.is_empty())
+}
+
 /// No excluded periodic point lies strictly inside this span. Work with
 /// enclosures and integer indices; an uncertain member is never discarded.
 fn families_clear_span(all: &[RowCert], x: B) -> bool {
+    families_clear_between(all, x, &[])
+}
+
+/// [`families_clear_span`], a member that meets one of `ends` aside: the
+/// enclosure of a piece's end that holds a member (an anchor) holds that
+/// one, two members being a period apart, and the period far wider than
+/// either enclosure.
+fn families_clear_between(all: &[RowCert], x: B, ends: &[Enc]) -> bool {
     let Some(domain) = all
         .iter()
         .find(|r| r.name == "domain" && r.status == "Certified")
@@ -1249,7 +1444,8 @@ fn families_clear_span(all: &[RowCert], x: B) -> bool {
                     &iv::ratio(&a, &rug::Integer::from(1)),
                 ),
             );
-            if member.hi > x.0 && member.lo < x.1 {
+            let at_an_end = ends.iter().any(|e| member.lo <= e.hi && e.lo <= member.hi);
+            if member.hi > x.0 && member.lo < x.1 && !at_an_end {
                 return false;
             }
             a += 1;
@@ -1330,7 +1526,44 @@ fn monotone_bridge(fx: &Fx, all: &[RowCert], x: B, want: Option<bool>) -> bool {
     {
         return true;
     }
-    want.is_some_and(|up| super::eval::sqrt_log_slope(&e, &xb, &ctx) == Some(up))
+    // f′'s own exact form, its sign factor by factor, where the series'
+    // sum of terms is ∞ − ∞ (beside an open end of the domain).
+    want.is_some_and(|up| {
+        super::algebra::derivative_tree(&e, &fx.lits, &fx.vars, fx.unit)
+            .is_some_and(|d| claims::factor_sign_over(fx, &d, &xb, 6) == Some(up))
+    })
+}
+
+/// Boxes sorted by their low ends, each with the greatest high end of
+/// those before it: the boxes that meet [a, b] are found from the last one
+/// starting at or below b, going down while that running high end reaches
+/// a. (Boxes that hardly overlap: about log n and those that meet.)
+struct Spans<T> {
+    items: Vec<(f64, f64, T)>,
+    reach: Vec<f64>,
+}
+
+impl<T: Copy> Spans<T> {
+    fn new(mut items: Vec<(f64, f64, T)>) -> Spans<T> {
+        items.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut reach = Vec::with_capacity(items.len());
+        let mut top = f64::NEG_INFINITY;
+        for it in &items {
+            top = top.max(it.1);
+            reach.push(top);
+        }
+        Spans { items, reach }
+    }
+
+    /// The boxes [lo, hi] with lo ≤ b and hi ≥ a.
+    fn meeting(&self, a: f64, b: f64) -> impl Iterator<Item = &(f64, f64, T)> {
+        let end = self.items.partition_point(|x| x.0 <= b);
+        (0..end)
+            .rev()
+            .take_while(move |&j| self.reach[j] >= a)
+            .map(move |j| &self.items[j])
+            .filter(move |x| x.1 >= a)
+    }
 }
 
 fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
@@ -1388,8 +1621,11 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
             }
             v
         });
+    let anchor_index = Spans::new(anchors.iter().map(|a| (a.lo, a.hi, ())).collect());
     let anchored = |x: &Enc| {
-        anchors.iter().any(|a| x.contains(a))
+        anchor_index
+            .meeting(x.lo, x.hi)
+            .any(|a| x.lo <= a.0 && a.1 <= x.hi)
             || period.is_some_and(|p| {
                 anchors
                     .iter()
@@ -1416,6 +1652,70 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
             }
         }
     }
+    // Each gap once: cleared of f′'s zeros, and of which sign beside. And
+    // the walk's boxes indexed, each repeat by the period with its own.
+    // (Asked again of every box for each of a thousand pieces, x +
+    // tan(200x)'s row took a second a replay.)
+    let clears = Spans::new(
+        rc.claims
+            .iter()
+            .filter_map(|c| match c {
+                Claim::GapClear {
+                    x,
+                    of: Subject::F(1),
+                } => Some((x.0, x.1, ())),
+                _ => None,
+            })
+            .collect(),
+    );
+    let sign_index = Spans::new(
+        w.signs
+            .iter()
+            .flat_map(|&(a, b, s)| {
+                repeated_boxes((a, b), period)
+                    .into_iter()
+                    .map(move |r| (r.0, r.1, (s, (a, b))))
+            })
+            .collect(),
+    );
+    let gap_facts = Spans::new(
+        w.gaps
+            .iter()
+            .flat_map(|g| {
+                let clear = clears.meeting(g.0, g.1).any(|c| c.0 <= g.0 && g.1 <= c.1);
+                let beside = |up: bool| {
+                    sign_index
+                        .meeting(g.0, g.1)
+                        .any(|(sa, sb, (s, _))| *s == up && (*sb == g.0 || *sa == g.1))
+                };
+                let facts = (clear, beside(true), beside(false), *g);
+                repeated_boxes(*g, period)
+                    .into_iter()
+                    .map(move |r| (r.0, r.1, facts))
+            })
+            .collect(),
+    );
+    let flat_index = Spans::new(
+        w.flat
+            .iter()
+            .flat_map(|&f| {
+                repeated_boxes(f, period)
+                    .into_iter()
+                    .map(|r| (r.0, r.1, ()))
+            })
+            .collect(),
+    );
+    let zero_index = Spans::new(
+        w.zeros
+            .iter()
+            .enumerate()
+            .flat_map(|(i, z)| {
+                repeated_boxes((z.at.lo, z.at.hi), period)
+                    .into_iter()
+                    .map(move |r| (r.0, r.1, i))
+            })
+            .collect(),
+    );
     for item in list(&rc.value)? {
         let p = piece(item.get("on").ok_or("on")?)?;
         let dir = item.get("dir").and_then(Value::as_str).unwrap_or("");
@@ -1448,40 +1748,35 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
         };
         // A partial row too proves each piece throughout its interior:
         // signed stretches of its direction, or flat ones for Constant.
-        let mut decided: Vec<B> = match want {
-            Some(up) => w
-                .signs
-                .iter()
-                .filter(|(_, _, s)| *s == up)
+        // (Only what meets the piece, or one of its repeats, can cover it:
+        // the repeats are in the indexes.)
+        let mut covered: Vec<B> = match want {
+            Some(up) => sign_index
+                .meeting(inner_lo, inner_hi)
+                .filter(|(_, _, (s, _))| *s == up)
                 .map(|(a, b, _)| (*a, *b))
                 .collect(),
-            None => w.flat.clone(),
+            None => flat_index
+                .meeting(inner_lo, inner_hi)
+                .map(|(a, b, _)| (*a, *b))
+                .collect(),
         };
         if let Some(up) = want {
-            for g in &w.gaps {
-                let clear = rc.claims.iter().any(|c| {
-                    matches!(c,
-                    Claim::GapClear { x, of: Subject::F(1) } if x.0 <= g.0 && g.1 <= x.1)
-                });
-                let signed_beside = w
-                    .signs
-                    .iter()
-                    .any(|(sa, sb, s)| *s == up && (*sb == g.0 || *sa == g.1));
+            for &(ra, rb, (clear, pos, neg, g)) in gap_facts.meeting(inner_lo, inner_hi) {
+                let signed_beside = if up { pos } else { neg };
+                if !(clear && signed_beside) {
+                    continue;
+                }
                 // A hole strictly inside the piece must not hide a jump
                 // or split its domain, even when f′ has no zero there.
                 let interior = inner_lo < g.0 && g.1 < inner_hi;
                 let continuous = !interior
-                    || claims::check(fx, &Claim::Continuous(*g), &rc.claims).class == Class::Strong;
-                if clear && signed_beside && continuous {
-                    decided.push(*g);
+                    || claims::check(fx, &Claim::Continuous(g), &rc.claims).class == Class::Strong;
+                if continuous {
+                    covered.push((ra, rb));
                 }
             }
         }
-        let proof: Vec<B> = decided
-            .iter()
-            .flat_map(|b| repeated_boxes(*b, period))
-            .collect();
-        let mut covered = proof;
         while let Some((lo, hi)) = uncovered((inner_lo, inner_hi), &covered) {
             // Endpoints are kept: there are reals between adjacent doubles.
             // Re-evaluate the whole missing span; only a continuous f with
@@ -1496,14 +1791,83 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
         }
         // (Or the end is a double inside a stretch where f′ has the
         // piece's sign: f is monotone from there on, the way it is listed.
-        // A piece cut at a window's edge ends so.)
-        let within = |d: f64| match want {
-            Some(up) => w
-                .signs
-                .iter()
-                .any(|(sa, sb, s)| *s == up && *sa <= d && d <= *sb),
-            None => w.flat.iter().any(|f| f.0 <= d && d <= f.1),
+        // A piece cut at a window's edge ends so; a partial row's piece may
+        // be any part of one. A complete row's pieces are whole: (−∞, 0)
+        // and (0, ∞) for a constant passed as its monotone pieces, 0
+        // inside the flat stretch. Round 19's mutation tester.)
+        let edge = |d: f64| match rc.region {
+            Some(Region::Window(a, b) | Region::Period(a, b)) => d == a || d == b,
+            Some(Region::Points) => true,
+            _ => false,
         };
+        let within = |d: f64| {
+            edge(d)
+                && match want {
+                    Some(up) => sign_index
+                        .meeting(d, d)
+                        .any(|(a, b, (s, orig))| *s == up && (*a, *b) == *orig),
+                    None => w.flat.iter().any(|f| f.0 <= d && d <= f.1),
+                }
+        };
+        // No excluded point inside the piece: f monotone on each side of
+        // one is not monotone across it. (cot's piece (0, π) moved to start
+        // a double below 0 passed: its pole at 0 was a family member, which
+        // only the domain's pieces were asked about.)
+        let holds = w.holes.iter().any(|h| inner_lo < h.0 && h.1 < inner_hi);
+        let has_families = domain_families(all);
+        let ends: Vec<Enc> = [p.lo, p.hi]
+            .iter()
+            .filter_map(|b| match b {
+                Bound::At { x, .. } => Some(*x),
+                _ => None,
+            })
+            .collect();
+        if holds || (has_families && !families_clear_between(all, (inner_lo, inner_hi), &ends)) {
+            out.problems.push(format!(
+                "a monotone piece on [{a:e}, {b:e}] holds a point f is undefined at, inside it"
+            ));
+        }
+        // A closed end belongs to the piece: f is defined there and
+        // continuous to it from the piece (on the end's enclosure, or from
+        // the double beside a point end), so the direction shown inside
+        // holds up to and at the end. (Only an end shown undefined, or one
+        // that is an open end of the domain's pieces, was refused: tan's
+        // piece closed at its poles, which are an excluded family, passed.
+        // Round 19's mutation tester.)
+        for (end, low) in [(p.lo, true), (p.hi, false)] {
+            let Bound::At { x, closed: true } = end else {
+                continue;
+            };
+            // (An end shown undefined is said so below.)
+            if x.lo == x.hi && no_value(fx, x.lo) {
+                continue;
+            }
+            // A closed end of the domain known only to an enclosure (the
+            // domain row shows f defined at it and on the piece beside it):
+            // f, built without steps, is continuous where it is defined.
+            let domain_end = domain.iter().flatten().any(|d| {
+                [d.lo, d.hi]
+                    .iter()
+                    .any(|b| matches!(b, Bound::At { x: e, closed: true } if *e == x))
+            });
+            if x.lo < x.hi && domain_end && !claims::has_steps(&fx.f) {
+                continue;
+            }
+            let beside = if x.lo < x.hi {
+                (x.lo, x.hi)
+            } else if low {
+                (x.lo, x.lo.next_up())
+            } else {
+                (x.lo.next_down(), x.lo)
+            };
+            if claims::check(fx, &Claim::Continuous(beside), &[]).class != Class::Strong {
+                out.problems.push(format!(
+                    "a monotone piece is closed at [{:e}, {:e}], where f is not shown defined \
+                     and continuous from the piece",
+                    x.lo, x.hi
+                ));
+            }
+        }
         for end in [p.lo, p.hi] {
             if let Bound::At { x, closed: true } = end
                 && x.lo == x.hi
@@ -1532,17 +1896,22 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
                 ));
             }
         }
-        for (sa, sb, s) in &w.signs {
-            let overlaps = repeated_boxes((*sa, *sb), period)
-                .iter()
-                .any(|(a, b)| *a < inner_hi && *b > inner_lo);
-            if overlaps && want.is_some_and(|d| d != *s) {
+        // (Each sign box once, though its repeats meet the piece.)
+        let mut against: Vec<(B, bool)> = sign_index
+            .meeting(inner_lo, inner_hi)
+            .filter(|(a, b, _)| *a < inner_hi && *b > inner_lo)
+            .map(|(_, _, (s, orig))| (*orig, *s))
+            .collect();
+        against.sort_by(|x, y| x.0.0.total_cmp(&y.0.0).then(x.0.1.total_cmp(&y.0.1)));
+        against.dedup();
+        for ((sa, sb), s) in against {
+            if want.is_some_and(|d| d != s) {
                 out.problems.push(format!(
                     "f′ is {} on [{sa:e}, {sb:e}], inside a piece listed {dir}",
-                    if *s { "positive" } else { "negative" }
+                    if s { "positive" } else { "negative" }
                 ));
             }
-            if overlaps && want.is_none() {
+            if want.is_none() {
                 out.problems.push(format!(
                     "f′ ≠ 0 on [{sa:e}, {sb:e}], inside a piece listed constant"
                 ));
@@ -1554,11 +1923,15 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
         // listed as meeting at a double beside the turn, 1/3 at
         // 0.333…3148, held the turn's enclosure across their ends. Review
         // 18's follow-up.)
-        for z in &w.zeros {
-            let inside = repeated_boxes((z.at.lo, z.at.hi), period)
-                .iter()
-                .any(|(a, b)| *b > inner_lo && *a < inner_hi);
-            if inside && z.left.is_some() && z.right.is_some() && z.left != z.right {
+        let mut inside_zeros: Vec<usize> = zero_index
+            .meeting(inner_lo, inner_hi)
+            .filter(|(a, b, _)| *b > inner_lo && *a < inner_hi)
+            .map(|(_, _, i)| *i)
+            .collect();
+        inside_zeros.sort_unstable();
+        inside_zeros.dedup();
+        for z in inside_zeros.into_iter().map(|i| &w.zeros[i]) {
+            if z.left.is_some() && z.right.is_some() && z.left != z.right {
                 out.problems.push(format!(
                     "f′ changes sign at {:e}, inside a piece listed {dir}",
                     z.at.mid()
@@ -1575,9 +1948,19 @@ fn y_intercept(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String>
     iv::set_prec(160);
     let (v, valid) = s.at(0.0);
     if rc.value.is_null() {
+        // (Shown undefined, on f itself: an f(0) the replay can't place
+        // was "no y-intercept" too.)
+        if !v.empty && !valid {
+            out.problems.push(format!(
+                "no y-intercept listed, yet f(0) is not shown undefined: {}",
+                claims::show(&v)
+            ));
+        }
         if !v.empty && valid {
-            out.problems
-                .push(format!("no y-intercept listed, yet f(0) is defined: {v:?}"));
+            out.problems.push(format!(
+                "no y-intercept listed, yet f(0) is defined: {}",
+                claims::show(&v)
+            ));
         }
         return Ok(());
     }
@@ -1664,9 +2047,9 @@ fn parity(
         "Even" | "Odd" => {
             match domain_symmetric(all) {
                 Some(true) => {}
-                Some(false) => out
-                    .problems
-                    .push(format!("{p}, but the domain is not symmetric about 0")),
+                Some(false) => out.problems.push(format!(
+                    "{p}, but the domain is not shown symmetric about 0"
+                )),
                 // No domain row to read it from: f's own structure may
                 // still say it (built of even and odd parts, f is defined
                 // at −x wherever it is at x). The fact f(−x) = ±f(x) alone
@@ -1677,20 +2060,14 @@ fn parity(
                 None if claims::tree_parity(&fx.f, &fx.lits) == Some(p == "Even") => out
                     .notes
                     .push("the domain's symmetry: by f's structure, with no domain row".into()),
-                // Else as far as points go: f defined at both or neither
-                // of ±x at each, and at both of some (weak, as a fact
-                // tested at points is; an f placed at none shows nothing).
-                None => match claims::mirrored_at_points(fx) {
-                    Some(true) => out.notes.push(
-                        "the domain's symmetry: tested at points only, with no domain row".into(),
-                    ),
-                    Some(false) => out.problems.push(format!(
-                        "{p}, but f is defined at only one of ±x at a sample point"
-                    )),
-                    None => out.problems.push(format!(
-                        "{p}, but the domain is not known to be symmetric about 0"
-                    )),
-                },
+                // Else it is not derived. (As far as sample points went, f
+                // defined at both or neither of ±x at each, it was noted
+                // and passed: a domain is not symmetric by what a few
+                // points show.)
+                None => out.problems.push(format!(
+                    "{p}, but the domain is not known to be symmetric about 0 (no domain row, \
+                     and f's structure doesn't say)"
+                )),
             }
             let word = if p == "Even" { "even" } else { "odd" };
             let fact = rc.claims.iter().find(
@@ -1760,6 +2137,131 @@ fn parity(
 
 // ------------------------------------------------------------ domain
 
+/// f over the reals strictly between the double p and the double beside
+/// it (on its right, or its left), p itself left out: x − p keeps its
+/// strict sign there (x − p written in f is that difference exactly: 1/(x
+/// − 1) beside 1 is 1/t, t > 0). An enclosure of f's values where it is
+/// defined; `def` where it is shown defined throughout.
+fn over_open_gap(fx: &Fx, p: f64, right: bool) -> Iv {
+    iv::set_prec(160);
+    let q = if right { p.next_up() } else { p.next_down() };
+    let (lo, hi) = if right { (p, q) } else { (q, p) };
+    let ctx = fx.ctx();
+    let (e, x) = if p == 0.0 {
+        (fx.f.clone(), Iv::of2(lo, hi).strict(right, !right))
+    } else {
+        (
+            super::eval::recentered(&fx.f, p, &ctx),
+            iv::sub(&Iv::of2(lo, hi), &Iv::of(p)).strict(right, !right),
+        )
+    };
+    super::series::where_defined(|| {
+        super::eval::eval(&e, &super::series::var(x, 0), 0, &ctx)[0].clone()
+    })
+}
+
+/// Whether f is shown defined at every real strictly between the double p,
+/// where it is not, and the double beside it: nothing else is excluded
+/// there. By f's own enclosure over those reals ([`over_open_gap`]); or by
+/// the nodes that exclude p: each is 0 at p exactly where f has no value
+/// at its zeros (a divisor), or at the edge of its function's domain there
+/// (ln's 0), and is continuous and strictly monotone from p to that
+/// double, so it is nonzero, or inside its domain, at every real between;
+/// and with those nodes stood in for, by any value they may take there,
+/// the rest of f is defined over the whole of it.
+///
+/// (The pieces were shown defined from the double beside an open end on.
+/// 1/((x − 1)·(x − 1.00000000000000001)) has a second pole strictly
+/// between 1 and that double: its domain passed as x ≠ 1, and every other
+/// row with it. Round 19's follow-up.)
+fn open_gap_defined(fx: &Fx, p: f64, right: bool) -> bool {
+    use graphing::ast::{BinOp, Expr, Func};
+    if claims::unmodelled(&fx.f) {
+        return false;
+    }
+    let v = over_open_gap(fx, p, right);
+    if !v.empty && v.def {
+        return true;
+    }
+    iv::set_prec(160);
+    let q = if right { p.next_up() } else { p.next_down() };
+    let (lo, hi) = if right { (p, q) } else { (q, p) };
+    // (log(a, b) as ln b / ln a, the same function on the same domain: its
+    // a ≠ 1 is then a divisor's.)
+    let f = fx.f.map(&|n| match n {
+        Expr::Call(Func::LogBase, a) if a.len() == 2 => Some(Expr::Bin(
+            BinOp::Div,
+            Box::new(Expr::Call(Func::Ln, vec![a[1].clone()])),
+            Box::new(Expr::Call(Func::Ln, vec![a[0].clone()])),
+        )),
+        _ => None,
+    });
+    // g − c's sign between p and q: g is c exactly at p and strictly
+    // monotone over [lo, hi], so it moves off c the way it slopes. (Not g
+    // at q: e^q − 1 at 160 bits is no more than 0, q being 5·10⁻³²⁴.)
+    let off = |g: &Expr, c: f64| -> Option<bool> {
+        let at = fx.series(g, p, p, 0)[0].clone();
+        if !(at.def && at.is_exactly(c)) {
+            return None;
+        }
+        let s = fx.series(g, lo, hi, 1);
+        if !(s[0].cont && !s[1].empty && s[1].def && s[1].ne0()) {
+            return None;
+        }
+        Some(s[1].gt(0.0) == right)
+    };
+    // (path, stand-in): shortest paths first, none inside another.
+    let mut stood: Vec<(Vec<u8>, &'static str)> = Vec::new();
+    let mut zeros = Vec::new();
+    paths_where(
+        &f,
+        &|g, path| {
+            let excluded = divisor(&f, path) || {
+                let zeroed = replace_with(&f, path, Expr::exact(0.0));
+                fx.series(&zeroed, f64::NEG_INFINITY, f64::INFINITY, 0)[0].empty
+            };
+            excluded && off(g, 0.0).is_some()
+        },
+        &mut Vec::new(),
+        &mut zeros,
+    );
+    for path in zeros {
+        let Some(g) = super::eval::at_path(&f, &path) else {
+            continue;
+        };
+        match off(g, 0.0) {
+            Some(true) => stood.push((path, "__pos")),
+            Some(false) => stood.push((path, "__neg")),
+            None => {}
+        }
+    }
+    let mut es = Vec::new();
+    edges(fx, &f, &mut Vec::new(), &mut es);
+    for ed in es {
+        let Some(g) = super::eval::at_path(&f, &ed.path) else {
+            continue;
+        };
+        if off(g, ed.c) == Some(ed.above) {
+            stood.push((ed.path, ed.stand_in));
+        }
+    }
+    if stood.is_empty() {
+        return false;
+    }
+    stood.sort_by_key(|(path, _)| path.len());
+    let mut done: Vec<Vec<u8>> = Vec::new();
+    let mut t = f.clone();
+    for (path, stand_in) in stood {
+        if done.iter().any(|d| path.starts_with(d)) {
+            continue;
+        }
+        t = replace(&t, &path, stand_in);
+        done.push(path);
+    }
+    let v = &fx.series(&t, lo, hi, 0)[0];
+    !v.empty && v.def
+}
+
 /// The domain checked directly: f defined on each piece (but at its
 /// families' members), undefined between pieces, its ends as listed.
 fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
@@ -1777,8 +2279,9 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
         })
         .collect::<Result<_, String>>()?;
     if claims::unmodelled(&fx.f) {
-        out.notes
-            .push("not checked: the tree uses a function the replay doesn't model".into());
+        // (Noted and passed: a domain for any such f, its claims withheld.)
+        out.problems
+            .push("not derived: the tree uses a function the replay doesn't model".into());
         return Ok(());
     }
     // Each family: a Family claim with these boxes, about a node whose
@@ -1977,6 +2480,21 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
                     .push(format!("an open end at {:e}, yet {w}", x.lo));
             }
         }
+        // Between an open end at a double and the double beside it, inside
+        // the piece, f is defined too: the boxes above start at that next
+        // double.
+        for (b, low) in [(p.lo, true), (p.hi, false)] {
+            if let Bound::At { x, closed: false } = b
+                && x.lo == x.hi
+                && lo <= hi
+                && !open_gap_defined(fx, x.lo, low)
+            {
+                out.problems.push(format!(
+                    "f is not shown defined between its open end {:e} and the double beside it",
+                    x.lo
+                ));
+            }
+        }
         // Ends known only to an enclosure: the end inside it, and whether
         // f is defined there, from the edge of a node's domain.
         for (b, low) in [(p.lo, true), (p.hi, false)] {
@@ -1994,7 +2512,9 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
                     shut(c)
                 )),
                 Some(_) => {}
-                None => out.notes.push(format!(
+                // (Noted and passed: the end open or closed as listed,
+                // whichever it was.)
+                None => out.problems.push(format!(
                     "the end in [{:e}, {:e}]: not shown {}",
                     x.lo,
                     x.hi,
@@ -2141,8 +2661,18 @@ fn edges(fx: &Fx, e: &graphing::ast::Expr, path: &mut Vec<u8>, out: &mut Vec<Edg
             Func::Acosh => push(0, 1.0, true),
             _ => {}
         },
+        // (f has no value where a divisor is 0: an end of the domain at a
+        // pole known only to an enclosure is open, from either side of it.)
+        Expr::Bin(BinOp::Div, _, b) if super::eval::contains_x(b) => {
+            push(1, 0.0, true);
+            push(1, 0.0, false);
+        }
         Expr::Bin(BinOp::Pow, a, b) => match super::eval::written_rational(b, &fx.lits) {
             Some((_, q)) if q.is_even() => push(0, 0.0, true),
+            Some((k, _)) if k < 0 && super::eval::contains_x(a) => {
+                push(0, 0.0, true);
+                push(0, 0.0, false);
+            }
             Some(_) => {}
             // A constant exactly an integer: an integer power.
             None if !super::eval::contains_x(b)
@@ -2377,8 +2907,12 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
             return Ok(());
         }
         // A tail: to ±∞ (f′ beyond a nonzero c), or a limit with two
-        // values apart.
-        let to_inf = shows_unbounded(&rc.claims);
+        // values apart. (A tail, not a pole: tan is unbounded and periodic.
+        // And a limit, not a bound: sin is within [−1, 1] far out, with
+        // two values apart, and periodic.)
+        let to_inf = [Side::Left, Side::Right]
+            .iter()
+            .any(|&s| tail_infinite(&rc.claims, s, true) || tail_infinite(&rc.claims, s, false));
         let vals: Vec<(f64, f64, f64)> = rc
             .claims
             .iter()
@@ -2393,16 +2927,32 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
             })
             .collect();
         let apart = vals.iter().any(|a| vals.iter().any(|b| a.2 < b.1));
-        // A limit at a tail: f's bands there, or a rational f's exact one.
-        let limit = [Side::Left, Side::Right]
-            .iter()
-            .any(|&s| !tail_bands(&rc.claims, s).is_empty())
-            || rc.claims.iter().any(|c| {
-                matches!(c, Claim::Simplifier(f) if f.starts_with(claims::RATIONAL) && fact_limit(f).is_some())
-            })
-            || [At::PosInf, At::NegInf]
-                .iter()
-                .any(|&at| matches!(limit_at(&rc.claims, at, false), Some(Toward::In(..))));
+        // A limit at a tail: by the tree's structure, a rational f's exact
+        // one, f bounded and monotone there, or the simplifier's with f's
+        // bands closing in on it.
+        let limit = [
+            (Side::Left, At::NegInf, "−∞"),
+            (Side::Right, At::PosInf, "+∞"),
+        ]
+        .iter()
+        .any(|&(s, toward, at)| {
+            let bands = tail_bands(&rc.claims, s);
+            let fact = rc.claims.iter().find_map(|c| match c {
+                Claim::Simplifier(f)
+                    if f.starts_with("f → ") && f.ends_with(&format!("as x → {at}")) =>
+                {
+                    fact_limit(f)
+                }
+                _ => None,
+            });
+            matches!(limit_at(&rc.claims, toward, false), Some(Toward::In(..)))
+                || rc.claims.iter().any(|c| {
+                    matches!(c, Claim::Simplifier(f) if f.starts_with(claims::RATIONAL)
+                            && f.ends_with(&format!("as x → {at}")) && fact_limit(f).is_some())
+                })
+                || (!bands.is_empty() && tail_mono(&rc.claims, s).is_some())
+                || fact.is_some_and(|y| borne_out(&bands, &y, "the limit").is_ok())
+        });
         if !(to_inf || (limit && apart)) {
             out.problems
                 .push("not periodic, but the claims don't show it".into());
@@ -2463,8 +3013,10 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
     match stated {
         Some(v) if v.ge(p.lo) && v.le(p.hi) => {}
         Some(v) => out.problems.push(format!(
-            "the period is listed in [{:e}, {:e}], the fact says {v:?}",
-            p.lo, p.hi
+            "the period is listed in [{:e}, {:e}], the fact says {}",
+            p.lo,
+            p.hi,
+            claims::show(&v)
         )),
         None => out.problems.push(format!("unread period fact: {fact}")),
     }
@@ -2684,44 +3236,14 @@ fn tail_bands(claims: &[Claim], side: Side) -> Vec<(f64, f64, f64)> {
     out
 }
 
-/// Bounds that grow without settling: three or more records (each beyond
-/// every bound before it, in the direction `up`), gaining at least 1.
-fn growing(mut bs: Vec<(f64, f64)>, up: bool) -> bool {
-    bs.sort_by(|a, b| a.0.total_cmp(&b.0));
-    // Several bounds from one place (other rows' claims): the strongest.
-    let mut one: Vec<(f64, f64)> = Vec::new();
-    for b in bs {
-        match one.last_mut() {
-            Some(l) if l.0 == b.0 => {
-                l.1 = if up { l.1.max(b.1) } else { l.1.min(b.1) };
-            }
-            _ => one.push(b),
-        }
-    }
-    // The records: each beyond every bound before it (a weaker bound
-    // further out, another row's, adds nothing).
-    let mut bs: Vec<(f64, f64)> = Vec::new();
-    for b in one {
-        let beyond = bs
-            .last()
-            .is_none_or(|l: &(f64, f64)| if up { b.1 > l.1 } else { b.1 < l.1 });
-        if beyond {
-            bs.push(b);
-        }
-    }
-    if bs.len() < 3 {
-        return false;
-    }
-    let ok = bs
-        .windows(2)
-        .all(|w| if up { w[1].1 > w[0].1 } else { w[1].1 < w[0].1 });
-    let (first, last) = (bs[0].1, bs[bs.len() - 1].1);
-    ok && (last - first).abs() >= 1.0
-}
-
 /// Whether the claims show f → +∞ (`up`) or −∞ on the tail: f′ beyond a
-/// nonzero bound of the matching sign, or f′'s sign chain (f′ moving away
-/// from 0); or f beyond bounds on [M, ∞) that grow out along the tail.
+/// nonzero bound of the matching sign, f′'s sign chain (f′ moving away
+/// from 0), or the limit by the tree's structure. (Bounds on f over tails
+/// [M, ∞) that "grew" with M counted too, and f's values at points of a
+/// monotone tail: a finite list of either shows no limit. −1/x on [1, ∞)
+/// is above −1, then −1/10, then −1/100. One genuine certificate of the
+/// corpus and pool rested on such bounds, beside a pole: the vertical row
+/// derives that pole itself now.)
 fn tail_infinite(claims: &[Claim], side: Side, up: bool) -> bool {
     let right = side == Side::Right;
     let proof = claims.iter().any(|c| match c {
@@ -2734,54 +3256,33 @@ fn tail_infinite(claims: &[Claim], side: Side, up: bool) -> bool {
         } if *s == side && *c != 0.0 => {
             (*above && *c > 0.0 || !*above && *c < 0.0) && (*above == right) == up
         }
+        // (f′ moving away from c on its side of it: away from 0 only for
+        // a c on that side of 0, or 0 itself. 1/x's f′ rises from above
+        // −5 on the right tail, toward 0.)
         Claim::TailChain {
             side: s,
             of: Subject::F(1),
+            c,
             above,
             ..
-        } if *s == side => (*above == right) == up,
+        } if *s == side && (if *above { *c >= 0.0 } else { *c <= 0.0 }) => (*above == right) == up,
         _ => false,
     });
-    let bounds: Vec<(f64, f64)> = claims
-        .iter()
-        .filter_map(|c| match c {
-            Claim::TailBeyond {
-                side: s,
-                from,
-                of: Subject::F(0),
-                c,
-                above,
-            } if *s == side && *above == up => Some((from.abs(), *c)),
-            _ => None,
-        })
-        .collect();
-    // f monotone on the tail, moving that way, past values that grow.
-    let points = || -> Vec<(f64, f64)> {
-        let Some((rising, start)) = tail_mono(claims, side) else {
-            return Vec::new();
-        };
-        if (rising == right) != up {
-            return Vec::new();
-        }
-        claims
-            .iter()
-            .filter_map(|c| match c {
-                Claim::Value {
-                    x,
-                    of: Subject::F(0),
-                    lo,
-                    hi,
-                } if x.0 == x.1 && (x.0 > 0.0) == right && on_tail(x.0, start, right) => {
-                    Some((x.0.abs(), if up { *lo } else { *hi }))
-                }
-                _ => None,
-            })
-            .collect()
-    };
     let at = if right { At::PosInf } else { At::NegInf };
     let structure =
         limit_at(claims, at, false) == Some(if up { Toward::PosInf } else { Toward::NegInf });
-    structure || proof || growing(bounds, up) || growing(points(), up)
+    // (Or a rational f's own, exactly: its fact checked so. 0.3·x's
+    // period row rests on it: FUZZ's seed 1451, case 66.)
+    let fact = format!(
+        "f → {} as x → {}",
+        if up { "+∞" } else { "−∞" },
+        if right { "+∞" } else { "−∞" }
+    );
+    let rational = claims.iter().any(|c| {
+        matches!(c, Claim::Simplifier(f)
+            if f.strip_prefix(super::claims::RATIONAL).is_some_and(|r| r.trim() == fact))
+    });
+    structure || proof || rational
 }
 
 /// What a `Limit` claim says f (or f/x, `over_x`) tends to as x → `at`.
@@ -2796,47 +3297,17 @@ fn limit_at(claims: &[Claim], at: At, over_x: bool) -> Option<Toward> {
     })
 }
 
-/// Whether the claims show f → ±∞ beside the point p (from the right, or
-/// the left): unbounded there by structure, or beyond bounds on boxes
-/// beside p that grow as the boxes shrink.
-fn side_infinite(claims: &[Claim], p: f64, right: bool) -> bool {
-    claims
-        .iter()
-        .any(|c| matches!(c, Claim::Unbounded { at, .. } if at.0 <= p && p <= at.1))
-        || side_grows(claims, p, right)
-}
-
 /// Whether the claims show f → ±∞ beside the very double p: its one-sided
-/// limit there by the tree's structure, or bounds on boxes from the double
-/// next to p that grow as the boxes shrink.
+/// limit there by the tree's structure. (Bounds on boxes from the double
+/// next to p that "grew" as the boxes shrank counted too: (x + 1)/(x² − 1)
+/// is above −10¹⁵, then −10⁹, then −2252 on boxes closing in on its hole
+/// at −1, where it tends to −1/2. Round 19's follow-up.)
 fn side_grows(claims: &[Claim], p: f64, right: bool) -> bool {
     let at = if right { At::Right(p) } else { At::Left(p) };
-    let structural = matches!(
+    matches!(
         limit_at(claims, at, false),
         Some(Toward::PosInf | Toward::NegInf)
-    );
-    let near = |x: &B| {
-        if right {
-            x.0 == p.next_up()
-        } else {
-            x.1 == p.next_down()
-        }
-    };
-    let bounds = |up: bool| -> Vec<(f64, f64)> {
-        claims
-            .iter()
-            .filter_map(|c| match c {
-                Claim::Beyond {
-                    x,
-                    of: Subject::F(0),
-                    c,
-                    above,
-                } if near(x) && *above == up => Some((-(x.1 - x.0), *c)),
-                _ => None,
-            })
-            .collect()
-    };
-    structural || growing(bounds(true), true) || growing(bounds(false), false)
+    )
 }
 
 /// f's bands on boxes beside p (from the right, or the left, p left
@@ -2912,12 +3383,11 @@ fn borne_out(bands: &[(f64, f64, f64)], y: &Enc, what: &str) -> Result<Enc, Stri
     Ok(Enc { lo, hi })
 }
 
-/// f′ on the tail shown beyond bounds growing in size (`to_zero` false:
-/// f′ → ±∞, so f/x → ±∞) or within bands about 0 narrowing to 10⁻¹²
-/// (f′ → 0, so f/x → 0): from bounds on f′ over tails, or, f′ monotone
-/// there (f″ of one sign), from its values at points of the tail, beyond
-/// which it moves.
-fn slope_shown(claims: &[Claim], side: Side, to_zero: bool) -> bool {
+/// f′ on the tail shown within bands about 0 narrowing to 10⁻¹² (f′ → 0,
+/// so f/x → 0): from bounds on f′ over tails, or, f′ monotone there (f″ of
+/// one sign), from its values at points of the tail, beyond which it
+/// moves. (Evidence for the simplifier's fact, which is the claim.)
+fn slope_to_zero(claims: &[Claim], side: Side) -> bool {
     let right = side == Side::Right;
     let bs: Vec<(f64, f64, bool)> = claims
         .iter()
@@ -2954,46 +3424,35 @@ fn slope_shown(claims: &[Claim], side: Side, to_zero: bool) -> bool {
         ),
         None => (Vec::new(), false),
     };
-    if to_zero {
-        // The farthest tail with a bound each way: two bounds there, or
-        // one and f′'s value at its start, moving towards it.
-        let mut bands: Vec<(f64, f64, f64)> = Vec::new();
-        for &(m, _, _) in &bs {
-            let above = bs
-                .iter()
-                .filter(|b| b.0 == m && b.2)
-                .map(|b| b.1)
-                .fold(f64::NEG_INFINITY, f64::max);
-            let below = bs
-                .iter()
-                .filter(|b| b.0 == m && !b.2)
-                .map(|b| b.1)
-                .fold(f64::INFINITY, f64::min);
-            let at = points.iter().find(|p| p.0 == m);
-            let lo = match at {
-                Some(p) if away_up => above.max(p.1),
-                _ => above,
-            };
-            let hi = match at {
-                Some(p) if !away_up => below.min(p.2),
-                _ => below,
-            };
-            bands.push((m, lo, hi));
-        }
-        bands
+    // The farthest tail with a bound each way: two bounds there, or
+    // one and f′'s value at its start, moving towards it.
+    let mut bands: Vec<(f64, f64, f64)> = Vec::new();
+    for &(m, _, _) in &bs {
+        let above = bs
             .iter()
-            .max_by(|a, b| a.0.total_cmp(&b.0))
-            .is_some_and(|b| b.1 >= -1e-12 && b.2 <= 1e-12)
-    } else {
-        let up: Vec<(f64, f64)> = bs.iter().filter(|b| b.2).map(|b| (b.0, b.1)).collect();
-        let down: Vec<(f64, f64)> = bs.iter().filter(|b| !b.2).map(|b| (b.0, b.1)).collect();
-        // f′ monotone, moving away from values that grow past 0.
-        let moving: Vec<(f64, f64)> = points
+            .filter(|b| b.0 == m && b.2)
+            .map(|b| b.1)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let below = bs
             .iter()
-            .map(|p| (p.0, if away_up { p.1 } else { p.2 }))
-            .collect();
-        growing(up, true) || growing(down, false) || growing(moving, away_up)
+            .filter(|b| b.0 == m && !b.2)
+            .map(|b| b.1)
+            .fold(f64::INFINITY, f64::min);
+        let at = points.iter().find(|p| p.0 == m);
+        let lo = match at {
+            Some(p) if away_up => above.max(p.1),
+            _ => above,
+        };
+        let hi = match at {
+            Some(p) if !away_up => below.min(p.2),
+            _ => below,
+        };
+        bands.push((m, lo, hi));
     }
+    bands
+        .iter()
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .is_some_and(|b| b.1 >= -1e-12 && b.2 <= 1e-12)
 }
 
 /// f″ beyond a nonzero bound on the tail (a `TailBeyond` or a sign chain
@@ -3026,21 +3485,34 @@ fn vertical(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Resu
         .iter()
         .map(spot)
         .collect::<Result<_, _>>()?;
-    let _ = fx;
     let periods: Vec<Enc> = listed.iter().filter_map(|(_, p)| *p).collect();
     families_follow("a vertical asymptote", rc, &periods, out);
+    repeats_listed("a vertical asymptote", rc, &listed, out);
     for (x, _) in &listed {
         // The listed enclosure is the box of a claim that f is unbounded
         // at a point in it (which the claim's check places there), or the
         // very double beside which f is shown to grow. (A double inside
         // such a claim's wider box is not where the pole is: π/2 listed at
         // the double nearest it passed for tan's. Review 18's follow-up.)
+        // (Or the replay's own derivation at a double, between the
+        // doubles beside it: f = a/b with b(p) = 0 and a away from 0, ln of
+        // something vanishing there, …, by `claims`' rules for a pole.)
+        let own = || {
+            x.lo == x.hi && {
+                let about = Claim::Unbounded {
+                    near: (x.lo.next_down(), x.lo.next_up()),
+                    at: (x.lo, x.lo),
+                };
+                claims::check(fx, &about, &[]).class == Class::Strong
+            }
+        };
         let unbounded = rc
             .claims
             .iter()
             .any(|c| matches!(c, Claim::Unbounded { at, .. } if at.0 == x.lo && at.1 == x.hi))
             || (x.lo == x.hi
-                && (side_grows(&rc.claims, x.lo, true) || side_grows(&rc.claims, x.lo, false)));
+                && (side_grows(&rc.claims, x.lo, true) || side_grows(&rc.claims, x.lo, false)))
+            || own();
         if !unbounded {
             out.problems.push(format!(
                 "a vertical asymptote at {:e} with no claim it is one",
@@ -3066,27 +3538,269 @@ fn vertical(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Resu
             ));
         }
     }
-    for e in &excluded {
+    let is_listed = |e: &Enc| {
         // (Listed itself, or a repeat of a listed family's. A row over one
         // period was let off this altogether: tan's poles could all be
         // left out.)
-        let is_listed = listed.iter().any(|(x, _)| x.contains(e))
+        listed.iter().any(|(x, _)| x.contains(e))
             || listed
                 .iter()
-                .any(|(x, p)| p.is_some_and(|p| meets_member(x, &p, e)));
+                .any(|(x, p)| p.is_some_and(|p| meets_member(x, &p, e)))
+    };
+    for e in &excluded {
         let unb = rc
             .claims
             .iter()
             .any(|c| matches!(c, Claim::Unbounded { at, .. } if at.0 == e.lo && at.1 == e.hi));
-        if unb && !is_listed {
+        if unb && !is_listed(e) {
             out.problems.push(format!(
                 "f is unbounded at {:e}, but no asymptote is listed there",
                 e.mid()
             ));
         }
     }
-    let _ = all;
+    if complete(rc) {
+        no_other_asymptote(fx, rc, all, &is_listed, out);
+    }
     Ok(())
+}
+
+/// A complete vertical row lists every asymptote: nowhere else in its
+/// region does |f| grow without bound beside a point. The row's claims
+/// place every x of the region (within the domain) in a box where f is
+/// valid, at a point where f is undefined, or in a gap beside one; then
+///
+/// * on a box where f is valid it is bounded near each point: a value
+///   claim bounds it there, or f is continuous on the box (built without
+///   steps, so continuous wherever defined; else shown so on the box);
+/// * each point where f is undefined, from each side the domain reaches
+///   it, is at a listed asymptote, or f is shown bounded beside it: a
+///   `Bounded` or `Removable` claim, a finite one-sided limit by the
+///   tree's structure, a band (bounds above and below) on the box from the
+///   double beside it, or the replay's own continuous extension of f at
+///   the point; a gap that holds an excluded point between two doubles
+///   has a claim that places it, unbounded (and listed) or bounded.
+///
+/// The reals strictly between an undefined double and the double beside it
+/// (a `Gap`) are the one place nothing is derived: no row shows that f has
+/// no second excluded point there.
+///
+/// (The row was checked only where it listed something: "none" passed for
+/// any f with no claims at all, x³ − 2x + 1/(x − 1) among them. Round 19's
+/// mutation tester.)
+fn no_other_asymptote(
+    fx: &Fx,
+    rc: &RowCert,
+    all: &[RowCert],
+    is_listed: &dyn Fn(&Enc) -> bool,
+    out: &mut RowResult,
+) {
+    if !all
+        .iter()
+        .any(|r| r.name == "domain" && r.status == "Certified")
+    {
+        out.problems
+            .push("the domain is not decided, yet the row is complete".into());
+        return;
+    }
+    if claims::unmodelled(&fx.f) {
+        return;
+    }
+    // Where the claims say f is valid, with a bound if they give one.
+    let f0 = Subject::F(0);
+    let mut w = Walk::default();
+    let mut valid: Vec<(B, bool)> = Vec::new();
+    for c in &rc.claims {
+        match c {
+            Claim::Beyond { x, of, .. }
+            | Claim::NoCross { x, of, .. }
+            | Claim::Factors { x, of, .. }
+            | Claim::OneCross { x, of, .. }
+            | Claim::ExactAt { x, of, .. }
+            | Claim::Touch { x, of, .. }
+                if *of == f0 =>
+            {
+                valid.push((*x, false));
+            }
+            Claim::Value { x, of, lo, hi } if *of == f0 => {
+                valid.push((*x, lo.is_finite() && hi.is_finite()));
+            }
+            Claim::TailBeyond { side, from, of, .. } | Claim::TailChain { side, from, of, .. }
+                if *of == f0 =>
+            {
+                valid.push((tail(*side, *from), false));
+            }
+            Claim::TailValue { side, from, lo, hi } => {
+                valid.push((tail(*side, *from), lo.is_finite() && hi.is_finite()));
+            }
+            Claim::Undefined(x) => {
+                w.holes.push(*x);
+                w.solid.push(*x);
+            }
+            Claim::Gap(x) => w.gaps.push(*x),
+            _ => {}
+        }
+    }
+    w.solid.extend(valid.iter().map(|(b, _)| *b));
+    w.boxes = w.solid.iter().chain(&w.gaps).copied().collect();
+    coverage(rc, all, &w.boxes, out);
+    gap_ends(fx, rc, all, &w, 0, out);
+    // Bounded near each point of a box where f is valid.
+    let mut steps = false;
+    fx.f.visit(&mut |e| {
+        use graphing::ast::{Expr, Func};
+        steps |= matches!(
+            e,
+            Expr::Call(
+                Func::Floor | Func::Ceil | Func::Round | Func::Sign | Func::Mod,
+                _
+            )
+        );
+    });
+    if steps {
+        for (b, bounded) in &valid {
+            let within = valid.iter().any(|(v, vb)| *vb && v.0 <= b.0 && b.1 <= v.1);
+            if *bounded || within {
+                continue;
+            }
+            if claims::check(fx, &Claim::Continuous(*b), &[]).class != Class::Strong {
+                out.problems.push(format!(
+                    "f is not shown continuous or bounded on [{:e}, {:e}]: an asymptote there \
+                     is not ruled out",
+                    b.0, b.1
+                ));
+                break;
+            }
+        }
+    }
+    // Each excluded point of the region, from each side the domain reaches
+    // it: at a listed asymptote, or f shown bounded beside it.
+    let Some(rg) = &rc.region else { return };
+    let ts = targets(rg, all);
+    // (p, from the right): the ends of the boxes where f is undefined.
+    let mut sides: Vec<(f64, bool)> = Vec::new();
+    for u in &w.holes {
+        if u.1.is_finite() && ts.iter().any(|t| t.0 <= u.1 && u.1 < t.1) {
+            sides.push((u.1, true));
+        }
+        if u.0.is_finite() && ts.iter().any(|t| t.0 < u.0 && u.0 <= t.1) {
+            sides.push((u.0, false));
+        }
+    }
+    // f bounded between p and the double beside it, where it is defined
+    // (the domain row's): a removable point (its claim's check: f's limit
+    // there), or the replay's own enclosure of f over those reals. (A
+    // bound on the box from that next double on says nothing of them: 1/(x
+    // − 1) is below 5·10¹⁵ on [1 + 2⁻⁵², 2]. Such bands, and a `Bounded`
+    // claim, which leaves the same reals out, passed for "no asymptote at
+    // 1" once the claim that it is one was left out.)
+    let removable = |p: f64| {
+        rc.claims
+            .iter()
+            .any(|c| matches!(c, Claim::Removable { at, .. } if at.0 <= p && p <= at.1))
+    };
+    // (Or f's reduced form, f wherever f is defined, bounded over a box:
+    // log(x, 2) − log(x, 2) + x² beside its hole at 1.)
+    let reduced = super::algebra::reduced_tree(&fx.f, &fx.lits, &fx.vars, fx.unit);
+    let reduced_bound = |b: B| {
+        reduced.as_ref().is_some_and(|g| {
+            iv::set_prec(160);
+            let v = &fx.series(g, b.0, b.1, 0)[0];
+            !v.empty && v.def && v.bounded()
+        })
+    };
+    let own_bound = |p: f64, right: bool| {
+        let v = over_open_gap(fx, p, right);
+        let b = if right {
+            (p, p.next_up())
+        } else {
+            (p.next_down(), p)
+        };
+        (!v.empty && v.bounded()) || reduced_bound(b)
+    };
+    // f where it is defined over a box, bounded: the box holds no
+    // asymptote (a domain end strictly between two doubles: √(3x − 1)'s,
+    // asin(x/0.3)'s).
+    let bounded_over = |b: B| {
+        iv::set_prec(160);
+        let v = super::series::where_defined(|| fx.series(&fx.f, b.0, b.1, 0)[0].clone());
+        (!v.empty && v.bounded()) || reduced_bound(b)
+    };
+    for (p, right) in sides {
+        let at = Enc { lo: p, hi: p };
+        if is_listed(&at) {
+            continue;
+        }
+        let toward = if right { At::Right(p) } else { At::Left(p) };
+        let finite = matches!(limit_at(&rc.claims, toward, false), Some(Toward::In(..)));
+        // (The replay's own: f's continuous extension at p, by series.)
+        let own = || {
+            iv::set_prec(160);
+            claims::limit_at(fx, p).is_some()
+        };
+        if finite || removable(p) || own() || own_bound(p, right) {
+            continue;
+        }
+        let unbounded = rc
+            .claims
+            .iter()
+            .any(|c| matches!(c, Claim::Unbounded { at, .. } if at.0 <= p && p <= at.1))
+            || matches!(
+                limit_at(&rc.claims, toward, false),
+                Some(Toward::PosInf | Toward::NegInf)
+            );
+        out.problems.push(if unbounded {
+            format!("f is unbounded at {p:e}, but no asymptote is listed there")
+        } else {
+            format!(
+                "f is not shown bounded {} {p:e}, where it is undefined: an asymptote there \
+                 is not ruled out",
+                if right { "right of" } else { "left of" }
+            )
+        });
+        return;
+    }
+    // A gap beside no undefined double holds an excluded point between two
+    // doubles: one a claim places there, f unbounded at it (and listed) or
+    // bounded about it.
+    for g in &w.gaps {
+        let asked = ts.iter().any(|t| t.0 <= g.1 && g.0 <= t.1);
+        let beside = w.holes.iter().any(|u| u.1 == g.0 || u.0 == g.1);
+        if !asked || beside {
+            continue;
+        }
+        let placed = rc.claims.iter().find_map(|c| match c {
+            Claim::Unbounded { at, .. } if g.0 <= at.0 && at.1 <= g.1 => {
+                Some((true, Enc { lo: at.0, hi: at.1 }))
+            }
+            Claim::Bounded { near, at, .. } | Claim::Removable { near, at, .. }
+                if g.0 <= at.0 && at.1 <= g.1 && near.0 <= g.0 && g.1 <= near.1 =>
+            {
+                Some((false, Enc { lo: at.0, hi: at.1 }))
+            }
+            _ => None,
+        });
+        match placed {
+            Some((false, _)) => {}
+            Some((true, at)) if is_listed(&at) => {}
+            Some((true, at)) => {
+                out.problems.push(format!(
+                    "f is unbounded at {:e}, but no asymptote is listed there",
+                    at.mid()
+                ));
+                return;
+            }
+            None if bounded_over(*g) => {}
+            None => {
+                out.problems.push(format!(
+                    "f in the gap [{:e}, {:e}] is not shown bounded: an asymptote there is not \
+                     ruled out",
+                    g.0, g.1
+                ));
+                return;
+            }
+        }
+    }
 }
 
 /// A fact that f is a line on its domain (a constant, m·x + b, holes
@@ -3169,8 +3883,51 @@ fn not_affine(claims: &[Claim]) -> bool {
     })
 }
 
+/// Whether the domain's pieces reach the tail (`None`: no domain row to
+/// say; then it may, for all that is known).
+fn reaches_tail(all: &[RowCert], side: Side) -> bool {
+    domain_pieces(all).is_none_or(|ps| {
+        ps.iter().any(|p| match side {
+            Side::Right => p.hi == Bound::PosInf,
+            Side::Left => p.lo == Bound::NegInf,
+        })
+    })
+}
+
+/// A fact, in any row of the certificate, that f has a period (each is
+/// checked as a claim of its row).
+fn periodic(all: &[RowCert]) -> bool {
+    all.iter()
+        .flat_map(|r| &r.claims)
+        .any(|c| matches!(c, Claim::Simplifier(f) if f.starts_with("f(x + ")))
+}
+
 fn horizontal(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
-    let _ = all;
+    // A tail with no asymptote listed has none: the domain doesn't reach
+    // it, f is a line (its own graph), f → ±∞ there, or f is periodic and
+    // no constant (it has no limit at all). A row that listed nothing was
+    // let through whatever f does far out: atan's two asymptotes removed,
+    // "none" for any f with no claims (round 19's mutation tester).
+    for (side, name, at) in [(Side::Left, "Left", "−∞"), (Side::Right, "Right", "+∞")] {
+        let n = list(&rc.value)?
+            .iter()
+            .filter(|h| h.get("side").and_then(Value::as_str) == Some(name))
+            .count();
+        if n > 1 {
+            out.problems
+                .push(format!("{n} horizontal asymptotes listed at {at}"));
+        }
+        let ruled_out = !reaches_tail(all, side)
+            || line_fact(&rc.claims)
+            || tail_infinite(&rc.claims, side, true)
+            || tail_infinite(&rc.claims, side, false)
+            || (periodic(all) && not_constant(&rc.claims));
+        if n == 0 && !ruled_out {
+            out.problems.push(format!(
+                "no horizontal asymptote at {at}, but nothing rules one out"
+            ));
+        }
+    }
     // A line's graph is the line itself: no asymptote (a constant, m·x +
     // b, holes aside). One listed needs f shown to be no constant.
     if !list(&rc.value)?.is_empty() {
@@ -3390,9 +4147,571 @@ fn exact_form(
 
 // ------------------------------------------------------------ range
 
-/// The range: every listed end is a value a claim proves (taken, a
-/// limit, or ±∞ by a claim), and no value of f at sample points falls
-/// outside the listed pieces.
+/// f's value at a place, or its limit toward one: an enclosure in the
+/// extended reals (±∞ at both ends for an infinite limit), and whether it
+/// is a value f takes.
+#[derive(Clone, Copy, Debug)]
+struct Seen {
+    lo: f64,
+    hi: f64,
+    taken: bool,
+}
+
+/// An end of a stretch of the domain on which f is continuous.
+#[derive(Clone, Copy, Debug)]
+enum Brink {
+    /// f is defined there (a closed end, an edge of the period's window).
+    Taken(B),
+    /// An excluded point or an open end, approached from its right (true)
+    /// or its left.
+    Toward(B, bool),
+    Tail(Side),
+}
+
+impl Brink {
+    fn at(&self) -> B {
+        match self {
+            Brink::Taken(b) | Brink::Toward(b, _) => *b,
+            Brink::Tail(Side::Left) => (f64::NEG_INFINITY, f64::NEG_INFINITY),
+            Brink::Tail(Side::Right) => (f64::INFINITY, f64::INFINITY),
+        }
+    }
+}
+
+/// The values f takes on one stretch where it is continuous: every value
+/// strictly between `lo` and `hi` for certain (and `lo` or `hi` itself
+/// where `closed`), none outside `hull`; with what was seen at its ends
+/// and turns.
+struct Image {
+    lo: f64,
+    hi: f64,
+    closed: (bool, bool),
+    hull: B,
+    seen: Vec<Seen>,
+}
+
+/// The range derived, and the listed pieces held to it.
+///
+/// The domain row's pieces, cut at the excluded points inside them, are
+/// the stretches on which f is continuous; the row's walk of f′ (which
+/// covers them: [`coverage`], [`gap_ends`], [`holes`]) cuts each into
+/// finitely many monotone parts, at f′'s zeros and f's kinks. So on a
+/// stretch f's least and greatest values are among: f at those zeros and
+/// kinks and at a closed end (taken), and f's limits at an open end, an
+/// excluded point or a tail (not taken). Each is enclosed here (`Seen`),
+/// from the replay's own evaluation where f is defined and from the
+/// row's claims where it is a limit; f is continuous on the stretch, so it
+/// takes every value strictly between the least and the greatest. Then:
+///
+/// * no value falls outside the list: each stretch's hull lies in one
+///   listed piece;
+/// * the list holds no value f doesn't take: each listed piece, between
+///   its ends' enclosures, is covered by the stretches' certain images;
+/// * a finite end is closed just when the value there is taken.
+///
+/// (The row was checked at its ends alone, each against the source it
+/// names, and at sample points: √x's range passed as (−∞, ∞), a third of
+/// x³ − 2x + 1/(x − 1)'s as everything above it. Round 19's mutation
+/// tester.)
+fn images(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk, pieces: &[Piece], out: &mut RowResult) {
+    let Some((ra, rb)) = rc.region.as_ref().and_then(region_box) else {
+        return;
+    };
+    let Some(domain) = domain_pieces(all) else {
+        out.problems
+            .push("the range is not derived: no domain row places the stretches of f".into());
+        return;
+    };
+    if claims::unmodelled(&fx.f) {
+        out.problems
+            .push("the range is not derived: f uses a function the replay doesn't model".into());
+        return;
+    }
+    // The excluded places: the boxes where f is undefined, and the gaps
+    // that hold an excluded point between two doubles (beside no undefined
+    // box), those that overlap as one.
+    let mut excluded: Vec<B> = w.holes.clone();
+    for g in &w.gaps {
+        let beside = w
+            .holes
+            .iter()
+            .any(|u| u.1 == g.0 || u.0 == g.1 || (u.0 <= g.0 && g.1 <= u.1));
+        if !beside {
+            excluded.push(*g);
+        }
+    }
+    excluded.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut merged: Vec<B> = Vec::new();
+    for e in excluded {
+        match merged.last_mut() {
+            Some(l) if e.0 <= l.1 => l.1 = l.1.max(e.1),
+            _ => merged.push(e),
+        }
+    }
+    // The stretches.
+    let mut stretches: Vec<(Brink, Brink)> = Vec::new();
+    for d in &domain {
+        let (dlo, dhi) = extent(d);
+        if dlo.max(ra) > dhi.min(rb) {
+            continue;
+        }
+        let low = if dlo < ra {
+            Brink::Taken((ra, ra))
+        } else {
+            match d.lo {
+                Bound::NegInf => Brink::Tail(Side::Left),
+                Bound::PosInf => continue,
+                Bound::At { x, closed: true } => Brink::Taken((x.lo, x.hi)),
+                Bound::At { x, closed: false } => Brink::Toward((x.lo, x.hi), true),
+            }
+        };
+        let high = if dhi > rb {
+            Brink::Taken((rb, rb))
+        } else {
+            match d.hi {
+                Bound::PosInf => Brink::Tail(Side::Right),
+                Bound::NegInf => continue,
+                Bound::At { x, closed: true } => Brink::Taken((x.lo, x.hi)),
+                Bound::At { x, closed: false } => Brink::Toward((x.lo, x.hi), false),
+            }
+        };
+        let mut from = low;
+        for e in &merged {
+            if e.0 > from.at().1 && e.1 < high.at().0 {
+                stretches.push((from, Brink::Toward(*e, false)));
+                from = Brink::Toward(*e, true);
+            }
+        }
+        stretches.push((from, high));
+    }
+    iv::set_prec(160);
+    // f over a box where it is defined: the replay's own enclosure, within
+    // its reduced form's (f wherever f is defined: asin x − asin x is 0,
+    // its enclosure at a point ±10⁻⁴⁸; FUZZ's seed 1409) and any value
+    // claim on that very box.
+    let reduced = super::algebra::reduced_tree(&fx.f, &fx.lits, &fx.vars, fx.unit);
+    let taken = |b: B| -> Option<Seen> {
+        let mut v = super::series::where_defined(|| fx.series(&fx.f, b.0, b.1, 0)[0].clone());
+        if let Some(g) = &reduced
+            && !v.empty
+        {
+            let w = super::series::where_defined(|| fx.series(g, b.0, b.1, 0)[0].clone());
+            if !w.empty && w.bounded() && !(w.hi < v.lo || v.hi < w.lo) {
+                v = v.meet(&w);
+            }
+        }
+        let mut seen = (!v.empty && v.bounded()).then(|| {
+            let (lo, hi) = claims::outward(&v);
+            Seen {
+                lo,
+                hi,
+                taken: true,
+            }
+        });
+        for c in &rc.claims {
+            if let Claim::Value {
+                x,
+                of: Subject::F(0),
+                lo,
+                hi,
+            } = c
+                && *x == b
+                && lo.is_finite()
+                && hi.is_finite()
+            {
+                seen = Some(match seen {
+                    Some(s) => Seen {
+                        lo: s.lo.max(*lo),
+                        hi: s.hi.min(*hi),
+                        taken: true,
+                    },
+                    None => Seen {
+                        lo: *lo,
+                        hi: *hi,
+                        taken: true,
+                    },
+                });
+            }
+        }
+        seen.filter(|s| s.lo <= s.hi)
+    };
+    // f constant on [lo, hi] (f′ ≡ 0 there, no excluded point inside):
+    // its one value, within every value claim on a box of it; with none,
+    // the replay's own at a point.
+    let constant = |lo: f64, hi: f64| -> Option<Seen> {
+        let mut seen: Option<Seen> = None;
+        for c in &rc.claims {
+            if let Claim::Value {
+                x,
+                of: Subject::F(0),
+                lo: l,
+                hi: h,
+            } = c
+                && lo <= x.0
+                && x.1 <= hi
+                && l.is_finite()
+                && h.is_finite()
+            {
+                seen = Some(match seen {
+                    Some(s) => Seen {
+                        lo: s.lo.max(*l),
+                        hi: s.hi.min(*h),
+                        taken: true,
+                    },
+                    None => Seen {
+                        lo: *l,
+                        hi: *h,
+                        taken: true,
+                    },
+                });
+            }
+        }
+        seen.filter(|s| s.lo <= s.hi).or_else(|| {
+            [0.0, lo, hi, lo + 1.0, hi - 1.0]
+                .into_iter()
+                .filter(|x| x.is_finite() && lo <= *x && *x <= hi)
+                .find_map(|x| taken((x, x)))
+        })
+    };
+    // f constant on a stretch that reaches the edge: its value there.
+    let flat_to = |e: &Brink| -> Option<Seen> {
+        let b = w.flat.iter().find(|b| match e {
+            Brink::Tail(Side::Left) => b.0 == f64::NEG_INFINITY,
+            Brink::Tail(Side::Right) => b.1 == f64::INFINITY,
+            Brink::Toward(x, true) => b.0 <= x.1.next_up() && x.1 < b.1,
+            Brink::Toward(x, false) => b.1 >= x.0.next_down() && x.0 > b.0,
+            Brink::Taken(_) => false,
+        })?;
+        match e {
+            Brink::Toward(x, true) => constant(x.1.next_up().max(b.0), b.1),
+            Brink::Toward(x, false) => constant(b.0, x.0.next_down().min(b.1)),
+            _ => constant(b.0, b.1),
+        }
+    };
+    let infinite = |up: bool| {
+        let v = if up { f64::INFINITY } else { f64::NEG_INFINITY };
+        Seen {
+            lo: v,
+            hi: v,
+            taken: false,
+        }
+    };
+    let limit = |v: Enc| Seen {
+        lo: v.lo,
+        hi: v.hi,
+        taken: false,
+    };
+    // f′'s sign on the stretch beside x (f's direction there).
+    let rising_beside = |x: f64, right: bool| -> Option<bool> {
+        let q = if right { x.next_up() } else { x.next_down() };
+        w.signs
+            .iter()
+            .find(|s| (s.0 <= q && q <= s.1) || (s.0 <= x && x <= s.1))
+            .map(|s| s.2)
+    };
+    let toward = |b: B, right: bool| -> Option<Seen> {
+        let point = (b.0 == b.1).then_some(b.0);
+        let at = point.map(|p| if right { At::Right(p) } else { At::Left(p) });
+        // An infinite limit by the tree's structure.
+        match at.and_then(|at| limit_at(&rc.claims, at, false)) {
+            Some(Toward::PosInf) => return Some(infinite(true)),
+            Some(Toward::NegInf) => return Some(infinite(false)),
+            _ => {}
+        }
+        // A finite one: every enclosure of it that is proven, together.
+        let mut shown: Vec<Enc> = Vec::new();
+        if let Some(p) = point {
+            let side = serde_json::json!({"Side": {"at": p, "right": right}});
+            if let Ok(v) = source_value(fx, rc, &side) {
+                shown.push(v.enc());
+            }
+            iv::set_prec(160);
+            if let Some(v) = claims::limit_at(fx, p) {
+                let (lo, hi) = claims::outward(&v);
+                shown.push(Enc { lo, hi });
+            }
+            // (f's own enclosure between p and the double beside it holds
+            // the limit; a band on the box from that double on does not.)
+            let v = over_open_gap(fx, p, right);
+            if !v.empty && v.bounded() {
+                let (lo, hi) = claims::outward(&v);
+                shown.push(Enc { lo, hi });
+            }
+        }
+        for c in &rc.claims {
+            if let Claim::Removable { at, lo, hi, .. } = c
+                && ((at.0 <= b.0 && b.1 <= at.1) || (b.0 <= at.0 && at.1 <= b.1))
+            {
+                shown.push(Enc { lo: *lo, hi: *hi });
+            }
+        }
+        if !shown.is_empty() {
+            let v = Enc {
+                lo: shown.iter().map(|e| e.lo).fold(f64::NEG_INFINITY, f64::max),
+                hi: shown.iter().map(|e| e.hi).fold(f64::INFINITY, f64::min),
+            };
+            return (v.lo <= v.hi).then(|| limit(v));
+        }
+        // A pole: |f| → ∞ there (a claim's proof, or the replay's own at a
+        // double), and f monotone beside it, so to +∞ or to −∞: up, coming
+        // from the right, where f falls away from it.
+        let pole = rc.claims.iter().any(|c| {
+            matches!(c, Claim::Unbounded { at, .. }
+                if (at.0 <= b.0 && b.1 <= at.1) || (b.0 <= at.0 && at.1 <= b.1))
+        }) || point.is_some_and(|p| {
+            let about = Claim::Unbounded {
+                near: (p.next_down(), p.next_up()),
+                at: (p, p),
+            };
+            claims::check(fx, &about, &[]).class == Class::Strong
+        });
+        let rising = rising_beside(if right { b.1 } else { b.0 }, right)?;
+        pole.then(|| infinite(rising != right))
+    };
+    let tail = |side: Side| -> Option<Seen> {
+        let right = side == Side::Right;
+        let at = if right { At::PosInf } else { At::NegInf };
+        match limit_at(&rc.claims, at, false) {
+            Some(Toward::PosInf) => return Some(infinite(true)),
+            Some(Toward::NegInf) => return Some(infinite(false)),
+            _ => {}
+        }
+        for up in [true, false] {
+            if tail_infinite(&rc.claims, side, up) {
+                return Some(infinite(up));
+            }
+        }
+        // A rational f's own limit, exactly.
+        if let Some(r) = super::algebra::Rat::of(&fx.f, &fx.lits, &fx.vars, fx.unit) {
+            match r.limit(right) {
+                Err(up) => return Some(infinite(up)),
+                Ok(q) => return Some(limit(Stated::Exact(q).enc())),
+            }
+        }
+        let name = if right { "Right" } else { "Left" };
+        source_value(fx, rc, &serde_json::json!({"Tail": name}))
+            .ok()
+            .map(|v| limit(v.enc()))
+    };
+    let see = |e: &Brink| -> Option<Seen> {
+        match e {
+            Brink::Taken(b) => taken(*b),
+            Brink::Toward(b, right) => flat_to(e).or_else(|| toward(*b, *right)),
+            Brink::Tail(side) => flat_to(e).or_else(|| tail(*side)),
+        }
+    };
+    let name = |e: &Brink| match e {
+        Brink::Taken(b) => format!("at [{:e}, {:e}]", b.0, b.1),
+        Brink::Toward(b, right) => format!(
+            "{} [{:e}, {:e}]",
+            if *right { "right of" } else { "left of" },
+            b.0,
+            b.1
+        ),
+        Brink::Tail(Side::Left) => "toward −∞".to_string(),
+        Brink::Tail(Side::Right) => "toward +∞".to_string(),
+    };
+    let mut found: Vec<(B, Vec<Seen>)> = Vec::new();
+    for (lo, hi) in &stretches {
+        let (a, b) = (lo.at().0, hi.at().1);
+        let mut seen = Vec::new();
+        for e in [lo, hi] {
+            match see(e) {
+                Some(s) => seen.push(s),
+                None => {
+                    out.problems.push(format!(
+                        "the range is not derived: f {} is not placed",
+                        name(e)
+                    ));
+                    return;
+                }
+            }
+        }
+        // Where f is constant on the stretch.
+        for f in &w.flat {
+            // (Off the stretch's own ends, where f may be undefined.)
+            let lo = f.0.max(if lo.at().0 == a { a.next_up() } else { a });
+            let hi = f.1.min(if hi.at().1 == b { b.next_down() } else { b });
+            if lo > hi {
+                continue;
+            }
+            match constant(lo, hi) {
+                Some(s) => seen.push(s),
+                None => {
+                    out.problems.push(format!(
+                        "the range is not derived: f, constant on [{lo:e}, {hi:e}], is not enclosed"
+                    ));
+                    return;
+                }
+            }
+        }
+        // f′'s zeros and f's kinks on the stretch.
+        let inside: Vec<B> = w
+            .zeros
+            .iter()
+            .map(|z| (z.at.lo, z.at.hi))
+            .filter(|z| a <= z.0 && z.1 <= b)
+            .collect();
+        for z in inside {
+            match taken(z) {
+                Some(s) => seen.push(s),
+                None => {
+                    out.problems.push(format!(
+                        "the range is not derived: f on [{:e}, {:e}] is not enclosed",
+                        z.0, z.1
+                    ));
+                    return;
+                }
+            }
+        }
+        found.push(((a, b), seen));
+    }
+    // Over one period: f at the window's low edge is f a period on, a
+    // point of the stretch that holds it (and so for the high edge).
+    if let Some(Region::Period(wa, wb)) = rc.region
+        && let Some(per) = row_period(rc)
+    {
+        let q = rug::Rational::from_f64;
+        for (edge, sign) in [(wa, 1), (wb, -1)] {
+            let (Some(e), Some(plo), Some(phi)) = (q(edge), q(per.lo), q(per.hi)) else {
+                continue;
+            };
+            let (lo, hi) = if sign > 0 {
+                (
+                    rug::Rational::from(&e + &plo),
+                    rug::Rational::from(&e + &phi),
+                )
+            } else {
+                (
+                    rug::Rational::from(&e - &phi),
+                    rug::Rational::from(&e - &plo),
+                )
+            };
+            let Some(v) = taken((edge, edge)) else {
+                continue;
+            };
+            if let Some((_, seen)) = found.iter_mut().find(|((a, b), _)| *a < lo && hi < *b) {
+                seen.push(v);
+            }
+        }
+    }
+    let imgs: Vec<Image> = found
+        .into_iter()
+        .map(|(_, seen)| {
+            let least = |f: fn(&Seen) -> f64| seen.iter().map(f).fold(f64::INFINITY, f64::min);
+            let most = |f: fn(&Seen) -> f64| seen.iter().map(f).fold(f64::NEG_INFINITY, f64::max);
+            let (lo, hi) = (least(|s| s.hi), most(|s| s.lo));
+            Image {
+                lo,
+                hi,
+                closed: (
+                    seen.iter().any(|s| s.taken && s.hi == lo),
+                    seen.iter().any(|s| s.taken && s.lo == hi),
+                ),
+                hull: (least(|s| s.lo), most(|s| s.hi)),
+                seen,
+            }
+        })
+        .collect();
+    // No value outside the list.
+    let within = |hull: B, p: &Piece| {
+        let (a, b) = extent(p);
+        a <= hull.0 && hull.1 <= b
+    };
+    for im in &imgs {
+        if !pieces.iter().any(|p| within(im.hull, p)) {
+            // Against the list only where a value (or limit) is shown
+            // outside every piece; else the enclosures are too wide to say
+            // (10^5000 − 10^5000 + min(x, 9, 6 − x) at its kinks: FUZZ's
+            // seed 1451).
+            let outside = im.seen.iter().find(|s| {
+                !pieces.iter().any(|p| {
+                    let (a, b) = extent(p);
+                    s.lo <= b && a <= s.hi
+                })
+            });
+            out.problems.push(match outside {
+                Some(s) => format!(
+                    "f takes a value in [{:e}, {:e}], which is outside the listed range",
+                    s.lo, s.hi
+                ),
+                None => format!(
+                    "the range is not derived: f's values on one stretch are enclosed in \
+                     [{:e}, {:e}], not shown inside a listed piece",
+                    im.hull.0, im.hull.1
+                ),
+            });
+            return;
+        }
+    }
+    for p in pieces {
+        let mine: Vec<&Image> = imgs.iter().filter(|im| within(im.hull, p)).collect();
+        // No listed value untaken: from the low end's enclosure up to the
+        // high end's, covered by the certain images (an exact point taken
+        // is one too).
+        let (from, to) = (
+            match p.lo {
+                Bound::At { x, .. } => x.hi,
+                _ => f64::NEG_INFINITY,
+            },
+            match p.hi {
+                Bound::At { x, .. } => x.lo,
+                _ => f64::INFINITY,
+            },
+        );
+        let (mut reach, mut reached) = (from, true);
+        while reach < to {
+            // The image that carries on from `reach`, furthest.
+            let next = mine
+                .iter()
+                .filter(|im| {
+                    im.lo < im.hi
+                        && (im.lo < reach || (im.lo == reach && (reached || im.closed.0)))
+                        && im.hi > reach
+                })
+                .max_by(|x, y| x.hi.total_cmp(&y.hi).then(x.closed.1.cmp(&y.closed.1)));
+            let Some(next) = next else {
+                out.problems.push(format!(
+                    "the listed range holds values about {reach:e} that f is not shown to take"
+                ));
+                return;
+            };
+            (reach, reached) = (next.hi, next.closed.1);
+        }
+        // A finite end closed just when it is taken: the least value of
+        // the stretches in the piece is among what was seen no higher than
+        // the lowest of their upper bounds.
+        let seen: Vec<&Seen> = mine.iter().flat_map(|im| &im.seen).collect();
+        for (b, low) in [(p.lo, true), (p.hi, false)] {
+            let Bound::At { x, closed } = b else { continue };
+            let may: Vec<&&Seen> = if low {
+                let top = seen.iter().map(|s| s.hi).fold(f64::INFINITY, f64::min);
+                seen.iter().filter(|s| s.lo <= top).collect()
+            } else {
+                let bottom = seen.iter().map(|s| s.lo).fold(f64::NEG_INFINITY, f64::max);
+                seen.iter().filter(|s| s.hi >= bottom).collect()
+            };
+            if may.is_empty() {
+                continue;
+            }
+            let (all_taken, none_taken) =
+                (may.iter().all(|s| s.taken), may.iter().all(|s| !s.taken));
+            if (closed && none_taken) || (!closed && all_taken) {
+                out.problems.push(format!(
+                    "the range's end in [{:e}, {:e}] is listed {}, yet f {} it",
+                    x.lo,
+                    x.hi,
+                    if closed { "closed" } else { "open" },
+                    if closed { "only tends to" } else { "takes" }
+                ));
+            }
+        }
+    }
+}
+
+/// The range: the listed pieces are the images of f's continuous stretches
+/// ([`images`]), and every finite end holds the value its named source
+/// gives.
 fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
     // The monotone pieces' images need a decided derivative walk, not
     // just continuity in the boxes left around unplaced kinks.
@@ -3405,6 +4724,9 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
         .iter()
         .map(piece)
         .collect::<Result<_, _>>()?;
+    if out.problems.is_empty() {
+        images(fx, rc, all, &w, &pieces, out);
+    }
     // Each finite end names where it comes from (`range_ends`: f's value at
     // a point, a tail's limit, a hole's, a one-sided limit; several where
     // it is the hull of ends not told apart). The listed enclosure holds
@@ -3413,8 +4735,8 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
     // source's enclosure, an end was listed at the double beside the value:
     // the range of (x + 1)/(3x) leaving out 0.333…3148, not 1/3. Review
     // 18's follow-up.) An end is closed just when its sources are values
-    // taken; without its sources neither follows. An infinite end: f
-    // unbounded somewhere, by a claim.
+    // taken; without its sources neither follows. (An infinite end is
+    // [`images`]': a stretch whose image reaches it.)
     let Some(ends) = rc.extra.as_array() else {
         out.problems
             .push("the range's ends name no sources (no range_ends)".into());
@@ -3427,17 +4749,10 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
             ends.len()
         ));
     }
-    let unbounded = shows_unbounded(&rc.claims);
     for (i, p) in pieces.iter().enumerate() {
         for (j, b) in [p.lo, p.hi].into_iter().enumerate() {
             let (x, closed) = match b {
-                Bound::NegInf | Bound::PosInf => {
-                    if !unbounded {
-                        out.problems
-                            .push("an infinite range end with no claim f is unbounded".into());
-                    }
-                    continue;
-                }
+                Bound::NegInf | Bound::PosInf => continue,
                 Bound::At { x, closed } => (x, closed),
             };
             let srcs: Vec<&Value> = ends
@@ -3497,42 +4812,15 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
     for x in xs {
         let (v, valid) = s.at(x);
         if valid && !v.empty && v.bounded() && !inside(&v) {
-            out.problems
-                .push(format!("f({x:e}) ∈ {v:?} is outside the listed range"));
+            out.problems.push(format!(
+                "f({x:e}) ∈ {} is outside the listed range",
+                claims::show(&v)
+            ));
             break;
         }
     }
-    let _ = (all, split);
+    let _ = split;
     Ok(())
-}
-
-/// Whether some claim shows f unbounded: structurally at a point, f′
-/// beyond a nonzero bound on a tail, f′'s sign chain, or bounds that grow
-/// out along a tail or beside a point. (A simplifier's "→ ±∞" alone never
-/// does.)
-fn shows_unbounded(claims: &[Claim]) -> bool {
-    claims.iter().any(|c| matches!(c, Claim::Unbounded { .. }))
-        || claims.iter().any(|c| {
-            matches!(c, Claim::Limit { over_x: false, to: Toward::PosInf | Toward::NegInf, .. })
-        })
-        || claims.iter().any(|c| {
-            matches!(c, Claim::Simplifier(f)
-                if f.strip_prefix(claims::RATIONAL).is_some_and(|r| r.starts_with("f → +∞") || r.starts_with("f → −∞")))
-        })
-        || [Side::Left, Side::Right]
-            .iter()
-            .any(|&s| tail_infinite(claims, s, true) || tail_infinite(claims, s, false))
-        || claims.iter().any(|c| match c {
-            Claim::Beyond {
-                x,
-                of: Subject::F(0),
-                ..
-            } => {
-                side_infinite(claims, x.0.next_down(), true)
-                    || side_infinite(claims, x.1.next_up(), false)
-            }
-            _ => false,
-        })
 }
 
 /// What a listing must hold: a number known exactly (a rational a fact
@@ -3903,23 +5191,23 @@ fn oblique(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Resul
                 .collect()
         })
         .unwrap_or_default();
-    let pieces = domain_pieces(all).unwrap_or_default();
     for (side, at) in [("Left", "−∞"), ("Right", "+∞")] {
-        if sides.iter().any(|s| s == side) {
+        let n = sides.iter().filter(|s| *s == side).count();
+        if n > 1 {
+            out.problems
+                .push(format!("{n} oblique asymptotes listed at {at}"));
+        }
+        if n > 0 {
             continue;
         }
-        let reaches = pieces.iter().any(|p| {
-            if side == "Right" {
-                p.hi == Bound::PosInf
-            } else {
-                p.lo == Bound::NegInf
-            }
-        });
         let s = if side == "Right" {
             Side::Right
         } else {
             Side::Left
         };
+        // (With no domain row the tail may be reached, for all that is
+        // known: read as "not reached", a row alone ruled every line out.)
+        let reaches = reaches_tail(all, s);
         let fact = |head: &str| {
             facts
                 .iter()
@@ -3955,8 +5243,7 @@ fn oblique(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Resul
                 },
                 true,
             ) == Some(Toward::In(0.0, 0.0))
-            || (fact("f/x → ±∞") && slope_shown(&rc.claims, s, false))
-            || (fact("f/x → 0") && slope_shown(&rc.claims, s, true));
+            || (fact("f/x → 0") && slope_to_zero(&rc.claims, s));
         if !ruled_out {
             out.problems.push(format!(
                 "no oblique asymptote at {at}, but nothing rules one out"

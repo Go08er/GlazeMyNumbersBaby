@@ -102,6 +102,15 @@ pub enum Side {
 /// A closed box of x.
 pub type B = (f64, f64);
 
+/// What a derivative does on one side of a kink (`Claim::KinkSides`):
+/// negative, 0 or positive wherever it exists there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KinkSign {
+    Neg,
+    Zero,
+    Pos,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Claim {
     Defined(B),
@@ -192,6 +201,21 @@ pub enum Claim {
         left: bool,
         right: bool,
     },
+    /// What f⁽ᵏ⁾ (k = `order`, 1 or 2) does on each side of the one point
+    /// c of the kink box `x` where it need not exist. c is the double `at`
+    /// (strictly inside x) when given, else some point strictly inside x.
+    /// f⁽ᵏ⁾ exists at all but finitely many points of x; wherever it exists
+    /// on [x.0, c) it has the sign `left`, on (c, x.1] the sign `right`.
+    /// With `joined` (only with `at`): f′ exists at c and is continuous on
+    /// x. (f is continuous on x: the box's `Kink`.)
+    KinkSides {
+        x: B,
+        at: Option<f64>,
+        order: usize,
+        left: KinkSign,
+        right: KinkSign,
+        joined: bool,
+    },
     /// Wherever f is defined on `near` (which holds `at`), its values lie
     /// in [lo, hi].
     Bounded {
@@ -262,6 +286,7 @@ impl Claim {
             Claim::Bounded { .. } => "Bounded",
             Claim::Kink(_) => "Kink",
             Claim::KinkAt { .. } => "KinkAt",
+            Claim::KinkSides { .. } => "KinkSides",
             Claim::Removable { .. } => "Removable",
             Claim::Simplifier(_) => "Simplifier",
             Claim::Gap(_) => "Gap",
@@ -485,6 +510,23 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
             left: bf(b, "left")?,
             right: bf(b, "right")?,
         },
+        "KinkSides" => {
+            let sign = |k: &str| match field(b, k)?.as_str() {
+                Some("Neg") => Ok(KinkSign::Neg),
+                Some("Zero") => Ok(KinkSign::Zero),
+                Some("Pos") => Ok(KinkSign::Pos),
+                _ => Err(format!("bad {k} sign")),
+            };
+            let at = b.get("at").filter(|v| !v.is_null());
+            Claim::KinkSides {
+                x: x()?,
+                at: at.map(r).transpose()?,
+                order: order(b)?,
+                left: sign("left")?,
+                right: sign("right")?,
+                joined: bf(b, "joined")?,
+            }
+        }
         "Bounded" => Claim::Bounded {
             near: xbox(field(b, "near")?)?,
             at: xbox(field(b, "at")?)?,
@@ -623,6 +665,10 @@ pub struct Fx {
     /// alone is no value ([`eval`]), but a structural rule (f's parity, an
     /// identity) would read through the mark (review 17, R17-M-02).
     pub refused: Option<String>,
+    /// What checks that read f alone have found already, by a key of
+    /// their own (a family member's place: the same ends come back in
+    /// each mutant of a certificate).
+    pub memo: std::cell::RefCell<std::collections::HashMap<String, bool>>,
 }
 
 impl Fx {
@@ -766,6 +812,7 @@ pub fn function(a: &Value) -> Result<Fx, String> {
         verified,
         f_alt,
         refused,
+        memo: Default::default(),
     })
 }
 
@@ -870,6 +917,33 @@ impl Report {
             .collect()
     }
 
+    /// Why the strict replay refuses the certificate, if it does: a claim
+    /// refuted, or left open (unconfirmed or unsupported) behind a row
+    /// that is shown, a row that doesn't follow from its claims, a
+    /// certifier's tree shown wrong, a binding missing. The one rule (the
+    /// `replay` example's exit status and the corpus test's are this).
+    pub fn refusal(&self) -> Option<String> {
+        if let Some(c) = self
+            .claims
+            .iter()
+            .find(|c| !matches!(c.outcome.class, Class::Strong | Class::Weak))
+        {
+            return Some(format!(
+                "{} {:?}: {}",
+                c.outcome.class.name(),
+                c.claim,
+                c.outcome.note
+            ));
+        }
+        if let Some(p) = self.row_problems().into_iter().next() {
+            return Some(p);
+        }
+        self.binding
+            .iter()
+            .find(|b| b.starts_with("missing"))
+            .cloned()
+    }
+
     /// The rows' problems, and a certifier's tree shown wrong.
     pub fn row_problems(&self) -> Vec<String> {
         self.rows
@@ -880,10 +954,63 @@ impl Report {
     }
 }
 
+/// What replays of certificates of one function have decided already,
+/// for a caller that replays many of them (the mutation tester: a few
+/// hundred certificates of one function that differ in a row). Kept: the
+/// function as read, and the outcome of each claim whose check reads the
+/// function alone. A certificate of another function (source, formula,
+/// unit, binding or evaluated trees) starts the session afresh.
+#[derive(Default)]
+pub struct Session {
+    key: String,
+    fx: Option<Fx>,
+    decided: std::collections::HashMap<String, Outcome>,
+}
+
+/// A claim as a key to look it up by (its written form: equal claims have
+/// one). A row of thousands of claims, each searched for among the others,
+/// was a quadratic replay.
+pub fn claim_key(c: &Claim) -> String {
+    format!("{c:?}")
+}
+
+/// Whether a claim's check reads the certificate's other claims too: a
+/// gap (the families it may be a member's enclosure of), and "f is
+/// periodic: no oblique asymptote" (the period fact it follows from).
+fn reads_the_certificate(c: &Claim) -> bool {
+    match c {
+        Claim::Gap(_) => true,
+        Claim::Simplifier(f) => f.starts_with("f is periodic"),
+        _ => false,
+    }
+}
+
 /// Replays a whole analysis (`graphing::certify::Analysis` as JSON).
 pub fn replay(a: &Value) -> Result<Report, String> {
+    replay_in(a, &mut Session::default(), None)
+}
+
+/// [`replay`] within a session; with `only`, of that row alone: its claims
+/// and whether it follows from them (the other rows are read, as what it
+/// may rest on, not checked; nor are the certifier's trees).
+pub fn replay_in(a: &Value, session: &mut Session, only: Option<&str>) -> Result<Report, String> {
     iv::init();
-    let fx = function(a)?;
+    let key = serde_json::to_string(&[
+        a.get("source"),
+        a.get("formula"),
+        a.get("unit"),
+        a.get("binding"),
+        a.get("evaluated"),
+    ])
+    .map_err(|e| e.to_string())?;
+    if session.key != key || session.fx.is_none() {
+        session.decided.clear();
+        session.fx = None;
+        session.fx = Some(function(a)?);
+        session.key = key;
+    }
+    let Session { fx, decided, .. } = session;
+    let fx = fx.as_ref().expect("the session's function");
     let mut rep = Report {
         source: fx.source.clone(),
         ..Default::default()
@@ -907,19 +1034,34 @@ pub fn replay(a: &Value) -> Result<Report, String> {
     // Each distinct claim once (the gaps go with every row); a gap is read
     // against all the certificate's claims (the families it may hold).
     let all: Vec<Claim> = rows_in.iter().flat_map(|rc| rc.claims.clone()).collect();
-    trees(&fx, &all, &mut rep);
-    let mut seen: Vec<(Claim, usize)> = Vec::new();
-    for rc in &rows_in {
+    if only.is_none() {
+        trees(fx, &all, &mut rep);
+    }
+    let asked = |rc: &RowCert| only.is_none_or(|name| rc.name == name);
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for rc in rows_in.iter().filter(|rc| asked(rc)) {
         for c in &rc.claims {
-            if let Some((_, i)) = seen.iter().find(|(d, _)| d == c) {
-                let i = *i;
+            let key = claim_key(c);
+            if let Some(&i) = seen.get(&key) {
                 if !rep.claims[i].rows.contains(&rc.name) {
                     rep.claims[i].rows.push(rc.name.clone());
                 }
                 continue;
             }
-            let outcome = claims::check(&fx, c, &all);
-            seen.push((c.clone(), rep.claims.len()));
+            let kept = (!reads_the_certificate(c))
+                .then(|| decided.get(&key).cloned())
+                .flatten();
+            let outcome = match kept {
+                Some(o) => o,
+                None => {
+                    let o = claims::check(fx, c, &all);
+                    if !reads_the_certificate(c) {
+                        decided.insert(key.clone(), o.clone());
+                    }
+                    o
+                }
+            };
+            seen.insert(key, rep.claims.len());
             rep.claims.push(ClaimResult {
                 rows: vec![rc.name.clone()],
                 claim: c.clone(),
@@ -927,8 +1069,8 @@ pub fn replay(a: &Value) -> Result<Report, String> {
             });
         }
     }
-    for rc in &rows_in {
-        rep.rows.push(rows::check(&fx, rc, &rows_in, &rep.claims));
+    for rc in rows_in.iter().filter(|rc| asked(rc)) {
+        rep.rows.push(rows::check(fx, rc, &rows_in, &rep.claims));
     }
     if fx.lits.untyped() > 0 {
         rep.binding.push(format!(

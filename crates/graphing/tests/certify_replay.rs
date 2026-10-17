@@ -23,199 +23,16 @@
 //! claim that isn't strong.
 #![cfg(feature = "mpfr-oracle")]
 
+mod certificates;
 mod replay;
 
+use certificates::{CORPUS, corpus, pool, review, units};
 use graphing::certify::{DEFAULT_BUDGET, certify_text};
 use graphing::compile::CompileOptions;
 use graphing::functions::TrigUnit;
 use replay::{Class, Report};
 use std::collections::BTreeMap;
 use std::time::Instant;
-
-const CASES: &str = include_str!("fixtures/certify/cases.tsv");
-const CORPUS: &str = include_str!("certify_corpus.rs");
-
-/// The review rounds' functions, read from `certify_corpus.rs`'s REVIEW
-/// table (the first string of each entry).
-fn review() -> Vec<String> {
-    let start = CORPUS
-        .find("const REVIEW")
-        .expect("REVIEW in certify_corpus.rs");
-    let body = &CORPUS[start..];
-    let end = body.find("\n];").expect("end of REVIEW");
-    let lines: Vec<&str> = body[..end].lines().collect();
-    let mut out = Vec::new();
-    for (i, l) in lines.iter().enumerate() {
-        if l.trim() == "(" {
-            let s = lines[i + 1].trim();
-            if let Some(s) = s.strip_prefix('"').and_then(|s| s.strip_suffix("\",")) {
-                out.push(s.to_string());
-            }
-        }
-    }
-    out
-}
-
-fn corpus() -> Vec<(String, TrigUnit)> {
-    let mut out: Vec<(String, TrigUnit)> = Vec::new();
-    for line in CASES.lines().filter(|l| !l.trim().is_empty()) {
-        let f: Vec<&str> = line.split('\t').collect();
-        out.push((f[2].to_string(), TrigUnit::Radians));
-    }
-    for s in review() {
-        out.push((s, TrigUnit::Radians));
-    }
-    out
-}
-
-/// The sweep's base functions (`examples/sweep.rs`), alone and shifted,
-/// offset, scaled and stretched.
-const BASES: &[&str] = &[
-    "x^2",
-    "x^3-2x+1/(x-1)",
-    "sin(x)",
-    "tan(x)",
-    "1/x",
-    "ln(x)",
-    "log(x)",
-    "sqrt(x)",
-    "e^x",
-    "(x^2-1)/(x-1)",
-    "x^0.9",
-    "x/ln(x)",
-    "1/ln(x)",
-    "sin(x^2)",
-    "floor(x)",
-    "atan(x)",
-    "x*e^(-x)",
-    "sin(x)/x",
-    "x*sin(x)",
-    "1/(x-2)",
-    "1/(x^2-4)",
-    "cot(x)",
-    "csc(x)",
-    "sec(x)",
-    "coth(x)",
-    "csch(x)",
-    "atan(1/x)",
-    "e^(-1/x^2)",
-    "e^(ln(x))",
-    "1/(1+e^x)",
-    "x*ln(x)",
-    "x/x",
-    "1/x^2",
-    "tan(x)^2",
-    "1/sin(x)",
-    "ln(abs(x))",
-    "sqrt(1/x)",
-    "x^x",
-    "x^-0.5",
-    "x^-0.0001",
-    "e^(-x^2)",
-    "x^3-3x",
-    "1/(x^2+1)",
-    "sqrt(x^2+1)",
-    "abs(x)",
-    "x*abs(x)",
-    "(x-1)*(x+2)",
-    "(x-1)*(x-2)*(x+3)",
-    "(x-1)^2*(x+1)",
-    "(x-0.5)*(x+0.25)*(x-3)*(x+4)",
-    "(x^2-1)*(x^2-4)*(x-0.5)",
-    "(x-1)/((x-2)*(x+3))",
-    "(x^2-4)/(x-2)",
-    "(x+1)/(x^2-1)",
-    "x^2/(x^2-1)",
-    "(x^3-1)/(x-1)",
-    "sin(x)+x/10",
-    "ln(x^2+1)",
-    "atan(x)+0.000000001",
-    "1/(x^2+1)-0.5",
-    "x^4-x^2",
-    "x*e^x",
-    "e^x-x",
-    "x^(1/3)",
-    "sqrt(4-x^2)",
-    "ln(4-x^2)",
-    "1/(sqrt(x)-1)",
-    "x^2+1",
-    "-x^2-1",
-    "cos(x)^2",
-    "sin(x)^2+1",
-    "x+1/x",
-    "e^(-x)",
-    "2^x",
-    "x^5-5x^3+4x",
-    "(x-1)^(1/3)",
-    "x^(2/3)",
-    "1/(x^2+x+1)",
-    "x^2*e^(-x)",
-    "sin(x)*e^(-x/10)",
-    "ln(x)/x",
-    "x^3+x",
-    "(x+1)^2/(x-1)",
-    "sqrt(x)*ln(x)",
-    "e^(1/x)",
-    "e^(1/(x-1))",
-    "x^2-2x+1",
-    "2x+3",
-    "x^4-4x^3+6x^2-4x+1",
-    "(x^2+1)/(x^2-1)",
-    "x/(x^2+1)",
-    "atan(ln(abs(x)))",
-    "cos(x)+sin(2x)",
-    "x-sin(x)",
-    "ln(x)^2",
-    "sqrt(x^2-1)",
-    "1/sqrt(1-x^2)",
-    "x^2*ln(x)",
-    "e^x/x",
-    "x^3-6x^2+11x-6",
-    "x^4-5x^2+4",
-    "(x-3)^2-4",
-    "100x^2",
-    "0.01x^2",
-    "x^2/100+x",
-];
-
-/// `x` replaced by `with` wherever it stands alone (not inside a name).
-fn subst_x(e: &str, with: &str) -> String {
-    let cs: Vec<char> = e.chars().collect();
-    let mut out = String::new();
-    for (i, &c) in cs.iter().enumerate() {
-        let letter = |j: Option<&char>| j.is_some_and(|c| c.is_ascii_alphabetic());
-        if c == 'x' && !letter(i.checked_sub(1).and_then(|j| cs.get(j))) && !letter(cs.get(i + 1)) {
-            out.push_str(&format!("({with})"));
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-fn pool() -> Vec<(String, TrigUnit)> {
-    let mut out = Vec::new();
-    for b in BASES {
-        out.push((b.to_string(), TrigUnit::Radians));
-        out.push((subst_x(b, "x-1000"), TrigUnit::Radians));
-        out.push((format!("({b})+0.0000001"), TrigUnit::Radians));
-        out.push((format!("-3*({b})"), TrigUnit::Radians));
-        out.push((subst_x(b, "x/1000"), TrigUnit::Radians));
-    }
-    out
-}
-
-/// The kgf set in the other angle units.
-fn units() -> Vec<(String, TrigUnit)> {
-    let mut out = Vec::new();
-    for line in CASES.lines().filter(|l| l.starts_with('K')) {
-        let src = line.split('\t').nth(2).unwrap_or_default();
-        for u in [TrigUnit::Degrees, TrigUnit::Grads] {
-            out.push((src.to_string(), u));
-        }
-    }
-    out
-}
 
 struct Done {
     src: String,
@@ -261,9 +78,7 @@ fn run(fs: Vec<(String, TrigUnit)>) -> Vec<String> {
         .into_iter()
         .filter(|(s, _)| filter.as_ref().is_none_or(|f| s.contains(f.as_str())))
         .collect();
-    let threads = std::thread::available_parallelism()
-        .map_or(4, |n| n.get())
-        .min(16);
+    let threads = certificates::threads();
     let next = std::sync::atomic::AtomicUsize::new(0);
     let done = std::sync::Mutex::new(Vec::new());
     std::thread::scope(|sc| {
@@ -3461,5 +3276,671 @@ fn a_placed_kink_can_have_zero_slope_at_its_endpoint() {
         let facts = judged(&v, "KinkAt");
         assert!(!facts.is_empty(), "{src}: no exact one-sided kink proof");
         assert!(facts.iter().all(|(_, c)| *c == Class::Strong));
+    }
+}
+
+// ------------------------------------------------------------ round 19
+
+/// f′'s own exact form (`algebra::derivative_tree`: f read in the replay's
+/// field, differentiated there, written back as a tree) is f′: wherever
+/// both are enclosed at a point, the tree's value and the first
+/// coefficient of f's series meet. The form decides a sign where the
+/// series' sum of terms is ∞ − ∞; a tree that were not f′ would decide a
+/// false one.
+#[test]
+fn the_derivatives_own_form_is_the_derivative() {
+    use replay::iv::{Iv, Unit};
+    replay::iv::init();
+    replay::iv::set_prec(160);
+    let srcs = [
+        "sqrt(x-1000)*ln(x-1000)",
+        "cbrt(x)*ln(x)",
+        "x^3-2x+1/(x-1)",
+        "(x^2+x+1)/(3x)",
+        "sin(x)/x",
+        "tan(x)+sec(x)",
+        "x*e^(-x)",
+        "e^(-1/x^2)",
+        "x^x",
+        "atan(x)+acot(x)",
+        "asin(x/3)*acos(x/3)",
+        "sinh(x)/cosh(x)^2",
+        "ln(x)/log(x+1)",
+        "(x+1)^(2/3)*root(x+2,5)",
+        "asinh(x)-acosh(x+2)+atanh(x/4)",
+        "pi*x^2-e*x",
+        "sqrt(x^2+1)/(x^2+1)",
+        "cos(x)^2*sin(3x)",
+    ];
+    let points = [0.3, 0.7, 1.3, 2.9, 11.0, 1003.5, -0.6, -2.3];
+    let (mut formed, mut compared) = (0, 0);
+    for src in srcs {
+        let (f, lits) = read(src);
+        let Some(d) = replay::algebra::derivative_tree(&f, &lits, &[], Unit::Radians) else {
+            continue;
+        };
+        formed += 1;
+        let ctx = replay::eval::Ctx {
+            unit: Unit::Radians,
+            lits: &lits,
+            vars: &[],
+        };
+        for x in points {
+            let s = replay::eval::eval(&f, &replay::series::var(Iv::of(x), 1), 1, &ctx);
+            let t = replay::eval::eval(&d, &replay::series::var(Iv::of(x), 0), 0, &ctx);
+            if s[1].empty || !s[1].def || t[0].empty || !t[0].def {
+                continue;
+            }
+            assert!(
+                !(s[1].hi < t[0].lo || t[0].hi < s[1].lo),
+                "{src} at {x}: f′ in [{}, {}], its form in [{}, {}]",
+                s[1].lo.to_f64(),
+                s[1].hi.to_f64(),
+                t[0].lo.to_f64(),
+                t[0].hi.to_f64()
+            );
+            compared += 1;
+        }
+    }
+    assert!(formed >= 15, "only {formed} of {} forms", srcs.len());
+    assert!(compared >= 60, "only {compared} comparisons");
+    // A step has no tree of its own: no form.
+    let (f, lits) = read("floor(x)*x");
+    assert!(replay::algebra::derivative_tree(&f, &lits, &[], Unit::Radians).is_none());
+}
+
+/// The first monotone piece of `v`, beside the open end at `end`.
+fn piece_from(v: &mut serde_json::Value, end: f64) -> &mut serde_json::Value {
+    value_of(v, "monotonicity")
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p["on"]["lo"]["At"]["x"]["lo"] == serde_json::json!(end))
+        .expect("a piece from the open end")
+}
+
+/// Review 19's fix kept √(x − 1000)·ln(x − 1000)'s first monotone piece
+/// (falling, from the open end 1000, where the claims start one double in)
+/// by the one identity (√u·ln u)′ = u′(ln u + 2)/(2√u), matched at the top
+/// of the tree: twice that function, or its cube root's, was refused. The
+/// sign beside the end is now read off f′'s own form, factor by factor;
+/// and the same piece called rising is refused, for each.
+#[test]
+fn the_slope_beside_an_open_end_is_read_off_the_derivatives_factors() {
+    for (src, end) in [
+        ("sqrt(x-1000)*ln(x-1000)", 1000.0),
+        ("2*sqrt(x-1000)*ln(x-1000)", 1000.0),
+        ("cbrt(x-1000)*ln(x-1000)", 1000.0),
+        ("(x-7)^(1/4)*ln(x-7)", 7.0),
+    ] {
+        let base = certificate(src);
+        assert_eq!(rejected(&base), None, "{src}");
+        let mut v = base.clone();
+        let piece = piece_from(&mut v, end);
+        assert_eq!(piece["dir"], "Decreasing", "{src}");
+        // The claims start at the double after the end: the stretch
+        // between is the replay's own to decide.
+        let first = end.next_up();
+        let from_the_end = claims_of(&mut v, "monotonicity").iter().any(|c| {
+            c.to_string().contains("\"F1\"")
+                && ["Beyond", "Factors", "NoCross"].iter().any(|k| {
+                    c.get(k)
+                        .is_some_and(|c| c["x"]["a"].as_f64().is_some_and(|a| a < first))
+                })
+        });
+        assert!(!from_the_end, "{src}: a claim signs f′ from the end itself");
+        piece_from(&mut v, end)["dir"] = serde_json::json!("Increasing");
+        assert!(
+            rejected(&v).is_some(),
+            "{src}: falling from its open end, called rising"
+        );
+    }
+}
+
+/// The two plants review 19's fix rewrote (their rows are withheld by the
+/// certifier now) are caught for what they plant, not for the row made up
+/// around them: the false tail claim is refuted as a claim, and "no least
+/// period" on f′ ≡ 0 over the left tail alone is refused as not derived.
+#[test]
+fn the_rewritten_plants_are_caught_for_what_they_plant() {
+    let mut v = certificate("min(x,x+1+abs(x-3))");
+    v["monotonicity"] = serde_json::json!({"Certified": {"value": [{
+        "on": {"lo": "NegInf", "hi": "PosInf"}, "dir": "Increasing"}],
+        "cert": {"covers": "Line", "claims": [{"TailBeyond": {
+            "side": "Left", "from": -16.0, "of": {"F": "F1"}, "c": 0.0,
+            "above": false}}]}}});
+    let tails = judged(&v, "TailBeyond");
+    assert!(
+        tails.iter().any(|(_, c)| *c == Class::Refuted),
+        "f′ < 0 on the left tail of an increasing f: {tails:?}"
+    );
+    // The same row with the claim true is still refused, for its coverage:
+    // the claim's refutation above is what catches the plant.
+    v["monotonicity"]["Certified"]["cert"]["claims"][0]["TailBeyond"]["above"] =
+        serde_json::json!(true);
+    assert!(
+        judged(&v, "TailBeyond")
+            .iter()
+            .all(|(_, c)| *c == Class::Strong)
+    );
+    assert!(rejected(&v).is_some());
+
+    let mut v = certificate("sign(abs(x)+1)");
+    let left = serde_json::json!({"Value": {
+        "x": {"a": "-inf", "b": -1.0}, "of": {"F": "F1"}, "lo": 0.0, "hi": 0.0}});
+    let period = |claims: serde_json::Value| {
+        serde_json::json!({"Certified": {"value": null,
+            "cert": {"covers": "Line", "claims": claims}}})
+    };
+    v["period"] = period(serde_json::json!([left]));
+    assert!(judged(&v, "Value").iter().all(|(_, c)| *c == Class::Strong));
+    let why = rejected(&v).expect("no least period, on f′ ≡ 0 over the left tail alone");
+    assert!(why.starts_with("period: "), "{why}");
+    // With f′ ≡ 0 on the whole line, the row follows.
+    let line = serde_json::json!({"Value": {
+        "x": {"a": "-inf", "b": "inf"}, "of": {"F": "F1"}, "lo": 0.0, "hi": 0.0}});
+    v["period"] = period(serde_json::json!([line]));
+    assert_eq!(rejected(&v), None);
+}
+
+/// A generic kink box decides nothing of f″ either: the dent's two
+/// plateaus (f″ ≡ 0, true) and the box between them make no complete list
+/// of inflections. (Review 19's test asks this of the rows on f′.)
+#[test]
+fn a_kink_box_does_not_complete_the_walk_of_the_second_derivative() {
+    let mut v = certificate_at("min((x-sin(1))^(2/1000003),0.01)", Some(14), &[]);
+    withhold_all_but(&mut v, "domain");
+    v["inflections"] = serde_json::json!({"Certified": {"value": [],
+    "cert": {"covers": "Line", "claims": [
+        {"Value": {"x": {"a": "-inf", "b": 0.8414709848078963},
+            "of": {"F": "F2"}, "lo": 0.0, "hi": 0.0}},
+        {"Value": {"x": {"a": 0.8414709848078967, "b": "inf"},
+            "of": {"F": "F2"}, "lo": 0.0, "hi": 0.0}},
+        {"Kink": {"x": {"a": 0.8414709848078963, "b": 0.8414709848078967}}}
+    ]}}});
+    let r = replay::replay(&v).expect("replayed");
+    assert!(
+        r.claims.iter().all(|c| c.outcome.class == Class::Strong),
+        "these premises really are true"
+    );
+    let why = rejected(&v).expect("no inflections, by continuity in a kink box");
+    assert!(why.contains("undecided"), "{why}");
+}
+
+/// A function whose formal derivative is 0 is constant on each stretch
+/// where it is continuous, and no further: arctan x + arctan(1/x) is π/2
+/// right of 0 and −π/2 left of it, |x|/x is ±1. "Constant on the line" is
+/// refused for each; so is ⌊x⌋ across a whole number.
+#[test]
+fn a_zero_derivative_is_a_constant_on_one_stretch_only() {
+    for src in ["atan(x)+atan(1/x)", "abs(x)/x", "floor(x)"] {
+        let mut v = certificate(src);
+        assert_eq!(rejected(&v), None, "{src}");
+        withhold_all_but(&mut v, "domain");
+        for (status, covers) in [("Certified", "Line"), ("Partial", "Points")] {
+            v["monotonicity"] = serde_json::json!({status: {"value": [{
+                "on": {"lo": "NegInf", "hi": "PosInf"}, "dir": "Constant"}],
+                "cert": {"covers": covers, "claims": []}}});
+            assert!(
+                rejected(&v).is_some(),
+                "{src}: constant on the line ({status} over {covers})"
+            );
+        }
+    }
+    // On one stretch it is: the replay's own algebra and f's continuity
+    // there, with no claim.
+    let mut v = certificate("atan(x)+atan(1/x)");
+    withhold_all_but(&mut v, "domain");
+    v["monotonicity"] = serde_json::json!({"Partial": {"value": [{
+        "on": {"lo": {"At": {"x": {"lo": 0.0, "hi": 0.0}, "closed": false}}, "hi": "PosInf"},
+        "dir": "Constant"}],
+        "cert": {"covers": "Points", "claims": []}}});
+    assert_eq!(rejected(&v), None);
+}
+
+/// A row's status and scope are part of what it says. "All of them"
+/// (Certified) over points, a window presented as certified, a partial
+/// domain, a y-intercept over the line: none is a form a row takes.
+#[test]
+fn a_row_off_its_form_is_refused() {
+    let base = certificate("x^3-2x+1/(x-1)");
+    assert_eq!(rejected(&base), None);
+    let window = serde_json::json!({"Window": {"a": -8.0, "b": 8.0}});
+    let cases: [(&str, &str, serde_json::Value); 9] = [
+        ("x_intercepts", "Certified", serde_json::json!("Points")),
+        ("extrema", "Certified", window.clone()),
+        ("inflections", "Partial", serde_json::json!("Line")),
+        ("monotonicity", "Certified", serde_json::json!("Points")),
+        ("vertical", "Partial", serde_json::json!("Line")),
+        ("range", "Certified", window.clone()),
+        ("domain", "Partial", serde_json::json!("Line")),
+        ("y_intercept", "Certified", serde_json::json!("Line")),
+        ("oblique", "Certified", serde_json::json!("Points")),
+    ];
+    for (row, status, covers) in cases {
+        let mut v = base.clone();
+        let mut body = v[row].as_object().unwrap().values().next().unwrap().clone();
+        body["cert"]["covers"] = covers.clone();
+        v[row] = serde_json::json!({status: body});
+        let why = rejected(&v).unwrap_or_else(|| panic!("{row} {status} over {covers}"));
+        assert!(why.contains("status and scope"), "{row}: {why}");
+    }
+}
+
+/// Bounds that "grow" show no limit. (x + 1)/(x² − 1) is above −10¹⁵,
+/// then above −2252, on boxes closing in on its hole at −1, where it tends
+/// to −1/2: those bounds passed for an asymptote there. And where a pole
+/// is, the replay derives it: (x − 2⁴⁰)/(x − 2⁴⁰ − 1/16)'s certificate
+/// carries bounds only.
+#[test]
+fn bounds_that_grow_are_no_pole() {
+    let base = certificate("(x+1)/(x^2-1)");
+    assert_eq!(rejected(&base), None);
+    let mut v = base.clone();
+    value_of(&mut v, "vertical")
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"At": {"lo": -1.0, "hi": -1.0}}));
+    let why = rejected(&v).expect("an asymptote at the hole −1");
+    assert!(why.contains("no claim it is one"), "{why}");
+    // The pole left out of a complete list is refused too.
+    let mut v = base.clone();
+    value_of(&mut v, "vertical").as_array_mut().unwrap().clear();
+    let why = rejected(&v).expect("the pole at 1 left out");
+    assert!(why.contains("no asymptote is listed"), "{why}");
+
+    let far = certificate("(x-2^40)/(x-2^40-1/16)");
+    assert!(
+        judged(&far, "Unbounded").is_empty(),
+        "the certificate brings its own proof now: retarget this"
+    );
+    assert_eq!(rejected(&far), None);
+}
+
+/// The range is the images of f's continuous stretches, no more and no
+/// less: the row was checked at its ends and at sample points only.
+#[test]
+fn the_range_is_the_images_of_the_stretches() {
+    let neg_inf = serde_json::json!("NegInf");
+    // √x takes no value below 0.
+    let mut v = certificate("sqrt(x)");
+    assert_eq!(rejected(&v), None);
+    value_of(&mut v, "range")[0]["lo"] = neg_inf.clone();
+    v["range_ends"][0][0] = serde_json::json!(["Other"]);
+    let why = rejected(&v).expect("√x's range from −∞");
+    assert!(why.contains("not shown to take"), "{why}");
+    // x³ − 2x + 1/(x − 1): the gap between its two pieces closed.
+    let mut v = certificate("x^3-2x+1/(x-1)");
+    assert_eq!(rejected(&v), None);
+    value_of(&mut v, "range")[1]["lo"] = neg_inf.clone();
+    v["range_ends"][1][0] = serde_json::json!(["Other"]);
+    let why = rejected(&v).expect("its range's upper piece from −∞");
+    assert!(why.contains("not shown to take"), "{why}");
+    // A piece left out: f takes values outside the list.
+    let mut v = certificate("x^3-2x+1/(x-1)");
+    value_of(&mut v, "range").as_array_mut().unwrap().remove(0);
+    v["range_ends"].as_array_mut().unwrap().remove(0);
+    let why = rejected(&v).expect("a piece of the range left out");
+    assert!(why.contains("outside the listed range"), "{why}");
+    // x²'s least value is taken: an open end there is refused whatever
+    // source it names; tan x·cos x only tends to ±1.
+    let mut v = certificate("x^2");
+    assert_eq!(rejected(&v), None);
+    value_of(&mut v, "range")[0]["lo"]["At"]["closed"] = serde_json::json!(false);
+    v["range_ends"][0][0] = serde_json::json!([{"Tail": "Left"}]);
+    assert!(rejected(&v).is_some(), "x²'s range open at 0");
+    let mut v = certificate("tan(x)*cos(x)");
+    assert_eq!(rejected(&v), None);
+    value_of(&mut v, "range")[0]["hi"]["At"]["closed"] = serde_json::json!(true);
+    assert!(
+        rejected(&v).is_some(),
+        "sin's range closed at 1, its turns excluded"
+    );
+}
+
+/// A complete list decides what it leaves out, with whatever claims it is
+/// given: each of these passed on the claims of the certificate's other
+/// rows, or on none.
+#[test]
+fn a_complete_list_decides_what_it_leaves_out() {
+    let empty = |claims: serde_json::Value| {
+        serde_json::json!({"Certified": {"value": [],
+            "cert": {"covers": "Line", "claims": claims}}})
+    };
+    // √x's minimum at its closed end, with the monotone row's claims.
+    let mut v = certificate("sqrt(x)");
+    let mono = claims_of(&mut v, "monotonicity").clone();
+    v["extrema"] = empty(serde_json::json!(mono));
+    let why = rejected(&v).expect("√x with no extremum");
+    assert!(why.starts_with("extrema: "), "{why}");
+    // arctan's two horizontal asymptotes.
+    let mut v = certificate("atan(x)");
+    let own = claims_of(&mut v, "horizontal").clone();
+    v["horizontal"] = empty(serde_json::json!(own));
+    let why = rejected(&v).expect("arctan with no horizontal asymptote");
+    assert!(why.contains("nothing rules one out"), "{why}");
+    // No vertical asymptote, on no claim.
+    let mut v = certificate("x^3-2x+1/(x-1)");
+    v["vertical"] = empty(serde_json::json!([]));
+    assert!(rejected(&v).is_some(), "no vertical asymptote, on no claim");
+    // tan's poles, one listed alone in a row over one period.
+    let mut v = certificate("tan(x)");
+    assert_eq!(rejected(&v), None);
+    let item = &mut value_of(&mut v, "vertical")[0];
+    let x0 = item["Every"]["x0"].clone();
+    *item = serde_json::json!({"At": x0});
+    let why = rejected(&v).expect("one pole of tan, alone");
+    assert!(why.contains("listed alone"), "{why}");
+    // sin is "not periodic" by its bounds far out.
+    let mut v = certificate("sin(x)");
+    v["period"] = serde_json::json!({"Certified": {"value": null,
+    "cert": {"covers": "Line", "claims": [
+        {"TailValue": {"side": "Right", "from": 16.0, "lo": -1.0, "hi": 1.0}},
+        {"Value": {"x": {"a": 0.0, "b": 0.0}, "of": {"F": "F0"}, "lo": 0.0, "hi": 0.0}},
+        {"Value": {"x": {"a": 1.0, "b": 1.0}, "of": {"F": "F0"},
+            "lo": 0.8414709848078965, "hi": 0.8414709848078966}}
+    ]}}});
+    assert!(
+        rejected(&v).is_some(),
+        "sin not periodic, by a band and two values"
+    );
+}
+
+/// A kink box (`Kink`) and what f⁽ᵏ⁾ does on each side of it
+/// (`KinkSides`), as the certifier writes them, set into `row` of `v`
+/// (Certified over the line).
+fn kink_row(
+    v: &mut serde_json::Value,
+    row: &str,
+    value: serde_json::Value,
+    claims: serde_json::Value,
+) {
+    v[row] = serde_json::json!({"Certified": {"value": value,
+        "cert": {"covers": "Line", "claims": claims}}});
+}
+
+fn sides(
+    x: (f64, f64),
+    at: Option<f64>,
+    k: u8,
+    l: &str,
+    r: &str,
+    joined: bool,
+) -> serde_json::Value {
+    serde_json::json!({"KinkSides": {"x": {"a": x.0, "b": x.1}, "at": at, "order": k,
+        "left": l, "right": r, "joined": joined}})
+}
+
+/// The class of each `KinkSides` claim of `v`.
+fn kink_sides_judged(v: &serde_json::Value) -> Vec<Class> {
+    judged(v, "KinkSides").into_iter().map(|(_, c)| c).collect()
+}
+
+/// Round 19: `KinkSides`, what f′ or f″ does on each side of the one point
+/// of a kink box where it need not exist, checked from its statement (f
+/// continuous on the box; the kink arguments' signs on each side, or the
+/// one that vanishes once inside an unplaced box; f⁽ᵏ⁾ on the one-sided
+/// forms, the point left out; with `joined`, the branches' slopes equal
+/// there). The rows the certifier gave up for a kink box it couldn't
+/// place (abs(x − 0.1)'s minimum, monotone pieces and no inflections;
+/// x·|x|'s inflection) come back on it, and the false versions are
+/// refused. (This branch's certifier doesn't write the claim: these rows
+/// are set in by hand, as the certifier's branch writes them.)
+#[test]
+fn the_sides_of_a_kink_decide_the_rows_on_its_derivatives() {
+    let bx = (0.09999999999999998, 0.10000000000000002);
+    let kink = serde_json::json!({"Kink": {"x": {"a": bx.0, "b": bx.1}}});
+    let tails = |k: &str, left: bool, right: bool| {
+        serde_json::json!([
+            {"TailBeyond": {"side": "Left", "from": bx.0, "of": {"F": k}, "c": 0.0, "above": left}},
+            {"TailBeyond": {"side": "Right", "from": bx.1, "of": {"F": k}, "c": 0.0, "above": right}}
+        ])
+    };
+    let with = |a: serde_json::Value, more: &[serde_json::Value]| {
+        let mut a = a.as_array().unwrap().clone();
+        a.extend(more.iter().cloned());
+        serde_json::Value::Array(a)
+    };
+    let base = certificate("abs(x-0.1)");
+    let min_at = serde_json::json!([{"x": {"lo": bx.0, "hi": bx.1},
+        "y": {"lo": 0.0, "hi": 2.7755575615628914e-17}, "kind": "Min", "every": null}]);
+    let value_there = serde_json::json!({"Value": {"x": {"a": bx.0, "b": bx.1}, "of": {"F": "F0"},
+        "lo": 0.0, "hi": 2.7755575615628914e-17}});
+    let end = serde_json::json!({"At": {"x": {"lo": bx.0, "hi": bx.1}, "closed": true}});
+    let pieces = serde_json::json!([{"on": {"lo": "NegInf", "hi": end}, "dir": "Decreasing"},
+        {"on": {"lo": end, "hi": "PosInf"}, "dir": "Increasing"}]);
+    let flat = serde_json::json!([
+        {"Value": {"x": {"a": "-inf", "b": bx.0}, "of": {"F": "F2"}, "lo": 0.0, "hi": 0.0}},
+        {"Value": {"x": {"a": bx.1, "b": "inf"}, "of": {"F": "F2"}, "lo": 0.0, "hi": 0.0}}
+    ]);
+    let turn = sides(bx, None, 1, "Neg", "Pos", false);
+    let mut v = base.clone();
+    kink_row(
+        &mut v,
+        "extrema",
+        min_at.clone(),
+        with(
+            tails("F1", false, true),
+            &[value_there.clone(), kink.clone(), turn.clone()],
+        ),
+    );
+    kink_row(
+        &mut v,
+        "monotonicity",
+        pieces.clone(),
+        with(tails("F1", false, true), &[kink.clone(), turn.clone()]),
+    );
+    kink_row(
+        &mut v,
+        "inflections",
+        serde_json::json!([]),
+        with(
+            flat.clone(),
+            &[kink.clone(), sides(bx, None, 2, "Zero", "Zero", false)],
+        ),
+    );
+    assert_eq!(rejected(&v), None, "abs(x − 0.1)'s rows on its kink box");
+    assert!(kink_sides_judged(&v).iter().all(|c| *c == Class::Strong));
+    // The box alone decides nothing (review 19's rule stands).
+    let mut w = v.clone();
+    claims_of(&mut w, "extrema").retain(|c| c.get("KinkSides").is_none());
+    assert!(
+        rejected(&w)
+            .expect("a minimum on the kink box alone")
+            .contains("undecided")
+    );
+    // The sides swapped: the claim is refuted, whatever the row says.
+    let mut w = v.clone();
+    *claims_of(&mut w, "extrema").last_mut().unwrap() = sides(bx, None, 1, "Pos", "Neg", false);
+    value_of(&mut w, "extrema")[0]["kind"] = serde_json::json!("Max");
+    let judged = kink_sides_judged(&w);
+    assert_eq!(
+        judged.iter().filter(|c| **c == Class::Refuted).count(),
+        1,
+        "{judged:?}"
+    );
+    // Placed at the double 0.1, which is past the kink (1/10 lies below
+    // it): x − 0.1 is not of one sign on the left of it. Not shown.
+    let mut w = v.clone();
+    *claims_of(&mut w, "extrema").last_mut().unwrap() =
+        sides(bx, Some(0.1), 1, "Neg", "Pos", false);
+    assert!(rejected(&w).is_some(), "the kink placed at the double 0.1");
+    // f″ is 0 on each branch: a change of its sign there is refuted.
+    let mut w = v.clone();
+    *claims_of(&mut w, "inflections").last_mut().unwrap() = sides(bx, None, 2, "Neg", "Pos", false);
+    assert!(kink_sides_judged(&w).contains(&Class::Refuted));
+    // The statement's own bounds: the point inside the box, an order of 1
+    // or 2, joined only at a point.
+    for bad in [
+        sides(bx, Some(0.2), 1, "Neg", "Pos", false),
+        sides(bx, None, 3, "Neg", "Pos", false),
+        sides(bx, None, 1, "Neg", "Pos", true),
+    ] {
+        let mut w = v.clone();
+        *claims_of(&mut w, "extrema").last_mut().unwrap() = bad.clone();
+        assert!(kink_sides_judged(&w).contains(&Class::Refuted), "{bad}");
+    }
+
+    // x·|x| at 0: f″ = −2 then 2, f′ = 2|x| continuous: an inflection,
+    // because joined. Not joined, it is a corner no complete row passes.
+    let zero = (-5e-324, 5e-324);
+    let mut v = certificate("x*abs(x)");
+    let at0 = serde_json::json!([{"x": {"lo": 0.0, "hi": 0.0}, "y": {"lo": 0.0, "hi": 0.0}, "every": null}]);
+    let claims = |joined: bool| {
+        serde_json::json!([
+            {"TailBeyond": {"side": "Left", "from": zero.0, "of": {"F": "F2"}, "c": 0.0, "above": false}},
+            {"TailBeyond": {"side": "Right", "from": zero.1, "of": {"F": "F2"}, "c": 0.0, "above": true}},
+            {"Value": {"x": {"a": 0.0, "b": 0.0}, "of": {"F": "F0"}, "lo": 0.0, "hi": 0.0}},
+            {"Kink": {"x": {"a": zero.0, "b": zero.1}}},
+            sides(zero, Some(0.0), 2, "Neg", "Pos", joined)
+        ])
+    };
+    kink_row(&mut v, "inflections", at0.clone(), claims(true));
+    assert_eq!(rejected(&v), None, "x·|x|'s inflection at 0");
+    assert!(kink_sides_judged(&v).iter().all(|c| *c == Class::Strong));
+    kink_row(&mut v, "inflections", at0, claims(false));
+    assert!(
+        rejected(&v)
+            .expect("a corner taken for an inflection")
+            .contains("kink")
+    );
+    // |x| is no inflection however joined it is said to be: its branches'
+    // slopes at 0 are −1 and 1.
+    let mut v = certificate("abs(x)");
+    kink_row(
+        &mut v,
+        "inflections",
+        serde_json::json!([]),
+        serde_json::json!([
+            {"Value": {"x": {"a": "-inf", "b": zero.0}, "of": {"F": "F2"}, "lo": 0.0, "hi": 0.0}},
+            {"Value": {"x": {"a": zero.1, "b": "inf"}, "of": {"F": "F2"}, "lo": 0.0, "hi": 0.0}},
+            {"Kink": {"x": {"a": zero.0, "b": zero.1}}},
+            sides(zero, Some(0.0), 2, "Zero", "Zero", false)
+        ]),
+    );
+    assert_eq!(rejected(&v), None, "|x| has no inflection");
+    *claims_of(&mut v, "inflections").last_mut().unwrap() =
+        sides(zero, Some(0.0), 2, "Zero", "Zero", true);
+    assert!(
+        kink_sides_judged(&v).contains(&Class::Refuted),
+        "|x|'s branches joined at 0"
+    );
+
+    // A vertical tangent no double holds, (x − 0.1)^(1/3): f′ > 0 on both
+    // sides, read off f′'s own form ∛u/(3u), each factor of u's sign. The
+    // other sign is refuted.
+    let mut v = certificate("(x-0.1)^(1/3)");
+    let rising = serde_json::json!([{"on": {"lo": "NegInf", "hi": "PosInf"}, "dir": "Increasing"}]);
+    kink_row(
+        &mut v,
+        "monotonicity",
+        rising.clone(),
+        with(
+            tails("F1", true, true),
+            &[kink.clone(), sides(bx, None, 1, "Pos", "Pos", false)],
+        ),
+    );
+    assert_eq!(rejected(&v), None, "(x − 0.1)^(1/3) increasing");
+    assert!(kink_sides_judged(&v).iter().all(|c| *c == Class::Strong));
+    *claims_of(&mut v, "monotonicity").last_mut().unwrap() =
+        sides(bx, None, 1, "Neg", "Neg", false);
+    assert!(kink_sides_judged(&v).contains(&Class::Refuted));
+
+    // max(x², 2 − x², −5): its kinks at ±1 are corners of a max of three:
+    // the argument it picks on each side, from every pair's difference.
+    let mut v = certificate("max(x^2,2-x^2,-5)");
+    withhold_all_but(&mut v, "domain");
+    let one = (-1.0000000000000002, -0.9999999999999999);
+    for (l, r, class) in [
+        ("Neg", "Pos", Class::Strong),
+        ("Pos", "Neg", Class::Refuted),
+    ] {
+        kink_row(
+            &mut v,
+            "extrema",
+            serde_json::json!([]),
+            serde_json::json!([
+                {"Kink": {"x": {"a": one.0, "b": one.1}}},
+                sides(one, Some(-1.0), 1, l, r, false)
+            ]),
+        );
+        assert_eq!(kink_sides_judged(&v), [class], "{l}, {r}");
+    }
+}
+
+/// FUZZ's seed 1409: x^(1/(0.1 + 0.2 − 0.3 + 10^(−400))) is x^(10^400),
+/// the typed decimals adding up exactly. The replay worked the constant
+/// term by term in intervals, which straddle 0 about 10^(−400), and
+/// refuted the true f(0) = 0. A constant the exact reader works out is that
+/// rational, enclosed.
+#[test]
+fn a_constant_is_worked_exactly_as_typed() {
+    for src in [
+        "x^(1/(0.1+0.2-0.3+10^(-400)))",
+        "x^(1/(10^(-400)))",
+        "(0.1+0.2-0.3+10^(-400))*10^400*x",
+    ] {
+        let mut v = certificate(src);
+        assert_eq!(rejected(&v), None, "{src}");
+        v["y_intercept"] = serde_json::json!({"Certified": {"value": {"lo": 0.0, "hi": 0.0},
+        "cert": {"covers": "Points", "claims": [
+            {"Value": {"x": {"a": 0.0, "b": 0.0}, "of": {"F": "F0"}, "lo": 0.0, "hi": 0.0}}
+        ]}}});
+        let at0 = judged(&v, "Value { x: (0.0, 0.0), of: F(0), lo: 0.0, hi: 0.0 }");
+        assert!(
+            !at0.is_empty() && at0.iter().all(|(_, c)| *c == Class::Strong),
+            "{src}: f(0) = 0: {at0:?}"
+        );
+        assert_eq!(rejected(&v), None, "{src}");
+    }
+}
+
+/// FUZZ's seed 1409, cases 1079 and 3120: a constant f's range is its one
+/// value. asin x − asin x is 0 where defined, but its enclosure at a point
+/// is ±10⁻⁴⁸ (the two terms rounded apart), which no listed [0, 0] holds;
+/// round(1000001) at 5 digits is a step of a constant, no step function.
+/// The range reads f's value through its reduced form (the replay's field:
+/// 0 and 10⁶ exactly).
+#[test]
+fn a_constant_ranges_over_its_one_value() {
+    for (src, digits) in [
+        ("asin(x)-asin(x)", None),
+        ("asin(x)-asin(x)", Some(14)),
+        ("round(1000001)-(asin(x)-asin(x))", Some(5)),
+        ("round(1000001)-(asin(x)-asin(x))", None),
+    ] {
+        let v = certificate_with(src, digits);
+        // (Its range row; f″ at the domain's ends, which asin's form has
+        // no value for, is another matter: a claim left open.)
+        let r = replay::replay(&v).expect("replayed");
+        let range = r
+            .rows
+            .iter()
+            .find(|row| row.name == "range")
+            .expect("a range row");
+        assert!(
+            range.status != "Unknown" && range.problems.is_empty(),
+            "{src} at {digits:?} digits: {:?}",
+            range.problems
+        );
+    }
+}
+
+/// FUZZ's seed 1451, case 66: 0.3·x is no periodic function, and its
+/// period row says so on the fact "f = N/D exactly: f → −∞ as x → −∞",
+/// which the replay's algebra decides exactly. Bounds were taken out of
+/// "f goes to ±∞ on a tail" this round, and this exact fact with them;
+/// it is a proof, and is read as one.
+#[test]
+fn a_rational_f_going_to_infinity_is_not_periodic() {
+    for src in ["0.30000000000000004*(x^2-x^2+x)", "x^3-x"] {
+        let v = certificate(src);
+        let r = replay::replay(&v).expect("replayed");
+        let period = r
+            .rows
+            .iter()
+            .find(|row| row.name == "period")
+            .expect("a period row");
+        assert!(period.problems.is_empty(), "{src}: {:?}", period.problems);
     }
 }
