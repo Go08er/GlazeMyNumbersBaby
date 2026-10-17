@@ -263,6 +263,8 @@ const WINDOW_AS_PROVEN: &str = "a partial list called complete over a window: tr
 const NO_LINE_BESIDE_A_LEVEL: &str = "no oblique asymptote where the horizontal row lists one on \
                                       each side: f − (m·x + b) → 0 with m ≠ 0 and f → c can't \
                                       both be, so the row rests on that row, not its own claims";
+const SAME_BY_PERIOD: &str = "a row complete over one period speaks for the line by f's period: \
+                              over another window at least a period wide it says the same";
 const NO_EXACT_FORM: &str = "the exact form is how the enclosure reads, not a narrower claim: \
                              without it the enclosure stands";
 
@@ -875,15 +877,18 @@ fn mutants_of(
             smaller,
         ));
         if window.is_some() {
+            // (Another window at least a period wide, for a row over one
+            // period: the same statement, of the line by f's period.)
+            let same = (kind == "Period" && covers.get("Period").is_some()).then_some(SAME_BY_PERIOD);
             scopes.push((
                 format!("{kind} [{}, {}] (wider)", wa - 1.0, wb + 1.0),
                 over(kind, (wa - 1.0, wb + 1.0)),
-                None,
+                same,
             ));
             scopes.push((
                 format!("{kind} [{}, {}] (moved)", wa + q, wb + q),
                 over(kind, (wa + q, wb + q)),
-                None,
+                same,
             ));
         }
     }
