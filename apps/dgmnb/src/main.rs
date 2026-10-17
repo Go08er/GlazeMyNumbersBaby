@@ -51,8 +51,8 @@ fn main() {
     let desktop = read_desktop();
     let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
         Ok(el) => el,
-        Err(e) => {
-            eprintln!("dgmnb: needs a Wayland session, but cannot connect to one: {e}");
+        Err(_) => {
+            eprintln!("dgmnb: needs a Wayland session, but cannot connect to a Wayland display");
             std::process::exit(1);
         }
     };
