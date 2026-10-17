@@ -1387,9 +1387,26 @@ fn repeated_boxes(b: B, period: Option<Enc>) -> Vec<B> {
         .collect()
 }
 
+/// Whether the domain row excludes a family of points (tan's poles).
+fn domain_families(all: &[RowCert]) -> bool {
+    all.iter()
+        .find(|r| r.name == "domain" && r.status == "Certified")
+        .and_then(|d| d.value.get("excluded"))
+        .and_then(Value::as_array)
+        .is_some_and(|e| !e.is_empty())
+}
+
 /// No excluded periodic point lies strictly inside this span. Work with
 /// enclosures and integer indices; an uncertain member is never discarded.
 fn families_clear_span(all: &[RowCert], x: B) -> bool {
+    families_clear_between(all, x, &[])
+}
+
+/// [`families_clear_span`], a member that meets one of `ends` aside: the
+/// enclosure of a piece's end that holds a member (an anchor) holds that
+/// one, two members being a period apart, and the period far wider than
+/// either enclosure.
+fn families_clear_between(all: &[RowCert], x: B, ends: &[Enc]) -> bool {
     let Some(domain) = all
         .iter()
         .find(|r| r.name == "domain" && r.status == "Certified")
@@ -1427,7 +1444,8 @@ fn families_clear_span(all: &[RowCert], x: B) -> bool {
                     &iv::ratio(&a, &rug::Integer::from(1)),
                 ),
             );
-            if member.hi > x.0 && member.lo < x.1 {
+            let at_an_end = ends.iter().any(|e| member.lo <= e.hi && e.lo <= member.hi);
+            if member.hi > x.0 && member.lo < x.1 && !at_an_end {
                 return false;
             }
             a += 1;
@@ -1773,13 +1791,45 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
         }
         // (Or the end is a double inside a stretch where f′ has the
         // piece's sign: f is monotone from there on, the way it is listed.
-        // A piece cut at a window's edge ends so.)
-        let within = |d: f64| match want {
-            Some(up) => sign_index
-                .meeting(d, d)
-                .any(|(a, b, (s, orig))| *s == up && (*a, *b) == *orig),
-            None => w.flat.iter().any(|f| f.0 <= d && d <= f.1),
+        // A piece cut at a window's edge ends so; a partial row's piece may
+        // be any part of one. A complete row's pieces are whole: (−∞, 0)
+        // and (0, ∞) for a constant passed as its monotone pieces, 0
+        // inside the flat stretch. Round 19's mutation tester.)
+        let edge = |d: f64| match rc.region {
+            Some(Region::Window(a, b) | Region::Period(a, b)) => d == a || d == b,
+            Some(Region::Points) => true,
+            _ => false,
         };
+        let within = |d: f64| {
+            edge(d)
+                && match want {
+                    Some(up) => sign_index
+                        .meeting(d, d)
+                        .any(|(a, b, (s, orig))| *s == up && (*a, *b) == *orig),
+                    None => w.flat.iter().any(|f| f.0 <= d && d <= f.1),
+                }
+        };
+        // No excluded point inside the piece: f monotone on each side of
+        // one is not monotone across it. (cot's piece (0, π) moved to start
+        // a double below 0 passed: its pole at 0 was a family member, which
+        // only the domain's pieces were asked about.)
+        let holds = w
+            .holes
+            .iter()
+            .any(|h| inner_lo < h.0 && h.1 < inner_hi);
+        let has_families = domain_families(all);
+        let ends: Vec<Enc> = [p.lo, p.hi]
+            .iter()
+            .filter_map(|b| match b {
+                Bound::At { x, .. } => Some(*x),
+                _ => None,
+            })
+            .collect();
+        if holds || (has_families && !families_clear_between(all, (inner_lo, inner_hi), &ends)) {
+            out.problems.push(format!(
+                "a monotone piece on [{a:e}, {b:e}] holds a point f is undefined at, inside it"
+            ));
+        }
         // A closed end belongs to the piece: f is defined there and
         // continuous to it from the piece (on the end's enclosure, or from
         // the double beside a point end), so the direction shown inside

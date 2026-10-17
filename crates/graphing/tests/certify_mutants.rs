@@ -257,6 +257,12 @@ const ON_F_ITSELF: &str = "the row is checked on f itself (each piece of the dom
 const BY_ANOTHER_ROW: &str = "not periodic follows from another row alone (a domain no shift \
                               maps onto itself, a monotone piece reaching ±∞): the row's own \
                               claims are not what it rests on";
+const WINDOW_AS_PROVEN: &str = "a partial list called complete over a window: true just when \
+                                every item in the window is listed, and the replay asks that of \
+                                every item its claims place there, over a window they cover";
+const NO_LINE_BESIDE_A_LEVEL: &str = "no oblique asymptote where the horizontal row lists one on \
+                                      each side: f − (m·x + b) → 0 with m ≠ 0 and f → c can't \
+                                      both be, so the row rests on that row, not its own claims";
 const NO_EXACT_FORM: &str = "the exact form is how the enclosure reads, not a narrower claim: \
                              without it the enclosure stands";
 
@@ -851,7 +857,13 @@ fn mutants_of(
         (!certified).then_some(SMALLER_SCOPE),
     ));
     for kind in ["Window", "Period"] {
-        let smaller = (kind == "Window" && was_region).then_some(SMALLER_SCOPE);
+        let smaller = if kind == "Window" && was_region {
+            Some(SMALLER_SCOPE)
+        } else if kind == "Window" && !certified {
+            Some(WINDOW_AS_PROVEN)
+        } else {
+            None
+        };
         scopes.push((
             format!("{kind} [{wa}, {wb}]"),
             over(kind, (wa, wb)),
@@ -901,7 +913,18 @@ fn mutants_of(
                 })
             })
     });
+    let level_both = body(base, "horizontal").is_some_and(|(status, h)| {
+        status == "Certified"
+            && ["Left", "Right"].iter().all(|side| {
+                h["value"]
+                    .as_array()
+                    .is_some_and(|hs| hs.iter().any(|x| x["side"] == *side))
+            })
+    });
     let rests_on_no_claim = match row {
+        "oblique" if value.as_array().is_some_and(Vec::is_empty) && level_both => {
+            Some(NO_LINE_BESIDE_A_LEVEL)
+        }
         "domain" if no_families => Some(ON_F_ITSELF),
         "y_intercept" if value.is_null() => Some(ON_F_ITSELF),
         "period" if value.is_null() && ((no_families && not_the_line) || reaching) => {

@@ -742,10 +742,21 @@ fn pow_pos(a: &Iv, y: &Iv) -> Iv {
         return Iv::empty();
     }
     let zero_ok = y.gt(0.0);
-    let lo_bound = if zero_ok { (0.0, true) } else { (0.0, false) };
-    let (Some(r), inside) = restrict(a, Some(lo_bound), None) else {
+    // (0 to an exponent positive somewhere in y is 0 there: defined, not
+    // throughout. 0^(−x) was empty, "undefined", over every box holding a
+    // negative x with others, and its domain passed as empty.)
+    let zero_somewhere = !zero_ok && y.hi > 0;
+    let lo_bound = if zero_ok || zero_somewhere {
+        (0.0, true)
+    } else {
+        (0.0, false)
+    };
+    let (Some(r), mut inside) = restrict(a, Some(lo_bound), None) else {
         return Iv::empty();
     };
+    if zero_somewhere && r.lo.is_zero() {
+        inside = false;
+    }
     // Corners of x^y over x ∈ r, y ∈ y: x^y is monotone in each.
     let pw = |x: &Float, e: &Float, rd: Round| -> Float {
         if x.is_zero() {
