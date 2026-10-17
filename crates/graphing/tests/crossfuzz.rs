@@ -377,7 +377,8 @@ const KNOWN: &[(&str, Matches, &str)] = &[
     // (A row problem that says something against the row from what the
     // claims prove is a finding: `replay/row-against`, and
     // `replay/row-narrower` for a value listed more narrowly than they
-    // show. Only those that leave a row open are listed here: views.rs,
+    // show; one of a text not yet read, `replay/row-problem-unread`. Only
+    // those that leave a row open are listed here: views.rs,
     // `mp::row_problem`.)
     (
         "replay/row-problem",
@@ -1291,6 +1292,15 @@ fn row_problems_are_found_by_what_they_say() {
         (
             "domain: f is not shown defined on its piece: not shown valid on [0e0, 1e0]",
             "replay/row-problem",
+        ),
+        (
+            "period: the window [0e0, 3e0] is not as wide as the period, in [6.2e0, 6.3e0]",
+            "replay/row-problem",
+        ),
+        // A text the replay has learnt since: read, and added to a list.
+        (
+            "range: something new about the row",
+            "replay/row-problem-unread",
         ),
     ] {
         assert_eq!(views::row_problem(text), class, "{text}");

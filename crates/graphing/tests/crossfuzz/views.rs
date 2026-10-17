@@ -1381,10 +1381,12 @@ mod mp {
     /// claims, `replay/row-against`; and a value listed more narrowly
     /// than the claims prove it, `replay/row-narrower` (the right limit of
     /// 3 + (x − (1 + 2·10⁻¹⁵))·e⁻ˣ + (x − x) at 14 digits, listed as one
-    /// double beside 3). A text not known to leave the row open is taken
-    /// as against it.
+    /// double beside 3). A text of neither kind (one the replay has
+    /// learnt since) is a finding of its own, `replay/row-problem-unread`,
+    /// to be read and added to one list or the other.
     pub fn row_problem(text: &str) -> &'static str {
         const OPEN: &[&str] = &[
+            "not as wide as the period",
             "not decided",
             "undecided",
             "not proven by the claims",
@@ -1413,12 +1415,59 @@ mod mp {
             "unread ",
             "unknown parity",
         ];
+        // What the replay says against a row (tests/replay/rows.rs).
+        const AGAINST: &[&str] = &[
+            "with one sign at both its ends",
+            "proven by the claims but not listed",
+            "the language refuses f",
+            "listed as repeating every",
+            "is outside the domain",
+            "yet the row lists points",
+            "changes sign across the kink",
+            ", listed as ",
+            "of the domain out, yet the row is complete",
+            "reaches outside the domain's pieces",
+            "includes its undefined endpoint",
+            "contains an open domain end",
+            "inside a piece listed",
+            "yet f(0) is",
+            "is not in the listed",
+            "but the domain is not symmetric",
+            "defined at only one of ±x",
+            "no such node of f",
+            "f is not defined on its piece",
+            "an open end at",
+            "yet it is",
+            "is strictly between",
+            "f is defined throughout it",
+            "is no multiple of an excluded family",
+            "the fact says",
+            "outside f's band",
+            "where f is bounded",
+            "but no asymptote is listed there",
+            "its own graph",
+            "outside its listed",
+            "not N/D's",
+            "], outside [",
+            "apart from the limit by f's structure",
+            "where f tends to ±∞",
+            "the claims show ",
+            "pairs of end sources",
+            "its sources say otherwise",
+            "doesn't hold the value",
+            "is outside the listed range",
+            "is outside the claims'",
+            "listed outside its expansion's",
+            "listed off N/D's line",
+        ];
         if text.contains("narrower than the claims show") {
             "replay/row-narrower"
         } else if OPEN.iter().any(|open| text.contains(open)) {
             "replay/row-problem"
-        } else {
+        } else if AGAINST.iter().any(|against| text.contains(against)) {
             "replay/row-against"
+        } else {
+            "replay/row-problem-unread"
         }
     }
 
@@ -1663,24 +1712,44 @@ fn places(cert: Option<&Analysis>) -> Places {
 /// a zero at sin 1 is no zero at the double beside it.
 fn claimed(x: f64, places: &[Place]) -> ((f64, f64), Option<(f64, f64)>) {
     for p in places {
-        let (mut lo, mut hi) = (p.x.lo.0, p.x.hi.0);
-        if let Some(every) = p.every {
-            let (plo, phi) = (every.lo.0, every.hi.0);
-            let period = plo / 2.0 + phi / 2.0;
-            if !(period.is_finite() && period > 0.0) {
-                continue;
-            }
-            let k = ((x - (lo / 2.0 + hi / 2.0)) / period).round();
-            let (a, b) = (k * plo, k * phi);
-            lo = checks::step(lo + a.min(b), -4);
-            hi = checks::step(hi + a.max(b), 4);
-        }
-        if lo.is_finite() && hi.is_finite() && lo <= x && x <= hi {
+        if let Some((lo, hi)) = member(p, x)
+            && lo <= x
+            && x <= hi
+        {
             return ((lo, hi), Some((p.y.lo.0, p.y.hi.0)));
         }
     }
     let w = (1e-6 * x.abs()).max(16.0 * ulp(x));
     ((x - w, x + w), None)
+}
+
+/// The enclosure of the member of `p` nearest x (`p` itself, if it is no
+/// family): x0 + k·period, enclosed.
+fn member(p: &Place, x: f64) -> Option<(f64, f64)> {
+    let (mut lo, mut hi) = (p.x.lo.0, p.x.hi.0);
+    if let Some(every) = p.every {
+        let (plo, phi) = (every.lo.0, every.hi.0);
+        let period = plo / 2.0 + phi / 2.0;
+        if !(period.is_finite() && period > 0.0) {
+            return None;
+        }
+        let k = ((x - (lo / 2.0 + hi / 2.0)) / period).round();
+        let (a, b) = (k * plo, k * phi);
+        lo = checks::step(lo + a.min(b), -4);
+        hi = checks::step(hi + a.max(b), 4);
+    }
+    (lo.is_finite() && hi.is_finite()).then_some((lo, hi))
+}
+
+/// Whether the certificate places something of `places` at a point of
+/// `[lo, hi]` as far as it knows: its enclosure (of the member nearest)
+/// meets the stretch. The panel shows such a thing at the enclosure's
+/// middle, which may be a part in 10⁶ or more from where it is.
+fn listed_over(lo: f64, hi: f64, places: &[Place]) -> bool {
+    places
+        .iter()
+        .filter_map(|p| member(p, lo / 2.0 + hi / 2.0))
+        .any(|(a, b)| a <= hi && lo <= b)
 }
 
 /// The views that prove things about f, asked what they make of something
@@ -1906,10 +1975,30 @@ impl<'a> Proofs<'a> {
             // double it was run down to), or an exact 0 in doubles: a
             // zero where f is continuous between two points it is proven
             // of opposite signs at.
-            "zero-missing" if f.span.0 < f.span.1 => proven_if(
-                self.zero_between(at, checks::step(at, 1)) || self.zero_between(f.span.0, f.span.1),
-            ),
-            "zero-missing" => proven_if(self.zero_about(at)),
+            // (Not missing where the certificate lists a zero whose
+            // enclosure meets where this one is: the panel shows it at
+            // the enclosure's middle, which may be past the oracle's
+            // reach of a part in 10⁶.)
+            "zero-missing" => {
+                let (lo, hi) = if f.span.0 < f.span.1 {
+                    if self.zero_between(at, checks::step(at, 1)) {
+                        (at, checks::step(at, 1))
+                    } else if self.zero_between(f.span.0, f.span.1) {
+                        f.span
+                    } else {
+                        return unproven();
+                    }
+                } else if self.zero_about(at) {
+                    (checks::step(at, -1), checks::step(at, 1))
+                } else {
+                    return unproven();
+                };
+                if listed_over(lo, hi, &self.places.zeros) {
+                    open("inside-a-listed-enclosure")
+                } else {
+                    Proven
+                }
+            }
             "zeros-merged" => {
                 let (a, b) = f.span;
                 proven_if(checks::step(a, 2) < b && self.zero_about(a) && self.zero_about(b))
@@ -1948,7 +2037,15 @@ impl<'a> Proofs<'a> {
                     } else {
                         t[2].lo() > 0.0
                     };
-                proven_if(xl < at && at < xr && bent && beats(xl) && beats(xr))
+                if !(xl < at && at < xr && bent && beats(xl) && beats(xr)) {
+                    unproven()
+                } else if listed_over(xl, xr, &self.places.extrema) {
+                    // (A turn the certificate lists, known to an
+                    // enclosure that meets the stretch.)
+                    open("inside-a-listed-enclosure")
+                } else {
+                    Proven
+                }
             }
             // "Lower beyond the listed minimum": at three points a part
             // in 10⁶ off, which says nothing of the points nearer. No
