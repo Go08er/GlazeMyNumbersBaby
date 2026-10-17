@@ -3635,3 +3635,157 @@ fn a_complete_list_decides_what_it_leaves_out() {
         ]}}});
     assert!(rejected(&v).is_some(), "sin not periodic, by a band and two values");
 }
+
+/// A kink box (`Kink`) and what f⁽ᵏ⁾ does on each side of it
+/// (`KinkSides`), as the certifier writes them, set into `row` of `v`
+/// (Certified over the line).
+fn kink_row(v: &mut serde_json::Value, row: &str, value: serde_json::Value, claims: serde_json::Value) {
+    v[row] = serde_json::json!({"Certified": {"value": value,
+        "cert": {"covers": "Line", "claims": claims}}});
+}
+
+fn sides(x: (f64, f64), at: Option<f64>, k: u8, l: &str, r: &str, joined: bool) -> serde_json::Value {
+    serde_json::json!({"KinkSides": {"x": {"a": x.0, "b": x.1}, "at": at, "order": k,
+        "left": l, "right": r, "joined": joined}})
+}
+
+/// The class of each `KinkSides` claim of `v`.
+fn kink_sides_judged(v: &serde_json::Value) -> Vec<Class> {
+    judged(v, "KinkSides").into_iter().map(|(_, c)| c).collect()
+}
+
+/// Round 19: `KinkSides`, what f′ or f″ does on each side of the one point
+/// of a kink box where it need not exist, checked from its statement (f
+/// continuous on the box; the kink arguments' signs on each side, or the
+/// one that vanishes once inside an unplaced box; f⁽ᵏ⁾ on the one-sided
+/// forms, the point left out; with `joined`, the branches' slopes equal
+/// there). The rows the certifier gave up for a kink box it couldn't
+/// place (abs(x − 0.1)'s minimum, monotone pieces and no inflections;
+/// x·|x|'s inflection) come back on it, and the false versions are
+/// refused. (This branch's certifier doesn't write the claim: these rows
+/// are set in by hand, as the certifier's branch writes them.)
+#[test]
+fn the_sides_of_a_kink_decide_the_rows_on_its_derivatives() {
+    let bx = (0.09999999999999998, 0.10000000000000002);
+    let kink = serde_json::json!({"Kink": {"x": {"a": bx.0, "b": bx.1}}});
+    let tails = |k: &str, left: bool, right: bool| {
+        serde_json::json!([
+            {"TailBeyond": {"side": "Left", "from": bx.0, "of": {"F": k}, "c": 0.0, "above": left}},
+            {"TailBeyond": {"side": "Right", "from": bx.1, "of": {"F": k}, "c": 0.0, "above": right}}
+        ])
+    };
+    let with = |a: serde_json::Value, more: &[serde_json::Value]| {
+        let mut a = a.as_array().unwrap().clone();
+        a.extend(more.iter().cloned());
+        serde_json::Value::Array(a)
+    };
+    let base = certificate("abs(x-0.1)");
+    let min_at = serde_json::json!([{"x": {"lo": bx.0, "hi": bx.1},
+        "y": {"lo": 0.0, "hi": 2.7755575615628914e-17}, "kind": "Min", "every": null}]);
+    let value_there = serde_json::json!({"Value": {"x": {"a": bx.0, "b": bx.1}, "of": {"F": "F0"},
+        "lo": 0.0, "hi": 2.7755575615628914e-17}});
+    let end = serde_json::json!({"At": {"x": {"lo": bx.0, "hi": bx.1}, "closed": true}});
+    let pieces = serde_json::json!([{"on": {"lo": "NegInf", "hi": end}, "dir": "Decreasing"},
+        {"on": {"lo": end, "hi": "PosInf"}, "dir": "Increasing"}]);
+    let flat = serde_json::json!([
+        {"Value": {"x": {"a": "-inf", "b": bx.0}, "of": {"F": "F2"}, "lo": 0.0, "hi": 0.0}},
+        {"Value": {"x": {"a": bx.1, "b": "inf"}, "of": {"F": "F2"}, "lo": 0.0, "hi": 0.0}}
+    ]);
+    let turn = sides(bx, None, 1, "Neg", "Pos", false);
+    let mut v = base.clone();
+    kink_row(&mut v, "extrema", min_at.clone(), with(tails("F1", false, true), &[value_there.clone(), kink.clone(), turn.clone()]));
+    kink_row(&mut v, "monotonicity", pieces.clone(), with(tails("F1", false, true), &[kink.clone(), turn.clone()]));
+    kink_row(&mut v, "inflections", serde_json::json!([]), with(flat.clone(), &[kink.clone(), sides(bx, None, 2, "Zero", "Zero", false)]));
+    assert_eq!(rejected(&v), None, "abs(x − 0.1)'s rows on its kink box");
+    assert!(kink_sides_judged(&v).iter().all(|c| *c == Class::Strong));
+    // The box alone decides nothing (review 19's rule stands).
+    let mut w = v.clone();
+    claims_of(&mut w, "extrema").retain(|c| c.get("KinkSides").is_none());
+    assert!(rejected(&w).expect("a minimum on the kink box alone").contains("undecided"));
+    // The sides swapped: the claim is refuted, whatever the row says.
+    let mut w = v.clone();
+    *claims_of(&mut w, "extrema").last_mut().unwrap() = sides(bx, None, 1, "Pos", "Neg", false);
+    value_of(&mut w, "extrema")[0]["kind"] = serde_json::json!("Max");
+    let judged = kink_sides_judged(&w);
+    assert_eq!(
+        judged.iter().filter(|c| **c == Class::Refuted).count(),
+        1,
+        "{judged:?}"
+    );
+    // Placed at the double 0.1, which is past the kink (1/10 lies below
+    // it): x − 0.1 is not of one sign on the left of it. Not shown.
+    let mut w = v.clone();
+    *claims_of(&mut w, "extrema").last_mut().unwrap() = sides(bx, Some(0.1), 1, "Neg", "Pos", false);
+    assert!(rejected(&w).is_some(), "the kink placed at the double 0.1");
+    // f″ is 0 on each branch: a change of its sign there is refuted.
+    let mut w = v.clone();
+    *claims_of(&mut w, "inflections").last_mut().unwrap() = sides(bx, None, 2, "Neg", "Pos", false);
+    assert!(kink_sides_judged(&w).contains(&Class::Refuted));
+    // The statement's own bounds: the point inside the box, an order of 1
+    // or 2, joined only at a point.
+    for bad in [
+        sides(bx, Some(0.2), 1, "Neg", "Pos", false),
+        sides(bx, None, 3, "Neg", "Pos", false),
+        sides(bx, None, 1, "Neg", "Pos", true),
+    ] {
+        let mut w = v.clone();
+        *claims_of(&mut w, "extrema").last_mut().unwrap() = bad.clone();
+        assert!(kink_sides_judged(&w).contains(&Class::Refuted), "{bad}");
+    }
+
+    // x·|x| at 0: f″ = −2 then 2, f′ = 2|x| continuous: an inflection,
+    // because joined. Not joined, it is a corner no complete row passes.
+    let zero = (-5e-324, 5e-324);
+    let mut v = certificate("x*abs(x)");
+    let at0 = serde_json::json!([{"x": {"lo": 0.0, "hi": 0.0}, "y": {"lo": 0.0, "hi": 0.0}, "every": null}]);
+    let claims = |joined: bool| {
+        serde_json::json!([
+            {"TailBeyond": {"side": "Left", "from": zero.0, "of": {"F": "F2"}, "c": 0.0, "above": false}},
+            {"TailBeyond": {"side": "Right", "from": zero.1, "of": {"F": "F2"}, "c": 0.0, "above": true}},
+            {"Value": {"x": {"a": 0.0, "b": 0.0}, "of": {"F": "F0"}, "lo": 0.0, "hi": 0.0}},
+            {"Kink": {"x": {"a": zero.0, "b": zero.1}}},
+            sides(zero, Some(0.0), 2, "Neg", "Pos", joined)
+        ])
+    };
+    kink_row(&mut v, "inflections", at0.clone(), claims(true));
+    assert_eq!(rejected(&v), None, "x·|x|'s inflection at 0");
+    assert!(kink_sides_judged(&v).iter().all(|c| *c == Class::Strong));
+    kink_row(&mut v, "inflections", at0, claims(false));
+    assert!(rejected(&v).expect("a corner taken for an inflection").contains("kink"));
+    // |x| is no inflection however joined it is said to be: its branches'
+    // slopes at 0 are −1 and 1.
+    let mut v = certificate("abs(x)");
+    kink_row(&mut v, "inflections", serde_json::json!([]), serde_json::json!([
+        {"Value": {"x": {"a": "-inf", "b": zero.0}, "of": {"F": "F2"}, "lo": 0.0, "hi": 0.0}},
+        {"Value": {"x": {"a": zero.1, "b": "inf"}, "of": {"F": "F2"}, "lo": 0.0, "hi": 0.0}},
+        {"Kink": {"x": {"a": zero.0, "b": zero.1}}},
+        sides(zero, Some(0.0), 2, "Zero", "Zero", false)
+    ]));
+    assert_eq!(rejected(&v), None, "|x| has no inflection");
+    *claims_of(&mut v, "inflections").last_mut().unwrap() = sides(zero, Some(0.0), 2, "Zero", "Zero", true);
+    assert!(kink_sides_judged(&v).contains(&Class::Refuted), "|x|'s branches joined at 0");
+
+    // A vertical tangent no double holds, (x − 0.1)^(1/3): f′ > 0 on both
+    // sides, read off f′'s own form ∛u/(3u), each factor of u's sign. The
+    // other sign is refuted.
+    let mut v = certificate("(x-0.1)^(1/3)");
+    let rising = serde_json::json!([{"on": {"lo": "NegInf", "hi": "PosInf"}, "dir": "Increasing"}]);
+    kink_row(&mut v, "monotonicity", rising.clone(), with(tails("F1", true, true), &[kink.clone(), sides(bx, None, 1, "Pos", "Pos", false)]));
+    assert_eq!(rejected(&v), None, "(x − 0.1)^(1/3) increasing");
+    assert!(kink_sides_judged(&v).iter().all(|c| *c == Class::Strong));
+    *claims_of(&mut v, "monotonicity").last_mut().unwrap() = sides(bx, None, 1, "Neg", "Neg", false);
+    assert!(kink_sides_judged(&v).contains(&Class::Refuted));
+
+    // max(x², 2 − x², −5): its kinks at ±1 are corners of a max of three:
+    // the argument it picks on each side, from every pair's difference.
+    let mut v = certificate("max(x^2,2-x^2,-5)");
+    withhold_all_but(&mut v, "domain");
+    let one = (-1.0000000000000002, -0.9999999999999999);
+    for (l, r, class) in [("Neg", "Pos", Class::Strong), ("Pos", "Neg", Class::Refuted)] {
+        kink_row(&mut v, "extrema", serde_json::json!([]), serde_json::json!([
+            {"Kink": {"x": {"a": one.0, "b": one.1}}},
+            sides(one, Some(-1.0), 1, l, r, false)
+        ]));
+        assert_eq!(kink_sides_judged(&v), [class], "{l}, {r}");
+    }
+}

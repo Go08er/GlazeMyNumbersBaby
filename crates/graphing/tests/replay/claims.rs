@@ -1149,6 +1149,144 @@ fn kink_sides(
     }
 }
 
+/// e⁽ᵏ⁾'s strict sign on each side of the one point c of [lo, hi] where a
+/// base u₀ of e's fractional powers vanishes (`at`, an inner double where
+/// it is exactly 0; or, with no `at`, the one zero of u₀ inside the box,
+/// u₀ strictly monotone over it with opposite signs at its ends), wherever
+/// e⁽ᵏ⁾ exists: f⁽ᵏ⁾'s own form ([`super::algebra::derivative_tree_k`]),
+/// factor by factor ([`factor_sides`]). Every base of e's fractional
+/// powers is strictly signed over the box or a constant multiple of u₀.
+/// (The series' enclosure of (x − 0.1)^(1/3)′ over a box about 0.1 is not
+/// signed: its coefficients divide by u₀. Its form r/(3u₀), r = ∛u₀, is
+/// positive on each side: r and u₀ have u₀'s sign.)
+fn singular_sides(
+    fx: &Fx,
+    e: &Expr,
+    lo: f64,
+    hi: f64,
+    at: Option<f64>,
+    k: usize,
+) -> Option<(KinkSign, KinkSign)> {
+    use super::algebra::{constant_ratio, derivative_tree_k};
+    let mut bases = Vec::new();
+    singular_args(fx, e, &mut bases);
+    let mut u0: Option<Expr> = None;
+    for u in &bases {
+        let s = fx.series(u, lo, hi, 1);
+        if s[0].def && (s[0].gt(0.0) || s[0].lt(0.0)) {
+            continue;
+        }
+        match &u0 {
+            Some(v) => {
+                constant_ratio(u, v, &fx.lits, &fx.vars, fx.unit)?;
+            }
+            None => u0 = Some(u.clone()),
+        }
+    }
+    let u0 = u0?;
+    let s = fx.series(&u0, lo, hi, 1);
+    if !(s[0].cont && s[1].def && s[1].bounded() && s[1].ne0()) {
+        return None;
+    }
+    let point = |t: f64| fx.series(&u0, t, t, 0)[0].clone();
+    let (a, b) = (point(lo), point(hi));
+    let opposite = (a.gt(0.0) && b.lt(0.0)) || (a.lt(0.0) && b.gt(0.0));
+    let placed = match at {
+        Some(p) => {
+            let v = point(p);
+            v.def && v.is_exactly(0.0)
+        }
+        None => true,
+    };
+    if !(opposite && placed) {
+        return None;
+    }
+    let signs = (a.gt(0.0), b.gt(0.0));
+    let d = derivative_tree_k(e, k, &fx.lits, &fx.vars, fx.unit)?;
+    let (l, r) = factor_sides(fx, &d, lo, hi, &u0, signs, 8)?;
+    let sign = |pos: bool| if pos { KinkSign::Pos } else { KinkSign::Neg };
+    Some((sign(l), sign(r)))
+}
+
+/// e's strict sign on each side of u₀'s one zero in [lo, hi] (`signs`: u₀'s
+/// own there), wherever e is defined: e strictly signed over the box; a
+/// nonzero constant times u₀ⁿ (n ≤ 4); a product or quotient of such
+/// factors; a power of one: u^(p/q) has u's sign for p and q odd, and is
+/// positive otherwise off u's zero (√u, and an even power).
+fn factor_sides(
+    fx: &Fx,
+    e: &Expr,
+    lo: f64,
+    hi: f64,
+    u0: &Expr,
+    signs: (bool, bool),
+    depth: usize,
+) -> Option<(bool, bool)> {
+    let v = fx.series(e, lo, hi, 0)[0].clone();
+    if !v.empty && v.def && v.gt(0.0) {
+        return Some((true, true));
+    }
+    if !v.empty && v.def && v.lt(0.0) {
+        return Some((false, false));
+    }
+    // A constant multiple of a power of u₀ (the field multiplies (x − a)³
+    // out: its sum of terms has no sign of its own beside a).
+    for n in 1..=4u32 {
+        let power = if n == 1 {
+            u0.clone()
+        } else {
+            Expr::Bin(BinOp::Pow, Box::new(u0.clone()), Box::new(Expr::exact(f64::from(n))))
+        };
+        let Some(c) = super::algebra::constant_ratio(e, &power, &fx.lits, &fx.vars, fx.unit)
+        else {
+            continue;
+        };
+        let of_power = if n % 2 == 1 { signs } else { (true, true) };
+        // (The constant's form need not be reduced, x/x: its value at a
+        // point where the form is defined.)
+        for t in [1.0, -1.0, 0.5, 2.0, -2.5, 3.75] {
+            let c = fx.series(&c, t, t, 0)[0].clone();
+            if !c.empty && c.def && c.gt(0.0) {
+                return Some(of_power);
+            }
+            if !c.empty && c.def && c.lt(0.0) {
+                return Some((!of_power.0, !of_power.1));
+            }
+        }
+        return None;
+    }
+    let d = depth.checked_sub(1)?;
+    let sides = |e: &Expr| factor_sides(fx, e, lo, hi, u0, signs, d);
+    // A power with the parity of its numerator and denominator.
+    let power = |base: &Expr, odd: bool| -> Option<(bool, bool)> {
+        let b = sides(base)?;
+        Some(if odd { b } else { (true, true) })
+    };
+    match e {
+        Expr::Neg(a) => sides(a).map(|(l, r)| (!l, !r)),
+        Expr::Bin(BinOp::Mul | BinOp::Div, a, b) => {
+            let (al, ar) = sides(a)?;
+            let (bl, br) = sides(b)?;
+            Some((al == bl, ar == br))
+        }
+        Expr::Bin(BinOp::Pow, a, k) => {
+            let (p, q) = written_rational(k, &fx.lits)?;
+            power(a, p.is_odd() && q.is_odd())
+        }
+        Expr::Call(Func::Sqrt, a) => power(&a[0], false),
+        Expr::Call(Func::Cbrt, a) => power(&a[0], true),
+        Expr::Call(Func::Root, a) if a.len() == 2 && !contains_x(&a[1]) => {
+            let n = fx.series(&a[1], 0.0, 0.0, 0)[0].clone();
+            if !(n.is_point() && n.lo.is_integer()) {
+                return None;
+            }
+            let odd = n.lo.to_integer()?.is_odd();
+            power(&a[0], odd)
+        }
+        _ => None,
+    }
+}
+
 /// [`kink_sides`] on the form `f`, at the working precision.
 #[allow(clippy::too_many_arguments)]
 fn sides_of(
@@ -1206,15 +1344,18 @@ fn sides_of(
     else {
         return unknown("no one-sided form");
     };
-    let sign = |e: &Expr, lo: f64, hi: f64| {
-        smooth_sign(fx, e, lo, hi, at, k).or_else(|| singular_sign(fx, e, lo, hi, at, k))
-    };
     let (lbox, rbox) = match at {
         Some(p) => ((l, p), (p, r)),
         None => ((l, r), (l, r)),
     };
-    for (e, b, want, which) in [(&minus, lbox, left, "left"), (&plus, rbox, right, "right")] {
-        match sign(e, b.0, b.1) {
+    let sides = [(&minus, lbox, left, "left"), (&plus, rbox, right, "right")];
+    for (i, (e, b, want, which)) in sides.into_iter().enumerate() {
+        let got = smooth_sign(fx, e, b.0, b.1, at, k)
+            .or_else(|| singular_sign(fx, e, b.0, b.1, at, k))
+            .or_else(|| {
+                singular_sides(fx, e, l, r, at, k).map(|(a, b)| if i == 0 { a } else { b })
+            });
+        match got {
             Some(got) if got == want => {}
             Some(got) => {
                 return V::No(format!(

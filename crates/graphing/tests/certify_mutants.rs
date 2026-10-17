@@ -1290,7 +1290,7 @@ fn report(r: &Run) {
     }
 }
 
-/// A fixed few, one of each shape of row: seconds.
+/// A fixed few, one of each shape of row, and kinks: seconds.
 const FEW: &[&str] = &[
     "x^3-2x+1/(x-1)",
     "sin(x)",
@@ -1300,6 +1300,12 @@ const FEW: &[&str] = &[
     "(x^2+x+1)/(3x)",
     "atan(x)",
     "abs(x-1)",
+    // Kinks: at no double, joined (an inflection), a vertical tangent no
+    // double holds, a max of three.
+    "abs(x-0.1)",
+    "x*abs(x)",
+    "(x-0.1)^(1/3)",
+    "max(x^2,2-x^2,-5)",
 ];
 
 #[test]

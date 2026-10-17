@@ -771,10 +771,11 @@ impl Field<'_> {
                 })
                 .collect();
         }
+        // (An integer a double holds exactly, of any size: 9·10¹⁸ is one,
+        // its odd part under 2⁵³.)
         let whole = |q: &Integer| -> Option<Expr> {
             let v = q.to_f64();
-            (Integer::from_f64(v).as_ref() == Some(q) && v.abs() <= 9007199254740992.0)
-                .then(|| Expr::exact(v.abs()))
+            (v.is_finite() && Integer::from_f64(v).as_ref() == Some(q)).then(|| Expr::exact(v.abs()))
         };
         let mut sum: Option<Expr> = None;
         for (m, c) in &p.0 {
@@ -844,6 +845,46 @@ pub fn derivative_tree(
     let value = field.read(f)?;
     let derivative = field.d(&value)?;
     field.tree(&derivative)
+}
+
+/// f⁽ᵏ⁾ as a tree of the replay's own ([`derivative_tree`] k times, in one
+/// field).
+pub fn derivative_tree_k(
+    f: &Expr,
+    k: usize,
+    lits: &Lits,
+    vars: &[(String, f64)],
+    unit: Unit,
+) -> Option<Expr> {
+    let mut field = Field::new(lits, vars, unit);
+    let mut value = field.read(f)?;
+    for _ in 0..k {
+        value = field.d(&value)?;
+    }
+    field.tree(&value)
+}
+
+/// a/b as a tree when it is a constant (its derivative is 0 in the
+/// replay's field, with no step in either): a = λ·b wherever both are
+/// defined, on any interval they are continuous on. None otherwise.
+pub fn constant_ratio(
+    a: &Expr,
+    b: &Expr,
+    lits: &Lits,
+    vars: &[(String, f64)],
+    unit: Unit,
+) -> Option<Expr> {
+    let mut field = Field::new(lits, vars, unit);
+    let (fa, fb) = (field.read(a)?, field.read(b)?);
+    if field.atoms.iter().any(|a| matches!(a, Atom::Steps)) {
+        return None;
+    }
+    let q = fa.div(&fb)?;
+    let dq = field.d(&q)?;
+    if !dq.n.is_zero() || q.n.is_zero() {
+        return None;
+    }
+    field.tree(&q)
 }
 
 /// Which of the certifier's trees are exactly the canonical tree's (f's
