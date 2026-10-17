@@ -1197,7 +1197,18 @@ fn factorials_enclose_mpfr() {
 /// about 2100 bits), so that arguments past 10¹⁸, whose Γ is beyond even
 /// MPFR's exponents, have their quotient too; `None` at a pole.
 fn mp_count_from_logs(n: f64, r: f64, perm: bool) -> Option<Float> {
-    const W: u32 = 2400;
+    let (l, neg) = mp_count_log(n, r, perm)?;
+    let v = Float::with_val(P, l.exp_ref());
+    Some(if neg { -v } else { v })
+}
+
+/// The working precision of [`mp_count_log`].
+const COUNT_W: u32 = 2400;
+
+/// [`mp_count_from_logs`] before the exponential: ln |count| at
+/// [`COUNT_W`] bits, and whether the count is negative.
+fn mp_count_log(n: f64, r: f64, perm: bool) -> Option<(Float, bool)> {
+    const W: u32 = COUNT_W;
     let (n, r) = (Float::with_val(W, n), Float::with_val(W, r));
     let ln_gamma = |v: Float| -> Option<(Float, bool)> {
         if v <= 0 && v.is_integer() {
@@ -1216,8 +1227,7 @@ fn mp_count_from_logs(n: f64, r: f64, perm: bool) -> Option<Float> {
         l -= k;
         neg ^= k_neg;
     }
-    let v = Float::with_val(P, l.exp_ref());
-    Some(if neg { -v } else { v })
+    Some((l, neg))
 }
 
 /// nCr and nPr through Γ (neither a count of whole numbers nor a whole
@@ -1364,6 +1374,173 @@ fn counts_through_gamma_are_within_a_few_ulps() {
         t.cases
     );
     report(&t);
+    assert!(t.violations.is_empty(), "{:#?}", t.violations);
+}
+
+/// nCr and nPr where their doubles are 0, a subnormal or ±∞, as the
+/// evaluations that hold values beyond the doubles have them
+/// (`functions::count_beyond`, for `wide.rs` and the reference evaluator):
+/// m·2^e within a few ulps of m, by MPFR's ln |Γ| (n! too, as nPr(n, n));
+/// beyond even that range only where |ln| is past 2⁴⁷; 0 only for a count
+/// that is 0; nothing at a pole. Their doubles made a/nCr(x, 3) undefined
+/// beside 0 and nPr(x, 62)/x⁶² +∞ near −5.6·10¹⁴ (`tests/crossfuzz.rs`,
+/// seed 1733).
+#[test]
+fn counts_beyond_the_doubles_are_within_a_few_ulps() {
+    use graphing::functions::{count_beyond, ncr, npr};
+    init();
+    let mut pairs: Vec<(f64, f64)> = Vec::new();
+    // The polynomial (a whole r ≤ 60) far out and next to 0.
+    for n in [
+        -562_341_325_190_349.06,
+        -559_999_999_999_999.5,
+        1e15 + 0.5,
+        -1e14 - 0.25,
+        33_000_000_000.5,
+        1e-310,
+        -5e-324,
+        5e-324,
+        2.5e-320,
+        -1e-310,
+        1e-300,
+    ] {
+        for r in [2.0, 3.0, 30.0, 60.0, 61.0] {
+            pairs.push((n, r));
+        }
+    }
+    // Whole numbers past the doubles, and outside 0 ≤ r ≤ n.
+    for p in [
+        (2000.0, 1000.0),
+        (1e20, 50.0),
+        (1e6, 300.0),
+        (1e300, 2.0),
+        (1e300, 1e300),
+        (5.0, 7.0),
+        (5.0, -1.0),
+        (0.0, 3.0),
+    ] {
+        pairs.push(p);
+    }
+    // Γ: n! as nPr(n, n), and its quotients, far out and next to a pole.
+    for x in [
+        171.7,
+        200.5,
+        1e6,
+        1e10 + 0.5,
+        1e12 + 0.5,
+        3e12,
+        1e13,
+        -200.5,
+        -1e6 - 0.5,
+        -1e15 - 0.5,
+    ] {
+        pairs.push((x, x));
+    }
+    for p in [
+        (7.0, 123_456.7),
+        (-0.5, 1e9 + 0.5),
+        (1e15 + 0.5, 3e14 + 0.25),
+        (-1e6 - 0.5, 3.25),
+        (10.5, -1e6 - 0.25),
+        (1e-300, 62.5),
+        (2.0 * -562_341_325_190_349.06, 0.5),
+    ] {
+        pairs.push(p);
+    }
+    let mut rng = Rng(0x5EED_1733_C0FF_EE11);
+    for i in 0..600 {
+        let s = if rng.next().is_multiple_of(2) {
+            1.0
+        } else {
+            -1.0
+        };
+        let (n, r) = match i % 3 {
+            // Far out, a whole r ≤ 60 or past it.
+            0 => {
+                let n = s * 10f64.powf(rng.unit() * 16.0);
+                let n = if n == n.trunc() { n + 0.5 } else { n };
+                (n, (2 + rng.next() % 80) as f64)
+            }
+            // Next to 0.
+            1 => (
+                s * 10f64.powf(-(rng.unit() * 324.0)),
+                (2 + rng.next() % 80) as f64,
+            ),
+            // Γ's quotient of any arguments.
+            _ => (
+                s * 10f64.powf(rng.unit() * 20.0),
+                10f64.powf(rng.unit() * 20.0) * if rng.next() % 3 == 0 { -1.0 } else { 1.0 },
+            ),
+        };
+        pairs.push((n, r));
+    }
+    let ln2 = Float::with_val(COUNT_W, MpConst::Log2);
+    let whole = |v: f64| v == v.trunc();
+    let mut t = Tally::default();
+    let mut worst: f64 = 0.0;
+    for (n, r) in pairs {
+        if !(n.is_finite() && r.is_finite()) {
+            continue;
+        }
+        for perm in [false, true] {
+            let v = if perm { npr(n, r) } else { ncr(n, r) };
+            if v.is_normal() || v.is_nan() {
+                continue;
+            }
+            t.cases += 1;
+            let name = format!("{}({n:e}, {r:e})", if perm { "nPr" } else { "nCr" });
+            let got = count_beyond(n, r, perm);
+            if got == Some((0.0, 0.0)) {
+                if !(whole(n) && whole(r) && n >= 0.0 && (r < 0.0 || r > n)) {
+                    t.fail(format!("{name} = 0, a count that isn't"));
+                }
+                continue;
+            }
+            let Some((l, neg)) = mp_count_log(n, r, perm) else {
+                t.fail(format!(
+                    "{name} = {got:?} at a pole of Γ (its double {v:e})"
+                ));
+                continue;
+            };
+            let Some((m, e)) = got else {
+                t.fail(format!("{name}: none, where MPFR has one"));
+                continue;
+            };
+            if (m < 0.0) != neg || !(1.0..2.0).contains(&m.abs()) {
+                t.fail(format!(
+                    "{name} = {m}·2^{e}: MPFR's sign is {}",
+                    if neg { '-' } else { '+' }
+                ));
+                continue;
+            }
+            if e.is_infinite() {
+                let lf = l.to_f64();
+                if !(lf.abs() > 1.4e14 && (lf > 0.0) == (e > 0.0)) {
+                    t.fail(format!("{name} = {m}·2^{e}, but its ln is {lf:e}"));
+                }
+                continue;
+            }
+            // |count|/2^e = e^(ln |count| − e·ln 2), which m should be.
+            let mut rest = Float::with_val(COUNT_W, &ln2 * e);
+            rest = Float::with_val(COUNT_W, &l - &rest);
+            let want = Float::with_val(P, rest.exp_ref());
+            let off =
+                Float::with_val(P, Float::with_val(P, m.abs()) - &want).to_f64() / f64::EPSILON;
+            worst = worst.max(off.abs());
+            if off.is_nan() || off.abs() > 4.0 {
+                t.fail(format!(
+                    "{name} = {m}·2^{e}, not {}·2^{e} ({off:.1} ulps)",
+                    want.to_f64()
+                ));
+            }
+        }
+    }
+    eprintln!(
+        "nCr, nPr beyond the doubles: {} cases, at most {worst:.2} ulps",
+        t.cases
+    );
+    report(&t);
+    assert!(t.cases > 400, "{} cases", t.cases);
     assert!(t.violations.is_empty(), "{:#?}", t.violations);
 }
 

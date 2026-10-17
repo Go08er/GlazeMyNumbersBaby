@@ -871,8 +871,9 @@ fn count(n: f64, r: f64, perm: bool) -> f64 {
 /// taken as its double, so a/nCr(x, 3) and ln nCr(x, 2) beside 0, where
 /// the count underflows to 0, were undefined, and nPr(x, 62)/x⁶² near
 /// −5.6·10¹⁴, both overflowing, was +∞ for about 1 (the first two found
-/// by `tests/crossfuzz.rs`).
-pub(crate) fn count_beyond(n: f64, r: f64, perm: bool) -> Option<(f64, f64)> {
+/// by `tests/crossfuzz.rs`). (Public for `tests/interval_oracle.rs`.)
+#[doc(hidden)]
+pub fn count_beyond(n: f64, r: f64, perm: bool) -> Option<(f64, f64)> {
     if !n.is_finite() || !r.is_finite() {
         return None;
     }

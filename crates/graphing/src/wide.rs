@@ -828,9 +828,7 @@ pub(crate) fn apply2(f: Fn2, a: Wide, b: Wide) -> Wide {
         // 0 was "can't tell", for 1: 2x is redone here, and was no
         // `normal` double), beyond the doubles too.
         Fn2::NCr | Fn2::NPr => match a.double().zip(b.double()) {
-            Some((x, y)) => count(f.apply(x, y), || {
-                fns::count_beyond(x, y, f == Fn2::NPr)
-            }),
+            Some((x, y)) => count(f.apply(x, y), || fns::count_beyond(x, y, f == Fn2::NPr)),
             None => Wide::Unknown,
         },
         Fn2::Min | Fn2::Max => match a.cmp(b) {
