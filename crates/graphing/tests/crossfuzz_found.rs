@@ -1265,7 +1265,7 @@ fn a_closed_range_end_names_where_it_is_taken() {
 /// evaluator and the reference both, where it is ∓1.5·10³²⁴ and the
 /// interval form encloses it past the doubles; and ln nCr(x, 2) at
 /// −5·10⁻³²⁴, of a count of 2.5·10⁻³²⁴, was undefined for −745.13. (Seed
-/// 1733; values from MPFR.)
+/// 1733; values: the doubles nearest MPFR's.)
 #[test]
 fn a_count_below_the_doubles_inside_an_expression_has_its_value() {
     let sliders = [("a", -2.5), ("b", 0.0)];
@@ -1297,7 +1297,7 @@ fn a_count_below_the_doubles_inside_an_expression_has_its_value() {
     }
     // nCr(x, 2) = 2⁻¹⁰⁷⁵·(1 + 2⁻¹⁰⁷⁴) there: its logarithm is −1075·ln 2.
     let g = "ln(nCr(x,2))";
-    let want = -745.133_219_101_941_207_623_5;
+    let want = -745.133_219_101_941_2;
     let v = scalar_in(g, -5e-324, deg);
     assert!(within(v, want, 1.0), "{g}: {v:e}");
     assert!(
@@ -1338,15 +1338,15 @@ fn a_count_below_the_doubles_inside_an_expression_has_its_value() {
 /// digits (x!/(x·(x − 1)!) at 10⁶ was 1.00000000000017; the tester's
 /// known-open table had it at Γ(171.5)); x!! past 300 was beyond even the
 /// extended range, so x!!/x!! was "can't tell". Each is its own value now,
-/// within an ulp or so. (Values from MPFR.)
+/// within an ulp or so. (Values: the doubles nearest MPFR's.)
 #[test]
 fn a_count_past_the_doubles_inside_an_expression_has_its_value() {
     let f = "nPr(x,62)/x^62";
     for (x, want) in [
-        (-562_341_325_190_349.06, 1.000_000_000_003_362_726_364),
-        (-559_999_999_999_999.5, 1.000_000_000_003_376_785_714),
-        (-560_000_000_000_000.25, 1.000_000_000_003_376_785_714),
-        (560_000_000_000_000.25, 0.999_999_999_996_623_214_285_7),
+        (-562_341_325_190_349.06, 1.000_000_000_003_362_6),
+        (-559_999_999_999_999.5, 1.000_000_000_003_376_9),
+        (-560_000_000_000_000.25, 1.000_000_000_003_376_9),
+        (560_000_000_000_000.25, 0.999_999_999_996_623_3),
     ] {
         let v = scalar(f, x);
         assert!(within(v, want, 2.0), "{f} at {x:e}: {v:e}, not {want:e}");
@@ -1365,13 +1365,9 @@ fn a_count_past_the_doubles_inside_an_expression_has_its_value() {
         ("x!/(x*(x-1)!)", 1e6, 1.0),
         ("x!/(x-1)!", 1e10 + 0.5, 1e10 + 0.5),
         ("(x+1)!/x!", 1000.5, 1001.5),
-        (
-            "1/(x-0.5)!*10^300",
-            172.0,
-            6.148_558_251_064_135_951_221e-11,
-        ),
+        ("1/(x-0.5)!*10^300", 172.0, 6.148_558_251_064_136e-11),
         // Γ(−199.5), below the doubles: it was "can't tell".
-        ("x!*10^300", -200.5, 5.636_995_190_178_567_052_651e-74),
+        ("x!*10^300", -200.5, 5.636_995_190_178_567e-74),
         ("x!!/x!!", 400.0, 1.0),
         ("x!!/(x-2)!!", 401.0, 401.0),
     ] {

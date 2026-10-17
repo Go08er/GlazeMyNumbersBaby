@@ -1469,7 +1469,12 @@ fn counts_beyond_the_doubles_are_within_a_few_ulps() {
             // Γ's quotient of any arguments.
             _ => (
                 s * 10f64.powf(rng.unit() * 20.0),
-                10f64.powf(rng.unit() * 20.0) * if rng.next() % 3 == 0 { -1.0 } else { 1.0 },
+                10f64.powf(rng.unit() * 20.0)
+                    * if rng.next().is_multiple_of(3) {
+                        -1.0
+                    } else {
+                        1.0
+                    },
             ),
         };
         pairs.push((n, r));
