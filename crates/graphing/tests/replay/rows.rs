@@ -2052,7 +2052,7 @@ fn parity(
                 Some(true) => {}
                 Some(false) => out
                     .problems
-                    .push(format!("{p}, but the domain is not symmetric about 0")),
+                    .push(format!("{p}, but the domain is not shown symmetric about 0")),
                 // No domain row to read it from: f's own structure may
                 // still say it (built of even and odd parts, f is defined
                 // at −x wherever it is at x). The fact f(−x) = ±f(x) alone

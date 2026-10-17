@@ -36,7 +36,9 @@
 //! `MUTANTS_FILTER=text` keeps the functions whose source contains `text`;
 //! `MUTANTS_LOG=file` writes every accepted mutant (tab separated: source,
 //! row, operator, what, setting); `MUTANTS_ROW=name` keeps one row's;
-//! `MUTANTS_PROGRESS=1` says each certificate as it is done.
+//! `MUTANTS_PROGRESS=1` says each certificate as it is done; `MUTANTS_SKIP=a;b`
+//! leaves those sources out (and says so); `MUTANTS_SLOW=seconds` names
+//! each mutant replay that takes longer.
 //!
 //! A list of more than `MUTANTS_ITEMS` items (16 unless set; `all`: no
 //! limit) has the operators that go item by item (an item removed, each
@@ -265,6 +267,10 @@ const NO_LINE_BESIDE_A_LEVEL: &str = "no oblique asymptote where the horizontal 
                                       both be, so the row rests on that row, not its own claims";
 const SAME_BY_PERIOD: &str = "a row complete over one period speaks for the line by f's period: \
                               over another window at least a period wide it says the same";
+const UNPLACED: &str = "a kink's point left unplaced: some point of the box, a weaker claim, \
+                        true of the one point it was";
+const JOINED_DROPPED: &str = "f′ continuous across the kink left unsaid: a weaker claim, true \
+                              still (an inflection that rested on it is no longer derived)";
 const NO_EXACT_FORM: &str = "the exact form is how the enclosure reads, not a narrower claim: \
                              without it the enclosure stands";
 
@@ -949,10 +955,74 @@ fn mutants_of(
         );
     }
 
-    // ---- the same row of another function
+    // ---- a kink's sides claimed wrong: what f⁽ᵏ⁾ does on each side of a
+    // kink box (`KinkSides`), its sign, its point, joined. (A premise, not
+    // the row: refused by its check, whatever the row says.)
+    let claims = b["cert"]["claims"].as_array().cloned().unwrap_or_default();
+    for (i, c) in claims.iter().enumerate() {
+        let Some(k) = c.get("KinkSides") else {
+            continue;
+        };
+        let mut variants: Vec<(String, Value, Option<&'static str>)> = Vec::new();
+        for side in ["left", "right"] {
+            for sign in ["Neg", "Zero", "Pos"] {
+                if k[side] != sign {
+                    let mut v = k.clone();
+                    v[side] = json!(sign);
+                    variants.push((format!("{side} called {sign}"), v, None));
+                }
+            }
+        }
+        let joined = k["joined"].as_bool().unwrap_or(false);
+        match k["at"].as_f64() {
+            Some(at) => {
+                for q in [at.next_up(), at.next_down()] {
+                    let mut v = k.clone();
+                    v["at"] = num(q);
+                    variants.push((format!("placed at {q:e}, not {at:e}"), v, None));
+                }
+                let mut v = k.clone();
+                v["at"] = Value::Null;
+                v["joined"] = json!(false);
+                variants.push(("left unplaced".into(), v, Some(UNPLACED)));
+            }
+            None => {
+                let (a, bb) = (
+                    replay::r(&k["x"]["a"]).unwrap_or(0.0),
+                    replay::r(&k["x"]["b"]).unwrap_or(0.0),
+                );
+                let mid = a / 2.0 + bb / 2.0;
+                let mut v = k.clone();
+                v["at"] = num(mid);
+                variants.push((format!("placed at {mid:e}"), v, None));
+            }
+        }
+        let mut v = k.clone();
+        v["joined"] = json!(!joined);
+        variants.push((
+            if joined { "joined dropped" } else { "joined" }.into(),
+            v,
+            joined.then_some(JOINED_DROPPED),
+        ));
+        for (what, new, benign) in variants {
+            let k = k.clone();
+            push(
+                "kink claim changed",
+                format!("{}: {what}", serde_json::to_string(&k).unwrap_or_default()),
+                benign,
+                &|v: &mut Value| body_mut(v, row)["cert"]["claims"][i] = json!({"KinkSides": new.clone()}),
+            );
+        }
+    }
+
+    // ---- the same row of another function (one of at most a thousand
+    // claims: each is checked on f afresh, and five thousand bands of f″
+    // of 1/(1 + e^(x/1000)), checked on 1/(1 + e^x) + 10⁻⁷, took the pool
+    // run past an hour)
     if let Some(o) = other
         && let Some((_, ob)) = body(o, row)
         && (ob["value"] != value || ob["cert"]["covers"] != covers)
+        && ob["cert"]["claims"].as_array().is_some_and(|c| c.len() <= 1000)
     {
         push(
             "row of another function",
@@ -1157,7 +1227,7 @@ fn mutate(src: &str, unit: TrigUnit, other: Option<&Value>, run: &mut Run) {
             // back: no setting for the mutant that only withholds them.)
             let settings: &[usize] = match (row, m.op) {
                 ("domain", "claims withheld") => &[0, 2],
-                (_, "claims withheld") => &[0, 1, 2],
+                (_, "claims withheld" | "kink claim changed") => &[0, 1, 2],
                 ("domain", _) => &[0, 2, 3],
                 _ => &[0, 1, 2, 3],
             };
@@ -1214,9 +1284,20 @@ fn mutate(src: &str, unit: TrigUnit, other: Option<&Value>, run: &mut Run) {
 /// returns the run.
 fn run(fs: Vec<(String, TrigUnit)>) -> Run {
     let filter = std::env::var("MUTANTS_FILTER").ok();
+    // (MUTANTS_SKIP=a;b: those sources left out, said so in the report.)
+    let skip: Vec<String> = std::env::var("MUTANTS_SKIP")
+        .map(|v| v.split(';').map(str::to_string).collect())
+        .unwrap_or_default();
     let fs: Vec<(String, TrigUnit)> = fs
         .into_iter()
         .filter(|(s, _)| filter.as_ref().is_none_or(|f| s.contains(f.as_str())))
+        .filter(|(s, _)| {
+            let out = skip.contains(s);
+            if out {
+                println!("skipped (MUTANTS_SKIP): {s}");
+            }
+            !out
+        })
         .collect();
     // (Each function's "other", for its rows: the one two along.)
     let threads = certificates::threads();

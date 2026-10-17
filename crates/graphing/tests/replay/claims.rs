@@ -1041,7 +1041,7 @@ fn singular_sign(
     k: usize,
 ) -> Option<KinkSign> {
     let mut bases = Vec::new();
-    singular_args(fx, e, &mut bases);
+    singular_args_below(fx, e, k as i64, &mut bases);
     let mut vanishing = 0;
     for u in &bases {
         let s = fx.series(u, lo, hi, 1);
@@ -1123,8 +1123,9 @@ fn kink_sides(
     {
         return Outcome::new(Class::Refuted, "the kink's point is not inside its box");
     }
-    if joined && at.is_none() {
-        return Outcome::new(Class::Refuted, "joined at no point");
+    // (Joined: f′ continuous across the point, said of f″'s sides only.)
+    if joined && (at.is_none() || k != 2) {
+        return Outcome::new(Class::Refuted, "joined, but not of f″ at a point");
     }
     if unmodelled(&fx.f) {
         return Outcome::new(
@@ -1186,7 +1187,7 @@ fn singular_sides(
 ) -> Option<(KinkSign, KinkSign)> {
     use super::algebra::{constant_ratio, derivative_tree_k};
     let mut bases = Vec::new();
-    singular_args(fx, e, &mut bases);
+    singular_args_below(fx, e, k as i64, &mut bases);
     let mut u0: Option<Expr> = None;
     for u in &bases {
         let s = fx.series(u, lo, hi, 1);
@@ -1410,45 +1411,45 @@ fn sides_of(
 /// (√u, ∛u, a typed or written non-integer exponent): f′ is unbounded
 /// where u = 0.
 fn singular_args(fx: &Fx, e: &Expr, out: &mut Vec<Expr>) {
-    let r = |b: &Expr| -> Option<f64> {
+    singular_args_below(fx, e, 1, out);
+}
+
+/// The bases u (varying with x) of f's non-integer powers u^s with
+/// s < `bound` (√u and ∛u among them): for bound 2, where f″ is singular
+/// (x^(4/3) at 0).
+fn singular_args_below(fx: &Fx, e: &Expr, bound: i64, out: &mut Vec<Expr>) {
+    // (Compared exactly: p/q below the bound though it rounds to it.)
+    let below = |b: &Expr| -> bool {
         if contains_x(b) {
-            return None;
+            return false;
         }
         if let Some((p, q)) = super::eval::written_rational(b, &fx.lits) {
-            if q == 1 {
-                return None;
-            }
-            // (Below 1 exactly, though p/q may round to 1.)
-            let r = rug::Rational::from((p, q));
-            let v = r.to_f64();
-            return Some(if r < 1 && v >= 1.0 {
-                1.0f64.next_down()
-            } else {
-                v
-            });
+            return q != 1 && rug::Rational::from((p, q)) < bound;
         }
         let v = fx.series(b, 0.0, 0.0, 0)[0].clone();
-        (v.is_point() && !v.lo.is_integer()).then(|| v.lo.to_f64())
+        v.is_point() && !v.lo.is_integer() && v.lo < bound
     };
     match e {
-        Expr::Bin(BinOp::Pow, u, b) if contains_x(u) && r(b).is_some_and(|r| r < 1.0) => {
+        Expr::Bin(BinOp::Pow, u, b) if contains_x(u) && below(b) => {
             if !out.contains(u) {
                 out.push((**u).clone());
             }
-            singular_args(fx, u, out);
+            singular_args_below(fx, u, bound, out);
         }
         Expr::Call(Func::Sqrt | Func::Cbrt, a) if contains_x(&a[0]) => {
             if !out.contains(&a[0]) {
                 out.push(a[0].clone());
             }
-            singular_args(fx, &a[0], out);
+            singular_args_below(fx, &a[0], bound, out);
         }
-        Expr::Neg(a) | Expr::Degrees(a) => singular_args(fx, a, out),
+        Expr::Neg(a) | Expr::Degrees(a) => singular_args_below(fx, a, bound, out),
         Expr::Bin(_, a, b) => {
-            singular_args(fx, a, out);
-            singular_args(fx, b, out);
+            singular_args_below(fx, a, bound, out);
+            singular_args_below(fx, b, bound, out);
         }
-        Expr::Call(_, args) => args.iter().for_each(|v| singular_args(fx, v, out)),
+        Expr::Call(_, args) => args
+            .iter()
+            .for_each(|v| singular_args_below(fx, v, bound, out)),
         _ => {}
     }
 }

@@ -924,6 +924,16 @@ pub fn eval(e: &Expr, x: &S, n: usize, ctx: &Ctx<'_>) -> S {
             if *op == BinOp::Pow {
                 return pow(a, b, x, n, ctx);
             }
+            // A constant the exact reader works out is that rational,
+            // enclosed: typed decimals as typed. (Intervals of each term
+            // of 0.1 + 0.2 − 0.3 + 10^(−400) straddle 0 about 10^(−400);
+            // x to 1 over it, 10^400 exactly, was refuted at 0. FUZZ's seed
+            // 1409.)
+            if !contains_x(e)
+                && let Some(q) = super::exact::eval(e, None, ctx.lits, ctx.vars, ctx.unit)
+            {
+                return se::constant(iv::ratio(q.numer(), q.denom()), n);
+            }
             let (ea, eb) = (eval(a, x, n, ctx), eval(b, x, n, ctx));
             match op {
                 BinOp::Add => se::add(&ea, &eb),
