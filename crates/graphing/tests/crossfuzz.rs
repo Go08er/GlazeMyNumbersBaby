@@ -277,12 +277,6 @@ fn texts(case: &Case) -> String {
     )
 }
 
-/// A count (n!, n!!, nCr, nPr) in the case.
-fn counts(case: &Case, _: &Finding) -> bool {
-    let t = texts(case);
-    t.contains("nCr(") || t.contains("nPr(") || t.contains('!')
-}
-
 /// A circular function whose argument doesn't vary with x and holds a
 /// whole number of 16 digits or more as typed: the number itself, or
 /// arithmetic on numbers alone around it (cos(|n|), which is cos(n)).
@@ -323,11 +317,6 @@ fn any(_: &Case, _: &Finding) -> bool {
 /// A row that doesn't follow only because claims are left open.
 fn not_refuted(_: &Case, f: &Finding) -> bool {
     !f.detail.contains("refuted")
-}
-
-/// A count in the case, and two finite values in the finding.
-fn counts_and_two_values(case: &Case, f: &Finding) -> bool {
-    counts(case, f) && !f.detail.contains("NaN") && !f.detail.contains("Undef")
 }
 
 /// A ratio of long integers written in the case, and a compiled NaN.
@@ -385,19 +374,6 @@ const KNOWN: &[(&str, Matches, &str)] = &[
         not_refuted,
         "a row the replay can't derive: its claims are left open, or what it rests on is not \
          shown (a piece of the domain defined, the domain's symmetry under a parity)",
-    ),
-    // wide.rs: Γ in extended range keeps about 13 digits.
-    (
-        "pt/scalar-vs-reference",
-        counts_and_two_values,
-        "a factorial just past the doubles (Γ(171.5)) is kept to about 13 digits in extended \
-         range: 1/(x − 0.5)! at 171 differs from the reference from there on (wide.rs)",
-    ),
-    (
-        "panel/evaluator-disagrees",
-        counts_and_two_values,
-        "a factorial just past the doubles (Γ(171.5)) is kept to about 13 digits in extended \
-         range: 1/(x − 0.5)! at 171 differs from the reference from there on (wide.rs)",
     ),
     // wide.rs pow_mag, functions.rs pow_ratio: |t·e| ≥ 2⁵³ > |t·(e + log₂ m)|.
     (

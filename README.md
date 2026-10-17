@@ -331,13 +331,13 @@ CI also runs checks that need more than `cargo test --workspace`:
   and causes found but not fixed are listed in its
   known-open table and counted in every run. Those in the engine are all in
   the compiled evaluator, the one that draws (the panel and tracing read
-  enclosures, which are right in each): Γ past a double's range
-  keeps about 13 digits; a power with a written ratio past 2⁵³ as its
-  exponent is undefined where its value is 0; and a root of a non-whole
-  degree can be tens of ulps off next to zero. Known but not in the table:
-  a count past the doubles inside a larger expression is taken as infinite
-  there (`nPr(x,62)/x^62` near −5.6·10¹⁴ is +∞ where its value is about 1;
-  its enclosure is wide but right). The table's other entries
+  enclosures, which are right in each): a power with a written ratio
+  past 2⁵³ as its exponent is undefined where its value is 0; and a root
+  of a non-whole degree can be tens of ulps off next to zero. (A count,
+  n!, n!!, nCr or nPr, past the doubles or below them inside a larger
+  expression has its own value in extended range, within an ulp or two
+  of MPFR's, not its double's 0 or ∞: `nPr(x,62)/x^62` near −5.6·10¹⁴ is
+  about 1.) The table's other entries
   are a documented limit (a circular function of a typed whole number of
   16 or more digits is taken at the number's double) and the tester's own
   reference evaluator on subnormal operands, where the compiled value is
