@@ -88,6 +88,24 @@ fn safe(r: f64) -> Option<Wide> {
         .then(|| Wide::new(r))
 }
 
+/// A count (n!, n!!, nCr, nPr) of doubles whose double is `r`: that double
+/// where it is a normal one (as rounded there), undefined where it is NaN
+/// (a pole), and else, where it is 0, a subnormal or ±∞, its own value
+/// from `beyond` (`functions::count_beyond`: an exact 0 only for a count
+/// that is 0).
+fn count(r: f64, beyond: impl FnOnce() -> Option<(f64, f64)>) -> Wide {
+    if r.is_normal() {
+        Wide::new(r)
+    } else if r.is_nan() {
+        Wide::Undef
+    } else {
+        match beyond() {
+            Some((m, e)) => Wide::norm(m, e),
+            None => Wide::Undef,
+        }
+    }
+}
+
 /// The result of an operation on operands that aren't both values:
 /// undefined if either is undefined.
 fn other(a: Wide, b: Wide) -> Wide {
@@ -690,18 +708,13 @@ pub(crate) fn apply1(f: Fn1, w: Wide) -> Wide {
                 // An integer: a pole if negative, beyond the range if not.
                 return if m < 0.0 { Wide::Undef } else { Wide::HUGE };
             }
-            let r = f.apply(v);
-            if r.is_nan() {
-                return Wide::Undef;
-            }
-            if let Some(s) = safe(r) {
-                return s;
-            }
-            match f {
-                Factorial if v > 0.0 => Wide::new(fns::ln_gamma(v + 1.0)).exp(),
-                _ if r == f64::INFINITY => Wide::HUGE,
-                _ => Wide::Unknown,
-            }
+            count(f.apply(v), || {
+                if f == Factorial {
+                    fns::factorial_beyond(v)
+                } else {
+                    fns::double_factorial_beyond(v)
+                }
+            })
         }
         _ => Wide::new(f.apply(v)),
     }
@@ -813,9 +826,11 @@ pub(crate) fn apply2(f: Fn2, a: Wide, b: Wide) -> Wide {
         // Two doubles, a subnormal one too: the count of the doubles,
         // which `functions` has wherever it is defined (nCr(7, 2x) next to
         // 0 was "can't tell", for 1: 2x is redone here, and was no
-        // `normal` double).
+        // `normal` double), beyond the doubles too.
         Fn2::NCr | Fn2::NPr => match a.double().zip(b.double()) {
-            Some((x, y)) => Wide::new(f.apply(x, y)),
+            Some((x, y)) => count(f.apply(x, y), || {
+                fns::count_beyond(x, y, f == Fn2::NPr)
+            }),
             None => Wide::Unknown,
         },
         Fn2::Min | Fn2::Max => match a.cmp(b) {

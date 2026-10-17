@@ -370,6 +370,31 @@ pub fn rational(e: &Expr) -> Option<(i32, i32)> {
     crate::compile::syntactic_rational(e, crate::compile::Reading::FaceValue)
 }
 
+/// A count (n!, n!!, nCr, nPr) of doubles whose double is `r`, as the
+/// compiled program's extended range has it (`wide::count`): that double
+/// where it is a normal one, undefined where NaN, and else, where it is 0,
+/// a subnormal or ±∞, its own value from `beyond` (m·2^e, e = ±∞ for a
+/// magnitude beyond even that; `functions::count_beyond`), 0 only for a
+/// count that is 0. (Its double alone made a/nCr(x, 3) and ln nCr(x, 2)
+/// undefined beside 0, where the count is below the doubles: found by
+/// `tests/crossfuzz.rs`.)
+fn count(r: f64, beyond: impl FnOnce() -> Option<(f64, f64)>) -> R {
+    if r.is_normal() {
+        return R::V(Xf::of(r));
+    }
+    if r.is_nan() {
+        return R::Undef;
+    }
+    match beyond() {
+        None => R::Undef,
+        Some((m, _)) if m == 0.0 => R::V(Xf::ZERO),
+        Some((_, e)) if e == f64::INFINITY => R::Unknown,
+        Some((m, e)) if e == f64::NEG_INFINITY => R::V(Xf::lost_of(m.signum())),
+        Some((m, e)) if e.is_finite() => settle(Xf::norm(m, e as i64)),
+        Some(_) => R::Unknown,
+    }
+}
+
 pub fn one(r: f64) -> R {
     if r.is_nan() {
         R::Undef
@@ -1079,11 +1104,12 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
             if !a.normal() {
                 return R::Unknown;
             }
-            one(if f == Factorial {
-                fns::factorial(a.f())
+            let t = a.f();
+            if f == Factorial {
+                count(fns::factorial(t), || fns::factorial_beyond(t))
             } else {
-                fns::double_factorial(a.f())
-            })
+                count(fns::double_factorial(t), || fns::double_factorial_beyond(t))
+            }
         }
         Root => root_x(a, v[1]),
         LogBase => {
@@ -1108,11 +1134,11 @@ pub fn call(f: Func, v: &[Xf], u: TrigUnit) -> R {
                 return R::Unknown;
             }
             let (p, q) = (a.f(), v[1].f());
-            one(match f {
-                Mod => fns::modulo(p, q),
-                NCr => fns::ncr(p, q),
-                _ => fns::npr(p, q),
-            })
+            match f {
+                Mod => one(fns::modulo(p, q)),
+                NCr => count(fns::ncr(p, q), || fns::count_beyond(p, q, false)),
+                _ => count(fns::npr(p, q), || fns::count_beyond(p, q, true)),
+            }
         }
         Min | Max => {
             // (Compared as numbers, not as the doubles standing in for them:

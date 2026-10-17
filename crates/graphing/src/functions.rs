@@ -620,16 +620,6 @@ pub fn gamma(x: f64) -> f64 {
     cm::tgamma(x)
 }
 
-/// ln Γ(x), correctly rounded (CORE-MATH), where Γ(x) > 0; NaN where it is
-/// negative or at a pole. It never overflows where Γ itself does (beyond
-/// x ≈ 171.6).
-pub(crate) fn ln_gamma(x: f64) -> f64 {
-    if x.is_nan() || (x <= 0.0 && (x == x.trunc() || x.floor() % 2.0 != 0.0)) {
-        return f64::NAN;
-    }
-    cm::lgamma(x)
-}
-
 /// `n!` extended to the reals as Γ(n+1).
 #[inline]
 pub fn factorial(n: f64) -> f64 {
@@ -872,6 +862,100 @@ fn count(n: f64, r: f64, perm: bool) -> f64 {
     }
 }
 
+/// nCr (nPr, `perm`) of two doubles where [`count`] has it as 0, a
+/// subnormal or ±∞: its own value, m·2^e with 1 ≤ |m| < 2 (e = ±∞ for a
+/// magnitude beyond even that range), and (0, 0) only for a count that is
+/// 0 (C(2, 3)); `None` at a pole of Γ. Within an ulp or two of m, for the
+/// evaluations that hold values beyond the doubles (`wide::apply2`, the
+/// reference evaluator): a count past them inside a larger expression was
+/// taken as its double, so a/nCr(x, 3) and ln nCr(x, 2) beside 0, where
+/// the count underflows to 0, were undefined, and nPr(x, 62)/x⁶² near
+/// −5.6·10¹⁴, both overflowing, was +∞ for about 1 (the first two found
+/// by `tests/crossfuzz.rs`).
+pub(crate) fn count_beyond(n: f64, r: f64, perm: bool) -> Option<(f64, f64)> {
+    if !n.is_finite() || !r.is_finite() {
+        return None;
+    }
+    let whole = |v: f64| v == v.trunc();
+    if whole(n) && whole(r) && n >= 0.0 {
+        // Counted exactly in doubles, so 0 only outside 0 ≤ r ≤ n; past
+        // them, through Γ (no argument of it below 1 here).
+        if r < 0.0 || r > n {
+            return Some((0.0, 0.0));
+        }
+        return gamma_count(n, r, perm);
+    }
+    if whole(r) && (0.0..=SMALL_COUNT).contains(&r) {
+        // The polynomial ([`falling`]); a whole n < 0 is a hole in it.
+        if whole(n) {
+            return None;
+        }
+        return Some(falling_far(n, r as u32, perm));
+    }
+    gamma_count(n, r, perm)
+}
+
+/// n! (Γ(n + 1)) of a double where [`factorial`] has it as 0, a subnormal
+/// or +∞, as [`count_beyond`] has a count: nPr(n, n). Within an ulp or two
+/// (`wide::apply1` took e^(ln Γ(n + 1)) with ln Γ a double, about 13
+/// digits: x!/(x·(x − 1)!) at 10⁶ was 1.00000000000017).
+pub(crate) fn factorial_beyond(n: f64) -> Option<(f64, f64)> {
+    gamma_count(n, n, true)
+}
+
+/// n!! of a double where [`double_factorial`] has it as +∞ (a whole n past
+/// 300): 2^k·k! for n = 2k, and (2k + 1)!/(2^k·k!) = nPr(2k + 1, k + 1)/2^k
+/// for n = 2k + 1. `None` for any other n.
+pub(crate) fn double_factorial_beyond(n: f64) -> Option<(f64, f64)> {
+    if !(n.is_finite() && n == n.trunc() && n > 300.0) {
+        return None;
+    }
+    // (Exact: every double from 2⁵³ on is even.)
+    let k = (n / 2.0).floor();
+    if n % 2.0 == 0.0 {
+        let (m, e) = gamma_count(k, k, true)?;
+        Some((m, e + k))
+    } else {
+        let (m, e) = gamma_count(n, k + 1.0, true)?;
+        Some((m, e - k))
+    }
+}
+
+/// [`falling`]'s n(n − 1)…(n − k + 1) (over k! for nCr) for an n no whole
+/// number, as m·2^e: each factor n − i exact (a double-double), each
+/// product in double-double with its binary exponent kept apart, so
+/// nothing overflows or underflows, and m within about half an ulp.
+fn falling_far(n: f64, k: u32, perm: bool) -> (f64, f64) {
+    // x = m·2^s with 1 ≤ |m.hi| < 2, for x.hi finite and nonzero. (A
+    // nonzero x.lo is within half an ulp of a normal x.hi, so its scaling
+    // is in range.)
+    let split = |x: Dd| -> (Dd, f64) {
+        let (hi, s) = crate::wide::frexp(x.hi);
+        let lo = if x.lo == 0.0 {
+            0.0
+        } else {
+            crate::wide::ldexp(x.lo, -s)
+        };
+        (Dd { hi, lo }, s)
+    };
+    let (mut m, mut e) = (Dd::of(1.0), 0.0);
+    for i in 0..k {
+        let (x, s) = split(Dd::of(n).add(Dd::of(-f64::from(i))));
+        let (p, t) = split(m.mul(x));
+        (m, e) = (p, e + s + t);
+    }
+    if !perm {
+        let mut f = Dd::of(1.0);
+        for i in 2..=k {
+            f = f.mul_f(f64::from(i));
+        }
+        let (f, s) = split(f);
+        let (q, t) = split(m.div(f));
+        (m, e) = (q, e - s + t);
+    }
+    (m.hi, e)
+}
+
 /// a + b exactly in doubles?
 fn sum_is_exact(a: f64, b: f64) -> bool {
     let s = a + b;
@@ -926,6 +1010,13 @@ const STIRLING_FROM: f64 = 16.0;
 /// An argument of Γ beyond which ln Γ of it alone (above 2²⁰⁰·138) is
 /// only a sign: a count that holds one is beyond the extended range.
 const FAR_ARGUMENT: f64 = 1.606_938_044_258_990_3e60;
+
+/// The largest |ln| of a count whose mantissa is kept (2⁴⁷): ln Γ in
+/// double-double is within about 2⁻¹⁰⁰ of itself, an ulp of the count's
+/// mantissa here. Past it a count is only a size, beyond the extended
+/// range (its binary exponent would near 2⁵³, where `Wide` keeps no
+/// mantissa either).
+const FAR_LOG: f64 = 140_737_488_355_328.0;
 
 /// a·n + b·r + c for a, b, c ∈ {−1, 0, 1}, as a double-double (exact but
 /// for a rounding at 2⁻¹⁰⁶ of it).
@@ -1159,7 +1250,7 @@ pub(crate) fn gamma_count(n: f64, r: f64, perm: bool) -> Option<(f64, f64)> {
             },
         ));
     }
-    if log.hi.abs() > 1e9 {
+    if log.hi.abs() > FAR_LOG {
         let far = if log.hi > 0.0 {
             f64::INFINITY
         } else {
