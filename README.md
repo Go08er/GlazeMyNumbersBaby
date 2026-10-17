@@ -289,12 +289,17 @@ CI also runs checks that need more than `cargo test --workspace`:
   withheld, a kink's sides changed, a row borrowed from another function or
   made up with no claims), and the replay must refuse each result, with the
   rest of the certificate there, withheld, or with every genuine claim
-  given to the row. CI runs a fixed few (2,502 mutants, none accepted).
-  Over the corpus it accepts 17 of 41,418 and over the pool 73 of 147,845,
-  each a true statement the replay proved (a row borrowed from another
-  function that happens to hold, a monotone piece cut shorter). On the
-  same 201 corpus functions the checker before review 19's fixes accepted
-  4,410 of 39,611.
+  given to the row. CI runs a fixed few (3,004 mutants, none accepted).
+  The long runs (204 corpus functions, 41,384 mutants; 607 pool functions,
+  148,188) accept 17 and 16: each a true statement the replay proved (a
+  row borrowed from another function that happens to hold, an enclosure
+  narrowed onto the number it holds), reviewed by hand in a table with the
+  reason it is true. A long run fails on an accepted mutant not in the
+  table and on a table entry it did not accept, so the table can't rot;
+  an end of a partial monotone piece moved strictly inward is
+  content-preserving by construction (a sub-piece of a monotone piece) and
+  counted apart, not tabled. On 201 corpus functions the checker before
+  review 19's fixes accepted 4,410 of 39,611.
 - **Random cross-checking** (`--test crossfuzz`, same feature): the checks
   above take ordinary functions, shifted and scaled. This one generates
   expressions aimed at the families the review rounds kept finding bugs in

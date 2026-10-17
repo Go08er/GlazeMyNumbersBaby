@@ -33,9 +33,24 @@
 //!     --include-ignored --nocapture                                           # the corpus and the pool
 //! ```
 //!
+//! The long runs assert more than an empty accepted list. A few mutants are
+//! accepted because the mutated row is a true statement (a row borrowed
+//! from another function that happens to hold; a proven enclosure narrowed
+//! onto the number it holds): each is reviewed by hand in [`KNOWN`], with
+//! the reason it is true. A long run fails on an accepted mutant that is not
+//! there, and on an entry there that it did not accept (stale), so that the
+//! table can neither miss a new finding nor keep a fixed one. (With
+//! `MUTANTS_FILTER`, `_ROW`, `_SKIP` or `_ITEMS` set, only the first holds.)
+//! The fixed few have no table: none is accepted. An end of a partial
+//! monotone piece moved strictly inward is content-preserving by
+//! construction ([`DRAWN_IN`]), decided from the mutation's numbers alone.
+//!
 //! `MUTANTS_FILTER=text` keeps the functions whose source contains `text`;
-//! `MUTANTS_LOG=file` writes every accepted mutant (tab separated: source,
-//! row, operator, what, setting); `MUTANTS_ROW=name` keeps one row's;
+//! `MUTANTS_LOG=file` writes every accepted mutant, tabled or not (tab
+//! separated: source, row, operator, what, setting) to `file.<run>`
+//! (`file.corpus`, `file.pool`, `file.a_fixed_few`), one file per test, so
+//! that tests run together don't truncate each other's; `MUTANTS_ROW=name`
+//! keeps one row's;
 //! `MUTANTS_PROGRESS=1` says each certificate as it is done; `MUTANTS_SKIP=a;b`
 //! leaves those sources out (and says so); `MUTANTS_SLOW=seconds` names
 //! each mutant replay that takes longer.
@@ -1548,7 +1563,155 @@ struct Known {
     why: &'static str,
 }
 
-const KNOWN: &[Known] = &[];
+// (Reasons shared by several entries.)
+const ZERO_LIMIT: &str = "f → 0 on each side, as the borrowed row's enclosures (each holding 0, \
+                          looks like 0) say";
+const NO_ZEROS_NO_POLES: &str = "f is continuous and positive everywhere (≥ 1 or ≥ 10¹³−1), so \
+                                 \"none\" is true";
+const ATAN_ROW_ALONE: &str = "the row is the genuine one, which is true; without its claims the \
+                              replay re-derives it from f alone (f′ < 0 on each side of the pole)";
+const CSCH_LIKE_1_OVER: &str = "csch(x−1000) and 1/(x−c) both have range ℝ∖{0} (pieces open at \
+                                an end enclosing 0) and tend to 0 on each side";
+
+#[rustfmt::skip]
+const KNOWN: &[Known] = &[
+    // ---- the corpus: rows borrowed from another function that are true of f
+    Known { run: "corpus", src: "10^16*(1.0000000000000001-1)+x [Radians]", row: "y_intercept",
+        op: "row of another function",
+        what: r#"the y_intercept row of "y=10^16*(1.0000000000000001-0.99999999999999999)+x""#,
+        why: "f(0) = 1, which the borrowed enclosure [0, 3.33] holds" },
+    Known { run: "corpus", src: "10^17*(0.1+0.2-0.3)+x [Radians]", row: "x_intercepts",
+        op: "row of another function",
+        what: r#"the x_intercepts row of "y=1.0000000000000001*x-1*x""#,
+        why: "f = x (the constant is 0 exactly): zero at 0 alone; the borrowed row lists 0 as a partial list over points" },
+    Known { run: "corpus", src: "10^17*(0.1+0.2-0.3)+x [Radians]", row: "y_intercept",
+        op: "row of another function",
+        what: r#"the y_intercept row of "y=1.0000000000000001*x-1*x""#,
+        why: "f(0) = 0, the borrowed row's value exactly" },
+    Known { run: "corpus", src: "10^17*(0.1+0.2-0.3)+x [Radians]", row: "y_intercept",
+        op: "number moved far",
+        what: "value: [-1.1102230246251565e1, 5.551115123125783e0] moved by 1",
+        why: "f(0) = 0 exactly, and the moved enclosure [-10.1, 6.55] still holds it" },
+    Known { run: "corpus", src: "1/(x-1000000000000001) [Radians]", row: "horizontal",
+        op: "row of another function",
+        what: r#"the horizontal row of "y=csch(x-1000)""#,
+        why: ZERO_LIMIT },
+    Known { run: "corpus", src: "1/(x-1000000000000001) [Radians]", row: "range",
+        op: "row of another function",
+        what: r#"the range row of "y=csch(x-1000)""#,
+        why: CSCH_LIKE_1_OVER },
+    Known { run: "corpus", src: "cos(x)^2/cos(x)^2 [Radians]", row: "y_intercept",
+        op: "row of another function",
+        what: r#"the y_intercept row of "y=2*exp(-(x-1522756)^2/(1/1000000))+exp(-x^2)""#,
+        why: "f(0) = 1, which the borrowed [1, 1.0000000000000002] holds" },
+    Known { run: "corpus", src: "ln(exp(1000000000000000)^4)-4000000000000000 [Radians]", row: "extrema",
+        op: "row of another function",
+        what: r#"the extrema row of "y=cos(x)^2/cos(x)^2""#,
+        why: "f is the zero function; the borrowed row is no extremum within [-16, 16], as the genuine row (none) says" },
+    Known { run: "corpus", src: "ln(exp(1000000000000000)^4)-4000000000000000 [Radians]", row: "inflections",
+        op: "row of another function",
+        what: r#"the inflections row of "y=cos(x)^2/cos(x)^2""#,
+        why: "f is the zero function; no inflection within [-16, 16], as the genuine row (none) says" },
+    Known { run: "corpus", src: "ln(exp(1000000000000000)^4)-4000000000000000 [Radians]", row: "parity",
+        op: "row of another function",
+        what: r#"the parity row of "y=tan(x)""#,
+        why: "the zero function on the whole line is odd (f(−x) = −f(x) = 0), as well as even" },
+    Known { run: "corpus", src: "sin(x)+10000000000000 [Radians]", row: "vertical",
+        op: "row of another function",
+        what: r#"the vertical row of "y=exp(-(x-100)^2)+exp(-x^2)""#,
+        why: "f is continuous on the line: no vertical asymptote, as the borrowed \"none\" says" },
+    Known { run: "corpus", src: "sin(x)+10000000000000 [Radians]", row: "x_intercepts",
+        op: "row of another function",
+        what: r#"the x_intercepts row of "y=exp(-(x-100)^2)+exp(-x^2)""#,
+        why: "sin x + 10¹³ ≥ 10¹³ − 1 > 0: no zeros, as the borrowed \"none\" says" },
+    Known { run: "corpus", src: "sqrt(exp(-(x+800)))*exp((x+800)/2) [Radians]", row: "y_intercept",
+        op: "row of another function",
+        what: r#"the y_intercept row of "y=exp(-1000)*(x+1)*exp(500)*exp(500)""#,
+        why: "f(0) = 1, which the borrowed [0, 1.9e108] holds" },
+    Known { run: "corpus", src: "x^(0.1+0.9) [Radians]", row: "y_intercept",
+        op: "row of another function",
+        what: r#"the y_intercept row of "y=10^16*(1.0000000000000001-1)+x""#,
+        why: "f(0) = 0, which the borrowed [0, 2.22] holds" },
+    Known { run: "corpus", src: "(x-1000000000)/(x-1000000000.0625) [Radians]", row: "y_intercept",
+        op: "row of another function",
+        what: r#"the y_intercept row of "y=sqrt(exp(-(x+800)))*exp((x+800)/2)""#,
+        why: "f(0) = 0.99999999993…, which the borrowed [0, 1.16e12] holds" },
+    Known { run: "corpus", src: "(x-1000000)^2+1/10000000+(x/1000000000)^2 [Radians]", row: "inflections",
+        op: "row of another function",
+        what: r#"the inflections row of "y=atan(tan(x))+1""#,
+        why: "f is a quadratic with positive leading coefficient (f″ > 0): no inflection within [-16, 16], as the borrowed row (none over that window) says" },
+    Known { run: "corpus", src: "(x-1000000)^2+1+(x/1000000000)^2 [Radians]", row: "inflections",
+        op: "row of another function",
+        what: r#"the inflections row of "y=atan(tan(x))+1""#,
+        why: "f is a quadratic with positive leading coefficient (f″ > 0): no inflection within [-16, 16], as the borrowed row (none over that window) says" },
+
+    // ---- the pool
+    Known { run: "pool", src: "atan(1/x) [Degrees]", row: "monotonicity",
+        op: "claims withheld",
+        what: "the row as it is, with none of its claims",
+        why: ATAN_ROW_ALONE },
+    Known { run: "pool", src: "atan(1/x) [Grads]", row: "monotonicity",
+        op: "claims withheld",
+        what: "the row as it is, with none of its claims",
+        why: ATAN_ROW_ALONE },
+    Known { run: "pool", src: "csch(x) [Degrees]", row: "monotonicity",
+        op: "row of another function",
+        what: r#"the monotonicity row of "y=atan(1/x)""#,
+        why: "csch decreases on (−∞, 0) and on (0, ∞), as atan(1/x) does" },
+    Known { run: "pool", src: "csch(x) [Grads]", row: "monotonicity",
+        op: "row of another function",
+        what: r#"the monotonicity row of "y=atan(1/x)""#,
+        why: "csch decreases on (−∞, 0) and on (0, ∞), as atan(1/x) does" },
+    Known { run: "pool", src: "csch(x) [Degrees]", row: "horizontal",
+        op: "row of another function",
+        what: r#"the horizontal row of "y=atan(1/x)""#,
+        why: ZERO_LIMIT },
+    Known { run: "pool", src: "csch(x) [Grads]", row: "horizontal",
+        op: "row of another function",
+        what: r#"the horizontal row of "y=atan(1/x)""#,
+        why: ZERO_LIMIT },
+    Known { run: "pool", src: "csch((x/1000)) [Radians]", row: "horizontal",
+        op: "row of another function",
+        what: r#"the horizontal row of "y=atan(1/(x-1000))""#,
+        why: ZERO_LIMIT },
+    Known { run: "pool", src: "(x-1)*(x-2)*(x+3) [Radians]", row: "monotonicity",
+        op: "row of another function",
+        what: r#"the monotonicity row of "y=((x-1)*(x-2)*(x+3))+0.0000001""#,
+        why: "adding a constant leaves f′ = 3x²−7 and so the turns at ±√(7/3), which the borrowed end enclosures hold" },
+    Known { run: "pool", src: "(e^x-x)+0.0000001 [Radians]", row: "monotonicity",
+        op: "row of another function",
+        what: r#"the monotonicity row of "y=e^(x/1000)-(x/1000)""#,
+        why: "f′ = e^x − 1 turns at 0, decreasing before and increasing after, as the borrowed row (turn enclosure [-1.8e-12, 1.4e-12] holds 0) says" },
+    Known { run: "pool", src: "(sin(x)^2+1)+0.0000001 [Radians]", row: "x_intercepts",
+        op: "row of another function",
+        what: r#"the x_intercepts row of "y=sin((x/1000))^2+1""#,
+        why: NO_ZEROS_NO_POLES },
+    Known { run: "pool", src: "(sin(x)^2+1)+0.0000001 [Radians]", row: "vertical",
+        op: "row of another function",
+        what: r#"the vertical row of "y=sin((x/1000))^2+1""#,
+        why: NO_ZEROS_NO_POLES },
+    Known { run: "pool", src: "sqrt((x/1000)) [Radians]", row: "y_intercept",
+        op: "row of another function",
+        what: r#"the y_intercept row of "y=e^(x-1000)""#,
+        why: "f(0) = 0, which the borrowed [0, 5e-324] holds" },
+    Known { run: "pool", src: "(x/1000)^4-(x/1000)^2 [Radians]", row: "y_intercept",
+        op: "row of another function",
+        what: r#"the y_intercept row of "y=(x-1000)*e^(x-1000)""#,
+        why: "f(0) = 0, which the borrowed [-4.9e-321, 0] holds" },
+    // Exact matches on the digits below: the statement is true of these numbers.
+    Known { run: "pool", src: "(1/x)+0.0000001 [Radians]", row: "horizontal",
+        op: "number moved to the next item's",
+        what: r#"[0].y: [9.999999999999998e-8, 1.0000000000000001e-7] to {"hi":1.0000000000000001e-7,"lo":1e-7}"#,
+        why: "the limit is 10⁻⁷ exactly, which lies between the double 1e-7 (just below it) and the one above, 1.0000000000000001e-7: the narrowed enclosure holds it" },
+    Known { run: "pool", src: "(1/(x-2))+0.0000001 [Radians]", row: "horizontal",
+        op: "number moved to the next item's",
+        what: r#"[0].y: [9.999999999999998e-8, 1.0000000000000001e-7] to {"hi":1.0000000000000001e-7,"lo":1e-7}"#,
+        why: "the limit is 10⁻⁷ exactly, which lies between the double 1e-7 (just below it) and the one above, 1.0000000000000001e-7: the narrowed enclosure holds it" },
+    Known { run: "pool", src: "1/((x-1000)^2+(x-1000)+1) [Radians]", row: "inflections",
+        op: "number moved far",
+        what: "[0].x: [9.99e2, 9.99e2] moved by 1",
+        why: "the list is partial, with inflections at 999 and 1000 and f = 1 at both (f″ ∝ u(u+1), u = x−1000): item 0 moved onto (1000, 1), the other inflection" },
+];
 
 /// Fails on an accepted mutant not in [`KNOWN`] and, in a run unfiltered
 /// (no `MUTANTS_FILTER`, `MUTANTS_ROW`, `MUTANTS_SKIP`, `MUTANTS_ITEMS`),
@@ -1620,4 +1783,3 @@ fn the_pool_mutated_is_refused() {
     assert!(r.functions >= 450, "only {} mutated", r.functions);
     assert_only_known("pool", &r);
 }
-
