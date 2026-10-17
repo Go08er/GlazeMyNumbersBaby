@@ -114,10 +114,12 @@ jobs:
           # cross-checking tester's short fixed run, here with the replay and
           # the checker's own MPFR evaluation among the views it compares
           # (its long run is `-- --ignored long_run`, not run here);
-          # crossfuzz_found keeps the bugs it found fixed.
+          # crossfuzz_found keeps the bugs it found fixed. certify_mutants
+          # mutates a fixed few certificates' rows every way that changes
+          # what they say, and fails if the replay accepts one.
           nix develop -c cargo test --locked -p graphing --features mpfr-oracle \
             --test certify_replay --test interval_oracle --test simplify_rules \
-            --test crossfuzz --test crossfuzz_found
+            --test crossfuzz --test crossfuzz_found --test certify_mutants
       - name: Clippy (all targets, warnings are errors)
         run: |
           nix develop -c cargo clippy --workspace --all-targets --locked -- -D warnings

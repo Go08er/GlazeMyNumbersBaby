@@ -273,7 +273,7 @@ CI also runs checks that need more than `cargo test --workspace`:
   claim is *strong* when it re-proves it on the function's own tree, *weak*
   when it can only prove it on a tree the certifier supplied (the
   simplifier's form, the derivatives) or check it at sample points, so it
-  rests on the simplifier: today 74,386 strong, 172 weak. A claim refuted
+  rests on the simplifier: today 74,389 strong, 172 weak. A claim refuted
   or left open, or a row that doesn't follow from its claims, fails it.
   The checker has no Γ of its own, so it doesn't model `n!`, `n!!`, `nCr`
   or `nPr`: a function that uses one anywhere, a constant like `5!`
@@ -281,6 +281,20 @@ CI also runs checks that need more than `cargo test --workspace`:
   neither the replayed corpus nor the pool contains one. Those functions'
   rows rest on the certifier alone; the handful the review rounds turned up
   are checked against a hand-written truth table instead.
+- **Certificate mutation** (`--test certify_mutants`, same feature): plants
+  find a hole in the checker one at a time; this goes through them by
+  construction. For each genuine certificate and each row it applies every
+  operator that changes what the row says (an item removed, moved or
+  changed, a piece cut or joined, a status or scope changed, claims
+  withheld, a kink's sides changed, a row borrowed from another function or
+  made up with no claims), and the replay must refuse each result, with the
+  rest of the certificate there, withheld, or with every genuine claim
+  given to the row. CI runs a fixed few (2,502 mutants, none accepted).
+  Over the corpus it accepts 17 of 41,418 and over the pool 73 of 147,845,
+  each a true statement the replay proved (a row borrowed from another
+  function that happens to hold, a monotone piece cut shorter). On the
+  same 201 corpus functions the checker before review 19's fixes accepted
+  4,410 of 39,611.
 - **Random cross-checking** (`--test crossfuzz`, same feature): the checks
   above take ordinary functions, shifted and scaled. This one generates
   expressions aimed at the families the review rounds kept finding bugs in
@@ -306,9 +320,7 @@ CI also runs checks that need more than `cargo test --workspace`:
   engine fault it found is a test in `crossfuzz_found`. What it can't
   show: a claim the checker can neither prove nor refute (about one case
   in thirty has one) is set aside, not failed, so a false claim the checker
-  can't decide would pass; a claim of a kind the checker doesn't read yet
-  (`KinkSides`, until it has the rule) is taken out before the replay and
-  counted, the rows resting on it left open; what the samples suggest but
+  can't decide would pass; what the samples suggest but
   no proof bears out (a turn as flat as x⁴'s, a pole without MPFR, a
   shorter period, an oblique line not approached) is counted, not found;
   and causes found but not fixed are listed in its
@@ -317,7 +329,10 @@ CI also runs checks that need more than `cargo test --workspace`:
   enclosures, which are right in each): Γ past a double's range
   keeps about 13 digits; a power with a written ratio past 2⁵³ as its
   exponent is undefined where its value is 0; and a root of a non-whole
-  degree can be tens of ulps off next to zero. The table's other entries
+  degree can be tens of ulps off next to zero. Known but not in the table:
+  a count past the doubles inside a larger expression is taken as infinite
+  there (`nPr(x,62)/x^62` near −5.6·10¹⁴ is +∞ where its value is about 1;
+  its enclosure is wide but right). The table's other entries
   are a documented limit (a circular function of a typed whole number of
   16 or more digits is taken at the number's double) and the tester's own
   reference evaluator on subnormal operands, where the compiled value is
