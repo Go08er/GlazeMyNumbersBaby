@@ -1318,6 +1318,21 @@ fn a_count_below_the_doubles_inside_an_expression_has_its_value() {
             reference("x/nCr(x,3)", x)
         );
     }
+    // Times a factor that brings it back: nCr(2⁻¹⁰⁷⁴, 3) is 2⁻¹⁰⁷⁴/3 to
+    // every digit a double holds. (By 2¹⁰⁰⁰, a double, or 2¹¹⁰⁰, past
+    // them, it was 0, not 2⁻⁷⁴/3 or 2²⁶/3.)
+    for (src, want) in [
+        ("nCr(x,3)*2^1000", 2f64.powi(-74) / 3.0),
+        ("nCr(x,3)*2^1100", 2f64.powi(26) / 3.0),
+    ] {
+        let v = scalar(src, 5e-324);
+        assert!(within(v, want, 2.0), "{src}: {v:e}, not {want:e}");
+        assert!(
+            matches!(reference(src, 5e-324), R::V(r) if within(r.f(), want, 2.0)),
+            "{src}: {:?}",
+            reference(src, 5e-324)
+        );
+    }
     // A count that is 0, or at a pole of Γ, has no reciprocal or logarithm.
     for (src, x) in [
         ("1/nCr(x,3)", 2.0),

@@ -333,17 +333,17 @@ CI also runs checks that need more than `cargo test --workspace`:
   the compiled evaluator, the one that draws (the panel and tracing read
   enclosures, which are right in each): a power with a written ratio
   past 2⁵³ as its exponent is undefined where its value is 0; and a root
-  of a non-whole degree can be tens of ulps off next to zero. (A count,
-  n!, n!!, nCr or nPr, past the doubles or below them inside a larger
-  expression has its own value in extended range, within an ulp or two
-  of MPFR's, not its double's 0 or ∞: `nPr(x,62)/x^62` near −5.6·10¹⁴ is
-  about 1.) The table's other entries
+  of a non-whole degree can be tens of ulps off next to zero. The table's
+  other entries
   are a documented limit (a circular function of a typed whole number of
   16 or more digits is taken at the number's double) and the tester's own
   reference evaluator on subnormal operands, where the compiled value is
   the closer one.
 - **MPFR oracles** (same feature): `interval_oracle` checks every interval
-  operation's enclosure against MPFR at 256 bits on adversarial boxes,
+  operation's enclosure against MPFR at 256 bits on adversarial boxes, and
+  the value a count (n!, n!!, nCr, nPr) past the doubles or below them
+  has inside a larger expression, within an ulp or two (not its double's
+  0 or ∞: `nPr(x,62)/x^62` near −5.6·10¹⁴ is about 1);
   `simplify_rules` checks every simplifier rule on both sides wherever its
   left side is defined.
 - **`bits`** (`cargo run --release -p graphing --example bits`): every
