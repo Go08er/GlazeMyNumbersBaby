@@ -6,7 +6,7 @@
 //!
 //! The broad tests (`examples/sweep.rs`, `examples/oracle.rs`, the certify
 //! corpus and its replay) take ordinary functions, shifted and scaled. The
-//! review rounds 12–18 found bugs in a few families they don't reach;
+//! review rounds 12–19 found bugs in a few families they don't reach;
 //! this generates expressions biased toward those (`crossfuzz/generate.rs`):
 //!
 //! 1. **typed-literal semantics**: decimals near an integer and very long
@@ -21,7 +21,20 @@
 //! 4. **display**: numbers a hair apart;
 //! 5. **two spellings of one function** (`p/q` and the ratio reduced,
 //!    `x^(a+b)` and `x^c`, `u − u + f` and `f`, literal arithmetic folded
-//!    by hand),
+//!    by hand);
+//! 6. **steps of exact literals a hair off a jump**
+//!    (`5 + ceil(1.00000000000000000001)`, `round(2.49999999999999999999)`,
+//!    `sign(10^(−400))`, `mod(x, 1.00000000000000000001)`), mostly off, as
+//!    a term, a factor, an exponent, a root's degree;
+//! 7. **narrow kinks and dents at a point no double holds**
+//!    (`min((x − sin 1)^(2/1000003), 0.01)` and with x added, |x − 1/3|,
+//!    (x − √2)·|x − √2|, max(x − c, c − x, k), (x − π/7)^(2/3));
+//! 8. **exact values on the edge of where a function turns**, whose
+//!    doubles are on the other side (a count beside a pole of Γ, an
+//!    exponent's or a root degree's parity, a quarter turn in degrees or
+//!    grads, ln and log beside 1, arcsin, arccos, arcosh, artanh, arcsec
+//!    beside ±1, a divisor exactly tiny, ties of min and max, mod at a
+//!    multiple),
 //!
 //! each inside ordinary blocks, under a random number-precision setting
 //! (5, 14, 15, 16, 20 digits or off), with and without sliders, mostly in
@@ -55,7 +68,15 @@
 //!
 //! # What a run reports
 //!
-//! * **Findings**: two views disagree. They fail the run.
+//! * **Findings**: two views disagree. They fail the run. A verdict is
+//!   decided by a view that proves things: f's interval enclosure over
+//!   the box in question, MPFR (the replay's evaluator), or the replay's
+//!   own proofs. What a finite set of samples or a fixed step suggests
+//!   (the oracle's checks judge f sampled in doubles: a pole where f
+//!   grows, no turn where f is lower beside one, P/2 a period, a zero
+//!   missing where f changes sign) is a finding only where such a view
+//!   bears it out over the stretch it is about, and counted otherwise
+//!   (`views::Proofs::stands`).
 //! * **Found before and left open** ([`KNOWN`]): disagreements of a cause
 //!   already found and written down, that isn't fixed here (a documented
 //!   limit of the doubles, the replay's own limits, which are another's
@@ -216,10 +237,10 @@ struct Done {
 }
 
 /// The groups of checks a case gets: every one, but one function typed
-/// under two settings (two more analyses) only for the literal family and
-/// a third of the rest.
+/// under two settings (two more analyses) only for the families of exact
+/// literals and a third of the rest.
 fn groups_of(case: &Case) -> u32 {
-    if case.family == "literal" || case.index.is_multiple_of(3) {
+    if matches!(case.family, "literal" | "steps" | "edges") || case.index.is_multiple_of(3) {
         group::ALL
     } else {
         group::ALL & !group::DIGITS
@@ -353,11 +374,17 @@ const KNOWN: &[(&str, Matches, &str)] = &[
          bears out no fact tested at points), a root of a varying degree where the radicand \
          may be negative, a number past i64 in a simplifier fact, a gap over 64 doubles)",
     ),
+    // (A row problem that says something against the row from what the
+    // claims prove is a finding: `replay/row-against`, and
+    // `replay/row-narrower` for a value listed more narrowly than they
+    // show. Only those that leave a row open are listed here: views.rs,
+    // `mp::row_problem`.)
     (
         "replay/row-problem",
         not_refuted,
         "a row the replay can't derive: its claims are left open, or what it rests on is not \
-         shown (a piece of the domain defined, the domain's symmetry under a parity)",
+         shown (a piece of the domain defined, the domain's symmetry under a parity; anything \
+         resting on a KinkSides claim, which the replay doesn't read yet)",
     ),
     // functions::ncr and npr (Γ's quotient) in doubles: ∞·0 far out and
     // an underflow to 0 give NaN where the quotient has a value, which the
@@ -942,11 +969,50 @@ fn the_generator_is_deterministic_and_parses() {
         pairs += usize::from(a.pair.is_some());
     }
     assert_ne!(generate::case(7, 3).expr, generate::case(8, 3).expr);
-    for f in ["literal", "definedness", "counting", "display", "pair"] {
+    for f in [
+        "literal",
+        "definedness",
+        "counting",
+        "display",
+        "pair",
+        "steps",
+        "kinks",
+        "edges",
+    ] {
         assert!(
             families.get(f).copied().unwrap_or(0) >= 20,
             "{f}: {families:?}"
         );
+    }
+    // The new families' shapes turn up: each steps case has a step of an
+    // exact literal or of x, mostly off and under a limit too; each kinks
+    // case has x less a centre no double holds, and the narrow valley is
+    // among them; edges come in degrees and in grads.
+    let of = |f: &str| -> Vec<Case> {
+        (0..600)
+            .map(|i| generate::case(7, i))
+            .filter(|c| c.family == f)
+            .collect()
+    };
+    let steps = of("steps");
+    assert!(steps.iter().all(|c| {
+        let t = c.expr.text();
+        ["floor(", "ceil(", "round(", "sign(", "mod("]
+            .iter()
+            .any(|s| t.contains(s))
+    }));
+    let off = steps.iter().filter(|c| c.digits.is_none()).count();
+    assert!(
+        off * 2 > steps.len() && off < steps.len(),
+        "{off} of {} steps cases off",
+        steps.len()
+    );
+    let kinks = of("kinks");
+    assert!(kinks.iter().all(|c| c.expr.text().contains("x-(")));
+    assert!(kinks.iter().any(|c| c.expr.text().contains("^(2/1000003)")));
+    let edges = of("edges");
+    for unit in [TrigUnit::Degrees, TrigUnit::Grads] {
+        assert!(edges.iter().any(|c| c.unit == unit), "no edge in {unit:?}");
     }
     assert_eq!(digits.len(), 6, "{digits:?}");
     assert!(
@@ -1104,11 +1170,17 @@ fn planted_false_answers_are_findings_where_proven() {
                 k.y_intercept = "0".into();
             }),
         ),
-        // That f is unbounded beside 0 no enclosure proves.
+        // That f is unbounded beside 0 no enclosure proves, and no
+        // values; the replay's own rule does (a divisor with a zero
+        // there, the numerator away from 0), where it is built in.
         (
             "1/x",
-            "panel/vertical-asymptote-missing-not-proven",
-            false,
+            if cfg!(feature = "mpfr-oracle") {
+                "panel/vertical-asymptote-missing"
+            } else {
+                "panel/vertical-asymptote-missing-not-proven"
+            },
+            cfg!(feature = "mpfr-oracle"),
             Box::new(|k| {
                 k.data.vertical_asymptotes.clear();
                 k.data.excluded.clear();
@@ -1179,6 +1251,63 @@ fn planted_false_answers_are_findings_where_proven() {
         let out = views::panel_planted(text, &set, &|_| {});
         assert!(out.findings.is_empty(), "y={text}: {:?}", out.findings);
     }
+}
+
+/// What the replay says of a row is a finding where it is against the row
+/// from what the claims prove, and known-open where it leaves the row
+/// open; and a certificate with claims the replay doesn't read is
+/// replayed without them.
+#[test]
+#[cfg(feature = "mpfr-oracle")]
+fn row_problems_are_found_by_what_they_say() {
+    for (text, class) in [
+        // The right limit of 3 + (x − (1 + 2·10⁻¹⁵))·e⁻ˣ + (x − x) at 14
+        // digits, as main certified it.
+        (
+            "horizontal: the limit at +∞: [2.9999999999999996e0, 2.9999999999999996e0] is \
+             narrower than the claims show",
+            "replay/row-narrower",
+        ),
+        (
+            "monotonicity: f′ is negative on [1e0, 2e0], inside a piece listed increasing",
+            "replay/row-against",
+        ),
+        (
+            "extrema: maximum at [1e0, 1e0] proven by the claims but not listed",
+            "replay/row-against",
+        ),
+        (
+            "vertical: f is unbounded at 0e0, but no asymptote is listed there",
+            "replay/row-against",
+        ),
+        (
+            "extrema: maximum at [8.4e-1, 8.5e-1] listed but not proven by the claims",
+            "replay/row-problem",
+        ),
+        (
+            "monotonicity: its claims leave [8.4e-1, 8.5e-1] of the region Kink undecided",
+            "replay/row-problem",
+        ),
+        (
+            "domain: f is not shown defined on its piece: not shown valid on [0e0, 1e0]",
+            "replay/row-problem",
+        ),
+    ] {
+        assert_eq!(views::row_problem(text), class, "{text}");
+    }
+    let cert: serde_json::Value = serde_json::from_str(
+        r#"{"extrema": {"Certified": {"value": [], "cert": {"claims": [
+            {"KinkSides": {"order": 1}}, {"Kink": {"x": [0, 1]}}, {"KinkSides": {"order": 2}}
+        ]}}}, "range": {"Certified": {"cert": {"claims": [{"Defined": [0, 1]}]}}}}"#,
+    )
+    .expect("JSON");
+    let (rest, n) = views::without_unread(&cert);
+    assert_eq!(n, 2);
+    assert_eq!(
+        rest["extrema"]["Certified"]["cert"]["claims"],
+        serde_json::json!([{"Kink": {"x": [0, 1]}}])
+    );
+    assert_eq!(rest["range"], cert["range"]);
 }
 
 /// A positive radicand gives a genuine open neighborhood at x=2, however

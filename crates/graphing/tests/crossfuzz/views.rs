@@ -19,6 +19,16 @@
 //! oracle's checks, `examples/oracle/checks.rs`, and d against c),
 //! `replay/` (e), `digits/` (one function typed under two settings),
 //! `pair/` (two spellings of one function), `plot/` (f against a, b and c).
+//!
+//! A verdict is decided by a view that proves things: (c) over the box in
+//! question, MPFR over it, or the replay's own proofs. Doubles at points
+//! are witnesses of values only: that f is undefined, unbounded, without
+//! a zero, a turn or a neighbourhood near a point, or periodic, no finite
+//! set of samples and no fixed step shows (review 19, R19-L-02: f
+//! undefined 2⁻²⁹⁹ below 2 is no proof that √(x − 2 + 10⁻¹⁰⁰) has no
+//! derivative at 2). Where the proving views don't decide, what was seen
+//! is counted, not failed ([`Proofs::stands`], `mp::beside`,
+//! `mp::limit_refuted`).
 
 use std::collections::BTreeMap;
 
@@ -179,7 +189,7 @@ pub fn replay_child() {
 }
 
 #[cfg(feature = "mpfr-oracle")]
-pub use mp::Beside;
+pub use mp::{Beside, row_problem, without_unread};
 
 /// What MPFR proves of `y = text` on the reals beside x ([`Beside`]);
 /// `None` where there is no certificate to read the function from.
@@ -1331,7 +1341,7 @@ mod mp {
 
     /// `json` without its claims of kind [`UNREAD`], and how many they
     /// were.
-    fn without_unread(json: &serde_json::Value) -> (serde_json::Value, usize) {
+    pub fn without_unread(json: &serde_json::Value) -> (serde_json::Value, usize) {
         use serde_json::Value;
         fn strip(v: &mut Value, n: &mut usize) {
             match v {
@@ -1373,7 +1383,7 @@ mod mp {
     /// 3 + (x − (1 + 2·10⁻¹⁵))·e⁻ˣ + (x − x) at 14 digits, listed as one
     /// double beside 3). A text not known to leave the row open is taken
     /// as against it.
-    fn row_problem(text: &str) -> &'static str {
+    pub fn row_problem(text: &str) -> &'static str {
         const OPEN: &[&str] = &[
             "not decided",
             "undecided",
@@ -1913,8 +1923,10 @@ impl<'a> Proofs<'a> {
                 None => Proven,
             },
             // A sample above (below) both ends of a stretch: a turn
-            // inside, where f is continuous on the stretch and the three
-            // values are f's.
+            // inside, where the three values are f's and f is continuous
+            // on the stretch; a strict one (the panel lists strict turns:
+            // docs/ti-conventions.md) where f″ keeps the sign that bends
+            // it so all along.
             "extremum-missing" => {
                 let (xl, xr) = f.span;
                 let max = f.detail.starts_with("maximum");
