@@ -1131,9 +1131,10 @@ fn planted_false_answers_are_findings_where_proven() {
                 k.y_intercept = "0".into();
             }),
         ),
-        // f(1) = 1 and f(−1) = 1, which an odd f can't have.
+        // f(x) = f(−x) > 0, which an odd f can't have. (Not x²: the three
+        // samples kept are the smallest, where x² is 0 or a subnormal.)
         (
-            "x^2",
+            "x^2+1",
             "panel/parity-witness",
             true,
             Box::new(|k| k.parity = graphing::analysis::Parity::Odd),
