@@ -387,6 +387,70 @@ fn walk(fx: &Fx, claims: &[Claim], k: usize) -> Walk {
                 });
                 w.boxes.push(*x);
             }
+            // What f⁽ᵏ⁾ does on each side of a kink (its claim checked so):
+            // a strict sign wherever it exists is a stretch of that sign (f
+            // continuous, so strictly monotone there for f′), 0 a flat
+            // stretch. Placed at a double: the two stretches meet there,
+            // a zero of the walk; a change of sign of f″ across it is an
+            // inflection only when f′ is continuous there (`joined`), else
+            // a corner, which no complete row of inflections gets past.
+            // Not placed: one sign either side is one stretch over the box;
+            // two are a zero enclosed by it (a turn somewhere inside).
+            Claim::KinkSides {
+                x,
+                at,
+                order,
+                left,
+                right,
+                joined,
+            } if *order == k => {
+                use super::KinkSign;
+                let strict = |s: &KinkSign| match s {
+                    KinkSign::Pos => Some(true),
+                    KinkSign::Neg => Some(false),
+                    KinkSign::Zero => None,
+                };
+                match at {
+                    Some(p) => {
+                        for (a, b, side) in [(x.0, *p, left), (*p, x.1, right)] {
+                            match strict(side) {
+                                Some(pos) => w.signs.push((a, b, pos)),
+                                None => w.flat.push((a, b)),
+                            }
+                        }
+                        w.zeros.push(Zero {
+                            at: Enc { lo: *p, hi: *p },
+                            left: strict(left),
+                            right: strict(right),
+                            kink: !(k == 2 && *joined),
+                        });
+                        w.boxes.push(*x);
+                    }
+                    None => match (strict(left), strict(right)) {
+                        (Some(a), Some(b)) if a == b => {
+                            w.signs.push((x.0, x.1, a));
+                            w.boxes.push(*x);
+                        }
+                        (Some(a), Some(b)) => {
+                            w.zeros.push(Zero {
+                                at: Enc { lo: x.0, hi: x.1 },
+                                left: Some(a),
+                                right: Some(b),
+                                kink: true,
+                            });
+                            w.boxes.push(*x);
+                        }
+                        (None, None) => {
+                            w.flat.push(*x);
+                            w.boxes.push(*x);
+                        }
+                        // (0 on one side, a sign on the other, the point
+                        // unknown: nothing to place. The box stays
+                        // undecided.)
+                        _ => {}
+                    },
+                }
+            }
             Claim::Kink(x) if k > 0 => {
                 // Continuity on a box says nothing about derivative events
                 // inside it. Only a placed, one-sided kink or the original

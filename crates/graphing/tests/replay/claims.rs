@@ -5,7 +5,7 @@
 use super::eval::{Lits, at_path, contains_x, written_rational};
 use super::iv::{self, Iv, Unit};
 use super::series::{self as se};
-use super::{B, Claim, Class, Fx, Outcome, Side, Subject, Via, exact, growth};
+use super::{B, Claim, Class, Fx, KinkSign, Outcome, Side, Subject, Via, exact, growth};
 use graphing::ast::{BinOp, Constant, Expr, Func};
 
 /// The precisions tried in turn (bits).
@@ -710,6 +710,14 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
         Claim::Unbounded { near, at } => unbounded(fx, *near, *at),
         Claim::Kink(x) => defined(fx, *x, Some(true)),
         Claim::KinkAt { x, at, left, right } => kink_at(fx, *x, *at, *left, *right),
+        Claim::KinkSides {
+            x,
+            at,
+            order,
+            left,
+            right,
+            joined,
+        } => kink_sides(fx, *x, *at, *order, *left, *right, *joined),
         Claim::Bounded { near, at, lo, hi } => {
             if !(near.0 <= at.0 && at.1 <= near.1) {
                 return Outcome::new(
@@ -759,8 +767,14 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
     }
 }
 
-/// The kink arguments of `e`, from the spec: the u of each |u| and the
-/// a − b of each min(a, b), max(a, b) that varies with x.
+/// a − b, for two arguments of a min or max.
+fn difference(a: &Expr, b: &Expr) -> Expr {
+    Expr::Bin(BinOp::Sub, Box::new(a.clone()), Box::new(b.clone()))
+}
+
+/// The kink arguments of `e`, from the spec: the u of each |u| that varies
+/// with x, and a − b for each two arguments a, b (a first) of each min and
+/// each max with an argument that varies with x, however many it has.
 fn kink_args(e: &Expr, out: &mut Vec<Expr>) {
     match e {
         Expr::Call(Func::Abs, a) if contains_x(&a[0]) => {
@@ -769,10 +783,14 @@ fn kink_args(e: &Expr, out: &mut Vec<Expr>) {
             }
             kink_args(&a[0], out);
         }
-        Expr::Call(Func::Min | Func::Max, a) if a.len() == 2 && a.iter().any(contains_x) => {
-            let d = Expr::Bin(BinOp::Sub, Box::new(a[0].clone()), Box::new(a[1].clone()));
-            if !out.contains(&d) {
-                out.push(d);
+        Expr::Call(Func::Min | Func::Max, a) if a.len() >= 2 && a.iter().any(contains_x) => {
+            for i in 0..a.len() {
+                for j in i + 1..a.len() {
+                    let d = difference(&a[i], &a[j]);
+                    if !out.contains(&d) {
+                        out.push(d);
+                    }
+                }
             }
             a.iter().for_each(|v| kink_args(v, out));
         }
@@ -804,15 +822,31 @@ fn one_sided(e: &Expr, sides: &[(Expr, bool, bool)], left: bool) -> Option<Expr>
                 Expr::Neg(Box::new(inner))
             }
         }
-        Expr::Call(f @ (Func::Min | Func::Max), a) if a.len() == 2 && a.iter().any(contains_x) => {
-            let d = Expr::Bin(BinOp::Sub, Box::new(a[0].clone()), Box::new(a[1].clone()));
-            let a_bigger = sign(&d)?;
-            let pick = if a_bigger == (*f == Func::Max) {
-                &a[0]
-            } else {
-                &a[1]
+        Expr::Call(f @ (Func::Min | Func::Max), a) if a.len() >= 2 && a.iter().any(contains_x) => {
+            // The argument greater (a max) or less (a min) than each other
+            // one on this side, by the sign of each a_i − a_j (i < j).
+            let max = *f == Func::Max;
+            let beats = |i: usize, j: usize| -> Option<bool> {
+                let (d, flip) = if i < j {
+                    (difference(&a[i], &a[j]), false)
+                } else {
+                    (difference(&a[j], &a[i]), true)
+                };
+                let i_greater = sign(&d)? != flip;
+                Some(i_greater == max)
             };
-            one_sided(pick, sides, left)?
+            let mut pick = None;
+            for i in 0..a.len() {
+                let mut all = true;
+                for j in (0..a.len()).filter(|j| *j != i) {
+                    all &= beats(i, j)?;
+                }
+                if all {
+                    pick = Some(i);
+                    break;
+                }
+            }
+            one_sided(&a[pick?], sides, left)?
         }
         Expr::Neg(a) => Expr::Neg(Box::new(one_sided(a, sides, left)?)),
         Expr::Degrees(a) => Expr::Degrees(Box::new(one_sided(a, sides, left)?)),
@@ -921,6 +955,294 @@ fn kink_at(fx: &Fx, x: B, at: f64, left: bool, right: bool) -> Outcome {
         V::No(w) => Outcome::new(Class::Refuted, w),
         V::Unknown(w) => Outcome::new(Class::Unconfirmed, w),
     }
+}
+
+/// Whether `e` uses a step (floor, ceil, round, sign, mod): where it may
+/// jump, nothing smooth is read off its form.
+fn has_steps(e: &Expr) -> bool {
+    match e {
+        Expr::Call(Func::Floor | Func::Ceil | Func::Round | Func::Sign | Func::Mod, _) => true,
+        Expr::Neg(a) | Expr::Degrees(a) => has_steps(a),
+        Expr::Bin(_, a, b) => has_steps(a) || has_steps(b),
+        Expr::Call(_, args) => args.iter().any(has_steps),
+        _ => false,
+    }
+}
+
+/// e⁽ᵏ⁾'s sign on [lo, hi], less the point `p` when it is given (an end of
+/// the box): e is k times continuously differentiable on the closed box
+/// and e⁽ᵏ⁾'s enclosure over it is strictly signed, or exactly 0; or, by
+/// Taylor at p, e⁽ᵏ⁾, …, e⁽ᵐ⁻¹⁾ are exactly 0 at p and e⁽ᵐ⁾'s enclosure
+/// over the box is strictly signed (m ≤ k + 3), so off p
+/// e⁽ᵏ⁾(t) = e⁽ᵐ⁾(ξ)·(t − p)ᵐ⁻ᵏ/(m − k)!: e⁽ᵐ⁾'s sign after p, and that
+/// sign times (−1)ᵐ⁻ᵏ before it. (k = 0: a kink argument's sign.)
+fn smooth_sign(fx: &Fx, e: &Expr, lo: f64, hi: f64, p: Option<f64>, k: usize) -> Option<KinkSign> {
+    let s = fx.series(e, lo, hi, k);
+    if valid_f(&s, k) {
+        let c = &s[k];
+        if c.gt(0.0) {
+            return Some(KinkSign::Pos);
+        }
+        if c.lt(0.0) {
+            return Some(KinkSign::Neg);
+        }
+        if c.is_exactly(0.0) {
+            return Some(KinkSign::Zero);
+        }
+    }
+    let p = p?;
+    for m in k + 1..=k + 3 {
+        let s = fx.series(e, lo, hi, m);
+        if !valid_f(&s, m) {
+            continue;
+        }
+        let there = fx.series(e, p, p, m - 1);
+        if !valid_f(&there, m - 1) || !(k..m).all(|j| there[j].is_exactly(0.0)) {
+            continue;
+        }
+        let up = if s[m].gt(0.0) {
+            true
+        } else if s[m].lt(0.0) {
+            false
+        } else {
+            continue;
+        };
+        let after = p == lo;
+        let pos = if after { up } else { up == ((m - k) % 2 == 0) };
+        return Some(if pos { KinkSign::Pos } else { KinkSign::Neg });
+    }
+    None
+}
+
+/// e⁽ᵏ⁾'s strict sign on [lo, hi] wherever it exists, where e's only
+/// failures to be smooth there are its fractional powers' bases at 0
+/// (u^r, r < 1, √u, ∛u: f′ unbounded there): each such base is strictly
+/// signed over the box, or vanishes at the one point `p` (an end, exactly
+/// 0 there) or, with no `p`, once inside the box, strictly monotone over
+/// it with opposite signs at its ends. Then e⁽ᵏ⁾'s enclosure over the box
+/// (where it exists: [`singular_at`]'s reading) strictly signed is its
+/// sign at each point but that one.
+fn singular_sign(fx: &Fx, e: &Expr, lo: f64, hi: f64, p: Option<f64>, k: usize) -> Option<KinkSign> {
+    let mut bases = Vec::new();
+    singular_args(fx, e, &mut bases);
+    let mut vanishing = 0;
+    for u in &bases {
+        let s = fx.series(u, lo, hi, 1);
+        if s[0].def && (s[0].gt(0.0) || s[0].lt(0.0)) {
+            continue;
+        }
+        if !(s[0].cont && s[1].def && s[1].bounded() && s[1].ne0()) {
+            return None;
+        }
+        let at = |x: f64| fx.series(u, x, x, 0)[0].clone();
+        let once = match p {
+            Some(p) => {
+                let v = at(p);
+                v.def && v.is_exactly(0.0)
+            }
+            None => {
+                let (a, b) = (at(lo), at(hi));
+                (a.gt(0.0) && b.lt(0.0)) || (a.lt(0.0) && b.gt(0.0))
+            }
+        };
+        if !once {
+            return None;
+        }
+        vanishing += 1;
+    }
+    if vanishing == 0 || (p.is_none() && vanishing > 1) {
+        return None;
+    }
+    let c = fx.series(e, lo, hi, k)[k].clone();
+    if c.empty {
+        None
+    } else if c.gt(0.0) {
+        Some(KinkSign::Pos)
+    } else if c.lt(0.0) {
+        Some(KinkSign::Neg)
+    } else {
+        None
+    }
+}
+
+/// `KinkSides`, from its statement. f is continuous on x = [l, r] (the
+/// `Kink` check). The kink arguments of f's tree (each |u|'s u, each two
+/// arguments' difference of each min and max) are decided on each side of
+/// the kink: with `at` = p, each strictly signed on [l, p) and on (p, r]
+/// ([`smooth_sign`] at k = 0, Taylor at p for a zero of higher order);
+/// with no `at`, each strictly signed over the box but one, u₀, continuous
+/// and strictly monotone over it with opposite signs at l and r, so it
+/// vanishes at one c strictly inside. f is then the one-sided form g₋ on
+/// [l, c] and g₊ on [c, r] (each |u|, min and max resolved by those
+/// signs), and f⁽ᵏ⁾ is g₋⁽ᵏ⁾ on [l, c), g₊⁽ᵏ⁾ on (c, r] wherever it exists:
+/// their signs are read with p left out ([`smooth_sign`]), or, where a
+/// power's base vanishes at the kink (∛x, x^(2/3): no corner), over the
+/// box wherever they exist ([`singular_sign`]). With no `at` each branch's
+/// sign is read over the whole box (c may be anywhere in it). `joined`:
+/// g₋ and g₊ continuously differentiable on their sides with g₋′(p) =
+/// g₊′(p) exactly, so f′ exists at p and is continuous.
+///
+/// Shown on f's own tree, strong; on the certificate's evaluated tree
+/// (equal to f wherever f is defined), weak. A form with a step (floor,
+/// …) is not read.
+fn kink_sides(
+    fx: &Fx,
+    x: B,
+    at: Option<f64>,
+    k: usize,
+    left: KinkSign,
+    right: KinkSign,
+    joined: bool,
+) -> Outcome {
+    let (l, r) = x;
+    if !(l < r) {
+        return Outcome::new(Class::Refuted, "an empty kink box");
+    }
+    if !(k == 1 || k == 2) {
+        return Outcome::new(Class::Refuted, format!("a derivative of order {k}"));
+    }
+    if let Some(p) = at
+        && !(l < p && p < r)
+    {
+        return Outcome::new(Class::Refuted, "the kink's point is not inside its box");
+    }
+    if joined && at.is_none() {
+        return Outcome::new(Class::Refuted, "joined at no point");
+    }
+    if unmodelled(&fx.f) {
+        return Outcome::new(
+            Class::Unsupported,
+            "the tree uses a function the replay doesn't model",
+        );
+    }
+    let cont = defined(fx, x, Some(true));
+    match cont.class {
+        Class::Strong | Class::Weak => {}
+        Class::Refuted => return cont,
+        _ => {
+            return Outcome::new(
+                Class::Unconfirmed,
+                format!("f is not shown continuous on the box: {}", cont.note),
+            );
+        }
+    }
+    let on = |f: &Expr| -> V {
+        if has_steps(f) {
+            return unknown("a step in f's form");
+        }
+        ladder(|| sides_of(fx, f, x, at, k, left, right, joined))
+    };
+    let mut v = on(&fx.f);
+    let mut weak = cont.class == Class::Weak;
+    if !v.yes()
+        && let Some(g) = &fx.f_eval
+        && matches!(on(g), V::Yes)
+    {
+        v = V::Yes;
+        weak = true;
+    }
+    match v {
+        V::Yes if weak => Outcome::new(Class::Weak, "on the certificate's evaluated tree"),
+        V::Yes => Outcome::new(Class::Strong, ""),
+        V::No(w) => Outcome::new(Class::Refuted, w),
+        V::Unknown(w) => Outcome::new(Class::Unconfirmed, w),
+    }
+}
+
+/// [`kink_sides`] on the form `f`, at the working precision.
+#[allow(clippy::too_many_arguments)]
+fn sides_of(
+    fx: &Fx,
+    f: &Expr,
+    x: B,
+    at: Option<f64>,
+    k: usize,
+    left: KinkSign,
+    right: KinkSign,
+    joined: bool,
+) -> V {
+    let (l, r) = x;
+    let strict = |s: Option<KinkSign>| match s {
+        Some(KinkSign::Pos) => Some(true),
+        Some(KinkSign::Neg) => Some(false),
+        _ => None,
+    };
+    let mut args = Vec::new();
+    kink_args(f, &mut args);
+    let mut sides: Vec<(Expr, bool, bool)> = Vec::new();
+    let mut moving = false;
+    for u in &args {
+        if let Some(s) = strict(smooth_sign(fx, u, l, r, None, 0)) {
+            sides.push((u.clone(), s, s));
+            continue;
+        }
+        match at {
+            Some(p) => {
+                let a = strict(smooth_sign(fx, u, l, p, Some(p), 0));
+                let b = strict(smooth_sign(fx, u, p, r, Some(p), 0));
+                let (Some(a), Some(b)) = (a, b) else {
+                    return unknown("a kink argument's sign beside the point is not decided");
+                };
+                sides.push((u.clone(), a, b));
+            }
+            None => {
+                // The one kink argument that vanishes in the box: once.
+                if moving {
+                    return unknown("two kink arguments may vanish in the box");
+                }
+                let s = fx.series(u, l, r, 1);
+                let end = |t: f64| fx.series(u, t, t, 0)[0].clone();
+                let (a, b) = (end(l), end(r));
+                let opposite = (a.gt(0.0) && b.lt(0.0)) || (a.lt(0.0) && b.gt(0.0));
+                if !(s[0].cont && s[1].def && s[1].bounded() && s[1].ne0() && opposite) {
+                    return unknown("a kink argument's one zero in the box is not shown");
+                }
+                moving = true;
+                sides.push((u.clone(), a.gt(0.0), b.gt(0.0)));
+            }
+        }
+    }
+    let (Some(minus), Some(plus)) = (one_sided(f, &sides, true), one_sided(f, &sides, false))
+    else {
+        return unknown("no one-sided form");
+    };
+    let sign = |e: &Expr, lo: f64, hi: f64| {
+        smooth_sign(fx, e, lo, hi, at, k).or_else(|| singular_sign(fx, e, lo, hi, at, k))
+    };
+    let (lbox, rbox) = match at {
+        Some(p) => ((l, p), (p, r)),
+        None => ((l, r), (l, r)),
+    };
+    for (e, b, want, which) in [(&minus, lbox, left, "left"), (&plus, rbox, right, "right")] {
+        match sign(e, b.0, b.1) {
+            Some(got) if got == want => {}
+            Some(got) => {
+                return V::No(format!(
+                    "f⁽{k}⁾ is {got:?} on the {which} of the kink, not {want:?}"
+                ));
+            }
+            None => return unknown(format!("f⁽{k}⁾'s sign on the {which} is not decided")),
+        }
+    }
+    if joined {
+        let p = at.expect("joined has a point");
+        let slope = |e: &Expr| fx.series(e, p, p, 1)[1].clone();
+        let smooth = |e: &Expr, lo: f64, hi: f64| valid_f(&fx.series(e, lo, hi, 1), 1);
+        let (a, b) = (slope(&minus), slope(&plus));
+        if !(smooth(&minus, l, p) && smooth(&plus, p, r)) {
+            return unknown("a branch's slope is not continuous up to the point");
+        }
+        if a.is_point() && b.is_point() {
+            if a.lo != b.lo {
+                return V::No("the two branches' slopes at the point differ".into());
+            }
+        } else if a.hi < b.lo || b.hi < a.lo {
+            return V::No("the two branches' slopes at the point differ".into());
+        } else {
+            return unknown("the two branches' slopes at the point are not shown equal");
+        }
+    }
+    V::Yes
 }
 
 /// The bases u (varying with x) of f's fractional powers u^r with r < 1

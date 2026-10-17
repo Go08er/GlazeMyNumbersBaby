@@ -102,6 +102,15 @@ pub enum Side {
 /// A closed box of x.
 pub type B = (f64, f64);
 
+/// What a derivative does on one side of a kink (`Claim::KinkSides`):
+/// negative, 0 or positive wherever it exists there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KinkSign {
+    Neg,
+    Zero,
+    Pos,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Claim {
     Defined(B),
@@ -192,6 +201,21 @@ pub enum Claim {
         left: bool,
         right: bool,
     },
+    /// What f⁽ᵏ⁾ (k = `order`, 1 or 2) does on each side of the one point
+    /// c of the kink box `x` where it need not exist. c is the double `at`
+    /// (strictly inside x) when given, else some point strictly inside x.
+    /// f⁽ᵏ⁾ exists at all but finitely many points of x; wherever it exists
+    /// on [x.0, c) it has the sign `left`, on (c, x.1] the sign `right`.
+    /// With `joined` (only with `at`): f′ exists at c and is continuous on
+    /// x. (f is continuous on x: the box's `Kink`.)
+    KinkSides {
+        x: B,
+        at: Option<f64>,
+        order: usize,
+        left: KinkSign,
+        right: KinkSign,
+        joined: bool,
+    },
     /// Wherever f is defined on `near` (which holds `at`), its values lie
     /// in [lo, hi].
     Bounded {
@@ -262,6 +286,7 @@ impl Claim {
             Claim::Bounded { .. } => "Bounded",
             Claim::Kink(_) => "Kink",
             Claim::KinkAt { .. } => "KinkAt",
+            Claim::KinkSides { .. } => "KinkSides",
             Claim::Removable { .. } => "Removable",
             Claim::Simplifier(_) => "Simplifier",
             Claim::Gap(_) => "Gap",
@@ -485,6 +510,23 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
             left: bf(b, "left")?,
             right: bf(b, "right")?,
         },
+        "KinkSides" => {
+            let sign = |k: &str| match field(b, k)?.as_str() {
+                Some("Neg") => Ok(KinkSign::Neg),
+                Some("Zero") => Ok(KinkSign::Zero),
+                Some("Pos") => Ok(KinkSign::Pos),
+                _ => Err(format!("bad {k} sign")),
+            };
+            let at = b.get("at").filter(|v| !v.is_null());
+            Claim::KinkSides {
+                x: x()?,
+                at: at.map(r).transpose()?,
+                order: order(b)?,
+                left: sign("left")?,
+                right: sign("right")?,
+                joined: bf(b, "joined")?,
+            }
+        }
         "Bounded" => Claim::Bounded {
             near: xbox(field(b, "near")?)?,
             at: xbox(field(b, "at")?)?,
