@@ -29,6 +29,9 @@ pub struct DatePage {
     /// reaches, and where the focus goes when it opens).
     cursor: NaiveDate,
     offsets: [TextEdit; 3],
+    /// What the shown result said when the page was last drawn: it is told
+    /// when it says something else ([`DatePage::view`]).
+    told: Option<String>,
 }
 
 fn msg(m: Msg) -> AppMsg {
@@ -99,6 +102,7 @@ impl DatePage {
             cursor: today,
             shown: today.with_day(1).unwrap_or(today),
             offsets: std::array::from_fn(|_| TextEdit::new("0", 3)),
+            told: None,
         }
     }
 
@@ -305,6 +309,21 @@ impl DatePage {
     }
 
     pub fn view(&mut self, f: &mut Frame, area: Rect) {
+        // The shown mode's result is told when it changes, as upstream's
+        // two result labels are polite live regions
+        // (DateDiffAllUnitsResultLabel and DateResultLabel,
+        // DateCalculator.xaml:1089 and 1226): its node is a live one in
+        // the frame that shows another result than the frame before. Not
+        // in the first frame of the page: AccessKit tells a live node as
+        // it comes, and what the page shows as it opens is not news (GMNB
+        // says nothing there either).
+        let name = if self.state.is_date_diff_mode() {
+            self.state.str_date_diff_result_automation_name()
+        } else {
+            self.state.str_date_result_automation_name()
+        };
+        let changed = self.told.as_deref().is_some_and(|was| was != name);
+        self.told = Some(name.to_string());
         let t = f.t;
         let col = area.inset_xy(16.0, 8.0);
         let col = Rect::new(col.x, col.y, col.w.min(480.0), col.h);
@@ -370,7 +389,7 @@ impl DatePage {
                 self.state.str_date_diff_result_automation_name(),
                 res,
             ) {
-                n.live = true;
+                n.live = changed;
             }
             y += 46.0;
             if !self.state.is_diff_in_days() {
@@ -480,7 +499,7 @@ impl DatePage {
                 self.state.str_date_result_automation_name(),
                 res,
             ) {
-                n.live = true;
+                n.live = changed;
             }
         }
     }

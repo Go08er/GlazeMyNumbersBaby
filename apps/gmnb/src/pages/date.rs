@@ -267,6 +267,8 @@ impl DatePage {
 
         let refresh = {
             let state = state.clone();
+            // What the shown result was when it was last told.
+            let told = RefCell::new(None::<String>);
             let (from_l, to_l, start_l) =
                 (from.label.clone(), to.label.clone(), start.label.clone());
             let (diff_result, diff_days, date_result) =
@@ -286,6 +288,21 @@ impl DatePage {
                 date_result.update_property(&[gtk::accessible::Property::Label(
                     st.str_date_result_automation_name(),
                 )]);
+                // The shown mode's result is told when it changes, as
+                // upstream's two result labels are polite live regions
+                // (DateDiffAllUnitsResultLabel and DateResultLabel,
+                // DateCalculator.xaml:1089 and 1226) and as DGMNB's nodes
+                // are told: once, the result alone (not the days under a
+                // difference), and not what the page shows as it opens.
+                let (shown, name) = if st.is_date_diff_mode() {
+                    (&diff_result, st.str_date_diff_result_automation_name())
+                } else {
+                    (&date_result, st.str_date_result_automation_name())
+                };
+                let was = told.replace(Some(name.to_string()));
+                if was.is_some_and(|was| was != name) {
+                    shown.announce(name, gtk::AccessibleAnnouncementPriority::Medium);
+                }
             })
         };
         refresh(Change::None);

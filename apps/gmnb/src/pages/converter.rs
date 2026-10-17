@@ -45,6 +45,8 @@ pub struct ConverterPage {
     spinner: adw::Spinner,
     keypad: Keypad,
     syncing: Cell<bool>,
+    /// What the second value said when it was last told ([`Self::sync`]).
+    told: RefCell<Option<String>>,
     unit_ids: RefCell<Vec<i32>>,
     /// Each unit's spoken name by its shown one ("United States Dollar"
     /// for "United States - Dollar"), for the drop-downs' lists.
@@ -240,6 +242,7 @@ impl ConverterPage {
             spinner,
             keypad: keypad.clone(),
             syncing: Cell::new(false),
+            told: RefCell::new(None),
             unit_ids: RefCell::default(),
             spoken: Rc::default(),
             wide: Cell::new(false),
@@ -512,6 +515,18 @@ impl ConverterPage {
                 .update_property(&[gtk::accessible::Property::Label(&name)]);
             f.display
                 .update_state(&[gtk::accessible::State::Selected(Some(is_active))]);
+            // The second value is told when what it says changes, as
+            // upstream's is a polite live region (Value2,
+            // UnitConverter.xaml:595-599; the first is not) and DGMNB's
+            // node: whichever of the two is typed into, and not what the
+            // page shows as it opens.
+            if std::ptr::eq(f, &self.f2) {
+                let was = self.told.replace(Some(name.clone()));
+                if was.is_some_and(|was| was != name) {
+                    f.display
+                        .announce(&name, gtk::AccessibleAnnouncementPriority::Medium);
+                }
+            }
             f.symbol
                 .set_visible(vm.currency_symbol_visible() && !sym.is_empty());
             f.symbol.set_text(sym);

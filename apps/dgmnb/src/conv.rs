@@ -32,6 +32,9 @@ pub struct ConvPage {
     picker: Option<u8>,
     search: TextEdit,
     fetching: bool,
+    /// What the second value said when the page was last drawn: it is told
+    /// when it says something else ([`ConvPage::view`]).
+    told: Option<String>,
     /// A network-status query is under way.
     checking: bool,
     proxy: Option<EventLoopProxy<UserEvent>>,
@@ -70,6 +73,7 @@ impl ConvPage {
             picker: None,
             search: TextEdit::new("", 60),
             fetching: false,
+            told: None,
             checking: false,
             proxy: None,
         }
@@ -281,6 +285,15 @@ impl ConvPage {
     fn values(&mut self, f: &mut Frame, r: Rect) {
         let t = f.t;
         let sid = id("conv-values");
+        // The second value is told when what it says changes, as
+        // upstream's is a polite live region (Value2,
+        // UnitConverter.xaml:595-599; the first is not): its node is a
+        // live one in the frame that shows another text than the frame
+        // before, whichever of the two values is typed into. Not in the
+        // first frame of the page (see DatePage::view).
+        let name2 = self.vm.value2_automation_name();
+        let changed = self.told.as_deref().is_some_and(|was| was != name2);
+        self.told = Some(name2);
         let off = f.scroll_begin(sid, r, "Conversion");
         let mut y = r.y - off;
         for which in [1u8, 2] {
@@ -333,6 +346,7 @@ impl ConvPage {
                 n.clickable = true;
                 n.focusable = true;
                 n.selected = Some(active);
+                n.live = which == 2 && changed;
             }
             y += 60.0;
             let unit_name = unit.map(|u| u.name.clone()).unwrap_or_default();
@@ -622,6 +636,7 @@ mod tests {
             picker: None,
             search: TextEdit::new("", 60),
             fetching: true,
+            told: None,
             checking: false,
             proxy: None,
         };
