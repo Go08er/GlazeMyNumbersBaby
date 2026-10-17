@@ -226,6 +226,48 @@ fn is_end(v: &Value) -> bool {
     v.get("At").is_some_and(|a| a.get("closed").is_some())
 }
 
+/// Whether replacing the enclosure `old` at `p` in `value` (a monotonicity
+/// row's value) by `new` draws a piece's end strictly inward: `p` is
+/// `[i].on.lo.At.x` or `[i].on.hi.At.x`, the new enclosure lies wholly on
+/// the piece's side of the old one (past every number the old one holds),
+/// and still wholly short of the piece's other end, so that the piece is
+/// non-empty. Decided from the numbers alone, not from the replay.
+fn drawn_in(value: &Value, p: &[Seg], old: (f64, f64), new: (f64, f64)) -> bool {
+    let n = p.len();
+    let [.., Seg::K(on), Seg::K(which), Seg::K(at), Seg::K(x)] = p else {
+        return false;
+    };
+    if on != "on" || at != "At" || x != "x" {
+        return false;
+    }
+    let mut cur = value;
+    for s in &p[..n - 3] {
+        cur = match s {
+            Seg::K(k) => &cur[k.as_str()],
+            Seg::I(i) => &cur[*i],
+        };
+    }
+    match which.as_str() {
+        // The low end up: past the old enclosure, short of the high end.
+        "lo" => {
+            new.0 >= old.1
+                && match &cur["hi"] {
+                    Value::String(s) => s == "PosInf",
+                    h => enc_of(&h["At"]["x"]).is_some_and(|(hl, _)| new.1 < hl),
+                }
+        }
+        // The high end down.
+        "hi" => {
+            new.1 <= old.0
+                && match &cur["lo"] {
+                    Value::String(s) => s == "NegInf",
+                    l => enc_of(&l["At"]["x"]).is_some_and(|(_, lh)| lh < new.0),
+                }
+        }
+        _ => false,
+    }
+}
+
 // ------------------------------------------------------------ mutants
 
 struct Mutant {
@@ -254,6 +296,9 @@ const SMALLER_SCOPE: &str = "complete over less: the same items, proven, and not
 const OPEN_END: &str = "f is monotone on a piece with an end left out as on the piece with it";
 const CUT_SHORTER: &str = "a monotone piece cut shorter at an end is monotone still, and the \
                            piece beside it starts within the turn's enclosure as before";
+const DRAWN_IN: &str = "an end of a piece of a partial monotone row moved strictly inward, the piece \
+                        left non-empty: a sub-piece of a piece f is monotone on is one it is \
+                        monotone on, and a partial row says nothing of the rest";
 const ON_F_ITSELF: &str = "the row is checked on f itself (each piece of the domain and each of \
                            its ends; f at 0): it rests on no claim, and stands without them";
 const BY_ANOTHER_ROW: &str = "not periodic follows from another row alone (a domain no shift \
@@ -583,18 +628,25 @@ fn mutants_of(
             continue;
         }
         let name = show(p);
+        // (A partial monotonicity row's end drawn in: DRAWN_IN. Not in a
+        // complete row, where the pieces are all there are; not outward.)
+        let inward = |new: (f64, f64)| {
+            (row == "monotonicity" && !certified && drawn_in(&value, p, (lo, hi), new))
+                .then_some(DRAWN_IN)
+        };
         if lo == hi {
+            let (up, down) = (lo.next_up(), lo.next_down());
             push(
                 "number moved a double",
                 format!("{name}: {lo:e} to the double above"),
-                None,
-                &set(p, enc(lo.next_up(), lo.next_up())),
+                inward((up, up)),
+                &set(p, enc(up, up)),
             );
             push(
                 "number moved a double",
                 format!("{name}: {lo:e} to the double below"),
-                None,
-                &set(p, enc(lo.next_down(), lo.next_down())),
+                inward((down, down)),
+                &set(p, enc(down, down)),
             );
         } else {
             let w = hi - lo;
@@ -636,7 +688,7 @@ fn mutants_of(
         push(
             "number moved far",
             format!("{name}: [{lo:e}, {hi:e}] moved by 1"),
-            None,
+            inward((lo + 1.0, hi + 1.0)),
             &set(p, enc(lo + 1.0, hi + 1.0)),
         );
         push(
@@ -1285,7 +1337,7 @@ fn mutate(src: &str, unit: TrigUnit, other: Option<&Value>, run: &mut Run) {
 
 /// Mutates every function of `fs` (in parallel), prints the table, and
 /// returns the run.
-fn run(fs: Vec<(String, TrigUnit)>) -> Run {
+fn run(name: &str, fs: Vec<(String, TrigUnit)>) -> Run {
     let filter = std::env::var("MUTANTS_FILTER").ok();
     // (MUTANTS_SKIP=a;b: those sources left out, said so in the report.)
     let skip: Vec<String> = std::env::var("MUTANTS_SKIP")
@@ -1357,11 +1409,11 @@ fn run(fs: Vec<(String, TrigUnit)>) -> Run {
             *all.shapes.entry(k).or_insert(0) += n;
         }
     }
-    report(&all);
+    report(name, &all);
     all
 }
 
-fn report(r: &Run) {
+fn report(name: &str, r: &Run) {
     println!(
         "\n{} certificates mutated ({} refused as they are, not mutated)",
         r.functions,
@@ -1421,6 +1473,9 @@ fn report(r: &Run) {
         }
     }
     if let Ok(path) = std::env::var("MUTANTS_LOG") {
+        // (One file per run: `file.name`, so that tests running at once
+        // don't truncate each other's.)
+        let path = format!("{path}.{name}");
         let mut text = String::new();
         for a in &r.accepted {
             text.push_str(&format!(
@@ -1456,7 +1511,7 @@ fn a_fixed_few_certificates_mutated_are_refused() {
         .iter()
         .map(|s| (s.to_string(), TrigUnit::Radians))
         .collect();
-    let r = run(fs);
+    let r = run("a_fixed_few", fs);
     assert!(r.refused.is_empty(), "{:#?}", r.refused);
     assert_eq!(r.functions, FEW.len());
     assert!(
@@ -1466,16 +1521,94 @@ fn a_fixed_few_certificates_mutated_are_refused() {
     );
 }
 
+// ------------------------------------------------------------ reviewed
+
+/// Mutants a long run accepts, each reviewed: the mutated row is a TRUE
+/// statement about f (the replay proved it), so accepting it is right. The
+/// long runs fail on any accepted mutant not here, and on any entry here
+/// that the run did not accept (stale: the table can't rot). An entry names
+/// the run, the function with its trig unit, the row, the operator and the
+/// mutant's `what`, and says why the statement is true.
+///
+/// `what` is matched exactly. Where it holds a double's digits (a number
+/// moved, an enclosure borrowed from the next item) that is on purpose: the
+/// statement is true of those numbers, and a changed enclosure is another
+/// statement that has not been reviewed. Where it names only a row of
+/// another function it is stable text, and the borrowed row is the one
+/// the entry's reason was written for. The setting a mutant was first
+/// accepted in is not part of the key: it depends on the order of the
+/// settings, not on the statement.
+struct Known {
+    /// "corpus" or "pool".
+    run: &'static str,
+    src: &'static str,
+    row: &'static str,
+    op: &'static str,
+    what: &'static str,
+    why: &'static str,
+}
+
+const KNOWN: &[Known] = &[];
+
+/// Fails on an accepted mutant not in [`KNOWN`] and, in a run unfiltered
+/// (no `MUTANTS_FILTER`, `MUTANTS_ROW`, `MUTANTS_SKIP`, `MUTANTS_ITEMS`),
+/// on an entry of this run that was not accepted.
+fn assert_only_known(name: &str, r: &Run) {
+    let mine = || KNOWN.iter().filter(|k| k.run == name);
+    let is = |a: &Accepted, k: &Known| {
+        a.src == k.src && a.row == k.row && a.op == k.op && a.what == k.what
+    };
+    let new: Vec<String> = r
+        .accepted
+        .iter()
+        .filter(|a| !mine().any(|k| is(a, k)))
+        .map(|a| format!("{}\t{}\t{}\t{}\t{}", a.src, a.row, a.op, a.what, a.setting))
+        .collect();
+    let filtered = ["FILTER", "ROW", "SKIP", "ITEMS"]
+        .iter()
+        .any(|v| std::env::var_os(format!("MUTANTS_{v}")).is_some());
+    let stale: Vec<String> = if filtered {
+        Vec::new()
+    } else {
+        mine()
+            .filter(|k| !r.accepted.iter().any(|a| is(a, k)))
+            .map(|k| format!("{}\t{}\t{}\t{}", k.src, k.row, k.op, k.what))
+            .collect()
+    };
+    let known = r
+        .accepted
+        .iter()
+        .filter(|a| mine().any(|k| is(a, k)))
+        .count();
+    println!(
+        "{name}: {known} accepted mutants reviewed true ({} entries), {} new, {} stale",
+        mine().count(),
+        new.len(),
+        stale.len()
+    );
+    for k in mine() {
+        println!(
+            "  reviewed true: {} / {} / {}: {}: {}",
+            k.src, k.row, k.op, k.what, k.why
+        );
+    }
+    assert!(
+        new.is_empty() && stale.is_empty(),
+        "{} mutants accepted that are not in KNOWN (source, row, operator, what, setting):\n{}\n\
+         {} entries of KNOWN not accepted this run (stale):\n{}",
+        new.len(),
+        new.join("\n"),
+        stale.len(),
+        stale.join("\n")
+    );
+}
+
 #[test]
 #[ignore = "long: every mutant of the corpus's certificates"]
 fn the_corpus_mutated_is_refused() {
-    let r = run(certificates::corpus());
+    let r = run("corpus", certificates::corpus());
     assert!(r.functions >= 150, "only {} mutated", r.functions);
-    assert!(
-        r.accepted.is_empty(),
-        "{} mutants accepted",
-        r.accepted.len()
-    );
+    assert_only_known("corpus", &r);
 }
 
 #[test]
@@ -1483,11 +1616,8 @@ fn the_corpus_mutated_is_refused() {
 fn the_pool_mutated_is_refused() {
     let mut fs = certificates::units();
     fs.extend(certificates::pool());
-    let r = run(fs);
+    let r = run("pool", fs);
     assert!(r.functions >= 450, "only {} mutated", r.functions);
-    assert!(
-        r.accepted.is_empty(),
-        "{} mutants accepted",
-        r.accepted.len()
-    );
+    assert_only_known("pool", &r);
 }
+
