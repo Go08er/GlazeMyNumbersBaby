@@ -193,6 +193,22 @@ impl Frac {
         Frac::of(Poly::constant(q))
     }
 
+    /// The fraction's value when it is a constant (no variable in it).
+    fn constant_value(&self) -> Option<Rational> {
+        let only = |p: &Poly| -> Option<Rational> {
+            match p.0.len() {
+                0 => Some(Rational::new()),
+                1 => {
+                    let (m, c) = p.0.iter().next()?;
+                    m.is_empty().then(|| c.clone())
+                }
+                _ => None,
+            }
+        };
+        let (n, d) = (only(&self.n)?, only(&self.d)?);
+        (d != 0).then(|| n / d)
+    }
+
     fn add(&self, o: &Frac) -> Option<Frac> {
         if self.d == o.d {
             return Some(Frac {
@@ -596,6 +612,21 @@ impl<'a> Field<'a> {
                 self.of("ln", u)?.div(&self.of("ln", ten)?)
             }
             Abs => self.of("abs", u),
+            // A step of a constant is that constant's, exactly (round half
+            // away from zero, as the language rounds): round(1000001) − x
+            // is no step function. (FUZZ's seed 1409.)
+            Sign | Floor | Ceil | Round if u.constant_value().is_some() => {
+                let c = u.constant_value()?;
+                Some(Frac::constant(match f {
+                    Sign => Rational::from(c.cmp0() as i32),
+                    Floor => c.floor(),
+                    Ceil => c.ceil(),
+                    _ => {
+                        let t = (c.clone().abs() + Rational::from((1, 2))).floor();
+                        if c < 0 { -t } else { t }
+                    }
+                }))
+            }
             Sign => self.atom(format!("sign{}", u.key()), Atom::Steps),
             Floor => self.atom(format!("floor{}", u.key()), Atom::Steps),
             Ceil => self.atom(format!("ceil{}", u.key()), Atom::Steps),

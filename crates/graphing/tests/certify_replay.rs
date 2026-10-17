@@ -3894,3 +3894,30 @@ fn a_constant_is_worked_exactly_as_typed() {
         assert_eq!(rejected(&v), None, "{src}");
     }
 }
+
+/// FUZZ's seed 1409, cases 1079 and 3120: a constant f's range is its one
+/// value. asin x − asin x is 0 where defined, but its enclosure at a point
+/// is ±10⁻⁴⁸ (the two terms rounded apart), which no listed [0, 0] holds;
+/// round(1000001) at 5 digits is a step of a constant, no step function.
+/// The range reads f's value through its reduced form (the replay's field:
+/// 0 and 10⁶ exactly).
+#[test]
+fn a_constant_ranges_over_its_one_value() {
+    for (src, digits) in [
+        ("asin(x)-asin(x)", None),
+        ("asin(x)-asin(x)", Some(14)),
+        ("round(1000001)-(asin(x)-asin(x))", Some(5)),
+        ("round(1000001)-(asin(x)-asin(x))", None),
+    ] {
+        let v = certificate_with(src, digits);
+        // (Its range row; f″ at the domain's ends, which asin's form has
+        // no value for, is another matter: a claim left open.)
+        let r = replay::replay(&v).expect("replayed");
+        let range = r.rows.iter().find(|row| row.name == "range").expect("a range row");
+        assert!(
+            range.status != "Unknown" && range.problems.is_empty(),
+            "{src} at {digits:?} digits: {:?}",
+            range.problems
+        );
+    }
+}

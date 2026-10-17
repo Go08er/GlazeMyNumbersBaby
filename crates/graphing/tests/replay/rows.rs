@@ -4275,9 +4275,20 @@ fn images(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk, pieces: &[Piece], ou
     }
     iv::set_prec(160);
     // f over a box where it is defined: the replay's own enclosure, within
-    // any value claim on that very box.
+    // its reduced form's (f wherever f is defined: asin x − asin x is 0,
+    // its enclosure at a point ±10⁻⁴⁸; FUZZ's seed 1409) and any value
+    // claim on that very box.
+    let reduced = super::algebra::reduced_tree(&fx.f, &fx.lits, &fx.vars, fx.unit);
     let taken = |b: B| -> Option<Seen> {
-        let v = super::series::where_defined(|| fx.series(&fx.f, b.0, b.1, 0)[0].clone());
+        let mut v = super::series::where_defined(|| fx.series(&fx.f, b.0, b.1, 0)[0].clone());
+        if let Some(g) = &reduced
+            && !v.empty
+        {
+            let w = super::series::where_defined(|| fx.series(g, b.0, b.1, 0)[0].clone());
+            if !w.empty && w.bounded() && !(w.hi < v.lo || v.hi < w.lo) {
+                v = v.meet(&w);
+            }
+        }
         let mut seen = (!v.empty && v.bounded()).then(|| {
             let (lo, hi) = claims::outward(&v);
             Seen {
