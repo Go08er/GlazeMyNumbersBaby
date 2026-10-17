@@ -3925,3 +3925,22 @@ fn a_constant_ranges_over_its_one_value() {
         );
     }
 }
+
+/// FUZZ's seed 1451, case 66: 0.3·x is no periodic function, and its
+/// period row says so on the fact "f = N/D exactly: f → −∞ as x → −∞",
+/// which the replay's algebra decides exactly. Bounds were taken out of
+/// "f goes to ±∞ on a tail" this round, and this exact fact with them;
+/// it is a proof, and is read as one.
+#[test]
+fn a_rational_f_going_to_infinity_is_not_periodic() {
+    for src in ["0.30000000000000004*(x^2-x^2+x)", "x^3-x"] {
+        let v = certificate(src);
+        let r = replay::replay(&v).expect("replayed");
+        let period = r
+            .rows
+            .iter()
+            .find(|row| row.name == "period")
+            .expect("a period row");
+        assert!(period.problems.is_empty(), "{src}: {:?}", period.problems);
+    }
+}

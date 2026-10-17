@@ -3271,7 +3271,18 @@ fn tail_infinite(claims: &[Claim], side: Side, up: bool) -> bool {
     let at = if right { At::PosInf } else { At::NegInf };
     let structure =
         limit_at(claims, at, false) == Some(if up { Toward::PosInf } else { Toward::NegInf });
-    structure || proof
+    // (Or a rational f's own, exactly: its fact checked so. 0.3·x's
+    // period row rests on it: FUZZ's seed 1451, case 66.)
+    let fact = format!(
+        "f → {} as x → {}",
+        if up { "+∞" } else { "−∞" },
+        if right { "+∞" } else { "−∞" }
+    );
+    let rational = claims.iter().any(|c| {
+        matches!(c, Claim::Simplifier(f)
+            if f.strip_prefix(super::claims::RATIONAL).is_some_and(|r| r.trim() == fact))
+    });
+    structure || proof || rational
 }
 
 /// What a `Limit` claim says f (or f/x, `over_x`) tends to as x → `at`.
