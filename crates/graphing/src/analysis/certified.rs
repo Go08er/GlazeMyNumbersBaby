@@ -1645,6 +1645,138 @@ fn set_text(
     format!("{var} ∈ {}", items.join(" ∪ "))
 }
 
+/// A domain piece for display: its ends, whether it meets the next piece
+/// at one excluded point, whether it is a single point.
+#[derive(Clone)]
+struct Piece2 {
+    lo: End,
+    hi: End,
+    joined: bool,
+    one: bool,
+}
+
+/// `a` against `b`: -1, 0 or 1 where proven (exact numbers, or disjoint
+/// enclosures), else `None`.
+fn compare(a: &Num, b: &Num) -> Option<i32> {
+    if let (Some(x), Some(y)) = (a.exact, b.exact)
+        && let Some(s) = x.sub(y).and_then(Ex::sign)
+    {
+        return Some(s);
+    }
+    // (An exact number is enclosed more tightly by its form.)
+    let span = |n: &Num| -> (f64, f64) {
+        match n.exact.and_then(Ex::interval) {
+            Some(iv) => (iv.lo().max(n.enc.lo.0), iv.hi().min(n.enc.hi.0)),
+            None => (n.enc.lo.0, n.enc.hi.0),
+        }
+    };
+    let ((alo, ahi), (blo, bhi)) = (span(a), span(b));
+    if ahi < blo {
+        Some(-1)
+    } else if alo > bhi {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+/// The pieces split at the members of the family x + k·p that lie inside
+/// them, if the family meets every piece in finitely many members, each
+/// proven inside, outside or at an end (a member at a closed end opens it):
+/// every piece bounded, every member near them told by `compare`, and at
+/// most `MAX_ITEMS` inside. `None` keeps the family as it is.
+fn split_at_members(pcs: &[Piece2], x: &Num, p: &Num) -> Option<Vec<Piece2>> {
+    // A period proven positive, and a first member known to less than it.
+    if !(p.enc.lo.0 > 0.0 && p.enc.hi.0.is_finite())
+        || !(x.enc.lo.0.is_finite() && x.enc.hi.0.is_finite())
+        || x.enc.hi.0 - x.enc.lo.0 >= p.enc.lo.0
+    {
+        return None;
+    }
+    let pv = p.value();
+    let mut out: Vec<Piece2> = Vec::new();
+    let mut inside = 0usize;
+    for pc in pcs {
+        if pc.lo.inf.is_some() || pc.hi.inf.is_some() {
+            return None;
+        }
+        let (lo, hi) = (pc.lo.num?, pc.hi.num?);
+        // The members that can reach the piece are k0 ..= k1 (estimated in
+        // doubles, with two periods to spare). The estimate is trusted only
+        // where every integer is a double and the quotient's rounding
+        // (about k·2⁻⁵³ periods) is far below that margin: |k| ≤ 2⁴⁰. It is
+        // not assumed outside either: member k0 must be proven below the
+        // piece and member k1 above it, and the members (increasing in k)
+        // beyond them then are too.
+        const K_LIMIT: f64 = 1_099_511_627_776.0; // 2⁴⁰
+        let k0 = ((pc.lo.value - x.value()) / pv).floor() - 2.0;
+        let k1 = ((pc.hi.value - x.value()) / pv).ceil() + 2.0;
+        if !(k0.abs() <= K_LIMIT && k1.abs() <= K_LIMIT) || k1 - k0 > 400.0 {
+            return None;
+        }
+        let (k0, k1) = (k0 as i64, k1 as i64);
+        let (mut lo_end, mut hi_end) = (pc.lo.clone(), pc.hi.clone());
+        let mut cuts: Vec<Num> = Vec::new();
+        for k in k0..=k1 {
+            // x + k·p.
+            let m = shift(*x, p, -(k as f64));
+            let (below, above) = (compare(&m, &lo)?, compare(&m, &hi)?);
+            if (k == k0 && below >= 0) || (k == k1 && above <= 0) {
+                return None;
+            }
+            if below < 0 || above > 0 {
+                // Outside.
+            } else if below == 0 || above == 0 {
+                // At an end (so proven by exact numbers): a point
+                // excluded there opens a closed end.
+                if pc.one {
+                    return None;
+                }
+                if below == 0 {
+                    lo_end.closed = false;
+                } else {
+                    hi_end.closed = false;
+                }
+            } else {
+                cuts.push(m);
+            }
+        }
+        inside += cuts.len();
+        if inside > MAX_ITEMS {
+            return None;
+        }
+        if cuts.is_empty() {
+            out.push(Piece2 {
+                lo: lo_end,
+                hi: hi_end,
+                ..pc.clone()
+            });
+            continue;
+        }
+        if pc.one {
+            return None;
+        }
+        let mut from = lo_end;
+        for c in cuts {
+            let at = finite(c, false);
+            out.push(Piece2 {
+                lo: from,
+                hi: at.clone(),
+                joined: true,
+                one: false,
+            });
+            from = at;
+        }
+        out.push(Piece2 {
+            lo: from,
+            hi: hi_end,
+            joined: pc.joined,
+            one: false,
+        });
+    }
+    Some(out)
+}
+
 fn data_interval(a: &End, b: &End) -> format::Interval {
     format::Interval {
         lo: format::Bound {
@@ -1825,21 +1957,27 @@ pub(super) fn features(
     let mut domain_whole = false;
     match &a.domain {
         Row::Certified { value, .. } => {
-            let mut parts: Vec<(End, End)> = value
+            let mut pcs: Vec<Piece2> = value
                 .pieces
                 .iter()
-                .map(|p| (cx.end(&p.lo), cx.end(&p.hi)))
+                .enumerate()
+                .map(|(i, p)| Piece2 {
+                    lo: cx.end(&p.lo),
+                    hi: cx.end(&p.hi),
+                    // Pieces i and i + 1 meet at one excluded point.
+                    joined: match value.pieces.get(i + 1).map(|q| (p.hi, q.lo)) {
+                        Some((Bound::At { x: a, .. }, Bound::At { x: b, .. })) => a == b,
+                        _ => false,
+                    },
+                    // A piece written from one bound to itself is that one
+                    // point.
+                    one: p.lo == p.hi,
+                })
                 .collect();
-            let joined = |i: usize| match (value.pieces[i].hi, value.pieces[i + 1].lo) {
-                (Bound::At { x: a, .. }, Bound::At { x: b, .. }) => a == b,
-                _ => false,
-            };
-            // A piece written from one bound to itself is that one point.
-            let one = |i: usize| value.pieces[i].lo == value.pieces[i].hi;
-            let mut text = set_text("x", &mut parts, &joined, &one);
             domain_whole = value.pieces.len() == 1
                 && value.pieces[0].lo == Bound::NegInf
                 && value.pieces[0].hi == Bound::PosInf;
+            let mut left_over: Vec<(Num, Num, String)> = Vec::new();
             if !value.excluded.is_empty() {
                 let fams: Vec<(Num, Num, String)> = value
                     .excluded
@@ -1849,8 +1987,24 @@ pub(super) fn features(
                         (x, p, String::new())
                     })
                     .collect();
-                let merged = merge(fams);
-                let texts: Vec<String> = merged
+                // A family that meets the (bounded) pieces in finitely
+                // many members, each proven inside or outside, is written
+                // as those points, the pieces split at them; any other
+                // stays a family.
+                for fam in merge(fams) {
+                    match split_at_members(&pcs, &fam.0, &fam.1) {
+                        Some(split) => pcs = split,
+                        None => left_over.push(fam),
+                    }
+                }
+            }
+            let mut parts: Vec<(End, End)> =
+                pcs.iter().map(|p| (p.lo.clone(), p.hi.clone())).collect();
+            let joined = |i: usize| pcs[i].joined;
+            let one = |i: usize| pcs[i].one;
+            let mut text = set_text("x", &mut parts, &joined, &one);
+            if !left_over.is_empty() {
+                let texts: Vec<String> = left_over
                     .iter()
                     .map(|(x, p, _)| {
                         data.excluded.push(DataFamily {
@@ -1860,7 +2014,7 @@ pub(super) fn features(
                         family_text(x, p)
                     })
                     .collect();
-                let texts = families_apart(&merged, texts);
+                let texts = families_apart(&left_over, texts);
                 let base = if domain_whole {
                     "x ∈ ℝ".to_string()
                 } else {
@@ -2862,5 +3016,52 @@ mod tests {
             "[−1.6, 0]"
         );
         assert_eq!(approx(Enc::new(0.851, 1.05)), "[0.85, 1.1]");
+    }
+
+    /// A piece far out (members near 2⁵³ periods and beyond) neither hangs
+    /// `split_at_members` nor is listed; one near the origin is.
+    #[test]
+    fn split_at_members_far_out() {
+        let num = |v: f64| Num {
+            exact: Q::from_f64(v).map(Ex::q),
+            enc: Enc::point(v),
+        };
+        let piece = |a: f64, b: f64| {
+            vec![Piece2 {
+                lo: finite(num(a), true),
+                hi: finite(num(b), true),
+                joined: false,
+                one: false,
+            }]
+        };
+        let promptly = |pcs: Vec<Piece2>, x: Num, p: Num| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(split_at_members(&pcs, &x, &p).map(|v| v.len()));
+            });
+            rx.recv_timeout(std::time::Duration::from_secs(20))
+                .expect("split_at_members did not return")
+        };
+        let zero = num(0.0);
+        // 180k (exact period).
+        let deg = num(180.0);
+        // kπ: exact, and the same known only to its enclosure.
+        let pi_enc = Enc::new(std::f64::consts::PI, std::f64::consts::PI.next_up());
+        let pi = Num {
+            exact: Some(Ex::Pi(Q::ONE)),
+            enc: pi_enc,
+        };
+        let pi_approx = Num {
+            exact: None,
+            enc: pi_enc,
+        };
+        for (a, b) in [(1e19, 1e19 + 2048.0), (1e17, 1e17 + 16.0), (1e20, 1e20)] {
+            for p in [deg, pi, pi_approx] {
+                assert_eq!(promptly(piece(a, b), zero, p), None, "{a:e} {b:e}");
+            }
+        }
+        // Near the origin: 0 splits [−1, 1] in two.
+        assert_eq!(promptly(piece(-1.0, 1.0), zero, deg), Some(2));
+        assert_eq!(promptly(piece(-1.0, 1.0), zero, pi), Some(2));
     }
 }
