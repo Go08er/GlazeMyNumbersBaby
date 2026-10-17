@@ -484,7 +484,11 @@ fn mutants_of(
             let bottom = finite.iter().copied().fold(f64::INFINITY, f64::min);
             if !reaches("PosInf") && top.is_finite() {
                 added.push((
-                    format!("a piece made up above the range, [{}, {}]", top + 1.0, top + 2.0),
+                    format!(
+                        "a piece made up above the range, [{}, {}]",
+                        top + 1.0,
+                        top + 2.0
+                    ),
                     json!({"lo": end(top + 1.0), "hi": end(top + 2.0)}),
                 ));
             }
@@ -678,7 +682,11 @@ fn mutants_of(
             for closed in [false, true] {
                 push(
                     "end brought in from infinity",
-                    format!("{}: to {x} ({})", show(&p), if closed { "closed" } else { "open" }),
+                    format!(
+                        "{}: to {x} ({})",
+                        show(&p),
+                        if closed { "closed" } else { "open" }
+                    ),
                     None,
                     &set(&p, json!({"At": {"x": enc(x, x), "closed": closed}})),
                 );
@@ -689,7 +697,10 @@ fn mutants_of(
     // ---- directions, kinds, sides, parities
     for set_of in [&DIRECTIONS[..], &KINDS[..], &SIDES[..], &PARITIES[..]] {
         for p in sampled_paths(&value, &|n| n.as_str().is_some_and(|s| set_of.contains(&s))) {
-            let was = at(&mut value.clone(), &p).as_str().unwrap_or("").to_string();
+            let was = at(&mut value.clone(), &p)
+                .as_str()
+                .unwrap_or("")
+                .to_string();
             for other in set_of.iter().filter(|o| **o != was) {
                 push(
                     "kind changed",
@@ -818,15 +829,15 @@ fn mutants_of(
         || covers.get("Period").is_some();
     push(
         "status changed",
-        format!("{status} called {}", if certified { "Partial" } else { "Certified" }),
+        format!(
+            "{status} called {}",
+            if certified { "Partial" } else { "Certified" }
+        ),
         certified.then_some(WEAKER_STATUS),
         &|v: &mut Value| {
             let b = body_mut(v, row).clone();
             let mut m = serde_json::Map::new();
-            m.insert(
-                if certified { "Partial" } else { "Certified" }.into(),
-                b,
-            );
+            m.insert(if certified { "Partial" } else { "Certified" }.into(), b);
             v[row] = Value::Object(m);
         },
     );
@@ -898,7 +909,10 @@ fn mutants_of(
         }
         _ => None,
     };
-    if b["cert"]["claims"].as_array().is_some_and(|c| !c.is_empty()) {
+    if b["cert"]["claims"]
+        .as_array()
+        .is_some_and(|c| !c.is_empty())
+    {
         push(
             "claims withheld",
             "the row as it is, with none of its claims".into(),
@@ -1093,7 +1107,9 @@ fn mutate(src: &str, unit: TrigUnit, other: Option<&Value>, run: &mut Run) {
     run.functions += 1;
     let every = every_claim(&base);
     // (MUTANTS_SLOW=seconds: say each replay of a mutant that takes longer.)
-    let slow: Option<f64> = std::env::var("MUTANTS_SLOW").ok().and_then(|v| v.parse().ok());
+    let slow: Option<f64> = std::env::var("MUTANTS_SLOW")
+        .ok()
+        .and_then(|v| v.parse().ok());
     let only = std::env::var("MUTANTS_ROW").ok();
     for row in replay::ROWS {
         if only.as_ref().is_some_and(|r| r != row) {

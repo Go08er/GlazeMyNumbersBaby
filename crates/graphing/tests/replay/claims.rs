@@ -1032,7 +1032,14 @@ fn smooth_sign(fx: &Fx, e: &Expr, lo: f64, hi: f64, p: Option<f64>, k: usize) ->
 /// it with opposite signs at its ends. Then e⁽ᵏ⁾'s enclosure over the box
 /// (where it exists: [`singular_at`]'s reading) strictly signed is its
 /// sign at each point but that one.
-fn singular_sign(fx: &Fx, e: &Expr, lo: f64, hi: f64, p: Option<f64>, k: usize) -> Option<KinkSign> {
+fn singular_sign(
+    fx: &Fx,
+    e: &Expr,
+    lo: f64,
+    hi: f64,
+    p: Option<f64>,
+    k: usize,
+) -> Option<KinkSign> {
     let mut bases = Vec::new();
     singular_args(fx, e, &mut bases);
     let mut vanishing = 0;
@@ -1245,10 +1252,13 @@ fn factor_sides(
         let power = if n == 1 {
             u0.clone()
         } else {
-            Expr::Bin(BinOp::Pow, Box::new(u0.clone()), Box::new(Expr::exact(f64::from(n))))
+            Expr::Bin(
+                BinOp::Pow,
+                Box::new(u0.clone()),
+                Box::new(Expr::exact(f64::from(n))),
+            )
         };
-        let Some(c) = super::algebra::constant_ratio(e, &power, &fx.lits, &fx.vars, fx.unit)
-        else {
+        let Some(c) = super::algebra::constant_ratio(e, &power, &fx.lits, &fx.vars, fx.unit) else {
             continue;
         };
         let of_power = if n % 2 == 1 { signs } else { (true, true) };

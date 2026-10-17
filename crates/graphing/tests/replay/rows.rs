@@ -1278,12 +1278,7 @@ fn domain_pieces(all: &[RowCert]) -> Option<Vec<Piece>> {
 /// minimum), and the closed ends left undecided: f not shown continuous
 /// from the end into the stretch (by a claim, or by the replay itself),
 /// nor constant beside it.
-fn end_extrema(
-    fx: &Fx,
-    rc: &RowCert,
-    all: &[RowCert],
-    w: &Walk,
-) -> (Vec<(Enc, bool)>, Vec<Enc>) {
+fn end_extrema(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk) -> (Vec<(Enc, bool)>, Vec<Enc>) {
     let Some(pieces) = domain_pieces(all) else {
         return (Vec::new(), Vec::new());
     };
@@ -1685,7 +1680,11 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
     let flat_index = Spans::new(
         w.flat
             .iter()
-            .flat_map(|&f| repeated_boxes(f, period).into_iter().map(|r| (r.0, r.1, ())))
+            .flat_map(|&f| {
+                repeated_boxes(f, period)
+                    .into_iter()
+                    .map(|r| (r.0, r.1, ()))
+            })
             .collect(),
     );
     let zero_index = Spans::new(
@@ -1911,11 +1910,10 @@ fn y_intercept(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String>
             ));
         }
         if !v.empty && valid {
-            out.problems
-                .push(format!(
-                    "no y-intercept listed, yet f(0) is defined: {}",
-                    claims::show(&v)
-                ));
+            out.problems.push(format!(
+                "no y-intercept listed, yet f(0) is defined: {}",
+                claims::show(&v)
+            ));
         }
         return Ok(());
     }
@@ -2885,26 +2883,29 @@ fn period(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result
         // A limit at a tail: by the tree's structure, a rational f's exact
         // one, f bounded and monotone there, or the simplifier's with f's
         // bands closing in on it.
-        let limit = [(Side::Left, At::NegInf, "−∞"), (Side::Right, At::PosInf, "+∞")]
-            .iter()
-            .any(|&(s, toward, at)| {
-                let bands = tail_bands(&rc.claims, s);
-                let fact = rc.claims.iter().find_map(|c| match c {
-                    Claim::Simplifier(f)
-                        if f.starts_with("f → ") && f.ends_with(&format!("as x → {at}")) =>
-                    {
-                        fact_limit(f)
-                    }
-                    _ => None,
-                });
-                matches!(limit_at(&rc.claims, toward, false), Some(Toward::In(..)))
-                    || rc.claims.iter().any(|c| {
-                        matches!(c, Claim::Simplifier(f) if f.starts_with(claims::RATIONAL)
-                            && f.ends_with(&format!("as x → {at}")) && fact_limit(f).is_some())
-                    })
-                    || (!bands.is_empty() && tail_mono(&rc.claims, s).is_some())
-                    || fact.is_some_and(|y| borne_out(&bands, &y, "the limit").is_ok())
+        let limit = [
+            (Side::Left, At::NegInf, "−∞"),
+            (Side::Right, At::PosInf, "+∞"),
+        ]
+        .iter()
+        .any(|&(s, toward, at)| {
+            let bands = tail_bands(&rc.claims, s);
+            let fact = rc.claims.iter().find_map(|c| match c {
+                Claim::Simplifier(f)
+                    if f.starts_with("f → ") && f.ends_with(&format!("as x → {at}")) =>
+                {
+                    fact_limit(f)
+                }
+                _ => None,
             });
+            matches!(limit_at(&rc.claims, toward, false), Some(Toward::In(..)))
+                || rc.claims.iter().any(|c| {
+                    matches!(c, Claim::Simplifier(f) if f.starts_with(claims::RATIONAL)
+                            && f.ends_with(&format!("as x → {at}")) && fact_limit(f).is_some())
+                })
+                || (!bands.is_empty() && tail_mono(&rc.claims, s).is_some())
+                || fact.is_some_and(|y| borne_out(&bands, &y, "the limit").is_ok())
+        });
         if !(to_inf || (limit && apart)) {
             out.problems
                 .push("not periodic, but the claims don't show it".into());
@@ -3217,9 +3218,7 @@ fn tail_infinite(claims: &[Claim], side: Side, up: bool) -> bool {
             c,
             above,
             ..
-        } if *s == side && (if *above { *c >= 0.0 } else { *c <= 0.0 }) => {
-            (*above == right) == up
-        }
+        } if *s == side && (if *above { *c >= 0.0 } else { *c <= 0.0 }) => (*above == right) == up,
         _ => false,
     });
     let at = if right { At::PosInf } else { At::NegInf };
@@ -3602,9 +3601,7 @@ fn no_other_asymptote(
     });
     if steps {
         for (b, bounded) in &valid {
-            let within = valid
-                .iter()
-                .any(|(v, vb)| *vb && v.0 <= b.0 && b.1 <= v.1);
+            let within = valid.iter().any(|(v, vb)| *vb && v.0 <= b.0 && b.1 <= v.1);
             if *bounded || within {
                 continue;
             }
@@ -3640,9 +3637,9 @@ fn no_other_asymptote(
     // claim, which leaves the same reals out, passed for "no asymptote at
     // 1" once the claim that it is one was left out.)
     let removable = |p: f64| {
-        rc.claims.iter().any(
-            |c| matches!(c, Claim::Removable { at, .. } if at.0 <= p && p <= at.1),
-        )
+        rc.claims
+            .iter()
+            .any(|c| matches!(c, Claim::Removable { at, .. } if at.0 <= p && p <= at.1))
     };
     // (Or f's reduced form, f wherever f is defined, bounded over a box:
     // log(x, 2) − log(x, 2) + x² beside its hole at 1.)
@@ -3656,7 +3653,11 @@ fn no_other_asymptote(
     };
     let own_bound = |p: f64, right: bool| {
         let v = over_open_gap(fx, p, right);
-        let b = if right { (p, p.next_up()) } else { (p.next_down(), p) };
+        let b = if right {
+            (p, p.next_up())
+        } else {
+            (p.next_down(), p)
+        };
         (!v.empty && v.bounded()) || reduced_bound(b)
     };
     // f where it is defined over a box, bounded: the box holds no
@@ -4154,14 +4155,7 @@ struct Image {
 /// names, and at sample points: √x's range passed as (−∞, ∞), a third of
 /// x³ − 2x + 1/(x − 1)'s as everything above it. Round 19's mutation
 /// tester.)
-fn images(
-    fx: &Fx,
-    rc: &RowCert,
-    all: &[RowCert],
-    w: &Walk,
-    pieces: &[Piece],
-    out: &mut RowResult,
-) {
+fn images(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk, pieces: &[Piece], out: &mut RowResult) {
     let Some((ra, rb)) = rc.region.as_ref().and_then(region_box) else {
         return;
     };
@@ -4326,11 +4320,7 @@ fn images(
         }
     };
     let infinite = |up: bool| {
-        let v = if up {
-            f64::INFINITY
-        } else {
-            f64::NEG_INFINITY
-        };
+        let v = if up { f64::INFINITY } else { f64::NEG_INFINITY };
         Seen {
             lo: v,
             hi: v,
@@ -4518,9 +4508,15 @@ fn images(
                 continue;
             };
             let (lo, hi) = if sign > 0 {
-                (rug::Rational::from(&e + &plo), rug::Rational::from(&e + &phi))
+                (
+                    rug::Rational::from(&e + &plo),
+                    rug::Rational::from(&e + &phi),
+                )
             } else {
-                (rug::Rational::from(&e - &phi), rug::Rational::from(&e - &plo))
+                (
+                    rug::Rational::from(&e - &phi),
+                    rug::Rational::from(&e - &plo),
+                )
             };
             let Some(v) = taken((edge, edge)) else {
                 continue;
@@ -4612,18 +4608,15 @@ fn images(
             if may.is_empty() {
                 continue;
             }
-            let (all_taken, none_taken) = (may.iter().all(|s| s.taken), may.iter().all(|s| !s.taken));
+            let (all_taken, none_taken) =
+                (may.iter().all(|s| s.taken), may.iter().all(|s| !s.taken));
             if (closed && none_taken) || (!closed && all_taken) {
                 out.problems.push(format!(
                     "the range's end in [{:e}, {:e}] is listed {}, yet f {} it",
                     x.lo,
                     x.hi,
                     if closed { "closed" } else { "open" },
-                    if closed {
-                        "only tends to"
-                    } else {
-                        "takes"
-                    }
+                    if closed { "only tends to" } else { "takes" }
                 ));
             }
         }
@@ -4733,11 +4726,10 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
     for x in xs {
         let (v, valid) = s.at(x);
         if valid && !v.empty && v.bounded() && !inside(&v) {
-            out.problems
-                .push(format!(
-                    "f({x:e}) ∈ {} is outside the listed range",
-                    claims::show(&v)
-                ));
+            out.problems.push(format!(
+                "f({x:e}) ∈ {} is outside the listed range",
+                claims::show(&v)
+            ));
             break;
         }
     }

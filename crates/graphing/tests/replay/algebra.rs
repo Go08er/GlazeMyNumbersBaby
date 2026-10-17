@@ -701,11 +701,9 @@ impl Field<'_> {
                     _ => Expr::Call(Func::Root, vec![u, Expr::exact(f64::from(q))]),
                 }
             }
-            Atom::PowVar(a, b) => Expr::Bin(
-                BinOp::Pow,
-                Box::new(self.tree(a)?),
-                Box::new(self.tree(b)?),
-            ),
+            Atom::PowVar(a, b) => {
+                Expr::Bin(BinOp::Pow, Box::new(self.tree(a)?), Box::new(self.tree(b)?))
+            }
             Atom::Of(f, u) => {
                 let f = match *f {
                     "sin" => Func::Sin,
@@ -738,7 +736,11 @@ impl Field<'_> {
             let power = if *k == 1 {
                 var
             } else {
-                Expr::Bin(BinOp::Pow, Box::new(var), Box::new(Expr::exact(f64::from(*k))))
+                Expr::Bin(
+                    BinOp::Pow,
+                    Box::new(var),
+                    Box::new(Expr::exact(f64::from(*k))),
+                )
             };
             out = Some(match out {
                 None => power,
@@ -796,7 +798,8 @@ impl Field<'_> {
         // its odd part under 2⁵³.)
         let whole = |q: &Integer| -> Option<Expr> {
             let v = q.to_f64();
-            (v.is_finite() && Integer::from_f64(v).as_ref() == Some(q)).then(|| Expr::exact(v.abs()))
+            (v.is_finite() && Integer::from_f64(v).as_ref() == Some(q))
+                .then(|| Expr::exact(v.abs()))
         };
         let mut sum: Option<Expr> = None;
         for (m, c) in &p.0 {
@@ -823,7 +826,11 @@ impl Field<'_> {
         Some(if common.is_empty() {
             sum
         } else {
-            Expr::Bin(BinOp::Mul, Box::new(self.mono_tree(&common)?), Box::new(sum))
+            Expr::Bin(
+                BinOp::Mul,
+                Box::new(self.mono_tree(&common)?),
+                Box::new(sum),
+            )
         })
     }
 
@@ -840,7 +847,11 @@ impl Field<'_> {
             let cd = Self::common(&f.d);
             Self::common(&f.n)
                 .iter()
-                .filter_map(|(v, k)| cd.iter().find(|(w, _)| w == v).map(|(_, j)| (*v, (*k).min(*j))))
+                .filter_map(|(v, k)| {
+                    cd.iter()
+                        .find(|(w, _)| w == v)
+                        .map(|(_, j)| (*v, (*k).min(*j)))
+                })
                 .collect()
         };
         let n = self.poly_tree_less(&f.n, &shared)?;
@@ -861,12 +872,7 @@ impl Field<'_> {
 /// (√u·ln u's f′ is √u·(ln u + 2)/(2u), each factor of one sign beside u =
 /// 0, where the series' √u′·ln u + √u·ln u′ is −∞ + ∞.) None where the
 /// field doesn't read f, or an atom has no tree (a step).
-pub fn derivative_tree(
-    f: &Expr,
-    lits: &Lits,
-    vars: &[(String, f64)],
-    unit: Unit,
-) -> Option<Expr> {
+pub fn derivative_tree(f: &Expr, lits: &Lits, vars: &[(String, f64)], unit: Unit) -> Option<Expr> {
     let mut field = Field::new(lits, vars, unit);
     let value = field.read(f)?;
     let derivative = field.d(&value)?;
