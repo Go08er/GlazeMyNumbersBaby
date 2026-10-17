@@ -329,13 +329,20 @@ pub enum Claim {
     /// What f⁽ᵏ⁾ (k = `order`, 1 or 2) does on each side of the one point
     /// c of the `Kink` box `x` = [l, r] where it need not exist.
     ///
+    /// In JSON: `{"KinkSides": {"x": {"a": l, "b": r}, "at": p or null,
+    /// "order": 1 or 2, "left": "Neg" | "Zero" | "Pos", "right": …,
+    /// "joined": bool}}`. It comes with the box's `Kink` claim, in the
+    /// certificates of the rows built on f⁽ᵏ⁾ (k = 1: extrema,
+    /// monotonicity, range; k = 2: inflections); for k = 1 only where no
+    /// `KinkAt` places that box.
+    ///
     /// **The claim.** c is the double `at` when given (l < `at` < r), and
     /// otherwise some point of the open (l, r), known no more closely.
     /// f⁽ᵏ⁾ exists at all but finitely many points of [l, r]; wherever
     /// it exists on [l, c) it has the sign `left`, and wherever it exists
     /// on (c, r] the sign `right` (`Pos`: > 0, `Neg`: < 0, `Zero`: = 0).
-    /// With `joined` (only with `at`): f′ exists at c too and is
-    /// continuous on [l, r]. (f is continuous on [l, r]: the box's
+    /// With `joined` (k = 2 and `at` given only): f′ exists at c too, and
+    /// f′ is continuous on [l, r]. (f is continuous on [l, r]: the box's
     /// `Kink`.)
     ///
     /// **What a row takes from it.** k = 1: f, continuous, with f′ of one
@@ -345,7 +352,10 @@ pub enum Claim {
     /// strict sign is no extremum in the box. k = 2: the same sign on
     /// both sides is no change of f″'s sign in the box, so no inflection
     /// there; two different strict signs are an inflection at c when
-    /// `joined`, and are not decided otherwise (a corner).
+    /// `joined`, and are not decided otherwise (a corner). A row reads
+    /// the box so only where `left` and `right` agree with the proven
+    /// signs of f⁽ᵏ⁾ just outside it (a strict sign beside `Pos`/`Neg`,
+    /// f⁽ᵏ⁾ ≡ 0 beside `Zero`).
     ///
     /// **Proven in one of three ways**, none by values of f at samples.
     ///
@@ -353,60 +363,67 @@ pub enum Claim {
     /// certificate's evaluated f (the same function wherever f is
     /// defined, so across the box). F's kink arguments are u for each |u|
     /// in it whose u varies with x, and a − b for each two arguments a, b
-    /// of each min and each max in it that has an argument varying with
-    /// x.
+    /// (in their order) of each min and each max in it that has an
+    /// argument varying with x.
     ///
     /// 1. *One kink.* With `at` = p: some kink argument is exactly 0 at
-    ///    p, and every kink argument is continuous on [l, r], nonzero
-    ///    with one sign throughout [l, p), and nonzero with one sign
-    ///    throughout (p, r] (the two signs may be the same: |x²|).
-    ///    Without `at`: exactly one kink argument u₀ has a zero in
-    ///    [l, r]: u₀ is continuous on [l, r], u₀′ is strictly signed on
-    ///    [l, r], and u₀(l), u₀(r) are nonzero with opposite signs, so
-    ///    its one zero c has l < c < r; every other kink argument is
-    ///    nonzero throughout [l, r].
-    /// 2. *Two branches.* g₋ is F with each |u| replaced by u where
-    ///    u > 0 on [l, c) and by −u where u < 0 there, and each min (max)
-    ///    replaced by the one of its arguments that is less (greater)
-    ///    than each of its others on [l, c); g₊ the same for (c, r].
-    ///    So f = g₋ on [l, c] and f = g₊ on [c, r].
-    /// 3. *Signs.* With `at` = p: g₋ is k times continuously
-    ///    differentiable on [l, p] and g₋⁽ᵏ⁾ has the sign `left` on
-    ///    [l, p); g₊ is so on [p, r] and g₊⁽ᵏ⁾ has the sign `right` on
-    ///    (p, r]. (Not at p itself, where it may be 0: x·|x| has
-    ///    f′ = 2|x|.) Without `at`: g₋ and g₊ are each k times
-    ///    continuously differentiable on all of [l, r], g₋⁽ᵏ⁾ with the
-    ///    sign `left` on all of it and g₊⁽ᵏ⁾ with `right` on all of it
-    ///    (so each on its side of c, wherever c is). f⁽ᵏ⁾ then exists
-    ///    at every point of [l, r] but c.
-    /// 4. *Joined.* g₋′(p) = g₊′(p).
+    ///    p; every kink argument is defined on [l, r], nonzero with one
+    ///    sign throughout [l, p), and nonzero with one sign throughout
+    ///    (p, r] (the two signs may be the same: |x²| at 0); each that is
+    ///    0 at p is continuous on [l, r]. Without `at`: exactly one kink
+    ///    argument u₀ is not nonzero throughout [l, r]: u₀ is continuous
+    ///    on [l, r], u₀′ is strictly signed on [l, r], and u₀(l), u₀(r)
+    ///    are nonzero with opposite signs, so u₀ has one zero c, with
+    ///    l < c < r; every other kink argument is nonzero throughout
+    ///    [l, r].
+    /// 2. *Two branches.* g₋ is F with each |u| replaced by u where u > 0
+    ///    on [l, c) and by −u where u < 0 there, and each min (max) whose
+    ///    arguments vary with x replaced by the one of its arguments that
+    ///    is less (greater) than each of its others on [l, c); g₊ the
+    ///    same for (c, r]. Neither has an |u| of a u varying with x, or a
+    ///    min or max with an argument varying with x, left in it. So
+    ///    f = g₋ on [l, c] and f = g₊ on [c, r] (at c itself each |u| and
+    ///    each pair that vanishes reads the same either way).
+    /// 3. *Signs.* With `at` = p: g₋ is defined and continuous on [l, p]
+    ///    and k times differentiable there, and g₋⁽ᵏ⁾ has the sign `left`
+    ///    at every point of [l, p); g₊ is so on [p, r] and g₊⁽ᵏ⁾ has the
+    ///    sign `right` at every point of (p, r]. (Not at p itself, where
+    ///    it may be 0: x·|x| has f′ = 2|x|.) Without `at`: g₋ and g₊ are
+    ///    each defined, continuous and k times differentiable on all of
+    ///    [l, r], g₋⁽ᵏ⁾ with the sign `left` at every point of it and
+    ///    g₊⁽ᵏ⁾ with `right` at every point of it (so each on its side of
+    ///    c, wherever c is). f⁽ᵏ⁾ then exists at every point of [l, r]
+    ///    but c.
+    /// 4. *Joined* (k = 2, `at` = p): g₋′(p) = g₊′(p).
     ///
-    /// *No corner* (k = 2, `at` = p, not `joined`): every kink argument
-    /// of f's formulas is nonzero throughout [l, r]; some base u of a
-    /// power u^s in f with s < 2 not an integer (√u is u^(1/2), ∛u is
-    /// u^(1/3)) is exactly 0 at p, and each such base is nonzero
-    /// throughout [l, r] or is exactly 0 at p with u′ strictly signed on
-    /// [l, r] (x^(2/3), x^(4/3) at 0: f″ exists on each side of p).
-    /// f″, wherever it exists on [l, p], has the sign `left`, and
-    /// wherever it exists on [p, r] the sign `right`: the enclosure over
-    /// each of f″'s formula, which is not empty. (A formula made of
-    /// functions analytic inside their domains fails to have a second
-    /// derivative at finitely many points of a box it is continuous on.)
+    /// *No corner, placed* (k = 2, `at` = p, not `joined`): every kink
+    /// argument of f's formulas (typed and evaluated) is nonzero
+    /// throughout [l, r]; some base u of a power in f, typed or evaluated,
+    /// u^s with s < 2 not an integer (√u is u^(1/2), ∛u is u^(1/3)), is
+    /// exactly 0 at p, and each such base is nonzero throughout [l, r] or
+    /// is exactly 0 at p with u′ strictly signed on [l, r] (x^(2/3) and
+    /// x^(4/3) at 0: f″ exists on each side of p). f″, wherever it exists
+    /// on [l, p], has the sign `left`, and wherever it exists on [p, r]
+    /// the sign `right`: the enclosure of the certificate's evaluated f″
+    /// over each, which is not empty. (A formula made of functions
+    /// analytic inside their domains fails to have a second derivative at
+    /// finitely many points of a box it is continuous on.)
     ///
-    /// *No corner, not placed* (`at` absent, `left` = `right`, not
+    /// *No corner, not placed* (`at` absent, `left` = `right` strict, not
     /// `joined`): every kink argument of f's formulas is nonzero
     /// throughout [l, r]; f⁽ᵏ⁾, wherever it exists on [l, r], has the one
-    /// strict sign `left`: the enclosure over [l, r] of f⁽ᵏ⁾'s formula,
-    /// which is not empty (∛(x − 0.1): f′ > 0 on both sides of a vertical
-    /// tangent no double holds).
+    /// strict sign `left`: the enclosure over [l, r] of the certificate's
+    /// evaluated f⁽ᵏ⁾, which is not empty (∛(x − 0.1): f′ > 0 on both
+    /// sides of a vertical tangent no double holds).
     ///
-    /// (How the certifier shows a sign on [l, p), for a check that wants
-    /// the same route: g⁽ᵏ⁾'s enclosure over [l, p] strictly signed or
-    /// exactly 0; or g⁽ᵏ⁾, …, g⁽ᵐ⁻¹⁾ all exactly 0 at p and g⁽ᵐ⁾'s
-    /// enclosure over [l, p] strictly signed, m ≤ k + 3, which by Taylor
-    /// at p gives g⁽ᵏ⁾(t) = g⁽ᵐ⁾(ξ)·(t − p)ᵐ⁻ᵏ/(m − k)!: g⁽ᵐ⁾'s sign
-    /// after p, and that sign times (−1)ᵐ⁻ᵏ before it. A kink argument's
-    /// sign on each side of p likewise, from k = 0.)
+    /// (How the certifier shows a sign on [l, p) in a corner, for a check
+    /// that wants the same route: g⁽ᵏ⁾'s enclosure over [l, p] strictly
+    /// signed, or exactly 0 (then `Zero`); or g⁽ᵏ⁾, …, g⁽ᵐ⁻¹⁾ all exactly
+    /// 0 at p and g⁽ᵐ⁾'s enclosure over [l, p] strictly signed, for an
+    /// m ≤ k + 3, which by Taylor at p gives g⁽ᵏ⁾(t) =
+    /// g⁽ᵐ⁾(ξ)·(t − p)ᵐ⁻ᵏ/(m − k)! for a ξ between: g⁽ᵐ⁾'s sign after p,
+    /// and that sign times (−1)ᵐ⁻ᵏ before it. A kink argument's sign on
+    /// each side of p likewise, from k = 0. Over [p, r] the same.)
     KinkSides {
         x: XBox,
         at: Option<R>,
