@@ -1297,6 +1297,11 @@ fn row_problems_are_found_by_what_they_say() {
             "period: the window [0e0, 3e0] is not as wide as the period, in [6.2e0, 6.3e0]",
             "replay/row-problem",
         ),
+        // (Mirrors compared as listed: an excluded 0 enclosed off-centre.)
+        (
+            "parity: Even, but the domain is not symmetric about 0",
+            "replay/row-problem",
+        ),
         // A text the replay has learnt since: read, and added to a list.
         (
             "range: something new about the row",

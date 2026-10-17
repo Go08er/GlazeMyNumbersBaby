@@ -1414,6 +1414,13 @@ mod mp {
             "unreadable",
             "unread ",
             "unknown parity",
+            // (The replay's `domain_symmetric` compares each piece's
+            // mirror with the pieces as listed, enclosures and all: an
+            // excluded point enclosed off-centre, as 0 is in
+            // x/(sin(4)² − sin(4)² + x), reads "not symmetric" though the
+            // domain is ℝ \ {0}. Not shown symmetric, nor shown otherwise.
+            // Seed 1451, case 718.)
+            "but the domain is not symmetric",
         ];
         // What the replay says against a row (tests/replay/rows.rs).
         const AGAINST: &[&str] = &[
@@ -1432,7 +1439,6 @@ mod mp {
             "inside a piece listed",
             "yet f(0) is",
             "is not in the listed",
-            "but the domain is not symmetric",
             "defined at only one of ±x",
             "no such node of f",
             "f is not defined on its piece",
