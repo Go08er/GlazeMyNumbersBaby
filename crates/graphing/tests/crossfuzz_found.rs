@@ -2,7 +2,7 @@
 //! and was fixed: each case as the tester minimised it, checked directly.
 
 use graphing::Equation;
-use graphing::analysis::truth::{R, reval_typed};
+use graphing::analysis::truth::{R, bind_variables, reval_typed};
 use graphing::compile::{CompileOptions, Program};
 use graphing::functions::{TrigUnit, ncr, npr};
 use graphing::interval::{Ctx, Dec, DecInterval, Interval, enclose};
@@ -28,6 +28,28 @@ fn enclosure(src: &str, lo: f64, hi: f64) -> DecInterval {
         Interval::new(lo, hi),
         &Ctx::new(CompileOptions::default()),
     )
+}
+
+/// [`scalar`], [`reference`] and [`enclosure`] with sliders and an angle
+/// unit, as the tester had a case.
+fn scalar_in(src: &str, x: f64, opts: CompileOptions<'_>) -> f64 {
+    Program::compile_typed(&ast(src), &opts)
+        .expect("compiles")
+        .eval(x, 0.0)
+}
+
+fn reference_in(src: &str, x: f64, opts: CompileOptions<'_>) -> R {
+    reval_typed(&bind_variables(&ast(src), &opts), x, opts.trig_unit)
+}
+
+fn enclosure_in(src: &str, lo: f64, hi: f64, opts: CompileOptions<'_>) -> DecInterval {
+    enclose(&ast(src), Interval::new(lo, hi), &Ctx::new(opts))
+}
+
+/// Within `ulps` ulps of `want`.
+fn within(got: f64, want: f64, ulps: f64) -> bool {
+    let ulp = want.abs().next_up() - want.abs();
+    (got - want).abs() <= ulps * ulp
 }
 
 /// The claims the asymptote rows of a certificate rest on.
@@ -1234,5 +1256,144 @@ fn a_closed_range_end_names_where_it_is_taken() {
                 );
             }
         }
+    }
+}
+
+/// A count below the doubles inside a larger expression was taken as its
+/// double: nCr(x, 3) at ±5·10⁻³²⁴ is ±1.7·10⁻³²⁴, which rounds to 0, so
+/// a/nCr(x, 3) (a = −2.5, degrees) was undefined there to the compiled
+/// evaluator and the reference both, where it is ∓1.5·10³²⁴ and the
+/// interval form encloses it past the doubles; and ln nCr(x, 2) at
+/// −5·10⁻³²⁴, of a count of 2.5·10⁻³²⁴, was undefined for −745.13. (Seed
+/// 1733; values: the doubles nearest MPFR's.)
+#[test]
+fn a_count_below_the_doubles_inside_an_expression_has_its_value() {
+    let sliders = [("a", -2.5), ("b", 0.0)];
+    let deg = CompileOptions {
+        trig_unit: TrigUnit::Degrees,
+        variables: &sliders,
+    };
+    // a/nCr(x, 3) = −15/(x(x − 1)(x − 2)) is ∓7.5·2¹⁰⁷⁴ to every digit a
+    // double holds: beyond the doubles, and that to the reference.
+    let f = "a/nCr(x,3)";
+    for (x, side) in [(5e-324, -1.0), (-5e-324, 1.0)] {
+        let far = side * f64::INFINITY;
+        assert_eq!(scalar_in(f, x, deg), far, "{f} at {x:e}");
+        match reference_in(f, x, deg) {
+            R::V(v) => assert!(v.m == side * 0.9375 && v.e == 1077, "{f} at {x:e}: {v:?}"),
+            r => panic!("{f} at {x:e}: {r:?}"),
+        }
+        let (lo, hi) = if x > 0.0 {
+            (x, f64::MIN_POSITIVE)
+        } else {
+            (-f64::MIN_POSITIVE, x)
+        };
+        for e in [enclosure_in(f, x, x, deg), enclosure_in(f, lo, hi, deg)] {
+            assert!(
+                e.dec >= Dec::Dac && e.lo() <= far && far <= e.hi(),
+                "{f} at {x:e}: {e:?}"
+            );
+        }
+    }
+    // nCr(x, 2) = 2⁻¹⁰⁷⁵·(1 + 2⁻¹⁰⁷⁴) there: its logarithm is −1075·ln 2.
+    let g = "ln(nCr(x,2))";
+    let want = -745.133_219_101_941_2;
+    let v = scalar_in(g, -5e-324, deg);
+    assert!(within(v, want, 1.0), "{g}: {v:e}");
+    assert!(
+        matches!(reference_in(g, -5e-324, deg), R::V(r) if within(r.f(), want, 1.0)),
+        "{g}: {:?}",
+        reference_in(g, -5e-324, deg)
+    );
+    let e = enclosure_in(g, -5e-324, -5e-324, deg);
+    assert!(e.dec >= Dec::Dac && e.lo() <= v && v <= e.hi(), "{e:?}");
+    // The value itself, not only its side: x/nCr(x, 3) is 3 next to 0,
+    // where the count is below the doubles or a subnormal, whose rounding
+    // was up to 2⁻¹¹ of it off.
+    for x in [5e-324, -5e-324, 1e-320, -3e-310] {
+        assert_eq!(scalar("x/nCr(x,3)", x), 3.0, "at {x:e}");
+        assert!(
+            matches!(reference("x/nCr(x,3)", x), R::V(v) if v.f() == 3.0),
+            "at {x:e}: {:?}",
+            reference("x/nCr(x,3)", x)
+        );
+    }
+    // Times a factor that brings it back: nCr(2⁻¹⁰⁷⁴, 3) is 2⁻¹⁰⁷⁴/3 to
+    // every digit a double holds. (By 2¹⁰⁰⁰, a double, or 2¹¹⁰⁰, past
+    // them, it was 0, not 2⁻⁷⁴/3 or 2²⁶/3.)
+    for (src, want) in [
+        ("nCr(x,3)*2^1000", 2f64.powi(-74) / 3.0),
+        ("nCr(x,3)*2^1100", 2f64.powi(26) / 3.0),
+    ] {
+        let v = scalar(src, 5e-324);
+        assert!(within(v, want, 2.0), "{src}: {v:e}, not {want:e}");
+        assert!(
+            matches!(reference(src, 5e-324), R::V(r) if within(r.f(), want, 2.0)),
+            "{src}: {:?}",
+            reference(src, 5e-324)
+        );
+    }
+    // A count that is 0, or at a pole of Γ, has no reciprocal or logarithm.
+    for (src, x) in [
+        ("1/nCr(x,3)", 2.0),
+        ("ln(nCr(x,3))", 1.0),
+        ("1/nPr(x,62)", 61.0),
+        ("1/nPr(x,62)", -3.0),
+        ("ln(nCr(x,0.5))", -1.0),
+    ] {
+        assert!(scalar(src, x).is_nan(), "{src} at {x}");
+        assert!(matches!(reference(src, x), R::Undef), "{src} at {x}");
+    }
+}
+
+/// A count past the doubles inside a larger expression was +∞ to the
+/// compiled evaluator (and unknown to the reference): nPr(x, 62)/x⁶² near
+/// −5.6·10¹⁴, where both overflow, was +∞ for about 1 (the README's
+/// known-open note). And Γ there was e^(ln Γ) with ln Γ a double, about 13
+/// digits (x!/(x·(x − 1)!) at 10⁶ was 1.00000000000017; the tester's
+/// known-open table had it at Γ(171.5)); x!! past 300 was beyond even the
+/// extended range, so x!!/x!! was "can't tell". Each is its own value now,
+/// within an ulp or so. (Values: the doubles nearest MPFR's.)
+#[test]
+fn a_count_past_the_doubles_inside_an_expression_has_its_value() {
+    let f = "nPr(x,62)/x^62";
+    for (x, want) in [
+        (-562_341_325_190_349.06, 1.000_000_000_003_362_6),
+        (-559_999_999_999_999.5, 1.000_000_000_003_376_9),
+        (-560_000_000_000_000.25, 1.000_000_000_003_376_9),
+        (560_000_000_000_000.25, 0.999_999_999_996_623_3),
+    ] {
+        let v = scalar(f, x);
+        assert!(within(v, want, 2.0), "{f} at {x:e}: {v:e}, not {want:e}");
+        assert!(
+            matches!(reference(f, x), R::V(r) if within(r.f(), want, 2.0)),
+            "{f} at {x:e}: {:?}",
+            reference(f, x)
+        );
+    }
+    // −5.6·10¹⁴ itself is a whole number: Γ(x + 1) is at a pole there, a
+    // hole in the polynomial.
+    assert!(scalar(f, -5.6e14).is_nan());
+    assert!(matches!(reference(f, -5.6e14), R::Undef));
+    assert!(enclosure(f, -5.6e14, -5.6e14).is_empty());
+    for (g, x, want) in [
+        ("x!/(x*(x-1)!)", 1e6, 1.0),
+        ("x!/(x-1)!", 1e10 + 0.5, 1e10 + 0.5),
+        ("(x+1)!/x!", 1000.5, 1001.5),
+        ("1/(x-0.5)!*10^300", 172.0, 6.148_558_251_064_136e-11),
+        // Γ(−199.5), below the doubles: it was "can't tell".
+        ("x!*10^300", -200.5, 5.636_995_190_178_567e-74),
+        ("x!!/x!!", 400.0, 1.0),
+        ("x!!/(x-2)!!", 401.0, 401.0),
+    ] {
+        let v = scalar(g, x);
+        assert!(within(v, want, 2.0), "{g} at {x:e}: {v:e}, not {want:e}");
+        assert!(
+            matches!(reference(g, x), R::V(r) if within(r.f(), want, 2.0)),
+            "{g} at {x:e}: {:?}",
+            reference(g, x)
+        );
+        let e = enclosure(g, x, x);
+        assert!(e.lo() <= v && v <= e.hi(), "{g} at {x:e}: {v:e}, {e:?}");
     }
 }
