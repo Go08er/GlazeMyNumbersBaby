@@ -1128,10 +1128,8 @@ fn refused(
     match setting {
         1 => withhold_all_but(&mut v, &[row, "domain"]),
         2 => withhold_all_but(&mut v, &[row]),
-        3 => {
-            if body(&v, row).is_some() {
-                body_mut(&mut v, row)["cert"]["claims"] = Value::Array(every.to_vec());
-            }
+        3 if body(&v, row).is_some() => {
+            body_mut(&mut v, row)["cert"]["claims"] = Value::Array(every.to_vec());
         }
         _ => {}
     }

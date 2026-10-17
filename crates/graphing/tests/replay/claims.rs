@@ -1018,7 +1018,11 @@ fn smooth_sign(fx: &Fx, e: &Expr, lo: f64, hi: f64, p: Option<f64>, k: usize) ->
             continue;
         };
         let after = p == lo;
-        let pos = if after { up } else { up == ((m - k) % 2 == 0) };
+        let pos = if after {
+            up
+        } else {
+            up == (m - k).is_multiple_of(2)
+        };
         return Some(if pos { KinkSign::Pos } else { KinkSign::Neg });
     }
     None
@@ -1116,7 +1120,7 @@ fn kink_sides(
     joined: bool,
 ) -> Outcome {
     let (l, r) = x;
-    if !(l < r) {
+    if l.partial_cmp(&r) != Some(std::cmp::Ordering::Less) {
         return Outcome::new(Class::Refuted, "an empty kink box");
     }
     if !(k == 1 || k == 2) {

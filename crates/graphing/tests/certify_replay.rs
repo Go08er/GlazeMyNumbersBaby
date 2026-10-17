@@ -3350,7 +3350,7 @@ fn the_derivatives_own_form_is_the_derivative() {
 }
 
 /// The first monotone piece of `v`, beside the open end at `end`.
-fn piece_from<'v>(v: &'v mut serde_json::Value, end: f64) -> &'v mut serde_json::Value {
+fn piece_from(v: &mut serde_json::Value, end: f64) -> &mut serde_json::Value {
     value_of(v, "monotonicity")
         .as_array_mut()
         .unwrap()
