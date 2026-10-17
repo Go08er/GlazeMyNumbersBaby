@@ -90,14 +90,18 @@ fn safe(r: f64) -> Option<Wide> {
 
 /// A count (n!, n!!, nCr, nPr) of doubles whose double is `r`: that double
 /// where it is a normal one (as rounded there), undefined where it is NaN
-/// (a pole), and else, where it is 0, a subnormal or ±∞, its own value
-/// from `beyond` (`functions::count_beyond`: an exact 0 only for a count
-/// that is 0).
+/// (a pole) but for a count past the range whose side isn't proven (NaN
+/// to `beyond` too: "can't tell"), and else, where it is 0, a subnormal or
+/// ±∞, its own value from `beyond` (`functions::count_beyond`: an exact 0
+/// only for a count that is 0).
 fn count(r: f64, beyond: impl FnOnce() -> Option<(f64, f64)>) -> Wide {
     if r.is_normal() {
         Wide::new(r)
     } else if r.is_nan() {
-        Wide::Undef
+        match beyond() {
+            Some((_, e)) if e.is_nan() => Wide::Unknown,
+            _ => Wide::Undef,
+        }
     } else {
         match beyond() {
             Some((m, e)) => Wide::norm(m, e),

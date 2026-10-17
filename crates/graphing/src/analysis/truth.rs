@@ -372,18 +372,22 @@ pub fn rational(e: &Expr) -> Option<(i32, i32)> {
 
 /// A count (n!, n!!, nCr, nPr) of doubles whose double is `r`, as the
 /// compiled program's extended range has it (`wide::count`): that double
-/// where it is a normal one, undefined where NaN, and else, where it is 0,
-/// a subnormal or ±∞, its own value from `beyond` (m·2^e, e = ±∞ for a
-/// magnitude beyond even that; `functions::count_beyond`), 0 only for a
-/// count that is 0. (Its double alone made a/nCr(x, 3) and ln nCr(x, 2)
-/// undefined beside 0, where the count is below the doubles: found by
-/// `tests/crossfuzz.rs`.)
+/// where it is a normal one, undefined where NaN (but "can't tell" where
+/// `beyond` can't tell its side either), and else, where it is 0, a
+/// subnormal or ±∞, its own value from `beyond` (m·2^e, e = ±∞ for a
+/// magnitude beyond even that, NaN where its side isn't proven;
+/// `functions::count_beyond`), 0 only for a count that is 0. (Its double
+/// alone made a/nCr(x, 3) and ln nCr(x, 2) undefined beside 0, where the
+/// count is below the doubles: found by `tests/crossfuzz.rs`.)
 fn count(r: f64, beyond: impl FnOnce() -> Option<(f64, f64)>) -> R {
     if r.is_normal() {
         return R::V(Xf::of(r));
     }
     if r.is_nan() {
-        return R::Undef;
+        return match beyond() {
+            Some((_, e)) if e.is_nan() => R::Unknown,
+            _ => R::Undef,
+        };
     }
     match beyond() {
         None => R::Undef,

@@ -1397,3 +1397,80 @@ fn a_count_past_the_doubles_inside_an_expression_has_its_value() {
         assert!(e.lo() <= v && v <= e.hi(), "{g} at {x:e}: {v:e}, {e:?}");
     }
 }
+
+/// A count far past the extended range had its side from the sign of
+/// Σ ±(x/t)·(ln x − 1) in doubles, x each argument of Γ and t the
+/// largest, and for C(10²⁰⁰, 10¹⁰⁰) the first two parts cancel exactly
+/// there (10²⁰⁰ − 10¹⁰⁰ rounds to 10²⁰⁰): what was left, the lone 10¹⁰⁰'s,
+/// put a count of about e^(2.3·10¹⁰²) below the range. So nCr(x², x) at
+/// 10¹⁰⁰ was below the range to the reference where the compiled program
+/// had its double, +∞ (seed 2026), and to the compiled program
+/// 1/nCr(x², x) was +∞ for 0, and ln nCr(x², x) −∞. Its side is proven
+/// now (`functions::far_side`). nPr(x², x), x! and x!! there had theirs
+/// right, and keep them.
+#[test]
+fn a_count_far_past_the_range_has_its_side() {
+    use graphing::functions::count_beyond;
+    let above = |v: Option<(f64, f64)>| matches!(v, Some((m, e)) if m > 0.0 && e == f64::INFINITY);
+    // C(n, r) and P(n, r) for whole 1 ≤ r < n are whole numbers of at least
+    // n: never below the range. With r and n − r past 10¹⁵ and n past
+    // 10⁶⁰, ln C(n, r) > r·ln(n/r) is past 2⁴⁷, beyond the extended range.
+    for a in [61, 100, 150, 200, 250, 300, 308] {
+        let n = 10f64.powi(a);
+        for b in [15, 30, a / 2, a - 15, a - 1] {
+            let k = 10f64.powi(b);
+            for r in [k, n - k] {
+                if n - r < 1e15 {
+                    continue;
+                }
+                for perm in [false, true] {
+                    let v = count_beyond(n, r, perm);
+                    assert!(above(v), "{n:e}, {r:e} ({perm}): {v:?}");
+                }
+            }
+        }
+    }
+    // Beyond the range above: a size, not a value, to the reference; its
+    // reciprocal 0; its logarithm +∞ (about 2.3·10¹⁰² for C(10²⁰⁰, 10¹⁰⁰)).
+    fn huge(r: R) -> bool {
+        matches!(r, R::Unknown) || matches!(r, R::V(v) if v.m > 0.0 && v.e > 1024)
+    }
+    fn tiny(r: R) -> bool {
+        matches!(r, R::Unknown) || matches!(r, R::V(v) if v.m > 0.0 && v.f() == 0.0)
+    }
+    for x in [1e70, 1e100, 1e150] {
+        for f in ["nCr(x^2,x)", "nPr(x^2,x)", "x!", "x!!"] {
+            let checks = [
+                (f.to_string(), f64::INFINITY, huge as fn(R) -> bool),
+                (format!("1/{f}"), 0.0, tiny),
+                (format!("{f}*{f}"), f64::INFINITY, huge),
+            ];
+            for (g, want, side) in checks {
+                let v = scalar(&g, x);
+                assert_eq!(v, want, "{g} at {x:e}");
+                assert!(
+                    side(reference(&g, x)),
+                    "{g} at {x:e}: {:?}",
+                    reference(&g, x)
+                );
+                let e = enclosure(&g, x, x);
+                assert!(e.lo() <= v && v <= e.hi(), "{g} at {x:e}: {e:?}");
+            }
+            if f.starts_with('n') {
+                let g = format!("ln({f})");
+                assert_eq!(scalar(&g, x), f64::INFINITY, "{g} at {x:e}");
+                assert!(!matches!(reference(&g, x), R::V(v) if v.f() < 1e100 || v.m < 0.0));
+            }
+            // Two such sizes: their quotient (1) can't be told.
+            let g = format!("{f}/{f}");
+            assert!(scalar(&g, x).is_nan(), "{g} at {x:e}");
+            assert!(matches!(reference(&g, x), R::Unknown), "{g} at {x:e}");
+        }
+    }
+    // And below it: P(½, −10³⁰⁰) = Γ(3/2)/Γ(10³⁰⁰ + 3/2).
+    let (f, x) = ("nPr(0.5,-x)", 1e300);
+    assert_eq!(count_beyond(0.5, -x, true), Some((1.0, f64::NEG_INFINITY)));
+    assert_eq!(scalar(f, x), 0.0);
+    assert!(tiny(reference(f, x)), "{:?}", reference(f, x));
+    assert_eq!(scalar(&format!("1/{f}"), x), f64::INFINITY);
+}

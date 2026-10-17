@@ -1573,6 +1573,104 @@ fn counts_beyond_the_doubles_are_within_a_few_ulps() {
     assert!(t.violations.is_empty(), "{:#?}", t.violations);
 }
 
+/// nCr, nPr, n! and n!! far past the extended range, their |ln| beyond 2⁴⁷
+/// and the arguments of Γ up to 10³⁰⁸: on the side MPFR's ln |Γ| has them
+/// (at 2400 bits, ln Γ(10³⁰⁸) is known to 400 digits past its point), and
+/// nowhere "can't tell". The sign of Σ ±(x/t)·(ln x − 1) in doubles, x
+/// each argument of Γ and t the largest, had C(10²⁰⁰, 10¹⁰⁰), about
+/// e^(2.3·10¹⁰²), below the range: 10²⁰⁰ − 10¹⁰⁰ rounds to 10²⁰⁰ and two
+/// of its parts cancelled (`tests/crossfuzz.rs`, seed 2026, nCr(x², x)).
+#[test]
+fn counts_far_past_the_range_have_mpfrs_side() {
+    use graphing::functions::{count_beyond, double_factorial_beyond, factorial_beyond, ncr, npr};
+    init();
+    let mut pairs: Vec<(f64, f64)> = Vec::new();
+    for a in [16, 20, 40, 61, 62, 100, 150, 200, 250, 300, 307, 308] {
+        let n = 10f64.powi(a);
+        for b in [
+            0, 1, 2, 8, 14, 15, 16, 30, 45, 60, 61, 100, 150, 200, 250, 300, 307,
+        ] {
+            if b < a {
+                let k = 10f64.powi(b);
+                pairs.extend([(n, k), (n, n - k), (n, -k)]);
+            }
+        }
+        pairs.extend([(n, (n / 2.0).floor()), (n, (n / 4.0).floor()), (-n, 0.5)]);
+        // A fraction with a whole number past the range: the arguments of
+        // Γ reflected, and Γ(n + 1) with one next to it.
+        for s in [0.5, 2.5, 1e10 + 0.5, -0.5, -2.5, -1e10 - 0.5] {
+            pairs.extend([(s, n), (s, -n), (n, s)]);
+        }
+    }
+    let whole = |v: f64| v == v.trunc();
+    let mut t = Tally::default();
+    let mut worst: f64 = 0.0;
+    // How many far past the range: above it, below it.
+    let (mut above, mut below) = (0, 0);
+    let mut tally = |got: Option<(f64, f64)>| match got {
+        Some((_, e)) if e == f64::INFINITY => above += 1,
+        Some((_, e)) if e == f64::NEG_INFINITY => below += 1,
+        _ => {}
+    };
+    for (n, r) in pairs {
+        for perm in [false, true] {
+            let v = if perm { npr(n, r) } else { ncr(n, r) };
+            if v.is_normal() || v.is_nan() {
+                continue;
+            }
+            t.cases += 1;
+            let name = format!("{}({n:e}, {r:e})", if perm { "nPr" } else { "nCr" });
+            let got = count_beyond(n, r, perm);
+            if got == Some((0.0, 0.0)) {
+                if !(whole(n) && whole(r) && n >= 0.0 && (r < 0.0 || r > n)) {
+                    t.fail(format!("{name} = 0, a count that isn't"));
+                }
+                continue;
+            }
+            tally(got);
+            beyond_against_mpfr(&mut t, &mut worst, &name, got, mp_count_log(n, r, perm));
+        }
+    }
+    let mut xs: Vec<f64> = [16, 20, 40, 61, 62, 100, 200, 300, 308]
+        .map(|a| 10f64.powi(a))
+        .to_vec();
+    xs.extend([-(2f64.powi(51)) - 0.5, -1e15 - 0.5, -3e14 - 0.25]);
+    for x in xs {
+        t.cases += 1;
+        let (got, truth) = (factorial_beyond(x), mp_count_log(x, x, true));
+        tally(got);
+        beyond_against_mpfr(&mut t, &mut worst, &format!("({x:e})!"), got, truth);
+    }
+    let ln2 = Float::with_val(COUNT_W, MpConst::Log2);
+    for n in [
+        1e16,
+        1e100,
+        1e308,
+        2f64.powi(52) + 1.0,
+        999_999_999_999_999.0,
+        3e15 + 1.0,
+    ] {
+        t.cases += 1;
+        let k = (n / 2.0).floor();
+        let truth = if n % 2.0 == 0.0 {
+            mp_count_log(k, k, true).map(|(l, neg)| (l + Float::with_val(COUNT_W, &ln2 * k), neg))
+        } else {
+            mp_count_log(n, k + 1.0, true)
+                .map(|(l, neg)| (l - Float::with_val(COUNT_W, &ln2 * k), neg))
+        };
+        let got = double_factorial_beyond(n);
+        tally(got);
+        beyond_against_mpfr(&mut t, &mut worst, &format!("{n:e}!!"), got, truth);
+    }
+    eprintln!(
+        "counts far past the range: {} cases, {above} above it, {below} below, at most {worst:.2} ulps elsewhere",
+        t.cases
+    );
+    report(&t);
+    assert!(above > 300 && below > 20, "{above} above, {below} below");
+    assert!(t.violations.is_empty(), "{:#?}", t.violations);
+}
+
 /// A count beyond the doubles as m·2^e (`got`) against MPFR's ln |count|
 /// and sign (`truth`, `None` at a pole): m within 4 ulps of
 /// e^(ln |count| − e·ln 2), and an infinite e only where |ln| is past 2⁴⁷.
@@ -1597,6 +1695,13 @@ fn beyond_against_mpfr(
         t.fail(format!(
             "{name} = {m}·2^{e}: MPFR's sign is {}",
             if neg { '-' } else { '+' }
+        ));
+        return;
+    }
+    if e.is_nan() {
+        t.fail(format!(
+            "{name}: a side it can't tell, where MPFR has its ln as {:e}",
+            l.to_f64()
         ));
         return;
     }
