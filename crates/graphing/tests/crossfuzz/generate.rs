@@ -1,5 +1,5 @@
 //! The generator: random expressions biased toward the families the
-//! review rounds 12–18 found bugs in, built from ordinary blocks
+//! review rounds 12–19 found bugs in, built from ordinary blocks
 //! (polynomials, trig, exp/log, abs, floor, min/max, mod, sign) around the
 //! risky atoms of each family, under a random number-precision setting,
 //! with and without sliders. Deterministic: case `i` of seed `s` is a
@@ -565,6 +565,134 @@ const NEAR: &[(&str, &str)] = &[
     ("1/3", "0.0000001"),
 ];
 
+/// Steps (floor, ceil, round, sign, mod) of numbers typed a hair off where
+/// the step jumps, at a tie, or of literal arithmetic whose double lies on
+/// the other side: the exact value decides (docs/ti-conventions.md), and
+/// off it is not the double's (`ceil(1.00000000000000000001)` is 2, and 1
+/// from its double; `floor(0.3/0.1)` is 3, and 2 in doubles). Under a digit
+/// limit, the step of the number rounded. (Review 19, R19-M-04.)
+const STEPS: &[&str] = &[
+    "ceil(1.00000000000000000001)",
+    "ceil(-0.99999999999999999999)",
+    "floor(2.99999999999999999999)",
+    "floor(-2.99999999999999999999)",
+    "floor(-3.00000000000000000001)",
+    "round(2.50000000000000000001)",
+    "round(2.49999999999999999999)",
+    "round(-0.5)",
+    "round(0.5)",
+    "round(-2.5)",
+    "round(-0.50000000000000000001)",
+    "round(0.49999999999999999999)",
+    "sign(0.1+0.2-0.3)",
+    "sign(0.3-0.1*3)",
+    "sign(10^(-400))",
+    "sign(-(10^(-400)))",
+    "sign(1-0.99999999999999999999)",
+    "mod(7.00000000000000000001,7)",
+    "mod(6.99999999999999999999,7)",
+    "mod(21,7.00000000000000000001)",
+    "mod(-0.00000000000000000001,7)",
+    "mod(0.3,0.1)",
+    "mod(1,0.1)",
+    "floor(0.3/0.1)",
+    "ceil(0.1*3/0.3)",
+    "floor(10^17*(0.1+0.2-0.3))",
+    "ceil(10^(-400))",
+    "floor(-(10^(-400)))",
+    "ceil(max(1.00000000000000000001,1))",
+    "floor(0.7+0.2+0.1)",
+];
+
+/// Steps of x whose jumps sit a hair off the doubles' (a period or a
+/// shift no double holds).
+const STEPS_OF_X: &[&str] = &[
+    "mod(x,1.00000000000000000001)",
+    "mod(x,0.1)",
+    "mod(x+7.00000000000000000001,7)",
+    "floor(x*1.00000000000000000001)",
+    "floor(x+0.00000000000000000001)",
+    "ceil(x-10^(-400))",
+    "round(x+0.50000000000000000001)",
+    "sign(x-(0.1+0.2-0.3))",
+];
+
+/// Centres of narrow kinks and dents that no double holds (`0.1` and
+/// `0.1+0.2` are decimals beside their doubles): a turn there lies
+/// between two doubles, which samples don't see (review 19, R19-M-01).
+const CENTRES: &[&str] = &[
+    "sin(1)", "1/3", "sqrt(2)", "pi/7", "e/10", "0.1+0.2", "0.1", "cos(2)", "ln(3)", "2/3",
+];
+
+/// x-free sub-expressions whose exact value and whose double lie on two
+/// sides of where a function turns: a pole, a domain's end, a jump
+/// (docs/ti-conventions.md's table of exact arguments; review 19), with
+/// the angle unit they need (`Some`: degrees, or grads, for a quarter
+/// turn). A count beside a pole of Γ, a power or a root whose exponent's
+/// parity only the exact value shows, a quarter turn, ln and log beside
+/// 1, the inverse functions' ends, a divisor exactly tiny, ties of min
+/// and max, mod at a multiple.
+const EDGES: &[(&str, Option<TrigUnit>)] = &[
+    ("nCr(5.00000000000000000001,2)", None),
+    ("nCr(5,6.00000000000000000001)", None),
+    ("nPr(5.00000000000000000001,2)", None),
+    ("nPr(3,3.00000000000000000001)", None),
+    ("(-1.00000000000000000001)!", None),
+    ("(-0.99999999999999999999)!", None),
+    ("(-2)!", None),
+    ("(3.00000000000000000001)!!", None),
+    ("(4.99999999999999999999)!!", None),
+    ("nCr(-1.00000000000000000001,2)", None),
+    ("(-8)^(2.00000000000000000001)", None),
+    ("(-8)^(0.1*30)", None),
+    ("(-1)^(9007199254740993)", None),
+    ("(-1)^(10^17+1)", None),
+    ("(-1)^(1/(0.1+0.2))", None),
+    ("(-8)^(1/3.00000000000000000001)", None),
+    ("root(-8,3.00000000000000000001)", None),
+    ("root(-8,2.99999999999999999999)", None),
+    ("root(-8,0.1*30)", None),
+    ("root(-8,9007199254740993)", None),
+    ("root(-1,0.3/0.1)", None),
+    ("tan(90.00000000000000000001)", Some(TrigUnit::Degrees)),
+    ("tan(89.99999999999999999999)", Some(TrigUnit::Degrees)),
+    ("sec(90+10^(-30))", Some(TrigUnit::Degrees)),
+    ("sin(180.00000000000000000001)", Some(TrigUnit::Degrees)),
+    ("cot(180.00000000000000000001)", Some(TrigUnit::Degrees)),
+    ("tan(0.1*900)", Some(TrigUnit::Degrees)),
+    ("tan(100.00000000000000000001)", Some(TrigUnit::Grads)),
+    ("cot(200.00000000000000000001)", Some(TrigUnit::Grads)),
+    ("cos(100+10^(-30))", Some(TrigUnit::Grads)),
+    ("ln(1.00000000000000000001)", None),
+    ("1/ln(1.00000000000000000001)", None),
+    ("1/ln(0.7+0.2+0.1)", None),
+    ("ln(0.1+0.2-0.3+10^(-400))", None),
+    ("ln(0.1+0.2-0.3)", None),
+    ("log(1.00000000000000000001,2)", None),
+    ("1/log(0.99999999999999999999)", None),
+    ("sqrt(0.1+0.2-0.3-10^(-30))", None),
+    ("sqrt(0.3-0.1-0.2)", None),
+    ("asin(1.00000000000000000001)", None),
+    ("asin(0.99999999999999999999)", None),
+    ("acos(-1.00000000000000000001)", None),
+    ("acos(0.99999999999999999999)", None),
+    ("asin(0.1+0.2+0.7)", None),
+    ("acosh(0.99999999999999999999)", None),
+    ("acosh(1.00000000000000000001)", None),
+    ("atanh(0.99999999999999999999)", None),
+    ("atanh(1.00000000000000000001)", None),
+    ("asec(0.99999999999999999999)", None),
+    ("1/(0.1+0.2-0.3+10^(-400))", None),
+    ("1/(1.00000000000000000001-1)", None),
+    ("1/(0.3-0.1*3+10^(-30))", None),
+    ("min(0.1+0.2,0.3)", None),
+    ("max(0.1+0.2,0.3)-0.3", None),
+    ("min(1.00000000000000000001,1)-1", None),
+    ("ceil(max(0.1+0.2,0.3)/0.3)", None),
+    ("1/mod(0.3,0.1)", None),
+    ("1/mod(0.30000000000000000001,0.1)", None),
+];
+
 /// Slider values: whole, short decimals that are and aren't doubles, a
 /// double a digit limit rounds, and large.
 const SLIDER_VALUES: &[f64] = &[
@@ -906,6 +1034,107 @@ impl Gen<'_> {
         }
     }
 
+    /// A step of an exact literal a hair off its jump ([`STEPS`]) as a
+    /// constant term, a factor, an exponent, a root's degree, a divisor,
+    /// in an argument, beside x (`x + ceil(…)`) and alone with a number
+    /// (`5 + ceil(…)`, a constant); or a step of x whose jumps are a hair
+    /// off the doubles' ([`STEPS_OF_X`]).
+    fn steps(&mut self) -> T {
+        let s = raw(self.r.pick(STEPS));
+        let u = self.ordinary(1);
+        match self.r.below(11) {
+            0 | 1 => bin('+', T::X, s),
+            2 => bin('+', self.small(), s),
+            3 => bin('*', s, u),
+            4 => bin('^', u, s),
+            5 => call("root", vec![u, s]),
+            6 => {
+                let f = self
+                    .r
+                    .pick(&["sin", "sqrt", "ln", "abs", "floor", "exp", "atan"]);
+                call1(f, bin('+', T::X, s))
+            }
+            7 => bin('/', u, s),
+            8 | 9 => {
+                let t = raw(self.r.pick(STEPS_OF_X));
+                match self.r.below(3) {
+                    0 => t,
+                    1 => bin('+', t, u),
+                    _ => bin('*', u, t),
+                }
+            }
+            _ => call(self.r.pick(&["min", "max"]), vec![u, s]),
+        }
+    }
+
+    /// A narrow kink or dent at a centre no double holds ([`CENTRES`]):
+    /// valleys min((x − c)^(2/N), k) for a huge odd N (|x − c|^(2/N),
+    /// which rises from 0 at c to k within 10⁻ᴺ of it), with x added (a
+    /// strict local minimum on a rising line), |x − c|, (x − c)·|x − c|,
+    /// max(x − c, c − x, k), fractional powers of x − c, a notch
+    /// max((x − c)^(2/N), k) flat beside c, and two kinks closer than two
+    /// doubles.
+    fn kinks(&mut self) -> T {
+        let c = self.r.pick(CENTRES);
+        let d = || bin('-', T::X, raw(c));
+        let n = self.r.pick(&[
+            "1000003",
+            "1000003",
+            "3",
+            "5",
+            "9007199254740993",
+            "1000000000000000000000000000001",
+        ]);
+        let k = num(self.r.pick(&["0.01", "0.5", "1", "0.000000001"]));
+        let narrow = |n: &str| raw(&format!("2/{n}"));
+        match self.r.below(12) {
+            0 | 1 => call("min", vec![bin('^', d(), narrow(n)), k]),
+            2 => bin(
+                '+',
+                T::X,
+                call("min", vec![bin('^', d(), narrow("1000003")), num("0.01")]),
+            ),
+            3 => call1("abs", d()),
+            4 => bin('*', d(), call1("abs", d())),
+            5 => call("max", vec![d(), bin('-', raw(c), T::X), k]),
+            6 => bin('^', d(), raw("2/3")),
+            7 => bin('^', d(), raw(self.r.pick(&["1/3", "5/3", "4/3", "2/5"]))),
+            8 => call(
+                "max",
+                vec![bin('^', d(), narrow(n)), num(self.r.pick(&["0.99", "0.5"]))],
+            ),
+            9 => bin('-', self.poly(), call1("abs", d())),
+            10 => call("min", vec![call1("abs", d()), k]),
+            _ => bin(
+                '+',
+                call1("abs", d()),
+                call1("abs", bin('-', d(), raw("10^(-30)"))),
+            ),
+        }
+    }
+
+    /// An x-free sub-expression on the edge of where a function turns
+    /// ([`EDGES`]) beside x, as a factor, a term, a divisor, an exponent
+    /// or in an argument; with the angle unit it needs.
+    fn edges(&mut self) -> (T, Option<TrigUnit>) {
+        let (e, unit) = self.r.pick(EDGES);
+        let e = raw(e);
+        let u = self.ordinary(1);
+        let t = match self.r.below(8) {
+            0 | 1 => bin('+', T::X, e),
+            2 => bin('*', e, u),
+            3 => bin('+', u, e),
+            4 => bin('-', u, e),
+            5 => bin('/', u, e),
+            6 => bin('^', T::X, e),
+            _ => {
+                let f = self.r.pick(&["sqrt", "ln", "floor", "sign", "abs"]);
+                call1(f, bin('+', T::X, e))
+            }
+        };
+        (t, unit)
+    }
+
     /// Two spellings equal everywhere, with the same domain.
     fn pair(&mut self) -> (T, T) {
         let f = self.ordinary(1);
@@ -1030,12 +1259,21 @@ pub fn case(seed: u64, index: u64) -> Case {
     for _ in 0..8 {
         let sliders = r.chance(3, 10);
         let mut g = Gen { r: &mut r, sliders };
-        let which = g.r.weighted(&[26, 24, 20, 8, 22]);
+        let which = g.r.weighted(&[26, 24, 20, 8, 22, 16, 16, 16]);
+        // (The angle unit an atom needs, where it needs one.)
+        let mut needs = None;
         let (family, atom, pair) = match which {
             0 => ("literal", g.literal(), None),
             1 => ("definedness", g.definedness(), None),
             2 => ("counting", g.counting(), None),
             3 => ("display", g.display(), None),
+            5 => ("steps", g.steps(), None),
+            6 => ("kinks", g.kinks(), None),
+            7 => {
+                let (e, unit) = g.edges();
+                needs = unit;
+                ("edges", e, None)
+            }
             _ => {
                 let (l, r) = g.pair();
                 ("pair", l, Some(r))
@@ -1104,6 +1342,13 @@ pub fn case(seed: u64, index: u64) -> Case {
             }
         }
         let mut digits = DIGITS[r.weighted(&[2, 6, 2, 4, 4, 8])];
+        // An exact literal a hair off a step or an edge is that only off
+        // (to 14 digits 1.00000000000000000001 is 1): mostly off, and
+        // under each limit too (the same function as its number rounded,
+        // which `digits` in views.rs compares).
+        if matches!(family, "steps" | "edges") && r.chance(2, 3) {
+            digits = None;
+        }
         // Two spellings are one function only where rounding leaves every
         // number of both as typed (to 5 digits 1000001/3000003 is no cube
         // root): a setting that does, or off.
@@ -1114,6 +1359,7 @@ pub fn case(seed: u64, index: u64) -> Case {
             }
         }
         let unit = [TrigUnit::Radians, TrigUnit::Degrees, TrigUnit::Grads][r.weighted(&[90, 7, 3])];
+        let unit = needs.unwrap_or(unit);
         return Case {
             index,
             family,
