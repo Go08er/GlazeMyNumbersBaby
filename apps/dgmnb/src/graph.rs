@@ -340,7 +340,11 @@ impl GraphPage {
     }
 
     pub fn paste(&mut self, text: &str, cx: &mut Cx) {
-        self.insert(text.trim(), cx);
+        // One line of it, as a field's own paste takes (App::edit_key).
+        let line = input::single_line(text);
+        if !line.is_empty() {
+            self.insert(&line, cx);
+        }
     }
 
     // ------------------------------------------------------------ fields

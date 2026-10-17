@@ -362,16 +362,16 @@ fn guard_text(text: &gtk::Text) {
 /// selection if dropped on it, then as one edit ([`replace_selection`]).
 /// The cursor stays where it was (before the text, in place of a
 /// selection).
-fn drop_into_text(text: &gtk::Text, mut dropped: String, x: f64) {
-    if text.must_truncate_multiline()
-        && let Some(end) = dropped.find(['\n', '\r'])
-    {
-        dropped.truncate(end);
+fn drop_into_text(text: &gtk::Text, dropped: String, x: f64) {
+    // One line of it, as of a paste ([`paste_into_text`]).
+    let dropped = appcore::input::single_line(&dropped);
+    if dropped.is_empty() {
+        return;
     }
     let at = position_at(text, x);
     let _one_edit = text.freeze_notify();
     match text.selection_bounds() {
-        Some((a, b)) if (a.min(b)..=a.max(b)).contains(&at) => {
+        Some((a, b)) if dropped_on((a, b), at) => {
             replace_selection(text, &dropped);
             text.set_position(a.min(b));
         }
@@ -384,13 +384,28 @@ fn drop_into_text(text: &gtk::Text, mut dropped: String, x: f64) {
             text.select_region(at, at);
             replace_selection(text, &dropped);
             let added = i32::from(text.text_length()) - before;
-            let moved = |p: i32| if p >= at { p + added } else { p };
             match selection {
-                Some((a, b)) => text.select_region(moved(a), moved(b)),
-                None => text.set_position(moved(cursor)),
+                Some((a, b)) => {
+                    text.select_region(after_insertion(a, at, added), after_insertion(b, at, added))
+                }
+                None => text.set_position(after_insertion(cursor, at, added)),
             }
         }
     }
+}
+
+/// Whether a drop at `at` is on the selection `(a, b)` (its ends included,
+/// in either order): it then takes the selection's place, as in GtkText's
+/// own drop.
+fn dropped_on((a, b): (i32, i32), at: i32) -> bool {
+    (a.min(b)..=a.max(b)).contains(&at)
+}
+
+/// Where the position `p` of a text is once `added` characters have gone
+/// in at `at`: on the same text as before, so moved along if they went in
+/// before it (or at it).
+fn after_insertion(p: i32, at: i32, added: i32) -> i32 {
+    if p >= at { p + added } else { p }
 }
 
 /// Puts `with` in place of `text`'s selection (or at its cursor, with
@@ -515,14 +530,18 @@ fn paste_into_text(text: &gtk::Text, clipboard: gdk::Clipboard, at: Option<i32>)
         let Some(text) = weak.upgrade() else {
             return;
         };
-        let (Some(mut pasted), true) = (pasted, text.is_editable()) else {
+        let (Some(pasted), true) = (pasted, text.is_editable()) else {
             text.error_bell();
             return;
         };
-        if text.must_truncate_multiline()
-            && let Some(end) = pasted.find(['\n', '\r'])
-        {
-            pasted.truncate(end);
+        // A GtkText is one line: what a single-line field takes of a text
+        // (appcore's rule, DGMNB's too): the first line that isn't blank,
+        // tabs as spaces. GTK's own paste keeps every line, with the line
+        // breaks in the field, unless the field asks for the first
+        // (truncate-multiline), and then takes it blank or not.
+        let pasted = appcore::input::single_line(&pasted);
+        if pasted.is_empty() {
+            return;
         }
         let _one_edit = text.freeze_notify();
         if let Some(at) = at {
@@ -621,6 +640,35 @@ fn paste_into_text_view(view: &gtk::TextView, clipboard: gdk::Clipboard, at: Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A text dropped into a field: on the selection it takes its place;
+    /// beside it, it goes in where it was dropped and the selection (or
+    /// the cursor) stays on the text it was on.
+    #[test]
+    fn a_drop_on_the_selection_or_beside_it() {
+        // "abc+def" with "abc" selected (0..3), either way round.
+        for selection in [(0, 3), (3, 0)] {
+            for at in 0..=3 {
+                assert!(dropped_on(selection, at), "{selection:?} {at}");
+            }
+            for at in 4..=7 {
+                assert!(!dropped_on(selection, at), "{selection:?} {at}");
+            }
+        }
+        assert!(!dropped_on((2, 5), 1));
+        // Three characters dropped at the end (7): the selection stays.
+        assert_eq!((after_insertion(0, 7, 3), after_insertion(3, 7, 3)), (0, 3));
+        // Dropped at 1, before "+def" selected (3..7): it moves along.
+        assert_eq!(
+            (after_insertion(3, 1, 3), after_insertion(7, 1, 3)),
+            (6, 10)
+        );
+        // A cursor at the place itself ends up after the text, one before
+        // it stays, and nothing added moves nothing.
+        assert_eq!(after_insertion(4, 4, 2), 6);
+        assert_eq!(after_insertion(3, 4, 2), 3);
+        assert_eq!(after_insertion(5, 2, 0), 5);
+    }
 
     /// Bisection finds the first nearest position, as asking every
     /// position would, in a logarithmic number of questions.

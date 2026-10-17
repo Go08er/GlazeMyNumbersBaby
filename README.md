@@ -328,6 +328,15 @@ CI also runs checks that need more than `cargo test --workspace`:
 
 ## Deliberate differences from the original
 
+- **A pasted text with several lines puts its first non-blank line in a
+  field.** Upstream's equation box is single-line (`AcceptsReturn="false"`,
+  `EquationInputArea.xaml:664`) and pastes with `Selection.Paste(0)`
+  (`EquationTextBox.cs:509`); what the rich edit control does with a second
+  line is not in the repository's source, so both twins take the first line
+  that isn't blank, tabs as spaces, by one function
+  (`appcore::input::single_line`) for a field's paste, a middle click, a
+  drop, the page's paste action and an assistive technology's text.
+
 - **Currency rates come from a public source.** Windows Calculator gets its
   rates from Bing, and Microsoft doesn't license that data for other use, so
   its open repository can only show static mock rates (fictional planet

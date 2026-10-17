@@ -1407,7 +1407,11 @@ impl Page for GraphingHandle {
     }
 
     fn paste(&self, text: &str) {
-        self.0.insert_text(text.trim());
+        // One line of it, as the field's own paste takes (crate::paste).
+        let line = input::single_line(text);
+        if !line.is_empty() {
+            self.0.insert_text(&line);
+        }
     }
 
     fn save(&self) {

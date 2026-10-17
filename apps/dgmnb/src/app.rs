@@ -1351,8 +1351,13 @@ impl App {
             }
             Clip::Paste => {
                 let pasted = self.clipboard.as_ref().and_then(Clipboard::paste_text);
-                if let (Some(t), Some(e)) = (pasted, self.field(id)) {
-                    e.insert(t.lines().next().unwrap_or(""));
+                // One line of it (appcore's rule, GMNB's too): the first
+                // that isn't blank, tabs as spaces.
+                let line = pasted.as_deref().map(input::single_line);
+                if let (Some(line), Some(e)) = (line, self.field(id))
+                    && !line.is_empty()
+                {
+                    e.insert(&line);
                 }
             }
             _ => {}
@@ -1749,10 +1754,12 @@ impl App {
                 if let Some(accesskit::ActionData::Value(text)) = &req.data
                     && let Some(e) = self.field(target)
                 {
+                    // An assistive technology's text: one line of it too.
+                    let line = input::single_line(text);
                     if req.action == accesskit::Action::SetValue {
-                        e.set_text(text);
+                        e.set_text(&line);
                     } else {
-                        e.insert(text);
+                        e.insert(&line);
                     }
                     self.field_changed(target);
                 }

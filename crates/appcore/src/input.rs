@@ -472,6 +472,38 @@ pub fn item_after(item: usize, was: usize, now: usize) -> usize {
     (if now > was { item + (now - was) } else { item }).min(now.saturating_sub(1))
 }
 
+/// What of a text that comes from outside (a paste, a drop, an assistive
+/// technology's text) goes into a single-line field: its first line with
+/// anything but white space in it (the first line, if none has), tabs as
+/// spaces, other control characters dropped. An equation, a value or a
+/// search text is one line. Upstream's fields are single-line as well (the
+/// equation box is a RichEditBox with `AcceptsReturn="false"`,
+/// EquationInputArea.xaml:664, pasted into by the control itself:
+/// `Selection.Paste`, EquationTextBox.cs:509); what the control makes of a
+/// second line is not in its source, so the first line it is, in both
+/// apps and whatever brings the text.
+pub fn single_line(text: &str) -> String {
+    let breaks = |c: char| {
+        matches!(
+            c,
+            '\n' | '\r' | '\u{b}' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}'
+        )
+    };
+    let mut lines = text.split(breaks);
+    let first = lines.next().unwrap_or_default();
+    let line = std::iter::once(first)
+        .chain(lines)
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(first);
+    line.chars()
+        .filter_map(|c| match c {
+            '\t' => Some(' '),
+            c if c.is_control() => None,
+            c => Some(c),
+        })
+        .collect()
+}
+
 /// Shortcuts that work even while a text field has focus: mode switching
 /// (Alt+1…5) and upstream's Ctrl+Home "graph view". Everything else belongs
 /// to the text field.
@@ -917,6 +949,39 @@ mod tests {
         assert_eq!(item_after(1, 3, 3), 1);
         // Several went (a list that holds fewer).
         assert_eq!(item_after(4, 5, 2), 1);
+    }
+
+    /// One line of a text from outside goes into a single-line field: the
+    /// first that isn't blank, whatever ends the lines; a tab is a space;
+    /// spaces stay as they are.
+    #[test]
+    fn what_a_single_line_field_takes_of_a_text() {
+        for (given, taken) in [
+            ("y=x", "y=x"),
+            ("y=x\n", "y=x"),
+            ("y=x\r\n", "y=x"),
+            ("y=x\ny=2x", "y=x"),
+            ("y=x\r\ny=2x\r\n", "y=x"),
+            ("y=x\ry=2x", "y=x"),
+            ("\n\n  \t\ny=x\ny=2x", "y=x"),
+            ("\r\n12\r\n34", "12"),
+            ("12\t34", "12 34"),
+            ("\ty=x", " y=x"),
+            ("a\u{2028}b", "a"),
+            ("a\u{2029}b", "a"),
+            ("a\u{b}b\u{c}c\u{85}d", "a"),
+            ("  y = x  ", "  y = x  "),
+            ("x\u{7}y\u{0}z\u{8}", "xyz"),
+            ("π√x\n", "π√x"),
+            // Nothing but white space: the first line of it, which a
+            // space typed is.
+            (" ", " "),
+            ("  \n\t", "  "),
+            ("", ""),
+            ("\n\r\n", ""),
+        ] {
+            assert_eq!(single_line(given), taken, "{given:?}");
+        }
     }
 
     /// Ctrl+H is the History's key where there is a History: not in
