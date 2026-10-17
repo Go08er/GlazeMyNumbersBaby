@@ -1862,6 +1862,17 @@ pub fn ncr_npr(n: &DecInterval, r: &DecInterval, perm: bool) -> DecInterval {
         q = q / gr;
         defined &= dr;
     }
+    if let Some(reflected) = count_reflected(n.iv, r.iv, perm) {
+        // Both hold the count where Γ's quotient is defined (beside a
+        // zero it is wide: Γ of a box beside a pole).
+        let both = q.intersect(reflected);
+        let q = if defined && !both.is_empty() {
+            both
+        } else {
+            reflected
+        };
+        return DecInterval::result(q, Dec::Com, &[n, r]);
+    }
     let mut local = if defined { Dec::Com } else { Dec::Trv };
     // Whole numbers n ≥ 0 and r < 0 have the count 0
     // (`functions::count_exact`). Γ's quotient beside them is another
@@ -1877,6 +1888,65 @@ pub fn ncr_npr(n: &DecInterval, r: &DecInterval, perm: bool) -> DecInterval {
         local = local.min(if perm { Dec::Def } else { Dec::Trv });
     }
     DecInterval::result(q, local, &[n, r])
+}
+
+/// nPr(n, k) (nCr, `!perm`) for a whole count k past [`small_count`]'s
+/// and n's box inside (−1, k), where Γ(n − k + 1) has its poles at the
+/// count's zeros 0, 1, …, k − 1: Γ's quotient can't be enclosed across
+/// them, nor beside them (n − k + 1 rounded outward reaches the pole:
+/// nPr(10⁻⁹⁰, 62) was enclosed as ℝ, possibly undefined, and nPr(x, 62)
+/// had no curve; a little further off, Γ of a box beside its pole is
+/// wide). The count is a polynomial there, and by the reflection formula
+/// nPr(n, k) = (−1)^(k+1)·Γ(n + 1)·Γ(k − n)·sin(πn)/π, both Γ arguments
+/// in (0, k + 1) (nCr that over k!). sin πn = (−1)^j·sin πd, d = n − j
+/// for the whole j nearest the box (exact next to j), and a d so small
+/// that sin πd/π is d to within 2⁻⁵³ (and below it in size) is taken as
+/// d, last, so a subnormal d keeps its digits. `None` for other
+/// arguments.
+fn count_reflected(n: Interval, r: Interval, perm: bool) -> Option<Interval> {
+    let k = r.lo();
+    if !(r.is_point()
+        && k == k.trunc()
+        && (0.0..9_007_199_254_740_992.0).contains(&k)
+        && n.lo() > -1.0
+        && n.hi() < k)
+    {
+        return None;
+    }
+    let one = Interval::point(1.0);
+    let (top, defined_top) = gamma_iv(n + one);
+    let (rest, defined_rest) = gamma_iv(Interval::point(k) - n);
+    if !(defined_top && defined_rest) {
+        return None;
+    }
+    let j = n.mid().round();
+    let d = n - Interval::point(j);
+    let mut q = top * rest;
+    if !perm {
+        let (f, defined_f) = gamma_iv(Interval::point(k) + one);
+        if !defined_f {
+            return None;
+        }
+        q = q / f;
+    }
+    q = if d.lo().abs().max(d.hi().abs()) < 4.9e-91 {
+        q * Interval::new(1.0f64.next_down(), 1.0) * d
+    } else if d.lo() >= -0.5 && d.hi() <= 0.5 {
+        // sin πd increases on [−½, ½].
+        let s = Interval::new(
+            cm::sinpi(d.lo()).next_down().max(-1.0),
+            cm::sinpi(d.hi()).next_up().min(1.0),
+        );
+        q * s / pi()
+    } else {
+        q * Interval::new(-1.0, 1.0) / pi()
+    };
+    // (−1)^(k+1)·(−1)^j.
+    Some(if (k % 2.0 == 0.0) == (j % 2.0 == 0.0) {
+        -q
+    } else {
+        q
+    })
 }
 
 /// nCr(n, r) (nPr, `perm`) of whole numbers n ≥ 0 and r, enclosed
