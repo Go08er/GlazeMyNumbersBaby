@@ -857,15 +857,17 @@ fn count(n: f64, r: f64, perm: bool) -> f64 {
         return v;
     }
     match gamma_count(n, r, perm) {
-        Some((m, e)) => crate::wide::ldexp(m, e),
-        None => f64::NAN,
+        // (A side that can't be told, e = NaN: 0 or ±∞, no double.)
+        Some((m, e)) if !e.is_nan() => crate::wide::ldexp(m, e),
+        _ => f64::NAN,
     }
 }
 
 /// nCr (nPr, `perm`) of two doubles where [`count`] has it as 0, a
 /// subnormal or ±∞: its own value, m·2^e with 1 ≤ |m| < 2 (e = ±∞ for a
-/// magnitude beyond even that range), and (0, 0) only for a count that is
-/// 0 (C(2, 3)); `None` at a pole of Γ. Within an ulp or two of m, for the
+/// magnitude beyond even that range, NaN where which of the two isn't
+/// proven: [`far_side`]), and (0, 0) only for a count that is 0
+/// (C(2, 3)); `None` at a pole of Γ. Within an ulp or two of m, for the
 /// evaluations that hold values beyond the doubles (`wide::apply2`, the
 /// reference evaluator): a count past them inside a larger expression was
 /// taken as its double, so a/nCr(x, 3) and ln nCr(x, 2) beside 0, where
@@ -915,7 +917,9 @@ pub fn factorial_beyond(n: f64) -> Option<(f64, f64)> {
             let (m, s) = crate::wide::frexp(m);
             Some((m, k + s))
         }
-        // Past 2⁴⁷ for its logarithm, or an argument past `FAR_ARGUMENT`.
+        // Past 2⁴⁷ for its logarithm, or an argument past `FAR_ARGUMENT`
+        // (whose ln Γ is past 2²⁰⁰): above the range, as Γ(x) > 1 past
+        // x = 2 (x ≥ 16 here), and ln Γ(x) alone has nothing to cancel.
         _ => Some((1.0, f64::INFINITY)),
     }
 }
@@ -1027,7 +1031,8 @@ const LN_PI: Dd = Dd {
 const STIRLING_FROM: f64 = 16.0;
 
 /// An argument of Γ beyond which ln Γ of it alone (above 2²⁰⁰·138) is
-/// only a sign: a count that holds one is beyond the extended range.
+/// only a size: a count that holds one that no ratio takes is beyond the
+/// extended range, on the side [`far_side`] proves.
 const FAR_ARGUMENT: f64 = 1.606_938_044_258_990_3e60;
 
 /// The largest |ln| of a count whose mantissa is kept (2⁴⁷): ln Γ in
@@ -1143,7 +1148,8 @@ fn sinpi_scaled(d: f64) -> (f64, f64) {
 
 /// nPr(n, r) = Γ(n + 1)/Γ(n − r + 1), and nCr(n, r) that over Γ(r + 1),
 /// for any doubles n and r, as m·2^e (1 ≤ |m| < 2; e = ±∞ for a magnitude
-/// beyond even that); `None` where an argument of Γ is at a pole.
+/// beyond even that, NaN where its side isn't proven); `None` where an
+/// argument of Γ is at a pole.
 ///
 /// Each argument is a·n + b·r + 1, held exactly (as a double-double, not
 /// rounded onto or beside a pole). One below ½ is reflected: Γ(x) =
@@ -1250,36 +1256,93 @@ pub(crate) fn gamma_count(n: f64, r: f64, perm: bool) -> Option<(f64, f64)> {
             None => far = true,
         }
     }
-    if far || !log.hi.is_finite() {
-        // Arguments past 2²⁰⁰ that no ratio brings together, or a ratio of
-        // two past 10³⁰⁵ apart by a quarter of them or more: the count is
-        // beyond the extended range either way, as the sign of
-        // Σ ±x·(ln x − 1), each taken over the largest x, says.
-        let top = args.iter().map(|a| a.1.hi).fold(0.0, f64::max);
-        let s: f64 = args
-            .iter()
-            .map(|&(_, x, power)| f64::from(power) * (x.hi / top) * (cm::log(x.hi) - 1.0))
-            .sum();
-        return Some((
-            sign,
-            if s > 0.0 {
-                f64::INFINITY
-            } else {
-                f64::NEG_INFINITY
-            },
-        ));
-    }
-    if log.hi.abs() > FAR_LOG {
-        let far = if log.hi > 0.0 {
-            f64::INFINITY
-        } else {
-            f64::NEG_INFINITY
-        };
-        return Some((sign, far));
+    if far || !log.hi.is_finite() || log.hi.abs() > FAR_LOG {
+        // Arguments past 2²⁰⁰ that no ratio brings together, a ratio of two
+        // past 10³⁰⁵ (its logarithm overflowing), or a logarithm past 2⁴⁷:
+        // only a side, and that where [`far_side`] proves it, from the
+        // arguments themselves (not from `log`, of which far out only the
+        // digits of the largest terms are known).
+        return Some((sign, far_side(n, r, args, e).unwrap_or(f64::NAN)));
     }
     let (x, k) = crate::dd::exp(log);
     let (mm, me) = crate::wide::frexp(m * x);
     Some((sign * mm, e + k + me))
+}
+
+/// Whether [`gamma_count`]'s quotient, `args` (each argument ≥ ½: its
+/// a·n + b·r + c, its value, its power) times its sines' product (m·2^e,
+/// 1 ≤ m < 2) times π to a power of at most 3, has its |ln| past
+/// [`FAR_LOG`], and on which side: +∞ above, −∞ below. `None` where that
+/// isn't proven.
+///
+/// By Binet, ln Γ(x) = (x − ½)·ln x − x + ½·ln 2π + μ with 0 < μ < 1/(12x),
+/// for any x > 0. About any t > 0 (here the largest argument), Σ ±ln Γ(x)
+/// is then exactly
+///
+/// t·[Σ ±((x − ½)/t)·ln(x/t) + ((D − ½·S)/t)·ln t − D/t] + ρ,
+///
+/// with D = Σ ±x and S = Σ ±1, and ρ the ±½·ln 2π and the μ, under 4 in
+/// all; the π and the sines add under 5 + 0.7·|e|. Each part of the
+/// bracket is known to a few ulps of itself: ln(x/t) is ln(1 + (x − t)/t)
+/// where x is within a half of t, with x − t exact, as D is (each a·n +
+/// b·r + c of their summed coefficients: no difference of rounded
+/// arguments), but for the 1 at most that t's double-double may have
+/// dropped (a part off by 2/t at most). So the bracket, summed in doubles,
+/// is within 2⁻⁴⁸ of the sum of its parts' sizes, 6/t and 2⁻¹⁰⁰⁰ (for
+/// parts below the doubles), and the side is proven where it is farther
+/// from 0 than 2⁻⁴⁰ of that sum and (FAR_LOG + 32 + |e|)/t. In the
+/// shapes these quotients take,
+/// Γ(p)^±1·Γ(q)^±1 for nPr, and Γ(a + b − 1)/(Γ(a)·Γ(b)) or
+/// Γ(a)·Γ(b)/Γ(a + b) for nCr, the bracket is no small part of the sum
+/// of its parts' sizes (a ratio's parts are each about δ/t·ln t, not t):
+/// so the side is proven wherever the count is well past 2⁴⁷ (as the
+/// tests have it, with arguments from 10¹⁶ to 10³⁰⁸).
+///
+/// The sign of Σ ±(x/t)·(ln x − 1) in doubles, as it was, had the side of
+/// nCr(10²⁰⁰, 10¹⁰⁰) wrong: its first and second parts cancel exactly in
+/// doubles (10²⁰⁰ − 10¹⁰⁰ rounds to 10²⁰⁰), and what was left, the lone
+/// 10¹⁰⁰'s, made a count of about e^(2.3·10¹⁰²) below the range (found by
+/// `tests/crossfuzz.rs`, seed 2026, as nCr(x², x)).
+fn far_side(n: f64, r: f64, args: &[((f64, f64, f64), Dd, i32)], e: f64) -> Option<f64> {
+    let &((at, bt, ct), top, _) = args.iter().max_by(|a, b| a.1.hi.total_cmp(&b.1.hi))?;
+    let t = top.hi;
+    if !t.is_finite() {
+        return None;
+    }
+    let ln_t = cm::log(t);
+    // The bracket's parts, and D's and S's coefficients.
+    let mut parts = [0.0; 5];
+    let (mut a_d, mut b_d, mut c_d, mut s) = (0.0, 0.0, 0.0, 0.0);
+    for (i, &((a, b, c), x, power)) in args.iter().enumerate() {
+        let p = f64::from(power);
+        (a_d, b_d, c_d, s) = (a_d + p * a, b_d + p * b, c_d + p * c, s + p);
+        // x − t: (x − top) + (top − t), exactly.
+        let d = linear(n, r, (a - at, b - bt, c - ct)).add(Dd::of(top.lo));
+        let q = x.hi / t;
+        let ln_ratio = if d.hi >= -0.5 * t {
+            cm::log1p(d.hi / t)
+        } else if q >= f64::MIN_POSITIVE {
+            cm::log(q)
+        } else {
+            cm::log(x.hi) - ln_t
+        };
+        parts[i] = p * (((x.hi - 0.5) + x.lo) / t) * ln_ratio;
+    }
+    let d = linear(n, r, (a_d, b_d, c_d));
+    parts[3] = d.add(Dd::of(-0.5 * s)).hi / t * ln_t;
+    parts[4] = -d.hi / t;
+    let sum: f64 = parts.iter().sum();
+    let size: f64 = parts.iter().map(|v| v.abs()).sum();
+    let slack = size * 2f64.powi(-40) + (FAR_LOG + 32.0 + e.abs()) / t + 2f64.powi(-1000);
+    if !(sum.is_finite() && slack.is_finite()) {
+        None
+    } else if sum > slack {
+        Some(f64::INFINITY)
+    } else if sum < -slack {
+        Some(f64::NEG_INFINITY)
+    } else {
+        None
+    }
 }
 
 /// `b^(p/q)` with real-root semantics: a negative base is allowed when q is
