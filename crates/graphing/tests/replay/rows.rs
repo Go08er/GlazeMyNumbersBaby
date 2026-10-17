@@ -4609,10 +4609,27 @@ fn images(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk, pieces: &[Piece], ou
     };
     for im in &imgs {
         if !pieces.iter().any(|p| within(im.hull, p)) {
-            out.problems.push(format!(
-                "f takes values in [{:e}, {:e}] on one stretch, not all inside a listed piece",
-                im.hull.0, im.hull.1
-            ));
+            // Against the list only where a value (or limit) is shown
+            // outside every piece; else the enclosures are too wide to say
+            // (10^5000 − 10^5000 + min(x, 9, 6 − x) at its kinks: FUZZ's
+            // seed 1451).
+            let outside = im.seen.iter().find(|s| {
+                !pieces.iter().any(|p| {
+                    let (a, b) = extent(p);
+                    s.lo <= b && a <= s.hi
+                })
+            });
+            out.problems.push(match outside {
+                Some(s) => format!(
+                    "f takes a value in [{:e}, {:e}], which is outside the listed range",
+                    s.lo, s.hi
+                ),
+                None => format!(
+                    "the range is not derived: f's values on one stretch are enclosed in \
+                     [{:e}, {:e}], not shown inside a listed piece",
+                    im.hull.0, im.hull.1
+                ),
+            });
             return;
         }
     }

@@ -3581,7 +3581,7 @@ fn the_range_is_the_images_of_the_stretches() {
     value_of(&mut v, "range").as_array_mut().unwrap().remove(0);
     v["range_ends"].as_array_mut().unwrap().remove(0);
     let why = rejected(&v).expect("a piece of the range left out");
-    assert!(why.contains("not all inside a listed piece"), "{why}");
+    assert!(why.contains("outside the listed range"), "{why}");
     // x²'s least value is taken: an open end there is refused whatever
     // source it names; tan x·cos x only tends to ±1.
     let mut v = certificate("x^2");
