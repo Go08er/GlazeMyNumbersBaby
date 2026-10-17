@@ -187,10 +187,7 @@ pub use mp::Beside;
 pub fn beside(text: &str, set: &Setup, x: f64) -> Option<Beside> {
     let l = load(text, set).ok()?;
     let (_, a) = analyze_certified(&l.eq, &l.opts(), None).expect("not cancelled");
-    let json: serde_json::Value =
-        serde_json::from_str(&serde_json::to_string(&a?).expect("a certificate serialises"))
-            .expect("a certificate reads back");
-    let fx = mp::function(&json, &mut Outcome::default())?;
+    let fx = mp::read(&a?, &mut Outcome::default())?;
     Some(mp::beside(&fx, x))
 }
 
@@ -853,6 +850,35 @@ mod mp {
             .collect()
     }
 
+    /// A certificate as the replay is given it.
+    pub fn json(a: &Analysis) -> serde_json::Value {
+        serde_json::from_str(&serde_json::to_string(a).expect("a certificate serialises"))
+            .expect("a certificate reads back")
+    }
+
+    /// [`function`] of a certificate.
+    pub fn read(a: &Analysis, out: &mut Outcome) -> Option<Fx> {
+        function(&json(a), out)
+    }
+
+    impl Mpfr for Fx {
+        fn over(&self, lo: f64, hi: f64) -> MpAt {
+            over(self, lo, hi)
+        }
+
+        fn unbounded(&self, lo: f64, hi: f64) -> bool {
+            let s = lo.abs().max(hi.abs()).max(1.0);
+            let claim = replay::Claim::Unbounded {
+                near: (lo - 1e-3 * s, hi + 1e-3 * s),
+                at: (lo, hi),
+            };
+            let before = iv::prec();
+            let class = replay::claims::check(self, &claim, &[]).class;
+            iv::set_prec(before);
+            matches!(class, replay::Class::Strong)
+        }
+    }
+
     /// The replay's reading of the function, from the certificate: its
     /// own scan of the source's numbers, checked against the parser's.
     pub fn function(json: &serde_json::Value, out: &mut Outcome) -> Option<Fx> {
@@ -1298,22 +1324,126 @@ mod mp {
         );
     }
 
+    /// A kind of claim the certifier writes that the replay doesn't read
+    /// yet: it refuses the whole certificate for one ("unknown claim kind
+    /// KinkSides", tests/replay/mod.rs).
+    const UNREAD: &str = "KinkSides";
+
+    /// `json` without its claims of kind [`UNREAD`], and how many they
+    /// were.
+    fn without_unread(json: &serde_json::Value) -> (serde_json::Value, usize) {
+        use serde_json::Value;
+        fn strip(v: &mut Value, n: &mut usize) {
+            match v {
+                Value::Object(m) => {
+                    for (key, w) in m.iter_mut() {
+                        if let (true, Value::Array(claims)) = (key == "claims", &mut *w) {
+                            let before = claims.len();
+                            claims.retain(|c| {
+                                c.as_object()
+                                    .is_none_or(|o| !(o.len() == 1 && o.contains_key(UNREAD)))
+                            });
+                            *n += before - claims.len();
+                        } else {
+                            strip(w, n);
+                        }
+                    }
+                }
+                Value::Array(vs) => vs.iter_mut().for_each(|w| strip(w, n)),
+                _ => {}
+            }
+        }
+        let (mut rest, mut n) = (json.clone(), 0);
+        strip(&mut rest, &mut n);
+        (rest, n)
+    }
+
+    /// What a row's problem (`replay::Report::row_problems`) is found as.
+    /// The replay derives each shown row from the claims it has proven,
+    /// and a problem either leaves the row open (a claim behind it not
+    /// decided, a stretch the claims don't cover, a fact not stated: the
+    /// replay's own limits, or a claim it left open, which is listed
+    /// apart) or says something against the row from what is proven: an
+    /// item proven and not listed, a piece listed increasing where f′ is
+    /// negative, an end listed closed that is open, a value outside its
+    /// listed enclosure. The first is `replay/row-problem`, found before
+    /// and left open; the second is the certifier contradicted by its own
+    /// claims, `replay/row-against`; and a value listed more narrowly
+    /// than the claims prove it, `replay/row-narrower` (the right limit of
+    /// 3 + (x − (1 + 2·10⁻¹⁵))·e⁻ˣ + (x − x) at 14 digits, listed as one
+    /// double beside 3). A text not known to leave the row open is taken
+    /// as against it.
+    fn row_problem(text: &str) -> &'static str {
+        const OPEN: &[&str] = &[
+            "not decided",
+            "undecided",
+            "not proven by the claims",
+            "not shown",
+            "not known",
+            "not derived",
+            "no claim",
+            "no fact",
+            "no bound on",
+            "no number the replay reads",
+            "name no sources",
+            "with no source named",
+            "with no bands",
+            "without",
+            "nothing shows",
+            "nothing showing",
+            "nothing rules",
+            "don't show",
+            "don't narrow",
+            "don't close in",
+            "of a period out",
+            "the claims place",
+            "tested at points",
+            "past any sieve",
+            "unreadable",
+            "unread ",
+            "unknown parity",
+        ];
+        if text.contains("narrower than the claims show") {
+            "replay/row-narrower"
+        } else if OPEN.iter().any(|open| text.contains(open)) {
+            "replay/row-problem"
+        } else {
+            "replay/row-against"
+        }
+    }
+
     /// The certificate through the replay, and what it says onto `out`.
     fn judge(json: &serde_json::Value, fx: &Fx, out: &mut Outcome) {
         use replay::Class;
         let counting = replay::claims::unmodelled(&fx.f);
-        let r =
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| replay::replay(json))) {
-                Ok(Ok(r)) => r,
-                Ok(Err(e)) => {
-                    out.fail("replay/rejected", e);
-                    return;
-                }
-                Err(e) => {
-                    out.fail("panic/replay", panic_text(e));
-                    return;
-                }
-            };
+        let run = |json: &serde_json::Value| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| replay::replay(json)))
+        };
+        let mut replayed = run(json);
+        // A certificate refused for a kind of claim the replay doesn't
+        // read is replayed without those claims: the rest of it is
+        // checked, and the rows that rest on them come out as not derived
+        // (row problems, which are listed). Counted, a certificate once.
+        if let Ok(Err(e)) = &replayed
+            && e.contains(&format!("unknown claim kind {UNREAD}"))
+        {
+            let (rest, n) = without_unread(json);
+            out.note("replay/kink-sides-unread", || {
+                format!("{} ({n} claims left out)", fx.source)
+            });
+            replayed = run(&rest);
+        }
+        let r = match replayed {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                out.fail("replay/rejected", e);
+                return;
+            }
+            Err(e) => {
+                out.fail("panic/replay", panic_text(e));
+                return;
+            }
+        };
         for b in &r.binding {
             if b.starts_with("missing") {
                 out.fail("replay/binding", b.clone());
@@ -1374,7 +1504,7 @@ mod mp {
                 // (The refuted claims are findings already.)
                 out.note("replay/row-rests-on-refuted-claims", || p.clone());
             } else {
-                out.fail("replay/row-problem", p);
+                out.fail(row_problem(&p), p);
             }
         }
         out.count(
@@ -1403,8 +1533,21 @@ pub struct MpAt {
     pub continuous: bool,
 }
 
-/// MPFR's word on f over `[lo, hi]` (at a point: `lo == hi`).
-type Mp<'a> = Option<&'a dyn Fn(f64, f64) -> MpAt>;
+/// The replay's own evaluation of f, in MPFR, asked about f.
+pub trait Mpfr {
+    /// Its word on f over `[lo, hi]` (at a point: `lo == hi`).
+    fn over(&self, lo: f64, hi: f64) -> MpAt;
+    /// Whether f is unbounded beside some point of `[lo, hi]`, by the
+    /// replay's own proof of it from the tree's structure (what a
+    /// certificate's `Unbounded` claim is checked by: a divisor with a
+    /// zero there and a numerator away from 0, a tangent at a zero of its
+    /// cosine, a logarithm of an argument falling to 0, with what
+    /// multiplies them bounded away from 0). No values show that.
+    fn unbounded(&self, lo: f64, hi: f64) -> bool;
+}
+
+/// MPFR's word, where there is one.
+type Mp<'a> = Option<&'a dyn Mpfr>;
 
 /// Whether f is undefined at x, as far as the views that prove things
 /// say: `Some(true)` where f's enclosure there is empty (or MPFR's is),
@@ -1420,7 +1563,7 @@ fn proven_undefined(l: &Loaded, mp: Mp<'_>, x: f64) -> Option<bool> {
     if e.dec >= Dec::Def {
         return Some(false);
     }
-    mp.and_then(|m| m(x, x).undefined)
+    mp.and_then(|m| m.over(x, x).undefined)
 }
 
 /// How densely the oracle's checks sample a function typed as `text`: a
@@ -1580,7 +1723,7 @@ impl<'a> Proofs<'a> {
 
     /// MPFR's word on f over `[lo, hi]`, where there is one.
     fn mp_over(&self, lo: f64, hi: f64) -> MpAt {
-        self.mp.map(|m| m(lo, hi)).unwrap_or_default()
+        self.mp.map(|m| m.over(lo, hi)).unwrap_or_default()
     }
 
     fn undefined(&self, x: f64) -> Option<bool> {
@@ -1780,9 +1923,17 @@ impl<'a> Proofs<'a> {
                     (Some(m), Some(v)) => m.1 < v.0,
                     _ => false,
                 };
-                proven_if(
-                    xl < at && at < xr && self.continuous(xl, xr) && beats(xl) && beats(xr),
-                )
+                // (Bent one way throughout: the turn is one point, a
+                // strict one, which is what the panel lists. A plateau's
+                // top is none.)
+                let t = taylor(self.l.ast(), Interval::new(xl, xr), 2, &self.ctx);
+                let bent = derivs_valid(&t, 2)
+                    && if max {
+                        t[2].hi() < 0.0
+                    } else {
+                        t[2].lo() > 0.0
+                    };
+                proven_if(xl < at && at < xr && bent && beats(xl) && beats(xr))
             }
             // "Lower beyond the listed minimum": at three points a part
             // in 10⁶ off, which says nothing of the points nearer. No
@@ -1805,16 +1956,20 @@ impl<'a> Proofs<'a> {
             "extrema-merged" | "period-not-fundamental" => unproven(),
             // "A pole is missing": f grows toward a point where it is
             // undefined, at the doubles. A pole is f unbounded there,
-            // which no values show; f's enclosure over the doubles about
+            // which no values show. f's enclosure over the doubles about
             // the point shows that it isn't, where it is bounded
             // (min((3 − x)^(−2000002/2000004), 1000001ˣ) is 2·10¹⁵ and
-            // rising at the double before 3, and never past 1000001³).
+            // rising at the double before 3, and never past 1000001³);
+            // that it is, the replay's own proof from f's tree, where
+            // there is one.
             "vertical-asymptote-missing" => {
-                match self.range(checks::step(at, -4), checks::step(at, 4)) {
-                    Some((lo, hi)) if at.is_finite() && lo.is_finite() && hi.is_finite() => {
+                let (lo, hi) = (checks::step(at, -4), checks::step(at, 4));
+                match self.range(lo, hi) {
+                    _ if !at.is_finite() => unproven(),
+                    Some((a, b)) if a.is_finite() && b.is_finite() => {
                         Open("panel/no-pole-where-the-enclosure-is-bounded".into())
                     }
-                    _ => unproven(),
+                    _ => proven_if(self.mp.is_some_and(|m| m.unbounded(lo, hi))),
                 }
             }
             // "y = c is not approached": f is far from c at the farthest
@@ -2089,7 +2244,7 @@ fn shown_as_enclosed(
     let Some(digits) = (3..=6).rev().find(|&d| to(lo, d) == to(hi, d)) else {
         return false;
     };
-    let (flo, fhi) = match mp.and_then(|m| m(0.0, 0.0).value) {
+    let (flo, fhi) = match mp.and_then(|m| m.over(0.0, 0.0).value) {
         Some(v) => v,
         None => {
             let v = l.f.at(0.0);
@@ -2135,7 +2290,9 @@ fn panel(
         // it is that thing, and 0 in doubles), what the oracle saw there
         // is the doubles', not f.
         let missed = [at, f.span.0, f.span.1].into_iter().find_map(|x| {
-            let (lo, hi) = mp.filter(|_| x.is_finite()).and_then(|m| m(x, x).value)?;
+            let (lo, hi) = mp
+                .filter(|_| x.is_finite())
+                .and_then(|m| m.over(x, x).value)?;
             let c = l.f.prog.eval(x, 0.0);
             (!faithful(c, lo, hi)).then(|| {
                 format!(
@@ -2290,20 +2447,15 @@ pub fn panel_planted(text: &str, set: &Setup, plant: &dyn Fn(&mut KeyGraphFeatur
     let (mut k, a) = analyze_certified(&l.eq, &l.opts(), None).expect("not cancelled");
     plant(&mut k);
     #[cfg(not(feature = "mpfr-oracle"))]
-    let (_, told): (_, Option<Box<dyn Fn(f64, f64) -> MpAt>>) = (a, None);
+    let (_, told): (_, Mp<'_>) = (a, None);
     #[cfg(feature = "mpfr-oracle")]
-    let fx = a.and_then(|a| {
-        let json: serde_json::Value =
-            serde_json::from_str(&serde_json::to_string(&a).expect("a certificate serialises"))
-                .expect("a certificate reads back");
-        mp::function(&json, &mut Outcome::default())
-    });
+    let fx = a.and_then(|a| mp::read(&a, &mut Outcome::default()));
     #[cfg(feature = "mpfr-oracle")]
-    let told = fx
+    let told: Mp<'_> = fx
         .as_ref()
         .filter(|fx| mp::models(fx))
-        .map(|fx| Box::new(move |lo, hi| mp::over(fx, lo, hi)) as Box<dyn Fn(f64, f64) -> MpAt>);
-    panel(text, &l, &k, None, told.as_deref(), &mut out);
+        .map(|fx| fx as &dyn Mpfr);
+    panel(text, &l, &k, None, told, &mut out);
     out
 }
 
@@ -2556,12 +2708,15 @@ fn plotted(l: &Loaded, mp: Mp<'_>, out: &mut Outcome) {
     }
 }
 
-/// Whether f is 0 at every sample it has a value at (and so even and odd
-/// at once, as far as sampling tells).
-fn nowhere_but_zero(f: &F) -> bool {
-    sample_xs(f).into_iter().all(|x| {
-        let v = f.at(x);
-        v.k != K::Def || v.xf.is_zero()
+/// Whether f is proven to be something other than 0 at a point looked at
+/// (its enclosure there strictly signed, f defined): then it is not even
+/// and odd at once. (That it is 0 wherever defined no samples show; that
+/// it isn't, one point does.)
+fn somewhere_not_zero(l: &Loaded) -> bool {
+    let ctx = Ctx::new(l.opts());
+    sample_xs(&l.f).into_iter().any(|x| {
+        let e = enclose(l.ast(), Interval::point(x), &ctx);
+        !e.is_empty() && e.dec >= Dec::Def && (e.gt0() || e.lt0())
     })
 }
 
@@ -2635,17 +2790,14 @@ pub fn run(text: &str, pair: Option<&str>, set: &Setup, groups: u32) -> Outcome 
         });
     }
 
-    // MPFR's word on f at a point, where it has one.
-    type Told<'a> = Option<Box<dyn Fn(f64, f64) -> MpAt + 'a>>;
+    // MPFR's word on f, where it has one.
     #[cfg(not(feature = "mpfr-oracle"))]
-    let mp_defined: Told<'_> = None;
+    let mp_defined: Mp<'_> = None;
     #[cfg(feature = "mpfr-oracle")]
     let mut fx = None;
     #[cfg(feature = "mpfr-oracle")]
     if let Some(a) = &cert {
-        let json: serde_json::Value =
-            serde_json::from_str(&serde_json::to_string(a).expect("a certificate serialises"))
-                .expect("a certificate reads back");
+        let json = mp::json(a);
         guarded(&mut out, "replay", |out| fx = mp::function(&json, out));
         if let Some(fx) = &fx {
             if groups & group::POINTS != 0
@@ -2659,15 +2811,15 @@ pub fn run(text: &str, pair: Option<&str>, set: &Setup, groups: u32) -> Outcome 
         }
     }
     #[cfg(feature = "mpfr-oracle")]
-    let mp_defined: Told<'_> = fx
+    let mp_defined: Mp<'_> = fx
         .as_ref()
         .filter(|fx| mp::models(fx))
-        .map(|fx| Box::new(move |lo, hi| mp::over(fx, lo, hi)) as Box<dyn Fn(f64, f64) -> MpAt>);
+        .map(|fx| fx as &dyn Mpfr);
 
     if let Some(k) = &analysed {
         if groups & group::PANEL != 0 {
             guarded(&mut out, "panel", |out| {
-                panel(text, &l, k, cert.as_ref(), mp_defined.as_deref(), out)
+                panel(text, &l, k, cert.as_ref(), mp_defined, out)
             });
         }
         if groups & group::DIGITS != 0
@@ -2695,13 +2847,15 @@ pub fn run(text: &str, pair: Option<&str>, set: &Setup, groups: u32) -> Outcome 
                 // not the whole answer ("both"): one spelling proving
                 // more than the other is no contradiction.
                 // (And "even" against "odd" both hold of a function that
-                // is 0 wherever it is defined: x·√(x − x).)
+                // is 0 wherever it is defined, x·√(x − x): a contradiction
+                // only where f is proven to be something else at a
+                // point.)
                 let parity =
                     f.class == "equivalent-answers-differ" && f.detail.starts_with("parity:");
                 let says = |p: &str| f.detail.contains(&format!("says {p}"));
                 let weaker = parity
                     && ((says("Both") && (says("Even") || says("Odd")))
-                        || (says("Even") && says("Odd") && nowhere_but_zero(&l.f)));
+                        || (says("Even") && says("Odd") && !somewhere_not_zero(&l)));
                 let cannot_tell = f.class == "spelling-value-differs"
                     && f.at.is_finite()
                     && l.f.prog.eval(f.at, 0.0).is_nan()
@@ -2719,9 +2873,7 @@ pub fn run(text: &str, pair: Option<&str>, set: &Setup, groups: u32) -> Outcome 
         });
     }
     if groups & group::PLOT != 0 {
-        guarded(&mut out, "plot", |out| {
-            plotted(&l, mp_defined.as_deref(), out)
-        });
+        guarded(&mut out, "plot", |out| plotted(&l, mp_defined, out));
     }
     out
 }
