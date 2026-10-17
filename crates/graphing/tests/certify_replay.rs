@@ -3883,9 +3883,9 @@ fn a_constant_is_worked_exactly_as_typed() {
         let mut v = certificate(src);
         assert_eq!(rejected(&v), None, "{src}");
         v["y_intercept"] = serde_json::json!({"Certified": {"value": {"lo": 0.0, "hi": 0.0},
-            "cert": {"covers": "Points", "claims": [
-                {"Value": {"x": {"a": 0.0, "b": 0.0}, "of": {"F": "F0"}, "lo": 0.0, "hi": 0.0}}
-            ]}}});
+        "cert": {"covers": "Points", "claims": [
+            {"Value": {"x": {"a": 0.0, "b": 0.0}, "of": {"F": "F0"}, "lo": 0.0, "hi": 0.0}}
+        ]}}});
         let at0 = judged(&v, "Value { x: (0.0, 0.0), of: F(0), lo: 0.0, hi: 0.0 }");
         assert!(
             !at0.is_empty() && at0.iter().all(|(_, c)| *c == Class::Strong),

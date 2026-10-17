@@ -274,8 +274,11 @@ impl Num {
 
     fn value(&self) -> f64 {
         match self.exact {
-            Some(e) => e.to_f64(),
-            None => self.enc.mid(),
+            // (Its double, where that is in its enclosure: one that
+            // cancels need not be.)
+            Some(e) if self.enc.contains(e.to_f64()) || !self.enc.lo.0.is_finite() => e.to_f64(),
+            Some(e) if !self.enc.hi.0.is_finite() => e.to_f64(),
+            _ => self.enc.mid(),
         }
     }
 
@@ -392,8 +395,12 @@ fn shift(x: Num, p: &Num, n: f64) -> Num {
 /// with period P/n (the zeros of sin at 0 and π every 2π: kπ). `tag`
 /// must agree too (an extremum's value).
 fn merge(items: Vec<(Num, Num, String)>) -> Vec<(Num, Num, String)> {
-    // The same family twice (tan's poles from tan itself and from it as a
-    // divisor): once.
+    // The same family twice: once. The same when its exact forms say
+    // so, or it is the same two doubles. (Enclosures that coincide are
+    // not one set: tan(x + 10⁻³⁰) + tan(x + 2·10⁻³⁰) excludes two
+    // families, both within one enclosure, and its domain read
+    // ℝ \ {≈1.5708 + kπ}, one of them. The certifier lists a family
+    // once whose side expression occurs twice, as in tan x + sec x.)
     let mut items = items;
     let mut i = 0;
     while i < items.len() {
@@ -409,9 +416,12 @@ fn merge(items: Vec<(Num, Num, String)>) -> Vec<(Num, Num, String)> {
                                 .and_then(Ex::rational)
                                 .is_some_and(|t| t.is_int())
                     }
-                    // The certifier's very enclosures twice (one family
-                    // from two side conditions): the same set.
-                    _ => a.0.enc == b.0.enc && a.1.enc == b.1.enc,
+                    _ => {
+                        a.0.enc == b.0.enc
+                            && a.1.enc == b.1.enc
+                            && a.0.enc.is_point()
+                            && a.1.enc.is_point()
+                    }
                 }
         });
         if dup {
@@ -1771,18 +1781,16 @@ pub(super) fn features(
                 .then(|| cx.eval(&cx.f, Ex::int(0)))
                 .flatten()
         })
-        .filter(|_| domain_nonempty);
+        .filter(|_| domain_nonempty)
+        // (With an enclosure to show it by where its form is unwieldy.)
+        .filter(|c| c.interval().is_some());
+    // The constant's enclosure: of its form. (Its double with a few
+    // doubles either side is not one: y = ln(1.00000000000000000001),
+    // off, is 10⁻²⁰, its double is ln of the double beside 1, and its
+    // range read {≈2.22045×10⁻¹⁶}.)
     let const_enc = |c: Ex| -> Enc {
-        match c.rational() {
-            Some(q) => {
-                let iv = q.interval();
-                Enc::new(iv.lo(), iv.hi())
-            }
-            None => {
-                let (lo, hi) = widen(c.to_f64(), c.to_f64());
-                Enc::new(lo, hi)
-            }
-        }
+        let iv = c.interval().expect("kept with one");
+        Enc::new(iv.lo(), iv.hi())
     };
 
     // Constant on its domain: the range is one value.
@@ -2214,13 +2222,19 @@ pub(super) fn features(
                     Tail::Left => AsymptoteSide::NegativeInfinity,
                     Tail::Right => AsymptoteSide::PositiveInfinity,
                 };
-                // (Limits that agree to fifteen places are one line.)
+                // (Limits that agree are one line: both exact and equal;
+                // or both the same double; or both shown "≈" to the
+                // fifteen places they share, which says no more of
+                // either than its own line would. Never an exact one
+                // with one only enclosed: its exact text would then
+                // stand for the other side too, where nothing proves it.)
                 let agree = |m: &Num| match (m.exact, n.exact) {
                     (Some(a), Some(b)) => same(a, b),
-                    _ => {
-                        (m.enc == n.enc && m.enc.is_point())
-                            || fixed_to(m.enc, 15).is_some_and(|t| Some(t) == fixed_to(n.enc, 15))
+                    _ if m.enc == n.enc && m.enc.is_point() => true,
+                    (None, None) => {
+                        fixed_to(m.enc, 15).is_some_and(|t| Some(t) == fixed_to(n.enc, 15))
                     }
+                    _ => false,
                 };
                 if let Some(l) = lines.iter_mut().find(|(m, _)| agree(m)) {
                     l.1 = AsymptoteSide::AnyInfinity;

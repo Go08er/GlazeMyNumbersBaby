@@ -126,8 +126,10 @@ fn floor_q(q: Q) -> i128 {
 }
 
 /// The sign of self − v for a double v that Q can't hold (beyond about
-/// 2⁻¹²⁰ or 2¹²⁰): by the signs, or when they differ by far more than
-/// rounding.
+/// 2⁻¹²⁰ or 2¹²⁰): by the signs, or by an enclosure of self that lies
+/// wholly on one side of v. (Not by self's double: a + b·√c that cancels
+/// has a double with no digit right, and it was compared with v to within
+/// 10⁻⁶ as if it had them all. Found by the round-19 audit of premises.)
 fn by_margin(e: Ex, v: f64) -> Option<i32> {
     let s = e.sign()?;
     let vs = if v > 0.0 {
@@ -140,11 +142,14 @@ fn by_margin(e: Ex, v: f64) -> Option<i32> {
     if s != vs {
         return Some((s - vs).signum());
     }
-    let f = e.to_f64();
-    if (f - v).abs() > 1e-6 * f.abs().max(v.abs()) {
-        return Some(if f > v { 1 } else { -1 });
+    let enc = e.interval()?;
+    if enc.lo() > v {
+        Some(1)
+    } else if enc.hi() < v {
+        Some(-1)
+    } else {
+        None
     }
-    None
 }
 
 /// The double π is just below π; the next double is above it.
@@ -585,6 +590,45 @@ impl Ex {
         }
         self.enclosure()
             .is_some_and(|v| lo <= v.hi() && v.lo() <= hi)
+    }
+
+    /// An enclosure of the value, by interval arithmetic on its form
+    /// (`None` if that overflows). The value's double is not one: of
+    /// ln(1 + 10⁻²⁰) it is ln of the double beside 1, 2.2·10⁻¹⁶. A
+    /// logarithm is enclosed as 2·atanh((c − 1)/(c + 1)) too, the
+    /// argument exact, which keeps its digits beside 1.
+    pub fn interval(self) -> Option<Interval> {
+        let d = |q: Q| DecInterval::new(q.interval());
+        let v = match self.norm() {
+            Ex::Alg { a, b, c } => {
+                if b.is_zero() {
+                    d(a)
+                } else {
+                    let root = elem::sqrt(&d(Q::int(c.into())));
+                    elem::add(&d(a), &elem::mul(&d(b), &root))
+                }
+            }
+            Ex::Pi(q) => elem::mul(&d(q), &DecInterval::new(elem::pi())),
+            Ex::Exp { q, k } => elem::mul(&d(q), &elem::exp(&d(k))),
+            Ex::Ln { a, b, c } => {
+                let mut ln = elem::ln(&d(c));
+                let t = c
+                    .sub(Q::ONE)
+                    .and_then(|n| c.add(Q::ONE).and_then(|m| n.div(m)));
+                if let Some(t) = t {
+                    let two = DecInterval::new(Interval::point(2.0));
+                    let other = elem::mul(&two, &elem::atanh(&d(t)));
+                    if !other.is_empty() && !ln.is_empty() {
+                        let both = ln.iv.intersect(other.iv);
+                        if !both.is_empty() {
+                            ln = DecInterval::new(both);
+                        }
+                    }
+                }
+                elem::add(&d(a), &elem::mul(&d(b), &ln))
+            }
+        };
+        (!v.is_empty() && v.iv.is_bounded()).then_some(v.iv)
     }
 
     /// An enclosure of q·eᵏ or a + b·ln c (`None` for the other forms, or

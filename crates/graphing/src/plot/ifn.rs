@@ -55,12 +55,19 @@ impl IntervalFn {
         }
     }
 
+    /// The context f is enclosed in. A step of arguments free of x is
+    /// one number, constant along the curve, so continuous there
+    /// ([`Ctx::steady_constants`]): the plotter joins only what is proven
+    /// continuous, and a constant whose enclosure can't say which side of
+    /// a jump it is on (⌈ln e⌉) would have no curve at all.
     fn with_ctx<R>(&self, f: impl FnOnce(&Ctx<'_>) -> R) -> R {
         let opts = CompileOptions {
             trig_unit: self.unit,
             variables: &self.vars,
         };
-        f(&Ctx::new(opts))
+        let mut ctx = Ctx::new(opts);
+        ctx.steady_constants = true;
+        f(&ctx)
     }
 
     /// An enclosure of f over [lo, hi], decorated.
@@ -78,6 +85,7 @@ impl IntervalFn {
         };
         let mut ctx = Ctx::new(opts);
         ctx.pole_probe = true;
+        ctx.steady_constants = true;
         let e = enclose(&self.expr, Interval::point(x), &ctx);
         !e.is_empty() && !e.iv.is_bounded()
     }

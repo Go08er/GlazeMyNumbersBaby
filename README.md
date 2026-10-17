@@ -224,7 +224,7 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **1,054 tests** (counts include
+`nix develop -c cargo test --workspace` runs **1,088 tests** (counts include
 doctests; six more are `#[ignore]`d: a live currency fetch, the full
 metamorphic graph sweep, 20,000 random saved sessions, and the
 cross-checking tester's long run, single-expression check and case list).
@@ -284,12 +284,16 @@ CI also runs checks that need more than `cargo test --workspace`:
   expressions aimed at the families the review rounds kept finding bugs in
   (how a typed number is read, definedness lost in a shortcut, counting
   functions and roots at extremes, numbers a hair apart, two spellings of
-  one function), each under a random number-precision setting, with and
+  one function, a step of an exact value a hair off its jump, a kink or a
+  valley centred where no double is, an exact value just past a pole or
+  the end of a domain), each under a random number-precision setting, with and
   without sliders, and compares every pair of the engine's views of the
   function that should agree: the compiled evaluator, the typed reference
   evaluator, the interval form and its decorations, the checker's own MPFR
   evaluation of f, f′ and f″ at 1280 bits, the certified panel against
-  dense sampling, the certificate through the strict replay, the text at N
+  dense sampling (what the samples suggest is a finding only where an
+  enclosure or MPFR proves it, and counted otherwise), the certificate
+  through the strict replay, the text at N
   digits against the same text rounded by hand, and the plot against the
   enclosure. CI runs a short fixed run; the long run (`-- --ignored
   long_run`, release) is a function of its seed and range alone. It has
@@ -300,7 +304,12 @@ CI also runs checks that need more than `cargo test --workspace`:
   engine fault it found is a test in `crossfuzz_found`. What it can't
   show: a claim the checker can neither prove nor refute (about one case
   in thirty has one) is set aside, not failed, so a false claim the checker
-  can't decide would pass; and causes found but not fixed are listed in its
+  can't decide would pass; a claim of a kind the checker doesn't read yet
+  (`KinkSides`, until it has the rule) is taken out before the replay and
+  counted, the rows resting on it left open; what the samples suggest but
+  no proof bears out (a turn as flat as x⁴'s, a pole without MPFR, a
+  shorter period, an oblique line not approached) is counted, not found;
+  and causes found but not fixed are listed in its
   known-open table and counted in every run. Those in the engine are all in
   the compiled evaluator, the one that draws (the panel and tracing read
   enclosures, which are right in each): `nCr` and `nPr` far out or next to zero are

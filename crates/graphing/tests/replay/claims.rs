@@ -1040,6 +1040,9 @@ fn singular_sign(
     p: Option<f64>,
     k: usize,
 ) -> Option<KinkSign> {
+    if has_steps(e) {
+        return None;
+    }
     let mut bases = Vec::new();
     singular_args_below(fx, e, k as i64, &mut bases);
     let mut vanishing = 0;
@@ -1101,7 +1104,8 @@ fn singular_sign(
 ///
 /// Shown on f's own tree, strong; on the certificate's evaluated tree
 /// (equal to f wherever f is defined), weak. A form with a step (floor,
-/// …) is not read.
+/// …) is read only where its series is valid over a side (the step
+/// constant there), never "wherever it exists".
 fn kink_sides(
     fx: &Fx,
     x: B,
@@ -1144,12 +1148,10 @@ fn kink_sides(
             );
         }
     }
-    let on = |f: &Expr| -> V {
-        if has_steps(f) {
-            return unknown("a step in f's form");
-        }
-        ladder(|| sides_of(fx, f, x, at, k, left, right, joined))
-    };
+    // (A step in f's form is read as any node: over a closed side box its
+    // series is valid only where the step is constant there. Only the
+    // readings "wherever it exists" refuse one.)
+    let on = |f: &Expr| -> V { ladder(|| sides_of(fx, f, x, at, k, left, right, joined)) };
     let mut v = on(&fx.f);
     let mut weak = cont.class == Class::Weak;
     if !v.yes()
@@ -1186,6 +1188,9 @@ fn singular_sides(
     k: usize,
 ) -> Option<(KinkSign, KinkSign)> {
     use super::algebra::{constant_ratio, derivative_tree_k};
+    if has_steps(e) {
+        return None;
+    }
     let mut bases = Vec::new();
     singular_args_below(fx, e, k as i64, &mut bases);
     let mut u0: Option<Expr> = None;

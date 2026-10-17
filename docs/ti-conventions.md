@@ -121,13 +121,16 @@ hundreds of digits. An exponent too long to carry exactly (`3^20000`) is
 odd, even or no integer as its form shows (3^20000 is odd, 10^5000 even,
 1.5^100000 no integer); where that isn't known (`x^nCr(20000, 10000)`), a
 negative base's power is unknown. Arithmetic on literals and
-sliders alone (+, −, ×, ÷, whole powers, |·|, floor, ceil, round, sign and
-the counts n!, n!!, nCr, nPr of whole numbers of any size) is done exactly
-and rounded once
+sliders alone (+, −, ×, ÷, whole powers, |·|, floor, ceil, round, sign,
+mod, min, max and the counts n!, n!!, nCr, nPr of whole numbers of any
+size) is done exactly and rounded once
 (`10^17·(0.1 + 0.2 − 0.3)` is 0, `0.1·3` is the double nearest 0.3,
-`1/(0.1 + 0.2 − 0.3)` divides by zero, and off
+`1/(0.1 + 0.2 − 0.3)` divides by zero, `mod(0.3, 0.1)` is 0 though 0.3's
+double is less than three times 0.1's, and off
 `nCr(9007199254740993, 1) − 9007199254740992` is 1, though no double holds
-the first number), for the curve drawn, its trace and
+the first number, `ceil(1.00000000000000000001)` is 2 and
+`ceil(max(1.00000000000000000001, 1))` too), for the curve drawn, its
+trace and
 its analysis alike, while every exact value on the way fits in 2¹⁴ bits
 (about 4,900 digits), whether or not its numbers are doubles:
 `nCr(2^1000, 2)/(2^1000·(2^1000 − 1)/2)` is 1 and `171!/170!` is 171,
@@ -136,18 +139,51 @@ arithmetic isn't carried out. A value proven beyond the doubles on its own
 (`10^5000`, `2000!`, `(1/2)^100000`) is still the ±∞ or 0 it rounds to,
 but arithmetic on such a value has an unknown value, not what rounding
 step by step would make of it: `(10^5000 + 1) − 10^5000` is unknown,
-never 0. Nothing is drawn or traced
+never 0. A step of such a value needs only where it lies: its sign is ±1
+(`sign(10^5000)` is 1), floor, ceil and round of one nearer 0 than every
+double are 0 or ±1, whole numbers to compute with
+(`floor(2^(−100000)) + 5` is 5), and past the largest double a step
+leaves it there (`floor(10^5000)` is +∞ as `10^5000` is, and
+`floor(10^5000) − 10^5000` unknown). Nothing is drawn or traced
 for an unknown value except where f's enclosure itself places the curve.
 Anything else (π, e, sin, a root or a power to an exponent no integer,
-the counts of numbers no whole number, …) is computed in floating point
-as before. A
+the counts of numbers no whole number, …) is computed in floating point,
+from the double nearest its argument, as before: off, the sine of a typed
+whole number that no double holds is the sine of its double, another
+angle. **With one exception: an argument known exactly (a number typed,
+or arithmetic as above on literals and sliders) that rounds onto a number
+the function turns on, without being that number.** Its double then sits
+on a pole the argument is beside, on a zero the argument isn't at, or on
+the end of a domain the argument is past (or not yet at), and the
+function of the double is of another kind than the function of the
+argument. There the exact value decides, and the function is computed
+from the argument's exact distance to that number, rounded once:
+
+| The function turns at | Off (and at any setting through arithmetic, as `90 + 10^(−30)`) | Its double's |
+| --- | --- | --- |
+| a quarter turn, in degrees and grads (sin, cos, tan, sec, csc, cot) | `tan(90.00000000000000000001)` is −5.73·10²¹ (−cot of 10⁻²⁰°), `sin(180.00000000000000000001)` is −1.75·10⁻²² | undefined; 0 |
+| 1, under ln and log and as log's base | `ln(1.00000000000000000001)` is 10⁻²⁰ and 1 over it 10²⁰; `log(1.00000000000000000001, x)` is 10²⁰·ln x | 0, and a division by zero; undefined |
+| ±1, where arcsin, arccos, arcsec, arccsc, arcosh and arsech end and artanh and arcoth have their poles | `arcsin(1.00000000000000000001)` is undefined, `arccos(0.99999999999999999999)` is 1.41·10⁻¹⁰, `artanh(0.99999999999999999999)` is 23.37 | a quarter turn; 0; undefined |
+| a whole number below 0, a pole of n! (and so of nCr and nPr of numbers no whole ones) | `(−1.00000000000000000001)!` is Γ(−10⁻²⁰), about −10²⁰; `nCr(5, 6.00000000000000000001)` is −1.67·10⁻²¹ | undefined; 0 |
+| a whole number, for n!! (of whole numbers alone) | `(3.00000000000000000001)!!` is undefined | 3 |
+
+(In radians no number typed is a quarter turn; at 0 a value nearer 0
+than every double already keeps its side, in extended range: `ln(10^(−400))`
+is −921.03 and `sqrt(−(10^(−400)))` undefined.) Only an argument whose
+double is exactly that number is treated so: every other value is
+computed as before, bit for bit, and so is what a function makes of a
+value it computed itself (off, `floor(sin(90.00000000000000000001))` in
+degrees is the floor of the sine's double, 1). A
 literal the doubles can't tell from its neighbour (off, 1 + 10⁻¹⁶ against
 1) is enclosed by the doubles either side of it, so the analysis may leave
 a row unknown that only that difference decides (off,
 `2/(1.0000000000000001 − cos x)` is defined everywhere, but its domain row
 says it can't tell). Arithmetic on literals alone is still exact there:
 off, `x + 10^(−16)/(1.0000000000000001 − 1)` is the line x + 1, analysed
-in full.
+in full. A step (floor, ceil, round, sign, mod) of a constant that its
+enclosure can't place on one side of a jump (`ceil(ln e)`: ln e is 1 to
+within a rounding either way) is still one number, the same all along the
+curve: the curve is drawn whole, at the value computed.
 
 0⁰: the limit of x^y at (0, 0) doesn't exist, so a function graphed through
 it has no value there (x⁰ approaches 1 but 0^x approaches 0). TI documents

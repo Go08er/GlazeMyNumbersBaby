@@ -1813,10 +1813,7 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
         // one is not monotone across it. (cot's piece (0, π) moved to start
         // a double below 0 passed: its pole at 0 was a family member, which
         // only the domain's pieces were asked about.)
-        let holds = w
-            .holes
-            .iter()
-            .any(|h| inner_lo < h.0 && h.1 < inner_hi);
+        let holds = w.holes.iter().any(|h| inner_lo < h.0 && h.1 < inner_hi);
         let has_families = domain_families(all);
         let ends: Vec<Enc> = [p.lo, p.hi]
             .iter()
@@ -2050,9 +2047,9 @@ fn parity(
         "Even" | "Odd" => {
             match domain_symmetric(all) {
                 Some(true) => {}
-                Some(false) => out
-                    .problems
-                    .push(format!("{p}, but the domain is not shown symmetric about 0")),
+                Some(false) => out.problems.push(format!(
+                    "{p}, but the domain is not shown symmetric about 0"
+                )),
                 // No domain row to read it from: f's own structure may
                 // still say it (built of even and odd parts, f is defined
                 // at −x wherever it is at x). The fact f(−x) = ±f(x) alone

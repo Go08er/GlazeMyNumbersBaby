@@ -1081,3 +1081,39 @@ fn what_a_limit_looks_like_lies_in_its_enclosure() {
     // (The hint is still given where the closed form is in the enclosure.)
     assert!(hinted > 0);
 }
+
+/// x·ln(x)² takes its least value 0 at 1 and has it for its limit at 0⁺
+/// as well. The range's low end, closed, named the limit alone as where
+/// it comes from (the two ends were one value, and the first's sources
+/// were kept), and the replay read "a range end at 0 closed but its
+/// sources say otherwise". A closed end's sources are each a value taken.
+/// (Seed 1409, case 3532.)
+#[test]
+fn a_closed_range_end_names_where_it_is_taken() {
+    use graphing::certify::rows::EndSrc;
+    use graphing::certify::{Bound, DEFAULT_BUDGET, Row, certify_text};
+    for src in ["x*ln(x)^2", "x^2*ln(x)^2", "x*ln(x)"] {
+        let a = certify_text(src, CompileOptions::default(), DEFAULT_BUDGET, None).expect(src);
+        let Row::Certified { value, .. } = &a.range else {
+            panic!("{src}: {:?}", a.range);
+        };
+        for (i, p) in value.iter().enumerate() {
+            for (j, b) in [p.lo, p.hi].into_iter().enumerate() {
+                let Bound::At { closed, .. } = b else {
+                    continue;
+                };
+                let srcs = &a.range_ends[i][j];
+                let taken = srcs.iter().filter(|s| matches!(s, EndSrc::At(_))).count();
+                assert!(
+                    !srcs.is_empty()
+                        && (if closed {
+                            taken == srcs.len()
+                        } else {
+                            taken == 0
+                        }),
+                    "{src}: end {j} of piece {i}, closed {closed}: {srcs:?}"
+                );
+            }
+        }
+    }
+}

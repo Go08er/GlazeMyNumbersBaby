@@ -885,7 +885,8 @@ fn mutants_of(
         if window.is_some() {
             // (Another window at least a period wide, for a row over one
             // period: the same statement, of the line by f's period.)
-            let same = (kind == "Period" && covers.get("Period").is_some()).then_some(SAME_BY_PERIOD);
+            let same =
+                (kind == "Period" && covers.get("Period").is_some()).then_some(SAME_BY_PERIOD);
             scopes.push((
                 format!("{kind} [{}, {}] (wider)", wa - 1.0, wb + 1.0),
                 over(kind, (wa - 1.0, wb + 1.0)),
@@ -1010,7 +1011,9 @@ fn mutants_of(
                 "kink claim changed",
                 format!("{}: {what}", serde_json::to_string(&k).unwrap_or_default()),
                 benign,
-                &|v: &mut Value| body_mut(v, row)["cert"]["claims"][i] = json!({"KinkSides": new.clone()}),
+                &|v: &mut Value| {
+                    body_mut(v, row)["cert"]["claims"][i] = json!({"KinkSides": new.clone()})
+                },
             );
         }
     }
@@ -1022,7 +1025,9 @@ fn mutants_of(
     if let Some(o) = other
         && let Some((_, ob)) = body(o, row)
         && (ob["value"] != value || ob["cert"]["covers"] != covers)
-        && ob["cert"]["claims"].as_array().is_some_and(|c| c.len() <= 1000)
+        && ob["cert"]["claims"]
+            .as_array()
+            .is_some_and(|c| c.len() <= 1000)
     {
         push(
             "row of another function",
