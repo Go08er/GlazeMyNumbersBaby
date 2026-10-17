@@ -1609,13 +1609,17 @@ enum Fold {
     /// slider is in it.
     DivZero(bool),
     /// A value too long to carry exactly (beyond `big::MAX_BITS` bits) that
-    /// the general path still gets right alone, and whether a slider is in
-    /// it: a decimal typed with thousands of digits (its double is it
-    /// rounded once), or a power or count proven beyond the doubles
-    /// (10⁵⁰⁰⁰, 2^−100000, 2000!: ±∞ or 0, however it is rounded), with
-    /// what is known of its parity (for a power of a negative base). Any
+    /// the general path still gets right alone: a power or count proven
+    /// beyond the doubles (10⁵⁰⁰⁰, 2^−100000, 2000!: ±∞ or 0, however it is
+    /// rounded). Whether a slider is in it, what is known of its parity
+    /// (for a power of a negative base), and where it lies ([`Far`]). Any
     /// arithmetic on it is [`Fold::Big`].
-    Lone(bool, Parity),
+    Lone(bool, Parity, Far),
+    /// A decimal typed with more digits than are carried (thousands): the
+    /// general path reads its double, the decimal rounded once, which is
+    /// right alone. Which side of that double it lies on isn't carried, so
+    /// a step of it (⌈1.000…1⌉) is [`Fold::Big`], as any arithmetic on it is.
+    Long,
     /// A rational computation on literals and sliders too long to carry
     /// exactly and not proven beyond the doubles ((1 + 2⁻²⁰)^800), or
     /// arithmetic on a value too long to carry ((10⁵⁰⁰⁰ + 1) − 10⁵⁰⁰⁰), and
@@ -1631,10 +1635,29 @@ enum Fold {
 impl Fold {
     fn var(&self) -> bool {
         match self {
-            Fold::Value(_, v) | Fold::DivZero(v) | Fold::Lone(v, _) | Fold::Big(v) => *v,
-            Fold::No => false,
+            Fold::Value(_, v) | Fold::DivZero(v) | Fold::Lone(v, ..) | Fold::Big(v) => *v,
+            Fold::Long | Fold::No => false,
         }
     }
+}
+
+/// Where a value proven beyond the doubles ([`Fold::Lone`]) lies: past the
+/// largest of them (`huge`) or nearer 0 than the smallest, and on which
+/// side of 0. All that a step of it needs: its sign is ±1, ⌊·⌋ of a value
+/// nearer 0 than every double is 0 or −1, and past the largest double a
+/// step leaves it there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Far {
+    huge: bool,
+    neg: bool,
+}
+
+impl Far {
+    /// Past the largest double, above 0 (a count, a factorial).
+    const HUGE: Far = Far {
+        huge: true,
+        neg: false,
+    };
 }
 
 /// Whether a value too long to carry ([`Fold::Lone`]) is an integer, and
@@ -1675,12 +1698,14 @@ fn log2_bounds(r: &Rat) -> (f64, f64) {
     (lo.log2(), hi.log2())
 }
 
-/// [`Fold::Lone`] (of `parity`) if log₂ of a value lies in `l`, proving
-/// it beyond the doubles (above 2¹¹⁰⁰, rounded to ±∞; below 2⁻¹²⁰⁰, to
-/// 0), else [`Fold::Big`].
-fn beyond(l: (f64, f64), var: bool, parity: Parity) -> Fold {
-    if l.0 > 1100.0 || l.1 < -1200.0 {
-        Fold::Lone(var, parity)
+/// [`Fold::Lone`] (of `parity`, below 0 if `neg`) if log₂ of a value's
+/// magnitude lies in `l`, proving it beyond the doubles (above 2¹¹⁰⁰,
+/// rounded to ±∞; below 2⁻¹²⁰⁰, to 0), else [`Fold::Big`].
+fn beyond(l: (f64, f64), var: bool, parity: Parity, neg: bool) -> Fold {
+    if l.0 > 1100.0 {
+        Fold::Lone(var, parity, Far { huge: true, neg })
+    } else if l.1 < -1200.0 {
+        Fold::Lone(var, parity, Far { huge: false, neg })
     } else {
         Fold::Big(var)
     }
@@ -1688,8 +1713,8 @@ fn beyond(l: (f64, f64), var: bool, parity: Parity) -> Fold {
 
 /// The exact value of an x- and y-free subtree of typed literals and
 /// sliders (a slider's value is the double it holds) under +, −, ×, ÷,
-/// whole powers, |·|, floor, ceil, round, sign, and the counts n!, n!!,
-/// nCr, nPr of whole numbers.
+/// whole powers, |·|, floor, ceil, round, sign, mod, min, max, and the
+/// counts n!, n!!, nCr, nPr of whole numbers.
 ///
 /// Each of those is folded at any size, or refused for its length
 /// ([`Fold::Big`], unknown; or [`Fold::Lone`] where the general path is
@@ -1716,7 +1741,7 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
             Some(r) => Value(r, false),
             None if *lit == Lit::Near => No,
             // A decimal typed with thousands of digits.
-            None => Lone(false, Parity::Unknown),
+            None => Long,
         },
         // A slider's exact value: its double, or the decimal a digit limit
         // made it ([`Sliders`]).
@@ -1731,6 +1756,14 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
         // (Exact on a value too long to carry too.)
         Expr::Neg(a) => match go(a) {
             Value(r, v) => Value(r.neg(), v),
+            Lone(v, parity, far) => Lone(
+                v,
+                parity,
+                Far {
+                    neg: !far.neg,
+                    ..far
+                },
+            ),
             other => other,
         },
         Expr::Bin(op, a, b) => {
@@ -1782,6 +1815,8 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                 None => {
                     use Parity::*;
                     let ((al, ah), (bl, bh)) = (log2_bounds(&ra), log2_bounds(&rb));
+                    // (Of a product or a quotient.)
+                    let neg = ra.is_negative() != rb.is_negative();
                     match op {
                         BinOp::Mul => {
                             let parity = match (Parity::of(&ra), Parity::of(&rb)) {
@@ -1789,9 +1824,9 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                                 (Even, Even | Odd) | (Odd, Even) => Even,
                                 _ => Unknown,
                             };
-                            beyond((al + bl, ah + bh), var, parity)
+                            beyond((al + bl, ah + bh), var, parity, neg)
                         }
-                        BinOp::Div => beyond((al - bh, ah - bl), var, Unknown),
+                        BinOp::Div => beyond((al - bh, ah - bl), var, Unknown, neg),
                         BinOp::Pow => {
                             // log₂|aᵏ| = k·log₂|a|, k a whole number.
                             let k = (
@@ -1812,7 +1847,10 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                                 Some(ra.clone())
                             };
                             let parity = base.map_or(Unknown, |b| Parity::of(&b));
-                            beyond((lo, hi), var, parity)
+                            // (A whole power: below 0 for a base below 0
+                            // to an odd one.)
+                            let neg = ra.is_negative() && !rb.is_even();
+                            beyond((lo, hi), var, parity, neg)
                         }
                         _ => Big(var),
                     }
@@ -1822,6 +1860,7 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
         Expr::Call(f, args) => match f {
             Func::Abs => match go(&args[0]) {
                 Value(r, v) => Value(r.abs(), v),
+                Lone(v, parity, far) => Lone(v, parity, Far { neg: false, ..far }),
                 other => other,
             },
             // These steps depend on which side of an integer (or a half)
@@ -1842,8 +1881,68 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                 ),
                 No => No,
                 DivZero(v) => DivZero(v),
+                // A value proven beyond the doubles is too long to carry,
+                // but where it lies decides its steps: its sign is ±1; a
+                // step of one nearer 0 than the smallest double is 0 or ±1
+                // by its side of 0; and past the largest double a step
+                // leaves it there (a whole number is itself, and keeps its
+                // parity), still +∞ or −∞ alone and not to be computed
+                // with. (Review 19: each was unknown, as arithmetic on it
+                // is, where ⌊10⁵⁰⁰⁰⌋ had been +∞ and sign(10⁵⁰⁰⁰) 1.)
+                Lone(v, parity, far) => {
+                    let int = |n: u64| {
+                        Value(
+                            if far.neg {
+                                Rat::int(n).neg()
+                            } else {
+                                Rat::int(n)
+                            },
+                            v,
+                        )
+                    };
+                    match f {
+                        Func::Sign => int(1),
+                        _ if far.huge => Lone(
+                            v,
+                            match parity {
+                                Parity::Even | Parity::Odd => parity,
+                                _ => Parity::Unknown,
+                            },
+                            far,
+                        ),
+                        // ⌊−ε⌋ = −1 and ⌈ε⌉ = 1; every other step is 0.
+                        Func::Floor if far.neg => int(1),
+                        Func::Ceil if !far.neg => int(1),
+                        _ => Value(Rat::int(0), v),
+                    }
+                }
+                // A decimal too long to carry: which side of a whole
+                // number it is on isn't known.
                 other => Big(other.var()),
             },
+            // The floored remainder a − b·⌊a/b⌋ of two exact values is
+            // one too, and jumps wherever a passes a multiple of b: which
+            // multiple lies below a is theirs to say, not their doubles'
+            // (review 19: mod(0.3, 0.1) was 0.1 less an ulp for the 0 it
+            // is, and off, mod(5, 1.00000000000000000001) 0 for 1 less
+            // 4·10⁻²⁰). Any other argument, and b = 0 (undefined), are the
+            // general path's as before.
+            Func::Mod if args.len() == 2 => {
+                let (ra, va, rb, vb) = match (go(&args[0]), go(&args[1])) {
+                    (Value(ra, va), Value(rb, vb)) if !rb.is_zero() => (ra, va, rb, vb),
+                    _ => return No,
+                };
+                let r = ra
+                    .div(&rb)
+                    .map(|q| q.floor())
+                    .and_then(|q| rb.mul(&q))
+                    .and_then(|m| ra.sub(&m));
+                match r {
+                    Some(r) => Value(r, va || vb),
+                    // (Each step fails only for its length.)
+                    None => Big(va || vb),
+                }
+            }
             Func::Factorial | Func::DoubleFactorial => {
                 let (r, v) = match go(&args[0]) {
                     Value(r, v) => (r, v),
@@ -1859,8 +1958,8 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                     // (and the doubles), as it is from the even double
                     // the general path rounds it to.
                     None if r.is_negative() => return No,
-                    None if *f == Func::Factorial => return Lone(v, Parity::Even),
-                    None => return Lone(v, Parity::of(&r)),
+                    None if *f == Func::Factorial => return Lone(v, Parity::Even, Far::HUGE),
+                    None => return Lone(v, Parity::of(&r), Far::HUGE),
                 };
                 let step = if *f == Func::Factorial { 1 } else { 2 };
                 let count = if n < 0 && !(step == 2 && n == -1) {
@@ -1896,8 +1995,10 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                     // Past the cap: alone it is +∞, but 2000! − 2000! is
                     // no 0 to compute. (n! for n ≥ 2 is even; n!! is of n's
                     // parity.)
-                    Some(fns::Count::Huge) if *f == Func::Factorial => Lone(v, Parity::Even),
-                    Some(fns::Count::Huge) => Lone(v, Parity::of(&r)),
+                    Some(fns::Count::Huge) if *f == Func::Factorial => {
+                        Lone(v, Parity::Even, Far::HUGE)
+                    }
+                    Some(fns::Count::Huge) => Lone(v, Parity::of(&r), Far::HUGE),
                     None => No,
                 }
             }
@@ -1944,8 +2045,37 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                         } else {
                             Parity::Unknown
                         },
+                        Far::HUGE,
                     ),
                     None => Big(vn || vr),
+                }
+            }
+            // The least or greatest of exact values is one of them, by
+            // their own order: two that share a double are still apart
+            // (review 19: off, max(1.00000000000000000001, 1) was the
+            // double 1, and its ceiling 1 for 2). Any other argument is
+            // the general path's as before.
+            Func::Min | Func::Max => {
+                let mut best: Option<Rat> = None;
+                let mut var = false;
+                for a in args {
+                    let Value(r, v) = go(a) else {
+                        return No;
+                    };
+                    var |= v;
+                    let better = if *f == Func::Min {
+                        std::cmp::Ordering::Less
+                    } else {
+                        std::cmp::Ordering::Greater
+                    };
+                    best = Some(match best {
+                        Some(b) if r.cmp(&b) != better => b,
+                        _ => r,
+                    });
+                }
+                match best {
+                    Some(r) => Value(r, var),
+                    None => No,
                 }
             }
             _ => No,
@@ -1982,6 +2112,14 @@ pub(crate) fn fold_literals(e: &Expr, opts: &CompileOptions<'_>) -> Expr {
                 let n = Expr::Num(v.abs(), lit);
                 return if neg { Expr::Neg(Box::new(n)) } else { n };
             }
+        }
+        // A function of an exact value that rounds onto a number the
+        // function turns on, as the program computes it: from the value's
+        // exact distance to that number ([`exact_call`]).
+        if let Expr::Call(f, args) = e
+            && let Some(Exact::As(rewritten)) = exact_call(*f, args, opts)
+        {
+            return go(&rewritten, opts);
         }
         let rec = |a: &Expr| go(a, opts);
         match e {
@@ -2040,7 +2178,7 @@ pub(crate) fn typed_value(e: &Expr, opts: &CompileOptions<'_>) -> Option<TypedVa
         }
         Fold::DivZero(_) => Some(TypedValue::DivZero),
         Fold::Big(_) => Some(TypedValue::Unknown),
-        Fold::Lone(..) | Fold::No => None,
+        Fold::Lone(..) | Fold::Long | Fold::No => None,
     }
 }
 
@@ -2070,6 +2208,278 @@ pub(crate) fn typed_enclosure(
                 .then(|| DecInterval::new(Interval::new(lo, hi)).signs(pos, neg))
         }
         Fold::DivZero(_) => Some(DecInterval::new(Interval::EMPTY)),
+        _ => None,
+    }
+}
+
+/// What [`exact_call`] makes of a call.
+pub(crate) enum Exact {
+    /// The same value, written from the argument's exact distance to the
+    /// number it rounds onto.
+    As(Expr),
+    /// Too long to carry out so: not known.
+    Unknown,
+}
+
+/// The most factors [`exact_call`] writes out beside a pole of Γ. Each
+/// factor is of a number no double holds, of more than forty bits, so a
+/// product of more than these is past the bound every exact value keeps
+/// (`big::MAX_BITS`): not known, written out or not.
+const POLE_FACTORS: f64 = 400.0;
+
+/// An x- and y-free argument's exact value ([`fold`]) and the double it
+/// rounds to, when that double is another number: the value rounds onto
+/// it. (Never onto 0: a value nearer 0 than every double stays itself in
+/// extended range, its sign and that it isn't 0 kept: [`Wide`].)
+fn rounds_onto(a: &Expr, opts: &CompileOptions<'_>) -> Option<(Rat, f64)> {
+    if a.any(&|n| matches!(n, Expr::X | Expr::Y)) {
+        return None;
+    }
+    let Fold::Value(r, _) = fold(a, opts) else {
+        return None;
+    };
+    let d = r.to_f64(crate::big::Round::Nearest);
+    (d.is_finite() && d != 0.0 && Rat::from_f64(d).is_some_and(|x| x != r)).then_some((r, d))
+}
+
+/// A function of an argument known exactly ([`fold`]: a typed decimal,
+/// arithmetic on literals and sliders) that rounds onto a number the
+/// function turns on without being it: a quarter turn in degrees or grads
+/// (off, `tan(90.00000000000000000001)`, or `tan(90 + 10^(-30))` at any
+/// setting), 1 under a logarithm or as its base
+/// (`ln(1.00000000000000000001)`), ±1 where an inverse function's domain
+/// ends or it has a pole (`arcsin(1.00000000000000000001)`,
+/// `artanh(0.99999999999999999999)`), a whole number at a pole of Γ under
+/// a factorial or a count (`(−1.00000000000000000001)!`), a whole number
+/// under `n!!`. The argument's double sits on that number, so the general
+/// path would give the function there (a pole for a value beside it, an
+/// exact 0 for a value that isn't): the exact value decides instead
+/// (review 19, R19-M-04's family). The same value is written from the
+/// argument's exact distance to that number, in the language itself
+/// (`tan(90 + δ)` in degrees is `−cot(δ)`), so every view computes it
+/// alike from that distance, folded exactly and rounded once: the
+/// program ([`lower_in`]), the reference (`analysis::truth::reval_typed`)
+/// and the interval form ([`fold_literals`]).
+///
+/// `None` for any other call: an argument not known exactly, one that is
+/// its double, or a double the function doesn't turn on. There the
+/// function of the double is the function of the value to rounding, as it
+/// always was, and nothing moves.
+pub(crate) fn exact_call(f: Func, args: &[Expr], opts: &CompileOptions<'_>) -> Option<Exact> {
+    use Func::*;
+    let unit = opts.trig_unit;
+    let num = |v: f64| {
+        if v < 0.0 {
+            Expr::Neg(Box::new(Expr::exact(-v)))
+        } else {
+            Expr::exact(v)
+        }
+    };
+    let signed = |s: f64, e: Expr| {
+        if s < 0.0 { Expr::Neg(Box::new(e)) } else { e }
+    };
+    // Undefined, as √−1 is in every view.
+    let undefined = || Expr::call1(Sqrt, num(-1.0));
+    match f {
+        // Degrees and grads: sin and cos turn (a zero, or their
+        // reciprocal's pole) at whole quarter turns, which are doubles.
+        // With (s, c) the sine and cosine there, one 0 and the other ±1,
+        // sin(d + δ) = s·cos δ + c·sin δ and cos(d + δ) = c·cos δ − s·sin δ.
+        // (In radians no rational but 0 is a quarter turn.)
+        Sin | Cos | Tan | Sec | Csc | Cot if unit != TrigUnit::Radians => {
+            let (_, d) = rounds_onto(&args[0], opts)?;
+            if d % (unit.full_turn() / 4.0) != 0.0 {
+                return None;
+            }
+            let (s, c) = fns::sin_cos(d, unit);
+            let (g, sign) = match (f, s != 0.0) {
+                (Sin, true) => (Cos, s),
+                (Sin, false) => (Sin, c),
+                (Cos, true) => (Sin, -s),
+                (Cos, false) => (Cos, c),
+                (Tan, true) => (Cot, -1.0),
+                (Tan, false) => (Tan, 1.0),
+                (Cot, true) => (Tan, -1.0),
+                (Cot, false) => (Cot, 1.0),
+                (Sec, true) => (Csc, -s),
+                (Sec, false) => (Sec, c),
+                (Csc, true) => (Sec, s),
+                (Csc, false) => (Csc, c),
+                _ => unreachable!("a trigonometric function"),
+            };
+            let delta = Expr::bin(BinOp::Sub, args[0].clone(), num(d));
+            Some(Exact::As(signed(sign, Expr::call1(g, delta))))
+        }
+        // A logarithm turns at 1, its zero: off, ln(1.00000000000000000001)
+        // is 10⁻²⁰, not the 0 of its double, and 1 over it is 10²⁰, not a
+        // division by zero. ln a = 2·artanh((a − 1)/(a + 1)), whose
+        // argument is folded exactly.
+        Ln | Log => {
+            let (_, d) = rounds_onto(&args[0], opts)?;
+            if d != 1.0 {
+                return None;
+            }
+            let a = &args[0];
+            let z = Expr::bin(
+                BinOp::Div,
+                Expr::bin(BinOp::Sub, a.clone(), num(1.0)),
+                Expr::bin(BinOp::Add, a.clone(), num(1.0)),
+            );
+            let ln = Expr::bin(BinOp::Mul, num(2.0), Expr::call1(Atanh, z));
+            Some(Exact::As(if f == Ln {
+                ln
+            } else {
+                Expr::bin(BinOp::Div, ln, Expr::call1(Ln, num(10.0)))
+            }))
+        }
+        // log(b, t) = ln t/ln b: undefined at a base of 1, 0 at a t of 1.
+        LogBase if args.len() == 2 => {
+            let turns = |a: &Expr| rounds_onto(a, opts).is_some_and(|(_, d)| d == 1.0);
+            let (b, t) = (&args[0], &args[1]);
+            let ln = |a: &Expr| Expr::call1(Ln, a.clone());
+            if turns(b) {
+                // (The base's logarithm, written as above, is not 0.)
+                Some(Exact::As(Expr::bin(BinOp::Div, ln(t), ln(b))))
+            } else if turns(t) {
+                // ln t times 1/ln b, which is log(b, e): the logarithm
+                // itself keeps the base's rules (b > 0 and not 1).
+                let per = Expr::Call(LogBase, vec![b.clone(), Expr::Const(Constant::E)]);
+                Some(Exact::As(Expr::bin(BinOp::Mul, ln(t), per)))
+            } else {
+                None
+            }
+        }
+        // The inverse functions that turn at ±1, the end of a domain or a
+        // pole: off, arcsin(1.00000000000000000001) is undefined, not the
+        // quarter turn of its double, arccos(0.99999999999999999999) is
+        // 1.4·10⁻¹⁰, not 0, and artanh of it is 23.4, not a pole. With u
+        // the argument or its negative, whichever rounds onto 1, each is
+        // written from 1 − u or u − 1, folded exactly:
+        // arccos u = 2·arcsin √((1 − u)/2), arcosh u = 2·arsinh √((u − 1)/2),
+        // artanh u = ½·ln((1 + u)/(1 − u)), and the others from those
+        // (arcsin u = arcsin 1 − arccos u; arcsec, arccsc, arsech and
+        // arcoth are those of 1/u).
+        Asin | Acos | Acosh | Atanh | Acoth | Asec | Acsc | Asech => {
+            let (r, d) = rounds_onto(&args[0], opts)?;
+            if d.abs() != 1.0 {
+                return None;
+            }
+            let neg = d < 0.0;
+            if neg && matches!(f, Acosh | Asech) {
+                // Undefined either side of −1, as at −1.
+                return None;
+            }
+            let inside = r.abs().cmp(&Rat::int(1)) == std::cmp::Ordering::Less;
+            let u = signed(if neg { -1.0 } else { 1.0 }, args[0].clone());
+            let bin = Expr::bin;
+            let (one, two) = (|| num(1.0), || num(2.0));
+            // 1 − u inside the ends, u − 1 outside: above 0.
+            let off = if inside {
+                bin(BinOp::Sub, one(), u.clone())
+            } else {
+                bin(BinOp::Sub, u.clone(), one())
+            };
+            // 2·g(√(v/2)), for arccos (g = arcsin) and arcosh (g = arsinh).
+            let twice = |g: Func, v: Expr| {
+                let root = Expr::call1(Sqrt, bin(BinOp::Div, v, two()));
+                bin(BinOp::Mul, two(), Expr::call1(g, root))
+            };
+            // ½·ln((1 + u)/v), v = |1 − u|.
+            let half_ln = |v: Expr| {
+                let q = bin(BinOp::Div, bin(BinOp::Add, one(), u.clone()), v);
+                bin(BinOp::Div, Expr::call1(Ln, q), two())
+            };
+            let sign = if neg { -1.0 } else { 1.0 };
+            let quarter = || Expr::call1(Asin, one());
+            let half = || Expr::call1(Acos, num(-1.0));
+            // arccos of u, or of −u (half a turn less it).
+            let acos = |t: Expr| {
+                if neg { bin(BinOp::Sub, half(), t) } else { t }
+            };
+            let over_u = |v: Expr| bin(BinOp::Div, v, u.clone());
+            let rewritten = match (f, inside) {
+                (Asin, true) => signed(sign, bin(BinOp::Sub, quarter(), twice(Asin, off))),
+                (Acos, true) => acos(twice(Asin, off)),
+                (Atanh, true) => signed(sign, half_ln(off)),
+                (Asech, true) => twice(Asinh, over_u(off)),
+                (Acosh, false) => twice(Asinh, off),
+                (Acoth, false) => signed(sign, half_ln(off)),
+                (Asec, false) => acos(twice(Asin, over_u(off))),
+                (Acsc, false) => signed(sign, bin(BinOp::Sub, quarter(), twice(Asin, over_u(off)))),
+                // The other side of the end.
+                _ => undefined(),
+            };
+            Some(Exact::As(rewritten))
+        }
+        // n! is Γ(n + 1), with a pole at each whole n below 0: off,
+        // (−1.00000000000000000001)! is Γ(−10⁻²⁰), near −10²⁰, not the
+        // pole its double is at. Γ(a + 1) = Γ(a + n + 1)/((a + 1)(a + 2)…
+        // (a + n)) for the pole at −n: the product is folded exactly, its
+        // last factor the exact distance to the pole, and Γ is taken
+        // beside 1.
+        Factorial => {
+            let (_, d) = rounds_onto(&args[0], opts)?;
+            if !(d <= -1.0 && d == d.trunc()) {
+                return None;
+            }
+            let n = -d;
+            if n > POLE_FACTORS {
+                return Some(Exact::Unknown);
+            }
+            let plus = |j: f64| Expr::bin(BinOp::Add, args[0].clone(), num(j));
+            let mut product = plus(1.0);
+            let mut j = 2.0;
+            while j <= n {
+                product = Expr::bin(BinOp::Mul, product, plus(j));
+                j += 1.0;
+            }
+            let top = Expr::call1(Factorial, plus(n));
+            Some(Exact::As(Expr::bin(BinOp::Div, top, product)))
+        }
+        // n!! is of whole numbers alone: a value that only rounds onto
+        // one has none.
+        DoubleFactorial => {
+            let (r, d) = rounds_onto(&args[0], opts)?;
+            (d >= -1.0 && d == d.trunc() && !r.is_integer()).then(|| Exact::As(undefined()))
+        }
+        // nCr(n, k) is n!/(k!·(n − k)!) and nPr(n, k) is n!/(n − k)! where
+        // the numbers are no whole ones: beside a pole of one of those
+        // factorials (off, nCr(5, 6.00000000000000000001) has (n − k)!
+        // beside −1's), written so, n − k folded exactly, each factorial
+        // then taken as above. (The doubles' count, C(5, 6) = 0, is an
+        // exact 0 for a value that isn't; and nCr(−1.00000000000000000001,
+        // 2), which is 1, was undefined as nCr(−1, 2) is.)
+        NCr | NPr if args.len() == 2 => {
+            // (An argument with x in it is not folded at all: the
+            // reference asks this at every point.)
+            let exact = |a: &Expr| {
+                if a.any(&|n| matches!(n, Expr::X | Expr::Y)) {
+                    return None;
+                }
+                match fold(a, opts) {
+                    Fold::Value(r, _) => Some(r),
+                    _ => None,
+                }
+            };
+            let (n, k) = (exact(&args[0])?, exact(&args[1])?);
+            let rest = n.sub(&k)?;
+            let beside_pole = |r: &Rat| {
+                let d = r.to_f64(crate::big::Round::Nearest);
+                d <= -1.0 && d == d.trunc() && !r.is_integer()
+            };
+            if !(beside_pole(&n) || beside_pole(&k) || beside_pole(&rest)) {
+                return None;
+            }
+            let fact = |e: Expr| Expr::call1(Factorial, e);
+            let (a, b) = (args[0].clone(), args[1].clone());
+            let rest = fact(Expr::bin(BinOp::Sub, a.clone(), b.clone()));
+            let below = if f == NCr {
+                Expr::bin(BinOp::Mul, fact(b), rest)
+            } else {
+                rest
+            };
+            Some(Exact::As(Expr::bin(BinOp::Div, fact(a), below)))
+        }
         _ => None,
     }
 }
@@ -2179,7 +2589,7 @@ fn pow_kind(b: &Expr, opts: &CompileOptions<'_>, lx: Reading) -> PowKind {
             // A value beyond the doubles too long to carry (3^20000, 2000!,
             // 1.5^100000), by its parity: its extended-range value, past
             // 2⁵³, is even (as 10⁵⁰⁰⁰ and 2000! are).
-            Fold::Lone(_, parity) => {
+            Fold::Lone(_, parity, _) => {
                 return match parity {
                     Parity::Even => PowKind::Plain,
                     Parity::Odd => PowKind::Odd,
@@ -2187,6 +2597,9 @@ fn pow_kind(b: &Expr, opts: &CompileOptions<'_>, lx: Reading) -> PowKind {
                     Parity::Unknown => PowKind::Beyond,
                 };
             }
+            // A decimal too long to carry: an integer or not, odd or
+            // even, isn't known.
+            Fold::Long => return PowKind::Beyond,
             _ => {}
         }
     }
@@ -2209,8 +2622,24 @@ fn lower_in(e: &Expr, opts: &CompileOptions<'_>, lx: Reading) -> Result<Piece, E
             }
             Fold::DivZero(true) => return Ok(Piece::Const(Wide::Undef, true)),
             Fold::Big(var) => return Ok(Piece::Const(Wide::Unknown, var)),
-            Fold::Lone(..) | Fold::No => {}
+            Fold::Lone(..) | Fold::Long | Fold::No => {}
         }
+    }
+    // A function of an exact value that rounds onto a number the function
+    // turns on: from the value's exact distance to that number.
+    if lx == Reading::Typed
+        && let Expr::Call(f, args) = e
+        && let Some(exact) = exact_call(*f, args, opts)
+    {
+        // (A slider in it is still one in what it is rewritten as.)
+        let var = e.any(&|n| matches!(n, Expr::Var(_)));
+        return Ok(match exact {
+            Exact::Unknown => Piece::Const(Wide::Unknown, var),
+            Exact::As(rewritten) => match rec(&rewritten)? {
+                Piece::Const(w, v) => Piece::Const(w, v || var),
+                code => code,
+            },
+        });
     }
     Ok(match e {
         Expr::Num(v, _) => Piece::Const(Wide::new(*v), false),
@@ -2647,6 +3076,61 @@ mod tests {
         let e = crate::parser::parse_expression("x^1.0000000000000001").unwrap();
         let p = Program::compile(&e, &CompileOptions::default()).unwrap();
         assert_eq!(p.eval(-2.0, 0.0), -2.0);
+    }
+
+    /// Review 19: a step folded on an exact value is written into the
+    /// interval form as that value: `Lit::Exact` where it is a double,
+    /// else the whole number its double only rounds (`Lit::Folded`), under
+    /// its sign; and only what is free of x is folded.
+    #[test]
+    fn folded_steps_are_written_as_their_exact_value() {
+        let parse = |src: &str| crate::parser::parse_expression(src).unwrap();
+        let folded = |src: &str| fold_literals(&parse(src), &CompileOptions::default());
+        let num = |v: f64| Expr::Num(v, Lit::Exact);
+        let neg = |e: Expr| Expr::Neg(Box::new(e));
+        assert_eq!(folded("ceil(1.00000000000000000001)"), num(2.0));
+        assert_eq!(folded("floor(-1.00000000000000000001)"), neg(num(2.0)));
+        assert_eq!(folded("round(-0.5)"), neg(num(1.0)));
+        assert_eq!(folded("sign(-(10^(-400)))"), neg(num(1.0)));
+        assert_eq!(folded("sign(0.1+0.2-0.3)"), num(0.0));
+        assert_eq!(folded("ceil(-0.5)"), num(0.0));
+        // 2⁵³ + 1 is no double: the nearest one, 2⁵³, standing for it.
+        for (src, negative) in [
+            ("floor(9007199254740993.5)", false),
+            ("ceil(-9007199254740993.5)", true),
+        ] {
+            let e = match folded(src) {
+                Expr::Neg(a) if negative => *a,
+                e if !negative => e,
+                e => panic!("{src}: {e:?}"),
+            };
+            match e {
+                Expr::Num(v, Lit::Folded(r)) => {
+                    assert_eq!(v, 9007199254740992.0, "{src}");
+                    assert_eq!(*r.0, Rat::from_decimal("9007199254740993").unwrap());
+                }
+                e => panic!("{src}: {e:?}"),
+            }
+        }
+        // Beside x only the part free of it; with x inside, nothing.
+        assert_eq!(
+            folded("x+ceil(1.00000000000000000001)"),
+            Expr::bin(BinOp::Add, Expr::X, num(2.0))
+        );
+        assert_eq!(folded("ceil(x+0.5)"), parse("ceil(x+0.5)"));
+        // A slider alone is a number: folded at its value.
+        let e = parse("ceil(a+0.00000000000000000001)");
+        let at = |a: f64| {
+            let vars = [("a", a)];
+            fold_literals(
+                &e,
+                &CompileOptions {
+                    trig_unit: TrigUnit::Radians,
+                    variables: &vars,
+                },
+            )
+        };
+        assert_eq!((at(1.0), at(-1.0), at(2.5)), (num(2.0), num(0.0), num(3.0)));
     }
 
     #[test]

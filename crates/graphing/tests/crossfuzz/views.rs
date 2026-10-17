@@ -19,15 +19,25 @@
 //! oracle's checks, `examples/oracle/checks.rs`, and d against c),
 //! `replay/` (e), `digits/` (one function typed under two settings),
 //! `pair/` (two spellings of one function), `plot/` (f against a, b and c).
+//!
+//! A verdict is decided by a view that proves things: (c) over the box in
+//! question, MPFR over it, or the replay's own proofs. Doubles at points
+//! are witnesses of values only: that f is undefined, unbounded, without
+//! a zero, a turn or a neighbourhood near a point, or periodic, no finite
+//! set of samples and no fixed step shows (review 19, R19-L-02: f
+//! undefined 2⁻²⁹⁹ below 2 is no proof that √(x − 2 + 10⁻¹⁰⁰) has no
+//! derivative at 2). Where the proving views don't decide, what was seen
+//! is counted, not failed ([`Proofs::stands`], `mp::beside`,
+//! `mp::limit_refuted`).
 
 use std::collections::BTreeMap;
 
 use graphing::analysis::truth::{R, reval_typed};
 use graphing::analysis::{AnalysisError, KeyGraphFeatures, analyze, analyze_certified};
 use graphing::ast::{BinOp, Expr};
-use graphing::certify::{Analysis, Row};
+use graphing::certify::{Analysis, Enc, Row};
 use graphing::compile::{CompileOptions, Input, Sliders};
-use graphing::interval::{Ctx, Dec, DecInterval, Interval, enclose};
+use graphing::interval::{Ctx, Dec, DecInterval, Interval, derivs_valid, enclose, taylor};
 use graphing::lexer::ParseOptions;
 use graphing::plot::{PlotOptions, plot};
 use graphing::{Equation, TrigUnit, Viewport};
@@ -176,6 +186,19 @@ impl Loaded {
 #[cfg(feature = "mpfr-oracle")]
 pub fn replay_child() {
     mp::replay_child();
+}
+
+#[cfg(feature = "mpfr-oracle")]
+pub use mp::{Beside, row_problem, without_unread};
+
+/// What MPFR proves of `y = text` on the reals beside x ([`Beside`]);
+/// `None` where there is no certificate to read the function from.
+#[cfg(feature = "mpfr-oracle")]
+pub fn beside(text: &str, set: &Setup, x: f64) -> Option<Beside> {
+    let l = load(text, set).ok()?;
+    let (_, a) = analyze_certified(&l.eq, &l.opts(), None).expect("not cancelled");
+    let fx = mp::read(&a?, &mut Outcome::default())?;
+    Some(mp::beside(&fx, x))
 }
 
 fn load(text: &str, set: &Setup) -> Result<Loaded, NoFunction> {
@@ -559,7 +582,6 @@ fn points(l: &Loaded, out: &mut Outcome) -> Sampled {
 mod mp {
     use super::*;
     use crate::replay::{self, Fx, iv};
-    use graphing::interval::{derivs_valid, taylor};
     use rug::Float;
     use rug::float::Round;
 
@@ -576,11 +598,105 @@ mod mp {
     const PREC: u32 = 1280;
 
     fn at_prec<T>(f: impl FnOnce() -> T) -> T {
+        at_prec_of(PREC, f)
+    }
+
+    fn at_prec_of<T>(prec: u32, f: impl FnOnce() -> T) -> T {
         let before = iv::prec();
-        iv::set_prec(PREC);
+        iv::set_prec(prec);
         let r = f();
         iv::set_prec(before);
         r
+    }
+
+    /// What MPFR proves of f on the reals beside a double x: what a
+    /// derivative at x needs (`interval::derivs_valid`: "f is defined on a
+    /// neighbourhood of it") is a statement about every real near x, which
+    /// no value of f at a point beside x proves or refutes (review 19,
+    /// R19-L-02: √(x − 2 + 10⁻¹⁰⁰) is undefined 2⁻²⁹⁹ below 2 and
+    /// differentiable at 2, its domain ending 10⁻¹⁰⁰ below).
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum Beside {
+        /// f is defined on all of `[x − r, x + r]`, r = 2^−`bits` of |x|
+        /// (of the smallest normal double at 0): its enclosure over that
+        /// box says so. A neighbourhood, proven.
+        Defined { bits: u32 },
+        /// f is undefined at every real strictly on one side of x within
+        /// some distance of it: its enclosure over those reals alone, x
+        /// left out, is empty. No neighbourhood, proven. (The replay's
+        /// intervals can leave out an end only at 0, so only there.)
+        Undefined { below: bool },
+        /// Neither is proven. `probe`: a side on which f is undefined at
+        /// the first distance tried (`true`: below), which is all that
+        /// says.
+        Open { probe: Option<bool> },
+    }
+
+    /// The distances from x tried for [`Beside::Defined`], as powers of
+    /// two of |x|, each with the precision the box is enclosed at (enough
+    /// for x ± r to be numbers of it, and to place 10⁻¹⁰⁰⁰ beside 0).
+    const BESIDE: [(u32, u32); 3] = [(300, PREC), (1150, PREC), (4900, 4 * PREC + 64)];
+
+    /// [`Beside`] of f at x.
+    pub fn beside(fx: &Fx, x: f64) -> Beside {
+        // 2^−bits of x, and no more than 2^(50 − bits) (far out, a
+        // fraction of x is many periods of a tangent).
+        let radius = |bits: u32| {
+            if x == 0.0 {
+                Float::with_val(iv::prec(), f64::MIN_POSITIVE) >> (bits - 100)
+            } else {
+                let rel = Float::with_val(iv::prec(), x.abs()) >> bits;
+                let abs = Float::with_val(iv::prec(), 1.0) >> (bits - 50);
+                if rel < abs { rel } else { abs }
+            }
+        };
+        // x less r and x plus r, rounded away from x: strictly either side
+        // of it at any precision.
+        let beyond = |r: &Float, below: bool| {
+            let at = Float::with_val(iv::prec(), x);
+            if below {
+                Float::with_val_round(iv::prec(), &at - r, Round::Down).0
+            } else {
+                Float::with_val_round(iv::prec(), &at + r, Round::Up).0
+            }
+        };
+        for (bits, prec) in BESIDE {
+            let m = at_prec_of(prec, || {
+                let r = radius(bits);
+                let around = iv::Iv::new(beyond(&r, true), beyond(&r, false));
+                fx.series_iv(&fx.f, around, 0).swap_remove(0)
+            });
+            if !m.empty && m.def {
+                return Beside::Defined { bits };
+            }
+        }
+        // The reals strictly on one side of 0, 0 left out.
+        if x == 0.0 {
+            for below in [true, false] {
+                let m = at_prec(|| {
+                    let r = radius(BESIDE[0].0);
+                    let zero = Float::with_val(PREC, 0.0);
+                    let side = if below {
+                        iv::Iv::new(-r, zero).strict(false, true)
+                    } else {
+                        iv::Iv::new(zero, r).strict(true, false)
+                    };
+                    fx.series_iv(&fx.f, side, 0).swap_remove(0)
+                });
+                if m.empty {
+                    return Beside::Undefined { below };
+                }
+            }
+        }
+        // What a point at the first distance says: all it can.
+        let probe = [true, false].into_iter().find(|&below| {
+            at_prec(|| {
+                let p = beyond(&radius(BESIDE[0].0), below);
+                fx.series_iv(&fx.f, iv::Iv::point(p), 0).swap_remove(0)
+            })
+            .empty
+        });
+        Beside::Open { probe }
     }
 
     fn bounds(v: &iv::Iv) -> (f64, f64) {
@@ -637,18 +753,7 @@ mod mp {
                     .ok()?,
             ),
         };
-        let xs: Vec<f64> = note
-            .split(" at ")
-            .skip(1)
-            .filter_map(|t| {
-                t.split([',', ')'])
-                    .next()?
-                    .trim()
-                    .replace('−', "-")
-                    .parse()
-                    .ok()
-            })
-            .collect();
+        let xs = tried(note);
         if xs.len() != 3 {
             return None;
         }
@@ -682,6 +787,106 @@ mod mp {
                 g[0], g[1], g[2]
             )
         })
+    }
+
+    /// Whether a limit the replay left open with f's values at three
+    /// points against it ("f → +∞ as x → 2⁺: f settles (…)", "f stays
+    /// apart from 1: …") is false, which those values don't show (the
+    /// replay says so itself: "three points far out refute no limit"):
+    /// f's own enclosure, MPFR's, over all of the approach from the
+    /// nearest point tried on, to the point approached or out along the
+    /// tail, is bounded on the side an infinite limit needs, or lies
+    /// apart from a finite one. (Every value f takes from there on is in
+    /// it, and so is a limit of them.)
+    fn limit_refuted(fx: &Fx, claim: &replay::Claim, note: &str) -> bool {
+        let replay::Claim::Simplifier(fact) = claim else {
+            return false;
+        };
+        let Some((to, at)) = fact
+            .strip_prefix("f → ")
+            .and_then(|rest| rest.split_once(" as x → "))
+        else {
+            return false;
+        };
+        let number = |t: &str| t.trim().replace('−', "-").parse::<f64>().ok();
+        let at = at.split(':').next().unwrap_or("").trim();
+        let Some(&nearest) = tried(note).last() else {
+            return false;
+        };
+        let (lo, hi) = match at {
+            "+∞" => (nearest, f64::INFINITY),
+            "−∞" => (f64::NEG_INFINITY, nearest),
+            _ => match number(at.trim_end_matches(['⁺', '⁻'])) {
+                Some(p) if at.ends_with('⁺') && p < nearest => (p, nearest),
+                Some(p) if at.ends_with('⁻') && nearest < p => (nearest, p),
+                _ => return false,
+            },
+        };
+        let m = at_prec(|| fx.series(&fx.f, lo, hi, 0)).swap_remove(0);
+        if m.empty {
+            return false;
+        }
+        match to {
+            "+∞" => m.hi.is_finite(),
+            "−∞" => m.lo.is_finite(),
+            _ => {
+                // The limit as the certifier writes it: a number, or an
+                // enclosure "in [lo, hi]". (A decimal is read to its
+                // double: four ulps of it are left.)
+                let target = match to.strip_prefix("in [").and_then(|t| t.strip_suffix(']')) {
+                    Some(ends) => ends
+                        .split_once(", ")
+                        .and_then(|(a, b)| Some((number(a)?, number(b)?))),
+                    None => number(to).map(|t| (t - 4.0 * ulp(t), t + 4.0 * ulp(t))),
+                };
+                target.is_some_and(|(tlo, thi)| m.hi < tlo || m.lo > thi)
+            }
+        }
+    }
+
+    /// The points of a note "… (v₁ at x₁, v₂ at x₂, v₃ at x₃) …": where
+    /// the replay tried a limit, ever nearer what x approaches.
+    fn tried(note: &str) -> Vec<f64> {
+        note.split(" at ")
+            .skip(1)
+            .filter_map(|t| {
+                t.split([',', ')'])
+                    .next()?
+                    .trim()
+                    .replace('−', "-")
+                    .parse()
+                    .ok()
+            })
+            .collect()
+    }
+
+    /// A certificate as the replay is given it.
+    pub fn json(a: &Analysis) -> serde_json::Value {
+        serde_json::from_str(&serde_json::to_string(a).expect("a certificate serialises"))
+            .expect("a certificate reads back")
+    }
+
+    /// [`function`] of a certificate.
+    pub fn read(a: &Analysis, out: &mut Outcome) -> Option<Fx> {
+        function(&json(a), out)
+    }
+
+    impl Mpfr for Fx {
+        fn over(&self, lo: f64, hi: f64) -> MpAt {
+            over(self, lo, hi)
+        }
+
+        fn unbounded(&self, lo: f64, hi: f64) -> bool {
+            let s = lo.abs().max(hi.abs()).max(1.0);
+            let claim = replay::Claim::Unbounded {
+                near: (lo - 1e-3 * s, hi + 1e-3 * s),
+                at: (lo, hi),
+            };
+            let before = iv::prec();
+            let class = replay::claims::check(self, &claim, &[]).class;
+            iv::set_prec(before);
+            matches!(class, replay::Class::Strong)
+        }
     }
 
     /// The replay's reading of the function, from the certificate: its
@@ -719,9 +924,15 @@ mod mp {
         !(lo <= c && c <= hi)
     }
 
-    /// MPFR's word on f at x ([`MpAt`]).
-    pub fn at(fx: &Fx, x: f64) -> MpAt {
-        let m = at_prec(|| fx.series(&fx.f, x, x, 0)).swap_remove(0);
+    /// MPFR's word on f over `[lo, hi]` ([`MpAt`]): at the precision
+    /// points are looked at with, and at a point where that doesn't
+    /// decide whether f is defined (10⁻⁴⁰⁰ + sin²4 + cos²4 − 1 under a
+    /// root: 1280 bits don't place it against 0), at four times it.
+    pub fn over(fx: &Fx, lo: f64, hi: f64) -> MpAt {
+        let mut m = at_prec(|| fx.series(&fx.f, lo, hi, 0)).swap_remove(0);
+        if lo == hi && !m.empty && !m.def {
+            m = at_prec_of(4 * PREC + 64, || fx.series(&fx.f, lo, hi, 0)).swap_remove(0);
+        }
         MpAt {
             undefined: if m.empty {
                 Some(true)
@@ -731,6 +942,8 @@ mod mp {
                 None
             },
             value: (!m.empty && m.def).then(|| bounds(&m)),
+            within: (!m.empty).then(|| bounds(&m)),
+            continuous: !m.empty && m.def && m.cont,
         }
     }
 
@@ -905,34 +1118,42 @@ mod mp {
                     );
                 }
             }
-            // Look beside the derivative point as well. An undefined
-            // value at a fixed distance does not refute a neighborhood:
-            // sqrt(x - 2 + 10^-100) is differentiable at 2, but its
-            // domain ends closer than the probe's 2^-300 step. Without a
-            // proof locating the domain edge at x this is unresolved,
-            // not a finding. The coefficient comparisons above remain
-            // checks of the claimed derivatives.
-            for side in [-1.0, 1.0] {
-                let beside = at_prec(|| {
-                    let mut p = Float::with_val(PREC, x);
-                    // 2⁻³⁰⁰ of x, and no more than 2⁻²⁵⁰ (far out, a
-                    // fraction of x is many periods of a tangent).
-                    let step = if x == 0.0 {
-                        Float::with_val(PREC, f64::MIN_POSITIVE) >> 200u32
-                    } else {
-                        let rel = Float::with_val(PREC, x.abs()) >> 300u32;
-                        let abs = Float::with_val(PREC, 1.0) >> 250u32;
-                        if rel < abs { rel } else { abs }
-                    };
-                    p += step * side;
-                    fx.series_iv(&fx.f, iv::Iv::point(p), 0).swap_remove(0)
-                });
-                if beside.empty {
+            // A derivative at x needs f defined on both sides of x, on a
+            // neighbourhood: judged by what MPFR proves of the reals
+            // beside x ([`Beside`]), not by f at a point beside it. The
+            // coefficients above are compared whichever it is.
+            match beside(fx, x) {
+                Beside::Defined { bits } => {
+                    out.count("mpfr derivative points with a neighbourhood proven", 1);
+                    if bits != BESIDE[0].0 {
+                        // (What a point 2⁻³⁰⁰ away was read as "no
+                        // neighbourhood" at.)
+                        out.count(
+                            "mpfr derivative neighbourhoods proven only nearer than 2⁻³⁰⁰ of the point",
+                            1,
+                        );
+                    }
+                }
+                Beside::Undefined { below } => out.fail(
+                    "mp/derivative-without-neighbourhood",
+                    format!(
+                        "x={x:e}: f′ enclosed as {}, but MPFR: f is undefined at every real just {} it",
+                        show_enc(&t[1]),
+                        if below { "below" } else { "above" }
+                    ),
+                ),
+                Beside::Open { probe } => {
                     out.note("mp/derivative-neighbourhood-not-resolved", || {
                         format!(
-                            "x={x:e}: f′ enclosed as {}, but MPFR: f is undefined just {} it",
+                            "x={x:e}: f′ enclosed as {}; MPFR proves f neither defined on a box about x nor undefined beside it{}",
                             show_enc(&t[1]),
-                            if side < 0.0 { "below" } else { "above" }
+                            match probe {
+                                Some(below) => format!(
+                                    " (f is undefined at a point 2⁻³⁰⁰ of x {} it, which is no proof of either)",
+                                    if below { "below" } else { "above" }
+                                ),
+                                None => String::new(),
+                            }
                         )
                     });
                 }
@@ -973,9 +1194,12 @@ mod mp {
     /// (On a thread it ran on after it was given up on, and a run's slow
     /// replays piled up until the others had to be skipped.)
     ///
-    /// A limit the replay leaves open with f's values against it fails
-    /// the run (`replay/values-against`), unless f is still moving there
-    /// as a logarithm does ([`still_moving`]).
+    /// A limit the replay leaves open with f's values at three points
+    /// against it fails the run (`replay/values-against`) where f's
+    /// enclosure over the rest of the approach refutes it
+    /// ([`limit_refuted`]); otherwise it is counted (the values prove
+    /// nothing either way), apart where f is still moving there as a
+    /// logarithm does ([`still_moving`]).
     pub fn replayed(json: &serde_json::Value, fx: &Fx, out: &mut Outcome) {
         use std::io::{Read, Write};
         use std::process::{Command, Stdio};
@@ -1110,22 +1334,181 @@ mod mp {
         );
     }
 
+    /// A kind of claim the certifier writes that the replay doesn't read
+    /// yet: it refuses the whole certificate for one ("unknown claim kind
+    /// KinkSides", tests/replay/mod.rs).
+    const UNREAD: &str = "KinkSides";
+
+    /// `json` without its claims of kind [`UNREAD`], and how many they
+    /// were.
+    pub fn without_unread(json: &serde_json::Value) -> (serde_json::Value, usize) {
+        use serde_json::Value;
+        fn strip(v: &mut Value, n: &mut usize) {
+            match v {
+                Value::Object(m) => {
+                    for (key, w) in m.iter_mut() {
+                        if let (true, Value::Array(claims)) = (key == "claims", &mut *w) {
+                            let before = claims.len();
+                            claims.retain(|c| {
+                                c.as_object()
+                                    .is_none_or(|o| !(o.len() == 1 && o.contains_key(UNREAD)))
+                            });
+                            *n += before - claims.len();
+                        } else {
+                            strip(w, n);
+                        }
+                    }
+                }
+                Value::Array(vs) => vs.iter_mut().for_each(|w| strip(w, n)),
+                _ => {}
+            }
+        }
+        let (mut rest, mut n) = (json.clone(), 0);
+        strip(&mut rest, &mut n);
+        (rest, n)
+    }
+
+    /// What a row's problem (`replay::Report::row_problems`) is found as.
+    /// The replay derives each shown row from the claims it has proven,
+    /// and a problem either leaves the row open (a claim behind it not
+    /// decided, a stretch the claims don't cover, a fact not stated: the
+    /// replay's own limits, or a claim it left open, which is listed
+    /// apart) or says something against the row from what is proven: an
+    /// item proven and not listed, a piece listed increasing where f′ is
+    /// negative, an end listed closed that is open, a value outside its
+    /// listed enclosure. The first is `replay/row-problem`, found before
+    /// and left open; the second is the certifier contradicted by its own
+    /// claims, `replay/row-against`; and a value listed more narrowly
+    /// than the claims prove it, `replay/row-narrower` (the right limit of
+    /// 3 + (x − (1 + 2·10⁻¹⁵))·e⁻ˣ + (x − x) at 14 digits, listed as one
+    /// double beside 3). A text of neither kind (one the replay has
+    /// learnt since) is a finding of its own, `replay/row-problem-unread`,
+    /// to be read and added to one list or the other.
+    pub fn row_problem(text: &str) -> &'static str {
+        const OPEN: &[&str] = &[
+            "not as wide as the period",
+            "not decided",
+            "undecided",
+            "not proven by the claims",
+            "not shown",
+            "not known",
+            "not derived",
+            "no claim",
+            "no fact",
+            "no bound on",
+            "no number the replay reads",
+            "name no sources",
+            "with no source named",
+            "with no bands",
+            "without",
+            "nothing shows",
+            "nothing showing",
+            "nothing rules",
+            "don't show",
+            "don't narrow",
+            "don't close in",
+            "of a period out",
+            "the claims place",
+            "tested at points",
+            "past any sieve",
+            "unreadable",
+            "unread ",
+            "unknown parity",
+            // (The replay's `domain_symmetric` compares each piece's
+            // mirror with the pieces as listed, enclosures and all: an
+            // excluded point enclosed off-centre, as 0 is in
+            // x/(sin(4)² − sin(4)² + x), reads "not symmetric" though the
+            // domain is ℝ \ {0}. Not shown symmetric, nor shown otherwise.
+            // Seed 1451, case 718.)
+            "but the domain is not symmetric",
+        ];
+        // What the replay says against a row (tests/replay/rows.rs).
+        const AGAINST: &[&str] = &[
+            "with one sign at both its ends",
+            "proven by the claims but not listed",
+            "the language refuses f",
+            "listed as repeating every",
+            "is outside the domain",
+            "yet the row lists points",
+            "changes sign across the kink",
+            ", listed as ",
+            "of the domain out, yet the row is complete",
+            "reaches outside the domain's pieces",
+            "includes its undefined endpoint",
+            "contains an open domain end",
+            "inside a piece listed",
+            "yet f(0) is",
+            "is not in the listed",
+            "defined at only one of ±x",
+            "no such node of f",
+            "f is not defined on its piece",
+            "an open end at",
+            "yet it is",
+            "is strictly between",
+            "f is defined throughout it",
+            "is no multiple of an excluded family",
+            "the fact says",
+            "outside f's band",
+            "where f is bounded",
+            "but no asymptote is listed there",
+            "its own graph",
+            "outside its listed",
+            "not N/D's",
+            "], outside [",
+            "apart from the limit by f's structure",
+            "where f tends to ±∞",
+            "the claims show ",
+            "pairs of end sources",
+            "its sources say otherwise",
+            "doesn't hold the value",
+            "is outside the listed range",
+            "is outside the claims'",
+            "listed outside its expansion's",
+            "listed off N/D's line",
+        ];
+        if text.contains("narrower than the claims show") {
+            "replay/row-narrower"
+        } else if OPEN.iter().any(|open| text.contains(open)) {
+            "replay/row-problem"
+        } else if AGAINST.iter().any(|against| text.contains(against)) {
+            "replay/row-against"
+        } else {
+            "replay/row-problem-unread"
+        }
+    }
+
     /// The certificate through the replay, and what it says onto `out`.
     fn judge(json: &serde_json::Value, fx: &Fx, out: &mut Outcome) {
         use replay::Class;
         let counting = replay::claims::unmodelled(&fx.f);
-        let r =
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| replay::replay(json))) {
-                Ok(Ok(r)) => r,
-                Ok(Err(e)) => {
-                    out.fail("replay/rejected", e);
-                    return;
-                }
-                Err(e) => {
-                    out.fail("panic/replay", panic_text(e));
-                    return;
-                }
-            };
+        let run = |json: &serde_json::Value| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| replay::replay(json)))
+        };
+        let mut replayed = run(json);
+        // A certificate refused for a kind of claim the replay doesn't
+        // read is replayed without those claims: the rest of it is
+        // checked, and the rows that rest on them come out as not derived
+        // (row problems, which are listed). Counted, a certificate once.
+        if let Ok(Err(e)) = &replayed
+            && e.contains(&format!("unknown claim kind {UNREAD}"))
+        {
+            let (rest, n) = without_unread(json);
+            out.note("replay/kink-sides-unread", || {
+                format!("{} ({n} claims left out)", fx.source)
+            });
+            replayed = run(&rest);
+        }
+        let r = match replayed {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                out.fail("replay/rejected", e);
+                return;
+            }
+            Err(e) => {
+                out.fail("panic/replay", panic_text(e));
+                return;
+            }
+        };
         for b in &r.binding {
             if b.starts_with("missing") {
                 out.fail("replay/binding", b.clone());
@@ -1143,16 +1526,22 @@ mod mp {
                 Class::Strong | Class::Weak => {}
                 Class::Refuted => out.fail("replay/refuted", line()),
                 // A limit left open with f's values at the points tried
-                // against it: no proof (so not refuted), but to look at
-                // like one, not one of the replay's known limits. Unless
-                // the values aren't against it: 10⁻¹⁶·ln x "settles" at
-                // every double beside 0, and goes to −∞.
+                // against it: no proof (three points refute no limit:
+                // 10⁻¹⁶·ln x "settles" at every double beside 0, and goes
+                // to −∞). Refuted where f's enclosure over the rest of
+                // the approach leaves the limit out ([`limit_refuted`]):
+                // a finding. Otherwise counted, apart where f is seen
+                // still moving.
                 Class::Unconfirmed if c.outcome.note.starts_with(replay::claims::AGAINST) => {
-                    match still_moving(fx, &c.claim, &c.outcome.note) {
-                        Some(more) => out.note("replay/values-of-a-slow-limit", || {
-                            format!("{}; {more}", line())
-                        }),
-                        None => out.fail("replay/values-against", line()),
+                    if limit_refuted(fx, &c.claim, &c.outcome.note) {
+                        out.fail("replay/values-against", line());
+                    } else {
+                        match still_moving(fx, &c.claim, &c.outcome.note) {
+                            Some(more) => out.note("replay/values-of-a-slow-limit", || {
+                                format!("{}; {more}", line())
+                            }),
+                            None => out.note("replay/values-against-not-proven", line),
+                        }
                     }
                 }
                 Class::Unsupported if counting => {
@@ -1180,7 +1569,7 @@ mod mp {
                 // (The refuted claims are findings already.)
                 out.note("replay/row-rests-on-refuted-claims", || p.clone());
             } else {
-                out.fail("replay/row-problem", p);
+                out.fail(row_problem(&p), p);
             }
         }
         out.count(
@@ -1192,16 +1581,38 @@ mod mp {
 
 // ------------------------------------------------------------------- panel
 
-/// MPFR's word on f at a point, where the replay's evaluator has one.
+/// MPFR's word on f at a point, or over a box of x, where the replay's
+/// evaluator has one.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MpAt {
-    /// Whether f is undefined there (`None`: it can't tell).
+    /// Whether f is undefined there: on all of the box (`Some(true)`), at
+    /// no point of it (`Some(false)`), or it can't tell (`None`).
     pub undefined: Option<bool>,
-    /// f's value there, enclosed in doubles, where it proves f defined.
+    /// f's values there, enclosed in doubles, where it proves f defined
+    /// on all of the box.
     pub value: Option<(f64, f64)>,
+    /// What every value f takes there lies in, where f isn't undefined on
+    /// all of the box.
+    pub within: Option<(f64, f64)>,
+    /// f is proven defined and continuous on all of the box.
+    pub continuous: bool,
 }
 
-type Mp<'a> = Option<&'a dyn Fn(f64) -> MpAt>;
+/// The replay's own evaluation of f, in MPFR, asked about f.
+pub trait Mpfr {
+    /// Its word on f over `[lo, hi]` (at a point: `lo == hi`).
+    fn over(&self, lo: f64, hi: f64) -> MpAt;
+    /// Whether f is unbounded beside some point of `[lo, hi]`, by the
+    /// replay's own proof of it from the tree's structure (what a
+    /// certificate's `Unbounded` claim is checked by: a divisor with a
+    /// zero there and a numerator away from 0, a tangent at a zero of its
+    /// cosine, a logarithm of an argument falling to 0, with what
+    /// multiplies them bounded away from 0). No values show that.
+    fn unbounded(&self, lo: f64, hi: f64) -> bool;
+}
+
+/// MPFR's word, where there is one.
+type Mp<'a> = Option<&'a dyn Mpfr>;
 
 /// Whether f is undefined at x, as far as the views that prove things
 /// say: `Some(true)` where f's enclosure there is empty (or MPFR's is),
@@ -1217,7 +1628,7 @@ fn proven_undefined(l: &Loaded, mp: Mp<'_>, x: f64) -> Option<bool> {
     if e.dec >= Dec::Def {
         return Some(false);
     }
-    mp.and_then(|m| m(x).undefined)
+    mp.and_then(|m| m.over(x, x).undefined)
 }
 
 /// How densely the oracle's checks sample a function typed as `text`: a
@@ -1249,45 +1660,620 @@ fn density(text: &str) -> Density {
     }
 }
 
+/// Where the certificate places a feature the panel shows at one number:
+/// its x enclosed (the first of a family that repeats every so far), and
+/// its y.
+#[derive(Clone, Copy)]
+struct Place {
+    x: Enc,
+    every: Option<Enc>,
+    y: Enc,
+}
+
+/// The certificate's zeros, extrema and inflections, as [`Place`]s.
+#[derive(Default)]
+struct Places {
+    zeros: Vec<Place>,
+    extrema: Vec<Place>,
+    inflections: Vec<Place>,
+}
+
+fn places(cert: Option<&Analysis>) -> Places {
+    use graphing::certify::Spot;
+    let mut p = Places::default();
+    let Some(a) = cert else { return p };
+    for z in a.x_intercepts.value().into_iter().flatten() {
+        let (x, every) = match z {
+            Spot::At(x) => (*x, None),
+            Spot::Every(f) => (f.x0, Some(f.period)),
+        };
+        p.zeros.push(Place {
+            x,
+            every,
+            y: Enc::point(0.0),
+        });
+    }
+    for e in a.extrema.value().into_iter().flatten() {
+        p.extrema.push(Place {
+            x: e.x,
+            every: e.every,
+            y: e.y,
+        });
+    }
+    for i in a.inflections.value().into_iter().flatten() {
+        p.inflections.push(Place {
+            x: i.x,
+            every: i.every,
+            y: i.y,
+        });
+    }
+    p
+}
+
+/// The stretch of x that a feature the panel shows at the number x is
+/// claimed in, and the y claimed with it: the certificate's enclosure of
+/// it that holds x (of a family's member nearest x, x0 + k·period,
+/// enclosed), or, with none, the numbers that read as x to the panel's six
+/// digits. A feature is judged over that stretch, not at the double shown:
+/// a zero at sin 1 is no zero at the double beside it.
+fn claimed(x: f64, places: &[Place]) -> ((f64, f64), Option<(f64, f64)>) {
+    for p in places {
+        if let Some((lo, hi)) = member(p, x)
+            && lo <= x
+            && x <= hi
+        {
+            return ((lo, hi), Some((p.y.lo.0, p.y.hi.0)));
+        }
+    }
+    let w = (1e-6 * x.abs()).max(16.0 * ulp(x));
+    ((x - w, x + w), None)
+}
+
+/// The enclosure of the member of `p` nearest x (`p` itself, if it is no
+/// family): x0 + k·period, enclosed.
+fn member(p: &Place, x: f64) -> Option<(f64, f64)> {
+    let (mut lo, mut hi) = (p.x.lo.0, p.x.hi.0);
+    if let Some(every) = p.every {
+        let (plo, phi) = (every.lo.0, every.hi.0);
+        let period = plo / 2.0 + phi / 2.0;
+        if !(period.is_finite() && period > 0.0) {
+            return None;
+        }
+        let k = ((x - (lo / 2.0 + hi / 2.0)) / period).round();
+        let (a, b) = (k * plo, k * phi);
+        lo = checks::step(lo + a.min(b), -4);
+        hi = checks::step(hi + a.max(b), 4);
+    }
+    (lo.is_finite() && hi.is_finite()).then_some((lo, hi))
+}
+
+/// Whether the certificate places something of `places` at a point of
+/// `[lo, hi]` as far as it knows: its enclosure (of the member nearest)
+/// meets the stretch. The panel shows such a thing at the enclosure's
+/// middle, which may be a part in 10⁶ or more from where it is.
+fn listed_over(lo: f64, hi: f64, places: &[Place]) -> bool {
+    places
+        .iter()
+        .filter_map(|p| member(p, lo / 2.0 + hi / 2.0))
+        .any(|(a, b)| a <= hi && lo <= b)
+}
+
+/// The views that prove things about f, asked what they make of something
+/// the oracle's checks concluded from f sampled in doubles: f's interval
+/// enclosure over a box (c), its Taylor form's derivatives there, and
+/// MPFR's value at a point (e).
+struct Proofs<'a> {
+    l: &'a Loaded,
+    ctx: Ctx<'a>,
+    mp: Mp<'a>,
+    k: &'a KeyGraphFeatures,
+    cert: Option<&'a Analysis>,
+    places: Places,
+}
+
+/// How a finding of the oracle's checks stands with [`Proofs`].
+enum Stands {
+    /// Borne out by a view that proves things: a finding.
+    Proven,
+    /// Not borne out, or shown to be the doubles': counted under this
+    /// class.
+    Open(String),
+    /// A value of f at a point against the panel, or the panel's own
+    /// texts against each other: a witness, which stands unless the
+    /// doubles miss f there.
+    Witness,
+}
+
+impl<'a> Proofs<'a> {
+    fn new(
+        l: &'a Loaded,
+        k: &'a KeyGraphFeatures,
+        cert: Option<&'a Analysis>,
+        mp: Mp<'a>,
+    ) -> Proofs<'a> {
+        Proofs {
+            l,
+            ctx: Ctx::new(l.opts()),
+            mp,
+            k,
+            cert,
+            places: places(cert),
+        }
+    }
+
+    /// f's enclosure (c) over `[lo, hi]`.
+    fn over(&self, lo: f64, hi: f64) -> DecInterval {
+        enclose(self.l.ast(), Interval::new(lo, hi), &self.ctx)
+    }
+
+    /// MPFR's word on f over `[lo, hi]`, where there is one.
+    fn mp_over(&self, lo: f64, hi: f64) -> MpAt {
+        self.mp.map(|m| m.over(lo, hi)).unwrap_or_default()
+    }
+
+    fn undefined(&self, x: f64) -> Option<bool> {
+        proven_undefined(self.l, self.mp, x)
+    }
+
+    /// f is undefined at every point of `[lo, hi]`.
+    fn nowhere(&self, lo: f64, hi: f64) -> bool {
+        self.over(lo, hi).is_empty() || self.mp_over(lo, hi).undefined == Some(true)
+    }
+
+    /// f is defined at every point of `[lo, hi]`.
+    fn everywhere(&self, lo: f64, hi: f64) -> bool {
+        let e = self.over(lo, hi);
+        (!e.is_empty() && e.dec >= Dec::Def) || self.mp_over(lo, hi).undefined == Some(false)
+    }
+
+    /// f is defined and continuous at every point of `[lo, hi]`.
+    fn continuous(&self, lo: f64, hi: f64) -> bool {
+        let e = self.over(lo, hi);
+        (!e.is_empty() && e.dec >= Dec::Dac) || self.mp_over(lo, hi).continuous
+    }
+
+    /// What every value f takes on `[lo, hi]` lies in (`None`: f is
+    /// undefined on all of it): (c)'s enclosure cut to MPFR's, or MPFR's
+    /// where the two are apart (which is found as such at points).
+    fn range(&self, lo: f64, hi: f64) -> Option<(f64, f64)> {
+        let e = self.over(lo, hi);
+        let m = self.mp_over(lo, hi);
+        if e.is_empty() || m.undefined == Some(true) {
+            return None;
+        }
+        Some(match m.within {
+            Some((a, b)) if a.max(e.lo()) <= b.min(e.hi()) => (a.max(e.lo()), b.min(e.hi())),
+            Some(apart) => apart,
+            None => (e.lo(), e.hi()),
+        })
+    }
+
+    /// f's value at x enclosed, where f is proven defined there: MPFR's,
+    /// or (c)'s.
+    fn value(&self, x: f64) -> Option<(f64, f64)> {
+        self.mp_over(x, x).value.or_else(|| {
+            let e = self.over(x, x);
+            (!e.is_empty() && e.dec >= Dec::Def).then(|| (e.lo(), e.hi()))
+        })
+    }
+
+    /// f's strict sign at x, where it is proven (`true`: positive).
+    fn sign(&self, x: f64) -> Option<bool> {
+        match self.mp_over(x, x).value {
+            Some((lo, _)) if lo > 0.0 => return Some(true),
+            Some((_, hi)) if hi < 0.0 => return Some(false),
+            _ => {}
+        }
+        let e = self.over(x, x);
+        if e.is_empty() || e.dec < Dec::Def {
+            None
+        } else if e.gt0() {
+            Some(true)
+        } else if e.lt0() {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    /// f has a zero strictly between a and b: continuous on `[a, b]` and
+    /// of opposite strict signs at its ends.
+    fn zero_between(&self, a: f64, b: f64) -> bool {
+        a < b
+            && self.continuous(a, b)
+            && matches!((self.sign(a), self.sign(b)), (Some(p), Some(q)) if p != q)
+    }
+
+    /// f has a zero at x or between the doubles next to it: f(x) is 0
+    /// exactly, or [`Proofs::zero_between`].
+    fn zero_about(&self, x: f64) -> bool {
+        let e = self.over(x, x);
+        let exact = |lo: f64, hi: f64| lo == 0.0 && hi == 0.0;
+        (!e.is_empty() && e.dec >= Dec::Def && exact(e.lo(), e.hi()) && !e.pos && !e.neg)
+            || self
+                .mp_over(x, x)
+                .value
+                .is_some_and(|(lo, hi)| exact(lo, hi))
+            || self.zero_between(checks::step(x, -1), checks::step(x, 1))
+    }
+
+    /// f′ (`order` 1) or f″ (2) exists and keeps one strict sign over
+    /// `[lo, hi]`: f has no turn (no inflection) on it.
+    fn signed(&self, order: usize, lo: f64, hi: f64) -> bool {
+        let t = taylor(self.l.ast(), Interval::new(lo, hi), order, &self.ctx);
+        derivs_valid(&t, order) && (t[order].lo() > 0.0 || t[order].hi() < 0.0)
+    }
+
+    /// Whether f, over the stretch a feature shown at x is claimed in
+    /// ([`claimed`]), can take the y claimed with it (where the
+    /// certificate has none: what reads as `y` to the panel's six
+    /// digits): `Some(true)` within the doubles about x, `Some(false)`
+    /// within the stretch only, `None` where what f takes over the
+    /// stretch ([`Proofs::range`]) holds no such y, or f is undefined on
+    /// it all: the feature isn't there.
+    fn takes(&self, x: f64, y: f64, places: &[Place]) -> Option<bool> {
+        let ((lo, hi), ys) = claimed(x, places);
+        let w = 1e-6 * y.abs();
+        let (ylo, yhi) = ys.map_or((y - w, y + w), |(a, b)| (a.min(y), b.max(y)));
+        let holds = |lo: f64, hi: f64| {
+            self.range(lo, hi)
+                .is_some_and(|(a, b)| a <= yhi && ylo <= b)
+        };
+        if holds(checks::step(x, -16), checks::step(x, 16)) {
+            Some(true)
+        } else if holds(lo, hi) {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    /// f is undefined on all of the stretch a feature shown at x is
+    /// claimed in.
+    fn undefined_about(&self, x: f64, places: &[Place]) -> bool {
+        let ((lo, hi), _) = claimed(x, places);
+        if lo == hi {
+            self.undefined(lo) == Some(true)
+        } else {
+            self.nowhere(lo, hi)
+        }
+    }
+
+    /// The (x, y) the panel lists whose x is the number `x`.
+    fn listed(&self, x: f64, lists: &[&[(graphing::analysis::Family, f64)]]) -> Option<f64> {
+        lists
+            .iter()
+            .flat_map(|l| l.iter())
+            .find(|(fam, _)| {
+                checks::members(fam)
+                    .iter()
+                    .any(|m| m.to_bits() == x.to_bits())
+            })
+            .map(|(_, y)| *y)
+    }
+
+    /// What the proving views make of `f`, a finding of the oracle's
+    /// checks about the point `at`. The oracle samples f in doubles, and
+    /// its findings are of three kinds:
+    ///
+    /// * f's value at a point (or at two) against what the panel says of
+    ///   every point: a witness ([`Stands::Witness`]);
+    /// * that something exists between or beside samples (a zero where f
+    ///   changes sign, a turn where a sample is above its neighbours, a
+    ///   pole where f grows): true of a continuous f, which sampling
+    ///   doesn't show, and f's enclosure over the stretch does or doesn't;
+    /// * that something holds at no point near (no zero near the one
+    ///   listed, no neighbourhood the listed minimum is lowest in, P/2 a
+    ///   period at every x), or that f is undefined at a point, from the
+    ///   doubles' NaN: no sample shows it, and what the panel claims is
+    ///   refuted only by f's enclosure over the whole stretch claimed (or
+    ///   MPFR's word at the point).
+    ///
+    /// The last two are findings where proven, and counted otherwise.
+    fn stands(&self, f: &checks::Finding, at: f64) -> Stands {
+        use Stands::{Open, Proven, Witness};
+        let open = |why: &str| Open(format!("panel/{}-{why}", f.class));
+        let unproven = || open("not-proven");
+        let proven_if = |yes: bool| if yes { Proven } else { unproven() };
+        let d = &self.k.data;
+        match f.class {
+            // A change of sign between two samples (`span`; `at` is the
+            // double it was run down to), or an exact 0 in doubles: a
+            // zero where f is continuous between two points it is proven
+            // of opposite signs at.
+            // (Not missing where the certificate lists a zero whose
+            // enclosure meets where this one is: the panel shows it at
+            // the enclosure's middle, which may be past the oracle's
+            // reach of a part in 10⁶.)
+            "zero-missing" => {
+                let (lo, hi) = if f.span.0 < f.span.1 {
+                    if self.zero_between(at, checks::step(at, 1)) {
+                        (at, checks::step(at, 1))
+                    } else if self.zero_between(f.span.0, f.span.1) {
+                        f.span
+                    } else {
+                        return unproven();
+                    }
+                } else if self.zero_about(at) {
+                    (checks::step(at, -1), checks::step(at, 1))
+                } else {
+                    return unproven();
+                };
+                if listed_over(lo, hi, &self.places.zeros) {
+                    open("inside-a-listed-enclosure")
+                } else {
+                    Proven
+                }
+            }
+            "zeros-merged" => {
+                let (a, b) = f.span;
+                proven_if(checks::step(a, 2) < b && self.zero_about(a) && self.zero_about(b))
+            }
+            // "The zero listed is no zero": f takes no 0 on the stretch
+            // it is claimed in. (A zero so sharp that f is far from 0 at
+            // the doubles beside it, tan(x)^(2/1000001) at π's double, is
+            // one of f's enclosure there all the same; a zero known to an
+            // enclosure a part in 10⁶ wide is shown to the digits that
+            // fixes, at its middle.)
+            "zero-not-zero" if at.is_finite() => match self.takes(at, 0.0, &self.places.zeros) {
+                Some(true) => open("in-doubles"),
+                Some(false) => Open("panel/zero-shown-to-the-digits-known".into()),
+                None => Proven,
+            },
+            // A sample above (below) both ends of a stretch: a turn
+            // inside, where the three values are f's and f is continuous
+            // on the stretch; a strict one (the panel lists strict turns:
+            // docs/ti-conventions.md) where f″ keeps the sign that bends
+            // it so all along.
+            "extremum-missing" => {
+                let (xl, xr) = f.span;
+                let max = f.detail.starts_with("maximum");
+                let beats = |end: f64| match (self.value(at), self.value(end)) {
+                    (Some(m), Some(v)) if max => m.0 > v.1,
+                    (Some(m), Some(v)) => m.1 < v.0,
+                    _ => false,
+                };
+                // (Bent one way throughout: the turn is one point, a
+                // strict one, which is what the panel lists. A plateau's
+                // top is none.)
+                let t = taylor(self.l.ast(), Interval::new(xl, xr), 2, &self.ctx);
+                let bent = derivs_valid(&t, 2)
+                    && if max {
+                        t[2].hi() < 0.0
+                    } else {
+                        t[2].lo() > 0.0
+                    };
+                if !(xl < at && at < xr && bent && beats(xl) && beats(xr)) {
+                    unproven()
+                } else if listed_over(xl, xr, &self.places.extrema) {
+                    // (A turn the certificate lists, known to an
+                    // enclosure that meets the stretch.)
+                    open("inside-a-listed-enclosure")
+                } else {
+                    Proven
+                }
+            }
+            // "Lower beyond the listed minimum": at three points a part
+            // in 10⁶ off, which says nothing of the points nearer. No
+            // turn at all where f′ keeps a strict sign across the stretch
+            // the turn is claimed in.
+            "extremum-not-local" => {
+                let ((lo, hi), _) = claimed(at, &self.places.extrema);
+                proven_if(self.signed(1, checks::step(lo, -16), checks::step(hi, 16)))
+            }
+            // "Concave the same way either side": second differences at
+            // a few scales. No inflection where f″ keeps a strict sign
+            // across the stretch.
+            "inflection-not-inflection" => {
+                let ((lo, hi), _) = claimed(at, &self.places.inflections);
+                proven_if(self.signed(2, checks::step(lo, -16), checks::step(hi, 16)))
+            }
+            // Two turns for one listed (each found by sampling), and
+            // f(x + P/n) = f(x) at every sample: nothing here proves
+            // either.
+            "extrema-merged" | "period-not-fundamental" => unproven(),
+            // "A pole is missing": f grows toward a point where it is
+            // undefined, at the doubles. A pole is f unbounded there,
+            // which no values show. f's enclosure over the doubles about
+            // the point shows that it isn't, where it is bounded
+            // (min((3 − x)^(−2000002/2000004), 1000001ˣ) is 2·10¹⁵ and
+            // rising at the double before 3, and never past 1000001³);
+            // that it is, the replay's own proof from f's tree, where
+            // there is one.
+            "vertical-asymptote-missing" => {
+                let (lo, hi) = (checks::step(at, -4), checks::step(at, 4));
+                match self.range(lo, hi) {
+                    _ if !at.is_finite() => unproven(),
+                    Some((a, b)) if a.is_finite() && b.is_finite() => {
+                        Open("panel/no-pole-where-the-enclosure-is-bounded".into())
+                    }
+                    _ => proven_if(self.mp.is_some_and(|m| m.unbounded(lo, hi))),
+                }
+            }
+            // "y = c is not approached": f is far from c at the farthest
+            // samples. That refutes the limit only if f stays away, which
+            // samples can't say and f's enclosure over the rest of the
+            // tail can: min(acosh x, 2⁶³ − 1) is acosh x, 56, at 10²⁴, and
+            // 2⁶³ − 1 from e^(2⁶³) on, past every double; its limit is
+            // 2⁶³ − 1. Refuted where a limit claimed for that side (the
+            // certificate's enclosure of it, or the panel's number to its
+            // six digits) lies outside f's enclosure from the sample
+            // outward, or f is undefined all the way.
+            "asymptote-not-approached"
+                if f.detail.starts_with("horizontal") && at.is_finite() && at != 0.0 =>
+            {
+                use graphing::analysis::AsymptoteSide as Way;
+                use graphing::certify::Tail;
+                let right = at > 0.0;
+                let tail = if right {
+                    self.range(at, f64::INFINITY)
+                } else {
+                    self.range(f64::NEG_INFINITY, at)
+                };
+                let certified: Option<Vec<(f64, f64)>> =
+                    self.cert.and_then(|a| a.horizontal.value()).map(|hs| {
+                        hs.iter()
+                            .filter(|h| (h.side == Tail::Right) == right)
+                            .map(|h| (h.y.lo.0, h.y.hi.0))
+                            .collect()
+                    });
+                let limits = certified.unwrap_or_else(|| {
+                    let way = if right {
+                        Way::PositiveInfinity
+                    } else {
+                        Way::NegativeInfinity
+                    };
+                    d.horizontal_asymptotes
+                        .iter()
+                        .filter(|h| h.1 == way || h.1 == Way::AnyInfinity)
+                        .map(|h| {
+                            let w = 1e-6 * h.0.abs();
+                            (h.0 - w, h.0 + w)
+                        })
+                        .collect()
+                });
+                let refuted = match tail {
+                    None => true,
+                    Some((a, b)) => limits.iter().any(|&(lo, hi)| b < lo || a > hi),
+                };
+                if !limits.is_empty() && refuted {
+                    Proven
+                } else {
+                    Open("panel/asymptote-not-reached-within-the-doubles".into())
+                }
+            }
+            // (An oblique line: f less the line at three decades. The
+            // panel's slope is a double, and f less that line grows.)
+            "asymptote-not-approached" => unproven(),
+            // "Defined" and "undefined" at a sample, as the doubles have
+            // it: an operand can round onto a pole or a domain's end
+            // (ln(1 − x²)/ln(1 − x²) at 10⁻¹², where 1 − x² is 1 in
+            // doubles; √(g) where g rounds to 0 from below). A
+            // contradiction where f is proven so there.
+            "domain-excludes-defined" | "y-intercept-missing" => match self.undefined(at) {
+                Some(false) => Proven,
+                Some(true) => open("in-doubles"),
+                None => unproven(),
+            },
+            "domain-includes-undefined" | "y-intercept-undefined" => match self.undefined(at) {
+                Some(true) => Proven,
+                Some(false) => open("in-doubles"),
+                None => unproven(),
+            },
+            "row-ends-alike" if at.is_finite() => proven_if(self.undefined(at) == Some(true)),
+            // A listed turn or inflection where f is undefined: on all of
+            // the stretch it is claimed in (an end of the domain at sin 1
+            // is not undefined for the double below it being so).
+            "extremum-undefined" => proven_if(self.undefined_about(at, &self.places.extrema)),
+            "inflection-undefined" => proven_if(self.undefined_about(at, &self.places.inflections)),
+            // "The point the panel leaves out is in the domain": f is
+            // defined at the doubles about it. Refuted where f is defined
+            // on every real there: over the doubles about the point, and
+            // as far as a member of a family is rounded.
+            "excluded-point-defined" => {
+                let rounding = d
+                    .excluded
+                    .iter()
+                    .filter(|fam| {
+                        checks::members(fam)
+                            .iter()
+                            .any(|m| m.to_bits() == at.to_bits())
+                    })
+                    .map(|fam| fam.period.map_or(0.0, |p| 4.0 * ulp(p) + 2.0 * ulp(fam.x)))
+                    .fold(0.0, f64::max);
+                let r = 16.0 * ulp(at) + rounding;
+                proven_if(self.everywhere(at - r, at + r))
+            }
+            // Even or odd, with f defined at one of ±x only.
+            "parity-witness" if f.detail.contains("defined at") => proven_if(matches!(
+                (self.undefined(at), self.undefined(-at)),
+                (Some(true), Some(false)) | (Some(false), Some(true))
+            )),
+            // Periodic, with f defined at x and not at x + P: undefined
+            // on all of where x + P, rounded, may be.
+            "period-witness" if f.detail.ends_with("f(x+P) not") => {
+                let Some(p) = d.period else {
+                    return unproven();
+                };
+                let y = at + p;
+                let r = 16.0 * ulp(y) + 4.0 * ulp(p);
+                proven_if(self.undefined(at) == Some(false) && self.nowhere(y - r, y + r))
+            }
+            // "An open end of the range is reached": a turn's value in
+            // doubles is the end's to within its tolerance, which is no
+            // equality. Reached where f's value there lies in no piece of
+            // the range the certificate gives.
+            "range-open-bound-reached" => {
+                use graphing::certify::Bound;
+                let Some(pieces) = self.cert.and_then(|a| a.range.value()) else {
+                    return unproven();
+                };
+                let Some((lo, hi)) = self.value(at) else {
+                    return unproven();
+                };
+                let above = |end: &Bound| match end {
+                    Bound::At { x, closed: true } => lo > x.hi.0,
+                    Bound::At { x, closed: false } => lo >= x.hi.0,
+                    _ => false,
+                };
+                let below = |end: &Bound| match end {
+                    Bound::At { x, closed: true } => hi < x.lo.0,
+                    Bound::At { x, closed: false } => hi <= x.lo.0,
+                    _ => false,
+                };
+                proven_if(!pieces.is_empty() && pieces.iter().all(|p| above(&p.hi) || below(&p.lo)))
+            }
+            // The y listed with a turn or an inflection against f at the
+            // number shown: f's over the stretch the point is claimed in
+            // may be it all the same, and where it can't be the item is
+            // wrong whatever the doubles make of f.
+            "extremum-value-wrong" | "inflection-value-wrong" => {
+                let (places, lists): (_, [&[_]; 2]) = if f.class.starts_with("extremum") {
+                    (&self.places.extrema, [&d.minima, &d.maxima])
+                } else {
+                    (&self.places.inflections, [&d.inflection_points, &[]])
+                };
+                match self.listed(at, &lists) {
+                    Some(y) if self.takes(at, y, places).is_some() => open("within-the-enclosure"),
+                    Some(_) => Proven,
+                    None => Witness,
+                }
+            }
+            _ => Witness,
+        }
+    }
+}
+
 /// The items of a partial list ("these are some of them"): each is
 /// proven, so each listed zero is a zero of f and each listed turn or
 /// inflection has f's value. (The oracle's checks take complete answers
-/// only.) Judged as the oracle judges a complete list's items, where the
-/// doubles have f's value ([`Mp`], when there is one), and against (c):
-/// an item fails only if f's enclosure over the doubles about it doesn't
-/// hold what the item says either. (A zero of −|cos x|^(−p/7) + x³ beside
-/// π, p past 2⁵³, is right to nine digits while f in doubles is −4.6
-/// there: the cosine's last bit moves f by a seventh.)
-fn partial_items(l: &Loaded, k: &KeyGraphFeatures, mp: Mp<'_>, out: &mut Outcome) {
+/// only.) The oracle's judgement of a complete list's item, in doubles,
+/// says where to look; an item fails only if f's enclosure over the
+/// stretch it is claimed in ([`claimed`]) doesn't hold what the item says.
+/// (A zero of −|cos x|^(−p/7) + x³ beside π, p past 2⁵³, is right to nine
+/// digits while f in doubles is −4.6 there: the cosine's last bit moves f
+/// by a seventh.)
+fn partial_items(p: &Proofs<'_>, out: &mut Outcome) {
     use graphing::analysis::flags;
+    let (l, k) = (p.l, p.k);
     if k.analysis_error != AnalysisError::NoError || k.partial_features == 0 {
         return;
     }
     let d = &k.data;
     let f = &l.f;
-    // Whether the doubles' f at x is f's (as far as MPFR tells).
-    let sound = |x: f64| match mp.and_then(|m| m(x).value) {
-        Some((lo, hi)) => faithful(f.prog.eval(x, 0.0), lo, hi),
-        None => true,
-    };
     let poles: Vec<graphing::analysis::Family> = d
         .vertical_asymptotes
         .iter()
         .chain(&d.excluded)
         .copied()
         .collect();
-    let ctx = Ctx::new(l.opts());
-    // Whether f's enclosure over the doubles about x holds y.
-    let enclosed = |x: f64, y: f64| {
-        let around = Interval::new(checks::step(x, -16), checks::step(x, 16));
-        let e = enclose(l.ast(), around, &ctx);
-        !e.is_empty() && e.lo() <= y && y <= e.hi()
-    };
     if k.partial_features & flags::ZEROS != 0 {
         for z in &d.zeros {
             for x in checks::members(z) {
                 out.count("items of partial lists", 1);
-                if sound(x) && f.zero_holds(x, &poles) == Some(false) && !enclosed(x, 0.0) {
+                if f.zero_holds(x, &poles) == Some(false)
+                    && p.takes(x, 0.0, &p.places.zeros).is_none()
+                {
                     out.fail(
                         "panel/partial-zero-not-zero",
                         format!("{}: f({x:e}) = {:e}", k.x_intercept, f.at(x).v),
@@ -1296,10 +2282,15 @@ fn partial_items(l: &Loaded, k: &KeyGraphFeatures, mp: Mp<'_>, out: &mut Outcome
             }
         }
     }
-    for (flag, list, name) in [
-        (flags::MINIMA, &d.minima, "minimum"),
-        (flags::MAXIMA, &d.maxima, "maximum"),
-        (flags::INFLECTION_POINTS, &d.inflection_points, "inflection"),
+    for (flag, list, name, places) in [
+        (flags::MINIMA, &d.minima, "minimum", &p.places.extrema),
+        (flags::MAXIMA, &d.maxima, "maximum", &p.places.extrema),
+        (
+            flags::INFLECTION_POINTS,
+            &d.inflection_points,
+            "inflection",
+            &p.places.inflections,
+        ),
     ] {
         if k.partial_features & flag == 0 {
             continue;
@@ -1308,21 +2299,20 @@ fn partial_items(l: &Loaded, k: &KeyGraphFeatures, mp: Mp<'_>, out: &mut Outcome
             for x in checks::members(fam) {
                 out.count("items of partial lists", 1);
                 let v = f.at(x);
-                if !sound(x) {
-                    continue;
-                }
-                if v.k == K::Undef && proven_undefined(l, mp, x) == Some(true) {
-                    out.fail(
-                        "panel/partial-item-undefined",
-                        format!("{name} ({x:e}, {y}), where f is undefined"),
-                    );
+                if v.k == K::Undef {
+                    if p.undefined_about(x, places) {
+                        out.fail(
+                            "panel/partial-item-undefined",
+                            format!("{name} ({x:e}, {y}), where f is undefined"),
+                        );
+                    }
                 } else if v.k == K::Def && v.v.is_finite() && !v.sat {
                     let wrong = if *y == 0.0 {
                         f.zero_holds(x, &poles) == Some(false)
                     } else {
                         (y - v.v).abs() > f.tol(x) && !checks::alike(*y, v.v)
                     };
-                    if wrong && !enclosed(x, *y) {
+                    if wrong && p.takes(x, *y, places).is_none() {
                         out.fail(
                             "panel/partial-item-value-wrong",
                             format!("{name} ({x:e}, {y:e}), but f there = {:e}", v.v),
@@ -1331,21 +2321,6 @@ fn partial_items(l: &Loaded, k: &KeyGraphFeatures, mp: Mp<'_>, out: &mut Outcome
                 }
             }
         }
-    }
-}
-
-/// The enclosures of the single zeros the certificate lists.
-fn zero_enclosures(cert: Option<&Analysis>) -> Vec<(f64, f64)> {
-    use graphing::certify::{Row, Spot};
-    match cert.map(|a| &a.x_intercepts) {
-        Some(Row::Certified { value, .. } | Row::Partial { value, .. }) => value
-            .iter()
-            .filter_map(|s| match s {
-                Spot::At(x) => Some((x.lo.0, x.hi.0)),
-                Spot::Every(_) => None,
-            })
-            .collect(),
-        _ => Vec::new(),
     }
 }
 
@@ -1383,7 +2358,7 @@ fn shown_as_enclosed(
     let Some(digits) = (3..=6).rev().find(|&d| to(lo, d) == to(hi, d)) else {
         return false;
     };
-    let (flo, fhi) = match mp.and_then(|m| m(0.0).value) {
+    let (flo, fhi) = match mp.and_then(|m| m.over(0.0, 0.0).value) {
         Some(v) => v,
         None => {
             let v = l.f.at(0.0);
@@ -1400,8 +2375,9 @@ fn shown_as_enclosed(
         && to(fhi, digits) == shown
 }
 
-/// (d) against (a) and (b) sampled, by the oracle's checks; and against
-/// (c) at 0.
+/// (d) against (a) and (b) sampled, by the oracle's checks, each finding
+/// of theirs judged by the views that prove things ([`Proofs::stands`]);
+/// and against (c) at 0.
 fn panel(
     text: &str,
     l: &Loaded,
@@ -1410,190 +2386,112 @@ fn panel(
     mp: Mp<'_>,
     out: &mut Outcome,
 ) {
+    let proofs = Proofs::new(l, k, cert, mp);
     for f in checks::check_analysed(text, &l.f, k, &[], false, density(text)) {
         let class = format!("panel/{}", f.class);
         if f.note {
             out.note(&class, || f.detail.clone());
             continue;
         }
-        // The oracle judges by f in doubles. Where MPFR has f's value at
-        // the finding's point and the compiled one is off it by more than
-        // its rounding (off, 2⁵³ + 1 times a thing less 2⁵³ times it is
-        // that thing, and 0 in doubles), the finding is about the
-        // doubles, not the panel: counted.
         let at = if f.class.starts_with("y-intercept") {
             0.0
         } else {
             f.at
         };
-        if at.is_finite()
-            && let Some((lo, hi)) = mp.and_then(|m| m(at).value)
-        {
-            let c = l.f.prog.eval(at, 0.0);
-            if !faithful(c, lo, hi) {
-                out.note(&format!("{class}-where-the-doubles-miss-f"), || {
-                    format!(
-                        "{} (f({at:e}) = [{lo:e}, {hi:e}], compiled {c:e})",
-                        f.detail
-                    )
-                });
-                continue;
-            }
-        }
-        // f's enclosure over the doubles about x, to hold y: a zero so
-        // sharp that f is far from 0 at the doubles beside it
-        // (tan(x)^(2/1000001) at the double nearest π is 0.99993) is a
-        // zero of the enclosure there all the same.
-        let ctx = Ctx::new(l.opts());
-        let enclosed = |x: f64, y: f64| {
-            let around = Interval::new(checks::step(x, -16), checks::step(x, 16));
-            let e = enclose(l.ast(), around, &ctx);
-            !e.is_empty() && e.lo() <= y && y <= e.hi()
-        };
-        match f.class {
-            "zero-not-zero" if f.at.is_finite() && enclosed(f.at, 0.0) => {
-                out.note("panel/zero-not-zero-in-doubles", || f.detail.clone());
-            }
-            // A zero the certificate knows to an enclosure is shown to
-            // the digits the enclosure fixes, and the panel's number is
-            // the enclosure's middle: 10¹⁷·(x − 0.3) + (2¹²⁸ + 1)·x has its
-            // zero in an enclosure a part in 10⁶ wide, is shown as
-            // ≈8.816×10⁻²³, and is 4·10¹⁰ at the middle, its slope being
-            // 3·10³⁸. The claim is the enclosure: where f's own enclosure
-            // over it holds 0, nothing says the zero isn't there.
-            "zero-not-zero"
-                if f.at.is_finite()
-                    && zero_enclosures(cert).iter().any(|&(lo, hi)| {
-                        lo < hi && lo <= f.at && f.at <= hi && {
-                            let e = enclose(l.ast(), Interval::new(lo, hi), &ctx);
-                            !e.is_empty() && e.lo() <= 0.0 && 0.0 <= e.hi()
-                        }
-                    }) =>
-            {
-                out.note("panel/zero-shown-to-the-digits-known", || f.detail.clone());
-            }
-            // f(x + P) against f(x), where x + P lands beside such a point.
-            "period-witness"
-                if f.at.is_finite()
-                    && k.data.period.is_some_and(|p| {
-                        let v = l.f.prog.eval(f.at, 0.0);
-                        !v.is_nan() && enclosed(f.at + p, v)
-                    }) =>
-            {
-                out.note("panel/period-witness-in-doubles", || f.detail.clone());
-            }
-            // The compiled NaN there may say "can't tell".
-            "evaluator-disagrees"
-                if l.f.prog.eval(f.at, 0.0).is_nan() && l.f.prog.undecided(f.at, 0.0) =>
-            {
-                out.note("pt/scalar-cannot-tell", || f.detail.clone());
-            }
-            // Or the two are apart by their own rounding, as at a point.
-            "evaluator-disagrees"
-                if matches!(
-                    reval_typed(&l.f.ast, f.at, l.unit),
-                    R::V(p) if within_both_roundings(
-                        l,
-                        &noisy(&l.f.ast),
-                        f.at,
-                        l.f.prog.eval(f.at, 0.0),
-                        p.f(),
-                    )
-                ) =>
-            {
-                out.note("pt/scalar-vs-reference-within-their-rounding", || {
-                    f.detail.clone()
-                });
-            }
-            // "A pole is missing": f grows toward a point where it is
-            // undefined, at the doubles. A pole is f unbounded there, and
-            // f's enclosure over the doubles about the point says whether
-            // it can be: min((3 − x)^(−2000002/2000004), 1000001ˣ) is
-            // 2·10¹⁵ and rising at the double before 3, and never past
-            // 1000001³.
-            "vertical-asymptote-missing"
-                if f.at.is_finite() && {
-                    let around = Interval::new(checks::step(f.at, -4), checks::step(f.at, 4));
-                    let e = enclose(l.ast(), around, &ctx);
-                    !e.is_empty() && e.iv.is_bounded()
-                } =>
-            {
-                out.note("panel/no-pole-where-the-enclosure-is-bounded", || {
-                    f.detail.clone()
-                });
-            }
-            // "y = c is not approached": f is far from c at the farthest
-            // samples. That refutes the limit only if f stays away, which
-            // samples can't say and f's enclosure over the rest of the
-            // tail can: min(acosh x, 2⁶³ − 1) is acosh x, 56, at 10²⁴, and
-            // 2⁶³ − 1 from e^(2⁶³) on, past every double; its limit is
-            // 2⁶³ − 1. Where every such line of that side lies in f's
-            // enclosure from the sample outward, nothing is refuted.
-            "asymptote-not-approached"
-                if f.detail.starts_with("horizontal") && f.at.is_finite() && f.at != 0.0 && {
-                    let tail = if f.at > 0.0 {
-                        Interval::new(f.at, f64::INFINITY)
-                    } else {
-                        Interval::new(f64::NEG_INFINITY, f.at)
-                    };
-                    let e = enclose(l.ast(), tail, &ctx);
-                    let way = if f.at > 0.0 {
-                        graphing::analysis::AsymptoteSide::PositiveInfinity
-                    } else {
-                        graphing::analysis::AsymptoteSide::NegativeInfinity
-                    };
-                    let mut lines = k.data.horizontal_asymptotes.iter().filter(|h| {
-                        h.1 == way || h.1 == graphing::analysis::AsymptoteSide::AnyInfinity
-                    });
-                    !e.is_empty() && lines.all(|h| e.lo() <= h.0 && h.0 <= e.hi())
-                } =>
-            {
-                out.note("panel/asymptote-not-reached-within-the-doubles", || {
-                    f.detail.clone()
-                });
-            }
-            // "0 shown for a value below every double": the value is the
-            // reference's, which keeps 53 bits. f(0) is not 0 only where
-            // f's enclosure there says so (strictly signed, or 0 outside
-            // it): e^(−10⁶) is; sin(π)^(2⁵³/6) is 0, and (1.2·10⁻¹⁶) to
-            // that power to the reference, which takes the sine at π's
-            // double.
-            "y-intercept-underflow-shown-as-0"
-                if {
-                    let e = enclose(l.ast(), Interval::point(0.0), &ctx);
-                    !(e.is_empty() || e.gt0() || e.lt0() || e.lo() > 0.0 || e.hi() < 0.0)
-                } =>
-            {
-                out.note("panel/y-intercept-0-and-f-not-proven-nonzero", || {
-                    f.detail.clone()
-                });
-            }
-            // The panel's number for a value known to an enclosure is the
-            // enclosure's middle, and its text as many digits as the
-            // enclosure fixes: the text is the claim.
-            "y-intercept-wrong" if shown_as_enclosed(l, k, cert, mp) => {
-                out.note("panel/y-intercept-shown-to-the-digits-known", || {
-                    format!("{}, shown as {}", f.detail, k.y_intercept)
-                });
-            }
-            // "Undefined" at a sample, as the doubles have it: a
-            // contradiction only where f is undefined in fact, or (with
-            // MPFR to say) not proven defined.
-            "domain-includes-undefined"
-            | "y-intercept-undefined"
-            | "extremum-undefined"
-            | "inflection-undefined" => {
-                let undefined = proven_undefined(l, mp, f.at);
-                if undefined == Some(true) || (undefined.is_none() && mp.is_some()) {
-                    out.fail(&class, f.detail);
-                } else {
-                    out.note(&format!("{class}-in-doubles"), || f.detail.clone());
+        // The oracle judges by f in doubles. Where MPFR has f's value at
+        // a point the finding rests on and the compiled one is off it by
+        // more than a few ulps (off, 2⁵³ + 1 times a thing less 2⁵³ times
+        // it is that thing, and 0 in doubles), what the oracle saw there
+        // is the doubles', not f.
+        let missed = [at, f.span.0, f.span.1].into_iter().find_map(|x| {
+            let (lo, hi) = mp
+                .filter(|_| x.is_finite())
+                .and_then(|m| m.over(x, x).value)?;
+            let c = l.f.prog.eval(x, 0.0);
+            (!faithful(c, lo, hi))
+                .then(|| format!("{} (f({x:e}) = [{lo:e}, {hi:e}], compiled {c:e})", f.detail))
+        });
+        match proofs.stands(&f, at) {
+            Stands::Proven => out.fail(&class, f.detail),
+            Stands::Open(open) => match missed {
+                Some(line) => out.note(&format!("{class}-where-the-doubles-miss-f"), || line),
+                None => out.note(&open, || f.detail.clone()),
+            },
+            Stands::Witness => {
+                if let Some(line) = missed {
+                    out.note(&format!("{class}-where-the-doubles-miss-f"), || line);
+                    continue;
+                }
+                match f.class {
+                    // f(x + P) against f(x), where x + P lands beside a
+                    // point so sharp that f's enclosure over the doubles
+                    // about it holds f(x) all the same.
+                    "period-witness"
+                        if f.at.is_finite()
+                            && k.data.period.is_some_and(|p| {
+                                let v = l.f.prog.eval(f.at, 0.0);
+                                let y = f.at + p;
+                                let e = proofs.over(checks::step(y, -16), checks::step(y, 16));
+                                !v.is_nan() && !e.is_empty() && e.lo() <= v && v <= e.hi()
+                            }) =>
+                    {
+                        out.note("panel/period-witness-in-doubles", || f.detail.clone());
+                    }
+                    // The compiled NaN there may say "can't tell".
+                    "evaluator-disagrees"
+                        if l.f.prog.eval(f.at, 0.0).is_nan() && l.f.prog.undecided(f.at, 0.0) =>
+                    {
+                        out.note("pt/scalar-cannot-tell", || f.detail.clone());
+                    }
+                    // Or the two are apart by their own rounding, as at a
+                    // point.
+                    "evaluator-disagrees"
+                        if matches!(
+                            reval_typed(&l.f.ast, f.at, l.unit),
+                            R::V(p) if within_both_roundings(
+                                l,
+                                &noisy(&l.f.ast),
+                                f.at,
+                                l.f.prog.eval(f.at, 0.0),
+                                p.f(),
+                            )
+                        ) =>
+                    {
+                        out.note("pt/scalar-vs-reference-within-their-rounding", || {
+                            f.detail.clone()
+                        });
+                    }
+                    // "0 shown for a value below every double": the value
+                    // is the reference's, which keeps 53 bits. f(0) is not
+                    // 0 only where f's enclosure there says so (strictly
+                    // signed, or 0 outside it): e^(−10⁶) is; sin(π)^(2⁵³/6)
+                    // is 0, and (1.2·10⁻¹⁶) to that power to the
+                    // reference, which takes the sine at π's double.
+                    "y-intercept-underflow-shown-as-0"
+                        if {
+                            let e = proofs.over(0.0, 0.0);
+                            !(e.is_empty() || e.gt0() || e.lt0() || e.lo() > 0.0 || e.hi() < 0.0)
+                        } =>
+                    {
+                        out.note("panel/y-intercept-0-and-f-not-proven-nonzero", || {
+                            f.detail.clone()
+                        });
+                    }
+                    // The panel's number for a value known to an
+                    // enclosure is the enclosure's middle, and its text as
+                    // many digits as the enclosure fixes: the text is the
+                    // claim.
+                    "y-intercept-wrong" if shown_as_enclosed(l, k, cert, mp) => {
+                        out.note("panel/y-intercept-shown-to-the-digits-known", || {
+                            format!("{}, shown as {}", f.detail, k.y_intercept)
+                        });
+                    }
+                    _ => out.fail(&class, f.detail),
                 }
             }
-            _ => out.fail(&class, f.detail),
         }
     }
-    partial_items(l, k, mp, out);
+    partial_items(&proofs, out);
     let Some(a) = cert else { return };
     let rows = [
         a.domain.value().is_some(),
@@ -1615,8 +2513,7 @@ fn panel(
     );
     out.count("rows", rows.len());
     // The y-intercept against f's point enclosure at 0.
-    let ctx = Ctx::new(l.opts());
-    let e = enclose(l.ast(), Interval::point(0.0), &ctx);
+    let e = proofs.over(0.0, 0.0);
     if let Row::Certified { value, .. } | Row::Partial { value, .. } = &a.y_intercept {
         match value {
             Some(y) if e.is_empty() => out.fail(
@@ -1642,6 +2539,33 @@ fn panel(
             _ => {}
         }
     }
+}
+
+/// [`panel`] alone, on the analysis of `y = text` changed by `plant`
+/// first: a false answer planted in a true panel, as the oracle's own
+/// self-test plants them (`examples/oracle.rs --selftest`). Judged by f's
+/// enclosures (and MPFR's, where built with it), without the certificate
+/// (which `plant` doesn't change): for the test of what the proving views
+/// make a finding and what they leave counted.
+pub fn panel_planted(text: &str, set: &Setup, plant: &dyn Fn(&mut KeyGraphFeatures)) -> Outcome {
+    let mut out = Outcome::default();
+    let Ok(l) = load(text, set) else {
+        out.fail("gen/does-not-parse", String::new());
+        return out;
+    };
+    let (mut k, a) = analyze_certified(&l.eq, &l.opts(), None).expect("not cancelled");
+    plant(&mut k);
+    #[cfg(not(feature = "mpfr-oracle"))]
+    let (_, told): (_, Mp<'_>) = (a, None);
+    #[cfg(feature = "mpfr-oracle")]
+    let fx = a.and_then(|a| mp::read(&a, &mut Outcome::default()));
+    #[cfg(feature = "mpfr-oracle")]
+    let told: Mp<'_> = fx
+        .as_ref()
+        .filter(|fx| mp::models(fx))
+        .map(|fx| fx as &dyn Mpfr);
+    panel(text, &l, &k, None, told, &mut out);
+    out
 }
 
 // ------------------------------------------------------------------ digits
@@ -1807,9 +2731,9 @@ fn digits(
 /// (f): every drawn point inside the viewport lies in f's point enclosure
 /// (the plotter's own form folds literal arithmetic and can be tighter by
 /// rounding: a quarter pixel is allowed, the plotter's tolerance), and no
-/// point is drawn where f is undefined; no hole is marked where f has a
-/// value. Not where the plot says its budget ran out.
-fn plotted(l: &Loaded, out: &mut Outcome) {
+/// point is drawn where f is proven undefined; no hole is marked where f
+/// is proven to have a value. Not where the plot says its budget ran out.
+fn plotted(l: &Loaded, mp: Mp<'_>, out: &mut Outcome) {
     let opts = l.opts();
     let Ok(ceq) = l.eq.compile(&opts) else {
         return;
@@ -1856,37 +2780,52 @@ fn plotted(l: &Loaded, out: &mut Outcome) {
                         ),
                     );
                 }
+                // "Undefined" there as the doubles have it (an operand can
+                // round onto a domain's end): a point drawn where f isn't
+                // only where f is proven undefined.
                 if v.k == K::Undef {
-                    out.fail(
-                        "plot/point-where-undefined",
+                    let line = || {
                         format!(
                             "({:e}, {:e}) drawn, f is undefined there (enclosure {})",
                             pt.x,
                             pt.y,
                             show_enc(&e)
-                        ),
-                    );
+                        )
+                    };
+                    match proven_undefined(l, mp, pt.x) {
+                        Some(true) => out.fail("plot/point-where-undefined", line()),
+                        Some(false) => out.note("plot/point-where-undefined-in-doubles", line),
+                        None => out.note("plot/point-where-undefined-not-proven", line),
+                    }
                 }
             }
         }
+        // A hole is at a number the plotter proved f undefined at, with
+        // its own interval form: against f proven defined there, not
+        // against the doubles' number.
         for h in &p.holes {
             let v = l.f.at(h.x);
             if v.k == K::Def {
-                out.fail(
-                    "plot/hole-where-defined",
-                    format!("a hole at ({:e}, {:e}), but f there = {:e}", h.x, h.y, v.c),
-                );
+                let line = || format!("a hole at ({:e}, {:e}), but f there = {:e}", h.x, h.y, v.c);
+                match proven_undefined(l, mp, h.x) {
+                    Some(false) => out.fail("plot/hole-where-defined", line()),
+                    Some(true) => out.note("plot/hole-where-defined-in-doubles", line),
+                    None => out.note("plot/hole-where-defined-not-proven", line),
+                }
             }
         }
     }
 }
 
-/// Whether f is 0 at every sample it has a value at (and so even and odd
-/// at once, as far as sampling tells).
-fn nowhere_but_zero(f: &F) -> bool {
-    sample_xs(f).into_iter().all(|x| {
-        let v = f.at(x);
-        v.k != K::Def || v.xf.is_zero()
+/// Whether f is proven to be something other than 0 at a point looked at
+/// (its enclosure there strictly signed, f defined): then it is not even
+/// and odd at once. (That it is 0 wherever defined no samples show; that
+/// it isn't, one point does.)
+fn somewhere_not_zero(l: &Loaded) -> bool {
+    let ctx = Ctx::new(l.opts());
+    sample_xs(&l.f).into_iter().any(|x| {
+        let e = enclose(l.ast(), Interval::point(x), &ctx);
+        !e.is_empty() && e.dec >= Dec::Def && (e.gt0() || e.lt0())
     })
 }
 
@@ -1960,17 +2899,14 @@ pub fn run(text: &str, pair: Option<&str>, set: &Setup, groups: u32) -> Outcome 
         });
     }
 
-    // MPFR's word on f at a point, where it has one.
-    type Told<'a> = Option<Box<dyn Fn(f64) -> MpAt + 'a>>;
+    // MPFR's word on f, where it has one.
     #[cfg(not(feature = "mpfr-oracle"))]
-    let mp_defined: Told<'_> = None;
+    let mp_defined: Mp<'_> = None;
     #[cfg(feature = "mpfr-oracle")]
     let mut fx = None;
     #[cfg(feature = "mpfr-oracle")]
     if let Some(a) = &cert {
-        let json: serde_json::Value =
-            serde_json::from_str(&serde_json::to_string(a).expect("a certificate serialises"))
-                .expect("a certificate reads back");
+        let json = mp::json(a);
         guarded(&mut out, "replay", |out| fx = mp::function(&json, out));
         if let Some(fx) = &fx {
             if groups & group::POINTS != 0
@@ -1984,15 +2920,15 @@ pub fn run(text: &str, pair: Option<&str>, set: &Setup, groups: u32) -> Outcome 
         }
     }
     #[cfg(feature = "mpfr-oracle")]
-    let mp_defined: Told<'_> = fx
+    let mp_defined: Mp<'_> = fx
         .as_ref()
         .filter(|fx| mp::models(fx))
-        .map(|fx| Box::new(move |x| mp::at(fx, x)) as Box<dyn Fn(f64) -> MpAt>);
+        .map(|fx| fx as &dyn Mpfr);
 
     if let Some(k) = &analysed {
         if groups & group::PANEL != 0 {
             guarded(&mut out, "panel", |out| {
-                panel(text, &l, k, cert.as_ref(), mp_defined.as_deref(), out)
+                panel(text, &l, k, cert.as_ref(), mp_defined, out)
             });
         }
         if groups & group::DIGITS != 0
@@ -2020,21 +2956,28 @@ pub fn run(text: &str, pair: Option<&str>, set: &Setup, groups: u32) -> Outcome 
                 // not the whole answer ("both"): one spelling proving
                 // more than the other is no contradiction.
                 // (And "even" against "odd" both hold of a function that
-                // is 0 wherever it is defined: x·√(x − x).)
+                // is 0 wherever it is defined, x·√(x − x): a contradiction
+                // only where f is proven to be something else at a
+                // point.)
                 let parity =
                     f.class == "equivalent-answers-differ" && f.detail.starts_with("parity:");
                 let says = |p: &str| f.detail.contains(&format!("says {p}"));
                 let weaker = parity
                     && ((says("Both") && (says("Even") || says("Odd")))
-                        || (says("Even") && says("Odd") && nowhere_but_zero(&l.f)));
-                let cannot_tell = f.class == "spelling-value-differs"
+                        || (says("Even") && says("Odd") && !somewhere_not_zero(&l)));
+                let nan = f.class == "spelling-value-differs"
                     && f.at.is_finite()
-                    && l.f.prog.eval(f.at, 0.0).is_nan()
-                    && l.f.prog.undecided(f.at, 0.0);
+                    && l.f.prog.eval(f.at, 0.0).is_nan();
+                let cannot_tell = nan && l.f.prog.undecided(f.at, 0.0);
                 if f.note {
                     out.note(&format!("pair/{}", f.class), || f.detail.clone());
                 } else if cannot_tell {
                     out.note("pt/scalar-cannot-tell", || f.detail.clone());
+                } else if nan && proven_undefined(&l, mp_defined, f.at) != Some(true) {
+                    // "The first spelling is undefined there", as its
+                    // doubles have it (an operand rounded onto a pole):
+                    // the two differ only where it is proven undefined.
+                    out.note("pair/spelling-undefined-in-doubles", || f.detail.clone());
                 } else if weaker {
                     out.note("pair/parity-both-against-one", || f.detail.clone());
                 } else {
@@ -2044,7 +2987,7 @@ pub fn run(text: &str, pair: Option<&str>, set: &Setup, groups: u32) -> Outcome 
         });
     }
     if groups & group::PLOT != 0 {
-        guarded(&mut out, "plot", |out| plotted(&l, out));
+        guarded(&mut out, "plot", |out| plotted(&l, mp_defined, out));
     }
     out
 }

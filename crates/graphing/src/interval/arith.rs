@@ -376,6 +376,17 @@ pub(crate) fn mul_down(a: f64, b: f64) -> f64 {
         }
         return p;
     }
+    if p == 0.0 {
+        // Underflow: the true product is nonzero, on its side of 0 (as
+        // `div_down` has it). One double further out held the other
+        // side too: [−5·10⁻³²⁴, 0]·½ came out as [−5·10⁻³²⁴, 5·10⁻³²⁴],
+        // and (x/2)^(2/3)'s slope before 0, a power of that, had no sign.
+        return if (a > 0.0) == (b > 0.0) {
+            0.0
+        } else {
+            (-0.0f64).next_down()
+        };
+    }
     match mul_err(a, b, p) {
         Some(e) if e >= 0.0 => p,
         _ => p.next_down(),
@@ -393,6 +404,14 @@ pub(crate) fn mul_up(a: f64, b: f64) -> f64 {
             return -f64::MAX;
         }
         return p;
+    }
+    if p == 0.0 {
+        // (Underflow, as in `mul_down`.)
+        return if (a > 0.0) == (b > 0.0) {
+            0.0f64.next_up()
+        } else {
+            0.0
+        };
     }
     match mul_err(a, b, p) {
         Some(e) if e <= 0.0 => p,

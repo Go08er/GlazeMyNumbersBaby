@@ -918,6 +918,10 @@ pub fn domain(f: &Fun<'_>) -> Domain {
     };
     let mut pieces = vec![line()];
     let mut families: Vec<XFamily> = Vec::new();
+    // (The side expression of each family: the same one again is the
+    // same set, listed once. tan x + sec x excludes the zeros of cos x
+    // twice over.)
+    let mut family_of: Vec<&Expr> = Vec::new();
     let mut cl = Vec::new();
     for s in &conds {
         let subject = s.subject();
@@ -929,11 +933,14 @@ pub fn domain(f: &Fun<'_>) -> Domain {
                 x0: XBox::new(x0.lo(), x0.hi()),
                 period: XBox::new(period.lo(), period.hi()),
             });
-            families.push(XFamily {
-                x0,
-                period,
-                subject,
-            });
+            if !family_of.contains(&&s.g) {
+                family_of.push(&s.g);
+                families.push(XFamily {
+                    x0,
+                    period,
+                    subject,
+                });
+            }
             continue;
         }
         let mut cs: Vec<f64> = s

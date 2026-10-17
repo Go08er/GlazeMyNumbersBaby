@@ -136,6 +136,9 @@ pub struct Cover {
     /// For f′: each kink placed exactly, where it could be
     /// (`Claim::KinkAt`), in the order of `kinks`.
     pub kink_at: Vec<Option<crate::certify::fun::KinkPoint>>,
+    /// For this cover's derivative: what it does on each side of each
+    /// kink (`Claim::KinkSides`), in the order of `kinks`.
+    pub kink_sides: Vec<Option<crate::certify::fun::KinkSide>>,
 }
 
 struct Item {
@@ -305,6 +308,7 @@ impl Cover {
             stopped,
             kinks: Vec::new(),
             kink_at: Vec::new(),
+            kink_sides: Vec::new(),
         }
     }
 
