@@ -3208,8 +3208,20 @@ fn outer(a: End, b: End, low: bool) -> Option<End> {
         return Some(if low { b } else { a });
     }
     if a.same(&b) {
+        // One value: taken where either takes it, and then from where it
+        // is taken. (Its sources are those ends': a closed end's are each
+        // a value taken. x·ln(x)² has 0 for its limit at 0⁺ and its value
+        // at 1; the end, closed, named the limit alone, and the replay
+        // read "closed but its sources say otherwise".)
+        let (closed, at, src) = match (a.closed, b.closed) {
+            (true, false) => (true, a.at, a.src),
+            (false, true) => (true, b.at, b.src),
+            (c, _) => (c, a.at.or(b.at), Srcs::join(a.src, b.src)),
+        };
         return Some(End {
-            closed: a.closed || b.closed,
+            closed,
+            at,
+            src,
             ..a
         });
     }
