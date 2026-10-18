@@ -74,6 +74,11 @@ pub struct Analysis {
     pub stopped: Option<String>,
 }
 
+/// The gaps not shown clear of f⁽ᵏ⁾'s zeros after which the rest aren't
+/// asked (a window cut by an excluded family holds thousands of gaps,
+/// alike).
+const GAP_MISSES: usize = 8;
+
 /// The evaluation budget, in units of [`fun::UNIT_WORK`] (an evaluation
 /// of a tree up to that size, more for a bigger one), shared out over the
 /// phases (domain, f, f′, f″, the rows) unless a budget is given.
@@ -746,9 +751,14 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             _ => None,
         })
         .collect();
-    // When it is, a GapClear claim for each gap: the rows on f⁽ᵏ⁾ rest on
-    // them.
-    let clear = |k: usize| -> (bool, Vec<Claim>) {
+    // A GapClear claim for each gap shown clear, whether or not the others
+    // are: the rows on f⁽ᵏ⁾ rest on them, complete only if every gap is,
+    // and a monotone piece or an extremum reaches a domain end across a
+    // cleared gap alone (`rows::reaches`). (All or none, one gap not shown
+    // clear left every piece beside the others undecided at its end:
+    // atan(ln|x|) in degrees, round 20.) Each gap is asked on its own, so
+    // a run of gaps that aren't clear stops after a few.
+    let clear = |k: usize| -> (bool, Vec<XBox>) {
         let mut g = gap_boxes.clone();
         if k > 0 {
             if !kcont[k - 1] {
@@ -756,19 +766,40 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
             }
             g.extend(kgaps[k - 1].iter().copied());
         }
-        if !rows::gaps_clear(f, k, &g, &boxes, continuous).unwrap_or(false) {
-            return (false, Vec::new());
+        let mut cleared = Vec::new();
+        let mut misses = 0;
+        for x in &g {
+            match rows::gaps_clear(f, k, std::slice::from_ref(x), &boxes, continuous) {
+                Ok(true) => cleared.push(*x),
+                Ok(false) if misses < GAP_MISSES => misses += 1,
+                _ => break,
+            }
         }
-        let claims = g
-            .iter()
+        (cleared.len() == g.len(), cleared)
+    };
+    let ((clear0, cl0), (clear1, cl1), (clear2, cl2)) = (clear(0), clear(1), clear(2));
+    let gap_clear = |k: usize, xs: &[XBox]| -> Vec<Claim> {
+        xs.iter()
             .map(|x| Claim::GapClear {
                 x: *x,
                 of: Subject::f(k),
             })
-            .collect();
-        (true, claims)
+            .collect()
     };
-    let ((clear0, gc0), (clear1, gc1), (clear2, gc2)) = (clear(0), clear(1), clear(2));
+    let (gc0, gc1, gc2) = (gap_clear(0, &cl0), gap_clear(1, &cl1), gap_clear(2, &cl2));
+    // f′ ≡ 0 wherever f is defined, by its own tree (asked only when a gap
+    // is cleared: the derivative trees may cost a simplifier run).
+    let flat1 = !cl1.is_empty()
+        && (f
+            .numerators
+            .as_ref()
+            .is_some_and(|n| n[1].exact_value() == Some(0.0))
+            || f.derivs().is_some_and(|d| d[0].exact_value() == Some(0.0)));
+    let cleared1 = rows::Cleared {
+        all: clear1,
+        gaps: &cl1,
+        flat: flat1,
+    };
     if std::env::var_os("CERTIFY_DEBUG").is_some() {
         eprintln!("gaps {gap_boxes:?}: clear {clear0} {clear1} {clear2}");
         for g in &gap_boxes {
@@ -802,13 +833,13 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     };
     let (claims0, claims1, claims2) = (order(0, gc0), order(1, gc1), order(2, gc2));
     let monotonicity = if decided {
-        with(rows::monotonicity(&c1, &boxes, &scope, clear1), &claims1)
+        with(rows::monotonicity(&c1, &boxes, &scope, cleared1), &claims1)
     } else {
         Row::unknown(rows::UNDECIDED)
     };
     let mut x_intercepts = rows::zeros(&c0, &scope, &claims0, clear0);
     let mut extrema = with(
-        or_unknown(rows::extrema(f, &c1, &boxes, &scope, clear1)),
+        or_unknown(rows::extrema(f, &c1, &boxes, &scope, cleared1)),
         &claims1,
     );
     let mut inflections = with(
@@ -828,7 +859,7 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
         });
     }
     let horizontal = or_unknown(rows::horizontal(f, &dom, &scope));
-    let (range, range_ends) = rows::range(f, &dom, &c0, &c1, &boxes, &scope, clear1)
+    let (range, range_ends) = rows::range(f, &dom, &c0, &c1, &boxes, &scope, cleared1)
         .unwrap_or_else(|s| (Row::unknown(stop(s)), Vec::new()));
     let oblique = or_unknown(rows::oblique(f, &dom, &horizontal, &scope));
     Analysis {
