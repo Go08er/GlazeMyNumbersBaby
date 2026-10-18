@@ -384,4 +384,59 @@ mod tests {
         assert_eq!(de.formula(), "1");
         assert!(derivative(&parse_expression("x!").unwrap(), TrigUnit::Radians).is_none());
     }
+
+    /// A normal folded coefficient can lose a residual below 2^-1074.
+    /// Amplifying and cancelling the leading term makes that lost part
+    /// the whole derivative. These exact, finite ASTs need no sampling:
+    /// their coefficients reduce to 1, 2/(1 + 2^-51), and -1.
+    #[test]
+    fn tiny_rounding_residuals_are_not_exact_coefficients() {
+        let mul = |a, b| Expr::bin(BinOp::Mul, a, b);
+        let a = f64::from_bits(23u64 << 52).next_up(); // 2^-1000 (1 + 2^-52)
+        let b = 1.0f64.next_up();
+        let c = 2f64.powi(1000);
+        let opts = CompileOptions::default();
+        for (inner, factor, leading, scale, expected) in [
+            (
+                mul(Expr::exact(a), mul(Expr::exact(b), Expr::X)),
+                c,
+                1.0 + 2f64.powi(-51),
+                2f64.powi(104),
+                1.0,
+            ),
+            (
+                Expr::bin(
+                    BinOp::Div,
+                    mul(Expr::exact(a), Expr::X),
+                    Expr::exact(b.next_up()),
+                ),
+                c,
+                (a / b.next_up()) * c,
+                2f64.powi(104),
+                2.0 / b.next_up(),
+            ),
+            (
+                mul(
+                    Expr::exact(f64::MIN_POSITIVE),
+                    mul(Expr::exact(1.0 - 2f64.powi(-53)), Expr::X),
+                ),
+                2f64.powi(1022),
+                1.0,
+                2f64.powi(53),
+                -1.0,
+            ),
+        ] {
+            let f = mul(
+                Expr::bin(
+                    BinOp::Sub,
+                    mul(Expr::exact(factor), inner),
+                    mul(Expr::exact(leading), Expr::X),
+                ),
+                Expr::exact(scale),
+            );
+            let df = derivative(&f, TrigUnit::Radians).expect("finite derivative");
+            let p = Program::compile_typed(&df, &opts).unwrap();
+            assert_eq!(p.eval_x(0.0), expected, "{}", df.formula());
+        }
+    }
 }

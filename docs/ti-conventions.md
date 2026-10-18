@@ -194,6 +194,35 @@ give 1, the common algebraic convention for a typed number, and keep doing
 so here: those modes are
 tested against Microsoft's own engine.
 
+## Sliders no equation uses for now
+
+Applies to the graph's slider variables in both apps (`crates/graphing/src/graph.rs`:
+`Graph::refresh`, `REMEMBERED_VARIABLES`, `Graph::forget_variables`).
+
+| A variable no equation uses any more, then used again | Windows Calculator | TI-84 Plus CE | GMNB/DGMNB |
+| --- | --- | --- | --- |
+| its value, slider range and step | start again at 1, −5…5, 0.1 (`Grapher::UpdateVariables` keeps only the variables of the current equations) | A–Z keep their values whatever Y= says | **Chosen:** as they were |
+
+Windows reads an equation only when it is submitted (Enter, or the focus
+leaving the box: `MathRichEditBox.cs`, `EquationSubmitted`), so editing an
+equation doesn't pass through texts without its variables. GMNB and DGMNB
+graph each text as it is typed, a deliberate difference, and typing
+`x+a*x+2` over `y=a*x+1` passes through `x`, which uses no `a`; undo passes
+back through whatever the field held. Forgetting `a` there, as Windows'
+rule would, reset a slider the user never touched (R20-M-04). So a variable
+keeps its settings while no equation uses it, as the TI-84 Plus CE's do,
+and comes back with them after typing, undo and redo, an assistive
+technology's replacement, or the equation deleted and added again. A value
+set meanwhile is the value from then on.
+
+Bounded and not saved: the 64 most recently used names are remembered
+(subscripted names, `a_1`, `a_{b2}`, make the names a session can use
+unbounded; the CE has 27, A–Z and θ); one past them, or never used,
+starts at 1. They last the session only: the apps save the equations, not
+the sliders (a restored session's sliders start at 1, those in use too).
+`Graph::forget_variables` is the explicit reset, forgetting the ones no
+equation uses; neither app offers it (Windows has no such command).
+
 ## The certified analysis
 
 Applies to the function analysis panel in both apps: `crates/graphing/src/certify`

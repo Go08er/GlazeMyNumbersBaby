@@ -277,7 +277,16 @@ impl Wide {
                 _ => {}
             }
         }
-        unless_lost(&[self, o], self.add_inner(o))
+        let out = self.add_inner(o);
+        // A lost exponent and its mantissa do not identify a value.
+        // Distinct magnitudes can have the same rounded exponent and
+        // cancel in this representation; that is not an exact zero.
+        // (An exact zero factor or numerator remains zero in mul/div.)
+        if out.is_zero() && (self.lost() || o.lost()) {
+            Wide::Unknown
+        } else {
+            unless_lost(&[self, o], out)
+        }
     }
 
     fn add_inner(self, o: Wide) -> Wide {

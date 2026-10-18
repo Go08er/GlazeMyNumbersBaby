@@ -7,6 +7,7 @@ mod paste;
 mod prefs;
 mod settings;
 mod theme;
+mod undo;
 mod widgets;
 mod window;
 

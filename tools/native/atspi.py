@@ -7,6 +7,20 @@
     atspi.py display APP             the calculator display's value
     atspi.py focused APP             the name of the focused control
 
+A control is found by its accessible NAME (the first one showing):
+
+    atspi.py text APP NAME           its text
+    atspi.py settext APP NAME TEXT   EditableText SetTextContents
+    atspi.py inserttext APP NAME POSITION TEXT
+                                     EditableText InsertText
+    atspi.py deletetext APP NAME START END
+                                     EditableText DeleteText
+    atspi.py value APP NAME          its Value (a slider's), or "none" if
+                                     there is no such control
+    atspi.py setvalue APP NAME VALUE sets its Value
+    atspi.py press APP NAME          its first action (a button's click)
+    atspi.py items APP               the menu items showing: name | enabled
+
 APP is matched (case-insensitively) against the application names on the
 accessibility bus. Needs PyGObject and the Atspi typelib (see run.sh).
 """
@@ -104,8 +118,74 @@ def display_value(app):
     return None
 
 
+def find(app, name):
+    """The first node named `name` that is showing (any, if none says so),
+    or None. Read afresh: nothing from the client's cache."""
+    app.set_cache_mask(Atspi.Cache(0))
+    found = [n for n in walk(app) if (n.get_name() or "") == name]
+    showing = [n for n in found if "showing" in states_of(n)]
+    return (showing or found or [None])[0]
+
+
+def control(app, name):
+    node = find(app, name)
+    if node is None:
+        sys.exit(f"atspi: no control named {name!r}")
+    return node
+
+
+MENU_ITEMS = ("menu item", "check menu item", "radio menu item")
+
+
+def edits(cmd, app, args):
+    """The commands that read or change one control."""
+    if cmd == "items":
+        app.set_cache_mask(Atspi.Cache(0))
+        for n in walk(app):
+            states = states_of(n)
+            if n.get_role_name() in MENU_ITEMS and "showing" in states:
+                enabled = "enabled" if "enabled" in states else "disabled"
+                print(f"{n.get_name()} | {enabled}")
+        return
+    if cmd == "value":
+        node = find(app, args[0])
+        print("none" if node is None else Atspi.Value.get_current_value(node.get_value_iface()))
+        return
+    node = control(app, args[0])
+    if cmd == "text":
+        t = node.get_text_iface()
+        print(Atspi.Text.get_text(t, 0, Atspi.Text.get_character_count(t)))
+        return
+    if cmd == "press":
+        ok = Atspi.Action.do_action(node.get_action_iface(), 0)
+    elif cmd == "setvalue":
+        ok = Atspi.Value.set_current_value(node.get_value_iface(), float(args[1]))
+    else:
+        e = node.get_editable_text_iface()
+        if e is None:
+            sys.exit(f"atspi: {args[0]!r} is not editable text")
+        if cmd == "settext":
+            ok = Atspi.EditableText.set_text_contents(e, args[1])
+        elif cmd == "inserttext":
+            ok = Atspi.EditableText.insert_text(e, int(args[1]), args[2], len(args[2]))
+        else:
+            ok = Atspi.EditableText.delete_text(e, int(args[1]), int(args[2]))
+    if not ok:
+        sys.exit(f"atspi: {cmd} {args!r} was refused")
+
+
+# The commands of `edits`, and how many arguments each takes after APP.
+EDITS = {"text": 1, "settext": 2, "inserttext": 3, "deletetext": 3, "value": 1,
+         "setvalue": 2, "press": 1, "items": 0}
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd in EDITS:
+        if len(sys.argv) != 3 + EDITS[cmd]:
+            sys.exit(__doc__)
+        edits(cmd, find_app(sys.argv[2]), sys.argv[3:])
+        return
     if cmd == "enable":
         enable()
         return

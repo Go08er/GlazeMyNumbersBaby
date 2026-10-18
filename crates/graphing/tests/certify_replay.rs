@@ -3944,3 +3944,142 @@ fn a_rational_f_going_to_infinity_is_not_periodic() {
         assert!(period.problems.is_empty(), "{src}: {:?}", period.problems);
     }
 }
+
+/// An exact label is equality, including when no double can distinguish
+/// it from the true limit. A true Limit claim used to let any rational
+/// meeting the replay's 160-bit enclosure of π/2 stand for π/2 itself.
+#[test]
+fn an_exact_asymptote_is_not_decided_by_overlapping_enclosures() {
+    // Genuine composed and scaled limits need an exact derivation too:
+    // their general limit claims contain only enclosures, not exact facts.
+    for src in [
+        "(x/1000)^2/((x/1000)^2-1)",
+        "((x/1000)^2+1)/((x/1000)^2-1)",
+        "atan(ln(abs(x)))",
+        "atan(ln(abs((x-1000))))",
+        "-3*(atan(ln(abs(x))))",
+        "atan(ln(abs((x/1000))))",
+    ] {
+        for unit in [TrigUnit::Radians, TrigUnit::Degrees, TrigUnit::Grads] {
+            let mut v = certificate_in(src, None, unit);
+            // This control tests horizontal exactness. Other rows can
+            // have independent availability limitations beside a hole.
+            let domain = v["domain"].clone();
+            withhold_all_but(&mut v, "horizontal");
+            v["domain"] = domain;
+            assert_eq!(
+                rejected(&v),
+                None,
+                "the exact composed limit: {src} {unit:?}"
+            );
+        }
+    }
+    let mut v = certificate("atan(x)");
+    let y = value_of(&mut v, "horizontal")
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["side"] == "Right")
+        .unwrap()["y"]
+        .clone();
+    claims_of(&mut v, "horizontal").push(serde_json::json!({"Limit": {
+        "at": "PosInf", "over_x": false, "to": {"In": y}
+    }}));
+    assert_eq!(
+        rejected(&v),
+        None,
+        "the original row and added premise are true"
+    );
+    let right = |v: &mut serde_json::Value, text: &str| {
+        let h = value_of(v, "horizontal")
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|h| h["side"] == "Right")
+            .unwrap();
+        h["exact"] = serde_json::json!(text);
+    };
+    let mut equivalent = v.clone();
+    right(&mut equivalent, "2/4·π");
+    assert_eq!(rejected(&equivalent), None, "equal normalized exact forms");
+    for false_exact in [
+        // This rational is unequal to the irrational π/2, but within 10⁻⁶⁰.
+        "1570796326794896619231321691639751442098584699687552910487472296/1000000000000000000000000000000000000000000000000000000000000000",
+        // A different rational coefficient of the same power of π.
+        "500000000000000000000000000000000000000000000000000000000000000001/1000000000000000000000000000000000000000000000000000000000000000000·π",
+    ] {
+        let mut wrong = v.clone();
+        right(&mut wrong, false_exact);
+        let r = replay::replay(&wrong).expect("replayed");
+        assert!(
+            r.claims
+                .iter()
+                .all(|c| matches!(c.outcome.class, Class::Strong | Class::Weak)),
+            "the mathematical premises were left unchanged"
+        );
+        assert!(
+            r.rows
+                .iter()
+                .any(|r| r.name == "horizontal" && !r.problems.is_empty()),
+            "a different exact number must not stand for the limit: {false_exact}"
+        );
+    }
+}
+
+/// No double lies between 0 and 10⁻⁴⁰⁰, but each is a pole. The genuine
+/// domain lists both families; a complete vertical row listing only the
+/// integers used to pass because its gap beside undefined 0 was ignored.
+#[test]
+fn a_gap_beside_an_undefined_double_can_hold_another_pole() {
+    let tiny = f64::from_bits(1);
+    for (src, poles, correct) in [
+        ("cot(180*x)", true, true),
+        ("cot(180*x)+cot(180*(x-10^(-400)))", true, false),
+        ("sin(180*x)/sin(180*x)", false, true),
+    ] {
+        let mut v = certificate_in(src, None, TrigUnit::Degrees);
+        withhold_all_but(&mut v, "domain");
+        let mut claims = vec![
+            serde_json::json!({"Value": {"x": {"a": -0.5, "b": -tiny},
+                "of": {"F": "F0"}, "lo": "-inf", "hi": "inf"}}),
+            serde_json::json!({"Value": {"x": {"a": 2.0*tiny, "b": 0.5},
+                "of": {"F": "F0"}, "lo": "-inf", "hi": "inf"}}),
+            serde_json::json!({"Undefined": {"x": {"a": 0.0, "b": 0.0}}}),
+            serde_json::json!({"Gap": {"x": {"a": -tiny, "b": 0.0}}}),
+            serde_json::json!({"Gap": {"x": {"a": 0.0, "b": 2.0*tiny}}}),
+            serde_json::json!({"Simplifier": {"fact": "f(x + 1) = f(x) on its domain"}}),
+        ];
+        let value = if poles {
+            claims.push(serde_json::json!({"Unbounded": {
+                "near": {"a": -tiny, "b": 0.0}, "at": {"a": 0.0, "b": 0.0}}}));
+            serde_json::json!([{"Every": {"x0": {"lo": 0.0, "hi": 0.0},
+                "period": {"lo": 1.0, "hi": 1.0}}}])
+        } else {
+            serde_json::json!([])
+        };
+        v["vertical"] = serde_json::json!({"Certified": {"value": value,
+            "cert": {"covers": {"Period": {"a": -0.5, "b": 0.5}}, "claims": claims}}});
+        let r = replay::replay(&v).expect("replayed");
+        assert!(
+            r.claims
+                .iter()
+                .all(|c| matches!(c.outcome.class, Class::Strong | Class::Weak)),
+            "{src}: every premise is true"
+        );
+        let why = rejected(&v);
+        assert_eq!(why.is_none(), correct, "{src}: {why:?}");
+    }
+    // Horner's value-preserving rearrangement changes u²+u⁰ to u²+1
+    // where defined, but removes the u=0 hole. Its bounded value may
+    // rule out an asymptote, never prove the original function defined.
+    let mut v = certificate("1/x+((x-10^(-400))^2+(x-10^(-400))^0)");
+    withhold_all_but(&mut v, "domain");
+    let at = serde_json::json!({"At": {"x": {"lo": 0.0, "hi": 0.0}, "closed": false}});
+    v["domain"] = serde_json::json!({"Certified": {"value": {"pieces": [
+        {"lo": "NegInf", "hi": at.clone()}, {"lo": at, "hi": "PosInf"}], "excluded": []},
+        "cert": {"covers": "Line", "claims": []}}});
+    assert!(
+        rejected(&v).is_some(),
+        "the domain must also exclude 10⁻⁴⁰⁰"
+    );
+}

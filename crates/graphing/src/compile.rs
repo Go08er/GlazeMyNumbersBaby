@@ -2228,9 +2228,10 @@ pub(crate) enum Exact {
 const POLE_FACTORS: f64 = 400.0;
 
 /// An x- and y-free argument's exact value ([`fold`]) and the double it
-/// rounds to, when that double is another number: the value rounds onto
-/// it. (Never onto 0: a value nearer 0 than every double stays itself in
-/// extended range, its sign and that it isn't 0 kept: [`Wide`].)
+/// rounds to, when that double is another number or an infinity: the
+/// value rounds onto it. (Never onto 0: a value nearer 0 than every double
+/// stays itself in extended range, its sign and that it isn't 0 kept:
+/// [`Wide`].)
 fn rounds_onto(a: &Expr, opts: &CompileOptions<'_>) -> Option<(Rat, f64)> {
     if a.any(&|n| matches!(n, Expr::X | Expr::Y)) {
         return None;
@@ -2239,7 +2240,7 @@ fn rounds_onto(a: &Expr, opts: &CompileOptions<'_>) -> Option<(Rat, f64)> {
         return None;
     };
     let d = r.to_f64(crate::big::Round::Nearest);
-    (d.is_finite() && d != 0.0 && Rat::from_f64(d).is_some_and(|x| x != r)).then_some((r, d))
+    (d != 0.0 && !Rat::from_f64(d).is_some_and(|x| x == r)).then_some((r, d))
 }
 
 /// A function of an argument known exactly ([`fold`]: a typed decimal,
@@ -2418,7 +2419,13 @@ pub(crate) fn exact_call(f: Func, args: &[Expr], opts: &CompileOptions<'_>) -> O
         // last factor the exact distance to the pole, and Γ is taken
         // beside 1.
         Factorial => {
-            let (_, d) = rounds_onto(&args[0], opts)?;
+            let (r, d) = rounds_onto(&args[0], opts)?;
+            // An exact whole number below 0 is itself a pole, even when
+            // no double holds it. Only a noninteger needs the shifted
+            // formula (or an honest unknown beyond its factor bound).
+            if r.is_integer() {
+                return r.is_negative().then(|| Exact::As(undefined()));
+            }
             if !(d <= -1.0 && d == d.trunc()) {
                 return None;
             }
@@ -2436,11 +2443,11 @@ pub(crate) fn exact_call(f: Func, args: &[Expr], opts: &CompileOptions<'_>) -> O
             let top = Expr::call1(Factorial, plus(n));
             Some(Exact::As(Expr::bin(BinOp::Div, top, product)))
         }
-        // n!! is of whole numbers alone: a value that only rounds onto
-        // one has none.
+        // n!! is of whole numbers alone: a noninteger has none, even
+        // when its double has overflowed and lost that distinction.
         DoubleFactorial => {
-            let (r, d) = rounds_onto(&args[0], opts)?;
-            (d >= -1.0 && d == d.trunc() && !r.is_integer()).then(|| Exact::As(undefined()))
+            let (r, _) = rounds_onto(&args[0], opts)?;
+            (!r.is_integer()).then(|| Exact::As(undefined()))
         }
         // nCr(n, k) is n!/(k!·(n − k)!) and nPr(n, k) is n!/(n − k)! where
         // the numbers are no whole ones: beside a pole of one of those

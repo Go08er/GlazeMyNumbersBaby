@@ -8,6 +8,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use appcore::graph::NumberPrecision;
+use appcore::history;
 use appcore::input::{self, Focus, FocusKey, WindowAction};
 use appcore::modes::{Group, PageKind, ViewMode};
 use appcore::settings::{HasPages, PageStates};
@@ -1315,12 +1316,14 @@ impl App {
                     clip = Clip::Copy;
                     changed = false;
                 }
-                // Undo and redo, as GTK's fields (GMNB's) and upstream's
-                // RichEditBox have them; Ctrl+Y is redo too.
-                Key::Char('z' | 'Z') if ctrl && !alt => {
-                    changed = if shift { e.redo() } else { e.undo() };
+                // Undo and redo, as GTK's fields and upstream's RichEditBox
+                // have them (GMNB's fields take the same keys).
+                Key::Char(_) if history::chord(kp).is_some() => {
+                    changed = match history::chord(kp) {
+                        Some(history::Chord::Redo) => e.redo(),
+                        _ => e.undo(),
+                    };
                 }
-                Key::Char('y' | 'Y') if ctrl && !alt && !shift => changed = e.redo(),
                 Key::Char('x' | 'X') if ctrl && !alt => clip = Clip::Cut,
                 Key::Char('v' | 'V') if ctrl && !alt => clip = Clip::Paste,
                 Key::Named(Named::Insert) if shift => clip = Clip::Paste,
@@ -1751,7 +1754,7 @@ impl App {
                     // An assistive technology's text: one line of it too.
                     let line = input::single_line(text);
                     if req.action == accesskit::Action::SetValue {
-                        e.set_text(&line);
+                        e.replace(&line);
                     } else {
                         e.insert(&line);
                     }

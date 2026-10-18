@@ -1,6 +1,7 @@
 //! Everything GMNB and DGMNB share that isn't drawing: navigation modes,
-//! key layouts and the keyboard map, settings storage, colour maths, graph
-//! session persistence and a little desktop integration (D-Bus, time zone).
+//! key layouts and the keyboard map, a text field's undo history, settings
+//! storage, colour maths, graph session persistence and a little desktop
+//! integration (D-Bus, time zone).
 //!
 //! The calculator engines themselves live in their own crates (`calcvm`,
 //! `unitconv`, `datecalc`, `graphing`); this crate is the layer between
@@ -11,6 +12,7 @@ pub mod converter;
 pub mod dbus;
 pub mod dirs;
 pub mod graph;
+pub mod history;
 pub mod icons;
 pub mod input;
 pub mod keys;

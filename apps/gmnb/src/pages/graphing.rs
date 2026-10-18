@@ -45,12 +45,12 @@ struct Row {
 /// (R17-M-03).
 ///
 /// An equation field's text property can change several times in one
-/// operation: GTK's undo or redo of a typed replacement reverses its
-/// deletion and its insertion one after the other, each notified, with the
-/// field empty in between. Told of that empty text, the graph would forget
-/// the sliders the restored text still uses (`Graph::refresh`); told once,
-/// of the text as it is when the operation is over, it keeps them. The
-/// same holds for any operation made of steps (a paste, a drop, an
+/// operation (GTK's own undo of a typed replacement reversed its deletion
+/// and its insertion one after the other, each notified, with the field
+/// empty in between; a program's insertion into a GtkText is notified
+/// before the entry is). The graph is told once, of the text as it is when
+/// the operation is over, so it draws no text that was only on the way.
+/// The same holds for any operation made of steps (a paste, a drop, an
 /// assistive technology's edit, an input method's commit), whatever it is.
 struct Deferred {
     context: glib::MainContext,
@@ -658,6 +658,8 @@ impl GraphingPage {
             color: Cell::new(color),
             edit: Deferred::new(glib::MainContext::default()),
         });
+        // Undo from appcore's history, not GtkText's (R20-M-04, R20-M-05).
+        crate::undo::attach(&entry);
         style.set_popover(Some(&self.style_popover(&row)));
         self.paint_swatch(&row);
         self.show_drawn(&row);
@@ -677,13 +679,10 @@ impl GraphingPage {
         self.rows.borrow_mut().push(row.clone());
 
         // The text once each operation is over, not each step of it
-        // (Deferred): the graph never sees a text that was only on the way
-        // (the empty field in the middle of an undone replacement, of an
-        // assistive technology's SetTextContents), which would forget the
-        // sliders the final text still uses, as DGMNB's direct replacement
-        // keeps them. A text the user really clears, or an equation
-        // removed, still forgets them (Graph::refresh): that is where the
-        // operation ends.
+        // (Deferred): the graph never draws a text that was only on the way
+        // (the empty field in the middle of an assistive technology's
+        // SetTextContents). A slider the text stops using for a while, as
+        // typing over it does, is remembered (Graph::refresh).
         let weak = Rc::downgrade(self);
         entry.connect_text_notify(move |_| {
             if let Some(p) = weak.upgrade()
@@ -1164,6 +1163,7 @@ impl GraphingPage {
             e
         };
         let (xmin, xmax, ymin, ymax) = (mk("X-Min"), mk("X-Max"), mk("Y-Min"), mk("Y-Max"));
+        let undo = [&xmin, &xmax, &ymin, &ymax].map(crate::undo::attach);
         for (i, (l, e)) in [
             ("X-Min", &xmin),
             ("X-Max", &xmax),
@@ -1234,11 +1234,13 @@ impl GraphingPage {
                     graphing::viewport::range_text(vp.y_min, ys),
                     graphing::viewport::range_text(vp.y_max, ys),
                 ];
-                for (e, t) in entries.iter().zip(texts) {
+                // The program's text, not the user's edit: it ends the
+                // field's history (crate::undo).
+                for ((e, undo), t) in entries.iter().zip(&undo).zip(texts) {
                     if let Some(e) = e.upgrade()
                         && !e.has_focus()
                     {
-                        e.set_text(&t);
+                        undo.write(&t);
                     }
                 }
             }
@@ -1467,10 +1469,11 @@ mod tests {
     /// What the graph is told of a whole replacement (round 15, Question
     /// 2). GTK's set_text (an AT client's SetTextContents) emits `changed`
     /// for the deletion and for the insertion, the text property once
-    /// (checked natively over AT-SPI): told each change, the empty text
-    /// between forgets the slider; told the text, as the equation field
-    /// is now, the slider stays, value, range and step, as DGMNB's direct
-    /// replacement keeps it. A text really cleared still forgets it.
+    /// (checked natively over AT-SPI): the graph is told the text, as the
+    /// equation field is now. Told each change, or the text cleared and
+    /// typed again, or a typed replacement a character at a time (R20-M-04),
+    /// the slider is as it was, value, range and step: one no equation uses
+    /// for a while is remembered (Graph::refresh).
     #[test]
     fn a_whole_replacement_keeps_its_sliders() {
         let setup = || {
@@ -1485,27 +1488,37 @@ mod tests {
             (g, id)
         };
         let (mut g, id) = setup();
-        tell(&mut g, id, &["", "y = a*x+2"]);
-        assert_eq!(g.variable("a").unwrap().value(), 1.0);
-
-        let (mut g, id) = setup();
         let kept = *g.variable("a").unwrap();
+        tell(&mut g, id, &["", "y = a*x+2"]);
+        assert_eq!(g.variable("a"), Some(&kept));
         tell(&mut g, id, &["y = a*x+2"]);
         assert_eq!(g.variable("a"), Some(&kept));
         tell(&mut g, id, &[""]);
         assert!(g.variables().is_empty());
         tell(&mut g, id, &["y = a*x+2"]);
-        assert_eq!(g.variable("a").unwrap().value(), 1.0);
+        assert_eq!(g.variable("a"), Some(&kept));
+        // Typed over a key at a time, then undone and redone.
+        let (mut g, id) = setup();
+        for text in ["x", "x+", "x+a", "x+a*x+2", "y = a*x+1", "x+a*x+2"] {
+            tell(&mut g, id, &[text]);
+            if text.contains('a') {
+                assert_eq!(g.variable("a"), Some(&kept), "{text}");
+            }
+        }
+        // A value changed meanwhile is the value from then on.
+        g.set_variable("a", 0.7);
+        tell(&mut g, id, &["x", "y = a*x+1"]);
+        assert_eq!(g.variable("a").unwrap().value(), 0.7);
     }
 
     /// R17-M-03: what an equation field's text notifications tell the
     /// graph, through the field's own `Deferred` on a main loop of its own.
-    /// One operation, GTK's undo of a typed replacement (the typed text
-    /// deleted, the old one inserted, each notified, the field empty in
-    /// between), is told once, on the next idle, as the field has it then:
-    /// the slider stays. A text taken for telling at once (Enter, a click)
-    /// isn't told again. A real clear, an operation of its own, still
-    /// forgets the slider.
+    /// One operation made of steps (a typed replacement undone: the typed
+    /// text deleted, the old one inserted, each notified, the field empty
+    /// in between) is told once, on the next idle, as the field has it
+    /// then. A text taken for telling at once (Enter, a click) isn't told
+    /// again. A real clear, an operation of its own, is told: the slider
+    /// is no longer listed, and comes back as it was (Graph::refresh).
     #[test]
     fn one_operation_is_told_once() {
         use std::cell::{Cell, RefCell};
@@ -1559,14 +1572,14 @@ mod tests {
                 assert!(!edit.take());
                 assert_eq!(a(), Some(0.3));
 
-                // A real clear forgets a; typed again, it starts at 1.
+                // A real clear unlists a; typed again, it is as it was.
                 notify("");
                 idle();
                 assert_eq!(told.get(), 3);
                 assert!(graph.borrow().variables().is_empty());
                 notify("y = a*x+1");
                 idle();
-                assert_eq!(a(), Some(1.0));
+                assert_eq!(a(), Some(0.3));
             })
             .unwrap();
     }
