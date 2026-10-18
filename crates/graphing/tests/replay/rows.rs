@@ -5001,24 +5001,20 @@ fn tail_recip(a: Tail) -> Option<Tail> {
     })
 }
 
-/// A constant exponent as the replay's dominant terms read it
-/// ([`super::growth`]'s powers): written p/q (the real root of a negative
-/// base for q odd, `true`), or a typed decimal (a negative base for a
-/// whole one only). None for anything else (left to those terms).
+/// A constant exponent as the replay's own powers read it ([`super::eval`],
+/// [`super::growth`]): written p/q (the real root of a negative base for q
+/// odd, `true`), or any other constant by its exact value (typed decimals
+/// as typed: a negative base for a whole one only, 0.1 + 0.9 as 1). None
+/// for one with no exact value (left to the dominant terms).
 fn exponent(fx: &Fx, k: &graphing::ast::Expr) -> Option<(rug::Rational, bool)> {
-    use graphing::ast::Expr;
     if let Some((p, q)) = super::eval::written_rational(k, &fx.lits) {
         let odd = q.is_odd();
         return Some((rug::Rational::from((p, q)), odd));
     }
-    let q = match k {
-        Expr::Num(v, lit) => fx.lits.exact(*v, lit)?,
-        Expr::Neg(inner) => match inner.as_ref() {
-            Expr::Num(v, lit) => -fx.lits.exact(*v, lit)?,
-            _ => return None,
-        },
-        _ => return None,
-    };
+    if super::eval::contains_x(k) {
+        return None;
+    }
+    let q = super::exact::eval(k, None, &fx.lits, &fx.vars, fx.unit)?;
     let whole = q.is_integer();
     Some((q, whole))
 }

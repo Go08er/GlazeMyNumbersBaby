@@ -4353,10 +4353,11 @@ fn beside_exact(text: &str) -> Vec<String> {
 }
 
 /// A part going to ±∞ that the limit laws alone left as ∞ − ∞ (x² −
-/// (x − ln 3), 3x − |x|) or didn't read (ln(x)¹) goes as its leading
-/// term: arctan of it keeps its exact ±π/2 (crossfuzz's seed 2026, case
-/// 278, and seed 1451, cases 2535 and 3079, refused once overlap stopped
-/// standing for equality), and so does arccot its 0 and π. Terms of one
+/// (x − ln 3), 3x − |x|) or didn't read (ln(x)¹, (x − ln 3)^(1+2), ∛ of
+/// x − ln 3) goes as its leading term: arctan of it keeps its exact ±π/2
+/// (crossfuzz's seed 2026, case 278, and seed 1451, cases 2535 and 3079,
+/// refused once overlap stopped standing for equality), and so does
+/// arccot its 0 and π. Terms of one
 /// scale divide to their exact coefficients' quotient ((π·x + 1)/(2π·x)
 /// → 1/2); a part the laws don't read (sin x/x, x + sin x) goes where the
 /// replay's dominant terms say, its numbers exact only as points. None of
@@ -4389,6 +4390,8 @@ fn an_exact_limit_through_a_dominant_term_is_derived() {
         ("atan(3*x-abs(x))", None, G, true),
         ("atan(ln(x)^1)", Some(16), R, true),
         ("atan(ln(x)^1)", None, D, true),
+        ("atan((x-(ln(3)))^(1+2))", None, R, true),
+        ("atan(cbrt(x-(ln(3))))", None, G, true),
         ("acot(x^2-(x-(ln(3))))", None, R, false),
         ("acot(x^2-(x-(ln(3))))", None, D, false),
         ("acot(x^2-(x-(ln(3))))", None, G, false),
