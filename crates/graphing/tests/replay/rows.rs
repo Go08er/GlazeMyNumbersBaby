@@ -2143,15 +2143,26 @@ fn parity(
 /// − 1) beside 1 is 1/t, t > 0). An enclosure of f's values where it is
 /// defined; `def` where it is shown defined throughout.
 fn over_open_gap(fx: &Fx, p: f64, right: bool) -> Iv {
-    iv::set_prec(160);
     let q = if right { p.next_up() } else { p.next_down() };
+    over_punctured_span(fx, p, q)
+}
+
+/// f over the span from p to q, p left out. The far end need not be the
+/// double next to p: a certificate's Gap may be several doubles wide.
+fn over_punctured_span(fx: &Fx, p: f64, q: f64) -> Iv {
+    over_punctured_tree(fx, &fx.f, p, q)
+}
+
+fn over_punctured_tree(fx: &Fx, f: &graphing::ast::Expr, p: f64, q: f64) -> Iv {
+    iv::set_prec(160);
+    let right = q > p;
     let (lo, hi) = if right { (p, q) } else { (q, p) };
     let ctx = fx.ctx();
     let (e, x) = if p == 0.0 {
-        (fx.f.clone(), Iv::of2(lo, hi).strict(right, !right))
+        (f.clone(), Iv::of2(lo, hi).strict(right, !right))
     } else {
         (
-            super::eval::recentered(&fx.f, p, &ctx),
+            super::eval::recentered(f, p, &ctx),
             iv::sub(&Iv::of2(lo, hi), &Iv::of(p)).strict(right, !right),
         )
     };
@@ -2175,16 +2186,34 @@ fn over_open_gap(fx: &Fx, p: f64, right: bool) -> Iv {
 /// between 1 and that double: its domain passed as x ≠ 1, and every other
 /// row with it. Round 19's follow-up.)
 fn open_gap_defined(fx: &Fx, p: f64, right: bool) -> bool {
+    let q = if right { p.next_up() } else { p.next_down() };
+    punctured_span_defined(fx, p, q)
+}
+
+/// The same proof on the whole span from p to q, p left out. A gap beside
+/// an undefined double can hide another excluded point before its far
+/// end, even if no double represents that second point.
+fn punctured_span_defined(fx: &Fx, p: f64, q: f64) -> bool {
     use graphing::ast::{BinOp, Expr, Func};
     if claims::unmodelled(&fx.f) {
         return false;
     }
-    let v = over_open_gap(fx, p, right);
+    let v = over_punctured_span(fx, p, q);
     if !v.empty && v.def {
         return true;
     }
+    // Only the domain-preserving small-difference identities here, such
+    // as 1-cos(u)=2 sin²(u/2). f_alt's Horner rearrangement may erase a
+    // u^0 hole under the graph language's undefined-0^0 convention, so
+    // its definedness is no proof of the original domain.
+    if super::eval::small_differences(&fx.f, &fx.lits).is_some_and(|f| {
+        let v = over_punctured_tree(fx, &f, p, q);
+        !v.empty && v.def
+    }) {
+        return true;
+    }
     iv::set_prec(160);
-    let q = if right { p.next_up() } else { p.next_down() };
+    let right = q > p;
     let (lo, hi) = if right { (p, q) } else { (q, p) };
     // (log(a, b) as ln b / ln a, the same function on the same domain: its
     // a ≠ 1 is then a divisor's.)
@@ -2235,6 +2264,25 @@ fn open_gap_defined(fx: &Fx, p: f64, right: bool) -> bool {
             None => {}
         }
     }
+    // tan/sec exclude cos(u)=0; cot/csc exclude sin(u)=0. Once that
+    // argument moves strictly off 0 at p and has no further zero on the
+    // span, the call is defined throughout its punctured span.
+    let mut trig = Vec::new();
+    paths_where(
+        &f,
+        &|e, _| match e {
+            Expr::Call(Func::Tan | Func::Sec, a) => {
+                off(&Expr::Call(Func::Cos, a.clone()), 0.0).is_some()
+            }
+            Expr::Call(Func::Cot | Func::Csc, a) => {
+                off(&Expr::Call(Func::Sin, a.clone()), 0.0).is_some()
+            }
+            _ => false,
+        },
+        &mut Vec::new(),
+        &mut trig,
+    );
+    stood.extend(trig.into_iter().map(|path| (path, "__any")));
     let mut es = Vec::new();
     edges(fx, &f, &mut Vec::new(), &mut es);
     for ed in es {
@@ -3581,9 +3629,9 @@ fn vertical(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Resu
 ///   the point; a gap that holds an excluded point between two doubles
 ///   has a claim that places it, unbounded (and listed) or bounded.
 ///
-/// The reals strictly between an undefined double and the double beside it
-/// (a `Gap`) are the one place nothing is derived: no row shows that f has
-/// no second excluded point there.
+/// A gap beside an undefined double must also be cleared of any further
+/// excluded point (or f bounded throughout): proximity to the first point
+/// is no proof against another pole strictly between doubles.
 ///
 /// (The row was checked only where it listed something: "none" passed for
 /// any f with no claims at all, x³ − 2x + 1/(x − 1) among them. Round 19's
@@ -3765,9 +3813,27 @@ fn no_other_asymptote(
     // bounded about it.
     for g in &w.gaps {
         let asked = ts.iter().any(|t| t.0 <= g.1 && g.0 <= t.1);
-        let beside = w.holes.iter().any(|u| u.1 == g.0 || u.0 == g.1);
-        if !asked || beside {
+        if !asked {
             continue;
+        }
+        let beside = w.holes.iter().find_map(|u| {
+            if u.1 == g.0 {
+                Some((g.0, g.1))
+            } else if u.0 == g.1 {
+                Some((g.1, g.0))
+            } else {
+                None
+            }
+        });
+        if let Some((p, q)) = beside {
+            if bounded_over(*g) || punctured_span_defined(fx, p, q) {
+                continue;
+            }
+            out.problems.push(format!(
+                "f is not shown defined throughout the gap from {p:e} to {q:e}, or bounded \
+                 there: another asymptote inside it is not ruled out"
+            ));
+            return;
         }
         let placed = rc.claims.iter().find_map(|c| match c {
             Claim::Unbounded { at, .. } if g.0 <= at.0 && at.1 <= g.1 => {
@@ -4048,7 +4114,8 @@ fn horizontal(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Re
                     ));
                 }
                 if let Some(text) = exact
-                    && let Err(why) = exact_form(text, Some(&shown), fact_text, own.as_ref())
+                    && let Err(why) =
+                        exact_form(fx, toward, text, Some(&shown), fact_text, own.as_ref())
                 {
                     out.problems
                         .push(format!("the limit at {at} is written {text}: {why}"));
@@ -4082,7 +4149,7 @@ fn horizontal(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Re
                     ));
                 }
                 if let Some(text) = exact
-                    && let Err(why) = exact_form(text, Some(&b), fact_text, None)
+                    && let Err(why) = exact_form(fx, toward, text, Some(&b), fact_text, None)
                 {
                     out.problems
                         .push(format!("the limit at {at} is written {text}: {why}"));
@@ -4104,25 +4171,144 @@ fn own_limit(fx: &Fx, at: At) -> Option<Iv> {
     }
 }
 
+/// An exact number in the limit notation, normalized. For nonzero
+/// rationals q, q·πᵏ = r·πʲ only when q = r and k = j; zero has no
+/// distinguished power. This compares numbers, never rounded enclosures.
+fn exact_piq(text: &str) -> Option<(rug::Rational, i32)> {
+    if text.trim() == "π" {
+        return Some((rug::Rational::from(1), 1));
+    }
+    if text.trim() == "-π" {
+        return Some((rug::Rational::from(-1), 1));
+    }
+    let (q, k) = match text.trim().split_once('·') {
+        Some((q, "π")) => (q, 1),
+        Some((q, p)) => (q, p.strip_prefix("π^")?.parse().ok()?),
+        None => (text.trim(), 0),
+    };
+    let q = claims::rational(q.trim())?;
+    Some((q.clone(), if q == 0 { 0 } else { k }))
+}
+
+/// An exact finite q·πᵏ, or a signed infinite limit (true: +∞).
+type ExactTail = Result<(rug::Rational, i32), bool>;
+
+/// Exact tail limits by rational algebra and elementary limit laws. This
+/// retains exactness which the general MPFR limit enclosure does not:
+/// rational leading-coefficient quotients, and compositions such as
+/// arctan(ln|ax+b|) and their exact scalings. No finite probes or rounded
+/// equality take part. An unsupported operation or indeterminate form is
+/// left undecided, not read from the general enclosure.
+/// These are value identities on f's domain: existence of an original
+/// tail and its limit must be established separately by the row's claims.
+fn exact_tail(fx: &Fx, e: &graphing::ast::Expr, right: bool, depth: usize) -> Option<ExactTail> {
+    use graphing::ast::{BinOp, Constant, Expr, Func};
+    let d = depth.checked_sub(1)?;
+    let finite = |q: rug::Rational, k| {
+        let k = if q == 0 { 0 } else { k };
+        Ok((q, k))
+    };
+    if let Some(r) = super::algebra::Rat::of(e, &fx.lits, &fx.vars, fx.unit) {
+        return Some(r.limit(right).map(|q| (q, 0)));
+    }
+    let next = |e: &Expr| exact_tail(fx, e, right, d);
+    Some(match e {
+        Expr::Const(Constant::Pi) => finite(rug::Rational::from(1), 1),
+        Expr::Neg(a) => match next(a)? {
+            Ok((q, k)) => finite(-q, k),
+            Err(up) => Err(!up),
+        },
+        Expr::Degrees(a) if fx.unit == iv::Unit::Degrees => next(a)?,
+        Expr::Bin(op, a, b) => {
+            let (a, mut b) = (next(a)?, next(b)?);
+            let op = if *op == BinOp::Sub {
+                b = match b {
+                    Ok((q, k)) => finite(-q, k),
+                    Err(up) => Err(!up),
+                };
+                BinOp::Add
+            } else {
+                *op
+            };
+            match (op, a, b) {
+                (BinOp::Add, Ok((a, ak)), Ok((b, bk))) => {
+                    if a == 0 {
+                        finite(b, bk)
+                    } else if b == 0 {
+                        finite(a, ak)
+                    } else if ak == bk {
+                        finite(a + b, ak)
+                    } else {
+                        return None;
+                    }
+                }
+                (BinOp::Add, Err(a), Err(b)) if a == b => Err(a),
+                (BinOp::Add, Err(up), Ok(_)) | (BinOp::Add, Ok(_), Err(up)) => Err(up),
+                (BinOp::Mul, Ok((a, ak)), Ok((b, bk))) => finite(a * b, ak.checked_add(bk)?),
+                (BinOp::Mul, Err(a), Err(b)) => Err(a == b),
+                (BinOp::Mul, Err(up), Ok((q, _))) | (BinOp::Mul, Ok((q, _)), Err(up)) if q != 0 => {
+                    Err(up == (q > 0))
+                }
+                (BinOp::Div, Ok((a, ak)), Ok((b, bk))) if b != 0 => {
+                    finite(a / b, ak.checked_sub(bk)?)
+                }
+                (BinOp::Div, Ok(_), Err(_)) => finite(rug::Rational::from(0), 0),
+                (BinOp::Div, Err(up), Ok((q, _))) if q != 0 => Err(up == (q > 0)),
+                _ => return None,
+            }
+        }
+        Expr::Call(Func::Abs, a) => match next(&a[0])? {
+            Ok((q, k)) => finite(q.abs(), k),
+            Err(_) => Err(true),
+        },
+        Expr::Call(Func::Ln, a) => match next(&a[0])? {
+            Err(true) => Err(true),
+            Ok((q, 0)) if q == 1 => finite(rug::Rational::from(0), 0),
+            _ => return None,
+        },
+        Expr::Call(Func::Atan, a) => {
+            let Err(up) = next(&a[0])? else { return None };
+            let (q, k) = match fx.unit {
+                iv::Unit::Radians => (rug::Rational::from((1, 2)), 1),
+                iv::Unit::Degrees => (rug::Rational::from(90), 0),
+                iv::Unit::Grads => (rug::Rational::from(100), 0),
+            };
+            finite(if up { q } else { -q }, k)
+        }
+        _ => return None,
+    })
+}
+
 /// Why the exact form `text` written for a limit doesn't stand (Ok: it
 /// does). The form is what the panel shows as the limit itself, so it is
-/// the limit, not a number near it: the same form a fact of the row
-/// states (the fact its claim, checked as one); or the point the claims'
-/// enclosure `shown` is; or, at 160 bits, a number the replay's own limit
-/// by the tree's structure (`own`) can be (about 48 digits: no proof of
-/// equality, but no double beside the limit passes for it).
+/// the limit, not a number near it: the same exact number a fact of the
+/// row states (the fact its claim, checked as one), or an exact point
+/// shown by the claims or the replay's own limit. Two non-point MPFR
+/// enclosures meeting proves no equality, however high their precision.
 fn exact_form(
+    fx: &Fx,
+    at: At,
     text: &str,
     shown: Option<&Enc>,
     fact: Option<&str>,
     own: Option<&Iv>,
 ) -> Result<(), String> {
+    let exact = exact_piq(text).ok_or("no exact number the replay reads")?;
     let stated_by_fact = fact
         .map(|f| f.strip_prefix(claims::RATIONAL).unwrap_or(f))
         .and_then(|f| f.strip_prefix("f → "))
         .and_then(|f| f.split_once(" as x → "))
-        .is_some_and(|(l, _)| l.trim() == text.trim());
+        .and_then(|(l, _)| exact_piq(l))
+        .is_some_and(|l| l == exact);
     if stated_by_fact {
+        return Ok(());
+    }
+    let right = match at {
+        At::PosInf => Some(true),
+        At::NegInf => Some(false),
+        _ => None,
+    };
+    if right.is_some_and(|right| exact_tail(fx, &fx.f, right, 64) == Some(Ok(exact.clone()))) {
         return Ok(());
     }
     iv::set_prec(160);
@@ -4139,8 +4325,11 @@ fn exact_form(
         };
     }
     match own {
-        Some(o) if !(v.hi < o.lo || o.hi < v.lo) => Ok(()),
-        Some(_) => Err("apart from the limit by f's structure".into()),
+        Some(o) if o.is_point() && v.is_point() && o.lo == v.lo => Ok(()),
+        Some(o) if v.hi < o.lo || o.hi < v.lo => {
+            Err("apart from the limit by f's structure".into())
+        }
+        Some(_) => Err("meeting the limit's enclosure proves no exact equality".into()),
         None => Err("no fact states it, and no claim shows it exactly".into()),
     }
 }
