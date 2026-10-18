@@ -982,13 +982,22 @@ pub(crate) fn apply2(f: Fn2, a: Wide, b: Wide) -> Wide {
             Some((x, y)) => count(f.apply(x, y), || fns::count_beyond(x, y, f == Fn2::NPr)),
             None => Wide::Unknown,
         },
-        // Two far values of one sign on one side can't be put in order,
-        // but either is all that is known of the least or greatest: a
-        // value of that sign on that side.
+        // Two far values of one sign on one side can't be put in order.
+        // Keep only their sign and side, not either operand's exponent:
+        // it needn't describe the selected value. A small power could
+        // otherwise use the larger exponent for the smaller value and
+        // claim it still far beyond the doubles (review 21).
         Fn2::Min | Fn2::Max
             if a.far().is_some() && a.far() == b.far() && am.signum() == bm.signum() =>
         {
-            a
+            Wide::Val(
+                am.signum(),
+                if ae > 0.0 {
+                    f64::INFINITY
+                } else {
+                    f64::NEG_INFINITY
+                },
+            )
         }
         Fn2::Min | Fn2::Max => match a.cmp(b) {
             Some(Ordering::Greater) => {
