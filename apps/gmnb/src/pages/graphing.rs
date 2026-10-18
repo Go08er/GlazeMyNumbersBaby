@@ -37,6 +37,47 @@ struct Row {
     color: Cell<usize>,
     /// The field's text, waiting to be told to the graph ([`Deferred`]).
     edit: Deferred,
+    undo_variables: UndoVariables,
+}
+
+/// One keyboard undo/redo sequence keeps the sliders it started with.
+/// GTK can undo the suffix of a typed replacement before its first
+/// character, leaving a valid equation that temporarily uses none of its
+/// parameters. The next undo must restore their settings too. This holds
+/// only one snapshot of the currently listed variables, never a growing
+/// cache of names, and an ordinary edit ends it.
+#[derive(Default)]
+struct UndoVariables {
+    values: RefCell<Option<std::collections::BTreeMap<String, graphing::variable::Variable>>>,
+    restoring: Cell<bool>,
+}
+
+impl UndoVariables {
+    fn begin(&self, graph: &Graph) {
+        if self.values.borrow().is_none() {
+            self.values.replace(Some(graph.variables().clone()));
+        }
+        self.restoring.set(true);
+    }
+
+    fn ordinary_key(&self) {
+        self.values.take();
+        self.restoring.set(false);
+    }
+
+    fn edited(&self, graph: &mut Graph) {
+        if !self.restoring.replace(false) {
+            self.values.take();
+            return;
+        }
+        if let Some(values) = self.values.borrow().as_ref() {
+            for (name, saved) in values {
+                if graph.variable(name).is_some_and(|v| v != saved) {
+                    graph.update_variable(name, |v| *v = *saved);
+                }
+            }
+        }
+    }
 }
 
 /// Runs an update once a toolkit operation is complete: on the next idle,
@@ -657,6 +698,7 @@ impl GraphingPage {
             error,
             color: Cell::new(color),
             edit: Deferred::new(glib::MainContext::default()),
+            undo_variables: UndoVariables::default(),
         });
         style.set_popover(Some(&self.style_popover(&row)));
         self.paint_swatch(&row);
@@ -692,6 +734,40 @@ impl GraphingPage {
                 p.text_changed(id);
             }
         });
+        // Observe the field's public key events without handling them:
+        // GTK still owns undo and redo. A modifier by itself has no mapped
+        // key and does not break consecutive Ctrl+Z presses.
+        let undo_keys = gtk::EventControllerKey::new();
+        undo_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let (weak, weak_row) = (Rc::downgrade(self), Rc::downgrade(&row));
+        undo_keys.connect_key_pressed(move |_, key, _, mods| {
+            if let (Some(p), Some(row), Some(kp)) = (
+                weak.upgrade(),
+                weak_row.upgrade(),
+                crate::keymap::key_press(key, mods),
+            ) {
+                let undo = kp.ctrl
+                    && !kp.alt
+                    && (matches!(kp.key, appcore::Key::Char('z' | 'Z'))
+                        || (!kp.shift && matches!(kp.key, appcore::Key::Char('y' | 'Y'))));
+                if undo {
+                    row.undo_variables.begin(&p.graph.borrow());
+                    let row = Rc::downgrade(&row);
+                    // An undo with no history changes no text. Clear its
+                    // pending flag after any high-idle text update so a
+                    // later AT/keypad edit is never mistaken for undo.
+                    glib::idle_add_local_once(move || {
+                        if let Some(row) = row.upgrade() {
+                            row.undo_variables.restoring.set(false);
+                        }
+                    });
+                } else {
+                    row.undo_variables.ordinary_key();
+                }
+            }
+            glib::Propagation::Proceed
+        });
+        entry.add_controller(undo_keys);
         let weak = Rc::downgrade(self);
         let focus = gtk::EventControllerFocus::new();
         // Use the controller's own widget: capturing `entry` here would make
@@ -882,6 +958,7 @@ impl GraphingPage {
         // An edit draws a hidden equation again (as upstream's does).
         self.graph.borrow_mut().set_equation_text(id, text);
         if let Some(row) = self.rows.borrow().iter().find(|r| r.id == id) {
+            row.undo_variables.edited(&mut self.graph.borrow_mut());
             self.show_drawn(row);
         }
         let err = self.show_error(id);
@@ -911,6 +988,15 @@ impl GraphingPage {
             }
         }
         err
+    }
+
+    /// Sliders are shared by every equation. A value deliberately changed
+    /// between undo and redo becomes the new value; no row may restore an
+    /// older snapshot over it.
+    fn changed_variable(&self) {
+        for row in self.rows.borrow().iter() {
+            row.undo_variables.ordinary_key();
+        }
     }
 
     fn sync_variables(self: &Rc<Self>) {
@@ -962,6 +1048,7 @@ impl GraphingPage {
             let (n, v2) = (name.clone(), value.downgrade());
             scale.connect_value_changed(move |s| {
                 if let (Some(p), Some(v2)) = (weak.upgrade(), v2.upgrade()) {
+                    p.changed_variable();
                     p.graph.borrow_mut().set_variable(&n, s.value());
                     if (v2.value() - s.value()).abs() > 1e-12 {
                         v2.set_value(s.value());
@@ -974,6 +1061,7 @@ impl GraphingPage {
             let n = name.clone();
             value.connect_value_changed(move |v| {
                 if let (Some(p), Some(s2)) = (weak.upgrade(), s2.upgrade()) {
+                    p.changed_variable();
                     let x = v.value();
                     // Widen the slider if the typed value is outside it.
                     p.graph.borrow_mut().update_variable(&n, |var| {
@@ -1495,6 +1583,37 @@ mod tests {
         tell(&mut g, id, &[""]);
         assert!(g.variables().is_empty());
         tell(&mut g, id, &["y = a*x+2"]);
+        assert_eq!(g.variable("a").unwrap().value(), 1.0);
+
+        // GTK's typed replacement can take two undo steps. A valid
+        // intermediate x must not reset a when the second restores it.
+        let (mut g, id) = setup();
+        let kept = *g.variable("a").unwrap();
+        let undo = super::UndoVariables::default();
+        for text in ["x", "y = a*x+1", "x", "x+a*x+2"] {
+            undo.begin(&g);
+            tell(&mut g, id, &[text]);
+            undo.edited(&mut g);
+            if let Some(a) = g.variable("a") {
+                assert_eq!(*a, kept);
+            }
+        }
+        // A deliberate slider change between undo and redo wins over
+        // the old snapshot, as changed_variable clears every row's.
+        undo.ordinary_key();
+        g.set_variable("a", 0.7);
+        for text in ["x", "y = a*x+1"] {
+            undo.begin(&g);
+            tell(&mut g, id, &[text]);
+            undo.edited(&mut g);
+        }
+        assert_eq!(g.variable("a").unwrap().value(), 0.7);
+        // An ordinary clear and retype still starts a new variable.
+        undo.ordinary_key();
+        tell(&mut g, id, &[""]);
+        undo.edited(&mut g);
+        tell(&mut g, id, &["a*x"]);
+        undo.edited(&mut g);
         assert_eq!(g.variable("a").unwrap().value(), 1.0);
     }
 

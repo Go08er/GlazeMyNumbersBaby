@@ -259,6 +259,17 @@ fn guard_text(text: &gtk::Text) {
     if !first_time(text.upcast_ref()) {
         return;
     }
+    // Every insertion into a single-line field follows the same rule,
+    // including IM commits and AT-SPI SetTextContents/InsertText, which do
+    // not pass through our clipboard or drop handlers. Keep GTK's edit
+    // operation intact: only replace the insertion's text, at its cursor.
+    text.connect_insert_text(|text, given, position| {
+        let line = appcore::input::single_line(given);
+        if line != given {
+            text.stop_signal_emission_by_name("insert-text");
+            text.insert_text(&line, position);
+        }
+    });
     // Runs before the class handler, which this stops.
     text.connect_local("paste-clipboard", false, |args| {
         let text = args[0].get::<gtk::Text>().ok()?;
