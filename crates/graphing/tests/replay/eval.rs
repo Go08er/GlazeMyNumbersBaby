@@ -615,12 +615,16 @@ fn monomial(e: &Expr, base: &Expr, lits: &Lits) -> Option<(Expr, u32)> {
             let (c, k) = monomial(a, base, lits)?;
             (Expr::Bin(BinOp::Div, Box::new(c), b.clone()), k)
         }
+        // (Not a written 0th power: u⁰ is 1 only where u ≠ 0, 0⁰ being
+        // undefined. Read as the constant 1, Horner's form of (x − c)² +
+        // (x − c)⁰ was defined at c, and a domain of all ℝ passed for it
+        // on that form: round 20's checker audit.)
         Expr::Bin(BinOp::Pow, a, b) if **a == *base => {
             let (n, q) = written_rational(b, lits)?;
             if q != 1 {
                 return None;
             }
-            (one(), n.to_u32().filter(|n| *n <= 64)?)
+            (one(), n.to_u32().filter(|n| (1..=64).contains(n))?)
         }
         _ => return None,
     })
