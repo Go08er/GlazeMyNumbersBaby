@@ -4111,3 +4111,271 @@ fn a_gap_beside_an_undefined_double_can_hold_another_pole() {
         "the domain must also exclude 10⁻⁴⁰⁰"
     );
 }
+
+/// `src`'s certificate (radians) with only its domain and the row `row`
+/// borrowed from cot x's: the same boxes and facts, the Family claims
+/// those of `src`'s own domain, and f unbounded at 0 claimed from 0 itself
+/// (the second pole, at 10⁻⁴⁰⁰, lies in any neighbourhood of 0).
+fn cot_row_on(src: &str, row: &str) -> serde_json::Value {
+    let mut v = certificate(src);
+    let donor = certificate("cot(x)");
+    let fams: Vec<serde_json::Value> = claims_of(&mut v, "domain").clone();
+    withhold_all_but(&mut v, "domain");
+    v[row] = donor[row].clone();
+    if row == "range" {
+        v["range_ends"] = donor["range_ends"].clone();
+    }
+    let claims = claims_of(&mut v, row);
+    claims.retain(|c| c.get("Family").is_none());
+    for c in claims.iter_mut() {
+        if c.get("Unbounded").is_some() {
+            *c = serde_json::json!({"Unbounded": {
+                "near": {"a": 0.0, "b": 0.0}, "at": {"a": 0.0, "b": 0.0}}});
+        }
+    }
+    claims.extend(fams);
+    if row == "monotonicity" {
+        // (Up to π: the piece's far end, beside the next pole.)
+        let (pl, ph) = (std::f64::consts::PI, std::f64::consts::PI.next_up());
+        let g = serde_json::json!({"a": pl.next_down(), "b": ph});
+        claims.push(serde_json::json!({"Beyond": {
+            "x": {"a": 1.97920337176157, "b": pl.next_down()},
+            "of": {"F": "F1"}, "c": 0.0, "above": false}}));
+        claims.push(serde_json::json!({"Gap": {"x": g}}));
+        claims.push(serde_json::json!({"GapClear": {"x": g, "of": {"F": "F1"}}}));
+    }
+    v
+}
+
+/// Why the replay refuses `v`, every claim of which it proves (strongly or
+/// weakly): the rows alone, not following from true premises.
+fn refused_on_true_premises(v: &serde_json::Value, what: &str) -> Option<String> {
+    let r = replay::replay(v).expect("replayed");
+    assert!(
+        r.claims
+            .iter()
+            .all(|c| matches!(c.outcome.class, Class::Strong | Class::Weak)),
+        "{what}: every premise is true"
+    );
+    r.row_problems().into_iter().next()
+}
+
+/// A gap about or beside a point f is undefined at, or one a pole is
+/// placed in, stood for that one point. cot x + cot(x − 10⁻⁴⁰⁰) has a pole
+/// at 10⁻⁴⁰⁰ + kπ too, in the gap about 0: cot x's vertical row passed for
+/// it (round 20's checker audit, after R20-M-03's gap beside 0). With
+/// holes at 10⁻⁴⁰⁰ + kπ instead (cot x times sin(x − 10⁻⁴⁰⁰) over itself),
+/// cot x's monotone piece (0, π) holds the hole, and its range ℝ takes
+/// every value but cot 10⁻⁴⁰⁰: both passed, the gap about 0 cut as one
+/// excluded point. The genuine domains list both families.
+#[test]
+fn a_gap_holds_one_excluded_point_only_where_shown() {
+    let v = cot_row_on("cot(x)+cot(x-10^(-400))", "vertical");
+    assert!(
+        refused_on_true_premises(&v, "two poles").is_some(),
+        "a second pole in the gap about 0"
+    );
+    for row in ["monotonicity", "range"] {
+        let v = cot_row_on("cot(x)*(sin(x-10^(-400))/sin(x-10^(-400)))", row);
+        assert!(
+            refused_on_true_premises(&v, row).is_some(),
+            "a hole in the gap about 0: {row}"
+        );
+    }
+    // (cot x's own rows stand: the pool's certificate of it.)
+}
+
+/// A gap is no excluded point by itself: f = x listed as ℝ ∖ {0}, with a
+/// gap about 0 and its value there claimed as a removable point's, passed
+/// (the stretch was cut at the gap, the value 0 taken for a limit only).
+/// Round 20's checker audit.
+#[test]
+fn a_range_is_cut_only_where_f_is_excluded() {
+    let mut v = certificate("x");
+    let domain = v["domain"].clone();
+    withhold_all_but(&mut v, "range");
+    v["domain"] = domain;
+    let g = serde_json::json!({"a": -5e-324, "b": 5e-324});
+    claims_of(&mut v, "range").extend([
+        serde_json::json!({"Gap": {"x": g}}),
+        serde_json::json!({"GapClear": {"x": g, "of": {"F": "F1"}}}),
+        serde_json::json!({"Removable": {"near": g, "at": {"a": 0.0, "b": 0.0},
+            "lo": 0.0, "hi": 0.0}}),
+    ]);
+    assert_eq!(rejected(&v), None, "the genuine range, a true gap added");
+    let open = serde_json::json!({"At": {"x": {"lo": 0.0, "hi": 0.0}, "closed": false}});
+    *value_of(&mut v, "range") = serde_json::json!([
+        {"lo": "NegInf", "hi": open.clone()}, {"lo": open, "hi": "PosInf"}]);
+    let hole = serde_json::json!([{"Hole": {"lo": 0.0, "hi": 0.0}}]);
+    v["range_ends"] = serde_json::json!([[[], hole], [hole, []]]);
+    assert!(
+        refused_on_true_premises(&v, "x as ℝ ∖ {0}").is_some(),
+        "0 is f(0)"
+    );
+}
+
+/// Horner's form of (x − c)² + (x − c)⁰ read the 0th power as 1, and f's
+/// definedness on it stood for f's: a domain of all ℝ passed, with no
+/// claims, though 0⁰ is undefined at c = 10⁻⁴⁰⁰. Round 20's checker audit.
+#[test]
+fn a_zeroth_power_keeps_its_hole() {
+    let mut v = certificate("(x-10^(-400))^2+(x-10^(-400))^0");
+    withhold_all_but(&mut v, "domain");
+    v["domain"] = serde_json::json!({"Certified": {"value": {"pieces": [
+        {"lo": "NegInf", "hi": "PosInf"}], "excluded": []},
+        "cert": {"covers": "Line", "claims": []}}});
+    assert!(rejected(&v).is_some(), "f is undefined at 10⁻⁴⁰⁰");
+}
+
+/// A family is its own mirror when shown so, not when −x₀'s enclosure
+/// meets one of its members: x + 0·cot(180(x − 10⁻⁴⁰⁰)) is undefined at
+/// 10⁻⁴⁰⁰ + k only, x₀ enclosed in [0, 10⁻³²³]; called odd (a fact true
+/// where both sides are defined), it passed. Round 20's checker audit.
+#[test]
+fn a_family_is_symmetric_only_when_shown() {
+    let mut v = certificate_in("x+0*cot(180*(x-10^(-400)))", None, TrigUnit::Degrees);
+    withhold_all_but(&mut v, "domain");
+    parity_called(&mut v, "Odd", ODD);
+    assert!(
+        refused_on_true_premises(&v, "the domain and the fact").is_some(),
+        "the domain is not symmetric"
+    );
+    // tan's poles are: cos x is even.
+    let mut v = certificate("tan(x)");
+    withhold_all_but(&mut v, "domain");
+    parity_called(&mut v, "Odd", ODD);
+    assert_eq!(rejected(&v), None, "tan x is odd");
+}
+
+/// A monotone piece's open high end is left out of the bridge to it, as a
+/// low one was: atan(ln|x|) in degrees and grads, its partial piece
+/// (−∞, 0) undecided on [−5·10⁻³²⁴, 0] (review 20, Questions), replays
+/// whole. Called increasing there, it is refused.
+#[test]
+fn an_open_high_end_is_left_out_of_the_bridge() {
+    for unit in [TrigUnit::Degrees, TrigUnit::Grads] {
+        let mut v = certificate_in("atan(ln(abs(x)))", None, unit);
+        assert_eq!(rejected(&v), None, "{unit:?}");
+        let pieces = value_of(&mut v, "monotonicity").as_array_mut().unwrap();
+        let p = pieces
+            .iter_mut()
+            .find(|p| p["on"]["lo"] == "NegInf")
+            .expect("the piece from −∞");
+        p["dir"] = serde_json::json!("Increasing");
+        assert!(rejected(&v).is_some(), "{unit:?}: it decreases");
+    }
+}
+
+/// An exact limit through a step is derived too: atan(ceil x) → ±π/2, ceil
+/// x within 1 of x (crossfuzz's seed 2081, case 3598, and seed 2063, case
+/// 1859, atan(floor(x·1.00000000000000000001)): their genuine labels were
+/// refused once overlap stopped standing for equality). A coefficient
+/// 10⁻⁶³ off is not that limit.
+#[test]
+fn an_exact_limit_through_a_step_is_derived() {
+    for (src, unit) in [
+        ("atan(floor(x*1.00000000000000000001))", TrigUnit::Radians),
+        ("atan(floor(x*1.00000000000000000001))", TrigUnit::Degrees),
+    ] {
+        let mut v = certificate_in(src, None, unit);
+        let domain = v["domain"].clone();
+        withhold_all_but(&mut v, "horizontal");
+        v["domain"] = domain;
+        assert_eq!(rejected(&v), None, "{src} {unit:?}: the genuine labels");
+    }
+    let mut v = certificate("atan(ceil(x))");
+    let domain = v["domain"].clone();
+    withhold_all_but(&mut v, "horizontal");
+    v["domain"] = domain;
+    assert_eq!(rejected(&v), None, "the genuine labels");
+    let h = value_of(&mut v, "horizontal")
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|h| h["side"] == "Right")
+        .unwrap();
+    h["exact"] = serde_json::json!(
+        "500000000000000000000000000000000000000000000000000000000000001/\
+         1000000000000000000000000000000000000000000000000000000000000000·π"
+    );
+    assert!(rejected(&v).is_some(), "a nearby coefficient");
+}
+
+/// A finite constant in a part going to ±∞ decides an exact limit as any
+/// finite number would: 1/((x − ln 3)(x − ln 3 − 10⁻⁶)) + tanh x → ±1
+/// (crossfuzz's seed 2099, case 9; 1/x + tanh x, its minimised form).
+#[test]
+fn an_exact_limit_beside_an_inexact_constant_is_derived() {
+    for (src, digits) in [
+        ("1/((x-(ln(3)))*(x-(ln(3))-0.000001))+tanh(x)", Some(16)),
+        ("1/x+tanh(x)", None),
+    ] {
+        let mut v = certificate_in(src, digits, TrigUnit::Radians);
+        let domain = v["domain"].clone();
+        withhold_all_but(&mut v, "horizontal");
+        v["domain"] = domain;
+        assert_eq!(rejected(&v), None, "{src}: the genuine labels");
+        for h in value_of(&mut v, "horizontal").as_array_mut().unwrap() {
+            h["exact"] = serde_json::json!(if h["side"] == "Right" {
+                "1000000000000000000000000000000000000000000000000000000000000001/\
+                 1000000000000000000000000000000000000000000000000000000000000000"
+            } else {
+                "-1"
+            });
+        }
+        assert!(rejected(&v).is_some(), "{src}: 1 + 10⁻⁶³ is not the limit");
+    }
+}
+
+/// An extremum at a closed end of the domain follows from f′'s sign beside
+/// it, not from a stretch far in: x − √x falls from 0 to its turn at 1/4,
+/// and "a minimum at 0", from f′ > 0 on [1, 2] and f continuous on [0, 1],
+/// passed in a partial row, which asks no coverage. Round 20's checker
+/// audit.
+#[test]
+fn an_end_extremum_is_read_beside_the_end() {
+    let mut v = certificate("x-sqrt(x)");
+    withhold_all_but(&mut v, "domain");
+    let claims = serde_json::json!([
+        {"Beyond": {"x": {"a": 1.0, "b": 2.0}, "of": {"F": "F1"}, "c": 0.0, "above": true}},
+        {"Continuous": {"x": {"a": 0.0, "b": 1.0}}},
+        {"Value": {"x": {"a": 0.0, "b": 0.0}, "of": {"F": "F0"}, "lo": 0.0, "hi": 0.0}}
+    ]);
+    let end = |kind: &str| {
+        serde_json::json!([{"x": {"lo": 0.0, "hi": 0.0}, "y": {"lo": 0.0, "hi": 0.0},
+            "kind": kind, "every": null}])
+    };
+    for kind in ["Min", "Max"] {
+        v["extrema"] = serde_json::json!({"Partial": {"value": end(kind),
+            "cert": {"covers": "Points", "claims": claims}}});
+        assert!(
+            refused_on_true_premises(&v, kind).is_some(),
+            "{kind} at 0: f′ between 0 and 1 is not decided"
+        );
+    }
+}
+
+/// One listed item is one number. Zeros at 0.4 and 0.6 listed as one item
+/// over both, and monotone pieces meeting at one enclosure that holds both
+/// turns of (x − 0.5)³ − 0.01(x − 0.5) (its decreasing piece left out),
+/// passed as complete rows, every claim the genuine one. Round 20's
+/// checker audit.
+#[test]
+fn one_listed_item_stands_for_one_place() {
+    let mut v = certificate("(x-0.4)*(x-0.6)");
+    let xs = value_of(&mut v, "x_intercepts").as_array().unwrap().clone();
+    assert_eq!(xs.len(), 2);
+    let (a, b) = (&xs[0]["At"], &xs[1]["At"]);
+    *value_of(&mut v, "x_intercepts") = serde_json::json!([{"At": {"lo": a["lo"], "hi": b["hi"]}}]);
+    assert!(rejected(&v).is_some(), "two zeros listed as one");
+    let mut v = certificate("(x-0.5)^3-0.01*(x-0.5)");
+    let ps = value_of(&mut v, "monotonicity").as_array().unwrap().clone();
+    assert_eq!(ps.len(), 3);
+    let e = serde_json::json!({"lo": ps[0]["on"]["hi"]["At"]["x"]["lo"],
+        "hi": ps[2]["on"]["lo"]["At"]["x"]["hi"]});
+    let end = serde_json::json!({"At": {"x": e, "closed": true}});
+    *value_of(&mut v, "monotonicity") = serde_json::json!([
+        {"on": {"lo": "NegInf", "hi": end}, "dir": "Increasing"},
+        {"on": {"lo": end, "hi": "PosInf"}, "dir": "Increasing"}]);
+    assert!(rejected(&v).is_some(), "two turns in one end");
+}

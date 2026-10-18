@@ -13,6 +13,15 @@
 //! changes what the row says, and the strict replay must refuse each
 //! result.
 //!
+//! Two kinds of hole in the checker have each come back in a new shape,
+//! and have operators of their own (review 20): two enclosures meeting
+//! taken for one number (an exact limit written as a rational within
+//! 10⁻⁶³ of it; two zeros or poles listed as one item), and an obligation
+//! let go because a place was beside, about or near another (a pole or
+//! zero dropped with every claim about it, a gap in their place; pieces
+//! joined over the place between them; a value f takes split out of the
+//! range as a hole's).
+//!
 //! A mutant is **killed** when the replay refuses the mutated row itself
 //! (a claim of it refuted or left open, or the row not following from its
 //! claims), in each of four settings: the certificate as it is, with
@@ -331,6 +340,8 @@ const UNPLACED: &str = "a kink's point left unplaced: some point of the box, a w
                         true of the one point it was";
 const JOINED_DROPPED: &str = "f′ continuous across the kink left unsaid: a weaker claim, true \
                               still (an inflection that rested on it is no longer derived)";
+const ONE_OF_TWO: &str = "a partial row lists what is proven: an enclosure holding two of its \
+                          numbers holds the one it was listed for, and says nothing of the other";
 const NO_EXACT_FORM: &str = "the exact form is how the enclosure reads, not a narrower claim: \
                              without it the enclosure stands";
 
@@ -388,6 +399,184 @@ fn shifted(v: &Value, by: f64) -> Value {
         *at(&mut out, &p) = enc(lo + by, hi + by);
     }
     out
+}
+
+/// The exact number a limit's exact form writes (`q`, `q·π`, `q·π^k`,
+/// `π`, `-π`, q a whole number or `n/d`): (q, k). Read here on its own.
+fn exact_parts(text: &str) -> Option<(rug::Rational, i32)> {
+    let t = text.trim();
+    let (q, k) = match t {
+        "π" => ("1", 1),
+        "-π" => ("-1", 1),
+        _ => match t.split_once('·') {
+            Some((q, "π")) => (q, 1),
+            Some((q, p)) => (q, p.strip_prefix("π^")?.parse().ok()?),
+            None => (t, 0),
+        },
+    };
+    let whole = |s: &str| rug::Integer::from_str_radix(s, 10).ok();
+    let q = match q.split_once('/') {
+        Some((n, d)) => {
+            let d = whole(d)?;
+            if d == 0 {
+                return None;
+            }
+            rug::Rational::from((whole(n)?, d))
+        }
+        None => rug::Rational::from(whole(q)?),
+    };
+    Some((q, k))
+}
+
+/// q·πᵏ written as the certifier writes it.
+fn exact_text(q: &rug::Rational, k: i32) -> String {
+    match k {
+        0 => q.to_string(),
+        1 => format!("{q}·π"),
+        _ => format!("{q}·π^{k}"),
+    }
+}
+
+/// Exact forms beside `text`'s number, each another number whose 160-bit
+/// enclosure still meets the limit's: its coefficient moved by 10⁻⁶³ of
+/// itself (by 10⁻⁶³ for 0), and for a power of π the rational within
+/// 10⁻⁶³ of it (π/2 written 1570796…296/10⁶³: review 20, R20-M-02).
+fn nearby_exact(text: &str) -> Vec<(&'static str, String)> {
+    let Some((q, k)) = exact_parts(text) else {
+        return Vec::new();
+    };
+    let ten63 = rug::Integer::from(rug::Integer::u_pow_u(10, 63));
+    let tiny = rug::Rational::from((rug::Integer::from(1), ten63.clone()));
+    let nudged = if q == 0 {
+        tiny.clone()
+    } else {
+        &q * (rug::Rational::from(1) + &tiny)
+    };
+    let mut out = vec![("its coefficient moved by 10⁻⁶³", exact_text(&nudged, k))];
+    if k != 0 && q != 0 {
+        let pi = rug::Float::with_val(1024, rug::float::Constant::Pi);
+        let mut v = rug::Float::with_val(1024, &q);
+        for _ in 0..k.unsigned_abs() {
+            if k > 0 {
+                v *= &pi;
+            } else {
+                v /= &pi;
+            }
+        }
+        v *= rug::Float::with_val(1024, &ten63);
+        if let Some(n) = v.round().to_integer() {
+            out.push((
+                "a rational within 10⁻⁶³",
+                exact_text(&rug::Rational::from((n, ten63)), 0),
+            ));
+        }
+    }
+    out
+}
+
+/// x moved n doubles up (or down).
+fn doubles_out(mut x: f64, n: usize, up: bool) -> f64 {
+    for _ in 0..n {
+        x = if up { x.next_up() } else { x.next_down() };
+    }
+    x
+}
+
+/// What a claim places, where it is a place: an excluded point's box
+/// (`at`), a box of x (`x`), the point a one-sided limit is at; and whether
+/// the box is one the row's coverage counts (where f is decided, a gap).
+fn claim_spot(c: &Value) -> Option<((f64, f64), bool)> {
+    let (kind, b) = c.as_object()?.iter().next()?;
+    let bx = |v: &Value| Some((replay::r(v.get("a")?).ok()?, replay::r(v.get("b")?).ok()?));
+    match kind.as_str() {
+        "Unbounded" | "Bounded" | "Removable" => Some((bx(b.get("at")?)?, false)),
+        "Undefined" | "Gap" | "Value" | "Beyond" | "NoCross" | "Factors" | "OneCross"
+        | "ExactAt" | "Touch" | "KinkSides" | "KinkAt" => Some((bx(b.get("x")?)?, true)),
+        "GapClear" | "Defined" | "Continuous" | "Kink" => Some((bx(b.get("x")?)?, false)),
+        "Limit" => {
+            let at = b.get("at")?;
+            let p = at.get("Right").or_else(|| at.get("Left"))?;
+            let p = replay::r(p).ok()?;
+            Some(((p, p), false))
+        }
+        _ => None,
+    }
+}
+
+/// The row's claims with those about the places `spots` (within 16 doubles
+/// of one) taken out, and a gap where they were (the place itself and the
+/// boxes taken out that the row's coverage counted): what a certificate
+/// that said nothing of those places but "a gap" would hold. None where the
+/// gap would be over 64 doubles wide (no gap claim stands so) or nothing
+/// is taken out.
+fn gapped_claims(
+    claims: &[Value],
+    spots: &[(f64, f64)],
+    clear: Option<&str>,
+) -> Option<Vec<Value>> {
+    let near = |s: (f64, f64)| {
+        spots
+            .iter()
+            .any(|e| doubles_out(e.0, 16, false) <= s.0 && s.1 <= doubles_out(e.1, 16, true))
+    };
+    let mut kept = Vec::new();
+    let mut hulls: Vec<(f64, f64)> = spots.to_vec();
+    let mut taken = 0;
+    for c in claims {
+        match claim_spot(c) {
+            Some((s, covers)) if near(s) => {
+                taken += 1;
+                if covers {
+                    // (The hull it falls in.)
+                    if let Some(h) = hulls.iter_mut().find(|h| {
+                        doubles_out(h.0, 16, false) <= s.0 && s.1 <= doubles_out(h.1, 16, true)
+                    }) {
+                        h.0 = h.0.min(s.0);
+                        h.1 = h.1.max(s.1);
+                    }
+                }
+            }
+            _ => kept.push(c.clone()),
+        }
+    }
+    if taken == 0 {
+        return None;
+    }
+    for (a, b) in hulls {
+        if !(a.is_finite() && b.is_finite()) || doubles_out(a, 64, true) < b {
+            return None;
+        }
+        kept.push(json!({"Gap": {"x": {"a": num(a), "b": num(b)}}}));
+        if let Some(of) = clear {
+            kept.push(json!({"GapClear": {"x": {"a": num(a), "b": num(b)}, "of": {"F": of}}}));
+        }
+    }
+    Some(kept)
+}
+
+/// The members of the family `x0 + k·period` (enclosures, a few doubles
+/// wider each way) inside the window [a, b], at most eight.
+fn members_in(x0: (f64, f64), period: (f64, f64), (a, b): (f64, f64)) -> Vec<(f64, f64)> {
+    if !(period.0 > 0.0 && a.is_finite() && b.is_finite()) {
+        return Vec::new();
+    }
+    let k0 = ((a - x0.1) / period.0).floor() as i64;
+    let k1 = ((b - x0.0) / period.0).ceil() as i64;
+    if k1 - k0 > 8 {
+        return Vec::new();
+    }
+    (k0..=k1)
+        .map(|k| {
+            let k = k as f64;
+            let (lo, hi) = if k >= 0.0 {
+                (x0.0 + k * period.0, x0.1 + k * period.1)
+            } else {
+                (x0.0 + k * period.1, x0.1 + k * period.0)
+            };
+            (doubles_out(lo, 4, false), doubles_out(hi, 4, true))
+        })
+        .filter(|m| m.1 >= a && m.0 <= b)
+        .collect()
 }
 
 /// Every mutant of the row `row` of the certificate `base`; `other`: a
@@ -870,6 +1059,16 @@ fn mutants_of(
                         None,
                         &set(&p, json!("7")),
                     );
+                    // Another exact number whose enclosure meets the
+                    // limit's: overlapping enclosures are no equality.
+                    for (how, near) in nearby_exact(was.as_str().unwrap_or("")) {
+                        push(
+                            "exact form moved beside",
+                            format!("{}: {was} called {near} ({how})", show(&p)),
+                            None,
+                            &set(&p, json!(near)),
+                        );
+                    }
                     push(
                         "exact form dropped",
                         format!("{}: {was}", show(&p)),
@@ -896,6 +1095,394 @@ fn mutants_of(
                 );
             }
             _ => {}
+        }
+    }
+
+    // ---- a place dropped, and what the claims said of it but "a gap"
+    //
+    // From a complete row of poles, zeros or excluded families: an item
+    // (or a family, each of its members in the row's window) left out,
+    // with every claim about its place (an excluded point, a pole, a
+    // zero's box, a one-sided limit there: within 16 doubles of it), and
+    // a gap in their place (cleared of f's zeros, for the zeros). The
+    // domain row stays the genuine one. A gap beside or about another
+    // place, or holding one a claim places, was taken to hold nothing more
+    // (review 20, R20-M-03; round 20's checker audit).
+    let claims_now = b["cert"]["claims"].as_array().cloned().unwrap_or_default();
+    let window_of = || -> Option<(f64, f64)> {
+        let w = covers.get("Period").or_else(|| covers.get("Window"))?;
+        Some((replay::r(w.get("a")?).ok()?, replay::r(w.get("b")?).ok()?))
+    };
+    if certified && matches!(row, "vertical" | "x_intercepts" | "domain") {
+        let items_path: Vec<Seg> = if row == "domain" {
+            vec![Seg::K("excluded".into())]
+        } else {
+            Vec::new()
+        };
+        let items = at(&mut value.clone(), &items_path)
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for (i, item) in items.iter().enumerate() {
+            if !taken(i, items.len()) {
+                continue;
+            }
+            // (The places, and the family's x₀ and period.)
+            type Family = Option<((f64, f64), (f64, f64))>;
+            let (spots, family): (Vec<(f64, f64)>, Family) =
+                if let Some(x) = item.get("At").and_then(enc_of) {
+                    (vec![x], None)
+                } else if let Some(e) = item
+                    .get("Every")
+                    .or(Some(item))
+                    .filter(|e| e.get("x0").is_some())
+                {
+                    let (Some(x0), Some(per)) = (enc_of(&e["x0"]), enc_of(&e["period"])) else {
+                        continue;
+                    };
+                    let spots = match window_of() {
+                        Some(w) => members_in(x0, per, w),
+                        None => vec![x0],
+                    };
+                    (spots, Some((x0, per)))
+                } else {
+                    continue;
+                };
+            let mut rest = items.clone();
+            rest.remove(i);
+            let new_claims = if row == "domain" {
+                // (The family's own claim: the one naming its boxes.)
+                let (x0, per) = family.expect("a family");
+                let named = |c: &Value| {
+                    c.get("Family").is_some_and(|f| {
+                        let bx = |v: &Value| {
+                            Some((replay::r(v.get("a")?).ok()?, replay::r(v.get("b")?).ok()?))
+                        };
+                        bx(&f["x0"]) == Some(x0) && bx(&f["period"]) == Some(per)
+                    })
+                };
+                let kept: Vec<Value> = claims_now.iter().filter(|c| !named(c)).cloned().collect();
+                (kept.len() < claims_now.len()).then_some(kept)
+            } else {
+                gapped_claims(&claims_now, &spots, (row == "x_intercepts").then_some("F0"))
+            };
+            let Some(new_claims) = new_claims else {
+                continue;
+            };
+            let items_path = items_path.clone();
+            push(
+                "place dropped, its claims a gap",
+                if row == "domain" {
+                    format!(
+                        "family {i} of {} dropped, with its Family claim",
+                        items.len()
+                    )
+                } else {
+                    format!(
+                        "item {i} of {} dropped ({} place{} in the window), its claims a gap",
+                        items.len(),
+                        spots.len(),
+                        if spots.len() == 1 { "" } else { "s" }
+                    )
+                },
+                None,
+                &|v: &mut Value| {
+                    *at(&mut body_mut(v, row)["value"], &items_path) = Value::Array(rest.clone());
+                    body_mut(v, row)["cert"]["claims"] = Value::Array(new_claims.clone());
+                },
+            );
+        }
+    }
+
+    // ---- two places listed as one
+    //
+    // Two items of a list (points, not families) as one, its enclosure
+    // holding both. A complete row lists each zero, turn or pole: one item
+    // for two is one left out. (A partial row's wider enclosure is true of
+    // the item it was.)
+    if matches!(row, "x_intercepts" | "vertical" | "extrema" | "inflections") {
+        let items = value.as_array().cloned().unwrap_or_default();
+        let x_of = |it: &Value| -> Option<(f64, f64)> {
+            match row {
+                "x_intercepts" | "vertical" => enc_of(it.get("At")?),
+                _ => it
+                    .get("every")
+                    .is_none_or(Value::is_null)
+                    .then(|| enc_of(it.get("x")?))
+                    .flatten(),
+            }
+        };
+        for i in 0..items.len().saturating_sub(1) {
+            if !taken(i, items.len()) {
+                continue;
+            }
+            let (Some(a), Some(c)) = (x_of(&items[i]), x_of(&items[i + 1])) else {
+                continue;
+            };
+            let hull = (a.0.min(c.0), a.1.max(c.1));
+            let mut one = items[i].clone();
+            match row {
+                "x_intercepts" | "vertical" => one["At"] = enc(hull.0, hull.1),
+                _ => {
+                    one["x"] = enc(hull.0, hull.1);
+                    if let (Some(ya), Some(yc)) =
+                        (enc_of(&items[i]["y"]), enc_of(&items[i + 1]["y"]))
+                    {
+                        one["y"] = enc(ya.0.min(yc.0), ya.1.max(yc.1));
+                    }
+                }
+            }
+            let mut merged = items.clone();
+            merged[i] = one;
+            merged.remove(i + 1);
+            push(
+                "two places listed as one",
+                format!(
+                    "items {i} and {} as one, over [{:e}, {:e}]",
+                    i + 1,
+                    hull.0,
+                    hull.1
+                ),
+                (!certified).then_some(ONE_OF_TWO),
+                &|v: &mut Value| body_mut(v, row)["value"] = Value::Array(merged.clone()),
+            );
+        }
+    }
+
+    // ---- an end's extremum read from past the turn beside it
+    //
+    // An extremum at a closed end of the domain, called the other kind, in
+    // a partial row whose only f′ claims lie past the next turn inward:
+    // f′'s sign there is the other one, and nothing says what f does
+    // between (a partial row asks no coverage). True only if f′ had the
+    // far sign up to the end, which the turn between rules out.
+    if row == "extrema" {
+        let items = value.as_array().cloned().unwrap_or_default();
+        let closed_ends: Vec<(f64, f64)> = body(base, "domain")
+            .map(|(_, d)| {
+                paths(&d["value"]["pieces"], &is_end)
+                    .into_iter()
+                    .filter_map(|p| {
+                        let e = at(&mut d["value"]["pieces"].clone(), &p).clone();
+                        (e["At"]["closed"] == json!(true))
+                            .then(|| enc_of(&e["At"]["x"]))
+                            .flatten()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (i, item) in items.iter().enumerate() {
+            let Some(xe) = enc_of(&item["x"]) else {
+                continue;
+            };
+            if !closed_ends.contains(&xe) || !item["every"].is_null() {
+                continue;
+            }
+            // The turn nearest the end, and which side the end is on.
+            let Some((turn, low)) = items
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .filter_map(|(_, it)| enc_of(&it["x"]))
+                .map(|t| (t, t.0 > xe.1))
+                .min_by(|a, b| {
+                    let d = |t: &(f64, f64)| (t.0 - xe.1).abs().min((xe.0 - t.1).abs());
+                    d(&a.0).total_cmp(&d(&b.0))
+                })
+            else {
+                continue;
+            };
+            let past = |c: &Value| {
+                let Some((kind, b)) = c.as_object().and_then(|o| o.iter().next()) else {
+                    return false;
+                };
+                let of_f1 = b.get("of") == Some(&json!({"F": "F1"}));
+                let bx =
+                    |v: &Value| Some((replay::r(v.get("a")?).ok()?, replay::r(v.get("b")?).ok()?));
+                // (From the turn on: a box that starts at it, the turn's own
+                // claim among them, and every one past it.)
+                match kind.as_str() {
+                    "Beyond" | "NoCross" | "Factors" | "OneCross" | "ExactAt" | "Touch"
+                    | "Value"
+                        if of_f1 =>
+                    {
+                        bx(&b["x"]).is_some_and(|x| if low { x.0 >= turn.0 } else { x.1 <= turn.1 })
+                    }
+                    "TailBeyond" | "TailChain" if of_f1 => {
+                        let right = b["side"] == "Right";
+                        right == low
+                            && replay::r(&b["from"])
+                                .is_ok_and(|f| if low { f >= turn.0 } else { f <= turn.1 })
+                    }
+                    "Value" => bx(&b["x"]) == Some(xe) && b.get("of") == Some(&json!({"F": "F0"})),
+                    _ => false,
+                }
+            };
+            let kept: Vec<Value> = b["cert"]["claims"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|c| past(c))
+                .cloned()
+                .collect();
+            let mut one = item.clone();
+            one["kind"] = json!(if item["kind"] == "Min" { "Max" } else { "Min" });
+            let row_now = json!({"Partial": {"value": [one],
+                "cert": {"covers": "Points", "claims": kept}}});
+            push(
+                "end extremum read from past a turn",
+                format!(
+                    "item {i}, at the closed end [{:e}, {:e}], called {}, with only the f′ claims \
+                     past the turn at [{:e}, {:e}]",
+                    xe.0, xe.1, one["kind"], turn.0, turn.1
+                ),
+                None,
+                &|v: &mut Value| v[row] = row_now.clone(),
+            );
+        }
+    }
+
+    // ---- pieces joined over the place between them
+    //
+    // Two pieces meeting at one enclosure (the domain's either side of an
+    // excluded point; monotone pieces either side of a turn or pole; the
+    // range's either side of a value it leaves out) as one piece across it.
+    if matches!(row, "domain" | "monotonicity" | "range") {
+        let list_path: Vec<Seg> = if row == "domain" {
+            vec![Seg::K("pieces".into())]
+        } else {
+            Vec::new()
+        };
+        let items = at(&mut value.clone(), &list_path)
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let piece_of = |it: &Value| -> Value {
+            if row == "monotonicity" {
+                it["on"].clone()
+            } else {
+                it.clone()
+            }
+        };
+        for i in 0..items.len().saturating_sub(1) {
+            if !taken(i, items.len()) {
+                continue;
+            }
+            let (p, q) = (piece_of(&items[i]), piece_of(&items[i + 1]));
+            if !(is_end(&p["hi"]) && p["hi"]["At"]["x"] == q["lo"]["At"]["x"]) {
+                continue;
+            }
+            let joined = json!({"lo": p["lo"], "hi": q["hi"]});
+            let mut one = items[i].clone();
+            if row == "monotonicity" {
+                one["on"] = joined;
+            } else {
+                one = joined;
+            }
+            let mut fewer = items.clone();
+            fewer[i] = one;
+            fewer.remove(i + 1);
+            let ends = (row == "range")
+                .then(|| base["range_ends"].as_array().cloned())
+                .flatten()
+                .filter(|e| e.len() == items.len())
+                .map(|mut e| {
+                    let hi = e[i + 1][1].clone();
+                    e[i][1] = hi;
+                    e.remove(i + 1);
+                    Value::Array(e)
+                });
+            let list_path = list_path.clone();
+            push(
+                "pieces joined",
+                format!(
+                    "pieces {i} and {} joined over {}",
+                    i + 1,
+                    p["hi"]["At"]["x"]
+                ),
+                None,
+                &|v: &mut Value| {
+                    *at(&mut body_mut(v, row)["value"], &list_path) = Value::Array(fewer.clone());
+                    if let Some(e) = &ends {
+                        v["range_ends"] = e.clone();
+                    }
+                },
+            );
+        }
+    }
+
+    // ---- a value f takes, left out of the range as a hole's
+    //
+    // The listed piece that holds f's value at a double cut there, open
+    // both sides, with a gap about that double (cleared of f′'s zeros) and
+    // the value claimed as a removable point's: f defined there, the gap
+    // passed for an excluded point (f = x as ℝ ∖ {0}: round 20's checker
+    // audit).
+    if row == "range" {
+        let pieces = value.as_array().cloned().unwrap_or_default();
+        let ends = base["range_ends"].as_array().cloned().unwrap_or_default();
+        let finite = |b: &Value| enc_of(&b["At"]["x"]);
+        let mut tried = 0;
+        for c in &claims_now {
+            let Some(v) = c.get("Value") else { continue };
+            if v["of"] != json!({"F": "F0"}) || tried >= 3 {
+                continue;
+            }
+            let (Ok(xa), Ok(xb), Ok(lo), Ok(hi)) = (
+                replay::r(&v["x"]["a"]),
+                replay::r(&v["x"]["b"]),
+                replay::r(&v["lo"]),
+                replay::r(&v["hi"]),
+            ) else {
+                continue;
+            };
+            if xa != xb || !(lo.is_finite() && hi.is_finite()) {
+                continue;
+            }
+            // The piece the value lies strictly inside.
+            let Some(i) = pieces.iter().position(|p| {
+                let above = match finite(&p["lo"]) {
+                    Some(e) => e.1 < lo,
+                    None => p["lo"] == "NegInf",
+                };
+                let below = match finite(&p["hi"]) {
+                    Some(e) => hi < e.0,
+                    None => p["hi"] == "PosInf",
+                };
+                above && below
+            }) else {
+                continue;
+            };
+            tried += 1;
+            let cut = json!({"At": {"x": enc(lo, hi), "closed": false}});
+            let mut split = pieces.clone();
+            split[i] = json!({"lo": pieces[i]["lo"], "hi": cut});
+            split.insert(i + 1, json!({"lo": cut, "hi": pieces[i]["hi"]}));
+            let hole = json!([{"Hole": enc(xa, xa)}]);
+            let mut new_ends = ends.clone();
+            if new_ends.len() == pieces.len() {
+                let pair = new_ends[i].clone();
+                new_ends[i] = json!([pair[0], hole]);
+                new_ends.insert(i + 1, json!([hole, pair[1]]));
+            }
+            let g = json!({"a": num(xa.next_down()), "b": num(xa.next_up())});
+            let mut more = claims_now.clone();
+            more.push(json!({"Gap": {"x": g}}));
+            more.push(json!({"GapClear": {"x": g, "of": {"F": "F1"}}}));
+            more.push(
+                json!({"Removable": {"near": g, "at": {"a": num(xa), "b": num(xa)},
+                "lo": num(lo), "hi": num(hi)}}),
+            );
+            push(
+                "a value left out as a hole's",
+                format!("piece {i} cut at f({xa:e}) ∈ [{lo:e}, {hi:e}], a gap about {xa:e}"),
+                None,
+                &|v: &mut Value| {
+                    body_mut(v, row)["value"] = Value::Array(split.clone());
+                    body_mut(v, row)["cert"]["claims"] = Value::Array(more.clone());
+                    v["range_ends"] = Value::Array(new_ends.clone());
+                },
+            );
         }
     }
 
@@ -1568,8 +2155,6 @@ const ZERO_LIMIT: &str = "f → 0 on each side, as the borrowed row's enclosures
                           looks like 0) say";
 const NO_ZEROS_NO_POLES: &str = "f is continuous and positive everywhere (≥ 1 or ≥ 10¹³−1), so \
                                  \"none\" is true";
-const ATAN_ROW_ALONE: &str = "the row is the genuine one, which is true; without its claims the \
-                              replay re-derives it from f alone (f′ < 0 on each side of the pole)";
 const CSCH_LIKE_1_OVER: &str = "csch(x−1000) and 1/(x−c) both have range ℝ∖{0} (pieces open at \
                                 an end enclosing 0) and tend to 0 on each side";
 
@@ -1646,22 +2231,10 @@ const KNOWN: &[Known] = &[
         why: "f is a quadratic with positive leading coefficient (f″ > 0): no inflection within [-16, 16], as the borrowed row (none over that window) says" },
 
     // ---- the pool
-    Known { run: "pool", src: "atan(1/x) [Degrees]", row: "monotonicity",
-        op: "claims withheld",
-        what: "the row as it is, with none of its claims",
-        why: ATAN_ROW_ALONE },
-    Known { run: "pool", src: "atan(1/x) [Grads]", row: "monotonicity",
-        op: "claims withheld",
-        what: "the row as it is, with none of its claims",
-        why: ATAN_ROW_ALONE },
-    Known { run: "pool", src: "csch(x) [Degrees]", row: "monotonicity",
-        op: "row of another function",
-        what: r#"the monotonicity row of "y=atan(1/x)""#,
-        why: "csch decreases on (−∞, 0) and on (0, ∞), as atan(1/x) does" },
-    Known { run: "pool", src: "csch(x) [Grads]", row: "monotonicity",
-        op: "row of another function",
-        what: r#"the monotonicity row of "y=atan(1/x)""#,
-        why: "csch decreases on (−∞, 0) and on (0, ∞), as atan(1/x) does" },
+    // (atan(1/x)'s monotone rows in degrees and grads, alone and borrowed
+    // by csch(x), were here as partial rows. The certifier now certifies
+    // them complete (p12-cert), which neither its claims withheld nor
+    // atan's claims on csch can carry: both are refused.)
     Known { run: "pool", src: "csch(x) [Degrees]", row: "horizontal",
         op: "row of another function",
         what: r#"the horizontal row of "y=atan(1/x)""#,

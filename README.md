@@ -276,6 +276,11 @@ CI also runs checks that need more than `cargo test --workspace`:
   simplifier's form, the derivatives) or check it at sample points, so it
   rests on the simplifier: today 75,427 strong, 172 weak. A claim refuted
   or left open, or a row that doesn't follow from its claims, fails it.
+  Each row is derived, not matched: an exact limit is equal to the
+  derived one, never just inside the same enclosure; a gap about a point
+  where f is undefined, or holding a pole a claim places, is shown to hold
+  nothing else excluded; one listed item stands for one zero, turn or pole;
+  a family's member only lies at a piece's end when shown there.
   The checker has no Γ of its own, so it doesn't model `n!`, `n!!`, `nCr`
   or `nPr`: a function that uses one anywhere, a constant like `5!`
   included, comes out *unsupported* (not checked, rather than wrong), and
@@ -288,11 +293,16 @@ CI also runs checks that need more than `cargo test --workspace`:
   operator that changes what the row says (an item removed, moved or
   changed, a piece cut or joined, a status or scope changed, claims
   withheld, a kink's sides changed, a row borrowed from another function or
-  made up with no claims), and the replay must refuse each result, with the
+  made up with no claims; an exact limit written as another number within
+  10⁻⁶³ of it, two zeros or poles listed as one, a pole, zero or excluded
+  family dropped with every claim about it and a gap in their place, pieces
+  joined over the place between them, a value f takes split out of the
+  range as a hole's, an extremum at an end of the domain read from past
+  the turn beside it), and the replay must refuse each result, with the
   rest of the certificate there, withheld, or with every genuine claim
-  given to the row. CI runs a fixed few (3,004 mutants, none accepted).
-  The long runs (204 corpus functions, 41,384 mutants; 607 pool functions,
-  148,188) accept 17 and 16: each a true statement the replay proved (a
+  given to the row. CI runs a fixed few (3,048 mutants, none accepted).
+  The long runs (204 corpus functions, 41,958 mutants; 607 pool functions,
+  151,313) accept 17 and 12: each a true statement the replay proved (a
   row borrowed from another function that happens to hold, an enclosure
   narrowed onto the number it holds), reviewed by hand in a table with the
   reason it is true. A long run fails on an accepted mutant not in the
@@ -300,7 +310,14 @@ CI also runs checks that need more than `cargo test --workspace`:
   an end of a partial monotone piece moved strictly inward is
   content-preserving by construction (a sub-piece of a monotone piece) and
   counted apart, not tabled. On 201 corpus functions the checker before
-  review 19's fixes accepted 4,410 of 39,611.
+  review 19's fixes accepted 4,410 of 39,611. Of the operators added in
+  round 20 the checker before its audit accepted 1 of the fixed few's 44,
+  17 of the corpus's 574 and 195 of the pool's 2,427 (two zeros listed as
+  one, a value f takes left out of the range; the certificates before
+  this round's certifier changes) and 10 of the pool's 18 extrema at an
+  end of the domain read from past a turn, and the one before review 20
+  another 20 of the pool's exact limits written within 10⁻⁶³ of
+  themselves.
 - **Random cross-checking** (`--test crossfuzz`, same feature): the checks
   above take ordinary functions, shifted and scaled. This one generates
   expressions aimed at the families the review rounds kept finding bugs in
