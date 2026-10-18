@@ -4239,11 +4239,22 @@ fn an_open_high_end_is_left_out_of_the_bridge() {
 }
 
 /// An exact limit through a step is derived too: atan(ceil x) → ±π/2, ceil
-/// x within 1 of x (crossfuzz's seed 2081, case 3598: its genuine labels
-/// were refused once overlap stopped standing for equality). A coefficient
+/// x within 1 of x (crossfuzz's seed 2081, case 3598, and seed 2063, case
+/// 1859, atan(floor(x·1.00000000000000000001)): their genuine labels were
+/// refused once overlap stopped standing for equality). A coefficient
 /// 10⁻⁶³ off is not that limit.
 #[test]
 fn an_exact_limit_through_a_step_is_derived() {
+    for (src, unit) in [
+        ("atan(floor(x*1.00000000000000000001))", TrigUnit::Radians),
+        ("atan(floor(x*1.00000000000000000001))", TrigUnit::Degrees),
+    ] {
+        let mut v = certificate_in(src, None, unit);
+        let domain = v["domain"].clone();
+        withhold_all_but(&mut v, "horizontal");
+        v["domain"] = domain;
+        assert_eq!(rejected(&v), None, "{src} {unit:?}: the genuine labels");
+    }
     let mut v = certificate("atan(ceil(x))");
     let domain = v["domain"].clone();
     withhold_all_but(&mut v, "horizontal");
