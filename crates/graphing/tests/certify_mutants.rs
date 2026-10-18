@@ -1249,6 +1249,94 @@ fn mutants_of(
         }
     }
 
+    // ---- an end's extremum read from past the turn beside it
+    //
+    // An extremum at a closed end of the domain, called the other kind, in
+    // a partial row whose only f′ claims lie past the next turn inward:
+    // f′'s sign there is the other one, and nothing says what f does
+    // between (a partial row asks no coverage). True only if f′ had the
+    // far sign up to the end, which the turn between rules out.
+    if row == "extrema" {
+        let items = value.as_array().cloned().unwrap_or_default();
+        let closed_ends: Vec<(f64, f64)> = body(base, "domain")
+            .map(|(_, d)| {
+                paths(&d["value"]["pieces"], &is_end)
+                    .into_iter()
+                    .filter_map(|p| {
+                        let e = at(&mut d["value"]["pieces"].clone(), &p).clone();
+                        (e["At"]["closed"] == json!(true))
+                            .then(|| enc_of(&e["At"]["x"]))
+                            .flatten()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (i, item) in items.iter().enumerate() {
+            let Some(xe) = enc_of(&item["x"]) else {
+                continue;
+            };
+            if !closed_ends.contains(&xe) || !item["every"].is_null() {
+                continue;
+            }
+            // The turn nearest the end, and which side the end is on.
+            let Some((turn, low)) = items
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .filter_map(|(_, it)| enc_of(&it["x"]))
+                .map(|t| (t, t.0 > xe.1))
+                .min_by(|a, b| {
+                    let d = |t: &(f64, f64)| (t.0 - xe.1).abs().min((xe.0 - t.1).abs());
+                    d(&a.0).total_cmp(&d(&b.0))
+                })
+            else {
+                continue;
+            };
+            let past = |c: &Value| {
+                let Some((kind, b)) = c.as_object().and_then(|o| o.iter().next()) else {
+                    return false;
+                };
+                let of_f1 = b.get("of") == Some(&json!({"F": "F1"}));
+                let bx =
+                    |v: &Value| Some((replay::r(v.get("a")?).ok()?, replay::r(v.get("b")?).ok()?));
+                match kind.as_str() {
+                    "Beyond" | "NoCross" | "Factors" | "OneCross" | "Value" if of_f1 => {
+                        bx(&b["x"]).is_some_and(|x| if low { x.0 > turn.1 } else { x.1 < turn.0 })
+                    }
+                    "TailBeyond" | "TailChain" if of_f1 => {
+                        let right = b["side"] == "Right";
+                        right == low
+                            && replay::r(&b["from"])
+                                .is_ok_and(|f| if low { f > turn.1 } else { f < turn.0 })
+                    }
+                    "Value" => bx(&b["x"]) == Some(xe) && b.get("of") == Some(&json!({"F": "F0"})),
+                    _ => false,
+                }
+            };
+            let kept: Vec<Value> = b["cert"]["claims"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|c| past(c))
+                .cloned()
+                .collect();
+            let mut one = item.clone();
+            one["kind"] = json!(if item["kind"] == "Min" { "Max" } else { "Min" });
+            let row_now = json!({"Partial": {"value": [one],
+                "cert": {"covers": "Points", "claims": kept}}});
+            push(
+                "end extremum read from past a turn",
+                format!(
+                    "item {i}, at the closed end [{:e}, {:e}], called {}, with only the f′ claims \
+                     past the turn at [{:e}, {:e}]",
+                    xe.0, xe.1, one["kind"], turn.0, turn.1
+                ),
+                None,
+                &|v: &mut Value| v[row] = row_now.clone(),
+            );
+        }
+    }
+
     // ---- pieces joined over the place between them
     //
     // Two pieces meeting at one enclosure (the domain's either side of an
