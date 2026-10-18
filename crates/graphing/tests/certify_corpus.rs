@@ -1551,6 +1551,50 @@ fn check_mono(r: &Row<Vec<Monotone>>, want: &Option<Vec<MonoPiece>>) -> Option<S
             }
         }
     }
+    // Over a window, every true piece's part in it, as a certified row
+    // lists every true piece: a window's row promises that much there
+    // (review 21; `check_xs` and `check_pts` asked it, this didn't). A
+    // part cut at the window's end is listed reaching it.
+    if let Some(Region::Window { a, b }) = region(r) {
+        let (a, b) = (a.0, b.0);
+        let reaches = |e: &Bound, w: f64, low: bool| match e {
+            Bound::NegInf => low,
+            Bound::PosInf => !low,
+            Bound::At { x, .. } => {
+                if low {
+                    x.lo.0 <= w
+                } else {
+                    x.hi.0 >= w
+                }
+            }
+        };
+        for (d, (lo, lc, hi, hc)) in want {
+            // (Nothing of it strictly inside the window.)
+            if !(lo.mid() < b && hi.mid() > a) {
+                continue;
+            }
+            let listed = value.iter().any(|m| {
+                m.dir == *d
+                    && if lo.mid() > a {
+                        bound_fits(&m.on.lo, *lo, *lc, true)
+                    } else {
+                        reaches(&m.on.lo, a, true)
+                    }
+                    && if hi.mid() < b {
+                        bound_fits(&m.on.hi, *hi, *hc, false)
+                    } else {
+                        reaches(&m.on.hi, b, false)
+                    }
+            });
+            if !listed {
+                return Some(format!(
+                    "monotonicity: {d:?} on ({}, {}) missing over [{a}, {b}] ({value:?})",
+                    lo.mid(),
+                    hi.mid()
+                ));
+            }
+        }
+    }
     None
 }
 
@@ -2337,6 +2381,63 @@ fn whole_counts_past_sixty_are_exact() {
 /// Review 13, R13-M-04: a degree typed as the odd 9007199254740993 is odd,
 /// though both doubles about it are even: root(−8, n) is defined, just
 /// below −1 (the panel said there was no y-intercept).
+/// A monotonicity row complete over a window lists every true piece's
+/// part in it; a points-only row need not. (Review 21: only a certified
+/// row's pieces were asked for, as if every partial row were points-only.)
+#[test]
+fn a_window_monotonicity_row_lists_every_piece_in_it() {
+    use graphing::certify::{Certificate, R};
+    let t = truth("M=dec:(-inf,0];inc:[0,inf)");
+    let a = certify_text("x^2-1", CompileOptions::default(), DEFAULT_BUDGET, None).unwrap();
+    let Row::Certified { value, .. } = &a.monotonicity else {
+        panic!("{:?}", a.monotonicity)
+    };
+    assert_eq!(value.len(), 2);
+    let rising: Vec<Monotone> = value
+        .iter()
+        .filter(|m| m.dir == Dir::Increasing)
+        .cloned()
+        .collect();
+    let over = |covers: Region, value: &[Monotone]| Row::Partial {
+        value: value.to_vec(),
+        cert: Certificate::new(covers),
+    };
+    let window = |a: f64, b: f64| Region::Window { a: R(a), b: R(b) };
+    assert_eq!(check_mono(&over(window(-2.0, 2.0), value), &t.m), None);
+    assert_eq!(check_mono(&over(Region::Points, &rising), &t.m), None);
+    assert_eq!(check_mono(&over(window(1.0, 2.0), &rising), &t.m), None);
+    let missing = check_mono(&over(window(-2.0, 2.0), &rising), &t.m);
+    assert!(missing.is_some_and(|m| m.contains("missing over")));
+    assert!(check_mono(&over(window(-1.0, 0.5), &rising), &t.m).is_some());
+}
+
+/// (x/16)³/3 − x turns at ±64, and 0·tan x's poles cut its rows to the
+/// window [−64, 64] (four times its largest constant): both turns on the
+/// window's ends. f′ is 0 there, its sign past them outside every box, so
+/// the certifier took each zero for a box's bound and listed "none for
+/// −64 ≤ x ≤ 64" as complete (review 21's audit of the window's promise).
+/// Now it can't tell, and says so.
+#[test]
+fn a_turn_on_the_windows_end_is_not_left_out() {
+    let src = "(x/16)^3/3-x+0*tan(x)";
+    let a = certify_text(src, CompileOptions::default(), DEFAULT_BUDGET, None).unwrap();
+    let empty = |r: &Row<Vec<graphing::certify::Extremum>>| match r {
+        Row::Certified { value, .. } => value.is_empty(),
+        Row::Partial { value, cert } => {
+            value.is_empty() && matches!(cert.covers, Region::Window { .. })
+        }
+        Row::Unknown { .. } => false,
+    };
+    assert!(!empty(&a.extrema), "{:?}", a.extrema);
+    let k = analyze_str(&format!("y={src}"));
+    for (flag, note) in &k.notes {
+        assert!(
+            flag & (flags::MINIMA | flags::MAXIMA) == 0 || !note.starts_with("None"),
+            "{note}"
+        );
+    }
+}
+
 #[test]
 fn a_typed_odd_degree_is_odd() {
     let a = certify_text(
