@@ -59,7 +59,8 @@ impl TextEdit {
     /// restored): not an edit of the user's, so there is nothing to undo
     /// after it, as after GTK's `set_text`.
     pub fn set_text(&mut self, text: &str) {
-        self.text = self.clamp(text).to_string();
+        let line = appcore::input::single_line(text);
+        self.text = self.clamp(&line).to_string();
         self.cursor = self.text.len();
         self.anchor = self.cursor;
         self.undone.clear();
@@ -179,11 +180,19 @@ impl TextEdit {
         true
     }
 
-    /// Insert at the caret (replacing any selection); newlines and control
-    /// characters are dropped and the length limit is respected. One edit
+    /// Insert at the caret (replacing any selection); the shared single-line
+    /// rule and the length limit apply, including to input-method commits. One edit
     /// (a paste, a keypad key, an assistive technology's text).
     pub fn insert(&mut self, s: &str) {
         self.edit(false, |e| e.put(s));
+    }
+
+    /// Replaces the whole field as one user edit (an assistive
+    /// technology's SetValue), rather than resetting its undo history as
+    /// an application-driven [`TextEdit::set_text`] does.
+    pub fn replace(&mut self, s: &str) {
+        self.select_all();
+        self.insert(s);
     }
 
     /// [`TextEdit::insert`] for what the keyboard types: a character typed
@@ -193,9 +202,17 @@ impl TextEdit {
         self.edit(one, |e| e.put(s));
     }
 
+    /// The text before the current consecutive run of typing. A graph
+    /// can hold that edit's slider values while a partial prefix does
+    /// not yet use them. Navigation, undo and non-typed edits end a run.
+    pub fn typing_origin(&self) -> Option<&str> {
+        self.typed
+            .and_then(|_| self.undone.last().map(|was| was.text.as_str()))
+    }
+
     fn put(&mut self, s: &str) {
         self.remove_selection();
-        let clean: String = s.chars().filter(|c| !c.is_control()).collect();
+        let clean = appcore::input::single_line(s);
         let room = if self.max_chars == 0 {
             usize::MAX
         } else {
@@ -366,6 +383,23 @@ mod tests {
         assert_eq!(e.text, "π");
         e.place(1, false); // inside π: snaps back
         assert_eq!(e.cursor, 0);
+        // Direct insertions (including input-method commits) and external
+        // whole replacements follow the same rule as clipboard paste.
+        for text in ["\n\n y=x\ny=2", "\r\n y=x\ry=2", "\u{2028} y=x\u{2029}y=2"] {
+            let mut e = TextEdit::new("before", 0);
+            e.select_all();
+            e.insert(text);
+            assert_eq!(e.text, " y=x");
+            assert!(e.undo());
+            assert_eq!(e.selected_text(), "before");
+            assert!(e.redo());
+            assert_eq!(e.text, " y=x");
+            e.set_text(text);
+            assert_eq!(e.text, " y=x");
+        }
+        let mut e = TextEdit::new("", 0);
+        e.insert("12\t34");
+        assert_eq!(e.text, "12 34");
     }
 
     /// Undo and redo (Ctrl+Z, Ctrl+Shift+Z), as GTK's fields and
@@ -442,6 +476,15 @@ mod tests {
         e.type_in("z");
         e.set_text("w");
         assert!(!e.undo() && !e.redo());
+        // AT-SPI whole-field replacement is a user edit, unlike a value
+        // written by the application itself.
+        let mut e = TextEdit::new("w", 0);
+        e.replace("new");
+        assert_eq!(e.text, "new");
+        assert!(e.undo());
+        assert_eq!(state(&e), ("w".into(), "w".into()));
+        assert!(e.redo());
+        assert_eq!(e.text, "new");
     }
 
     #[test]

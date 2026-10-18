@@ -1751,7 +1751,7 @@ impl App {
                     // An assistive technology's text: one line of it too.
                     let line = input::single_line(text);
                     if req.action == accesskit::Action::SetValue {
-                        e.set_text(&line);
+                        e.replace(&line);
                     } else {
                         e.insert(&line);
                     }
