@@ -46,6 +46,9 @@
 # a paste over the whole text are one Ctrl+Z each, and so are Backspace over
 # a selection and a cut; a move ends a run of typing. In GMNB, the field's
 # context menu (Shift+F10) has an Undo (U), which takes back an edit too.
+# Then a's value field: 0.7 typed (and Enter) and 0.5 set over AT-SPI are
+# one Ctrl+Z each, a following the text; a's slider moved, nothing is left
+# to undo.
 # Pointer input (wlrctl, swaymsg) has not been tried.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -223,13 +226,14 @@ expect() {
 }
 undo() { keys -M ctrl -k z -m ctrl; settle; }
 redo() { keys -M ctrl -M shift -k z -m shift -m ctrl; settle; }
-focus_equation() {
+focus_on() {
   for _ in $(seq 60); do
-    [ "$(atspi focused "$app" 2>/dev/null || true)" = Equation ] && return
+    [ "$(atspi focused "$app" 2>/dev/null || true)" = "$1" ] && return
     keys -k Tab
   done
-  fail "never reached the equation by Tab"
+  fail "never reached '$1' by Tab"
 }
+focus_equation() { focus_on Equation; }
 settext() { atspi settext "$app" Equation "$1" || fail "SetTextContents refused"; settle; }
 
 edit() {
@@ -386,6 +390,49 @@ edit() {
     expect "context menu Undo" "y=a*x+1" 0.3
     [ "$(atspi focused "$app" 2>/dev/null || true)" = Equation ] || fail "the menu stayed open"
   fi
+
+  # a's value field (GMNB: a spin button, which shows three decimals and
+  # takes a typed value on Enter; DGMNB: a field, which takes it as typed).
+  # Typed, set over AT-SPI: one Ctrl+Z each, the slider following the
+  # text. Its slider moved: the program's text, after which there is
+  # nothing to undo.
+  shown() { [ "$app" = gmnb ] && printf '%.3f' "$1" || printf '%s' "$1"; }
+  value_is() {
+    local text a
+    text=$(atspi text "$app" "Value of a")
+    a=$(slider_a)
+    echo "$1: value of a = '$text', a = $a"
+    [ "$text" = "$(shown "$2")" ] || fail "$1: expected the value '$(shown "$2")'"
+    [ "$a" = "$2" ] || fail "$1: expected a = $2"
+  }
+  value_is "start" 0.3
+  focus_on "Value of a"
+  keys -M ctrl -k a -m ctrl
+  for c in 0 . 7; do
+    keys "$c"
+    sleep 0.3
+  done
+  keys -k Return
+  settle
+  value_is "typed 0.7, Enter" 0.7
+  undo
+  value_is "Ctrl+Z" 0.3
+  redo
+  value_is "Ctrl+Shift+Z" 0.7
+  undo
+  value_is "Ctrl+Z" 0.3
+  atspi settext "$app" "Value of a" 0.5 || fail "SetTextContents refused"
+  settle
+  keys -k Return
+  settle
+  value_is "SetTextContents 0.5, Enter" 0.5
+  undo
+  value_is "Ctrl+Z" 0.3
+  atspi setvalue "$app" "Variable a" 0.6 || fail "a refused 0.6"
+  settle
+  value_is "slider set to 0.6" 0.6
+  undo
+  value_is "Ctrl+Z: nothing to undo" 0.6
 }
 
 $steps

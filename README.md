@@ -527,9 +527,10 @@ CI also runs checks that need more than `cargo test --workspace`:
   saved with the session, in use or not.
 - **Undo in a text field** (Ctrl+Z; Ctrl+Shift+Z or Ctrl+Y to redo). The
   original's equation box is a rich edit box with its own undo. Both
-  twins keep one model of it (`appcore::history`): DGMNB in every field,
-  GMNB in its equation and graph range fields instead of GtkText's own
-  history (which an assistive technology's `SetTextContents` clears, and
+  twins keep one model of it (`appcore::history`) in every field typed
+  into: the equations, the graph range fields, a variable's value, Date's
+  offsets and the converter's unit search (GMNB instead of GtkText's own
+  history, which an assistive technology's `SetTextContents` clears, and
   which takes the first character typed over a selection back apart from
   the rest). Each edit is taken back whole, and what it replaced is
   selected again: a run of typed characters, the first one typed over a
@@ -539,14 +540,24 @@ CI also runs checks that need more than `cargo test --workspace`:
   `SetTextContents`; in GMNB its `InsertText` and `DeleteText` too, which
   DGMNB's AccessKit doesn't offer). A text the app writes into a field
   itself (a variable's value when its slider moves, a range field
-  following the graph) ends that field's history, as GTK's `set_text`
-  does. GMNB's equation and range fields' context menu has the
-  original's Undo (its equation box's menu has one, enabled when there is
-  something to undo), after GTK's own entries; GtkText's menu has no
+  following the graph, the unit search cleared as its list closes or
+  opens) ends that field's history, as GTK's `set_text` does; the text a
+  field has already, written again, changes nothing. GMNB's value and
+  offset fields are spin buttons, which take a typed value on Enter or
+  as the focus leaves them and then write it back in their own format
+  (`0.3` as `0.300`): that is part of the user's edit, and one Ctrl+Z
+  takes both back; a value from their arrows or Page keys, like one from
+  the slider, is the app's text. DGMNB's fields take a value as it is
+  typed. In both, undo in a value field gives the variable (or the
+  offset) the value of the text it puts back, and Date's offsets take
+  digits alone, refusing a whole insertion with anything else in it, as
+  GTK's numeric spin buttons do (which also let a sign in at the start,
+  and take a negative offset as 0). GMNB's fields' context menu has the
+  original's Undo (its equation box's menu has one, enabled when there
+  is something to undo), after GTK's own entries; GtkText's menu has no
   Undo, and DGMNB's fields have no context menu. GTK leaves that menu,
   its own entries too, out of the accessibility tree (Shift+F10 or the
-  Menu key opens it). GMNB's other fields (a variable's value, Date's
-  offsets: spin buttons) keep GTK's undo.
+  Menu key opens it).
 - **What a screen reader is told** about the display and the parentheses
   follows the original's view model (`SetPrimaryDisplay`,
   `OnBinaryOperatorReceived`, `SetParenthesisCount`,
