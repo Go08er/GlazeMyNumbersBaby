@@ -812,6 +812,12 @@ pub fn reaches(bound: Bound, from: f64, low: bool, signed: bool, cleared: &[XBox
     }
 }
 
+/// An end of a monotone piece, and whether it is a window's edge.
+type Edge = (Bound, bool);
+
+/// A monotone piece, and whether its low and high ends are window edges.
+type PieceAt = (Monotone, bool, bool);
+
 /// The ends of the box the claims on f′ reach ([`reaches`]): each the
 /// box's bound if they reach it, else the double they start (end) at,
 /// closed; with whether the bound is a window's edge, and whether either
@@ -821,7 +827,7 @@ fn reached_ends(
     ib: &IBox,
     segs: &[Seg],
     clear: Cleared<'_>,
-) -> Option<((Bound, bool), (Bound, bool), bool)> {
+) -> Option<(Edge, Edge, bool)> {
     let (from, to) = decided_span(c1, ib)?;
     let carries = |s: Option<&Seg>| match s {
         Some(Seg::Sign(_)) => true,
@@ -852,11 +858,7 @@ fn reached_ends(
 /// The monotone pieces of each box, from f′'s sign walk, each from and to
 /// where the claims on f′ reach ([`reached_ends`]); and whether a piece
 /// was cut short of its box's bound so.
-fn monotone_pieces(
-    c1: &Cover,
-    boxes: &[IBox],
-    clear: Cleared<'_>,
-) -> Option<(Vec<(Monotone, bool, bool)>, bool)> {
+fn monotone_pieces(c1: &Cover, boxes: &[IBox], clear: Cleared<'_>) -> Option<(Vec<PieceAt>, bool)> {
     let mut out = Vec::new();
     let mut cut = false;
     for ib in boxes {
