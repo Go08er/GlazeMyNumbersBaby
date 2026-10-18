@@ -314,8 +314,10 @@ CI also runs checks that need more than `cargo test --workspace`:
   round 20 the checker before its audit accepted 1 of the fixed few's 44,
   17 of the corpus's 574 and 195 of the pool's 2,427 (two zeros listed as
   one, a value f takes left out of the range; the certificates before
-  this round's certifier changes), and the one before review 20 another
-  20 of the pool's exact limits written within 10⁻⁶³ of themselves.
+  this round's certifier changes) and 10 of the pool's 18 extrema at an
+  end of the domain read from past a turn, and the one before review 20
+  another 20 of the pool's exact limits written within 10⁻⁶³ of
+  themselves.
 - **Random cross-checking** (`--test crossfuzz`, same feature): the checks
   above take ordinary functions, shifted and scaled. This one generates
   expressions aimed at the families the review rounds kept finding bugs in
