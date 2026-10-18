@@ -37,13 +37,14 @@
 # Steps with "edit": the graphing page's equation field, its undo and its
 # slider (R20-M-04, R20-M-05, R20-L-03). y=a*x+1 set over AT-SPI, a set to
 # 0.3; all of it selected and x+a*x+2 typed a key at a time, a pause after
-# each: a is 0.3 throughout (while the text uses it), and one Ctrl+Z gives
+# each: a is 0.3 whenever its slider shows, and one Ctrl+Z gives
 # y=a*x+1 back, with a 0.3; a second the empty field; Ctrl+Shift+Z y=a*x+1,
 # a 0.3, and Ctrl+Y x+a*x+2 again. Each of AT-SPI's SetTextContents,
-# InsertText and DeleteText is taken back by one Ctrl+Z (and redone), and
+# InsertText and DeleteText (in GMNB: DGMNB's AccessKit offers only
+# SetTextContents) is taken back by one Ctrl+Z (and redone), and
 # "\n\n y=a*x+2\ny=3" set is " y=a*x+2". A keypad key over a selection and
 # a paste over the whole text are one Ctrl+Z each. In GMNB, the field's
-# context menu (Shift+F10) has an Undo, which takes back an edit too.
+# context menu (Shift+F10) has an Undo (U), which takes back an edit too.
 # Pointer input (wlrctl, swaymsg) has not been tried.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -244,7 +245,8 @@ edit() {
     text=$(equation)
     a=$(slider_a)
     echo "typed '$c': equation = '$text', a = $a"
-    case $text in *a*) [ "$a" = 0.3 ] || fail "a is $a while '$text' uses it" ;; esac
+    # Not shown while the text doesn't parse ("x+a*"); shown, it is 0.3.
+    [ "$a" = none ] || [ "$a" = 0.3 ] || fail "a is $a at '$text'"
   done
   expect "typed" "x+a*x+2" 0.3
   undo
@@ -272,16 +274,19 @@ edit() {
   expect "SetTextContents of lines" " y=a*x+2" 0.3
   undo
   expect "Ctrl+Z" "y=a*x+1" 0.3
-  atspi inserttext "$app" Equation 6 0 || fail "InsertText refused"
-  settle
-  expect "InsertText" "y=a*x+01" 0.3
-  undo
-  expect "Ctrl+Z" "y=a*x+1" 0.3
-  atspi deletetext "$app" Equation 0 2 || fail "DeleteText refused"
-  settle
-  expect "DeleteText" "a*x+1" 0.3
-  undo
-  expect "Ctrl+Z" "y=a*x+1" 0.3
+  # AccessKit's AT-SPI adapter (DGMNB's) offers SetTextContents alone.
+  if [ "$app" = gmnb ]; then
+    atspi inserttext "$app" Equation 6 0 || fail "InsertText refused"
+    settle
+    expect "InsertText" "y=a*x+01" 0.3
+    undo
+    expect "Ctrl+Z" "y=a*x+1" 0.3
+    atspi deletetext "$app" Equation 0 2 || fail "DeleteText refused"
+    settle
+    expect "DeleteText" "a*x+1" 0.3
+    undo
+    expect "Ctrl+Z" "y=a*x+1" 0.3
+  fi
 
   # R19-M-03's controls: a keypad key over a selection, a paste over the
   # whole text: one Ctrl+Z each.
@@ -324,18 +329,23 @@ edit() {
   expect "Ctrl+Z" "y=a*x+1" 0.3
 
   # GMNB: the context menu's Undo, as upstream's equation box has one.
+  # GTK 4.22 leaves a GtkText's menu out of the accessibility tree (the
+  # GtkText isn't presented, nor anything in it), so it is opened with
+  # Shift+F10 and its Undo chosen by its mnemonic, U: typed into the field
+  # instead, the u would show in the equation.
   if [ "$app" = gmnb ]; then
     settext "y=a*x+4"
     focus_equation
     keys -M shift -k F10 -m shift
     settle
-    local items
-    items=$(atspi items "$app")
-    echo "context menu: $(echo "$items" | tr '\n' ';')"
-    echo "$items" | grep -qx 'Undo | enabled' || fail "no Undo in the context menu"
-    atspi press "$app" Undo || fail "Undo refused"
+    local focused
+    focused=$(atspi focused "$app" 2>/dev/null || true)
+    echo "Shift+F10: focused = '$focused', menu items in the tree: $(atspi items "$app" | wc -l)"
+    [ "$focused" != Equation ] || fail "the context menu didn't take the focus"
+    keys u
     settle
     expect "context menu Undo" "y=a*x+1" 0.3
+    [ "$(atspi focused "$app" 2>/dev/null || true)" = Equation ] || fail "the menu stayed open"
   fi
 }
 
