@@ -34,7 +34,11 @@
 //! Insert Emoji); upstream's equation box has one (Cut, Copy, Paste, Undo,
 //! Select All: `EquationInputArea.xaml`, `MathRichEditContextMenu`), so
 //! the field's menu gets an Undo, in its own section after GTK's, enabled
-//! when there is something to undo, as upstream's (`CanUndo`).
+//! when there is something to undo, as upstream's (`CanUndo`). (GTK
+//! presents neither a GtkText nor anything in it to assistive technology,
+//! so that menu, GTK's own entries too, is not in the accessibility tree
+//! (GTK 4.22 `gtk_accessible_should_present`); Shift+F10 or the Menu key
+//! opens it.)
 //!
 //! A text the program writes itself ([`FieldUndo::write`]: a range field
 //! following the graph) is not the user's edit: it ends the history, as

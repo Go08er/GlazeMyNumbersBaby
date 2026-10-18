@@ -543,8 +543,10 @@ CI also runs checks that need more than `cargo test --workspace`:
   does. GMNB's equation and range fields' context menu has the
   original's Undo (its equation box's menu has one, enabled when there is
   something to undo), after GTK's own entries; GtkText's menu has no
-  Undo, and DGMNB's fields have no context menu. GMNB's other fields (a
-  variable's value, Date's offsets: spin buttons) keep GTK's undo.
+  Undo, and DGMNB's fields have no context menu. GTK leaves that menu,
+  its own entries too, out of the accessibility tree (Shift+F10 or the
+  Menu key opens it). GMNB's other fields (a variable's value, Date's
+  offsets: spin buttons) keep GTK's undo.
 - **What a screen reader is told** about the display and the parentheses
   follows the original's view model (`SetPrimaryDisplay`,
   `OnBinaryOperatorReceived`, `SetParenthesisCount`,
