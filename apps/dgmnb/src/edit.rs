@@ -1,5 +1,8 @@
 //! A single-line text editing model (caret, selection, word motion, undo).
-//! The UI layer draws it; this file only knows about strings.
+//! The UI layer draws it; this file only knows about strings. The undo
+//! history is appcore's ([`History`]), the one GMNB's fields keep too.
+
+use appcore::history::{History, Snapshot};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TextEdit {
@@ -12,26 +15,10 @@ pub struct TextEdit {
     pub max_chars: usize,
     /// Uncommitted input-method text shown at the caret.
     pub preedit: String,
-    /// What Ctrl+Z goes back to, the latest last: the text and the
-    /// selection before each edit ([`TextEdit::undo`]).
-    undone: Vec<Was>,
-    /// What Ctrl+Shift+Z goes forward to again, after an undo.
-    redone: Vec<Was>,
-    /// Where the last typed character left the caret, while typing goes
-    /// on: one typed there next is taken back together with it.
-    typed: Option<usize>,
+    /// The edits Ctrl+Z takes back ([`TextEdit::undo`]); positions in it
+    /// are byte offsets, as here.
+    history: History,
 }
-
-/// A text and its selection, as an undo or a redo puts them back.
-#[derive(Clone, Debug, PartialEq)]
-struct Was {
-    text: String,
-    cursor: usize,
-    anchor: usize,
-}
-
-/// How many edits a field remembers.
-const UNDO_STEPS: usize = 200;
 
 fn prev_boundary(s: &str, i: usize) -> usize {
     s[..i].char_indices().next_back().map_or(0, |(j, _)| j)
@@ -63,13 +50,11 @@ impl TextEdit {
         self.text = self.clamp(&line).to_string();
         self.cursor = self.text.len();
         self.anchor = self.cursor;
-        self.undone.clear();
-        self.redone.clear();
-        self.typed = None;
+        self.history.clear();
     }
 
-    fn now(&self) -> Was {
-        Was {
+    fn now(&self) -> Snapshot {
+        Snapshot {
             text: self.text.clone(),
             cursor: self.cursor,
             anchor: self.anchor,
@@ -81,52 +66,37 @@ impl TextEdit {
     /// is made of (a selection deleted and a text put in its place are
     /// one). A character typed (`typing`) where the last one typed left
     /// the caret joins that one's edit: a run of typing is taken back
-    /// whole, as GTK's fields take it.
+    /// whole ([`History::record`]).
     fn edit(&mut self, typing: bool, change: impl FnOnce(&mut Self)) {
         let was = self.now();
         change(self);
-        if self.text == was.text {
-            return;
-        }
-        let joins = typing && was.cursor == was.anchor && self.typed == Some(was.cursor);
-        if !joins {
-            if self.undone.len() == UNDO_STEPS {
-                self.undone.remove(0);
-            }
-            self.undone.push(was);
-        }
-        self.redone.clear();
-        self.typed = typing.then_some(self.cursor);
+        self.history.record(was, &self.text, self.cursor, typing);
     }
 
     /// Takes the last edit back (Ctrl+Z): the text as it was before it,
     /// with the selection it had (what a replacement replaced is selected
     /// again). False if there is none.
     pub fn undo(&mut self) -> bool {
-        let Some(was) = self.undone.pop() else {
-            return false;
-        };
-        self.redone.push(self.now());
-        self.restore(was);
-        true
+        match self.history.undo(self.now()) {
+            Some(was) => self.restore(was),
+            None => false,
+        }
     }
 
     /// Makes the edit last taken back again (Ctrl+Shift+Z, Ctrl+Y). False
     /// if there is none: any new edit forgets them.
     pub fn redo(&mut self) -> bool {
-        let Some(was) = self.redone.pop() else {
-            return false;
-        };
-        self.undone.push(self.now());
-        self.restore(was);
-        true
+        match self.history.redo(self.now()) {
+            Some(was) => self.restore(was),
+            None => false,
+        }
     }
 
-    fn restore(&mut self, was: Was) {
+    fn restore(&mut self, was: Snapshot) -> bool {
         self.text = was.text;
         self.cursor = was.cursor;
         self.anchor = was.anchor;
-        self.typed = None;
+        true
     }
 
     fn clamp<'a>(&self, text: &'a str) -> &'a str {
@@ -155,7 +125,7 @@ impl TextEdit {
     pub fn select_all(&mut self) {
         self.anchor = 0;
         self.cursor = self.text.len();
-        self.typed = None;
+        self.history.end_run();
     }
 
     /// Deletes the selection (a cut): an edit of its own.
@@ -200,14 +170,6 @@ impl TextEdit {
     pub fn type_in(&mut self, s: &str) {
         let one = s.chars().count() == 1;
         self.edit(one, |e| e.put(s));
-    }
-
-    /// The text before the current consecutive run of typing. A graph
-    /// can hold that edit's slider values while a partial prefix does
-    /// not yet use them. Navigation, undo and non-typed edits end a run.
-    pub fn typing_origin(&self) -> Option<&str> {
-        self.typed
-            .and_then(|_| self.undone.last().map(|was| was.text.as_str()))
     }
 
     fn put(&mut self, s: &str) {
@@ -278,7 +240,7 @@ impl TextEdit {
     }
 
     pub fn left(&mut self, select: bool, word: bool) {
-        self.typed = None;
+        self.history.end_run();
         if !select && self.has_selection() {
             self.cursor = self.selection().0;
         } else {
@@ -294,7 +256,7 @@ impl TextEdit {
     }
 
     pub fn right(&mut self, select: bool, word: bool) {
-        self.typed = None;
+        self.history.end_run();
         if !select && self.has_selection() {
             self.cursor = self.selection().1;
         } else {
@@ -310,7 +272,7 @@ impl TextEdit {
     }
 
     pub fn home(&mut self, select: bool) {
-        self.typed = None;
+        self.history.end_run();
         self.cursor = 0;
         if !select {
             self.anchor = 0;
@@ -318,7 +280,7 @@ impl TextEdit {
     }
 
     pub fn end(&mut self, select: bool) {
-        self.typed = None;
+        self.history.end_run();
         self.cursor = self.text.len();
         if !select {
             self.anchor = self.cursor;
@@ -327,7 +289,7 @@ impl TextEdit {
 
     /// Put the caret at `offset` (snapped to a char boundary).
     pub fn place(&mut self, mut offset: usize, select: bool) {
-        self.typed = None;
+        self.history.end_run();
         offset = offset.min(self.text.len());
         while !self.text.is_char_boundary(offset) {
             offset -= 1;
