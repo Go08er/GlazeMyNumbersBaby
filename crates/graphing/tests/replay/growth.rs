@@ -962,12 +962,36 @@ pub fn limit(fx: &Fx, at: At, over_x: bool) -> Option<Goes> {
     } else {
         fx.f.clone()
     };
-    let w = Reader { fx, at }.way(&e);
-    if let Some(s) = infinite(&w) {
+    goes(&Reader { fx, at }.way(&e))
+}
+
+fn goes(w: &Way) -> Option<Goes> {
+    if let Some(s) = infinite(w) {
         return Some(if s { Goes::PosInf } else { Goes::NegInf });
     }
-    let (v, _) = finite(&w)?;
+    let (v, _) = finite(w)?;
     bounded(&v).then_some(Goes::To(v))
+}
+
+/// What the facts say of any expression `e` of x (a part of f, say) as x
+/// → `at`: its leading term a·u^q·(ln u)^r (a enclosed, shown nonzero;
+/// (q, r) ≠ (0, 0)) where they give one, else its limit as [`limit`]
+/// reads f's (a finite one enclosed); `None` when they don't decide it.
+pub enum Reading {
+    Term(Iv, Rational, Rational),
+    Limit(Goes),
+}
+
+pub fn read_of(fx: &Fx, e: &Expr, at: At) -> Option<Reading> {
+    let w = Reader { fx, at }.way(e);
+    if let Term { a, q, r } = &w
+        && bounded(a)
+        && a.ne0()
+        && order(q, r) != Ordering::Equal
+    {
+        return Some(Reading::Term(a.clone(), q.clone(), r.clone()));
+    }
+    goes(&w).map(Reading::Limit)
 }
 
 #[allow(dead_code)]
