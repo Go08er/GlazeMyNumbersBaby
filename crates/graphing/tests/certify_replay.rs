@@ -4238,6 +4238,30 @@ fn an_open_high_end_is_left_out_of_the_bridge() {
     }
 }
 
+/// An exact limit through a step is derived too: atan(ceil x) → ±π/2, ceil
+/// x within 1 of x (crossfuzz's seed 2081, case 3598: its genuine labels
+/// were refused once overlap stopped standing for equality). A coefficient
+/// 10⁻⁶³ off is not that limit.
+#[test]
+fn an_exact_limit_through_a_step_is_derived() {
+    let mut v = certificate("atan(ceil(x))");
+    let domain = v["domain"].clone();
+    withhold_all_but(&mut v, "horizontal");
+    v["domain"] = domain;
+    assert_eq!(rejected(&v), None, "the genuine labels");
+    let h = value_of(&mut v, "horizontal")
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|h| h["side"] == "Right")
+        .unwrap();
+    h["exact"] = serde_json::json!(
+        "500000000000000000000000000000000000000000000000000000000000001/\
+         1000000000000000000000000000000000000000000000000000000000000000·π"
+    );
+    assert!(rejected(&v).is_some(), "a nearby coefficient");
+}
+
 /// One listed item is one number. Zeros at 0.4 and 0.6 listed as one item
 /// over both, and monotone pieces meeting at one enclosure that holds both
 /// turns of (x − 0.5)³ − 0.01(x − 0.5) (its decreasing piece left out),

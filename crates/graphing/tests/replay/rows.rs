@@ -4633,6 +4633,7 @@ fn exact_tail(fx: &Fx, e: &graphing::ast::Expr, right: bool, depth: usize) -> Op
             Err(up) => Err(!up),
         },
         Expr::Degrees(a) if fx.unit == iv::Unit::Degrees => next(a)?,
+        Expr::Bin(BinOp::Pow, b, u) if **b == Expr::Const(Constant::E) => exp_tail(next(u)?)?,
         Expr::Bin(op, a, b) => {
             let (a, mut b) = (next(a)?, next(b)?);
             let op = if *op == BinOp::Sub {
@@ -4689,8 +4690,53 @@ fn exact_tail(fx: &Fx, e: &graphing::ast::Expr, right: bool, depth: usize) -> Op
             };
             finite(if up { q } else { -q }, k)
         }
+        // A step within 1 of its argument goes where it goes (floor u ≤
+        // u < floor u + 1): atan(ceil x)'s ±π/2, which crossfuzz's seed
+        // 2081 found refused (round 20). sign u is ±1 once u is past 0.
+        Expr::Call(Func::Floor | Func::Ceil | Func::Round, a) => match next(&a[0])? {
+            Err(up) => Err(up),
+            Ok(_) => return None,
+        },
+        Expr::Call(Func::Sign, a) => match next(&a[0])? {
+            Err(up) => finite(rug::Rational::from(if up { 1 } else { -1 }), 0),
+            Ok((q, _)) if q != 0 => finite(rug::Rational::from(q.cmp0() as i32), 0),
+            Ok(_) => return None,
+        },
+        // eᵘ → 0 as u → −∞, → ∞ as u → ∞, → 1 as u → 0; √, ∛, sinh, cosh,
+        // log₁₀ grow with their argument; tanh → ±1.
+        Expr::Call(Func::Exp, a) => exp_tail(next(&a[0])?)?,
+        Expr::Call(Func::Sqrt, a) => match next(&a[0])? {
+            Err(true) => Err(true),
+            _ => return None,
+        },
+        Expr::Call(Func::Log, a) if a.len() == 1 => match next(&a[0])? {
+            Err(true) => Err(true),
+            _ => return None,
+        },
+        Expr::Call(Func::Cbrt | Func::Sinh, a) => match next(&a[0])? {
+            Err(up) => Err(up),
+            _ => return None,
+        },
+        Expr::Call(Func::Cosh, a) => match next(&a[0])? {
+            Err(_) => Err(true),
+            _ => return None,
+        },
+        Expr::Call(Func::Tanh, a) => match next(&a[0])? {
+            Err(up) => finite(rug::Rational::from(if up { 1 } else { -1 }), 0),
+            _ => return None,
+        },
         _ => return None,
     })
+}
+
+/// The limit of eᵘ from u's: 0 as u → −∞, ∞ as u → ∞, 1 as u → 0.
+fn exp_tail(u: ExactTail) -> Option<ExactTail> {
+    match u {
+        Err(true) => Some(Err(true)),
+        Err(false) => Some(Ok((rug::Rational::new(), 0))),
+        Ok((q, _)) if q == 0 => Some(Ok((rug::Rational::from(1), 0))),
+        Ok(_) => None,
+    }
 }
 
 /// Why the exact form `text` written for a limit doesn't stand (Ok: it
