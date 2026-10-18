@@ -788,8 +788,13 @@ pub fn certify(f: &Fun<'_>, source: &str) -> Analysis {
     };
     let (gc0, gc1, gc2) = (gap_clear(0, &cl0), gap_clear(1, &cl1), gap_clear(2, &cl2));
     // f′ ≡ 0 wherever f is defined, by its own tree (asked only when a gap
-    // is cleared: the derivative trees may cost a simplifier run).
+    // is cleared and f′ ≡ 0 on a box: the derivative trees may cost a
+    // simplifier run).
     let flat1 = !cl1.is_empty()
+        && c1
+            .leaves
+            .iter()
+            .any(|l| matches!(l, cover::Leaf::Equal { .. }))
         && (f
             .numerators
             .as_ref()
