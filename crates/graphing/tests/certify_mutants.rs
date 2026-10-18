@@ -593,6 +593,9 @@ fn mutants_of(
     let certified = status == "Certified";
     let value = b["value"].clone();
     let covers = b["cert"]["covers"].clone();
+    // Partial/Window still promises every feature inside that window.
+    // Only Partial/Points may discard items or shorten pieces freely.
+    let points_only = !certified && covers == json!("Points");
     let mut push = |op: &'static str,
                     what: String,
                     benign: Option<&'static str>,
@@ -617,7 +620,7 @@ fn mutants_of(
     for p in paths(&value, &Value::is_array) {
         let mut vv = value.clone();
         let items = at(&mut vv, &p).as_array().cloned().unwrap_or_default();
-        let fewer = (!certified).then_some(FEWER);
+        let fewer = points_only.then_some(FEWER);
         // (The range's ends name their sources pair by pair, beside the
         // row: they go with the pieces.)
         let listed = |items: Vec<Value>, ends: Option<Value>| {
@@ -835,7 +838,7 @@ fn mutants_of(
         // (A partial monotonicity row's end drawn in: DRAWN_IN. Not in a
         // complete row, where the pieces are all there are; not outward.)
         let inward = |new: (f64, f64)| {
-            (row == "monotonicity" && !certified && drawn_in(&value, p, (lo, hi), new))
+            (row == "monotonicity" && points_only && drawn_in(&value, p, (lo, hi), new))
                 .then_some(DRAWN_IN)
         };
         if lo == hi {
@@ -1001,7 +1004,7 @@ fn mutants_of(
             push(
                 "a family called one",
                 format!("{}: {} alone", show(&p), s["Every"]["x0"]),
-                (!certified).then_some(FEWER),
+                points_only.then_some(FEWER),
                 &set(&p, json!({"At": s["Every"]["x0"]})),
             );
         }
@@ -1022,7 +1025,7 @@ fn mutants_of(
             push(
                 "a family called one",
                 format!("{}: {was} dropped", show(&p)),
-                (!certified).then_some(FEWER),
+                points_only.then_some(FEWER),
                 &set(&p, Value::Null),
             );
         }
@@ -1243,7 +1246,7 @@ fn mutants_of(
                     hull.0,
                     hull.1
                 ),
-                (!certified).then_some(ONE_OF_TWO),
+                points_only.then_some(ONE_OF_TWO),
                 &|v: &mut Value| body_mut(v, row)["value"] = Value::Array(merged.clone()),
             );
         }
@@ -2121,6 +2124,46 @@ fn a_fixed_few_certificates_mutated_are_refused() {
         "{} mutants accepted",
         r.accepted.len()
     );
+}
+
+/// A partial list complete within a window cannot omit its zeros there.
+/// The checker already refuses these false rows; the mutation harness
+/// must ask it to do so, rather than exempt them as content preserving.
+#[test]
+fn window_completeness_is_not_exempted_as_a_points_only_list() {
+    let mut v = certificate("x^2-1", TrigUnit::Radians).unwrap();
+    let mut b = body(&v, "x_intercepts").unwrap().1.clone();
+    b["cert"]["covers"] = json!({"Window": {"a": -2.0, "b": 2.0}});
+    v["x_intercepts"] = json!({"Partial": b});
+    let genuine = replay::replay(&v).unwrap();
+    assert!(genuine.row_problems().is_empty());
+    let mut checked = 0;
+    mutants_of(&v, "x_intercepts", None, &mut |m| {
+        if !matches!(
+            m.op,
+            "list emptied" | "item removed" | "two places listed as one"
+        ) {
+            return;
+        }
+        assert!(m.benign.is_none(), "{}: {}", m.op, m.what);
+        let r = replay::replay(&m.v).unwrap();
+        assert!(
+            r.rows
+                .iter()
+                .any(|r| r.name == "x_intercepts" && !r.problems.is_empty())
+        );
+        checked += 1;
+    });
+    assert!(checked >= 4, "{checked} destructive window mutants checked");
+    body_mut(&mut v, "x_intercepts")["cert"]["covers"] = json!("Points");
+    let mut exempted = 0;
+    mutants_of(&v, "x_intercepts", None, &mut |m| {
+        if m.op == "list emptied" {
+            assert_eq!(m.benign, Some(FEWER));
+            exempted += 1;
+        }
+    });
+    assert_eq!(exempted, 1);
 }
 
 // ------------------------------------------------------------ reviewed
