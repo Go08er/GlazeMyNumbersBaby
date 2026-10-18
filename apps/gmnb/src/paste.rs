@@ -351,22 +351,21 @@ fn after_insertion(p: i32, at: i32, added: i32) -> i32 {
 /// none), the cursor after it, as typing it there does: one edit, one
 /// change of its text property for a caller holding its notifications
 /// (`freeze_notify`), and one step of its undo. Ctrl+Z takes it back
-/// whole, the text gone and what it replaced there again, selected, as
-/// GTK takes back a selection typed over. (The graphing equation field
-/// tells its graph of its text only once an operation is over, R17-M-03;
-/// with one step of undo the field is not left empty between two Ctrl+Z
-/// either, where the graph would forget the sliders the text still uses,
-/// R19-M-03.)
+/// whole, the text gone and what it replaced there again, selected.
+/// (GMNB's fields keep appcore's history, [`crate::undo`], which records
+/// each change of the text property as one edit; GTK's own fields, the
+/// same with GTK's history, R19-M-03.)
 ///
 /// As the text's input method does it: GtkText takes what is typed from
 /// its input method context's `commit` ([`im_context`]), and makes of it
-/// one undoable change, selection replaced (GTK 4.22 `gtk_text_commit_cb`,
-/// `gtk_text_enter_text`). No other way in is one step: GtkText takes a
+/// one change, selection replaced (GTK 4.22 `gtk_text_commit_cb`,
+/// `gtk_text_enter_text`). No other way in is one: GtkText takes a
 /// program's direct insertion or deletion as irreversible and clears its
-/// undo history for it (`gtk_text_insert_text`, `gtk_text_delete_text`),
-/// and its key-binding signals `delete-from-cursor` and `insert-at-cursor`
-/// are a step each, with the field as the first left it between two
-/// Ctrl+Z. Those are what is left without an input method context.
+/// own undo history for it (`gtk_text_insert_text`,
+/// `gtk_text_delete_text`), and its key-binding signals
+/// `delete-from-cursor` and `insert-at-cursor` are a change each, with
+/// the field as the first left it in between. Those are what is left
+/// without an input method context.
 pub(crate) fn replace_selection(text: &gtk::Text, with: &str) {
     match im_context(text) {
         Some(typed) if !with.is_empty() => typed.emit_by_name::<()>("commit", &[&with]),
