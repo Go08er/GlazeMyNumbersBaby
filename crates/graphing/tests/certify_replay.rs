@@ -4327,6 +4327,108 @@ fn an_exact_limit_beside_an_inexact_constant_is_derived() {
     }
 }
 
+/// Exact forms beside the genuine `text` (q or q·π): q moved by 10⁻⁶³,
+/// and for a multiple of π the rational within 10⁻⁶³ of it.
+fn beside_exact(text: &str) -> Vec<String> {
+    let (q, pi) = match text.split_once('·') {
+        Some((q, p)) => (q, Some(p)),
+        None => (text, None),
+    };
+    let q: rug::Rational = q.parse().expect("a rational coefficient");
+    let ten = rug::Integer::from(rug::Integer::u_pow_u(10, 63));
+    let nudged = q.clone() + rug::Rational::from((rug::Integer::from(1), ten.clone()));
+    let mut out = vec![match pi {
+        Some(p) => format!("{nudged}·{p}"),
+        None => nudged.to_string(),
+    }];
+    if let Some(p) = pi {
+        assert_eq!(p, "π", "{text}");
+        let mut v = rug::Float::with_val(400, rug::float::Constant::Pi);
+        v *= &q;
+        v *= &ten;
+        let near = v.round().to_integer().expect("finite");
+        out.push(rug::Rational::from((near, ten)).to_string());
+    }
+    out
+}
+
+/// A part going to ±∞ that the limit laws alone left as ∞ − ∞ (x² −
+/// (x − ln 3), 3x − |x|) or didn't read (ln(x)¹) goes as its leading
+/// term: arctan of it keeps its exact ±π/2 (crossfuzz's seed 2026, case
+/// 278, and seed 1451, cases 2535 and 3079, refused once overlap stopped
+/// standing for equality), and so does arccot its 0 and π. Terms of one
+/// scale divide to their exact coefficients' quotient ((π·x + 1)/(2π·x)
+/// → 1/2); a part the laws don't read (sin x/x, x + sin x) goes where the
+/// replay's dominant terms say, its numbers exact only as points. None of
+/// it reads a number off an enclosure that merely meets it: a coefficient
+/// 10⁻⁶³ off, or the rational within 10⁻⁶³ of a multiple of π, is still
+/// refused.
+#[test]
+fn an_exact_limit_through_a_dominant_term_is_derived() {
+    // The horizontal row's problems with an exact label.
+    let label_problems = |v: &serde_json::Value| -> Vec<String> {
+        let r = replay::replay(v).expect("replayed");
+        r.rows
+            .iter()
+            .filter(|r| r.name == "horizontal")
+            .flat_map(|r| r.problems.iter().filter(|p| p.contains(" is written ")))
+            .cloned()
+            .collect()
+    };
+    // `whole`: the certificate replays whole. (arccot's own enclosures far
+    // out are another matter: π/2 − arctan u loses the sign of an arccot
+    // near 0, and a tail value claim there is left unconfirmed. Only its
+    // labels are asked.)
+    use TrigUnit::{Degrees as D, Grads as G, Radians as R};
+    for (src, digits, unit, whole) in [
+        ("atan(x^2+3-abs(x-(ln(3))))", Some(16), R, true),
+        ("atan(x^2-(x-(ln(3))))", None, R, true),
+        ("atan(x^2-(x-(ln(3))))", None, D, true),
+        ("atan(3*x+6-abs(x-(0.1)))", Some(16), R, true),
+        ("atan(3*x-abs(x))", None, R, true),
+        ("atan(3*x-abs(x))", None, G, true),
+        ("atan(ln(x)^1)", Some(16), R, true),
+        ("atan(ln(x)^1)", None, D, true),
+        ("acot(x^2-(x-(ln(3))))", None, R, false),
+        ("acot(x^2-(x-(ln(3))))", None, D, false),
+        ("acot(x^2-(x-(ln(3))))", None, G, false),
+        ("acot(x-(ln(3))*x)", None, R, false),
+        ("((pi)*x+1)/(2*(pi)*x)", None, R, true),
+        ("atan(sin(x)/x)", None, R, true),
+        ("pi*(x+sin(x))/x", None, R, true),
+    ] {
+        let mut v = certificate_in(src, digits, unit);
+        let domain = v["domain"].clone();
+        withhold_all_but(&mut v, "horizontal");
+        v["domain"] = domain;
+        assert_eq!(
+            label_problems(&v),
+            Vec::<String>::new(),
+            "{src} {unit:?}: the genuine labels"
+        );
+        if whole {
+            assert_eq!(rejected(&v), None, "{src} {unit:?}: the genuine rows");
+        }
+        let items = value_of(&mut v, "horizontal").as_array().unwrap().clone();
+        let mut tried = 0;
+        for (i, h) in items.iter().enumerate() {
+            let Some(text) = h["exact"].as_str() else {
+                continue;
+            };
+            for wrong in beside_exact(text) {
+                let mut w = v.clone();
+                value_of(&mut w, "horizontal")[i]["exact"] = serde_json::json!(wrong);
+                assert!(
+                    !label_problems(&w).is_empty(),
+                    "{src} {unit:?}: {wrong} written for {text}"
+                );
+                tried += 1;
+            }
+        }
+        assert!(tried > 0, "{src} {unit:?}: no exact label to move");
+    }
+}
+
 /// An extremum at a closed end of the domain follows from f′'s sign beside
 /// it, not from a stretch far in: x − √x falls from 0 to its turn at 1/4,
 /// and "a minimum at 0", from f′ > 0 on [1, 2] and f continuous on [0, 1],
