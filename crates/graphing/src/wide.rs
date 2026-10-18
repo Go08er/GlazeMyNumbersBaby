@@ -23,11 +23,15 @@ use std::f64::consts::{LN_2, LN_10};
 /// ln 2 − `LN_2`, for exact argument reduction.
 const LN2_LO: f64 = 2.319_046_813_846_299_6e-17;
 
-/// 2⁵³: up to it every integer is a double, so a binary exponent is exact.
-/// Beyond it a value's exponent is itself rounded and its mantissa
-/// meaningless: such a value is "lost" (see [`Wide::far`]). It is still
-/// certainly beyond a double's range, but nothing that would bring it back
-/// into range (a logarithm, a root, a ratio of two of them) can be known.
+/// 2⁵³: below it every integer is a double, so a binary exponent is exact.
+/// From it on a value's exponent may itself be rounded (2⁵³ too: it is
+/// what 2⁵³ + 1 rounds to) and its mantissa meaningless: such a value is
+/// "lost" (see [`Wide::far`]). It is still certainly beyond a double's
+/// range, but nothing that would bring it back into range (a logarithm, a
+/// root, a ratio of two of them) can be known. (An exponent of exactly 2⁵³
+/// was taken as exact: e^6243314768165359, whose exponent rounds to 2⁵³,
+/// over e^6243314768165358 was 3.35, not e, and e^6243314768165358·8 over
+/// itself 4: review 21.)
 const TWO53: f64 = 9_007_199_254_740_992.0;
 
 /// 2⁴⁶. A far value ([`Wide::far`]) is past 2⁴⁷ binades at the least: a
@@ -201,13 +205,13 @@ fn pow_mag(m: f64, e: f64, t: dd::Dd) -> Wide {
     if !p.is_finite()
         || p.abs() >= TWO53
         || !e.is_finite()
-        || e.abs() > TWO53
+        || e.abs() >= TWO53
         || n.is_nan()
         || n.abs() >= TWO53
     {
         return if n.is_nan() {
             Wide::Unknown
-        } else if n.is_infinite() || n.abs() > TWO53 {
+        } else if n.is_infinite() || n.abs() >= TWO53 {
             Wide::Val(1.0, n.round())
         } else {
             Wide::Unknown
@@ -287,13 +291,47 @@ impl Wide {
 
     /// For a value beyond the doubles whose size isn't held (lost, or
     /// beyond even the extended range): which side of them it is on, above
-    /// them all (true) or nearer 0 than them all (false). That and its sign
-    /// are all that is known of it. Its exponent is rounded (two distinct
-    /// e^t far out share one), so two such values on one side can't be put
-    /// in order: nothing that compares or cancels them is known (R20-M-01).
+    /// them all (true) or nearer 0 than them all (false). That, its sign
+    /// and a bound on its size are all that is known of it. Its exponent is
+    /// rounded (two distinct e^t far out share one), so two such values on
+    /// one side can't be put in order: nothing that compares or cancels
+    /// them is known (R20-M-01).
+    ///
+    /// # The invariant
+    ///
+    /// Every far `Val(m, e)` this module makes stands for a real v of m's
+    /// sign, on the side of the doubles e's sign gives, and
+    ///
+    /// * **e finite** (a lost value, |e| ≥ 2⁵³): v = μ·2^T with 1 ≤ |μ| < 2
+    ///   and |T − e| ≤ 2⁻⁴⁰·|T|. Each operation rounds an exponent by 2⁻⁵³
+    ///   of itself and drops a binade at most (a sum, a mantissa); none
+    ///   cancels two far exponents (`add`, `div` refuse to); a product or
+    ///   quotient with a value within reach pulls a lost value toward 1 by
+    ///   [`NEAR`] binades at most, on one past 2⁵³, multiplying its error by
+    ///   1 + 2⁻⁷ at most. After d operations the error is below
+    ///   d·2⁻⁵²·(1 + 2⁻⁷)^d: about 2⁻⁴¹ for the 256 a typed expression can
+    ///   nest (`parser::MAX_TREE_DEPTH`), far inside [`farther`]'s 2⁻²⁰.
+    /// * **e infinite**: |T| > 2⁴⁷ − k·[`STEP`] after k such pulls, and no
+    ///   more. A count whose logarithm passed `functions::FAR_LOG` is that
+    ///   near; whatever else is made so (e^(e¹⁰⁰⁰), a power past a double)
+    ///   is far farther. It may be nearer 1 than a lost value.
+    ///
+    /// So a far result keeps an operand's exponent only where that exponent
+    /// describes the result within this bound: the far summand beside one
+    /// [`farther`] shows negligible, the larger of two lost values of one
+    /// sign in a sum, the selected one of two lost values in min/max
+    /// (`apply2`). Where an infinite exponent meets a lost one and the
+    /// result's size could be either's, the result is infinite: past 2⁴⁷,
+    /// no more. Exponent arithmetic (t·e, e₁ + e₂ of one sign, e₁ − e₂ of
+    /// two) keeps the bound. What would need more of v (its order against a
+    /// far value of its side, its logarithm, a root or small power of an
+    /// infinite one, its mantissa's parity) is unknown, and nothing far
+    /// comes back within reach (`unless_lost`). New code that makes a far
+    /// value must say which of these keeps it within the bound. (Review 21:
+    /// min/max returned its first operand's exponent for either.)
     pub(crate) fn far(self) -> Option<bool> {
         match self {
-            Wide::Val(m, e) if m != 0.0 && (e.is_infinite() || e.abs() > TWO53) => Some(e > 0.0),
+            Wide::Val(m, e) if m != 0.0 && (e.is_infinite() || e.abs() >= TWO53) => Some(e > 0.0),
             _ => None,
         }
     }
@@ -331,21 +369,36 @@ impl Wide {
             && b != 0.0
         {
             match (self.far(), o.far()) {
-                // Two far values: of one sign, the sum is far on the side
-                // of the larger; on two sides the one above the doubles
-                // rules. But of two signs on one side which is larger
-                // isn't known, so neither is the sum, its sign nor whether
-                // it is 0 (R20-M-01: e^(10³⁰⁰ + 2·10²⁸⁴) − e^(10³⁰⁰ + 3·10²⁸⁴)
-                // was an exact 0, its exponents rounded alike; with
-                // exponents rounded the other way, a product of two such
-                // less a third had the wrong sign).
+                // Two far values: on two sides the one above the doubles
+                // rules. Of two signs on one side which is larger isn't
+                // known, so neither is the sum, its sign nor whether it is
+                // 0 (R20-M-01: e^(10³⁰⁰ + 2·10²⁸⁴) − e^(10³⁰⁰ + 3·10²⁸⁴) was
+                // an exact 0, its exponents rounded alike; with exponents
+                // rounded the other way, a product of two such less a
+                // third had the wrong sign). Of one sign on one side, the
+                // sum is within a binade of the larger in size: of two lost
+                // ones, the larger exponent (above the doubles) or the
+                // nearer 0 (below), each within its small error of the
+                // truth. One beyond even the extended range is past 2⁴⁷
+                // binades and no more (see `far`), so may be nearer 1 than
+                // a lost one: the sum is then known to be that far only
+                // (review 21: e^(−10³⁰⁰) + e/(5·10¹²)!, about e^(−1.4·10¹⁴),
+                // kept e^(−10³⁰⁰)'s exponent, and a small power of it drew
+                // a false curve).
                 (Some(ha), Some(hb)) => {
                     return if ha != hb {
                         if ha { self } else { o }
-                    } else if a.signum() == b.signum() {
-                        if ea >= eb { self } else { o }
-                    } else {
+                    } else if a.signum() != b.signum() {
                         Wide::Unknown
+                    } else if ea.is_infinite() || eb.is_infinite() {
+                        Wide::Val(
+                            a.signum(),
+                            if ha { f64::INFINITY } else { f64::NEG_INFINITY },
+                        )
+                    } else if ea >= eb {
+                        self
+                    } else {
+                        o
                     };
                 }
                 // A far value and one within reach: the far one rules if
@@ -982,22 +1035,34 @@ pub(crate) fn apply2(f: Fn2, a: Wide, b: Wide) -> Wide {
             Some((x, y)) => count(f.apply(x, y), || fns::count_beyond(x, y, f == Fn2::NPr)),
             None => Wide::Unknown,
         },
-        // Two far values of one sign on one side can't be put in order.
-        // Keep only their sign and side, not either operand's exponent:
-        // it needn't describe the selected value. A small power could
-        // otherwise use the larger exponent for the smaller value and
-        // claim it still far beyond the doubles (review 21).
+        // Two far values of one sign on one side can't be put in order,
+        // and the result must still keep `Wide::far`'s invariant: the first
+        // operand's exponent needn't describe the selected value (review
+        // 21: min(e^(10³⁰⁰), e^(10¹⁶))^(10⁻¹⁶) was taken for far above the
+        // doubles; it is e). Of two lost values, the min of two positive
+        // ones and the max of two negative ones is the one nearer 0 in
+        // size, so its exponent is the lower; the others take the higher.
+        // The exponent so chosen is within the bound of the selected
+        // value's, whichever value that truly is. One beyond even the
+        // extended range may be on either side of a lost one, so with one
+        // the result is only past 2⁴⁷ binades.
         Fn2::Min | Fn2::Max
             if a.far().is_some() && a.far() == b.far() && am.signum() == bm.signum() =>
         {
-            Wide::Val(
-                am.signum(),
-                if ae > 0.0 {
-                    f64::INFINITY
-                } else {
-                    f64::NEG_INFINITY
-                },
-            )
+            if ae.is_infinite() || be.is_infinite() {
+                Wide::Val(
+                    am.signum(),
+                    if ae > 0.0 {
+                        f64::INFINITY
+                    } else {
+                        f64::NEG_INFINITY
+                    },
+                )
+            } else if (ae <= be) == ((f == Fn2::Min) == (am > 0.0)) {
+                a
+            } else {
+                b
+            }
         }
         Fn2::Min | Fn2::Max => match a.cmp(b) {
             Some(Ordering::Greater) => {
