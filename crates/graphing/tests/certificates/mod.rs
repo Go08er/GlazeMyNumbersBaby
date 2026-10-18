@@ -198,6 +198,32 @@ pub fn pool() -> Vec<(String, TrigUnit)> {
     out
 }
 
+/// Functions with a monotone piece or an extremum beside an open end of
+/// the domain, or a closed one f isn't differentiable at, where the claims
+/// on f′ start a double in (round 20): a piece or extremum is listed at the
+/// end only across a gap shown clear, and otherwise from where its claims
+/// start. `pool` says whether the function belongs to the long run (the
+/// rest are in the corpus test). The first three were refused by the
+/// strict replay: the piece of √(x − 1000)·ln(x − 1000) + x from 1000,
+/// atan(ln|x|)'s up to 0 in degrees, √(1 − x²) − ∛(1 − x²)'s from ±1.
+pub fn open_ends(pool: bool) -> Vec<(String, TrigUnit)> {
+    let set: &[(&str, TrigUnit, bool)] = &[
+        ("sqrt(x-1000)*ln(x-1000)+x", TrigUnit::Radians, false),
+        ("atan(ln(abs(x)))", TrigUnit::Degrees, false),
+        ("sqrt(1-x^2)-(1-x^2)^(1/3)", TrigUnit::Radians, false),
+        ("atan(ln(abs(x)))", TrigUnit::Grads, true),
+        ("atan(ln(abs(x-1000)))", TrigUnit::Degrees, true),
+        ("atan(ln(abs(x+3)))", TrigUnit::Grads, true),
+        ("atan(ln(abs(x-0.5)))", TrigUnit::Degrees, true),
+        ("sqrt(x+3)*ln(x+3)+x", TrigUnit::Degrees, true),
+        ("sqrt(x-0.5)*ln(x-0.5)+x", TrigUnit::Grads, true),
+    ];
+    set.iter()
+        .filter(|(_, _, p)| *p == pool)
+        .map(|(s, u, _)| (s.to_string(), *u))
+        .collect()
+}
+
 /// The kgf set in the other angle units.
 pub fn units() -> Vec<(String, TrigUnit)> {
     let mut out = Vec::new();

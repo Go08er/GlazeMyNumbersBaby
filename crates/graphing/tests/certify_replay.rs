@@ -16,8 +16,10 @@
 //! standalone `replay` example's rule (since review 17, Question 2).
 //!
 //! `cargo test -p graphing --features mpfr-oracle --test certify_replay`
-//! replays the certify corpus (its fixtures and review rounds 9–11);
-//! `-- --ignored` adds the kgf set in degrees and grads and a few hundred
+//! replays the certify corpus (its fixtures and review rounds 9–11, and
+//! three functions at open domain ends, round 20);
+//! `-- --ignored` adds the kgf set in degrees and grads, more open ends
+//! (shifted, in degrees and grads) and a few hundred
 //! functions of the analysis sweep's pool. `REPLAY_FILTER=text` keeps the
 //! functions whose source contains `text`; `REPLAY_VERBOSE=1` prints every
 //! claim that isn't strong.
@@ -26,7 +28,7 @@
 mod certificates;
 mod replay;
 
-use certificates::{CORPUS, corpus, pool, review, units};
+use certificates::{CORPUS, corpus, open_ends, pool, review, units};
 use graphing::certify::{DEFAULT_BUDGET, certify_text};
 use graphing::compile::CompileOptions;
 use graphing::functions::TrigUnit;
@@ -257,6 +259,8 @@ fn corpus_certificates_replay() {
         review().len()
     );
     assert!(fs.len() >= 140, "only {} corpus functions", fs.len());
+    let mut fs = fs;
+    fs.extend(open_ends(false));
     // Every claim of the corpus proved (none is left open).
     let fails = run(fs);
     assert!(fails.is_empty(), "{} failures", fails.len());
@@ -266,6 +270,7 @@ fn corpus_certificates_replay() {
 #[ignore = "long: the kgf set in degrees and grads, and the sweep's pool"]
 fn pool_certificates_replay() {
     let mut fs = units();
+    fs.extend(open_ends(true));
     fs.extend(pool());
     // Every claim of the pool proved too: the standalone replay exits 0 on
     // each of these genuine certificates (review 17, Question 2).
@@ -3349,13 +3354,18 @@ fn the_derivatives_own_form_is_the_derivative() {
     assert!(replay::algebra::derivative_tree(&f, &lits, &[], Unit::Radians).is_none());
 }
 
-/// The first monotone piece of `v`, beside the open end at `end`.
+/// The first monotone piece of `v`, beside the open end at `end` (from
+/// it, or from the double after it).
 fn piece_from(v: &mut serde_json::Value, end: f64) -> &mut serde_json::Value {
     value_of(v, "monotonicity")
         .as_array_mut()
         .unwrap()
         .iter_mut()
-        .find(|p| p["on"]["lo"]["At"]["x"]["lo"] == serde_json::json!(end))
+        .find(|p| {
+            [end, end.next_up()]
+                .iter()
+                .any(|e| p["on"]["lo"]["At"]["x"]["lo"] == serde_json::json!(e))
+        })
         .expect("a piece from the open end")
 }
 
@@ -3365,6 +3375,12 @@ fn piece_from(v: &mut serde_json::Value, end: f64) -> &mut serde_json::Value {
 /// of the tree: twice that function, or its cube root's, was refused. The
 /// sign beside the end is now read off f′'s own form, factor by factor;
 /// and the same piece called rising is refused, for each.
+///
+/// Since round 20 the certifier lists a piece only from where its claims
+/// reach (`certify::rows::reaches`): no GapClear reaches these ends, so
+/// the genuine pieces start at the double after the end, closed. The
+/// replay's own reading of the slope is asked of each piece moved back to
+/// the open end, as the certifier listed it before.
 #[test]
 fn the_slope_beside_an_open_end_is_read_off_the_derivatives_factors() {
     for (src, end) in [
@@ -3376,11 +3392,22 @@ fn the_slope_beside_an_open_end_is_read_off_the_derivatives_factors() {
         let base = certificate(src);
         assert_eq!(rejected(&base), None, "{src}");
         let mut v = base.clone();
+        let first = f64::next_up(end);
+        let cleared = claims_of(&mut v, "monotonicity")
+            .iter()
+            .any(|c| c.get("GapClear").is_some_and(|g| g["x"]["a"] == end));
         let piece = piece_from(&mut v, end);
         assert_eq!(piece["dir"], "Decreasing", "{src}");
-        // The claims start at the double after the end: the stretch
-        // between is the replay's own to decide.
-        let first = end.next_up();
+        assert!(!cleared, "{src}: the gap beside the end is cleared now");
+        assert_eq!(
+            piece["on"]["lo"],
+            serde_json::json!({"At": {"x": {"lo": first, "hi": first}, "closed": true}}),
+            "{src}: the piece starts where its claims do"
+        );
+        // Moved back to the open end: the claims start at the double
+        // after it, and the stretch between is the replay's own to decide.
+        piece["on"]["lo"] = serde_json::json!({"At": {"x": {"lo": end, "hi": end}, "closed": false}});
+        assert_eq!(rejected(&v), None, "{src}: falling from its open end");
         let from_the_end = claims_of(&mut v, "monotonicity").iter().any(|c| {
             c.to_string().contains("\"F1\"")
                 && ["Beyond", "Factors", "NoCross"].iter().any(|k| {
