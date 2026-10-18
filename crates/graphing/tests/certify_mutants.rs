@@ -2150,8 +2150,6 @@ const ZERO_LIMIT: &str = "f → 0 on each side, as the borrowed row's enclosures
                           looks like 0) say";
 const NO_ZEROS_NO_POLES: &str = "f is continuous and positive everywhere (≥ 1 or ≥ 10¹³−1), so \
                                  \"none\" is true";
-const ATAN_ROW_ALONE: &str = "the row is the genuine one, which is true; without its claims the \
-                              replay re-derives it from f alone (f′ < 0 on each side of the pole)";
 const CSCH_LIKE_1_OVER: &str = "csch(x−1000) and 1/(x−c) both have range ℝ∖{0} (pieces open at \
                                 an end enclosing 0) and tend to 0 on each side";
 
@@ -2228,22 +2226,10 @@ const KNOWN: &[Known] = &[
         why: "f is a quadratic with positive leading coefficient (f″ > 0): no inflection within [-16, 16], as the borrowed row (none over that window) says" },
 
     // ---- the pool
-    Known { run: "pool", src: "atan(1/x) [Degrees]", row: "monotonicity",
-        op: "claims withheld",
-        what: "the row as it is, with none of its claims",
-        why: ATAN_ROW_ALONE },
-    Known { run: "pool", src: "atan(1/x) [Grads]", row: "monotonicity",
-        op: "claims withheld",
-        what: "the row as it is, with none of its claims",
-        why: ATAN_ROW_ALONE },
-    Known { run: "pool", src: "csch(x) [Degrees]", row: "monotonicity",
-        op: "row of another function",
-        what: r#"the monotonicity row of "y=atan(1/x)""#,
-        why: "csch decreases on (−∞, 0) and on (0, ∞), as atan(1/x) does" },
-    Known { run: "pool", src: "csch(x) [Grads]", row: "monotonicity",
-        op: "row of another function",
-        what: r#"the monotonicity row of "y=atan(1/x)""#,
-        why: "csch decreases on (−∞, 0) and on (0, ∞), as atan(1/x) does" },
+    // (atan(1/x)'s monotone rows in degrees and grads, alone and borrowed
+    // by csch(x), were here as partial rows. The certifier now certifies
+    // them complete (p12-cert), which neither its claims withheld nor
+    // atan's claims on csch can carry: both are refused.)
     Known { run: "pool", src: "csch(x) [Degrees]", row: "horizontal",
         op: "row of another function",
         what: r#"the horizontal row of "y=atan(1/x)""#,

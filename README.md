@@ -297,11 +297,12 @@ CI also runs checks that need more than `cargo test --workspace`:
   10⁻⁶³ of it, two zeros or poles listed as one, a pole, zero or excluded
   family dropped with every claim about it and a gap in their place, pieces
   joined over the place between them, a value f takes split out of the
-  range as a hole's), and the replay must refuse each result, with the
+  range as a hole's, an extremum at an end of the domain read from past
+  the turn beside it), and the replay must refuse each result, with the
   rest of the certificate there, withheld, or with every genuine claim
   given to the row. CI runs a fixed few (3,048 mutants, none accepted).
   The long runs (204 corpus functions, 41,958 mutants; 607 pool functions,
-  150,615) accept 17 and 16: each a true statement the replay proved (a
+  151,313) accept 17 and 12: each a true statement the replay proved (a
   row borrowed from another function that happens to hold, an enclosure
   narrowed onto the number it holds), reviewed by hand in a table with the
   reason it is true. A long run fails on an accepted mutant not in the
@@ -312,9 +313,9 @@ CI also runs checks that need more than `cargo test --workspace`:
   review 19's fixes accepted 4,410 of 39,611. Of the operators added in
   round 20 the checker before its audit accepted 1 of the fixed few's 44,
   17 of the corpus's 574 and 195 of the pool's 2,427 (two zeros listed as
-  one, a value f takes left out of the range), and the one before review
-  20 another 20 of the pool's exact limits written within 10⁻⁶³ of
-  themselves.
+  one, a value f takes left out of the range; the certificates before
+  this round's certifier changes), and the one before review 20 another
+  20 of the pool's exact limits written within 10⁻⁶³ of themselves.
 - **Random cross-checking** (`--test crossfuzz`, same feature): the checks
   above take ordinary functions, shifted and scaled. This one generates
   expressions aimed at the families the review rounds kept finding bugs in
