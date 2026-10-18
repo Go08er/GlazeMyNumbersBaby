@@ -43,9 +43,9 @@
 # InsertText and DeleteText (in GMNB: DGMNB's AccessKit offers only
 # SetTextContents) is taken back by one Ctrl+Z (and redone), and
 # "\n\n y=a*x+2\ny=3" set is " y=a*x+2". A keypad key over a selection and
-# a paste over the whole text are one Ctrl+Z each; a move ends a run of
-# typing. In GMNB, the field's context menu (Shift+F10) has an Undo (U),
-# which takes back an edit too.
+# a paste over the whole text are one Ctrl+Z each, and so are Backspace over
+# a selection and a cut; a move ends a run of typing. In GMNB, the field's
+# context menu (Shift+F10) has an Undo (U), which takes back an edit too.
 # Pointer input (wlrctl, swaymsg) has not been tried.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -349,6 +349,21 @@ edit() {
   expect "typed 00, Left, Right, 7" "y=a*x+1007" 0.3
   undo
   expect "Ctrl+Z" "y=a*x+100" 0.3
+  undo
+  expect "Ctrl+Z" "y=a*x+1" 0.3
+
+  # Backspace over a selection, and a cut, are an edit each.
+  keys -k End
+  keys -M shift -k Left -k Left -m shift
+  keys -k BackSpace
+  settle
+  expect "Backspace over '+1'" "y=a*x" 0.3
+  undo
+  expect "Ctrl+Z" "y=a*x+1" 0.3
+  keys -M ctrl -k a -m ctrl
+  keys -M ctrl -k x -m ctrl
+  settle
+  expect "Ctrl+A, Ctrl+X" "" none
   undo
   expect "Ctrl+Z" "y=a*x+1" 0.3
 
