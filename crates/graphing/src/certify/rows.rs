@@ -9,6 +9,21 @@ use crate::analysis::format::Nice;
 use crate::interval::{Dec, DecInterval, Interval};
 use serde::{Deserialize, Serialize};
 
+/// The gaps shown clear of f⁽ᵏ⁾'s zeros ([`gaps_clear`]), each with its
+/// `GapClear` claim in the rows on f⁽ᵏ⁾.
+#[derive(Clone, Copy, Debug)]
+pub struct Cleared<'a> {
+    /// Every gap is.
+    pub all: bool,
+    /// Those that are.
+    pub gaps: &'a [XBox],
+    /// f⁽ᵏ⁾'s own tree is exactly 0 (a rational f's numerator, or the
+    /// symbolic derivative of an f without steps or kinks): f⁽ᵏ⁾ ≡ 0
+    /// wherever f is defined, the gaps included, so a constant piece
+    /// reaches across one as a strictly monotone one does.
+    pub flat: bool,
+}
+
 /// Whether every leaf of a cover is decided and the gaps beside excluded
 /// points are clear (`clear`, from [`gaps_clear`]): an undecided box
 /// anywhere leaves the row incomplete, as a zero or a turn could hide
@@ -514,6 +529,13 @@ fn own_tree_too(f: &Fun<'_>, x: Enc, span: Interval, need: Dec) -> Result<bool, 
 /// from the end to the first box f′ decides, and f′ keeps one strict sign
 /// beside the end (a zero right at the end aside), so f is strictly
 /// monotone beside it; rising away from a low end makes it a minimum.
+/// The claims on f′ must reach the end ([`reaches`]): where f′ is claimed
+/// from a double in (an end f isn't differentiable at, or one known only
+/// to an enclosure), the gap between must be shown clear of f′'s zeros
+/// (`cleared`). A zero of f′ there would be a turn less than an ulp from
+/// the end, and f continuous to the end with f′'s sign from a double in
+/// is no extremum at the end then. (The rule was the replay's for a
+/// complete row alone; a partial row listed the end anyway. Round 20.)
 /// `Ok(None)`: not decided; `Ok(Some(None))`: the end is no closed domain
 /// end.
 fn end_extremum(
@@ -522,6 +544,7 @@ fn end_extremum(
     ib: &IBox,
     low: bool,
     segs: &[Seg],
+    cleared: &[XBox],
     cl: &mut Vec<Claim>,
 ) -> Result<Option<Option<Extremum>>, Stop> {
     let (bound, clipped) = if low {
@@ -555,6 +578,18 @@ fn end_extremum(
     let Some(sign) = sign else {
         return Ok(None);
     };
+    let Some((from, to)) = decided_span(c1, ib) else {
+        return Ok(None);
+    };
+    let (start, beside) = if low {
+        (from, segs.first())
+    } else {
+        (to, segs.last())
+    };
+    let signed = matches!(beside, Some(Seg::Sign(_)));
+    if !reaches(bound, start, low, signed, cleared) {
+        return Ok(None);
+    }
     // The first leaf beside the end (an exact zero at the end aside).
     let mut leaves: Vec<(f64, f64)> = c1
         .leaves
@@ -605,9 +640,9 @@ pub fn extrema(
     c1: &Cover,
     boxes: &[IBox],
     scope: &Scope,
-    clear: bool,
+    clear: Cleared<'_>,
 ) -> Result<Row<Vec<Extremum>>, Stop> {
-    let (gaps, mut complete) = settle(c1, clear);
+    let (gaps, mut complete) = settle(c1, clear.all);
     let mut out = Vec::new();
     let mut cl = claims(c1, &Subject::f(1), &[0.0]);
     cl.extend(gaps);
@@ -620,7 +655,7 @@ pub fn extrema(
                 // An isolated point: one end.
                 continue;
             }
-            match end_extremum(f, c1, ib, low, &segs, &mut cl)? {
+            match end_extremum(f, c1, ib, low, &segs, clear.gaps, &mut cl)? {
                 Some(Some(e)) => out.push(e),
                 Some(None) => {}
                 None => complete = false,
@@ -722,31 +757,131 @@ pub fn inflections(
 
 // ---------------------------------------------------------- monotonicity
 
-/// The monotone pieces of each box, from f′'s sign walk.
-fn monotone_pieces(c1: &Cover, boxes: &[IBox]) -> Option<Vec<(Monotone, bool, bool)>> {
+/// The first and last points inside the box that the cover decides (a
+/// leaf's end, or a kink box's), if it decides any.
+fn decided_span(c: &Cover, ib: &IBox) -> Option<(f64, f64)> {
+    c.leaves
+        .iter()
+        .map(|l| l.span())
+        .chain(c.kinks.iter().copied())
+        .filter(|&(a, b)| a >= ib.a && b <= ib.b)
+        .fold(None, |acc, (a, b)| {
+            Some(match acc {
+                None => (a, b),
+                Some((l, r)) => (l.min(a), r.max(b)),
+            })
+        })
+}
+
+/// Whether the claims on f′ reach the box's bound `bound` (its low end
+/// when `low`) from `from`, the first (last) point the cover of f′
+/// decides in the box: the bound is that point (a closed end at a double,
+/// decided as a point, or a window's edge), or ±∞ with a tail decided out
+/// to it; or the reals between lie in a gap shown clear of f′'s zeros
+/// (`cleared`, each with its `GapClear` claim) and f′ is strictly signed
+/// beside it (`signed`: the walk starts with a sign there), so f′ keeps
+/// that sign across the gap and f is monotone out to the bound. (Or f′ is
+/// ≡ 0 beside it and everywhere f is defined: [`Cleared::flat`]. A gap
+/// clear of zeros alone doesn't keep f constant: f′ may be 0 at `from`
+/// and nonzero inside.)
+///
+/// Otherwise nothing decides f′ between the bound and `from`, and a
+/// monotone piece or an extremum placed at the bound would rest on no
+/// claim: √(x − 1000)·ln(x − 1000) + x's falling piece was listed from
+/// the open end 1000, its claims starting a double in, the gap between
+/// not shown clear (f′ → −∞ there, but its tree's enclosure over the gap
+/// is the whole line). The strict replay refused it (round 20). A piece
+/// starts where its claims do instead ([`monotone_pieces`]).
+pub fn reaches(bound: Bound, from: f64, low: bool, signed: bool, cleared: &[XBox]) -> bool {
+    match bound {
+        Bound::NegInf | Bound::PosInf => from.is_infinite(),
+        Bound::At { x, closed } => {
+            let end = if low { x.lo.0 } else { x.hi.0 };
+            if closed && x.is_point() && from == end {
+                return true;
+            }
+            signed
+                && cleared.iter().any(|g| {
+                    if low {
+                        g.a.0 <= x.lo.0 && from <= g.b.0
+                    } else {
+                        g.a.0 <= from && x.hi.0 <= g.b.0
+                    }
+                })
+        }
+    }
+}
+
+/// An end of a monotone piece, and whether it is a window's edge.
+type Edge = (Bound, bool);
+
+/// A monotone piece, and whether its low and high ends are window edges.
+type PieceAt = (Monotone, bool, bool);
+
+/// The ends of the box the claims on f′ reach ([`reaches`]): each the
+/// box's bound if they reach it, else the double they start (end) at,
+/// closed; with whether the bound is a window's edge, and whether either
+/// end was moved in.
+fn reached_ends(
+    c1: &Cover,
+    ib: &IBox,
+    segs: &[Seg],
+    clear: Cleared<'_>,
+) -> Option<(Edge, Edge, bool)> {
+    let (from, to) = decided_span(c1, ib)?;
+    let carries = |s: Option<&Seg>| match s {
+        Some(Seg::Sign(_)) => true,
+        Some(Seg::Flat) => clear.flat,
+        _ => false,
+    };
+    let at = |p: f64| Bound::At {
+        x: Enc::point(p),
+        closed: true,
+    };
+    let lo_ok = reaches(ib.lo, from, true, carries(segs.first()), clear.gaps);
+    let hi_ok = reaches(ib.hi, to, false, carries(segs.last()), clear.gaps);
+    Some((
+        if lo_ok {
+            (ib.lo, ib.lo_clipped)
+        } else {
+            (at(from), false)
+        },
+        if hi_ok {
+            (ib.hi, ib.hi_clipped)
+        } else {
+            (at(to), false)
+        },
+        !(lo_ok && hi_ok),
+    ))
+}
+
+/// The monotone pieces of each box, from f′'s sign walk, each from and to
+/// where the claims on f′ reach ([`reached_ends`]); and whether a piece
+/// was cut short of its box's bound so.
+fn monotone_pieces(c1: &Cover, boxes: &[IBox], clear: Cleared<'_>) -> Option<(Vec<PieceAt>, bool)> {
     let mut out = Vec::new();
+    let mut cut = false;
     for ib in boxes {
         let segs = walk(c1, ib);
+        let ((lo0, lo_clip0), (hi0, hi_clip0), moved) = reached_ends(c1, ib, &segs, clear)?;
+        cut |= moved;
         if flat(&segs) {
             // f′ ≡ 0 on the whole box: f is constant there.
             out.push((
                 Monotone {
-                    on: Piece {
-                        lo: ib.lo,
-                        hi: ib.hi,
-                    },
+                    on: Piece { lo: lo0, hi: hi0 },
                     dir: Dir::Constant,
                 },
-                ib.lo_clipped,
-                ib.hi_clipped,
+                lo_clip0,
+                hi_clip0,
             ));
             continue;
         }
         if !changes(&segs, true).1 {
             return None;
         }
-        let mut lo = ib.lo;
-        let mut lo_clip = ib.lo_clipped;
+        let mut lo = lo0;
+        let mut lo_clip = lo_clip0;
         let mut dir: Option<bool> = None;
         for (i, s) in segs.iter().enumerate() {
             match *s {
@@ -782,21 +917,30 @@ fn monotone_pieces(c1: &Cover, boxes: &[IBox]) -> Option<Vec<(Monotone, bool, bo
         let d = dir?;
         out.push((
             Monotone {
-                on: Piece { lo, hi: ib.hi },
+                on: Piece { lo, hi: hi0 },
                 dir: if d { Dir::Increasing } else { Dir::Decreasing },
             },
             lo_clip,
-            ib.hi_clipped,
+            hi_clip0,
         ));
     }
-    Some(out)
+    Some((out, cut))
 }
 
-pub fn monotonicity(c1: &Cover, boxes: &[IBox], scope: &Scope, clear: bool) -> Row<Vec<Monotone>> {
-    let (gaps, complete) = settle(c1, clear);
-    let Some(mut pieces) = monotone_pieces(c1, boxes) else {
+/// The monotone pieces. A piece reaches a bound of its box across a gap
+/// shown clear of f′'s zeros (`clear`), and otherwise starts (ends) where
+/// the claims on f′ do, the row then partial.
+pub fn monotonicity(
+    c1: &Cover,
+    boxes: &[IBox],
+    scope: &Scope,
+    clear: Cleared<'_>,
+) -> Row<Vec<Monotone>> {
+    let (gaps, complete) = settle(c1, clear.all);
+    let Some((mut pieces, cut)) = monotone_pieces(c1, boxes, clear) else {
         return Row::unknown("f′'s sign is not decided everywhere");
     };
+    let complete = complete && !cut;
     let mut cl = claims(c1, &Subject::f(1), &[0.0]);
     cl.extend(gaps);
     // Over one period [s, s + P] of a periodic f, the piece cut at the
@@ -3463,17 +3607,18 @@ pub fn range(
     c1: &Cover,
     boxes: &[IBox],
     scope: &Scope,
-    clear: bool,
+    clear: Cleared<'_>,
 ) -> Result<RangeRow, Stop> {
     let unknown = |why: &str| Ok((Row::unknown(why), Vec::new()));
     if !dom.row.is_certified() || !(scope.whole || scope.period.is_some()) {
         return unknown("the domain is not known");
     }
-    let (_, complete) = settle(c1, clear);
+    let (_, complete) = settle(c1, clear.all);
     if !complete {
         return unknown("f′'s sign is not decided everywhere");
     }
-    let Some(pieces) = monotone_pieces(c1, boxes) else {
+    // (Each piece reaching its box's bounds: an image is taken from them.)
+    let Some((pieces, false)) = monotone_pieces(c1, boxes, clear) else {
         return unknown("f′'s sign is not decided everywhere");
     };
     // Each strictly monotone piece's image, as (low end, high end).

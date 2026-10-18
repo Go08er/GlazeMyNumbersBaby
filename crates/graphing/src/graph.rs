@@ -12,12 +12,18 @@ use crate::plot::{Cancel, Plot, PlotOptions, contour_cost, plot, plot_with};
 use crate::trace::{TracePoint, nearest_point};
 use crate::variable::Variable;
 use crate::viewport::Viewport;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::AtomicBool;
 
 /// Maximum number of equations in the equation list
 /// (`EquationInputArea.maxEquationSize`).
 pub const MAX_EQUATIONS: usize = 14;
+
+/// How many sliders no equation uses any more a graph remembers, the most
+/// recently used ([`Graph::refresh`]). Subscripted names (`a_1`, `a_{b2}`)
+/// make the names a session can use unbounded; a TI-84 Plus CE has 27
+/// (A–Z and θ).
+pub const REMEMBERED_VARIABLES: usize = 64;
 
 /// Default line width (`Grapher.LineWidth`); the settings offer 1–4.
 pub const DEFAULT_LINE_WIDTH: f64 = 2.0;
@@ -146,6 +152,9 @@ pub struct Graph {
     variables: BTreeMap<String, Variable>,
     /// Sliders kept for equations not drawn for now ([`Graph::refresh`]).
     kept: BTreeMap<String, Variable>,
+    /// Sliders no equation uses any more, the one that left last first; at
+    /// most [`REMEMBERED_VARIABLES`] ([`Graph::refresh`]).
+    remembered: VecDeque<(String, Variable)>,
     trig_unit: TrigUnit,
     parse_options: ParseOptions,
     plot_options: PlotOptions,
@@ -165,6 +174,7 @@ impl Graph {
             entries: Vec::new(),
             variables: BTreeMap::new(),
             kept: BTreeMap::new(),
+            remembered: VecDeque::new(),
             trig_unit: TrigUnit::Radians,
             parse_options: ParseOptions::default(),
             plot_options: PlotOptions::default(),
@@ -372,7 +382,8 @@ impl Graph {
 
     /// Edits a variable's slider settings (min/max/step) and/or value via a
     /// closure; recompiles afterwards. False for a name neither listed nor
-    /// kept.
+    /// kept (one only remembered, [`Graph::refresh`], is not shown, so not
+    /// edited either).
     pub fn update_variable(&mut self, name: &str, f: impl FnOnce(&mut Variable)) -> bool {
         let Some(v) = self
             .variables
@@ -424,13 +435,29 @@ impl Graph {
     ///   Typing goes through texts that don't parse or evaluate, and a
     ///   precision change can make a constant divide by zero for a while:
     ///   the slider outlasts them;
-    /// - one no equation uses any more (removed, edited away, cleared) is
-    ///   forgotten: used again, it starts at 1, as upstream's does.
+    /// - one no equation uses any more (edited away, cleared, its equation
+    ///   removed) is remembered for the session, slider and all: used
+    ///   again, it comes back as it was. A TI-84 Plus CE's A–Z keep their
+    ///   values whatever Y= says. Upstream forgets it
+    ///   (`Grapher::UpdateVariables` keeps only the current ones), but it
+    ///   reads an equation only when it is submitted (Enter, or the focus
+    ///   leaving it: `MathRichEditBox.cs`); the apps read every text on the
+    ///   way, so typing `x+a*x+2` over `y=a*x+1` goes through `x`, and
+    ///   undo through whatever the field held, with no `a` in it. The
+    ///   [`REMEMBERED_VARIABLES`] most recently used are remembered; a new
+    ///   name, or one past them, starts at 1 ([`Variable::default`]).
+    ///   [`Graph::forget_variables`] forgets them all.
     fn refresh(&mut self) {
         // Compile first with the current variables to know which equations
         // are graphable, then rebuild the variable set from them.
         self.recompile();
-        let had = |n: &str| self.variables.get(n).or_else(|| self.kept.get(n)).copied();
+        let had = |n: &str| {
+            self.variables
+                .get(n)
+                .or_else(|| self.kept.get(n))
+                .or_else(|| self.remembered.iter().find(|(m, _)| m == n).map(|(_, v)| v))
+                .copied()
+        };
         let mut listed = BTreeMap::new();
         for e in &self.entries {
             if e.graphable()
@@ -451,11 +478,37 @@ impl Graph {
                 kept.insert(n.clone(), v);
             }
         }
+        // Those no equation uses any more are remembered, the ones that
+        // left now first (in name order among them); those used again are
+        // no longer.
+        let used = |n: &str| listed.contains_key(n) || kept.contains_key(n);
+        let mut left: Vec<(String, Variable)> = self
+            .variables
+            .iter()
+            .chain(&self.kept)
+            .filter(|(n, _)| !used(n))
+            .map(|(n, v)| (n.clone(), *v))
+            .collect();
+        left.sort_by(|a, b| a.0.cmp(&b.0));
+        self.remembered.retain(|(n, _)| !used(n));
+        for (n, v) in left.into_iter().rev() {
+            self.remembered.retain(|(m, _)| *m != n);
+            self.remembered.push_front((n, v));
+        }
+        self.remembered.truncate(REMEMBERED_VARIABLES);
         if listed != self.variables || kept != self.kept {
             self.variables = listed;
             self.kept = kept;
             self.recompile();
         }
+    }
+
+    /// Forgets the sliders no equation uses ([`Graph::refresh`] remembers
+    /// them): a name used again then starts at 1. Those in use keep their
+    /// settings. Neither app offers this yet (upstream has no such
+    /// command); it is the model's explicit reset.
+    pub fn forget_variables(&mut self) {
+        self.remembered.clear();
     }
 
     /// The compiled form of an equation (for custom evaluation).
@@ -742,7 +795,7 @@ mod tests {
         assert_eq!(g.variable("a").unwrap().value(), 1.0);
         g.set_variable("a", 2.0);
         assert_eq!(g.evaluate(a, 3.0), Some(19.0));
-        // Editing keeps existing slider values, drops unused variables.
+        // Editing keeps existing slider values; unused ones aren't listed.
         g.set_equation_text(a, "y = a x + c");
         assert_eq!(
             g.variables().keys().cloned().collect::<Vec<_>>(),
@@ -761,8 +814,8 @@ mod tests {
     /// R14-M-01: a slider keeps its value, range and step while its
     /// equation isn't drawn — an edit made it invalid for a while (an
     /// evaluation error, a syntax error), or it is hidden — and comes back
-    /// with them. One no equation uses any more is forgotten: a new one
-    /// starts at 1, as upstream's does.
+    /// with them. One no equation uses any more is remembered (R20-M-04,
+    /// [`sliders_are_remembered_while_no_equation_uses_them`]).
     #[test]
     fn sliders_outlast_an_equation_not_drawn_for_a_while() {
         let mut g = Graph::new();
@@ -789,20 +842,107 @@ mod tests {
         assert!(near(g.evaluate(id, 2.0), 1.6));
         g.set_line_enabled(id, true);
         assert_eq!(g.variable("a"), Some(&want));
-        // Edited to an equation without it: forgotten.
+        // Edited to an equation without it, cleared, removed: remembered.
         g.set_equation_text(id, "y = b*x");
+        assert_eq!(g.variables().keys().collect::<Vec<_>>(), ["b"]);
         g.set_equation_text(id, "y = a*x");
-        assert_eq!(g.variable("a"), Some(&Variable::default()));
-        // Cleared: forgotten.
-        g.set_variable("a", 0.3);
+        assert_eq!(g.variable("a"), Some(&want));
         g.set_equation_text(id, "");
+        assert!(g.variables().is_empty());
         g.set_equation_text(id, "y = a*x");
-        assert_eq!(g.variable("a").unwrap().value(), 1.0);
-        // Removed: forgotten.
-        g.set_variable("a", 0.3);
+        assert_eq!(g.variable("a"), Some(&want));
         g.remove_equation(id);
         g.add_equation("y = a*x");
-        assert_eq!(g.variable("a").unwrap().value(), 1.0);
+        assert_eq!(g.variable("a"), Some(&want));
+    }
+
+    /// R20-M-04: a slider no equation uses any more keeps its value, range
+    /// and step for the session, as a TI-84 Plus CE's A–Z keep theirs
+    /// whatever Y= says: the apps read each text typed on the way, and
+    /// typing `x+a*x+2` over `y=a*x+1` goes through `x`; undo goes back
+    /// through it. The most recently used [`REMEMBERED_VARIABLES`] are
+    /// remembered; [`Graph::forget_variables`] forgets them.
+    #[test]
+    fn sliders_are_remembered_while_no_equation_uses_them() {
+        let mut g = Graph::new();
+        let id = g.add_equation("y=a*x+1");
+        g.set_variable("a", 0.3);
+        g.update_variable("a", |v| {
+            v.set_max(7.0);
+            v.set_step(0.01);
+        });
+        let a = *g.variable("a").unwrap();
+        // Typed over, a character at a time; then undone and redone.
+        for text in ["x", "x+", "x+a", "x+a*x+2", "x", "y=a*x+1", "x", "x+a*x+2"] {
+            g.set_equation_text(id, text);
+            match text {
+                "x" | "x+" => assert!(g.variables().is_empty(), "{text}"),
+                _ => assert_eq!(g.variable("a"), Some(&a), "{text}"),
+            }
+        }
+        assert!(near(g.evaluate(id, 2.0), 2.0 + 0.6 + 2.0));
+        // Two names: a second equation still uses b while the first loses
+        // a; each comes back as it was.
+        let other = g.add_equation("y=b");
+        g.set_variable("b", -2.0);
+        let b = *g.variable("b").unwrap();
+        g.set_equation_text(id, "");
+        g.remove_equation(other);
+        assert!(g.variables().is_empty());
+        let again = g.add_equation("y=a+b");
+        assert_eq!(g.variable("a"), Some(&a));
+        assert_eq!(g.variable("b"), Some(&b));
+        assert!(near(g.evaluate(again, 0.0), 0.3 - 2.0));
+
+        // At most REMEMBERED_VARIABLES, the most recently used: a_0 left
+        // first, then a_1 … a_65 one by one, so a_0 and a_1 are forgotten.
+        let mut g = Graph::new();
+        let id = g.add_equation("");
+        let n = REMEMBERED_VARIABLES + 2;
+        for i in 0..n {
+            g.set_equation_text(id, &format!("y=a_{i}"));
+            g.set_variable(&format!("a_{i}"), i as f64 / 100.0);
+        }
+        g.set_equation_text(id, "");
+        let names: Vec<String> = (0..n).map(|i| format!("a_{i}")).collect();
+        g.set_equation_text(id, &format!("y={}", names.join("+")));
+        let values: Vec<f64> = names
+            .iter()
+            .map(|n| g.variable(n).unwrap().value())
+            .collect();
+        assert_eq!(values[..2], [1.0, 1.0], "the two oldest are forgotten");
+        for (i, v) in values.iter().enumerate().skip(2) {
+            assert_eq!(*v, i as f64 / 100.0, "a_{i}");
+        }
+        // Leaving together, they leave in name order, the first counted the
+        // most recent: of b_00 … b_65 cleared at once, b_64 and b_65 go.
+        let mut g = Graph::new();
+        let names: Vec<String> = (0..n).map(|i| format!("b_{i:02}")).collect();
+        let id = g.add_equation(&format!("y={}", names.join("+")));
+        for name in &names {
+            g.set_variable(name, 0.5);
+        }
+        g.set_equation_text(id, "");
+        g.set_equation_text(id, &format!("y={}", names.join("+")));
+        let kept: Vec<bool> = names
+            .iter()
+            .map(|n| g.variable(n).unwrap().value() == 0.5)
+            .collect();
+        assert!(kept[..REMEMBERED_VARIABLES].iter().all(|&k| k));
+        assert!(!kept[REMEMBERED_VARIABLES] && !kept[REMEMBERED_VARIABLES + 1]);
+
+        // An explicit reset forgets those no equation uses; one in use
+        // keeps its slider.
+        let mut g = Graph::new();
+        let id = g.add_equation("y=a*x+c");
+        g.set_variable("a", 0.3);
+        g.set_variable("c", 4.0);
+        g.set_equation_text(id, "y=c");
+        g.forget_variables();
+        assert_eq!(g.variable("c").unwrap().value(), 4.0);
+        g.set_equation_text(id, "y=a*x+c");
+        assert_eq!(g.variable("a"), Some(&Variable::default()));
+        assert_eq!(g.variable("c").unwrap().value(), 4.0);
     }
 
     /// R14-M-01, the review's case: Number precision Off → 14 → Off. At 14

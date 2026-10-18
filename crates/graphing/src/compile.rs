@@ -1466,10 +1466,12 @@ struct Scaled<'e> {
     d: f64,
 }
 
-/// a·b, if a double holds it exactly.
+/// a·b, if a double holds it exactly: by the integer significands, as the
+/// simplifier proves it (an FMA residual below the least subnormal
+/// rounds to 0, R20-L-02: 2¹⁰⁰⁰·((2⁻¹⁰⁰⁰(1 + 2⁻⁵²))·((1 + 2⁻⁵²)·x)) −
+/// (1 + 2⁻⁵¹)·x was a constant 0, for 2⁻¹⁰⁴·x).
 fn mul_exact(a: f64, b: f64) -> Option<f64> {
-    let p = a * b;
-    (p.is_finite() && a.mul_add(b, -p) == 0.0).then_some(p)
+    crate::simplify::exact_mul(a, b)
 }
 
 /// a + b, if a double holds it exactly.
@@ -1584,12 +1586,10 @@ impl<'e> Scaled<'e> {
         if self.b != o.b || o.k == 0.0 {
             return None;
         }
-        // Exact products as a double and its rounding error.
-        let two = |a: f64, b: f64| {
-            let p = a * b;
-            (p, a.mul_add(b, -p))
-        };
-        if two(self.k, o.c) != two(o.k, self.c) {
+        // (Exactly, by the integer significands: two products can share a
+        // double and an FMA residual that both vanished below the least
+        // subnormal.)
+        if !crate::simplify::same_product(self.k, o.c, o.k, self.c) {
             return None;
         }
         let w = |v: f64| Wide::new(v);
@@ -1947,6 +1947,30 @@ fn fold(e: &Expr, opts: &CompileOptions<'_>) -> Fold {
                 let (r, v) = match go(&args[0]) {
                     Value(r, v) => (r, v),
                     No => return No,
+                    // A value proven beyond the doubles, too long to carry:
+                    // its parity says whether it is a whole number, which
+                    // its extended-range value can't (every one past 2⁵³
+                    // is even). Γ(1 + w) of a positive w past them is past
+                    // them too (even, of a whole w); w!! of a positive
+                    // whole w is of w's parity. A pole, a w!! of no whole
+                    // number and Γ(1 + w) ≈ 1 nearer 0 than every double
+                    // are `exact_call`'s and the general path's to decide;
+                    // anything else is unknown (beside a pole past the
+                    // factor bound).
+                    Lone(v, parity, far) => {
+                        let whole = matches!(parity, Parity::Even | Parity::Odd);
+                        let factorial = *f == Func::Factorial;
+                        return match (far.huge, far.neg) {
+                            (true, false) if factorial => {
+                                Lone(v, if whole { Parity::Even } else { Parity::Unknown }, far)
+                            }
+                            (true, false) if whole => Lone(v, parity, far),
+                            (true, false) if parity == Parity::Fraction => No,
+                            (true, true) if !factorial || whole => No,
+                            (false, _) => No,
+                            _ => Big(v),
+                        };
+                    }
                     other => return Big(other.var()),
                 };
                 let n = match whole(&r) {
@@ -2243,6 +2267,19 @@ fn rounds_onto(a: &Expr, opts: &CompileOptions<'_>) -> Option<(Rat, f64)> {
     (d != 0.0 && !Rat::from_f64(d).is_some_and(|x| x == r)).then_some((r, d))
 }
 
+/// An x- and y-free argument proven beyond the doubles and too long to
+/// carry ([`Fold::Lone`]): what is known exactly of it, its parity and
+/// where it lies.
+fn lone(a: &Expr, opts: &CompileOptions<'_>) -> Option<(Parity, Far)> {
+    if a.any(&|n| matches!(n, Expr::X | Expr::Y)) {
+        return None;
+    }
+    match fold(a, opts) {
+        Fold::Lone(_, parity, far) => Some((parity, far)),
+        _ => None,
+    }
+}
+
 /// A function of an argument known exactly ([`fold`]: a typed decimal,
 /// arithmetic on literals and sliders) that rounds onto a number the
 /// function turns on without being it: a quarter turn in degrees or grads
@@ -2419,6 +2456,12 @@ pub(crate) fn exact_call(f: Func, args: &[Expr], opts: &CompileOptions<'_>) -> O
         // last factor the exact distance to the pole, and Γ is taken
         // beside 1.
         Factorial => {
+            // Past the doubles and too long to carry ([`Fold::Lone`]): a
+            // whole number below 0 is a pole, by its parity.
+            if let Some((parity, far)) = lone(&args[0], opts) {
+                let whole = matches!(parity, Parity::Even | Parity::Odd);
+                return (far.huge && far.neg && whole).then(|| Exact::As(undefined()));
+            }
             let (r, d) = rounds_onto(&args[0], opts)?;
             // An exact whole number below 0 is itself a pole, even when
             // no double holds it. Only a noninteger needs the shifted
@@ -2446,6 +2489,13 @@ pub(crate) fn exact_call(f: Func, args: &[Expr], opts: &CompileOptions<'_>) -> O
         // n!! is of whole numbers alone: a noninteger has none, even
         // when its double has overflowed and lost that distinction.
         DoubleFactorial => {
+            // Past the doubles and too long to carry ([`Fold::Lone`]): none
+            // of one no whole number, nearer 0 than every double, or below
+            // 0 (a pole if whole), by its parity and side.
+            if let Some((parity, far)) = lone(&args[0], opts) {
+                let none = !far.huge || far.neg || parity == Parity::Fraction;
+                return none.then(|| Exact::As(undefined()));
+            }
             let (r, _) = rounds_onto(&args[0], opts)?;
             (!r.is_integer()).then(|| Exact::As(undefined()))
         }
@@ -2955,6 +3005,45 @@ mod tests {
         ));
         assert!(ev("x^(-1000001/3)", 0.0).is_nan());
         assert_eq!(ev("x^(1000001/3)", 0.0), 0.0);
+    }
+
+    /// Review 20 (R20-L-02's neighbour): a scaled copy's coefficients were
+    /// "exact" where a product's FMA residual vanished below the least
+    /// subnormal, so this, which is 2⁻¹⁰⁴·x, was found the constant 0
+    /// wherever defined (by the earlier engine, `analysis::analyze_legacy`,
+    /// not the certified panel).
+    /// Proportional copies and cancelling shifts are still found.
+    #[test]
+    fn a_scaled_copy_is_exact_only_when_its_coefficients_are() {
+        let tree = |src: &str| {
+            let eq = crate::equation::Equation::parse(&format!("y={src}")).unwrap();
+            eq.explicit().unwrap().1.clone()
+        };
+        let opts = CompileOptions::default();
+        let c = |src: &str| constant_where_defined(&tree(src), &opts);
+        assert_eq!(
+            c("2^1000*((2^-1000*(1+2^-52))*((1+2^-52)*x))-(1+2^-51)*x"),
+            None
+        );
+        // (A·x + A·B rounded)/(x + B): not in proportion, by 2⁻¹¹⁰⁴.
+        assert_eq!(
+            c("(2^-1000*(1+2^-52)*x+2^-1000*(1+2^-51))/(x+(1+2^-52))"),
+            None
+        );
+        assert_eq!(c("(2^1000*(2^-1000*(1+2^-52)*x))/((1+2^-52)*x)"), Some(1.0));
+        assert_eq!(c("(2x+2)/(x+1)"), Some(2.0));
+        assert_eq!(c("((x-5)/3)/(x-5)"), Some(1.0 / 3.0));
+        assert_eq!(c("(x+1)-x"), Some(1.0));
+        assert_eq!(c("2^1000*(2^-1000*x)-x"), Some(0.0));
+        // The products that decide it: exact by their integer significands.
+        let a = f64::from_bits(23u64 << 52).next_up(); // 2^-1000 (1 + 2^-52)
+        let b = 1.0f64.next_up();
+        assert_eq!(crate::simplify::exact_mul(a, b), None);
+        assert_eq!(crate::simplify::exact_mul(a, 2.0), Some(2.0 * a));
+        assert!(!crate::simplify::same_product(a, b, a * b, 1.0));
+        assert!(crate::simplify::same_product(a, 2.0, 2.0 * a, 1.0));
+        assert!(crate::simplify::same_product(0.0, b, -0.0, 3.0));
+        assert!(!crate::simplify::same_product(-a, 2.0, 2.0 * a, 1.0));
     }
 
     #[test]

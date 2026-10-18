@@ -25,10 +25,51 @@ const LN2_LO: f64 = 2.319_046_813_846_299_6e-17;
 
 /// 2⁵³: up to it every integer is a double, so a binary exponent is exact.
 /// Beyond it a value's exponent is itself rounded and its mantissa
-/// meaningless: such a value is "lost" (see [`Wide::lost`]). It is still
+/// meaningless: such a value is "lost" (see [`Wide::far`]). It is still
 /// certainly beyond a double's range, but nothing that would bring it back
 /// into range (a logarithm, a root, a ratio of two of them) can be known.
 const TWO53: f64 = 9_007_199_254_740_992.0;
+
+/// 2⁴⁶. A far value ([`Wide::far`]) is past 2⁴⁷ binades at the least: a
+/// lost one past 2⁵³, its exponent rounded but by a small part of itself
+/// only (nothing far is made by cancelling two far ones, nor by bringing
+/// one back further than this), and one beyond even the extended range (an
+/// infinite exponent) past 2⁴⁷ when it is a count whose logarithm passed
+/// `functions::FAR_LOG`, far beyond that when made otherwise. A value
+/// within reach and within this many binades of 1 is nearer 1 than one
+/// beyond the extended range beyond doubt; and a product with one brings a
+/// lost value back toward 1 by a small part of itself at most.
+const NEAR: f64 = 70_368_744_177_664.0;
+
+/// 2³⁰: the most binades a product or quotient with a value within reach
+/// may bring a value beyond even the extended range back toward 1. Its
+/// exponent, infinite, can't follow, so what is known of it is what it
+/// was made with, less these steps: a few hundred of them, all an
+/// expression can hold, leave it past 2⁴⁷ less 2³⁹ binades.
+const STEP: f64 = 1_073_741_824.0;
+
+/// Whether a far value of binary exponent `far_e` is farther from 1 than
+/// a value within reach of exponent `e`, beyond doubt: on the other side
+/// of 1, within [`NEAR`] of 1, or for a lost value, within all but 2⁻²⁰
+/// of its own exponent (rounded by a far smaller part of itself).
+fn farther(far_e: f64, e: f64) -> bool {
+    if e == 0.0 || (e > 0.0) != (far_e > 0.0) {
+        return true;
+    }
+    e.abs() <= NEAR || (far_e.is_finite() && e.abs() <= far_e.abs() * (1.0 - 1.0 / 1_048_576.0))
+}
+
+/// Whether a far value of binary exponent `far_e`, scaled by a value
+/// within reach of exponent `e` (`e`'s binades added to its own), is still
+/// held as well: away from 1, always; toward 1, by at most [`NEAR`] for a
+/// lost value (whose exponent follows) and [`STEP`] for one beyond the
+/// extended range (whose exponent can't).
+fn scales(far_e: f64, e: f64) -> bool {
+    if e == 0.0 || (e > 0.0) == (far_e > 0.0) {
+        return true;
+    }
+    e.abs() <= if far_e.is_infinite() { STEP } else { NEAR }
+}
 
 /// Exponents within which m·2^e is an ordinary double, with room for a
 /// simple result of it to stay one.
@@ -144,6 +185,12 @@ fn ln_dd(m: f64, e: f64) -> dd::Dd {
 /// Beyond, only its size is kept (a lost value); and a lost base gives
 /// nothing that would land back within 2⁵³ binades.
 fn pow_mag(m: f64, e: f64, t: dd::Dd) -> Wide {
+    // A base beyond even the extended range is past 2⁴⁷ binades (see
+    // `NEAR`) and no more is known: a power of it below 1 may be anywhere
+    // ((e^(1.3·10³⁰⁸))^(10⁻³⁰⁶) is e¹³⁰, an ordinary double).
+    if e.is_infinite() && t.hi.abs() < 1.0 {
+        return Wide::Unknown;
+    }
     let p = t.hi * e;
     // The result's binades: t·(e + log₂|m|). Past 2⁵³ of them through the
     // mantissa alone too (1.5^(−10³⁰⁰): e is 0): `dd::exp` holds t·ln|b|
@@ -171,11 +218,20 @@ fn pow_mag(m: f64, e: f64, t: dd::Dd) -> Wide {
     Wide::norm(r, n)
 }
 
-/// `out`, unless one of `inputs` is lost (beyond 2⁵³ binades, see
-/// [`TWO53`]) and `out` is not: a result back within reach would carry the
-/// lost value's meaningless mantissa or exponent, so it is unknown.
+/// `out`, unless one of `inputs` is far (lost beyond 2⁵³ binades, see
+/// [`TWO53`], or beyond even the extended range) and `out` is a value that
+/// is not: a result back within reach would carry the far value's
+/// meaningless mantissa or exponent, so it is unknown. An exact 0 is no
+/// exception unless an input is one too (0·e^(10³⁰⁰)): two far values
+/// that cancel to 0 in this representation needn't be equal (R20-M-01).
+/// Undefined stays undefined (√ of a negative, a division by an exact 0).
 fn unless_lost(inputs: &[Wide], out: Wide) -> Wide {
-    if inputs.iter().any(|w| w.lost()) && !out.lost() && !out.beyond() && !out.is_zero() {
+    let kept = match out {
+        Wide::Val(..) if out.far().is_some() => true,
+        Wide::Val(..) => out.is_zero() && inputs.iter().any(|w| w.is_zero()),
+        _ => true,
+    };
+    if inputs.iter().any(|w| w.far().is_some()) && !kept {
         Wide::Unknown
     } else {
         out
@@ -229,15 +285,17 @@ impl Wide {
         matches!(self, Wide::Val(m, _) if m == 0.0)
     }
 
-    /// A value beyond 2⁵³ binades: its size is known to be beyond a
-    /// double, but its exponent is rounded and its mantissa made up.
-    pub(crate) fn lost(self) -> bool {
-        matches!(self, Wide::Val(m, e) if m != 0.0 && e.is_finite() && e.abs() > TWO53)
-    }
-
-    /// A magnitude beyond even the extended range (an infinite exponent).
-    fn beyond(self) -> bool {
-        matches!(self, Wide::Val(m, e) if m != 0.0 && e.is_infinite())
+    /// For a value beyond the doubles whose size isn't held (lost, or
+    /// beyond even the extended range): which side of them it is on, above
+    /// them all (true) or nearer 0 than them all (false). That and its sign
+    /// are all that is known of it. Its exponent is rounded (two distinct
+    /// e^t far out share one), so two such values on one side can't be put
+    /// in order: nothing that compares or cancels them is known (R20-M-01).
+    pub(crate) fn far(self) -> Option<bool> {
+        match self {
+            Wide::Val(m, e) if m != 0.0 && (e.is_infinite() || e.abs() > TWO53) => Some(e > 0.0),
+            _ => None,
+        }
     }
 
     /// The double, when it is an ordinary one with room to spare.
@@ -268,25 +326,54 @@ impl Wide {
     }
 
     pub(crate) fn add(self, o: Wide) -> Wide {
-        // A lost value far below a known one doesn't change it (e^(−10¹⁶)
-        // + 1 is 1); otherwise a sum back in range depends on what was lost.
-        if let (Wide::Val(a, ea), Wide::Val(b, eb)) = (self, o) {
-            match (self.lost(), o.lost()) {
-                (true, false) if b != 0.0 && ea < eb - 64.0 => return o,
-                (false, true) if a != 0.0 && eb < ea - 64.0 => return self,
-                _ => {}
+        if let (Wide::Val(a, ea), Wide::Val(b, eb)) = (self, o)
+            && a != 0.0
+            && b != 0.0
+        {
+            match (self.far(), o.far()) {
+                // Two far values: of one sign, the sum is far on the side
+                // of the larger; on two sides the one above the doubles
+                // rules. But of two signs on one side which is larger
+                // isn't known, so neither is the sum, its sign nor whether
+                // it is 0 (R20-M-01: e^(10³⁰⁰ + 2·10²⁸⁴) − e^(10³⁰⁰ + 3·10²⁸⁴)
+                // was an exact 0, its exponents rounded alike; with
+                // exponents rounded the other way, a product of two such
+                // less a third had the wrong sign).
+                (Some(ha), Some(hb)) => {
+                    return if ha != hb {
+                        if ha { self } else { o }
+                    } else if a.signum() == b.signum() {
+                        if ea >= eb { self } else { o }
+                    } else {
+                        Wide::Unknown
+                    };
+                }
+                // A far value and one within reach: the far one rules if
+                // above the doubles, and changes nothing if below them
+                // (e^(−10¹⁶) + 1 is 1). Unless the other is itself so far
+                // out that the far one's rounded exponent can't place it.
+                (Some(h), None) => {
+                    return if !farther(ea, eb) {
+                        Wide::Unknown
+                    } else if h {
+                        self
+                    } else {
+                        o
+                    };
+                }
+                (None, Some(h)) => {
+                    return if !farther(eb, ea) {
+                        Wide::Unknown
+                    } else if h {
+                        o
+                    } else {
+                        self
+                    };
+                }
+                (None, None) => {}
             }
         }
-        let out = self.add_inner(o);
-        // A lost exponent and its mantissa do not identify a value.
-        // Distinct magnitudes can have the same rounded exponent and
-        // cancel in this representation; that is not an exact zero.
-        // (An exact zero factor or numerator remains zero in mul/div.)
-        if out.is_zero() && (self.lost() || o.lost()) {
-            Wide::Unknown
-        } else {
-            unless_lost(&[self, o], out)
-        }
+        unless_lost(&[self, o], self.add_inner(o))
     }
 
     fn add_inner(self, o: Wide) -> Wide {
@@ -333,11 +420,32 @@ impl Wide {
             // Exactly 0, even beside a magnitude beyond the range.
             return Wide::Val(a * b, 0.0);
         }
+        // A far value above the doubles times one below them: which wins
+        // isn't known (their exponents are rounded, see `far`); nor times
+        // one within reach that brings it far back toward 1 (`scales`).
+        match (self.far(), o.far()) {
+            (Some(ha), Some(hb)) if ha != hb => return Wide::Unknown,
+            (Some(_), None) if !scales(ea, eb) => return Wide::Unknown,
+            (None, Some(_)) if !scales(eb, ea) => return Wide::Unknown,
+            _ => {}
+        }
         unless_lost(&[self, o], Wide::norm(a * b, ea + eb))
     }
 
     /// Division, undefined by an exact 0 (as `functions::div`).
     pub(crate) fn div(self, o: Wide) -> Wide {
+        // Two far values on one side: whether the quotient is above or
+        // below the doubles isn't known (see `far`); nor of a far value and
+        // one within reach that brings it far back toward 1 (`scales`; 1/o
+        // is far on o's other side).
+        if let (Wide::Val(_, ea), Wide::Val(_, eb)) = (self, o) {
+            match (self.far(), o.far()) {
+                (Some(ha), Some(hb)) if ha == hb => return Wide::Unknown,
+                (Some(_), None) if !scales(ea, -eb) => return Wide::Unknown,
+                (None, Some(_)) if !scales(-eb, ea) => return Wide::Unknown,
+                _ => {}
+            }
+        }
         unless_lost(&[self, o], self.div_inner(o))
     }
 
@@ -387,10 +495,14 @@ impl Wide {
     }
 
     /// ln, undefined at 0 (as `functions::ln`) and for negative numbers.
+    /// Of a far value, unknown: its exponent is no more than its side
+    /// (ln of e^(1.3·10³⁰⁸), beyond even the extended range, is 1.3·10³⁰⁸,
+    /// an ordinary double).
     pub(crate) fn ln(self) -> Wide {
         unless_lost(
             &[self],
             match self {
+                Wide::Val(m, _) if m > 0.0 && self.far().is_some() => Wide::Unknown,
                 Wide::Val(m, e) if m > 0.0 => Wide::new(ln_abs(m, e)),
                 Wide::Val(..) => Wide::Undef,
                 w => w,
@@ -404,6 +516,8 @@ impl Wide {
 
     fn log10_inner(self) -> Wide {
         match self {
+            // (As `ln`.)
+            Wide::Val(m, _) if m > 0.0 && self.far().is_some() => Wide::Unknown,
             Wide::Val(m, e) if m > 0.0 => Wide::new(if e.abs() <= NORMAL {
                 cm::log10(ldexp(m, e))
             } else {
@@ -421,6 +535,9 @@ impl Wide {
     fn sqrt_inner(self) -> Wide {
         match self {
             Wide::Val(m, _) if m < 0.0 => Wide::Undef,
+            // (Beyond even the extended range: past 2⁴⁷ binades, and its
+            // root needn't be, see `NEAR`.)
+            Wide::Val(_, e) if e.is_infinite() => Wide::Unknown,
             Wide::Val(m, e) => {
                 if m == 0.0 || e.abs() <= NORMAL {
                     return Wide::new(ldexp(m, e).sqrt());
@@ -442,6 +559,8 @@ impl Wide {
 
     fn cbrt_inner(self) -> Wide {
         match self {
+            // (As `sqrt_inner`.)
+            Wide::Val(m, e) if m != 0.0 && e.is_infinite() => Wide::Unknown,
             Wide::Val(m, e) => {
                 if m == 0.0 || e.abs() <= NORMAL {
                     return Wide::new(cm::cbrt(ldexp(m, e)));
@@ -489,6 +608,11 @@ pub(crate) fn pow(b: Wide, t: Wide) -> Wide {
         // Integer powers only; every double from 2⁵³ on is an even integer.
         if te < 0.0 || (te < 53.0 && tv.fract() != 0.0) {
             return Wide::Undef;
+        }
+        // (A far exponent's mantissa is made up: whether it is a whole
+        // number, and odd, isn't held.)
+        if t.far().is_some() {
+            return Wide::Unknown;
         }
         odd = te < 53.0 && tv % 2.0 != 0.0;
     }
@@ -644,8 +768,9 @@ pub(crate) fn apply1(f: Fn1, w: Wide) -> Wide {
     let huge = e > NORMAL;
     let v = ldexp(m, e);
     let k = |u: crate::TrigUnit| Wide::new(u.to_radians_factor());
-    // (Logarithmic in w: nothing to be known of a lost w.)
-    let lost = w.lost();
+    // (Logarithmic in w: nothing to be known of a far w, lost or beyond
+    // even the extended range: see `Wide::ln`.)
+    let lost = w.far().is_some();
     let ln2w = |s: f64| {
         if lost {
             Wide::Unknown
@@ -718,7 +843,19 @@ pub(crate) fn apply1(f: Fn1, w: Wide) -> Wide {
                 };
             }
             if huge {
-                // An integer: a pole if negative, beyond the range if not.
+                // Far out (see `Wide::far`) whether w is a whole number
+                // isn't held: Γ(1 + w) is still beyond the range for w > 0,
+                // but w!!, or Γ(1 + w) for w < 0 (a pole, or beside one),
+                // can't be told.
+                if w.far().is_some() {
+                    return if f == Factorial && m > 0.0 {
+                        Wide::HUGE
+                    } else {
+                        Wide::Unknown
+                    };
+                }
+                // An integer as held: a pole if negative, beyond the
+                // range if not.
                 return if m < 0.0 { Wide::Undef } else { Wide::HUGE };
             }
             count(f.apply(v), || {
@@ -804,7 +941,8 @@ pub(crate) fn apply2(f: Fn2, a: Wide, b: Wide) -> Wide {
             if am <= 0.0 || bm <= 0.0 || a == Wide::ONE {
                 return Wide::Undef;
             }
-            if a.lost() || b.lost() {
+            // (As `Wide::ln`: nothing of a far value's logarithm is held.)
+            if a.far().is_some() || b.far().is_some() {
                 return Wide::Unknown;
             }
             let (lx, lb) = (ln_dd(bm, be), ln_dd(am, ae));
@@ -844,6 +982,14 @@ pub(crate) fn apply2(f: Fn2, a: Wide, b: Wide) -> Wide {
             Some((x, y)) => count(f.apply(x, y), || fns::count_beyond(x, y, f == Fn2::NPr)),
             None => Wide::Unknown,
         },
+        // Two far values of one sign on one side can't be put in order,
+        // but either is all that is known of the least or greatest: a
+        // value of that sign on that side.
+        Fn2::Min | Fn2::Max
+            if a.far().is_some() && a.far() == b.far() && am.signum() == bm.signum() =>
+        {
+            a
+        }
         Fn2::Min | Fn2::Max => match a.cmp(b) {
             Some(Ordering::Greater) => {
                 if f == Fn2::Min {

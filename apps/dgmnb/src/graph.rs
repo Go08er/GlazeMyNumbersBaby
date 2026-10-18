@@ -59,9 +59,6 @@ struct Row {
     id: EquationId,
     edit: TextEdit,
     color: usize,
-    /// Only the current typed edit's origin and its listed variables.
-    /// A valid prefix can temporarily stop using a, then use it again.
-    typed_variables: Option<(String, BTreeMap<String, graphing::variable::Variable>)>,
 }
 
 enum Side {
@@ -258,7 +255,6 @@ impl GraphPage {
                 id,
                 edit: TextEdit::new(&eq.text, session::MAX_EQUATION_CHARS),
                 color: eq.color,
-                typed_variables: None,
             });
         }
         if page.rows.is_empty() {
@@ -293,7 +289,6 @@ impl GraphPage {
             id,
             edit: TextEdit::new(text, session::MAX_EQUATION_CHARS),
             color: self.next_color,
-            typed_variables: None,
         });
         self.next_color += 1;
         self.dirty = true;
@@ -371,31 +366,11 @@ impl GraphPage {
     }
 
     pub fn field_changed(&mut self, fid: ui::Id, _cx: &mut Cx) {
-        if let Some(r) = self.rows.iter_mut().find(|r| eq_field(r.id) == fid) {
+        if let Some(r) = self.rows.iter().find(|r| eq_field(r.id) == fid) {
             let (id, text) = (r.id, r.edit.text.clone());
-            let origin = r.edit.typing_origin();
-            if text.trim().is_empty() {
-                r.typed_variables = None;
-            } else if let Some(origin) = origin
-                && r.typed_variables
-                    .as_ref()
-                    .is_none_or(|(was, _)| was != origin)
-            {
-                r.typed_variables = Some((origin.to_string(), self.graph.variables().clone()));
-            }
+            // Every text on the way, each key typed: a slider the text
+            // stops using for a while is remembered (Graph::refresh).
             self.graph.set_equation_text(id, &text);
-            if let Some((was, values)) = &r.typed_variables
-                && (origin.is_some() || text == *was)
-            {
-                for (name, saved) in values {
-                    if self.graph.variable(name).is_some_and(|v| v != saved) {
-                        self.graph.update_variable(name, |v| *v = *saved);
-                    }
-                }
-            }
-            if origin.is_none() {
-                r.typed_variables = None;
-            }
             self.dirty = true;
             self.sync_vars();
             self.analysis_inputs_changed();
@@ -410,7 +385,6 @@ impl GraphPage {
             && let Ok(x) = text.replace('−', "-").trim().parse::<f64>()
             && x.is_finite()
         {
-            self.changed_variable();
             // Widen the slider if the typed value is outside it.
             self.graph.update_variable(&name, |v| {
                 if x < v.min() {
@@ -423,14 +397,6 @@ impl GraphPage {
             self.graph.set_variable(&name, x);
             self.dirty = true;
             self.analysis_inputs_changed();
-        }
-    }
-
-    /// A slider is shared: a deliberate value change supersedes every
-    /// row's current typing snapshot.
-    fn changed_variable(&mut self) {
-        for row in &mut self.rows {
-            row.typed_variables = None;
         }
     }
 
@@ -724,7 +690,6 @@ impl GraphPage {
             return true;
         }
         let value = value.clamp(v.min(), v.max());
-        self.changed_variable();
         self.graph.set_variable(&name, value);
         if let Some(e) = self.vars.get_mut(&name) {
             e.set_text(&format_value(value));
@@ -2172,22 +2137,31 @@ mod tests {
         g.update(Msg::Toggle(id), &mut cx);
         assert_eq!(g.graph.variable("a").unwrap().value(), 0.3);
         assert_eq!(g.vars["a"].text, "0.3");
-        // A physical-key replacement is reported a character at a time.
-        // Its valid x prefix must not lose a before a appears again.
+        // R20-M-04: a physical-key replacement is told a character at a
+        // time. Its valid x prefix uses no a (a isn't listed then); a comes
+        // back as it was, and so it does after undo and redo.
         let field = eq_field(id);
         g.field(field).unwrap().select_all();
         for c in "x+a*x+2".chars() {
             g.field(field).unwrap().type_in(&c.to_string());
             g.field_changed(field, &mut cx);
+            let text = g.field(field).unwrap().text.clone();
+            if g.graph.error(id).is_some() {
+                continue; // "x+", "x+a*": not drawn, nothing listed
+            }
+            match text.contains('a') {
+                true => assert_eq!(g.graph.variable("a").unwrap().value(), 0.3, "{text}"),
+                false => assert!(g.vars.is_empty(), "{text}"),
+            }
         }
-        assert_eq!(g.graph.variable("a").unwrap().value(), 0.3);
         assert!(g.field(field).unwrap().undo());
         g.field_changed(field, &mut cx);
+        assert_eq!(g.field(field).unwrap().text, "y=a*x", "one undo");
         assert_eq!(g.graph.variable("a").unwrap().value(), 0.3);
         assert!(g.field(field).unwrap().redo());
         g.field_changed(field, &mut cx);
         assert_eq!(g.graph.variable("a").unwrap().value(), 0.3);
-        // A deliberate value change must win over an earlier snapshot.
+        // A value changed meanwhile is the value from then on.
         assert!(g.adjust_slider(var_slider("a"), Adjust::To(0.7)));
         assert!(g.field(field).unwrap().undo());
         g.field_changed(field, &mut cx);
@@ -2195,13 +2169,15 @@ mod tests {
         assert!(g.field(field).unwrap().redo());
         g.field_changed(field, &mut cx);
         assert_eq!(g.graph.variable("a").unwrap().value(), 0.7);
-        // A real clear, followed by a new equation, still forgets a.
+        // Cleared and typed again, a is as it was, slider and value field.
         g.field(field).unwrap().select_all();
         g.field(field).unwrap().backspace(false);
         g.field_changed(field, &mut cx);
+        assert!(g.vars.is_empty());
         g.field(field).unwrap().type_in("a");
         g.field_changed(field, &mut cx);
-        assert_eq!(g.graph.variable("a").unwrap().value(), 1.0);
+        assert_eq!(g.graph.variable("a").unwrap().value(), 0.7);
+        assert_eq!(g.vars["a"].text, "0.7");
     }
 
     #[test]

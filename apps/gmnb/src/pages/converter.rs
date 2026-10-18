@@ -132,14 +132,30 @@ fn name_units(dropdown: &gtk::DropDown, spoken: &Rc<RefCell<HashMap<String, Stri
         child = c.next_sibling();
         todo.push(c);
     }
+    let (mut search, mut popovers) = (None, Vec::new());
     while let Some(w) = todo.pop() {
-        if w.is::<gtk::SearchEntry>() {
+        if let Some(entry) = w.downcast_ref::<gtk::SearchEntry>() {
             w.update_property(&[gtk::accessible::Property::Label("Search units")]);
+            // Undo from appcore's history, as DGMNB's unit search
+            // (crate::undo).
+            search = Some(crate::undo::attach(entry));
+        }
+        if let Some(popover) = w.downcast_ref::<gtk::Popover>() {
+            popovers.push(popover.clone());
         }
         let mut child = w.first_child();
         while let Some(c) = child {
             child = c.next_sibling();
             todo.push(c);
+        }
+    }
+    // GTK clears the search as the list closes (gtkdropdown.c
+    // `popover_closed`, before this): the program's text, which ends the
+    // history, as DGMNB's search starts afresh each time its list opens.
+    if let Some(search) = search {
+        for popover in popovers {
+            let search = search.clone();
+            popover.connect_closed(move |_| search.forget());
         }
     }
 }

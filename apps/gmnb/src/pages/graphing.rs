@@ -37,47 +37,6 @@ struct Row {
     color: Cell<usize>,
     /// The field's text, waiting to be told to the graph ([`Deferred`]).
     edit: Deferred,
-    undo_variables: UndoVariables,
-}
-
-/// One keyboard undo/redo sequence keeps the sliders it started with.
-/// GTK can undo the suffix of a typed replacement before its first
-/// character, leaving a valid equation that temporarily uses none of its
-/// parameters. The next undo must restore their settings too. This holds
-/// only one snapshot of the currently listed variables, never a growing
-/// cache of names, and an ordinary edit ends it.
-#[derive(Default)]
-struct UndoVariables {
-    values: RefCell<Option<std::collections::BTreeMap<String, graphing::variable::Variable>>>,
-    restoring: Cell<bool>,
-}
-
-impl UndoVariables {
-    fn begin(&self, graph: &Graph) {
-        if self.values.borrow().is_none() {
-            self.values.replace(Some(graph.variables().clone()));
-        }
-        self.restoring.set(true);
-    }
-
-    fn ordinary_key(&self) {
-        self.values.take();
-        self.restoring.set(false);
-    }
-
-    fn edited(&self, graph: &mut Graph) {
-        if !self.restoring.replace(false) {
-            self.values.take();
-            return;
-        }
-        if let Some(values) = self.values.borrow().as_ref() {
-            for (name, saved) in values {
-                if graph.variable(name).is_some_and(|v| v != saved) {
-                    graph.update_variable(name, |v| *v = *saved);
-                }
-            }
-        }
-    }
 }
 
 /// Runs an update once a toolkit operation is complete: on the next idle,
@@ -86,12 +45,12 @@ impl UndoVariables {
 /// (R17-M-03).
 ///
 /// An equation field's text property can change several times in one
-/// operation: GTK's undo or redo of a typed replacement reverses its
-/// deletion and its insertion one after the other, each notified, with the
-/// field empty in between. Told of that empty text, the graph would forget
-/// the sliders the restored text still uses (`Graph::refresh`); told once,
-/// of the text as it is when the operation is over, it keeps them. The
-/// same holds for any operation made of steps (a paste, a drop, an
+/// operation (GTK's own undo of a typed replacement reversed its deletion
+/// and its insertion one after the other, each notified, with the field
+/// empty in between; a program's insertion into a GtkText is notified
+/// before the entry is). The graph is told once, of the text as it is when
+/// the operation is over, so it draws no text that was only on the way.
+/// The same holds for any operation made of steps (a paste, a drop, an
 /// assistive technology's edit, an input method's commit), whatever it is.
 struct Deferred {
     context: glib::MainContext,
@@ -698,8 +657,9 @@ impl GraphingPage {
             error,
             color: Cell::new(color),
             edit: Deferred::new(glib::MainContext::default()),
-            undo_variables: UndoVariables::default(),
         });
+        // Undo from appcore's history, not GtkText's (R20-M-04, R20-M-05).
+        crate::undo::attach(&entry);
         style.set_popover(Some(&self.style_popover(&row)));
         self.paint_swatch(&row);
         self.show_drawn(&row);
@@ -719,13 +679,10 @@ impl GraphingPage {
         self.rows.borrow_mut().push(row.clone());
 
         // The text once each operation is over, not each step of it
-        // (Deferred): the graph never sees a text that was only on the way
-        // (the empty field in the middle of an undone replacement, of an
-        // assistive technology's SetTextContents), which would forget the
-        // sliders the final text still uses, as DGMNB's direct replacement
-        // keeps them. A text the user really clears, or an equation
-        // removed, still forgets them (Graph::refresh): that is where the
-        // operation ends.
+        // (Deferred): the graph never draws a text that was only on the way
+        // (the empty field in the middle of an assistive technology's
+        // SetTextContents). A slider the text stops using for a while, as
+        // typing over it does, is remembered (Graph::refresh).
         let weak = Rc::downgrade(self);
         entry.connect_text_notify(move |_| {
             if let Some(p) = weak.upgrade()
@@ -734,40 +691,6 @@ impl GraphingPage {
                 p.text_changed(id);
             }
         });
-        // Observe the field's public key events without handling them:
-        // GTK still owns undo and redo. A modifier by itself has no mapped
-        // key and does not break consecutive Ctrl+Z presses.
-        let undo_keys = gtk::EventControllerKey::new();
-        undo_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let (weak, weak_row) = (Rc::downgrade(self), Rc::downgrade(&row));
-        undo_keys.connect_key_pressed(move |_, key, _, mods| {
-            if let (Some(p), Some(row), Some(kp)) = (
-                weak.upgrade(),
-                weak_row.upgrade(),
-                crate::keymap::key_press(key, mods),
-            ) {
-                let undo = kp.ctrl
-                    && !kp.alt
-                    && (matches!(kp.key, appcore::Key::Char('z' | 'Z'))
-                        || (!kp.shift && matches!(kp.key, appcore::Key::Char('y' | 'Y'))));
-                if undo {
-                    row.undo_variables.begin(&p.graph.borrow());
-                    let row = Rc::downgrade(&row);
-                    // An undo with no history changes no text. Clear its
-                    // pending flag after any high-idle text update so a
-                    // later AT/keypad edit is never mistaken for undo.
-                    glib::idle_add_local_once(move || {
-                        if let Some(row) = row.upgrade() {
-                            row.undo_variables.restoring.set(false);
-                        }
-                    });
-                } else {
-                    row.undo_variables.ordinary_key();
-                }
-            }
-            glib::Propagation::Proceed
-        });
-        entry.add_controller(undo_keys);
         let weak = Rc::downgrade(self);
         let focus = gtk::EventControllerFocus::new();
         // Use the controller's own widget: capturing `entry` here would make
@@ -958,7 +881,6 @@ impl GraphingPage {
         // An edit draws a hidden equation again (as upstream's does).
         self.graph.borrow_mut().set_equation_text(id, text);
         if let Some(row) = self.rows.borrow().iter().find(|r| r.id == id) {
-            row.undo_variables.edited(&mut self.graph.borrow_mut());
             self.show_drawn(row);
         }
         let err = self.show_error(id);
@@ -988,15 +910,6 @@ impl GraphingPage {
             }
         }
         err
-    }
-
-    /// Sliders are shared by every equation. A value deliberately changed
-    /// between undo and redo becomes the new value; no row may restore an
-    /// older snapshot over it.
-    fn changed_variable(&self) {
-        for row in self.rows.borrow().iter() {
-            row.undo_variables.ordinary_key();
-        }
     }
 
     fn sync_variables(self: &Rc<Self>) {
@@ -1035,6 +948,8 @@ impl GraphingPage {
             value.set_value(var.value());
             value.set_width_chars(6);
             value.add_css_class("wc-spin");
+            // Undo from appcore's history, as the equations' (crate::undo).
+            crate::undo::attach(&value);
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             row.add_css_class("wc-var-row");
             row.append(&label);
@@ -1048,7 +963,6 @@ impl GraphingPage {
             let (n, v2) = (name.clone(), value.downgrade());
             scale.connect_value_changed(move |s| {
                 if let (Some(p), Some(v2)) = (weak.upgrade(), v2.upgrade()) {
-                    p.changed_variable();
                     p.graph.borrow_mut().set_variable(&n, s.value());
                     if (v2.value() - s.value()).abs() > 1e-12 {
                         v2.set_value(s.value());
@@ -1061,7 +975,6 @@ impl GraphingPage {
             let n = name.clone();
             value.connect_value_changed(move |v| {
                 if let (Some(p), Some(s2)) = (weak.upgrade(), s2.upgrade()) {
-                    p.changed_variable();
                     let x = v.value();
                     // Widen the slider if the typed value is outside it.
                     p.graph.borrow_mut().update_variable(&n, |var| {
@@ -1252,6 +1165,7 @@ impl GraphingPage {
             e
         };
         let (xmin, xmax, ymin, ymax) = (mk("X-Min"), mk("X-Max"), mk("Y-Min"), mk("Y-Max"));
+        let undo = [&xmin, &xmax, &ymin, &ymax].map(crate::undo::attach);
         for (i, (l, e)) in [
             ("X-Min", &xmin),
             ("X-Max", &xmax),
@@ -1322,11 +1236,13 @@ impl GraphingPage {
                     graphing::viewport::range_text(vp.y_min, ys),
                     graphing::viewport::range_text(vp.y_max, ys),
                 ];
-                for (e, t) in entries.iter().zip(texts) {
+                // The program's text, not the user's edit: it ends the
+                // field's history (crate::undo).
+                for ((e, undo), t) in entries.iter().zip(&undo).zip(texts) {
                     if let Some(e) = e.upgrade()
                         && !e.has_focus()
                     {
-                        e.set_text(&t);
+                        undo.write(&t);
                     }
                 }
             }
@@ -1555,10 +1471,11 @@ mod tests {
     /// What the graph is told of a whole replacement (round 15, Question
     /// 2). GTK's set_text (an AT client's SetTextContents) emits `changed`
     /// for the deletion and for the insertion, the text property once
-    /// (checked natively over AT-SPI): told each change, the empty text
-    /// between forgets the slider; told the text, as the equation field
-    /// is now, the slider stays, value, range and step, as DGMNB's direct
-    /// replacement keeps it. A text really cleared still forgets it.
+    /// (checked natively over AT-SPI): the graph is told the text, as the
+    /// equation field is now. Told each change, or the text cleared and
+    /// typed again, or a typed replacement a character at a time (R20-M-04),
+    /// the slider is as it was, value, range and step: one no equation uses
+    /// for a while is remembered (Graph::refresh).
     #[test]
     fn a_whole_replacement_keeps_its_sliders() {
         let setup = || {
@@ -1573,58 +1490,37 @@ mod tests {
             (g, id)
         };
         let (mut g, id) = setup();
-        tell(&mut g, id, &["", "y = a*x+2"]);
-        assert_eq!(g.variable("a").unwrap().value(), 1.0);
-
-        let (mut g, id) = setup();
         let kept = *g.variable("a").unwrap();
+        tell(&mut g, id, &["", "y = a*x+2"]);
+        assert_eq!(g.variable("a"), Some(&kept));
         tell(&mut g, id, &["y = a*x+2"]);
         assert_eq!(g.variable("a"), Some(&kept));
         tell(&mut g, id, &[""]);
         assert!(g.variables().is_empty());
         tell(&mut g, id, &["y = a*x+2"]);
-        assert_eq!(g.variable("a").unwrap().value(), 1.0);
-
-        // GTK's typed replacement can take two undo steps. A valid
-        // intermediate x must not reset a when the second restores it.
+        assert_eq!(g.variable("a"), Some(&kept));
+        // Typed over a key at a time, then undone and redone.
         let (mut g, id) = setup();
-        let kept = *g.variable("a").unwrap();
-        let undo = super::UndoVariables::default();
-        for text in ["x", "y = a*x+1", "x", "x+a*x+2"] {
-            undo.begin(&g);
+        for text in ["x", "x+", "x+a", "x+a*x+2", "y = a*x+1", "x+a*x+2"] {
             tell(&mut g, id, &[text]);
-            undo.edited(&mut g);
-            if let Some(a) = g.variable("a") {
-                assert_eq!(*a, kept);
+            if text.contains('a') {
+                assert_eq!(g.variable("a"), Some(&kept), "{text}");
             }
         }
-        // A deliberate slider change between undo and redo wins over
-        // the old snapshot, as changed_variable clears every row's.
-        undo.ordinary_key();
+        // A value changed meanwhile is the value from then on.
         g.set_variable("a", 0.7);
-        for text in ["x", "y = a*x+1"] {
-            undo.begin(&g);
-            tell(&mut g, id, &[text]);
-            undo.edited(&mut g);
-        }
+        tell(&mut g, id, &["x", "y = a*x+1"]);
         assert_eq!(g.variable("a").unwrap().value(), 0.7);
-        // An ordinary clear and retype still starts a new variable.
-        undo.ordinary_key();
-        tell(&mut g, id, &[""]);
-        undo.edited(&mut g);
-        tell(&mut g, id, &["a*x"]);
-        undo.edited(&mut g);
-        assert_eq!(g.variable("a").unwrap().value(), 1.0);
     }
 
     /// R17-M-03: what an equation field's text notifications tell the
     /// graph, through the field's own `Deferred` on a main loop of its own.
-    /// One operation, GTK's undo of a typed replacement (the typed text
-    /// deleted, the old one inserted, each notified, the field empty in
-    /// between), is told once, on the next idle, as the field has it then:
-    /// the slider stays. A text taken for telling at once (Enter, a click)
-    /// isn't told again. A real clear, an operation of its own, still
-    /// forgets the slider.
+    /// One operation made of steps (a typed replacement undone: the typed
+    /// text deleted, the old one inserted, each notified, the field empty
+    /// in between) is told once, on the next idle, as the field has it
+    /// then. A text taken for telling at once (Enter, a click) isn't told
+    /// again. A real clear, an operation of its own, is told: the slider
+    /// is no longer listed, and comes back as it was (Graph::refresh).
     #[test]
     fn one_operation_is_told_once() {
         use std::cell::{Cell, RefCell};
@@ -1678,14 +1574,14 @@ mod tests {
                 assert!(!edit.take());
                 assert_eq!(a(), Some(0.3));
 
-                // A real clear forgets a; typed again, it starts at 1.
+                // A real clear unlists a; typed again, it is as it was.
                 notify("");
                 idle();
                 assert_eq!(told.get(), 3);
                 assert!(graph.borrow().variables().is_empty());
                 notify("y = a*x+1");
                 idle();
-                assert_eq!(a(), Some(1.0));
+                assert_eq!(a(), Some(0.3));
             })
             .unwrap();
     }

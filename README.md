@@ -227,7 +227,7 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **1,100 tests** (counts include
+`nix develop -c cargo test --workspace` runs **1,113 tests** (counts include
 doctests; six more are `#[ignore]`d: a live currency fetch, the full
 metamorphic graph sweep, 20,000 random saved sessions, and the
 cross-checking tester's long run, single-expression check and case list).
@@ -255,10 +255,10 @@ upstream sources with g++:
 | calcvm (187 + 1 ignored) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage and the saved-state size budget (long pasted sessions keep their newest History, memory and modes) |
 | unitconv (140 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
 | datecalc (40), copypaste (40) | Ports of `DateCalculatorTests` and `CopyPasteManagerTests`, plus paste key-sequence tests |
-| graphing (429 + 4 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
-| appcore (62) | Keyboard map, key scripts, converter paste validation, settings storage (huge/corrupt files, per-section budgets, a long calculator session that used to cost the whole file), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
+| graphing (437 + 4 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, sliders (kept while their equation isn't drawn, remembered while no equation uses them), function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows, a monotone piece or extremum at a domain end only where the proof reaches it; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
+| appcore (66) | Keyboard map, key scripts, a text field's undo history (typed runs, its bound, redo cleared, the selection restored), converter paste validation, settings storage (huge/corrupt files, per-section budgets, a long calculator session that used to cost the whole file), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
 | crmath (1) | The vendored CORE-MATH's two builds (baseline and x86-64-v3) give the same bits |
-| gmnb (24), gmnb-launcher (4), dgmnb (68) | GDK key translation, palette contrast for extreme accents, settings compatibility, licence text that parses as markup; the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it) and where it finds GMNB; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown and pipe deadlines |
+| gmnb (25), gmnb-launcher (4), dgmnb (68) | GDK key translation, a field's undo keys, palette contrast for extreme accents, settings compatibility, licence text that parses as markup; the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it) and where it finds GMNB; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown and pipe deadlines |
 
 The oracles live in `tools/oracle/` and need the upstream repository checked
 out at `reference/calculator` to regenerate the golden files.
@@ -267,13 +267,14 @@ CI also runs checks that need more than `cargo test --workspace`:
 
 - **Certificate replay** (`cargo test -p graphing --features mpfr-oracle
   --test certify_replay`): the certified analysis of each of the certify
-  corpus's 204 functions goes through JSON to a separate checker
+  corpus's 204 functions, and of three with a monotone piece or extremum
+  at an end of the domain, goes through JSON to a separate checker
   (`crates/graphing/tests/replay`) with its own MPFR interval arithmetic,
   sharing only graphing's parser and expression tree with the certifier. A
   claim is *strong* when it re-proves it on the function's own tree, *weak*
   when it can only prove it on a tree the certifier supplied (the
   simplifier's form, the derivatives) or check it at sample points, so it
-  rests on the simplifier: today 74,389 strong, 172 weak. A claim refuted
+  rests on the simplifier: today 75,427 strong, 172 weak. A claim refuted
   or left open, or a row that doesn't follow from its claims, fails it.
   Each row is derived, not matched: an exact limit is equal to the
   derived one, never just inside the same enclosure; a gap about a point
@@ -351,8 +352,12 @@ CI also runs checks that need more than `cargo test --workspace`:
   past 2⁵³ as its exponent is undefined where its value is 0; and a root
   of a non-whole degree can be tens of ulps off next to zero. Known but not
   in the table: a count past even the extended range (beyond e^(2⁴⁷)) keeps
-  only its side, so `ln(nCr(x^2,x))` at 10¹⁰⁰ draws +∞ (its value is about
-  2.3·10¹⁰²) and `nCr(x^2,x)/nCr(x^2,x)` there is a gap. The table's other
+  only its side, so `ln(nCr(x^2,x))` at 10¹⁰⁰ (about 2.3·10¹⁰²) and
+  `nCr(x^2,x)/nCr(x^2,x)` there are gaps. So does any value past 2⁵³
+  binades (e^(10³⁰⁰)): two on one side of the doubles are never put in
+  order, nor their logarithms taken, so `e^(10^300)/e^(10^299)` is a gap
+  too, though it is plainly past the doubles (review 20: such orders,
+  taken from rounded exponents, drew false curves). The table's other
   entries are a documented limit (a circular function of a typed whole number of
   16 or more digits is taken at the number's double) and the tester's own
   reference evaluator on subnormal operands, where the compiled value is
@@ -421,8 +426,13 @@ CI also runs checks that need more than `cargo test --workspace`:
   x, and the curve drawn, its trace and its analysis all read the same
   function. This is more conservative than Windows' symbolic engine:
   functions it can't prove (some poles and far features) get fewer
-  answers. Windows-parity of the analysis is not claimed; the conventions
-  it follows where Windows' choice isn't known are in
+  answers. A monotone piece or an extremum is placed at an end of the
+  domain only where the proof of the slope reaches that end:
+  √(x − 1000)·ln(x − 1000) + x falls from 1000, but its slope is proven
+  only from the double after 1000, so its falling piece reads
+  (≈1000, ≈1000.08) with "there may be more", and an extremum at such an
+  end isn't listed. Windows-parity of the analysis is not claimed; the
+  conventions it follows where Windows' choice isn't known are in
   [docs/ti-conventions.md](docs/ti-conventions.md).
 - **Explicit curves: joins are proven until a work budget runs out.**
   Within the budget, two plotted points of y = f(x) are joined only when
@@ -527,21 +537,51 @@ CI also runs checks that need more than `cargo test --workspace`:
   Programmer, which has no History. In a wide window, where the lists
   are docked, it chooses the History list; the original's key does
   nothing there.
+- **A slider keeps its settings while no equation uses it.** The
+  original reads an equation only when it is submitted (Enter, or the
+  focus leaving the box) and then forgets the variables no equation uses;
+  both twins graph each text as it is typed, so typing `x+a*x+2` over
+  `y=a*x+1` passes through `x`, and undo back through whatever the field
+  held, with no `a` in it. A variable no equation uses keeps its value,
+  range and step for the session (the 64 most recently used names), as
+  the TI-84 Plus CE's A–Z keep theirs, and comes back with them when an
+  equation uses it again: after typing, undo or redo, an assistive
+  technology's replacement, or the equation removed and added again
+  ([docs/ti-conventions.md](docs/ti-conventions.md)). Sliders are not
+  saved with the session, in use or not.
 - **Undo in a text field** (Ctrl+Z; Ctrl+Shift+Z or Ctrl+Y to redo). The
-  original's equation box is a rich edit box with its own undo. GMNB's
-  fields have GTK's and DGMNB's their own. A keypad key, a paste, a cut
-  or a deletion is taken back whole, and what it replaced is selected
-  again. DGMNB groups a run of typed characters; GTK can separate the
-  first selection-replacing character from the rest of that run. GTK
-  also counts a keypad key or a paste put straight after typed text as
-  part of that run, DGMNB as an edit of its own. DGMNB retains slider
-  settings while a consecutive typed run temporarily stops using a
-  variable. GMNB keeps them through consecutive keyboard undo/redo;
-  its context-menu undo does not use that snapshot. Assistive whole-field
-  replacement uses DGMNB's user-edit history; GTK's AT-SPI
-  `SetTextContents` still ends GMNB's field history. In both,
-  text the app writes itself (a variable's value when its slider moves,
-  a range reset) ends that field's history.
+  original's equation box is a rich edit box with its own undo. Both
+  twins keep one model of it (`appcore::history`) in every field typed
+  into: the equations, the graph range fields, a variable's value, Date's
+  offsets and the converter's unit search (GMNB instead of GtkText's own
+  history, which an assistive technology's `SetTextContents` clears, and
+  which takes the first character typed over a selection back apart from
+  the rest). Each edit is taken back whole, and what it replaced is
+  selected again: a run of typed characters, the first one typed over a
+  selection included, is one edit; a keypad key, a paste, a drop or
+  middle click (GMNB), a cut, a deletion, an input method's commit and an
+  assistive technology's edit are each one of their own (its
+  `SetTextContents`; in GMNB its `InsertText` and `DeleteText` too, which
+  DGMNB's AccessKit doesn't offer). A text the app writes into a field
+  itself (a variable's value when its slider moves, a range field
+  following the graph, the unit search cleared as its list closes or
+  opens) ends that field's history, as GTK's `set_text` does; the text a
+  field has already, written again, changes nothing. GMNB's value and
+  offset fields are spin buttons, which take a typed value on Enter or
+  as the focus leaves them and then write it back in their own format
+  (`0.3` as `0.300`): that is part of the user's edit, and one Ctrl+Z
+  takes both back; a value from their arrows or Page keys, like one from
+  the slider, is the app's text. DGMNB's fields take a value as it is
+  typed. In both, undo in a value field gives the variable (or the
+  offset) the value of the text it puts back, and Date's offsets take
+  digits alone, refusing a whole insertion with anything else in it, as
+  GTK's numeric spin buttons do (which also let a sign in at the start,
+  and take a negative offset as 0). GMNB's fields' context menu has the
+  original's Undo (its equation box's menu has one, enabled when there
+  is something to undo), after GTK's own entries; GtkText's menu has no
+  Undo, and DGMNB's fields have no context menu. GTK leaves that menu,
+  its own entries too, out of the accessibility tree (Shift+F10 or the
+  Menu key opens it).
 - **What a screen reader is told** about the display and the parentheses
   follows the original's view model (`SetPrimaryDisplay`,
   `OnBinaryOperatorReceived`, `SetParenthesisCount`,
