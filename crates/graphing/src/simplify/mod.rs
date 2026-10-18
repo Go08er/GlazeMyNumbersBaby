@@ -87,12 +87,32 @@ fn exact_add(x: f64, y: f64) -> Option<f64> {
     (s.is_finite() && err == 0.0).then_some(s)
 }
 
-/// x·y when the double product is exact (its fma residual is 0, and it is
-/// no subnormal, whose residual could itself be lost).
+/// x·y when the double product is exact. Even a normal product can have
+/// an FMA residual smaller than the least subnormal, so a residual of 0
+/// alone proves nothing there. Its integer significands' product must
+/// fit in a double without losing any significant bit.
 fn exact_mul(x: f64, y: f64) -> Option<f64> {
     let p = x * y;
-    let normal = p == 0.0 && (x == 0.0 || y == 0.0) || p.is_normal();
-    (normal && x.mul_add(y, -p) == 0.0).then_some(p)
+    if p == 0.0 && (x == 0.0 || y == 0.0) {
+        return Some(p);
+    }
+    if !p.is_normal() {
+        return None;
+    }
+    let parts = |v: f64| {
+        let bits = v.to_bits();
+        let fraction = bits & ((1u64 << 52) - 1);
+        let exponent = ((bits >> 52) & 0x7ff) as i32;
+        let (m, e) = if exponent == 0 {
+            (fraction, -1074)
+        } else {
+            (fraction | (1u64 << 52), exponent - 1075)
+        };
+        let zeros = m.trailing_zeros();
+        (u128::from(m >> zeros), e + zeros as i32)
+    };
+    let ((mx, ex), (my, ey), (mp, ep)) = (parts(x), parts(y), parts(p));
+    (mx * my == mp && ex + ey == ep).then_some(p)
 }
 
 /// x/y when the double quotient is exact.
@@ -102,7 +122,7 @@ fn exact_div(x: f64, y: f64) -> Option<f64> {
     }
     let q = x / y;
     let normal = q == 0.0 && x == 0.0 || q.is_normal();
-    (normal && q.mul_add(y, -x) == 0.0).then_some(q)
+    (normal && exact_mul(q, y) == Some(x)).then_some(q)
 }
 
 pub(crate) fn neg(a: Expr) -> Expr {
