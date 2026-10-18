@@ -1675,7 +1675,7 @@ fn monotone_bridge(fx: &Fx, all: &[RowCert], x: B, want: Option<bool>, open_hi: 
     if !continuous {
         return false;
     }
-    if want.is_none() && super::algebra::zero_derivative(&fx.f, &fx.lits, &fx.vars, fx.unit) {
+    if want.is_none() && locally_constant(fx, &fx.f) {
         return true;
     }
     let origin = if open_hi && x.1.is_finite() {
@@ -1709,6 +1709,26 @@ fn monotone_bridge(fx: &Fx, all: &[RowCert], x: B, want: Option<bool>, open_hi: 
         super::algebra::derivative_tree(&e, &fx.lits, &fx.vars, fx.unit)
             .is_some_and(|d| claims::factor_sign_over(fx, &d, &xb, 6) == Some(up))
     })
+}
+
+/// e's derivative is 0 wherever e is defined: by the replay's field
+/// ([`super::algebra::zero_derivative`]), or e x-free, or e built by any
+/// operation from such parts (a function of numbers locally constant is
+/// locally constant: (x/x)^(2⁵³ + 1), whose power the field doesn't read).
+/// With f continuous on a span (the caller's), f is constant there.
+fn locally_constant(fx: &Fx, e: &graphing::ast::Expr) -> bool {
+    use graphing::ast::Expr;
+    if !super::eval::contains_x(e)
+        || super::algebra::zero_derivative(e, &fx.lits, &fx.vars, fx.unit)
+    {
+        return true;
+    }
+    match e {
+        Expr::Neg(a) | Expr::Degrees(a) => locally_constant(fx, a),
+        Expr::Bin(_, a, b) => locally_constant(fx, a) && locally_constant(fx, b),
+        Expr::Call(_, args) => args.iter().all(|a| locally_constant(fx, a)),
+        _ => false,
+    }
 }
 
 /// Boxes sorted by their low ends, each with the greatest high end of
