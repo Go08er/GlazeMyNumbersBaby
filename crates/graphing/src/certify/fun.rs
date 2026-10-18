@@ -1487,9 +1487,50 @@ pub fn symbolic_derivs(
             _ => d,
         }
     };
-    let d1 = simp(crate::diff::derivative_bounded(e, unit, DIFF_NODES)?);
-    let d2 = simp(crate::diff::derivative_bounded(&d1, unit, DIFF_NODES)?);
+    let d = |e: &Expr| -> Option<Expr> {
+        Some(exact_unit_factor(
+            crate::diff::derivative_bounded(e, unit, DIFF_NODES)?,
+            e,
+            unit,
+        ))
+    };
+    let d1 = simp(d(e)?);
+    let d2 = simp(d(&d1)?);
     Some([canonical(&d1), canonical(&d2)])
+}
+
+/// `d`, the derivative of `e` in degrees or grads, with the angle unit's
+/// factor written exactly: π/180 (π/200), where the differentiator writes
+/// the double nearest it, a number only near its own (`Lit::Near`) that
+/// [`sound_constants`] refuses. Each `Near` number of `d` with that double
+/// is the factor (the differentiator writes no other number so) unless
+/// `e` holds one already, when `d` is left as it is. (Every derivative
+/// tree in degrees was refused so: atan(ln|x|) in degrees had no f′ to
+/// clear the gaps beside its excluded 0, where radians had. Round 20.)
+fn exact_unit_factor(d: Expr, e: &Expr, unit: crate::functions::TrigUnit) -> Expr {
+    use crate::ast::{Constant, Lit};
+    use crate::functions::TrigUnit;
+    let half_turn = match unit {
+        TrigUnit::Radians => return d,
+        TrigUnit::Degrees => 180.0,
+        TrigUnit::Grads => 200.0,
+    };
+    let k = unit.to_radians_factor();
+    let is_factor = |n: &Expr| matches!(n, Expr::Num(v, Lit::Near) if *v == k);
+    let mut held = false;
+    e.visit(&mut |n| held |= is_factor(n));
+    if held {
+        return d;
+    }
+    d.map(&|n| {
+        is_factor(n).then(|| {
+            Expr::bin(
+                BinOp::Div,
+                Expr::Const(Constant::Pi),
+                Expr::Num(half_turn, Lit::Exact),
+            )
+        })
+    })
 }
 
 /// Factors whose zeros, on the domain of `e`, are the zeros of `e`: the
