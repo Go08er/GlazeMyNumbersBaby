@@ -43,8 +43,9 @@
 # InsertText and DeleteText (in GMNB: DGMNB's AccessKit offers only
 # SetTextContents) is taken back by one Ctrl+Z (and redone), and
 # "\n\n y=a*x+2\ny=3" set is " y=a*x+2". A keypad key over a selection and
-# a paste over the whole text are one Ctrl+Z each. In GMNB, the field's
-# context menu (Shift+F10) has an Undo (U), which takes back an edit too.
+# a paste over the whole text are one Ctrl+Z each; a move ends a run of
+# typing. In GMNB, the field's context menu (Shift+F10) has an Undo (U),
+# which takes back an edit too.
 # Pointer input (wlrctl, swaymsg) has not been tried.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -151,7 +152,13 @@ sleep 1.5
 GSK_RENDERER=cairo GMNB_STILL=1 "$bin" >"$rt/app.log" 2>&1 &
 apppid=$!
 pids+=($apppid)
-atspi display "$app" >/dev/null || fail "$app never showed a display"
+# The app can be on the bus a moment before its display is in the tree.
+shown=
+for _ in $(seq 10); do
+  atspi display "$app" >/dev/null 2>&1 && { shown=1; break; }
+  sleep 0.5
+done
+[ -n "$shown" ] || fail "$app never showed a display"
 keys() { "$WTYPE" -s 150 "$@"; }
 settle() { sleep 0.6; }
 
@@ -325,6 +332,23 @@ edit() {
   expect "Ctrl+Z" "y=a*x+1" 0.3
   redo
   expect "Ctrl+Shift+Z" "$pasted" 0.3
+  undo
+  expect "Ctrl+Z" "y=a*x+1" 0.3
+
+  # A move ends a run of typing: a character typed after it is an edit of
+  # its own.
+  focus_equation
+  keys -k End
+  keys 0
+  sleep 0.3
+  keys 0
+  keys -k Left
+  keys -k Right
+  keys 7
+  settle
+  expect "typed 00, Left, Right, 7" "y=a*x+1007" 0.3
+  undo
+  expect "Ctrl+Z" "y=a*x+100" 0.3
   undo
   expect "Ctrl+Z" "y=a*x+1" 0.3
 

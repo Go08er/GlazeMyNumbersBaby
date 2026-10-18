@@ -44,10 +44,15 @@ impl TextEdit {
 
     /// Replaces the text from outside (a value the page shows, a session
     /// restored): not an edit of the user's, so there is nothing to undo
-    /// after it, as after GTK's `set_text`.
+    /// after it, as after GTK's `set_text`. The text the field has already
+    /// is left alone, history and all, as GMNB's fields leave it.
     pub fn set_text(&mut self, text: &str) {
         let line = appcore::input::single_line(text);
-        self.text = self.clamp(&line).to_string();
+        let line = self.clamp(&line);
+        if line == self.text {
+            return;
+        }
+        self.text = line.to_string();
         self.cursor = self.text.len();
         self.anchor = self.cursor;
         self.history.clear();
@@ -433,9 +438,12 @@ mod tests {
         e.delete(false);
         e.insert("y");
         assert!(!e.undo(), "{}", e.text);
-        // A text set from outside is not an edit, and ends the history.
+        // A text set from outside is not an edit, and ends the history;
+        // the text the field has already changes nothing.
         e.select_all();
         e.type_in("z");
+        e.set_text("z");
+        assert!(e.undo() && e.redo());
         e.set_text("w");
         assert!(!e.undo() && !e.redo());
         // AT-SPI whole-field replacement is a user edit, unlike a value
