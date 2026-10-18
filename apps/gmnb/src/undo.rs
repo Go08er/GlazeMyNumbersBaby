@@ -1,5 +1,7 @@
-//! Undo in GMNB's own text fields from appcore's history (DGMNB's model)
-//! instead of GtkText's own (R20-M-04, R20-M-05).
+//! Undo in GMNB's text fields from appcore's history (DGMNB's model)
+//! instead of GtkText's own (R20-M-04, R20-M-05): the equations, the graph
+//! range fields, the spin buttons (a variable's value, Date's offsets) and
+//! the converter's unit search, each where DGMNB has a `TextEdit`.
 //!
 //! GtkText keeps a private undo history no program can add to or keep:
 //! `gtk_editable_set_text`, which is what an assistive technology's
@@ -19,7 +21,7 @@
 //! selection are read as they were) and ends with the field's one `text`
 //! notification. GtkText makes each of its own operations one change (it
 //! holds its notifications for it, `begin_change`), and
-//! `gtk_editable_set_text` on the entry holds the entry's: an assistive
+//! `gtk_editable_set_text` on the field holds the field's: an assistive
 //! technology's whole replacement, a deletion and an insertion, is one.
 //!
 //! A character typed by a key pressed in the field is typing: a run of
@@ -41,8 +43,20 @@
 //! opens it.)
 //!
 //! A text the program writes itself ([`FieldUndo::write`]: a range field
-//! following the graph) is not the user's edit: it ends the history, as
+//! following the graph; GTK clearing the unit search as its list closes,
+//! [`FieldUndo::forget`]) is not the user's edit: it ends the history, as
 //! GTK's `set_text` ends GTK's and DGMNB's `TextEdit::set_text` its own.
+//!
+//! A spin button writes its text itself: its value, formatted (`output`).
+//! When it takes the text the user typed (Enter, or the focus leaving it:
+//! `gtk_spin_button_update`), the text it writes back (`0.3` as `0.300`,
+//! or its value again for a text that isn't a number) is part of that
+//! edit: one Ctrl+Z takes both back. A value it gets from anywhere else
+//! (its slider, its arrows, Page Up or Down, an assistive technology's
+//! Value) is the program's text, and ends the history, as a variable's
+//! value written by its slider ends DGMNB's. An undo or a redo in a spin
+//! button gives it the value of the text it puts back, as DGMNB's value
+//! field takes every text as it changes.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -53,7 +67,9 @@ use gtk::{gdk, gio, glib};
 
 /// One field's history ([`attach`]).
 pub struct FieldUndo {
-    entry: glib::WeakRef<gtk::Entry>,
+    /// The field (an entry, a spin button, a search entry).
+    field: glib::WeakRef<gtk::Editable>,
+    /// The GtkText it edits through.
     text: glib::WeakRef<gtk::Text>,
     history: RefCell<History>,
     /// The text and the selection as they were before the operation now
@@ -66,6 +82,13 @@ pub struct FieldUndo {
     restoring: Cell<bool>,
     /// The program writing the field's text ([`FieldUndo::write`]).
     writing: Cell<bool>,
+    /// A spin button's text changed by the user and not yet taken (as a
+    /// value) by it.
+    untaken: Cell<bool>,
+    /// A spin button writing its value as its text (`output`): whether it
+    /// takes the user's text ([`FieldUndo::untaken`]), which the text it
+    /// writes then is part of.
+    output: Cell<Option<bool>>,
     /// The context menu's Undo.
     undo_action: gio::SimpleAction,
 }
@@ -100,27 +123,43 @@ fn key_role(key: gdk::Key, mods: gdk::ModifierType) -> KeyRole {
     }
 }
 
-/// Gives `entry` a [`FieldUndo`] in place of its GtkText's own history.
-/// Call once, before the field is shown (its handlers then come before
-/// any added when it is realized, [`crate::paste`]'s).
-pub fn attach(entry: &gtk::Entry) -> Rc<FieldUndo> {
+/// Marks a field [`attach`] has given its history (the history itself).
+const ATTACHED: &str = "gmnb-field-undo";
+
+/// Gives `editable` (a GtkEntry, a GtkSpinButton, a GtkSearchEntry: a field
+/// that edits through a GtkText) a [`FieldUndo`] in place of its GtkText's
+/// own history; the one it has already, if it has one. Call before the
+/// field is shown (its handlers then come before any added when it is
+/// realized, [`crate::paste`]'s).
+pub fn attach(editable: &(impl IsA<gtk::Editable> + IsA<gtk::Widget>)) -> Rc<FieldUndo> {
+    let widget = editable.upcast_ref::<gtk::Widget>();
+    // SAFETY: ATTACHED is only ever set, and read, here, always as
+    // Rc<FieldUndo>.
+    if let Some(field) = unsafe { widget.data::<Rc<FieldUndo>>(ATTACHED) } {
+        return unsafe { field.as_ref() }.clone();
+    }
+    let entry = editable.upcast_ref::<gtk::Editable>();
     let text = entry
         .delegate()
         .and_downcast::<gtk::Text>()
-        .expect("a GtkEntry edits through a GtkText");
+        .expect("the field edits through a GtkText");
     text.set_enable_undo(false);
     let undo_action = gio::SimpleAction::new("undo", None);
     undo_action.set_enabled(false);
     let field = Rc::new(FieldUndo {
-        entry: entry.downgrade(),
+        field: entry.downgrade(),
         text: text.downgrade(),
         history: RefCell::default(),
         before: RefCell::default(),
         typing: Cell::new(false),
         restoring: Cell::new(false),
         writing: Cell::new(false),
+        untaken: Cell::new(false),
+        output: Cell::new(None),
         undo_action: undo_action.clone(),
     });
+    // SAFETY: as above.
+    unsafe { widget.set_data(ATTACHED, field.clone()) };
 
     // The state before an operation, at its first change: GtkText's
     // handlers run after these (the signals run their class handler last).
@@ -128,25 +167,43 @@ pub fn attach(entry: &gtk::Entry) -> Rc<FieldUndo> {
     text.connect_insert_text(move |_, _, _| f.begin());
     let f = field.clone();
     text.connect_delete_text(move |_, _, _| f.begin());
-    // Its end: one notification of the entry's text per operation.
+    // Its end: one notification of the field's text per operation.
     let f = field.clone();
     entry.connect_notify_local(Some("text"), move |_, _| f.changed());
+    // A spin button about to write its value as its text: taking the
+    // user's, or given a value from elsewhere. Runs before its default
+    // output (this handler leaves the writing to it).
+    if let Some(spin) = editable.dynamic_cast_ref::<gtk::SpinButton>() {
+        let f = field.clone();
+        spin.connect_output(move |_| {
+            f.output.set(Some(f.untaken.replace(false)));
+            // One that writes nothing (the text is the value already) has
+            // no text notification to end it: the next idle does.
+            let weak = Rc::downgrade(&f);
+            glib::idle_add_local_once(move || {
+                if let Some(f) = weak.upgrade() {
+                    f.output.set(None);
+                }
+            });
+            glib::Propagation::Proceed
+        });
+    }
 
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     let f = field.clone();
     keys.connect_key_pressed(move |_, key, _, mods| f.key(key, mods));
-    entry.add_controller(keys);
+    widget.add_controller(keys);
     let click = gtk::GestureClick::builder()
         .button(0)
         .propagation_phase(gtk::PropagationPhase::Capture)
         .build();
     let f = field.clone();
     click.connect_pressed(move |_, _, _, _| f.history.borrow_mut().end_run());
-    entry.add_controller(click);
+    widget.add_controller(click);
 
     // The context menu's Undo, as upstream's equation box has it. Weak:
-    // the entry holds the action.
+    // the field holds the action.
     let weak = Rc::downgrade(&field);
     undo_action.connect_activate(move |_, _| {
         if let Some(f) = weak.upgrade() {
@@ -155,12 +212,17 @@ pub fn attach(entry: &gtk::Entry) -> Rc<FieldUndo> {
     });
     let actions = gio::SimpleActionGroup::new();
     actions.add_action(&undo_action);
-    entry.insert_action_group("field", Some(&actions));
+    widget.insert_action_group("field", Some(&actions));
     let section = gio::Menu::new();
     section.append(Some("_Undo"), Some("field.undo"));
     let menu = gio::Menu::new();
     menu.append_section(None, &section);
-    entry.set_extra_menu(Some(&menu));
+    // An entry sets its GtkText's menu from its own (with its emoji items);
+    // the others leave their GtkText's alone.
+    match editable.dynamic_cast_ref::<gtk::Entry>() {
+        Some(entry) => entry.set_extra_menu(Some(&menu)),
+        None => text.set_extra_menu(Some(&menu)),
+    }
     field
 }
 
@@ -193,20 +255,29 @@ impl FieldUndo {
         }
     }
 
-    /// The entry's text changed: an operation is over.
+    /// The field's text changed: an operation is over.
     fn changed(&self) {
         let before = self.before.take();
         let typing = self.typing.replace(false);
+        let output = self.output.take();
         if self.restoring.get() {
             return;
         }
         let mut history = self.history.borrow_mut();
-        if self.writing.get() {
-            history.clear();
-        } else if let (Some(before), Some(now)) = (before, self.now()) {
-            history.record(before, &now.text, now.cursor, typing);
-        } else {
-            history.end_run();
+        match output {
+            // A spin button writing back the text it took: part of the
+            // user's edit.
+            Some(true) => history.end_run(),
+            // Its value from elsewhere: the program's text.
+            Some(false) => history.clear(),
+            None if self.writing.get() => history.clear(),
+            None => match (before, self.now()) {
+                (Some(before), Some(now)) => {
+                    history.record(before, &now.text, now.cursor, typing);
+                    self.untaken.set(true);
+                }
+                _ => history.end_run(),
+            },
         }
         self.undo_action.set_enabled(history.can_undo());
     }
@@ -239,9 +310,10 @@ impl FieldUndo {
     }
 
     /// Undoes or redoes the field's last edit, if there is one: its text
-    /// and selection as they were, told as one change of its text.
+    /// and selection as they were, told as one change of its text. A spin
+    /// button takes the text's value.
     fn step(&self, chord: Chord) {
-        let (Some(entry), Some(now)) = (self.entry.upgrade(), self.now()) else {
+        let (Some(entry), Some(now)) = (self.field.upgrade(), self.now()) else {
             return;
         };
         let was = {
@@ -259,8 +331,13 @@ impl FieldUndo {
                 let at = |n: usize| i32::try_from(n).unwrap_or(i32::MAX);
                 entry.select_region(at(was.anchor), at(was.cursor));
             }
+            if let Some(spin) = entry.dynamic_cast_ref::<gtk::SpinButton>() {
+                spin.update();
+            }
             self.restoring.set(false);
             self.before.take();
+            self.output.take();
+            self.untaken.set(false);
         }
         self.undo_action
             .set_enabled(self.history.borrow().can_undo());
@@ -270,7 +347,7 @@ impl FieldUndo {
     /// the field's history ends, as after GTK's `set_text`. The text it
     /// has already is left alone, history and all.
     pub fn write(&self, text: &str) {
-        let Some(entry) = self.entry.upgrade() else {
+        let Some(entry) = self.field.upgrade() else {
             return;
         };
         if entry.text() == text {
@@ -279,6 +356,14 @@ impl FieldUndo {
         self.writing.set(true);
         entry.set_text(text);
         self.writing.set(false);
+    }
+
+    /// Forgets the field's history: the program wrote its text already
+    /// (GTK clearing a drop-down's search as its list closes).
+    pub fn forget(&self) {
+        self.history.borrow_mut().clear();
+        self.untaken.set(false);
+        self.undo_action.set_enabled(false);
     }
 }
 

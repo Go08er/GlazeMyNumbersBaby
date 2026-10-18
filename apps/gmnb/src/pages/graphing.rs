@@ -948,6 +948,8 @@ impl GraphingPage {
             value.set_value(var.value());
             value.set_width_chars(6);
             value.add_css_class("wc-spin");
+            // Undo from appcore's history, as the equations' (crate::undo).
+            crate::undo::attach(&value);
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             row.add_css_class("wc-var-row");
             row.append(&label);

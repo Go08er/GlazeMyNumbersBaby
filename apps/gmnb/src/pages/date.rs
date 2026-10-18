@@ -107,6 +107,8 @@ fn spin(label: &str) -> (gtk::Box, gtk::SpinButton) {
     let spin = gtk::SpinButton::with_range(0.0, datecalc::MAX_OFFSET_VALUE as f64, 1.0);
     spin.set_numeric(true);
     spin.add_css_class("wc-spin");
+    // Undo from appcore's history, as DGMNB's offset fields (crate::undo).
+    crate::undo::attach(&spin);
     // Upstream: LabeledBy the caption above it.
     spin.update_relation(&[gtk::accessible::Relation::LabelledBy(&[
         caption.upcast_ref()
