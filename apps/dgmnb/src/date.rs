@@ -101,7 +101,11 @@ impl DatePage {
             calendar: None,
             cursor: today,
             shown: today.with_day(1).unwrap_or(today),
-            offsets: std::array::from_fn(|_| TextEdit::new("0", 3)),
+            offsets: std::array::from_fn(|_| {
+                let mut e = TextEdit::new("0", 3);
+                e.digits_only = true;
+                e
+            }),
             told: None,
         }
     }
@@ -191,15 +195,9 @@ impl DatePage {
 
     pub fn field_changed(&mut self, fid: crate::ui::Id) {
         if let Some(i) = (0..3).find(|&i| offset_id(i) == fid) {
-            let digits: String = self.offsets[i]
+            // Digits alone go in (TextEdit::digits_only).
+            let v = self.offsets[i]
                 .text
-                .chars()
-                .filter(char::is_ascii_digit)
-                .collect();
-            if digits != self.offsets[i].text {
-                self.offsets[i].set_text(&digits);
-            }
-            let v = digits
                 .parse::<i32>()
                 .unwrap_or(0)
                 .min(datecalc::MAX_OFFSET_VALUE);

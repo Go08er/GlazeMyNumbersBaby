@@ -13,6 +13,9 @@ pub struct TextEdit {
     pub anchor: usize,
     /// Longest text accepted, in chars (0 = unlimited).
     pub max_chars: usize,
+    /// Takes digits alone (Date's offsets, as GMNB's numeric spin
+    /// buttons): an insertion with anything else in it is refused whole.
+    pub digits_only: bool,
     /// Uncommitted input-method text shown at the caret.
     pub preedit: String,
     /// The edits Ctrl+Z takes back ([`TextEdit::undo`]); positions in it
@@ -180,6 +183,9 @@ impl TextEdit {
     fn put(&mut self, s: &str) {
         self.remove_selection();
         let clean = appcore::input::single_line(s);
+        if self.digits_only && !clean.chars().all(|c| c.is_ascii_digit()) {
+            return;
+        }
         let room = if self.max_chars == 0 {
             usize::MAX
         } else {
@@ -367,6 +373,23 @@ mod tests {
         let mut e = TextEdit::new("", 0);
         e.insert("12\t34");
         assert_eq!(e.text, "12 34");
+        // Digits alone: anything else is refused whole, as by GTK's numeric
+        // spin buttons; what it was typed over goes all the same.
+        let mut e = TextEdit {
+            digits_only: true,
+            ..TextEdit::new("12", 3)
+        };
+        e.type_in("a");
+        e.insert("3a");
+        assert_eq!(e.text, "12");
+        assert!(!e.undo(), "nothing went in");
+        e.type_in("3");
+        assert_eq!(e.text, "123");
+        e.select_all();
+        e.type_in("x");
+        assert_eq!(e.text, "");
+        assert!(e.undo());
+        assert_eq!(e.text, "123");
     }
 
     /// Undo and redo (Ctrl+Z, Ctrl+Shift+Z), as GTK's fields and
