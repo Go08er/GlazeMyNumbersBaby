@@ -3406,7 +3406,8 @@ fn the_slope_beside_an_open_end_is_read_off_the_derivatives_factors() {
         );
         // Moved back to the open end: the claims start at the double
         // after it, and the stretch between is the replay's own to decide.
-        piece["on"]["lo"] = serde_json::json!({"At": {"x": {"lo": end, "hi": end}, "closed": false}});
+        piece["on"]["lo"] =
+            serde_json::json!({"At": {"x": {"lo": end, "hi": end}, "closed": false}});
         assert_eq!(rejected(&v), None, "{src}: falling from its open end");
         let from_the_end = claims_of(&mut v, "monotonicity").iter().any(|c| {
             c.to_string().contains("\"F1\"")

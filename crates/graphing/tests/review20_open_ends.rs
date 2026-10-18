@@ -140,14 +140,22 @@ fn a_piece_starts_where_its_claims_on_the_slope_do() {
 /// are cleared in every unit, and the rows are complete as in radians.
 #[test]
 fn atan_of_ln_abs_x_is_complete_in_every_angle_unit() {
-    for src in ["atan(ln(abs(x)))", "atan(ln(abs(x-1000)))", "atan(ln(abs(x+3)))"] {
+    for src in [
+        "atan(ln(abs(x)))",
+        "atan(ln(abs(x-1000)))",
+        "atan(ln(abs(x+3)))",
+    ] {
         for unit in UNITS {
             let a = certify(src, unit);
             let Row::Certified { value, cert } = &a.monotonicity else {
                 panic!("{src} [{unit:?}]: {:?}", a.monotonicity);
             };
             assert_eq!(value.len(), 2, "{src} [{unit:?}]");
-            let Bound::At { x: p, closed: false } = value[0].on.hi else {
+            let Bound::At {
+                x: p,
+                closed: false,
+            } = value[0].on.hi
+            else {
                 panic!("{src} [{unit:?}]: {value:?}");
             };
             assert!(p.is_point(), "{src} [{unit:?}]");
@@ -167,8 +175,14 @@ fn atan_of_ln_abs_x_is_complete_in_every_angle_unit() {
                 ),
                 "{src} [{unit:?}]"
             );
-            assert!(gap_cleared(&cert.claims, f64::next_down(p), p), "{src} [{unit:?}]");
-            assert!(gap_cleared(&cert.claims, p, f64::next_up(p)), "{src} [{unit:?}]");
+            assert!(
+                gap_cleared(&cert.claims, f64::next_down(p), p),
+                "{src} [{unit:?}]"
+            );
+            assert!(
+                gap_cleared(&cert.claims, p, f64::next_up(p)),
+                "{src} [{unit:?}]"
+            );
             assert!(a.extrema.is_certified(), "{src} [{unit:?}]");
             assert!(a.range.is_certified(), "{src} [{unit:?}]");
             assert_eq!(unreached(&a), Vec::<String>::new(), "{src} [{unit:?}]");
@@ -202,7 +216,10 @@ fn an_end_extremum_needs_the_gap_beside_it_cleared() {
     let Row::Partial { value, .. } = &a.extrema else {
         panic!("{:?}", a.extrema);
     };
-    assert!(value.iter().all(|e| e.x.hi.0 < 1.0 && e.x.lo.0 > -1.0), "{value:?}");
+    assert!(
+        value.iter().all(|e| e.x.hi.0 < 1.0 && e.x.lo.0 > -1.0),
+        "{value:?}"
+    );
     assert_eq!(value.len(), 3, "{value:?}");
     let Row::Partial { value, .. } = &a.monotonicity else {
         panic!("{:?}", a.monotonicity);
@@ -237,7 +254,9 @@ fn a_constant_piece_reaches_across_a_gap_where_the_slope_is_zero_throughout() {
         };
         assert!(value.iter().all(|m| m.dir == Dir::Constant), "{src}");
         assert!(
-            value.iter().any(|m| matches!(m.on.hi, Bound::At { closed: false, .. })),
+            value
+                .iter()
+                .any(|m| matches!(m.on.hi, Bound::At { closed: false, .. })),
             "{src}: {value:?}"
         );
         assert!(a.range.is_certified(), "{src}");
