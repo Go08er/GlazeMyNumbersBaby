@@ -87,11 +87,26 @@ fn exact_add(x: f64, y: f64) -> Option<f64> {
     (s.is_finite() && err == 0.0).then_some(s)
 }
 
+/// |v| = m·2^e for a finite nonzero v, m odd: exactly, in integers.
+fn significand(v: f64) -> (u128, i32) {
+    debug_assert!(v.is_finite() && v != 0.0);
+    let bits = v.to_bits();
+    let fraction = bits & ((1u64 << 52) - 1);
+    let exponent = ((bits >> 52) & 0x7ff) as i32;
+    let (m, e) = if exponent == 0 {
+        (fraction, -1074)
+    } else {
+        (fraction | (1u64 << 52), exponent - 1075)
+    };
+    let zeros = m.trailing_zeros();
+    (u128::from(m >> zeros), e + zeros as i32)
+}
+
 /// x·y when the double product is exact. Even a normal product can have
 /// an FMA residual smaller than the least subnormal, so a residual of 0
-/// alone proves nothing there. Its integer significands' product must
-/// fit in a double without losing any significant bit.
-fn exact_mul(x: f64, y: f64) -> Option<f64> {
+/// alone proves nothing there (R20-L-02). Its integer significands'
+/// product must fit in a double without losing any significant bit.
+pub(crate) fn exact_mul(x: f64, y: f64) -> Option<f64> {
     let p = x * y;
     if p == 0.0 && (x == 0.0 || y == 0.0) {
         return Some(p);
@@ -99,20 +114,27 @@ fn exact_mul(x: f64, y: f64) -> Option<f64> {
     if !p.is_normal() {
         return None;
     }
-    let parts = |v: f64| {
-        let bits = v.to_bits();
-        let fraction = bits & ((1u64 << 52) - 1);
-        let exponent = ((bits >> 52) & 0x7ff) as i32;
-        let (m, e) = if exponent == 0 {
-            (fraction, -1074)
-        } else {
-            (fraction | (1u64 << 52), exponent - 1075)
-        };
-        let zeros = m.trailing_zeros();
-        (u128::from(m >> zeros), e + zeros as i32)
-    };
-    let ((mx, ex), (my, ey), (mp, ep)) = (parts(x), parts(y), parts(p));
+    let ((mx, ex), (my, ey), (mp, ep)) = (significand(x), significand(y), significand(p));
     (mx * my == mp && ex + ey == ep).then_some(p)
+}
+
+/// Whether a·b and c·d are the same real number, exactly (their integer
+/// significands, not FMA residuals, which vanish below the least
+/// subnormal).
+pub(crate) fn same_product(a: f64, b: f64, c: f64, d: f64) -> bool {
+    if ![a, b, c, d].iter().all(|v| v.is_finite()) {
+        return false;
+    }
+    match (a == 0.0 || b == 0.0, c == 0.0 || d == 0.0) {
+        (true, true) => true,
+        (false, false) => {
+            let neg = |x: f64, y: f64| x.is_sign_negative() != y.is_sign_negative();
+            let ((ma, ea), (mb, eb)) = (significand(a), significand(b));
+            let ((mc, ec), (md, ed)) = (significand(c), significand(d));
+            neg(a, b) == neg(c, d) && ma * mb == mc * md && ea + eb == ec + ed
+        }
+        _ => false,
+    }
 }
 
 /// x/y when the double quotient is exact.

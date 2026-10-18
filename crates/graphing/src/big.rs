@@ -847,7 +847,7 @@ mod tests {
             .unwrap();
         assert_eq!(p.to_f64(Round::Nearest), 10.0);
         let w = ten.powi(400).unwrap().to_wide();
-        assert!(w.to_f64().is_infinite() && !w.lost());
+        assert!(w.to_f64().is_infinite() && w.far().is_none());
         assert_eq!(ten.powi(-400).unwrap().to_wide().to_f64(), 0.0);
         assert!(!ten.powi(-400).unwrap().to_wide().is_zero());
         // Beyond the cap: refused.

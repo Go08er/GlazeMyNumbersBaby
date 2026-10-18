@@ -1431,7 +1431,9 @@ fn a_count_far_past_the_range_has_its_side() {
         }
     }
     // Beyond the range above: a size, not a value, to the reference; its
-    // reciprocal 0; its logarithm +∞ (about 2.3·10¹⁰² for C(10²⁰⁰, 10¹⁰⁰)).
+    // reciprocal 0. Its logarithm (about 2.3·10¹⁰² for C(10²⁰⁰, 10¹⁰⁰)) is
+    // a double, which a size can't give: "can't tell" (review 20: it was
+    // +∞, and ln of e^(1.3·10³⁰⁸) +∞ for 1.3·10³⁰⁸).
     fn huge(r: R) -> bool {
         matches!(r, R::Unknown) || matches!(r, R::V(v) if v.m > 0.0 && v.e > 1024)
     }
@@ -1458,7 +1460,11 @@ fn a_count_far_past_the_range_has_its_side() {
             }
             if f.starts_with('n') {
                 let g = format!("ln({f})");
-                assert_eq!(scalar(&g, x), f64::INFINITY, "{g} at {x:e}");
+                let p = Program::compile_typed(&ast(&g), &CompileOptions::default()).unwrap();
+                assert!(
+                    p.eval(x, 0.0).is_nan() && p.undecided(x, 0.0),
+                    "{g} at {x:e}"
+                );
                 assert!(!matches!(reference(&g, x), R::V(v) if v.f() < 1e100 || v.m < 0.0));
             }
             // Two such sizes: their quotient (1) can't be told.
@@ -1473,4 +1479,133 @@ fn a_count_far_past_the_range_has_its_side() {
     assert_eq!(scalar(f, x), 0.0);
     assert!(tiny(reference(f, x)), "{:?}", reference(f, x));
     assert_eq!(scalar(&format!("1/{f}"), x), f64::INFINITY);
+}
+
+/// Review 20 (R20-M-01's family) against MPFR. A value beyond the doubles
+/// of which only its sign and side are held (lost past 2⁵³ binades, or
+/// beyond even the extended range) decides nothing else: each of these
+/// was decided, at a value MPFR contradicts (from the doubles the literals
+/// are; in logarithms, where the value is past MPFR's own range). Now each
+/// is "can't tell", or MPFR's value; what the side does decide stays.
+#[cfg(feature = "mpfr-oracle")]
+#[test]
+fn far_values_decide_nothing_mpfr_contradicts() {
+    use rug::ops::Pow;
+    use rug::{Float, Integer, Rational};
+    const P: u32 = 4000;
+    let ten = |k: u32| Integer::from(10).pow(k);
+    // A typed literal: its exact value rounded once to a double.
+    let lit = |r: Rational| Float::with_val(P, Float::with_val(53, r));
+    let two = |k: i32| Float::with_val(P, Float::i_exp(1, k));
+    // e^l for a logarithm l, as the double nearest it (0 or ±∞ past them).
+    let exp_of = |l: &Float| -> f64 {
+        if *l > 710 {
+            f64::INFINITY
+        } else if *l < -746 {
+            0.0
+        } else {
+            Float::with_val(P, l.exp_ref()).to_f64()
+        }
+    };
+    let sign = |v: f64| {
+        if v > 0.0 {
+            1.0
+        } else if v < 0.0 {
+            -1.0
+        } else {
+            0.0
+        }
+    };
+    let a = lit(Rational::from(Integer::from(7801888238375471u64) << 944));
+    let b = lit(Rational::from(Integer::from(6783390357013892u64) << 944));
+    let c = lit(Rational::from(Integer::from(7292639297694682u64) << 945));
+    let abc = Float::with_val(P, &a + &b) - &c;
+    let big = lit(Rational::from(Integer::from(13) * ten(307)));
+    let seven = lit(Rational::from(Integer::from(7) * ten(307)));
+    // (2^1001)! = Γ(2^1001 + 1), less 2^1011: its logarithm.
+    let mut lg = Float::with_val(P, two(1001) + 1u32);
+    lg.ln_gamma_mut();
+    let lg = lg - two(1011);
+    let base = lit(Rational::from((10000001, 10000000)));
+    let t309 = lit(Rational::from(ten(309)));
+    let small = lit(Rational::from((1, ten(306))));
+    // ln of e^1000 as the program holds it (rounded once), rounded once.
+    let e1000 = Float::with_val(53, Float::with_val(P, 1000u32).exp_ref());
+    let ln_e1000 = Float::with_val(53, Float::with_val(P, e1000.ln_ref()));
+    let power = Float::with_val(P, base.ln_ref()) * &t309 - lit(Rational::from(ten(305)));
+    let root = Float::with_val(P, &big / 2u32) - &seven;
+    let e130 = Float::with_val(P, &big * &small)
+        - Float::with_val(P, lit(Rational::from(ten(60))).ln_ref());
+    // (5·10¹²)! = Γ(5·10¹² + 1), less e^(2·10¹⁴): its logarithm's side.
+    let mut fact = Float::with_val(P, 5_000_000_000_001u64);
+    fact.ln_gamma_mut();
+    let steps = Float::with_val(P, &fact - 144_000_000_000_000u64);
+    let fact = fact - 200_000_000_000_000u64;
+    let pi2 = std::f64::consts::FRAC_PI_2;
+    let cases: Vec<(&str, f64, f64)> = vec![
+        (
+            "sign(exp(7801888238375471*2^944)*exp(6783390357013892*2^944)-exp(7292639297694682*2^945))",
+            sign(abc.to_f64()),
+            0.0,
+        ),
+        (
+            "atan(exp(7801888238375471*2^944)*exp(6783390357013892*2^944)/exp(7292639297694682*2^945))",
+            exp_of(&abc).atan(),
+            0.0,
+        ),
+        (
+            "atan(ln(ln(exp(exp(1000))))-1000)",
+            (ln_e1000.to_f64() - 1000.0).atan(),
+            1e-12,
+        ),
+        ("atan(ln(exp(1.3*10^308))-1.3*10^308)", 0.0, 1e-12),
+        ("atan((2^1001)!*exp(-2^1011))", exp_of(&lg).atan(), 0.0),
+        (
+            "sign((2^1001)!*exp(-2^1011)-1)",
+            sign(exp_of(&lg) - 1.0),
+            0.0,
+        ),
+        (
+            "atan(1.0000001^(10^309)*exp(-10^305))",
+            exp_of(&power).atan(),
+            0.0,
+        ),
+        (
+            "atan(sqrt(exp(1.3*10^308))/exp(0.7*10^308))",
+            exp_of(&root).atan(),
+            0.0,
+        ),
+        (
+            "sign(exp(1.3*10^308)^(10^-306)-10^60)",
+            sign(e130.to_f64()),
+            0.0,
+        ),
+        ("sign((5*10^12)!-exp(2*10^14))", sign(fact.to_f64()), 0.0),
+        ("atan((5*10^12)!/exp(2*10^14))", exp_of(&fact).atan(), 0.0),
+        (
+            "sign((5*10^12)!*exp(-4.8*10^13)*exp(-4.8*10^13)*exp(-4.8*10^13)-1)",
+            sign(steps.to_f64()),
+            0.0,
+        ),
+        ("sign(exp(10^300)-exp(10^10))", 1.0, 0.0),
+        ("sign(exp(-10^300)-exp(-10^10))", -1.0, 0.0),
+        ("atan(exp(10^300)-exp(10^10))", pi2, 0.0),
+    ];
+    let mut decided = 0;
+    for (src, want, tol) in cases {
+        let p = Program::compile_typed(&ast(src), &CompileOptions::default()).unwrap();
+        if p.undecided(0.0, 0.0) {
+            continue;
+        }
+        decided += 1;
+        let v = p.eval(0.0, 0.0);
+        assert!(
+            (v - want).abs() <= tol,
+            "{src}: {v} decided, and MPFR has {want}"
+        );
+    }
+    // The controls are decided; main's answers were each the other sign,
+    // or π/2 for each atan at 0.
+    assert_eq!(decided, 3);
+    assert!(abc < 0 && lg < 0 && power < 0 && root < 0 && e130 < 0 && fact < 0 && steps < 0);
 }
