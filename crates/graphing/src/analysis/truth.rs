@@ -1297,6 +1297,10 @@ pub fn fn2(f: Func) -> impl Fn(f64, f64) -> f64 {
     }
 }
 
+/// The least magnitude from which a product's FMA residual is itself a
+/// double (2⁻⁹⁶⁹ = 2^(emin + p), as the interval core has it).
+const RESIDUAL_EXACT: f64 = 2.004168360008973e-292;
+
 /// Is the library result exact here (no rounding at all)? Special values
 /// the functions return exactly (sin 0, cos 0, ln 1, quarter turns in
 /// degrees and grads) and the functions that never round.
@@ -1304,8 +1308,14 @@ pub fn exact_at(f: Func, a: f64, r: f64, u: TrigUnit) -> bool {
     use Func::*;
     match f {
         Abs | Floor | Ceil | Round | Sign => true,
-        Sqrt => r.mul_add(r, -a) == 0.0,
-        Cbrt => r * r * r == a,
+        // r² or r³ is a exactly: by the integer significands (an FMA
+        // residual below the least subnormal rounds to 0, and two
+        // roundings can meet a; review 20).
+        Sqrt => crate::simplify::exact_mul(r, r) == Some(a),
+        Cbrt => {
+            crate::simplify::exact_mul(r, r).and_then(|s| crate::simplify::exact_mul(s, r))
+                == Some(a)
+        }
         Sin | Tan | Cos | Sec | Csc | Cot if u != TrigUnit::Radians => {
             a.rem_euclid(u.full_turn() / 4.0) == 0.0
         }
@@ -1357,11 +1367,11 @@ pub fn eb(e: &Expr, x: f64, u: TrigUnit) -> (f64, f64) {
                 }
             };
             let r = g(va);
-            // (An underflowed square is not exact, whatever fma says.)
+            // (An underflowed square is not exact, whatever fma says; nor is
+            // one whose residual vanished below the least subnormal: by the
+            // integer significands, review 20.)
             let exact = q == 1
-                && (p == 0
-                    || p == 1
-                    || (p == 2 && (r != 0.0 || va == 0.0) && va.mul_add(va, -r) == 0.0));
+                && (p == 0 || p == 1 || (p == 2 && crate::simplify::exact_mul(va, va) == Some(r)));
             let k = if q == 1 && p.abs() <= 2 {
                 0.5
             } else {
@@ -1418,11 +1428,19 @@ pub fn eb(e: &Expr, x: f64, u: TrigUnit) -> (f64, f64) {
                     } else {
                         0.0
                     };
-                    let e = va.abs() * ebb
-                        + vb.abs() * ea
-                        + ea * ebb
-                        + va.mul_add(vb, -r).abs()
-                        + under;
+                    // |va·vb − r|: the FMA residual, itself a double for a
+                    // product from 2⁻⁹⁶⁹ on; below, it can have rounded too
+                    // (to 0 for a product that isn't exact: review 20), so
+                    // the least subnormal more unless it is proven exact.
+                    let res = va.mul_add(vb, -r).abs();
+                    let res = if r.abs() < RESIDUAL_EXACT
+                        && crate::simplify::exact_mul(va, vb) != Some(r)
+                    {
+                        res + f64::from_bits(1)
+                    } else {
+                        res
+                    };
+                    let e = va.abs() * ebb + vb.abs() * ea + ea * ebb + res + under;
                     // (Nor does the bound itself: 10⁻⁶ times an underflowed
                     // e⁻¹⁰⁰⁰'s error is no reason to call the product exact.)
                     if e == 0.0 && ((ea > 0.0 && vb != 0.0) || (ebb > 0.0 && va != 0.0)) {
@@ -1440,8 +1458,19 @@ pub fn eb(e: &Expr, x: f64, u: TrigUnit) -> (f64, f64) {
                     } else {
                         0.0
                     };
+                    // (va − r·vb as the product's residual is: a double
+                    // where r and va are from 2⁻⁹⁶⁹ on, else the least
+                    // subnormal more unless r·vb is va exactly.)
+                    let res = ((-r).mul_add(vb, va) / vb).abs();
+                    let res = if (r.abs() < RESIDUAL_EXACT || va.abs() < RESIDUAL_EXACT)
+                        && crate::simplify::exact_mul(r, vb) != Some(va)
+                    {
+                        res + f64::from_bits(1)
+                    } else {
+                        res
+                    };
                     let e = (va.abs() * ebb + vb.abs() * ea) / (vb.abs() * (vb.abs() - ebb))
-                        + ((-r).mul_add(vb, va) / vb).abs()
+                        + res
                         + under;
                     if e == 0.0 && (ea > 0.0 || (ebb > 0.0 && va != 0.0)) {
                         f64::from_bits(1)
