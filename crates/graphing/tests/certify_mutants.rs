@@ -1299,15 +1299,20 @@ fn mutants_of(
                 let of_f1 = b.get("of") == Some(&json!({"F": "F1"}));
                 let bx =
                     |v: &Value| Some((replay::r(v.get("a")?).ok()?, replay::r(v.get("b")?).ok()?));
+                // (From the turn on: a box that starts at it, the turn's own
+                // claim among them, and every one past it.)
                 match kind.as_str() {
-                    "Beyond" | "NoCross" | "Factors" | "OneCross" | "Value" if of_f1 => {
-                        bx(&b["x"]).is_some_and(|x| if low { x.0 > turn.1 } else { x.1 < turn.0 })
+                    "Beyond" | "NoCross" | "Factors" | "OneCross" | "ExactAt" | "Touch"
+                    | "Value"
+                        if of_f1 =>
+                    {
+                        bx(&b["x"]).is_some_and(|x| if low { x.0 >= turn.0 } else { x.1 <= turn.1 })
                     }
                     "TailBeyond" | "TailChain" if of_f1 => {
                         let right = b["side"] == "Right";
                         right == low
                             && replay::r(&b["from"])
-                                .is_ok_and(|f| if low { f > turn.1 } else { f < turn.0 })
+                                .is_ok_and(|f| if low { f >= turn.0 } else { f <= turn.1 })
                     }
                     "Value" => bx(&b["x"]) == Some(xe) && b.get("of") == Some(&json!({"F": "F0"})),
                     _ => false,
