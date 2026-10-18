@@ -1477,9 +1477,32 @@ fn end_extrema(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk) -> (Vec<(Enc, b
                     z.at.hi < x.lo && z.at.lo > sb
                 }
             };
-            if joined && !w.zeros.iter().any(between) {
+            // And between them, f′ of the stretch's sign or a gap cleared of
+            // f′'s zeros, nothing undecided: a partial row asks no coverage,
+            // and a stretch far in said what f does at the end (x − √x "a
+            // minimum at 0" from f′ > 0 on [1, 2], f falling from 0 to its
+            // turn at 1/4: round 20's checker audit).
+            let decided = {
+                let span = if low { (x.hi, sa) } else { (sb, x.lo) };
+                let cleared = |g: &B| {
+                    rc.claims.iter().any(|c| {
+                        matches!(c, Claim::GapClear { x: cx, of: Subject::F(1) }
+                            if cx.0 <= g.0 && g.1 <= cx.1)
+                    })
+                };
+                let cover: Vec<B> = w
+                    .gaps
+                    .iter()
+                    .filter(|g| cleared(g))
+                    .copied()
+                    .chain(w.signs.iter().filter(|s| s.2 == sign).map(|s| (s.0, s.1)))
+                    .collect();
+                span.0 >= span.1 || uncovered(span, &cover).is_none()
+            };
+            let zero_between = w.zeros.iter().any(between);
+            if joined && decided && !zero_between {
                 out.push((x, sign == low));
-            } else if !joined {
+            } else if !joined || (!decided && !zero_between) {
                 open.push(x);
             }
         }
@@ -4604,125 +4627,195 @@ fn exact_piq(text: &str) -> Option<(rug::Rational, i32)> {
     Some((q.clone(), if q == 0 { 0 } else { k }))
 }
 
-/// An exact finite q·πᵏ, or a signed infinite limit (true: +∞).
-type ExactTail = Result<(rug::Rational, i32), bool>;
+/// A tail limit: an exact finite q·πᵏ, a signed infinity (true: +∞), or a
+/// finite number not known exactly (an x-free constant such as ln 3, its
+/// sign where shown: `Some(true)` positive), which may still take part in
+/// an exact limit (1/((x − ln 3)(x − ln 3 − 10⁻⁶)) → 0).
+#[derive(Clone, Debug, PartialEq)]
+enum Tail {
+    Exact(rug::Rational, i32),
+    Inf(bool),
+    Finite(Option<bool>),
+}
 
 /// Exact tail limits by rational algebra and elementary limit laws. This
 /// retains exactness which the general MPFR limit enclosure does not:
 /// rational leading-coefficient quotients, and compositions such as
 /// arctan(ln|ax+b|) and their exact scalings. No finite probes or rounded
-/// equality take part. An unsupported operation or indeterminate form is
-/// left undecided, not read from the general enclosure.
+/// equality take part: an x-free part not read exactly is only shown
+/// finite (and signed) by its enclosure, and then decides nothing exact
+/// but what any finite number would (c + ∞, c/∞). An unsupported
+/// operation or indeterminate form is left undecided, not read from the
+/// general enclosure.
 /// These are value identities on f's domain: existence of an original
 /// tail and its limit must be established separately by the row's claims.
-fn exact_tail(fx: &Fx, e: &graphing::ast::Expr, right: bool, depth: usize) -> Option<ExactTail> {
-    use graphing::ast::{BinOp, Constant, Expr, Func};
+fn exact_tail(fx: &Fx, e: &graphing::ast::Expr, right: bool, depth: usize) -> Option<Tail> {
     let d = depth.checked_sub(1)?;
-    let finite = |q: rug::Rational, k| {
+    exact_tail_by_laws(fx, e, right, d).or_else(|| {
+        // An x-free part: finite where its enclosure is (crossfuzz's seed
+        // 2099, case 9: ln 3 in a divisor going to ∞).
+        if super::eval::contains_x(e) || claims::unmodelled(e) {
+            return None;
+        }
+        iv::set_prec(160);
+        let v = fx.series(e, 0.0, 0.0, 0)[0].clone();
+        (!v.empty && v.def && v.bounded()).then(|| {
+            Tail::Finite(if v.gt(0.0) {
+                Some(true)
+            } else if v.lt(0.0) {
+                Some(false)
+            } else {
+                None
+            })
+        })
+    })
+}
+
+fn exact_tail_by_laws(fx: &Fx, e: &graphing::ast::Expr, right: bool, d: usize) -> Option<Tail> {
+    use graphing::ast::{BinOp, Constant, Expr, Func};
+    use rug::Rational;
+    let exact = |q: Rational, k: i32| {
         let k = if q == 0 { 0 } else { k };
-        Ok((q, k))
+        Tail::Exact(q, k)
     };
     if let Some(r) = super::algebra::Rat::of(e, &fx.lits, &fx.vars, fx.unit) {
-        return Some(r.limit(right).map(|q| (q, 0)));
+        return Some(match r.limit(right) {
+            Ok(q) => Tail::Exact(q, 0),
+            Err(up) => Tail::Inf(up),
+        });
     }
     let next = |e: &Expr| exact_tail(fx, e, right, d);
+    let neg = |t: Tail| match t {
+        Tail::Exact(q, k) => exact(-q, k),
+        Tail::Inf(up) => Tail::Inf(!up),
+        Tail::Finite(s) => Tail::Finite(s.map(|s| !s)),
+    };
+    // The sign of a nonzero limit (None: not known nonzero).
+    let sign = |t: &Tail| match t {
+        Tail::Exact(q, _) if *q != 0 => Some(*q > 0),
+        Tail::Inf(up) => Some(*up),
+        Tail::Finite(s) => *s,
+        _ => None,
+    };
+    let is_zero = |t: &Tail| matches!(t, Tail::Exact(q, _) if *q == 0);
     Some(match e {
-        Expr::Const(Constant::Pi) => finite(rug::Rational::from(1), 1),
-        Expr::Neg(a) => match next(a)? {
-            Ok((q, k)) => finite(-q, k),
-            Err(up) => Err(!up),
-        },
+        Expr::Const(Constant::Pi) => exact(Rational::from(1), 1),
+        Expr::Neg(a) => neg(next(a)?),
         Expr::Degrees(a) if fx.unit == iv::Unit::Degrees => next(a)?,
         Expr::Bin(BinOp::Pow, b, u) if **b == Expr::Const(Constant::E) => exp_tail(next(u)?)?,
         Expr::Bin(op, a, b) => {
             let (a, mut b) = (next(a)?, next(b)?);
             let op = if *op == BinOp::Sub {
-                b = match b {
-                    Ok((q, k)) => finite(-q, k),
-                    Err(up) => Err(!up),
-                };
+                b = neg(b);
                 BinOp::Add
             } else {
                 *op
             };
-            match (op, a, b) {
-                (BinOp::Add, Ok((a, ak)), Ok((b, bk))) => {
-                    if a == 0 {
-                        finite(b, bk)
-                    } else if b == 0 {
-                        finite(a, ak)
-                    } else if ak == bk {
-                        finite(a + b, ak)
-                    } else {
-                        return None;
+            match op {
+                BinOp::Add => match (a, b) {
+                    (Tail::Exact(a, ak), Tail::Exact(b, bk)) => {
+                        if a == 0 {
+                            exact(b, bk)
+                        } else if b == 0 {
+                            exact(a, ak)
+                        } else if ak == bk {
+                            exact(a + b, ak)
+                        } else {
+                            return None;
+                        }
+                    }
+                    (Tail::Inf(a), Tail::Inf(b)) if a == b => Tail::Inf(a),
+                    (Tail::Inf(_), Tail::Inf(_)) => return None,
+                    (Tail::Inf(up), _) | (_, Tail::Inf(up)) => Tail::Inf(up),
+                    _ => Tail::Finite(None),
+                },
+                BinOp::Mul => {
+                    if is_zero(&a) || is_zero(&b) {
+                        // 0 times a finite limit; 0·∞ is left undecided.
+                        if matches!(a, Tail::Inf(_)) || matches!(b, Tail::Inf(_)) {
+                            return None;
+                        }
+                        return Some(exact(Rational::new(), 0));
+                    }
+                    match (&a, &b) {
+                        (Tail::Exact(a, ak), Tail::Exact(b, bk)) => {
+                            exact(Rational::from(a * b), ak.checked_add(*bk)?)
+                        }
+                        (Tail::Inf(_), _) | (_, Tail::Inf(_)) => Tail::Inf(sign(&a)? == sign(&b)?),
+                        _ => Tail::Finite(sign(&a).zip(sign(&b)).map(|(x, y)| x == y)),
                     }
                 }
-                (BinOp::Add, Err(a), Err(b)) if a == b => Err(a),
-                (BinOp::Add, Err(up), Ok(_)) | (BinOp::Add, Ok(_), Err(up)) => Err(up),
-                (BinOp::Mul, Ok((a, ak)), Ok((b, bk))) => finite(a * b, ak.checked_add(bk)?),
-                (BinOp::Mul, Err(a), Err(b)) => Err(a == b),
-                (BinOp::Mul, Err(up), Ok((q, _))) | (BinOp::Mul, Ok((q, _)), Err(up)) if q != 0 => {
-                    Err(up == (q > 0))
-                }
-                (BinOp::Div, Ok((a, ak)), Ok((b, bk))) if b != 0 => {
-                    finite(a / b, ak.checked_sub(bk)?)
-                }
-                (BinOp::Div, Ok(_), Err(_)) => finite(rug::Rational::from(0), 0),
-                (BinOp::Div, Err(up), Ok((q, _))) if q != 0 => Err(up == (q > 0)),
+                BinOp::Div => match (&a, &b) {
+                    (_, Tail::Inf(_)) if !matches!(a, Tail::Inf(_)) => exact(Rational::new(), 0),
+                    (Tail::Exact(a, ak), Tail::Exact(b, bk)) if *b != 0 => {
+                        exact(Rational::from(a / b), ak.checked_sub(*bk)?)
+                    }
+                    (Tail::Inf(_), Tail::Exact(..) | Tail::Finite(_)) => {
+                        Tail::Inf(sign(&a)? == sign(&b)?)
+                    }
+                    (Tail::Exact(..) | Tail::Finite(_), Tail::Exact(..) | Tail::Finite(_))
+                        if sign(&b).is_some() =>
+                    {
+                        Tail::Finite(sign(&a).zip(sign(&b)).map(|(x, y)| x == y))
+                    }
+                    _ => return None,
+                },
                 _ => return None,
             }
         }
         Expr::Call(Func::Abs, a) => match next(&a[0])? {
-            Ok((q, k)) => finite(q.abs(), k),
-            Err(_) => Err(true),
+            Tail::Exact(q, k) => exact(q.abs(), k),
+            Tail::Inf(_) => Tail::Inf(true),
+            Tail::Finite(s) => Tail::Finite(s.map(|_| true)),
         },
         Expr::Call(Func::Ln, a) => match next(&a[0])? {
-            Err(true) => Err(true),
-            Ok((q, 0)) if q == 1 => finite(rug::Rational::from(0), 0),
+            Tail::Inf(true) => Tail::Inf(true),
+            Tail::Exact(q, 0) if q == 1 => exact(Rational::new(), 0),
             _ => return None,
         },
         Expr::Call(Func::Atan, a) => {
-            let Err(up) = next(&a[0])? else { return None };
-            let (q, k) = match fx.unit {
-                iv::Unit::Radians => (rug::Rational::from((1, 2)), 1),
-                iv::Unit::Degrees => (rug::Rational::from(90), 0),
-                iv::Unit::Grads => (rug::Rational::from(100), 0),
+            let Tail::Inf(up) = next(&a[0])? else {
+                return None;
             };
-            finite(if up { q } else { -q }, k)
+            let (q, k) = match fx.unit {
+                iv::Unit::Radians => (Rational::from((1, 2)), 1),
+                iv::Unit::Degrees => (Rational::from(90), 0),
+                iv::Unit::Grads => (Rational::from(100), 0),
+            };
+            exact(if up { q } else { -q }, k)
         }
         // A step within 1 of its argument goes where it goes (floor u ≤
         // u < floor u + 1): atan(ceil x)'s ±π/2, which crossfuzz's seed
         // 2081 found refused (round 20). sign u is ±1 once u is past 0.
         Expr::Call(Func::Floor | Func::Ceil | Func::Round, a) => match next(&a[0])? {
-            Err(up) => Err(up),
-            Ok(_) => return None,
+            Tail::Inf(up) => Tail::Inf(up),
+            _ => return None,
         },
-        Expr::Call(Func::Sign, a) => match next(&a[0])? {
-            Err(up) => finite(rug::Rational::from(if up { 1 } else { -1 }), 0),
-            Ok((q, _)) if q != 0 => finite(rug::Rational::from(q.cmp0() as i32), 0),
-            Ok(_) => return None,
-        },
+        Expr::Call(Func::Sign, a) => {
+            let t = next(&a[0])?;
+            exact(Rational::from(if sign(&t)? { 1 } else { -1 }), 0)
+        }
         // eᵘ → 0 as u → −∞, → ∞ as u → ∞, → 1 as u → 0; √, ∛, sinh, cosh,
         // log₁₀ grow with their argument; tanh → ±1.
         Expr::Call(Func::Exp, a) => exp_tail(next(&a[0])?)?,
         Expr::Call(Func::Sqrt, a) => match next(&a[0])? {
-            Err(true) => Err(true),
+            Tail::Inf(true) => Tail::Inf(true),
             _ => return None,
         },
         Expr::Call(Func::Log, a) if a.len() == 1 => match next(&a[0])? {
-            Err(true) => Err(true),
+            Tail::Inf(true) => Tail::Inf(true),
             _ => return None,
         },
         Expr::Call(Func::Cbrt | Func::Sinh, a) => match next(&a[0])? {
-            Err(up) => Err(up),
+            Tail::Inf(up) => Tail::Inf(up),
             _ => return None,
         },
         Expr::Call(Func::Cosh, a) => match next(&a[0])? {
-            Err(_) => Err(true),
+            Tail::Inf(_) => Tail::Inf(true),
             _ => return None,
         },
         Expr::Call(Func::Tanh, a) => match next(&a[0])? {
-            Err(up) => finite(rug::Rational::from(if up { 1 } else { -1 }), 0),
+            Tail::Inf(up) => exact(Rational::from(if up { 1 } else { -1 }), 0),
             _ => return None,
         },
         _ => return None,
@@ -4730,12 +4823,12 @@ fn exact_tail(fx: &Fx, e: &graphing::ast::Expr, right: bool, depth: usize) -> Op
 }
 
 /// The limit of eᵘ from u's: 0 as u → −∞, ∞ as u → ∞, 1 as u → 0.
-fn exp_tail(u: ExactTail) -> Option<ExactTail> {
+fn exp_tail(u: Tail) -> Option<Tail> {
     match u {
-        Err(true) => Some(Err(true)),
-        Err(false) => Some(Ok((rug::Rational::new(), 0))),
-        Ok((q, _)) if q == 0 => Some(Ok((rug::Rational::from(1), 0))),
-        Ok(_) => None,
+        Tail::Inf(true) => Some(Tail::Inf(true)),
+        Tail::Inf(false) => Some(Tail::Exact(rug::Rational::new(), 0)),
+        Tail::Exact(q, _) if q == 0 => Some(Tail::Exact(rug::Rational::from(1), 0)),
+        _ => None,
     }
 }
 
@@ -4768,7 +4861,9 @@ fn exact_form(
         At::NegInf => Some(false),
         _ => None,
     };
-    if right.is_some_and(|right| exact_tail(fx, &fx.f, right, 64) == Some(Ok(exact.clone()))) {
+    if right.is_some_and(|right| {
+        exact_tail(fx, &fx.f, right, 64) == Some(Tail::Exact(exact.0.clone(), exact.1))
+    }) {
         return Ok(());
     }
     iv::set_prec(160);

@@ -4273,6 +4273,60 @@ fn an_exact_limit_through_a_step_is_derived() {
     assert!(rejected(&v).is_some(), "a nearby coefficient");
 }
 
+/// A finite constant in a part going to ±∞ decides an exact limit as any
+/// finite number would: 1/((x − ln 3)(x − ln 3 − 10⁻⁶)) + tanh x → ±1
+/// (crossfuzz's seed 2099, case 9; 1/x + tanh x, its minimised form).
+#[test]
+fn an_exact_limit_beside_an_inexact_constant_is_derived() {
+    for (src, digits) in [
+        ("1/((x-(ln(3)))*(x-(ln(3))-0.000001))+tanh(x)", Some(16)),
+        ("1/x+tanh(x)", None),
+    ] {
+        let mut v = certificate_in(src, digits, TrigUnit::Radians);
+        let domain = v["domain"].clone();
+        withhold_all_but(&mut v, "horizontal");
+        v["domain"] = domain;
+        assert_eq!(rejected(&v), None, "{src}: the genuine labels");
+        for h in value_of(&mut v, "horizontal").as_array_mut().unwrap() {
+            h["exact"] = serde_json::json!(if h["side"] == "Right" {
+                "1000000000000000000000000000000000000000000000000000000000000001/\
+                 1000000000000000000000000000000000000000000000000000000000000000"
+            } else {
+                "-1"
+            });
+        }
+        assert!(rejected(&v).is_some(), "{src}: 1 + 10⁻⁶³ is not the limit");
+    }
+}
+
+/// An extremum at a closed end of the domain follows from f′'s sign beside
+/// it, not from a stretch far in: x − √x falls from 0 to its turn at 1/4,
+/// and "a minimum at 0", from f′ > 0 on [1, 2] and f continuous on [0, 1],
+/// passed in a partial row, which asks no coverage. Round 20's checker
+/// audit.
+#[test]
+fn an_end_extremum_is_read_beside_the_end() {
+    let mut v = certificate("x-sqrt(x)");
+    withhold_all_but(&mut v, "domain");
+    let claims = serde_json::json!([
+        {"Beyond": {"x": {"a": 1.0, "b": 2.0}, "of": {"F": "F1"}, "c": 0.0, "above": true}},
+        {"Continuous": {"x": {"a": 0.0, "b": 1.0}}},
+        {"Value": {"x": {"a": 0.0, "b": 0.0}, "of": {"F": "F0"}, "lo": 0.0, "hi": 0.0}}
+    ]);
+    let end = |kind: &str| {
+        serde_json::json!([{"x": {"lo": 0.0, "hi": 0.0}, "y": {"lo": 0.0, "hi": 0.0},
+            "kind": kind, "every": null}])
+    };
+    for kind in ["Min", "Max"] {
+        v["extrema"] = serde_json::json!({"Partial": {"value": end(kind),
+            "cert": {"covers": "Points", "claims": claims}}});
+        assert!(
+            refused_on_true_premises(&v, kind).is_some(),
+            "{kind} at 0: f′ between 0 and 1 is not decided"
+        );
+    }
+}
+
 /// One listed item is one number. Zeros at 0.4 and 0.6 listed as one item
 /// over both, and monotone pieces meeting at one enclosure that holds both
 /// turns of (x − 0.5)³ − 0.01(x − 0.5) (its decreasing piece left out),
