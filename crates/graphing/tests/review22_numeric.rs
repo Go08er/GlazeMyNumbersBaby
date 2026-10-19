@@ -1,7 +1,8 @@
 //! Review 22: a far exponent must not be formed by cancelling a rounded
 //! log2(m) against -1 when a power's base is just below 1; a power within
-//! reach of such a base is its value; and a cube root next to 2⁵³ binades
-//! below 1 keeps a whole exponent (`tests/far_invariant.rs` found it).
+//! reach of such a base is its value; and next to 2⁵³ binades a cube root
+//! keeps a whole exponent and a product or quotient isn't brought back
+//! within reach a binade off (`tests/far_invariant.rs` found both).
 use graphing::compile::{CompileOptions, Input, Program};
 use graphing::lexer::ParseOptions;
 use graphing::plot::{PlotOptions, plot};
@@ -145,5 +146,40 @@ fn a_cube_root_next_to_2_to_the_53_binades_keeps_a_whole_exponent() {
         "root(exp(-6243314768165358),3)/exp(-2081104922721786)/1024",
         1.0 / 1024.0,
         1e-15,
+    );
+}
+
+/// A product or quotient whose exponents add past 2⁵³ is lost there, not
+/// brought back within reach by its mantissa's carry. e^(−6243314768165358)
+/// is about 2^(−2⁵³ + 1) and 0.375 is 1.5·2⁻², so their product's exponent
+/// is −2⁵³; but −2⁵³ − 1 was rounded to −2⁵³ before the carry, and the
+/// product held as twice itself, within reach: divided by
+/// e^(−6243314768165358) it was 0.75. A quotient past +2⁵³ the same way:
+/// e^6243314768165358 (exponent 2⁵³ − 2) over 0.1875 (1.5·2⁻³), and that
+/// over e^6243314768165358 was 8/3, not 16/3.
+/// Now these are "can't tell", as any value from 2⁵³ binades on is.
+/// (Literals off: at 14 digits these exponents are other numbers.)
+#[test]
+fn a_product_past_2_to_the_53_binades_is_not_brought_back_a_binade_off() {
+    for src in [
+        "exp(-6243314768165358)*0.375/exp(-6243314768165358)",
+        "exp(6243314768165358)/0.1875/exp(6243314768165358)",
+    ] {
+        let p = program(src, None);
+        assert!(p.eval(0.0, 0.0).is_nan(), "{src}: {}", p.eval(0.0, 0.0));
+        assert!(p.undecided(0.0, 0.0), "{src}");
+    }
+    // A binade nearer 1 the product is within reach, and its value.
+    decided_at(
+        "exp(-6243314768165358)*0.75/exp(-6243314768165358)",
+        0.75,
+        1e-15,
+        &[None],
+    );
+    decided_at(
+        "exp(6243314768165358)/0.375/exp(6243314768165358)",
+        1.0 / 0.375,
+        1e-15,
+        &[None],
     );
 }

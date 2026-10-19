@@ -288,6 +288,20 @@ impl Wide {
         Wide::Val(m, e + k)
     }
 
+    /// m·2^(e₁ + e₂) normalised (as [`Wide::norm`]), the exponents added in
+    /// integers while both are within reach: a double rounds e₁ + e₂ past
+    /// 2⁵³, and the mantissa's carry then brought the value back within
+    /// reach a binade off (e^(−6243314768165358)·0.375, of exponent −2⁵³,
+    /// was taken for one of −2⁵³ + 1, twice itself, and its quotient by
+    /// e^(−6243314768165358) for 0.75: found by `tests/far_invariant.rs`).
+    fn norm_sum(m: f64, e1: f64, e2: f64) -> Wide {
+        if m == 0.0 || !m.is_finite() || !(e1.abs() < TWO53 && e2.abs() < TWO53) {
+            return Wide::norm(m, e1 + e2);
+        }
+        let (m, k) = frexp(m);
+        Wide::Val(m, (e1 as i64 + e2 as i64 + k as i64) as f64)
+    }
+
     /// The nearest double: 0 or ±∞ beyond its range, NaN unless a value.
     pub(crate) fn to_f64(self) -> f64 {
         match self {
@@ -502,7 +516,7 @@ impl Wide {
             (None, Some(_)) if !scales(eb, ea) => return Wide::Unknown,
             _ => {}
         }
-        unless_lost(&[self, o], Wide::norm(a * b, ea + eb))
+        unless_lost(&[self, o], Wide::norm_sum(a * b, ea, eb))
     }
 
     /// Division, undefined by an exact 0 (as `functions::div`).
@@ -529,7 +543,7 @@ impl Wide {
                 if a == 0.0 {
                     Wide::Val(a / b, 0.0)
                 } else {
-                    Wide::norm(a / b, ea - eb)
+                    Wide::norm_sum(a / b, ea, -eb)
                 }
             }
             _ => other(self, o),
