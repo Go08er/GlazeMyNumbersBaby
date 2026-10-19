@@ -4563,6 +4563,7 @@ fn a_window_is_a_stretch_and_promises_its_ends() {
     // [−64, 64], turning on both ends, was "no extrema" on f′'s claims
     // over the window, and passed.
     let mut v = certificate("(x/16)^3/3-x+0*tan(x)");
+    assert_eq!(rejected(&v), None, "the certifier's own certificate now");
     let claims = body_of(&mut v, "monotonicity")["cert"]["claims"].clone();
     v["extrema"] = json!({"Partial": {"value": [],
         "cert": {"covers": {"Window": {"a": -64.0, "b": 64.0}}, "claims": claims}}});
