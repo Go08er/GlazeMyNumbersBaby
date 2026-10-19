@@ -963,6 +963,20 @@ impl Program {
         }
     }
 
+    /// The value at a point in extended range (`Program::eval_wide`):
+    /// `(m, e)` for m·2^e with 1 ≤ |m| < 2 (an exact 0 as (±0, 0)), from
+    /// 2⁵³ binades on (e = ±∞ past even that range) held only as far as
+    /// `Wide::far` says; `None` where it is undefined or can't be told.
+    /// (Public for `tests/far_invariant.rs`, which checks that rule
+    /// against MPFR.)
+    #[doc(hidden)]
+    pub fn eval_extended(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        match self.eval_wide(x, y) {
+            Wide::Val(m, e) => Some((m, e)),
+            _ => None,
+        }
+    }
+
     fn eval_wide_with(&self, stack: &mut [Wide], x: f64, y: f64) -> Wide {
         let mut sp = 0usize;
         for op in &self.ops {

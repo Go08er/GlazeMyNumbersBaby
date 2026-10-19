@@ -117,9 +117,14 @@ jobs:
           # crossfuzz_found keeps the bugs it found fixed. certify_mutants
           # mutates a fixed few certificates' rows every way that changes
           # what they say, and fails if the replay accepts one.
+          # far_invariant checks every node of random programs past 2^53
+          # binades (powers of bases a hair from 1, e^c, counts, and chains
+          # of them) against MPFR: a far value's sign, side and exponent
+          # bound (wide.rs, `Wide::far`), and every other value it decides.
           nix develop -c cargo test --locked -p graphing --features mpfr-oracle \
             --test certify_replay --test interval_oracle --test simplify_rules \
-            --test crossfuzz --test crossfuzz_found --test certify_mutants
+            --test crossfuzz --test crossfuzz_found --test certify_mutants \
+            --test far_invariant
       - name: Clippy (all targets, warnings are errors)
         run: |
           nix develop -c cargo clippy --workspace --all-targets --locked -- -D warnings
