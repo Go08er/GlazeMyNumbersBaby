@@ -227,7 +227,7 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **1,115 tests** (counts include
+`nix develop -c cargo test --workspace` runs **1,120 tests** (counts include
 doctests; six more are `#[ignore]`d: a live currency fetch, the full
 metamorphic graph sweep, 20,000 random saved sessions, and the
 cross-checking tester's long run, single-expression check and case list).
@@ -255,7 +255,7 @@ upstream sources with g++:
 | calcvm (187 + 1 ignored) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage and the saved-state size budget (long pasted sessions keep their newest History, memory and modes) |
 | unitconv (140 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
 | datecalc (40), copypaste (40) | Ports of `DateCalculatorTests` and `CopyPasteManagerTests`, plus paste key-sequence tests |
-| graphing (439 + 4 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, sliders (kept while their equation isn't drawn, remembered while no equation uses them), function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows, a monotone piece or extremum at a domain end only where the proof reaches it; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
+| graphing (444 + 4 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, sliders (kept while their equation isn't drawn, remembered while no equation uses them), function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows, a monotone piece or extremum at a domain end only where the proof reaches it; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
 | appcore (66) | Keyboard map, key scripts, a text field's undo history (typed runs, its bound, redo cleared, the selection restored), converter paste validation, settings storage (huge/corrupt files, per-section budgets, a long calculator session that used to cost the whole file), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
 | crmath (1) | The vendored CORE-MATH's two builds (baseline and x86-64-v3) give the same bits |
 | gmnb (25), gmnb-launcher (4), dgmnb (68) | GDK key translation, a field's undo keys, palette contrast for extreme accents, settings compatibility, licence text that parses as markup; the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it) and where it finds GMNB; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown and pipe deadlines |
@@ -280,7 +280,9 @@ CI also runs checks that need more than `cargo test --workspace`:
   derived one, never just inside the same enclosure; a gap about a point
   where f is undefined, or holding a pole a claim places, is shown to hold
   nothing else excluded; one listed item stands for one zero, turn or pole;
-  a family's member only lies at a piece's end when shown there.
+  a family's member only lies at a piece's end when shown there; a row
+  complete over a window answers for its ends, a zero of f′ or f″ on one
+  needing its sign past it.
   The checker has no Γ of its own, so it doesn't model `n!`, `n!!`, `nCr`
   or `nPr`: a function that uses one anywhere, a constant like `5!`
   included, comes out *unsupported* (not checked, rather than wrong), and
@@ -298,11 +300,13 @@ CI also runs checks that need more than `cargo test --workspace`:
   family dropped with every claim about it and a gap in their place, pieces
   joined over the place between them, a value f takes split out of the
   range as a hole's, an extremum at an end of the domain read from past
-  the turn beside it), and the replay must refuse each result, with the
+  the turn beside it, a complete list made complete over a window from
+  one of its places with that place left out), and the replay must
+  refuse each result, with the
   rest of the certificate there, withheld, or with every genuine claim
-  given to the row. CI runs a fixed few (3,048 mutants, none accepted).
-  The long runs (204 corpus functions, 42,202 mutants; 607 pool functions,
-  151,313) accept 17 and 12: each a true statement the replay proved (a
+  given to the row. CI runs a fixed few (3,084 mutants, none accepted).
+  The long runs (204 corpus functions, 42,660 mutants; 607 pool functions,
+  153,363) accept 17 and 12: each a true statement the replay proved (a
   row borrowed from another function that happens to hold, an enclosure
   narrowed onto the number it holds), reviewed by hand in a table with the
   reason it is true. A long run fails on an accepted mutant not in the
@@ -317,7 +321,10 @@ CI also runs checks that need more than `cargo test --workspace`:
   this round's certifier changes) and 10 of the pool's 18 extrema at an
   end of the domain read from past a turn, and the one before review 20
   another 20 of the pool's exact limits written within 10⁻⁶³ of
-  themselves.
+  themselves. Of review 21's window from a place with the place left
+  out, the checker before its audit accepted 2 of the fixed few's 36, 34
+  of the corpus's 308 and 330 of the pool's 2,050 (x²'s "no extrema for
+  0 ≤ x ≤ 4": a turn or an inflection on the window's end).
 - **Random cross-checking** (`--test crossfuzz`, same feature): the checks
   above take ordinary functions, shifted and scaled. This one generates
   expressions aimed at the families the review rounds kept finding bugs in
@@ -356,14 +363,20 @@ CI also runs checks that need more than `cargo test --workspace`:
   of a non-whole degree can be tens of ulps off next to zero. Known but not
   in the table: a count past even the extended range (beyond e^(2⁴⁷)) keeps
   only its side, so `ln(nCr(x^2,x))` at 10¹⁰⁰ (about 2.3·10¹⁰²) and
-  `nCr(x^2,x)/nCr(x^2,x)` there are gaps. So does any value past 2⁵³
-  binades (e^(10³⁰⁰)): two on one side of the doubles are never put in
+  `nCr(x^2,x)/nCr(x^2,x)` there are gaps. So does any value from 2⁵³
+  binades on (e^(10³⁰⁰)): two on one side of the doubles are never put in
   order, nor their logarithms taken, so `e^(10^300)/e^(10^299)` is a gap
   too, though it is plainly past the doubles (review 20: such orders,
-  taken from rounded exponents, drew false curves). When two such values
-  of one sign and side cannot be ordered, their min/max discards the
-  individual exponents: a later small power cannot borrow either
-  argument's magnitude (review 21). The table's other
+  taken from rounded exponents, drew false curves); and so is
+  `e^6243314768165359/e^6243314768165358`, whose first exponent rounds to
+  2⁵³ itself. Such a value keeps an exponent only where it describes the
+  value (`Wide::far` states the rule): the min or max of two of one sign
+  and side keeps the selected one's, while one past even the extended
+  range is known only to be past 2⁴⁷ binades, so a min, max or
+  same-signed sum with one is that far and no more:
+  `min(e^(10^20),(5*10^12)!)^(1/100)` and
+  `(e^(-10^300)+e/(5*10^12)!)^(10^-284)` are gaps (review 21: the first
+  operand's exponent, or the lost one's, drew false curves). The table's other
   entries are a documented limit (a circular function of a typed whole number of
   16 or more digits is taken at the number's double) and the tester's own
   reference evaluator on subnormal operands, where the compiled value is
@@ -437,7 +450,11 @@ CI also runs checks that need more than `cargo test --workspace`:
   √(x − 1000)·ln(x − 1000) + x falls from 1000, but its slope is proven
   only from the double after 1000, so its falling piece reads
   (≈1000, ≈1000.08) with "there may be more", and an extremum at such an
-  end isn't listed. Windows-parity of the analysis is not claimed; the
+  end isn't listed. A list complete only over a window ("Complete for
+  a ≤ x ≤ b") speaks for its ends too: a turn or an inflection on one,
+  which the slope past the window would decide, leaves the row unknown
+  ((x/16)³/3 − x + 0·tan x turns on both ends of its window [−64, 64]).
+  Windows-parity of the analysis is not claimed; the
   conventions it follows where Windows' choice isn't known are in
   [docs/ti-conventions.md](docs/ti-conventions.md).
 - **Explicit curves: joins are proven until a work budget runs out.**
