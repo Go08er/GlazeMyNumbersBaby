@@ -593,6 +593,9 @@ fn mutants_of(
     let certified = status == "Certified";
     let value = b["value"].clone();
     let covers = b["cert"]["covers"].clone();
+    // Partial/Window still promises every feature inside that window.
+    // Only Partial/Points may discard items or shorten pieces freely.
+    let points_only = !certified && covers == json!("Points");
     let mut push = |op: &'static str,
                     what: String,
                     benign: Option<&'static str>,
@@ -617,7 +620,7 @@ fn mutants_of(
     for p in paths(&value, &Value::is_array) {
         let mut vv = value.clone();
         let items = at(&mut vv, &p).as_array().cloned().unwrap_or_default();
-        let fewer = (!certified).then_some(FEWER);
+        let fewer = points_only.then_some(FEWER);
         // (The range's ends name their sources pair by pair, beside the
         // row: they go with the pieces.)
         let listed = |items: Vec<Value>, ends: Option<Value>| {
@@ -835,7 +838,7 @@ fn mutants_of(
         // (A partial monotonicity row's end drawn in: DRAWN_IN. Not in a
         // complete row, where the pieces are all there are; not outward.)
         let inward = |new: (f64, f64)| {
-            (row == "monotonicity" && !certified && drawn_in(&value, p, (lo, hi), new))
+            (row == "monotonicity" && points_only && drawn_in(&value, p, (lo, hi), new))
                 .then_some(DRAWN_IN)
         };
         if lo == hi {
@@ -901,8 +904,11 @@ fn mutants_of(
             Some(WIDER),
             &set(p, enc(lo.next_down(), hi.next_up())),
         );
-        // The next proven feature: the same field of the next item.
-        if certified
+        // The next proven feature: the same field of the next item. (Not
+        // in a points-only row, which a duplicate and one fewer leave
+        // true; a window's lists every feature in it, as a complete row
+        // does: review 21.)
+        if !points_only
             && let Some(i) = p.iter().position(|s| matches!(s, Seg::I(_)))
             && let Seg::I(k) = &p[i]
         {
@@ -1001,7 +1007,7 @@ fn mutants_of(
             push(
                 "a family called one",
                 format!("{}: {} alone", show(&p), s["Every"]["x0"]),
-                (!certified).then_some(FEWER),
+                points_only.then_some(FEWER),
                 &set(&p, json!({"At": s["Every"]["x0"]})),
             );
         }
@@ -1022,7 +1028,7 @@ fn mutants_of(
             push(
                 "a family called one",
                 format!("{}: {was} dropped", show(&p)),
-                (!certified).then_some(FEWER),
+                points_only.then_some(FEWER),
                 &set(&p, Value::Null),
             );
         }
@@ -1100,7 +1106,8 @@ fn mutants_of(
 
     // ---- a place dropped, and what the claims said of it but "a gap"
     //
-    // From a complete row of poles, zeros or excluded families: an item
+    // From a complete row (over the line, a period or a window: review
+    // 21) of poles, zeros or excluded families: an item
     // (or a family, each of its members in the row's window) left out,
     // with every claim about its place (an excluded point, a pole, a
     // zero's box, a one-sided limit there: within 16 doubles of it), and
@@ -1113,7 +1120,7 @@ fn mutants_of(
         let w = covers.get("Period").or_else(|| covers.get("Window"))?;
         Some((replay::r(w.get("a")?).ok()?, replay::r(w.get("b")?).ok()?))
     };
-    if certified && matches!(row, "vertical" | "x_intercepts" | "domain") {
+    if !points_only && matches!(row, "vertical" | "x_intercepts" | "domain") {
         let items_path: Vec<Seg> = if row == "domain" {
             vec![Seg::K("excluded".into())]
         } else {
@@ -1243,9 +1250,96 @@ fn mutants_of(
                     hull.0,
                     hull.1
                 ),
-                (!certified).then_some(ONE_OF_TWO),
+                points_only.then_some(ONE_OF_TWO),
                 &|v: &mut Value| body_mut(v, row)["value"] = Value::Array(merged.clone()),
             );
+        }
+    }
+
+    // ---- a window from a place, the place left out
+    //
+    // A complete list (over the line, or a window) made complete over a
+    // window that starts (ends) at an item's enclosure: the item and those
+    // before (after) it left out, and every claim about the reals before
+    // (after) the window with them. The item lies in the window, closed,
+    // so the row leaves one of its features out: false by construction. A
+    // zero, turn or inflection on a window's end, its far side signed by
+    // no claim, was never derived, and "no extrema for 0 ≤ x ≤ 2" passed
+    // for x² − 1 (review 21's audit of the window's promise).
+    let windowed = (certified && covers == json!("Line")) || (!certified && window_of().is_some());
+    if windowed && matches!(row, "x_intercepts" | "extrema" | "inflections") {
+        let items = value.as_array().cloned().unwrap_or_default();
+        let x_of = |it: &Value| -> Option<(f64, f64)> {
+            match row {
+                "x_intercepts" => enc_of(it.get("At")?),
+                _ => it
+                    .get("every")
+                    .is_none_or(Value::is_null)
+                    .then(|| enc_of(it.get("x")?))
+                    .flatten(),
+            }
+        };
+        let old = window_of();
+        for (i, item) in items.iter().enumerate() {
+            let Some((lo, hi)) = x_of(item) else {
+                continue;
+            };
+            if !(taken(i, items.len()) && lo.is_finite() && hi.is_finite()) {
+                continue;
+            }
+            let reach = hi.abs().max(lo.abs()) + 4.0;
+            for from in [true, false] {
+                // The window, the place on its end; the claims and items
+                // on the window's side of that end.
+                let (a, b) = match (old, from) {
+                    (Some((_, b)), true) => (lo, b),
+                    (Some((a, _)), false) => (a, hi),
+                    (None, true) => (lo, hi + reach),
+                    (None, false) => (lo - reach, hi),
+                };
+                if !(a < lo || b > hi) || a > b || !(a.is_finite() && b.is_finite()) {
+                    continue;
+                }
+                let kept_claim = |c: &Value| match claim_spot(c) {
+                    Some((s, _)) => {
+                        if from {
+                            s.0 >= lo
+                        } else {
+                            s.1 <= hi
+                        }
+                    }
+                    None => {
+                        let side = c
+                            .as_object()
+                            .and_then(|o| o.values().next())
+                            .and_then(|b| b.get("side"))
+                            .and_then(Value::as_str);
+                        side.is_none_or(|s| s == if from { "Right" } else { "Left" })
+                    }
+                };
+                let claims: Vec<Value> = claims_now
+                    .iter()
+                    .filter(|c| kept_claim(c))
+                    .cloned()
+                    .collect();
+                let rest: Vec<Value> = items
+                    .iter()
+                    .filter(|it| x_of(it).is_some_and(|(l, h)| if from { l > hi } else { h < lo }))
+                    .cloned()
+                    .collect();
+                push(
+                    "window from a place, the place left out",
+                    format!("item {i} at [{lo:e}, {hi:e}] left out, complete over [{a:e}, {b:e}]"),
+                    None,
+                    &|v: &mut Value| {
+                        let mut body = body_mut(v, row).clone();
+                        body["value"] = Value::Array(rest.clone());
+                        body["cert"]["covers"] = json!({"Window": {"a": num(a), "b": num(b)}});
+                        body["cert"]["claims"] = Value::Array(claims.clone());
+                        v[row] = json!({ "Partial": body });
+                    },
+                );
+            }
         }
     }
 
@@ -1715,6 +1809,9 @@ fn mutants_of(
         _ => vec![json!([]), json!([made_up_item(row, 0.123)])],
     };
     for value in made_up {
+        // (Not over a window: an empty list made up there is true where f
+        // has nothing in it, so no mutant of its own. "A window from a
+        // place" above makes the false ones.)
         for (status, covers) in [("Certified", "Line"), ("Partial", "Points")] {
             // (A partial row that lists nothing says nothing.)
             let says_nothing = status == "Partial" && value.as_array().is_some_and(Vec::is_empty);
@@ -2121,6 +2218,81 @@ fn a_fixed_few_certificates_mutated_are_refused() {
         "{} mutants accepted",
         r.accepted.len()
     );
+}
+
+/// A partial list complete within a window cannot omit its zeros there.
+/// The checker already refuses these false rows; the mutation harness
+/// must ask it to do so, rather than exempt them as content preserving.
+#[test]
+fn window_completeness_is_not_exempted_as_a_points_only_list() {
+    let mut v = certificate("x^2-1", TrigUnit::Radians).unwrap();
+    let mut b = body(&v, "x_intercepts").unwrap().1.clone();
+    b["cert"]["covers"] = json!({"Window": {"a": -2.0, "b": 2.0}});
+    v["x_intercepts"] = json!({"Partial": b});
+    let genuine = replay::replay(&v).unwrap();
+    assert!(genuine.row_problems().is_empty());
+    let mut checked = 0;
+    mutants_of(&v, "x_intercepts", None, &mut |m| {
+        if !matches!(
+            m.op,
+            "list emptied" | "item removed" | "two places listed as one"
+        ) {
+            return;
+        }
+        assert!(m.benign.is_none(), "{}: {}", m.op, m.what);
+        let r = replay::replay(&m.v).unwrap();
+        assert!(
+            r.rows
+                .iter()
+                .any(|r| r.name == "x_intercepts" && !r.problems.is_empty())
+        );
+        checked += 1;
+    });
+    assert!(checked >= 4, "{checked} destructive window mutants checked");
+    body_mut(&mut v, "x_intercepts")["cert"]["covers"] = json!("Points");
+    let mut exempted = 0;
+    mutants_of(&v, "x_intercepts", None, &mut |m| {
+        if m.op == "list emptied" {
+            assert_eq!(m.benign, Some(FEWER));
+            exempted += 1;
+        }
+    });
+    assert_eq!(exempted, 1);
+}
+
+/// A window from a listed place, the place left out, is refused in every
+/// setting: the zero, turn or inflection on the window's end is in it.
+/// (Before review 21's audit the replay never derived a turn on a
+/// window's end whose far side no claim signed: x² − 1's "no extrema for
+/// 0 ≤ x ≤ 2" and x³'s "no inflections for 0 ≤ x ≤ 2" passed.)
+#[test]
+fn a_window_from_a_place_left_out_is_refused() {
+    for (src, row) in [
+        ("x^2-1", "extrema"),
+        ("x^3", "inflections"),
+        ("x^2-1", "x_intercepts"),
+        ("x^3-3x", "extrema"),
+    ] {
+        let v = certificate(src, TrigUnit::Radians).unwrap();
+        let every = every_claim(&v);
+        let mut checked = 0;
+        mutants_of(&v, row, None, &mut |m| {
+            if m.op != "window from a place, the place left out" {
+                return;
+            }
+            assert!(m.benign.is_none());
+            let mut session = replay::Session::default();
+            for (s, setting) in SETTINGS.iter().enumerate() {
+                assert!(
+                    refused(&m.v, row, s, &every, &mut session).is_some(),
+                    "{src}: {row}: {} accepted ({setting})",
+                    m.what,
+                );
+            }
+            checked += 1;
+        });
+        assert!(checked >= 2, "{src}: {row}: {checked} mutants");
+    }
 }
 
 // ------------------------------------------------------------ reviewed

@@ -502,6 +502,17 @@ fn changes(segs: &[Seg], kink_turns: bool) -> (Vec<(Enc, bool)>, bool) {
     (out, complete)
 }
 
+/// A zero of f⁽ᵏ⁾ on an end of the box that the window clipped: its sign
+/// past that end, outside the window, is no box's, so whether f turns (or
+/// inflects) there isn't decided, and a row complete over the window,
+/// whose closed ends it promises too, can't be. (`changes` takes a zero at
+/// a box's end for the box's bound; review 21's audit of the window's
+/// promise, which the replay now asks.)
+fn clipped_zero(segs: &[Seg], ib: &IBox) -> bool {
+    (ib.lo_clipped && matches!(segs.first(), Some(Seg::Zero(_))))
+        || (ib.hi_clipped && matches!(segs.last(), Some(Seg::Zero(_))))
+}
+
 // ---------------------------------------------------------- extrema
 
 /// Whether a claim about f on `span`, a box that holds the closed domain
@@ -649,7 +660,7 @@ pub fn extrema(
     for ib in boxes {
         let segs = walk(c1, ib);
         let (ch, done) = changes(&segs, true);
-        complete &= done;
+        complete &= done && !clipped_zero(&segs, ib);
         for low in [true, false] {
             if !low && ib.a == ib.b {
                 // An isolated point: one end.
@@ -715,7 +726,7 @@ pub fn inflections(
     for ib in boxes {
         let segs = walk(c2, ib);
         let (ch, done) = changes(&segs, false);
-        complete &= done;
+        complete &= done && !clipped_zero(&segs, ib);
         for (x, _) in ch {
             if let Some(p) = scope.period
                 && repeats(

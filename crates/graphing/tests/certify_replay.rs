@@ -4484,3 +4484,89 @@ fn one_listed_item_stands_for_one_place() {
         {"on": {"lo": end, "hi": "PosInf"}, "dir": "Increasing"}]);
     assert!(rejected(&v).is_some(), "two turns in one end");
 }
+
+/// A row complete over a window promises every feature in a ≤ x ≤ b, its
+/// ends included, and its window is a stretch of the line. Review 21's
+/// audit of the window's promise: a turn or an inflection on a window's
+/// end, its far side signed by no claim, was never derived, so x² − 1's
+/// "no extrema for 0 ≤ x ≤ 2" (and for −2 ≤ x ≤ 0) and x³'s "no
+/// inflections for 0 ≤ x ≤ 2" passed on true claims; and a window turned
+/// around was complete about nothing.
+#[test]
+fn a_window_is_a_stretch_and_promises_its_ends() {
+    use serde_json::json;
+    // The row over [a, b], listing `value`, with only the claims on the
+    // window's side of its end at 0.
+    let windowed = |src: &str, row: &str, (a, b): (f64, f64), value: serde_json::Value| {
+        let mut v = certificate(src);
+        assert!(rejected(&v).is_none(), "{src}: the true certificate");
+        let mut body = body_of(&mut v, row).clone();
+        let keep = |c: &serde_json::Value| {
+            let (kind, inner) = c.as_object().unwrap().iter().next().unwrap();
+            if kind.starts_with("Tail") {
+                return inner["side"] == json!(if a == 0.0 { "Right" } else { "Left" });
+            }
+            match inner.get("x") {
+                Some(x) if a == 0.0 => replay::r(&x["a"]).unwrap() >= 0.0,
+                Some(x) => replay::r(&x["b"]).unwrap() <= 0.0,
+                None => true,
+            }
+        };
+        let claims: Vec<_> = body["cert"]["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| keep(c))
+            .cloned()
+            .collect();
+        body["value"] = value;
+        body["cert"]["covers"] = json!({"Window": {"a": a, "b": b}});
+        body["cert"]["claims"] = json!(claims);
+        v[row] = json!({ "Partial": body });
+        rejected(&v)
+    };
+    for (src, row, window) in [
+        ("x^2-1", "extrema", (0.0, 2.0)),
+        ("x^2-1", "extrema", (-2.0, 0.0)),
+        ("x^3", "inflections", (0.0, 2.0)),
+        ("x^3", "inflections", (-2.0, 0.0)),
+    ] {
+        let why = windowed(src, row, window, json!([]))
+            .unwrap_or_else(|| panic!("{src}: {row} none over {window:?} accepted"));
+        assert!(why.contains("is not decided"), "{src}: {row}: {why}");
+    }
+    // Listed, the turn on the window's end needs its far side all the same
+    // (a complete row lists what its claims show, no more).
+    let mut v = certificate("x^2-1");
+    let min = value_of(&mut v, "extrema").clone();
+    assert!(windowed("x^2-1", "extrema", (0.0, 2.0), min).is_some());
+    // With the claims beyond the end too, the window's row is true.
+    let mut v = certificate("x^2-1");
+    let body = body_of(&mut v, "extrema").clone();
+    for window in [(0.0, 2.0), (-2.0, 0.0), (-2.0, 2.0)] {
+        let mut w = v.clone();
+        let mut b = body.clone();
+        b["cert"]["covers"] = json!({"Window": {"a": window.0, "b": window.1}});
+        w["extrema"] = json!({ "Partial": b });
+        assert_eq!(rejected(&w), None, "{window:?}");
+    }
+    // A window turned around.
+    let mut v = certificate("x^2-1");
+    let mut b = body_of(&mut v, "x_intercepts").clone();
+    b["value"] = json!([]);
+    b["cert"]["covers"] = json!({"Window": {"a": 2.0, "b": -2.0}});
+    b["cert"]["claims"] = json!([]);
+    v["x_intercepts"] = json!({ "Partial": b });
+    let why = rejected(&v).expect("a window turned around");
+    assert!(why.contains("no stretch"), "{why}");
+    // The certifier's own row of this shape: (x/16)³/3 − x + 0·tan x over
+    // [−64, 64], turning on both ends, was "no extrema" on f′'s claims
+    // over the window, and passed.
+    let mut v = certificate("(x/16)^3/3-x+0*tan(x)");
+    assert_eq!(rejected(&v), None, "the certifier's own certificate now");
+    let claims = body_of(&mut v, "monotonicity")["cert"]["claims"].clone();
+    v["extrema"] = json!({"Partial": {"value": [],
+        "cert": {"covers": {"Window": {"a": -64.0, "b": 64.0}}, "claims": claims}}});
+    let why = rejected(&v).expect("no extrema over [−64, 64]");
+    assert!(why.contains("is not decided"), "{why}");
+}

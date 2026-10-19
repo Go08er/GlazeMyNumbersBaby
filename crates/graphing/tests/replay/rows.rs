@@ -689,19 +689,30 @@ fn gap_ends(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk, k: usize, out: &mu
 /// sign". Nothing is asked of a side outside the row's region, where f has
 /// no value, or where f⁽ᵏ⁾ ≡ 0 on a stretch. (x²'s f′, its zero at 0
 /// between two gaps, changed sign nowhere: the third pass's audit.)
+///
+/// But a zero on an end of a window (or of a period) is in the region,
+/// and a turn or an inflection there is one of the row's: so its side
+/// beyond that end is asked too. (x² − 1's extrema "none for 0 ≤ x ≤ 2"
+/// over claims from 0 on passed, its minimum at 0 never derived: the
+/// window's completeness, review 21's audit.)
 fn sides_decided(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk, k: usize, out: &mut RowResult) {
     let Some(rg) = &rc.region else { return };
     if !complete(rc) {
         return;
     }
     let ts = targets(rg, all);
+    let ends: &[f64] = match rg {
+        Region::Window(a, b) | Region::Period(a, b) => &[*a, *b],
+        Region::Line | Region::Points => &[],
+    };
     for z in &w.zeros {
+        let on_end = ends.iter().any(|&e| z.at.lo <= e && e <= z.at.hi);
         let sides = [
             ("before", z.left, z.at.lo.next_down()),
             ("after", z.right, z.at.hi.next_up()),
         ];
         for (side, sign, beside) in sides {
-            let asked = ts.iter().any(|t| t.0 <= beside && beside <= t.1);
+            let asked = on_end || ts.iter().any(|t| t.0 <= beside && beside <= t.1);
             let flat = w.flat.iter().any(|b| b.0 <= beside && beside <= b.1);
             if sign.is_some() || !asked || flat || no_value(fx, beside) {
                 continue;
@@ -992,6 +1003,17 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
     }
     if let Some(why) = off_form(rc) {
         out.problems.push(why);
+    }
+    // A window (or a period) is a stretch a ≤ x ≤ b of the line: turned
+    // around, or with an end that is no number, it holds nothing to be
+    // complete about, and every list over it was taken as complete (the
+    // x-intercepts of x² − 1 "none for 2 ≤ x ≤ −2". Review 21's audit).
+    if let Some(Region::Window(a, b) | Region::Period(a, b)) = rc.region
+        && !(a.is_finite() && b.is_finite() && a <= b)
+    {
+        out.problems.push(format!(
+            "its scope [{a:e}, {b:e}] is no stretch a ≤ x ≤ b of the line"
+        ));
     }
     // The claims' own outcomes (looked up by key: a row has thousands).
     let outcomes: std::collections::HashMap<String, &ClaimResult> = results
