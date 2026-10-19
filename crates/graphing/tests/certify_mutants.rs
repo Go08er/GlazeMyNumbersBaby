@@ -1343,6 +1343,374 @@ fn mutants_of(
         }
     }
 
+    // ---- a place behind a gap: on a window's end, or between two gaps
+    //
+    // The operators above withhold claims, or change the row; none puts a
+    // true claim in the place of another. A zero, turn or inflection at a
+    // double p is decided by its claims; in their place, a gap with p for
+    // an end, cleared of f⁽ᵏ⁾'s zeros strictly inside it, and f⁽ᵏ⁾'s sign
+    // from the gap's other end on to where they reached, decide nothing at
+    // p, and are as true: so the row must ask p of something else. With p
+    // on the end of a window the row is made complete over (its item left
+    // out, or listed a double inside the window), or p inside the row's
+    // region between two such gaps (its item left out), every premise is
+    // true and the row false (review 22, R22-M-01: x² − 1's minimum at 0
+    // left out of "no extrema for 0 ≤ x ≤ 2" passed, every claim strong).
+    // A mutant whose new premises the replay's own claim check doesn't
+    // prove is not made: it would test the premises, not the row.
+    let order = match row {
+        "x_intercepts" => Some(0),
+        "extrema" | "monotonicity" => Some(1),
+        "inflections" => Some(2),
+        _ => None,
+    };
+    if let Some(k) = order
+        && !points_only
+    {
+        let of = ["F0", "F1", "F2"][k];
+        let items = value.as_array().cloned().unwrap_or_default();
+        let x_of = |it: &Value| -> Option<(f64, f64)> {
+            match row {
+                "x_intercepts" => enc_of(it.get("At")?),
+                _ => it
+                    .get("every")
+                    .is_none_or(Value::is_null)
+                    .then(|| enc_of(it.get("x")?))
+                    .flatten(),
+            }
+        };
+        // The places: (what, index, p, the list without what it says of
+        // p): each item at a double; for the monotone pieces, an end two
+        // meet at, at a double (a turn), the two joined over it.
+        let mut places: Vec<(String, usize, f64, Vec<Value>)> = Vec::new();
+        if row == "monotonicity" {
+            for j in 0..items.len().saturating_sub(1) {
+                let end = &items[j]["on"]["hi"];
+                let Some((p, q)) = enc_of(&end["At"]["x"]) else {
+                    continue;
+                };
+                if !(taken(j, items.len()) && p == q && p.is_finite())
+                    || items[j + 1]["on"]["lo"]["At"]["x"] != end["At"]["x"]
+                {
+                    continue;
+                }
+                let mut one = items[j].clone();
+                one["on"]["hi"] = items[j + 1]["on"]["hi"].clone();
+                let mut joined = items.clone();
+                joined[j] = one;
+                joined.remove(j + 1);
+                places.push((
+                    format!("pieces {j} and {} joined over", j + 1),
+                    j,
+                    p,
+                    joined,
+                ));
+            }
+        } else {
+            for (i, item) in items.iter().enumerate() {
+                let Some((p, hi)) = x_of(item) else {
+                    continue;
+                };
+                if !(taken(i, items.len()) && p == hi && p.is_finite()) {
+                    continue;
+                }
+                let mut rest = items.clone();
+                rest.remove(i);
+                places.push((format!("item {i} at"), i, p, rest));
+            }
+        }
+        let old = window_of();
+        let mut session = replay::Session::default();
+        let gap = |a: f64, b: f64| {
+            [
+                json!({"Gap": {"x": {"a": num(a), "b": num(b)}}}),
+                json!({"GapClear": {"x": {"a": num(a), "b": num(b)}, "of": {"F": of}}}),
+            ]
+        };
+        let sign = |a: f64, b: f64, up: bool| {
+            json!({"Beyond": {"x": {"a": num(a), "b": num(b)}, "of": {"F": of}, "c": 0.0,
+                "above": up}})
+        };
+        // (body, list, claims) → the mutated certificate, made only where
+        // its new claims are true: f⁽ᵏ⁾'s sign on each stretch filled in
+        // is tried both ways.
+        let mut make = |covers: Value,
+                        status: &str,
+                        list: Vec<Value>,
+                        claims: Vec<Value>,
+                        fills: &[(f64, f64)]|
+         -> Option<Value> {
+            let fills: Vec<(f64, f64)> = fills.iter().copied().filter(|f| f.0 < f.1).collect();
+            for signs in 0..(1usize << fills.len()) {
+                let mut cs = claims.clone();
+                for (j, f) in fills.iter().enumerate() {
+                    cs.push(sign(f.0, f.1, signs & (1 << j) == 0));
+                }
+                let mut v = base.clone();
+                let mut body = body_mut(&mut v, row).clone();
+                body["value"] = Value::Array(list.clone());
+                body["cert"]["covers"] = covers.clone();
+                body["cert"]["claims"] = Value::Array(cs);
+                v[row] = json!({ status: body });
+                let true_premises = replay::replay_in(&v, &mut session, Some(row)).is_ok_and(|r| {
+                    r.claims.iter().all(|c| {
+                        matches!(c.outcome.class, replay::Class::Strong | replay::Class::Weak)
+                    })
+                });
+                if true_premises {
+                    return Some(v);
+                }
+            }
+            None
+        };
+        for (what, i, p, without) in places {
+            let (below, above) = (p.next_down(), p.next_up());
+            // The claims about p (their boxes hold it), and how far they
+            // reached either side.
+            let about_p = |c: &Value| claim_spot(c).is_some_and(|(s, _)| s.0 <= p && p <= s.1);
+            let (reach_lo, reach_hi) = claims_now
+                .iter()
+                .filter(|c| about_p(c))
+                .filter_map(|c| claim_spot(c).map(|(s, _)| s))
+                .fold((p, p), |(a, b), s| (a.min(s.0), b.max(s.1)));
+            // On a window's end: the window from p (or to p), as in "a
+            // window from a place" above; the claims on its side kept but
+            // those about p; a gap from p (to p) in their place. (Not for
+            // monotone pieces: one cut at a window's end is as true.)
+            let windowed = row != "monotonicity"
+                && ((certified && (covers == json!("Line") || covers.get("Period").is_some()))
+                    || (!certified && old.is_some()));
+            if windowed {
+                let reach = p.abs() + 4.0;
+                for from in [true, false] {
+                    let (a, b) = match (old, from) {
+                        (Some((_, b)), true) => (p, b),
+                        (Some((a, _)), false) => (a, p),
+                        (None, true) => (p, p + reach),
+                        (None, false) => (p - reach, p),
+                    };
+                    if !(a.is_finite() && b.is_finite() && a <= b) {
+                        continue;
+                    }
+                    let kept: Vec<Value> = claims_now
+                        .iter()
+                        .filter(|c| !about_p(c))
+                        .filter(|c| match claim_spot(c) {
+                            Some((s, _)) => {
+                                if from {
+                                    s.0 >= p
+                                } else {
+                                    s.1 <= p
+                                }
+                            }
+                            None => {
+                                let side = c
+                                    .as_object()
+                                    .and_then(|o| o.values().next())
+                                    .and_then(|b| b.get("side"))
+                                    .and_then(Value::as_str);
+                                side.is_none_or(|s| s == if from { "Right" } else { "Left" })
+                            }
+                        })
+                        .cloned()
+                        .collect();
+                    let rest: Vec<Value> = items
+                        .iter()
+                        .filter(|it| {
+                            x_of(it).is_some_and(|(l, h)| if from { l > p } else { h < p })
+                        })
+                        .cloned()
+                        .collect();
+                    let (g, fill) = if from {
+                        ((p, above), (above, reach_hi))
+                    } else {
+                        ((below, p), (reach_lo, below))
+                    };
+                    let mut claims = kept.clone();
+                    claims.extend(gap(g.0, g.1));
+                    let inward = if from { above } else { below };
+                    let mut moved_item = items[i].clone();
+                    match row {
+                        "x_intercepts" => moved_item["At"] = enc(inward, inward),
+                        _ => moved_item["x"] = enc(inward, inward),
+                    }
+                    let mut moved = rest.clone();
+                    moved.push(moved_item);
+                    for (how, list) in [("left out", rest.clone()), ("moved a double in", moved)] {
+                        let w = json!({"Window": {"a": num(a), "b": num(b)}});
+                        if let Some(v) = make(w, "Partial", list, claims.clone(), &[fill]) {
+                            push(
+                                "window end behind a gap",
+                                format!(
+                                    "{what} {p:e} {how}, complete over [{a:e}, {b:e}], a gap \
+                                     [{:e}, {:e}] in place of its claims",
+                                    g.0, g.1
+                                ),
+                                None,
+                                &|m: &mut Value| *m = v.clone(),
+                            );
+                        }
+                    }
+                }
+            }
+            // Inside the region: two gaps meeting at p.
+            let inside = match old {
+                Some((a, b)) => a < p && p < b,
+                None => certified,
+            };
+            if inside {
+                let mut claims: Vec<Value> =
+                    claims_now.iter().filter(|c| !about_p(c)).cloned().collect();
+                claims.extend(gap(below, p));
+                claims.extend(gap(p, above));
+                let status = if certified { "Certified" } else { "Partial" };
+                if let Some(v) = make(
+                    covers.clone(),
+                    status,
+                    without,
+                    claims,
+                    &[(reach_lo, below), (above, reach_hi)],
+                ) {
+                    let gone = if row == "monotonicity" {
+                        ""
+                    } else {
+                        " left out"
+                    };
+                    push(
+                        "place between two gaps",
+                        format!(
+                            "{what} {p:e}{gone}, gaps [{below:e}, {p:e}] and [{p:e}, {above:e}] \
+                             in place of its claims"
+                        ),
+                        None,
+                        &|m: &mut Value| *m = v.clone(),
+                    );
+                }
+            }
+        }
+    }
+
+    // ---- a kink in a gap
+    //
+    // A kink box (`Kink`, `KinkAt`, `KinkSides`) and the claims inside it
+    // given way to a gap over it, cleared of f⁽ᵏ⁾'s zeros (true where
+    // f⁽ᵏ⁾ changes sign at the kink with no zero: (x − 1)^(2/3)'s f′); the
+    // gap as the box, a double wider each way (the signs beside it now
+    // overlapping its ends), or two gaps overlapping; and the turn (or
+    // inflection) at the kink left out of the row, or the monotone pieces
+    // either side of it joined. Every premise true (each new one proven by
+    // the replay's own check, else no mutant), the row false: a gap's
+    // clearness says nothing of a point inside it where f⁽ᵏ⁾ doesn't exist
+    // (review 22's audit).
+    let kink_order = match row {
+        "extrema" | "monotonicity" => Some(1),
+        "inflections" => Some(2),
+        _ => None,
+    };
+    if let Some(k) = kink_order {
+        let of = ["F0", "F1", "F2"][k];
+        let bx = |v: &Value| Some((replay::r(v.get("a")?).ok()?, replay::r(v.get("b")?).ok()?));
+        let kinks: Vec<(f64, f64)> = claims_now
+            .iter()
+            .filter_map(|c| {
+                let (kind, b) = c.as_object()?.iter().next()?;
+                matches!(kind.as_str(), "Kink" | "KinkAt" | "KinkSides")
+                    .then(|| bx(b.get("x")?))
+                    .flatten()
+            })
+            .fold(Vec::new(), |mut v, x| {
+                if !v.contains(&x) {
+                    v.push(x);
+                }
+                v
+            });
+        let mut session = replay::Session::default();
+        for (n, kb) in kinks.iter().enumerate() {
+            if !(kb.0.is_finite() && kb.1.is_finite()) || doubles_out(kb.0, 60, true) < kb.1 {
+                continue;
+            }
+            // The row without what it said of the kink.
+            let new_value = match row {
+                "monotonicity" => {
+                    let items = value.as_array().cloned().unwrap_or_default();
+                    let at_kink = |b: &Value| {
+                        enc_of(&b["At"]["x"]).is_some_and(|(l, h)| kb.0 <= h && l <= kb.1)
+                    };
+                    let j = (0..items.len().saturating_sub(1)).find(|&j| {
+                        at_kink(&items[j]["on"]["hi"]) && at_kink(&items[j + 1]["on"]["lo"])
+                    });
+                    j.map(|j| {
+                        let mut one = items[j].clone();
+                        one["on"]["hi"] = items[j + 1]["on"]["hi"].clone();
+                        let mut fewer = items.clone();
+                        fewer[j] = one;
+                        fewer.remove(j + 1);
+                        Value::Array(fewer)
+                    })
+                }
+                _ => {
+                    let items = value.as_array().cloned().unwrap_or_default();
+                    let rest: Vec<Value> = items
+                        .iter()
+                        .filter(|it| !enc_of(&it["x"]).is_some_and(|(l, h)| kb.0 <= h && l <= kb.1))
+                        .cloned()
+                        .collect();
+                    (rest.len() < items.len()).then_some(Value::Array(rest))
+                }
+            };
+            let Some(new_value) = new_value else {
+                continue;
+            };
+            let inside_kink =
+                |c: &Value| claim_spot(c).is_some_and(|(s, _)| kb.0 <= s.0 && s.1 <= kb.1);
+            let kept: Vec<Value> = claims_now
+                .iter()
+                .filter(|c| !inside_kink(c))
+                .cloned()
+                .collect();
+            let (a, b) = *kb;
+            let shapes: [(&str, Vec<(f64, f64)>); 3] = [
+                ("over the kink box", vec![(a, b)]),
+                (
+                    "a double wider each way",
+                    vec![(a.next_down(), b.next_up())],
+                ),
+                (
+                    "two overlapping",
+                    vec![(a.next_down(), b), (a, b.next_up())],
+                ),
+            ];
+            for (how, gaps) in shapes {
+                let mut claims = kept.clone();
+                for g in &gaps {
+                    claims.push(json!({"Gap": {"x": {"a": num(g.0), "b": num(g.1)}}}));
+                    claims.push(
+                        json!({"GapClear": {"x": {"a": num(g.0), "b": num(g.1)}, "of": {"F": of}}}),
+                    );
+                }
+                let mut v = base.clone();
+                body_mut(&mut v, row)["value"] = new_value.clone();
+                body_mut(&mut v, row)["cert"]["claims"] = Value::Array(claims);
+                let true_premises = replay::replay_in(&v, &mut session, Some(row)).is_ok_and(|r| {
+                    r.claims.iter().all(|c| {
+                        matches!(c.outcome.class, replay::Class::Strong | replay::Class::Weak)
+                    })
+                });
+                if !true_premises {
+                    continue;
+                }
+                push(
+                    "kink in a gap",
+                    format!(
+                        "kink box {n} [{a:e}, {b:e}]: its claims a gap, {how}; what the row said of it left out"
+                    ),
+                    None,
+                    &|m: &mut Value| *m = v.clone(),
+                );
+            }
+        }
+    }
+
     // ---- an end's extremum read from past the turn beside it
     //
     // An extremum at a closed end of the domain, called the other kind, in
@@ -2197,11 +2565,13 @@ const FEW: &[&str] = &[
     "atan(x)",
     "abs(x-1)",
     // Kinks: at no double, joined (an inflection), a vertical tangent no
-    // double holds, a max of three.
+    // double holds, a max of three, a cusp (f′ changing sign with no zero:
+    // the kink's claims a gap, review 22's audit).
     "abs(x-0.1)",
     "x*abs(x)",
     "(x-0.1)^(1/3)",
     "max(x^2,2-x^2,-5)",
+    "(x-1)^(2/3)",
 ];
 
 #[test]
@@ -2292,6 +2662,57 @@ fn a_window_from_a_place_left_out_is_refused() {
             checked += 1;
         });
         assert!(checked >= 2, "{src}: {row}: {checked} mutants");
+    }
+}
+
+/// True claims in the place of those about a place, the place left out of
+/// the row: a gap from a zero, turn or inflection on a window's end, two
+/// gaps meeting at one inside the region, a gap over a cusp. Every premise
+/// of each mutant is true (the operators make none the replay's own check
+/// doesn't prove), and each is refused in every setting. Before review
+/// 22's audit the replay accepted every window-end mutant of a turn or an
+/// inflection here (R22-M-01) and every cusp mutant but the gap over the
+/// kink box alone.
+#[test]
+fn true_claims_in_the_place_of_a_place_are_refused() {
+    for (src, row, op, least) in [
+        ("x^2-1", "extrema", "window end behind a gap", 4),
+        ("x^2-1", "extrema", "place between two gaps", 1),
+        ("x^3", "inflections", "window end behind a gap", 4),
+        ("x^3-3x", "extrema", "window end behind a gap", 8),
+        ("x^2-1", "x_intercepts", "window end behind a gap", 8),
+        ("x^2-1", "x_intercepts", "place between two gaps", 2),
+        ("(x-1)^(2/3)", "extrema", "kink in a gap", 3),
+        ("(x-1)^(2/3)", "monotonicity", "kink in a gap", 3),
+    ] {
+        let v = certificate(src, TrigUnit::Radians).unwrap();
+        let every = every_claim(&v);
+        let mut checked = 0;
+        mutants_of(&v, row, None, &mut |m| {
+            if m.op != op {
+                return;
+            }
+            assert!(m.benign.is_none());
+            let mut session = replay::Session::default();
+            let r = replay::replay_in(&m.v, &mut session, Some(row)).unwrap();
+            assert!(
+                r.claims.iter().all(|c| matches!(
+                    c.outcome.class,
+                    replay::Class::Strong | replay::Class::Weak
+                )),
+                "{src}: {row}: {}: a premise is not true",
+                m.what
+            );
+            for (s, setting) in SETTINGS.iter().enumerate() {
+                assert!(
+                    refused(&m.v, row, s, &every, &mut session).is_some(),
+                    "{src}: {row}: {} accepted ({setting})",
+                    m.what,
+                );
+            }
+            checked += 1;
+        });
+        assert!(checked >= least, "{src}: {row}: {op}: {checked} mutants");
     }
 }
 
