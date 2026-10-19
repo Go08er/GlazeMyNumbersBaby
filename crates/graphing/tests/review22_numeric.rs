@@ -1,9 +1,36 @@
-//! Far exponents must not be formed by cancelling a rounded log2(m)
-//! against -1 when a power's base is just below 1.
+//! Review 22: a far exponent must not be formed by cancelling a rounded
+//! log2(m) against -1 when a power's base is just below 1; and a power
+//! within reach of such a base is its value.
 use graphing::compile::{CompileOptions, Input, Program};
 use graphing::lexer::ParseOptions;
 use graphing::plot::{PlotOptions, plot};
 use graphing::{Equation, Viewport};
+
+fn program(src: &str, digits: Option<u8>) -> Program {
+    let eq = Equation::parse_with(
+        &format!("y={src}"),
+        ParseOptions {
+            literal_digits: digits,
+            decimal_comma: false,
+        },
+    )
+    .unwrap_or_else(|e| panic!("{src}: {e:?}"));
+    Program::compile_typed(eq.explicit().unwrap().1, &CompileOptions::default()).unwrap()
+}
+
+/// Decided, within `tol` of `want`, with literals off and at 14 digits.
+fn decided(src: &str, want: f64, tol: f64) {
+    decided_at(src, want, tol, &[None, Some(14)]);
+}
+
+fn decided_at(src: &str, want: f64, tol: f64, settings: &[Option<u8>]) {
+    for &digits in settings {
+        let p = program(src, digits);
+        let v = p.eval(0.0, 0.0);
+        assert!((v - want).abs() <= tol, "{src}: {v} for {want}");
+        assert!(!p.undecided(0.0, 0.0), "{src}: decided");
+    }
+}
 
 #[test]
 fn a_far_power_just_below_one_keeps_its_logarithm() {
@@ -54,10 +81,30 @@ fn ordinary_powers_below_one_keep_their_values() {
         "((cos(0)-0.25)^1000)/(0.75^1000)",
         "sign((cos(0)-2^-44)^(10^300))",
     ] {
-        let eq = Equation::parse(&format!("y={src}")).unwrap();
-        let p =
-            Program::compile_typed(eq.explicit().unwrap().1, &CompileOptions::default()).unwrap();
-        assert!((p.eval(0.0, 0.0) - 1.0).abs() < 1e-12, "{src}");
-        assert!(!p.undecided(0.0, 0.0), "{src}");
+        decided(src, 1.0, 1e-12);
     }
+}
+
+/// A power of a base just below 1 whose value is within reach is that
+/// value, from the base's logarithm: (1 − 2⁻⁵²)^(2⁷⁰) is
+/// e^(−262144 − 2⁻³⁵ − …), though t·e alone is −2⁷⁰ binades (that made it
+/// "can't tell"); t·e + t·log₂|m| in doubles is up to 2¹⁶ binades off.
+#[test]
+fn a_power_just_below_one_within_reach_is_its_value() {
+    decided(
+        "(cos(0)-2^-52)^(2^70)/exp(-262144)",
+        1.0 - 2f64.powi(-35),
+        1e-14,
+    );
+    decided(
+        "(cos(0)-2^-44)^(2^60)/exp(-65536)",
+        1.0 - 2f64.powi(-29),
+        1e-13,
+    );
+    // Just above 1 too (e is 0 there, nothing cancelled).
+    decided(
+        "(cos(0)+2^-52)^(2^70)/exp(262144)",
+        1.0 - 2f64.powi(-35),
+        1e-14,
+    );
 }
