@@ -201,7 +201,16 @@ fn pow_mag(m: f64, e: f64, t: dd::Dd) -> Wide {
     // to a fraction of an ulp only below that, and beyond it gave a
     // mantissa of noise, 0 or ∞ by chance (1.5^x + 1 was ∞ at −10³⁰⁰ and 1
     // at 10³⁰⁰: found by `tests/crossfuzz.rs`).
-    let n = p + t.hi * cm::log2(m.abs());
+    // Just below 1, e is -1 and log2(|m|) almost 1: subtracting the
+    // rounded products can lose most of n's relative accuracy. That
+    // violates `far`'s exponent bound, and a later small power can then
+    // falsely remain far (review 22). Reconstruct this base exactly and
+    // take its logarithm near 1 before scaling, in double-double.
+    let n = if e == -1.0 && m.abs() > 1.0 {
+        dd::ln(0.5 * m.abs()).mul(t).div(dd::LN2).hi
+    } else {
+        p + t.hi * cm::log2(m.abs())
+    };
     if !p.is_finite()
         || p.abs() >= TWO53
         || !e.is_finite()
