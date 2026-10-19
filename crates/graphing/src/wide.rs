@@ -638,9 +638,17 @@ impl Wide {
                 if m == 0.0 || e.abs() <= NORMAL {
                     return Wide::new(cm::cbrt(ldexp(m, e)));
                 }
-                if e.abs() <= TWO53 {
-                    let r = e.rem_euclid(3.0);
-                    Wide::norm(cm::cbrt(m * f64::from(1 << r as i32)), (e - r) / 3.0)
+                if e.abs() < TWO53 {
+                    // (In integers: next to −2⁵³, e − r can be past 2⁵³ and
+                    // no double, and cbrt(e^(−6243314768165358)) was √2
+                    // times itself, with a half in its exponent: found by
+                    // `tests/far_invariant.rs`.)
+                    let k = e as i64;
+                    let r = k.rem_euclid(3);
+                    Wide::norm(
+                        cm::cbrt(m * [1.0, 2.0, 4.0][r as usize]),
+                        ((k - r) / 3) as f64,
+                    )
                 } else {
                     Wide::norm(cm::cbrt(m), e / 3.0)
                 }

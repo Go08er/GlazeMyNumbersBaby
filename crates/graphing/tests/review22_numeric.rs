@@ -1,6 +1,7 @@
 //! Review 22: a far exponent must not be formed by cancelling a rounded
-//! log2(m) against -1 when a power's base is just below 1; and a power
-//! within reach of such a base is its value.
+//! log2(m) against -1 when a power's base is just below 1; a power within
+//! reach of such a base is its value; and a cube root next to 2⁵³ binades
+//! below 1 keeps a whole exponent (`tests/far_invariant.rs` found it).
 use graphing::compile::{CompileOptions, Input, Program};
 use graphing::lexer::ParseOptions;
 use graphing::plot::{PlotOptions, plot};
@@ -106,5 +107,43 @@ fn a_power_just_below_one_within_reach_is_its_value() {
         "(cos(0)+2^-52)^(2^70)/exp(262144)",
         1.0 - 2f64.powi(-35),
         1e-14,
+    );
+}
+
+/// A cube root of a value 2⁵³ − 1 binades below 1 keeps a whole exponent.
+/// e^(−6243314768165358) is about 2^(−(2⁵³ − 1)), and its cube root
+/// e^(−2081104922721786) exactly; but e − r, the exponent less its
+/// remainder by 3, is no double there, and rounding it gave the root an
+/// exponent with a half in it: √2 times itself, drawn as 2/1024 for
+/// 1/1024 below, and a logarithm a quarter off. (Literals off: at 14
+/// digits these 16-digit exponents are other numbers.)
+#[test]
+fn a_cube_root_next_to_2_to_the_53_binades_keeps_a_whole_exponent() {
+    let decided = |src: &str, want: f64, tol: f64| decided_at(src, want, tol, &[None]);
+    decided(
+        "cbrt(exp(-6243314768165358))/exp(-2081104922721786)/1024",
+        1.0 / 1024.0,
+        1e-18,
+    );
+    decided(
+        "ln(cbrt(exp(-6243314768165358)))+2081104922721786",
+        0.0,
+        0.0,
+    );
+    decided(
+        "cbrt(-exp(-6243314768165358))/exp(-2081104922721786)/1024",
+        -1.0 / 1024.0,
+        1e-18,
+    );
+    // The square root and a root through the power were whole already.
+    decided(
+        "sqrt(exp(-6243314768165358))/exp(-3121657384082679)/1024",
+        1.0 / 1024.0,
+        1e-18,
+    );
+    decided(
+        "root(exp(-6243314768165358),3)/exp(-2081104922721786)/1024",
+        1.0 / 1024.0,
+        1e-15,
     );
 }
