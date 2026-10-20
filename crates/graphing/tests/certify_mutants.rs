@@ -22,6 +22,13 @@
 //! joined over the place between them; a value f takes split out of the
 //! range as a hole's).
 //!
+//! A third (review 22): the claims about a place swapped for others as
+//! true that leave it undecided, the place then left out of the row: a
+//! gap from a zero, turn or inflection on a window's end, two gaps
+//! meeting at one inside the region, a gap over a cusp. These operators
+//! make a mutant only where the replay's own claim check proves every new
+//! premise, so that what they test is the row, not the premises.
+//!
 //! A mutant is **killed** when the replay refuses the mutated row itself
 //! (a claim of it refuted or left open, or the row not following from its
 //! claims), in each of four settings: the certificate as it is, with

@@ -697,8 +697,8 @@ fn gap_ends(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk, k: usize, out: &mu
 /// defined: its argument at one of the values listed.
 enum Critical {
     /// f defined on both sides of it: |u| at 0, min and max where two
-    /// arguments meet, odd roots and powers p/q (q odd) at 0, arccot at 0
-    /// (a kink, a cusp, a vertical tangent).
+    /// arguments meet, odd roots and powers p/q (q odd) at 0 (a kink, a
+    /// cusp, a vertical tangent).
     Kinked(Vec<f64>),
     /// The node's domain ends there, the node defined at it (√, even roots,
     /// positive powers p/q with q even or a varying exponent, at 0; arcsin,
@@ -715,8 +715,9 @@ enum Critical {
 /// The nodes of `e` at which f may have no derivative where it is
 /// defined, with their arguments: every node but those smooth wherever
 /// they are defined (+, −, ×, ÷, whole and negative powers, exp, ln, the
-/// logarithms, the trigonometric and hyperbolic functions, arctan, arsinh,
-/// arcsch, and artanh and arcoth, undefined at ±1). False: a node the
+/// logarithms, the trigonometric and hyperbolic functions, arctan, arccot
+/// (π/2 − arctan), arsinh, arcsch, and artanh and arcoth, undefined at
+/// ±1). False: a node the
 /// replay doesn't model (Γ).
 fn kink_nodes(
     fx: &Fx,
@@ -729,9 +730,7 @@ fn kink_nodes(
         Expr::Call(f, a) => {
             let arg = || a[0].clone();
             match f {
-                Func::Abs | Func::Cbrt | Func::Acot => {
-                    out.push((arg(), Critical::Kinked(vec![0.0])))
-                }
+                Func::Abs | Func::Cbrt => out.push((arg(), Critical::Kinked(vec![0.0]))),
                 Func::Sqrt => out.push((arg(), Critical::Edge(vec![0.0]))),
                 // (A degree not read as a whole number: as a kink, the
                 // stricter.)
