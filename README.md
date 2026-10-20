@@ -227,7 +227,7 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **1,120 tests** (counts include
+`nix develop -c cargo test --workspace` runs **1,124 tests** (counts include
 doctests; six more are `#[ignore]`d: a live currency fetch, the full
 metamorphic graph sweep, 20,000 random saved sessions, and the
 cross-checking tester's long run, single-expression check and case list).
@@ -255,7 +255,7 @@ upstream sources with g++:
 | calcvm (187 + 1 ignored) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage and the saved-state size budget (long pasted sessions keep their newest History, memory and modes) |
 | unitconv (140 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
 | datecalc (40), copypaste (40) | Ports of `DateCalculatorTests` and `CopyPasteManagerTests`, plus paste key-sequence tests |
-| graphing (444 + 4 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, sliders (kept while their equation isn't drawn, remembered while no equation uses them), function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows, a monotone piece or extremum at a domain end only where the proof reaches it; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
+| graphing (448 + 4 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, sliders (kept while their equation isn't drawn, remembered while no equation uses them), function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows, a monotone piece or extremum at a domain end only where the proof reaches it; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
 | appcore (66) | Keyboard map, key scripts, a text field's undo history (typed runs, its bound, redo cleared, the selection restored), converter paste validation, settings storage (huge/corrupt files, per-section budgets, a long calculator session that used to cost the whole file), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
 | crmath (1) | The vendored CORE-MATH's two builds (baseline and x86-64-v3) give the same bits |
 | gmnb (25), gmnb-launcher (4), dgmnb (68) | GDK key translation, a field's undo keys, palette contrast for extreme accents, settings compatibility, licence text that parses as markup; the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it) and where it finds GMNB; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown and pipe deadlines |
@@ -376,7 +376,14 @@ CI also runs checks that need more than `cargo test --workspace`:
   same-signed sum with one is that far and no more:
   `min(e^(10^20),(5*10^12)!)^(1/100)` and
   `(e^(-10^300)+e/(5*10^12)!)^(10^-284)` are gaps (review 21: the first
-  operand's exponent, or the lost one's, drew false curves). The table's other
+  operand's exponent, or the lost one's, drew false curves). A kept
+  exponent is within 2⁻⁴⁰ of the true one, relatively (under 2⁻⁵¹ in the
+  property test below); a power's comes from its base's logarithm in
+  double-double, so a base a hair from 1 loses nothing to cancellation
+  (review 22: `((cos(0)-2^-44)^(10^300))^(1.0982801747529*10^-271)`,
+  about e^(−6.243·10¹⁵), was drawn below e^(−6.2432·10¹⁵) and is a gap
+  now; `(cos(0)-2^-52)^(2^70)`, about e^(−262144), is that value now,
+  where it was a gap). The table's other
   entries are a documented limit (a circular function of a typed whole number of
   16 or more digits is taken at the number's double) and the tester's own
   reference evaluator on subnormal operands, where the compiled value is
@@ -389,7 +396,26 @@ CI also runs checks that need more than `cargo test --workspace`:
   one far past even the extended range, with arguments up to 10³⁰⁸ (C(10²⁰⁰,
   10¹⁰⁰), about e^(2.3·10¹⁰²), was below it);
   `simplify_rules` checks every simplifier rule on both sides wherever its
-  left side is defined.
+  left side is defined. `far_invariant` makes `Wide::far`'s rule a tested
+  property: it generates short programs past 2⁵³ binades (powers of bases
+  a hair either side of 1, exactly 1 ± 2⁻ᵏ and m·2ᵉ, some at run time
+  through x, to huge exponents written every way the compiler tells
+  apart; e^c; n!, nCr and nPr; and chains of these through small powers
+  aimed at the 2⁵³-binade edge, roots, products, quotients, sums,
+  differences, min, max and comparisons with a value near their own),
+  compiles and evaluates every subtree on its own, and checks each
+  against MPFR holding log₂|v| at 1024 bits, taking an operand within
+  reach as exactly what the evaluator holds (a literal is the double it
+  reads): a far value's sign, side and exponent, within 2⁻⁴⁰ and within
+  the bound its depth allows (an infinite one past 2⁴⁷ binades, less 2³⁰
+  a product), and any other value within 2⁻⁴⁰. CI runs 3,000 cases;
+  `-- --ignored long_run` takes `FAR_SEED`, `FAR_CASES` and
+  `FAR_THREADS` and prints the largest error on each path. On the code
+  review 22 read, 537 of CI's 3,000 cases fail, on powers like the one
+  above; it also found a cube root next to 2⁵³ binades below 1 with half
+  a binade in its exponent
+  (`cbrt(exp(-6243314768165358))/exp(-2081104922721786)/1024` was 2/1024),
+  fixed.
 - **`bits`** (`cargo run --release -p graphing --example bits`): every
   built-in function's results, bit for bit, from a plain x86-64 build (which
   runs both CORE-MATH builds), an x86-64-v3 build and the plain build on an

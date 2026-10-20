@@ -55,7 +55,8 @@ const STEP: f64 = 1_073_741_824.0;
 /// Whether a far value of binary exponent `far_e` is farther from 1 than
 /// a value within reach of exponent `e`, beyond doubt: on the other side
 /// of 1, within [`NEAR`] of 1, or for a lost value, within all but 2⁻²⁰
-/// of its own exponent (rounded by a far smaller part of itself).
+/// of its own exponent (which is within 2⁻⁴⁰ of the true one: see
+/// [`Wide::far`]).
 fn farther(far_e: f64, e: f64) -> bool {
     if e == 0.0 || (e > 0.0) != (far_e > 0.0) {
         return true;
@@ -174,9 +175,15 @@ fn ln_abs(m: f64, e: f64) -> f64 {
     }
 }
 
-/// ln|v| for v = m·2^e ≠ 0, in double-double (±∞ for an infinite e).
+/// ln|v| for v = m·2^e ≠ 0, in double-double (±∞ for an infinite e). A
+/// v in [½, 1) is taken whole (|m|/2, exactly): just below 1, ln|m| and
+/// e·ln 2 nearly cancel, and their sum held ln(1 − 2⁻³⁰) to 2⁻⁸⁰ of
+/// itself, where a power's mantissa, from up to 2⁵³·ln 2 of t·ln|b|,
+/// needs 2⁻¹⁰⁰ (review 22).
 fn ln_dd(m: f64, e: f64) -> dd::Dd {
-    if e.is_finite() {
+    if e == -1.0 {
+        dd::ln(0.5 * m.abs())
+    } else if e.is_finite() {
         dd::ln(m.abs()).add(dd::LN2.mul_f(e))
     } else {
         dd::Dd::of(e)
@@ -195,30 +202,35 @@ fn pow_mag(m: f64, e: f64, t: dd::Dd) -> Wide {
     if e.is_infinite() && t.hi.abs() < 1.0 {
         return Wide::Unknown;
     }
-    let p = t.hi * e;
-    // The result's binades: t·(e + log₂|m|). Past 2⁵³ of them through the
-    // mantissa alone too (1.5^(−10³⁰⁰): e is 0): `dd::exp` holds t·ln|b|
-    // to a fraction of an ulp only below that, and beyond it gave a
-    // mantissa of noise, 0 or ∞ by chance (1.5^x + 1 was ∞ at −10³⁰⁰ and 1
-    // at 10³⁰⁰: found by `tests/crossfuzz.rs`).
-    let n = p + t.hi * cm::log2(m.abs());
-    if !p.is_finite()
-        || p.abs() >= TWO53
-        || !e.is_finite()
-        || e.abs() >= TWO53
-        || n.is_nan()
-        || n.abs() >= TWO53
-    {
-        return if n.is_nan() {
-            Wide::Unknown
-        } else if n.is_infinite() || n.abs() >= TWO53 {
+    // The result's binades, t·ln|b|/ln 2, from ln|b| itself (`ln_dd`) and
+    // rounded once: past 2⁵³ of them a lost value's exponent (see
+    // `Wide::far`), past a double's range a value beyond even the
+    // extended range. Not t·e + t·log₂|m| in doubles: just below 1, e is
+    // −1 and log₂|m| almost 1, and those two rounded products cancelled
+    // (review 22: the exponent of (1 − 2⁻⁴⁴)^(10³⁰⁰) was 0.09% off, and
+    // its 1.098·10⁻²⁷¹th power, about e^(−6.243·10¹⁵), was taken for one
+    // far below e^(−6.2432·10¹⁵)). Nor does t·e alone send a power out of
+    // reach: (1 − 2⁻⁵²)^(2⁷⁰) is about e^(−262144), a value within it.
+    let lb = ln_dd(m, e);
+    let l = lb.mul(t);
+    let n = if l.hi.abs() <= f64::MAX * LN_2 {
+        l.div(dd::LN2).hi
+    } else {
+        // (±∞, or NaN for a double-double product past the doubles.)
+        (lb.hi * t.hi).signum() * f64::INFINITY
+    };
+    // Past 2⁵³ binades through the mantissa alone too (1.5^(−10³⁰⁰): e is
+    // 0): `dd::exp` holds t·ln|b| to a fraction of an ulp only below that,
+    // and beyond it gave a mantissa of noise, 0 or ∞ by chance (1.5^x + 1
+    // was ∞ at −10³⁰⁰ and 1 at 10³⁰⁰: found by `tests/crossfuzz.rs`).
+    if !e.is_finite() || e.abs() >= TWO53 || n.is_nan() || n.abs() >= TWO53 {
+        return if n.abs() >= TWO53 {
             Wide::Val(1.0, n.round())
         } else {
             Wide::Unknown
         };
     }
-    let l = dd::ln(m.abs()).add(dd::LN2.mul_f(e));
-    let (r, n) = dd::exp(l.mul(t));
+    let (r, n) = dd::exp(l);
     Wide::norm(r, n)
 }
 
@@ -276,6 +288,20 @@ impl Wide {
         Wide::Val(m, e + k)
     }
 
+    /// m·2^(e₁ + e₂) normalised (as [`Wide::norm`]), the exponents added in
+    /// integers while both are within reach: a double rounds e₁ + e₂ past
+    /// 2⁵³, and the mantissa's carry then brought the value back within
+    /// reach a binade off (e^(−6243314768165358)·0.375, of exponent −2⁵³,
+    /// was taken for one of −2⁵³ + 1, twice itself, and its quotient by
+    /// e^(−6243314768165358) for 0.75: found by `tests/far_invariant.rs`).
+    fn norm_sum(m: f64, e1: f64, e2: f64) -> Wide {
+        if m == 0.0 || !m.is_finite() || !(e1.abs() < TWO53 && e2.abs() < TWO53) {
+            return Wide::norm(m, e1 + e2);
+        }
+        let (m, k) = frexp(m);
+        Wide::Val(m, (e1 as i64 + e2 as i64 + k as i64) as f64)
+    }
+
     /// The nearest double: 0 or ±∞ beyond its range, NaN unless a value.
     pub(crate) fn to_f64(self) -> f64 {
         match self {
@@ -303,14 +329,22 @@ impl Wide {
     /// sign, on the side of the doubles e's sign gives, and
     ///
     /// * **e finite** (a lost value, |e| ≥ 2⁵³): v = μ·2^T with 1 ≤ |μ| < 2
-    ///   and |T − e| ≤ 2⁻⁴⁰·|T|. Each operation rounds an exponent by 2⁻⁵³
-    ///   of itself and drops a binade at most (a sum, a mantissa); none
-    ///   cancels two far exponents (`add`, `div` refuse to); a product or
-    ///   quotient with a value within reach pulls a lost value toward 1 by
-    ///   [`NEAR`] binades at most, on one past 2⁵³, multiplying its error by
-    ///   1 + 2⁻⁷ at most. After d operations the error is below
-    ///   d·2⁻⁵²·(1 + 2⁻⁷)^d: about 2⁻⁴¹ for the 256 a typed expression can
+    ///   and |T − e| ≤ 2⁻⁴⁰·|T|. Each operation adds 3·2⁻⁵³ of T at most
+    ///   to that error: its exponent rounded once or twice by 2⁻⁵³ of
+    ///   itself (e^x's v/ln 2 twice, ln 2 being a double; a power's
+    ///   t·ln|b|/ln 2 once, from ln|b| in double-double) and a binade
+    ///   dropped at most (a sum, a mantissa). None cancels two far
+    ///   exponents (`add`, `div` refuse to), nor two rounded parts of one:
+    ///   a power's comes from its base's logarithm (t·e + t·log₂|m| was
+    ///   2⁻¹⁰ of itself off just below 1: review 22). A product or quotient
+    ///   with a value within reach pulls a lost value toward 1 by [`NEAR`]
+    ///   binades at most, on one past 2⁵³, multiplying its error by
+    ///   1/(1 − 2⁻⁷) at most. After d operations the error is below
+    ///   d·3·2⁻⁵³/(1 − 2⁻⁷)^d: 2⁻⁴⁰·⁵ for the 256 a typed expression can
     ///   nest (`parser::MAX_TREE_DEPTH`), far inside [`farther`]'s 2⁻²⁰.
+    ///   `tests/far_invariant.rs` checks both bounds against MPFR, node by
+    ///   node, on random programs in this regime; the most one operation
+    ///   adds there is 2⁻⁵².
     /// * **e infinite**: |T| > 2⁴⁷ − k·[`STEP`] after k such pulls, and no
     ///   more. A count whose logarithm passed `functions::FAR_LOG` is that
     ///   near; whatever else is made so (e^(e¹⁰⁰⁰), a power past a double)
@@ -482,7 +516,7 @@ impl Wide {
             (None, Some(_)) if !scales(eb, ea) => return Wide::Unknown,
             _ => {}
         }
-        unless_lost(&[self, o], Wide::norm(a * b, ea + eb))
+        unless_lost(&[self, o], Wide::norm_sum(a * b, ea, eb))
     }
 
     /// Division, undefined by an exact 0 (as `functions::div`).
@@ -509,7 +543,7 @@ impl Wide {
                 if a == 0.0 {
                     Wide::Val(a / b, 0.0)
                 } else {
-                    Wide::norm(a / b, ea - eb)
+                    Wide::norm_sum(a / b, ea, -eb)
                 }
             }
             _ => other(self, o),
@@ -618,9 +652,17 @@ impl Wide {
                 if m == 0.0 || e.abs() <= NORMAL {
                     return Wide::new(cm::cbrt(ldexp(m, e)));
                 }
-                if e.abs() <= TWO53 {
-                    let r = e.rem_euclid(3.0);
-                    Wide::norm(cm::cbrt(m * f64::from(1 << r as i32)), (e - r) / 3.0)
+                if e.abs() < TWO53 {
+                    // (In integers: next to −2⁵³, e − r can be past 2⁵³ and
+                    // no double, and cbrt(e^(−6243314768165358)) was √2
+                    // times itself, with a half in its exponent: found by
+                    // `tests/far_invariant.rs`.)
+                    let k = e as i64;
+                    let r = k.rem_euclid(3);
+                    Wide::norm(
+                        cm::cbrt(m * [1.0, 2.0, 4.0][r as usize]),
+                        ((k - r) / 3) as f64,
+                    )
                 } else {
                     Wide::norm(cm::cbrt(m), e / 3.0)
                 }

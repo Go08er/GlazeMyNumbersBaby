@@ -653,23 +653,28 @@ fn no_value(fx: &Fx, x: f64) -> bool {
 /// some other claim of the row decides (a sign, a zero, a kink, f
 /// undefined there) or one strictly inside another gap, unless there is
 /// nothing to decide at it: f has no value there, or it lies outside the
-/// row's region, or (for f′ and f″) it is an end of the region, where no
-/// derivative is asked. Counted as covered like any box, two gaps meeting
+/// row's region, or (for f′ and f″) it is an actual domain end, where no
+/// derivative is asked. A window's end inside the original domain still
+/// needs a decision: a gap open at 0 hid x²'s minimum on [0, 2], without
+/// recording a zero for `sides_decided` to inspect (review 22).
+/// Counted as covered like any box, two gaps meeting
 /// at a double left it out of the row: x²'s f′ "had no zero" and x² "no
 /// extremum", 0 between the gaps (−5·10⁻³²⁴, 0) and (0, 5·10⁻³²⁴) (the
 /// third pass's audit).
 fn gap_ends(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk, k: usize, out: &mut RowResult) {
     let Some(rg) = &rc.region else { return };
     let ts = targets(rg, all);
+    let domain = targets(&Region::Line, all);
     for g in &w.gaps {
         for e in [g.0, g.1] {
             // (Or strictly inside another gap, a real that one stands
             // for: the certifier's gaps about one excluded point nest.)
             let decided = w.solid.iter().any(|b| b.0 <= e && e <= b.1)
                 || w.gaps.iter().any(|h| h.0 < e && e < h.1);
+            let in_domain = domain.iter().any(|d| d.0 < e && e < d.1);
             let asked = ts
                 .iter()
-                .any(|t| (t.0 < e && e < t.1) || (k == 0 && (t.0 == e || t.1 == e)));
+                .any(|t| (t.0 < e && e < t.1) || ((k == 0 || in_domain) && (t.0 == e || t.1 == e)));
             if decided || !asked || !e.is_finite() || no_value(fx, e) {
                 continue;
             }

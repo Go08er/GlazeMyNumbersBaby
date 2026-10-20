@@ -4570,3 +4570,66 @@ fn a_window_is_a_stretch_and_promises_its_ends() {
     let why = rejected(&v).expect("no extrema over [−64, 64]");
     assert!(why.contains("is not decided"), "{why}");
 }
+
+/// A gap is open: proving its interior clear of zeros does not decide a
+/// derivative at its closed window end. Without a zero in the walk,
+/// `sides_decided` alone cannot catch the omitted turn (review 22).
+#[test]
+fn a_gap_cannot_hide_a_turn_on_a_closed_window_end() {
+    use serde_json::json;
+    let tiny = f64::from_bits(1);
+    for (src, row, of) in [("x^2-1", "extrema", "F1"), ("x^3", "inflections", "F2")] {
+        for (a, b, ga, gb, sa, sb, above) in [
+            (0.0, 2.0, 0.0, tiny, tiny, 2.0, true),
+            (-2.0, 0.0, -tiny, 0.0, -2.0, -tiny, false),
+            (0.0, 0.0, 0.0, tiny, tiny, 2.0, true),
+        ] {
+            let mut v = certificate(src);
+            v[row] = json!({"Partial": {"value": [], "cert": {
+            "covers": {"Window": {"a": a, "b": b}}, "claims": [
+                {"Gap": {"x": {"a": ga, "b": gb}}},
+                {"GapClear": {"x": {"a": ga, "b": gb}, "of": {"F": of}}},
+                {"Beyond": {"x": {"a": sa, "b": sb}, "of": {"F": of},
+                    "c": 0.0, "above": above}}
+            ]}}});
+            let r = replay::replay(&v).unwrap();
+            assert!(
+                r.claims
+                    .iter()
+                    .filter(|c| c.rows.iter().any(|s| s == row))
+                    .all(|c| c.outcome.class == Class::Strong),
+                "{src}: the premises must remain true"
+            );
+            let why =
+                rejected(&v).unwrap_or_else(|| panic!("{src}: no {row} over [{a}, {b}] accepted"));
+            assert!(why.contains("no claim decides"), "{src}: {why}");
+            // Points make no completeness promise about the gap's ends.
+            body_of(&mut v, row)["cert"]["covers"] = json!("Points");
+            assert_eq!(rejected(&v), None, "{src}: an empty Points row");
+        }
+    }
+}
+
+#[test]
+fn decided_window_gap_ends_and_actual_domain_ends_still_replay() {
+    use serde_json::json;
+    // Away from a turn, a sign claim at the gap's end supplies what the
+    // open-gap proof cannot: f'(1) > 0.
+    let mut v = certificate("x^2-1");
+    v["extrema"] = json!({"Partial": {"value": [], "cert": {
+    "covers": {"Window": {"a": 1.0, "b": 2.0}}, "claims": [
+        {"Gap": {"x": {"a": 1.0, "b": 1.0f64.next_up()}}},
+        {"GapClear": {"x": {"a": 1.0, "b": 1.0f64.next_up()}, "of": {"F": "F1"}}},
+        {"Value": {"x": {"a": 1.0, "b": 1.0}, "of": {"F": "F1"}, "lo": 2.0, "hi": 2.0}},
+        {"Beyond": {"x": {"a": 1.0f64.next_up(), "b": 2.0}, "of": {"F": "F1"},
+            "c": 0.0, "above": true}}
+    ]}}});
+    assert_eq!(rejected(&v), None, "a decided nonzero window end");
+    // At a true domain end, the one-sided extremum proof applies; a
+    // derivative at that end (sqrt's at 0) is not required.
+    let mut v = certificate("sqrt(x)");
+    let mut b = body_of(&mut v, "extrema").clone();
+    b["cert"]["covers"] = json!({"Window": {"a": 0.0, "b": 2.0}});
+    v["extrema"] = json!({"Partial": b});
+    assert_eq!(rejected(&v), None, "a genuine domain-end minimum");
+}
