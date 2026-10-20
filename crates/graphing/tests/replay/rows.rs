@@ -653,28 +653,32 @@ fn no_value(fx: &Fx, x: f64) -> bool {
 /// some other claim of the row decides (a sign, a zero, a kink, f
 /// undefined there) or one strictly inside another gap, unless there is
 /// nothing to decide at it: f has no value there, or it lies outside the
-/// row's region, or (for f′ and f″) it is an actual domain end, where no
-/// derivative is asked. A window's end inside the original domain still
-/// needs a decision: a gap open at 0 hid x²'s minimum on [0, 2], without
-/// recording a zero for `sides_decided` to inspect (review 22).
-/// Counted as covered like any box, two gaps meeting
-/// at a double left it out of the row: x²'s f′ "had no zero" and x² "no
-/// extremum", 0 between the gaps (−5·10⁻³²⁴, 0) and (0, 5·10⁻³²⁴) (the
-/// third pass's audit).
+/// row's region, or (for f′ and f″) it is an end of the domain's pieces,
+/// where no derivative is asked (an extremum there is [`end_extrema`]'s).
+/// An end of a window or a period inside a piece is no such end: a gap
+/// from 0, cleared of f′'s zeros strictly inside it, left x² − 1's
+/// minimum at 0 out of its extrema "for 0 ≤ x ≤ 2", every claim strong,
+/// no zero recorded for [`sides_decided`] to ask about (review 22,
+/// R22-M-01; so for [−2, 0], [0, 0] and x³'s inflections). Counted as
+/// covered like any box, two gaps meeting at a double left it out of the
+/// row: x²'s f′ "had no zero" and x² "no extremum", 0 between the gaps
+/// (−5·10⁻³²⁴, 0) and (0, 5·10⁻³²⁴) (the third pass's audit).
 fn gap_ends(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk, k: usize, out: &mut RowResult) {
     let Some(rg) = &rc.region else { return };
     let ts = targets(rg, all);
-    let domain = targets(&Region::Line, all);
+    // (The domain's pieces, their ends' enclosures included: a double
+    // strictly inside one is no end of the domain.)
+    let pieces = targets(&Region::Line, all);
     for g in &w.gaps {
         for e in [g.0, g.1] {
             // (Or strictly inside another gap, a real that one stands
             // for: the certifier's gaps about one excluded point nest.)
             let decided = w.solid.iter().any(|b| b.0 <= e && e <= b.1)
                 || w.gaps.iter().any(|h| h.0 < e && e < h.1);
-            let in_domain = domain.iter().any(|d| d.0 < e && e < d.1);
-            let asked = ts
-                .iter()
-                .any(|t| (t.0 < e && e < t.1) || ((k == 0 || in_domain) && (t.0 == e || t.1 == e)));
+            let inside_piece = pieces.iter().any(|d| d.0 < e && e < d.1);
+            let asked = ts.iter().any(|t| {
+                (t.0 < e && e < t.1) || ((k == 0 || inside_piece) && (t.0 == e || t.1 == e))
+            });
             if decided || !asked || !e.is_finite() || no_value(fx, e) {
                 continue;
             }
@@ -687,6 +691,223 @@ fn gap_ends(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk, k: usize, out: &mu
             return;
         }
     }
+}
+
+/// How a node of f may leave f without a derivative at a point where f is
+/// defined: its argument at one of the values listed.
+enum Critical {
+    /// f defined on both sides of it: |u| at 0, min and max where two
+    /// arguments meet, odd roots and powers p/q (q odd) at 0 (a kink, a
+    /// cusp, a vertical tangent).
+    Kinked(Vec<f64>),
+    /// The node's domain ends there, the node defined at it (√, even roots,
+    /// positive powers p/q with q even or a varying exponent, at 0; arcsin,
+    /// arccos, arcsec, arccsc at ±1; arcosh and arsech at 1): where its
+    /// argument crosses the value, strictly monotone, f is defined on one
+    /// side only, an end of its domain; where it touches it (√(x²)), a
+    /// kink.
+    Edge(Vec<f64>),
+    /// A step: a jump where its argument is a whole number (floor, ceil,
+    /// mod's quotient), a whole number and a half (round), or 0 (sign).
+    Jump(f64),
+}
+
+/// The nodes of `e` at which f may have no derivative where it is
+/// defined, with their arguments: every node but those smooth wherever
+/// they are defined (+, −, ×, ÷, whole and negative powers, exp, ln, the
+/// logarithms, the trigonometric and hyperbolic functions, arctan, arccot
+/// (π/2 − arctan), arsinh, arcsch, and artanh and arcoth, undefined at
+/// ±1). False: a node the
+/// replay doesn't model (Γ).
+fn kink_nodes(
+    fx: &Fx,
+    e: &graphing::ast::Expr,
+    out: &mut Vec<(graphing::ast::Expr, Critical)>,
+) -> bool {
+    use super::eval::{contains_x, written_rational};
+    use graphing::ast::{BinOp, Expr, Func};
+    match e {
+        Expr::Call(f, a) => {
+            let arg = || a[0].clone();
+            match f {
+                Func::Abs | Func::Cbrt => out.push((arg(), Critical::Kinked(vec![0.0]))),
+                Func::Sqrt => out.push((arg(), Critical::Edge(vec![0.0]))),
+                // (A degree not read as a whole number: as a kink, the
+                // stricter.)
+                Func::Root => out.push((
+                    arg(),
+                    match written_rational(&a[1], &fx.lits) {
+                        Some((n, q)) if q == 1 && n.is_even() => Critical::Edge(vec![0.0]),
+                        _ => Critical::Kinked(vec![0.0]),
+                    },
+                )),
+                Func::Asin | Func::Acos | Func::Asec | Func::Acsc => {
+                    out.push((arg(), Critical::Edge(vec![-1.0, 1.0])));
+                }
+                Func::Acosh | Func::Asech => out.push((arg(), Critical::Edge(vec![1.0]))),
+                Func::Floor | Func::Ceil => out.push((arg(), Critical::Jump(0.0))),
+                Func::Round => out.push((arg(), Critical::Jump(0.5))),
+                Func::Sign => out.push((arg(), Critical::Kinked(vec![0.0]))),
+                Func::Mod if a.len() == 2 => out.push((
+                    Expr::Bin(BinOp::Div, Box::new(a[0].clone()), Box::new(a[1].clone())),
+                    Critical::Jump(0.0),
+                )),
+                Func::Min | Func::Max => {
+                    for i in 0..a.len() {
+                        for j in i + 1..a.len() {
+                            out.push((
+                                Expr::Bin(
+                                    BinOp::Sub,
+                                    Box::new(a[i].clone()),
+                                    Box::new(a[j].clone()),
+                                ),
+                                Critical::Kinked(vec![0.0]),
+                            ));
+                        }
+                    }
+                }
+                Func::Factorial | Func::DoubleFactorial | Func::NCr | Func::NPr | Func::Mod => {
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        Expr::Bin(BinOp::Pow, a, k) => {
+            let q = (!contains_x(k))
+                .then(|| super::exact::eval(k, None, &fx.lits, &fx.vars, fx.unit))
+                .flatten();
+            // A whole power is smooth; a negative one is a pole at 0, no
+            // value there. p/q > 0 with q even, or an exponent that varies:
+            // the base ≥ 0 (or > 0), an edge. q odd (a real root, defined
+            // on both sides of 0, as the power convention reads it), or an
+            // exponent not read exactly: as a kink, the stricter.
+            let crit = match &q {
+                Some(q) if q.is_integer() || *q < 0 => None,
+                Some(q) if q.denom().is_even() => Some(Critical::Edge(vec![0.0])),
+                Some(_) => Some(Critical::Kinked(vec![0.0])),
+                None if contains_x(k) => Some(Critical::Edge(vec![0.0])),
+                None => Some(Critical::Kinked(vec![0.0])),
+            };
+            if let Some(crit) = crit {
+                out.push(((**a).clone(), crit));
+            }
+        }
+        _ => {}
+    }
+    let kids: Vec<&Expr> = match e {
+        Expr::Neg(a) | Expr::Degrees(a) => vec![&**a],
+        Expr::Bin(_, a, b) => vec![&**a, &**b],
+        Expr::Call(_, args) => args.iter().collect(),
+        _ => Vec::new(),
+    };
+    kids.into_iter().all(|k| kink_nodes(fx, k, out))
+}
+
+/// `e`'s series to order k over the reals from the double p to q, p left
+/// out (x − p keeping its strict sign there, as in [`over_punctured_tree`]);
+/// `lenient`: enclosed where defined ([`super::series::where_defined`]).
+fn punctured_series(
+    fx: &Fx,
+    e: &graphing::ast::Expr,
+    p: f64,
+    q: f64,
+    k: usize,
+    lenient: bool,
+) -> super::series::S {
+    iv::set_prec(160);
+    let right = q > p;
+    let (lo, hi) = if right { (p, q) } else { (q, p) };
+    let ctx = fx.ctx();
+    let (e, x) = if p == 0.0 {
+        (e.clone(), Iv::of2(lo, hi).strict(right, !right))
+    } else {
+        (
+            super::eval::recentered(e, p, &ctx),
+            iv::sub(&Iv::of2(lo, hi), &Iv::of(p)).strict(right, !right),
+        )
+    };
+    let run = || super::eval::eval(&e, &super::series::var(x, k), k, &ctx);
+    if lenient {
+        super::series::where_defined(run)
+    } else {
+        run()
+    }
+}
+
+/// f⁽ᵏ⁾ exists at every real from p to q (p left out) where f is defined:
+/// by f's own series to order k, valid throughout; or, f undefined
+/// somewhere there (a pole, an end of its domain), by each node that may
+/// leave f without a derivative where it is defined ([`kink_nodes`]), its
+/// argument kept off the values where it does, or (an edge of its domain)
+/// crossing one strictly monotone, an end of f's domain.
+fn smooth_beside(fx: &Fx, k: usize, p: f64, q: f64) -> bool {
+    use super::eval::contains_x;
+    let s = punctured_series(fx, &fx.f, p, q, k, false);
+    if s[0].empty || (!s[k].empty && s[k].def) {
+        return true;
+    }
+    let mut nodes = Vec::new();
+    if !kink_nodes(fx, &fx.f, &mut nodes) {
+        return false;
+    }
+    let off = |v: &Iv, cs: &[f64]| v.empty || cs.iter().all(|&c| v.lt(c) || v.gt(c));
+    nodes
+        .iter()
+        .filter(|(g, _)| contains_x(g))
+        .all(|(g, crit)| match crit {
+            Critical::Kinked(cs) => off(&punctured_series(fx, g, p, q, 0, true)[0], cs),
+            Critical::Edge(cs) => {
+                off(&punctured_series(fx, g, p, q, 0, true)[0], cs) || {
+                    let s = punctured_series(fx, g, p, q, 1, false);
+                    !s[1].empty && s[1].def && s[1].ne0()
+                }
+            }
+            Critical::Jump(at) => {
+                // No whole number (plus `at`) in its argument's enclosure.
+                let v = &punctured_series(fx, g, p, q, 0, true)[0];
+                v.empty
+                    || (v.lo.is_finite() && v.hi.is_finite() && {
+                        let n = (v.hi.clone() - *at).floor();
+                        n + *at < v.lo
+                    })
+            }
+        })
+}
+
+/// No kink of f hides strictly inside the gap `g`: f⁽ᵏ⁾ exists at every
+/// real strictly inside it where f is defined ([`smooth_beside`] on the
+/// gap's two halves, each with its end left out; or, the gap's ends
+/// adjacent doubles, on all of it but one end). A gap cleared of f⁽ᵏ⁾'s
+/// zeros (`GapClear`) says nothing of a point inside where f⁽ᵏ⁾ doesn't
+/// exist: (x − 1)^(2/3)'s f′ has no zero, and its minimum at 1, in a gap
+/// the signs on either side of which overlap the gap's ends (or in two
+/// gaps overlapping), passed for "no extrema"; so did (x + 10⁻⁴⁰⁰)^(2/3)
+/// on x ≤ 0 for a minimum at its closed end 0, read across a gap beside
+/// it, and for decreasing up to it (review 22's audit).
+fn smooth_in_gap(fx: &Fx, k: usize, g: B) -> bool {
+    if claims::unmodelled(&fx.f) {
+        return false;
+    }
+    if !(g.0 < g.1 && g.0.is_finite() && g.1.is_finite()) {
+        return g.0 >= g.1;
+    }
+    let m = g.0.next_up();
+    if m < g.1 {
+        smooth_beside(fx, k, g.0, m) && smooth_beside(fx, k, g.1, m)
+    } else {
+        smooth_beside(fx, k, g.0, g.1) || smooth_beside(fx, k, g.1, g.0)
+    }
+}
+
+/// The first gap of the walk inside the row's region in which a kink of f
+/// isn't ruled out ([`smooth_in_gap`]).
+fn rough_gap(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk, k: usize) -> Option<B> {
+    let rg = rc.region.as_ref()?;
+    let ts = targets(rg, all);
+    w.gaps
+        .iter()
+        .find(|g| ts.iter().any(|t| t.0 <= g.1 && g.0 <= t.1) && !smooth_in_gap(fx, k, **g))
+        .copied()
 }
 
 /// In a complete row on f′ or f″, each zero's two sides are decided: a
@@ -713,13 +934,20 @@ fn sides_decided(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk, k: usize, out
     for z in &w.zeros {
         let on_end = ends.iter().any(|&e| z.at.lo <= e && e <= z.at.hi);
         let sides = [
-            ("before", z.left, z.at.lo.next_down()),
-            ("after", z.right, z.at.hi.next_up()),
+            ("before", z.left, z.at.lo, z.at.lo.next_down()),
+            ("after", z.right, z.at.hi, z.at.hi.next_up()),
         ];
-        for (side, sign, beside) in sides {
+        for (side, sign, from, beside) in sides {
             let asked = on_end || ts.iter().any(|t| t.0 <= beside && beside <= t.1);
             let flat = w.flat.iter().any(|b| b.0 <= beside && beside <= b.1);
-            if sign.is_some() || !asked || flat || no_value(fx, beside) {
+            // (Nothing beside: f has no value from the zero's enclosure to
+            // the double beside it, that double included. f undefined at
+            // that double alone leaves the reals before it: a pole there
+            // let a side of a turn at the double before go unasked.)
+            let nothing_beside = from.is_finite()
+                && beside.is_finite()
+                && punctured_series(fx, &fx.f, from, beside, 0, true)[0].empty;
+            if sign.is_some() || !asked || flat || nothing_beside {
                 continue;
             }
             out.problems.push(format!(
@@ -1305,6 +1533,19 @@ fn turns(
     gap_ends(fx, rc, all, &w, k, out);
     sides_decided(fx, rc, all, &w, k, out);
     holes(rc, k, complete(rc), out);
+    // A gap holds no turn (inflection) only where f⁽ᵏ⁾ exists throughout it:
+    // its clearness says nothing of a kink.
+    if complete(rc)
+        && let Some(g) = rough_gap(fx, rc, all, &w, k)
+    {
+        out.problems.push(format!(
+            "f{} is not shown to exist throughout the gap [{:e}, {:e}] where f is defined: a kink \
+             of f there is not ruled out, yet the row is complete",
+            ["", "′", "″"][k],
+            g.0,
+            g.1
+        ));
+    }
     // f⁽ᵏ⁾ of one sign up to a gap and of the other from it, f defined
     // throughout the gap: a turn (an inflection) is there, at a kink of
     // f⁽ᵏ⁻¹⁾ where f⁽ᵏ⁾ has no value, though the gap is clear of f⁽ᵏ⁾'s
@@ -1508,14 +1749,17 @@ fn end_extrema(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk) -> (Vec<(Enc, b
             // f′'s zeros, nothing undecided: a partial row asks no coverage,
             // and a stretch far in said what f does at the end (x − √x "a
             // minimum at 0" from f′ > 0 on [1, 2], f falling from 0 to its
-            // turn at 1/4: round 20's checker audit).
+            // turn at 1/4: round 20's checker audit). A gap with no kink of
+            // f in it ([`smooth_in_gap`]): f′ changes sign at a kink with no
+            // zero, and (x + 10⁻⁴⁰⁰)^(2/3) on x ≤ 0 had "a minimum at 0", its
+            // maximum, read across the gap beside 0 (review 22's audit).
             let decided = {
                 let span = if low { (x.hi, sa) } else { (sb, x.lo) };
                 let cleared = |g: &B| {
                     rc.claims.iter().any(|c| {
                         matches!(c, Claim::GapClear { x: cx, of: Subject::F(1) }
                             if cx.0 <= g.0 && g.1 <= cx.1)
-                    })
+                    }) && smooth_in_gap(fx, 1, *g)
                 };
                 let cover: Vec<B> = w
                     .gaps
@@ -1933,11 +2177,15 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
             })
             .collect(),
     );
+    // (Cleared of f′'s zeros, and of kinks: f′ changes sign at a kink with
+    // no zero, and (x + 10⁻⁴⁰⁰)^(2/3) on x ≤ 0 passed as decreasing up to
+    // 0, across the gap beside it: review 22's audit.)
     let gap_facts = Spans::new(
         w.gaps
             .iter()
             .flat_map(|g| {
-                let clear = clears.meeting(g.0, g.1).any(|c| c.0 <= g.0 && g.1 <= c.1);
+                let clear = clears.meeting(g.0, g.1).any(|c| c.0 <= g.0 && g.1 <= c.1)
+                    && smooth_in_gap(fx, 1, *g);
                 let beside = |up: bool| {
                     sign_index
                         .meeting(g.0, g.1)
@@ -6021,6 +6269,17 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
     coverage(rc, all, &w.boxes, out);
     gap_ends(fx, rc, all, &w, 1, out);
     holes(rc, 1, complete(rc), out);
+    // (f's least and greatest values are at f′'s zeros and f's kinks: one
+    // in a gap is none the walk places. (x − 10⁻⁴⁰⁰)^(2/3) on x ≥ 0 passed
+    // for a range from f(0), its minimum 0 in the gap beside 0: review 22's
+    // audit.)
+    if let Some(g) = rough_gap(fx, rc, all, &w, 1) {
+        out.problems.push(format!(
+            "the range is not derived: f′ is not shown to exist throughout the gap [{:e}, {:e}] \
+             where f is defined, and a turn of f at a kink there is not ruled out",
+            g.0, g.1
+        ));
+    }
     let pieces: Vec<Piece> = list(&rc.value)?
         .iter()
         .map(piece)

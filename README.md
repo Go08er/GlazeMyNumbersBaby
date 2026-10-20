@@ -282,7 +282,9 @@ CI also runs checks that need more than `cargo test --workspace`:
   nothing else excluded; one listed item stands for one zero, turn or pole;
   a family's member only lies at a piece's end when shown there; a row
   complete over a window answers for its ends, a zero of f′ or f″ on one
-  needing its sign past it.
+  needing its sign past it and a gap's end on one a claim deciding it; a
+  gap holds no turn or inflection only where f′ (f″) is shown to exist
+  throughout it, so no cusp passes for a stretch of one sign.
   The checker has no Γ of its own, so it doesn't model `n!`, `n!!`, `nCr`
   or `nPr`: a function that uses one anywhere, a constant like `5!`
   included, comes out *unsupported* (not checked, rather than wrong), and
@@ -301,12 +303,15 @@ CI also runs checks that need more than `cargo test --workspace`:
   joined over the place between them, a value f takes split out of the
   range as a hole's, an extremum at an end of the domain read from past
   the turn beside it, a complete list made complete over a window from
-  one of its places with that place left out), and the replay must
+  one of its places with that place left out; the claims about a zero,
+  turn, inflection or kink swapped for others as true that leave it
+  undecided, a gap from it on a window's end, two gaps meeting at it or a
+  gap over a cusp, and the place left out), and the replay must
   refuse each result, with the
   rest of the certificate there, withheld, or with every genuine claim
-  given to the row. CI runs a fixed few (3,084 mutants, none accepted).
-  The long runs (204 corpus functions, 42,660 mutants; 607 pool functions,
-  153,363) accept 17 and 12: each a true statement the replay proved (a
+  given to the row. CI runs a fixed few (3,341 mutants, none accepted).
+  The long runs (204 corpus functions, 43,080 mutants; 607 pool functions,
+  156,658) accept 17 and 12: each a true statement the replay proved (a
   row borrowed from another function that happens to hold, an enclosure
   narrowed onto the number it holds), reviewed by hand in a table with the
   reason it is true. A long run fails on an accepted mutant not in the
@@ -324,7 +329,11 @@ CI also runs checks that need more than `cargo test --workspace`:
   themselves. Of review 21's window from a place with the place left
   out, the checker before its audit accepted 2 of the fixed few's 36, 34
   of the corpus's 308 and 330 of the pool's 2,050 (x²'s "no extrema for
-  0 ≤ x ≤ 4": a turn or an inflection on the window's end).
+  0 ≤ x ≤ 4": a turn or an inflection on the window's end). Of review
+  22's true claims in a place's stead, each premise proven by the replay's
+  own claim check, the checker before its audit accepted 10 of the fixed
+  few's 61, 44 of the corpus's 420 and 486 of the pool's 3,295 (a turn or
+  an inflection on a window's end behind a gap from it; a cusp in a gap).
 - **Random cross-checking** (`--test crossfuzz`, same feature): the checks
   above take ordinary functions, shifted and scaled. This one generates
   expressions aimed at the families the review rounds kept finding bugs in

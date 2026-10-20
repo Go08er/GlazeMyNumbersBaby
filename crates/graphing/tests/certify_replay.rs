@@ -4633,3 +4633,189 @@ fn decided_window_gap_ends_and_actual_domain_ends_still_replay() {
     v["extrema"] = json!({"Partial": b});
     assert_eq!(rejected(&v), None, "a genuine domain-end minimum");
 }
+
+/// `src`'s certificate with the row `row` made up as `body` (and, for the
+/// range, its ends' sources `ends`), every other row withheld but the
+/// domain: why the replay refuses it, every premise of the row true
+/// (strong, or weak: proven on the certifier's derivative), the row
+/// alone not following.
+fn refused_row(
+    src: &str,
+    row: &str,
+    body: serde_json::Value,
+    ends: Option<serde_json::Value>,
+) -> Option<String> {
+    let mut v = certificate(src);
+    let domain = v["domain"].clone();
+    withhold_all_but(&mut v, row);
+    v["domain"] = domain;
+    v[row] = body;
+    if let Some(e) = ends {
+        v["range_ends"] = e;
+    }
+    let r = replay::replay(&v).expect("replayed");
+    for c in r.claims.iter().filter(|c| c.rows.iter().any(|s| s == row)) {
+        assert!(
+            matches!(c.outcome.class, Class::Strong | Class::Weak),
+            "{src}: {row}: a premise is not true: {:?}: {}",
+            c.claim,
+            c.outcome.note
+        );
+    }
+    r.rows
+        .iter()
+        .find(|x| x.name == row)
+        .and_then(|x| x.problems.first().cloned())
+}
+
+/// A gap cleared of f′'s zeros says nothing of a point strictly inside it
+/// where f′ doesn't exist, and f′ changes sign at a cusp with no zero:
+/// (x − 1)^(2/3) "has no extrema" over its true claims, the cusp at 1 in
+/// a gap the signs on either side of which overlap its ends, or in two
+/// gaps overlapping; so for x^(2/3), and for (x − 10⁻⁴⁰⁰)^(2/3) + 0/x,
+/// the gap beside its hole at 0. Only the abutting shape was refused (by
+/// f′'s signs at the gap's very ends: round 20). At a closed end of the
+/// domain, the gap beside it read as the stretch's sign: (x + 10⁻⁴⁰⁰)^(2/3)
+/// on x ≤ 0 "has a minimum at 0" (its maximum: the minimum is at −10⁻⁴⁰⁰)
+/// and "decreases on (−∞, 0]"; (x − 10⁻⁴⁰⁰)^(2/3) on x ≥ 0 "ranges from
+/// f(0) ≈ 2.2·10⁻²⁶⁷ up", its minimum 0 in the gap. Each passed on
+/// `8cca5b6`, every premise true (the gap's clearness weak: proven on the
+/// certifier's derivative, which is right). (Review 22's audit.)
+#[test]
+fn a_gap_cannot_hide_a_kink() {
+    use serde_json::json;
+    let (one_down, one_up) = (1.0f64.next_down(), 1.0f64.next_up());
+    let (two_down, two_up) = (one_down.next_down(), one_up.next_up());
+    let tiny = f64::from_bits(1);
+    let gap = |a: f64, b: f64, of: &str| {
+        [
+            json!({"Gap": {"x": {"a": a, "b": b}}}),
+            json!({"GapClear": {"x": {"a": a, "b": b}, "of": {"F": of}}}),
+        ]
+    };
+    let tail = |side: &str, from: f64, above: bool| {
+        json!({"TailBeyond": {"side": side, "from": from, "of": {"F": "F1"}, "c": 0.0,
+            "above": above}})
+    };
+    let none = |claims: Vec<serde_json::Value>| json!({"Certified": {"value": [], "cert": {"covers": "Line", "claims": claims}}});
+    let mut cases: Vec<(&str, &str, serde_json::Value, Option<serde_json::Value>)> = Vec::new();
+    let mut overlapping = vec![tail("Left", one_down, false), tail("Right", one_up, true)];
+    overlapping.extend(gap(two_down, two_up, "F1"));
+    cases.push(("(x-1)^(2/3)", "extrema", none(overlapping), None));
+    let mut chained = vec![tail("Left", two_down, false), tail("Right", two_up, true)];
+    chained.extend(gap(two_down, one_up, "F1"));
+    chained.extend(gap(one_down, two_up, "F1"));
+    cases.push(("(x-1)^(2/3)", "extrema", none(chained), None));
+    let mut at_0 = vec![tail("Left", -tiny, false), tail("Right", tiny, true)];
+    at_0.extend(gap(-2.0 * tiny, 2.0 * tiny, "F1"));
+    cases.push(("x^(2/3)", "extrema", none(at_0), None));
+    let mut hole = vec![
+        tail("Left", -tiny, false),
+        tail("Right", tiny, true),
+        json!({"Undefined": {"x": {"a": 0.0, "b": 0.0}}}),
+    ];
+    hole.extend(gap(-tiny, 0.0, "F1"));
+    hole.extend(gap(0.0, tiny, "F1"));
+    cases.push(("(x-10^(-400))^(2/3)+0/x", "extrema", none(hole), None));
+    let end = json!({"At": {"x": {"lo": 0.0, "hi": 0.0}, "closed": true}});
+    let mut beside_end = vec![tail("Left", -tiny, false)];
+    beside_end.extend(gap(-tiny, 0.0, "F1"));
+    let mut min_at_end = beside_end.clone();
+    min_at_end.push(json!({"Continuous": {"x": {"a": -tiny, "b": 0.0}}}));
+    min_at_end.push(
+        json!({"Value": {"x": {"a": 0.0, "b": 0.0}, "of": {"F": "F0"}, "lo": 0.0, "hi": 1e-200}}),
+    );
+    let src = "(x+10^(-400))^(2/3)+0*sqrt(-x)";
+    cases.push((
+        src,
+        "extrema",
+        json!({"Certified": {"value": [{"x": {"lo": 0.0, "hi": 0.0},
+            "y": {"lo": 0.0, "hi": 1e-200}, "kind": "Min", "every": null}],
+            "cert": {"covers": "Line", "claims": min_at_end}}}),
+        None,
+    ));
+    cases.push((
+        src,
+        "monotonicity",
+        json!({"Certified": {"value": [{"dir": "Decreasing", "on": {"lo": "NegInf", "hi": end}}],
+            "cert": {"covers": "Line", "claims": beside_end}}}),
+        None,
+    ));
+    // (f(0) = 10^(−800/3) ≈ 2.15·10⁻²⁶⁷.)
+    let mut from_f0 = vec![
+        tail("Right", tiny, true),
+        json!({"Value": {"x": {"a": 0.0, "b": 0.0}, "of": {"F": "F0"},
+            "lo": 2e-267, "hi": 3e-267}}),
+        json!({"Limit": {"at": "PosInf", "over_x": false, "to": "PosInf"}}),
+    ];
+    from_f0.extend(gap(0.0, tiny, "F1"));
+    cases.push((
+        "(x-10^(-400))^(2/3)+0*sqrt(x)",
+        "range",
+        json!({"Certified": {"value": [{"lo": {"At": {"x": {"lo": 2e-267, "hi": 3e-267},
+            "closed": true}}, "hi": "PosInf"}], "cert": {"covers": "Line", "claims": from_f0}}}),
+        Some(json!([[[{"At": {"lo": 0.0, "hi": 0.0}}], ["Other"]]])),
+    ));
+    for (src, row, body, ends) in cases {
+        let why = refused_row(src, row, body, ends)
+            .unwrap_or_else(|| panic!("{src}: a {row} row past its cusp accepted"));
+        assert!(
+            why.contains("is not shown to exist throughout the gap") || why.contains("undecided"),
+            "{src}: {row}: {why}"
+        );
+    }
+    // Genuine gaps stand: beside a domain end (√x, √(3x − 1), arcsin(x/0.3)
+    // at its two ends), about a pole no double holds (tan x, 1/(x − 0.1))
+    // or beside one at a double (1/x², |x|/x).
+    for src in [
+        "sqrt(x)",
+        "sqrt(3x-1)",
+        "asin(x/0.3)",
+        "tan(x)",
+        "1/(x-0.1)",
+        "1/x^2",
+        "abs(x)/x",
+    ] {
+        assert_eq!(rejected(&certificate(src)), None, "{src}");
+    }
+}
+
+/// A zero of f′ at a double whose side no claim signs is no "no change of
+/// sign", unless f has no value beside it: from the zero to the double
+/// beside it, that double included. f undefined at that double alone left
+/// the reals before it, where f is defined, unasked: with a pole at
+/// 1 + 2⁻⁵², x + 2⁻¹⁰⁴/(x − 1 − 2⁻⁵²) − 1 + 2⁻⁵² (f′ = (x − 1)(x − 1 − 2⁻⁵¹)
+/// over (x − 1 − 2⁻⁵²)²) had "no extrema", its maximum at 1 and minimum at
+/// 1 + 2⁻⁵¹ each beside a gap to the pole. (The gaps' clearness is true but
+/// beyond the replay: this is the row alone. Review 22's audit.)
+#[test]
+fn a_pole_at_the_next_double_leaves_the_side_of_a_turn_asked() {
+    use serde_json::json;
+    let src = "x-(1+2^(-52))+2*2^(-52)+2^(-104)/(x-(1+2^(-52)))";
+    let (one_up, two_up) = (1.0f64.next_up(), 1.0f64.next_up().next_up());
+    let mut v = certificate(src);
+    v["extrema"] = json!({"Certified": {"value": [], "cert": {"covers": "Line", "claims": [
+        {"TailBeyond": {"side": "Left", "from": 0.0, "of": {"F": "F1"}, "c": 0.0, "above": true}},
+        {"ExactAt": {"x": {"a": 0.0, "b": 1.0}, "of": {"F": "F1"}, "c": 0.0, "at": 1.0}},
+        {"Gap": {"x": {"a": 1.0, "b": one_up}}},
+        {"GapClear": {"x": {"a": 1.0, "b": one_up}, "of": {"F": "F1"}}},
+        {"Undefined": {"x": {"a": one_up, "b": one_up}}},
+        {"Gap": {"x": {"a": one_up, "b": two_up}}},
+        {"GapClear": {"x": {"a": one_up, "b": two_up}, "of": {"F": "F1"}}},
+        {"ExactAt": {"x": {"a": two_up, "b": 2.0}, "of": {"F": "F1"}, "c": 0.0, "at": two_up}},
+        {"TailBeyond": {"side": "Right", "from": 2.0, "of": {"F": "F1"}, "c": 0.0, "above": true}}
+    ]}}});
+    let r = replay::replay(&v).expect("replayed");
+    let problems = &r
+        .rows
+        .iter()
+        .find(|x| x.name == "extrema")
+        .unwrap()
+        .problems;
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("sign after its zero at 1e0 is not decided")),
+        "{problems:?}"
+    );
+}
