@@ -284,7 +284,10 @@ CI also runs checks that need more than `cargo test --workspace`:
   complete over a window answers for its ends, a zero of f′ or f″ on one
   needing its sign past it and a gap's end on one a claim deciding it; a
   gap holds no turn or inflection only where f′ (f″) is shown to exist
-  throughout it, so no cusp passes for a stretch of one sign.
+  throughout it, so no cusp passes for a stretch of one sign; a fact at
+  a double is no fact about the reals beside it (f′ = 0 at the next
+  double is no flat stretch, a zero's sign is not carried across it into
+  a gap, a monotone piece has length).
   The checker has no Γ of its own, so it doesn't model `n!`, `n!!`, `nCr`
   or `nPr`: a function that uses one anywhere, a constant like `5!`
   included, comes out *unsupported* (not checked, rather than wrong), and
@@ -311,10 +314,12 @@ CI also runs checks that need more than `cargo test --workspace`:
   rest of the certificate there, withheld, or with every genuine claim
   given to the row. CI runs a fixed few (3,341 mutants, none accepted).
   The long runs (204 corpus functions, 43,080 mutants; 607 pool functions,
-  156,658) accept 17 and 12: each a true statement the replay proved (a
+  156,658) accept 17 and 11: each a true statement the replay proved (a
   row borrowed from another function that happens to hold, an enclosure
   narrowed onto the number it holds), reviewed by hand in a table with the
-  reason it is true. A long run fails on an accepted mutant not in the
+  reason it is true. (A twelfth, an inflection moved onto the other one
+  and listed twice, is refused since this round: two items for one place
+  say there are two.) A long run fails on an accepted mutant not in the
   table and on a table entry it did not accept, so the table can't rot;
   an end of a Points-only partial monotone piece moved strictly inward is
   content-preserving by construction (a sub-piece of a monotone piece) and
@@ -334,6 +339,35 @@ CI also runs checks that need more than `cargo test --workspace`:
   own claim check, the checker before its audit accepted 10 of the fixed
   few's 61, 44 of the corpus's 420 and 486 of the pool's 3,295 (a turn or
   an inflection on a window's end behind a gap from it; a cusp in a gap).
+- **Claim fuzzer** (`--test replay_fuzz`, same feature): the mutation
+  tester only meets the shapes the certifier writes, and three review
+  rounds running a set of true claims built by hand made the replay
+  accept a false row. This makes up its own: polynomials whose zeros,
+  turns and inflections are planted at doubles, at adjacent doubles (1 and
+  1 + 2⁻⁵²), at points between doubles and as multiple roots, some with a
+  closed domain end or a hole; small sets of true claims from the
+  replay's vocabulary about the doubles at and beside each feature (a
+  point alone, a one-ulp gap and a point beside it, a box ending on it or
+  a double off it, overlapping crossings), kept where the replay's own
+  claim check proves them; and rows true and changed (an item dropped,
+  moved a double, listed twice, a piece cut or joined, a range end moved
+  or opened). Every row the replay accepts is held to the exact truth,
+  worked in GMP rationals (Sturm sequences, square-free parts, signs at
+  algebraic points), and so is every premise and every genuine
+  certificate of the functions it makes. CI runs a fixed seed (24
+  functions, about 2,000 cases); on 96 functions of it (7,994 cases) the
+  checker before review 22 accepts 74 false rows, `a711963`'s 17 (R23-M-01
+  and R23-M-02 among them), this round's proposal 9, and this checker
+  none. The rows it found since (two crossing boxes about one zero taken
+  for two, an item listed twice or for a turn of the other kind, a cleared
+  gap given the sign of a stretch past a zero, a monotone piece of no
+  length) have regressions; a long run of 600 functions on a fresh seed
+  (50,090 cases) then found none. Holding the genuine certificates to the
+  truth, it also found the certifier leaving out a turn or inflection at
+  a double beside a hole (`1/6*(x-1/2)^3+2^(-56)*(x-1/2)^2+1/3+0/(x-(1/2))`
+  certified "no extrema", its maximum at the double below 1/2): four such
+  functions in two long runs; the strict replay refuses each (the turn's
+  side across the hole not decided). That is open in the certifier.
 - **Random cross-checking** (`--test crossfuzz`, same feature): the checks
   above take ordinary functions, shifted and scaled. This one generates
   expressions aimed at the families the review rounds kept finding bugs in

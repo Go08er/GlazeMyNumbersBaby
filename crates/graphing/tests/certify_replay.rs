@@ -4819,3 +4819,477 @@ fn a_pole_at_the_next_double_leaves_the_side_of_a_turn_asked() {
         "{problems:?}"
     );
 }
+/// A zero at the next double is not a flat stretch reaching back to the
+/// preceding zero. These cubics have a minimum at 1; the quartics have an
+/// inflection there. Every supplied premise is Strong, including the
+/// factored derivative's exact identity with the source's derivative.
+#[test]
+fn a_flat_point_beside_a_zero_does_not_decide_its_side() {
+    use serde_json::json;
+    for reverse in [false, true] {
+        let (k, u, tree) = if reverse {
+            (53, "(1-x)", "Sub(1,x)")
+        } else {
+            (52, "(x-1)", "Sub(x,1)")
+        };
+        let d = 2.0f64.powi(-k);
+        let (a, b) = if reverse {
+            (1.0, 1.0 + 2.0 * d)
+        } else {
+            (1.0 - d, 1.0)
+        };
+        let (lo, hi) = if reverse {
+            (1.0 - d, 1.0)
+        } else {
+            (1.0, 1.0 + d)
+        };
+        let beside = if reverse { lo } else { hi };
+        for inflection in [false, true] {
+            let (src, row, of, name) = if inflection {
+                (
+                    format!("2^(-{k})*{u}^3-0.5*{u}^4"),
+                    "inflections",
+                    "F2",
+                    "f″",
+                )
+            } else {
+                (format!("3*2^(-{k})*{u}^2-2*{u}^3"), "extrema", "F1", "f′")
+            };
+            let mut v = certificate(&src);
+            let domain = v["domain"].clone();
+            withhold_all_but(&mut v, row);
+            v["domain"] = domain;
+            let derivative = format!("Mul(Mul(6,{tree}),Sub(Pow(2,Neg({k})),{tree}))");
+            let derivative = if reverse && !inflection {
+                format!("Neg({derivative})")
+            } else {
+                derivative
+            };
+            // Supplying a correct factorisation makes the gap's open
+            // interior independently decidable, without lending it a sign.
+            v["evaluated"] = json!(format!("{name} = {derivative}"));
+            v[row] = json!({"Partial": {"value": [], "cert": {
+            "covers": {"Window": {"a": 1.0, "b": 1.0}}, "claims": [
+                {"ExactAt": {"x": {"a": a, "b": b}, "of": {"F": of}, "c": 0.0, "at": 1.0}},
+                {"Gap": {"x": {"a": lo, "b": hi}}},
+                {"GapClear": {"x": {"a": lo, "b": hi}, "of": {"F": of}}},
+                {"Kink": {"x": {"a": beside, "b": beside}}}
+            ]}}});
+            let r = replay::replay(&v).expect("replayed");
+            assert!(
+                r.claims.iter().all(|c| c.outcome.class == Class::Strong),
+                "{src}: {:?}",
+                r.claims
+            );
+            let why =
+                rejected(&v).unwrap_or_else(|| panic!("{src}: a false empty {row} row passed"));
+            assert!(
+                why.contains("sign") && why.contains("is not decided"),
+                "{src}: {why}"
+            );
+            // A Points list promises no completeness and may omit 1.
+            body_of(&mut v, row)["cert"]["covers"] = json!("Points");
+            assert_eq!(rejected(&v), None, "{src}: an empty Points row");
+        }
+    }
+}
+
+/// Continuity at one point, with f′ or f″ exactly zero there, records a
+/// zero whose sides must be decided. It is not a flat neighbourhood that
+/// lets a complete window omit the minimum of (x−1)² or the inflection of
+/// (x−1)³. The sole premise is Strong in each case.
+#[test]
+fn a_continuity_point_at_a_derivative_zero_keeps_its_sides_asked() {
+    use serde_json::json;
+    for (src, row, of) in [
+        ("(x-1)^2", "extrema", "F1"),
+        ("(x-1)^3", "inflections", "F2"),
+    ] {
+        let mut v = certificate(src);
+        let domain = v["domain"].clone();
+        withhold_all_but(&mut v, row);
+        v["domain"] = domain;
+        v[row] = json!({"Partial": {"value": [], "cert": {
+            "covers": {"Window": {"a": 1.0, "b": 1.0}},
+            "claims": [{"Kink": {"x": {"a": 1.0, "b": 1.0}}}]
+        }}});
+        // Both ways of establishing the same point zero leave the same
+        // completeness obligation. Neither may omit the feature at 1.
+        for claim in [
+            json!({"Kink": {"x": {"a": 1.0, "b": 1.0}}}),
+            json!({"Value": {"x": {"a": 1.0, "b": 1.0}, "of": {"F": of},
+                "lo": 0.0, "hi": 0.0}}),
+        ] {
+            body_of(&mut v, row)["cert"]["covers"] = json!({"Window": {"a": 1.0, "b": 1.0}});
+            body_of(&mut v, row)["cert"]["claims"] = json!([claim]);
+            let r = replay::replay(&v).expect("replayed");
+            assert_eq!(r.claims.len(), 1, "{src}: {:?}", r.claims);
+            assert!(
+                r.claims.iter().all(|c| c.outcome.class == Class::Strong),
+                "{src}: {:?}",
+                r.claims
+            );
+            let why = rejected(&v)
+                .unwrap_or_else(|| panic!("{src}: a false complete empty {row} row passed"));
+            assert!(
+                why.contains("sign before its zero at 1e0 is not decided"),
+                "{src}: {why}"
+            );
+            // A Points list promises no completeness and may omit 1.
+            body_of(&mut v, row)["cert"]["covers"] = json!("Points");
+            assert_eq!(rejected(&v), None, "{src}: an empty Points row");
+        }
+    }
+    // Real flat stretches and the genuine feature lists stay accepted.
+    for src in ["max(x,0)^3", "min(x,0)^3", "(x-1)^2", "(x-1)^3", "0", "2"] {
+        assert_eq!(rejected(&certificate(src)), None, "{src}");
+    }
+}
+
+/// A point with f′ = 0 one double inward from a closed domain end does
+/// not make f constant from that end. The minimum at 1 must remain an
+/// obligation, even when the only window being certified is [1, 1].
+#[test]
+fn a_flat_point_beside_a_domain_end_does_not_hide_its_minimum() {
+    use serde_json::json;
+    for reverse in [false, true] {
+        let (k, u, tree) = if reverse {
+            (53, "(1-x)", "Sub(1,x)")
+        } else {
+            (52, "(x-1)", "Sub(x,1)")
+        };
+        let d = 2.0f64.powi(-k);
+        let (lo, hi) = if reverse {
+            (1.0 - d, 1.0)
+        } else {
+            (1.0, 1.0 + d)
+        };
+        let beside = if reverse { lo } else { hi };
+        let src = format!("3*2^(-{k})*{u}^2-2*{u}^3+0*sqrt({u})");
+        let mut v = certificate(&src);
+        let domain = v["domain"].clone();
+        withhold_all_but(&mut v, "extrema");
+        v["domain"] = domain;
+        let derivative = format!("Mul(Mul(6,{tree}),Sub(Pow(2,Neg({k})),{tree}))");
+        let derivative = if reverse {
+            format!("Neg({derivative})")
+        } else {
+            derivative
+        };
+        v["evaluated"] = json!(format!("f′ = {derivative}"));
+        v["extrema"] = json!({"Partial": {"value": [], "cert": {
+        "covers": {"Window": {"a": 1.0, "b": 1.0}}, "claims": [
+            {"Defined": {"x": {"a": 1.0, "b": 1.0}}},
+            {"Gap": {"x": {"a": lo, "b": hi}}},
+            {"GapClear": {"x": {"a": lo, "b": hi}, "of": {"F": "F1"}}},
+            {"Kink": {"x": {"a": beside, "b": beside}}}
+        ]}}});
+        let r = replay::replay(&v).expect("replayed");
+        assert!(
+            r.claims.iter().all(|c| c.outcome.class == Class::Strong),
+            "{src}: {:?}",
+            r.claims
+        );
+        // A point zero outside the window can now report an undecided
+        // side first. Still require the domain end's own obligation.
+        let problems = r.row_problems();
+        assert!(
+            problems.iter().any(|p| p.contains("at the closed end")),
+            "{src}: {problems:?}"
+        );
+        body_of(&mut v, "extrema")["cert"]["covers"] = json!("Points");
+        assert_eq!(rejected(&v), None, "{src}: an empty Points row");
+    }
+    // Genuine plateaus still meet the flat-stretch requirement.
+    for src in ["max(x,0)^3", "max(x,0)^4", "min(x,0)^3"] {
+        assert_eq!(
+            rejected(&certificate(src)),
+            None,
+            "{src}: a genuine plateau"
+        );
+    }
+}
+
+/// Two crossing boxes about one zero, overlapping, neither holding the
+/// other, are one place: f⁽ᵏ⁾ is strictly monotone on both, so on their
+/// union, with one zero. Counted apart, (x − 1)² had two minima, x − 1 two
+/// zeros and (x − 1)³ two inflections, each box listed, every premise
+/// strong; and two items listed for one proven place say there are two.
+/// Found by the claim fuzzer (`tests/replay_fuzz.rs`).
+#[test]
+fn overlapping_crossings_are_one_place() {
+    use serde_json::json;
+    let (a1, a2) = (1.0 - 2f64.powi(-52), 1.0 - 2f64.powi(-53));
+    let (b1, b2) = (1.0 + 2f64.powi(-52), 1.0 + 2f64.powi(-51));
+    let bx = |a: f64, b: f64| json!({"a": a, "b": b});
+    for (src, row, of, y1, y2) in [
+        ("x-1", "x_intercepts", "F0", (0.0, 0.0), (0.0, 0.0)),
+        (
+            "(x-1)^2",
+            "extrema",
+            "F1",
+            (-(2f64.powi(-104)), 2f64.powi(-104)),
+            (-(2f64.powi(-102)), 2f64.powi(-102)),
+        ),
+        (
+            "(x-1)^3",
+            "inflections",
+            "F2",
+            (-(2f64.powi(-156)), 2f64.powi(-156)),
+            (-(2f64.powi(-153)), 2f64.powi(-153)),
+        ),
+    ] {
+        let mut v = certificate(src);
+        let domain = v["domain"].clone();
+        withhold_all_but(&mut v, row);
+        v["domain"] = domain;
+        // f, f′, f″ of these are x − 1 times a positive number: negative
+        // before 1, positive after.
+        let mut claims = vec![
+            json!({"Beyond": {"x": bx(0.5, a1), "of": {"F": of}, "c": 0.0, "above": false}}),
+            json!({"OneCross": {"x": bx(a1, b1), "of": {"F": of}, "c": 0.0}}),
+            json!({"OneCross": {"x": bx(a2, b2), "of": {"F": of}, "c": 0.0}}),
+            json!({"Beyond": {"x": bx(b2, 1.5), "of": {"F": of}, "c": 0.0, "above": true}}),
+        ];
+        let item = |x: (f64, f64), y: (f64, f64)| -> serde_json::Value {
+            match row {
+                "x_intercepts" => json!({"At": {"lo": x.0, "hi": x.1}}),
+                "extrema" => json!({"x": {"lo": x.0, "hi": x.1}, "y": {"lo": y.0, "hi": y.1},
+                    "kind": "Min", "every": null}),
+                _ => json!({"x": {"lo": x.0, "hi": x.1}, "y": {"lo": y.0, "hi": y.1},
+                    "every": null}),
+            }
+        };
+        if row != "x_intercepts" {
+            for (x, y) in [((a1, b1), y1), ((a2, b2), y2)] {
+                claims.push(json!({"Value": {"x": bx(x.0, x.1), "of": {"F": "F0"},
+                    "lo": y.0, "hi": y.1}}));
+            }
+        }
+        let both = json!([item((a1, b1), y1), item((a2, b2), y2)]);
+        v[row] = json!({"Partial": {"value": both, "cert": {
+            "covers": {"Window": {"a": 0.5, "b": 1.5}}, "claims": claims}}});
+        let r = replay::replay(&v).expect("replayed");
+        assert!(
+            r.claims.iter().all(|c| c.outcome.class == Class::Strong),
+            "{src}: {:?}",
+            r.claims
+        );
+        let why =
+            rejected(&v).unwrap_or_else(|| panic!("{src}: one {row} item listed twice passed"));
+        assert!(why.contains("no proven place of its own"), "{src}: {why}");
+        // Either box alone is the one place: true, and accepted.
+        for one in [item((a1, b1), y1), item((a2, b2), y2)] {
+            body_of(&mut v, row)["value"] = json!([one]);
+            assert_eq!(rejected(&v), None, "{src}: one item");
+        }
+    }
+}
+
+/// A stretch where f′ ≡ 0 from the double inside an end of the domain
+/// known only to an enclosure (√(x − 1/3)'s 1/3, between two doubles)
+/// shows f constant from the end only with f′ ≡ 0 shown on the
+/// enclosure's own reals too, the end being somewhere among them; and a
+/// stretch flat from the double beside an excluded point gives f's limit
+/// there only so. (Review 23's audit: the same reach from a double to the
+/// reals beside it as R23-M-01, at an end with an enclosure.) Constants
+/// and plateaus up to such an end keep their rows.
+#[test]
+fn a_flat_stretch_reaches_an_enclosed_end_only_shown_flat_there() {
+    let failed: Vec<String> = [
+        "2+0*sqrt(x-1/3)",
+        "2+0*sqrt(1/3-x)",
+        "2+0/(x-1/3)",
+        "max(x,1)+0*sqrt(x-1/3)",
+        "min(x,0)+0*sqrt(1/3-x)",
+        "max(x,1)+0/(x-1/3)",
+    ]
+    .iter()
+    .filter_map(|src| rejected(&certificate(src)).map(|w| format!("{src}: {w}")))
+    .collect();
+    assert!(failed.is_empty(), "{failed:#?}");
+}
+
+/// A cleared gap has one sign of f′ throughout, but not the sign of a
+/// stretch that touches it at a zero of f′: f′ = (x − 1)(x − 1 − 2⁻⁵²) is
+/// negative between its two zeros, a cleared gap there, and positive
+/// after. "Increasing on [1, 1 + 2⁻⁵²]" passed, read across the gap from
+/// the stretch past the second zero (a Touch from it), every premise
+/// strong; and with a closed domain end at 1, its maximum there passed as
+/// a minimum. Found by the claim fuzzer (`tests/replay_fuzz.rs`).
+#[test]
+fn a_gap_takes_no_sign_across_a_zero() {
+    use serde_json::json;
+    let d = 2f64.powi(-52);
+    let (r, s) = (1.0 + d, 1.0 + 2.0 * d);
+    let bx = |a: f64, b: f64| json!({"a": a, "b": b});
+    let gap_and_touch = || {
+        vec![
+            json!({"Gap": {"x": bx(1.0, r)}}),
+            json!({"GapClear": {"x": bx(1.0, r), "of": {"F": "F1"}}}),
+            json!({"Touch": {"x": bx(r, s), "of": {"F": "F1"}, "c": 0.0, "at": r,
+                "order": 0, "above": true}}),
+        ]
+    };
+    let piece = |a: f64, b: f64, dir: &str| {
+        json!({"on": {"lo": {"At": {"x": {"lo": a, "hi": a}, "closed": true}},
+            "hi": {"At": {"x": {"lo": b, "hi": b}, "closed": true}}}, "dir": dir})
+    };
+    // f falls from 1 to 1 + 2⁻⁵², then rises. (Its f′ factored, a tree
+    // the replay shows f′'s exactly: the gap's clearness from it.)
+    let derivative = json!("f′ = Mul(3,Mul(Sub(x,1),Sub(x,Add(1,Pow(2,Neg(52))))))");
+    let src = "(x-1)^3-3*2^(-53)*(x-1)^2";
+    let mut v = certificate(src);
+    let domain = v["domain"].clone();
+    withhold_all_but(&mut v, "monotonicity");
+    v["domain"] = domain;
+    v["evaluated"] = derivative.clone();
+    let mut claims = gap_and_touch();
+    claims.push(json!({"Kink": {"x": bx(1.0, 1.0)}}));
+    v["monotonicity"] = json!({"Partial": {
+        "value": [piece(1.0, r, "Increasing"), piece(r, s, "Increasing")],
+        "cert": {"covers": {"Window": {"a": 1.0, "b": s}}, "claims": claims}}});
+    let rep = replay::replay(&v).expect("replayed");
+    assert!(
+        rep.claims.iter().all(|c| c.outcome.class == Class::Strong),
+        "{src}: {:?}",
+        rep.claims
+    );
+    assert!(
+        rejected(&v).is_some(),
+        "{src}: \"increasing on [1, 1 + 2^-52]\" passed"
+    );
+    // The same function from a closed end at 1: a maximum there.
+    let src = "(x-1)^3-3*2^(-53)*(x-1)^2+0*sqrt(x-1)";
+    let mut v = certificate(src);
+    let domain = v["domain"].clone();
+    withhold_all_but(&mut v, "extrema");
+    v["domain"] = domain;
+    v["evaluated"] = derivative;
+    let mut claims = gap_and_touch();
+    claims.push(json!({"Value": {"x": bx(1.0, 1.0), "of": {"F": "F0"}, "lo": 0.0, "hi": 0.0}}));
+    v["extrema"] = json!({"Partial": {
+        "value": [{"x": {"lo": 1.0, "hi": 1.0}, "y": {"lo": 0.0, "hi": 0.0}, "kind": "Min",
+            "every": null}],
+        "cert": {"covers": "Points", "claims": claims}}});
+    let rep = replay::replay(&v).expect("replayed");
+    assert!(
+        rep.claims.iter().all(|c| c.outcome.class == Class::Strong),
+        "{src}: {:?}",
+        rep.claims
+    );
+    assert!(rejected(&v).is_some(), "{src}: \"a minimum at 1\" passed");
+    // Genuine certificates of both keep their rows.
+    for src in [
+        "(x-1)^3-3*2^(-53)*(x-1)^2",
+        "(x-1)*(x-1-2^(-52))",
+        "x^3-3*x",
+    ] {
+        assert_eq!(rejected(&certificate(src)), None, "{src}");
+    }
+}
+
+/// An item stands for a turn of its own kind: x³ − 3x's maximum at −1
+/// listed alone and again as "a maximum in [−1, 1]", an enclosure that
+/// holds it and the minimum at 1, passed as two maxima (a partial row, its
+/// premises strong): the second item was matched to the minimum. Found by
+/// the claim fuzzer's long run (`tests/replay_fuzz.rs`).
+#[test]
+fn an_item_stands_for_a_turn_of_its_kind() {
+    use serde_json::json;
+    let mut v = certificate("x^3-3*x");
+    let domain = v["domain"].clone();
+    withhold_all_but(&mut v, "extrema");
+    v["domain"] = domain;
+    let bx = |a: f64, b: f64| json!({"a": a, "b": b});
+    let claims = json!([
+        {"ExactAt": {"x": bx(-1.5, -0.5), "of": {"F": "F1"}, "c": 0.0, "at": -1.0}},
+        {"ExactAt": {"x": bx(0.5, 1.5), "of": {"F": "F1"}, "c": 0.0, "at": 1.0}},
+        {"Value": {"x": bx(-1.0, -1.0), "of": {"F": "F0"}, "lo": 2.0, "hi": 2.0}},
+        {"Value": {"x": bx(-1.0, 1.0), "of": {"F": "F0"}, "lo": -2.0, "hi": 2.0}},
+        {"Value": {"x": bx(1.0, 1.0), "of": {"F": "F0"}, "lo": -2.0, "hi": -2.0}}
+    ]);
+    let item = |a: f64, b: f64, y: (f64, f64), kind: &str| {
+        json!({"x": {"lo": a, "hi": b}, "y": {"lo": y.0, "hi": y.1}, "kind": kind,
+            "every": null})
+    };
+    v["extrema"] = json!({"Partial": {"value": [item(-1.0, -1.0, (2.0, 2.0), "Max"),
+        item(-1.0, 1.0, (-2.0, 2.0), "Max")],
+        "cert": {"covers": "Points", "claims": claims}}});
+    let r = replay::replay(&v).expect("replayed");
+    assert!(
+        r.claims.iter().all(|c| c.outcome.class == Class::Strong),
+        "{:?}",
+        r.claims
+    );
+    let why = rejected(&v).unwrap_or_else(|| panic!("one maximum listed as two passed"));
+    assert!(why.contains("no proven place of its own"), "{why}");
+    // The maximum and, in the wide item, the minimum: true.
+    body_of(&mut v, "extrema")["value"] = json!([
+        item(-1.0, -1.0, (2.0, 2.0), "Max"),
+        item(-1.0, 1.0, (-2.0, 2.0), "Min")
+    ]);
+    assert_eq!(rejected(&v), None);
+}
+
+/// A monotone piece is a stretch of the line. One whose ends leave no
+/// reals between them had its direction read off f′ at a single point:
+/// −x³/3 + 1 + 0·√(1 − x) "decreasing on (1, 1]" (and on [1, 1]) over a
+/// window that meets its domain at 1 alone, from a gap beside 1; x²
+/// "increasing on [1, 1]" from f′ > 0 at 1. Found by the claim fuzzer
+/// (`tests/replay_fuzz.rs`); every premise strong.
+#[test]
+fn a_monotone_piece_has_length() {
+    use serde_json::json;
+    let next = 1.0f64.next_up();
+    let piece = |lo_closed: bool, dir: &str| {
+        json!([{"on": {
+            "lo": {"At": {"x": {"lo": 1.0, "hi": 1.0}, "closed": lo_closed}},
+            "hi": {"At": {"x": {"lo": 1.0, "hi": 1.0}, "closed": true}}}, "dir": dir}])
+    };
+    let mut cases = Vec::new();
+    for lo_closed in [false, true] {
+        cases.push((
+            "-1/3*x^3+1+0*sqrt(1-x)",
+            json!({"Partial": {"value": piece(lo_closed, "Decreasing"), "cert": {
+                "covers": {"Window": {"a": 1.0, "b": 1.5}}, "claims": [
+                    {"Gap": {"x": {"a": 1.0, "b": next}}},
+                    {"GapClear": {"x": {"a": 1.0, "b": next}, "of": {"F": "F1"}}}]}}}),
+        ));
+    }
+    cases.push((
+        "x^2",
+        json!({"Partial": {"value": piece(true, "Increasing"), "cert": {
+            "covers": {"Window": {"a": 1.0, "b": 1.0}}, "claims": [
+                {"Beyond": {"x": {"a": 1.0, "b": 1.0}, "of": {"F": "F1"}, "c": 0.0,
+                    "above": true}}]}}}),
+    ));
+    for (src, row) in cases {
+        let mut v = certificate(src);
+        let domain = v["domain"].clone();
+        withhold_all_but(&mut v, "monotonicity");
+        v["domain"] = domain;
+        v["monotonicity"] = row;
+        let r = replay::replay(&v).expect("replayed");
+        assert!(
+            r.claims.iter().all(|c| c.outcome.class == Class::Strong),
+            "{src}: {:?}",
+            r.claims
+        );
+        let why = rejected(&v).unwrap_or_else(|| panic!("{src}: a piece of no length passed"));
+        assert!(why.contains("has no length"), "{src}: {why}");
+    }
+    // Genuine pieces from a domain end, and about a turn between two
+    // doubles, stay.
+    let failed: Vec<String> = [
+        "x^2",
+        "sqrt(x)",
+        "(x-1+2^(-53))*(x-1-2^(-52))",
+        "sqrt(x-(1-2^(-53)))*(x-1-2^(-52))",
+        "(x-1-2^(-54))^2+sqrt(x-1)",
+    ]
+    .iter()
+    .filter_map(|src| rejected(&certificate(src)).map(|w| format!("{src}: {w}")))
+    .collect();
+    assert!(failed.is_empty(), "{failed:#?}");
+}
