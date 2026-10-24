@@ -910,8 +910,17 @@ fn make_fun(rng: &mut Rng) -> Option<Fun> {
         return Some(fun);
     }
     let k = *rng.pick(&[0usize, 0, 1, 1, 1, 2, 2]);
-    let n = 1 + rng.below(if k == 0 { 4 } else { 3 });
     let mut offsets: Vec<Rational> = Vec::new();
+    if rng.chance(0.3) {
+        // Two at adjacent doubles (1 and 1 + 2⁻⁵²).
+        offsets.push(qi(0));
+        offsets.push(if rng.chance(0.5) {
+            up.clone()
+        } else {
+            Rational::from(-&down)
+        });
+    }
+    let n = (1 + rng.below(if k == 0 { 4 } else { 3 })).max(offsets.len());
     while offsets.len() < n {
         let o = rng.pick(&palette).clone();
         if !offsets.contains(&o) {
@@ -1542,9 +1551,9 @@ impl Gen<'_> {
                     self.push(c_value(k, x, x, 0.0, 0.0));
                 }
             }
-            None => match self.rng.below(4) {
-                0 if k > 0 => self.push(c_box("Kink", x, x)),
-                1 if self.monotone(x, x) => self.push(c_exact(k, x, x, x)),
+            None => match self.rng.below(5) {
+                0 | 1 if k > 0 => self.push(c_box("Kink", x, x)),
+                2 if self.monotone(x, x) => self.push(c_exact(k, x, x, x)),
                 _ => self.push(c_value(k, x, x, 0.0, 0.0)),
             },
             Some(up) => match self.rng.below(4) {
@@ -1989,13 +1998,23 @@ impl Truth {
             return Verdict::False("unreadable".into());
         };
         if row == "x_intercepts" && self.d[0].is_zero() {
-            // f ≡ 0: every point a zero.
-            return if scope.complete() {
-                Verdict::False("f ≡ 0: its zeros are no list".into())
-            } else if items.iter().all(|i| self.dom.holds_box(i.x.1, i.x.1)) {
-                Verdict::True
-            } else {
-                Verdict::False("an item outside the domain".into())
+            // f ≡ 0: every point a zero, so an item is one where it meets
+            // the domain; a complete list only over a window of one point.
+            if items.iter().any(|i| self.dom.misses_box(i.x.0, i.x.1)) {
+                return Verdict::False("an item outside the domain".into());
+            }
+            return match scope {
+                Scope::Window(a, b) if a == b => {
+                    if !self.dom.holds_q(&qd(*a))
+                        || items.iter().any(|i| i.x.0 <= *a && *a <= i.x.1)
+                    {
+                        Verdict::True
+                    } else {
+                        Verdict::False(format!("f ≡ 0, and its zero at {a:e} is not listed"))
+                    }
+                }
+                Scope::Points => Verdict::True,
+                _ => Verdict::False("f ≡ 0: its zeros are no list".into()),
             };
         }
         let mut feats = self.features(row);
@@ -2178,11 +2197,23 @@ impl Truth {
             return Verdict::True;
         }
         // Every point of the scope where f is defined lies in a piece:
-        // tried at every end and between each two (exactly).
+        // tried at every end and between each two (exactly). (Where that
+        // is one point, there is no piece to list: f is monotone on no
+        // stretch of it.)
         let (sa, sb) = match scope {
             Scope::Window(a, b) => (*a, *b),
             _ => (f64::NEG_INFINITY, f64::INFINITY),
         };
+        let one_point = sa == sb
+            || match &self.dom {
+                Dom::From(c) => sb.is_finite() && qd(sb) == *c,
+                Dom::Upto(c) => sa.is_finite() && qd(sa) == *c,
+                _ => false,
+            };
+        if one_point {
+            // (Each piece listed is true: checked above.)
+            return Verdict::True;
+        }
         let mut pts: Vec<Rational> = Vec::new();
         for (a, b) in extents.iter().chain([(sa, sb)].iter()) {
             for e in [a, b] {
@@ -2457,6 +2488,166 @@ impl Ctx {
         } else {
             Scope::Window(a.min(b), a.max(b))
         }
+    }
+
+    /// A case about one place: a zero of f⁽ᵏ⁾ (or the domain's end or
+    /// hole) at a double or between two, the window on it or from it, and
+    /// a few true claims about the doubles at and beside it, the reals
+    /// between them and stretches from them: where a row's inference may
+    /// take a fact at a point for one about the reals beside it.
+    fn make_local_cases(&self, rng: &mut Rng, variants: usize) -> Vec<Case> {
+        let (row, k) = *rng.pick(&[
+            ROWS[0], ROWS[1], ROWS[1], ROWS[1], ROWS[2], ROWS[2], ROWS[3],
+        ]);
+        let mut spots: Vec<f64> = Vec::new();
+        for r in &self.truth.roots[k] {
+            let (lo, hi) = r.clone().doubles();
+            spots.push(lo);
+            if hi != lo {
+                spots.push(hi);
+            }
+        }
+        if let Some(c) = self.truth.dom.point() {
+            spots.push(floor_double(c));
+            spots.push(ceil_double(c));
+        }
+        spots.retain(|x| x.is_finite());
+        if spots.is_empty() {
+            spots = self.atoms.clone();
+        }
+        // Mostly one of the row's own features.
+        let mut primary: Vec<f64> = Vec::new();
+        let kind = if row == "monotonicity" {
+            "extrema"
+        } else {
+            row
+        };
+        for mut f in self.truth.features(kind) {
+            let (lo, hi) = f.at.enc();
+            primary.push(lo);
+            primary.push(hi);
+        }
+        primary.retain(|x| x.is_finite());
+        let r = if !primary.is_empty() && rng.chance(0.7) {
+            *rng.pick(&primary)
+        } else {
+            *rng.pick(&spots)
+        };
+        let u = |n: i32| doubles_out(r, n);
+        let lefts: Vec<f64> = self.atoms.iter().copied().filter(|a| *a < u(-3)).collect();
+        let rights: Vec<f64> = self.atoms.iter().copied().filter(|a| *a > u(3)).collect();
+        let left = if lefts.is_empty() || rng.chance(0.2) {
+            u(-3)
+        } else {
+            *rng.pick(&lefts)
+        };
+        let right = if rights.is_empty() || rng.chance(0.2) {
+            u(3)
+        } else {
+            *rng.pick(&rights)
+        };
+        let mut g = Gen {
+            t: &self.truth,
+            k,
+            rng,
+            atoms: &self.atoms,
+            out: Vec::new(),
+        };
+        // Groups of claims about the place: what decides the reals on each
+        // side of it, the place itself and the doubles beside it. Each
+        // variant takes a few, chosen at random, so that a shape of a few
+        // claims (a point alone, a gap and a point beside it) comes up.
+        let groups: [&dyn Fn(&mut Gen); 19] = [
+            &|g| g.stretch(left, r, 30),
+            &|g| g.stretch(r, right, 30),
+            &|g| g.stretch(left, u(-1), 30),
+            &|g| g.stretch(u(1), right, 30),
+            &|g| g.gap(u(-1), r),
+            &|g| g.gap(r, u(1)),
+            &|g| g.stretch(u(-1), r, 30),
+            &|g| g.stretch(r, u(1), 30),
+            &|g| g.point(r),
+            &|g| {
+                if g.k > 0 {
+                    g.push(c_box("Kink", r, r));
+                } else {
+                    g.point(r);
+                }
+            },
+            &|g| g.point(u(-1)),
+            &|g| g.point(u(1)),
+            &|g| g.push(c_box("Kink", u(-1), u(-1))),
+            &|g| g.push(c_box("Kink", u(1), u(1))),
+            &|g| g.stretch(u(-1), u(1), 30),
+            &|g| g.gap(u(-2), u(-1)),
+            &|g| g.gap(u(1), u(2)),
+            &|g| g.point(u(-2)),
+            &|g| g.point(u(2)),
+        ];
+        let made: Vec<Vec<Value>> = groups
+            .iter()
+            .map(|f| {
+                f(&mut g);
+                std::mem::take(&mut g.out)
+            })
+            .collect();
+        let mut out = Vec::new();
+        for _ in 0..variants {
+            let scope = match g.rng.below(10) {
+                0..=4 if row != "monotonicity" => Scope::Window(r, r),
+                0..=5 => Scope::Window(r, right),
+                6 | 7 => Scope::Window(left, r),
+                8 => Scope::Window(u(-1), u(1)),
+                _ => {
+                    if g.rng.chance(0.5) {
+                        Scope::Line
+                    } else {
+                        Scope::Points
+                    }
+                }
+            };
+            let n = *g.rng.pick(&[1usize, 1, 1, 2, 2, 2, 3, 3, 4, 5, 7]);
+            let mut chosen: Vec<usize> = Vec::new();
+            while chosen.len() < n {
+                let i = g.rng.below(groups.len());
+                if !chosen.contains(&i) {
+                    chosen.push(i);
+                }
+            }
+            let mut claims: Vec<Value> = chosen.iter().flat_map(|i| made[*i].clone()).collect();
+            if g.rng.chance(0.2) {
+                match &scope {
+                    Scope::Window(a, b) => g.cover(*a, *b),
+                    Scope::Line => g.cover(f64::NEG_INFINITY, f64::INFINITY),
+                    Scope::Points => {}
+                }
+            }
+            if g.rng.chance(0.15) {
+                g.noise();
+            }
+            claims.append(&mut g.out);
+            let mut value = if row == "monotonicity" {
+                self.mono_row(g.rng, &scope)
+            } else {
+                self.list_row(g.rng, row, &scope, &mut claims)
+            };
+            if g.rng.chance(0.5)
+                && let Some(items) = value.as_array_mut()
+                && !items.is_empty()
+            {
+                let i = g.rng.below(items.len());
+                items.remove(i);
+            }
+            let mut seen = std::collections::HashSet::new();
+            claims.retain(|c| seen.insert(c.to_string()));
+            out.push(Case {
+                row,
+                scope,
+                value,
+                claims,
+            });
+        }
+        out
     }
 
     fn make_case(&self, rng: &mut Rng) -> Case {
@@ -3046,99 +3237,106 @@ fn run_function(seed: u64, i: u64, cases: u64) -> Tally {
             continue;
         }
         let mut rng = Rng::new(seed, i, j + 1);
-        let mut case = ctx.make_case(&mut rng);
-        if trace.is_some() {
-            let v = case.json(&ctx.base);
-            let rep = replay::replay_in(&v, &mut ctx.session, Some(case.row));
-            println!("TRACE {}", ctx.show(&case, "(as made)"));
-            for c in rep.iter().flat_map(|r| r.claims.iter()) {
-                println!(
-                    "  {} {:?} {}",
-                    c.outcome.class.name(),
-                    c.claim,
-                    c.outcome.note
-                );
-            }
-        }
-        let Some(rep) = ctx.replay(&mut case, &mut t.dropped) else {
-            t.unreadable += 1;
-            continue;
+        let made = if rng.chance(0.5) {
+            ctx.make_local_cases(&mut rng, 6)
+        } else {
+            vec![ctx.make_case(&mut rng)]
         };
-        t.cases += 1;
-        for c in &rep.claims {
-            let class = c.outcome.class;
-            *t.kept.entry(class.name()).or_default() += 1;
-            if ctx.truth.claim_true(&c.claim) == Some(false) {
-                t.false_premises.push(format!(
-                    "seed {seed} function {i} case {j}: y={} [{}]: {} {:?} ({})",
-                    ctx.fun.text,
-                    ctx.fun.evaluated.join("; "),
-                    class.name(),
-                    c.claim,
-                    c.outcome.note
-                ));
-            }
-        }
-        let accepted = rep.rows.iter().all(|r| r.problems.is_empty());
-        let verdict = ctx.truth.judge(case.row, &case.scope, &case.value);
-        let slot = match (&verdict, accepted) {
-            (Verdict::Split(_), _) => 4,
-            (Verdict::True, true) => 0,
-            (Verdict::False(_), true) => 1,
-            (Verdict::True, false) => 2,
-            (Verdict::False(_), false) => 3,
-        };
-        t.by_row.entry(case.row.to_string()).or_default()[slot] += 1;
-        if slot == 2 {
-            let why = rep
-                .rows
-                .iter()
-                .flat_map(|r| r.problems.iter())
-                .next()
-                .cloned()
-                .unwrap_or_default();
-            // (By the problem's words, numbers aside.)
-            let key: String = why
-                .split_whitespace()
-                .filter(|w| !w.chars().any(|c| c.is_ascii_digit()))
-                .collect::<Vec<_>>()
-                .join(" ");
-            *t.refusals
-                .entry(format!("{}: {key}", case.row))
-                .or_default() += 1;
-            let wanted =
-                std::env::var("REPLAY_FUZZ_REFUSALS_MATCH").map_or(true, |m| why.contains(&m));
-            if wanted && t.refused_true.len() < 50 {
-                t.refused_true.push(format!(
-                    "function {i} case {j}: {}\n  replay: {why}",
-                    ctx.show(&case, "true")
-                ));
-            }
-        }
-        match verdict {
-            Verdict::False(why) if accepted => {
-                let strong = rep.claims.iter().all(|c| c.outcome.class == Class::Strong);
-                if strong {
-                    t.failures_strong += 1;
+        for (v, mut case) in made.into_iter().enumerate() {
+            let j = format!("{j}.{v}");
+            if trace.is_some() {
+                let v = case.json(&ctx.base);
+                let rep = replay::replay_in(&v, &mut ctx.session, Some(case.row));
+                println!("TRACE {}", ctx.show(&case, "(as made)"));
+                for c in rep.iter().flat_map(|r| r.claims.iter()) {
+                    println!(
+                        "  {} {:?} {}",
+                        c.outcome.class.name(),
+                        c.claim,
+                        c.outcome.note
+                    );
                 }
-                let small = ctx.minimise(&case);
-                let why = match ctx.truth.judge(small.row, &small.scope, &small.value) {
-                    Verdict::False(w) => w,
-                    _ => why,
-                };
-                t.failures.push(format!(
-                    "seed {seed} function {i} case {j}{}:\n{}",
-                    if strong { " (all premises strong)" } else { "" },
-                    ctx.show(&small, &why)
-                ));
             }
-            Verdict::Split(why) if accepted => {
-                t.splits.push(format!(
-                    "seed {seed} function {i} case {j}: {}",
-                    ctx.show(&case, &why)
-                ));
+            let Some(rep) = ctx.replay(&mut case, &mut t.dropped) else {
+                t.unreadable += 1;
+                continue;
+            };
+            t.cases += 1;
+            for c in &rep.claims {
+                let class = c.outcome.class;
+                *t.kept.entry(class.name()).or_default() += 1;
+                if ctx.truth.claim_true(&c.claim) == Some(false) {
+                    t.false_premises.push(format!(
+                        "seed {seed} function {i} case {j}: y={} [{}]: {} {:?} ({})",
+                        ctx.fun.text,
+                        ctx.fun.evaluated.join("; "),
+                        class.name(),
+                        c.claim,
+                        c.outcome.note
+                    ));
+                }
             }
-            _ => {}
+            let accepted = rep.rows.iter().all(|r| r.problems.is_empty());
+            let verdict = ctx.truth.judge(case.row, &case.scope, &case.value);
+            let slot = match (&verdict, accepted) {
+                (Verdict::Split(_), _) => 4,
+                (Verdict::True, true) => 0,
+                (Verdict::False(_), true) => 1,
+                (Verdict::True, false) => 2,
+                (Verdict::False(_), false) => 3,
+            };
+            t.by_row.entry(case.row.to_string()).or_default()[slot] += 1;
+            if slot == 2 {
+                let why = rep
+                    .rows
+                    .iter()
+                    .flat_map(|r| r.problems.iter())
+                    .next()
+                    .cloned()
+                    .unwrap_or_default();
+                // (By the problem's words, numbers aside.)
+                let key: String = why
+                    .split_whitespace()
+                    .filter(|w| !w.chars().any(|c| c.is_ascii_digit()))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                *t.refusals
+                    .entry(format!("{}: {key}", case.row))
+                    .or_default() += 1;
+                let wanted =
+                    std::env::var("REPLAY_FUZZ_REFUSALS_MATCH").map_or(true, |m| why.contains(&m));
+                if wanted && t.refused_true.len() < 50 {
+                    t.refused_true.push(format!(
+                        "function {i} case {j}: {}\n  replay: {why}",
+                        ctx.show(&case, "true")
+                    ));
+                }
+            }
+            match verdict {
+                Verdict::False(why) if accepted => {
+                    let strong = rep.claims.iter().all(|c| c.outcome.class == Class::Strong);
+                    if strong {
+                        t.failures_strong += 1;
+                    }
+                    let small = ctx.minimise(&case);
+                    let why = match ctx.truth.judge(small.row, &small.scope, &small.value) {
+                        Verdict::False(w) => w,
+                        _ => why,
+                    };
+                    t.failures.push(format!(
+                        "seed {seed} function {i} case {j}{}:\n{}",
+                        if strong { " (all premises strong)" } else { "" },
+                        ctx.show(&small, &why)
+                    ));
+                }
+                Verdict::Split(why) if accepted => {
+                    t.splits.push(format!(
+                        "seed {seed} function {i} case {j}: {}",
+                        ctx.show(&case, &why)
+                    ));
+                }
+                _ => {}
+            }
         }
     }
     t
