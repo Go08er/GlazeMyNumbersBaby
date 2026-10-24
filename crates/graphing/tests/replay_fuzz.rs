@@ -1096,6 +1096,54 @@ impl Place {
     }
 }
 
+/// Two places in order, exactly.
+fn pcmp(a: &Place, b: &Place) -> Ordering {
+    match (a, b) {
+        (Place::At(x), Place::At(y)) => x.cmp(y),
+        (Place::Root(r), Place::At(y)) => r.cmp(y),
+        (Place::At(x), Place::Root(r)) => r.cmp(x).reverse(),
+        (Place::Root(r), Place::Root(s)) => {
+            if let Some(x) = r.exact() {
+                return s.cmp(x).reverse();
+            }
+            if let Some(y) = s.exact() {
+                return r.cmp(y);
+            }
+            let (mut r, mut s) = (r.clone(), s.clone());
+            for _ in 0..400 {
+                if r.hi <= s.lo {
+                    return Less;
+                }
+                if s.hi <= r.lo {
+                    return Greater;
+                }
+                // (Isolating intervals of one square-free polynomial that
+                // meet hold one root.)
+                if r.p == s.p {
+                    return Equal;
+                }
+                r.bisect();
+                s.bisect();
+                if let Some(x) = r.exact().cloned() {
+                    return s.cmp(&x).reverse();
+                }
+                if let Some(y) = s.exact().cloned() {
+                    return r.cmp(&y);
+                }
+            }
+            // One root of both: their common factor's.
+            let g = gcd(&r.p, &s.p);
+            let lo = (&r.lo).max(&s.lo).clone();
+            let hi = (&r.hi).min(&s.hi).clone();
+            assert!(
+                g.degree() >= 1 && Sturm::new(&g).closed(&lo, &hi) > 0,
+                "two roots not told apart"
+            );
+            Equal
+        }
+    }
+}
+
 /// A zero, turn or inflection: where, and (a turn) whether a maximum.
 #[derive(Clone, Debug)]
 struct Feature {
@@ -1888,8 +1936,6 @@ const ROWS: [(&str, usize); 4] = [
 #[derive(Clone, Debug, PartialEq)]
 enum Verdict {
     True,
-    /// True, but a complete monotone row cut a piece where f doesn't turn.
-    Split(String),
     False(String),
 }
 
@@ -2083,12 +2129,7 @@ impl Truth {
         }
         // (In order, exactly: a rational against a root by the root's
         // own comparison; two turns are roots of one square-free f′, apart.)
-        inner.sort_by(|(a, _), (b, _)| match (a, b) {
-            (Place::At(x), Place::At(y)) => x.cmp(y),
-            (Place::Root(r), Place::At(y)) => r.cmp(y),
-            (Place::At(x), Place::Root(r)) => r.cmp(x).reverse(),
-            (Place::Root(r), Place::Root(s)) => r.lo.cmp(&s.lo),
-        });
+        inner.sort_by(|(a, _), (b, _)| pcmp(a, b));
         ends.extend(inner.into_iter().map(|(p, c)| (Some(p), c)));
         ends.push(match &self.dom {
             Dom::Upto(c) => (Some(Place::At(c.clone())), true),
@@ -2252,21 +2293,105 @@ impl Truth {
                 ));
             }
         }
-        // Two pieces of one direction meeting where f doesn't turn: true
-        // statements, but not f's pieces.
-        for (i, (_, hi, dir)) in pieces.iter().enumerate() {
-            let Some((x, _)) = hi else { continue };
-            for (lo2, _, dir2) in &pieces[i + 1..] {
-                if lo2.is_some_and(|(y, _)| y == *x) && dir == dir2 {
-                    let anchored = self.breaks.iter().any(|b| b.within(x.0, x.1))
-                        || matches!(scope, Scope::Window(a, b) if x.0 == *a || x.1 == *b);
-                    if !anchored {
-                        return Verdict::Split(format!("cut at [{:e}, {:e}]", x.0, x.1));
-                    }
-                }
+        // f's pieces, each end where one ends: a zero of f′, the domain's
+        // end or hole, the window's edge; and between two such ends, f
+        // monotone the way listed. (Only some point of each enclosure
+        // was asked above: two overlapping enclosures of one turn bound
+        // a piece of no length.)
+        for (lo, hi, dir) in &pieces {
+            if let Err(why) = self.piece_anchored(lo, hi, *dir, scope) {
+                return Verdict::False(format!("the piece {lo:?} to {hi:?} {dir:?}: {why}"));
             }
         }
         Verdict::True
+    }
+
+    /// Where a piece of a complete row may end, within the enclosure x:
+    /// a zero of f′ in the domain, the domain's end or hole, an edge of
+    /// the window.
+    fn anchors_in(&self, x: (f64, f64), scope: &Scope) -> Vec<Place> {
+        let mut out: Vec<Place> = self.roots[1]
+            .iter()
+            .map(|r| Place::Root(r.clone()))
+            .filter(|p| p.within(x.0, x.1) && self.dom.holds(p))
+            .collect();
+        if let Some(c) = self.dom.point()
+            && qd(x.0) <= *c
+            && *c <= qd(x.1)
+        {
+            out.push(Place::At(c.clone()));
+        }
+        if let Scope::Window(a, b) = scope {
+            for e in [*a, *b] {
+                if x.0 <= e && e <= x.1 {
+                    out.push(Place::At(qd(e)));
+                }
+            }
+        }
+        out
+    }
+
+    /// A complete row's piece: from an anchor in its low end's enclosure
+    /// to a later one in its high end's, within one stretch of f in its
+    /// direction.
+    fn piece_anchored(
+        &self,
+        lo: &End,
+        hi: &End,
+        dir: Option<bool>,
+        scope: &Scope,
+    ) -> Result<(), String> {
+        let ps: Option<Vec<Place>> = lo.map(|(x, _)| self.anchors_in(x, scope));
+        let qs: Option<Vec<Place>> = hi.map(|(x, _)| self.anchors_in(x, scope));
+        if ps.as_ref().is_some_and(Vec::is_empty) || qs.as_ref().is_some_and(Vec::is_empty) {
+            return Err("an end where no piece of f ends".into());
+        }
+        let below = |a: &Option<Place>, b: &Place| a.as_ref().is_none_or(|a| pcmp(a, b) != Greater);
+        let above = |a: &Option<Place>, b: &Place| a.as_ref().is_none_or(|a| pcmp(a, b) != Less);
+        for (b0, c0, b1, c1, d) in self.stretches() {
+            if d != dir {
+                continue;
+            }
+            let starts: Vec<Option<Place>> = match &ps {
+                None if b0.is_none() => vec![None],
+                None => continue,
+                Some(ps) => ps
+                    .iter()
+                    .filter(|p| below(&b0, p) && above(&b1, p))
+                    .filter(|p| {
+                        // (A closed end at the stretch's open end: no.)
+                        !(lo.is_some_and(|(_, closed)| closed)
+                            && !c0
+                            && b0.as_ref().is_some_and(|b| pcmp(b, p) == Equal))
+                    })
+                    .map(|p| Some(p.clone()))
+                    .collect(),
+            };
+            let ends: Vec<Option<Place>> = match &qs {
+                None if b1.is_none() => vec![None],
+                None => continue,
+                Some(qs) => qs
+                    .iter()
+                    .filter(|q| below(&b0, q) && above(&b1, q))
+                    .filter(|q| {
+                        !(hi.is_some_and(|(_, closed)| closed)
+                            && !c1
+                            && b1.as_ref().is_some_and(|b| pcmp(b, q) == Equal))
+                    })
+                    .map(|q| Some(q.clone()))
+                    .collect(),
+            };
+            let ordered = starts.iter().any(|p| {
+                ends.iter().any(|q| match (p, q) {
+                    (Some(p), Some(q)) => pcmp(p, q) == Less,
+                    _ => true,
+                })
+            });
+            if ordered {
+                return Ok(());
+            }
+        }
+        Err("no stretch of f between two of its anchors".into())
     }
 
     fn judge(&self, row: &str, scope: &Scope, value: &Value) -> Verdict {
@@ -3038,7 +3163,7 @@ struct Tally {
     cases: u64,
     unreadable: u64,
     /// (accepted, true) by row.
-    by_row: BTreeMap<String, [u64; 5]>,
+    by_row: BTreeMap<String, [u64; 4]>,
     kept: BTreeMap<&'static str, u64>,
     dropped: BTreeMap<String, u64>,
     false_premises: Vec<String>,
@@ -3046,7 +3171,6 @@ struct Tally {
     failures: Vec<String>,
     /// All premises strong among those.
     failures_strong: u64,
-    splits: Vec<String>,
     /// True rows the replay refuses: by its reason, and a few in full.
     refusals: BTreeMap<String, u64>,
     refused_true: Vec<String>,
@@ -3065,7 +3189,7 @@ impl Tally {
         self.unreadable += o.unreadable;
         for (k, v) in o.by_row {
             let e = self.by_row.entry(k).or_default();
-            for i in 0..5 {
+            for i in 0..4 {
                 e[i] += v[i];
             }
         }
@@ -3078,7 +3202,6 @@ impl Tally {
         self.false_premises.extend(o.false_premises);
         self.failures.extend(o.failures);
         self.failures_strong += o.failures_strong;
-        self.splits.extend(o.splits);
         for (k, v) in o.refusals {
             *self.refusals.entry(k).or_default() += v;
         }
@@ -3101,12 +3224,9 @@ impl Tally {
             self.cases,
             self.unreadable
         );
-        println!("  row: accepted true / accepted FALSE / refused true / refused false / split");
+        println!("  row: accepted true / accepted FALSE / refused true / refused false");
         for (row, v) in &self.by_row {
-            println!(
-                "  {row:>13}: {} / {} / {} / {} / {}",
-                v[0], v[1], v[2], v[3], v[4]
-            );
+            println!("  {row:>13}: {} / {} / {} / {}", v[0], v[1], v[2], v[3]);
         }
         println!(
             "  premises kept: {:?}; dropped: {:?}",
@@ -3145,7 +3265,6 @@ impl Tally {
             ("PROVED FALSE PREMISE", &self.false_premises),
             ("GENUINE ROW THE TRUTH REFUSES", &self.genuine_false),
             ("genuine row the replay refuses", &self.genuine_refused),
-            ("split", &self.splits),
             ("domain not as built", &self.domain_not_as_built),
         ] {
             for s in list.iter().take(show) {
@@ -3279,7 +3398,6 @@ fn run_function(seed: u64, i: u64, cases: u64) -> Tally {
             let accepted = rep.rows.iter().all(|r| r.problems.is_empty());
             let verdict = ctx.truth.judge(case.row, &case.scope, &case.value);
             let slot = match (&verdict, accepted) {
-                (Verdict::Split(_), _) => 4,
                 (Verdict::True, true) => 0,
                 (Verdict::False(_), true) => 1,
                 (Verdict::True, false) => 2,
@@ -3327,12 +3445,6 @@ fn run_function(seed: u64, i: u64, cases: u64) -> Tally {
                         "seed {seed} function {i} case {j}{}:\n{}",
                         if strong { " (all premises strong)" } else { "" },
                         ctx.show(&small, &why)
-                    ));
-                }
-                Verdict::Split(why) if accepted => {
-                    t.splits.push(format!(
-                        "seed {seed} function {i} case {j}: {}",
-                        ctx.show(&case, &why)
                     ));
                 }
                 _ => {}

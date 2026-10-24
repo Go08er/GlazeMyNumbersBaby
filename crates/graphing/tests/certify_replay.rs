@@ -5009,3 +5009,65 @@ fn a_flat_point_beside_a_domain_end_does_not_hide_its_minimum() {
         );
     }
 }
+
+/// A monotone piece is a stretch of the line. One whose ends leave no
+/// reals between them had its direction read off f′ at a single point:
+/// −x³/3 + 1 + 0·√(1 − x) "decreasing on (1, 1]" (and on [1, 1]) over a
+/// window that meets its domain at 1 alone, from a gap beside 1; x²
+/// "increasing on [1, 1]" from f′ > 0 at 1. Found by the claim fuzzer
+/// (`tests/replay_fuzz.rs`); every premise strong.
+#[test]
+fn a_monotone_piece_has_length() {
+    use serde_json::json;
+    let next = 1.0f64.next_up();
+    let piece = |lo_closed: bool, dir: &str| {
+        json!([{"on": {
+            "lo": {"At": {"x": {"lo": 1.0, "hi": 1.0}, "closed": lo_closed}},
+            "hi": {"At": {"x": {"lo": 1.0, "hi": 1.0}, "closed": true}}}, "dir": dir}])
+    };
+    let mut cases = Vec::new();
+    for lo_closed in [false, true] {
+        cases.push((
+            "-1/3*x^3+1+0*sqrt(1-x)",
+            json!({"Partial": {"value": piece(lo_closed, "Decreasing"), "cert": {
+                "covers": {"Window": {"a": 1.0, "b": 1.5}}, "claims": [
+                    {"Gap": {"x": {"a": 1.0, "b": next}}},
+                    {"GapClear": {"x": {"a": 1.0, "b": next}, "of": {"F": "F1"}}}]}}}),
+        ));
+    }
+    cases.push((
+        "x^2",
+        json!({"Partial": {"value": piece(true, "Increasing"), "cert": {
+            "covers": {"Window": {"a": 1.0, "b": 1.0}}, "claims": [
+                {"Beyond": {"x": {"a": 1.0, "b": 1.0}, "of": {"F": "F1"}, "c": 0.0,
+                    "above": true}}]}}}),
+    ));
+    for (src, row) in cases {
+        let mut v = certificate(src);
+        let domain = v["domain"].clone();
+        withhold_all_but(&mut v, "monotonicity");
+        v["domain"] = domain;
+        v["monotonicity"] = row;
+        let r = replay::replay(&v).expect("replayed");
+        assert!(
+            r.claims.iter().all(|c| c.outcome.class == Class::Strong),
+            "{src}: {:?}",
+            r.claims
+        );
+        let why = rejected(&v).unwrap_or_else(|| panic!("{src}: a piece of no length passed"));
+        assert!(why.contains("has no length"), "{src}: {why}");
+    }
+    // Genuine pieces from a domain end, and about a turn between two
+    // doubles, stay.
+    let failed: Vec<String> = [
+        "x^2",
+        "sqrt(x)",
+        "(x-1+2^(-53))*(x-1-2^(-52))",
+        "sqrt(x-(1-2^(-53)))*(x-1-2^(-52))",
+        "(x-1-2^(-54))^2+sqrt(x-1)",
+    ]
+    .iter()
+    .filter_map(|src| rejected(&certificate(src)).map(|w| format!("{src}: {w}")))
+    .collect();
+    assert!(failed.is_empty(), "{failed:#?}");
+}

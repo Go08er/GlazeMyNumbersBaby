@@ -2241,6 +2241,20 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
         let p = piece(item.get("on").ok_or("on")?)?;
         let dir = item.get("dir").and_then(Value::as_str).unwrap_or("");
         let (a, b) = extent(&p);
+        // A piece is a stretch of the line: some place in its high end's
+        // enclosure lies past some place in its low end's. One with no
+        // reals between its ends had its direction read off f′ at one
+        // point: "decreasing on (1, 1]" passed for −x³/3 + 0·√(1 − x),
+        // the window [1, 1.44] meeting its domain at 1 alone (the claim
+        // fuzzer, `tests/replay_fuzz.rs`).
+        if let (Bound::At { x: lo, .. }, Bound::At { x: hi, .. }) = (p.lo, p.hi)
+            && !(lo.lo < hi.hi)
+        {
+            out.problems.push(format!(
+                "a monotone piece from [{:e}, {:e}] to [{:e}, {:e}] has no length",
+                lo.lo, lo.hi, hi.lo, hi.hi
+            ));
+        }
         if let Some(ds) = &domain
             && !ds.iter().any(|d| {
                 let (da, db) = extent(d);
