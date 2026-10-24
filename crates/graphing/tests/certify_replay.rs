@@ -4819,3 +4819,137 @@ fn a_pole_at_the_next_double_leaves_the_side_of_a_turn_asked() {
         "{problems:?}"
     );
 }
+/// A zero at the next double is not a flat stretch reaching back to the
+/// preceding zero. These cubics have a minimum at 1; the quartics have an
+/// inflection there. Every supplied premise is Strong, including the
+/// factored derivative's exact identity with the source's derivative.
+#[test]
+fn a_flat_point_beside_a_zero_does_not_decide_its_side() {
+    use serde_json::json;
+    for reverse in [false, true] {
+        let (k, u, tree) = if reverse {
+            (53, "(1-x)", "Sub(1,x)")
+        } else {
+            (52, "(x-1)", "Sub(x,1)")
+        };
+        let d = 2.0f64.powi(-k);
+        let (a, b) = if reverse {
+            (1.0, 1.0 + 2.0 * d)
+        } else {
+            (1.0 - d, 1.0)
+        };
+        let (lo, hi) = if reverse {
+            (1.0 - d, 1.0)
+        } else {
+            (1.0, 1.0 + d)
+        };
+        let beside = if reverse { lo } else { hi };
+        for inflection in [false, true] {
+            let (src, row, of, name) = if inflection {
+                (
+                    format!("2^(-{k})*{u}^3-0.5*{u}^4"),
+                    "inflections",
+                    "F2",
+                    "f″",
+                )
+            } else {
+                (format!("3*2^(-{k})*{u}^2-2*{u}^3"), "extrema", "F1", "f′")
+            };
+            let mut v = certificate(&src);
+            let domain = v["domain"].clone();
+            withhold_all_but(&mut v, row);
+            v["domain"] = domain;
+            let derivative = format!("Mul(Mul(6,{tree}),Sub(Pow(2,Neg({k})),{tree}))");
+            let derivative = if reverse && !inflection {
+                format!("Neg({derivative})")
+            } else {
+                derivative
+            };
+            // Supplying a correct factorisation makes the gap's open
+            // interior independently decidable, without lending it a sign.
+            v["evaluated"] = json!(format!("{name} = {derivative}"));
+            v[row] = json!({"Partial": {"value": [], "cert": {
+            "covers": {"Window": {"a": 1.0, "b": 1.0}}, "claims": [
+                {"ExactAt": {"x": {"a": a, "b": b}, "of": {"F": of}, "c": 0.0, "at": 1.0}},
+                {"Gap": {"x": {"a": lo, "b": hi}}},
+                {"GapClear": {"x": {"a": lo, "b": hi}, "of": {"F": of}}},
+                {"Kink": {"x": {"a": beside, "b": beside}}}
+            ]}}});
+            let r = replay::replay(&v).expect("replayed");
+            assert!(
+                r.claims.iter().all(|c| c.outcome.class == Class::Strong),
+                "{src}: {:?}",
+                r.claims
+            );
+            let why =
+                rejected(&v).unwrap_or_else(|| panic!("{src}: a false empty {row} row passed"));
+            assert!(
+                why.contains("sign") && why.contains("is not decided"),
+                "{src}: {why}"
+            );
+            // A Points list promises no completeness and may omit 1.
+            body_of(&mut v, row)["cert"]["covers"] = json!("Points");
+            assert_eq!(rejected(&v), None, "{src}: an empty Points row");
+        }
+    }
+}
+
+/// A point with f′ = 0 one double inward from a closed domain end does
+/// not make f constant from that end. The minimum at 1 must remain an
+/// obligation, even when the only window being certified is [1, 1].
+#[test]
+fn a_flat_point_beside_a_domain_end_does_not_hide_its_minimum() {
+    use serde_json::json;
+    for reverse in [false, true] {
+        let (k, u, tree) = if reverse {
+            (53, "(1-x)", "Sub(1,x)")
+        } else {
+            (52, "(x-1)", "Sub(x,1)")
+        };
+        let d = 2.0f64.powi(-k);
+        let (lo, hi) = if reverse {
+            (1.0 - d, 1.0)
+        } else {
+            (1.0, 1.0 + d)
+        };
+        let beside = if reverse { lo } else { hi };
+        let src = format!("3*2^(-{k})*{u}^2-2*{u}^3+0*sqrt({u})");
+        let mut v = certificate(&src);
+        let domain = v["domain"].clone();
+        withhold_all_but(&mut v, "extrema");
+        v["domain"] = domain;
+        let derivative = format!("Mul(Mul(6,{tree}),Sub(Pow(2,Neg({k})),{tree}))");
+        let derivative = if reverse {
+            format!("Neg({derivative})")
+        } else {
+            derivative
+        };
+        v["evaluated"] = json!(format!("f′ = {derivative}"));
+        v["extrema"] = json!({"Partial": {"value": [], "cert": {
+        "covers": {"Window": {"a": 1.0, "b": 1.0}}, "claims": [
+            {"Defined": {"x": {"a": 1.0, "b": 1.0}}},
+            {"Gap": {"x": {"a": lo, "b": hi}}},
+            {"GapClear": {"x": {"a": lo, "b": hi}, "of": {"F": "F1"}}},
+            {"Kink": {"x": {"a": beside, "b": beside}}}
+        ]}}});
+        let r = replay::replay(&v).expect("replayed");
+        assert!(
+            r.claims.iter().all(|c| c.outcome.class == Class::Strong),
+            "{src}: {:?}",
+            r.claims
+        );
+        let why =
+            rejected(&v).unwrap_or_else(|| panic!("{src}: the omitted domain-end minimum passed"));
+        assert!(why.contains("end"), "{src}: {why}");
+        body_of(&mut v, "extrema")["cert"]["covers"] = json!("Points");
+        assert_eq!(rejected(&v), None, "{src}: an empty Points row");
+    }
+    // Genuine plateaus still meet the flat-stretch requirement.
+    for src in ["max(x,0)^3", "max(x,0)^4", "min(x,0)^3"] {
+        assert_eq!(
+            rejected(&certificate(src)),
+            None,
+            "{src}: a genuine plateau"
+        );
+    }
+}

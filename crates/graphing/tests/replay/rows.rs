@@ -939,7 +939,13 @@ fn sides_decided(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk, k: usize, out
         ];
         for (side, sign, from, beside) in sides {
             let asked = on_end || ts.iter().any(|t| t.0 <= beside && beside <= t.1);
-            let flat = w.flat.iter().any(|b| b.0 <= beside && beside <= b.1);
+            // Flat throughout the reals beside the zero, not just at the
+            // next double: an isolated derivative zero there decides
+            // nothing about the sign between the two doubles.
+            let flat = w
+                .flat
+                .iter()
+                .any(|b| b.0 <= from.min(beside) && from.max(beside) <= b.1);
             // (Nothing beside: f has no value from the zero's enclosure to
             // the double beside it, that double included. f undefined at
             // that double alone leaves the reals before it: a pole there
@@ -1700,9 +1706,9 @@ fn end_extrema(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk) -> (Vec<(Enc, b
             // f constant from the end: no extremum of its own there.
             let flat = w.flat.iter().any(|f| {
                 if low {
-                    f.0 <= x.hi.next_up() && f.1 > x.hi
+                    f.0 <= x.hi && f.1 > x.hi
                 } else {
-                    f.1 >= x.lo.next_down() && f.0 < x.lo
+                    f.1 >= x.lo && f.0 < x.lo
                 }
             });
             if flat {
