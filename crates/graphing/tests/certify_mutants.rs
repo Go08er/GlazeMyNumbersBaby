@@ -2880,10 +2880,10 @@ const KNOWN: &[Known] = &[
         op: "number moved to the next item's",
         what: r#"[0].y: [9.999999999999998e-8, 1.0000000000000001e-7] to {"hi":1.0000000000000001e-7,"lo":1e-7}"#,
         why: "the limit is 10⁻⁷ exactly, which lies between the double 1e-7 (just below it) and the one above, 1.0000000000000001e-7: the narrowed enclosure holds it" },
-    Known { run: "pool", src: "1/((x-1000)^2+(x-1000)+1) [Radians]", row: "inflections",
-        op: "number moved far",
-        what: "[0].x: [9.99e2, 9.99e2] moved by 1",
-        why: "the list is partial, with inflections at 999 and 1000 and f = 1 at both (f″ ∝ u(u+1), u = x−1000): item 0 moved onto (1000, 1), the other inflection" },
+    // (1/((x−1000)² + (x−1000) + 1)'s inflection at 999 moved onto the one
+    // at 1000, which the partial list then held twice, was tabled here as
+    // true. Two items for one place say there are two inflections: the
+    // replay refuses that now (review 23's claim fuzzer).
 ];
 
 /// Fails on an accepted mutant not in [`KNOWN`] and, in a run unfiltered

@@ -314,10 +314,12 @@ CI also runs checks that need more than `cargo test --workspace`:
   rest of the certificate there, withheld, or with every genuine claim
   given to the row. CI runs a fixed few (3,341 mutants, none accepted).
   The long runs (204 corpus functions, 43,080 mutants; 607 pool functions,
-  156,658) accept 17 and 12: each a true statement the replay proved (a
+  156,658) accept 17 and 11: each a true statement the replay proved (a
   row borrowed from another function that happens to hold, an enclosure
   narrowed onto the number it holds), reviewed by hand in a table with the
-  reason it is true. A long run fails on an accepted mutant not in the
+  reason it is true. (A twelfth, an inflection moved onto the other one
+  and listed twice, is refused since this round: two items for one place
+  say there are two.) A long run fails on an accepted mutant not in the
   table and on a table entry it did not accept, so the table can't rot;
   an end of a Points-only partial monotone piece moved strictly inward is
   content-preserving by construction (a sub-piece of a monotone piece) and
