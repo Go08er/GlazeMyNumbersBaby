@@ -2386,7 +2386,7 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
         // the window [1, 1.44] meeting its domain at 1 alone (the claim
         // fuzzer, `tests/replay_fuzz.rs`).
         if let (Bound::At { x: lo, .. }, Bound::At { x: hi, .. }) = (p.lo, p.hi)
-            && !(lo.lo < hi.hi)
+            && lo.lo.partial_cmp(&hi.hi) != Some(std::cmp::Ordering::Less)
         {
             out.problems.push(format!(
                 "a monotone piece from [{:e}, {:e}] to [{:e}, {:e}] has no length",

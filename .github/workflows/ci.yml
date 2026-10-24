@@ -121,10 +121,14 @@ jobs:
           # binades (powers of bases a hair from 1, e^c, counts, and chains
           # of them) against MPFR: a far value's sign, side and exponent
           # bound (wide.rs, `Wide::far`), and every other value it decides.
+          # replay_fuzz makes up true claim sets about polynomials whose
+          # features are known exactly (zeros at doubles, adjacent doubles,
+          # points between) and rows true and false, and fails if the replay
+          # accepts a row the exact truth refuses (a short fixed run).
           nix develop -c cargo test --locked -p graphing --features mpfr-oracle \
             --test certify_replay --test interval_oracle --test simplify_rules \
             --test crossfuzz --test crossfuzz_found --test certify_mutants \
-            --test far_invariant
+            --test far_invariant --test replay_fuzz
       - name: Clippy (all targets, warnings are errors)
         run: |
           nix develop -c cargo clippy --workspace --all-targets --locked -- -D warnings

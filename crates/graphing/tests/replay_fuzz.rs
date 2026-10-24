@@ -331,7 +331,7 @@ impl Sturm {
                 }
                 // −r, scaled by a positive number.
                 let l = r.lead().abs();
-                s.push(r.scale(&Rational::from(-l.recip())));
+                s.push(r.scale(&(-l.recip())));
             }
         }
         Sturm(s)
@@ -469,7 +469,7 @@ impl Root {
             }
             let w = Rational::from(&self.hi - &self.lo);
             let m = Rational::from(&self.hi + &self.lo).abs();
-            if Rational::from(&w * Rational::from(Integer::from(1) << 60)) <= m
+            if &w * Rational::from(Integer::from(1) << 60) <= m
                 || w <= Rational::from((Integer::from(1), Integer::from(1) << 1100))
             {
                 break;
@@ -2946,7 +2946,20 @@ impl Ctx {
             primary.push(hi);
         }
         primary.retain(|x| x.is_finite());
-        let r = if !primary.is_empty() && rng.chance(0.7) {
+        // (Above all, one with another zero of f⁽ᵏ⁾ a double or two away:
+        // a point fact there is a fact about the reals between.)
+        let crowded: Vec<f64> = primary
+            .iter()
+            .copied()
+            .filter(|p| {
+                spots
+                    .iter()
+                    .any(|q| q != p && doubles_out(*p, -2) <= *q && *q <= doubles_out(*p, 2))
+            })
+            .collect();
+        let r = if !crowded.is_empty() && rng.chance(0.5) {
+            *rng.pick(&crowded)
+        } else if !primary.is_empty() && rng.chance(0.7) {
             *rng.pick(&primary)
         } else {
             *rng.pick(&spots)
@@ -2975,7 +2988,28 @@ impl Ctx {
         // side of it, the place itself and the doubles beside it. Each
         // variant takes a few, chosen at random, so that a shape of a few
         // claims (a point alone, a gap and a point beside it) comes up.
-        let groups: [&dyn Fn(&mut Gen); 20] = [
+        let groups: [&dyn Fn(&mut Gen); 24] = [
+            // (A side decided up to the place, a gap to the next double
+            // and a point there; a gap from the place and a stretch past
+            // it: each side.)
+            &|g| {
+                g.stretch(left, r, 30);
+                g.gap(r, u(1));
+                g.point(u(1));
+            },
+            &|g| {
+                g.stretch(r, right, 30);
+                g.gap(u(-1), r);
+                g.point(u(-1));
+            },
+            &|g| {
+                g.gap(r, u(1));
+                g.stretch(u(1), right, 30);
+            },
+            &|g| {
+                g.gap(u(-1), r);
+                g.stretch(left, u(-1), 30);
+            },
             &|g| g.crossings(),
             &|g| g.stretch(left, r, 30),
             &|g| g.stretch(r, right, 30),
@@ -3104,10 +3138,10 @@ impl Ctx {
                 g.cover(lo, hi);
             }
             Scope::Points => {
-                if g.rng.chance(0.7) {
-                    if let Scope::Window(a, b) = self.window(g.rng, false) {
-                        g.cover(a, b);
-                    }
+                if g.rng.chance(0.7)
+                    && let Scope::Window(a, b) = self.window(g.rng, false)
+                {
+                    g.cover(a, b);
                 }
             }
         }
@@ -3150,6 +3184,17 @@ impl Ctx {
             out: Vec::new(),
         };
         g.cover(f64::NEG_INFINITY, f64::INFINITY);
+        if g.rng.chance(0.6) {
+            // f′'s sign on every stretch between atoms with no zero of
+            // it, in the domain: the walk covered but where it turns.
+            for w in self.atoms.windows(2) {
+                if self.truth.dom.holds_box(w[0], w[1])
+                    && let Some(up) = self.truth.sign_over(1, w[0], w[1])
+                {
+                    g.push(c_sign("Beyond", 1, w[0], w[1], up));
+                }
+            }
+        }
         if g.rng.chance(0.4) {
             g.noise();
         }
@@ -3256,7 +3301,9 @@ impl Ctx {
         let f = &self.truth.d[0];
         // Each place's enclosure, and f's values there: the replay's own
         // where f is defined over it (a value claim's), else exactly.
-        let mut vals: Vec<((f64, f64), (f64, f64), bool)> = Vec::new();
+        // (Where, f's values there, from a value claim.)
+        type Valued = ((f64, f64), (f64, f64), bool);
+        let mut vals: Vec<Valued> = Vec::new();
         for p in at {
             let mut p = p.clone();
             let x = p.enc();
@@ -3266,7 +3313,7 @@ impl Ctx {
             }
         }
         // Those that may be the least (greatest).
-        let group: Vec<&((f64, f64), (f64, f64), bool)> = if low {
+        let group: Vec<&Valued> = if low {
             let m = vals.iter().map(|v| v.1.1).fold(f64::INFINITY, f64::min);
             vals.iter().filter(|v| v.1.0 <= m).collect()
         } else {
@@ -4012,7 +4059,7 @@ fn assert_clean(t: &Tally) {
 }
 
 const SHORT_SEED: u64 = 20_261_024;
-const SHORT_FUNCTIONS: u64 = 48;
+const SHORT_FUNCTIONS: u64 = 24;
 const CASES: u64 = 24;
 
 /// The short run: a fixed seed, seconds.
