@@ -359,8 +359,15 @@ CI also runs checks that need more than `cargo test --workspace`:
   checker before review 22 accepts 74 false rows, `a711963`'s 17 (R23-M-01
   and R23-M-02 among them), this round's proposal 9, and this checker
   none. The rows it found since (two crossing boxes about one zero taken
-  for two, an item listed twice, a cleared gap given the sign of a
-  stretch past a zero, a monotone piece of no length) have regressions.
+  for two, an item listed twice or for a turn of the other kind, a cleared
+  gap given the sign of a stretch past a zero, a monotone piece of no
+  length) have regressions; a long run of 600 functions on a fresh seed
+  (50,090 cases) then found none. Holding the genuine certificates to the
+  truth, it also found the certifier leaving out a turn or inflection at
+  a double beside a hole (`1/6*(x-1/2)^3+2^(-56)*(x-1/2)^2+1/3+0/(x-(1/2))`
+  certified "no extrema", its maximum at the double below 1/2): four such
+  functions in two long runs; the strict replay refuses each (the turn's
+  side across the hole not decided). That is open in the certifier.
 - **Random cross-checking** (`--test crossfuzz`, same feature): the checks
   above take ordinary functions, shifted and scaled. This one generates
   expressions aimed at the families the review rounds kept finding bugs in
