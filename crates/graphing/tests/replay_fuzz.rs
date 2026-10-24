@@ -1836,6 +1836,39 @@ impl Gen<'_> {
         }
     }
 
+    /// Two crossing boxes about one change of f⁽ᵏ⁾'s sign, overlapping,
+    /// neither holding the other: f⁽ᵏ⁾ strictly monotone on both is so on
+    /// their union, so they hold one zero.
+    fn crossings(&mut self) {
+        let k = self.k;
+        let changes: Vec<Root> = self.t.roots[k]
+            .iter()
+            .filter(|r| {
+                let (l, rr) = sides(&self.t.d[k], r);
+                l != rr
+            })
+            .cloned()
+            .collect();
+        if changes.is_empty() {
+            return;
+        }
+        let mut r = self.rng.pick(&changes).clone();
+        let (lo, hi) = r.doubles();
+        let (a1, a2) = if lo == hi {
+            (doubles_out(lo, -2), doubles_out(lo, -1))
+        } else {
+            (doubles_out(lo, -1), lo)
+        };
+        let (b1, b2) = if lo == hi {
+            (doubles_out(hi, 1), doubles_out(hi, 2))
+        } else {
+            (hi, doubles_out(hi, 1))
+        };
+        let wide = if self.rng.chance(0.5) { 3 } else { 0 };
+        self.push(c_cross(k, doubles_out(a1, -wide), b1));
+        self.push(c_cross(k, a2, doubles_out(b2, wide)));
+    }
+
     /// Claims at and about the zeros of f⁽ᵏ⁾: a point, a one-ulp gap and
     /// a point beside it, a sign from a double off it.
     fn noise(&mut self) {
@@ -2050,16 +2083,26 @@ impl Truth {
                 return Verdict::False("an item outside the domain".into());
             }
             return match scope {
-                Scope::Window(a, b) if a == b => {
-                    if !self.dom.holds_q(&qd(*a))
-                        || items.iter().any(|i| i.x.0 <= *a && *a <= i.x.1)
-                    {
+                Scope::Points => Verdict::True,
+                // (No point of the domain in the window: no zero.)
+                Scope::Window(a, b) if self.dom.misses_box(*a, *b) => Verdict::True,
+                Scope::Window(a, b)
+                    if a == b
+                        || matches!(&self.dom, Dom::From(c) if qd(*b) == *c)
+                        || matches!(&self.dom, Dom::Upto(c) if qd(*a) == *c) =>
+                {
+                    // One point of the domain in the window: its zero.
+                    let p = if matches!(&self.dom, Dom::From(_)) {
+                        *b
+                    } else {
+                        *a
+                    };
+                    if !self.dom.holds_q(&qd(p)) || items.iter().any(|i| i.x.0 <= p && p <= i.x.1) {
                         Verdict::True
                     } else {
-                        Verdict::False(format!("f ≡ 0, and its zero at {a:e} is not listed"))
+                        Verdict::False(format!("f ≡ 0, and its zero at {p:e} is not listed"))
                     }
                 }
-                Scope::Points => Verdict::True,
                 _ => Verdict::False("f ≡ 0: its zeros are no list".into()),
             };
         }
@@ -2089,6 +2132,20 @@ impl Truth {
                     it.x.0, it.x.1
                 ));
             }
+        }
+        // A list of features names each once: two items for one zero,
+        // turn or inflection say there are two.
+        let mut held: Vec<Vec<usize>> = vec![Vec::new(); items.len()];
+        for (i, o) in options.iter().enumerate() {
+            for j in o {
+                held[*j].push(i);
+            }
+        }
+        if let Some(j) = matched(&held) {
+            return Verdict::False(format!(
+                "the item at [{:e}, {:e}] holds no {row} feature of its own",
+                items[j].x.0, items[j].x.1
+            ));
         }
         if !scope.complete() {
             return Verdict::True;
@@ -2310,6 +2367,15 @@ impl Truth {
     /// a zero of f′ in the domain, the domain's end or hole, an edge of
     /// the window.
     fn anchors_in(&self, x: (f64, f64), scope: &Scope) -> Vec<Place> {
+        // (f constant: f′ is 0 everywhere, and a constant piece may be
+        // cut anywhere in the domain.)
+        if self.constant() {
+            return [x.0, x.1]
+                .iter()
+                .filter(|e| e.is_finite() && self.dom.holds_q(&qd(**e)))
+                .map(|e| Place::At(qd(*e)))
+                .collect();
+        }
         let mut out: Vec<Place> = self.roots[1]
             .iter()
             .map(|r| Place::Root(r.clone()))
@@ -2397,9 +2463,186 @@ impl Truth {
     fn judge(&self, row: &str, scope: &Scope, value: &Value) -> Verdict {
         match row {
             "monotonicity" => self.judge_monotone(scope, value),
+            "range" => self.judge_range(value),
             _ => self.judge_list(row, scope, value),
         }
     }
+
+    /// f's range on its domain, as its components in order, each end
+    /// infinite or the least (greatest) of f's values at some places.
+    fn range_parts(&self) -> Vec<(REnd, REnd)> {
+        let f = &self.d[0];
+        let inside_point = || -> Place {
+            Place::At(match &self.dom {
+                Dom::From(c) => Rational::from(c + 1u32),
+                Dom::Upto(c) => Rational::from(c - 1u32),
+                Dom::Hole(c) => Rational::from(c + 1u32),
+                Dom::Line => qi(0),
+            })
+        };
+        if f.degree() == 0 {
+            let v = REnd::Val {
+                at: vec![inside_point()],
+                attained: true,
+            };
+            return vec![(v.clone(), v)];
+        }
+        // Where f may be least or greatest: its critical points inside
+        // the domain, a closed end.
+        let mut cands: Vec<Place> = self.roots[1]
+            .iter()
+            .map(|r| Place::Root(r.clone()))
+            .filter(|p| self.dom.inside(p))
+            .collect();
+        if let Dom::From(c) | Dom::Upto(c) = &self.dom {
+            cands.push(Place::At(c.clone()));
+        }
+        // Which way f goes at each infinite end of its domain.
+        let lead = f.lead().cmp0() == Greater;
+        let odd = f.degree() % 2 == 1;
+        let right = lead;
+        let left = if odd { !lead } else { lead };
+        let (up_unbounded, down_unbounded) = match &self.dom {
+            Dom::From(_) => (right, !right),
+            Dom::Upto(_) => (left, !left),
+            _ => (right || left, !right || !left),
+        };
+        let lower = if down_unbounded {
+            REnd::Inf
+        } else {
+            REnd::Val {
+                at: cands.clone(),
+                attained: true,
+            }
+        };
+        let upper = if up_unbounded {
+            REnd::Inf
+        } else {
+            REnd::Val {
+                at: cands.clone(),
+                attained: true,
+            }
+        };
+        let Dom::Hole(c) = &self.dom else {
+            return vec![(lower, upper)];
+        };
+        // A hole: its value is taken elsewhere, or left out.
+        let v = f.eval(c);
+        let g = f.sub(&Poly::constant(v.clone()));
+        if real_roots(&g).iter().any(|r| r.cmp(c) != Equal) {
+            return vec![(lower, upper)];
+        }
+        let at_c = REnd::Val {
+            at: vec![Place::At(c.clone())],
+            attained: false,
+        };
+        let mut all_cands = cands.clone();
+        all_cands.push(Place::At(c.clone()));
+        // (f's least value on the line is at c just when no other
+        // critical value is below f(c).)
+        let below = cands.iter().any(|p| p.clone().sign_of(&g) == Less);
+        let above = cands.iter().any(|p| p.clone().sign_of(&g) == Greater);
+        let lower = match lower {
+            REnd::Inf => REnd::Inf,
+            _ => REnd::Val {
+                at: all_cands.clone(),
+                attained: true,
+            },
+        };
+        let upper = match upper {
+            REnd::Inf => REnd::Inf,
+            _ => REnd::Val {
+                at: all_cands,
+                attained: true,
+            },
+        };
+        if !matches!(lower, REnd::Inf) && !below {
+            // f(c) the least value, taken only at c.
+            return vec![(at_c, upper)];
+        }
+        if !matches!(upper, REnd::Inf) && !above {
+            return vec![(lower, at_c)];
+        }
+        vec![(lower, at_c.clone()), (at_c, upper)]
+    }
+
+    /// An end of the range, against a listed bound: the same infinity, or
+    /// the value in the listed enclosure and closed just when taken.
+    fn end_holds(&self, e: &REnd, b: &End, low: bool) -> Result<(), String> {
+        match (e, b) {
+            (REnd::Inf, None) => Ok(()),
+            (REnd::Inf, Some(_)) => Err("a finite end where f is unbounded".into()),
+            (REnd::Val { .. }, None) => Err("an infinite end where f is bounded".into()),
+            (REnd::Val { at, attained }, Some((x, closed))) => {
+                if closed != attained {
+                    return Err(format!(
+                        "an end listed {} where f {} it",
+                        if *closed { "closed" } else { "open" },
+                        if *attained { "takes" } else { "only tends to" }
+                    ));
+                }
+                // The least (greatest) of f at `at` is in [x.0, x.1]: none
+                // beyond it on the far side, one within reach.
+                let f = &self.d[0];
+                let lo = f.sub(&Poly::constant(qd(x.0)));
+                let hi = f.sub(&Poly::constant(qd(x.1)));
+                let ok = if low {
+                    at.iter().all(|p| p.clone().sign_of(&lo) != Less)
+                        && at.iter().any(|p| p.clone().sign_of(&hi) != Greater)
+                } else {
+                    at.iter().all(|p| p.clone().sign_of(&hi) != Greater)
+                        && at.iter().any(|p| p.clone().sign_of(&lo) != Less)
+                };
+                if ok {
+                    Ok(())
+                } else {
+                    Err(format!("the end [{:e}, {:e}] doesn't hold f's", x.0, x.1))
+                }
+            }
+        }
+    }
+
+    fn judge_range(&self, value: &Value) -> Verdict {
+        let Some(list) = value.as_array() else {
+            return Verdict::False("unreadable".into());
+        };
+        let mut pieces: Vec<(End, End)> = Vec::new();
+        for p in list {
+            let (Some(lo), Some(hi)) = (end_of(&p["lo"]), end_of(&p["hi"])) else {
+                return Verdict::False("unreadable".into());
+            };
+            pieces.push((lo, hi));
+        }
+        pieces.sort_by(|a, b| {
+            let k = |e: &End| e.map_or(f64::NEG_INFINITY, |(x, _)| x.0);
+            k(&a.0).total_cmp(&k(&b.0))
+        });
+        let parts = self.range_parts();
+        if parts.len() != pieces.len() {
+            return Verdict::False(format!(
+                "{} pieces listed, f's range has {}",
+                pieces.len(),
+                parts.len()
+            ));
+        }
+        for ((lo, hi), (pl, ph)) in parts.iter().zip(&pieces) {
+            if let Err(why) = self.end_holds(lo, pl, true) {
+                return Verdict::False(format!("low end: {why}"));
+            }
+            if let Err(why) = self.end_holds(hi, ph, false) {
+                return Verdict::False(format!("high end: {why}"));
+            }
+        }
+        Verdict::True
+    }
+}
+
+/// An end of f's range: infinite, or the least (greatest) of f's values at
+/// the places `at`, taken there or only a limit.
+#[derive(Clone, Debug)]
+enum REnd {
+    Inf,
+    Val { at: Vec<Place>, attained: bool },
 }
 
 // ------------------------------------------------------------ one function
@@ -2567,6 +2810,8 @@ struct Case {
     scope: Scope,
     value: Value,
     claims: Vec<Value>,
+    /// The range's `range_ends` (where each end comes from).
+    ends: Value,
 }
 
 impl Case {
@@ -2574,7 +2819,55 @@ impl Case {
         let mut v = base.clone();
         v[self.row] = json!({self.scope.status(): {"value": self.value.clone(),
             "cert": {"covers": self.scope.covers(), "claims": self.claims.clone()}}});
+        if self.row == "range" {
+            v["range_ends"] = self.ends.clone();
+        }
         v
+    }
+}
+
+/// p's values over [lo, hi] (rationals), by Horner's rule on intervals: an
+/// enclosure.
+fn poly_range(p: &Poly, lo: &Rational, hi: &Rational) -> (Rational, Rational) {
+    let mut acc = (Rational::new(), Rational::new());
+    for c in p.0.iter().rev() {
+        let prods = [
+            Rational::from(&acc.0 * lo),
+            Rational::from(&acc.0 * hi),
+            Rational::from(&acc.1 * lo),
+            Rational::from(&acc.1 * hi),
+        ];
+        let mn = prods.iter().min().expect("four").clone();
+        let mx = prods.iter().max().expect("four").clone();
+        acc = (mn + c, mx + c);
+    }
+    acc
+}
+
+/// f's value at the place, enclosed in doubles.
+fn value_enc(f: &Poly, p: &Place) -> (f64, f64) {
+    match p {
+        Place::At(x) => {
+            let v = f.eval(x);
+            (floor_double(&v), ceil_double(&v))
+        }
+        Place::Root(r) => {
+            let mut r = r.clone();
+            for _ in 0..400 {
+                if r.exact().is_some()
+                    || Rational::from(&r.hi - &r.lo) < Rational::from((1, Integer::from(1) << 300))
+                {
+                    break;
+                }
+                r.bisect();
+            }
+            if let Some(x) = r.exact() {
+                let v = f.eval(x);
+                return (floor_double(&v), ceil_double(&v));
+            }
+            let (lo, hi) = poly_range(f, &r.lo, &r.hi);
+            (floor_double(&lo), ceil_double(&hi))
+        }
     }
 }
 
@@ -2682,7 +2975,8 @@ impl Ctx {
         // side of it, the place itself and the doubles beside it. Each
         // variant takes a few, chosen at random, so that a shape of a few
         // claims (a point alone, a gap and a point beside it) comes up.
-        let groups: [&dyn Fn(&mut Gen); 19] = [
+        let groups: [&dyn Fn(&mut Gen); 20] = [
+            &|g| g.crossings(),
             &|g| g.stretch(left, r, 30),
             &|g| g.stretch(r, right, 30),
             &|g| g.stretch(left, u(-1), 30),
@@ -2770,6 +3064,7 @@ impl Ctx {
                 scope,
                 value,
                 claims,
+                ends: Value::Null,
             });
         }
         out
@@ -2819,6 +3114,9 @@ impl Ctx {
         if g.rng.chance(0.6) {
             g.noise();
         }
+        if g.rng.chance(0.15) {
+            g.crossings();
+        }
         let mut claims = std::mem::take(&mut g.out);
         let drop = *rng.pick(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.02, 0.05]);
         claims.retain(|_| !rng.chance(drop));
@@ -2834,18 +3132,208 @@ impl Ctx {
             scope,
             value,
             claims,
+            ends: Value::Null,
         }
+    }
+
+    /// A range row over the line: f′'s walk, the limits at the domain's
+    /// infinite ends, and each finite end from the places f may be least
+    /// or greatest at (a value claim there, or the hole's limit); then
+    /// changed: an end moved a double, closed or opened, two pieces
+    /// joined, one dropped.
+    fn make_range_case(&self, rng: &mut Rng) -> Case {
+        let mut g = Gen {
+            t: &self.truth,
+            k: 1,
+            rng,
+            atoms: &self.atoms,
+            out: Vec::new(),
+        };
+        g.cover(f64::NEG_INFINITY, f64::INFINITY);
+        if g.rng.chance(0.4) {
+            g.noise();
+        }
+        let mut claims = std::mem::take(&mut g.out);
+        // f's limits at the domain's infinite ends (by the tree's
+        // structure).
+        let f = &self.truth.d[0];
+        if f.degree() >= 1 {
+            let lead = f.lead().cmp0() == Greater;
+            let odd = f.degree() % 2 == 1;
+            for (right, up) in [(true, lead), (false, lead != odd)] {
+                let reaches = match &self.truth.dom {
+                    Dom::From(_) => right,
+                    Dom::Upto(_) => !right,
+                    _ => true,
+                };
+                if reaches {
+                    claims.push(
+                        json!({"Limit": {"at": if right { "PosInf" } else { "NegInf" },
+                        "over_x": false, "to": if up { "PosInf" } else { "NegInf" }}}),
+                    );
+                }
+            }
+        }
+        let mut pieces: Vec<[Value; 2]> = Vec::new();
+        let mut sources: Vec<[Value; 2]> = Vec::new();
+        for (lo, hi) in self.truth.range_parts() {
+            let (bl, sl) = self.range_bound(&lo, true, &mut claims);
+            let (bh, sh) = self.range_bound(&hi, false, &mut claims);
+            pieces.push([bl, bh]);
+            sources.push([sl, sh]);
+        }
+        let n = pieces.len();
+        let finite: Vec<(usize, usize)> = (0..n)
+            .flat_map(|i| [(i, 0), (i, 1)])
+            .filter(|(i, j)| pieces[*i][*j].get("At").is_some())
+            .collect();
+        match rng.below(10) {
+            4 if !finite.is_empty() => {
+                // An end moved a double.
+                let (i, j) = *rng.pick(&finite);
+                let s = if rng.chance(0.5) { 1 } else { -1 };
+                let x = &mut pieces[i][j]["At"]["x"];
+                if let Some((lo, hi)) = enc_of(x) {
+                    *x = enc(doubles_out(lo, s), doubles_out(hi, s));
+                }
+            }
+            5 if !finite.is_empty() => {
+                let (i, j) = *rng.pick(&finite);
+                let c = pieces[i][j]["At"]["closed"].as_bool().unwrap_or(true);
+                pieces[i][j]["At"]["closed"] = json!(!c);
+            }
+            6 if n >= 2 => {
+                let i = rng.below(n - 1);
+                let hi = pieces[i + 1][1].clone();
+                let sh = sources[i + 1][1].clone();
+                pieces[i][1] = hi;
+                sources[i][1] = sh;
+                pieces.remove(i + 1);
+                sources.remove(i + 1);
+            }
+            7 if n >= 2 => {
+                let i = rng.below(n);
+                pieces.remove(i);
+                sources.remove(i);
+            }
+            8 if !finite.is_empty() => {
+                // An end narrowed to one of its doubles.
+                let (i, j) = *rng.pick(&finite);
+                let x = &mut pieces[i][j]["At"]["x"];
+                if let Some((lo, hi)) = enc_of(x) {
+                    let p = if rng.chance(0.5) { lo } else { hi };
+                    *x = enc(p, p);
+                }
+            }
+            _ => {}
+        }
+        let value = Value::Array(
+            pieces
+                .iter()
+                .map(|[lo, hi]| json!({"lo": lo, "hi": hi}))
+                .collect(),
+        );
+        let ends = Value::Array(sources.iter().map(|[a, b]| json!([a, b])).collect());
+        let mut seen = std::collections::HashSet::new();
+        claims.retain(|c| seen.insert(c.to_string()));
+        Case {
+            row: "range",
+            scope: Scope::Line,
+            value,
+            claims,
+            ends,
+        }
+    }
+
+    /// A range end as listed, with its sources (and their claims).
+    fn range_bound(&self, e: &REnd, low: bool, claims: &mut Vec<Value>) -> (Value, Value) {
+        let REnd::Val { at, attained } = e else {
+            return (
+                json!(if low { "NegInf" } else { "PosInf" }),
+                json!(["Other"]),
+            );
+        };
+        let f = &self.truth.d[0];
+        // Each place's enclosure, and f's values there: the replay's own
+        // where f is defined over it (a value claim's), else exactly.
+        let mut vals: Vec<((f64, f64), (f64, f64), bool)> = Vec::new();
+        for p in at {
+            let mut p = p.clone();
+            let x = p.enc();
+            match self.y_of(x.0, x.1).filter(|_| *attained) {
+                Some(y) => vals.push((x, y, true)),
+                None => vals.push((x, value_enc(f, &p), false)),
+            }
+        }
+        // Those that may be the least (greatest).
+        let group: Vec<&((f64, f64), (f64, f64), bool)> = if low {
+            let m = vals.iter().map(|v| v.1.1).fold(f64::INFINITY, f64::min);
+            vals.iter().filter(|v| v.1.0 <= m).collect()
+        } else {
+            let m = vals.iter().map(|v| v.1.0).fold(f64::NEG_INFINITY, f64::max);
+            vals.iter().filter(|v| v.1.1 >= m).collect()
+        };
+        let lo = group.iter().map(|v| v.1.0).fold(f64::INFINITY, f64::min);
+        let hi = group
+            .iter()
+            .map(|v| v.1.1)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let mut srcs = Vec::new();
+        for (x, y, valued) in group {
+            if *attained && *valued {
+                claims.push(c_value(0, x.0, x.1, y.0, y.1));
+                srcs.push(json!({"At": enc(x.0, x.1)}));
+            } else if !*attained {
+                let w = 1e-6 * x.0.abs().max(1.0);
+                claims.push(json!({"Removable": {"near": bx(x.0 - w, x.1 + w),
+                    "at": bx(x.0, x.1), "lo": num(y.0), "hi": num(y.1)}}));
+                srcs.push(json!({"Hole": enc(x.0, x.1)}));
+            } else {
+                srcs.push(json!("Other"));
+            }
+        }
+        (
+            json!({"At": {"x": enc(lo, hi), "closed": attained}}),
+            Value::Array(srcs),
+        )
     }
 
     fn list_row(&self, rng: &mut Rng, row: &str, scope: &Scope, claims: &mut Vec<Value>) -> Value {
         let mut feats = self.truth.features(row);
         let mut chosen: Vec<((f64, f64), Option<bool>)> = Vec::new();
+        // The boxes the claims place zeros in (each item may be listed as
+        // one of those holding its feature, or as two).
+        let zero_boxes: Vec<(f64, f64)> = claims
+            .iter()
+            .filter_map(|c| {
+                let (kind, b) = c.as_object()?.iter().next()?;
+                if !["OneCross", "ExactAt", "Touch", "KinkSides", "Gap"].contains(&kind.as_str()) {
+                    return None;
+                }
+                let x = b.get("x")?;
+                Some((replay::r(x.get("a")?).ok()?, replay::r(x.get("b")?).ok()?))
+            })
+            .collect();
+        let as_boxes = rng.chance(0.3);
         for f in &mut feats {
             let take = match scope {
                 Scope::Points => rng.chance(0.6),
                 _ => scope.holds(&f.at) || rng.chance(0.15),
             };
-            if take {
+            if !take {
+                continue;
+            }
+            let holding: Vec<(f64, f64)> = zero_boxes
+                .iter()
+                .copied()
+                .filter(|b| b.0.is_finite() && b.1.is_finite() && f.at.within(b.0, b.1))
+                .collect();
+            if as_boxes && !holding.is_empty() {
+                chosen.push((*rng.pick(&holding), f.max));
+                if holding.len() > 1 && rng.chance(0.5) {
+                    chosen.push((*rng.pick(&holding), f.max));
+                }
+            } else {
                 chosen.push((f.at.enc(), f.max));
             }
         }
@@ -3127,7 +3615,7 @@ impl Ctx {
 
     fn show(&self, case: &Case, why: &str) -> String {
         format!(
-            "y={}{}\n  {} {} over {}: {}\n  value: {}\n  claims:\n    {}\n  truth: {why}",
+            "y={}{}\n  {} {} over {}: {}\n  value: {}{}\n  claims:\n    {}\n  truth: {why}",
             self.fun.text,
             if self.fun.evaluated.is_empty() {
                 String::new()
@@ -3143,6 +3631,11 @@ impl Ctx {
                 "points"
             },
             case.value,
+            if case.row == "range" {
+                format!("\n  range_ends: {}", case.ends)
+            } else {
+                String::new()
+            },
             case.claims
                 .iter()
                 .map(Value::to_string)
@@ -3276,7 +3769,13 @@ impl Tally {
 
 /// The genuine certificate's rows, held to the truth and replayed.
 fn genuine(ctx: &mut Ctx, t: &mut Tally) {
-    for (row, _) in ROWS {
+    for row in [
+        "x_intercepts",
+        "extrema",
+        "inflections",
+        "monotonicity",
+        "range",
+    ] {
         let Some((status, body)) = ctx.genuine[row]
             .as_object()
             .and_then(|o| o.iter().next())
@@ -3356,10 +3855,10 @@ fn run_function(seed: u64, i: u64, cases: u64) -> Tally {
             continue;
         }
         let mut rng = Rng::new(seed, i, j + 1);
-        let made = if rng.chance(0.5) {
-            ctx.make_local_cases(&mut rng, 6)
-        } else {
-            vec![ctx.make_case(&mut rng)]
+        let made = match rng.below(100) {
+            0..=49 => ctx.make_local_cases(&mut rng, 6),
+            50..=61 => vec![ctx.make_range_case(&mut rng)],
+            _ => vec![ctx.make_case(&mut rng)],
         };
         for (v, mut case) in made.into_iter().enumerate() {
             let j = format!("{j}.{v}");
@@ -3698,6 +4197,7 @@ fn the_reviewers_rows_are_false_and_refused() {
             scope,
             value: json!([]),
             claims,
+            ends: Value::Null,
         };
         assert!(
             matches!(
