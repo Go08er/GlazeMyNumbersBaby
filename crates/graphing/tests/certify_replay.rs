@@ -4894,6 +4894,58 @@ fn a_flat_point_beside_a_zero_does_not_decide_its_side() {
     }
 }
 
+/// Continuity at one point, with f′ or f″ exactly zero there, records a
+/// zero whose sides must be decided. It is not a flat neighbourhood that
+/// lets a complete window omit the minimum of (x−1)² or the inflection of
+/// (x−1)³. The sole premise is Strong in each case.
+#[test]
+fn a_continuity_point_at_a_derivative_zero_keeps_its_sides_asked() {
+    use serde_json::json;
+    for (src, row, of) in [
+        ("(x-1)^2", "extrema", "F1"),
+        ("(x-1)^3", "inflections", "F2"),
+    ] {
+        let mut v = certificate(src);
+        let domain = v["domain"].clone();
+        withhold_all_but(&mut v, row);
+        v["domain"] = domain;
+        v[row] = json!({"Partial": {"value": [], "cert": {
+            "covers": {"Window": {"a": 1.0, "b": 1.0}},
+            "claims": [{"Kink": {"x": {"a": 1.0, "b": 1.0}}}]
+        }}});
+        // Both ways of establishing the same point zero leave the same
+        // completeness obligation. Neither may omit the feature at 1.
+        for claim in [
+            json!({"Kink": {"x": {"a": 1.0, "b": 1.0}}}),
+            json!({"Value": {"x": {"a": 1.0, "b": 1.0}, "of": {"F": of},
+                "lo": 0.0, "hi": 0.0}}),
+        ] {
+            body_of(&mut v, row)["cert"]["covers"] = json!({"Window": {"a": 1.0, "b": 1.0}});
+            body_of(&mut v, row)["cert"]["claims"] = json!([claim]);
+            let r = replay::replay(&v).expect("replayed");
+            assert_eq!(r.claims.len(), 1, "{src}: {:?}", r.claims);
+            assert!(
+                r.claims.iter().all(|c| c.outcome.class == Class::Strong),
+                "{src}: {:?}",
+                r.claims
+            );
+            let why = rejected(&v)
+                .unwrap_or_else(|| panic!("{src}: a false complete empty {row} row passed"));
+            assert!(
+                why.contains("sign before its zero at 1e0 is not decided"),
+                "{src}: {why}"
+            );
+            // A Points list promises no completeness and may omit 1.
+            body_of(&mut v, row)["cert"]["covers"] = json!("Points");
+            assert_eq!(rejected(&v), None, "{src}: an empty Points row");
+        }
+    }
+    // Real flat stretches and the genuine feature lists stay accepted.
+    for src in ["max(x,0)^3", "min(x,0)^3", "(x-1)^2", "(x-1)^3", "0", "2"] {
+        assert_eq!(rejected(&certificate(src)), None, "{src}");
+    }
+}
+
 /// A point with f′ = 0 one double inward from a closed domain end does
 /// not make f constant from that end. The minimum at 1 must remain an
 /// obligation, even when the only window being certified is [1, 1].
@@ -4938,9 +4990,13 @@ fn a_flat_point_beside_a_domain_end_does_not_hide_its_minimum() {
             "{src}: {:?}",
             r.claims
         );
-        let why =
-            rejected(&v).unwrap_or_else(|| panic!("{src}: the omitted domain-end minimum passed"));
-        assert!(why.contains("end"), "{src}: {why}");
+        // A point zero outside the window can now report an undecided
+        // side first. Still require the domain end's own obligation.
+        let problems = r.row_problems();
+        assert!(
+            problems.iter().any(|p| p.contains("at the closed end")),
+            "{src}: {problems:?}"
+        );
         body_of(&mut v, "extrema")["cert"]["covers"] = json!("Points");
         assert_eq!(rejected(&v), None, "{src}: an empty Points row");
     }

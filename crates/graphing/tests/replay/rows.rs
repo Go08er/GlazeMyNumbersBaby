@@ -470,7 +470,19 @@ fn walk(fx: &Fx, claims: &[Claim], k: usize) -> Walk {
                     w.signs.push((x.0, x.1, v[0].gt(0.0)));
                     w.boxes.push(*x);
                 } else if valid && v[0].is_exactly(0.0) {
-                    w.flat.push(*x);
+                    // At one point this is a derivative zero, just as
+                    // for a Value claim: its sides remain obligations.
+                    // Only a nondegenerate box proves a flat stretch.
+                    if x.0 == x.1 {
+                        w.zeros.push(Zero {
+                            at: Enc { lo: x.0, hi: x.1 },
+                            left: None,
+                            right: None,
+                            kink: false,
+                        });
+                    } else {
+                        w.flat.push(*x);
+                    }
                     w.boxes.push(*x);
                 }
             }
