@@ -5189,6 +5189,49 @@ fn a_gap_takes_no_sign_across_a_zero() {
     }
 }
 
+/// An item stands for a turn of its own kind: x³ − 3x's maximum at −1
+/// listed alone and again as "a maximum in [−1, 1]", an enclosure that
+/// holds it and the minimum at 1, passed as two maxima (a partial row, its
+/// premises strong): the second item was matched to the minimum. Found by
+/// the claim fuzzer's long run (`tests/replay_fuzz.rs`).
+#[test]
+fn an_item_stands_for_a_turn_of_its_kind() {
+    use serde_json::json;
+    let mut v = certificate("x^3-3*x");
+    let domain = v["domain"].clone();
+    withhold_all_but(&mut v, "extrema");
+    v["domain"] = domain;
+    let bx = |a: f64, b: f64| json!({"a": a, "b": b});
+    let claims = json!([
+        {"ExactAt": {"x": bx(-1.5, -0.5), "of": {"F": "F1"}, "c": 0.0, "at": -1.0}},
+        {"ExactAt": {"x": bx(0.5, 1.5), "of": {"F": "F1"}, "c": 0.0, "at": 1.0}},
+        {"Value": {"x": bx(-1.0, -1.0), "of": {"F": "F0"}, "lo": 2.0, "hi": 2.0}},
+        {"Value": {"x": bx(-1.0, 1.0), "of": {"F": "F0"}, "lo": -2.0, "hi": 2.0}},
+        {"Value": {"x": bx(1.0, 1.0), "of": {"F": "F0"}, "lo": -2.0, "hi": -2.0}}
+    ]);
+    let item = |a: f64, b: f64, y: (f64, f64), kind: &str| {
+        json!({"x": {"lo": a, "hi": b}, "y": {"lo": y.0, "hi": y.1}, "kind": kind,
+            "every": null})
+    };
+    v["extrema"] = json!({"Partial": {"value": [item(-1.0, -1.0, (2.0, 2.0), "Max"),
+        item(-1.0, 1.0, (-2.0, 2.0), "Max")],
+        "cert": {"covers": "Points", "claims": claims}}});
+    let r = replay::replay(&v).expect("replayed");
+    assert!(
+        r.claims.iter().all(|c| c.outcome.class == Class::Strong),
+        "{:?}",
+        r.claims
+    );
+    let why = rejected(&v).unwrap_or_else(|| panic!("one maximum listed as two passed"));
+    assert!(why.contains("no proven place of its own"), "{why}");
+    // The maximum and, in the wide item, the minimum: true.
+    body_of(&mut v, "extrema")["value"] = json!([
+        item(-1.0, -1.0, (2.0, 2.0), "Max"),
+        item(-1.0, 1.0, (-2.0, 2.0), "Min")
+    ]);
+    assert_eq!(rejected(&v), None);
+}
+
 /// A monotone piece is a stretch of the line. One whose ends leave no
 /// reals between them had its direction read off f′ at a single point:
 /// −x³/3 + 1 + 0·√(1 − x) "decreasing on (1, 1]" (and on [1, 1]) over a

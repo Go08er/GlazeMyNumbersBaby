@@ -1144,8 +1144,13 @@ fn one_each(found: &[Enc], listed: &[(Enc, Option<Enc>)]) -> Option<(Enc, Enc)> 
 /// A listed item (not a family) that no proven place can be given to on
 /// its own: each item is matched to a derived enclosure it holds, no two
 /// to one (augmenting paths). Enclosures one inside another are one place,
-/// as in [`one_each`].
-fn shared_item(found: &[Enc], listed: &[(Enc, Option<Enc>)]) -> Option<Enc> {
+/// as in [`one_each`]. `fits(j, i)`: listed item j may stand for found
+/// place i (an extremum of its kind).
+fn shared_item(
+    found: &[Enc],
+    listed: &[(Enc, Option<Enc>)],
+    fits: &dyn Fn(usize, usize) -> bool,
+) -> Option<Enc> {
     let mut places: Vec<Enc> = Vec::new();
     let mut sorted = found.to_vec();
     sorted.sort_by(|a, b| (b.hi - b.lo).total_cmp(&(a.hi - a.lo)));
@@ -1154,19 +1159,23 @@ fn shared_item(found: &[Enc], listed: &[(Enc, Option<Enc>)]) -> Option<Enc> {
             places.push(e);
         }
     }
-    // An item may stand for a place it holds, or one inside such a place.
-    let items: Vec<Enc> = listed
+    // An item may stand for a place holding a proven enclosure it holds,
+    // one that fits it.
+    let items: Vec<(usize, Enc)> = listed
         .iter()
-        .filter(|(_, p)| p.is_none())
-        .map(|(x, _)| *x)
+        .enumerate()
+        .filter(|(_, (_, p))| p.is_none())
+        .map(|(j, (x, _))| (j, *x))
         .collect();
     let options: Vec<Vec<usize>> = items
         .iter()
-        .map(|x| {
+        .map(|(j, x)| {
             (0..places.len())
                 .filter(|&i| {
-                    x.contains(&places[i])
-                        || found.iter().any(|d| x.contains(d) && places[i].contains(d))
+                    found
+                        .iter()
+                        .enumerate()
+                        .any(|(di, d)| x.contains(d) && places[i].contains(d) && fits(*j, di))
                 })
                 .collect()
         })
@@ -1200,7 +1209,7 @@ fn shared_item(found: &[Enc], listed: &[(Enc, Option<Enc>)]) -> Option<Enc> {
         }
         let mut used = std::collections::HashSet::new();
         if !assign(p, &options, &mut owner, &mut used) {
-            return Some(items[p]);
+            return Some(items[p].1);
         }
     }
     None
@@ -1237,6 +1246,7 @@ fn match_items(
     derived: &[Enc],
     listed: &[(Enc, Option<Enc>)],
     complete: bool,
+    fits: &dyn Fn(usize, usize) -> bool,
     out: &mut RowResult,
 ) {
     for (x, _) in listed {
@@ -1249,9 +1259,11 @@ fn match_items(
     }
     // Each item listed (but a family) is a place of its own: two items
     // holding one proven zero or turn say there are two. (Two crossing
-    // boxes about one turn of (x − 1)², each listed, passed as two minima:
-    // the claim fuzzer, `tests/replay_fuzz.rs`.)
-    if let Some(x) = shared_item(derived, listed) {
+    // boxes about one turn of (x − 1)², each listed, passed as two minima;
+    // a maximum listed alone and again in an item that held it and the
+    // next turn, a minimum, as two maxima: the claim fuzzer,
+    // `tests/replay_fuzz.rs`.)
+    if let Some(x) = shared_item(derived, listed, fits) {
         out.problems.push(format!(
             "{what} at [{:e}, {:e}] is listed with no proven place of its own",
             x.lo, x.hi
@@ -1642,7 +1654,14 @@ fn zeros_row(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Res
         .map(spot)
         .collect::<Result<_, _>>()?;
     let derived: Vec<Enc> = w.zeros.iter().map(|z| z.at).collect();
-    match_items("an x-intercept", &derived, &listed, complete(rc), out);
+    match_items(
+        "an x-intercept",
+        &derived,
+        &listed,
+        complete(rc),
+        &|_, _| true,
+        out,
+    );
     let periods: Vec<Enc> = listed.iter().filter_map(|(_, p)| *p).collect();
     families_follow("an x-intercept", rc, &periods, out);
     repeats_listed("an x-intercept", rc, &listed, out);
@@ -1736,6 +1755,8 @@ fn turns(
         }
     }
     let mut listed = Vec::new();
+    // Each item's kind (a maximum: "from positive"; an inflection: any).
+    let mut kinds: Vec<Option<bool>> = Vec::new();
     for item in list(&rc.value)? {
         let x = enc(item.get("x").ok_or("x")?)?;
         let y = enc(item.get("y").ok_or("y")?)?;
@@ -1744,16 +1765,22 @@ fn turns(
             .filter(|v| !v.is_null())
             .map(enc)
             .transpose()?;
+        kinds.push((k == 1).then(|| item.get("kind").and_then(Value::as_str) == Some("Max")));
         if k == 1 {
             let kind = item.get("kind").and_then(Value::as_str).unwrap_or("");
-            if let Some((_, from_pos)) = ch.iter().find(|(c, _)| x.contains(c)) {
-                let want = if *from_pos { "Max" } else { "Min" };
-                if kind != want {
-                    out.problems.push(format!(
-                        "the extremum at {:e} is a {want}, listed as {kind}",
-                        x.mid()
-                    ));
-                }
+            let name = |max: bool| if max { "Max" } else { "Min" };
+            // (Of a turn it holds of that kind: an item holding a maximum
+            // and a minimum is either.)
+            if let Some((_, from_pos)) = ch.iter().find(|(c, _)| x.contains(c))
+                && !ch
+                    .iter()
+                    .any(|(c, max)| x.contains(c) && kind == name(*max))
+            {
+                let want = name(*from_pos);
+                out.problems.push(format!(
+                    "the extremum at {:e} is a {want}, listed as {kind}",
+                    x.mid()
+                ));
             }
         }
         // f's value there: a claim on the x box within y.
@@ -1775,7 +1802,9 @@ fn turns(
     } else {
         "an inflection"
     };
-    match_items(what, &derived, &listed, complete(rc), out);
+    // (An item stands for a turn of its kind.)
+    let fits = |j: usize, i: usize| kinds[j].is_none_or(|max| ch[i].1 == max);
+    match_items(what, &derived, &listed, complete(rc), &fits, out);
     let periods: Vec<Enc> = listed.iter().filter_map(|(_, p)| *p).collect();
     families_follow(what, rc, &periods, out);
     repeats_listed(what, rc, &listed, out);

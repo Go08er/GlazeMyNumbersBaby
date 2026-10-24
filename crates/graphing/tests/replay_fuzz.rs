@@ -2370,11 +2370,21 @@ impl Truth {
         // (f constant: f′ is 0 everywhere, and a constant piece may be
         // cut anywhere in the domain.)
         if self.constant() {
-            return [x.0, x.1]
+            let mut out: Vec<Place> = [x.0, x.1]
                 .iter()
                 .filter(|e| e.is_finite() && self.dom.holds_q(&qd(**e)))
                 .map(|e| Place::At(qd(*e)))
                 .collect();
+            // (And the domain's end or hole, where a piece ends too.)
+            if let Some(c) = self.dom.point()
+                && x.0.is_finite()
+                && x.1.is_finite()
+                && qd(x.0) <= *c
+                && *c <= qd(x.1)
+            {
+                out.push(Place::At(c.clone()));
+            }
+            return out;
         }
         let mut out: Vec<Place> = self.roots[1]
             .iter()
