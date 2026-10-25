@@ -4369,8 +4369,8 @@ impl Truth {
                 Scope::Window(a, b) if self.dom.misses_box(*a, *b) => Verdict::True,
                 Scope::Window(a, b)
                     if a == b
-                        || matches!(&self.dom, Dom::From(c) if qd(*b) == *c)
-                        || matches!(&self.dom, Dom::Upto(c) if qd(*a) == *c) =>
+                        || matches!(&self.dom, Dom::From(c) if b.is_finite() && qd(*b) == *c)
+                        || matches!(&self.dom, Dom::Upto(c) if a.is_finite() && qd(*a) == *c) =>
                 {
                     // One point of the domain in the window: its zero.
                     let p = if matches!(&self.dom, Dom::From(_)) {
@@ -4823,7 +4823,11 @@ impl Truth {
         }
         let mut readings: Vec<Vec<Reading>> = Vec::new();
         let mut alone = false;
+        let feats = per.feats_s(row);
         for it in &items {
+            if !(it.x.0.is_finite() && it.x.1.is_finite()) {
+                return Verdict::Unknown("a periodic f's item over an infinite stretch".into());
+            }
             let held: Vec<Rational> = per
                 .feats_in(row, it.x.0, it.x.1)
                 .into_iter()
@@ -4850,8 +4854,31 @@ impl Truth {
                         ));
                     };
                     let step = Rational::from(&ps * &Rational::from(n));
+                    // (Every member of the orbit a feature of the kind listed,
+                    // f's value there in the item's y: each of its residues
+                    // in a period of T asked, not the first member's alone.
+                    // f's values at features of one kind agree for these
+                    // functions, so this held already: hardening, round 25.)
+                    let orbit_fits = |s0: &Rational| {
+                        let mut seen: Vec<Rational> = Vec::new();
+                        let mut s = s0.clone();
+                        loop {
+                            let r = per.residue(&s);
+                            if seen.contains(&r) {
+                                return true;
+                            }
+                            let Some((_, m)) = feats.iter().find(|(f, _)| *f == r) else {
+                                return false;
+                            };
+                            if !fits(it, &per.trig.place(&r), m) {
+                                return false;
+                            }
+                            seen.push(r);
+                            s += &step;
+                        }
+                    };
                     let mut orbits: Vec<Reading> = Vec::new();
-                    for s0 in held {
+                    for s0 in held.into_iter().filter(|s0| orbit_fits(s0)) {
                         let seen = orbits.iter().any(|o| {
                             matches!(o, Reading::Orbit(t, _) if whole(&(Rational::from(&s0 - t) / &step)))
                         });
@@ -4949,6 +4976,9 @@ impl Truth {
         };
         if search(0, &readings, &mut Vec::new(), &ok, &meet, &mut tried) {
             Verdict::True
+        } else if tried > 20_000 {
+            // (Not every reading tried: no verdict, rather than a false one.)
+            Verdict::Unknown("too many readings of the items".into())
         } else {
             Verdict::False(format!(
                 "no reading of its items lists each {row} item once{}",
