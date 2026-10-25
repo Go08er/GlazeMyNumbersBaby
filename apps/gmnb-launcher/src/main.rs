@@ -16,6 +16,7 @@ use std::io::IsTerminal;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
+use std::time::{Duration, Instant};
 
 const MESSAGE: &str = "GMNB needs a CPU with AVX2 (x86-64-v3): Intel Core from Haswell (2013) or AMD from Excavator (2015) on, though not every Pentium, Celeron or Atom. DGMNB runs on any 64-bit PC.";
 const TITLE: &str = "GMNB needs a CPU with AVX2";
@@ -153,16 +154,45 @@ fn tell_desktop() {
         &["zenity", "--error", "--title=GMNB", "--text", MESSAGE],
         &["kdialog", "--title", "GMNB", "--error", MESSAGE],
     ];
-    for cmd in attempts {
-        let ok = Command::new(cmd[0])
-            .args(&cmd[1..])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success());
-        if ok {
+    // The two notifications are given NOTIFY_WAIT each; a dialog waits for
+    // its reader, as a dialog should.
+    for (i, cmd) in attempts.into_iter().enumerate() {
+        if succeeds(cmd, (i < 2).then_some(NOTIFY_WAIT)) {
             return;
+        }
+    }
+}
+
+/// How long a notification may take to be sent. With a display but no
+/// notification service answering, `notify-send` and `gdbus` would each
+/// wait out D-Bus's default timeout (25 s) before the dialog was tried.
+const NOTIFY_WAIT: Duration = Duration::from_secs(5);
+
+/// Runs `cmd` quietly: true if it exits successfully, within `limit` if
+/// one is given (past it, it is killed and counts as failed).
+fn succeeds(cmd: &[&str], limit: Option<Duration>) -> bool {
+    let Ok(mut child) = Command::new(cmd[0])
+        .args(&cmd[1..])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let Some(limit) = limit else {
+        return child.wait().is_ok_and(|s| s.success());
+    };
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if start.elapsed() < limit => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
         }
     }
 }
@@ -241,6 +271,21 @@ mod tests {
             assert!(detected(f).is_some(), "{f}");
         }
         assert_eq!(detected("avx512f"), None);
+    }
+
+    #[test]
+    fn a_notification_that_hangs_is_given_up_on() {
+        let start = Instant::now();
+        assert!(!succeeds(
+            &["sleep", "30"],
+            Some(Duration::from_millis(200))
+        ));
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(succeeds(&["true"], Some(Duration::from_secs(5))));
+        assert!(!succeeds(&["false"], Some(Duration::from_secs(5))));
+        assert!(succeeds(&["true"], None));
+        // Not installed: skipped quietly.
+        assert!(!succeeds(&["gmnb-launcher-no-such-helper"], None));
     }
 
     #[test]
