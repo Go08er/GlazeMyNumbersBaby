@@ -1215,6 +1215,35 @@ fn shared_item(
     None
 }
 
+/// An item listed alone whose every proven place may be a member of a
+/// family the row lists too: the family stands for each of its members,
+/// so the item lists one of them again, a second number where there is
+/// one. ([`shared_item`] holds items alone apart from each other only:
+/// sin(x)°'s zeros every 360° from 0 and from 180°, with 180 alone too,
+/// passed. The claim fuzzer's periodic functions, every premise strong.)
+/// Meeting a member's enclosure is no proof that the place is that
+/// member: the item is refused where it isn't shown apart from them all.
+fn alone_at_a_member(found: &[Enc], listed: &[(Enc, Option<Enc>)]) -> Option<Enc> {
+    let families: Vec<(Enc, Enc)> = listed
+        .iter()
+        .filter_map(|(x, p)| p.map(|p| (*x, p)))
+        .collect();
+    if families.is_empty() {
+        return None;
+    }
+    listed
+        .iter()
+        .filter(|(_, p)| p.is_none())
+        .find(|(x, _)| {
+            let held: Vec<&Enc> = found.iter().filter(|d| x.contains(d)).collect();
+            !held.is_empty()
+                && held
+                    .iter()
+                    .all(|d| families.iter().any(|(x0, p)| meets_member(x0, p, d)))
+        })
+        .map(|(x, _)| *x)
+}
+
 /// Does `x` hold the enclosure `a` moved on k periods, a + k·p for every
 /// a and p in their enclosures? Exactly, in rationals.
 fn holds_shifted(x: &Enc, a: &Enc, p: &Enc, k: i32) -> bool {
@@ -1266,6 +1295,12 @@ fn match_items(
     if let Some(x) = shared_item(derived, listed, fits) {
         out.problems.push(format!(
             "{what} at [{:e}, {:e}] is listed with no proven place of its own",
+            x.lo, x.hi
+        ));
+    }
+    if let Some(x) = alone_at_a_member(derived, listed) {
+        out.problems.push(format!(
+            "{what} at [{:e}, {:e}] is listed alone, and as a listed family's member",
             x.lo, x.hi
         ));
     }
@@ -1809,6 +1844,28 @@ fn turns(
     families_follow(what, rc, &periods, out);
     repeats_listed(what, rc, &listed, out);
     Ok(())
+}
+
+/// The monotone piece `p` lies in the domain's piece `d`. An end of `d`
+/// known only to an enclosure may be anywhere in it, so `p` either stays
+/// clear of that enclosure or ends at it, its own end's enclosure holding
+/// it whole. (Compared as hulls, a piece ending at a double inside the
+/// enclosure of a hole, past the hole, lay "in" the piece before it: x +
+/// 0/(x + 2/7), its hole between two doubles, passed for increasing up to
+/// the double above the hole. The claim fuzzer's functions with corners.)
+fn within_piece(p: &Piece, d: &Piece) -> bool {
+    let holds = |x: &Enc, e: &Enc| x.lo <= e.lo && e.hi <= x.hi;
+    let low = match (d.lo, p.lo) {
+        (Bound::NegInf, _) => true,
+        (Bound::At { x: e, .. }, Bound::At { x, .. }) => x.lo >= e.hi || holds(&x, &e),
+        _ => false,
+    };
+    let high = match (d.hi, p.hi) {
+        (Bound::PosInf, _) => true,
+        (Bound::At { x: e, .. }, Bound::At { x, .. }) => x.hi <= e.lo || holds(&x, &e),
+        _ => false,
+    };
+    low && high
 }
 
 /// The domain's pieces, from its row (when certified).
@@ -2423,10 +2480,7 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
             ));
         }
         if let Some(ds) = &domain
-            && !ds.iter().any(|d| {
-                let (da, db) = extent(d);
-                da <= a && b <= db
-            })
+            && !ds.iter().any(|d| within_piece(&p, d))
         {
             out.problems.push(format!(
                 "the piece on [{a:e}, {b:e}] reaches outside the domain's pieces"

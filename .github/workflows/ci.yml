@@ -124,7 +124,13 @@ jobs:
           # replay_fuzz makes up true claim sets about polynomials whose
           # features are known exactly (zeros at doubles, adjacent doubles,
           # points between) and rows true and false, and fails if the replay
-          # accepts a row the exact truth refuses (a short fixed run).
+          # accepts a row the exact truth refuses (a short fixed run); and so
+          # for functions with corners (|p|, p + a|x - c|, max and min, the
+          # truth worked piece by piece) and periodic ones (sin, cos, tan,
+          # cot of a linear argument, in degrees: rows over one period,
+          # families), each a short fixed run of its own; and its exhaustive
+          # slice: every set of up to two proven claims about each feature of
+          # a few fixed functions, against every changed row.
           nix develop -c cargo test --locked -p graphing --features mpfr-oracle \
             --test certify_replay --test interval_oracle --test simplify_rules \
             --test crossfuzz --test crossfuzz_found --test certify_mutants \
