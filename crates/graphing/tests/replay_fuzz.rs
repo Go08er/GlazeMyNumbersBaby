@@ -49,12 +49,19 @@
 //! may not see what the claims don't show, but its false refusals show up
 //! here), and holds every genuine certificate of the functions it makes to
 //! the same truth: the oracle's own check, and the certifier's. A genuine
-//! row the truth refuses fails the run where the replay accepts it; where
-//! the replay refuses it too, it is the certifier's error, caught, and is
-//! printed and counted. (One is known: `1/3*(x+2)^3-2^(-53)*(x+2)^2+1/3+
+//! Certified or Partial row the truth refuses fails the run whether the
+//! replay accepts it or not: the panel shows it either way. (Failing only
+//! where the replay accepted it too, the run passed over the certifier's
+//! turn beside a hole: `1/3*(x+2)^3-2^(-53)*(x+2)^2+1/3+
 //! 0/(x-(-9007199254740991*2^(-52)))`, a maximum at −2 with its hole a
 //! double away, certified "no extrema"; the replay refuses it, f′'s sign
-//! after −2 not decided.)
+//! after −2 not decided. Four such functions, turns and inflections, in
+//! the long runs of seeds 20261025 and 20261026. The certifier now takes a
+//! zero at a box's end for its bound only at a closed end of the domain
+//! at that double, and otherwise leaves the row incomplete:
+//! `certify::rows::side_unasked`, and the four held to the truth again in
+//! [`the_genuine_rows_beside_a_hole_are_true`].) A true genuine row the
+//! replay refuses is counted and printed, not failed.
 //!
 //! ```text
 //! cargo test -p graphing --features mpfr-oracle --test replay_fuzz          # fixed seed, seconds
@@ -3732,10 +3739,13 @@ struct Tally {
     refused_true: Vec<String>,
     genuine_rows: u64,
     /// Genuine rows the truth refuses (the certifier's errors, or the
-    /// truth's), and those of them the replay accepts (the replay's).
+    /// truth's: each fails the run), and those of them the replay accepts
+    /// too (the replay's as well).
     genuine_false: Vec<String>,
     genuine_false_accepted: Vec<String>,
-    genuine_refused: Vec<String>,
+    /// True genuine rows the replay refuses (counted, not failed: the
+    /// replay may not see what the claims don't show).
+    genuine_refused_true: Vec<String>,
 }
 
 impl Tally {
@@ -3770,7 +3780,7 @@ impl Tally {
         self.genuine_rows += o.genuine_rows;
         self.genuine_false.extend(o.genuine_false);
         self.genuine_false_accepted.extend(o.genuine_false_accepted);
-        self.genuine_refused.extend(o.genuine_refused);
+        self.genuine_refused_true.extend(o.genuine_refused_true);
     }
 
     fn print(&self, seed: u64) {
@@ -3801,11 +3811,11 @@ impl Tally {
         );
         println!(
             "  genuine certificates: {} rows, {} refused by the truth ({} of them accepted by the \
-             replay), {} refused by the replay",
+             replay), {} true ones refused by the replay",
             self.genuine_rows,
             self.genuine_false.len(),
             self.genuine_false_accepted.len(),
-            self.genuine_refused.len()
+            self.genuine_refused_true.len()
         );
         let show = env_u64("REPLAY_FUZZ_SHOW").unwrap_or(3) as usize;
         if env_u64("REPLAY_FUZZ_REFUSALS").is_some() {
@@ -3826,7 +3836,10 @@ impl Tally {
             ("ACCEPTED FALSE", &self.failures),
             ("PROVED FALSE PREMISE", &self.false_premises),
             ("GENUINE ROW THE TRUTH REFUSES", &self.genuine_false),
-            ("genuine row the replay refuses", &self.genuine_refused),
+            (
+                "true genuine row the replay refuses",
+                &self.genuine_refused_true,
+            ),
             ("domain not as built", &self.domain_not_as_built),
         ] {
             for s in list.iter().take(show) {
@@ -3879,24 +3892,30 @@ fn genuine(ctx: &mut Ctx, t: &mut Tally) {
                 .or_else(|| r.row_problems().into_iter().next()),
         };
         // A genuine row the truth refuses is the certifier's error (or the
-        // truth's); the replay accepting it too is the replay's.
-        if let Verdict::False(why) = ctx.truth.judge(row, &scope, &body["value"]) {
-            let text = format!(
-                "y={} {row} {status} over {covers}: {}: {why}; the replay {}",
-                ctx.fun.text,
-                body["value"],
-                refused
-                    .as_ref()
-                    .map_or("accepts it".to_string(), |w| format!("refuses it: {w}"))
-            );
-            if refused.is_none() {
-                t.genuine_false_accepted.push(text.clone());
+        // truth's), the panel showing it, whether the replay refuses it or
+        // not; the replay accepting it too is the replay's as well. A true
+        // one the replay refuses is only counted.
+        match ctx.truth.judge(row, &scope, &body["value"]) {
+            Verdict::False(why) => {
+                let text = format!(
+                    "y={} {row} {status} over {covers}: {}: {why}; the replay {}",
+                    ctx.fun.text,
+                    body["value"],
+                    refused
+                        .as_ref()
+                        .map_or("accepts it".to_string(), |w| format!("refuses it: {w}"))
+                );
+                if refused.is_none() {
+                    t.genuine_false_accepted.push(text.clone());
+                }
+                t.genuine_false.push(text);
             }
-            t.genuine_false.push(text);
-        }
-        if let Some(why) = refused {
-            t.genuine_refused
-                .push(format!("y={} {row}: {why}", ctx.fun.text));
+            Verdict::True => {
+                if let Some(why) = refused {
+                    t.genuine_refused_true
+                        .push(format!("y={} {row}: {why}", ctx.fun.text));
+                }
+            }
         }
     }
 }
@@ -4075,21 +4094,26 @@ fn threads() -> u64 {
 }
 
 /// No false row accepted, no false premise proved, no genuine row the
-/// truth refuses that the replay accepts. (A genuine row the truth refuses
-/// and the replay refuses too is the certifier's error, caught: printed
-/// above, not failed here.)
+/// truth refuses. A genuine row the truth refuses is a false row on the
+/// panel whether the replay refuses it or not: the panel shows the
+/// certifier's rows, and the replay is no gate before it. (Only one the
+/// replay accepted too failed the run: the certifier's turn beside a
+/// hole, four functions in two long runs, was printed and counted, and
+/// the run passed.) A true genuine row the replay refuses is counted, not
+/// failed.
 fn assert_clean(t: &Tally) {
     assert!(
-        t.failures.is_empty() && t.false_premises.is_empty() && t.genuine_false_accepted.is_empty(),
+        t.failures.is_empty() && t.false_premises.is_empty() && t.genuine_false.is_empty(),
         "{} accepted false rows, {} proved false premises, {} genuine rows the truth refuses \
-         and the replay accepts; the first: {}",
+         ({} of them accepted by the replay); the first: {}",
         t.failures.len(),
         t.false_premises.len(),
+        t.genuine_false.len(),
         t.genuine_false_accepted.len(),
         t.failures
             .first()
             .or(t.false_premises.first())
-            .or(t.genuine_false_accepted.first())
+            .or(t.genuine_false.first())
             .map_or("", String::as_str)
     );
 }
@@ -4325,4 +4349,58 @@ fn the_reviewers_rows_are_false_and_refused() {
             listed.value
         );
     }
+}
+
+/// The genuine rows the long runs found false (seeds 20261025 and
+/// 20261026), held to the truth again: a turn or an inflection at the
+/// double beside a hole, its side across the gap to the hole decided by
+/// no claim, certified away ("no extrema", "no inflection points"). The
+/// certifier now leaves such a row incomplete. Each function is made
+/// again by its seed and index, and its genuine certificate judged as the
+/// run judges it.
+#[test]
+fn the_genuine_rows_beside_a_hole_are_true() {
+    let found: [(u64, &str); 4] = [
+        (
+            20_261_025,
+            "1/3*(x+2)^3-2^(-53)*(x+2)^2+1/3+0/(x-(-9007199254740991*2^(-52)))",
+        ),
+        (
+            20_261_026,
+            "1/6*(x-1/2)^3+2^(-56)*(x-1/2)^2+1/3+0/(x-(1/2))",
+        ),
+        (
+            20_261_026,
+            "-1*(x-1/2)^3-3*2^(-55)*(x-1/2)^2+1+0/(x-(9007199254740991*2^(-54)))",
+        ),
+        (
+            20_261_026,
+            "1/24*(x-3)^4-2^(-53)/3*(x-3)^3+2^(-51)*(x-3)-1+0/(x-(3))",
+        ),
+    ];
+    let bad = std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(move || {
+            replay::iv::init();
+            let mut bad = Vec::new();
+            for (seed, text) in found {
+                // (The function the run makes as its i-th.)
+                let i = (0..2000)
+                    .find(|&i| {
+                        let mut rng = Rng::new(seed, i, 0);
+                        (0..20)
+                            .find_map(|_| make_fun(&mut rng))
+                            .is_some_and(|f| f.text == text)
+                    })
+                    .unwrap_or_else(|| panic!("{text}: not made by seed {seed}"));
+                let t = run_function(seed, i, 0);
+                assert!(t.genuine_rows > 0, "{text}: no genuine row judged");
+                bad.extend(t.genuine_false);
+            }
+            bad
+        })
+        .expect("a thread")
+        .join()
+        .expect("held to the truth");
+    assert!(bad.is_empty(), "{bad:#?}");
 }

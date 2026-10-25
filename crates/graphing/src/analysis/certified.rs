@@ -600,6 +600,10 @@ struct Ctx<'a> {
     /// Every exact crossing claimed, and every value claimed exact at a
     /// double: (box, subject, level, where).
     exact_at: Vec<(Enc, Subject, f64, f64)>,
+    /// Every touch claimed (the level exactly at a double on the box's
+    /// end, strictly on one side of it on the rest): (box, subject, level,
+    /// where).
+    touch_at: Vec<(Enc, Subject, f64, f64)>,
     /// Every table family: (side expression, x₀, period).
     fams: Vec<(Subject, Enc, Enc)>,
     /// A proven period of f (the one the certifier's periodic window used).
@@ -672,6 +676,7 @@ impl<'a> Ctx<'a> {
         certs.extend(cert_of(&a.range));
         certs.extend(cert_of(&a.vertical));
         let (mut cross, mut exact_at, mut fams) = (Vec::new(), Vec::new(), Vec::new());
+        let mut touch_at = Vec::new();
         for c in certs {
             for cl in &c.claims {
                 match cl {
@@ -685,6 +690,9 @@ impl<'a> Ctx<'a> {
                     }
                     Claim::Family { of, x0, period } => {
                         fams.push((of.clone(), enc_of(x0), enc_of(period)));
+                    }
+                    Claim::Touch { x, of, c, at, .. } => {
+                        touch_at.push((enc_of(x), of.clone(), c.0, at.0));
                     }
                     _ => {}
                 }
@@ -706,6 +714,7 @@ impl<'a> Ctx<'a> {
             d,
             cross,
             exact_at,
+            touch_at,
             fams,
             period,
             period_enc,
@@ -1108,15 +1117,35 @@ impl<'a> Ctx<'a> {
             lo <= x.lo.0 && x.hi.0 <= hi
         };
         let first_order = |s: &Subject| matches!(s, Subject::F(o) if o.k() == 1);
+        // The boxes claimed about a zero of f′ at the double `at`, each
+        // with that one zero (f′ strictly monotone there, or a touch
+        // there: of one strict sign on the rest of the box): their hull.
+        let about = |at: f64| {
+            self.exact_at
+                .iter()
+                .chain(&self.touch_at)
+                .filter(|(b, s, c, a)| first_order(s) && *c == 0.0 && *a == at && !b.is_point())
+                .map(|(b, ..)| *b)
+                .reduce(|u, b| Enc::new(u.lo.0.min(b.lo.0), u.hi.0.max(b.hi.0)))
+        };
         for k in [-1.0f64, 1.0] {
             let shift = p.mul(Ex::int(k as i128))?;
             // f′ = 0 exactly at a double, a period back.
             for (b, s, c, at) in &self.exact_at {
                 // (A zero at a double, alone in its box: shifted, it is the
-                // one in x.)
+                // one in x. Claimed at the double alone, the boxes about it
+                // must hold x shifted back: f′ is 0 there and nowhere else
+                // in them, so no other zero of f′, nor a kink, is in x. A
+                // zero at one double was taken for the end in x a period
+                // on, whatever else x held: the audit of every place a
+                // fact at one double is read for the reals beside it.)
                 if first_order(s)
                     && *c == 0.0
-                    && (b.is_point() || inside(b, k))
+                    && (if b.is_point() {
+                        about(*at).is_some_and(|h| inside(&h, k))
+                    } else {
+                        inside(b, k)
+                    })
                     && let Some(e) = Q::from_f64(*at).and_then(|q| Ex::q(q).add(shift))
                     && e.within(x.lo.0, x.hi.0) == Some(true)
                 {

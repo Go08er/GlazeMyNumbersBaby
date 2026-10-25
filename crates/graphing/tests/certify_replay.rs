@@ -5293,3 +5293,31 @@ fn a_monotone_piece_has_length() {
     .collect();
     assert!(failed.is_empty(), "{failed:#?}");
 }
+
+/// What the certifier read across a gap, and now doesn't, replays in
+/// full (the audit after the claim fuzzer found its turn beside a hole:
+/// `tests/across_a_gap.rs` holds the panel's rows to the truth). A zero
+/// of f′ at the double beside a hole or a pole leaves its row incomplete
+/// rather than "none" (the replay refused the row, the zero's side across
+/// the gap not decided); a piece another condition cut is decided on the
+/// reals beside the cut, or the domain is unknown (a domain of (1, ∞) for
+/// 1/(x − 1) + ln(2⁶⁰·(x − 1) − ½), defined from 1 + 2⁻⁶¹ on, was refused:
+/// f not shown defined beside its open end); a tail's claims start past
+/// the domain's last end (x²·(x/100 − 10)⁰'s f′ > 0 was claimed from 400,
+/// across its hole at 1000, and left open).
+#[test]
+fn what_is_read_across_a_gap_replays() {
+    let failed: Vec<String> = [
+        "1/3*(x+2)^3-2^(-53)*(x+2)^2+1/3+0/(x-(-9007199254740991*2^(-52)))",
+        "1/(x-1)+ln(2^60*(x-1)-1/2)",
+        "1/(x-1)+sqrt(2^60*(x-1)-1/2)",
+        "1/(x-1)+ln(2^60*(1-x)-1/2)",
+        "1/(x-1)+1/(x-(1+2^-52))",
+        "x^2*(x/100-10)^0",
+        "ln(x)/x",
+    ]
+    .iter()
+    .filter_map(|src| rejected(&certificate(src)).map(|w| format!("{src}: {w}")))
+    .collect();
+    assert!(failed.is_empty(), "{failed:#?}");
+}
