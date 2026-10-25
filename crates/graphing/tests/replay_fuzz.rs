@@ -633,6 +633,105 @@ fn values_within(p: &Poly, a: &Rational, b: &Rational, lo: &Rational, hi: &Ratio
     true
 }
 
+/// f as polynomials on pieces: `polys[i]` on the closed stretch from
+/// `cuts[i − 1]` to `cuts[i]` (from −∞ before the first cut, to +∞ after
+/// the last), f continuous at each cut. A polynomial is one piece; |p|,
+/// p + a·|x − c|, max and min of two are several, cut where they kink.
+#[derive(Clone, Debug, PartialEq)]
+struct Pw {
+    cuts: Vec<Rational>,
+    polys: Vec<Poly>,
+}
+
+impl Pw {
+    fn one(p: Poly) -> Pw {
+        Pw {
+            cuts: Vec::new(),
+            polys: vec![p],
+        }
+    }
+
+    fn deriv(&self) -> Pw {
+        Pw {
+            cuts: self.cuts.clone(),
+            polys: self.polys.iter().map(Poly::deriv).collect(),
+        }
+    }
+
+    fn sub_const(&self, v: &Rational) -> Pw {
+        Pw {
+            cuts: self.cuts.clone(),
+            polys: self
+                .polys
+                .iter()
+                .map(|p| p.sub(&Poly::constant(v.clone())))
+                .collect(),
+        }
+    }
+
+    fn is_zero(&self) -> bool {
+        self.polys.iter().all(Poly::is_zero)
+    }
+
+    /// The pieces whose closed stretch holds x: one, or the two that meet
+    /// at a cut.
+    fn at(&self, x: &Rational) -> (usize, usize) {
+        let i = self.cuts.partition_point(|c| c < x);
+        if self.cuts.get(i) == Some(x) {
+            (i, i + 1)
+        } else {
+            (i, i)
+        }
+    }
+
+    /// The same for a place.
+    fn at_place(&self, p: &Place) -> (usize, usize) {
+        if let Place::At(x) = p {
+            return self.at(x);
+        }
+        let mut i = 0;
+        while i < self.cuts.len() && p.cmp(&self.cuts[i]) == Greater {
+            i += 1;
+        }
+        if i < self.cuts.len() && p.cmp(&self.cuts[i]) == Equal {
+            (i, i + 1)
+        } else {
+            (i, i)
+        }
+    }
+
+    /// Piece i's stretch (None: an infinite end).
+    fn ends(&self, i: usize) -> (Option<&Rational>, Option<&Rational>) {
+        (i.checked_sub(1).map(|j| &self.cuts[j]), self.cuts.get(i))
+    }
+
+    /// The piece just right (or left) of x.
+    fn beside(&self, x: &Rational, right: bool) -> usize {
+        let (l, r) = self.at(x);
+        if right { r } else { l }
+    }
+
+    /// The real roots of each piece's polynomial strictly inside its
+    /// stretch, in order (a piece ≡ 0 left out).
+    fn inner_roots(&self) -> Vec<Place> {
+        let mut out = Vec::new();
+        for (i, p) in self.polys.iter().enumerate() {
+            if p.is_zero() {
+                continue;
+            }
+            let (lo, hi) = self.ends(i);
+            for r in real_roots(p) {
+                let inside =
+                    lo.is_none_or(|c| r.cmp(c) == Greater) && hi.is_none_or(|c| r.cmp(c) == Less);
+                if inside {
+                    out.push(Place::Root(r));
+                }
+            }
+        }
+        out
+    }
+}
+
 // ------------------------------------------------------------ doubles
 
 fn floor_double(q: &Rational) -> f64 {
@@ -815,7 +914,7 @@ struct Fun {
     text: String,
     /// The trees given the certificate as `evaluated` ("f′ = …").
     evaluated: Vec<String>,
-    f: Poly,
+    f: Pw,
     dom: Dom,
     /// The points it was built about (roots planted, the centre).
     planted: Vec<Rational>,
@@ -914,7 +1013,7 @@ fn make_fun(rng: &mut Rng) -> Option<Fun> {
         let mut fun = Fun {
             text: v.to_string(),
             evaluated: Vec::new(),
-            f: Poly::constant(qi(v)),
+            f: Pw::one(Poly::constant(qi(v))),
             dom: Dom::Line,
             planted: vec![c.clone()],
             expanded: Vec::new(),
@@ -1020,7 +1119,7 @@ fn make_fun(rng: &mut Rng) -> Option<Fun> {
     let mut fun = Fun {
         text,
         evaluated,
-        f: fu.at_shift(&c),
+        f: Pw::one(fu.at_shift(&c)),
         dom: Dom::Line,
         planted,
         expanded,
@@ -1095,12 +1194,6 @@ impl Place {
         }
     }
 
-    /// f's value here lies in [lo, hi].
-    fn value_within(&mut self, f: &Poly, lo: f64, hi: f64) -> bool {
-        self.sign_of(&f.sub(&Poly::constant(qd(lo)))) != Less
-            && self.sign_of(&f.sub(&Poly::constant(qd(hi)))) != Greater
-    }
-
     fn approx(&self) -> f64 {
         match self {
             Place::At(x) => x.to_f64(),
@@ -1164,63 +1257,115 @@ struct Feature {
     max: Option<bool>,
 }
 
+/// A closed stretch, an infinite end None.
+type Stretch = (Option<Rational>, Option<Rational>);
+
+/// The stretch meets [a, b] (closed; an infinite end of either reaches
+/// out).
+fn meets(s: &Stretch, a: f64, b: f64) -> bool {
+    (!b.is_finite() || s.0.as_ref().is_none_or(|c| *c <= qd(b)))
+        && (!a.is_finite() || s.1.as_ref().is_none_or(|c| qd(a) <= *c))
+}
+
 struct Truth {
-    /// f, f′, f″, f‴.
-    d: [Poly; 4],
+    /// f, f′, f″, f‴ (on f's pieces).
+    d: [Pw; 4],
     dom: Dom,
-    /// The distinct real roots of f, f′, f″, f‴ (anywhere).
-    roots: [Vec<Root>; 4],
+    /// Where f⁽ᵏ⁾ is 0 where it exists, anywhere on the line: each piece's
+    /// roots inside it, and the cuts where f⁽ᵏ⁾ exists and is 0 (a stretch
+    /// where it is ≡ 0 is in `flats`). A polynomial's: its real roots.
+    roots: [Vec<Place>; 4],
+    /// Where f⁽ᵏ⁾ doesn't exist though f does (k ≥ 1): the cuts where
+    /// f′, …, f⁽ᵏ⁾'s two sides differ. Those of f′ are f's corners.
+    rough: [Vec<Rational>; 4],
+    /// Both, in order (true: rough).
+    events: [Vec<(Place, bool)>; 4],
+    /// The stretches where f⁽ᵏ⁾ ≡ 0: a piece whose polynomial is 0.
+    flats: [Vec<Stretch>; 4],
     zeros: Vec<Feature>,
     extrema: Vec<Feature>,
     inflections: Vec<Feature>,
-    /// Where f′ changes sign inside the domain, and the domain's end or
-    /// hole: where monotone pieces end.
+    /// Where f″ changes sign with no inflection decided: across a corner
+    /// (f′ jumps there) or across a stretch where f″ ≡ 0. A complete row
+    /// of inflections whose scope meets one is not true (the replay's and
+    /// the certifier's rule: no complete row passes a change of f″'s sign
+    /// at a corner), nor is an item standing for one.
+    blur: Vec<(Place, Place)>,
+    /// Where f′ changes sign inside the domain (a corner of f among
+    /// them), and the domain's end or hole: where monotone pieces end.
     breaks: Vec<Place>,
 }
 
 impl Truth {
-    fn new(f: &Poly, dom: &Dom) -> Truth {
+    fn new(f: &Pw, dom: &Dom) -> Truth {
         let d1 = f.deriv();
         let d2 = d1.deriv();
         let d3 = d2.deriv();
         let d = [f.clone(), d1, d2, d3];
-        let roots = [0, 1, 2, 3].map(|k| {
-            if d[k].is_zero() {
-                Vec::new()
-            } else {
-                real_roots(&d[k])
+        let mut roots: [Vec<Place>; 4] = Default::default();
+        let mut rough: [Vec<Rational>; 4] = Default::default();
+        let mut flats: [Vec<Stretch>; 4] = Default::default();
+        for k in 0..4 {
+            roots[k] = d[k].inner_roots();
+            for (i, p) in d[k].polys.iter().enumerate() {
+                if p.is_zero() {
+                    let (lo, hi) = d[k].ends(i);
+                    flats[k].push((lo.cloned(), hi.cloned()));
+                }
             }
+            for (j, c) in f.cuts.iter().enumerate() {
+                let exists = (1..=k).all(|m| d[m].polys[j].eval(c) == d[m].polys[j + 1].eval(c));
+                if !exists {
+                    rough[k].push(c.clone());
+                } else if d[k].polys[j].sign(c) == Equal
+                    && !(d[k].polys[j].is_zero() && d[k].polys[j + 1].is_zero())
+                {
+                    roots[k].push(Place::At(c.clone()));
+                }
+            }
+            if !f.cuts.is_empty() {
+                roots[k].sort_by(pcmp);
+            }
+        }
+        let events = [0, 1, 2, 3].map(|k| {
+            let mut e: Vec<(Place, bool)> = roots[k].iter().map(|p| (p.clone(), false)).collect();
+            e.extend(rough[k].iter().map(|c| (Place::At(c.clone()), true)));
+            if !rough[k].is_empty() {
+                e.sort_by(|a, b| pcmp(&a.0, &b.0));
+            }
+            e
         });
-        let changes = |k: usize| -> Vec<Feature> {
-            roots[k]
-                .iter()
-                .filter(|r| dom.inside(&Place::Root((*r).clone())))
-                .filter_map(|r| {
-                    let (l, rr) = sides(&d[k], r);
-                    (l != rr && l != Equal && rr != Equal).then(|| Feature {
-                        at: Place::Root(r.clone()),
-                        max: Some(l == Greater),
-                    })
-                })
-                .collect()
+        let mut t = Truth {
+            d,
+            dom: dom.clone(),
+            roots,
+            rough,
+            events,
+            flats,
+            zeros: Vec::new(),
+            extrema: Vec::new(),
+            inflections: Vec::new(),
+            blur: Vec::new(),
+            breaks: Vec::new(),
         };
-        let zeros = roots[0]
+        t.zeros = t.roots[0]
             .iter()
-            .filter(|r| dom.holds(&Place::Root((*r).clone())))
-            .map(|r| Feature {
-                at: Place::Root(r.clone()),
+            .filter(|p| dom.holds(p))
+            .map(|p| Feature {
+                at: p.clone(),
                 max: None,
             })
             .collect();
-        let mut extrema = changes(1);
-        if f.degree() > 0 {
+        let mut extrema = t.changes(1);
+        if !t.d[1].is_zero() {
             let end = match dom {
                 Dom::From(c) => Some((c, true)),
                 Dom::Upto(c) => Some((c, false)),
                 _ => None,
             };
             if let Some((c, right)) = end {
-                let g = f.sub(&Poly::constant(f.eval(c)));
+                let i = t.d[0].beside(c, right);
+                let g = t.d[0].polys[i].sub(&Poly::constant(t.d[0].polys[i].eval(c)));
                 let s = sign_beside(&g, c, right);
                 extrema.push(Feature {
                     at: Place::At(c.clone()),
@@ -1228,48 +1373,197 @@ impl Truth {
                 });
             }
         }
-        let mut inflections = changes(2);
+        let mut inflections = t.changes(2);
         for i in &mut inflections {
             i.max = None;
         }
-        let mut breaks: Vec<Place> = changes(1).into_iter().map(|t| t.at).collect();
+        // f″ changing sign across a corner or a flat stretch.
+        let mut blur = Vec::new();
+        for c in &t.rough[2] {
+            let p = Place::At(c.clone());
+            let (l, r) = t.sides(2, &p);
+            if t.rough[1].contains(c) && dom.inside(&p) && l != r && l != Equal && r != Equal {
+                blur.push((p.clone(), p));
+            }
+        }
+        for (lo, hi) in &t.flats[2] {
+            let (Some(lo), Some(hi)) = (lo, hi) else {
+                continue;
+            };
+            let l = t.beside_sign(2, lo, false);
+            let r = t.beside_sign(2, hi, true);
+            if l != r && l != Equal && r != Equal {
+                blur.push((Place::At(lo.clone()), Place::At(hi.clone())));
+            }
+        }
+        let mut breaks: Vec<Place> = t.changes(1).into_iter().map(|t| t.at).collect();
         if let Some(c) = dom.point() {
             breaks.push(Place::At(c.clone()));
         }
         breaks.sort_by(|a, b| a.approx().total_cmp(&b.approx()));
-        Truth {
-            d,
-            dom: dom.clone(),
-            roots,
-            zeros,
-            extrema,
-            inflections,
-            breaks,
-        }
+        t.extrema = extrema;
+        t.inflections = inflections;
+        t.blur = blur;
+        t.breaks = breaks;
+        t
+    }
+
+    /// Where f⁽ᵏ⁾ changes sign strictly inside the domain: a zero, or a
+    /// cut where it has no value (for f″, only where f′ is continuous: a
+    /// corner is `blur`). (A maximum: from positive.)
+    fn changes(&self, k: usize) -> Vec<Feature> {
+        self.events[k]
+            .iter()
+            .filter(|(p, _)| self.dom.inside(p))
+            .filter(|(p, rough)| {
+                !(k == 2 && *rough && matches!(p, Place::At(c) if self.rough[1].contains(c)))
+            })
+            .filter_map(|(p, _)| {
+                let (l, r) = self.sides(k, p);
+                (l != r && l != Equal && r != Equal).then(|| Feature {
+                    at: p.clone(),
+                    max: Some(l == Greater),
+                })
+            })
+            .collect()
     }
 
     fn constant(&self) -> bool {
         self.d[1].is_zero()
     }
 
-    /// How many distinct roots f⁽ᵏ⁾ has in [a, b] (≡ 0: all).
+    /// f⁽ᵏ⁾'s sign just right (or left) of x, x left out.
+    fn beside_sign(&self, k: usize, x: &Rational, right: bool) -> Ordering {
+        let i = self.d[k].beside(x, right);
+        sign_beside(&self.d[k].polys[i], x, right)
+    }
+
+    /// f⁽ᵏ⁾'s sign just left and just right of a zero or a cut.
+    fn sides(&self, k: usize, p: &Place) -> (Ordering, Ordering) {
+        match p {
+            Place::At(x) => (self.beside_sign(k, x, false), self.beside_sign(k, x, true)),
+            Place::Root(r) => {
+                let (i, _) = self.d[k].at_place(p);
+                sides(&self.d[k].polys[i], r)
+            }
+        }
+    }
+
+    /// f⁽ᵏ⁾'s sign at x, None where it has no value (a cut where it
+    /// doesn't exist).
+    fn sign_q(&self, k: usize, x: &Rational) -> Option<Ordering> {
+        let (l, r) = self.d[k].at(x);
+        if l != r && self.rough[k].contains(x) {
+            return None;
+        }
+        Some(self.d[k].polys[l].sign(x))
+    }
+
+    /// f⁽ᵏ⁾(x), where it exists.
+    fn value_q(&self, k: usize, x: &Rational) -> Option<Rational> {
+        let (l, r) = self.d[k].at(x);
+        if l != r && self.rough[k].contains(x) {
+            return None;
+        }
+        Some(self.d[k].polys[l].eval(x))
+    }
+
+    /// f⁽ᵏ⁾ at a place against y (f⁽ᵏ⁾ exists there).
+    fn cmp_value(&self, k: usize, p: &Place, y: &Rational) -> Ordering {
+        let (i, _) = self.d[k].at_place(p);
+        let g = self.d[k].polys[i].sub(&Poly::constant(y.clone()));
+        p.clone().sign_of(&g)
+    }
+
+    /// f's value at the place lies in [lo, hi].
+    fn value_within_at(&self, p: &Place, lo: f64, hi: f64) -> bool {
+        self.cmp_value(0, p, &qd(lo)) != Less && self.cmp_value(0, p, &qd(hi)) != Greater
+    }
+
+    /// The values of f⁽ᵏ⁾ over [a, b] lie in [lo, hi] (it exists
+    /// throughout: no cut where it doesn't inside).
+    fn values_within(
+        &self,
+        k: usize,
+        a: &Rational,
+        b: &Rational,
+        lo: &Rational,
+        hi: &Rational,
+    ) -> bool {
+        if self.rough[k].iter().any(|c| a <= c && c <= b) {
+            return false;
+        }
+        let mut from = a.clone();
+        loop {
+            let i = self.d[k].beside(&from, true);
+            let to = match self.d[k].cuts.get(i) {
+                Some(c) if c < b => c.clone(),
+                _ => b.clone(),
+            };
+            let i = if from == *b { self.d[k].at(b).0 } else { i };
+            if !values_within(&self.d[k].polys[i], &from, &to, lo, hi) {
+                return false;
+            }
+            if to >= *b {
+                return true;
+            }
+            from = to;
+        }
+    }
+
+    /// How many zeros of f⁽ᵏ⁾, and cuts where it has no value, lie in
+    /// [a, b] (a stretch where it is ≡ 0 meeting it: all).
     fn roots_in(&self, k: usize, a: f64, b: f64) -> usize {
-        if self.d[k].is_zero() {
+        if self.flats[k].iter().any(|s| meets(s, a, b)) {
             return usize::MAX;
         }
-        self.roots[k]
+        self.events[k]
             .iter()
-            .filter(|r| Place::Root((*r).clone()).within(a, b))
+            .filter(|(p, _)| p.within(a, b))
             .count()
     }
 
-    /// The roots of f⁽ᵏ⁾ in [a, b].
-    fn roots_within(&self, k: usize, a: f64, b: f64) -> Vec<Root> {
-        self.roots[k]
+    /// The zeros of f⁽ᵏ⁾ and the cuts where it has no value in [a, b].
+    fn events_within(&self, k: usize, a: f64, b: f64) -> Vec<(Place, bool)> {
+        self.events[k]
             .iter()
-            .filter(|r| Place::Root((*r).clone()).within(a, b))
+            .filter(|(p, _)| p.within(a, b))
             .cloned()
             .collect()
+    }
+
+    /// f⁽ᵏ⁾ ≡ 0 on [a, b], existing throughout.
+    fn flat_over(&self, k: usize, a: f64, b: f64) -> bool {
+        self.flat_cover(k, a, b)
+            && !self.rough[k]
+                .iter()
+                .any(|c| Place::At(c.clone()).within(a, b))
+    }
+
+    /// [a, b] lies in the stretches where f⁽ᵏ⁾ ≡ 0 (a cut between two
+    /// where it has no value aside).
+    fn flat_cover(&self, k: usize, a: f64, b: f64) -> bool {
+        let holds = |s: &Stretch, x: f64| {
+            s.0.as_ref().is_none_or(|c| x.is_finite() && *c <= qd(x))
+                && s.1.as_ref().is_none_or(|c| x.is_finite() && qd(x) <= *c)
+        };
+        // From a, stretch by stretch.
+        let Some(mut s) = self.flats[k]
+            .iter()
+            .find(|s| holds(s, a) || (a == f64::NEG_INFINITY && s.0.is_none()))
+        else {
+            return false;
+        };
+        loop {
+            match &s.1 {
+                None => return true,
+                Some(c) if b.is_finite() && qd(b) <= *c => return true,
+                Some(c) => match self.flats[k].iter().find(|t| t.0.as_ref() == Some(c)) {
+                    Some(t) => s = t,
+                    None => return false,
+                },
+            }
+        }
     }
 
     /// f⁽ᵏ⁾'s strict sign over [a, b] (closed, ends may be infinite), if
@@ -1284,35 +1578,82 @@ impl Truth {
             (false, true) => Rational::from(&qd(b) - 1u32),
             (false, false) => qi(0),
         };
-        Some(self.d[k].sign(&m) == Greater)
+        Some(self.sign_q(k, &m)? == Greater)
     }
 
-    /// The value of f⁽ᵏ⁾ at a double.
-    fn at(&self, k: usize, x: f64) -> Rational {
-        self.d[k].eval(&qd(x))
+    /// The value of f⁽ᵏ⁾ at a double, where it exists.
+    fn at(&self, k: usize, x: f64) -> Option<Rational> {
+        self.value_q(k, &qd(x))
     }
 
-    /// The sign of f⁽ᵏ⁾ at a double.
-    fn sign_at(&self, k: usize, x: f64) -> Ordering {
-        self.d[k].sign(&qd(x))
+    /// The sign of f⁽ᵏ⁾ at a double, where it exists.
+    fn sign_at(&self, k: usize, x: f64) -> Option<Ordering> {
+        self.sign_q(k, &qd(x))
     }
 
-    /// The roots of f⁽ᵏ⁾ strictly inside (a, b) where f is defined.
+    /// The zeros of f⁽ᵏ⁾ strictly inside (a, b) where f is defined.
     fn roots_strictly_inside(&self, k: usize, a: f64, b: f64) -> usize {
         self.roots[k]
             .iter()
-            .filter(|r| {
-                let p = Place::Root((*r).clone());
+            .filter(|p| {
                 (!a.is_finite() || p.cmp(&qd(a)) == Greater)
                     && (!b.is_finite() || p.cmp(&qd(b)) == Less)
-                    && self.dom.holds(&p)
+                    && self.dom.holds(p)
             })
             .count()
     }
 
+    /// f⁽ᵏ⁾ wherever it exists on the stretch from a to b (an end open as
+    /// asked; a cut where it has no value left out) is of the sign `s`:
+    /// ≡ 0 for `Zero`.
+    fn side_is(&self, k: usize, s: &KinkSign, a: f64, b: f64, open_a: bool, open_b: bool) -> bool {
+        let inner = |p: &Place| {
+            let lo = p.cmp(&qd(a));
+            let hi = p.cmp(&qd(b));
+            (lo == Greater || (lo == Equal && !open_a)) && (hi == Less || (hi == Equal && !open_b))
+        };
+        // (The reals strictly inside, and the closed ends asked.)
+        let flat_meets = |st: &Stretch| {
+            st.0.as_ref()
+                .is_none_or(|c| *c < qd(b) || (!open_b && *c == qd(b)))
+                && st
+                    .1
+                    .as_ref()
+                    .is_none_or(|c| qd(a) < *c || (!open_a && *c == qd(a)))
+        };
+        if *s == KinkSign::Zero {
+            // Every piece meeting the reals inside ≡ 0.
+            let (i, _) = self.d[k].at(&qd(a));
+            let (_, j) = self.d[k].at(&qd(b));
+            return (i..=j).all(|n| {
+                let (lo, hi) = self.d[k].ends(n);
+                let touches = lo.is_some_and(|c| *c >= qd(b)) || hi.is_some_and(|c| *c <= qd(a));
+                touches || self.d[k].polys[n].is_zero()
+            });
+        }
+        let want = if *s == KinkSign::Pos { Greater } else { Less };
+        if self.roots[k].iter().any(inner) || self.flats[k].iter().any(flat_meets) {
+            return false;
+        }
+        // f⁽ᵏ⁾'s sign on each stretch between the cuts where it has none.
+        let mut cuts: Vec<Rational> = self.rough[k]
+            .iter()
+            .filter(|c| qd(a) < **c && **c < qd(b))
+            .cloned()
+            .collect();
+        cuts.insert(0, qd(a));
+        cuts.push(qd(b));
+        cuts.windows(2).all(|w| {
+            let m = Rational::from(&w[0] + &w[1]) / 2u32;
+            self.sign_q(k, &m) == Some(want)
+        })
+    }
+
     /// Whether a claim is true (None: a kind this truth doesn't read).
     /// f⁽ᵏ⁾ is the polynomial's own derivative throughout the domain, at a
-    /// closed end too, one-sided (as the replay reads `0*sqrt(u)`).
+    /// closed end too, one-sided (as the replay reads `0*sqrt(u)`); at a
+    /// cut where its two sides differ it has no value, and no claim of a
+    /// sign or a value of it over a box holding one is true.
     fn claim_true(&self, c: &Claim) -> Option<bool> {
         let order = |of: &Subject| match of {
             Subject::F(k) if *k <= 2 => Some(*k),
@@ -1366,7 +1707,11 @@ impl Truth {
                     return None;
                 }
                 let (a, b) = (self.sign_at(k, x.0), self.sign_at(k, x.1));
-                ok_box(x) && a != Equal && b != Equal && a != b && self.roots_in(k, x.0, x.1) == 1
+                ok_box(x)
+                    && a.is_some_and(|a| a != Equal)
+                    && b.is_some_and(|b| b != Equal)
+                    && a != b
+                    && self.roots_in(k, x.0, x.1) == 1
             }
             Claim::ExactAt { x, of, c, at } => {
                 let k = order(of)?;
@@ -1376,7 +1721,7 @@ impl Truth {
                 ok_box(x)
                     && x.0 <= *at
                     && *at <= x.1
-                    && self.sign_at(k, *at) == Equal
+                    && self.sign_at(k, *at) == Some(Equal)
                     && self.roots_in(k, x.0, x.1) == 1
             }
             Claim::Touch {
@@ -1394,9 +1739,10 @@ impl Truth {
                 let other = if *at == x.0 { x.1 } else { x.0 };
                 ok_box(x)
                     && (*at == x.0 || *at == x.1)
-                    && self.sign_at(k, *at) == Equal
+                    && self.sign_at(k, *at) == Some(Equal)
                     && self.roots_in(k, x.0, x.1) == 1
-                    && (x.0 == x.1 || self.sign_at(k, other) == if *above { Greater } else { Less })
+                    && (x.0 == x.1
+                        || self.sign_at(k, other) == Some(if *above { Greater } else { Less }))
             }
             Claim::Value { x, of, lo, hi } => {
                 let k = order(of)?;
@@ -1405,12 +1751,27 @@ impl Truth {
                     && hi.is_finite()
                     && x.0.is_finite()
                     && x.1.is_finite()
-                    && values_within(&self.d[k], &qd(x.0), &qd(x.1), &qd(*lo), &qd(*hi))
+                    && self.values_within(k, &qd(x.0), &qd(x.1), &qd(*lo), &qd(*hi))
             }
             Claim::Gap(x) => x.0 <= x.1,
             Claim::GapClear { x, of } => {
                 let k = order(of)?;
-                self.d[k].is_zero() || self.roots_strictly_inside(k, x.0, x.1) == 0
+                if self.d[k].is_zero() {
+                    return Some(true);
+                }
+                // (≡ 0 throughout it, or no zero strictly inside it.)
+                let inside = |s: &Stretch| {
+                    s.0.as_ref()
+                        .is_none_or(|c| !x.1.is_finite() || *c < qd(x.1))
+                        && s.1
+                            .as_ref()
+                            .is_none_or(|c| !x.0.is_finite() || qd(x.0) < *c)
+                };
+                if self.flats[k].iter().any(inside) {
+                    self.flat_cover(k, x.0, x.1)
+                } else {
+                    self.roots_strictly_inside(k, x.0, x.1) == 0
+                }
             }
             Claim::KinkSides {
                 x,
@@ -1418,71 +1779,79 @@ impl Truth {
                 order: k,
                 left,
                 right,
-                ..
+                joined,
             } => {
                 if *k > 2 || *k == 0 || !ok_box(x) || x.0 >= x.1 {
                     return Some(false);
                 }
-                let side = |s: &KinkSign, a: f64, b: f64, open_a: bool, open_b: bool| {
-                    // f⁽ᵏ⁾'s sign on the side, its open ends left out.
-                    if self.d[*k].is_zero() {
-                        return *s == KinkSign::Zero;
-                    }
-                    let want = match s {
-                        KinkSign::Zero => return false,
-                        KinkSign::Pos => Greater,
-                        KinkSign::Neg => Less,
-                    };
-                    let inside = self.roots[*k].iter().any(|r| {
-                        let p = Place::Root(r.clone());
-                        let lo = p.cmp(&qd(a));
-                        let hi = p.cmp(&qd(b));
-                        (lo == Greater || (lo == Equal && !open_a))
-                            && (hi == Less || (hi == Equal && !open_b))
-                    });
-                    let m = Rational::from(&qd(a) + &qd(b)) / 2u32;
-                    !inside && self.d[*k].sign(&m) == want
-                };
+                // (Joined: f′ exists at the point and is continuous on x.)
+                if *joined
+                    && (*k != 2
+                        || at.is_none()
+                        || self.rough[1]
+                            .iter()
+                            .any(|c| Place::At(c.clone()).within(x.0, x.1)))
+                {
+                    return Some(false);
+                }
                 match at {
                     Some(p) => {
                         x.0 < *p
                             && *p < x.1
-                            && side(left, x.0, *p, false, true)
-                            && side(right, *p, x.1, true, false)
+                            && self.side_is(*k, left, x.0, *p, false, true)
+                            && self.side_is(*k, right, *p, x.1, true, false)
                     }
                     None => {
                         // Some c strictly inside with these signs on
-                        // either side of it.
-                        let rs = self.roots_within(*k, x.0, x.1);
-                        if self.d[*k].is_zero() {
-                            *left == KinkSign::Zero && *right == KinkSign::Zero
-                        } else if rs.is_empty() {
-                            left == right && side(left, x.0, x.1, false, false)
-                        } else if rs.len() == 1 {
-                            let mut r = Place::Root(rs[0].clone());
-                            let inner = r.cmp(&qd(x.0)) == Greater && r.cmp(&qd(x.1)) == Less;
-                            let (l, rr) = sides(&self.d[*k], &rs[0]);
-                            let want = |s: &KinkSign| match s {
-                                KinkSign::Pos => Greater,
-                                KinkSign::Neg => Less,
-                                KinkSign::Zero => Equal,
-                            };
-                            let _ = r.enc();
-                            inner && l == want(left) && rr == want(right)
-                        } else {
-                            false
-                        }
+                        // either side of it: a zero, or a cut where f⁽ᵏ⁾
+                        // has no value; anywhere, where both sides agree.
+                        let want = |s: &KinkSign| match s {
+                            KinkSign::Pos => Greater,
+                            KinkSign::Neg => Less,
+                            KinkSign::Zero => Equal,
+                        };
+                        let whole = left == right && self.side_is(*k, left, x.0, x.1, false, false);
+                        let evs = self.events_within(*k, x.0, x.1);
+                        whole
+                            || evs.iter().any(|(p, _)| {
+                                // At a double: each side read on its own.
+                                if let Place::At(c) = p
+                                    && qd(c.to_f64()) == *c
+                                {
+                                    let d = c.to_f64();
+                                    return x.0 < d
+                                        && d < x.1
+                                        && self.side_is(*k, left, x.0, d, false, true)
+                                        && self.side_is(*k, right, d, x.1, true, false);
+                                }
+                                // Between doubles: the one in the box, and
+                                // its sides.
+                                let inner = p.cmp(&qd(x.0)) == Greater && p.cmp(&qd(x.1)) == Less;
+                                let (l, r) = self.sides(*k, p);
+                                inner
+                                    && evs.len() == 1
+                                    && !self.flats[*k].iter().any(|s| meets(s, x.0, x.1))
+                                    && l == want(left)
+                                    && r == want(right)
+                            })
                     }
                 }
             }
             Claim::KinkAt {
                 x, left, right, at, ..
             } => {
+                // The one corner in the box at `at`, f′ of the smooth form
+                // f takes on each side strictly signed up to it (0 at `at`
+                // itself allowed: x·|x|).
+                let s = |up: bool| if up { KinkSign::Pos } else { KinkSign::Neg };
                 ok_box(x)
                     && x.0 < *at
                     && *at < x.1
-                    && self.sign_over(1, x.0, *at) == Some(*left)
-                    && self.sign_over(1, *at, x.1) == Some(*right)
+                    && self.rough[1]
+                        .iter()
+                        .all(|c| !Place::At(c.clone()).within(x.0, x.1) || *c == qd(*at))
+                    && self.side_is(1, &s(*left), x.0, *at, false, true)
+                    && self.side_is(1, &s(*right), *at, x.1, true, false)
             }
             _ => return None,
         })
@@ -1556,9 +1925,23 @@ fn kink_sign(s: Ordering) -> &'static str {
     }
 }
 
-fn c_sides(k: usize, a: f64, b: f64, at: Option<f64>, l: Ordering, r: Ordering) -> Value {
+/// `KinkSides` (`joined`: f′ continuous across the point, said of f″'s
+/// sides at a point only).
+fn c_sides(
+    k: usize,
+    a: f64,
+    b: f64,
+    at: Option<f64>,
+    l: Ordering,
+    r: Ordering,
+    joined: bool,
+) -> Value {
     json!({"KinkSides": {"x": bx(a, b), "at": at.map_or(Value::Null, num), "order": k,
-        "left": kink_sign(l), "right": kink_sign(r), "joined": k == 2 && at.is_some()}})
+        "left": kink_sign(l), "right": kink_sign(r), "joined": joined}})
+}
+
+fn c_kink_at(a: f64, b: f64, at: f64, left: bool, right: bool) -> Value {
+    json!({"KinkAt": {"x": bx(a, b), "at": num(at), "left": left, "right": right}})
 }
 
 // ------------------------------------------------------------ claim sets
@@ -1582,8 +1965,8 @@ impl Gen<'_> {
 
     fn above(&self, x: f64) -> Option<bool> {
         match self.t.sign_at(self.k, x) {
-            Equal => None,
-            s => Some(s == Greater),
+            None | Some(Equal) => None,
+            Some(s) => Some(s == Greater),
         }
     }
 
@@ -1604,6 +1987,14 @@ impl Gen<'_> {
         if !self.t.dom.holds_box(x, x) {
             return;
         }
+        if self.t.sign_at(k, x).is_none() {
+            // A corner (or a cut where f″ jumps): f is continuous there,
+            // and f⁽ᵏ⁾ has no value.
+            if self.rng.chance(0.5) {
+                self.push(c_box("Kink", x, x));
+            }
+            return;
+        }
         match self.above(x) {
             None if self.t.d[k].is_zero() => {
                 if k > 0 && self.rng.chance(0.4) {
@@ -1620,7 +2011,7 @@ impl Gen<'_> {
             Some(up) => match self.rng.below(4) {
                 0 if k > 0 => self.push(c_box("Kink", x, x)),
                 1 => {
-                    let v = self.t.at(k, x);
+                    let v = self.t.at(k, x).expect("a value");
                     self.push(c_value(k, x, x, floor_double(&v), ceil_double(&v)));
                 }
                 _ => self.push(c_sign("Beyond", k, x, x, up)),
@@ -1638,13 +2029,107 @@ impl Gen<'_> {
             return;
         }
         self.push(c_box("Gap", a, b));
-        if self.t.d[self.k].is_zero() || self.t.roots_strictly_inside(self.k, a, b) == 0 {
+        let clear = Claim::GapClear {
+            x: (a, b),
+            of: Subject::F(self.k),
+        };
+        if self.t.claim_true(&clear) == Some(true) {
             if self.rng.chance(0.9) {
                 self.push(c_clear(self.k, a, b));
             }
         } else if self.rng.chance(0.2) {
             // (A false clearness, which the claim check must refuse.)
             self.push(c_clear(self.k, a, b));
+        }
+    }
+
+    /// The claim, if true (made up from the truth's own sides: a shape
+    /// they don't fit is left out).
+    fn push_true(&mut self, c: Value) {
+        if replay::claim(&c).is_ok_and(|cl| self.t.claim_true(&cl) == Some(true)) {
+            self.push(c);
+        }
+    }
+
+    /// Claims about the box [l, r] about a cut where f⁽ᵏ⁾ has no value (a
+    /// corner of f, or a jump of f″): the certifier's `Kink`, its `KinkAt`
+    /// (f′'s one-sided signs, the corner at a double) and `KinkSides` (each
+    /// derivative's sign on either side), each where true.
+    fn kink_box(&mut self, l: f64, r: f64, c: &Place) {
+        let k = self.k;
+        self.push_true(c_box("Kink", l, r));
+        let (sl, sr) = self.t.sides(k, c);
+        let at = match c {
+            Place::At(q) if qd(q.to_f64()) == *q && l < q.to_f64() && q.to_f64() < r => {
+                Some(q.to_f64())
+            }
+            _ => None,
+        };
+        let joined = k == 2
+            && at.is_some()
+            && !self.t.rough[1]
+                .iter()
+                .any(|q| Place::At(q.clone()).within(l, r));
+        match self.rng.below(4) {
+            0 => {}
+            1 if k == 1 && at.is_some() && sl != Equal && sr != Equal => {
+                let p = at.expect("placed");
+                self.push_true(c_kink_at(l, r, p, sl == Greater, sr == Greater));
+            }
+            _ => self.push_true(c_sides(k, l, r, at, sl, sr, joined)),
+        }
+        if self.rng.chance(0.2) {
+            // (And the other order's, about the same box.)
+            let o = 3 - k;
+            let (ol, or) = self.t.sides(o, c);
+            if o == 1
+                && let Some(p) = at
+                && self.rng.chance(0.5)
+            {
+                self.push_true(c_kink_at(l, r, p, ol == Greater, or == Greater));
+            } else {
+                let joined = o == 2
+                    && at.is_some()
+                    && !self.t.rough[1]
+                        .iter()
+                        .any(|q| Place::At(q.clone()).within(l, r));
+                self.push_true(c_sides(o, l, r, at, ol, or, joined));
+            }
+        }
+    }
+
+    /// Claims covering [a, b] about the one cut c in it where f⁽ᵏ⁾ has no
+    /// value: the certifier's shape (the stretches up to the kink box
+    /// beside it, the box of the doubles about it), a kink box over all of
+    /// [a, b], or a gap.
+    fn rough_stretch(&mut self, a: f64, b: f64, c: &Place, inner: &[f64], depth: u32) {
+        let (cl, ch) = c.clone().enc();
+        let (bl, bh) = if cl == ch {
+            (cl.next_down(), ch.next_up())
+        } else {
+            (cl, ch)
+        };
+        match self.rng.below(6) {
+            0..=2 => {
+                // Up to the kink's box, the box, and on from it.
+                if a < bl {
+                    self.stretch(a, bl.min(b), depth + 1);
+                }
+                self.kink_box(bl, bh, c);
+                if bh < b {
+                    self.stretch(bh.max(a), b, depth + 1);
+                }
+            }
+            3 if a < cl && ch < b => self.kink_box(a, b, c),
+            4 if narrow(a, b) => self.gap(a, b),
+            _ if !inner.is_empty() => {
+                let mut last = a;
+                for &m in inner.iter().chain(std::iter::once(&b)) {
+                    self.stretch(last, m, depth + 1);
+                    last = m;
+                }
+            }
+            _ => self.kink_box(a.min(bl), b.max(bh), c),
         }
     }
 
@@ -1690,13 +2175,34 @@ impl Gen<'_> {
         if self.t.d[k].is_zero() {
             match self.rng.below(4) {
                 0 if k > 0 => self.push(c_box("Kink", a, b)),
-                1 if k > 0 => self.push(c_sides(k, a, b, None, Equal, Equal)),
+                1 if k > 0 => self.push(c_sides(k, a, b, None, Equal, Equal, false)),
                 2 if narrow(a, b) => self.gap(a, b),
                 _ => self.push(c_value(k, a, b, 0.0, 0.0)),
             }
             return;
         }
-        let rs = self.t.roots_within(k, a, b);
+        if self.t.flats[k].iter().any(|s| meets(s, a, b)) {
+            // A stretch where f⁽ᵏ⁾ ≡ 0 meets the box (one piece's).
+            if self.t.flat_over(k, a, b) {
+                match self.rng.below(3) {
+                    0 => self.push(c_sides(k, a, b, None, Equal, Equal, false)),
+                    1 if narrow(a, b) => self.gap(a, b),
+                    _ => self.push(c_value(k, a, b, 0.0, 0.0)),
+                }
+            } else if inner.is_empty() {
+                let evs = self.t.events_within(k, a, b);
+                match evs.as_slice() {
+                    [(c, true)] if self.rng.chance(0.7) => {
+                        self.rough_stretch(a, b, &c.clone(), &inner, depth)
+                    }
+                    _ => self.gap(a, b),
+                }
+            } else {
+                split(self, &inner);
+            }
+            return;
+        }
+        let rs = self.t.events_within(k, a, b);
         match rs.len() {
             0 => {
                 let up = self.t.sign_over(k, a, b).expect("no root, a sign");
@@ -1714,16 +2220,20 @@ impl Gen<'_> {
                         2 | 3 if k > 0 => self.push(c_box("Kink", a, b)),
                         4 if k > 0 => {
                             let s = if up { Greater } else { Less };
-                            self.push(c_sides(k, a, b, None, s, s));
+                            self.push(c_sides(k, a, b, None, s, s, false));
                         }
                         _ => self.push(c_sign("Beyond", k, a, b, up)),
                     }
                 }
             }
+            1 if rs[0].1 => {
+                let c = rs[0].0.clone();
+                self.rough_stretch(a, b, &c, &inner, depth);
+            }
             1 => {
-                let mut r = rs[0].clone();
-                let (rl, rh) = r.doubles();
-                let (sl, sr) = sides(&self.t.d[k], &r);
+                let mut r = rs[0].0.clone();
+                let (rl, rh) = r.enc();
+                let (sl, sr) = self.t.sides(k, &r);
                 let change = sl != sr;
                 if rl == rh {
                     let e = rl;
@@ -1731,7 +2241,7 @@ impl Gen<'_> {
                         match self.rng.below(5) {
                             0 | 1 if self.monotone(a, b) => self.push(c_exact(k, a, b, e)),
                             2 if k > 0 => {
-                                self.push(c_sides(k, a, b, Some(e), sl, sr));
+                                self.push(c_sides(k, a, b, Some(e), sl, sr, k == 2));
                             }
                             _ => {
                                 self.stretch(a, e, depth + 1);
@@ -1767,7 +2277,7 @@ impl Gen<'_> {
                             self.push(c_cross(k, a, b));
                         }
                         2 if k > 0 && pa.is_some() && pb.is_some() => {
-                            self.push(c_sides(k, a, b, None, sl, sr));
+                            self.push(c_sides(k, a, b, None, sl, sr, false));
                         }
                         _ => self.gap(a, b),
                     }
@@ -1806,7 +2316,6 @@ impl Gen<'_> {
         if cuts.is_empty() {
             return;
         }
-        let deg = self.t.d[k].degree().max(1);
         for (inf, from, right) in [
             (lo, cuts[0], false),
             (hi, *cuts.last().expect("cuts"), true),
@@ -1827,6 +2336,11 @@ impl Gen<'_> {
                     self.push(c_tail(k, right, from, up));
                 }
                 if n >= 6 {
+                    // (The outermost piece's degree.)
+                    let polys = &self.t.d[k].polys;
+                    let deg = polys[if right { polys.len() - 1 } else { 0 }]
+                        .degree()
+                        .max(1);
                     let mut c = c_tail(k, right, from, up);
                     let body = c["TailBeyond"].take();
                     c = json!({"TailChain": body});
@@ -1854,10 +2368,10 @@ impl Gen<'_> {
     /// their union, so they hold one zero.
     fn crossings(&mut self) {
         let k = self.k;
-        let changes: Vec<Root> = self.t.roots[k]
+        let changes: Vec<Place> = self.t.roots[k]
             .iter()
             .filter(|r| {
-                let (l, rr) = sides(&self.t.d[k], r);
+                let (l, rr) = self.t.sides(k, r);
                 l != rr
             })
             .cloned()
@@ -1866,7 +2380,7 @@ impl Gen<'_> {
             return;
         }
         let mut r = self.rng.pick(&changes).clone();
-        let (lo, hi) = r.doubles();
+        let (lo, hi) = r.enc();
         let (a1, a2) = if lo == hi {
             (doubles_out(lo, -2), doubles_out(lo, -1))
         } else {
@@ -1882,14 +2396,15 @@ impl Gen<'_> {
         self.push(c_cross(k, a2, doubles_out(b2, wide)));
     }
 
-    /// Claims at and about the zeros of f⁽ᵏ⁾: a point, a one-ulp gap and
-    /// a point beside it, a sign from a double off it.
+    /// Claims at and about the zeros of f⁽ᵏ⁾ (and the cuts where it has no
+    /// value): a point, a one-ulp gap and a point beside it, a sign from a
+    /// double off it.
     fn noise(&mut self) {
         let k = self.k;
-        let near: Vec<f64> = self.t.roots[k]
+        let near: Vec<f64> = self.t.events[k]
             .iter()
-            .flat_map(|r| {
-                let (lo, hi) = r.clone().doubles();
+            .flat_map(|(r, _)| {
+                let (lo, hi) = r.clone().enc();
                 [-2, -1, 0, 1, 2].map(|i| {
                     if i <= 0 {
                         doubles_out(lo, i)
@@ -2125,7 +2640,7 @@ impl Truth {
                 && (it.max.is_none() || it.max == f.max)
                 && it
                     .y
-                    .is_none_or(|(lo, hi)| f.at.value_within(&self.d[0], lo, hi))
+                    .is_none_or(|(lo, hi)| self.value_within_at(&f.at, lo, hi))
         };
         let mut options: Vec<Vec<usize>> = vec![Vec::new(); feats.len()];
         for (j, it) in items.iter().enumerate() {
@@ -2162,6 +2677,20 @@ impl Truth {
         }
         if !scope.complete() {
             return Verdict::True;
+        }
+        // (f″ changing sign across a corner, or across a stretch where it
+        // is ≡ 0: no inflection decided, so no complete row there.)
+        if row == "inflections"
+            && let Some((a, _)) = self
+                .blur
+                .iter()
+                .find(|(a, b)| scope.holds(a) || scope.holds(b))
+        {
+            let (lo, hi) = a.clone().enc();
+            return Verdict::False(format!(
+                "f″ changes sign across a corner (or a flat stretch) at [{lo:e}, {hi:e}] in \
+                 {scope:?}: no complete row of inflections there"
+            ));
         }
         let inside: Vec<usize> = (0..feats.len())
             .filter(|i| scope.holds(&feats[*i].at))
@@ -2205,19 +2734,18 @@ impl Truth {
             Dom::Upto(c) => (Some(Place::At(c.clone())), true),
             _ => (None, false),
         });
-        let d1 = &self.d[1];
         ends.windows(2)
             .map(|w| {
-                let dir = if d1.is_zero() {
+                let dir = if self.d[1].is_zero() {
                     None
                 } else {
                     // f′'s sign just inside the stretch.
                     let s = match (&w[0].0, &w[1].0) {
-                        (Some(Place::At(x)), _) => sign_beside(d1, x, true),
-                        (Some(Place::Root(r)), _) => sides(d1, r).1,
-                        (None, Some(Place::At(x))) => sign_beside(d1, x, false),
-                        (None, Some(Place::Root(r))) => sides(d1, r).0,
-                        (None, None) => sign_beside(d1, &qi(0), true),
+                        (Some(Place::At(x)), _) => self.beside_sign(1, x, true),
+                        (Some(p), _) => self.sides(1, p).1,
+                        (None, Some(Place::At(x))) => self.beside_sign(1, x, false),
+                        (None, Some(p)) => self.sides(1, p).0,
+                        (None, None) => self.beside_sign(1, &qi(0), true),
                     };
                     Some(s == Greater)
                 };
@@ -2399,9 +2927,10 @@ impl Truth {
             }
             return out;
         }
-        let mut out: Vec<Place> = self.roots[1]
+        // (A corner too: a piece may end there.)
+        let mut out: Vec<Place> = self.events[1]
             .iter()
-            .map(|r| Place::Root(r.clone()))
+            .map(|(p, _)| p.clone())
             .filter(|p| p.within(x.0, x.1) && self.dom.holds(p))
             .collect();
         if let Some(c) = self.dom.point()
@@ -2494,7 +3023,6 @@ impl Truth {
     /// f's range on its domain, as its components in order, each end
     /// infinite or the least (greatest) of f's values at some places.
     fn range_parts(&self) -> Vec<(REnd, REnd)> {
-        let f = &self.d[0];
         let inside_point = || -> Place {
             Place::At(match &self.dom {
                 Dom::From(c) => Rational::from(c + 1u32),
@@ -2503,7 +3031,7 @@ impl Truth {
                 Dom::Line => qi(0),
             })
         };
-        if f.degree() == 0 {
+        if self.constant() {
             let v = REnd::Val {
                 at: vec![inside_point()],
                 attained: true,
@@ -2511,20 +3039,23 @@ impl Truth {
             return vec![(v.clone(), v)];
         }
         // Where f may be least or greatest: its critical points inside
-        // the domain, a closed end.
-        let mut cands: Vec<Place> = self.roots[1]
+        // the domain (its corners among them), a closed end.
+        let mut cands: Vec<Place> = self.events[1]
             .iter()
-            .map(|r| Place::Root(r.clone()))
+            .map(|(p, _)| p.clone())
             .filter(|p| self.dom.inside(p))
             .collect();
         if let Dom::From(c) | Dom::Upto(c) = &self.dom {
             cands.push(Place::At(c.clone()));
         }
-        // Which way f goes at each infinite end of its domain.
-        let lead = f.lead().cmp0() == Greater;
-        let odd = f.degree() % 2 == 1;
-        let right = lead;
-        let left = if odd { !lead } else { lead };
+        // Which way f goes at each infinite end of its domain (its
+        // outermost pieces').
+        let (first, last) = (
+            &self.d[0].polys[0],
+            self.d[0].polys.last().expect("a piece"),
+        );
+        let right = last.lead().cmp0() == Greater;
+        let left = (first.lead().cmp0() == Greater) != (first.degree() % 2 == 1);
         let (up_unbounded, down_unbounded) = match &self.dom {
             Dom::From(_) => (right, !right),
             Dom::Upto(_) => (left, !left),
@@ -2550,9 +3081,14 @@ impl Truth {
             return vec![(lower, upper)];
         };
         // A hole: its value is taken elsewhere, or left out.
-        let v = f.eval(c);
-        let g = f.sub(&Poly::constant(v.clone()));
-        if real_roots(&g).iter().any(|r| r.cmp(c) != Equal) {
+        let v = self.value_q(0, c).expect("f is continuous");
+        let g = self.d[0].sub_const(&v);
+        let elsewhere = g.inner_roots().iter().any(|r| r.cmp(c) != Equal)
+            || g.cuts
+                .iter()
+                .enumerate()
+                .any(|(j, q)| q != c && g.polys[j].sign(q) == Equal);
+        if elsewhere {
             return vec![(lower, upper)];
         }
         let at_c = REnd::Val {
@@ -2563,8 +3099,8 @@ impl Truth {
         all_cands.push(Place::At(c.clone()));
         // (f's least value on the line is at c just when no other
         // critical value is below f(c).)
-        let below = cands.iter().any(|p| p.clone().sign_of(&g) == Less);
-        let above = cands.iter().any(|p| p.clone().sign_of(&g) == Greater);
+        let below = cands.iter().any(|p| self.cmp_value(0, p, &v) == Less);
+        let above = cands.iter().any(|p| self.cmp_value(0, p, &v) == Greater);
         let lower = match lower {
             REnd::Inf => REnd::Inf,
             _ => REnd::Val {
@@ -2606,15 +3142,13 @@ impl Truth {
                 }
                 // The least (greatest) of f at `at` is in [x.0, x.1]: none
                 // beyond it on the far side, one within reach.
-                let f = &self.d[0];
-                let lo = f.sub(&Poly::constant(qd(x.0)));
-                let hi = f.sub(&Poly::constant(qd(x.1)));
+                let (lo, hi) = (qd(x.0), qd(x.1));
                 let ok = if low {
-                    at.iter().all(|p| p.clone().sign_of(&lo) != Less)
-                        && at.iter().any(|p| p.clone().sign_of(&hi) != Greater)
+                    at.iter().all(|p| self.cmp_value(0, p, &lo) != Less)
+                        && at.iter().any(|p| self.cmp_value(0, p, &hi) != Greater)
                 } else {
-                    at.iter().all(|p| p.clone().sign_of(&hi) != Greater)
-                        && at.iter().any(|p| p.clone().sign_of(&lo) != Less)
+                    at.iter().all(|p| self.cmp_value(0, p, &hi) != Greater)
+                        && at.iter().any(|p| self.cmp_value(0, p, &lo) != Less)
                 };
                 if ok {
                     Ok(())
@@ -2766,8 +3300,8 @@ fn context(fun: Fun) -> Result<Ctx, String> {
         }
     };
     for k in 0..3 {
-        for r in &truth.roots[k] {
-            let (lo, hi) = r.clone().doubles();
+        for (r, _) in &truth.events[k] {
+            let (lo, hi) = r.clone().enc();
             about(lo, hi, 2);
         }
     }
@@ -2784,13 +3318,16 @@ fn context(fun: Fun) -> Result<Ctx, String> {
     };
     // Past every root of f, f′, f″, f‴ and beyond (Cauchy's bound).
     let mut far = 1.0f64;
-    for p in &truth.d {
+    for p in truth.d.iter().flat_map(|d| &d.polys) {
         if p.degree() >= 1 {
             let lead = p.lead();
             for c in &p.0 {
                 far = far.max(1.0 + Rational::from(c / &lead).abs().to_f64());
             }
         }
+    }
+    for c in &truth.d[0].cuts {
+        far = far.max(1.0 + c.to_f64().abs());
     }
     atoms.extend([
         lo - 1.0,
@@ -2867,7 +3404,8 @@ fn poly_range(p: &Poly, lo: &Rational, hi: &Rational) -> (Rational, Rational) {
     acc
 }
 
-/// f's value at the place, enclosed in doubles.
+/// f's value at the place, enclosed in doubles (f the piece's polynomial
+/// there).
 fn value_enc(f: &Poly, p: &Place) -> (f64, f64) {
     match p {
         Place::At(x) => {
@@ -2902,7 +3440,7 @@ impl Ctx {
             return None;
         }
         if a == b {
-            let v = self.truth.at(0, a);
+            let v = self.truth.at(0, a)?;
             return Some((floor_double(&v), ceil_double(&v)));
         }
         replay::iv::set_prec(160);
@@ -2941,8 +3479,8 @@ impl Ctx {
             ROWS[0], ROWS[1], ROWS[1], ROWS[1], ROWS[2], ROWS[2], ROWS[3],
         ]);
         let mut spots: Vec<f64> = Vec::new();
-        for r in &self.truth.roots[k] {
-            let (lo, hi) = r.clone().doubles();
+        for (r, _) in &self.truth.events[k] {
+            let (lo, hi) = r.clone().enc();
             spots.push(lo);
             if hi != lo {
                 spots.push(hi);
@@ -3224,11 +3762,12 @@ impl Ctx {
         let mut claims = std::mem::take(&mut g.out);
         // f's limits at the domain's infinite ends (by the tree's
         // structure).
-        let f = &self.truth.d[0];
-        if f.degree() >= 1 {
-            let lead = f.lead().cmp0() == Greater;
-            let odd = f.degree() % 2 == 1;
-            for (right, up) in [(true, lead), (false, lead != odd)] {
+        if !self.truth.constant() {
+            let polys = &self.truth.d[0].polys;
+            let (first, last) = (&polys[0], &polys[polys.len() - 1]);
+            let up_right = last.lead().cmp0() == Greater;
+            let up_left = (first.lead().cmp0() == Greater) != (first.degree() % 2 == 1);
+            for (right, up) in [(true, up_right), (false, up_left)] {
                 let reaches = match &self.truth.dom {
                     Dom::From(_) => right,
                     Dom::Upto(_) => !right,
@@ -3321,7 +3860,6 @@ impl Ctx {
                 json!(["Other"]),
             );
         };
-        let f = &self.truth.d[0];
         // Each place's enclosure, and f's values there: the replay's own
         // where f is defined over it (a value claim's), else exactly.
         // (Where, f's values there, from a value claim.)
@@ -3332,7 +3870,10 @@ impl Ctx {
             let x = p.enc();
             match self.y_of(x.0, x.1).filter(|_| *attained) {
                 Some(y) => vals.push((x, y, true)),
-                None => vals.push((x, value_enc(f, &p), false)),
+                None => {
+                    let (i, _) = self.truth.d[0].at_place(&p);
+                    vals.push((x, value_enc(&self.truth.d[0].polys[i], &p), false));
+                }
             }
         }
         // Those that may be the least (greatest).
@@ -3517,11 +4058,9 @@ impl Ctx {
                 (None, Some((y, _))) => Rational::from(&qd(y.0) - 1u32),
                 (None, None) => qi(0),
             };
-            let d1 = &self.truth.d[1];
-            let s = if d1.sign(&m) == Equal {
-                sign_beside(d1, &m, true)
-            } else {
-                d1.sign(&m)
+            let s = match self.truth.sign_q(1, &m) {
+                Some(Equal) | None => self.truth.beside_sign(1, &m, true),
+                Some(s) => s,
             };
             if s == Greater {
                 "Increasing"
@@ -3920,15 +4459,51 @@ fn genuine(ctx: &mut Ctx, t: &mut Tally) {
     }
 }
 
-fn run_function(seed: u64, i: u64, cases: u64) -> Tally {
+/// Which functions a run makes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Kind {
+    /// Polynomials (`make_fun`), with a closed domain end or a hole.
+    Poly,
+    /// Each function of a kind drawn from its own stream: a run's i-th
+    /// polynomial is the polynomial-only run's i-th.
+    Mixed,
+}
+
+/// The kind of the i-th function of a run (its own stream, apart from
+/// the function's: `Rng::new(seed, i, 0)` makes the same polynomial
+/// whichever kinds a run mixes).
+fn kind_of(_seed: u64, _i: u64, kind: Kind) -> Kind {
+    match kind {
+        Kind::Mixed => Kind::Poly,
+        k => k,
+    }
+}
+
+/// The i-th function of a run.
+fn make_kind(seed: u64, i: u64, kind: Kind) -> Option<Fun> {
+    let mut rng = Rng::new(seed, i, 0);
+    match kind_of(seed, i, kind) {
+        Kind::Poly | Kind::Mixed => (0..20).find_map(|_| make_fun(&mut rng)),
+    }
+}
+
+fn run_function(seed: u64, i: u64, cases: u64, kind: Kind) -> Tally {
+    let Some(fun) = make_kind(seed, i, kind) else {
+        return Tally {
+            functions: 1,
+            not_made: 1,
+            ..Tally::default()
+        };
+    };
+    run_fun(fun, seed, i, cases)
+}
+
+/// One function: its genuine certificate held to the truth, and `cases`
+/// cases of made-up claims and rows.
+fn run_fun(fun: Fun, seed: u64, i: u64, cases: u64) -> Tally {
     let mut t = Tally {
         functions: 1,
         ..Tally::default()
-    };
-    let mut rng = Rng::new(seed, i, 0);
-    let Some(fun) = (0..20).find_map(|_| make_fun(&mut rng)) else {
-        t.not_made += 1;
-        return t;
     };
     let mut ctx = match context(fun.clone()) {
         Ok(c) => c,
@@ -4051,7 +4626,7 @@ fn run_function(seed: u64, i: u64, cases: u64) -> Tally {
     t
 }
 
-fn run(seed: u64, functions: u64, cases: u64, threads: u64) -> Tally {
+fn run(seed: u64, functions: u64, cases: u64, threads: u64, kind: Kind) -> Tally {
     let total = Mutex::new(Tally::default());
     let threads = threads.max(1);
     std::thread::scope(|s| {
@@ -4063,7 +4638,7 @@ fn run(seed: u64, functions: u64, cases: u64, threads: u64) -> Tally {
                     replay::iv::init();
                     let mut i = w;
                     while i < functions {
-                        let t = run_function(seed, i, cases);
+                        let t = run_function(seed, i, cases, kind);
                         total.lock().unwrap().absorb(t);
                         i += threads;
                     }
@@ -4125,7 +4700,7 @@ const CASES: u64 = 24;
 /// The short run: a fixed seed, seconds.
 #[test]
 fn short_run() {
-    let t = run(SHORT_SEED, SHORT_FUNCTIONS, CASES, threads());
+    let t = run(SHORT_SEED, SHORT_FUNCTIONS, CASES, threads(), Kind::Poly);
     t.print(SHORT_SEED);
     assert_clean(&t);
 }
@@ -4139,7 +4714,7 @@ fn long_run() {
     let functions = env_u64("REPLAY_FUZZ_FUNCTIONS").unwrap_or(2000);
     let cases = env_u64("REPLAY_FUZZ_CASES").unwrap_or(CASES);
     let started = std::time::Instant::now();
-    let t = run(seed, functions, cases, threads());
+    let t = run(seed, functions, cases, threads(), Kind::Mixed);
     t.print(seed);
     println!("{:.1} s", started.elapsed().as_secs_f64());
     assert_clean(&t);
@@ -4214,7 +4789,9 @@ fn the_reviewers_rows_are_false_and_refused() {
         // f = 3δu² − 2u³ (u = x − 1): f′ = 6u(δ − u), a minimum at 1, f′
         // zero again at the next double.
         let du = qd(d);
-        let f = Poly::new(vec![qi(0), qi(0), Rational::from(&du * 3u32), qi(-2)]).at_shift(&qi(1));
+        let f = Pw::one(
+            Poly::new(vec![qi(0), qi(0), Rational::from(&du * 3u32), qi(-2)]).at_shift(&qi(1)),
+        );
         Fun {
             text: t.into(),
             evaluated: vec!["f′ = Mul(Mul(6,Sub(x,1)),Sub(Pow(2,Neg(52)),Sub(x,1)))".into()],
@@ -4231,7 +4808,7 @@ fn the_reviewers_rows_are_false_and_refused() {
             Fun {
                 text: "x^2-1".into(),
                 evaluated: Vec::new(),
-                f: Poly::new(vec![qi(-1), qi(0), qi(1)]),
+                f: Pw::one(Poly::new(vec![qi(-1), qi(0), qi(1)])),
                 dom: Dom::Line,
                 planted: vec![qi(0)],
                 expanded: Vec::new(),
@@ -4273,7 +4850,7 @@ fn the_reviewers_rows_are_false_and_refused() {
             Fun {
                 text: "(x-1)^2".into(),
                 evaluated: Vec::new(),
-                f: Poly::x_minus(&qi(1)).pow(2),
+                f: Pw::one(Poly::x_minus(&qi(1)).pow(2)),
                 dom: Dom::Line,
                 planted: vec![qi(1)],
                 expanded: Vec::new(),
@@ -4286,7 +4863,7 @@ fn the_reviewers_rows_are_false_and_refused() {
             Fun {
                 text: "(x-1)^3".into(),
                 evaluated: Vec::new(),
-                f: Poly::x_minus(&qi(1)).pow(3),
+                f: Pw::one(Poly::x_minus(&qi(1)).pow(3)),
                 dom: Dom::Line,
                 planted: vec![qi(1)],
                 expanded: Vec::new(),
@@ -4384,16 +4961,17 @@ fn the_genuine_rows_beside_a_hole_are_true() {
             replay::iv::init();
             let mut bad = Vec::new();
             for (seed, text) in found {
-                // (The function the run makes as its i-th.)
-                let i = (0..2000)
-                    .find(|&i| {
+                // (The polynomial the run made as its i-th.)
+                let (i, fun) = (0..2000)
+                    .find_map(|i| {
                         let mut rng = Rng::new(seed, i, 0);
                         (0..20)
                             .find_map(|_| make_fun(&mut rng))
-                            .is_some_and(|f| f.text == text)
+                            .filter(|f| f.text == text)
+                            .map(|f| (i, f))
                     })
                     .unwrap_or_else(|| panic!("{text}: not made by seed {seed}"));
-                let t = run_function(seed, i, 0);
+                let t = run_fun(fun, seed, i, 0);
                 assert!(t.genuine_rows > 0, "{text}: no genuine row judged");
                 bad.extend(t.genuine_false);
             }
