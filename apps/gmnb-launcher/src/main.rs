@@ -118,6 +118,15 @@ fn real_binary(me: &Path) -> Option<PathBuf> {
 /// take one, else a dialog. Stops at the first that works; each is skipped
 /// quietly if it isn't installed or has nothing to show it on.
 fn tell_desktop() {
+    // A session bus alone does not make this a desktop invocation. Its
+    // notification service may wait for a display that is not there;
+    // stderr already carries the CPU error for a headless caller.
+    let has_display = ["WAYLAND_DISPLAY", "WAYLAND_SOCKET", "DISPLAY"]
+        .into_iter()
+        .any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty()));
+    if !has_display {
+        return;
+    }
     let portal = format!("{{'title': <'{TITLE}'>, 'body': <'{MESSAGE}'>}}");
     let attempts: [&[&str]; 4] = [
         &[
