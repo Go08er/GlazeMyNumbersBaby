@@ -55,8 +55,13 @@
 //! turn beside a hole: `1/3*(x+2)^3-2^(-53)*(x+2)^2+1/3+
 //! 0/(x-(-9007199254740991*2^(-52)))`, a maximum at −2 with its hole a
 //! double away, certified "no extrema"; the replay refuses it, f′'s sign
-//! after −2 not decided.) A true genuine row the replay refuses is
-//! counted and printed, not failed.
+//! after −2 not decided. Four such functions, turns and inflections, in
+//! the long runs of seeds 20261025 and 20261026. The certifier now takes a
+//! zero at a box's end for its bound only at a closed end of the domain
+//! at that double, and otherwise leaves the row incomplete:
+//! `certify::rows::side_unasked`, and the four held to the truth again in
+//! [`the_genuine_rows_beside_a_hole_are_true`].) A true genuine row the
+//! replay refuses is counted and printed, not failed.
 //!
 //! ```text
 //! cargo test -p graphing --features mpfr-oracle --test replay_fuzz          # fixed seed, seconds

@@ -227,7 +227,7 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **1,125 tests** (counts include
+`nix develop -c cargo test --workspace` runs **1,128 tests** (counts include
 doctests; six more are `#[ignore]`d: a live currency fetch, the full
 metamorphic graph sweep, 20,000 random saved sessions, and the
 cross-checking tester's long run, single-expression check and case list).
@@ -255,7 +255,7 @@ upstream sources with g++:
 | calcvm (187 + 1 ignored) | Ports of `StandardCalculatorViewModelTests`, `HistoryTests`, the snapshot tests, plus programmer/paste/event coverage and the saved-state size budget (long pasted sessions keep their newest History, memory and modes) |
 | unitconv (140 + 1 ignored) | Ports of `UnitConverterTest.cpp`, `UnitConverterViewModelTests`, currency tests, a known value for every unit, network-policy cases |
 | datecalc (40), copypaste (40) | Ports of `DateCalculatorTests` and `CopyPasteManagerTests`, plus paste key-sequence tests |
-| graphing (449 + 4 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, sliders (kept while their equation isn't drawn, remembered while no equation uses them), function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows, a monotone piece or extremum at a domain end only where the proof reaches it; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
+| graphing (452 + 4 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, sliders (kept while their equation isn't drawn, remembered while no equation uses them), function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows, a monotone piece or extremum at a domain end only where the proof reaches it, nothing read across a gap beside a hole or a cut of the domain; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
 | appcore (66) | Keyboard map, key scripts, a text field's undo history (typed runs, its bound, redo cleared, the selection restored), converter paste validation, settings storage (huge/corrupt files, per-section budgets, a long calculator session that used to cost the whole file), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
 | crmath (1) | The vendored CORE-MATH's two builds (baseline and x86-64-v3) give the same bits |
 | gmnb (25), gmnb-launcher (4), dgmnb (68) | GDK key translation, a field's undo keys, palette contrast for extreme accents, settings compatibility, licence text that parses as markup; the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it) and where it finds GMNB; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown and pipe deadlines |
@@ -274,7 +274,7 @@ CI also runs checks that need more than `cargo test --workspace`:
   claim is *strong* when it re-proves it on the function's own tree, *weak*
   when it can only prove it on a tree the certifier supplied (the
   simplifier's form, the derivatives) or check it at sample points, so it
-  rests on the simplifier: today 75,427 strong, 172 weak. A claim refuted
+  rests on the simplifier: today 75,437 strong, 172 weak. A claim refuted
   or left open, or a row that doesn't follow from its claims, fails it.
   Each row is derived, not matched: an exact limit is equal to the
   derived one, never just inside the same enclosure; a gap about a point
@@ -313,7 +313,7 @@ CI also runs checks that need more than `cargo test --workspace`:
   refuse each result, with the
   rest of the certificate there, withheld, or with every genuine claim
   given to the row. CI runs a fixed few (3,341 mutants, none accepted).
-  The long runs (204 corpus functions, 43,080 mutants; 607 pool functions,
+  The long runs (204 corpus functions, 43,074 mutants; 607 pool functions,
   156,658) accept 17 and 11: each a true statement the replay proved (a
   row borrowed from another function that happens to hold, an enclosure
   narrowed onto the number it holds), reviewed by hand in a table with the
@@ -365,9 +365,30 @@ CI also runs checks that need more than `cargo test --workspace`:
   (50,090 cases) then found none. Holding the genuine certificates to the
   truth, it also found the certifier leaving out a turn or inflection at
   a double beside a hole (`1/6*(x-1/2)^3+2^(-56)*(x-1/2)^2+1/3+0/(x-(1/2))`
-  certified "no extrema", its maximum at the double below 1/2): four such
-  functions in two long runs; the strict replay refuses each (the turn's
-  side across the hole not decided). That is open in the certifier.
+  certified "no extrema", its maximum at the double below 1/2, the panel
+  saying "no maxima"): four such functions in two long runs, each refused
+  by the strict replay (the turn's side across the hole not decided) and
+  so let through by the run. A zero of f′ or f″ at the end of a box's
+  claims was taken for the box's bound; past it lay the gap to the hole,
+  where a `GapClear` says f′ has no zero, not which sign it has. Now such
+  a zero is the bound only at a closed end of the domain at that very
+  double; anywhere else it is no item and the row is not complete (the
+  panel's minima and maxima unknown). And now any genuine row the truth
+  refutes fails the run, whatever the replay says; the replay's refusals
+  of true genuine rows are counted (on seeds 20261025 and 20261026, 253 of
+  2,143 rows and 184 of 1,663 before the fix; 253 of 2,142 and 184 of
+  1,660 after, the false rows unknown now). The audit that followed, of
+  every place the certifier or the panel reads a sign, a zero's side or a
+  value across a gap or from one double to the reals beside it
+  (`tests/across_a_gap.rs` holds the panel's rows to the true answer),
+  found a domain's later side conditions carried back from a piece's
+  first double to the cut an earlier one made: 1/(x − 1) +
+  ln(2⁶⁰·(x − 1) − ½) was certified defined on (1, ∞), from 1 + 2⁻⁶¹ in
+  truth, and 1/(x − 1) + 1/(x − 1 − 2⁻⁵²) lost the reals between its
+  poles, and with them its one inflection point ("none"). Each such
+  sliver is now decided, or the domain is unknown. A long run of 600
+  functions on a fresh seed (7331, 50,190 cases) then found no false row,
+  genuine (1,730 rows; 238 true ones refused by the replay) or made up.
 - **Random cross-checking** (`--test crossfuzz`, same feature): the checks
   above take ordinary functions, shifted and scaled. This one generates
   expressions aimed at the families the review rounds kept finding bugs in
