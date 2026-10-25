@@ -7232,6 +7232,27 @@ fn exhaustive_funs() -> Vec<Fun> {
             vec![sq(&x(1)).scale(&qi(-1)), sq(&x(1))],
             Dom::Line,
         ),
+        // (f″ ≡ 0 on the line's piece: KinkSides with a flat side.)
+        fixed(
+            "max(x^2,x)",
+            &[qi(0), qi(1)],
+            vec![sq(&x(0)), x(0), sq(&x(0))],
+            Dom::Line,
+        ),
+        // (Two corners, each kink argument signed over the other's box.)
+        fixed(
+            "(x-1)^2+abs(x)-2*abs(x-1/3)",
+            &[qi(0), third.clone()],
+            {
+                let c = |a: i64, b: Rational| sq(&x(1)).add(&Poly::new(vec![b, qi(a)]));
+                vec![
+                    c(1, Rational::from((-2, 3))),
+                    c(3, Rational::from((-2, 3))),
+                    c(-1, Rational::from((2, 3))),
+                ]
+            },
+            Dom::Line,
+        ),
         fixed(
             "abs((x-1)*(x+1))",
             &[qi(-1), qi(1)],
@@ -7302,7 +7323,7 @@ fn exhaustive_funs() -> Vec<Fun> {
 }
 
 /// The functions the CI slice takes.
-const CI_FUNS: usize = 5;
+const CI_FUNS: usize = 6;
 
 /// What the exhaustive mode found and how much it tried.
 #[derive(Default)]
