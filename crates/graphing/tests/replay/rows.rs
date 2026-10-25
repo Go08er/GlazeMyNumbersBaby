@@ -1215,6 +1215,35 @@ fn shared_item(
     None
 }
 
+/// An item listed alone whose every proven place may be a member of a
+/// family the row lists too: the family stands for each of its members,
+/// so the item lists one of them again, a second number where there is
+/// one. ([`shared_item`] holds items alone apart from each other only:
+/// sin(x)°'s zeros every 360° from 0 and from 180°, with 180 alone too,
+/// passed. The claim fuzzer's periodic functions, every premise strong.)
+/// Meeting a member's enclosure is no proof that the place is that
+/// member: the item is refused where it isn't shown apart from them all.
+fn alone_at_a_member(found: &[Enc], listed: &[(Enc, Option<Enc>)]) -> Option<Enc> {
+    let families: Vec<(Enc, Enc)> = listed
+        .iter()
+        .filter_map(|(x, p)| p.map(|p| (*x, p)))
+        .collect();
+    if families.is_empty() {
+        return None;
+    }
+    listed
+        .iter()
+        .filter(|(_, p)| p.is_none())
+        .find(|(x, _)| {
+            let held: Vec<&Enc> = found.iter().filter(|d| x.contains(d)).collect();
+            !held.is_empty()
+                && held
+                    .iter()
+                    .all(|d| families.iter().any(|(x0, p)| meets_member(x0, p, d)))
+        })
+        .map(|(x, _)| *x)
+}
+
 /// Does `x` hold the enclosure `a` moved on k periods, a + k·p for every
 /// a and p in their enclosures? Exactly, in rationals.
 fn holds_shifted(x: &Enc, a: &Enc, p: &Enc, k: i32) -> bool {
@@ -1266,6 +1295,12 @@ fn match_items(
     if let Some(x) = shared_item(derived, listed, fits) {
         out.problems.push(format!(
             "{what} at [{:e}, {:e}] is listed with no proven place of its own",
+            x.lo, x.hi
+        ));
+    }
+    if let Some(x) = alone_at_a_member(derived, listed) {
+        out.problems.push(format!(
+            "{what} at [{:e}, {:e}] is listed alone, and as a listed family's member",
             x.lo, x.hi
         ));
     }

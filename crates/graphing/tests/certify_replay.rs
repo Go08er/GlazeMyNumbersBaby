@@ -5321,3 +5321,30 @@ fn what_is_read_across_a_gap_replays() {
     .collect();
     assert!(failed.is_empty(), "{failed:#?}");
 }
+
+/// An item alone at a member of a family the row lists too is that number
+/// listed twice: one item stands for one number, a family for each of its
+/// members. The rule for an item of its own was asked only of items alone
+/// among themselves, so sin(x)°'s zeros "every 360° from 0 and from 180°"
+/// with 180 listed alone too passed (the claim fuzzer's periodic
+/// functions: −3·tan(3x + 45)° with −75 alone beside every 60° from −15,
+/// over points, and cot(x/2)° with 540 alone beside every 360° from −180,
+/// complete over a window, every premise strong).
+#[test]
+fn an_item_alone_at_a_familys_member_is_listed_twice() {
+    // sin's genuine row, its region narrowed to points (partial).
+    let points = || {
+        let mut v = certificate_in("sin(x)", None, TrigUnit::Degrees);
+        let row = v["x_intercepts"]["Certified"].take();
+        v["x_intercepts"] = serde_json::json!({ "Partial": row });
+        body_of(&mut v, "x_intercepts")["cert"]["covers"] = serde_json::json!("Points");
+        v
+    };
+    assert_eq!(rejected(&points()), None);
+    let mut v = points();
+    let items = value_of(&mut v, "x_intercepts").as_array_mut().unwrap();
+    assert!(items.iter().any(|i| i["Every"]["x0"]["lo"] == 180.0));
+    items.push(serde_json::json!({"At": {"lo": 180.0, "hi": 180.0}}));
+    let w = rejected(&v).expect("180 listed alone and as a family's member, refused");
+    assert!(w.contains("family"), "{w}");
+}
