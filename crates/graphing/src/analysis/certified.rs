@@ -275,6 +275,18 @@ fn directed(v: f64, sig: i32, up: bool) -> Option<(String, f64)> {
     d.is_finite().then(|| (format_decimal_digits(d, sig), d))
 }
 
+/// An edge of a window as text: the double's shortest round-trip decimal
+/// when it has at most `sig` digits (a literal is the double it reads, so
+/// 0.1 is the edge 0.1 and no wider window), else [`directed`].
+fn edge_text(v: f64, sig: i32, up: bool) -> Option<(String, f64)> {
+    let t = format!("{v:e}");
+    let m = t.split_once('e')?.0;
+    if m.chars().filter(char::is_ascii_digit).count() <= sig as usize {
+        return Some((format_decimal_digits(v, sig), v));
+    }
+    directed(v, sig, up)
+}
+
 /// The two edges of a window the proof covers, written so the text lies
 /// within it (the audit of what is read across a gap, round 23: the
 /// edges rounded to nearest could name a wider window than was proven):
@@ -291,11 +303,11 @@ fn window_edges(a: f64, b: f64) -> Option<(String, String)> {
     for sig in 6..=15 {
         let lo = match &ea {
             Some(t) => Some((t.clone(), a)),
-            None => directed(a, sig, true).map(|(t, d)| (format!("≈{t}"), d)),
+            None => edge_text(a, sig, true).map(|(t, d)| (format!("≈{t}"), d)),
         };
         let hi = match &eb {
             Some(t) => Some((t.clone(), b)),
-            None => directed(b, sig, false).map(|(t, d)| (format!("≈{t}"), d)),
+            None => edge_text(b, sig, false).map(|(t, d)| (format!("≈{t}"), d)),
         };
         let (lo, hi) = (lo?, hi?);
         if lo.1 <= hi.1 {
@@ -3060,6 +3072,13 @@ mod tests {
         // was written 0.123456, below the proof's start, and 0.1234569
         // 0.123457, above its end), both signs.
         assert_eq!(w(0.1234561, 1.0).0, "≈0.123457");
+        // A literal is the double it reads: 0.1 stands for the edge 0.1,
+        // and the double after it is not written "0.1".
+        assert_eq!(w(0.1, 1.0).0, "≈0.1");
+        assert_eq!(w(-1.0, -0.1).1, m("≈-0.1"));
+        assert_eq!(w(0.1_f64.next_up(), 1.0).0, "≈0.100001");
+        assert_eq!(w(-1.0, 0.1_f64.next_down()).1, "≈0.0999999");
+        assert_eq!(w(1e-7, 2e20), ("≈1×10⁻⁷".into(), "2×10²⁰".into()));
         assert_eq!(w(-1.0, 0.1234569).1, "≈0.123456");
         assert_eq!(w(-0.1234569, 1.0).0, m("≈-0.123456"));
         assert_eq!(w(-1.0, -0.1234561).1, m("≈-0.123457"));
@@ -3080,9 +3099,9 @@ mod tests {
         // keep a point of the reals from crossing itself.
         assert_eq!(
             w(1.0000001, 1.0000002),
-            ("≈1.00000011".into(), "≈1.00000019".into())
+            ("≈1.0000001".into(), "≈1.0000002".into())
         );
-        assert_eq!(window_edges(0.1234561, 0.1234561), None);
+        assert_eq!(window_edges(1.0 / 3.0, 1.0 / 3.0), None);
     }
 
     #[test]

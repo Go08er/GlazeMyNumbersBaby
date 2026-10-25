@@ -546,7 +546,8 @@ CI also runs checks that need more than `cargo test --workspace`:
   ((x/16)³/3 − x + 0·tan x turns on both ends of its window [−64, 64]).
   The window's ends are written within what was proven: the low end
   rounded up and the high end down at the digits shown ("≈", unless
-  exact), never to nearest, which could name a wider window; and a
+  exact), never to nearest (an end whose shortest decimal is short is
+  that decimal: x-min 0.1 reads "≈0.1"), which could name a wider window; and a
   family's period is written exact only from its own claim or f's
   proven period, never because another family's lies in its enclosure.
   Windows-parity of the analysis is not claimed; the
