@@ -409,12 +409,14 @@ CI also runs checks that need more than `cargo test --workspace`:
   up to two (CI: 6 functions, 1,201,723 combinations, about 35 s) or
   three (all 20, 54,221,736 combinations about 126 places, 44 minutes at
   two threads) claims from a pool of proven true ones, crossed with
-  every changed row; none accepted a false row. Coverage of `tests/replay` under the fuzzer's
-  CI runs rose from 40.6% to 54.1% of lines (37.6% to 51.2% of regions),
-  of `src/certify` from 50.8% to 68.2% (46.8% to 64.9%), the generators
-  then aimed at what was left unreached (a kink's flat side, a row over
-  one period without its fact or over half of one, the domain undecided,
-  the period row, a piece listed constant or ending at two turns). It
+  every changed row; none accepted a false row. Coverage of
+  `tests/replay` under the fuzzer's CI runs rose from 40.6% to 54.2% of
+  lines (37.6% to 51.2% of regions), of `src/certify` from 50.8% to 68.5%
+  (46.8% to 65.2%); with the replay suites, to 89.8% and 87.7% of lines.
+  The generators were aimed at what the measure showed unreached (a
+  kink's flat side, a row over one period without its fact or over half
+  of one, the domain undecided, the period row, a piece listed constant
+  or ending at two turns). It
   found two holes in the replay, each fixed with a regression in
   `tests/certify_replay.rs`: an item listed alone at a member of a family
   the row lists too passed for a number of its own (−3·tan(3x + 45)° with
