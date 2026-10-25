@@ -600,6 +600,10 @@ struct Ctx<'a> {
     /// Every exact crossing claimed, and every value claimed exact at a
     /// double: (box, subject, level, where).
     exact_at: Vec<(Enc, Subject, f64, f64)>,
+    /// Every touch claimed (the level exactly at a double on the box's
+    /// end, strictly on one side of it on the rest): (box, subject, level,
+    /// where).
+    touch_at: Vec<(Enc, Subject, f64, f64)>,
     /// Every table family: (side expression, x₀, period).
     fams: Vec<(Subject, Enc, Enc)>,
     /// A proven period of f (the one the certifier's periodic window used).
@@ -672,6 +676,7 @@ impl<'a> Ctx<'a> {
         certs.extend(cert_of(&a.range));
         certs.extend(cert_of(&a.vertical));
         let (mut cross, mut exact_at, mut fams) = (Vec::new(), Vec::new(), Vec::new());
+        let mut touch_at = Vec::new();
         for c in certs {
             for cl in &c.claims {
                 match cl {
@@ -685,6 +690,9 @@ impl<'a> Ctx<'a> {
                     }
                     Claim::Family { of, x0, period } => {
                         fams.push((of.clone(), enc_of(x0), enc_of(period)));
+                    }
+                    Claim::Touch { x, of, c, at, .. } => {
+                        touch_at.push((enc_of(x), of.clone(), c.0, at.0));
                     }
                     _ => {}
                 }
@@ -706,6 +714,7 @@ impl<'a> Ctx<'a> {
             d,
             cross,
             exact_at,
+            touch_at,
             fams,
             period,
             period_enc,
@@ -1109,10 +1118,12 @@ impl<'a> Ctx<'a> {
         };
         let first_order = |s: &Subject| matches!(s, Subject::F(o) if o.k() == 1);
         // The boxes claimed about a zero of f′ at the double `at`, each
-        // with that one zero (f′ strictly monotone there): their hull.
+        // with that one zero (f′ strictly monotone there, or a touch
+        // there: of one strict sign on the rest of the box): their hull.
         let about = |at: f64| {
             self.exact_at
                 .iter()
+                .chain(&self.touch_at)
                 .filter(|(b, s, c, a)| first_order(s) && *c == 0.0 && *a == at && !b.is_point())
                 .map(|(b, ..)| *b)
                 .reduce(|u, b| Enc::new(u.lo.0.min(b.lo.0), u.hi.0.max(b.hi.0)))

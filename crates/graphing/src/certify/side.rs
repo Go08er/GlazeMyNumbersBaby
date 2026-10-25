@@ -865,7 +865,8 @@ fn pieces_of(
 /// (1, 1 + 2⁻⁵²), where it is defined, the box's first point a pole (the
 /// audit of what is read across a gap, after the claim fuzzer found a
 /// turn read across one: `tests/replay_fuzz.rs`). Now: g's enclosure over
-/// them (and the end) all allowed, or none of it; or g is v at the end,
+/// them (and the end) all allowed, or none of it; a g that must not be 0
+/// with each of its zero factors away from 0 there; or g is v at the end,
 /// and strictly monotone from there to the box, so strictly past v on
 /// the reals between: v its exact value at an end at a double (ln(x)/x: x
 /// is 0 at the end 0 ln leaves, and positive past it, where the divisor
@@ -895,10 +896,31 @@ fn sliver(
     // of a stretch g may be 0 on.)
     let none =
         |a: f64, b: f64, all: bool| all && !(s.zero_if_exponent.is_some() && a <= 0.0 && 0.0 <= b);
+    // Every value in [a, b] allowed, an infinite end of it a bound g's
+    // values approach, not one it takes (ln x over [0, 5·10⁻³²⁴]).
+    let all_in = |a: f64, b: f64| {
+        s.allowed.iter().any(|t| {
+            (a > t.lo || (a == t.lo && (t.lo_in || a.is_infinite())))
+                && (b < t.hi || (b == t.hi && (t.hi_in || b.is_infinite())))
+        })
+    };
+    // A divisor (or the like) that no zero factor of reaches 0 there,
+    // wherever it is defined: exp(1/x) beside x's 0, whose enclosure there
+    // holds 0 (its values are below the doubles), has none.
+    if s.allowed_nonzero() {
+        let mut off = true;
+        for h in super::fun::zero_factors(&s.g) {
+            let v = f.ser_of(&h, span, 0)?[0];
+            off &= !v.is_empty() && v.ne0();
+        }
+        if off {
+            return Ok(Some(Some(true)));
+        }
+    }
     let ser = f.ser_of(&s.g, span, 1)?;
     let g = ser[0];
     if !g.is_empty() {
-        if allows_all(&s.allowed, g.lo(), g.hi()) {
+        if all_in(g.lo(), g.hi()) {
             return Ok(Some(Some(true)));
         }
         if none(g.lo(), g.hi(), allows_none(&s.allowed, g.lo(), g.hi())) {
@@ -931,12 +953,14 @@ fn sliver(
     let segs = &s.allowed;
     let (all, nothing) = if closed {
         let (a, b) = if up { (v, g.hi()) } else { (g.lo(), v) };
-        (allows_all(segs, a, b), none(a, b, allows_none(segs, a, b)))
+        (all_in(a, b), none(a, b, allows_none(segs, a, b)))
     } else if up {
         // (v, g.hi]
         (
-            segs.iter()
-                .any(|t| v >= t.lo && (g.hi() < t.hi || (g.hi() == t.hi && t.hi_in))),
+            segs.iter().any(|t| {
+                v >= t.lo
+                    && (g.hi() < t.hi || (g.hi() == t.hi && (t.hi_in || g.hi().is_infinite())))
+            }),
             none(
                 v.next_up(),
                 g.hi(),
@@ -947,8 +971,10 @@ fn sliver(
     } else {
         // [g.lo, v)
         (
-            segs.iter()
-                .any(|t| v <= t.hi && (g.lo() > t.lo || (g.lo() == t.lo && t.lo_in))),
+            segs.iter().any(|t| {
+                v <= t.hi
+                    && (g.lo() > t.lo || (g.lo() == t.lo && (t.lo_in || g.lo().is_infinite())))
+            }),
             none(
                 g.lo(),
                 v.next_down(),
