@@ -79,8 +79,10 @@ mod replay;
 
 use graphing::certify::{DEFAULT_BUDGET, certify_text};
 use graphing::compile::CompileOptions;
+use graphing::functions::TrigUnit;
 use replay::{Claim, Class, KinkSign, Side, Subject};
-use rug::{Integer, Rational};
+use rug::float::{Constant, Round};
+use rug::{Float, Integer, Rational};
 use serde_json::{Value, json};
 use std::cmp::Ordering::{self, Equal, Greater, Less};
 use std::collections::BTreeMap;
@@ -673,6 +675,30 @@ impl Pw {
         self.polys.iter().all(Poly::is_zero)
     }
 
+    /// f on its domain: no cut at a closed end or past it (f there is
+    /// the piece inside, its derivatives one-sided at the end).
+    fn within(&self, dom: &Dom) -> Pw {
+        let keep = |c: &Rational| match dom {
+            Dom::From(a) => c > a,
+            Dom::Upto(a) => c < a,
+            _ => true,
+        };
+        let mut out = Pw {
+            cuts: Vec::new(),
+            polys: vec![self.polys[0].clone()],
+        };
+        for (j, c) in self.cuts.iter().enumerate() {
+            if keep(c) {
+                out.cuts.push(c.clone());
+                out.polys.push(self.polys[j + 1].clone());
+            } else if matches!(dom, Dom::From(_)) {
+                // (Left of the end: the piece after it stands.)
+                *out.polys.last_mut().expect("a piece") = self.polys[j + 1].clone();
+            }
+        }
+        out
+    }
+
     /// The pieces whose closed stretch holds x: one, or the two that meet
     /// at a cut.
     fn at(&self, x: &Rational) -> (usize, usize) {
@@ -730,6 +756,506 @@ impl Pw {
         }
         out
     }
+}
+
+// ------------------------------------------------------------ reals by MPFR
+
+/// A closed interval of MPFR floats about a real, its ends rounded
+/// outward (MPFR's own directed rounding; nothing of the replay's).
+#[derive(Clone, Debug)]
+struct Fi {
+    lo: Float,
+    hi: Float,
+}
+
+impl Fi {
+    fn rat(q: &Rational, p: u32) -> Fi {
+        Fi {
+            lo: Float::with_val_round(p, q, Round::Down).0,
+            hi: Float::with_val_round(p, q, Round::Up).0,
+        }
+    }
+
+    fn pi(p: u32) -> Fi {
+        Fi {
+            lo: Float::with_val_round(p, Constant::Pi, Round::Down).0,
+            hi: Float::with_val_round(p, Constant::Pi, Round::Up).0,
+        }
+    }
+
+    fn prec(&self) -> u32 {
+        self.lo.prec()
+    }
+
+    fn add(&self, o: &Fi) -> Fi {
+        let p = self.prec();
+        Fi {
+            lo: Float::with_val_round(p, &self.lo + &o.lo, Round::Down).0,
+            hi: Float::with_val_round(p, &self.hi + &o.hi, Round::Up).0,
+        }
+    }
+
+    fn neg(&self) -> Fi {
+        let p = self.prec();
+        Fi {
+            lo: Float::with_val(p, -&self.hi),
+            hi: Float::with_val(p, -&self.lo),
+        }
+    }
+
+    fn mul(&self, o: &Fi) -> Fi {
+        let p = self.prec();
+        let ends = [
+            (&self.lo, &o.lo),
+            (&self.lo, &o.hi),
+            (&self.hi, &o.lo),
+            (&self.hi, &o.hi),
+        ];
+        let down = ends.map(|(a, b)| Float::with_val_round(p, a * b, Round::Down).0);
+        let up = ends.map(|(a, b)| Float::with_val_round(p, a * b, Round::Up).0);
+        Fi {
+            lo: down.into_iter().reduce(|a, b| a.min(&b)).expect("four"),
+            hi: up.into_iter().reduce(|a, b| a.max(&b)).expect("four"),
+        }
+    }
+
+    /// 1/o (None: o may be 0).
+    fn recip(&self) -> Option<Fi> {
+        let p = self.prec();
+        if !(self.lo > 0 || self.hi < 0) {
+            return None;
+        }
+        Some(Fi {
+            lo: Float::with_val_round(p, 1 / &self.hi, Round::Down).0,
+            hi: Float::with_val_round(p, 1 / &self.lo, Round::Up).0,
+        })
+    }
+
+    /// sin over the interval, by its value at the low end widened by the
+    /// interval's width (|sin′| ≤ 1).
+    fn sin(&self) -> Fi {
+        self.trig(true)
+    }
+
+    fn cos(&self) -> Fi {
+        self.trig(false)
+    }
+
+    fn trig(&self, sin: bool) -> Fi {
+        let p = self.prec();
+        let w = Float::with_val_round(p, &self.hi - &self.lo, Round::Up).0;
+        let mut d = Float::with_val(p, &self.lo);
+        let mut u = Float::with_val(p, &self.lo);
+        if sin {
+            d.sin_round(Round::Down);
+            u.sin_round(Round::Up);
+        } else {
+            d.cos_round(Round::Down);
+            u.cos_round(Round::Up);
+        }
+        Fi {
+            lo: Float::with_val_round(p, &d - &w, Round::Down).0,
+            hi: Float::with_val_round(p, &u + &w, Round::Up).0,
+        }
+    }
+
+    /// The real against q, if the interval decides it.
+    fn cmp_rat(&self, q: &Rational) -> Option<Ordering> {
+        if self.lo > *q {
+            Some(Greater)
+        } else if self.hi < *q {
+            Some(Less)
+        } else {
+            None
+        }
+    }
+}
+
+/// A double's place in the order of all doubles, as a whole number.
+fn ord(d: f64) -> i64 {
+    let b = d.to_bits() as i64;
+    if b < 0 { b ^ i64::MAX } else { b }
+}
+
+fn unord(o: i64) -> f64 {
+    f64::from_bits((if o < 0 { o ^ i64::MAX } else { o }) as u64)
+}
+
+/// The doubles at or about a real enclosed by `fi`, `cmp(d)` the real
+/// against the double d: bisected over the doubles in order. (Walked a
+/// double at a time from the enclosure's end, a value near 0 was 2⁶⁰
+/// doubles from an end 2⁻⁹⁶ off: the periodic run hung on −cos(5x − 60)°.)
+fn doubles_about(cmp: impl Fn(f64) -> Ordering, fi: &Fi) -> (f64, f64) {
+    let mut lo = ord(fi.lo.to_f64_round(Round::Down).max(f64::MIN));
+    let mut hi = ord(fi.hi.to_f64_round(Round::Up).min(f64::MAX));
+    debug_assert!(cmp(unord(lo)) != Less);
+    while lo < hi {
+        let mid = lo + (hi - lo + 1) / 2;
+        if cmp(unord(mid)) != Less {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let d = unord(lo);
+    if cmp(d) == Equal {
+        (d, d)
+    } else {
+        (d, d.next_up())
+    }
+}
+
+/// A real (enclosed by `enc` at each precision) against q, the precision
+/// raised until the enclosure decides it. The real must not be q (each
+/// caller decides an exact equality exactly first).
+fn decide(enc: impl Fn(u32) -> Fi, q: &Rational) -> Ordering {
+    let mut p = 96;
+    loop {
+        if let Some(o) = enc(p).cmp_rat(q) {
+            return o;
+        }
+        assert!(p < 1 << 16, "a real not told from {q} at {p} bits");
+        p *= 2;
+    }
+}
+
+// ------------------------------------------------------------ periodic functions
+
+/// The trigonometric function of a periodic f.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TrigFn {
+    Sin,
+    Cos,
+    Tan,
+    Cot,
+}
+
+/// f = A·T(θ) + C, θ = a·x + b in degrees (or radians), T sin, cos, tan
+/// or cot, and C/A one of the values T takes at whole multiples of 30°
+/// (or 45°): 0, ±½, ±1. In half-turns s = θ/180° (θ/π), every zero of f,
+/// f′, f″, f‴ and every pole is at a rational s; in degrees that is a
+/// rational x, so the truth stays exact; in radians x = −b/a + (s/a)·π,
+/// and a comparison of one with a double is decided by MPFR, the
+/// precision raised until it decides (π is no rational).
+#[derive(Clone, Debug)]
+struct Trig {
+    func: TrigFn,
+    a: Rational,
+    b: Rational,
+    amp: Rational,
+    c: Rational,
+    deg: bool,
+}
+
+/// sin(π·u) exactly, where it is rational (u a whole multiple of 1/6, mod
+/// 2: Niven's).
+fn sin_pi_exact(u: &Rational) -> Option<Rational> {
+    let two = qi(2);
+    let v = u - Rational::from(u / &two).floor() * &two;
+    let table: [(Rational, Rational); 8] = [
+        (qi(0), qi(0)),
+        (Rational::from((1, 6)), Rational::from((1, 2))),
+        (Rational::from((1, 2)), qi(1)),
+        (Rational::from((5, 6)), Rational::from((1, 2))),
+        (qi(1), qi(0)),
+        (Rational::from((7, 6)), Rational::from((-1, 2))),
+        (Rational::from((3, 2)), qi(-1)),
+        (Rational::from((11, 6)), Rational::from((-1, 2))),
+    ];
+    table.into_iter().find(|(w, _)| *w == v).map(|(_, s)| s)
+}
+
+impl Trig {
+    /// T's period in half-turns.
+    fn tp(&self) -> Rational {
+        match self.func {
+            TrigFn::Sin | TrigFn::Cos => qi(2),
+            TrigFn::Tan | TrigFn::Cot => qi(1),
+        }
+    }
+
+    /// The half-turns of one unit of θ: 180 (degrees), or π.
+    fn theta(&self, x: &Rational) -> Rational {
+        Rational::from(&self.a * x) + &self.b
+    }
+
+    /// s at x, where it is rational: always in degrees; in radians where
+    /// θ = 0.
+    fn s_exact(&self, x: &Rational) -> Option<Rational> {
+        let th = self.theta(x);
+        if self.deg {
+            Some(th / 180u32)
+        } else {
+            (th.cmp0() == Equal).then(qi0)
+        }
+    }
+
+    /// f's period P = Tp·180/|a| (or Tp·π/|a|), as q0 + q1·π.
+    fn period(&self) -> (Rational, Rational) {
+        let p = &self.tp() / Rational::from(self.a.abs_ref());
+        if self.deg {
+            (p * 180u32, qi0())
+        } else {
+            (qi0(), p)
+        }
+    }
+
+    /// The place at half-turns s: x = (180·s − b)/a, or −b/a + (s/a)·π.
+    fn place(&self, s: &Rational) -> Place {
+        if self.deg {
+            Place::At((Rational::from(s * 180u32) - &self.b) / &self.a)
+        } else {
+            Place::Pi(
+                Rational::from(-&self.b) / &self.a,
+                Rational::from(s / &self.a),
+            )
+        }
+    }
+
+    /// The half-turns of a place of f (its zeros, turns, poles: all at
+    /// rational s).
+    fn s_of(&self, p: &Place) -> Option<Rational> {
+        match p {
+            Place::At(x) => self.s_exact(x),
+            Place::Pi(q0, q1) => {
+                (self.theta(q0).cmp0() == Equal).then(|| Rational::from(&self.a * q1))
+            }
+            Place::Root(_) => None,
+        }
+    }
+
+    /// f⁽ᵏ⁾ = coef·T⁽ᵏ⁾(θ) (+ C for k = 0), coef = A·(a·π/180)ᵏ, or A·aᵏ:
+    /// as (q, m), coef = q·πᵐ.
+    fn coef(&self, k: usize) -> (Rational, u32) {
+        let mut q = self.amp.clone();
+        for _ in 0..k {
+            q *= &self.a;
+            if self.deg {
+                q /= 180u32;
+            }
+        }
+        (q, if self.deg { k as u32 } else { 0 })
+    }
+
+    /// T⁽ᵏ⁾ at half-turns s, exactly where rational; Err at a pole.
+    fn tk_exact(&self, k: usize, s: &Rational) -> Result<Option<Rational>, ()> {
+        match self.func {
+            TrigFn::Sin | TrigFn::Cos => {
+                // T⁽ᵏ⁾(πs) = sin(π(s + k/2)) (+ ½ for cos).
+                let shift = Rational::from((k as i64 + i64::from(self.func == TrigFn::Cos), 2));
+                Ok(sin_pi_exact(&Rational::from(s + &shift)))
+            }
+            TrigFn::Tan | TrigFn::Cot => {
+                let v = s - s.clone().floor();
+                let tan = self.func == TrigFn::Tan;
+                let pole = if tan { Rational::from((1, 2)) } else { qi0() };
+                if v == pole {
+                    return Err(());
+                }
+                let t = if v == 0 || v == Rational::from((1, 2)) {
+                    qi0()
+                } else if v == Rational::from((1, 4)) {
+                    qi(1)
+                } else if v == Rational::from((3, 4)) {
+                    qi(-1)
+                } else {
+                    return Ok(None);
+                };
+                Ok(Some(Trig::tan_poly(k, tan, &t)))
+            }
+        }
+    }
+
+    /// tan⁽ᵏ⁾ (cot⁽ᵏ⁾) as a polynomial in t = tan (cot): t, ±(1 + t²),
+    /// 2t(1 + t²), ±2(1 + t²)(1 + 3t²).
+    fn tan_poly(k: usize, tan: bool, t: &Rational) -> Rational {
+        let t2 = Rational::from(t * t);
+        let one = Rational::from(&t2 + 1u32);
+        let sg = if tan { qi(1) } else { qi(-1) };
+        match k {
+            0 => t.clone(),
+            1 => sg * one,
+            2 => Rational::from(t * 2u32) * one,
+            _ => sg * one * 2u32 * (Rational::from(&t2 * 3u32) + 1u32),
+        }
+    }
+
+    /// T⁽ᵏ⁾ over an interval of θ in radians (None near a pole).
+    fn tk_fi(&self, k: usize, th: &Fi) -> Option<Fi> {
+        let (s, c) = (th.sin(), th.cos());
+        Some(match self.func {
+            TrigFn::Sin => [s.clone(), c.clone(), s.neg(), c.neg()][k].clone(),
+            TrigFn::Cos => [c.clone(), s.neg(), c.neg(), s][k].clone(),
+            TrigFn::Tan | TrigFn::Cot => {
+                let tan = self.func == TrigFn::Tan;
+                let t = if tan {
+                    s.mul(&c.recip()?)
+                } else {
+                    c.mul(&s.recip()?)
+                };
+                let p = th.prec();
+                let one = Fi::rat(&qi(1), p);
+                let t2 = t.mul(&t);
+                let sec = t2.add(&one);
+                let sg = Fi::rat(&qi(if tan { 1 } else { -1 }), p);
+                match k {
+                    0 => t,
+                    1 => sg.mul(&sec),
+                    2 => Fi::rat(&qi(2), p).mul(&t).mul(&sec),
+                    _ => sg
+                        .mul(&Fi::rat(&qi(2), p))
+                        .mul(&sec)
+                        .mul(&Fi::rat(&qi(3), p).mul(&t2).add(&one)),
+                }
+            }
+        })
+    }
+
+    /// f⁽ᵏ⁾(x) enclosed at p bits (x no pole).
+    fn val_fi(&self, k: usize, x: &Rational, p: u32) -> Fi {
+        let th = self.theta(x);
+        let arg = if self.deg {
+            Fi::pi(p).mul(&Fi::rat(&(th / 180u32), p))
+        } else {
+            Fi::rat(&th, p)
+        };
+        let t = self.tk_fi(k, &arg).expect("no pole");
+        let (q, m) = self.coef(k);
+        let mut v = t.mul(&Fi::rat(&q, p));
+        for _ in 0..m {
+            v = v.mul(&Fi::pi(p));
+        }
+        if k == 0 {
+            v = v.add(&Fi::rat(&self.c, p));
+        }
+        v
+    }
+
+    /// f⁽ᵏ⁾ at half-turns s against y, f⁽ᵏ⁾ exact there (T⁽ᵏ⁾ rational).
+    fn cmp_exact(&self, k: usize, t: &Rational, y: &Rational) -> Ordering {
+        let (q, m) = self.coef(k);
+        let qt = Rational::from(&q * t);
+        let add = if k == 0 { self.c.clone() } else { qi0() };
+        if m == 0 || qt.cmp0() == Equal {
+            return (qt + add).cmp(y);
+        }
+        // q·T·πᵐ (+ C): never a rational but 0.
+        let y = Rational::from(y - &add);
+        decide(
+            |p| {
+                let mut v = Fi::rat(&qt, p);
+                for _ in 0..m {
+                    v = v.mul(&Fi::pi(p));
+                }
+                v
+            },
+            &y,
+        )
+    }
+
+    /// f⁽ᵏ⁾(x) against y (x no pole).
+    fn val_cmp(&self, k: usize, x: &Rational, y: &Rational) -> Ordering {
+        if let Some(s) = self.s_exact(x)
+            && let Ok(Some(t)) = self.tk_exact(k, &s)
+        {
+            return self.cmp_exact(k, &t, y);
+        }
+        // T⁽ᵏ⁾ irrational there, so f⁽ᵏ⁾ is no rational: MPFR decides.
+        decide(|p| self.val_fi(k, x, p), y)
+    }
+
+    /// x is a pole.
+    fn pole_at(&self, x: &Rational) -> bool {
+        matches!(self.func, TrigFn::Tan | TrigFn::Cot)
+            && self
+                .s_exact(x)
+                .is_some_and(|s| self.tk_exact(0, &s).is_err())
+    }
+
+    /// f⁽ᵏ⁾ − v's breakpoints in one period of s, [0, Tp): its zeros
+    /// (false) and the poles (true), in order. (v = −C for k = 0.)
+    fn breakpoints(&self, k: usize) -> Vec<(Rational, bool)> {
+        let tp = self.tp();
+        let r = |n: i64, d: i64| Rational::from((n, d));
+        let mut out: Vec<(Rational, bool)> = Vec::new();
+        match self.func {
+            TrigFn::Sin | TrigFn::Cos => {
+                // sin(π(s + shift)) = v.
+                let v = if k == 0 {
+                    Rational::from(-&self.c) / &self.amp
+                } else {
+                    qi0()
+                };
+                let shift = r(k as i64 + i64::from(self.func == TrigFn::Cos), 2);
+                let us: Vec<Rational> = if v == 0 {
+                    vec![qi(0), qi(1)]
+                } else if v == r(1, 2) {
+                    vec![r(1, 6), r(5, 6)]
+                } else if v == r(-1, 2) {
+                    vec![r(7, 6), r(11, 6)]
+                } else if v == 1 {
+                    vec![r(1, 2)]
+                } else if v == -1 {
+                    vec![r(3, 2)]
+                } else {
+                    Vec::new()
+                };
+                for u in us {
+                    let s = Rational::from(&u - &shift);
+                    let s = &s - Rational::from(&s / &tp).floor() * &tp;
+                    out.push((s, false));
+                }
+            }
+            TrigFn::Tan | TrigFn::Cot => {
+                let tan = self.func == TrigFn::Tan;
+                out.push((if tan { r(1, 2) } else { qi(0) }, true));
+                let zero_t = if tan { qi(0) } else { r(1, 2) };
+                match k {
+                    0 => {
+                        let v = Rational::from(-&self.c) / &self.amp;
+                        if v == 0 {
+                            out.push((zero_t, false));
+                        } else if v == 1 {
+                            out.push((r(1, 4), false));
+                        } else if v == -1 {
+                            out.push((r(3, 4), false));
+                        }
+                    }
+                    2 => out.push((zero_t, false)),
+                    _ => {}
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+}
+
+fn qi0() -> Rational {
+    Rational::new()
+}
+
+/// The derivative whose zeros (or changes of sign) a list row lists.
+fn row_order(row: &str) -> usize {
+    match row {
+        "x_intercepts" => 0,
+        "extrema" | "monotonicity" => 1,
+        _ => 2,
+    }
+}
+
+/// A place of a periodic f as (q0, q1): q0 + q1·π.
+fn pq(p: &Place) -> (Rational, Rational) {
+    match p {
+        Place::At(x) => (x.clone(), qi0()),
+        Place::Pi(q0, q1) => (q0.clone(), q1.clone()),
+        Place::Root(_) => panic!("a root of a polynomial as q0 + q1·π"),
+    }
+}
+
+/// q is a whole number.
+fn whole(q: &Rational) -> bool {
+    *q.denom() == 1
 }
 
 // ------------------------------------------------------------ doubles
@@ -849,15 +1375,86 @@ enum Dom {
     Upto(Rational),
     /// ℝ ∖ {c}: `+0/(x−c)`.
     Hole(Rational),
+    /// ℝ less the poles x0 + k·P of tan or cot (each q0 + q1·π).
+    Poles {
+        x0: (Rational, Rational),
+        per: (Rational, Rational),
+    },
+}
+
+/// q0 + q1·π as a place (a rational where q1 = 0).
+fn pi_place(q0: Rational, q1: Rational) -> Place {
+    if q1.cmp0() == Equal {
+        Place::At(q0)
+    } else {
+        Place::Pi(q0, q1)
+    }
 }
 
 impl Dom {
+    /// The k-th pole (Poles only).
+    fn member(&self, k: &Integer) -> Place {
+        let Dom::Poles { x0, per } = self else {
+            unreachable!("poles")
+        };
+        let k = Rational::from(k);
+        pi_place(
+            Rational::from(&k * &per.0) + &x0.0,
+            Rational::from(&k * &per.1) + &x0.1,
+        )
+    }
+
+    /// The poles in [a, b] (Poles only; finite ends).
+    fn members(&self, a: f64, b: f64) -> Vec<Place> {
+        let Dom::Poles { x0, per } = self else {
+            return Vec::new();
+        };
+        let x = pi_place(x0.0.clone(), x0.1.clone()).approx();
+        let p = pi_place(per.0.clone(), per.1.clone()).approx();
+        let lo = ((a - x) / p).floor() - 1.0;
+        let hi = ((b - x) / p).ceil() + 1.0;
+        let mut out = Vec::new();
+        let mut k = Integer::from_f64(lo).expect("finite");
+        while k <= hi {
+            let m = self.member(&k);
+            if m.within(a, b) {
+                out.push(m);
+            }
+            k += 1;
+        }
+        out
+    }
+
+    /// The pole at the place, if one is (Poles only).
+    fn pole(&self, p: &Place) -> bool {
+        let Dom::Poles { x0, per } = self else {
+            return false;
+        };
+        // (q0 − x0 − k·P) + (q1 − x1 − k·P1)·π = 0, both parts.
+        let (q0, q1) = match p {
+            Place::At(x) => (x.clone(), qi0()),
+            Place::Pi(q0, q1) => (q0.clone(), q1.clone()),
+            Place::Root(_) => return false,
+        };
+        let (d0, d1) = (Rational::from(&q0 - &x0.0), Rational::from(&q1 - &x0.1));
+        let k = if per.1.cmp0() != Equal {
+            Rational::from(&d1 / &per.1)
+        } else {
+            if d1.cmp0() != Equal {
+                return false;
+            }
+            Rational::from(&d0 / &per.0)
+        };
+        *k.denom() == 1 && Rational::from(&k * &per.0) == d0 && Rational::from(&k * &per.1) == d1
+    }
+
     fn holds_q(&self, x: &Rational) -> bool {
         match self {
             Dom::Line => true,
             Dom::From(c) => x >= c,
             Dom::Upto(c) => x <= c,
             Dom::Hole(c) => x != c,
+            Dom::Poles { .. } => !self.pole(&Place::At(x.clone())),
         }
     }
 
@@ -868,6 +1465,7 @@ impl Dom {
             Dom::From(c) => a.is_finite() && qd(a) >= *c,
             Dom::Upto(c) => b.is_finite() && qd(b) <= *c,
             Dom::Hole(c) => !((!a.is_finite() || qd(a) <= *c) && (!b.is_finite() || *c <= qd(b))),
+            Dom::Poles { .. } => a.is_finite() && b.is_finite() && self.members(a, b).is_empty(),
         }
     }
 
@@ -878,6 +1476,7 @@ impl Dom {
             Dom::From(c) => b.is_finite() && qd(b) < *c,
             Dom::Upto(c) => a.is_finite() && qd(a) > *c,
             Dom::Hole(c) => a == b && a.is_finite() && qd(a) == *c,
+            Dom::Poles { .. } => a == b && a.is_finite() && !self.holds_q(&qd(a)),
         }
     }
 
@@ -887,6 +1486,7 @@ impl Dom {
             Dom::From(c) => p.cmp(c) != Less,
             Dom::Upto(c) => p.cmp(c) != Greater,
             Dom::Hole(c) => p.cmp(c) != Equal,
+            Dom::Poles { .. } => !self.pole(p),
         }
     }
 
@@ -901,7 +1501,7 @@ impl Dom {
 
     fn point(&self) -> Option<&Rational> {
         match self {
-            Dom::Line => None,
+            Dom::Line | Dom::Poles { .. } => None,
             Dom::From(c) | Dom::Upto(c) | Dom::Hole(c) => Some(c),
         }
     }
@@ -922,6 +1522,9 @@ struct Fun {
     /// hole, where the replay's own algebra doesn't read f as a rational
     /// function and needs a tree to factor).
     expanded: Vec<String>,
+    /// A periodic f (`f` then unused): its truth is the trigonometric
+    /// function's, certified in its angle unit.
+    trig: Option<Trig>,
 }
 
 /// p(x − c) as a formula (p in u = x − c).
@@ -965,8 +1568,11 @@ fn x_minus_text(c: &Rational, o: &Rational) -> Option<(String, String)> {
     Some((t, format!("Sub(x,{})", rat_formula(&r)?)))
 }
 
-fn make_fun(rng: &mut Rng) -> Option<Fun> {
-    // The centre: a double, or a point no double holds.
+/// The centre a function is built about (a double, or a point no double
+/// holds), the gaps to the doubles above and below it, and offsets from
+/// it: the doubles beside it, points between doubles, and others well
+/// apart.
+fn centre_and_palette(rng: &mut Rng) -> (Rational, Rational, Rational, Vec<Rational>) {
     let centres: [Rational; 8] = [
         qi(1),
         qi(1),
@@ -980,8 +1586,6 @@ fn make_fun(rng: &mut Rng) -> Option<Fun> {
     let c = rng.pick(&centres).clone();
     let up = Rational::from(&qd(doubles_out(floor_double(&c), 1)) - &c);
     let down = Rational::from(&c - &qd(doubles_out(ceil_double(&c), -1)));
-    // Offsets from the centre: the doubles beside it, points between
-    // doubles, and others well apart.
     let mut palette: Vec<Rational> = vec![
         qi(0),
         qi(0),
@@ -1007,6 +1611,57 @@ fn make_fun(rng: &mut Rng) -> Option<Fun> {
         palette.push(qd(f64::from_bits(1)));
         palette.push(qd(-f64::from_bits(1)));
     }
+    (c, up, down, palette)
+}
+
+/// f(u) in powers of u = x − c, as typed.
+fn u_text(fu: &Poly, c: &Rational) -> Option<String> {
+    let (u, _) = x_minus_text(c, &qi(0))?;
+    let mut t = String::new();
+    for (j, a) in fu.0.iter().enumerate().rev() {
+        if a.cmp0() == Equal {
+            continue;
+        }
+        let s = rat_text(&Rational::from(a.abs_ref()))?;
+        let term = match j {
+            0 => s,
+            1 => format!("{s}*{u}"),
+            _ => format!("{s}*{u}^{j}"),
+        };
+        let minus = a.cmp0() == Less;
+        if t.is_empty() {
+            t = if minus { format!("-{term}") } else { term };
+        } else {
+            t = format!("{t}{}{term}", if minus { "-" } else { "+" });
+        }
+    }
+    Some(if t.is_empty() { "0".into() } else { t })
+}
+
+/// lead·Π(x − c − o)^m as typed and as a formula.
+fn factored_text(
+    lead: &Rational,
+    c: &Rational,
+    offsets: &[Rational],
+    mults: &[u32],
+) -> Option<(String, String)> {
+    let mut t = rat_text(lead)?;
+    let mut fm = rat_formula(lead)?;
+    for (o, m) in offsets.iter().zip(mults) {
+        let (xt, xf) = x_minus_text(c, o)?;
+        if *m == 1 {
+            t = format!("{t}*{xt}");
+            fm = format!("Mul({fm},{xf})");
+        } else {
+            t = format!("{t}*{xt}^{m}");
+            fm = format!("Mul({fm},Pow({xf},{m}))");
+        }
+    }
+    Some((t, fm))
+}
+
+fn make_fun(rng: &mut Rng) -> Option<Fun> {
+    let (c, up, down, palette) = centre_and_palette(rng);
     if rng.chance(0.05) {
         // A constant (a plateau everywhere).
         let v = *rng.pick(&[0i64, 2, -3]);
@@ -1017,6 +1672,7 @@ fn make_fun(rng: &mut Rng) -> Option<Fun> {
             dom: Dom::Line,
             planted: vec![c.clone()],
             expanded: Vec::new(),
+            trig: None,
         };
         modifier(rng, &mut fun, &c, &palette)?;
         return Some(fun);
@@ -1067,44 +1723,11 @@ fn make_fun(rng: &mut Rng) -> Option<Fun> {
     }
     let planted: Vec<Rational> = offsets.iter().map(|o| Rational::from(&c + o)).collect();
     // The text: P itself factored, or f in powers of u.
-    let factored = |lead: &Rational| -> Option<(String, String)> {
-        let mut t = rat_text(lead)?;
-        let mut fm = rat_formula(lead)?;
-        for (o, m) in offsets.iter().zip(&mults) {
-            let (xt, xf) = x_minus_text(&c, o)?;
-            if *m == 1 {
-                t = format!("{t}*{xt}");
-                fm = format!("Mul({fm},{xf})");
-            } else {
-                t = format!("{t}*{xt}^{m}");
-                fm = format!("Mul({fm},Pow({xf},{m}))");
-            }
-        }
-        Some((t, fm))
-    };
+    let factored = |lead: &Rational| factored_text(lead, &c, &offsets, &mults);
     let text = if k == 0 && rng.chance(0.6) {
         factored(&scale)?.0
     } else {
-        let (u, _) = x_minus_text(&c, &qi(0))?;
-        let mut t = String::new();
-        for (j, a) in fu.0.iter().enumerate().rev() {
-            if a.cmp0() == Equal {
-                continue;
-            }
-            let s = rat_text(&Rational::from(a.abs_ref()))?;
-            let term = match j {
-                0 => s,
-                1 => format!("{s}*{u}"),
-                _ => format!("{s}*{u}^{j}"),
-            };
-            let minus = a.cmp0() == Less;
-            if t.is_empty() {
-                t = if minus { format!("-{term}") } else { term };
-            } else {
-                t = format!("{t}{}{term}", if minus { "-" } else { "+" });
-            }
-        }
-        if t.is_empty() { "0".into() } else { t }
+        u_text(&fu, &c)?
     };
     let mut evaluated = Vec::new();
     if k > 0 && rng.chance(0.5) {
@@ -1123,6 +1746,7 @@ fn make_fun(rng: &mut Rng) -> Option<Fun> {
         dom: Dom::Line,
         planted,
         expanded,
+        trig: None,
     };
     modifier(rng, &mut fun, &c, &palette)?;
     Some(fun)
@@ -1147,6 +1771,7 @@ fn modifier(rng: &mut Rng, fun: &mut Fun, c: &Rational, palette: &[Rational]) ->
     };
     fun.text.push_str(&term);
     fun.dom = dom;
+    fun.f = fun.f.within(&fun.dom);
     // (Its derivatives' trees, which the replay checks are f's exactly.)
     for t in fun.expanded.clone() {
         let name = &t[..t.find(" = ").expect("named")];
@@ -1157,13 +1782,367 @@ fn modifier(rng: &mut Rng, fun: &mut Fun, c: &Rational, palette: &[Rational]) ->
     Some(())
 }
 
+/// A periodic f: A·T(a·x + b) + C, T sin, cos, tan or cot, mostly in
+/// degrees (each zero, turn, inflection and pole at a rational), at
+/// times in radians (at rationals plus rational multiples of π, each
+/// told from a double by MPFR); C/A one of T's values at whole multiples
+/// of 30° (45°), so f's zeros sit at those too, or f touches 0 at a turn.
+fn make_trig(rng: &mut Rng) -> Option<Fun> {
+    let deg = rng.chance(0.8);
+    let func = *rng.pick(&[
+        TrigFn::Sin,
+        TrigFn::Sin,
+        TrigFn::Cos,
+        TrigFn::Cos,
+        TrigFn::Tan,
+        TrigFn::Cot,
+    ]);
+    let a = rng
+        .pick(&[
+            qi(1),
+            qi(1),
+            qi(2),
+            qi(-1),
+            qi(3),
+            Rational::from((1, 2)),
+            Rational::from((1, 3)),
+            qi(-2),
+            Rational::from((3, 2)),
+            qi(5),
+        ])
+        .clone();
+    let b = if deg {
+        rng.pick(&[
+            qi(0),
+            qi(0),
+            qi(30),
+            qi(45),
+            qi(-60),
+            qi(90),
+            qi(15),
+            qi(10),
+            qi(-135),
+            Rational::from((1, 2)),
+        ])
+        .clone()
+    } else {
+        rng.pick(&[
+            qi(0),
+            qi(0),
+            qi(1),
+            Rational::from((-1, 2)),
+            Rational::from((1, 3)),
+        ])
+        .clone()
+    };
+    let amp = rng
+        .pick(&[qi(1), qi(1), qi(2), qi(-1), Rational::from((1, 2)), qi(-3)])
+        .clone();
+    let v = match func {
+        TrigFn::Sin | TrigFn::Cos => rng
+            .pick(&[
+                qi(0),
+                qi(0),
+                Rational::from((1, 2)),
+                Rational::from((-1, 2)),
+                qi(1),
+                qi(-1),
+            ])
+            .clone(),
+        TrigFn::Tan | TrigFn::Cot => rng.pick(&[qi(0), qi(0), qi(1), qi(-1)]).clone(),
+    };
+    let c = -Rational::from(&amp * &v);
+    let name = match func {
+        TrigFn::Sin => "sin",
+        TrigFn::Cos => "cos",
+        TrigFn::Tan => "tan",
+        TrigFn::Cot => "cot",
+    };
+    let arg = format!("{}x{}", coef_text(&a)?, plus_text(&b)?);
+    let text = format!("{}{name}({arg}){}", coef_text(&amp)?, plus_text(&c)?);
+    Some(Fun {
+        text,
+        evaluated: Vec::new(),
+        f: Pw::one(Poly::constant(qi(1))),
+        dom: Dom::Line,
+        planted: Vec::new(),
+        expanded: Vec::new(),
+        trig: Some(Trig {
+            func,
+            a,
+            b,
+            amp,
+            c,
+            deg,
+        }),
+    })
+}
+
+/// A point at or beside q: q itself, the double next above or below it,
+/// or the point halfway between q's double and the next (no double holds
+/// it).
+fn beside_point(rng: &mut Rng, q: &Rational) -> Rational {
+    let lo = floor_double(q);
+    match rng.below(6) {
+        0 => qd(doubles_out(lo, 1)),
+        1 => qd(doubles_out(ceil_double(q), -1)),
+        2 => Rational::from(&qd(lo) + &qd(doubles_out(lo, 1))) / 2u32,
+        _ => q.clone(),
+    }
+}
+
+/// `{coef}*` as typed before a factor (nothing for 1, `-` for −1).
+fn coef_text(a: &Rational) -> Option<String> {
+    Some(if *a == 1 {
+        String::new()
+    } else if *a == -1 {
+        "-".into()
+    } else {
+        format!("{}*", rat_text(a)?)
+    })
+}
+
+/// `+t` or `-t` for a term added (nothing for 0).
+fn plus_text(a: &Rational) -> Option<String> {
+    Some(match a.cmp0() {
+        Equal => String::new(),
+        Greater => format!("+{}", rat_text(a)?),
+        Less => format!("-{}", rat_text(&Rational::from(-a))?),
+    })
+}
+
+/// A function with corners, its truth worked piece by piece: |P| (times
+/// a constant, plus one), P + a·|x − k|, and the max or min of P and Q =
+/// P − R, where P has its roots (or its turns) planted as `make_fun`'s
+/// are, R its own, and the corners sit at rationals: at doubles, at
+/// adjacent doubles, between doubles, at a turn of P or a double beside
+/// one; then sometimes a closed domain end or a hole at a corner or
+/// beside it. (A root of even multiplicity of |P|'s P, or of R, is no
+/// corner, though the certifier asks about a kink there.)
+fn make_kinked(rng: &mut Rng) -> Option<Fun> {
+    let (c, up, down, palette) = centre_and_palette(rng);
+    let shape = rng.below(10);
+    // P about c: its roots planted (k = 0) or its turns (k = 1, P′'s).
+    let k = if shape <= 2 {
+        0
+    } else {
+        *rng.pick(&[0usize, 0, 1, 1])
+    };
+    let mut offsets: Vec<Rational> = Vec::new();
+    if rng.chance(0.3) {
+        offsets.push(qi(0));
+        offsets.push(if rng.chance(0.5) {
+            up.clone()
+        } else {
+            Rational::from(-&down)
+        });
+    }
+    let n = (1 + rng.below(3)).max(offsets.len());
+    while offsets.len() < n {
+        let o = rng.pick(&palette).clone();
+        if !offsets.contains(&o) {
+            offsets.push(o);
+        }
+    }
+    let mults: Vec<u32> = offsets
+        .iter()
+        .map(|_| *rng.pick(&[1u32, 1, 1, 2, 2, 3]))
+        .collect();
+    let scale = rng
+        .pick(&[qi(1), qi(-1), qi(2), qi(-3), Rational::from((1, 2))])
+        .clone();
+    if mults.iter().sum::<u32>() + k as u32 > 6 {
+        return None;
+    }
+    let mut fu = Poly::constant(scale.clone());
+    for (o, m) in offsets.iter().zip(&mults) {
+        fu = fu.mul(&Poly::x_minus(o).pow(*m));
+    }
+    for _ in 0..k {
+        fu = fu.integral();
+        if rng.chance(0.4) {
+            let k0 = rng
+                .pick(&[qi(1), qi(-1), Rational::from((1, 3)), up.clone()])
+                .clone();
+            fu = fu.add(&Poly::constant(k0));
+        }
+    }
+    let p_text = if k == 0 && rng.chance(0.6) {
+        factored_text(&scale, &c, &offsets, &mults)?.0
+    } else {
+        u_text(&fu, &c)?
+    };
+    let p = fu.at_shift(&c);
+    let mut planted: Vec<Rational> = offsets.iter().map(|o| Rational::from(&c + o)).collect();
+    // The sign of a polynomial on each piece between its roots `cuts`.
+    let signs = |g: &Poly, cuts: &[Rational]| -> Vec<Ordering> {
+        (0..=cuts.len())
+            .map(|i| {
+                if cuts.is_empty() {
+                    sign_beside(g, &qi(0), true)
+                } else if i == 0 {
+                    sign_beside(g, &cuts[0], false)
+                } else {
+                    sign_beside(g, &cuts[i - 1], true)
+                }
+            })
+            .collect()
+    };
+    let (text, f) = match shape {
+        0..=2 => {
+            // s·|P| + C: corners at P's roots of odd multiplicity.
+            let s = rng
+                .pick(&[qi(1), qi(1), qi(-1), qi(2), Rational::from((1, 2))])
+                .clone();
+            let c0 = rng
+                .pick(&[qi(0), qi(0), qi(0), qi(1), Rational::from((-1, 2))])
+                .clone();
+            let mut cuts: Vec<Rational> = offsets
+                .iter()
+                .zip(&mults)
+                .filter(|(_, m)| *m % 2 == 1)
+                .map(|(o, _)| Rational::from(&c + o))
+                .collect();
+            cuts.sort();
+            let polys = signs(&p, &cuts)
+                .into_iter()
+                .map(|sg| {
+                    let sp = if sg == Less {
+                        p.scale(&qi(-1))
+                    } else {
+                        p.clone()
+                    };
+                    sp.scale(&s).add(&Poly::constant(c0.clone()))
+                })
+                .collect();
+            (
+                format!("{}abs({p_text}){}", coef_text(&s)?, plus_text(&c0)?),
+                Pw { cuts, polys },
+            )
+        }
+        3..=6 => {
+            // P + a·|x − q| or |x − q|·P, q at or beside one of P's
+            // planted points (a root, or a turn), or near the centre. (At
+            // a root of P, |x − q|·P has f′ continuous across q, 0 there,
+            // and f″ changing sign: an inflection at a kink, x·|x|'s.)
+            let base = if rng.chance(0.6) {
+                rng.pick(&planted).clone()
+            } else {
+                Rational::from(&c + rng.pick(&palette))
+            };
+            let q = beside_point(rng, &base);
+            let a = rng
+                .pick(&[qi(1), qi(-1), qi(2), Rational::from((-1, 2)), qi(3)])
+                .clone();
+            let (xt, _) = x_minus_text(&q, &qi(0))?;
+            let arg = if xt == "x" { "(x)".to_string() } else { xt };
+            planted.push(q.clone());
+            if shape == 6 {
+                let g = p.mul(&Poly::x_minus(&q));
+                (
+                    format!("abs{arg}*({p_text})"),
+                    Pw {
+                        cuts: vec![q],
+                        polys: vec![g.scale(&qi(-1)), g],
+                    },
+                )
+            } else {
+                let lin = Poly::x_minus(&q).scale(&a);
+                let sign = if a.cmp0() == Less { "-" } else { "+" };
+                let mag = coef_text(&Rational::from(a.abs_ref()))?;
+                (
+                    format!("{p_text}{sign}{mag}abs{arg}"),
+                    Pw {
+                        cuts: vec![q],
+                        polys: vec![p.sub(&lin), p.add(&lin)],
+                    },
+                )
+            }
+        }
+        _ => {
+            // max or min of P and Q = P − R: corners at R's roots of odd
+            // multiplicity, each at or beside a planted point of P.
+            let nr = 1 + rng.below(2);
+            let mut roffs: Vec<Rational> = Vec::new();
+            for _ in 0..nr {
+                let base = if rng.chance(0.5) {
+                    rng.pick(&offsets).clone()
+                } else {
+                    rng.pick(&palette).clone()
+                };
+                let o = Rational::from(&beside_point(rng, &Rational::from(&c + &base)) - &c);
+                if !roffs.contains(&o) {
+                    roffs.push(o);
+                }
+            }
+            let rmults: Vec<u32> = roffs.iter().map(|_| *rng.pick(&[1u32, 1, 2])).collect();
+            let rs = rng
+                .pick(&[qi(1), qi(-1), qi(2), Rational::from((1, 2))])
+                .clone();
+            let mut ru = Poly::constant(rs);
+            for (o, m) in roffs.iter().zip(&rmults) {
+                ru = ru.mul(&Poly::x_minus(o).pow(*m));
+            }
+            let qu = fu.sub(&ru);
+            let q_text = u_text(&qu, &c)?;
+            let (q, r) = (qu.at_shift(&c), ru.at_shift(&c));
+            let mut cuts: Vec<Rational> = roffs
+                .iter()
+                .zip(&rmults)
+                .filter(|(_, m)| *m % 2 == 1)
+                .map(|(o, _)| Rational::from(&c + o))
+                .collect();
+            cuts.sort();
+            planted.extend(roffs.iter().map(|o| Rational::from(&c + o)));
+            let max = rng.chance(0.5);
+            let polys = signs(&r, &cuts)
+                .into_iter()
+                .map(|sg| {
+                    // (R > 0: P is the greater.)
+                    if (sg == Greater) == max {
+                        p.clone()
+                    } else {
+                        q.clone()
+                    }
+                })
+                .collect();
+            let name = if max { "max" } else { "min" };
+            let text = if rng.chance(0.5) {
+                format!("{name}({p_text},{q_text})")
+            } else {
+                format!("{name}({q_text},{p_text})")
+            };
+            (text, Pw { cuts, polys })
+        }
+    };
+    // (No piece where f is constant: a plateau's turns are no list.)
+    if f.polys.iter().any(|g| g.degree() == 0) || f.polys.iter().any(|g| g.degree() > 7) {
+        return None;
+    }
+    planted.sort();
+    planted.dedup();
+    let mut fun = Fun {
+        text,
+        evaluated: Vec::new(),
+        f,
+        dom: Dom::Line,
+        planted,
+        expanded: Vec::new(),
+        trig: None,
+    };
+    modifier(rng, &mut fun, &c, &palette)?;
+    Some(fun)
+}
+
 // ------------------------------------------------------------ the truth
 
-/// A point of the line: a rational, or a root of a polynomial.
+/// A point of the line: a rational, a root of a polynomial, or q0 + q1·π
+/// (a feature of a periodic f in radians).
 #[derive(Clone, Debug)]
 enum Place {
     At(Rational),
     Root(Root),
+    Pi(Rational, Rational),
 }
 
 impl Place {
@@ -1171,6 +2150,7 @@ impl Place {
         match self {
             Place::At(x) => x.cmp(q),
             Place::Root(r) => r.cmp(q),
+            Place::Pi(q0, q1) => pi_cmp(q0, q1, q),
         }
     }
 
@@ -1183,6 +2163,7 @@ impl Place {
         match self {
             Place::At(x) => g.sign(x),
             Place::Root(r) => r.sign_of(g),
+            Place::Pi(..) => panic!("a polynomial's sign at q0 + q1·π"),
         }
     }
 
@@ -1191,6 +2172,10 @@ impl Place {
         match self {
             Place::At(x) => (floor_double(x), ceil_double(x)),
             Place::Root(r) => r.doubles(),
+            Place::Pi(q0, q1) => {
+                let fi = Fi::pi(128).mul(&Fi::rat(q1, 128)).add(&Fi::rat(q0, 128));
+                doubles_about(|d| self.cmp(&qd(d)), &fi)
+            }
         }
     }
 
@@ -1198,14 +2183,36 @@ impl Place {
         match self {
             Place::At(x) => x.to_f64(),
             Place::Root(r) => (Rational::from(&r.lo + &r.hi) / 2u32).to_f64(),
+            Place::Pi(q0, q1) => {
+                let v = Fi::pi(128).mul(&Fi::rat(q1, 128)).add(&Fi::rat(q0, 128));
+                v.lo.to_f64()
+            }
         }
     }
+}
+
+/// q0 + q1·π against q, exactly (by MPFR where q1 ≠ 0: π is no rational).
+fn pi_cmp(q0: &Rational, q1: &Rational, q: &Rational) -> Ordering {
+    if q1.cmp0() == Equal {
+        return q0.cmp(q);
+    }
+    let y = Rational::from(q - q0);
+    decide(|p| Fi::pi(p).mul(&Fi::rat(q1, p)), &y)
 }
 
 /// Two places in order, exactly.
 fn pcmp(a: &Place, b: &Place) -> Ordering {
     match (a, b) {
         (Place::At(x), Place::At(y)) => x.cmp(y),
+        (Place::Pi(..), Place::At(y)) => a.cmp(y),
+        (Place::At(x), Place::Pi(..)) => b.cmp(x).reverse(),
+        (Place::Pi(q0, q1), Place::Pi(r0, r1)) => {
+            // (q0 − r0) + (q1 − r1)·π against 0.
+            pi_cmp(&Rational::from(q0 - r0), &Rational::from(q1 - r1), &qi0())
+        }
+        (Place::Pi(..), Place::Root(_)) | (Place::Root(_), Place::Pi(..)) => {
+            panic!("a root of a polynomial against q0 + q1·π")
+        }
         (Place::Root(r), Place::At(y)) => r.cmp(y),
         (Place::At(x), Place::Root(r)) => r.cmp(x).reverse(),
         (Place::Root(r), Place::Root(s)) => {
@@ -1267,6 +2274,216 @@ fn meets(s: &Stretch, a: f64, b: f64) -> bool {
         && (!a.is_finite() || s.1.as_ref().is_none_or(|c| qd(a) <= *c))
 }
 
+/// A periodic f's truth: f⁽ᵏ⁾'s breakpoints in one period of the
+/// half-turns s (its zeros, false, and the poles, true) and its sign on
+/// the arc after each, and the stretch of x its feature lists cover.
+struct Periodic {
+    trig: Trig,
+    brk: [Vec<(Rational, bool)>; 4],
+    arcs: [Vec<Ordering>; 4],
+    span: (f64, f64),
+}
+
+impl Periodic {
+    fn new(trig: Trig, span: (f64, f64)) -> Periodic {
+        let brk = [0, 1, 2, 3].map(|k| trig.breakpoints(k));
+        let mut per = Periodic {
+            trig,
+            brk,
+            arcs: Default::default(),
+            span,
+        };
+        let tp = per.trig.tp();
+        per.arcs = [0, 1, 2, 3].map(|k| {
+            let b = &per.brk[k];
+            (0..b.len().max(1))
+                .map(|j| {
+                    let mid = match (b.get(j), b.get(j + 1)) {
+                        (Some(x), Some(y)) => Rational::from(&x.0 + &y.0) / 2u32,
+                        (Some(x), None) => (Rational::from(&x.0 + &b[0].0) + &tp) / 2u32,
+                        _ => Rational::from((1, 3)),
+                    };
+                    per.cmp_s(k, &mid, &qi0())
+                })
+                .collect()
+        });
+        per
+    }
+
+    /// f⁽ᵏ⁾ at half-turns s against y (s no pole).
+    fn cmp_s(&self, k: usize, s: &Rational, y: &Rational) -> Ordering {
+        let t = &self.trig;
+        match t.tk_exact(k, s) {
+            Ok(Some(v)) => t.cmp_exact(k, &v, y),
+            Ok(None) => decide(
+                |p| {
+                    let th = Fi::pi(p).mul(&Fi::rat(s, p));
+                    let (q, m) = t.coef(k);
+                    // (coef·πᵐ is (a/180)ᵏ·πᵏ in degrees, aᵏ in radians.)
+                    let mut v = t.tk_fi(k, &th).expect("no pole").mul(&Fi::rat(&q, p));
+                    for _ in 0..m {
+                        v = v.mul(&Fi::pi(p));
+                    }
+                    if k == 0 {
+                        v = v.add(&Fi::rat(&t.c, p));
+                    }
+                    v
+                },
+                y,
+            ),
+            Err(()) => panic!("f at a pole"),
+        }
+    }
+
+    /// Where half-turns s lie among f⁽ᵏ⁾'s breakpoints: on brk[j]
+    /// (Some(j)), or on the arc after brk[j].
+    fn locate(&self, k: usize, s: &Rational) -> (Option<usize>, usize) {
+        let tp = self.trig.tp();
+        let u = s - Rational::from(s / &tp).floor() * &tp;
+        let b = &self.brk[k];
+        if let Some(j) = b.iter().position(|(r, _)| *r == u) {
+            return (Some(j), j);
+        }
+        let j = b
+            .iter()
+            .rposition(|(r, _)| *r < u)
+            .unwrap_or(b.len().saturating_sub(1));
+        (None, j)
+    }
+
+    /// f⁽ᵏ⁾'s sign just left and right of half-turns s.
+    fn sides_s(&self, k: usize, s: &Rational) -> (Ordering, Ordering) {
+        let n = self.arcs[k].len();
+        match self.locate(k, s) {
+            (Some(j), _) => (self.arcs[k][(j + n - 1) % n], self.arcs[k][j]),
+            (None, j) => (self.arcs[k][j], self.arcs[k][j]),
+        }
+    }
+
+    /// The same in x: s falls as x rises where a < 0.
+    fn sides_x(&self, k: usize, s: &Rational) -> (Ordering, Ordering) {
+        let (l, r) = self.sides_s(k, s);
+        if self.trig.a.cmp0() == Less {
+            (r, l)
+        } else {
+            (l, r)
+        }
+    }
+
+    /// A row's features in one period of s: (where, a maximum?). Its
+    /// zeros for x-intercepts; f′'s and f″'s changes of sign for the
+    /// others.
+    fn feats_s(&self, row: &str) -> Vec<(Rational, Option<bool>)> {
+        let k = row_order(row);
+        self.brk[k]
+            .iter()
+            .filter(|(_, pole)| !pole)
+            .filter_map(|(r, _)| {
+                if k == 0 {
+                    return Some((r.clone(), None));
+                }
+                let (l, rr) = self.sides_x(k, r);
+                (l != rr && l != Equal && rr != Equal)
+                    .then(|| (r.clone(), (k == 1).then_some(l == Greater)))
+            })
+            .collect()
+    }
+
+    /// s modulo T's period.
+    fn residue(&self, s: &Rational) -> Rational {
+        let tp = self.trig.tp();
+        s - Rational::from(s / &tp).floor() * &tp
+    }
+
+    /// The least shift of s mapping a row's features (and their kinds)
+    /// onto themselves: Tp/j. (sin's zeros repeat every half-turn,
+    /// though f only every turn.)
+    fn shift_s(&self, row: &str) -> Rational {
+        let fs = self.feats_s(row);
+        let tp = self.trig.tp();
+        for j in (1..=fs.len().max(1)).rev() {
+            let d = Rational::from(&tp / j as u32);
+            let onto = fs.iter().all(|(r, m)| {
+                let u = self.residue(&Rational::from(r + &d));
+                fs.iter().any(|(r2, m2)| *r2 == u && m2 == m)
+            });
+            if onto {
+                return d;
+            }
+        }
+        tp
+    }
+
+    /// A row's features in [a, b] of x (finite): (where, its s, a
+    /// maximum?).
+    fn feats_in(&self, row: &str, a: f64, b: f64) -> Vec<(Place, Rational, Option<bool>)> {
+        let fs = self.feats_s(row);
+        self.between(row_order(row), a, b)
+            .into_iter()
+            .filter(|(_, pole)| !pole)
+            .filter_map(|(p, _)| {
+                let s = self.trig.s_of(&p)?;
+                let u = self.residue(&s);
+                let m = fs.iter().find(|(r, _)| *r == u)?.1;
+                Some((p, s, m))
+            })
+            .collect()
+    }
+
+    /// A shift of s as one of x: (q0, q1), |Δx| = q0 + q1·π.
+    fn dx(&self, ds: &Rational) -> (Rational, Rational) {
+        let q = ds / Rational::from(self.trig.a.abs_ref());
+        if self.trig.deg {
+            (q * 180u32, qi0())
+        } else {
+            (qi0(), q)
+        }
+    }
+
+    /// The whole n ≥ 1 for which [lo, hi] holds n shifts of s by `ds`, as
+    /// a shift of x.
+    fn multiple_in(&self, ds: &Rational, lo: f64, hi: f64) -> Option<Integer> {
+        let (q0, q1) = self.dx(ds);
+        let step = pi_place(q0.clone(), q1.clone()).approx();
+        if !(lo.is_finite() && hi.is_finite() && step > 0.0) {
+            return None;
+        }
+        let guess = (lo / step).round().max(1.0);
+        [guess - 1.0, guess, guess + 1.0]
+            .into_iter()
+            .filter(|n| *n >= 1.0)
+            .map(|n| Integer::from_f64(n).expect("finite"))
+            .find(|n| {
+                let n = Rational::from(n);
+                pi_place(Rational::from(&q0 * &n), Rational::from(&q1 * &n)).within(lo, hi)
+            })
+    }
+
+    /// The zeros of f⁽ᵏ⁾ and the poles (true) in [a, b] (finite), in
+    /// order.
+    fn between(&self, k: usize, a: f64, b: f64) -> Vec<(Place, bool)> {
+        let t = &self.trig;
+        let tp = t.tp().to_f64();
+        let unit = if t.deg { 180.0 } else { std::f64::consts::PI };
+        let s = |x: f64| (t.a.to_f64() * x + t.b.to_f64()) / unit;
+        let (s0, s1) = (s(a).min(s(b)), s(a).max(s(b)));
+        let mut out: Vec<(Place, bool)> = Vec::new();
+        let mut m = Integer::from_f64((s0 / tp).floor() - 1.0).expect("finite");
+        while m.to_f64() <= (s1 / tp).floor() + 1.0 {
+            for (r, pole) in &self.brk[k] {
+                let sv = r + Rational::from(&m) * t.tp();
+                let pl = t.place(&sv);
+                if pl.within(a, b) {
+                    out.push((pl, *pole));
+                }
+            }
+            m += 1;
+        }
+        out.sort_by(|x, y| pcmp(&x.0, &y.0));
+        out
+    }
+}
+
 struct Truth {
     /// f, f′, f″, f‴ (on f's pieces).
     d: [Pw; 4],
@@ -1294,6 +2511,9 @@ struct Truth {
     /// Where f′ changes sign inside the domain (a corner of f among
     /// them), and the domain's end or hole: where monotone pieces end.
     breaks: Vec<Place>,
+    /// A periodic f's (then `d` is unused, and the lists above are of
+    /// the span's features alone).
+    per: Option<Periodic>,
 }
 
 impl Truth {
@@ -1347,6 +2567,7 @@ impl Truth {
             inflections: Vec::new(),
             blur: Vec::new(),
             breaks: Vec::new(),
+            per: None,
         };
         t.zeros = t.roots[0]
             .iter()
@@ -1408,6 +2629,102 @@ impl Truth {
         t
     }
 
+    /// A periodic f's truth, its lists over `span`.
+    fn new_trig(trig: &Trig, span: (f64, f64)) -> Truth {
+        let per = Periodic::new(trig.clone(), span);
+        let dom = match trig.func {
+            TrigFn::Tan | TrigFn::Cot => {
+                let pole = per.brk[0]
+                    .iter()
+                    .find(|(_, p)| *p)
+                    .expect("a pole")
+                    .0
+                    .clone();
+                let x0 = match trig.place(&pole) {
+                    Place::At(x) => (x, qi0()),
+                    Place::Pi(q0, q1) => (q0, q1),
+                    Place::Root(_) => unreachable!("a pole at a root"),
+                };
+                Dom::Poles {
+                    x0,
+                    per: trig.period(),
+                }
+            }
+            _ => Dom::Line,
+        };
+        let events = [0, 1, 2, 3].map(|k| {
+            per.between(k, span.0, span.1)
+                .into_iter()
+                .filter(|(_, pole)| !pole)
+                .map(|(p, _)| (p, false))
+                .collect::<Vec<_>>()
+        });
+        let roots = [0, 1, 2, 3].map(|k| events[k].iter().map(|(p, _)| p.clone()).collect());
+        let one = Pw::one(Poly::constant(qi(1)));
+        let mut t = Truth {
+            d: [one.clone(), one.clone(), one.clone(), one],
+            dom,
+            roots,
+            rough: Default::default(),
+            events,
+            flats: Default::default(),
+            zeros: Vec::new(),
+            extrema: Vec::new(),
+            inflections: Vec::new(),
+            blur: Vec::new(),
+            breaks: Vec::new(),
+            per: Some(per),
+        };
+        t.zeros = t.roots[0]
+            .iter()
+            .map(|p| Feature {
+                at: p.clone(),
+                max: None,
+            })
+            .collect();
+        t.extrema = t.changes(1);
+        t.inflections = t.changes(2);
+        for i in &mut t.inflections {
+            i.max = None;
+        }
+        let mut breaks: Vec<Place> = t.extrema.iter().map(|f| f.at.clone()).collect();
+        breaks.extend(t.dom.members(span.0, span.1));
+        breaks.sort_by(pcmp);
+        t.breaks = breaks;
+        t
+    }
+
+    /// The zeros of f⁽ᵏ⁾ that may lie in [a, b]: a polynomial's all, a
+    /// periodic f's there.
+    fn zeros_near(&self, k: usize, a: f64, b: f64) -> Vec<Place> {
+        match &self.per {
+            Some(per) if a.is_finite() && b.is_finite() => per
+                .between(k, a, b)
+                .into_iter()
+                .filter(|(_, pole)| !pole)
+                .map(|(p, _)| p)
+                .collect(),
+            _ => self.roots[k].clone(),
+        }
+    }
+
+    /// The value of f⁽ᵏ⁾ at a double, enclosed in the doubles about it
+    /// (where it exists).
+    fn val_enc(&self, k: usize, x: f64) -> Option<(f64, f64)> {
+        let Some(per) = &self.per else {
+            let v = self.at(k, x)?;
+            return Some((floor_double(&v), ceil_double(&v)));
+        };
+        let q = qd(x);
+        if per.trig.pole_at(&q) {
+            return None;
+        }
+        Some(doubles_about(
+            |d| per.trig.val_cmp(k, &q, &qd(d)),
+            &per.trig.val_fi(k, &q, 96),
+        ))
+    }
+
     /// Where f⁽ᵏ⁾ changes sign strictly inside the domain: a zero, or a
     /// cut where it has no value (for f″, only where f′ is continuous: a
     /// corner is `blur`). (A maximum: from positive.)
@@ -1434,24 +2751,40 @@ impl Truth {
 
     /// f⁽ᵏ⁾'s sign just right (or left) of x, x left out.
     fn beside_sign(&self, k: usize, x: &Rational, right: bool) -> Ordering {
+        if let Some(per) = &self.per {
+            return match per.trig.s_exact(x) {
+                Some(s) => {
+                    let (l, r) = per.sides_x(k, &s);
+                    if right { r } else { l }
+                }
+                None => self.sign_q(k, x).expect("no pole"),
+            };
+        }
         let i = self.d[k].beside(x, right);
         sign_beside(&self.d[k].polys[i], x, right)
     }
 
     /// f⁽ᵏ⁾'s sign just left and just right of a zero or a cut.
     fn sides(&self, k: usize, p: &Place) -> (Ordering, Ordering) {
+        if let Some(per) = &self.per {
+            return per.sides_x(k, &per.trig.s_of(p).expect("a feature's half-turns"));
+        }
         match p {
             Place::At(x) => (self.beside_sign(k, x, false), self.beside_sign(k, x, true)),
             Place::Root(r) => {
                 let (i, _) = self.d[k].at_place(p);
                 sides(&self.d[k].polys[i], r)
             }
+            Place::Pi(..) => unreachable!("q0 + q1·π of a polynomial"),
         }
     }
 
     /// f⁽ᵏ⁾'s sign at x, None where it has no value (a cut where it
     /// doesn't exist).
     fn sign_q(&self, k: usize, x: &Rational) -> Option<Ordering> {
+        if let Some(per) = &self.per {
+            return (!per.trig.pole_at(x)).then(|| per.trig.val_cmp(k, x, &qi0()));
+        }
         let (l, r) = self.d[k].at(x);
         if l != r && self.rough[k].contains(x) {
             return None;
@@ -1461,6 +2794,9 @@ impl Truth {
 
     /// f⁽ᵏ⁾(x), where it exists.
     fn value_q(&self, k: usize, x: &Rational) -> Option<Rational> {
+        if self.per.is_some() {
+            return None;
+        }
         let (l, r) = self.d[k].at(x);
         if l != r && self.rough[k].contains(x) {
             return None;
@@ -1470,6 +2806,13 @@ impl Truth {
 
     /// f⁽ᵏ⁾ at a place against y (f⁽ᵏ⁾ exists there).
     fn cmp_value(&self, k: usize, p: &Place, y: &Rational) -> Ordering {
+        if let Some(per) = &self.per {
+            return match (per.trig.s_of(p), p) {
+                (Some(s), _) => per.cmp_s(k, &s, y),
+                (None, Place::At(x)) => per.trig.val_cmp(k, x, y),
+                _ => unreachable!("a place of a periodic f"),
+            };
+        }
         let (i, _) = self.d[k].at_place(p);
         let g = self.d[k].polys[i].sub(&Poly::constant(y.clone()));
         p.clone().sign_of(&g)
@@ -1490,6 +2833,25 @@ impl Truth {
         lo: &Rational,
         hi: &Rational,
     ) -> bool {
+        if let Some(per) = &self.per {
+            // Its ends' values, and those at the turns of f⁽ᵏ⁾ between (no
+            // pole there).
+            let (af, bf) = (a.to_f64(), b.to_f64());
+            if per.between(k, af, bf).iter().any(|(_, pole)| *pole) {
+                return false;
+            }
+            let inside = |c: Ordering| c != Less;
+            let within = |c_lo: Ordering, c_hi: Ordering| inside(c_lo) && c_hi != Greater;
+            let ends = [a, b]
+                .iter()
+                .all(|x| within(per.trig.val_cmp(k, x, lo), per.trig.val_cmp(k, x, hi)));
+            return ends
+                && per
+                    .between(k + 1, af, bf)
+                    .iter()
+                    .filter(|(p, pole)| !pole && p.cmp(a) == Greater && p.cmp(b) == Less)
+                    .all(|(p, _)| within(self.cmp_value(k, p, lo), self.cmp_value(k, p, hi)));
+        }
         if self.rough[k].iter().any(|c| a <= c && c <= b) {
             return false;
         }
@@ -1514,6 +2876,13 @@ impl Truth {
     /// How many zeros of f⁽ᵏ⁾, and cuts where it has no value, lie in
     /// [a, b] (a stretch where it is ≡ 0 meeting it: all).
     fn roots_in(&self, k: usize, a: f64, b: f64) -> usize {
+        if let Some(per) = &self.per {
+            // (Infinitely many on a tail.)
+            if !(a.is_finite() && b.is_finite()) {
+                return usize::MAX;
+            }
+            return per.between(k, a, b).len();
+        }
         if self.flats[k].iter().any(|s| meets(s, a, b)) {
             return usize::MAX;
         }
@@ -1525,6 +2894,14 @@ impl Truth {
 
     /// The zeros of f⁽ᵏ⁾ and the cuts where it has no value in [a, b].
     fn events_within(&self, k: usize, a: f64, b: f64) -> Vec<(Place, bool)> {
+        if self.per.is_some() {
+            return self
+                .zeros_near(k, a, b)
+                .into_iter()
+                .filter(|p| p.within(a, b))
+                .map(|p| (p, false))
+                .collect();
+        }
         self.events[k]
             .iter()
             .filter(|(p, _)| p.within(a, b))
@@ -1593,7 +2970,7 @@ impl Truth {
 
     /// The zeros of f⁽ᵏ⁾ strictly inside (a, b) where f is defined.
     fn roots_strictly_inside(&self, k: usize, a: f64, b: f64) -> usize {
-        self.roots[k]
+        self.zeros_near(k, a, b)
             .iter()
             .filter(|p| {
                 (!a.is_finite() || p.cmp(&qd(a)) == Greater)
@@ -1632,7 +3009,7 @@ impl Truth {
             });
         }
         let want = if *s == KinkSign::Pos { Greater } else { Less };
-        if self.roots[k].iter().any(inner) || self.flats[k].iter().any(flat_meets) {
+        if self.zeros_near(k, a, b).iter().any(inner) || self.flats[k].iter().any(flat_meets) {
             return false;
         }
         // f⁽ᵏ⁾'s sign on each stretch between the cuts where it has none.
@@ -2011,8 +3388,8 @@ impl Gen<'_> {
             Some(up) => match self.rng.below(4) {
                 0 if k > 0 => self.push(c_box("Kink", x, x)),
                 1 => {
-                    let v = self.t.at(k, x).expect("a value");
-                    self.push(c_value(k, x, x, floor_double(&v), ceil_double(&v)));
+                    let (lo, hi) = self.t.val_enc(k, x).expect("a value");
+                    self.push(c_value(k, x, x, lo, hi));
                 }
                 _ => self.push(c_sign("Beyond", k, x, x, up)),
             },
@@ -2453,6 +3830,8 @@ impl Gen<'_> {
 enum Scope {
     Line,
     Window(f64, f64),
+    /// One period of a periodic f, standing for the line (Certified).
+    Period(f64, f64),
     Points,
 }
 
@@ -2461,12 +3840,13 @@ impl Scope {
         match self {
             Scope::Line => json!("Line"),
             Scope::Window(a, b) => json!({"Window": {"a": num(*a), "b": num(*b)}}),
+            Scope::Period(a, b) => json!({"Period": {"a": num(*a), "b": num(*b)}}),
             Scope::Points => json!("Points"),
         }
     }
 
     fn status(&self) -> &'static str {
-        if *self == Scope::Line {
+        if matches!(self, Scope::Line | Scope::Period(..)) {
             "Certified"
         } else {
             "Partial"
@@ -2477,9 +3857,14 @@ impl Scope {
         *self != Scope::Points
     }
 
+    /// The whole line (by f's period, for a period).
+    fn whole(&self) -> bool {
+        matches!(self, Scope::Line | Scope::Period(..))
+    }
+
     fn holds(&self, p: &Place) -> bool {
         match self {
-            Scope::Line => true,
+            Scope::Line | Scope::Period(..) => true,
             Scope::Window(a, b) => p.within(*a, *b),
             Scope::Points => false,
         }
@@ -2506,6 +3891,8 @@ struct Item {
     y: Option<(f64, f64)>,
     max: Option<bool>,
     family: bool,
+    /// A family's period (x its first member's place).
+    every: Option<(f64, f64)>,
 }
 
 fn enc_of(v: &Value) -> Option<(f64, f64)> {
@@ -2524,20 +3911,28 @@ fn items_of(row: &str, value: &Value) -> Option<Vec<Item>> {
                         y: None,
                         max: None,
                         family: false,
+                        every: None,
                     });
                 }
+                let e = it.get("Every")?;
                 return Some(Item {
-                    x: enc_of(it.get("Every")?.get("x0")?)?,
+                    x: enc_of(e.get("x0")?)?,
                     y: None,
                     max: None,
                     family: true,
+                    every: Some(enc_of(e.get("period")?)?),
                 });
             }
+            let every = it.get("every").filter(|e| !e.is_null());
             Some(Item {
                 x: enc_of(it.get("x")?)?,
                 y: enc_of(it.get("y")?),
                 max: it.get("kind").and_then(Value::as_str).map(|k| k == "Max"),
-                family: it.get("every").is_some_and(|e| !e.is_null()),
+                family: every.is_some(),
+                every: match every {
+                    Some(e) => Some(enc_of(e)?),
+                    None => None,
+                },
             })
         })
         .collect()
@@ -2714,15 +4109,19 @@ impl Truth {
     #[allow(clippy::type_complexity)]
     fn stretches(&self) -> Vec<(Option<Place>, bool, Option<Place>, bool, Option<bool>)> {
         let mut ends: Vec<(Option<Place>, bool)> = Vec::new();
-        ends.push(match &self.dom {
-            Dom::From(c) => (Some(Place::At(c.clone())), true),
+        // (A periodic f's from the span's ends: no stretch of it is
+        // infinite, and those there are part of one.)
+        let span = self.per.as_ref().map(|p| p.span);
+        ends.push(match (&self.dom, span) {
+            (_, Some((a, _))) => (Some(Place::At(qd(a))), true),
+            (Dom::From(c), _) => (Some(Place::At(c.clone())), true),
             _ => (None, false),
         });
         let mut inner: Vec<(Place, bool)> = Vec::new();
         for b in &self.breaks {
             match (&self.dom, b) {
                 (Dom::From(c) | Dom::Upto(c), Place::At(x)) if x == c => {}
-                (Dom::Hole(c), Place::At(x)) if x == c => inner.push((b.clone(), false)),
+                _ if !self.dom.holds(b) => inner.push((b.clone(), false)),
                 _ => inner.push((b.clone(), true)),
             }
         }
@@ -2730,8 +4129,9 @@ impl Truth {
         // own comparison; two turns are roots of one square-free f′, apart.)
         inner.sort_by(|(a, _), (b, _)| pcmp(a, b));
         ends.extend(inner.into_iter().map(|(p, c)| (Some(p), c)));
-        ends.push(match &self.dom {
-            Dom::Upto(c) => (Some(Place::At(c.clone())), true),
+        ends.push(match (&self.dom, span) {
+            (_, Some((_, b))) => (Some(Place::At(qd(b))), true),
+            (Dom::Upto(c), _) => (Some(Place::At(c.clone())), true),
             _ => (None, false),
         });
         ends.windows(2)
@@ -2939,6 +4339,9 @@ impl Truth {
         {
             out.push(Place::At(c.clone()));
         }
+        if x.0.is_finite() && x.1.is_finite() {
+            out.extend(self.dom.members(x.0, x.1));
+        }
         if let Scope::Window(a, b) = scope {
             for e in [*a, *b] {
                 if x.0 <= e && e <= x.1 {
@@ -3013,22 +4416,310 @@ impl Truth {
     }
 
     fn judge(&self, row: &str, scope: &Scope, value: &Value) -> Verdict {
+        if row == "period" {
+            return self.judge_period(value);
+        }
+        if matches!(scope, Scope::Period(..)) && self.per.is_none() {
+            return Verdict::False("a row over one period of an f with none".into());
+        }
         match row {
+            "monotonicity" if self.per.is_some() && scope.whole() => {
+                self.judge_monotone_periodic(scope, value)
+            }
             "monotonicity" => self.judge_monotone(scope, value),
             "range" => self.judge_range(value),
+            _ if self.per.is_some() => self.judge_list_periodic(row, scope, value),
             _ => self.judge_list(row, scope, value),
+        }
+    }
+
+    /// A list row of a periodic f. Each item holds a feature of its kind
+    /// (f's value in its y); a family's period is a whole multiple of the
+    /// shift that maps the features onto themselves, so each member is
+    /// one; no feature is listed twice (two families' members meeting, an
+    /// item alone among a family's); over the line (or one period) every
+    /// feature is a family's member, and an item listed alone says its
+    /// repeats are none; over a window each feature in it is listed.
+    fn judge_list_periodic(&self, row: &str, scope: &Scope, value: &Value) -> Verdict {
+        let per = self.per.as_ref().expect("periodic");
+        let Some(items) = items_of(row, value) else {
+            return Verdict::False("unreadable".into());
+        };
+        let ps = per.shift_s(row);
+        let fits = |it: &Item, p: &Place, m: &Option<bool>| {
+            (it.max.is_none() || it.max == *m)
+                && it.y.is_none_or(|(lo, hi)| self.value_within_at(p, lo, hi))
+        };
+        // (Families as orbits of s: s0 + i·step.)
+        let mut fams: Vec<(Rational, Rational)> = Vec::new();
+        let mut singles: Vec<Vec<Rational>> = Vec::new();
+        for it in &items {
+            let held: Vec<Rational> = per
+                .feats_in(row, it.x.0, it.x.1)
+                .into_iter()
+                .filter(|(p, _, m)| fits(it, p, m))
+                .map(|(_, s, _)| s)
+                .collect();
+            if held.is_empty() {
+                return Verdict::False(format!(
+                    "the item at [{:e}, {:e}] is no {row} item",
+                    it.x.0, it.x.1
+                ));
+            }
+            match it.every {
+                None => singles.push(held),
+                Some((lo, hi)) => {
+                    if held.len() > 1 {
+                        return Verdict::False(format!(
+                            "a family through [{:e}, {:e}], which holds two {row} items",
+                            it.x.0, it.x.1
+                        ));
+                    }
+                    let Some(n) = per.multiple_in(&ps, lo, hi) else {
+                        return Verdict::False(format!(
+                            "the family through {:e} repeats every [{lo:e}, {hi:e}]: no shift \
+                             there maps f's {row} items onto themselves",
+                            it.x.0
+                        ));
+                    };
+                    fams.push((held[0].clone(), Rational::from(&ps * &Rational::from(n))));
+                }
+            }
+        }
+        let in_orbit = |s: &Rational, (s0, step): &(Rational, Rational)| {
+            whole(&(Rational::from(s - s0) / step))
+        };
+        for (i, a) in fams.iter().enumerate() {
+            for b in &fams[i + 1..] {
+                // Members meet where s_b − s_a is a whole combination of
+                // the two steps: a multiple of their greatest common one.
+                let (na, nb) = (Rational::from(&a.1 / &ps), Rational::from(&b.1 / &ps));
+                let g = Integer::from(na.numer().gcd_ref(nb.numer()));
+                let d = Rational::from(&b.0 - &a.0) / (Rational::from(&ps * &Rational::from(g)));
+                if whole(&d) {
+                    return Verdict::False(format!("two families of {row} items share members"));
+                }
+            }
+        }
+        // Each item alone: a feature of its own, no family's member.
+        let options: Vec<Vec<usize>> = Vec::new();
+        let mut keys: Vec<Rational> = Vec::new();
+        let mut opts = options;
+        for held in &singles {
+            let mut o = Vec::new();
+            for s in held.iter().filter(|s| !fams.iter().any(|f| in_orbit(s, f))) {
+                let i = keys.iter().position(|k| k == s).unwrap_or_else(|| {
+                    keys.push(s.clone());
+                    keys.len() - 1
+                });
+                o.push(i);
+            }
+            opts.push(o);
+        }
+        if matched(&opts).is_some() {
+            return Verdict::False(format!(
+                "an item listed alone holds no {row} item of its own"
+            ));
+        }
+        match scope {
+            Scope::Points => Verdict::True,
+            Scope::Line | Scope::Period(..) => {
+                if !singles.is_empty() {
+                    return Verdict::False(format!(
+                        "an item listed alone in a row complete over the line: its repeats \
+                         are {row} items too"
+                    ));
+                }
+                // Every feature over a common period of the families.
+                let tp = per.trig.tp();
+                let mut l = Integer::from(1);
+                for (_, step) in &fams {
+                    l.lcm_mut(Rational::from(step / &ps).numer());
+                }
+                l.lcm_mut(Rational::from(&tp / &ps).numer());
+                let span = Rational::from(&ps * &Rational::from(l));
+                let turns = Rational::from(&span / &tp).numer().to_u32().unwrap_or(1);
+                for (r, _) in per.feats_s(row) {
+                    for i in 0..turns {
+                        let sv = Rational::from(&tp * i) + &r;
+                        if !fams.iter().any(|f| in_orbit(&sv, f)) {
+                            return Verdict::False(format!(
+                                "the {row} item at s = {sv} (half-turns) is no family's member"
+                            ));
+                        }
+                    }
+                }
+                Verdict::True
+            }
+            Scope::Window(a, b) => {
+                // Each feature in the window: a family's member, or an item
+                // of its own.
+                let rest: Vec<Rational> = per
+                    .feats_in(row, *a, *b)
+                    .into_iter()
+                    .map(|(_, s, _)| s)
+                    .filter(|s| !fams.iter().any(|f| in_orbit(s, f)))
+                    .collect();
+                let opts: Vec<Vec<usize>> = rest
+                    .iter()
+                    .map(|s| {
+                        (0..singles.len())
+                            .filter(|j| singles[*j].contains(s))
+                            .collect()
+                    })
+                    .collect();
+                match matched(&opts) {
+                    None => Verdict::True,
+                    Some(i) => Verdict::False(format!(
+                        "the {row} item at s = {} (half-turns) in {scope:?} is not listed (or \
+                         shares an item)",
+                        rest[i]
+                    )),
+                }
+            }
+        }
+    }
+
+    /// A monotonicity row of a periodic f over the line (or one period):
+    /// each piece true and ending where f turns or has a pole, and with
+    /// their repeats by f's period they cover one period.
+    fn judge_monotone_periodic(&self, scope: &Scope, value: &Value) -> Verdict {
+        let per = self.per.as_ref().expect("periodic");
+        let Some(list) = value.as_array() else {
+            return Verdict::False("unreadable".into());
+        };
+        let mut pieces: Vec<(End, End, Option<bool>)> = Vec::new();
+        for it in list {
+            let on = &it["on"];
+            let (Some(lo), Some(hi)) = (end_of(&on["lo"]), end_of(&on["hi"])) else {
+                return Verdict::False("unreadable".into());
+            };
+            let dir = match it["dir"].as_str() {
+                Some("Increasing") => Some(true),
+                Some("Decreasing") => Some(false),
+                _ => None,
+            };
+            pieces.push((lo, hi, dir));
+        }
+        let mut extents: Vec<(f64, f64)> = Vec::new();
+        for (lo, hi, dir) in &pieces {
+            if let Err(why) = self.piece_true(lo, hi, *dir) {
+                return Verdict::False(format!("the piece {lo:?} to {hi:?} {dir:?}: {why}"));
+            }
+            if let Err(why) = self.piece_anchored(lo, hi, *dir, &Scope::Line) {
+                return Verdict::False(format!("the piece {lo:?} to {hi:?} {dir:?}: {why}"));
+            }
+            match (lo, hi) {
+                (Some((x, _)), Some((y, _))) => extents.push((x.0, y.1)),
+                _ => return Verdict::False("an infinite piece of a periodic f".into()),
+            }
+        }
+        // One period from the scope's start: each point of it where f is
+        // defined in a piece moved a whole number of periods.
+        let s0 = match scope {
+            Scope::Period(a, _) => *a,
+            _ => 0.0,
+        };
+        let (p0, p1) = per.trig.period();
+        let pf = pi_place(p0.clone(), p1.clone()).approx();
+        let shifted = |e: f64, k: i64| {
+            let k = Rational::from(k);
+            pi_place(Rational::from(&p0 * &k) + qd(e), Rational::from(&p1 * &k))
+        };
+        let start = Place::At(qd(s0));
+        let end = pi_place(Rational::from(&p0 + &qd(s0)), p1.clone());
+        let ks = |e0: f64, e1: f64| {
+            let lo = ((s0 - e1) / pf).floor() as i64 - 1;
+            let hi = ((s0 + pf - e0) / pf).ceil() as i64 + 1;
+            lo..=hi
+        };
+        let mut tries: Vec<Place> = vec![start.clone(), end.clone()];
+        for (e0, e1) in &extents {
+            for k in ks(*e0, *e1) {
+                for e in [*e0, *e1] {
+                    let t = shifted(e, k);
+                    if pcmp(&t, &start) != Less && pcmp(&t, &end) != Greater {
+                        tries.push(t);
+                    }
+                }
+            }
+        }
+        tries.sort_by(pcmp);
+        let mids: Vec<Place> = tries
+            .windows(2)
+            .map(|w| {
+                let (a, b) = (pq(&w[0]), pq(&w[1]));
+                pi_place((a.0 + b.0) / 2u32, (a.1 + b.1) / 2u32)
+            })
+            .collect();
+        tries.extend(mids);
+        for t in &tries {
+            if !self.dom.holds(t) {
+                continue;
+            }
+            let covered = extents.iter().any(|(e0, e1)| {
+                ks(*e0, *e1).any(|k| {
+                    pcmp(&shifted(*e0, k), t) != Greater && pcmp(t, &shifted(*e1, k)) != Greater
+                })
+            });
+            if !covered {
+                return Verdict::False(format!(
+                    "the pieces and their repeats leave {:e} out",
+                    t.approx()
+                ));
+            }
+        }
+        Verdict::True
+    }
+
+    /// The least period: P, for a periodic f; none for any other (a
+    /// constant has every period and no least: none too).
+    fn judge_period(&self, value: &Value) -> Verdict {
+        match (&self.per, enc_of(value)) {
+            (None, None) if value.is_null() => Verdict::True,
+            (None, _) => Verdict::False("a period listed for an f with none".into()),
+            (Some(_), None) => Verdict::False("no period listed for a periodic f".into()),
+            (Some(per), Some((lo, hi))) => {
+                let (q0, q1) = per.trig.period();
+                let p = pi_place(q0, q1);
+                if p.within(lo, hi) {
+                    Verdict::True
+                } else {
+                    Verdict::False(format!(
+                        "the period listed in [{lo:e}, {hi:e}] is not f's, {:e}",
+                        p.approx()
+                    ))
+                }
+            }
         }
     }
 
     /// f's range on its domain, as its components in order, each end
     /// infinite or the least (greatest) of f's values at some places.
     fn range_parts(&self) -> Vec<(REnd, REnd)> {
+        if let Some(per) = &self.per {
+            // sin, cos: [C − |A|, C + |A|], taken at the turns; tan, cot:
+            // the line.
+            if matches!(per.trig.func, TrigFn::Tan | TrigFn::Cot) {
+                return vec![(REnd::Inf, REnd::Inf)];
+            }
+            let at = |max: bool| REnd::Val {
+                at: self
+                    .extrema
+                    .iter()
+                    .filter(|f| f.max == Some(max))
+                    .map(|f| f.at.clone())
+                    .collect(),
+                attained: true,
+            };
+            return vec![(at(false), at(true))];
+        }
         let inside_point = || -> Place {
             Place::At(match &self.dom {
                 Dom::From(c) => Rational::from(c + 1u32),
                 Dom::Upto(c) => Rational::from(c - 1u32),
                 Dom::Hole(c) => Rational::from(c + 1u32),
-                Dom::Line => qi(0),
+                Dom::Line | Dom::Poles { .. } => qi(0),
             })
         };
         if self.constant() {
@@ -3217,6 +4908,11 @@ struct Ctx {
     atoms: Vec<f64>,
     /// The atoms at and beside the features.
     near: Vec<f64>,
+    /// A periodic f's window of one period (the genuine rows', or one
+    /// from −0.37·P), and the facts every row of it rests on: the
+    /// simplifier's period, the domain's excluded families.
+    pwin: Option<(f64, f64)>,
+    facts: Vec<Value>,
 }
 
 const LISTS: [&str; 12] = [
@@ -3239,7 +4935,23 @@ fn domain_as_built(row: &Value, dom: &Dom) -> bool {
     let Some(v) = row.get("Certified").map(|b| &b["value"]) else {
         return false;
     };
-    if v["excluded"].as_array().is_none_or(|e| !e.is_empty()) {
+    let Some(excluded) = v["excluded"].as_array() else {
+        return false;
+    };
+    let fams_ok = match dom {
+        // (One family: the poles, its x0 one of them, its period theirs.)
+        Dom::Poles { per, .. } => match excluded.as_slice() {
+            [e] => {
+                let x0 = enc_of(&e["x0"]);
+                let pe = enc_of(&e["period"]);
+                x0.is_some_and(|(a, b)| !dom.members(a, b).is_empty())
+                    && pe.is_some_and(|(a, b)| pi_place(per.0.clone(), per.1.clone()).within(a, b))
+            }
+            _ => false,
+        },
+        _ => excluded.is_empty(),
+    };
+    if !fams_ok {
         return false;
     }
     let Some(pieces) = v["pieces"].as_array() else {
@@ -3252,7 +4964,7 @@ fn domain_as_built(row: &Value, dom: &Dom) -> bool {
     };
     let inf = |b: &Value, s: &str| b.as_str() == Some(s);
     match (dom, pieces.as_slice()) {
-        (Dom::Line, [p]) => inf(&p["lo"], "NegInf") && inf(&p["hi"], "PosInf"),
+        (Dom::Line | Dom::Poles { .. }, [p]) => inf(&p["lo"], "NegInf") && inf(&p["hi"], "PosInf"),
         (Dom::From(c), [p]) => at(&p["lo"], c, true) && inf(&p["hi"], "PosInf"),
         (Dom::Upto(c), [p]) => inf(&p["lo"], "NegInf") && at(&p["hi"], c, true),
         (Dom::Hole(c), [p, q]) => {
@@ -3266,7 +4978,15 @@ fn domain_as_built(row: &Value, dom: &Dom) -> bool {
 }
 
 fn context(fun: Fun) -> Result<Ctx, String> {
-    let a = certify_text(&fun.text, CompileOptions::default(), DEFAULT_BUDGET, None)
+    let opts = CompileOptions {
+        trig_unit: if fun.trig.as_ref().is_some_and(|t| t.deg) {
+            TrigUnit::Degrees
+        } else {
+            TrigUnit::Radians
+        },
+        ..CompileOptions::default()
+    };
+    let a = certify_text(&fun.text, opts, DEFAULT_BUDGET, None)
         .map_err(|e| format!("not certified: {e:?}"))?;
     let mut genuine: Value =
         serde_json::from_str(&serde_json::to_string(&a).map_err(|e| e.to_string())?)
@@ -3284,14 +5004,23 @@ fn context(fun: Fun) -> Result<Ctx, String> {
         parts.extend(fun.evaluated.iter().cloned());
         genuine["evaluated"] = json!(parts.join("; "));
     }
-    if !domain_as_built(&genuine["domain"], &fun.dom) {
+    // A periodic f's truth over three periods either side of 0 (the
+    // certifier's window of one period lies within one of 0).
+    let truth = match &fun.trig {
+        Some(t) => {
+            let (q0, q1) = t.period();
+            let pf = pi_place(q0, q1).approx();
+            Truth::new_trig(t, (-3.0 * pf, 3.0 * pf))
+        }
+        None => Truth::new(&fun.f, &fun.dom),
+    };
+    if !domain_as_built(&genuine["domain"], &truth.dom) {
         return Err(format!(
             "the domain row is not as built: {}",
             genuine["domain"]
         ));
     }
     let fx = replay::function(&genuine)?;
-    let truth = Truth::new(&fun.f, &fun.dom);
     let mut near: Vec<f64> = Vec::new();
     let mut about = |lo: f64, hi: f64, n: i32| {
         for i in 0..=n {
@@ -3307,6 +5036,12 @@ fn context(fun: Fun) -> Result<Ctx, String> {
     }
     for p in fun.planted.iter().chain(fun.dom.point()) {
         about(floor_double(p), ceil_double(p), 1);
+    }
+    if let Some(per) = &truth.per {
+        for mut m in truth.dom.members(per.span.0, per.span.1) {
+            let (lo, hi) = m.enc();
+            about(lo, hi, 1);
+        }
     }
     near.retain(|x| x.is_finite());
     near.sort_by(f64::total_cmp);
@@ -3351,6 +5086,36 @@ fn context(fun: Fun) -> Result<Ctx, String> {
             base[row] = json!({"Unknown": {"reason": "withheld"}});
         }
     }
+    // A periodic f's window of one period, and the facts its rows rest on.
+    let (mut pwin, mut facts) = (None, Vec::new());
+    if let Some(per) = &truth.per {
+        for row in LISTS {
+            let Some(body) = genuine[row].as_object().and_then(|o| o.values().next()) else {
+                continue;
+            };
+            if let Some(w) = body["cert"]["covers"].get("Period") {
+                pwin = Some((
+                    replay::r(&w["a"]).unwrap_or(0.0),
+                    replay::r(&w["b"]).unwrap_or(0.0),
+                ));
+            }
+            for c in body["cert"]["claims"].as_array().into_iter().flatten() {
+                let fact = c.get("Simplifier").is_some_and(|f| {
+                    f["fact"]
+                        .as_str()
+                        .is_some_and(|t| t.starts_with("f(x + P) = f(x)"))
+                });
+                if (fact || c.get("Family").is_some()) && !facts.contains(c) {
+                    facts.push(c.clone());
+                }
+            }
+        }
+        if pwin.is_none() {
+            let (q0, q1) = per.trig.period();
+            let pf = pi_place(q0, q1).approx();
+            pwin = Some((-0.37 * pf, 0.63 * pf));
+        }
+    }
     Ok(Ctx {
         fun,
         truth,
@@ -3360,6 +5125,8 @@ fn context(fun: Fun) -> Result<Ctx, String> {
         session: replay::Session::default(),
         atoms,
         near,
+        pwin,
+        facts,
     })
 }
 
@@ -3404,6 +5171,31 @@ fn poly_range(p: &Poly, lo: &Rational, hi: &Rational) -> (Rational, Rational) {
     acc
 }
 
+impl Truth {
+    /// f's value at the place, enclosed in doubles.
+    fn value_enc(&self, p: &Place) -> (f64, f64) {
+        if let Some(per) = &self.per {
+            // (At a zero, a turn or an inflection f is A·T + C with T
+            // rational there.)
+            let t = &per.trig;
+            if let Some(sv) = t.s_of(p)
+                && let Ok(Some(v)) = t.tk_exact(0, &sv)
+            {
+                let y = Rational::from(&t.amp * &v) + &t.c;
+                return (floor_double(&y), ceil_double(&y));
+            }
+            return match p {
+                Place::At(x) if qd(x.to_f64()) == *x => {
+                    self.val_enc(0, x.to_f64()).expect("no pole")
+                }
+                _ => panic!("f's value at {p:?}"),
+            };
+        }
+        let (i, _) = self.d[0].at_place(p);
+        value_enc(&self.d[0].polys[i], p)
+    }
+}
+
 /// f's value at the place, enclosed in doubles (f the piece's polynomial
 /// there).
 fn value_enc(f: &Poly, p: &Place) -> (f64, f64) {
@@ -3412,6 +5204,7 @@ fn value_enc(f: &Poly, p: &Place) -> (f64, f64) {
             let v = f.eval(x);
             (floor_double(&v), ceil_double(&v))
         }
+        Place::Pi(..) => unreachable!("a polynomial at q0 + q1·π"),
         Place::Root(r) => {
             let mut r = r.clone();
             for _ in 0..400 {
@@ -3440,8 +5233,7 @@ impl Ctx {
             return None;
         }
         if a == b {
-            let v = self.truth.at(0, a)?;
-            return Some((floor_double(&v), ceil_double(&v)));
+            return self.truth.val_enc(0, a);
         }
         replay::iv::set_prec(160);
         let s = self.fx.series(&self.fx.f, a, b, 0);
@@ -3613,7 +5405,11 @@ impl Ctx {
                 6 | 7 => Scope::Window(left, r),
                 8 => Scope::Window(u(-1), u(1)),
                 _ => {
-                    if g.rng.chance(0.5) {
+                    if let Some(w) = self.pwin
+                        && g.rng.chance(0.6)
+                    {
+                        Scope::Period(w.0, w.1)
+                    } else if g.rng.chance(0.5) {
                         Scope::Line
                     } else {
                         Scope::Points
@@ -3631,7 +5427,7 @@ impl Ctx {
             let mut claims: Vec<Value> = chosen.iter().flat_map(|i| made[*i].clone()).collect();
             if g.rng.chance(0.2) {
                 match &scope {
-                    Scope::Window(a, b) => g.cover(*a, *b),
+                    Scope::Window(a, b) | Scope::Period(a, b) => g.cover(*a, *b),
                     Scope::Line => g.cover(f64::NEG_INFINITY, f64::INFINITY),
                     Scope::Points => {}
                 }
@@ -3652,6 +5448,7 @@ impl Ctx {
                 let i = g.rng.below(items.len());
                 items.remove(i);
             }
+            claims.extend(self.facts.iter().cloned());
             let mut seen = std::collections::HashSet::new();
             claims.retain(|c| seen.insert(c.to_string()));
             out.push(Case {
@@ -3670,7 +5467,10 @@ impl Ctx {
             ROWS[0], ROWS[1], ROWS[1], ROWS[1], ROWS[2], ROWS[2], ROWS[3],
         ]);
         let scope = match rng.below(10) {
-            0..=2 => Scope::Line,
+            0..=2 => match self.pwin {
+                Some(w) if rng.chance(0.8) => Scope::Period(w.0, w.1),
+                _ => Scope::Line,
+            },
             3..=8 => {
                 let point = row != "monotonicity" && rng.chance(0.3);
                 self.window(rng, point)
@@ -3686,6 +5486,7 @@ impl Ctx {
         };
         match &scope {
             Scope::Line => g.cover(f64::NEG_INFINITY, f64::INFINITY),
+            Scope::Period(a, b) => g.cover(*a, *b),
             Scope::Window(a, b) => {
                 let (mut lo, mut hi) = (*a, *b);
                 if g.rng.chance(0.3) {
@@ -3720,6 +5521,7 @@ impl Ctx {
         } else {
             self.list_row(rng, row, &scope, &mut claims)
         };
+        claims.extend(self.facts.iter().cloned());
         let mut seen = std::collections::HashSet::new();
         claims.retain(|c| seen.insert(c.to_string()));
         Case {
@@ -3744,7 +5546,10 @@ impl Ctx {
             atoms: &self.atoms,
             out: Vec::new(),
         };
-        g.cover(f64::NEG_INFINITY, f64::INFINITY);
+        match self.pwin {
+            Some((a, b)) => g.cover(a, b),
+            None => g.cover(f64::NEG_INFINITY, f64::INFINITY),
+        }
         if g.rng.chance(0.6) {
             // f′'s sign on every stretch between atoms with no zero of
             // it, in the domain: the walk covered but where it turns.
@@ -3762,7 +5567,7 @@ impl Ctx {
         let mut claims = std::mem::take(&mut g.out);
         // f's limits at the domain's infinite ends (by the tree's
         // structure).
-        if !self.truth.constant() {
+        if !self.truth.constant() && self.truth.per.is_none() {
             let polys = &self.truth.d[0].polys;
             let (first, last) = (&polys[0], &polys[polys.len() - 1]);
             let up_right = last.lead().cmp0() == Greater;
@@ -3841,11 +5646,15 @@ impl Ctx {
                 .collect(),
         );
         let ends = Value::Array(sources.iter().map(|[a, b]| json!([a, b])).collect());
+        claims.extend(self.facts.iter().cloned());
         let mut seen = std::collections::HashSet::new();
         claims.retain(|c| seen.insert(c.to_string()));
         Case {
             row: "range",
-            scope: Scope::Line,
+            scope: match self.pwin {
+                Some((a, b)) => Scope::Period(a, b),
+                None => Scope::Line,
+            },
             value,
             claims,
             ends,
@@ -3870,10 +5679,7 @@ impl Ctx {
             let x = p.enc();
             match self.y_of(x.0, x.1).filter(|_| *attained) {
                 Some(y) => vals.push((x, y, true)),
-                None => {
-                    let (i, _) = self.truth.d[0].at_place(&p);
-                    vals.push((x, value_enc(&self.truth.d[0].polys[i], &p), false));
-                }
+                None => vals.push((x, self.truth.value_enc(&p), false)),
             }
         }
         // Those that may be the least (greatest).
@@ -3909,7 +5715,157 @@ impl Ctx {
         )
     }
 
+    /// A list row of a periodic f: over the line (or one period) one
+    /// period's items as families every P (the certifier's), elsewhere
+    /// those in the window or some, alone or (sometimes) as families;
+    /// then changed: an item dropped, made up, moved a double, two
+    /// merged, a kind flipped, a family's period doubled, halved, moved a
+    /// double or the shift its items repeat by, a family listed alone, a
+    /// first member moved half a period, a family again every 2P.
+    fn list_row_periodic(
+        &self,
+        rng: &mut Rng,
+        row: &str,
+        scope: &Scope,
+        claims: &mut Vec<Value>,
+    ) -> Value {
+        let per = self.truth.per.as_ref().expect("periodic");
+        let (q0, q1) = per.trig.period();
+        let pp = pi_place(q0.clone(), q1.clone());
+        let pf = pp.approx();
+        let pe = pp.clone().enc();
+        let (a, b, fam) = match scope {
+            Scope::Line | Scope::Period(..) => {
+                let s0 = match scope {
+                    Scope::Period(a, _) => *a,
+                    _ => self.pwin.map_or(0.0, |w| w.0),
+                };
+                (s0, s0 + pf, true)
+            }
+            Scope::Window(a, b) => (*a, *b, rng.chance(0.2)),
+            Scope::Points => {
+                let Scope::Window(a, b) = self.window(rng, false) else {
+                    unreachable!("a window")
+                };
+                (a, b, rng.chance(0.3))
+            }
+        };
+        let mut feats = per.feats_in(row, a, b);
+        if scope.whole() {
+            // (One period: its far end is its near end's repeat.)
+            let (s0, s1) = pq(&Place::At(qd(a)));
+            let end = pi_place(s0 + &q0, s1 + &q1);
+            feats.retain(|(p, _, _)| pcmp(p, &end) == Less);
+        }
+        if *scope == Scope::Points {
+            feats.retain(|_| rng.chance(0.6));
+        }
+        // (x's enclosure, the family's period, a maximum?)
+        type Listed = ((f64, f64), Option<(f64, f64)>, Option<bool>);
+        let mut chosen: Vec<Listed> = feats
+            .into_iter()
+            .map(|(mut p, _, m)| (p.enc(), fam.then_some(pe), m))
+            .collect();
+        let shift = per.dx(&per.shift_s(row));
+        let se = pi_place(shift.0, shift.1).enc();
+        let n = chosen.len();
+        match rng.below(14) {
+            0 if n > 0 => {
+                chosen.remove(rng.below(n));
+            }
+            1 => {
+                let x = *rng.pick(&self.near);
+                chosen.push(((x, x), fam.then_some(pe), Some(rng.chance(0.5))));
+            }
+            2 if n > 0 => {
+                let i = rng.below(n);
+                let d = if rng.chance(0.5) { 1 } else { -1 };
+                chosen[i].0 = (doubles_out(chosen[i].0.0, d), doubles_out(chosen[i].0.1, d));
+            }
+            3 if n >= 2 => {
+                let i = rng.below(n - 1);
+                let (x, y) = (chosen[i].0, chosen[i + 1].0);
+                chosen[i].0 = (x.0.min(y.0), x.1.max(y.1));
+                chosen.remove(i + 1);
+            }
+            4 if n > 0 => {
+                let i = rng.below(n);
+                chosen[i].2 = chosen[i].2.map(|m| !m);
+            }
+            5 if n > 0 => {
+                let i = rng.below(n);
+                chosen[i].1 = Some((pe.0 * 2.0, pe.1 * 2.0));
+            }
+            6 if n > 0 => {
+                let i = rng.below(n);
+                chosen[i].1 = Some((pe.0 / 2.0, pe.1 / 2.0));
+            }
+            7 if n > 0 => {
+                let i = rng.below(n);
+                let d = if rng.chance(0.5) { 1 } else { -1 };
+                chosen[i].1 = Some((doubles_out(pe.0, d), doubles_out(pe.1, d)));
+            }
+            8 if n > 0 => {
+                let i = rng.below(n);
+                chosen[i].1 = Some(se);
+            }
+            9 if n > 0 => {
+                let i = rng.below(n);
+                chosen[i].1 = if chosen[i].1.is_some() {
+                    None
+                } else {
+                    Some(pe)
+                };
+            }
+            10 if n > 0 => {
+                let i = rng.below(n);
+                let h = pf / 2.0;
+                chosen[i].0 = (chosen[i].0.0 + h, chosen[i].0.1 + h);
+                let x = chosen[i].0;
+                chosen[i].0 = (x.0.next_down(), x.1.next_up());
+            }
+            11 if n > 0 => {
+                // The same family again, every 2P from P on.
+                let i = rng.below(n);
+                let mut again = chosen[i];
+                again.0 = ((again.0.0 + pf).next_down(), (again.0.1 + pf).next_up());
+                again.1 = Some((pe.0 * 2.0, pe.1 * 2.0));
+                chosen.push(again);
+            }
+            _ => {}
+        }
+        chosen.sort_by(|a, b| a.0.0.total_cmp(&b.0.0));
+        let items: Vec<Value> = chosen
+            .iter()
+            .map(|&((lo, hi), every, max)| {
+                let every_v = every.map_or(Value::Null, |(a, b)| enc(a, b));
+                if row == "x_intercepts" {
+                    return match every {
+                        Some((pa, pb)) => {
+                            json!({"Every": {"x0": enc(lo, hi), "period": enc(pa, pb)}})
+                        }
+                        None => json!({"At": enc(lo, hi)}),
+                    };
+                }
+                let y = self.y_of(lo, hi);
+                if let Some((ylo, yhi)) = y {
+                    claims.push(c_value(0, lo, hi, ylo, yhi));
+                }
+                let (ylo, yhi) = y.unwrap_or((0.0, 0.0));
+                let mut item = json!({"x": enc(lo, hi), "y": enc(ylo, yhi), "every": every_v});
+                if row == "extrema" {
+                    item["kind"] = json!(if max.unwrap_or(false) { "Max" } else { "Min" });
+                }
+                item
+            })
+            .collect();
+        Value::Array(items)
+    }
+
     fn list_row(&self, rng: &mut Rng, row: &str, scope: &Scope, claims: &mut Vec<Value>) -> Value {
+        if self.truth.per.is_some() {
+            return self.list_row_periodic(rng, row, scope, claims);
+        }
         let mut feats = self.truth.features(row);
         let mut chosen: Vec<((f64, f64), Option<bool>)> = Vec::new();
         // The boxes the claims place zeros in (each item may be listed as
@@ -4008,10 +5964,43 @@ impl Ctx {
     }
 
     fn mono_row(&self, rng: &mut Rng, scope: &Scope) -> Value {
+        self.mono_row_x(rng, scope, true)
+    }
+
+    /// The monotone pieces over the scope, changed (`change`) or true.
+    fn mono_row_x(&self, rng: &mut Rng, scope: &Scope, change: bool) -> Value {
         // The pieces' ends in order: (enclosure, closed); None: infinite.
         let mut ends: Vec<End> = Vec::new();
+        if let Some(per) = &self.truth.per
+            && scope.whole()
+        {
+            // One period of pieces, from the first turn (or pole) at or
+            // after the window's start to its repeat.
+            let s0 = match scope {
+                Scope::Period(a, _) => *a,
+                _ => self.pwin.map_or(0.0, |w| w.0),
+            };
+            let (q0, q1) = per.trig.period();
+            let first = self
+                .truth
+                .breaks
+                .iter()
+                .find(|b| b.cmp(&qd(s0)) != Less)
+                .cloned();
+            if let Some(first) = first {
+                let (f0, f1) = pq(&first);
+                let last = pi_place(f0 + q0, f1 + q1);
+                for b in &self.truth.breaks {
+                    if pcmp(b, &first) != Less && pcmp(b, &last) != Greater {
+                        let x = b.clone().enc();
+                        ends.push(Some((x, self.truth.dom.holds(b))));
+                    }
+                }
+            }
+            return self.mono_pieces(rng, ends, change);
+        }
         let (sa, sb) = match scope {
-            Scope::Window(a, b) => (*a, *b),
+            Scope::Window(a, b) | Scope::Period(a, b) => (*a, *b),
             Scope::Line => (f64::NEG_INFINITY, f64::INFINITY),
             Scope::Points => {
                 let Scope::Window(a, b) = self.window(rng, false) else {
@@ -4042,11 +6031,17 @@ impl Ctx {
             let mut b = b.clone();
             let x = b.enc();
             if x.0 > lo_x && x.1 < hi_x {
-                let hole = matches!(dom, Dom::Hole(c) if b.cmp(c) == Equal);
-                ends.push(Some((x, !hole)));
+                ends.push(Some((x, dom.holds(&b))));
             }
         }
         ends.push(end);
+        self.mono_pieces(rng, ends, change)
+    }
+
+    /// Monotone pieces between each two of `ends` (each in its direction),
+    /// then changed: a direction flipped, two joined, one cut at an atom,
+    /// an end moved a double, one dropped, an end opened or closed.
+    fn mono_pieces(&self, rng: &mut Rng, ends: Vec<End>, change: bool) -> Value {
         // The direction between two ends.
         let dir = |a: &End, b: &End| -> &'static str {
             if self.truth.constant() {
@@ -4078,7 +6073,7 @@ impl Ctx {
             _ => "Increasing",
         };
         let n = pieces.len();
-        match rng.below(10) {
+        match if change { rng.below(10) } else { 0 } {
             4 if n > 0 => {
                 let i = rng.below(n);
                 pieces[i].2 = flip(pieces[i].2);
@@ -4267,6 +6262,9 @@ struct Tally {
     /// (accepted, true) by row.
     by_row: BTreeMap<String, [u64; 4]>,
     kept: BTreeMap<&'static str, u64>,
+    /// The kinds of claims about kinks kept (`REPLAY_FUZZ_KINDS` prints
+    /// every kind's).
+    kept_kinds: BTreeMap<&'static str, u64>,
     dropped: BTreeMap<String, u64>,
     false_premises: Vec<String>,
     /// Accepted false rows (minimised).
@@ -4303,6 +6301,9 @@ impl Tally {
         }
         for (k, v) in o.kept {
             *self.kept.entry(k).or_default() += v;
+        }
+        for (k, v) in o.kept_kinds {
+            *self.kept_kinds.entry(k).or_default() += v;
         }
         for (k, v) in o.dropped {
             *self.dropped.entry(k).or_default() += v;
@@ -4341,6 +6342,15 @@ impl Tally {
             "  premises kept: {:?}; dropped: {:?}",
             self.kept, self.dropped
         );
+        let all_kinds = std::env::var_os("REPLAY_FUZZ_KINDS").is_some();
+        let kinds: BTreeMap<_, _> = self
+            .kept_kinds
+            .iter()
+            .filter(|(k, _)| all_kinds || k.starts_with("Kink") || **k == "Family")
+            .collect();
+        if !kinds.is_empty() {
+            println!("  kept by kind: {kinds:?}");
+        }
         println!(
             "  accepted false rows: {} ({} from strong premises only); premises proved but \
              false: {}",
@@ -4396,6 +6406,7 @@ fn genuine(ctx: &mut Ctx, t: &mut Tally) {
         "inflections",
         "monotonicity",
         "range",
+        "period",
     ] {
         let Some((status, body)) = ctx.genuine[row]
             .as_object()
@@ -4411,12 +6422,16 @@ fn genuine(ctx: &mut Ctx, t: &mut Tally) {
         let scope = match covers.as_str() {
             Some("Line") => Scope::Line,
             Some("Points") => Scope::Points,
-            _ => match covers.get("Window") {
-                Some(w) => Scope::Window(
+            _ => match (covers.get("Window"), covers.get("Period")) {
+                (Some(w), _) => Scope::Window(
                     replay::r(&w["a"]).unwrap_or(f64::NAN),
                     replay::r(&w["b"]).unwrap_or(f64::NAN),
                 ),
-                None => continue,
+                (_, Some(w)) => Scope::Period(
+                    replay::r(&w["a"]).unwrap_or(f64::NAN),
+                    replay::r(&w["b"]).unwrap_or(f64::NAN),
+                ),
+                _ => continue,
             },
         };
         t.genuine_rows += 1;
@@ -4464,17 +6479,38 @@ fn genuine(ctx: &mut Ctx, t: &mut Tally) {
 enum Kind {
     /// Polynomials (`make_fun`), with a closed domain end or a hole.
     Poly,
+    /// Functions with corners (`make_kinked`).
+    Kink,
+    /// Periodic functions (`make_trig`).
+    Trig,
     /// Each function of a kind drawn from its own stream: a run's i-th
     /// polynomial is the polynomial-only run's i-th.
     Mixed,
 }
 
+impl Kind {
+    /// `REPLAY_FUZZ_KIND` (poly, kink, trig or mixed), mixed unless set.
+    fn from_env() -> Kind {
+        match std::env::var("REPLAY_FUZZ_KIND").as_deref() {
+            Ok("poly") => Kind::Poly,
+            Ok("kink") => Kind::Kink,
+            Ok("trig") => Kind::Trig,
+            Ok("mixed") | Err(_) => Kind::Mixed,
+            Ok(other) => panic!("REPLAY_FUZZ_KIND={other}: poly, kink, trig or mixed"),
+        }
+    }
+}
+
 /// The kind of the i-th function of a run (its own stream, apart from
 /// the function's: `Rng::new(seed, i, 0)` makes the same polynomial
 /// whichever kinds a run mixes).
-fn kind_of(_seed: u64, _i: u64, kind: Kind) -> Kind {
+fn kind_of(seed: u64, i: u64, kind: Kind) -> Kind {
     match kind {
-        Kind::Mixed => Kind::Poly,
+        Kind::Mixed => match Rng::new(seed, i, u64::MAX).below(10) {
+            0..=4 => Kind::Poly,
+            5..=7 => Kind::Kink,
+            _ => Kind::Trig,
+        },
         k => k,
     }
 }
@@ -4484,6 +6520,8 @@ fn make_kind(seed: u64, i: u64, kind: Kind) -> Option<Fun> {
     let mut rng = Rng::new(seed, i, 0);
     match kind_of(seed, i, kind) {
         Kind::Poly | Kind::Mixed => (0..20).find_map(|_| make_fun(&mut rng)),
+        Kind::Kink => (0..20).find_map(|_| make_kinked(&mut rng)),
+        Kind::Trig => (0..20).find_map(|_| make_trig(&mut rng)),
     }
 }
 
@@ -4495,7 +6533,25 @@ fn run_function(seed: u64, i: u64, cases: u64, kind: Kind) -> Tally {
             ..Tally::default()
         };
     };
-    run_fun(fun, seed, i, cases)
+    // `REPLAY_FUZZ_TIMES`: each function's time and findings as it ends.
+    let started = std::time::Instant::now();
+    let text = fun.text.clone();
+    if std::env::var_os("REPLAY_FUZZ_TIMES").is_some() {
+        println!("function {i}: y={text}");
+    }
+    let t = run_fun(fun, seed, i, cases);
+    if std::env::var_os("REPLAY_FUZZ_TIMES").is_some() {
+        println!(
+            "function {i} ({:.1} s): y={text}: {} cases, {} accepted false, {} false premises, \
+             {} genuine false",
+            started.elapsed().as_secs_f64(),
+            t.cases,
+            t.failures.len(),
+            t.false_premises.len(),
+            t.genuine_false.len()
+        );
+    }
+    t
 }
 
 /// One function: its genuine certificate held to the truth, and `cases`
@@ -4556,6 +6612,7 @@ fn run_fun(fun: Fun, seed: u64, i: u64, cases: u64) -> Tally {
             for c in &rep.claims {
                 let class = c.outcome.class;
                 *t.kept.entry(class.name()).or_default() += 1;
+                *t.kept_kinds.entry(c.claim.kind()).or_default() += 1;
                 if ctx.truth.claim_true(&c.claim) == Some(false) {
                     t.false_premises.push(format!(
                         "seed {seed} function {i} case {j}: y={} [{}]: {} {:?} ({})",
@@ -4693,6 +6750,686 @@ fn assert_clean(t: &Tally) {
     );
 }
 
+// ------------------------------------------------------------ exhaustive
+
+/// A fixed function: its text, its pieces (in x), its domain.
+fn fixed(text: &str, cuts: &[Rational], polys: Vec<Poly>, dom: Dom) -> Fun {
+    let f = Pw {
+        cuts: cuts.to_vec(),
+        polys,
+    };
+    let mut planted: Vec<Rational> = cuts.to_vec();
+    planted.extend(dom.point().cloned());
+    // (A polynomial with a domain end or a hole: its derivatives' trees,
+    // as `make_fun` gives them.)
+    let mut evaluated = Vec::new();
+    if f.cuts.is_empty()
+        && let Some(c) = dom.point()
+    {
+        // (In u = x − c, where its coefficients are short.)
+        let d1 = f.polys[0].at_shift(&Rational::from(-c)).deriv();
+        evaluated = vec![
+            format!("f′ = {}", poly_formula(&d1, c).expect("written")),
+            format!("f″ = {}", poly_formula(&d1.deriv(), c).expect("written")),
+        ];
+    }
+    Fun {
+        text: text.into(),
+        evaluated,
+        f: f.within(&dom),
+        dom,
+        planted,
+        expanded: Vec::new(),
+        trig: None,
+    }
+}
+
+fn fixed_trig(text: &str, func: TrigFn, a: i64, b: i64, amp: i64, c: i64) -> Fun {
+    Fun {
+        text: text.into(),
+        evaluated: Vec::new(),
+        f: Pw::one(Poly::constant(qi(1))),
+        dom: Dom::Line,
+        planted: Vec::new(),
+        expanded: Vec::new(),
+        trig: Some(Trig {
+            func,
+            a: qi(a),
+            b: qi(b),
+            amp: qi(amp),
+            c: qi(c),
+            deg: true,
+        }),
+    }
+}
+
+/// The exhaustive mode's functions: the reviewers' (x² − 1 from a gap at
+/// its turn, the turn with f′'s next zero a double off, alone and at a
+/// closed end, (x − 1)² and (x − 1)³ at a point), the long runs' turn
+/// beside a hole, zeros at adjacent doubles and between doubles; corners
+/// at doubles and between them, a joined kink with an inflection, a kink
+/// box that holds no corner, a corner at a hole and at a closed end;
+/// sin, tan and a shifted sine in degrees. The CI slice takes the first
+/// `CI_FUNS`.
+fn exhaustive_funs() -> Vec<Fun> {
+    let x = |c: i64| Poly::x_minus(&qi(c));
+    let ulp = qd(2f64.powi(-52));
+    let cubic = Poly::new(vec![qi(0), qi(0), Rational::from(&ulp * 3u32), qi(-2)]).at_shift(&qi(1));
+    let third = Rational::from((1, 3));
+    let near_hole = Poly::new(vec![
+        third.clone(),
+        qi(0),
+        -qd(2f64.powi(-53)),
+        third.clone(),
+    ])
+    .at_shift(&qi(-2));
+    let sq = |p: &Poly| p.mul(p);
+    let mut cubic_fun = fixed(
+        "3*2^(-52)*(x-1)^2-2*(x-1)^3",
+        &[],
+        vec![cubic.clone()],
+        Dom::Line,
+    );
+    cubic_fun.evaluated = vec!["f′ = Mul(Mul(6,Sub(x,1)),Sub(Pow(2,Neg(52)),Sub(x,1)))".into()];
+    let mut cubic_end = fixed(
+        "3*2^(-52)*(x-1)^2-2*(x-1)^3+0*sqrt(x-1)",
+        &[],
+        vec![cubic],
+        Dom::From(qi(1)),
+    );
+    cubic_end.evaluated = cubic_fun.evaluated.clone();
+    let x2m1 = Poly::new(vec![qi(-1), qi(0), qi(1)]);
+    vec![
+        fixed("x^2-1", &[], vec![x2m1.clone()], Dom::Line),
+        cubic_fun,
+        fixed("(x-1)^2", &[], vec![sq(&x(1))], Dom::Line),
+        fixed(
+            "abs(x-1)*(x-1)",
+            &[qi(1)],
+            vec![sq(&x(1)).scale(&qi(-1)), sq(&x(1))],
+            Dom::Line,
+        ),
+        fixed(
+            "abs((x-1)*(x+1))",
+            &[qi(-1), qi(1)],
+            vec![x2m1.clone(), x2m1.scale(&qi(-1)), x2m1.clone()],
+            Dom::Line,
+        ),
+        cubic_end,
+        fixed("(x-1)^3", &[], vec![x(1).pow(3)], Dom::Line),
+        fixed(
+            "(x-1)*(x-1-2^(-52))",
+            &[],
+            vec![x(1).mul(&Poly::x_minus(&Rational::from(&ulp + 1u32)))],
+            Dom::Line,
+        ),
+        fixed(
+            "x^2-1/9",
+            &[],
+            vec![Poly::new(vec![Rational::from((-1, 9)), qi(0), qi(1)])],
+            Dom::Line,
+        ),
+        fixed(
+            "1/3*(x+2)^3-2^(-53)*(x+2)^2+1/3+0/(x-(-9007199254740991*2^(-52)))",
+            &[],
+            vec![near_hole],
+            Dom::Hole(qd(-2.0 + f64::EPSILON)),
+        ),
+        fixed(
+            "(x-1)^2+2*abs(x-1)",
+            &[qi(1)],
+            vec![
+                sq(&x(1)).sub(&x(1).scale(&qi(2))),
+                sq(&x(1)).add(&x(1).scale(&qi(2))),
+            ],
+            Dom::Line,
+        ),
+        fixed(
+            "x^3/3+abs(x-1/3)",
+            std::slice::from_ref(&third),
+            {
+                let c = Poly::new(vec![qi(0), qi(0), qi(0), third.clone()]);
+                let u = Poly::x_minus(&third);
+                vec![c.sub(&u), c.add(&u)]
+            },
+            Dom::Line,
+        ),
+        fixed(
+            "max(x^2,2*x-1)",
+            &[],
+            vec![Poly::new(vec![qi(0), qi(0), qi(1)])],
+            Dom::Line,
+        ),
+        fixed(
+            "abs(x-1)+0/(x-1)",
+            &[qi(1)],
+            vec![x(1).scale(&qi(-1)), x(1)],
+            Dom::Hole(qi(1)),
+        ),
+        fixed(
+            "abs(x-1)+(x-1)^2+0*sqrt(x-1)",
+            &[qi(1)],
+            vec![sq(&x(1)).sub(&x(1)), sq(&x(1)).add(&x(1))],
+            Dom::From(qi(1)),
+        ),
+        fixed_trig("sin(x)", TrigFn::Sin, 1, 0, 1, 0),
+        fixed_trig("tan(x)", TrigFn::Tan, 1, 0, 1, 0),
+        fixed_trig("2*sin(3*x+30)+1", TrigFn::Sin, 3, 30, 2, 1),
+    ]
+}
+
+/// The functions the CI slice takes.
+const CI_FUNS: usize = 5;
+
+/// What the exhaustive mode found and how much it tried.
+#[derive(Default)]
+struct Sweep {
+    /// (function, row, place, pool size, combinations tried).
+    places: Vec<(String, &'static str, f64, usize, u64)>,
+    combos: u64,
+    /// Rows the truth refuses among the variants, and true ones.
+    false_rows: u64,
+    true_rows: u64,
+    failures: Vec<String>,
+    genuine: Tally,
+}
+
+impl Ctx {
+    /// The places a row's features sit at (or might): the zeros of f⁽ᵏ⁾
+    /// (and its cuts with no value), the domain's end or hole, a
+    /// periodic f's over one period.
+    fn sweep_places(&self, k: usize) -> Vec<Place> {
+        let mut out: Vec<Place> = self.truth.events[k]
+            .iter()
+            .map(|(p, _)| p.clone())
+            .collect();
+        if let Some(c) = self.truth.dom.point() {
+            out.push(Place::At(c.clone()));
+        }
+        if let (Some(per), Some((a, _))) = (&self.truth.per, self.pwin) {
+            let (q0, q1) = per.trig.period();
+            let end = pi_place(q0 + qd(a), q1);
+            out.retain(|p| p.cmp(&qd(a)) != Less && pcmp(p, &end) == Less);
+        }
+        out
+    }
+
+    /// The pool about a place: true claims, each proven by the replay's
+    /// own check, about its doubles and the two either side, the gaps
+    /// between, boxes from far off and from two doubles off ending on
+    /// each, crossing and kink boxes about it. Each element is a claim or
+    /// two that go together (a gap with its clearness).
+    fn sweep_pool(&mut self, row: &'static str, k: usize, place: &Place) -> Vec<Vec<Value>> {
+        let (lo, hi) = place.clone().enc();
+        let mut pts = vec![doubles_out(lo, -2), lo.next_down(), lo];
+        if hi != lo {
+            pts.push(hi);
+        }
+        pts.extend([hi.next_up(), doubles_out(hi, 2)]);
+        let left = self
+            .atoms
+            .iter()
+            .copied()
+            .rfind(|a| *a < doubles_out(lo, -3))
+            .unwrap_or(doubles_out(lo, -3));
+        let right = self
+            .atoms
+            .iter()
+            .copied()
+            .find(|a| *a > doubles_out(hi, 3))
+            .unwrap_or(doubles_out(hi, 3));
+        let t = &self.truth;
+        let mut cands: Vec<Vec<Value>> = Vec::new();
+        for &x in &pts {
+            match t.sign_at(k, x) {
+                _ if t.dom.misses_box(x, x) => cands.push(vec![c_box("Undefined", x, x)]),
+                None => {
+                    if k > 0 {
+                        cands.push(vec![c_box("Kink", x, x)]);
+                    }
+                }
+                Some(Equal) => {
+                    cands.push(vec![c_value(k, x, x, 0.0, 0.0)]);
+                    cands.push(vec![c_exact(k, x, x, x)]);
+                    if k > 0 {
+                        cands.push(vec![c_box("Kink", x, x)]);
+                    }
+                }
+                Some(s) => {
+                    cands.push(vec![c_sign("Beyond", k, x, x, s == Greater)]);
+                    if let Some((a, b)) = t.val_enc(k, x) {
+                        cands.push(vec![c_value(k, x, x, a, b)]);
+                    }
+                }
+            }
+        }
+        for w in pts.windows(2) {
+            if w[0] < w[1] {
+                cands.push(vec![c_box("Gap", w[0], w[1]), c_clear(k, w[0], w[1])]);
+                cands.push(vec![c_box("Gap", w[0], w[1])]);
+            }
+        }
+        let (near_l, near_r) = (pts[0], pts[pts.len() - 1]);
+        for &x in &pts {
+            for (a, b) in [(left, x), (x, right), (near_l, x), (x, near_r)] {
+                if a >= b {
+                    continue;
+                }
+                if let Some(up) = t.sign_over(k, a, b) {
+                    cands.push(vec![c_sign("Beyond", k, a, b, up)]);
+                }
+                if t.sign_at(k, x) == Some(Equal) {
+                    let other = if a == x { b } else { a };
+                    if let Some(s) = t.sign_at(k, other).filter(|s| *s != Equal) {
+                        cands.push(vec![c_touch(k, a, b, x, s == Greater)]);
+                    }
+                    cands.push(vec![c_exact(k, a, b, x)]);
+                }
+                if k == 0 || row == "extrema" {
+                    cands.push(vec![c_box("Continuous", a, b)]);
+                }
+            }
+        }
+        // About the place itself: crossing boxes (two overlapping too), a
+        // kink's box and its sides.
+        let n = pts.len();
+        for (i, j) in [(0, n - 1), (1, n - 2), (0, n - 2), (1, n - 1)] {
+            cands.push(vec![c_cross(k, pts[i], pts[j])]);
+        }
+        for (a, b) in [(pts[1], pts[n - 2]), (pts[0], pts[n - 1])] {
+            if a < b && k > 0 {
+                cands.push(vec![c_box("Kink", a, b)]);
+                let at = (lo == hi && a < lo && lo < b).then_some(lo);
+                let (sl, sr) = t.sides(k, place);
+                cands.push(vec![c_sides(k, a, b, at, sl, sr, false)]);
+                cands.push(vec![c_sides(k, a, b, None, sl, sr, false)]);
+            }
+        }
+        let (a, b) = (pts[1], pts[n - 2]);
+        if k > 0 {
+            let at = (lo == hi && a < lo && lo < b).then_some(lo);
+            let (sl, sr) = t.sides(k, place);
+            cands.push(vec![c_box("Kink", a, b)]);
+            cands.push(vec![c_sides(k, a, b, at, sl, sr, false)]);
+            cands.push(vec![c_sides(k, a, b, at, sl, sr, k == 2 && at.is_some())]);
+            cands.push(vec![c_sides(k, a, b, None, sl, sr, false)]);
+            if k == 1
+                && let Some(p) = at
+                && sl != Equal
+                && sr != Equal
+            {
+                cands.push(vec![c_kink_at(a, b, p, sl == Greater, sr == Greater)]);
+            }
+        }
+        // True by the truth, and proven by the replay (each element on
+        // its own).
+        cands.retain(|el| {
+            el.iter()
+                .all(|c| replay::claim(c).is_ok_and(|cl| t.claim_true(&cl) == Some(true)))
+        });
+        let mut seen = std::collections::HashSet::new();
+        cands.retain(|el| seen.insert(format!("{el:?}")));
+        cands
+            .into_iter()
+            .filter(|el| {
+                let case = Case {
+                    row,
+                    scope: Scope::Points,
+                    value: json!([]),
+                    claims: el.clone(),
+                    ends: Value::Null,
+                };
+                let v = case.json(&self.base);
+                replay::replay_in(&v, &mut self.session, Some(row)).is_ok_and(|rep| {
+                    rep.claims
+                        .iter()
+                        .all(|c| matches!(c.outcome.class, Class::Strong | Class::Weak))
+                })
+            })
+            .take(SWEEP_POOL)
+            .collect()
+    }
+
+    /// Rows about a place, every way: over the place, a window from it
+    /// or to it, the doubles beside it, points (and one period of a
+    /// periodic f); each true, and changed every way one change goes (an
+    /// item dropped, moved a double either way, made up at the place or a
+    /// double beside, of the other kind; a piece's direction flipped, two
+    /// joined, an end moved). With the value claims its items need.
+    fn sweep_rows(&self, row: &'static str, place: &Place) -> Vec<(Scope, Value, Vec<Value>)> {
+        let (lo, hi) = place.clone().enc();
+        let mut scopes = vec![
+            Scope::Window(lo, hi),
+            Scope::Window(lo, doubles_out(hi, 4)),
+            Scope::Window(doubles_out(lo, -4), hi),
+            Scope::Window(lo.next_down(), hi.next_up()),
+            Scope::Points,
+        ];
+        if let Some((a, b)) = self.pwin {
+            scopes.push(Scope::Period(a, b));
+        }
+        let mut out = Vec::new();
+        for scope in scopes {
+            if row == "monotonicity" {
+                if matches!(scope, Scope::Window(a, b) if a == b) || scope == Scope::Points {
+                    continue;
+                }
+                let base = self.mono_row_x(&mut Rng::new(0, 0, 0), &scope, false);
+                let pieces = base.as_array().cloned().unwrap_or_default();
+                out.push((scope.clone(), Value::Array(pieces.clone()), Vec::new()));
+                for i in 0..pieces.len() {
+                    let mut v = pieces.clone();
+                    let d = v[i]["dir"].as_str().unwrap_or("");
+                    v[i]["dir"] = json!(if d == "Increasing" {
+                        "Decreasing"
+                    } else {
+                        "Increasing"
+                    });
+                    out.push((scope.clone(), Value::Array(v), Vec::new()));
+                    let mut v = pieces.clone();
+                    v.remove(i);
+                    out.push((scope.clone(), Value::Array(v), Vec::new()));
+                    for (end, d) in [("lo", 1), ("lo", -1), ("hi", 1), ("hi", -1)] {
+                        let mut v = pieces.clone();
+                        if let Some(x) = v[i]["on"][end].get_mut("At").map(|a| &mut a["x"])
+                            && let Some((a, b)) = enc_of(x)
+                        {
+                            *x = enc(doubles_out(a, d), doubles_out(b, d));
+                            out.push((scope.clone(), Value::Array(v), Vec::new()));
+                        }
+                    }
+                    if i + 1 < pieces.len() {
+                        let mut v = pieces.clone();
+                        v[i]["on"]["hi"] = v[i + 1]["on"]["hi"].clone();
+                        v.remove(i + 1);
+                        out.push((scope.clone(), Value::Array(v), Vec::new()));
+                    }
+                }
+                continue;
+            }
+            // The true items in the scope (about the place for points).
+            let (a, b) = match &scope {
+                Scope::Window(a, b) | Scope::Period(a, b) => (*a, *b),
+                _ => (doubles_out(lo, -4), doubles_out(hi, 4)),
+            };
+            // (x's enclosure, a maximum?)
+            type Listed = ((f64, f64), Option<bool>);
+            let mut feats: Vec<Listed> = match &self.truth.per {
+                Some(per) => per
+                    .feats_in(row, a, b)
+                    .into_iter()
+                    .map(|(mut p, _, m)| (p.enc(), m))
+                    .collect(),
+                None => self
+                    .truth
+                    .features(row)
+                    .into_iter()
+                    .filter(|f| f.at.within(a, b))
+                    .map(|mut f| (f.at.enc(), f.max))
+                    .collect(),
+            };
+            if let (Scope::Period(..), Some(per)) = (&scope, &self.truth.per) {
+                let (q0, q1) = per.trig.period();
+                let end = pi_place(q0 + qd(a), q1);
+                feats.retain(|f| Place::At(qd(f.0.0)).cmp(&qd(end.approx())) == Less);
+            }
+            let fam = matches!(scope, Scope::Period(..)).then(|| {
+                let per = self.truth.per.as_ref().expect("periodic");
+                let (q0, q1) = per.trig.period();
+                pi_place(q0, q1).enc()
+            });
+            let mut variants: Vec<Vec<Listed>> = vec![feats.clone()];
+            for i in 0..feats.len() {
+                let mut v = feats.clone();
+                v.remove(i);
+                variants.push(v);
+                for d in [1, -1] {
+                    let mut v = feats.clone();
+                    v[i].0 = (doubles_out(v[i].0.0, d), doubles_out(v[i].0.1, d));
+                    variants.push(v);
+                }
+                if row == "extrema" {
+                    let mut v = feats.clone();
+                    v[i].1 = v[i].1.map(|m| !m);
+                    variants.push(v);
+                }
+            }
+            for x in [lo.next_down(), lo, hi.next_up()] {
+                for m in [Some(true), Some(false)] {
+                    let mut v = feats.clone();
+                    v.push(((x, x), m));
+                    variants.push(v);
+                }
+            }
+            for v in variants {
+                let mut claims = Vec::new();
+                let items: Vec<Value> = v
+                    .iter()
+                    .map(|&((lo, hi), max)| {
+                        if row == "x_intercepts" {
+                            return match fam {
+                                Some((pa, pb)) => {
+                                    json!({"Every": {"x0": enc(lo, hi), "period": enc(pa, pb)}})
+                                }
+                                None => json!({"At": enc(lo, hi)}),
+                            };
+                        }
+                        let y = self.y_of(lo, hi);
+                        if let Some((ylo, yhi)) = y {
+                            claims.push(c_value(0, lo, hi, ylo, yhi));
+                        }
+                        let (ylo, yhi) = y.unwrap_or((0.0, 0.0));
+                        let every = fam.map_or(Value::Null, |(pa, pb)| enc(pa, pb));
+                        let mut item =
+                            json!({"x": enc(lo, hi), "y": enc(ylo, yhi), "every": every});
+                        if row == "extrema" {
+                            item["kind"] = json!(if max.unwrap_or(false) { "Max" } else { "Min" });
+                        }
+                        item
+                    })
+                    .collect();
+                out.push((scope.clone(), Value::Array(items), claims));
+            }
+        }
+        out
+    }
+}
+
+/// The most elements of a pool the exhaustive mode takes.
+const SWEEP_POOL: usize = 48;
+
+/// Every subset of up to `max` of `n` elements (by index), the empty one
+/// among them.
+fn subsets(n: usize, max: usize) -> Vec<Vec<usize>> {
+    let mut out = vec![Vec::new()];
+    let mut frontier = vec![Vec::new()];
+    for _ in 0..max {
+        let mut next = Vec::new();
+        for s in &frontier {
+            let from = s.last().map_or(0, |l: &usize| l + 1);
+            for i in from..n {
+                let mut t = s.clone();
+                t.push(i);
+                next.push(t);
+            }
+        }
+        out.extend(next.iter().cloned());
+        frontier = next;
+    }
+    out
+}
+
+/// The exhaustive mode on one function: about each place of each row's
+/// features, every subset of up to `max` of its pool, crossed with every
+/// false variant of the row; and its genuine rows held to the truth.
+fn sweep_fun(fun: Fun, max: usize) -> Sweep {
+    let mut out = Sweep::default();
+    let text = fun.text.clone();
+    let mut ctx = match context(fun) {
+        Ok(c) => c,
+        Err(e) => {
+            out.failures.push(format!("y={text}: no context: {e}"));
+            return out;
+        }
+    };
+    out.genuine.functions = 1;
+    genuine(&mut ctx, &mut out.genuine);
+    for (row, k) in ROWS {
+        for place in ctx.sweep_places(k) {
+            let pool = ctx.sweep_pool(row, k, &place);
+            let rows = ctx.sweep_rows(row, &place);
+            let mut tried = 0u64;
+            let falses: Vec<&(Scope, Value, Vec<Value>)> = rows
+                .iter()
+                .filter(|(scope, value, _)| {
+                    let f = matches!(ctx.truth.judge(row, scope, value), Verdict::False(_));
+                    if f {
+                        out.false_rows += 1;
+                    } else {
+                        out.true_rows += 1;
+                    }
+                    f
+                })
+                .collect();
+            for set in subsets(pool.len(), max) {
+                let claims: Vec<Value> =
+                    set.iter().flat_map(|i| pool[*i].iter().cloned()).collect();
+                for (scope, value, extra) in &falses {
+                    tried += 1;
+                    let mut cl = claims.clone();
+                    cl.extend(extra.iter().cloned());
+                    cl.extend(ctx.facts.iter().cloned());
+                    let case = Case {
+                        row,
+                        scope: scope.clone(),
+                        value: value.clone(),
+                        claims: cl,
+                        ends: Value::Null,
+                    };
+                    if ctx.accepted_false(&case) {
+                        let small = ctx.minimise(&case);
+                        let why = match ctx.truth.judge(row, &small.scope, &small.value) {
+                            Verdict::False(w) => w,
+                            Verdict::True => "?".into(),
+                        };
+                        out.failures.push(format!(
+                            "exhaustive, {row} about {:e}:\n{}",
+                            place.approx(),
+                            ctx.show(&small, &why)
+                        ));
+                    }
+                }
+            }
+            out.combos += tried;
+            out.places
+                .push((text.clone(), row, place.approx(), pool.len(), tried));
+        }
+    }
+    out
+}
+
+/// The exhaustive mode over the first `funs` fixed functions, `max`
+/// claims at most from each pool, on `threads` threads.
+fn sweep(funs: usize, max: usize, threads: u64) -> Sweep {
+    let all: Vec<Fun> = exhaustive_funs().into_iter().take(funs).collect();
+    let total = Mutex::new(Sweep::default());
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|s| {
+        for _ in 0..threads.max(1) {
+            let (total, next, all) = (&total, &next, &all);
+            std::thread::Builder::new()
+                .stack_size(256 << 20)
+                .spawn_scoped(s, move || {
+                    replay::iv::init();
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(fun) = all.get(i) else { break };
+                        let o = sweep_fun(fun.clone(), max);
+                        let mut t = total.lock().unwrap();
+                        t.places.extend(o.places);
+                        t.combos += o.combos;
+                        t.false_rows += o.false_rows;
+                        t.true_rows += o.true_rows;
+                        t.failures.extend(o.failures);
+                        t.genuine.absorb(o.genuine);
+                    }
+                })
+                .expect("a sweeping thread");
+        }
+    });
+    let mut t = total.into_inner().unwrap();
+    t.places
+        .sort_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)).then(a.2.total_cmp(&b.2)));
+    t
+}
+
+impl Sweep {
+    fn print(&self, max: usize) {
+        let mut by_fun: BTreeMap<&str, (usize, u64)> = BTreeMap::new();
+        for (f, _, _, _, n) in &self.places {
+            let e = by_fun.entry(f).or_default();
+            e.0 += 1;
+            e.1 += n;
+        }
+        println!(
+            "exhaustive (subsets of up to {max}): {} places, {} combinations of claims and false \
+             rows ({} false variants, {} true ones); {} accepted false",
+            self.places.len(),
+            self.combos,
+            self.false_rows,
+            self.true_rows,
+            self.failures.len()
+        );
+        for (f, (places, n)) in by_fun {
+            println!("  y={f}: {places} places, {n} combinations");
+        }
+        let pools: Vec<usize> = self.places.iter().map(|p| p.3).collect();
+        println!(
+            "  pools: {} to {} elements; genuine rows {}, {} refused by the truth",
+            pools.iter().min().unwrap_or(&0),
+            pools.iter().max().unwrap_or(&0),
+            self.genuine.genuine_rows,
+            self.genuine.genuine_false.len()
+        );
+        for s in self.failures.iter().take(10) {
+            println!("ACCEPTED FALSE: {s}");
+        }
+        for s in self.genuine.genuine_false.iter().take(10) {
+            println!("GENUINE ROW THE TRUTH REFUSES: {s}");
+        }
+    }
+}
+
+/// The exhaustive mode's CI slice: the first functions, up to two claims
+/// from each pool.
+#[test]
+fn exhaustive_slice() {
+    let t = sweep(CI_FUNS, 2, threads());
+    t.print(2);
+    assert!(
+        t.failures.is_empty() && t.genuine.genuine_false.is_empty(),
+        "{:?}",
+        t.failures.first().or(t.genuine.genuine_false.first())
+    );
+}
+
+/// The full exhaustive run: every fixed function, up to three claims
+/// (`REPLAY_FUZZ_SUBSETS` to change it), release.
+#[test]
+#[ignore = "the full exhaustive run: up to an hour"]
+fn exhaustive_full() {
+    let max = env_u64("REPLAY_FUZZ_SUBSETS").unwrap_or(3) as usize;
+    let started = std::time::Instant::now();
+    let t = sweep(usize::MAX, max, threads());
+    t.print(max);
+    println!("{:.1} s", started.elapsed().as_secs_f64());
+    assert!(
+        t.failures.is_empty() && t.genuine.genuine_false.is_empty(),
+        "{:?}",
+        t.failures.first().or(t.genuine.genuine_false.first())
+    );
+}
+
 const SHORT_SEED: u64 = 20_261_024;
 const SHORT_FUNCTIONS: u64 = 24;
 const CASES: u64 = 24;
@@ -4705,8 +7442,30 @@ fn short_run() {
     assert_clean(&t);
 }
 
+/// The short run of functions with corners: a fixed seed, seconds.
+#[test]
+fn short_run_kinked() {
+    let t = run(KINK_SEED, KINK_FUNCTIONS, CASES, threads(), Kind::Kink);
+    t.print(KINK_SEED);
+    assert_clean(&t);
+}
+
+const KINK_SEED: u64 = 20_261_101;
+const KINK_FUNCTIONS: u64 = 12;
+
+/// The short run of periodic functions: a fixed seed, seconds.
+#[test]
+fn short_run_periodic() {
+    let t = run(TRIG_SEED, SHORT_FUNCTIONS, CASES, threads(), Kind::Trig);
+    t.print(TRIG_SEED);
+    assert_clean(&t);
+}
+
+const TRIG_SEED: u64 = 20_261_102;
+
 /// The long run: `REPLAY_FUZZ_SEED`, `REPLAY_FUZZ_FUNCTIONS`,
-/// `REPLAY_FUZZ_CASES`, `REPLAY_FUZZ_THREADS` (release).
+/// `REPLAY_FUZZ_CASES`, `REPLAY_FUZZ_THREADS`, `REPLAY_FUZZ_KIND`
+/// (release).
 #[test]
 #[ignore = "the long run: minutes"]
 fn long_run() {
@@ -4714,7 +7473,7 @@ fn long_run() {
     let functions = env_u64("REPLAY_FUZZ_FUNCTIONS").unwrap_or(2000);
     let cases = env_u64("REPLAY_FUZZ_CASES").unwrap_or(CASES);
     let started = std::time::Instant::now();
-    let t = run(seed, functions, cases, threads(), Kind::Mixed);
+    let t = run(seed, functions, cases, threads(), Kind::from_env());
     t.print(seed);
     println!("{:.1} s", started.elapsed().as_secs_f64());
     assert_clean(&t);
@@ -4778,6 +7537,59 @@ fn the_truth_knows_its_polynomials() {
     }
 }
 
+/// The periodic truth against what is known by hand: sin(x°)'s zeros at
+/// 0 and 180, its maximum at 90, inflections where it is 0, period 360;
+/// tan(x°)'s poles at 90 + 180k, its inflection at 0, rising between;
+/// 2·sin(3x + 30)° + 1's zeros at −20 and 60 (mod 120); sin's zero at π
+/// in radians, above the double nearest π; and a value at a double read
+/// against the doubles beside it.
+#[test]
+fn the_truth_knows_its_trig() {
+    let tr = |func, a: i64, b: i64, amp: i64, c: i64, deg| Trig {
+        func,
+        a: qi(a),
+        b: qi(b),
+        amp: qi(amp),
+        c: qi(c),
+        deg,
+    };
+    let at = |t: &Truth, row: &str| -> Vec<f64> {
+        t.features(row).iter().map(|f| f.at.approx()).collect()
+    };
+    let sin = Truth::new_trig(&tr(TrigFn::Sin, 1, 0, 1, 0, true), (-1.0, 361.0));
+    assert_eq!(at(&sin, "x_intercepts"), vec![0.0, 180.0, 360.0]);
+    assert_eq!(at(&sin, "extrema"), vec![90.0, 270.0]);
+    assert_eq!(sin.extrema[0].max, Some(true));
+    assert_eq!(at(&sin, "inflections"), vec![0.0, 180.0, 360.0]);
+    assert_eq!(sin.judge_period(&enc(360.0, 360.0)), Verdict::True);
+    assert!(matches!(
+        sin.judge_period(&enc(180.0, 180.0)),
+        Verdict::False(_)
+    ));
+    assert_eq!(sin.sign_at(0, 30.0), Some(Greater));
+    assert_eq!(sin.sign_at(1, 90.0), Some(Equal));
+    assert_eq!(sin.sign_at(2, 30.0), Some(Less));
+    let tan = Truth::new_trig(&tr(TrigFn::Tan, 1, 0, 1, 0, true), (-100.0, 100.0));
+    assert!(tan.dom.misses_box(90.0, 90.0) && tan.dom.misses_box(-90.0, -90.0));
+    assert!(!tan.dom.holds_box(80.0, 100.0) && tan.dom.holds_box(-80.0, 80.0));
+    assert_eq!(at(&tan, "inflections"), vec![0.0]);
+    assert!(tan.extrema.is_empty());
+    assert_eq!(tan.sign_over(1, -89.0, 89.0), Some(true));
+    let shifted = Truth::new_trig(&tr(TrigFn::Sin, 3, 30, 2, 1, true), (-21.0, 61.0));
+    assert_eq!(at(&shifted, "x_intercepts"), vec![-20.0, 60.0]);
+    let rad = Truth::new_trig(&tr(TrigFn::Sin, 1, 0, 1, 0, false), (-1.0, 4.0));
+    let mut pi = rad.zeros[1].at.clone();
+    assert_eq!(pi.cmp(&qd(std::f64::consts::PI)), Greater);
+    assert_eq!(
+        pi.enc(),
+        (std::f64::consts::PI, std::f64::consts::PI.next_up())
+    );
+    // sin(1) = 0.8414709848078965 (to the nearest), between the doubles
+    // about it.
+    let (lo, hi) = rad.val_enc(0, 1.0).expect("a value");
+    assert!(lo < hi && lo.next_up() == hi && lo <= 0.8414709848078965 && 0.8414709848078965 <= hi);
+}
+
 /// The reviewers' rows, built by hand (review 22, R22-M-01; review 23,
 /// R23-M-01 and R23-M-02): the truth refuses each, and the replay now
 /// does too, every premise proved.
@@ -4799,6 +7611,7 @@ fn the_reviewers_rows_are_false_and_refused() {
             dom,
             planted: vec![qi(1)],
             expanded: Vec::new(),
+            trig: None,
         }
     };
     let kink = |a: f64| json!({"Kink": {"x": bx(a, a)}});
@@ -4812,6 +7625,7 @@ fn the_reviewers_rows_are_false_and_refused() {
                 dom: Dom::Line,
                 planted: vec![qi(0)],
                 expanded: Vec::new(),
+                trig: None,
             },
             "extrema",
             Scope::Window(0.0, 2.0),
@@ -4854,6 +7668,7 @@ fn the_reviewers_rows_are_false_and_refused() {
                 dom: Dom::Line,
                 planted: vec![qi(1)],
                 expanded: Vec::new(),
+                trig: None,
             },
             "extrema",
             Scope::Window(1.0, 1.0),
@@ -4867,6 +7682,7 @@ fn the_reviewers_rows_are_false_and_refused() {
                 dom: Dom::Line,
                 planted: vec![qi(1)],
                 expanded: Vec::new(),
+                trig: None,
             },
             "inflections",
             Scope::Window(1.0, 1.0),
