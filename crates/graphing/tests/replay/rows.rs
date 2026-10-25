@@ -1846,6 +1846,28 @@ fn turns(
     Ok(())
 }
 
+/// The monotone piece `p` lies in the domain's piece `d`. An end of `d`
+/// known only to an enclosure may be anywhere in it, so `p` either stays
+/// clear of that enclosure or ends at it, its own end's enclosure holding
+/// it whole. (Compared as hulls, a piece ending at a double inside the
+/// enclosure of a hole, past the hole, lay "in" the piece before it: x +
+/// 0/(x + 2/7), its hole between two doubles, passed for increasing up to
+/// the double above the hole. The claim fuzzer's functions with corners.)
+fn within_piece(p: &Piece, d: &Piece) -> bool {
+    let holds = |x: &Enc, e: &Enc| x.lo <= e.lo && e.hi <= x.hi;
+    let low = match (d.lo, p.lo) {
+        (Bound::NegInf, _) => true,
+        (Bound::At { x: e, .. }, Bound::At { x, .. }) => x.lo >= e.hi || holds(&x, &e),
+        _ => false,
+    };
+    let high = match (d.hi, p.hi) {
+        (Bound::PosInf, _) => true,
+        (Bound::At { x: e, .. }, Bound::At { x, .. }) => x.hi <= e.lo || holds(&x, &e),
+        _ => false,
+    };
+    low && high
+}
+
 /// The domain's pieces, from its row (when certified).
 fn domain_pieces(all: &[RowCert]) -> Option<Vec<Piece>> {
     let d = all
@@ -2458,10 +2480,7 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
             ));
         }
         if let Some(ds) = &domain
-            && !ds.iter().any(|d| {
-                let (da, db) = extent(d);
-                da <= a && b <= db
-            })
+            && !ds.iter().any(|d| within_piece(&p, d))
         {
             out.problems.push(format!(
                 "the piece on [{a:e}, {b:e}] reaches outside the domain's pieces"

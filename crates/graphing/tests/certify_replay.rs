@@ -5322,6 +5322,45 @@ fn what_is_read_across_a_gap_replays() {
     assert!(failed.is_empty(), "{failed:#?}");
 }
 
+/// A monotone piece lies in one piece of the domain, and an end of the
+/// domain known only to an enclosure may be anywhere in it: a piece that
+/// ends inside that enclosure, short of holding it, may run past the
+/// end. x + 0/(x + 2/7), its hole between the doubles −0.28571428571428575
+/// and −0.2857142857142857, passed for increasing on [−0.2857142857142858,
+/// −0.2857142857142857), complete over that window: the piece's hull lay
+/// inside the domain piece's hull, the gap about the hole was cleared of
+/// f′'s zeros and signed beside, and a gap at a piece's end was taken for
+/// where the piece ends. The claim fuzzer's functions with corners
+/// (x − 5/7 − 2⁻⁵³/7 − ½·|x − q| + 0/(x + 2/7)), every premise strong.
+#[test]
+fn a_monotone_piece_does_not_run_past_a_hole_in_its_enclosure() {
+    let mut v = certificate("x+0/(x+2/7)");
+    let (d0, dm1, dm2) = (
+        -0.2857142857142857_f64,
+        -0.28571428571428575_f64,
+        -0.2857142857142858_f64,
+    );
+    assert!(dm2.next_up() == dm1 && dm1.next_up() == d0);
+    let sign = |a: f64, b: f64| {
+        serde_json::json!({"Beyond": {"x": {"a": a, "b": b}, "of": {"F": "F1"}, "c": 0.0,
+            "above": true}})
+    };
+    // (The genuine certificate replays.)
+    assert_eq!(rejected(&v), None);
+    v["monotonicity"] = serde_json::json!({"Partial": {
+    "value": [{"on": {"lo": {"At": {"x": {"lo": dm2, "hi": dm2}, "closed": true}},
+        "hi": {"At": {"x": {"lo": d0, "hi": d0}, "closed": false}}},
+        "dir": "Increasing"}],
+    "cert": {"covers": {"Window": {"a": dm2, "b": d0}}, "claims": [
+        {"Gap": {"x": {"a": dm1, "b": d0}}},
+        {"GapClear": {"x": {"a": dm1, "b": d0}, "of": {"F": "F1"}}},
+        sign(dm2, dm1),
+        sign(d0, d0),
+    ]}}});
+    let w = rejected(&v).expect("a piece across the hole, refused");
+    assert!(w.contains("domain"), "{w}");
+}
+
 /// An item alone at a member of a family the row lists too is that number
 /// listed twice: one item stands for one number, a family for each of its
 /// members. The rule for an item of its own was asked only of items alone
