@@ -75,6 +75,10 @@
 //! `a_monotone_piece_does_not_run_past_a_hole_in_its_enclosure`). No
 //! genuine row of these functions was false.
 //!
+//! Repeating x-intercept lists for an identically zero function are not
+//! modeled. The truth returns Unknown for them; a generated or genuine
+//! row it cannot judge fails the run rather than counting as true.
+//!
 //! **Not covered**: plateaus (a piece where f is constant, max(P, c)),
 //! steps (floor, round, sign, mod), fractional powers, poles other than
 //! a hole and tan's and cot's, sums of sinusoids with transcendental
@@ -3253,6 +3257,66 @@ impl Truth {
         })
     }
 
+    /// Whether f⁽ᵏ⁾ is continuous and strictly monotone on a finite box.
+    /// Isolated stationary points are allowed (x³), but no flat stretch
+    /// is: each nondegenerate polynomial piece must move in the same
+    /// direction. Exact critical values decide its derivative's weak sign.
+    fn strictly_monotone(&self, k: usize, a: f64, b: f64) -> Option<bool> {
+        if !(a.is_finite() && b.is_finite()) {
+            return None;
+        }
+        let (a, b) = (qd(a), qd(b));
+        if a > b || self.rough[k].iter().any(|c| a <= *c && *c <= b) {
+            return Some(false);
+        }
+        if a == b {
+            return Some(true);
+        }
+        if let Some(per) = &self.per {
+            // For these four elementary trig functions every zero of
+            // the next derivative is a change of its sign. A zero at an
+            // end is allowed; a pole is excluded by the domain check.
+            return Some(
+                per.trig.amp.cmp0() != Equal
+                    && !per
+                        .between(k + 1, a.to_f64(), b.to_f64())
+                        .iter()
+                        .any(|(p, pole)| *pole || (p.cmp(&a) == Greater && p.cmp(&b) == Less)),
+            );
+        }
+        let mut from = a;
+        let mut direction = None;
+        loop {
+            let i = self.d[k].beside(&from, true);
+            let to = self.d[k]
+                .cuts
+                .get(i)
+                .filter(|c| **c < b)
+                .cloned()
+                .unwrap_or_else(|| b.clone());
+            let p = &self.d[k].polys[i];
+            let d = p.deriv();
+            let going = p.eval(&to).cmp(&p.eval(&from));
+            if d.is_zero() || going == Equal || direction.is_some_and(|s| s != going) {
+                return Some(false);
+            }
+            direction = Some(going);
+            let (lo, hi) = poly_range(&d, &from, &to);
+            let signed = if going == Greater {
+                lo >= 0 || values_within(&d, &from, &to, &qi(0), &hi)
+            } else {
+                hi <= 0 || values_within(&d, &from, &to, &lo, &qi(0))
+            };
+            if !signed {
+                return Some(false);
+            }
+            if to == b {
+                return Some(true);
+            }
+            from = to;
+        }
+    }
+
     /// Whether a claim is true (None: a kind this truth doesn't read).
     /// f⁽ᵏ⁾ is the polynomial's own derivative throughout the domain, at a
     /// closed end too, one-sided (as the replay reads `0*sqrt(u)`); at a
@@ -3274,14 +3338,19 @@ impl Truth {
         Some(match c {
             Claim::Defined(x) | Claim::Continuous(x) | Claim::Kink(x) => ok_box(x),
             Claim::Undefined(x) => x.0 <= x.1 && self.dom.misses_box(x.0, x.1),
-            Claim::Beyond { x, of, c, above }
-            | Claim::NoCross { x, of, c, above }
-            | Claim::Factors { x, of, c, above } => {
+            Claim::Beyond { x, of, c, above } | Claim::Factors { x, of, c, above } => {
                 let k = order(of)?;
                 if *c != 0.0 {
                     return None;
                 }
                 sign_is(k, x.0, x.1, *above)
+            }
+            Claim::NoCross { x, of, c, above } => {
+                let k = order(of)?;
+                if *c != 0.0 {
+                    return None;
+                }
+                sign_is(k, x.0, x.1, *above) && self.strictly_monotone(k, x.0, x.1)?
             }
             Claim::TailBeyond {
                 side,
@@ -3310,8 +3379,10 @@ impl Truth {
                 if *c != 0.0 || self.d[k].is_zero() {
                     return None;
                 }
+                let monotone = self.strictly_monotone(k, x.0, x.1)?;
                 let (a, b) = (self.sign_at(k, x.0), self.sign_at(k, x.1));
                 ok_box(x)
+                    && monotone
                     && a.is_some_and(|a| a != Equal)
                     && b.is_some_and(|b| b != Equal)
                     && a != b
@@ -3323,6 +3394,7 @@ impl Truth {
                     return None;
                 }
                 ok_box(x)
+                    && self.strictly_monotone(k, x.0, x.1)?
                     && x.0 <= *at
                     && *at <= x.1
                     && self.sign_at(k, *at) == Some(Equal)
@@ -4139,6 +4211,9 @@ const ROWS: [(&str, usize); 4] = [
 enum Verdict {
     True,
     False(String),
+    /// A row shape outside this truth's model. Never counted as true or
+    /// false; a generated or genuine row with this verdict fails the run.
+    Unknown(String),
 }
 
 /// A listed item: where, f's value there and (an extremum) its kind.
@@ -4256,10 +4331,37 @@ impl Truth {
             return Verdict::False("unreadable".into());
         };
         if row == "x_intercepts" && self.d[0].is_zero() {
+            if items.iter().any(|i| i.family) {
+                return Verdict::Unknown("zero-function repeating lists are not modeled".into());
+            }
             // f ≡ 0: every point a zero, so an item is one where it meets
             // the domain; a complete list only over a window of one point.
             if items.iter().any(|i| self.dom.misses_box(i.x.0, i.x.1)) {
                 return Verdict::False("an item outside the domain".into());
+            }
+            // A positive-width intersection holds infinitely many zeros,
+            // so finitely many such items can name distinct ones. An
+            // intersection of one point (including a clipped domain end)
+            // has only that zero to offer: two items cannot share it.
+            let mut points = std::collections::BTreeSet::new();
+            for i in &items {
+                if i.x.0 > i.x.1 || i.x.0 == f64::INFINITY || i.x.1 == f64::NEG_INFINITY {
+                    return Verdict::False("an item with no real point".into());
+                }
+                let point = if i.x.0 == i.x.1 {
+                    Some(qd(i.x.0))
+                } else {
+                    match &self.dom {
+                        Dom::From(c) if i.x.1.is_finite() && qd(i.x.1) == *c => Some(c.clone()),
+                        Dom::Upto(c) if i.x.0.is_finite() && qd(i.x.0) == *c => Some(c.clone()),
+                        _ => None,
+                    }
+                };
+                if let Some(point) = point
+                    && !points.insert(point)
+                {
+                    return Verdict::False("two items name the same zero".into());
+                }
             }
             return match scope {
                 Scope::Points => Verdict::True,
@@ -4782,34 +4884,21 @@ impl Truth {
                 whole(&(Rational::from(b0 - a0) / Rational::from(&ps * &Rational::from(g))))
             }
         };
-        // The features the scope asks for: one period of residues over a
-        // common period of the families (the line), or those in the window.
+        // A complete line lists periodic subsets of the feature set.
+        // The chosen orbits are pairwise disjoint (checked below), so
+        // their exact total density equals the feature set's just when
+        // no feature is missing. This avoids enumerating an LCM of their
+        // periods, which may be arbitrarily large.
+        let whole_density = scope
+            .whole()
+            .then(|| Rational::from(per.feats_s(row).len()) / per.trig.tp());
         let wanted: Vec<Rational> = match scope {
-            Scope::Points => Vec::new(),
-            Scope::Line | Scope::Period(..) => {
-                let tp = per.trig.tp();
-                let mut l = Integer::from(1);
-                for r in readings.iter().flatten() {
-                    if let Reading::Orbit(_, step) = r {
-                        l.lcm_mut(Rational::from(step / &ps).numer());
-                    }
-                }
-                l.lcm_mut(Rational::from(&tp / &ps).numer());
-                let span = Rational::from(&ps * &Rational::from(l));
-                let turns = Rational::from(&span / &tp).numer().to_u32().unwrap_or(1);
-                let mut w = Vec::new();
-                for (r, _) in per.feats_s(row) {
-                    for i in 0..turns {
-                        w.push(Rational::from(&tp * i) + &r);
-                    }
-                }
-                w
-            }
             Scope::Window(a, b) => per
                 .feats_in(row, *a, *b)
                 .into_iter()
                 .map(|(_, s, _)| s)
                 .collect(),
+            _ => Vec::new(),
         };
         let covered = |chosen: &[Reading], s: &Rational| {
             chosen.iter().any(|r| match r {
@@ -4847,7 +4936,17 @@ impl Truth {
             }
             false
         }
-        let ok = |chosen: &[Reading]| wanted.iter().all(|s| covered(chosen, s));
+        let ok = |chosen: &[Reading]| {
+            if let Some(wanted) = &whole_density {
+                let density = chosen.iter().fold(qi(0), |sum, r| match r {
+                    Reading::Orbit(_, step) => sum + qi(1) / step,
+                    Reading::One(_) => sum, // Already refused over the line.
+                });
+                density == *wanted
+            } else {
+                wanted.iter().all(|s| covered(chosen, s))
+            }
+        };
         if search(0, &readings, &mut Vec::new(), &ok, &meet, &mut tried) {
             Verdict::True
         } else {
@@ -6647,6 +6746,9 @@ struct Tally {
     domain_not_as_built: Vec<String>,
     cases: u64,
     unreadable: u64,
+    /// Constructed or genuine rows this truth cannot judge. They fail a
+    /// run, separately from false rows, so a coverage gap cannot pass.
+    unjudged: Vec<String>,
     /// (accepted, true) by row.
     by_row: BTreeMap<String, [u64; 4]>,
     kept: BTreeMap<&'static str, u64>,
@@ -6681,6 +6783,7 @@ impl Tally {
         self.domain_not_as_built.extend(o.domain_not_as_built);
         self.cases += o.cases;
         self.unreadable += o.unreadable;
+        self.unjudged.extend(o.unjudged);
         for (k, v) in o.by_row {
             let e = self.by_row.entry(k).or_default();
             for i in 0..4 {
@@ -6722,6 +6825,7 @@ impl Tally {
             self.cases,
             self.unreadable
         );
+        println!("  rows not judged: {}", self.unjudged.len());
         println!("  row: accepted true / accepted FALSE / refused true / refused false");
         for (row, v) in &self.by_row {
             println!("  {row:>13}: {} / {} / {} / {}", v[0], v[1], v[2], v[3]);
@@ -6838,6 +6942,10 @@ fn genuine(ctx: &mut Ctx, t: &mut Tally) {
         // not; the replay accepting it too is the replay's as well. A true
         // one the replay refuses is only counted.
         match ctx.truth.judge(row, &scope, &body["value"]) {
+            Verdict::Unknown(why) => t.unjudged.push(format!(
+                "genuine y={} {row}: truth cannot judge this row: {why}",
+                ctx.fun.text
+            )),
             Verdict::False(why) => {
                 let text = format!(
                     "y={} {row} {status} over {covers}: {}: {why}; the replay {}",
@@ -7032,6 +7140,11 @@ fn run_fun(fun: Fun, seed: u64, i: u64, cases: u64) -> Tally {
             let accepted = rep.rows.iter().all(|r| r.problems.is_empty());
             let verdict = ctx.truth.judge(case.row, &case.scope, &case.value);
             let slot = match (&verdict, accepted) {
+                (Verdict::Unknown(why), _) => {
+                    t.unjudged
+                        .push(format!("function {i} case {j}: {}", ctx.show(&case, why)));
+                    continue;
+                }
                 (Verdict::True, true) => 0,
                 (Verdict::False(_), true) => 1,
                 (Verdict::True, false) => 2,
@@ -7140,17 +7253,22 @@ fn threads() -> u64 {
 /// failed.
 fn assert_clean(t: &Tally) {
     assert!(
-        t.failures.is_empty() && t.false_premises.is_empty() && t.genuine_false.is_empty(),
+        t.failures.is_empty()
+            && t.false_premises.is_empty()
+            && t.genuine_false.is_empty()
+            && t.unjudged.is_empty(),
         "{} accepted false rows, {} proved false premises, {} genuine rows the truth refuses \
-         ({} of them accepted by the replay); the first: {}",
+         ({} of them accepted by the replay); {} rows not judged; the first: {}",
         t.failures.len(),
         t.false_premises.len(),
         t.genuine_false.len(),
         t.genuine_false_accepted.len(),
+        t.unjudged.len(),
         t.failures
             .first()
             .or(t.false_premises.first())
             .or(t.genuine_false.first())
+            .or(t.unjudged.first())
             .map_or("", String::as_str)
     );
 }
@@ -7709,7 +7827,16 @@ fn sweep_fun(fun: Fun, max: usize) -> Sweep {
             let falses: Vec<&(Scope, Value, Vec<Value>)> = rows
                 .iter()
                 .filter(|(scope, value, _)| {
-                    let f = matches!(ctx.truth.judge(row, scope, value), Verdict::False(_));
+                    let f = match ctx.truth.judge(row, scope, value) {
+                        Verdict::False(_) => true,
+                        Verdict::True => false,
+                        Verdict::Unknown(why) => {
+                            out.genuine
+                                .unjudged
+                                .push(format!("exhaustive y={text} {row}: {why}"));
+                            return false;
+                        }
+                    };
                     if f {
                         out.false_rows += 1;
                     } else {
@@ -7739,6 +7866,7 @@ fn sweep_fun(fun: Fun, max: usize) -> Sweep {
                         let why = match ctx.truth.judge(row, &small.scope, &small.value) {
                             Verdict::False(w) => w,
                             Verdict::True => "?".into(),
+                            Verdict::Unknown(why) => format!("truth cannot judge: {why}"),
                         };
                         out.failures.push(format!(
                             "exhaustive, {row} about {:e}:\n{}",
@@ -7825,6 +7953,9 @@ impl Sweep {
         for s in self.genuine.genuine_false.iter().take(10) {
             println!("GENUINE ROW THE TRUTH REFUSES: {s}");
         }
+        for s in self.genuine.unjudged.iter().take(10) {
+            println!("ROW THE TRUTH CANNOT JUDGE: {s}");
+        }
     }
 }
 
@@ -7835,9 +7966,14 @@ fn exhaustive_slice() {
     let t = sweep(CI_FUNS, 2, threads());
     t.print(2);
     assert!(
-        t.failures.is_empty() && t.genuine.genuine_false.is_empty(),
+        t.failures.is_empty()
+            && t.genuine.genuine_false.is_empty()
+            && t.genuine.unjudged.is_empty(),
         "{:?}",
-        t.failures.first().or(t.genuine.genuine_false.first())
+        t.failures
+            .first()
+            .or(t.genuine.genuine_false.first())
+            .or(t.genuine.unjudged.first())
     );
 }
 
@@ -7852,9 +7988,14 @@ fn exhaustive_full() {
     t.print(max);
     println!("{:.1} s", started.elapsed().as_secs_f64());
     assert!(
-        t.failures.is_empty() && t.genuine.genuine_false.is_empty(),
+        t.failures.is_empty()
+            && t.genuine.genuine_false.is_empty()
+            && t.genuine.unjudged.is_empty(),
         "{:?}",
-        t.failures.first().or(t.genuine.genuine_false.first())
+        t.failures
+            .first()
+            .or(t.genuine.genuine_false.first())
+            .or(t.genuine.unjudged.first())
     );
 }
 
@@ -8219,6 +8360,7 @@ fn the_genuine_rows_beside_a_hole_are_true() {
                 let t = run_fun(fun, seed, i, 0);
                 assert!(t.genuine_rows > 0, "{text}: no genuine row judged");
                 bad.extend(t.genuine_false);
+                bad.extend(t.unjudged);
             }
             bad
         })
@@ -8226,4 +8368,299 @@ fn the_genuine_rows_beside_a_hole_are_true() {
         .join()
         .expect("held to the truth");
     assert!(bad.is_empty(), "{bad:#?}");
+}
+
+#[test]
+fn the_zero_functions_list_names_distinct_places() {
+    let t = Truth::new(&Pw::one(Poly::constant(qi(0))), &Dom::Line);
+    let zero = json!({"At": {"lo": 0.0, "hi": 0.0}});
+    let one = json!({"At": {"lo": 1.0, "hi": 1.0}});
+    let wide = json!({"At": {"lo": 0.0, "hi": 1.0}});
+    let mut errors = Vec::new();
+    for (label, scope, value, expected) in [
+        (
+            "duplicate point, Points",
+            Scope::Points,
+            json!([zero, zero]),
+            false,
+        ),
+        (
+            "duplicate point, Window",
+            Scope::Window(0.0, 0.0),
+            json!([zero, zero]),
+            false,
+        ),
+        ("distinct points", Scope::Points, json!([zero, one]), true),
+        (
+            "wide intervals have distinct zeros",
+            Scope::Points,
+            json!([wide, wide]),
+            true,
+        ),
+        (
+            "one required point",
+            Scope::Window(0.0, 0.0),
+            json!([zero]),
+            true,
+        ),
+        (
+            "missing required point",
+            Scope::Window(0.0, 0.0),
+            json!([]),
+            false,
+        ),
+    ] {
+        let verdict = t.judge("x_intercepts", &scope, &value);
+        println!("{label}: {verdict:?}; expected true = {expected}");
+        if matches!(verdict, Verdict::True) != expected {
+            errors.push(label);
+        }
+    }
+    let end = Truth::new(&Pw::one(Poly::constant(qi(0))), &Dom::From(qi(1)));
+    let clipped = json!({"At": {"lo": 0.0, "hi": 1.0}});
+    let verdict = end.judge("x_intercepts", &Scope::Points, &json!([clipped, clipped]));
+    println!("duplicate domain-end point: {verdict:?}; expected false");
+    if !matches!(verdict, Verdict::False(_)) {
+        errors.push("duplicate domain-end point");
+    }
+    let end = Truth::new(&Pw::one(Poly::constant(qi(0))), &Dom::Upto(qi(1)));
+    let clipped = json!({"At": {"lo": 1.0, "hi": 2.0}});
+    assert!(matches!(
+        end.judge("x_intercepts", &Scope::Points, &json!([clipped, clipped])),
+        Verdict::False(_)
+    ));
+    assert!(errors.is_empty(), "false truth verdicts: {errors:?}");
+}
+
+#[test]
+fn the_crossing_claims_need_continuity_and_strict_monotonicity() {
+    let line = Dom::Line;
+    let square = Truth::new(&Pw::one(Poly::new(vec![qi(1), qi(0), qi(1)])), &line);
+    let cubic = Truth::new(
+        &Pw::one(Poly::new(vec![qi(0), qi(-1), qi(0), qi(1)])),
+        &line,
+    );
+    let x = Poly::x_minus(&qi(0));
+    let corner = Truth::new(
+        &Pw {
+            cuts: vec![qi(0)],
+            polys: vec![x.scale(&qi(-1)), x.clone()],
+        },
+        &line,
+    );
+    let identity = Truth::new(&Pw::one(x.clone()), &line);
+    let strict_cubic = Truth::new(&Pw::one(x.pow(3)), &line);
+    let cases = [
+        (
+            "nonmonotone NoCross",
+            &square,
+            Claim::NoCross {
+                x: (-1.0, 1.0),
+                of: Subject::F(0),
+                c: 0.0,
+                above: true,
+            },
+            false,
+        ),
+        (
+            "nonmonotone OneCross",
+            &cubic,
+            Claim::OneCross {
+                x: (-1.5, -0.5),
+                of: Subject::F(0),
+                c: 0.0,
+            },
+            false,
+        ),
+        (
+            "nonmonotone ExactAt",
+            &cubic,
+            Claim::ExactAt {
+                x: (-1.5, -0.5),
+                of: Subject::F(0),
+                c: 0.0,
+                at: -1.0,
+            },
+            false,
+        ),
+        (
+            "discontinuous derivative OneCross",
+            &corner,
+            Claim::OneCross {
+                x: (-1.0, 1.0),
+                of: Subject::F(1),
+                c: 0.0,
+            },
+            false,
+        ),
+        (
+            "identity OneCross",
+            &identity,
+            Claim::OneCross {
+                x: (-1.0, 1.0),
+                of: Subject::F(0),
+                c: 0.0,
+            },
+            true,
+        ),
+        (
+            "identity ExactAt",
+            &identity,
+            Claim::ExactAt {
+                x: (-1.0, 1.0),
+                of: Subject::F(0),
+                c: 0.0,
+                at: 0.0,
+            },
+            true,
+        ),
+        (
+            "identity NoCross",
+            &identity,
+            Claim::NoCross {
+                x: (1.0, 2.0),
+                of: Subject::F(0),
+                c: 0.0,
+                above: true,
+            },
+            true,
+        ),
+        (
+            "strict cubic with stationary zero",
+            &strict_cubic,
+            Claim::OneCross {
+                x: (-1.0, 1.0),
+                of: Subject::F(0),
+                c: 0.0,
+            },
+            true,
+        ),
+    ];
+    let mut errors = Vec::new();
+    for (label, t, claim, expected) in cases {
+        let actual = t.claim_true(&claim);
+        println!("{label}: {actual:?}; expected {expected}");
+        if actual != Some(expected) {
+            errors.push(label);
+        }
+    }
+    assert!(errors.is_empty(), "false claim truth verdicts: {errors:?}");
+    let sin = Truth::new_trig(
+        &Trig {
+            func: TrigFn::Sin,
+            a: qi(1),
+            b: qi(0),
+            amp: qi(1),
+            c: qi(0),
+            deg: true,
+        },
+        (-180.0, 180.0),
+    );
+    for (a, b, expected) in [(-100.0, 100.0, false), (-90.0, 90.0, true)] {
+        assert_eq!(
+            sin.claim_true(&Claim::OneCross {
+                x: (a, b),
+                of: Subject::F(0),
+                c: 0.0
+            }),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn the_periodic_truth_counts_every_orbit_without_truncating() {
+    let t = Truth::new_trig(
+        &Trig {
+            func: TrigFn::Sin,
+            a: qi(1),
+            b: qi(0),
+            amp: qi(1),
+            c: qi(0),
+            deg: true,
+        },
+        (-1.0, 361.0),
+    );
+    let family = |first: f64, period: f64| {
+        json!({"Every": {
+            "x0": {"lo": first, "hi": first}, "period": {"lo": period, "hi": period}
+        }})
+    };
+    let n = 2f64.powi(34);
+    let sparse = json!([family(0.0, 180.0 * n), family(180.0, 180.0 * n)]);
+    // These are true subsets, but the complete line omits 360 and more.
+    assert_eq!(
+        t.judge("x_intercepts", &Scope::Points, &sparse),
+        Verdict::True
+    );
+    assert!(matches!(
+        t.judge("x_intercepts", &Scope::Line, &sparse),
+        Verdict::False(_)
+    ));
+    assert_eq!(
+        t.judge("x_intercepts", &Scope::Line, &json!([family(0.0, 180.0)])),
+        Verdict::True
+    );
+    assert!(matches!(
+        t.judge("x_intercepts", &Scope::Line, &json!([family(0.0, 360.0)])),
+        Verdict::False(_)
+    ));
+    // A large common period can also be correct: partition all integers
+    // by their first set bit, and the multiples of 2^34.
+    let mut cover: Vec<Value> = (1..=34)
+        .map(|k| family(180.0 * 2f64.powi(k - 1), 180.0 * 2f64.powi(k)))
+        .collect();
+    cover.push(family(0.0, 180.0 * n));
+    assert_eq!(
+        t.judge("x_intercepts", &Scope::Line, &json!(cover)),
+        Verdict::True
+    );
+}
+
+#[test]
+fn zero_function_families_are_not_read_as_one_point() {
+    let family = json!({"Every": {"x0": enc(1.0,1.0), "period": enc(1.0,1.0)}});
+    for dom in [
+        Dom::Line,
+        Dom::From(qi(0)),
+        Dom::Upto(qi(2)),
+        Dom::Hole(qi(0)),
+    ] {
+        let t = Truth::new(&Pw::one(Poly::constant(qi(0))), &dom);
+        assert!(matches!(
+            t.judge("x_intercepts", &Scope::Points, &json!([family])),
+            Verdict::Unknown(_)
+        ));
+    }
+}
+
+#[test]
+#[should_panic(expected = "rows not judged")]
+fn a_row_the_truth_cannot_judge_does_not_pass_the_run() {
+    replay::iv::init();
+    let mut ctx = context(Fun {
+        text: "0*sqrt(x)".into(),
+        evaluated: Vec::new(),
+        f: Pw::one(Poly::constant(qi(0))),
+        dom: Dom::From(qi(0)),
+        planted: Vec::new(),
+        expanded: Vec::new(),
+        trig: None,
+    })
+    .expect("zero function on a half-line");
+    // Exercise row ingestion with a repeating list the model does not
+    // read. A true/false tally alone must not let this run pass.
+    let case = Case {
+        row: "x_intercepts",
+        scope: Scope::Points,
+        value: json!([{"Every": {"x0": enc(1.0,1.0), "period": enc(1.0,1.0)}}]),
+        claims: vec![c_value(0, 1.0, 1.0, 0.0, 0.0)],
+        ends: Value::Null,
+        undecided: false,
+    };
+    ctx.genuine = case.json(&ctx.base);
+    let mut tally = Tally::default();
+    genuine(&mut ctx, &mut tally);
+    assert_eq!(tally.unjudged.len(), 1);
+    assert_clean(&tally);
 }
