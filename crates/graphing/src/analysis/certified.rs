@@ -254,6 +254,60 @@ fn outward(v: f64, up: bool) -> String {
     format_decimal_digits(d, 2)
 }
 
+/// `v` rounded to `sig` significant digits toward +∞ (`up`) or −∞, as the
+/// decimal's text and its double: exactly the digits of `v`'s own value,
+/// cut or carried, never nearest.
+fn directed(v: f64, sig: i32, up: bool) -> Option<(String, f64)> {
+    // (Rust prints the exact expansion of a double at this many digits.)
+    let t = format!("{:.800e}", v.abs());
+    let (m, e) = t.split_once('e')?;
+    let e: i32 = e.parse().ok()?;
+    let digits: String = m.chars().filter(|c| c.is_ascii_digit()).collect();
+    let (head, rest) = digits.split_at(sig as usize);
+    let mut n: u64 = head.parse().ok()?;
+    // Rounding toward +∞ takes a positive magnitude up and a negative
+    // one down, and the reverse toward −∞.
+    if (up == (v > 0.0)) && rest.bytes().any(|c| c != b'0') {
+        n += 1;
+    }
+    let d: f64 = format!("{n}e{}", e - (sig - 1)).parse().ok()?;
+    let d = if v < 0.0 { -d } else { d };
+    d.is_finite().then(|| (format_decimal_digits(d, sig), d))
+}
+
+/// The two edges of a window the proof covers, written so the text lies
+/// within it (the audit of what is read across a gap, round 23: the
+/// edges rounded to nearest could name a wider window than was proven):
+/// the low edge rounded up, the high edge down, at six significant
+/// digits (more where the two would cross), marked "≈" unless an edge is
+/// exact, as everywhere. `None` if no digits keep the window a window.
+fn window_edges(a: f64, b: f64) -> Option<(String, String)> {
+    let exact = |v: f64| Q::from_f64(v).and_then(|q| Ex::q(q).text());
+    let (ea, eb) = (exact(a), exact(b));
+    if !a.is_finite() || !b.is_finite() {
+        let num = |v: f64| format_decimal_digits(v, 6);
+        return Some((ea.unwrap_or_else(|| num(a)), eb.unwrap_or_else(|| num(b))));
+    }
+    for sig in 6..=15 {
+        let lo = match &ea {
+            Some(t) => Some((t.clone(), a)),
+            None => directed(a, sig, true).map(|(t, d)| (format!("≈{t}"), d)),
+        };
+        let hi = match &eb {
+            Some(t) => Some((t.clone(), b)),
+            None => directed(b, sig, false).map(|(t, d)| (format!("≈{t}"), d)),
+        };
+        let (lo, hi) = (lo?, hi?);
+        if lo.1 <= hi.1 {
+            return Some((lo.0, hi.0));
+        }
+        if ea.is_some() && eb.is_some() {
+            break;
+        }
+    }
+    None
+}
+
 /// A number: exact text if known (and not unwieldy), else [`approx`].
 #[derive(Clone, Copy, Debug)]
 struct Num {
@@ -1084,21 +1138,6 @@ impl<'a> Ctx<'a> {
         found
     }
 
-    /// An excluded family's exact period inside `p`.
-    fn xfam_period(&self, p: Enc) -> Option<Ex> {
-        let fams = self.xfams.as_ref()?;
-        let mut found: Option<Ex> = None;
-        for &(_, per) in fams {
-            if per.within(p.lo.0, p.hi.0) == Some(true) {
-                match found {
-                    Some(f) if !same(f, per) => return None,
-                    _ => found = Some(per),
-                }
-            }
-        }
-        found
-    }
-
     /// A closed end of a monotone piece of a periodic f, a period away from
     /// where it was found (the piece that wrapped around the window): f′
     /// is 0 there and, by periodicity, has exactly one zero in a box a
@@ -1206,11 +1245,15 @@ impl<'a> Ctx<'a> {
                     exact: self.exact_x(x0).or_else(|| self.member(x0)),
                     enc: x0,
                 },
+                // (Not an excluded family's period that merely lies in
+                // `p`: inside an enclosure is not equal to this family's
+                // period. Only its own claim (`table_period`) or f's
+                // proven period (`period_in`) is; the audit of what is
+                // taken without proof, round 23.)
                 Num {
                     exact: self
                         .table_period(x0, p)
                         .map(|t| t.3)
-                        .or_else(|| self.xfam_period(p))
                         .or_else(|| self.period_in(p)),
                     enc: p,
                 },
@@ -1876,12 +1919,8 @@ impl Out {
     /// no item; `was_cut`, items were left out.
     fn settle(&mut self, flag: u32, r: Reach, empty: bool, was_cut: bool) {
         let window = |t: &str, a: f64, b: f64| {
-            let num = |v: f64| Num {
-                exact: Q::from_f64(v).map(Ex::q),
-                enc: Enc::point(v),
-            };
-            t.replace("%1", &num(a).text())
-                .replace("%2", &num(b).text())
+            let (x, y) = window_edges(a, b)?;
+            Some(t.replace("%1", &x).replace("%2", &y))
         };
         match r {
             Reach::All if was_cut => self.note(flag, s::KGF_PARTIAL_SOME.into()),
@@ -1889,13 +1928,16 @@ impl Out {
             // Nothing found, and no proof there is nothing: unknown.
             Reach::Part(w) if empty => {
                 self.unknown(flag);
-                if let Some((a, b)) = w {
-                    self.note(flag, window(s::KGF_PARTIAL_NONE_WINDOW, a, b));
+                if let Some((a, b)) = w
+                    && let Some(n) = window(s::KGF_PARTIAL_NONE_WINDOW, a, b)
+                {
+                    self.note(flag, n);
                 }
             }
-            Reach::Part(Some((a, b))) if !was_cut => {
-                self.note(flag, window(s::KGF_PARTIAL_WINDOW, a, b));
-            }
+            Reach::Part(Some((a, b))) if !was_cut => match window(s::KGF_PARTIAL_WINDOW, a, b) {
+                Some(n) => self.note(flag, n),
+                None => self.note(flag, s::KGF_PARTIAL_SOME.into()),
+            },
             Reach::Part(_) => self.note(flag, s::KGF_PARTIAL_SOME.into()),
             Reach::Unknown => self.unknown(flag),
         }
@@ -3008,6 +3050,87 @@ mod tests {
         assert_eq!(simplest(-0.34, -0.33), Q::new(-1, 3));
         assert_eq!(simplest(2.9, 3.1), Some(Q::int(3)));
         assert_eq!(simplest(-1.0, 1.0), Some(Q::ZERO));
+    }
+
+    #[test]
+    fn a_window_is_written_within_the_proof() {
+        let w = |a: f64, b: f64| window_edges(a, b).unwrap();
+        let m = |s: &str| s.replace('-', MINUS);
+        // The low edge up and the high edge down (to nearest, 0.1234561
+        // was written 0.123456, below the proof's start, and 0.1234569
+        // 0.123457, above its end), both signs.
+        assert_eq!(w(0.1234561, 1.0).0, "≈0.123457");
+        assert_eq!(w(-1.0, 0.1234569).1, "≈0.123456");
+        assert_eq!(w(-0.1234569, 1.0).0, m("≈-0.123456"));
+        assert_eq!(w(-1.0, -0.1234561).1, m("≈-0.123457"));
+        assert_eq!(
+            w(-0.1234561, 0.1234561),
+            (m("≈-0.123456"), "≈0.123456".into())
+        );
+        // An edge that nearest already puts inward is unchanged.
+        assert_eq!(w(0.1234566, 0.5).0, "≈0.123457");
+        // A carry into the next power of ten, and scientific form.
+        assert_eq!(w(9.9999991, 20.0).0, "≈10");
+        assert_eq!(w(1.0, 2345678.9).1, "≈2.34567×10⁶");
+        assert_eq!(w(-2345678.9, 3.0).0, m("≈-2.34567×10⁶"));
+        // Exact edges stay exact, unmarked.
+        assert_eq!(w(-64.0, 64.0), (m("-64"), "64".into()));
+        assert_eq!(w(0.25, 5.1234569), ("1/4".into(), "≈5.12345".into()));
+        // Digits are added where the two edges would cross, and none
+        // keep a point of the reals from crossing itself.
+        assert_eq!(
+            w(1.0000001, 1.0000002),
+            ("≈1.00000011".into(), "≈1.00000019".into())
+        );
+        assert_eq!(window_edges(0.1234561, 0.1234561), None);
+    }
+
+    #[test]
+    fn a_partial_row_names_only_the_window_proven() {
+        let mut out = Out {
+            k: KeyGraphFeatures::default(),
+        };
+        out.settle(1, Reach::Part(Some((0.1234561, 5.1234569))), false, false);
+        out.settle(2, Reach::Part(Some((-5.1234569, -0.1234561))), true, false);
+        let notes: Vec<&str> = out.k.notes.iter().map(|(_, n)| n.as_str()).collect();
+        assert_eq!(
+            notes[0],
+            s::KGF_PARTIAL_WINDOW
+                .replace("%1", "≈0.123457")
+                .replace("%2", "≈5.12345")
+        );
+        assert_eq!(
+            notes[1],
+            s::KGF_PARTIAL_NONE_WINDOW
+                .replace("%1", &format!("≈{MINUS}5.12345"))
+                .replace("%2", &format!("≈{MINUS}0.123457"))
+        );
+    }
+
+    /// A family's exact period comes from a claim about that family (its
+    /// own table fact) or from f's proven period, never from another
+    /// excluded family's period merely lying in the enclosure (hardening:
+    /// no function in the tests or the corpus reached that path, so main
+    /// is not shown wrong; this pins what the periods are read from).
+    #[test]
+    fn a_family_period_is_exact_only_from_a_claim() {
+        // Two excluded families, each with its own claim: each period is
+        // exact (kπ, kπ/2) though the pole x₀ of the shifted one isn't.
+        let r = crate::analysis::analyze_str("tan(x)+tan(2x)");
+        assert_eq!(r.domain, "x ∈ ℝ \\ {π/2 + kπ, π/4 + kπ/2 | k ∈ ℤ}");
+        let r = crate::analysis::analyze_str("tan(x)+tan(x+1)");
+        assert_eq!(r.domain, "x ∈ ℝ \\ {π/2 + kπ, ≈0.570796 + kπ | k ∈ ℤ}");
+        assert_eq!(
+            r.vertical_asymptotes,
+            ["x = ≈0.570796 + kπ, k ∈ ℤ", "x = ≈1.5708 + kπ, k ∈ ℤ"]
+        );
+        // A period near π that is not π (α = 1 + 10⁻¹⁶) is its own
+        // claim's, exactly, not π that lies in its enclosure.
+        let r = crate::analysis::analyze_str("tan(1.0000000000000001x)+sin(x)");
+        assert_eq!(
+            r.domain,
+            "x ∈ ℝ \\ {≈1.5708 + 10000000000000000kπ/10000000000000001 | k ∈ ℤ}"
+        );
     }
 
     #[test]
