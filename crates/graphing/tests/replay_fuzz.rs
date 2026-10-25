@@ -64,6 +64,17 @@
 //! made up, of the other kind; a piece flipped, dropped, joined, an end
 //! moved), over the place, windows from and to it, points and one period.
 //!
+//! What these found in the replay, each fixed with a regression in
+//! `tests/certify_replay.rs`: an item listed alone at a member of a family
+//! the row lists too passed for a number of its own (−3·tan(3x + 45)°
+//! with −75 alone beside every 60° from −15;
+//! `an_item_alone_at_a_familys_member_is_listed_twice`); and a monotone
+//! piece ending at a double inside a hole's enclosure, past the hole, lay
+//! "in" the domain piece before it (x − 5/7 − 2⁻⁵³/7 − ½|x − q| +
+//! 0/(x + 2/7), long run seed 9103;
+//! `a_monotone_piece_does_not_run_past_a_hole_in_its_enclosure`). No
+//! genuine row of these functions was false.
+//!
 //! **Not covered**: plateaus (a piece where f is constant, max(P, c)),
 //! steps (floor, round, sign, mod), fractional powers, poles other than
 //! a hole and tan's and cot's, sums of sinusoids with transcendental

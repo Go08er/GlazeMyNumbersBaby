@@ -389,6 +389,42 @@ CI also runs checks that need more than `cargo test --workspace`:
   sliver is now decided, or the domain is unknown. A long run of 600
   functions on a fresh seed (7331, 50,190 cases) then found no false row,
   genuine (1,730 rows; 238 true ones refused by the replay) or made up.
+  It now also makes functions with corners and periodic ones, and has an
+  exhaustive mode. Corners: |P|, P + a·|x − q| (one or two such terms),
+  |x − q|·P, and the max or min of P and P − R or of a quadratic and
+  lines, their corners at doubles, adjacent doubles and between them, at
+  or beside a turn, a hole or a closed end; the truth worked piece by
+  piece (a turn may be at a corner, an inflection only where f′ is
+  continuous, and no complete row of inflections stands across a corner
+  where f″ changes sign), with the claims the certifier writes about a
+  corner (`Kink`, `KinkAt`, `KinkSides`, a flat side among them).
+  Periodic: A·T(a·x + b) + C for T sin, cos, tan and cot, mostly in
+  degrees, where every zero, turn, inflection and pole is at a rational
+  and the truth stays exact, at times in radians, each comparison with a
+  double decided by MPFR at a rising precision; rows over one period with
+  families, over windows across poles and over points, the period row,
+  the pole families' domain. The exhaustive mode takes fixed functions
+  (the reviewers' rows, the turn beside a hole, corners of each kind,
+  sin, tan) and, about each place a row's features sit at, every set of
+  up to two (CI: 6 functions, 1,201,723 combinations, about 35 s) or
+  three (all 20, 54,221,736 combinations about 126 places, 44 minutes at
+  two threads) claims from a pool of proven true ones, crossed with
+  every changed row; none accepted a false row. Coverage of `tests/replay` under the fuzzer's
+  CI runs rose from 40.6% to 54.1% of lines (37.6% to 51.2% of regions),
+  of `src/certify` from 50.8% to 68.2% (46.8% to 64.9%), the generators
+  then aimed at what was left unreached (a kink's flat side, a row over
+  one period without its fact or over half of one, the domain undecided,
+  the period row, a piece listed constant or ending at two turns). It
+  found two holes in the replay, each fixed with a regression in
+  `tests/certify_replay.rs`: an item listed alone at a member of a family
+  the row lists too passed for a number of its own (−3·tan(3x + 45)° with
+  −75 alone beside every 60° from −15), and a monotone piece ending at a
+  double inside a hole's enclosure, past the hole, lay "in" the domain
+  piece before it (x + 0/(x + 2/7) "increasing" up to the double above
+  its hole). No genuine row was false. A long run of 600 functions on
+  seed 9103 (50,630 cases: half polynomials, three in ten with corners,
+  one in five periodic) then found no false row, genuine (2,450 rows; 168
+  true ones refused by the replay) or made up.
 - **Random cross-checking** (`--test crossfuzz`, same feature): the checks
   above take ordinary functions, shifted and scaled. This one generates
   expressions aimed at the families the review rounds kept finding bugs in
