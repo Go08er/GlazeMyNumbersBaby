@@ -2425,7 +2425,18 @@ fn pcmp(a: &Place, b: &Place) -> Ordering {
                 return r.cmp(y);
             }
             let (mut r, mut s) = (r.clone(), s.clone());
-            for _ in 0..400 {
+            for i in 0..8000 {
+                // (Past 400 halvings, one root of both is their common
+                // factor's; two apart may be 2⁻¹⁰⁷⁴ apart, a corner's piece
+                // beside another's: halved on to tell them.)
+                if i == 400 {
+                    let g = gcd(&r.p, &s.p);
+                    let lo = (&r.lo).max(&s.lo).clone();
+                    let hi = (&r.hi).min(&s.hi).clone();
+                    if g.degree() >= 1 && Sturm::new(&g).closed(&lo, &hi) > 0 {
+                        return Equal;
+                    }
+                }
                 if r.hi <= s.lo {
                     return Less;
                 }
