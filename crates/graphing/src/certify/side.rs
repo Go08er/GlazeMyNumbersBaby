@@ -19,11 +19,11 @@ use super::cert::{
     Bound, Certificate, Claim, DomainValue, Enc, Family, Piece, Region, Row, Subject, Via, XBox,
 };
 use super::cover::{Cover, Leaf, Target, claims};
-use super::fun::{Fun, Stop, at_path};
+use super::fun::{Fun, Stop, at_path, usable};
 use crate::ast::{BinOp, Expr, Func};
 use crate::compile::{Written, written};
 use crate::functions::TrigUnit;
-use crate::interval::{DecInterval, Interval, elem};
+use crate::interval::{Dec, DecInterval, Interval, elem};
 
 /// An interval of allowed values of g.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,6 +64,12 @@ fn allows_all(segs: &[Seg], lo: f64, hi: f64) -> bool {
 fn allows(segs: &[Seg], v: f64) -> bool {
     segs.iter()
         .any(|s| (v > s.lo || (v == s.lo && s.lo_in)) && (v < s.hi || (v == s.hi && s.hi_in)))
+}
+
+/// No value in [lo, hi] is allowed.
+fn allows_none(segs: &[Seg], lo: f64, hi: f64) -> bool {
+    segs.iter()
+        .all(|s| hi < s.lo || (hi == s.lo && !s.lo_in) || lo > s.hi || (lo == s.hi && !s.hi_in))
 }
 
 /// One condition: the side expression must take values in `allowed`.
@@ -700,6 +706,10 @@ pub fn piece_box(p: &Piece) -> (f64, f64) {
     (lo, hi)
 }
 
+/// A crossing a side's cover placed only within an enclosure: the
+/// enclosure, the side expression, and the threshold it crosses there.
+type Cut = (Enc, Expr, f64);
+
 /// One stretch of x in the scan of a side's cover.
 #[derive(Clone, Copy)]
 enum Item {
@@ -717,6 +727,7 @@ fn pieces_of(
     cs: &[f64],
     piece: &Piece,
     cover: &Cover,
+    cuts: &[Cut],
 ) -> Result<Option<Vec<Piece>>, Stop> {
     if !cover.complete() {
         return Ok(None);
@@ -819,7 +830,140 @@ fn pieces_of(
     items.dedup_by(
         |y, x| matches!((*x, *y), (Item::Point(p, u), Item::Point(q, v)) if p == q && u == v),
     );
+    // The reals the box leaves out at the piece's ends, as runs of their
+    // own. (Allowed there, with g at a threshold at the box's first double:
+    // a piece with no double in it, which no box of the rows would cover.
+    // Not decided.)
+    for low in [true, false] {
+        let point = matches!(
+            if low { items.first() } else { items.last() },
+            Some(Item::Point(..))
+        );
+        match sliver(f, s, piece, low, cuts)? {
+            None => {}
+            Some(None) => return Ok(None),
+            Some(Some(true)) if point => return Ok(None),
+            Some(Some(inn)) if low => items.insert(0, Item::Run(inn)),
+            Some(Some(inn)) => items.push(Item::Run(inn)),
+        }
+    }
     Ok(scan(&items, piece))
+}
+
+/// Whether the side holds on the reals between an end of the piece and
+/// the double its box starts at (`low`) or ends at ([`piece_box`]),
+/// which the box's cover leaves out: beside an open end, or between an
+/// end known only to an enclosure and the double past it. `None`: there
+/// are none (an infinite end, or a closed one at a double, where the box
+/// starts); `Some(None)`: not decided.
+///
+/// The piece's end was carried in from the conditions before, and [`scan`]
+/// gave it to a run at the box's first double: no later condition asked
+/// about the reals between. 1/(x − 1) + ln(2⁶⁰·(x − 1) − ½) was
+/// certified defined on (1, ∞), its logarithm's argument negative up to
+/// 1 + 2⁻⁶¹; 1/(x − 1) + 1/(x − 1 − 2⁻⁵²) lost the piece
+/// (1, 1 + 2⁻⁵²), where it is defined, the box's first point a pole (the
+/// audit of what is read across a gap, after the claim fuzzer found a
+/// turn read across one: `tests/replay_fuzz.rs`). Now: g's enclosure over
+/// them (and the end) all allowed, or none of it; or g is v at the end,
+/// and strictly monotone from there to the box, so strictly past v on
+/// the reals between: v its exact value at an end at a double (ln(x)/x: x
+/// is 0 at the end 0 ln leaves, and positive past it, where the divisor
+/// is allowed), or at an end known only to an enclosure, the threshold g
+/// itself crossed there to make the end (ln(x − 0.1)/(x − 0.1): the
+/// divisor x − 0.1 is ln's argument, 0 at the end).
+fn sliver(
+    f: &Fun<'_>,
+    s: &SideCond,
+    piece: &Piece,
+    low: bool,
+    cuts: &[Cut],
+) -> Result<Option<Option<bool>>, Stop> {
+    let (lo, hi) = piece_box(piece);
+    let Bound::At { x, closed } = (if low { piece.lo } else { piece.hi }) else {
+        return Ok(None);
+    };
+    if closed && x.is_point() {
+        return Ok(None);
+    }
+    let span = if low {
+        Interval::new(x.lo.0, lo)
+    } else {
+        Interval::new(hi, x.hi.0)
+    };
+    // (A zero base to a varying exponent may be allowed: never said none
+    // of a stretch g may be 0 on.)
+    let none =
+        |a: f64, b: f64, all: bool| all && !(s.zero_if_exponent.is_some() && a <= 0.0 && 0.0 <= b);
+    let ser = f.ser_of(&s.g, span, 1)?;
+    let g = ser[0];
+    if !g.is_empty() {
+        if allows_all(&s.allowed, g.lo(), g.hi()) {
+            return Ok(Some(Some(true)));
+        }
+        if none(g.lo(), g.hi(), allows_none(&s.allowed, g.lo(), g.hi())) {
+            return Ok(Some(Some(false)));
+        }
+    }
+    // g's value v at the end: at a double, g there exactly; known only to
+    // an enclosure, the threshold g crossed there to make it (and every
+    // crossing placed in that enclosure g's, at v).
+    let v = if x.is_point() {
+        let at = f.ser_of(&s.g, Interval::point(x.lo.0), 0)?[0];
+        (!at.is_empty() && at.dec >= Dec::Def && at.lo() == at.hi() && at.lo().is_finite())
+            .then(|| at.lo())
+    } else {
+        let mut here = cuts.iter().filter(|c| c.0 == x).peekable();
+        let first = here.peek().map(|c| c.2);
+        first.filter(|&v| here.all(|c| c.1 == s.g && c.2 == v))
+    };
+    // Continuous and strictly monotone over the span: on the reals
+    // between, strictly past v (from v, at a closed end), and no further
+    // than its enclosure.
+    let Some(v) =
+        v.filter(|_| !g.is_empty() && g.dec >= Dec::Dac && usable(&ser, 1) && ser[1].ne0())
+    else {
+        return Ok(Some(None));
+    };
+    // (Away from the end, g rises: right of it where g′ > 0, left of it
+    // where g′ < 0.)
+    let up = ser[1].gt0() == low;
+    let segs = &s.allowed;
+    let (all, nothing) = if closed {
+        let (a, b) = if up { (v, g.hi()) } else { (g.lo(), v) };
+        (allows_all(segs, a, b), none(a, b, allows_none(segs, a, b)))
+    } else if up {
+        // (v, g.hi]
+        (
+            segs.iter()
+                .any(|t| v >= t.lo && (g.hi() < t.hi || (g.hi() == t.hi && t.hi_in))),
+            none(
+                v.next_up(),
+                g.hi(),
+                segs.iter()
+                    .all(|t| t.hi <= v || g.hi() < t.lo || (g.hi() == t.lo && !t.lo_in)),
+            ),
+        )
+    } else {
+        // [g.lo, v)
+        (
+            segs.iter()
+                .any(|t| v <= t.hi && (g.lo() > t.lo || (g.lo() == t.lo && t.lo_in))),
+            none(
+                g.lo(),
+                v.next_down(),
+                segs.iter()
+                    .all(|t| t.lo >= v || g.lo() > t.hi || (g.lo() == t.hi && !t.hi_in)),
+            ),
+        )
+    };
+    Ok(if all {
+        Some(Some(true))
+    } else if nothing {
+        Some(Some(false))
+    } else {
+        Some(None)
+    })
 }
 
 /// Pieces of the allowed set from a scan of runs and points in x order.
@@ -937,6 +1081,9 @@ pub fn domain(f: &Fun<'_>) -> Domain {
     // twice over.)
     let mut family_of: Vec<&Expr> = Vec::new();
     let mut cl = Vec::new();
+    // Each crossing a cover placed only within an enclosure: the
+    // enclosure, the side expression and the threshold it crosses there.
+    let mut cuts: Vec<Cut> = Vec::new();
     for s in &conds {
         let subject = s.subject();
         if s.allowed.as_slice() == NONZERO
@@ -989,7 +1136,22 @@ pub fn domain(f: &Fun<'_>) -> Domain {
                 );
             }
             cl.extend(claims(&cover, &subject, &cs));
-            match pieces_of(f, s, &cs, p, &cover) {
+            let found = pieces_of(f, s, &cs, p, &cover, &cuts);
+            // (Where g crosses a threshold within an enclosure, which may
+            // become a piece's end: [`sliver`].)
+            for leaf in &cover.leaves {
+                if let Leaf::Cross {
+                    l,
+                    r,
+                    j,
+                    exact: None,
+                    ..
+                } = *leaf
+                {
+                    cuts.push((Enc::new(l, r), s.g.clone(), cs[j]));
+                }
+            }
+            match found {
                 Ok(Some(ps)) => {
                     // A closed end known only to an enclosure (a gap the
                     // cover left out) keeps this piece's bound: the

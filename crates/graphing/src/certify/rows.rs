@@ -485,8 +485,9 @@ fn changes(segs: &[Seg], kink_turns: bool) -> (Vec<(Enc, bool)>, bool) {
                             out.push((*x, *p));
                         }
                     }
-                    // A zero at the very end of a box: the box's bound,
-                    // not a change inside.
+                    // A zero at the very end of the walk: no change inside
+                    // the box. (Whether it is one at the box's bound, the
+                    // walk can't say: [`side_unasked`].)
                     (None, Some(Seg::Sign(_))) | (Some(Seg::Sign(_)), None) => {}
                     _ => complete = false,
                 }
@@ -502,15 +503,37 @@ fn changes(segs: &[Seg], kink_turns: bool) -> (Vec<(Enc, bool)>, bool) {
     (out, complete)
 }
 
-/// A zero of f⁽ᵏ⁾ on an end of the box that the window clipped: its sign
-/// past that end, outside the window, is no box's, so whether f turns (or
-/// inflects) there isn't decided, and a row complete over the window,
-/// whose closed ends it promises too, can't be. (`changes` takes a zero at
-/// a box's end for the box's bound; review 21's audit of the window's
-/// promise, which the replay now asks.)
-fn clipped_zero(segs: &[Seg], ib: &IBox) -> bool {
-    (ib.lo_clipped && matches!(segs.first(), Some(Seg::Zero(_))))
-        || (ib.hi_clipped && matches!(segs.last(), Some(Seg::Zero(_))))
+/// A zero of f⁽ᵏ⁾ first or last in the box's walk with a side no claim
+/// decides. [`changes`] passes over such a zero as no change inside the
+/// box; it is none at all only where f has no value past it: the box's
+/// bound is a closed end of the domain at that very double. Anywhere else
+/// f takes values on reals past the zero, and whether f turns (or
+/// inflects) there hangs on f⁽ᵏ⁾'s sign on them, which no box gives:
+///
+/// - past an edge of the window, outside it (the row, complete over the
+///   window, promises its closed ends too: review 21's audit of the
+///   window's promise, which the replay asks);
+/// - in the gap between the box's last double and its bound, an open end
+///   (a hole, a pole, an end of the domain f isn't defined at) or an end
+///   known only to an enclosure; or in the gap a closed end leaves for
+///   f′ or f″ where they aren't claimed at it (√x's 0). A `GapClear` says
+///   f⁽ᵏ⁾ has no zero strictly inside the gap, not which sign it has
+///   there: 1/6·(x − ½)³ + 2⁻⁵⁶·(x − ½)² + 1/3 + 0/(x − ½), f′ 0 at the
+///   double below ½ and negative from there to the hole, had its maximum
+///   at that double certified "no extrema" (four such functions, turns
+///   and inflections, in the claim fuzzer's long runs, which hold genuine
+///   rows to an exact truth: `tests/replay_fuzz.rs`; the strict replay
+///   refused each, the zero's side across the gap not decided).
+///
+/// Such a zero is no item of the row, which is then not complete. (Only
+/// a window's edge was asked before.)
+fn side_unasked(segs: &[Seg], ib: &IBox) -> bool {
+    // The bound itself: closed, at the zero's double, not a window's edge.
+    let bound_at = |z: &Enc, b: Bound, clipped: bool| {
+        !clipped && matches!(b, Bound::At { x, closed: true } if x.is_point() && x == *z)
+    };
+    matches!(segs.first(), Some(Seg::Zero(z)) if !bound_at(z, ib.lo, ib.lo_clipped))
+        || matches!(segs.last(), Some(Seg::Zero(z)) if !bound_at(z, ib.hi, ib.hi_clipped))
 }
 
 // ---------------------------------------------------------- extrema
@@ -660,7 +683,7 @@ pub fn extrema(
     for ib in boxes {
         let segs = walk(c1, ib);
         let (ch, done) = changes(&segs, true);
-        complete &= done && !clipped_zero(&segs, ib);
+        complete &= done && !side_unasked(&segs, ib);
         for low in [true, false] {
             if !low && ib.a == ib.b {
                 // An isolated point: one end.
@@ -726,7 +749,7 @@ pub fn inflections(
     for ib in boxes {
         let segs = walk(c2, ib);
         let (ch, done) = changes(&segs, false);
-        complete &= done && !clipped_zero(&segs, ib);
+        complete &= done && !side_unasked(&segs, ib);
         for (x, _) in ch {
             if let Some(p) = scope.period
                 && repeats(
@@ -1175,7 +1198,8 @@ pub fn gaps_clear(
 /// factors ([`super::fun::zero_factors`]) is away from 0 over the box, or
 /// is exactly 0 at one of its doubles and strictly monotone there (so 0
 /// nowhere else in it), that double being an end of the box (which the
-/// claims beside the gap decide) or a point where f is undefined.
+/// claims beside the gap decide: the zero there, not its side across the
+/// gap, [`side_unasked`]) or a point where f is undefined.
 ///
 /// A double strictly inside the box where f may be defined is a zero the
 /// gap holds: √(0.1 + 0.9 + x) is 0 at −1, its domain's end, which the
@@ -1552,6 +1576,25 @@ fn far_points(f: &Fun<'_>, right: bool, start: f64) -> Vec<f64> {
     }
     ms.retain(|m| *m > past);
     ms
+}
+
+/// Where the claims on a tail start (a sign of f′ or f″ from there out,
+/// a sign chain, f at the start): `from` out (at least 1), and past the
+/// domain's last end on that side ([`tail_past`]), as [`far_points`]
+/// keeps its tails. From the window's half-width alone, a tail could hold
+/// that end: x²·(x/100 − 10)⁰ is x² to the simplifier with a hole at
+/// 1000, and f′ > 0 was claimed on [400, ∞), across it, which the replay
+/// left open (f′ has no value at 1000); the limits read from it were
+/// true. (The audit of what is read across a gap, after the claim fuzzer
+/// found a turn read across one.)
+fn tail_start(f: &Fun<'_>, right: bool, from: f64) -> f64 {
+    let start = from.abs().max(1.0);
+    let past = f.tails_past.get()[usize::from(right)];
+    if past.is_finite() && start <= past {
+        past.next_up()
+    } else {
+        start
+    }
 }
 
 /// At most `k` of `v`, evenly spread, the first and the last kept (the
@@ -1945,7 +1988,7 @@ pub fn tail_end(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Cla
     let Some((lim, fact)) = simplifier_limit(f, right) else {
         return Ok((end, claims));
     };
-    let start = from.abs().max(1.0);
+    let start = tail_start(f, right, from);
     // A rational f's limit is exact (from N/D's degrees and leading
     // coefficients), its fact checked so: it stands as it is.
     let rational = matches!(&fact, Claim::Simplifier { fact } if fact.starts_with(RATIONAL));
@@ -2457,7 +2500,7 @@ fn pi_q(v: crate::simplify::PiQ) -> String {
 
 fn tail_interval(f: &Fun<'_>, right: bool, from: f64) -> Result<(TailEnd, Vec<Claim>), Stop> {
     let side = if right { Tail::Right } else { Tail::Left };
-    let start = from.abs().max(1.0);
+    let start = tail_start(f, right, from);
     let from_r = R(if right { start } else { -start });
     // f′ of one sign and moving away from 0 out along the tail (a sign
     // chain through f″, f‴): |f′| ≥ |f′(start)| > 0, so f goes to ±∞.
@@ -3093,7 +3136,7 @@ pub fn oblique(
         let dir = if right { LDir::PosInf } else { LDir::NegInf };
         let at = if right { "+∞" } else { "−∞" };
         let over_x = Expr::bin(BinOp::Div, f.expr.clone(), Expr::X);
-        let start = scope.w.abs().max(1.0);
+        let start = tail_start(f, right, scope.w);
         // f″ away from 0 on the tail: no line, by intervals alone.
         if let Some(bend) = bends_away(f, right, start)? {
             c.push(bend);

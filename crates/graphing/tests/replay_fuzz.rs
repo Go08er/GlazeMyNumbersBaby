@@ -4345,3 +4345,57 @@ fn the_reviewers_rows_are_false_and_refused() {
         );
     }
 }
+
+/// The genuine rows the long runs found false (seeds 20261025 and
+/// 20261026), held to the truth again: a turn or an inflection at the
+/// double beside a hole, its side across the gap to the hole decided by
+/// no claim, certified away ("no extrema", "no inflection points"). The
+/// certifier now leaves such a row incomplete. Each function is made
+/// again by its seed and index, and its genuine certificate judged as the
+/// run judges it.
+#[test]
+fn the_genuine_rows_beside_a_hole_are_true() {
+    let found: [(u64, &str); 4] = [
+        (
+            20_261_025,
+            "1/3*(x+2)^3-2^(-53)*(x+2)^2+1/3+0/(x-(-9007199254740991*2^(-52)))",
+        ),
+        (
+            20_261_026,
+            "1/6*(x-1/2)^3+2^(-56)*(x-1/2)^2+1/3+0/(x-(1/2))",
+        ),
+        (
+            20_261_026,
+            "-1*(x-1/2)^3-3*2^(-55)*(x-1/2)^2+1+0/(x-(9007199254740991*2^(-54)))",
+        ),
+        (
+            20_261_026,
+            "1/24*(x-3)^4-2^(-53)/3*(x-3)^3+2^(-51)*(x-3)-1+0/(x-(3))",
+        ),
+    ];
+    let bad = std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(move || {
+            replay::iv::init();
+            let mut bad = Vec::new();
+            for (seed, text) in found {
+                // (The function the run makes as its i-th.)
+                let i = (0..2000)
+                    .find(|&i| {
+                        let mut rng = Rng::new(seed, i, 0);
+                        (0..20)
+                            .find_map(|_| make_fun(&mut rng))
+                            .is_some_and(|f| f.text == text)
+                    })
+                    .unwrap_or_else(|| panic!("{text}: not made by seed {seed}"));
+                let t = run_function(seed, i, 0);
+                assert!(t.genuine_rows > 0, "{text}: no genuine row judged");
+                bad.extend(t.genuine_false);
+            }
+            bad
+        })
+        .expect("a thread")
+        .join()
+        .expect("held to the truth");
+    assert!(bad.is_empty(), "{bad:#?}");
+}

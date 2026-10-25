@@ -464,7 +464,10 @@ pub enum Claim {
     /// away from 0 there, or exactly 0 at one of the box's doubles and
     /// strictly monotone across it), or, for f, from a pole beside it with
     /// no zero between. A row that lists f⁽ᵏ⁾'s features rests on one for
-    /// each of its gaps.
+    /// each of its gaps. It says nothing of the subject's sign in the gap:
+    /// a zero of f′ (f″) on an end of the gap is a turn (an inflection) or
+    /// not by that sign, which no claim gives, and a row with one there
+    /// is not complete.
     GapClear { x: XBox, of: Subject },
 }
 
