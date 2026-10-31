@@ -766,11 +766,22 @@ pub fn check(fx: &Fx, c: &Claim, cert: &[Claim]) -> Outcome {
                         "the tree uses a function the replay doesn't model",
                     );
                 }
-                match gap_clear(fx, *k, *x) {
-                    Some(true) => Outcome::new(Class::Strong, ""),
-                    Some(false) => Outcome::new(Class::Weak, "away from 0 on the certifier's tree"),
-                    None => Outcome::new(Class::Unconfirmed, "not shown away from 0 in the gap"),
-                }
+                let Some((canonical, how)) = gap_clear(fx, *k, *x) else {
+                    return Outcome::new(Class::Unconfirmed, "not shown away from 0 in the gap");
+                };
+                let mut o = match (canonical, how) {
+                    (true, _) => Outcome::new(Class::Strong, ""),
+                    (false, Clear::Away) => {
+                        Outcome::new(Class::Weak, "away from 0 on the certifier's tree")
+                    }
+                    (false, Clear::Flat) => {
+                        Outcome::new(Class::Weak, "≡ 0 throughout it on the certifier's tree")
+                    }
+                };
+                // (Why, for the rows: a gap where f⁽ᵏ⁾ ≡ 0 holds no zero of
+                // its own, and is a stretch of them.)
+                o.clear = Some(how);
+                o
             }
             _ => Outcome::new(Class::Unsupported, "a gap claim on a side expression"),
         },
@@ -3701,12 +3712,27 @@ fn member_box(x: B, x0: B, period: B) -> Option<i64> {
     })
 }
 
+/// Why a gap holds no zero of f⁽ᵏ⁾ of its own ([`gap_clear`]). Both are
+/// what `GapClear` says, and the claim is as strong either way; but they
+/// say opposite things of the reals in the gap, and a row reads them
+/// apart: f ≡ 0 throughout a gap is a stretch every real of which is a
+/// zero, not a gap with none. (Read alike, y = 0's x-intercepts were
+/// "none" over the window [5/7, 5/7], its one double in a gap cleared so:
+/// the claim fuzzer's long run, seed 9907, `tests/replay_fuzz.rs`.)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Clear {
+    /// f⁽ᵏ⁾ has no zero strictly inside the gap (or no value there).
+    Away,
+    /// f⁽ᵏ⁾ ≡ 0 strictly inside the gap, wherever it exists there.
+    Flat,
+}
+
 /// Whether f⁽ᵏ⁾ has no zero in the gap box `g` (or is 0 throughout it),
-/// wherever it exists there:
-/// `Some(true)` shown on the canonical tree (or on a certifier's tree shown
-/// identical to it exactly), `Some(false)` only on the certifier's tree,
-/// `None` not shown.
-pub fn gap_clear(fx: &Fx, k: usize, g: B) -> Option<bool> {
+/// wherever it exists there, and which ([`Clear`]):
+/// `Some((true, _))` shown on the canonical tree (or on a certifier's
+/// tree shown identical to it exactly), `Some((false, _))` only on the
+/// certifier's tree, `None` not shown.
+pub fn gap_clear(fx: &Fx, k: usize, g: B) -> Option<(bool, Clear)> {
     if unmodelled(&fx.f) {
         return None;
     }
@@ -3717,19 +3743,26 @@ pub fn gap_clear(fx: &Fx, k: usize, g: B) -> Option<bool> {
         iv::set_prec(p);
         Iv::of2(g.0, g.1).strict(g.0 == 0.0, g.1 == 0.0)
     };
-    // Away from 0, or exactly 0 throughout (f⁽ᵏ⁾ ≡ 0: no zero of its own).
-    let away = |e: &Expr, k: usize| -> bool {
-        [160, 640].into_iter().any(|p| {
+    // Away from 0, or exactly 0 throughout (f⁽ᵏ⁾ ≡ 0: no zero of its own,
+    // but every real a zero).
+    let away = |e: &Expr, k: usize| -> Option<Clear> {
+        [160, 640].into_iter().find_map(|p| {
             let xb = x(p);
             let s = se::where_defined(|| fx.series_iv(e, xb, k));
             let c = &s[k];
-            let r = s[0].empty || c.empty || c.ne0() || (c.is_point() && c.lo == 0);
+            let r = if s[0].empty || c.empty || c.ne0() {
+                Some(Clear::Away)
+            } else if c.is_point() && c.lo == 0 {
+                Some(Clear::Flat)
+            } else {
+                None
+            };
             iv::set_prec(160);
             r
         })
     };
-    if away(&fx.f, k) {
-        return Some(true);
+    if let Some(how) = away(&fx.f, k) {
+        return Some((true, how));
     }
     // A factor exactly 0 at one of the gap's doubles and strictly monotone
     // over the closed gap is 0 nowhere else in it: nowhere strictly inside
@@ -3757,31 +3790,46 @@ pub fn gap_clear(fx: &Fx, k: usize, g: B) -> Option<bool> {
             s[0].cont && s[1].def && !s[1].empty && s[1].ne0()
         }
     };
-    // Factor by factor (f's zeros are among its factors').
-    let by_factors = |e: &Expr| -> bool {
+    // Factor by factor (f's zeros are among its factors'). A factor ≡ 0
+    // throughout the gap makes e ≡ 0 wherever e is defined there (or, a
+    // base to the power 0, reads it so: the stricter for the rows).
+    let by_factors = |e: &Expr| -> Option<Clear> {
         let mut safe = Vec::new();
         nonzero_where_defined(&fx.f, &mut safe);
         nonzero_where_defined(e, &mut safe);
-        zero_factors(e)
-            .iter()
-            .all(|h| safe.contains(h) || away(h, 0) || end_root(h))
+        let mut how = Clear::Away;
+        for h in zero_factors(e) {
+            if safe.contains(&h) {
+                continue;
+            }
+            match away(&h, 0) {
+                Some(Clear::Away) => {}
+                Some(Clear::Flat) => how = Clear::Flat,
+                None if end_root(&h) => {}
+                None => return None,
+            }
+        }
+        Some(how)
     };
-    if k == 0 && by_factors(&fx.f) {
-        return Some(true);
+    if k == 0
+        && let Some(how) = by_factors(&fx.f)
+    {
+        return Some((true, how));
     }
     if k > 0
         && let Some(d) = &fx.d[k - 1]
-        && (away(d, 0) || by_factors(d))
+        && let Some(how) = away(d, 0).or_else(|| by_factors(d))
     {
-        return Some(fx.verified.d[k - 1]);
+        return Some((fx.verified.d[k - 1], how));
     }
     // The simplifier's form of f (equal to f where f is defined).
     if let Some(e) = &fx.f_eval
-        && (away(e, k) || (k == 0 && by_factors(e)))
+        && let Some(how) = away(e, k).or_else(|| if k == 0 { by_factors(e) } else { None })
     {
-        return Some(fx.verified.f);
+        return Some((fx.verified.f, how));
     }
-    rational_clear(fx, k, g).then_some(true)
+    // (N's enclosure strictly signed, or N strictly monotone: away.)
+    rational_clear(fx, k, g).then_some((true, Clear::Away))
 }
 
 /// For f a rational function of x alone: f⁽ᵏ⁾ = N/D exactly, read by the

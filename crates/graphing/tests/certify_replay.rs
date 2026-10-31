@@ -5514,3 +5514,184 @@ fn a_vertical_rows_two_families_of_one_orbit_list_each_pole_twice() {
     let w = rejected(&v).expect("a sub-orbit of poles beside its family, refused");
     assert!(w.contains("family"), "{w}");
 }
+
+/// A gap cleared of f's zeros because f ≡ 0 throughout it (`GapClear`'s
+/// "or it is 0 throughout") holds no zero of its own, and every real in it
+/// is one. y = 0's x-intercepts "none" over the window [5/7, 5/7], its one
+/// double 0.7142857142857144 inside a gap about it so cleared, passed on
+/// `d21bdc8` (and on `9f6c7c9` before it), the gap and its clearness both
+/// strong: the walk records no zero in a gap, and its stretches where
+/// f ≡ 0 come from boxes alone. The claim fuzzer's long run (seed 9907,
+/// function 432, case 18). So for 0/x's gaps about its hole, meeting the
+/// window [−1, 1] where f is defined on part of them; but not over the
+/// window {0}, where 0/x has no value and so no zero. Over points the
+/// empty list says nothing of the gap; away from 0 (1, x² + 1) the gap is
+/// one with no zero, and the empty list stands; and the certifier's own
+/// rows for f ≡ 0 (unknown on a stretch, the one zero of a domain {0})
+/// stand.
+#[test]
+fn an_empty_list_over_a_gap_where_f_is_0_is_refused() {
+    use serde_json::json;
+    let p = 0.7142857142857144_f64;
+    let (a, b) = (p.next_down(), p.next_up());
+    let row = json!({"Partial": {"value": [], "cert": {
+        "covers": {"Window": {"a": p, "b": p}}, "claims": [
+            {"Gap": {"x": {"a": a, "b": b}}},
+            {"GapClear": {"x": {"a": a, "b": b}, "of": {"F": "F0"}}}]}}});
+    let mut v = certificate("0");
+    v["x_intercepts"] = row.clone();
+    let r = replay::replay(&v).unwrap();
+    assert!(
+        r.claims
+            .iter()
+            .filter(|c| c.rows.iter().any(|s| s == "x_intercepts"))
+            .all(|c| c.outcome.class == Class::Strong),
+        "the premises must remain true"
+    );
+    let why = rejected(&v).expect("y = 0's zero at 5/7 left out, refused");
+    assert!(why.contains("≡ 0 throughout a gap"), "{why}");
+    body_of(&mut v, "x_intercepts")["cert"]["covers"] = json!("Points");
+    assert_eq!(rejected(&v), None, "an empty Points row");
+    for src in ["1", "x^2+1"] {
+        let mut v = certificate(src);
+        v["x_intercepts"] = row.clone();
+        assert_eq!(rejected(&v), None, "{src}: no zero in the gap");
+    }
+    let tiny = f64::from_bits(1);
+    let about_the_hole = |a: f64, b: f64| {
+        json!({"Partial": {"value": [], "cert": {
+            "covers": {"Window": {"a": a, "b": b}}, "claims": [
+                {"Gap": {"x": {"a": -tiny, "b": 0.0}}},
+                {"GapClear": {"x": {"a": -tiny, "b": 0.0}, "of": {"F": "F0"}}},
+                {"Gap": {"x": {"a": 0.0, "b": tiny}}},
+                {"GapClear": {"x": {"a": 0.0, "b": tiny}, "of": {"F": "F0"}}},
+                {"Undefined": {"x": {"a": 0.0, "b": 0.0}}}]}}})
+    };
+    let mut v = certificate("0/x");
+    v["x_intercepts"] = about_the_hole(-1.0, 1.0);
+    let r = replay::replay(&v).unwrap();
+    let problems = &r
+        .rows
+        .iter()
+        .find(|x| x.name == "x_intercepts")
+        .unwrap()
+        .problems;
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("≡ 0 throughout a gap the region meets on [-5e-324, 0e0]")),
+        "{problems:?}"
+    );
+    v["x_intercepts"] = about_the_hole(0.0, 0.0);
+    assert_eq!(rejected(&v), None, "0/x has no zero at 0");
+    assert_eq!(rejected(&certificate("0")), None);
+    // (Its x-intercepts "0", certified: the rest of this certificate has
+    // an asymptote fact no sample decides, a point being all its domain.)
+    let r = replay::replay(&certificate("0*sqrt(x)+0*sqrt(-x)")).unwrap();
+    let zeros = r.rows.iter().find(|x| x.name == "x_intercepts").unwrap();
+    assert_eq!(zeros.status, "Certified");
+    assert!(zeros.problems.is_empty(), "{:?}", zeros.problems);
+    assert!(
+        r.claims
+            .iter()
+            .filter(|c| c.rows.iter().any(|s| s == "x_intercepts"))
+            .all(|c| c.outcome.class == Class::Strong)
+    );
+}
+
+/// A gap cleared of f′'s zeros because f′ ≡ 0 throughout it has no strict
+/// sign to carry across: f is constant there. (x − |x|)/2, rising to 0
+/// and constant from it, was "increasing" on [−1, 2⁻¹⁰⁷⁴] by its row on
+/// `d21bdc8`: f′ > 0 up to 0, the gap (0, 2⁻¹⁰⁷⁴) cleared so (strong), f′
+/// 0 at 2⁻¹⁰⁷⁴, the gap read as the stretch's sign. The certificate was
+/// refused all the same: f′ has no value at the kink at 0, and its sign
+/// up to 0 is open (f′ strictly signed at a double, existing there, is
+/// signed just past it, so not ≡ 0 in a gap beside it). Now the row does
+/// not follow either. Constant pieces across such gaps, and increasing
+/// ones across gaps where f′ is away from 0, replay as before.
+#[test]
+fn a_monotone_piece_across_a_gap_where_f_is_constant_is_refused() {
+    use serde_json::json;
+    let tiny = f64::from_bits(1);
+    let mut v = certificate("(x-abs(x))/2");
+    withhold_all_but(&mut v, "domain");
+    v["monotonicity"] = json!({"Partial": {
+    "value": [{"on": {"lo": {"At": {"x": {"lo": -1.0, "hi": -1.0}, "closed": true}},
+        "hi": {"At": {"x": {"lo": tiny, "hi": tiny}, "closed": true}}},
+        "dir": "Increasing"}],
+    "cert": {"covers": {"Window": {"a": -1.0, "b": tiny}}, "claims": [
+        {"Beyond": {"x": {"a": -1.0, "b": 0.0}, "of": {"F": "F1"}, "c": 0.0,
+            "above": true}},
+        {"Gap": {"x": {"a": 0.0, "b": tiny}}},
+        {"GapClear": {"x": {"a": 0.0, "b": tiny}, "of": {"F": "F1"}}},
+        {"Value": {"x": {"a": tiny, "b": tiny}, "of": {"F": "F1"}, "lo": 0.0, "hi": 0.0}}
+    ]}}});
+    let r = replay::replay(&v).expect("replayed");
+    let class = |kind: &str| {
+        r.claims
+            .iter()
+            .find(|c| c.claim.kind() == kind)
+            .map(|c| c.outcome.class)
+    };
+    assert_eq!(class("GapClear"), Some(Class::Strong));
+    assert_eq!(class("Beyond"), Some(Class::Unconfirmed));
+    let problems = &r
+        .rows
+        .iter()
+        .find(|x| x.name == "monotonicity")
+        .unwrap()
+        .problems;
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("of a listed Increasing piece undecided")),
+        "{problems:?}"
+    );
+    for src in ["1+0/x", "0/x", "0*ln(x)", "x+0/x"] {
+        assert_eq!(rejected(&certificate(src)), None, "{src}");
+    }
+}
+
+/// The same for an extremum at a closed end of the domain, read off the
+/// first stretch of f′'s sign across a gap beside the end: across one
+/// cleared because f′ ≡ 0 throughout it, f is constant from the end.
+/// max(x − 1, 0) + 0·√x "had a minimum at 0" by its row on `d21bdc8`, the
+/// gap (0, 2⁻¹⁰⁷⁴) so cleared (strong) and f′ > 0 claimed from 2⁻¹⁰⁷⁴,
+/// which the replay refutes (no strict sign of f′ beside such a gap is
+/// true: here f′ is 0 up to 1). Now the row does not decide the end.
+#[test]
+fn an_end_extremum_across_a_gap_where_f_is_constant_is_refused() {
+    use serde_json::json;
+    let tiny = f64::from_bits(1);
+    let mut v = certificate("max(x-1,0)+0*sqrt(x)");
+    withhold_all_but(&mut v, "domain");
+    v["extrema"] = json!({"Partial": {
+    "value": [{"x": {"lo": 0.0, "hi": 0.0}, "y": {"lo": 0.0, "hi": 0.0}, "kind": "Min",
+        "every": null}],
+    "cert": {"covers": {"Window": {"a": 0.0, "b": 2.0}}, "claims": [
+        {"Gap": {"x": {"a": 0.0, "b": tiny}}},
+        {"GapClear": {"x": {"a": 0.0, "b": tiny}, "of": {"F": "F1"}}},
+        {"Beyond": {"x": {"a": tiny, "b": 2.0}, "of": {"F": "F1"}, "c": 0.0,
+            "above": true}},
+        {"Value": {"x": {"a": 0.0, "b": 0.0}, "of": {"F": "F0"}, "lo": 0.0, "hi": 0.0}}
+    ]}}});
+    let r = replay::replay(&v).expect("replayed");
+    let class = |kind: &str| {
+        r.claims
+            .iter()
+            .find(|c| c.claim.kind() == kind && c.rows.iter().any(|s| s == "extrema"))
+            .map(|c| c.outcome.class)
+    };
+    assert_eq!(class("GapClear"), Some(Class::Strong));
+    assert_eq!(class("Beyond"), Some(Class::Refuted));
+    let problems = &r
+        .rows
+        .iter()
+        .find(|x| x.name == "extrema")
+        .unwrap()
+        .problems;
+    assert!(
+        problems.iter().any(|p| p.contains("listed but not proven")),
+        "{problems:?}"
+    );
+}

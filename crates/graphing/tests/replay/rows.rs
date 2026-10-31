@@ -634,6 +634,14 @@ fn changes(w: &Walk) -> Vec<(Enc, bool, bool)> {
 /// the range) is complete inside a gap only if f⁽ᵏ⁾ has no zero there: a
 /// `GapClear` claim for it (checked with the claims). A complete row with
 /// a gap that has none is a problem; a partial one is noted.
+///
+/// A gap cleared because f⁽ᵏ⁾ ≡ 0 throughout it ([`claims::Clear::Flat`])
+/// passes here too: it holds no zero of its own. What is in it each row
+/// reads for itself: a stretch of zeros for the x-intercepts
+/// ([`flat_gap_in_region`]); no strict sign to carry across, for the
+/// monotone pieces and an extremum at an end of the domain; and nothing
+/// more, for the other turns, the inflections and the range read no
+/// sign across a gap ([`turns`], [`range`]).
 pub const GAPS_NOT_IN_CERT: &str = "clearness is not in the certificate";
 
 fn holes(rc: &RowCert, k: usize, complete: bool, out: &mut RowResult) {
@@ -1506,6 +1514,16 @@ fn match_items(
     }
 }
 
+/// Boxes in order: by their low ends, then their high ones.
+fn box_order(a: &B, b: &B) -> std::cmp::Ordering {
+    a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1))
+}
+
+/// Whether `x` is one of the boxes `sorted` (by [`box_order`]).
+fn among(sorted: &[B], x: &B) -> bool {
+    sorted.binary_search_by(|b| box_order(b, x)).is_ok()
+}
+
 fn complete(rc: &RowCert) -> bool {
     matches!(
         rc.region,
@@ -1634,12 +1652,36 @@ pub fn check(fx: &Fx, rc: &RowCert, all: &[RowCert], results: &[ClaimResult]) ->
         out.problems.push(format!("unreadable value: {e}"));
     }
     one_period(rc, &mut out);
+    // The gaps shown clear of f⁽ᵏ⁾'s zeros because f⁽ᵏ⁾ ≡ 0 throughout
+    // them (`claims::Clear::Flat`), from their `GapClear` claims' outcomes
+    // (sorted, for [`among`]).
+    let flat_gaps = |k: usize| -> Vec<B> {
+        let mut v: Vec<B> = rc
+            .claims
+            .iter()
+            .filter_map(|c| match c {
+                Claim::GapClear {
+                    x,
+                    of: Subject::F(j),
+                } if *j == k
+                    && outcomes
+                        .get(&super::claim_key(c))
+                        .is_some_and(|r| r.outcome.clear == Some(claims::Clear::Flat)) =>
+                {
+                    Some(*x)
+                }
+                _ => None,
+            })
+            .collect();
+        v.sort_by(box_order);
+        v
+    };
     let r = match rc.name.as_str() {
         "domain" => domain(fx, rc, &mut out),
-        "x_intercepts" => zeros_row(fx, rc, all, &mut out),
-        "extrema" => turns(fx, rc, all, 1, &mut out),
-        "inflections" => turns(fx, rc, all, 2, &mut out),
-        "monotonicity" => monotonicity(fx, rc, all, &mut out),
+        "x_intercepts" => zeros_row(fx, rc, all, &flat_gaps(0), &mut out),
+        "extrema" => turns(fx, rc, all, 1, &flat_gaps(1), &mut out),
+        "inflections" => turns(fx, rc, all, 2, &flat_gaps(2), &mut out),
+        "monotonicity" => monotonicity(fx, rc, all, &flat_gaps(1), &mut out),
         "y_intercept" => y_intercept(fx, rc, &mut out),
         "parity" => parity(fx, rc, all, results, &mut out),
         "period" => period(fx, rc, all, &mut out),
@@ -1849,7 +1891,36 @@ fn in_domain(
     Ok(())
 }
 
-fn zeros_row(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
+/// The reals of a gap where f ≡ 0 (`flat`: its `GapClear` shown so,
+/// [`claims::Clear::Flat`]) that lie in the row's region: some real
+/// strictly inside the gap is in the region (within the domain's pieces),
+/// f not shown to have no value on where they meet. Every such real where
+/// f is defined is a zero, as on a stretch of `Walk::flat`; the gap's
+/// clearness says only that none is a zero of its own. The first such
+/// meeting, if any. (Over points the row lists some zeros, not all:
+/// nothing to ask.)
+fn flat_gap_in_region(fx: &Fx, rc: &RowCert, all: &[RowCert], flat: &[B]) -> Option<B> {
+    let ts = targets(rc.region.as_ref()?, all);
+    flat.iter().find_map(|g| {
+        ts.iter().find_map(|t| {
+            let (lo, hi) = (g.0.max(t.0), g.1.min(t.1));
+            let meets = g.0 < g.1 && t.0 < g.1 && g.0 < t.1 && lo <= hi;
+            (meets && {
+                iv::set_prec(160);
+                !fx.series(&fx.f, lo, hi, 0)[0].empty
+            })
+            .then_some((lo, hi))
+        })
+    })
+}
+
+fn zeros_row(
+    fx: &Fx,
+    rc: &RowCert,
+    all: &[RowCert],
+    flat_gaps: &[B],
+    out: &mut RowResult,
+) -> Result<(), String> {
     let w = walk(fx, &rc.claims, 0);
     out.problems.extend(w.problems.iter().cloned());
     coverage(rc, all, &w.boxes, out);
@@ -1858,6 +1929,16 @@ fn zeros_row(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Res
     if !w.flat.is_empty() {
         out.problems
             .push("f ≡ 0 on a stretch, yet the row lists points".into());
+    }
+    // A gap cleared because f ≡ 0 throughout it is such a stretch too,
+    // where it meets the region: the walk records no zero in a gap, and
+    // y = 0's x-intercepts were "none" over the window [5/7, 5/7], its one
+    // double inside a gap about it so cleared, every claim strong (the
+    // claim fuzzer's long run, seed 9907, `tests/replay_fuzz.rs`).
+    if let Some((a, b)) = flat_gap_in_region(fx, rc, all, flat_gaps) {
+        out.problems.push(format!(
+            "f ≡ 0 throughout a gap the region meets on [{a:e}, {b:e}], yet the row lists points"
+        ));
     }
     let listed: Vec<(Enc, Option<Enc>)> = list(&rc.value)?
         .iter()
@@ -1881,11 +1962,21 @@ fn zeros_row(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Res
 
 /// Extrema (k = 1) or inflections (k = 2): changes of sign of f⁽ᵏ⁾, with
 /// f's value there from a claim.
+///
+/// A gap cleared because f⁽ᵏ⁾ ≡ 0 throughout it (`flat_gaps`: f
+/// constant there for k = 1, a line for k = 2) holds no change of sign
+/// of f⁽ᵏ⁾ either, and the walk reads no sign across any gap: a
+/// zero of f⁽ᵏ⁾ at one of its ends has its side across the gap asked
+/// ([`sides_decided`]; such a gap is no `Walk::flat` stretch), and one
+/// sign up to the gap with the other from it is refused below, cleared
+/// or not. Only [`end_extrema`] carries a sign across a cleared gap, and
+/// not across one of these.
 fn turns(
     fx: &Fx,
     rc: &RowCert,
     all: &[RowCert],
     k: usize,
+    flat_gaps: &[B],
     out: &mut RowResult,
 ) -> Result<(), String> {
     let w = walk(fx, &rc.claims, k);
@@ -1948,7 +2039,7 @@ fn turns(
     }
     if k == 1 {
         // Extrema at closed domain ends (a maximum is "from positive").
-        let (ends, open) = end_extrema(fx, rc, all, &w);
+        let (ends, open) = end_extrema(fx, rc, all, &w, flat_gaps);
         for (x, min) in ends {
             ch.push((x, !min));
         }
@@ -2059,11 +2150,17 @@ fn domain_pieces(all: &[RowCert]) -> Option<Vec<Piece>> {
 /// sign (a Continuous claim), and nothing else lies between; rising away
 /// from a low end (or falling toward a high one) makes it a minimum.
 /// (f′ must also have no zero in the gap beside the end: its GapClear
-/// claim, which [`holes`] asks of a complete row.) Returns (where, is a
-/// minimum), and the closed ends left undecided: f not shown continuous
-/// from the end into the stretch (by a claim, or by the replay itself),
-/// nor constant beside it.
-fn end_extrema(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk) -> (Vec<(Enc, bool)>, Vec<Enc>) {
+/// claim, which [`holes`] asks of a complete row; and not for f′ ≡ 0
+/// there, `flat_gaps`.) Returns (where, is a minimum), and the closed
+/// ends left undecided: f not shown continuous from the end into the
+/// stretch (by a claim, or by the replay itself), nor constant beside it.
+fn end_extrema(
+    fx: &Fx,
+    rc: &RowCert,
+    all: &[RowCert],
+    w: &Walk,
+    flat_gaps: &[B],
+) -> (Vec<(Enc, bool)>, Vec<Enc>) {
     let Some(pieces) = domain_pieces(all) else {
         return (Vec::new(), Vec::new());
     };
@@ -2162,12 +2259,15 @@ fn end_extrema(fx: &Fx, rc: &RowCert, all: &[RowCert], w: &Walk) -> (Vec<(Enc, b
                 let cleared = |g: &B| {
                     rc.claims.iter().any(|c| {
                         matches!(c, Claim::GapClear { x: cx, of: Subject::F(1) }
-                            if cx.0 <= g.0 && g.1 <= cx.1)
+                            if cx.0 <= g.0 && g.1 <= cx.1 && !among(flat_gaps, cx))
                     }) && smooth_in_gap(fx, 1, *g)
                 };
                 // (A cleared gap has one sign throughout: the stretch's
                 // only where one of that sign touches it at a double where
-                // f′ has it strictly, not at a zero of f′.)
+                // f′ has it strictly, not at a zero of f′. One cleared
+                // because f′ ≡ 0 throughout it has none: f is constant
+                // there, and max(x − 1, 0) + 0·√x "had a minimum at 0"
+                // read across the gap (0, 2⁻¹⁰⁷⁴) so cleared.)
                 let signed = |g: &B| {
                     w.signs.iter().any(|s| {
                         s.2 == sign
@@ -2448,7 +2548,17 @@ impl<T: Copy> Spans<T> {
     }
 }
 
-fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<(), String> {
+/// The monotone pieces: each proven throughout its interior, by f′'s
+/// strict sign (or f′ ≡ 0 for a constant piece), and ending where one
+/// may. `flat_gaps`: the gaps cleared because f′ ≡ 0 throughout them,
+/// which carry no strict sign across.
+fn monotonicity(
+    fx: &Fx,
+    rc: &RowCert,
+    all: &[RowCert],
+    flat_gaps: &[B],
+    out: &mut RowResult,
+) -> Result<(), String> {
     let w = walk(fx, &rc.claims, 1);
     out.problems.extend(w.problems.iter().cloned());
     coverage(rc, all, &w.boxes, out);
@@ -2568,7 +2678,10 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
     // Each gap once: cleared of f′'s zeros, and of which sign beside. And
     // the walk's boxes indexed, each repeat by the period with its own.
     // (Asked again of every box for each of a thousand pieces, x +
-    // tan(200x)'s row took a second a replay.)
+    // tan(200x)'s row took a second a replay.) A gap cleared because
+    // f′ ≡ 0 throughout it is no gap of one sign: f is constant there.
+    // (Read as the sign of the stretch beside it, (x − |x|)/2 was
+    // "increasing" on [−1, 2⁻¹⁰⁷⁴], constant from 0.)
     let clears = Spans::new(
         rc.claims
             .iter()
@@ -2576,7 +2689,7 @@ fn monotonicity(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> 
                 Claim::GapClear {
                     x,
                     of: Subject::F(1),
-                } => Some((x.0, x.1, ())),
+                } if !among(flat_gaps, x) => Some((x.0, x.1, ())),
                 _ => None,
             })
             .collect(),
@@ -6713,6 +6826,10 @@ fn range(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Result<
     out.problems.extend(w.problems.iter().cloned());
     coverage(rc, all, &w.boxes, out);
     gap_ends(fx, rc, all, &w, 1, out);
+    // (A gap cleared because f′ ≡ 0 throughout it holds no value of its
+    // own: f is constant on it, f′ existing there (`rough_gap` below), and
+    // the images take what a gap holds from its ends, or from the limits
+    // toward a place excluded in it, never from a sign read across it.)
     holes(rc, 1, complete(rc), out);
     // (f's least and greatest values are at f′'s zeros and f's kinks: one
     // in a gap is none the walk places. (x − 10⁻⁴⁰⁰)^(2/3) on x ≥ 0 passed
