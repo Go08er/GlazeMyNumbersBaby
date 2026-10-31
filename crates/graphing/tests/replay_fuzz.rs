@@ -72,12 +72,15 @@
 //! piece ending at a double inside a hole's enclosure, past the hole, lay
 //! "in" the domain piece before it (x − 5/7 − 2⁻⁵³/7 − ½|x − q| +
 //! 0/(x + 2/7), long run seed 9103;
-//! `a_monotone_piece_does_not_run_past_a_hole_in_its_enclosure`); and two
+//! `a_monotone_piece_does_not_run_past_a_hole_in_its_enclosure`); two
 //! families of one orbit, each of its members listed twice, passed
 //! complete (1/2·tan(3x)° + ½'s inflections every 60° from 60 and from
 //! 120 over a window, long run seed 7703 after review 25;
-//! `two_families_of_one_orbit_list_their_members_twice`). No genuine row
-//! of these functions was false.
+//! `two_families_of_one_orbit_list_their_members_twice`); and a gap
+//! cleared because f ≡ 0 throughout it was read as one with no zero
+//! (y = 0's x-intercepts "none" over the window [5/7, 5/7], long run seed
+//! 9907; `an_empty_list_over_a_gap_where_f_is_0_is_refused`). No genuine
+//! row of these functions was false.
 //!
 //! **The truth, audited.** Review 24 found it calling four false things
 //! true, each with rows or claims built by hand: two items at one zero
@@ -11317,6 +11320,23 @@ fn the_long_runs_one_orbit_listed_twice_is_refused() {
     let fun = make_kind(7703, 208, Kind::Mixed).expect("made");
     assert_eq!(fun.text, "1/2*tan(3*x)+1/2");
     let t = run_function(7703, 208, CASES, Kind::Mixed);
+    assert!(t.cases > 0);
+    assert_clean(&t);
+}
+
+/// The long run's accepted false row after the members' rule (seed 9907,
+/// function 432, case 18): y = 0's x-intercepts "none" over the window
+/// [5/7, 5/7], its one double inside a gap cleared because f ≡ 0
+/// throughout it, every premise strong. The replay read every cleared gap
+/// as one with no zero; now one cleared so is a stretch of zeros
+/// (`claims::Clear`, `rows::flat_gap_in_region`, with the hand-built rows
+/// in `tests/certify_replay.rs`). The function's cases again.
+#[test]
+fn the_long_runs_empty_list_over_a_gap_where_f_is_0_is_refused() {
+    replay::iv::init();
+    let fun = make_kind(9907, 432, Kind::Mixed).expect("made");
+    assert_eq!(fun.text, "0");
+    let t = run_function(9907, 432, CASES, Kind::Mixed);
     assert!(t.cases > 0);
     assert_clean(&t);
 }
