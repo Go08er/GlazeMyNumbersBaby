@@ -92,7 +92,16 @@
 //! truth before. What it doesn't model is Unknown, never true: a row so
 //! (a zero function's repeating list, a plateau, a periodic item over a
 //! tail) fails the run; a premise so (a side expression's, a limit, a
-//! bound, the simplifier's fact, a family) is not held to it.
+//! bound, the simplifier's fact, a family) is not held to it. Review 25
+//! found it counting a periodic f's cycles in doubles (a zero far out, or
+//! past a large phase, never visited), taking a family's period for the
+//! first multiple in its enclosure, and misreading an end enclosed from
+//! −∞; the sweep that followed, the same rounding in the domain's poles
+//! (tan(x − 10²⁰ + 8100)°'s all missed near 0), in the repeats of a
+//! period's monotone pieces and in the order of a range's pieces, and a
+//! scope from −∞ sent to `qd`. Every count of periods is exact now
+//! (rational floors in degrees, MPFR's directed bounds in radians), each
+//! fix with a regression.
 //!
 //! **The refuter** (`Ctx::refute_claim`, `Ctx::refute_row`), a second
 //! check on the truth: every claim and row it calls true is tried against
@@ -1059,6 +1068,36 @@ fn floor_over_pi(q: &Rational) -> Integer {
     }
 }
 
+/// ⌊d/P⌋ for d = d0 + d1·π and a period P = p0 + p1·π > 0 (one part 0;
+/// d rational where P is), exactly. In radians d/P = d0/(p1·π) + d1/p1 is
+/// a whole number only where d0 = 0, so directed bounds decide the rest
+/// (as `floor_over_pi` does). Never a count of periods through a double.
+fn cycles(d0: &Rational, d1: &Rational, per: &(Rational, Rational)) -> Integer {
+    let (p0, p1) = per;
+    if p1.cmp0() == Equal {
+        debug_assert_eq!(d1.cmp0(), Equal);
+        return Rational::from(d0 / p0).floor().numer().clone();
+    }
+    let s = Rational::from(d1 / p1);
+    if d0.cmp0() == Equal {
+        return s.floor().numer().clone();
+    }
+    let q = Rational::from(d0 / p1);
+    let mut p = 128;
+    loop {
+        let v = Fi::rat(&q, p)
+            .mul(&Fi::pi(p).recip().expect("π > 0"))
+            .add(&Fi::rat(&s, p));
+        let lo = v.lo.to_integer_round(Round::Down).expect("finite").0;
+        let hi = v.hi.to_integer_round(Round::Down).expect("finite").0;
+        if lo == hi {
+            return lo;
+        }
+        assert!(p < 1 << 16, "a count of periods not decided at {p} bits");
+        p *= 2;
+    }
+}
+
 // ------------------------------------------------------------ periodic functions
 
 /// The trigonometric function of a periodic f.
@@ -1565,13 +1604,14 @@ impl Dom {
         let Dom::Poles { x0, per } = self else {
             return Vec::new();
         };
-        let x = pi_place(x0.0.clone(), x0.1.clone()).approx();
-        let p = pi_place(per.0.clone(), per.1.clone()).approx();
-        let lo = ((a - x) / p).floor() - 1.0;
-        let hi = ((b - x) / p).ceil() + 1.0;
+        // (From ⌊(a − x0)/P⌋, at most the first pole's k, to ⌊(b − x0)/P⌋,
+        // the last's, exactly. Counted in doubles, k was dozens off far
+        // out, and near 0 where x0 is far and rounded: tan(x − 10²⁰ +
+        // 8100)° had no pole in [0, 20], at 10: review 25.)
+        let from = |e: f64| cycles(&(qd(e) - &x0.0), &Rational::from(-&x0.1), per);
+        let (mut k, last) = (from(a), from(b));
         let mut out = Vec::new();
-        let mut k = Integer::from_f64(lo).expect("finite");
-        while k <= hi {
+        while k <= last {
             let m = self.member(&k);
             if m.within(a, b) {
                 out.push(m);
@@ -4642,10 +4682,11 @@ fn covering(
     if n > 4096 {
         return None;
     }
-    let approx = |e: &Ext| match e {
-        Ext::At(p) => p.approx(),
-        Ext::Neg => f64::NEG_INFINITY,
-        Ext::Pos => f64::INFINITY,
+    // (Repeats cover only a finite [from, to]: one period.)
+    let ends = match (period, from, to) {
+        (Some(_), Ext::At(f), Ext::At(t)) => Some((pq(f), pq(t))),
+        (Some(_), ..) => return None,
+        _ => None,
     };
     let mut pick = vec![0usize; choices.len()];
     loop {
@@ -4654,20 +4695,26 @@ fn covering(
             let (p, q) = &c[*i];
             match (period, p, q) {
                 (Some(per), Ext::At(p), Ext::At(q)) => {
-                    // (Its repeats that may meet [from, to].)
-                    let pf = pi_place(per.0.clone(), per.1.clone()).approx();
-                    let lo = ((approx(from) - q.approx()) / pf).floor() as i64 - 1;
-                    let hi = ((approx(to) - p.approx()) / pf).ceil() as i64 + 1;
-                    for k in lo..=hi {
-                        let shift = |x: &Place| {
-                            let (q0, q1) = pq(x);
-                            let k = Rational::from(k);
+                    // (Its repeats that may meet [from, to]: k from
+                    // ⌊(from − q)/P⌋, at most the first one's, to
+                    // ⌊(to − p)/P⌋, exactly. Counted in doubles, one
+                    // either side, a period from 10²⁰ got repeats a dozen
+                    // periods past it, and sin(x)°'s two pieces left it
+                    // out: review 25.)
+                    let ((f0, f1), (t0, t1)) = ends.as_ref().expect("finite ends");
+                    let (p, q) = (pq(p), pq(q));
+                    let mut k = cycles(&(f0.clone() - &q.0), &(f1.clone() - &q.1), per);
+                    let last = cycles(&(t0.clone() - &p.0), &(t1.clone() - &p.1), per);
+                    while k <= last {
+                        let k_q = Rational::from(&k);
+                        let shift = |x: &(Rational, Rational)| {
                             pi_place(
-                                q0 + Rational::from(&k * &per.0),
-                                q1 + Rational::from(&k * &per.1),
+                                Rational::from(&k_q * &per.0) + &x.0,
+                                Rational::from(&k_q * &per.1) + &x.1,
                             )
                         };
-                        stretches.push((Ext::At(shift(p)), Ext::At(shift(q))));
+                        stretches.push((Ext::At(shift(&p)), Ext::At(shift(&q))));
+                        k += 1;
                     }
                 }
                 _ => stretches.push((p.clone(), q.clone())),
@@ -5325,6 +5372,12 @@ impl Truth {
             .whole()
             .then(|| Rational::from(per.feats_s(row).len()) / per.trig.tp());
         let wanted: Vec<Rational> = match scope {
+            // (A window with an infinite end, which `real_enc` lets
+            // through, sent its end to `qd`: not modelled, as an item over
+            // a tail isn't. Review 25.)
+            Scope::Window(a, b) if !(a.is_finite() && b.is_finite()) => {
+                return Verdict::Unknown("a periodic f's row over an infinite window".into());
+            }
             Scope::Window(a, b) => per
                 .feats_in(row, *a, *b)
                 .into_iter()
@@ -5435,8 +5488,10 @@ impl Truth {
         // poles between are no points of f's). (Each piece's ends were
         // asked only of some place in each enclosure and the enclosures'
         // extents moved: the hole `judge_monotone` closed after review 24.)
+        // (Any period's start will do: the repeats are the same. A start
+        // at −∞, which `real_enc` lets through, reached `qd`: review 25.)
         let s0 = match scope {
-            Scope::Period(a, _) => *a,
+            Scope::Period(a, _) if a.is_finite() => *a,
             _ => 0.0,
         };
         let period = per.trig.period();
@@ -5666,15 +5721,32 @@ impl Truth {
                 parts.len()
             ));
         }
-        for ((lo, hi), (pl, ph)) in parts.iter().zip(&pieces) {
-            if let Err(why) = self.end_holds(lo, pl, true) {
-                return Verdict::False(format!("low end: {why}"));
-            }
-            if let Err(why) = self.end_holds(hi, ph, false) {
-                return Verdict::False(format!("high end: {why}"));
-            }
+        // (Which piece is which part the row doesn't say: some one-to-one
+        // reading must fit. Matched in the order of their low ends' doubles
+        // alone, a low end enclosed from −∞ tied with "NegInf" and kept its
+        // place: x³ with a hole at 0, the upper piece listed first from
+        // [−∞, 0], was false. Review 25.)
+        let fits = |(lo, hi): &(REnd, REnd), (pl, ph): &(End, End)| {
+            self.end_holds(lo, pl, true)
+                .map_err(|why| format!("low end: {why}"))?;
+            self.end_holds(hi, ph, false)
+                .map_err(|why| format!("high end: {why}"))
+        };
+        let options: Vec<Vec<usize>> = parts
+            .iter()
+            .map(|part| {
+                (0..pieces.len())
+                    .filter(|j| fits(part, &pieces[*j]).is_ok())
+                    .collect()
+            })
+            .collect();
+        match matched(&options) {
+            None => Verdict::True,
+            Some(i) => Verdict::False(match fits(&parts[i], &pieces[i]) {
+                Err(why) => why,
+                Ok(()) => format!("no piece of its own for part {} of the range", i + 1),
+            }),
         }
-        Verdict::True
     }
 }
 
@@ -11011,4 +11083,121 @@ fn review25_a_wide_constant_end_can_mean_the_domain_end() {
     let v = json!([{"on": {"lo": {"At": {"x": enc(f64::NEG_INFINITY, 1.0), "closed": true}},
         "hi": "PosInf"}, "dir": "Constant"}]);
     assert_eq!(truth.judge("monotonicity", &Scope::Line, &v), Verdict::True);
+}
+
+// ------------------------------------------- review 25's class, swept
+
+/// A degree trig f for the truth alone (no certificate).
+fn trig_deg(func: TrigFn, a: i64, b: Rational) -> Trig {
+    Trig {
+        func,
+        a: qi(a),
+        b,
+        amp: qi(1),
+        c: qi(0),
+        deg: true,
+    }
+}
+
+/// The domain's poles in a box, counted from doubles: (a − x0)/P
+/// rounded far out, and x0 itself rounded where it is far (R25-L-01's
+/// two ways). cot(x − 60)° has a pole at the double 10²⁰ − 10·2¹⁴, R25-
+/// L-01's: the box of it alone was "defined" (and "undefined"). tan(x −
+/// 10²⁰ + 8100)°'s x0, 10²⁰ − 8010, rounds to 10²⁰, and its poles near 0
+/// (10 + 180k) went uncounted: [0, 20] "defined", and a true piece
+/// between two poles false, its ends no pole.
+#[test]
+fn poles_far_out_or_past_a_far_phase_are_counted_exactly() {
+    let cot = Truth::new_trig(&trig_deg(TrigFn::Cot, 1, qi(-60)), (-752.0, 752.0));
+    let x = 1e20 - 10.0 * 16384.0;
+    assert!(cot.dom.pole(&Place::At(qd(x))));
+    assert_eq!(cot.claim_true(&Claim::Defined((x, x))), Some(false));
+    assert_eq!(cot.claim_true(&Claim::Undefined((x, x))), Some(true));
+    let tan = Truth::new_trig(
+        &trig_deg(TrigFn::Tan, 1, -qd(1e20) + qi(8100)),
+        (-1500.0, 1500.0),
+    );
+    assert!(tan.dom.pole(&Place::At(qi(10))));
+    assert_eq!(tan.claim_true(&Claim::Defined((0.0, 20.0))), Some(false));
+    assert_eq!(tan.claim_true(&Claim::Defined((20.0, 180.0))), Some(true));
+    let at = |x: f64| json!({"At": {"x": enc(x, x), "closed": false}});
+    let row = json!([{"on": {"lo": at(10.0), "hi": at(190.0)}, "dir": "Increasing"}]);
+    assert_eq!(tan.judge("monotonicity", &Scope::Line, &row), Verdict::True);
+}
+
+/// A monotone row over one period from 10²⁰: each piece's repeats about
+/// it were counted in doubles, one either side, and sin(x)°'s two
+/// pieces, true, left the period out (their repeats taken a dozen
+/// periods past it).
+#[test]
+fn a_period_from_far_out_meets_the_pieces_own_repeats() {
+    let sin = Truth::new_trig(&trig_deg(TrigFn::Sin, 1, qi(0)), (-1472.0, 1472.0));
+    let at = |x: f64| json!({"At": {"x": enc(x, x), "closed": true}});
+    let piece =
+        |lo: f64, hi: f64, dir: &str| json!({"on": {"lo": at(lo), "hi": at(hi)}, "dir": dir});
+    let row = json!([
+        piece(-90.0, 90.0, "Increasing"),
+        piece(90.0, 270.0, "Decreasing")
+    ]);
+    // (The next double past 10²⁰ is 2¹⁴ on: a window as wide as P.)
+    let far = Scope::Period(1e20, 1e20 + 16384.0);
+    assert_eq!(sin.judge("monotonicity", &far, &row), Verdict::True);
+    let gap = json!([piece(-90.0, 90.0, "Increasing")]);
+    assert!(matches!(
+        sin.judge("monotonicity", &far, &gap),
+        Verdict::False(_)
+    ));
+}
+
+/// A periodic f's scope from −∞ (`real_enc` holds it a real stretch):
+/// one period from −∞ sent −∞ to `qd`, as did a window from −∞ to the
+/// features of a list. Now any start of a period does (the repeats are
+/// one), and a list over a tail is not modelled, as an item over one
+/// isn't.
+#[test]
+fn a_periodic_scope_from_minus_infinity_reaches_no_double() {
+    let sin = Truth::new_trig(&trig_deg(TrigFn::Sin, 1, qi(0)), (-1472.0, 1472.0));
+    let at = |x: f64| json!({"At": {"x": enc(x, x), "closed": true}});
+    let piece =
+        |lo: f64, hi: f64, dir: &str| json!({"on": {"lo": at(lo), "hi": at(hi)}, "dir": dir});
+    let row = json!([
+        piece(-90.0, 90.0, "Increasing"),
+        piece(90.0, 270.0, "Decreasing")
+    ]);
+    let scope = Scope::Period(f64::NEG_INFINITY, 0.0);
+    assert_eq!(sin.judge("monotonicity", &scope, &row), Verdict::True);
+    let zeros = json!([{"Every": {"x0": enc(0.0, 0.0), "period": enc(180.0, 180.0)}}]);
+    for scope in [
+        Scope::Window(f64::NEG_INFINITY, 0.0),
+        Scope::Window(0.0, f64::INFINITY),
+    ] {
+        assert!(matches!(
+            sin.judge("x_intercepts", &scope, &zeros),
+            Verdict::Unknown(_)
+        ));
+    }
+}
+
+/// A range's pieces were matched to its parts in the order of their low
+/// ends' lower doubles; a low end enclosed from −∞ tied with "NegInf" and
+/// kept the listed order. x³ with a hole at 0, (−∞, 0) ∪ (0, ∞), its
+/// upper piece listed first from [−∞, 0] (0 in it, open): false.
+#[test]
+fn range_pieces_are_matched_to_parts_by_some_reading() {
+    let t = Truth::new(
+        &Pw::one(Poly::new(vec![qi(0), qi(0), qi(0), qi(1)])),
+        &Dom::Hole(qi(0)),
+    );
+    let open = |lo: f64, hi: f64| json!({"At": {"x": enc(lo, hi), "closed": false}});
+    let upper = json!({"lo": open(f64::NEG_INFINITY, 0.0), "hi": "PosInf"});
+    let lower = json!({"lo": "NegInf", "hi": open(0.0, 0.0)});
+    for row in [
+        json!([upper.clone(), lower.clone()]),
+        json!([lower.clone(), upper.clone()]),
+    ] {
+        assert_eq!(t.judge("range", &Scope::Line, &row), Verdict::True);
+    }
+    // (Each part needs a piece of its own.)
+    let v = t.judge("range", &Scope::Line, &json!([upper.clone(), upper]));
+    assert!(matches!(v, Verdict::False(_)), "{v:?}");
 }
