@@ -10946,8 +10946,13 @@ fn the_refuter_catches_review_24s_examples() {
     assert!(wrong.is_empty(), "the refuter got these wrong: {wrong:?}");
 }
 
+// ---------------------------------------------------- review 25
+
+/// Two families of sin's zeros, from 0 and from a half-turn, each every
+/// [half-turn, turn]: true with a turn each, though not with the first
+/// multiple each (R25-L-02); a choice of too many periods is Unknown.
 #[test]
-fn review25_ambiguous_periods_can_choose_disjoint_orbits() {
+fn two_families_may_take_the_periods_that_keep_them_apart() {
     for deg in [true, false] {
         let mut fun = fixed_trig("sin(x)", TrigFn::Sin, 1, 0, 1, 0);
         fun.trig.as_mut().unwrap().deg = deg;
@@ -10992,8 +10997,10 @@ fn review25_ambiguous_periods_can_choose_disjoint_orbits() {
     }
 }
 
+/// sin(x − 10²⁰ + 8100)°'s zero at 10²⁰: its cycle, counted in doubles
+/// after a·x and b cancelled, was skipped (R25-L-01).
 #[test]
-fn review25_large_phase_cancellation_does_not_lose_a_zero() {
+fn a_zero_past_a_cancelling_phase_is_not_lost() {
     let t = Trig {
         func: TrigFn::Sin,
         a: qi(1),
@@ -11011,8 +11018,9 @@ fn review25_large_phase_cancellation_does_not_lose_a_zero() {
     );
 }
 
+/// A piece's end enclosed from −∞ sent −∞ to `qd` (R25-L-03).
 #[test]
-fn review25_unbounded_monotone_enclosure_is_read_without_a_panic() {
+fn a_piece_end_enclosed_from_minus_infinity_is_read_without_panicking() {
     let truth = Truth::new(
         &Pw::one(Poly::new(vec![qi(0), qi(-1), qi(0), qi(1)])),
         &Dom::Line,
@@ -11031,8 +11039,10 @@ fn review25_unbounded_monotone_enclosure_is_read_without_a_panic() {
     );
 }
 
+/// A window of one far double, sin(−2x − 60)°'s zero, listed empty:
+/// true, its cycle skipped by a rounded bound (R25-L-01).
 #[test]
-fn review25_a_far_singleton_window_must_not_omit_its_zero() {
+fn a_far_window_of_one_double_holds_its_zero() {
     let ctx = context(fixed_trig("sin(-2x-60)", TrigFn::Sin, -2, -60, 1, 0)).unwrap();
     let x = 1e20 - 10.0 * 16384.0;
     assert_eq!(
@@ -11055,8 +11065,10 @@ fn review25_a_far_singleton_window_must_not_omit_its_zero() {
     ));
 }
 
+/// The certifier's own rows of review 25's functions, in each angle
+/// mode, pass the replay's row checks (none reaches its holes).
 #[test]
-fn review25_genuine_certificate_search() {
+fn the_genuine_rows_of_review_25s_functions_pass_the_replay() {
     for text in [
         "sin(x)",
         "sin(-2x-60)",
@@ -11086,8 +11098,10 @@ fn review25_genuine_certificate_search() {
     }
 }
 
+/// A constant piece's end enclosed from −∞ may be the domain's end at
+/// 0; read with finite ends alone, it was false (R25-L-03).
 #[test]
-fn review25_a_wide_constant_end_can_mean_the_domain_end() {
+fn a_wide_constant_end_may_be_the_domains_end() {
     let truth = Truth::new(&Pw::one(Poly::constant(qi(1))), &Dom::From(qi(0)));
     let v = json!([{"on": {"lo": {"At": {"x": enc(f64::NEG_INFINITY, 1.0), "closed": true}},
         "hi": "PosInf"}, "dir": "Constant"}]);
