@@ -123,7 +123,9 @@
 //! (`the_refuter_catches_review_24s_examples`); not R24-L-01's items
 //! clipped to one domain end (only the end's exact place shows that one
 //! point), nor a gap clear out to infinity, nor a range that holds every
-//! sampled value.
+//! sampled value. A family's members and a periodic f's repeated pieces
+//! are counted exactly too (in doubles they were right, but a family far
+//! off went untried: hardening, after review 25).
 //!
 //! **Not covered**: plateaus (a piece where f is constant, max(P, c): the
 //! truth says Unknown), steps (floor, round, sign, mod), fractional
@@ -7315,32 +7317,30 @@ fn show_enc(v: &(Float, Float)) -> String {
     format!("[{:e}, {:e}]", v.0.to_f64(), v.1.to_f64())
 }
 
+/// The k for which a family's member x0 + k·P (x0 and P > 0 enclosed,
+/// every end finite) may lie in [a, b]: from the least to the greatest,
+/// exactly (from > to: none). They are the whole numbers in
+/// {(y − x0)/P}, y in [a, b], x0 and P in their enclosures: one stretch.
+fn members_about(x0: (f64, f64), per: (f64, f64), a: f64, b: f64) -> (Integer, Integer) {
+    let (lo, hi) = (qd(a) - qd(x0.1), qd(b) - qd(x0.0));
+    let least = Rational::from(&lo / &qd(if lo.cmp0() == Less { per.0 } else { per.1 }));
+    let most = Rational::from(&hi / &qd(if hi.cmp0() == Less { per.1 } else { per.0 }));
+    (least.ceil().numer().clone(), most.floor().numer().clone())
+}
+
 /// Whether some member x0 + k·period of a family (each enclosed) may meet
-/// [a, b]: false only where none can (a stretch narrower than half a
-/// period, the members about it each apart from it, exactly).
+/// [a, b]: false only where none can, exactly. (The k about the middle,
+/// from doubles, were right, but a family past 10¹⁵ periods was let be:
+/// hardening, after review 25.)
 fn member_meets(x0: (f64, f64), per: (f64, f64), a: f64, b: f64) -> bool {
     let finite = [x0.0, x0.1, per.0, per.1, a, b]
         .iter()
         .all(|v| v.is_finite());
-    if !finite || per.0 <= 0.0 || b - a >= per.0 / 2.0 {
+    if !finite || per.0 <= 0.0 {
         return true;
     }
-    let mid = ((a / 2.0 + b / 2.0) - (x0.0 / 2.0 + x0.1 / 2.0)) / (per.0 / 2.0 + per.1 / 2.0);
-    if !mid.is_finite() || mid.abs() > 1e15 {
-        return true;
-    }
-    let k0 = mid.round() as i64;
-    (k0 - 2..=k0 + 2).any(|k| {
-        let kq = qi(k);
-        let (pl, ph) = if k >= 0 {
-            (per.0, per.1)
-        } else {
-            (per.1, per.0)
-        };
-        let lo = qd(x0.0) + Rational::from(&kq * &qd(pl));
-        let hi = qd(x0.1) + Rational::from(&kq * &qd(ph));
-        lo <= qd(b) && qd(a) <= hi
-    })
+    let (from, to) = members_about(x0, per, a, b);
+    from <= to
 }
 
 /// A second check on the truth, by sampling: each claim and each row the
@@ -7879,22 +7879,27 @@ impl Ctx {
             if !finite || per.0 <= 0.0 {
                 continue;
             }
-            let p = per.0 / 2.0 + per.1 / 2.0;
-            let k_lo = ((m0 - it.x.1) / p).floor() - 1.0;
-            let k_hi = ((m1 - it.x.0) / p).ceil() + 1.0;
-            if !(k_lo.is_finite() && k_hi.is_finite()) || k_hi - k_lo > 2000.0 {
+            // (Its k about the marks and one either side, exactly. Counted
+            // in doubles by the middle period, a far family's were dozens
+            // of periods off the marks, and a wide period's cut short:
+            // fewer places tried, never a false refutation, as every k is
+            // a member's. Hardening, after review 25.)
+            let (from, to) = members_about(it.x, per, m0, m1);
+            let (mut k, last) = (from - 1u32, to + 1u32);
+            if Integer::from(&last - &k) > 2000 {
                 continue;
             }
-            for kk in k_lo as i64..=k_hi as i64 {
-                let kq = qi(kk);
-                let (pl, ph) = if kk >= 0 {
-                    (per.0, per.1)
-                } else {
+            while k <= last {
+                let kq = Rational::from(&k);
+                let (pl, ph) = if k.cmp0() == Less {
                     (per.1, per.0)
+                } else {
+                    (per.0, per.1)
                 };
                 let lo = qd(it.x.0) + Rational::from(&kq * &qd(pl));
                 let hi = qd(it.x.1) + Rational::from(&kq * &qd(ph));
                 places.push(((floor_double(&lo), ceil_double(&hi)), j));
+                k += 1;
             }
         }
         for ((lo, hi), j) in &places {
@@ -8105,26 +8110,30 @@ impl Ctx {
         // lies in some piece's extent, and where f′ is shown strictly
         // signed, in one of that direction (a monotone piece holding a
         // point where f′ > 0, even at its end, is increasing). A periodic
-        // f's over the line: the extents repeated by its period, widened.
-        let pf = self.truth.per.as_ref().filter(|_| scope.whole()).map(|p| {
-            let (q0, q1) = p.trig.period();
-            pi_place(q0, q1).approx()
-        });
+        // f's over the line: the extents repeated by its period, some k
+        // with a + k·P ≤ x ≤ b + k·P, exactly. (Its k from doubles, one
+        // either side and widened by 10⁻¹², fell short only where P is
+        // tiny against a piece's distance from x: hardening, after review
+        // 25.)
+        let per = self
+            .truth
+            .per
+            .as_ref()
+            .filter(|_| scope.whole())
+            .map(|p| p.trig.period());
         let holds = |(lo, hi, _): &(End, End, Option<bool>), x: f64| -> bool {
             let a = lo.map_or(f64::NEG_INFINITY, |(e, _)| e.0);
             let b = hi.map_or(f64::INFINITY, |(e, _)| e.1);
-            match pf {
+            match &per {
                 None => a <= x && x <= b,
-                Some(pf) => {
+                Some(per) => {
                     if !(a.is_finite() && b.is_finite()) {
                         return true;
                     }
-                    let k = ((x - a) / pf).floor();
-                    [k - 1.0, k, k + 1.0].iter().any(|k| {
-                        let (sa, sb) = (a + k * pf, b + k * pf);
-                        let w = (sa.abs() + sb.abs() + pf) * 1e-12;
-                        sa - w <= x && x <= sb + w
-                    })
+                    // ⌊(x − a)/P⌋ + ⌊(b − x)/P⌋ ≥ 0.
+                    let (x, a, b) = (qd(x), qd(a), qd(b));
+                    let n = cycles(&(x.clone() - a), &qi0(), per) + cycles(&(b - x), &qi0(), per);
+                    n.cmp0() != Less
                 }
             }
         };
@@ -11200,4 +11209,23 @@ fn range_pieces_are_matched_to_parts_by_some_reading() {
     // (Each part needs a piece of its own.)
     let v = t.judge("range", &Scope::Line, &json!([upper.clone(), upper]));
     assert!(matches!(v, Verdict::False(_)), "{v:?}");
+}
+
+/// The refuter's family members about a stretch, exactly (hardening:
+/// counted in doubles about the middle period they were right, but a
+/// family more than 10¹⁵ periods off was taken to meet anything).
+#[test]
+fn a_far_familys_members_are_found_exactly() {
+    // 10²⁰ − 10·2¹⁴ ≡ 60 (mod 180); 10²⁰ ≡ 100.
+    let x = 1e20 - 10.0 * 16384.0;
+    assert!(member_meets((60.0, 60.0), (180.0, 180.0), x, x));
+    assert!(!member_meets((0.0, 0.0), (180.0, 180.0), x, x));
+    assert!(!member_meets((0.0, 0.0), (180.0, 180.0), 1e20, 1e20));
+    assert!(member_meets((0.0, 0.0), (180.0, 360.0), x, x));
+    // A wide period: members 3 to 5 may meet [1000, 1001], none [100, 170].
+    assert_eq!(
+        members_about((0.0, 0.0), (180.0, 360.0), 1000.0, 1001.0),
+        (Integer::from(3), Integer::from(5))
+    );
+    assert!(!member_meets((0.0, 0.0), (180.0, 360.0), 100.0, 170.0));
 }
