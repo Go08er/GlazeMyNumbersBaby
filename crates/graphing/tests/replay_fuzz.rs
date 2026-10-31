@@ -1039,6 +1039,26 @@ fn decide(enc: impl Fn(u32) -> Fi, q: &Rational) -> Ordering {
     }
 }
 
+/// floor(q/π), with an exact rational numerator. A nonzero rational
+/// divided by π is not an integer, so directed MPFR bounds eventually
+/// have the same floor. Never round a cycle count through a double.
+fn floor_over_pi(q: &Rational) -> Integer {
+    if q.cmp0() == Equal {
+        return Integer::from(0);
+    }
+    let mut p = 128;
+    loop {
+        let v = Fi::rat(q, p).mul(&Fi::pi(p).recip().expect("π > 0"));
+        let lo = v.lo.to_integer_round(Round::Down).expect("finite").0;
+        let hi = v.hi.to_integer_round(Round::Down).expect("finite").0;
+        if lo == hi {
+            return lo;
+        }
+        assert!(p < 1 << 16, "a cycle boundary not decided at {p} bits");
+        p *= 2;
+    }
+}
+
 // ------------------------------------------------------------ periodic functions
 
 /// The trigonometric function of a periodic f.
@@ -1107,6 +1127,18 @@ impl Trig {
             Some(th / 180u32)
         } else {
             (th.cmp0() == Equal).then(qi0)
+        }
+    }
+
+    /// The whole cycle containing x, without rounding a·x + b or the
+    /// quotient. Far from 0 a double's cycle count can skip whole periods;
+    /// large opposite a·x and b can also cancel after losing their phase.
+    fn cycle_at(&self, x: f64) -> Integer {
+        let q = self.theta(&qd(x)) / self.tp();
+        if self.deg {
+            (q / 180u32).floor().numer().clone()
+        } else {
+            floor_over_pi(&q)
         }
     }
 
@@ -2710,36 +2742,48 @@ impl Periodic {
         }
     }
 
-    /// The whole n ≥ 1 for which [lo, hi] holds n shifts of s by `ds`, as
-    /// a shift of x.
-    fn multiple_in(&self, ds: &Rational, lo: f64, hi: f64) -> Option<Integer> {
+    /// Every whole n ≥ 1 whose shift lies in [lo, hi]. The periods of
+    /// different items must be chosen together with their first members:
+    /// taking only the first n can make two otherwise disjoint orbits
+    /// overlap. None means too many choices, not a false family.
+    fn multiples_in(&self, ds: &Rational, lo: f64, hi: f64) -> Option<Vec<Integer>> {
         let (q0, q1) = self.dx(ds);
-        let step = pi_place(q0.clone(), q1.clone()).approx();
-        if !(lo.is_finite() && hi.is_finite() && step > 0.0) {
+        if !(lo.is_finite() && hi.is_finite()) {
             return None;
         }
-        let guess = (lo / step).round().max(1.0);
-        [guess - 1.0, guess, guess + 1.0]
-            .into_iter()
-            .filter(|n| *n >= 1.0)
-            .map(|n| Integer::from_f64(n).expect("finite"))
-            .find(|n| {
-                let n = Rational::from(n);
-                pi_place(Rational::from(&q0 * &n), Rational::from(&q1 * &n)).within(lo, hi)
-            })
+        let (mut from, to) = if q1.cmp0() == Equal {
+            (
+                (qd(lo) / &q0).ceil().numer().clone(),
+                (qd(hi) / &q0).floor().numer().clone(),
+            )
+        } else {
+            debug_assert_eq!(q0.cmp0(), Equal);
+            (
+                -floor_over_pi(&(-qd(lo) / &q1)),
+                floor_over_pi(&(qd(hi) / &q1)),
+            )
+        };
+        from = from.max(Integer::from(1));
+        if Integer::from(&to - &from) >= 256 {
+            return None;
+        }
+        let mut out = Vec::new();
+        while from <= to {
+            out.push(from.clone());
+            from += 1;
+        }
+        Some(out)
     }
 
     /// The zeros of f⁽ᵏ⁾ and the poles (true) in [a, b] (finite), in
     /// order.
     fn between(&self, k: usize, a: f64, b: f64) -> Vec<(Place, bool)> {
         let t = &self.trig;
-        let tp = t.tp().to_f64();
-        let unit = if t.deg { 180.0 } else { std::f64::consts::PI };
-        let s = |x: f64| (t.a.to_f64() * x + t.b.to_f64()) / unit;
-        let (s0, s1) = (s(a).min(s(b)), s(a).max(s(b)));
+        let (ca, cb) = (t.cycle_at(a), t.cycle_at(b));
+        let mut m = ca.clone().min(cb.clone()) - 1u32;
+        let last = ca.max(cb) + 1u32;
         let mut out: Vec<(Place, bool)> = Vec::new();
-        let mut m = Integer::from_f64((s0 / tp).floor() - 1.0).expect("finite");
-        while m.to_f64() <= (s1 / tp).floor() + 1.0 {
+        while m <= last {
             for (r, pole) in &self.brk[k] {
                 let sv = r + Rational::from(&m) * t.tp();
                 let pl = t.place(&sv);
@@ -4861,16 +4905,22 @@ impl Truth {
             // one) at or below x.
             match p {
                 None => low,
+                Some(_) if x == f64::NEG_INFINITY => false,
+                Some(_) if x == f64::INFINITY => true,
                 Some(p) => p.cmp(&qd(x)) != Greater,
             }
         };
         let lt = |p: &Option<Place>, x: f64, low: bool| -> bool {
             match p {
                 None => low,
+                Some(_) if x == f64::NEG_INFINITY => false,
+                Some(_) if x == f64::INFINITY => true,
                 Some(p) => p.cmp(&qd(x)) == Less,
             }
         };
-        let eq = |p: &Option<Place>, x: f64| p.as_ref().is_some_and(|p| p.cmp(&qd(x)) == Equal);
+        let eq = |p: &Option<Place>, x: f64| {
+            x.is_finite() && p.as_ref().is_some_and(|p| p.cmp(&qd(x)) == Equal)
+        };
         let mut why = "no stretch of f holds it".to_string();
         for (b0, c0, b1, c1, d) in self.stretches() {
             if d != dir {
@@ -5004,10 +5054,7 @@ impl Truth {
                 .collect();
             // (And the domain's end or hole, where a piece ends too.)
             if let Some(c) = self.dom.point()
-                && x.0.is_finite()
-                && x.1.is_finite()
-                && qd(x.0) <= *c
-                && *c <= qd(x.1)
+                && Place::At(c.clone()).within(x.0, x.1)
             {
                 out.push(Place::At(c.clone()));
             }
@@ -5205,21 +5252,16 @@ impl Truth {
                     readings.push(held.into_iter().map(Reading::One).collect());
                 }
                 Some((lo, hi)) => {
-                    let Some(n) = per.multiple_in(&ps, lo, hi) else {
-                        return Verdict::False(format!(
-                            "the family through {:e} repeats every [{lo:e}, {hi:e}]: no shift \
-                             there maps f's {row} items onto themselves",
-                            it.x.0
-                        ));
+                    let Some(ns) = per.multiples_in(&ps, lo, hi) else {
+                        return Verdict::Unknown("too many readings of a family's period".into());
                     };
-                    let step = Rational::from(&ps * &Rational::from(n));
                     // (Every member of the orbit a feature of the kind listed,
                     // f's value there in the item's y: each of its residues
                     // in a period of T asked, not the first member's alone.
                     // f's values at features of one kind agree for these
                     // functions, so this held already: hardening, after
                     // review 24.)
-                    let orbit_fits = |s0: &Rational| {
+                    let orbit_fits = |s0: &Rational, step: &Rational| {
                         let mut seen: Vec<Rational> = Vec::new();
                         let mut s = s0.clone();
                         loop {
@@ -5234,16 +5276,19 @@ impl Truth {
                                 return false;
                             }
                             seen.push(r);
-                            s += &step;
+                            s += step;
                         }
                     };
                     let mut orbits: Vec<Reading> = Vec::new();
-                    for s0 in held.into_iter().filter(|s0| orbit_fits(s0)) {
-                        let seen = orbits.iter().any(|o| {
-                            matches!(o, Reading::Orbit(t, _) if whole(&(Rational::from(&s0 - t) / &step)))
-                        });
-                        if !seen {
-                            orbits.push(Reading::Orbit(s0, step.clone()));
+                    for n in ns {
+                        let step = Rational::from(&ps * &Rational::from(n));
+                        for s0 in held.iter().filter(|s0| orbit_fits(s0, &step)) {
+                            let seen = orbits.iter().any(|o| {
+                                matches!(o, Reading::Orbit(t, st) if *st == step && whole(&(Rational::from(s0 - t) / &step)))
+                            });
+                            if !seen {
+                                orbits.push(Reading::Orbit(s0.clone(), step.clone()));
+                            }
                         }
                     }
                     readings.push(orbits);
@@ -10818,4 +10863,152 @@ fn the_refuter_catches_review_24s_examples() {
         }
     }
     assert!(wrong.is_empty(), "the refuter got these wrong: {wrong:?}");
+}
+
+#[test]
+fn review25_ambiguous_periods_can_choose_disjoint_orbits() {
+    for deg in [true, false] {
+        let mut fun = fixed_trig("sin(x)", TrigFn::Sin, 1, 0, 1, 0);
+        fun.trig.as_mut().unwrap().deg = deg;
+        let ctx = context(fun).unwrap();
+        let mut half = if deg {
+            Place::At(qi(180))
+        } else {
+            pi_place(qi(0), qi(1))
+        };
+        let mut full = if deg {
+            Place::At(qi(360))
+        } else {
+            pi_place(qi(0), qi(2))
+        };
+        let h = half.enc();
+        let f = full.enc();
+        let list = |period: (f64, f64)| {
+            json!([
+                {"Every": {"x0": enc(0.0, 0.0), "period": enc(period.0, period.1)}},
+                {"Every": {"x0": enc(h.0, h.1), "period": enc(period.0, period.1)}}
+            ])
+        };
+        let v = list((h.0, f.1));
+        assert_eq!(
+            ctx.truth.judge("x_intercepts", &Scope::Line, &v),
+            Verdict::True
+        );
+        assert_eq!(ctx.refute_row("x_intercepts", &Scope::Line, &v), None);
+        assert_eq!(
+            ctx.truth.judge("x_intercepts", &Scope::Line, &list(f)),
+            Verdict::True
+        );
+        assert!(matches!(
+            ctx.truth.judge("x_intercepts", &Scope::Line, &list(h)),
+            Verdict::False(_)
+        ));
+        let broad = list((0.0, 10000.0 * f.1));
+        assert!(matches!(
+            ctx.truth.judge("x_intercepts", &Scope::Line, &broad),
+            Verdict::Unknown(_)
+        ));
+    }
+}
+
+#[test]
+fn review25_large_phase_cancellation_does_not_lose_a_zero() {
+    let t = Trig {
+        func: TrigFn::Sin,
+        a: qi(1),
+        b: -qd(1e20) + qi(8100),
+        amp: qi(1),
+        c: qi(0),
+        deg: true,
+    };
+    let truth = Truth::new_trig(&t, (-1500.0, 1500.0));
+    assert_eq!(t.val_cmp(0, &qd(1e20), &qi(0)), Equal);
+    let v = json!([{"At": enc(1e20, 1e20)}]);
+    assert_eq!(
+        truth.judge("x_intercepts", &Scope::Points, &v),
+        Verdict::True
+    );
+}
+
+#[test]
+fn review25_unbounded_monotone_enclosure_is_read_without_a_panic() {
+    let truth = Truth::new(
+        &Pw::one(Poly::new(vec![qi(0), qi(-1), qi(0), qi(1)])),
+        &Dom::Line,
+    );
+    let v = json!([{"on": {
+        "lo": {"At": {"x": enc(f64::NEG_INFINITY, -1.0), "closed": true}},
+        "hi": {"At": {"x": enc(-0.7, -0.6), "closed": true}}},
+        "dir": "Increasing"}]);
+    assert_eq!(
+        truth.judge("monotonicity", &Scope::Points, &v),
+        Verdict::True
+    );
+    assert_eq!(
+        truth.judge("monotonicity", &Scope::Window(-1.0, -0.6), &v),
+        Verdict::True
+    );
+}
+
+#[test]
+fn review25_a_far_singleton_window_must_not_omit_its_zero() {
+    let ctx = context(fixed_trig("sin(-2x-60)", TrigFn::Sin, -2, -60, 1, 0)).unwrap();
+    let x = 1e20 - 10.0 * 16384.0;
+    assert_eq!(
+        ctx.truth
+            .per
+            .as_ref()
+            .unwrap()
+            .trig
+            .val_cmp(0, &qd(x), &qi(0)),
+        Equal
+    );
+    let scope = Scope::Window(x, x);
+    println!(
+        "far-window refuter: {:?}",
+        ctx.refute_row("x_intercepts", &scope, &json!([]))
+    );
+    assert!(matches!(
+        ctx.truth.judge("x_intercepts", &scope, &json!([])),
+        Verdict::False(_)
+    ));
+}
+
+#[test]
+fn review25_genuine_certificate_search() {
+    for text in [
+        "sin(x)",
+        "sin(-2x-60)",
+        "sin(x-99999999999999991900)",
+        "x^3-x",
+    ] {
+        for mode in [TrigUnit::Degrees, TrigUnit::Radians, TrigUnit::Grads] {
+            let a = certify_text(
+                text,
+                CompileOptions {
+                    trig_unit: mode,
+                    ..CompileOptions::default()
+                },
+                DEFAULT_BUDGET,
+                None,
+            )
+            .unwrap();
+            let cert: Value = serde_json::to_value(a).unwrap();
+            let report = replay::replay(&cert).unwrap();
+            println!("genuine {text} {mode:?}: rows checked");
+            println!(
+                "genuine replay {text} {mode:?}: {:?}",
+                report.row_problems()
+            );
+            assert!(report.row_problems().is_empty());
+        }
+    }
+}
+
+#[test]
+fn review25_a_wide_constant_end_can_mean_the_domain_end() {
+    let truth = Truth::new(&Pw::one(Poly::constant(qi(1))), &Dom::From(qi(0)));
+    let v = json!([{"on": {"lo": {"At": {"x": enc(f64::NEG_INFINITY, 1.0), "closed": true}},
+        "hi": "PosInf"}, "dir": "Constant"}]);
+    assert_eq!(truth.judge("monotonicity", &Scope::Line, &v), Verdict::True);
 }
