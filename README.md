@@ -284,14 +284,16 @@ CI also runs checks that need more than `cargo test --workspace`:
   nothing else excluded; one listed item stands for one zero, turn or pole,
   and each member of a listed family for one of its own (two families of
   one orbit list each member twice, so a family too wide to tell from
-  another is refused); a family's member only lies at a piece's end when
+  another is refused); a gap cleared of zeros because f ≡ 0 throughout it
+  is a stretch of them, not a gap with none, and one where f′ ≡ 0 carries
+  no sign of f′ across; a family's member only lies at a piece's end when
   shown there; a row complete over a window answers for its ends, a zero
   of f′ or f″ on one needing its sign past it and a gap's end on one a
   claim deciding it; a gap holds no turn or inflection only where f′ (f″)
   is shown to exist throughout it, so no cusp passes for a stretch of one
-  sign; a fact at a double is no fact about the reals beside it (f′ = 0
-  at the next double is no flat stretch, a zero's sign is not carried
-  across it into a gap, a monotone piece has length).
+  sign; a fact at a double is no fact about the reals beside it (f′ = 0 at
+  the next double is no flat stretch, a zero's sign is not carried across
+  it into a gap, a monotone piece has length).
   The checker has no Γ of its own, so it doesn't model `n!`, `n!!`, `nCr`
   or `nPr`: a function that uses one anywhere, a constant like `5!`
   included, comes out *unsupported* (not checked, rather than wrong), and
@@ -472,8 +474,12 @@ CI also runs checks that need more than `cargo test --workspace`:
   replay: two families of one orbit, 1/2·tan(3x)° + ½'s inflections every
   60° from 60 and every 60° from 120, passed complete over a window, every
   premise strong; now each member of a listed family needs a proven place
-  of its own. A periodic f's monotone piece past the span the truth works
-  its stretches over is Unknown now, not false.
+  of its own. A long run on seed 9907 found another: y = 0's x-intercepts
+  "none" over the window [5/7, 5/7], its one double inside a gap cleared
+  because f ≡ 0 throughout it, every premise strong; a gap so cleared is
+  now a stretch of zeros, not a gap with none. A periodic f's monotone
+  piece past the span the truth works its stretches over is Unknown now,
+  not false.
 - **Random cross-checking** (`--test crossfuzz`, same feature): the checks
   above take ordinary functions, shifted and scaled. This one generates
   expressions aimed at the families the review rounds kept finding bugs in
