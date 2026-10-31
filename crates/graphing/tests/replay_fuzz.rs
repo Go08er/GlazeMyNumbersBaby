@@ -75,16 +75,54 @@
 //! `a_monotone_piece_does_not_run_past_a_hole_in_its_enclosure`). No
 //! genuine row of these functions was false.
 //!
-//! Repeating x-intercept lists for an identically zero function are not
-//! modeled. The truth returns Unknown for them; a generated or genuine
-//! row it cannot judge fails the run rather than counting as true.
+//! **The truth, audited.** Review 24 found it calling four false things
+//! true, each with rows or claims built by hand: two items at one zero of
+//! f ≡ 0, crossing claims without monotonicity, a periodic list's turn
+//! count overflowing, a family of f ≡ 0 read as one point. Round 25 held
+//! every claim kind it reads to what the claim promises (its doc in
+//! `certify/cert.rs` and what the replay's rows take from it) and every
+//! list and row branch to what the row says. It also called true a
+//! complete monotonicity row whose pieces met at one enclosure holding
+//! two turns, the piece between left out (each end was asked of some
+//! place on its own); a `TailChain` whose chain was false; a periodic f's
+//! `GapClear` over an infinite box; an item, end or period of a NaN
+//! enclosure, a low end "PosInf", a direction or kind of no known word, a
+//! range over a window; a plateau's pieces, range and zeros. Each is
+//! fixed, with a regression that fails on the truth before. What it
+//! doesn't model is Unknown, never true: a row so (a zero function's
+//! repeating list, a plateau, a periodic item over a tail) fails the run;
+//! a premise so (a side expression's, a limit, a bound, the simplifier's
+//! fact, a family) is not held to it.
 //!
-//! **Not covered**: plateaus (a piece where f is constant, max(P, c)),
-//! steps (floor, round, sign, mod), fractional powers, poles other than
-//! a hole and tan's and cot's, sums of sinusoids with transcendental
-//! turns, and functions whose features no exact truth here reaches. The
-//! rows of the domain, the y-intercept, parity and the asymptotes are the
-//! mutation tester's and the corpus's.
+//! **The refuter** (`Ctx::refute_claim`, `Ctx::refute_row`), a second
+//! check on the truth: every claim and row it calls true is tried against
+//! f's own tree, evaluated by the replay's MPFR series (`replay::iv`,
+//! written from the language's specification; of the truth's model only
+//! where to look is read): on a grid over the claim's box or the row's
+//! scope, at every double within two of each of the truth's zeros of f to
+//! f‴, cuts and poles and within three of the domain's end. It refutes
+//! only what an enclosure shows (a strict sign or monotone order broken,
+//! a listed zero, turn or inflection where f⁽ᵏ⁾ isn't 0, two items at one
+//! double, a change of sign between two samples that no item of a
+//! complete row meets, a point in no monotone piece of the direction f′
+//! shows, a value of f outside the range, f(x + P) ≠ f(x), the truth's
+//! domain against f's definedness) and confirms nothing; a refutation
+//! fails the run as a truth bug. Of what the truth before review 24's
+//! fixes called true, it refutes R24-L-02's crossing claims (on that very
+//! truth: each refuted), R24-L-01's two items at one double,
+//! R24-L-03's sparse families and R24-L-04's family through −1
+//! (`the_refuter_catches_review_24s_examples`); not R24-L-01's items
+//! clipped to one domain end (only the end's exact place shows that one
+//! point), nor a gap clear out to infinity, nor a range that holds every
+//! sampled value.
+//!
+//! **Not covered**: plateaus (a piece where f is constant, max(P, c): the
+//! truth says Unknown), steps (floor, round, sign, mod), fractional
+//! powers, poles other than a hole and tan's and cot's, sums of sinusoids
+//! with transcendental turns, and functions whose features no exact truth
+//! here reaches. The rows of the y-intercept, parity and the asymptotes
+//! are the mutation tester's and the corpus's; the domain row is held to
+//! the domain as built (a Certified one otherwise fails the run).
 //!
 //! **Claims** from the replay's own vocabulary, true by that truth, on
 //! boxes around and between the features: sign stretches (Beyond,
