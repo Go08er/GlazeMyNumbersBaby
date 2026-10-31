@@ -95,17 +95,18 @@
 //! range and zeros. Each is fixed, with a regression that fails on the
 //! truth before. What it doesn't model is Unknown, never true: a row so
 //! (a zero function's repeating list, a plateau, a periodic item over a
-//! tail) fails the run; a premise so (a side expression's, a limit, a
-//! bound, the simplifier's fact, a family) is not held to it. Review 25
-//! found it counting a periodic f's cycles in doubles (a zero far out, or
-//! past a large phase, never visited), taking a family's period for the
-//! first multiple in its enclosure, and misreading an end enclosed from
-//! −∞; the sweep that followed, the same rounding in the domain's poles
-//! (tan(x − 10²⁰ + 8100)°'s all missed near 0), in the repeats of a
-//! period's monotone pieces and in the order of a range's pieces, and a
-//! scope from −∞ sent to `qd`. Every count of periods is exact now
-//! (rational floors in degrees, MPFR's directed bounds in radians), each
-//! fix with a regression.
+//! tail, a periodic f's monotone piece past the span its stretches are
+//! worked over) fails the run; a premise so (a side expression's, a
+//! limit, a bound, the simplifier's fact, a family) is not held to it.
+//! Review 25 found it counting a periodic f's cycles in doubles (a zero
+//! far out, or past a large phase, never visited), taking a family's
+//! period for the first multiple in its enclosure, and misreading an end
+//! enclosed from −∞; the sweep that followed, the same rounding in the
+//! domain's poles (tan(x − 10²⁰ + 8100)°'s all missed near 0), in the
+//! repeats of a period's monotone pieces and in the order of a range's
+//! pieces, and a scope from −∞ sent to `qd`. Every count of periods is
+//! exact now (rational floors in degrees, MPFR's directed bounds in
+//! radians), each fix with a regression.
 //!
 //! **The refuter** (`Ctx::refute_claim`, `Ctx::refute_row`), a second
 //! check on the truth: every claim and row it calls true is tried against
@@ -4472,6 +4473,10 @@ const ROWS: [(&str, usize); 4] = [
     ("monotonicity", 1),
 ];
 
+/// Why a periodic f's monotone row past the truth's span has no verdict.
+const PAST_SPAN: &str = "a periodic f's monotone piece or window past the span its stretches are \
+                         worked over is not modelled";
+
 /// A verdict of the truth on a row.
 #[derive(Clone, Debug, PartialEq)]
 enum Verdict {
@@ -4949,6 +4954,27 @@ impl Truth {
             .collect()
     }
 
+    /// A periodic f's monotone stretches are worked over its span alone:
+    /// a piece's end enclosure reaching past it, or a finite window's end,
+    /// is not modelled (Unknown, never false). (The stretches end at the
+    /// span, so a true piece of sin(x)° from 9990 to 10170 was false: the
+    /// sweep after review 25.) A window to ±∞ is: no finite list of
+    /// bounded pieces covers it.
+    fn past_span(&self, pieces: &[(End, End, Option<bool>)], scope: &Scope) -> bool {
+        let Some(per) = &self.per else {
+            return false;
+        };
+        let out = |x: f64| !(per.span.0 <= x && x <= per.span.1);
+        let ends = pieces
+            .iter()
+            .flat_map(|(lo, hi, _)| [lo, hi])
+            .flatten()
+            .any(|(x, _)| out(x.0) || out(x.1));
+        let window = matches!(scope, Scope::Window(a, b)
+            if a.is_finite() && b.is_finite() && (out(*a) || out(*b)));
+        ends || window
+    }
+
     /// The piece from `lo` to `hi` is part of a monotone stretch of f in
     /// its direction: some p in lo's enclosure and q > p in hi's lie in
     /// one stretch (p the stretch's open end only where lo is open).
@@ -5023,6 +5049,9 @@ impl Truth {
         }
         if self.plateau() {
             return Verdict::Unknown("a plateau's monotone pieces are not modelled".into());
+        }
+        if self.past_span(&pieces, scope) {
+            return Verdict::Unknown(PAST_SPAN.into());
         }
         for (lo, hi, dir) in &pieces {
             if let Err(why) = self.piece_true(lo, hi, *dir) {
@@ -5473,6 +5502,9 @@ impl Truth {
                 return Verdict::False("unreadable".into());
             };
             pieces.push((lo, hi, dir));
+        }
+        if self.past_span(&pieces, scope) {
+            return Verdict::Unknown(PAST_SPAN.into());
         }
         let mut choices: Vec<Vec<(Ext, Ext)>> = Vec::new();
         for (lo, hi, dir) in &pieces {
@@ -11227,6 +11259,30 @@ fn range_pieces_are_matched_to_parts_by_some_reading() {
     // (Each part needs a piece of its own.)
     let v = t.judge("range", &Scope::Line, &json!([upper.clone(), upper]));
     assert!(matches!(v, Verdict::False(_)), "{v:?}");
+}
+
+/// A periodic f's monotone stretches are worked over the truth's span,
+/// ±(4P + 32), alone, so a true piece of sin(x)° from 9990 to 10170 was
+/// false. Past the span is not modelled: Unknown, which fails a run (no
+/// generated or genuine row reaches past it).
+#[test]
+fn a_periodic_piece_past_the_truths_span_is_not_judged() {
+    let sin = Truth::new_trig(&trig_deg(TrigFn::Sin, 1, qi(0)), (-1472.0, 1472.0));
+    let at = |x: f64| json!({"At": {"x": enc(x, x), "closed": true}});
+    let piece =
+        |lo: f64, hi: f64| json!([{"on": {"lo": at(lo), "hi": at(hi)}, "dir": "Increasing"}]);
+    let row = piece(-90.0, 90.0);
+    assert_eq!(
+        sin.judge("monotonicity", &Scope::Points, &row),
+        Verdict::True
+    );
+    let far = piece(9990.0, 10170.0);
+    for scope in [Scope::Points, Scope::Window(9990.0, 10170.0)] {
+        let v = sin.judge("monotonicity", &scope, &far);
+        assert!(matches!(v, Verdict::Unknown(_)), "{v:?}");
+    }
+    let v = sin.judge("monotonicity", &Scope::Window(-90.0, 10170.0), &row);
+    assert!(matches!(v, Verdict::Unknown(_)), "{v:?}");
 }
 
 /// The refuter's family members about a stretch, exactly (hardening:
