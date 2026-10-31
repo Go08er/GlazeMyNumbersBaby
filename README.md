@@ -428,7 +428,38 @@ CI also runs checks that need more than `cargo test --workspace`:
   its hole). No genuine row was false. A long run of 600 functions on
   seed 9103 (50,630 cases: half polynomials, three in ten with corners,
   one in five periodic) then found no false row, genuine (2,450 rows; 168
-  true ones refused by the replay) or made up.
+  true ones refused by the replay) or made up. Review 24 then found the
+  truth itself calling four false things true, each with rows or claims
+  built by hand: two items at one zero of f ≡ 0, crossing claims without
+  monotonicity, a periodic list's count of turns overflowing, a family of
+  f ≡ 0 read as one point. Round 25 audited the truth whole, every claim
+  kind against what the claim promises and every list and row branch
+  against what the row says, and found it also calling true a complete
+  monotonicity row whose pieces met at one enclosure holding two turns,
+  the piece between left out (three of the periodic short run's rows the
+  replay refused, counted as true, were such); a `TailChain` with a
+  false chain; a periodic `GapClear` over an infinite box; items, ends
+  and periods of a NaN enclosure, a low end "PosInf", directions and
+  kinds of no known word, a range over a window; a plateau's pieces,
+  range and zeros. Each is fixed with a regression that fails on the
+  truth before; what it doesn't model is Unknown, which fails a run. A
+  sampled refuter now checks the truth in turn: every claim and row it
+  calls true is tried against f's own tree, evaluated by the replay's
+  MPFR series on a grid over the box or the scope and at the doubles
+  about each feature, and refuted only where an enclosure shows it false
+  (a strict sign or monotone order broken, a listed zero that isn't, a
+  change of sign between samples that no listed item meets, a value
+  outside the range, f(x + P) ≠ f(x)); a refutation fails the run. Of
+  what the truth before review 24 called true it refutes R24-L-02's
+  crossing claims, the two items at one double, the sparse families and
+  the family through −1, and it adds a few seconds to the fuzzer's CI
+  run. A long run of 600 functions on seed 5501 (50,160 cases, the
+  refuter trying 896,383 claims and rows the truth called true at
+  1,648,097 doubles) then found no false row or premise, genuine (2,436
+  rows; 145 true ones refused by the replay) or made up, no row the
+  truth couldn't judge, and the refuter nothing; the full exhaustive run
+  on the audited truth (54,221,736 combinations about 126 places, as
+  before) none.
 - **Random cross-checking** (`--test crossfuzz`, same feature): the checks
   above take ordinary functions, shifted and scaled. This one generates
   expressions aimed at the families the review rounds kept finding bugs in

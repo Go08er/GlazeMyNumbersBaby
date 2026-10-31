@@ -75,16 +75,54 @@
 //! `a_monotone_piece_does_not_run_past_a_hole_in_its_enclosure`). No
 //! genuine row of these functions was false.
 //!
-//! Repeating x-intercept lists for an identically zero function are not
-//! modeled. The truth returns Unknown for them; a generated or genuine
-//! row it cannot judge fails the run rather than counting as true.
+//! **The truth, audited.** Review 24 found it calling four false things
+//! true, each with rows or claims built by hand: two items at one zero of
+//! f ≡ 0, crossing claims without monotonicity, a periodic list's turn
+//! count overflowing, a family of f ≡ 0 read as one point. Round 25 held
+//! every claim kind it reads to what the claim promises (its doc in
+//! `certify/cert.rs` and what the replay's rows take from it) and every
+//! list and row branch to what the row says. It also called true a
+//! complete monotonicity row whose pieces met at one enclosure holding
+//! two turns, the piece between left out (each end was asked of some
+//! place on its own); a `TailChain` whose chain was false; a periodic f's
+//! `GapClear` over an infinite box; an item, end or period of a NaN
+//! enclosure, a low end "PosInf", a direction or kind of no known word, a
+//! range over a window; a plateau's pieces, range and zeros. Each is
+//! fixed, with a regression that fails on the truth before. What it
+//! doesn't model is Unknown, never true: a row so (a zero function's
+//! repeating list, a plateau, a periodic item over a tail) fails the run;
+//! a premise so (a side expression's, a limit, a bound, the simplifier's
+//! fact, a family) is not held to it.
 //!
-//! **Not covered**: plateaus (a piece where f is constant, max(P, c)),
-//! steps (floor, round, sign, mod), fractional powers, poles other than
-//! a hole and tan's and cot's, sums of sinusoids with transcendental
-//! turns, and functions whose features no exact truth here reaches. The
-//! rows of the domain, the y-intercept, parity and the asymptotes are the
-//! mutation tester's and the corpus's.
+//! **The refuter** (`Ctx::refute_claim`, `Ctx::refute_row`), a second
+//! check on the truth: every claim and row it calls true is tried against
+//! f's own tree, evaluated by the replay's MPFR series (`replay::iv`,
+//! written from the language's specification; of the truth's model only
+//! where to look is read): on a grid over the claim's box or the row's
+//! scope, at every double within two of each of the truth's zeros of f to
+//! f‴, cuts and poles and within three of the domain's end. It refutes
+//! only what an enclosure shows (a strict sign or monotone order broken,
+//! a listed zero, turn or inflection where f⁽ᵏ⁾ isn't 0, two items at one
+//! double, a change of sign between two samples that no item of a
+//! complete row meets, a point in no monotone piece of the direction f′
+//! shows, a value of f outside the range, f(x + P) ≠ f(x), the truth's
+//! domain against f's definedness) and confirms nothing; a refutation
+//! fails the run as a truth bug. Of what the truth before review 24's
+//! fixes called true, it refutes R24-L-02's crossing claims (on that very
+//! truth: each refuted), R24-L-01's two items at one double,
+//! R24-L-03's sparse families and R24-L-04's family through −1
+//! (`the_refuter_catches_review_24s_examples`); not R24-L-01's items
+//! clipped to one domain end (only the end's exact place shows that one
+//! point), nor a gap clear out to infinity, nor a range that holds every
+//! sampled value.
+//!
+//! **Not covered**: plateaus (a piece where f is constant, max(P, c): the
+//! truth says Unknown), steps (floor, round, sign, mod), fractional
+//! powers, poles other than a hole and tan's and cot's, sums of sinusoids
+//! with transcendental turns, and functions whose features no exact truth
+//! here reaches. The rows of the y-intercept, parity and the asymptotes
+//! are the mutation tester's and the corpus's; the domain row is held to
+//! the domain as built (a Certified one otherwise fails the run).
 //!
 //! **Claims** from the replay's own vocabulary, true by that truth, on
 //! boxes around and between the features: sign stretches (Beyond,
@@ -156,8 +194,9 @@ use replay::{Claim, Class, KinkSign, Side, Subject};
 use rug::float::{Constant, Round};
 use rug::{Float, Integer, Rational};
 use serde_json::{Value, json};
+use std::cell::RefCell;
 use std::cmp::Ordering::{self, Equal, Greater, Less};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 
 // ------------------------------------------------------------ randomness
@@ -2980,6 +3019,13 @@ impl Truth {
         self.d[1].is_zero()
     }
 
+    /// f constant on a stretch, not everywhere (max(P, c)): its turns,
+    /// monotone pieces and range are not modelled (no generator makes
+    /// one; `make_kinked` refuses a constant piece).
+    fn plateau(&self) -> bool {
+        !self.constant() && !self.flats[1].is_empty()
+    }
+
     /// f⁽ᵏ⁾'s sign just right (or left) of x, x left out.
     fn beside_sign(&self, k: usize, x: &Rational, right: bool) -> Ordering {
         if let Some(per) = &self.per {
@@ -3049,9 +3095,14 @@ impl Truth {
         p.clone().sign_of(&g)
     }
 
-    /// f's value at the place lies in [lo, hi].
+    /// f's value at the place lies in [lo, hi] (an infinite end no bound;
+    /// a NaN end, or lo > hi, holds no value).
     fn value_within_at(&self, p: &Place, lo: f64, hi: f64) -> bool {
-        self.cmp_value(0, p, &qd(lo)) != Less && self.cmp_value(0, p, &qd(hi)) != Greater
+        if lo.is_nan() || hi.is_nan() || lo > hi || lo == f64::INFINITY || hi == f64::NEG_INFINITY {
+            return false;
+        }
+        (!lo.is_finite() || self.cmp_value(0, p, &qd(lo)) != Less)
+            && (!hi.is_finite() || self.cmp_value(0, p, &qd(hi)) != Greater)
     }
 
     /// The values of f⁽ᵏ⁾ over [a, b] lie in [lo, hi] (it exists
@@ -3317,6 +3368,93 @@ impl Truth {
         }
     }
 
+    /// `TailChain`'s chain of order m about f⁽ᵏ⁾ on the tail from `from`:
+    /// f⁽ᵏ⁺ᵐ⁾ exists on the tail with one strict sign σ, and at `from`
+    /// f⁽ᵏ⁺ⁱ⁾ (i < m) has the strict sign σ forces (σ on the right tail,
+    /// σ·(−1)ᵐ⁻ⁱ on the left), σ the sign that leaves f⁽ᵏ⁾ on side `above`
+    /// (the replay's `claims::tail_chain`). No chain holds on a tail of a
+    /// periodic f (f⁽ᵏ⁺ᵐ⁾ changes sign there, or has poles).
+    fn chain(&self, k: usize, side: Side, from: f64, above: bool, m: usize) -> bool {
+        if self.per.is_some() || m == 0 || !from.is_finite() {
+            return false;
+        }
+        let right = side == Side::Right;
+        let sigma = if right || m.is_multiple_of(2) {
+            above
+        } else {
+            !above
+        };
+        let want = |i: usize| {
+            let s = if right {
+                sigma
+            } else {
+                sigma == (m - i).is_multiple_of(2)
+            };
+            if s { Greater } else { Less }
+        };
+        let x = qd(from);
+        let top = k + m;
+        let mut d: Vec<Pw> = vec![self.d[0].clone()];
+        for _ in 0..top {
+            let next = d.last().expect("f").deriv();
+            d.push(next);
+        }
+        let cuts = &self.d[0].cuts;
+        // f⁽ᵗᵒᵖ⁾ exists on the closed tail: at each cut there, f′, …, f⁽ᵗᵒᵖ⁾
+        // agree on both sides.
+        for (j, c) in cuts.iter().enumerate() {
+            let on = if right { *c >= x } else { *c <= x };
+            if on && (1..=top).any(|n| d[n].polys[j].eval(c) != d[n].polys[j + 1].eval(c)) {
+                return false;
+            }
+        }
+        // Its strict sign on each piece's part of the tail.
+        let want_top = if sigma { Greater } else { Less };
+        for (i, p) in d[top].polys.iter().enumerate() {
+            let (lo, hi) = d[top].ends(i);
+            let (a, b) = if right {
+                (
+                    Some(lo.map_or(x.clone(), |l| l.clone().max(x.clone()))),
+                    hi.cloned(),
+                )
+            } else {
+                (
+                    lo.cloned(),
+                    Some(hi.map_or(x.clone(), |h| h.clone().min(x.clone()))),
+                )
+            };
+            if let (Some(a), Some(b)) = (&a, &b)
+                && a > b
+            {
+                continue;
+            }
+            if p.is_zero() {
+                return false;
+            }
+            let inside = |r: &Root| {
+                a.as_ref().is_none_or(|a| r.cmp(a) != Less)
+                    && b.as_ref().is_none_or(|b| r.cmp(b) != Greater)
+            };
+            if real_roots(p).iter().any(inside) {
+                return false;
+            }
+            let t = match (&a, &b) {
+                (Some(a), Some(b)) => Rational::from(a + b) / 2u32,
+                (Some(a), None) => Rational::from(a + 1u32),
+                (None, Some(b)) => Rational::from(b - 1u32),
+                (None, None) => qi(0),
+            };
+            if p.sign(&t) != want_top {
+                return false;
+            }
+        }
+        // The signs at `from` (each derivative exists there: checked).
+        (0..m).all(|i| {
+            let n = k + i;
+            d[n].polys[d[n].at(&x).0].sign(&x) == want(i)
+        })
+    }
+
     /// Whether a claim is true (None: a kind this truth doesn't read).
     /// f⁽ᵏ⁾ is the polynomial's own derivative throughout the domain, at a
     /// closed end too, one-sided (as the replay reads `0*sqrt(u)`); at a
@@ -3358,14 +3496,6 @@ impl Truth {
                 of,
                 c,
                 above,
-            }
-            | Claim::TailChain {
-                side,
-                from,
-                of,
-                c,
-                above,
-                ..
             } => {
                 let k = order(of)?;
                 if *c != 0.0 {
@@ -3373,6 +3503,25 @@ impl Truth {
                 }
                 let (a, b) = tail(*side, *from);
                 sign_is(k, a, b, *above)
+            }
+            Claim::TailChain {
+                side,
+                from,
+                of,
+                c,
+                above,
+                order: m,
+            } => {
+                let k = order(of)?;
+                if *c != 0.0 {
+                    return None;
+                }
+                // (Its chain too, not only where it ends: the rows read
+                // f⁽ᵏ⁾ moving away from c on the tail from it (`rows::
+                // tail_infinite`). x² + 1 above 0 on [−1, ∞) "by f′ > 0"
+                // passed: round 25's audit.)
+                let (a, b) = tail(*side, *from);
+                sign_is(k, a, b, *above) && self.chain(k, *side, *from, *above, *m)
             }
             Claim::OneCross { x, of, c } => {
                 let k = order(of)?;
@@ -3413,7 +3562,10 @@ impl Truth {
                     return None;
                 }
                 let other = if *at == x.0 { x.1 } else { x.0 };
+                // (A box of doubles: `at` and the far end are ones.)
                 ok_box(x)
+                    && x.0.is_finite()
+                    && x.1.is_finite()
                     && (*at == x.0 || *at == x.1)
                     && self.sign_at(k, *at) == Some(Equal)
                     && self.roots_in(k, x.0, x.1) == 1
@@ -3461,8 +3613,20 @@ impl Truth {
             Claim::Gap(x) => x.0 <= x.1,
             Claim::GapClear { x, of } => {
                 let k = order(of)?;
+                if x.0.is_nan() || x.1.is_nan() {
+                    return Some(false);
+                }
                 if self.d[k].is_zero() {
                     return Some(true);
+                }
+                // (A periodic f's zeros over an infinite stretch: each
+                // period's, if it has any. Its lists hold its span's
+                // alone, and a box past the span was read as clear: round
+                // 25's audit.)
+                if let Some(per) = &self.per
+                    && !(x.0.is_finite() && x.1.is_finite())
+                {
+                    return Some(x.0 >= x.1 || per.brk[k].iter().all(|(_, pole)| *pole));
                 }
                 // (≡ 0 throughout it, or no zero strictly inside it.)
                 let inside = |s: &Stretch| {
@@ -3486,7 +3650,13 @@ impl Truth {
                 right,
                 joined,
             } => {
-                if *k > 2 || *k == 0 || !ok_box(x) || x.0 >= x.1 {
+                // (A box of doubles: an infinite end is none.)
+                if *k > 2
+                    || *k == 0
+                    || !ok_box(x)
+                    || x.0 >= x.1
+                    || !(x.0.is_finite() && x.1.is_finite())
+                {
                     return Some(false);
                 }
                 // (Joined: f′ exists at the point and is continuous on x.)
@@ -3548,8 +3718,14 @@ impl Truth {
                 // The one corner in the box at `at`, f′ of the smooth form
                 // f takes on each side strictly signed up to it (0 at `at`
                 // itself allowed: x·|x|).
+                // (Not modelled: that a kink argument of f's formula is 0
+                // at `at`, a fact of the tree; |P| at an even root of P
+                // has one and no corner. What the rows read, f strictly
+                // monotone on each side with any corner at `at`, is.)
                 let s = |up: bool| if up { KinkSign::Pos } else { KinkSign::Neg };
                 ok_box(x)
+                    && x.0.is_finite()
+                    && x.1.is_finite()
                     && x.0 < *at
                     && *at < x.1
                     && self.rough[1]
@@ -4230,6 +4406,21 @@ fn enc_of(v: &Value) -> Option<(f64, f64)> {
     Some((replay::r(v.get("lo")?).ok()?, replay::r(v.get("hi")?).ok()?))
 }
 
+/// An enclosure that holds a real: no NaN end, lo ≤ hi, not a point at
+/// an infinity. (A NaN end read as an infinite one by `Place::within`
+/// made an item `[NaN, NaN]` hold every feature, and the zero function's
+/// list took it for a wide item: round 25's audit.)
+fn real_enc(x: (f64, f64)) -> bool {
+    x.0 <= x.1 && x.0 != f64::INFINITY && x.1 != f64::NEG_INFINITY
+}
+
+/// An enclosure that holds a real, read as such (None: it holds none).
+fn real_enc_of(v: &Value) -> Option<(f64, f64)> {
+    enc_of(v).filter(|x| real_enc(*x))
+}
+
+/// A list row's items (None: unreadable, or an item that holds no real
+/// number, or of a kind that is no extremum's: each a false row).
 fn items_of(row: &str, value: &Value) -> Option<Vec<Item>> {
     value
         .as_array()?
@@ -4238,7 +4429,7 @@ fn items_of(row: &str, value: &Value) -> Option<Vec<Item>> {
             if row == "x_intercepts" {
                 if let Some(a) = it.get("At") {
                     return Some(Item {
-                        x: enc_of(a)?,
+                        x: real_enc_of(a)?,
                         y: None,
                         max: None,
                         family: false,
@@ -4247,21 +4438,35 @@ fn items_of(row: &str, value: &Value) -> Option<Vec<Item>> {
                 }
                 let e = it.get("Every")?;
                 return Some(Item {
-                    x: enc_of(e.get("x0")?)?,
+                    x: real_enc_of(e.get("x0")?)?,
                     y: None,
                     max: None,
                     family: true,
-                    every: Some(enc_of(e.get("period")?)?),
+                    every: Some(real_enc_of(e.get("period")?)?),
                 });
             }
             let every = it.get("every").filter(|e| !e.is_null());
+            // (A null y is no claim; one that is no enclosure of a real,
+            // NaN or reversed, was read as none too, and so no false one.)
+            let y = match it.get("y")? {
+                Value::Null => None,
+                y => Some(real_enc_of(y)?),
+            };
+            let max = match it.get("kind").filter(|k| !k.is_null()) {
+                None => None,
+                Some(k) => match k.as_str()? {
+                    "Max" => Some(true),
+                    "Min" => Some(false),
+                    _ => return None,
+                },
+            };
             Some(Item {
-                x: enc_of(it.get("x")?)?,
-                y: enc_of(it.get("y")?),
-                max: it.get("kind").and_then(Value::as_str).map(|k| k == "Max"),
+                x: real_enc_of(it.get("x")?)?,
+                y,
+                max,
                 family: every.is_some(),
                 every: match every {
-                    Some(e) => Some(enc_of(e)?),
+                    Some(e) => Some(real_enc_of(e)?),
                     None => None,
                 },
             })
@@ -4308,12 +4513,138 @@ fn matched(options: &[Vec<usize>]) -> Option<usize> {
 /// infinite.
 type End = Option<((f64, f64), bool)>;
 
-fn end_of(v: &Value) -> Option<End> {
-    if v.as_str().is_some() {
-        return Some(None);
+/// A piece's low (`low`) or high end: `NegInf` only low, `PosInf` only
+/// high, or at an enclosure that holds a real. (Any string was read as
+/// the infinite end, so a range from `PosInf` was one from −∞: round
+/// 25's audit.)
+fn end_of(v: &Value, low: bool) -> Option<End> {
+    if let Some(s) = v.as_str() {
+        return (s == if low { "NegInf" } else { "PosInf" }).then_some(None);
     }
     let at = v.get("At")?;
-    Some(Some((enc_of(at.get("x")?)?, at.get("closed")?.as_bool()?)))
+    Some(Some((
+        real_enc_of(at.get("x")?)?,
+        at.get("closed")?.as_bool()?,
+    )))
+}
+
+/// A monotone piece's direction: increasing (`Some(true)`), decreasing,
+/// or constant (`None`); any other word is unreadable (it was read as
+/// "constant", true of every piece of a constant f: round 25's audit).
+fn dir_of(v: &Value) -> Option<Option<bool>> {
+    match v.as_str()? {
+        "Increasing" => Some(Some(true)),
+        "Decreasing" => Some(Some(false)),
+        "Constant" => Some(None),
+        _ => None,
+    }
+}
+
+/// An end of a stretch of x: −∞, a place, +∞.
+#[derive(Clone, Debug)]
+enum Ext {
+    Neg,
+    At(Place),
+    Pos,
+}
+
+/// Two ends of stretches in order, exactly.
+fn ecmp(a: &Ext, b: &Ext) -> Ordering {
+    match (a, b) {
+        (Ext::Neg, Ext::Neg) | (Ext::Pos, Ext::Pos) => Equal,
+        (Ext::Neg, _) | (_, Ext::Pos) => Less,
+        (_, Ext::Neg) | (Ext::Pos, _) => Greater,
+        (Ext::At(p), Ext::At(q)) => pcmp(p, q),
+    }
+}
+
+/// The closed stretches cover [from, to] (closed).
+fn covers(stretches: &[(Ext, Ext)], from: &Ext, to: &Ext) -> bool {
+    let mut reach = from.clone();
+    loop {
+        // (Of the stretches holding `reach`, the one reaching farthest.)
+        let Some(best) = stretches
+            .iter()
+            .filter(|(p, q)| ecmp(p, &reach) != Greater && ecmp(q, &reach) != Less)
+            .map(|(_, q)| q)
+            .max_by(|a, b| ecmp(a, b))
+        else {
+            return false;
+        };
+        if ecmp(best, to) != Less {
+            return true;
+        }
+        if ecmp(best, &reach) != Greater {
+            // (The reals just past `reach` in none.)
+            return false;
+        }
+        reach = best.clone();
+    }
+}
+
+/// Whether one stretch chosen from each piece's (each with its repeats
+/// by the period P = q0 + q1·π, when given) covers [from, to]: every
+/// choice tried, None if there are too many.
+fn covering(
+    choices: &[Vec<(Ext, Ext)>],
+    from: &Ext,
+    to: &Ext,
+    period: Option<&(Rational, Rational)>,
+) -> Option<bool> {
+    let n = choices
+        .iter()
+        .try_fold(1usize, |n, c| n.checked_mul(c.len()))?;
+    if n > 4096 {
+        return None;
+    }
+    let approx = |e: &Ext| match e {
+        Ext::At(p) => p.approx(),
+        Ext::Neg => f64::NEG_INFINITY,
+        Ext::Pos => f64::INFINITY,
+    };
+    let mut pick = vec![0usize; choices.len()];
+    loop {
+        let mut stretches: Vec<(Ext, Ext)> = Vec::new();
+        for (c, i) in choices.iter().zip(&pick) {
+            let (p, q) = &c[*i];
+            match (period, p, q) {
+                (Some(per), Ext::At(p), Ext::At(q)) => {
+                    // (Its repeats that may meet [from, to].)
+                    let pf = pi_place(per.0.clone(), per.1.clone()).approx();
+                    let lo = ((approx(from) - q.approx()) / pf).floor() as i64 - 1;
+                    let hi = ((approx(to) - p.approx()) / pf).ceil() as i64 + 1;
+                    for k in lo..=hi {
+                        let shift = |x: &Place| {
+                            let (q0, q1) = pq(x);
+                            let k = Rational::from(k);
+                            pi_place(
+                                q0 + Rational::from(&k * &per.0),
+                                q1 + Rational::from(&k * &per.1),
+                            )
+                        };
+                        stretches.push((Ext::At(shift(p)), Ext::At(shift(q))));
+                    }
+                }
+                _ => stretches.push((p.clone(), q.clone())),
+            }
+        }
+        if covers(&stretches, from, to) {
+            return Some(true);
+        }
+        // (The next choice.)
+        let mut i = 0;
+        loop {
+            if i == pick.len() {
+                return Some(false);
+            }
+            pick[i] += 1;
+            if pick[i] < choices[i].len() {
+                break;
+            }
+            pick[i] = 0;
+            i += 1;
+        }
+    }
 }
 
 impl Truth {
@@ -4343,11 +4674,9 @@ impl Truth {
             // so finitely many such items can name distinct ones. An
             // intersection of one point (including a clipped domain end)
             // has only that zero to offer: two items cannot share it.
+            // (`items_of` refuses an item with no real point.)
             let mut points = std::collections::BTreeSet::new();
             for i in &items {
-                if i.x.0 > i.x.1 || i.x.0 == f64::INFINITY || i.x.1 == f64::NEG_INFINITY {
-                    return Verdict::False("an item with no real point".into());
-                }
                 let point = if i.x.0 == i.x.1 {
                     Some(qd(i.x.0))
                 } else {
@@ -4369,8 +4698,8 @@ impl Truth {
                 Scope::Window(a, b) if self.dom.misses_box(*a, *b) => Verdict::True,
                 Scope::Window(a, b)
                     if a == b
-                        || matches!(&self.dom, Dom::From(c) if qd(*b) == *c)
-                        || matches!(&self.dom, Dom::Upto(c) if qd(*a) == *c) =>
+                        || matches!(&self.dom, Dom::From(c) if b.is_finite() && qd(*b) == *c)
+                        || matches!(&self.dom, Dom::Upto(c) if a.is_finite() && qd(*a) == *c) =>
                 {
                     // One point of the domain in the window: its zero.
                     let p = if matches!(&self.dom, Dom::From(_)) {
@@ -4386,6 +4715,16 @@ impl Truth {
                 }
                 _ => Verdict::False("f ≡ 0: its zeros are no list".into()),
             };
+        }
+        // (Zeros on a stretch where f ≡ 0 though f isn't, a plateau's
+        // turns: no list holds them, and no generator makes either. Read
+        // as zeros and turns at the stretch's ends alone, they would pass
+        // a list that leaves the stretch out: round 25's audit.)
+        if row == "x_intercepts" && !self.flats[0].is_empty() {
+            return Verdict::Unknown("zeros on a stretch where f ≡ 0 are not modelled".into());
+        }
+        if row == "extrema" && self.plateau() {
+            return Verdict::Unknown("a plateau's extrema are not modelled".into());
         }
         let mut feats = self.features(row);
         let ok = |it: &Item, f: &mut Feature| -> bool {
@@ -4570,96 +4909,84 @@ impl Truth {
         let mut pieces: Vec<(End, End, Option<bool>)> = Vec::new();
         for it in list {
             let on = &it["on"];
-            let (Some(lo), Some(hi)) = (end_of(&on["lo"]), end_of(&on["hi"])) else {
+            let (Some(lo), Some(hi)) = (end_of(&on["lo"], true), end_of(&on["hi"], false)) else {
                 return Verdict::False("unreadable".into());
             };
-            let dir = match it["dir"].as_str() {
-                Some("Increasing") => Some(true),
-                Some("Decreasing") => Some(false),
-                _ => None,
+            let Some(dir) = dir_of(&it["dir"]) else {
+                return Verdict::False("unreadable".into());
             };
             pieces.push((lo, hi, dir));
         }
-        let mut extents: Vec<(f64, f64)> = Vec::new();
+        if self.plateau() {
+            return Verdict::Unknown("a plateau's monotone pieces are not modelled".into());
+        }
         for (lo, hi, dir) in &pieces {
             if let Err(why) = self.piece_true(lo, hi, *dir) {
                 return Verdict::False(format!("the piece {lo:?} to {hi:?} {dir:?}: {why}"));
             }
-            extents.push((
-                lo.map_or(f64::NEG_INFINITY, |(x, _)| x.0),
-                hi.map_or(f64::INFINITY, |(x, _)| x.1),
-            ));
         }
         if !scope.complete() {
             return Verdict::True;
         }
-        // Every point of the scope where f is defined lies in a piece:
-        // tried at every end and between each two (exactly). (Where that
-        // is one point, there is no piece to list: f is monotone on no
-        // stretch of it.)
+        // The part of the domain the scope asks for, closed (the union of
+        // the pieces, each closed, holds the reals of a stretch just when
+        // it holds the stretch's closure). (Where that is one point,
+        // there is no piece to list: f is monotone on no stretch of it.)
         let (sa, sb) = match scope {
             Scope::Window(a, b) => (*a, *b),
             _ => (f64::NEG_INFINITY, f64::INFINITY),
         };
-        let one_point = sa == sb
-            || match &self.dom {
-                Dom::From(c) => sb.is_finite() && qd(sb) == *c,
-                Dom::Upto(c) => sa.is_finite() && qd(sa) == *c,
-                _ => false,
-            };
-        if one_point {
+        let mut from = if sa.is_finite() {
+            Ext::At(Place::At(qd(sa)))
+        } else {
+            Ext::Neg
+        };
+        let mut to = if sb.is_finite() {
+            Ext::At(Place::At(qd(sb)))
+        } else {
+            Ext::Pos
+        };
+        match &self.dom {
+            Dom::From(c) if ecmp(&from, &Ext::At(Place::At(c.clone()))) == Less => {
+                from = Ext::At(Place::At(c.clone()));
+            }
+            Dom::Upto(c) if ecmp(&to, &Ext::At(Place::At(c.clone()))) == Greater => {
+                to = Ext::At(Place::At(c.clone()));
+            }
+            _ => {}
+        }
+        if ecmp(&from, &to) != Less {
             // (Each piece listed is true: checked above.)
             return Verdict::True;
         }
-        let mut pts: Vec<Rational> = Vec::new();
-        for (a, b) in extents.iter().chain([(sa, sb)].iter()) {
-            for e in [a, b] {
-                if e.is_finite() {
-                    pts.push(qd(*e));
+        // Each piece stands for one stretch of f's: from a place in its low
+        // end's enclosure where a piece of f may end (a zero of f′, the
+        // domain's end or hole, the window's edge) to a later one in its
+        // high end's, within one stretch of f in its direction. Which,
+        // the row doesn't say: true if some choice, one for each piece,
+        // covers the scope. (Each piece's ends were asked only of some
+        // place in each enclosure, and the extents of the enclosures
+        // covered: two pieces meeting at one enclosure that held two
+        // turns, a piece of the other direction between them left out,
+        // passed for true. x³ − x increasing up to [−0.6, 0.6] and from
+        // it: round 25's audit.)
+        let mut choices: Vec<Vec<(Ext, Ext)>> = Vec::new();
+        for (lo, hi, dir) in &pieces {
+            match self.piece_choices(lo, hi, *dir, scope) {
+                Ok(c) => choices.push(c),
+                Err(why) => {
+                    return Verdict::False(format!("the piece {lo:?} to {hi:?} {dir:?}: {why}"));
                 }
             }
         }
-        if let Some(c) = self.dom.point() {
-            pts.push(c.clone());
+        match covering(&choices, &from, &to, None) {
+            Some(true) => Verdict::True,
+            Some(false) => Verdict::False(format!(
+                "the pieces, each from a place f's pieces end at to another, leave part of \
+                 {scope:?} out"
+            )),
+            None => Verdict::Unknown("too many readings of the pieces' ends".into()),
         }
-        pts.sort();
-        pts.dedup();
-        let mut tries = pts.clone();
-        for w in pts.windows(2) {
-            tries.push(Rational::from(&w[0] + &w[1]) / 2u32);
-        }
-        if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
-            tries.push(Rational::from(first - 1u32));
-            tries.push(Rational::from(last + 1u32));
-        } else {
-            tries.push(qi(0));
-        }
-        for t in &tries {
-            let in_scope = (!sa.is_finite() || *t >= qd(sa)) && (!sb.is_finite() || *t <= qd(sb));
-            if !in_scope || !self.dom.holds_q(t) {
-                continue;
-            }
-            let covered = extents
-                .iter()
-                .any(|(a, b)| (!a.is_finite() || qd(*a) <= *t) && (!b.is_finite() || *t <= qd(*b)));
-            if !covered {
-                return Verdict::False(format!(
-                    "the pieces leave {:e} of {scope:?} out",
-                    t.to_f64()
-                ));
-            }
-        }
-        // f's pieces, each end where one ends: a zero of f′, the domain's
-        // end or hole, the window's edge; and between two such ends, f
-        // monotone the way listed. (Only some point of each enclosure
-        // was asked above: two overlapping enclosures of one turn bound
-        // a piece of no length.)
-        for (lo, hi, dir) in &pieces {
-            if let Err(why) = self.piece_anchored(lo, hi, *dir, scope) {
-                return Verdict::False(format!("the piece {lo:?} to {hi:?} {dir:?}: {why}"));
-            }
-        }
-        Verdict::True
     }
 
     /// Where a piece of a complete row may end, within the enclosure x:
@@ -4692,8 +5019,7 @@ impl Truth {
             .filter(|p| p.within(x.0, x.1) && self.dom.holds(p))
             .collect();
         if let Some(c) = self.dom.point()
-            && qd(x.0) <= *c
-            && *c <= qd(x.1)
+            && Place::At(c.clone()).within(x.0, x.1)
         {
             out.push(Place::At(c.clone()));
         }
@@ -4702,7 +5028,7 @@ impl Truth {
         }
         if let Scope::Window(a, b) = scope {
             for e in [*a, *b] {
-                if x.0 <= e && e <= x.1 {
+                if e.is_finite() && x.0 <= e && e <= x.1 {
                     out.push(Place::At(qd(e)));
                 }
             }
@@ -4710,16 +5036,17 @@ impl Truth {
         out
     }
 
-    /// A complete row's piece: from an anchor in its low end's enclosure
-    /// to a later one in its high end's, within one stretch of f in its
-    /// direction.
-    fn piece_anchored(
+    /// A complete row's piece, as each stretch it may stand for: from an
+    /// anchor in its low end's enclosure to a later one in its high
+    /// end's, within one stretch of f in its direction, the widest such
+    /// in each stretch (it covers what any other there covers).
+    fn piece_choices(
         &self,
         lo: &End,
         hi: &End,
         dir: Option<bool>,
         scope: &Scope,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<(Ext, Ext)>, String> {
         let ps: Option<Vec<Place>> = lo.map(|(x, _)| self.anchors_in(x, scope));
         let qs: Option<Vec<Place>> = hi.map(|(x, _)| self.anchors_in(x, scope));
         if ps.as_ref().is_some_and(Vec::is_empty) || qs.as_ref().is_some_and(Vec::is_empty) {
@@ -4727,6 +5054,7 @@ impl Truth {
         }
         let below = |a: &Option<Place>, b: &Place| a.as_ref().is_none_or(|a| pcmp(a, b) != Greater);
         let above = |a: &Option<Place>, b: &Place| a.as_ref().is_none_or(|a| pcmp(a, b) != Less);
+        let mut out = Vec::new();
         for (b0, c0, b1, c1, d) in self.stretches() {
             if d != dir {
                 continue;
@@ -4760,22 +5088,52 @@ impl Truth {
                     .map(|q| Some(q.clone()))
                     .collect(),
             };
-            let ordered = starts.iter().any(|p| {
-                ends.iter().any(|q| match (p, q) {
-                    (Some(p), Some(q)) => pcmp(p, q) == Less,
-                    _ => true,
-                })
-            });
-            if ordered {
-                return Ok(());
+            // (The least start and the greatest end: if any start is below
+            // any end, these are.)
+            let ext = |p: &Option<Place>, low: bool| match p {
+                Some(p) => Ext::At(p.clone()),
+                None if low => Ext::Neg,
+                None => Ext::Pos,
+            };
+            let p = starts.iter().map(|p| ext(p, true)).min_by(ecmp);
+            let q = ends.iter().map(|q| ext(q, false)).max_by(ecmp);
+            if let (Some(p), Some(q)) = (p, q)
+                && ecmp(&p, &q) == Less
+            {
+                out.push((p, q));
             }
         }
-        Err("no stretch of f between two of its anchors".into())
+        if out.is_empty() {
+            return Err("no stretch of f between two of its anchors".into());
+        }
+        Ok(out)
     }
 
     fn judge(&self, row: &str, scope: &Scope, value: &Value) -> Verdict {
+        // (A window or period with a NaN end, or reversed, holds no real;
+        // read as one it made a complete row over nothing, or over the
+        // line: round 25's audit.)
+        if let Scope::Window(a, b) | Scope::Period(a, b) = scope
+            && !real_enc((*a, *b))
+        {
+            return Verdict::False(format!("a scope [{a:e}, {b:e}] that holds no real"));
+        }
+        // (The range and the period are statements about the whole line,
+        // a part of either no row: the replay's `off_form`.)
+        if matches!(row, "period" | "range") && !scope.whole() {
+            return Verdict::False(format!(
+                "a {row} row over {scope:?}: a part of one is no row"
+            ));
+        }
         if row == "period" {
             return self.judge_period(value);
+        }
+        // (Any other name was judged as a list of inflections.)
+        if !matches!(
+            row,
+            "x_intercepts" | "extrema" | "inflections" | "monotonicity" | "range"
+        ) {
+            return Verdict::Unknown(format!("the {row} row is not modelled"));
         }
         if matches!(scope, Scope::Period(..)) && self.per.is_none() {
             return Verdict::False("a row over one period of an f with none".into());
@@ -4823,7 +5181,11 @@ impl Truth {
         }
         let mut readings: Vec<Vec<Reading>> = Vec::new();
         let mut alone = false;
+        let feats = per.feats_s(row);
         for it in &items {
+            if !(it.x.0.is_finite() && it.x.1.is_finite()) {
+                return Verdict::Unknown("a periodic f's item over an infinite stretch".into());
+            }
             let held: Vec<Rational> = per
                 .feats_in(row, it.x.0, it.x.1)
                 .into_iter()
@@ -4850,8 +5212,31 @@ impl Truth {
                         ));
                     };
                     let step = Rational::from(&ps * &Rational::from(n));
+                    // (Every member of the orbit a feature of the kind listed,
+                    // f's value there in the item's y: each of its residues
+                    // in a period of T asked, not the first member's alone.
+                    // f's values at features of one kind agree for these
+                    // functions, so this held already: hardening, round 25.)
+                    let orbit_fits = |s0: &Rational| {
+                        let mut seen: Vec<Rational> = Vec::new();
+                        let mut s = s0.clone();
+                        loop {
+                            let r = per.residue(&s);
+                            if seen.contains(&r) {
+                                return true;
+                            }
+                            let Some((_, m)) = feats.iter().find(|(f, _)| *f == r) else {
+                                return false;
+                            };
+                            if !fits(it, &per.trig.place(&r), m) {
+                                return false;
+                            }
+                            seen.push(r);
+                            s += &step;
+                        }
+                    };
                     let mut orbits: Vec<Reading> = Vec::new();
-                    for s0 in held {
+                    for s0 in held.into_iter().filter(|s0| orbit_fits(s0)) {
                         let seen = orbits.iter().any(|o| {
                             matches!(o, Reading::Orbit(t, _) if whole(&(Rational::from(&s0 - t) / &step)))
                         });
@@ -4949,6 +5334,9 @@ impl Truth {
         };
         if search(0, &readings, &mut Vec::new(), &ok, &meet, &mut tried) {
             Verdict::True
+        } else if tried > 20_000 {
+            // (Not every reading tried: no verdict, rather than a false one.)
+            Verdict::Unknown("too many readings of the items".into())
         } else {
             Verdict::False(format!(
                 "no reading of its items lists each {row} item once{}",
@@ -4972,91 +5360,61 @@ impl Truth {
         let mut pieces: Vec<(End, End, Option<bool>)> = Vec::new();
         for it in list {
             let on = &it["on"];
-            let (Some(lo), Some(hi)) = (end_of(&on["lo"]), end_of(&on["hi"])) else {
+            let (Some(lo), Some(hi)) = (end_of(&on["lo"], true), end_of(&on["hi"], false)) else {
                 return Verdict::False("unreadable".into());
             };
-            let dir = match it["dir"].as_str() {
-                Some("Increasing") => Some(true),
-                Some("Decreasing") => Some(false),
-                _ => None,
+            let Some(dir) = dir_of(&it["dir"]) else {
+                return Verdict::False("unreadable".into());
             };
             pieces.push((lo, hi, dir));
         }
-        let mut extents: Vec<(f64, f64)> = Vec::new();
+        let mut choices: Vec<Vec<(Ext, Ext)>> = Vec::new();
         for (lo, hi, dir) in &pieces {
             if let Err(why) = self.piece_true(lo, hi, *dir) {
                 return Verdict::False(format!("the piece {lo:?} to {hi:?} {dir:?}: {why}"));
             }
-            if let Err(why) = self.piece_anchored(lo, hi, *dir, &Scope::Line) {
-                return Verdict::False(format!("the piece {lo:?} to {hi:?} {dir:?}: {why}"));
+            if lo.is_none() || hi.is_none() {
+                return Verdict::False("an infinite piece of a periodic f".into());
             }
-            match (lo, hi) {
-                (Some((x, _)), Some((y, _))) => extents.push((x.0, y.1)),
-                _ => return Verdict::False("an infinite piece of a periodic f".into()),
+            match self.piece_choices(lo, hi, *dir, &Scope::Line) {
+                Ok(c) => choices.push(c),
+                Err(why) => {
+                    return Verdict::False(format!("the piece {lo:?} to {hi:?} {dir:?}: {why}"));
+                }
             }
         }
-        // One period from the scope's start: each point of it where f is
-        // defined in a piece moved a whole number of periods.
+        // One period from the scope's start, covered by a choice of each
+        // piece's stretch moved a whole number of periods (closed: the
+        // poles between are no points of f's). (Each piece's ends were
+        // asked only of some place in each enclosure and the enclosures'
+        // extents moved: the hole `judge_monotone` closed, round 25.)
         let s0 = match scope {
             Scope::Period(a, _) => *a,
             _ => 0.0,
         };
-        let (p0, p1) = per.trig.period();
-        let pf = pi_place(p0.clone(), p1.clone()).approx();
-        let shifted = |e: f64, k: i64| {
-            let k = Rational::from(k);
-            pi_place(Rational::from(&p0 * &k) + qd(e), Rational::from(&p1 * &k))
-        };
-        let start = Place::At(qd(s0));
-        let end = pi_place(Rational::from(&p0 + &qd(s0)), p1.clone());
-        let ks = |e0: f64, e1: f64| {
-            let lo = ((s0 - e1) / pf).floor() as i64 - 1;
-            let hi = ((s0 + pf - e0) / pf).ceil() as i64 + 1;
-            lo..=hi
-        };
-        let mut tries: Vec<Place> = vec![start.clone(), end.clone()];
-        for (e0, e1) in &extents {
-            for k in ks(*e0, *e1) {
-                for e in [*e0, *e1] {
-                    let t = shifted(e, k);
-                    if pcmp(&t, &start) != Less && pcmp(&t, &end) != Greater {
-                        tries.push(t);
-                    }
-                }
-            }
+        let period = per.trig.period();
+        let start = Ext::At(Place::At(qd(s0)));
+        let end = Ext::At(pi_place(
+            Rational::from(&period.0 + &qd(s0)),
+            period.1.clone(),
+        ));
+        match covering(&choices, &start, &end, Some(&period)) {
+            Some(true) => Verdict::True,
+            Some(false) => Verdict::False(
+                "the pieces and their repeats, each from a place f's pieces end at to another, \
+                 leave part of a period out"
+                    .into(),
+            ),
+            None => Verdict::Unknown("too many readings of the pieces' ends".into()),
         }
-        tries.sort_by(pcmp);
-        let mids: Vec<Place> = tries
-            .windows(2)
-            .map(|w| {
-                let (a, b) = (pq(&w[0]), pq(&w[1]));
-                pi_place((a.0 + b.0) / 2u32, (a.1 + b.1) / 2u32)
-            })
-            .collect();
-        tries.extend(mids);
-        for t in &tries {
-            if !self.dom.holds(t) {
-                continue;
-            }
-            let covered = extents.iter().any(|(e0, e1)| {
-                ks(*e0, *e1).any(|k| {
-                    pcmp(&shifted(*e0, k), t) != Greater && pcmp(t, &shifted(*e1, k)) != Greater
-                })
-            });
-            if !covered {
-                return Verdict::False(format!(
-                    "the pieces and their repeats leave {:e} out",
-                    t.approx()
-                ));
-            }
-        }
-        Verdict::True
     }
 
     /// The least period: P, for a periodic f; none for any other (a
     /// constant has every period and no least: none too).
     fn judge_period(&self, value: &Value) -> Verdict {
-        match (&self.per, enc_of(value)) {
+        // (An enclosure with a NaN end held f's period by `within`: round
+        // 25's audit.)
+        match (&self.per, real_enc_of(value)) {
             (None, None) if value.is_null() => Verdict::True,
             (None, _) => Verdict::False("a period listed for an f with none".into()),
             (Some(_), None) => Verdict::False("no period listed for a periodic f".into()),
@@ -5214,13 +5572,15 @@ impl Truth {
                 }
                 // The least (greatest) of f at `at` is in [x.0, x.1]: none
                 // beyond it on the far side, one within reach.
-                let (lo, hi) = (qd(x.0), qd(x.1));
+                // (An infinite end of the enclosure is no bound.)
+                let not_below =
+                    |p: &Place| !x.0.is_finite() || self.cmp_value(0, p, &qd(x.0)) != Less;
+                let not_above =
+                    |p: &Place| !x.1.is_finite() || self.cmp_value(0, p, &qd(x.1)) != Greater;
                 let ok = if low {
-                    at.iter().all(|p| self.cmp_value(0, p, &lo) != Less)
-                        && at.iter().any(|p| self.cmp_value(0, p, &hi) != Greater)
+                    at.iter().all(not_below) && at.iter().any(not_above)
                 } else {
-                    at.iter().all(|p| self.cmp_value(0, p, &hi) != Greater)
-                        && at.iter().any(|p| self.cmp_value(0, p, &lo) != Less)
+                    at.iter().all(not_above) && at.iter().any(not_below)
                 };
                 if ok {
                     Ok(())
@@ -5235,9 +5595,14 @@ impl Truth {
         let Some(list) = value.as_array() else {
             return Verdict::False("unreadable".into());
         };
+        // (Its ends read from the outermost pieces' leading terms: a
+        // constant outer piece, a plateau, would read as unbounded.)
+        if self.plateau() {
+            return Verdict::Unknown("a plateau's range is not modelled".into());
+        }
         let mut pieces: Vec<(End, End)> = Vec::new();
         for p in list {
-            let (Some(lo), Some(hi)) = (end_of(&p["lo"]), end_of(&p["hi"])) else {
+            let (Some(lo), Some(hi)) = (end_of(&p["lo"], true), end_of(&p["hi"], false)) else {
                 return Verdict::False("unreadable".into());
             };
             pieces.push((lo, hi));
@@ -5294,6 +5659,13 @@ struct Ctx {
     /// simplifier's period, the domain's excluded families.
     pwin: Option<(f64, f64)>,
     facts: Vec<Value>,
+    /// The refuter's: the doubles at and beside each of the truth's
+    /// zeros of f, f′, f″, f‴, cuts, poles and domain end, and the atoms,
+    /// in order; f's tree at each double sampled; what it found of each
+    /// claim.
+    marks: Vec<f64>,
+    samples: RefCell<HashMap<u64, Sample>>,
+    refuted: RefCell<HashMap<String, Option<String>>>,
 }
 
 const LISTS: [&str; 12] = [
@@ -5323,8 +5695,8 @@ fn domain_as_built(row: &Value, dom: &Dom) -> bool {
         // (One family: the poles, its x0 one of them, its period theirs.)
         Dom::Poles { per, .. } => match excluded.as_slice() {
             [e] => {
-                let x0 = enc_of(&e["x0"]);
-                let pe = enc_of(&e["period"]);
+                let x0 = real_enc_of(&e["x0"]).filter(|(a, b)| a.is_finite() && b.is_finite());
+                let pe = real_enc_of(&e["period"]);
                 x0.is_some_and(|(a, b)| !dom.members(a, b).is_empty())
                     && pe.is_some_and(|(a, b)| pi_place(per.0.clone(), per.1.clone()).within(a, b))
             }
@@ -5338,20 +5710,20 @@ fn domain_as_built(row: &Value, dom: &Dom) -> bool {
     let Some(pieces) = v["pieces"].as_array() else {
         return false;
     };
-    let at = |b: &Value, c: &Rational, closed: bool| -> bool {
-        end_of(b).is_some_and(|e| {
-            e.is_some_and(|(x, cl)| cl == closed && qd(x.0) <= *c && *c <= qd(x.1))
+    let at = |b: &Value, low: bool, c: &Rational, closed: bool| -> bool {
+        end_of(b, low).is_some_and(|e| {
+            e.is_some_and(|(x, cl)| cl == closed && Place::At(c.clone()).within(x.0, x.1))
         })
     };
     let inf = |b: &Value, s: &str| b.as_str() == Some(s);
     match (dom, pieces.as_slice()) {
         (Dom::Line | Dom::Poles { .. }, [p]) => inf(&p["lo"], "NegInf") && inf(&p["hi"], "PosInf"),
-        (Dom::From(c), [p]) => at(&p["lo"], c, true) && inf(&p["hi"], "PosInf"),
-        (Dom::Upto(c), [p]) => inf(&p["lo"], "NegInf") && at(&p["hi"], c, true),
+        (Dom::From(c), [p]) => at(&p["lo"], true, c, true) && inf(&p["hi"], "PosInf"),
+        (Dom::Upto(c), [p]) => inf(&p["lo"], "NegInf") && at(&p["hi"], false, c, true),
         (Dom::Hole(c), [p, q]) => {
             inf(&p["lo"], "NegInf")
-                && at(&p["hi"], c, false)
-                && at(&q["lo"], c, false)
+                && at(&p["hi"], false, c, false)
+                && at(&q["lo"], true, c, false)
                 && inf(&q["hi"], "PosInf")
         }
         _ => false,
@@ -5400,9 +5772,14 @@ fn context(fun: Fun) -> Result<Ctx, String> {
         }
         None => Truth::new(&fun.f, &fun.dom),
     };
+    // (A Certified domain row that says otherwise is a false genuine row,
+    // the panel's, and fails the run; it was only counted. One withheld
+    // is counted: round 25's audit.)
     if !domain_as_built(&genuine["domain"], &truth.dom) {
+        let certified = genuine["domain"].get("Certified").is_some();
         return Err(format!(
-            "the domain row is not as built: {}",
+            "the domain row is {}: {}",
+            if certified { "false" } else { "not as built" },
             genuine["domain"]
         ));
     }
@@ -5507,6 +5884,33 @@ fn context(fun: Fun) -> Result<Ctx, String> {
             pwin = Some((-0.37 * pf, 0.63 * pf));
         }
     }
+    // The refuter's marks: two doubles either side of each of the truth's
+    // places (three of the domain's end), and the atoms.
+    let mut marks = atoms.clone();
+    let mut about = |lo: f64, hi: f64, n: i32| {
+        for i in 0..=n {
+            marks.push(doubles_out(lo, -i));
+            marks.push(doubles_out(hi, i));
+        }
+    };
+    for k in 0..4 {
+        for (r, _) in &truth.events[k] {
+            let (lo, hi) = r.clone().enc();
+            about(lo, hi, 2);
+        }
+    }
+    if let Some(c) = truth.dom.point() {
+        about(floor_double(c), ceil_double(c), 3);
+    }
+    if let Some(per) = &truth.per {
+        for mut m in truth.dom.members(per.span.0, per.span.1) {
+            let (lo, hi) = m.enc();
+            about(lo, hi, 2);
+        }
+    }
+    marks.retain(|x| x.is_finite());
+    marks.sort_by(f64::total_cmp);
+    marks.dedup();
     Ok(Ctx {
         fun,
         truth,
@@ -5518,6 +5922,9 @@ fn context(fun: Fun) -> Result<Ctx, String> {
         near,
         pwin,
         facts,
+        marks,
+        samples: RefCell::new(HashMap::new()),
+        refuted: RefCell::new(HashMap::new()),
     })
 }
 
@@ -6736,6 +7143,1032 @@ impl Ctx {
     }
 }
 
+// ------------------------------------------------------------ the refuter
+
+/// The refuter's working precision, in bits.
+const REFUTE_PREC: u32 = 256;
+
+/// What MPFR evaluation of f's own tree shows at one double: whether f is
+/// defined there (None: not decided), and f, f′, f″, f‴ there, enclosed,
+/// where shown to exist.
+#[derive(Clone)]
+struct Sample {
+    def: Option<bool>,
+    d: [Option<(Float, Float)>; 4],
+}
+
+/// An enclosure's sign, if it shows one (`Equal`: exactly 0).
+fn enc_sign(v: &(Float, Float)) -> Option<Ordering> {
+    if v.0 > 0 {
+        Some(Greater)
+    } else if v.1 < 0 {
+        Some(Less)
+    } else if v.0 == 0 && v.1 == 0 {
+        Some(Equal)
+    } else {
+        None
+    }
+}
+
+/// Two enclosed reals in order, if their enclosures show it (`Equal`:
+/// both the one point).
+fn enc_cmp(a: &(Float, Float), b: &(Float, Float)) -> Option<Ordering> {
+    if a.1 < b.0 {
+        Some(Less)
+    } else if a.0 > b.1 {
+        Some(Greater)
+    } else if a.0 == a.1 && b.0 == b.1 && a.0 == b.0 {
+        Some(Equal)
+    } else {
+        None
+    }
+}
+
+fn sign_word(o: Ordering) -> &'static str {
+    match o {
+        Greater => "positive",
+        Less => "negative",
+        Equal => "0",
+    }
+}
+
+fn show_enc(v: &(Float, Float)) -> String {
+    format!("[{:e}, {:e}]", v.0.to_f64(), v.1.to_f64())
+}
+
+/// Whether some member x0 + k·period of a family (each enclosed) may meet
+/// [a, b]: false only where none can (a stretch narrower than half a
+/// period, the members about it each apart from it, exactly).
+fn member_meets(x0: (f64, f64), per: (f64, f64), a: f64, b: f64) -> bool {
+    let finite = [x0.0, x0.1, per.0, per.1, a, b]
+        .iter()
+        .all(|v| v.is_finite());
+    if !finite || per.0 <= 0.0 || b - a >= per.0 / 2.0 {
+        return true;
+    }
+    let mid = ((a / 2.0 + b / 2.0) - (x0.0 / 2.0 + x0.1 / 2.0)) / (per.0 / 2.0 + per.1 / 2.0);
+    if !mid.is_finite() || mid.abs() > 1e15 {
+        return true;
+    }
+    let k0 = mid.round() as i64;
+    (k0 - 2..=k0 + 2).any(|k| {
+        let kq = qi(k);
+        let (pl, ph) = if k >= 0 {
+            (per.0, per.1)
+        } else {
+            (per.1, per.0)
+        };
+        let lo = qd(x0.0) + Rational::from(&kq * &qd(pl));
+        let hi = qd(x0.1) + Rational::from(&kq * &qd(ph));
+        lo <= qd(b) && qd(a) <= hi
+    })
+}
+
+/// A second check on the truth, by sampling: each claim and each row the
+/// truth calls true is tried against f's own tree, evaluated by the
+/// replay's MPFR series (`replay::iv`, written from the language's
+/// specification; nothing of the truth's exact model, its polynomials,
+/// pieces and roots, is read but where to look). It samples a grid over
+/// the claim's box or the row's scope (40 doubles evenly by value, 16 by
+/// the order of the doubles, its ends and three doubles in from each) and
+/// every double within two of each of the truth's zeros of f, f′, f″ and
+/// f‴, cuts, poles, and within three of the domain's end, and refutes only
+/// what an enclosure shows: a strict sign or a monotone order broken at
+/// samples, a listed zero, turn or inflection where f⁽ᵏ⁾ is shown nonzero
+/// (or a box where it is shown away from 0), two items at one double, a
+/// sign change of f⁽ᵏ⁾ between two samples (f continuous across: a zero,
+/// a turn; f′ existing across: an inflection) that no listed item or
+/// family member meets in a complete row, a sampled point where f is
+/// defined that no monotone piece holds, or none of the direction f′ shows
+/// there, a value of f in no piece of the range, f(x + P) apart from f(x)
+/// for every P in the period's enclosure, and the truth's domain against
+/// f's definedness. It confirms nothing. (Assumed of f, as of every
+/// function the fuzzer makes: no plateau, so a sign change of f′ between
+/// samples is a strict turn; f′ existing across a box is continuous.)
+impl Ctx {
+    /// f's tree at the double x (cached).
+    fn sample(&self, x: f64) -> Sample {
+        if let Some(s) = self.samples.borrow().get(&x.to_bits()) {
+            return s.clone();
+        }
+        let keep = replay::iv::prec();
+        replay::iv::set_prec(REFUTE_PREC);
+        let s = self.fx.series(&self.fx.f, x, x, 3);
+        replay::iv::set_prec(keep);
+        let def = match s.first() {
+            Some(c) if c.empty => Some(false),
+            Some(c) if c.def => Some(true),
+            _ => None,
+        };
+        // (s[k] encloses f⁽ᵏ⁾/k!.)
+        let fact = [1u32, 1, 2, 6];
+        let d = std::array::from_fn(|k| {
+            let c = s.get(k)?;
+            (def == Some(true) && !c.empty && c.def && c.bounded()).then(|| {
+                (
+                    Float::with_val_round(REFUTE_PREC, &c.lo * fact[k], Round::Down).0,
+                    Float::with_val_round(REFUTE_PREC, &c.hi * fact[k], Round::Up).0,
+                )
+            })
+        });
+        let out = Sample { def, d };
+        self.samples.borrow_mut().insert(x.to_bits(), out.clone());
+        out
+    }
+
+    /// f's series over the box [a, b] to order n (f⁽ᵏ⁾/k!, each with
+    /// where it exists).
+    fn over(&self, a: f64, b: f64, n: usize) -> replay::series::S {
+        let keep = replay::iv::prec();
+        replay::iv::set_prec(REFUTE_PREC);
+        let s = self.fx.series(&self.fx.f, a, b, n);
+        replay::iv::set_prec(keep);
+        s
+    }
+
+    /// The doubles tried over [a, b] (finite).
+    fn grid(&self, a: f64, b: f64) -> Vec<f64> {
+        if !(a.is_finite() && b.is_finite() && a <= b) {
+            return Vec::new();
+        }
+        let mut out = vec![a, b];
+        for i in 1..=3 {
+            out.push(doubles_out(a, i));
+            out.push(doubles_out(b, -i));
+        }
+        for i in 1..40 {
+            let t = f64::from(i) / 40.0;
+            out.push(a * (1.0 - t) + b * t);
+        }
+        let (oa, ob) = (i128::from(ord(a)), i128::from(ord(b)));
+        for i in 1..16 {
+            out.push(unord((oa + (ob - oa) * i / 16) as i64));
+        }
+        let lo = self.marks.partition_point(|m| *m < a);
+        let hi = self.marks.partition_point(|m| *m <= b);
+        out.extend_from_slice(&self.marks[lo..hi.max(lo)]);
+        out.retain(|x| x.is_finite() && a <= *x && *x <= b);
+        out.sort_by(f64::total_cmp);
+        out.dedup();
+        out
+    }
+
+    /// The doubles tried on the tail from `from` (finite): it, three
+    /// doubles out, then ever farther, and every mark on it.
+    fn tail_grid(&self, from: f64, right: bool) -> Vec<f64> {
+        if !from.is_finite() {
+            return Vec::new();
+        }
+        let s = if right { 1.0 } else { -1.0 };
+        let mut out = vec![from];
+        for i in 1..=3 {
+            out.push(doubles_out(from, if right { i } else { -i }));
+        }
+        let base = 1.0 + from.abs();
+        for j in [
+            -6, -3, -1, 0, 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 128, 256, 512, 1000,
+        ] {
+            out.push(from + s * base * 2f64.powi(j));
+        }
+        out.extend(
+            self.marks
+                .iter()
+                .filter(|m| if right { **m >= from } else { **m <= from }),
+        );
+        out.retain(|x| x.is_finite() && if right { *x >= from } else { *x <= from });
+        out.sort_by(f64::total_cmp);
+        out.dedup();
+        out
+    }
+
+    /// The doubles tried over [a, b], either end infinite: a grid over its
+    /// finite part about the marks, tails beyond.
+    fn region(&self, a: f64, b: f64) -> Vec<f64> {
+        if a.is_nan() || b.is_nan() || a > b {
+            return Vec::new();
+        }
+        let m0 = self.marks.first().copied().unwrap_or(-1.0);
+        let m1 = self.marks.last().copied().unwrap_or(1.0);
+        let lo = if a.is_finite() {
+            a
+        } else {
+            m0.min(if b.is_finite() { b } else { m0 }) - 1.0
+        };
+        let hi = if b.is_finite() { b } else { m1.max(lo) + 1.0 };
+        let mut out = self.grid(lo, hi);
+        if !a.is_finite() {
+            out.extend(self.tail_grid(lo, false));
+        }
+        if !b.is_finite() {
+            out.extend(self.tail_grid(hi, true));
+        }
+        out.sort_by(f64::total_cmp);
+        out.dedup();
+        out
+    }
+
+    fn scope_samples(&self, scope: &Scope) -> Vec<f64> {
+        match scope {
+            Scope::Window(a, b) => self.region(*a, *b),
+            Scope::Line | Scope::Period(..) => self.region(f64::NEG_INFINITY, f64::INFINITY),
+            Scope::Points => Vec::new(),
+        }
+    }
+
+    /// f undefined at one of the doubles.
+    fn refute_defined(&self, xs: &[f64]) -> Option<String> {
+        xs.iter()
+            .find(|x| self.sample(**x).def == Some(false))
+            .map(|x| format!("f is undefined at {x:e}"))
+    }
+
+    /// f⁽ᵏ⁾ strictly on side `above` of 0 at the doubles (`skip` aside),
+    /// f defined at each.
+    fn refute_sign(&self, k: usize, xs: &[f64], above: bool, skip: Option<f64>) -> Option<String> {
+        let want = if above { Greater } else { Less };
+        for &x in xs {
+            if Some(x) == skip {
+                continue;
+            }
+            let s = self.sample(x);
+            if s.def == Some(false) {
+                return Some(format!("f is undefined at {x:e}"));
+            }
+            if let Some(v) = &s.d[k]
+                && let Some(o) = enc_sign(v)
+                && o != want
+            {
+                return Some(format!("f⁽{k}⁾({x:e}) is {}", sign_word(o)));
+            }
+        }
+        None
+    }
+
+    /// f⁽ᵏ⁾ strictly monotone over the doubles (in order): its values in
+    /// one order, never equal, and f⁽ᵏ⁺¹⁾ never of both strict signs.
+    fn refute_monotone(&self, k: usize, xs: &[f64]) -> Option<String> {
+        let (mut up, mut down) = (None, None);
+        let vals: Vec<(f64, (Float, Float))> = xs
+            .iter()
+            .filter_map(|x| self.sample(*x).d[k].clone().map(|v| (*x, v)))
+            .collect();
+        for w in vals.windows(2) {
+            match enc_cmp(&w[0].1, &w[1].1) {
+                Some(Equal) => {
+                    return Some(format!(
+                        "f⁽{k}⁾ is {} at both {:e} and {:e}",
+                        show_enc(&w[0].1),
+                        w[0].0,
+                        w[1].0
+                    ));
+                }
+                Some(Less) => up = up.or(Some((w[0].0, w[1].0))),
+                Some(Greater) => down = down.or(Some((w[0].0, w[1].0))),
+                None => {}
+            }
+        }
+        if k < 3 {
+            for &x in xs {
+                match self.sample(x).d[k + 1].as_ref().and_then(enc_sign) {
+                    Some(Greater) => up = up.or(Some((x, x))),
+                    Some(Less) => down = down.or(Some((x, x))),
+                    _ => {}
+                }
+            }
+        }
+        let ((a, b), (c, d)) = (up?, down?);
+        Some(format!(
+            "f⁽{k}⁾ rises at [{a:e}, {b:e}] and falls at [{c:e}, {d:e}]"
+        ))
+    }
+
+    /// A claim the truth calls true, refuted (cached by the claim).
+    fn refute_claim(&self, c: &Claim) -> Option<String> {
+        let key = format!("{c:?}");
+        if let Some(r) = self.refuted.borrow().get(&key) {
+            return r.clone();
+        }
+        let r = self.refute_claim_now(c);
+        self.refuted.borrow_mut().insert(key, r.clone());
+        r
+    }
+
+    fn refute_claim_now(&self, c: &Claim) -> Option<String> {
+        let order = |of: &Subject| match of {
+            Subject::F(k) if *k <= 2 => Some(*k),
+            _ => None,
+        };
+        match c {
+            Claim::Defined(x) | Claim::Continuous(x) | Claim::Kink(x) => {
+                self.refute_defined(&self.region(x.0, x.1))
+            }
+            Claim::Undefined(x) => self
+                .region(x.0, x.1)
+                .into_iter()
+                .find(|p| self.sample(*p).def == Some(true))
+                .map(|p| format!("f is defined at {p:e}")),
+            Claim::Beyond { x, of, above, .. } | Claim::Factors { x, of, above, .. } => {
+                self.refute_sign(order(of)?, &self.region(x.0, x.1), *above, None)
+            }
+            Claim::NoCross { x, of, above, .. } => {
+                let k = order(of)?;
+                let xs = self.region(x.0, x.1);
+                self.refute_sign(k, &xs, *above, None)
+                    .or_else(|| self.refute_monotone(k, &xs))
+            }
+            Claim::TailBeyond {
+                side,
+                from,
+                of,
+                above,
+                ..
+            } => self.refute_sign(
+                order(of)?,
+                &self.tail_grid(*from, *side == Side::Right),
+                *above,
+                None,
+            ),
+            Claim::TailChain {
+                side,
+                from,
+                of,
+                above,
+                order: m,
+                ..
+            } => {
+                let k = order(of)?;
+                let right = *side == Side::Right;
+                let xs = self.tail_grid(*from, right);
+                self.refute_sign(k, &xs, *above, None).or_else(|| {
+                    // (The chain, where the samples reach its order: f to
+                    // f‴.)
+                    let top = k + m;
+                    if *m == 0 || top > 3 {
+                        return None;
+                    }
+                    let sigma = if right || m.is_multiple_of(2) {
+                        *above
+                    } else {
+                        !*above
+                    };
+                    self.refute_sign(top, &xs, sigma, None).or_else(|| {
+                        let s = self.sample(*from);
+                        (0..*m).find_map(|i| {
+                            let want = if right {
+                                sigma
+                            } else {
+                                sigma == (m - i).is_multiple_of(2)
+                            };
+                            let o = enc_sign(s.d[k + i].as_ref()?)?;
+                            (o != if want { Greater } else { Less })
+                                .then(|| format!("f⁽{}⁾({from:e}) is {}", k + i, sign_word(o)))
+                        })
+                    })
+                })
+            }
+            Claim::OneCross { x, of, .. } => {
+                let k = order(of)?;
+                let xs = self.grid(x.0, x.1);
+                let end = |p: f64| self.sample(p).d[k].as_ref().and_then(enc_sign);
+                if let (Some(a), Some(b)) = (end(x.0), end(x.1))
+                    && (a == Equal || b == Equal || a == b)
+                {
+                    return Some(format!(
+                        "f⁽{k}⁾ is {} at {:e} and {} at {:e}",
+                        sign_word(a),
+                        x.0,
+                        sign_word(b),
+                        x.1
+                    ));
+                }
+                self.refute_monotone(k, &xs)
+                    .or_else(|| self.refute_changes(k, &xs, 1))
+            }
+            Claim::ExactAt { x, of, at, .. } => {
+                let k = order(of)?;
+                let xs = self.grid(x.0, x.1);
+                if let Some(o) = self.sample(*at).d[k].as_ref().and_then(enc_sign)
+                    && o != Equal
+                {
+                    return Some(format!("f⁽{k}⁾({at:e}) is {}", sign_word(o)));
+                }
+                if let Some(p) = xs.iter().find(|p| {
+                    **p != *at && self.sample(**p).d[k].as_ref().and_then(enc_sign) == Some(Equal)
+                }) {
+                    return Some(format!("f⁽{k}⁾ is 0 at {p:e} too"));
+                }
+                let left: Vec<f64> = xs.iter().copied().filter(|p| p < at).collect();
+                let right: Vec<f64> = xs.iter().copied().filter(|p| p > at).collect();
+                self.refute_monotone(k, &xs)
+                    .or_else(|| self.refute_changes(k, &left, 0))
+                    .or_else(|| self.refute_changes(k, &right, 0))
+            }
+            Claim::Touch {
+                x, of, at, above, ..
+            } => {
+                let k = order(of)?;
+                if let Some(o) = self.sample(*at).d[k].as_ref().and_then(enc_sign)
+                    && o != Equal
+                {
+                    return Some(format!("f⁽{k}⁾({at:e}) is {}", sign_word(o)));
+                }
+                self.refute_sign(k, &self.grid(x.0, x.1), *above, Some(*at))
+            }
+            Claim::Value { x, of, lo, hi } => {
+                let k = order(of)?;
+                for p in self.region(x.0, x.1) {
+                    let s = self.sample(p);
+                    if s.def == Some(false) {
+                        return Some(format!("f is undefined at {p:e}"));
+                    }
+                    if let Some(v) = &s.d[k]
+                        && (v.1 < *lo || v.0 > *hi)
+                    {
+                        return Some(format!(
+                            "f⁽{k}⁾({p:e}) is in {}, not [{lo:e}, {hi:e}]",
+                            show_enc(v)
+                        ));
+                    }
+                }
+                None
+            }
+            Claim::GapClear { x, of } => {
+                let k = order(of)?;
+                let xs: Vec<f64> = self
+                    .grid(x.0, x.1)
+                    .into_iter()
+                    .filter(|p| x.0 < *p && *p < x.1)
+                    .collect();
+                let shown: Vec<(f64, Ordering)> = xs
+                    .iter()
+                    .filter_map(|p| Some((*p, enc_sign(self.sample(*p).d[k].as_ref()?)?)))
+                    .collect();
+                if let (Some(z), Some(n)) = (
+                    shown.iter().find(|(_, o)| *o == Equal),
+                    shown.iter().find(|(_, o)| *o != Equal),
+                ) {
+                    return Some(format!(
+                        "f⁽{k}⁾ is 0 at {:e} and {} at {:e} inside the gap",
+                        z.0,
+                        sign_word(n.1),
+                        n.0
+                    ));
+                }
+                self.refute_changes(k, &xs, 0)
+            }
+            Claim::KinkSides {
+                x,
+                at,
+                order: k,
+                left,
+                right,
+                ..
+            } => {
+                if !(1..=2).contains(k) {
+                    return None;
+                }
+                let want = |s: &KinkSign| match s {
+                    KinkSign::Pos => Greater,
+                    KinkSign::Neg => Less,
+                    KinkSign::Zero => Equal,
+                };
+                let xs = self.grid(x.0, x.1);
+                if let Some(why) = self.refute_defined(&xs) {
+                    return Some(why);
+                }
+                let signs: Vec<(f64, Ordering)> = xs
+                    .iter()
+                    .filter_map(|p| Some((*p, enc_sign(self.sample(*p).d[*k].as_ref()?)?)))
+                    .collect();
+                // (Wrong on the left of c, or on the right. As reals: −0
+                // is 0, no side of it.)
+                let wrong = |c: &dyn Fn(f64) -> Ordering| {
+                    signs.iter().find(|(p, o)| match c(*p) {
+                        Less => *o != want(left),
+                        Greater => *o != want(right),
+                        Equal => false,
+                    })
+                };
+                let side = |p: f64, c: f64| p.partial_cmp(&c).unwrap_or(Equal);
+                match at {
+                    Some(c) => wrong(&|p: f64| side(p, *c)).map(|(p, o)| {
+                        format!("f⁽{k}⁾({p:e}) is {}, on its side of {c:e}", sign_word(*o))
+                    }),
+                    None => {
+                        // (Refuted only if wrong wherever c may be: at each
+                        // sample inside, and between each two.)
+                        let inside: Vec<f64> = xs
+                            .iter()
+                            .copied()
+                            .filter(|p| x.0 < *p && *p < x.1)
+                            .collect();
+                        let at_sample = |c: f64| wrong(&move |p: f64| side(p, c)).is_some();
+                        let between = |i: usize| {
+                            wrong(&|p: f64| if p <= xs[i] { Less } else { Greater }).is_some()
+                        };
+                        (inside.iter().all(|c| at_sample(*c))
+                            && (0..xs.len().saturating_sub(1)).all(between))
+                        .then(|| format!("f⁽{k}⁾'s signs over the box fit no point between"))
+                    }
+                }
+            }
+            Claim::KinkAt {
+                x, at, left, right, ..
+            } => {
+                let xs = self.grid(x.0, x.1);
+                let lefts: Vec<f64> = xs.iter().copied().filter(|p| p < at).collect();
+                let rights: Vec<f64> = xs.iter().copied().filter(|p| p > at).collect();
+                let mut l = lefts.clone();
+                l.push(*at);
+                let mut r = vec![*at];
+                r.extend(&rights);
+                self.refute_sign(1, &lefts, *left, None)
+                    .or_else(|| self.refute_sign(1, &rights, *right, None))
+                    .or_else(|| self.refute_monotone(0, &l))
+                    .or_else(|| self.refute_monotone(0, &r))
+            }
+            _ => None,
+        }
+    }
+
+    /// More than `most` changes of f⁽ᵏ⁾'s sign over the doubles (in order),
+    /// each across a stretch where f⁽ᵏ⁾ is continuous: so more zeros.
+    fn refute_changes(&self, k: usize, xs: &[f64], most: usize) -> Option<String> {
+        let shown: Vec<(f64, Ordering)> = xs
+            .iter()
+            .filter_map(|p| Some((*p, enc_sign(self.sample(*p).d[k].as_ref()?)?)))
+            .filter(|(_, o)| *o != Equal)
+            .collect();
+        let mut n = 0;
+        for w in shown.windows(2) {
+            if w[0].1 != w[1].1 && self.continuous_over(k, w[0].0, w[1].0) {
+                n += 1;
+                if n > most {
+                    return Some(format!(
+                        "f⁽{k}⁾ changes sign {n} times, the last between {:e} and {:e}",
+                        w[0].0, w[1].0
+                    ));
+                }
+            }
+        }
+        None
+    }
+
+    /// f⁽ᵏ⁾ shown to exist throughout [a, b], and continuous there (f by
+    /// its decoration; f⁽ᵏ⁾, k ≥ 1, as f⁽ᵏ⁺¹⁾ exists throughout).
+    fn continuous_over(&self, k: usize, a: f64, b: f64) -> bool {
+        let s = self.over(a, b, if k == 0 { 0 } else { k + 1 });
+        let ok = |c: &replay::iv::Iv| !c.empty && c.def;
+        s.first().is_some_and(|c| ok(c) && c.cont)
+            && (k == 0 || s.iter().take(k + 2).skip(1).all(ok))
+    }
+
+    /// A row the truth calls true, refuted.
+    fn refute_row(&self, row: &str, scope: &Scope, value: &Value) -> Option<String> {
+        match row {
+            "monotonicity" => self.refute_monotone_row(scope, value),
+            "range" => self.refute_range(value),
+            "period" => self.refute_period(value),
+            "x_intercepts" | "extrema" | "inflections" => self.refute_list(row, scope, value),
+            _ => None,
+        }
+    }
+
+    fn refute_list(&self, row: &str, scope: &Scope, value: &Value) -> Option<String> {
+        let k = row_order(row);
+        let what = match k {
+            0 => "zero",
+            1 => "turn",
+            _ => "inflection",
+        };
+        let Some(items) = items_of(row, value) else {
+            return Some("an item that holds no real, or of no kind".into());
+        };
+        // Each place listed: an item alone, or a family's members about
+        // the marks (each enclosed, rounded out).
+        let (m0, m1) = (
+            self.marks.first().copied().unwrap_or(-1.0),
+            self.marks.last().copied().unwrap_or(1.0),
+        );
+        let mut places: Vec<((f64, f64), usize)> = Vec::new();
+        for (j, it) in items.iter().enumerate() {
+            let Some(per) = it.every else {
+                places.push((it.x, j));
+                continue;
+            };
+            let finite = [it.x.0, it.x.1, per.0, per.1].iter().all(|v| v.is_finite());
+            if !finite || per.0 <= 0.0 {
+                continue;
+            }
+            let p = per.0 / 2.0 + per.1 / 2.0;
+            let k_lo = ((m0 - it.x.1) / p).floor() - 1.0;
+            let k_hi = ((m1 - it.x.0) / p).ceil() + 1.0;
+            if !(k_lo.is_finite() && k_hi.is_finite()) || k_hi - k_lo > 2000.0 {
+                continue;
+            }
+            for kk in k_lo as i64..=k_hi as i64 {
+                let kq = qi(kk);
+                let (pl, ph) = if kk >= 0 {
+                    (per.0, per.1)
+                } else {
+                    (per.1, per.0)
+                };
+                let lo = qd(it.x.0) + Rational::from(&kq * &qd(pl));
+                let hi = qd(it.x.1) + Rational::from(&kq * &qd(ph));
+                places.push(((floor_double(&lo), ceil_double(&hi)), j));
+            }
+        }
+        for ((lo, hi), j) in &places {
+            let it = &items[*j];
+            if lo == hi {
+                let s = self.sample(*lo);
+                if s.def == Some(false) {
+                    return Some(format!("a {what} listed at {lo:e}, where f is undefined"));
+                }
+                if let (Some(y), Some(v)) = (it.y, &s.d[0])
+                    && (v.1 < y.0 || v.0 > y.1)
+                {
+                    return Some(format!(
+                        "f({lo:e}) is in {}, not the item's y [{:e}, {:e}]",
+                        show_enc(v),
+                        y.0,
+                        y.1
+                    ));
+                }
+                // (A turn or an inflection at a domain end or beside a
+                // hole needs no zero of f⁽ᵏ⁾: asked only where f is
+                // defined from the double below to the one above.)
+                if let Some(o) = s.d[k].as_ref().and_then(enc_sign)
+                    && o != Equal
+                {
+                    let inner = || {
+                        let b = self.over(lo.next_down(), lo.next_up(), 0);
+                        b.first().is_some_and(|c| !c.empty && c.def)
+                    };
+                    if k == 0 || inner() {
+                        return Some(format!(
+                            "a {what} listed at {lo:e}, where f⁽{k}⁾ is {}",
+                            sign_word(o)
+                        ));
+                    }
+                }
+                // (A smooth turn there of the other kind: f′ exactly 0,
+                // f″ of one strict sign.)
+                if k == 1
+                    && let Some(max) = it.max
+                    && s.d[1].as_ref().and_then(enc_sign) == Some(Equal)
+                    && let Some(o) = s.d[2].as_ref().and_then(enc_sign)
+                    && o != Equal
+                    && (o == Less) != max
+                {
+                    return Some(format!(
+                        "a {} listed at {lo:e}, where f′ is 0 and f″ {}",
+                        if max { "maximum" } else { "minimum" },
+                        sign_word(o)
+                    ));
+                }
+            } else if lo.is_finite() && hi.is_finite() {
+                let (a, b) = if k == 0 {
+                    (*lo, *hi)
+                } else {
+                    (lo.next_down(), hi.next_up())
+                };
+                let s = self.over(a, b, k);
+                let f_def = s.first().is_some_and(|c| !c.empty && c.def && c.cont);
+                if f_def
+                    && let Some(c) = s.get(k)
+                    && !c.empty
+                    && c.def
+                    && c.ne0()
+                {
+                    return Some(format!(
+                        "a {what} listed in [{lo:e}, {hi:e}], where f⁽{k}⁾ is away from 0"
+                    ));
+                }
+                if let (Some(y), Some(c)) = (it.y, s.first())
+                    && f_def
+                    && (c.hi < y.0 || c.lo > y.1)
+                {
+                    return Some(format!("f over [{lo:e}, {hi:e}] misses the item's y"));
+                }
+            }
+        }
+        // Two items at one double: one place, listed twice.
+        let mut points: Vec<(f64, usize)> = places
+            .iter()
+            .filter(|((lo, hi), _)| lo == hi)
+            .map(|((lo, _), j)| (*lo, *j))
+            .collect();
+        points.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for w in points.windows(2) {
+            if w[0].0 == w[1].0 && w[0].1 != w[1].1 {
+                return Some(format!("two items at the one double {:e}", w[0].0));
+            }
+        }
+        if !scope.complete() {
+            return None;
+        }
+        // Complete: each change of f⁽ᵏ⁾'s sign between two samples, across
+        // a stretch where it can't jump, holds a listed place.
+        let held = |a: f64, b: f64| {
+            items.iter().any(|it| match it.every {
+                None => it.x.0 <= b && a <= it.x.1,
+                Some(per) => member_meets(it.x, per, a, b),
+            })
+        };
+        let xs = self.scope_samples(scope);
+        let shown: Vec<(f64, Ordering)> = xs
+            .iter()
+            .filter_map(|p| Some((*p, enc_sign(self.sample(*p).d[k].as_ref()?)?)))
+            .collect();
+        if k == 0
+            && let Some((p, _)) = shown.iter().find(|(p, o)| *o == Equal && !held(*p, *p))
+        {
+            return Some(format!("f({p:e}) = 0, and no item holds it"));
+        }
+        for w in shown.windows(2) {
+            let ((p, a), (q, b)) = (w[0], w[1]);
+            if a == Equal || b == Equal || a == b || held(p, q) {
+                continue;
+            }
+            // (A zero of f where f is continuous; a turn where f is; an
+            // inflection where f′ exists throughout.)
+            let s = self.over(p, q, k.min(1));
+            let ok = |c: &replay::iv::Iv| !c.empty && c.def;
+            let across =
+                s.first().is_some_and(|c| ok(c) && c.cont) && (k < 2 || s.get(1).is_some_and(ok));
+            if across {
+                return Some(format!(
+                    "f⁽{k}⁾ is {} at {p:e} and {} at {q:e}, and no item lies between",
+                    sign_word(a),
+                    sign_word(b)
+                ));
+            }
+        }
+        None
+    }
+
+    fn refute_monotone_row(&self, scope: &Scope, value: &Value) -> Option<String> {
+        let unreadable = || Some("a piece that holds no real, or of no direction".to_string());
+        let mut pieces: Vec<(End, End, Option<bool>)> = Vec::new();
+        let Some(list) = value.as_array() else {
+            return unreadable();
+        };
+        for it in list {
+            let on = &it["on"];
+            let (Some(lo), Some(hi), Some(dir)) = (
+                end_of(&on["lo"], true),
+                end_of(&on["hi"], false),
+                dir_of(&it["dir"]),
+            ) else {
+                return unreadable();
+            };
+            pieces.push((lo, hi, dir));
+        }
+        let word = |d: Option<bool>| match d {
+            Some(true) => "increasing",
+            Some(false) => "decreasing",
+            None => "constant",
+        };
+        // Each piece over the reals between its ends' enclosures: f
+        // defined there, f′ never of the other sign, its values in order.
+        for (lo, hi, dir) in &pieces {
+            let a = lo.map_or(f64::NEG_INFINITY, |(x, _)| x.1);
+            let b = hi.map_or(f64::INFINITY, |(x, _)| x.0);
+            let want = match dir {
+                Some(true) => Less,
+                Some(false) => Greater,
+                None => Equal,
+            };
+            let mut last: Option<(f64, (Float, Float))> = None;
+            for x in self.region(a, b).into_iter().filter(|x| a < *x && *x < b) {
+                let s = self.sample(x);
+                if s.def == Some(false) {
+                    return Some(format!(
+                        "a piece {} over {x:e}, where f is undefined",
+                        word(*dir)
+                    ));
+                }
+                if let Some(o) = s.d[1].as_ref().and_then(enc_sign) {
+                    let bad = match dir {
+                        Some(true) => o == Less,
+                        Some(false) => o == Greater,
+                        None => o != Equal,
+                    };
+                    if bad {
+                        return Some(format!(
+                            "f′({x:e}) is {} in a piece {}",
+                            sign_word(o),
+                            word(*dir)
+                        ));
+                    }
+                }
+                if let Some(v) = &s.d[0] {
+                    if let Some((p, u)) = &last
+                        && let Some(o) = enc_cmp(u, v)
+                        && o != want
+                    {
+                        return Some(format!(
+                            "f is {} at {p:e} and {} at {x:e}, in a piece {}",
+                            show_enc(u),
+                            show_enc(v),
+                            word(*dir)
+                        ));
+                    }
+                    last = Some((x, v.clone()));
+                }
+            }
+        }
+        if !scope.complete() {
+            return None;
+        }
+        // Complete: every sampled double of the scope where f is defined
+        // lies in some piece's extent, and where f′ is shown strictly
+        // signed, in one of that direction (a monotone piece holding a
+        // point where f′ > 0, even at its end, is increasing). A periodic
+        // f's over the line: the extents repeated by its period, widened.
+        let pf = self.truth.per.as_ref().filter(|_| scope.whole()).map(|p| {
+            let (q0, q1) = p.trig.period();
+            pi_place(q0, q1).approx()
+        });
+        let holds = |(lo, hi, _): &(End, End, Option<bool>), x: f64| -> bool {
+            let a = lo.map_or(f64::NEG_INFINITY, |(e, _)| e.0);
+            let b = hi.map_or(f64::INFINITY, |(e, _)| e.1);
+            match pf {
+                None => a <= x && x <= b,
+                Some(pf) => {
+                    if !(a.is_finite() && b.is_finite()) {
+                        return true;
+                    }
+                    let k = ((x - a) / pf).floor();
+                    [k - 1.0, k, k + 1.0].iter().any(|k| {
+                        let (sa, sb) = (a + k * pf, b + k * pf);
+                        let w = (sa.abs() + sb.abs() + pf) * 1e-12;
+                        sa - w <= x && x <= sb + w
+                    })
+                }
+            }
+        };
+        // (A point of the scope where f is defined needs a piece only on a
+        // stretch of them: where the scope meets the domain in one point,
+        // f is monotone on no stretch of it, and no piece is listed. Shown
+        // so: f defined over the box to the next double, in the scope.)
+        let in_scope = |y: f64| match scope {
+            Scope::Window(a, b) => *a <= y && y <= *b,
+            _ => true,
+        };
+        let stretch = |x: f64| {
+            [(x, x.next_up()), (x.next_down(), x)].iter().any(|(a, b)| {
+                in_scope(*a)
+                    && in_scope(*b)
+                    && self
+                        .over(*a, *b, 0)
+                        .first()
+                        .is_some_and(|c| !c.empty && c.def)
+            })
+        };
+        for x in self.scope_samples(scope) {
+            let s = self.sample(x);
+            if s.def != Some(true) {
+                continue;
+            }
+            let covering: Vec<&(End, End, Option<bool>)> =
+                pieces.iter().filter(|p| holds(p, x)).collect();
+            if covering.is_empty() && stretch(x) {
+                return Some(format!("{x:e}, where f is defined, is in no piece"));
+            }
+            if let Some(o) = s.d[1].as_ref().and_then(enc_sign)
+                && o != Equal
+                && !covering.iter().any(|p| p.2 == Some(o == Greater))
+                && stretch(x)
+            {
+                return Some(format!(
+                    "f′({x:e}) is {}, and no piece holding it is {}",
+                    sign_word(o),
+                    word(Some(o == Greater))
+                ));
+            }
+        }
+        None
+    }
+
+    fn refute_range(&self, value: &Value) -> Option<String> {
+        let Some(pieces) = value.as_array().and_then(|l| {
+            l.iter()
+                .map(|p| Some((end_of(&p["lo"], true)?, end_of(&p["hi"], false)?)))
+                .collect::<Option<Vec<(End, End)>>>()
+        }) else {
+            return Some("a range piece whose end holds no real".into());
+        };
+        // (v may lie in the piece: false only where its enclosure shows
+        // it past an end.)
+        let may = |(lo, hi): &(End, End), v: &(Float, Float)| {
+            let above = match lo {
+                None => true,
+                Some((e, true)) => v.1 >= e.0,
+                Some((e, false)) => v.1 > e.0,
+            };
+            let below = match hi {
+                None => true,
+                Some((e, true)) => v.0 <= e.1,
+                Some((e, false)) => v.0 < e.1,
+            };
+            above && below
+        };
+        for x in self.region(f64::NEG_INFINITY, f64::INFINITY) {
+            if let Some(v) = &self.sample(x).d[0]
+                && !pieces.iter().any(|p| may(p, v))
+            {
+                return Some(format!(
+                    "f({x:e}) is in {}, in no piece of the range",
+                    show_enc(v)
+                ));
+            }
+        }
+        None
+    }
+
+    fn refute_period(&self, value: &Value) -> Option<String> {
+        // (No period listed: nothing to sample.)
+        if value.is_null() {
+            return None;
+        }
+        let Some((lo, hi)) = real_enc_of(value) else {
+            return Some("a period that holds no real".into());
+        };
+        if !(lo.is_finite() && hi.is_finite()) {
+            return None;
+        }
+        let xs = self.region(f64::NEG_INFINITY, f64::INFINITY);
+        for &x in xs.iter().step_by((xs.len() / 24).max(1)) {
+            let Some(v) = self.sample(x).d[0].clone() else {
+                continue;
+            };
+            let (a, b) = ((x + lo).next_down(), (x + hi).next_up());
+            if !(a.is_finite() && b.is_finite()) {
+                continue;
+            }
+            let s = self.over(a, b, 0);
+            if let Some(c) = s.first()
+                && !c.empty
+                && c.def
+                && c.bounded()
+                && (c.hi < v.0 || c.lo > v.1)
+            {
+                return Some(format!(
+                    "f({x:e}) is in {}, f(x + P) for P in [{lo:e}, {hi:e}] in [{:e}, {:e}]",
+                    show_enc(&v),
+                    c.lo.to_f64(),
+                    c.hi.to_f64()
+                ));
+            }
+        }
+        None
+    }
+
+    /// The truth's domain against f's own definedness at the samples.
+    fn refute_domain(&self) -> Option<String> {
+        for x in self.region(f64::NEG_INFINITY, f64::INFINITY) {
+            let holds = self.truth.dom.holds_q(&qd(x));
+            match self.sample(x).def {
+                Some(false) if holds => {
+                    return Some(format!(
+                        "the truth's domain holds {x:e}, where f is undefined"
+                    ));
+                }
+                Some(true) if !holds => {
+                    return Some(format!(
+                        "the truth's domain leaves out {x:e}, where f is defined"
+                    ));
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// A case whose row the truth calls true and the refuter refutes, cut
+    /// down: its claims (neither reads them), then items dropped while it
+    /// still is.
+    fn minimise_refuted(&self, case: &Case) -> Case {
+        let mut c = case.clone();
+        c.claims.clear();
+        let mut i = 0;
+        while c.value.as_array().is_some_and(|a| i < a.len()) {
+            let mut t = c.clone();
+            t.value.as_array_mut().expect("a list").remove(i);
+            if self.truth.judge(t.row, &t.scope, &t.value) == Verdict::True
+                && self.refute_row(t.row, &t.scope, &t.value).is_some()
+            {
+                c = t;
+            } else {
+                i += 1;
+            }
+        }
+        c
+    }
+}
+
 // ------------------------------------------------------------ the run
 
 #[derive(Default)]
@@ -6773,6 +8206,13 @@ struct Tally {
     /// True genuine rows the replay refuses (counted, not failed: the
     /// replay may not see what the claims don't show).
     genuine_refused_true: Vec<String>,
+    /// Claims and rows the truth calls true that the refuter refutes:
+    /// the truth's own errors, each failing the run.
+    refuted: Vec<String>,
+    /// Claims and rows the refuter tried, and the doubles it sampled f
+    /// at.
+    tried: u64,
+    sampled: u64,
 }
 
 impl Tally {
@@ -6812,6 +8252,9 @@ impl Tally {
         self.genuine_false.extend(o.genuine_false);
         self.genuine_false_accepted.extend(o.genuine_false_accepted);
         self.genuine_refused_true.extend(o.genuine_refused_true);
+        self.refuted.extend(o.refuted);
+        self.tried += o.tried;
+        self.sampled += o.sampled;
     }
 
     fn print(&self, seed: u64) {
@@ -6826,6 +8269,13 @@ impl Tally {
             self.unreadable
         );
         println!("  rows not judged: {}", self.unjudged.len());
+        println!(
+            "  refuter: {} claims and rows the truth calls true tried ({} doubles sampled), {} \
+             refuted",
+            self.tried,
+            self.sampled,
+            self.refuted.len()
+        );
         println!("  row: accepted true / accepted FALSE / refused true / refused false");
         for (row, v) in &self.by_row {
             println!("  {row:>13}: {} / {} / {} / {}", v[0], v[1], v[2], v[3]);
@@ -6875,6 +8325,7 @@ impl Tally {
         }
         for (what, list) in [
             ("ACCEPTED FALSE", &self.failures),
+            ("TRUTH REFUTED", &self.refuted),
             ("PROVED FALSE PREMISE", &self.false_premises),
             ("GENUINE ROW THE TRUTH REFUSES", &self.genuine_false),
             (
@@ -6941,7 +8392,15 @@ fn genuine(ctx: &mut Ctx, t: &mut Tally) {
         // truth's), the panel showing it, whether the replay refuses it or
         // not; the replay accepting it too is the replay's as well. A true
         // one the replay refuses is only counted.
-        match ctx.truth.judge(row, &scope, &body["value"]) {
+        // (Its status is part of what it says: Certified is all of them,
+        // over the line or one period; Partial, over a window or points.
+        // The truth read only the scope: round 25's audit.)
+        let verdict = if (status == "Certified") != scope.whole() {
+            Verdict::False(format!("{status} over {covers}"))
+        } else {
+            ctx.truth.judge(row, &scope, &body["value"])
+        };
+        match verdict {
             Verdict::Unknown(why) => t.unjudged.push(format!(
                 "genuine y={} {row}: truth cannot judge this row: {why}",
                 ctx.fun.text
@@ -6961,6 +8420,14 @@ fn genuine(ctx: &mut Ctx, t: &mut Tally) {
                 t.genuine_false.push(text);
             }
             Verdict::True => {
+                t.tried += 1;
+                if let Some(r) = ctx.refute_row(row, &scope, &body["value"]) {
+                    t.refuted.push(format!(
+                        "genuine y={} {row} {status} over {covers}: {}: the truth calls it true; \
+                         refuted: {r}",
+                        ctx.fun.text, body["value"]
+                    ));
+                }
                 if let Some(why) = refused {
                     t.genuine_refused_true
                         .push(format!("y={} {row}: {why}", ctx.fun.text));
@@ -7060,7 +8527,10 @@ fn run_fun(fun: Fun, seed: u64, i: u64, cases: u64) -> Tally {
     let mut ctx = match context(fun.clone()) {
         Ok(c) => c,
         Err(e) => {
-            if e.starts_with("the domain row") {
+            if e.starts_with("the domain row is false") {
+                t.genuine_rows += 1;
+                t.genuine_false.push(format!("y={}: {e}", fun.text));
+            } else if e.starts_with("the domain row") {
                 t.domain_not_as_built.push(format!("y={}: {e}", fun.text));
             } else {
                 t.not_certified += 1;
@@ -7069,6 +8539,10 @@ fn run_fun(fun: Fun, seed: u64, i: u64, cases: u64) -> Tally {
         }
     };
     genuine(&mut ctx, &mut t);
+    t.tried += 1;
+    if let Some(r) = ctx.refute_domain() {
+        t.refuted.push(format!("y={}: {r}", ctx.fun.text));
+    }
     // `REPLAY_FUZZ_TRACE=i:j`: that case's claims as made, each with the
     // replay's outcome.
     let trace = std::env::var("REPLAY_FUZZ_TRACE").ok().and_then(|s| {
@@ -7126,7 +8600,18 @@ fn run_fun(fun: Fun, seed: u64, i: u64, cases: u64) -> Tally {
                 let class = c.outcome.class;
                 *t.kept.entry(class.name()).or_default() += 1;
                 *t.kept_kinds.entry(c.claim.kind()).or_default() += 1;
-                if ctx.truth.claim_true(&c.claim) == Some(false) {
+                let truth = ctx.truth.claim_true(&c.claim);
+                if truth == Some(true) {
+                    t.tried += 1;
+                    if let Some(r) = ctx.refute_claim(&c.claim) {
+                        t.refuted.push(format!(
+                            "seed {seed} function {i} case {j}: y={}: the truth calls {:?} true; \
+                             refuted: {r}",
+                            ctx.fun.text, c.claim
+                        ));
+                    }
+                }
+                if truth == Some(false) {
                     t.false_premises.push(format!(
                         "seed {seed} function {i} case {j}: y={} [{}]: {} {:?} ({})",
                         ctx.fun.text,
@@ -7151,6 +8636,19 @@ fn run_fun(fun: Fun, seed: u64, i: u64, cases: u64) -> Tally {
                 (Verdict::False(_), false) => 3,
             };
             t.by_row.entry(case.row.to_string()).or_default()[slot] += 1;
+            if verdict == Verdict::True {
+                t.tried += 1;
+                if let Some(r) = ctx.refute_row(case.row, &case.scope, &case.value) {
+                    let small = ctx.minimise_refuted(&case);
+                    let why = ctx
+                        .refute_row(small.row, &small.scope, &small.value)
+                        .unwrap_or(r);
+                    t.refuted.push(format!(
+                        "seed {seed} function {i} case {j}:\n{}",
+                        ctx.show(&small, &format!("TRUE, refuted: {why}"))
+                    ));
+                }
+            }
             if slot == 2 {
                 let why = rep
                     .rows
@@ -7198,6 +8696,7 @@ fn run_fun(fun: Fun, seed: u64, i: u64, cases: u64) -> Tally {
             }
         }
     }
+    t.sampled += ctx.samples.borrow().len() as u64;
     t
 }
 
@@ -7256,19 +8755,23 @@ fn assert_clean(t: &Tally) {
         t.failures.is_empty()
             && t.false_premises.is_empty()
             && t.genuine_false.is_empty()
-            && t.unjudged.is_empty(),
+            && t.unjudged.is_empty()
+            && t.refuted.is_empty(),
         "{} accepted false rows, {} proved false premises, {} genuine rows the truth refuses \
-         ({} of them accepted by the replay); {} rows not judged; the first: {}",
+         ({} of them accepted by the replay); {} rows not judged; {} the truth calls true \
+         refuted; the first: {}",
         t.failures.len(),
         t.false_premises.len(),
         t.genuine_false.len(),
         t.genuine_false_accepted.len(),
         t.unjudged.len(),
+        t.refuted.len(),
         t.failures
             .first()
             .or(t.false_premises.first())
             .or(t.genuine_false.first())
             .or(t.unjudged.first())
+            .or(t.refuted.first())
             .map_or("", String::as_str)
     );
 }
@@ -7819,9 +9322,25 @@ fn sweep_fun(fun: Fun, max: usize) -> Sweep {
     };
     out.genuine.functions = 1;
     genuine(&mut ctx, &mut out.genuine);
+    out.genuine.tried += 1;
+    if let Some(r) = ctx.refute_domain() {
+        out.genuine
+            .refuted
+            .push(format!("exhaustive y={text}: {r}"));
+    }
     for (row, k) in ROWS {
         for place in ctx.sweep_places(k) {
             let pool = ctx.sweep_pool(row, k, &place);
+            // (Each claim of the pool the truth calls true, refuted?)
+            for c in pool.iter().flatten() {
+                let Ok(cl) = replay::claim(c) else { continue };
+                out.genuine.tried += 1;
+                if let Some(r) = ctx.refute_claim(&cl) {
+                    out.genuine.refuted.push(format!(
+                        "exhaustive y={text}: the truth calls {cl:?} true; refuted: {r}"
+                    ));
+                }
+            }
             let rows = ctx.sweep_rows(row, &place);
             let mut tried = 0u64;
             let falses: Vec<&(Scope, Value, Vec<Value>)> = rows
@@ -7829,7 +9348,16 @@ fn sweep_fun(fun: Fun, max: usize) -> Sweep {
                 .filter(|(scope, value, _)| {
                     let f = match ctx.truth.judge(row, scope, value) {
                         Verdict::False(_) => true,
-                        Verdict::True => false,
+                        Verdict::True => {
+                            out.genuine.tried += 1;
+                            if let Some(r) = ctx.refute_row(row, scope, value) {
+                                out.genuine.refuted.push(format!(
+                                    "exhaustive y={text} {row} over {scope:?}: {value}: the truth \
+                                     calls it true; refuted: {r}"
+                                ));
+                            }
+                            false
+                        }
                         Verdict::Unknown(why) => {
                             out.genuine
                                 .unjudged
@@ -7881,6 +9409,7 @@ fn sweep_fun(fun: Fun, max: usize) -> Sweep {
                 .push((text.clone(), row, place.approx(), pool.len(), tried));
         }
     }
+    out.genuine.sampled += ctx.samples.borrow().len() as u64;
     out
 }
 
@@ -7956,6 +9485,16 @@ impl Sweep {
         for s in self.genuine.unjudged.iter().take(10) {
             println!("ROW THE TRUTH CANNOT JUDGE: {s}");
         }
+        println!(
+            "  refuter: {} claims and rows the truth calls true tried ({} doubles sampled), {} \
+             refuted",
+            self.genuine.tried,
+            self.genuine.sampled,
+            self.genuine.refuted.len()
+        );
+        for s in self.genuine.refuted.iter().take(10) {
+            println!("TRUTH REFUTED: {s}");
+        }
     }
 }
 
@@ -7968,12 +9507,14 @@ fn exhaustive_slice() {
     assert!(
         t.failures.is_empty()
             && t.genuine.genuine_false.is_empty()
-            && t.genuine.unjudged.is_empty(),
+            && t.genuine.unjudged.is_empty()
+            && t.genuine.refuted.is_empty(),
         "{:?}",
         t.failures
             .first()
             .or(t.genuine.genuine_false.first())
             .or(t.genuine.unjudged.first())
+            .or(t.genuine.refuted.first())
     );
 }
 
@@ -7990,12 +9531,14 @@ fn exhaustive_full() {
     assert!(
         t.failures.is_empty()
             && t.genuine.genuine_false.is_empty()
-            && t.genuine.unjudged.is_empty(),
+            && t.genuine.unjudged.is_empty()
+            && t.genuine.refuted.is_empty(),
         "{:?}",
         t.failures
             .first()
             .or(t.genuine.genuine_false.first())
             .or(t.genuine.unjudged.first())
+            .or(t.genuine.refuted.first())
     );
 }
 
@@ -8663,4 +10206,614 @@ fn a_row_the_truth_cannot_judge_does_not_pass_the_run() {
     genuine(&mut ctx, &mut tally);
     assert_eq!(tally.unjudged.len(), 1);
     assert_clean(&tally);
+}
+
+// ------------------------------------------------------------ round 25's audit
+
+/// Monotone pieces meeting at one enclosure that holds two turns: each
+/// piece true up to some place in it, the enclosures' extents covering
+/// the line, yet the piece between the turns left out. The truth asked
+/// each piece's ends of some place on its own and the coverage of the
+/// enclosures' extents; it called these true (the replay refuses them:
+/// "a piece's end holds two turns", round 20's audit). Now one place
+/// for each end is chosen, and the pieces between them must cover.
+#[test]
+fn a_piece_end_holding_two_turns_leaves_the_piece_between_out() {
+    // x³ − x: increasing up to −1/√3, decreasing to 1/√3, increasing on.
+    let t = Truth::new(
+        &Pw::one(Poly::new(vec![qi(0), qi(-1), qi(0), qi(1)])),
+        &Dom::Line,
+    );
+    let at = |x: (f64, f64)| json!({"At": {"x": enc(x.0, x.1), "closed": true}});
+    let piece = |lo: Value, hi: Value, dir: &str| json!({"on": {"lo": lo, "hi": hi}, "dir": dir});
+    let hull = at((-0.6, 0.6));
+    let row = json!([
+        piece(json!("NegInf"), hull.clone(), "Increasing"),
+        piece(hull, json!("PosInf"), "Increasing"),
+    ]);
+    let v = t.judge("monotonicity", &Scope::Line, &row);
+    assert!(matches!(v, Verdict::False(_)), "{v:?}");
+    // The true row, its ends the turns' own enclosures.
+    let (a, b) = (t.breaks[0].clone().enc(), t.breaks[1].clone().enc());
+    let row = json!([
+        piece(json!("NegInf"), at(a), "Increasing"),
+        piece(at(a), at(b), "Decreasing"),
+        piece(at(b), json!("PosInf"), "Increasing"),
+    ]);
+    assert_eq!(t.judge("monotonicity", &Scope::Line, &row), Verdict::True);
+    // The same over one period of sin(x)°: increasing from −90 to [90,
+    // 270] and on from there to 450, the decreasing piece left out.
+    let sin = Truth::new_trig(
+        &Trig {
+            func: TrigFn::Sin,
+            a: qi(1),
+            b: qi(0),
+            amp: qi(1),
+            c: qi(0),
+            deg: true,
+        },
+        (-1500.0, 1500.0),
+    );
+    let period = Scope::Period(-90.0, 270.0);
+    let row = json!([
+        piece(at((-90.0, -90.0)), at((90.0, 270.0)), "Increasing"),
+        piece(at((90.0, 270.0)), at((450.0, 450.0)), "Increasing"),
+    ]);
+    let v = sin.judge("monotonicity", &period, &row);
+    assert!(matches!(v, Verdict::False(_)), "{v:?}");
+    let row = json!([
+        piece(at((-90.0, -90.0)), at((90.0, 90.0)), "Increasing"),
+        piece(at((90.0, 90.0)), at((270.0, 270.0)), "Decreasing"),
+    ]);
+    assert_eq!(sin.judge("monotonicity", &period, &row), Verdict::True);
+}
+
+/// `TailChain` says more than its conclusion: f⁽ᵏ⁺ᵐ⁾ of one sign on the
+/// tail and the signs at `from` that keep f⁽ᵏ⁾ moving away from c (the
+/// rows read f → ∞ from one about f′). The truth read the conclusion
+/// alone: x² + 1 above 0 on [−1, ∞) "by f′ > 0" was true.
+#[test]
+fn a_tail_chain_is_true_only_with_its_chain() {
+    let t = Truth::new(&Pw::one(Poly::new(vec![qi(1), qi(0), qi(1)])), &Dom::Line);
+    let chain = |side: Side, from: f64, order: usize| Claim::TailChain {
+        side,
+        from,
+        of: Subject::F(0),
+        c: 0.0,
+        above: true,
+        order,
+    };
+    for (claim, expected) in [
+        (chain(Side::Right, -1.0, 1), false),
+        (chain(Side::Right, -1.0, 2), false),
+        (chain(Side::Right, 0.0, 2), false),
+        (chain(Side::Right, 1.0, 1), true),
+        (chain(Side::Right, 1.0, 2), true),
+        (chain(Side::Left, -1.0, 1), true),
+        (chain(Side::Left, 1.0, 1), false),
+        (chain(Side::Left, -1.0, 2), true),
+    ] {
+        assert_eq!(t.claim_true(&claim), Some(expected), "{claim:?}");
+    }
+}
+
+/// A periodic f's zeros over an infinite gap box: its lists hold its
+/// span's alone, so a box past the span was read as clear of them.
+#[test]
+fn a_periodic_gap_clear_over_a_tail_asks_every_period() {
+    let trig = |func| Trig {
+        func,
+        a: qi(1),
+        b: qi(0),
+        amp: qi(1),
+        c: qi(0),
+        deg: true,
+    };
+    let sin = Truth::new_trig(&trig(TrigFn::Sin), (-1500.0, 1500.0));
+    let tan = Truth::new_trig(&trig(TrigFn::Tan), (-1500.0, 1500.0));
+    let clear = |k: usize, a: f64, b: f64| Claim::GapClear {
+        x: (a, b),
+        of: Subject::F(k),
+    };
+    assert_eq!(sin.claim_true(&clear(0, 1e6, f64::INFINITY)), Some(false));
+    assert_eq!(
+        sin.claim_true(&clear(0, f64::NEG_INFINITY, -1e6)),
+        Some(false)
+    );
+    // (tan′ = sec² has no zero at all.)
+    assert_eq!(tan.claim_true(&clear(1, 1e6, f64::INFINITY)), Some(true));
+    assert_eq!(sin.claim_true(&clear(0, 10.0, 170.0)), Some(true));
+}
+
+/// What holds no real number is no item, end, period or scope: an
+/// enclosure with a NaN end (read as an infinite one, it held every
+/// feature), a low end read from "PosInf" (any string was the infinite
+/// end), a direction or an extremum's kind of no known word (read as
+/// constant, and as a minimum), a range over a window (a part of it is no
+/// row; it was judged as the whole range).
+#[test]
+fn the_truth_refuses_what_holds_no_real_or_says_nothing() {
+    let nan = json!({"lo": "nan", "hi": "nan"});
+    let square = Truth::new(&Pw::one(Poly::new(vec![qi(-1), qi(0), qi(1)])), &Dom::Line);
+    let zero = Truth::new(&Pw::one(Poly::constant(qi(0))), &Dom::Line);
+    let cube = Truth::new(
+        &Pw::one(Poly::new(vec![qi(0), qi(0), qi(0), qi(1)])),
+        &Dom::Line,
+    );
+    let up = Truth::new(&Pw::one(Poly::new(vec![qi(1), qi(0), qi(1)])), &Dom::Line);
+    let two = Truth::new(&Pw::one(Poly::constant(qi(2))), &Dom::Line);
+    let sin = Truth::new_trig(
+        &Trig {
+            func: TrigFn::Sin,
+            a: qi(1),
+            b: qi(0),
+            amp: qi(1),
+            c: qi(0),
+            deg: true,
+        },
+        (-1500.0, 1500.0),
+    );
+    let at = |x: f64, closed: bool| json!({"At": {"x": enc(x, x), "closed": closed}});
+    let cases: Vec<(&str, &Truth, &str, Scope, Value)> = vec![
+        (
+            "NaN zero of x² − 1",
+            &square,
+            "x_intercepts",
+            Scope::Points,
+            json!([{ "At": nan }]),
+        ),
+        (
+            "NaN zero of f ≡ 0",
+            &zero,
+            "x_intercepts",
+            Scope::Points,
+            json!([{ "At": nan }]),
+        ),
+        (
+            "NaN period of sin(x)°",
+            &sin,
+            "period",
+            Scope::Line,
+            nan.clone(),
+        ),
+        (
+            "x² + 1's range up to NegInf",
+            &up,
+            "range",
+            Scope::Line,
+            json!([{"lo": at(1.0, true), "hi": "NegInf"}]),
+        ),
+        (
+            "x³'s range from PosInf",
+            &cube,
+            "range",
+            Scope::Line,
+            json!([{"lo": "PosInf", "hi": "PosInf"}]),
+        ),
+        (
+            "2 going sideways",
+            &two,
+            "monotonicity",
+            Scope::Line,
+            json!([{"on": {"lo": "NegInf", "hi": "PosInf"}, "dir": "Sideways"}]),
+        ),
+        (
+            "x² − 1's saddle at 0",
+            &square,
+            "extrema",
+            Scope::Points,
+            json!([{"x": enc(0.0, 0.0), "y": enc(-1.0, -1.0), "kind": "Saddle", "every": null}]),
+        ),
+        (
+            "x² + 1's range over a window",
+            &up,
+            "range",
+            Scope::Window(5.0, 6.0),
+            json!([{"lo": at(1.0, true), "hi": "PosInf"}]),
+        ),
+    ];
+    for (what, t, row, scope, value) in cases {
+        let v = t.judge(row, &scope, &value);
+        assert!(matches!(v, Verdict::False(_)), "{what}: {v:?}");
+    }
+    // Controls: the same rows written right.
+    assert_eq!(
+        up.judge(
+            "range",
+            &Scope::Line,
+            &json!([{"lo": at(1.0, true), "hi": "PosInf"}])
+        ),
+        Verdict::True
+    );
+    assert_eq!(
+        cube.judge(
+            "range",
+            &Scope::Line,
+            &json!([{"lo": "NegInf", "hi": "PosInf"}])
+        ),
+        Verdict::True
+    );
+    assert_eq!(
+        square.judge(
+            "extrema",
+            &Scope::Points,
+            &json!([{"x": enc(0.0, 0.0), "y": enc(-1.0, -1.0), "kind": "Min", "every": null}])
+        ),
+        Verdict::True
+    );
+}
+
+/// A plateau (f constant on a stretch, not everywhere) or zeros on a
+/// stretch where f ≡ 0: max(x, 0) was "increasing" on the line, its range
+/// (−∞, ∞) and its zeros 0 alone. No generator makes one; the truth now
+/// says it can't judge, which fails a run.
+#[test]
+fn a_plateau_is_not_judged() {
+    let f = Pw {
+        cuts: vec![qi(0)],
+        polys: vec![Poly::default(), Poly::x_minus(&qi(0))],
+    };
+    let t = Truth::new(&f, &Dom::Line);
+    for (row, value) in [
+        (
+            "monotonicity",
+            json!([{"on": {"lo": "NegInf", "hi": "PosInf"}, "dir": "Increasing"}]),
+        ),
+        ("range", json!([{"lo": "NegInf", "hi": "PosInf"}])),
+        ("x_intercepts", json!([{"At": enc(0.0, 0.0)}])),
+        ("extrema", json!([])),
+    ] {
+        let v = t.judge(row, &Scope::Line, &value);
+        assert!(matches!(v, Verdict::Unknown(_)), "{row}: {v:?}");
+    }
+}
+
+/// Shapes the truth panicked on (a box with an infinite end where it
+/// reads doubles, a periodic item over a tail, an infinite y or range
+/// end): each now read so, false, true or unjudged. Hardening: none was
+/// called true that isn't.
+#[test]
+fn the_truth_reads_infinite_ends_without_panicking() {
+    let square = Truth::new(&Pw::one(Poly::new(vec![qi(-1), qi(0), qi(1)])), &Dom::Line);
+    let zero = Truth::new(&Pw::one(Poly::constant(qi(0))), &Dom::From(qi(1)));
+    let sin = Truth::new_trig(
+        &Trig {
+            func: TrigFn::Sin,
+            a: qi(1),
+            b: qi(0),
+            amp: qi(1),
+            c: qi(0),
+            deg: true,
+        },
+        (-1500.0, 1500.0),
+    );
+    let inf = f64::INFINITY;
+    for claim in [
+        Claim::Touch {
+            x: (-inf, 1.0),
+            of: Subject::F(0),
+            c: 0.0,
+            at: -inf,
+            order: 0,
+            above: true,
+        },
+        Claim::KinkSides {
+            x: (-inf, inf),
+            at: None,
+            order: 1,
+            left: KinkSign::Pos,
+            right: KinkSign::Pos,
+            joined: false,
+        },
+        Claim::KinkAt {
+            x: (-inf, inf),
+            at: 0.0,
+            left: false,
+            right: true,
+        },
+    ] {
+        assert_eq!(square.claim_true(&claim), Some(false), "{claim:?}");
+    }
+    let v = sin.judge(
+        "x_intercepts",
+        &Scope::Points,
+        &json!([{"At": enc(-inf, 0.0)}]),
+    );
+    assert!(matches!(v, Verdict::Unknown(_)), "{v:?}");
+    let v = square.judge(
+        "extrema",
+        &Scope::Points,
+        &json!([{"x": enc(0.0, 0.0), "y": enc(-inf, inf), "kind": "Min", "every": null}]),
+    );
+    assert_eq!(v, Verdict::True);
+    let v = zero.judge("x_intercepts", &Scope::Window(0.0, inf), &json!([]));
+    assert!(matches!(v, Verdict::False(_)), "{v:?}");
+    let v = square.judge(
+        "range",
+        &Scope::Line,
+        &json!([{"lo": {"At": {"x": enc(-inf, -1.0), "closed": true}}, "hi": "PosInf"}]),
+    );
+    assert_eq!(v, Verdict::True);
+}
+
+/// The refuter on its own, each claim and row put to it whatever the
+/// truth says: review 24's (R24-L-02's three crossing claims; two items
+/// at one double of f ≡ 0, R24-L-01; sin(x)°'s zeros as two families
+/// every 180·2³⁴, R24-L-03; a family of f ≡ 0 on [0, ∞) through −1,
+/// R24-L-04) and round 25's audit's (pieces meeting at one enclosure of
+/// two turns; a tail chain from the wrong side of f′'s zero; max(x, 0)
+/// increasing, its zeros {0}) refuted; each with a true control that is
+/// not. (Not reached: R24-L-01's two items clipped to one domain end,
+/// whose one point only the domain's exact end shows; a gap clear to
+/// infinity; the range of max(x, 0) said (−∞, ∞), every sampled value in
+/// it.)
+#[test]
+fn the_refuter_catches_review_24s_examples() {
+    replay::iv::init();
+    let x = |c: i64| Poly::x_minus(&qi(c));
+    let line = |text: &str, f: Pw| {
+        context(Fun {
+            text: text.into(),
+            evaluated: Vec::new(),
+            f,
+            dom: Dom::Line,
+            planted: Vec::new(),
+            expanded: Vec::new(),
+            trig: None,
+        })
+        .unwrap_or_else(|e| panic!("{text}: {e}"))
+    };
+    let square = line("x^2+1", Pw::one(Poly::new(vec![qi(1), qi(0), qi(1)])));
+    let cubic = line(
+        "x^3-x",
+        Pw::one(Poly::new(vec![qi(0), qi(-1), qi(0), qi(1)])),
+    );
+    let corner = line(
+        "abs(x)",
+        Pw {
+            cuts: vec![qi(0)],
+            polys: vec![x(0).scale(&qi(-1)), x(0)],
+        },
+    );
+    let ramp = line(
+        "max(x,0)",
+        Pw {
+            cuts: vec![qi(0)],
+            polys: vec![Poly::default(), x(0)],
+        },
+    );
+    let zero = line("0", Pw::one(Poly::constant(qi(0))));
+    let half = context(Fun {
+        text: "0*sqrt(x)".into(),
+        evaluated: Vec::new(),
+        f: Pw::one(Poly::constant(qi(0))),
+        dom: Dom::From(qi(0)),
+        planted: Vec::new(),
+        expanded: Vec::new(),
+        trig: None,
+    })
+    .expect("0*sqrt(x)");
+    let sin = context(fixed_trig("sin(x)", TrigFn::Sin, 1, 0, 1, 0)).expect("sin(x)°");
+    let f = |k: usize| Subject::F(k);
+    let claims: Vec<(&str, &Ctx, Claim, bool)> = vec![
+        (
+            "x²+1 never crossing 0 on [−1, 1], monotone",
+            &square,
+            Claim::NoCross {
+                x: (-1.0, 1.0),
+                of: f(0),
+                c: 0.0,
+                above: true,
+            },
+            true,
+        ),
+        (
+            "x³−x crossing 0 once on [−1.5, −0.5], monotone",
+            &cubic,
+            Claim::OneCross {
+                x: (-1.5, -0.5),
+                of: f(0),
+                c: 0.0,
+            },
+            true,
+        ),
+        (
+            "x³−x 0 at −1 alone on [−1.5, −0.5], monotone",
+            &cubic,
+            Claim::ExactAt {
+                x: (-1.5, -0.5),
+                of: f(0),
+                c: 0.0,
+                at: -1.0,
+            },
+            true,
+        ),
+        (
+            "|x|′ crossing 0 once on [−1, 1]",
+            &corner,
+            Claim::OneCross {
+                x: (-1.0, 1.0),
+                of: f(1),
+                c: 0.0,
+            },
+            true,
+        ),
+        (
+            "x²+1 above 0 on [−1, ∞) by f′ > 0",
+            &square,
+            Claim::TailChain {
+                side: Side::Right,
+                from: -1.0,
+                of: f(0),
+                c: 0.0,
+                above: true,
+                order: 1,
+            },
+            true,
+        ),
+        (
+            "x²+1 never crossing 0 on [1, 2]",
+            &square,
+            Claim::NoCross {
+                x: (1.0, 2.0),
+                of: f(0),
+                c: 0.0,
+                above: true,
+            },
+            false,
+        ),
+        (
+            "x³−x crossing 0 once on [−1.2, −0.8]",
+            &cubic,
+            Claim::OneCross {
+                x: (-1.2, -0.8),
+                of: f(0),
+                c: 0.0,
+            },
+            false,
+        ),
+        (
+            "x²+1 above 0 on [1, ∞) by f′ > 0",
+            &square,
+            Claim::TailChain {
+                side: Side::Right,
+                from: 1.0,
+                of: f(0),
+                c: 0.0,
+                above: true,
+                order: 1,
+            },
+            false,
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (what, ctx, claim, refuted) in claims {
+        let r = ctx.refute_claim(&claim);
+        println!("{what}: {r:?}");
+        if r.is_some() != refuted {
+            wrong.push(what);
+        }
+    }
+    let family = |x0: f64, p: f64| json!({"Every": {"x0": enc(x0, x0), "period": enc(p, p)}});
+    let at = |x: f64| json!({"At": enc(x, x)});
+    let end = |x: (f64, f64)| json!({"At": {"x": enc(x.0, x.1), "closed": true}});
+    let piece = |lo: Value, hi: Value, dir: &str| json!({"on": {"lo": lo, "hi": hi}, "dir": dir});
+    let n = 2f64.powi(34);
+    let (t0, t1) = (
+        cubic.truth.breaks[0].clone().enc(),
+        cubic.truth.breaks[1].clone().enc(),
+    );
+    let rows: Vec<(&str, &Ctx, &str, Scope, Value, bool)> = vec![
+        (
+            "f ≡ 0's zero at 0, twice",
+            &zero,
+            "x_intercepts",
+            Scope::Points,
+            json!([at(0.0), at(0.0)]),
+            true,
+        ),
+        (
+            "sin(x)°'s zeros every 180·2³⁴ from 0 and 180",
+            &sin,
+            "x_intercepts",
+            Scope::Line,
+            json!([family(0.0, 180.0 * n), family(180.0, 180.0 * n)]),
+            true,
+        ),
+        (
+            "0·√x's zeros every 1 from 1",
+            &half,
+            "x_intercepts",
+            Scope::Points,
+            json!([family(1.0, 1.0)]),
+            true,
+        ),
+        (
+            "x³ − x increasing to [−0.6, 0.6] and from it",
+            &cubic,
+            "monotonicity",
+            Scope::Line,
+            json!([
+                piece(json!("NegInf"), end((-0.6, 0.6)), "Increasing"),
+                piece(end((-0.6, 0.6)), json!("PosInf"), "Increasing"),
+            ]),
+            true,
+        ),
+        (
+            "max(x, 0) increasing",
+            &ramp,
+            "monotonicity",
+            Scope::Line,
+            json!([piece(json!("NegInf"), json!("PosInf"), "Increasing")]),
+            true,
+        ),
+        (
+            "max(x, 0)'s zeros {0}",
+            &ramp,
+            "x_intercepts",
+            Scope::Line,
+            json!([at(0.0)]),
+            true,
+        ),
+        (
+            "x² + 1's maximum at 0",
+            &square,
+            "extrema",
+            Scope::Points,
+            json!([{"x": enc(0.0, 0.0), "y": enc(1.0, 1.0), "kind": "Max", "every": null}]),
+            true,
+        ),
+        (
+            "x² + 1's minimum at 0",
+            &square,
+            "extrema",
+            Scope::Points,
+            json!([{"x": enc(0.0, 0.0), "y": enc(1.0, 1.0), "kind": "Min", "every": null}]),
+            false,
+        ),
+        (
+            "f ≡ 0's zeros 0 and 1",
+            &zero,
+            "x_intercepts",
+            Scope::Points,
+            json!([at(0.0), at(1.0)]),
+            false,
+        ),
+        (
+            "sin(x)°'s zeros every 180 from 0",
+            &sin,
+            "x_intercepts",
+            Scope::Line,
+            json!([family(0.0, 180.0)]),
+            false,
+        ),
+        (
+            "f ≡ 0's zeros every 1 from 1",
+            &zero,
+            "x_intercepts",
+            Scope::Points,
+            json!([family(1.0, 1.0)]),
+            false,
+        ),
+        (
+            "x³ − x's monotone pieces",
+            &cubic,
+            "monotonicity",
+            Scope::Line,
+            json!([
+                piece(json!("NegInf"), end(t0), "Increasing"),
+                piece(end(t0), end(t1), "Decreasing"),
+                piece(end(t1), json!("PosInf"), "Increasing"),
+            ]),
+            false,
+        ),
+    ];
+    for (what, ctx, row, scope, value, refuted) in rows {
+        let r = ctx.refute_row(row, &scope, &value);
+        println!("{what}: {r:?}");
+        if r.is_some() != refuted {
+            wrong.push(what);
+        }
+    }
+    assert!(wrong.is_empty(), "the refuter got these wrong: {wrong:?}");
 }
