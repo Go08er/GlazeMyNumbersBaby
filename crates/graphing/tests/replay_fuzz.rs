@@ -68,12 +68,16 @@
 //! `tests/certify_replay.rs`: an item listed alone at a member of a family
 //! the row lists too passed for a number of its own (−3·tan(3x + 45)°
 //! with −75 alone beside every 60° from −15;
-//! `an_item_alone_at_a_familys_member_is_listed_twice`); and a monotone
+//! `an_item_alone_at_a_familys_member_is_listed_twice`); a monotone
 //! piece ending at a double inside a hole's enclosure, past the hole, lay
 //! "in" the domain piece before it (x − 5/7 − 2⁻⁵³/7 − ½|x − q| +
 //! 0/(x + 2/7), long run seed 9103;
-//! `a_monotone_piece_does_not_run_past_a_hole_in_its_enclosure`). No
-//! genuine row of these functions was false.
+//! `a_monotone_piece_does_not_run_past_a_hole_in_its_enclosure`); and two
+//! families of one orbit, each of its members listed twice, passed
+//! complete (1/2·tan(3x)° + ½'s inflections every 60° from 60 and from
+//! 120 over a window, long run seed 7703 after review 25;
+//! `two_families_of_one_orbit_list_their_members_twice`). No genuine row
+//! of these functions was false.
 //!
 //! **The truth, audited.** Review 24 found it calling four false things
 //! true, each with rows or claims built by hand: two items at one zero
@@ -11242,4 +11246,21 @@ fn a_far_familys_members_are_found_exactly() {
         (Integer::from(3), Integer::from(5))
     );
     assert!(!member_meets((0.0, 0.0), (180.0, 360.0), 100.0, 170.0));
+}
+
+/// The long run's accepted false row after review 25 (seed 7703, function
+/// 208, case 3): 1/2·tan(3x)° + ½'s inflections every 60 from 60 and every
+/// 60 from 120, one orbit listed twice, complete over [−15, 165], every
+/// premise strong. The replay held each proven place to an item of its
+/// own, never each family's member to a place of its own; now it does
+/// (`rows::members_apart`, with the hand-built rows in
+/// `tests/certify_replay.rs`). The function's cases again.
+#[test]
+fn the_long_runs_one_orbit_listed_twice_is_refused() {
+    replay::iv::init();
+    let fun = make_kind(7703, 208, Kind::Mixed).expect("made");
+    assert_eq!(fun.text, "1/2*tan(3*x)+1/2");
+    let t = run_function(7703, 208, CASES, Kind::Mixed);
+    assert!(t.cases > 0);
+    assert_clean(&t);
 }
