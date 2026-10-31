@@ -5478,3 +5478,39 @@ fn families_too_wide_to_tell_apart_are_refused() {
     .expect("a member not shown apart, refused");
     assert!(w.contains("family"), "{w}");
 }
+
+/// A vertical row's families are poles of their own too: tan(x)°'s
+/// asymptotes listed every 180° from 90° and again every 180° from 270°,
+/// one orbit, list each pole twice. The certifier never writes such a
+/// row (two asymptotes of one period not told apart leave it Unknown),
+/// but the replay's vertical row held only items listed alone apart
+/// (`repeats_listed`), and each proven pole to an item (`one_each`).
+#[test]
+fn a_vertical_rows_two_families_of_one_orbit_list_each_pole_twice() {
+    let genuine = certificate_in("tan(x)", None, TrigUnit::Degrees);
+    assert_eq!(rejected(&genuine), None);
+    let mut v = genuine.clone();
+    let items = value_of(&mut v, "vertical").as_array_mut().unwrap();
+    let family = items
+        .iter()
+        .find(|i| i.get("Every").is_some())
+        .expect("a family of poles")
+        .clone();
+    let x0 = family["Every"]["x0"]["lo"].as_f64().unwrap();
+    let mut again = family.clone();
+    again["Every"]["x0"] = serde_json::json!({"lo": x0 + 180.0, "hi": x0 + 180.0});
+    items.push(again);
+    let w = rejected(&v).expect("one orbit of poles listed twice, refused");
+    assert!(w.contains("family"), "{w}");
+    // (A sub-orbit beside it, every 360° from 90° read from [180, 360]:
+    // the same.)
+    let mut v = genuine.clone();
+    let mut wide = family.clone();
+    wide["Every"]["period"] = serde_json::json!({"lo": 180.0, "hi": 360.0});
+    value_of(&mut v, "vertical")
+        .as_array_mut()
+        .unwrap()
+        .push(wide);
+    let w = rejected(&v).expect("a sub-orbit of poles beside its family, refused");
+    assert!(w.contains("family"), "{w}");
+}

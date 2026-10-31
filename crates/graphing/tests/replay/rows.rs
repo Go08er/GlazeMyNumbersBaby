@@ -1257,8 +1257,10 @@ fn alone_at_a_member(found: &[Enc], listed: &[(Enc, Option<Enc>)]) -> Option<Enc
 /// number of its own only where some place it may be is no other
 /// family's member's (enclosures too wide to tell two members apart are
 /// refused, as [`alone_at_a_member`] refuses an item alone). Two members
-/// of one family are k·P apart: two numbers. Returns why a member shares
-/// its place.
+/// of one family are k·P apart: two numbers. For the list rows (zeros,
+/// turns, inflections, their proven places) and the vertical asymptotes
+/// (the poles the claims show, a family of them every 180° from 90° and
+/// again from 270° as tan(x)°'s). Returns why a member shares its place.
 fn members_apart(found: &[Enc], listed: &[(Enc, Option<Enc>)], span: Option<B>) -> Option<String> {
     use rug::{Integer, Rational};
     let families: Vec<(Enc, Enc)> = listed
@@ -4749,6 +4751,13 @@ fn vertical(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Resu
                 a.lo, a.hi, b.lo, b.hi
             ));
         }
+    }
+    // (Each listed family's members poles of their own, complete or not:
+    // every 180° from 90° and again from 270° listed tan(x)°'s poles
+    // twice.)
+    let span = rc.region.as_ref().and_then(region_box);
+    if let Some(why) = members_apart(&poles, &listed, span) {
+        out.problems.push(format!("a vertical asymptote: {why}"));
     }
     Ok(())
 }
