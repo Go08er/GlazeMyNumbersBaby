@@ -859,6 +859,10 @@ impl Class {
 pub struct Outcome {
     pub class: Class,
     pub note: String,
+    /// A `GapClear` shown (strong or weak): why the gap holds no zero of
+    /// f⁽ᵏ⁾ of its own, f⁽ᵏ⁾ away from 0 there or ≡ 0 throughout it. The
+    /// rows read the second as a stretch of zeros ([`claims::Clear`]).
+    pub clear: Option<claims::Clear>,
 }
 
 impl Outcome {
@@ -866,6 +870,7 @@ impl Outcome {
         Outcome {
             class,
             note: note.into(),
+            clear: None,
         }
     }
 }
