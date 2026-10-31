@@ -432,7 +432,7 @@ CI also runs checks that need more than `cargo test --workspace`:
   truth itself calling four false things true, each with rows or claims
   built by hand: two items at one zero of f ≡ 0, crossing claims without
   monotonicity, a periodic list's count of turns overflowing, a family of
-  f ≡ 0 read as one point. Round 25 audited the truth whole, every claim
+  f ≡ 0 read as one point. The audit that followed took the truth whole, every claim
   kind against what the claim promises and every list and row branch
   against what the row says, and found it also calling true a complete
   monotonicity row whose pieces met at one enclosure holding two turns,

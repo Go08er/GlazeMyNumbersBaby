@@ -76,23 +76,23 @@
 //! genuine row of these functions was false.
 //!
 //! **The truth, audited.** Review 24 found it calling four false things
-//! true, each with rows or claims built by hand: two items at one zero of
-//! f ≡ 0, crossing claims without monotonicity, a periodic list's turn
-//! count overflowing, a family of f ≡ 0 read as one point. Round 25 held
-//! every claim kind it reads to what the claim promises (its doc in
-//! `certify/cert.rs` and what the replay's rows take from it) and every
-//! list and row branch to what the row says. It also called true a
-//! complete monotonicity row whose pieces met at one enclosure holding
-//! two turns, the piece between left out (each end was asked of some
-//! place on its own); a `TailChain` whose chain was false; a periodic f's
-//! `GapClear` over an infinite box; an item, end or period of a NaN
-//! enclosure, a low end "PosInf", a direction or kind of no known word, a
-//! range over a window; a plateau's pieces, range and zeros. Each is
-//! fixed, with a regression that fails on the truth before. What it
-//! doesn't model is Unknown, never true: a row so (a zero function's
-//! repeating list, a plateau, a periodic item over a tail) fails the run;
-//! a premise so (a side expression's, a limit, a bound, the simplifier's
-//! fact, a family) is not held to it.
+//! true, each with rows or claims built by hand: two items at one zero
+//! of f ≡ 0, crossing claims without monotonicity, a periodic list's
+//! turn count overflowing, a family of f ≡ 0 read as one point. The
+//! audit that followed held every claim kind it reads to what the claim
+//! promises (its doc in `certify/cert.rs` and what the replay's rows
+//! take from it) and every list and row branch to what the row says. It
+//! also called true a complete monotonicity row whose pieces met at one
+//! enclosure holding two turns, the piece between left out (each end
+//! was asked of some place on its own); a `TailChain` whose chain was
+//! false; a periodic f's `GapClear` over an infinite box; an item, end
+//! or period of a NaN enclosure, a low end "PosInf", a direction or
+//! kind of no known word, a range over a window; a plateau's pieces,
+//! range and zeros. Each is fixed, with a regression that fails on the
+//! truth before. What it doesn't model is Unknown, never true: a row so
+//! (a zero function's repeating list, a plateau, a periodic item over a
+//! tail) fails the run; a premise so (a side expression's, a limit, a
+//! bound, the simplifier's fact, a family) is not held to it.
 //!
 //! **The refuter** (`Ctx::refute_claim`, `Ctx::refute_row`), a second
 //! check on the truth: every claim and row it calls true is tried against
@@ -3519,7 +3519,7 @@ impl Truth {
                 // (Its chain too, not only where it ends: the rows read
                 // f⁽ᵏ⁾ moving away from c on the tail from it (`rows::
                 // tail_infinite`). x² + 1 above 0 on [−1, ∞) "by f′ > 0"
-                // passed: round 25's audit.)
+                // passed: the audit after review 24.)
                 let (a, b) = tail(*side, *from);
                 sign_is(k, a, b, *above) && self.chain(k, *side, *from, *above, *m)
             }
@@ -4409,7 +4409,7 @@ fn enc_of(v: &Value) -> Option<(f64, f64)> {
 /// An enclosure that holds a real: no NaN end, lo ≤ hi, not a point at
 /// an infinity. (A NaN end read as an infinite one by `Place::within`
 /// made an item `[NaN, NaN]` hold every feature, and the zero function's
-/// list took it for a wide item: round 25's audit.)
+/// list took it for a wide item: the audit after review 24.)
 fn real_enc(x: (f64, f64)) -> bool {
     x.0 <= x.1 && x.0 != f64::INFINITY && x.1 != f64::NEG_INFINITY
 }
@@ -4530,7 +4530,8 @@ fn end_of(v: &Value, low: bool) -> Option<End> {
 
 /// A monotone piece's direction: increasing (`Some(true)`), decreasing,
 /// or constant (`None`); any other word is unreadable (it was read as
-/// "constant", true of every piece of a constant f: round 25's audit).
+/// "constant", true of every piece of a constant f: the audit after
+/// review 24).
 fn dir_of(v: &Value) -> Option<Option<bool>> {
     match v.as_str()? {
         "Increasing" => Some(Some(true)),
@@ -4719,7 +4720,7 @@ impl Truth {
         // (Zeros on a stretch where f ≡ 0 though f isn't, a plateau's
         // turns: no list holds them, and no generator makes either. Read
         // as zeros and turns at the stretch's ends alone, they would pass
-        // a list that leaves the stretch out: round 25's audit.)
+        // a list that leaves the stretch out: the audit after review 24.)
         if row == "x_intercepts" && !self.flats[0].is_empty() {
             return Verdict::Unknown("zeros on a stretch where f ≡ 0 are not modelled".into());
         }
@@ -4969,7 +4970,7 @@ impl Truth {
         // covered: two pieces meeting at one enclosure that held two
         // turns, a piece of the other direction between them left out,
         // passed for true. x³ − x increasing up to [−0.6, 0.6] and from
-        // it: round 25's audit.)
+        // it: the audit after review 24.)
         let mut choices: Vec<Vec<(Ext, Ext)>> = Vec::new();
         for (lo, hi, dir) in &pieces {
             match self.piece_choices(lo, hi, *dir, scope) {
@@ -5112,7 +5113,7 @@ impl Truth {
     fn judge(&self, row: &str, scope: &Scope, value: &Value) -> Verdict {
         // (A window or period with a NaN end, or reversed, holds no real;
         // read as one it made a complete row over nothing, or over the
-        // line: round 25's audit.)
+        // line: the audit after review 24.)
         if let Scope::Window(a, b) | Scope::Period(a, b) = scope
             && !real_enc((*a, *b))
         {
@@ -5216,7 +5217,8 @@ impl Truth {
                     // f's value there in the item's y: each of its residues
                     // in a period of T asked, not the first member's alone.
                     // f's values at features of one kind agree for these
-                    // functions, so this held already: hardening, round 25.)
+                    // functions, so this held already: hardening, after
+                    // review 24.)
                     let orbit_fits = |s0: &Rational| {
                         let mut seen: Vec<Rational> = Vec::new();
                         let mut s = s0.clone();
@@ -5387,7 +5389,7 @@ impl Truth {
         // piece's stretch moved a whole number of periods (closed: the
         // poles between are no points of f's). (Each piece's ends were
         // asked only of some place in each enclosure and the enclosures'
-        // extents moved: the hole `judge_monotone` closed, round 25.)
+        // extents moved: the hole `judge_monotone` closed after review 24.)
         let s0 = match scope {
             Scope::Period(a, _) => *a,
             _ => 0.0,
@@ -5774,7 +5776,7 @@ fn context(fun: Fun) -> Result<Ctx, String> {
     };
     // (A Certified domain row that says otherwise is a false genuine row,
     // the panel's, and fails the run; it was only counted. One withheld
-    // is counted: round 25's audit.)
+    // is counted: the audit after review 24.)
     if !domain_as_built(&genuine["domain"], &truth.dom) {
         let certified = genuine["domain"].get("Certified").is_some();
         return Err(format!(
@@ -8394,7 +8396,7 @@ fn genuine(ctx: &mut Ctx, t: &mut Tally) {
         // one the replay refuses is only counted.
         // (Its status is part of what it says: Certified is all of them,
         // over the line or one period; Partial, over a window or points.
-        // The truth read only the scope: round 25's audit.)
+        // The truth read only the scope: the audit after review 24.)
         let verdict = if (status == "Certified") != scope.whole() {
             Verdict::False(format!("{status} over {covers}"))
         } else {
@@ -10208,7 +10210,7 @@ fn a_row_the_truth_cannot_judge_does_not_pass_the_run() {
     assert_clean(&tally);
 }
 
-// ------------------------------------------------------------ round 25's audit
+// ---------------------------------------------------- the audit after review 24
 
 /// Monotone pieces meeting at one enclosure that holds two turns: each
 /// piece true up to some place in it, the enclosures' extents covering
@@ -10540,13 +10542,13 @@ fn the_truth_reads_infinite_ends_without_panicking() {
 /// truth says: review 24's (R24-L-02's three crossing claims; two items
 /// at one double of f ≡ 0, R24-L-01; sin(x)°'s zeros as two families
 /// every 180·2³⁴, R24-L-03; a family of f ≡ 0 on [0, ∞) through −1,
-/// R24-L-04) and round 25's audit's (pieces meeting at one enclosure of
-/// two turns; a tail chain from the wrong side of f′'s zero; max(x, 0)
-/// increasing, its zeros {0}) refuted; each with a true control that is
-/// not. (Not reached: R24-L-01's two items clipped to one domain end,
-/// whose one point only the domain's exact end shows; a gap clear to
-/// infinity; the range of max(x, 0) said (−∞, ∞), every sampled value in
-/// it.)
+/// R24-L-04) and the audit after review 24's (pieces meeting at one
+/// enclosure of two turns; a tail chain from the wrong side of f′'s
+/// zero; max(x, 0) increasing, its zeros {0}) refuted; each with a true
+/// control that is not. (Not reached: R24-L-01's two items clipped to
+/// one domain end, whose one point only the domain's exact end shows; a
+/// gap clear to infinity; the range of max(x, 0) said (−∞, ∞), every
+/// sampled value in it.)
 #[test]
 fn the_refuter_catches_review_24s_examples() {
     replay::iv::init();
