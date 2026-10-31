@@ -5387,3 +5387,130 @@ fn an_item_alone_at_a_familys_member_is_listed_twice() {
     let w = rejected(&v).expect("180 listed alone and as a family's member, refused");
     assert!(w.contains("family"), "{w}");
 }
+
+/// A listed family: its first member's enclosure and its period's.
+type Family = ((f64, f64), (f64, f64));
+
+/// sin(x)°'s zeros over the window [−10, 370] (0, 180 and 360, each where
+/// f is exactly 0 and strictly monotone, f signed between), complete
+/// there, listing `families`.
+fn sin_zeros_over_a_window(families: &[Family]) -> serde_json::Value {
+    let mut v = certificate_in("sin(x)", None, TrigUnit::Degrees);
+    let fact = claims_of_kind(&mut v, "x_intercepts", "Simplifier");
+    let sign = |a: f64, b: f64, above: bool| {
+        serde_json::json!({"Beyond": {"x": {"a": a, "b": b}, "of": {"F": "F0"}, "c": 0.0,
+            "above": above}})
+    };
+    let zero = |at: f64| {
+        serde_json::json!({"ExactAt": {"x": {"a": at - 1.0, "b": at + 1.0}, "of": {"F": "F0"},
+            "c": 0.0, "at": at}})
+    };
+    let mut claims = vec![
+        sign(-10.0, -1.0, false),
+        zero(0.0),
+        sign(1.0, 179.0, true),
+        zero(180.0),
+        sign(181.0, 359.0, false),
+        zero(360.0),
+        sign(361.0, 370.0, true),
+    ];
+    claims.extend(fact);
+    let value: Vec<serde_json::Value> = families
+        .iter()
+        .map(|((a, b), (p, q))| {
+            serde_json::json!({"Every": {"x0": {"lo": a, "hi": b}, "period": {"lo": p, "hi": q}}})
+        })
+        .collect();
+    v["x_intercepts"] = serde_json::json!({"Partial": {"value": value,
+        "cert": {"covers": {"Window": {"a": -10.0, "b": 370.0}}, "claims": claims}}});
+    v
+}
+
+/// Two listed families whose members coincide list each of those numbers
+/// twice: a family stands for every one of its members. The replay held
+/// each proven place to an item of its own, never each member to a place
+/// of its own, so 1/2·tan(3x)°'s inflections every 60° from 60° and every
+/// 60° from 120°, one orbit, passed complete over a window (the claim
+/// fuzzer's long run, seed 7703, after review 25, every premise strong).
+/// Here sin(x)°'s zeros over [−10, 370]: every 360° from 0, from 180 and
+/// again from 360.
+#[test]
+fn two_families_of_one_orbit_list_their_members_twice() {
+    let one = |x: f64| ((x, x), (360.0, 360.0));
+    assert_eq!(
+        rejected(&sin_zeros_over_a_window(&[one(0.0), one(180.0)])),
+        None
+    );
+    let w = rejected(&sin_zeros_over_a_window(&[
+        one(0.0),
+        one(180.0),
+        one(360.0),
+    ]))
+    .expect("every 360° from 0 and from 360, refused");
+    assert!(w.contains("family"), "{w}");
+}
+
+/// A family beside a sub-orbit of it: every 720° from 0, its period read
+/// in [360, 720] (which holds f's, as each listed period must), beside
+/// every 360° from 0 lists 0 twice, and 720 if the window reached it.
+#[test]
+fn a_family_beside_a_sub_orbit_of_it_lists_its_members_twice() {
+    let w = rejected(&sin_zeros_over_a_window(&[
+        ((0.0, 0.0), (360.0, 360.0)),
+        ((180.0, 180.0), (360.0, 360.0)),
+        ((0.0, 0.0), (360.0, 720.0)),
+    ]))
+    .expect("a sub-orbit beside its family, refused");
+    assert!(w.contains("family"), "{w}");
+}
+
+/// A family whose enclosure is too wide to tell its members from another
+/// family's is not shown to list numbers of their own: every 360° from
+/// [−1, 181] beside every 360° from 0 may be 0 again, or 180. (The row is
+/// true read as 180; the replay holds it apart only where it can, as it
+/// does an item alone at a member.)
+#[test]
+fn families_too_wide_to_tell_apart_are_refused() {
+    let w = rejected(&sin_zeros_over_a_window(&[
+        ((0.0, 0.0), (360.0, 360.0)),
+        ((-1.0, 181.0), (360.0, 360.0)),
+    ]))
+    .expect("a member not shown apart, refused");
+    assert!(w.contains("family"), "{w}");
+}
+
+/// A vertical row's families are poles of their own too: tan(x)°'s
+/// asymptotes listed every 180° from 90° and again every 180° from 270°,
+/// one orbit, list each pole twice. The certifier never writes such a
+/// row (two asymptotes of one period not told apart leave it Unknown),
+/// but the replay's vertical row held only items listed alone apart
+/// (`repeats_listed`), and each proven pole to an item (`one_each`).
+#[test]
+fn a_vertical_rows_two_families_of_one_orbit_list_each_pole_twice() {
+    let genuine = certificate_in("tan(x)", None, TrigUnit::Degrees);
+    assert_eq!(rejected(&genuine), None);
+    let mut v = genuine.clone();
+    let items = value_of(&mut v, "vertical").as_array_mut().unwrap();
+    let family = items
+        .iter()
+        .find(|i| i.get("Every").is_some())
+        .expect("a family of poles")
+        .clone();
+    let x0 = family["Every"]["x0"]["lo"].as_f64().unwrap();
+    let mut again = family.clone();
+    again["Every"]["x0"] = serde_json::json!({"lo": x0 + 180.0, "hi": x0 + 180.0});
+    items.push(again);
+    let w = rejected(&v).expect("one orbit of poles listed twice, refused");
+    assert!(w.contains("family"), "{w}");
+    // (A sub-orbit beside it, every 360° from 90° read from [180, 360]:
+    // the same.)
+    let mut v = genuine.clone();
+    let mut wide = family.clone();
+    wide["Every"]["period"] = serde_json::json!({"lo": 180.0, "hi": 360.0});
+    value_of(&mut v, "vertical")
+        .as_array_mut()
+        .unwrap()
+        .push(wide);
+    let w = rejected(&v).expect("a sub-orbit of poles beside its family, refused");
+    assert!(w.contains("family"), "{w}");
+}

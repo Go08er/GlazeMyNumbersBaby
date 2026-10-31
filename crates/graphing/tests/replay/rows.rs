@@ -1244,6 +1244,177 @@ fn alone_at_a_member(found: &[Enc], listed: &[(Enc, Option<Enc>)]) -> Option<Enc
         .map(|(x, _)| *x)
 }
 
+/// Each member of a listed family stands for a number of its own: the
+/// converse of [`one_each`] (there each proven place needs an item of its
+/// own, here each member a place). A family stands for every one of its
+/// members, so two whose members coincide list each such number twice:
+/// 1/2·tan(3x)°'s inflections every 60° from 60° and every 60° from 120°,
+/// one orbit, passed complete over a window (the claim fuzzer's long run,
+/// seed 7703, after review 25), as would a family beside a sub-orbit of
+/// it. Over the row's span (its window or period, as far as the proven
+/// places reach; over points, their hull) each member lying in it is
+/// matched to a proven place it meets, no two to one; and a member is a
+/// number of its own only where some place it may be is no other
+/// family's member's (enclosures too wide to tell two members apart are
+/// refused, as [`alone_at_a_member`] refuses an item alone). Two members
+/// of one family are k·P apart: two numbers. For the list rows (zeros,
+/// turns, inflections, their proven places) and the vertical asymptotes
+/// (the poles the claims show, a family of them every 180° from 90° and
+/// again from 270° as tan(x)°'s). Returns why a member shares its place.
+fn members_apart(found: &[Enc], listed: &[(Enc, Option<Enc>)], span: Option<B>) -> Option<String> {
+    use rug::{Integer, Rational};
+    let families: Vec<(Enc, Enc)> = listed
+        .iter()
+        .filter_map(|(x, p)| p.map(|p| (*x, p)))
+        .collect();
+    if families.len() < 2 || found.is_empty() {
+        return None;
+    }
+    // Places, one inside another taken as one, as in `one_each`.
+    let mut places: Vec<Enc> = Vec::new();
+    let mut sorted = found.to_vec();
+    sorted.sort_by(|a, b| (b.hi - b.lo).total_cmp(&(a.hi - a.lo)));
+    for e in sorted {
+        if !places.iter().any(|p| p.contains(&e)) {
+            places.push(e);
+        }
+    }
+    let q = Rational::from_f64;
+    let lo = places.iter().map(|e| e.lo).fold(f64::INFINITY, f64::min);
+    let hi = places
+        .iter()
+        .map(|e| e.hi)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let (lo, hi) = span.map_or((lo, hi), |(a, b)| (lo.max(a), hi.min(b)));
+    let (Some(lo), Some(hi)) = (q(lo), q(hi)) else {
+        return None;
+    };
+    if lo > hi {
+        return None;
+    }
+    let places_q: Vec<(Rational, Rational)> = places
+        .iter()
+        .filter_map(|e| Some((q(e.lo)?, q(e.hi)?)))
+        .collect();
+    if places_q.len() != places.len() {
+        return None;
+    }
+    // Every member meeting the span: (family, its enclosure, wholly in
+    // the span), k from the least to the greatest whose member may meet it.
+    let mut members: Vec<(usize, Rational, Rational, bool)> = Vec::new();
+    for (i, (x0, p)) in families.iter().enumerate() {
+        let (Some(xl), Some(xh), Some(pl), Some(ph)) = (q(x0.lo), q(x0.hi), q(p.lo), q(p.hi))
+        else {
+            continue;
+        };
+        if pl <= 0 {
+            continue;
+        }
+        let a = Rational::from(&lo - &xh);
+        let b = Rational::from(&hi - &xl);
+        let least = Rational::from(&a / if a < 0 { &pl } else { &ph }).ceil();
+        let most = Rational::from(&b / if b < 0 { &ph } else { &pl }).floor();
+        let (mut k, last) = (least.numer().clone(), most.numer().clone());
+        if Integer::from(&last - &k) > 4096 {
+            return Some(format!(
+                "the family through {:e} has too many members in the span to hold apart",
+                x0.mid()
+            ));
+        }
+        while k <= last {
+            let kq = Rational::from(&k);
+            let (kl, kh) = if k >= 0 {
+                (Rational::from(&kq * &pl), Rational::from(&kq * &ph))
+            } else {
+                (Rational::from(&kq * &ph), Rational::from(&kq * &pl))
+            };
+            let (ml, mh) = (Rational::from(&xl + &kl), Rational::from(&xh + &kh));
+            let inside = lo <= ml && mh <= hi;
+            members.push((i, ml, mh, inside));
+            k += 1;
+        }
+    }
+    let meets = |m: &(usize, Rational, Rational, bool), j: usize| {
+        let (pl, ph) = &places_q[j];
+        m.1 <= *ph && *pl <= m.2
+    };
+    let options: Vec<Vec<usize>> = members
+        .iter()
+        .map(|m| (0..places.len()).filter(|&j| meets(m, j)).collect())
+        .collect();
+    let as_enc = |m: &(usize, Rational, Rational, bool)| Enc {
+        lo: m.1.to_f64(),
+        hi: m.2.to_f64(),
+    };
+    // Some place each may be that no other family's member may be.
+    for (m, o) in members.iter().zip(&options) {
+        let shared = |j: &usize| {
+            members
+                .iter()
+                .zip(&options)
+                .any(|(n, p)| n.0 != m.0 && p.contains(j))
+        };
+        if !o.is_empty() && o.iter().all(shared) {
+            let (x, d) = (as_enc(m), places[o[0]]);
+            return Some(format!(
+                "a member of the family through {:e}, at [{:e}, {:e}], may be the place at \
+                 [{:e}, {:e}] only where another listed family's member may be too: one number \
+                 listed twice",
+                families[m.0].0.mid(),
+                x.lo,
+                x.hi,
+                d.lo,
+                d.hi
+            ));
+        }
+    }
+    // A place of its own for each member in the span (augmenting paths).
+    fn assign(
+        m: usize,
+        options: &[Vec<usize>],
+        owner: &mut std::collections::HashMap<usize, usize>,
+        used: &mut std::collections::HashSet<usize>,
+    ) -> bool {
+        for &o in &options[m] {
+            if !used.insert(o) {
+                continue;
+            }
+            let free = match owner.get(&o).copied() {
+                None => true,
+                Some(n) => assign(n, options, owner, used),
+            };
+            if free {
+                owner.insert(o, m);
+                return true;
+            }
+        }
+        false
+    }
+    let mut owner = std::collections::HashMap::new();
+    for (m, member) in members.iter().enumerate() {
+        // (A member with no proven place is said elsewhere, or past the
+        // claims; one straddling the span's end may lie outside it.)
+        if !member.3 || options[m].is_empty() {
+            continue;
+        }
+        let mut used = std::collections::HashSet::new();
+        if !assign(m, &options, &mut owner, &mut used) {
+            let (x, d) = (as_enc(member), places[options[m][0]]);
+            return Some(format!(
+                "a member of the family through {:e}, at [{:e}, {:e}], has no proven place of \
+                 its own (the listed families' members there outnumber the places, [{:e}, {:e}] \
+                 among them): one number listed twice",
+                families[member.0].0.mid(),
+                x.lo,
+                x.hi,
+                d.lo,
+                d.hi
+            ));
+        }
+    }
+    None
+}
+
 /// Does `x` hold the enclosure `a` moved on k periods, a + k·p for every
 /// a and p in their enclosures? Exactly, in rationals.
 fn holds_shifted(x: &Enc, a: &Enc, p: &Enc, k: i32) -> bool {
@@ -1275,6 +1446,7 @@ fn match_items(
     derived: &[Enc],
     listed: &[(Enc, Option<Enc>)],
     complete: bool,
+    span: Option<B>,
     fits: &dyn Fn(usize, usize) -> bool,
     out: &mut RowResult,
 ) {
@@ -1303,6 +1475,9 @@ fn match_items(
             "{what} at [{:e}, {:e}] is listed alone, and as a listed family's member",
             x.lo, x.hi
         ));
+    }
+    if let Some(why) = members_apart(derived, listed, span) {
+        out.problems.push(format!("{what}: {why}"));
     }
     if !complete {
         return;
@@ -1694,6 +1869,7 @@ fn zeros_row(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Res
         &derived,
         &listed,
         complete(rc),
+        rc.region.as_ref().and_then(region_box),
         &|_, _| true,
         out,
     );
@@ -1839,7 +2015,8 @@ fn turns(
     };
     // (An item stands for a turn of its kind.)
     let fits = |j: usize, i: usize| kinds[j].is_none_or(|max| ch[i].1 == max);
-    match_items(what, &derived, &listed, complete(rc), &fits, out);
+    let span = rc.region.as_ref().and_then(region_box);
+    match_items(what, &derived, &listed, complete(rc), span, &fits, out);
     let periods: Vec<Enc> = listed.iter().filter_map(|(_, p)| *p).collect();
     families_follow(what, rc, &periods, out);
     repeats_listed(what, rc, &listed, out);
@@ -4574,6 +4751,13 @@ fn vertical(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Resu
                 a.lo, a.hi, b.lo, b.hi
             ));
         }
+    }
+    // (Each listed family's members poles of their own, complete or not:
+    // every 180° from 90° and again from 270° listed tan(x)°'s poles
+    // twice.)
+    let span = rc.region.as_ref().and_then(region_box);
+    if let Some(why) = members_apart(&poles, &listed, span) {
+        out.problems.push(format!("a vertical asymptote: {why}"));
     }
     Ok(())
 }
