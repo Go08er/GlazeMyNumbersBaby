@@ -458,7 +458,15 @@ CI also runs checks that need more than `cargo test --workspace`:
   row or premise, genuine (2,436 rows; 145 true ones refused by the
   replay) or made up, no row the truth couldn't judge, and the refuter
   nothing; the full exhaustive run on the audited truth (54,221,736
-  combinations about 126 places, as before) none.
+  combinations about 126 places, as before) none. Review 25 found the
+  truth counting a periodic f's cycles in doubles, taking a family's
+  period for the first multiple in its enclosure and misreading an end
+  enclosed from −∞; the sweep after it found the same rounding in the
+  domain's poles, in a period's repeats of the monotone pieces and in
+  the order of a range's pieces, and a scope from −∞ sent to an exact
+  conversion. Every count of periods is exact now (rational floors in
+  degrees, MPFR's directed bounds in radians), the refuter's too, each
+  fix with a regression.
 - **Random cross-checking** (`--test crossfuzz`, same feature): the checks
   above take ordinary functions, shifted and scaled. This one generates
   expressions aimed at the families the review rounds kept finding bugs in
