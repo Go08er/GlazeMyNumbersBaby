@@ -6074,3 +6074,38 @@ fn a_place_past_the_doubles_is_refused() {
     assert!(r.claims.iter().all(|c| c.outcome.class == Class::Strong));
     assert!(rejected(&v).is_some());
 }
+
+/// A monotone piece listed twice: two pieces where there is one, complete
+/// or not, and so with one end enclosed two ways (review 26's mutation
+/// tester, after R26-L-05).
+#[test]
+fn a_monotone_piece_listed_twice_is_refused() {
+    use serde_json::json;
+    let v = certificate("x^3-3x");
+    assert_eq!(rejected(&v), None);
+    let mut twice = v.clone();
+    let items = value_of(&mut twice, "monotonicity").as_array_mut().unwrap();
+    items.insert(1, items[0].clone());
+    assert!(rejected(&twice).is_some(), "complete");
+    // (Partial over points; the period row, which rests on a complete
+    // monotone row reaching ±∞, withheld.)
+    let partial = |v: &serde_json::Value| {
+        let mut v = v.clone();
+        let mut b = body_of(&mut v, "monotonicity").clone();
+        b["cert"]["covers"] = json!("Points");
+        v["monotonicity"] = json!({ "Partial": b });
+        v["period"] = json!({"Unknown": {"reason": "withheld"}});
+        v
+    };
+    assert_eq!(rejected(&partial(&v)), None);
+    assert!(rejected(&partial(&twice)).is_some(), "partial");
+    // Increasing up to [−1 − 2⁻²⁰, −1 + 2⁻²⁰] beside up to −1.
+    let mut wide = v.clone();
+    let items = value_of(&mut wide, "monotonicity").as_array_mut().unwrap();
+    let mut copy = items[0].clone();
+    let d = 2f64.powi(-20);
+    copy["on"]["hi"] = json!({"At": {"x": {"lo": -1.0 - d, "hi": -1.0 + d}, "closed": true}});
+    items.insert(1, copy);
+    assert!(rejected(&wide).is_some(), "an end enclosed two ways");
+    assert!(rejected(&partial(&wide)).is_some(), "the same, partial");
+}

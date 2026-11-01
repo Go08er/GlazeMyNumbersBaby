@@ -2840,6 +2840,48 @@ fn monotonicity(
             })
             .collect(),
     );
+    // One listed piece is one piece of f's: the same piece twice says
+    // there are two (each piece of a monotone row listed again beside it
+    // passed, complete or not, as 1/x's asymptote listed twice did:
+    // review 26's mutation tester, after R26-L-05). So two of one
+    // direction share no reals: one inside the other, or the two
+    // overlapping past their ends' enclosures (the same piece with an end
+    // enclosed two ways), are one listed twice.
+    let listed: Vec<(Piece, &str)> = list(&rc.value)?
+        .iter()
+        .map(|it| {
+            let p = piece(it.get("on").ok_or("on")?)?;
+            Ok((p, it.get("dir").and_then(Value::as_str).unwrap_or("")))
+        })
+        .collect::<Result<_, String>>()?;
+    // (A piece's least high end and greatest low end: past both, it has
+    // reals; two pieces whose such stretches overlap share reals.)
+    let inner = |p: &Piece| -> B {
+        let lo = match p.lo {
+            Bound::NegInf => f64::NEG_INFINITY,
+            Bound::PosInf => f64::INFINITY,
+            Bound::At { x, .. } => x.hi,
+        };
+        let hi = match p.hi {
+            Bound::NegInf => f64::NEG_INFINITY,
+            Bound::PosInf => f64::INFINITY,
+            Bound::At { x, .. } => x.lo,
+        };
+        (lo, hi)
+    };
+    if let Some((p, d)) = listed.iter().enumerate().find_map(|(i, (p, d))| {
+        listed[i + 1..].iter().find_map(|(q, e)| {
+            let (a, b) = (inner(p), inner(q));
+            let shared = a.0.max(b.0) < a.1.min(b.1);
+            (d == e && (p == q || shared)).then_some((p, d))
+        })
+    }) {
+        let (a, b) = extent(p);
+        out.problems.push(format!(
+            "the {} piece on [{a:e}, {b:e}] is listed twice: two pieces where there is one",
+            d.to_lowercase()
+        ));
+    }
     for item in list(&rc.value)? {
         let p = piece(item.get("on").ok_or("on")?)?;
         let dir = item.get("dir").and_then(Value::as_str).unwrap_or("");
