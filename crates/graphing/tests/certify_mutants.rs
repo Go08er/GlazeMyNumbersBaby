@@ -351,6 +351,8 @@ const ONE_OF_TWO: &str = "a partial row lists what is proven: an enclosure holdi
                           numbers holds the one it was listed for, and says nothing of the other";
 const NO_EXACT_FORM: &str = "the exact form is how the enclosure reads, not a narrower claim: \
                              without it the enclosure stands";
+const UNION: &str = "the domain's pieces and excluded families and the range's pieces are a set, \
+                     the union of what is listed: the same one twice is the same set";
 
 /// An item of a list row made up at `x` (nothing in the certificate
 /// proves it).
@@ -584,6 +586,122 @@ fn members_in(x0: (f64, f64), period: (f64, f64), (a, b): (f64, f64)) -> Vec<(f6
         })
         .filter(|m| m.1 >= a && m.0 <= b)
         .collect()
+}
+
+/// a + b as a double: the nearest (`round` None), or rounded down
+/// (`Some(false)`) or up (`Some(true)`), the exact sum at or above (below)
+/// it.
+fn add_round(a: f64, b: f64, round: Option<bool>) -> f64 {
+    let s = a + b;
+    if !s.is_finite() {
+        return s;
+    }
+    // (Two-sum: s + err is a + b exactly.)
+    let bb = s - a;
+    let err = (a - (s - bb)) + (b - bb);
+    match (round, err) {
+        (Some(true), e) if e > 0.0 => s.next_up(),
+        (Some(false), e) if e < 0.0 => s.next_down(),
+        _ => s,
+    }
+}
+
+/// The claim `c` moved `by` along x: each box, point, excluded place and
+/// one-sided limit's point `by` on. For f of period `by` it says of the
+/// reals a period on what `c` says of its own, but for the rounding: each
+/// end to the nearest double (`inward` false: boxes meeting at an end
+/// still meet), or a box a claim decides drawn in to the doubles inside
+/// it, a gap's and a kink's box and an excluded place's pushed out, and a
+/// point only where it moves exactly (so a stretch of one sign up to a
+/// pole a double past it stays short of the pole's repeat). Either may
+/// make it false, so a mutant built on it is made only where the replay
+/// proves it. None for a claim of no place (a fact, a family of excluded
+/// points, a tail or a limit at ±∞) or an end taken past the doubles.
+fn claim_moved(c: &Value, by: f64, inward: bool) -> Option<Value> {
+    let (kind, b) = c.as_object()?.iter().next()?;
+    if matches!(
+        kind.as_str(),
+        "Simplifier" | "Family" | "TailBeyond" | "TailChain" | "TailValue" | "TailLine"
+    ) {
+        return None;
+    }
+    // (How each end rounds: None to the nearest; up or down; exactly.)
+    let mv = |x: &Value, round: Option<bool>, exact: bool| -> Option<Value> {
+        let x = replay::r(x).ok()?;
+        let y = add_round(x, by, round);
+        let exact = !exact || add_round(x, by, Some(false)) == add_round(x, by, Some(true));
+        (y.is_finite() && exact).then(|| num(y))
+    };
+    let out = matches!(kind.as_str(), "Gap" | "GapClear" | "Kink");
+    let mut nb = b.clone();
+    for k in ["x", "near", "at"] {
+        let Some(v) = b.get(k) else { continue };
+        // (A box drawn in, or pushed out: an excluded place's `at`, a
+        // gap's and a kink's box.)
+        let push_out = out || k == "at";
+        let (lo, hi) = match (inward, push_out) {
+            (false, _) => (None, None),
+            (true, true) => (Some(false), Some(true)),
+            (true, false) => (Some(true), Some(false)),
+        };
+        nb[k] = match v {
+            Value::Null => Value::Null,
+            Value::Object(o) if o.contains_key("a") => {
+                json!({"a": mv(&v["a"], lo, false)?, "b": mv(&v["b"], hi, false)?})
+            }
+            Value::Object(o) if kind == "Limit" => {
+                let (side, p) = o.iter().next()?;
+                json!({side.as_str(): mv(p, None, inward)?})
+            }
+            Value::Number(_) => mv(v, None, inward)?,
+            _ => return None,
+        };
+    }
+    Some(json!({kind.as_str(): nb}))
+}
+
+/// An item's place, and its family's period if it is one.
+type ItemPlace = ((f64, f64), Option<(f64, f64)>);
+
+/// A list row's item's place (an `At`, a family's x₀, a turn's x) and the
+/// family's period, if it is one.
+fn item_place(row: &str, it: &Value) -> Option<ItemPlace> {
+    match row {
+        "x_intercepts" | "vertical" => match it.get("At") {
+            Some(x) => Some((enc_of(x)?, None)),
+            None => {
+                let e = it.get("Every")?;
+                Some((enc_of(&e["x0"])?, Some(enc_of(&e["period"])?)))
+            }
+        },
+        "extrema" | "inflections" => {
+            let every = match it.get("every").filter(|v| !v.is_null()) {
+                Some(e) => Some(enc_of(e)?),
+                None => None,
+            };
+            Some((enc_of(it.get("x")?)?, every))
+        }
+        _ => None,
+    }
+}
+
+/// The item `it` of a list row with its place `x` and its family's
+/// period `every` (None: a point alone).
+fn item_at(row: &str, it: &Value, x: (f64, f64), every: Option<(f64, f64)>) -> Value {
+    let mut one = it.clone();
+    match row {
+        "x_intercepts" | "vertical" => {
+            one = match every {
+                None => json!({"At": enc(x.0, x.1)}),
+                Some(p) => json!({"Every": {"x0": enc(x.0, x.1), "period": enc(p.0, p.1)}}),
+            };
+        }
+        _ => {
+            one["x"] = enc(x.0, x.1);
+            one["every"] = every.map_or(Value::Null, |p| enc(p.0, p.1));
+        }
+    }
+    one
 }
 
 /// Every mutant of the row `row` of the certificate `base`; `other`: a
@@ -1262,6 +1380,22 @@ fn mutants_of(
             );
         }
     }
+
+    // ---- the edits review 26 made by hand, each an operator
+    //
+    // Review 26 (R26-L-01 to L-06) edited genuine certificates by hand into
+    // six false rows the replay accepted, every premise strong; none of the
+    // operators above made those edits. Each is one here, applied to every
+    // certificate where it makes sense.
+    review26_mutants(
+        base,
+        row,
+        &value,
+        &covers,
+        points_only,
+        &claims_now,
+        &mut push,
+    );
 
     // ---- a window from a place, the place left out
     //
@@ -2212,6 +2346,570 @@ fn mutants_of(
     }
 }
 
+/// [`mutants_of`]'s `push`: an operator, what it changed, why the change
+/// is content-preserving where it is, and the edit.
+type Push<'p> = dyn FnMut(&'static str, String, Option<&'static str>, &dyn Fn(&mut Value)) + 'p;
+
+/// The operators for the edits review 26 made by hand ([`mutants_of`]'s
+/// arguments, and its `push`).
+fn review26_mutants(
+    base: &Value,
+    row: &'static str,
+    value: &Value,
+    covers: &Value,
+    points_only: bool,
+    claims_now: &[Value],
+    push: &mut Push<'_>,
+) {
+    // ---- one item listed twice (R26-L-05)
+    //
+    // A copy of an item beside it. One listed item stands for one zero,
+    // turn, pole, piece or asymptote, so a list holding one twice says
+    // there are two: 1/x's asymptote at 0 listed twice passed, the vertical
+    // row never asking that each listed item have a place of its own.
+    for p in paths(value, &Value::is_array) {
+        let list = at(&mut value.clone(), &p)
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let ends = (row == "range" && p.is_empty())
+            .then(|| base["range_ends"].as_array().cloned())
+            .flatten();
+        let union = matches!(row, "domain" | "range").then_some(UNION);
+        for i in (0..list.len()).filter(|i| taken(*i, list.len())) {
+            let mut twice = list.clone();
+            twice.insert(i + 1, list[i].clone());
+            let ends = ends.clone().map(|mut e| {
+                if i < e.len() {
+                    let pair = e[i].clone();
+                    e.insert(i + 1, pair);
+                }
+                Value::Array(e)
+            });
+            push(
+                "item listed twice",
+                format!(
+                    "{}: item {i} of {} listed again beside it",
+                    show(&p),
+                    list.len()
+                ),
+                union,
+                &|v: &mut Value| {
+                    *at(&mut body_mut(v, row)["value"], &p) = Value::Array(twice.clone());
+                    if let Some(e) = &ends {
+                        v["range_ends"] = e.clone();
+                    }
+                },
+            );
+        }
+    }
+    if !matches!(row, "x_intercepts" | "vertical" | "extrema" | "inflections") {
+        return;
+    }
+    let items = value.as_array().cloned().unwrap_or_default();
+    let places: Vec<Option<ItemPlace>> = items.iter().map(|it| item_place(row, it)).collect();
+    let mut session = replay::Session::default();
+    // The certificate with the row's value `list`, its claims `claims`, over
+    // `over` (Partial, a window) or as it is.
+    let as_row = |list: &[Value], claims: &[Value], over: Option<&Value>| -> Value {
+        let mut v = base.clone();
+        let mut b = body_mut(&mut v, row).clone();
+        b["value"] = Value::Array(list.to_vec());
+        b["cert"]["claims"] = Value::Array(claims.to_vec());
+        match over {
+            Some(c) => {
+                b["cert"]["covers"] = c.clone();
+                v[row] = json!({ "Partial": b });
+            }
+            None => *body_mut(&mut v, row) = b,
+        }
+        v
+    };
+    // (Every premise of the row proven; and the row following from them.)
+    let proven = |v: &Value, s: &mut replay::Session| {
+        replay::replay_in(v, s, Some(row)).is_ok_and(|r| {
+            r.claims
+                .iter()
+                .all(|c| matches!(c.outcome.class, replay::Class::Strong | replay::Class::Weak))
+        })
+    };
+    let follows = |v: &Value, s: &mut replay::Session| {
+        replay::replay_in(v, s, Some(row)).is_ok_and(|r| r.refusal().is_none())
+    };
+
+    // ---- a place at infinity (R26-L-02)
+    //
+    // An item's place (a point, a family's x₀, a turn's x) at +∞ or −∞,
+    // where no real number is: a zero at [∞, ∞] of y = 0 passed, its value
+    // there "0".
+    for (i, it) in items.iter().enumerate() {
+        let Some((_, every)) = places[i] else {
+            continue;
+        };
+        if !taken(i, items.len()) {
+            continue;
+        }
+        for (name, x) in [("+∞", f64::INFINITY), ("−∞", f64::NEG_INFINITY)] {
+            let mut list = items.clone();
+            list[i] = item_at(row, it, (x, x), every);
+            push(
+                "a place at infinity",
+                format!("item {i}'s place at {name}"),
+                None,
+                &|v: &mut Value| body_mut(v, row)["value"] = Value::Array(list.clone()),
+            );
+        }
+    }
+    // A zero beyond the doubles where f → 0, pinned at that infinity by a
+    // value, exact or touching claim: exp(−x)'s "zero" in [MAX, ∞] passed,
+    // f "0 at +∞". (By the genuine horizontal row: an asymptote y = c with
+    // c's enclosure holding 0.)
+    if row == "x_intercepts" {
+        let to_0 = |side: &str| {
+            body(base, "horizontal").is_some_and(|(_, h)| {
+                h["value"].as_array().is_some_and(|hs| {
+                    hs.iter().any(|a| {
+                        a["side"] == side
+                            && enc_of(&a["y"]).is_some_and(|(lo, hi)| lo <= 0.0 && 0.0 <= hi)
+                    })
+                })
+            })
+        };
+        for (side, inf, beyond) in [
+            ("Right", f64::INFINITY, (f64::MAX, f64::INFINITY)),
+            ("Left", f64::NEG_INFINITY, (f64::NEG_INFINITY, -f64::MAX)),
+        ] {
+            if !to_0(side) {
+                continue;
+            }
+            let bx = json!({"a": num(beyond.0), "b": num(beyond.1)});
+            let pins = [
+                (
+                    "a value 0 there",
+                    json!({"Value": {"x": {"a": num(inf), "b": num(inf)}, "of": {"F": "F0"},
+                        "lo": 0.0, "hi": 0.0}}),
+                ),
+                (
+                    "0 exactly there",
+                    json!({"ExactAt": {"x": bx, "of": {"F": "F0"}, "c": 0.0, "at": num(inf)}}),
+                ),
+                (
+                    "touching 0 there from above",
+                    json!({"Touch": {"x": bx, "of": {"F": "F0"}, "c": 0.0, "at": num(inf),
+                        "order": 1, "above": true}}),
+                ),
+                (
+                    "touching 0 there from below",
+                    json!({"Touch": {"x": bx, "of": {"F": "F0"}, "c": 0.0, "at": num(inf),
+                        "order": 1, "above": false}}),
+                ),
+            ];
+            for (how, pin) in pins {
+                let mut list = items.clone();
+                list.push(json!({"At": enc(beyond.0, beyond.1)}));
+                let mut claims = claims_now.to_vec();
+                claims.push(pin);
+                push(
+                    "a zero beyond the doubles, pinned at infinity",
+                    format!("a zero in [{:e}, {:e}], f {how}", beyond.0, beyond.1),
+                    None,
+                    &|v: &mut Value| *v = as_row(&list, &claims, None),
+                );
+            }
+        }
+    }
+
+    // ---- a place stretched over the next, of either kind (R26-L-04)
+    //
+    // An item (or a family's x₀) widened to hold the next place too, with
+    // what proves f's value over the wider box (a turn's) or f unbounded in
+    // it (a pole's); the next item left out, or (a turn of the other kind)
+    // kept, the wide one called its kind. An enclosure holding turns of
+    // both kinds is either, so the list's kind said nothing to the rest: a
+    // family of sin(x)°'s maxima over [−90, 270] listed its minima too, and
+    // two minimum families of (cos 2x + cos x)° both stood for the one at
+    // 104.48°, each on a maximum of its own. (For points listed alone, the
+    // next one left out, of zeros and poles, see "two places listed as
+    // one".)
+    let kind = |it: &Value| it.get("kind").and_then(Value::as_str).map(str::to_string);
+    for i in 0..items.len().saturating_sub(1) {
+        let (Some((xi, ei)), Some((xj, _))) = (places[i], places[i + 1]) else {
+            continue;
+        };
+        if !taken(i, items.len()) {
+            continue;
+        }
+        let hull = (xi.0.min(xj.0), xi.1.max(xj.1));
+        if !(hull.0.is_finite() && hull.1.is_finite()) {
+            continue;
+        }
+        let (ki, kj) = (kind(&items[i]), kind(&items[i + 1]));
+        // (stretched item's kind, next kept, what, benign)
+        let mut shapes: Vec<(Option<String>, bool, String, Option<&'static str>)> = Vec::new();
+        if ei.is_some() || matches!(row, "extrema" | "inflections") {
+            shapes.push((
+                ki.clone(),
+                false,
+                format!("item {i} stretched over item {}, that one left out", i + 1),
+                points_only.then_some(ONE_OF_TWO),
+            ));
+        }
+        if ki.is_some() && ki != kj {
+            let k = kj.clone().unwrap_or_default();
+            shapes.push((
+                kj.clone(),
+                false,
+                format!(
+                    "item {i} stretched over item {}, called {k}, that one left out",
+                    i + 1
+                ),
+                points_only.then_some(ONE_OF_TWO),
+            ));
+            shapes.push((
+                kj.clone(),
+                true,
+                format!("item {i} stretched over item {}, called {k}", i + 1),
+                None,
+            ));
+        }
+        for (k, keep, what, benign) in shapes {
+            let mut one = item_at(row, &items[i], hull, ei);
+            if let Some(k) = &k {
+                one["kind"] = json!(k);
+            }
+            let mut list = items.clone();
+            list[i] = one.clone();
+            if !keep {
+                list.remove(i + 1);
+            }
+            // What proves the stretched item: f's value over it (the two
+            // turns' values, else any), f unbounded in it.
+            let mut tries: Vec<(Value, Option<Value>)> = Vec::new();
+            match row {
+                "extrema" | "inflections" => {
+                    let y = match (enc_of(&items[i]["y"]), enc_of(&items[i + 1]["y"])) {
+                        (Some(a), Some(b)) => (a.0.min(b.0), a.1.max(b.1)),
+                        _ => continue,
+                    };
+                    for y in [y, (f64::NEG_INFINITY, f64::INFINITY)] {
+                        let mut l = list.clone();
+                        l[i]["y"] = enc(y.0, y.1);
+                        tries.push((
+                            Value::Array(l),
+                            Some(json!({"Value": {"x": {"a": num(hull.0), "b": num(hull.1)},
+                                "of": {"F": "F0"}, "lo": num(y.0), "hi": num(y.1)}})),
+                        ));
+                    }
+                }
+                "vertical" => tries.push((
+                    Value::Array(list.clone()),
+                    Some(
+                        json!({"Unbounded": {"near": {"a": num(hull.0), "b": num(hull.1)},
+                        "at": {"a": num(hull.0), "b": num(hull.1)}}}),
+                    ),
+                )),
+                _ => tries.push((Value::Array(list.clone()), None)),
+            }
+            for (l, claim) in tries {
+                let mut claims = claims_now.to_vec();
+                claims.extend(claim);
+                let l = l.as_array().cloned().unwrap_or_default();
+                let v = as_row(&l, &claims, None);
+                if proven(&v, &mut session) {
+                    push(
+                        "a place stretched over the next",
+                        what.clone(),
+                        benign,
+                        &|m: &mut Value| *m = v.clone(),
+                    );
+                    break;
+                }
+            }
+        }
+    }
+
+    // Two turns of one kind each stretched over the turn of the other kind
+    // between them, and called its kind (with what proves f's value over
+    // each wider box), alone in a partial row: each holds a turn of its
+    // own, of the kind it isn't, and both stand for the one between. Two
+    // minimum families of (cos 2x + cos x)° passed so, each on a maximum
+    // of its own (R26-L-04). (From a complete row, its items one after
+    // another: no other turn between.)
+    if row == "extrema" && !points_only {
+        let any = (f64::NEG_INFINITY, f64::INFINITY);
+        for i in 0..items.len().saturating_sub(2) {
+            let (Some((xi, ei)), Some((xm, _)), Some((xk, ek))) =
+                (places[i], places[i + 1], places[i + 2])
+            else {
+                continue;
+            };
+            let (ki, km, kk) = (kind(&items[i]), kind(&items[i + 1]), kind(&items[i + 2]));
+            if !taken(i, items.len()) || km.is_none() || ki == km || kk == km {
+                continue;
+            }
+            let h1 = (xi.0.min(xm.0), xi.1.max(xm.1));
+            let h2 = (xm.0.min(xk.0), xm.1.max(xk.1));
+            if ![h1.0, h1.1, h2.0, h2.1].iter().all(|e| e.is_finite()) {
+                continue;
+            }
+            let mut list = Vec::new();
+            let mut claims = claims_now.to_vec();
+            for (j, h, e) in [(i, h1, ei), (i + 2, h2, ek)] {
+                let mut one = item_at(row, &items[j], h, e);
+                one["kind"] = json!(km);
+                one["y"] = enc(any.0, any.1);
+                list.push(one);
+                claims.push(json!({"Value": {"x": {"a": num(h.0), "b": num(h.1)},
+                    "of": {"F": "F0"}, "lo": num(any.0), "hi": num(any.1)}}));
+            }
+            let v = as_row(&list, &claims, Some(&json!("Points")));
+            if proven(&v, &mut session) {
+                push(
+                    "two turns stretched over the one between",
+                    format!(
+                        "items {i} and {} stretched over item {}, called {}, alone over points",
+                        i + 2,
+                        i + 1,
+                        km.unwrap_or_default()
+                    ),
+                    None,
+                    &|m: &mut Value| *m = v.clone(),
+                );
+            }
+        }
+    }
+
+    // ---- families over two periods: an anchor alone, a family listed
+    //      again (R26-L-01, L-03, L-06)
+    //
+    // A row over one period of f, its families every P (one double, the
+    // same for each), with the claims of the period and the same claims
+    // one period on (`claim_moved`). Only where the replay proves every
+    // premise and takes the row so, its value as it is (in radians a
+    // period is no double, and nothing is made). Then:
+    //
+    // * complete over a window two periods wide, one family listed as its
+    //   anchor alone, the others kept: its member a period on is in the
+    //   window and listed by nothing. A point's coverage took any listed
+    //   family's period, so sin(x)°'s zero at 0 alone beside every 360°
+    //   from 180 passed complete over [−10, 370] (R26-L-06). And the
+    //   converse: every member in the window listed alone (a row the
+    //   replay takes), and one anchor as its family again, its member a
+    //   period on still listed beside it;
+    // * a family listed again from its member one period on: one orbit
+    //   twice. As it is, with its period from 0, or its anchor from −∞,
+    //   which the replay skipped (R26-L-01); and over a window between
+    //   members, which no member enters (R26-L-03).
+    let Some(Value::Object(w)) = covers.get("Period") else {
+        return;
+    };
+    let (Some(a), Some(b)) = (
+        w.get("a").and_then(|x| replay::r(x).ok()),
+        w.get("b").and_then(|x| replay::r(x).ok()),
+    ) else {
+        return;
+    };
+    let Some(Some((_, Some(per)))) = places.first() else {
+        return;
+    };
+    let per = *per;
+    if !(per.0 == per.1
+        && per.0 > 0.0
+        && places
+            .iter()
+            .all(|p| p.is_some_and(|(x, e)| e == Some(per) && x.0.is_finite() && x.1.is_finite())))
+    {
+        return;
+    }
+    let pp = per.0;
+    // (Each end moved to the nearest double; else drawn in or pushed out.)
+    let Some(claims2) = [false, true].into_iter().find_map(|inward| {
+        let mut claims2 = claims_now.to_vec();
+        claims2.extend(claims_now.iter().filter_map(|c| claim_moved(c, pp, inward)));
+        follows(&as_row(&items, &claims2, None), &mut session).then_some(claims2)
+    }) else {
+        return;
+    };
+    let moved = |x: (f64, f64)| (x.0 + pp, x.1 + pp);
+    let two = json!({"Window": {"a": num(a), "b": num(b + pp)}});
+    if follows(&as_row(&items, &claims2, Some(&two)), &mut session) {
+        for (i, it) in items.iter().enumerate() {
+            let Some((x, _)) = places[i] else { continue };
+            if !taken(i, items.len()) {
+                continue;
+            }
+            let mut list = items.clone();
+            list[i] = item_at(row, it, x, None);
+            let v = as_row(&list, &claims2, Some(&two));
+            push(
+                "a family's anchor alone, its repeat in the window",
+                format!(
+                    "item {i} alone at [{:e}, {:e}], the others families, complete over [{a:e}, \
+                     {:e}] (the claims and again a period on)",
+                    x.0,
+                    x.1,
+                    b + pp
+                ),
+                None,
+                &|m: &mut Value| *m = v.clone(),
+            );
+        }
+    }
+    let mut points: Vec<Value> = Vec::new();
+    for (it, p) in items.iter().zip(&places) {
+        let (x, _) = p.expect("a family");
+        points.push(item_at(row, it, x, None));
+        points.push(item_at(row, it, moved(x), None));
+    }
+    if follows(&as_row(&points, &claims2, Some(&two)), &mut session) {
+        for (i, it) in items.iter().enumerate() {
+            let Some((x, e)) = places[i] else { continue };
+            if !taken(i, items.len()) {
+                continue;
+            }
+            let mut list = points.clone();
+            list[2 * i] = item_at(row, it, x, e);
+            let v = as_row(&list, &claims2, Some(&two));
+            push(
+                "a point called a family beside its repeat",
+                format!(
+                    "every member over [{a:e}, {:e}] alone, but item {i}'s family again, its \
+                     member a period on alone beside it",
+                    b + pp
+                ),
+                None,
+                &|m: &mut Value| *m = v.clone(),
+            );
+        }
+    }
+    // A family of one kind stretched over another kind's member and that
+    // member's repeat, the other family left out, complete over the
+    // period between them: sin(x)°'s maxima, every 360° from [−90, 270],
+    // passed for the row complete over [−100, 280], its minima at −90 and
+    // 270 left out (R26-L-04).
+    if row == "extrema" {
+        let any = (f64::NEG_INFINITY, f64::INFINITY);
+        for (i, j) in (0..items.len()).flat_map(|i| (0..items.len()).map(move |j| (i, j))) {
+            let (Some((_, _)), Some((xj, _))) = (places[i], places[j]) else {
+                continue;
+            };
+            if i == j || !taken(i, items.len()) || kind(&items[i]) == kind(&items[j]) {
+                continue;
+            }
+            let hull = (xj.0, moved(xj).1);
+            let mut one = item_at(row, &items[i], hull, Some(per));
+            one["y"] = enc(any.0, any.1);
+            let mut list = items.clone();
+            list[i] = one;
+            list.remove(j);
+            // (The claims about that period alone: a place a claim proves
+            // outside it is one more for the family's members.)
+            let mut claims: Vec<Value> = claims2
+                .iter()
+                .filter(|c| claim_spot(c).is_none_or(|(x, _)| x.0 <= hull.1 && hull.0 <= x.1))
+                .cloned()
+                .collect();
+            claims.push(json!({"Value": {"x": {"a": num(hull.0), "b": num(hull.1)},
+                "of": {"F": "F0"}, "lo": num(any.0), "hi": num(any.1)}}));
+            let over = json!({"Window": {"a": num(hull.0), "b": num(hull.1)}});
+            let v = as_row(&list, &claims, Some(&over));
+            if proven(&v, &mut session) {
+                push(
+                    "a family stretched over a member of another kind and its repeat",
+                    format!(
+                        "item {i} every [{:e}, {:e}] from [{:e}, {:e}], item {j} left out, \
+                         complete over that",
+                        per.0, per.1, hull.0, hull.1
+                    ),
+                    None,
+                    &|m: &mut Value| *m = v.clone(),
+                );
+            }
+        }
+    }
+    // A window between members: the middle third of the widest stretch of
+    // the period's window between anchors.
+    let mut ends: Vec<f64> = vec![a, b];
+    for p in places.iter().flatten() {
+        ends.extend([p.0.0, p.0.1]);
+    }
+    ends.sort_by(f64::total_cmp);
+    let between = ends
+        .windows(2)
+        .map(|w| (w[0], w[1]))
+        .filter(|(l, h)| places.iter().flatten().all(|p| p.0.1 <= *l || *h <= p.0.0))
+        .max_by(|p, q| (p.1 - p.0).total_cmp(&(q.1 - q.0)));
+    for (i, it) in items.iter().enumerate() {
+        let Some((x, _)) = places[i] else { continue };
+        if !taken(i, items.len()) {
+            continue;
+        }
+        let x1 = moved(x);
+        let copies = [
+            ("", x1, per, None),
+            (", its period from 0", x1, (0.0, per.1), None),
+            (
+                ", its anchor from −∞",
+                (f64::NEG_INFINITY, x1.1),
+                per,
+                Some((f64::NEG_INFINITY, f64::INFINITY)),
+            ),
+        ];
+        for (how, cx, cp, wide_y) in copies {
+            let mut copy = item_at(row, it, cx, Some(cp));
+            let mut claims = claims2.clone();
+            // (A turn's value over an anchor from −∞: any.)
+            if let Some(y) = wide_y
+                && matches!(row, "extrema" | "inflections")
+            {
+                copy["y"] = enc(y.0, y.1);
+                claims.push(json!({"Value": {"x": {"a": num(cx.0), "b": num(cx.1)},
+                    "of": {"F": "F0"}, "lo": num(y.0), "hi": num(y.1)}}));
+            }
+            if wide_y.is_some() && row == "vertical" {
+                claims.push(
+                    json!({"Unbounded": {"near": {"a": num(cx.0), "b": num(cx.1)},
+                    "at": {"a": num(cx.0), "b": num(cx.1)}}}),
+                );
+            }
+            let mut list = items.clone();
+            list.insert(i + 1, copy);
+            let v = as_row(&list, &claims, None);
+            if !proven(&v, &mut session) {
+                continue;
+            }
+            push(
+                "a family listed again one period on",
+                format!(
+                    "item {i}'s family again from [{:e}, {:e}], every [{:e}, {:e}]{how}",
+                    cx.0, cx.1, cp.0, cp.1
+                ),
+                None,
+                &|m: &mut Value| *m = v.clone(),
+            );
+            if let Some((l, h)) = between
+                && how.is_empty()
+            {
+                let third = (h - l) / 3.0;
+                let narrow = json!({"Window": {"a": num(l + third), "b": num(h - third)}});
+                let v = as_row(&list, &claims, Some(&narrow));
+                push(
+                    "a family listed again, over a window between members",
+                    format!(
+                        "item {i}'s family again from [{:e}, {:e}], complete over [{:e}, {:e}]",
+                        cx.0,
+                        cx.1,
+                        l + third,
+                        h - third
+                    ),
+                    None,
+                    &|m: &mut Value| *m = v.clone(),
+                );
+            }
+        }
+    }
+}
+
 // ------------------------------------------------------------ the run
 
 /// The settings a mutant is replayed in: with every row, with the domain
@@ -2579,17 +3277,28 @@ const FEW: &[&str] = &[
     "(x-0.1)^(1/3)",
     "max(x^2,2-x^2,-5)",
     "(x-1)^(2/3)",
+    // f → 0 at +∞, no zero (a zero beyond the doubles, review 26).
+    "exp(-x)",
 ];
+
+/// And in degrees: families of zeros, turns, inflections and poles,
+/// whose period is a double (review 26's operators over two periods).
+const FEW_IN_DEGREES: &[&str] = &["sin(x)", "tan(x)", "cos(2x)+cos(x)"];
 
 #[test]
 fn a_fixed_few_certificates_mutated_are_refused() {
     let fs = FEW
         .iter()
         .map(|s| (s.to_string(), TrigUnit::Radians))
+        .chain(
+            FEW_IN_DEGREES
+                .iter()
+                .map(|s| (s.to_string(), TrigUnit::Degrees)),
+        )
         .collect();
     let r = run("a_fixed_few", fs);
     assert!(r.refused.is_empty(), "{:#?}", r.refused);
-    assert_eq!(r.functions, FEW.len());
+    assert_eq!(r.functions, FEW.len() + FEW_IN_DEGREES.len());
     assert!(
         r.accepted.is_empty(),
         "{} mutants accepted",

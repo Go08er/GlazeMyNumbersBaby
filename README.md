@@ -281,19 +281,23 @@ CI also runs checks that need more than `cargo test --workspace`:
   Each row is derived, not matched: an exact limit is equal to the
   derived one, never just inside the same enclosure; a gap about a point
   where f is undefined, or holding a pole a claim places, is shown to hold
-  nothing else excluded; one listed item stands for one zero, turn or pole,
-  and each member of a listed family for one of its own (two families of
-  one orbit list each member twice, so a family too wide to tell from
-  another is refused); a gap cleared of zeros because f ≡ 0 throughout it
-  is a stretch of them, not a gap with none, and one where f′ ≡ 0 carries
-  no sign of f′ across; a family's member only lies at a piece's end when
-  shown there; a row complete over a window answers for its ends, a zero
-  of f′ or f″ on one needing its sign past it and a gap's end on one a
-  claim deciding it; a gap holds no turn or inflection only where f′ (f″)
-  is shown to exist throughout it, so no cusp passes for a stretch of one
-  sign; a fact at a double is no fact about the reals beside it (f′ = 0 at
-  the next double is no flat stretch, a zero's sign is not carried across
-  it into a gap, a monotone piece has length).
+  nothing else excluded; one listed item stands for one zero, turn, pole
+  or monotone piece, a turn of its own kind, and each member of a listed
+  family for one of its own among every place the claims prove, not the
+  window's alone (two families of one orbit list each member twice, so a
+  family too wide to tell from another is refused, as is one whose
+  members can't be counted); a point listed alone repeats by no family's
+  period; a listed place is a number between two doubles, never ±∞, and
+  a family's period one above 0; a gap cleared of zeros because f ≡ 0
+  throughout it is a stretch of them, not a gap with none, and one where
+  f′ ≡ 0 carries no sign of f′ across; a family's member only lies at a
+  piece's end when shown there; a row complete over a window answers for
+  its ends, a zero of f′ or f″ on one needing its sign past it and a gap's
+  end on one a claim deciding it; a gap holds no turn or inflection only
+  where f′ (f″) is shown to exist throughout it, so no cusp passes for a
+  stretch of one sign; a fact at a double is no fact about the reals
+  beside it (f′ = 0 at the next double is no flat stretch, a zero's sign
+  is not carried across it into a gap, a monotone piece has length).
   The checker has no Γ of its own, so it doesn't model `n!`, `n!!`, `nCr`
   or `nPr`: a function that uses one anywhere, a constant like `5!`
   included, comes out *unsupported* (not checked, rather than wrong), and
@@ -315,20 +319,27 @@ CI also runs checks that need more than `cargo test --workspace`:
   one of its places with that place left out; the claims about a zero,
   turn, inflection or kink swapped for others as true that leave it
   undecided, a gap from it on a window's end, two gaps meeting at it or a
-  gap over a cusp, and the place left out), and the replay must
-  refuse each result, with the
-  rest of the certificate there, withheld, or with every genuine claim
-  given to the row. CI runs a fixed few (3,341 mutants, none accepted).
-  The long runs (204 corpus functions, 43,074 mutants; 607 pool functions,
-  156,658) accept 17 and 11: each a true statement the replay proved (a
-  row borrowed from another function that happens to hold, an enclosure
-  narrowed onto the number it holds), reviewed by hand in a table with the
-  reason it is true. (A twelfth, an inflection moved onto the other one
-  and listed twice, is refused since this round: two items for one place
-  say there are two.) A long run fails on an accepted mutant not in the
-  table and on a table entry it did not accept, so the table can't rot;
-  an end of a Points-only partial monotone piece moved strictly inward is
-  content-preserving by construction (a sub-piece of a monotone piece) and
+  gap over a cusp, and the place left out; review 26's edits by hand: an
+  item listed twice, a place at ±∞ or a zero pinned there, a place
+  stretched over the next of either kind, and, over two periods of a row
+  over one (its claims again a period on), a family's anchor listed
+  alone, a family listed again a period on (as it is, every [0, P], from
+  −∞, or over a window no member enters) or stretched over another
+  kind's member and its repeat), and the replay must refuse each result,
+  with the rest of the certificate there, withheld, or with every genuine
+  claim given to the row. CI runs a fixed few (17 functions, three of them
+  in degrees: 4,738 mutants, none accepted). The long runs (204 corpus
+  functions, 46,802 mutants; 607 pool functions, 168,940) accept 17 and
+  11: each a true statement the replay proved (a row borrowed from another
+  function that happens to hold, an enclosure narrowed onto the number it
+  holds), reviewed by hand in a table with the reason it is true. (A
+  twelfth, an inflection moved onto the other one and listed twice, is
+  refused since this round: two items for one place say there are two.) A
+  long run fails on an accepted mutant not in the table and on a table
+  entry it did not accept, so the table can't rot; an end of a Points-only
+  partial monotone piece moved strictly inward is content-preserving by
+  construction (a sub-piece of a monotone piece), as is a piece of the
+  domain or the range listed twice (a set, the union of its pieces), and
   counted apart, not tabled. On 201 corpus functions the checker before
   review 19's fixes accepted 4,410 of 39,611. Of the operators added in
   round 20 the checker before its audit accepted 1 of the fixed few's 44,
@@ -345,6 +356,13 @@ CI also runs checks that need more than `cargo test --workspace`:
   own claim check, the checker before its audit accepted 10 of the fixed
   few's 61, 44 of the corpus's 420 and 486 of the pool's 3,295 (a turn or
   an inflection on a window's end behind a gap from it; a cusp in a gap).
+  Of review 26's edits by hand, the checker before review 26 (`9be43a7`)
+  accepted 90 of the fixed few's 313, 569 of the corpus's 3,728 and 1,900
+  of the pool's 12,282: the six findings' shapes (55, 239 and 773; a pole
+  listed twice, a zero pinned at ∞, two families of one orbit, a point
+  alone borrowing another family's period, a turn of the wrong kind) and a
+  monotone piece listed twice (35, 330 and 1,127), which the reviewer's
+  fix left open; it is refused now.
 - **Claim fuzzer** (`--test replay_fuzz`, same feature): the mutation
   tester only meets the shapes the certifier writes, and three review
   rounds running a set of true claims built by hand made the replay

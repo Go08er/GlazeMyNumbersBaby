@@ -72,10 +72,48 @@ pub struct Piece {
 }
 
 fn enc(v: &Value) -> Result<Enc, String> {
-    Ok(Enc {
+    let e = Enc {
         lo: r(v.get("lo").ok_or("enc lo")?)?,
         hi: r(v.get("hi").ok_or("enc hi")?)?,
-    })
+    };
+    super::real_box((e.lo, e.hi))
+        .then_some(e)
+        .ok_or_else(|| "enclosure contains no real number".into())
+}
+
+/// A place an item lists (a zero, a turn, an inflection, a pole, a hole,
+/// a family's first member): a real number, enclosed by two doubles. An
+/// enclosure reaching ±∞ holds no more of it than one to ±MAX, and says
+/// nothing the replay can hold apart or match: a zero of exp(−x) in
+/// [MAX, ∞], pinned "at +∞", passed, and three families of sin(x)°'s zeros
+/// from [−∞, 360] passed for three orbits, the check that they were
+/// distinct skipped (review 26, R26-L-01, L-02). The certifier encloses
+/// each place by its cover's finite boxes, or a domain end's, so no
+/// genuine row lists one so.
+fn point(v: &Value) -> Result<Enc, String> {
+    let e = enc(v)?;
+    (e.lo.is_finite() && e.hi.is_finite())
+        .then_some(e)
+        .ok_or_else(|| {
+            format!(
+                "a place enclosed by [{:e}, {:e}]: a number lies between two doubles",
+                e.lo, e.hi
+            )
+        })
+}
+
+/// A family's period: a positive number, enclosed by two doubles above
+/// 0. One reaching 0 (or below) holds a period of no family, x₀ alone,
+/// and members it can't enumerate: an item listed alone beside such a
+/// family, every [0, 360]° from 0, passed though the family lists it too
+/// (the item's place a member of it for every period it may be), and
+/// three such families of two orbits passed for three (R26-L-01). The
+/// certifier's periods are f's, proven in (0, 10⁶].
+fn period_of(v: &Value) -> Result<Enc, String> {
+    let e = point(v)?;
+    (e.lo > 0.0)
+        .then_some(e)
+        .ok_or_else(|| format!("a period enclosed by [{:e}, {:e}], not above 0", e.lo, e.hi))
 }
 
 fn bound(v: &Value) -> Result<Bound, String> {
@@ -108,12 +146,12 @@ fn list(v: &Value) -> Result<&Vec<Value>, String> {
 /// A spot: one point (x0, None) or a family (x0, Some(period)).
 fn spot(v: &Value) -> Result<(Enc, Option<Enc>), String> {
     if let Some(a) = v.get("At") {
-        return Ok((enc(a)?, None));
+        return Ok((point(a)?, None));
     }
     let f = v.get("Every").ok_or_else(|| format!("bad spot {v}"))?;
     Ok((
-        enc(f.get("x0").ok_or("x0")?)?,
-        Some(enc(f.get("period").ok_or("period")?)?),
+        point(f.get("x0").ok_or("x0")?)?,
+        Some(period_of(f.get("period").ok_or("period")?)?),
     ))
 }
 
@@ -1077,7 +1115,11 @@ fn member_ks(x0: &Enc, p: &Enc, d: &Enc) -> Vec<rug::Integer> {
 /// as [0.3, 0.7] were "every zero"; poles at 0 and 10⁻⁴⁰⁰ + kπ both stood
 /// for the family kπ. (Round 20's checker audit.) Returns two that would
 /// share an item, if no listing gives each its own.
-fn one_each(found: &[Enc], listed: &[(Enc, Option<Enc>)]) -> Option<(Enc, Enc)> {
+fn one_each(
+    found: &[Enc],
+    listed: &[(Enc, Option<Enc>)],
+    fits: &dyn Fn(usize, usize) -> bool,
+) -> Option<(Enc, Enc)> {
     // Places: the found enclosures, one inside another taken as one (the
     // widest kept).
     let mut places: Vec<Enc> = Vec::new();
@@ -1094,6 +1136,13 @@ fn one_each(found: &[Enc], listed: &[(Enc, Option<Enc>)]) -> Option<(Enc, Enc)> 
         .map(|e| {
             let mut o: Vec<(usize, rug::Integer)> = Vec::new();
             for (i, (x, p)) in listed.iter().enumerate() {
+                if !found
+                    .iter()
+                    .enumerate()
+                    .any(|(j, d)| e.contains(d) && fits(i, j))
+                {
+                    continue;
+                }
                 if x.contains(e) {
                     o.push((i, rug::Integer::new()));
                 }
@@ -1231,25 +1280,37 @@ fn shared_item(
 /// passed. The claim fuzzer's periodic functions, every premise strong.)
 /// Meeting a member's enclosure is no proof that the place is that
 /// member: the item is refused where it isn't shown apart from them all.
-fn alone_at_a_member(found: &[Enc], listed: &[(Enc, Option<Enc>)]) -> Option<Enc> {
-    let families: Vec<(Enc, Enc)> = listed
+fn alone_at_a_member(
+    found: &[Enc],
+    listed: &[(Enc, Option<Enc>)],
+    fits: &dyn Fn(usize, usize) -> bool,
+) -> Option<Enc> {
+    let families: Vec<(usize, Enc, Enc)> = listed
         .iter()
-        .filter_map(|(x, p)| p.map(|p| (*x, p)))
+        .enumerate()
+        .filter_map(|(j, (x, p))| p.map(|p| (j, *x, p)))
         .collect();
     if families.is_empty() {
         return None;
     }
     listed
         .iter()
-        .filter(|(_, p)| p.is_none())
-        .find(|(x, _)| {
-            let held: Vec<&Enc> = found.iter().filter(|d| x.contains(d)).collect();
+        .enumerate()
+        .filter(|(_, (_, p))| p.is_none())
+        .find(|(j, (x, _))| {
+            let held: Vec<_> = found
+                .iter()
+                .enumerate()
+                .filter(|(i, d)| x.contains(d) && fits(*j, *i))
+                .collect();
             !held.is_empty()
-                && held
-                    .iter()
-                    .all(|d| families.iter().any(|(x0, p)| meets_member(x0, p, d)))
+                && held.iter().all(|(i, d)| {
+                    families
+                        .iter()
+                        .any(|(k, x0, p)| fits(*k, *i) && meets_member(x0, p, d))
+                })
         })
-        .map(|(x, _)| *x)
+        .map(|(_, (x, _))| *x)
 }
 
 /// Each member of a listed family stands for a number of its own: the
@@ -1259,8 +1320,8 @@ fn alone_at_a_member(found: &[Enc], listed: &[(Enc, Option<Enc>)]) -> Option<Enc
 /// 1/2·tan(3x)°'s inflections every 60° from 60° and every 60° from 120°,
 /// one orbit, passed complete over a window (the claim fuzzer's long run,
 /// seed 7703, after review 25), as would a family beside a sub-orbit of
-/// it. Over the row's span (its window or period, as far as the proven
-/// places reach; over points, their hull) each member lying in it is
+/// it. A window limits completeness, not the identity of a listed
+/// family: over the hull of all proven places each member lying in it is
 /// matched to a proven place it meets, no two to one; and a member is a
 /// number of its own only where some place it may be is no other
 /// family's member's (enclosures too wide to tell two members apart are
@@ -1269,11 +1330,16 @@ fn alone_at_a_member(found: &[Enc], listed: &[(Enc, Option<Enc>)]) -> Option<Enc
 /// turns, inflections, their proven places) and the vertical asymptotes
 /// (the poles the claims show, a family of them every 180° from 90° and
 /// again from 270° as tan(x)°'s). Returns why a member shares its place.
-fn members_apart(found: &[Enc], listed: &[(Enc, Option<Enc>)], span: Option<B>) -> Option<String> {
+fn members_apart(
+    found: &[Enc],
+    listed: &[(Enc, Option<Enc>)],
+    fits: &dyn Fn(usize, usize) -> bool,
+) -> Option<String> {
     use rug::{Integer, Rational};
-    let families: Vec<(Enc, Enc)> = listed
+    let families: Vec<(usize, Enc, Enc)> = listed
         .iter()
-        .filter_map(|(x, p)| p.map(|p| (*x, p)))
+        .enumerate()
+        .filter_map(|(j, (x, p))| p.map(|p| (j, *x, p)))
         .collect();
     if families.len() < 2 || found.is_empty() {
         return None;
@@ -1288,35 +1354,41 @@ fn members_apart(found: &[Enc], listed: &[(Enc, Option<Enc>)], span: Option<B>) 
         }
     }
     let q = Rational::from_f64;
-    let lo = places.iter().map(|e| e.lo).fold(f64::INFINITY, f64::min);
-    let hi = places
+    // (A place a claim proves out to ±∞ can't be told from a member.)
+    let Some(places_q) = places
         .iter()
-        .map(|e| e.hi)
-        .fold(f64::NEG_INFINITY, f64::max);
-    let (lo, hi) = span.map_or((lo, hi), |(a, b)| (lo.max(a), hi.min(b)));
-    let (Some(lo), Some(hi)) = (q(lo), q(hi)) else {
-        return None;
+        .map(|e| Some((q(e.lo)?, q(e.hi)?)))
+        .collect::<Option<Vec<(Rational, Rational)>>>()
+    else {
+        return Some("non-finite proven places cannot hold families apart".into());
     };
-    if lo > hi {
-        return None;
-    }
-    let places_q: Vec<(Rational, Rational)> = places
+    // The hull of every proven place (each place a real box, lo ≤ hi, and
+    // there is one: the hull is no empty stretch).
+    let lo = places_q
         .iter()
-        .filter_map(|e| Some((q(e.lo)?, q(e.hi)?)))
-        .collect();
-    if places_q.len() != places.len() {
-        return None;
-    }
-    // Every member meeting the span: (family, its enclosure, wholly in
-    // the span), k from the least to the greatest whose member may meet it.
+        .map(|p| &p.0)
+        .min()
+        .expect("a place")
+        .clone();
+    let hi = places_q
+        .iter()
+        .map(|p| &p.1)
+        .max()
+        .expect("a place")
+        .clone();
+    // Every member meeting the hull: (family, its enclosure, wholly in
+    // the hull), k from the least to the greatest whose member may meet it.
+    // (A listed family's x₀ and period are numbers, the period above 0, as
+    // `point` and `period_of` read them; one that can't be enumerated is
+    // refused all the same, never skipped.)
     let mut members: Vec<(usize, Rational, Rational, bool)> = Vec::new();
-    for (i, (x0, p)) in families.iter().enumerate() {
+    for (i, (_, x0, p)) in families.iter().enumerate() {
         let (Some(xl), Some(xh), Some(pl), Some(ph)) = (q(x0.lo), q(x0.hi), q(p.lo), q(p.hi))
         else {
-            continue;
+            return Some("non-finite family enclosures cannot be held apart".into());
         };
         if pl <= 0 {
-            continue;
+            return Some("a family period reaching zero cannot be held apart".into());
         }
         let a = Rational::from(&lo - &xh);
         let b = Rational::from(&hi - &xl);
@@ -1325,7 +1397,7 @@ fn members_apart(found: &[Enc], listed: &[(Enc, Option<Enc>)], span: Option<B>) 
         let (mut k, last) = (least.numer().clone(), most.numer().clone());
         if Integer::from(&last - &k) > 4096 {
             return Some(format!(
-                "the family through {:e} has too many members in the span to hold apart",
+                "the family through {:e} has too many members in the hull to hold apart",
                 x0.mid()
             ));
         }
@@ -1344,7 +1416,14 @@ fn members_apart(found: &[Enc], listed: &[(Enc, Option<Enc>)], span: Option<B>) 
     }
     let meets = |m: &(usize, Rational, Rational, bool), j: usize| {
         let (pl, ph) = &places_q[j];
-        m.1 <= *ph && *pl <= m.2
+        m.1 <= *ph
+            && *pl <= m.2
+            && found.iter().enumerate().any(|(i, d)| {
+                places[j].contains(d)
+                    && fits(families[m.0].0, i)
+                    && q(d.lo).is_some_and(|lo| lo <= m.2)
+                    && q(d.hi).is_some_and(|hi| m.1 <= hi)
+            })
     };
     let options: Vec<Vec<usize>> = members
         .iter()
@@ -1368,7 +1447,7 @@ fn members_apart(found: &[Enc], listed: &[(Enc, Option<Enc>)], span: Option<B>) 
                 "a member of the family through {:e}, at [{:e}, {:e}], may be the place at \
                  [{:e}, {:e}] only where another listed family's member may be too: one number \
                  listed twice",
-                families[m.0].0.mid(),
+                families[m.0].1.mid(),
                 x.lo,
                 x.hi,
                 d.lo,
@@ -1376,7 +1455,7 @@ fn members_apart(found: &[Enc], listed: &[(Enc, Option<Enc>)], span: Option<B>) 
             ));
         }
     }
-    // A place of its own for each member in the span (augmenting paths).
+    // A place of its own for each member in the hull (augmenting paths).
     fn assign(
         m: usize,
         options: &[Vec<usize>],
@@ -1401,7 +1480,7 @@ fn members_apart(found: &[Enc], listed: &[(Enc, Option<Enc>)], span: Option<B>) 
     let mut owner = std::collections::HashMap::new();
     for (m, member) in members.iter().enumerate() {
         // (A member with no proven place is said elsewhere, or past the
-        // claims; one straddling the span's end may lie outside it.)
+        // claims; one straddling the hull's end may lie outside it.)
         if !member.3 || options[m].is_empty() {
             continue;
         }
@@ -1412,7 +1491,7 @@ fn members_apart(found: &[Enc], listed: &[(Enc, Option<Enc>)], span: Option<B>) 
                 "a member of the family through {:e}, at [{:e}, {:e}], has no proven place of \
                  its own (the listed families' members there outnumber the places, [{:e}, {:e}] \
                  among them): one number listed twice",
-                families[member.0].0.mid(),
+                families[member.0].1.mid(),
                 x.lo,
                 x.hi,
                 d.lo,
@@ -1441,11 +1520,6 @@ fn holds_shifted(x: &Enc, a: &Enc, p: &Enc, k: i32) -> bool {
     alo + kp_lo >= x.lo && ahi + kp_hi <= x.hi
 }
 
-/// Is `x` (enclosed) a repeat of one of `xs` by a whole number of periods?
-fn repeat_of(xs: &[Enc], x: &Enc, period: &Enc) -> bool {
-    xs.iter().any(|e| meets_member(e, period, x))
-}
-
 /// The derived items against the listed ones: every listed item is a
 /// derived one; with `complete`, every derived one is listed (over one
 /// period of a periodic row, up to repeats).
@@ -1454,12 +1528,15 @@ fn match_items(
     derived: &[Enc],
     listed: &[(Enc, Option<Enc>)],
     complete: bool,
-    span: Option<B>,
     fits: &dyn Fn(usize, usize) -> bool,
     out: &mut RowResult,
 ) {
-    for (x, _) in listed {
-        if !derived.iter().any(|d| x.contains(d)) {
+    for (j, (x, _)) in listed.iter().enumerate() {
+        if !derived
+            .iter()
+            .enumerate()
+            .any(|(i, d)| x.contains(d) && fits(j, i))
+        {
             out.problems.push(format!(
                 "{what} at [{:e}, {:e}] listed but not proven by the claims",
                 x.lo, x.hi
@@ -1478,24 +1555,27 @@ fn match_items(
             x.lo, x.hi
         ));
     }
-    if let Some(x) = alone_at_a_member(derived, listed) {
+    if let Some(x) = alone_at_a_member(derived, listed, fits) {
         out.problems.push(format!(
             "{what} at [{:e}, {:e}] is listed alone, and as a listed family's member",
             x.lo, x.hi
         ));
     }
-    if let Some(why) = members_apart(derived, listed, span) {
+    if let Some(why) = members_apart(derived, listed, fits) {
         out.problems.push(format!("{what}: {why}"));
     }
     if !complete {
         return;
     }
-    let xs: Vec<Enc> = listed.iter().map(|(x, _)| *x).collect();
-    for d in derived {
-        let listed_here = listed.iter().any(|(x, _)| x.contains(d));
+    for (i, d) in derived.iter().enumerate() {
+        let listed_here = listed
+            .iter()
+            .enumerate()
+            .any(|(j, (x, _))| fits(j, i) && x.contains(d));
         let repeat = listed
             .iter()
-            .any(|(_, p)| p.is_some_and(|p| repeat_of(&xs, d, &p)));
+            .enumerate()
+            .any(|(j, (x, p))| fits(j, i) && p.is_some_and(|p| meets_member(x, &p, d)));
         if !listed_here && !repeat {
             out.problems.push(format!(
                 "{what} at [{:e}, {:e}] proven by the claims but not listed",
@@ -1505,7 +1585,7 @@ fn match_items(
     }
     // (A partial row may list a wide enclosure for one of two numbers in
     // it: true of the one. A complete one lists each.)
-    if let Some((a, b)) = one_each(derived, listed) {
+    if let Some((a, b)) = one_each(derived, listed, fits) {
         out.problems.push(format!(
             "{what} at [{:e}, {:e}] and another at [{:e}, {:e}] are listed as one item, yet the \
              row is complete",
@@ -1826,9 +1906,9 @@ fn in_domain(
             let every = it
                 .get("every")
                 .filter(|v| !v.is_null())
-                .map(enc)
+                .map(period_of)
                 .transpose()?;
-            (enc(it.get("x").ok_or("x")?)?, every)
+            (point(it.get("x").ok_or("x")?)?, every)
         } else {
             spot(it)?
         });
@@ -1899,12 +1979,23 @@ fn in_domain(
 /// clearness says only that none is a zero of its own. The first such
 /// meeting, if any. (Over points the row lists some zeros, not all:
 /// nothing to ask.)
-fn flat_gap_in_region(fx: &Fx, rc: &RowCert, all: &[RowCert], flat: &[B]) -> Option<B> {
+fn flat_gap_in_region(
+    fx: &Fx,
+    rc: &RowCert,
+    all: &[RowCert],
+    flat: &[B],
+    zeros: &[Zero],
+) -> Option<B> {
     let ts = targets(rc.region.as_ref()?, all);
     flat.iter().find_map(|g| {
         ts.iter().find_map(|t| {
             let (lo, hi) = (g.0.max(t.0), g.1.min(t.1));
             let meets = g.0 < g.1 && t.0 < g.1 && g.0 < t.1 && lo <= hi;
+            // A singleton meeting is already accounted for by an exact
+            // zero, which the item matcher below still requires listed.
+            if lo == hi && zeros.iter().any(|z| z.at.lo == lo && z.at.hi == hi) {
+                return None;
+            }
             (meets && {
                 iv::set_prec(160);
                 !fx.series(&fx.f, lo, hi, 0)[0].empty
@@ -1935,7 +2026,7 @@ fn zeros_row(
     // y = 0's x-intercepts were "none" over the window [5/7, 5/7], its one
     // double inside a gap about it so cleared, every claim strong (the
     // claim fuzzer's long run, seed 9907, `tests/replay_fuzz.rs`).
-    if let Some((a, b)) = flat_gap_in_region(fx, rc, all, flat_gaps) {
+    if let Some((a, b)) = flat_gap_in_region(fx, rc, all, flat_gaps, &w.zeros) {
         out.problems.push(format!(
             "f ≡ 0 throughout a gap the region meets on [{a:e}, {b:e}], yet the row lists points"
         ));
@@ -1950,7 +2041,6 @@ fn zeros_row(
         &derived,
         &listed,
         complete(rc),
-        rc.region.as_ref().and_then(region_box),
         &|_, _| true,
         out,
     );
@@ -2060,12 +2150,12 @@ fn turns(
     // Each item's kind (a maximum: "from positive"; an inflection: any).
     let mut kinds: Vec<Option<bool>> = Vec::new();
     for item in list(&rc.value)? {
-        let x = enc(item.get("x").ok_or("x")?)?;
+        let x = point(item.get("x").ok_or("x")?)?;
         let y = enc(item.get("y").ok_or("y")?)?;
         let every = item
             .get("every")
             .filter(|v| !v.is_null())
-            .map(enc)
+            .map(period_of)
             .transpose()?;
         kinds.push((k == 1).then(|| item.get("kind").and_then(Value::as_str) == Some("Max")));
         if k == 1 {
@@ -2106,8 +2196,7 @@ fn turns(
     };
     // (An item stands for a turn of its kind.)
     let fits = |j: usize, i: usize| kinds[j].is_none_or(|max| ch[i].1 == max);
-    let span = rc.region.as_ref().and_then(region_box);
-    match_items(what, &derived, &listed, complete(rc), span, &fits, out);
+    match_items(what, &derived, &listed, complete(rc), &fits, out);
     let periods: Vec<Enc> = listed.iter().filter_map(|(_, p)| *p).collect();
     families_follow(what, rc, &periods, out);
     repeats_listed(what, rc, &listed, out);
@@ -2751,6 +2840,48 @@ fn monotonicity(
             })
             .collect(),
     );
+    // One listed piece is one piece of f's: the same piece twice says
+    // there are two (each piece of a monotone row listed again beside it
+    // passed, complete or not, as 1/x's asymptote listed twice did:
+    // review 26's mutation tester, after R26-L-05). So two of one
+    // direction share no reals: one inside the other, or the two
+    // overlapping past their ends' enclosures (the same piece with an end
+    // enclosed two ways), are one listed twice.
+    let listed: Vec<(Piece, &str)> = list(&rc.value)?
+        .iter()
+        .map(|it| {
+            let p = piece(it.get("on").ok_or("on")?)?;
+            Ok((p, it.get("dir").and_then(Value::as_str).unwrap_or("")))
+        })
+        .collect::<Result<_, String>>()?;
+    // (A piece's least high end and greatest low end: past both, it has
+    // reals; two pieces whose such stretches overlap share reals.)
+    let inner = |p: &Piece| -> B {
+        let lo = match p.lo {
+            Bound::NegInf => f64::NEG_INFINITY,
+            Bound::PosInf => f64::INFINITY,
+            Bound::At { x, .. } => x.hi,
+        };
+        let hi = match p.hi {
+            Bound::NegInf => f64::NEG_INFINITY,
+            Bound::PosInf => f64::INFINITY,
+            Bound::At { x, .. } => x.lo,
+        };
+        (lo, hi)
+    };
+    if let Some((p, d)) = listed.iter().enumerate().find_map(|(i, (p, d))| {
+        listed[i + 1..].iter().find_map(|(q, e)| {
+            let (a, b) = (inner(p), inner(q));
+            let shared = a.0.max(b.0) < a.1.min(b.1);
+            (d == e && (p == q || shared)).then_some((p, d))
+        })
+    }) {
+        let (a, b) = extent(p);
+        out.problems.push(format!(
+            "the {} piece on [{a:e}, {b:e}] is listed twice: two pieces where there is one",
+            d.to_lowercase()
+        ));
+    }
     for item in list(&rc.value)? {
         let p = piece(item.get("on").ok_or("on")?)?;
         let dir = item.get("dir").and_then(Value::as_str).unwrap_or("");
@@ -3073,7 +3204,7 @@ fn domain_symmetric(fx: &Fx, all: &[RowCert]) -> Option<bool> {
         .get("excluded")?
         .as_array()?
         .iter()
-        .map(|f| Some((enc(f.get("x0")?).ok()?, enc(f.get("period")?).ok()?)))
+        .map(|f| Some((point(f.get("x0")?).ok()?, period_of(f.get("period")?).ok()?)))
         .collect::<Option<_>>()?;
     // Each family its own mirror: −x₀ = x₀ + k·P for a whole k, exactly
     // (x₀ and P doubles: 2x₀/P whole), or the zeros of a node even or odd
@@ -3495,8 +3626,8 @@ fn domain_candidates(all: &[RowCert], b: B) -> Option<Vec<Enc>> {
         start = hi;
     }
     for f in list(domain.value.get("excluded")?).ok()? {
-        let x0 = enc(f.get("x0")?).ok()?;
-        let per = enc(f.get("period")?).ok()?;
+        let x0 = point(f.get("x0")?).ok()?;
+        let per = period_of(f.get("period")?).ok()?;
         if per.lo.is_nan() || per.lo <= 0.0 || !per.hi.is_finite() {
             return None;
         }
@@ -3565,8 +3696,8 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
         .iter()
         .map(|f| {
             Ok((
-                enc(f.get("x0").ok_or("x0")?)?,
-                enc(f.get("period").ok_or("period")?)?,
+                point(f.get("x0").ok_or("x0")?)?,
+                period_of(f.get("period").ok_or("period")?)?,
             ))
         })
         .collect::<Result<_, String>>()?;
@@ -4858,18 +4989,31 @@ fn vertical(fx: &Fx, rc: &RowCert, all: &[RowCert], out: &mut RowResult) -> Resu
     }
     if complete(rc) {
         no_other_asymptote(fx, rc, all, &is_listed, &mut poles, out);
-        if let Some((a, b)) = one_each(&poles, &listed) {
+        if let Some((a, b)) = one_each(&poles, &listed, &|_, _| true) {
             out.problems.push(format!(
                 "places at [{:e}, {:e}] and [{:e}, {:e}] are two, listed as one asymptote",
                 a.lo, a.hi, b.lo, b.hi
             ));
         }
     }
+    // Each listed item is one pole; a family does not give an extra
+    // identity to a pole also listed alone.
+    if let Some(x) = shared_item(&poles, &listed, &|_, _| true) {
+        out.problems.push(format!(
+            "a vertical asymptote at {:e} is listed with no proven place of its own",
+            x.mid()
+        ));
+    }
+    if let Some(x) = alone_at_a_member(&poles, &listed, &|_, _| true) {
+        out.problems.push(format!(
+            "a vertical asymptote at {:e} is listed alone, and as a listed family's member",
+            x.mid()
+        ));
+    }
     // (Each listed family's members poles of their own, complete or not:
     // every 180° from 90° and again from 270° listed tan(x)°'s poles
     // twice.)
-    let span = rc.region.as_ref().and_then(region_box);
-    if let Some(why) = members_apart(&poles, &listed, span) {
+    if let Some(why) = members_apart(&poles, &listed, &|_, _| true) {
         out.problems.push(format!("a vertical asymptote: {why}"));
     }
     Ok(())
@@ -7089,7 +7233,7 @@ fn source_value(fx: &Fx, rc: &RowCert, src: &Value) -> Result<Stated, String> {
         )
     };
     if let Some(x) = src.get("At") {
-        let x = enc(x)?;
+        let x = point(x)?;
         return rc
             .claims
             .iter()
@@ -7154,7 +7298,7 @@ fn source_value(fx: &Fx, rc: &RowCert, src: &Value) -> Result<Stated, String> {
         };
     }
     if let Some(x) = src.get("Hole") {
-        let x = enc(x)?;
+        let x = point(x)?;
         return rc
             .claims
             .iter()
@@ -7172,7 +7316,11 @@ fn source_value(fx: &Fx, rc: &RowCert, src: &Value) -> Result<Stated, String> {
             });
     }
     if let Some(sd) = src.get("Side") {
-        let at = sd.get("at").and_then(|v| r(v).ok()).ok_or("side at")?;
+        let at = sd
+            .get("at")
+            .and_then(|v| r(v).ok())
+            .filter(|p| p.is_finite())
+            .ok_or("side at: a double")?;
         let right = sd
             .get("right")
             .and_then(Value::as_bool)

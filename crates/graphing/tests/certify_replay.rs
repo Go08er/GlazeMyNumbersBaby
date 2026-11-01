@@ -5695,3 +5695,434 @@ fn an_end_extremum_across_a_gap_where_f_is_constant_is_refused() {
         "{problems:?}"
     );
 }
+
+// ------------------------------------------------------------ review 26
+
+/// y = 0's proven zero, over a window of one double in a flat gap (R26-N-01).
+#[test]
+fn a_window_of_one_double_in_a_flat_gap_lists_its_zero() {
+    use serde_json::json;
+    let p = 0.7142857142857144_f64;
+    let mut v = certificate("0");
+    v["x_intercepts"] = json!({"Partial":{"value":[{"At":{"lo":p,"hi":p}}],"cert":{
+    "covers":{"Window":{"a":p,"b":p}},"claims":[
+      {"Gap":{"x":{"a":p.next_down(),"b":p.next_up()}}},
+      {"GapClear":{"x":{"a":p.next_down(),"b":p.next_up()},"of":{"F":"F0"}}},
+      {"Value":{"x":{"a":p,"b":p},"of":{"F":"F0"},"lo":0.0,"hi":0.0}}
+    ]}}});
+    let r = replay::replay(&v).unwrap();
+    assert!(
+        r.claims
+            .iter()
+            .filter(|c| c.rows.iter().any(|n| n == "x_intercepts"))
+            .all(|c| c.outcome.class == Class::Strong)
+    );
+    assert_eq!(
+        rejected(&v),
+        None,
+        "one real in the window, its zero listed"
+    );
+    let mut bad = v.clone();
+    *value_of(&mut bad, "x_intercepts") = json!([]);
+    assert!(
+        rejected(&bad).is_some(),
+        "the exact zero must still be listed"
+    );
+    body_of(&mut bad, "x_intercepts")["cert"]["claims"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    assert!(
+        rejected(&bad).is_some(),
+        "an empty singleton window is still false"
+    );
+    let mut bad = v.clone();
+    *value_of(&mut bad, "x_intercepts") = json!([{"At":{"lo":p.next_up(),"hi":p.next_up()}}]);
+    assert!(
+        rejected(&bad).is_some(),
+        "a different point cannot cover the singleton"
+    );
+    let mut bad = v.clone();
+    body_of(&mut bad, "x_intercepts")["cert"]["covers"] = json!({"Window":{"a":p,"b":p.next_up()}});
+    assert!(
+        rejected(&bad).is_some(),
+        "a nondegenerate interval has more zeros"
+    );
+    // Skipping an accounted singleton must not skip the next flat gap.
+    let mut bad = certificate("0*sqrt((x-1)*x^2)");
+    let tiny = f64::from_bits(1);
+    let mut claims = Vec::new();
+    for (a, b) in [(-tiny, tiny), (1.0, 2.0)] {
+        claims.push(json!({"Gap":{"x":{"a":a,"b":b}}}));
+        claims.push(json!({"GapClear":{"x":{"a":a,"b":b},"of":{"F":"F0"}}}));
+    }
+    for x in [0.0, 1.0, 2.0] {
+        claims.push(json!({"Value":{"x":{"a":x,"b":x},"of":{"F":"F0"},"lo":0.0,"hi":0.0}}));
+    }
+    bad["x_intercepts"] = json!({"Partial":{"value":[{"At":{"lo":0.0,"hi":0.0}},
+        {"At":{"lo":1.0,"hi":1.0}},{"At":{"lo":2.0,"hi":2.0}}],
+        "cert":{"covers":{"Window":{"a":0.0,"b":2.0}},"claims":claims}}});
+    let r = replay::replay(&bad).unwrap();
+    let row = r.rows.iter().find(|r| r.name == "x_intercepts").unwrap();
+    assert!(
+        row.problems
+            .iter()
+            .any(|p| p.contains("f ≡ 0 throughout a gap")),
+        "{:?}",
+        row.problems
+    );
+}
+
+/// 0·√(x − p) + 0·√(p − x)'s own zeros pass, in each angle mode (R26-N-01).
+#[test]
+fn the_genuine_rows_of_one_point_domains_pass_the_replay() {
+    for text in [
+        "0*sqrt(x)+0*sqrt(-x)",
+        "0*sqrt(x-1/3)+0*sqrt(1/3-x)",
+        "0*sqrt(x-0.3)+0*sqrt(0.3-x)",
+        "0*sqrt(x-5/7)+0*sqrt(5/7-x)",
+    ] {
+        for mode in [TrigUnit::Radians, TrigUnit::Degrees, TrigUnit::Grads] {
+            let v = certificate_in(text, None, mode);
+            if let Some(body) = v["domain"].get("Certified") {
+                assert!(
+                    !body["value"]["pieces"].as_array().unwrap().is_empty(),
+                    "{text} {mode:?}: its exact singleton domain is nonempty"
+                );
+            }
+            let r = replay::replay(&v).unwrap();
+            let zeros = r.rows.iter().find(|r| r.name == "x_intercepts").unwrap();
+            println!(
+                "singleton {text} {mode:?}: {} -> {:?}",
+                v["x_intercepts"], zeros.problems
+            );
+            assert!(zeros.problems.is_empty());
+        }
+    }
+}
+
+/// Three families of sin(x)°'s zeros, periods from 0: two orbits (R26-L-01).
+#[test]
+fn families_whose_period_reaches_0_are_not_taken_as_apart() {
+    let v = sin_zeros_over_a_window(&[
+        ((0.0, 0.0), (0.0, 360.0)),
+        ((180.0, 180.0), (0.0, 360.0)),
+        ((360.0, 360.0), (0.0, 360.0)),
+    ]);
+    let r = replay::replay(&v).unwrap();
+    assert!(
+        r.claims
+            .iter()
+            .filter(|c| c.rows.iter().any(|n| n == "x_intercepts"))
+            .all(|c| matches!(c.outcome.class, Class::Strong | Class::Weak))
+    );
+    assert!(
+        rejected(&v).is_some(),
+        "three families but only two zero orbits for positive periods at most 360 degrees"
+    );
+}
+
+/// Three families of sin(x)°'s zeros from [−∞, 360]: two orbits (R26-L-01).
+#[test]
+fn families_from_minus_infinity_are_not_taken_as_apart() {
+    let mut v = sin_zeros_over_a_window(&[
+        ((0.0, 360.0), (360.0, 360.0)),
+        ((0.0, 360.0), (360.0, 360.0)),
+        ((0.0, 360.0), (360.0, 360.0)),
+    ]);
+    for item in value_of(&mut v, "x_intercepts").as_array_mut().unwrap() {
+        item["Every"]["x0"]["lo"] = serde_json::json!("-inf");
+    }
+    let r = replay::replay(&v).unwrap();
+    assert!(
+        r.claims
+            .iter()
+            .filter(|c| c.rows.iter().any(|n| n == "x_intercepts"))
+            .all(|c| matches!(c.outcome.class, Class::Strong | Class::Weak))
+    );
+    assert!(
+        rejected(&v).is_some(),
+        "three period-360 families cannot name distinct orbits of sine zeros"
+    );
+}
+
+/// ±∞ is no real point: no zero is there, listed or pinned (R26-L-02).
+#[test]
+fn a_zero_at_infinity_is_refused() {
+    use serde_json::json;
+    for x in ["inf", "-inf"] {
+        let mut v = certificate("0");
+        v["x_intercepts"] = json!({"Partial":{"value":[{"At":{"lo":x,"hi":x}}],
+            "cert":{"covers":"Points","claims":[{"Value":{"x":{"a":x,"b":x},
+            "of":{"F":"F0"},"lo":0.0,"hi":0.0}}]}}});
+        assert!(rejected(&v).is_some(), "infinity is no real point");
+    }
+    let claims = [
+        json!({"Value":{"x":{"a":"inf","b":"inf"},"of":{"F":"F0"},"lo":0.0,"hi":0.0}}),
+        json!({"ExactAt":{"x":{"a":0.0,"b":"inf"},"of":{"F":"F0"},"c":0.0,"at":"inf"}}),
+        json!({"Touch":{"x":{"a":0.0,"b":"inf"},"of":{"F":"F0"},"c":0.0,"at":"inf","order":1,"above":true}}),
+    ];
+    for c in claims {
+        let mut v = certificate("exp(-x)");
+        v["x_intercepts"] = json!({"Partial":{"value":[{"At":{"lo":f64::MAX,"hi":"inf"}}],
+            "cert":{"covers":"Points","claims":[c]}}});
+        assert!(
+            rejected(&v).is_some(),
+            "exp(-x) has no finite zero, even beyond the doubles"
+        );
+    }
+    let fx = replay::function(&certificate("1")).unwrap();
+    let c = replay::claim(
+        &json!({"Value":{"x":{"a":"-inf","b":"inf"},"of":{"F":"F1"},"lo":0.0,"hi":0.0}}),
+    )
+    .unwrap();
+    assert_eq!(
+        replay::claims::check(&fx, &c, std::slice::from_ref(&c)).class,
+        Class::Strong
+    );
+    for side in ["Right", "Left"] {
+        let from = if side == "Right" { "-inf" } else { "inf" };
+        let c = replay::claim(&json!({"TailValue":{"side":side,"from":from,"lo":1.0,"hi":1.0}}))
+            .unwrap();
+        assert_eq!(
+            replay::claims::check(&fx, &c, std::slice::from_ref(&c)).class,
+            Class::Strong
+        );
+    }
+    for (a, b) in [("inf", "inf"), ("-inf", "-inf"), ("nan", "nan")] {
+        assert!(
+            replay::claim(&json!({"Value":{"x":{"a":a,"b":b},"of":{"F":"F0"},"lo":1.0,"hi":1.0}}))
+                .is_err()
+        );
+    }
+}
+
+/// Two families of one orbit, over a window holding no member (R26-L-03).
+#[test]
+fn families_of_one_orbit_are_refused_over_a_window_that_misses_them() {
+    use serde_json::json;
+    let one = |x| ((x, x), (360.0, 360.0));
+    let mut v = sin_zeros_over_a_window(&[one(0.0), one(180.0), one(360.0)]);
+    body_of(&mut v, "x_intercepts")["cert"]["covers"] = json!({"Window":{"a":1.0,"b":2.0}});
+    assert!(
+        rejected(&v).is_some(),
+        "0+360k and 360+360k are still the same orbit"
+    );
+    let mut v = sin_zeros_over_a_window(&[one(0.0), one(180.0)]);
+    body_of(&mut v, "x_intercepts")["cert"]["covers"] = json!({"Window":{"a":1.0,"b":2.0}});
+    assert_eq!(rejected(&v), None, "two globally distinct orbits");
+}
+
+/// A family's place of its own is an extremum of its kind (R26-L-04).
+#[test]
+fn a_familys_place_of_its_own_is_a_turn_of_its_kind() {
+    use serde_json::json;
+    let mut v = certificate_in("cos(2x)+cos(x)", None, TrigUnit::Degrees);
+    let facts = claims_of_kind(&mut v, "period", "Simplifier");
+    withhold_all_but(&mut v, "domain");
+    let exact =
+        |p: f64| json!({"ExactAt":{"x":{"a":p-1.0,"b":p+1.0},"of":{"F":"F1"},"c":0.0,"at":p}});
+    let val =
+        |a: f64, b: f64| json!({"Value":{"x":{"a":a,"b":b},"of":{"F":"F0"},"lo":-3.0,"hi":3.0}});
+    let mut claims = vec![
+        exact(0.0),
+        json!({"OneCross":{"x":{"a":100.0,"b":110.0},"of":{"F":"F1"},"c":0.0}}),
+        exact(180.0),
+        val(-10.0, 110.0),
+        val(100.0, 190.0),
+    ];
+    claims.extend(facts);
+    let items:Vec<_>=[(-10.0,110.0),(100.0,190.0)].into_iter().map(|(a,b)|json!({"x":{"lo":a,"hi":b},"y":{"lo":-3.0,"hi":3.0},"kind":"Min","every":{"lo":360.0,"hi":360.0}})).collect();
+    v["extrema"] = json!({"Partial":{"value":items,"cert":{"covers":"Points","claims":claims}}});
+    let r = replay::replay(&v).unwrap();
+    assert!(r.claims.iter().all(|c| c.outcome.class == Class::Strong));
+    let mut good = v.clone();
+    for e in value_of(&mut good, "extrema").as_array_mut().unwrap() {
+        e["kind"] = json!("Max");
+    }
+    assert_eq!(rejected(&good), None, "the two distinct maximum orbits");
+    assert!(
+        rejected(&v).is_some(),
+        "both minimum families can only mean the minimum near 104.48 degrees"
+    );
+}
+
+/// A family of maxima whose enclosure holds minima lists none (R26-L-04).
+#[test]
+fn a_maximum_family_does_not_list_the_minima() {
+    use serde_json::json;
+    let mut v = certificate_in("sin(x)", None, TrigUnit::Degrees);
+    let facts = claims_of_kind(&mut v, "period", "Simplifier");
+    withhold_all_but(&mut v, "domain");
+    let sign = |a: f64, b: f64, up| json!({"Beyond":{"x":{"a":a,"b":b},"of":{"F":"F1"},"c":0.0,"above":up}});
+    let exact =
+        |p: f64| json!({"ExactAt":{"x":{"a":p-1.0,"b":p+1.0},"of":{"F":"F1"},"c":0.0,"at":p}});
+    let mut claims = vec![
+        sign(-100.0, -91.0, false),
+        exact(-90.0),
+        sign(-89.0, 89.0, true),
+        exact(90.0),
+        sign(91.0, 269.0, false),
+        exact(270.0),
+        sign(271.0, 280.0, true),
+        json!({"Value":{"x":{"a":-90.0,"b":270.0},"of":{"F":"F0"},"lo":-1.0,"hi":1.0}}),
+    ];
+    claims.extend(facts);
+    v["extrema"] = json!({"Partial":{"value":[{"x":{"lo":-90.0,"hi":270.0},"y":{"lo":-1.0,"hi":1.0},"kind":"Max","every":{"lo":360.0,"hi":360.0}}],"cert":{"covers":{"Window":{"a":-100.0,"b":280.0}},"claims":claims}}});
+    let r = replay::replay(&v).unwrap();
+    assert!(r.claims.iter().all(|c| c.outcome.class == Class::Strong));
+    assert!(
+        rejected(&v).is_some(),
+        "the minima at -90 and 270 are not maxima"
+    );
+}
+
+/// 1/x's asymptote at 0 listed twice: two where there is one (R26-L-05).
+#[test]
+fn a_vertical_pole_listed_twice_is_refused() {
+    let mut v = certificate("1/x");
+    assert_eq!(rejected(&v), None);
+    let items = value_of(&mut v, "vertical").as_array_mut().unwrap();
+    items.push(items[0].clone());
+    let r = replay::replay(&v).unwrap();
+    assert!(r.claims.iter().all(|c| c.outcome.class == Class::Strong));
+    assert!(rejected(&v).is_some(), "one pole at zero, listed twice");
+}
+
+/// A point alone doesn't repeat by another family's period (R26-L-06).
+#[test]
+fn a_point_does_not_borrow_another_familys_period() {
+    use serde_json::json;
+    let one = |x| ((x, x), (360.0, 360.0));
+    let mut v = sin_zeros_over_a_window(&[one(0.0), one(180.0)]);
+    value_of(&mut v, "x_intercepts")[0] = json!({"At":{"lo":0.0,"hi":0.0}});
+    let r = replay::replay(&v).unwrap();
+    assert!(r.claims.iter().all(|c| c.outcome.class == Class::Strong));
+    assert!(rejected(&v).is_some(), "the zero at 360 is not listed");
+    value_of(&mut v, "x_intercepts")
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"At":{"lo":360.0,"hi":360.0}}));
+    assert_eq!(
+        rejected(&v),
+        None,
+        "all three zeros in the window are listed"
+    );
+}
+
+// ------------------------------------------------------------ after review 26
+
+/// sin(x)°'s zeros every [0, 360]° from 0, with 180 and 360 alone beside
+/// it: the family lists one of them again for each period it may be (not
+/// 0, no period), and so from [−∞, 0] every 360° or every [−1, 360]°;
+/// `alone_at_a_member` skipped a family whose members it couldn't
+/// enumerate, as `members_apart` did (R26-L-01). Every [360, ∞]°, true of
+/// 540, is refused too: a period is a number between two doubles.
+#[test]
+fn a_family_whose_members_cant_be_counted_is_refused() {
+    use serde_json::json;
+    let at = |x: f64| json!({"At": {"lo": x, "hi": x}});
+    let zero = json!({"lo": 0.0, "hi": 0.0});
+    let turn = json!({"lo": 360.0, "hi": 360.0});
+    for (x0, p) in [
+        (zero.clone(), json!({"lo": 0.0, "hi": 360.0})),
+        (json!({"lo": "-inf", "hi": 0.0}), turn.clone()),
+        (zero.clone(), json!({"lo": -1.0, "hi": 360.0})),
+        (zero.clone(), json!({"lo": 360.0, "hi": "inf"})),
+    ] {
+        let mut v = sin_zeros_over_a_window(&[]);
+        *value_of(&mut v, "x_intercepts") =
+            json!([{"Every": {"x0": x0, "period": p}}, at(180.0), at(360.0)]);
+        let r = replay::replay(&v).unwrap();
+        assert!(r.claims.iter().all(|c| c.outcome.class == Class::Strong));
+        assert!(
+            rejected(&v).is_some(),
+            "every {p} from {x0}, with 180 and 360 alone"
+        );
+    }
+    // (Every 360° from 0 with 180 alone: true.)
+    let mut v = sin_zeros_over_a_window(&[]);
+    *value_of(&mut v, "x_intercepts") = json!([{"Every": {"x0": zero, "period": turn}}, at(180.0)]);
+    assert_eq!(rejected(&v), None);
+    // A domain's excluded family is read so too, from its `Family` claim.
+    let g = json!({"G": {"path": [], "via": "CosOfArg"}});
+    let family = |x0: serde_json::Value, p: serde_json::Value| {
+        replay::claim(&json!({"Family": {"of": g, "x0": x0, "period": p}}))
+    };
+    let (m90, p180) = (
+        json!({"a": -90.0, "b": -90.0}),
+        json!({"a": 180.0, "b": 180.0}),
+    );
+    assert!(family(m90.clone(), p180.clone()).is_ok());
+    assert!(family(json!({"a": "-inf", "b": -90.0}), p180).is_err());
+    assert!(family(m90.clone(), json!({"a": 0.0, "b": 180.0})).is_err());
+    assert!(family(m90, json!({"a": 180.0, "b": "inf"})).is_err());
+}
+
+/// 1 − x/10³¹⁰'s one zero lies past every double, in [MAX, ∞], its
+/// crossing there proven: true, but a listed place is a number between
+/// two doubles, as the certifier's are, and one enclosed out to ±∞ is
+/// refused outright rather than each infinite pin chased (R26-L-02).
+#[test]
+fn a_place_past_the_doubles_is_refused() {
+    use serde_json::json;
+    let mut v = certificate("1-(x/10^300)/10^10");
+    v["x_intercepts"] = json!({"Partial": {"value": [{"At": {"lo": f64::MAX, "hi": "inf"}}],
+        "cert": {"covers": "Points", "claims": [{"OneCross": {"x": {"a": f64::MAX, "b": "inf"},
+        "of": {"F": "F0"}, "c": 0.0}}]}}});
+    let r = replay::replay(&v).unwrap();
+    assert!(r.claims.iter().all(|c| c.outcome.class == Class::Strong));
+    assert!(rejected(&v).is_some());
+}
+
+/// A monotone piece listed twice: two pieces where there is one, complete
+/// or not, and so with one end enclosed two ways (review 26's mutation
+/// tester, after R26-L-05).
+#[test]
+fn a_monotone_piece_listed_twice_is_refused() {
+    use serde_json::json;
+    let v = certificate("x^3-3x");
+    assert_eq!(rejected(&v), None);
+    let mut twice = v.clone();
+    let items = value_of(&mut twice, "monotonicity").as_array_mut().unwrap();
+    items.insert(1, items[0].clone());
+    assert!(rejected(&twice).is_some(), "complete");
+    // (Partial over points; the period row, which rests on a complete
+    // monotone row reaching ±∞, withheld.)
+    let partial = |v: &serde_json::Value| {
+        let mut v = v.clone();
+        let mut b = body_of(&mut v, "monotonicity").clone();
+        b["cert"]["covers"] = json!("Points");
+        v["monotonicity"] = json!({ "Partial": b });
+        v["period"] = json!({"Unknown": {"reason": "withheld"}});
+        v
+    };
+    assert_eq!(rejected(&partial(&v)), None);
+    assert!(rejected(&partial(&twice)).is_some(), "partial");
+    // Increasing up to [−1 − 2⁻²⁰, −1 + 2⁻²⁰] beside up to −1.
+    let mut wide = v.clone();
+    let items = value_of(&mut wide, "monotonicity").as_array_mut().unwrap();
+    let mut copy = items[0].clone();
+    let d = 2f64.powi(-20);
+    copy["on"]["hi"] = json!({"At": {"x": {"lo": -1.0 - d, "hi": -1.0 + d}, "closed": true}});
+    items.insert(1, copy);
+    assert!(rejected(&wide).is_some(), "an end enclosed two ways");
+    assert!(rejected(&partial(&wide)).is_some(), "the same, partial");
+}
+
+/// A finite limit lies in an enclosure holding a real: one in [∞, ∞],
+/// [−∞, −∞] or NaN's is unreadable, as a point there is (R26-L-02's
+/// class); one past the doubles, [MAX, ∞], reads.
+#[test]
+fn a_limit_where_no_real_is_is_unreadable() {
+    use serde_json::json;
+    let limit = |lo: serde_json::Value, hi: serde_json::Value| {
+        replay::claim(&json!({"Limit": {"at": "PosInf", "over_x": false,
+            "to": {"In": {"lo": lo, "hi": hi}}}}))
+    };
+    for (lo, hi) in [("inf", "inf"), ("-inf", "-inf"), ("nan", "nan")] {
+        assert!(limit(json!(lo), json!(hi)).is_err(), "[{lo}, {hi}]");
+    }
+    assert!(limit(json!(f64::MAX), json!("inf")).is_ok());
+    assert!(limit(json!(0.0), json!(1.0)).is_ok());
+}

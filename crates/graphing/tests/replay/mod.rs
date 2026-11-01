@@ -363,8 +363,53 @@ fn bf(v: &Value, k: &str) -> Result<bool, String> {
         .ok_or_else(|| format!("{k} not a bool"))
 }
 
+/// An enclosure contains a real number; its ends may be unbounded.
+fn real_box((a, b): B) -> bool {
+    a <= b && a != f64::INFINITY && b != f64::NEG_INFINITY
+}
+
+fn coordinate(v: &Value) -> Result<f64, String> {
+    let x = r(v)?;
+    x.is_finite()
+        .then_some(x)
+        .ok_or_else(|| "non-finite coordinate".into())
+}
+
+fn point_field(v: &Value, k: &str) -> Result<f64, String> {
+    coordinate(field(v, k)?)
+}
+
+/// A tail may start at the opposite infinity and cover the whole line,
+/// but it must contain real coordinates.
+fn tail_from(v: &Value) -> Result<f64, String> {
+    let from = rf(v, "from")?;
+    let b = match side(field(v, "side")?)? {
+        Side::Left => (f64::NEG_INFINITY, from),
+        Side::Right => (from, f64::INFINITY),
+    };
+    real_box(b)
+        .then_some(from)
+        .ok_or_else(|| "tail contains no real number".into())
+}
+
 fn xbox(v: &Value) -> Result<B, String> {
-    Ok((rf(v, "a")?, rf(v, "b")?))
+    let x = (rf(v, "a")?, rf(v, "b")?);
+    real_box(x)
+        .then_some(x)
+        .ok_or_else(|| "box contains no real number".into())
+}
+
+/// A family's first member and period, as a `Family` claim writes them:
+/// two numbers between doubles, the period above 0 (as the rows read a
+/// listed family's, [`rows`]' `point` and `period_of`). Read from
+/// [−∞, x] or with a period reaching 0, its check took the infinite end
+/// for 0.
+fn family_boxes(v: &Value) -> Result<(B, B), String> {
+    let (x0, period) = (xbox(field(v, "x0")?)?, xbox(field(v, "period")?)?);
+    let finite = |b: B| b.0.is_finite() && b.1.is_finite();
+    (finite(x0) && finite(period) && period.0 > 0.0)
+        .then_some((x0, period))
+        .ok_or_else(|| "a family's first member and period are numbers, the period above 0".into())
 }
 
 /// A Taylor order as the certifier writes one (a byte; its orders are 3 at
@@ -451,7 +496,7 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
             x: x()?,
             of: of()?,
             c: rf(b, "c")?,
-            at: rf(b, "at")?,
+            at: point_field(b, "at")?,
         },
         "Factors" => Claim::Factors {
             x: x()?,
@@ -463,7 +508,7 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
             x: x()?,
             of: of()?,
             c: rf(b, "c")?,
-            at: rf(b, "at")?,
+            at: point_field(b, "at")?,
             order: order(b)?,
             above: bf(b, "above")?,
         },
@@ -473,21 +518,24 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
             lo: rf(b, "lo")?,
             hi: rf(b, "hi")?,
         },
-        "Family" => Claim::Family {
-            of: of()?,
-            x0: xbox(field(b, "x0")?)?,
-            period: xbox(field(b, "period")?)?,
-        },
+        "Family" => {
+            let (x0, period) = family_boxes(b)?;
+            Claim::Family {
+                of: of()?,
+                x0,
+                period,
+            }
+        }
         "TailBeyond" => Claim::TailBeyond {
             side: side(field(b, "side")?)?,
-            from: rf(b, "from")?,
+            from: tail_from(b)?,
             of: of()?,
             c: rf(b, "c")?,
             above: bf(b, "above")?,
         },
         "TailChain" => Claim::TailChain {
             side: side(field(b, "side")?)?,
-            from: rf(b, "from")?,
+            from: tail_from(b)?,
             of: of()?,
             c: rf(b, "c")?,
             above: bf(b, "above")?,
@@ -495,7 +543,7 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
         },
         "TailValue" => Claim::TailValue {
             side: side(field(b, "side")?)?,
-            from: rf(b, "from")?,
+            from: tail_from(b)?,
             lo: rf(b, "lo")?,
             hi: rf(b, "hi")?,
         },
@@ -506,7 +554,7 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
         "Kink" => Claim::Kink(x()?),
         "KinkAt" => Claim::KinkAt {
             x: x()?,
-            at: rf(b, "at")?,
+            at: point_field(b, "at")?,
             left: bf(b, "left")?,
             right: bf(b, "right")?,
         },
@@ -520,7 +568,7 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
             let at = b.get("at").filter(|v| !v.is_null());
             Claim::KinkSides {
                 x: x()?,
-                at: at.map(r).transpose()?,
+                at: at.map(coordinate).transpose()?,
                 order: order(b)?,
                 left: sign("left")?,
                 right: sign("right")?,
@@ -554,7 +602,7 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
             };
             Claim::TailLine {
                 side: side(field(b, "side")?)?,
-                from: rf(b, "from")?,
+                from: tail_from(b)?,
                 m: pair("m")?,
                 b: pair("b")?,
                 lo: rf(b, "lo")?,
@@ -567,8 +615,8 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
                 Some("PosInf") => growth::At::PosInf,
                 Some("NegInf") => growth::At::NegInf,
                 _ => match (at.get("Right"), at.get("Left")) {
-                    (Some(p), _) => growth::At::Right(r(p)?),
-                    (_, Some(p)) => growth::At::Left(r(p)?),
+                    (Some(p), _) => growth::At::Right(coordinate(p)?),
+                    (_, Some(p)) => growth::At::Left(coordinate(p)?),
                     _ => return Err(format!("bad limit point {at}")),
                 },
             };
@@ -577,8 +625,13 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
                 Some("PosInf") => Toward::PosInf,
                 Some("NegInf") => Toward::NegInf,
                 _ => {
+                    // (A finite limit: a real number in the enclosure.)
                     let i = field(to, "In")?;
-                    Toward::In(rf(i, "lo")?, rf(i, "hi")?)
+                    let (lo, hi) = (rf(i, "lo")?, rf(i, "hi")?);
+                    if !real_box((lo, hi)) {
+                        return Err(format!("a limit in [{lo:e}, {hi:e}], where no real is"));
+                    }
+                    Toward::In(lo, hi)
                 }
             };
             Claim::Limit {
