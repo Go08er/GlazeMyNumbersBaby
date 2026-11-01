@@ -363,8 +363,40 @@ fn bf(v: &Value, k: &str) -> Result<bool, String> {
         .ok_or_else(|| format!("{k} not a bool"))
 }
 
+/// An enclosure contains a real number; its ends may be unbounded.
+fn real_box((a, b): B) -> bool {
+    a <= b && a != f64::INFINITY && b != f64::NEG_INFINITY
+}
+
+fn coordinate(v: &Value) -> Result<f64, String> {
+    let x = r(v)?;
+    x.is_finite()
+        .then_some(x)
+        .ok_or_else(|| "non-finite coordinate".into())
+}
+
+fn point_field(v: &Value, k: &str) -> Result<f64, String> {
+    coordinate(field(v, k)?)
+}
+
+/// A tail may start at the opposite infinity and cover the whole line,
+/// but it must contain real coordinates.
+fn tail_from(v: &Value) -> Result<f64, String> {
+    let from = rf(v, "from")?;
+    let b = match side(field(v, "side")?)? {
+        Side::Left => (f64::NEG_INFINITY, from),
+        Side::Right => (from, f64::INFINITY),
+    };
+    real_box(b)
+        .then_some(from)
+        .ok_or_else(|| "tail contains no real number".into())
+}
+
 fn xbox(v: &Value) -> Result<B, String> {
-    Ok((rf(v, "a")?, rf(v, "b")?))
+    let x = (rf(v, "a")?, rf(v, "b")?);
+    real_box(x)
+        .then_some(x)
+        .ok_or_else(|| "box contains no real number".into())
 }
 
 /// A Taylor order as the certifier writes one (a byte; its orders are 3 at
@@ -451,7 +483,7 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
             x: x()?,
             of: of()?,
             c: rf(b, "c")?,
-            at: rf(b, "at")?,
+            at: point_field(b, "at")?,
         },
         "Factors" => Claim::Factors {
             x: x()?,
@@ -463,7 +495,7 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
             x: x()?,
             of: of()?,
             c: rf(b, "c")?,
-            at: rf(b, "at")?,
+            at: point_field(b, "at")?,
             order: order(b)?,
             above: bf(b, "above")?,
         },
@@ -480,14 +512,14 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
         },
         "TailBeyond" => Claim::TailBeyond {
             side: side(field(b, "side")?)?,
-            from: rf(b, "from")?,
+            from: tail_from(b)?,
             of: of()?,
             c: rf(b, "c")?,
             above: bf(b, "above")?,
         },
         "TailChain" => Claim::TailChain {
             side: side(field(b, "side")?)?,
-            from: rf(b, "from")?,
+            from: tail_from(b)?,
             of: of()?,
             c: rf(b, "c")?,
             above: bf(b, "above")?,
@@ -495,7 +527,7 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
         },
         "TailValue" => Claim::TailValue {
             side: side(field(b, "side")?)?,
-            from: rf(b, "from")?,
+            from: tail_from(b)?,
             lo: rf(b, "lo")?,
             hi: rf(b, "hi")?,
         },
@@ -506,7 +538,7 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
         "Kink" => Claim::Kink(x()?),
         "KinkAt" => Claim::KinkAt {
             x: x()?,
-            at: rf(b, "at")?,
+            at: point_field(b, "at")?,
             left: bf(b, "left")?,
             right: bf(b, "right")?,
         },
@@ -520,7 +552,7 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
             let at = b.get("at").filter(|v| !v.is_null());
             Claim::KinkSides {
                 x: x()?,
-                at: at.map(r).transpose()?,
+                at: at.map(coordinate).transpose()?,
                 order: order(b)?,
                 left: sign("left")?,
                 right: sign("right")?,
@@ -554,7 +586,7 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
             };
             Claim::TailLine {
                 side: side(field(b, "side")?)?,
-                from: rf(b, "from")?,
+                from: tail_from(b)?,
                 m: pair("m")?,
                 b: pair("b")?,
                 lo: rf(b, "lo")?,
@@ -567,8 +599,8 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
                 Some("PosInf") => growth::At::PosInf,
                 Some("NegInf") => growth::At::NegInf,
                 _ => match (at.get("Right"), at.get("Left")) {
-                    (Some(p), _) => growth::At::Right(r(p)?),
-                    (_, Some(p)) => growth::At::Left(r(p)?),
+                    (Some(p), _) => growth::At::Right(coordinate(p)?),
+                    (_, Some(p)) => growth::At::Left(coordinate(p)?),
                     _ => return Err(format!("bad limit point {at}")),
                 },
             };
