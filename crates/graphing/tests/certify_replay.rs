@@ -5696,8 +5696,11 @@ fn an_end_extremum_across_a_gap_where_f_is_constant_is_refused() {
     );
 }
 
+// ------------------------------------------------------------ review 26
+
+/// y = 0's proven zero, over a window of one double in a flat gap (R26-N-01).
 #[test]
-fn review26_a_singleton_flat_gap_window_can_list_its_zero() {
+fn a_window_of_one_double_in_a_flat_gap_lists_its_zero() {
     use serde_json::json;
     let p = 0.7142857142857144_f64;
     let mut v = certificate("0");
@@ -5770,8 +5773,9 @@ fn review26_a_singleton_flat_gap_window_can_list_its_zero() {
     );
 }
 
+/// 0·√(x − p) + 0·√(p − x)'s own zeros pass, in each angle mode (R26-N-01).
 #[test]
-fn review26_genuine_singleton_domains() {
+fn the_genuine_rows_of_one_point_domains_pass_the_replay() {
     for text in [
         "0*sqrt(x)+0*sqrt(-x)",
         "0*sqrt(x-1/3)+0*sqrt(1/3-x)",
@@ -5797,8 +5801,9 @@ fn review26_genuine_singleton_domains() {
     }
 }
 
+/// Three families of sin(x)°'s zeros, periods from 0: two orbits (R26-L-01).
 #[test]
-fn review26_family_distinctness_is_not_skipped_at_a_zero_period_bound() {
+fn families_whose_period_reaches_0_are_not_taken_as_apart() {
     let v = sin_zeros_over_a_window(&[
         ((0.0, 0.0), (0.0, 360.0)),
         ((180.0, 180.0), (0.0, 360.0)),
@@ -5817,8 +5822,9 @@ fn review26_family_distinctness_is_not_skipped_at_a_zero_period_bound() {
     );
 }
 
+/// Three families of sin(x)°'s zeros from [−∞, 360]: two orbits (R26-L-01).
 #[test]
-fn review26_family_distinctness_is_not_skipped_at_an_infinite_first_member_bound() {
+fn families_from_minus_infinity_are_not_taken_as_apart() {
     let mut v = sin_zeros_over_a_window(&[
         ((0.0, 360.0), (360.0, 360.0)),
         ((0.0, 360.0), (360.0, 360.0)),
@@ -5840,8 +5846,9 @@ fn review26_family_distinctness_is_not_skipped_at_an_infinite_first_member_bound
     );
 }
 
+/// ±∞ is no real point: no zero is there, listed or pinned (R26-L-02).
 #[test]
-fn review26_infinity_is_not_a_zero_coordinate() {
+fn a_zero_at_infinity_is_refused() {
     use serde_json::json;
     for x in ["inf", "-inf"] {
         let mut v = certificate("0");
@@ -5890,8 +5897,9 @@ fn review26_infinity_is_not_a_zero_coordinate() {
     }
 }
 
+/// Two families of one orbit, over a window holding no member (R26-L-03).
 #[test]
-fn review26_family_duplicates_remain_duplicates_outside_the_window() {
+fn families_of_one_orbit_are_refused_over_a_window_that_misses_them() {
     use serde_json::json;
     let one = |x| ((x, x), (360.0, 360.0));
     let mut v = sin_zeros_over_a_window(&[one(0.0), one(180.0), one(360.0)]);
@@ -5905,8 +5913,9 @@ fn review26_family_duplicates_remain_duplicates_outside_the_window() {
     assert_eq!(rejected(&v), None, "two globally distinct orbits");
 }
 
+/// A family's place of its own is an extremum of its kind (R26-L-04).
 #[test]
-fn review26_family_place_witnesses_respect_the_extremum_kind() {
+fn a_familys_place_of_its_own_is_a_turn_of_its_kind() {
     use serde_json::json;
     let mut v = certificate_in("cos(2x)+cos(x)", None, TrigUnit::Degrees);
     let facts = claims_of_kind(&mut v, "period", "Simplifier");
@@ -5938,8 +5947,9 @@ fn review26_family_place_witnesses_respect_the_extremum_kind() {
     );
 }
 
+/// A family of maxima whose enclosure holds minima lists none (R26-L-04).
 #[test]
-fn review26_a_complete_maximum_family_does_not_cover_minima() {
+fn a_maximum_family_does_not_list_the_minima() {
     use serde_json::json;
     let mut v = certificate_in("sin(x)", None, TrigUnit::Degrees);
     let facts = claims_of_kind(&mut v, "period", "Simplifier");
@@ -5967,9 +5977,9 @@ fn review26_a_complete_maximum_family_does_not_cover_minima() {
     );
 }
 
-/// Two identical point entries are two listed asymptotes, not one union.
+/// 1/x's asymptote at 0 listed twice: two where there is one (R26-L-05).
 #[test]
-fn review26_a_vertical_pole_listed_twice_is_refused() {
+fn a_vertical_pole_listed_twice_is_refused() {
     let mut v = certificate("1/x");
     assert_eq!(rejected(&v), None);
     let items = value_of(&mut v, "vertical").as_array_mut().unwrap();
@@ -5979,9 +5989,9 @@ fn review26_a_vertical_pole_listed_twice_is_refused() {
     assert!(rejected(&v).is_some(), "one pole at zero, listed twice");
 }
 
-/// A family's period only repeats that family's own anchor.
+/// A point alone doesn't repeat by another family's period (R26-L-06).
 #[test]
-fn review26_a_point_does_not_borrow_another_familys_period() {
+fn a_point_does_not_borrow_another_familys_period() {
     use serde_json::json;
     let one = |x| ((x, x), (360.0, 360.0));
     let mut v = sin_zeros_over_a_window(&[one(0.0), one(180.0)]);
