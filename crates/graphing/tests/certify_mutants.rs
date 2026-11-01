@@ -660,9 +660,12 @@ fn claim_moved(c: &Value, by: f64, inward: bool) -> Option<Value> {
     Some(json!({kind.as_str(): nb}))
 }
 
+/// An item's place, and its family's period if it is one.
+type ItemPlace = ((f64, f64), Option<(f64, f64)>);
+
 /// A list row's item's place (an `At`, a family's x₀, a turn's x) and the
 /// family's period, if it is one.
-fn item_place(row: &str, it: &Value) -> Option<((f64, f64), Option<(f64, f64)>)> {
+fn item_place(row: &str, it: &Value) -> Option<ItemPlace> {
     match row {
         "x_intercepts" | "vertical" => match it.get("At") {
             Some(x) => Some((enc_of(x)?, None)),
@@ -2343,6 +2346,10 @@ fn mutants_of(
     }
 }
 
+/// [`mutants_of`]'s `push`: an operator, what it changed, why the change
+/// is content-preserving where it is, and the edit.
+type Push<'p> = dyn FnMut(&'static str, String, Option<&'static str>, &dyn Fn(&mut Value)) + 'p;
+
 /// The operators for the edits review 26 made by hand ([`mutants_of`]'s
 /// arguments, and its `push`).
 fn review26_mutants(
@@ -2352,7 +2359,7 @@ fn review26_mutants(
     covers: &Value,
     points_only: bool,
     claims_now: &[Value],
-    push: &mut dyn FnMut(&'static str, String, Option<&'static str>, &dyn Fn(&mut Value)),
+    push: &mut Push<'_>,
 ) {
     // ---- one item listed twice (R26-L-05)
     //
@@ -2400,8 +2407,7 @@ fn review26_mutants(
         return;
     }
     let items = value.as_array().cloned().unwrap_or_default();
-    let places: Vec<Option<((f64, f64), Option<(f64, f64)>)>> =
-        items.iter().map(|it| item_place(row, it)).collect();
+    let places: Vec<Option<ItemPlace>> = items.iter().map(|it| item_place(row, it)).collect();
     let mut session = replay::Session::default();
     // The certificate with the row's value `list`, its claims `claims`, over
     // `over` (Partial, a window) or as it is.
