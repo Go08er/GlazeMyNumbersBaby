@@ -625,8 +625,13 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
                 Some("PosInf") => Toward::PosInf,
                 Some("NegInf") => Toward::NegInf,
                 _ => {
+                    // (A finite limit: a real number in the enclosure.)
                     let i = field(to, "In")?;
-                    Toward::In(rf(i, "lo")?, rf(i, "hi")?)
+                    let (lo, hi) = (rf(i, "lo")?, rf(i, "hi")?);
+                    if !real_box((lo, hi)) {
+                        return Err(format!("a limit in [{lo:e}, {hi:e}], where no real is"));
+                    }
+                    Toward::In(lo, hi)
                 }
             };
             Claim::Limit {

@@ -6109,3 +6109,20 @@ fn a_monotone_piece_listed_twice_is_refused() {
     assert!(rejected(&wide).is_some(), "an end enclosed two ways");
     assert!(rejected(&partial(&wide)).is_some(), "the same, partial");
 }
+
+/// A finite limit lies in an enclosure holding a real: one in [∞, ∞],
+/// [−∞, −∞] or NaN's is unreadable, as a point there is (R26-L-02's
+/// class); one past the doubles, [MAX, ∞], reads.
+#[test]
+fn a_limit_where_no_real_is_is_unreadable() {
+    use serde_json::json;
+    let limit = |lo: serde_json::Value, hi: serde_json::Value| {
+        replay::claim(&json!({"Limit": {"at": "PosInf", "over_x": false,
+            "to": {"In": {"lo": lo, "hi": hi}}}}))
+    };
+    for (lo, hi) in [("inf", "inf"), ("-inf", "-inf"), ("nan", "nan")] {
+        assert!(limit(json!(lo), json!(hi)).is_err(), "[{lo}, {hi}]");
+    }
+    assert!(limit(json!(f64::MAX), json!("inf")).is_ok());
+    assert!(limit(json!(0.0), json!(1.0)).is_ok());
+}
