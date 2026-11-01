@@ -6009,3 +6009,68 @@ fn a_point_does_not_borrow_another_familys_period() {
         "all three zeros in the window are listed"
     );
 }
+
+// ------------------------------------------------------------ after review 26
+
+/// sin(x)°'s zeros every [0, 360]° from 0, with 180 and 360 alone beside
+/// it: the family lists one of them again for each period it may be (not
+/// 0, no period), and so from [−∞, 0] every 360° or every [−1, 360]°;
+/// `alone_at_a_member` skipped a family whose members it couldn't
+/// enumerate, as `members_apart` did (R26-L-01). Every [360, ∞]°, true of
+/// 540, is refused too: a period is a number between two doubles.
+#[test]
+fn a_family_whose_members_cant_be_counted_is_refused() {
+    use serde_json::json;
+    let at = |x: f64| json!({"At": {"lo": x, "hi": x}});
+    let zero = json!({"lo": 0.0, "hi": 0.0});
+    let turn = json!({"lo": 360.0, "hi": 360.0});
+    for (x0, p) in [
+        (zero.clone(), json!({"lo": 0.0, "hi": 360.0})),
+        (json!({"lo": "-inf", "hi": 0.0}), turn.clone()),
+        (zero.clone(), json!({"lo": -1.0, "hi": 360.0})),
+        (zero.clone(), json!({"lo": 360.0, "hi": "inf"})),
+    ] {
+        let mut v = sin_zeros_over_a_window(&[]);
+        *value_of(&mut v, "x_intercepts") =
+            json!([{"Every": {"x0": x0, "period": p}}, at(180.0), at(360.0)]);
+        let r = replay::replay(&v).unwrap();
+        assert!(r.claims.iter().all(|c| c.outcome.class == Class::Strong));
+        assert!(
+            rejected(&v).is_some(),
+            "every {p} from {x0}, with 180 and 360 alone"
+        );
+    }
+    // (Every 360° from 0 with 180 alone: true.)
+    let mut v = sin_zeros_over_a_window(&[]);
+    *value_of(&mut v, "x_intercepts") = json!([{"Every": {"x0": zero, "period": turn}}, at(180.0)]);
+    assert_eq!(rejected(&v), None);
+    // A domain's excluded family is read so too, from its `Family` claim.
+    let g = json!({"G": {"path": [], "via": "CosOfArg"}});
+    let family = |x0: serde_json::Value, p: serde_json::Value| {
+        replay::claim(&json!({"Family": {"of": g, "x0": x0, "period": p}}))
+    };
+    let (m90, p180) = (
+        json!({"a": -90.0, "b": -90.0}),
+        json!({"a": 180.0, "b": 180.0}),
+    );
+    assert!(family(m90.clone(), p180.clone()).is_ok());
+    assert!(family(json!({"a": "-inf", "b": -90.0}), p180).is_err());
+    assert!(family(m90.clone(), json!({"a": 0.0, "b": 180.0})).is_err());
+    assert!(family(m90, json!({"a": 180.0, "b": "inf"})).is_err());
+}
+
+/// 1 − x/10³¹⁰'s one zero lies past every double, in [MAX, ∞], its
+/// crossing there proven: true, but a listed place is a number between
+/// two doubles, as the certifier's are, and one enclosed out to ±∞ is
+/// refused outright rather than each infinite pin chased (R26-L-02).
+#[test]
+fn a_place_past_the_doubles_is_refused() {
+    use serde_json::json;
+    let mut v = certificate("1-(x/10^300)/10^10");
+    v["x_intercepts"] = json!({"Partial": {"value": [{"At": {"lo": f64::MAX, "hi": "inf"}}],
+        "cert": {"covers": "Points", "claims": [{"OneCross": {"x": {"a": f64::MAX, "b": "inf"},
+        "of": {"F": "F0"}, "c": 0.0}}]}}});
+    let r = replay::replay(&v).unwrap();
+    assert!(r.claims.iter().all(|c| c.outcome.class == Class::Strong));
+    assert!(rejected(&v).is_some());
+}

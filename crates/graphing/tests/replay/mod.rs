@@ -399,6 +399,19 @@ fn xbox(v: &Value) -> Result<B, String> {
         .ok_or_else(|| "box contains no real number".into())
 }
 
+/// A family's first member and period, as a `Family` claim writes them:
+/// two numbers between doubles, the period above 0 (as the rows read a
+/// listed family's, [`rows`]' `point` and `period_of`). Read from
+/// [−∞, x] or with a period reaching 0, its check took the infinite end
+/// for 0.
+fn family_boxes(v: &Value) -> Result<(B, B), String> {
+    let (x0, period) = (xbox(field(v, "x0")?)?, xbox(field(v, "period")?)?);
+    let finite = |b: B| b.0.is_finite() && b.1.is_finite();
+    (finite(x0) && finite(period) && period.0 > 0.0)
+        .then_some((x0, period))
+        .ok_or_else(|| "a family's first member and period are numbers, the period above 0".into())
+}
+
 /// A Taylor order as the certifier writes one (a byte; its orders are 3 at
 /// most): a larger one is refused, not expanded to (the series' cost grows
 /// with its square).
@@ -505,11 +518,14 @@ pub fn claim(v: &Value) -> Result<Claim, String> {
             lo: rf(b, "lo")?,
             hi: rf(b, "hi")?,
         },
-        "Family" => Claim::Family {
-            of: of()?,
-            x0: xbox(field(b, "x0")?)?,
-            period: xbox(field(b, "period")?)?,
-        },
+        "Family" => {
+            let (x0, period) = family_boxes(b)?;
+            Claim::Family {
+                of: of()?,
+                x0,
+                period,
+            }
+        }
         "TailBeyond" => Claim::TailBeyond {
             side: side(field(b, "side")?)?,
             from: tail_from(b)?,

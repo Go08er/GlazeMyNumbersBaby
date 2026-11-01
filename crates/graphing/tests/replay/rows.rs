@@ -81,6 +81,41 @@ fn enc(v: &Value) -> Result<Enc, String> {
         .ok_or_else(|| "enclosure contains no real number".into())
 }
 
+/// A place an item lists (a zero, a turn, an inflection, a pole, a hole,
+/// a family's first member): a real number, enclosed by two doubles. An
+/// enclosure reaching ±∞ holds no more of it than one to ±MAX, and says
+/// nothing the replay can hold apart or match: a zero of exp(−x) in
+/// [MAX, ∞], pinned "at +∞", passed, and three families of sin(x)°'s zeros
+/// from [−∞, 360] passed for three orbits, the check that they were
+/// distinct skipped (review 26, R26-L-01, L-02). The certifier encloses
+/// each place by its cover's finite boxes, or a domain end's, so no
+/// genuine row lists one so.
+fn point(v: &Value) -> Result<Enc, String> {
+    let e = enc(v)?;
+    (e.lo.is_finite() && e.hi.is_finite())
+        .then_some(e)
+        .ok_or_else(|| {
+            format!(
+                "a place enclosed by [{:e}, {:e}]: a number lies between two doubles",
+                e.lo, e.hi
+            )
+        })
+}
+
+/// A family's period: a positive number, enclosed by two doubles above
+/// 0. One reaching 0 (or below) holds a period of no family, x₀ alone,
+/// and members it can't enumerate: an item listed alone beside such a
+/// family, every [0, 360]° from 0, passed though the family lists it too
+/// (the item's place a member of it for every period it may be), and
+/// three such families of two orbits passed for three (R26-L-01). The
+/// certifier's periods are f's, proven in (0, 10⁶].
+fn period_of(v: &Value) -> Result<Enc, String> {
+    let e = point(v)?;
+    (e.lo > 0.0)
+        .then_some(e)
+        .ok_or_else(|| format!("a period enclosed by [{:e}, {:e}], not above 0", e.lo, e.hi))
+}
+
 fn bound(v: &Value) -> Result<Bound, String> {
     match v.as_str() {
         Some("NegInf") => return Ok(Bound::NegInf),
@@ -111,12 +146,12 @@ fn list(v: &Value) -> Result<&Vec<Value>, String> {
 /// A spot: one point (x0, None) or a family (x0, Some(period)).
 fn spot(v: &Value) -> Result<(Enc, Option<Enc>), String> {
     if let Some(a) = v.get("At") {
-        return Ok((enc(a)?, None));
+        return Ok((point(a)?, None));
     }
     let f = v.get("Every").ok_or_else(|| format!("bad spot {v}"))?;
     Ok((
-        enc(f.get("x0").ok_or("x0")?)?,
-        Some(enc(f.get("period").ok_or("period")?)?),
+        point(f.get("x0").ok_or("x0")?)?,
+        Some(period_of(f.get("period").ok_or("period")?)?),
     ))
 }
 
@@ -1864,9 +1899,9 @@ fn in_domain(
             let every = it
                 .get("every")
                 .filter(|v| !v.is_null())
-                .map(enc)
+                .map(period_of)
                 .transpose()?;
-            (enc(it.get("x").ok_or("x")?)?, every)
+            (point(it.get("x").ok_or("x")?)?, every)
         } else {
             spot(it)?
         });
@@ -2108,12 +2143,12 @@ fn turns(
     // Each item's kind (a maximum: "from positive"; an inflection: any).
     let mut kinds: Vec<Option<bool>> = Vec::new();
     for item in list(&rc.value)? {
-        let x = enc(item.get("x").ok_or("x")?)?;
+        let x = point(item.get("x").ok_or("x")?)?;
         let y = enc(item.get("y").ok_or("y")?)?;
         let every = item
             .get("every")
             .filter(|v| !v.is_null())
-            .map(enc)
+            .map(period_of)
             .transpose()?;
         kinds.push((k == 1).then(|| item.get("kind").and_then(Value::as_str) == Some("Max")));
         if k == 1 {
@@ -3120,7 +3155,7 @@ fn domain_symmetric(fx: &Fx, all: &[RowCert]) -> Option<bool> {
         .get("excluded")?
         .as_array()?
         .iter()
-        .map(|f| Some((enc(f.get("x0")?).ok()?, enc(f.get("period")?).ok()?)))
+        .map(|f| Some((point(f.get("x0")?).ok()?, period_of(f.get("period")?).ok()?)))
         .collect::<Option<_>>()?;
     // Each family its own mirror: −x₀ = x₀ + k·P for a whole k, exactly
     // (x₀ and P doubles: 2x₀/P whole), or the zeros of a node even or odd
@@ -3542,8 +3577,8 @@ fn domain_candidates(all: &[RowCert], b: B) -> Option<Vec<Enc>> {
         start = hi;
     }
     for f in list(domain.value.get("excluded")?).ok()? {
-        let x0 = enc(f.get("x0")?).ok()?;
-        let per = enc(f.get("period")?).ok()?;
+        let x0 = point(f.get("x0")?).ok()?;
+        let per = period_of(f.get("period")?).ok()?;
         if per.lo.is_nan() || per.lo <= 0.0 || !per.hi.is_finite() {
             return None;
         }
@@ -3612,8 +3647,8 @@ fn domain(fx: &Fx, rc: &RowCert, out: &mut RowResult) -> Result<(), String> {
         .iter()
         .map(|f| {
             Ok((
-                enc(f.get("x0").ok_or("x0")?)?,
-                enc(f.get("period").ok_or("period")?)?,
+                point(f.get("x0").ok_or("x0")?)?,
+                period_of(f.get("period").ok_or("period")?)?,
             ))
         })
         .collect::<Result<_, String>>()?;
@@ -7149,7 +7184,7 @@ fn source_value(fx: &Fx, rc: &RowCert, src: &Value) -> Result<Stated, String> {
         )
     };
     if let Some(x) = src.get("At") {
-        let x = enc(x)?;
+        let x = point(x)?;
         return rc
             .claims
             .iter()
@@ -7214,7 +7249,7 @@ fn source_value(fx: &Fx, rc: &RowCert, src: &Value) -> Result<Stated, String> {
         };
     }
     if let Some(x) = src.get("Hole") {
-        let x = enc(x)?;
+        let x = point(x)?;
         return rc
             .claims
             .iter()
@@ -7232,7 +7267,11 @@ fn source_value(fx: &Fx, rc: &RowCert, src: &Value) -> Result<Stated, String> {
             });
     }
     if let Some(sd) = src.get("Side") {
-        let at = sd.get("at").and_then(|v| r(v).ok()).ok_or("side at")?;
+        let at = sd
+            .get("at")
+            .and_then(|v| r(v).ok())
+            .filter(|p| p.is_finite())
+            .ok_or("side at: a double")?;
         let right = sd
             .get("right")
             .and_then(Value::as_bool)
