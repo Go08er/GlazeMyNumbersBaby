@@ -1354,26 +1354,33 @@ fn members_apart(
         }
     }
     let q = Rational::from_f64;
-    let lo = places.iter().map(|e| e.lo).fold(f64::INFINITY, f64::min);
-    let hi = places
+    // (A place a claim proves out to ±∞ can't be told from a member.)
+    let Some(places_q) = places
         .iter()
-        .map(|e| e.hi)
-        .fold(f64::NEG_INFINITY, f64::max);
-    let (Some(lo), Some(hi)) = (q(lo), q(hi)) else {
+        .map(|e| Some((q(e.lo)?, q(e.hi)?)))
+        .collect::<Option<Vec<(Rational, Rational)>>>()
+    else {
         return Some("non-finite proven places cannot hold families apart".into());
     };
-    if lo > hi {
-        return None;
-    }
-    let places_q: Vec<(Rational, Rational)> = places
+    // The hull of every proven place (each place a real box, lo ≤ hi, and
+    // there is one: the hull is no empty stretch).
+    let lo = places_q
         .iter()
-        .filter_map(|e| Some((q(e.lo)?, q(e.hi)?)))
-        .collect();
-    if places_q.len() != places.len() {
-        return Some("non-finite proven places cannot hold families apart".into());
-    }
-    // Every member meeting the span: (family, its enclosure, wholly in
-    // the span), k from the least to the greatest whose member may meet it.
+        .map(|p| &p.0)
+        .min()
+        .expect("a place")
+        .clone();
+    let hi = places_q
+        .iter()
+        .map(|p| &p.1)
+        .max()
+        .expect("a place")
+        .clone();
+    // Every member meeting the hull: (family, its enclosure, wholly in
+    // the hull), k from the least to the greatest whose member may meet it.
+    // (A listed family's x₀ and period are numbers, the period above 0, as
+    // `point` and `period_of` read them; one that can't be enumerated is
+    // refused all the same, never skipped.)
     let mut members: Vec<(usize, Rational, Rational, bool)> = Vec::new();
     for (i, (_, x0, p)) in families.iter().enumerate() {
         let (Some(xl), Some(xh), Some(pl), Some(ph)) = (q(x0.lo), q(x0.hi), q(p.lo), q(p.hi))
@@ -1390,7 +1397,7 @@ fn members_apart(
         let (mut k, last) = (least.numer().clone(), most.numer().clone());
         if Integer::from(&last - &k) > 4096 {
             return Some(format!(
-                "the family through {:e} has too many members in the span to hold apart",
+                "the family through {:e} has too many members in the hull to hold apart",
                 x0.mid()
             ));
         }
@@ -1448,7 +1455,7 @@ fn members_apart(
             ));
         }
     }
-    // A place of its own for each member in the span (augmenting paths).
+    // A place of its own for each member in the hull (augmenting paths).
     fn assign(
         m: usize,
         options: &[Vec<usize>],
@@ -1473,7 +1480,7 @@ fn members_apart(
     let mut owner = std::collections::HashMap::new();
     for (m, member) in members.iter().enumerate() {
         // (A member with no proven place is said elsewhere, or past the
-        // claims; one straddling the span's end may lie outside it.)
+        // claims; one straddling the hull's end may lie outside it.)
         if !member.3 || options[m].is_empty() {
             continue;
         }
