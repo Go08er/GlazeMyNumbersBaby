@@ -14,8 +14,8 @@ makedepends=('cargo' 'gtk4' 'libadwaita' 'wayland' 'libxkbcommon')
 # Rust handles its own LTO; makepkg's -flto would also hit the bundled C (ring).
 options=('!lto' '!debug')
 source=("$pkgbase-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-# Pinned to the tag tarball's checksum once v0.2.0 is published.
-sha256sums=('SKIP')
+# The v0.2.0 tag tarball's checksum.
+sha256sums=('2974ff53b17572f11776f4f2f346d71a12d0073363de5919725d6ed831b09d63')
 
 _src="GlazeMyNumbersBaby-$pkgver"
 
