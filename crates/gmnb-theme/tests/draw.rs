@@ -524,7 +524,7 @@ fn scales_one_inside_another_stay_within_what_can_be_drawn() {
         draw:save()
         draw:scale(1e7)
         draw:scale(-1e7, 0.5)
-        draw:rect(0, 0, 1, 1, "#ff0000")
+        draw:rect(0, 0, 1e-7, 1e-7, "#ff0000")
         draw:restore()
         for _ = 1, 20 do
             draw:save()
@@ -567,6 +567,50 @@ fn scales_one_inside_another_stay_within_what_can_be_drawn() {
     );
     let failed = message(run(&theme).unwrap_err());
     assert!(failed.contains("draw:scale"), "{failed}");
+    // Whatever the scales, nothing is drawn more than 10^8 pixels from
+    // the layer's origin: given a picture 10^11 across to shadow (a scale
+    // of 10^4 and a rect of 10^7), the software renderer crashed.
+    for (body, drawn) in [
+        ("draw:scale(10) draw:rect(-1e7, 0, 1, 1e7, '#fff')", true),
+        ("draw:scale(100) draw:rect(-1e7, 0, 1, 1, '#fff')", false),
+        (
+            "draw:scale(1e4) draw:push_shadow({ { blur = 4, color = '#000' } }) draw:rect(0, 0, 1e7, 1e7, '#fff') draw:pop()",
+            false,
+        ),
+        ("draw:scale(1e4) draw:circle(0, 0, 1e5, '#fff')", false),
+        ("draw:scale(1e4) draw:circle(9e3, 0, 1e3, '#fff')", true),
+        (
+            "draw:scale(1e3) draw:fill(gmnb.svg_path('M0 0 L1e6 0 L0 1 Z'), '#fff')",
+            false,
+        ),
+        (
+            "draw:scale(1e3) draw:fill(gmnb.svg_path('M0 0 L24 0 L0 24 Z'), '#fff')",
+            true,
+        ),
+        (
+            "draw:scale(1e3) draw:stroke(gmnb.path():move_to(0, 0):line_to(9e4, 0), 1, '#fff')",
+            true,
+        ),
+        (
+            "draw:scale(1e3) draw:stroke(gmnb.path():move_to(0, 0):line_to(1e5, 1), 2, '#fff')",
+            false,
+        ),
+        (
+            "draw:scale(1e4) draw:text('8', 1e4, 0, { size = 20 }, '#fff')",
+            false,
+        ),
+        (
+            "draw:scale(1e5) draw:shadow(0, 0, 10, 10, 0, { x = 1e3, blur = 8, color = '#000' })",
+            false,
+        ),
+    ] {
+        let (theme, _d) = background("reach", "", body);
+        let result = run(&theme);
+        assert_eq!(result.is_ok(), drawn, "{body}: {result:?}");
+        if let Err(failure) = result {
+            assert!(message(failure).contains("10^8"), "{body}");
+        }
+    }
     // And one more after those three is refused, by itself: a hook that
     // catches the error draws what it drew.
     let (theme, _d) = background(
@@ -577,7 +621,7 @@ fn scales_one_inside_another_stay_within_what_can_be_drawn() {
         draw:scale(1e7)
         local ok, why = pcall(draw.scale, draw, 1.5)
         assert(not ok and string.find(tostring(why), "draw:scale"), tostring(why))
-        draw:rect(0, 0, 1, 1, "#ff0000")
+        draw:rect(0, 0, 1e-7, 1e-7, "#ff0000")
         "##,
     );
     assert_eq!(ops_count(&theme), 3);

@@ -471,6 +471,15 @@ impl Recorder {
                 format!("more than {} draw calls in one frame", self.limits.ops),
             ));
         }
+        // How far from the layer's origin it is drawn, at most, with the
+        // scales in force: past `DEVICE_REACH` the toolkit's software
+        // renderer crashed (a shadow of a picture 10^11 pixels across).
+        if f64::from(local_reach(&op)) * self.zoom > DEVICE_REACH {
+            return Err(bad(
+                what,
+                "drawn more than 10^8 pixels from the layer's origin, with the scales in force",
+            ));
+        }
         self.ops.push(op);
         Ok(())
     }
@@ -506,6 +515,39 @@ fn bad(what: &str, problem: impl std::fmt::Display) -> mlua::Error {
 /// The largest coordinate taken: far beyond any window, small enough that
 /// the renderers' arithmetic stays exact.
 const FAR: f64 = 1.0e7;
+
+/// How far from a layer's origin, in its pixels, anything may be drawn,
+/// at most: a call that, with the scales in force, would reach further is
+/// refused. (Given a picture 10^10 pixels across or more to shadow, the
+/// toolkit's software renderer failed, or crashed; at 10^9 it drew.)
+const DEVICE_REACH: f64 = 1.0e8;
+
+/// How far from the origin, in the units it is drawn in, an operation can
+/// reach, at most (its text: a line of its bytes at its font's size).
+fn local_reach(op: &Op) -> f32 {
+    let far = |c: &[f32]| c.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    let rect = |r: &Rect| far(&[r[0], r[1], r[0] + r[2], r[1] + r[3]]);
+    let shadow = |s: &Shadow| far(&[s.x, s.y]) + s.spread.abs() + s.blur.abs();
+    match op {
+        Op::Rect { rect: r, .. }
+        | Op::RoundedRect { rect: r, .. }
+        | Op::Image { rect: r, .. }
+        | Op::Tile { rect: r, .. }
+        | Op::Animation { rect: r, .. }
+        | Op::Field { rect: r, .. }
+        | Op::PushClip { rect: r, .. } => rect(r),
+        Op::Border { rect: r, width, .. } => rect(r) + width,
+        Op::Shadow {
+            rect: r, shadow: s, ..
+        } => rect(r) + shadow(s),
+        Op::Circle { center, radius, .. } => far(center) + radius,
+        Op::Fill { path, .. } => path::reach(path),
+        Op::Stroke { path, stroke, .. } => path::reach(path) + stroke.width,
+        Op::Text { text, at, font, .. } => far(at) + font.size * (text.len() as f32 + 1.0),
+        Op::PushShadow(shadows) => shadows.iter().map(shadow).fold(0.0, f32::max),
+        _ => 0.0,
+    }
+}
 
 /// The most the scales in force at once that enlarge may multiply sizes
 /// by. With coordinates within [`FAR`] and 4096 calls, every number the

@@ -355,6 +355,12 @@ pub const MAX_RADIUS: f32 = 1.0e6;
 /// What passes here is what the toolkit's parser is given; anything else
 /// is refused before it gets there.
 pub fn svg_segments(d: &str) -> Result<usize, String> {
+    svg_reach(d).map(|(count, _)| count)
+}
+
+/// [`svg_segments`], and how far from the origin a point of the path can
+/// be, at most.
+pub fn svg_reach(d: &str) -> Result<(usize, f64), String> {
     let b = d.as_bytes();
     let mut i = 0;
     let mut count = 0usize;
@@ -431,6 +437,9 @@ pub fn svg_segments(d: &str) -> Result<usize, String> {
     // largest made its GL renderer abort.)
     let mut absolute = 0.0f64;
     let mut steps = 0.0f64;
+    // The furthest, of all of them (an arc's points can be its radius
+    // from its centre, which is its radius from its ends).
+    let mut furthest = 0.0f64;
     skip(&mut i, false);
     while i < b.len() {
         let command = b[i];
@@ -510,6 +519,11 @@ pub fn svg_segments(d: &str) -> Result<usize, String> {
                     let what = if radius { "an arc's radius" } else { "a point" };
                     return Err(format!("{what} past {SVG_REACH:e} (at byte {})", at + 1));
                 }
+                furthest = furthest.max(if radius {
+                    absolute + steps + 2.0 * n
+                } else {
+                    reach
+                });
             }
             sets += 1;
             count += 1;
@@ -518,7 +532,27 @@ pub fn svg_segments(d: &str) -> Result<usize, String> {
     if count == 0 {
         return Err("empty path data".into());
     }
-    Ok(count)
+    Ok((count, furthest))
+}
+
+/// How far from the origin, in its own units, a point of the path can be,
+/// at most.
+pub fn reach(path: &Path) -> f32 {
+    let far = |c: &[f32]| c.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    path.segments
+        .iter()
+        .map(|s| match s {
+            Segment::MoveTo(x, y) | Segment::LineTo(x, y) => far(&[*x, *y]),
+            Segment::QuadTo(a, b, x, y) => far(&[*a, *b, *x, *y]),
+            Segment::CurveTo(a, b, c, d, x, y) => far(&[*a, *b, *c, *d, *x, *y]),
+            Segment::Close => 0.0,
+            Segment::Rect(x, y, w, h) | Segment::RoundedRect(x, y, w, h, _) => {
+                far(&[*x, *y, x + w, y + h])
+            }
+            Segment::Circle(x, y, r) => far(&[*x, *y]) + r,
+            Segment::Svg(d) => svg_reach(d).map_or(SVG_REACH, |(_, r)| r) as f32,
+        })
+        .fold(0.0, f32::max)
 }
 
 #[cfg(test)]

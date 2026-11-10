@@ -1241,7 +1241,12 @@ What a call does with what it is given:
   nothing back.) (Six of 10^7 are past a float's range, and the toolkit's
   software renderer, given that and a blur, stopped drawing the whole
   window.) A `restore`, or the `pop` of a push, gives back the scales
-  made since.
+  made since. And whatever the scales, a call that would draw more than
+  10^8 pixels from the layer's origin is refused (an error at that line):
+  a text by its position and its bytes at its font's size, a path by its
+  furthest point, a shadow with its offset and blur. (Given a picture
+  10^11 pixels across to shadow, a scale of 10^4 and a rectangle of 10^7,
+  the software renderer crashed.)
 - `draw:text`'s font is laid onto `text.body` of the style; `nil` is that
   font as it is. A font that can't be read is noted and the rest of it
   used.
