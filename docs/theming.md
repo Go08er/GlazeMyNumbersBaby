@@ -739,7 +739,7 @@ For a Control, the base states are these unless the row says otherwise:
 | `plain.background` | Fill | `base.text_scrim` | `.wc-plain` *(new)*: the memory row, radix list, bit grid, programmer and scientific toolbars, the date column, the converter's value column, the graph side panel, empty-state texts |
 | `plain.radius` | Radius | `shape.card_radius` | same |
 | `scrim` | Color | black at 0.30 | The shade over what the sidebar or a sheet covers |
-| `focus` | FocusRing | `{ width 2, color accent_text, offset 2 }` (the ring touches the control: DGMNB's `rounded_border` strokes inside the rect it is given) | `window.gmnb.own-focus :focus-visible { outline }` for every control but text fields and sliders, which draw their own; `outline-offset` is `offset − width`; the ring's corners follow the control's radius |
+| `focus` | FocusRing | `{ width 2, color accent_text, offset 2 }` (the ring touches the control: DGMNB's `rounded_border` strokes inside the rect it is given) | `window.gmnb.own-focus :focus:focus-visible { outline }` (the focus itself: `:focus-visible` alone holds for the widgets holding it too) for every control but text fields and sliders, which draw their own; `outline-offset` is `offset − width`; the ring's corners follow the control's radius |
 
 ### Header and window buttons
 

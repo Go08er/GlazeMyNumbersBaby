@@ -3370,7 +3370,7 @@ button.wc-bit:checked:disabled {
    click hides it: window.rs hide_ring_on_press), `focus.offset` out from
    the control to its outer edge, its corners the control's. Text fields
    and sliders draw their own. */
-window.gmnb.own-focus :focus-visible:not(text):not(entry):not(spinbutton):not(scale) {
+window.gmnb.own-focus :focus:focus-visible:not(text):not(entry):not(spinbutton):not(scale) {
   outline-style: solid;
   outline-width: var(--gmnb-focus-width);
   outline-color: var(--gmnb-focus-color);
