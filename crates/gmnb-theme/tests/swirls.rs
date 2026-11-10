@@ -48,6 +48,60 @@ fn draw_at(theme: &Theme, kind: LayerKind, c: &Ctx, f: &Frame) -> Drawn {
     ok(theme.draw(kind, c, f))
 }
 
+/// Whether a layer asked to be drawn again when its next thirtieth of a
+/// second begins, having been drawn at `time`.
+/// (Never a whole thirtieth away: that would be a plain timer of the
+/// app's, which is late for the screen's frame half the time. And a
+/// frame half a millisecond early belongs to the thirtieth it came for.)
+fn next_thirtieth(again: Option<f64>, time: f64) -> bool {
+    let next = ((time * 30.0 + 0.03).floor() + 1.0) / 30.0;
+    let wait = (next - time).clamp(0.001, 1.0 / 30.0 - 0.001);
+    again.is_some_and(|asked| (asked - wait).abs() < 1e-9)
+        && gmnb_theme::sched::Clock::new().end(0.0, again, RUN) == gmnb_theme::sched::Wait::Frame
+}
+
+const RUN: gmnb_theme::sched::Conditions = gmnb_theme::sched::Conditions {
+    mapped: true,
+    active: true,
+    motion: true,
+    settled: false,
+};
+
+/// The app's own clock (`sched`) driven by what the background returns,
+/// on a screen of `hertz` whose frames come `early` seconds before they
+/// are due: how many times the layer is drawn in ten seconds, and how
+/// many of those are new pictures.
+fn drawn_in_ten_seconds(hertz: f64, early: f64) -> (usize, usize) {
+    use gmnb_theme::sched::{Clock, Fire};
+    let theme = swirls();
+    let c = ctx(&theme, &[]);
+    let mut clock = Clock::new();
+    let (mut draws, mut pictures) = (0, HashSet::new());
+    let mut draw = |clock: &mut Clock, now: f64| {
+        let timing = clock.begin(now, RUN);
+        let f = Frame {
+            time: timing.time,
+            dt: timing.dt,
+            ..Frame::sized(760.0, 640.0)
+        };
+        let d = draw_at(&theme, LayerKind::Background, &c, &f);
+        assert_eq!(d.retry, None, "{now}");
+        draws += 1;
+        pictures.insert(field(&d).0.serial);
+        // (A plain timer is never asked for: `next_thirtieth` has that.)
+        assert_eq!(clock.end(now, d.again, RUN), gmnb_theme::sched::Wait::Frame);
+    };
+    draw(&mut clock, 0.0);
+    let frames = (10.0 * hertz) as usize;
+    for n in 1..=frames {
+        let now = n as f64 / hertz - early;
+        if clock.fire(now, RUN) == Fire::Draw {
+            draw(&mut clock, now);
+        }
+    }
+    (draws, pictures.len())
+}
+
 fn text(s: &str) -> OptionValue {
     OptionValue::Text(s.into())
 }
@@ -192,14 +246,14 @@ fn the_paint_flows_while_it_may_and_stands_when_it_may_not() {
     );
     let flowing = ctx(&theme, &[]);
     let f = Frame::sized(760.0, 640.0);
-    // One field over the whole window, at half size, and again in a
-    // thirtieth of a second: the app keeps a plain timer for that.
+    // One field over the whole window, at half size, and again when the
+    // next thirtieth of a second begins.
     let first = draw_at(&theme, LayerKind::Background, &flowing, &f);
     let (picture, rect) = field(&first);
     assert_eq!(rect, [0.0, 0.0, 760.0, 640.0]);
     assert_eq!((picture.width, picture.height), (380, 320));
     assert_eq!(first.list.ops.len(), 1);
-    assert_eq!(first.again, Some(1.0 / 30.0));
+    assert!(next_thirtieth(first.again, 0.0), "{:?}", first.again);
     assert_eq!(first.retry, None);
     // Drawn again within the same thirtieth (an event came, the style
     // changed): the picture already made, at no cost, and the rest of
@@ -212,8 +266,7 @@ fn the_paint_flows_while_it_may_and_stands_when_it_may_not() {
     };
     let again = draw_at(&theme, LayerKind::Background, &flowing, &soon);
     assert_eq!(field(&again).0.serial, serial);
-    let wait = again.again.unwrap();
-    assert!((wait - (1.0 / 30.0 - 0.012)).abs() < 1e-6, "{wait}");
+    assert!(next_thirtieth(again.again, 0.012), "{:?}", again.again);
     // Thirty pictures a second and no more: a second of frames a
     // sixtieth apart makes thirty. (From the first fifth of a second on:
     // until its second snapshot is made the paint stands.)
@@ -268,7 +321,7 @@ fn the_paint_flows_while_it_may_and_stands_when_it_may_not() {
         };
         last = Some(draw_at(&theme, LayerKind::Background, &held, &f));
         if i < 30 {
-            assert_eq!(last.as_ref().unwrap().again, Some(1.0 / 30.0), "{i}");
+            assert!(next_thirtieth(last.as_ref().unwrap().again, t), "{i}");
         }
     }
     assert_eq!(last.unwrap().again, None);
@@ -296,6 +349,28 @@ fn the_paint_flows_while_it_may_and_stands_when_it_may_not() {
             .iter()
             .all(|(_, strikes, off)| *strikes == 0 && !off)
     );
+}
+
+/// The paint on the app's own clock: thirty pictures a second on a 60 Hz
+/// screen and no frame drawn for nothing, whether the screen's frames
+/// come on time or the half millisecond early the clock allows; and
+/// close to thirty on screens whose frames don't divide a thirtieth.
+#[test]
+fn the_paint_is_drawn_thirty_times_a_second_on_the_apps_clock() {
+    for early in [0.0, 0.0003, 0.00049] {
+        let (draws, pictures) = drawn_in_ten_seconds(60.0, early);
+        assert!((299..=301).contains(&draws), "60 Hz, {early}: {draws}");
+        // (The first fifth of a second is one picture: one snapshot.)
+        assert!(
+            pictures >= draws - 6,
+            "60 Hz, {early}: {pictures} of {draws}"
+        );
+    }
+    for hertz in [50.0, 75.0, 120.0, 144.0, 165.0, 240.0] {
+        let (draws, pictures) = drawn_in_ten_seconds(hertz, 0.0002);
+        assert!((240..=301).contains(&draws), "{hertz} Hz: {draws}");
+        assert!(pictures >= draws - 6, "{hertz} Hz: {pictures} of {draws}");
+    }
 }
 
 /// Every pixel the background draws, in every set of bands, flowing,
@@ -439,7 +514,7 @@ fn the_background_stays_within_its_limits_at_any_size() {
             let d = draw_at(&theme, LayerKind::Background, &c, &f);
             let ms = cpu_ms() - started;
             assert_eq!(d.retry, None, "{w}x{h} at {t}");
-            assert_eq!(d.again, Some(1.0 / 30.0), "{w}x{h} at {t}");
+            assert!(next_thirtieth(d.again, t), "{w}x{h} at {t}");
             let (picture, _) = field(&d);
             assert!(picture.width * picture.height <= 262_144);
             times.push(ms);
@@ -603,6 +678,46 @@ fn what_a_frame_costs() {
     );
 }
 
+/// A window dragged larger and smaller, a new size every frame for
+/// twenty seconds' worth of frames: the buffers of each size are let go
+/// as the next are made, and the theme stays far inside its 8 MiB.
+#[test]
+fn a_window_being_resized_keeps_its_memory() {
+    let theme = swirls();
+    let c = ctx(&theme, &[]);
+    let key = press(5, KeyKind::Number, 110.0, 300.0);
+    let mut most = 0usize;
+    for i in 0..1200u32 {
+        let t = i as f64 / 60.0;
+        // 300 to 1500 wide and back, 400 to 1000 high, out of step.
+        let swing = |period: f64| 0.5 - 0.5 * (t * std::f64::consts::TAU / period).cos();
+        let (w, h) = (
+            (300.0 + 1200.0 * swing(7.0)).round() as f32,
+            (400.0 + 600.0 * swing(4.6)).round() as f32,
+        );
+        let f = Frame {
+            time: t,
+            dt: 1.0 / 60.0,
+            events: vec![(t % 1.0, &key)],
+            ..Frame::sized(w, h)
+        };
+        let d = draw_at(&theme, LayerKind::Background, &c, &f);
+        assert_eq!(field(&d).1, [0.0, 0.0, w, h]);
+        most = most.max(theme.engine().used_memory());
+    }
+    println!(
+        "swirls, resized every frame: {} KiB of the theme's 8 MiB at most",
+        most / 1024
+    );
+    assert!(most < 4 << 20, "{most} bytes");
+    assert!(
+        theme
+            .hooks()
+            .iter()
+            .all(|(_, strikes, off)| *strikes == 0 && !off)
+    );
+}
+
 /// A calculator keypad's cells, 6 rows of 4.
 fn keypad_cells() -> Vec<KeyCell> {
     let mut cells = Vec::new();
@@ -719,7 +834,7 @@ fn the_readouts_figures_are_paint_behind_a_mask() {
     let rest = draw(&c, 0.0, value(&now, &old, Role::Calculator, false, None));
     assert!(border(&rest) && masked(&rest));
     assert_eq!((count(&rest, false), fields(&rest)), (9, 1));
-    assert_eq!(rest.again, Some(1.0 / 30.0));
+    assert!(next_thirtieth(rest.again, 0.0), "{:?}", rest.again);
     assert_eq!(rest.retry, None);
     // A converter's value and a date's result are figures of paint too,
     // with no hairline of the readout's.
@@ -761,7 +876,7 @@ fn the_readouts_figures_are_paint_behind_a_mask() {
             Some((ChangeKind::Typing, 2.0)),
         ),
     );
-    assert_eq!(done.again, Some(1.0 / 30.0));
+    assert!(next_thirtieth(done.again, 2.0), "{:?}", done.again);
     // Under reduced motion, a still picture of the same paint.
     let f = Frame {
         motion: false,

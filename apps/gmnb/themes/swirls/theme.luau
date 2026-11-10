@@ -83,7 +83,7 @@ end
 -- nothing is chosen by eye. The glass has three strengths to choose from,
 -- and for each set of bands, at each window opacity, the least strength at
 -- which every ink still reads over every colour the field can show is
--- worked out (`floor`); the glass is never thinner than that.
+-- worked out (`least_glass`); the glass is never thinner than that.
 --
 -- The field's colours are its three bands and the blends between two of
 -- them. Glass is dark and the inks are light, so the worst ground is the
@@ -182,8 +182,9 @@ type Scheme = {
 	b_ink: Rgba,
 	danger: Rgba,
 	series: { Rgba },
-	-- How strong the glass is: keys and panes; a key being pressed; the
-	-- readout and the panels; the graph.
+	-- How strong the glass is: the least the text can bear; keys and
+	-- panes; a key being pressed; the readout and the panels; the graph.
+	least: number,
 	glass: number,
 	pressed: number,
 	panel: number,
@@ -238,7 +239,8 @@ local function finish(id: string, set: Bands, strength: number, opacity: number)
 		-- A field's placeholder: 2.45, as in the base look.
 		{ ink = faint, target = 2.45, on = { alpha(fg, 0.08) } },
 	}
-	local glass = max(strength, least_glass(lift, backs, checks, 1.02))
+	local least = least_glass(lift, backs, checks, 1.02)
+	local glass = max(strength, least)
 
 	-- The two bright colours as text, and a coral for errors (neither band
 	-- in any set): each as near itself as that glass lets it be, alone and
@@ -261,7 +263,8 @@ local function finish(id: string, set: Bands, strength: number, opacity: number)
 	local danger = ink(coral, alpha(coral, 0.10))
 	-- (A colour that is as light as it can be and still doesn't read on
 	-- its own wash, white on white's, needs more glass instead.)
-	glass = max(glass, least_glass(lift, backs, checks, 1.02))
+	least = max(least, least_glass(lift, backs, checks, 1.02))
+	glass = max(strength, least)
 
 	-- A pressed key clears as far as its glyph (large: 3) allows.
 	local pressed = min(glass, least_glass(lift, backs, { { ink = fg, target = UI, on = {} } }, 1.05))
@@ -292,6 +295,7 @@ local function finish(id: string, set: Bands, strength: number, opacity: number)
 		b_ink = b_ink,
 		danger = danger,
 		series = series,
+		least = least,
 		glass = glass,
 		pressed = pressed,
 		panel = panel,
@@ -733,7 +737,9 @@ local function style(ctx: Ctx): Style
 		},
 
 		date = {
-			label = { font = sans(12, 600, 0.04), color = dim },
+			-- (A pane has no padding of its own: what lies on one steps in
+			-- from its edge by its own margin.)
+			label = { font = sans(12, 600, 0.04), color = dim, margin = { 8, 0, 2, 10 } },
 			field = {
 				min_height = 40,
 				padding = { 0, 12 },
@@ -751,7 +757,7 @@ local function style(ctx: Ctx): Style
 				border = { width = 1, color = line },
 				radius = RADIUS,
 				padding = { 12, 16, 14, 16 },
-				margin = { 8, 0, 0, 0 },
+				margin = { 10, 8, 8, 8 },
 			},
 			result = { size = 32, font = figures(nil, 650) },
 			add_result = { size = 28, font = figures(nil, 650) },
@@ -781,6 +787,7 @@ local function style(ctx: Ctx): Style
 				border = { width = 1, color = alpha(b, 0.18) },
 				radius = RADIUS,
 				padding = { 6, 10, 8, 10 },
+				margin = { 8, 8, 0, 8 },
 				transition = { shadow = 180 },
 				checked = { border = { width = 1, color = a } },
 			},
@@ -788,6 +795,7 @@ local function style(ctx: Ctx): Style
 			value = { size = 42, font = figures(nil, 600), checked_weight = 700, focus = { width = 3, color = a, offset = 5, radius = 8 } },
 			symbol = { font = sans(24), color = dim },
 			unit = {
+				margin = { 6, 8, 2, 8 },
 				radius = 8,
 				padding = { 2, 10 },
 				min_height = 34,
@@ -801,6 +809,7 @@ local function style(ctx: Ctx): Style
 			},
 			-- The swap button turns the values over, and itself.
 			swap = {
+				margin = { 0, 0, 0, 10 },
 				min_width = 36,
 				min_height = 36,
 				radius = 999,
@@ -811,7 +820,7 @@ local function style(ctx: Ctx): Style
 				hover = { background = alpha(b, 0.2), border = { width = 1, color = a } },
 				active = { background = alpha(b, 0.2), border = { width = 1, color = a }, rotate = 180, scale = 0.92 },
 			},
-			caption = { font = sans(13), color = dim },
+			caption = { font = sans(13), color = dim, margin = { 6, 12, 2, 12 } },
 			chip = {
 				padding = { 4, 10 },
 				radius = 999,
@@ -823,14 +832,14 @@ local function style(ctx: Ctx): Style
 			},
 			whimsy = { background = a, color = on_a, border = false },
 			whimsy_icon = true,
-			ratio = { font = sans(14), color = fg },
-			timestamp = { font = sans(12), color = dim },
+			ratio = { font = sans(14), color = fg, margin = { 6, 12, 0, 12 } },
+			timestamp = { font = sans(12), color = dim, margin = { 0, 0, 10, 12 } },
 			link = { font = sans(12), padding = { 0, 6 }, min_height = 22, color = b_ink, hover = wash, active = wash_more },
 		},
 
 		graph = {
 			divider = hair,
-			row = { padding = 3, radius = 8 },
+			row = { padding = { 3, 6 }, radius = 8 },
 			row_error = { background = alpha(danger, 0.10) },
 			error = { font = sans(12), color = danger },
 			entry = { min_height = 36, radius = 8, font = sans(15), background = alpha(fg, 0.07) },
@@ -906,6 +915,23 @@ local SHOWN_RATE = 30
 local SHOWN_PER_FIELD = SHOWN_RATE / FIELD_RATE
 -- How fast the page's swirl turns: its phase, in radians a second.
 local TURN = 0.06
+-- Which thirtieth of a second a layer's clock is in. (A frame may come
+-- half a millisecond before it is due: it belongs to the thirtieth it
+-- was drawn for.)
+local function thirtieth(time: number): number
+	return floor(time * SHOWN_RATE + 0.03)
+end
+
+-- How long a layer drawn at `time` waits for its next thirtieth to begin.
+-- Never a whole thirtieth: the app would arm a plain timer for that,
+-- which comes due just after every other frame of a 60 Hz screen as
+-- often as just before it, and the paint would run at 20 pictures a
+-- second half the time. Under a thirtieth it watches the screen's own
+-- frames, and draws on the first one due.
+local function until_next(time: number): number
+	return clamp((thirtieth(time) + 1) / SHOWN_RATE - time, 0.001, 1 / SHOWN_RATE - 0.001)
+end
+
 -- About as many points as a 760 × 640 window has at one every 12 pixels:
 -- a bigger window gets a coarser grid, not more to work out. (The bands
 -- grow with the window, so they are as smooth in it.)
@@ -995,8 +1021,6 @@ type Kept = {
 	shown: number,
 	tick: number,
 	mix: number,
-	-- When the next thirtieth is due, on the layer's clock.
-	due: number,
 	-- The part of the grid something has pushed about this frame: columns
 	-- left to right, rows top to bottom (none: right < left).
 	left: number,
@@ -1032,7 +1056,6 @@ local function keep(cols: number, rows: number, width: number, height: number): 
 		shown = -1,
 		tick = -1,
 		mix = 0,
-		due = 0,
 		left = 0,
 		right = -1,
 		top = 0,
@@ -1274,7 +1297,7 @@ local function background(draw: Draw, frame: Frame): Again
 	-- same and the app has the picture already.
 	local speed = number_option(ctx, "speed", 1)
 	local stirring = ctx.options.stir ~= false
-	local shown = floor(frame.time * SHOWN_RATE + 0.001)
+	local shown = thirtieth(frame.time)
 	if fresh or k.tick < 0 or shown ~= k.shown then
 		local tick = floor(shown / SHOWN_PER_FIELD)
 		if fresh or k.tick < 0 then
@@ -1313,7 +1336,6 @@ local function background(draw: Draw, frame: Frame): Again
 		end
 		k.mix = (shown - tick * SHOWN_PER_FIELD) / SHOWN_PER_FIELD
 		k.shown = shown
-		k.due = frame.time + 1 / SHOWN_RATE
 		k.bent = false
 		k.stirred = stirring and #frame.events > 0 and disturb(k, frame.events, width, height)
 	end
@@ -1329,12 +1351,9 @@ local function background(draw: Draw, frame: Frame): Again
 		scale = 1.25,
 	})
 
-	-- Again in a thirtieth of a second for as long as anything moves (a
-	-- whole thirtieth: the app keeps a plain timer for that, and its frame
-	-- clock sleeps); sooner if this frame was drawn in between.
+	-- Again when the next thirtieth begins, for as long as anything moves.
 	if speed > 0 or k.flowing or k.stirred then
-		local wait = k.due - frame.time
-		return if wait > 0.9 / SHOWN_RATE then 1 / SHOWN_RATE else max(wait, 0.001)
+		return until_next(frame.time)
 	end
 	return nil
 end
@@ -1441,7 +1460,7 @@ local function slice(buf: buffer, cols: number, rows: number, width: number, hei
 	end
 end
 
-type Slice = { cols: number, rows: number, a: buffer, b: buffer, tick: number, shown: number, mix: number, turn: number, due: number }
+type Slice = { cols: number, rows: number, a: buffer, b: buffer, tick: number, shown: number, mix: number, turn: number }
 -- By size: two readouts of one size (the converter's) show one slice.
 local slices: { [number]: Slice } = {}
 local slices_count = 0
@@ -1565,7 +1584,7 @@ local function display(draw: Draw, frame: Frame): Again
 		if slices_count >= 24 then
 			slices, slices_count = {}, 0
 		end
-		k = { cols = cols, rows = rows, a = buffer.create(cols * rows * 4), b = buffer.create(cols * rows * 4), tick = -1, shown = -1, mix = 0, turn = 0, due = 0 }
+		k = { cols = cols, rows = rows, a = buffer.create(cols * rows * 4), b = buffer.create(cols * rows * 4), tick = -1, shown = -1, mix = 0, turn = 0 }
 		slices[key] = k
 		slices_count += 1
 	end
@@ -1576,13 +1595,13 @@ local function display(draw: Draw, frame: Frame): Again
 		end
 		k.mix = 0
 	else
-		local shown = floor(frame.time * SHOWN_RATE + 0.001)
+		local shown = thirtieth(frame.time)
 		if k.tick < 0 or shown ~= k.shown then
 			local tick = floor(shown / SHOWN_PER_FIELD)
 			local turn = STILL + turned * DIGIT_FLOW
 			if k.tick < 0 then
 				slice(k.a, cols, rows, band.w, band.h, turn)
-				slice(k.b, cols, rows, band.w, band.h, turn)
+				buffer.copy(k.b, 0, k.a)
 				k.turn = turn
 				k.tick = tick
 			elseif tick ~= k.tick then
@@ -1595,7 +1614,6 @@ local function display(draw: Draw, frame: Frame): Again
 			end
 			k.mix = (shown - tick * SHOWN_PER_FIELD) / SHOWN_PER_FIELD
 			k.shown = shown
-			k.due = frame.time + 1 / SHOWN_RATE
 		end
 	end
 
@@ -1623,8 +1641,7 @@ local function display(draw: Draw, frame: Frame): Again
 	if change then
 		return 0
 	elseif living then
-		local wait = k.due - frame.time
-		return if wait > 0.9 / SHOWN_RATE then 1 / SHOWN_RATE else max(wait, 0.001)
+		return until_next(frame.time)
 	end
 	return nil
 end
@@ -1663,10 +1680,11 @@ end
 local function glass_tile(draw: Draw, frame: Preview, choice: string)
 	local s = scheme(frame.ctx)
 	local w, h = frame.width, frame.height
-	local strength = max(STRENGTH[choice] or SMOKED, s.glass - (STRENGTH[tostring(frame.ctx.options.glass)] or SMOKED) + (STRENGTH[choice] or SMOKED))
+	-- (As strong as it would be: the strength named, or what the text needs.)
+	local strength = max(STRENGTH[choice] or SMOKED, s.least)
 	draw:push_clip(0, 0, w, h, RADIUS)
 	tile_swirl(draw, w, h, RAMPS[s.id])
-	draw:rounded_rect(14, 10, w - 28, h - 20, 8, alpha(s.lift, clamp(strength, 0, 1)))
+	draw:rounded_rect(14, 10, w - 28, h - 20, 8, alpha(s.lift, strength))
 	draw:border(14, 10, w - 28, h - 20, 8, 1, alpha(s.b, 0.5))
 	local tw, th = draw:text_size("7", { size = 20, weight = 500 })
 	draw:text("7", (w - tw) / 2, (h - th) / 2, { size = 20, weight = 500 }, s.fg)
