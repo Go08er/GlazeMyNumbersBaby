@@ -421,11 +421,7 @@ impl Hub {
     /// What the installed themes credit (About → Legal): a title and a
     /// text each.
     pub fn credits(&self) -> Vec<(String, String)> {
-        self.sources()
-            .into_iter()
-            .filter_map(|source| Theme::load(source, Limits::default()).ok())
-            .flat_map(|theme| theme.credits())
-            .collect()
+        credits(&self.sources())
     }
 
     /// The theme chosen ("" for the base look), loaded or not.
@@ -1122,6 +1118,33 @@ impl Hub {
     }
 }
 
+/// What the themes of `sources` (`themes::discover`'s) credit, for
+/// About → Legal: a title and a text each. The built-in themes' always,
+/// first: their fonts and pictures are in GMNB itself, whether or not a
+/// folder of the user's replaces the theme ("your copy"); then the
+/// user's themes' own.
+fn credits(sources: &[Source]) -> Vec<(String, String)> {
+    let built_in = themes::BUILT_IN
+        .iter()
+        .filter_map(|b| Source::built_in(b.id));
+    let users = sources
+        .iter()
+        .filter(|s| s.origin != Origin::BuiltIn)
+        .cloned();
+    let mut out: Vec<(String, String)> = Vec::new();
+    for theme in built_in
+        .chain(users)
+        .filter_map(|source| Theme::load(source, Limits::default()).ok())
+    {
+        for credit in theme.credits() {
+            if !out.contains(&credit) {
+                out.push(credit);
+            }
+        }
+    }
+    out
+}
+
 /// The desktop's interface font: its family, and its size in pixels.
 fn desktop_font(settings: Option<&gtk::Settings>) -> (String, f32) {
     let fallback = ("sans-serif".to_string(), 15.0);
@@ -1230,6 +1253,41 @@ mod tests {
                 ("living".to_string(), "false".to_string())
             ]
         );
+    }
+
+    /// About → Legal credits what GMNB itself carries, the built-in
+    /// themes' fonts and the swirl, whatever the user installs: a folder
+    /// of theirs named after a built-in theme ("your copy") replaced its
+    /// credits with its own, and so did one that fails to load. A theme of
+    /// the user's adds its own.
+    #[test]
+    fn the_built_in_credits_stay_with_a_copy_of_the_theme() {
+        let dir = std::env::temp_dir().join(format!("gmnb-credits-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (id, source) in [
+            ("aurora", "return { api = 1, name = \"Mine\" }"),
+            ("glazed", "this is not Luau"),
+            (
+                "mine",
+                "return { api = 1, name = \"Mine\", credits = { { title = \"Me\", file = \"me.txt\" } } }",
+            ),
+        ] {
+            std::fs::create_dir_all(dir.join(id)).unwrap();
+            std::fs::write(dir.join(id).join("theme.luau"), source).unwrap();
+        }
+        std::fs::write(dir.join("mine/me.txt"), "mine").unwrap();
+        let listed = credits(&themes::discover(Some(&dir), None));
+        let _ = std::fs::remove_dir_all(&dir);
+        let titles: Vec<&str> = listed.iter().map(|(title, _)| title.as_str()).collect();
+        for title in [
+            "Outfit typeface",
+            "Jersey 10 typeface",
+            "The swirl (ColorMix, from ly)",
+            "Me",
+        ] {
+            assert!(titles.contains(&title), "{title} is not in {titles:?}");
+        }
+        assert_eq!(titles.len(), 4, "{titles:?}");
     }
 
     /// The function of `code` that holds its byte `at`: the nearest `fn`
