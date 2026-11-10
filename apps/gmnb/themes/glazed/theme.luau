@@ -102,7 +102,8 @@ type Scheme = {
 	glaze_shine: Rgba,
 	glaze_rim: Rgba,
 	glaze_sprinkles: { Rgba },
-	-- The doughnut's own colours.
+	-- The doughnut's own colours: the shine on its icing, and its dough.
+	icing_shine: Rgba,
 	dough: Rgba,
 	dough_shade: Rgba,
 	dough_hole: Rgba,
@@ -266,6 +267,7 @@ local function build(id: string, dark: boolean): Scheme
 		glaze_shine = glaze_shine,
 		glaze_rim = glaze_rim,
 		glaze_sprinkles = glaze_sprinkles,
+		icing_shine = mix(icing, white, 0.6),
 		dough = hex("#f2b866"),
 		dough_shade = hex("#d48c42"),
 		dough_hole = hex("#8a4b25"),
@@ -696,12 +698,20 @@ local function chance(n: number, salt: number): number
 	return scramble(scramble(scramble(n * 7919 + salt * 104729 + 12345))) / 4294967296
 end
 
--- A colour as `buffer.writeu32` wants it: 0xAABBGGRR.
+local function byte(v: number): number
+	return floor(math.clamp(v, 0, 1) * 255 + 0.5)
+end
+
+-- A colour as `buffer.writeu32` wants it: 0xAABBGGRR. A scheme's colours
+-- are the same tables from frame to frame, so each is worked out once.
+local packed: { [Rgba]: number } = {}
 local function pack(c: Rgba): number
-	local function byte(v: number): number
-		return floor(math.clamp(v, 0, 1) * 255 + 0.5)
+	local n = packed[c]
+	if not n then
+		n = byte(c.a or 1) * 0x1000000 + byte(c.b) * 0x10000 + byte(c.g) * 0x100 + byte(c.r)
+		packed[c] = n
 	end
-	return byte(c.a or 1) * 0x1000000 + byte(c.b) * 0x10000 + byte(c.g) * 0x100 + byte(c.r)
+	return n
 end
 
 -- Events have no names, and what is drawn of one (a burst of sprinkles)
@@ -1059,7 +1069,8 @@ local function make_icing(s: Scheme, key: string, tall: number, poured: number, 
 	local buf = icing_buffer
 	buffer.fill(buf, 0, 0)
 	local glaze, shine, rim = pack(s.glaze), pack(s.glaze_shine), pack(s.glaze_rim)
-	-- Row 0 is the digits' top. The line the icing comes down to, and at
+	-- The picture is laid one art pixel above the digits' tops, so that
+	-- row 1 is their top row. The line the icing comes down to, and at
 	-- every column how far it has come.
 	local line = math.max(floor(tall * ICED), 2)
 	local edge = table.create(ICING_W, 0)
@@ -1177,7 +1188,7 @@ local function buddy_pixel(s: Scheme, x: number, y: number, face: Face, squash: 
 		if y - cy >= 0.5 + BUDDY_ICING[x + 1] then
 			return s.icing_edge
 		elseif dx < -0.15 and dy < -0.3 and inner > 0.42 and inner < 0.68 then
-			return mix(s.icing, white, 0.6)
+			return s.icing_shine
 		end
 		-- Its own sprinkles.
 		local n = (x * 7 + y * 13) % 31
@@ -1458,7 +1469,7 @@ local options: { Option } = {
 		type = "toggle",
 		group = "Shop",
 		label = "Falling sprinkles",
-		description = "Sprinkles drift down the wall. Pauses whenever the window is in the background",
+		description = "Sprinkles drift down the wall, and the doughnut blinks. Pauses whenever the window is in the background",
 		default = true,
 	},
 	{

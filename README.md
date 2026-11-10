@@ -919,8 +919,11 @@ CI also runs checks that need more than `cargo test --workspace`:
 The code is MIT; see [LICENSE](LICENSE), which carries Microsoft's original
 notice. Both embed *Inter* and subsets of *Noto Sans*
 (`apps/dgmnb/assets/fonts/`); GMNB's Aurora theme brings the *Outfit*
-typeface (`apps/gmnb/themes/aurora/fonts/`). All are under the SIL Open
-Font License. Exchange-rate data comes from Frankfurter
+typeface (`apps/gmnb/themes/aurora/fonts/`) and its Glazed theme
+*Jersey 10* (`apps/gmnb/themes/glazed/fonts/`). All are under the SIL Open
+Font License. Glazed's pictures are drawn by a script of its own
+(`apps/gmnb/themes/glazed/make_assets.py`) and its sounds are recipes in
+its `theme.luau`: MIT, like the code. Exchange-rate data comes from Frankfurter
 (central bank reference rates).
 
 Both also contain code by others:
