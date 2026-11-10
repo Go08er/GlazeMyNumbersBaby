@@ -111,11 +111,13 @@ fn run(display: &Path, theme: &str, env: &[(&str, &str)], ms: u64) -> String {
 }
 
 /// A theme whose `style` fails the first time is chosen: the base look
-/// shows ("the last style that worked, or the base look"), not the style
-/// of the theme chosen before it, which stood under the new theme's
-/// name. GMNB in Glazed, then the theme chosen (`GMNB_STEPS`' `theme:`),
-/// is pixel for pixel GMNB started in that theme (both pictured once the
-/// toast that says so is gone).
+/// shows ("the last style that worked, or the base look"). Chosen after
+/// another, the style of the one before stood under the new theme's name;
+/// at start, no style was ever written, and the window was bare (no keys,
+/// no header: the stylesheet's properties unset). GMNB in Glazed, then
+/// the theme chosen (`GMNB_STEPS`' `theme:`), is pixel for pixel GMNB
+/// started in that theme (both pictured once the toast that says so is
+/// gone), and that is the base look's picture.
 #[test]
 fn a_theme_whose_style_fails_shows_the_base_look() {
     let Some(display) = display() else {
@@ -143,11 +145,17 @@ return { api = 1, name = "Broken", style = function(ctx) error("no style", 0) en
         "7500",
     );
     assert!(err.contains("has a problem"), "{err}");
-    let (a, b) = (std::fs::read(&started), std::fs::read(&switched));
+    let base = shots.join("base.png");
+    shot(&base, &[("GMNB_THEME", "base")], "7500");
+    let read = |path: &Path| std::fs::read(path).expect("a picture");
+    let (a, b, c) = (read(&started), read(&switched), read(&base));
     let _ = std::fs::remove_dir_all(&shots);
-    let (a, b) = (a.expect("a picture"), b.expect("a picture"));
     assert!(
-        a == b,
+        a == c,
+        "started in the broken theme, GMNB isn't the base look"
+    );
+    assert!(
+        b == c,
         "chosen after Glazed, the broken theme isn't the base look"
     );
 }

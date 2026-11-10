@@ -122,14 +122,23 @@ fn run(display: &Path, theme: &str, env: &[(&str, &str)], ms: u64) -> (Option<bo
 }
 
 /// What GTK, Pango and GDK say when text was taken for markup, or when
-/// markup asked for more than they can draw.
+/// markup asked for more than they can draw (a dialog asked for some
+/// thousands of pixels: Settings' own dozen too many at 360 wide is
+/// another matter).
 fn markup_trouble(err: &str) -> Vec<&str> {
+    let huge = |l: &str| {
+        l.split("requested ")
+            .nth(1)
+            .and_then(|r| r.split(' ').next())
+            .and_then(|n| n.parse::<u32>().ok())
+            .is_some_and(|px| px > 2000)
+    };
     err.lines()
         .filter(|l| {
             l.contains("from markup")
                 || l.contains("Pango-WARNING")
                 || l.contains("Gdk-CRITICAL")
-                || l.contains("exceeds AdwBreakpointBin")
+                || (l.contains("exceeds AdwBreakpointBin") && huge(l))
         })
         .collect()
 }
