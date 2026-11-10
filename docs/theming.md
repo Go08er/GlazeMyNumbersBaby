@@ -1652,7 +1652,12 @@ rest and checked; `field` text and placeholder (placeholder: 2.45, see
 open point 9); chips
 and the whimsy chip; lit bits; radix names and values; calendar days at
 rest and checked; the toast; the graph's labels, axes and each series
-colour on the canvas. (Not yet for Aurora: the chrome's pairs, the
+colour on the canvas; the readout's value, its error colour and its
+expression on the readout's own scrim; a card's heading. (Not yet: the
+bits' indexes, which DGMNB draws in `fg_faint`, 2.46:1 in its light
+palette and 3.52:1 in its dark one: they would need open point 9's
+allowance, which the contract gives the placeholder only. The ignored
+test `the_bits_indexes_read` checks them.) (Not yet for Aurora: the chrome's pairs, the
 header title to the bits, are checked for the base look and Mono. Aurora's
 own values for them fail in its light palettes, and on a see-through
 window, where its `plain` has no scrim; they wait, with the pages'
@@ -1685,6 +1690,7 @@ must reach 4.5 (its scrim is computed to). Halos are not counted.
 | `GMNB_SOUND_DUMP=<folder>` | Every sound the theme makes is written there as a WAV file. |
 | `GMNB_DATE_TO=YYYY-MM-DD` | The date page's "To" date (the comparison's "Date with a result"). |
 | `GMNB_DATE_ADD` | Open the date page on "Add or subtract days". |
+| `GMNB_FOCUS=<css class>` | Give the keyboard's focus, its ring shown, to the first focusable widget with that class (`wc-conv-value`: the converter's first value), as Tab to it would. |
 
 `GMNB_DARK`, `GMNB_OPACITY`, `GMNB_SIZE`, `GMNB_MODE`, `GMNB_KEYS` and the
 rest keep working.

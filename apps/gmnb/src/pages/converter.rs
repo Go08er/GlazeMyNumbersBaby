@@ -41,6 +41,8 @@ pub struct ConverterPage {
     vm: RefCell<UnitConverterViewModel>,
     root: SizeBin,
     layout: gtk::Box,
+    /// The values, in their scrolled view.
+    column: gtk::Box,
     f1: Field,
     f2: Field,
     supp: gtk::FlowBox,
@@ -384,6 +386,7 @@ impl ConverterPage {
             vm: RefCell::new(vm),
             root: root.clone(),
             layout,
+            column: column.clone(),
             f1,
             f2,
             supp,
@@ -578,16 +581,47 @@ impl ConverterPage {
             Some(Value::Spacing(s)) => *s,
             _ => Spacing::default(),
         };
-        self.layout.set_margin_top(m.top.round() as i32);
-        self.layout.set_margin_end(m.right.round() as i32);
-        self.layout.set_margin_bottom(m.bottom.round() as i32);
-        self.layout.set_margin_start(m.left.round() as i32);
+        // A value's focus ring is drawn outside it, and the values fill
+        // their scrolled view to its top and its end: that much of the
+        // page's margin (and of the gap before the keypad) is inside the
+        // view instead, where the ring isn't cut, the values and the
+        // keypad staying put.
+        let ring = match style.get("converter.value") {
+            Some(Value::Record(r)) => match r.get("focus") {
+                Some(Value::FocusRing(f)) => (f.width + f.offset).max(0.0),
+                _ => 0.0,
+            },
+            _ => 0.0,
+        };
         let wide = w as f32 >= mc::WIDE;
+        let gap_wide = style.number("layout.converter.gap_wide");
+        let room = |outside: f32| ring.min(outside).max(0.0).round() as i32;
+        let (top, side, end) = (
+            room(m.top),
+            room(m.left),
+            room(if wide { gap_wide } else { m.right }),
+        );
+        self.column.set_margin_top(top);
+        self.column.set_margin_start(side);
+        self.column.set_margin_end(end);
+        self.layout.set_margin_top(m.top.round() as i32 - top);
+        self.layout
+            .set_margin_end(m.right.round() as i32 - if wide { 0 } else { end });
+        self.layout.set_margin_bottom(m.bottom.round() as i32);
+        self.layout.set_margin_start(m.left.round() as i32 - side);
+        if wide {
+            self.keypad.set_margin_top(top);
+            self.keypad.set_margin_start(0);
+            self.keypad.set_margin_end(0);
+        } else {
+            self.keypad.set_margin_top(0);
+            self.keypad.set_margin_start(side);
+            self.keypad.set_margin_end(end);
+        }
         self.wide.set(wide);
         if wide {
             self.layout.set_orientation(gtk::Orientation::Horizontal);
-            self.layout
-                .set_spacing(style.number("layout.converter.gap_wide").round() as i32);
+            self.layout.set_spacing(gap_wide.round() as i32 - end);
             let pad_w = style.number("layout.converter.keypad_width").round() as i32;
             self.keypad.set_size_request(pad_w, -1);
             self.keypad.set_vexpand(true);
