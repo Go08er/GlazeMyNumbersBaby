@@ -376,6 +376,27 @@ fn cap_height(context: &pango::Context, font: &Font) -> f32 {
     ink.height() as f32 / pango::SCALE as f32
 }
 
+/// The context the readout's text is laid out in: the widget's, with
+/// glyphs unhinted and placed by their true widths. DGMNB's rasteriser
+/// hints nothing; left to the desktop's setting, small text here came out
+/// crisper and brighter than DGMNB's.
+fn text_context(widget: &impl IsA<gtk::Widget>) -> pango::Context {
+    let context = widget.create_pango_context();
+    if let Ok(mut options) = gtk::cairo::FontOptions::new() {
+        options.set_hint_style(gtk::cairo::HintStyle::None);
+        options.set_hint_metrics(gtk::cairo::HintMetrics::Off);
+        pangocairo::functions::context_set_font_options(&context, Some(&options));
+    }
+    context
+}
+
+/// Where a line's top goes for its capitals to be centred on `middle`,
+/// with its baseline on a whole pixel: DGMNB's placing of a line of text.
+fn line_top(context: &pango::Context, layout: &pango::Layout, font: &Font, middle: f32) -> f32 {
+    let baseline = (middle + cap_height(context, font) / 2.0).round();
+    baseline - layout.baseline() as f32 / pango::SCALE as f32
+}
+
 impl Display {
     /// A readout whose value is at most `max_size` pixels tall, until
     /// the page gives it a mode ([`Display::set_mode`]).
@@ -654,7 +675,7 @@ impl Display {
     fn lay(&self) -> Laid {
         let imp = self.imp();
         let look = imp.look.borrow();
-        let context = self.pango_context();
+        let context = text_context(self);
         let text = imp.value.borrow().clone();
         let (w, h) = (self.width() as f32, self.height() as f32);
         let avail = (w - look.pad_x * 2.0).max(10.0);
@@ -672,17 +693,18 @@ impl Display {
         };
         let font = self.font(size);
         let full = replay::layout(&context, &text, &font);
-        let (fw, fh) = full.pixel_size();
-        let (fw, fh) = (fw as f32, fh as f32);
+        // The text's width as laid out, not rounded up to whole pixels:
+        // its end is set against the readout's.
+        let (_, logical) = full.extents();
+        let fw = logical.width() as f32 / pango::SCALE as f32;
+        let fh = logical.height() as f32 / pango::SCALE as f32;
         let x = if imp.align_end.get() {
             w - look.pad_x - fw
         } else {
             look.pad_x
         };
         let top = self.expression_height();
-        let middle = top + (h - top) / 2.0;
-        let baseline = full.baseline() as f32 / pango::SCALE as f32;
-        let y = middle + cap_height(&context, &font) / 2.0 - baseline;
+        let y = line_top(&context, &full, &font, top + (h - top) / 2.0);
         let mut glyphs = Vec::new();
         let mut boxes = Vec::new();
         for (byte, ch) in text.char_indices() {
@@ -719,7 +741,7 @@ impl Display {
             return;
         }
         let look = imp.look.borrow();
-        let context = self.pango_context();
+        let context = text_context(self);
         let avail = (self.width() as f32 - look.pad_x * 2.0).max(10.0);
         let mut font = look.expression.clone();
         let mut layout = replay::layout(&context, &expr, &font);
@@ -735,8 +757,7 @@ impl Display {
         } else {
             pango::Alignment::Left
         });
-        let baseline = layout.baseline() as f32 / pango::SCALE as f32;
-        let y = self.expression_height() / 2.0 + cap_height(&context, &font) / 2.0 - baseline;
+        let y = line_top(&context, &layout, &font, self.expression_height() / 2.0);
         let c = look.expression_color;
         s.save();
         s.translate(&graphene::Point::new(look.pad_x, y));
