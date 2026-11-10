@@ -1,0 +1,1695 @@
+--!strict
+-- Swirls: the paint that flows behind s0y b0y, with a calculator of
+-- smoked glass standing in it.
+--
+-- The homepage's background is the ColorMix field of fairyglade/ly (WTFPL,
+-- src/animations/ColorMix.zig): a coordinate bent three times and pushed
+-- through three bands of colour, gold, cyan and near-black. Here the theme
+-- works out the bent coordinate on a coarse grid five times a second, and
+-- the app colours every pixel of it thirty times a second (draw:field,
+-- docs/theming-media.md). Everything else is built on that one picture:
+--
+--   the keys      panes of dark glass with the page's cyan hairline, its
+--                 hover and its gold focus ring; a pressed key clears, and
+--                 the paint shows through it
+--   the paint     is stirred where a key is pressed, runs faster while you
+--                 type, and carries a ripple out from every result
+--   the digits    are cut out of the same paint, without its black
+--   the keypad    swirls into place
+--
+-- The file reads top to bottom:
+--   1. Colours     the six sets of bands
+--   2. Inks, glass what keeps text readable over paint that moves
+--   3. Style       how every part of the window looks
+--   4. The field   the swirl itself, and what disturbs it
+--   5. Keypad      the keys swirling in
+--   6. Display     digits made of paint
+--   7. Options     what Settings offers, and its tiles
+--   8. Sound       drops, bubbles and a stirred glass
+
+local hex, hsl, mix, alpha, over = gmnb.hex, gmnb.hsl, gmnb.mix, gmnb.alpha, gmnb.over
+local white, black = gmnb.white, gmnb.black
+local ease = gmnb.ease
+-- 4.5 and 3: what WCAG asks of text, and of large text and lines.
+local TEXT, UI = gmnb.TEXT_CONTRAST, gmnb.UI_CONTRAST
+
+local cos, sin, sqrt, exp = math.cos, math.sin, math.sqrt, math.exp
+local floor, ceil, min, max, clamp = math.floor, math.ceil, math.min, math.max, math.clamp
+local readf32, writef32 = buffer.readf32, buffer.writef32
+local TAU = 2 * math.pi
+
+---------------------------------------------------------------------------
+-- 1. Colours
+---------------------------------------------------------------------------
+
+-- A set of bands: two bright colours and the dark one they flow through.
+--   a       the warm one. Whatever is on, lit or the next thing to press:
+--           the equals key, the focus ring, a border under the pointer.
+--   b       the cool one. Lines: borders, links, the operators' glyphs.
+--   ground  the dark one, which the glass is made of too.
+type Bands = { a: Rgba, b: Rgba, ground: Rgba }
+
+local function bands(a: string, b: string, ground: string): Bands
+	return { a = hex(a), b = hex(b), ground = hex(ground) }
+end
+
+-- The first is the homepage's own: #ffcf29, #0ed6f0, #010609.
+local BANDS: { [string]: Bands } = {
+	party = bands("#ffcf29", "#0ed6f0", "#010609"),
+	lava = bands("#ffb224", "#ff3b4e", "#100306"),
+	lagoon = bands("#7dffb0", "#2b8cff", "#010a14"),
+	orchid = bands("#ff7fd0", "#8f7bff", "#08030f"),
+	absinthe = bands("#d7ff3e", "#19e68c", "#030a04"),
+	marble = bands("#f5faff", "#93a1ad", "#020507"),
+}
+
+-- The page's text colour.
+local FG = hex("#f5faff")
+
+-- The ramp of each set: its three colours in the page's order, each
+-- blending into the next between 8% and 92% of its band, and after the
+-- last the first again. (A theme may make eight ramps: these are six.)
+local RAMPS: { [string]: Ramp } = {}
+for id, set in BANDS do
+	RAMPS[id] = gmnb.ramp({ colors = { set.a, set.b, set.ground }, edge = { 0.08, 0.92 }, cycle = true })
+end
+
+---------------------------------------------------------------------------
+-- 2. Inks and glass
+---------------------------------------------------------------------------
+--
+-- Text here lies on glass, and under the glass is paint that moves: gold
+-- one second, near-black the next. White on that gold is 1.4 to 1. So
+-- nothing is chosen by eye. The glass has three strengths to choose from,
+-- and for each set of bands, at each window opacity, the least strength at
+-- which every ink still reads over every colour the field can show is
+-- worked out (`floor`); the glass is never thinner than that.
+--
+-- The field's colours are its three bands and the blends between two of
+-- them. Glass is dark and the inks are light, so the worst ground is the
+-- brightest one, and a blend is never brighter than the brighter of its
+-- two ends: the three bands are all that needs checking. (The tests check
+-- every entry of the ramp all the same: crates/gmnb-theme/tests/css.rs.)
+
+-- How strong the glass is, by the `glass` option: how much of the paint
+-- it hides. The last is the homepage's panels, rgba(1, 6, 9, .91).
+local CLEAR, SMOKED, PANEL = 0.60, 0.76, 0.91
+local STRENGTH: { [string]: number } = { clear = CLEAR, smoked = SMOKED, panel = PANEL }
+
+-- Whether `ink`, which may be translucent, reaches `target` on every one
+-- of `grounds`.
+local function reads(ink: Rgba, grounds: { Rgba }, target: number): boolean
+	for _, ground in grounds do
+		if gmnb.contrast(over(ink, ground), ground) < target then
+			return false
+		end
+	end
+	return true
+end
+
+-- Text that steps back: `ink` at the lowest opacity, from `least` up, at
+-- which it still reads on every ground.
+local function recede(ink: Rgba, grounds: { Rgba }, least: number): Rgba
+	if reads(alpha(ink, least), grounds, TEXT) then
+		return alpha(ink, least)
+	end
+	local low, high = least, 1
+	for _ = 1, 6 do
+		local middle = (low + high) / 2
+		if reads(alpha(ink, middle), grounds, TEXT) then
+			high = middle
+		else
+			low = middle
+		end
+	end
+	return alpha(ink, high)
+end
+
+-- `color` with its lightness moved, as little as possible, until it
+-- reaches `target` on every ground.
+local function legible(color: Rgba, grounds: { Rgba }, target: number): Rgba
+	for _, ground in grounds do
+		color = gmnb.with_contrast(color, ground, target)
+	end
+	return color
+end
+
+-- One thing that has to stay readable: an ink, the contrast it needs, and
+-- what lies between it and the glass (bottom-most first): a tint.
+type Check = { ink: Rgba, target: number, on: { Rgba } }
+
+-- The least strength, in 64ths, at which glass of `tint` over each of
+-- `backs` lets every check hold.
+local function least_glass(tint: Rgba, backs: { Rgba }, checks: { Check }, margin: number): number
+	local function holds(strength: number): boolean
+		for _, back in backs do
+			local glass = over(alpha(tint, strength), back)
+			for _, check in checks do
+				local ground = glass
+				for _, layer in check.on do
+					ground = over(layer, ground)
+				end
+				if gmnb.contrast(over(check.ink, ground), ground) < check.target * margin then
+					return false
+				end
+			end
+		end
+		return true
+	end
+	-- Down from solid to the last step that holds.
+	local step = 64
+	while step > 0 and holds((step - 1) / 64) do
+		step -= 1
+	end
+	return step / 64
+end
+
+-- A set of bands, and everything worked out from it.
+type Scheme = {
+	id: string,
+	a: Rgba,
+	b: Rgba,
+	ground: Rgba,
+	fg: Rgba,
+	-- The glass under the pointer: the page's #13252b.
+	lift: Rgba,
+	-- The text colour stepping back: function keys, then captions.
+	soft: Rgba,
+	dim: Rgba,
+	faint: Rgba,
+	-- The two bright colours as text.
+	a_ink: Rgba,
+	b_ink: Rgba,
+	danger: Rgba,
+	series: { Rgba },
+	-- How strong the glass is: keys and panes; a key being pressed; the
+	-- readout and the panels; the graph.
+	glass: number,
+	pressed: number,
+	panel: number,
+	canvas: number,
+}
+
+local function finish(id: string, set: Bands, strength: number, opacity: number): Scheme
+	local a, b, ground = set.a, set.b, set.ground
+	local fg = FG
+	-- The page's hover colour, #13252b, is its near-black a twelfth of the
+	-- way to its cyan and then a fourteenth of the way to its text.
+	local lift = mix(mix(ground, b, 0.08), fg, 0.07)
+	local colours = { a, b, ground }
+
+	-- What the field shows as: itself, or on a see-through window what is
+	-- left of it over a black desktop and over a white one.
+	local backs: { Rgba } = {}
+	if opacity >= 1 then
+		backs = colours
+	else
+		for _, desktop in { black, white } do
+			for _, band in colours do
+				table.insert(backs, over(alpha(band, opacity), desktop))
+			end
+		end
+	end
+
+	-- The text colour stepping back. How far it may is settled on the
+	-- clearest glass an opaque window can have, alone and under the wash
+	-- of a field or of a button under the pointer, so that it is the same
+	-- text whatever glass is chosen.
+	local on_clear: { Rgba } = {}
+	for _, band in colours do
+		local glass = over(alpha(lift, CLEAR), band)
+		table.insert(on_clear, glass)
+		table.insert(on_clear, over(alpha(fg, 0.08), glass))
+	end
+	local soft = recede(fg, on_clear, 0.86)
+	local dim = recede(fg, on_clear, 0.68)
+
+	-- The glass: the strength chosen, or what the text needs if that is
+	-- more. On a see-through window the text colour keeps the 4.5 it has
+	-- on an opaque one, and everything fainter or coloured keeps at least 3.
+	local other = if opacity >= 1 then TEXT else UI
+	local faint = alpha(fg, 0.42)
+	local checks: { Check } = {
+		{ ink = fg, target = TEXT, on = {} },
+		{ ink = fg, target = TEXT, on = { alpha(fg, 0.08) } },
+		{ ink = soft, target = other, on = {} },
+		{ ink = dim, target = other, on = {} },
+		{ ink = dim, target = other, on = { alpha(fg, 0.08) } },
+		-- A field's placeholder: 2.45, as in the base look.
+		{ ink = faint, target = 2.45, on = { alpha(fg, 0.08) } },
+	}
+	local glass = max(strength, least_glass(lift, backs, checks, 1.02))
+
+	-- The two bright colours as text, and a coral for errors (neither band
+	-- in any set): each as near itself as that glass lets it be, alone and
+	-- on a wash of its own colour.
+	local function ink(color: Rgba, wash: Rgba): Rgba
+		local grounds: { Rgba } = {}
+		for _, back in backs do
+			local under = over(alpha(lift, glass), back)
+			table.insert(grounds, under)
+			table.insert(grounds, over(wash, under))
+		end
+		color = legible(color, grounds, other * 1.03)
+		table.insert(checks, { ink = color, target = other, on = {} })
+		table.insert(checks, { ink = color, target = other, on = { wash } })
+		return color
+	end
+	local a_ink = ink(a, alpha(a, 0.16))
+	local b_ink = ink(b, alpha(b, 0.16))
+	local coral = hsl(4, 1.0, 0.70)
+	local danger = ink(coral, alpha(coral, 0.10))
+	-- (A colour that is as light as it can be and still doesn't read on
+	-- its own wash, white on white's, needs more glass instead.)
+	glass = max(glass, least_glass(lift, backs, checks, 1.02))
+
+	-- A pressed key clears as far as its glyph (large: 3) allows.
+	local pressed = min(glass, least_glass(lift, backs, { { ink = fg, target = UI, on = {} } }, 1.05))
+
+	-- Graph colours: the two bands and four more, each made to read as a
+	-- line on the graph's own glass, which is never thinner than a panel.
+	local panel = max(glass, PANEL)
+	local on_panel: { Rgba } = {}
+	for _, back in backs do
+		table.insert(on_panel, over(alpha(ground, panel), back))
+	end
+	local series: { Rgba } = {}
+	for i, c in { a, b, hex("#ff7ad9"), hex("#8dff7a"), hex("#b79bff"), hex("#ff9a6e") } do
+		series[i] = legible(c, on_panel, UI * 1.05)
+	end
+
+	return {
+		id = id,
+		a = a,
+		b = b,
+		ground = ground,
+		fg = fg,
+		lift = lift,
+		soft = soft,
+		dim = dim,
+		faint = faint,
+		a_ink = a_ink,
+		b_ink = b_ink,
+		danger = danger,
+		series = series,
+		glass = glass,
+		pressed = pressed,
+		panel = panel,
+		canvas = panel,
+	}
+end
+
+-- Finishing a set takes a few thousand contrast checks, and the draw hooks
+-- ask for the scheme every frame: remember what was built.
+local remembered: { [string]: Scheme } = {}
+local remembered_count = 0
+
+local function bands_id(value: OptionValue?): string
+	return if type(value) == "string" and BANDS[value] then value else "party"
+end
+
+local function scheme_for(id: string, ctx: Ctx): Scheme
+	local strength = STRENGTH[tostring(ctx.options.glass)] or SMOKED
+	-- (Dragging the opacity slider: a scheme for every 64th.)
+	local opacity = ceil(ctx.opacity * 64) / 64
+	local key = id .. "|" .. strength .. "|" .. opacity
+	local s = remembered[key]
+	if not s then
+		if remembered_count >= 96 then
+			remembered, remembered_count = {}, 0
+		end
+		s = finish(id, BANDS[id], strength, opacity)
+		remembered[key] = s
+		remembered_count += 1
+	end
+	return s
+end
+
+local function scheme(ctx: Ctx): Scheme
+	return scheme_for(bands_id(ctx.options.bands), ctx)
+end
+
+---------------------------------------------------------------------------
+-- 3. Style
+---------------------------------------------------------------------------
+
+-- The page's panels: radius 12.
+local RADIUS = 12
+
+local function style(ctx: Ctx): Style
+	local s = scheme(ctx)
+	local a, b, ground, fg, lift = s.a, s.b, s.ground, s.fg, s.lift
+	local soft, dim, faint = s.soft, s.dim, s.faint
+	local a_ink, b_ink, danger = s.a_ink, s.b_ink, s.danger
+	-- The page is set in the system's own interface font at weight 500.
+	local system = ctx.font
+	local see = ctx.opacity < 1
+
+	local function sans(size: number, weight: number?, spacing: number?): Font
+		return { size = size, weight = weight or 500, spacing = spacing or 0 }
+	end
+	-- Numbers: the bundled Inter, heavy enough for paint to show in.
+	local function figures(size: number?, weight: number): Font
+		return { family = { "Inter Variable", system.family }, size = size, weight = weight, features = { "tnum" } }
+	end
+
+	-- Glass. A pane is the dark band at the strength worked out above; a
+	-- raised pane (a number key, the glass under the pointer) is the
+	-- page's hover colour at the same strength.
+	local pane = alpha(ground, s.glass)
+	local raised = alpha(lift, s.glass)
+	local slab = alpha(ground, s.panel)
+	-- The page's lines: its cyan at 0.6 around a panel, fainter round a key.
+	local line = alpha(b, 0.6)
+	local hair = alpha(b, 0.3)
+	local on_a = ground
+	-- The page's shadow under a panel: 0 8px 32px #01060955.
+	local drop: Shadow = { y = 8, blur = 32, color = alpha(ground, 0.33) }
+	-- A dark edge round text on a see-through window, for the wallpaper no
+	-- contrast figure knows about.
+	local halo: { Shadow } = if see
+		then { { blur = 3, color = alpha(ground, 0.9) }, { blur = 10, color = alpha(ground, 0.75) } }
+		else {}
+
+	-- Something lit: the warm band, solid, with the dark one written on it.
+	local lit: State = { background = a, color = on_a, border = false }
+	-- Something chosen from a list: a wash of the warm band and a bar of it.
+	local chosen: State = {
+		background = alpha(a, 0.13),
+		shadow = { { inset = true, x = 3, color = a } },
+		color = fg,
+		icon = { color = a_ink },
+	}
+	local wash: State = { background = alpha(fg, 0.08) }
+	local wash_more: State = { background = alpha(fg, 0.15) }
+
+	local function text_button(padding: Spacing, font: Font): Control
+		return {
+			min_width = 30,
+			min_height = 30,
+			padding = padding,
+			radius = 8,
+			font = font,
+			color = soft,
+			background = gmnb.transparent,
+			transition = { background = 140, color = 140, shadow = 140 },
+			hover = { background = alpha(fg, 0.08), color = fg },
+			active = { background = alpha(fg, 0.15), color = fg },
+			checked = { background = alpha(a, 0.16), color = a_ink, border = { width = 1, color = alpha(a, 0.6) } },
+			disabled = { color = alpha(fg, 0.28) },
+		}
+	end
+
+	local function icon_button(size: number, icon: number): Control
+		return {
+			min_width = size,
+			min_height = size,
+			radius = 8,
+			color = fg,
+			icon = { size = icon },
+			transition = { background = 140 },
+			hover = wash,
+			active = wash_more,
+			checked = { background = alpha(a, 0.16), color = a_ink },
+			disabled = { opacity = 0.4 },
+		}
+	end
+
+	return {
+		-- Tokens. Anything not styled below is derived from these; the two
+		-- surfaces are glass, so whatever is derived reads over the paint.
+		colors = {
+			bg = ground,
+			surface = lift,
+			surface2 = raised,
+			border = hair,
+			fg = fg,
+			fg_dim = dim,
+			fg_faint = faint,
+			accent = a,
+			on_accent = on_a,
+			accent_text = b_ink,
+			hover = alpha(fg, 0.08),
+			press = alpha(fg, 0.15),
+			danger = danger,
+			series = s.series,
+		},
+		fonts = { ui = system.family, display = { "Inter Variable", system.family } },
+		text = {
+			body = sans(system.size),
+			strong = sans(system.size, 700),
+			small = sans(13),
+			caption = sans(12),
+			key = sans(19),
+			title = sans(17, 600),
+		},
+		shape = { radius = RADIUS, row_radius = 8, card_radius = RADIUS },
+		icons = { stroke = 1.9, taper = 0.5 },
+		motion = {
+			page = 240,
+			mode = 200,
+			panel = 220,
+			flip = 260,
+			graph_view = 220,
+			graph_side = 240,
+			date = 260,
+			history_row = 300,
+			equation_row = 260,
+			icon_draw = 600,
+			graph_draw = 1000,
+			graph_zoom = 240,
+		},
+		layout = {
+			calculator = { margin = { 0, 8, 8, 8 }, gap = 8, panel_width = 300, panel_margin = { 0, 8, 8, 0 } },
+			converter = { margin = { 0, 12, 10, 12 }, gap = 10, gap_wide = 24 },
+			date = { margin = { 4, 16, 16, 16 }, gap = 12 },
+			graph = { margin = { 0, 8, 8, 8 }, gap = 8, side_width = 340 },
+		},
+		stock = {
+			window = ground,
+			view = mix(ground, black, 0.3),
+			headerbar = ground,
+			sidebar = ground,
+			dialog = mix(ground, lift, 0.5),
+			popover = lift,
+			card = alpha(fg, 0.05),
+			fg = fg,
+			accent = b_ink,
+			accent_bg = a,
+			accent_fg = on_a,
+			destructive = danger,
+			error = danger,
+		},
+
+		window = {
+			-- Under the field, which covers it: the page's own backdrop, its
+			-- three bands on a slant.
+			background = gmnb.linear({ angle = 135, colors = { a, ground, b } }),
+			color = fg,
+			font = sans(system.size),
+			text_halo = halo,
+			raised_text_halo = halo,
+		},
+		plain = { background = pane, radius = RADIUS },
+		focus = { width = 3, color = a, offset = 5 },
+		scrim = alpha(ground, 0.55),
+
+		header = {
+			background = pane,
+			height = 46,
+			title = { font = sans(17, 600), color = fg },
+			button = icon_button(34, 18),
+			controls = {
+				min_width = 24,
+				min_height = 24,
+				radius = 999,
+				margin = { 0, 5 },
+				background = alpha(fg, 0.10),
+				color = fg,
+				icon = { size = 16 },
+				hover = { background = alpha(fg, 0.20) },
+				active = { background = alpha(fg, 0.30) },
+			},
+			close = { hover = { background = danger, color = on_a }, active = { background = danger, color = on_a } },
+		},
+		nav = {
+			background = alpha(ground, 0.95),
+			shadow = { { inset = true, x = -1, color = line } },
+			width = 290,
+			title = { font = sans(17, 600), color = fg },
+			header = { font = sans(12, 600, 0.1), color = dim, margin = { 10, 18, 2, 18 } },
+			uppercase_headers = true,
+			row = {
+				radius = 8,
+				margin = { 1, 8 },
+				padding = { 0, 10 },
+				min_height = 40,
+				font = sans(15),
+				color = fg,
+				icon = { size = 18, color = soft },
+				transition = { background = 140 },
+				hover = wash,
+				active = wash_more,
+				checked = chosen,
+			},
+			settings = { radius = 8, hover = wash, active = wash_more },
+		},
+
+		display = {
+			-- The page's panel. Its hairline is drawn by the display layer.
+			background = slab,
+			radius = RADIUS,
+			padding_x = 16,
+			heights = { standard = "auto", scientific = "auto", programmer = "auto", compact = "auto" },
+			sizes = { standard = 62, scientific = 54, programmer = 46, compact = 42 },
+			min_size = 18,
+			value = {
+				font = figures(nil, 700),
+				-- The display layer paints the value; these are what it would
+				-- be without it.
+				color = gmnb.linear({ angle = 90, colors = { a, b } }),
+				error_color = danger,
+				error_scale = 0.6,
+				glow = false,
+			},
+			expression = { font = sans(14), color = dim },
+			expression_min_size = 13,
+			halo = halo,
+		},
+
+		keys = {
+			gap = 6,
+			gap_compact = 4,
+			radius = RADIUS,
+			min_width = 40,
+			min_height = 38,
+			padding = { 0, 2 },
+			icon = { size = 22, stroke = 1.9 },
+			-- A key fogs over again slowly after it was pressed (the keypad
+			-- layer and the field know the same 420 ms).
+			transition = {
+				background = { ms = 420, ease = "ease-out" },
+				shadow = 180,
+				transform = { ms = 300, ease = "spring" },
+				filter = 180,
+			},
+			-- The page's hover: its lifted glass and a gold border.
+			hover = { background = raised, border = { width = 1, color = a } },
+			-- Pressed, the glass clears and the paint shows.
+			active = {
+				background = alpha(lift, s.pressed),
+				border = { width = 1, color = a },
+				scale = 0.96,
+				transition = { background = 40, transform = 60 },
+			},
+			-- A key that can't be used keeps its glass (a see-through window
+			-- needs it) and loses its glyph.
+			disabled = { background = alpha(ground, s.glass), border = { width = 1, color = alpha(b, 0.10) }, fade = 0.3 },
+			number = {
+				font = sans(21),
+				color = fg,
+				background = raised,
+				border = { width = 1, color = hair },
+			},
+			func = {
+				font = sans(15),
+				color = soft,
+				background = pane,
+				border = { width = 1, color = alpha(b, 0.18) },
+			},
+			operator = {
+				font = sans(23, 400),
+				color = b_ink,
+				background = { alpha(b, 0.10), pane },
+				border = { width = 1, color = line },
+			},
+			equals = {
+				font = sans(25, 600),
+				color = on_a,
+				background = gmnb.linear({ angle = 180, colors = { mix(a, white, 0.18), a } }),
+				border = false,
+				icon = { stroke = 2.4 },
+				hover = { brightness = 1.08 },
+				active = { brightness = 1.16, scale = 0.96, transition = { transform = 60, filter = 60 } },
+			},
+			on = lit,
+			pad = { gap = 4, radius = 8, min_height = 32, font = sans(15) },
+		},
+
+		text_button = text_button({ 0, 6 }, sans(13, 600, 0.03)),
+		text_button_gap = 2,
+		flyout_button = text_button({ 0, 10 }, sans(13)),
+		icon_button = icon_button(34, 18),
+		button = { background = alpha(fg, 0.10), radius = 8, hover = { background = alpha(fg, 0.16) }, checked = lit },
+		segmented = {
+			gap = 4,
+			item = {
+				font = sans(13),
+				color = soft,
+				radius = 8,
+				background = alpha(fg, 0.07),
+				border = { width = 1, color = alpha(b, 0.18) },
+				transition = { background = 160, color = 160 },
+				hover = { background = alpha(fg, 0.12), color = fg },
+				active = { background = alpha(fg, 0.18), color = fg },
+				checked = lit,
+			},
+		},
+		field = {
+			background = alpha(fg, 0.07),
+			color = fg,
+			border = { width = 1, color = hair },
+			radius = 8,
+			font = sans(15),
+			min_height = 36,
+			padding = { 0, 10 },
+			placeholder = faint,
+			selection = alpha(b, 0.35),
+			caret = a,
+			focus = { border = { width = 2, color = a } },
+			error = { border = { width = 2, color = danger } },
+		},
+		row = { radius = 8, hover = wash, active = wash_more, checked = { background = alpha(a, 0.14) } },
+		section = { font = sans(12, 600, 0.04), color = dim },
+		slider = {
+			track = { height = 4, color = alpha(fg, 0.18), radius = 2 },
+			fill = a,
+			knob = { size = 16, color = a, halo = alpha(a, 0.2), halo_size = 26 },
+		},
+		switch = { off = alpha(fg, 0.2), on = a, knob = fg, knob_on = on_a },
+		scrollbar = { color = alpha(fg, 0.35) },
+		-- (Settings' groups, on its dialog.)
+		card = { background = lift, radius = RADIUS },
+		popover = {
+			padding = 8,
+			radius = RADIUS,
+			background = lift,
+			border = { width = 1, color = line },
+			shadow = { drop },
+		},
+		menu = { padding = 6, radius = 10, background = lift, border = { width = 1, color = line }, shadow = { drop } },
+		toast = { background = alpha(fg, 0.95), color = ground, radius = RADIUS },
+		tooltip = { background = alpha(fg, 0.95), color = ground, radius = 8 },
+
+		panel = {
+			-- The page's panel, whole.
+			background = slab,
+			radius = RADIUS,
+			border = { width = 1, color = line },
+			shadow = { drop },
+			padding = 8,
+			sheet = { background = alpha(lift, 0.98), border = { width = 1, color = line }, radius = 14, shadow = { drop } },
+			tabs = { item = { font = sans(14, 600), radius = 8, checked = lit } },
+			row = { radius = 8, transition = { background = 140 }, hover = wash, active = wash_more },
+			expression = { font = sans(13), color = dim },
+			result = { font = figures(22, 600), color = fg },
+			delete = { min_width = 22, min_height = 22, radius = 999, color = soft, hover = wash_more, active = wash_more, transition = { opacity = 160 } },
+			delete_reveal = "hover",
+			memory_button = {
+				min_height = 24,
+				padding = { 0, 8 },
+				radius = 8,
+				font = sans(11, 600, 0.04),
+				color = soft,
+				background = alpha(fg, 0.08),
+				hover = { background = alpha(fg, 0.15), color = fg },
+				active = { background = alpha(fg, 0.22), color = fg },
+				transition = { background = 140, opacity = 160 },
+			},
+			memory_reveal = "hover",
+			empty = { font = sans(14), color = dim },
+		},
+
+		programmer = {
+			radix = {
+				row = {
+					radius = 8,
+					padding = { 0, 8 },
+					min_height = 26,
+					transition = { background = 160, shadow = 160 },
+					hover = wash,
+					active = wash_more,
+					checked = { background = alpha(a, 0.13), shadow = { { inset = true, x = 3, color = a } } },
+				},
+				name = { font = sans(12, 700, 0.06), color = dim },
+				name_checked = a_ink,
+				value = { font = figures(14, 500), color = fg },
+			},
+			bit = {
+				min_width = 14,
+				min_height = 28,
+				padding = 0,
+				radius = 6,
+				font = figures(15, 500),
+				color = dim,
+				background = alpha(fg, 0.05),
+				transition = { background = 160, color = 160 },
+				hover = { background = alpha(fg, 0.12) },
+				active = { background = alpha(fg, 0.2) },
+				-- A set bit is lit.
+				checked = { background = a, color = on_a, font = { weight = 700 } },
+				disabled = { opacity = 0.3 },
+			},
+			bit_index = { font = sans(10), color = dim },
+		},
+
+		date = {
+			label = { font = sans(12, 600, 0.04), color = dim },
+			field = {
+				min_height = 40,
+				padding = { 0, 12 },
+				radius = 8,
+				font = sans(15),
+				color = fg,
+				background = alpha(fg, 0.07),
+				border = { width = 1, color = hair },
+				hover = { background = alpha(fg, 0.12), border = { width = 1, color = a } },
+				active = { background = alpha(fg, 0.18), border = { width = 1, color = a } },
+				checked = lit,
+			},
+			result_panel = {
+				background = slab,
+				border = { width = 1, color = line },
+				radius = RADIUS,
+				padding = { 12, 16, 14, 16 },
+				margin = { 8, 0, 0, 0 },
+			},
+			result = { size = 32, font = figures(nil, 650) },
+			add_result = { size = 28, font = figures(nil, 650) },
+			subresult = { font = sans(15), color = dim },
+			calendar = {
+				title = { font = sans(15, 600), color = fg },
+				weekday = { font = sans(12), color = dim },
+				day = {
+					radius = 999,
+					font = { size = 13, weight = 500, features = { "tnum" } },
+					color = fg,
+					hover = wash,
+					active = wash_more,
+					checked = lit,
+				},
+				other_month = faint,
+				today = { width = 1, color = b },
+				focus = { width = 2, color = a, offset = 1 },
+			},
+		},
+
+		converter = {
+			-- Each value in a panel of its own, as the readout is: its figures
+			-- are made of paint too.
+			field = {
+				background = slab,
+				border = { width = 1, color = alpha(b, 0.18) },
+				radius = RADIUS,
+				padding = { 6, 10, 8, 10 },
+				transition = { shadow = 180 },
+				checked = { border = { width = 1, color = a } },
+			},
+			marker = { color = a, width = 36, height = 3 },
+			value = { size = 42, font = figures(nil, 600), checked_weight = 700, focus = { width = 3, color = a, offset = 5, radius = 8 } },
+			symbol = { font = sans(24), color = dim },
+			unit = {
+				radius = 8,
+				padding = { 2, 10 },
+				min_height = 34,
+				font = sans(15),
+				color = fg,
+				background = alpha(fg, 0.07),
+				border = { width = 1, color = hair },
+				hover = { background = alpha(fg, 0.12), border = { width = 1, color = a } },
+				active = { background = alpha(fg, 0.18), border = { width = 1, color = a } },
+				checked = { background = alpha(fg, 0.18), border = { width = 1, color = a } },
+			},
+			-- The swap button turns the values over, and itself.
+			swap = {
+				min_width = 36,
+				min_height = 36,
+				radius = 999,
+				color = b_ink,
+				background = alpha(b, 0.12),
+				border = { width = 1, color = line },
+				transition = { transform = { ms = 420, ease = "spring" }, background = 140 },
+				hover = { background = alpha(b, 0.2), border = { width = 1, color = a } },
+				active = { background = alpha(b, 0.2), border = { width = 1, color = a }, rotate = 180, scale = 0.92 },
+			},
+			caption = { font = sans(13), color = dim },
+			chip = {
+				padding = { 4, 10 },
+				radius = 999,
+				min_height = 0,
+				font = sans(13),
+				color = fg,
+				background = alpha(fg, 0.07),
+				border = { width = 1, color = alpha(b, 0.18) },
+			},
+			whimsy = { background = a, color = on_a, border = false },
+			whimsy_icon = true,
+			ratio = { font = sans(14), color = fg },
+			timestamp = { font = sans(12), color = dim },
+			link = { font = sans(12), padding = { 0, 6 }, min_height = 22, color = b_ink, hover = wash, active = wash_more },
+		},
+
+		graph = {
+			divider = hair,
+			row = { padding = 3, radius = 8 },
+			row_error = { background = alpha(danger, 0.10) },
+			error = { font = sans(12), color = danger },
+			entry = { min_height = 36, radius = 8, font = sans(15), background = alpha(fg, 0.07) },
+			row_button = icon_button(30, 16),
+			swatch = {
+				size = 18,
+				hidden_opacity = 0.35,
+				glow = { blur = 10, spread = -2 },
+				active_scale = 0.8,
+				transition = { opacity = 200, transform = { ms = 300, ease = "spring" } },
+			},
+			add = {
+				min_height = 38,
+				radius = 8,
+				font = sans(15),
+				color = dim,
+				background = gmnb.transparent,
+				border = { width = 1, color = alpha(b, 0.18) },
+				hover = { color = fg, background = alpha(fg, 0.07), border = { width = 1, color = a } },
+				active = { color = fg, background = alpha(fg, 0.12), border = { width = 1, color = a } },
+			},
+			variable = { font = { size = 16, weight = 600, italic = true }, color = fg },
+			analysis = {
+				title = { font = sans(17, 600), color = fg },
+				card = { padding = { 8, 12 }, radius = 8, background = alpha(fg, 0.05), border = { width = 1, color = alpha(b, 0.18) } },
+				card_title = { font = sans(12, 600, 0.04), color = dim },
+				value = { font = sans(15), color = fg },
+				text = { font = sans(13), color = soft },
+				note = { font = sans(12), color = dim },
+			},
+			toolbar = { padding = 4, radius = 10, background = alpha(lift, 0.94), border = { width = 1, color = line }, shadow = { drop } },
+			toolbar_button = icon_button(30, 16),
+			canvas = {
+				-- A panel, like the readout.
+				background = alpha(ground, s.canvas),
+				radius = RADIUS,
+				border = { width = 1, color = line },
+				grid_minor = alpha(fg, 0.05),
+				grid_major = alpha(fg, 0.11),
+				axis = { color = dim, width = 1.3 },
+				label = { font = sans(11), color = dim },
+				fill_opacity = 0.18,
+				glow = { blur = 5, width = 3, opacity = 0.5 },
+				trace = {
+					hair_opacity = 0.5,
+					hair_dash = { 4, 4 },
+					halo = { grow = 3, color = "series", opacity = 0.3 },
+					ring = { width = 1.5, color = fg },
+					bubble = {
+						background = lift,
+						color = fg,
+						radius = 8,
+						font = sans(13),
+						border = { width = 1, color = line },
+						shadow = { drop },
+					},
+				},
+			},
+		},
+	}
+end
+
+---------------------------------------------------------------------------
+-- 4. The field
+---------------------------------------------------------------------------
+
+-- The picture thirty times a second, as on the page. The field five times
+-- (the page's ten are for a browser's shader; at the page's pace the swirl
+-- turns a hundredth of a radian between two of these, and gliding over
+-- that is still the page's picture).
+local FIELD_RATE = 5
+local SHOWN_RATE = 30
+local SHOWN_PER_FIELD = SHOWN_RATE / FIELD_RATE
+-- How fast the page's swirl turns: its phase, in radians a second.
+local TURN = 0.06
+-- About as many points as a 760 × 640 window has at one every 12 pixels:
+-- a bigger window gets a coarser grid, not more to work out. (The bands
+-- grow with the window, so they are as smooth in it.)
+local POINTS = 3600
+local FINEST = 12
+
+-- The bent coordinate (u, v) at every point of a cols × rows grid whose
+-- corners are the corners of a width × height picture, as two 32-bit
+-- floats a point. This is the page's shader, line for line.
+local function swirl(buf: buffer, cols: number, rows: number, width: number, height: number, turned: number)
+	local p = turned % TAU
+	local px, py = 1.31 + p, 4.27 - p
+	local sx, sy = 0.825 * width / height, 1.65
+	local o = 0
+	for j = 0, rows - 1 do
+		local v0 = (1 - 2 * j / (rows - 1)) * sy
+		for i = 0, cols - 1 do
+			local u = (2 * i / (cols - 1) - 1) * sx
+			local v = v0
+			local u2 = u + v
+			local v2 = u2
+			for _ = 1, 3 do
+				local len = sqrt(u * u + v * v)
+				u2 += u + len
+				v2 += v + len
+				u += 0.5 * cos(px + v2 * 0.2)
+				v += 0.5 * sin(py + u2)
+				local d = cos(u + v) - sin(u * 0.7 - v)
+				u -= d
+				v -= d
+			end
+			writef32(buf, o, u)
+			writef32(buf, o + 4, v)
+			o += 8
+		end
+	end
+end
+
+local function grid(width: number, height: number): (number, number)
+	local step = max(FINEST, sqrt(width * height / POINTS))
+	return clamp(ceil(width / step) + 1, 2, 256), clamp(ceil(height / step) + 1, 2, 256)
+end
+
+-- How far the swirl has turned, in radians, since the theme was loaded.
+-- It runs on while the window is in use, at the `speed` chosen, and faster
+-- for a moment after every press.
+local turned = 0
+
+-- What the background keeps between frames: two snapshots of the field a
+-- fifth of a second apart, which thirtieth is shown, and room to bend
+-- both when something disturbs the paint.
+type Kept = {
+	cols: number,
+	rows: number,
+	width: number,
+	height: number,
+	a: buffer,
+	b: buffer,
+	bent_a: buffer,
+	bent_b: buffer,
+	dx: buffer,
+	dy: buffer,
+	-- The thirtieth shown, the fifth its snapshots are of, and how far
+	-- between them it is.
+	shown: number,
+	tick: number,
+	mix: number,
+	-- When the next thirtieth is due, on the layer's clock.
+	due: number,
+	-- Whether the snapshots handed over are the bent ones, whether the two
+	-- snapshots differ, and whether anything is still disturbing the paint.
+	bent: boolean,
+	flowing: boolean,
+	stirred: boolean,
+}
+local kept: Kept? = nil
+
+-- What is kept for a picture of this size, and whether it was just made.
+local function keep(cols: number, rows: number, width: number, height: number): (Kept, boolean)
+	local k = kept
+	if k and k.cols == cols and k.rows == rows and k.width == width and k.height == height then
+		return k, false
+	end
+	local points = cols * rows
+	local made: Kept = {
+		cols = cols,
+		rows = rows,
+		width = width,
+		height = height,
+		a = buffer.create(points * 8),
+		b = buffer.create(points * 8),
+		bent_a = buffer.create(points * 8),
+		bent_b = buffer.create(points * 8),
+		dx = buffer.create(points * 4),
+		dy = buffer.create(points * 4),
+		shown = -1,
+		tick = -1,
+		mix = 0,
+		due = 0,
+		bent = false,
+		flowing = false,
+		stirred = false,
+	}
+	kept = made
+	return made, true
+end
+
+-- A disturbance: something that pushes the paint about for a moment. All
+-- of them move where the field is looked up, not the field: the bands are
+-- dragged, and spring back.
+--   a stir    turns the paint round a point, there and back, like a spoon
+--   a ripple  pushes it outward in a ring that travels
+local STIR_LIFE = 1.3
+local RIPPLE_SPEED = 620
+local RIPPLE_WIDTH = 90
+
+-- A stir's turn, in radians at its middle, `age` seconds after it began:
+-- a quick twist that swings back past rest and settles.
+local function stir_turn(age: number): number
+	return exp(-3.2 * age) * sin(TAU * 1.15 * age) * 1.9
+end
+
+-- Adds a stir at (cx, cy), `reach` pixels wide, turned `angle` at its
+-- middle, to the displacement of every point it touches.
+local function add_stir(k: Kept, sx: number, sy: number, cx: number, cy: number, reach: number, angle: number): boolean
+	if math.abs(angle) < 0.004 then
+		return false
+	end
+	local cols, rows = k.cols, k.rows
+	local i0, i1 = max(0, floor((cx - reach) / sx)), min(cols - 1, ceil((cx + reach) / sx))
+	local j0, j1 = max(0, floor((cy - reach) / sy)), min(rows - 1, ceil((cy + reach) / sy))
+	local dx, dy = k.dx, k.dy
+	local rr = reach * reach
+	for j = j0, j1 do
+		local y = j * sy - cy
+		for i = i0, i1 do
+			local x = i * sx - cx
+			local d = (x * x + y * y) / rr
+			if d < 1 then
+				local f = (1 - d) * (1 - d)
+				local t = angle * f
+				local c, s = cos(t) - 1, sin(t)
+				local o = (j * cols + i) * 4
+				writef32(dx, o, readf32(dx, o) + (c * x - s * y) / sx)
+				writef32(dy, o, readf32(dy, o) + (s * x + c * y) / sy)
+			end
+		end
+	end
+	return i1 >= i0 and j1 >= j0
+end
+
+-- Adds a ripple from (cx, cy), `age` seconds old, pushing by `push`
+-- pixels at its crest.
+local function add_ripple(k: Kept, sx: number, sy: number, cx: number, cy: number, age: number, push: number): boolean
+	if push < 0.25 then
+		return false
+	end
+	local cols, rows = k.cols, k.rows
+	local crest = RIPPLE_SPEED * age
+	local outer = crest + RIPPLE_WIDTH
+	local inner = max(crest - RIPPLE_WIDTH, 0)
+	local i0, i1 = max(0, floor((cx - outer) / sx)), min(cols - 1, ceil((cx + outer) / sx))
+	local j0, j1 = max(0, floor((cy - outer) / sy)), min(rows - 1, ceil((cy + outer) / sy))
+	local dx, dy = k.dx, k.dy
+	local oo, ii = outer * outer, inner * inner
+	for j = j0, j1 do
+		local y = j * sy - cy
+		for i = i0, i1 do
+			local x = i * sx - cx
+			local d = x * x + y * y
+			if d < oo and d > ii and d > 1 then
+				local r = sqrt(d)
+				local w = (r - crest) / RIPPLE_WIDTH
+				local f = (1 - w * w)
+				f = f * f * push / r
+				-- (Looked up nearer the middle: the paint moves outward.)
+				local o = (j * cols + i) * 4
+				writef32(dx, o, readf32(dx, o) - f * x / sx)
+				writef32(dy, o, readf32(dy, o) - f * y / sy)
+			end
+		end
+	end
+	return i1 >= i0 and j1 >= j0
+end
+
+-- One snapshot looked up where the displacement says, into `out`.
+local function bend(k: Kept, from: buffer, out: buffer)
+	local cols, rows = k.cols, k.rows
+	local dx, dy = k.dx, k.dy
+	local right, bottom = cols - 1, rows - 1
+	buffer.copy(out, 0, from)
+	local o = 0
+	for j = 0, rows - 1 do
+		for i = 0, cols - 1 do
+			local x, y = readf32(dx, o), readf32(dy, o)
+			if x ~= 0 or y ~= 0 then
+				x = clamp(i + x, 0, right)
+				y = clamp(j + y, 0, bottom)
+				local i0, j0 = min(floor(x), right - 1), min(floor(y), bottom - 1)
+				local tx, ty = x - i0, y - j0
+				local p = (j0 * cols + i0) * 8
+				local q = p + cols * 8
+				local u0 = readf32(from, p)
+				local v0 = readf32(from, p + 4)
+				local u1 = readf32(from, q)
+				local v1 = readf32(from, q + 4)
+				u0 += (readf32(from, p + 8) - u0) * tx
+				v0 += (readf32(from, p + 12) - v0) * tx
+				u1 += (readf32(from, q + 8) - u1) * tx
+				v1 += (readf32(from, q + 12) - v1) * tx
+				writef32(out, o * 2, u0 + (u1 - u0) * ty)
+				writef32(out, o * 2 + 4, v0 + (v1 - v0) * ty)
+			end
+			o += 4
+		end
+	end
+end
+
+-- What each event does to the paint. Returns whether anything is still
+-- moving it.
+local function disturb(k: Kept, events: { Event }, width: number, height: number): boolean
+	local sx, sy = width / (k.cols - 1), height / (k.rows - 1)
+	buffer.fill(k.dx, 0, 0)
+	buffer.fill(k.dy, 0, 0)
+	local touched, alive = false, false
+	for _, e in events do
+		local age = e.age
+		if e.kind == "press" then
+			if age < STIR_LIFE then
+				alive = true
+				-- Each key turns its own way; the equals key stirs wide.
+				local key = e.key
+				local way = if key and key.id % 2 == 1 then -1 else 1
+				local wide = key ~= nil and key.kind == "equals"
+				local reach = if wide then 190 elseif e.source == "key" then 120 else 90
+				touched = add_stir(k, sx, sy, e.x, e.y, reach, way * stir_turn(age) * (if wide then 1.2 else 1)) or touched
+			end
+		elseif e.kind == "result" or e.kind == "error" then
+			-- From under the last digits of the readout: a ripple for a
+			-- result, a shudder for an error.
+			local x, y = e.rect.x + e.rect.w * 0.8, e.rect.y + e.rect.h * 0.6
+			if e.kind == "error" then
+				if age < STIR_LIFE then
+					alive = true
+					touched = add_stir(k, sx, sy, x, y, 260, exp(-4 * age) * sin(TAU * 4.5 * age) * 1.1) or touched
+				end
+			elseif e.cause == "equals" or e.cause == "function" or e.cause == nil then
+				local life = (sqrt(width * width + height * height) + RIPPLE_WIDTH) / RIPPLE_SPEED
+				if age < life then
+					alive = true
+					touched = add_ripple(k, sx, sy, x, y, age, 46 * (1 - age / life) ^ 1.5) or touched
+				end
+			end
+		elseif e.kind == "mode" or e.kind == "option" then
+			-- A new page, or new colours: one slow turn of the whole window.
+			if age < STIR_LIFE then
+				alive = true
+				local reach = sqrt(width * width + height * height) * 0.6
+				touched = add_stir(k, sx, sy, width / 2, height / 2, reach, stir_turn(age * 0.8) * 0.5) or touched
+			end
+		end
+	end
+	if touched then
+		bend(k, k.a, k.bent_a)
+		bend(k, k.b, k.bent_b)
+	end
+	k.bent = touched
+	return alive
+end
+
+-- Where the page's swirl stands when it stands still.
+local STILL = 0
+
+local function number_option(ctx: Ctx, id: string, fallback: number): number
+	local value = ctx.options[id]
+	return if type(value) == "number" then value else fallback
+end
+
+local function background(draw: Draw, frame: Frame): Again
+	local width, height = frame.width, frame.height
+	if width < 2 or height < 2 then
+		return nil
+	end
+	local ctx = frame.ctx
+	local ramp = RAMPS[bands_id(ctx.options.bands)]
+	local cols, rows = grid(width, height)
+	local k, fresh = keep(cols, rows, width, height)
+
+	if not frame.motion then
+		-- A still picture: the page as it stands when it has flowed this far.
+		if fresh or k.tick ~= -2 then
+			swirl(k.a, cols, rows, width, height, STILL + turned)
+			k.tick = -2
+		end
+		draw:field(0, 0, width, height, { data = k.a, cols = cols, rows = rows, channels = 2, ramp = ramp, scale = 1.25 })
+		return nil
+	end
+
+	-- Which thirtieth of a second this is. Drawn again within the same one
+	-- (an event came, the window's colours changed), the numbers are the
+	-- same and the app has the picture already.
+	local speed = number_option(ctx, "speed", 1)
+	local stirring = ctx.options.stir ~= false
+	local shown = floor(frame.time * SHOWN_RATE + 0.001)
+	if fresh or k.tick < 0 or shown ~= k.shown then
+		local tick = floor(shown / SHOWN_PER_FIELD)
+		if fresh or k.tick < 0 then
+			swirl(k.a, cols, rows, width, height, STILL + turned)
+			buffer.copy(k.b, 0, k.a)
+			k.tick = tick
+			k.flowing = false
+		end
+		if tick ~= k.tick then
+			-- A new fifth of a second: the later snapshot becomes the earlier
+			-- one, and one new snapshot is worked out, as far on as the paint
+			-- flows in that time. Typing hurries it: every press just made
+			-- adds to its pace, and wears off in a second.
+			local hurry = 0
+			if stirring then
+				for _, e in frame.events do
+					if e.kind == "press" then
+						hurry += 2.5 * exp(-2.4 * e.age)
+					elseif e.kind == "result" and e.cause ~= "operator" and e.cause ~= "digit" then
+						hurry += 6 * exp(-2.4 * e.age)
+					end
+				end
+			end
+			local flow = TURN / FIELD_RATE * speed * (1 + min(hurry, 12))
+			if flow > 0 or k.flowing then
+				k.a, k.b = k.b, k.a
+				if flow > 0 then
+					turned += flow
+					swirl(k.b, cols, rows, width, height, STILL + turned)
+				else
+					buffer.copy(k.b, 0, k.a)
+				end
+				k.flowing = flow > 0
+			end
+			k.tick = tick
+		end
+		k.mix = (shown - tick * SHOWN_PER_FIELD) / SHOWN_PER_FIELD
+		k.shown = shown
+		k.due = frame.time + 1 / SHOWN_RATE
+		k.bent = false
+		k.stirred = stirring and #frame.events > 0 and disturb(k, frame.events, width, height)
+	end
+
+	draw:field(0, 0, width, height, {
+		data = if k.bent then k.bent_a else k.a,
+		next = if k.bent then k.bent_b else k.b,
+		mix = k.mix,
+		cols = cols,
+		rows = rows,
+		channels = 2,
+		ramp = ramp,
+		scale = 1.25,
+	})
+
+	-- Again in a thirtieth of a second for as long as anything moves (a
+	-- whole thirtieth: the app keeps a plain timer for that, and its frame
+	-- clock sleeps); sooner if this frame was drawn in between.
+	if speed > 0 or k.flowing or k.stirred then
+		local wait = k.due - frame.time
+		return if wait > 0.9 / SHOWN_RATE then 1 / SHOWN_RATE else max(wait, 0.001)
+	end
+	return nil
+end
+
+---------------------------------------------------------------------------
+-- 5. Keypad: the keys swirl into place
+---------------------------------------------------------------------------
+
+local SWIRL_IN = 0.55
+local SWIRL_STEP = 0.0009
+
+local function newest(events: { Event }, kind: string): Event?
+	for i = #events, 1, -1 do
+		if events[i].kind == kind then
+			return events[i]
+		end
+	end
+	return nil
+end
+
+-- Whenever a keypad comes into view its keys come round into their
+-- places, the ones nearest the middle first.
+local function place(key: KeyCell, frame: Frame): Placement?
+	local show = newest(frame.events, "show")
+	if not show then
+		return nil
+	end
+	local r = key.rect
+	local x, y = r.x + r.w / 2 - frame.width / 2, r.y + r.h / 2 - frame.height / 2
+	local away = sqrt(x * x + y * y)
+	local p = clamp((show.age - away * SWIRL_STEP) / SWIRL_IN, 0, 1)
+	if p >= 1 then
+		return nil
+	elseif p <= 0 then
+		return { opacity = 0 }
+	end
+	local e = ease.out_cubic(p)
+	local turn = (1 - e) * 0.9
+	local c, s = cos(turn), sin(turn)
+	local out = 1 + (1 - e) * 0.22
+	return {
+		dx = (c * x - s * y) * out - x,
+		dy = (s * x + c * y) * out - y,
+		scale = 0.7 + 0.3 * ease.out_back(p),
+		opacity = e,
+	}
+end
+
+local function keypad(_draw: Draw, frame: Frame): Again
+	-- Nothing is drawn over the keys: their glass and the paint under it
+	-- are the picture. `place` moves them for as long as the swirl-in runs.
+	local show = newest(frame.events, "show")
+	if show then
+		local reach = sqrt(frame.width * frame.width + frame.height * frame.height) / 2
+		if show.age <= reach * SWIRL_STEP + SWIRL_IN then
+			return 0
+		end
+	end
+	return nil
+end
+
+---------------------------------------------------------------------------
+-- 6. Display: digits made of paint
+---------------------------------------------------------------------------
+--
+-- The app lays the value out and hands over its glyphs; this paints them.
+-- They are a window onto the swirl too: a slice of the same field, pushed
+-- through the first band of the same ramp only, from the warm colour to
+-- the cool one and back, so that no digit is ever written in the dark one.
+
+-- How much of the swirl a readout's width shows, and how many times the
+-- warm and cool colours change places across it.
+local SLICE = 2.6
+local WAVES = 2.4
+-- The digits' paint runs this many times faster than the window's.
+local DIGIT_FLOW = 7
+
+-- One snapshot of a readout's slice: a number from 0 to 1 at every point.
+local function slice(buf: buffer, cols: number, rows: number, width: number, height: number, turn: number)
+	local p = turn % TAU
+	local px, py = 1.31 + p, 4.27 - p
+	local sy = SLICE * height / width
+	local o = 0
+	for j = 0, rows - 1 do
+		local v0 = (1 - 2 * j / (rows - 1)) * sy + 0.4
+		for i = 0, cols - 1 do
+			local u = (2 * i / (cols - 1) - 1) * SLICE
+			local v = v0
+			local u2 = u + v
+			local v2 = u2
+			for _ = 1, 3 do
+				local len = sqrt(u * u + v * v)
+				u2 += u + len
+				v2 += v + len
+				u += 0.5 * cos(px + v2 * 0.2)
+				v += 0.5 * sin(py + u2)
+				local d = cos(u + v) - sin(u * 0.7 - v)
+				u -= d
+				v -= d
+			end
+			writef32(buf, o, 0.5 - 0.47 * cos(sqrt(u * u + v * v) * WAVES))
+			o += 4
+		end
+	end
+end
+
+type Slice = { cols: number, rows: number, a: buffer, b: buffer, tick: number, shown: number, mix: number, turn: number, due: number }
+-- By size: two readouts of one size (the converter's) show one slice.
+local slices: { [number]: Slice } = {}
+local slices_count = 0
+
+-- How long each kind of change plays for, in seconds.
+local function change_time(kind: string, digits: number): number
+	if kind == "typing" then
+		return 0.24
+	elseif kind == "result" then
+		return 0.45 + digits * 0.03 + 0.4
+	elseif kind == "replace" then
+		return 0.3
+	end
+	return 0.55 -- error
+end
+
+local function display(draw: Draw, frame: Frame): Again
+	local v = frame.value
+	if not v then
+		return nil
+	end
+	local ctx = frame.ctx
+	local s = scheme(ctx)
+	if v.role == "calculator" then
+		-- The panel's hairline.
+		draw:border(0, 0, frame.width, frame.height, RADIUS, 1, alpha(s.b, 0.6))
+	end
+	local digits = #v.glyphs
+	local change = v.change
+	if change and change.age > change_time(change.kind, digits) then
+		change = nil
+	end
+	local kind = if change then change.kind else "none"
+	local t = if change then change.age else 0
+	local from = if change then change.from else 1
+
+	-- An error shudders, as the paint under it does.
+	local shake = 0
+	if kind == "error" then
+		shake = exp(-4 * t) * sin(TAU * 4.5 * t) * 10
+	end
+
+	-- Replace: the old value sinks away.
+	local old = v.previous
+	if kind == "replace" and old then
+		local p = min(t / 0.2, 1)
+		draw:save()
+		draw:translate(0, 10 * p)
+		draw:push_opacity((1 - p) * 0.7)
+		for _, g in old.glyphs do
+			draw:glyph(g, s.fg)
+		end
+		draw:pop()
+		draw:restore()
+	end
+
+	-- Where one glyph is in the change being played: how far above its
+	-- place, how opaque, how large.
+	local function pose(g: Glyph): (number, number, number)
+		if kind == "typing" and g.index >= from then
+			-- A new digit drops in.
+			local p = min(t / 0.24, 1)
+			return (1 - ease.out_back(p)) * v.size * 0.22, sqrt(p), 1
+		elseif kind == "result" then
+			-- The number wells up from the right, where the ripple starts.
+			local p = clamp((t - (digits - g.index) * 0.03) / 0.45, 0, 1)
+			return 0, ease.out_cubic(p), 0.6 + 0.4 * ease.out_back(p)
+		elseif kind == "replace" then
+			local e = ease.out_cubic(min(t / 0.3, 1))
+			return (1 - e) * 10, e, 1
+		end
+		return 0, 1, 1
+	end
+
+	local function glyphs(color: Rgba)
+		for _, g in v.glyphs do
+			local up, opacity, size = pose(g)
+			if opacity > 0.001 then
+				local cx, cy = g.x + g.w / 2, g.y + g.h / 2
+				draw:save()
+				draw:translate(cx + shake, cy - up)
+				draw:scale(size)
+				draw:translate(-cx, -cy)
+				draw:glyph(g, alpha(color, opacity))
+				draw:restore()
+			end
+		end
+	end
+
+	if digits == 0 then
+		return nil
+	end
+	local band = v.band
+	local living = frame.motion and number_option(ctx, "speed", 1) > 0
+	if v.error or ctx.options.digits == false or band.w < 8 or band.h < 8 then
+		-- An error is written in its own colour, plainly; and so is every
+		-- value when the paint is kept out of the digits.
+		if v.error then
+			glyphs(s.danger)
+		else
+			draw:push_mask("alpha")
+			glyphs(white)
+			draw:pop()
+			draw:rect(band.x, band.y, band.w, band.h, gmnb.linear({
+				from = { 0, band.y },
+				to = { 0, band.y + band.h },
+				colors = { s.fg, mix(s.fg, s.b, 0.35) },
+			}))
+			draw:pop()
+		end
+		return if change then 0 else nil
+	end
+
+	-- The slice of the swirl behind this readout's digits: a point every
+	-- eight pixels of the band the value sits in.
+	local cols, rows = clamp(ceil(band.w / 8) + 1, 2, 160), clamp(ceil(band.h / 8) + 1, 2, 24)
+	local key = cols * 32 + rows
+	local k = slices[key]
+	if not k then
+		if slices_count >= 24 then
+			slices, slices_count = {}, 0
+		end
+		k = { cols = cols, rows = rows, a = buffer.create(cols * rows * 4), b = buffer.create(cols * rows * 4), tick = -1, shown = -1, mix = 0, turn = 0, due = 0 }
+		slices[key] = k
+		slices_count += 1
+	end
+	if not frame.motion then
+		if k.tick ~= -2 then
+			slice(k.a, cols, rows, band.w, band.h, STILL + turned * DIGIT_FLOW)
+			k.tick = -2
+		end
+		k.mix = 0
+	else
+		local shown = floor(frame.time * SHOWN_RATE + 0.001)
+		if k.tick < 0 or shown ~= k.shown then
+			local tick = floor(shown / SHOWN_PER_FIELD)
+			local turn = STILL + turned * DIGIT_FLOW
+			if k.tick < 0 then
+				slice(k.a, cols, rows, band.w, band.h, turn)
+				slice(k.b, cols, rows, band.w, band.h, turn)
+				k.turn = turn
+				k.tick = tick
+			elseif tick ~= k.tick then
+				if turn ~= k.turn then
+					k.a, k.b = k.b, k.a
+					slice(k.b, cols, rows, band.w, band.h, turn)
+					k.turn = turn
+				end
+				k.tick = tick
+			end
+			k.mix = (shown - tick * SHOWN_PER_FIELD) / SHOWN_PER_FIELD
+			k.shown = shown
+			k.due = frame.time + 1 / SHOWN_RATE
+		end
+	end
+
+	draw:push_mask("alpha")
+	glyphs(white)
+	draw:pop()
+	draw:field(band.x, band.y, band.w, band.h, {
+		data = k.a,
+		next = k.b,
+		mix = k.mix,
+		cols = cols,
+		rows = rows,
+		channels = 1,
+		ramp = RAMPS[s.id],
+		quality = 1,
+	})
+	if kind == "result" then
+		-- The digits flare as they land, and cool.
+		local p = clamp(t / change_time("result", digits), 0, 1)
+		draw:rect(band.x, band.y, band.w, band.h, alpha(white, 0.75 * (1 - p) ^ 2))
+	elseif kind == "typing" then
+		draw:rect(band.x, band.y, band.w, band.h, alpha(white, 0.3 * (1 - min(t / 0.24, 1))))
+	end
+	draw:pop()
+
+	if change then
+		return 0
+	elseif living then
+		local wait = k.due - frame.time
+		return if wait > 0.9 / SHOWN_RATE then 1 / SHOWN_RATE else max(wait, 0.001)
+	end
+	return nil
+end
+
+---------------------------------------------------------------------------
+-- 7. Options
+---------------------------------------------------------------------------
+
+-- A tile's own small field: the swirl as it stands still, 96 × 56.
+local TILE_COLS, TILE_ROWS = 17, 11
+local tile_field = buffer.create(TILE_COLS * TILE_ROWS * 8)
+local tile_made = false
+
+local function tile_swirl(draw: Draw, w: number, h: number, ramp: Ramp)
+	if not tile_made then
+		swirl(tile_field, TILE_COLS, TILE_ROWS, 96, 56, STILL)
+		tile_made = true
+	end
+	draw:field(0, 0, w, h, { data = tile_field, cols = TILE_COLS, rows = TILE_ROWS, channels = 2, ramp = ramp, scale = 1.25, quality = 1 })
+end
+
+-- A set of bands: its swirl, and a key of its glass with its equals sign.
+local function bands_tile(draw: Draw, frame: Preview, choice: string)
+	local id = bands_id(choice)
+	local s = scheme_for(id, frame.ctx)
+	local w, h = frame.width, frame.height
+	draw:push_clip(0, 0, w, h, RADIUS)
+	tile_swirl(draw, w, h, RAMPS[id])
+	draw:rounded_rect(w - 40, h - 30, 30, 20, 6, s.a)
+	draw:rect(w - 31, h - 23, 12, 2, s.ground)
+	draw:rect(w - 31, h - 19, 12, 2, s.ground)
+	draw:pop()
+end
+
+-- A strength of glass: a key of it over the swirl.
+local function glass_tile(draw: Draw, frame: Preview, choice: string)
+	local s = scheme(frame.ctx)
+	local w, h = frame.width, frame.height
+	local strength = max(STRENGTH[choice] or SMOKED, s.glass - (STRENGTH[tostring(frame.ctx.options.glass)] or SMOKED) + (STRENGTH[choice] or SMOKED))
+	draw:push_clip(0, 0, w, h, RADIUS)
+	tile_swirl(draw, w, h, RAMPS[s.id])
+	draw:rounded_rect(14, 10, w - 28, h - 20, 8, alpha(s.lift, clamp(strength, 0, 1)))
+	draw:border(14, 10, w - 28, h - 20, 8, 1, alpha(s.b, 0.5))
+	local tw, th = draw:text_size("7", { size = 20, weight = 500 })
+	draw:text("7", (w - tw) / 2, (h - th) / 2, { size = 20, weight = 500 }, s.fg)
+	draw:pop()
+end
+
+local options: { Option } = {
+	{
+		id = "bands",
+		type = "choice",
+		group = "Paint",
+		label = "Colours",
+		description = "The three bands of the swirl, and what the keys borrow from them",
+		default = "party",
+		choices = {
+			{ id = "party", label = "s0y b0y" },
+			{ id = "lava", label = "Lava" },
+			{ id = "lagoon", label = "Lagoon" },
+			{ id = "orchid", label = "Orchid" },
+			{ id = "absinthe", label = "Absinthe" },
+			{ id = "marble", label = "Marble" },
+		},
+		preview = bands_tile,
+	},
+	{
+		id = "glass",
+		type = "choice",
+		group = "Paint",
+		label = "Glass",
+		description = "How much of the paint shows through the keys. It is never clearer than the text on it can bear",
+		default = "smoked",
+		choices = {
+			{ id = "clear", label = "Clear" },
+			{ id = "smoked", label = "Smoked" },
+			{ id = "panel", label = "Panels" },
+		},
+		preview = glass_tile,
+	},
+	{
+		id = "speed",
+		type = "slider",
+		group = "Motion",
+		label = "Flow",
+		description = "How fast the paint moves: 1 is the homepage's own pace, 0 holds it still",
+		min = 0,
+		max = 4,
+		step = 0.25,
+		default = 1,
+	},
+	{
+		id = "stir",
+		type = "toggle",
+		group = "Motion",
+		label = "Stir with every press",
+		description = "Keys turn the paint under them, typing hurries it along, a result sends a ripple out",
+		default = true,
+	},
+	{
+		id = "digits",
+		type = "toggle",
+		group = "Motion",
+		label = "Digits made of paint",
+		description = "The readout's numbers are cut out of the swirl. Off, they are plain",
+		default = true,
+	},
+	{
+		id = "motion_note",
+		type = "note",
+		group = "Motion",
+		label = "Everything here stands still under the system's “reduce animations” setting, and rests when the window isn't in use.",
+	},
+}
+
+local theme: Theme = {
+	api = 1,
+	name = "Swirls",
+	description = "The paint that flows behind s0y b0y, under a calculator of dark glass. Keys stir it.",
+	author = "GMNB contributors",
+	license = "MIT",
+	credits = { { title = "The swirl (ColorMix, from ly)", file = "credits/ColorMix.txt" } },
+	options = options,
+	style = style,
+	layers = {
+		background = { draw = background, events = { press = STIR_LIFE, result = 2.5, error = STIR_LIFE, mode = STIR_LIFE, option = STIR_LIFE } },
+		keypad = { draw = keypad, place = place, events = { show = 1.6 } },
+		display = { draw = display },
+	},
+}
+
+return theme
