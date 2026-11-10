@@ -38,8 +38,10 @@
 //! # Limits
 //!
 //! Every entry into the VM, the load and each hook call, runs under a
-//! deadline (an interrupt checks it at every loop and call), and stays under
-//! it until the host call returns: a script that catches the timeout error
+//! deadline (an interrupt checks it at every loop and call). The limit is
+//! of processor time, what the thread has run, so a machine busy with
+//! other things doesn't fail a theme that did nothing slow. The entry stays
+//! under its deadline until the host call returns: a script that catches the timeout error
 //! with `pcall` is stopped at its next loop or call, coroutines included,
 //! and a call that returns after its deadline (one long library call, which
 //! Luau can't interrupt) is a [`ThemeError::Timeout`] too. Several calls

@@ -221,6 +221,49 @@ fn one_library_call_past_the_deadline_is_a_timeout() {
 }
 
 #[test]
+fn a_limit_is_of_processor_time_not_of_the_clock_on_the_wall() {
+    // A call that loses the processor (here: the host sleeps inside it,
+    // as a busy machine would make it) hasn't used its limit: it isn't a
+    // timeout, whether it is interrupted after the wait or returns right
+    // after it.
+    let nap = |lua: &gmnb_theme::mlua::Lua| {
+        let f = lua.create_function(|_, ms: u64| {
+            std::thread::sleep(Duration::from_millis(ms));
+            Ok(())
+        })?;
+        lua.globals().raw_set("nap", f)
+    };
+    let e = Engine::with_globals(Limits::default(), nap).unwrap();
+    let returns = hook(&e, "return function() nap(120) return 1 end");
+    let t = Instant::now();
+    assert_eq!(
+        e.call(&returns, Budget::Custom(ms(30)), ()),
+        Ok(ThemeValue::Int(1))
+    );
+    assert!(t.elapsed() >= ms(120));
+    let goes_on = hook(
+        &e,
+        "return function() nap(120) local n = 0 for i = 1, 1000 do n += i end return n end",
+    );
+    assert_eq!(
+        e.call(&goes_on, Budget::Custom(ms(30)), ()),
+        Ok(ThemeValue::Int(500500))
+    );
+    assert_eq!((returns.strikes(), goes_on.strikes()), (0, 0));
+    // What it runs itself still counts, after any wait.
+    let spins = hook(&e, "return function() nap(60) while true do end end");
+    assert_eq!(
+        e.call(&spins, Budget::Custom(ms(30)), ()),
+        Err(ThemeError::Timeout(ms(30)))
+    );
+    // A span is not over for having waited.
+    let span = e.span(Budget::Custom(ms(30)));
+    std::thread::sleep(ms(60));
+    assert!(!span.is_over());
+    assert_eq!(e.call_in(&returns, &span, ()), Ok(ThemeValue::Int(1)));
+}
+
+#[test]
 fn the_contracts_budgets() {
     let d = Limits::default();
     assert_eq!(

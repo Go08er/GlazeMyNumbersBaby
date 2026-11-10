@@ -810,7 +810,9 @@ impl Hub {
         let Some(theme) = theme.as_ref() else {
             return Err(Failure::Off);
         };
+        let start = std::time::Instant::now();
         let result = theme.draw(kind, &ctx, frame);
+        self.layers.hook_took(start.elapsed());
         self.hear(theme);
         result
     }

@@ -13,3 +13,6 @@ appcore.workspace = true
 # Luau only (its C++ is built by `cc`; mlua has no default features). No
 # `send` (GMNB's themes live on the main thread), no `async`, no JIT.
 mlua = { version = "0.12.2", default-features = false, features = ["luau"] }
+# The processor time a call has had (clock_gettime): what its time limit
+# measures.
+libc = "0.2"

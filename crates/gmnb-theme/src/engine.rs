@@ -59,8 +59,12 @@ pub struct Engine {
 
 /// What the interrupt and `print` share with the engine.
 struct Shared {
-    /// Until when the running entry may run, if any is running.
+    /// Until when the running entry may run, if any is running: a time on
+    /// the wall's clock, which the interrupt can read cheaply. It is moved
+    /// on when it comes and the entry hasn't had its processor time yet.
     deadline: Cell<Option<Instant>>,
+    /// The span that deadline is of.
+    span: Cell<Option<Span>>,
     /// Whether the interrupt stopped the running entry.
     timed_out: Cell<bool>,
     /// The fatal error that stopped the engine (the heap cap, or a panic
@@ -98,16 +102,60 @@ impl HostTable {
 /// One time limit shared by several calls, from when it was made
 /// ([`Engine::span`]): all `place` calls of one keypad frame share
 /// [`Limits::place`]. [`Engine::call`] makes one for each call.
+///
+/// A limit is of **processor time**: what this thread has run since the
+/// span was made, not what the clock on the wall says. A call that loses
+/// the processor for a while (a busy machine) hasn't used its limit, and
+/// isn't failed for it. Where the system can't tell a thread's processor
+/// time, the wall's clock is used.
 #[derive(Clone, Copy, Debug)]
 pub struct Span {
     start: Instant,
+    /// This thread's processor time when the span was made.
+    cpu: Option<Duration>,
     limit: Duration,
 }
 
+/// The processor time this thread has used so far.
+fn thread_cpu() -> Option<Duration> {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `clock_gettime` writes the one `timespec` it is given, which
+    // lives on this stack; it keeps no pointer.
+    let ok = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) } == 0;
+    (ok && ts.tv_sec >= 0 && ts.tv_nsec >= 0)
+        .then(|| Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32))
+}
+
 impl Span {
+    fn new(limit: Duration) -> Span {
+        Span {
+            start: Instant::now(),
+            cpu: thread_cpu(),
+            limit,
+        }
+    }
+
+    /// How much of the limit has been used.
+    fn used(&self) -> Duration {
+        match (self.cpu, thread_cpu()) {
+            (Some(then), Some(now)) => now.saturating_sub(then),
+            _ => self.start.elapsed(),
+        }
+    }
+
+    /// Whether more than `limit` has been used. (Processor time is never
+    /// more than the time passed: the clock on the wall is asked first,
+    /// and it is cheap.)
+    fn past(&self, limit: Duration) -> bool {
+        self.start.elapsed() >= limit && self.used() >= limit
+    }
+
     /// Whether the time is up.
     pub fn is_over(&self) -> bool {
-        self.start.elapsed() >= self.limit
+        self.past(self.limit)
     }
 }
 
@@ -128,6 +176,7 @@ impl Engine {
             Lua::new_with(libs(), LuaOptions::default()).map_err(|e| classify(&e, &limits))?;
         let shared = Rc::new(Shared {
             deadline: Cell::new(None),
+            span: Cell::new(None),
             timed_out: Cell::new(false),
             dead: RefCell::new(None),
             print_nesting: Cell::new(0),
@@ -172,6 +221,17 @@ impl Engine {
             if let Some(deadline) = shared.deadline.get()
                 && Instant::now() >= deadline
             {
+                // The wall's clock says the time is up. If the call lost
+                // the processor meanwhile, it is given what it is owed.
+                if let Some(span) = shared.span.get() {
+                    let used = span.used();
+                    if used < span.limit {
+                        shared
+                            .deadline
+                            .set(Instant::now().checked_add(span.limit - used));
+                        return Ok(VmState::Continue);
+                    }
+                }
                 shared.timed_out.set(true);
                 return Err(mlua::Error::runtime(TIMEOUT_MESSAGE));
             }
@@ -247,10 +307,7 @@ impl Engine {
 
     /// A time limit for several calls ([`Engine::call_in`]), from now.
     pub fn span(&self, budget: Budget) -> Span {
-        Span {
-            start: Instant::now(),
-            limit: budget.duration(&self.limits),
-        }
+        Span::new(budget.duration(&self.limits))
     }
 
     /// [`Engine::call`] within a span shared with other calls. Once the
@@ -284,7 +341,7 @@ impl Engine {
         if result.is_err() {
             let strikes = h.strikes.get().saturating_add(1);
             h.strikes.set(strikes);
-            let overran = span.start.elapsed() > span.limit.saturating_mul(4);
+            let overran = span.past(span.limit.saturating_mul(4));
             if strikes >= self.limits.strikes || overran {
                 h.disabled.set(true);
             }
@@ -500,7 +557,7 @@ impl Engine {
         span: &Span,
         f: impl FnOnce() -> mlua::Result<T>,
     ) -> Result<T, ThemeError> {
-        let entry = Entry::new(&self.shared, span.start.checked_add(span.limit));
+        let entry = Entry::new(&self.shared, span);
         let result = self.shielded(f);
         let timed_out = entry.timed_out();
         drop(entry);
@@ -536,37 +593,42 @@ impl Engine {
 /// running one is restored when it ends, panics included.
 struct Entry<'a> {
     shared: &'a Shared,
-    deadline: Option<Instant>,
-    outer: Option<Instant>,
+    outer: (Option<Instant>, Option<Span>),
     outer_timed_out: bool,
 }
 
 impl<'a> Entry<'a> {
-    /// `end`: `None` for no deadline of its own.
-    fn new(shared: &'a Shared, end: Option<Instant>) -> Self {
-        let outer = shared.deadline.get();
-        let deadline = match (outer, end) {
-            (Some(o), Some(d)) => Some(o.min(d)),
-            (Some(o), None) => Some(o),
-            (None, d) => d,
+    fn new(shared: &'a Shared, span: &Span) -> Self {
+        let outer = (shared.deadline.get(), shared.span.get());
+        let end = span.start.checked_add(span.limit);
+        // The earlier of the running entry's deadline and this one's.
+        let keep = match (outer.0, end) {
+            (Some(running), Some(own)) => running <= own,
+            (Some(_), None) => true,
+            (None, _) => false,
         };
-        shared.deadline.set(deadline);
+        if !keep {
+            shared.deadline.set(end);
+            shared.span.set(Some(*span));
+        }
         Entry {
             shared,
-            deadline,
             outer,
             outer_timed_out: shared.timed_out.replace(false),
         }
     }
 
+    /// Whether the entry was stopped, or came back after its time was up
+    /// (one library call the interrupt couldn't stop).
     fn timed_out(&self) -> bool {
-        self.shared.timed_out.get() || self.deadline.is_some_and(|d| Instant::now() > d)
+        self.shared.timed_out.get() || self.shared.span.get().is_some_and(|s| s.is_over())
     }
 }
 
 impl Drop for Entry<'_> {
     fn drop(&mut self) {
-        self.shared.deadline.set(self.outer);
+        self.shared.deadline.set(self.outer.0);
+        self.shared.span.set(self.outer.1);
         let inner = self.shared.timed_out.get();
         self.shared.timed_out.set(self.outer_timed_out || inner);
     }

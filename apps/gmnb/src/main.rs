@@ -223,7 +223,10 @@ fn activate(app: &adw::Application) {
         // What theming holds once the window has settled.
         let w = win.clone();
         glib::timeout_add_local_once(Duration::from_millis(1200), move || {
-            eprintln!("theme: {:?}", w.ctx().hub.stats());
+            let hub = &w.ctx().hub;
+            eprintln!("theme: {:?}", hub.stats());
+            // Each layer hook: its failures, and whether it was switched off.
+            eprintln!("theme hooks: {:?}", hub.hooks());
         });
     }
     if let Ok(path) = std::env::var("GMNB_SCREENSHOT") {

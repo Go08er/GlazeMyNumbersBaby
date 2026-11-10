@@ -227,6 +227,15 @@ impl Layers {
         self.stats.set(stats);
     }
 
+    /// A layer's hooks ran for this long.
+    pub fn hook_took(&self, time: Duration) {
+        let ms = time.as_secs_f64() * 1000.0;
+        self.count(|s| {
+            s.hook_ms += ms;
+            s.worst_ms = s.worst_ms.max(ms);
+        });
+    }
+
     /// A number no other keypad or readout of this window has.
     pub fn next_id(&self) -> u64 {
         let id = self.next_id.get();

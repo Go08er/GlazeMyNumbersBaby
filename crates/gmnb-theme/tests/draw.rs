@@ -1500,14 +1500,13 @@ fn median(mut times: Vec<f64>) -> f64 {
     times[times.len() / 2]
 }
 
-/// Aurora's three layers in the real engine: what they draw at rest and
-/// mid-animation, what they ask for, and what a frame costs against the
-/// real limits. (The deadlines themselves are lifted: this machine is
-/// shared, and one frame that loses the processor for 8 ms would fail a
-/// test that is about the median.)
+/// Aurora's three layers in the real engine, under the real limits: what
+/// they draw at rest and mid-animation, what they ask for, and what a
+/// frame costs. (The limits are of processor time, so a shared machine
+/// taking the processor away for a while fails nothing here.)
 #[test]
 fn auroras_layers_draw_within_their_limits() {
-    let theme = built_in("aurora", patient());
+    let theme = built_in("aurora", Limits::default());
     assert_eq!(
         theme
             .hooks()
