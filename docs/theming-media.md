@@ -371,6 +371,14 @@ renderer, used 9 to 12% of a core, and 1 to 2 MiB of memory more than
 with the same theme standing still.) The same picture worked out per pixel on
 the processor takes 62 ms a frame.
 
+The built-in theme Swirls
+([`apps/gmnb/themes/swirls`](../apps/gmnb/themes/swirls/theme.luau)) is
+this example grown into a theme: the same field behind glass keys, with a
+grid that keeps its number of points whatever the window's size, a clock
+quantised to thirtieths of a second, the paint stirred where keys are
+pressed (by moving where the field is looked up), and the readout's
+figures cut out of a slice of it.
+
 A field that hasn't changed isn't coloured again. Drawn with the same
 numbers, the same ramp and the same size as last time, it is the picture
 already made, at no cost: a layer that is redrawn for another reason (an
@@ -1737,7 +1745,7 @@ well under any music playing.
     the result it brings about.
 11. **DGMNB**: the widened `cargo tree` check.
 12. **A built-in theme's sounds** (`crates/gmnb-theme/tests/aurora_sound.rs`
-    for Aurora): they load with no note, each within the gain a built-in
+    for Aurora, `swirls_sound.rs` for Swirls): they load with no note, each within the gain a built-in
     theme may have; every event plays what the theme means it to, in every
     palette, and nothing lasts longer than the budget of
     [Designing sounds](#designing-sounds-a-few-rules-that-work) allows;

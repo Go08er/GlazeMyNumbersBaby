@@ -251,7 +251,18 @@ fn the_paint_flows_while_it_may_and_stands_when_it_may_not() {
     let first = draw_at(&theme, LayerKind::Background, &flowing, &f);
     let (picture, rect) = field(&first);
     assert_eq!(rect, [0.0, 0.0, 760.0, 640.0]);
-    assert_eq!((picture.width, picture.height), (380, 320));
+    // (Half size: 380 × 320. A machine over three times slower than the
+    // one the theme was written on gets a coarser picture, by as much
+    // as it is slower: `keep`, in the theme.)
+    let nominal = (picture.width, picture.height) == (380, 320);
+    let thinned = picture.width < 380 && picture.width * 320 / 380 == picture.height;
+    assert!(nominal || thinned, "{} x {}", picture.width, picture.height);
+    if thinned {
+        println!(
+            "this machine is slow: Swirls thinned its picture to {} x {}",
+            picture.width, picture.height
+        );
+    }
     assert_eq!(first.list.ops.len(), 1);
     assert!(next_thirtieth(first.again, 0.0), "{:?}", first.again);
     assert_eq!(first.retry, None);
@@ -414,9 +425,7 @@ fn every_pixel_of_the_paint_is_one_of_its_ramps_colours() {
                     ..Frame::sized(w, h)
                 };
                 let d = draw_at(&theme, LayerKind::Background, &c, &f);
-                for px in field(&d).0.pixels.chunks_exact(4) {
-                    seen.insert([px[0], px[1], px[2], px[3]]);
-                }
+                seen.extend(field(&d).0.pixels.as_chunks::<4>().0);
             }
         }
         // (A good part of the table shows in two and a half seconds.)
@@ -440,9 +449,7 @@ fn every_pixel_of_the_paint_is_one_of_its_ramps_colours() {
                 let d = draw_at(&theme, LayerKind::Display, &c, &f);
                 let (picture, rect) = field(&d);
                 assert_eq!(rect, [0.0, 40.0, 428.0, 68.0]);
-                for px in picture.pixels.chunks_exact(4) {
-                    seen.insert([px[0], px[1], px[2], px[3]]);
-                }
+                seen.extend(picture.pixels.as_chunks::<4>().0);
             }
         }
         assert!(seen.len() > 100, "{bands}: {} colours", seen.len());
@@ -515,8 +522,15 @@ fn the_background_stays_within_its_limits_at_any_size() {
             let ms = cpu_ms() - started;
             assert_eq!(d.retry, None, "{w}x{h} at {t}");
             assert!(next_thirtieth(d.again, t), "{w}x{h} at {t}");
+            // Never more pixels to colour than a 760 × 640 window has at
+            // half size, and a little over for the rounding.
             let (picture, _) = field(&d);
-            assert!(picture.width * picture.height <= 262_144);
+            assert!(
+                picture.width * picture.height <= 161_000,
+                "{w}x{h}: {} x {}",
+                picture.width,
+                picture.height
+            );
             times.push(ms);
         }
         let (mean, worst) = mean_and_worst(&times);
@@ -655,17 +669,19 @@ fn what_a_frame_costs() {
         line("readout, typing", &typing_readout),
         line("keypad, swirling in (place included)", &keypad),
     );
-    // The limit is 8 ms a frame. The worst frame is the one that makes a
-    // new snapshot with the paint disturbed; flowing, a frame is a tenth
-    // of the limit on average, and with six stirs and a ripple alive at
-    // once, a third at most.
+    // The limit is 8 ms a frame, and no frame comes near it: no frame
+    // carries a whole snapshot but the first (the next is worked out a
+    // few rows a frame). Flowing, a frame is a tenth of the limit on
+    // average on the machine this was written on, and with six stirs and
+    // a ripple alive at once a quarter; here they are held to a quarter
+    // and a half, for a machine that is busy or slower.
     let limit = Limits::default().frame.as_secs_f64() * 1000.0;
     for (times, share) in [
-        (&flowing, 6.0),
-        (&typing, 3.0),
-        (&flowing_readout, 16.0),
-        (&typing_readout, 16.0),
-        (&keypad, 16.0),
+        (&flowing, 4.0),
+        (&typing, 2.0),
+        (&flowing_readout, 8.0),
+        (&typing_readout, 8.0),
+        (&keypad, 8.0),
     ] {
         let (mean, worst) = mean_and_worst(times);
         assert!(mean < limit / share && worst < limit, "{mean} {worst}");
@@ -1030,7 +1046,7 @@ fn frames() {
         let d = draw_at(&theme, LayerKind::Background, &c, &f);
         let (picture, _) = field(&d);
         let mut ppm = format!("P6\n{} {}\n255\n", picture.width, picture.height).into_bytes();
-        for px in picture.pixels.chunks_exact(4) {
+        for px in picture.pixels.as_chunks::<4>().0 {
             ppm.extend_from_slice(&px[..3]);
         }
         std::fs::write(out.join(format!("f{i:03}.ppm")), ppm).unwrap();

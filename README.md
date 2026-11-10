@@ -920,8 +920,11 @@ The code is MIT; see [LICENSE](LICENSE), which carries Microsoft's original
 notice. Both embed *Inter* and subsets of *Noto Sans*
 (`apps/dgmnb/assets/fonts/`); GMNB's Aurora theme brings the *Outfit*
 typeface (`apps/gmnb/themes/aurora/fonts/`). All are under the SIL Open
-Font License. Exchange-rate data comes from Frankfurter
-(central bank reference rates).
+Font License. GMNB's Swirls theme draws the field behind s0y b0y,
+which is adapted from the ColorMix animation of
+[ly](https://github.com/fairyglade/ly) (WTFPL; the theme's credits are in
+`apps/gmnb/themes/swirls/credits/`). Exchange-rate data comes from
+Frankfurter (central bank reference rates).
 
 Both also contain code by others:
 [CORE-MATH](https://core-math.gitlabpages.inria.fr/)'s correctly rounded

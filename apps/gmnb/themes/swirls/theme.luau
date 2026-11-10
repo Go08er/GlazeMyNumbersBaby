@@ -937,16 +937,22 @@ end
 -- grow with the window, so they are as smooth in it.)
 local POINTS = 3600
 local FINEST = 12
+-- And about as many pixels for the app to colour as that window has at
+-- half size (`quality` 0.5, the page's own sharpness there): a bigger
+-- window's picture is scaled up further, not coloured for longer. The
+-- bands are soft-edged and grow with the window; it doesn't show.
+local PIXELS = 160000
 
 -- The bent coordinate (u, v) at every point of a cols × rows grid whose
 -- corners are the corners of a width × height picture, as two 32-bit
--- floats a point. This is the page's shader, line for line.
-local function swirl(buf: buffer, cols: number, rows: number, width: number, height: number, turned: number)
+-- floats a point. This is the page's shader, line for line. Only the
+-- rows from `first` up to (not including) `last` are worked out.
+local function swirl(buf: buffer, cols: number, rows: number, width: number, height: number, turned: number, first: number, last: number)
 	local p = turned % TAU
 	local px, py = 1.31 + p, 4.27 - p
 	local sx, sy = 0.825 * width / height, 1.65
-	local o = 0
-	for j = 0, rows - 1 do
+	local o = first * cols * 8
+	for j = first, last - 1 do
 		local v0 = (1 - 2 * j / (rows - 1)) * sy
 		for i = 0, cols - 1 do
 			local u = (2 * i / (cols - 1) - 1) * sx
@@ -970,41 +976,34 @@ local function swirl(buf: buffer, cols: number, rows: number, width: number, hei
 	end
 end
 
--- How many points the grid has now. A machine too slow for POINTS gets
--- fewer: a draw hook has 8 ms of the processor, and a swirl that takes a
--- third of that leaves too little room.
-local points = POINTS
-local SLOW = 0.0027
-local took: { number } = {}
+-- How much coarser than that this machine needs both: 1, unless it is
+-- slow (`keep`, below, finds out).
+local thin = 1
 
 local function grid(width: number, height: number): (number, number)
-	local step = max(FINEST, sqrt(width * height / points))
+	local step = max(FINEST, sqrt(width * height * thin / POINTS))
 	return clamp(ceil(width / step) + 1, 2, 256), clamp(ceil(height / step) + 1, 2, 256)
 end
 
--- A snapshot, timed. If the quickest of four in a row was slow (the
--- quickest: the machine may have been busy with something else during
--- the others), the grid is made coarser from the next frame on.
-local function snapshot(buf: buffer, cols: number, rows: number, width: number, height: number, at: number)
-	local started = os.clock()
-	swirl(buf, cols, rows, width, height, at)
-	table.insert(took, (os.clock() - started) * POINTS / (cols * rows) * (points / POINTS))
-	if #took >= 4 then
-		if points > 900 and min(took[1], took[2], took[3], took[4]) > SLOW then
-			points = max(900, floor(points * 0.6))
-		end
-		table.clear(took)
-	end
+-- How many pixels the app colours per pixel of the window, along a side.
+local function sharpness(width: number, height: number): number
+	return clamp(sqrt(PIXELS / thin / (width * height)), 0.1, 0.5)
 end
 
--- How far the swirl has turned, in radians, since the theme was loaded.
--- It runs on while the window is in use, at the `speed` chosen, and faster
--- for a moment after every press.
+-- Where the page's swirl stands before it has flowed at all.
+local STILL = 0
+
+-- How far the swirl has turned, in radians, since the theme was loaded:
+-- where the later of the two snapshots in use is. It runs on while the
+-- window is in use, at the `speed` chosen, and faster for a moment after
+-- every press.
 local turned = 0
 
 -- What the background keeps between frames: two snapshots of the field a
--- fifth of a second apart, which thirtieth is shown, and room to bend
--- both when something disturbs the paint.
+-- fifth of a second apart, the one that comes after them (worked out a
+-- few rows a frame, so that no frame carries a whole snapshot), which
+-- thirtieth is shown, and room to bend both when something disturbs the
+-- paint.
 type Kept = {
 	cols: number,
 	rows: number,
@@ -1012,6 +1011,14 @@ type Kept = {
 	height: number,
 	a: buffer,
 	b: buffer,
+	-- The next snapshot, whether it has been begun, how many of its rows
+	-- are done, and how far turned each of the three is.
+	c: buffer,
+	begun: boolean,
+	done: number,
+	turn_a: number,
+	turn_b: number,
+	turn_c: number,
 	bent_a: buffer,
 	bent_b: buffer,
 	dx: buffer,
@@ -1027,32 +1034,33 @@ type Kept = {
 	right: number,
 	top: number,
 	bottom: number,
-	-- Whether the snapshots handed over are the bent ones, whether the two
-	-- snapshots differ, and whether anything is still disturbing the paint.
+	-- Whether the snapshots handed over are the bent ones, and whether
+	-- anything is still disturbing the paint.
 	bent: boolean,
-	flowing: boolean,
 	stirred: boolean,
 }
 local kept: Kept? = nil
 
--- What is kept for a picture of this size, and whether it was just made.
-local function keep(cols: number, rows: number, width: number, height: number): (Kept, boolean)
-	local k = kept
-	if k and k.cols == cols and k.rows == rows and k.width == width and k.height == height then
-		return k, false
-	end
-	local points = cols * rows
-	local made: Kept = {
+local function make(width: number, height: number): Kept
+	local cols, rows = grid(width, height)
+	local size = cols * rows * 8
+	return {
 		cols = cols,
 		rows = rows,
 		width = width,
 		height = height,
-		a = buffer.create(points * 8),
-		b = buffer.create(points * 8),
-		bent_a = buffer.create(points * 8),
-		bent_b = buffer.create(points * 8),
-		dx = buffer.create(points * 4),
-		dy = buffer.create(points * 4),
+		a = buffer.create(size),
+		b = buffer.create(size),
+		c = buffer.create(size),
+		begun = false,
+		done = 0,
+		turn_a = turned,
+		turn_b = turned,
+		turn_c = turned,
+		bent_a = buffer.create(size),
+		bent_b = buffer.create(size),
+		dx = buffer.create(size / 2),
+		dy = buffer.create(size / 2),
 		shown = -1,
 		tick = -1,
 		mix = 0,
@@ -1061,9 +1069,43 @@ local function keep(cols: number, rows: number, width: number, height: number): 
 		top = 0,
 		bottom = -1,
 		bent = false,
-		flowing = false,
 		stirred = false,
 	}
+end
+
+-- A draw hook has 8 ms of the processor, and loses its place for good
+-- after three frames that take longer. A whole snapshot takes 1.6 ms on
+-- the machine this was written on. Where one would take over 5, the grid
+-- and the picture are made as much coarser as brings it to 3.5, for as
+-- long as the theme is loaded. The first nine rows tell: three batches of
+-- three, of which the quickest counts (the machine may have been busy
+-- with something else during the others).
+local SLOW, AFFORDED = 0.005, 0.0035
+
+-- What is kept for a picture of this size, and whether it was just made:
+-- then with one whole snapshot, as far turned as the paint is, which is
+-- both of its two until the next is ready.
+local function keep(width: number, height: number): (Kept, boolean)
+	local k = kept
+	if k and k.width == width and k.height == height then
+		return k, false
+	end
+	local made = make(width, height)
+	local row, quickest = 0, math.huge
+	while row + 3 <= min(made.rows, 9) do
+		local started = os.clock()
+		swirl(made.a, made.cols, made.rows, width, height, STILL + turned, row, row + 3)
+		quickest = min(quickest, os.clock() - started)
+		row += 3
+	end
+	local whole = quickest / 3 * made.rows
+	if row > 0 and whole > SLOW and thin < 16 then
+		thin = min(16, thin * whole / AFFORDED)
+		made = make(width, height)
+		row = 0
+	end
+	swirl(made.a, made.cols, made.rows, width, height, STILL + turned, row, made.rows)
+	buffer.copy(made.b, 0, made.a)
 	kept = made
 	return made, true
 end
@@ -1204,9 +1246,11 @@ local function bend(k: Kept)
 	end
 end
 
--- What each event does to the paint. Returns whether anything is still
--- moving it.
-local function disturb(k: Kept, events: { Event }, width: number, height: number): boolean
+-- What each event does to the paint, the newest first, for as long as
+-- the frame has time left (`started`: when it began; on a machine that
+-- gets through them all, which is any but a very slow one, nothing is
+-- left out). Returns whether anything is still moving it.
+local function disturb(k: Kept, events: { Event }, width: number, height: number, started: number): boolean
 	local sx, sy = width / (k.cols - 1), height / (k.rows - 1)
 	-- (Only what the last frame touched needs wiping.)
 	if k.right >= k.left then
@@ -1219,8 +1263,14 @@ local function disturb(k: Kept, events: { Event }, width: number, height: number
 	end
 	k.left, k.right, k.top, k.bottom = 0, -1, 0, -1
 	local alive = false
-	for _, e in events do
+	for i = #events, 1, -1 do
+		local e = events[i]
 		local age = e.age
+		if os.clock() - started > 0.004 then
+			-- (What is left is older, and has less to say.)
+			alive = true
+			break
+		end
 		if e.kind == "press" then
 			if age < STIR_LIFE then
 				alive = true
@@ -1264,31 +1314,33 @@ local function disturb(k: Kept, events: { Event }, width: number, height: number
 	return alive
 end
 
--- Where the page's swirl stands when it stands still.
-local STILL = 0
-
 local function number_option(ctx: Ctx, id: string, fallback: number): number
 	local value = ctx.options[id]
 	return if type(value) == "number" then value else fallback
 end
 
 local function background(draw: Draw, frame: Frame): Again
+	local started = os.clock()
 	local width, height = frame.width, frame.height
 	if width < 2 or height < 2 then
 		return nil
 	end
 	local ctx = frame.ctx
 	local ramp = RAMPS[bands_id(ctx.options.bands)]
-	local cols, rows = grid(width, height)
-	local k, fresh = keep(cols, rows, width, height)
+	local k, fresh = keep(width, height)
+	local cols, rows = k.cols, k.rows
 
 	if not frame.motion then
-		-- A still picture: the page as it stands when it has flowed this far.
-		if fresh or k.tick ~= -2 then
-			swirl(k.a, cols, rows, width, height, STILL + turned)
-			k.tick = -2
-		end
-		draw:field(0, 0, width, height, { data = k.a, cols = cols, rows = rows, channels = 2, ramp = ramp, scale = 1.25 })
+		-- A still picture: the paint as it stands.
+		draw:field(0, 0, width, height, {
+			data = k.a,
+			cols = cols,
+			rows = rows,
+			channels = 2,
+			ramp = ramp,
+			scale = 1.25,
+			quality = sharpness(width, height),
+		})
 		return nil
 	end
 
@@ -1298,19 +1350,13 @@ local function background(draw: Draw, frame: Frame): Again
 	local speed = number_option(ctx, "speed", 1)
 	local stirring = ctx.options.stir ~= false
 	local shown = thirtieth(frame.time)
-	if fresh or k.tick < 0 or shown ~= k.shown then
+	if fresh or shown ~= k.shown then
 		local tick = floor(shown / SHOWN_PER_FIELD)
-		if fresh or k.tick < 0 then
-			snapshot(k.a, cols, rows, width, height, STILL + turned)
-			buffer.copy(k.b, 0, k.a)
-			k.tick = tick
-			k.flowing = false
-		end
-		if tick ~= k.tick then
-			-- A new fifth of a second: the later snapshot becomes the earlier
-			-- one, and one new snapshot is worked out, as far on as the paint
-			-- flows in that time. Typing hurries it: every press just made
-			-- adds to its pace, and wears off in a second.
+		-- The snapshot after the two in use is begun: as far on as the paint
+		-- flows in a fifth of a second from the later of them. Typing
+		-- hurries it: every press just made adds to its pace, and wears off
+		-- in a second. (No further on at all: it is that one again.)
+		local function begin()
 			local hurry = 0
 			if stirring then
 				for _, e in frame.events do
@@ -1321,23 +1367,42 @@ local function background(draw: Draw, frame: Frame): Again
 					end
 				end
 			end
-			local flow = TURN / FIELD_RATE * speed * (1 + min(hurry, 12))
-			if flow > 0 or k.flowing then
-				k.a, k.b = k.b, k.a
-				if flow > 0 then
-					turned += flow
-					snapshot(k.b, cols, rows, width, height, STILL + turned)
-				else
-					buffer.copy(k.b, 0, k.a)
-				end
-				k.flowing = flow > 0
+			k.turn_c = k.turn_b + TURN / FIELD_RATE * speed * (1 + min(hurry, 12))
+			k.done = 0
+			k.begun = true
+			if k.turn_c == k.turn_b then
+				buffer.copy(k.c, 0, k.b)
+				k.done = rows
 			end
+		end
+		if k.tick < 0 then
 			k.tick = tick
+		elseif tick ~= k.tick and k.begun then
+			-- A new fifth of a second: the later snapshot becomes the earlier
+			-- one, the one that was being worked out the later (what is left
+			-- of it is done now, if frames were missed), and the next is begun.
+			if k.done < rows then
+				swirl(k.c, cols, rows, width, height, STILL + k.turn_c, k.done, rows)
+			end
+			k.a, k.b, k.c = k.b, k.c, k.a
+			k.turn_a, k.turn_b = k.turn_b, k.turn_c
+			turned = k.turn_b
+			k.tick = tick
+			k.begun = false
+		end
+		if not k.begun then
+			begin()
+		end
+		-- A few rows of the next snapshot: all of it in five frames of six.
+		if k.done < rows then
+			local upto = min(rows, k.done + ceil(rows / (SHOWN_PER_FIELD - 1)))
+			swirl(k.c, cols, rows, width, height, STILL + k.turn_c, k.done, upto)
+			k.done = upto
 		end
 		k.mix = (shown - tick * SHOWN_PER_FIELD) / SHOWN_PER_FIELD
 		k.shown = shown
 		k.bent = false
-		k.stirred = stirring and #frame.events > 0 and disturb(k, frame.events, width, height)
+		k.stirred = stirring and #frame.events > 0 and disturb(k, frame.events, width, height, started)
 	end
 
 	draw:field(0, 0, width, height, {
@@ -1349,10 +1414,13 @@ local function background(draw: Draw, frame: Frame): Again
 		channels = 2,
 		ramp = ramp,
 		scale = 1.25,
+		quality = sharpness(width, height),
 	})
 
-	-- Again when the next thirtieth begins, for as long as anything moves.
-	if speed > 0 or k.flowing or k.stirred then
+	-- Again when the next thirtieth begins, for as long as anything moves:
+	-- the paint is meant to flow, a glide is under way or to come, or
+	-- something is disturbing it.
+	if speed > 0 or k.turn_a ~= k.turn_b or k.turn_b ~= k.turn_c or k.stirred then
 		return until_next(frame.time)
 	end
 	return nil
@@ -1657,7 +1725,7 @@ local tile_made = false
 
 local function tile_swirl(draw: Draw, w: number, h: number, ramp: Ramp)
 	if not tile_made then
-		swirl(tile_field, TILE_COLS, TILE_ROWS, 96, 56, STILL)
+		swirl(tile_field, TILE_COLS, TILE_ROWS, 96, 56, STILL, 0, TILE_ROWS)
 		tile_made = true
 	end
 	draw:field(0, 0, w, h, { data = tile_field, cols = TILE_COLS, rows = TILE_ROWS, channels = 2, ramp = ramp, scale = 1.25, quality = 1 })
