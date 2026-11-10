@@ -874,3 +874,419 @@ pub fn paint(
 pub fn measure(widget: &impl IsA<gtk::Widget>) -> Rc<dyn TextMeasure> {
     Rc::new(replay::Measure(widget.pango_context()))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    use gmnb_theme::events::KeyKind;
+    use gmnb_theme::layer::{DisplayValue, GlyphBox, Glyphs, KeyCell, Keys, Role};
+    use gmnb_theme::theme::{Source, Theme};
+    use gmnb_theme::{Ctx, Limits};
+    use gtk::{gdk, gsk};
+
+    use super::*;
+
+    /// A theme with every layer, each drawing with a part of the draw
+    /// API, so that the picture holds every operation.
+    const EVERY_LAYER: &str = r##"
+local grain = gmnb.noise({ size = 16, seed = 7, color = "#ffffff", opacity = 0.5 })
+local inter = { family = "Inter Variable", size = 18, weight = 600 }
+return { api = 1, name = "Every layer", layers = {
+    background = { draw = function(draw, frame)
+        local w, h = frame.width, frame.height
+        draw:rect(0, 0, w, h, gmnb.linear({ angle = 135, colors = { "#102040", "#402010" } }))
+        draw:rect(0, 0, w, h, gmnb.radial({ center = { 60, 50 }, radius = 70, radius_y = 50,
+            colors = { "#ff8040", gmnb.alpha("#ff8040", 0) } }))
+        draw:rect(200, 10, 60, 60, gmnb.conic({ at = { 0.5, 0.5 }, angle = 45,
+            colors = { "#ff0000", "#00ff00", "#0000ff", "#ff0000" } }))
+        draw:rect(270, 10, 40, 60, gmnb.radial({ at = { 0.5, 0.5 }, radius = "closest-side",
+            colors = { "#ffffff", "#000000" } }))
+        draw:tile(grain, 0, 180, w, 60)
+        draw:image(grain, 130, 10, 60, 60, { filter = "nearest" })
+        draw:image(grain, 130, 80, 30, 30)
+    end },
+    keypad = { draw = function(draw, frame)
+        for _, k in frame.keys do
+            local r = k.rect
+            draw:rounded_rect(r.x, r.y, r.w, r.h, k.radius, if k.checked then "#3060c0" else "#00000080")
+            draw:border(r.x, r.y, r.w, r.h, k.radius, 2, "#ffcc00")
+            if k.hovered then
+                draw:push_clip(r.x, r.y, r.w, r.h, k.radius)
+                draw:rect(r.x, r.y, r.w, r.h, gmnb.radial({ center = { r.x + 10, r.y + 10 }, radius = 30,
+                    colors = { "#ffffffa0", "#ffffff00" } }))
+                draw:pop()
+            end
+            draw:stroke(gmnb.path():rounded_rect(r.x + 4.5, r.y + 4.5, r.w - 9, r.h - 9, 3),
+                { width = 1, dash = { 3, 2 } }, gmnb.linear({ angle = 90, colors = { "#ffffff", "#ff00ff" } }))
+        end
+    end },
+    display = { draw = function(draw, frame)
+        local v = frame.value
+        draw:push_blur(4)
+        for _, g in v.glyphs do draw:glyph(g, "#00ffff") end
+        draw:pop()
+        draw:push_mask("alpha")
+        for _, g in v.glyphs do draw:glyph(g, "#ffffff") end
+        draw:pop()
+        draw:rect(v.band.x, v.band.y, v.band.w, v.band.h, gmnb.linear({ from = { 0, v.band.y },
+            to = { 0, v.band.y + v.band.h }, colors = { "#ffffff", "#ffcc00" } }))
+        draw:pop()
+        draw:text("ok", 4, 4, inter, "#ffffff")
+        draw:text("go", 40, 4, inter, gmnb.linear({ angle = 90, colors = { "#ff4040", "#40ff40" } }))
+        local w, h = draw:text_size("ok", inter)
+        draw:border(4, 4, w, h, 0, 1, "#ffffff60")
+    end },
+    overlay = { draw = function(draw, frame)
+        draw:push_opacity(0.5)
+        draw:circle(40, 150, 24, "#ff00ff")
+        draw:circle(70, 150, 24, gmnb.linear({ angle = 180, colors = { "#ffff00", "#00ffff" } }))
+        draw:pop()
+        draw:push_blend("screen")
+        draw:rect(110, 126, 50, 50, "#c02020")
+        draw:pop()
+        draw:rect(130, 140, 50, 50, "#2020c0")
+        draw:pop()
+        draw:shadow(200, 130, 40, 40, 8, { y = 3, blur = 8, color = "#000000c0" })
+        draw:rounded_rect(200, 130, 40, 40, 8, "#e0e0e0")
+        draw:shadow(200, 130, 40, 40, 8, { inset = true, spread = 3, color = "#4080ff" })
+        draw:push_shadow({ { x = 2, y = 2, blur = 2, color = "#000000" } })
+        draw:rect(250, 130, 20, 20, "#ffffff")
+        draw:pop()
+        draw:save()
+        draw:translate(290, 150)
+        draw:rotate(30)
+        draw:scale(1.5, 0.75)
+        draw:rect(-10, -10, 20, 20, "#40ff40")
+        draw:restore()
+        draw:fill(gmnb.path():rect(250, 160, 40, 16):circle(270, 168, 6), gmnb.linear({ angle = 90,
+            colors = { "#ffffff", "#ff8000" } }), "even-odd")
+        draw:fill(gmnb.path():move_to(10, 110):line_to(40, 110):quad_to(55, 118, 40, 126)
+            :curve_to(30, 132, 20, 132, 10, 126):close(), "#80ff80")
+        draw:stroke(gmnb.svg_path("M10 200 h60 l10 10 a8 8 0 0 1 16 0"),
+            { width = 3, cap = "round", join = "round" }, "#ffffff")
+        draw:push_mask("inverted-alpha")
+        draw:circle(300, 100, 8, "#ffffff")
+        draw:pop()
+        draw:rect(284, 84, 32, 32, "#ff4080")
+        draw:pop()
+    end },
+} }
+"##;
+
+    /// What the toolkit refuses if it is handed over as it is: nothing
+    /// here may reach it so (the child runs with criticals fatal).
+    const DEGENERATE: &str = r##"
+local grain = gmnb.noise({ size = 1 })
+return { api = 1, name = "Degenerate", layers = { background = { draw = function(draw, frame)
+    local two = { "#ff0000", "#0000ff" }
+    draw:rect(0, 0, 0, 0, "#ffffff")
+    draw:rect(0, 0, 50, 50, "#ffffff00")
+    draw:rect(0, 0, 50, 50, gmnb.linear({ from = { 5, 5 }, to = { 5, 5 }, colors = two }))
+    draw:rect(0, 0, 50, 50, gmnb.linear({ colors = { "#ff0000", "#ff0000" } }))
+    draw:rect(0, 0, 50, 50, gmnb.radial({ center = { 5, 5 }, radius = 0, colors = two }))
+    draw:rect(0, 0, 50, 50, gmnb.radial({ at = { 0, 0 }, radius = "closest-side", colors = two }))
+    draw:rect(0, 0, 50, 50, gmnb.radial({ colors = two, stops = { 0.5, 0.5 } }))
+    draw:rect(0, 0, 50, 50, gmnb.conic({ colors = two, stops = { 1, 1 } }))
+    draw:rect(0, 0, 0, 50, gmnb.conic({ colors = two }))
+    draw:rounded_rect(0, 0, 50, 0, 999, "#ffffff")
+    draw:rounded_rect(0, 0, 50, 20, 999, gmnb.linear({ colors = two }))
+    draw:circle(10, 10, 0, "#ffffff")
+    draw:circle(10, 10, 0, gmnb.linear({ colors = two }))
+    draw:fill(gmnb.path(), "#ffffff")
+    draw:fill(gmnb.path(), gmnb.linear({ colors = two }))
+    draw:fill(gmnb.path():line_to(5, 5):close():circle(0, 0, 0):rect(0, 0, 0, 0), gmnb.linear({ colors = two }))
+    draw:fill(gmnb.path():rounded_rect(0, 0, 4, 4, 100), "#ffffff", "even-odd")
+    draw:stroke(gmnb.path(), 1, "#ffffff")
+    draw:stroke(gmnb.path():move_to(0, 0), 1, gmnb.linear({ colors = two }))
+    draw:stroke(gmnb.path():move_to(0, 0):line_to(9, 9), { width = 0.0001, dash = { 0, 0 } }, "#ffffff")
+    draw:stroke(gmnb.path():move_to(0, 0):line_to(9, 9), { width = 2, dash = { 0, 3 }, dash_offset = -7 }, "#ffffff")
+    draw:stroke(gmnb.svg_path("M0 0"), 1, "#ffffff")
+    draw:border(0, 0, 0, 0, 5, 1, "#ffffff")
+    draw:border(0, 0, 20, 20, 500, 0, "#ffffff")
+    draw:border(0, 0, 20, 20, 500, 400, "#ffffff")
+    draw:shadow(0, 0, 0, 0, 4, { blur = 4, color = "#000000" })
+    draw:shadow(0, 0, 20, 20, 40, { blur = 0, spread = -50, color = "#000000" })
+    draw:shadow(0, 0, 20, 20, 40, { inset = true, blur = 100, spread = 50, color = "#000000" })
+    draw:text("", 0, 0, nil, "#ffffff")
+    draw:text("x", 0, 0, { size = 1 }, gmnb.linear({ colors = two }))
+    draw:text("\n\t", 0, 0, { size = 512, family = "No such family", features = { "zzzz" } }, "#ffffff")
+    draw:image(grain, 0, 0, 0, 0)
+    draw:image(grain, 0, 0, 5000, 0.001, { filter = "linear" })
+    draw:tile(grain, 0, 0, 0, 10)
+    draw:tile(grain, 0, 0, 100, 100)
+    draw:push_clip(0, 0, 0, 0)
+    draw:rect(0, 0, 9, 9, "#ffffff")
+    draw:pop()
+    draw:push_clip(0, 0, 10, 10, 999)
+    draw:pop()
+    draw:push_opacity(0)
+    draw:pop()
+    draw:push_blur(0)
+    draw:rect(0, 0, 9, 9, "#ffffff")
+    draw:pop()
+    draw:push_blur(100)
+    draw:pop()
+    draw:push_shadow({ { color = "#00000000" } })
+    draw:pop()
+    draw:push_mask()
+    draw:pop()
+    draw:pop()
+    draw:push_blend("color-dodge")
+    draw:pop()
+    draw:pop()
+    draw:save()
+    draw:scale(0)
+    draw:rotate(1e7)
+    draw:translate(1e30, -1e30)
+    draw:rect(0, 0, 9, 9, gmnb.linear({ colors = two }))
+    draw:circle(0, 0, 5, "#ffffff")
+    draw:restore()
+    draw:push_opacity(0.5)
+    draw:save()
+end } } }
+"##;
+
+    const SIZE: (i32, i32) = (320, 240);
+
+    fn theme_in(dir: &std::path::Path, source: &str) -> Theme {
+        std::fs::create_dir_all(dir).expect("a folder for the test's theme");
+        std::fs::write(dir.join("theme.luau"), source).expect("the test's theme");
+        let limits = Limits {
+            load: Duration::from_secs(20),
+            frame: Duration::from_secs(20),
+            ..Limits::default()
+        };
+        match Theme::load(Source::folder("t", dir), limits) {
+            Ok(theme) => theme,
+            Err(e) => panic!("{e}"),
+        }
+    }
+
+    /// Renders what the test's themes draw to pixels (BGRA, premultiplied,
+    /// as cairo holds them).
+    fn render(dir: &std::path::Path) -> Vec<u8> {
+        gtk::init().expect("GTK on the test's display");
+        // The bundled Inter, as the app registers it.
+        std::fs::create_dir_all(dir).expect("a folder for the test");
+        let font = dir.join("Inter.ttf");
+        std::fs::write(&font, crate::INTER).expect("the font");
+        crate::add_font_file(&font);
+        let pango = pangocairo::FontMap::default().create_context();
+        let (w, h) = (SIZE.0 as f32, SIZE.1 as f32);
+        let ctx = Ctx::default();
+        let cache = replay::Cache::default();
+
+        let theme = theme_in(&dir.join("every"), EVERY_LAYER);
+        theme
+            .api()
+            .set_measure(Rc::new(replay::Measure(pango.clone())));
+        let cell = |i: usize, hovered: bool, checked: bool| KeyCell {
+            id: Some(i as u32),
+            kind: KeyKind::Number,
+            rect: [0.0, i as f32 * 34.0, 60.0, 30.0],
+            row: i as i32,
+            col: 0,
+            radius: 8.0,
+            enabled: true,
+            hovered,
+            pressed: false,
+            checked,
+        };
+        let cells = [
+            cell(0, false, false),
+            cell(1, true, false),
+            cell(2, false, true),
+        ];
+        let value = gmnb_theme::types::Font::new(&["Inter Variable".to_string()], 40.0, 400.0);
+        let glyphs: Vec<replay::Glyph> = ["4", "2"]
+            .iter()
+            .enumerate()
+            .map(|(i, text)| replay::Glyph {
+                layout: replay::layout(&pango, text, &value),
+                x: 20.0 + i as f32 * 28.0,
+                y: 30.0,
+            })
+            .collect();
+        let told = Glyphs {
+            glyphs: glyphs
+                .iter()
+                .map(|g| GlyphBox {
+                    x: g.x,
+                    y: g.y,
+                    w: 26.0,
+                    h: 48.0,
+                })
+                .collect(),
+            size: 40.0,
+            rect: [20.0, 30.0, 56.0, 48.0],
+        };
+        let s = gtk::Snapshot::new();
+        // Each layer where the app draws it: the window's two at its
+        // origin, a keypad and a readout at theirs.
+        for (kind, at, size) in [
+            (LayerKind::Background, (0.0, 0.0), (w, h)),
+            (LayerKind::Keypad, (250.0, 78.0), (60.0, 98.0)),
+            (LayerKind::Display, (100.0, 150.0), (100.0, 90.0)),
+            (LayerKind::Overlay, (0.0, 0.0), (w, h)),
+        ] {
+            let mut frame = Frame::sized(size.0, size.1);
+            if kind == LayerKind::Keypad {
+                frame.keys = Some(Keys {
+                    pad: 1,
+                    layout: 1,
+                    cells: &cells,
+                });
+            }
+            if kind == LayerKind::Display {
+                frame.value = Some(DisplayValue {
+                    readout: 1,
+                    version: 1,
+                    text: "42",
+                    glyphs: &told,
+                    band: [0.0, 26.0, size.0, 56.0],
+                    error: false,
+                    align_end: true,
+                    role: Role::Calculator,
+                    change: None,
+                    previous: None,
+                });
+            }
+            let drawn = match theme.draw(kind, &ctx, &frame) {
+                Ok(drawn) => drawn,
+                Err(e) => panic!("{kind:?}: {e:?}"),
+            };
+            assert!(!drawn.list.is_empty(), "{kind:?}");
+            s.save();
+            s.translate(&graphene::Point::new(at.0, at.1));
+            let scene = replay::Scene {
+                cache: &cache,
+                theme: Some(&theme),
+                pango: &pango,
+                glyphs: [&glyphs, &[]],
+            };
+            replay::replay(&s, &drawn.list, &scene);
+            s.restore();
+        }
+        assert_eq!(cache.textures(), 1);
+        let notes = theme.take_draw_notes();
+        assert!(notes.is_empty(), "{notes:?}");
+
+        // The degenerate calls, replayed into the same picture, off to
+        // the side: they must reach the toolkit as nothing it refuses.
+        let odd = theme_in(&dir.join("odd"), DEGENERATE);
+        let drawn = match odd.draw(LayerKind::Background, &ctx, &Frame::sized(w, h)) {
+            Ok(drawn) => drawn,
+            Err(e) => panic!("degenerate: {e:?}"),
+        };
+        assert!(odd.api().was_unbalanced());
+        let odd_cache = replay::Cache::default();
+        s.save();
+        s.translate(&graphene::Point::new(5000.0, 5000.0));
+        let scene = replay::Scene {
+            cache: &odd_cache,
+            theme: Some(&odd),
+            pango: &pango,
+            glyphs: [&[], &[]],
+        };
+        replay::replay(&s, &drawn.list, &scene);
+        s.restore();
+
+        let node = s.to_node().expect("a picture");
+        let renderer = gsk::CairoRenderer::new();
+        renderer
+            .realize(None::<&gdk::Surface>)
+            .expect("the cairo renderer");
+        let bounds = graphene::Rect::new(0.0, 0.0, w, h);
+        let texture = renderer.render_texture(&node, Some(&bounds));
+        renderer.unrealize();
+        assert_eq!((texture.width(), texture.height()), SIZE);
+        if let Some(path) = std::env::var_os("GMNB_RENDER_WRITE") {
+            texture.save_to_png(&path).expect("the picture written");
+        }
+        let mut pixels = vec![0; (SIZE.0 * SIZE.1 * 4) as usize];
+        texture.download(&mut pixels, SIZE.0 as usize * 4);
+        pixels
+    }
+
+    /// The picture the test's theme is expected to make.
+    const EXPECTED: &[u8] = include_bytes!("expected.png");
+
+    /// Where the picture has text: glyph edges differ between versions of
+    /// the font libraries, so text is only checked to be there.
+    const TEXT: [[i32; 4]; 1] = [[100, 150, 100, 90]];
+
+    fn in_text(x: i32, y: i32) -> bool {
+        TEXT.iter()
+            .any(|[tx, ty, tw, th]| x >= *tx && x < tx + tw && y >= *ty && y < ty + th)
+    }
+
+    /// Every layer of a test theme, replayed and rendered by the
+    /// toolkit's software renderer, against the expected picture; and
+    /// every degenerate argument, with the toolkit's criticals fatal.
+    ///
+    /// It needs a display for the toolkit to start on:
+    /// `GMNB_TEST_WAYLAND_DISPLAY` names a compositor (a headless
+    /// weston's socket), and the test is skipped without one. The
+    /// toolkit runs in a process of its own (this test again, with that
+    /// display in its environment).
+    #[test]
+    fn layers_render_as_expected() {
+        let Some(display) = std::env::var_os("GMNB_TEST_WAYLAND_DISPLAY") else {
+            eprintln!("GMNB_TEST_WAYLAND_DISPLAY not set; skipped");
+            return;
+        };
+        let dir: PathBuf = std::env::temp_dir().join(format!("gmnb-render-{}", std::process::id()));
+        if std::env::var_os("GMNB_RENDER_CHILD").is_none() {
+            let me = std::env::current_exe().expect("the test's own path");
+            let status = Command::new(me)
+                .args([
+                    "--exact",
+                    "layers::tests::layers_render_as_expected",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env("WAYLAND_DISPLAY", display)
+                .env("GMNB_RENDER_CHILD", &dir)
+                .env("GDK_BACKEND", "wayland")
+                .env("GSK_RENDERER", "cairo")
+                .env("G_DEBUG", "fatal-criticals")
+                .env("GTK_A11Y", "none")
+                .status()
+                .expect("the test run again");
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(status.success(), "the rendering process failed: {status}");
+            return;
+        }
+        let dir = PathBuf::from(std::env::var_os("GMNB_RENDER_CHILD").unwrap_or_default());
+        let got = render(&dir);
+        let expected = gdk::Texture::from_bytes(&glib::Bytes::from_static(EXPECTED))
+            .expect("the expected picture");
+        assert_eq!((expected.width(), expected.height()), SIZE);
+        let mut want = vec![0; got.len()];
+        expected.download(&mut want, SIZE.0 as usize * 4);
+        // Outside text: within 16/255 a channel, but for 1 pixel in 100
+        // (edges fall differently between versions of cairo).
+        let (mut off, mut counted, mut ink) = (0, 0, 0);
+        for y in 0..SIZE.1 {
+            for x in 0..SIZE.0 {
+                let at = ((y * SIZE.0 + x) * 4) as usize;
+                let (a, b) = (&got[at..at + 4], &want[at..at + 4]);
+                let differs = a.iter().zip(b).any(|(p, q)| p.abs_diff(*q) > 16);
+                if in_text(x, y) {
+                    // The readout: cyan glow, white-to-amber digits.
+                    ink += usize::from(a[1] > 200 && a[2] > 200);
+                } else {
+                    counted += 1;
+                    off += usize::from(differs);
+                }
+            }
+        }
+        assert!(
+            off * 100 <= counted,
+            "{off} of {counted} pixels differ from the expected picture"
+        );
+        assert!(ink > 150, "the readout's digits are missing ({ink} pixels)");
+    }
+}
