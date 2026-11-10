@@ -263,8 +263,8 @@ metamorphic graph sweep, 20,000 random saved sessions, the
 cross-checking tester's long run, single-expression check and case list,
 the theme engine's frame-call timing, three measurements of what a
 theme's pictures cost, Swirls' paint written out frame by frame for
-looking at, and the hostile Vorbis files their own test decodes in a
-child process).
+looking at, the hostile Vorbis files their own test decodes in a child
+process, and the three longest sweeps of the built-in themes).
 `cargo run --release -p graphing --example sweep`
 checks graph analysis against about 3,400 generated functions (shifted,
 offset, scaled and stretched variants, close and far centres, jumps,
