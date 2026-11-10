@@ -755,7 +755,7 @@ fn chrome_pairs(style: &Style) -> Vec<(String, Rgba, f32, Vec<Fill>)> {
 /// What a field's placeholder needs: DGMNB's light palette puts `fg_faint`
 /// at 2.49:1 on `surface`, and the base look is DGMNB's (docs/theming.md,
 /// "Readability rules", open point 9).
-const PLACEHOLDER_CONTRAST: f32 = 2.45;
+const PLACEHOLDER_CONTRAST: f32 = appcore::palette::FAINT_CONTRAST;
 
 /// The date page's, the converter's and graphing's texts, and the
 /// toolkit families' the app draws (fields, popovers, toasts, tooltips).
@@ -979,19 +979,15 @@ fn auroras_page_texts_read() {
     assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
 }
 
-/// Rules 3 and 4 for the bits' indexes (63, 59, ... under each nibble):
+/// Rules 3 and 4 for the bits' indexes (63, 59, ... under each nibble).
 /// DGMNB draws them in `fg_faint` (2.46:1 light, 3.52:1 dark on its
-/// background), and the base look is DGMNB's. They fail as the
-/// placeholder would without open point 9's allowance; the contract
-/// hasn't said yet whether they get it.
+/// background), and the base look is DGMNB's: like the placeholder they
+/// need 2.45 (open point 9). On a see-through window the base look
+/// deepens them toward `fg_dim` as far as that needs.
 #[test]
-#[ignore = "DGMNB's own colours: the bits' indexes are fg_faint (docs/theming.md, open point 9)"]
 fn the_bits_indexes_read() {
     let mut bad = Vec::new();
     for (name, style) in every_style() {
-        if !name.starts_with("base") {
-            continue;
-        }
         let Some(Value::Text(t)) = style.get("programmer.bit_index") else {
             panic!("no programmer.bit_index");
         };
@@ -1003,11 +999,7 @@ fn the_bits_indexes_read() {
         };
         for desktop in desktops {
             let got = worst(t.color, &[&plain], &backdrop(&style, desktop));
-            let want = if desktop.is_none() {
-                needed(&t.font)
-            } else {
-                UI_CONTRAST
-            };
+            let want = PLACEHOLDER_CONTRAST;
             if got < want {
                 bad.push(format!("{name} {desktop:?}: {got:.2} < {want}"));
             }

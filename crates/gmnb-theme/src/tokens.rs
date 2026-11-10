@@ -136,6 +136,13 @@ impl Colors {
     pub fn text_scrim(&self, opacity: f32) -> Rgba {
         appcore::palette::text_scrim(self.bg, self.fg, self.fg_dim, self.accent_text, opacity)
     }
+
+    /// Faint text straight on a see-through window, on that scrim
+    /// (`appcore::palette::faint_text`): `fg_faint` at full opacity.
+    pub fn faint_text(&self, opacity: f32) -> Rgba {
+        let scrim = self.text_scrim(opacity);
+        appcore::palette::faint_text(self.bg, self.fg_faint, self.fg_dim, scrim, opacity)
+    }
 }
 
 impl From<&Palette> for Colors {

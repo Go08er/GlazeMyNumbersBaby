@@ -130,6 +130,17 @@ impl Palette {
         scrim_reads(self.bg, self.fg, self.fg_dim, self.accent_text, opacity, k)
     }
 
+    /// [`faint_text`] for these colours, on their own [`text_scrim`].
+    pub fn faint_text(&self, opacity: f32) -> Rgba {
+        faint_text(
+            self.bg,
+            self.fg_faint,
+            self.fg_dim,
+            self.text_scrim(opacity),
+            opacity,
+        )
+    }
+
     /// Every colour in a fixed order (the order of the fields above, with
     /// the series last), for tests and bulk conversion.
     pub fn all(&self) -> [Rgba; 19] {
@@ -209,6 +220,53 @@ pub fn scrim_reads(
     })
 }
 
+/// What faint text needs: the placeholder and the bits' indexes, which
+/// DGMNB draws in `fg_faint` at 2.49:1 and 2.46:1 in its light palette
+/// (docs/theming.md, open point 9).
+pub const FAINT_CONTRAST: f32 = 2.45;
+
+/// Faint text straight on a see-through window (the bits' indexes, on the
+/// base look's [`text_scrim`]): `fg_faint` mixed toward `fg_dim` by the
+/// least that reaches [`FAINT_CONTRAST`] over a black desktop and over a
+/// white one. `fg_faint` itself at full opacity, and wherever it already
+/// reads; the mix is continuous in `opacity`, so a dragged slider never
+/// makes it jump. `fg_dim` always reaches it, the scrim being worked out
+/// for `fg_dim` to reach 3.
+pub fn faint_text(bg: Rgba, fg_faint: Rgba, fg_dim: Rgba, scrim: Rgba, opacity: f32) -> Rgba {
+    let opacity = if opacity.is_finite() {
+        opacity.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    if opacity >= 1.0 {
+        return fg_faint;
+    }
+    let rgb3 = |c: Rgba| [c[0], c[1], c[2]];
+    let mix =
+        |t: f32| -> Rgba { std::array::from_fn(|i| fg_faint[i] + (fg_dim[i] - fg_faint[i]) * t) };
+    let reads = |c: Rgba| {
+        [color::BLACK, color::WHITE].into_iter().all(|desktop| {
+            let window = [bg[0], bg[1], bg[2], bg[3] * opacity];
+            let b = color::over(scrim, color::over(window, rgb(desktop)));
+            contrast(rgb3(color::over(c, b)), rgb3(b)) >= FAINT_CONTRAST
+        })
+    };
+    if reads(fg_faint) {
+        return fg_faint;
+    }
+    // Closer to `fg_dim` only reads better.
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    for _ in 0..20 {
+        let mid = (lo + hi) / 2.0;
+        if reads(mix(mid)) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    mix(hi)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,6 +338,44 @@ mod tests {
                 // The least opaque window needs the most.
                 assert!(t.text_scrim(0.1)[3] > 0.0);
                 assert!(t.text_scrim(0.1)[3] >= t.text_scrim(0.5)[3]);
+            }
+        }
+    }
+
+    /// Faint text on a see-through window: DGMNB's `fg_faint` at full
+    /// opacity; below it at least 2.45 over both desktops, and no more
+    /// than it needs; never darker than `fg_dim`.
+    #[test]
+    fn faint_text_reads_on_the_scrim() {
+        for accent in ACCENTS {
+            for dark in [false, true] {
+                let t = Palette::new(dark, accent);
+                assert_eq!(t.faint_text(1.0), t.fg_faint);
+                assert_eq!(t.faint_text(f32::NAN), t.fg_faint);
+                for opacity in [0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99] {
+                    let c = t.faint_text(opacity);
+                    let scrim = t.text_scrim(opacity);
+                    let contrast_over = |c: Rgba, desktop: Rgb| {
+                        let window = [t.bg[0], t.bg[1], t.bg[2], t.bg[3] * opacity];
+                        let b = color::over(scrim, color::over(window, rgb(desktop)));
+                        contrast(rgb3(color::over(c, b)), rgb3(b))
+                    };
+                    for desktop in [color::BLACK, color::WHITE] {
+                        let got = contrast_over(c, desktop);
+                        assert!(got >= FAINT_CONTRAST, "{accent:?} {dark} {opacity}: {got}");
+                    }
+                    assert!(c[3] >= t.fg_faint[3] && c[3] <= t.fg_dim[3]);
+                    if c != t.fg_faint {
+                        let less: Rgba =
+                            std::array::from_fn(|i| c[i] - (c[i] - t.fg_faint[i]) * 0.01);
+                        assert!(
+                            [color::BLACK, color::WHITE]
+                                .into_iter()
+                                .any(|d| contrast_over(less, d) < FAINT_CONTRAST),
+                            "{accent:?} {dark} {opacity}: more than needed"
+                        );
+                    }
+                }
             }
         }
     }

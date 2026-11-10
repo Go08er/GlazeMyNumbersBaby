@@ -141,6 +141,12 @@ impl Scope<'_> {
         self.t.colors.text_scrim(self.ctx.opacity())
     }
 
+    /// Faint text on that scrim (the bits' indexes): `fg_faint`, deepened
+    /// toward `fg_dim` on a see-through window as far as it needs to read.
+    fn faint_text(&self) -> Rgba {
+        self.t.colors.faint_text(self.ctx.opacity())
+    }
+
     /// The halo around text on a see-through window; none at full opacity.
     fn halo(&self) -> Vec<Shadow> {
         if !self.ctx.see_through() {
@@ -1132,7 +1138,7 @@ pub static ROWS: &[Row] = &[
         }))
     }),
     row("programmer.bit_index", Kind::Text, |s| {
-        s.text(&s.t.text.caption, s.t.colors.fg_faint)
+        s.text(&s.t.text.caption, s.faint_text())
     }),
     // -- Date page.
     row("date.label", Kind::Text, |s| {

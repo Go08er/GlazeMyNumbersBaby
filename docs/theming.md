@@ -897,7 +897,7 @@ The trash button under the list is an `icon_button`.
 | `programmer.radix.name_checked` | Color | `accent_text` | `.wc-radix-active .wc-radix-name` |
 | `programmer.radix.value` | Text | 14 / 400 with `{ "tnum" }`, `fg` | `.wc-radix-value` |
 | `programmer.bit` | Control | radius `shape.radius`; 16 / 400; `fg`; no background; `checked = { background accent, color on_accent, font { weight 700 } }` | `button.wc-bit`, on DGMNB's fractional grid (`bitflip.rs`) |
-| `programmer.bit_index` | Text | `text.caption`, `fg_faint` | `.wc-bit-index` |
+| `programmer.bit_index` | Text | `text.caption`, `fg_faint`; see-through: deepened toward `fg_dim` until it reaches 2.45 on the scrim over both desktops (`appcore::palette::faint_text`) | `.wc-bit-index` |
 
 Word size, Bitwise and Bit shift are `text_button`s (DGMNB sets them in
 its caption style, unlike Scientific's two flyout buttons); their flyouts
@@ -1665,11 +1665,9 @@ colour on the canvas (which lies on the backdrop, not in a `plain`
 container); the readout's value, its error colour and its expression on
 the readout's own scrim; a card's heading. For Aurora the whole table is
 `auroras_page_texts_read`, and `auroras_generated_palettes_read` runs it
-again for System and Freestyle generated from rule 2's colours. (Not yet:
-the bits' indexes, which DGMNB draws in `fg_faint`, 2.46:1 in its light
-palette and 3.52:1 in its dark one: they would need open point 9's
-allowance, which the contract gives the placeholder only. The ignored
-test `the_bits_indexes_read` checks them.)
+again for System and Freestyle generated from rule 2's colours. The
+bits' indexes need 2.45, as the placeholder does (open point 9):
+`the_bits_indexes_read`.
 
 **4. See-through** (new; 0.2 judged this by eye). The same table at
 opacity 0.1 and 0.5, each stack composited over
@@ -1861,10 +1859,13 @@ Decided here, and worth a second look by the owner:
    file to a font map but not take it out).
 8. **Media and sound** have their own list:
    [Open points](theming-media.md#open-points).
-9. **A placeholder needs 2.45:1**, not 3. DGMNB's light palette puts
-   `fg_faint` on `surface` at 2.49:1, and the base look is DGMNB's. The
-   alternative is to raise `fg_faint` in `appcore`, which changes DGMNB's
-   pixels.
+9. **A placeholder and the bits' indexes need 2.45:1**, not 3. DGMNB's
+   light palette puts `fg_faint` on `surface` at 2.49:1 and on `bg` (the
+   indexes) at 2.46:1, and the base look is DGMNB's. The alternative is to
+   raise `fg_faint` in `appcore`, which changes DGMNB's pixels. On a
+   see-through window the base look deepens the indexes toward `fg_dim`
+   just enough to keep 2.45 over a black desktop (2.28 otherwise), rather
+   than thicken the scrim under every `plain` container for them.
 10. **The base look's text is set as DGMNB sets it** where the pages draw
    it (`widgets/fit.rs`): unhinted, each glyph at the nearest quarter
    pixel, the capitals centred on a whole pixel, a key's line about
