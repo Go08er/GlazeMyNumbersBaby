@@ -1250,7 +1250,10 @@ mod tests {
     /// `after_frame`, once, for a hook that failed. The media thread
     /// reaches the main loop in one place too, `wake`, with a frame of an
     /// animation that a layer being drawn asked for. The keypad's one
-    /// timer is the 110 ms flash of a key typed on the keyboard.
+    /// timer is the 110 ms flash of a key typed on the keyboard, and its
+    /// one idle makes it short or not again once it has been laid out at
+    /// a height on the other side of `keys.short.below` (a resize, never
+    /// at rest).
     #[test]
     fn theming_installs_no_sources() {
         const CALLS: [&str; 5] = [
@@ -1288,7 +1291,7 @@ mod tests {
             (
                 "widgets/keypad.rs",
                 include_str!("widgets/keypad.rs"),
-                &[("timeout_add", "flash")],
+                &[("timeout_add", "flash"), ("idle_add", "size_allocate")],
             ),
         ] {
             let code = source.split("#[cfg(test)]").next().unwrap_or("");
