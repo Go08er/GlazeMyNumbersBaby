@@ -4,6 +4,7 @@
 import json
 import sys
 import textwrap
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,7 +34,16 @@ SUPPLEMENTS = {
         "accesskit_unix": "0.24.0",
         "accesskit_winit": "0.34.1",
     },
+    "luau.txt": {
+        "mlua-sys": "0.13.0",
+        "luau0-src": "0.22.0+luau740",
+    },
 }
+
+# Build dependencies whose code is compiled into a program. cargo-about
+# leaves build dependencies out (about.toml), so their notices are in
+# supplements too, and their versions are checked against Cargo.lock.
+COMPILED_IN = {"luau0-src"}
 
 # Licence files cargo-about doesn't pick up, reproduced whole: ring's
 # LICENSE points at LICENSE-BoringSSL, which also carries notices for
@@ -101,6 +111,18 @@ def main():
 
     errors = []
     checked = {n: (f, v) for f, cs in SUPPLEMENTS.items() for n, v in cs.items()}
+    lock = tomllib.loads((ROOT / "Cargo.lock").read_text())
+    locked = {}
+    for pkg in lock["package"]:
+        locked.setdefault(pkg["name"], []).append(pkg["version"])
+    for name in sorted(COMPILED_IN):
+        versions = locked.get(name, [])
+        if not versions:
+            errors.append(f"{name}: no longer a dependency; drop it from COMPILED_IN")
+        elif versions != [checked[name][1]]:
+            errors.append(
+                f"{name} is now {', '.join(versions)}: recheck supplements/{checked[name][0]}"
+            )
     for name, version in sorted(fallback.items()):
         if name not in checked:
             errors.append(f"{name} {version}: no licence file; add a supplement")
@@ -108,7 +130,7 @@ def main():
             errors.append(
                 f"{name} is now {version}: recheck supplements/{checked[name][0]}"
             )
-    for name in sorted(checked.keys() - fallback.keys()):
+    for name in sorted(checked.keys() - fallback.keys() - COMPILED_IN):
         errors.append(f"{name}: no longer needs supplements/{checked[name][0]}")
     for name in sorted(EXTRA_FILES.keys() - pkgs.keys()):
         errors.append(f"{name}: no longer a dependency; drop it from EXTRA_FILES")

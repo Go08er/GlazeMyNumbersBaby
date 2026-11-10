@@ -180,7 +180,7 @@ dependencies = [
 
 [[package]]
 name = "appcore"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "calcvm",
  "copypaste",
@@ -429,6 +429,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bstr"
+version = "1.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bb31b46c14244e20ee9984b11bf5c992b91fb6939fea616e3512c8baecdbe5f"
+dependencies = [
+ "memchr",
+ "serde_core",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -485,14 +495,14 @@ dependencies = [
 
 [[package]]
 name = "calcmanager"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ratpack",
 ]
 
 [[package]]
 name = "calcvm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "calcmanager",
  "copypaste",
@@ -594,7 +604,7 @@ dependencies = [
 
 [[package]]
 name = "copypaste"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "regex",
 ]
@@ -650,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "crmath"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cc",
 ]
@@ -669,14 +679,14 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "datecalc"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
 ]
 
 [[package]]
 name = "dgmnb"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "accesskit",
  "accesskit_consumer",
@@ -755,6 +765,12 @@ dependencies = [
  "symbolic_expressions",
  "thiserror 1.0.69",
 ]
+
+[[package]]
+name = "either"
+version = "1.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 
 [[package]]
 name = "endi"
@@ -1159,12 +1175,13 @@ dependencies = [
 
 [[package]]
 name = "gmnb"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "appcore",
  "calcvm",
  "chrono",
  "datecalc",
+ "gmnb-theme",
  "graphing",
  "gtk4",
  "libadwaita",
@@ -1177,7 +1194,14 @@ dependencies = [
 
 [[package]]
 name = "gmnb-launcher"
-version = "0.2.0"
+version = "0.3.0"
+
+[[package]]
+name = "gmnb-theme"
+version = "0.3.0"
+dependencies = [
+ "mlua",
+]
 
 [[package]]
 name = "gmp-mpfr-sys"
@@ -1223,7 +1247,7 @@ dependencies = [
 
 [[package]]
 name = "graphing"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "crmath",
  "egg",
@@ -1566,10 +1590,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
+name = "lock_api"
+version = "0.4.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
+dependencies = [
+ "scopeguard",
+]
+
+[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+
+[[package]]
+name = "luau0-src"
+version = "0.22.0+luau740"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ea012e8a8aaff2f7b6c788fad41a60630003b6a0932bcf045f7d14952c9bd31"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "memchr"
@@ -1613,6 +1655,34 @@ checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
 dependencies = [
  "adler2",
  "simd-adler32",
+]
+
+[[package]]
+name = "mlua"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a7ae6b65bf54b7fdd4cf5b6f44f60862350ebf3fe3779b3a9cc005e7fa14f81"
+dependencies = [
+ "bstr",
+ "either",
+ "libc",
+ "mlua-sys",
+ "num-traits",
+ "parking_lot",
+ "rustc-hash",
+]
+
+[[package]]
+name = "mlua-sys"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1631cda17bd6486410ab751d91f5fd4484f441589278cdad879eb3afc721a285"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "libc",
+ "luau0-src",
+ "pkg-config",
 ]
 
 [[package]]
@@ -2046,6 +2116,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f38d5652c16fde515bb1ecef450ab0f6a219d619a7274976324d5e377f7dceba"
 
 [[package]]
+name = "parking_lot"
+version = "0.12.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
+dependencies = [
+ "lock_api",
+ "parking_lot_core",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.9.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "redox_syscall 0.5.18",
+ "smallvec",
+ "windows-link",
+]
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2235,7 +2328,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "ratpack"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "raw-cpuid"
@@ -2441,6 +2534,12 @@ name = "scoped-tls"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1cf6437eb19a8f4a6cc0f7dca544973b0b78843adbfeb3683d1a94a0024a294"
+
+[[package]]
+name = "scopeguard"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "semver"
@@ -2940,7 +3039,7 @@ checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
 name = "unitconv"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "serde",

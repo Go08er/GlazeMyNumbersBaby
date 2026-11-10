@@ -21,8 +21,9 @@ accepted = [
 ]
 # The release binaries: Linux on x86-64 and AArch64.
 targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
-# Development and build-script dependencies don't end up in the binaries.
-# (Procedural-macro crates are still listed.)
+# Development and build-script dependencies don't end up in the binaries,
+# but for code a build script compiles in (Luau's C++, from luau0-src):
+# render.py's COMPILED_IN. (Procedural-macro crates are still listed.)
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
 # cargo-about's built-in fixes for crates whose licence files it can't match.

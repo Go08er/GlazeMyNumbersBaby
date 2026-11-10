@@ -1,0 +1,13 @@
+[package]
+name = "gmnb-theme"
+description = "GMNB's theme scripts: a sandboxed, bounded Luau VM and the value tree it hands the host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Luau only (its C++ is built by `cc`; mlua has no default features). No
+# `send` (GMNB's themes live on the main thread), no `async`, no JIT.
+mlua = { version = "0.12.2", default-features = false, features = ["luau"] }

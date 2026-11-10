@@ -42,8 +42,7 @@
         {
           "type": "git",
           "url": "https://github.com/Go08er/GlazeMyNumbersBaby.git",
-          "tag": "v0.2.0",
-          "commit": "dd09be34a22190b269cb0c934e63b841aaad3bed"
+          "tag": "v0.3.0"
         },
         "cargo-sources.json"
       ]

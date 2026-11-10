@@ -1099,7 +1099,15 @@ fn replay_catches_planted_errors() {
 /// claims (not refuse them on their binding).
 #[test]
 fn rounded_literals_are_refuted() {
-    let fixture = |text: &str| -> serde_json::Value { serde_json::from_str(text).unwrap() };
+    // The reviewers' certificates, unaltered but for the version of the
+    // certifier in their binding, which the replay requires to be its own:
+    // the certifier's code these claims came from is unchanged since.
+    let fixture = |text: &str| -> serde_json::Value {
+        let mut v: serde_json::Value = serde_json::from_str(text).unwrap();
+        let ours = format!("graphing {}", env!("CARGO_PKG_VERSION"));
+        v["binding"]["certifier"] = serde_json::json!(ours);
+        v
+    };
     let mut square = certificate("x^2");
     square["source"] = serde_json::json!("y=x^2.0000000000000001");
     let cases = [

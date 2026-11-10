@@ -97,8 +97,9 @@ jobs:
     steps:
       - name: Build dependencies
         run: |
-          dnf install -y git rpm-build rpmdevtools cargo rust gcc gtk4-devel libadwaita-devel \
-            pango-devel wayland-devel desktop-file-utils libappstream-glib
+          # gcc-c++: Luau, GMNB's theme scripting (the spec's BuildRequires).
+          dnf install -y git rpm-build rpmdevtools cargo rust gcc gcc-c++ gtk4-devel \
+            libadwaita-devel pango-devel wayland-devel desktop-file-utils libappstream-glib
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: rpmbuild
         run: |

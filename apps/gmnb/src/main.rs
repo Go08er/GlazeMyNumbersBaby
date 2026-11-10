@@ -267,3 +267,30 @@ fn schedule_screenshot(win: adw::ApplicationWindow, path: PathBuf) {
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    /// GMNB depends on the theme engine before the theme API uses it, so
+    /// that every package build already compiles its C++ (Luau): here it
+    /// links, a theme file's table comes back and its hook runs.
+    #[test]
+    fn theme_engine_links() {
+        use gmnb_theme::{Budget, Engine, Limits, ThemeValue};
+        let engine = Engine::new(Limits::default()).unwrap();
+        let theme = engine
+            .load(
+                "=theme",
+                "return { api = 1, style = function(ctx) return ctx end }",
+            )
+            .unwrap();
+        assert_eq!(theme.get("api"), Some(&ThemeValue::Int(1)));
+        let style = theme
+            .get("style")
+            .and_then(ThemeValue::as_function)
+            .unwrap();
+        assert_eq!(
+            engine.call(style, Budget::Style, "dark"),
+            Ok(ThemeValue::String("dark".into()))
+        );
+    }
+}
