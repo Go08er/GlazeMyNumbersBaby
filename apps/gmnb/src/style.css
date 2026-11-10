@@ -1,56 +1,59 @@
-/* GMNB — static styles. Colour tokens (@wc_*) are generated per palette
-   in theme.rs and loaded by a separate provider. */
+/* GMNB — the structure stylesheet: selectors and layout, loaded once.
 
+   Every look property of a migrated surface reads a custom property that
+   the theme engine writes from the checked style (crates/gmnb-theme;
+   docs/theming.md, "How style reaches the app"): no colour, size or font
+   is written here for them. Migrated so far: the window (and what goes
+   under text on a see-through one), the keys, segmented controls and the
+   History/Memory switch.
+
+   Rules that still name @wc_* colours or literal sizes belong to surfaces
+   that are not migrated yet; theme.rs derives those colours from the
+   style meanwhile (TRANSITION). */
+
+/* ------------------------------------------------------------- window */
+
+/* The window is always a transparent surface. The backdrop under
+   everything (widgets/backdrop.rs) paints window.background, faded as a
+   whole to the Background opacity setting; everything else is drawn at
+   full strength. */
 window.gmnb {
-  background-color: @wc_base;
-  color: @wc_fg;
+  background-color: transparent;
+  color: var(--gmnb-window-color);
+  font-family: var(--gmnb-window-font-family);
+  font-size: var(--gmnb-window-font-size);
+  font-weight: var(--gmnb-window-font-weight);
+  font-style: var(--gmnb-window-font-style);
+  letter-spacing: var(--gmnb-window-letter-spacing);
+  font-feature-settings: var(--gmnb-window-font-features);
+  font-variation-settings: var(--gmnb-window-font-variations);
+  /* Text straight on the backdrop: inherited by every label. */
+  text-shadow: var(--gmnb-window-text-halo);
 }
 
-/* The backdrop (the aurora) is see-through: so is the window under it,
-   and text that sits straight on it gets a halo in the backdrop's colour
-   (the display draws its own). */
-window.gmnb.wc-see-through {
-  background-color: transparent;
+.wc-backdrop {
+  background-color: var(--gmnb-window-background-color);
+  background-image: var(--gmnb-window-background-image);
 }
-window.gmnb.wc-see-through label,
-window.gmnb.wc-see-through button.wc-mem {
-  text-shadow: 0 0 3px alpha(@wc_base, 0.9), 0 0 10px alpha(@wc_base, 0.75);
+
+/* Text on what is raised above the backdrop has its own halo (none in
+   the base look), and disabled text never has one: it smears the faint
+   glyphs. */
+window.gmnb button,
+window.gmnb toggle-group,
+window.gmnb entry,
+window.gmnb spinbutton,
+window.gmnb popover,
+window.gmnb .wc-side-panel,
+window.gmnb .wc-sheet,
+window.gmnb .wc-sidebar,
+window.gmnb .card {
+  text-shadow: var(--gmnb-window-raised-text-halo);
 }
-/* Frosted panels: what sits straight on the backdrop gets a translucent
-   layer of the backdrop's own colour, so it stays readable over any
-   desktop (the keys' glass is drawn over it). */
-window.gmnb.wc-see-through headerbar,
-window.gmnb.wc-see-through .wc-glass-panel {
-  background-color: alpha(@wc_base, 0.55);
-}
-/* Keys and the display hold the text that must stay readable over a black
-   or a white desktop at the lowest opacity (3:1 for operator glyphs and the
-   expression line, more for the rest): a denser tint, and operator glyphs
-   halfway to the text colour. */
-window.gmnb.wc-see-through calcdisplay,
-window.gmnb.wc-see-through button.wc-key {
-  background-color: alpha(@wc_base, 0.7);
-}
-window.gmnb.wc-see-through button.wc-op {
-  color: mix(@wc_accent, @wc_fg, 0.5);
-}
-window.gmnb.wc-see-through calcdisplay {
-  border-radius: 18px;
-}
-/* The memory row's states, restated here because the see-through tint
-   outranks the plain rules below; a disabled key gets no halo (it smeared
-   the faint text). */
-window.gmnb.wc-see-through button.wc-mem {
-  background-color: alpha(@wc_base, 0.45);
-}
-window.gmnb.wc-see-through button.wc-mem:hover {
-  background-color: alpha(mix(@wc_base, @wc_fg, 0.12), 0.6);
-}
-window.gmnb.wc-see-through button.wc-mem:checked {
-  background-color: alpha(mix(@wc_base, @wc_accent, 0.2), 0.6);
-}
-window.gmnb.wc-see-through button.wc-mem:disabled,
-window.gmnb.wc-see-through button.wc-mem:disabled label {
+window.gmnb button:disabled,
+window.gmnb button:disabled label,
+window.gmnb toggle:disabled,
+window.gmnb toggle:disabled label {
   text-shadow: none;
 }
 
@@ -59,11 +62,30 @@ window.gmnb toolbarview > .top-bar,
 window.gmnb toolbarview > .bottom-bar {
   background: none;
   box-shadow: none;
-  color: @wc_fg;
+  color: var(--gmnb-window-color);
+}
+
+/* What goes under text on a see-through window (nothing at full
+   opacity): the header, the readout and every plain container. */
+window.gmnb headerbar {
+  background-color: var(--gmnb-header-background-color);
+  background-image: var(--gmnb-header-background-image);
+}
+
+calcdisplay {
+  background-color: var(--gmnb-display-background-color);
+  background-image: var(--gmnb-display-background-image);
+  border-radius: var(--gmnb-display-radius);
+}
+
+.wc-plain {
+  background-color: var(--gmnb-plain-background-color);
+  background-image: var(--gmnb-plain-background-image);
+  border-radius: var(--gmnb-plain-radius);
 }
 
 window.gmnb headerbar button {
-  color: @wc_fg;
+  color: var(--gmnb-window-color);
 }
 
 .wc-title {
@@ -75,42 +97,13 @@ window.gmnb headerbar button {
 
 /* ---------------------------------------------------------------- keys */
 
+/* The blocks between "control" and "end control" are written by
+   tools/theming/control_css.py from the line that opens them: a
+   control's resting properties, one rule per state combination, and the
+   rules that keep a covered (not disabled) control looking as it did. */
+
 button.wc-key {
-  border-radius: 14px;
-  min-height: 38px;
-  min-width: 40px;
-  padding: 0 2px;
-  font-family: "Outfit";
-  font-size: 17px;
-  font-weight: 400;
-  color: @wc_fg;
-  background-color: transparent;
-  background-image: linear-gradient(to bottom, @wc_glass_hi, @wc_glass);
-  box-shadow:
-    inset 0 1px alpha(white, 0.10),
-    inset 0 0 0 1px @wc_glass_border,
-    0 6px 18px -12px @wc_shade;
-  transition:
-    background-image 160ms ease-out,
-    box-shadow 220ms ease-out,
-    transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1),
-    filter 160ms ease-out;
-}
-
-button.wc-key:hover {
-  filter: brightness(1.12);
-}
-
-button.wc-key:active,
-button.wc-key.wc-flash {
-  transform: scale(0.93);
-  filter: brightness(1.22);
-  transition: transform 70ms ease-out, filter 70ms ease-out;
-}
-
-button.wc-key:disabled {
-  opacity: 0.32;
-  filter: saturate(0.4);
+  border: none;
 }
 
 button.wc-key label sup,
@@ -118,44 +111,950 @@ button.wc-key label sub {
   font-size: 70%;
 }
 
-button.wc-num {
-  font-size: 22px;
-  font-weight: 450;
-  background-image: linear-gradient(to bottom, @wc_glass_hi, @wc_glass_num);
+/* control keys.number button.wc-key.wc-num active=.wc-flash,.keyboard-activating icon=pathicon */
+button.wc-key.wc-num {
+  background-color: var(--gmnb-keys-number-background-color);
+  background-image: var(--gmnb-keys-number-background-image);
+  color: var(--gmnb-keys-number-color);
+  box-shadow: var(--gmnb-keys-number-shadow);
+  opacity: var(--gmnb-keys-number-opacity);
+  filter: var(--gmnb-keys-number-filter);
+  transform: var(--gmnb-keys-number-transform);
+  transition: var(--gmnb-keys-number-transition);
+  border-radius: var(--gmnb-keys-number-radius);
+  padding: var(--gmnb-keys-number-padding);
+  margin: var(--gmnb-keys-number-margin);
+  min-width: var(--gmnb-keys-number-min-width);
+  min-height: var(--gmnb-keys-number-min-height);
+  font-family: var(--gmnb-keys-number-font-family);
+  font-size: var(--gmnb-keys-number-font-size);
+  font-weight: var(--gmnb-keys-number-font-weight);
+  font-style: var(--gmnb-keys-number-font-style);
+  letter-spacing: var(--gmnb-keys-number-letter-spacing);
+  font-feature-settings: var(--gmnb-keys-number-font-features);
+  font-variation-settings: var(--gmnb-keys-number-font-variations);
+}
+button.wc-key.wc-num pathicon {
+  color: var(--gmnb-keys-number-icon-color);
+}
+button.wc-key.wc-num:hover {
+  background-color: var(--gmnb-keys-number-hover-background-color);
+  background-image: var(--gmnb-keys-number-hover-background-image);
+  color: var(--gmnb-keys-number-hover-color);
+  box-shadow: var(--gmnb-keys-number-hover-shadow);
+  opacity: var(--gmnb-keys-number-hover-opacity);
+  filter: var(--gmnb-keys-number-hover-filter);
+  transform: var(--gmnb-keys-number-hover-transform);
+  transition: var(--gmnb-keys-number-hover-transition);
+  font-weight: var(--gmnb-keys-number-hover-font-weight);
+}
+button.wc-key.wc-num:hover pathicon {
+  color: var(--gmnb-keys-number-hover-icon-color);
+}
+button.wc-key.wc-num:active,
+button.wc-key.wc-num.wc-flash,
+button.wc-key.wc-num.keyboard-activating {
+  background-color: var(--gmnb-keys-number-active-background-color);
+  background-image: var(--gmnb-keys-number-active-background-image);
+  color: var(--gmnb-keys-number-active-color);
+  box-shadow: var(--gmnb-keys-number-active-shadow);
+  opacity: var(--gmnb-keys-number-active-opacity);
+  filter: var(--gmnb-keys-number-active-filter);
+  transform: var(--gmnb-keys-number-active-transform);
+  transition: var(--gmnb-keys-number-active-transition);
+  font-weight: var(--gmnb-keys-number-active-font-weight);
+}
+button.wc-key.wc-num:active pathicon,
+button.wc-key.wc-num.wc-flash pathicon,
+button.wc-key.wc-num.keyboard-activating pathicon {
+  color: var(--gmnb-keys-number-active-icon-color);
+}
+button.wc-key.wc-num:checked {
+  background-color: var(--gmnb-keys-number-checked-background-color);
+  background-image: var(--gmnb-keys-number-checked-background-image);
+  color: var(--gmnb-keys-number-checked-color);
+  box-shadow: var(--gmnb-keys-number-checked-shadow);
+  opacity: var(--gmnb-keys-number-checked-opacity);
+  filter: var(--gmnb-keys-number-checked-filter);
+  transform: var(--gmnb-keys-number-checked-transform);
+  transition: var(--gmnb-keys-number-checked-transition);
+  font-weight: var(--gmnb-keys-number-checked-font-weight);
+}
+button.wc-key.wc-num:checked pathicon {
+  color: var(--gmnb-keys-number-checked-icon-color);
+}
+button.wc-key.wc-num:checked:hover {
+  background-color: var(--gmnb-keys-number-checked-hover-background-color);
+  background-image: var(--gmnb-keys-number-checked-hover-background-image);
+  color: var(--gmnb-keys-number-checked-hover-color);
+  box-shadow: var(--gmnb-keys-number-checked-hover-shadow);
+  opacity: var(--gmnb-keys-number-checked-hover-opacity);
+  filter: var(--gmnb-keys-number-checked-hover-filter);
+  transform: var(--gmnb-keys-number-checked-hover-transform);
+  transition: var(--gmnb-keys-number-checked-hover-transition);
+  font-weight: var(--gmnb-keys-number-checked-hover-font-weight);
+}
+button.wc-key.wc-num:checked:hover pathicon {
+  color: var(--gmnb-keys-number-checked-hover-icon-color);
+}
+button.wc-key.wc-num:checked:active,
+button.wc-key.wc-num:checked.wc-flash,
+button.wc-key.wc-num:checked.keyboard-activating {
+  background-color: var(--gmnb-keys-number-checked-active-background-color);
+  background-image: var(--gmnb-keys-number-checked-active-background-image);
+  color: var(--gmnb-keys-number-checked-active-color);
+  box-shadow: var(--gmnb-keys-number-checked-active-shadow);
+  opacity: var(--gmnb-keys-number-checked-active-opacity);
+  filter: var(--gmnb-keys-number-checked-active-filter);
+  transform: var(--gmnb-keys-number-checked-active-transform);
+  transition: var(--gmnb-keys-number-checked-active-transition);
+  font-weight: var(--gmnb-keys-number-checked-active-font-weight);
+}
+button.wc-key.wc-num:checked:active pathicon,
+button.wc-key.wc-num:checked.wc-flash pathicon,
+button.wc-key.wc-num:checked.keyboard-activating pathicon {
+  color: var(--gmnb-keys-number-checked-active-icon-color);
+}
+button.wc-key.wc-num:disabled {
+  background-color: var(--gmnb-keys-number-disabled-background-color);
+  background-image: var(--gmnb-keys-number-disabled-background-image);
+  color: var(--gmnb-keys-number-disabled-color);
+  box-shadow: var(--gmnb-keys-number-disabled-shadow);
+  opacity: var(--gmnb-keys-number-disabled-opacity);
+  filter: var(--gmnb-keys-number-disabled-filter);
+  transform: var(--gmnb-keys-number-disabled-transform);
+  transition: var(--gmnb-keys-number-disabled-transition);
+  font-weight: var(--gmnb-keys-number-disabled-font-weight);
+}
+button.wc-key.wc-num:disabled pathicon {
+  color: var(--gmnb-keys-number-disabled-icon-color);
+}
+button.wc-key.wc-num:checked:disabled {
+  background-color: var(--gmnb-keys-number-checked-disabled-background-color);
+  background-image: var(--gmnb-keys-number-checked-disabled-background-image);
+  color: var(--gmnb-keys-number-checked-disabled-color);
+  box-shadow: var(--gmnb-keys-number-checked-disabled-shadow);
+  opacity: var(--gmnb-keys-number-checked-disabled-opacity);
+  filter: var(--gmnb-keys-number-checked-disabled-filter);
+  transform: var(--gmnb-keys-number-checked-disabled-transform);
+  transition: var(--gmnb-keys-number-checked-disabled-transition);
+  font-weight: var(--gmnb-keys-number-checked-disabled-font-weight);
+}
+button.wc-key.wc-num:checked:disabled pathicon {
+  color: var(--gmnb-keys-number-checked-disabled-icon-color);
+}
+.wc-inert button.wc-key.wc-num:disabled:not(.wc-off) {
+  background-color: var(--gmnb-keys-number-background-color);
+  background-image: var(--gmnb-keys-number-background-image);
+  color: var(--gmnb-keys-number-color);
+  box-shadow: var(--gmnb-keys-number-shadow);
+  opacity: var(--gmnb-keys-number-opacity);
+  filter: var(--gmnb-keys-number-filter);
+  transform: var(--gmnb-keys-number-transform);
+  transition: var(--gmnb-keys-number-transition);
+  font-weight: var(--gmnb-keys-number-font-weight);
+}
+.wc-inert button.wc-key.wc-num:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-keys-number-icon-color);
+}
+.wc-inert button.wc-key.wc-num:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-keys-number-checked-background-color);
+  background-image: var(--gmnb-keys-number-checked-background-image);
+  color: var(--gmnb-keys-number-checked-color);
+  box-shadow: var(--gmnb-keys-number-checked-shadow);
+  opacity: var(--gmnb-keys-number-checked-opacity);
+  filter: var(--gmnb-keys-number-checked-filter);
+  transform: var(--gmnb-keys-number-checked-transform);
+  transition: var(--gmnb-keys-number-checked-transition);
+  font-weight: var(--gmnb-keys-number-checked-font-weight);
+}
+.wc-inert button.wc-key.wc-num:checked:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-keys-number-checked-icon-color);
+}
+/* end control */
+
+/* control keys.func button.wc-key.wc-fn active=.wc-flash,.keyboard-activating checked=:checked,.wc-on icon=pathicon */
+button.wc-key.wc-fn {
+  background-color: var(--gmnb-keys-func-background-color);
+  background-image: var(--gmnb-keys-func-background-image);
+  color: var(--gmnb-keys-func-color);
+  box-shadow: var(--gmnb-keys-func-shadow);
+  opacity: var(--gmnb-keys-func-opacity);
+  filter: var(--gmnb-keys-func-filter);
+  transform: var(--gmnb-keys-func-transform);
+  transition: var(--gmnb-keys-func-transition);
+  border-radius: var(--gmnb-keys-func-radius);
+  padding: var(--gmnb-keys-func-padding);
+  margin: var(--gmnb-keys-func-margin);
+  min-width: var(--gmnb-keys-func-min-width);
+  min-height: var(--gmnb-keys-func-min-height);
+  font-family: var(--gmnb-keys-func-font-family);
+  font-size: var(--gmnb-keys-func-font-size);
+  font-weight: var(--gmnb-keys-func-font-weight);
+  font-style: var(--gmnb-keys-func-font-style);
+  letter-spacing: var(--gmnb-keys-func-letter-spacing);
+  font-feature-settings: var(--gmnb-keys-func-font-features);
+  font-variation-settings: var(--gmnb-keys-func-font-variations);
+}
+button.wc-key.wc-fn pathicon {
+  color: var(--gmnb-keys-func-icon-color);
+}
+button.wc-key.wc-fn:hover {
+  background-color: var(--gmnb-keys-func-hover-background-color);
+  background-image: var(--gmnb-keys-func-hover-background-image);
+  color: var(--gmnb-keys-func-hover-color);
+  box-shadow: var(--gmnb-keys-func-hover-shadow);
+  opacity: var(--gmnb-keys-func-hover-opacity);
+  filter: var(--gmnb-keys-func-hover-filter);
+  transform: var(--gmnb-keys-func-hover-transform);
+  transition: var(--gmnb-keys-func-hover-transition);
+  font-weight: var(--gmnb-keys-func-hover-font-weight);
+}
+button.wc-key.wc-fn:hover pathicon {
+  color: var(--gmnb-keys-func-hover-icon-color);
+}
+button.wc-key.wc-fn:active,
+button.wc-key.wc-fn.wc-flash,
+button.wc-key.wc-fn.keyboard-activating {
+  background-color: var(--gmnb-keys-func-active-background-color);
+  background-image: var(--gmnb-keys-func-active-background-image);
+  color: var(--gmnb-keys-func-active-color);
+  box-shadow: var(--gmnb-keys-func-active-shadow);
+  opacity: var(--gmnb-keys-func-active-opacity);
+  filter: var(--gmnb-keys-func-active-filter);
+  transform: var(--gmnb-keys-func-active-transform);
+  transition: var(--gmnb-keys-func-active-transition);
+  font-weight: var(--gmnb-keys-func-active-font-weight);
+}
+button.wc-key.wc-fn:active pathicon,
+button.wc-key.wc-fn.wc-flash pathicon,
+button.wc-key.wc-fn.keyboard-activating pathicon {
+  color: var(--gmnb-keys-func-active-icon-color);
+}
+button.wc-key.wc-fn:checked,
+button.wc-key.wc-fn.wc-on {
+  background-color: var(--gmnb-keys-func-checked-background-color);
+  background-image: var(--gmnb-keys-func-checked-background-image);
+  color: var(--gmnb-keys-func-checked-color);
+  box-shadow: var(--gmnb-keys-func-checked-shadow);
+  opacity: var(--gmnb-keys-func-checked-opacity);
+  filter: var(--gmnb-keys-func-checked-filter);
+  transform: var(--gmnb-keys-func-checked-transform);
+  transition: var(--gmnb-keys-func-checked-transition);
+  font-weight: var(--gmnb-keys-func-checked-font-weight);
+}
+button.wc-key.wc-fn:checked pathicon,
+button.wc-key.wc-fn.wc-on pathicon {
+  color: var(--gmnb-keys-func-checked-icon-color);
+}
+button.wc-key.wc-fn:checked:hover,
+button.wc-key.wc-fn.wc-on:hover {
+  background-color: var(--gmnb-keys-func-checked-hover-background-color);
+  background-image: var(--gmnb-keys-func-checked-hover-background-image);
+  color: var(--gmnb-keys-func-checked-hover-color);
+  box-shadow: var(--gmnb-keys-func-checked-hover-shadow);
+  opacity: var(--gmnb-keys-func-checked-hover-opacity);
+  filter: var(--gmnb-keys-func-checked-hover-filter);
+  transform: var(--gmnb-keys-func-checked-hover-transform);
+  transition: var(--gmnb-keys-func-checked-hover-transition);
+  font-weight: var(--gmnb-keys-func-checked-hover-font-weight);
+}
+button.wc-key.wc-fn:checked:hover pathicon,
+button.wc-key.wc-fn.wc-on:hover pathicon {
+  color: var(--gmnb-keys-func-checked-hover-icon-color);
+}
+button.wc-key.wc-fn:checked:active,
+button.wc-key.wc-fn:checked.wc-flash,
+button.wc-key.wc-fn:checked.keyboard-activating,
+button.wc-key.wc-fn.wc-on:active,
+button.wc-key.wc-fn.wc-on.wc-flash,
+button.wc-key.wc-fn.wc-on.keyboard-activating {
+  background-color: var(--gmnb-keys-func-checked-active-background-color);
+  background-image: var(--gmnb-keys-func-checked-active-background-image);
+  color: var(--gmnb-keys-func-checked-active-color);
+  box-shadow: var(--gmnb-keys-func-checked-active-shadow);
+  opacity: var(--gmnb-keys-func-checked-active-opacity);
+  filter: var(--gmnb-keys-func-checked-active-filter);
+  transform: var(--gmnb-keys-func-checked-active-transform);
+  transition: var(--gmnb-keys-func-checked-active-transition);
+  font-weight: var(--gmnb-keys-func-checked-active-font-weight);
+}
+button.wc-key.wc-fn:checked:active pathicon,
+button.wc-key.wc-fn:checked.wc-flash pathicon,
+button.wc-key.wc-fn:checked.keyboard-activating pathicon,
+button.wc-key.wc-fn.wc-on:active pathicon,
+button.wc-key.wc-fn.wc-on.wc-flash pathicon,
+button.wc-key.wc-fn.wc-on.keyboard-activating pathicon {
+  color: var(--gmnb-keys-func-checked-active-icon-color);
+}
+button.wc-key.wc-fn:disabled {
+  background-color: var(--gmnb-keys-func-disabled-background-color);
+  background-image: var(--gmnb-keys-func-disabled-background-image);
+  color: var(--gmnb-keys-func-disabled-color);
+  box-shadow: var(--gmnb-keys-func-disabled-shadow);
+  opacity: var(--gmnb-keys-func-disabled-opacity);
+  filter: var(--gmnb-keys-func-disabled-filter);
+  transform: var(--gmnb-keys-func-disabled-transform);
+  transition: var(--gmnb-keys-func-disabled-transition);
+  font-weight: var(--gmnb-keys-func-disabled-font-weight);
+}
+button.wc-key.wc-fn:disabled pathicon {
+  color: var(--gmnb-keys-func-disabled-icon-color);
+}
+button.wc-key.wc-fn:checked:disabled,
+button.wc-key.wc-fn.wc-on:disabled {
+  background-color: var(--gmnb-keys-func-checked-disabled-background-color);
+  background-image: var(--gmnb-keys-func-checked-disabled-background-image);
+  color: var(--gmnb-keys-func-checked-disabled-color);
+  box-shadow: var(--gmnb-keys-func-checked-disabled-shadow);
+  opacity: var(--gmnb-keys-func-checked-disabled-opacity);
+  filter: var(--gmnb-keys-func-checked-disabled-filter);
+  transform: var(--gmnb-keys-func-checked-disabled-transform);
+  transition: var(--gmnb-keys-func-checked-disabled-transition);
+  font-weight: var(--gmnb-keys-func-checked-disabled-font-weight);
+}
+button.wc-key.wc-fn:checked:disabled pathicon,
+button.wc-key.wc-fn.wc-on:disabled pathicon {
+  color: var(--gmnb-keys-func-checked-disabled-icon-color);
+}
+.wc-inert button.wc-key.wc-fn:disabled:not(.wc-off) {
+  background-color: var(--gmnb-keys-func-background-color);
+  background-image: var(--gmnb-keys-func-background-image);
+  color: var(--gmnb-keys-func-color);
+  box-shadow: var(--gmnb-keys-func-shadow);
+  opacity: var(--gmnb-keys-func-opacity);
+  filter: var(--gmnb-keys-func-filter);
+  transform: var(--gmnb-keys-func-transform);
+  transition: var(--gmnb-keys-func-transition);
+  font-weight: var(--gmnb-keys-func-font-weight);
+}
+.wc-inert button.wc-key.wc-fn:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-keys-func-icon-color);
+}
+.wc-inert button.wc-key.wc-fn:checked:disabled:not(.wc-off),
+.wc-inert button.wc-key.wc-fn.wc-on:disabled:not(.wc-off) {
+  background-color: var(--gmnb-keys-func-checked-background-color);
+  background-image: var(--gmnb-keys-func-checked-background-image);
+  color: var(--gmnb-keys-func-checked-color);
+  box-shadow: var(--gmnb-keys-func-checked-shadow);
+  opacity: var(--gmnb-keys-func-checked-opacity);
+  filter: var(--gmnb-keys-func-checked-filter);
+  transform: var(--gmnb-keys-func-checked-transform);
+  transition: var(--gmnb-keys-func-checked-transition);
+  font-weight: var(--gmnb-keys-func-checked-font-weight);
+}
+.wc-inert button.wc-key.wc-fn:checked:disabled:not(.wc-off) pathicon,
+.wc-inert button.wc-key.wc-fn.wc-on:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-keys-func-checked-icon-color);
+}
+/* end control */
+
+/* control keys.operator button.wc-key.wc-op active=.wc-flash,.keyboard-activating icon=pathicon */
+button.wc-key.wc-op {
+  background-color: var(--gmnb-keys-operator-background-color);
+  background-image: var(--gmnb-keys-operator-background-image);
+  color: var(--gmnb-keys-operator-color);
+  box-shadow: var(--gmnb-keys-operator-shadow);
+  opacity: var(--gmnb-keys-operator-opacity);
+  filter: var(--gmnb-keys-operator-filter);
+  transform: var(--gmnb-keys-operator-transform);
+  transition: var(--gmnb-keys-operator-transition);
+  border-radius: var(--gmnb-keys-operator-radius);
+  padding: var(--gmnb-keys-operator-padding);
+  margin: var(--gmnb-keys-operator-margin);
+  min-width: var(--gmnb-keys-operator-min-width);
+  min-height: var(--gmnb-keys-operator-min-height);
+  font-family: var(--gmnb-keys-operator-font-family);
+  font-size: var(--gmnb-keys-operator-font-size);
+  font-weight: var(--gmnb-keys-operator-font-weight);
+  font-style: var(--gmnb-keys-operator-font-style);
+  letter-spacing: var(--gmnb-keys-operator-letter-spacing);
+  font-feature-settings: var(--gmnb-keys-operator-font-features);
+  font-variation-settings: var(--gmnb-keys-operator-font-variations);
+}
+button.wc-key.wc-op pathicon {
+  color: var(--gmnb-keys-operator-icon-color);
+}
+button.wc-key.wc-op:hover {
+  background-color: var(--gmnb-keys-operator-hover-background-color);
+  background-image: var(--gmnb-keys-operator-hover-background-image);
+  color: var(--gmnb-keys-operator-hover-color);
+  box-shadow: var(--gmnb-keys-operator-hover-shadow);
+  opacity: var(--gmnb-keys-operator-hover-opacity);
+  filter: var(--gmnb-keys-operator-hover-filter);
+  transform: var(--gmnb-keys-operator-hover-transform);
+  transition: var(--gmnb-keys-operator-hover-transition);
+  font-weight: var(--gmnb-keys-operator-hover-font-weight);
+}
+button.wc-key.wc-op:hover pathicon {
+  color: var(--gmnb-keys-operator-hover-icon-color);
+}
+button.wc-key.wc-op:active,
+button.wc-key.wc-op.wc-flash,
+button.wc-key.wc-op.keyboard-activating {
+  background-color: var(--gmnb-keys-operator-active-background-color);
+  background-image: var(--gmnb-keys-operator-active-background-image);
+  color: var(--gmnb-keys-operator-active-color);
+  box-shadow: var(--gmnb-keys-operator-active-shadow);
+  opacity: var(--gmnb-keys-operator-active-opacity);
+  filter: var(--gmnb-keys-operator-active-filter);
+  transform: var(--gmnb-keys-operator-active-transform);
+  transition: var(--gmnb-keys-operator-active-transition);
+  font-weight: var(--gmnb-keys-operator-active-font-weight);
+}
+button.wc-key.wc-op:active pathicon,
+button.wc-key.wc-op.wc-flash pathicon,
+button.wc-key.wc-op.keyboard-activating pathicon {
+  color: var(--gmnb-keys-operator-active-icon-color);
+}
+button.wc-key.wc-op:checked {
+  background-color: var(--gmnb-keys-operator-checked-background-color);
+  background-image: var(--gmnb-keys-operator-checked-background-image);
+  color: var(--gmnb-keys-operator-checked-color);
+  box-shadow: var(--gmnb-keys-operator-checked-shadow);
+  opacity: var(--gmnb-keys-operator-checked-opacity);
+  filter: var(--gmnb-keys-operator-checked-filter);
+  transform: var(--gmnb-keys-operator-checked-transform);
+  transition: var(--gmnb-keys-operator-checked-transition);
+  font-weight: var(--gmnb-keys-operator-checked-font-weight);
+}
+button.wc-key.wc-op:checked pathicon {
+  color: var(--gmnb-keys-operator-checked-icon-color);
+}
+button.wc-key.wc-op:checked:hover {
+  background-color: var(--gmnb-keys-operator-checked-hover-background-color);
+  background-image: var(--gmnb-keys-operator-checked-hover-background-image);
+  color: var(--gmnb-keys-operator-checked-hover-color);
+  box-shadow: var(--gmnb-keys-operator-checked-hover-shadow);
+  opacity: var(--gmnb-keys-operator-checked-hover-opacity);
+  filter: var(--gmnb-keys-operator-checked-hover-filter);
+  transform: var(--gmnb-keys-operator-checked-hover-transform);
+  transition: var(--gmnb-keys-operator-checked-hover-transition);
+  font-weight: var(--gmnb-keys-operator-checked-hover-font-weight);
+}
+button.wc-key.wc-op:checked:hover pathicon {
+  color: var(--gmnb-keys-operator-checked-hover-icon-color);
+}
+button.wc-key.wc-op:checked:active,
+button.wc-key.wc-op:checked.wc-flash,
+button.wc-key.wc-op:checked.keyboard-activating {
+  background-color: var(--gmnb-keys-operator-checked-active-background-color);
+  background-image: var(--gmnb-keys-operator-checked-active-background-image);
+  color: var(--gmnb-keys-operator-checked-active-color);
+  box-shadow: var(--gmnb-keys-operator-checked-active-shadow);
+  opacity: var(--gmnb-keys-operator-checked-active-opacity);
+  filter: var(--gmnb-keys-operator-checked-active-filter);
+  transform: var(--gmnb-keys-operator-checked-active-transform);
+  transition: var(--gmnb-keys-operator-checked-active-transition);
+  font-weight: var(--gmnb-keys-operator-checked-active-font-weight);
+}
+button.wc-key.wc-op:checked:active pathicon,
+button.wc-key.wc-op:checked.wc-flash pathicon,
+button.wc-key.wc-op:checked.keyboard-activating pathicon {
+  color: var(--gmnb-keys-operator-checked-active-icon-color);
+}
+button.wc-key.wc-op:disabled {
+  background-color: var(--gmnb-keys-operator-disabled-background-color);
+  background-image: var(--gmnb-keys-operator-disabled-background-image);
+  color: var(--gmnb-keys-operator-disabled-color);
+  box-shadow: var(--gmnb-keys-operator-disabled-shadow);
+  opacity: var(--gmnb-keys-operator-disabled-opacity);
+  filter: var(--gmnb-keys-operator-disabled-filter);
+  transform: var(--gmnb-keys-operator-disabled-transform);
+  transition: var(--gmnb-keys-operator-disabled-transition);
+  font-weight: var(--gmnb-keys-operator-disabled-font-weight);
+}
+button.wc-key.wc-op:disabled pathicon {
+  color: var(--gmnb-keys-operator-disabled-icon-color);
+}
+button.wc-key.wc-op:checked:disabled {
+  background-color: var(--gmnb-keys-operator-checked-disabled-background-color);
+  background-image: var(--gmnb-keys-operator-checked-disabled-background-image);
+  color: var(--gmnb-keys-operator-checked-disabled-color);
+  box-shadow: var(--gmnb-keys-operator-checked-disabled-shadow);
+  opacity: var(--gmnb-keys-operator-checked-disabled-opacity);
+  filter: var(--gmnb-keys-operator-checked-disabled-filter);
+  transform: var(--gmnb-keys-operator-checked-disabled-transform);
+  transition: var(--gmnb-keys-operator-checked-disabled-transition);
+  font-weight: var(--gmnb-keys-operator-checked-disabled-font-weight);
+}
+button.wc-key.wc-op:checked:disabled pathicon {
+  color: var(--gmnb-keys-operator-checked-disabled-icon-color);
+}
+.wc-inert button.wc-key.wc-op:disabled:not(.wc-off) {
+  background-color: var(--gmnb-keys-operator-background-color);
+  background-image: var(--gmnb-keys-operator-background-image);
+  color: var(--gmnb-keys-operator-color);
+  box-shadow: var(--gmnb-keys-operator-shadow);
+  opacity: var(--gmnb-keys-operator-opacity);
+  filter: var(--gmnb-keys-operator-filter);
+  transform: var(--gmnb-keys-operator-transform);
+  transition: var(--gmnb-keys-operator-transition);
+  font-weight: var(--gmnb-keys-operator-font-weight);
+}
+.wc-inert button.wc-key.wc-op:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-keys-operator-icon-color);
+}
+.wc-inert button.wc-key.wc-op:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-keys-operator-checked-background-color);
+  background-image: var(--gmnb-keys-operator-checked-background-image);
+  color: var(--gmnb-keys-operator-checked-color);
+  box-shadow: var(--gmnb-keys-operator-checked-shadow);
+  opacity: var(--gmnb-keys-operator-checked-opacity);
+  filter: var(--gmnb-keys-operator-checked-filter);
+  transform: var(--gmnb-keys-operator-checked-transform);
+  transition: var(--gmnb-keys-operator-checked-transition);
+  font-weight: var(--gmnb-keys-operator-checked-font-weight);
+}
+.wc-inert button.wc-key.wc-op:checked:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-keys-operator-checked-icon-color);
+}
+/* end control */
+
+/* control keys.equals button.wc-key.wc-eq active=.wc-flash,.keyboard-activating icon=pathicon */
+button.wc-key.wc-eq {
+  background-color: var(--gmnb-keys-equals-background-color);
+  background-image: var(--gmnb-keys-equals-background-image);
+  color: var(--gmnb-keys-equals-color);
+  box-shadow: var(--gmnb-keys-equals-shadow);
+  opacity: var(--gmnb-keys-equals-opacity);
+  filter: var(--gmnb-keys-equals-filter);
+  transform: var(--gmnb-keys-equals-transform);
+  transition: var(--gmnb-keys-equals-transition);
+  border-radius: var(--gmnb-keys-equals-radius);
+  padding: var(--gmnb-keys-equals-padding);
+  margin: var(--gmnb-keys-equals-margin);
+  min-width: var(--gmnb-keys-equals-min-width);
+  min-height: var(--gmnb-keys-equals-min-height);
+  font-family: var(--gmnb-keys-equals-font-family);
+  font-size: var(--gmnb-keys-equals-font-size);
+  font-weight: var(--gmnb-keys-equals-font-weight);
+  font-style: var(--gmnb-keys-equals-font-style);
+  letter-spacing: var(--gmnb-keys-equals-letter-spacing);
+  font-feature-settings: var(--gmnb-keys-equals-font-features);
+  font-variation-settings: var(--gmnb-keys-equals-font-variations);
+}
+button.wc-key.wc-eq pathicon {
+  color: var(--gmnb-keys-equals-icon-color);
+}
+button.wc-key.wc-eq:hover {
+  background-color: var(--gmnb-keys-equals-hover-background-color);
+  background-image: var(--gmnb-keys-equals-hover-background-image);
+  color: var(--gmnb-keys-equals-hover-color);
+  box-shadow: var(--gmnb-keys-equals-hover-shadow);
+  opacity: var(--gmnb-keys-equals-hover-opacity);
+  filter: var(--gmnb-keys-equals-hover-filter);
+  transform: var(--gmnb-keys-equals-hover-transform);
+  transition: var(--gmnb-keys-equals-hover-transition);
+  font-weight: var(--gmnb-keys-equals-hover-font-weight);
+}
+button.wc-key.wc-eq:hover pathicon {
+  color: var(--gmnb-keys-equals-hover-icon-color);
+}
+button.wc-key.wc-eq:active,
+button.wc-key.wc-eq.wc-flash,
+button.wc-key.wc-eq.keyboard-activating {
+  background-color: var(--gmnb-keys-equals-active-background-color);
+  background-image: var(--gmnb-keys-equals-active-background-image);
+  color: var(--gmnb-keys-equals-active-color);
+  box-shadow: var(--gmnb-keys-equals-active-shadow);
+  opacity: var(--gmnb-keys-equals-active-opacity);
+  filter: var(--gmnb-keys-equals-active-filter);
+  transform: var(--gmnb-keys-equals-active-transform);
+  transition: var(--gmnb-keys-equals-active-transition);
+  font-weight: var(--gmnb-keys-equals-active-font-weight);
+}
+button.wc-key.wc-eq:active pathicon,
+button.wc-key.wc-eq.wc-flash pathicon,
+button.wc-key.wc-eq.keyboard-activating pathicon {
+  color: var(--gmnb-keys-equals-active-icon-color);
+}
+button.wc-key.wc-eq:checked {
+  background-color: var(--gmnb-keys-equals-checked-background-color);
+  background-image: var(--gmnb-keys-equals-checked-background-image);
+  color: var(--gmnb-keys-equals-checked-color);
+  box-shadow: var(--gmnb-keys-equals-checked-shadow);
+  opacity: var(--gmnb-keys-equals-checked-opacity);
+  filter: var(--gmnb-keys-equals-checked-filter);
+  transform: var(--gmnb-keys-equals-checked-transform);
+  transition: var(--gmnb-keys-equals-checked-transition);
+  font-weight: var(--gmnb-keys-equals-checked-font-weight);
+}
+button.wc-key.wc-eq:checked pathicon {
+  color: var(--gmnb-keys-equals-checked-icon-color);
+}
+button.wc-key.wc-eq:checked:hover {
+  background-color: var(--gmnb-keys-equals-checked-hover-background-color);
+  background-image: var(--gmnb-keys-equals-checked-hover-background-image);
+  color: var(--gmnb-keys-equals-checked-hover-color);
+  box-shadow: var(--gmnb-keys-equals-checked-hover-shadow);
+  opacity: var(--gmnb-keys-equals-checked-hover-opacity);
+  filter: var(--gmnb-keys-equals-checked-hover-filter);
+  transform: var(--gmnb-keys-equals-checked-hover-transform);
+  transition: var(--gmnb-keys-equals-checked-hover-transition);
+  font-weight: var(--gmnb-keys-equals-checked-hover-font-weight);
+}
+button.wc-key.wc-eq:checked:hover pathicon {
+  color: var(--gmnb-keys-equals-checked-hover-icon-color);
+}
+button.wc-key.wc-eq:checked:active,
+button.wc-key.wc-eq:checked.wc-flash,
+button.wc-key.wc-eq:checked.keyboard-activating {
+  background-color: var(--gmnb-keys-equals-checked-active-background-color);
+  background-image: var(--gmnb-keys-equals-checked-active-background-image);
+  color: var(--gmnb-keys-equals-checked-active-color);
+  box-shadow: var(--gmnb-keys-equals-checked-active-shadow);
+  opacity: var(--gmnb-keys-equals-checked-active-opacity);
+  filter: var(--gmnb-keys-equals-checked-active-filter);
+  transform: var(--gmnb-keys-equals-checked-active-transform);
+  transition: var(--gmnb-keys-equals-checked-active-transition);
+  font-weight: var(--gmnb-keys-equals-checked-active-font-weight);
+}
+button.wc-key.wc-eq:checked:active pathicon,
+button.wc-key.wc-eq:checked.wc-flash pathicon,
+button.wc-key.wc-eq:checked.keyboard-activating pathicon {
+  color: var(--gmnb-keys-equals-checked-active-icon-color);
+}
+button.wc-key.wc-eq:disabled {
+  background-color: var(--gmnb-keys-equals-disabled-background-color);
+  background-image: var(--gmnb-keys-equals-disabled-background-image);
+  color: var(--gmnb-keys-equals-disabled-color);
+  box-shadow: var(--gmnb-keys-equals-disabled-shadow);
+  opacity: var(--gmnb-keys-equals-disabled-opacity);
+  filter: var(--gmnb-keys-equals-disabled-filter);
+  transform: var(--gmnb-keys-equals-disabled-transform);
+  transition: var(--gmnb-keys-equals-disabled-transition);
+  font-weight: var(--gmnb-keys-equals-disabled-font-weight);
+}
+button.wc-key.wc-eq:disabled pathicon {
+  color: var(--gmnb-keys-equals-disabled-icon-color);
+}
+button.wc-key.wc-eq:checked:disabled {
+  background-color: var(--gmnb-keys-equals-checked-disabled-background-color);
+  background-image: var(--gmnb-keys-equals-checked-disabled-background-image);
+  color: var(--gmnb-keys-equals-checked-disabled-color);
+  box-shadow: var(--gmnb-keys-equals-checked-disabled-shadow);
+  opacity: var(--gmnb-keys-equals-checked-disabled-opacity);
+  filter: var(--gmnb-keys-equals-checked-disabled-filter);
+  transform: var(--gmnb-keys-equals-checked-disabled-transform);
+  transition: var(--gmnb-keys-equals-checked-disabled-transition);
+  font-weight: var(--gmnb-keys-equals-checked-disabled-font-weight);
+}
+button.wc-key.wc-eq:checked:disabled pathicon {
+  color: var(--gmnb-keys-equals-checked-disabled-icon-color);
+}
+.wc-inert button.wc-key.wc-eq:disabled:not(.wc-off) {
+  background-color: var(--gmnb-keys-equals-background-color);
+  background-image: var(--gmnb-keys-equals-background-image);
+  color: var(--gmnb-keys-equals-color);
+  box-shadow: var(--gmnb-keys-equals-shadow);
+  opacity: var(--gmnb-keys-equals-opacity);
+  filter: var(--gmnb-keys-equals-filter);
+  transform: var(--gmnb-keys-equals-transform);
+  transition: var(--gmnb-keys-equals-transition);
+  font-weight: var(--gmnb-keys-equals-font-weight);
+}
+.wc-inert button.wc-key.wc-eq:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-keys-equals-icon-color);
+}
+.wc-inert button.wc-key.wc-eq:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-keys-equals-checked-background-color);
+  background-image: var(--gmnb-keys-equals-checked-background-image);
+  color: var(--gmnb-keys-equals-checked-color);
+  box-shadow: var(--gmnb-keys-equals-checked-shadow);
+  opacity: var(--gmnb-keys-equals-checked-opacity);
+  filter: var(--gmnb-keys-equals-checked-filter);
+  transform: var(--gmnb-keys-equals-checked-transform);
+  transition: var(--gmnb-keys-equals-checked-transition);
+  font-weight: var(--gmnb-keys-equals-checked-font-weight);
+}
+.wc-inert button.wc-key.wc-eq:checked:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-keys-equals-checked-icon-color);
+}
+/* end control */
+
+/* ------------------------------------------------ segmented controls */
+
+/* The toolkit's toggle group, drawn the app's way unless the theme hands
+   the family back (native = { "segmented" }): no trough of its own, no
+   separators, and the gap the style says (with the separators gone the
+   toolkit leaves twice the border-spacing between two toggles). */
+window.gmnb.own-segmented toggle-group {
+  background: none;
+  box-shadow: none;
+  border-radius: 0;
+  padding: 0;
+  border-spacing: calc(var(--gmnb-segmented-gap) / 2);
 }
 
-button.wc-op {
-  font-size: 22px;
-  font-weight: 350;
-  color: @wc_accent;
-  background-image: linear-gradient(to bottom, alpha(@wc_accent, 0.20), alpha(@wc_accent, 0.07));
-  box-shadow:
-    inset 0 1px alpha(white, 0.10),
-    inset 0 0 0 1px alpha(@wc_accent, 0.22),
-    0 6px 18px -12px @wc_shade;
+window.gmnb.own-segmented toggle-group > separator {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  background: none;
 }
 
-button.wc-fn {
-  font-size: 16px;
-  color: alpha(@wc_fg, 0.86);
+/* (The toolkit fades a disabled toggle's label itself.) */
+window.gmnb.own-segmented toggle-group > toggle > label {
+  filter: none;
 }
 
-button.wc-fn:checked,
-button.wc-key.wc-on {
-  color: @wc_on_hot;
-  background-image: linear-gradient(135deg, alpha(@wc_hot_a, 0.85), alpha(@wc_hot_b, 0.85));
+/* control segmented.item toggle-group>toggle scope=window.gmnb.own-segmented active=.keyboard-activating */
+window.gmnb.own-segmented toggle-group>toggle {
+  background-color: var(--gmnb-segmented-item-background-color);
+  background-image: var(--gmnb-segmented-item-background-image);
+  color: var(--gmnb-segmented-item-color);
+  box-shadow: var(--gmnb-segmented-item-shadow);
+  opacity: var(--gmnb-segmented-item-opacity);
+  filter: var(--gmnb-segmented-item-filter);
+  transform: var(--gmnb-segmented-item-transform);
+  transition: var(--gmnb-segmented-item-transition);
+  border-radius: var(--gmnb-segmented-item-radius);
+  padding: var(--gmnb-segmented-item-padding);
+  margin: var(--gmnb-segmented-item-margin);
+  min-width: var(--gmnb-segmented-item-min-width);
+  min-height: var(--gmnb-segmented-item-min-height);
+  font-family: var(--gmnb-segmented-item-font-family);
+  font-size: var(--gmnb-segmented-item-font-size);
+  font-weight: var(--gmnb-segmented-item-font-weight);
+  font-style: var(--gmnb-segmented-item-font-style);
+  letter-spacing: var(--gmnb-segmented-item-letter-spacing);
+  font-feature-settings: var(--gmnb-segmented-item-font-features);
+  font-variation-settings: var(--gmnb-segmented-item-font-variations);
+}
+window.gmnb.own-segmented toggle-group>toggle:hover {
+  background-color: var(--gmnb-segmented-item-hover-background-color);
+  background-image: var(--gmnb-segmented-item-hover-background-image);
+  color: var(--gmnb-segmented-item-hover-color);
+  box-shadow: var(--gmnb-segmented-item-hover-shadow);
+  opacity: var(--gmnb-segmented-item-hover-opacity);
+  filter: var(--gmnb-segmented-item-hover-filter);
+  transform: var(--gmnb-segmented-item-hover-transform);
+  transition: var(--gmnb-segmented-item-hover-transition);
+  font-weight: var(--gmnb-segmented-item-hover-font-weight);
+}
+window.gmnb.own-segmented toggle-group>toggle:active,
+window.gmnb.own-segmented toggle-group>toggle.keyboard-activating {
+  background-color: var(--gmnb-segmented-item-active-background-color);
+  background-image: var(--gmnb-segmented-item-active-background-image);
+  color: var(--gmnb-segmented-item-active-color);
+  box-shadow: var(--gmnb-segmented-item-active-shadow);
+  opacity: var(--gmnb-segmented-item-active-opacity);
+  filter: var(--gmnb-segmented-item-active-filter);
+  transform: var(--gmnb-segmented-item-active-transform);
+  transition: var(--gmnb-segmented-item-active-transition);
+  font-weight: var(--gmnb-segmented-item-active-font-weight);
+}
+window.gmnb.own-segmented toggle-group>toggle:checked {
+  background-color: var(--gmnb-segmented-item-checked-background-color);
+  background-image: var(--gmnb-segmented-item-checked-background-image);
+  color: var(--gmnb-segmented-item-checked-color);
+  box-shadow: var(--gmnb-segmented-item-checked-shadow);
+  opacity: var(--gmnb-segmented-item-checked-opacity);
+  filter: var(--gmnb-segmented-item-checked-filter);
+  transform: var(--gmnb-segmented-item-checked-transform);
+  transition: var(--gmnb-segmented-item-checked-transition);
+  font-weight: var(--gmnb-segmented-item-checked-font-weight);
+}
+window.gmnb.own-segmented toggle-group>toggle:checked:hover {
+  background-color: var(--gmnb-segmented-item-checked-hover-background-color);
+  background-image: var(--gmnb-segmented-item-checked-hover-background-image);
+  color: var(--gmnb-segmented-item-checked-hover-color);
+  box-shadow: var(--gmnb-segmented-item-checked-hover-shadow);
+  opacity: var(--gmnb-segmented-item-checked-hover-opacity);
+  filter: var(--gmnb-segmented-item-checked-hover-filter);
+  transform: var(--gmnb-segmented-item-checked-hover-transform);
+  transition: var(--gmnb-segmented-item-checked-hover-transition);
+  font-weight: var(--gmnb-segmented-item-checked-hover-font-weight);
+}
+window.gmnb.own-segmented toggle-group>toggle:checked:active,
+window.gmnb.own-segmented toggle-group>toggle:checked.keyboard-activating {
+  background-color: var(--gmnb-segmented-item-checked-active-background-color);
+  background-image: var(--gmnb-segmented-item-checked-active-background-image);
+  color: var(--gmnb-segmented-item-checked-active-color);
+  box-shadow: var(--gmnb-segmented-item-checked-active-shadow);
+  opacity: var(--gmnb-segmented-item-checked-active-opacity);
+  filter: var(--gmnb-segmented-item-checked-active-filter);
+  transform: var(--gmnb-segmented-item-checked-active-transform);
+  transition: var(--gmnb-segmented-item-checked-active-transition);
+  font-weight: var(--gmnb-segmented-item-checked-active-font-weight);
+}
+window.gmnb.own-segmented toggle-group>toggle:disabled {
+  background-color: var(--gmnb-segmented-item-disabled-background-color);
+  background-image: var(--gmnb-segmented-item-disabled-background-image);
+  color: var(--gmnb-segmented-item-disabled-color);
+  box-shadow: var(--gmnb-segmented-item-disabled-shadow);
+  opacity: var(--gmnb-segmented-item-disabled-opacity);
+  filter: var(--gmnb-segmented-item-disabled-filter);
+  transform: var(--gmnb-segmented-item-disabled-transform);
+  transition: var(--gmnb-segmented-item-disabled-transition);
+  font-weight: var(--gmnb-segmented-item-disabled-font-weight);
+}
+window.gmnb.own-segmented toggle-group>toggle:checked:disabled {
+  background-color: var(--gmnb-segmented-item-checked-disabled-background-color);
+  background-image: var(--gmnb-segmented-item-checked-disabled-background-image);
+  color: var(--gmnb-segmented-item-checked-disabled-color);
+  box-shadow: var(--gmnb-segmented-item-checked-disabled-shadow);
+  opacity: var(--gmnb-segmented-item-checked-disabled-opacity);
+  filter: var(--gmnb-segmented-item-checked-disabled-filter);
+  transform: var(--gmnb-segmented-item-checked-disabled-transform);
+  transition: var(--gmnb-segmented-item-checked-disabled-transition);
+  font-weight: var(--gmnb-segmented-item-checked-disabled-font-weight);
+}
+window.gmnb.own-segmented .wc-inert toggle-group>toggle:disabled:not(.wc-off) {
+  background-color: var(--gmnb-segmented-item-background-color);
+  background-image: var(--gmnb-segmented-item-background-image);
+  color: var(--gmnb-segmented-item-color);
+  box-shadow: var(--gmnb-segmented-item-shadow);
+  opacity: var(--gmnb-segmented-item-opacity);
+  filter: var(--gmnb-segmented-item-filter);
+  transform: var(--gmnb-segmented-item-transform);
+  transition: var(--gmnb-segmented-item-transition);
+  font-weight: var(--gmnb-segmented-item-font-weight);
+}
+window.gmnb.own-segmented .wc-inert toggle-group>toggle:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-segmented-item-checked-background-color);
+  background-image: var(--gmnb-segmented-item-checked-background-image);
+  color: var(--gmnb-segmented-item-checked-color);
+  box-shadow: var(--gmnb-segmented-item-checked-shadow);
+  opacity: var(--gmnb-segmented-item-checked-opacity);
+  filter: var(--gmnb-segmented-item-checked-filter);
+  transform: var(--gmnb-segmented-item-checked-transform);
+  transition: var(--gmnb-segmented-item-checked-transition);
+  font-weight: var(--gmnb-segmented-item-checked-font-weight);
+}
+/* end control */
+
+/* The History / Memory switch. */
+window.gmnb.own-segmented toggle-group.wc-panel-tabs {
+  border-spacing: calc(var(--gmnb-panel-tabs-gap) / 2);
 }
 
-button.wc-eq {
-  font-size: 26px;
-  font-weight: 400;
-  color: @wc_on_hot;
-  background-image: linear-gradient(135deg, @wc_hot_a, @wc_hot_b);
-  box-shadow:
-    inset 0 1px alpha(white, 0.35),
-    0 12px 32px -12px alpha(@wc_hot_b, 0.85),
-    0 2px 10px -4px alpha(@wc_hot_a, 0.6);
+/* control panel.tabs.item toggle-group.wc-panel-tabs>toggle scope=window.gmnb.own-segmented active=.keyboard-activating */
+window.gmnb.own-segmented toggle-group.wc-panel-tabs>toggle {
+  background-color: var(--gmnb-panel-tabs-item-background-color);
+  background-image: var(--gmnb-panel-tabs-item-background-image);
+  color: var(--gmnb-panel-tabs-item-color);
+  box-shadow: var(--gmnb-panel-tabs-item-shadow);
+  opacity: var(--gmnb-panel-tabs-item-opacity);
+  filter: var(--gmnb-panel-tabs-item-filter);
+  transform: var(--gmnb-panel-tabs-item-transform);
+  transition: var(--gmnb-panel-tabs-item-transition);
+  border-radius: var(--gmnb-panel-tabs-item-radius);
+  padding: var(--gmnb-panel-tabs-item-padding);
+  margin: var(--gmnb-panel-tabs-item-margin);
+  min-width: var(--gmnb-panel-tabs-item-min-width);
+  min-height: var(--gmnb-panel-tabs-item-min-height);
+  font-family: var(--gmnb-panel-tabs-item-font-family);
+  font-size: var(--gmnb-panel-tabs-item-font-size);
+  font-weight: var(--gmnb-panel-tabs-item-font-weight);
+  font-style: var(--gmnb-panel-tabs-item-font-style);
+  letter-spacing: var(--gmnb-panel-tabs-item-letter-spacing);
+  font-feature-settings: var(--gmnb-panel-tabs-item-font-features);
+  font-variation-settings: var(--gmnb-panel-tabs-item-font-variations);
 }
+window.gmnb.own-segmented toggle-group.wc-panel-tabs>toggle:hover {
+  background-color: var(--gmnb-panel-tabs-item-hover-background-color);
+  background-image: var(--gmnb-panel-tabs-item-hover-background-image);
+  color: var(--gmnb-panel-tabs-item-hover-color);
+  box-shadow: var(--gmnb-panel-tabs-item-hover-shadow);
+  opacity: var(--gmnb-panel-tabs-item-hover-opacity);
+  filter: var(--gmnb-panel-tabs-item-hover-filter);
+  transform: var(--gmnb-panel-tabs-item-hover-transform);
+  transition: var(--gmnb-panel-tabs-item-hover-transition);
+  font-weight: var(--gmnb-panel-tabs-item-hover-font-weight);
+}
+window.gmnb.own-segmented toggle-group.wc-panel-tabs>toggle:active,
+window.gmnb.own-segmented toggle-group.wc-panel-tabs>toggle.keyboard-activating {
+  background-color: var(--gmnb-panel-tabs-item-active-background-color);
+  background-image: var(--gmnb-panel-tabs-item-active-background-image);
+  color: var(--gmnb-panel-tabs-item-active-color);
+  box-shadow: var(--gmnb-panel-tabs-item-active-shadow);
+  opacity: var(--gmnb-panel-tabs-item-active-opacity);
+  filter: var(--gmnb-panel-tabs-item-active-filter);
+  transform: var(--gmnb-panel-tabs-item-active-transform);
+  transition: var(--gmnb-panel-tabs-item-active-transition);
+  font-weight: var(--gmnb-panel-tabs-item-active-font-weight);
+}
+window.gmnb.own-segmented toggle-group.wc-panel-tabs>toggle:checked {
+  background-color: var(--gmnb-panel-tabs-item-checked-background-color);
+  background-image: var(--gmnb-panel-tabs-item-checked-background-image);
+  color: var(--gmnb-panel-tabs-item-checked-color);
+  box-shadow: var(--gmnb-panel-tabs-item-checked-shadow);
+  opacity: var(--gmnb-panel-tabs-item-checked-opacity);
+  filter: var(--gmnb-panel-tabs-item-checked-filter);
+  transform: var(--gmnb-panel-tabs-item-checked-transform);
+  transition: var(--gmnb-panel-tabs-item-checked-transition);
+  font-weight: var(--gmnb-panel-tabs-item-checked-font-weight);
+}
+window.gmnb.own-segmented toggle-group.wc-panel-tabs>toggle:checked:hover {
+  background-color: var(--gmnb-panel-tabs-item-checked-hover-background-color);
+  background-image: var(--gmnb-panel-tabs-item-checked-hover-background-image);
+  color: var(--gmnb-panel-tabs-item-checked-hover-color);
+  box-shadow: var(--gmnb-panel-tabs-item-checked-hover-shadow);
+  opacity: var(--gmnb-panel-tabs-item-checked-hover-opacity);
+  filter: var(--gmnb-panel-tabs-item-checked-hover-filter);
+  transform: var(--gmnb-panel-tabs-item-checked-hover-transform);
+  transition: var(--gmnb-panel-tabs-item-checked-hover-transition);
+  font-weight: var(--gmnb-panel-tabs-item-checked-hover-font-weight);
+}
+window.gmnb.own-segmented toggle-group.wc-panel-tabs>toggle:checked:active,
+window.gmnb.own-segmented toggle-group.wc-panel-tabs>toggle:checked.keyboard-activating {
+  background-color: var(--gmnb-panel-tabs-item-checked-active-background-color);
+  background-image: var(--gmnb-panel-tabs-item-checked-active-background-image);
+  color: var(--gmnb-panel-tabs-item-checked-active-color);
+  box-shadow: var(--gmnb-panel-tabs-item-checked-active-shadow);
+  opacity: var(--gmnb-panel-tabs-item-checked-active-opacity);
+  filter: var(--gmnb-panel-tabs-item-checked-active-filter);
+  transform: var(--gmnb-panel-tabs-item-checked-active-transform);
+  transition: var(--gmnb-panel-tabs-item-checked-active-transition);
+  font-weight: var(--gmnb-panel-tabs-item-checked-active-font-weight);
+}
+window.gmnb.own-segmented toggle-group.wc-panel-tabs>toggle:disabled {
+  background-color: var(--gmnb-panel-tabs-item-disabled-background-color);
+  background-image: var(--gmnb-panel-tabs-item-disabled-background-image);
+  color: var(--gmnb-panel-tabs-item-disabled-color);
+  box-shadow: var(--gmnb-panel-tabs-item-disabled-shadow);
+  opacity: var(--gmnb-panel-tabs-item-disabled-opacity);
+  filter: var(--gmnb-panel-tabs-item-disabled-filter);
+  transform: var(--gmnb-panel-tabs-item-disabled-transform);
+  transition: var(--gmnb-panel-tabs-item-disabled-transition);
+  font-weight: var(--gmnb-panel-tabs-item-disabled-font-weight);
+}
+window.gmnb.own-segmented toggle-group.wc-panel-tabs>toggle:checked:disabled {
+  background-color: var(--gmnb-panel-tabs-item-checked-disabled-background-color);
+  background-image: var(--gmnb-panel-tabs-item-checked-disabled-background-image);
+  color: var(--gmnb-panel-tabs-item-checked-disabled-color);
+  box-shadow: var(--gmnb-panel-tabs-item-checked-disabled-shadow);
+  opacity: var(--gmnb-panel-tabs-item-checked-disabled-opacity);
+  filter: var(--gmnb-panel-tabs-item-checked-disabled-filter);
+  transform: var(--gmnb-panel-tabs-item-checked-disabled-transform);
+  transition: var(--gmnb-panel-tabs-item-checked-disabled-transition);
+  font-weight: var(--gmnb-panel-tabs-item-checked-disabled-font-weight);
+}
+window.gmnb.own-segmented .wc-inert toggle-group.wc-panel-tabs>toggle:disabled:not(.wc-off) {
+  background-color: var(--gmnb-panel-tabs-item-background-color);
+  background-image: var(--gmnb-panel-tabs-item-background-image);
+  color: var(--gmnb-panel-tabs-item-color);
+  box-shadow: var(--gmnb-panel-tabs-item-shadow);
+  opacity: var(--gmnb-panel-tabs-item-opacity);
+  filter: var(--gmnb-panel-tabs-item-filter);
+  transform: var(--gmnb-panel-tabs-item-transform);
+  transition: var(--gmnb-panel-tabs-item-transition);
+  font-weight: var(--gmnb-panel-tabs-item-font-weight);
+}
+window.gmnb.own-segmented .wc-inert toggle-group.wc-panel-tabs>toggle:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-panel-tabs-item-checked-background-color);
+  background-image: var(--gmnb-panel-tabs-item-checked-background-image);
+  color: var(--gmnb-panel-tabs-item-checked-color);
+  box-shadow: var(--gmnb-panel-tabs-item-checked-shadow);
+  opacity: var(--gmnb-panel-tabs-item-checked-opacity);
+  filter: var(--gmnb-panel-tabs-item-checked-filter);
+  transform: var(--gmnb-panel-tabs-item-checked-transform);
+  transition: var(--gmnb-panel-tabs-item-checked-transition);
+  font-weight: var(--gmnb-panel-tabs-item-checked-font-weight);
+}
+/* end control */
 
 /* ------------------------------------------------------- flat text rows */
 
@@ -310,11 +1209,6 @@ button.wc-mem-small {
 .wc-empty {
   font-size: 14px;
   color: alpha(@wc_fg, 0.5);
-}
-
-.wc-toggle-group {
-  font-family: "Outfit";
-  font-weight: 500;
 }
 
 /* programmer */
@@ -751,7 +1645,6 @@ button.wc-swatch-pick {
 .wc-inert :disabled:not(.wc-off) {
   filter: none;
 }
-.wc-inert button.wc-key:disabled:not(.wc-off),
 .wc-inert button.wc-bit:disabled:not(.wc-off) {
   opacity: 1;
 }

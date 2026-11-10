@@ -120,9 +120,11 @@ def control(path, selector, options):
     out += block(combos(checked, [":disabled"]), "checked-disabled-", STATE)
     # Covered is not disabled: what the app itself didn't turn off keeps
     # its look.
-    inert = [f".wc-inert {s}:disabled:not(.wc-off)" for s in [base]]
+    # (`.wc-inert` is inside the window: it goes after the scope.)
+    covered = scope + ".wc-inert " + selector
+    inert = [f"{covered}:disabled:not(.wc-off)"]
     out += block(inert, "", STATE)
-    inert = [f".wc-inert {s}:disabled:not(.wc-off)" for s in combos(checked)]
+    inert = [f"{covered}{way}:disabled:not(.wc-off)" for way in checked]
     out += block(inert, "checked-", STATE)
     return out
 

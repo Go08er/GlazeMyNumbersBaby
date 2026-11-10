@@ -274,13 +274,14 @@ impl ConverterPage {
                     p.keypad.set_scheme(*s);
                 }
             });
+            ctx.hub
+                .subscribe_style(&page.keypad, |pad, style| pad.set_style(style));
         }
         let weak = Rc::downgrade(&page);
         keypad.connect_pressed(move |id, x, y| {
             if let Some(p) = weak.upgrade() {
                 let s = p.ctx.hub.scheme();
-                p.ctx
-                    .pulse_at(&p.keypad, x, y, s.blobs[(id as usize * 5) % 4], 0.55);
+                p.ctx.pulse_at(&p.keypad, x, y, s.accent, 0.55);
                 p.press(id);
             }
         });

@@ -353,10 +353,7 @@ fn text_styles(family: &[String], theme: Option<&ThemeValue>, notes: &mut Notes)
 
 fn merge_colors(colors: &mut Colors, v: &ThemeValue, notes: &mut Notes) {
     let ThemeValue::Map(m) = v else {
-        notes.push(
-            "colors",
-            format!("expected a table, got {}", v.type_name()),
-        );
+        notes.push("colors", format!("expected a table, got {}", v.type_name()));
         return;
     };
     for (key, value) in m {

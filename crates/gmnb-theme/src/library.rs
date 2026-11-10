@@ -42,7 +42,10 @@ fn number(what: &str, v: &Value) -> mlua::Result<f32> {
     match v {
         Value::Integer(i) => Ok(*i as f32),
         Value::Number(n) => finite(what, *n),
-        other => Err(bad(what, format!("expected a number, got {}", other.type_name()))),
+        other => Err(bad(
+            what,
+            format!("expected a number, got {}", other.type_name()),
+        )),
     }
 }
 
@@ -53,14 +56,18 @@ fn color_arg(what: &str, v: &Value) -> mlua::Result<Rgba> {
         Value::String(s) => {
             let text = s.to_str()?;
             parse_hex(&text).ok_or_else(|| {
-                bad(what, "a colour is \"#rrggbb\", \"#rrggbbaa\" or { r, g, b, a }")
+                bad(
+                    what,
+                    "a colour is \"#rrggbb\", \"#rrggbbaa\" or { r, g, b, a }",
+                )
             })
         }
         Value::Table(t) => {
             let part = |key: &str, default: Option<f32>| -> mlua::Result<f32> {
                 match t.raw_get::<Value>(key)? {
-                    Value::Nil => default
-                        .ok_or_else(|| bad(what, format!("a colour table needs `{key}`"))),
+                    Value::Nil => {
+                        default.ok_or_else(|| bad(what, format!("a colour table needs `{key}`")))
+                    }
                     v => Ok(number(what, &v)?.clamp(0.0, 1.0)),
                 }
             };
@@ -242,7 +249,10 @@ pub fn placeholder_drawing(lua: &Lua, gmnb: &Table) -> mlua::Result<()> {
         t.raw_set("height", size)?;
         Ok(t)
     };
-    gmnb.raw_set("image", lua.create_function(move |lua, _: MultiValue| picture(lua, 0.0))?)?;
+    gmnb.raw_set(
+        "image",
+        lua.create_function(move |lua, _: MultiValue| picture(lua, 0.0))?,
+    )?;
     gmnb.raw_set(
         "noise",
         lua.create_function(move |lua, spec: Value| {
@@ -318,7 +328,11 @@ pub fn register(
     f(
         "mix",
         lua.create_function(|lua, (a, b, t): (Value, Value, f64)| {
-            let (a, b, t) = (color_arg("mix", &a)?, color_arg("mix", &b)?, finite("mix", t)?);
+            let (a, b, t) = (
+                color_arg("mix", &a)?,
+                color_arg("mix", &b)?,
+                finite("mix", t)?,
+            );
             color_table(lua, [0, 1, 2, 3].map(|i| a[i] + (b[i] - a[i]) * t))
         })?,
     )?;
@@ -326,7 +340,10 @@ pub fn register(
         "alpha",
         lua.create_function(|lua, (c, a): (Value, f64)| {
             let c = color_arg("alpha", &c)?;
-            color_table(lua, with_alpha(rgb(c), (c[3] * finite("alpha", a)?).clamp(0.0, 1.0)))
+            color_table(
+                lua,
+                with_alpha(rgb(c), (c[3] * finite("alpha", a)?).clamp(0.0, 1.0)),
+            )
         })?,
     )?;
     f(
@@ -373,7 +390,10 @@ pub fn register(
             let c = color_arg("with_contrast", &c)?;
             let against = rgb(color_arg("with_contrast", &against)?);
             let target = finite("with_contrast", target)?.clamp(1.0, 21.0);
-            color_table(lua, with_alpha(color::with_contrast(rgb(c), against, target), c[3]))
+            color_table(
+                lua,
+                with_alpha(color::with_contrast(rgb(c), against, target), c[3]),
+            )
         })?,
     )?;
     f(

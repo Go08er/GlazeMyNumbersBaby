@@ -25,7 +25,34 @@ pub const APP_NAME: &str = "GMNB";
 /// Directory name under the XDG config/cache dirs.
 pub const DATA_DIR: &str = "gmnb";
 
-static OUTFIT: &[u8] = include_bytes!("../assets/fonts/Outfit-Variable.ttf");
+/// The base look's typeface: Inter, the file DGMNB bundles (its family
+/// name is "Inter Variable"). Themes bring their own fonts (Aurora:
+/// Outfit).
+static INTER: &[u8] = include_bytes!("../../dgmnb/assets/fonts/Inter.ttf");
+
+/// The structure stylesheet (docs/theming.md, "The pieces").
+pub const STYLESHEET: &str = include_str!("style.css");
+
+/// `--theme <id>`: the theme for this run (`base`: the base look), without
+/// changing the saved choice. `None` inside: not given.
+pub static THEME_ARG: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Takes `--theme <id>` (or `--theme=<id>`) out of the arguments.
+fn take_theme_arg(args: Vec<String>) -> (Vec<String>, Option<String>) {
+    let mut rest = Vec::with_capacity(args.len());
+    let mut theme = None;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        if arg == "--theme" {
+            theme = args.next().or(theme);
+        } else if let Some(id) = arg.strip_prefix("--theme=") {
+            theme = Some(id.to_string());
+        } else {
+            rest.push(arg);
+        }
+    }
+    (rest, theme)
+}
 
 /// Whether GSK_RENDERER came from the environment GMNB was started in (so
 /// the "Vulkan acceleration" setting doesn't decide the renderer).
@@ -105,7 +132,9 @@ fn main() -> glib::ExitCode {
         }
         activate(app);
     });
-    let code = app.run();
+    let (args, theme) = take_theme_arg(std::env::args().collect());
+    let _ = THEME_ARG.set(theme.filter(|t| !t.is_empty()));
+    let code = app.run_with_args(&args);
     if no_display.get() {
         glib::ExitCode::FAILURE
     } else {
@@ -197,24 +226,38 @@ fn icon_installed() -> bool {
         .any(|dir| dir.join(&file).is_file())
 }
 
-/// Make the bundled display font available to Pango without installing it.
-fn register_fonts() {
+/// Writes a bundled font file to the cache directory (once: a file of
+/// the same size is taken to be it), for Pango to load.
+pub fn cache_font(name: &str, bytes: &[u8]) -> Option<PathBuf> {
     let dir = glib::user_cache_dir().join(DATA_DIR).join("fonts");
-    let path = dir.join("Outfit-Variable.ttf");
+    let path = dir.join(name);
     let stale = std::fs::metadata(&path)
-        .map(|m| m.len() != OUTFIT.len() as u64)
+        .map(|m| m.len() != bytes.len() as u64)
         .unwrap_or(true);
     if stale {
         let _ = std::fs::create_dir_all(&dir);
-        if let Err(e) = std::fs::write(&path, OUTFIT) {
+        if let Err(e) = std::fs::write(&path, bytes) {
             glib::g_warning!("gmnb", "could not cache font: {e}");
-            return;
+            return None;
         }
     }
+    Some(path)
+}
+
+/// Makes a font file available to this app only, under the family name
+/// inside it.
+pub fn add_font_file(path: &std::path::Path) {
     let fontmap = pangocairo::FontMap::default();
     use pango::prelude::*;
-    if let Err(e) = fontmap.add_font_file(&path) {
+    if let Err(e) = fontmap.add_font_file(path) {
         glib::g_warning!("gmnb", "could not register font: {e}");
+    }
+}
+
+/// Make the base look's font available to Pango without installing it.
+fn register_fonts() {
+    if let Some(path) = cache_font("Inter.ttf", INTER) {
+        add_font_file(&path);
     }
 }
 
@@ -223,7 +266,7 @@ fn load_static_css() {
     provider.connect_parsing_error(|_, section, err| {
         eprintln!("stylesheet error at {}: {err}", section.to_str());
     });
-    provider.load_from_string(include_str!("style.css"));
+    provider.load_from_string(STYLESHEET);
     let Some(display) = gdk::Display::default() else {
         return;
     };
@@ -270,6 +313,27 @@ fn schedule_screenshot(win: adw::ApplicationWindow, path: PathBuf) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_theme_argument_is_taken_out() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            super::take_theme_arg(args(&["gmnb", "--theme", "base", "x"])),
+            (args(&["gmnb", "x"]), Some("base".to_string()))
+        );
+        assert_eq!(
+            super::take_theme_arg(args(&["gmnb", "--theme=mono"])),
+            (args(&["gmnb"]), Some("mono".to_string()))
+        );
+        assert_eq!(
+            super::take_theme_arg(args(&["gmnb", "--theme"])),
+            (args(&["gmnb"]), None)
+        );
+        assert_eq!(
+            super::take_theme_arg(args(&["gmnb"])),
+            (args(&["gmnb"]), None)
+        );
+    }
+
     /// GMNB depends on the theme engine before the theme API uses it, so
     /// that every package build already compiles its C++ (Luau): here it
     /// links, a theme file's table comes back and its hook runs.

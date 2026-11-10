@@ -1115,7 +1115,10 @@ fn the_hosts_allowance_is_not_the_themes() {
         let cap = e.limits().memory;
         assert!(own <= cap, "{host}: the theme holds {own} bytes");
         // (Luau takes its memory a page at a time.)
-        assert!(own > cap - (256 << 10), "{host}: the theme holds {own} bytes");
+        assert!(
+            own > cap - (256 << 10),
+            "{host}: the theme holds {own} bytes"
+        );
     }
 }
 

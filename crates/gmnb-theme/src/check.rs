@@ -197,7 +197,12 @@ pub fn parse_hex(s: &str) -> Option<Rgba> {
         .collect();
     let pair = |i: usize| (d[i] * 16.0 + d[i + 1]) / 255.0;
     match d.len() {
-        3 => Some([d[0] * 17.0 / 255.0, d[1] * 17.0 / 255.0, d[2] * 17.0 / 255.0, 1.0]),
+        3 => Some([
+            d[0] * 17.0 / 255.0,
+            d[1] * 17.0 / 255.0,
+            d[2] * 17.0 / 255.0,
+            1.0,
+        ]),
         6 => Some([pair(0), pair(2), pair(4), 1.0]),
         8 => Some([pair(0), pair(2), pair(4), pair(6)]),
         _ => None,
@@ -210,7 +215,11 @@ pub fn color(v: &ThemeValue, path: &str, notes: &mut Notes) -> Option<Rgba> {
         ThemeValue::String(s) => {
             let c = parse_hex(s);
             if c.is_none() {
-                notes.wrong(path, "a colour (\"#rrggbb\", \"#rrggbbaa\" or { r, g, b, a })", v);
+                notes.wrong(
+                    path,
+                    "a colour (\"#rrggbb\", \"#rrggbbaa\" or { r, g, b, a })",
+                    v,
+                );
             }
             c
         }
@@ -291,7 +300,10 @@ pub fn gradient(v: &ThemeValue, path: &str, pixels: bool, notes: &mut Notes) -> 
         return None;
     };
     if !(2..=16).contains(&listed.len()) {
-        notes.push(&cpath, format!("{} colours; a gradient takes 2 to 16", listed.len()));
+        notes.push(
+            &cpath,
+            format!("{} colours; a gradient takes 2 to 16", listed.len()),
+        );
         return None;
     }
     let mut colors = Vec::with_capacity(listed.len());
@@ -323,7 +335,11 @@ pub fn gradient(v: &ThemeValue, path: &str, pixels: bool, notes: &mut Notes) -> 
         kind,
         colors,
         stops,
-        angle: if kind == GradientKind::Linear { 180.0 } else { 0.0 },
+        angle: if kind == GradientKind::Linear {
+            180.0
+        } else {
+            0.0
+        },
         at: [0.5, 0.5],
         extent: Extent::FarthestCorner,
         pixels: Pixels::default(),
@@ -408,8 +424,19 @@ pub const MAX_SHADOWS: usize = 8;
 pub const MAX_BLUR: f64 = 100.0;
 
 pub fn shadow(v: &ThemeValue, path: &str, notes: &mut Notes) -> Option<Shadow> {
-    let m = map(v, path, "a shadow { x, y, blur, spread, color, inset }", notes)?;
-    unknown_keys(m, path, &["x", "y", "blur", "spread", "color", "inset"], &[], notes);
+    let m = map(
+        v,
+        path,
+        "a shadow { x, y, blur, spread, color, inset }",
+        notes,
+    )?;
+    unknown_keys(
+        m,
+        path,
+        &["x", "y", "blur", "spread", "color", "inset"],
+        &[],
+        notes,
+    );
     let Some(c) = m.get("color") else {
         notes.push(path, "a shadow needs `color`");
         return None;
@@ -661,7 +688,11 @@ fn ease(v: &ThemeValue, path: &str, notes: &mut Notes) -> Option<Ease> {
     if let Some(s) = v.as_str() {
         let found = Ease::NAMED.iter().find(|(n, _)| *n == s).map(|(_, e)| *e);
         if found.is_none() {
-            notes.wrong(path, "an ease (\"ease-out\", \"spring\", … or four numbers)", v);
+            notes.wrong(
+                path,
+                "an ease (\"ease-out\", \"spring\", … or four numbers)",
+                v,
+            );
         }
         return found;
     }
@@ -676,7 +707,11 @@ fn ease(v: &ThemeValue, path: &str, notes: &mut Notes) -> Option<Ease> {
             Some(Ease::Bezier(b))
         }
         _ => {
-            notes.wrong(path, "an ease (\"ease-out\", \"spring\", … or four numbers)", v);
+            notes.wrong(
+                path,
+                "an ease (\"ease-out\", \"spring\", … or four numbers)",
+                v,
+            );
             None
         }
     }
@@ -743,7 +778,12 @@ pub fn icon(v: &ThemeValue, base: Icon, path: &str, notes: &mut Notes) -> Icon {
 /// A FocusRing, onto `base`.
 pub fn focus_ring(v: &ThemeValue, base: FocusRing, path: &str, notes: &mut Notes) -> FocusRing {
     let mut ring = base;
-    let Some(m) = map(v, path, "a focus ring { width, color, offset, radius }", notes) else {
+    let Some(m) = map(
+        v,
+        path,
+        "a focus ring { width, color, offset, radius }",
+        notes,
+    ) else {
         return ring;
     };
     unknown_keys(m, path, &["width", "color", "offset", "radius"], &[], notes);
@@ -847,7 +887,12 @@ pub fn state(v: &ThemeValue, path: &str, notes: &mut Notes) -> Option<State> {
 /// A Text, onto `base`. `also`: keys of `v` that are other rows' business.
 pub fn text(v: &ThemeValue, base: &Text, path: &str, also: &[&str], notes: &mut Notes) -> Text {
     let mut t = base.clone();
-    let Some(m) = map(v, path, "a text style { color, font, shadow, margin }", notes) else {
+    let Some(m) = map(
+        v,
+        path,
+        "a text style { color, font, shadow, margin }",
+        notes,
+    ) else {
         return t;
     };
     unknown_keys(m, path, &["color", "font", "shadow", "margin"], also, notes);
@@ -872,7 +917,14 @@ pub fn text(v: &ThemeValue, base: &Text, path: &str, also: &[&str], notes: &mut 
     t
 }
 
-const SURFACE_KEYS: [&str; 6] = ["background", "border", "shadow", "radius", "padding", "margin"];
+const SURFACE_KEYS: [&str; 6] = [
+    "background",
+    "border",
+    "shadow",
+    "radius",
+    "padding",
+    "margin",
+];
 
 /// What a surface, a control and a field share, checked onto the parts
 /// given.
@@ -930,7 +982,12 @@ pub fn surface(
     notes: &mut Notes,
 ) -> Surface {
     let mut s = base.clone();
-    let Some(m) = map(v, path, "a surface { background, border, shadow, … }", notes) else {
+    let Some(m) = map(
+        v,
+        path,
+        "a surface { background, border, shadow, … }",
+        notes,
+    ) else {
         return s;
     };
     unknown_keys(m, path, &SURFACE_KEYS, also, notes);

@@ -1,4 +1,10 @@
-//! `Keypad` — a homogeneous grid of glass keys with three indulgences:
+//! `Keypad` — a homogeneous grid of keys. How a key looks is the
+//! stylesheet's (`keys.*` of the style); the grid's gap, the keys' corner
+//! radius and their icons' size come from the style here.
+//!
+//! TRANSITION: three effects 0.2 drew are still built in, and run only
+//! for a theme that has a `keypad` layer (whose `draw` and `place` hooks
+//! will replace them; the base look has none):
 //!
 //! * **Reveal**: a Fluent-style light that follows the pointer and lights up
 //!   key *borders* near it (a nod to Windows' Reveal highlight), plus a soft
@@ -18,7 +24,6 @@ use gtk::{glib, graphene, gsk};
 use super::animations_enabled;
 use crate::theme::{Scheme, rgba};
 
-pub const KEY_RADIUS: f32 = 14.0;
 const RIPPLE_LIFE: f32 = 0.55;
 const CASCADE_STEP: f32 = 0.022;
 const CASCADE_DUR: f32 = 0.46;
@@ -61,6 +66,16 @@ mod imp {
         pub cascade_start: Cell<Option<Instant>>,
         pub tick: RefCell<Option<gtk::TickCallbackId>>,
         pub scheme: Cell<Option<Scheme>>,
+        /// From the style: the keys' corner radius (`keys.radius`), the
+        /// grid's gap (`keys.gap`) and the compact one's
+        /// (`keys.gap_compact`), and which of the two is in use.
+        pub radius: Cell<f32>,
+        pub gaps: Cell<(f32, f32)>,
+        pub compact: Cell<bool>,
+        /// The keys' icons, and the size and line width the style gives
+        /// them (`keys.icon`).
+        pub icons: RefCell<Vec<super::super::icon::PathIcon>>,
+        pub icon: Cell<(f32, f32)>,
     }
 
     impl Default for Keypad {
@@ -75,6 +90,14 @@ mod imp {
                 cascade_start: Cell::new(None),
                 tick: RefCell::new(None),
                 scheme: Cell::new(None),
+                radius: Cell::new(appcore::metrics::shape::RADIUS),
+                gaps: Cell::new((
+                    appcore::metrics::calc::KEY_GAP,
+                    appcore::metrics::calc::KEY_GAP_COMPACT,
+                )),
+                compact: Cell::new(false),
+                icons: RefCell::default(),
+                icon: Cell::new((appcore::metrics::controls::KEY_ICON, 1.5)),
             }
         }
     }
@@ -98,8 +121,7 @@ mod imp {
             let grid = obj.grid_layout();
             grid.set_row_homogeneous(true);
             grid.set_column_homogeneous(true);
-            grid.set_row_spacing(5);
-            grid.set_column_spacing(5);
+            obj.sync_gap();
 
             // Reveal light and press-point ripples.
             {
@@ -108,7 +130,9 @@ mod imp {
                 motion.connect_motion(move |_, x, y| {
                     if let Some(k) = weak.upgrade() {
                         k.imp().pointer.set(Some((x as f32, y as f32)));
-                        k.queue_draw();
+                        if k.effects() {
+                            k.queue_draw();
+                        }
                     }
                 });
                 let weak = obj.downgrade();
@@ -196,10 +220,41 @@ impl Keypad {
             .expect("grid layout")
     }
 
-    pub fn set_spacing(&self, spacing: i32) {
+    fn sync_gap(&self) {
+        let (gap, compact) = self.imp().gaps.get();
+        let gap = if self.imp().compact.get() {
+            compact
+        } else {
+            gap
+        };
+        let gap = gap.round().max(0.0) as u32;
         let g = self.grid_layout();
-        g.set_row_spacing(spacing as u32);
-        g.set_column_spacing(spacing as u32);
+        g.set_row_spacing(gap);
+        g.set_column_spacing(gap);
+    }
+
+    /// The compact window's keypad: `keys.gap_compact` between its keys.
+    pub fn set_compact(&self, compact: bool) {
+        self.imp().compact.set(compact);
+        self.sync_gap();
+    }
+
+    /// What the keypad takes from the style in Rust: the grid's gaps, the
+    /// keys' radius (for what is drawn over them) and their icons.
+    pub fn set_style(&self, style: &gmnb_theme::Style) {
+        let imp = self.imp();
+        imp.radius.set(style.radius("keys.radius").uniform());
+        imp.gaps
+            .set((style.number("keys.gap"), style.number("keys.gap_compact")));
+        self.sync_gap();
+        if let Some(icon) = style.icon("keys.icon") {
+            let stroke = icon.stroke.unwrap_or_else(|| style.icon_stroke(icon.size));
+            imp.icon.set((icon.size, stroke));
+            for i in imp.icons.borrow().iter() {
+                i.set_style(icon.size, stroke);
+            }
+        }
+        self.queue_draw();
     }
 
     pub fn set_scheme(&self, scheme: Scheme) {
@@ -207,16 +262,19 @@ impl Keypad {
         self.queue_draw();
     }
 
+    /// TRANSITION: whether the built-in effects run (see the module docs).
+    fn effects(&self) -> bool {
+        self.imp().scheme.get().is_some_and(|s| s.keypad_effects) && animations_enabled()
+    }
+
     /// Add a key at (row, col) spanning (rows, cols). Returns the button.
     pub fn add(&self, key: Key, row: i32, col: i32, rows: i32, cols: i32) -> gtk::Button {
         let child: gtk::Widget = match key.icon {
             Some(path) => {
-                let icon = super::icon::PathIcon::new(path, 22);
-                icon.set_stroke_width(if key.kind == KeyKind::Equals {
-                    2.3
-                } else {
-                    1.9
-                });
+                let (size, stroke) = self.imp().icon.get();
+                let icon = super::icon::PathIcon::new(path, size.round() as i32);
+                icon.set_style(size, stroke);
+                self.imp().icons.borrow_mut().push(icon.clone());
                 icon.upcast()
             }
             None => {
@@ -364,7 +422,7 @@ impl Keypad {
     }
 
     fn add_ripple(&self, rect: graphene::Rect, x: f32, y: f32, hot: bool) {
-        if !animations_enabled() {
+        if !self.effects() {
             return;
         }
         self.imp().ripples.borrow_mut().push(Ripple {
@@ -379,7 +437,7 @@ impl Keypad {
 
     /// Play the entrance cascade.
     pub fn cascade(&self) {
-        if !animations_enabled() {
+        if !self.effects() {
             return;
         }
         self.imp().cascade_start.set(Some(Instant::now()));
@@ -454,9 +512,10 @@ impl Keypad {
         }
         drop(pos);
 
-        let Some(scheme) = imp.scheme.get() else {
+        let Some(scheme) = imp.scheme.get().filter(|s| s.keypad_effects) else {
             return;
         };
+        let key_radius = imp.radius.get();
         let light = if scheme.dark {
             [1.0, 1.0, 1.0]
         } else {
@@ -473,7 +532,7 @@ impl Keypad {
             let radius = 6.0 + ease_out_cubic(age) * reach;
             let a = (1.0 - age).powf(1.4) * if scheme.dark { 0.26 } else { 0.30 };
             let color = if r.hot { scheme.on_hot } else { light };
-            let rr = gsk::RoundedRect::from_rect(r.rect, KEY_RADIUS);
+            let rr = gsk::RoundedRect::from_rect(r.rect, key_radius);
             s.push_rounded_clip(&rr);
             s.append_radial_gradient(
                 &r.rect,
@@ -512,7 +571,8 @@ impl Keypad {
             if dist > REVEAL_RADIUS {
                 continue;
             }
-            let rr = gsk::RoundedRect::from_rect(rect.inset_r(0.5, 0.5), KEY_RADIUS - 0.5);
+            let rr =
+                gsk::RoundedRect::from_rect(rect.inset_r(0.5, 0.5), (key_radius - 0.5).max(0.0));
             let builder = gsk::PathBuilder::new();
             builder.add_rounded_rect(&rr);
             let path = builder.to_path();
@@ -533,7 +593,7 @@ impl Keypad {
 
             if rect.contains_point(&pointer) {
                 let glow_r = rect.width().max(rect.height()) * 0.95;
-                s.push_rounded_clip(&gsk::RoundedRect::from_rect(rect, KEY_RADIUS));
+                s.push_rounded_clip(&gsk::RoundedRect::from_rect(rect, key_radius));
                 s.append_radial_gradient(
                     &rect,
                     &pointer,

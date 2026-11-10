@@ -288,7 +288,9 @@ const MODES_SIZE: Kind = Kind::Record(&[
 /// the rows above it.
 pub static ROWS: &[Row] = &[
     // -- Tokens that derive nothing: icons, motion, layout.
-    row("icons.stroke", Kind::Num(0.0, 64.0), |_| px(metrics::shape::ICON_STROKE)),
+    row("icons.stroke", Kind::Num(0.0, 64.0), |_| {
+        px(metrics::shape::ICON_STROKE)
+    }),
     row("icons.taper", UNIT, |_| px(0.0)),
     row("motion.page", Kind::Ms, |_| px(0.0)),
     row("motion.mode", Kind::Ms, |_| px(0.0)),
@@ -318,9 +320,15 @@ pub static ROWS: &[Row] = &[
         use metrics::converter::{MARGIN_X, MARGIN_Y};
         spacing(MARGIN_Y, MARGIN_X, MARGIN_Y, MARGIN_X)
     }),
-    row("layout.converter.gap", SIZE, |_| px(metrics::converter::NARROW_GAP)),
-    row("layout.converter.gap_wide", SIZE, |_| px(metrics::converter::WIDE_GAP)),
-    row("layout.converter.keypad_width", SIZE, |_| px(metrics::converter::KEYPAD_W)),
+    row("layout.converter.gap", SIZE, |_| {
+        px(metrics::converter::NARROW_GAP)
+    }),
+    row("layout.converter.gap_wide", SIZE, |_| {
+        px(metrics::converter::WIDE_GAP)
+    }),
+    row("layout.converter.keypad_width", SIZE, |_| {
+        px(metrics::converter::KEYPAD_W)
+    }),
     row("layout.date.margin", Kind::Spacing, |_| {
         use metrics::date::{MARGIN_X, MARGIN_Y};
         spacing(MARGIN_Y, MARGIN_X, MARGIN_Y, MARGIN_X)
@@ -328,16 +336,24 @@ pub static ROWS: &[Row] = &[
     row("layout.date.gap", SIZE, |_| {
         px(metrics::date::STEP_FROM_TO - metrics::date::FIELD_BLOCK_H)
     }),
-    row("layout.date.max_width", SIZE, |_| px(metrics::date::MAX_WIDTH)),
+    row("layout.date.max_width", SIZE, |_| {
+        px(metrics::date::MAX_WIDTH)
+    }),
     row("layout.graph.margin", Kind::Spacing, |_| {
         use metrics::graph::{MARGIN_X, MARGIN_Y};
         spacing(MARGIN_Y, MARGIN_X, MARGIN_Y, MARGIN_X)
     }),
     row("layout.graph.gap", SIZE, |_| px(metrics::graph::GAP)),
-    row("layout.graph.side_width", SIZE, |_| px(metrics::graph::SIDE_W)),
-    row("layout.graph.pad_height", SIZE, |_| px(metrics::graph::PAD_H)),
+    row("layout.graph.side_width", SIZE, |_| {
+        px(metrics::graph::SIDE_W)
+    }),
+    row("layout.graph.pad_height", SIZE, |_| {
+        px(metrics::graph::PAD_H)
+    }),
     // -- The toolkit's own widgets.
-    row("native", Kind::Words(&NATIVE_FAMILIES), |_| Value::Words(Vec::new())),
+    row("native", Kind::Words(&NATIVE_FAMILIES), |_| {
+        Value::Words(Vec::new())
+    }),
     row("stock.window", Kind::Color, |s| color(s.t.colors.bg)),
     row("stock.view", Kind::Color, |s| color(s.t.colors.surface)),
     row("stock.headerbar", Kind::Color, |s| color(s.t.colors.bg)),
@@ -346,22 +362,40 @@ pub static ROWS: &[Row] = &[
     row("stock.popover", Kind::Color, |s| color(s.t.colors.surface)),
     row("stock.card", Kind::Color, |s| color(s.t.colors.surface)),
     row("stock.fg", Kind::Color, |s| color(s.t.colors.fg)),
-    row("stock.accent", Kind::Color, |s| color(s.t.colors.accent_text)),
+    row("stock.accent", Kind::Color, |s| {
+        color(s.t.colors.accent_text)
+    }),
     row("stock.accent_bg", Kind::Color, |s| color(s.t.colors.accent)),
-    row("stock.accent_fg", Kind::Color, |s| color(s.t.colors.on_accent)),
-    row("stock.destructive", Kind::Color, |s| color(s.t.colors.danger)),
+    row("stock.accent_fg", Kind::Color, |s| {
+        color(s.t.colors.on_accent)
+    }),
+    row("stock.destructive", Kind::Color, |s| {
+        color(s.t.colors.danger)
+    }),
     row("stock.error", Kind::Color, |s| color(s.t.colors.danger)),
     // -- Window.
-    row("window.background", Kind::Fill, |s| Value::Fill(Fill::color(s.t.colors.bg))),
+    row("window.background", Kind::Fill, |s| {
+        Value::Fill(Fill::color(s.t.colors.bg))
+    }),
     row("window.color", Kind::Color, |s| color(s.t.colors.fg)),
-    row("window.font", Kind::Font, |s| Value::Font(s.t.text.body.clone())),
-    row("window.text_halo", Kind::TextShadows, |s| Value::Shadows(s.halo())),
-    row("window.raised_text_halo", Kind::TextShadows, |_| Value::Shadows(Vec::new())),
-    row("plain.background", Kind::Fill, |s| Value::Fill(Fill::color(s.text_scrim()))),
+    row("window.font", Kind::Font, |s| {
+        Value::Font(s.t.text.body.clone())
+    }),
+    row("window.text_halo", Kind::TextShadows, |s| {
+        Value::Shadows(s.halo())
+    }),
+    row("window.raised_text_halo", Kind::TextShadows, |_| {
+        Value::Shadows(Vec::new())
+    }),
+    row("plain.background", Kind::Fill, |s| {
+        Value::Fill(Fill::color(s.text_scrim()))
+    }),
     row("plain.radius", Kind::Radius, |s| {
         Value::Radius(Radius::all(s.t.shape.card_radius))
     }),
-    row("scrim", Kind::Color, |_| color(alpha(BLACK, metrics::shape::SCRIM_ALPHA))),
+    row("scrim", Kind::Color, |_| {
+        color(alpha(BLACK, metrics::shape::SCRIM_ALPHA))
+    }),
     row("focus", Kind::FocusRing, |s| {
         Value::FocusRing(FocusRing {
             width: metrics::focus::WIDTH,
@@ -371,7 +405,9 @@ pub static ROWS: &[Row] = &[
         })
     }),
     // -- Header and window buttons.
-    row("header.background", Kind::Fill, |s| Value::Fill(Fill::color(s.text_scrim()))),
+    row("header.background", Kind::Fill, |s| {
+        Value::Fill(Fill::color(s.text_scrim()))
+    }),
     todo("header.height", SIZE),
     todo("header.title", Kind::Text),
     todo("header.button", Kind::Control),
@@ -393,7 +429,9 @@ pub static ROWS: &[Row] = &[
     todo("text_button_gap", SIZE),
     todo("flyout_button", Kind::Control),
     todo("button", Kind::Control),
-    row("segmented.gap", SIZE, |_| px(metrics::controls::SEGMENTED_GAP)),
+    row("segmented.gap", SIZE, |_| {
+        px(metrics::controls::SEGMENTED_GAP)
+    }),
     row("segmented.item", Kind::Control, |s| {
         let c = &s.t.colors;
         Value::Control(Box::new(Control {
@@ -460,7 +498,9 @@ pub static ROWS: &[Row] = &[
         ]),
     ),
     // -- Display (the readout).
-    row("display.background", Kind::Fill, |s| Value::Fill(Fill::color(s.text_scrim()))),
+    row("display.background", Kind::Fill, |s| {
+        Value::Fill(Fill::color(s.text_scrim()))
+    }),
     row("display.radius", Kind::Radius, |s| {
         Value::Radius(Radius::all(s.t.shape.card_radius))
     }),
@@ -484,11 +524,17 @@ pub static ROWS: &[Row] = &[
     row("display.halo", Kind::Shadows, |s| Value::Shadows(s.halo())),
     // -- Keys. The shared values first: the classes are built from them.
     row("keys.gap", SIZE, |_| px(metrics::calc::KEY_GAP)),
-    row("keys.gap_compact", SIZE, |_| px(metrics::calc::KEY_GAP_COMPACT)),
-    row("keys.radius", Kind::Radius, |s| Value::Radius(Radius::all(s.t.shape.radius))),
+    row("keys.gap_compact", SIZE, |_| {
+        px(metrics::calc::KEY_GAP_COMPACT)
+    }),
+    row("keys.radius", Kind::Radius, |s| {
+        Value::Radius(Radius::all(s.t.shape.radius))
+    }),
     row("keys.min_width", SIZE, |_| px(0.0)),
     row("keys.min_height", SIZE, |_| px(0.0)),
-    row("keys.padding", Kind::Spacing, |_| Value::Spacing(Spacing::default())),
+    row("keys.padding", Kind::Spacing, |_| {
+        Value::Spacing(Spacing::default())
+    }),
     row("keys.transition", Kind::Transition, |_| {
         Value::Transition(Transition::default())
     }),
@@ -499,8 +545,12 @@ pub static ROWS: &[Row] = &[
             color: None,
         })
     }),
-    row("keys.hover", Kind::State, |s| Value::State(State::overlay(s.t.colors.hover))),
-    row("keys.active", Kind::State, |s| Value::State(State::overlay(s.t.colors.press))),
+    row("keys.hover", Kind::State, |s| {
+        Value::State(State::overlay(s.t.colors.hover))
+    }),
+    row("keys.active", Kind::State, |s| {
+        Value::State(State::overlay(s.t.colors.press))
+    }),
     row("keys.disabled", Kind::State, |_| {
         Value::State(State {
             fade: Some(metrics::controls::DISABLED_ALPHA),
@@ -520,10 +570,18 @@ pub static ROWS: &[Row] = &[
         s.key(s.t.colors.surface2, s.t.colors.fg, s.t.text.key.clone())
     }),
     row("keys.operator", Kind::KeyControl, |s| {
-        s.key(s.t.colors.surface2, s.t.colors.accent_text, s.t.text.key.clone())
+        s.key(
+            s.t.colors.surface2,
+            s.t.colors.accent_text,
+            s.t.text.key.clone(),
+        )
     }),
     row("keys.equals", Kind::KeyControl, |s| {
-        s.key(s.t.colors.accent, s.t.colors.on_accent, s.t.text.key.clone())
+        s.key(
+            s.t.colors.accent,
+            s.t.colors.on_accent,
+            s.t.text.key.clone(),
+        )
     }),
     todo(
         "keys.pad",
@@ -755,9 +813,7 @@ fn neutral_control() -> Control {
 pub fn neutral(kind: &Kind) -> Value {
     match kind {
         Kind::Bool => Value::Bool(false),
-        Kind::Px(min, _) | Kind::Num(min, _) | Kind::PxOr(_, min, _) => {
-            Value::Number(min.max(0.0))
-        }
+        Kind::Px(min, _) | Kind::Num(min, _) | Kind::PxOr(_, min, _) => Value::Number(min.max(0.0)),
         Kind::Ms => Value::Number(0.0),
         Kind::Color | Kind::ColorOr(_) => Value::Color(TRANSPARENT),
         Kind::Paint => Value::Paint(Paint::Color(TRANSPARENT)),
@@ -843,7 +899,9 @@ pub fn check(
         Kind::Px(min, max) | Kind::Num(min, max) => {
             check::number(v, path, *min, *max, notes).map_or_else(keep, Value::Number)
         }
-        Kind::Ms => check::number(v, path, 0.0, check::MAX_MS, notes).map_or_else(keep, Value::Number),
+        Kind::Ms => {
+            check::number(v, path, 0.0, check::MAX_MS, notes).map_or_else(keep, Value::Number)
+        }
         Kind::Color => check::color(v, path, notes).map_or_else(keep, Value::Color),
         Kind::Paint => check::paint(v, path, false, notes).map_or_else(keep, Value::Paint),
         Kind::Fill => check::fill(v, path, notes).map_or_else(keep, Value::Fill),

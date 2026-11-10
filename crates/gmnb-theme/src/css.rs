@@ -52,18 +52,19 @@ pub fn num(n: f32) -> String {
     if s == "-0" { "0".into() } else { s }
 }
 
+/// A length. (Zero has its unit too: `calc()` needs it.)
 pub fn px(n: f32) -> String {
-    if n == 0.0 || !n.is_finite() {
-        "0".into()
-    } else {
-        format!("{}px", num(n))
-    }
+    format!("{}px", num(n))
 }
 
 pub fn color(c: Rgba) -> String {
     let ch = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     let (r, g, b) = (ch(c[0]), ch(c[1]), ch(c[2]));
-    let a = if c[3].is_finite() { c[3].clamp(0.0, 1.0) } else { 1.0 };
+    let a = if c[3].is_finite() {
+        c[3].clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
     if a >= 0.9995 {
         format!("rgb({r},{g},{b})")
     } else {
@@ -253,7 +254,13 @@ fn ease(e: Ease) -> String {
         Ease::EaseInOut => "ease-in-out".into(),
         Ease::Spring => "cubic-bezier(0.34, 1.56, 0.64, 1)".into(),
         Ease::Bezier([a, b, c, d]) => {
-            format!("cubic-bezier({}, {}, {}, {})", num(a), num(b), num(c), num(d))
+            format!(
+                "cubic-bezier({}, {}, {}, {})",
+                num(a),
+                num(b),
+                num(c),
+                num(d)
+            )
         }
     }
 }
@@ -376,8 +383,18 @@ fn emit_finished(out: &mut BTreeMap<String, String>, path: &str, lead: &str, f: 
         &format!("{lead}transform"),
         transform(f.scale, f.rotate),
     );
-    put(out, path, &format!("{lead}transition"), transition(&f.transition));
-    put(out, path, &format!("{lead}font-weight"), num(f.font_weight.round()));
+    put(
+        out,
+        path,
+        &format!("{lead}transition"),
+        transition(&f.transition),
+    );
+    put(
+        out,
+        path,
+        &format!("{lead}font-weight"),
+        num(f.font_weight.round()),
+    );
 }
 
 fn emit_control(out: &mut BTreeMap<String, String>, path: &str, c: &Control) {
@@ -436,7 +453,12 @@ pub fn emit(path: &str, kind: &Kind, value: &Value, out: &mut BTreeMap<String, S
         }
         (_, Value::Surface(s)) => {
             emit_fill(out, path, "background-", &s.background);
-            put(out, path, "shadow", box_shadow(s.border.as_ref(), &s.shadow));
+            put(
+                out,
+                path,
+                "shadow",
+                box_shadow(s.border.as_ref(), &s.shadow),
+            );
             put(out, path, "radius", radius(&s.radius));
             put(out, path, "padding", spacing(&s.padding));
             put(out, path, "margin", spacing(&s.margin));

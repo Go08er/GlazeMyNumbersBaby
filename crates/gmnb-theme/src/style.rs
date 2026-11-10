@@ -137,7 +137,10 @@ pub fn resolve(ctx: &Ctx, theme: &ThemeValue) -> Resolved {
         other => {
             notes.push(
                 "style",
-                format!("expected `style` to return a table, got {}", other.type_name()),
+                format!(
+                    "expected `style` to return a table, got {}",
+                    other.type_name()
+                ),
             );
             &empty
         }

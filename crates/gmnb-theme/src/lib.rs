@@ -67,9 +67,9 @@
 pub mod check;
 mod convert;
 pub mod css;
-pub mod library;
 mod engine;
 mod error;
+pub mod library;
 pub mod schema;
 pub mod states;
 pub mod style;

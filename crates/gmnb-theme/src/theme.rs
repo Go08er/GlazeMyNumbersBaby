@@ -246,9 +246,7 @@ impl Source {
     fn text(&self, max: usize) -> Result<Vec<u8>, LoadError> {
         match self.built() {
             Some(b) => Ok(b.source.as_bytes().to_vec()),
-            None => self
-                .read(THEME_FILE, max as u64)
-                .map_err(LoadError::Read),
+            None => self.read(THEME_FILE, max as u64).map_err(LoadError::Read),
         }
     }
 }
@@ -354,13 +352,14 @@ impl OptionDef {
     /// slider's number is brought into range and onto a step.
     pub fn accept(&self, value: &OptionValue) -> Option<OptionValue> {
         match (&self.kind, value) {
-            (OptionKind::Choice { choices, .. }, OptionValue::Text(s)) => choices
-                .iter()
-                .any(|c| c.id == *s)
-                .then(|| value.clone()),
+            (OptionKind::Choice { choices, .. }, OptionValue::Text(s)) => {
+                choices.iter().any(|c| c.id == *s).then(|| value.clone())
+            }
             (OptionKind::Color, OptionValue::Text(s)) => {
                 let c = parse_hex(s).filter(|_| s.len() == 7)?;
-                Some(OptionValue::Text(appcore::color::to_hex([c[0], c[1], c[2]])))
+                Some(OptionValue::Text(appcore::color::to_hex([
+                    c[0], c[1], c[2],
+                ])))
             }
             (OptionKind::Toggle, OptionValue::Bool(_)) => Some(value.clone()),
             (OptionKind::Slider { min, max, step, .. }, OptionValue::Number(n)) => {
@@ -390,7 +389,10 @@ pub fn complete_options(
         .iter()
         .filter_map(|o| {
             let default = o.default.clone()?;
-            let value = saved.get(&o.id).and_then(|v| o.accept(v)).unwrap_or(default);
+            let value = saved
+                .get(&o.id)
+                .and_then(|v| o.accept(v))
+                .unwrap_or(default);
             Some((o.id.clone(), value))
         })
         .collect()
@@ -477,9 +479,7 @@ fn function_field(
 }
 
 fn option_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 32
-        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    !id.is_empty() && id.len() <= 32 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 fn option_value(v: &ThemeValue) -> Option<OptionValue> {
@@ -527,7 +527,8 @@ fn parse_option(v: &ThemeValue, path: &str, notes: &mut Notes) -> Option<OptionD
             return None;
         }
     };
-    let number = |key: &str, default: f64| v.get(key).and_then(ThemeValue::as_f64).unwrap_or(default);
+    let number =
+        |key: &str, default: f64| v.get(key).and_then(ThemeValue::as_f64).unwrap_or(default);
     let kind = match v.get("type").and_then(ThemeValue::as_str) {
         Some("choice") => {
             let mut choices = Vec::new();
@@ -576,14 +577,21 @@ fn parse_option(v: &ThemeValue, path: &str, notes: &mut Notes) -> Option<OptionD
                 None | Some("number") => false,
                 Some("percent") => true,
                 Some(_) => {
-                    notes.push(&format!("{dot}format"), "expected \"number\" or \"percent\"");
+                    notes.push(
+                        &format!("{dot}format"),
+                        "expected \"number\" or \"percent\"",
+                    );
                     false
                 }
             };
             OptionKind::Slider {
                 min,
                 max,
-                step: if step > 0.0 && step <= max - min { step } else { 0.0 },
+                step: if step > 0.0 && step <= max - min {
+                    step
+                } else {
+                    0.0
+                },
                 percent,
             }
         }
@@ -952,7 +960,10 @@ impl Theme {
             .iter()
             .filter_map(|c| {
                 let bytes = self.source.read(&c.file, MAX_CREDIT_BYTES).ok()?;
-                Some((c.title.clone(), String::from_utf8_lossy(&bytes).into_owned()))
+                Some((
+                    c.title.clone(),
+                    String::from_utf8_lossy(&bytes).into_owned(),
+                ))
             })
             .collect()
     }
@@ -1002,7 +1013,10 @@ impl Theme {
             let text = lua.create_table()?;
             for (name, f) in base.text.named() {
                 let font = lua.create_table()?;
-                font.raw_set("family", frozen(lua.create_sequence_from(f.family.iter().map(String::as_str))?))?;
+                font.raw_set(
+                    "family",
+                    frozen(lua.create_sequence_from(f.family.iter().map(String::as_str))?),
+                )?;
                 font.raw_set("size", f64::from(f.size))?;
                 font.raw_set("weight", f64::from(f.weight))?;
                 text.raw_set(name, frozen(font))?;
@@ -1075,9 +1089,9 @@ impl Theme {
             .table()
             .raw_get::<Value>("options")
             .unwrap_or(Value::Nil);
-        let changed =
-            self.engine
-                .call(&action.run, Budget::Action, (options, self.ctx.table()))?;
+        let changed = self
+            .engine
+            .call(&action.run, Budget::Action, (options, self.ctx.table()))?;
         let mut out = BTreeMap::new();
         if let ThemeValue::Map(m) = changed {
             for (id, value) in m {

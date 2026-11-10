@@ -61,7 +61,11 @@ fn an_empty_style_is_exactly_the_base() {
             assert_eq!(r.style, Style::base(&c));
         }
     }
-    let mut theme = load("empty", "return { api = 1, name = 'Empty', style = function() return {} end }").unwrap();
+    let mut theme = load(
+        "empty",
+        "return { api = 1, name = 'Empty', style = function() return {} end }",
+    )
+    .unwrap();
     let c = ctx(true, 1.0);
     assert_eq!(theme.style(&c).unwrap().style, Style::base(&c));
     // And so is a theme with no `style` at all.
@@ -93,20 +97,32 @@ fn the_base_is_dgmnbs() {
         assert_eq!(number.font.family[0], INTER);
         assert_eq!(number.radius, Radius::all(metrics::shape::RADIUS));
         let func = s.control("keys.func").unwrap();
-        assert_eq!((func.background.clone(), func.color), (Fill::color(p.surface2), p.fg));
+        assert_eq!(
+            (func.background.clone(), func.color),
+            (Fill::color(p.surface2), p.fg)
+        );
         assert_eq!(func.font.size, metrics::text::KEY.size);
         assert_eq!(func.font.weight, metrics::text::KEY.weight);
         let op = s.control("keys.operator").unwrap();
-        assert_eq!((op.background.clone(), op.color), (Fill::color(p.surface2), p.accent_text));
+        assert_eq!(
+            (op.background.clone(), op.color),
+            (Fill::color(p.surface2), p.accent_text)
+        );
         let eq = s.control("keys.equals").unwrap();
-        assert_eq!((eq.background.clone(), eq.color), (Fill::color(p.accent), p.on_accent));
+        assert_eq!(
+            (eq.background.clone(), eq.color),
+            (Fill::color(p.accent), p.on_accent)
+        );
         // Hover and press are overlays, a disabled key fades its glyph, and
         // a toggle that is on is the accent's.
         assert_eq!(func.hover, State::overlay(p.hover));
         assert_eq!(func.active, State::overlay(p.press));
         assert_eq!(func.disabled.fade, Some(metrics::controls::DISABLED_ALPHA));
         assert_eq!(func.checked, State::filled(p.accent, p.on_accent));
-        assert_eq!(s.icon("keys.icon").unwrap().size, metrics::controls::KEY_ICON);
+        assert_eq!(
+            s.icon("keys.icon").unwrap().size,
+            metrics::controls::KEY_ICON
+        );
         let tab = s.control("panel.tabs.item").unwrap();
         assert_eq!(tab.min_height, metrics::panel::TAB_H);
         assert_eq!(tab.background, Fill::none());
@@ -141,7 +157,10 @@ fn the_base_is_dgmnbs() {
     assert_eq!((halo[1].blur, halo[1].color[3]), (10.0, 0.75));
     assert_eq!(s.shadows("display.halo"), halo);
     // The keys stay opaque surfaces.
-    assert_eq!(s.control("keys.number").unwrap().background, Fill::color(p.surface));
+    assert_eq!(
+        s.control("keys.number").unwrap().background,
+        Fill::color(p.surface)
+    );
 }
 
 /// Tokens come first: an element's base follows the theme's tokens, and a
@@ -173,9 +192,18 @@ fn elements_derive_from_the_merged_tokens() {
     let eq = s.control("keys.equals").unwrap();
     assert_eq!(eq.background, Fill::color(red));
     assert_eq!(eq.color, [0.0, 0.0, 0.0, 1.0]);
-    assert_eq!(s.control("keys.func").unwrap().checked.background, Some(Fill::color(red)));
-    assert_eq!(s.control("segmented.item").unwrap().radius, Radius::all(3.0));
-    assert_eq!(s.control("segmented.item").unwrap().font.family, ["Fira Sans"]);
+    assert_eq!(
+        s.control("keys.func").unwrap().checked.background,
+        Some(Fill::color(red))
+    );
+    assert_eq!(
+        s.control("segmented.item").unwrap().radius,
+        Radius::all(3.0)
+    );
+    assert_eq!(
+        s.control("segmented.item").unwrap().font.family,
+        ["Fira Sans"]
+    );
     // `keys.radius` wins over `shape.radius` for every class...
     assert_eq!(s.control("keys.func").unwrap().radius, Radius::all(14.0));
     // ...and a class's own over it.
@@ -300,7 +328,12 @@ fn numbers_out_of_range_are_clamped_with_a_note() {
         ),
     );
     assert_eq!(r.notes.list.len(), 8, "{:#?}", r.notes.list);
-    assert!(r.notes.list.iter().all(|n| n.message.contains("out of range")));
+    assert!(
+        r.notes
+            .list
+            .iter()
+            .all(|n| n.message.contains("out of range"))
+    );
     let s = &r.style;
     assert_eq!(s.number("keys.gap"), 0.0);
     let number = s.control("keys.number").unwrap();
@@ -358,7 +391,10 @@ fn a_theme_that_does_not_load_is_an_error() {
         Err(other) => panic!("{other}"),
         Ok(_) => panic!("it loaded"),
     };
-    assert!(matches!(script(load("syntax", "return {")), ThemeError::Syntax(_)));
+    assert!(matches!(
+        script(load("syntax", "return {")),
+        ThemeError::Syntax(_)
+    ));
     assert!(matches!(
         script(load("error", "error('no')")),
         ThemeError::Runtime { .. }
@@ -368,24 +404,45 @@ fn a_theme_that_does_not_load_is_an_error() {
         ThemeError::Timeout(_)
     ));
     assert!(matches!(
-        script(load("big", "local t = {} while true do t[#t + 1] = string.rep('x', 4096) .. #t end")),
+        script(load(
+            "big",
+            "local t = {} while true do t[#t + 1] = string.rep('x', 4096) .. #t end"
+        )),
         ThemeError::Memory(_)
     ));
     // A string over 4 KiB is refused, not cut.
     assert!(matches!(
-        script(load("long", "return { api = 1, name = string.rep('x', 5000) }")),
+        script(load(
+            "long",
+            "return { api = 1, name = string.rep('x', 5000) }"
+        )),
         ThemeError::Limit(_)
     ));
-    assert!(matches!(load("nothing", "local x = 1"), Err(LoadError::NotATable)));
-    assert!(matches!(load("list", "return { 1, 2 }"), Err(LoadError::NotATable)));
-    assert!(matches!(load("noapi", "return { name = 'x' }"), Err(LoadError::NoApi)));
-    assert!(matches!(load("noname", "return { api = 1 }"), Err(LoadError::NoName)));
+    assert!(matches!(
+        load("nothing", "local x = 1"),
+        Err(LoadError::NotATable)
+    ));
+    assert!(matches!(
+        load("list", "return { 1, 2 }"),
+        Err(LoadError::NotATable)
+    ));
+    assert!(matches!(
+        load("noapi", "return { name = 'x' }"),
+        Err(LoadError::NoApi)
+    ));
+    assert!(matches!(
+        load("noname", "return { api = 1 }"),
+        Err(LoadError::NoName)
+    ));
     match load("newer", "return { api = 2, name = 'Tomorrow' }") {
         Err(e @ LoadError::NewerApi(2)) => assert!(e.to_string().contains("needs a newer GMNB")),
         other => panic!("{:?}", other.err()),
     }
     // Over 512 KiB of source.
-    let big = format!("return {{ api = 1, name = 'x' }} --{}", "x".repeat(513 << 10));
+    let big = format!(
+        "return {{ api = 1, name = 'x' }} --{}",
+        "x".repeat(513 << 10)
+    );
     assert!(matches!(load("huge", &big), Err(LoadError::Read(_))));
     // Bytecode is refused.
     assert!(load("bytecode", "\u{1b}Lua").is_err());
@@ -454,9 +511,30 @@ fn style_runs_only_when_ctx_changes() {
     let c = ctx(false, 1.0);
     assert_eq!(theme.style(&c).unwrap().style.number("keys.gap"), 1.0);
     assert_eq!(theme.style(&c).unwrap().style.number("keys.gap"), 1.0);
-    assert_eq!(theme.style(&ctx(true, 1.0)).unwrap().style.number("keys.gap"), 2.0);
-    assert_eq!(theme.style(&ctx(true, 0.5)).unwrap().style.number("keys.gap"), 3.0);
-    assert_eq!(theme.style(&ctx(true, 0.5)).unwrap().style.number("keys.gap"), 3.0);
+    assert_eq!(
+        theme
+            .style(&ctx(true, 1.0))
+            .unwrap()
+            .style
+            .number("keys.gap"),
+        2.0
+    );
+    assert_eq!(
+        theme
+            .style(&ctx(true, 0.5))
+            .unwrap()
+            .style
+            .number("keys.gap"),
+        3.0
+    );
+    assert_eq!(
+        theme
+            .style(&ctx(true, 0.5))
+            .unwrap()
+            .style
+            .number("keys.gap"),
+        3.0
+    );
 }
 
 /// `ctx` is exactly the contract's, and read-only.
@@ -548,7 +626,14 @@ fn the_built_in_themes_load_and_return_only_known_keys() {
     let ids: Vec<&str> = aurora.def.options.iter().map(|o| o.id.as_str()).collect();
     assert_eq!(
         ids,
-        ["palette", "system_note", "primary", "secondary", "living", "motion_note"]
+        [
+            "palette",
+            "system_note",
+            "primary",
+            "secondary",
+            "living",
+            "motion_note"
+        ]
     );
     for name in ["background", "keypad", "display"] {
         assert!(aurora.def.layers[name].draw.is_some(), "{name}");
@@ -636,7 +721,10 @@ fn the_built_in_themes_load_and_return_only_known_keys() {
                 // The accent is the option's, worked out as the base's is.
                 let p = appcore::palette::Palette::new(dark, Some(appcore::color::hex(0xe5484d)));
                 assert_eq!(s.tokens.colors.accent, p.accent);
-                assert_eq!(s.control("keys.equals").unwrap().background, Fill::color(p.accent));
+                assert_eq!(
+                    s.control("keys.equals").unwrap().background,
+                    Fill::color(p.accent)
+                );
             }
         }
     }
@@ -651,7 +739,10 @@ fn discovery_lists_built_ins_then_the_users() {
         std::fs::create_dir_all(root.join(id)).unwrap();
         std::fs::write(root.join(id).join("theme.luau"), text).unwrap();
     };
-    write("zebra", "return { api = 1, name = 'Zebra', description = 'Stripes.' }");
+    write(
+        "zebra",
+        "return { api = 1, name = 'Zebra', description = 'Stripes.' }",
+    );
     write("mono", "return { api = 1, name = 'My Mono' }");
     write("broken", "return {");
     write("Bad Name", "return { api = 1, name = 'x' }");
@@ -659,7 +750,8 @@ fn discovery_lists_built_ins_then_the_users() {
     std::fs::create_dir_all(root.join("empty")).unwrap();
     let dev = root.join("zebra");
     let sources = theme::discover(Some(&root), Some(&dev));
-    let ids: Vec<(&str, theme::Origin)> = sources.iter().map(|s| (s.id.as_str(), s.origin)).collect();
+    let ids: Vec<(&str, theme::Origin)> =
+        sources.iter().map(|s| (s.id.as_str(), s.origin)).collect();
     use theme::Origin::*;
     assert_eq!(
         ids,
@@ -674,7 +766,13 @@ fn discovery_lists_built_ins_then_the_users() {
     let listed = theme::list(&sources, &Limits::default());
     assert_eq!(listed[0].meta.as_ref().unwrap().name, "Aurora");
     assert_eq!(listed[1].meta.as_ref().unwrap().name, "My Mono");
-    assert!(listed[2].meta.as_ref().unwrap_err().contains("syntax error"));
+    assert!(
+        listed[2]
+            .meta
+            .as_ref()
+            .unwrap_err()
+            .contains("syntax error")
+    );
     assert_eq!(
         listed[3].meta.as_ref().unwrap().description.as_deref(),
         Some("Stripes.")
@@ -709,7 +807,10 @@ fn theme_files_stay_inside_the_folder() {
     let theme = Theme::load(Source::folder("files", &dir), Limits::default()).unwrap();
     assert_eq!(theme.def.fonts, ["fonts/a.ttf", "fonts/inside.ttf"]);
     assert_eq!(theme.font_files().len(), 2);
-    assert_eq!(theme.credits(), [("Thanks".to_string(), "thanks".to_string())]);
+    assert_eq!(
+        theme.credits(),
+        [("Thanks".to_string(), "thanks".to_string())]
+    );
     let noted: Vec<&str> = theme.notes.list.iter().map(|n| n.path.as_str()).collect();
     assert_eq!(
         noted,
@@ -726,7 +827,9 @@ fn theme_files_stay_inside_the_folder() {
         "{:#?}",
         theme.notes.list
     );
-    for bad in ["", ".", "..", "a/../b", "/a", "a//b", "a\\b", "a/./b", "a\nb"] {
+    for bad in [
+        "", ".", "..", "a/../b", "/a", "a//b", "a\\b", "a/./b", "a\nb",
+    ] {
         assert!(!theme::safe_relative(bad), "{bad:?}");
     }
     assert!(theme::safe_relative("fonts/My Font.ttf"));
