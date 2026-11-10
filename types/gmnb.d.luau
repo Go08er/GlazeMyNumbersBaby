@@ -611,7 +611,7 @@ export type Style = {
 	section: Text?,
 	slider: SliderStyle?,
 	switch: SwitchStyle?,
-	scrollbar: { width: number?, color: Color?, radius: number? }?,
+	scrollbar: { width: number?, color: Color?, radius: number?, inset: number? }?,
 	card: Surface?,
 	-- Flyouts: the keys' own popovers, the calendar, the graph's options.
 	popover: Surface?,

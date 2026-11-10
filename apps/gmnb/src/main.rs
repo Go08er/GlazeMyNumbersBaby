@@ -32,6 +32,31 @@ pub const DATA_DIR: &str = "gmnb";
 /// Outfit).
 static INTER: &[u8] = include_bytes!("../../dgmnb/assets/fonts/Inter.ttf");
 
+/// The subsets DGMNB falls back to after Inter (`fonts.ui`): the arrows
+/// and the mathematical signs Inter lacks (▾), and four scripts.
+static FALLBACKS: [(&str, &[u8]); 5] = [
+    (
+        "NotoSansMath-subset.otf",
+        include_bytes!("../../dgmnb/assets/fonts/NotoSansMath-subset.otf"),
+    ),
+    (
+        "NotoSansArabic-subset.ttf",
+        include_bytes!("../../dgmnb/assets/fonts/NotoSansArabic-subset.ttf"),
+    ),
+    (
+        "NotoSansArmenian-subset.ttf",
+        include_bytes!("../../dgmnb/assets/fonts/NotoSansArmenian-subset.ttf"),
+    ),
+    (
+        "NotoSansBengali-subset.ttf",
+        include_bytes!("../../dgmnb/assets/fonts/NotoSansBengali-subset.ttf"),
+    ),
+    (
+        "NotoSansKhmer-subset.ttf",
+        include_bytes!("../../dgmnb/assets/fonts/NotoSansKhmer-subset.ttf"),
+    ),
+];
+
 /// The structure stylesheet (docs/theming.md, "The pieces").
 pub const STYLESHEET: &str = include_str!("style.css");
 
@@ -284,6 +309,11 @@ pub fn add_font_file(path: &std::path::Path) {
 fn register_fonts() {
     if let Some(path) = cache_font("Inter.ttf", INTER) {
         add_font_file(&path);
+    }
+    for (name, bytes) in FALLBACKS {
+        if let Some(path) = cache_font(name, bytes) {
+            add_font_file(&path);
+        }
     }
 }
 

@@ -343,8 +343,9 @@ mod imp {
                 };
             }
             if orientation == gtk::Orientation::Vertical {
-                let h = self.obj().natural_height();
-                (h, h, -1, -1)
+                // The style's height for its mode; held at another (the
+                // calculator page's bin), it sets its text in that.
+                (0, self.obj().height_wanted(), -1, -1)
             } else {
                 (40, 200, -1, -1)
             }
@@ -598,7 +599,9 @@ impl Display {
         }
     }
 
-    fn natural_height(&self) -> i32 {
+    /// How tall the readout is by the style: `display.heights` for its
+    /// mode, in whole pixels.
+    pub fn height_wanted(&self) -> i32 {
         let imp = self.imp();
         let auto = || {
             // `"auto"`: 1.6 × the expression's size + 1.28 × the mode's

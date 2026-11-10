@@ -44,6 +44,9 @@ The marker's words: the style path, the selector, then any of
     focus=SEL,...      (a field) the ways of holding the focus (default
                        `:focus-within`)
     error=SEL,...      (a field) the ways of being wrong (default `.error`)
+    line=1             (a control or a text) its labels' lines sit where
+                       DGMNB puts them: the font's line height, and the
+                       pixel above it (css.rs `text_line`)
 
 `--check` changes nothing and fails if a block is out of date.
 """
@@ -67,6 +70,7 @@ REST = [
     ("min-height", "min-height"),
     ("font-family", "font-family"),
     ("font-size", "font-size"),
+    ("line-height", "line-height"),
     ("font-weight", "font-weight"),
     ("font-style", "font-style"),
     ("letter-spacing", "letter-spacing"),
@@ -95,6 +99,7 @@ TEXT = [
     ("color", "color"),
     ("font-family", "font-family"),
     ("font-size", "font-size"),
+    ("line-height", "line-height"),
     ("font-weight", "font-weight"),
     ("font-style", "font-style"),
     ("letter-spacing", "letter-spacing"),
@@ -102,6 +107,8 @@ TEXT = [
     ("font-variation-settings", "font-variations"),
     ("text-shadow", "text-shadow"),
     ("margin", "margin"),
+    # Where its line sits in its place (css.rs `text_line`).
+    ("padding-top", "text-nudge"),
 ]
 
 SURFACE = [
@@ -113,8 +120,9 @@ SURFACE = [
     ("margin", "margin"),
 ]
 
-# A field's resting properties: a control's, but no margin or least width.
-FIELD_REST = [p for p in REST if p[1] not in ("margin", "min-width")]
+# A field's resting properties: a control's, but no margin, least width
+# or line height (its text is the toolkit's entry, not a label).
+FIELD_REST = [p for p in REST if p[1] not in ("margin", "min-width", "line-height")]
 
 
 def var(path, lead, name):
@@ -153,7 +161,12 @@ def control(path, selector, options):
             )
         return out
 
-    out = block([base], "", REST)
+    lines = options.get("line") == "1"
+    rest = [p for p in REST if lines or p[1] != "line-height"]
+    out = block([base], "", rest)
+    if lines:
+        # Its label's line sits where DGMNB puts it (css.rs `text_line`).
+        out += rule([f"{base} label"], [("padding-top", var(path, "", "text-nudge"))])
     out += block(combos([":hover"]), "hover-", STATE)
     out += block(combos(active), "active-", STATE)
     out += block(combos(checked), "checked-", STATE)
@@ -202,7 +215,9 @@ def plain(props):
     def write(path, selector, options):
         scope = options.get("scope", "").replace("+", " ")
         scope = scope + " " if scope else ""
-        return rule([scope + selector.replace("+", " ")], [(p, var(path, "", n)) for p, n in props])
+        lines = options.get("line") == "1"
+        own = [p for p in props if lines or p[1] not in ("line-height", "text-nudge")]
+        return rule([scope + selector.replace("+", " ")], [(p, var(path, "", n)) for p, n in own])
     return write
 
 

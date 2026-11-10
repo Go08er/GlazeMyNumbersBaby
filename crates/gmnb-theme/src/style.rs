@@ -138,11 +138,19 @@ impl Style {
     }
 
     /// The line width of an icon drawn at `size` pixels: `icons.stroke` on
-    /// the 24-unit grid, scaled by `icons.taper`.
+    /// the 24-unit grid, scaled by `icons.taper`. Taper 0, the base look's,
+    /// is DGMNB's line: it scales the grid's line with the icon, and then
+    /// once more, by the same factor (`ui.rs` `icon`: its stroke width is
+    /// in the path's units, which the icon's transform scales).
     pub fn icon_stroke(&self, size: f32) -> f32 {
         let stroke = self.number("icons.stroke");
         let taper = self.number("icons.taper");
-        stroke * (taper + (1.0 - taper) * size / appcore::metrics::shape::ICON_GRID)
+        let k = size / appcore::metrics::shape::ICON_GRID;
+        if taper == 0.0 {
+            stroke * k * k
+        } else {
+            stroke * (taper + (1.0 - taper) * k)
+        }
     }
 }
 

@@ -332,7 +332,10 @@ pixels. Without `color` an icon takes its control's.
 
 **FocusRing** `{ width, color, offset, radius }`: the ring around what
 holds the keyboard focus. It shows for keyboard use only; a click never
-draws it. `offset` is the gap to the element's edge (negative: inside).
+draws it. `offset` is how far out from the element's edge the ring's
+outer edge is (negative: inside); the ring is `width` wide inside that,
+so DGMNB's `{ width 2, offset 2 }` touches the element. Its corners are
+the element's radius plus `offset`.
 
 ---------------------------------------------------------------------------
 
@@ -396,7 +399,7 @@ properties:
 | Border + shadow list | one `--P-shadow`: the border as `inset 0 0 0 <width> <color>` first, then the shadows; `none` if empty. (`P` is the element; there is no separate border property.) |
 | Radius | `--P-radius` |
 | Spacing | `--P-padding`, `--P-margin` |
-| Font | `--P-font-family`, `--P-font-size`, `--P-font-weight`, `--P-font-style`, `--P-letter-spacing`, `--P-font-features`, `--P-font-variations` |
+| Font | `--P-font-family`, `--P-font-size`, `--P-font-weight`, `--P-font-style`, `--P-letter-spacing`, `--P-font-features`, `--P-font-variations`, and `--P-line-height` and `--P-text-nudge` (where a line sits: [Text in its place](#text-in-its-place)) |
 | Transition | `--P-transition`: a complete `transition` value, or `none` |
 | brightness, saturation | `--P-filter`: `brightness(b) saturate(s)`, or `none` |
 | scale, rotate | `--P-transform`: `scale(s) rotate(d)`, or `none` |
@@ -509,6 +512,29 @@ Read from libadwaita 1.9.3's own stylesheet while the rules were written
 undoes for the families the app draws; and `calc(var(--x) / 2)` needs
 the variable to carry a unit even when it is zero.
 
+### Text in its place
+
+DGMNB draws its own text, and GTK lays out and draws GMNB's: the base
+look meets the [text rule](#how-it-is-measured) only where GMNB puts each
+glyph where DGMNB does. What was found, measured against DGMNB's pictures
+on the private compositor (GTK 4.22, Pango 1.57), and what the app does
+about it:
+
+| What | DGMNB | GTK, by default | GMNB |
+|---|---|---|---|
+| Outlines | Unhinted, grey levels (`text.rs`) | At scale 1 GTK's automatic font rendering hints them: every glyph moved and stretched to the pixel grid, by up to a pixel | `window.rs` `match_text_rendering`: manual rendering, no hinting (outlines or metrics), grey levels, for the whole app |
+| Across | A line at `cx − width / 2`, to a quarter of a pixel | A label rounds its text's place down to a whole pixel | `window.rs` `exact_text`: a centred or end-aligned label is laid out across its whole width (it may be ellipsized), and Pango places the line there to the fraction |
+| Down | The baseline at the place's middle plus half the capitals' height, rounded to a pixel (`ui.rs` `draw_line`) | A label centres its line box in its place, rounding down; the baseline is half the leading below the font's ascent. Inter's ascent less its descent is its cap height, so only the rounding differs | Each font's `--P-line-height` and `--P-text-nudge` (`css.rs` `text_line`): a line box and a pixel of padding above it that land the baseline on DGMNB's in any place an even number of pixels high |
+| Scripts | 62% of the label's size, raised 0.36 of it or lowered 0.16, at their own optical size | Pango's `<sup>` uses the font's own superscript size and shift (60%, 0.35), and an absolute line height is given to every run, so a raised run makes the line taller | Keys' labels are written as `<span size="62%" rise="…" line_height="1025" font="@opsz=…">` (`calculator.rs` `script_markup`): the script in a line box a pixel high. (Pango reads a `line_height` above 1024 as Pango units, up to 1024 as a factor.) A fallback font's glyph in a label (the ▾ of the flyout buttons) gets the same box |
+| Cells | Rows of equal cells (`Rect::columns`, `Rect::cell`) fall on fractions of a pixel | Whole pixels, the spare ones to the first cells: a label up to a pixel off | `width_bin.rs` `Cells` (the memory row), `Strip` (the programmer bar) and `bitflip.rs`'s grid place children to the fraction with an allocation transform, and the bits' baselines on DGMNB's pixel |
+| Overlap | A narrow window's rows overlap | Children ask for their width, and the window grows | `Strip` asks for none of its own |
+
+Not done: the keypad (`widgets/keypad.rs`) lays keys out on GTK's grid,
+so where DGMNB's key cells are fractional (Scientific and Programmer at
+760×640: five columns of 85.6 px; Standard at 360×600: rows of 61.3 px)
+their labels sit up to a pixel off and fail the text rule. The bits'
+`place` is the recipe.
+
 ### Toolkit-drawn families: `native`
 
 Some widgets are the toolkit's own: switches, sliders, scrollbars, menus.
@@ -605,7 +631,7 @@ A text style without `family` takes `fonts.ui`.
 | `shape.row_radius` | 6 | List rows, text fields |
 | `shape.card_radius` | 12 | Panels, cards, popovers, the graph |
 | `icons.stroke` | 1.8 | Line width of every icon on its 24-unit grid |
-| `icons.taper` | 0 | At `size` px a line is `stroke × (taper + (1 − taper) × size / 24)` px wide. 0 scales the line with the icon; 1 keeps it the same at every size. |
+| `icons.taper` | 0 | At `size` px a line is `stroke × (taper + (1 − taper) × size / 24)` px wide: 1 keeps it the same at every size. 0, the base look's, is DGMNB's line, `stroke × (size / 24)²` (DGMNB's stroke is in the path's units, which the icon's scale scales again: 1.0 px at 18 px). |
 
 An element's own `icon.stroke` (in pixels) overrides the formula.
 
@@ -720,7 +746,7 @@ For a Control, the base states are these unless the row says otherwise:
 | `plain.background` | Fill | `base.text_scrim` | `.wc-plain` *(new)*: the memory row, radix list, bit grid, programmer and scientific toolbars, the date column, the converter's value column, the graph side panel, empty-state texts |
 | `plain.radius` | Radius | `shape.card_radius` | same |
 | `scrim` | Color | black at 0.30 | The shade over what the sidebar or a sheet covers |
-| `focus` | FocusRing | `{ width 2, color accent_text, offset 2 }` | `*:focus-visible { outline }` for every control; the ring's corners follow the control's radius |
+| `focus` | FocusRing | `{ width 2, color accent_text, offset 2 }` (the ring touches the control: DGMNB's `rounded_border` strokes inside the rect it is given) | `window.gmnb.own-focus :focus:focus-visible { outline }` (the focus itself: `:focus-visible` alone holds for the widgets holding it too) for every control but text fields and sliders, which draw their own; `outline-offset` is `offset − width`; the ring's corners follow the control's radius |
 
 ### Header and window buttons
 
@@ -729,8 +755,8 @@ For a Control, the base states are these unless the row says otherwise:
 | `header.background` | Fill | `base.text_scrim` | `window.gmnb headerbar` |
 | `header.height` | number | 46 | `headerbar { min-height }` |
 | `header.title` | Text | `text.title`, `fg` | `.wc-title` |
-| `header.button` | Control | `icon_button` | `headerbar .wc-icon-button`: menu, History, Keep on top, the graph's toggles |
-| `header.controls` | Control | `icon_button` | `button.wc-window-button` *(new)*: minimise, maximise/restore, close. The app's own buttons with DGMNB's glyphs; the toolkit's are switched off. |
+| `header.button` | Control | `icon_button`'s base (its row comes first) | `headerbar .wc-icon-button`: menu, History, Keep on top, the graph's toggles. History is a button, not a toggle, as DGMNB's |
+| `header.controls` | Control | `icon_button`'s base | `button.wc-window-button` *(new)*: minimise, maximise/restore, close. The app's own buttons with DGMNB's glyphs (`appcore::icons::WINDOW_*`), in its order, named, not focused by a click; the toolkit's are switched off. In compact (keep on top) Close alone stays, and the way back takes the menu's place, as DGMNB's |
 | `header.close` | Control | `header.controls` | `button.wc-window-button.wc-close` *(new)* |
 
 ### Navigation sidebar
@@ -742,10 +768,10 @@ For a Control, the base states are these unless the row says otherwise:
 | `nav.width` | number | 280 | The split view's sidebar width (Rust); it always leaves 40 px of the window uncovered |
 | `nav.title` | Text | `text.title`, `fg` | `.wc-nav-title` *(new)*: the app's name beside the menu button |
 | `nav.show_title` | boolean | `true` | Rust: the label's visibility |
-| `nav.header` | Text | `text.caption`, `fg_dim`, margin `{ 8, 12, 4, 12 }` | `.wc-nav-header` |
+| `nav.header` | Text | `text.caption`, `fg_dim`, margin `{ 0, 0, 0, 18 }` (its row is 28 high) | `.wc-nav-header` |
 | `nav.uppercase_headers` | boolean | `false` | Rust: a Pango text transform on the label; what a screen reader hears doesn't change |
-| `nav.row` | Control | radius `shape.row_radius`; min_height 40; margin `{ 1, 6 }`; padding `{ 0, 8 }` (the icon in a 28 px box, the label 44 px in); `text.body`; `fg`; icon `{ size 18 }`; `checked = { background accent at 0.16, color accent_text }` | `.wc-nav row`; `checked` is `:selected` |
-| `nav.settings` | Control | as `nav.row` | `button.wc-nav-settings` |
+| `nav.row` | Control | radius `shape.row_radius`; min_height 40; margin `{ 0, 6, 2, 6 }` (the 2 px step is under each row); padding `{ 0, 8 }` (the icon in a 28 px box, the label 44 px in); `text.body`; `fg`; icon `{ size 18 }`; `checked = { background accent at 0.16, color accent_text }` | `list.wc-nav > row.wc-nav-row`; `checked` is `:selected` |
+| `nav.settings` | Control | as `nav.row`, margin 6 (its foot is 52 high) | `button.wc-nav-settings` |
 
 ### Shared controls
 
@@ -754,7 +780,7 @@ For a Control, the base states are these unless the row says otherwise:
 | `icon_button` | Control | 36×36; radius 999; `fg`; icon `{ size 18 }`; `checked = { background accent at 0.18, color accent_text }` | `button.wc-icon-button` |
 | `text_button` | Control | min_height 34; padding `{ 0, 6 }`; radius `shape.radius`; `text.caption`; `fg`; no background; `checked = { background accent, color on_accent }` | `button.wc-mem`: MC MR M+ M− MS M▾, DEG, F-E, the programmer bar |
 | `text_button_gap` | number | 2 | The rows' spacing (Rust) |
-| `flyout_button` | Control | as `text_button`, in `text.small`, min_height 30 (its row is 36 high, the button 3 px in from top and bottom), padding `{ 0, 6 }` | `button.wc-mem.wc-flyout-button`: Trigonometry ▾ and Function ▾ |
+| `flyout_button` | Control | as `text_button`, in `text.small`, min_height 30 (its row is 36 high, the button 3 px in from top and bottom), padding `{ 0, 6 }` | `menubutton.wc-flyout-button > button`: Trigonometry ▾ and Function ▾ (each one label, as DGMNB's; the programmer bar's Bitwise ▾ and Bit shift ▾ are `text_button`s, `menubutton.wc-text-flyout > button`) |
 | `button` | Control | background `surface2`; radius `shape.radius`; `text.body`; `fg`; min_height 34; padding `{ 0, 6 }`; `checked = { background accent, color on_accent }` | `window.gmnb.own-button dialog button:not(.flat):not(.circular):not(.image-button)`: the dialogs' buttons (the toolkit has no attribute selectors, so "every button without a `wc-` class" can't be said; the app's own buttons have rules of their own) |
 | `segmented.gap` | number | 4 | `toggle-group { border-spacing }` (half of it: see [what the toolkit was found to support](#what-the-toolkit-was-found-to-support)) |
 | `segmented.item` | Control | min_height 36; padding `{ 0, 6 }`; radius `shape.radius`; `text.small`; `fg`; background `surface2`; `checked = { background accent, color on_accent }` | `window.gmnb.own-segmented toggle-group > toggle` |
@@ -765,7 +791,7 @@ For a Control, the base states are these unless the row says otherwise:
 | `slider.fill` | Color | `accent` | `scale highlight` |
 | `slider.knob` | `{ size, color, halo, halo_size }` | 16, `accent`, `accent` at 0.16, 24 | `scale slider`; the halo shows on hover and press |
 | `switch` | `{ width, height, knob_size, off, on, knob, knob_on }` | 46, 24, 18, `border`, `accent`, `surface`, `on_accent` | `window.gmnb.own-switch switch`; the knob is `switch > slider`, centred |
-| `scrollbar` | `{ width, color, radius }` | 3, `fg_faint`, 1.5 | `window.gmnb.own-scrollbar scrollbar slider` |
+| `scrollbar` | `{ width, color, radius, inset }` | 3, `fg_faint`, 1.5, 5 (from the view's edge to the thumb's outer side) | `.wc-scroll-thumb`: the thumb the app draws over its lists (the sidebar, History, Memory) whenever one is longer than its view, as DGMNB's, and as long; `window.gmnb.own-scrollbar scrollbar slider` for the toolkit's own. A theme that hands `scrollbar` back gets the toolkit's on the lists too |
 | `card` | Surface | background `surface`; radius `shape.card_radius`; no border | `window.gmnb.own-card .card, list.boxed-list` (Settings) |
 | `card.heading` | Text | `text.strong`, `fg` | The headings over Settings' and About's cards (`preferencesgroup box.header label.heading`) |
 | `popover` | Surface | background `surface`; border `{ 1, border }`; radius `shape.card_radius`; padding 6; shadow: three rings, `{ spread 6, black 0.05 }, { spread 3, black 0.07 }, { spread 1, black 0.10 }` | `popover.wc-flyout > contents`, the calendar popover |
@@ -820,25 +846,25 @@ hook falls back to.
 The key classes are Controls but have no `checked`; a toggle that is on
 uses `keys.on`. A class takes `keys`' shared values (`radius`, `padding`,
 `min_width`, `min_height`, `transition`, `icon`, and the three states)
-as the theme set them, unless it gives its own. Superscripts and subscripts in key labels are 70% of the
-label's size (fixed).
+as the theme set them, unless it gives its own. Superscripts and subscripts in key labels are 62% of the
+label's size, raised 0.36 of it or lowered 0.16 (fixed, DGMNB's: [Text in its place](#text-in-its-place)).
 
 ### History and memory panel
 
 | Path | Kind | Base | Feeds |
 |---|---|---|---|
 | `panel` | Surface | background `surface2`; radius `shape.card_radius`; padding 8; no border, no shadow | `.wc-side-panel` (the wide window's panel) |
-| `panel.sheet` | Surface | background `surface`; border `{ 1, border }`; radius 14; the popover's three-ring shadow | `.wc-sheet` and the bottom sheet's own surface (narrow window) |
+| `panel.sheet` | Surface | background `surface`; border `{ 1, border }`; radius 14; the popover's three-ring shadow; padding 8; margin `{ 0, 6, 6, 6 }` | `bottom-sheet > sheet` (background, shadow, radius, margin) and `.wc-sheet` (padding), the narrow window's: a BottomSheet, its height DGMNB's share of the page (62%, at least 260) |
 | `panel.tabs.stretch` | boolean | `true` | Rust: the switch fills the panel's width in equal halves, or hugs its labels at the start |
 | `panel.tabs.gap` | number | 0 | the switch's spacing |
 | `panel.tabs.item` | Control | min_height 34; padding `{ 0, 6 }`; radius `shape.radius`; `text.strong`; `fg`; no background; `checked = { background accent, color on_accent }` | `.wc-toggle-group.wc-panel-tabs > toggle` *(new class)* |
-| `panel.title` | Text | `text.strong`, `fg` | `.wc-panel-title` (Programmer has memory only) |
-| `panel.row` | Control | radius `shape.row_radius`; min_height 64 (a memory row, with its three buttons under the value: 70); padding `{ 6, 10 }` | `.wc-panel-row` |
+| `panel.title` | Text | none: accepted and not drawn | Programmer has memory only, and shows its Memory tab alone across the panel, lit, as DGMNB's (0.2 showed a title) |
+| `panel.row` | Control | radius `shape.row_radius`; min_height 64 (a memory row, with its three buttons under the value: 70); padding `{ 6, 10 }`; margin `{ 0, 0, 2, 0 }` (the step to the next) | `list.wc-panel-list > row.wc-panel-row`: its hover and press cover the whole row; the padding is its content's (`.wc-row-content`); the expression line is 20 high and leaves 24 px for the ×, the result (or the value) 32. No slide-in unless `motion.history_row` |
 | `panel.expression` | Text | `text.small`, `fg_dim` | `.wc-hist-expr` |
 | `panel.result` | Text | 22 / 500 with `{ "tnum" }`, `fg` | `.wc-hist-result` (history results and memory values) |
 | `panel.delete` | Control | 22×22; radius 999; `fg`; the icon as DGMNB draws it | `button.wc-hist-delete` *(new)*: the × on each history row |
 | `panel.delete_reveal` | `"always"` or `"hover"` | `"always"` | `"hover"`: opacity 0 until the row is hovered or holds the keyboard focus. The button is always there for the keyboard and for screen readers. |
-| `panel.memory_button` | Control | background `surface2`; radius `shape.radius`; `text.caption`; `fg`; min_height 26; padding `{ 0, 8 }` | `button.wc-mem-small`: MC, M+, M− on a memory row |
+| `panel.memory_button` | Control | background `surface2`; radius `shape.radius`; `text.caption`; `fg`; min_height 26; padding `{ 0, 6 }` | `button.wc-mem-small`: MC, M+, M− on a memory row, 126 px between them, 4 apart |
 | `panel.memory_reveal` | `"always"` or `"hover"` | `"always"` | `.wc-mem-actions`, as `delete_reveal` |
 | `panel.empty` | Text | `text.small`, `fg_dim` | `.wc-empty` |
 
@@ -848,11 +874,11 @@ The trash button under the list is an `icon_button`.
 
 | Path | Kind | Base | Feeds |
 |---|---|---|---|
-| `programmer.radix.row` | Control | radius `shape.row_radius`; min_height 26; padding `{ 0, 8 }`; `checked` changes nothing | `button.wc-radix-row`; `checked` is `.wc-radix-active` |
+| `programmer.radix.row` | Control | radius `shape.row_radius`; min_height 26; padding `{ 0, 8 }`; `checked = { background accent at 0.16 over bg }` (DGMNB's `row`, selected; opaque, so it reads on a see-through window) | `button.wc-radix-row`; `checked` is `.wc-radix-active`; the name 52 px wide |
 | `programmer.radix.name` | Text | `text.strong`, `fg_dim` | `.wc-radix-name` |
 | `programmer.radix.name_checked` | Color | `accent_text` | `.wc-radix-active .wc-radix-name` |
 | `programmer.radix.value` | Text | 14 / 400 with `{ "tnum" }`, `fg` | `.wc-radix-value` |
-| `programmer.bit` | Control | radius `shape.radius`; 16 / 400; `fg`; no background; min 14×30; `checked = { background accent, color on_accent, font { weight 700 } }` | `button.wc-bit` |
+| `programmer.bit` | Control | radius `shape.radius`; 16 / 400; `fg`; no background; `checked = { background accent, color on_accent, font { weight 700 } }` | `button.wc-bit`, on DGMNB's fractional grid (`bitflip.rs`) |
 | `programmer.bit_index` | Text | `text.caption`, `fg_faint` | `.wc-bit-index` |
 
 Word size, Bitwise and Bit shift are `text_button`s (DGMNB sets them in
@@ -1522,6 +1548,8 @@ Excluded from the comparison, because the structure differs by design:
 - 16×16 px at each window corner (GMNB keeps the desktop's rounded
   corners and shadow; DGMNB's window is square).
 - The bottom sheet's drag handle (narrow window).
+- The app's name in the sidebar's header ("GMNB", "DGMNB"), and the
+  header title it covers: 47,10 to 125,36 at scale 1.
 - What the toolkit pops up: the unit list with its search box, the
   calendar's placement, menus, tooltips, the colour chooser.
 - Settings and About (GMNB: dialogs; DGMNB: a page).
@@ -1590,18 +1618,24 @@ built-in theme, each of its palettes, light and dark, at opacity 1: for
 every pair in a fixed table of (text, the fills beneath it, bottom-most
 last) the text's contrast against the composited fill is at least 4.5,
 or 3 where the text is 24 px or larger (19 px if weight ≥ 700), is an
-icon, a graph line, or an operator key's glyph (÷ × − +: a symbol, not
-text to read; DGMNB's own light palette puts them at 4.1 on `surface2`). Gradients are checked at both ends and the
+icon, a graph line, an operator key's glyph (÷ × − +: a symbol, not
+text to read; DGMNB's own light palette puts them at 4.1 on `surface2`),
+or a selected row's label (the sidebar's current page, the current
+radix: [open point 11](#open-points)). Gradients are checked at both ends and the
 middle. A translucent stack is composited over `window.background`'s
 colours. Disabled text is exempt, as in WCAG. The table covers: each key
 class and `keys.on`; `text_button` at rest and checked; the header title;
 the readout's value and expression; history expression and result;
 sidebar rows at rest and checked; `segmented` and `panel.tabs` items at
 rest and checked; `field` text and placeholder (placeholder: 2.45, see
-open point 8); chips
+open point 9); chips
 and the whimsy chip; lit bits; radix names and values; calendar days at
 rest and checked; the toast; the graph's labels, axes and each series
-colour on the canvas.
+colour on the canvas. (Not yet for Aurora: the chrome's pairs, the
+header title to the bits, are checked for the base look and Mono. Aurora's
+own values for them fail in its light palettes, and on a see-through
+window, where its `plain` has no scrim; they wait, with the pages'
+pairs, in the ignored `auroras_page_texts_read` for its polish pass.)
 
 **4. See-through** (new; 0.2 judged this by eye). The same table at
 opacity 0.1 and 0.5, each stack composited over
@@ -1791,8 +1825,16 @@ Decided here, and worth a second look by the owner:
 10. **The base look's text is set as DGMNB sets it** where the pages draw
    it (`widgets/fit.rs`): unhinted, each glyph at the nearest quarter
    pixel, the capitals centred on a whole pixel, a key's line about
-   DGMNB's fractional cell. The toolkit's own labels are hinted and
-   centred by their line height; on the date page, the converter and the
+   DGMNB's fractional cell. The toolkit's own labels were hinted (until
+   point 12) and are centred by their line height; on the date page, the converter and the
    graph pad those missed the comparison's ink-colour and blur limits by
    a little. The calculator's keypad (`widgets/keypad.rs`) still uses
    the toolkit's labels.
+11. **A selected row's label counts as a mark** in the readability rules
+    (3:1): the sidebar's current page and the current radix are
+    `accent_text` on the accent at .16, which DGMNB's own colours put at
+    3.6:1 light and 4.4:1 dark. The tint shows the selection too. The
+    alternative is again to move `accent_text` in `appcore`.
+12. **GMNB draws text unhinted, as DGMNB**, whatever the desktop's font
+    settings say ([Text in its place](#text-in-its-place)). It applies to
+    every theme and to the dialogs, and to the toolkit's own labels.
