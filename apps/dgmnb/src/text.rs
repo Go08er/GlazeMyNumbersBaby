@@ -69,6 +69,9 @@ pub struct Line {
     pub cap: f32,
     /// (byte offset, x) at every cluster boundary, plus the end.
     pub carets: Vec<(usize, f32)>,
+    /// The source string, kept only while boxes are being recorded
+    /// (`DGMNB_TEXT_BOXES`); empty otherwise.
+    pub text: String,
 }
 
 impl Line {
@@ -116,6 +119,21 @@ pub struct Text {
     cache: HashMap<Key, Option<Raster>>,
     /// Which font draws a character (memoised).
     pick: HashMap<char, u8>,
+    /// Boxes of what is drawn, when the dev hook `DGMNB_TEXT_BOXES` asks.
+    boxes: Option<Vec<Ink>>,
+}
+
+/// One drawn run (or curve), in physical pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ink {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub text: String,
+    pub kind: &'static str,
+    /// A curve's colour, 8 bits per channel.
+    pub color: Option<[u8; 3]>,
 }
 
 impl Default for Text {
@@ -139,6 +157,7 @@ impl Text {
             scale: ScaleContext::new(),
             cache: HashMap::new(),
             pick: HashMap::new(),
+            boxes: None,
         }
     }
 
@@ -173,7 +192,45 @@ impl Text {
     pub fn layout(&mut self, text: &str, style: Style) -> Line {
         let mut line = self.empty_line(style);
         self.append(&mut line, text, 0, style, 0.0);
+        if self.boxes.is_some() {
+            line.text = text.to_string();
+        }
         line
+    }
+
+    /// Start (or stop) recording the box of everything drawn.
+    pub fn record_boxes(&mut self, on: bool) {
+        self.boxes = on.then(Vec::new);
+    }
+
+    /// The boxes recorded since `record_boxes(true)`, emptied.
+    pub fn take_boxes(&mut self) -> Vec<Ink> {
+        self.boxes.as_mut().map(std::mem::take).unwrap_or_default()
+    }
+
+    /// Note a drawn box (physical pixels), if recording.
+    pub fn note_box(
+        &mut self,
+        kind: &'static str,
+        r: [i32; 4],
+        text: &str,
+        color: Option<[u8; 3]>,
+    ) {
+        let [x, y, w, h] = r;
+        if let Some(b) = self.boxes.as_mut()
+            && w > 0
+            && h > 0
+        {
+            b.push(Ink {
+                x,
+                y,
+                w,
+                h,
+                text: text.to_string(),
+                kind,
+                color,
+            });
+        }
     }
 
     /// Shape a label with `<sup>…</sup>` / `<sub>…</sub>` spans.
@@ -217,6 +274,9 @@ impl Text {
             self.append(&mut line, chunk, offset, st, dy);
             offset += chunk.len();
             rest = tail;
+        }
+        if self.boxes.is_some() {
+            line.text = markup.to_string();
         }
         line
     }
@@ -363,6 +423,8 @@ impl Text {
     /// Draw `line` with its origin (left end of the baseline) at `(x, y)`.
     pub fn draw(&mut self, canvas: &mut Canvas, line: &Line, x: f32, y: f32, color: Color) {
         let s = canvas.scale;
+        // The ink's box, only while recording.
+        let mut ink: Option<(i32, i32, i32, i32)> = None;
         for g in &line.glyphs {
             let px = (x + g.x) * s;
             let py = ((y + g.y) * s).round();
@@ -386,7 +448,18 @@ impl Text {
             }
             if let Some(Some(r)) = self.cache.get(&key) {
                 canvas.blit_mask(ix + r.left, py as i32 - r.top, r.w, r.h, &r.data, color);
+                if self.boxes.is_some() {
+                    let (x0, y0) = (ix + r.left, py as i32 - r.top);
+                    let (x1, y1) = (x0 + r.w as i32, y0 + r.h as i32);
+                    ink = Some(match ink {
+                        None => (x0, y0, x1, y1),
+                        Some((a, b, c, d)) => (a.min(x0), b.min(y0), c.max(x1), d.max(y1)),
+                    });
+                }
             }
+        }
+        if let Some((x0, y0, x1, y1)) = ink {
+            self.note_box("text", [x0, y0, x1 - x0, y1 - y0], &line.text, None);
         }
     }
 

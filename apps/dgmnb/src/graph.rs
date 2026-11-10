@@ -1497,6 +1497,27 @@ impl GraphPage {
                     _ => None,
                 };
                 f.cv.stroke_path(&p, color, self.line_width as f32, dash);
+                // Dev hook (DGMNB_TEXT_BOXES): the curve's box, clipped to the plot.
+                let b = p.bounds();
+                let pad = self.line_width as f32 / 2.0;
+                let (x0, y0) = ((b.left() - pad).max(r.x), (b.top() - pad).max(r.y));
+                let (x1, y1) = (
+                    (b.right() + pad).min(r.x + r.w),
+                    (b.bottom() + pad).min(r.y + r.h),
+                );
+                let s = f.cv.scale;
+                let c8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                f.text.note_box(
+                    "curve",
+                    [
+                        (x0 * s).floor() as i32,
+                        (y0 * s).floor() as i32,
+                        ((x1 - x0) * s).ceil() as i32,
+                        ((y1 - y0) * s).ceil() as i32,
+                    ],
+                    "curve",
+                    Some([c8(color.0[0]), c8(color.0[1]), c8(color.0[2])]),
+                );
             }
             // Proven holes ((x²−1)/(x−1) at 1): open circles over the gap.
             let hole_r = graphing::graph::trace_point_radius(self.line_width) as f32 + 1.0;
