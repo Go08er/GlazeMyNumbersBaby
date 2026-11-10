@@ -400,8 +400,10 @@ impl Layers {
             .and_then(|(x, y)| pad.compute_point(&button, &graphene::Point::new(x, y)))
             .map(|p| (p.x(), p.y()));
         happened.source = Some(Source::Key);
+        // A click's way is the keypad's to say (it sees what happens in a
+        // flyout, whose grab keeps the window's controllers from it).
         happened.via = Some(if at.is_some() {
-            self.via()
+            pad.clicked_via()
         } else {
             Via::Keyboard
         });
@@ -515,11 +517,14 @@ impl Layers {
         if listeners.is_empty() {
             return;
         }
-        let Some(root) = happened
-            .widget
-            .and_then(|w| w.root())
-            .map(|r| r.upcast::<gtk::Widget>())
-        else {
+        // In the window's coordinates: the window of the widget it came
+        // from, or of any layer for an event from nowhere in particular.
+        let root = happened.widget.and_then(|w| w.root()).or_else(|| {
+            self.live()
+                .iter()
+                .find_map(|i| i.widget.upgrade().and_then(|w| w.root()))
+        });
+        let Some(root) = root.map(|r| r.upcast::<gtk::Widget>()) else {
             return;
         };
         let size = (root.width() as f32, root.height() as f32);
@@ -1252,13 +1257,17 @@ end } } }
     /// every degenerate argument, with the toolkit's criticals fatal.
     ///
     /// It needs a display for the toolkit to start on:
-    /// `GMNB_TEST_WAYLAND_DISPLAY` names a compositor (a headless
+    /// `GMNB_TEST_WAYLAND_DISPLAY` (or `DGMNB_TEST_WAYLAND_DISPLAY`, which
+    /// the workspace's tests are run with) names a compositor (a headless
     /// weston's socket), and the test is skipped without one. The
     /// toolkit runs in a process of its own (this test again, with that
     /// display in its environment).
     #[test]
     fn layers_render_as_expected() {
-        let Some(display) = std::env::var_os("GMNB_TEST_WAYLAND_DISPLAY") else {
+        // The same compositor DGMNB's display test is given will do.
+        let named = std::env::var_os("GMNB_TEST_WAYLAND_DISPLAY")
+            .or_else(|| std::env::var_os("DGMNB_TEST_WAYLAND_DISPLAY"));
+        let Some(display) = named else {
             eprintln!("GMNB_TEST_WAYLAND_DISPLAY not set; skipped");
             return;
         };

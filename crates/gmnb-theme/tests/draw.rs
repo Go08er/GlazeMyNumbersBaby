@@ -705,6 +705,75 @@ fn a_hook_that_fails_or_runs_out_of_time_draws_nothing_and_strikes() {
     assert!(theme.hooks().is_empty());
 }
 
+#[test]
+fn the_heap_cap_holds_through_the_librarys_functions() {
+    // The library's functions build their values with the cap lifted (a
+    // speed-up). A theme that keeps what they return in a table it made
+    // beforehand allocates nothing itself: the cap must stop it all the
+    // same, and stopping it unloads the theme.
+    let cap = 2 << 20;
+    let limits = Limits {
+        memory: cap,
+        ..patient()
+    };
+    let d = dir("heapcap");
+    let theme = load_in(
+        &d,
+        r##"
+        local kept = table.create(40000)
+        local sixteen = {}
+        for i = 1, 16 do sixteen[i] = "#ff8800" end
+        local spec = { colors = sixteen }
+        return { api = 1, name = "T", layers = { background = { draw = function(draw, frame)
+            for i = 1, #kept == 0 and 40000 or 0 do
+                kept[i] = gmnb.linear(spec)
+            end
+        end } } }
+        "##,
+        limits,
+    );
+    assert!(matches!(
+        run(&theme),
+        Err(Failure::Failed(ThemeError::Memory(_)))
+    ));
+    assert!(theme.is_dead());
+    // Over by no more than the one value the last call built.
+    let used = theme.engine().used_memory();
+    assert!(
+        used <= cap + (64 << 10),
+        "{used} bytes in a heap capped at {cap}"
+    );
+    // Caught by the theme, it is still stopped: nothing more can be made.
+    let d = dir("heapcap-caught");
+    let theme = load_in(
+        &d,
+        r##"
+        local kept = table.create(40000)
+        local spec = { colors = { "#ff8800", "#0088ff", "#ff8800", "#0088ff", "#ff8800", "#0088ff", "#ff8800", "#0088ff" } }
+        local made = 0
+        return { api = 1, name = "T", layers = { background = { draw = function(draw, frame)
+            for i = 1, 40000 do
+                local ok, g = pcall(gmnb.linear, spec)
+                if not ok then break end
+                made += 1
+                kept[made] = g
+            end
+            draw:rect(0, 0, made, 1, "#ffffff")
+        end } } }
+        "##,
+        Limits {
+            memory: cap,
+            ..patient()
+        },
+    );
+    let _ = run(&theme);
+    let used = theme.engine().used_memory();
+    assert!(
+        used <= cap + (64 << 10),
+        "{used} bytes in a heap capped at {cap}"
+    );
+}
+
 // ---- Determinism ----------------------------------------------------------------------
 
 #[test]

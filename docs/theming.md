@@ -1654,12 +1654,13 @@ the widget it came from (the name its page has in the window's stack).
 
 - **`action`**: a key is `"backspace"` by its icon and `"clear"` by its
   label (C, CE); `Keypad::key_meaning`.
-- **`via`**: the backdrop notes every pointer press in the window and
-  every Space or Enter (capture phase, never claimed). A control that
-  says it was used within a second of a pointer press was used by the
-  pointer; else within a second of Space or Enter, by the keyboard; else
-  through the accessibility interface (`"assistive"`). A key typed on
-  the keyboard that presses its key on screen is always `"keyboard"`.
+- **`via`**: a keypad notes every pointer press on it and every Space or
+  Enter (capture phase, never claimed), and the backdrop does the same
+  for the rest of the window. A control that says it was used within a
+  second of a pointer press on it was used by the pointer; else within a
+  second of Space or Enter, by the keyboard; else through the
+  accessibility interface (`"assistive"`). A key typed on the keyboard
+  that presses its key on screen is always `"keyboard"`.
 
 `Display::set_value`'s `Change` also becomes `frame.value.change` for
 that readout, while a theme's display layer draws it.

@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
 
-use gmnb_theme::events::{Action, KeyKind as CellKind};
+use gmnb_theme::events::{Action, KeyKind as CellKind, Via};
 use gmnb_theme::layer::{KeyCell, Keys, LayerKind};
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
@@ -87,6 +87,10 @@ mod imp {
         pub(super) cells: RefCell<Vec<Cell_>>,
         pub handlers: RefCell<Vec<PressedFn>>,
         pub last_press: Cell<Option<(f32, f32, Instant)>>,
+        /// When Space or Enter was last pressed on one of the keys.
+        pub last_activation: Cell<Option<Instant>>,
+        /// How the key clicked last was clicked.
+        pub via: Cell<Via>,
         /// From the style: the keys' corner radius (`keys.radius`), the
         /// grid's gap (`keys.gap`) and the compact one's
         /// (`keys.gap_compact`), and which of the two is in use.
@@ -119,6 +123,8 @@ mod imp {
                 cells: RefCell::default(),
                 handlers: RefCell::default(),
                 last_press: Cell::new(None),
+                last_activation: Cell::new(None),
+                via: Cell::new(Via::Pointer),
                 radius: Cell::new(appcore::metrics::shape::RADIUS),
                 gaps: Cell::new((
                     appcore::metrics::calc::KEY_GAP,
@@ -189,6 +195,25 @@ mod imp {
                     }
                 });
                 obj.add_controller(click);
+
+                // And Space or Enter on a key with the focus: a click with
+                // neither before it came through the accessibility
+                // interface.
+                let keys = gtk::EventControllerKey::new();
+                keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+                let weak = obj.downgrade();
+                keys.connect_key_pressed(move |_, key, _, _| {
+                    use gtk::gdk::Key;
+                    if matches!(
+                        key,
+                        Key::space | Key::Return | Key::KP_Enter | Key::ISO_Enter
+                    ) && let Some(k) = weak.upgrade()
+                    {
+                        k.imp().last_activation.set(Some(Instant::now()));
+                    }
+                    glib::Propagation::Proceed
+                });
+                obj.add_controller(keys);
             }
 
             obj.connect_map(|k| k.cascade());
@@ -469,22 +494,37 @@ impl Keypad {
         let Some(rect) = button.compute_bounds(self) else {
             return;
         };
-        let (x, y) = match self.imp().last_press.take() {
-            Some((x, y, t))
-                if t.elapsed().as_secs_f32() < 1.0
-                    && rect.contains_point(&graphene::Point::new(x, y)) =>
-            {
+        let imp = self.imp();
+        let recent = |t: Instant| t.elapsed().as_secs_f32() < 1.0;
+        let (x, y) = match imp.last_press.take() {
+            Some((x, y, t)) if recent(t) && rect.contains_point(&graphene::Point::new(x, y)) => {
+                imp.via.set(Via::Pointer);
                 (x, y)
             }
-            _ => (
-                rect.x() + rect.width() / 2.0,
-                rect.y() + rect.height() / 2.0,
-            ),
+            _ => {
+                imp.via
+                    .set(if imp.last_activation.take().is_some_and(recent) {
+                        Via::Keyboard
+                    } else {
+                        Via::Assistive
+                    });
+                (
+                    rect.x() + rect.width() / 2.0,
+                    rect.y() + rect.height() / 2.0,
+                )
+            }
         };
         let handlers: Vec<PressedFn> = self.imp().handlers.borrow().clone();
         for h in handlers {
             h(id, x, y);
         }
+    }
+
+    /// How the key clicked last was clicked: by the pointer, by Space or
+    /// Enter with the focus on it, or through the accessibility
+    /// interface (neither came before the click).
+    pub fn clicked_via(&self) -> Via {
+        self.imp().via.get()
     }
 
     /// A key typed on the keyboard: it is shown `active` for 110 ms.

@@ -100,9 +100,13 @@ fn with_alpha(c: Rgb, a: f32) -> Rgba {
 /// in a protected call, in case the allocation fails: a colour table then
 /// costs five of them, and a theme makes dozens of colours and gradients a
 /// frame. Lifted, they are plain (Aurora's background with thirteen pulses
-/// went from 0.55 ms to 0.2 ms a frame). The cap is back when `f` returns: what was built counts, and if
-/// it took the heap over the cap, the script's next allocation fails as it
-/// should. The overshoot is never more than the one value.
+/// went from 0.55 ms to 0.2 ms a frame).
+///
+/// The cap is back when `f` returns, and it is checked then: if what was
+/// built took the heap over it, the call fails with the memory error the
+/// allocation would have raised. So the cap holds through these functions
+/// too, to within the one value a call builds (a theme that keeps what
+/// they return in a table it made beforehand allocates nothing itself).
 fn uncapped<R>(lua: &Lua, f: impl FnOnce() -> mlua::Result<R>) -> mlua::Result<R> {
     struct Restore<'a>(&'a Lua, usize);
     impl Drop for Restore<'_> {
@@ -111,8 +115,16 @@ fn uncapped<R>(lua: &Lua, f: impl FnOnce() -> mlua::Result<R>) -> mlua::Result<R
         }
     }
     let cap = lua.set_memory_limit(0)?;
-    let _restore = Restore(lua, cap);
-    f()
+    let result = {
+        let _restore = Restore(lua, cap);
+        f()
+    };
+    if cap != 0 && lua.used_memory() > cap {
+        return Err(mlua::Error::MemoryError(
+            "the theme's heap is over its cap".into(),
+        ));
+    }
+    result
 }
 
 /// A library function that runs with the heap cap lifted ([`uncapped`]):
