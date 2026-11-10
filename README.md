@@ -238,13 +238,14 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **1,486 tests** (counts include
-doctests; eleven more are `#[ignore]`d: a live currency fetch, the full
+`nix develop -c cargo test --workspace` runs **1,490 tests** (counts include
+doctests; twelve more are `#[ignore]`d: a live currency fetch, the full
 metamorphic graph sweep, 20,000 random saved sessions, the
 cross-checking tester's long run, single-expression check and case list,
 the theme engine's frame-call timing, three measurements of what a
-theme's pictures cost, and Swirls' paint written out frame by frame for
-looking at).
+theme's pictures cost, Swirls' paint written out frame by frame for
+looking at, and the hostile Vorbis files their own test decodes in a
+child process).
 `cargo run --release -p graphing --example sweep`
 checks graph analysis against about 3,400 generated functions (shifted,
 offset, scaled and stretched variants, close and far centres, jumps,

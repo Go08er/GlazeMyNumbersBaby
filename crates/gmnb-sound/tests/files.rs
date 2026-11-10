@@ -535,15 +535,16 @@ fn greedy_vorbis_child() {
 /// A sound file in a theme's folder is the theme author's, and the
 /// decoder reads its headers: one whose headers ask for more memory than
 /// the machine has is refused like any damaged file, and does not take
-/// the app down with it. (In a child with 4 GiB of address space, so that
-/// the outcome is the same whatever the machine's overcommit policy.)
+/// the app down with it. (In a child with 4 GiB of address space where
+/// the shell can set that, so that the outcome is the same whatever the
+/// machine's overcommit policy.)
 #[test]
 fn greedy_vorbis_headers_are_refused_not_fatal() {
     let exe = std::env::current_exe().unwrap();
     let out = std::process::Command::new("sh")
         .arg("-c")
         .arg(concat!(
-            "ulimit -v 4194304 && exec \"$0\" --exact greedy_vorbis_child",
+            "ulimit -v 4194304; exec \"$0\" --exact greedy_vorbis_child",
             " --ignored --nocapture --test-threads=1"
         ))
         .arg(&exe)
