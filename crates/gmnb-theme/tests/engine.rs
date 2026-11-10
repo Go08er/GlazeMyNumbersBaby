@@ -28,6 +28,19 @@ fn engine() -> Engine {
     Engine::new(quick()).unwrap()
 }
 
+/// Deadlines that real work (filling the heap, building big tables) can't
+/// reach on a loaded machine, for tests that expect another outcome.
+fn roomy() -> Engine {
+    let long = Duration::from_secs(5);
+    Engine::new(Limits {
+        load: long,
+        style: long,
+        frame: long,
+        ..Limits::default()
+    })
+    .unwrap()
+}
+
 fn load(e: &Engine, src: &str) -> Result<ThemeValue, ThemeError> {
     e.load("=test", src)
 }
@@ -252,7 +265,7 @@ fn deeply_nested_source_is_a_syntax_error() {
 
 #[test]
 fn string_rep_memory_bomb() {
-    let e = engine();
+    let e = roomy();
     assert_eq!(
         load(&e, "return #string.rep('x', 64 * 1024 * 1024)"),
         Err(ThemeError::Memory(8 << 20))
@@ -266,7 +279,7 @@ fn string_rep_memory_bomb() {
 
 #[test]
 fn table_growth_memory_bomb() {
-    let e = engine();
+    let e = roomy();
     let f = hook(
         &e,
         "return function() local t = {} for i = 1, 1e9 do t[i] = i end end",
@@ -288,7 +301,7 @@ fn table_growth_memory_bomb() {
 #[test]
 fn a_caught_memory_error_stays_under_the_cap() {
     // A script may catch the error; the cap held all the same.
-    let e = engine();
+    let e = roomy();
     assert_eq!(
         load(
             &e,
@@ -300,7 +313,7 @@ fn a_caught_memory_error_stays_under_the_cap() {
 
 #[test]
 fn host_work_with_the_heap_full_fails_cleanly() {
-    let e = engine();
+    let e = roomy();
     // Fill the heap, keep it full, and hand back more than fits.
     let r = load(
         &e,
@@ -690,7 +703,7 @@ fn print_writes_to_a_capped_log() {
 
 #[test]
 fn tables_become_arrays_and_maps() {
-    let e = engine();
+    let e = roomy();
     assert_eq!(
         load(
             &e,
@@ -749,7 +762,7 @@ fn tables_become_arrays_and_maps() {
 
 #[test]
 fn cyclic_tables() {
-    let e = engine();
+    let e = roomy();
     for src in [
         "local t = {} t.me = t return t",
         "local a, b = {}, {} a.b = b b.a = a return a",
@@ -772,7 +785,7 @@ fn cyclic_tables() {
 
 #[test]
 fn deep_and_wide_trees_are_capped() {
-    let e = engine();
+    let e = roomy();
     let nest = |n: usize| format!("local t = 1 for i = 1, {n} do t = {{t}} end return t");
     // 32 tables deep is the cap.
     assert!(load(&e, &nest(32)).is_ok());
@@ -810,7 +823,7 @@ fn deep_and_wide_trees_are_capped() {
 
 #[test]
 fn numbers() {
-    let e = engine();
+    let e = roomy();
     for (src, want) in [
         ("return 3", ThemeValue::Int(3)),
         ("return -7", ThemeValue::Int(-7)),
