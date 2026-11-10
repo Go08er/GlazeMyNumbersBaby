@@ -2,9 +2,10 @@
 //! load, every event plays what the theme means it to, its `sound`
 //! function stays inside its 2 ms, and its bank is small.
 //!
-//! The events are made and decided by the stand-in for the app that the
-//! render example uses, so what is tested here is what
-//! `tools/theming/sound_check.py` measures.
+//! The events are made by the stand-in for the app that the render
+//! example uses, and decided by the app's own code
+//! (`gmnb_theme::sound::decide`), so what is tested here is what
+//! `tools/theming/sound_check.py` measures and what the app plays.
 
 #[path = "../../gmnb-sound/examples/support/stand_in.rs"]
 mod stand_in;

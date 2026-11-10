@@ -36,7 +36,7 @@ effect of its readout are in its `theme.luau`. Pictures from files
 comes with the media chapter's code.
 
 Sounds are declared and checked (`sounds`, `sound`, `gmnb.synth`), and the
-engine that plays them is built (`crates/gmnb-sound`), but the app does
-not hand it a theme's events yet. Until it does, Aurora's sounds can be
-rendered to WAV files, measured and drawn without the app:
+app plays them (`crates/gmnb-sound`; Settings → Sound turns them off and
+sets their volume). They can also be rendered to WAV files, measured and
+drawn without the app, decided as the app decides them:
 [Designing sounds](../../../docs/theming-media.md#designing-sounds-a-few-rules-that-work).
