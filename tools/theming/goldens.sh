@@ -12,7 +12,8 @@ OUT=${1:?outdir}; BIN=${2:?bindir}; WHICH=${3:-all}
 mkdir -p "$OUT"
 fresh() { # a new profile (the pages' shots: a graph saved by one isn't restored by the next)
   X=$(mktemp -d "$SP/xdg.XXXX"); mkdir -p "$X"/{config,data,cache,state}
-  base=(env -u DISPLAY -u DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY=wincalc-shot XDG_CONFIG_HOME="$X/config"
+  base=(env -u DISPLAY -u DBUS_SESSION_BUS_ADDRESS -u PULSE_SERVER -u PULSE_RUNTIME_PATH GMNB_SOUND=null
+        WAYLAND_DISPLAY=wincalc-shot XDG_CONFIG_HOME="$X/config"
         XDG_DATA_HOME="$X/data" XDG_CACHE_HOME="$X/cache" XDG_STATE_HOME="$X/state" GTK_A11Y=none NO_AT_BRIDGE=1
         dbus-run-session --config-file="$SP/privbus.conf" --)
 }
