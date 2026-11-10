@@ -735,6 +735,60 @@ fn the_built_in_themes_load_and_return_only_known_keys() {
     }
 }
 
+/// Every page fits the least window, 300 × 400 (docs/theming.md, open
+/// point 2), under Aurora too. Its keys asked for 40 × 38 at least and its
+/// bits for 14 × 30, where the base's ask for nothing: there the window
+/// grew instead (Standard to 300 × 470, Scientific to 300 × 581). Now the
+/// keys and the bits take what room the window gives them, as the base's.
+#[test]
+fn auroras_keys_keep_no_least_size_beyond_the_bases() {
+    let mut aurora = built_in("aurora");
+    let base = Style::base(&Ctx::default());
+    for palette in PALETTES {
+        for dark in [false, true] {
+            for opacity in [1.0, 0.5] {
+                let saved = BTreeMap::from([(
+                    "palette".to_string(),
+                    OptionValue::Text(palette.to_string()),
+                )]);
+                let c = Ctx {
+                    dark,
+                    opacity,
+                    options: theme::complete_options(&aurora.def.options, &saved),
+                    ..Ctx::default()
+                };
+                let style = aurora.style(&c).unwrap().style.clone();
+                for path in ["keys.min_width", "keys.min_height"] {
+                    assert!(
+                        style.number(path) <= base.number(path),
+                        "{palette} {dark} {opacity} {path}: {} (the base's: {})",
+                        style.number(path),
+                        base.number(path)
+                    );
+                }
+                for path in [
+                    "keys.number",
+                    "keys.func",
+                    "keys.operator",
+                    "keys.equals",
+                    "programmer.bit",
+                ] {
+                    let (ours, theirs) =
+                        (style.control(path).unwrap(), base.control(path).unwrap());
+                    assert!(
+                        ours.min_width <= theirs.min_width && ours.min_height <= theirs.min_height,
+                        "{palette} {dark} {opacity} {path}: {} × {} (the base's: {} × {})",
+                        ours.min_width,
+                        ours.min_height,
+                        theirs.min_width,
+                        theirs.min_height
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// The themes Settings lists, and "your copy".
 #[test]
 fn discovery_lists_built_ins_then_the_users() {

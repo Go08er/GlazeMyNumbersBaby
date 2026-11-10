@@ -825,8 +825,10 @@ local function style(ctx: Ctx): Style
 			gap = 5,
 			gap_compact = 3,
 			radius = KEY_RADIUS,
-			min_width = 40,
-			min_height = 38,
+			-- No least size: in the least window, 300 × 400, the keys take
+			-- what room is left, as the base's do (and so do the bits).
+			min_width = 0,
+			min_height = 0,
 			padding = { 0, 2 },
 			icon = { size = 22, stroke = 1.9 * (0.6 + 0.4 * 22 / 24) },
 			-- (320 ms: the keypad layer's SPRING_BACK.)
@@ -975,8 +977,8 @@ local function style(ctx: Ctx): Style
 				value = { font = { family = "Outfit", size = 15, weight = 400, features = { "tnum" } }, color = fg },
 			},
 			bit = {
-				min_width = 14,
-				min_height = 30,
+				min_width = 0,
+				min_height = 0,
 				padding = 0,
 				radius = 8,
 				font = outfit(15),
