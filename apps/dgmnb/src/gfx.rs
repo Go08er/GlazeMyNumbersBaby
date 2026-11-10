@@ -16,9 +16,6 @@ use tiny_skia::{
 pub struct Color(pub [f32; 4]);
 
 impl Color {
-    pub const fn rgb(c: [f32; 3]) -> Color {
-        Color([c[0], c[1], c[2], 1.0])
-    }
     pub fn alpha(self, a: f32) -> Color {
         let [r, g, b, a0] = self.0;
         Color([r, g, b, a0 * a])
