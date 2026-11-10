@@ -116,6 +116,8 @@ pub struct Hub {
     notes: RefCell<Vec<Note>>,
     /// `style` has failed and the user has been told.
     style_failed: Cell<bool>,
+    /// The loaded theme's `style` has worked at least once.
+    styled: Cell<bool>,
     options: RefCell<BTreeMap<String, BTreeMap<String, OptionValue>>>,
     run_options: RefCell<Vec<(String, String)>>,
     opacity: Cell<f32>,
@@ -202,6 +204,7 @@ impl Hub {
             error: RefCell::new(None),
             notes: RefCell::default(),
             style_failed: Cell::new(false),
+            styled: Cell::new(false),
             options: RefCell::new(config.saved_options),
             run_options: RefCell::new(config.run_options),
             opacity: Cell::new(config.opacity),
@@ -474,6 +477,7 @@ impl Hub {
         self.error.replace(None);
         self.notes.borrow_mut().clear();
         self.style_failed.set(false);
+        self.styled.set(false);
         // Unload first: one machine at a time.
         self.theme.replace(None);
         if !id.is_empty() {
@@ -785,7 +789,10 @@ impl Hub {
                         });
                     }
                     match result {
-                        Ok(resolved) => Some(resolved),
+                        Ok(resolved) => {
+                            self.styled.set(true);
+                            Some(resolved)
+                        }
                         Err(e) => {
                             if theme.is_dead() {
                                 unload = Some(e.to_string());
@@ -801,7 +808,13 @@ impl Hub {
                                     ));
                                 }
                             }
-                            None
+                            // The theme's last style that worked stands;
+                            // if none has, the base look (not the style
+                            // of the theme before it).
+                            (!self.styled.get()).then(|| gmnb_theme::Resolved {
+                                style: Style::base(&ctx),
+                                notes: Default::default(),
+                            })
                         }
                     }
                 }

@@ -12,6 +12,8 @@
 //! - `activate:<id>`: the same key activated as assistive technology
 //!   activates it (no pointer, no key);
 //! - `wait:<ms>`: a longer pause;
+//! - `theme:<id>`: that theme chosen, as Settings' list chooses it (`base`:
+//!   the base look), without saving the choice;
 //! - `quit`: what sound has done, a line on stderr (as `GMNB_THEME_STATS`
 //!   writes it), and the window closed.
 
@@ -30,6 +32,7 @@ enum Step {
     Click(u32),
     Activate(u32),
     Wait(u64),
+    Theme(String),
     Quit,
 }
 
@@ -45,6 +48,7 @@ fn parse(spec: &str) -> VecDeque<Step> {
                 "click" => Step::Click(arg.trim().parse().ok()?),
                 "activate" => Step::Activate(arg.trim().parse().ok()?),
                 "wait" => Step::Wait(arg.trim().parse().ok()?),
+                "theme" => Step::Theme(arg.trim().to_string()),
                 _ => {
                     eprintln!("GMNB_STEPS: what is {part:?}?");
                     return None;
@@ -104,6 +108,7 @@ fn next(win: Rc<Window>, steps: std::cell::RefCell<VecDeque<Step>>, gap: u64) {
             }
         }
         Step::Wait(ms) => pause = ms,
+        Step::Theme(id) => win.ctx().hub.set_theme(&id),
         Step::Quit => {
             eprintln!("sound: {}", win.ctx().hub.sound_report());
             win.widget().close();

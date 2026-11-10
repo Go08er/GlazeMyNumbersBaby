@@ -110,6 +110,45 @@ fn run(display: &Path, theme: &str, env: &[(&str, &str)], ms: u64) -> String {
     reader.join().unwrap()
 }
 
+/// A theme whose `style` fails the first time is chosen: the base look
+/// shows ("the last style that worked, or the base look"), not the style
+/// of the theme chosen before it, which stood under the new theme's
+/// name. GMNB in Glazed, then the theme chosen (`GMNB_STEPS`' `theme:`),
+/// pictured once the toast that says so is gone, is pixel for pixel GMNB
+/// started in that theme.
+#[test]
+fn a_theme_whose_style_fails_shows_the_base_look() {
+    let Some(display) = display() else {
+        eprintln!("skipped: no GMNB_TEST_WAYLAND_DISPLAY or DGMNB_TEST_WAYLAND_DISPLAY");
+        return;
+    };
+    const THEME: &str = r#"
+return { api = 1, name = "Broken", style = function(ctx) error("no style", 0) end }"#;
+    let shots = std::env::temp_dir().join(format!("gmnb-settings-shots-{}", std::process::id()));
+    std::fs::create_dir_all(&shots).unwrap();
+    let (started, switched) = (shots.join("started.png"), shots.join("switched.png"));
+    let common = [("GMNB_STILL", "1"), ("GMNB_MODE", "standard")];
+    let shot = |path: &Path, more: &[(&str, &str)], delay: &str| {
+        let mut env: Vec<(&str, &str)> = common.to_vec();
+        env.extend_from_slice(more);
+        env.push(("GMNB_SCREENSHOT", path.to_str().unwrap()));
+        env.push(("GMNB_SCREENSHOT_DELAY_MS", delay));
+        run(&display, THEME, &env, 30_000)
+    };
+    let err = shot(&started, &[("GMNB_THEME", "dev")], "2000");
+    assert!(err.contains("has a problem"), "{err}");
+    let err = shot(
+        &switched,
+        &[("GMNB_THEME", "glazed"), ("GMNB_STEPS", "theme:dev")],
+        "7500",
+    );
+    assert!(err.contains("has a problem"), "{err}");
+    let (a, b) = (std::fs::read(&started), std::fs::read(&switched));
+    let _ = std::fs::remove_dir_all(&shots);
+    let (a, b) = (a.expect("a picture"), b.expect("a picture"));
+    assert!(a == b, "chosen after Glazed, the broken theme isn't the base look");
+}
+
 /// As many options as a theme may have (24), each a choice of as many
 /// choices as it may have (16), each with a tile: Settings draws each tile
 /// once ("a tile's picture until `ctx` changes"). It drew the tiles of
