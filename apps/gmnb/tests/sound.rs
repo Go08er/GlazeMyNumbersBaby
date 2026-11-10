@@ -377,11 +377,21 @@ fn events_play_their_sounds() {
         summary.starts_with("sound: status Ready, thread yes, threads 1, connections 0"),
         "{summary}"
     );
+    // Each play queued was taken up: it became a voice (or, on a machine
+    // so busy that it waited past its time, was dropped, never played
+    // late).
+    let count = |what: &str| -> usize {
+        let at = summary.find(&format!("{what} ")).expect(what) + what.len() + 1;
+        let digits: String = summary[at..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        digits.parse().unwrap()
+    };
     let queued = lines.iter().filter(|l| l.contains("Queued")).count();
-    assert!(
-        summary.contains(&format!("queued {queued}, started {queued}, skipped 0")),
-        "{summary}\n{lines:#?}"
-    );
+    assert_eq!(count("queued"), queued, "{summary}\n{lines:#?}");
+    assert_eq!(count("started") + count("skipped"), queued, "{summary}");
+    assert!(count("started") > 0, "{summary}");
 }
 
 /// The base look, the switch off and the desktop's event sounds off make

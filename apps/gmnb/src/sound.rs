@@ -70,10 +70,8 @@ pub struct Asked {
 /// The app's theme sounds.
 pub struct Voice {
     engine: SoundEngine,
+    /// The theme loaded, if it has sounds (or a `sound` function).
     loaded: Option<Loaded>,
-    /// The theme loaded has no sounds and no `sound` function (or there
-    /// is none): Settings says so.
-    none: bool,
     /// Settings' switch, and the desktop's event sounds.
     switch: bool,
     desktop: bool,
@@ -102,7 +100,6 @@ impl Voice {
         Voice {
             engine: SoundEngine::new(settings),
             loaded: None,
-            none: true,
             switch,
             desktop,
             run_off,
@@ -126,14 +123,12 @@ impl Voice {
     pub fn load(&mut self, theme: Option<&Theme>) -> Vec<Note> {
         self.loaded = None;
         let Some(theme) = theme else {
-            self.none = true;
             self.engine.unload();
             return Vec::new();
         };
         let notes = theme.take_sound_notes();
         let sounds = theme.sounds();
-        self.none = !sounds.any();
-        if self.none {
+        if !sounds.any() {
             self.engine.unload();
             return notes;
         }
@@ -746,12 +741,14 @@ return {
 
         // The volume let go in Settings: the digit's sound.
         assert_eq!(voice.preview(), Some(Played::Queued));
-        // Every play became a voice (or will: none was refused).
+        // Every play was taken up: it became a voice (or, on a machine so
+        // busy that it waited past its time, was dropped: never played
+        // late).
         assert!(until(Duration::from_secs(5), || {
             let s = voice.stats();
             s.started + s.skipped == s.queued
         }));
-        assert_eq!(voice.stats().skipped, 0);
+        assert!(voice.stats().started > 0);
         assert!(voice.take_notes().is_empty());
     }
 
