@@ -301,18 +301,29 @@ impl Wake for Unpark {
 }
 
 /// Runs `fut` on this thread; `None` if it has not finished in `limit`.
+///
+/// The thread sleeps by parking, and so does the sound thread's own loop.
+/// A wake-up meant for that loop (a play, or being told to stop) that
+/// comes while the thread is parked here is used up here. So one is left
+/// behind on the way out: the caller's loop goes round once more and looks
+/// at its queues before it sleeps. (Without this a play that arrived
+/// during a cork stayed in the queue until the next play.)
 fn wait<F: Future>(fut: F, limit: Duration) -> Option<F::Output> {
     let waker = Waker::from(Arc::new(Unpark(std::thread::current())));
     let mut cx = Context::from_waker(&waker);
     let mut fut = pin!(fut);
     let deadline = Instant::now() + limit;
-    loop {
+    let result = loop {
         if let Poll::Ready(v) = fut.as_mut().poll(&mut cx) {
-            return Some(v);
+            break Some(v);
         }
-        let left = deadline.checked_duration_since(Instant::now())?;
-        std::thread::park_timeout(left);
-    }
+        match deadline.checked_duration_since(Instant::now()) {
+            Some(left) => std::thread::park_timeout(left),
+            None => break None,
+        }
+    };
+    std::thread::current().unpark();
+    result
 }
 
 fn answered<T>(

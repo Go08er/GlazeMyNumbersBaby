@@ -888,9 +888,9 @@ impl Run {
             Status::Off | Status::Idle => 1,
         };
         *lock(&self.link.reason) = reason.to_string();
-        self.link.status.store(value, Ordering::Release);
         // One line per change of state, however many themes are loaded
-        // while it lasts.
+        // while it lasts. (Said before the state shows: whoever sees the
+        // state finds the line there.)
         let said = &self.counters.said_unavailable;
         match status {
             Status::Unavailable if !said.swap(true, Ordering::AcqRel) => say(
@@ -902,6 +902,7 @@ impl Run {
             }
             _ => {}
         }
+        self.link.status.store(value, Ordering::Release);
     }
 
     fn connect(&mut self) {

@@ -186,11 +186,15 @@ impl Mixer {
         }
     }
 
-    /// The master gain from now on; it is reached smoothly, over the next
-    /// frames mixed.
+    /// The master gain from now on. While something sounds it is reached
+    /// smoothly, over the next frames mixed; at rest it is simply the
+    /// gain, so the next sound starts at it.
     pub fn set_gain(&mut self, gain: f32) {
         if !gain.is_nan() {
             self.gain_to = gain.clamp(0.0, 1.0);
+            if !self.is_active() {
+                self.gain = self.gain_to;
+            }
         }
     }
 
@@ -544,6 +548,24 @@ mod tests {
         assert!(out[0] > 9800 && out[2 * 50] > 4000 && out[2 * 50] < 6000);
         assert_eq!(out[2 * 99], 0);
         assert!(mix(&mut m, 100).iter().all(|s| *s == 0));
+    }
+
+    #[test]
+    fn a_gain_set_at_rest_is_the_next_sounds_from_its_first_frame() {
+        // The Volume slider is let go, then plays a sound: it must be at
+        // the new volume from the start, not gliding there from the old.
+        let mut m = Mixer::new(1.0);
+        m.play(flat(10, 10_000), PlayParams::default());
+        mix(&mut m, 64);
+        m.set_gain(0.25);
+        m.play(flat(100, 10_000), PlayParams::default());
+        let out = mix(&mut m, 100);
+        assert!(out.iter().all(|s| (s - 2500).abs() <= 1), "{:?}", &out[..4]);
+        // Before anything was ever mixed, too.
+        let mut m = Mixer::new(0.0);
+        m.set_gain(1.0);
+        m.play(flat(10, 10_000), PlayParams::default());
+        assert!((mix(&mut m, 10)[0] - 10_000).abs() <= 1);
     }
 
     #[test]

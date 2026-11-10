@@ -1226,6 +1226,24 @@ anywhere else):
   (the sound thread was rendering) is dropped, not played late.
 - `PULSE_SERVER` of another kind than `unix:` is passed over, and the
   next place is tried.
+- **A wake-up is never used up by a wait on the server.** The sound
+  thread sleeps by parking, in its own loop and while it waits for the
+  server's answer. A play (or being told to stop) that arrived during a
+  cork had its wake-up spent there and then sat in the queue; each such
+  wait now leaves a wake-up behind. `tests/server.rs` holds this with a
+  server that takes 20 ms to answer.
+- **What is tested where.** `cargo test` never meets a sound server: the
+  null sink, a socket nobody listens on, and a stand-in server in the
+  test itself (`tests/server.rs`: created corked, nothing while corked,
+  sound in the stream's first audio, cork then flush 100 ms after the last
+  voice, a server that goes away and comes back). Against the sandbox's
+  real `pipewire-pulse` 1.6.11: `examples/latency.rs` (the table below)
+  and `examples/lifecycle.rs` (the session's server found from the
+  environment; the server stopped while the stream rests and in the
+  middle of a sound, each time "unavailable" within 12 ms, one line, and
+  0 wake-ups afterwards; started again, found by the next play after the
+  retry interval; and no server at all, the chapter's test 3). PulseAudio's
+  own daemon was not tried.
 
 | | Measured |
 |---|---|
@@ -1243,7 +1261,10 @@ anywhere else):
 
 A running stream holds its 15 ms of silence in front of a new sound; a
 corked one holds nothing, which is why the first is slower than the
-second.
+second. These are from one run; a second gave the same figures for plays
+(medians within 0.3 ms). Its "stream ready" was 54 ms, measured while
+another job had the machine's processor cap saturated; a third, with the
+machine quieter, 10.6 ms.
 
 ### From event to sound
 
