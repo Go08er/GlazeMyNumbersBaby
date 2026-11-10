@@ -1001,6 +1001,12 @@ fn swirls_loads_and_returns_only_known_keys() {
 /// glyph keys keep none, as the base's keep none, and take what the
 /// window gives them. (The graph pad's 32 px rows fit: measured in the
 /// app at 300 × 400.)
+///
+/// And a readout the app shrinks to fit its width keeps the optical size
+/// its figures have at their largest. Inter's `opsz` follows the size
+/// unless a font names it, and a smaller optical size is a wider cut: a
+/// line shrunk for its width came out longer than it, and the date page's
+/// "4 months, 1 week, 1 day" was cut off in a 360-pixel window.
 #[test]
 fn every_page_fits_the_least_window() {
     let mut theme = swirls();
@@ -1039,6 +1045,54 @@ fn every_page_fits_the_least_window() {
                 panic!("no keys.pad");
             };
             assert_eq!(pad.get("min_height"), Some(&Value::Number(32.0)));
+
+            // The readouts, at their largest: the calculator's (the
+            // standard page's size), the date page's two, the converter's.
+            let sized = |path: &str| -> Font {
+                let Some(Value::Record(r)) = style.get(path) else {
+                    panic!("no {path}");
+                };
+                let (Some(Value::Number(size)), Some(Value::Font(font))) =
+                    (r.get("size"), r.get("font"))
+                else {
+                    panic!("{path}: no size and font");
+                };
+                Font {
+                    size: *size as f32,
+                    ..font.clone()
+                }
+            };
+            let Some(Value::Number(largest)) = style.part("display.sizes", "standard") else {
+                panic!("no display.sizes.standard");
+            };
+            let calculator = Font {
+                size: *largest as f32,
+                ..style.font("display.value.font").unwrap().clone()
+            };
+            for (what, font) in [
+                ("the calculator's readout", calculator),
+                ("date.result", sized("date.result")),
+                ("date.add_result", sized("date.add_result")),
+                ("converter.value", sized("converter.value")),
+            ] {
+                assert_eq!(font.family.first().map(String::as_str), Some(INTER), "{what}");
+                let opsz: Vec<f32> = font
+                    .variations
+                    .iter()
+                    .filter(|(tag, _)| tag == OPSZ)
+                    .map(|(_, v)| *v)
+                    .collect();
+                // What the app would set at the largest size, held there.
+                let want = font.size.clamp(OPSZ_RANGE.0, OPSZ_RANGE.1);
+                assert_eq!(opsz, [want], "{what}: {:?}", font.variations);
+                let shrunk = Font { size: 16.0, ..font };
+                assert!(
+                    shrunk
+                        .effective_variations()
+                        .contains(&(OPSZ.to_string(), want)),
+                    "{what}"
+                );
+            }
         }
     }
 }

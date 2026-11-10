@@ -356,6 +356,19 @@ local function style(ctx: Ctx): Style
 	local function figures(size: number?, weight: number): Font
 		return { family = { "Inter Variable", system.family }, size = size, weight = weight, features = { "tnum" } }
 	end
+	-- A readout's figures, which the app shrinks to fit its width: their
+	-- optical size held at the one they have at their largest. (Left to
+	-- follow the size, a shrunk line is set in Inter's wider text cut and
+	-- comes out longer than the width it was shrunk for: the date page's
+	-- "4 months, 1 week, 1 day" was cut off in a new window.)
+	local function readout(largest: number, weight: number): Font
+		return {
+			family = { "Inter Variable", system.family },
+			weight = weight,
+			features = { "tnum" },
+			variations = { opsz = clamp(largest, 14, 32) },
+		}
+	end
 
 	-- Glass. A pane is the dark band at the strength worked out above; a
 	-- raised pane (a number key, the glass under the pointer) is the
@@ -547,7 +560,7 @@ local function style(ctx: Ctx): Style
 			sizes = { standard = 62, scientific = 54, programmer = 46, compact = 42 },
 			min_size = 18,
 			value = {
-				font = figures(nil, 700),
+				font = readout(62, 700),
 				-- The display layer paints the value; these are what it would
 				-- be without it.
 				color = gmnb.linear({ angle = 90, colors = { a, b } }),
@@ -761,8 +774,8 @@ local function style(ctx: Ctx): Style
 				padding = { 12, 16, 14, 16 },
 				margin = { 10, 8, 8, 8 },
 			},
-			result = { size = 32, font = figures(nil, 650) },
-			add_result = { size = 28, font = figures(nil, 650) },
+			result = { size = 32, font = readout(32, 650) },
+			add_result = { size = 28, font = readout(28, 650) },
 			subresult = { font = sans(15), color = dim },
 			calendar = {
 				title = { font = sans(15, 600), color = fg },
@@ -794,7 +807,7 @@ local function style(ctx: Ctx): Style
 				checked = { border = { width = 1, color = a } },
 			},
 			marker = { color = a, width = 36, height = 3 },
-			value = { size = 42, font = figures(nil, 600), checked_weight = 700, focus = { width = 3, color = a, offset = 5, radius = 8 } },
+			value = { size = 42, font = readout(42, 600), checked_weight = 700, focus = { width = 3, color = a, offset = 5, radius = 8 } },
 			symbol = { font = sans(24), color = dim },
 			unit = {
 				margin = { 6, 8, 2, 8 },
