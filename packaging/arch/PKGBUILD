@@ -6,9 +6,10 @@ pkgrel=1
 pkgdesc='Windows Calculator ported to Rust, twice: pointlessly beautiful (GMNB) and lean (DGMNB)'
 arch=('x86_64' 'aarch64')
 url='https://github.com/Go08er/GlazeMyNumbersBaby'
-# The apps' own code and fonts, then the crates compiled in (their texts are
-# in THIRD-PARTY-LICENSES.txt). Each package lists its own below.
-license=('MIT' 'OFL-1.1' 'Apache-2.0' 'BSD-2-Clause' 'BSD-3-Clause' 'CDLA-Permissive-2.0'
+# The apps' own code and fonts, Swirls' swirl (adapted from ly's ColorMix,
+# WTFPL), then the crates compiled in (their texts are in
+# THIRD-PARTY-LICENSES.txt). Each package lists its own below.
+license=('MIT' 'OFL-1.1' 'WTFPL' 'Apache-2.0' 'BSD-2-Clause' 'BSD-3-Clause' 'CDLA-Permissive-2.0'
          'ISC' 'Unicode-3.0' 'Zlib')
 makedepends=('cargo' 'gtk4' 'libadwaita' 'wayland' 'libxkbcommon')
 # Rust handles its own LTO; makepkg's -flto would also hit the bundled C and
@@ -54,8 +55,8 @@ check() {
 
 package_gmnb() {
   pkgdesc='GlazeMyNumbers,Baby: Windows Calculator ported to Rust, made pointlessly beautiful'
-  license=('MIT' 'OFL-1.1' 'Apache-2.0' 'BSD-3-Clause' 'CDLA-Permissive-2.0' 'ISC' 'Unicode-3.0'
-           'Zlib')
+  license=('MIT' 'OFL-1.1' 'WTFPL' 'Apache-2.0' 'BSD-3-Clause' 'CDLA-Permissive-2.0' 'ISC'
+           'Unicode-3.0' 'Zlib')
   depends=('gtk4' 'libadwaita' 'glib2' 'pango' 'cairo' 'gcc-libs' 'glibc' 'hicolor-icon-theme')
   # A sound server that speaks PulseAudio's protocol; GMNB links no sound
   # library and is silent without one.
@@ -67,7 +68,7 @@ package_gmnb() {
   install -Dm644 "packaging/$app.desktop" -t "$pkgdir/usr/share/applications"
   install -Dm644 "packaging/$app.metainfo.xml" -t "$pkgdir/usr/share/metainfo"
   install -Dm644 "packaging/icons/$app.svg" -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
-  install -Dm644 LICENSE THIRD-PARTY-LICENSES.txt apps/gmnb/themes/aurora/fonts/OFL-Outfit.txt apps/gmnb/themes/glazed/fonts/OFL-Jersey10.txt apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt \
+  install -Dm644 LICENSE THIRD-PARTY-LICENSES.txt apps/gmnb/themes/aurora/fonts/OFL-Outfit.txt apps/gmnb/themes/glazed/fonts/OFL-Jersey10.txt apps/gmnb/themes/swirls/credits/ColorMix.txt apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt \
     -t "$pkgdir/usr/share/licenses/$pkgname"
 }
 

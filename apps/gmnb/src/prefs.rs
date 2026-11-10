@@ -231,6 +231,8 @@ struct ThemeSettings {
     /// Each tile a `preview` drew, with its option and its choice: they
     /// are drawn again when `ctx` changes.
     tiles: RefCell<Vec<(Tile, OptionDef, String)>>,
+    /// The `ctx` the tiles were drawn for: each is drawn once for each.
+    tiles_ctx: RefCell<Option<gmnb_theme::Ctx>>,
     /// Set while the list or the options are being built: their widgets'
     /// signals then change nothing.
     building: std::cell::Cell<bool>,
@@ -285,9 +287,23 @@ impl ThemeSettings {
             options_box,
             rows: RefCell::default(),
             tiles: RefCell::default(),
+            tiles_ctx: RefCell::default(),
             building: std::cell::Cell::new(false),
             pending: Rc::default(),
         });
+        {
+            // The desktop's accent, light and dark: the tiles follow. One
+            // subscription for them all (one a grid drew every grid's
+            // tiles again, for each grid).
+            let weak = Rc::downgrade(&this);
+            this.ctx
+                .hub
+                .subscribe_style(&this.options_box, move |_, _| {
+                    if let Some(t) = weak.upgrade() {
+                        t.draw_tiles();
+                    }
+                });
+        }
         {
             let weak = Rc::downgrade(&this);
             reload.connect_clicked(move |b| {
@@ -432,11 +448,20 @@ impl ThemeSettings {
     }
 
     /// Has the theme draw every tile again (still pictures, for the
-    /// `ctx` there is now).
+    /// `ctx` there is now), once for each `ctx`; not while the options
+    /// are being built or changed in a batch (they are drawn after).
     fn draw_tiles(&self) {
+        if self.building.get() {
+            return;
+        }
+        let ctx = self.ctx.hub.frame_ctx();
+        if self.tiles_ctx.borrow().as_ref() == Some(&ctx) {
+            return;
+        }
         for (tile, option, choice) in self.tiles.borrow().iter() {
             tile.set_list(self.ctx.hub.preview(option, choice));
         }
+        self.tiles_ctx.replace(Some(ctx));
     }
 
     fn sync_visible(&self) {
@@ -454,6 +479,8 @@ impl ThemeSettings {
         }
         self.rows.borrow_mut().clear();
         self.tiles.borrow_mut().clear();
+        // Each tile is drawn as it is made, for this `ctx`.
+        self.tiles_ctx.replace(Some(self.ctx.hub.frame_ctx()));
         let defs = self.ctx.hub.option_defs();
         let values = self.ctx.hub.option_values();
         self.options.set_visible(!defs.is_empty());
@@ -464,6 +491,8 @@ impl ThemeSettings {
                 Some(at) => groups[at].1.clone(),
                 None => {
                     let title = def.group.clone().unwrap_or_else(|| "Theme options".into());
+                    // A group's title is markup; the theme's is text.
+                    let title = gtk::glib::markup_escape_text(&title);
                     let group = adw::PreferencesGroup::builder().title(title).build();
                     self.options_box.append(&group);
                     groups.push((def.group.clone(), group.clone()));
@@ -594,13 +623,7 @@ impl ThemeSettings {
                         t.changed(&id, OptionValue::Text(ids[at].clone()), false);
                     }
                 });
-                // The desktop's accent, light and dark: the tiles follow.
-                let weak = Rc::downgrade(self);
-                self.ctx.hub.subscribe_style(&flow, move |_, _| {
-                    if let Some(t) = weak.upgrade() {
-                        t.draw_tiles();
-                    }
-                });
+                // (The tiles follow `ctx`: `ThemeSettings::new`.)
                 let column = gtk::Box::new(gtk::Orientation::Vertical, 8);
                 if let Some(description) = def.description.as_deref().filter(|d| !d.is_empty()) {
                     column.append(
@@ -785,6 +808,9 @@ impl ThemeSettings {
                         return;
                     }
                     let theme = t.ctx.hub.active();
+                    // A batch: the tiles are drawn once, as the options
+                    // are built again below, not for each option set.
+                    t.building.set(true);
                     for (id, value) in t.ctx.hub.run_action(&action) {
                         t.ctx.hub.set_option(&id, value.clone(), false);
                         t.ctx
@@ -793,6 +819,7 @@ impl ThemeSettings {
                             .borrow_mut()
                             .set_option(&theme, &id, &value);
                     }
+                    t.building.set(false);
                     t.ctx.store.persist();
                     // The rows show the new values.
                     let t2 = t.clone();
@@ -1103,12 +1130,14 @@ pub fn about(parent: &adw::ApplicationWindow, credits: &[(String, String)]) {
         None,
     );
     // Custom licence text is Pango markup: escape the plain-text notices.
-    about.add_legal_section(
-        "Inter typeface",
-        Some("Copyright (c) 2016 The Inter Project Authors"),
-        gtk::License::Custom,
-        Some(&gtk::glib::markup_escape_text(INTER)),
-    );
+    for (title, copyright, text) in TYPEFACES {
+        about.add_legal_section(
+            title,
+            copyright,
+            gtk::License::Custom,
+            Some(&gtk::glib::markup_escape_text(text)),
+        );
+    }
     for (title, text) in credits {
         about.add_legal_section(
             title,
@@ -1145,6 +1174,22 @@ pub fn about(parent: &adw::ApplicationWindow, credits: &[(String, String)]) {
 }
 
 const INTER: &str = include_str!("../../dgmnb/assets/fonts/OFL-Inter.txt");
+const NOTO: &str = include_str!("../../dgmnb/assets/fonts/OFL-Noto.txt");
+/// The typefaces GMNB bundles itself (`crate::INTER`, and the subsets it
+/// falls back to, `crate::FALLBACKS`): each one's title, copyright and
+/// licence in About → Legal. (A theme's are its own credits.)
+const TYPEFACES: [(&str, Option<&str>, &str); 2] = [
+    (
+        "Inter typeface",
+        Some("Copyright (c) 2016 The Inter Project Authors"),
+        INTER,
+    ),
+    (
+        "Noto Sans typefaces (Math, Arabic, Armenian, Bengali and Khmer subsets)",
+        None,
+        NOTO,
+    ),
+];
 const CORE_MATH: &str = concat!(
     include_str!("../../../crates/crmath/vendor/COPYRIGHT"),
     "\n",
@@ -1213,5 +1258,96 @@ mod tests {
         let (_, plain, _) = pango::parse_markup(&rest, '\0').unwrap();
         assert!(plain.contains("Show their licences"));
         assert!(CORE_MATH.contains("Alexei Sibidanov") && CORE_MATH.contains("Permission is"));
+    }
+
+    /// Every credit a built-in theme carries (About → Legal shows it) is
+    /// in every package: its file among GMNB's licences (Flatpak, Arch,
+    /// Fedora), a stanza of debian/copyright for its folder, and the
+    /// licence it names in each package's licence list. Swirls' (ly's
+    /// ColorMix, under the WTFPL) was in none.
+    #[test]
+    fn every_built_in_credit_is_in_every_package() {
+        use gmnb_theme::theme::{BUILT_IN, Source, Theme};
+        let flatpak =
+            include_str!("../../../packaging/flatpak/io.github.Go08er.GlazeMyNumbersBaby.json");
+        let arch = include_str!("../../../packaging/arch/PKGBUILD");
+        let fedora = include_str!("../../../packaging/fedora/gmnb.spec");
+        let debian = include_str!("../../../packaging/debian/copyright");
+        // GMNB's own parts: Arch's package_gmnb, Fedora's main package.
+        let arch_gmnb = arch.split("package_gmnb()").nth(1).unwrap();
+        let arch_gmnb = arch_gmnb.split("package_dgmnb()").next().unwrap();
+        let fedora_license = fedora.lines().find(|l| l.starts_with("License:")).unwrap();
+        let fedora_files = fedora.split("%files\n").nth(1).unwrap();
+        let fedora_files = fedora_files.split("%files -n").next().unwrap();
+        // The licences a credit can name, by the words that name them.
+        const LICENCES: [(&str, &str); 2] =
+            [("SIL Open Font License", "OFL-1.1"), ("WTFPL", "WTFPL")];
+        let limits = gmnb_theme::Limits {
+            load: std::time::Duration::from_secs(20),
+            ..Default::default()
+        };
+        let mut missing = Vec::new();
+        for b in &BUILT_IN {
+            let theme = Theme::load(Source::built_in(b.id).unwrap(), limits.clone()).unwrap();
+            for (credit, (title, text)) in theme.def.credits.iter().zip(theme.credits()) {
+                let path = format!("apps/gmnb/themes/{}/{}", b.id, credit.file);
+                for (package, list) in [
+                    ("Flatpak", flatpak),
+                    ("Arch", arch_gmnb),
+                    ("Fedora", fedora_files),
+                ] {
+                    if !list.contains(&path) {
+                        missing.push(format!("{package} doesn't install {path} ({title})"));
+                    }
+                }
+                let stanza = debian.split("\n\n").find(|stanza| {
+                    stanza.lines().next().is_some_and(|first| {
+                        first
+                            .strip_prefix("Files: ")
+                            .and_then(|glob| glob.strip_suffix('*'))
+                            .is_some_and(|folder| !folder.is_empty() && path.starts_with(folder))
+                    })
+                });
+                for (words, spdx) in LICENCES.iter().filter(|(w, _)| text.contains(w)) {
+                    // (DEP-5: "License: MIT and WTFPL", and the text of
+                    // each in a paragraph of its own.)
+                    let names = |s: &str| {
+                        s.lines()
+                            .find_map(|l| l.strip_prefix("License: "))
+                            .is_some_and(|l| l.split_whitespace().any(|w| w == *spdx))
+                    };
+                    if !stanza.is_some_and(names)
+                        || !debian.contains(&format!("\nLicense: {spdx}\n "))
+                    {
+                        missing.push(format!("debian/copyright: {path} under {spdx} ({words})"));
+                    }
+                    if !fedora_license.contains(spdx) {
+                        missing.push(format!("Fedora's License has no {spdx} ({title})"));
+                    }
+                    if !arch_gmnb.contains(&format!("'{spdx}'")) {
+                        missing.push(format!("Arch's gmnb has no {spdx} ({title})"));
+                    }
+                }
+            }
+        }
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+    }
+
+    /// Every typeface GMNB bundles has its licence in About → Legal:
+    /// Inter, and the Noto Sans subsets it falls back to (0.3 bundles
+    /// them, as DGMNB does, whose About lists both).
+    #[test]
+    fn every_bundled_typeface_is_credited() {
+        let credited = |licence: &str| TYPEFACES.iter().any(|(_, _, text)| *text == licence);
+        assert!(credited(INTER), "Inter isn't credited in About → Legal");
+        for (name, _) in crate::FALLBACKS {
+            assert!(name.starts_with("NotoSans"), "{name}: which licence?");
+            assert!(credited(NOTO), "{name} isn't credited in About → Legal");
+        }
+        for (_, _, text) in TYPEFACES {
+            let escaped = gtk::glib::markup_escape_text(text);
+            let (_, plain, _) = pango::parse_markup(&escaped, '\0').unwrap();
+            assert_eq!(plain, text);
+        }
     }
 }

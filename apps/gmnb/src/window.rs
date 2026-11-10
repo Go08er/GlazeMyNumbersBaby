@@ -888,6 +888,9 @@ impl Window {
             hub.set_tell(move |message| {
                 if let Some(toasts) = toasts.upgrade() {
                     let toast = adw::Toast::new(message);
+                    // The theme's name and its errors are its own words:
+                    // text, not markup (a toast reads markup by default).
+                    toast.set_use_markup(false);
                     toast.set_timeout(4);
                     toasts.add_toast(toast);
                 }
