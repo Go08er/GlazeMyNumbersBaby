@@ -845,6 +845,8 @@ fn sound_group(ctx: &Rc<Ctx>) -> adw::PreferencesGroup {
     volume.add_suffix(&scale);
     volume.add_suffix(&shown);
     volume.set_sensitive(on);
+    // (GMNB_FOCUS=wc-sound-volume: Settings scrolled to these rows.)
+    volume.add_css_class("wc-sound-volume");
     group.add(&volume);
     {
         let (ctx, volume) = (ctx.clone(), volume.clone());

@@ -21,7 +21,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use gmnb_sound::standin::Server;
+use gmnb_sound::standin::{Saw, Server};
 
 /// The keypad's 7 and its = (calcmanager's command numbers).
 const SEVEN: u32 = 137;
@@ -106,6 +106,30 @@ impl Drop for Profile {
 /// Runs GMNB once in `profile`: `theme` loaded (the test's, or none),
 /// `env` added, for `ms` milliseconds; what it wrote to stderr.
 fn run(display: &Path, profile: &Profile, theme: bool, env: &[(&str, &str)], ms: u64) -> String {
+    run_while(display, profile, theme, env, ms, |_| {})
+}
+
+/// The app's process, killed if a test fails while it runs.
+struct App(std::process::Child);
+
+impl Drop for App {
+    fn drop(&mut self) {
+        if self.0.try_wait().ok().flatten().is_none() {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+
+/// [`run`], doing `during` with the app's process id while it runs.
+fn run_while(
+    display: &Path,
+    profile: &Profile,
+    theme: bool,
+    env: &[(&str, &str)],
+    ms: u64,
+    during: impl FnOnce(u32),
+) -> String {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_gmnb"));
     // Nothing of the session's: its display, bus, sound server, or any
     // GMNB_ setting it was started with.
@@ -145,30 +169,74 @@ fn run(display: &Path, profile: &Profile, theme: bool, env: &[(&str, &str)], ms:
     for (k, v) in env {
         cmd.env(k, v);
     }
-    let mut child = cmd
+    let mut child = App(cmd
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("GMNB started");
-    let mut err = child.stderr.take().unwrap();
+        .expect("GMNB started"));
+    let mut err = child.0.stderr.take().unwrap();
     let reader = std::thread::spawn(move || {
         let mut s = String::new();
         let _ = std::io::Read::read_to_string(&mut err, &mut s);
         s
     });
+    during(child.0.id());
     let deadline = Instant::now() + Duration::from_millis(ms) + Duration::from_secs(60);
     loop {
-        if child.try_wait().unwrap().is_some() {
+        if child.0.try_wait().unwrap().is_some() {
             break;
         }
         if Instant::now() > deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            drop(child);
             panic!("GMNB did not close: {}", reader.join().unwrap());
         }
         std::thread::sleep(Duration::from_millis(50));
     }
     reader.join().unwrap()
+}
+
+/// The threads of process `pid` named `name` (the sound thread, and the
+/// sound server's client, which it starts and which takes its name): how
+/// many, their processor time (ns) and their context switches (each time
+/// one slept and woke, or was put aside).
+fn threads(pid: u32, name: &str) -> (usize, u64, u64) {
+    let (mut n, mut run, mut switches) = (0, 0, 0);
+    let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
+        return (0, 0, 0);
+    };
+    for dir in tasks.flatten().map(|t| t.path()) {
+        let read = |f: &str| std::fs::read_to_string(dir.join(f)).unwrap_or_default();
+        if read("comm").trim() != name {
+            continue;
+        }
+        n += 1;
+        run += read("schedstat")
+            .split_whitespace()
+            .next()
+            .and_then(|r| r.parse::<u64>().ok())
+            .unwrap_or(0);
+        switches += read("status")
+            .lines()
+            .filter(|l| l.contains("ctxt_switches"))
+            .filter_map(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
+            .sum::<u64>();
+    }
+    (n, run, switches)
+}
+
+/// The processor time process `pid` has had, in clock ticks.
+fn ticks(pid: u32) -> u64 {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+    // After the name, which is in brackets: the state is field 3, utime 14.
+    let rest = stat.rsplit_once(')').map_or("", |(_, r)| r);
+    let fields: Vec<&str> = rest.split_whitespace().collect();
+    let get = |i: usize| {
+        fields
+            .get(i)
+            .and_then(|f| f.parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    get(11) + get(12)
 }
 
 /// The lines of the trace.
@@ -388,29 +456,90 @@ fn only_a_theme_with_sounds_connects() {
     );
     assert_eq!(server.connections(), 1);
     assert!(
-        server.count(|s| matches!(s, gmnb_sound::standin::Saw::Audio { sound: true, .. })) > 0,
+        server.count(|s| matches!(s, Saw::Audio { sound: true, .. })) > 0,
         "no sound reached the server: {:?}",
         server.saw()
     );
     // Created corked, started for the keys, corked again at rest, and
     // closed when the app was.
     let closed = Instant::now() + Duration::from_secs(5);
-    while server.saw().last() != Some(&gmnb_sound::standin::Saw::Closed) && Instant::now() < closed
-    {
+    while server.saw().last() != Some(&Saw::Closed) && Instant::now() < closed {
         std::thread::sleep(Duration::from_millis(20));
     }
     let saw = server.saw();
-    assert_eq!(
-        saw.first(),
-        Some(&gmnb_sound::standin::Saw::Stream { corked: true })
+    assert_eq!(saw.first(), Some(&Saw::Stream { corked: true }));
+    assert!(saw.contains(&Saw::Cork(true)), "{saw:?}");
+    assert_eq!(saw.last(), Some(&Saw::Closed), "{saw:?}");
+}
+
+/// At rest the sound side does nothing (chapter test 5): Aurora, with its
+/// sounds, on a sound server (the stand-in); a key pressed, the sound
+/// played, and the stream corked again 100 ms after it: from then on the
+/// sound thread does not run once, and the server is asked for nothing.
+#[test]
+fn at_rest_nothing_wakes() {
+    let Some(display) = display() else {
+        eprintln!("GMNB_TEST_WAYLAND_DISPLAY not set; skipped");
+        return;
+    };
+    let profile = Profile::new("rest");
+    let server = Server::start(&profile.socket());
+    let corked = || {
+        let saw = server.saw();
+        let sound = saw
+            .iter()
+            .position(|s| matches!(s, Saw::Audio { sound: true, .. }));
+        sound.is_some_and(|at| saw[at..].contains(&Saw::Cork(true)))
+    };
+    let mut measured = None;
+    let stderr = run_while(
+        &display,
+        &profile,
+        false,
+        &[("GMNB_THEME", "aurora"), ("GMNB_STEPS", "keys:7")],
+        14_000,
+        |pid| {
+            let deadline = Instant::now() + Duration::from_secs(12);
+            while !corked() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(
+                corked(),
+                "the sound never played and corked: {:?}",
+                server.saw()
+            );
+            std::thread::sleep(Duration::from_millis(200));
+            let (before, seen, cpu) = (threads(pid, "gmnb-sound"), server.saw().len(), ticks(pid));
+            let start = Instant::now();
+            std::thread::sleep(Duration::from_secs(5));
+            let after = threads(pid, "gmnb-sound");
+            let took = start.elapsed();
+            measured = Some((
+                before,
+                after,
+                server.saw()[seen..].to_vec(),
+                ticks(pid) - cpu,
+                took,
+            ));
+        },
     );
+    let (before, after, saw, cpu, took) = measured.unwrap();
+    let ((n, run0, woke0), (_, run1, woke1)) = (before, after);
+    assert_eq!(n, 2, "the sound thread and the client's");
+    eprintln!(
+        "at rest over {:.1} s: the {n} sound threads {} ns, {} wake-ups; the whole app {} ticks \
+         (Aurora's background still moving); the server asked {} times",
+        took.as_secs_f64(),
+        run1 - run0,
+        woke1 - woke0,
+        cpu,
+        saw.len()
+    );
+    assert_eq!(woke1 - woke0, 0, "the sound thread woke at rest");
+    assert_eq!(run1, run0);
+    assert!(saw.is_empty(), "{saw:?}");
     assert!(
-        saw.contains(&gmnb_sound::standin::Saw::Cork(true)),
-        "{saw:?}"
-    );
-    assert_eq!(
-        saw.last(),
-        Some(&gmnb_sound::standin::Saw::Closed),
-        "{saw:?}"
+        report(&stderr).starts_with("sound: status Ready, thread yes, threads 1, connections 1"),
+        "{stderr}"
     );
 }
