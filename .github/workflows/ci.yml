@@ -83,10 +83,11 @@ jobs:
           kill "$weston"
           # It must have run, not skipped: the base look and every built-in
           # theme, passed; a theme's words shown as text (markup.rs); each
-          # tile of Settings drawn once, and a theme whose style fails shown
-          # in the base look (settings.rs).
+          # tile of Settings drawn once, a theme whose style fails shown in
+          # the base look, one that fails at start told (settings.rs).
           grep -q "^test result: ok\. 4 passed; 0 failed;" least-test.log
-          [ "$(grep -c "^test result: ok\. 2 passed; 0 failed;" least-test.log)" = 2 ]
+          grep -q "^test result: ok\. 2 passed; 0 failed;" least-test.log
+          grep -q "^test result: ok\. 3 passed; 0 failed;" least-test.log
           if grep -q "skipped" least-test.log; then exit 1; fi
       - name: D-Bus tests ran (private dbus-daemon)
         run: |

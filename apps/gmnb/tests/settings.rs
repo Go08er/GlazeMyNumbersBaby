@@ -114,8 +114,8 @@ fn run(display: &Path, theme: &str, env: &[(&str, &str)], ms: u64) -> String {
 /// shows ("the last style that worked, or the base look"), not the style
 /// of the theme chosen before it, which stood under the new theme's
 /// name. GMNB in Glazed, then the theme chosen (`GMNB_STEPS`' `theme:`),
-/// pictured once the toast that says so is gone, is pixel for pixel GMNB
-/// started in that theme.
+/// is pixel for pixel GMNB started in that theme (both pictured once the
+/// toast that says so is gone).
 #[test]
 fn a_theme_whose_style_fails_shows_the_base_look() {
     let Some(display) = display() else {
@@ -135,7 +135,7 @@ return { api = 1, name = "Broken", style = function(ctx) error("no style", 0) en
         env.push(("GMNB_SCREENSHOT_DELAY_MS", delay));
         run(&display, THEME, &env, 30_000)
     };
-    let err = shot(&started, &[("GMNB_THEME", "dev")], "2000");
+    let err = shot(&started, &[("GMNB_THEME", "dev")], "7500");
     assert!(err.contains("has a problem"), "{err}");
     let err = shot(
         &switched,
@@ -147,6 +147,38 @@ return { api = 1, name = "Broken", style = function(ctx) error("no style", 0) en
     let _ = std::fs::remove_dir_all(&shots);
     let (a, b) = (a.expect("a picture"), b.expect("a picture"));
     assert!(a == b, "chosen after Glazed, the broken theme isn't the base look");
+}
+
+/// A theme that doesn't load when GMNB starts: "the base look, and a
+/// toast" (docs/theming.md). The hub learns it before the window has said
+/// how it shows a toast, and the toast was never shown: the picture was
+/// the base look's, unexplained.
+#[test]
+fn a_theme_that_fails_at_start_says_so() {
+    let Some(display) = display() else {
+        eprintln!("skipped: no GMNB_TEST_WAYLAND_DISPLAY or DGMNB_TEST_WAYLAND_DISPLAY");
+        return;
+    };
+    const THEME: &str = "return { api = 1, name = \"Unfinished\"";
+    let shots = std::env::temp_dir().join(format!("gmnb-start-shots-{}", std::process::id()));
+    std::fs::create_dir_all(&shots).unwrap();
+    let (failed, base) = (shots.join("failed.png"), shots.join("base.png"));
+    let shot = |path: &Path, theme: &str| {
+        let env = [
+            ("GMNB_STILL", "1"),
+            ("GMNB_THEME", theme),
+            ("GMNB_SCREENSHOT", path.to_str().unwrap()),
+            ("GMNB_SCREENSHOT_DELAY_MS", "1500"),
+        ];
+        run(&display, THEME, &env, 30_000)
+    };
+    let err = shot(&failed, "dev");
+    assert!(err.contains("couldn't be loaded"), "{err}");
+    shot(&base, "base");
+    let (a, b) = (std::fs::read(&failed), std::fs::read(&base));
+    let _ = std::fs::remove_dir_all(&shots);
+    let (a, b) = (a.expect("a picture"), b.expect("a picture"));
+    assert!(a != b, "no toast: the picture is the base look's");
 }
 
 /// As many options as a theme may have (24), each a choice of as many

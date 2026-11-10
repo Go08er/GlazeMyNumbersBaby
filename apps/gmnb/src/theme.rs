@@ -137,6 +137,8 @@ pub struct Hub {
     style_subscribers: RefCell<Vec<StyleSubscriber>>,
     /// How the user is told of a theme that failed (a toast).
     tell: RefCell<Option<Tell>>,
+    /// What was to be told before there was a way to tell it.
+    untold: RefCell<Vec<String>>,
     stats: Cell<Stats>,
     /// The drawing layers' runtime.
     layers: Rc<Layers>,
@@ -223,6 +225,7 @@ impl Hub {
             fonts: RefCell::default(),
             style_subscribers: RefCell::default(),
             tell: RefCell::new(None),
+            untold: RefCell::default(),
             stats: Cell::default(),
             layers: Layers::new(),
             frame_ctx: RefCell::new(ctx.clone()),
@@ -449,14 +452,20 @@ impl Hub {
     }
 
     /// How the user is told that a theme failed.
+    /// What was to be told before then (a theme that failed as GMNB
+    /// started) is told now.
     pub fn set_tell(&self, tell: impl Fn(&str) + 'static) {
+        for message in self.untold.take() {
+            tell(&message);
+        }
         self.tell.replace(Some(Box::new(tell)));
     }
 
     fn tell(&self, message: &str) {
         eprintln!("gmnb: {message}");
-        if let Some(tell) = self.tell.borrow().as_ref() {
-            tell(message);
+        match self.tell.borrow().as_ref() {
+            Some(tell) => tell(message),
+            None => self.untold.borrow_mut().push(message.to_string()),
         }
     }
 
