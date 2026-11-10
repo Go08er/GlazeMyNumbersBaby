@@ -355,7 +355,8 @@ local function style(ctx: Ctx): Style
 		on_accent = white
 	end
 
-	-- A flat button as the toolkit drew it in 0.2.
+	-- A flat button as the toolkit drew it in 0.2. (A state a theme gives
+	-- replaces the base look's whole: these have no overlay.)
 	local flat_hover: State = { background = alpha(fg, 0.07) }
 	local flat_active: State = { background = alpha(fg, 0.16) }
 
@@ -728,8 +729,9 @@ local function style(ctx: Ctx): Style
 				background = down(glass_hi, glass),
 				border = false,
 				shadow = { highlight, rim },
-				hover = flat_hover,
-				active = flat_active,
+				-- Over the glass, not instead of it.
+				hover = { overlay = alpha(fg, 0.05) },
+				active = { overlay = alpha(fg, 0.12) },
 			},
 			result_panel = {
 				background = panel_fill,

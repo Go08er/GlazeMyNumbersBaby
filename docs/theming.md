@@ -355,11 +355,22 @@ can skip to the [reference](#reference-tokens).
 4. `E` = the theme's element tables merged over `E0`.
 5. Check and clamp `E`, then generate.
 
-Merging is by key, recursively. Lists (shadows, fill layers, font
-features, `native`) are replaced whole. `false` clears a value that can be
-absent (`border`, `glow`, `marker`, `divider`). A key the API doesn't know,
-or a value of the wrong type, is reported and skipped: the base value
-stays.
+Merging is by key, recursively, with three exceptions that are taken
+whole:
+
+- **Lists** (shadows, fill layers, font features, `native`).
+- **States** (`hover`, `active`, `checked`, `disabled`, a field's `focus`
+  and `error`, `keys.on`, `converter.whimsy`, `graph.row_error`). A
+  theme's `hover = { brightness = 1.1 }` means exactly that: the base
+  look's hover overlay is gone.
+- **Transitions.**
+
+`false` clears a value that can be absent (`border`, `glow`, `marker`,
+`divider`). A key the API doesn't know, or a value of the wrong type, is
+reported and skipped: the base value stays.
+
+A key class's own `hover`, `active` or `disabled` replaces the shared
+`keys.hover`, `keys.active` or `keys.disabled` for that class.
 
 ### Names of the custom properties
 
@@ -400,6 +411,13 @@ emits the finished values:
   the state changes nothing. The stylesheet can therefore name any of them
   without a fallback, and **a property the stylesheet reads that the app
   does not emit is a bug** (there is a test for it).
+
+A full style is about three thousand properties, written in one
+`:root` block. Their names are the app's own business (a theme never sees
+them): if measuring shows the reload is too slow, the engine may write a
+control's state values as generated rules instead. Either way the
+structure stylesheet holds no literal colour, size or font, and every
+value in it or in the generated style comes from the checked `Style`.
 
 Numbers are written with units by the app (`px`, `ms`, `deg`, `em`).
 Colours are written as `rgb()`/`rgba()`. Font family names are written as
@@ -721,7 +739,7 @@ hook falls back to.
 | `keys.padding` | Spacing | 0 | `button.wc-key` |
 | `keys.transition` | Transition | none | `button.wc-key` |
 | `keys.icon` | Icon | `{ size 20 }` | Rust: the keys that carry an icon (backspace, …) |
-| `keys.hover`, `keys.active`, `keys.disabled` | State | `{ overlay hover }`, `{ overlay press }`, `{ fade 0.35 }` | Every key class, under its own states |
+| `keys.hover`, `keys.active`, `keys.disabled` | State | `{ overlay hover }`, `{ overlay press }`, `{ fade 0.35 }` | Every key class that doesn't give its own |
 | `keys.number` | Control | background `surface`; `fg`; `text.key` at size + 2, weight 500 | `button.wc-key.wc-num` |
 | `keys.func` | Control | background `surface2`; `fg`; `text.key` | `button.wc-key.wc-fn` |
 | `keys.operator` | Control | background `surface2`; `accent_text`; `text.key` | `button.wc-key.wc-op` |
