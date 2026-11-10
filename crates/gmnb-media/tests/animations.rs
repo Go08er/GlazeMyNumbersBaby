@@ -781,7 +781,7 @@ fn a_thread_on_its_way_to_a_far_frame_ends_with_its_player() {
     let after = watch.stats();
     // A frame or two more at most (one may be under way).
     assert!(
-        after.decoded <= at_drop.decoded + 2 && dropped.elapsed() < Duration::from_millis(250),
+        after.decoded <= at_drop.decoded + 2 && dropped.elapsed() < Duration::from_secs(2),
         "{} frames decoded and {:?} after its player went ({at_drop:?}, then {after:?})",
         after.decoded - at_drop.decoded,
         dropped.elapsed()

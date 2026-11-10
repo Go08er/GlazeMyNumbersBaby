@@ -260,4 +260,16 @@ fn a_lossless_webps_codes_are_counted_before_they_are_built() {
     alpha.extend(lossless(3, info.width, info.height, false));
     let (result, _) = held(with_alpha(&alpha));
     assert_eq!(result, Ok((info.width, info.height)));
+
+    // An empty ALPH chunk, the next one's name starting with a letter
+    // whose low bits say "compressed losslessly": nothing is read past it
+    // (the check panicked there, inside the shield).
+    let file = riff(&[
+        wrapped(b"VP8X", &vp8x),
+        wrapped(b"ALPH", &[]),
+        wrapped(b"ALPH", &alpha),
+        wrapped(b"VP8 ", vp8),
+    ]);
+    let (result, _) = held(file);
+    assert!(!matches!(result, Err(Error::Panicked(_))), "{result:?}");
 }

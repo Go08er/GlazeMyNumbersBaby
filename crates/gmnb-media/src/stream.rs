@@ -221,9 +221,13 @@ pub(crate) fn webp_picture(
     for (name, data) in &chunks {
         let held = match name {
             b"VP8L" => crate::vp8l::codes_held(&bytes[data.clone()], None),
-            b"ALPH" if bytes.get(data.start).is_some_and(|info| info & 3 == 1) => {
-                crate::vp8l::codes_held(&bytes[data.start + 1..data.end], Some(size))
-            }
+            // Its first byte says how it is compressed; then the picture.
+            b"ALPH" => match bytes[data.clone()].split_first() {
+                Some((info, picture)) if info & 3 == 1 => {
+                    crate::vp8l::codes_held(picture, Some(size))
+                }
+                _ => continue,
+            },
             _ => continue,
         };
         match held {
