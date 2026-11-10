@@ -1,9 +1,13 @@
 //! Programmer-mode bit toggling keypad (upstream CalculatorProgrammerBitFlipPanel):
-//! 64 bits in four rows of four nibbles, MSB first. Set bits glow.
+//! 64 bits in four rows of four nibbles, MSB first, laid out as DGMNB's
+//! (`calc.rs` `bit_flip`): each row a quarter of the grid, each nibble its
+//! four bits over the index of its first, the bits `BIT_INSET_Y` in from
+//! the top and bottom of their room.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use appcore::metrics::programmer as mpg;
 use gtk::prelude::*;
 
 /// Called with the index of the bit the user toggled.
@@ -18,23 +22,32 @@ pub struct BitFlip {
 
 impl BitFlip {
     pub fn new() -> Rc<Self> {
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        root.set_homogeneous(true);
         root.add_css_class("wc-bitflip");
         root.add_css_class("wc-plain");
-        root.set_valign(gtk::Align::Center);
+        let pad_y = mpg::BITS_PAD_Y as i32;
+        let inner = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        inner.set_homogeneous(true);
+        inner.set_margin_top(pad_y);
+        inner.set_margin_bottom(pad_y);
+        inner.set_vexpand(true);
         let mut bits: Vec<Option<gtk::ToggleButton>> = vec![None; 64];
         for row in 0..4 {
-            let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+            let row_box = gtk::Box::new(gtk::Orientation::Horizontal, mpg::NIBBLE_GAP as i32);
             row_box.set_homogeneous(true);
             for nibble in 0..4 {
-                let col = gtk::Box::new(gtk::Orientation::Vertical, 2);
-                let nb = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+                let col = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                let nb = gtk::Box::new(gtk::Orientation::Horizontal, mpg::BIT_GAP as i32);
                 nb.set_homogeneous(true);
+                nb.set_vexpand(true);
                 let top_bit = 63 - (row * 16 + nibble * 4);
                 for j in 0..4 {
                     let bit = top_bit - j;
                     let b = gtk::ToggleButton::with_label("0");
                     b.add_css_class("wc-bit");
+                    b.set_margin_top(mpg::BIT_INSET_Y as i32);
+                    b.set_margin_bottom(mpg::BIT_INSET_Y as i32);
                     b.set_tooltip_text(Some(&format!("Bit {bit}")));
                     // Named by which bit it is (as DGMNB's, and upstream's
                     // "%1, value %2" puts the position first); its value,
@@ -46,12 +59,14 @@ impl BitFlip {
                 let label = gtk::Label::new(Some(&top_bit.to_string()));
                 label.add_css_class("wc-bit-index");
                 label.set_xalign(0.0);
+                label.set_height_request(mpg::BIT_INDEX_H as i32);
                 col.append(&nb);
                 col.append(&label);
                 row_box.append(&col);
             }
-            root.append(&row_box);
+            inner.append(&row_box);
         }
+        root.append(&inner);
         let bits: Vec<gtk::ToggleButton> = bits
             .into_iter()
             .map(|b| b.expect("all bits built"))

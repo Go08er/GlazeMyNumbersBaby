@@ -28,6 +28,13 @@ The marker's words: the style path, the selector, then any of
     checked=SEL,...    the ways of being on (default `:checked`)
     icon=SELECTOR      a descendant that takes the icon colour
 
+A Text (a label's look: colour, font, halo, margin) is marked the same
+way, with no options but `scope=`:
+
+    /* text header.title .wc-title */
+    ...
+    /* end text */
+
 `--check` changes nothing and fails if a block is out of date.
 """
 
@@ -50,6 +57,7 @@ REST = [
     ("min-height", "min-height"),
     ("font-family", "font-family"),
     ("font-size", "font-size"),
+    ("line-height", "line-height"),
     ("font-weight", "font-weight"),
     ("font-style", "font-style"),
     ("letter-spacing", "letter-spacing"),
@@ -70,8 +78,24 @@ STATE = [
     ("font-weight", "font-weight"),
 ]
 
-MARK = re.compile(r"^/\* control (\S+) (\S+)((?: \S+=\S+)*) \*/$")
-END = "/* end control */"
+# A Text's properties.
+TEXT = [
+    ("color", "color"),
+    ("font-family", "font-family"),
+    ("font-size", "font-size"),
+    ("line-height", "line-height"),
+    ("font-weight", "font-weight"),
+    ("font-style", "font-style"),
+    ("letter-spacing", "letter-spacing"),
+    ("font-feature-settings", "font-features"),
+    ("font-variation-settings", "font-variations"),
+    ("text-shadow", "text-shadow"),
+    ("margin", "margin"),
+    ("padding-top", "text-nudge"),
+]
+
+MARK = re.compile(r"^/\* (control|text) (\S+) (\S+)((?: \S+=\S+)*) \*/$")
+END = {"control": "/* end control */", "text": "/* end text */"}
 
 
 def var(path, lead, name):
@@ -111,6 +135,8 @@ def control(path, selector, options):
         return out
 
     out = block([base], "", REST)
+    # Its label's line sits where DGMNB puts it (css.rs `text_line`).
+    out += rule([f"{base} label"], [("padding-top", var(path, "", "text-nudge"))])
     out += block(combos([":hover"]), "hover-", STATE)
     out += block(combos(active), "active-", STATE)
     out += block(combos(checked), "checked-", STATE)
@@ -129,6 +155,12 @@ def control(path, selector, options):
     return out
 
 
+def text_rule(path, selector, options):
+    scope = options.get("scope", "").replace("+", " ")
+    scope = scope + " " if scope else ""
+    return rule([scope + selector], [(p, var(path, "", n)) for p, n in TEXT])
+
+
 def regenerate(text):
     lines = text.split("\n")
     out, i = [], 0
@@ -139,12 +171,14 @@ def regenerate(text):
         m = MARK.match(line)
         if not m:
             continue
-        options = dict(w.split("=", 1) for w in m.group(3).split())
-        while i < len(lines) and lines[i] != END:
+        kind, path, selector = m.group(1), m.group(2), m.group(3)
+        options = dict(w.split("=", 1) for w in m.group(4).split())
+        while i < len(lines) and lines[i] != END[kind]:
             i += 1
         if i == len(lines):
-            sys.exit(f"control {m.group(1)}: no '{END}' line")
-        out.append(control(m.group(1), m.group(2), options).rstrip("\n"))
+            sys.exit(f"{kind} {path}: no '{END[kind]}' line")
+        write = control if kind == "control" else text_rule
+        out.append(write(path, selector, options).rstrip("\n"))
     return "\n".join(out)
 
 

@@ -107,6 +107,13 @@ const fn todo(path: &'static str, kind: Kind) -> Row {
     }
 }
 
+/// What a Text is drawn on: which halo it takes.
+#[derive(Clone, Copy)]
+enum On {
+    Backdrop,
+    Raised,
+}
+
 /// What a base value is worked out from.
 pub struct Scope<'a> {
     /// `T`: the tokens, the theme's merged over the base ones.
@@ -189,6 +196,92 @@ impl Scope<'_> {
         }
     }
 
+    /// A Text in `font` and `color`, with no margin, and the halo of what
+    /// it is on (as the theme set it): text straight on the backdrop has
+    /// `window.text_halo`, text on a raised surface (the sidebar, the
+    /// panel) `window.raised_text_halo`.
+    fn text(&self, font: &Font, color: Rgba, on: On) -> Value {
+        let halo = match on {
+            On::Backdrop => "window.text_halo",
+            On::Raised => "window.raised_text_halo",
+        };
+        let shadow = match self.get(halo) {
+            Value::Shadows(s) => s.clone(),
+            _ => Vec::new(),
+        };
+        Value::Text(Text {
+            color,
+            font: font.clone(),
+            shadow,
+            margin: Spacing::default(),
+        })
+    }
+
+    /// `icon_button`'s base: a round 36 px button with an 18 px icon, lit
+    /// in the accent at .18 when on. (The header's buttons start from
+    /// this too: their rows come before `icon_button`'s.)
+    fn icon_button(&self) -> Control {
+        use metrics::controls::{ICON_BUTTON, ICON_BUTTON_ON_ALPHA};
+        let c = &self.t.colors;
+        Control {
+            radius: Radius::all(ROUND),
+            min_width: ICON_BUTTON,
+            min_height: ICON_BUTTON,
+            checked: State::filled(alpha(c.accent, ICON_BUTTON_ON_ALPHA), c.accent_text),
+            ..self.control(&self.t.text.body)
+        }
+    }
+
+    /// `text_button`'s base: a 34 px row button in the caption style with
+    /// no fill, lit in the accent when on.
+    fn text_button(&self) -> Control {
+        use metrics::controls::{BUTTON_PAD_X, TEXT_BUTTON_H};
+        let c = &self.t.colors;
+        Control {
+            min_height: TEXT_BUTTON_H,
+            padding: Spacing::vh(0.0, BUTTON_PAD_X),
+            checked: State::filled(c.accent, c.on_accent),
+            ..self.control(&self.t.text.caption)
+        }
+    }
+
+    /// A raised card's shadow: three rings of black, DGMNB's.
+    fn popover_shadow(&self) -> Vec<Shadow> {
+        metrics::shape::POPOVER_SHADOW
+            .iter()
+            .map(|&(spread, a)| Shadow {
+                x: 0.0,
+                y: 0.0,
+                blur: 0.0,
+                spread,
+                color: alpha(BLACK, a),
+                inset: false,
+            })
+            .collect()
+    }
+
+    /// A font in `fonts.ui` at one of DGMNB's own sizes.
+    fn ui_font(&self, style: metrics::TextStyle) -> Font {
+        Font::new(&self.t.fonts.ui, style.size, style.weight)
+    }
+
+    /// A selectable row (`nav.row`, the radix list): the accent at .16
+    /// behind it when selected.
+    fn selectable_row(&self, font: &Font) -> Control {
+        let c = &self.t.colors;
+        Control {
+            radius: Radius::all(self.t.shape.row_radius),
+            checked: State {
+                background: Some(Fill::color(alpha(
+                    c.accent,
+                    metrics::controls::ROW_CHECKED_ALPHA,
+                ))),
+                ..State::default()
+            },
+            ..self.control(font)
+        }
+    }
+
     /// A key class: `keys`' shared values, with its own fill, text colour
     /// and font.
     fn key(&self, background: Rgba, color: Rgba, font: Font) -> Value {
@@ -243,6 +336,19 @@ fn px(n: f32) -> Value {
 fn spacing(top: f32, right: f32, bottom: f32, left: f32) -> Value {
     Value::Spacing(Spacing::trbl(top, right, bottom, left))
 }
+
+/// A value per calculator mode.
+fn modes(standard: f32, scientific: f32, programmer: f32, compact: f32) -> Value {
+    Value::Record(BTreeMap::from([
+        ("standard", px(standard)),
+        ("scientific", px(scientific)),
+        ("programmer", px(programmer)),
+        ("compact", px(compact)),
+    ]))
+}
+
+/// A radius of 999 or more is fully round.
+const ROUND: f32 = 999.0;
 
 // ---- Kinds the rows share --------------------------------------------------
 
@@ -408,26 +514,89 @@ pub static ROWS: &[Row] = &[
     row("header.background", Kind::Fill, |s| {
         Value::Fill(Fill::color(s.text_scrim()))
     }),
-    todo("header.height", SIZE),
-    todo("header.title", Kind::Text),
-    todo("header.button", Kind::Control),
-    todo("header.controls", Kind::Control),
-    todo("header.close", Kind::Control),
+    row("header.height", SIZE, |_| px(metrics::window::HEADER_H)),
+    row("header.title", Kind::Text, |s| {
+        s.text(&s.t.text.title, s.t.colors.fg, On::Backdrop)
+    }),
+    row("header.button", Kind::Control, |s| {
+        Value::Control(Box::new(s.icon_button()))
+    }),
+    row("header.controls", Kind::Control, |s| {
+        Value::Control(Box::new(s.icon_button()))
+    }),
+    // As the theme set `header.controls`.
+    row("header.close", Kind::Control, |s| {
+        s.get("header.controls").clone()
+    }),
     // -- Navigation sidebar.
-    todo("nav.background", Kind::Fill),
-    todo("nav.shadow", Kind::Shadows),
-    todo("nav.width", SIZE),
-    todo("nav.title", Kind::Text),
-    todo("nav.show_title", Kind::Bool),
-    todo("nav.header", Kind::Text),
-    todo("nav.uppercase_headers", Kind::Bool),
-    todo("nav.row", Kind::Control),
-    todo("nav.settings", Kind::Control),
+    row("nav.background", Kind::Fill, |s| {
+        Value::Fill(Fill::color(s.t.colors.bg))
+    }),
+    // A line down the right edge.
+    row("nav.shadow", Kind::Shadows, |s| {
+        Value::Shadows(vec![Shadow {
+            x: -metrics::nav::EDGE,
+            y: 0.0,
+            blur: 0.0,
+            spread: 0.0,
+            color: s.t.colors.border,
+            inset: true,
+        }])
+    }),
+    row("nav.width", SIZE, |_| px(metrics::nav::WIDTH)),
+    row("nav.title", Kind::Text, |s| {
+        s.text(&s.t.text.title, s.t.colors.fg, On::Raised)
+    }),
+    row("nav.show_title", Kind::Bool, |_| Value::Bool(true)),
+    row("nav.header", Kind::Text, |s| {
+        let mut header = s.text(&s.t.text.caption, s.t.colors.fg_dim, On::Raised);
+        if let Value::Text(t) = &mut header {
+            t.margin.left = metrics::nav::HEADER_X;
+        }
+        header
+    }),
+    row("nav.uppercase_headers", Kind::Bool, |_| Value::Bool(false)),
+    row("nav.row", Kind::Control, |s| {
+        use metrics::nav::{ROW_H, ROW_ICON, ROW_ICON_X, ROW_MARGIN_X, ROW_STEP};
+        let c = &s.t.colors;
+        let mut row = s.selectable_row(&s.t.text.body);
+        row.min_height = ROW_H;
+        // The step to the next row, shared above and below.
+        row.margin = Spacing::vh((ROW_STEP - ROW_H) / 2.0, ROW_MARGIN_X);
+        row.padding = Spacing::vh(0.0, ROW_ICON_X);
+        row.icon.size = ROW_ICON;
+        row.checked.color = Some(c.accent_text);
+        Value::Control(Box::new(row))
+    }),
+    // As the theme set `nav.row`, at the foot of the drawer.
+    row("nav.settings", Kind::Control, |s| {
+        let mut settings = s.get("nav.row").clone();
+        if let Value::Control(c) = &mut settings {
+            c.margin = Spacing::all(metrics::nav::FOOT_INSET);
+        }
+        settings
+    }),
     // -- Shared controls.
-    todo("icon_button", Kind::Control),
-    todo("text_button", Kind::Control),
-    todo("text_button_gap", SIZE),
-    todo("flyout_button", Kind::Control),
+    row("icon_button", Kind::Control, |s| {
+        Value::Control(Box::new(s.icon_button()))
+    }),
+    row("text_button", Kind::Control, |s| {
+        Value::Control(Box::new(s.text_button()))
+    }),
+    row("text_button_gap", SIZE, |_| {
+        px(metrics::controls::TEXT_BUTTON_GAP)
+    }),
+    // As the theme set `text_button`, in the small style, and 30 high (its
+    // row is 36: the button 3 in from top and bottom).
+    row("flyout_button", Kind::Control, |s| {
+        let mut b = match s.get("text_button") {
+            Value::Control(c) => (**c).clone(),
+            _ => s.text_button(),
+        };
+        b.font = s.t.text.small.clone();
+        b.min_height = metrics::calc::FLYOUT_ROW_H - 2.0 * metrics::calc::FLYOUT_BUTTON_PAD_Y;
+        Value::Control(Box::new(b))
+    }),
     todo("button", Kind::Control),
     row("segmented.gap", SIZE, |_| {
         px(metrics::controls::SEGMENTED_GAP)
@@ -471,9 +640,24 @@ pub static ROWS: &[Row] = &[
             ("knob_on", Kind::Color),
         ]),
     ),
-    todo(
+    // The thumb, `inset` in from the view's edge (to its outer side).
+    row(
         "scrollbar",
-        Kind::Record(&[("width", SIZE), ("color", Kind::Color), ("radius", SIZE)]),
+        Kind::Record(&[
+            ("width", SIZE),
+            ("color", Kind::Color),
+            ("radius", SIZE),
+            ("inset", SIZE),
+        ]),
+        |s| {
+            use metrics::controls::{SCROLLBAR_INSET, SCROLLBAR_RADIUS, SCROLLBAR_W};
+            Value::Record(BTreeMap::from([
+                ("width", px(SCROLLBAR_W)),
+                ("color", color(s.t.colors.fg_faint)),
+                ("radius", px(SCROLLBAR_RADIUS)),
+                ("inset", px(SCROLLBAR_INSET)),
+            ]))
+        },
     ),
     todo("card", Kind::Surface),
     todo("popover", Kind::Surface),
@@ -507,8 +691,21 @@ pub static ROWS: &[Row] = &[
         Value::Radius(Radius::all(s.t.shape.card_radius))
     }),
     todo("display.padding_x", SIZE),
-    todo("display.heights", MODES_HEIGHT),
-    todo("display.sizes", MODES_SIZE),
+    // The calculator page sizes the readout from these (DGMNB's).
+    row("display.heights", MODES_HEIGHT, |_| {
+        use metrics::calc::*;
+        modes(
+            DISPLAY_H_STANDARD,
+            DISPLAY_H_SCIENTIFIC,
+            DISPLAY_H_PROGRAMMER,
+            DISPLAY_H_COMPACT,
+        )
+    }),
+    row("display.sizes", MODES_SIZE, |_| {
+        use metrics::text::{DISPLAY_VALUE, DISPLAY_VALUE_COMPACT};
+        let size = DISPLAY_VALUE.size;
+        modes(size, size, size, DISPLAY_VALUE_COMPACT.size)
+    }),
     todo("display.min_size", FONT_SIZE),
     todo("display.value.font", Kind::Font),
     todo("display.value.color", Kind::Paint),
@@ -595,8 +792,33 @@ pub static ROWS: &[Row] = &[
         ]),
     ),
     // -- History and memory panel.
-    todo("panel", Kind::Surface),
-    todo("panel.sheet", Kind::Surface),
+    row("panel", Kind::Surface, |s| {
+        Value::Surface(Surface {
+            background: Fill::color(s.t.colors.surface2),
+            border: None,
+            shadow: Vec::new(),
+            radius: Radius::all(s.t.shape.card_radius),
+            padding: Spacing::all(metrics::panel::PADDING),
+            margin: Spacing::default(),
+        })
+    }),
+    row("panel.sheet", Kind::Surface, |s| {
+        Value::Surface(Surface {
+            background: Fill::color(s.t.colors.surface),
+            border: Some(Border {
+                width: metrics::shape::BORDER,
+                color: s.t.colors.border,
+            }),
+            shadow: s.popover_shadow(),
+            radius: Radius::all(metrics::shape::SHEET_RADIUS),
+            padding: Spacing::all(metrics::panel::PADDING),
+            // Clear of the window's sides and bottom.
+            margin: {
+                let m = metrics::calc::SHEET_MARGIN;
+                Spacing::trbl(0.0, m, m, m)
+            },
+        })
+    }),
     row("panel.tabs.stretch", Kind::Bool, |_| Value::Bool(true)),
     row("panel.tabs.gap", SIZE, |_| px(0.0)),
     row("panel.tabs.item", Kind::Control, |s| {
@@ -608,22 +830,84 @@ pub static ROWS: &[Row] = &[
             ..s.control(&s.t.text.strong)
         }))
     }),
+    // Accepted, and not drawn: Programmer shows its Memory tab alone,
+    // across the panel, as DGMNB does (0.2 showed a title there).
     todo("panel.title", Kind::Text),
-    todo("panel.row", Kind::Control),
-    todo("panel.expression", Kind::Text),
-    todo("panel.result", Kind::Text),
-    todo("panel.delete", Kind::Control),
-    todo("panel.delete_reveal", REVEAL),
-    todo("panel.memory_button", Kind::Control),
-    todo("panel.memory_reveal", REVEAL),
-    todo("panel.empty", Kind::Text),
+    // A History item (a Memory item is taller: its buttons are under the
+    // value), full width, the step to the next below it.
+    row("panel.row", Kind::Control, |s| {
+        use metrics::panel::{HISTORY_ROW_H, HISTORY_ROW_STEP, ROW_PAD_X, ROW_PAD_Y};
+        Value::Control(Box::new(Control {
+            radius: Radius::all(s.t.shape.row_radius),
+            min_height: HISTORY_ROW_H,
+            padding: Spacing::vh(ROW_PAD_Y, ROW_PAD_X),
+            margin: Spacing::trbl(0.0, 0.0, HISTORY_ROW_STEP - HISTORY_ROW_H, 0.0),
+            ..s.control(&s.t.text.body)
+        }))
+    }),
+    row("panel.expression", Kind::Text, |s| {
+        s.text(&s.t.text.small, s.t.colors.fg_dim, On::Raised)
+    }),
+    row("panel.result", Kind::Text, |s| {
+        let font = s
+            .ui_font(metrics::text::PANEL_RESULT)
+            .with_features(&["tnum"]);
+        s.text(&font, s.t.colors.fg, On::Raised)
+    }),
+    row("panel.delete", Kind::Control, |s| {
+        let mut b = s.icon_button();
+        b.min_width = metrics::panel::DELETE;
+        b.min_height = metrics::panel::DELETE;
+        b.checked = State::default();
+        Value::Control(Box::new(b))
+    }),
+    row("panel.delete_reveal", REVEAL, |_| Value::Word("always")),
+    row("panel.memory_button", Kind::Control, |s| {
+        Value::Control(Box::new(Control {
+            background: Fill::color(s.t.colors.surface2),
+            min_height: metrics::panel::MEMORY_ROW_H
+                - 2.0 * metrics::panel::ROW_PAD_Y
+                - metrics::panel::MEMORY_VALUE_H,
+            padding: Spacing::vh(0.0, metrics::controls::BUTTON_PAD_X),
+            ..s.control(&s.t.text.caption)
+        }))
+    }),
+    row("panel.memory_reveal", REVEAL, |_| Value::Word("always")),
+    row("panel.empty", Kind::Text, |s| {
+        s.text(&s.t.text.small, s.t.colors.fg_dim, On::Raised)
+    }),
     // -- Programmer.
-    todo("programmer.radix.row", Kind::Control),
-    todo("programmer.radix.name", Kind::Text),
-    todo("programmer.radix.name_checked", Kind::Color),
-    todo("programmer.radix.value", Kind::Text),
-    todo("programmer.bit", Kind::Control),
-    todo("programmer.bit_index", Kind::Text),
+    row("programmer.radix.row", Kind::Control, |s| {
+        let mut row = s.selectable_row(&s.t.text.body);
+        row.min_height = metrics::programmer::RADIX_ROW_H;
+        row.padding = Spacing::vh(0.0, metrics::programmer::RADIX_PAD_X);
+        Value::Control(Box::new(row))
+    }),
+    row("programmer.radix.name", Kind::Text, |s| {
+        s.text(&s.t.text.strong, s.t.colors.fg_dim, On::Backdrop)
+    }),
+    row("programmer.radix.name_checked", Kind::Color, |s| {
+        color(s.t.colors.accent_text)
+    }),
+    row("programmer.radix.value", Kind::Text, |s| {
+        let font = s
+            .ui_font(metrics::text::RADIX_VALUE)
+            .with_features(&["tnum"]);
+        s.text(&font, s.t.colors.fg, On::Backdrop)
+    }),
+    row("programmer.bit", Kind::Control, |s| {
+        let c = &s.t.colors;
+        Value::Control(Box::new(Control {
+            checked: State {
+                font_weight: Some(metrics::text::BIT_ON.weight),
+                ..State::filled(c.accent, c.on_accent)
+            },
+            ..s.control(&s.ui_font(metrics::text::BIT))
+        }))
+    }),
+    row("programmer.bit_index", Kind::Text, |s| {
+        s.text(&s.t.text.caption, s.t.colors.fg_faint, On::Backdrop)
+    }),
     // -- Date page.
     todo("date.label", Kind::Text),
     todo("date.field", Kind::Control),

@@ -345,11 +345,42 @@ fn emit_fill(out: &mut BTreeMap<String, String>, path: &str, lead: &str, f: &Fil
     put(out, path, &format!("{lead}image"), image);
 }
 
+/// Where a line of text in `size` px sits: its box's height, near the
+/// font's own, and the padding above it (0 or 1 px).
+///
+/// DGMNB puts a line's baseline at its place's middle plus half the
+/// capitals' height, on a whole pixel (`ui.rs` `draw_line`, `text.rs`
+/// `draw`). The toolkit centres a line's box in its place, rounding down,
+/// and puts the baseline half the leading below the font's ascent; it
+/// draws glyphs to the fraction of a pixel. Inter's ascent less its
+/// descent is its cap height, so the toolkit's baseline is the box's
+/// middle plus half the capitals: in a place an even number of pixels
+/// high, with this box and this padding, that is DGMNB's baseline exactly
+/// (docs/theming.md, "Text in its place"). Other fonts are centred the
+/// toolkit's way, as near as this gets them.
+pub fn text_line(size: f32) -> (f32, f32) {
+    let half_cap = size * CAP_EM / 2.0;
+    let frac = half_cap - half_cap.floor();
+    let even = (size * LINE_EM / 2.0).round().max(1.0) * 2.0;
+    if frac < 0.5 {
+        (even - 2.0 * frac, 0.0)
+    } else {
+        (even + 2.0 * (1.0 - frac), 1.0)
+    }
+}
+
+/// Inter's ascent and descent, and its capitals' height, in em.
+const LINE_EM: f32 = (1984.0 + 494.0) / 2048.0;
+const CAP_EM: f32 = 1490.0 / 2048.0;
+
 /// A font's properties, named after the element at `path` that it is the
 /// font of.
 fn emit_font(out: &mut BTreeMap<String, String>, path: &str, f: &Font) {
     put(out, path, "font-family", font_family(&f.family));
     put(out, path, "font-size", px(f.size));
+    let (line, nudge) = text_line(f.size);
+    put(out, path, "line-height", px(line));
+    put(out, path, "text-nudge", px(nudge));
     put(out, path, "font-weight", num(f.weight.round()));
     let style = if f.italic { "italic" } else { "normal" };
     put(out, path, "font-style", style.into());
