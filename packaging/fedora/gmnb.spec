@@ -26,6 +26,9 @@ BuildRequires:  pkgconfig(wayland-client)
 BuildRequires:  desktop-file-utils
 BuildRequires:  libappstream-glib
 Requires:       hicolor-icon-theme
+# Theme sounds go to a sound server that speaks PulseAudio's protocol, over
+# its socket (no library is linked). Without one GMNB is silent.
+Suggests:       pipewire-pulseaudio
 
 %description
 GMNB is a Rust port of the open-source Windows Calculator with a GTK 4

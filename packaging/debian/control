@@ -20,6 +20,9 @@ Rules-Requires-Root: no
 Package: gmnb
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
+# Theme sounds go to a sound server that speaks PulseAudio's protocol, over
+# its socket (no library is linked). Without one GMNB is silent.
+Suggests: pipewire-pulse | pulseaudio
 Description: GlazeMyNumbers,Baby - a pointlessly beautiful calculator
  GMNB is a Rust port of the open-source Windows Calculator with a GTK 4
  interface: Standard, Scientific, Programmer, Graphing, Date calculation and

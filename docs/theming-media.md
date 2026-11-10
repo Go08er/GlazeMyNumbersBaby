@@ -528,6 +528,13 @@ musical steps and needs both values above zero.
 | `{ type = "crush", bits, rate }` | 1 to 16; 100 to 48 000 | Fewer bits and fewer samples a second: arcade grit |
 | `{ type = "lowpass" \| "highpass" \| "bandpass", freq, q }` | as a layer's filter | Filters the mix; `freq` may glide over the whole sound |
 
+A number left out of an effect is: delay `time` 0.25, `feedback` 0.35,
+`mix` 0.3; reverb `size` 0.5, `damp` 0.5, `mix` 0.3; drive `amount` 0.5;
+crush `bits` 8, `rate` 12 000. A filter, as an effect or on a layer,
+needs its `freq` (without one it is left out, with a note); its `q` is
+0.707. Left out of a layer: `fm.ratio` is 1 and `fm.index` 0, and the
+`rate` and `depth` of a vibrato or tremolo are 0.
+
 A sound with a delay or reverb rings on after its layers end. The app
 keeps the tail until it has faded (or until `length`, or 4 s) and trims
 the silence after it.
@@ -712,8 +719,9 @@ proves not to be enough.
 | Crate | Holds | Depends on |
 |---|---|---|
 | `crates/gmnb-media` (new) | Sniffing and decoding stills; the animation player and its thread; the field pass; ramps. No toolkit: it produces RGBA bytes. | `png`, `zune-jpeg`, `gif`, `image-webp` |
-| `crates/gmnb-sound` (new) | The synthesiser; reading sound files; the mixer; the PulseAudio client and its threads | `crmath`, `hound`, `lewton`, `pulseaudio`, `futures` (executor only) |
-| `apps/gmnb` | Turning bytes into `gdk::MemoryTexture`; the `gmnb` and `draw` functions; event → sound; Settings | both |
+| `crates/gmnb-sound` (new) | The synthesiser (`synth.rs`); reading sound files (`file.rs`, `resample.rs`); the mixer (`mixer.rs`); the table of sounds by event and how an entry becomes a play (`table.rs`); the PulseAudio client (`pulse.rs`); the engine and its thread (`engine.rs`) | `crmath`, `hound`, `lewton`, `pulseaudio` |
+| `crates/gmnb-theme` | `gmnb.synth`, `gmnb.sound`, `gmnb.note`; checking the `sounds` table and what `sound` returns; an event's name (`sound.rs`). It declares; it makes no sound. | `gmnb-sound`, for the types |
+| `apps/gmnb` | Turning bytes into `gdk::MemoryTexture`; the `gmnb` and `draw` functions for pictures; handing a theme's sounds to the engine and its events to `play`; Settings | both |
 
 Rules these keep:
 
@@ -1196,6 +1204,68 @@ Nothing panics, nothing retries in a loop, nothing reaches the theme.
 renders, decodes and corks). Measured: one extra thread and 1.5 MiB of
 resident memory with the stream open.
 
+**As built** (`crates/gmnb-sound`). What differs from the prototype the
+numbers above came from, and what the engine measured in the same kind
+of sandbox (a private PipeWire 1.6.11 with one null sink, quantum 256, at
+nice 15 under a CPU cap; `examples/latency.rs`, which refuses to run
+anywhere else):
+
+- **A corked stream is given nothing.** The prototype's source answered
+  every request, so a stream created corked was handed silence that the
+  first sound then queued behind. The engine's source answers only while
+  the stream is in use: corked, it leaves the server's request open
+  (`Poll::Pending`), and the sound thread wakes the reactor when a play
+  arrives. The request to start goes out behind the first frames, not
+  ahead of them. A corked stream is asked 0 times a second, and the
+  request after each flush stays the same size (3072 bytes here).
+- **Every wait on the server is bounded** (2 s; the greeting's blocking
+  reads by a socket timeout). A server that stops answering leaves sound
+  "unavailable"; dropping the engine joins its thread, and if that takes
+  more than 5 s leaves it behind with a line on stderr.
+- **A play that waited** more than 50 ms past its own delay in the queue
+  (the sound thread was rendering) is dropped, not played late.
+- `PULSE_SERVER` of another kind than `unix:` is passed over, and the
+  next place is tried.
+- **A wake-up is never used up by a wait on the server.** The sound
+  thread sleeps by parking, in its own loop and while it waits for the
+  server's answer. A play (or being told to stop) that arrived during a
+  cork had its wake-up spent there and then sat in the queue; each such
+  wait now leaves a wake-up behind. `tests/server.rs` holds this with a
+  server that takes 20 ms to answer.
+- **What is tested where.** `cargo test` never meets a sound server: the
+  null sink, a socket nobody listens on, and a stand-in server in the
+  test itself (`tests/server.rs`: created corked, nothing while corked,
+  sound in the stream's first audio, cork then flush 100 ms after the last
+  voice, a server that goes away and comes back). Against the sandbox's
+  real `pipewire-pulse` 1.6.11: `examples/latency.rs` (the table below)
+  and `examples/lifecycle.rs` (the session's server found from the
+  environment; the server stopped while the stream rests and in the
+  middle of a sound, each time "unavailable" within 12 ms, one line, and
+  0 wake-ups afterwards; started again, found by the next play after the
+  retry interval; and no server at all, the chapter's test 3). PulseAudio's
+  own daemon was not tried.
+
+| | Measured |
+|---|---|
+| Theme loaded → stream ready (connect, create corked) | p50 9.7, p95 10.8, max 11.8 ms |
+| The `play` call | p50 0.01, max 0.05 ms (80 ns in the null sink's test) |
+| First play after 400 ms corked → handed to the server | p50 0.15, p95 0.22, max 0.61 ms |
+| First play after 400 ms corked → on the sink | p50 4.2, p95 5.1, max 9.3 ms |
+| Play from corked → handed to the server | p50 0.15, p95 0.25, max 0.66 ms |
+| Play from corked → on the sink | p50 3.9, p95 6.4, max 6.8 ms |
+| Play, stream running → handed to the server | p50 2.8, p95 5.1, max 5.7 ms |
+| Play, stream running → on the sink | p50 18.8, p95 21.1, max 21.8 ms |
+| At rest, corked | 0 requests and 0 wake-ups of the sound thread a second; 0.002 to 0.003% of one core |
+| With a theme loaded | +2 threads, +2.6 MiB resident (768 KiB of it the test's 4 s sound) |
+| Unload while sounding | the call 0.008 ms; both threads gone after 56 ms |
+
+A running stream holds its 15 ms of silence in front of a new sound; a
+corked one holds nothing, which is why the first is slower than the
+second. These are from one run; a second gave the same figures for plays
+(medians within 0.3 ms). Its "stream ready" was 54 ms, measured while
+another job had the machine's processor cap saturated; a third, with the
+machine quieter, 10.6 ms.
+
 ### From event to sound
 
 For each `press`, `result`, `error`, `mode` and `option` event, after the
@@ -1320,8 +1390,10 @@ most in the built-in themes, so at the default nothing peaks above
 ### Packaging
 
 No package gains a build or run-time dependency: everything added is a
-Rust crate. The package names below are from memory, not from the
-distributions' indexes: confirm them when the packaging is edited.
+Rust crate. The package names below were confirmed in the distributions'
+package indexes when the packaging was edited (Debian trixie:
+`pipewire-pulse` 1.4.2, `pulseaudio` 17.0; Fedora 43 to Rawhide:
+`pipewire-pulseaudio`; Arch extra: `pipewire-pulse`, `pulseaudio`).
 
 | Package | Change |
 |---|---|

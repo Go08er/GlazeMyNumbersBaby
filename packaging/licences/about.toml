@@ -43,3 +43,16 @@ checksum = "6dc0e068dcf3a5bc8e054205b85b7720e1d49265bbc64bf515d2cf79197df69a"
 path = "LICENSE-LIBM-MIT"
 license = "MIT"
 checksum = "9eff396a99bafd208e7126602420d6864f6066c08b84485a5b032320a9c01997"
+
+# lewton (Ogg Vorbis, GMNB's theme sounds) keeps both of its licences in one
+# file, which cargo-about can't tell apart. It is MIT or Apache-2.0: the MIT
+# part of the file is taken, with its copyright line.
+[lewton.clarify]
+license = "MIT OR Apache-2.0"
+
+[[lewton.clarify.files]]
+path = "LICENSE"
+license = "MIT"
+checksum = "6a5b303976bc1b405e340cc30d1361e04bb1ebb48fcaf5d045bec77349cdf456"
+start = "The MIT License (MIT)"
+end = "SOFTWARE."
