@@ -95,6 +95,8 @@ impl Ctx {
 
     pub fn toast(&self, text: &str) {
         let toast = adw::Toast::new(text);
+        // Text, not markup (a folder's name may have `&` in it).
+        toast.set_use_markup(false);
         toast.set_timeout(2);
         self.toasts.add_toast(toast);
     }

@@ -464,6 +464,8 @@ impl ThemeSettings {
                 Some(at) => groups[at].1.clone(),
                 None => {
                     let title = def.group.clone().unwrap_or_else(|| "Theme options".into());
+                    // A group's title is markup; the theme's is text.
+                    let title = gtk::glib::markup_escape_text(&title);
                     let group = adw::PreferencesGroup::builder().title(title).build();
                     self.options_box.append(&group);
                     groups.push((def.group.clone(), group.clone()));
