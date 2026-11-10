@@ -33,12 +33,18 @@ pub mod mixer;
 pub mod pulse;
 pub mod recipe;
 pub mod resample;
+/// A stand-in sound server, for the app's tests.
+#[cfg(feature = "stand-in")]
+#[doc(hidden)]
+pub mod standin;
 pub mod synth;
 pub mod table;
 pub mod wav;
 
 pub use bank::{Budget, FileData, SoundSource, ThemeSounds, dump_name, prepare, prepare_all};
-pub use engine::{Bank, Log, Played, Settings, Sink, SoundEngine, SoundState, Stats, Status};
+pub use engine::{
+    Bank, Log, Played, Settings, Sink, SoundEngine, SoundState, Stats, Status, StatusHook,
+};
 pub use mixer::{MixStats, Mixer, PlayParams};
 pub use pulse::{Identity, connection_attempts};
 pub use recipe::{

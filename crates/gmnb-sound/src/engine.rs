@@ -54,6 +54,10 @@ pub enum Sink {
 /// Where the engine's few lines for the terminal go.
 pub type Log = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// Told of each change of [`Status`] the sound thread makes (on that
+/// thread): what Settings says follows it.
+pub type StatusHook = Arc<dyn Fn(Status) + Send + Sync>;
+
 /// How the engine is set up.
 #[derive(Clone)]
 pub struct Settings {
@@ -73,6 +77,9 @@ pub struct Settings {
     pub server_limit: Duration,
     /// Where the lines for the terminal go; `None` is stderr.
     pub log: Option<Log>,
+    /// Called on the sound thread after it has set a new [`Status`]
+    /// (the output ready, or no sound system).
+    pub on_status: Option<StatusHook>,
 }
 
 impl Default for Settings {
@@ -88,6 +95,7 @@ impl Default for Settings {
             retry: Duration::from_secs(5),
             server_limit: Duration::from_secs(2),
             log: None,
+            on_status: None,
         }
     }
 }
@@ -903,6 +911,9 @@ impl Run {
             _ => {}
         }
         self.link.status.store(value, Ordering::Release);
+        if let Some(hook) = &self.settings.on_status {
+            hook(status);
+        }
     }
 
     fn connect(&mut self) {
