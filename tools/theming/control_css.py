@@ -15,6 +15,19 @@ The stylesheet marks each such block with a line saying what it is for:
     ...
     /* end control */
 
+A text field (a Field of the schema) is marked the same way with
+`field` and ended with `/* end field */`: its resting properties, its
+placeholder, selection and caret colours, and one rule each for `focus`,
+`error` and `error-focus`:
+
+    /* field field entry scope=window.gmnb.own-field */
+    ...
+    /* end field */
+
+A Text (`text`) and a Surface (`surface`) are marked the same way, each
+ended with its own `/* end text */` or `/* end surface */`, and written
+as one rule of their properties.
+
 and this tool rewrites every marked block in place:
 
     tools/theming/control_css.py apps/gmnb/src/style.css
@@ -23,17 +36,17 @@ To style a new control, add its marker line and the end line, and run it.
 The marker's words: the style path, the selector, then any of
 
     scope=SELECTOR     an ancestor the rules sit under (with a space after
-                       it); `+` stands for a space inside it
+                       it); `+` stands for a space inside it, as in
+                       the selector
     active=SEL,...     more ways of being pressed, besides `:active`
     checked=SEL,...    the ways of being on (default `:checked`)
     icon=SELECTOR      a descendant that takes the icon colour
-
-A Text (a label's look: colour, font, halo, margin) is marked the same
-way, with no options but `scope=`:
-
-    /* text header.title .wc-title */
-    ...
-    /* end text */
+    focus=SEL,...      (a field) the ways of holding the focus (default
+                       `:focus-within`)
+    error=SEL,...      (a field) the ways of being wrong (default `.error`)
+    line=1             (a control or a text) its labels' lines sit where
+                       DGMNB puts them: the font's line height, and the
+                       pixel above it (css.rs `text_line`)
 
 `--check` changes nothing and fails if a block is out of date.
 """
@@ -78,7 +91,10 @@ STATE = [
     ("font-weight", "font-weight"),
 ]
 
-# A Text's properties.
+MARK = re.compile(r"^/\* (control|field|text|surface) (\S+) (\S+)((?: \S+=\S+)*) \*/$")
+END = {k: f"/* end {k} */" for k in ("control", "field", "text", "surface")}
+END["control"] = "/* end control */"
+
 TEXT = [
     ("color", "color"),
     ("font-family", "font-family"),
@@ -91,11 +107,22 @@ TEXT = [
     ("font-variation-settings", "font-variations"),
     ("text-shadow", "text-shadow"),
     ("margin", "margin"),
+    # Where its line sits in its place (css.rs `text_line`).
     ("padding-top", "text-nudge"),
 ]
 
-MARK = re.compile(r"^/\* (control|text) (\S+) (\S+)((?: \S+=\S+)*) \*/$")
-END = {"control": "/* end control */", "text": "/* end text */"}
+SURFACE = [
+    ("background-color", "background-color"),
+    ("background-image", "background-image"),
+    ("box-shadow", "shadow"),
+    ("border-radius", "radius"),
+    ("padding", "padding"),
+    ("margin", "margin"),
+]
+
+# A field's resting properties: a control's, but no margin, least width
+# or line height (its text is the toolkit's entry, not a label).
+FIELD_REST = [p for p in REST if p[1] not in ("margin", "min-width", "line-height")]
 
 
 def var(path, lead, name):
@@ -116,7 +143,7 @@ def control(path, selector, options):
     active = [":active"] + [s for s in options.get("active", "").split(",") if s]
     checked = [s for s in options.get("checked", ":checked").split(",") if s]
     icon = options.get("icon")
-    base = scope + selector
+    base = scope + selector.replace("+", " ")
 
     def combos(*parts):
         """Every selector for the base with one of each part's ways appended."""
@@ -134,9 +161,12 @@ def control(path, selector, options):
             )
         return out
 
-    out = block([base], "", REST)
-    # Its label's line sits where DGMNB puts it (css.rs `text_line`).
-    out += rule([f"{base} label"], [("padding-top", var(path, "", "text-nudge"))])
+    lines = options.get("line") == "1"
+    rest = [p for p in REST if lines or p[1] != "line-height"]
+    out = block([base], "", rest)
+    if lines:
+        # Its label's line sits where DGMNB puts it (css.rs `text_line`).
+        out += rule([f"{base} label"], [("padding-top", var(path, "", "text-nudge"))])
     out += block(combos([":hover"]), "hover-", STATE)
     out += block(combos(active), "active-", STATE)
     out += block(combos(checked), "checked-", STATE)
@@ -147,7 +177,7 @@ def control(path, selector, options):
     # Covered is not disabled: what the app itself didn't turn off keeps
     # its look.
     # (`.wc-inert` is inside the window: it goes after the scope.)
-    covered = scope + ".wc-inert " + selector
+    covered = scope + ".wc-inert " + selector.replace("+", " ")
     inert = [f"{covered}:disabled:not(.wc-off)"]
     out += block(inert, "", STATE)
     inert = [f"{covered}{way}:disabled:not(.wc-off)" for way in checked]
@@ -155,10 +185,40 @@ def control(path, selector, options):
     return out
 
 
-def text_rule(path, selector, options):
+def field(path, selector, options):
     scope = options.get("scope", "").replace("+", " ")
     scope = scope + " " if scope else ""
-    return rule([scope + selector], [(p, var(path, "", n)) for p, n in TEXT])
+    focus = [s for s in options.get("focus", ":focus-within").split(",") if s]
+    error = [s for s in options.get("error", ".error").split(",") if s]
+    base = scope + selector.replace("+", " ")
+
+    def combos(*parts):
+        sels = [base]
+        for ways in parts:
+            sels = [s + w for s in sels for w in ways]
+        return sels
+
+    out = rule([base], [(p, var(path, "", n)) for p, n in FIELD_REST]
+               + [("caret-color", var(path, "", "caret"))])
+    # (The toolkit dims a placeholder as well: the colour is all of it.)
+    out += rule([f"{base} placeholder"],
+                [("color", var(path, "", "placeholder")), ("opacity", "1"), ("filter", "none")])
+    out += rule([f"{base} text > selection"],
+                [("background-color", var(path, "", "selection"))])
+    out += rule(combos(focus), [(p, var(path, "focus-", n)) for p, n in STATE])
+    out += rule(combos(error), [(p, var(path, "error-", n)) for p, n in STATE])
+    out += rule(combos(error, focus), [(p, var(path, "error-focus-", n)) for p, n in STATE])
+    return out
+
+
+def plain(props):
+    def write(path, selector, options):
+        scope = options.get("scope", "").replace("+", " ")
+        scope = scope + " " if scope else ""
+        lines = options.get("line") == "1"
+        own = [p for p in props if lines or p[1] not in ("line-height", "text-nudge")]
+        return rule([scope + selector.replace("+", " ")], [(p, var(path, "", n)) for p, n in own])
+    return write
 
 
 def regenerate(text):
@@ -177,7 +237,12 @@ def regenerate(text):
             i += 1
         if i == len(lines):
             sys.exit(f"{kind} {path}: no '{END[kind]}' line")
-        write = control if kind == "control" else text_rule
+        write = {
+            "control": control,
+            "field": field,
+            "text": plain(TEXT),
+            "surface": plain(SURFACE),
+        }[kind]
         out.append(write(path, selector, options).rstrip("\n"))
     return "\n".join(out)
 

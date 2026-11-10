@@ -2,7 +2,7 @@
 //! between narrow and wide layouts. Layout changes are deferred to an idle
 //! callback so the widget tree is never mutated mid-allocation.
 //!
-//! `SizeBin` — a bin exactly as high, or as wide, as its page says, whatever
+//! `FixedBin` — a bin exactly as high, or as wide, as its page says, whatever
 //! its child would ask: the readout is `display.heights` high, the side
 //! panel `layout.calculator.panel_width` wide.
 
@@ -75,20 +75,20 @@ mod imp {
     }
 
     #[derive(Default)]
-    pub struct SizeBin {
+    pub struct FixedBin {
         /// `None`: the child's own.
         pub width: Cell<Option<i32>>,
         pub height: Cell<Option<i32>>,
     }
 
     #[glib::object_subclass]
-    impl ObjectSubclass for SizeBin {
-        const NAME: &'static str = "GmnbSizeBin";
-        type Type = super::SizeBin;
+    impl ObjectSubclass for FixedBin {
+        const NAME: &'static str = "GmnbFixedBin";
+        type Type = super::FixedBin;
         type ParentType = gtk::Widget;
     }
 
-    impl ObjectImpl for SizeBin {
+    impl ObjectImpl for FixedBin {
         fn dispose(&self) {
             while let Some(child) = self.obj().first_child() {
                 child.unparent();
@@ -96,7 +96,7 @@ mod imp {
         }
     }
 
-    impl WidgetImpl for SizeBin {
+    impl WidgetImpl for FixedBin {
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
             let fixed = match orientation {
                 gtk::Orientation::Horizontal => self.width.get(),
@@ -325,12 +325,12 @@ impl WidthBin {
 }
 
 glib::wrapper! {
-    pub struct SizeBin(ObjectSubclass<imp::SizeBin>)
+    pub struct FixedBin(ObjectSubclass<imp::FixedBin>)
         @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
-impl SizeBin {
+impl FixedBin {
     pub fn new(child: &impl IsA<gtk::Widget>) -> Self {
         let bin: Self = glib::Object::new();
         child.set_parent(&bin);

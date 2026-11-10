@@ -16,7 +16,7 @@ use crate::widgets::calc_panel::{CalcPanel, MemOp};
 use crate::widgets::display::{Change, Display};
 use crate::widgets::icon::{PathIcon, icon_toggle, paths};
 use crate::widgets::keypad::Keypad;
-use crate::widgets::width_bin::{Cells, SizeBin, Strip, WidthBin};
+use crate::widgets::width_bin::{Cells, FixedBin, Strip, WidthBin};
 use appcore::KeyPress;
 use appcore::input::{self, Action};
 use appcore::keys::{self, KEY_HYP, KEY_SECOND, KEY_TRIG_SECOND};
@@ -36,7 +36,7 @@ pub struct CalculatorPage {
     column: gtk::Box,
     display: Display,
     /// Holds the readout at its mode's height.
-    display_bin: SizeBin,
+    display_bin: FixedBin,
     modes: gtk::Stack,
     keypads: RefCell<HashMap<CalcMode, Keypad>>,
     flyouts: RefCell<Vec<Keypad>>,
@@ -60,7 +60,7 @@ pub struct CalculatorPage {
     shift_radios: RefCell<Vec<(ShiftMode, gtk::CheckButton)>>,
     panel: Rc<CalcPanel>,
     side: gtk::Box,
-    side_bin: SizeBin,
+    side_bin: FixedBin,
     sheet: adw::BottomSheet,
     sheet_holder: gtk::Box,
     history_btn: gtk::Button,
@@ -118,7 +118,7 @@ impl CalculatorPage {
     pub fn new(ctx: Rc<Ctx>) -> Rc<Self> {
         let display = Display::new(64.0);
         // The readout is exactly `display.heights` high (`sync_display`).
-        let display_bin = SizeBin::new(&display);
+        let display_bin = FixedBin::new(&display);
 
         let modes = gtk::Stack::new();
         modes.set_vhomogeneous(false);
@@ -134,7 +134,7 @@ impl CalculatorPage {
         let side = gtk::Box::new(gtk::Orientation::Vertical, 0);
         side.add_css_class("wc-side-panel");
         // Exactly `panel_width` wide, with its margins (`apply_style`).
-        let side_bin = SizeBin::new(&side);
+        let side_bin = FixedBin::new(&side);
         side_bin.set_visible(false);
 
         // The narrow window's History and Memory, in a sheet DGMNB's

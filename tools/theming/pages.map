@@ -1,0 +1,20 @@
+# The base look against DGMNB on the date page, the converter and graphing
+# (goldens.sh OUT BIN pages; compare --batch OUT OUT --map pages.map).
+#
+# The only exclusion here is live data: the currency's "Updated …" line
+# (and the "Update rates" button placed after it) shows the time each app
+# fetched its rates. To look at one agent's surfaces alone, add on the
+# command line --exclude 0,0,760,46 (the header) and, for Currency and
+# Length, --exclude 448,52,300,582 (the keypad).
+dgmnb-date-d0 gmnb-date-d0
+dgmnb-date-d1 gmnb-date-d1
+dgmnb-date-result-d0 gmnb-date-result-d0
+dgmnb-date-result-d1 gmnb-date-result-d1
+dgmnb-currency-d0 gmnb-currency-d0 exclude=12,318,416,26
+dgmnb-currency-d1 gmnb-currency-d1 exclude=12,318,416,26
+dgmnb-length-d0 gmnb-length-d0
+dgmnb-length-d1 gmnb-length-d1
+dgmnb-graphing-d0 gmnb-graphing-d0
+dgmnb-graphing-d1 gmnb-graphing-d1
+dgmnb-graphing-eqs-d0 gmnb-graphing-eqs-d0
+dgmnb-graphing-eqs-d1 gmnb-graphing-eqs-d1

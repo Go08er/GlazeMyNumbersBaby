@@ -26,6 +26,9 @@ use gtk::gdk;
 use gtk::glib;
 use gtk::prelude::*;
 
+use appcore::metrics::date as md;
+use gmnb_theme::Style;
+
 use super::icon::{PathIcon, paths};
 
 const CHEVRON_RIGHT: &str = "M9 6l6 6-6 6";
@@ -41,6 +44,7 @@ pub struct DayGrid {
     title: gtk::Label,
     /// Previous year, previous month, next month, next year.
     nav: [gtk::Button; 4],
+    nav_icons: [PathIcon; 4],
     days: Vec<gtk::Button>,
     /// The first of the month shown.
     shown: Cell<NaiveDate>,
@@ -51,14 +55,18 @@ pub struct DayGrid {
     picked: RefCell<Vec<Picked>>,
 }
 
-fn nav_button(icon: &str, name: &str) -> gtk::Button {
+/// One of the month and year arrows: an icon button, DGMNB's 36 square.
+fn nav_button(icon: &str, name: &str) -> (gtk::Button, PathIcon) {
+    let icon = PathIcon::new(icon, 18);
     let b = gtk::Button::builder()
-        .child(&PathIcon::new(icon, 16))
+        .child(&icon)
         .tooltip_text(name)
-        .css_classes(["flat", "circular", "wc-days-nav"])
+        .css_classes(["wc-days-nav"])
         .build();
+    let side = md::CALENDAR_ARROWS_W as i32;
+    b.set_size_request(side, side);
     b.update_property(&[gtk::accessible::Property::Label(name)]);
-    b
+    (b, icon)
 }
 
 /// The days the grid shows for the month starting `first`: from the Sunday
@@ -94,26 +102,30 @@ impl DayGrid {
             .css_classes(["wc-days-title"])
             .build();
         title.update_property(&[gtk::accessible::Property::Level(2)]);
-        let nav = [
+        let [(n0, i0), (n1, i1), (n2, i2), (n3, i3)] = [
             nav_button(DOUBLE_LEFT, "Previous year"),
             nav_button(paths::CHEVRON_LEFT, "Previous month"),
             nav_button(CHEVRON_RIGHT, "Next month"),
             nav_button(DOUBLE_RIGHT, "Next year"),
         ];
-        let head = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        let (nav, nav_icons) = ([n0, n1, n2, n3], [i0, i1, i2, i3]);
+        // DGMNB's card: a 36 px head, a 26 px row of weekdays, six rows of
+        // days 2 apart.
+        let head = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        head.set_size_request(-1, md::CALENDAR_HEAD_H as i32);
         head.append(&nav[0]);
         head.append(&nav[1]);
         head.append(&title);
         head.append(&nav[2]);
         head.append(&nav[3]);
 
+        let gap = md::CALENDAR_GRID_GAP as i32;
         let grid = gtk::Grid::builder()
-            .row_homogeneous(true)
             .column_homogeneous(true)
-            .row_spacing(2)
-            .column_spacing(2)
+            .column_spacing(gap)
             .css_classes(["wc-days-grid"])
             .build();
+        grid.set_size_request(-1, md::CALENDAR_WEEKDAY_H as i32);
         // The weekdays are read with each day's date; drawn only.
         for (c, w) in WEEKDAYS.into_iter().enumerate() {
             let l = gtk::Label::builder()
@@ -130,31 +142,40 @@ impl DayGrid {
             .accessible_role(gtk::AccessibleRole::List)
             .row_homogeneous(true)
             .column_homogeneous(true)
-            .row_spacing(2)
-            .column_spacing(2)
+            .row_spacing(gap)
+            .column_spacing(gap)
+            .vexpand(true)
             .build();
         days_box.update_relation(&[gtk::accessible::Relation::LabelledBy(&[title.upcast_ref()])]);
         let mut days = Vec::with_capacity(42);
         for i in 0..42 {
             let b = gtk::Button::builder()
                 .accessible_role(gtk::AccessibleRole::ListItem)
-                .css_classes(["flat", "circular", "wc-day"])
+                .css_classes(["wc-day"])
                 .build();
             days_box.attach(&b, i % 7, i / 7, 1, 1);
             days.push(b);
         }
-        grid.attach(&days_box, 0, 1, 7, 6);
-
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         root.add_css_class("wc-days");
+        let (w, h) = md::CALENDAR;
+        let pad = md::CALENDAR_PAD;
+        root.set_size_request((w - 2.0 * pad) as i32, (h - 2.0 * pad) as i32);
+        let pad = pad as i32;
+        root.set_margin_top(pad);
+        root.set_margin_bottom(pad);
+        root.set_margin_start(pad);
+        root.set_margin_end(pad);
         root.append(&head);
         root.append(&grid);
+        root.append(&days_box);
 
         let today = Local::now().date_naive();
         let this = Rc::new(DayGrid {
             root,
             title,
             nav,
+            nav_icons,
             days,
             shown: Cell::new(first_of_month(today)),
             selected: Cell::new(today),
@@ -236,6 +257,16 @@ impl DayGrid {
 
     pub fn widget(&self) -> gtk::Widget {
         self.root.clone().upcast()
+    }
+
+    /// The arrows' icons as the style's `icon_button` has them.
+    pub fn set_style(&self, style: &Style) {
+        if let Some(icon) = style.control("icon_button").map(|c| c.icon) {
+            let stroke = icon.stroke.unwrap_or(style.icon_stroke(icon.size));
+            for i in &self.nav_icons {
+                i.set_style(icon.size, stroke);
+            }
+        }
     }
 
     /// Shows `d`'s month with `d` chosen and the keys on it.

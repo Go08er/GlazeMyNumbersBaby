@@ -1,9 +1,12 @@
 //! `GraphView` — renders a `graphing::Graph` with GSK paths.
 //!
-//! Glass canvas, fading grid with axis labels, neon curves (soft glow +
-//! crisp core) that draw themselves in when an equation appears, shaded
-//! inequality regions, a snapping trace cursor with a value bubble, and
-//! animated zoom/reset. Drag to pan, scroll or pinch to zoom.
+//! Drawn from the style's `graph.canvas` (docs/theming.md, "Graphing"): in
+//! the base look DGMNB's canvas (a surface card with a 1 px border, a
+//! faint grid, the axes, DGMNB's labels, flat curves, a trace dot with a
+//! halo and a value bubble); a theme can give it a gradient, a glow under
+//! the curves, a dashed cross-hair, a ring round the dot. Curves can draw
+//! themselves in (`motion.graph_draw`) and the view glide to a new zoom
+//! (`motion.graph_zoom`). Drag to pan, scroll or pinch to zoom.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -21,13 +24,16 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, gio, glib, graphene, gsk, pango};
 
-use super::animations_enabled;
-use super::display::display_font;
-use crate::theme::{Scheme, rgba};
+use std::collections::BTreeMap;
 
-const RADIUS: f32 = 20.0;
-const ZOOM_ANIM: f32 = 0.24;
-const DRAW_IN: f32 = 0.9;
+use appcore::metrics::graph as mg;
+use gmnb_theme::Style;
+use gmnb_theme::types::{
+    Border, Fill, Font, GradientKind, Paint, Rgba, Shadow, TRANSPARENT, Text, Value, alpha,
+};
+
+use super::animations_enabled;
+use super::fit::{draw_line, pango_font};
 /// Graphs that sample faster than this re-plot inline (perfectly in step
 /// with panning); slower ones move to a worker thread.
 const INLINE_PLOT_MS: f64 = 12.0;
@@ -46,7 +52,11 @@ mod imp {
         pub jobs: RefCell<PlotJobs>,
         pub dirty: Cell<bool>,
         pub colors: RefCell<HashMap<EquationId, [f32; 3]>>,
-        pub scheme: Cell<Option<Scheme>>,
+        pub style: RefCell<Option<Rc<Style>>>,
+        /// `motion.graph_draw` and `motion.graph_zoom`, in seconds (0:
+        /// none).
+        pub draw_secs: Cell<f32>,
+        pub zoom_secs: Cell<f32>,
         pub line_width: Cell<f64>,
         pub trace_on: Cell<bool>,
         /// Asks the page to switch tracing on (keeps its toggle in step).
@@ -70,7 +80,9 @@ mod imp {
                 jobs: RefCell::default(),
                 dirty: Cell::new(true),
                 colors: RefCell::default(),
-                scheme: Cell::new(None),
+                style: RefCell::default(),
+                draw_secs: Cell::new(0.0),
+                zoom_secs: Cell::new(0.0),
                 line_width: Cell::new(graphing::graph::DEFAULT_LINE_WIDTH),
                 trace_on: Cell::new(false),
                 trace_wanted: RefCell::default(),
@@ -177,8 +189,13 @@ impl GraphView {
         self.invalidate();
     }
 
-    pub fn set_scheme(&self, scheme: Scheme) {
-        self.imp().scheme.set(Some(scheme));
+    pub fn set_style(&self, style: &Rc<Style>) {
+        let imp = self.imp();
+        imp.draw_secs
+            .set(style.number("motion.graph_draw") / 1000.0);
+        imp.zoom_secs
+            .set(style.number("motion.graph_zoom") / 1000.0);
+        imp.style.replace(Some(style.clone()));
         self.queue_draw();
     }
 
@@ -209,7 +226,7 @@ impl GraphView {
 
     /// Have `id`'s curve trace itself in.
     pub fn animate_draw(&self, id: EquationId) {
-        if animations_enabled() {
+        if animations_enabled() && self.imp().draw_secs.get() > 0.0 {
             self.imp().draw_in.borrow_mut().insert(id, Instant::now());
             self.ensure_ticking();
         }
@@ -305,7 +322,7 @@ impl GraphView {
         let Some(cur) = self.imp().vp.get() else {
             return;
         };
-        if animations_enabled() {
+        if animations_enabled() && self.imp().zoom_secs.get() > 0.0 {
             self.imp().anim.set(Some((cur, target, Instant::now())));
             self.ensure_ticking();
         } else {
@@ -358,16 +375,18 @@ impl GraphView {
         let id = self.add_tick_callback(|g, _| {
             let imp = g.imp();
             if let Some((from, to, start)) = imp.anim.get() {
-                let p = (start.elapsed().as_secs_f32() / ZOOM_ANIM).min(1.0);
+                let secs = imp.zoom_secs.get().max(1e-3);
+                let p = (start.elapsed().as_secs_f32() / secs).min(1.0);
                 let e = 1.0 - (1.0 - p as f64).powi(3);
                 g.set_vp(lerp_vp(&from, &to, e));
                 if p >= 1.0 {
                     imp.anim.set(None);
                 }
             }
+            let draw = imp.draw_secs.get();
             imp.draw_in
                 .borrow_mut()
-                .retain(|_, t| t.elapsed().as_secs_f32() < DRAW_IN);
+                .retain(|_, t| t.elapsed().as_secs_f32() < draw);
             g.queue_draw();
             if imp.anim.get().is_none() && imp.draw_in.borrow().is_empty() {
                 imp.tick.replace(None);
@@ -564,17 +583,27 @@ impl GraphView {
         Some(renderer.render_texture(&node, Some(&graphene::Rect::new(0.0, 0.0, w, h))))
     }
 
-    fn label_layout(&self, text: &str, size: f64) -> pango::Layout {
+    /// A label's line in the style's `graph.canvas.label` font.
+    fn label_layout(&self, text: &str, font: &Font) -> pango::Layout {
         let layout = self.create_pango_layout(Some(text));
-        layout.set_font_description(Some(&display_font(self, size as f32, 400)));
+        let (fd, attrs) = pango_font(font, font.size);
+        layout.set_font_description(Some(&fd));
+        layout.set_attributes(Some(&attrs));
         layout
+    }
+
+    /// The height of `font`'s capitals (what DGMNB centres a line on).
+    fn cap(&self, font: &Font) -> f32 {
+        let (ink, _) = self.label_layout("H", font).extents();
+        ink.height() as f32 / pango::SCALE as f32
     }
 
     fn draw(&self, s: &gtk::Snapshot) {
         let imp = self.imp();
-        let Some(scheme) = imp.scheme.get() else {
+        let Some(style) = imp.style.borrow().clone() else {
             return;
         };
+        let look = Look::of(&style);
         let (w, h) = (self.width() as f32, self.height() as f32);
         if w <= 1.0 || h <= 1.0 {
             return;
@@ -585,34 +614,13 @@ impl GraphView {
         }
         let Some(vp) = imp.vp.get() else { return };
         let bounds = graphene::Rect::new(0.0, 0.0, w, h);
-        let rr = gsk::RoundedRect::from_rect(bounds, RADIUS);
-        let fg = scheme.fg;
+        let rr = gsk::RoundedRect::from_rect(bounds, look.radius);
 
-        // Canvas.
+        // The canvas.
         s.push_rounded_clip(&rr);
-        {
-            let (top, bottom) = if scheme.dark {
-                (0.20, 0.30)
-            } else {
-                (0.55, 0.42)
-            };
-            let tint = if scheme.dark {
-                [0.0, 0.0, 0.0]
-            } else {
-                [1.0, 1.0, 1.0]
-            };
-            s.append_linear_gradient(
-                &bounds,
-                &graphene::Point::new(0.0, 0.0),
-                &graphene::Point::new(0.0, h),
-                &[
-                    gsk::ColorStop::new(0.0, rgba(tint, top)),
-                    gsk::ColorStop::new(1.0, rgba(tint, bottom)),
-                ],
-            );
-        }
+        paint_rect(s, &look.background, &bounds);
 
-        // Grid.
+        // Grid. Lines have round ends, as DGMNB strokes them.
         let grid = Grid::for_viewport(&vp);
         let to_sx = |x: f64| vp.to_screen(x, 0.0).0 as f32;
         let to_sy = |y: f64| vp.to_screen(0.0, y).1 as f32;
@@ -626,85 +634,86 @@ impl GraphView {
             let b = gsk::PathBuilder::new();
             b.move_to(x0, y0);
             b.line_to(x1, y1);
-            s.append_stroke(&b.to_path(), &gsk::Stroke::new(width), &color);
+            let st = gsk::Stroke::new(width);
+            st.set_line_cap(gsk::LineCap::Round);
+            s.append_stroke(&b.to_path(), &st, &color);
         };
-        let minor = rgba(fg, if scheme.dark { 0.045 } else { 0.06 });
-        let major = rgba(fg, if scheme.dark { 0.10 } else { 0.12 });
+        let (minor, major) = (rgba(look.grid_minor), rgba(look.grid_major));
+        let gw = mg::GRID_WIDTH;
         for x in &grid.x.minor {
             let sx = to_sx(*x);
-            line(s, sx, 0.0, sx, h, minor, 1.0);
+            line(s, sx, 0.0, sx, h, minor, gw);
         }
         for y in &grid.y.minor {
             let sy = to_sy(*y);
-            line(s, 0.0, sy, w, sy, minor, 1.0);
+            line(s, 0.0, sy, w, sy, minor, gw);
         }
         for t in &grid.x.major {
             let sx = to_sx(t.value);
-            line(s, sx, 0.0, sx, h, major, 1.0);
+            line(s, sx, 0.0, sx, h, major, gw);
         }
         for t in &grid.y.major {
             let sy = to_sy(t.value);
-            line(s, 0.0, sy, w, sy, major, 1.0);
+            line(s, 0.0, sy, w, sy, major, gw);
         }
-        let axis = rgba(fg, 0.55);
+        let axis = rgba(look.axis.0);
         let (ax, ay) = (to_sx(0.0), to_sy(0.0));
         if (0.0..=w).contains(&ax) {
-            line(s, ax, 0.0, ax, h, axis, 1.4);
+            line(s, ax, 0.0, ax, h, axis, look.axis.1);
         }
         if (0.0..=h).contains(&ay) {
-            line(s, 0.0, ay, w, ay, axis, 1.4);
+            line(s, 0.0, ay, w, ay, axis, look.axis.1);
         }
-        // Labels hug the axes, or the edges when an axis is off-screen.
-        let label_color = rgba(fg, 0.62);
+        // Labels hug the axes, or the edges when an axis is off-screen
+        // (DGMNB's offsets).
+        let label_color = rgba(look.label.color);
+        let font = &look.label.font;
+        let cap = self.cap(font);
         let ly = ay.clamp(4.0, h - 18.0);
         for t in &grid.x.major {
             if t.value.abs() < 1e-12 {
                 continue;
             }
-            let layout = self.label_layout(&t.label, 11.0);
-            let (lw, _) = layout.pixel_size();
-            let sx = to_sx(t.value) - lw as f32 / 2.0;
-            if sx < 4.0 || sx + lw as f32 > w - 4.0 {
+            let layout = self.label_layout(&t.label, font);
+            let lw = layout_width(&layout);
+            let sx = to_sx(t.value) - lw / 2.0;
+            if sx < 4.0 || sx + lw > w - 4.0 {
                 continue;
             }
-            s.save();
-            s.translate(&graphene::Point::new(sx, ly + 3.0));
-            s.append_layout(&layout, &label_color);
-            s.restore();
+            draw_line(s, &layout, sx, (ly + 4.0 + cap).round(), &label_color);
         }
         let lx = ax.clamp(4.0, w - 40.0);
         for t in &grid.y.major {
             if t.value.abs() < 1e-12 {
                 continue;
             }
-            let layout = self.label_layout(&t.label, 11.0);
-            let (lw, lh) = layout.pixel_size();
-            let x = if lx + 6.0 + lw as f32 > w {
-                lx - 6.0 - lw as f32
+            let layout = self.label_layout(&t.label, font);
+            let lw = layout_width(&layout);
+            let x = if lx + 6.0 + lw > w {
+                lx - 6.0 - lw
             } else {
                 lx + 6.0
             };
-            let y = to_sy(t.value) - lh as f32 / 2.0;
-            if y < 4.0 || y + lh as f32 > h - 4.0 {
+            let y = to_sy(t.value);
+            if y < 10.0 || y > h - 10.0 {
                 continue;
             }
-            s.save();
-            s.translate(&graphene::Point::new(x, to_sy(t.value) - lh as f32 / 2.0));
-            s.append_layout(&layout, &label_color);
-            s.restore();
+            draw_line(s, &layout, x, (y + cap / 2.0).round(), &label_color);
         }
 
         // Curves.
         let graph = imp.graph.borrow().clone();
         let lw = imp.line_width.get() as f32;
+        let series = &style.tokens.colors.series;
+        let draw_secs = imp.draw_secs.get();
         for (i, ep) in imp.jobs.borrow().plots.iter().enumerate() {
             let color = imp
                 .colors
                 .borrow()
                 .get(&ep.id)
                 .copied()
-                .unwrap_or(scheme.series[i % scheme.series.len()]);
-            let style = graph
+                .unwrap_or_else(|| rgb3(series[i % series.len()]));
+            let line_style = graph
                 .as_ref()
                 .map(|g| g.borrow().line_style(ep.id))
                 .unwrap_or_default();
@@ -712,8 +721,9 @@ impl GraphView {
                 .draw_in
                 .borrow()
                 .get(&ep.id)
+                .filter(|_| draw_secs > 0.0)
                 .map(|t| {
-                    let p = (t.elapsed().as_secs_f32() / DRAW_IN).min(1.0);
+                    let p = (t.elapsed().as_secs_f32() / draw_secs).min(1.0);
                     1.0 - (1.0 - p).powi(3)
                 })
                 .unwrap_or(1.0);
@@ -734,7 +744,7 @@ impl GraphView {
                 s.append_fill(
                     &b.to_path(),
                     gsk::FillRule::Winding,
-                    &rgba(color, 0.18 * draw_p),
+                    &rgba3(color, look.fill_opacity * draw_p),
                 );
             }
 
@@ -764,7 +774,7 @@ impl GraphView {
                 let st = gsk::Stroke::new(width);
                 st.set_line_cap(gsk::LineCap::Round);
                 st.set_line_join(gsk::LineJoin::Round);
-                let pattern: &[f32] = match (ep.plot.boundary_dashed, style) {
+                let pattern: &[f32] = match (ep.plot.boundary_dashed, line_style) {
                     (true, _) | (_, LineStyle::Dash) => &[8.0, 6.0],
                     (_, LineStyle::Dot) => &[0.1, 5.0],
                     (_, LineStyle::DashDot) => &[8.0, 5.0, 0.1, 5.0],
@@ -795,22 +805,23 @@ impl GraphView {
                 s.append_fill(
                     &holes(),
                     gsk::FillRule::Winding,
-                    &rgba([1.0, 1.0, 1.0], 1.0),
+                    &rgba3([1.0, 1.0, 1.0], 1.0),
                 );
                 s.pop();
             }
-            if scheme.dark {
-                s.push_blur(6.0);
-                s.append_stroke(&path, &make(lw * 3.2), &rgba(color, 0.55));
+            // A theme's glow: a blurred, wider copy under the line.
+            if let Some((blur, width, opacity)) = look.glow {
+                s.push_blur(f64::from(blur));
+                s.append_stroke(&path, &make(lw * width), &rgba3(color, opacity));
                 s.pop();
             }
-            s.append_stroke(&path, &make(lw), &rgba(color, 1.0));
+            s.append_stroke(&path, &make(lw), &rgba3(color, 1.0));
             if has_holes {
                 s.pop();
                 s.append_stroke(
                     &holes(),
                     &gsk::Stroke::new((lw * 0.75).max(1.25)),
-                    &rgba(color, draw_p),
+                    &rgba3(color, draw_p),
                 );
             }
         }
@@ -822,70 +833,293 @@ impl GraphView {
                 .borrow()
                 .get(id)
                 .copied()
-                .unwrap_or(scheme.accent);
+                .unwrap_or_else(|| rgb3(style.tokens.colors.accent));
             let (sx, sy) = (tp.screen_x as f32, tp.screen_y as f32);
-            let hair = rgba(color, 0.45);
-            let st = gsk::Stroke::new(1.0);
-            st.set_dash(&[4.0, 4.0]);
+            let hair = rgba3(color, look.hair_opacity);
+            let st = gsk::Stroke::new(mg::HAIR_WIDTH);
+            st.set_line_cap(gsk::LineCap::Round);
+            if let Some((dash, gap)) = look.hair_dash {
+                st.set_dash(&[dash, gap]);
+            }
             for (x0, y0, x1, y1) in [(sx, 0.0, sx, h), (0.0, sy, w, sy)] {
                 let b = gsk::PathBuilder::new();
                 b.move_to(x0, y0);
                 b.line_to(x1, y1);
                 s.append_stroke(&b.to_path(), &st, &hair);
             }
-            let r = graphing::graph::trace_point_radius(imp.line_width.get()) as f32 + 2.0;
-            let dot = gsk::PathBuilder::new();
-            dot.add_circle(&graphene::Point::new(sx, sy), r + 3.0);
-            s.append_fill(&dot.to_path(), gsk::FillRule::Winding, &rgba(color, 0.25));
-            let dot = gsk::PathBuilder::new();
-            dot.add_circle(&graphene::Point::new(sx, sy), r);
-            s.append_fill(&dot.to_path(), gsk::FillRule::Winding, &rgba(color, 1.0));
-            s.append_stroke(
-                &dot.to_path(),
-                &gsk::Stroke::new(1.5),
-                &rgba([1.0, 1.0, 1.0], 0.9),
-            );
-
-            let text = tp.text();
-            let layout = self.label_layout(&text, 13.0);
-            let (lw2, lh) = layout.pixel_size();
-            let (bw, bh) = (lw2 as f32 + 18.0, lh as f32 + 10.0);
-            let mut bx = sx + 14.0;
-            let mut by = sy - bh - 14.0;
-            if bx + bw > w - 6.0 {
-                bx = sx - bw - 14.0;
-            }
-            if by < 6.0 {
-                by = sy + 14.0;
-            }
-            let bubble = gsk::RoundedRect::from_rect(graphene::Rect::new(bx, by, bw, bh), 10.0);
-            s.append_outset_shadow(&bubble, &rgba([0.0, 0.0, 0.0], 0.3), 0.0, 4.0, 0.0, 12.0);
-            let bg = if scheme.dark {
-                rgba(scheme.base_bottom, 0.92)
-            } else {
-                rgba([1.0, 1.0, 1.0], 0.95)
+            let r = graphing::graph::trace_point_radius(imp.line_width.get()) as f32
+                + mg::TRACE_DOT_ADD;
+            let disc = |radius: f32, c: gtk::gdk::RGBA| {
+                let b = gsk::PathBuilder::new();
+                b.add_circle(&graphene::Point::new(sx, sy), radius);
+                s.append_fill(&b.to_path(), gsk::FillRule::Winding, &c);
             };
-            s.push_rounded_clip(&bubble);
-            s.append_color(&bg, bubble.bounds());
-            s.pop();
-            s.save();
-            s.translate(&graphene::Point::new(bx + 9.0, by + 5.0));
-            s.append_layout(&layout, &rgba(fg, 0.95));
-            s.restore();
+            if let Some((grow, halo, opacity)) = look.halo {
+                let c = match halo {
+                    Some(c) => rgba(alpha(c, opacity)),
+                    None => rgba3(color, opacity),
+                };
+                disc(r + grow, c);
+            }
+            disc(r, rgba3(color, 1.0));
+            if let Some(ring) = look.ring {
+                let b = gsk::PathBuilder::new();
+                b.add_circle(&graphene::Point::new(sx, sy), r);
+                s.append_stroke(
+                    &b.to_path(),
+                    &gsk::Stroke::new(ring.width),
+                    &rgba(ring.color),
+                );
+            }
+
+            let bubble = &look.bubble;
+            let text = tp.text();
+            let layout = self.label_layout(&text, &bubble.font);
+            let tw = layout_width(&layout);
+            let (bw, bh) = (tw + mg::BUBBLE_PAD, mg::BUBBLE_H);
+            let mut bx = sx + mg::BUBBLE_OFFSET;
+            let mut by = sy - bh - mg::BUBBLE_OFFSET;
+            if bx + bw > w - mg::BUBBLE_EDGE {
+                bx = sx - bw - mg::BUBBLE_OFFSET;
+            }
+            if by < mg::BUBBLE_EDGE {
+                by = sy + mg::BUBBLE_OFFSET;
+            }
+            let rect = graphene::Rect::new(bx, by, bw, bh);
+            surface(
+                s,
+                &rect,
+                bubble.radius,
+                &Fill::color(bubble.background),
+                bubble.border,
+                &bubble.shadow,
+            );
+            let cap = self.cap(&bubble.font);
+            let tx = bx + (bw - tw) / 2.0;
+            draw_line(
+                s,
+                &layout,
+                tx,
+                (by + bh / 2.0 + cap / 2.0).round(),
+                &rgba(bubble.color),
+            );
         }
         s.pop();
 
-        // Glass rim.
-        let b = gsk::PathBuilder::new();
-        b.add_rounded_rect(&gsk::RoundedRect::from_rect(
-            bounds.inset_r(0.5, 0.5),
-            RADIUS - 0.5,
-        ));
-        s.append_stroke(
-            &b.to_path(),
-            &gsk::Stroke::new(1.0),
-            &rgba(fg, if scheme.dark { 0.12 } else { 0.18 }),
-        );
+        // The border, inside the edge.
+        if let Some(b) = look.border {
+            s.append_border(&rr, &[b.width; 4], &[rgba(b.color); 4]);
+        }
+    }
+}
+
+/// What the canvas is drawn with, from the style (`graph.canvas`).
+struct Look {
+    background: Paint,
+    radius: f32,
+    border: Option<Border>,
+    grid_minor: Rgba,
+    grid_major: Rgba,
+    /// Colour and width.
+    axis: (Rgba, f32),
+    label: Text,
+    fill_opacity: f32,
+    /// Blur, width (times the line's), opacity.
+    glow: Option<(f32, f32, f32)>,
+    hair_opacity: f32,
+    hair_dash: Option<(f32, f32)>,
+    /// Grow, colour (`None`: the curve's), opacity.
+    halo: Option<(f32, Option<Rgba>, f32)>,
+    ring: Option<Border>,
+    bubble: Bubble,
+}
+
+struct Bubble {
+    background: Rgba,
+    color: Rgba,
+    radius: f32,
+    font: Font,
+    border: Option<Border>,
+    shadow: Vec<Shadow>,
+}
+
+/// The parts of the record at `path`.
+fn parts<'a>(style: &'a Style, path: &str) -> Option<&'a BTreeMap<&'static str, Value>> {
+    match style.get(path) {
+        Some(Value::Record(r)) => Some(r),
+        _ => None,
+    }
+}
+
+fn number(v: Option<&Value>) -> f32 {
+    match v {
+        Some(Value::Number(n)) => *n as f32,
+        _ => 0.0,
+    }
+}
+
+fn color(v: Option<&Value>) -> Rgba {
+    match v {
+        Some(Value::Color(c)) => *c,
+        _ => TRANSPARENT,
+    }
+}
+
+fn border(v: Option<&Value>) -> Option<Border> {
+    match v {
+        Some(Value::Border(b)) => Some(*b),
+        _ => None,
+    }
+}
+
+impl Look {
+    fn of(style: &Style) -> Look {
+        let c = &style.tokens.colors;
+        let axis = parts(style, "graph.canvas.axis");
+        let glow = parts(style, "graph.canvas.glow").map(|g| {
+            (
+                number(g.get("blur")),
+                number(g.get("width")),
+                number(g.get("opacity")),
+            )
+        });
+        let hair_dash = match style.get("graph.canvas.trace.hair_dash") {
+            Some(Value::Numbers(n)) if n.len() == 2 => Some((n[0] as f32, n[1] as f32)),
+            _ => None,
+        };
+        let halo = parts(style, "graph.canvas.trace.halo").map(|h| {
+            let color = match h.get("color") {
+                Some(Value::Color(c)) => Some(*c),
+                // "series": the curve's own.
+                _ => None,
+            };
+            (number(h.get("grow")), color, number(h.get("opacity")))
+        });
+        let b = parts(style, "graph.canvas.trace.bubble");
+        let bubble = Bubble {
+            background: b.map_or(c.surface, |b| color(b.get("background"))),
+            color: b.map_or(c.fg, |b| color(b.get("color"))),
+            radius: b.map_or(0.0, |b| number(b.get("radius"))),
+            font: match b.and_then(|b| b.get("font")) {
+                Some(Value::Font(f)) => f.clone(),
+                _ => style.tokens.text.small.clone(),
+            },
+            border: b.and_then(|b| border(b.get("border"))),
+            shadow: match b.and_then(|b| b.get("shadow")) {
+                Some(Value::Shadows(s)) => s.clone(),
+                _ => Vec::new(),
+            },
+        };
+        Look {
+            background: match style.get("graph.canvas.background") {
+                Some(Value::Paint(p)) => p.clone(),
+                _ => Paint::Color(c.surface),
+            },
+            radius: style.number("graph.canvas.radius"),
+            border: border(style.get("graph.canvas.border")),
+            grid_minor: style.color("graph.canvas.grid_minor"),
+            grid_major: style.color("graph.canvas.grid_major"),
+            axis: (
+                axis.map_or(c.fg, |a| color(a.get("color"))),
+                axis.map_or(1.0, |a| number(a.get("width"))),
+            ),
+            label: match style.get("graph.canvas.label") {
+                Some(Value::Text(t)) => t.clone(),
+                _ => Text {
+                    color: c.fg_dim,
+                    font: style.tokens.text.small.clone(),
+                    shadow: Vec::new(),
+                    margin: Default::default(),
+                },
+            },
+            fill_opacity: style.number("graph.canvas.fill_opacity"),
+            glow,
+            hair_opacity: style.number("graph.canvas.trace.hair_opacity"),
+            hair_dash,
+            halo,
+            ring: border(style.get("graph.canvas.trace.ring")),
+            bubble,
+        }
+    }
+}
+
+fn rgba(c: Rgba) -> gtk::gdk::RGBA {
+    gtk::gdk::RGBA::new(c[0], c[1], c[2], c[3])
+}
+
+fn rgba3(c: [f32; 3], a: f32) -> gtk::gdk::RGBA {
+    gtk::gdk::RGBA::new(c[0], c[1], c[2], a)
+}
+
+fn rgb3(c: Rgba) -> [f32; 3] {
+    [c[0], c[1], c[2]]
+}
+
+fn layout_width(layout: &pango::Layout) -> f32 {
+    let (_, logical) = layout.extents();
+    logical.width() as f32 / pango::SCALE as f32
+}
+
+/// A paint over `rect`: a colour, or a gradient along the rect.
+fn paint_rect(s: &gtk::Snapshot, paint: &Paint, rect: &graphene::Rect) {
+    match paint {
+        Paint::Color(c) => s.append_color(&rgba(*c), rect),
+        Paint::Gradient(g) => {
+            let stops: Vec<gsk::ColorStop> = g
+                .colors
+                .iter()
+                .zip(&g.stops)
+                .map(|(c, t)| gsk::ColorStop::new(*t, rgba(*c)))
+                .collect();
+            match g.kind {
+                GradientKind::Linear => {
+                    // CSS angles: 0deg points up, 90deg right.
+                    let a = g.angle.to_radians();
+                    let (dx, dy) = (a.sin(), -a.cos());
+                    let (w, h) = (rect.width(), rect.height());
+                    let half = (w * dx.abs() + h * dy.abs()) / 2.0;
+                    let (cx, cy) = (rect.x() + w / 2.0, rect.y() + h / 2.0);
+                    s.append_linear_gradient(
+                        rect,
+                        &graphene::Point::new(cx - dx * half, cy - dy * half),
+                        &graphene::Point::new(cx + dx * half, cy + dy * half),
+                        &stops,
+                    );
+                }
+                _ => {
+                    let center = graphene::Point::new(
+                        rect.x() + rect.width() * g.at[0],
+                        rect.y() + rect.height() * g.at[1],
+                    );
+                    let r = rect.width().max(rect.height());
+                    s.append_radial_gradient(rect, &center, r, r, 0.0, 1.0, &stops);
+                }
+            }
+        }
+    }
+}
+
+/// A raised surface: its shadows, its fill and its border inside the
+/// edge, as DGMNB's `surface` (three rings for a shadow).
+fn surface(
+    s: &gtk::Snapshot,
+    rect: &graphene::Rect,
+    radius: f32,
+    fill: &Fill,
+    border: Option<Border>,
+    shadows: &[Shadow],
+) {
+    let rr = gsk::RoundedRect::from_rect(*rect, radius);
+    for sh in shadows.iter().filter(|sh| !sh.inset) {
+        s.append_outset_shadow(&rr, &rgba(sh.color), sh.x, sh.y, sh.spread, sh.blur);
+    }
+    s.push_rounded_clip(&rr);
+    for paint in fill.0.iter().rev() {
+        paint_rect(s, paint, rect);
+    }
+    s.pop();
+    if let Some(b) = border {
+        s.append_border(&rr, &[b.width; 4], &[rgba(b.color); 4]);
     }
 }
 

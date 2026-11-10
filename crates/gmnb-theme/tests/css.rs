@@ -460,8 +460,8 @@ fn many_changes_reload_the_main_provider() {
     assert_eq!((w.main_len(), w.live_len()), (200, 0));
 }
 
-/// An opacity drag in the base look changes a handful of properties: the
-/// scrims, and at the ends the halo.
+/// An opacity drag in the base look changes a few properties: the scrims,
+/// and at the ends the halo (the window's and its texts').
 #[test]
 fn an_opacity_step_in_the_base_look_is_a_few_properties() {
     let mut w = Writer::new(STYLESHEET);
@@ -481,7 +481,9 @@ fn an_opacity_step_in_the_base_look_is_a_few_properties() {
             Update::Unchanged => {}
             Update::Live(_) => {
                 live += 1;
-                assert!(w.live_len() <= 8, "{opacity}: {}", w.live_len());
+                // At the first step the halo appears, on the window and on
+                // each text on the backdrop that the stylesheet names.
+                assert!(w.live_len() <= 24, "{opacity}: {}", w.live_len());
             }
             Update::Main(_) => panic!("{opacity}: the main provider was reloaded"),
         }
@@ -552,7 +554,7 @@ fn needed(font: &Font) -> f32 {
 /// beneath it, topmost first) for the elements this slice resolves. The
 /// window's background is under them all. `plain_text`: whether text
 /// straight on the backdrop is in it.
-fn pairs(style: &Style, plain_text: bool, chrome: bool) -> Vec<(String, Rgba, f32, Vec<Fill>)> {
+fn pairs(style: &Style, plain_text: bool) -> Vec<(String, Rgba, f32, Vec<Fill>)> {
     let mut out = Vec::new();
     let plain = style.fill("plain.background");
     // Text straight on the backdrop (the memory row, empty states...), over
@@ -624,9 +626,6 @@ fn pairs(style: &Style, plain_text: bool, chrome: bool) -> Vec<(String, Rgba, f3
             }
         }
     }
-    if chrome {
-        chrome_pairs(style, &plain, &mut out);
-    }
     out
 }
 
@@ -644,9 +643,11 @@ fn text_of(style: &Style, path: &str) -> (Rgba, f32) {
 /// A selected row's label (the sidebar's current page, the current radix)
 /// is `accent_text` on the accent at .16: DGMNB's own colours give it
 /// 3.6:1 light and 4.4:1 dark, so it is held to 3, as a mark of the
-/// selection its tint shows too (docs/theming.md, open point 8; moving
+/// selection its tint shows too (docs/theming.md, open point 11; moving
 /// `accent_text` would change DGMNB's pixels).
-fn chrome_pairs(style: &Style, plain: &Fill, out: &mut Vec<(String, Rgba, f32, Vec<Fill>)>) {
+fn chrome_pairs(style: &Style) -> Vec<(String, Rgba, f32, Vec<Fill>)> {
+    let mut out = Vec::new();
+    let plain = &style.fill("plain.background");
     let control = |path: &str| style.control(path).unwrap_or_else(|| panic!("no {path}"));
     // A control's label at rest and in `states`, over `under` (topmost
     // first) and its own background.
@@ -731,6 +732,207 @@ fn chrome_pairs(style: &Style, plain: &Fill, out: &mut Vec<(String, Rgba, f32, V
         UI_CONTRAST,
         vec![row.background, plain.clone()],
     ));
+    out
+}
+
+/// What a field's placeholder needs: DGMNB's light palette puts `fg_faint`
+/// at 2.49:1 on `surface`, and the base look is DGMNB's (docs/theming.md,
+/// "Readability rules", open point 9).
+const PLACEHOLDER_CONTRAST: f32 = 2.45;
+
+/// The date page's, the converter's and graphing's texts, and the
+/// toolkit families' the app draws (fields, popovers, toasts, tooltips).
+fn page_pairs(style: &Style, plain_text: bool) -> Vec<(String, Rgba, f32, Vec<Fill>)> {
+    let mut out = Vec::new();
+    let c = &style.tokens.colors;
+    let plain = style.fill("plain.background");
+    let surface = |path: &str| match style.get(path) {
+        Some(Value::Surface(s)) => s.background.clone(),
+        _ => panic!("no surface at {path}"),
+    };
+    let text = |path: &str| match style.get(path) {
+        Some(Value::Text(t)) => t.clone(),
+        _ => panic!("no text at {path}"),
+    };
+    let part = |path: &str, name: &str| match style.get(path) {
+        Some(Value::Record(r)) => r.get(name).cloned(),
+        _ => None,
+    };
+    // Text straight on a page (over the scrim; on a see-through window
+    // a theme gives its own fills, so only the base look's is checked).
+    if plain_text {
+        for path in [
+            "date.label",
+            "date.subresult",
+            "converter.symbol",
+            "converter.caption",
+            "converter.ratio",
+            "converter.timestamp",
+            "graph.error",
+            "graph.variables",
+            "graph.variable",
+            "graph.analysis.title",
+            "graph.analysis.card_title",
+            "graph.analysis.value",
+            "graph.analysis.text",
+            "graph.analysis.note",
+        ] {
+            let t = text(path);
+            out.push((
+                path.to_string(),
+                t.color,
+                needed(&t.font),
+                vec![plain.clone()],
+            ));
+        }
+        // A result's and a converter value's size and font, in the text
+        // colour.
+        for path in ["date.result", "date.add_result", "converter.value"] {
+            if let Some(Value::Font(f)) = part(path, "font") {
+                let size = match part(path, "size") {
+                    Some(Value::Number(n)) => n as f32,
+                    _ => f.size,
+                };
+                let f = Font { size, ..f };
+                out.push((
+                    path.to_string(),
+                    style.color("window.color"),
+                    needed(&f),
+                    vec![plain.clone()],
+                ));
+            }
+        }
+        // Controls on a page: at rest and checked (a lit date or unit
+        // button, the whimsy chip).
+        for path in [
+            "date.field",
+            "converter.unit",
+            "converter.chip",
+            "converter.link",
+            "graph.add",
+        ] {
+            let control = style.control(path).unwrap();
+            for (state, states) in [("", &[][..]), (" checked", &[Which::Checked][..])] {
+                let f = control.finished(states);
+                out.push((
+                    format!("{path}{state}"),
+                    f.color,
+                    needed(&control.font),
+                    vec![f.background, plain.clone()],
+                ));
+            }
+        }
+    }
+    // Fields: the text and the placeholder (3) on the field.
+    if !style.native().contains(&"field") {
+        for path in ["field", "graph.entry"] {
+            let Some(Value::Field(f)) = style.get(path) else {
+                panic!("no field at {path}");
+            };
+            let under = vec![f.background.clone(), plain.clone()];
+            out.push((path.to_string(), f.color, needed(&f.font), under.clone()));
+            out.push((
+                format!("{path} placeholder"),
+                f.placeholder,
+                PLACEHOLDER_CONTRAST,
+                under,
+            ));
+        }
+    }
+    // A popover's texts: the calendar's, the flyouts' headings, menu rows.
+    let popover = surface("popover");
+    for path in ["date.calendar.title", "date.calendar.weekday", "section"] {
+        let t = text(path);
+        out.push((
+            path.to_string(),
+            t.color,
+            needed(&t.font),
+            vec![popover.clone()],
+        ));
+    }
+    let day = style.control("date.calendar.day").unwrap();
+    for (state, states) in [("", &[][..]), (" checked", &[Which::Checked][..])] {
+        let f = day.finished(states);
+        out.push((
+            format!("date.calendar.day{state}"),
+            f.color,
+            needed(&day.font),
+            vec![f.background, popover.clone()],
+        ));
+    }
+    if !style.native().contains(&"menu") {
+        let menu = surface("menu");
+        let row = style.control("row").unwrap();
+        for (state, states) in [("", &[][..]), (" checked", &[Which::Checked][..])] {
+            let f = row.finished(states);
+            out.push((
+                format!("row{state}"),
+                f.color,
+                needed(&row.font),
+                vec![f.background, menu.clone()],
+            ));
+        }
+    }
+    // Toasts and tooltips float over the page.
+    for (family, path) in [("toast", "toast"), ("tooltip", "tooltip")] {
+        if style.native().contains(&family) {
+            continue;
+        }
+        let (Some(Value::Fill(bg)), Some(Value::Color(fg)), Some(Value::Font(f))) = (
+            part(path, "background"),
+            part(path, "color"),
+            part(path, "font"),
+        ) else {
+            panic!("no {path}");
+        };
+        out.push((
+            path.to_string(),
+            fg,
+            needed(&f),
+            vec![bg, Fill::color(c.bg)],
+        ));
+    }
+    // The canvas: its labels (text), its axes and every graph colour (3).
+    let canvas = match style.get("graph.canvas.background") {
+        Some(Value::Paint(p)) => Fill(vec![p.clone()]),
+        _ => panic!("no canvas"),
+    };
+    let label = text("graph.canvas.label");
+    out.push((
+        "graph.canvas.label".into(),
+        label.color,
+        needed(&label.font),
+        vec![canvas.clone(), plain.clone()],
+    ));
+    if let Some(Value::Color(axis)) = part("graph.canvas.axis", "color") {
+        out.push((
+            "graph.canvas.axis".into(),
+            axis,
+            UI_CONTRAST,
+            vec![canvas.clone(), plain.clone()],
+        ));
+    }
+    for (i, s) in c.series.iter().enumerate() {
+        out.push((
+            format!("series {i}"),
+            *s,
+            UI_CONTRAST,
+            vec![canvas.clone(), plain.clone()],
+        ));
+    }
+    // The canvas's toolbar buttons, on the toolbar over the canvas.
+    let toolbar = surface("graph.toolbar");
+    let tool = style.control("graph.toolbar_button").unwrap();
+    for (state, states) in [("", &[][..]), (" checked", &[Which::Checked][..])] {
+        let f = tool.finished(states);
+        out.push((
+            format!("graph.toolbar_button{state}"),
+            f.icon_color,
+            UI_CONTRAST,
+            vec![f.background, toolbar.clone(), canvas.clone(), plain.clone()],
+        ));
+    }
+    out
 }
 
 /// Rule 3: every text on what is under it, at full opacity. Rule 4: the
@@ -739,6 +941,27 @@ fn chrome_pairs(style: &Style, plain: &Fill, out: &mut Vec<(String, Rgba, f32, V
 /// worked out to).
 #[test]
 fn every_text_reads_on_what_is_under_it() {
+    // The pages' texts for every theme but Aurora, whose colours there
+    // wait on the theme (`auroras_page_texts_read`).
+    let bad = unreadable(|name| !name.starts_with("aurora"));
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// Rules 3 and 4 on the pages (the date page, the converter, graphing and
+/// the families the app draws) for Aurora: 0.2's values for them were
+/// never checked, and some miss (its light palettes' dim captions, its
+/// error colour and whimsy chip, its see-through fields and canvas).
+/// They are the theme's to raise.
+#[test]
+#[ignore = "Aurora's page colours are the theme's to raise (theme.luau)"]
+fn auroras_page_texts_read() {
+    let bad = unreadable(|name| name.starts_with("aurora"));
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// Every pair of the fixed table that reads too faintly, for every style;
+/// the pages' pairs only for the styles `pages` names.
+fn unreadable(pages: impl Fn(&str) -> bool) -> Vec<String> {
     let mut bad = Vec::new();
     for (name, style) in every_style() {
         let base_look = name.starts_with("base");
@@ -749,19 +972,25 @@ fn every_text_reads_on_what_is_under_it() {
         };
         for desktop in desktops {
             let behind = backdrop(&style, desktop);
-            // Aurora's own values for the chrome don't meet these yet:
-            // its polish pass takes them on (the chrome's report lists them).
-            let chrome = !name.starts_with("aurora");
-            for (what, text, at_rest, fills) in
-                pairs(&style, desktop.is_none() || base_look, chrome)
-            {
+            let plain_text = desktop.is_none() || base_look;
+            let mut all = if pages(&name) {
+                let mut all = page_pairs(&style, plain_text);
+                all.extend(chrome_pairs(&style));
+                all
+            } else {
+                Vec::new()
+            };
+            if !name.starts_with("aurora") || !pages(&name) {
+                all.extend(pairs(&style, plain_text));
+            }
+            for (what, text, at_rest, fills) in all {
                 let fills: Vec<&Fill> = fills.iter().collect();
                 let got = worst(text, &fills, &behind);
                 let fg = text == style.tokens.colors.fg;
                 let want = match desktop {
                     None => at_rest,
                     Some(_) if base_look && fg => TEXT_CONTRAST,
-                    Some(_) => UI_CONTRAST,
+                    Some(_) => at_rest.min(UI_CONTRAST),
                 };
                 if got < want {
                     let over = match desktop {
@@ -774,7 +1003,7 @@ fn every_text_reads_on_what_is_under_it() {
             }
         }
     }
-    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+    bad
 }
 
 /// Rule 2: Aurora's palettes, the built-in ones and those generated from
