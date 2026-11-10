@@ -474,6 +474,9 @@ impl Keypad {
                 let (size, stroke) = self.imp().icon.get();
                 let icon = super::icon::PathIcon::new(path, size.round() as i32);
                 icon.set_style(size, stroke);
+                // A key is as small as its place: DGMNB's keys shrink
+                // below what they show (its least window is 300 × 400).
+                icon.set_loose(true);
                 self.imp().icons.borrow_mut().push(icon.clone());
                 icon.upcast()
             }
@@ -482,6 +485,7 @@ impl Keypad {
                 let label = FitLabel::drawn();
                 label.set_markup(&key.label);
                 label.set_align(Align::Center);
+                label.set_loose(true);
                 let inset = (appcore::metrics::controls::KEY_LABEL_MARGIN / 2.0) as i32;
                 label.set_margin_start(inset);
                 label.set_margin_end(inset);

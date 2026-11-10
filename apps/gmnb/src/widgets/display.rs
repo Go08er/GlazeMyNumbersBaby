@@ -399,11 +399,7 @@ const CHANGE_MAX: f64 = 3.0;
 /// options back into a widget's context when its style changes.
 fn text_context(widget: &impl IsA<gtk::Widget>) -> pango::Context {
     let context = widget.create_pango_context();
-    if let Ok(mut options) = gtk::cairo::FontOptions::new() {
-        options.set_hint_style(gtk::cairo::HintStyle::None);
-        options.set_hint_metrics(gtk::cairo::HintMetrics::Off);
-        pangocairo::functions::context_set_font_options(&context, Some(&options));
-    }
+    fit::set_unhinted(&context);
     context
 }
 

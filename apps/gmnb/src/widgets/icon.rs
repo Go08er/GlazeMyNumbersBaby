@@ -28,6 +28,8 @@ mod imp {
         /// worked out from `width`, as 0.2 did).
         pub stroke_px: Cell<Option<f32>>,
         pub draw_start: Cell<Option<Instant>>,
+        /// It asks for no least size ([`super::PathIcon::set_loose`]).
+        pub loose: Cell<bool>,
     }
 
     impl Default for PathIcon {
@@ -39,6 +41,7 @@ mod imp {
                 width: Cell::new(1.75),
                 stroke_px: Cell::new(None),
                 draw_start: Cell::new(None),
+                loose: Cell::new(false),
             }
         }
     }
@@ -60,7 +63,7 @@ mod imp {
     impl WidgetImpl for PathIcon {
         fn measure(&self, _o: gtk::Orientation, _f: i32) -> (i32, i32, i32, i32) {
             let s = self.size.get();
-            (s, s, -1, -1)
+            (if self.loose.get() { 0 } else { s }, s, -1, -1)
         }
 
         fn snapshot(&self, s: &gtk::Snapshot) {
@@ -121,6 +124,15 @@ impl PathIcon {
             Err(e) => glib::g_warning!("gmnb", "bad icon path {data:?}: {e}"),
         }
         self.queue_draw();
+    }
+
+    /// An icon that asks for no least size: it is drawn at its size
+    /// about the middle of whatever it is given, past its edges if need
+    /// be (a key's icon: DGMNB's keys shrink below what they show).
+    pub fn set_loose(&self, loose: bool) {
+        if self.imp().loose.replace(loose) != loose {
+            self.queue_resize();
+        }
     }
 
     pub fn set_stroke_width(&self, w: f32) {

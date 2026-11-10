@@ -187,16 +187,24 @@ pub fn parse_markup(markup: &str) -> (String, Vec<(usize, usize, bool)>) {
     (plain, spans)
 }
 
-/// `widget`'s Pango context set as DGMNB sets text: glyphs unhinted,
-/// their widths unrounded.
-pub fn unhinted(widget: &impl IsA<gtk::Widget>) -> pango::Context {
-    let context = widget.pango_context();
+/// `context` set as DGMNB sets text: outlines unhinted, in grey levels,
+/// their widths unrounded. What `window.rs` `match_text_rendering` asks of
+/// the toolkit for the whole app, said here too for the text the app
+/// places glyph by glyph: it must not move with a setting.
+pub fn set_unhinted(context: &pango::Context) {
     let mut options = pangocairo::cairo::FontOptions::new().ok();
     if let Some(o) = options.as_mut() {
+        o.set_antialias(pangocairo::cairo::Antialias::Gray);
         o.set_hint_style(pangocairo::cairo::HintStyle::None);
         o.set_hint_metrics(pangocairo::cairo::HintMetrics::Off);
     }
-    pangocairo::functions::context_set_font_options(&context, options.as_ref());
+    pangocairo::functions::context_set_font_options(context, options.as_ref());
+}
+
+/// `widget`'s Pango context, set as DGMNB sets text ([`set_unhinted`]).
+pub fn unhinted(widget: &impl IsA<gtk::Widget>) -> pango::Context {
+    let context = widget.pango_context();
+    set_unhinted(&context);
     context
 }
 
@@ -281,6 +289,8 @@ mod imp {
         /// The cell of a grid whose middle the line is set about
         /// (DGMNB's keys sit in cells of fractional size).
         pub cell: RefCell<Option<CellAt>>,
+        /// It asks for no least height ([`super::FitLabel::set_loose`]).
+        pub loose: Cell<bool>,
     }
 
     impl Default for FitLabel {
@@ -294,6 +304,7 @@ mod imp {
                 prefix: RefCell::default(),
                 halo: RefCell::default(),
                 cell: RefCell::default(),
+                loose: Cell::new(false),
             }
         }
     }
@@ -323,7 +334,7 @@ mod imp {
                 (0, natural.ceil() as i32, -1, -1)
             } else {
                 let natural = px(logical.height()).ceil() as i32;
-                (natural, natural, -1, -1)
+                (if self.loose.get() { 0 } else { natural }, natural, -1, -1)
             }
         }
 
@@ -478,6 +489,15 @@ impl FitLabel {
         if *imp.text.borrow() != markup || !imp.markup.get() {
             imp.text.replace(markup.to_string());
             imp.markup.set(true);
+            self.queue_resize();
+        }
+    }
+
+    /// A label that asks for no least height: its line is set about the
+    /// middle of whatever it is given, past its edges if need be (a key's
+    /// label: DGMNB's keys shrink below what they show).
+    pub fn set_loose(&self, loose: bool) {
+        if self.imp().loose.replace(loose) != loose {
             self.queue_resize();
         }
     }
