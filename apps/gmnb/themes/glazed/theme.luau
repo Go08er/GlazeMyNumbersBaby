@@ -444,7 +444,9 @@ local function style(ctx: Ctx): Style
 		header = {
 			background = if see then s.card else gmnb.transparent,
 			height = HEADER,
-			title = { font = jersey(2), color = if see then ink else s.awning_ink },
+			-- (At one and a half the longest page's name, "Weight and mass",
+			-- fits a new window's 360 pixels beside the buttons.)
+			title = { font = jersey(1.5), color = if see then ink else s.awning_ink },
 			button = {
 				min_width = 32,
 				min_height = 32,

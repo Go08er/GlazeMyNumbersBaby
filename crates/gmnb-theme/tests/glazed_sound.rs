@@ -536,7 +536,11 @@ fn nothing_is_too_long_in_any_flavour() {
         // The jingle itself: under the two seconds nothing needs more than.
         let (jingle, _) = choose(&mut app, flavour.id);
         let longest = jingle.iter().map(&ends).fold(0.0, f32::max);
-        assert!(longest <= 1.6, "{}: its jingle lasts {longest} s", flavour.id);
+        assert!(
+            longest <= 1.6,
+            "{}: its jingle lasts {longest} s",
+            flavour.id
+        );
         // A number key and an operator: 80 ms at most, on every key.
         for id in 0..64 {
             let play = app.decide(&digit(id, 0.5)).0[0];
@@ -545,7 +549,11 @@ fn nothing_is_too_long_in_any_flavour() {
             assert!(length <= 0.08, "{}, key {id}: {length} s", flavour.id);
         }
         let length = ends(&app.decide(&operator()).0[0]);
-        assert!(length <= 0.08, "{}: an operator lasts {length} s", flavour.id);
+        assert!(
+            length <= 0.08,
+            "{}: an operator lasts {length} s",
+            flavour.id
+        );
         // The equals key: a quarter of a second at most.
         let length = ends(&app.decide(&equals()).0[0]);
         assert!(length <= 0.25, "{}: = lasts {length} s", flavour.id);
@@ -553,11 +561,18 @@ fn nothing_is_too_long_in_any_flavour() {
         for _ in 0..4 {
             let (plays, _) = app.decide(&result());
             let longest = plays.iter().map(&ends).fold(0.0, f32::max);
-            assert!(longest <= 1.75, "{}: a result lasts {longest} s", flavour.id);
+            assert!(
+                longest <= 1.75,
+                "{}: a result lasts {longest} s",
+                flavour.id
+            );
             app.decide(&equals());
         }
     }
-    println!("Glazed's longest number key, in any flavour: {:.0} ms", longest_key * 1000.0);
+    println!(
+        "Glazed's longest number key, in any flavour: {:.0} ms",
+        longest_key * 1000.0
+    );
     assert!(app.notes.is_empty(), "{:?}", app.notes);
 }
 

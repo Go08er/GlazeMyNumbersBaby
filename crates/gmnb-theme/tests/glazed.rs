@@ -196,7 +196,10 @@ fn pictures(theme: &Theme) -> Pictures {
         let c = theme.api().canvas(id).unwrap();
         (c.width, c.height)
     };
-    assert_eq!((size(canvases[0]), size(canvases[1])), ((256, 28), (24, 24)));
+    assert_eq!(
+        (size(canvases[0]), size(canvases[1])),
+        ((256, 28), (24, 24))
+    );
     Pictures {
         walls: [file("images/wall-light.png"), file("images/wall-dark.png")],
         hem: [
@@ -221,9 +224,11 @@ fn colours_of(theme: &Theme, id: ImageId) -> BTreeSet<[u8; 4]> {
         },
     };
     bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| p[3] != 0)
-        .map(|p| [p[0], p[1], p[2], p[3]])
+        .copied()
         .collect()
 }
 
@@ -474,7 +479,10 @@ fn glazeds_layers_draw_within_their_limits() {
         ..Frame::sized(360.0, 600.0)
     };
     assert_eq!(
-        ok(theme.draw(LayerKind::Overlay, &living, &f)).list.ops.len(),
+        ok(theme.draw(LayerKind::Overlay, &living, &f))
+            .list
+            .ops
+            .len(),
         0
     );
     let off = ctx(&theme, false, "strawberry", &[("fountain", false)]);
@@ -612,7 +620,11 @@ fn glazeds_layers_draw_within_their_limits() {
     assert_eq!(far.again, Some(frame));
     assert_eq!(wave(0.59).again, None);
     // An error shakes the whole pad.
-    let error = Event::at(EventKind::Error, Page::Calculator, [0.0, -150.0, 355.0, 122.0]);
+    let error = Event::at(
+        EventKind::Error,
+        Page::Calculator,
+        [0.0, -150.0, 355.0, 122.0],
+    );
     let f = Frame {
         events: vec![(0.06, &error)],
         keys: Some(keys(&cells)),
@@ -673,7 +685,13 @@ fn glazeds_layers_draw_within_their_limits() {
     // doughnut on the shelf; and with nothing living it stands.
     let typing = display(
         &nothing_living,
-        value(&now, 1, false, Some((ChangeKind::Typing, 2.9)), Role::Calculator),
+        value(
+            &now,
+            1,
+            false,
+            Some((ChangeKind::Typing, 2.9)),
+            Role::Calculator,
+        ),
         vec![],
         0.0,
     );
@@ -681,7 +699,10 @@ fn glazeds_layers_draw_within_their_limits() {
     assert_eq!(typing.again, None);
     let buddy = image_of(&typing, pics.buddy).expect("the doughnut");
     assert_eq!((buddy[2], buddy[3]), (48.0, 48.0));
-    assert!(buddy[0] + buddy[2] < now.rect[0], "it stands clear of the number");
+    assert!(
+        buddy[0] + buddy[2] < now.rect[0],
+        "it stands clear of the number"
+    );
     assert!(
         typing
             .list
@@ -696,7 +717,11 @@ fn glazeds_layers_draw_within_their_limits() {
         vec![],
         1.0,
     );
-    assert!(matches!(idle.again, Some(t) if t > 3.0 && t < 3.3), "{:?}", idle.again);
+    assert!(
+        matches!(idle.again, Some(t) if t > 3.0 && t < 3.3),
+        "{:?}",
+        idle.again
+    );
     let blink = display(
         &living,
         value(&now, 1, false, None, Role::Calculator),
@@ -707,7 +732,13 @@ fn glazeds_layers_draw_within_their_limits() {
     // A new digit drops into place.
     let dropping = display(
         &nothing_living,
-        value(&now, 2, false, Some((ChangeKind::Typing, 0.01)), Role::Calculator),
+        value(
+            &now,
+            2,
+            false,
+            Some((ChangeKind::Typing, 0.01)),
+            Role::Calculator,
+        ),
         vec![],
         0.0,
     );
@@ -719,7 +750,13 @@ fn glazeds_layers_draw_within_their_limits() {
     for (age, pouring) in [(0.05, true), (0.2, true), (0.5, true), (0.9, false)] {
         let d = display(
             &nothing_living,
-            value(&now, 3, false, Some((ChangeKind::Result, age)), Role::Calculator),
+            value(
+                &now,
+                3,
+                false,
+                Some((ChangeKind::Result, age)),
+                Role::Calculator,
+            ),
             vec![],
             0.0,
         );
@@ -733,7 +770,8 @@ fn glazeds_layers_draw_within_their_limits() {
         assert!((icing[1] - (top - 2.0)).abs() <= 1.0, "{} {top}", icing[1]);
         filled.push(colours_of(&theme, pics.icing).len());
         let canvas = theme.api().canvas(pics.icing).unwrap();
-        let iced = canvas.pixels.chunks_exact(4).filter(|p| p[3] != 0).count();
+        let (pixels, _) = canvas.pixels.as_chunks::<4>();
+        let iced = pixels.iter().filter(|p| p[3] != 0).count();
         filled.push(iced);
     }
     // More and more of it is iced, and the sprinkles' colours come last.
@@ -750,19 +788,37 @@ fn glazeds_layers_draw_within_their_limits() {
     // ...until the next digit is typed, or an error says otherwise.
     let plain = display(
         &nothing_living,
-        value(&now, 4, false, Some((ChangeKind::Typing, 1.0)), Role::Calculator),
+        value(
+            &now,
+            4,
+            false,
+            Some((ChangeKind::Typing, 1.0)),
+            Role::Calculator,
+        ),
         vec![],
         0.0,
     );
     assert_eq!(count(&plain, mask), 0);
     let wrong = display(
         &nothing_living,
-        value(&now, 5, true, Some((ChangeKind::Error, 0.1)), Role::Calculator),
+        value(
+            &now,
+            5,
+            true,
+            Some((ChangeKind::Error, 0.1)),
+            Role::Calculator,
+        ),
         vec![],
         0.0,
     );
     assert_eq!((count(&wrong, mask), wrong.again), (0, Some(frame)));
-    assert!(wrong.list.ops.iter().any(|op| matches!(op, Op::Translate(x, _) if *x != 0.0)));
+    assert!(
+        wrong
+            .list
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::Translate(x, _) if *x != 0.0))
+    );
     // Without motion nothing says what a number is: every one is glazed.
     tick();
     let f = Frame {
@@ -776,7 +832,13 @@ fn glazeds_layers_draw_within_their_limits() {
     let cheer = |age: f64| {
         display(
             &nothing_living,
-            value(&now, 7, false, Some((ChangeKind::Result, age)), Role::Calculator),
+            value(
+                &now,
+                7,
+                false,
+                Some((ChangeKind::Result, age)),
+                Role::Calculator,
+            ),
             vec![(age, &result)],
             0.0,
         )
@@ -792,7 +854,11 @@ fn glazeds_layers_draw_within_their_limits() {
     // room at all it is gone. It never stands under a digit.
     for n in 5..=18 {
         let long = digits(n, 344.0, (344.0 - 28.0) / (n as f32 * 0.42));
-        let long = if n <= 10 { digits(n, 344.0, 74.667) } else { long };
+        let long = if n <= 10 {
+            digits(n, 344.0, 74.667)
+        } else {
+            long
+        };
         let d = display(
             &nothing_living,
             value(&long, 10 + n as u64, false, None, Role::Calculator),
@@ -822,7 +888,12 @@ fn glazeds_layers_draw_within_their_limits() {
     }
     // The doughnut switched off: no picture of it.
     let alone = ctx(&theme, false, "strawberry", &[("buddy", false)]);
-    let d = display(&alone, value(&now, 40, false, None, Role::Calculator), vec![], 0.0);
+    let d = display(
+        &alone,
+        value(&now, 40, false, None, Role::Calculator),
+        vec![],
+        0.0,
+    );
     assert_eq!(image_of(&d, pics.buddy), None);
     assert_eq!(d.again, None);
     // A page's line (a converter's value, a date's result): plain digits
@@ -863,7 +934,13 @@ fn glazeds_layers_draw_within_their_limits() {
     let mut versions = BTreeSet::new();
     for i in 0..120 {
         let age = (i % 12) as f64 * 0.034;
-        let v = value(&now, 70, false, Some((ChangeKind::Result, age)), Role::Calculator);
+        let v = value(
+            &now,
+            70,
+            false,
+            Some((ChangeKind::Result, age)),
+            Role::Calculator,
+        );
         tick();
         let f = Frame {
             value: Some(v),
@@ -1062,7 +1139,10 @@ fn the_wall_is_what_the_style_says() {
         for p in tiles {
             assert_eq!(p[3], 255);
             let got = on(rgba(p), wall);
-            assert!(got < 1.3, "dark={dark}: a tile at {got:.2} from the wall's colour");
+            assert!(
+                got < 1.3,
+                "dark={dark}: a tile at {got:.2} from the wall's colour"
+            );
         }
     }
     // The hem's masks are white and nothing else.

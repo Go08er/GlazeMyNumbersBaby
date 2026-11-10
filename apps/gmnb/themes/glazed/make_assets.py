@@ -5,8 +5,10 @@
     python3 -I make_assets.py --check    fails if a file differs from what it would write
 
 Nothing here is copied from anywhere: the pictures are drawn below, pixel
-by pixel, and the same input always gives the same bytes (the sprinkles
-come from a fixed seed). It needs only Python's standard library.
+by pixel, and the same input always gives the same pictures (the sprinkles
+come from a fixed seed). It needs only Python's standard library. The
+check compares a PNG's pixels, not its bytes: how small zlib packs them
+is that zlib's own business, and differs from one build of it to another.
 
 Glazed is drawn on a grid of *art pixels*, each 2 x 2 real ones, like the
 theme's own drawing (theme.luau, `PX`). Stills are written at their real
@@ -40,6 +42,27 @@ def png(width, height, rgba):
         + chunk(b"IDAT", zlib.compress(rows, 9))
         + chunk(b"IEND", b"")
     )
+
+
+def unpng(data):
+    """(width, height, pixels) of a PNG as `png` writes them: 8-bit RGBA, no filter."""
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    at, packed, size = 8, b"", None
+    while at < len(data):
+        (length,) = struct.unpack(">I", data[at : at + 4])
+        kind, body = data[at + 4 : at + 8], data[at + 8 : at + 8 + length]
+        if kind == b"IHDR":
+            width, height, depth, colour, _, _, interlace = struct.unpack(">IIBBBBB", body)
+            assert (depth, colour, interlace) == (8, 6, 0)
+            size = (width, height)
+        elif kind == b"IDAT":
+            packed += body
+        at += 12 + length
+    width, height = size
+    rows = zlib.decompress(packed)
+    stride = 1 + width * 4
+    assert len(rows) == stride * height and all(rows[y * stride] == 0 for y in range(height))
+    return width, height, b"".join(rows[y * stride + 1 : (y + 1) * stride] for y in range(height))
 
 
 def lzw(indices, bits):
@@ -271,7 +294,11 @@ def main():
     for name, data in sorted(pictures().items()):
         path = os.path.join(OUT, name)
         if check:
-            same = os.path.exists(path) and open(path, "rb").read() == data
+            have = open(path, "rb").read() if os.path.exists(path) else None
+            if have is not None and name.endswith(".png"):
+                same = unpng(have) == unpng(data)
+            else:
+                same = have == data
             print(("ok       " if same else "DIFFERS  ") + name)
             bad += not same
         else:
