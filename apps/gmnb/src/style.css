@@ -3534,6 +3534,19 @@ label.wc-subresult {
 }
 /* end text */
 
+/* What holds a result: its caption, the result and the line under it
+   (nothing in the base look; a theme's card). */
+/* surface date.result_panel .wc-result-panel */
+.wc-result-panel {
+  background-color: var(--gmnb-date-result-panel-background-color);
+  background-image: var(--gmnb-date-result-panel-background-image);
+  box-shadow: var(--gmnb-date-result-panel-shadow);
+  border-radius: var(--gmnb-date-result-panel-radius);
+  padding: var(--gmnb-date-result-panel-padding);
+  margin: var(--gmnb-date-result-panel-margin);
+}
+/* end surface */
+
 /* The results (widgets/display.rs draws them at the style's font, or the
    theme's display layer does). */
 calcdisplay.wc-date-result {

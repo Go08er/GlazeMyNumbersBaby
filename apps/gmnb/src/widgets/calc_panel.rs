@@ -73,11 +73,11 @@ fn line_label(text: &str, class: &str, height: f32) -> gtk::Label {
     l
 }
 
-/// What an empty list says, in the middle of it (DGMNB's).
+/// What an empty list says, in the middle of it (DGMNB's). It lies on the
+/// panel or the sheet, a surface of the style's: no scrim of its own.
 fn empty_state(text: &str) -> gtk::Label {
     let l = gtk::Label::new(Some(text));
     l.add_css_class("wc-empty");
-    l.add_css_class("wc-plain");
     l.set_wrap(true);
     l.set_justify(gtk::Justification::Center);
     l.set_valign(gtk::Align::Center);

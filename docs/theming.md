@@ -676,7 +676,7 @@ through `Style` (not CSS).
 | `layout.converter.keypad_width` | 300 | 300 |
 | `layout.date.margin` | `{ 8, 16, 8, 16 }` | `{ 4, 16, 16, 16 }` |
 | `layout.date.gap` | 8 | 14 |
-| `layout.date.max_width` | 480 | unlimited |
+| `layout.date.max_width` | 480 | 480 |
 | `layout.graph.margin` | `{ 4, 8, 4, 8 }` | `{ 0, 10, 10, 10 }` |
 | `layout.graph.gap` | 8 | 10 |
 | `layout.graph.side_width` | 340 | 340 |
@@ -746,7 +746,7 @@ For a Control, the base states are these unless the row says otherwise:
 | `window.font` | Font | `text.body` | `window.gmnb`; inherited by every widget, popover and dialog in it |
 | `window.text_halo` | Shadow list | none; see-through: `{ blur 3, bg 0.9 }, { blur 10, bg 0.75 }` | `text-shadow` on `window.gmnb` (inherited) |
 | `window.raised_text_halo` | Shadow list | none | `text-shadow` on keys, buttons, fields, the panel, cards, popovers, the sidebar. Disabled controls get `none` always. |
-| `plain.background` | Fill | `base.text_scrim` | `.wc-plain` *(new)*: the memory row, radix list, bit grid, programmer and scientific toolbars, the date column, the converter's value column, the graph side panel, empty-state texts |
+| `plain.background` | Fill | `base.text_scrim` | `.wc-plain` *(new)*: the memory row, radix list, bit grid, programmer and scientific toolbars, the date column, the converter's value column, the graph's equation column. (An empty list's text in the History panel lies on the panel, a surface of the style's.) |
 | `plain.radius` | Radius | `shape.card_radius` | same |
 | `scrim` | Color | black at 0.30 | The shade over what the sidebar or a sheet covers |
 | `focus` | FocusRing | `{ width 2, color accent_text, offset 2 }` (the ring touches the control: DGMNB's `rounded_border` strokes inside the rect it is given) | `window.gmnb.own-focus :focus:focus-visible { outline }` (the focus itself: `:focus-visible` alone holds for the widgets holding it too) for every control but text fields and sliders, which draw their own; `outline-offset` is `offset − width`; the ring's corners follow the control's radius |
@@ -906,7 +906,7 @@ are `popover`s.
 |---|---|---|---|
 | `date.label` | Text | `text.caption`, `fg_dim` | `.wc-section` on this page |
 | `date.field` | Control | min_height 38; radius `shape.radius`; background `surface2`; `text.body`; `fg`; padding `{ 0, 6 }`; `checked = { background accent, color on_accent }` (while its calendar is open) | `menubutton.wc-field > button.toggle`: "Tuesday, November 10, 2026  ▾", centred, at most 320 wide |
-| `date.result_panel` | Surface | nothing: no background, no padding | `.wc-result-panel` |
+| `date.result_panel` | Surface | nothing: no background, no padding | `.wc-result-panel`: the box around a result's caption, the result and the line under it |
 | `date.result`, `date.add_result` | `{ size, font }` | 28, weight 400; the same | The page's results (Rust, `widgets/display.rs`: a readout, `role = "date"`), shrunk to fit down to 14; out of range, the error colour |
 | `date.subresult` | Text | `text.body`, `fg_dim` | `.wc-subresult` |
 | `date.calendar.title` | Text | `text.strong`, `fg` | `.wc-days-title` |
@@ -1514,8 +1514,8 @@ How each of Aurora's effects is made:
 | The seven palettes; System and Freestyle generated from one or two colours | **Scripted** (`style`, with the `gmnb` colour functions) | Pure data and arithmetic. |
 | Glass keys, glass panels, the equals key's glow, lit bits, the whimsy chip, the sidebar's and flyouts' tints | **Declared** (style values: gradients, shadow lists) | They are the toolkit's own box drawing. |
 | Hover brightness, the press that springs back, the swap button's turn | **Declared** (states and transitions) | The toolkit animates them, and stops for reduced motion. |
-| See-through tints and halos | **Declared**, switched on `ctx.opacity` | |
-| Aurora blobs and their drift, vignette, pulses | **Scripted** (`background` layer) | A few gradients a frame; all of its numbers are the theme's. |
+| The see-through frost and halos | **Scripted** (`style`): how much of the desktop each palette's inks need hidden is worked out from the palette, and the frost under every surface that carries text follows `ctx.opacity` | A fixed tint is too much at 0.9 and, for some palette, too little at 0.1. |
+| Aurora blobs and their drift, the two veils, vignette, pulses | **Scripted** (`background` layer) | A few gradients a frame; all of its numbers are the theme's. |
 | Grain | **Scripted placement** of a **built-in** texture (`gmnb.noise`, `draw:tile`) | Filling 36 864 pixels per call is no job for a script; the recipe is specified so it never changes. |
 | Ripples, the pointer's light on key borders | **Scripted** (`keypad` layer) | |
 | The key cascade | **Scripted** (`place`) | One small function per key per frame while it plays. |
@@ -1609,7 +1609,13 @@ Where 0.3's structure changed for the base look, Aurora follows it:
 | Toolkit-drawn text fields | libadwaita's entry | Aurora's `field` values, matched to it by eye |
 | Thresholds and sizes not in `layout` (wide at 620 px, the new-window size) | 0.2's | DGMNB's |
 | The drift's phase | Starts at 0 s when animated | Starts from the still frame (37 s) |
-| Readability under see-through | Judged by eye | Any tint the [see-through test](#readability-rules) fails is raised until it passes, and the change is noted in the theme |
+| Readability under see-through | Judged by eye: a fixed tint under the keys, the readout and the panels, a halo around the rest | A frost of the palette's own background under every surface that carries text, `plain` panes included, as strong as that palette needs at that opacity to pass the [see-through rule](#readability-rules) (none above about four fifths); the graph's canvas turns almost solid |
+| Text that steps back (captions, expressions, the number bases' names) | The text colour at about 0.6 whatever the palette: 4.1 to 4.4:1 in the light ones | The least opacity, from 0.62 up, that reaches 4.5:1 on that palette's background, its blobs and its glass |
+| Errors | The equals key's first colour as it came: 2:1 in the light Aurora, teal in Abyss | A rose, moved until it reaches 4.5:1 |
+| A lit text button, the current number base, the operators' glyphs | The accent on a tint of itself: under 4.5:1 in the light palettes | The accent deepened until it reaches 4.5:1 on that tint |
+| A key that can't be used | The whole key at 0.32 | Thinner glass and a faint glyph: on a see-through window the key keeps its frost |
+| The aurora | Four blobs | Four blobs under two veils of light in the palette's hot colours |
+| A pulse | One bloom | A bloom; the equals key's, a result's and a new palette's also send a wavefront ahead |
 | A toggle key that is on (2nd, hyp) | The equals key's gradient at 0.85: its small text fell to 2.5:1 in the light palettes | The gradient solid, deepened until the text reaches 4.5:1 |
 
 ## Readability rules
@@ -1652,17 +1658,18 @@ rest and checked; `field` text and placeholder (placeholder: 2.45, see
 open point 9); chips
 and the whimsy chip; lit bits; radix names and values; calendar days at
 rest and checked; the toast; the graph's labels, axes and each series
-colour on the canvas. (Not yet for Aurora: the chrome's pairs, the
-header title to the bits, are checked for the base look and Mono. Aurora's
-own values for them fail in its light palettes, and on a see-through
-window, where its `plain` has no scrim; they wait, with the pages'
-pairs, in the ignored `auroras_page_texts_read` for its polish pass.)
+colour on the canvas (which lies on the backdrop, not in a `plain`
+container). For Aurora the whole table is `auroras_page_texts_read`, and
+`auroras_generated_palettes_read` runs it again for System and Freestyle
+generated from rule 2's colours.
 
 **4. See-through** (new; 0.2 judged this by eye). The same table at
 opacity 0.1 and 0.5, each stack composited over
 `over(alpha(window.background, opacity), desktop)` for a black and for a
 white desktop. Every pair must reach **3**; in the base look, `fg` pairs
-must reach 4.5 (its scrim is computed to). Halos are not counted.
+must reach 4.5 (its scrim is computed to). Halos are not counted. Text
+straight on a page counts wherever the style puts something under it in
+`plain.background`: the base look's scrim, Aurora's frost.
 
 ## For implementers
 
@@ -1767,14 +1774,14 @@ toolkit code knows Aurora.
 
 Measured for the language choice: 1000 frames of 300 calls into the app,
 with the sandbox, memory limit and deadline on, averaged 76 µs. Aurora
-makes 7 draw calls for a still background and 20 with thirteen pulses at
+makes 9 draw calls for a still background and 22 with thirteen pulses at
 once, about 30 for a keypad with the pointer over it, and about 115 for
 a nine-digit readout mid-animation in the dark (each digit twice, its
 glow and itself, each inside a save and three transforms).
 
 Measured in the real engine, under the real limits (`tests/draw.rs`,
-medians of 200 frames): the background with thirteen pulses 0.21 ms, a
-keypad with the pointer over it and a ripple 0.10 ms, the readout
+medians of 200 frames): the background with thirteen pulses 0.26 ms, a
+keypad with the pointer over it and a ripple 0.13 ms, the readout
 mid-result 0.06 ms; the limit is 8 ms. Most of a frame is the theme
 making colours and gradients: the `gmnb` library's functions therefore
 run with the heap cap lifted (each builds one small value), which more
