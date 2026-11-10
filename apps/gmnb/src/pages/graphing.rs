@@ -312,6 +312,9 @@ impl GraphingPage {
         analysis_title.set_wrap(true);
         let analysis_body = gtk::Box::new(gtk::Orientation::Vertical, 10);
         let an_col = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        // Its text lies straight on the page, as the equations' does.
+        an_col.add_css_class("wc-plain");
+        an_col.set_valign(gtk::Align::Start);
         an_col.append(&back);
         an_col.append(&analysis_title);
         an_col.append(&analysis_body);
