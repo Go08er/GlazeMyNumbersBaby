@@ -564,36 +564,13 @@ pub fn apply_theme_setting(theme: &str) {
     });
 }
 
-/// The window class for a see-through backdrop.
-pub const SEE_THROUGH: &str = "wc-see-through";
-
 /// Show the backdrop at `alpha`: below 1 the desktop shows through it (a
 /// Wayland compositor always composites windows; the window itself is
 /// always a transparent surface). The style follows through the hub
-/// (`Hub::set_opacity`).
-pub fn apply_backdrop(win: &adw::ApplicationWindow, backdrop: &Backdrop, alpha: f32) {
-    let see_through = alpha < 1.0;
-    backdrop.set_alpha(if see_through { alpha } else { 1.0 });
-    // TRANSITION: the display draws its own halo, and reads this class to
-    // know when (it becomes `display.halo`, from the style).
-    if see_through == win.has_css_class(SEE_THROUGH) {
-        return;
-    }
-    if see_through {
-        win.add_css_class(SEE_THROUGH);
-    } else {
-        win.remove_css_class(SEE_THROUGH);
-    }
-    // Text drawn by hand (the display) adds or drops its halo.
-    fn redraw(w: &gtk::Widget) {
-        w.queue_draw();
-        let mut c = w.first_child();
-        while let Some(child) = c {
-            redraw(&child);
-            c = child.next_sibling();
-        }
-    }
-    redraw(win.upcast_ref());
+/// (`Hub::set_opacity`): what goes under and round text on a see-through
+/// window (the scrim, the halos) is the style's.
+pub fn apply_backdrop(backdrop: &Backdrop, alpha: f32) {
+    backdrop.set_alpha(alpha.min(1.0));
 }
 
 /// What the theme hub starts with: the saved settings, and what the
@@ -710,7 +687,6 @@ impl Window {
         let backdrop = Backdrop::default();
         backdrop.set_hub(&hub);
         apply_backdrop(
-            &win,
             &backdrop,
             crate::settings::backdrop_alpha(settings.background_opacity),
         );

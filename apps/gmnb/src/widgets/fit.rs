@@ -91,7 +91,7 @@ pub struct Prefix {
 }
 
 /// A cell of a grid a FitLabel's line is set about. The grid is a
-/// `gtk::Grid`, or any widget laid out by a `gtk::GridLayout` (a keypad).
+/// `gtk::Grid`, a keypad, or any widget laid out by a `gtk::GridLayout`.
 pub struct CellAt {
     grid: glib::WeakRef<gtk::Widget>,
     key: glib::WeakRef<gtk::Widget>,
@@ -116,12 +116,14 @@ impl CellAt {
         if cells.0 == 0 || cells.1 == 0 {
             return (0.0, 0.0);
         }
-        let gap = match grid.downcast_ref::<gtk::Grid>() {
-            Some(g) => g.row_spacing(),
-            None => grid
-                .layout_manager()
+        let gap = if let Some(g) = grid.downcast_ref::<gtk::Grid>() {
+            g.row_spacing() as i32
+        } else if let Some(k) = grid.downcast_ref::<super::keypad::Keypad>() {
+            k.gap()
+        } else {
+            grid.layout_manager()
                 .and_downcast::<gtk::GridLayout>()
-                .map_or(0, |l| l.row_spacing()),
+                .map_or(0, |l| l.row_spacing() as i32)
         };
         let size = (grid.width() as f32, grid.height() as f32);
         // Over several cells: midway between the first's middle and the
@@ -291,6 +293,13 @@ mod imp {
         pub cell: RefCell<Option<CellAt>>,
         /// It asks for no least height ([`super::FitLabel::set_loose`]).
         pub loose: Cell<bool>,
+        /// How far its line is moved from where its alignment puts it
+        /// ([`super::FitLabel::set_shift`]), worked out as it is drawn.
+        pub shift: RefCell<Option<ShiftFn>>,
+        /// A text field's line ([`super::FitLabel::set_field`]): never
+        /// shrunk, cut at its box, and moved left to keep this byte of
+        /// the text (the caret) in view.
+        pub field: Cell<Option<usize>>,
     }
 
     impl Default for FitLabel {
@@ -305,6 +314,8 @@ mod imp {
                 halo: RefCell::default(),
                 cell: RefCell::default(),
                 loose: Cell::new(false),
+                shift: RefCell::default(),
+                field: Cell::new(None),
             }
         }
     }
@@ -347,21 +358,47 @@ mod imp {
             // The capitals centred, on a whole pixel, as DGMNB sets a line
             // (`H`'s ink is the cap height).
             // Worked out as it is drawn, from the allocations then.
-            let (dx, dy) = self
+            let (mut dx, mut dy) = self
                 .cell
                 .borrow()
                 .as_ref()
                 .map_or((0.0, 0.0), |c| c.shift());
+            if let Some(f) = self.shift.borrow().as_ref() {
+                let (x, y) = f(&obj);
+                dx += x;
+                dy += y;
+            }
+            // DGMNB's quarters and whole pixels are the window's: a label
+            // placed to the fraction of a pixel (a row's cells, a strip)
+            // sets its glyphs on those, not on its own.
+            let (fx, fy) = obj
+                .root()
+                .and_then(|r| obj.compute_point(&r, &gtk::graphene::Point::new(0.0, 0.0)))
+                .map_or((0.0, 0.0), |p| {
+                    (p.x() - p.x().floor(), p.y() - p.y().floor())
+                });
             let baseline = |font: Option<&Font>, size: f32| {
                 let probe = obj.layout_at_size(size, "H", font);
                 let (ink, _) = probe.extents();
-                h / 2.0 + dy + px(ink.height()) / 2.0
+                h / 2.0 + dy + px(ink.height()) / 2.0 + fy
             };
             let (_, logical) = layout.extents();
-            let x = match self.align.get() {
-                Align::Start => lead,
+            let mut x = match self.align.get() {
+                Align::Start => lead + dx,
                 Align::Center => (w - lead - px(logical.width())) / 2.0 + lead + dx,
             };
+            let field = self.field.get();
+            if let Some(caret) = field {
+                // DGMNB's `text_field`: the caret kept in view, a margin
+                // before the box's end; the line cut at the box.
+                let byte = caret.min(self.text.borrow().len()) as i32;
+                let at = px(layout.index_to_pos(byte).x());
+                x -= (at - (w - lead) + appcore::metrics::controls::CARET_MARGIN).max(0.0);
+                s.push_clip(&gtk::graphene::Rect::new(0.0, 0.0, w, h));
+            }
+            s.save();
+            s.translate(&gtk::graphene::Point::new(-fx, -fy));
+            x += fx;
             let halo = self.halo.borrow();
             if !halo.is_empty() {
                 let shadows: Vec<gtk::gsk::Shadow> = halo
@@ -375,7 +412,7 @@ mod imp {
                 draw_line(
                     s,
                     &pl,
-                    0.0,
+                    fx,
                     baseline(Some(&p.font), p.font.size),
                     &rgba(p.color),
                 );
@@ -384,9 +421,16 @@ mod imp {
             if !halo.is_empty() {
                 s.pop();
             }
+            s.restore();
+            if field.is_some() {
+                s.pop();
+            }
         }
     }
 }
+
+/// Where a label's line goes from where its alignment puts it (x, y).
+type ShiftFn = Box<dyn Fn(&FitLabel) -> (f32, f32)>;
 
 fn rgba(c: gmnb_theme::types::Rgba) -> gtk::gdk::RGBA {
     gtk::gdk::RGBA::new(c[0], c[1], c[2], c[3])
@@ -532,7 +576,7 @@ impl FitLabel {
 
     /// [`FitLabel::set_cell`] for a grid whose rows and columns are only
     /// known once all its cells are in: `cells` is read as the label is
-    /// drawn. The grid is a `gtk::Grid` or laid out by a
+    /// drawn. The grid is a `gtk::Grid`, a keypad, or laid out by a
     /// `gtk::GridLayout`; `span`: the rows and columns the cell is over.
     pub fn set_cell_of(
         &self,
@@ -550,6 +594,39 @@ impl FitLabel {
             span,
         }));
         self.queue_draw();
+    }
+
+    /// Moves the line from where its alignment puts it by what `f` says
+    /// as it is drawn (x, y in pixels): to the fraction of a pixel where
+    /// DGMNB puts a line the toolkit's whole pixels can't (a button as
+    /// wide as its text and a part more, a line placed after another's
+    /// text).
+    pub fn set_shift(&self, f: impl Fn(&FitLabel) -> (f32, f32) + 'static) {
+        self.imp().shift.replace(Some(Box::new(f)));
+        self.queue_draw();
+    }
+
+    /// A text field's line, set as DGMNB's `text_field` sets it: never
+    /// shrunk, cut at the label's box, and moved left as far as keeps
+    /// `caret` (a byte of the text) in view; `None`: a plain line.
+    pub fn set_field(&self, caret: Option<usize>) {
+        if self.imp().field.replace(caret) != caret {
+            self.queue_draw();
+        }
+    }
+
+    /// The width of its line (with its prefix) at its font's own size, to
+    /// the fraction: what DGMNB measures a line at.
+    pub fn text_width(&self) -> f32 {
+        let (_, logical) = self.layout_at(None).extents();
+        self.prefix_width() + px(logical.width())
+    }
+
+    /// The width of `text` in its font at its own size, to the fraction.
+    pub fn measure(&self, text: &str) -> f32 {
+        let size = self.imp().font.borrow().as_ref().map_or(15.0, |f| f.size);
+        let (_, logical) = self.layout_at_size(size, text, None).extents();
+        px(logical.width())
     }
 
     pub fn set_prefix(&self, prefix: Option<Prefix>) {
@@ -588,6 +665,9 @@ impl FitLabel {
         let Some(font) = font.as_ref() else {
             return 15.0;
         };
+        if imp.field.get().is_some() {
+            return font.size;
+        }
         fitted_size(
             &unhinted(self),
             &imp.text.borrow(),
@@ -625,6 +705,96 @@ impl FitLabel {
             }
         }
     }
+}
+
+/// A toolkit text field whose text at rest is set as DGMNB sets a
+/// field's ([`rest_line`]).
+pub struct RestLine {
+    /// The field, with the line over it: what goes in the page.
+    pub overlay: gtk::Overlay,
+    /// The line: its font is the caller's to give (a field's style).
+    pub line: FitLabel,
+}
+
+/// `field` (a `GtkEntry`, a `GtkSpinButton`) in an overlay whose line sets
+/// its text, while it doesn't have the focus, as DGMNB's `text_field`
+/// does: in `area`'s box less `pad` each side (DGMNB's field and its
+/// inner box), its capitals centred, unhinted, each glyph on a quarter
+/// pixel, cut at the box and moved left to keep the caret in view; the
+/// placeholder when there is no text, in the `wc-placeholder` colour.
+///
+/// The toolkit's own text (`text`, the field's `GtkText`) stays where it
+/// is, hidden at rest (style.css, `.wc-rest`), and is what takes the
+/// focus, is edited, shows the caret, a selection and what an input
+/// method composes, and what assistive technology reads; as the field
+/// takes the focus the line goes and the toolkit's text shows. The line
+/// is drawn only (no node for assistive technology), and the pointer
+/// goes through it to the field. `class` names the field's kind for the
+/// line's colours (style.css).
+pub fn rest_line(
+    field: &impl IsA<gtk::Widget>,
+    area: &impl IsA<gtk::Widget>,
+    text: &gtk::Text,
+    placeholder: &'static str,
+    pad: f32,
+    class: &str,
+) -> RestLine {
+    let overlay = gtk::Overlay::new();
+    overlay.set_child(Some(field));
+    overlay.add_css_class("wc-rest");
+    overlay.add_css_class(class);
+    let line = FitLabel::drawn();
+    line.set_can_target(false);
+    line.set_focusable(false);
+    overlay.add_overlay(&line);
+    overlay.set_clip_overlay(&line, true);
+    {
+        let (area, line) = (
+            area.upcast_ref::<gtk::Widget>().downgrade(),
+            line.downgrade(),
+        );
+        overlay.connect_get_child_position(move |o, child| {
+            let (area, line) = (area.upgrade()?, line.upgrade()?);
+            if child != line.upcast_ref::<gtk::Widget>() {
+                return None;
+            }
+            let b = area.compute_bounds(o)?;
+            Some(gtk::gdk::Rectangle::new(
+                (b.x() + pad).round() as i32,
+                b.y().round() as i32,
+                (b.width() - 2.0 * pad).max(0.0).round() as i32,
+                b.height().round() as i32,
+            ))
+        });
+    }
+    let show = {
+        let line = line.downgrade();
+        move |t: &gtk::Text| {
+            let Some(line) = line.upgrade() else {
+                return;
+            };
+            let shown = t.text();
+            if shown.is_empty() {
+                line.set_text(placeholder);
+                line.set_field(Some(0));
+                line.add_css_class("wc-placeholder");
+            } else {
+                // GTK counts the caret in characters; DGMNB's in bytes.
+                let at = usize::try_from(t.position()).unwrap_or(0);
+                let byte = shown.char_indices().nth(at).map_or(shown.len(), |(b, _)| b);
+                line.set_text(&shown);
+                line.set_field(Some(byte));
+                line.remove_css_class("wc-placeholder");
+            }
+        }
+    };
+    show(text);
+    let show = Rc::new(show);
+    for property in ["text", "cursor-position"] {
+        let show = show.clone();
+        text.connect_notify_local(Some(property), move |t, _| show(t));
+    }
+    RestLine { overlay, line }
 }
 
 type SizeFn = Box<dyn Fn(i32, i32)>;
@@ -810,34 +980,82 @@ pub fn cell_middle(
 #[derive(Clone, Default)]
 pub struct Texts(Rc<RefCell<Vec<Entry>>>);
 
-/// A label, the path of its font, and the least size it shrinks to.
-type Entry = (glib::WeakRef<FitLabel>, &'static str, f32);
+/// A label, the path of its font, the least size it shrinks to, and the
+/// path of its halo when it isn't the style's own.
+type Entry = (
+    glib::WeakRef<FitLabel>,
+    &'static str,
+    f32,
+    Option<&'static str>,
+);
 
 impl Texts {
-    /// `label` in `path`'s font, shrinking to fit down to `min` px.
+    /// `label` in `path`'s font, shrinking to fit down to `min` px. A Text
+    /// brings its halo; a Control or a Field the raised one (its text is
+    /// on its own fill).
     pub fn add(&self, label: &FitLabel, path: &'static str, min: f32) {
-        self.0.borrow_mut().push((label.downgrade(), path, min));
+        self.0
+            .borrow_mut()
+            .push((label.downgrade(), path, min, None));
+    }
+
+    /// [`Texts::add`] with the halo at `halo` (a control with no fill of
+    /// its own, its text on the window: `window.text_halo`).
+    pub fn add_with_halo(
+        &self,
+        label: &FitLabel,
+        path: &'static str,
+        min: f32,
+        halo: &'static str,
+    ) {
+        self.0
+            .borrow_mut()
+            .push((label.downgrade(), path, min, Some(halo)));
     }
 
     pub fn apply(&self, style: &gmnb_theme::Style) {
-        use gmnb_theme::types::Value;
         self.0.borrow_mut().retain(|(l, ..)| l.upgrade().is_some());
-        for (label, path, min) in self.0.borrow().iter() {
-            let Some(label) = label.upgrade() else {
-                continue;
-            };
-            match style.get(path) {
-                Some(Value::Text(t)) => {
-                    label.set_font(&t.font, *min);
-                    label.set_halo(&t.shadow);
-                }
-                Some(Value::Control(c)) => {
-                    label.set_font(&c.font, *min);
-                    label.set_halo(style.shadows("window.raised_text_halo"));
-                }
-                _ => {}
+        for (label, path, min, halo) in self.0.borrow().iter() {
+            if let Some(label) = label.upgrade() {
+                set_style(&label, style, path, *min, *halo);
             }
         }
+    }
+}
+
+/// `label` in `path`'s font and halo ([`Texts::add`], [`Texts::add_with_halo`]).
+fn set_style(
+    label: &FitLabel,
+    style: &gmnb_theme::Style,
+    path: &str,
+    min: f32,
+    halo: Option<&str>,
+) {
+    use gmnb_theme::types::Value;
+    let own = match style.get(path) {
+        Some(Value::Text(t)) => {
+            label.set_font(&t.font, min);
+            t.shadow.as_slice()
+        }
+        Some(Value::Control(c)) => {
+            label.set_font(&c.font, min);
+            style.shadows("window.raised_text_halo")
+        }
+        Some(Value::Field(f)) => {
+            label.set_font(&f.font, min);
+            style.shadows("window.raised_text_halo")
+        }
+        _ => return,
+    };
+    label.set_halo(halo.map_or(own, |h| style.shadows(h)));
+}
+
+/// `label` in `path`'s font and halo from now on, as the hub's style
+/// changes: for a label made where no page's [`Texts`] reaches (a
+/// drop-down's button, made by its factory).
+pub fn follow(label: &FitLabel, path: &'static str, min: f32, halo: Option<&'static str>) {
+    if let Some(hub) = crate::theme::Hub::current() {
+        hub.subscribe_style(label, move |l, style| set_style(l, style, path, min, halo));
     }
 }
 

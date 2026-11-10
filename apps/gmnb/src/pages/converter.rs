@@ -18,7 +18,7 @@ use unitconv::{ConverterMode, NetworkAccessBehavior, UnitConverterViewModel};
 
 use super::{Ctx, Page};
 use crate::widgets::display::{Change, Display};
-use crate::widgets::fit::{FitLabel, Prefix, SizeBin, Texts, pango_font};
+use crate::widgets::fit::{self, Align, FitLabel, Prefix, SizeBin, Texts, pango_font};
 use crate::widgets::icon::{PathIcon, paths};
 use crate::widgets::keypad::Keypad;
 use appcore::KeyPress;
@@ -41,6 +41,8 @@ pub struct ConverterPage {
     vm: RefCell<UnitConverterViewModel>,
     root: SizeBin,
     layout: gtk::Box,
+    /// The values, in their scrolled view.
+    column: gtk::Box,
     f1: Field,
     f2: Field,
     supp: gtk::FlowBox,
@@ -118,9 +120,12 @@ fn field(label: &str) -> Field {
     }
 }
 
-/// The drop-down's button as DGMNB's unit button: "Centimeters ▾",
-/// centred (the toolkit's own list, with its marks, stays the popup's).
-/// The arrow is drawn, not read: the unit alone names it.
+/// The drop-down's button as DGMNB's unit button: "Centimeters ▾", set
+/// as DGMNB sets it (a FitLabel in `converter.unit`'s font, centred where
+/// DGMNB's button of the unit's width and `UNIT_ARROW` more has its
+/// middle). The toolkit's own list, with its marks, stays the popup's.
+/// The arrow is drawn, not read: the unit alone names the label (and so
+/// the drop-down, which GTK names after it).
 fn unit_button(dropdown: &gtk::DropDown) {
     if let Some(list) = dropdown.factory() {
         dropdown.set_list_factory(Some(&list));
@@ -130,28 +135,32 @@ fn unit_button(dropdown: &gtk::DropDown) {
         let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let name = gtk::Label::new(None);
-        let arrow = gtk::Label::builder()
-            .label(" ▾")
-            .accessible_role(gtk::AccessibleRole::Presentation)
-            .build();
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        row.set_halign(gtk::Align::Center);
-        row.set_hexpand(true);
-        row.append(&name);
-        row.append(&arrow);
-        item.set_child(Some(&row));
+        let name = FitLabel::new();
+        name.set_align(Align::Center);
+        name.set_hexpand(true);
+        fit::follow(&name, "converter.unit", txt::BUTTON_MIN_SIZE, None);
+        name.set_shift(|l| {
+            let Some(button) = l.ancestor(gtk::Button::static_type()) else {
+                return (0.0, 0.0);
+            };
+            let text = l.text();
+            let unit = text.trim_end_matches('▾').trim_end();
+            let wide = (l.measure(unit) + mc::UNIT_ARROW).min(button.width() as f32);
+            let at = gtk::graphene::Point::new(l.width() as f32 / 2.0, 0.0);
+            let have = l.compute_point(&button, &at).map_or(wide / 2.0, |p| p.x());
+            (wide / 2.0 - have, 0.0)
+        });
+        item.set_child(Some(&name));
     });
     factory.connect_bind(|_, item| {
         let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let name = item
-            .child()
-            .and_then(|row| row.first_child())
-            .and_downcast::<gtk::Label>();
+        let name = item.child().and_downcast::<FitLabel>();
         if let (Some(name), Some(unit)) = (name, item.item().and_downcast::<gtk::StringObject>()) {
-            name.set_text(&unit.string());
+            let unit = unit.string();
+            name.set_text(&format!("{unit} ▾"));
+            name.update_property(&[gtk::accessible::Property::Label(&unit)]);
         }
     });
     dropdown.set_factory(Some(&factory));
@@ -293,11 +302,37 @@ impl ConverterPage {
         );
         status.set_hexpand(true);
         status.set_margin_bottom((mc::STATUS_STEP - mc::STATUS_H) as i32);
+        // "Update rates", set as DGMNB sets it: centred in its button,
+        // which starts the gap after the time's text (to the fraction).
+        let refresh_text = FitLabel::drawn();
+        refresh_text.set_text("Update rates");
+        refresh_text.set_align(Align::Center);
+        texts.add_with_halo(
+            &refresh_text,
+            "converter.link",
+            txt::BUTTON_MIN_SIZE,
+            "window.text_halo",
+        );
+        {
+            let after = timestamp.downgrade();
+            refresh_text.set_shift(move |l| {
+                let Some(after) = after.upgrade() else {
+                    return (0.0, 0.0);
+                };
+                let end = gtk::graphene::Point::new(after.text_width(), 0.0);
+                let Some(end) = after.compute_point(l, &end) else {
+                    return (0.0, 0.0);
+                };
+                let middle = end.x() + mc::REFRESH_GAP + mc::REFRESH_W / 2.0;
+                (middle - l.width() as f32 / 2.0, 0.0)
+            });
+        }
         let refresh = gtk::Button::builder()
-            .label("Update rates")
+            .child(&refresh_text)
             .css_classes(["wc-link"])
             .halign(gtk::Align::Start)
             .build();
+        crate::a11y::name_button(&refresh, "Update rates");
         refresh.set_size_request(mc::REFRESH_W as i32, mc::TIMESTAMP_H as i32);
         refresh.set_margin_start(mc::REFRESH_GAP as i32);
         let spinner = adw::Spinner::new();
@@ -351,6 +386,7 @@ impl ConverterPage {
             vm: RefCell::new(vm),
             root: root.clone(),
             layout,
+            column: column.clone(),
             f1,
             f2,
             supp,
@@ -545,16 +581,47 @@ impl ConverterPage {
             Some(Value::Spacing(s)) => *s,
             _ => Spacing::default(),
         };
-        self.layout.set_margin_top(m.top.round() as i32);
-        self.layout.set_margin_end(m.right.round() as i32);
-        self.layout.set_margin_bottom(m.bottom.round() as i32);
-        self.layout.set_margin_start(m.left.round() as i32);
+        // A value's focus ring is drawn outside it, and the values fill
+        // their scrolled view to its top and its end: that much of the
+        // page's margin (and of the gap before the keypad) is inside the
+        // view instead, where the ring isn't cut, the values and the
+        // keypad staying put.
+        let ring = match style.get("converter.value") {
+            Some(Value::Record(r)) => match r.get("focus") {
+                Some(Value::FocusRing(f)) => (f.width + f.offset).max(0.0),
+                _ => 0.0,
+            },
+            _ => 0.0,
+        };
         let wide = w as f32 >= mc::WIDE;
+        let gap_wide = style.number("layout.converter.gap_wide");
+        let room = |outside: f32| ring.min(outside).max(0.0).round() as i32;
+        let (top, side, end) = (
+            room(m.top),
+            room(m.left),
+            room(if wide { gap_wide } else { m.right }),
+        );
+        self.column.set_margin_top(top);
+        self.column.set_margin_start(side);
+        self.column.set_margin_end(end);
+        self.layout.set_margin_top(m.top.round() as i32 - top);
+        self.layout
+            .set_margin_end(m.right.round() as i32 - if wide { 0 } else { end });
+        self.layout.set_margin_bottom(m.bottom.round() as i32);
+        self.layout.set_margin_start(m.left.round() as i32 - side);
+        if wide {
+            self.keypad.set_margin_top(top);
+            self.keypad.set_margin_start(0);
+            self.keypad.set_margin_end(0);
+        } else {
+            self.keypad.set_margin_top(0);
+            self.keypad.set_margin_start(side);
+            self.keypad.set_margin_end(end);
+        }
         self.wide.set(wide);
         if wide {
             self.layout.set_orientation(gtk::Orientation::Horizontal);
-            self.layout
-                .set_spacing(style.number("layout.converter.gap_wide").round() as i32);
+            self.layout.set_spacing(gap_wide.round() as i32 - end);
             let pad_w = style.number("layout.converter.keypad_width").round() as i32;
             self.keypad.set_size_request(pad_w, -1);
             self.keypad.set_vexpand(true);

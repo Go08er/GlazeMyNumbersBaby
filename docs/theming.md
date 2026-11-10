@@ -525,18 +525,21 @@ about it:
 | Outlines | Unhinted, grey levels (`text.rs`) | At scale 1 GTK's automatic font rendering hints them: every glyph moved and stretched to the pixel grid, by up to a pixel | `window.rs` `match_text_rendering`: manual rendering, no hinting (outlines or metrics), grey levels, for the whole app |
 | Across | A line at `cx − width / 2`, to a quarter of a pixel | A label rounds its text's place down to a whole pixel | `window.rs` `exact_text`: a centred or end-aligned label is laid out across its whole width (it may be ellipsized), and Pango places the line there to the fraction |
 | Down | The baseline at the place's middle plus half the capitals' height, rounded to a pixel (`ui.rs` `draw_line`) | A label centres its line box in its place, rounding down; the baseline is half the leading below the font's ascent. Inter's ascent less its descent is its cap height, so only the rounding differs | Each font's `--P-line-height` and `--P-text-nudge` (`css.rs` `text_line`): a line box and a pixel of padding above it that land the baseline on DGMNB's in any place an even number of pixels high |
-| Scripts | 62% of the label's size, raised 0.36 of it or lowered 0.16, at their own optical size | Pango's `<sup>` uses the font's own superscript size and shift (60%, 0.35), and an absolute line height is given to every run, so a raised run makes the line taller | A key's label is not the toolkit's: `widgets/fit.rs` reads the keys' own `<sup>` / `<sub>` (`parse_markup`) and sets each script in the label's font at 62%, risen or dropped by those parts of the size, its baseline rounded with its shift as DGMNB's (`line_layout`, `draw_line`). A fallback font's glyph in a toolkit label (the ▾ of the flyout buttons) is given a line box a pixel high (`line_height="1025"`: Pango reads a `line_height` above 1024 as Pango units, up to 1024 as a factor) |
-| Cells | Rows of equal cells (`Rect::columns`, `Rect::cell`) fall on fractions of a pixel | Whole pixels, the spare ones to the first cells: a label up to a pixel off | `width_bin.rs` `Cells` (the memory row), `Strip` (the programmer bar) and `bitflip.rs`'s grid place children to the fraction with an allocation transform, and the bits' baselines on DGMNB's pixel. A key stays on the toolkit's whole pixels and its label is set about the middle of DGMNB's cell (`fit.rs` `set_cell`, `cell_middle`): the keypads (`widgets/keypad.rs`) and the graph pad |
-| Overlap | A narrow window's rows overlap | Children ask for their width, and the window grows | `Strip` asks for none of its own |
+| Scripts | 62% of the label's size, raised 0.36 of it or lowered 0.16, at their own optical size | Pango's `<sup>` uses the font's own superscript size and shift (60%, 0.35), and an absolute line height is given to every run, so a raised run makes the line taller | A key's label is not the toolkit's: `widgets/fit.rs` reads the keys' own `<sup>` / `<sub>` (`parse_markup`) and sets each script in the label's font at 62%, risen or dropped by those parts of the size, its baseline rounded with its shift as DGMNB's (`line_layout`, `draw_line`) |
+| Cells | Rows of equal cells (`Rect::columns`, `Rect::cell`) fall on fractions of a pixel | Whole pixels, the spare ones to the first cells: a label up to a pixel off, a key up to two at 300×400 | `width_bin.rs` `Cells` (the memory row), `Strip` (the programmer bar) and `bitflip.rs`'s grid place children to the fraction with an allocation transform, and the bits' baselines on DGMNB's pixel. The keypads (`widgets/keypad.rs`) lay their keys out themselves: DGMNB's cells, each edge rounded to the nearest pixel. A key's label is set about the middle of DGMNB's cell (`fit.rs` `set_cell`, `cell_middle`): the keypads and the graph pad |
+| Overlap | A narrow window's rows overlap | Children ask for their width, and the window grows | `Strip` asks for none of its own, and takes its slots apart as DGMNB's `take_left` and `take_right` do: each from what is left of the row, the last ones down to none |
+| Buttons | A button's label shrunk to its width less its padding, centred (`button`); a unit button as wide as the unit and `UNIT_ARROW` more, "Update rates" the gap after the time's text, both to the fraction | A label at its size, on whole pixels | The labels of the converter's, the date page's, the graph's and the calculator's text buttons are `FitLabel`s; `FitLabel::set_shift` moves a line to where DGMNB's fractional geometry puts it |
+| Fields | A field's text at its box's start less its padding, its capitals centred, cut at the box, the caret kept in view (`text_field`) | The toolkit's text field | At rest the text is drawn by a `FitLabel` over the field (`fit.rs` `rest_line`), and the field's own text is hidden (`.wc-rest`); with the focus the field shows its own, and it is always the field that is edited, shows the caret, selection and input method, and is read by assistive technology. A theme that hands the `field` family back to the toolkit keeps the toolkit's text |
 
 The text the app places itself needs none of the toolkit's part of this:
 a key's label, a page's line (`widgets/fit.rs` `FitLabel`) and the
 readouts (`widgets/display.rs`) are laid out unhinted in grey levels
 (`fit.rs` `set_unhinted`, whatever the settings say), shrunk to their
 width, their capitals centred with each run's baseline on a whole pixel
-and each glyph at the nearest quarter pixel (`fit.rs` `draw_line`). A
-key's label and icon ask for no least height, so keys shrink below what
-they show, as DGMNB's do.
+and each glyph at the nearest quarter pixel (`fit.rs` `draw_line`), the
+quarters and whole pixels being the window's wherever the label is
+placed. A key's label and icon ask for no least height, so keys shrink
+below what they show, as DGMNB's do; so does the bit grid.
 
 ### Toolkit-drawn families: `native`
 
@@ -1659,9 +1662,14 @@ open point 9); chips
 and the whimsy chip; lit bits; radix names and values; calendar days at
 rest and checked; the toast; the graph's labels, axes and each series
 colour on the canvas (which lies on the backdrop, not in a `plain`
-container). For Aurora the whole table is `auroras_page_texts_read`, and
-`auroras_generated_palettes_read` runs it again for System and Freestyle
-generated from rule 2's colours.
+container); the readout's value, its error colour and its expression on
+the readout's own scrim; a card's heading. For Aurora the whole table is
+`auroras_page_texts_read`, and `auroras_generated_palettes_read` runs it
+again for System and Freestyle generated from rule 2's colours. (Not yet:
+the bits' indexes, which DGMNB draws in `fg_faint`, 2.46:1 in its light
+palette and 3.52:1 in its dark one: they would need open point 9's
+allowance, which the contract gives the placeholder only. The ignored
+test `the_bits_indexes_read` checks them.)
 
 **4. See-through** (new; 0.2 judged this by eye). The same table at
 opacity 0.1 and 0.5, each stack composited over
@@ -1692,6 +1700,8 @@ straight on a page counts wherever the style puts something under it in
 | `GMNB_SOUND_DUMP=<folder>` | Every sound the theme makes is written there as a WAV file. |
 | `GMNB_DATE_TO=YYYY-MM-DD` | The date page's "To" date (the comparison's "Date with a result"). |
 | `GMNB_DATE_ADD` | Open the date page on "Add or subtract days". |
+| `GMNB_PREFS=about` | Open About, as `GMNB_PREFS=1` opens Settings. |
+| `GMNB_FOCUS=<css class>` | Give the keyboard's focus, its ring shown, to the first focusable widget with that class (`wc-conv-value`: the converter's first value), as Tab to it would. |
 
 `GMNB_DARK`, `GMNB_OPACITY`, `GMNB_SIZE`, `GMNB_MODE`, `GMNB_KEYS` and the
 rest keep working.

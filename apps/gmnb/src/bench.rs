@@ -86,7 +86,7 @@ impl Bench {
                 format!("theme {id}")
             }
             Step::Opacity(a) => {
-                crate::window::apply_backdrop(&win, &ctx.backdrop, *a);
+                crate::window::apply_backdrop(&ctx.backdrop, *a);
                 ctx.hub.set_opacity(*a, true);
                 String::new()
             }

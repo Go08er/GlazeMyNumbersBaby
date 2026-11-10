@@ -35,10 +35,13 @@ pub fn show(win: &Rc<Window>) {
     // Mode.
     let group = adw::PreferencesGroup::builder().title("Mode").build();
     let theme = adw::ToggleGroup::new();
-    for (name, label) in [("light", "Light"), ("dark", "Dark"), ("system", "System")] {
+    // In DGMNB's order (its Settings page's "Style").
+    for (name, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
         theme.add(adw::Toggle::builder().name(name).label(label).build());
     }
     theme.set_active_name(Some(&ctx.store.data.borrow().theme));
+    // Its parts equal, as DGMNB's.
+    theme.set_homogeneous(true);
     theme.set_valign(gtk::Align::Center);
     let row = adw::ActionRow::builder()
         .title("Light or dark")
@@ -131,7 +134,7 @@ pub fn show(win: &Rc<Window>) {
         opacity.add_suffix(&scale);
         opacity.add_suffix(&shown);
         {
-            let (ctx, win, shown) = (ctx.clone(), win.widget(), shown.clone());
+            let (ctx, shown) = (ctx.clone(), shown.clone());
             let pending = Rc::default();
             scale.connect_value_changed(move |s| {
                 if ctx.layers.covers(s) {
@@ -147,7 +150,7 @@ pub fn show(win: &Rc<Window>) {
                 shown.set_text(&percent(v));
                 s.update_property(&[gtk::accessible::Property::ValueText(&percent(v))]);
                 let alpha = crate::settings::backdrop_alpha(v);
-                apply_backdrop(&win, &ctx.backdrop, alpha);
+                apply_backdrop(&ctx.backdrop, alpha);
                 // One step of a drag: only the properties that change
                 // with the opacity are rewritten (the live provider).
                 ctx.hub.set_opacity(alpha, true);

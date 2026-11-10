@@ -25,7 +25,7 @@ use graphing::{EquationId, Graph, TrigUnit};
 use gtk::{gdk, gio, glib};
 
 use super::{Ctx, Page};
-use crate::widgets::fit::{Align, FitLabel};
+use crate::widgets::fit::{self, Align, FitLabel};
 use crate::widgets::graph_view::GraphView;
 use crate::widgets::icon::{PathIcon, paths};
 use crate::widgets::width_bin::WidthBin;
@@ -254,9 +254,19 @@ impl GraphingPage {
             gtk::Orientation::Vertical,
             (mg::ROW_STEP - mg::ROW_H) as i32,
         );
-        // "+  Enter an expression", read without its "+".
+        // "+  Enter an expression", set as DGMNB sets it, read without
+        // its "+".
+        let add_text = FitLabel::drawn();
+        add_text.set_text("+  Enter an expression");
+        add_text.set_align(Align::Center);
+        fit::follow(
+            &add_text,
+            "graph.add",
+            appcore::metrics::text::BUTTON_MIN_SIZE,
+            Some("window.text_halo"),
+        );
         let add = gtk::Button::builder()
-            .label("+  Enter an expression")
+            .child(&add_text)
             .css_classes(["wc-add-eq"])
             .build();
         crate::a11y::name_button(&add, "Enter an expression");
@@ -818,10 +828,27 @@ impl GraphingPage {
                 icons.push((i.downgrade(), "graph.row_button"));
             }
         }
+        // At rest its text is set as DGMNB's field sets it (fit.rs
+        // `rest_line`); the entry's own shows while it has the focus.
+        let rest = entry.delegate().and_downcast::<gtk::Text>().map(|text| {
+            let rest = fit::rest_line(
+                &entry,
+                &entry,
+                &text,
+                "Enter an expression",
+                appcore::metrics::controls::FIELD_PAD_X,
+                "wc-eq-rest",
+            );
+            fit::follow(&rest.line, "graph.entry", 1.0, None);
+            rest.overlay
+        });
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         line.set_size_request(-1, mg::ROW_FIELD_H as i32);
         line.append(&swatch);
-        line.append(&entry);
+        match &rest {
+            Some(rest) => line.append(rest),
+            None => line.append(&entry),
+        }
         line.append(&buttons);
         let error = gtk::Label::new(None);
         error.add_css_class("wc-eq-error");
@@ -1105,9 +1132,15 @@ impl GraphingPage {
             if show {
                 row.root.add_css_class("wc-has-error");
                 row.entry.add_css_class("error");
+                if let Some(rest) = row.entry.parent() {
+                    rest.add_css_class("wc-error");
+                }
             } else {
                 row.root.remove_css_class("wc-has-error");
                 row.entry.remove_css_class("error");
+                if let Some(rest) = row.entry.parent() {
+                    rest.remove_css_class("wc-error");
+                }
             }
         }
         err

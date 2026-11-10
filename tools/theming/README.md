@@ -72,6 +72,49 @@ physical pixels (curves also `"color":[r,g,b]`): one entry per drawn run
 stroke's box clipped to the plot). Icons are paths, not text, and are not
 listed; the edge rule covers them. Unset, nothing is recorded.
 
+## The whole comparison, one command
+
+From the repo root, inside the nix dev shell, with the private headless
+weston running (socket `wincalc-shot`) and release builds of both apps in
+`target/release`:
+
+    tools/theming/goldens.sh OUT target/release base
+
+It captures every pair of `base.map` and `least.map`, both apps, each in a
+fresh profile (temporary XDG directories, a private D-Bus with no
+services, no display but the private weston), then compares them: the
+table, every failing run of text, and a diff picture per pair in
+`OUT/report`. The exit status is `compare`'s for `base.map`: 0 when every
+pair passes.
+
+- `base.map` is the contract's set (docs/theming.md, "How it is
+  measured"), light and dark: the seven pages at 760x640, Standard after
+  `1234*56=789/3=`, the sidebar, Programmer with the bit grid, the compact
+  window, Date with a result and adding days, Graphing with three
+  equations, Standard at 360x600. Its only exclusion is the contract's:
+  the app's name in the sidebar's header.
+- The pictures are taken offline, in a namespace with no network
+  (`unshare -rn`): the converter shows the rates it is shipped with, and
+  their time, in both apps, so there is no live data to exclude. `NET=online`
+  takes them with the network (the currency's rates and their time are
+  then whatever each app fetched, and when).
+- GMNB is drawn by the toolkit's software renderer (`GSK_RENDERER=cairo`
+  unless set), so the pixels don't depend on the GPU.
+- `least.map`: Scientific and Programmer at DGMNB's least window,
+  300x400. Reported after `base.map`, not in the exit status. Both fit
+  the window as DGMNB's do; what still differs: in Scientific, four keys
+  whose text is taller than their 15 px key (the glyphs are DGMNB's to
+  1/255, but the key's edge under them is on a fraction of a pixel in
+  DGMNB and on a whole one in GMNB, which moves the text rule's estimate
+  of the background), and the edges of icons drawn by two rasterisers,
+  which at this size are more than 1% of the picture's edges; in
+  Programmer, `M▾` and `MS`, which DGMNB squeezes into no room at the
+  bar's end and shrinks to 10 px, where GMNB's buttons keep their least
+  width.
+- `ONLY=REGEX` captures and compares only the cases it matches
+  (`ONLY='date|currency'`), keeping the other pictures in `OUT`.
+- `COMPARE=path` uses that `compare` binary (else it is built here).
+
 `goldens.sh OUTDIR BINDIR [gmnb|dgmnb|all|pages]` is the isolated capture script
 (private weston, D-Bus and XDG); DGMNB's pictures come with their JSON.
 `BOXES= goldens.sh ...` leaves the hook unset (used to check the pictures are
