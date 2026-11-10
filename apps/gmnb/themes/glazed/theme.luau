@@ -26,7 +26,7 @@
 --   6. Keypad       keys that sink, hop and stack; crumbs
 --   7. Display      the case, the doughnut, digits plain and glazed
 --   8. Options      what Settings offers, and the flavours' tiles
---   9. Sound        (chip-tune; comes with the next commit)
+--   9. Sound        chip-tune: a note under every key, a jingle for a result
 
 local hex, mix, alpha = gmnb.hex, gmnb.mix, gmnb.alpha
 local white, black = gmnb.white, gmnb.black
@@ -207,10 +207,12 @@ local function build(id: string, dark: boolean): Scheme
 	end
 
 	-- A glazed number is two colours, the dough's (the text colour) and
-	-- the icing's: large text, so 3, with a little to spare.
+	-- the icing's: large text, so 3, with a little to spare (a colour is
+	-- rounded to eight bits on its way to the screen).
+	local large = UI * 1.04
 	local glaze = legible(if dark then icing else mix(icing, CHOCOLATE, 0.1), { card }, UI * 1.12)
-	local glaze_shine = legible(mix(glaze, white, 0.5), { card }, UI)
-	local glaze_rim = legible(mix(glaze, if dark then black else CHOCOLATE, 0.3), { card }, UI)
+	local glaze_shine = legible(mix(glaze, white, 0.5), { card }, large)
+	local glaze_rim = legible(mix(glaze, if dark then black else CHOCOLATE, 0.3), { card }, large)
 	-- Sprinkles on the number: they are part of it, so each reads on the
 	-- case; and each shows on the icing.
 	local candidates: { Rgba } = if dark
@@ -218,7 +220,7 @@ local function build(id: string, dark: boolean): Scheme
 		else { CHOCOLATE, hex("#0b5d52"), hex("#213f9e"), hex("#5b2386"), hex("#8f1d1d") }
 	local glaze_sprinkles = {}
 	for _, c in candidates do
-		c = legible(c, { card }, UI)
+		c = legible(c, { card }, large)
 		if gmnb.contrast(c, glaze) >= 1.3 then
 			table.insert(glaze_sprinkles, c)
 		end
@@ -505,6 +507,9 @@ local function style(ctx: Ctx): Style
 			gap = 5,
 			gap_compact = 3,
 			radius = KEY_RADIUS,
+			-- A key is never squeezed flatter than its sign.
+			min_width = 36,
+			min_height = 30,
 			icon = { size = 22, stroke = 2.8 },
 			hover = hover,
 			disabled = { fade = 0.3 },
@@ -519,7 +524,7 @@ local function style(ctx: Ctx): Style
 		text_button = words({ 0, 6 }),
 		flyout_button = words({ 0, 8 }),
 		icon_button = flat,
-		button = block(jersey(1.5)),
+		button = block(jersey(1)),
 		segmented = { gap = 4, item = block(jersey(1)) },
 		field = {
 			background = s.card,
@@ -585,7 +590,8 @@ local function style(ctx: Ctx): Style
 				active = { background = alpha(ink, 0.16) },
 				checked = { background = s.icing, color = s.on_icing, font = { weight = 400 } },
 			},
-			bit_index = { color = dim },
+			-- (The bits' indexes have a row sixteen pixels high: the base look's own small face.)
+			bit_index = { font = ctx.base.text.caption, color = dim },
 		},
 
 		date = {
@@ -626,6 +632,8 @@ local function style(ctx: Ctx): Style
 		},
 
 		graph = {
+			-- The equations, and a function's analysis: a card of their own.
+			side = { background = s.card, border = outline, radius = 6, padding = 6 },
 			divider = s.soft,
 			error = { color = s.danger },
 			entry = { background = s.card, border = soft_line, radius = 4 },
@@ -835,12 +843,16 @@ local function fountain(draw: Draw, frame: Frame): Again
 				end
 			end
 			local seed = burst[i] or 0
+			-- Thrown no harder than keeps the highest of them under the
+			-- readout: the number is never rained on.
+			local room = math.max(oy - (e.rect.y + e.rect.h) - 12, 16)
+			local throw = math.min(math.sqrt(2 * GRAVITY * room) / 640, 1)
 			for k = 1, 30 do
 				local life = 0.7 + 0.4 * chance(k, seed + 2)
 				if e.age < life then
 					-- A fan, straight up and to both sides.
 					local angle = math.rad(-155 + 130 * chance(k, seed))
-					local speed = 280 + 360 * chance(k, seed + 1)
+					local speed = (280 + 360 * chance(k, seed + 1)) * throw
 					local x = ox + math.cos(angle) * speed * e.age
 					local y = oy + math.sin(angle) * speed * e.age + GRAVITY / 2 * e.age * e.age
 					rod(draw, x, y, floor(e.age * 10 + k) % 2 == 0, SPRINKLES[k % #SPRINKLES + 1])
@@ -1044,7 +1056,6 @@ local function make_icing(s: Scheme, key: string, tall: number, poured: number, 
 	if made == icing_made then
 		return
 	end
-	icing_made = made
 	local buf = icing_buffer
 	buffer.fill(buf, 0, 0)
 	local glaze, shine, rim = pack(s.glaze), pack(s.glaze_shine), pack(s.glaze_rim)
@@ -1069,7 +1080,7 @@ local function make_icing(s: Scheme, key: string, tall: number, poured: number, 
 		end
 	end
 	-- Sprinkles: little rods, two art pixels long, on the icing only.
-	local count = floor(ICING_W / 3 * sprinkled)
+	local count = floor(ICING_W * 0.7 * sprinkled)
 	local colours = {}
 	for i, c in s.glaze_sprinkles do
 		colours[i] = pack(c)
@@ -1079,16 +1090,21 @@ local function make_icing(s: Scheme, key: string, tall: number, poured: number, 
 		local reach = math.min(edge[x + 1], edge[x + 2])
 		if reach >= 5 then
 			local y = 2 + floor(chance(n, 22) * (reach - 4))
-			local color = colours[n % #colours + 1]
+			-- Every other one is the first colour, the one that shows best.
+			local color = if n % 2 == 0 then colours[1] else colours[(n // 2) % #colours + 1]
 			buffer.writeu32(buf, (y * ICING_W + x) * 4, color)
 			if chance(n, 23) < 0.5 then
 				buffer.writeu32(buf, (y * ICING_W + x + 1) * 4, color)
 			elseif y + 1 < reach - 1 then
 				buffer.writeu32(buf, ((y + 1) * ICING_W + x) * 4, color)
+			else
+				buffer.writeu32(buf, ((y - 1) * ICING_W + x) * 4, color)
 			end
 		end
 	end
-	icing_picture:set(buf)
+	-- (A picture may change thirty times a second. Refused, this one is
+	-- made again with the frame the app then owes the layer.)
+	icing_made = if icing_picture:set(buf) then made else ""
 end
 
 -- The doughnut: twenty-four art pixels a side, worked out pixel by pixel
@@ -1105,13 +1121,14 @@ local BUDDY_ICING = { 0, 0, 1, 2, 2, 1, 0, 0, 1, 1, 0, 0, 1, 2, 3, 2, 1, 0, 0, 1
 type Face = "open" | "shut" | "happy" | "dizzy"
 
 -- The colour of the doughnut's pixel at (x, y), or nil where there is none.
--- `squash` flattens it (1) or stretches it (-1); `look` moves its eyes.
+-- `squash` flattens it (1) or stretches it (-1); `look` is the side its
+-- eyes' glints are on: where it is looking.
 local function buddy_pixel(s: Scheme, x: number, y: number, face: Face, squash: number, look: number): Rgba?
 	local line = if s.dark then s.line else CHOCOLATE
 	local rx, ry = 10 + squash, 10 - squash
 	local cx, cy = 11.5, 21.5 - ry
-	-- Its feet.
-	if y >= 22 and ((x >= 6 and x <= 9) or (x >= 14 and x <= 17)) then
+	-- Its feet, and the legs they are on.
+	if (y >= 22 and ((x >= 6 and x <= 8) or (x >= 15 and x <= 17))) or (y == 21 and (x == 7 or x == 16)) then
 		return line
 	end
 	local dx, dy = (x - cx) / rx, (y - cy) / ry
@@ -1127,11 +1144,11 @@ local function buddy_pixel(s: Scheme, x: number, y: number, face: Face, squash: 
 	-- The eyes, above the middle, either side of the hole.
 	local ey = floor(cy) - 3
 	for side = -1, 1, 2 do
-		local ex = (if side < 0 then 5 else 17) + look
+		local ex = if side < 0 then 5 else 17
 		local px, py = x - ex, y - ey
 		if face == "open" then
 			if px >= 0 and px <= 1 and py >= 0 and py <= 2 then
-				return if px == 0 and py == 0 then white else line
+				return if py == 0 and px == (if look > 0 then 1 else 0) then white else line
 			end
 		elseif face == "shut" then
 			if px >= -1 and px <= 2 and py == 2 then
@@ -1180,14 +1197,13 @@ local function make_buddy(s: Scheme, key: string, face: Face, squash: number, lo
 	if made == buddy_made then
 		return
 	end
-	buddy_made = made
 	for y = 0, BUDDY - 1 do
 		for x = 0, BUDDY - 1 do
 			local c = buddy_pixel(s, x, y, face, squash, look)
 			buffer.writeu32(buddy_buffer, (y * BUDDY + x) * 4, if c then pack(c) else 0)
 		end
 	end
-	buddy_picture:set(buddy_buffer)
+	buddy_made = if buddy_picture:set(buddy_buffer) then made else ""
 end
 
 -- The calculator's number, as it stands, is a result: it is glazed.
@@ -1461,6 +1477,351 @@ local options: { Option } = {
 	},
 }
 
+---------------------------------------------------------------------------
+-- 9. Sound
+---------------------------------------------------------------------------
+--
+-- A shop like this one sounds like the machine in its corner: chip-tune.
+-- Every sound is a square wave or two (a triangle for the low ones, a
+-- crunch of held noise for what is swept away), switched on and off
+-- rather than faded, and nothing rings for long. They follow the sound
+-- chapter's rules (docs/theming-media.md, "Designing sounds") and were
+-- balanced by measuring, not by ear: tools/theming/sound_check.py.
+--
+-- What makes it part of the theme is the notes. Every flavour has a
+-- five-note scale. Number keys play its notes, each key its own, so that
+-- any sum typed is a tune in the flavour's key and no key is a wrong
+-- note; the operators play a low note that goes with them; and a result
+-- after = is the flavour's jingle, three notes rising and a patter, timed
+-- to what the readout does: the icing pours on the first, the doughnut
+-- is in the air on the third, and the sprinkles land with the patter.
+
+-- A square wave at `pitch`: on for `body` seconds, then off within `tail`.
+-- `width` is the part of each period it spends high: a half is hollow, a
+-- quarter bright, an eighth thin.
+local function pulse(pitch: Pitch | PitchGlide, width: number, level: number, at: number, body: number, tail: number): SynthLayer
+	return {
+		wave = "square",
+		width = width,
+		freq = pitch,
+		gain = level,
+		at = at,
+		env = { attack = 0.001, decay = 0.006, sustain = 0.6, hold = body, release = tail },
+	}
+end
+
+-- A crunch: noise held `pitch` times a second.
+local function crunch(seed: number, pitch: number | Glide, level: number, at: number, seconds: number): SynthLayer
+	return {
+		wave = "noise",
+		seed = seed,
+		freq = pitch,
+		gain = level,
+		at = at,
+		env = { attack = 0, decay = seconds },
+	}
+end
+
+-- Nothing under the small speakers' reach, twice over (a lopsided square
+-- wave switched on and off is a thump as well as a note), and the top
+-- taken off the edges.
+local chip: { SynthEffect } = {
+	{ type = "highpass", freq = 220 },
+	{ type = "highpass", freq = 220 },
+	{ type = "lowpass", freq = 7000 },
+}
+
+-- Number keys: one note, on C5, in two takes played in turn. The key's
+-- own note is this one played faster or slower.
+local blip_a = gmnb.synth({
+	gain = 0.23,
+	layers = { pulse("C5", 0.5, 1, 0, 0.012, 0.024), pulse("C6", 0.25, 0.22, 0, 0.003, 0.012) },
+	effects = chip,
+})
+local blip_b = gmnb.synth({
+	gain = 0.23,
+	layers = { pulse("C5", 0.25, 1, 0, 0.012, 0.024), pulse("C6", 0.5, 0.18, 0, 0.003, 0.012) },
+	effects = chip,
+})
+
+-- Operators: a triangle on G4 that dips as it lands, rounder and lower
+-- than any number key.
+local bop = gmnb.synth({
+	gain = 0.16,
+	layers = {
+		{
+			wave = "triangle",
+			freq = { "A4", "G4", time = 0.018 } :: PitchGlide,
+			env = { attack = 0.001, decay = 0.008, sustain = 0.7, hold = 0.016, release = 0.026 },
+		},
+		pulse("G5", 0.125, 0.12, 0, 0.002, 0.008),
+	},
+	effects = chip,
+})
+
+-- Function keys and buttons: thinner and drier, a tick more than a note.
+local tap = gmnb.synth({
+	gain = 0.24,
+	layers = { pulse("E5", 0.125, 1, 0, 0.008, 0.02), crunch(41, 6000, 0.35, 0, 0.008) },
+	effects = chip,
+})
+
+-- The equals key: two notes, a fifth apart, short and dry. The jingle
+-- that follows is the result's.
+local set = gmnb.synth({
+	gain = 0.17,
+	layers = { pulse("C5", 0.5, 1, 0, 0.016, 0.014), pulse("G5", 0.5, 1, 0.045, 0.022, 0.03) },
+	effects = chip,
+})
+
+-- 2nd and hyp: a switch thrown, two quick notes.
+local flip = gmnb.synth({
+	gain = 0.18,
+	layers = { pulse("E5", 0.25, 1, 0, 0.008, 0.012), pulse("A5", 0.25, 1, 0.034, 0.012, 0.022) },
+	effects = chip,
+})
+
+-- Backspace: a note that falls away.
+local back = gmnb.synth({
+	gain = 0.18,
+	layers = { pulse({ "A5", "D5", time = 0.035 } :: PitchGlide, 0.25, 1, 0, 0.012, 0.022) },
+	effects = chip,
+})
+
+-- Clear: the counter swept, a crunch that falls.
+local sweep = gmnb.synth({
+	gain = 0.2,
+	layers = {
+		crunch(42, { 9000, 700, time = 0.12 } :: Glide, 1, 0, 0.14),
+		pulse({ "C5", "C4", time = 0.09 } :: PitchGlide, 0.5, 0.3, 0, 0.03, 0.05),
+	},
+	effects = chip,
+})
+
+-- The memory row: something dropped in the jar. A tick, and two notes a
+-- fifth apart, the second left to ring a little.
+local jar = gmnb.synth({
+	gain = 0.18,
+	layers = {
+		crunch(43, 8000, 0.4, 0, 0.006),
+		pulse("G5", 0.25, 1, 0, 0.014, 0.012),
+		pulse("D6", 0.25, 0.9, 0.04, 0.02, 0.07),
+	},
+	effects = chip,
+})
+
+-- The jingle's voice: a square on E5 with a triangle an octave under it,
+-- and one echo. The jingle is this one note at other speeds.
+local voice_fx: { SynthEffect } = {
+	{ type = "highpass", freq = 170 },
+	{ type = "delay", time = 0.12, feedback = 0.25, mix = 0.2 },
+	{ type = "lowpass", freq = 6500 },
+}
+local note = gmnb.synth({
+	gain = 0.23,
+	length = 0.7,
+	layers = {
+		{ wave = "square", width = 0.5, freq = "E5", env = { attack = 0.002, decay = 0.2 } },
+		{ wave = "square", width = 0.25, freq = "E6", env = { attack = 0.002, decay = 0.07 }, gain = 0.25 },
+		{ wave = "triangle", freq = "E4", env = { attack = 0.002, decay = 0.24 }, gain = 0.6 },
+	},
+	effects = voice_fx,
+})
+
+-- Sprinkles landing: a patter of high ticks, each its own note.
+local patter = gmnb.synth({
+	gain = 0.12,
+	layers = {
+		pulse("E6", 0.25, 1, 0, 0.004, 0.014),
+		pulse("G6", 0.25, 0.9, 0.045, 0.004, 0.014),
+		pulse("C7", 0.25, 0.8, 0.085, 0.004, 0.014),
+		pulse("G6", 0.25, 0.7, 0.14, 0.004, 0.014),
+		pulse("E7", 0.25, 0.7, 0.18, 0.004, 0.03),
+		crunch(44, 9000, 0.25, 0, 0.004),
+		crunch(45, 9000, 0.2, 0.085, 0.004),
+		crunch(46, 9000, 0.2, 0.18, 0.004),
+	},
+	effects = chip,
+})
+
+-- An error: the tray dropped. Two notes falling, the second three whole
+-- tones under the first and wavering, with the grit of a cheap chip.
+local womp_fx: { SynthEffect } = {
+	{ type = "crush", bits = 6, rate = 11000 },
+	{ type = "highpass", freq = 170 },
+	{ type = "lowpass", freq = 5000 },
+}
+local womp = gmnb.synth({
+	gain = 0.15,
+	layers = {
+		pulse({ "B4", "A4", time = 0.1 } :: PitchGlide, 0.5, 1, 0, 0.08, 0.03),
+		{
+			wave = "square",
+			width = 0.5,
+			freq = { "F4", "E4", time = 0.25 } :: PitchGlide,
+			vibrato = { rate = 13, depth = 35 },
+			at = 0.137,
+			env = { attack = 0.002, decay = 0.01, sustain = 0.7, hold = 0.12, release = 0.14 },
+		},
+	},
+	effects = womp_fx,
+})
+
+-- A change of page or mode: the bell over the shop's door, two notes
+-- coming down, a triangle with a bright edge that is gone at once.
+local door_fx: { SynthEffect } = {
+	{ type = "highpass", freq = 200 },
+	{ type = "delay", time = 0.09, feedback = 0.2, mix = 0.15 },
+}
+local function ding(pitch: string, above: string, at: number, level: number): (SynthLayer, SynthLayer)
+	return { wave = "triangle", freq = pitch, at = at, gain = level, env = { attack = 0.002, decay = 0.32 } },
+		{ wave = "square", width = 0.25, freq = above, at = at, gain = level * 0.14, env = { attack = 0.001, decay = 0.05 } }
+end
+local ding_1, edge_1 = ding("E6", "E7", 0, 1)
+local ding_2, edge_2 = ding("C6", "C7", 0.13, 0.85)
+local door = gmnb.synth({
+	gain = 0.16,
+	length = 0.8,
+	layers = { ding_1, edge_1, ding_2, edge_2 },
+	effects = door_fx,
+})
+
+-- A flavour's notes, as speeds: its five for the number keys (of the
+-- blips, which are on C5), its jingle's four (of the voice, on E5), the
+-- note its operators play (of the bop, on G4), and its home note for the
+-- equals key and the patter (which are in C).
+type Voice = { keys: { number }, jingle: { number }, low: number, home: number }
+
+local function speeds(notes: { string }, of: string): { number }
+	local out = {}
+	for i, name in notes do
+		out[i] = gmnb.note(name) / gmnb.note(of)
+	end
+	return out
+end
+
+local function voice(keys: { string }, jingle: { string }, low: string, home: string): Voice
+	return {
+		keys = speeds(keys, "C5"),
+		jingle = speeds(jingle, "E5"),
+		low = gmnb.note(low) / gmnb.note("G4"),
+		home = gmnb.note(home) / gmnb.note("C5"),
+	}
+end
+
+local VOICES: { [string]: Voice } = {
+	-- C major's five: bright and plain, the tune a toy plays.
+	strawberry = voice({ "C5", "D5", "E5", "G5", "A5" }, { "C5", "E5", "G5", "C6" }, "G4", "C5"),
+	-- A minor's five: the same notes from the dark end.
+	blueberry = voice({ "A4", "C5", "D5", "E5", "G5" }, { "A4", "C5", "E5", "A5" }, "E4", "A4"),
+	-- The in scale, with its half step: a koto's tuning, for tea.
+	matcha = voice({ "D5", "Eb5", "G5", "A5", "C6" }, { "D5", "G5", "A5", "D6" }, "A4", "D5"),
+	-- D major's five, higher than the rest: sharp.
+	lemon = voice({ "D5", "E5", "F#5", "A5", "B5" }, { "D5", "F#5", "A5", "D6" }, "A4", "D5"),
+	-- F major's five, the lowest: slow and warm.
+	caramel = voice({ "F4", "G4", "A4", "C5", "D5" }, { "F4", "A4", "C5", "F5" }, "F4", "F4"),
+}
+
+local function voice_for(id: OptionValue?): Voice
+	return (if type(id) == "string" then VOICES[id] else nil) or VOICES.strawberry
+end
+
+-- Which sound for which event. This table is all of it if `sound` below
+-- is ever switched off: the keys then keep a pitch each, in no scale.
+local sounds: Sounds = {
+	digit = { sound = { blip_a, blip_b }, pick = "key", rate = { 0.84, 1.5 }, pan = "position" },
+	operator = { sound = bop, rate = { 0.985, 1.015 }, pan = "position" },
+	func = { sound = tap, pick = "key", rate = { 0.94, 1.06 }, pan = "position" },
+	equals = { sound = set, pan = "position" },
+	toggle = { sound = flip, pan = "position" },
+	clear = sweep,
+	backspace = { sound = back, rate = { 0.97, 1.03 }, pan = "position" },
+	memory = { sound = jar, pan = "position" },
+	button = { sound = tap, volume = 0.9, pan = "position" },
+	result = { sound = note, rate = 1.5, volume = 0.7, delay = 0.09 },
+	-- It starts as the number begins to shake its head.
+	error = { sound = womp, delay = 0.03 },
+	mode = door,
+}
+
+-- Number keys pressed so far, and results in a row from = alone (pressed
+-- again, it repeats the operation).
+local turn = 0
+local repeats = 0
+
+local function sound(event: SoundEvent, ctx: Ctx): SoundChoice
+	local v = voice_for(ctx.options.flavour)
+	if event.kind == "press" then
+		local key = event.key
+		if not key or event.action then
+			repeats = 0
+			return nil
+		end
+		if key.kind ~= "equals" then
+			repeats = 0
+		end
+		local pan = event.pan * 0.6
+		if key.kind == "number" then
+			-- The key's note in the flavour's scale, the two takes in turn.
+			turn += 1
+			local id = key.id or 0
+			local play: Play = {
+				sound = if turn % 2 == 0 then blip_a else blip_b,
+				rate = v.keys[id * 7 % #v.keys + 1],
+				volume = 0.88 + 0.12 * (turn * 0.618034 % 1),
+				pan = pan,
+			}
+			return play
+		elseif key.kind == "operator" then
+			local play: Play = { sound = bop, rate = v.low, pan = pan }
+			return play
+		elseif key.kind == "equals" then
+			local play: Play = { sound = set, rate = v.home, pan = pan }
+			return play
+		end
+		return nil
+	elseif event.kind == "result" and event.page == "calculator" then
+		if event.cause == "equals" then
+			repeats += 1
+			if repeats == 1 then
+				-- The jingle: three notes up the flavour's chord, and the
+				-- patter of sprinkles where the fourth would be.
+				local jingle: { Play } = {
+					{ sound = note, rate = v.jingle[1], volume = 0.8, pan = -0.3, delay = 0.09 },
+					{ sound = note, rate = v.jingle[2], volume = 0.85, pan = 0, delay = 0.17 },
+					{ sound = note, rate = v.jingle[3], volume = 0.9, pan = 0.3, delay = 0.25 },
+					{ sound = patter, rate = v.home, volume = 1, pan = 0, delay = 0.36 },
+				}
+				return jingle
+			end
+			-- = again and again: the top note and the patter, each time.
+			local again: { Play } = {
+				{ sound = note, rate = v.jingle[4], volume = 0.6, pan = 0, delay = 0.09 },
+				{ sound = patter, rate = v.home, volume = 0.7, pan = 0, delay = 0.2 },
+			}
+			return again
+		elseif event.cause == "function" then
+			-- A function's result (a square root, a sine): one note.
+			local one: Play = { sound = note, rate = v.jingle[3], volume = 0.6, delay = 0.06 }
+			return one
+		end
+		-- The running total an operator shows: its own note said it.
+		return false
+	elseif event.kind == "error" then
+		repeats = 0
+	elseif event.kind == "option" and event.id == "flavour" then
+		-- A new flavour plays its jingle through, where the sprinkles
+		-- shake out from under the awning.
+		local fresh = voice_for(event.value)
+		local run: { Play } = {}
+		for i, speed in fresh.jingle do
+			run[i] = { sound = note, rate = speed, volume = 0.7, pan = (i - 2.5) * 0.24, delay = 0.08 * (i - 1) }
+		end
+		return run
+	end
+	return nil
+end
+
 local theme: Theme = {
 	api = 1,
 	name = "Glazed",
@@ -1471,6 +1832,8 @@ local theme: Theme = {
 	credits = { { title = "Jersey 10 typeface", file = "fonts/OFL-Jersey10.txt" } },
 	options = options,
 	style = style,
+	sounds = sounds,
+	sound = sound,
 	layers = {
 		background = { draw = background },
 		overlay = { draw = fountain, events = { press = FOUNTAIN_LIFE + 0.3, result = FOUNTAIN_LIFE, option = RAIN_LIFE } },
