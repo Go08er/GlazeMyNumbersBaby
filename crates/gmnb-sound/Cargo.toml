@@ -20,6 +20,10 @@ lewton = "0.10"
 # with sounds is.
 pulseaudio = "0.3"
 
+[features]
+# `gmnb_sound::standin`: a stand-in sound server, for the app's tests.
+stand-in = []
+
 [dev-dependencies]
 # The render example loads real theme files.
 gmnb-theme.workspace = true

@@ -16,7 +16,8 @@
 //!
 //! Events are funnelled through [`Layers::emit`]: every layer that
 //! listens is told, in its own coordinates, and so is whoever
-//! [`Layers::listen`]s (sound, later), under reduced motion too.
+//! [`Layers::listen`]s (theme sounds, while a theme with sounds is on:
+//! [`Layers::set_heard`]), under reduced motion too.
 
 pub mod replay;
 pub mod tile;
@@ -27,7 +28,7 @@ use std::time::Duration;
 
 use gmnb_theme::draw::DisplayList;
 pub use gmnb_theme::events::{Action, Source};
-use gmnb_theme::events::{Event, EventKind, KeyKind, Page, Ring, Via};
+use gmnb_theme::events::{Cause, Event, EventKind, KeyKind, Page, Ring, Via};
 use gmnb_theme::layer::{DisplayValue, Drawn, Frame, Keys, LayerKind, Placement};
 use gmnb_theme::sched::{Change, Clock, Conditions, Fire, SETTLE, Wait};
 use gmnb_theme::{OptionValue, TextMeasure};
@@ -41,6 +42,11 @@ use crate::widgets::keypad::Keypad;
 pub fn now() -> f64 {
     glib::monotonic_time() as f64 / 1.0e6
 }
+
+/// How soon after a press a result or an error is taken to be its doing.
+/// (Both happen in the same handler: the press is told first, then the
+/// calculator is pressed, then its readout shows what came of it.)
+const CAUSE_WINDOW: f64 = 0.25;
 
 /// What a layer drew last.
 #[derive(Clone)]
@@ -95,6 +101,8 @@ pub struct Happened<'a> {
     pub at: Option<(f32, f32)>,
     pub source: Option<Source>,
     pub via: Option<Via>,
+    /// A result or an error: the press that brought it about.
+    pub cause: Option<Cause>,
     pub action: Option<Action>,
     pub key: Option<(Option<u32>, KeyKind)>,
     pub option: Option<(String, OptionValue)>,
@@ -109,6 +117,7 @@ impl<'a> Happened<'a> {
             at: None,
             source: None,
             via: None,
+            cause: None,
             action: None,
             key: None,
             option: None,
@@ -134,6 +143,7 @@ impl<'a> Happened<'a> {
         }
         event.source = self.source;
         event.via = self.via;
+        event.cause = self.cause;
         event.action = self.action;
         event.key = self.key;
         event.option = self.option.clone();
@@ -141,7 +151,8 @@ impl<'a> Happened<'a> {
     }
 }
 
-type Listener = Box<dyn Fn(&Event)>;
+/// Told of an event in the window's coordinates, and the window's width.
+type Listener = Box<dyn Fn(&Event, f32)>;
 
 /// What every layer of the window shares.
 pub struct Layers {
@@ -164,12 +175,18 @@ pub struct Layers {
     drawn: Cell<[bool; 4]>,
     pub cache: replay::Cache,
     listeners: RefCell<Vec<Listener>>,
+    /// Whether the listeners want events now (a theme with sounds is on):
+    /// otherwise the base look emits nothing for them.
+    heard: Cell<bool>,
     stats: Cell<Stats>,
     next_id: Cell<u64>,
     /// When the pointer last pressed in the window, and when Space or
     /// Enter last did: how a control that says it was used was used.
     pointer_pressed: Cell<f64>,
     key_activated: Cell<f64>,
+    /// The last press: when, what a result after it is due to, and how it
+    /// was made.
+    last_press: Cell<Option<(f64, Cause, Option<Via>)>>,
 }
 
 /// The page a widget is on: the name its page has in the window's stack
@@ -205,10 +222,12 @@ impl Layers {
             drawn: Cell::new([false; 4]),
             cache: replay::Cache::default(),
             listeners: RefCell::default(),
+            heard: Cell::new(false),
             stats: Cell::default(),
             next_id: Cell::new(1),
             pointer_pressed: Cell::new(f64::NEG_INFINITY),
             key_activated: Cell::new(f64::NEG_INFINITY),
+            last_press: Cell::new(None),
         })
     }
 
@@ -252,7 +271,8 @@ impl Layers {
         !self.still && crate::widgets::animations_enabled()
     }
 
-    fn active(&self) -> bool {
+    /// Whether the window is the one in use (`GMNB_ACTIVE`: taken to be).
+    pub fn active(&self) -> bool {
         self.always_active || self.active.get()
     }
 
@@ -372,6 +392,46 @@ impl Layers {
         self.key_activated.set(now());
     }
 
+    /// Whether Space or Enter activated a control within the last second
+    /// (one the window activated itself, with something held, is noted
+    /// only here: the key goes no further).
+    pub fn keyboard_activated_lately(&self) -> bool {
+        now() - self.key_activated.get() < 1.0
+    }
+
+    /// Notes the pointer's presses and Space and Enter in `widget`, as
+    /// the window's are noted: for a popover, whose grab keeps them from
+    /// the window's controllers. A control used there is then known to
+    /// have been used by the pointer or the keyboard, not through the
+    /// accessibility interface.
+    pub fn watch(self: &Rc<Self>, widget: &impl IsA<gtk::Widget>) {
+        let click = gtk::GestureClick::new();
+        click.set_button(0);
+        click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(self);
+        click.connect_pressed(move |_, _, _, _| {
+            if let Some(all) = weak.upgrade() {
+                all.pointer_pressed();
+            }
+        });
+        widget.add_controller(click);
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(self);
+        keys.connect_key_pressed(move |_, key, _, _| {
+            use gtk::gdk::Key;
+            if matches!(
+                key,
+                Key::space | Key::Return | Key::KP_Enter | Key::ISO_Enter
+            ) && let Some(all) = weak.upgrade()
+            {
+                all.key_activated();
+            }
+            glib::Propagation::Proceed
+        });
+        widget.add_controller(keys);
+    }
+
     /// How a control that has just said it was used was used: by the
     /// pointer or the keyboard if either did something within the last
     /// second, else through the accessibility interface.
@@ -427,7 +487,10 @@ impl Layers {
         self.emit(&happened);
     }
 
-    /// A calculation produced a value in `readout`, or an error.
+    /// A calculation produced a value in `readout`, or an error. What
+    /// brought it about is the press just before it, if there was one: its
+    /// `cause`, and its `via` (what follows a press through the
+    /// accessibility interface is that press's doing too).
     pub fn outcome(&self, readout: &impl IsA<gtk::Widget>, error: bool) {
         let readout = readout.upcast_ref::<gtk::Widget>();
         let kind = if error {
@@ -435,7 +498,13 @@ impl Layers {
         } else {
             EventKind::Result
         };
-        self.emit(&Happened::new(kind, page_of(readout), Some(readout)));
+        let mut happened = Happened::new(kind, page_of(readout), Some(readout));
+        if let Some((at, cause, via)) = self.last_press.get()
+            && now() - at < CAUSE_WINDOW
+        {
+            (happened.cause, happened.via) = (Some(cause), via);
+        }
+        self.emit(&happened);
     }
 
     /// A keypad came into view.
@@ -454,7 +523,17 @@ impl Layers {
     }
 
     fn draws_any(&self) -> bool {
-        self.drawn.get().contains(&true) || !self.listeners.borrow().is_empty()
+        self.drawn.get().contains(&true) || self.hears()
+    }
+
+    /// Whether the listeners want events now.
+    fn hears(&self) -> bool {
+        self.heard.get() && !self.listeners.borrow().is_empty()
+    }
+
+    /// Whether the listeners want events now: a theme with sounds is on.
+    pub fn set_heard(&self, heard: bool) {
+        self.heard.set(heard);
     }
 
     /// Runs `f` once the frame being painted is done: for what a hook's
@@ -464,10 +543,11 @@ impl Layers {
         glib::idle_add_local_once(f);
     }
 
-    /// Calls `f` for every event, in the window's coordinates, after the
-    /// layers have been told (under reduced motion too, when layers are
-    /// told nothing).
-    pub fn listen(&self, f: impl Fn(&Event) + 'static) {
+    /// Calls `f` for every event, in the window's coordinates, with the
+    /// window's width, after the layers have been told (under reduced
+    /// motion too, when layers are told nothing); while
+    /// [`Layers::set_heard`] says so.
+    pub fn listen(&self, f: impl Fn(&Event, f32) + 'static) {
         self.listeners.borrow_mut().push(Box::new(f));
     }
 
@@ -476,6 +556,10 @@ impl Layers {
     pub fn emit(&self, happened: &Happened) {
         self.poke();
         self.count(|s| s.events += 1);
+        if happened.kind == EventKind::Press {
+            let cause = Cause::of_press(happened.action, happened.key.map(|(_, kind)| kind));
+            self.last_press.set(Some((now(), cause, happened.via)));
+        }
         // A keypad's layer is told of its own keypad's keys and showing,
         // not of another's.
         let from_pad = (happened.kind == EventKind::Show || happened.source == Some(Source::Key))
@@ -513,10 +597,10 @@ impl Layers {
                 }
             }
         }
-        let listeners = self.listeners.borrow();
-        if listeners.is_empty() {
+        if !self.hears() {
             return;
         }
+        let listeners = self.listeners.borrow();
         // In the window's coordinates: the window of the widget it came
         // from, or of any layer for an event from nowhere in particular.
         let root = happened.widget.and_then(|w| w.root()).or_else(|| {
@@ -530,7 +614,7 @@ impl Layers {
         let size = (root.width() as f32, root.height() as f32);
         if let Some(event) = happened.seen_from(&root, size) {
             for listener in listeners.iter() {
-                listener(&event);
+                listener(&event, size.0);
             }
         }
     }

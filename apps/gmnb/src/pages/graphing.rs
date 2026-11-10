@@ -647,11 +647,13 @@ impl GraphingPage {
                 b.set_focus_on_click(false);
                 let weak = Rc::downgrade(self);
                 let insert = insert.to_string();
+                // Its backspace does what the calculator's does.
+                let action = (*label == "⌫").then_some(crate::layers::Action::Backspace);
                 b.connect_clicked(move |b| {
                     if let Some(p) = weak.upgrade() {
                         p.insert_text(&insert);
                         let key = crate::layers::Source::Key;
-                        p.ctx.hub.layers().pressed(b, key, None);
+                        p.ctx.hub.layers().pressed(b, key, action);
                     }
                 });
                 pad.attach(&b, c as i32, r as i32, 1, 1);

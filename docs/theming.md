@@ -1072,8 +1072,8 @@ An event stays for as many seconds as the layer's `events` table says
 | `kind` | When | Extra fields |
 |---|---|---|
 | `"press"` | A control was used. | `source`, `via`, `key` |
-| `"result"` | A calculation produced a value in a readout. | |
-| `"error"` | It produced an error. | |
+| `"result"` | A calculation produced a value in a readout. | `cause`, `via` |
+| `"error"` | It produced an error. | `cause`, `via` |
 | `"show"` | A keypad came into view (first shown, or the mode changed). | |
 | `"option"` | The user changed one of this theme's options. | `id`, `value` |
 | `"mode"` | The user changed page or calculator mode (not sent for the page the app starts on). | |
@@ -1107,6 +1107,14 @@ operated through the accessibility interface.
 
 A press also has `action` when the control does one of three things:
 `"clear"` (C, CE), `"backspace"` or `"memory"` (any memory button).
+
+A `result` or an `error` has `cause`, what brought it about: the press
+just before it. `"equals"` is = (or Enter), `"operator"` the running total
++ − × ÷ show (`1 +` shows 1), `"function"` any other function key, and
+`"digit"`, `"clear"`, `"backspace"`, `"memory"` or `"button"` the rest
+(the converter's value follows each digit). It has that press's `via`
+too. With no press just before it (a paste, a unit chosen, the rates
+arriving), it has neither.
 
 ### The draw API
 
@@ -1718,11 +1726,11 @@ the widget it came from (the name its page has in the window's stack).
 |---|---|---|
 | `calculator.rs` `on_key`, `converter.rs` keypad `connect_pressed` (a key clicked) | `key_pressed(pad, id, Some(point))` | `press`, `source = "key"`, `x, y` = the point pressed, `rect` = the key |
 | `calculator.rs` `flash`, `converter.rs` key handler (a key typed) | `key_pressed(pad, id, None)` | `press`, `source = "key"`, `via = "keyboard"`, `x, y` = the key's middle. The key is also `active` for 110 ms. |
-| `graphing.rs` keypad buttons | `pressed(button, Source::Key, None)` | `press`, `source = "key"`, `page = "graphing"`, `key.kind = "other"`, no `key.id`, `x, y` = the button's middle |
-| `calculator.rs` `press_from` (memory row, F-E) | `pressed(button, Source::Button, …)` | `press`, `source = "button"`; the memory buttons with `action = "memory"` |
+| `graphing.rs` keypad buttons | `pressed(button, Source::Key, action)` | `press`, `source = "key"`, `page = "graphing"`, `key.kind = "other"`, no `key.id`, `x, y` = the button's middle; ⌫ with `action = "backspace"` |
+| `calculator.rs` `press_from` (memory row, F-E); MC, M+ and M− on a stored value | `pressed(button, Source::Button, …)` | `press`, `source = "button"`; the memory buttons with `action = "memory"` |
 | `converter.rs` swap | `pressed(button, Source::Swap, None)` | `press`, `source = "swap"` |
 | `date.rs` a day picked | `pressed(button, Source::Date, None)` | `press`, `source = "date"`, `rect` = the date button |
-| `Display::set_value` given `Change::Result` or `Change::Error` (the calculator's, the converter's and the date page's readouts alike) | `outcome(readout, error)` | `result` / `error` with the readout's `page`, `rect` = the readout. Not from a readout that is not on screen (another page's; the date page's other result) |
+| `Display::set_value` given `Change::Result` or `Change::Error` (the calculator's, the converter's and the date page's readouts alike) | `outcome(readout, error)` | `result` / `error` with the readout's `page`, `rect` = the readout, and the `cause` and `via` of the press told less than 250 ms before it (every press is told before the calculator is pressed). Not from a readout that is not on screen (another page's; the date page's other result) |
 | `Keypad` mapped; `Keypad::cascade` (the calculator's mode changed, the converter shown) | `shown(pad)` | `show`, `rect` = the keypad |
 | `Hub::set_option` | `emit` | `option`, with `id` and `value` |
 | `Window::set_mode`, after the first page | `mode_changed(page)` | `mode`, `page` = the new page, `rect` = the page |
@@ -1731,11 +1739,13 @@ the widget it came from (the name its page has in the window's stack).
   label (C, CE); `Keypad::key_meaning`.
 - **`via`**: a keypad notes every pointer press on it and every Space or
   Enter (capture phase, never claimed), and the backdrop does the same
-  for the rest of the window. A control that says it was used within a
-  second of a pointer press on it was used by the pointer; else within a
-  second of Space or Enter, by the keyboard; else through the
-  accessibility interface (`"assistive"`). A key typed on the keyboard
-  that presses its key on screen is always `"keyboard"`.
+  for the rest of the window, and a popover whose grab keeps them from
+  the window does it for itself (`Layers::watch`: the date picker). A
+  control that says it was used within a second of a pointer press on it
+  was used by the pointer; else within a second of Space or Enter, by the
+  keyboard; else through the accessibility interface (`"assistive"`). A
+  key typed on the keyboard that presses its key on screen is always
+  `"keyboard"`.
 
 `Display::set_value`'s `Change` also becomes `frame.value.change` for
 that readout, while a theme's display layer draws it. On the converter a

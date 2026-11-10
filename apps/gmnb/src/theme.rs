@@ -6,14 +6,19 @@
 //! the Background opacity, the theme's options, reduced motion and the
 //! desktop's font. The base look needs no theme: no Luau machine exists
 //! then. Nothing here runs at rest: no timer and no tick callback.
+//!
+//! The hub also holds the theme's sounds (`crate::sound::Voice`): it hands
+//! the engine each theme loaded, hears each event the layers are told of,
+//! and is what Settings' Sound rows ask and tell.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Instant;
 
 use gmnb_theme::draw::DisplayList;
-use gmnb_theme::events::{EventKind, Page};
+use gmnb_theme::events::{Event, EventKind, Page};
 use gmnb_theme::layer::{Drawn, Failure, Frame, LayerKind};
 use gmnb_theme::theme::{self as themes, Action, FontFile, OptionDef, Origin, Source, Theme};
 use gmnb_theme::{Ctx, Limits, Note, OptionValue, Style, TextMeasure, Update, Writer, css, schema};
@@ -21,6 +26,7 @@ use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
 use crate::layers::{Happened, Layers};
+use crate::sound::{Asked, Heard, Voice};
 
 pub use appcore::color::{parse_hex, to_hex};
 
@@ -34,6 +40,8 @@ pub fn rgba(c: [f32; 3], a: f32) -> gdk::RGBA {
 
 /// Returns false once it should be dropped (its widget is gone).
 type StyleSubscriber = Box<dyn Fn(&Rc<Style>) -> bool>;
+/// Told what Settings says of sound now; false once its widget is gone.
+type SoundSubscriber = Box<dyn Fn(&str) -> bool>;
 /// How the user is told something (a toast).
 type Tell = Box<dyn Fn(&str)>;
 
@@ -54,6 +62,9 @@ pub struct Config {
     pub accent: Option<Option<[f32; 3]>>,
     /// `GMNB_THEME_DIR`.
     pub dev_dir: Option<PathBuf>,
+    /// Settings' *Theme sounds* and its volume (0 to 1).
+    pub sound: bool,
+    pub sound_volume: f32,
 }
 
 /// One theme of Settings' list.
@@ -85,6 +96,11 @@ pub struct Stats {
     pub layers: crate::layers::Stats,
     /// Textures made of the theme's pictures.
     pub textures: usize,
+    /// What the sound engine has done, and whether its thread exists.
+    pub sound: gmnb_sound::Stats,
+    pub sound_thread: bool,
+    /// Connections to a sound server this process has attempted.
+    pub sound_connections: u64,
 }
 
 pub struct Hub {
@@ -126,6 +142,16 @@ pub struct Hub {
     measure: RefCell<Option<Rc<dyn TextMeasure>>>,
     /// The layers whose hook was switched off, and the user told.
     told_off: RefCell<HashSet<LayerKind>>,
+    /// The theme's sounds.
+    sound: RefCell<Voice>,
+    /// Since when the window has been on screen.
+    on_screen: Cell<Option<Instant>>,
+    /// Settings' Sound rows, told when what they say changes.
+    sound_subscribers: RefCell<Vec<SoundSubscriber>>,
+    /// The theme's `sound` was switched off, and the user told.
+    told_sound_off: Cell<bool>,
+    /// `GMNB_SOUND_TRACE`: a line on stderr for each event sound hears.
+    trace: bool,
 }
 
 thread_local! {
@@ -157,6 +183,17 @@ impl Hub {
             p
         };
         let ctx = Ctx::default();
+        // The desktop's own switch for event sounds.
+        let desktop_sounds =
+            gtk::Settings::default().is_none_or(|s| s.is_gtk_enable_event_sounds());
+        let mut voice = Voice::new(
+            crate::sound::engine_settings(config.sound_volume),
+            config.sound,
+            desktop_sounds,
+        );
+        if std::env::var_os("GMNB_SCREENSHOT").is_some() {
+            voice = voice.quiet_run();
+        }
         let hub = Rc::new(Hub {
             theme: RefCell::new(None),
             active: RefCell::new(String::new()),
@@ -186,8 +223,23 @@ impl Hub {
             frame_ctx: RefCell::new(ctx.clone()),
             measure: RefCell::new(None),
             told_off: RefCell::default(),
+            sound: RefCell::new(voice),
+            on_screen: Cell::new(None),
+            sound_subscribers: RefCell::default(),
+            told_sound_off: Cell::new(false),
+            trace: std::env::var_os("GMNB_SOUND_TRACE").is_some(),
         });
         hub.layers.set_hub(&hub);
+        {
+            // Sound hears every event the layers are told of, in the
+            // window's coordinates (while a theme with sounds is on).
+            let weak = Rc::downgrade(&hub);
+            hub.layers.listen(move |event, width| {
+                if let Some(hub) = weak.upgrade() {
+                    hub.hear_event(event, width);
+                }
+            });
+        }
         CURRENT.with(|c| c.replace(Rc::downgrade(&hub)));
         let sm = adw::StyleManager::default();
         let weak = Rc::downgrade(&hub);
@@ -214,6 +266,16 @@ impl Hub {
             settings.connect_gtk_font_name_notify(move |_| {
                 if let Some(hub) = weak.upgrade() {
                     hub.apply(false);
+                }
+            });
+            // The desktop turning its event sounds off turns GMNB's off.
+            let weak = Rc::downgrade(&hub);
+            settings.connect_gtk_enable_event_sounds_notify(move |s| {
+                if let Some(hub) = weak.upgrade() {
+                    hub.sound
+                        .borrow_mut()
+                        .set_desktop(s.is_gtk_enable_event_sounds());
+                    hub.sound_changed();
                 }
             });
         }
@@ -376,6 +438,11 @@ impl Hub {
 
     /// What the theme's author should know: the latest 20.
     pub fn notes(&self) -> Vec<Note> {
+        // What the sound engine found as it made the theme's sounds.
+        let made = self.sound.borrow().take_notes();
+        for note in made {
+            self.note(&note.path, note.message);
+        }
         let notes = self.notes.borrow();
         notes[notes.len().saturating_sub(20)..].to_vec()
     }
@@ -436,10 +503,151 @@ impl Hub {
             }
         }
         // Nothing of the theme that was keeps running; the layers of the
-        // one that is start afresh.
+        // one that is start afresh, and its sounds are made.
         self.told_off.borrow_mut().clear();
         self.layers.theme_changed();
+        self.sounds_changed();
         self.apply(false);
+    }
+
+    /// The theme was loaded or unloaded: the sound engine is handed its
+    /// sounds (or lets the last theme's go).
+    fn sounds_changed(&self) {
+        self.told_sound_off.set(false);
+        let notes = {
+            let theme = self.theme.borrow();
+            self.sound.borrow_mut().load(theme.as_ref())
+        };
+        for note in notes {
+            self.note(&note.path, note.message);
+        }
+        self.sound_changed();
+    }
+
+    // ---- Sound -------------------------------------------------------------------
+
+    /// What sound does changed (the theme, the switch, the desktop's
+    /// setting, or the engine found the sound system or none): events are
+    /// heard only while there is something to hear them, and Settings
+    /// says what is so.
+    pub fn sound_changed(&self) {
+        let (listening, subtitle) = {
+            let voice = self.sound.borrow();
+            (voice.listening(), voice.subtitle())
+        };
+        self.layers.set_heard(listening);
+        let subs = std::mem::take(&mut *self.sound_subscribers.borrow_mut());
+        let mut keep: Vec<SoundSubscriber> = subs.into_iter().filter(|f| f(&subtitle)).collect();
+        keep.append(&mut self.sound_subscribers.borrow_mut());
+        *self.sound_subscribers.borrow_mut() = keep;
+    }
+
+    /// Call `f` with what Settings says of sound, now and whenever it
+    /// changes, while `widget` is alive.
+    pub fn subscribe_sound<W: IsA<glib::Object>>(
+        &self,
+        widget: &W,
+        f: impl Fn(&W, &str) + 'static,
+    ) {
+        f(widget, &self.sound.borrow().subtitle());
+        let weak = widget.downgrade();
+        self.sound_subscribers
+            .borrow_mut()
+            .push(Box::new(move |text| match weak.upgrade() {
+                Some(w) => {
+                    f(&w, text);
+                    true
+                }
+                None => false,
+            }));
+    }
+
+    /// Settings' *Theme sounds*.
+    pub fn sound_switch(&self) -> bool {
+        self.sound.borrow().switch()
+    }
+
+    pub fn set_sound(&self, on: bool) {
+        self.sound.borrow_mut().set_switch(on);
+        self.sound_changed();
+    }
+
+    /// Settings' volume, 0 to 1.
+    pub fn set_sound_volume(&self, volume: f32) {
+        self.sound.borrow_mut().set_volume(volume);
+    }
+
+    /// The volume was let go: the theme's `digit` sound, once.
+    pub fn preview_sound(&self) {
+        let played = self.sound.borrow_mut().preview();
+        if self.trace {
+            eprintln!("sound: the volume let go: {played:?}");
+        }
+    }
+
+    /// The window came on screen, or left it.
+    fn on_screen(&self, shown: bool) {
+        self.on_screen.set(shown.then(Instant::now));
+    }
+
+    /// One event, in the window's coordinates: what it plays ("From
+    /// event to sound"). Nothing while the window is not the one in use
+    /// or has been on screen for less than half a second.
+    fn hear_event(&self, event: &Event, width: f32) {
+        let start = Instant::now();
+        let settled = self
+            .on_screen
+            .get()
+            .is_some_and(|t| start.saturating_duration_since(t) >= crate::sound::SETTLING);
+        let (heard, asked) = if !self.layers.active() {
+            (Heard::Silent("the window is not in use"), Asked::default())
+        } else if !settled {
+            (
+                Heard::Silent("the window has only just come on screen"),
+                Asked::default(),
+            )
+        } else {
+            // (A theme being restyled is not to be asked anything.)
+            let (Ok(theme), Ok(ctx)) = (self.theme.try_borrow(), self.frame_ctx.try_borrow())
+            else {
+                return;
+            };
+            self.sound
+                .borrow_mut()
+                .hear(theme.as_ref(), &ctx, event, width, start)
+        };
+        if self.trace {
+            eprintln!(
+                "{}",
+                crate::sound::trace_line(event, &heard, &asked, start.elapsed())
+            );
+        }
+        if matches!(heard, Heard::NotAnswered | Heard::Silent(_)) {
+            return;
+        }
+        // What the theme's `sound` noted, did wrong, or came to.
+        let (notes, name, dead) = self.with_theme(|t| match t {
+            Some(t) => (t.take_sound_notes(), t.def.meta.name.clone(), t.is_dead()),
+            None => (Vec::new(), String::new(), false),
+        });
+        for note in notes {
+            self.note(&note.path, note.message);
+        }
+        if let Some(e) = &asked.failed {
+            eprintln!("gmnb: sound: {e}");
+            self.note("sound", e.clone());
+        }
+        if dead {
+            self.layers.after_frame(|| {
+                if let Some(hub) = Hub::current() {
+                    hub.unload_dead();
+                }
+            });
+        } else if asked.switched_off && !self.told_sound_off.replace(true) {
+            self.tell(&format!(
+                "Theme “{name}”: its sound function failed and was switched off"
+            ));
+        }
     }
 
     /// Adds the theme's font files to the app's font map (they are known
@@ -602,6 +810,7 @@ impl Hub {
             self.theme.replace(None);
             self.error.replace(Some(why));
             self.layers.theme_changed();
+            self.sounds_changed();
             self.tell(&format!(
                 "Theme “{name}” was unloaded: it ran out of memory"
             ));
@@ -685,6 +894,20 @@ impl Hub {
     pub fn attach(&self, window: &impl IsA<gtk::Window>) {
         let window = window.clone().upcast::<gtk::Window>();
         self.windows.borrow_mut().push(window.downgrade());
+        // Nothing sounds until the window has been on screen a moment.
+        if window.is_mapped() {
+            self.on_screen(true);
+        }
+        window.connect_map(|_| {
+            if let Some(hub) = Hub::current() {
+                hub.on_screen(true);
+            }
+        });
+        window.connect_unmap(|_| {
+            if let Some(hub) = Hub::current() {
+                hub.on_screen(false);
+            }
+        });
         self.sync_window(&window, &self.style());
         // `draw:text_size` measures as the window lays text out.
         if self.measure.borrow().is_none() {
@@ -798,6 +1021,7 @@ impl Hub {
         self.error
             .replace(Some("the theme ran out of memory".into()));
         self.layers.theme_changed();
+        self.sounds_changed();
         self.tell(&format!(
             "Theme “{name}” was unloaded: it ran out of memory"
         ));
@@ -866,7 +1090,32 @@ impl Hub {
         stats.machines = u32::from(self.theme.borrow().is_some());
         stats.layers = self.layers.stats();
         stats.textures = self.layers.cache.textures();
+        let voice = self.sound.borrow();
+        stats.sound = voice.stats();
+        stats.sound_thread = voice.has_thread();
+        stats.sound_connections = gmnb_sound::connection_attempts();
         stats
+    }
+
+    /// What the sound side is doing, in a line (`GMNB_THEME_STATS`).
+    pub fn sound_report(&self) -> String {
+        let voice = self.sound.borrow();
+        let s = voice.stats();
+        format!(
+            "status {:?}, thread {}, threads {}, connections {}, queued {}, started {}, skipped {}, \
+             wakes {}, uncorks {}, corks {}; {}",
+            voice.status(),
+            if voice.has_thread() { "yes" } else { "no" },
+            s.threads,
+            gmnb_sound::connection_attempts(),
+            s.queued,
+            s.started,
+            s.skipped,
+            s.wakes,
+            s.uncorks,
+            s.corks,
+            voice.subtitle()
+        )
     }
 }
 
@@ -1013,6 +1262,7 @@ mod tests {
                 &[],
             ),
             ("layers/replay.rs", include_str!("layers/replay.rs"), &[]),
+            ("sound.rs", include_str!("sound.rs"), &[]),
             ("layers/tile.rs", include_str!("layers/tile.rs"), &[]),
             (
                 "layers/mod.rs",

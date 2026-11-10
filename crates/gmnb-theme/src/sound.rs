@@ -18,14 +18,14 @@ use std::time::Duration;
 
 use gmnb_sound::{
     Curve, Effect, Entry, Env, EventName, FileData, Filter, FilterKind, Fm, Glide, Layer, Lfo, Pan,
-    Pick, Play, PlayParams, Recipe, Slot, SoundId, SoundSource, SoundTable, ThemeSounds, Trigger,
-    Varied, Wave, limits, note_name,
+    Pick, Play, PlayParams, Recipe, Resolver, Slot, SoundId, SoundSource, SoundTable, ThemeSounds,
+    Trigger, Varied, Wave, limits, note_name,
 };
 use mlua::{Lua, Table, Value};
 
 use crate::ThemeValue;
 use crate::check::{Note, Notes};
-use crate::events::{Action, Event, EventKind, KeyKind, Page, Via};
+use crate::events::{Action, Cause, Event, EventKind, KeyKind, Page, Via};
 use crate::theme::{Theme, safe_relative};
 
 /// The time one `sound(event, ctx)` call has (`Budget::Custom`).
@@ -51,14 +51,15 @@ pub fn answers(event: &Event) -> bool {
 
 /// The name an event goes by in the `sounds` table (step 3). `None`: the
 /// table plays nothing for it (an `option`; a result or an error on
-/// another page than the Calculator), though the theme's `sound` function
-/// is still asked.
+/// another page than the Calculator, or one that no `=` or function key
+/// brought about: [`concludes`]), though the theme's `sound` function is
+/// still asked.
 pub fn event_name(event: &Event) -> Option<EventName> {
-    let on_calculator = event.page == Page::Calculator;
+    let ended = event.page == Page::Calculator && concludes(event.cause);
     match event.kind {
         EventKind::Mode => Some(EventName::Mode),
-        EventKind::Result if on_calculator => Some(EventName::Result),
-        EventKind::Error if on_calculator => Some(EventName::Error),
+        EventKind::Result if ended => Some(EventName::Result),
+        EventKind::Error if ended => Some(EventName::Error),
         EventKind::Press => Some(match (event.action, event.key) {
             (Some(Action::Clear), _) => EventName::Clear,
             (Some(Action::Backspace), _) => EventName::Backspace,
@@ -72,6 +73,15 @@ pub fn event_name(event: &Event) -> Option<EventName> {
         }),
         _ => None,
     }
+}
+
+/// Whether a result or an error brought about by `cause` is the end of a
+/// calculation, which the `sounds` table plays: `=` (or Enter), or a
+/// function key. Not the running total an operator shows (`1 + 2 +`
+/// chimes once, at `=`), nor a value a digit, a memory button or a paste
+/// puts there.
+pub fn concludes(cause: Option<Cause>) -> bool {
+    matches!(cause, Some(Cause::Equals | Cause::Function))
 }
 
 /// Where an event happened across a window `width` wide: -1 at the left
@@ -92,6 +102,89 @@ pub fn trigger(event: &Event, width: f32) -> Trigger {
         key: event.key.and_then(|(id, _)| id).map(u64::from),
         across: Some((across(event, width) + 1.0) / 2.0),
     }
+}
+
+// ---- What an event plays --------------------------------------------------------
+
+/// Who decided what an event plays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum By {
+    /// The theme's `sound` function.
+    Function,
+    /// The `sounds` table, under this name (the event's own, or one its
+    /// row falls back to).
+    Table(EventName),
+    /// Nobody: sound does not answer the event, or the function left it
+    /// to the table, which has no entry for it (or `false`, or the event
+    /// has no name there).
+    Nobody,
+}
+
+/// What an event plays, and how that was decided.
+#[derive(Debug, PartialEq)]
+pub struct Decision {
+    /// Up to 4 plays; none: silence.
+    pub plays: Vec<Play>,
+    pub by: By,
+    /// The event's name in the table (what the 30 ms rule goes by).
+    pub name: Option<EventName>,
+    /// The theme's `sound` failed for this event (the table decided), and
+    /// whether that failure switched it off.
+    pub failed: Option<crate::ThemeError>,
+    pub switched_off: bool,
+}
+
+/// What an event plays: "From event to sound", steps 1 to 4, as the app
+/// decides it (the app, and the tools that render and test a theme's
+/// sounds without it, share this). Sound answers the event or not; the
+/// theme's `sound(event, ctx)` decides first; what it leaves to the table
+/// (`nil`, or a failure) the table decides: the event's name, its row,
+/// `pick` and ranges, `pan = "position"` across a window `width` wide.
+///
+/// Not here: whether the window is in use and sound is on (the app's),
+/// and the same name again within 30 ms (`Resolver::too_soon`, which the
+/// caller asks with [`Decision::name`] once it has plays).
+pub fn decide(
+    theme: &Theme,
+    resolver: &mut Resolver,
+    event: &Event,
+    width: f32,
+    ctx: &crate::Ctx,
+) -> Decision {
+    let mut d = Decision {
+        plays: Vec::new(),
+        by: By::Nobody,
+        name: event_name(event),
+        failed: None,
+        switched_off: false,
+    };
+    if !answers(event) {
+        return d;
+    }
+    match theme.sound_choice(event, across(event, width), ctx) {
+        Some(Ok(Choice::Silence)) => {
+            d.by = By::Function;
+            return d;
+        }
+        Some(Ok(Choice::Plays(plays))) => {
+            (d.plays, d.by) = (plays, By::Function);
+            return d;
+        }
+        Some(Ok(Choice::Table)) | None => {}
+        Some(Err(e)) => {
+            d.failed = Some(e);
+            d.switched_off = !theme.asks_sound();
+        }
+    }
+    let Some(name) = d.name else {
+        return d;
+    };
+    if let Some((found, _)) = resolver.table().find(name) {
+        d.by = By::Table(found);
+    }
+    d.plays
+        .extend(resolver.resolve(name, trigger(event, width)));
+    d
 }
 
 // ---- What a theme has declared ------------------------------------------------
@@ -257,6 +350,59 @@ impl Theme {
     /// `SoundEngine::extend`.)
     pub fn sounds_declared(&self) -> usize {
         shared(self.engine().lua()).map_or(0, |s| s.borrow().list.len())
+    }
+
+    /// Whether the theme has a `sound` function that is still called (it
+    /// is switched off after three failures, or one that ran four times
+    /// its 2 ms).
+    pub fn asks_sound(&self) -> bool {
+        self.def.sound.as_ref().is_some_and(|f| !f.is_disabled())
+    }
+
+    /// Runs the theme's `sound(event, ctx)` for one event ("From event to
+    /// sound", step 2): `event` in window coordinates, given with `age` 0
+    /// and `pan`, where it happened across the window (-1 to 1); within
+    /// [`HOOK_TIME`]. `None`: the theme has no such function, or it has
+    /// been switched off.
+    ///
+    /// What it returned is checked ([`parse_choice`]); what was wrong with
+    /// it goes to the sound notes ([`Theme::take_sound_notes`]). A failure
+    /// counts against the function, as a draw hook's does: the `sounds`
+    /// table decides for that event.
+    pub fn sound_choice(
+        &self,
+        event: &Event,
+        pan: f32,
+        ctx: &crate::Ctx,
+    ) -> Option<Result<Choice, crate::ThemeError>> {
+        let hook = self.def.sound.as_ref().filter(|f| !f.is_disabled())?;
+        let engine = self.engine();
+        let asked = (|| {
+            let ctx = self.ctx_for(ctx)?.clone();
+            let told = engine.host_table(0, 12)?;
+            engine.fill(&told, |t| {
+                crate::layer::write_event(engine.lua(), t, 0.0, event)?;
+                t.raw_set("pan", pan.clamp(-1.0, 1.0))
+            })?;
+            engine.call(
+                hook,
+                crate::Budget::Custom(HOOK_TIME),
+                (told.table().clone(), ctx),
+            )
+        })();
+        Some(asked.map(|value| {
+            let mut notes = Notes::default();
+            let choice = parse_choice(&value, &mut notes);
+            if !notes.list.is_empty()
+                && let Some(s) = shared(engine.lua())
+            {
+                let mut s = s.borrow_mut();
+                for note in notes.list {
+                    s.notes.push(&note.path, note.message);
+                }
+            }
+            choice
+        }))
     }
 
     /// What the theme's author should know about the sounds it made,

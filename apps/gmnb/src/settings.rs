@@ -33,6 +33,11 @@ pub struct Settings {
     pub theme_options: serde_json::Map<String, Value>,
     /// "Use the desktop's accent colour": off, themes are told of none.
     pub system_accent: bool,
+    /// Settings → Sound → Theme sounds (docs/theming-media.md,
+    /// "Settings"). The app's, not a theme's.
+    pub sound: bool,
+    /// The sounds' volume, 0 to 1; the gain is its square (0.5: -12 dB).
+    pub sound_volume: f64,
     /// How opaque the window's backdrop is, 0.1..=1. Below 1 the desktop
     /// shows through (and the compositor's blur, if it blurs translucent
     /// windows).
@@ -61,6 +66,8 @@ impl Default for Settings {
             active_theme: String::new(),
             theme_options: Default::default(),
             system_accent: true,
+            sound: true,
+            sound_volume: DEFAULT_SOUND_VOLUME,
             background_opacity: 1.0,
             vulkan: true,
             literal_digits: NumberPrecision::DEFAULT,
@@ -179,6 +186,18 @@ pub fn backdrop_alpha(v: f64) -> f32 {
         v.clamp(MIN_BACKGROUND_OPACITY, 1.0) as f32
     } else {
         1.0
+    }
+}
+
+/// The sounds' volume a new profile has.
+pub const DEFAULT_SOUND_VOLUME: f64 = 0.5;
+
+/// A saved sound volume as one to play at: 0 to 1.
+pub fn sound_volume(v: f64) -> f32 {
+    if v.is_finite() {
+        v.clamp(0.0, 1.0) as f32
+    } else {
+        DEFAULT_SOUND_VOLUME as f32
     }
 }
 
@@ -394,6 +413,44 @@ mod tests {
         );
         assert!(dir.join("settings.json.bad").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Sound: on at 50% in a new profile and in a file from before it;
+    /// each key loads by itself, and a volume out of range plays within
+    /// it.
+    #[test]
+    fn the_sound_settings_load_by_themselves() {
+        let s = loaded("sound-old", r#"{"theme":"dark","background_opacity":0.4}"#);
+        assert!(s.sound);
+        assert_eq!(s.sound_volume, 0.5);
+        assert_eq!(s.background_opacity, 0.4);
+        let new = Settings::default();
+        assert!(new.sound && new.sound_volume == 0.5);
+
+        let s = loaded("sound-set", r#"{"sound":false,"sound_volume":0.25}"#);
+        assert!(!s.sound);
+        assert_eq!(s.sound_volume, 0.25);
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(
+            (json["sound"].clone(), json["sound_volume"].clone()),
+            (false.into(), 0.25.into())
+        );
+
+        // Mistyped: that key's default, the rest kept.
+        let s = loaded(
+            "sound-odd",
+            r#"{"sound":"no","sound_volume":0.75,"theme":"light"}"#,
+        );
+        assert!(s.sound);
+        assert_eq!((s.sound_volume, s.theme.as_str()), (0.75, "light"));
+        let s = loaded("sound-odd2", r#"{"sound":false,"sound_volume":"loud"}"#);
+        assert!(!s.sound);
+        assert_eq!(s.sound_volume, 0.5);
+
+        assert_eq!(sound_volume(0.3), 0.3);
+        assert_eq!(sound_volume(-1.0), 0.0);
+        assert_eq!(sound_volume(7.0), 1.0);
+        assert_eq!(sound_volume(f64::NAN), 0.5);
     }
 
     #[test]

@@ -42,7 +42,7 @@ use gmnb_sound::{
     EventName, Mixer, Pan, Pick, Play, Slot, SoundSource, Varied, dump_name, limits, prepare_all,
     wav,
 };
-use gmnb_theme::events::{EventKind, KeyKind, Page};
+use gmnb_theme::events::{Cause, EventKind, KeyKind, Page};
 use gmnb_theme::theme::{OptionKind, Source, Theme};
 use gmnb_theme::{Limits, OptionValue};
 use stand_in::{By, StandIn};
@@ -221,23 +221,29 @@ fn typing(app: &mut StandIn) -> Vec<Vec<Play>> {
         '1', '2', '.', '5', '*', '4', '+', '3', '7', '.', '9', '9', '-', '8', '0', '0', '/', '6',
         '4', '=',
     ];
-    let result = stand_in::outcome(EventKind::Result, Page::Calculator);
+    let result = |cause| stand_in::outcome_after(EventKind::Result, Page::Calculator, cause);
     KEYS.iter()
         .map(|c| {
+            // The result each operator shows (the running total) and the
+            // one = shows: each with its cause, as the app reports them.
             let (event, reported) = match c {
-                '=' => (stand_in::key(30, KeyKind::Equals, None, 0.875), true),
+                '=' => (
+                    stand_in::key(30, KeyKind::Equals, None, 0.875),
+                    Some(Cause::Equals),
+                ),
                 '*' | '+' | '-' | '/' => {
                     let id = 20 + "*+-/".find(*c).unwrap_or(0) as u32;
-                    (stand_in::key(id, KeyKind::Operator, None, 0.875), true)
+                    let key = stand_in::key(id, KeyKind::Operator, None, 0.875);
+                    (key, Some(Cause::Operator))
                 }
                 c => {
                     let (id, across) = digit(c.to_digit(10).unwrap_or(10));
-                    (stand_in::key(id, KeyKind::Number, None, across), false)
+                    (stand_in::key(id, KeyKind::Number, None, across), None)
                 }
             };
             let mut plays = app.decide(&event).0;
-            if reported {
-                plays.extend(app.decide(&result).0);
+            if let Some(cause) = reported {
+                plays.extend(app.decide(&result(cause)).0);
             }
             plays
         })

@@ -21,3 +21,9 @@ unitconv.workspace = true
 graphing.workspace = true
 appcore.workspace = true
 gmnb-theme.workspace = true
+# Theme sounds: the engine the app holds (docs/theming-media.md).
+gmnb-sound.workspace = true
+
+[dev-dependencies]
+# A stand-in sound server for the tests: no test reaches a real one.
+gmnb-sound = { workspace = true, features = ["stand-in"] }

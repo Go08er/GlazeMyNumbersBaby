@@ -668,6 +668,48 @@ fn with_no_sound_server_there_is_silence_and_one_line() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Settings hears of each change of state, from the sound thread: "No
+/// sound system found" as soon as it is so, and nothing at rest.
+#[test]
+fn each_change_of_state_is_told() {
+    type Told = Arc<Mutex<Vec<Status>>>;
+    let hook = |told: &Told| -> Option<gmnb_sound::StatusHook> {
+        let told = told.clone();
+        Some(Arc::new(move |status| told.lock().unwrap().push(status)))
+    };
+    // No server: unavailable, told once.
+    let dir = scratch("told");
+    let told = Told::default();
+    let mut engine = SoundEngine::new(Settings {
+        on_status: hook(&told),
+        ..server(dir.join("pulse/native"), &Lines::default())
+    });
+    loaded(&mut engine, vec![tone(0.02)]);
+    assert!(until(Duration::from_secs(5), || !told
+        .lock()
+        .unwrap()
+        .is_empty()));
+    // By the time it is told, the state shows.
+    assert_eq!(engine.status(), Status::Unavailable);
+    assert_eq!(*told.lock().unwrap(), [Status::Unavailable]);
+    drop(engine);
+    // The null sink: ready, once.
+    let told = Told::default();
+    let mut engine = SoundEngine::new(Settings {
+        on_status: hook(&told),
+        ..null()
+    });
+    loaded(&mut engine, vec![tone(0.02)]);
+    assert!(until(Duration::from_secs(5), || !told
+        .lock()
+        .unwrap()
+        .is_empty()));
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(*told.lock().unwrap(), [Status::Ready]);
+    drop(engine);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn it_looks_again_politely() {
     let dir = scratch("retry");
