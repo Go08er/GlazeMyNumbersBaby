@@ -79,6 +79,7 @@ mod engine;
 mod error;
 pub mod events;
 pub mod field;
+pub mod install;
 pub mod layer;
 pub mod library;
 pub mod path;
