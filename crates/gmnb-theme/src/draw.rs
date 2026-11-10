@@ -107,6 +107,11 @@ impl Default for DrawLimits {
     }
 }
 
+/// How long before its start an animation's frame is shown, if the
+/// layer happens to be drawn then: 2 ms. (No frame is shorter than
+/// 20 ms.)
+pub const EARLY: f64 = 0.002;
+
 /// `x, y, width, height`.
 pub type Rect = [f32; 4];
 
@@ -1467,11 +1472,18 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                                 None => {
                                     let slow = s.slow.get();
                                     let position = pictures.position(image, rec.time, slow);
-                                    if let Some(due) = timeline.next_due(position) {
+                                    // The layer is woken for a frame by a
+                                    // timer of whole milliseconds, and may
+                                    // be drawn a hair before the frame
+                                    // starts: it shows it all the same.
+                                    // (Else it would wait a thirtieth of
+                                    // a second more.)
+                                    let frame = timeline.frame_at(position + EARLY, true);
+                                    if let Some(due) = timeline.due_after(frame, position) {
                                         let due = due * slow;
                                         rec.due = Some(rec.due.map_or(due, |d| d.min(due)));
                                     }
-                                    timeline.frame_at(position, true)
+                                    frame
                                 }
                             };
                             Op::Animation {

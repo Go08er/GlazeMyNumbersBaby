@@ -474,6 +474,14 @@ fn an_animation_plays_on_its_layers_clock_and_asks_for_its_next_frame() {
         (0.59, 2, 1.0 / 30.0),
         // The loop wraps to the first frame.
         (0.61, 0, 0.09),
+        // Drawn a millisecond before a frame starts (a timer of whole
+        // milliseconds woke the layer for it): that frame, and the one
+        // after it due when it is due.
+        (0.0993, 1, 0.2007),
+        (0.2992, 2, 0.3008),
+        (0.5992, 0, 0.1008),
+        // Three milliseconds before is too early.
+        (0.097, 0, 1.0 / 30.0),
         (0.75, 1, 0.15),
         (60.0 * 0.6 + 0.35, 2, 0.25),
     ] {

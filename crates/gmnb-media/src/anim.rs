@@ -186,6 +186,29 @@ impl Timeline {
         Some((start - p).max(MIN_SHOWN))
     }
 
+    /// Seconds from `position` (on a looping clock) until the frame after
+    /// `frame` starts, and never sooner than [`MIN_SHOWN`]: when a layer
+    /// that shows `frame` at `position` is to be drawn again. `None` for
+    /// a still.
+    ///
+    /// (`frame` is the caller's choice: a clock that wakes a hair before
+    /// a frame's start may show that frame already.)
+    pub fn due_after(&self, frame: u32, position: f64) -> Option<f64> {
+        if !self.moves() {
+            return None;
+        }
+        let p = self.within(position, true);
+        let next = frame as usize + 1;
+        let start = self.starts.get(next).copied().unwrap_or(self.duration);
+        let mut wait = start - p;
+        // The frame shown is of the pass after the one `position` is
+        // still in the last moments of.
+        if wait < -self.duration / 2.0 {
+            wait += self.duration;
+        }
+        Some(wait.max(MIN_SHOWN))
+    }
+
     /// The frame that follows `i`, the first again after the last.
     pub fn after(&self, i: u32) -> u32 {
         if i + 1 >= self.frames() { 0 } else { i + 1 }
@@ -379,7 +402,18 @@ mod tests {
         // A 50-a-second animation is shown 30 times a second.
         let fast = line(&[0.02; 10]);
         assert_eq!(fast.next_due(0.0), Some(MIN_SHOWN));
+        // After a frame of the caller's choosing: a clock that woke a
+        // millisecond before frame 1 starts and shows it already waits
+        // for frame 2 from where it is.
+        assert_eq!(t.due_after(1, 0.124), Some(0.251));
+        assert_eq!(t.due_after(0, 0.0), Some(0.125));
+        // The same at the loop's end: the first frame of the next pass,
+        // then its second.
+        assert!((t.due_after(0, 0.749).unwrap() - 0.126).abs() < 1e-12);
+        assert_eq!(t.due_after(2, 0.5), Some(0.25));
+        assert_eq!(t.due_after(2, 0.749), Some(MIN_SHOWN));
         // A still asks for nothing.
+        assert_eq!(line(&[0.5]).due_after(0, 0.0), None);
         assert_eq!(line(&[0.5]).next_due(0.0), None);
         assert_eq!(line(&[0.5]).frame_at(3.0, true), 0);
         assert_eq!(line(&[0.5]).duration, 0.0);
