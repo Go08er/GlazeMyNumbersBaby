@@ -5,7 +5,7 @@ written against is [docs/theming.md](../../../docs/theming.md).
 
 | Folder | What it is |
 |---|---|
-| `aurora/` | The look GMNB had up to 0.2: an aurora behind glass keys, in seven palettes. It uses every part of the API (style, three draw layers, options with drawn previews, its own font). |
+| `aurora/` | The look GMNB had up to 0.2, grown since: an aurora behind glass keys, in seven palettes. It uses every part of the API (style, three draw layers, options with drawn previews, its own font), and works its colours out from each palette so that all of them stay readable. |
 | `mono/` | The base look with a different accent, corners and typeface, in twenty lines. Start here. |
 
 GMNB's base look is not a theme. It is what a theme that returns `{}` looks

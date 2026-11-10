@@ -557,10 +557,9 @@ fn needed(font: &Font) -> f32 {
 fn pairs(style: &Style, plain_text: bool) -> Vec<(String, Rgba, f32, Vec<Fill>)> {
     let mut out = Vec::new();
     let plain = style.fill("plain.background");
-    // Text straight on the backdrop (the memory row, empty states...), over
-    // the scrim. It stands for the reference's `text_button` and header
-    // title until those are resolved; a theme gives those their own
-    // fills, so on a see-through window only the base look's is checked.
+    // Text straight on the backdrop (the memory row...), over the scrim.
+    // On a see-through window it counts where the style has a scrim there
+    // (`unreadable` says for which styles).
     let body = match style.get("window.font") {
         Some(Value::Font(f)) => f.clone(),
         _ => panic!("no window.font"),
@@ -758,8 +757,8 @@ fn page_pairs(style: &Style, plain_text: bool) -> Vec<(String, Rgba, f32, Vec<Fi
         Some(Value::Record(r)) => r.get(name).cloned(),
         _ => None,
     };
-    // Text straight on a page (over the scrim; on a see-through window
-    // a theme gives its own fills, so only the base look's is checked).
+    // Text straight on a page, over the scrim (on a see-through window:
+    // where the style has one, as `unreadable` says).
     if plain_text {
         for path in [
             "date.label",

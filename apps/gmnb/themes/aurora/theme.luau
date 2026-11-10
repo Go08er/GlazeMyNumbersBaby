@@ -281,9 +281,9 @@ local function legible(color: Rgba, grounds: { Rgba }, target: number): Rgba
 end
 
 -- One thing that has to stay readable on a see-through window: an ink, the
--- contrast it needs, and what lies between it and the frost (bottom-most
+-- contrast it needs, and what it lies on above the frost (bottom-most
 -- first): a pane of glass, the tint of a lit button.
-type Check = { ink: Rgba, target: number, veils: { Rgba } }
+type Check = { ink: Rgba, target: number, on: { Rgba } }
 
 -- How much of the desktop a surface has to hide for every check to hold
 -- over a black desktop and over a white one, as a fraction: 0.8 means
@@ -295,8 +295,8 @@ local function cover_for(base: Rgba, checks: { Check }, margin: number): number
 			local frosted = over(alpha(base, cover), desktop)
 			for _, check in checks do
 				local ground = frosted
-				for _, veil in check.veils do
-					ground = over(veil, ground)
+				for _, layer in check.on do
+					ground = over(layer, ground)
 				end
 				if gmnb.contrast(over(check.ink, ground), ground) < check.target * margin then
 					return false
@@ -404,27 +404,27 @@ local function finish(p: Palette, dark_text: Rgba?): Scheme
 	-- The text colour keeps the 4.5 it has on an opaque window; everything
 	-- fainter, and everything coloured, keeps at least 3.
 	local checks: { Check } = {
-		{ ink = fg, target = TEXT, veils = {} },
-		{ ink = dim, target = UI, veils = {} },
-		{ ink = accent, target = UI, veils = {} },
-		{ ink = danger, target = UI, veils = {} },
+		{ ink = fg, target = TEXT, on = {} },
+		{ ink = dim, target = UI, on = {} },
+		{ ink = accent, target = UI, on = {} },
+		{ ink = danger, target = UI, on = {} },
 		-- On a tint: lit buttons, operator keys; fields, bits and chips.
-		{ ink = accent_ink, target = UI, veils = { tint } },
-		{ ink = dim, target = UI, veils = { alpha(fg, 0.10) } },
+		{ ink = accent_ink, target = UI, on = { tint } },
+		{ ink = dim, target = UI, on = { alpha(fg, 0.10) } },
 		-- Under glass: keys, the panels, and the small buttons on them.
-		{ ink = dim, target = UI, veils = { glass.top } },
-		{ ink = dim, target = UI, veils = { glass.bottom } },
-		{ ink = dim, target = UI, veils = { glass.top, alpha(fg, 0.07) } },
+		{ ink = dim, target = UI, on = { glass.top } },
+		{ ink = dim, target = UI, on = { glass.bottom } },
+		{ ink = dim, target = UI, on = { glass.top, alpha(fg, 0.07) } },
 	}
 	-- The graph: every curve, the axes and the labels, under the canvas's
 	-- own glass. Curves only just reach 3 on the opaque background, so
 	-- this comes out close to 1: a graph needs to know what it is on.
 	local canvas_top, canvas_bottom = canvas_tint(p.dark)
 	local canvas_checks: { Check } = {}
-	for _, veil in { canvas_top, canvas_bottom } do
-		table.insert(canvas_checks, { ink = dim, target = UI, veils = { veil } })
+	for _, smoke in { canvas_top, canvas_bottom } do
+		table.insert(canvas_checks, { ink = dim, target = UI, on = { smoke } })
 		for _, c in series do
-			table.insert(canvas_checks, { ink = c, target = UI, veils = { veil } })
+			table.insert(canvas_checks, { ink = c, target = UI, on = { smoke } })
 		end
 	end
 
@@ -513,10 +513,10 @@ end
 -- for: the palette's own background colour at this opacity, laid over the
 -- window's (which is already there at `opacity`).
 --
--- Down to about three quarters opacity this is 0 and nothing changes but
--- the aurora thinning; below that the frost comes in by sixteenths, so
--- that dragging the slider restyles the window a dozen times, not at
--- every step.
+-- Down to about four fifths opacity this is 0 and nothing changes but the
+-- aurora thinning; below that the frost comes in by sixteenths, so that
+-- dragging the slider restyles the window a dozen times, not at every
+-- step.
 local function frost_for(cover: number, opacity: number): number
 	if opacity >= 1 or cover <= opacity then
 		return 0
@@ -570,8 +570,9 @@ local function style(ctx: Ctx): Style
 		local layers: { Paint } = { paint, frost }
 		return if frosted then layers else paint
 	end
-	-- A surface that was translucent anyway, at least as solid as the frost.
-	local function veil(opacity: number): Rgba
+	-- The backdrop's colour for a surface that was translucent anyway: at
+	-- its own strength, or the frost's if that is more.
+	local function sheet(opacity: number): Rgba
 		return alpha(base, math.max(opacity, frost_alpha))
 	end
 	-- A halo in the backdrop's colour around text that lies straight on it,
@@ -774,7 +775,7 @@ local function style(ctx: Ctx): Style
 			},
 		},
 		nav = {
-			background = down(veil(0.94), veil(0.88)),
+			background = down(sheet(0.94), sheet(0.88)),
 			shadow = { { inset = true, x = -1, color = alpha(fg, 0.08) } },
 			width = 300,
 			show_title = false,
@@ -1476,7 +1477,9 @@ local function keypad(draw: Draw, frame: Frame): Again
 		if e.kind == "press" and e.source == "key" and e.key and e.page ~= "graphing" and e.age < RIPPLE_LIFE then
 			busy = true
 			-- (The style shrinks a pressed key and springs it back.)
-			springing[e.key.id] = e.age < SPRING_BACK
+			if e.key.id then
+				springing[e.key.id] = e.age < SPRING_BACK
+			end
 			local life = e.age / RIPPLE_LIFE
 			local r = e.rect
 			local reach = math.sqrt(r.w * r.w + r.h * r.h) * 1.1
@@ -1772,7 +1775,7 @@ local options: { Option } = {
 local theme: Theme = {
 	api = 1,
 	name = "Aurora",
-	description = "A drifting aurora behind glass keys, in seven palettes. GMNB's look up to 0.2, grown up.",
+	description = "A drifting aurora behind glass keys, in seven palettes. The look GMNB was born with.",
 	author = "GMNB contributors",
 	license = "MIT",
 	fonts = { "fonts/Outfit-Variable.ttf" },
