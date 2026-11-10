@@ -30,7 +30,7 @@ Contents
 14. [Versions](#versions)
 15. [What is scripted and what is built in](#what-is-scripted-and-what-is-built-in)
 16. [Acceptance: the base look is DGMNB's](#acceptance-the-base-look-is-dgmnbs)
-17. [Acceptance: Aurora is 0.2](#acceptance-aurora-is-02)
+17. [Acceptance: Aurora carries 0.2 on](#acceptance-aurora-carries-02-on)
 18. [Readability rules](#readability-rules)
 19. [For implementers](#for-implementers)
 
@@ -1395,16 +1395,19 @@ shared by both apps; the resolved base `Style` is pinned against DGMNB's
 constants (`ui.rs` text styles and radii, `HEADER_H`, `NAV_W`, …) by
 importing them from a shared module, not by copying numbers.
 
-## Acceptance: Aurora is 0.2
+## Acceptance: Aurora carries 0.2 on
 
-With Aurora chosen, GMNB 0.3 looks as 0.2.0 did with the same palette:
-every colour, gradient, shadow, radius, font and animation the same, and
-the page layout the same where `layout` reaches. The same three-figure
-comparison is run against the 0.2.0 reference pictures (all seven palettes
-light and dark, every page, opacity 0.1), with `GMNB_STILL` set.
+Aurora is 0.2's look ported to a theme, and then made better: it is not a
+pixel copy. It keeps 0.2's character and every one of its features (the
+seven palettes, System and Freestyle, the living background, glass keys,
+glows, ripples, the pointer's light, the cascade, the readout's effects,
+the palette tiles, Outfit), and its author is free to refine any of them.
+The 0.2.0 reference pictures are a starting point to judge it against by
+eye, not a threshold. What is not optional: the [readability
+rules](#readability-rules), the limits, and a still picture under reduced
+motion.
 
-Differences that are accepted, because 0.3's structure changed for the
-base look:
+Where 0.3's structure changed for the base look, Aurora follows it:
 
 | What | 0.2 | Aurora on 0.3 |
 |---|---|---|

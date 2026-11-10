@@ -904,7 +904,28 @@ impl App {
         };
         let maximized = g.window.is_maximized();
         let canvas = Canvas::new(pm.as_mut(), scale, false);
+        let boxes_to = env("TEXT_BOXES").map(PathBuf::from);
+        self.text.record_boxes(boxes_to.is_some());
         let _ = self.draw(canvas, maximized);
+        if let Some(bp) = boxes_to {
+            let list: Vec<serde_json::Value> = self
+                .text
+                .take_boxes()
+                .into_iter()
+                .map(|b| {
+                    let mut j = serde_json::json!({"x": b.x, "y": b.y, "w": b.w,
+                        "h": b.h, "text": b.text, "kind": b.kind});
+                    if let Some(c) = b.color {
+                        j["color"] = serde_json::json!(c);
+                    }
+                    j
+                })
+                .collect();
+            self.text.record_boxes(false);
+            if let Err(e) = std::fs::write(&bp, serde_json::Value::Array(list).to_string()) {
+                eprintln!("text boxes failed: {e}");
+            }
+        }
         match pm.save_png(path) {
             Ok(()) => println!(
                 "screenshot: {} ({}x{})",
