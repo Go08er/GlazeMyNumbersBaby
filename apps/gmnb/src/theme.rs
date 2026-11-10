@@ -732,6 +732,12 @@ impl Hub {
         }
     }
 
+    /// The `ctx` frames and Settings' tiles are drawn for: the one the
+    /// style was last worked out for.
+    pub fn frame_ctx(&self) -> Ctx {
+        self.frame_ctx.borrow().clone()
+    }
+
     /// Whether Settings shows `option` now.
     pub fn option_visible(&self, option: &OptionDef) -> bool {
         let ctx = self.ctx();

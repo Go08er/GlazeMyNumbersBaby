@@ -231,6 +231,8 @@ struct ThemeSettings {
     /// Each tile a `preview` drew, with its option and its choice: they
     /// are drawn again when `ctx` changes.
     tiles: RefCell<Vec<(Tile, OptionDef, String)>>,
+    /// The `ctx` the tiles were drawn for: each is drawn once for each.
+    tiles_ctx: RefCell<Option<gmnb_theme::Ctx>>,
     /// Set while the list or the options are being built: their widgets'
     /// signals then change nothing.
     building: std::cell::Cell<bool>,
@@ -285,9 +287,21 @@ impl ThemeSettings {
             options_box,
             rows: RefCell::default(),
             tiles: RefCell::default(),
+            tiles_ctx: RefCell::default(),
             building: std::cell::Cell::new(false),
             pending: Rc::default(),
         });
+        {
+            // The desktop's accent, light and dark: the tiles follow. One
+            // subscription for them all (one a grid drew every grid's
+            // tiles again, for each grid).
+            let weak = Rc::downgrade(&this);
+            this.ctx.hub.subscribe_style(&this.options_box, move |_, _| {
+                if let Some(t) = weak.upgrade() {
+                    t.draw_tiles();
+                }
+            });
+        }
         {
             let weak = Rc::downgrade(&this);
             reload.connect_clicked(move |b| {
@@ -432,11 +446,20 @@ impl ThemeSettings {
     }
 
     /// Has the theme draw every tile again (still pictures, for the
-    /// `ctx` there is now).
+    /// `ctx` there is now), once for each `ctx`; not while the options
+    /// are being built or changed in a batch (they are drawn after).
     fn draw_tiles(&self) {
+        if self.building.get() {
+            return;
+        }
+        let ctx = self.ctx.hub.frame_ctx();
+        if self.tiles_ctx.borrow().as_ref() == Some(&ctx) {
+            return;
+        }
         for (tile, option, choice) in self.tiles.borrow().iter() {
             tile.set_list(self.ctx.hub.preview(option, choice));
         }
+        self.tiles_ctx.replace(Some(ctx));
     }
 
     fn sync_visible(&self) {
@@ -454,6 +477,8 @@ impl ThemeSettings {
         }
         self.rows.borrow_mut().clear();
         self.tiles.borrow_mut().clear();
+        // Each tile is drawn as it is made, for this `ctx`.
+        self.tiles_ctx.replace(Some(self.ctx.hub.frame_ctx()));
         let defs = self.ctx.hub.option_defs();
         let values = self.ctx.hub.option_values();
         self.options.set_visible(!defs.is_empty());
@@ -596,13 +621,7 @@ impl ThemeSettings {
                         t.changed(&id, OptionValue::Text(ids[at].clone()), false);
                     }
                 });
-                // The desktop's accent, light and dark: the tiles follow.
-                let weak = Rc::downgrade(self);
-                self.ctx.hub.subscribe_style(&flow, move |_, _| {
-                    if let Some(t) = weak.upgrade() {
-                        t.draw_tiles();
-                    }
-                });
+                // (The tiles follow `ctx`: `ThemeSettings::new`.)
                 let column = gtk::Box::new(gtk::Orientation::Vertical, 8);
                 if let Some(description) = def.description.as_deref().filter(|d| !d.is_empty()) {
                     column.append(
@@ -787,6 +806,9 @@ impl ThemeSettings {
                         return;
                     }
                     let theme = t.ctx.hub.active();
+                    // A batch: the tiles are drawn once, as the options
+                    // are built again below, not for each option set.
+                    t.building.set(true);
                     for (id, value) in t.ctx.hub.run_action(&action) {
                         t.ctx.hub.set_option(&id, value.clone(), false);
                         t.ctx
@@ -795,6 +817,7 @@ impl ThemeSettings {
                             .borrow_mut()
                             .set_option(&theme, &id, &value);
                     }
+                    t.building.set(false);
                     t.ctx.store.persist();
                     // The rows show the new values.
                     let t2 = t.clone();

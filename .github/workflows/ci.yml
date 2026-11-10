@@ -78,12 +78,15 @@ jobs:
           for _ in $(seq 150); do [ -S "$XDG_RUNTIME_DIR/ci-least" ] && break; sleep 0.2; done
           sleep 1
           GMNB_SOUND=null GMNB_TEST_WAYLAND_DISPLAY=ci-least nix develop -c \
-            cargo test -p gmnb --locked --test least --test markup -- --nocapture 2>&1 | tee least-test.log
+            cargo test -p gmnb --locked --test least --test markup --test settings -- --nocapture 2>&1 \
+            | tee least-test.log
           kill "$weston"
           # It must have run, not skipped: the base look and every built-in
-          # theme, passed; and a theme's words shown as text (markup.rs).
+          # theme, passed; a theme's words shown as text (markup.rs); each
+          # tile of Settings drawn once (settings.rs).
           grep -q "^test result: ok\. 4 passed; 0 failed;" least-test.log
           grep -q "^test result: ok\. 2 passed; 0 failed;" least-test.log
+          grep -q "^test result: ok\. 1 passed; 0 failed;" least-test.log
           if grep -q "skipped" least-test.log; then exit 1; fi
       - name: D-Bus tests ran (private dbus-daemon)
         run: |
