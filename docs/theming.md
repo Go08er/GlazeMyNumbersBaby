@@ -1214,7 +1214,9 @@ left it. On loading a file with no `theme_options.aurora`:
 | `custom_primary`, `custom_secondary` | `theme_options.aurora.primary`, `.secondary` (if valid hex) |
 | `animated_background` | `theme_options.aurora.living` |
 
-`active_theme` is left unset. The four old keys are not written back.
+`active_theme` is left unset. The four old keys are kept and written
+back unchanged, so going back to 0.2 still finds the palette it had;
+0.3 never reads them again once `theme_options.aurora` exists.
 The existing test becomes: `{"theme":"dark","palette":"ember"}` loads with
 `theme == "dark"`, `active_theme == ""`,
 `theme_options.aurora.palette == "ember"`, opacity 1 and Vulkan on.
@@ -1560,8 +1562,8 @@ Decided here, and worth a second look by the owner:
 2. **A new window is 360×600** and may shrink to 300×400, as DGMNB.
    Saved sizes are kept.
 3. **"Use the desktop's accent colour"** joins Settings (DGMNB has it).
-4. **Old settings keys are dropped** once migrated: going back to 0.2
-   afterwards starts on Aurora's default palette.
+4. **Old settings keys are kept**: written back unchanged, so going back
+   to 0.2 afterwards finds the palette it had.
 5. **Themes are code.** They are sandboxed, limited and can only change
    how GMNB looks, but installing one is still running someone's script.
    Settings says so beside *Open themes folder*.
