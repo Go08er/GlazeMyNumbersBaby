@@ -993,6 +993,8 @@ export type SynthLayer = {
 }
 
 -- One effect on the whole mix. Which fields are read depends on `type`.
+-- (In strict mode luau-lsp may reject a list of differing effects written
+-- in place. Give the list a type: `local fx: { SynthEffect } = { ... }`.)
 export type SynthEffect = {
 	type: "delay" | "reverb" | "drive" | "crush" | "lowpass" | "highpass" | "bandpass",
 	-- delay: seconds between echoes (0.001 to 1), how much quieter each

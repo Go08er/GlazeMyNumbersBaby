@@ -342,9 +342,11 @@ end
 
 What that costs, measured for a 760×640 window: the field takes 1.4 ms in
 Luau (0.8 ms with a point every 16 px) ten times a second, and the app's
-colouring pass 0.74 ms at `quality = 0.5` thirty times a second. Together
-about 4% of one core while the window is in use, and nothing at rest. The
-same picture worked out per pixel on the processor takes 62 ms a frame.
+colouring pass 0.74 ms at `quality = 0.5` thirty times a second. Those
+two add up to about 4% of one core while the window is in use, and nothing
+at rest. (Handing each picture to the graphics card and redrawing the
+window thirty times a second come on top and were not measured.) The same
+picture worked out per pixel on the processor takes 62 ms a frame.
 
 `quality` is how many pixels the app computes per pixel of the rectangle
 along each side (0.1 to 1; 0.5 by default). The app may use less to stay
@@ -758,14 +760,22 @@ Instead:
    pass the count or the total.
 4. Decode to RGBA8 with the decoder's own limits set to match (`png`
    `Limits`, `zune` `set_max_width/height`, `gif` `MemoryLimit`, `webp`
-   `set_memory_limit`). PNG: `EXPAND | ALPHA | STRIP_16`. A decoder that
-   panics is caught (`catch_unwind`) and the file refused.
+   `set_memory_limit`). PNG: `EXPAND | ALPHA | STRIP_16`. JPEG:
+   `DecoderOptions::new_safe()` (zune's portable code only, none of its
+   `unsafe` SIMD paths; at most 100 scans, its default), output RGBA. A
+   decoder that panics is caught (`catch_unwind`) and the file refused.
 5. Premultiply, and wrap as a `gdk::MemoryTexture`
    (`R8G8B8A8_PREMULTIPLIED`).
 
-Measured, 2048×2048: PNG 31 ms (a detailed picture) to 45 ms (film grain,
-9.7 MiB, over the size limit); JPEG 34 ms. Reading a header takes a
-microsecond. Decoding is done on the calling thread, at the `gmnb.image`
+**A file that fails is remembered.** Asked for again, by the same name,
+it is the same empty picture at no cost and with no second attempt, until
+the theme is reloaded. It has also used one of the count (16 images, 4
+animations, 32 sounds), so a theme can make the app try at most that many
+files, good or bad, however its hooks are written.
+
+Measured, 2048×2048, in the configuration above: PNG 31 ms (a detailed
+picture) to 45 ms (film grain, 9.7 MiB, over the size limit); JPEG 34 ms.
+Reading a header takes a microsecond. Decoding is done on the calling thread, at the `gmnb.image`
 call, so that a picture loaded at the top of the file is there for the
 first frame.
 
@@ -774,7 +784,11 @@ first frame.
 `call_in` compares against for "ran four times over", move later by that
 much. The media functions measure their own decoding and reading and
 credit it. Without this a 2048×2048 picture loaded inside `draw` (8 ms)
-would switch the hook off.
+would switch the hook off. Credit is given once per file, for its first
+load, success or failure; with the counts above that bounds all the time
+a theme can ever have credited (sixteen images and four animations at the
+measured rates: under a second). Sound files are read on the sound thread
+and need no credit.
 
 The four decoders together add 664 KiB to a stripped release binary
 (png 176, zune-jpeg 224, gif 96, image-webp 292, each measured alone).
@@ -1087,7 +1101,11 @@ local buzz = { gain = 0.42, layers = { a1, a2, b1, b2 },
 
 The renderer these were made with is `theming-work/media/synth/src/lib.rs`
 (not in the repository; 480 lines, no dependency but `crmath`). It is the
-reference: port it rather than re-derive it.
+reference: port it rather than re-derive it. The hashes come from recipes
+written as Rust values there (`src/main.rs`); the Luau above is the same
+three recipes written out again by hand, and has not itself been run. If
+the first implementation disagrees with a hash, compare the recipe it
+read with the Rust one before suspecting the arithmetic.
 
 **Cost.** The ten example sounds render in 0.2 to 10 ms each. The most a
 recipe may ask for (eight 4 s layers with FM, vibrato, tremolo and a
@@ -1140,6 +1158,11 @@ quantum whether or not there is any: measured, 187 wake-ups a second and
 
 The flush matters: a stream corked with silence still queued plays that
 silence first on the next uncork, in front of the click.
+
+The start-up case was measured by itself: a stream created corked, left
+alone for 400 ms, then its first play. The uncork took 0.24 ms (median)
+and the sound was on the null sink's monitor within 19.8 ms (median) and
+20.6 ms (the worst of 40).
 
 Do not leave an uncorked stream unfed "to save wake-ups". With
 `pre_buffering = 0` the server's read position moves on through the
@@ -1203,6 +1226,17 @@ without a key cycle). A range under `"key"` is `low + (high − low) ×
 Sound events do not depend on layers. In particular they are produced
 under reduced motion, where layers receive no events.
 
+**Telling an assistive press.** Today (`widgets/keypad.rs`) every way of
+operating a key ends in the button's `clicked`, and a pointer press is
+recognised by the gesture recorded just before it (`last_press`); what is
+left is taken for the keyboard. The accessibility interface arrives the
+same way. To tell it apart, record Space and Enter on the focused control
+in a capture-phase key controller, as the pointer is recorded now: a
+`clicked` with neither a pointer press nor such a key in the last second
+is `"assistive"`. Where the app cannot tell (a row the toolkit activates
+by itself), the press is reported as `"keyboard"`: the rule fails towards
+sound, not towards silence.
+
 ### Settings
 
 Settings → Appearance gains a group, **Sound**, between the theme's
@@ -1219,9 +1253,10 @@ to a theme.
 
 **Why on.** A sound exists only after the user has chosen a theme that
 has one; the base look is silent. The switch sits directly under the list
-they chose it from. The desktop's own switch (`gtk-enable-event-sounds`,
-which GTK reads from the desktop's settings, in a Flatpak through the
-portal) is honoured. Off by default would hide the feature from the
+they chose it from. The desktop's own switch is honoured: the
+`gtk-enable-event-sounds` property of `GtkSettings`. (That GTK fills it
+from the desktop's setting on each desktop, and inside a Flatpak, is
+assumed here and to be confirmed when it is wired up.) Off by default would hide the feature from the
 people who picked a theme for it. **Why 50%.** The gain is the slider
 squared, so 50% is −12 dB. A sound's loudest sample is its `gain`, 0.5 at
 most in the built-in themes, so at the default nothing peaks above
@@ -1285,7 +1320,8 @@ most in the built-in themes, so at the default nothing peaks above
 ### Packaging
 
 No package gains a build or run-time dependency: everything added is a
-Rust crate.
+Rust crate. The package names below are from memory, not from the
+distributions' indexes: confirm them when the packaging is edited.
 
 | Package | Change |
 |---|---|
@@ -1297,11 +1333,14 @@ Rust crate.
 | Nix | Nothing. (`nix/package.nix` has no sound input to add; the socket is found at run time.) |
 
 **What `--socket=pulseaudio` exposes.** The sandbox gets the host's
-PulseAudio socket (and, in current Flatpak, `/dev/snd`). That is the
-whole protocol, not only playback: an app holding it can also record
-from the microphone, listen to other applications through monitor
-sources, and list and adjust streams. Flatpak has no playback-only
-permission. GMNB's client opens one playback stream and nothing else,
+PulseAudio socket (and, as far as is known, `/dev/snd` with it since
+Flatpak 1.8: to be confirmed). That is the whole protocol, not only
+playback: it also has recording, monitor sources that carry what other
+applications play, and commands that list and adjust streams. (The
+latency test here recorded the sink's monitor through the same kind of
+socket.) Flatpak has no playback-only permission, and whether a sound
+server holds a sandboxed client to less is that server's policy, which
+was not tested. GMNB's client opens one playback stream and nothing else,
 and a theme cannot reach the socket: scripts have no I/O. The permission
 is still a real widening of what a compromised GMNB could do, and it is
 the price of sound in the Flatpak. It is why the request is GMNB's alone.
@@ -1336,9 +1375,13 @@ record stream: an upper bound, since it includes that capture.
 | Native library | none | `libasound.so.2`, loaded at every start, sound or no sound |
 | Build needs | nothing new | ALSA headers and pkg-config in all five package builds |
 | Mixing, pitch, pan | ours | ours |
-| No sound server | Connection refused: silent | alsa-lib prints to stderr unless silenced; then silent |
+| No sound server and no sound hardware (run) | No socket: gives up in 3 ms, nothing on stderr, clean exit | `snd_pcm_open` fails ("Host is down") after 22 ms, nothing on stderr, clean exit |
 | Flatpak | `--socket=pulseaudio`, directly | The same permission, through the runtime's ALSA-to-pulse plug-in |
 | Without the PulseAudio protocol (bare ALSA, JACK) | Silent | Works |
+
+These are single runs on a busy machine, and the tails move between runs:
+a second run of the chosen client gave 21.0 ms (p95) with the stream
+running and 51.9 ms (p95) from corked. Medians held within 2 ms.
 
 Both meet "under about 30 ms from event to buffer submission" with room.
 The pure-Rust client wins on the constraints that are not about speed:
@@ -1354,7 +1397,7 @@ The others, not prototyped:
 | rodio | cpal plus a mixer and decoders: cpal's costs, and a mixer the contract would have to re-specify anyway. |
 | GStreamer (`GtkMediaFile` per sound, or `appsrc`) | The video trial's costs (start-up of 0.3 s and more, +102 MiB, +31 threads) for a click; system decoders on theme files; a pipeline per sound has no shared mixer. |
 | GSound / libcanberra | A new native library on every distribution; plays files and named desktop sounds, so synthesised sounds would go through temporary files; volume only, no pitch or pan; one server-side stream per play. |
-| pipewire-rs | Needs bindgen (libclang) and PipeWire's headers in every build; PipeWire only; a Flatpak would need the PipeWire socket itself, a wider hole than PulseAudio's. |
+| pipewire-rs | Needs bindgen (libclang) and PipeWire's headers in every build (as its build is known; it was not built here); PipeWire only; a Flatpak would need the PipeWire socket itself. |
 | libpulse-simple | `libpulse.so.0` and its dozen dependencies loaded at every start; otherwise the chosen design with C underneath. |
 
 ### Open points
