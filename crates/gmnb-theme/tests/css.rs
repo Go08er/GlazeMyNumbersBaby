@@ -557,10 +557,9 @@ fn needed(font: &Font) -> f32 {
 fn pairs(style: &Style, plain_text: bool) -> Vec<(String, Rgba, f32, Vec<Fill>)> {
     let mut out = Vec::new();
     let plain = style.fill("plain.background");
-    // Text straight on the backdrop (the memory row, empty states...), over
-    // the scrim. It stands for the reference's `text_button` and header
-    // title until those are resolved; a theme gives those their own
-    // fills, so on a see-through window only the base look's is checked.
+    // Text straight on the backdrop (the memory row...), over the scrim.
+    // On a see-through window it counts where the style has a scrim there
+    // (`unreadable` says for which styles).
     let body = match style.get("window.font") {
         Some(Value::Font(f)) => f.clone(),
         _ => panic!("no window.font"),
@@ -758,8 +757,8 @@ fn page_pairs(style: &Style, plain_text: bool) -> Vec<(String, Rgba, f32, Vec<Fi
         Some(Value::Record(r)) => r.get(name).cloned(),
         _ => None,
     };
-    // Text straight on a page (over the scrim; on a see-through window
-    // a theme gives its own fills, so only the base look's is checked).
+    // Text straight on a page, over the scrim (on a see-through window:
+    // where the style has one, as `unreadable` says).
     if plain_text {
         for path in [
             "date.label",
@@ -897,28 +896,25 @@ fn page_pairs(style: &Style, plain_text: bool) -> Vec<(String, Rgba, f32, Vec<Fi
         Some(Value::Paint(p)) => Fill(vec![p.clone()]),
         _ => panic!("no canvas"),
     };
+    // (The canvas sits straight on the backdrop: `graphing.rs` puts it in
+    // no plain container, so no scrim is counted under it.)
     let label = text("graph.canvas.label");
     out.push((
         "graph.canvas.label".into(),
         label.color,
         needed(&label.font),
-        vec![canvas.clone(), plain.clone()],
+        vec![canvas.clone()],
     ));
     if let Some(Value::Color(axis)) = part("graph.canvas.axis", "color") {
         out.push((
             "graph.canvas.axis".into(),
             axis,
             UI_CONTRAST,
-            vec![canvas.clone(), plain.clone()],
+            vec![canvas.clone()],
         ));
     }
     for (i, s) in c.series.iter().enumerate() {
-        out.push((
-            format!("series {i}"),
-            *s,
-            UI_CONTRAST,
-            vec![canvas.clone(), plain.clone()],
-        ));
+        out.push((format!("series {i}"), *s, UI_CONTRAST, vec![canvas.clone()]));
     }
     // The canvas's toolbar buttons, on the toolbar over the canvas.
     let toolbar = surface("graph.toolbar");
@@ -929,7 +925,7 @@ fn page_pairs(style: &Style, plain_text: bool) -> Vec<(String, Rgba, f32, Vec<Fi
             format!("graph.toolbar_button{state}"),
             f.icon_color,
             UI_CONTRAST,
-            vec![f.background, toolbar.clone(), canvas.clone(), plain.clone()],
+            vec![f.background, toolbar.clone(), canvas.clone()],
         ));
     }
     out
@@ -941,29 +937,97 @@ fn page_pairs(style: &Style, plain_text: bool) -> Vec<(String, Rgba, f32, Vec<Fi
 /// worked out to).
 #[test]
 fn every_text_reads_on_what_is_under_it() {
-    // The pages' texts for every theme but Aurora, whose colours there
-    // wait on the theme (`auroras_page_texts_read`).
-    let bad = unreadable(|name| !name.starts_with("aurora"));
+    let bad = unreadable(styles_where(|name| !name.starts_with("aurora")));
     assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
 }
 
-/// Rules 3 and 4 on the pages (the date page, the converter, graphing and
-/// the families the app draws) for Aurora: 0.2's values for them were
-/// never checked, and some miss (its light palettes' dim captions, its
-/// error colour and whimsy chip, its see-through fields and canvas).
-/// They are the theme's to raise.
+/// Rules 3 and 4 for Aurora, in each of its seven palettes: the keys, the
+/// chrome and the pages (0.2's own values for many of these were never
+/// checked, and missed; the theme raised them).
 #[test]
-#[ignore = "Aurora's page colours are the theme's to raise (theme.luau)"]
 fn auroras_page_texts_read() {
-    let bad = unreadable(|name| name.starts_with("aurora"));
+    let bad = unreadable(styles_where(|name| name.starts_with("aurora")));
     assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
 }
 
-/// Every pair of the fixed table that reads too faintly, for every style;
-/// the pages' pairs only for the styles `pages` names.
-fn unreadable(pages: impl Fn(&str) -> bool) -> Vec<String> {
+/// Those of `every_style` whose name `wanted` says yes to.
+fn styles_where(wanted: impl Fn(&str) -> bool) -> Vec<(String, Style)> {
+    let mut styles = every_style();
+    styles.retain(|(name, _)| wanted(name));
+    styles
+}
+
+/// Rules 3 and 4 for Aurora's generated palettes: System and Freestyle
+/// from the extreme colours of rule 2 (with the complement, and with the
+/// colour twice), light and dark, at the three opacities.
+#[test]
+fn auroras_generated_palettes_read() {
+    let bad = unreadable(auroras_extreme_styles());
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// The colours rule 2 generates Aurora's palettes from.
+const EXTREMES: [(&str, u32); 7] = [
+    ("white", 0xffffff),
+    ("black", 0x000000),
+    ("grey", 0x808080),
+    ("yellow", 0xffff00),
+    ("blue", 0x0000ff),
+    ("lime", 0x00ff00),
+    ("violet", 0x7c4dff),
+];
+
+/// Aurora's System and Freestyle palettes from each of the extreme
+/// colours, light and dark, at three opacities.
+fn auroras_extreme_styles() -> Vec<(String, Style)> {
+    let mut out = Vec::new();
+    let mut aurora = built_in("aurora");
+    for dark in [false, true] {
+        for opacity in [1.0, 0.5, 0.1] {
+            for (name, hex) in EXTREMES {
+                let colour = appcore::color::hex(hex);
+                let as_text = |c: [f32; 3]| text(&appcore::color::to_hex(c));
+                let mut ctx = with(&aurora, dark, opacity, &[("palette", text("system"))]);
+                ctx.accent = Some(colour);
+                out.push((
+                    format!("aurora system {name} dark={dark} {opacity}"),
+                    aurora.style(&ctx).unwrap().style.clone(),
+                ));
+                for (kind, second) in [
+                    ("complement", appcore::color::complement(colour)),
+                    ("twice", colour),
+                ] {
+                    let ctx = with(
+                        &aurora,
+                        dark,
+                        opacity,
+                        &[
+                            ("palette", text("custom")),
+                            ("primary", as_text(colour)),
+                            ("secondary", as_text(second)),
+                        ],
+                    );
+                    out.push((
+                        format!("aurora freestyle {name} {kind} dark={dark} {opacity}"),
+                        aurora.style(&ctx).unwrap().style.clone(),
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Every pair of the fixed table that reads too faintly, for each of
+/// `styles`.
+///
+/// Text straight on a page counts on a see-through window too wherever
+/// the style puts a scrim under it (`plain.background`): the base look's,
+/// and Aurora's frost. A theme that gives each element its own fill
+/// there instead is checked through those elements' pairs.
+fn unreadable(styles: Vec<(String, Style)>) -> Vec<String> {
     let mut bad = Vec::new();
-    for (name, style) in every_style() {
+    for (name, style) in styles {
         let base_look = name.starts_with("base");
         let desktops: Vec<Option<Rgba>> = if style.opacity >= 1.0 {
             vec![None]
@@ -972,17 +1036,10 @@ fn unreadable(pages: impl Fn(&str) -> bool) -> Vec<String> {
         };
         for desktop in desktops {
             let behind = backdrop(&style, desktop);
-            let plain_text = desktop.is_none() || base_look;
-            let mut all = if pages(&name) {
-                let mut all = page_pairs(&style, plain_text);
-                all.extend(chrome_pairs(&style));
-                all
-            } else {
-                Vec::new()
-            };
-            if !name.starts_with("aurora") || !pages(&name) {
-                all.extend(pairs(&style, plain_text));
-            }
+            let plain_text = desktop.is_none() || base_look || name.starts_with("aurora");
+            let mut all = page_pairs(&style, plain_text);
+            all.extend(chrome_pairs(&style));
+            all.extend(pairs(&style, plain_text));
             for (what, text, at_rest, fills) in all {
                 let fills: Vec<&Fill> = fills.iter().collect();
                 let got = worst(text, &fills, &behind);
@@ -1043,15 +1100,7 @@ fn auroras_palettes_stay_readable() {
                 &aurora.style(&ctx).unwrap().style,
             );
         }
-        for (name, hex) in [
-            ("white", 0xffffff),
-            ("black", 0x000000),
-            ("grey", 0x808080),
-            ("yellow", 0xffff00),
-            ("blue", 0x0000ff),
-            ("lime", 0x00ff00),
-            ("violet", 0x7c4dff),
-        ] {
+        for (name, hex) in EXTREMES {
             let colour = appcore::color::hex(hex);
             let as_text = |c: [f32; 3]| text(&appcore::color::to_hex(c));
             // System: the desktop's accent and its complement.

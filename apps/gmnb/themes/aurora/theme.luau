@@ -1,29 +1,35 @@
 --!strict
--- Aurora: the look GMNB had up to version 0.2, as a theme.
+-- Aurora: a drifting aurora behind glass keys, in seven palettes.
 --
--- A drifting aurora behind glass keys, in seven palettes. Everything here
--- is written against theme API 1 (docs/theming.md); nothing in the app
--- knows this theme by name.
+-- This was GMNB's whole look up to version 0.2. It is a theme now, written
+-- against theme API 1 (docs/theming.md) like any other: nothing in the app
+-- knows it by name. It uses every part of the API, so it doubles as the
+-- worked example. Copy what you like.
 --
 -- The file reads top to bottom:
 --   1. Palettes        the colours of each palette, light and dark
---   2. Style           how every part of the window looks
---   3. Background      the aurora, its grain, vignette and pulses
---   4. Keypad          ripples, the light that follows the pointer, the cascade
---   5. Display         gradient digits, their glow and their animations
---   6. Options         what Settings offers, and the palette tiles
+--   2. Inks and frost  what keeps every palette readable, see-through or not
+--   3. Style           how every part of the window looks
+--   4. Background      the aurora, its grain, vignette and pulses
+--   5. Keypad          ripples, the light that follows the pointer, the cascade
+--   6. Display         gradient digits, their glow and their animations
+--   7. Options         what Settings offers, and the palette tiles
 --
--- Numbers that look arbitrary are 0.2's own: this theme has to look the same.
+-- Sounds will get a section of their own once the app plays them; the
+-- places they hang from are the events the layers below already react to.
 
-local hex, hsl, mix, alpha = gmnb.hex, gmnb.hsl, gmnb.mix, gmnb.alpha
+local hex, hsl, mix, alpha, over = gmnb.hex, gmnb.hsl, gmnb.mix, gmnb.alpha, gmnb.over
 local white, black = gmnb.white, gmnb.black
 local ease = gmnb.ease
+-- 4.5 and 3: what WCAG asks of text, and of large text and lines.
+local TEXT, UI = gmnb.TEXT_CONTRAST, gmnb.UI_CONTRAST
 
 ---------------------------------------------------------------------------
 -- 1. Palettes
 ---------------------------------------------------------------------------
 
-type Scheme = {
+-- What a palette's author chooses.
+type Palette = {
 	dark: boolean,
 	-- The background's gradient, top to bottom.
 	base_top: Rgba,
@@ -62,7 +68,7 @@ local function palette(
 	hot_b: string,
 	on_hot: string,
 	series: { string }
-): Scheme
+): Palette
 	return {
 		dark = dark,
 		base_top = hex(base_top),
@@ -78,8 +84,7 @@ local function palette(
 	}
 end
 
--- Called afresh each time, because `readable` below adjusts what it is given.
-local BUILT_IN: { [string]: (dark: boolean) -> Scheme } = {
+local BUILT_IN: { [string]: (dark: boolean) -> Palette } = {
 	aurora = function(dark)
 		if dark then
 			return palette(true, "#0b0820", "#150d33",
@@ -147,32 +152,11 @@ local DEFAULT_SECONDARY = "#ff6fb5"
 -- What System uses on a desktop that shares no accent colour.
 local FALLBACK_ACCENT = "#3584e4"
 
--- Keep what is drawn on top legible: the equals glyph against its whole
--- gradient (a large glyph: 3:1), accent text against the background
--- (4.5:1) and graph lines against it (3:1). Generated palettes can come
--- from anything (a neon-yellow desktop accent, pure grey...) and also pick
--- light or `dark_text` for the glyph; the built-in ones keep their glyph
--- colour and only have their colours nudged.
-local function readable(s: Scheme, dark_text: Rgba?): Scheme
-	local function fix(c: Rgba, target: number): Rgba
-		return gmnb.with_contrast(gmnb.with_contrast(c, s.base_top, target), s.base_bottom, target)
-	end
-	if dark_text then
-		s.on_hot, s.hot_a, s.hot_b = gmnb.readable_gradient(s.hot_a, s.hot_b, white, dark_text, gmnb.UI_CONTRAST)
-	else
-		s.hot_a, s.hot_b = gmnb.gradient_for_text(s.on_hot, s.hot_a, s.hot_b, gmnb.UI_CONTRAST)
-	end
-	s.accent = fix(s.accent, gmnb.TEXT_CONTRAST)
-	for i, c in s.series do
-		s.series[i] = fix(c, gmnb.UI_CONTRAST)
-	end
-	return s
-end
-
--- A complete scheme from two colours: a tinted base, an aurora of the two
--- hues and their neighbours, readable text and accent, a hot gradient
--- running secondary to primary, and six well-spread graph colours.
-local function generate(primary: Rgba, secondary: Rgba, dark: boolean): Scheme
+-- A complete palette from two colours: a tinted base, an aurora of the two
+-- hues and their neighbours, a hot gradient running secondary to primary,
+-- and six well-spread graph colours. System makes one from the desktop's
+-- accent and its complement, Freestyle from the two colours you pick.
+local function generate(primary: Rgba, secondary: Rgba, dark: boolean): Palette
 	local ph, ps = gmnb.to_hsl(primary)
 	local qh, qs = gmnb.to_hsl(secondary)
 	-- Keep greys grey, but give real colours some life.
@@ -182,12 +166,11 @@ local function generate(primary: Rgba, secondary: Rgba, dark: boolean): Scheme
 	local pv, qv = vivid(ps), vivid(qs)
 	local hues = { ph, ph + 180, ph + 60, ph + 240, ph + 120, ph + 300 }
 	local series = {}
-	local s: Scheme
 	if dark then
 		for i, h in hues do
 			series[i] = hsl(h, 0.8, 0.66)
 		end
-		s = {
+		return {
 			dark = true,
 			base_top = hsl(ph, math.min(ps * 0.7, 0.55), 0.055),
 			base_bottom = hsl(ph, math.min(ps * 0.75, 0.6), 0.105),
@@ -200,30 +183,274 @@ local function generate(primary: Rgba, secondary: Rgba, dark: boolean): Scheme
 			on_hot = white,
 			series = series,
 		}
-	else
-		for i, h in hues do
-			series[i] = hsl(h, 0.7, 0.42)
-		end
-		s = {
-			dark = false,
-			base_top = hsl(ph, math.min(ps, 0.6), 0.985),
-			base_bottom = hsl(ph, math.min(ps, 0.55), 0.955),
-			blobs = {
-				hsl(ph, math.min(pv, 0.8), 0.83),
-				hsl(qh, math.min(qv, 0.8), 0.84),
-				hsl(ph + 35, math.min(pv, 0.8), 0.85),
-				hsl(qh - 35, math.min(qv, 0.8), 0.83),
-			},
-			blob_alpha = 0.62,
-			fg = hsl(ph, math.min(ps, 0.45), 0.15),
-			accent = hsl(ph, math.min(pv, 0.9), 0.42),
-			hot_a = hsl(qh, math.min(qv, 0.8), 0.58),
-			hot_b = hsl(ph, math.min(pv, 0.75), 0.50),
-			on_hot = white,
-			series = series,
-		}
 	end
-	return readable(s, hsl(ph, 0.4, 0.10))
+	for i, h in hues do
+		series[i] = hsl(h, 0.7, 0.42)
+	end
+	return {
+		dark = false,
+		base_top = hsl(ph, math.min(ps, 0.6), 0.985),
+		base_bottom = hsl(ph, math.min(ps, 0.55), 0.955),
+		blobs = {
+			hsl(ph, math.min(pv, 0.8), 0.83),
+			hsl(qh, math.min(qv, 0.8), 0.84),
+			hsl(ph + 35, math.min(pv, 0.8), 0.85),
+			hsl(qh - 35, math.min(qv, 0.8), 0.83),
+		},
+		blob_alpha = 0.62,
+		fg = hsl(ph, math.min(ps, 0.45), 0.15),
+		accent = hsl(ph, math.min(pv, 0.9), 0.42),
+		hot_a = hsl(qh, math.min(qv, 0.8), 0.58),
+		hot_b = hsl(ph, math.min(pv, 0.75), 0.50),
+		on_hot = white,
+		series = series,
+	}
+end
+
+---------------------------------------------------------------------------
+-- 2. Inks and frost
+---------------------------------------------------------------------------
+--
+-- A palette can come from anywhere (a neon-yellow desktop accent, pure
+-- grey, two colours somebody liked), and the window can be see-through
+-- over any desktop. So nothing below trusts a colour to be readable: each
+-- ink is worked out from the palette against what it will lie on.
+--
+-- 0.2 chose these by eye, and some of its choices missed: small dim text
+-- at 4:1 in the light palettes, errors at 2:1, and on a see-through window
+-- any text that had no tint under it. The numbers that changed for that
+-- are all here.
+
+-- Glass: white, thin in the dark and milky in the light.
+local function glass_for(dark: boolean)
+	return {
+		top = alpha(white, if dark then 0.11 else 0.78),
+		bottom = alpha(white, if dark then 0.055 else 0.50),
+		-- Number keys are a little more solid than the rest.
+		number = alpha(white, if dark then 0.085 else 0.72),
+		rim = alpha(white, if dark then 0.10 else 0.85),
+	}
+end
+
+-- The graph's canvas is a pane of smoked glass in the dark and of milk
+-- glass in the light: top and bottom.
+local function canvas_tint(dark: boolean): (Rgba, Rgba)
+	if dark then
+		return alpha(black, 0.20), alpha(black, 0.30)
+	end
+	return alpha(white, 0.55), alpha(white, 0.42)
+end
+
+-- Whether `ink`, which may be translucent, reaches `target` on every one
+-- of `grounds`.
+local function reads(ink: Rgba, grounds: { Rgba }, target: number): boolean
+	for _, ground in grounds do
+		if gmnb.contrast(over(ink, ground), ground) < target then
+			return false
+		end
+	end
+	return true
+end
+
+-- Text that steps back: `ink` at the lowest opacity, from `floor` up, at
+-- which it still reads on every ground.
+local function recede(ink: Rgba, grounds: { Rgba }, floor: number): Rgba
+	if reads(alpha(ink, floor), grounds, TEXT) then
+		return alpha(ink, floor)
+	end
+	-- More opaque always reads better: halve the range six times.
+	local low, high = floor, 1
+	for _ = 1, 6 do
+		local middle = (low + high) / 2
+		if reads(alpha(ink, middle), grounds, TEXT) then
+			high = middle
+		else
+			low = middle
+		end
+	end
+	return alpha(ink, high)
+end
+
+-- `color` with its lightness moved, as little as possible, until it
+-- reaches `target` on every ground.
+local function legible(color: Rgba, grounds: { Rgba }, target: number): Rgba
+	for _, ground in grounds do
+		color = gmnb.with_contrast(color, ground, target)
+	end
+	return color
+end
+
+-- One thing that has to stay readable on a see-through window: an ink, the
+-- contrast it needs, and what it lies on above the frost (bottom-most
+-- first): a pane of glass, the tint of a lit button.
+type Check = { ink: Rgba, target: number, on: { Rgba } }
+
+-- How much of the desktop a surface has to hide for every check to hold
+-- over a black desktop and over a white one, as a fraction: 0.8 means
+-- "four fifths this palette's own background, one fifth whatever is
+-- behind the window".
+local function cover_for(base: Rgba, checks: { Check }, margin: number): number
+	local function holds(cover: number): boolean
+		for _, desktop in { black, white } do
+			local frosted = over(alpha(base, cover), desktop)
+			for _, check in checks do
+				local ground = frosted
+				for _, layer in check.on do
+					ground = over(layer, ground)
+				end
+				if gmnb.contrast(over(check.ink, ground), ground) < check.target * margin then
+					return false
+				end
+			end
+		end
+		return true
+	end
+	-- Down from everything hidden, in 64ths, to the last step that holds.
+	-- (Not a search by halves: over a desktop darker than a dark ink the
+	-- ink reads again once the frost is nearly gone, and that is not the
+	-- answer.)
+	local step = 64
+	while step > 0 and holds((step - 1) / 64) do
+		step -= 1
+	end
+	return step / 64
+end
+
+-- A palette, and everything worked out from it.
+type Scheme = {
+	dark: boolean,
+	base_top: Rgba,
+	base_bottom: Rgba,
+	blobs: { Rgba },
+	blob_alpha: number,
+	fg: Rgba,
+	accent: Rgba,
+	hot_a: Rgba,
+	hot_b: Rgba,
+	on_hot: Rgba,
+	series: { Rgba },
+	-- The text colour stepping back, three steps: function keys, the
+	-- buttons that are only text, and captions.
+	strong: Rgba,
+	soft: Rgba,
+	dim: Rgba,
+	-- The accent as text on something tinted with the accent.
+	accent_ink: Rgba,
+	-- Errors.
+	danger: Rgba,
+	-- The hot gradient deep enough for small text.
+	lit_a: Rgba,
+	lit_b: Rgba,
+	-- How strong the two veils of light over the aurora are.
+	veil_alpha: number,
+	-- How much of the desktop must be hidden under text, and under the
+	-- graph, on a see-through window (see `cover_for`).
+	cover: number,
+	canvas_cover: number,
+}
+
+-- Generated palettes also pick white or `dark_text` for the equals key's
+-- glyph; the built-in ones keep the colour their author chose.
+local function finish(p: Palette, dark_text: Rgba?): Scheme
+	local top, bottom = p.base_top, p.base_bottom
+	local fg = p.fg
+
+	-- The equals key's glyph against its whole gradient (a large glyph: 3),
+	-- and a deeper gradient for the small text of whatever is lit: a toggle
+	-- key that is on, a set bit, the playful chip.
+	local on_hot, hot_a, hot_b = p.on_hot, p.hot_a, p.hot_b
+	if dark_text then
+		on_hot, hot_a, hot_b = gmnb.readable_gradient(hot_a, hot_b, white, dark_text, UI)
+	else
+		hot_a, hot_b = gmnb.gradient_for_text(on_hot, hot_a, hot_b, UI)
+	end
+	local lit_a, lit_b = gmnb.gradient_for_text(on_hot, hot_a, hot_b, TEXT)
+
+	-- The accent as text on the background, and graph lines on it.
+	local accent = legible(p.accent, { top, bottom }, TEXT)
+	local series = {}
+	for i, c in p.series do
+		series[i] = legible(c, { top, bottom }, UI)
+	end
+
+	-- What text lies on at full opacity: the background's two colours, the
+	-- body of each blob of the aurora, its veils, and any of those under
+	-- glass.
+	local glass = glass_for(p.dark)
+	local veil_alpha = if p.dark then 0.16 else 0.10
+	local grounds = { top, bottom, over(alpha(hot_a, veil_alpha), bottom), over(alpha(hot_b, veil_alpha), bottom) }
+	for _, blob in p.blobs do
+		table.insert(grounds, over(alpha(blob, p.blob_alpha * 0.62), bottom))
+	end
+	for i = 1, #grounds do
+		table.insert(grounds, over(glass.top, grounds[i]))
+	end
+
+	-- 0.2 had these at .86, .78 and around .6 of the text colour whatever
+	-- the palette. Those are the floors now: the light palettes need more.
+	local strong = recede(fg, grounds, 0.86)
+	local soft = recede(fg, grounds, 0.78)
+	local dim = recede(fg, grounds, 0.62)
+	-- A lit text button and the current number base write the accent on a
+	-- tint of the accent, and the operator keys are made of that tint.
+	local tint = alpha(accent, 0.24)
+	local accent_ink = legible(accent, { over(tint, top), over(tint, bottom) }, TEXT)
+	-- Errors. 0.2 wrote them in the hot colour as it came: 2:1 in the light
+	-- Aurora, and teal in Abyss, where it didn't look like an error at all.
+	-- A rose reads as one in every palette.
+	local danger = legible(hsl(348, 0.9, if p.dark then 0.72 else 0.46), grounds, TEXT)
+
+	-- See-through: what has to hold wherever the desktop shows through.
+	-- The text colour keeps the 4.5 it has on an opaque window; everything
+	-- fainter, and everything coloured, keeps at least 3.
+	local checks: { Check } = {
+		{ ink = fg, target = TEXT, on = {} },
+		{ ink = dim, target = UI, on = {} },
+		{ ink = accent, target = UI, on = {} },
+		{ ink = danger, target = UI, on = {} },
+		-- On a tint: lit buttons, operator keys; fields, bits and chips.
+		{ ink = accent_ink, target = UI, on = { tint } },
+		{ ink = dim, target = UI, on = { alpha(fg, 0.10) } },
+		-- Under glass: keys, the panels, and the small buttons on them.
+		{ ink = dim, target = UI, on = { glass.top } },
+		{ ink = dim, target = UI, on = { glass.bottom } },
+		{ ink = dim, target = UI, on = { glass.top, alpha(fg, 0.07) } },
+	}
+	-- The graph: every curve, the axes and the labels, under the canvas's
+	-- own glass. Curves only just reach 3 on the opaque background, so
+	-- this comes out close to 1: a graph needs to know what it is on.
+	local canvas_top, canvas_bottom = canvas_tint(p.dark)
+	local canvas_checks: { Check } = {}
+	for _, smoke in { canvas_top, canvas_bottom } do
+		table.insert(canvas_checks, { ink = dim, target = UI, on = { smoke } })
+		for _, c in series do
+			table.insert(canvas_checks, { ink = c, target = UI, on = { smoke } })
+		end
+	end
+
+	return {
+		dark = p.dark,
+		base_top = top,
+		base_bottom = bottom,
+		blobs = p.blobs,
+		blob_alpha = p.blob_alpha,
+		fg = fg,
+		accent = accent,
+		hot_a = hot_a,
+		hot_b = hot_b,
+		on_hot = on_hot,
+		series = series,
+		strong = strong,
+		soft = soft,
+		dim = dim,
+		accent_ink = accent_ink,
+		danger = danger,
+		lit_a = lit_a,
+		lit_b = lit_b,
+		veil_alpha = veil_alpha,
+		cover = cover_for(bottom, checks, 1.05),
+		canvas_cover = cover_for(bottom, canvas_checks, 1.01),
+	}
 end
 
 -- A colour option's saved text, or `fallback` if someone edited it into nonsense.
@@ -235,22 +462,25 @@ local function colour(value: OptionValue?, fallback: string): Rgba
 end
 
 local function build(id: string, ctx: Ctx): Scheme
+	local function generated(primary: Rgba, secondary: Rgba): Scheme
+		local hue = gmnb.to_hsl(primary)
+		return finish(generate(primary, secondary, ctx.dark), hsl(hue, 0.4, 0.10))
+	end
 	if id == "system" then
-		local p = ctx.accent or hex(FALLBACK_ACCENT)
-		return generate(p, gmnb.complement(p), ctx.dark)
+		local primary = ctx.accent or hex(FALLBACK_ACCENT)
+		return generated(primary, gmnb.complement(primary))
 	elseif id == "custom" then
-		return generate(
+		return generated(
 			colour(ctx.options.primary, DEFAULT_PRIMARY),
-			colour(ctx.options.secondary, DEFAULT_SECONDARY),
-			ctx.dark
+			colour(ctx.options.secondary, DEFAULT_SECONDARY)
 		)
 	end
 	local make = BUILT_IN[id] or BUILT_IN.aurora
-	return readable(make(ctx.dark), nil)
+	return finish(make(ctx.dark), nil)
 end
 
--- Building a generated palette takes a few hundred contrast checks, and the
--- draw hooks ask for the scheme every frame: remember what was built.
+-- Finishing a palette takes a few thousand contrast checks, and the draw
+-- hooks ask for the scheme every frame: remember what was built.
 local remembered: { [string]: Scheme } = {}
 local remembered_count = 0
 
@@ -279,8 +509,24 @@ local function scheme(ctx: Ctx): Scheme
 	return scheme_for(tostring(ctx.options.palette), ctx)
 end
 
+-- The frost a see-through window needs under what `cover` was worked out
+-- for: the palette's own background colour at this opacity, laid over the
+-- window's (which is already there at `opacity`).
+--
+-- Down to about four fifths opacity this is 0 and nothing changes but the
+-- aurora thinning; below that the frost comes in by sixteenths, so that
+-- dragging the slider restyles the window a dozen times, not at every
+-- step.
+local function frost_for(cover: number, opacity: number): number
+	if opacity >= 1 or cover <= opacity then
+		return 0
+	end
+	local needed = 1 - (1 - cover) / (1 - opacity)
+	return math.min(math.ceil(needed * 16 - 0.001) / 16, 1)
+end
+
 ---------------------------------------------------------------------------
--- 2. Style
+-- 3. Style
 ---------------------------------------------------------------------------
 
 -- The keys' corner radius: the ripples and the pointer's light follow it.
@@ -305,40 +551,49 @@ end
 local function style(ctx: Ctx): Style
 	local s = scheme(ctx)
 	local dark = s.dark
-	local fg, accent = s.fg, s.accent
-	-- Below full opacity the desktop shows through the aurora: what must
-	-- stay readable gets a layer of the backdrop's own colour under it.
-	local see = ctx.opacity < 1
+	local fg, accent, accent_ink = s.fg, s.accent, s.accent_ink
+	local strong, soft, dim = s.strong, s.soft, s.dim
 	local base = s.base_bottom
 	-- 0.2 left whatever it didn't set in Outfit to the desktop's own font.
 	local system = ctx.font
 
-	-- Glass.
-	local glass = alpha(white, if dark then 0.055 else 0.50)
-	local glass_hi = alpha(white, if dark then 0.11 else 0.78)
-	local glass_border = alpha(white, if dark then 0.10 else 0.85)
-	local glass_num = alpha(white, if dark then 0.085 else 0.72)
-	local shade = if dark then alpha(black, 0.32) else alpha(hex("#3a2a6a"), 0.10)
-	local highlight: Shadow = { inset = true, y = 1, color = alpha(white, 0.10) }
-	local rim: Shadow = { inset = true, spread = 1, color = glass_border }
-
-	-- A gradient, over the see-through tint when there is one.
-	local function over_tint(g: Gradient, tint: number): Fill
-		local layers: { Paint } = { g, alpha(base, tint) }
-		return if see then layers else g
+	-- See-through. Below full opacity the desktop shows through the aurora,
+	-- and every surface that carries text gets the frost under it: a layer
+	-- of the backdrop's own colour, as strong as this palette needs at this
+	-- opacity and no stronger (section 2).
+	local see = ctx.opacity < 1
+	local frost_alpha = frost_for(s.cover, ctx.opacity)
+	local frost = alpha(base, frost_alpha)
+	local frosted = frost_alpha > 0
+	-- `paint` over the frost.
+	local function on_frost(paint: Paint): Fill
+		local layers: { Paint } = { paint, frost }
+		return if frosted then layers else paint
 	end
-
-	local hot = slant(s.hot_a, s.hot_b)
-	local hot_soft = slant(alpha(s.hot_a, 0.85), alpha(s.hot_b, 0.85))
-	-- A toggle key that is on carries small text. 0.2 gave it the soft
-	-- gradient, on which that text fell to 2.5:1 in the light palettes:
-	-- here the gradient is solid and deepened until the text reads (4.5:1).
-	local on_a, on_b = gmnb.gradient_for_text(s.on_hot, s.hot_a, s.hot_b, gmnb.TEXT_CONTRAST)
-	local hot_on = slant(on_a, on_b)
+	-- The backdrop's colour for a surface that was translucent anyway: at
+	-- its own strength, or the frost's if that is more.
+	local function sheet(opacity: number): Rgba
+		return alpha(base, math.max(opacity, frost_alpha))
+	end
+	-- A halo in the backdrop's colour around text that lies straight on it,
+	-- for the busy wallpaper no contrast figure knows about.
 	local halo: { Shadow } = if see
 		then { { blur = 3, color = alpha(base, 0.9) }, { blur = 10, color = alpha(base, 0.75) } }
 		else {}
-	local display_base = if dark then s.base_bottom else s.base_top
+
+	-- Glass.
+	local glass = glass_for(dark)
+	local pane = down(glass.top, glass.bottom)
+	local shade = if dark then alpha(black, 0.32) else alpha(hex("#3a2a6a"), 0.10)
+	local highlight: Shadow = { inset = true, y = 1, color = alpha(white, 0.10) }
+	local rim: Shadow = { inset = true, spread = 1, color = glass.rim }
+
+	local hot = slant(s.hot_a, s.hot_b)
+	-- Whatever is lit and carries small text: a toggle key that is on, a
+	-- set bit, the playful chip. 0.2 gave the first and the last the hot
+	-- gradient at 0.85, on which their text fell to 2.5:1 in the light
+	-- palettes; this one is solid, and deepened until the text reads.
+	local lit = slant(s.lit_a, s.lit_b)
 
 	-- What the toolkit's own widgets are coloured with: dialogs, menus,
 	-- lists, cards and the text on the accent colour.
@@ -364,14 +619,20 @@ local function style(ctx: Ctx): Style
 	-- replaces the base look's whole: these have no overlay.)
 	local flat_hover: State = { background = alpha(fg, 0.07) }
 	local flat_active: State = { background = alpha(fg, 0.16) }
+	-- Something chosen: the accent as text, on a tint of it.
+	local chosen: State = { background = alpha(accent, 0.12), color = accent_ink }
 
 	-- Shadows, listed topmost first: a highlight along the top edge, a
-	-- hairline rim, and a soft drop shadow underneath.
-	local key_shadow: { Shadow } = { highlight, rim, { y = 6, blur = 18, spread = -12, color = shade } }
+	-- hairline rim, a shade along the bottom edge that gives the glass its
+	-- thickness, and a soft drop shadow underneath.
+	local thickness: Shadow = { inset = true, y = -1, color = alpha(black, if dark then 0.22 else 0.05) }
+	local drop: Shadow = { y = 6, blur = 18, spread = -12, color = shade }
+	local key_shadow: { Shadow } = { highlight, rim, thickness, drop }
 	local operator_shadow: { Shadow } = {
 		highlight,
 		{ inset = true, spread = 1, color = alpha(accent, 0.22) },
-		{ y = 6, blur = 18, spread = -12, color = shade },
+		thickness,
+		drop,
 	}
 	-- The equals key glows in its own colours.
 	local equals_shadow: { Shadow } = {
@@ -386,7 +647,6 @@ local function style(ctx: Ctx): Style
 	local panel_shadow: { Shadow } = { highlight, rim, { y = 18, blur = 50, spread = -28, color = shade } }
 	local flyout_shadow: { Shadow } = { rim, { y = 18, blur = 48, spread = -16, color = alpha(black, 0.5) } }
 	local toolbar_shadow: { Shadow } = { rim, { y = 8, blur = 24, spread = -10, color = alpha(black, 0.4) } }
-	local panel_fill = over_tint(down(glass_hi, glass), 0.55)
 
 	-- The memory row's buttons, DEG, F-E and their like: text that lights up.
 	local function text_button(padding: Spacing): Control
@@ -396,18 +656,20 @@ local function style(ctx: Ctx): Style
 			padding = padding,
 			radius = 10,
 			font = outfit(13, 600, 0.04),
-			color = alpha(fg, 0.78),
-			background = if see then alpha(base, 0.45) else gmnb.transparent,
+			color = soft,
+			background = gmnb.transparent,
 			transition = { background = 150, color = 150 },
-			hover = { background = if see then alpha(mix(base, fg, 0.12), 0.6) else alpha(fg, 0.07), color = fg },
-			active = { background = if see then alpha(mix(base, fg, 0.12), 0.6) else alpha(fg, 0.07), color = fg },
-			checked = {
-				background = if see then alpha(mix(base, accent, 0.2), 0.6) else alpha(accent, 0.12),
-				color = accent,
-			},
+			hover = { background = alpha(fg, 0.07), color = fg },
+			active = { background = alpha(fg, 0.07), color = fg },
+			checked = chosen,
 			disabled = { color = alpha(fg, 0.26) },
 		}
 	end
+
+	-- The graph's canvas: its glass, with the frost a graph needs mixed
+	-- in (it takes one paint, not layers).
+	local canvas_top, canvas_bottom = canvas_tint(dark)
+	local canvas_frost = alpha(base, frost_for(s.canvas_cover, ctx.opacity))
 
 	return {
 		-- Tokens. Anything not styled below is derived from these.
@@ -417,14 +679,14 @@ local function style(ctx: Ctx): Style
 			surface2 = alpha(fg, 0.06),
 			border = alpha(fg, 0.12),
 			fg = fg,
-			fg_dim = alpha(fg, 0.62),
+			fg_dim = dim,
 			fg_faint = alpha(fg, 0.38),
 			accent = accent,
 			on_accent = on_accent,
-			accent_text = accent,
+			accent_text = accent_ink,
 			hover = alpha(fg, 0.06),
 			press = alpha(fg, 0.12),
-			danger = s.hot_a,
+			danger = s.danger,
 			series = s.series,
 		},
 		fonts = { ui = system.family, display = "Outfit" },
@@ -479,11 +741,14 @@ local function style(ctx: Ctx): Style
 			color = fg,
 			font = { size = system.size, weight = 400 },
 			text_halo = halo,
-			raised_text_halo = halo,
 		},
-		plain = { background = gmnb.transparent, radius = 0 },
+		-- Whatever holds text straight on the page (the memory row, the
+		-- number bases, the bits, a converter's values, a date's fields)
+		-- becomes a pane of frost on a see-through window. 0.2 had nothing
+		-- here, and such text sank to 1:1 over a desktop of its own colour.
+		plain = { background = frost, radius = KEY_RADIUS },
 		header = {
-			background = if see then alpha(base, 0.55) else gmnb.transparent,
+			background = frost,
 			height = 47,
 			title = { font = outfit(19, 500, 0.01), color = fg },
 			button = {
@@ -510,11 +775,11 @@ local function style(ctx: Ctx): Style
 			},
 		},
 		nav = {
-			background = down(alpha(base, 0.94), alpha(base, 0.88)),
+			background = down(sheet(0.94), sheet(0.88)),
 			shadow = { { inset = true, x = -1, color = alpha(fg, 0.08) } },
 			width = 300,
 			show_title = false,
-			header = { font = outfit(12, 600, 0.12), color = alpha(fg, 0.5), margin = { 14, 18, 4, 18 } },
+			header = { font = outfit(12, 600, 0.12), color = dim, margin = { 14, 18, 4, 18 } },
 			uppercase_headers = true,
 			row = {
 				radius = 12,
@@ -531,15 +796,15 @@ local function style(ctx: Ctx): Style
 					background = across(alpha(accent, 0.24), alpha(accent, 0.06)),
 					shadow = { { inset = true, x = 3, color = accent } },
 					color = fg,
-					icon = { color = accent },
+					icon = { color = accent_ink },
 				},
 			},
 			settings = { padding = { 10, 12 }, radius = 12, min_height = 0, hover = flat_hover, active = flat_active },
 		},
 
 		display = {
-			background = if see then alpha(base, 0.7) else gmnb.transparent,
-			radius = if see then 18 else 0,
+			background = frost,
+			radius = 18,
 			padding_x = 14,
 			heights = { standard = "auto", scientific = "auto", programmer = "auto", compact = "auto" },
 			sizes = { standard = 64, scientific = 54, programmer = 46, compact = 44 },
@@ -549,15 +814,13 @@ local function style(ctx: Ctx): Style
 				-- The display layer below paints the value; these are what it
 				-- would be without it.
 				color = fg,
-				error_color = s.hot_a,
+				error_color = s.danger,
 				error_scale = 0.62,
 				glow = false,
 			},
-			expression = { font = outfit(15), color = alpha(fg, if see then 0.8 else 0.55) },
+			expression = { font = outfit(15), color = dim },
 			expression_min_size = 15,
-			halo = if see
-				then { { blur = 3, color = alpha(display_base, 0.9) }, { blur = 10, color = alpha(display_base, 0.75) } }
-				else {},
+			halo = halo,
 		},
 
 		keys = {
@@ -568,28 +831,36 @@ local function style(ctx: Ctx): Style
 			min_height = 38,
 			padding = { 0, 2 },
 			icon = { size = 22, stroke = 1.9 * (0.6 + 0.4 * 22 / 24) },
+			-- (320 ms: the keypad layer's SPRING_BACK.)
 			transition = { background = 160, shadow = 220, transform = { ms = 320, ease = "spring" }, filter = 160 },
 			hover = { brightness = 1.12 },
 			active = { scale = 0.93, brightness = 1.22, transition = { transform = 70, filter = 70 } },
-			disabled = { opacity = 0.32, saturation = 0.4 },
+			-- A key that can't be used now (A to F outside hexadecimal) is
+			-- thinner glass with a faint glyph. 0.2 faded the whole key, which
+			-- on a see-through window would fade its frost away too.
+			disabled = {
+				background = on_frost(down(alpha(glass.top, 0.4), alpha(glass.bottom, 0.4))),
+				shadow = { { inset = true, spread = 1, color = alpha(glass.rim, 0.4) } },
+				fade = 0.3,
+			},
 			number = {
 				font = outfit(22, 450),
 				color = fg,
-				background = over_tint(down(glass_hi, glass_num), 0.7),
+				background = on_frost(down(glass.top, glass.number)),
 				border = false,
 				shadow = key_shadow,
 			},
 			func = {
 				font = outfit(16),
-				color = alpha(fg, 0.86),
-				background = over_tint(down(glass_hi, glass), 0.7),
+				color = strong,
+				background = on_frost(pane),
 				border = false,
 				shadow = key_shadow,
 			},
 			operator = {
 				font = outfit(22, 350),
-				color = if see then mix(accent, fg, 0.5) else accent,
-				background = over_tint(down(alpha(accent, 0.20), alpha(accent, 0.07)), 0.7),
+				color = accent_ink,
+				background = on_frost(down(alpha(accent, 0.20), alpha(accent, 0.07))),
 				border = false,
 				shadow = operator_shadow,
 			},
@@ -601,7 +872,7 @@ local function style(ctx: Ctx): Style
 				icon = { stroke = 2.3 * (0.6 + 0.4 * 22 / 24) },
 				shadow = equals_shadow,
 			},
-			on = { color = s.on_hot, background = hot_on },
+			on = { color = s.on_hot, background = lit },
 			pad = { gap = 4, radius = 10, min_height = 32, font = { size = 15 } },
 		},
 
@@ -616,7 +887,7 @@ local function style(ctx: Ctx): Style
 			icon = { size = 18 },
 			hover = flat_hover,
 			active = flat_active,
-			checked = { background = alpha(accent, 0.12), color = accent },
+			checked = chosen,
 			disabled = { opacity = 0.5 },
 		},
 		segmented = { item = { font = { family = "Outfit", weight = 500 } } },
@@ -628,14 +899,14 @@ local function style(ctx: Ctx): Style
 			font = outfit(16),
 			min_height = 34,
 			padding = { 0, 9 },
-			placeholder = alpha(fg, 0.5),
+			placeholder = dim,
 			selection = alpha(accent, 0.3),
 			caret = fg,
 			focus = { border = { width = 2, color = alpha(accent, 0.5) } },
-			error = { border = { width = 2, color = alpha(s.hot_a, 0.5) }, color = s.hot_a },
+			error = { border = { width = 2, color = alpha(s.danger, 0.5) }, color = s.danger },
 		},
 		row = { radius = 9, hover = flat_hover, active = flat_active, checked = { background = alpha(fg, 0.10) } },
-		section = { font = outfit(13, 600, 0.04), color = alpha(fg, 0.6), margin = { 6, 0, 0, 0 } },
+		section = { font = outfit(13, 600, 0.04), color = dim, margin = { 6, 0, 0, 0 } },
 		popover = {
 			padding = 8,
 			radius = 18,
@@ -645,14 +916,13 @@ local function style(ctx: Ctx): Style
 		},
 
 		panel = {
-			background = panel_fill,
+			background = on_frost(pane),
 			radius = 20,
 			border = false,
 			shadow = panel_shadow,
 			padding = { 10, 6, 6, 6 },
 			sheet = { background = down(alpha(base, 0.97), alpha(base, 0.94)) },
 			tabs = { stretch = false },
-			title = { font = outfit(15, 600), color = fg, margin = { 6, 10, 2, 10 } },
 			row = {
 				radius = 14,
 				margin = { 2, 4 },
@@ -661,13 +931,13 @@ local function style(ctx: Ctx): Style
 				hover = { background = alpha(fg, 0.06) },
 				active = { background = alpha(fg, 0.06) },
 			},
-			expression = { font = outfit(13), color = alpha(fg, 0.55) },
+			expression = { font = outfit(13), color = dim },
 			result = { font = outfit(24, 350), color = fg },
 			delete = {
 				min_width = 22,
 				min_height = 22,
 				radius = 999,
-				color = alpha(fg, 0.78),
+				color = soft,
 				hover = flat_hover,
 				active = flat_active,
 				transition = { opacity = 160 },
@@ -678,14 +948,14 @@ local function style(ctx: Ctx): Style
 				padding = { 0, 8 },
 				radius = 10,
 				font = outfit(11, 600, 0.04),
-				color = alpha(fg, 0.78),
+				color = soft,
 				background = alpha(fg, 0.06),
 				hover = { background = alpha(fg, 0.07), color = fg },
 				active = { background = alpha(fg, 0.07), color = fg },
 				transition = { background = 150, color = 150, opacity = 160 },
 			},
 			memory_reveal = "hover",
-			empty = { font = { size = 14 }, color = alpha(fg, 0.5) },
+			empty = { font = { size = 14 }, color = dim },
 		},
 
 		programmer = {
@@ -702,8 +972,8 @@ local function style(ctx: Ctx): Style
 						shadow = { { inset = true, x = 3, color = accent } },
 					},
 				},
-				name = { font = outfit(12, 650, 0.08), color = alpha(fg, 0.6) },
-				name_checked = accent,
+				name = { font = outfit(12, 650, 0.08), color = dim },
+				name_checked = accent_ink,
 				value = { font = { family = "Outfit", size = 15, weight = 400, features = { "tnum" } }, color = fg },
 			},
 			bit = {
@@ -712,7 +982,7 @@ local function style(ctx: Ctx): Style
 				padding = 0,
 				radius = 8,
 				font = outfit(15),
-				color = alpha(fg, 0.55),
+				color = dim,
 				background = alpha(fg, 0.04),
 				shadow = { { inset = true, spread = 1, color = alpha(fg, 0.06) } },
 				transition = { background = 200, color = 200, shadow = 200, opacity = 200 },
@@ -720,44 +990,45 @@ local function style(ctx: Ctx): Style
 				active = { background = alpha(fg, 0.10) },
 				checked = {
 					color = s.on_hot,
-					background = hot,
+					background = lit,
 					shadow = bit_glow,
 					font = { weight = 400 },
 				},
 				disabled = { opacity = 0.25 },
 			},
-			bit_index = { font = outfit(10), color = alpha(fg, 0.4), margin = { 0, 0, 0, 2 } },
+			bit_index = { font = outfit(10), color = dim, margin = { 0, 0, 0, 2 } },
 		},
 
 		date = {
-			label = { font = outfit(13, 600, 0.04), color = alpha(fg, 0.6), margin = { 6, 0, 0, 0 } },
+			label = { font = outfit(13, 600, 0.04), color = dim, margin = { 6, 0, 0, 0 } },
 			field = {
 				min_height = 44,
 				padding = { 0, 14 },
 				radius = 14,
 				font = outfit(16),
 				color = fg,
-				background = down(glass_hi, glass),
+				background = pane,
 				border = false,
 				shadow = { highlight, rim },
 				-- Over the glass, not instead of it.
 				hover = { overlay = alpha(fg, 0.05) },
 				active = { overlay = alpha(fg, 0.12) },
 			},
+			-- (The page's column is a pane of frost already.)
 			result_panel = {
-				background = panel_fill,
+				background = pane,
 				radius = 20,
 				border = false,
 				shadow = panel_shadow,
-				padding = { 10, 6, 14, 6 },
+				padding = { 12, 18, 16, 18 },
 				margin = { 10, 0, 0, 0 },
 			},
 			result = { size = 34, font = { family = "Outfit", weight = 300 } },
 			add_result = { size = 30, font = { family = "Outfit", weight = 300 } },
-			subresult = { font = outfit(17), color = alpha(fg, 0.65), margin = { 0, 0, 0, 14 } },
+			subresult = { font = outfit(17), color = dim },
 			calendar = {
 				title = { font = outfit(15, 600), color = fg },
-				weekday = { font = { size = 12 }, color = alpha(fg, 0.62) },
+				weekday = { font = { size = 12 }, color = dim },
 				day = {
 					min_width = 34,
 					min_height = 34,
@@ -792,7 +1063,7 @@ local function style(ctx: Ctx): Style
 				checked_weight = 300,
 				focus = { width = 2, color = alpha(accent, 0.9), offset = 2, radius = 12 },
 			},
-			symbol = { font = outfit(26, 300), color = alpha(fg, 0.6), margin = { 0, 0, 0, 14 } },
+			symbol = { font = outfit(26, 300), color = dim, margin = { 0, 0, 0, 14 } },
 			unit = {
 				margin = { 0, 0, 0, 8 },
 				radius = 12,
@@ -826,10 +1097,10 @@ local function style(ctx: Ctx): Style
 				background = alpha(fg, 0.06),
 				shadow = { { inset = true, spread = 1, color = alpha(fg, 0.06) } },
 			},
-			whimsy = { color = s.on_hot, background = hot_soft },
+			whimsy = { color = s.on_hot, background = lit },
 			whimsy_icon = true,
 			ratio = { font = outfit(15), color = fg, margin = { 4, 14, 0, 14 } },
-			timestamp = { font = { size = 12 }, color = alpha(fg, 0.6), margin = { 0, 0, 0, 14 } },
+			timestamp = { font = { size = 12 }, color = dim, margin = { 0, 0, 0, 14 } },
 			link = {
 				font = { size = 12 },
 				padding = { 0, 6 },
@@ -842,7 +1113,7 @@ local function style(ctx: Ctx): Style
 
 		graph = {
 			side = {
-				background = panel_fill,
+				background = on_frost(pane),
 				radius = 20,
 				border = false,
 				shadow = panel_shadow,
@@ -850,8 +1121,8 @@ local function style(ctx: Ctx): Style
 			},
 			divider = false,
 			row = { padding = 4, radius = 14 },
-			row_error = { background = alpha(s.hot_a, 0.08) },
-			error = { font = { size = 12 }, color = s.hot_a, margin = { 0, 0, 0, 40 } },
+			row_error = { background = alpha(s.danger, 0.08) },
+			error = { font = { size = 12 }, color = s.danger, margin = { 0, 0, 0, 40 } },
 			entry = {
 				min_height = 38,
 				radius = 12,
@@ -868,7 +1139,8 @@ local function style(ctx: Ctx): Style
 			add = {
 				min_height = 40,
 				radius = 12,
-				color = alpha(fg, 0.6),
+				font = outfit(15),
+				color = dim,
 				background = gmnb.transparent,
 				shadow = { { inset = true, spread = 1, color = alpha(fg, 0.12) } },
 				hover = { color = fg, background = alpha(fg, 0.05) },
@@ -878,10 +1150,10 @@ local function style(ctx: Ctx): Style
 			analysis = {
 				title = { font = outfit(18), color = fg, margin = { 2, 8, 6, 8 } },
 				card = { padding = { 8, 12 }, radius = 14, background = alpha(fg, 0.04), border = false },
-				card_title = { font = outfit(12, 600, 0.06), color = alpha(fg, 0.6) },
+				card_title = { font = outfit(12, 600, 0.06), color = dim },
 				value = { font = outfit(16), color = fg },
-				text = { font = { size = 14 }, color = alpha(fg, 0.8) },
-				note = { font = { size = 12, italic = true }, color = alpha(fg, 0.6) },
+				text = { font = { size = 14 }, color = soft },
+				note = { font = { size = 12, italic = true }, color = dim },
 			},
 			toolbar = {
 				padding = 4,
@@ -893,15 +1165,13 @@ local function style(ctx: Ctx): Style
 			toolbar_button = { min_width = 30, min_height = 30, icon = { size = 16 } },
 			row_button = { min_width = 30, min_height = 30, icon = { size = 16 } },
 			canvas = {
-				background = if dark
-					then down(alpha(black, 0.20), alpha(black, 0.30))
-					else down(alpha(white, 0.55), alpha(white, 0.42)),
+				background = down(over(canvas_top, canvas_frost), over(canvas_bottom, canvas_frost)),
 				radius = 20,
 				border = { width = 1, color = alpha(fg, if dark then 0.12 else 0.18) },
 				grid_minor = alpha(fg, if dark then 0.045 else 0.06),
 				grid_major = alpha(fg, if dark then 0.10 else 0.12),
-				axis = { color = alpha(fg, 0.55), width = 1.4 },
-				label = { font = outfit(11), color = alpha(fg, 0.62) },
+				axis = { color = dim, width = 1.4 },
+				label = { font = outfit(11), color = dim },
 				fill_opacity = 0.18,
 				-- Neon in the dark.
 				glow = if dark then { blur = 6, width = 3.2, opacity = 0.55 } else false,
@@ -925,8 +1195,12 @@ local function style(ctx: Ctx): Style
 end
 
 ---------------------------------------------------------------------------
--- 3. Background: the aurora
+-- 4. Background: the aurora
 ---------------------------------------------------------------------------
+--
+-- Bottom to top: the base gradient, four blobs of colour that wander, two
+-- veils of light arching over them, a pulse wherever something just
+-- happened, a vignette, and film grain.
 
 -- The blobs: where each rests (as fractions of the window), how far it
 -- wanders, how fast in x and in y (radians a second), where in its swing it
@@ -937,6 +1211,20 @@ local BLOBS = {
 	{ x = 0.22, y = 0.98, wander = 0.18, speed_x = 0.059, speed_y = 0.043, phase = 3.1, size = 0.58 },
 	{ x = 0.88, y = 0.96, wander = 0.14, speed_x = 0.038, speed_y = 0.061, phase = 4.4, size = 0.46 },
 }
+
+-- The veils: each is a slice of a huge ring whose centre lies far below the
+-- window, so that what shows is an arc with a bright lower edge, fading
+-- upwards as an aurora's curtain does.
+--   x, y      the arc's highest point, as fractions of the window
+--   radius    of the ring, in window heights; `stretch` times that across
+--   sway      how far the arc's top wanders sideways, and `speed`, `phase`
+local VEILS = {
+	{ x = 0.28, y = 0.30, radius = 1.3, stretch = 1.15, sway = 0.10, speed = 0.043, phase = 0.6 },
+	{ x = 0.80, y = 0.42, radius = 1.6, stretch = 1.10, sway = 0.08, speed = 0.031, phase = 2.9 },
+}
+-- Where in the ring's gradient the bright edge is: the rest, out to 1, is
+-- the fade above it.
+local VEIL_EDGE = 0.76
 
 -- The blobs move about 5 px a second: 15 frames a second is smooth.
 local DRIFT_FRAME = 0.066
@@ -952,19 +1240,76 @@ local grain_light = gmnb.noise({ size = GRAIN, seed = 0x9e3779b9, color = black,
 -- How far the aurora has drifted, in seconds. It starts at the frame 0.2
 -- showed when it stood still, and only moves on while "Living background"
 -- is on (`frame.dt` is 0 whenever the app isn't animating).
-local drift = 37.0
+local STILL = 37.0
+local drift = STILL
 
+-- A soft light: a radial gradient centred on (cx, cy), painted only where
+-- it reaches inside the window.
+local function light(
+	draw: Draw,
+	w: number,
+	h: number,
+	cx: number,
+	cy: number,
+	rx: number,
+	ry: number,
+	colors: { Rgba },
+	stops: { number }
+)
+	local left, top = math.max(cx - rx, 0), math.max(cy - ry, 0)
+	local right, bottom = math.min(cx + rx, w), math.min(cy + ry, h)
+	if right > left and bottom > top then
+		draw:rect(left, top, right - left, bottom - top, gmnb.radial({
+			center = { cx, cy },
+			radius = rx,
+			radius_y = ry,
+			colors = colors,
+			stops = stops,
+		}))
+	end
+end
+
+-- One veil at drift time `t`, `strength` being its opacity at the edge.
+local function veil_at(draw: Draw, w: number, h: number, veil: typeof(VEILS[1]), color: Rgba, strength: number, t: number)
+	local top_x = (veil.x + veil.sway * math.sin(t * veil.speed + veil.phase)) * w
+	local top_y = (veil.y + 0.03 * math.cos(t * veil.speed * 1.7 + veil.phase)) * h
+	-- The bright edge's own ellipse, and the gradient's, which ends above it.
+	local ry = veil.radius * h
+	local rx = ry * veil.stretch
+	local cx, cy = top_x, top_y + ry
+	local a = strength * (0.85 + 0.15 * math.sin(t * 0.09 + veil.phase))
+	-- Nothing of it shows below where its edge leaves the window.
+	local reach = math.max(top_x, w - top_x) / rx
+	local lowest = cy - ry * math.sqrt(math.max(1 - reach * reach, 0)) + 0.06 * ry
+	local top = math.max(cy - ry / VEIL_EDGE, 0)
+	local bottom = math.min(lowest, h)
+	if bottom > top then
+		draw:rect(0, top, w, bottom - top, gmnb.radial({
+			center = { cx, cy },
+			radius = rx / VEIL_EDGE,
+			radius_y = ry / VEIL_EDGE,
+			colors = { alpha(color, 0), alpha(color, 0), alpha(color, a), alpha(color, a * 0.45), alpha(color, 0) },
+			stops = { 0, VEIL_EDGE - 0.06, VEIL_EDGE, VEIL_EDGE + 0.08, 1 },
+		}))
+	end
+end
+
+-- A pulse: a bloom of light that swells from where something happened and
+-- fades. The strong ones (the equals key, a result, the converter's swap,
+-- a new palette) also send a thin wavefront running ahead of it.
 local function pulse_at(draw: Draw, w: number, h: number, x: number, y: number, color: Rgba, strength: number, age: number)
 	local life = age / PULSE_LIFE
-	local grow = 1 - (1 - life) ^ 3
-	local radius = 40 + grow * 340
-	local a = (1 - life) ^ 1.6 * 0.30 * strength
-	draw:rect(0, 0, w, h, gmnb.radial({
-		center = { x, y },
-		radius = radius,
-		colors = { alpha(color, a * 0.6), alpha(color, a), alpha(color, 0) },
-		stops = { 0, 0.55, 1 },
-	}))
+	-- It comes up over three frames instead of popping in.
+	local rise = ease.out_quad(math.min(age / 0.05, 1))
+	local radius = 40 + ease.out_cubic(life) * 340
+	local a = (1 - life) ^ 1.6 * 0.30 * strength * rise
+	light(draw, w, h, x, y, radius, radius, { alpha(color, a * 0.6), alpha(color, a), alpha(color, 0) }, { 0, 0.55, 1 })
+	local front = life * 1.8
+	if strength >= 1 and front < 1 then
+		local reach = 60 + ease.out_quart(front) * 420
+		local b = (1 - front) ^ 2 * 0.16 * strength
+		light(draw, w, h, x, y, reach, reach, { alpha(color, 0), alpha(color, 0), alpha(color, b), alpha(color, 0) }, { 0, 0.82, 0.94, 1 })
+	end
 end
 
 -- The colour and strength of the pulse a press makes.
@@ -983,6 +1328,7 @@ local function press_pulse(e: Event, s: Scheme): (Rgba, number)
 		elseif key.kind == "equals" then
 			return s.hot_a, 1.4
 		end
+		-- Each key has a blob's colour of its own.
 		return s.blobs[key.id * 7 % 4 + 1], 0.55
 	elseif e.source == "swap" then
 		return s.hot_a, 1.0
@@ -1017,16 +1363,15 @@ local function background(draw: Draw, frame: Frame): Again
 		local breathe = 1 + 0.08 * math.sin(t * 0.11 + (i - 1))
 		local r = span * b.size * breathe
 		local c, a = s.blobs[i], s.blob_alpha
-		draw:rect(0, 0, w, h, gmnb.radial({
-			center = { cx, cy },
-			radius = r,
-			radius_y = r * 0.82,
-			colors = { alpha(c, a), alpha(c, a * 0.62), alpha(c, a * 0.18), alpha(c, 0) },
-			stops = { 0, 0.3, 0.62, 1 },
-		}))
+		light(draw, w, h, cx, cy, r, r * 0.82,
+			{ alpha(c, a), alpha(c, a * 0.62), alpha(c, a * 0.18), alpha(c, 0) }, { 0, 0.3, 0.62, 1 })
 	end
 
-	-- Pulses: a soft bloom wherever something just happened.
+	-- Two veils in the hot colours.
+	veil_at(draw, w, h, VEILS[1], s.hot_a, s.veil_alpha, t)
+	veil_at(draw, w, h, VEILS[2], s.hot_b, s.veil_alpha * 0.8, t)
+
+	-- Pulses: a bloom wherever something just happened.
 	local pulsing = false
 	for _, e in frame.events do
 		if e.age < PULSE_LIFE then
@@ -1035,8 +1380,9 @@ local function background(draw: Draw, frame: Frame): Again
 				pulsing = true
 				pulse_at(draw, w, h, e.x, e.y, color, strength, e.age)
 			elseif (e.kind == "result" or e.kind == "error") and e.page == "calculator" then
+				-- From under the last digits of the readout.
 				pulsing = true
-				local color = if e.kind == "error" then s.hot_a else s.hot_b
+				local color = if e.kind == "error" then s.danger else s.hot_b
 				pulse_at(draw, w, h, e.rect.x + e.rect.w * 0.8, e.rect.y + e.rect.h * 0.65, color, 1.1, e.age)
 			elseif e.kind == "option" and e.id == "palette" then
 				-- A new palette introduces itself.
@@ -1059,6 +1405,8 @@ local function background(draw: Draw, frame: Frame): Again
 
 	draw:tile(if s.dark then grain_dark else grain_light, 0, 0, w, h)
 
+	-- Every frame while a pulse plays; fifteen a second while it only
+	-- drifts; and not at all when it stands still.
 	if pulsing then
 		return 0
 	elseif living then
@@ -1068,10 +1416,13 @@ local function background(draw: Draw, frame: Frame): Again
 end
 
 ---------------------------------------------------------------------------
--- 4. Keypad: ripples, the pointer's light, the cascade
+-- 5. Keypad: ripples, the pointer's light, the cascade
 ---------------------------------------------------------------------------
 
 local RIPPLE_LIFE = 0.55
+-- How long a pressed key takes to spring back to its size (`keys.transition`
+-- in the style), in seconds.
+local SPRING_BACK = 0.32
 -- The cascade: each diagonal starts this much later, and takes this long.
 local CASCADE_STEP = 0.022
 local CASCADE_TIME = 0.46
@@ -1106,9 +1457,10 @@ end
 local function keypad(draw: Draw, frame: Frame): Again
 	local s = scheme(frame.ctx)
 	local keys: { KeyCell } = frame.keys or {}
-	local light = if s.dark then white else s.accent
+	local glint = if s.dark then white else s.accent
 	local busy = false
 
+	-- `place` is moving keys for as long as the cascade runs.
 	local show = newest(frame.events, "show")
 	if show then
 		local last = 0
@@ -1118,28 +1470,34 @@ local function keypad(draw: Draw, frame: Frame): Again
 		busy = show.age <= last * CASCADE_STEP + CASCADE_TIME
 	end
 
-	-- Ripples spread from where a key was pressed, and stay inside it.
+	-- Ripples spread from where a key was pressed, and stay inside it: a
+	-- wash of light with a brighter rim.
+	local springing: { [number]: boolean } = {}
 	for _, e in frame.events do
 		if e.kind == "press" and e.source == "key" and e.key and e.page ~= "graphing" and e.age < RIPPLE_LIFE then
 			busy = true
+			-- (The style shrinks a pressed key and springs it back.)
+			if e.key.id then
+				springing[e.key.id] = e.age < SPRING_BACK
+			end
 			local life = e.age / RIPPLE_LIFE
 			local r = e.rect
 			local reach = math.sqrt(r.w * r.w + r.h * r.h) * 1.1
 			local a = (1 - life) ^ 1.4 * (if s.dark then 0.26 else 0.30)
-			local color = if e.key.kind == "equals" then s.on_hot else light
+			local color = if e.key.kind == "equals" then s.on_hot else glint
 			draw:push_clip(r.x, r.y, r.w, r.h, KEY_RADIUS)
 			draw:rect(r.x, r.y, r.w, r.h, gmnb.radial({
 				center = { e.x, e.y },
 				radius = 6 + ease.out_cubic(life) * reach,
-				colors = { alpha(color, a * 0.5), alpha(color, a), alpha(color, 0) },
-				stops = { 0, 0.8, 1 },
+				colors = { alpha(color, a * 0.4), alpha(color, a * 0.7), alpha(color, a), alpha(color, 0) },
+				stops = { 0, 0.6, 0.88, 1 },
 			}))
 			draw:pop()
 		end
 	end
 
-	-- Reveal: the borders of the keys near the pointer light up, and the
-	-- key under it glows.
+	-- Reveal: the borders of the keys near the pointer catch its light, and
+	-- the key under it glows.
 	local p = frame.pointer
 	if p then
 		local border = if s.dark then 0.55 else 0.75
@@ -1149,19 +1507,23 @@ local function keypad(draw: Draw, frame: Frame): Again
 			local nx = math.clamp(p.x, r.x, r.x + r.w)
 			local ny = math.clamp(p.y, r.y, r.y + r.h)
 			local away = math.sqrt((p.x - nx) ^ 2 + (p.y - ny) ^ 2)
-			if k.enabled and away <= REVEAL_RADIUS then
-				local edge = gmnb.path():rounded_rect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, KEY_RADIUS - 0.5)
-				draw:stroke(edge, 1.25, gmnb.radial({
+			-- (Not a key that is pressed or springing back: its border
+			-- would be drawn where the key, shrunk, no longer is.)
+			local shrunk = k.pressed or (k.id ~= nil and springing[k.id])
+			if k.enabled and not shrunk and away <= REVEAL_RADIUS then
+				local outline = gmnb.path():rounded_rect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, KEY_RADIUS - 0.5)
+				draw:stroke(outline, 1.25, gmnb.radial({
 					center = { p.x, p.y },
 					radius = REVEAL_RADIUS,
-					colors = { alpha(light, border), alpha(light, 0) },
+					colors = { alpha(glint, border), alpha(glint, border * 0.3), alpha(glint, 0) },
+					stops = { 0, 0.55, 1 },
 				}))
 				if away == 0 then
 					draw:push_clip(r.x, r.y, r.w, r.h, KEY_RADIUS)
 					draw:rect(r.x, r.y, r.w, r.h, gmnb.radial({
 						center = { p.x, p.y },
 						radius = math.max(r.w, r.h) * 0.95,
-						colors = { alpha(light, glow), alpha(light, 0) },
+						colors = { alpha(glint, glow), alpha(glint, 0) },
 					}))
 					draw:pop()
 				end
@@ -1173,8 +1535,12 @@ local function keypad(draw: Draw, frame: Frame): Again
 end
 
 ---------------------------------------------------------------------------
--- 5. Display: gradient digits, glow, and how a new value arrives
+-- 6. Display: gradient digits, glow, and how a new value arrives
 ---------------------------------------------------------------------------
+--
+-- The app lays the value out and hands over its glyphs; this paints them.
+-- The same hook paints the converter's two values and the date page's
+-- results (`frame.value.role` says which).
 
 -- How long each kind of change plays for, in seconds.
 local function change_time(kind: string, digits: number): number
@@ -1230,8 +1596,7 @@ local function display(draw: Draw, frame: Frame): Again
 		if kind == "typing" and g.index >= from then
 			-- New digits pop in with a little overshoot.
 			local p = math.min(t / 0.26, 1)
-			local back = 1 + 2.7 * (p - 1) ^ 3 + 1.7 * (p - 1) ^ 2
-			return 0, math.sqrt(p), 0.55 + 0.45 * back
+			return 0, math.sqrt(p), 0.55 + 0.45 * ease.out_back(p)
 		elseif kind == "result" then
 			-- The number rises in as a wave, left to right.
 			local p = math.clamp((t - (g.index - 1) * 0.028) / 0.5, 0, 1)
@@ -1259,17 +1624,18 @@ local function display(draw: Draw, frame: Frame): Again
 		end
 	end
 
-	-- A glow in the dark.
+	-- A glow in the dark: the digits again, blurred, in the accent (or in
+	-- the error's colour).
 	if s.dark and digits > 0 then
 		draw:push_blur(v.size * 0.30)
-		glyphs(alpha(s.accent, 0.42))
+		glyphs(alpha(if v.error then s.danger else s.accent, 0.42))
 		draw:pop()
 	end
 
 	-- The digits are a window onto a gradient: text colour at the top,
-	-- leaning to the accent at the bottom (or to the hot colour, in error).
+	-- leaning to the accent at the bottom (or to the error's, in error).
 	local top = if v.error then alpha(s.fg, 0.92) else s.fg
-	local bottom = if v.error then alpha(s.hot_a, 0.95) else mix(s.fg, s.accent, if s.dark then 0.55 else 0.45)
+	local bottom = if v.error then s.danger else mix(s.fg, s.accent, if s.dark then 0.55 else 0.45)
 	local band = v.band
 	draw:push_mask("alpha")
 	glyphs(white)
@@ -1298,11 +1664,11 @@ local function display(draw: Draw, frame: Frame): Again
 end
 
 ---------------------------------------------------------------------------
--- 6. Options
+-- 7. Options
 ---------------------------------------------------------------------------
 
--- A palette's tile in Settings: its background, its four blobs, and a dot
--- of its hot gradient.
+-- A palette's tile in Settings: its background, its four blobs, a veil
+-- and a dot of its hot gradient.
 local function tile(draw: Draw, frame: Preview, choice: string)
 	local s = scheme_for(choice, frame.ctx)
 	local w, h = frame.width, frame.height
@@ -1321,6 +1687,8 @@ local function tile(draw: Draw, frame: Preview, choice: string)
 			colors = { alpha(c, math.min(s.blob_alpha * 1.4, 1)), alpha(c, 0) },
 		}))
 	end
+	-- (A tile is small: the veil needs to be twice as strong to show.)
+	veil_at(draw, w, h, VEILS[1], s.hot_a, math.min(s.veil_alpha * 2, 1), STILL)
 	draw:circle(w - 20, h - 18, 9, gmnb.linear({
 		from = { w - 34, h - 26 },
 		to = { w - 10, h - 8 },
@@ -1407,7 +1775,7 @@ local options: { Option } = {
 local theme: Theme = {
 	api = 1,
 	name = "Aurora",
-	description = "A drifting aurora behind glass keys, in seven palettes. GMNB's look up to 0.2.",
+	description = "A drifting aurora behind glass keys, in seven palettes. The look GMNB was born with.",
 	author = "GMNB contributors",
 	license = "MIT",
 	fonts = { "fonts/Outfit-Variable.ttf" },
@@ -1415,6 +1783,9 @@ local theme: Theme = {
 	options = options,
 	style = style,
 	layers = {
+		-- Which events each layer is told of, and for how many seconds it
+		-- keeps them. (A sound for each of these would hang from the same
+		-- events: see the header.)
 		background = { draw = background, events = { press = PULSE_LIFE, result = PULSE_LIFE, error = PULSE_LIFE, option = PULSE_LIFE } },
 		keypad = { draw = keypad, place = place, pointer = true, events = { press = RIPPLE_LIFE, show = 1.5 } },
 		display = { draw = display },

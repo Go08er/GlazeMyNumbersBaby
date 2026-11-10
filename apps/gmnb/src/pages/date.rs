@@ -231,6 +231,18 @@ fn result_line() -> Display {
     r
 }
 
+/// What holds a result: its caption, the result and the line under it,
+/// one under the other as they were. `date.result_panel` styles it; in the
+/// base look it is nothing and takes no room.
+fn result_panel(parts: &[&gtk::Widget]) -> gtk::Box {
+    let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    panel.add_css_class("wc-result-panel");
+    for part in parts {
+        panel.append(*part);
+    }
+    panel
+}
+
 /// The `{ size, font }` at `path`.
 fn sized_font(style: &Style, path: &str) -> Option<gmnb_theme::types::Font> {
     let Some(Value::Record(r)) = style.get(path) else {
@@ -315,10 +327,12 @@ impl DatePage {
         below(&to.bin, md::STEP_TO_LABEL - md::FIELD_TOP - md::FIELD_H);
         let diff_caption = section_label(S::DATE_DIFFERENCE_LABEL, &texts);
         below(&diff_caption, md::STEP_LABEL_RESULT - md::FIELD_LABEL_H);
-        diff_box.append(&diff_caption);
-        diff_box.append(&diff_result);
         below(&diff_result, md::STEP_RESULT_NEXT - md::RESULT_H);
-        diff_box.append(&diff_days);
+        diff_box.append(&result_panel(&[
+            diff_caption.upcast_ref(),
+            diff_result.upcast_ref(),
+            diff_days.upcast_ref(),
+        ]));
 
         // --- add/subtract mode
         let start = date_button();
@@ -371,8 +385,10 @@ impl DatePage {
         add_box.append(&spins_bin);
         let date_caption = section_label(S::DATE_LABEL, &texts);
         below(&date_caption, md::STEP_LABEL_RESULT - md::FIELD_LABEL_H);
-        add_box.append(&date_caption);
-        add_box.append(&date_result);
+        add_box.append(&result_panel(&[
+            date_caption.upcast_ref(),
+            date_result.upcast_ref(),
+        ]));
 
         let stack = gtk::Stack::new();
         stack.set_transition_type(gtk::StackTransitionType::SlideLeftRight);
