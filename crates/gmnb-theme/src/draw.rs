@@ -380,6 +380,9 @@ pub struct Recorder {
     pub(crate) fields: usize,
     /// Seconds until an animation drawn this frame shows its next frame.
     due: Option<f64>,
+    /// Seconds until a picture this frame was refused (a field coloured,
+    /// a picture changed, too soon after the last) can be made.
+    retry: Option<f64>,
 }
 
 impl Recorder {
@@ -403,6 +406,22 @@ impl Recorder {
             layer: 0,
             fields: 0,
             due: None,
+            retry: None,
+        }
+    }
+
+    /// A hook is drawing a still picture (a preview's tile).
+    pub(crate) fn still(&self) -> bool {
+        self.still
+    }
+
+    /// A picture was refused for being asked for too soon, and can be
+    /// had in `wait` seconds: if a hook is drawing, its layer is to be
+    /// drawn once more then, so that what stands on screen is never a
+    /// picture the theme has since replaced.
+    pub(crate) fn retry(&mut self, wait: f64) {
+        if self.active {
+            self.retry = Some(self.retry.map_or(wait, |r| r.min(wait)));
         }
     }
 
@@ -1034,6 +1053,7 @@ impl Api {
         rec.layer = layer;
         rec.fields = 0;
         rec.due = None;
+        rec.retry = None;
         rec.active = true;
         rec.ops.clear();
         rec.open.clear();
@@ -1083,11 +1103,20 @@ impl Api {
         self.shared.recorder.borrow_mut().due.take()
     }
 
+    /// Seconds until a picture the finished frame was refused can be made
+    /// (`draw:field` or `canvas:set` past its allowance): the layer is to
+    /// be drawn once more then, whether or not anything may move. `None`:
+    /// nothing was refused.
+    pub fn take_retry(&self) -> Option<f64> {
+        self.shared.recorder.borrow_mut().retry.take()
+    }
+
     /// Abandons a frame (the hook failed): nothing is kept.
     pub fn abandon(&self) {
         let mut rec = self.shared.recorder.borrow_mut();
         rec.active = false;
         rec.due = None;
+        rec.retry = None;
         rec.over = None;
         rec.ops.clear();
         rec.open.clear();

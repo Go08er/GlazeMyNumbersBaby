@@ -30,6 +30,16 @@ impl Bucket {
         Bucket::default()
     }
 
+    /// Seconds from `now` until there is a token to spend: 0 if there is
+    /// one already.
+    pub fn wait(&self, now: f64) -> f64 {
+        let gained = match self.at {
+            Some(then) if now > then => (now - then) * RATE,
+            _ => 0.0,
+        };
+        ((1.0 - (self.tokens + gained)) / RATE).max(0.0)
+    }
+
     /// Spends a token at `now` (seconds on any clock that only goes
     /// forward), if there is one.
     pub fn take(&mut self, now: f64) -> bool {
@@ -75,6 +85,12 @@ mod tests {
         // A clock that steps back gains nothing.
         assert!(!b.take(19.0));
         assert!(!b.take(f64::NAN));
+        // How long until the next: a thirtieth of a second from empty,
+        // less as time passes, nothing once there is one.
+        assert!((b.wait(20.0) - 1.0 / 30.0).abs() < 1e-9);
+        assert!((b.wait(20.0 + 0.5 / 30.0) - 0.5 / 30.0).abs() < 1e-9);
+        assert_eq!(b.wait(20.1), 0.0);
+        assert_eq!(Bucket::new().wait(0.0), 0.0);
     }
 
     #[test]

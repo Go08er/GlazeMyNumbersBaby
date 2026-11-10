@@ -9,9 +9,19 @@
 //!
 //! **How often.** A layer's fields are coloured 30 times a second at
 //! most, two in hand ([`gmnb_media::Bucket`]). A call past that draws the
-//! picture that field made last, again. When a `draw` has two fields and
-//! the allowance is short, they take turns: the one that went without
-//! last time goes first.
+//! picture that field made last, again, and the layer is drawn once more
+//! when the allowance has a pass to give, so that a picture that stands
+//! (a theme that doesn't animate, reduced motion) is never left out of
+//! date. When a `draw` has two fields and the allowance is short, they
+//! take turns: the one that went without last time goes first. A
+//! preview's tile is a still picture drawn once: its fields are always
+//! coloured.
+//!
+//! **What isn't a pass.** A field asked for with the same numbers, ramp
+//! and size as its last picture is that picture: nothing is coloured and
+//! nothing spent. So a layer that is drawn again for another reason (an
+//! event, the pointer, the frame it was owed) pays only for the fields
+//! that changed.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -58,8 +68,36 @@ pub(crate) struct Fields {
     tables: usize,
     serial: u64,
     turns: HashMap<u64, Turn>,
-    /// By layer and by which field of its `draw` (the first, the second).
-    last: HashMap<(u64, usize), Rc<FieldPicture>>,
+    /// By layer and by which field of its `draw` (the first, the second):
+    /// the picture it made last, and what that was made of.
+    last: HashMap<(u64, usize), (Asked, Rc<FieldPicture>)>,
+}
+
+/// What a pass is made of: the numbers after the glide, their shape, the
+/// ramp and how a value becomes a position. Asked for again unchanged,
+/// the picture is the one already made.
+struct Asked {
+    values: Vec<f32>,
+    shape: (usize, usize, usize),
+    ramp: Rc<Ramp>,
+    /// As bits: the same number, not merely an equal one.
+    scale: u32,
+    offset: u32,
+}
+
+impl PartialEq for Asked {
+    fn eq(&self, other: &Asked) -> bool {
+        self.shape == other.shape
+            && self.scale == other.scale
+            && self.offset == other.offset
+            && Rc::ptr_eq(&self.ramp, &other.ramp)
+            && self.values.len() == other.values.len()
+            && self
+                .values
+                .iter()
+                .zip(&other.values)
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+    }
 }
 
 /// Layers and fields whose last pictures are kept at once.
@@ -252,14 +290,14 @@ pub(crate) fn draw_field(
     };
 
     // Which field of this draw it is: there may be two.
-    let (layer, slot) = {
+    let (layer, slot, still) = {
         let mut rec = shared.recorder.borrow_mut();
         let cap = rec.limits().fields;
         if rec.fields >= cap {
             return Err(rec.over(name, format!("more than {cap} fields in one frame")));
         }
         rec.fields += 1;
-        (rec.layer, rec.fields - 1)
+        (rec.layer, rec.fields - 1, rec.still())
     };
     // A buffer of the wrong size: the call does nothing, and says so.
     let need = cols * rows * channels * 4;
@@ -286,14 +324,23 @@ pub(crate) fn draw_field(
         return Ok(());
     }
 
+    // The numbers the pass would colour, and the size it would make.
+    let values = field::values(&data.to_vec(), next.map(|b| b.to_vec()).as_deref(), mix);
+    let (width, height) = field::output_size(rect[2], rect[3], quality, MAX_PIXELS);
+    let asked = Asked {
+        values,
+        shape: (cols, rows, channels),
+        ramp,
+        scale: scale.to_bits(),
+        offset: offset.to_bits(),
+    };
+
     let now = shared.now();
     let mut fields = shared.fields.borrow_mut();
     if fields.turns.len() > KEPT || fields.last.len() > KEPT {
         fields.turns.clear();
         fields.last.clear();
     }
-    // Its turn, if the allowance has a pass to give: a field that went
-    // without is served before one that didn't.
     let turn = fields.turns.entry(layer).or_default();
     if slot == 0 {
         turn.draw += 1;
@@ -302,29 +349,59 @@ pub(crate) fn draw_field(
     if turn.waiting.is_some_and(|(_, at)| at + 1 < turn.draw) {
         turn.waiting = None;
     }
-    let yields = turn
-        .waiting
-        .is_some_and(|(other, at)| other != slot && at < turn.draw);
-    let granted = !yields && turn.allowance.take(now);
-    if granted {
+    // The same numbers through the same ramp at the same size as this
+    // field's last picture: that picture is this one. Nothing is coloured
+    // and nothing spent. (A layer drawn again for another reason, or to
+    // make good a field that was refused, costs its other fields
+    // nothing.)
+    let same = fields
+        .last
+        .get(&(layer, slot))
+        .is_some_and(|(made, picture)| {
+            *made == asked && (picture.width, picture.height) == (width, height)
+        });
+    let turn = fields.turns.entry(layer).or_default();
+    let (granted, retry) = if same {
         if turn.waiting.is_some_and(|(waiting, _)| waiting == slot) {
             turn.waiting = None;
         }
-    } else if !yields && turn.waiting.is_none() {
-        turn.waiting = Some((slot, turn.draw));
-    }
+        (false, None)
+    } else {
+        // Its turn, if the allowance has a pass to give: a field that
+        // went without is served before one that didn't.
+        let yields = turn
+            .waiting
+            .is_some_and(|(other, at)| other != slot && at < turn.draw);
+        // (A preview's tile is drawn once and stands: it is always
+        // coloured.)
+        let granted = still || (!yields && turn.allowance.take(now));
+        if granted {
+            if turn.waiting.is_some_and(|(waiting, _)| waiting == slot) {
+                turn.waiting = None;
+            }
+        } else if !yields && turn.waiting.is_none() {
+            turn.waiting = Some((slot, turn.draw));
+        }
+        // Refused: the layer is drawn once more when there is a pass to
+        // be had, whatever its hook returns.
+        let retry = (!granted).then(|| turn.allowance.wait(now).max(1.0 / 60.0));
+        (granted, retry)
+    };
     let picture = if granted {
-        let values = field::values(&data.to_vec(), next.map(|b| b.to_vec()).as_deref(), mix);
         let grid = field::Field {
-            data: &values,
+            data: &asked.values,
             cols,
             rows,
             channels,
         };
-        let (width, height) = field::output_size(rect[2], rect[3], quality, MAX_PIXELS);
-        let Some(pixels) =
-            field::render(&grid, &ramp, scale, offset, width as usize, height as usize)
-        else {
+        let Some(pixels) = field::render(
+            &grid,
+            &asked.ramp,
+            scale,
+            offset,
+            width as usize,
+            height as usize,
+        ) else {
             return Ok(());
         };
         fields.serial += 1;
@@ -334,19 +411,23 @@ pub(crate) fn draw_field(
             height,
             pixels: Bytes::new(pixels),
         });
-        fields.last.insert((layer, slot), picture.clone());
-        picture
+        fields.last.insert((layer, slot), (asked, picture.clone()));
+        Some(picture)
     } else {
-        // Too soon: the picture this field made last, again. (None yet:
-        // nothing this once.)
-        match fields.last.get(&(layer, slot)) {
-            Some(last) => last.clone(),
-            None => return Ok(()),
-        }
+        // The same picture, or too soon for another: the picture this
+        // field made last, again. (None yet: nothing this once.)
+        fields
+            .last
+            .get(&(layer, slot))
+            .map(|(_, picture)| picture.clone())
     };
     drop(fields);
-    shared
-        .recorder
-        .borrow_mut()
-        .push(name, Op::Field { picture, rect })
+    let mut rec = shared.recorder.borrow_mut();
+    if let Some(wait) = retry {
+        rec.retry(wait);
+    }
+    match picture {
+        Some(picture) => rec.push(name, Op::Field { picture, rect }),
+        None => Ok(()),
+    }
 }

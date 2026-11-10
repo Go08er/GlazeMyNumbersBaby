@@ -21,3 +21,6 @@ unitconv.workspace = true
 graphing.workspace = true
 appcore.workspace = true
 gmnb-theme.workspace = true
+# A theme's pictures: the app's own decoders and the animation player
+# (docs/theming-media.md). Rust only; nothing of it runs in the base look.
+gmnb-media.workspace = true

@@ -210,6 +210,11 @@ pub struct Drawn {
     /// (an animation's next frame), whatever `draw` returned: the layer
     /// is drawn again at the sooner of the two. `None`: nothing is.
     pub due: Option<f64>,
+    /// Seconds until a picture this frame asked for too soon can be made
+    /// (a field past its layer's allowance, a `canvas:set` past its
+    /// picture's): the layer is drawn once more then, under reduced
+    /// motion too. What stands on screen is then never out of date.
+    pub retry: Option<f64>,
 }
 
 /// Why a layer drew nothing.

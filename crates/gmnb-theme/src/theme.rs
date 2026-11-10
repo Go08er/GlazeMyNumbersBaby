@@ -1254,6 +1254,7 @@ impl Theme {
         // An animation drawn on the layer's clock asks for its next frame
         // itself; what `draw` returned stays what `draw` returned.
         drawn.due = self.api.take_due();
+        drawn.retry = self.api.take_retry();
         Ok(drawn)
     }
 

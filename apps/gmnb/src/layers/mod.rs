@@ -25,7 +25,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
-use gmnb_theme::draw::DisplayList;
+use gmnb_theme::draw::{DisplayList, Op};
 pub use gmnb_theme::events::{Action, Source};
 use gmnb_theme::events::{Event, EventKind, KeyKind, Page, Ring, Via};
 use gmnb_theme::layer::{DisplayValue, Drawn, Frame, Keys, LayerKind, Placement};
@@ -549,9 +549,22 @@ struct State {
     /// The size the picture was drawn for.
     size: (f32, f32),
     dirty: bool,
+    /// The timer is (also) for a picture the last frame was refused as
+    /// too soon: when it fires the layer is drawn again, whatever may
+    /// move.
+    retry: bool,
+    /// How many frames in a row were drawn because one was owed.
+    retries: u8,
+    /// The frame about to be drawn is one that was owed.
+    owed: bool,
     timer: Option<glib::SourceId>,
     tick: Option<gtk::TickCallbackId>,
 }
+
+/// Frames in a row that may be drawn because a picture was refused as
+/// too soon: enough for each of a layer's fields to have its turn, and a
+/// bound on a hook that is refused whenever it is drawn.
+const OWED_IN_A_ROW: u8 = 4;
 
 /// What a frame of a keypad or a readout is told beside the common
 /// fields.
@@ -645,16 +658,19 @@ impl Instance {
             return;
         };
         let now = now();
-        let fire = {
+        let (fire, retry) = {
             let mut st = self.state.borrow_mut();
             // A one-shot timer is gone once it has fired.
             if st.timer.take().is_some() {
                 layers.count(|s| s.armed = s.armed.saturating_sub(1));
             }
             let c = self.conditions(&layers, now);
-            st.clock.fire(now, c)
+            (st.clock.fire(now, c), std::mem::take(&mut st.retry))
         };
-        if matches!(fire, Fire::Draw | Fire::NotYet) {
+        if retry {
+            self.state.borrow_mut().owed = true;
+        }
+        if retry || matches!(fire, Fire::Draw | Fire::NotYet) {
             self.redraw();
         }
     }
@@ -720,16 +736,20 @@ impl Instance {
         let Some(layers) = self.layers.upgrade() else {
             return;
         };
-        let change = {
+        let (change, retry) = {
             let mut st = self.state.borrow_mut();
             let c = self.conditions(&layers, now());
             let change = st.clock.conditions(c);
+            let mut retry = false;
             if change == Change::Disarm {
+                // A frame owed for a refused picture is not lost with the
+                // timer: it is drawn now instead.
+                retry = std::mem::take(&mut st.retry);
                 self.disarm(&mut st);
             }
-            change
+            (change, retry)
         };
-        if change == Change::Draw {
+        if change == Change::Draw || retry {
             self.redraw();
         }
     }
@@ -847,6 +867,7 @@ impl Instance {
                 again,
                 places,
                 due,
+                retry,
             }) => {
                 layers.count(|s| s.frames[slot(self.kind)] += 1);
                 st.picture = Some(Picture {
@@ -863,13 +884,40 @@ impl Instance {
                     (Some(again), Some(due)) => Some(again.min(due)),
                     (again, due) => again.or(due),
                 };
-                let wait = st.clock.end(now, next, c);
+                // A picture the frame was refused as too soon (a field
+                // past its allowance): the layer is drawn once more when
+                // it can be had, also when nothing may move or the hook
+                // asked for nothing, so that what stands is never out of
+                // date. If a frame is coming anyway, that one will do.
+                //
+                // A frame owed makes good what was refused: with two
+                // fields that takes two, and never many. A hook that is
+                // refused every time it is drawn (it changes one picture
+                // twice a frame) is not drawn for ever on that account:
+                // after a few such frames in a row it waits for
+                // something else to draw it.
+                st.retries = if std::mem::take(&mut st.owed) {
+                    st.retries.saturating_add(1)
+                } else {
+                    0
+                };
+                let wait = match (st.clock.end(now, next, c), retry) {
+                    (Wait::None, Some(seconds)) if st.retries < OWED_IN_A_ROW => {
+                        st.retry = true;
+                        Wait::Timer(seconds)
+                    }
+                    (wait, _) => {
+                        st.retry = false;
+                        wait
+                    }
+                };
                 self.arm(&mut st, wait);
             }
             Err(failure) => {
                 // Nothing is drawn for this layer this frame.
                 layers.count(|s| s.failed += 1);
                 st.picture = None;
+                st.retry = false;
                 let wait = st.clock.end(now, None, c);
                 self.arm(&mut st, wait);
                 drop(st);
@@ -908,6 +956,48 @@ pub fn paint(
         s.replays += 1;
         s.replay_ms += ms;
     });
+}
+
+/// A frame of an animation has arrived from the media thread, which
+/// calls this: the main loop is asked to take it in. The media thread
+/// reaches the main loop here and nowhere else, and only with a frame
+/// that a layer being drawn asked for: nothing at rest.
+pub fn wake() {
+    glib::MainContext::default().invoke(frames_arrived);
+}
+
+/// Takes in the frames that have arrived, and has every layer that drew
+/// one of their animations painted again: its picture stands (the hook
+/// isn't run again), the frame in it is now the one it asked for.
+fn frames_arrived() {
+    let Some(hub) = Hub::current() else {
+        return;
+    };
+    let layers = hub.layers();
+    let (changed, notes, slow) = layers.cache.arrived(now());
+    hub.with_theme(|theme| {
+        if let Some(theme) = theme {
+            // An animation too heavy to decode in time plays slower.
+            theme.api().set_slow(slow);
+            for note in notes {
+                theme.api().note(note);
+            }
+        }
+    });
+    if changed.is_empty() {
+        return;
+    }
+    for instance in layers.live() {
+        let shows = instance.state.borrow().picture.as_ref().is_some_and(|p| {
+            p.list
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::Animation { image, .. } if changed.contains(image)))
+        });
+        if shows && let Some(widget) = instance.widget.upgrade() {
+            widget.queue_draw();
+        }
+    }
 }
 
 /// Measures `draw:text_size` with the widget's Pango context.
@@ -1332,5 +1422,189 @@ end } } }
             "{off} of {counted} pixels differ from the expected picture"
         );
         assert!(ink > 150, "the readout's digits are missing ({ink} pixels)");
+    }
+
+    /// A theme that draws one of each kind of picture: a still from a
+    /// file, the same tiled, a picture it fills, an animation and a
+    /// field.
+    const PICTURES: &str = r##"
+local still = gmnb.image("still.png")
+local moving = gmnb.animation("anim.gif")
+local canvas = gmnb.pixels(2, 1)
+local two = buffer.create(8)
+buffer.writeu32(two, 0, 0xff00ff00)   -- green
+buffer.writeu32(two, 4, 0x80ffffff)   -- white, half clear
+canvas:set(two)
+local ramp = gmnb.ramp({ colors = { "#ffcf29", "#010609" }, edge = { 0.5, 0.5 } })
+local grid = buffer.create(2 * 2 * 4)
+for i, v in { 0, 2, 0, 2 } do buffer.writef32(grid, (i - 1) * 4, v) end
+return { api = 1, name = "Pictures", layers = { background = { draw = function(draw, frame)
+    draw:rect(0, 0, frame.width, frame.height, "#000000")
+    draw:image(still, 0, 0, 160, 120, { filter = "nearest" })
+    draw:image(canvas, 160, 0, 80, 40, { filter = "nearest" })
+    draw:tile(still, 240, 0, 80, 40)
+    draw:image(moving, 0, 120, 80, 60)
+    draw:tile(moving, 80, 120, 80, 60)
+    draw:field(160, 120, 160, 120, { data = grid, cols = 2, rows = 2, channels = 1, ramp = ramp, scale = 0.5 })
+    -- Pictures that aren't there draw nothing.
+    draw:image(gmnb.image("none.png"), 0, 0, 320, 240)
+    draw:image(gmnb.image("cut.png"), 0, 0, 320, 240)
+end } } }
+"##;
+
+    fn fixture(name: &str) -> Vec<u8> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/gmnb-media/tests/fixtures")
+            .join(name);
+        std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    }
+
+    /// Renders the pictures' theme; the colour at a point is checked by
+    /// the caller.
+    fn render_pictures(dir: &std::path::Path) -> Vec<u8> {
+        gtk::init().expect("GTK on the test's display");
+        let dir = dir.join("pictures");
+        std::fs::create_dir_all(&dir).expect("a folder for the test's theme");
+        let still = fixture("still.png");
+        std::fs::write(dir.join("still.png"), &still).expect("a picture");
+        // Its header, and half of what should follow.
+        std::fs::write(dir.join("cut.png"), &still[..still.len() / 2]).expect("a picture");
+        std::fs::write(dir.join("anim.gif"), fixture("anim.gif")).expect("a picture");
+        let theme = theme_in(&dir, PICTURES);
+        let pango = pangocairo::FontMap::default().create_context();
+        let (w, h) = (SIZE.0 as f32, SIZE.1 as f32);
+        let cache = replay::Cache::default();
+        let drawn = match theme.draw(LayerKind::Background, &Ctx::default(), &Frame::sized(w, h)) {
+            Ok(drawn) => drawn,
+            Err(e) => panic!("{e:?}"),
+        };
+        // An animation's first frame is there at once and nothing more
+        // is asked of anyone.
+        assert_eq!(drawn.due.map(|due| (due * 10.0).round()), Some(1.0));
+        let s = gtk::Snapshot::new();
+        let scene = replay::Scene {
+            cache: &cache,
+            theme: Some(&theme),
+            pango: &pango,
+            glyphs: [&[], &[]],
+        };
+        replay::replay(&s, &drawn.list, &scene);
+        // The picture again, as a widget does when nothing has changed:
+        // nothing is decoded or made twice.
+        let again = gtk::Snapshot::new();
+        replay::replay(&again, &drawn.list, &scene);
+        // The still, the picture the theme fills, the animation's first
+        // frame and the field's picture.
+        assert_eq!(cache.textures(), 4);
+        // No frame after the first was needed: there is no media thread.
+        assert_eq!(cache.media().threads, 0);
+        let notes: Vec<String> = theme
+            .take_draw_notes()
+            .into_iter()
+            .map(|n| n.message)
+            .collect();
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(notes.iter().any(|n| n.contains("none.png")), "{notes:?}");
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("cut.png can't be decoded") && n.contains("draws nothing")),
+            "{notes:?}"
+        );
+
+        let node = s.to_node().expect("a picture");
+        let renderer = gsk::CairoRenderer::new();
+        renderer
+            .realize(None::<&gdk::Surface>)
+            .expect("the cairo renderer");
+        let bounds = graphene::Rect::new(0.0, 0.0, w, h);
+        let texture = renderer.render_texture(&node, Some(&bounds));
+        renderer.unrealize();
+        assert_eq!((texture.width(), texture.height()), SIZE);
+        if let Some(path) = std::env::var_os("GMNB_RENDER_WRITE") {
+            texture.save_to_png(&path).expect("the picture written");
+        }
+        let mut pixels = vec![0; (SIZE.0 * SIZE.1 * 4) as usize];
+        texture.download(&mut pixels, SIZE.0 as usize * 4);
+        pixels
+    }
+
+    /// A theme's pictures reach the screen: a file decoded by the app's
+    /// own decoders, a picture the theme filled from a buffer, an
+    /// animation's frame, and a field coloured through its ramp, each
+    /// where and as the theme drew it. (The toolkit's criticals are
+    /// fatal, as in the test above, and the display is found the same
+    /// way.)
+    #[test]
+    fn a_themes_pictures_render() {
+        let named = std::env::var_os("GMNB_TEST_WAYLAND_DISPLAY")
+            .or_else(|| std::env::var_os("DGMNB_TEST_WAYLAND_DISPLAY"));
+        let Some(display) = named else {
+            eprintln!("GMNB_TEST_WAYLAND_DISPLAY not set; skipped");
+            return;
+        };
+        let dir: PathBuf =
+            std::env::temp_dir().join(format!("gmnb-pictures-{}", std::process::id()));
+        if std::env::var_os("GMNB_RENDER_CHILD").is_none() {
+            let me = std::env::current_exe().expect("the test's own path");
+            let status = Command::new(me)
+                .args([
+                    "--exact",
+                    "layers::tests::a_themes_pictures_render",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env("WAYLAND_DISPLAY", display)
+                .env("GMNB_RENDER_CHILD", &dir)
+                .env("GDK_BACKEND", "wayland")
+                .env("GSK_RENDERER", "cairo")
+                .env("G_DEBUG", "fatal-criticals")
+                .env("GTK_A11Y", "none")
+                .status()
+                .expect("the test run again");
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(status.success(), "the rendering process failed: {status}");
+            return;
+        }
+        let dir = PathBuf::from(std::env::var_os("GMNB_RENDER_CHILD").unwrap_or_default());
+        let got = render_pictures(&dir);
+        // Red, green, blue at a point (cairo holds them the other way
+        // round).
+        let at = |x: i32, y: i32| {
+            let i = ((y * SIZE.0 + x) * 4) as usize;
+            [got[i + 2], got[i + 1], got[i]]
+        };
+        let near = |x: i32, y: i32, want: [u8; 3]| {
+            let got = at(x, y);
+            assert!(
+                got.iter().zip(&want).all(|(g, w)| g.abs_diff(*w) <= 3),
+                "at ({x}, {y}): {got:?}, not {want:?}"
+            );
+        };
+        let (red, blue) = ([200, 50, 20], [20, 50, 200]);
+        // The still, hard-edged: its left half and its right.
+        near(40, 60, red);
+        near(79, 100, red);
+        near(81, 100, blue);
+        near(120, 60, blue);
+        // The picture the theme filled: green, then white at half
+        // opacity over the black behind it.
+        near(180, 20, [0, 255, 0]);
+        near(220, 20, [128, 128, 128]);
+        // The still tiled at its own size: 16 pixels a tile.
+        near(243, 5, red);
+        near(251, 5, blue);
+        near(259, 5, red);
+        near(315, 30, blue);
+        // The animation's first frame, and the same tiled.
+        near(40, 150, red);
+        near(120, 170, red);
+        // The field: a hard edge down the middle of its rectangle.
+        near(200, 180, [255, 207, 41]);
+        near(238, 230, [255, 207, 41]);
+        near(242, 130, [1, 6, 9]);
+        near(300, 180, [1, 6, 9]);
+        // Where nothing was drawn: the black behind.
+        near(100, 200, [0, 0, 0]);
     }
 }

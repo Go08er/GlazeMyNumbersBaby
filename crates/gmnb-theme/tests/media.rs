@@ -694,12 +694,18 @@ fn a_theme_fills_a_picture_from_a_buffer() {
         assert(not pcall(function() canvas.width = 9 end))
         local buf = buffer.create(32)
         for i = 0, 7 do buffer.writeu32(buf, i * 4, 0x80000000 + i * 0x010203) end
+        local spare, sets = buffer.create(32), 0
         "##,
         r##"
         draw:image(canvas, 0, 0, frame.width, frame.height)
         draw:image(canvas, 0, 0, 40, 20, { filter = "nearest" })
         draw:tile(canvas, 0, 0, 80, 80)
-        return if canvas:set(buf) then 1 else 2
+        local taken = canvas:set(buf)
+        -- Something else to set the next time.
+        sets += 1
+        buffer.writeu8(spare, 0, sets)
+        buf = spare
+        return if taken then 1 else 2
         "##,
     );
     let now = clock(&theme, 100.0);
@@ -747,9 +753,14 @@ fn a_theme_fills_a_picture_from_a_buffer() {
 
     // Thirty changes a second, two in hand: a third at the same moment
     // is refused and the picture stays.
-    assert_eq!(drawn(&theme, 0.0).again, Some(1.0));
-    assert_eq!(drawn(&theme, 0.0).again, Some(2.0));
+    let second = drawn(&theme, 0.0);
+    assert_eq!((second.again, second.retry), (Some(1.0), None));
+    let third = drawn(&theme, 0.0);
+    assert_eq!(third.again, Some(2.0));
     assert_eq!(theme.api().canvas(ImageId(0)).unwrap().version, 2);
+    // The layer is owed a frame when the picture can be changed again, a
+    // thirtieth of a second on: what stands is never left out of date.
+    assert!(close(third.retry, 1.0 / 30.0), "{:?}", third.retry);
     now.set(100.0 + 0.9 / 30.0);
     assert_eq!(drawn(&theme, 0.0).again, Some(2.0));
     now.set(100.0 + 1.1 / 30.0);
@@ -784,11 +795,16 @@ fn pictures_to_fill_are_capped_in_size_number_and_changes() {
             assert(not pcall(gmnb.pixels, size[1], size[2]))
         end
         local two = made[2]
+        local draws = 0
         "##,
         r##"
         -- A buffer of the wrong size changes nothing.
         assert(two:set(buffer.create(12)) == false)
+        draws += 1
+        buffer.writeu8(small, 0, draws)
         assert(two:set(small) == true)
+        -- What it already holds is no change: taken, and nothing spent.
+        for _ = 1, 5 do assert(two:set(small) == true) end
         -- What isn't a buffer is an error.
         assert(not pcall(two.set, two, "pixels"))
         assert(not pcall(two.set, two))
@@ -1100,23 +1116,36 @@ fn a_layers_fields_are_coloured_thirty_times_a_second_at_most() {
         "draw:field(0, 0, 40, 40, { data = buf, cols = 4, rows = 4, channels = 2, ramp = ramp })";
     let theme = d.background(&top, &format!("fill(frame.time) {field}"));
     let now = clock(&theme, 50.0);
-    let serial = |time: f64| pictures(&drawn(&theme, time))[0].0;
+    let frame = |time: f64| {
+        let d = drawn(&theme, time);
+        (pictures(&d)[0].0, d.retry)
+    };
+    let serial = |time: f64| frame(time).0;
     // Two in hand; a third pass at the same moment draws the picture the
     // field made last, again, whatever the buffer now holds.
-    let (first, second) = (serial(0.0), serial(0.25));
-    assert_ne!(first, second);
-    assert_eq!(serial(0.5), second);
+    let (first, second) = (frame(0.0), frame(0.25));
+    assert_ne!(first.0, second.0);
+    assert_eq!((first.1, second.1), (None, None));
+    let second = second.0;
+    // And the layer is owed a frame a thirtieth of a second on, when
+    // there is a pass again: a picture that stands is never out of date.
+    let refused = frame(0.5);
+    assert_eq!(refused.0, second);
+    assert!(close(refused.1, 1.0 / 30.0), "{:?}", refused.1);
     assert_eq!(serial(0.75), second);
+    now.set(50.0 + 0.5 / 30.0);
+    assert!(close(frame(0.8).1, 0.5 / 30.0));
     // A thirtieth of a second later there is a pass again.
     now.set(50.0 + 1.1 / 30.0);
     let third = serial(1.0);
     assert_ne!(third, second);
     assert_eq!(serial(1.25), third);
-    // A steady thirty a second: a new picture every frame.
+    // A steady thirty a second, the numbers new each time: a new picture
+    // every frame.
     let mut last = third;
     for i in 1..=60 {
         now.set(60.0 + f64::from(i) / 30.0);
-        let next = serial(f64::from(i));
+        let next = serial(10.0 + f64::from(i));
         assert_ne!(next, last, "frame {i}");
         last = next;
     }
@@ -1142,6 +1171,66 @@ fn a_layers_fields_are_coloured_thirty_times_a_second_at_most() {
         (58..=63).contains(&fresh[0]) && (58..=63).contains(&fresh[1]),
         "{fresh:?}"
     );
+    // A field that has no picture yet and no pass to make one draws
+    // nothing this once, and is owed a frame.
+    let theme = d.background(
+        &top,
+        &format!("fill(frame.time) {field} if frame.time > 1 then {field} end"),
+    );
+    clock(&theme, 50.0);
+    assert_eq!(pictures(&drawn(&theme, 0.0)).len(), 1);
+    assert_eq!(pictures(&drawn(&theme, 1.0)).len(), 1);
+    let short = drawn(&theme, 2.0);
+    assert_eq!(pictures(&short).len(), 1);
+    assert!(short.retry.is_some());
+
+    // A field asked for with the numbers, the ramp and the size of its
+    // last picture is that picture: nothing is coloured and nothing is
+    // spent, however often and however fast the layer is drawn.
+    let theme = d.background(
+        &top,
+        &format!("fill(math.floor(frame.time)) {field} {field}"),
+    );
+    clock(&theme, 50.0);
+    let first = drawn(&theme, 0.0);
+    let made = pictures(&first);
+    assert_eq!(made.len(), 2);
+    for _ in 0..50 {
+        let again = drawn(&theme, 0.5);
+        assert_eq!(pictures(&again), made);
+        assert_eq!(again.retry, None);
+    }
+    // Both changed, with nothing in hand: both are refused and the layer
+    // is owed a frame. A thirtieth of a second on there is one pass: the
+    // owed frame makes one field good and another frame is owed. The
+    // second makes the other good, the first field's new picture
+    // standing as it is, at no cost; and then nothing is owed.
+    let changed = drawn(&theme, 1.0);
+    assert_eq!(pictures(&changed), made);
+    assert!(changed.retry.is_some());
+    let now = clock(&theme, 50.0 + 1.01 / 30.0);
+    let owed = drawn(&theme, 1.0);
+    let half = pictures(&owed);
+    assert!(owed.retry.is_some());
+    assert!(
+        (half[0].0 != made[0].0) != (half[1].0 != made[1].0),
+        "{half:?}"
+    );
+    now.set(50.0 + 2.02 / 30.0);
+    let owed = drawn(&theme, 1.0);
+    let after = pictures(&owed);
+    assert_eq!(owed.retry, None, "{after:?}");
+    assert!(
+        after[0].0 != made[0].0 && after[1].0 != made[1].0,
+        "{after:?}"
+    );
+    assert!(after[0] == half[0] || after[1] == half[1], "{after:?}");
+    // And then it stands: no frame is owed for ever.
+    for i in 0..20 {
+        now.set(60.0 + f64::from(i));
+        let still = drawn(&theme, 1.0);
+        assert_eq!((pictures(&still), still.retry), (after.clone(), None));
+    }
     // One of the two stops being drawn: the other has every pass again.
     let theme = d.background(
         &top,
@@ -1159,6 +1248,41 @@ fn a_layers_fields_are_coloured_thirty_times_a_second_at_most() {
         last = made[0].0;
     }
     assert!(fresh >= 49, "{fresh} of 50 frames were coloured");
+}
+
+#[test]
+fn a_previews_fields_are_always_coloured() {
+    // Tiles are still pictures, drawn once each when Settings opens: six
+    // of them at the same moment, each with a field.
+    let d = dir("fieldtiles");
+    let theme = d.load(&format!(
+        r##"
+        local ramp = {RAMP}
+        local buf = buffer.create(2 * 2 * 4)
+        local ids = {{ "a", "b", "c", "d", "e", "f" }}
+        local choices = {{}}
+        for i, id in ids do choices[i] = {{ id = id, label = id }} end
+        return {{ api = 1, name = "T",
+            options = {{ {{ id = "o", type = "choice", label = "O", default = "a", choices = choices,
+                preview = function(draw, frame, choice)
+                    buffer.writef32(buf, 0, string.byte(choice))
+                    draw:field(0, 0, frame.width, frame.height,
+                        {{ data = buf, cols = 2, rows = 2, channels = 1, ramp = ramp, quality = 1 }})
+                end }} }} }}
+        "##
+    ));
+    clock(&theme, 3.0);
+    let option = theme.def.options[0].clone();
+    let mut seen = std::collections::HashSet::new();
+    for choice in ["a", "b", "c", "d", "e", "f"] {
+        let tile = theme.preview(&option, choice, &Ctx::default()).unwrap();
+        let [Op::Field { picture, rect }] = &tile.ops[..] else {
+            panic!("{choice}: {:?}", tile.ops);
+        };
+        assert_eq!(*rect, [0.0, 0.0, 96.0, 56.0]);
+        assert_eq!((picture.width, picture.height), (96, 56));
+        assert!(seen.insert(fnv(&picture.pixels)), "{choice} repeats a tile");
+    }
 }
 
 // ---- The swirl demonstration -----------------------------------------------------------

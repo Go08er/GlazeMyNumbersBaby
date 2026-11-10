@@ -165,6 +165,8 @@ pub struct Stats {
     pub layers: crate::layers::Stats,
     /// Textures made of the theme's pictures.
     pub textures: usize,
+    /// What the theme's animations have cost: the media thread.
+    pub media: crate::layers::replay::MediaStats,
 }
 
 pub struct Hub {
@@ -947,6 +949,7 @@ impl Hub {
         stats.machines = u32::from(self.theme.borrow().is_some());
         stats.layers = self.layers.stats();
         stats.textures = self.layers.cache.textures();
+        stats.media = self.layers.cache.media();
         stats
     }
 }
@@ -1076,11 +1079,19 @@ mod tests {
     /// replay or a preview's tile at all. The layers' runtime makes them
     /// in two places only: `arm`, for a hook that asked for another
     /// frame (never for one that returned nil: `gmnb_theme::sched`), and
-    /// `after_frame`, once, for a hook that failed. The keypad's one
+    /// `after_frame`, once, for a hook that failed. The media thread
+    /// reaches the main loop in one place too, `wake`, with a frame of an
+    /// animation that a layer being drawn asked for. The keypad's one
     /// timer is the 110 ms flash of a key typed on the keyboard.
     #[test]
     fn theming_installs_no_sources() {
-        const CALLS: [&str; 4] = ["timeout_add", "idle_add", "add_tick_callback", "source_new"];
+        const CALLS: [&str; 5] = [
+            "timeout_add",
+            "idle_add",
+            "add_tick_callback",
+            "source_new",
+            "invoke",
+        ];
         for (name, source, allowed) in [
             ("theme.rs", include_str!("theme.rs"), &[][..]),
             (
@@ -1102,6 +1113,7 @@ mod tests {
                     ("timeout_add", "arm"),
                     ("add_tick_callback", "arm"),
                     ("idle_add", "after_frame"),
+                    ("invoke", "wake"),
                 ],
             ),
             (

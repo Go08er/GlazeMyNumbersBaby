@@ -553,10 +553,17 @@ impl Pictures {
     }
 
     /// `canvas:set(buffer)` at `now`: the picture takes `bytes`, if they
-    /// are as many as it has and it wasn't changed too recently.
-    fn set_canvas(&mut self, id: ImageId, bytes: Vec<u8>, now: f64) -> Result<bool, String> {
+    /// are as many as it has and it wasn't changed too recently. `Ok` of
+    /// `Err`: refused as too soon, and in how many seconds it would be
+    /// taken. `Err`: the wrong size, with a note for the theme's author.
+    fn set_canvas(
+        &mut self,
+        id: ImageId,
+        bytes: Vec<u8>,
+        now: f64,
+    ) -> Result<Result<(), f64>, String> {
         let Some(state) = self.canvases.get_mut(&id) else {
-            return Ok(false);
+            return Ok(Err(f64::INFINITY));
         };
         let c = &mut state.canvas;
         let want = c.width as usize * c.height as usize * 4;
@@ -568,12 +575,17 @@ impl Pictures {
                 c.height
             ));
         }
+        // The bytes it holds already: nothing changes and nothing is
+        // spent.
+        if c.pixels[..] == bytes[..] {
+            return Ok(Ok(()));
+        }
         if !state.allowance.take(now) {
-            return Ok(false);
+            return Ok(Err(state.allowance.wait(now)));
         }
         c.pixels = Bytes::new(bytes);
         c.version += 1;
-        Ok(true)
+        Ok(Ok(()))
     }
 
     /// `gmnb.noise(spec)`.
@@ -660,7 +672,15 @@ pub(crate) fn register(lua: &Lua, gmnb: &Table, shared: &Rc<Shared>) -> mlua::Re
             .borrow_mut()
             .set_canvas(ImageId(id as u32 - 1), data.to_vec(), now);
         match done {
-            Ok(done) => Ok(done),
+            Ok(Ok(())) => Ok(true),
+            // Too soon: the old picture stays. If a hook is drawing, its
+            // layer is drawn once more when the picture can be changed.
+            Ok(Err(wait)) => {
+                if wait.is_finite() {
+                    s.recorder.borrow_mut().retry(wait.max(1.0 / 60.0));
+                }
+                Ok(false)
+            }
             // The wrong size: the call does nothing, and says so once.
             Err(note) => {
                 s.pictures.borrow_mut().note(note);
