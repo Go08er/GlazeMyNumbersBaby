@@ -3,17 +3,20 @@
 # private headless weston (socket wincalc-shot), temporary XDG dirs, and a
 # private D-Bus with no services (no portal: the default accent, no desktop
 # settings). Usage, from the repo root, inside the nix dev shell:
-#   tools/theming/goldens.sh OUTDIR BINDIR [gmnb|dgmnb|all]
+#   tools/theming/goldens.sh OUTDIR BINDIR [gmnb|dgmnb|all|pages]
 # BINDIR holds the gmnb and dgmnb binaries to capture (theming-work/v02-bin
 # for the v0.2.0 references).
 set -u
 SP=/tmp/claude-1000/-home-goober-Documents-wincalc/a4c4533e-9373-47f7-85c3-9ead96a053d7/scratchpad
 OUT=${1:?outdir}; BIN=${2:?bindir}; WHICH=${3:-all}
 mkdir -p "$OUT"
-X=$(mktemp -d "$SP/xdg.XXXX"); mkdir -p "$X"/{config,data,cache,state}
-base=(env -u DISPLAY -u DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY=wincalc-shot XDG_CONFIG_HOME="$X/config"
-      XDG_DATA_HOME="$X/data" XDG_CACHE_HOME="$X/cache" XDG_STATE_HOME="$X/state" GTK_A11Y=none NO_AT_BRIDGE=1
-      dbus-run-session --config-file="$SP/privbus.conf" --)
+fresh() { # a new profile (the pages' shots: a graph saved by one isn't restored by the next)
+  X=$(mktemp -d "$SP/xdg.XXXX"); mkdir -p "$X"/{config,data,cache,state}
+  base=(env -u DISPLAY -u DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY=wincalc-shot XDG_CONFIG_HOME="$X/config"
+        XDG_DATA_HOME="$X/data" XDG_CACHE_HOME="$X/cache" XDG_STATE_HOME="$X/state" GTK_A11Y=none NO_AT_BRIDGE=1
+        dbus-run-session --config-file="$SP/privbus.conf" --)
+}
+fresh
 BOXES=${BOXES-1}  # BOXES= (empty) leaves the hook unset
 WSIZE=${WSIZE:-760x640}  # not SIZE: the nix shell sets SIZE=size (binutils)
 shot_g() { # NAME ENV...
@@ -28,6 +31,30 @@ shot_d() {
 }
 modes=(standard scientific programmer date graphing currency length)
 EQS='y=sin(x)*3;x^2/4-3;y<cos(x)-4'
+if [ "$WHICH" = pages ]; then
+  # The base look against DGMNB on the date page, the converter and
+  # graphing, both apps, the accent pinned (compare with --map
+  # tools/theming/pages.map). "Date with a result" picks the calendar's
+  # cell at row 2, column 3 (Sunday first) of this month: DGMNB by two
+  # clicks (the To button, then the cell of its calendar card), GMNB by
+  # GMNB_DATE_TO.
+  first=$(date +%Y-%m-01); wd=$(date -d "$first" +%w)
+  PICK=$(date -d "$first -$wd days +17 days" +%Y-%m-%d)
+  CLICKS='176,221;166,413'
+  base_g=(GMNB_THEME=base GMNB_ACCENT=3b6fd8); base_d=(DGMNB_ACCENT=3b6fd8)
+  for d in 0 1; do
+    for m in date currency length graphing; do
+      fresh; shot_g "$m-d$d" "${base_g[@]}" GMNB_MODE=$m GMNB_DARK=$d
+      fresh; shot_d "$m-d$d" "${base_d[@]}" DGMNB_MODE=$m DGMNB_DARK=$d
+    done
+    fresh; shot_g "date-result-d$d" "${base_g[@]}" GMNB_MODE=date GMNB_DARK=$d GMNB_DATE_TO=$PICK
+    fresh; shot_d "date-result-d$d" "${base_d[@]}" DGMNB_MODE=date DGMNB_DARK=$d DGMNB_CLICKS="$CLICKS"
+    fresh; shot_g "graphing-eqs-d$d" "${base_g[@]}" GMNB_MODE=graphing GMNB_DARK=$d GMNB_EQUATIONS="$EQS"
+    fresh; shot_d "graphing-eqs-d$d" "${base_d[@]}" DGMNB_MODE=graphing DGMNB_DARK=$d DGMNB_EQUATIONS="$EQS"
+  done
+  echo "$(ls "$OUT"/*.png | wc -l) pictures, $(grep -c FAIL "$OUT/log.txt") failures"
+  exit 0
+fi
 if [ "$WHICH" != dgmnb ]; then
   for p in aurora ember abyss orchard graphite system custom; do
     for d in 0 1; do

@@ -1,5 +1,10 @@
 //! Graphing calculator (upstream GraphingCalculator.xaml + EquationInputArea +
 //! KeyGraphFeaturesPanel + GraphingSettings + GraphingNumPad).
+//!
+//! Laid out as DGMNB's page (`apps/dgmnb/src/graph.rs`): the equations
+//! and the keypad on the left at `layout.graph.side_width`, a line between
+//! them, the canvas beside; every part at the height and the distance
+//! `appcore::metrics::graph` gives it.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -12,23 +17,27 @@ use appcore::KeyPress;
 use appcore::graph::{self as session, SavedEquation};
 use appcore::input::{self, GraphAction};
 use appcore::keys::GRAPH_PAD;
+use appcore::metrics::{controls as ctl, graph as mg};
 use appcore::modes::ViewMode;
+use gmnb_theme::Style;
+use gmnb_theme::types::{Rgba, Spacing, Value};
 use graphing::{EquationId, Graph, TrigUnit};
 use gtk::{gdk, gio, glib};
 
 use super::{Ctx, Page};
+use crate::widgets::fit::{Align, FitLabel};
 use crate::widgets::graph_view::GraphView;
-use crate::widgets::icon::{PathIcon, icon_toggle, paths};
+use crate::widgets::icon::{PathIcon, paths};
 use crate::widgets::width_bin::WidthBin;
-
-const WIDE_PX: i32 = 760;
 
 struct Row {
     id: EquationId,
     root: gtk::Box,
     entry: gtk::Entry,
     swatch: gtk::Button,
-    /// The swatch's colour, reloaded on change (one provider per row).
+    /// The swatch's dot, in the equation's colour.
+    dot: gtk::Box,
+    /// The dot's colour, reloaded on change (one provider per row).
     swatch_css: gtk::CssProvider,
     /// The colour picker's buttons, one per series colour; repainted with
     /// the swatch so they follow palette and theme changes.
@@ -92,25 +101,41 @@ impl Deferred {
 
 /// A style provider for a swatch's colour, attached once and reloaded on
 /// change (adding a new one each time would pile them up).
-fn colour_provider(button: &gtk::Button) -> gtk::CssProvider {
+fn colour_provider(widget: &impl IsA<gtk::Widget>) -> gtk::CssProvider {
     let css = gtk::CssProvider::new();
     #[allow(deprecated)]
-    button
+    widget
         .style_context()
         .add_provider(&css, gtk::STYLE_PROVIDER_PRIORITY_USER + 5);
     css
 }
 
-fn load_colour(css: &gtk::CssProvider, c: [f32; 3]) {
-    let rgb = format!(
-        "rgb({},{},{})",
-        (c[0] * 255.0) as u8,
-        (c[1] * 255.0) as u8,
-        (c[2] * 255.0) as u8
-    );
+/// A swatch dot in `c`, and the style's glow in it if it has one
+/// (`graph.swatch.glow`). Written from typed values only.
+fn load_colour(css: &gtk::CssProvider, c: Rgba, style: Option<&Style>) {
+    use gmnb_theme::css;
+    let rgb = css::color(c);
+    let glow = match style.and_then(|s| s.get("graph.swatch.glow")) {
+        Some(Value::Record(g)) => {
+            let n = |k: &str| match g.get(k) {
+                Some(Value::Number(n)) => *n as f32,
+                _ => 0.0,
+            };
+            format!("0 0 {} {} {rgb}", css::px(n("blur")), css::px(n("spread")))
+        }
+        _ => "none".to_string(),
+    };
     css.load_from_string(&format!(
-        "button {{ background: {rgb}; box-shadow: 0 0 12px -2px {rgb}; }}"
+        "box.wc-swatch-dot {{ background-color: {rgb}; box-shadow: {glow}; }}"
     ));
+}
+
+/// The style's `layout.graph.margin`.
+fn margin(style: &Style) -> Spacing {
+    match style.get("layout.graph.margin") {
+        Some(Value::Spacing(s)) => *s,
+        _ => Spacing::default(),
+    }
 }
 
 pub struct GraphingPage {
@@ -130,6 +155,11 @@ pub struct GraphingPage {
     side_stack: gtk::Stack,
     /// The keypad (upstream's GraphingNumPad).
     pad: gtk::Grid,
+    /// The pad's labels (and whether each is a number key's), set in the
+    /// style's key fonts.
+    pad_labels: RefCell<Vec<(FitLabel, bool)>>,
+    /// The icons the style sizes: each with the control it is in.
+    icons: RefCell<Vec<(glib::WeakRef<PathIcon>, &'static str)>>,
     focused: RefCell<Option<glib::WeakRef<gtk::Entry>>>,
     mode_toggle: adw::ToggleGroup,
     next_color: Cell<usize>,
@@ -148,14 +178,17 @@ pub struct GraphingPage {
 /// Re-analysis waits this long after the last edit.
 const REANALYZE_AFTER: Duration = Duration::from_millis(150);
 
-fn small_button(icon: &str, tip: &str) -> gtk::Button {
+/// One of the canvas's toolbar buttons, or a row's: an icon button of
+/// the style's (`graph.toolbar_button`, `graph.row_button`).
+fn small_button(icon: &str, tip: &str, class: &str) -> (gtk::Button, PathIcon) {
+    let icon = PathIcon::new(icon, ctl::ICON_BUTTON_ICON as i32);
     let b = gtk::Button::builder()
-        .child(&PathIcon::new(icon, 16))
+        .child(&icon)
         .tooltip_text(tip)
-        .css_classes(["flat", "wc-icon-button", "wc-small"])
+        .css_classes([class])
         .build();
     b.update_property(&[gtk::accessible::Property::Label(tip)]);
-    b
+    (b, icon)
 }
 
 impl GraphingPage {
@@ -166,20 +199,37 @@ impl GraphingPage {
         graph_view.set_hexpand(true);
         graph_view.set_vexpand(true);
 
-        // Graph toolbar overlay.
-        let zoom_in = small_button(paths::ZOOM_IN, "Zoom in (Ctrl+Plus)");
-        let zoom_out = small_button(paths::ZOOM_OUT, "Zoom out (Ctrl+Minus)");
-        let reset = small_button(paths::ZOOM_FIT, "Reset view (Ctrl+0)");
-        let trace_btn = icon_toggle(paths::TRACE, "Trace");
-        trace_btn.add_css_class("wc-small");
-        let copy = small_button(paths::COPY, "Copy graph image");
-        let settings = gtk::MenuButton::builder()
-            .child(&PathIcon::new(paths::SLIDERS, 16))
-            .tooltip_text("Graph options")
-            .css_classes(["flat", "wc-icon-button", "wc-small"])
+        // Graph toolbar overlay: DGMNB's six 34 px buttons, 2 apart.
+        let tool = "wc-tool-button";
+        let mut icons: Vec<(PathIcon, &'static str)> = Vec::new();
+        let (zoom_in, i) = small_button(paths::ZOOM_IN, "Zoom in (Ctrl+Plus)", tool);
+        icons.push((i, "graph.toolbar_button"));
+        let (zoom_out, i) = small_button(paths::ZOOM_OUT, "Zoom out (Ctrl+Minus)", tool);
+        icons.push((i, "graph.toolbar_button"));
+        let (reset, i) = small_button(paths::ZOOM_FIT, "Reset view (Ctrl+0)", tool);
+        icons.push((i, "graph.toolbar_button"));
+        let trace_icon = PathIcon::new(paths::TRACE, ctl::ICON_BUTTON_ICON as i32);
+        let trace_btn = gtk::ToggleButton::builder()
+            .child(&trace_icon)
+            .tooltip_text("Trace")
+            .css_classes([tool])
             .build();
+        trace_btn.update_property(&[gtk::accessible::Property::Label("Trace")]);
+        icons.push((trace_icon, "graph.toolbar_button"));
+        let (copy, i) = small_button(paths::COPY, "Copy graph image", tool);
+        icons.push((i, "graph.toolbar_button"));
+        let settings_icon = PathIcon::new(paths::SLIDERS, ctl::ICON_BUTTON_ICON as i32);
+        let settings = gtk::MenuButton::builder()
+            .child(&settings_icon)
+            .tooltip_text("Graph options")
+            .css_classes([tool])
+            .build();
+        icons.push((settings_icon, "graph.toolbar_button"));
         crate::a11y::name_menu_button(&settings, "Graph options");
-        let tools = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let tools = gtk::Box::new(
+            gtk::Orientation::Vertical,
+            (mg::TOOLBAR_STEP - mg::TOOLBAR_BUTTON) as i32,
+        );
         tools.add_css_class("wc-graph-tools");
         for w in [
             zoom_in.upcast_ref::<gtk::Widget>(),
@@ -193,27 +243,40 @@ impl GraphingPage {
         }
         tools.set_halign(gtk::Align::End);
         tools.set_valign(gtk::Align::Start);
-        tools.set_margin_top(10);
-        tools.set_margin_end(10);
+        tools.set_margin_top(mg::TOOLBAR_TOP as i32);
+        tools.set_margin_end((mg::TOOLBAR_RIGHT - mg::TOOLBAR_W) as i32);
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&graph_view));
         overlay.add_overlay(&tools);
 
-        // Equations list.
-        let list = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        let add = gtk::Button::builder().css_classes(["wc-add-eq"]).build();
-        let add_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        add_box.append(&PathIcon::new(paths::PLUS, 16));
-        add_box.append(&gtk::Label::new(Some("Enter an expression")));
-        add.set_child(Some(&add_box));
+        // Equations list: DGMNB's 40 px rows, 2 apart.
+        let list = gtk::Box::new(
+            gtk::Orientation::Vertical,
+            (mg::ROW_STEP - mg::ROW_H) as i32,
+        );
+        // "+  Enter an expression", read without its "+".
+        let add = gtk::Button::builder()
+            .label("+  Enter an expression")
+            .css_classes(["wc-add-eq"])
+            .build();
+        crate::a11y::name_button(&add, "Enter an expression");
+        add.set_size_request(-1, mg::ADD_H as i32);
+        add.set_margin_top((mg::ROW_STEP - mg::ROW_H + mg::ADD_Y) as i32);
+        add.set_margin_bottom((mg::ADD_STEP - mg::ADD_Y - mg::ADD_H) as i32);
         let vars_header = gtk::Label::new(Some("Variables"));
-        vars_header.add_css_class("wc-section");
+        vars_header.add_css_class("wc-var-header");
         vars_header.set_xalign(0.0);
         vars_header.set_visible(false);
-        let vars_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        let eq_col = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        eq_col.set_margin_start(4);
-        eq_col.set_margin_end(4);
+        vars_header.set_size_request(-1, mg::VARIABLES_H as i32);
+        vars_header.set_margin_start(mg::VARIABLES_X as i32);
+        vars_header.set_margin_bottom((mg::VARIABLES_STEP - mg::VARIABLES_H) as i32);
+        let vars_box = gtk::Box::new(
+            gtk::Orientation::Vertical,
+            (mg::VARIABLE_STEP - mg::VARIABLE_ROW_H) as i32,
+        );
+        let eq_col = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        eq_col.add_css_class("wc-plain");
+        eq_col.set_valign(gtk::Align::Start);
         eq_col.append(&list);
         eq_col.append(&add);
         eq_col.append(&vars_header);
@@ -254,47 +317,54 @@ impl GraphingPage {
         side_stack.add_named(&eq_scroll, Some("equations"));
         side_stack.add_named(&an_scroll, Some("analysis"));
 
-        // Keypad.
+        // Keypad, under a line (`graph.divider`).
         let pad = gtk::Grid::builder()
-            .row_spacing(4)
-            .column_spacing(4)
             .column_homogeneous(true)
             .row_homogeneous(true)
             .build();
         pad.add_css_class("wc-graph-pad");
+        pad.set_size_request(-1, (mg::PAD_H - mg::PAD_TRIM) as i32);
+        pad.set_margin_top((mg::PAD_TRIM - mg::DIVIDER) as i32);
+        let divider = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        divider.add_css_class("wc-graph-divider");
+        divider.set_size_request(-1, mg::DIVIDER as i32);
 
-        let side = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        side.add_css_class("wc-glass-panel");
+        let side = gtk::Box::new(gtk::Orientation::Vertical, 0);
         side.add_css_class("wc-graph-side");
+        side.set_margin_top(mg::SIDE_PAD_Y as i32);
+        side.set_margin_bottom(mg::SIDE_PAD_Y as i32);
+        side_stack.set_vexpand(true);
         side.append(&side_stack);
+        side.append(&divider);
         side.append(&pad);
 
         let view_stack = gtk::Stack::new();
         view_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
-        view_stack.set_transition_duration(200);
         view_stack.set_vexpand(true);
+        view_stack.set_hexpand(true);
 
-        let split = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-        split.set_margin_start(10);
-        split.set_margin_end(10);
-        split.set_margin_bottom(10);
+        let split = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         split.append(&view_stack);
 
         let mode_toggle = adw::ToggleGroup::new();
+        let eq_icon = PathIcon::new(paths::FUNCTION, ctl::ICON_BUTTON_ICON as i32);
         mode_toggle.add(
             adw::Toggle::builder()
                 .name("equations")
-                .child(&PathIcon::new(paths::FUNCTION, 16))
+                .child(&eq_icon)
                 .tooltip("Equations")
                 .build(),
         );
+        let graph_icon = PathIcon::new(paths::GRAPHING, ctl::ICON_BUTTON_ICON as i32);
         mode_toggle.add(
             adw::Toggle::builder()
                 .name("graph")
-                .child(&PathIcon::new(paths::GRAPHING, 16))
+                .child(&graph_icon)
                 .tooltip("Graph (Ctrl+Home)")
                 .build(),
         );
+        icons.push((eq_icon, "segmented.item"));
+        icons.push((graph_icon, "segmented.item"));
         mode_toggle.set_active_name(Some("equations"));
         mode_toggle.add_css_class("wc-toggle-group");
 
@@ -315,6 +385,8 @@ impl GraphingPage {
             analysis_body,
             side_stack: side_stack.clone(),
             pad: pad.clone(),
+            pad_labels: RefCell::default(),
+            icons: RefCell::new(icons.iter().map(|(i, p)| (i.downgrade(), *p)).collect()),
             focused: RefCell::new(None),
             mode_toggle: mode_toggle.clone(),
             next_color: Cell::new(0),
@@ -332,13 +404,71 @@ impl GraphingPage {
 
         {
             let weak = Rc::downgrade(&page);
-            ctx.hub.subscribe(move |s| {
-                if let Some(p) = weak.upgrade() {
-                    p.graph_view.set_scheme(*s);
-                    for r in p.rows.borrow().iter() {
-                        p.paint_swatch(r);
-                        p.graph_view
-                            .set_color(r.id, s.series[r.color.get() % s.series.len()]);
+            let (split, side_stack, view_stack) =
+                (split.clone(), side_stack.clone(), view_stack.clone());
+            ctx.hub.subscribe_style(&page.graph_view, move |gv, style| {
+                let Some(p) = weak.upgrade() else { return };
+                gv.set_style(style);
+                for r in p.rows.borrow().iter() {
+                    p.paint_swatch(r);
+                    gv.set_color(r.id, series(style, r.color.get()));
+                }
+                let m = margin(style);
+                split.set_margin_top(m.top.round() as i32);
+                split.set_margin_end(m.right.round() as i32);
+                split.set_margin_bottom(m.bottom.round() as i32);
+                split.set_margin_start(m.left.round() as i32);
+                split.set_spacing(style.number("layout.graph.gap").round() as i32);
+                if p.wide.get() {
+                    p.side
+                        .set_width_request(style.number("layout.graph.side_width").round() as i32);
+                }
+                let (gap, pad_font) = match style.get("keys.pad") {
+                    Some(Value::Record(r)) => (
+                        match r.get("gap") {
+                            Some(Value::Number(n)) => *n as u32,
+                            _ => 0,
+                        },
+                        // The pad's keys in their classes' fonts unless the
+                        // theme gives one (anything but the base's).
+                        match (r.get("font"), style.control("keys.func")) {
+                            (Some(Value::Font(f)), Some(func)) => *f != func.font,
+                            _ => false,
+                        },
+                    ),
+                    _ => (0, false),
+                };
+                p.pad.set_row_spacing(gap);
+                p.pad.set_column_spacing(gap);
+                let font = |number: bool| {
+                    let own = style
+                        .control(if number { "keys.number" } else { "keys.func" })
+                        .map(|c| c.font.clone());
+                    match (pad_font, style.get("keys.pad")) {
+                        (true, Some(Value::Record(r))) => match r.get("font") {
+                            Some(Value::Font(f)) => Some(f.clone()),
+                            _ => own,
+                        },
+                        _ => own,
+                    }
+                };
+                for (label, number) in p.pad_labels.borrow().iter() {
+                    if let Some(f) = font(*number) {
+                        label.set_font(&f, 1.0);
+                    }
+                }
+                side_stack
+                    .set_transition_duration(style.number("motion.graph_side").round() as u32);
+                view_stack
+                    .set_transition_duration(style.number("motion.graph_view").round() as u32);
+                p.icons
+                    .borrow_mut()
+                    .retain(|(icon, _)| icon.upgrade().is_some());
+                for (icon, path) in p.icons.borrow().iter() {
+                    if let (Some(icon), Some(i)) =
+                        (icon.upgrade(), style.control(path).map(|c| c.icon))
+                    {
+                        icon.set_style(i.size, i.stroke.unwrap_or(style.icon_stroke(i.size)));
                     }
                 }
             });
@@ -398,7 +528,7 @@ impl GraphingPage {
             let weak = Rc::downgrade(&page);
             root.connect_width(move |w| {
                 if let Some(p) = weak.upgrade() {
-                    p.set_wide(w >= WIDE_PX);
+                    p.set_wide(w as f32 >= mg::WIDE);
                 }
             });
         }
@@ -452,7 +582,8 @@ impl GraphingPage {
             }
         }
         if wide {
-            self.side.set_width_request(340);
+            let width = self.ctx.hub.style().number("layout.graph.side_width");
+            self.side.set_width_request(width.round() as i32);
             self.side.set_hexpand(false);
             self.split.prepend(&self.side);
             self.view_stack.set_visible_child_name("graph");
@@ -472,16 +603,33 @@ impl GraphingPage {
     fn build_pad(self: &Rc<Self>, pad: &gtk::Grid) {
         for (r, row) in GRAPH_PAD.iter().enumerate() {
             for (c, (label, insert)) in row.iter().enumerate() {
-                let b = gtk::Button::with_label(label);
+                // DGMNB's key: its label set with the capitals centred,
+                // shrunk to the key's width less 8 (a FitLabel), or its
+                // icon.
+                let b = gtk::Button::new();
+                let number = label.chars().all(|ch| ch.is_ascii_digit() || ch == '.');
+                if *label == "⌫" {
+                    let icon = PathIcon::new(paths::BACKSPACE, ctl::KEY_ICON as i32);
+                    b.set_child(Some(&icon));
+                    self.icons
+                        .borrow_mut()
+                        .push((icon.downgrade(), "keys.func"));
+                } else {
+                    let text = FitLabel::drawn();
+                    text.set_text(label);
+                    text.set_align(Align::Center);
+                    let inset = (ctl::KEY_LABEL_MARGIN / 2.0) as i32;
+                    text.set_margin_start(inset);
+                    text.set_margin_end(inset);
+                    b.set_child(Some(&text));
+                    // About DGMNB's cell middle, not the toolkit's
+                    // rounded allocation's.
+                    text.set_cell(pad, &b, (GRAPH_PAD.len(), row.len()), (r, c));
+                    self.pad_labels.borrow_mut().push((text, number));
+                }
                 crate::a11y::name_button(&b, appcore::keys::graph_pad_name(label));
                 b.add_css_class("wc-key");
-                b.add_css_class(
-                    if label.chars().all(|ch| ch.is_ascii_digit() || ch == '.') {
-                        "wc-num"
-                    } else {
-                        "wc-fn"
-                    },
-                );
+                b.add_css_class(if number { "wc-num" } else { "wc-fn" });
                 b.add_css_class("wc-pad-key");
                 // Not focused by a click, unlike the calculator's keys: it
                 // types into the equation, which keeps the focus
@@ -492,12 +640,12 @@ impl GraphingPage {
                 b.connect_clicked(move |b| {
                     if let Some(p) = weak.upgrade() {
                         p.insert_text(&insert);
-                        let s = p.ctx.hub.scheme();
+                        let a = p.ctx.hub.style().tokens.colors.accent;
                         p.ctx.pulse_at(
                             b,
                             b.width() as f32 / 2.0,
                             b.height() as f32 / 2.0,
-                            s.accent,
+                            [a[0], a[1], a[2]],
                             0.4,
                         );
                     }
@@ -547,13 +695,16 @@ impl GraphingPage {
         entry.grab_focus_without_selecting();
     }
 
-    /// Paint a row's swatch and its colour picker in the current scheme.
+    /// Paint a row's swatch and its colour picker in the style's graph
+    /// colours.
     fn paint_swatch(&self, row: &Row) {
-        let s = self.ctx.hub.scheme();
-        let n = s.series.len();
-        load_colour(&row.swatch_css, s.series[row.color.get() % n]);
+        let style = self.ctx.hub.style();
+        let c = &style.tokens.colors.series;
+        let size = style.number("graph.swatch.size").round() as i32;
+        row.dot.set_size_request(size, size);
+        load_colour(&row.swatch_css, c[row.color.get() % c.len()], Some(&style));
         for (i, (button, css)) in row.pickers.borrow().iter().enumerate() {
-            load_colour(css, s.series[i % n]);
+            load_colour(css, c[i % c.len()], None);
             let checked = if i == row.color.get() {
                 gtk::AccessibleTristate::True
             } else {
@@ -584,7 +735,8 @@ impl GraphingPage {
     /// equation is drawn, as in DGMNB (R15-L-03).
     fn show_drawn(&self, row: &Row) {
         let on = self.graph.borrow().is_line_enabled(row.id);
-        row.swatch.set_opacity(if on { 1.0 } else { 0.35 });
+        let hidden = f64::from(self.ctx.hub.style().number("graph.swatch.hidden_opacity"));
+        row.dot.set_opacity(if on { 1.0 } else { hidden });
         let pressed = if on {
             gtk::AccessibleTristate::True
         } else {
@@ -606,12 +758,24 @@ impl GraphingPage {
 
         // A toggle for assistive technology: pressed while the equation
         // is drawn (show_drawn).
+        // DGMNB's swatch: a dot in the equation's colour in a 28 px round
+        // button, 2 in from the row's start and 6 down.
+        let dot = gtk::Box::builder()
+            .css_classes(["wc-swatch-dot"])
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .build();
         let swatch = gtk::Button::builder()
+            .child(&dot)
             .css_classes(["wc-swatch"])
             .tooltip_text("Show or hide")
             .accessible_role(gtk::AccessibleRole::ToggleButton)
-            .valign(gtk::Align::Center)
+            .valign(gtk::Align::Start)
             .build();
+        let box_side = mg::SWATCH_BOX as i32;
+        swatch.set_size_request(box_side, box_side);
+        swatch.set_margin_start(mg::SWATCH_X as i32);
+        swatch.set_margin_top((mg::SWATCH_Y - mg::ROW_FIELD_Y) as i32);
         swatch.update_property(&[gtk::accessible::Property::Label("Show or hide")]);
         let entry = gtk::Entry::builder()
             // Plenty for any real equation; also bounds parse/compile work.
@@ -622,36 +786,71 @@ impl GraphingPage {
             .css_classes(["wc-eq-entry"])
             .build();
         entry.update_property(&[gtk::accessible::Property::Label("Equation")]);
-        let analyze = small_button(paths::FUNCTION, "Analyze function");
-        let remove = small_button(paths::CLOSE, "Remove equation");
+        // The field: 34 in from the row's start, 4 short of the buttons.
+        entry.set_width_chars(1);
+        entry.set_margin_start((mg::ROW_FIELD_X - mg::SWATCH_X - mg::SWATCH_BOX) as i32);
+        entry.set_margin_end(mg::ROW_FIELD_TRIM as i32);
+        entry.set_size_request(-1, mg::ROW_FIELD_H as i32);
+        entry.set_valign(gtk::Align::Start);
+        let row_button = "wc-row-button";
+        let (analyze, analyze_icon) = small_button(paths::FUNCTION, "Analyze function", row_button);
+        let (remove, remove_icon) = small_button(paths::CLOSE, "Remove equation", row_button);
+        let style_icon = PathIcon::new(paths::CHEVRON_DOWN, ctl::ICON_BUTTON_ICON as i32);
         let style = gtk::MenuButton::builder()
-            .child(&PathIcon::new(paths::CHEVRON_DOWN, 14))
+            .child(&style_icon)
             .tooltip_text("Line color and style")
-            .css_classes(["flat", "wc-icon-button", "wc-small"])
-            .valign(gtk::Align::Center)
+            .css_classes([row_button])
             .build();
         crate::a11y::name_menu_button(&style, "Line color and style");
-        let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        buttons.set_valign(gtk::Align::Start);
+        buttons.set_margin_top(mg::ROW_BUTTON_Y as i32);
+        let side = mg::ROW_BUTTON as i32;
+        for w in [
+            style.upcast_ref::<gtk::Widget>(),
+            analyze.upcast_ref(),
+            remove.upcast_ref(),
+        ] {
+            w.set_size_request(side, side);
+            buttons.append(w);
+        }
+        {
+            let style_now = self.ctx.hub.style();
+            let mut icons = self.icons.borrow_mut();
+            for i in [style_icon, analyze_icon, remove_icon] {
+                if let Some(c) = style_now.control("graph.row_button").map(|c| c.icon) {
+                    i.set_style(c.size, c.stroke.unwrap_or(style_now.icon_stroke(c.size)));
+                }
+                icons.push((i.downgrade(), "graph.row_button"));
+            }
+        }
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        line.set_size_request(-1, mg::ROW_FIELD_H as i32);
         line.append(&swatch);
         line.append(&entry);
-        line.append(&style);
-        line.append(&analyze);
-        line.append(&remove);
+        line.append(&buttons);
         let error = gtk::Label::new(None);
         error.add_css_class("wc-eq-error");
         error.set_xalign(0.0);
-        error.set_wrap(true);
+        error.set_ellipsize(gtk::pango::EllipsizeMode::End);
         error.set_visible(false);
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        error.set_size_request(-1, mg::ERROR_H as i32);
+        error.set_margin_start(mg::ERROR_X as i32);
+        error.set_margin_end((mg::ERROR_TRIM - mg::ERROR_X) as i32);
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         root.add_css_class("wc-eq-row");
         root.append(&line);
-        root.append(&error);
-        let swatch_css = colour_provider(&swatch);
+        // The error line under the row (DGMNB's: no padding between).
+        let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        outer.append(&root);
+        outer.append(&error);
+        let swatch_css = colour_provider(&dot);
         let row = Rc::new(Row {
             id,
             root: root.clone(),
             entry: entry.clone(),
             swatch: swatch.clone(),
+            dot,
             swatch_css,
             pickers: RefCell::default(),
             error,
@@ -663,13 +862,12 @@ impl GraphingPage {
         style.set_popover(Some(&self.style_popover(&row)));
         self.paint_swatch(&row);
         self.show_drawn(&row);
-        let s = self.ctx.hub.scheme();
-        self.graph_view
-            .set_color(id, s.series[color % s.series.len()]);
+        let style_now = self.ctx.hub.style();
+        self.graph_view.set_color(id, series(&style_now, color));
         let revealer = gtk::Revealer::builder()
-            .child(&root)
+            .child(&outer)
             .transition_type(gtk::RevealerTransitionType::SlideDown)
-            .transition_duration(260)
+            .transition_duration(style_now.number("motion.equation_row").round() as u32)
             .build();
         self.list.append(&revealer);
         glib::idle_add_local_once({
@@ -746,9 +944,11 @@ impl GraphingPage {
             p.graph_view.forget_color(id);
             rev.set_reveal_child(false);
             let (list, rev2) = (p.list.clone(), rev.clone());
-            glib::timeout_add_local_once(std::time::Duration::from_millis(280), move || {
-                list.remove(&rev2)
-            });
+            let leave = rev.transition_duration();
+            glib::timeout_add_local_once(
+                std::time::Duration::from_millis(u64::from(leave) + 20),
+                move || list.remove(&rev2),
+            );
             p.graph_view.invalidate();
             p.sync_variables();
             p.analysis_inputs_changed();
@@ -762,12 +962,18 @@ impl GraphingPage {
     /// Upstream EquationStylePanelControl: colour + line style.
     fn style_popover(self: &Rc<Self>, row: &Rc<Row>) -> gtk::Popover {
         let colors = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let n = self.ctx.hub.scheme().series.len();
+        let n = self.ctx.hub.style().tokens.colors.series.len();
         for i in 0..n {
             let name = format!("Color {}", i + 1);
             // A radio choice for assistive technology: named (a tooltip is
             // only the description) and checked when it's the row's colour.
+            let dot = gtk::Box::builder()
+                .css_classes(["wc-swatch-dot"])
+                .halign(gtk::Align::Center)
+                .valign(gtk::Align::Center)
+                .build();
             let b = gtk::Button::builder()
+                .child(&dot)
                 .css_classes(["wc-swatch", "wc-swatch-pick"])
                 .tooltip_text(&name)
                 .accessible_role(gtk::AccessibleRole::Radio)
@@ -775,15 +981,14 @@ impl GraphingPage {
             b.update_property(&[gtk::accessible::Property::Label(&name)]);
             row.pickers
                 .borrow_mut()
-                .push((b.clone(), colour_provider(&b)));
+                .push((b.clone(), colour_provider(&dot)));
             // Weak row: the row's widgets own this popover and its buttons.
             let (weak, r) = (Rc::downgrade(self), Rc::downgrade(row));
             b.connect_clicked(move |_| {
                 if let (Some(p), Some(r)) = (weak.upgrade(), r.upgrade()) {
                     r.color.set(i);
                     p.paint_swatch(&r);
-                    let s = p.ctx.hub.scheme();
-                    p.graph_view.set_color(r.id, s.series[i % s.series.len()]);
+                    p.graph_view.set_color(r.id, series(&p.ctx.hub.style(), i));
                 }
             });
             colors.append(&b);
@@ -905,8 +1110,10 @@ impl GraphingPage {
             }
             if show {
                 row.root.add_css_class("wc-has-error");
+                row.entry.add_css_class("error");
             } else {
                 row.root.remove_css_class("wc-has-error");
+                row.entry.remove_css_class("error");
             }
         }
         err
@@ -927,6 +1134,13 @@ impl GraphingPage {
         for (name, var) in vars {
             let label = gtk::Label::new(Some(&name));
             label.add_css_class("wc-var-name");
+            label.set_xalign(0.0);
+            label.set_size_request(
+                (mg::VARIABLE_NAME_W - 2.0 * mg::VARIABLE_NAME_INSET) as i32,
+                -1,
+            );
+            label.set_margin_start(mg::VARIABLE_NAME_INSET as i32);
+            label.set_margin_end(mg::VARIABLE_NAME_INSET as i32);
             let scale = gtk::Scale::with_range(
                 gtk::Orientation::Horizontal,
                 var.min(),
@@ -946,12 +1160,35 @@ impl GraphingPage {
             ))]);
             value.set_digits(3);
             value.set_value(var.value());
-            value.set_width_chars(6);
-            value.add_css_class("wc-spin");
+            value.set_width_chars(1);
+            // DGMNB's value box: a field 84 wide, 2 in, with no steps.
+            value.add_css_class("wc-var-value");
+            let inset = mg::VARIABLE_FIELD_INSET as i32;
+            value.set_size_request(
+                (mg::VARIABLE_VALUE_W - 2.0 * mg::VARIABLE_FIELD_INSET) as i32,
+                (mg::VARIABLE_ROW_H - 2.0 * mg::VARIABLE_FIELD_INSET) as i32,
+            );
+            for m in [
+                gtk::Widget::set_margin_top,
+                gtk::Widget::set_margin_bottom,
+                gtk::Widget::set_margin_start,
+                gtk::Widget::set_margin_end,
+            ] {
+                m(value.upcast_ref(), inset);
+            }
+            let mut child = value.first_child();
+            while let Some(c) = child {
+                child = c.next_sibling();
+                if c.is::<gtk::Button>() {
+                    c.set_visible(false);
+                }
+            }
             // Undo from appcore's history, as the equations' (crate::undo).
             crate::undo::attach(&value);
-            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            scale.add_css_class("wc-var-slider");
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             row.add_css_class("wc-var-row");
+            row.set_size_request(-1, mg::VARIABLE_ROW_H as i32);
             row.append(&label);
             row.append(&scale);
             row.append(&value);
@@ -1328,9 +1565,8 @@ impl GraphingPage {
                 first.get_or_insert(row.id);
                 row.color.set(eq.color);
                 self.paint_swatch(&row);
-                let s = self.ctx.hub.scheme();
                 self.graph_view
-                    .set_color(row.id, s.series[eq.color % s.series.len()]);
+                    .set_color(row.id, series(&self.ctx.hub.style(), eq.color));
                 if let Some(style) = session::style_from_key(&eq.style) {
                     self.graph.borrow_mut().set_line_style(row.id, style);
                 }
@@ -1446,6 +1682,13 @@ impl GraphingPage {
     pub fn handle(ctx: Rc<Ctx>) -> Rc<dyn Page> {
         Rc::new(GraphingHandle(Self::new(ctx)))
     }
+}
+
+/// The `i`th graph colour of the style.
+fn series(style: &Style, i: usize) -> [f32; 3] {
+    let c = &style.tokens.colors.series;
+    let c = c[i % c.len()];
+    [c[0], c[1], c[2]]
 }
 
 /// A value's accessible label: "≈" (a value known to its digits only)

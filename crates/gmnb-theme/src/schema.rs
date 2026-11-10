@@ -189,6 +189,91 @@ impl Scope<'_> {
         }
     }
 
+    /// A resolved control above this row (`icon_button` for the swap and
+    /// the graph's buttons): a theme's changes to it carry over.
+    fn control_at(&self, path: &str) -> Control {
+        match self.get(path) {
+            Value::Control(c) => (**c).clone(),
+            _ => self.control(&self.t.text.body),
+        }
+    }
+
+    /// `icon_button` at `size` × `size`.
+    fn icon_button(&self, size: f32) -> Value {
+        Value::Control(Box::new(Control {
+            min_width: size,
+            min_height: size,
+            ..self.control_at("icon_button")
+        }))
+    }
+
+    /// Text in `font` and `color` straight on the backdrop: it has the
+    /// window's halo (none at full opacity), and no margin.
+    fn text(&self, font: &Font, color: Rgba) -> Value {
+        self.text_with(font, color, "window.text_halo")
+    }
+
+    /// Text on something raised (a popover, a card): the raised halo.
+    fn raised_text(&self, font: &Font, color: Rgba) -> Value {
+        self.text_with(font, color, "window.raised_text_halo")
+    }
+
+    fn text_with(&self, font: &Font, color: Rgba, halo: &str) -> Value {
+        let shadow = match self.get(halo) {
+            Value::Shadows(s) => s.clone(),
+            _ => Vec::new(),
+        };
+        Value::Text(Text {
+            color,
+            font: font.clone(),
+            shadow,
+            margin: Spacing::default(),
+        })
+    }
+
+    /// `font` at another size and weight (a page's own text style).
+    fn sized(&self, style: metrics::TextStyle) -> Font {
+        Font {
+            size: style.size,
+            weight: style.weight,
+            ..self.t.text.body.clone()
+        }
+    }
+
+    /// Nothing drawn: no background, border, radius or padding.
+    fn bare(&self) -> Surface {
+        Surface {
+            background: Fill::none(),
+            border: None,
+            shadow: Vec::new(),
+            radius: Radius::all(0.0),
+            padding: Spacing::default(),
+            margin: Spacing::default(),
+        }
+    }
+
+    /// A raised card's soft shadow: DGMNB's three translucent rings.
+    fn rings(&self) -> Vec<Shadow> {
+        metrics::shape::POPOVER_SHADOW
+            .iter()
+            .map(|&(spread, a)| Shadow {
+                x: 0.0,
+                y: 0.0,
+                blur: 0.0,
+                spread,
+                color: alpha(BLACK, a),
+                inset: false,
+            })
+            .collect()
+    }
+
+    fn line(&self) -> Option<Border> {
+        Some(Border {
+            width: metrics::shape::BORDER,
+            color: self.t.colors.border,
+        })
+    }
+
     /// A key class: `keys`' shared values, with its own fill, text colour
     /// and font.
     fn key(&self, background: Rgba, color: Rgba, font: Font) -> Value {
@@ -244,6 +329,10 @@ fn spacing(top: f32, right: f32, bottom: f32, left: f32) -> Value {
     Value::Spacing(Spacing::trbl(top, right, bottom, left))
 }
 
+fn record(parts: &[(&'static str, Value)]) -> Value {
+    Value::Record(parts.iter().cloned().collect())
+}
+
 // ---- Kinds the rows share --------------------------------------------------
 
 const SIZE: Kind = Kind::Px(0.0, 4096.0);
@@ -252,6 +341,47 @@ const UNIT: Kind = Kind::Num(0.0, 1.0);
 const REVEAL: Kind = Kind::Word(&["always", "hover"]);
 const HEIGHT: Kind = Kind::PxOr("auto", 0.0, 4096.0);
 const SIZE_FONT: Kind = Kind::Record(&[("size", FONT_SIZE), ("font", Kind::Font)]);
+const SLIDER_TRACK: Kind =
+    Kind::Record(&[("height", SIZE), ("color", Kind::Color), ("radius", SIZE)]);
+const SLIDER_KNOB: Kind = Kind::Record(&[
+    ("size", SIZE),
+    ("color", Kind::Color),
+    ("halo", Kind::Color),
+    ("halo_size", SIZE),
+]);
+const SWITCH: Kind = Kind::Record(&[
+    ("width", SIZE),
+    ("height", SIZE),
+    ("knob_size", SIZE),
+    ("off", Kind::Color),
+    ("on", Kind::Color),
+    ("knob", Kind::Color),
+    ("knob_on", Kind::Color),
+]);
+const TOAST: Kind = Kind::Record(&[
+    ("background", Kind::Fill),
+    ("color", Kind::Color),
+    ("radius", Kind::Radius),
+    ("font", Kind::Font),
+    ("min_height", SIZE),
+    ("padding", Kind::Spacing),
+]);
+const TOOLTIP: Kind = Kind::Record(&[
+    ("background", Kind::Fill),
+    ("color", Kind::Color),
+    ("radius", Kind::Radius),
+    ("font", Kind::Font),
+    ("padding", Kind::Spacing),
+]);
+const KEYS_PAD: Kind = Kind::Record(&[
+    ("gap", SIZE),
+    ("radius", Kind::Radius),
+    ("min_height", SIZE),
+    ("font", Kind::Font),
+]);
+/// A radius that rounds a control's ends fully (CSS shrinks it to half the
+/// shorter side).
+const ROUND: f32 = 999.0;
 
 /// The toolkit's own widget families a theme can hand back (`native`).
 pub const NATIVE_FAMILIES: [&str; 11] = [
@@ -424,11 +554,33 @@ pub static ROWS: &[Row] = &[
     todo("nav.row", Kind::Control),
     todo("nav.settings", Kind::Control),
     // -- Shared controls.
-    todo("icon_button", Kind::Control),
+    row("icon_button", Kind::Control, |s| {
+        let c = &s.t.colors;
+        let size = metrics::controls::ICON_BUTTON;
+        Value::Control(Box::new(Control {
+            min_width: size,
+            min_height: size,
+            radius: Radius::all(ROUND),
+            checked: State::filled(
+                alpha(c.accent, metrics::controls::ICON_BUTTON_ON_ALPHA),
+                c.accent_text,
+            ),
+            ..s.control(&s.t.text.body)
+        }))
+    }),
     todo("text_button", Kind::Control),
     todo("text_button_gap", SIZE),
     todo("flyout_button", Kind::Control),
-    todo("button", Kind::Control),
+    row("button", Kind::Control, |s| {
+        let c = &s.t.colors;
+        Value::Control(Box::new(Control {
+            background: Fill::color(c.surface2),
+            min_height: metrics::controls::TEXT_BUTTON_H,
+            padding: Spacing::vh(0.0, metrics::controls::BUTTON_PAD_X),
+            checked: State::filled(c.accent, c.on_accent),
+            ..s.control(&s.t.text.body)
+        }))
+    }),
     row("segmented.gap", SIZE, |_| {
         px(metrics::controls::SEGMENTED_GAP)
     }),
@@ -443,62 +595,147 @@ pub static ROWS: &[Row] = &[
             ..s.control(&s.t.text.small)
         }))
     }),
-    todo("field", Kind::Field),
-    todo("row", Kind::Control),
-    todo("section", Kind::Text),
-    todo(
-        "slider.track",
-        Kind::Record(&[("height", SIZE), ("color", Kind::Color), ("radius", SIZE)]),
-    ),
-    todo("slider.fill", Kind::Color),
-    todo(
-        "slider.knob",
-        Kind::Record(&[
-            ("size", SIZE),
-            ("color", Kind::Color),
-            ("halo", Kind::Color),
-            ("halo_size", SIZE),
-        ]),
-    ),
-    todo(
-        "switch",
-        Kind::Record(&[
-            ("width", SIZE),
-            ("height", SIZE),
-            ("off", Kind::Color),
-            ("on", Kind::Color),
-            ("knob", Kind::Color),
-            ("knob_on", Kind::Color),
-        ]),
-    ),
+    row("field", Kind::Field, |s| {
+        let c = &s.t.colors;
+        let ring = |color: Rgba| State {
+            border: Some(Some(Border {
+                width: metrics::shape::FIELD_BORDER_ACTIVE,
+                color,
+            })),
+            ..State::default()
+        };
+        Value::Field(Box::new(Field {
+            background: Fill::color(c.surface),
+            color: c.fg,
+            border: s.line(),
+            shadow: Vec::new(),
+            radius: Radius::all(metrics::shape::FIELD_RADIUS),
+            font: s.t.text.body.clone(),
+            padding: Spacing::vh(0.0, metrics::controls::FIELD_PAD_X),
+            min_height: metrics::controls::FIELD_H,
+            placeholder: c.fg_faint,
+            selection: alpha(c.accent, metrics::controls::SELECTION_ALPHA),
+            caret: c.fg,
+            focus: ring(c.accent_text),
+            error: ring(c.danger),
+        }))
+    }),
+    row("row", Kind::Control, |s| {
+        let c = &s.t.colors;
+        Value::Control(Box::new(Control {
+            radius: Radius::all(s.t.shape.row_radius),
+            min_height: metrics::controls::ROW_H,
+            checked: State {
+                background: Some(Fill::color(alpha(
+                    c.accent,
+                    metrics::controls::ROW_CHECKED_ALPHA,
+                ))),
+                ..State::default()
+            },
+            ..s.control(&s.t.text.body)
+        }))
+    }),
+    row("section", Kind::Text, |s| {
+        s.raised_text(&s.t.text.caption, s.t.colors.fg_dim)
+    }),
+    row("slider.track", SLIDER_TRACK, |s| {
+        use metrics::controls::{SLIDER_TRACK_H, SLIDER_TRACK_RADIUS};
+        record(&[
+            ("height", px(SLIDER_TRACK_H)),
+            ("color", color(s.t.colors.border)),
+            ("radius", px(SLIDER_TRACK_RADIUS)),
+        ])
+    }),
+    row("slider.fill", Kind::Color, |s| color(s.t.colors.accent)),
+    row("slider.knob", SLIDER_KNOB, |s| {
+        use metrics::controls::{SLIDER_HALO_ALPHA, SLIDER_HALO_RADIUS, SLIDER_KNOB_RADIUS};
+        let a = s.t.colors.accent;
+        record(&[
+            ("size", px(SLIDER_KNOB_RADIUS * 2.0)),
+            ("color", color(a)),
+            ("halo", color(alpha(a, SLIDER_HALO_ALPHA))),
+            ("halo_size", px(SLIDER_HALO_RADIUS * 2.0)),
+        ])
+    }),
+    row("switch", SWITCH, |s| {
+        use metrics::controls::{SWITCH_H, SWITCH_KNOB_RADIUS, SWITCH_W};
+        let c = &s.t.colors;
+        record(&[
+            ("width", px(SWITCH_W)),
+            ("height", px(SWITCH_H)),
+            ("knob_size", px(SWITCH_KNOB_RADIUS * 2.0)),
+            ("off", color(c.border)),
+            ("on", color(c.accent)),
+            ("knob", color(c.surface)),
+            ("knob_on", color(c.on_accent)),
+        ])
+    }),
     todo(
         "scrollbar",
         Kind::Record(&[("width", SIZE), ("color", Kind::Color), ("radius", SIZE)]),
     ),
-    todo("card", Kind::Surface),
-    todo("popover", Kind::Surface),
-    todo("menu", Kind::Surface),
-    todo(
-        "toast",
-        Kind::Record(&[
-            ("background", Kind::Fill),
-            ("color", Kind::Color),
-            ("radius", Kind::Radius),
-            ("font", Kind::Font),
-            ("min_height", SIZE),
-            ("padding", Kind::Spacing),
-        ]),
-    ),
-    todo(
-        "tooltip",
-        Kind::Record(&[
-            ("background", Kind::Fill),
-            ("color", Kind::Color),
-            ("radius", Kind::Radius),
-            ("font", Kind::Font),
-            ("padding", Kind::Spacing),
-        ]),
-    ),
+    row("card", Kind::Surface, |s| {
+        Value::Surface(Surface {
+            background: Fill::color(s.t.colors.surface),
+            radius: Radius::all(s.t.shape.card_radius),
+            ..s.bare()
+        })
+    }),
+    // The headings over Settings' and About's cards (DGMNB's STRONG).
+    row("card.heading", Kind::Text, |s| {
+        s.raised_text(&s.t.text.strong, s.t.colors.fg)
+    }),
+    row("popover", Kind::Surface, |s| {
+        Value::Surface(Surface {
+            background: Fill::color(s.t.colors.surface),
+            border: s.line(),
+            shadow: s.rings(),
+            radius: Radius::all(s.t.shape.card_radius),
+            padding: Spacing::all(metrics::controls::LIST_POPUP_PAD),
+            margin: Spacing::default(),
+        })
+    }),
+    row("menu", Kind::Surface, |s| {
+        let popover = match s.get("popover") {
+            Value::Surface(p) => p.clone(),
+            _ => s.bare(),
+        };
+        Value::Surface(Surface {
+            radius: Radius::all(metrics::shape::MENU_RADIUS),
+            ..popover
+        })
+    }),
+    row("toast", TOAST, |s| {
+        use metrics::toast;
+        let c = &s.t.colors;
+        record(&[
+            (
+                "background",
+                Value::Fill(Fill::color(alpha(c.fg, toast::ALPHA))),
+            ),
+            ("color", color(c.bg)),
+            (
+                "radius",
+                Value::Radius(Radius::all(metrics::shape::TOAST_RADIUS)),
+            ),
+            ("font", Value::Font(s.t.text.body.clone())),
+            ("min_height", px(toast::MIN_HEIGHT)),
+            ("padding", spacing(0.0, toast::PAD_X, 0.0, toast::PAD_X)),
+        ])
+    }),
+    row("tooltip", TOOLTIP, |s| {
+        let c = &s.t.colors;
+        record(&[
+            (
+                "background",
+                Value::Fill(Fill::color(alpha(c.fg, metrics::toast::ALPHA))),
+            ),
+            ("color", color(c.bg)),
+            ("radius", Value::Radius(Radius::all(s.t.shape.row_radius))),
+            ("font", Value::Font(s.t.text.small.clone())),
+            ("padding", spacing(4.0, 8.0, 4.0, 8.0)),
+        ])
+    }),
     // -- Display (the readout).
     row("display.background", Kind::Fill, |s| {
         Value::Fill(Fill::color(s.text_scrim()))
@@ -585,15 +822,17 @@ pub static ROWS: &[Row] = &[
             s.t.text.key.clone(),
         )
     }),
-    todo(
-        "keys.pad",
-        Kind::Record(&[
-            ("gap", SIZE),
-            ("radius", Kind::Radius),
-            ("min_height", SIZE),
-            ("font", Kind::Font),
-        ]),
-    ),
+    row("keys.pad", KEYS_PAD, |s| {
+        // The pad's keys are set in their classes' own fonts; a theme's
+        // font here (anything other than this) is used for all of them.
+        let font = s.control_at("keys.func").font;
+        record(&[
+            ("gap", px(metrics::graph::PAD_GAP)),
+            ("radius", Value::Radius(Radius::all(s.t.shape.radius))),
+            ("min_height", px(0.0)),
+            ("font", Value::Font(font)),
+        ])
+    }),
     // -- History and memory panel.
     todo("panel", Kind::Surface),
     todo("panel.sheet", Kind::Surface),
@@ -625,29 +864,87 @@ pub static ROWS: &[Row] = &[
     todo("programmer.bit", Kind::Control),
     todo("programmer.bit_index", Kind::Text),
     // -- Date page.
-    todo("date.label", Kind::Text),
-    todo("date.field", Kind::Control),
-    todo("date.result_panel", Kind::Surface),
-    todo("date.result", SIZE_FONT),
-    todo("date.add_result", SIZE_FONT),
-    todo("date.subresult", Kind::Text),
-    todo("date.calendar.title", Kind::Text),
-    todo("date.calendar.weekday", Kind::Text),
-    todo("date.calendar.day", Kind::Control),
-    todo("date.calendar.other_month", Kind::Color),
-    todo("date.calendar.today", Kind::Opt(&Kind::Border)),
-    todo("date.calendar.focus", Kind::FocusRing),
+    row("date.label", Kind::Text, |s| {
+        s.text(&s.t.text.caption, s.t.colors.fg_dim)
+    }),
+    row("date.field", Kind::Control, |s| {
+        let c = &s.t.colors;
+        Value::Control(Box::new(Control {
+            background: Fill::color(c.surface2),
+            min_height: metrics::date::FIELD_H,
+            padding: Spacing::vh(0.0, metrics::controls::BUTTON_PAD_X),
+            // Lit while its calendar is open.
+            checked: State::filled(c.accent, c.on_accent),
+            ..s.control(&s.t.text.body)
+        }))
+    }),
+    row("date.result_panel", Kind::Surface, |s| {
+        Value::Surface(s.bare())
+    }),
+    row("date.result", SIZE_FONT, |s| {
+        let font = s.sized(metrics::text::DATE_RESULT);
+        record(&[("size", px(font.size)), ("font", Value::Font(font))])
+    }),
+    row("date.add_result", SIZE_FONT, |s| {
+        let font = s.sized(metrics::text::DATE_RESULT);
+        record(&[("size", px(font.size)), ("font", Value::Font(font))])
+    }),
+    row("date.subresult", Kind::Text, |s| {
+        s.text(&s.t.text.body, s.t.colors.fg_dim)
+    }),
+    row("date.calendar.title", Kind::Text, |s| {
+        s.raised_text(&s.t.text.strong, s.t.colors.fg)
+    }),
+    row("date.calendar.weekday", Kind::Text, |s| {
+        s.raised_text(&s.t.text.caption, s.t.colors.fg_dim)
+    }),
+    row("date.calendar.day", Kind::Control, |s| {
+        let c = &s.t.colors;
+        Value::Control(Box::new(Control {
+            radius: Radius::all(ROUND),
+            checked: State::filled(c.accent, c.on_accent),
+            ..s.control(&s.t.text.small)
+        }))
+    }),
+    row("date.calendar.other_month", Kind::Color, |s| {
+        color(s.t.colors.fg_faint)
+    }),
+    row("date.calendar.today", Kind::Opt(&Kind::Border), |s| {
+        Value::Border(Border {
+            width: metrics::date::TODAY_BORDER,
+            color: s.t.colors.accent_text,
+        })
+    }),
+    row("date.calendar.focus", Kind::FocusRing, |s| {
+        s.get("focus").clone()
+    }),
     // -- Converter.
-    todo("converter.field", Kind::Control),
-    todo(
+    row("converter.field", Kind::Control, |s| {
+        Value::Control(Box::new(Control {
+            radius: Radius::all(0.0),
+            // DGMNB draws nothing under the pointer or pressed.
+            hover: State::default(),
+            active: State::default(),
+            ..s.control(&s.t.text.body)
+        }))
+    }),
+    row(
         "converter.marker",
         Kind::Opt(&Kind::Record(&[
             ("color", Kind::Color),
             ("width", SIZE),
             ("height", SIZE),
         ])),
+        |s| {
+            use metrics::converter::{MARKER_H, MARKER_W};
+            record(&[
+                ("color", color(s.t.colors.accent)),
+                ("width", px(MARKER_W)),
+                ("height", px(MARKER_H)),
+            ])
+        },
     ),
-    todo(
+    row(
         "converter.value",
         Kind::Record(&[
             ("size", FONT_SIZE),
@@ -655,77 +952,250 @@ pub static ROWS: &[Row] = &[
             ("checked_weight", Kind::Num(1.0, 1000.0)),
             ("focus", Kind::FocusRing),
         ]),
+        |s| {
+            use metrics::text::{CONVERTER_VALUE, CONVERTER_VALUE_CHECKED_WEIGHT};
+            let font = Font {
+                family: s.t.fonts.display.clone(),
+                ..s.sized(CONVERTER_VALUE)
+            }
+            .with_features(&["tnum"]);
+            record(&[
+                ("size", px(font.size)),
+                ("font", Value::Font(font)),
+                ("checked_weight", px(CONVERTER_VALUE_CHECKED_WEIGHT)),
+                ("focus", s.get("focus").clone()),
+            ])
+        },
     ),
-    todo("converter.symbol", Kind::Text),
-    todo("converter.unit", Kind::Control),
-    todo("converter.swap", Kind::Control),
-    todo("converter.caption", Kind::Text),
-    todo("converter.chip", Kind::Control),
-    todo("converter.whimsy", Kind::State),
-    todo("converter.whimsy_icon", Kind::Bool),
-    todo("converter.ratio", Kind::Text),
-    todo("converter.timestamp", Kind::Text),
-    todo("converter.link", Kind::Control),
+    row("converter.symbol", Kind::Text, |s| {
+        s.text(&s.sized(metrics::text::CONVERTER_SYMBOL), s.t.colors.fg_dim)
+    }),
+    row("converter.unit", Kind::Control, |s| {
+        let c = &s.t.colors;
+        Value::Control(Box::new(Control {
+            background: Fill::color(c.surface2),
+            min_height: metrics::converter::UNIT_H,
+            padding: Spacing::vh(0.0, metrics::controls::BUTTON_PAD_X),
+            // Lit while its list is open.
+            checked: State::filled(c.accent, c.on_accent),
+            ..s.control(&s.t.text.body)
+        }))
+    }),
+    row("converter.swap", Kind::Control, |s| {
+        s.icon_button(metrics::controls::ICON_BUTTON)
+    }),
+    row("converter.caption", Kind::Text, |s| {
+        s.text(&s.t.text.caption, s.t.colors.fg_dim)
+    }),
+    row("converter.whimsy", Kind::State, |_| {
+        Value::State(State::default())
+    }),
+    // A chip's `checked` is the whimsy (the playful comparison): the
+    // stylesheet reads it as the chip's checked state.
+    row("converter.chip", Kind::Control, |s| {
+        use metrics::converter::{CHIP_H, CHIP_PAD_X};
+        Value::Control(Box::new(Control {
+            background: Fill::color(s.t.colors.surface2),
+            radius: Radius::all(metrics::shape::CHIP_RADIUS),
+            min_height: CHIP_H,
+            padding: Spacing::vh(0.0, CHIP_PAD_X),
+            // A label: nothing under the pointer or pressed.
+            hover: State::default(),
+            active: State::default(),
+            checked: s.state("converter.whimsy"),
+            ..s.control(&s.t.text.small)
+        }))
+    }),
+    row("converter.whimsy_icon", Kind::Bool, |_| Value::Bool(false)),
+    row("converter.ratio", Kind::Text, |s| {
+        s.text(&s.t.text.small, s.t.colors.fg)
+    }),
+    row("converter.timestamp", Kind::Text, |s| {
+        s.text(&s.t.text.small, s.t.colors.fg_dim)
+    }),
+    row("converter.link", Kind::Control, |s| {
+        // "Update rates": a plain button in DGMNB's small text.
+        Value::Control(Box::new(Control {
+            padding: Spacing::vh(0.0, metrics::controls::BUTTON_PAD_X),
+            ..s.control(&s.t.text.small)
+        }))
+    }),
     // -- Graphing.
-    todo("graph.side", Kind::Surface),
-    todo("graph.divider", Kind::Opt(&Kind::Color)),
-    todo("graph.row", Kind::Surface),
-    todo("graph.row_error", Kind::State),
-    todo("graph.entry", Kind::Field),
-    todo("graph.row_button", Kind::Control),
-    todo("graph.error", Kind::Text),
-    todo("graph.swatch.size", SIZE),
-    todo("graph.swatch.hidden_opacity", UNIT),
-    todo(
+    row("graph.side", Kind::Surface, |s| Value::Surface(s.bare())),
+    row("graph.divider", Kind::Opt(&Kind::Color), |s| {
+        color(s.t.colors.border)
+    }),
+    row("graph.row", Kind::Surface, |s| {
+        Value::Surface(Surface {
+            padding: Spacing::vh(metrics::graph::ROW_FIELD_Y, 0.0),
+            ..s.bare()
+        })
+    }),
+    row("graph.row_error", Kind::State, |_| {
+        Value::State(State::default())
+    }),
+    row("graph.entry", Kind::Field, |s| match s.get("field") {
+        Value::Field(f) => Value::Field(Box::new(Field {
+            min_height: metrics::graph::ROW_FIELD_H,
+            ..(**f).clone()
+        })),
+        other => other.clone(),
+    }),
+    row("graph.row_button", Kind::Control, |s| {
+        s.icon_button(metrics::graph::ROW_BUTTON)
+    }),
+    row("graph.error", Kind::Text, |s| {
+        s.text(&s.t.text.caption, s.t.colors.danger)
+    }),
+    row("graph.swatch.size", SIZE, |_| {
+        px(metrics::graph::SWATCH_RADIUS * 2.0)
+    }),
+    row("graph.swatch.hidden_opacity", UNIT, |_| {
+        px(metrics::graph::SWATCH_HIDDEN_ALPHA)
+    }),
+    row(
         "graph.swatch.glow",
         Kind::Opt(&Kind::Record(&[
             ("blur", Kind::Px(0.0, 100.0)),
             ("spread", Kind::Px(-1000.0, 1000.0)),
         ])),
+        |_| Value::Absent,
     ),
-    todo("graph.swatch.active_scale", Kind::Num(0.0, 4.0)),
-    todo("graph.swatch.transition", Kind::Transition),
-    todo("graph.add", Kind::Control),
-    todo("graph.variable", Kind::Text),
-    todo("graph.analysis.title", Kind::Text),
-    todo("graph.analysis.card", Kind::Surface),
-    todo("graph.analysis.card_title", Kind::Text),
-    todo("graph.analysis.value", Kind::Text),
-    todo("graph.analysis.text", Kind::Text),
-    todo("graph.analysis.note", Kind::Text),
-    todo("graph.toolbar", Kind::Surface),
-    todo("graph.toolbar_button", Kind::Control),
-    todo("graph.canvas.background", Kind::Paint),
-    todo("graph.canvas.radius", SIZE),
-    todo("graph.canvas.border", Kind::Opt(&Kind::Border)),
-    todo("graph.canvas.grid_minor", Kind::Color),
-    todo("graph.canvas.grid_major", Kind::Color),
-    todo(
+    row("graph.swatch.active_scale", Kind::Num(0.0, 4.0), |_| {
+        px(1.0)
+    }),
+    row("graph.swatch.transition", Kind::Transition, |_| {
+        Value::Transition(Transition::default())
+    }),
+    row("graph.add", Kind::Control, |s| {
+        Value::Control(Box::new(Control {
+            min_height: metrics::graph::ADD_H,
+            padding: Spacing::vh(0.0, metrics::controls::BUTTON_PAD_X),
+            ..s.control(&s.t.text.body)
+        }))
+    }),
+    row("graph.variables", Kind::Text, |s| {
+        s.text(&s.t.text.strong, s.t.colors.fg)
+    }),
+    row("graph.variable", Kind::Text, |s| {
+        s.text(&s.sized(metrics::text::GRAPH_VARIABLE), s.t.colors.fg)
+    }),
+    row("graph.analysis.title", Kind::Text, |s| {
+        s.text(&s.sized(metrics::text::ANALYSIS_TITLE), s.t.colors.fg)
+    }),
+    row("graph.analysis.card", Kind::Surface, |s| {
+        Value::Surface(Surface {
+            border: s.line(),
+            radius: Radius::all(metrics::shape::ANALYSIS_CARD_RADIUS),
+            padding: Spacing::vh(
+                metrics::graph::ANALYSIS_CARD_BOTTOM,
+                metrics::graph::ANALYSIS_CARD_X,
+            ),
+            ..s.bare()
+        })
+    }),
+    row("graph.analysis.card_title", Kind::Text, |s| {
+        s.text(&s.t.text.caption, s.t.colors.fg_dim)
+    }),
+    row("graph.analysis.value", Kind::Text, |s| {
+        s.text(&s.t.text.body, s.t.colors.fg)
+    }),
+    row("graph.analysis.text", Kind::Text, |s| {
+        s.text(&s.t.text.small, s.t.colors.fg)
+    }),
+    row("graph.analysis.note", Kind::Text, |s| {
+        s.text(&s.t.text.caption, s.t.colors.fg_dim)
+    }),
+    row("graph.toolbar", Kind::Surface, |s| {
+        use metrics::graph::{
+            TOOLBAR_BUTTON, TOOLBAR_FILL_ALPHA, TOOLBAR_PAD_X, TOOLBAR_PAD_Y, TOOLBAR_STEP,
+        };
+        // The buttons are 34 apart by 36: the last one's 2 are left below
+        // it, with the padding.
+        let bottom = TOOLBAR_PAD_Y + TOOLBAR_STEP - TOOLBAR_BUTTON;
+        Value::Surface(Surface {
+            background: Fill::color(alpha(s.t.colors.surface2, TOOLBAR_FILL_ALPHA)),
+            radius: Radius::all(metrics::shape::TOOLBAR_RADIUS),
+            padding: Spacing::trbl(TOOLBAR_PAD_Y, TOOLBAR_PAD_X, bottom, TOOLBAR_PAD_X),
+            ..s.bare()
+        })
+    }),
+    row("graph.toolbar_button", Kind::Control, |s| {
+        s.icon_button(metrics::graph::TOOLBAR_BUTTON)
+    }),
+    row("graph.canvas.background", Kind::Paint, |s| {
+        Value::Paint(Paint::Color(s.t.colors.surface))
+    }),
+    row("graph.canvas.radius", SIZE, |_| {
+        px(metrics::graph::CANVAS_RADIUS)
+    }),
+    row("graph.canvas.border", Kind::Opt(&Kind::Border), |s| {
+        Value::Border(Border {
+            width: metrics::shape::BORDER,
+            color: s.t.colors.border,
+        })
+    }),
+    row("graph.canvas.grid_minor", Kind::Color, |s| {
+        let (dark, light) = metrics::graph::GRID_MINOR_ALPHA;
+        color(alpha(s.t.colors.fg, if s.ctx.dark { dark } else { light }))
+    }),
+    row("graph.canvas.grid_major", Kind::Color, |s| {
+        let (dark, light) = metrics::graph::GRID_MAJOR_ALPHA;
+        color(alpha(s.t.colors.fg, if s.ctx.dark { dark } else { light }))
+    }),
+    row(
         "graph.canvas.axis",
         Kind::Record(&[("color", Kind::Color), ("width", Kind::Px(0.0, 64.0))]),
+        |s| {
+            use metrics::graph::{AXIS_ALPHA, AXIS_WIDTH};
+            record(&[
+                ("color", color(alpha(s.t.colors.fg, AXIS_ALPHA))),
+                ("width", px(AXIS_WIDTH)),
+            ])
+        },
     ),
-    todo("graph.canvas.label", Kind::Text),
-    todo("graph.canvas.fill_opacity", UNIT),
-    todo(
+    row("graph.canvas.label", Kind::Text, |s| {
+        s.text(&s.sized(metrics::text::CANVAS_LABEL), s.t.colors.fg_dim)
+    }),
+    row("graph.canvas.fill_opacity", UNIT, |_| {
+        px(metrics::graph::FILL_OPACITY)
+    }),
+    row(
         "graph.canvas.glow",
         Kind::Opt(&Kind::Record(&[
             ("blur", Kind::Px(0.0, 100.0)),
             ("width", Kind::Num(0.0, 64.0)),
             ("opacity", UNIT),
         ])),
+        |_| Value::Absent,
     ),
-    todo("graph.canvas.trace.hair_opacity", UNIT),
-    todo("graph.canvas.trace.hair_dash", Kind::Opt(&Kind::Dash)),
-    todo(
+    row("graph.canvas.trace.hair_opacity", UNIT, |_| {
+        px(metrics::graph::HAIR_OPACITY)
+    }),
+    row(
+        "graph.canvas.trace.hair_dash",
+        Kind::Opt(&Kind::Dash),
+        |_| Value::Absent,
+    ),
+    row(
         "graph.canvas.trace.halo",
         Kind::Opt(&Kind::Record(&[
             ("grow", Kind::Px(0.0, 64.0)),
             ("color", Kind::ColorOr("series")),
             ("opacity", UNIT),
         ])),
+        |s| {
+            record(&[
+                ("grow", px(metrics::graph::TRACE_HALO_GROW)),
+                ("color", color(s.t.colors.surface)),
+                ("opacity", px(1.0)),
+            ])
+        },
     ),
-    todo("graph.canvas.trace.ring", Kind::Opt(&Kind::Border)),
-    todo(
+    row("graph.canvas.trace.ring", Kind::Opt(&Kind::Border), |_| {
+        Value::Absent
+    }),
+    row(
         "graph.canvas.trace.bubble",
         Kind::Record(&[
             ("background", Kind::Color),
@@ -735,6 +1205,23 @@ pub static ROWS: &[Row] = &[
             ("border", Kind::Opt(&Kind::Border)),
             ("shadow", Kind::Shadows),
         ]),
+        |s| {
+            let c = &s.t.colors;
+            record(&[
+                ("background", color(c.surface)),
+                ("color", color(c.fg)),
+                ("radius", px(metrics::shape::BUBBLE_RADIUS)),
+                ("font", Value::Font(s.t.text.small.clone())),
+                (
+                    "border",
+                    Value::Border(Border {
+                        width: metrics::shape::BORDER,
+                        color: c.border,
+                    }),
+                ),
+                ("shadow", Value::Shadows(s.rings())),
+            ])
+        },
     ),
 ];
 
