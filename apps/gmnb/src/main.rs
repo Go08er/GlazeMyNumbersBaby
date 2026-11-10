@@ -428,6 +428,79 @@ mod tests {
         );
     }
 
+    /// How wide Pango sets `text` in `family` at 40 px, from the font map
+    /// the app registers fonts in.
+    fn width_in(family: &str, text: &str) -> i32 {
+        use pango::prelude::*;
+        let map = pangocairo::FontMap::default();
+        let context = map.create_context();
+        let layout = pango::Layout::new(&context);
+        layout.set_font_description(Some(&pango::FontDescription::from_string(&format!(
+            "{family} 30px"
+        ))));
+        layout.set_text(text);
+        layout.pixel_size().0
+    }
+
+    /// A theme's font that is named like the base look's ("Inter Variable")
+    /// stayed registered once the theme was left, and Pango set the base
+    /// look's text in it (fontconfig picks among files of one family).
+    #[test]
+    fn a_theme_font_named_like_the_base_looks_does_not_replace_it() {
+        let dir = std::env::temp_dir().join(format!("gmnb-fonts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Signs both fonts have, set differently by each.
+        let text = "\u{2264}\u{2265}\u{221a}\u{2217}\u{2205}\u{2208}\u{2219}";
+        // The base look's font, as `register_fonts` adds it.
+        let inter = super::cache_font("Inter-test.ttf", super::INTER).unwrap();
+        super::add_font_file(&inter);
+        let before = width_in("Inter Variable", text);
+        // A theme's font with Inter's family name: Noto Sans Math's file,
+        // its name patched (both are 14 characters long).
+        let mut bytes = include_bytes!("../../dgmnb/assets/fonts/NotoSansMath-subset.otf").to_vec();
+        for (from, to) in [
+            (b"Noto Sans Math".to_vec(), b"Inter Variable".to_vec()),
+            (
+                "Noto Sans Math"
+                    .encode_utf16()
+                    .flat_map(u16::to_be_bytes)
+                    .collect(),
+                "Inter Variable"
+                    .encode_utf16()
+                    .flat_map(u16::to_be_bytes)
+                    .collect(),
+            ),
+        ] {
+            let mut at = 0;
+            while let Some(i) = bytes[at..].windows(from.len()).position(|w| w == from) {
+                bytes[at + i..at + i + to.len()].copy_from_slice(&to);
+                at += i + to.len();
+            }
+        }
+        // Its version is the newest there is (`head.fontRevision`), the
+        // likeliest to be taken over the base look's file.
+        let tables = u16::from_be_bytes([bytes[4], bytes[5]]) as usize;
+        for i in 0..tables {
+            let record = 12 + 16 * i;
+            if &bytes[record..record + 4] == b"head" {
+                let at = u32::from_be_bytes(bytes[record + 8..record + 12].try_into().unwrap());
+                let at = at as usize + 4;
+                bytes[at..at + 4].copy_from_slice(&0x7fff_0000u32.to_be_bytes());
+            }
+        }
+        let other = dir.join("theme-inter.otf");
+        std::fs::write(&other, &bytes).unwrap();
+        // What `register_fonts` does when a theme is loaded.
+        super::add_font_file(&other);
+        let after = width_in("Inter Variable", text);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            before, after,
+            "the base look's text is set in the theme's font"
+        );
+    }
+
     /// GMNB depends on the theme engine before the theme API uses it, so
     /// that every package build already compiles its C++ (Luau): here it
     /// links, a theme file's table comes back and its hook runs.
