@@ -1268,6 +1268,671 @@ button.wc-key.wc-eq:checked:disabled pathicon {
 }
 /* end control */
 
+/* A short keypad's keys (keys.short; the keypad decides it from its
+   height, keypad.rs): each class again, under `keypad.wc-short`, which
+   outranks every rule above for the same state. */
+/* control keys.short.number keypad.wc-short+button.wc-key.wc-num active=.wc-flash,.keyboard-activating icon=pathicon */
+keypad.wc-short button.wc-key.wc-num {
+  background-color: var(--gmnb-keys-short-number-background-color);
+  background-image: var(--gmnb-keys-short-number-background-image);
+  color: var(--gmnb-keys-short-number-color);
+  box-shadow: var(--gmnb-keys-short-number-shadow);
+  opacity: var(--gmnb-keys-short-number-opacity);
+  filter: var(--gmnb-keys-short-number-filter);
+  transform: var(--gmnb-keys-short-number-transform);
+  transition: var(--gmnb-keys-short-number-transition);
+  border-radius: var(--gmnb-keys-short-number-radius);
+  padding: var(--gmnb-keys-short-number-padding);
+  margin: var(--gmnb-keys-short-number-margin);
+  min-width: var(--gmnb-keys-short-number-min-width);
+  min-height: var(--gmnb-keys-short-number-min-height);
+  font-family: var(--gmnb-keys-short-number-font-family);
+  font-size: var(--gmnb-keys-short-number-font-size);
+  font-weight: var(--gmnb-keys-short-number-font-weight);
+  font-style: var(--gmnb-keys-short-number-font-style);
+  letter-spacing: var(--gmnb-keys-short-number-letter-spacing);
+  font-feature-settings: var(--gmnb-keys-short-number-font-features);
+  font-variation-settings: var(--gmnb-keys-short-number-font-variations);
+}
+keypad.wc-short button.wc-key.wc-num pathicon {
+  color: var(--gmnb-keys-short-number-icon-color);
+}
+keypad.wc-short button.wc-key.wc-num:hover {
+  background-color: var(--gmnb-keys-short-number-hover-background-color);
+  background-image: var(--gmnb-keys-short-number-hover-background-image);
+  color: var(--gmnb-keys-short-number-hover-color);
+  box-shadow: var(--gmnb-keys-short-number-hover-shadow);
+  opacity: var(--gmnb-keys-short-number-hover-opacity);
+  filter: var(--gmnb-keys-short-number-hover-filter);
+  transform: var(--gmnb-keys-short-number-hover-transform);
+  transition: var(--gmnb-keys-short-number-hover-transition);
+  font-weight: var(--gmnb-keys-short-number-hover-font-weight);
+}
+keypad.wc-short button.wc-key.wc-num:hover pathicon {
+  color: var(--gmnb-keys-short-number-hover-icon-color);
+}
+keypad.wc-short button.wc-key.wc-num:active,
+keypad.wc-short button.wc-key.wc-num.wc-flash,
+keypad.wc-short button.wc-key.wc-num.keyboard-activating {
+  background-color: var(--gmnb-keys-short-number-active-background-color);
+  background-image: var(--gmnb-keys-short-number-active-background-image);
+  color: var(--gmnb-keys-short-number-active-color);
+  box-shadow: var(--gmnb-keys-short-number-active-shadow);
+  opacity: var(--gmnb-keys-short-number-active-opacity);
+  filter: var(--gmnb-keys-short-number-active-filter);
+  transform: var(--gmnb-keys-short-number-active-transform);
+  transition: var(--gmnb-keys-short-number-active-transition);
+  font-weight: var(--gmnb-keys-short-number-active-font-weight);
+}
+keypad.wc-short button.wc-key.wc-num:active pathicon,
+keypad.wc-short button.wc-key.wc-num.wc-flash pathicon,
+keypad.wc-short button.wc-key.wc-num.keyboard-activating pathicon {
+  color: var(--gmnb-keys-short-number-active-icon-color);
+}
+keypad.wc-short button.wc-key.wc-num:checked {
+  background-color: var(--gmnb-keys-short-number-checked-background-color);
+  background-image: var(--gmnb-keys-short-number-checked-background-image);
+  color: var(--gmnb-keys-short-number-checked-color);
+  box-shadow: var(--gmnb-keys-short-number-checked-shadow);
+  opacity: var(--gmnb-keys-short-number-checked-opacity);
+  filter: var(--gmnb-keys-short-number-checked-filter);
+  transform: var(--gmnb-keys-short-number-checked-transform);
+  transition: var(--gmnb-keys-short-number-checked-transition);
+  font-weight: var(--gmnb-keys-short-number-checked-font-weight);
+}
+keypad.wc-short button.wc-key.wc-num:checked pathicon {
+  color: var(--gmnb-keys-short-number-checked-icon-color);
+}
+keypad.wc-short button.wc-key.wc-num:checked:hover {
+  background-color: var(--gmnb-keys-short-number-checked-hover-background-color);
+  background-image: var(--gmnb-keys-short-number-checked-hover-background-image);
+  color: var(--gmnb-keys-short-number-checked-hover-color);
+  box-shadow: var(--gmnb-keys-short-number-checked-hover-shadow);
+  opacity: var(--gmnb-keys-short-number-checked-hover-opacity);
+  filter: var(--gmnb-keys-short-number-checked-hover-filter);
+  transform: var(--gmnb-keys-short-number-checked-hover-transform);
+  transition: var(--gmnb-keys-short-number-checked-hover-transition);
+  font-weight: var(--gmnb-keys-short-number-checked-hover-font-weight);
+}
+keypad.wc-short button.wc-key.wc-num:checked:hover pathicon {
+  color: var(--gmnb-keys-short-number-checked-hover-icon-color);
+}
+keypad.wc-short button.wc-key.wc-num:checked:active,
+keypad.wc-short button.wc-key.wc-num:checked.wc-flash,
+keypad.wc-short button.wc-key.wc-num:checked.keyboard-activating {
+  background-color: var(--gmnb-keys-short-number-checked-active-background-color);
+  background-image: var(--gmnb-keys-short-number-checked-active-background-image);
+  color: var(--gmnb-keys-short-number-checked-active-color);
+  box-shadow: var(--gmnb-keys-short-number-checked-active-shadow);
+  opacity: var(--gmnb-keys-short-number-checked-active-opacity);
+  filter: var(--gmnb-keys-short-number-checked-active-filter);
+  transform: var(--gmnb-keys-short-number-checked-active-transform);
+  transition: var(--gmnb-keys-short-number-checked-active-transition);
+  font-weight: var(--gmnb-keys-short-number-checked-active-font-weight);
+}
+keypad.wc-short button.wc-key.wc-num:checked:active pathicon,
+keypad.wc-short button.wc-key.wc-num:checked.wc-flash pathicon,
+keypad.wc-short button.wc-key.wc-num:checked.keyboard-activating pathicon {
+  color: var(--gmnb-keys-short-number-checked-active-icon-color);
+}
+keypad.wc-short button.wc-key.wc-num:disabled {
+  background-color: var(--gmnb-keys-short-number-disabled-background-color);
+  background-image: var(--gmnb-keys-short-number-disabled-background-image);
+  color: var(--gmnb-keys-short-number-disabled-color);
+  box-shadow: var(--gmnb-keys-short-number-disabled-shadow);
+  opacity: var(--gmnb-keys-short-number-disabled-opacity);
+  filter: var(--gmnb-keys-short-number-disabled-filter);
+  transform: var(--gmnb-keys-short-number-disabled-transform);
+  transition: var(--gmnb-keys-short-number-disabled-transition);
+  font-weight: var(--gmnb-keys-short-number-disabled-font-weight);
+}
+keypad.wc-short button.wc-key.wc-num:disabled pathicon {
+  color: var(--gmnb-keys-short-number-disabled-icon-color);
+}
+keypad.wc-short button.wc-key.wc-num:checked:disabled {
+  background-color: var(--gmnb-keys-short-number-checked-disabled-background-color);
+  background-image: var(--gmnb-keys-short-number-checked-disabled-background-image);
+  color: var(--gmnb-keys-short-number-checked-disabled-color);
+  box-shadow: var(--gmnb-keys-short-number-checked-disabled-shadow);
+  opacity: var(--gmnb-keys-short-number-checked-disabled-opacity);
+  filter: var(--gmnb-keys-short-number-checked-disabled-filter);
+  transform: var(--gmnb-keys-short-number-checked-disabled-transform);
+  transition: var(--gmnb-keys-short-number-checked-disabled-transition);
+  font-weight: var(--gmnb-keys-short-number-checked-disabled-font-weight);
+}
+keypad.wc-short button.wc-key.wc-num:checked:disabled pathicon {
+  color: var(--gmnb-keys-short-number-checked-disabled-icon-color);
+}
+.wc-inert keypad.wc-short button.wc-key.wc-num:disabled:not(.wc-off) {
+  background-color: var(--gmnb-keys-short-number-background-color);
+  background-image: var(--gmnb-keys-short-number-background-image);
+  color: var(--gmnb-keys-short-number-color);
+  box-shadow: var(--gmnb-keys-short-number-shadow);
+  opacity: var(--gmnb-keys-short-number-opacity);
+  filter: var(--gmnb-keys-short-number-filter);
+  transform: var(--gmnb-keys-short-number-transform);
+  transition: var(--gmnb-keys-short-number-transition);
+  font-weight: var(--gmnb-keys-short-number-font-weight);
+}
+.wc-inert keypad.wc-short button.wc-key.wc-num:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-keys-short-number-icon-color);
+}
+.wc-inert keypad.wc-short button.wc-key.wc-num:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-keys-short-number-checked-background-color);
+  background-image: var(--gmnb-keys-short-number-checked-background-image);
+  color: var(--gmnb-keys-short-number-checked-color);
+  box-shadow: var(--gmnb-keys-short-number-checked-shadow);
+  opacity: var(--gmnb-keys-short-number-checked-opacity);
+  filter: var(--gmnb-keys-short-number-checked-filter);
+  transform: var(--gmnb-keys-short-number-checked-transform);
+  transition: var(--gmnb-keys-short-number-checked-transition);
+  font-weight: var(--gmnb-keys-short-number-checked-font-weight);
+}
+.wc-inert keypad.wc-short button.wc-key.wc-num:checked:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-keys-short-number-checked-icon-color);
+}
+/* end control */
+
+/* control keys.short.func keypad.wc-short+button.wc-key.wc-fn active=.wc-flash,.keyboard-activating checked=:checked,.wc-on icon=pathicon */
+keypad.wc-short button.wc-key.wc-fn {
+  background-color: var(--gmnb-keys-short-func-background-color);
+  background-image: var(--gmnb-keys-short-func-background-image);
+  color: var(--gmnb-keys-short-func-color);
+  box-shadow: var(--gmnb-keys-short-func-shadow);
+  opacity: var(--gmnb-keys-short-func-opacity);
+  filter: var(--gmnb-keys-short-func-filter);
+  transform: var(--gmnb-keys-short-func-transform);
+  transition: var(--gmnb-keys-short-func-transition);
+  border-radius: var(--gmnb-keys-short-func-radius);
+  padding: var(--gmnb-keys-short-func-padding);
+  margin: var(--gmnb-keys-short-func-margin);
+  min-width: var(--gmnb-keys-short-func-min-width);
+  min-height: var(--gmnb-keys-short-func-min-height);
+  font-family: var(--gmnb-keys-short-func-font-family);
+  font-size: var(--gmnb-keys-short-func-font-size);
+  font-weight: var(--gmnb-keys-short-func-font-weight);
+  font-style: var(--gmnb-keys-short-func-font-style);
+  letter-spacing: var(--gmnb-keys-short-func-letter-spacing);
+  font-feature-settings: var(--gmnb-keys-short-func-font-features);
+  font-variation-settings: var(--gmnb-keys-short-func-font-variations);
+}
+keypad.wc-short button.wc-key.wc-fn pathicon {
+  color: var(--gmnb-keys-short-func-icon-color);
+}
+keypad.wc-short button.wc-key.wc-fn:hover {
+  background-color: var(--gmnb-keys-short-func-hover-background-color);
+  background-image: var(--gmnb-keys-short-func-hover-background-image);
+  color: var(--gmnb-keys-short-func-hover-color);
+  box-shadow: var(--gmnb-keys-short-func-hover-shadow);
+  opacity: var(--gmnb-keys-short-func-hover-opacity);
+  filter: var(--gmnb-keys-short-func-hover-filter);
+  transform: var(--gmnb-keys-short-func-hover-transform);
+  transition: var(--gmnb-keys-short-func-hover-transition);
+  font-weight: var(--gmnb-keys-short-func-hover-font-weight);
+}
+keypad.wc-short button.wc-key.wc-fn:hover pathicon {
+  color: var(--gmnb-keys-short-func-hover-icon-color);
+}
+keypad.wc-short button.wc-key.wc-fn:active,
+keypad.wc-short button.wc-key.wc-fn.wc-flash,
+keypad.wc-short button.wc-key.wc-fn.keyboard-activating {
+  background-color: var(--gmnb-keys-short-func-active-background-color);
+  background-image: var(--gmnb-keys-short-func-active-background-image);
+  color: var(--gmnb-keys-short-func-active-color);
+  box-shadow: var(--gmnb-keys-short-func-active-shadow);
+  opacity: var(--gmnb-keys-short-func-active-opacity);
+  filter: var(--gmnb-keys-short-func-active-filter);
+  transform: var(--gmnb-keys-short-func-active-transform);
+  transition: var(--gmnb-keys-short-func-active-transition);
+  font-weight: var(--gmnb-keys-short-func-active-font-weight);
+}
+keypad.wc-short button.wc-key.wc-fn:active pathicon,
+keypad.wc-short button.wc-key.wc-fn.wc-flash pathicon,
+keypad.wc-short button.wc-key.wc-fn.keyboard-activating pathicon {
+  color: var(--gmnb-keys-short-func-active-icon-color);
+}
+keypad.wc-short button.wc-key.wc-fn:checked,
+keypad.wc-short button.wc-key.wc-fn.wc-on {
+  background-color: var(--gmnb-keys-short-func-checked-background-color);
+  background-image: var(--gmnb-keys-short-func-checked-background-image);
+  color: var(--gmnb-keys-short-func-checked-color);
+  box-shadow: var(--gmnb-keys-short-func-checked-shadow);
+  opacity: var(--gmnb-keys-short-func-checked-opacity);
+  filter: var(--gmnb-keys-short-func-checked-filter);
+  transform: var(--gmnb-keys-short-func-checked-transform);
+  transition: var(--gmnb-keys-short-func-checked-transition);
+  font-weight: var(--gmnb-keys-short-func-checked-font-weight);
+}
+keypad.wc-short button.wc-key.wc-fn:checked pathicon,
+keypad.wc-short button.wc-key.wc-fn.wc-on pathicon {
+  color: var(--gmnb-keys-short-func-checked-icon-color);
+}
+keypad.wc-short button.wc-key.wc-fn:checked:hover,
+keypad.wc-short button.wc-key.wc-fn.wc-on:hover {
+  background-color: var(--gmnb-keys-short-func-checked-hover-background-color);
+  background-image: var(--gmnb-keys-short-func-checked-hover-background-image);
+  color: var(--gmnb-keys-short-func-checked-hover-color);
+  box-shadow: var(--gmnb-keys-short-func-checked-hover-shadow);
+  opacity: var(--gmnb-keys-short-func-checked-hover-opacity);
+  filter: var(--gmnb-keys-short-func-checked-hover-filter);
+  transform: var(--gmnb-keys-short-func-checked-hover-transform);
+  transition: var(--gmnb-keys-short-func-checked-hover-transition);
+  font-weight: var(--gmnb-keys-short-func-checked-hover-font-weight);
+}
+keypad.wc-short button.wc-key.wc-fn:checked:hover pathicon,
+keypad.wc-short button.wc-key.wc-fn.wc-on:hover pathicon {
+  color: var(--gmnb-keys-short-func-checked-hover-icon-color);
+}
+keypad.wc-short button.wc-key.wc-fn:checked:active,
+keypad.wc-short button.wc-key.wc-fn:checked.wc-flash,
+keypad.wc-short button.wc-key.wc-fn:checked.keyboard-activating,
+keypad.wc-short button.wc-key.wc-fn.wc-on:active,
+keypad.wc-short button.wc-key.wc-fn.wc-on.wc-flash,
+keypad.wc-short button.wc-key.wc-fn.wc-on.keyboard-activating {
+  background-color: var(--gmnb-keys-short-func-checked-active-background-color);
+  background-image: var(--gmnb-keys-short-func-checked-active-background-image);
+  color: var(--gmnb-keys-short-func-checked-active-color);
+  box-shadow: var(--gmnb-keys-short-func-checked-active-shadow);
+  opacity: var(--gmnb-keys-short-func-checked-active-opacity);
+  filter: var(--gmnb-keys-short-func-checked-active-filter);
+  transform: var(--gmnb-keys-short-func-checked-active-transform);
+  transition: var(--gmnb-keys-short-func-checked-active-transition);
+  font-weight: var(--gmnb-keys-short-func-checked-active-font-weight);
+}
+keypad.wc-short button.wc-key.wc-fn:checked:active pathicon,
+keypad.wc-short button.wc-key.wc-fn:checked.wc-flash pathicon,
+keypad.wc-short button.wc-key.wc-fn:checked.keyboard-activating pathicon,
+keypad.wc-short button.wc-key.wc-fn.wc-on:active pathicon,
+keypad.wc-short button.wc-key.wc-fn.wc-on.wc-flash pathicon,
+keypad.wc-short button.wc-key.wc-fn.wc-on.keyboard-activating pathicon {
+  color: var(--gmnb-keys-short-func-checked-active-icon-color);
+}
+keypad.wc-short button.wc-key.wc-fn:disabled {
+  background-color: var(--gmnb-keys-short-func-disabled-background-color);
+  background-image: var(--gmnb-keys-short-func-disabled-background-image);
+  color: var(--gmnb-keys-short-func-disabled-color);
+  box-shadow: var(--gmnb-keys-short-func-disabled-shadow);
+  opacity: var(--gmnb-keys-short-func-disabled-opacity);
+  filter: var(--gmnb-keys-short-func-disabled-filter);
+  transform: var(--gmnb-keys-short-func-disabled-transform);
+  transition: var(--gmnb-keys-short-func-disabled-transition);
+  font-weight: var(--gmnb-keys-short-func-disabled-font-weight);
+}
+keypad.wc-short button.wc-key.wc-fn:disabled pathicon {
+  color: var(--gmnb-keys-short-func-disabled-icon-color);
+}
+keypad.wc-short button.wc-key.wc-fn:checked:disabled,
+keypad.wc-short button.wc-key.wc-fn.wc-on:disabled {
+  background-color: var(--gmnb-keys-short-func-checked-disabled-background-color);
+  background-image: var(--gmnb-keys-short-func-checked-disabled-background-image);
+  color: var(--gmnb-keys-short-func-checked-disabled-color);
+  box-shadow: var(--gmnb-keys-short-func-checked-disabled-shadow);
+  opacity: var(--gmnb-keys-short-func-checked-disabled-opacity);
+  filter: var(--gmnb-keys-short-func-checked-disabled-filter);
+  transform: var(--gmnb-keys-short-func-checked-disabled-transform);
+  transition: var(--gmnb-keys-short-func-checked-disabled-transition);
+  font-weight: var(--gmnb-keys-short-func-checked-disabled-font-weight);
+}
+keypad.wc-short button.wc-key.wc-fn:checked:disabled pathicon,
+keypad.wc-short button.wc-key.wc-fn.wc-on:disabled pathicon {
+  color: var(--gmnb-keys-short-func-checked-disabled-icon-color);
+}
+.wc-inert keypad.wc-short button.wc-key.wc-fn:disabled:not(.wc-off) {
+  background-color: var(--gmnb-keys-short-func-background-color);
+  background-image: var(--gmnb-keys-short-func-background-image);
+  color: var(--gmnb-keys-short-func-color);
+  box-shadow: var(--gmnb-keys-short-func-shadow);
+  opacity: var(--gmnb-keys-short-func-opacity);
+  filter: var(--gmnb-keys-short-func-filter);
+  transform: var(--gmnb-keys-short-func-transform);
+  transition: var(--gmnb-keys-short-func-transition);
+  font-weight: var(--gmnb-keys-short-func-font-weight);
+}
+.wc-inert keypad.wc-short button.wc-key.wc-fn:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-keys-short-func-icon-color);
+}
+.wc-inert keypad.wc-short button.wc-key.wc-fn:checked:disabled:not(.wc-off),
+.wc-inert keypad.wc-short button.wc-key.wc-fn.wc-on:disabled:not(.wc-off) {
+  background-color: var(--gmnb-keys-short-func-checked-background-color);
+  background-image: var(--gmnb-keys-short-func-checked-background-image);
+  color: var(--gmnb-keys-short-func-checked-color);
+  box-shadow: var(--gmnb-keys-short-func-checked-shadow);
+  opacity: var(--gmnb-keys-short-func-checked-opacity);
+  filter: var(--gmnb-keys-short-func-checked-filter);
+  transform: var(--gmnb-keys-short-func-checked-transform);
+  transition: var(--gmnb-keys-short-func-checked-transition);
+  font-weight: var(--gmnb-keys-short-func-checked-font-weight);
+}
+.wc-inert keypad.wc-short button.wc-key.wc-fn:checked:disabled:not(.wc-off) pathicon,
+.wc-inert keypad.wc-short button.wc-key.wc-fn.wc-on:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-keys-short-func-checked-icon-color);
+}
+/* end control */
+
+/* control keys.short.operator keypad.wc-short+button.wc-key.wc-op active=.wc-flash,.keyboard-activating icon=pathicon */
+keypad.wc-short button.wc-key.wc-op {
+  background-color: var(--gmnb-keys-short-operator-background-color);
+  background-image: var(--gmnb-keys-short-operator-background-image);
+  color: var(--gmnb-keys-short-operator-color);
+  box-shadow: var(--gmnb-keys-short-operator-shadow);
+  opacity: var(--gmnb-keys-short-operator-opacity);
+  filter: var(--gmnb-keys-short-operator-filter);
+  transform: var(--gmnb-keys-short-operator-transform);
+  transition: var(--gmnb-keys-short-operator-transition);
+  border-radius: var(--gmnb-keys-short-operator-radius);
+  padding: var(--gmnb-keys-short-operator-padding);
+  margin: var(--gmnb-keys-short-operator-margin);
+  min-width: var(--gmnb-keys-short-operator-min-width);
+  min-height: var(--gmnb-keys-short-operator-min-height);
+  font-family: var(--gmnb-keys-short-operator-font-family);
+  font-size: var(--gmnb-keys-short-operator-font-size);
+  font-weight: var(--gmnb-keys-short-operator-font-weight);
+  font-style: var(--gmnb-keys-short-operator-font-style);
+  letter-spacing: var(--gmnb-keys-short-operator-letter-spacing);
+  font-feature-settings: var(--gmnb-keys-short-operator-font-features);
+  font-variation-settings: var(--gmnb-keys-short-operator-font-variations);
+}
+keypad.wc-short button.wc-key.wc-op pathicon {
+  color: var(--gmnb-keys-short-operator-icon-color);
+}
+keypad.wc-short button.wc-key.wc-op:hover {
+  background-color: var(--gmnb-keys-short-operator-hover-background-color);
+  background-image: var(--gmnb-keys-short-operator-hover-background-image);
+  color: var(--gmnb-keys-short-operator-hover-color);
+  box-shadow: var(--gmnb-keys-short-operator-hover-shadow);
+  opacity: var(--gmnb-keys-short-operator-hover-opacity);
+  filter: var(--gmnb-keys-short-operator-hover-filter);
+  transform: var(--gmnb-keys-short-operator-hover-transform);
+  transition: var(--gmnb-keys-short-operator-hover-transition);
+  font-weight: var(--gmnb-keys-short-operator-hover-font-weight);
+}
+keypad.wc-short button.wc-key.wc-op:hover pathicon {
+  color: var(--gmnb-keys-short-operator-hover-icon-color);
+}
+keypad.wc-short button.wc-key.wc-op:active,
+keypad.wc-short button.wc-key.wc-op.wc-flash,
+keypad.wc-short button.wc-key.wc-op.keyboard-activating {
+  background-color: var(--gmnb-keys-short-operator-active-background-color);
+  background-image: var(--gmnb-keys-short-operator-active-background-image);
+  color: var(--gmnb-keys-short-operator-active-color);
+  box-shadow: var(--gmnb-keys-short-operator-active-shadow);
+  opacity: var(--gmnb-keys-short-operator-active-opacity);
+  filter: var(--gmnb-keys-short-operator-active-filter);
+  transform: var(--gmnb-keys-short-operator-active-transform);
+  transition: var(--gmnb-keys-short-operator-active-transition);
+  font-weight: var(--gmnb-keys-short-operator-active-font-weight);
+}
+keypad.wc-short button.wc-key.wc-op:active pathicon,
+keypad.wc-short button.wc-key.wc-op.wc-flash pathicon,
+keypad.wc-short button.wc-key.wc-op.keyboard-activating pathicon {
+  color: var(--gmnb-keys-short-operator-active-icon-color);
+}
+keypad.wc-short button.wc-key.wc-op:checked {
+  background-color: var(--gmnb-keys-short-operator-checked-background-color);
+  background-image: var(--gmnb-keys-short-operator-checked-background-image);
+  color: var(--gmnb-keys-short-operator-checked-color);
+  box-shadow: var(--gmnb-keys-short-operator-checked-shadow);
+  opacity: var(--gmnb-keys-short-operator-checked-opacity);
+  filter: var(--gmnb-keys-short-operator-checked-filter);
+  transform: var(--gmnb-keys-short-operator-checked-transform);
+  transition: var(--gmnb-keys-short-operator-checked-transition);
+  font-weight: var(--gmnb-keys-short-operator-checked-font-weight);
+}
+keypad.wc-short button.wc-key.wc-op:checked pathicon {
+  color: var(--gmnb-keys-short-operator-checked-icon-color);
+}
+keypad.wc-short button.wc-key.wc-op:checked:hover {
+  background-color: var(--gmnb-keys-short-operator-checked-hover-background-color);
+  background-image: var(--gmnb-keys-short-operator-checked-hover-background-image);
+  color: var(--gmnb-keys-short-operator-checked-hover-color);
+  box-shadow: var(--gmnb-keys-short-operator-checked-hover-shadow);
+  opacity: var(--gmnb-keys-short-operator-checked-hover-opacity);
+  filter: var(--gmnb-keys-short-operator-checked-hover-filter);
+  transform: var(--gmnb-keys-short-operator-checked-hover-transform);
+  transition: var(--gmnb-keys-short-operator-checked-hover-transition);
+  font-weight: var(--gmnb-keys-short-operator-checked-hover-font-weight);
+}
+keypad.wc-short button.wc-key.wc-op:checked:hover pathicon {
+  color: var(--gmnb-keys-short-operator-checked-hover-icon-color);
+}
+keypad.wc-short button.wc-key.wc-op:checked:active,
+keypad.wc-short button.wc-key.wc-op:checked.wc-flash,
+keypad.wc-short button.wc-key.wc-op:checked.keyboard-activating {
+  background-color: var(--gmnb-keys-short-operator-checked-active-background-color);
+  background-image: var(--gmnb-keys-short-operator-checked-active-background-image);
+  color: var(--gmnb-keys-short-operator-checked-active-color);
+  box-shadow: var(--gmnb-keys-short-operator-checked-active-shadow);
+  opacity: var(--gmnb-keys-short-operator-checked-active-opacity);
+  filter: var(--gmnb-keys-short-operator-checked-active-filter);
+  transform: var(--gmnb-keys-short-operator-checked-active-transform);
+  transition: var(--gmnb-keys-short-operator-checked-active-transition);
+  font-weight: var(--gmnb-keys-short-operator-checked-active-font-weight);
+}
+keypad.wc-short button.wc-key.wc-op:checked:active pathicon,
+keypad.wc-short button.wc-key.wc-op:checked.wc-flash pathicon,
+keypad.wc-short button.wc-key.wc-op:checked.keyboard-activating pathicon {
+  color: var(--gmnb-keys-short-operator-checked-active-icon-color);
+}
+keypad.wc-short button.wc-key.wc-op:disabled {
+  background-color: var(--gmnb-keys-short-operator-disabled-background-color);
+  background-image: var(--gmnb-keys-short-operator-disabled-background-image);
+  color: var(--gmnb-keys-short-operator-disabled-color);
+  box-shadow: var(--gmnb-keys-short-operator-disabled-shadow);
+  opacity: var(--gmnb-keys-short-operator-disabled-opacity);
+  filter: var(--gmnb-keys-short-operator-disabled-filter);
+  transform: var(--gmnb-keys-short-operator-disabled-transform);
+  transition: var(--gmnb-keys-short-operator-disabled-transition);
+  font-weight: var(--gmnb-keys-short-operator-disabled-font-weight);
+}
+keypad.wc-short button.wc-key.wc-op:disabled pathicon {
+  color: var(--gmnb-keys-short-operator-disabled-icon-color);
+}
+keypad.wc-short button.wc-key.wc-op:checked:disabled {
+  background-color: var(--gmnb-keys-short-operator-checked-disabled-background-color);
+  background-image: var(--gmnb-keys-short-operator-checked-disabled-background-image);
+  color: var(--gmnb-keys-short-operator-checked-disabled-color);
+  box-shadow: var(--gmnb-keys-short-operator-checked-disabled-shadow);
+  opacity: var(--gmnb-keys-short-operator-checked-disabled-opacity);
+  filter: var(--gmnb-keys-short-operator-checked-disabled-filter);
+  transform: var(--gmnb-keys-short-operator-checked-disabled-transform);
+  transition: var(--gmnb-keys-short-operator-checked-disabled-transition);
+  font-weight: var(--gmnb-keys-short-operator-checked-disabled-font-weight);
+}
+keypad.wc-short button.wc-key.wc-op:checked:disabled pathicon {
+  color: var(--gmnb-keys-short-operator-checked-disabled-icon-color);
+}
+.wc-inert keypad.wc-short button.wc-key.wc-op:disabled:not(.wc-off) {
+  background-color: var(--gmnb-keys-short-operator-background-color);
+  background-image: var(--gmnb-keys-short-operator-background-image);
+  color: var(--gmnb-keys-short-operator-color);
+  box-shadow: var(--gmnb-keys-short-operator-shadow);
+  opacity: var(--gmnb-keys-short-operator-opacity);
+  filter: var(--gmnb-keys-short-operator-filter);
+  transform: var(--gmnb-keys-short-operator-transform);
+  transition: var(--gmnb-keys-short-operator-transition);
+  font-weight: var(--gmnb-keys-short-operator-font-weight);
+}
+.wc-inert keypad.wc-short button.wc-key.wc-op:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-keys-short-operator-icon-color);
+}
+.wc-inert keypad.wc-short button.wc-key.wc-op:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-keys-short-operator-checked-background-color);
+  background-image: var(--gmnb-keys-short-operator-checked-background-image);
+  color: var(--gmnb-keys-short-operator-checked-color);
+  box-shadow: var(--gmnb-keys-short-operator-checked-shadow);
+  opacity: var(--gmnb-keys-short-operator-checked-opacity);
+  filter: var(--gmnb-keys-short-operator-checked-filter);
+  transform: var(--gmnb-keys-short-operator-checked-transform);
+  transition: var(--gmnb-keys-short-operator-checked-transition);
+  font-weight: var(--gmnb-keys-short-operator-checked-font-weight);
+}
+.wc-inert keypad.wc-short button.wc-key.wc-op:checked:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-keys-short-operator-checked-icon-color);
+}
+/* end control */
+
+/* control keys.short.equals keypad.wc-short+button.wc-key.wc-eq active=.wc-flash,.keyboard-activating icon=pathicon */
+keypad.wc-short button.wc-key.wc-eq {
+  background-color: var(--gmnb-keys-short-equals-background-color);
+  background-image: var(--gmnb-keys-short-equals-background-image);
+  color: var(--gmnb-keys-short-equals-color);
+  box-shadow: var(--gmnb-keys-short-equals-shadow);
+  opacity: var(--gmnb-keys-short-equals-opacity);
+  filter: var(--gmnb-keys-short-equals-filter);
+  transform: var(--gmnb-keys-short-equals-transform);
+  transition: var(--gmnb-keys-short-equals-transition);
+  border-radius: var(--gmnb-keys-short-equals-radius);
+  padding: var(--gmnb-keys-short-equals-padding);
+  margin: var(--gmnb-keys-short-equals-margin);
+  min-width: var(--gmnb-keys-short-equals-min-width);
+  min-height: var(--gmnb-keys-short-equals-min-height);
+  font-family: var(--gmnb-keys-short-equals-font-family);
+  font-size: var(--gmnb-keys-short-equals-font-size);
+  font-weight: var(--gmnb-keys-short-equals-font-weight);
+  font-style: var(--gmnb-keys-short-equals-font-style);
+  letter-spacing: var(--gmnb-keys-short-equals-letter-spacing);
+  font-feature-settings: var(--gmnb-keys-short-equals-font-features);
+  font-variation-settings: var(--gmnb-keys-short-equals-font-variations);
+}
+keypad.wc-short button.wc-key.wc-eq pathicon {
+  color: var(--gmnb-keys-short-equals-icon-color);
+}
+keypad.wc-short button.wc-key.wc-eq:hover {
+  background-color: var(--gmnb-keys-short-equals-hover-background-color);
+  background-image: var(--gmnb-keys-short-equals-hover-background-image);
+  color: var(--gmnb-keys-short-equals-hover-color);
+  box-shadow: var(--gmnb-keys-short-equals-hover-shadow);
+  opacity: var(--gmnb-keys-short-equals-hover-opacity);
+  filter: var(--gmnb-keys-short-equals-hover-filter);
+  transform: var(--gmnb-keys-short-equals-hover-transform);
+  transition: var(--gmnb-keys-short-equals-hover-transition);
+  font-weight: var(--gmnb-keys-short-equals-hover-font-weight);
+}
+keypad.wc-short button.wc-key.wc-eq:hover pathicon {
+  color: var(--gmnb-keys-short-equals-hover-icon-color);
+}
+keypad.wc-short button.wc-key.wc-eq:active,
+keypad.wc-short button.wc-key.wc-eq.wc-flash,
+keypad.wc-short button.wc-key.wc-eq.keyboard-activating {
+  background-color: var(--gmnb-keys-short-equals-active-background-color);
+  background-image: var(--gmnb-keys-short-equals-active-background-image);
+  color: var(--gmnb-keys-short-equals-active-color);
+  box-shadow: var(--gmnb-keys-short-equals-active-shadow);
+  opacity: var(--gmnb-keys-short-equals-active-opacity);
+  filter: var(--gmnb-keys-short-equals-active-filter);
+  transform: var(--gmnb-keys-short-equals-active-transform);
+  transition: var(--gmnb-keys-short-equals-active-transition);
+  font-weight: var(--gmnb-keys-short-equals-active-font-weight);
+}
+keypad.wc-short button.wc-key.wc-eq:active pathicon,
+keypad.wc-short button.wc-key.wc-eq.wc-flash pathicon,
+keypad.wc-short button.wc-key.wc-eq.keyboard-activating pathicon {
+  color: var(--gmnb-keys-short-equals-active-icon-color);
+}
+keypad.wc-short button.wc-key.wc-eq:checked {
+  background-color: var(--gmnb-keys-short-equals-checked-background-color);
+  background-image: var(--gmnb-keys-short-equals-checked-background-image);
+  color: var(--gmnb-keys-short-equals-checked-color);
+  box-shadow: var(--gmnb-keys-short-equals-checked-shadow);
+  opacity: var(--gmnb-keys-short-equals-checked-opacity);
+  filter: var(--gmnb-keys-short-equals-checked-filter);
+  transform: var(--gmnb-keys-short-equals-checked-transform);
+  transition: var(--gmnb-keys-short-equals-checked-transition);
+  font-weight: var(--gmnb-keys-short-equals-checked-font-weight);
+}
+keypad.wc-short button.wc-key.wc-eq:checked pathicon {
+  color: var(--gmnb-keys-short-equals-checked-icon-color);
+}
+keypad.wc-short button.wc-key.wc-eq:checked:hover {
+  background-color: var(--gmnb-keys-short-equals-checked-hover-background-color);
+  background-image: var(--gmnb-keys-short-equals-checked-hover-background-image);
+  color: var(--gmnb-keys-short-equals-checked-hover-color);
+  box-shadow: var(--gmnb-keys-short-equals-checked-hover-shadow);
+  opacity: var(--gmnb-keys-short-equals-checked-hover-opacity);
+  filter: var(--gmnb-keys-short-equals-checked-hover-filter);
+  transform: var(--gmnb-keys-short-equals-checked-hover-transform);
+  transition: var(--gmnb-keys-short-equals-checked-hover-transition);
+  font-weight: var(--gmnb-keys-short-equals-checked-hover-font-weight);
+}
+keypad.wc-short button.wc-key.wc-eq:checked:hover pathicon {
+  color: var(--gmnb-keys-short-equals-checked-hover-icon-color);
+}
+keypad.wc-short button.wc-key.wc-eq:checked:active,
+keypad.wc-short button.wc-key.wc-eq:checked.wc-flash,
+keypad.wc-short button.wc-key.wc-eq:checked.keyboard-activating {
+  background-color: var(--gmnb-keys-short-equals-checked-active-background-color);
+  background-image: var(--gmnb-keys-short-equals-checked-active-background-image);
+  color: var(--gmnb-keys-short-equals-checked-active-color);
+  box-shadow: var(--gmnb-keys-short-equals-checked-active-shadow);
+  opacity: var(--gmnb-keys-short-equals-checked-active-opacity);
+  filter: var(--gmnb-keys-short-equals-checked-active-filter);
+  transform: var(--gmnb-keys-short-equals-checked-active-transform);
+  transition: var(--gmnb-keys-short-equals-checked-active-transition);
+  font-weight: var(--gmnb-keys-short-equals-checked-active-font-weight);
+}
+keypad.wc-short button.wc-key.wc-eq:checked:active pathicon,
+keypad.wc-short button.wc-key.wc-eq:checked.wc-flash pathicon,
+keypad.wc-short button.wc-key.wc-eq:checked.keyboard-activating pathicon {
+  color: var(--gmnb-keys-short-equals-checked-active-icon-color);
+}
+keypad.wc-short button.wc-key.wc-eq:disabled {
+  background-color: var(--gmnb-keys-short-equals-disabled-background-color);
+  background-image: var(--gmnb-keys-short-equals-disabled-background-image);
+  color: var(--gmnb-keys-short-equals-disabled-color);
+  box-shadow: var(--gmnb-keys-short-equals-disabled-shadow);
+  opacity: var(--gmnb-keys-short-equals-disabled-opacity);
+  filter: var(--gmnb-keys-short-equals-disabled-filter);
+  transform: var(--gmnb-keys-short-equals-disabled-transform);
+  transition: var(--gmnb-keys-short-equals-disabled-transition);
+  font-weight: var(--gmnb-keys-short-equals-disabled-font-weight);
+}
+keypad.wc-short button.wc-key.wc-eq:disabled pathicon {
+  color: var(--gmnb-keys-short-equals-disabled-icon-color);
+}
+keypad.wc-short button.wc-key.wc-eq:checked:disabled {
+  background-color: var(--gmnb-keys-short-equals-checked-disabled-background-color);
+  background-image: var(--gmnb-keys-short-equals-checked-disabled-background-image);
+  color: var(--gmnb-keys-short-equals-checked-disabled-color);
+  box-shadow: var(--gmnb-keys-short-equals-checked-disabled-shadow);
+  opacity: var(--gmnb-keys-short-equals-checked-disabled-opacity);
+  filter: var(--gmnb-keys-short-equals-checked-disabled-filter);
+  transform: var(--gmnb-keys-short-equals-checked-disabled-transform);
+  transition: var(--gmnb-keys-short-equals-checked-disabled-transition);
+  font-weight: var(--gmnb-keys-short-equals-checked-disabled-font-weight);
+}
+keypad.wc-short button.wc-key.wc-eq:checked:disabled pathicon {
+  color: var(--gmnb-keys-short-equals-checked-disabled-icon-color);
+}
+.wc-inert keypad.wc-short button.wc-key.wc-eq:disabled:not(.wc-off) {
+  background-color: var(--gmnb-keys-short-equals-background-color);
+  background-image: var(--gmnb-keys-short-equals-background-image);
+  color: var(--gmnb-keys-short-equals-color);
+  box-shadow: var(--gmnb-keys-short-equals-shadow);
+  opacity: var(--gmnb-keys-short-equals-opacity);
+  filter: var(--gmnb-keys-short-equals-filter);
+  transform: var(--gmnb-keys-short-equals-transform);
+  transition: var(--gmnb-keys-short-equals-transition);
+  font-weight: var(--gmnb-keys-short-equals-font-weight);
+}
+.wc-inert keypad.wc-short button.wc-key.wc-eq:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-keys-short-equals-icon-color);
+}
+.wc-inert keypad.wc-short button.wc-key.wc-eq:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-keys-short-equals-checked-background-color);
+  background-image: var(--gmnb-keys-short-equals-checked-background-image);
+  color: var(--gmnb-keys-short-equals-checked-color);
+  box-shadow: var(--gmnb-keys-short-equals-checked-shadow);
+  opacity: var(--gmnb-keys-short-equals-checked-opacity);
+  filter: var(--gmnb-keys-short-equals-checked-filter);
+  transform: var(--gmnb-keys-short-equals-checked-transform);
+  transition: var(--gmnb-keys-short-equals-checked-transition);
+  font-weight: var(--gmnb-keys-short-equals-checked-font-weight);
+}
+.wc-inert keypad.wc-short button.wc-key.wc-eq:checked:disabled:not(.wc-off) pathicon {
+  color: var(--gmnb-keys-short-equals-checked-icon-color);
+}
+/* end control */
+
 /* ------------------------------------------------ segmented controls */
 
 /* The toolkit's toggle group, drawn the app's way unless the theme hands

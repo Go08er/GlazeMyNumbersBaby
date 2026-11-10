@@ -373,6 +373,14 @@ impl Scope<'_> {
             ..self.control(&font)
         }))
     }
+
+    /// A key class on a short keypad: the class as finished, a toggle
+    /// that is on as `keys.short.on` says.
+    fn short_key(&self, class: &str) -> Value {
+        let mut c = self.control_at(class);
+        c.checked = self.state("keys.short.on");
+        Value::Control(Box::new(c))
+    }
 }
 
 fn color(c: Rgba) -> Value {
@@ -1005,6 +1013,30 @@ pub static ROWS: &[Row] = &[
             s.t.colors.on_accent,
             s.t.text.key.clone(),
         )
+    }),
+    // -- Short keys: a keypad whose keys would be less than
+    // `keys.short.below` high takes these instead. Each is what it stands
+    // for as finished above, unless the theme says otherwise; with
+    // `below` at 0 (the base look's) no keypad is ever short.
+    row("keys.short.below", SIZE, |_| px(0.0)),
+    row("keys.short.gap", SIZE, |s| px(s.px("keys.gap"))),
+    row("keys.short.icon", Kind::Icon, |s| {
+        s.get("keys.icon").clone()
+    }),
+    row("keys.short.on", Kind::State, |s| {
+        Value::State(s.state("keys.on"))
+    }),
+    row("keys.short.number", Kind::KeyControl, |s| {
+        s.short_key("keys.number")
+    }),
+    row("keys.short.func", Kind::KeyControl, |s| {
+        s.short_key("keys.func")
+    }),
+    row("keys.short.operator", Kind::KeyControl, |s| {
+        s.short_key("keys.operator")
+    }),
+    row("keys.short.equals", Kind::KeyControl, |s| {
+        s.short_key("keys.equals")
     }),
     row("keys.pad", KEYS_PAD, |s| {
         // The pad's keys are set in their classes' own fonts; a theme's

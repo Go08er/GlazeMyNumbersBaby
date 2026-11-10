@@ -390,6 +390,20 @@ export type KeysStyle = {
 	disabled: State?,
 	-- The graphing page's small keypad.
 	pad: { gap: number?, radius: Radius?, min_height: number?, font: Font? }?,
+	-- A keypad whose keys would be less than `below` pixels high, laid out
+	-- the usual gap apart, is short and takes these instead: its own gap,
+	-- its keys' icons, each class, and a toggle that is on. Each is what
+	-- it stands for unless given. `below` 0, the base look's: never.
+	short: {
+		below: number?,
+		gap: number?,
+		icon: Icon?,
+		number: Control?,
+		func: Control?,
+		operator: Control?,
+		equals: Control?,
+		on: State?,
+	}?,
 }
 
 export type Reveal = "always" | "hover"
@@ -791,7 +805,8 @@ export type Draw = {
 	text_size: (self: Draw, text: string, font: Font?) -> (number, number),
 	glyph: (self: Draw, glyph: Glyph, paint: Paint) -> (),
 	image: (self: Draw, image: Picture, x: number, y: number, w: number, h: number, options: ImageOptions?) -> (),
-	tile: (self: Draw, image: Picture, x: number, y: number, w: number, h: number) -> (),
+	-- Of `options` only `filter` is read.
+	tile: (self: Draw, image: Picture, x: number, y: number, w: number, h: number, options: ImageOptions?) -> (),
 	field: (self: Draw, x: number, y: number, w: number, h: number, spec: FieldSpec) -> (),
 	-- Groups: everything drawn until the matching pop() is affected.
 	push_clip: (self: Draw, x: number, y: number, w: number, h: number, radius: Radius?) -> (),

@@ -91,6 +91,36 @@ fn color(hex: &str) -> Paint {
 
 // ---- The calls -----------------------------------------------------------------
 
+/// `draw:tile` reads one option, `filter` (hard pixels on a screen of
+/// more pixels than the window's), and is smooth without it.
+#[test]
+fn a_tile_takes_its_filter_and_nothing_else() {
+    let (theme, _d) = background(
+        "tile-filter",
+        "local grain = gmnb.noise({ size = 8 })",
+        r#"
+        draw:tile(grain, 0, 0, 40, 30, { filter = "nearest", time = 3, loop = false })
+        draw:tile(grain, 0, 0, 40, 30, {})
+        draw:tile(grain, 0, 0, 40, 30)
+        "#,
+    );
+    let filters: Vec<draw::Filter> = ops(&theme)
+        .iter()
+        .filter_map(|op| match op {
+            Op::Tile { filter, .. } => Some(*filter),
+            _ => None,
+        })
+        .collect();
+    use draw::Filter::{Linear, Nearest};
+    assert_eq!(filters, [Nearest, Linear, Linear]);
+    let (theme, _d) = background(
+        "tile-bad-filter",
+        "local grain = gmnb.noise({ size = 8 })",
+        r#"draw:tile(grain, 0, 0, 40, 30, { filter = "blurry" })"#,
+    );
+    assert!(run(&theme).is_err());
+}
+
 #[test]
 fn every_call_records_its_operation() {
     let (theme, _d) = background(
@@ -230,7 +260,8 @@ fn every_call_records_its_operation() {
         ops[11],
         Op::Tile {
             image: ImageId(0),
-            rect: [0.0, 0.0, 400.0, 300.0]
+            rect: [0.0, 0.0, 400.0, 300.0],
+            filter: draw::Filter::Linear,
         }
     );
     assert_eq!(

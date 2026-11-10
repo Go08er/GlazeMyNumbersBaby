@@ -1047,6 +1047,11 @@ pub fn paint(
         return;
     };
     let pango = widget.pango_context();
+    // The surface's own scale (fractional where the screen is).
+    let scale = widget
+        .native()
+        .and_then(|n| n.surface())
+        .map_or(1.0, |surface| surface.scale() as f32);
     let start = std::time::Instant::now();
     hub.with_theme(|theme| {
         let scene = replay::Scene {
@@ -1054,6 +1059,7 @@ pub fn paint(
             theme,
             pango: &pango,
             glyphs,
+            scale,
         };
         replay::replay(s, list, &scene);
     });
@@ -1401,6 +1407,7 @@ end } } }
                 theme: Some(&theme),
                 pango: &pango,
                 glyphs: [&glyphs, &[]],
+                scale: 1.0,
             };
             replay::replay(&s, &drawn.list, &scene);
             s.restore();
@@ -1425,6 +1432,7 @@ end } } }
             theme: Some(&odd),
             pango: &pango,
             glyphs: [&[], &[]],
+            scale: 1.0,
         };
         replay::replay(&s, &drawn.list, &scene);
         s.restore();
@@ -1593,6 +1601,7 @@ end } } }
             theme: Some(&theme),
             pango: &pango,
             glyphs: [&[], &[]],
+            scale: 1.0,
         };
         replay::replay(&s, &drawn.list, &scene);
         // The picture again, as a widget does when nothing has changed:

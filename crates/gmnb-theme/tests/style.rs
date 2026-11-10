@@ -168,6 +168,65 @@ fn the_base_is_dgmnbs() {
     );
 }
 
+/// A short keypad's keys (`keys.short`) are each the class as finished,
+/// and a toggle that is on `keys.on`, unless a theme says otherwise; the
+/// base look's keypads are never short.
+#[test]
+fn short_keys_are_their_classes_unless_said() {
+    let c = ctx(false, 1.0);
+    let base = resolve(&c, &value("return {}")).style;
+    assert_eq!(base.number("keys.short.below"), 0.0);
+    assert_eq!(base.number("keys.short.gap"), base.number("keys.gap"));
+    assert_eq!(base.icon("keys.short.icon"), base.icon("keys.icon"));
+    for class in ["number", "func", "operator", "equals"] {
+        assert_eq!(
+            base.control(&format!("keys.short.{class}")),
+            base.control(&format!("keys.{class}")),
+            "{class}"
+        );
+    }
+    let r = resolve(
+        &c,
+        &value(
+            "return {
+                keys = {
+                    gap = 6,
+                    number = { font = { size = 40 }, border = { width = 2, color = '#000000' } },
+                    on = { background = '#ff0000' },
+                    short = {
+                        below = 24,
+                        number = { font = { size = 18 }, border = { width = 1, color = '#000000' } },
+                        on = { background = '#00ff00' },
+                    },
+                },
+            }",
+        ),
+    );
+    assert!(r.notes.is_empty(), "{:?}", r.notes);
+    let s = &r.style;
+    assert_eq!(s.number("keys.short.below"), 24.0);
+    // What isn't said follows the class, and the shared values.
+    assert_eq!(s.number("keys.short.gap"), 6.0);
+    let (number, short) = (
+        s.control("keys.number").unwrap(),
+        s.control("keys.short.number").unwrap(),
+    );
+    assert_eq!((number.font.size, short.font.size), (40.0, 18.0));
+    assert_eq!(short.border.map(|b| b.width), Some(1.0));
+    assert_eq!(short.background, number.background);
+    assert_eq!(short.hover, number.hover);
+    // A short toggle that is on is `keys.short.on`.
+    let green = Some(Fill::color([0.0, 1.0, 0.0, 1.0]));
+    assert_eq!(
+        s.control("keys.short.func").unwrap().checked.background,
+        green
+    );
+    assert_eq!(
+        s.control("keys.func").unwrap().checked.background,
+        Some(Fill::color([1.0, 0.0, 0.0, 1.0]))
+    );
+}
+
 /// Tokens come first: an element's base follows the theme's tokens, and a
 /// key class follows `keys`' shared values, unless it says otherwise.
 #[test]

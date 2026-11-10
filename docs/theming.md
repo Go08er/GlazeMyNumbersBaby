@@ -861,7 +861,12 @@ hook falls back to.
 | `keys.operator` | Control | background `surface2`; `accent_text`; `text.key` | `button.wc-key.wc-op` |
 | `keys.equals` | Control | background `accent`; `on_accent`; `text.key` | `button.wc-key.wc-eq` |
 | `keys.on` | State | `{ background accent, color on_accent }` | `button.wc-key.wc-on`, `button.wc-fn:checked` (2nd, hyp, … switched on) |
-| `keys.pad` | `{ gap, radius, min_height, font }` | 3, `shape.radius`, 0, `keys.func`'s font | `.wc-graph-pad button.wc-pad-key` and its grid (the graphing page's keypad). The keys are set in their classes' own fonts (`keys.number`, `keys.func`) unless `font` differs from `keys.func`'s: then it is every pad key's (Rust). |
+| `keys.pad` | `{ gap, radius, min_height, font }` | 3, `shape.radius`, 0, `keys.func`'s font | `.wc-graph-pad button.wc-pad-key` and its grid (the graphing page's keypad). The keys are set in their classes' own fonts (`keys.number`, `keys.func`) unless `font` differs from `keys.func`'s: then it is every pad key's (Rust). Its labels ask for no least height, as a keypad's do. |
+| `keys.short.below` | number | 0 (never) | Rust: a keypad whose keys would be less than this high, laid out `keys.gap` apart (`keys.gap_compact` in the compact window), is *short*: it carries `wc-short` and takes the rest of `keys.short` |
+| `keys.short.gap` | number | `keys.gap` | Rust: a short keypad's spacing |
+| `keys.short.icon` | Icon | `keys.icon` | Rust: a short keypad's keys that carry an icon |
+| `keys.short.number`, `.func`, `.operator`, `.equals` | Control | that class as finished | `keypad.wc-short button.wc-key.wc-num` (and `.wc-fn`, `.wc-op`, `.wc-eq`): every rule of the class again, which outranks the class's own for each state; the labels' fonts (Rust) |
+| `keys.short.on` | State | `keys.on` | A short keypad's toggle that is on |
 
 The key classes are Controls but have no `checked`; a toggle that is on
 uses `keys.on`. A class takes `keys`' shared values (`radius`, `padding`,
@@ -876,6 +881,18 @@ that state (`checked`, then `hover` or `active`, then `disabled`, as the
 stylesheet orders them), and it is shrunk to its key's width less 8 with
 no least size. Its halo is `window.raised_text_halo`, and none while the
 key is disabled.
+
+Keys shrink with the window, down to its least, 300×400, where
+Scientific's and Programmer's are some fifteen pixels high in the base
+look. A look made for keys of forty pixels (a lip,
+a glint, a large sign) has no room there: `keys.short` is a second look
+for a keypad whose keys are less than `keys.short.below` high. Only the
+height the keypad is given decides it, never anything the short keys
+ask for, so it can't flicker at the threshold; it is decided once the
+toolkit has laid the window out, and a frame later the keys are drawn
+the other way. A key class's own `min_height` keeps a window from
+shrinking at all, and the least window is the contract's on every page:
+a theme lets its keys shrink and makes them short instead.
 
 ### History and memory panel
 
@@ -1153,9 +1170,9 @@ the layer's; paints may be colours or gradients everywhere.
 | `draw:text(text, x, y, font, paint)` | `append_layout` (gradient: `push_mask` + `append_layout` + `pop` + gradient + `pop`); `x, y` is the top-left |
 | `draw:text_size(text, font)` → `w, h` | Pango layout pixel size; draws nothing |
 | `draw:glyph(glyph, paint)` | `append_layout` of one laid-out character of the display's value, at its place |
-| `draw:image(image, x, y, w, h, options?)` | `append_scaled_texture`; `options.filter` is `"trilinear"` (the default for stills), `"linear"` or `"nearest"`. An [animation](theming-media.md#animated-pictures) draws its current frame. |
+| `draw:image(image, x, y, w, h, options?)` | `append_scaled_texture`; `options.filter` is `"trilinear"` (the default for stills), `"linear"` or `"nearest"`. An [animation](theming-media.md#animated-pictures) draws its current frame. On a screen of more pixels than the window's (scale 2) a `"nearest"` picture is set in the screen's own pixels: the toolkit's renderers would scale it to the window's first and then smoothly up, and its hard pixels would be soft. |
 | `draw:field(x, y, w, h, spec)` | A grid of numbers coloured per pixel by the app through a ramp, then `append_scaled_texture`. See [Fields](theming-media.md#fields-swirls-plasma-contours). |
-| `draw:tile(image, x, y, w, h)` | `push_repeat` + `append_texture` + `pop`: the image repeated at its own size |
+| `draw:tile(image, x, y, w, h, options?)` | `push_repeat` + `append_texture` + `pop`: the image repeated at its own size. Of `options` only `filter` is read, and only on a screen of more pixels than the window's: `"nearest"` keeps its pixels hard there, as `draw:image`'s does (the default, `"linear"`, is smooth) |
 | `draw:push_clip(x, y, w, h, radius?)` | `push_clip` / `push_rounded_clip` |
 | `draw:push_opacity(opacity)` | `push_opacity` |
 | `draw:push_blur(radius)` | `push_blur` |
@@ -1571,7 +1588,8 @@ noise.
 |---|---|---|
 | The five flavours | **Scripted** (`style`): a flavour is two colours, and every ink and surface is worked out from them against what it lies on | No colour option, so no generated palette to guard: ten schemes, each checked. |
 | Keys as blocks: a line, a glint, a lip, a hard shadow; pressed, the lip is gone | **Declared** (borders and shadow lists with no blur; no transitions at all) | A state that changes at once is the look. |
-| The tiled wall | A **still** the theme's script draws (`gmnb.image`, `draw:tile`) | Four colours, 200 bytes; tiling it costs one node. |
+| Short keys, in a window near its least (300×400, where Scientific's keys are fourteen pixels high and Programmer's twelve): a thin line, the lip under the key instead of inside it, the sign one Jersey pixel to the pixel | **Declared** (`keys.short`, below 24 pixels: where a number's capitals no longer fit between its key's lines), its gap 3 | The keys shrink with the window instead of holding it open; what has room at forty pixels has none at fourteen. |
+| The tiled wall | A **still** the theme's script draws (`gmnb.image`, `draw:tile`, hard pixels at scale 2 too) | Four colours, 200 bytes; tiling it costs one node. |
 | The awning's hem in the flavour's colours | Three **stills used as masks** (`draw:push_mask`, `draw:tile`, then a rectangle of the colour) | One set of pictures serves every flavour, light and dark: a still can't be recoloured, a mask can be filled. |
 | Sprinkles falling down the wall | An **animated picture** (`gmnb.animation`, a 128-frame GIF the script writes), drawn side by side with hard pixels | The loop repeats in space as it does in time, so nine copies of one small animation cover a window, decoded once off the interface's thread. The app schedules its frames; the hook returns nothing. |
 | The icing on the digits of a result (one that = or a function key gave): it pours, its drips run ahead, sprinkles land on it | A **picture the theme computes** (`gmnb.pixels`, 256×28, a dozen steps of the pour) shown through the **glyphs as a mask** (`display` layer); only on digits of 28 px and more, because the icing is held to large text's 3:1 | A drip is a pixel-stepped edge no gradient makes, and through the digits' own shapes it needs no knowledge of the typeface but two of its measures. |
