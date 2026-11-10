@@ -1,0 +1,19 @@
+# The theming acceptance comparison (docs/theming.md, "How it is measured").
+# Standalone, outside the workspace like tools/bench.
+[package]
+name = "theming-compare"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "Screenshot comparison: flat pixels, edges and text of two pictures"
+
+[[bin]]
+name = "compare"
+path = "src/main.rs"
+
+[dependencies]
+png = "0.17"
+serde_json = "1"
+
+[workspace]
