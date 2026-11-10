@@ -486,6 +486,19 @@ pub fn emit(path: &str, kind: &Kind, value: &Value, out: &mut BTreeMap<String, S
         }
         (_, Value::Control(c)) => emit_control(out, path, c),
         (_, Value::Field(f)) => emit_field(out, path, f),
+        // A state on its own (`graph.row_error`): what it lays over a
+        // plain surface, its background with any overlay on top, and its
+        // shadow.
+        (Kind::State, Value::State(st)) => {
+            let mut layers: Vec<Paint> = st.overlay.map(Paint::Color).into_iter().collect();
+            if let Some(b) = &st.background {
+                layers.extend(b.0.iter().cloned());
+            }
+            emit_fill(out, path, "background-", &Fill(layers));
+            let border = st.border.flatten();
+            let shadow = st.shadow.clone().unwrap_or_default();
+            put(out, path, "shadow", box_shadow(border.as_ref(), &shadow));
+        }
         (Kind::Record(parts), Value::Record(fields)) => {
             for (name, k) in *parts {
                 if let Some(v) = fields.get(name) {

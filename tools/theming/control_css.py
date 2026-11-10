@@ -187,7 +187,9 @@ def field(path, selector, options):
 
     out = rule([base], [(p, var(path, "", n)) for p, n in FIELD_REST]
                + [("caret-color", var(path, "", "caret"))])
-    out += rule([f"{base} placeholder"], [("color", var(path, "", "placeholder"))])
+    # (The toolkit dims a placeholder as well: the colour is all of it.)
+    out += rule([f"{base} placeholder"],
+                [("color", var(path, "", "placeholder")), ("opacity", "1"), ("filter", "none")])
     out += rule([f"{base} text > selection"],
                 [("background-color", var(path, "", "selection"))])
     out += rule(combos(focus), [(p, var(path, "focus-", n)) for p, n in STATE])

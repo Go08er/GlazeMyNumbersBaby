@@ -1506,6 +1506,8 @@ window.gmnb.own-field spinbutton.wc-spin>text {
 }
 window.gmnb.own-field spinbutton.wc-spin>text placeholder {
   color: var(--gmnb-field-placeholder);
+  opacity: 1;
+  filter: none;
 }
 window.gmnb.own-field spinbutton.wc-spin>text text > selection {
   background-color: var(--gmnb-field-selection);
@@ -2315,6 +2317,8 @@ window.gmnb.own-field entry {
 }
 window.gmnb.own-field entry placeholder {
   color: var(--gmnb-field-placeholder);
+  opacity: 1;
+  filter: none;
 }
 window.gmnb.own-field entry text > selection {
   background-color: var(--gmnb-field-selection);
@@ -3417,132 +3421,1010 @@ box.wc-chip.wc-chip-whimsy:disabled pathicon {
 
 /* -------------------------------------------------------- graphing */
 
+/* Laid out in Rust as DGMNB's page (pages/graphing.rs); the canvas is
+   drawn by widgets/graph_view.rs from the style. */
+
+/* surface graph.side .wc-graph-side */
 .wc-graph-side {
-  padding: 10px;
+  background-color: var(--gmnb-graph-side-background-color);
+  background-image: var(--gmnb-graph-side-background-image);
+  box-shadow: var(--gmnb-graph-side-shadow);
+  border-radius: var(--gmnb-graph-side-radius);
+  padding: var(--gmnb-graph-side-padding);
+  margin: var(--gmnb-graph-side-margin);
+}
+/* end surface */
+
+.wc-graph-divider {
+  background-color: var(--gmnb-graph-divider);
 }
 
-.wc-graph-tools {
-  padding: 4px;
-  border-radius: 14px;
-  background: alpha(@wc_base, 0.72);
-  box-shadow: inset 0 0 0 1px @wc_glass_border, 0 8px 24px -10px alpha(black, 0.4);
-}
-
-button.wc-small,
-togglebutton.wc-small {
-  min-width: 30px;
-  min-height: 30px;
-}
-
+/* surface graph.row .wc-eq-row */
 .wc-eq-row {
-  padding: 4px;
-  border-radius: 14px;
+  background-color: var(--gmnb-graph-row-background-color);
+  background-image: var(--gmnb-graph-row-background-image);
+  box-shadow: var(--gmnb-graph-row-shadow);
+  border-radius: var(--gmnb-graph-row-radius);
+  padding: var(--gmnb-graph-row-padding);
+  margin: var(--gmnb-graph-row-margin);
 }
+/* end surface */
 
+/* A row whose equation doesn't parse (nothing in the base look). */
 .wc-eq-row.wc-has-error {
-  background: alpha(@wc_hot_a, 0.08);
+  background-color: var(--gmnb-graph-row-error-background-color);
+  background-image: var(--gmnb-graph-row-error-background-image);
+  box-shadow: var(--gmnb-graph-row-error-shadow);
 }
 
-entry.wc-eq-entry {
-  min-height: 38px;
-  border-radius: 12px;
-  font-family: "Outfit";
-  font-size: 16px;
-  background: alpha(@wc_fg, 0.05);
+/* field graph.entry entry.wc-eq-entry scope=window.gmnb.own-field */
+window.gmnb.own-field entry.wc-eq-entry {
+  background-color: var(--gmnb-graph-entry-background-color);
+  background-image: var(--gmnb-graph-entry-background-image);
+  color: var(--gmnb-graph-entry-color);
+  box-shadow: var(--gmnb-graph-entry-shadow);
+  opacity: var(--gmnb-graph-entry-opacity);
+  filter: var(--gmnb-graph-entry-filter);
+  transform: var(--gmnb-graph-entry-transform);
+  transition: var(--gmnb-graph-entry-transition);
+  border-radius: var(--gmnb-graph-entry-radius);
+  padding: var(--gmnb-graph-entry-padding);
+  min-height: var(--gmnb-graph-entry-min-height);
+  font-family: var(--gmnb-graph-entry-font-family);
+  font-size: var(--gmnb-graph-entry-font-size);
+  font-weight: var(--gmnb-graph-entry-font-weight);
+  font-style: var(--gmnb-graph-entry-font-style);
+  letter-spacing: var(--gmnb-graph-entry-letter-spacing);
+  font-feature-settings: var(--gmnb-graph-entry-font-features);
+  font-variation-settings: var(--gmnb-graph-entry-font-variations);
+  caret-color: var(--gmnb-graph-entry-caret);
+}
+window.gmnb.own-field entry.wc-eq-entry placeholder {
+  color: var(--gmnb-graph-entry-placeholder);
+  opacity: 1;
+  filter: none;
+}
+window.gmnb.own-field entry.wc-eq-entry text > selection {
+  background-color: var(--gmnb-graph-entry-selection);
+}
+window.gmnb.own-field entry.wc-eq-entry:focus-within {
+  background-color: var(--gmnb-graph-entry-focus-background-color);
+  background-image: var(--gmnb-graph-entry-focus-background-image);
+  color: var(--gmnb-graph-entry-focus-color);
+  box-shadow: var(--gmnb-graph-entry-focus-shadow);
+  opacity: var(--gmnb-graph-entry-focus-opacity);
+  filter: var(--gmnb-graph-entry-focus-filter);
+  transform: var(--gmnb-graph-entry-focus-transform);
+  transition: var(--gmnb-graph-entry-focus-transition);
+  font-weight: var(--gmnb-graph-entry-focus-font-weight);
+}
+window.gmnb.own-field entry.wc-eq-entry.error {
+  background-color: var(--gmnb-graph-entry-error-background-color);
+  background-image: var(--gmnb-graph-entry-error-background-image);
+  color: var(--gmnb-graph-entry-error-color);
+  box-shadow: var(--gmnb-graph-entry-error-shadow);
+  opacity: var(--gmnb-graph-entry-error-opacity);
+  filter: var(--gmnb-graph-entry-error-filter);
+  transform: var(--gmnb-graph-entry-error-transform);
+  transition: var(--gmnb-graph-entry-error-transition);
+  font-weight: var(--gmnb-graph-entry-error-font-weight);
+}
+window.gmnb.own-field entry.wc-eq-entry.error:focus-within {
+  background-color: var(--gmnb-graph-entry-error-focus-background-color);
+  background-image: var(--gmnb-graph-entry-error-focus-background-image);
+  color: var(--gmnb-graph-entry-error-focus-color);
+  box-shadow: var(--gmnb-graph-entry-error-focus-shadow);
+  opacity: var(--gmnb-graph-entry-error-focus-opacity);
+  filter: var(--gmnb-graph-entry-error-focus-filter);
+  transform: var(--gmnb-graph-entry-error-focus-transform);
+  transition: var(--gmnb-graph-entry-error-focus-transition);
+  font-weight: var(--gmnb-graph-entry-error-focus-font-weight);
+}
+/* end field */
+
+window.gmnb entry.wc-eq-entry,
+window.gmnb entry.wc-eq-entry:focus-within {
+  border: none;
+  outline-color: transparent;
 }
 
-.wc-eq-error {
-  font-size: 12px;
-  color: @wc_hot_a;
-  margin-left: 40px;
+/* control graph.row_button button.wc-row-button scope=window.gmnb */
+window.gmnb button.wc-row-button {
+  background-color: var(--gmnb-graph-row-button-background-color);
+  background-image: var(--gmnb-graph-row-button-background-image);
+  color: var(--gmnb-graph-row-button-color);
+  box-shadow: var(--gmnb-graph-row-button-shadow);
+  opacity: var(--gmnb-graph-row-button-opacity);
+  filter: var(--gmnb-graph-row-button-filter);
+  transform: var(--gmnb-graph-row-button-transform);
+  transition: var(--gmnb-graph-row-button-transition);
+  border-radius: var(--gmnb-graph-row-button-radius);
+  padding: var(--gmnb-graph-row-button-padding);
+  margin: var(--gmnb-graph-row-button-margin);
+  min-width: var(--gmnb-graph-row-button-min-width);
+  min-height: var(--gmnb-graph-row-button-min-height);
+  font-family: var(--gmnb-graph-row-button-font-family);
+  font-size: var(--gmnb-graph-row-button-font-size);
+  font-weight: var(--gmnb-graph-row-button-font-weight);
+  font-style: var(--gmnb-graph-row-button-font-style);
+  letter-spacing: var(--gmnb-graph-row-button-letter-spacing);
+  font-feature-settings: var(--gmnb-graph-row-button-font-features);
+  font-variation-settings: var(--gmnb-graph-row-button-font-variations);
 }
+window.gmnb button.wc-row-button:hover {
+  background-color: var(--gmnb-graph-row-button-hover-background-color);
+  background-image: var(--gmnb-graph-row-button-hover-background-image);
+  color: var(--gmnb-graph-row-button-hover-color);
+  box-shadow: var(--gmnb-graph-row-button-hover-shadow);
+  opacity: var(--gmnb-graph-row-button-hover-opacity);
+  filter: var(--gmnb-graph-row-button-hover-filter);
+  transform: var(--gmnb-graph-row-button-hover-transform);
+  transition: var(--gmnb-graph-row-button-hover-transition);
+  font-weight: var(--gmnb-graph-row-button-hover-font-weight);
+}
+window.gmnb button.wc-row-button:active {
+  background-color: var(--gmnb-graph-row-button-active-background-color);
+  background-image: var(--gmnb-graph-row-button-active-background-image);
+  color: var(--gmnb-graph-row-button-active-color);
+  box-shadow: var(--gmnb-graph-row-button-active-shadow);
+  opacity: var(--gmnb-graph-row-button-active-opacity);
+  filter: var(--gmnb-graph-row-button-active-filter);
+  transform: var(--gmnb-graph-row-button-active-transform);
+  transition: var(--gmnb-graph-row-button-active-transition);
+  font-weight: var(--gmnb-graph-row-button-active-font-weight);
+}
+window.gmnb button.wc-row-button:checked {
+  background-color: var(--gmnb-graph-row-button-checked-background-color);
+  background-image: var(--gmnb-graph-row-button-checked-background-image);
+  color: var(--gmnb-graph-row-button-checked-color);
+  box-shadow: var(--gmnb-graph-row-button-checked-shadow);
+  opacity: var(--gmnb-graph-row-button-checked-opacity);
+  filter: var(--gmnb-graph-row-button-checked-filter);
+  transform: var(--gmnb-graph-row-button-checked-transform);
+  transition: var(--gmnb-graph-row-button-checked-transition);
+  font-weight: var(--gmnb-graph-row-button-checked-font-weight);
+}
+window.gmnb button.wc-row-button:checked:hover {
+  background-color: var(--gmnb-graph-row-button-checked-hover-background-color);
+  background-image: var(--gmnb-graph-row-button-checked-hover-background-image);
+  color: var(--gmnb-graph-row-button-checked-hover-color);
+  box-shadow: var(--gmnb-graph-row-button-checked-hover-shadow);
+  opacity: var(--gmnb-graph-row-button-checked-hover-opacity);
+  filter: var(--gmnb-graph-row-button-checked-hover-filter);
+  transform: var(--gmnb-graph-row-button-checked-hover-transform);
+  transition: var(--gmnb-graph-row-button-checked-hover-transition);
+  font-weight: var(--gmnb-graph-row-button-checked-hover-font-weight);
+}
+window.gmnb button.wc-row-button:checked:active {
+  background-color: var(--gmnb-graph-row-button-checked-active-background-color);
+  background-image: var(--gmnb-graph-row-button-checked-active-background-image);
+  color: var(--gmnb-graph-row-button-checked-active-color);
+  box-shadow: var(--gmnb-graph-row-button-checked-active-shadow);
+  opacity: var(--gmnb-graph-row-button-checked-active-opacity);
+  filter: var(--gmnb-graph-row-button-checked-active-filter);
+  transform: var(--gmnb-graph-row-button-checked-active-transform);
+  transition: var(--gmnb-graph-row-button-checked-active-transition);
+  font-weight: var(--gmnb-graph-row-button-checked-active-font-weight);
+}
+window.gmnb button.wc-row-button:disabled {
+  background-color: var(--gmnb-graph-row-button-disabled-background-color);
+  background-image: var(--gmnb-graph-row-button-disabled-background-image);
+  color: var(--gmnb-graph-row-button-disabled-color);
+  box-shadow: var(--gmnb-graph-row-button-disabled-shadow);
+  opacity: var(--gmnb-graph-row-button-disabled-opacity);
+  filter: var(--gmnb-graph-row-button-disabled-filter);
+  transform: var(--gmnb-graph-row-button-disabled-transform);
+  transition: var(--gmnb-graph-row-button-disabled-transition);
+  font-weight: var(--gmnb-graph-row-button-disabled-font-weight);
+}
+window.gmnb button.wc-row-button:checked:disabled {
+  background-color: var(--gmnb-graph-row-button-checked-disabled-background-color);
+  background-image: var(--gmnb-graph-row-button-checked-disabled-background-image);
+  color: var(--gmnb-graph-row-button-checked-disabled-color);
+  box-shadow: var(--gmnb-graph-row-button-checked-disabled-shadow);
+  opacity: var(--gmnb-graph-row-button-checked-disabled-opacity);
+  filter: var(--gmnb-graph-row-button-checked-disabled-filter);
+  transform: var(--gmnb-graph-row-button-checked-disabled-transform);
+  transition: var(--gmnb-graph-row-button-checked-disabled-transition);
+  font-weight: var(--gmnb-graph-row-button-checked-disabled-font-weight);
+}
+window.gmnb .wc-inert button.wc-row-button:disabled:not(.wc-off) {
+  background-color: var(--gmnb-graph-row-button-background-color);
+  background-image: var(--gmnb-graph-row-button-background-image);
+  color: var(--gmnb-graph-row-button-color);
+  box-shadow: var(--gmnb-graph-row-button-shadow);
+  opacity: var(--gmnb-graph-row-button-opacity);
+  filter: var(--gmnb-graph-row-button-filter);
+  transform: var(--gmnb-graph-row-button-transform);
+  transition: var(--gmnb-graph-row-button-transition);
+  font-weight: var(--gmnb-graph-row-button-font-weight);
+}
+window.gmnb .wc-inert button.wc-row-button:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-graph-row-button-checked-background-color);
+  background-image: var(--gmnb-graph-row-button-checked-background-image);
+  color: var(--gmnb-graph-row-button-checked-color);
+  box-shadow: var(--gmnb-graph-row-button-checked-shadow);
+  opacity: var(--gmnb-graph-row-button-checked-opacity);
+  filter: var(--gmnb-graph-row-button-checked-filter);
+  transform: var(--gmnb-graph-row-button-checked-transform);
+  transition: var(--gmnb-graph-row-button-checked-transition);
+  font-weight: var(--gmnb-graph-row-button-checked-font-weight);
+}
+/* end control */
 
-button.wc-swatch {
-  min-width: 18px;
-  min-height: 18px;
+/* control graph.row_button menubutton.wc-row-button>button scope=window.gmnb checked=:checked */
+window.gmnb menubutton.wc-row-button>button {
+  background-color: var(--gmnb-graph-row-button-background-color);
+  background-image: var(--gmnb-graph-row-button-background-image);
+  color: var(--gmnb-graph-row-button-color);
+  box-shadow: var(--gmnb-graph-row-button-shadow);
+  opacity: var(--gmnb-graph-row-button-opacity);
+  filter: var(--gmnb-graph-row-button-filter);
+  transform: var(--gmnb-graph-row-button-transform);
+  transition: var(--gmnb-graph-row-button-transition);
+  border-radius: var(--gmnb-graph-row-button-radius);
+  padding: var(--gmnb-graph-row-button-padding);
+  margin: var(--gmnb-graph-row-button-margin);
+  min-width: var(--gmnb-graph-row-button-min-width);
+  min-height: var(--gmnb-graph-row-button-min-height);
+  font-family: var(--gmnb-graph-row-button-font-family);
+  font-size: var(--gmnb-graph-row-button-font-size);
+  font-weight: var(--gmnb-graph-row-button-font-weight);
+  font-style: var(--gmnb-graph-row-button-font-style);
+  letter-spacing: var(--gmnb-graph-row-button-letter-spacing);
+  font-feature-settings: var(--gmnb-graph-row-button-font-features);
+  font-variation-settings: var(--gmnb-graph-row-button-font-variations);
+}
+window.gmnb menubutton.wc-row-button>button:hover {
+  background-color: var(--gmnb-graph-row-button-hover-background-color);
+  background-image: var(--gmnb-graph-row-button-hover-background-image);
+  color: var(--gmnb-graph-row-button-hover-color);
+  box-shadow: var(--gmnb-graph-row-button-hover-shadow);
+  opacity: var(--gmnb-graph-row-button-hover-opacity);
+  filter: var(--gmnb-graph-row-button-hover-filter);
+  transform: var(--gmnb-graph-row-button-hover-transform);
+  transition: var(--gmnb-graph-row-button-hover-transition);
+  font-weight: var(--gmnb-graph-row-button-hover-font-weight);
+}
+window.gmnb menubutton.wc-row-button>button:active {
+  background-color: var(--gmnb-graph-row-button-active-background-color);
+  background-image: var(--gmnb-graph-row-button-active-background-image);
+  color: var(--gmnb-graph-row-button-active-color);
+  box-shadow: var(--gmnb-graph-row-button-active-shadow);
+  opacity: var(--gmnb-graph-row-button-active-opacity);
+  filter: var(--gmnb-graph-row-button-active-filter);
+  transform: var(--gmnb-graph-row-button-active-transform);
+  transition: var(--gmnb-graph-row-button-active-transition);
+  font-weight: var(--gmnb-graph-row-button-active-font-weight);
+}
+window.gmnb menubutton.wc-row-button>button:checked {
+  background-color: var(--gmnb-graph-row-button-checked-background-color);
+  background-image: var(--gmnb-graph-row-button-checked-background-image);
+  color: var(--gmnb-graph-row-button-checked-color);
+  box-shadow: var(--gmnb-graph-row-button-checked-shadow);
+  opacity: var(--gmnb-graph-row-button-checked-opacity);
+  filter: var(--gmnb-graph-row-button-checked-filter);
+  transform: var(--gmnb-graph-row-button-checked-transform);
+  transition: var(--gmnb-graph-row-button-checked-transition);
+  font-weight: var(--gmnb-graph-row-button-checked-font-weight);
+}
+window.gmnb menubutton.wc-row-button>button:checked:hover {
+  background-color: var(--gmnb-graph-row-button-checked-hover-background-color);
+  background-image: var(--gmnb-graph-row-button-checked-hover-background-image);
+  color: var(--gmnb-graph-row-button-checked-hover-color);
+  box-shadow: var(--gmnb-graph-row-button-checked-hover-shadow);
+  opacity: var(--gmnb-graph-row-button-checked-hover-opacity);
+  filter: var(--gmnb-graph-row-button-checked-hover-filter);
+  transform: var(--gmnb-graph-row-button-checked-hover-transform);
+  transition: var(--gmnb-graph-row-button-checked-hover-transition);
+  font-weight: var(--gmnb-graph-row-button-checked-hover-font-weight);
+}
+window.gmnb menubutton.wc-row-button>button:checked:active {
+  background-color: var(--gmnb-graph-row-button-checked-active-background-color);
+  background-image: var(--gmnb-graph-row-button-checked-active-background-image);
+  color: var(--gmnb-graph-row-button-checked-active-color);
+  box-shadow: var(--gmnb-graph-row-button-checked-active-shadow);
+  opacity: var(--gmnb-graph-row-button-checked-active-opacity);
+  filter: var(--gmnb-graph-row-button-checked-active-filter);
+  transform: var(--gmnb-graph-row-button-checked-active-transform);
+  transition: var(--gmnb-graph-row-button-checked-active-transition);
+  font-weight: var(--gmnb-graph-row-button-checked-active-font-weight);
+}
+window.gmnb menubutton.wc-row-button>button:disabled {
+  background-color: var(--gmnb-graph-row-button-disabled-background-color);
+  background-image: var(--gmnb-graph-row-button-disabled-background-image);
+  color: var(--gmnb-graph-row-button-disabled-color);
+  box-shadow: var(--gmnb-graph-row-button-disabled-shadow);
+  opacity: var(--gmnb-graph-row-button-disabled-opacity);
+  filter: var(--gmnb-graph-row-button-disabled-filter);
+  transform: var(--gmnb-graph-row-button-disabled-transform);
+  transition: var(--gmnb-graph-row-button-disabled-transition);
+  font-weight: var(--gmnb-graph-row-button-disabled-font-weight);
+}
+window.gmnb menubutton.wc-row-button>button:checked:disabled {
+  background-color: var(--gmnb-graph-row-button-checked-disabled-background-color);
+  background-image: var(--gmnb-graph-row-button-checked-disabled-background-image);
+  color: var(--gmnb-graph-row-button-checked-disabled-color);
+  box-shadow: var(--gmnb-graph-row-button-checked-disabled-shadow);
+  opacity: var(--gmnb-graph-row-button-checked-disabled-opacity);
+  filter: var(--gmnb-graph-row-button-checked-disabled-filter);
+  transform: var(--gmnb-graph-row-button-checked-disabled-transform);
+  transition: var(--gmnb-graph-row-button-checked-disabled-transition);
+  font-weight: var(--gmnb-graph-row-button-checked-disabled-font-weight);
+}
+window.gmnb .wc-inert menubutton.wc-row-button>button:disabled:not(.wc-off) {
+  background-color: var(--gmnb-graph-row-button-background-color);
+  background-image: var(--gmnb-graph-row-button-background-image);
+  color: var(--gmnb-graph-row-button-color);
+  box-shadow: var(--gmnb-graph-row-button-shadow);
+  opacity: var(--gmnb-graph-row-button-opacity);
+  filter: var(--gmnb-graph-row-button-filter);
+  transform: var(--gmnb-graph-row-button-transform);
+  transition: var(--gmnb-graph-row-button-transition);
+  font-weight: var(--gmnb-graph-row-button-font-weight);
+}
+window.gmnb .wc-inert menubutton.wc-row-button>button:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-graph-row-button-checked-background-color);
+  background-image: var(--gmnb-graph-row-button-checked-background-image);
+  color: var(--gmnb-graph-row-button-checked-color);
+  box-shadow: var(--gmnb-graph-row-button-checked-shadow);
+  opacity: var(--gmnb-graph-row-button-checked-opacity);
+  filter: var(--gmnb-graph-row-button-checked-filter);
+  transform: var(--gmnb-graph-row-button-checked-transform);
+  transition: var(--gmnb-graph-row-button-checked-transition);
+  font-weight: var(--gmnb-graph-row-button-checked-font-weight);
+}
+/* end control */
+
+/* text graph.error label.wc-eq-error */
+label.wc-eq-error {
+  color: var(--gmnb-graph-error-color);
+  font-family: var(--gmnb-graph-error-font-family);
+  font-size: var(--gmnb-graph-error-font-size);
+  font-weight: var(--gmnb-graph-error-font-weight);
+  font-style: var(--gmnb-graph-error-font-style);
+  letter-spacing: var(--gmnb-graph-error-letter-spacing);
+  font-feature-settings: var(--gmnb-graph-error-font-features);
+  font-variation-settings: var(--gmnb-graph-error-font-variations);
+  text-shadow: var(--gmnb-graph-error-text-shadow);
+  margin: var(--gmnb-graph-error-margin);
+}
+/* end text */
+
+/* The swatch: a round button round the equation's dot (its colour and a
+   theme's glow are the row's own provider's). */
+window.gmnb button.wc-swatch {
+  min-width: 0;
+  min-height: 0;
   padding: 0;
-  margin: 0 4px;
+  border: none;
   border-radius: 999px;
-  transition: opacity 200ms ease-out, transform 300ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
 }
 
-button.wc-swatch:active {
-  transform: scale(0.8);
+window.gmnb button.wc-swatch:hover {
+  background-color: var(--gmnb-icon-button-hover-background-color);
+  background-image: var(--gmnb-icon-button-hover-background-image);
 }
 
-button.wc-add-eq {
-  min-height: 40px;
-  border-radius: 12px;
-  color: alpha(@wc_fg, 0.6);
+box.wc-swatch-dot {
+  border-radius: 999px;
+  transition: var(--gmnb-graph-swatch-transition);
+}
+
+window.gmnb button.wc-swatch:active box.wc-swatch-dot {
+  transform: scale(var(--gmnb-graph-swatch-active-scale));
+}
+
+/* control graph.add button.wc-add-eq scope=window.gmnb */
+window.gmnb button.wc-add-eq {
+  background-color: var(--gmnb-graph-add-background-color);
+  background-image: var(--gmnb-graph-add-background-image);
+  color: var(--gmnb-graph-add-color);
+  box-shadow: var(--gmnb-graph-add-shadow);
+  opacity: var(--gmnb-graph-add-opacity);
+  filter: var(--gmnb-graph-add-filter);
+  transform: var(--gmnb-graph-add-transform);
+  transition: var(--gmnb-graph-add-transition);
+  border-radius: var(--gmnb-graph-add-radius);
+  padding: var(--gmnb-graph-add-padding);
+  margin: var(--gmnb-graph-add-margin);
+  min-width: var(--gmnb-graph-add-min-width);
+  min-height: var(--gmnb-graph-add-min-height);
+  font-family: var(--gmnb-graph-add-font-family);
+  font-size: var(--gmnb-graph-add-font-size);
+  font-weight: var(--gmnb-graph-add-font-weight);
+  font-style: var(--gmnb-graph-add-font-style);
+  letter-spacing: var(--gmnb-graph-add-letter-spacing);
+  font-feature-settings: var(--gmnb-graph-add-font-features);
+  font-variation-settings: var(--gmnb-graph-add-font-variations);
+}
+window.gmnb button.wc-add-eq:hover {
+  background-color: var(--gmnb-graph-add-hover-background-color);
+  background-image: var(--gmnb-graph-add-hover-background-image);
+  color: var(--gmnb-graph-add-hover-color);
+  box-shadow: var(--gmnb-graph-add-hover-shadow);
+  opacity: var(--gmnb-graph-add-hover-opacity);
+  filter: var(--gmnb-graph-add-hover-filter);
+  transform: var(--gmnb-graph-add-hover-transform);
+  transition: var(--gmnb-graph-add-hover-transition);
+  font-weight: var(--gmnb-graph-add-hover-font-weight);
+}
+window.gmnb button.wc-add-eq:active {
+  background-color: var(--gmnb-graph-add-active-background-color);
+  background-image: var(--gmnb-graph-add-active-background-image);
+  color: var(--gmnb-graph-add-active-color);
+  box-shadow: var(--gmnb-graph-add-active-shadow);
+  opacity: var(--gmnb-graph-add-active-opacity);
+  filter: var(--gmnb-graph-add-active-filter);
+  transform: var(--gmnb-graph-add-active-transform);
+  transition: var(--gmnb-graph-add-active-transition);
+  font-weight: var(--gmnb-graph-add-active-font-weight);
+}
+window.gmnb button.wc-add-eq:checked {
+  background-color: var(--gmnb-graph-add-checked-background-color);
+  background-image: var(--gmnb-graph-add-checked-background-image);
+  color: var(--gmnb-graph-add-checked-color);
+  box-shadow: var(--gmnb-graph-add-checked-shadow);
+  opacity: var(--gmnb-graph-add-checked-opacity);
+  filter: var(--gmnb-graph-add-checked-filter);
+  transform: var(--gmnb-graph-add-checked-transform);
+  transition: var(--gmnb-graph-add-checked-transition);
+  font-weight: var(--gmnb-graph-add-checked-font-weight);
+}
+window.gmnb button.wc-add-eq:checked:hover {
+  background-color: var(--gmnb-graph-add-checked-hover-background-color);
+  background-image: var(--gmnb-graph-add-checked-hover-background-image);
+  color: var(--gmnb-graph-add-checked-hover-color);
+  box-shadow: var(--gmnb-graph-add-checked-hover-shadow);
+  opacity: var(--gmnb-graph-add-checked-hover-opacity);
+  filter: var(--gmnb-graph-add-checked-hover-filter);
+  transform: var(--gmnb-graph-add-checked-hover-transform);
+  transition: var(--gmnb-graph-add-checked-hover-transition);
+  font-weight: var(--gmnb-graph-add-checked-hover-font-weight);
+}
+window.gmnb button.wc-add-eq:checked:active {
+  background-color: var(--gmnb-graph-add-checked-active-background-color);
+  background-image: var(--gmnb-graph-add-checked-active-background-image);
+  color: var(--gmnb-graph-add-checked-active-color);
+  box-shadow: var(--gmnb-graph-add-checked-active-shadow);
+  opacity: var(--gmnb-graph-add-checked-active-opacity);
+  filter: var(--gmnb-graph-add-checked-active-filter);
+  transform: var(--gmnb-graph-add-checked-active-transform);
+  transition: var(--gmnb-graph-add-checked-active-transition);
+  font-weight: var(--gmnb-graph-add-checked-active-font-weight);
+}
+window.gmnb button.wc-add-eq:disabled {
+  background-color: var(--gmnb-graph-add-disabled-background-color);
+  background-image: var(--gmnb-graph-add-disabled-background-image);
+  color: var(--gmnb-graph-add-disabled-color);
+  box-shadow: var(--gmnb-graph-add-disabled-shadow);
+  opacity: var(--gmnb-graph-add-disabled-opacity);
+  filter: var(--gmnb-graph-add-disabled-filter);
+  transform: var(--gmnb-graph-add-disabled-transform);
+  transition: var(--gmnb-graph-add-disabled-transition);
+  font-weight: var(--gmnb-graph-add-disabled-font-weight);
+}
+window.gmnb button.wc-add-eq:checked:disabled {
+  background-color: var(--gmnb-graph-add-checked-disabled-background-color);
+  background-image: var(--gmnb-graph-add-checked-disabled-background-image);
+  color: var(--gmnb-graph-add-checked-disabled-color);
+  box-shadow: var(--gmnb-graph-add-checked-disabled-shadow);
+  opacity: var(--gmnb-graph-add-checked-disabled-opacity);
+  filter: var(--gmnb-graph-add-checked-disabled-filter);
+  transform: var(--gmnb-graph-add-checked-disabled-transform);
+  transition: var(--gmnb-graph-add-checked-disabled-transition);
+  font-weight: var(--gmnb-graph-add-checked-disabled-font-weight);
+}
+window.gmnb .wc-inert button.wc-add-eq:disabled:not(.wc-off) {
+  background-color: var(--gmnb-graph-add-background-color);
+  background-image: var(--gmnb-graph-add-background-image);
+  color: var(--gmnb-graph-add-color);
+  box-shadow: var(--gmnb-graph-add-shadow);
+  opacity: var(--gmnb-graph-add-opacity);
+  filter: var(--gmnb-graph-add-filter);
+  transform: var(--gmnb-graph-add-transform);
+  transition: var(--gmnb-graph-add-transition);
+  font-weight: var(--gmnb-graph-add-font-weight);
+}
+window.gmnb .wc-inert button.wc-add-eq:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-graph-add-checked-background-color);
+  background-image: var(--gmnb-graph-add-checked-background-image);
+  color: var(--gmnb-graph-add-checked-color);
+  box-shadow: var(--gmnb-graph-add-checked-shadow);
+  opacity: var(--gmnb-graph-add-checked-opacity);
+  filter: var(--gmnb-graph-add-checked-filter);
+  transform: var(--gmnb-graph-add-checked-transform);
+  transition: var(--gmnb-graph-add-checked-transition);
+  font-weight: var(--gmnb-graph-add-checked-font-weight);
+}
+/* end control */
+
+/* text graph.variables label.wc-var-header */
+label.wc-var-header {
+  color: var(--gmnb-graph-variables-color);
+  font-family: var(--gmnb-graph-variables-font-family);
+  font-size: var(--gmnb-graph-variables-font-size);
+  font-weight: var(--gmnb-graph-variables-font-weight);
+  font-style: var(--gmnb-graph-variables-font-style);
+  letter-spacing: var(--gmnb-graph-variables-letter-spacing);
+  font-feature-settings: var(--gmnb-graph-variables-font-features);
+  font-variation-settings: var(--gmnb-graph-variables-font-variations);
+  text-shadow: var(--gmnb-graph-variables-text-shadow);
+  margin: var(--gmnb-graph-variables-margin);
+}
+/* end text */
+
+/* text graph.variable label.wc-var-name */
+label.wc-var-name {
+  color: var(--gmnb-graph-variable-color);
+  font-family: var(--gmnb-graph-variable-font-family);
+  font-size: var(--gmnb-graph-variable-font-size);
+  font-weight: var(--gmnb-graph-variable-font-weight);
+  font-style: var(--gmnb-graph-variable-font-style);
+  letter-spacing: var(--gmnb-graph-variable-letter-spacing);
+  font-feature-settings: var(--gmnb-graph-variable-font-features);
+  font-variation-settings: var(--gmnb-graph-variable-font-variations);
+  text-shadow: var(--gmnb-graph-variable-text-shadow);
+  margin: var(--gmnb-graph-variable-margin);
+}
+/* end text */
+
+/* A variable's slider: DGMNB's track inset by its knob's radius, the knob's
+   middle travelling the track's length. */
+window.gmnb.own-slider scale.wc-var-slider {
+  padding: 0 calc(var(--gmnb-slider-knob-size) / 2);
+}
+
+window.gmnb.own-slider scale.wc-var-slider > trough > slider {
+  margin: calc((var(--gmnb-slider-track-height) - var(--gmnb-slider-knob-size)) / 2) calc(var(--gmnb-slider-knob-size) / -2);
+}
+
+/* A variable's value: a field with no steps. */
+window.gmnb spinbutton.wc-var-value {
   background: none;
-  box-shadow: inset 0 0 0 1px alpha(@wc_fg, 0.12);
+  box-shadow: none;
+  border: none;
+  padding: 0;
+  min-height: 0;
+  outline: none;
 }
 
-button.wc-add-eq:hover {
-  color: @wc_fg;
-  background: alpha(@wc_fg, 0.05);
+/* field field spinbutton.wc-var-value>text scope=window.gmnb.own-field */
+window.gmnb.own-field spinbutton.wc-var-value>text {
+  background-color: var(--gmnb-field-background-color);
+  background-image: var(--gmnb-field-background-image);
+  color: var(--gmnb-field-color);
+  box-shadow: var(--gmnb-field-shadow);
+  opacity: var(--gmnb-field-opacity);
+  filter: var(--gmnb-field-filter);
+  transform: var(--gmnb-field-transform);
+  transition: var(--gmnb-field-transition);
+  border-radius: var(--gmnb-field-radius);
+  padding: var(--gmnb-field-padding);
+  min-height: var(--gmnb-field-min-height);
+  font-family: var(--gmnb-field-font-family);
+  font-size: var(--gmnb-field-font-size);
+  font-weight: var(--gmnb-field-font-weight);
+  font-style: var(--gmnb-field-font-style);
+  letter-spacing: var(--gmnb-field-letter-spacing);
+  font-feature-settings: var(--gmnb-field-font-features);
+  font-variation-settings: var(--gmnb-field-font-variations);
+  caret-color: var(--gmnb-field-caret);
+}
+window.gmnb.own-field spinbutton.wc-var-value>text placeholder {
+  color: var(--gmnb-field-placeholder);
+  opacity: 1;
+  filter: none;
+}
+window.gmnb.own-field spinbutton.wc-var-value>text text > selection {
+  background-color: var(--gmnb-field-selection);
+}
+window.gmnb.own-field spinbutton.wc-var-value>text:focus-within {
+  background-color: var(--gmnb-field-focus-background-color);
+  background-image: var(--gmnb-field-focus-background-image);
+  color: var(--gmnb-field-focus-color);
+  box-shadow: var(--gmnb-field-focus-shadow);
+  opacity: var(--gmnb-field-focus-opacity);
+  filter: var(--gmnb-field-focus-filter);
+  transform: var(--gmnb-field-focus-transform);
+  transition: var(--gmnb-field-focus-transition);
+  font-weight: var(--gmnb-field-focus-font-weight);
+}
+window.gmnb.own-field spinbutton.wc-var-value>text.error {
+  background-color: var(--gmnb-field-error-background-color);
+  background-image: var(--gmnb-field-error-background-image);
+  color: var(--gmnb-field-error-color);
+  box-shadow: var(--gmnb-field-error-shadow);
+  opacity: var(--gmnb-field-error-opacity);
+  filter: var(--gmnb-field-error-filter);
+  transform: var(--gmnb-field-error-transform);
+  transition: var(--gmnb-field-error-transition);
+  font-weight: var(--gmnb-field-error-font-weight);
+}
+window.gmnb.own-field spinbutton.wc-var-value>text.error:focus-within {
+  background-color: var(--gmnb-field-error-focus-background-color);
+  background-image: var(--gmnb-field-error-focus-background-image);
+  color: var(--gmnb-field-error-focus-color);
+  box-shadow: var(--gmnb-field-error-focus-shadow);
+  opacity: var(--gmnb-field-error-focus-opacity);
+  filter: var(--gmnb-field-error-focus-filter);
+  transform: var(--gmnb-field-error-focus-transform);
+  transition: var(--gmnb-field-error-focus-transition);
+  font-weight: var(--gmnb-field-error-focus-font-weight);
+}
+/* end field */
+
+window.gmnb spinbutton.wc-var-value > text {
+  min-height: 0;
+  outline: none;
 }
 
-.wc-var-row {
-  padding: 2px 6px;
+/* The function analysis. */
+/* text graph.analysis.title label.wc-analysis-title */
+label.wc-analysis-title {
+  color: var(--gmnb-graph-analysis-title-color);
+  font-family: var(--gmnb-graph-analysis-title-font-family);
+  font-size: var(--gmnb-graph-analysis-title-font-size);
+  font-weight: var(--gmnb-graph-analysis-title-font-weight);
+  font-style: var(--gmnb-graph-analysis-title-font-style);
+  letter-spacing: var(--gmnb-graph-analysis-title-letter-spacing);
+  font-feature-settings: var(--gmnb-graph-analysis-title-font-features);
+  font-variation-settings: var(--gmnb-graph-analysis-title-font-variations);
+  text-shadow: var(--gmnb-graph-analysis-title-text-shadow);
+  margin: var(--gmnb-graph-analysis-title-margin);
 }
+/* end text */
 
-.wc-var-name {
-  font-family: "Outfit";
-  font-size: 17px;
-  font-style: italic;
-  min-width: 18px;
-}
-
-.wc-graph-pad button.wc-pad-key {
-  min-height: 32px;
-  font-size: 15px;
-  border-radius: 10px;
-}
-
-.wc-analysis-title {
-  font-family: "Outfit";
-  font-size: 18px;
-  margin: 2px 8px 6px 8px;
-}
-
+/* surface graph.analysis.card .wc-kgf */
 .wc-kgf {
-  padding: 8px 12px;
-  border-radius: 14px;
-  background: alpha(@wc_fg, 0.04);
+  background-color: var(--gmnb-graph-analysis-card-background-color);
+  background-image: var(--gmnb-graph-analysis-card-background-image);
+  box-shadow: var(--gmnb-graph-analysis-card-shadow);
+  border-radius: var(--gmnb-graph-analysis-card-radius);
+  padding: var(--gmnb-graph-analysis-card-padding);
+  margin: var(--gmnb-graph-analysis-card-margin);
+}
+/* end surface */
+
+/* text graph.analysis.card_title label.wc-kgf-title */
+label.wc-kgf-title {
+  color: var(--gmnb-graph-analysis-card-title-color);
+  font-family: var(--gmnb-graph-analysis-card-title-font-family);
+  font-size: var(--gmnb-graph-analysis-card-title-font-size);
+  font-weight: var(--gmnb-graph-analysis-card-title-font-weight);
+  font-style: var(--gmnb-graph-analysis-card-title-font-style);
+  letter-spacing: var(--gmnb-graph-analysis-card-title-letter-spacing);
+  font-feature-settings: var(--gmnb-graph-analysis-card-title-font-features);
+  font-variation-settings: var(--gmnb-graph-analysis-card-title-font-variations);
+  text-shadow: var(--gmnb-graph-analysis-card-title-text-shadow);
+  margin: var(--gmnb-graph-analysis-card-title-margin);
+}
+/* end text */
+
+/* text graph.analysis.value label.wc-kgf-value */
+label.wc-kgf-value {
+  color: var(--gmnb-graph-analysis-value-color);
+  font-family: var(--gmnb-graph-analysis-value-font-family);
+  font-size: var(--gmnb-graph-analysis-value-font-size);
+  font-weight: var(--gmnb-graph-analysis-value-font-weight);
+  font-style: var(--gmnb-graph-analysis-value-font-style);
+  letter-spacing: var(--gmnb-graph-analysis-value-letter-spacing);
+  font-feature-settings: var(--gmnb-graph-analysis-value-font-features);
+  font-variation-settings: var(--gmnb-graph-analysis-value-font-variations);
+  text-shadow: var(--gmnb-graph-analysis-value-text-shadow);
+  margin: var(--gmnb-graph-analysis-value-margin);
+}
+/* end text */
+
+/* text graph.analysis.text label.wc-kgf-text */
+label.wc-kgf-text {
+  color: var(--gmnb-graph-analysis-text-color);
+  font-family: var(--gmnb-graph-analysis-text-font-family);
+  font-size: var(--gmnb-graph-analysis-text-font-size);
+  font-weight: var(--gmnb-graph-analysis-text-font-weight);
+  font-style: var(--gmnb-graph-analysis-text-font-style);
+  letter-spacing: var(--gmnb-graph-analysis-text-letter-spacing);
+  font-feature-settings: var(--gmnb-graph-analysis-text-font-features);
+  font-variation-settings: var(--gmnb-graph-analysis-text-font-variations);
+  text-shadow: var(--gmnb-graph-analysis-text-text-shadow);
+  margin: var(--gmnb-graph-analysis-text-margin);
+}
+/* end text */
+
+/* text graph.analysis.note label.wc-kgf-note */
+label.wc-kgf-note {
+  color: var(--gmnb-graph-analysis-note-color);
+  font-family: var(--gmnb-graph-analysis-note-font-family);
+  font-size: var(--gmnb-graph-analysis-note-font-size);
+  font-weight: var(--gmnb-graph-analysis-note-font-weight);
+  font-style: var(--gmnb-graph-analysis-note-font-style);
+  letter-spacing: var(--gmnb-graph-analysis-note-letter-spacing);
+  font-feature-settings: var(--gmnb-graph-analysis-note-font-features);
+  font-variation-settings: var(--gmnb-graph-analysis-note-font-variations);
+  text-shadow: var(--gmnb-graph-analysis-note-text-shadow);
+  margin: var(--gmnb-graph-analysis-note-margin);
+}
+/* end text */
+
+/* The canvas's toolbar. */
+/* surface graph.toolbar .wc-graph-tools */
+.wc-graph-tools {
+  background-color: var(--gmnb-graph-toolbar-background-color);
+  background-image: var(--gmnb-graph-toolbar-background-image);
+  box-shadow: var(--gmnb-graph-toolbar-shadow);
+  border-radius: var(--gmnb-graph-toolbar-radius);
+  padding: var(--gmnb-graph-toolbar-padding);
+  margin: var(--gmnb-graph-toolbar-margin);
+}
+/* end surface */
+
+/* control graph.toolbar_button button.wc-tool-button scope=window.gmnb */
+window.gmnb button.wc-tool-button {
+  background-color: var(--gmnb-graph-toolbar-button-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-background-image);
+  color: var(--gmnb-graph-toolbar-button-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-opacity);
+  filter: var(--gmnb-graph-toolbar-button-filter);
+  transform: var(--gmnb-graph-toolbar-button-transform);
+  transition: var(--gmnb-graph-toolbar-button-transition);
+  border-radius: var(--gmnb-graph-toolbar-button-radius);
+  padding: var(--gmnb-graph-toolbar-button-padding);
+  margin: var(--gmnb-graph-toolbar-button-margin);
+  min-width: var(--gmnb-graph-toolbar-button-min-width);
+  min-height: var(--gmnb-graph-toolbar-button-min-height);
+  font-family: var(--gmnb-graph-toolbar-button-font-family);
+  font-size: var(--gmnb-graph-toolbar-button-font-size);
+  font-weight: var(--gmnb-graph-toolbar-button-font-weight);
+  font-style: var(--gmnb-graph-toolbar-button-font-style);
+  letter-spacing: var(--gmnb-graph-toolbar-button-letter-spacing);
+  font-feature-settings: var(--gmnb-graph-toolbar-button-font-features);
+  font-variation-settings: var(--gmnb-graph-toolbar-button-font-variations);
+}
+window.gmnb button.wc-tool-button:hover {
+  background-color: var(--gmnb-graph-toolbar-button-hover-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-hover-background-image);
+  color: var(--gmnb-graph-toolbar-button-hover-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-hover-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-hover-opacity);
+  filter: var(--gmnb-graph-toolbar-button-hover-filter);
+  transform: var(--gmnb-graph-toolbar-button-hover-transform);
+  transition: var(--gmnb-graph-toolbar-button-hover-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-hover-font-weight);
+}
+window.gmnb button.wc-tool-button:active {
+  background-color: var(--gmnb-graph-toolbar-button-active-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-active-background-image);
+  color: var(--gmnb-graph-toolbar-button-active-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-active-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-active-opacity);
+  filter: var(--gmnb-graph-toolbar-button-active-filter);
+  transform: var(--gmnb-graph-toolbar-button-active-transform);
+  transition: var(--gmnb-graph-toolbar-button-active-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-active-font-weight);
+}
+window.gmnb button.wc-tool-button:checked {
+  background-color: var(--gmnb-graph-toolbar-button-checked-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-checked-background-image);
+  color: var(--gmnb-graph-toolbar-button-checked-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-checked-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-checked-opacity);
+  filter: var(--gmnb-graph-toolbar-button-checked-filter);
+  transform: var(--gmnb-graph-toolbar-button-checked-transform);
+  transition: var(--gmnb-graph-toolbar-button-checked-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-checked-font-weight);
+}
+window.gmnb button.wc-tool-button:checked:hover {
+  background-color: var(--gmnb-graph-toolbar-button-checked-hover-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-checked-hover-background-image);
+  color: var(--gmnb-graph-toolbar-button-checked-hover-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-checked-hover-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-checked-hover-opacity);
+  filter: var(--gmnb-graph-toolbar-button-checked-hover-filter);
+  transform: var(--gmnb-graph-toolbar-button-checked-hover-transform);
+  transition: var(--gmnb-graph-toolbar-button-checked-hover-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-checked-hover-font-weight);
+}
+window.gmnb button.wc-tool-button:checked:active {
+  background-color: var(--gmnb-graph-toolbar-button-checked-active-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-checked-active-background-image);
+  color: var(--gmnb-graph-toolbar-button-checked-active-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-checked-active-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-checked-active-opacity);
+  filter: var(--gmnb-graph-toolbar-button-checked-active-filter);
+  transform: var(--gmnb-graph-toolbar-button-checked-active-transform);
+  transition: var(--gmnb-graph-toolbar-button-checked-active-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-checked-active-font-weight);
+}
+window.gmnb button.wc-tool-button:disabled {
+  background-color: var(--gmnb-graph-toolbar-button-disabled-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-disabled-background-image);
+  color: var(--gmnb-graph-toolbar-button-disabled-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-disabled-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-disabled-opacity);
+  filter: var(--gmnb-graph-toolbar-button-disabled-filter);
+  transform: var(--gmnb-graph-toolbar-button-disabled-transform);
+  transition: var(--gmnb-graph-toolbar-button-disabled-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-disabled-font-weight);
+}
+window.gmnb button.wc-tool-button:checked:disabled {
+  background-color: var(--gmnb-graph-toolbar-button-checked-disabled-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-checked-disabled-background-image);
+  color: var(--gmnb-graph-toolbar-button-checked-disabled-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-checked-disabled-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-checked-disabled-opacity);
+  filter: var(--gmnb-graph-toolbar-button-checked-disabled-filter);
+  transform: var(--gmnb-graph-toolbar-button-checked-disabled-transform);
+  transition: var(--gmnb-graph-toolbar-button-checked-disabled-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-checked-disabled-font-weight);
+}
+window.gmnb .wc-inert button.wc-tool-button:disabled:not(.wc-off) {
+  background-color: var(--gmnb-graph-toolbar-button-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-background-image);
+  color: var(--gmnb-graph-toolbar-button-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-opacity);
+  filter: var(--gmnb-graph-toolbar-button-filter);
+  transform: var(--gmnb-graph-toolbar-button-transform);
+  transition: var(--gmnb-graph-toolbar-button-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-font-weight);
+}
+window.gmnb .wc-inert button.wc-tool-button:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-graph-toolbar-button-checked-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-checked-background-image);
+  color: var(--gmnb-graph-toolbar-button-checked-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-checked-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-checked-opacity);
+  filter: var(--gmnb-graph-toolbar-button-checked-filter);
+  transform: var(--gmnb-graph-toolbar-button-checked-transform);
+  transition: var(--gmnb-graph-toolbar-button-checked-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-checked-font-weight);
+}
+/* end control */
+
+/* control graph.toolbar_button menubutton.wc-tool-button>button scope=window.gmnb */
+window.gmnb menubutton.wc-tool-button>button {
+  background-color: var(--gmnb-graph-toolbar-button-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-background-image);
+  color: var(--gmnb-graph-toolbar-button-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-opacity);
+  filter: var(--gmnb-graph-toolbar-button-filter);
+  transform: var(--gmnb-graph-toolbar-button-transform);
+  transition: var(--gmnb-graph-toolbar-button-transition);
+  border-radius: var(--gmnb-graph-toolbar-button-radius);
+  padding: var(--gmnb-graph-toolbar-button-padding);
+  margin: var(--gmnb-graph-toolbar-button-margin);
+  min-width: var(--gmnb-graph-toolbar-button-min-width);
+  min-height: var(--gmnb-graph-toolbar-button-min-height);
+  font-family: var(--gmnb-graph-toolbar-button-font-family);
+  font-size: var(--gmnb-graph-toolbar-button-font-size);
+  font-weight: var(--gmnb-graph-toolbar-button-font-weight);
+  font-style: var(--gmnb-graph-toolbar-button-font-style);
+  letter-spacing: var(--gmnb-graph-toolbar-button-letter-spacing);
+  font-feature-settings: var(--gmnb-graph-toolbar-button-font-features);
+  font-variation-settings: var(--gmnb-graph-toolbar-button-font-variations);
+}
+window.gmnb menubutton.wc-tool-button>button:hover {
+  background-color: var(--gmnb-graph-toolbar-button-hover-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-hover-background-image);
+  color: var(--gmnb-graph-toolbar-button-hover-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-hover-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-hover-opacity);
+  filter: var(--gmnb-graph-toolbar-button-hover-filter);
+  transform: var(--gmnb-graph-toolbar-button-hover-transform);
+  transition: var(--gmnb-graph-toolbar-button-hover-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-hover-font-weight);
+}
+window.gmnb menubutton.wc-tool-button>button:active {
+  background-color: var(--gmnb-graph-toolbar-button-active-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-active-background-image);
+  color: var(--gmnb-graph-toolbar-button-active-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-active-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-active-opacity);
+  filter: var(--gmnb-graph-toolbar-button-active-filter);
+  transform: var(--gmnb-graph-toolbar-button-active-transform);
+  transition: var(--gmnb-graph-toolbar-button-active-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-active-font-weight);
+}
+window.gmnb menubutton.wc-tool-button>button:checked {
+  background-color: var(--gmnb-graph-toolbar-button-checked-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-checked-background-image);
+  color: var(--gmnb-graph-toolbar-button-checked-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-checked-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-checked-opacity);
+  filter: var(--gmnb-graph-toolbar-button-checked-filter);
+  transform: var(--gmnb-graph-toolbar-button-checked-transform);
+  transition: var(--gmnb-graph-toolbar-button-checked-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-checked-font-weight);
+}
+window.gmnb menubutton.wc-tool-button>button:checked:hover {
+  background-color: var(--gmnb-graph-toolbar-button-checked-hover-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-checked-hover-background-image);
+  color: var(--gmnb-graph-toolbar-button-checked-hover-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-checked-hover-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-checked-hover-opacity);
+  filter: var(--gmnb-graph-toolbar-button-checked-hover-filter);
+  transform: var(--gmnb-graph-toolbar-button-checked-hover-transform);
+  transition: var(--gmnb-graph-toolbar-button-checked-hover-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-checked-hover-font-weight);
+}
+window.gmnb menubutton.wc-tool-button>button:checked:active {
+  background-color: var(--gmnb-graph-toolbar-button-checked-active-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-checked-active-background-image);
+  color: var(--gmnb-graph-toolbar-button-checked-active-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-checked-active-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-checked-active-opacity);
+  filter: var(--gmnb-graph-toolbar-button-checked-active-filter);
+  transform: var(--gmnb-graph-toolbar-button-checked-active-transform);
+  transition: var(--gmnb-graph-toolbar-button-checked-active-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-checked-active-font-weight);
+}
+window.gmnb menubutton.wc-tool-button>button:disabled {
+  background-color: var(--gmnb-graph-toolbar-button-disabled-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-disabled-background-image);
+  color: var(--gmnb-graph-toolbar-button-disabled-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-disabled-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-disabled-opacity);
+  filter: var(--gmnb-graph-toolbar-button-disabled-filter);
+  transform: var(--gmnb-graph-toolbar-button-disabled-transform);
+  transition: var(--gmnb-graph-toolbar-button-disabled-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-disabled-font-weight);
+}
+window.gmnb menubutton.wc-tool-button>button:checked:disabled {
+  background-color: var(--gmnb-graph-toolbar-button-checked-disabled-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-checked-disabled-background-image);
+  color: var(--gmnb-graph-toolbar-button-checked-disabled-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-checked-disabled-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-checked-disabled-opacity);
+  filter: var(--gmnb-graph-toolbar-button-checked-disabled-filter);
+  transform: var(--gmnb-graph-toolbar-button-checked-disabled-transform);
+  transition: var(--gmnb-graph-toolbar-button-checked-disabled-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-checked-disabled-font-weight);
+}
+window.gmnb .wc-inert menubutton.wc-tool-button>button:disabled:not(.wc-off) {
+  background-color: var(--gmnb-graph-toolbar-button-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-background-image);
+  color: var(--gmnb-graph-toolbar-button-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-opacity);
+  filter: var(--gmnb-graph-toolbar-button-filter);
+  transform: var(--gmnb-graph-toolbar-button-transform);
+  transition: var(--gmnb-graph-toolbar-button-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-font-weight);
+}
+window.gmnb .wc-inert menubutton.wc-tool-button>button:checked:disabled:not(.wc-off) {
+  background-color: var(--gmnb-graph-toolbar-button-checked-background-color);
+  background-image: var(--gmnb-graph-toolbar-button-checked-background-image);
+  color: var(--gmnb-graph-toolbar-button-checked-color);
+  box-shadow: var(--gmnb-graph-toolbar-button-checked-shadow);
+  opacity: var(--gmnb-graph-toolbar-button-checked-opacity);
+  filter: var(--gmnb-graph-toolbar-button-checked-filter);
+  transform: var(--gmnb-graph-toolbar-button-checked-transform);
+  transition: var(--gmnb-graph-toolbar-button-checked-transition);
+  font-weight: var(--gmnb-graph-toolbar-button-checked-font-weight);
+}
+/* end control */
+
+/* The graph's keypad: the key classes' rules, the pad's shape (its
+   labels are drawn in the keys' fonts, or the pad's own, from Rust). */
+.wc-graph-pad button.wc-pad-key {
+  border-radius: var(--gmnb-keys-pad-radius);
+  min-height: var(--gmnb-keys-pad-min-height);
 }
 
-.wc-kgf-title {
-  font-family: "Outfit";
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  color: alpha(@wc_fg, 0.6);
-}
-
-.wc-kgf-value {
-  font-family: "Outfit";
-  font-size: 16px;
-}
-
-.wc-kgf-text {
-  font-size: 14px;
-  color: alpha(@wc_fg, 0.8);
-}
-
-.wc-kgf-note {
-  font-size: 12px;
-  font-style: italic;
-  color: alpha(@wc_fg, 0.6);
-}
-
+/* The style and options popovers. */
 entry.wc-range-entry {
-  font-family: "Outfit";
+  min-width: 0;
 }
 
+button.wc-swatch-pick box.wc-swatch-dot,
 button.wc-swatch-pick {
-  min-width: 24px;
-  min-height: 24px;
+  min-width: var(--gmnb-graph-swatch-size);
+  min-height: var(--gmnb-graph-swatch-size);
 }
 
 /* What a dialog, the sidebar or a sheet covers is insensitive only so

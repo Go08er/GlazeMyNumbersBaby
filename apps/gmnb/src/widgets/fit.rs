@@ -98,6 +98,9 @@ mod imp {
         pub prefix: RefCell<Option<Prefix>>,
         /// Shadows round the text (a see-through window's halo).
         pub halo: RefCell<Vec<gmnb_theme::types::Shadow>>,
+        /// How far the middle the line is set about lies from the
+        /// allocation's (DGMNB's keys sit in cells of fractional size).
+        pub shift: Cell<(f32, f32)>,
     }
 
     impl Default for FitLabel {
@@ -109,6 +112,7 @@ mod imp {
                 align: Cell::new(Align::Start),
                 prefix: RefCell::default(),
                 halo: RefCell::default(),
+                shift: Cell::new((0.0, 0.0)),
             }
         }
     }
@@ -150,15 +154,16 @@ mod imp {
             let layout = obj.layout_at_size(size, &self.text.borrow(), None);
             // The capitals centred, on a whole pixel, as DGMNB sets a line
             // (`H`'s ink is the cap height).
+            let (dx, dy) = self.shift.get();
             let baseline = |font: Option<&Font>, size: f32| {
                 let probe = obj.layout_at_size(size, "H", font);
                 let (ink, _) = probe.extents();
-                (h / 2.0 + px(ink.height()) / 2.0).round()
+                (h / 2.0 + dy + px(ink.height()) / 2.0).round()
             };
             let (_, logical) = layout.extents();
             let x = match self.align.get() {
                 Align::Start => lead,
-                Align::Center => (w - lead - px(logical.width())) / 2.0 + lead,
+                Align::Center => (w - lead - px(logical.width())) / 2.0 + lead + dx,
             };
             let halo = self.halo.borrow();
             if !halo.is_empty() {
@@ -170,7 +175,7 @@ mod imp {
             }
             if let Some(p) = self.prefix.borrow().as_ref() {
                 let pl = obj.layout_at_size(p.font.size, &p.text, Some(&p.font));
-                glyphs(
+                draw_line(
                     s,
                     &pl,
                     0.0,
@@ -178,7 +183,7 @@ mod imp {
                     &rgba(p.color),
                 );
             }
-            glyphs(s, &layout, x, baseline(None, size), &obj.color());
+            draw_line(s, &layout, x, baseline(None, size), &obj.color());
             if !halo.is_empty() {
                 s.pop();
             }
@@ -193,7 +198,7 @@ fn rgba(c: gmnb_theme::types::Rgba) -> gtk::gdk::RGBA {
 /// `layout`'s line at `x`, its baseline at `baseline`, each glyph placed
 /// at the nearest quarter pixel, as DGMNB places its glyphs (the
 /// toolkit's own rounding of a position put some a quarter pixel off).
-fn glyphs(
+pub fn draw_line(
     s: &gtk::Snapshot,
     layout: &pango::Layout,
     x: f32,
@@ -244,6 +249,13 @@ impl FitLabel {
         Self::default()
     }
 
+    /// One drawn only: what it says is its control's name (a key's).
+    pub fn drawn() -> Self {
+        glib::Object::builder()
+            .property("accessible-role", gtk::AccessibleRole::Presentation)
+            .build()
+    }
+
     /// One that is also a control (a converter value, picked to type
     /// into): a button to assistive technology and a stop for Tab.
     pub fn button() -> Self {
@@ -275,6 +287,13 @@ impl FitLabel {
     pub fn set_halo(&self, halo: &[gmnb_theme::types::Shadow]) {
         if *self.imp().halo.borrow() != halo {
             self.imp().halo.replace(halo.to_vec());
+            self.queue_draw();
+        }
+    }
+
+    /// Sets the line about a middle `dx`, `dy` from the allocation's.
+    pub fn set_shift(&self, dx: f32, dy: f32) {
+        if self.imp().shift.replace((dx, dy)) != (dx, dy) {
             self.queue_draw();
         }
     }
