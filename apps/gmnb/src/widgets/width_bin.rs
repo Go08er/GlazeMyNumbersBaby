@@ -227,20 +227,25 @@ mod imp {
             (most, most, -1, -1)
         }
 
+        /// As DGMNB takes its row apart (`Rect::take_left`,
+        /// `take_right`): each slot from what is left of the row, no
+        /// wider than that (in a narrow window the last get less, down to
+        /// none, and their buttons overlap about the room's middle).
         fn size_allocate(&self, width: i32, height: i32, _baseline: i32) {
             let (mut start, mut end) = (0.0, width as f32);
             for (w, s) in self.slots.borrow().iter() {
                 if !w.is_visible() {
                     continue;
                 }
+                let wide = s.width.min(end - start).max(0.0);
                 let x = if s.end {
-                    end -= s.width;
+                    end -= wide;
                     end
                 } else {
-                    start += s.width;
-                    start - s.width
+                    start += wide;
+                    start - wide
                 };
-                let room = s.width - 2.0 * s.inset;
+                let room = wide - 2.0 * s.inset;
                 let min = w.measure(gtk::Orientation::Horizontal, height).0;
                 let cw = (room.round() as i32).max(min);
                 let at = x + s.inset + (room - cw as f32) / 2.0;

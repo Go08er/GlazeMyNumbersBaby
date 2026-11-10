@@ -3606,7 +3606,10 @@ window.gmnb.own-field spinbutton.wc-spin>text.error:focus-within {
 }
 /* end field */
 
-window.gmnb spinbutton.wc-spin > text {
+/* The box is DGMNB's 36 px line (date.rs sizes the spin button), not a
+   field's height: as particular as the field's own rule, after it. */
+window.gmnb spinbutton.wc-spin > text,
+window.gmnb.own-field spinbutton.wc-spin > text {
   min-height: 0;
   outline: none;
 }
@@ -5583,6 +5586,41 @@ window.gmnb entry.wc-eq-entry,
 window.gmnb entry.wc-eq-entry:focus-within {
   border: none;
   outline-color: transparent;
+}
+
+/* A text field's text at rest (widgets/fit.rs `rest_line`): the line over
+   the field sets it as DGMNB does, and the toolkit's own text, there for
+   the focus, editing, the caret, a selection, an input method and
+   assistive technology, is hidden until the field has the focus. A theme
+   that hands the field family back to the toolkit keeps its text. */
+window.gmnb .wc-rest > fitlabel {
+  opacity: 0;
+}
+window.gmnb.own-field .wc-rest:not(:focus-within) > fitlabel {
+  opacity: 1;
+}
+window.gmnb.own-field .wc-rest:not(:focus-within) text,
+window.gmnb.own-field .wc-rest:not(:focus-within) text > placeholder {
+  color: transparent;
+}
+window.gmnb.own-field .wc-rest:not(:focus-within) text > selection {
+  color: transparent;
+  background-color: transparent;
+}
+window.gmnb .wc-eq-rest > fitlabel {
+  color: var(--gmnb-graph-entry-color);
+}
+window.gmnb .wc-eq-rest.wc-error > fitlabel {
+  color: var(--gmnb-graph-entry-error-color);
+}
+window.gmnb .wc-eq-rest > fitlabel.wc-placeholder {
+  color: var(--gmnb-graph-entry-placeholder);
+}
+window.gmnb .wc-spin-rest > fitlabel {
+  color: var(--gmnb-field-color);
+}
+window.gmnb .wc-spin-rest > fitlabel.wc-placeholder {
+  color: var(--gmnb-field-placeholder);
 }
 
 /* control graph.row_button button.wc-row-button scope=window.gmnb */

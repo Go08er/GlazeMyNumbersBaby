@@ -50,6 +50,10 @@ mod imp {
     }
 
     impl WidgetImpl for BitGrid {
+        /// No least size of its own: DGMNB's bits take whatever room the
+        /// keypad's place has (its least window is 300 × 400), the bits
+        /// and their indexes shrinking with it. What it would like is room
+        /// for each part's own least size.
         fn measure(&self, orientation: gtk::Orientation, _for_size: i32) -> (i32, i32, i32, i32) {
             let mut most = 0;
             let mut c = self.obj().first_child();
@@ -62,7 +66,7 @@ mod imp {
             } else {
                 8
             };
-            (most * n, most * n, -1, -1)
+            (0, most * n, -1, -1)
         }
 
         fn size_allocate(&self, width: i32, height: i32, _baseline: i32) {
