@@ -99,14 +99,14 @@ fn infinite_loop_at_load() {
 #[test]
 fn infinite_loop_in_a_call() {
     let e = engine();
-    let f = hook(&e, "return function() while true do end end");
+    let spin = "return function() while true do end end";
     let t = Instant::now();
-    assert_eq!(call(&e, &f), Err(ThemeError::Timeout(ms(30))));
+    assert_eq!(call(&e, &hook(&e, spin)), Err(ThemeError::Timeout(ms(30))));
     assert_prompt(t);
     // The style budget is its own.
     let t = Instant::now();
     assert_eq!(
-        e.call(&f, Budget::Style, ()),
+        e.call(&hook(&e, spin), Budget::Style, ()),
         Err(ThemeError::Timeout(ms(50)))
     );
     assert!(t.elapsed() >= ms(50));
@@ -199,16 +199,76 @@ fn a_sort_comparator_that_loops() {
 #[test]
 fn one_library_call_past_the_deadline_is_a_timeout() {
     // Sorting numbers runs no script code, so the interrupt can't stop it;
-    // returning late is a timeout all the same.
-    let e = engine();
+    // returning late is a timeout all the same, and returning more than
+    // four times late switches the hook off at once.
+    let e = roomy();
     let f = hook(
         &e,
-        "local t = table.create(200000) for i = 1, #t do t[i] = (i * 7919) % 200003 end
+        "local t = table.create(300000, 0) for i = 1, #t do t[i] = (i * 7919) % 300007 end
          return function() table.sort(t) table.sort(t, function(a, b) return a > b end) end",
     );
     assert_eq!(
-        e.call(&f, Budget::Custom(Duration::from_micros(1)), ()),
-        Err(ThemeError::Timeout(Duration::from_micros(1)))
+        e.call(&f, Budget::Custom(ms(1)), ()),
+        Err(ThemeError::Timeout(ms(1)))
+    );
+    assert_eq!(f.strikes(), 1);
+    assert!(f.is_disabled());
+    assert_eq!(
+        e.call(&f, Budget::Custom(ms(1)), ()),
+        Err(ThemeError::Disabled(1))
+    );
+    assert!(!e.is_dead());
+}
+
+#[test]
+fn the_contracts_budgets() {
+    let d = Limits::default();
+    assert_eq!(
+        [
+            d.load, d.style, d.frame, d.preview, d.visible, d.action, d.place
+        ],
+        [250, 50, 8, 10, 10, 10, 2].map(ms)
+    );
+    assert_eq!(
+        (d.memory, d.strikes, d.string_bytes, d.source_bytes),
+        (8 << 20, 3, 4096, 512 << 10)
+    );
+    let e = Engine::new(Limits::default()).unwrap();
+    let spin = "return function() while true do end end";
+    for budget in [Budget::Preview, Budget::Visible, Budget::Action] {
+        assert_eq!(
+            e.call(&hook(&e, spin), budget, ()),
+            Err(ThemeError::Timeout(ms(10)))
+        );
+    }
+    // A span shares one limit between calls: all of a keypad frame's
+    // `place` calls.
+    let place = hook(&e, "return function(i) return i end");
+    let span = e.span(Budget::Place);
+    for i in 1..=3 {
+        assert_eq!(e.call_in(&place, &span, i), Ok(ThemeValue::Int(i)));
+    }
+    // The slow call stops when the span ends, which began before it.
+    let slow = hook(&e, spin);
+    let t = Instant::now();
+    let span = e.span(Budget::Custom(ms(40)));
+    assert_eq!(e.call_in(&place, &span, 0), Ok(ThemeValue::Int(0)));
+    assert_eq!(
+        e.call_in(&slow, &span, ()),
+        Err(ThemeError::Timeout(ms(40)))
+    );
+    assert!(t.elapsed() >= ms(40));
+    assert!(span.is_over());
+    // Once it's over, a call fails without running, and isn't the hook's
+    // fault.
+    assert_eq!(
+        e.call_in(&place, &span, 4),
+        Err(ThemeError::Timeout(ms(40)))
+    );
+    assert_eq!(place.strikes(), 0);
+    assert_eq!(
+        e.call_in(&place, &e.span(Budget::Place), 5),
+        Ok(ThemeValue::Int(5))
     );
 }
 
@@ -216,7 +276,6 @@ fn one_library_call_past_the_deadline_is_a_timeout() {
 
 #[test]
 fn recursion_bombs_fail_cleanly() {
-    let e = engine();
     for src in [
         "local function f() return f() + 1 end return f()",
         // Through metamethods, pcall, coroutines, gsub and tostring: each
@@ -229,18 +288,20 @@ fn recursion_bombs_fail_cleanly() {
         "local function f() return select(2, pcall(f)) end return f()",
         "local function f() local ok, e = xpcall(f, f) error(e) end f()",
     ] {
+        // Its own engine for each: the heap cap is fatal.
+        let e = engine();
         let t = Instant::now();
         match load(&e, src) {
+            Err(ThemeError::Memory(_)) => assert!(e.is_dead(), "{src}"),
             // xpcall's handler retrying each failure makes a tree of calls,
             // which the deadline cuts.
-            Err(ThemeError::Runtime { .. } | ThemeError::Memory(_) | ThemeError::Timeout(_)) => {}
+            Err(ThemeError::Runtime { .. } | ThemeError::Timeout(_)) => assert_usable(&e),
             // pcall recursion unwinds into its own catchers.
-            Ok(_) if src.contains("pcall") => {}
+            Ok(_) if src.contains("pcall") => assert_usable(&e),
             other => panic!("{src}: {other:?}"),
         }
         assert_prompt(t);
     }
-    assert_usable(&e);
 }
 
 #[test]
@@ -265,16 +326,14 @@ fn deeply_nested_source_is_a_syntax_error() {
 
 #[test]
 fn string_rep_memory_bomb() {
-    let e = roomy();
-    assert_eq!(
-        load(&e, "return #string.rep('x', 64 * 1024 * 1024)"),
-        Err(ThemeError::Memory(8 << 20))
-    );
-    assert_eq!(
-        load(&e, "local s = 'x' while true do s = s .. s end"),
-        Err(ThemeError::Memory(8 << 20))
-    );
-    assert_usable(&e);
+    for src in [
+        "return #string.rep('x', 64 * 1024 * 1024)",
+        "local s = 'x' while true do s = s .. s end",
+    ] {
+        let e = roomy();
+        assert_eq!(load(&e, src), Err(ThemeError::Memory(8 << 20)), "{src}");
+        assert!(e.is_dead());
+    }
 }
 
 #[test]
@@ -284,23 +343,23 @@ fn table_growth_memory_bomb() {
         &e,
         "return function() local t = {} for i = 1, 1e9 do t[i] = i end end",
     );
-    assert_eq!(
-        e.call(&f, Budget::Load, ()),
-        Err(ThemeError::Memory(8 << 20))
-    );
-    // What the failed call left was collected: the next has the room.
-    let g = hook(
-        &e,
-        "return function() local t = table.create(300000, 1) return #t end",
-    );
-    assert_eq!(e.call(&g, Budget::Load, ()), Ok(ThemeValue::Int(300000)));
-    assert!(e.used_memory() < 8 << 20);
-    assert_usable(&e);
+    let g = hook(&e, "return function() return 1 end");
+    let err = e.call(&f, Budget::Load, ());
+    assert_eq!(err, Err(ThemeError::Memory(8 << 20)));
+    // Fatal: the engine is stopped, the host unloads the theme, and
+    // everything fails the same way without running.
+    assert!(err.unwrap_err().is_fatal());
+    assert!(e.is_dead());
+    assert_eq!(call(&e, &g), Err(ThemeError::Memory(8 << 20)));
+    assert_eq!(g.strikes(), 0);
+    assert_eq!(load(&e, "return 1"), Err(ThemeError::Memory(8 << 20)));
+    assert!(matches!(e.host_table(0, 1), Err(ThemeError::Memory(_))));
 }
 
 #[test]
 fn a_caught_memory_error_stays_under_the_cap() {
-    // A script may catch the error; the cap held all the same.
+    // A script may catch the error, and the host never hears of it; the
+    // cap held all the same.
     let e = roomy();
     assert_eq!(
         load(
@@ -309,6 +368,7 @@ fn a_caught_memory_error_stays_under_the_cap() {
         ),
         Ok(ThemeValue::Bool(false))
     );
+    assert!(!e.is_dead());
 }
 
 #[test]
@@ -339,7 +399,8 @@ fn host_work_with_the_heap_full_fails_cleanly() {
         }
     }
     match e.convert(Value::Nil) {
-        Ok(ThemeValue::Nil) => {}
+        Ok(ThemeValue::Nil) => assert!(!e.is_dead()),
+        Err(ThemeError::Memory(_)) => assert!(e.is_dead()),
         other => panic!("{other:?}"),
     }
 }
@@ -352,6 +413,8 @@ fn require_and_loadstring_are_gone() {
     for name in [
         "require",
         "loadstring",
+        "debug",
+        "io",
         "getfenv",
         "setfenv",
         "newproxy",
@@ -399,7 +462,6 @@ fn the_globals_left() {
             "buffer",
             "collectgarbage",
             "coroutine",
-            "debug",
             "error",
             "gcinfo",
             "getmetatable",
@@ -433,14 +495,14 @@ fn the_globals_left() {
         load(
             &e,
             "local out = {}
-             for _, lib in {'os', 'debug'} do
+             for _, lib in {'os'} do
                  for k in pairs(_G[lib]) do out[#out + 1] = lib .. '.' .. k end
              end
              table.sort(out)
              return table.concat(out, ' ')"
         ),
         Ok(ThemeValue::String(
-            "debug.info debug.traceback os.clock os.date os.difftime os.time".into()
+            "os.clock os.date os.difftime os.time".into()
         ))
     );
     // collectgarbage only counts.
@@ -549,9 +611,9 @@ fn huge_and_odd_error_values() {
     assert!(message.ends_with(" more bytes)"), "{message}");
     assert!(traceback.len() < 2100);
     // Bigger, and the traceback mlua adds doesn't fit in the heap: still
-    // an error.
+    // an error (and, if the heap ran out, a fatal one).
     assert!(matches!(
-        load(&e, "error(string.rep('x', 4 * 1024 * 1024))"),
+        load(&engine(), "error(string.rep('x', 4 * 1024 * 1024))"),
         Err(ThemeError::Memory(_) | ThemeError::Runtime { .. })
     ));
     for (src, has) in [
@@ -629,12 +691,17 @@ fn a_hook_is_disabled_after_three_failures() {
     assert!(bad.is_disabled());
     assert_eq!(call(&e, &bad), Err(ThemeError::Disabled(3)));
     assert_eq!(bad.strikes(), 3);
-    // Strikes are per hook, and any failure counts.
+    // Strikes are per hook, and any failure counts. (A timeout normally
+    // takes three too, or one if a stall made the call run four times its
+    // limit.)
     assert_eq!(call(&e, &good), Ok(ThemeValue::Int(1)));
-    for _ in 0..3 {
+    let mut timeouts = 0;
+    while !slow.is_disabled() {
         assert_eq!(call(&e, &slow), Err(ThemeError::Timeout(ms(30))));
+        timeouts += 1;
+        assert!(timeouts <= 3);
     }
-    assert_eq!(call(&e, &slow), Err(ThemeError::Disabled(3)));
+    assert_eq!(call(&e, &slow), Err(ThemeError::Disabled(timeouts)));
     assert_eq!(call(&e, &good), Ok(ThemeValue::Int(2)));
     assert!(!good.is_disabled());
 }
@@ -810,9 +877,17 @@ fn deep_and_wide_trees_are_capped() {
         Err(ThemeError::Limit(m)) if m.contains(has) => {}
         other => panic!("{src}: {other:?}"),
     };
-    limit("return string.rep('s', 70000)", "a string of 70000 bytes");
+    assert_eq!(
+        load(&e, "return string.rep('s', 4096)"),
+        Ok(ThemeValue::String("s".repeat(4096)))
+    );
+    limit("return string.rep('s', 4097)", "a string of 4097 bytes");
     limit(
-        "local t = {} for i = 1, 20 do t[i] = string.rep('s', 60000) .. i end return t",
+        "return {[string.rep('k', 5000)] = 1}",
+        "a string of 5000 bytes",
+    );
+    limit(
+        "local t = {} for i = 1, 300 do t[i] = string.rep('s', 4000) .. i end return t",
         "in all",
     );
     match load(&e, "return {['\\255'] = 1}") {

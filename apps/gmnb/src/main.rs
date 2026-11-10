@@ -1,5 +1,4 @@
 mod a11y;
-mod check_theme;
 mod inert;
 mod keymap;
 mod launch;
@@ -37,10 +36,6 @@ pub static RENDERER_FROM_ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::n
 static RENDERER_SET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn main() -> glib::ExitCode {
-    // A dev command for theme authors: no window, no display needed.
-    if let Some(code) = check_theme::from_args() {
-        return code;
-    }
     launch::mark("main");
     // SAFETY: first thing in main, before GTK or any other thread starts.
     unsafe { appcore::tz::fix_sandbox_timezone() };
@@ -271,4 +266,31 @@ fn schedule_screenshot(win: adw::ApplicationWindow, path: PathBuf) {
             app.quit();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    /// GMNB depends on the theme engine before the theme API uses it, so
+    /// that every package build already compiles its C++ (Luau): here it
+    /// links, a theme file's table comes back and its hook runs.
+    #[test]
+    fn theme_engine_links() {
+        use gmnb_theme::{Budget, Engine, Limits, ThemeValue};
+        let engine = Engine::new(Limits::default()).unwrap();
+        let theme = engine
+            .load(
+                "=theme",
+                "return { api = 1, style = function(ctx) return ctx end }",
+            )
+            .unwrap();
+        assert_eq!(theme.get("api"), Some(&ThemeValue::Int(1)));
+        let style = theme
+            .get("style")
+            .and_then(ThemeValue::as_function)
+            .unwrap();
+        assert_eq!(
+            engine.call(style, Budget::Style, "dark"),
+            Ok(ThemeValue::String("dark".into()))
+        );
+    }
 }

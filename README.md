@@ -222,8 +222,8 @@ crates/appcore      Everything the twins share that isn't drawing: modes, key
                     graph sessions, a tiny D-Bus client, time zone fix
 crates/gmnb-theme   GMNB's theme scripts: a sandboxed Luau VM (mlua) with a
                     heap cap and deadlines, and the values it returns; never
-                    linked into DGMNB. `gmnb --check-theme FILE` loads a
-                    theme file in it and prints what it returns
+                    linked into DGMNB (docs/theming.md, once the theme API
+                    lands, is what runs on it)
 apps/gmnb           The GTK 4 / libadwaita application
 apps/gmnb-launcher  Installed as `gmnb`: checks the CPU, then runs GMNB
 apps/dgmnb          The software-drawn application (winit, softbuffer,
@@ -234,7 +234,7 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **1,163 tests** (counts include
+`nix develop -c cargo test --workspace` runs **1,165 tests** (counts include
 doctests; seven more are `#[ignore]`d: a live currency fetch, the full
 metamorphic graph sweep, 20,000 random saved sessions, the
 cross-checking tester's long run, single-expression check and case list,
@@ -266,8 +266,8 @@ upstream sources with g++:
 | graphing (455 + 4 ignored) | Parser, certified explicit plots (no join across a pole, jump, domain edge or hole; nothing visible left out; chords within tolerance; holes marked and unjoined, and no false ones, at hundreds of canvas sizes; steep lines up to 10³⁰⁰·x) and holes, tracing values and steep-curve stepping, implicit/inequality plots, sliders (kept while their equation isn't drawn, remembered while no equation uses them), function analysis (the certified panel: no row certified wrong on the certify corpus truth table, exact forms only where proven, partial lists and unknown rows, a monotone piece or extremum at a domain end only where the proof reaches it, nothing read across a gap beside a hole or a cut of the domain; poles, zeros and domains far out, tiny bounds, points where an intermediate is undefined, values beyond a double's range), frame-time budgets, prompt cancellation of running plots and analyses (the heaviest known analyses bounded and cancellable), and regressions for hostile input (deep nesting, huge nCr/nPr, extreme ranges, runaway analysis, dense pole families) |
 | appcore (66) | Keyboard map, key scripts, a text field's undo history (typed runs, its bound, redo cleared, the selection restored), converter paste validation, settings storage (huge/corrupt files, per-section budgets, a long calculator session that used to cost the whole file), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus |
 | crmath (1) | The vendored CORE-MATH's two builds (baseline and x86-64-v3) give the same bits |
-| gmnb-theme (31 + 1 ignored) | The theme sandbox against hostile scripts: runaway loops at load and in calls (also inside `pcall`, coroutines, a sort comparator and a backtracking pattern, and one library call past the deadline), recursion through Luau and C, memory bombs and host work with the heap full, `require`/`loadstring`/`getfenv` gone, the exact globals left, read-only libraries and host tables, bytecode refused, huge and odd error values; the value tree's caps (depth, values, string bytes), cycles, mixed and sparse tables, NaN and infinities, metamethods that never run; strikes disabling a hook; the frame-call cost (ignored: `--release -- --ignored`) |
-| gmnb (25), gmnb-launcher (5), dgmnb (68) | GDK key translation, a field's undo keys, palette contrast for extreme accents, settings compatibility, licence text that parses as markup; the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it), where it finds GMNB, and a notification that hangs given up on; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown and pipe deadlines |
+| gmnb-theme (32 + 1 ignored) | The theme sandbox against hostile scripts: runaway loops at load and in calls (also inside `pcall`, coroutines, a sort comparator and a backtracking pattern), one library call past the deadline (a timeout, and four times past it switches the hook off at once), the contract's budgets and a span shared by several calls, recursion through Luau and C, memory bombs (fatal: the engine stops) and host work with the heap full, `require`/`loadstring`/`getfenv`/`debug` gone, the exact globals left, read-only libraries and host tables, bytecode refused, huge and odd error values; the value tree's caps (depth, values, 4 KiB strings), cycles, mixed and sparse tables, NaN and infinities, metamethods that never run; strikes disabling a hook; the frame-call cost (ignored: `--release -- --ignored`) |
+| gmnb (26), gmnb-launcher (5), dgmnb (68) | GDK key translation, a field's undo keys, palette contrast for extreme accents, settings compatibility, licence text that parses as markup, the theme engine (linked, a hook called); the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it), where it finds GMNB, and a notification that hangs given up on; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown and pipe deadlines |
 
 The oracles live in `tools/oracle/` and need the upstream repository checked
 out at `reference/calculator` to regenerate the golden files.

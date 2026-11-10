@@ -13,7 +13,8 @@ pub enum ThemeError {
     Runtime { message: String, traceback: String },
     /// The call ran past its deadline.
     Timeout(Duration),
-    /// The Luau heap reached its cap (in bytes).
+    /// The Luau heap reached its cap (in bytes). Fatal: the engine is
+    /// stopped, and the host unloads the theme.
     Memory(usize),
     /// A host cap was reached: the source's size, or the size of the value
     /// tree a script returned.
@@ -21,8 +22,21 @@ pub enum ThemeError {
     /// Something the host doesn't take: precompiled bytecode, or a value
     /// with no host form (a mixed or cyclic table, NaN, a coroutine...).
     Unsupported(String),
-    /// The hook failed this many times and is no longer called.
+    /// The hook failed this many times (or once, running more than four
+    /// times its limit) and is no longer called.
     Disabled(u32),
+    /// A bug in GMNB, not the theme: a panic inside mlua, caught. Fatal.
+    Internal(String),
+}
+
+impl ThemeError {
+    /// Whether the engine is stopped by it ([`Engine::is_dead`]): the host
+    /// drops the engine and unloads the theme.
+    ///
+    /// [`Engine::is_dead`]: crate::Engine::is_dead
+    pub fn is_fatal(&self) -> bool {
+        matches!(self, ThemeError::Memory(_) | ThemeError::Internal(_))
+    }
 }
 
 impl fmt::Display for ThemeError {
@@ -40,6 +54,7 @@ impl fmt::Display for ThemeError {
             ThemeError::Limit(m) => write!(f, "too big: {m}"),
             ThemeError::Unsupported(m) => write!(f, "not supported: {m}"),
             ThemeError::Disabled(n) => write!(f, "disabled after failing {n} times"),
+            ThemeError::Internal(m) => write!(f, "internal error (not the theme's): {m}"),
         }
     }
 }

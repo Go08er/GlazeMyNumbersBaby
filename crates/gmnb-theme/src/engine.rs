@@ -10,12 +10,13 @@ use mlua::{
     Function, IntoLuaMulti, Lua, LuaOptions, LuaString, MultiValue, StdLib, Table, Value, VmState,
 };
 
-use crate::error::{BYTECODE, TIMEOUT_MESSAGE, cap, classify, runtime};
+use crate::error::{BYTECODE, TIMEOUT_MESSAGE, cap, classify};
 use crate::value::Hook;
 use crate::{Budget, FunctionHandle, Limits, ThemeError, ThemeValue};
 
-/// Luau's standard libraries but `integer` (behind a Luau flag in this
-/// version). The base library always comes with them.
+/// Luau's standard libraries but `debug` (the theme contract leaves it
+/// out) and `integer` (behind a Luau flag in this version). The base
+/// library always comes with them.
 fn libs() -> StdLib {
     StdLib::COROUTINE
         | StdLib::TABLE
@@ -26,7 +27,6 @@ fn libs() -> StdLib {
         | StdLib::MATH
         | StdLib::BUFFER
         | StdLib::VECTOR
-        | StdLib::DEBUG
 }
 
 /// Globals taken away before the sandbox closes (see the crate docs).
@@ -53,8 +53,9 @@ struct Shared {
     deadline: Cell<Option<Instant>>,
     /// Whether the interrupt stopped the running entry.
     timed_out: Cell<bool>,
-    /// Set after a panic inside mlua: the engine refuses everything after.
-    dead: Cell<bool>,
+    /// The fatal error that stopped the engine (the heap cap, or a panic
+    /// inside mlua): everything after fails with it.
+    dead: RefCell<Option<ThemeError>>,
     print_nesting: Cell<u32>,
     log: RefCell<LogBuf>,
 }
@@ -84,6 +85,22 @@ impl HostTable {
     }
 }
 
+/// One time limit shared by several calls, from when it was made
+/// ([`Engine::span`]): all `place` calls of one keypad frame share
+/// [`Limits::place`]. [`Engine::call`] makes one for each call.
+#[derive(Clone, Copy, Debug)]
+pub struct Span {
+    start: Instant,
+    limit: Duration,
+}
+
+impl Span {
+    /// Whether the time is up.
+    pub fn is_over(&self) -> bool {
+        self.start.elapsed() >= self.limit
+    }
+}
+
 impl Engine {
     /// A sandboxed engine with no globals beyond the libraries.
     pub fn new(limits: Limits) -> Result<Engine, ThemeError> {
@@ -102,7 +119,7 @@ impl Engine {
         let shared = Rc::new(Shared {
             deadline: Cell::new(None),
             timed_out: Cell::new(false),
-            dead: Cell::new(false),
+            dead: RefCell::new(None),
             print_nesting: Cell::new(0),
             log: RefCell::new(LogBuf {
                 lines: VecDeque::new(),
@@ -183,8 +200,9 @@ impl Engine {
         if chunk.mode() == ChunkMode::Binary {
             return Err(ThemeError::Unsupported(BYTECODE.into()));
         }
+        self.alive()?;
         let value = self
-            .guarded(self.limits.load, || {
+            .guarded(&self.span(Budget::Load), || {
                 chunk
                     .set_mode(ChunkMode::Text)
                     .into_function()?
@@ -198,14 +216,38 @@ impl Engine {
     }
 
     /// Calls a hook under `budget`'s deadline and converts its first return
-    /// value. A failure counts against the hook (conversion errors too);
-    /// after [`Limits::strikes`] of them it is disabled.
+    /// value. A failure counts against the hook (conversion errors too):
+    /// after [`Limits::strikes`] of them it is disabled, and at once if the
+    /// call ran more than four times its limit (one library call Luau
+    /// couldn't interrupt). A fatal error ([`ThemeError::is_fatal`]) stops
+    /// the whole engine.
     pub fn call(
         &self,
         hook: &FunctionHandle,
         budget: Budget,
         args: impl IntoLuaMulti,
     ) -> Result<ThemeValue, ThemeError> {
+        self.call_in(hook, &self.span(budget), args)
+    }
+
+    /// A time limit for several calls ([`Engine::call_in`]), from now.
+    pub fn span(&self, budget: Budget) -> Span {
+        Span {
+            start: Instant::now(),
+            limit: budget.duration(&self.limits),
+        }
+    }
+
+    /// [`Engine::call`] within a span shared with other calls. Once the
+    /// span is over, a call fails with [`ThemeError::Timeout`] without
+    /// running and without a strike (the host should stop calling).
+    pub fn call_in(
+        &self,
+        hook: &FunctionHandle,
+        span: &Span,
+        args: impl IntoLuaMulti,
+    ) -> Result<ThemeValue, ThemeError> {
+        self.alive()?;
         let h = &hook.0;
         if h.engine != self.id {
             return Err(ThemeError::Unsupported(
@@ -215,8 +257,11 @@ impl Engine {
         if h.disabled.get() {
             return Err(ThemeError::Disabled(h.strikes.get()));
         }
+        if span.is_over() {
+            return Err(ThemeError::Timeout(span.limit));
+        }
         let result = self
-            .guarded(budget.duration(&self.limits), || {
+            .guarded(span, || {
                 let f: Function = self.lua.registry_value(&h.key)?;
                 f.call::<Value>(args)
             })
@@ -224,7 +269,8 @@ impl Engine {
         if result.is_err() {
             let strikes = h.strikes.get().saturating_add(1);
             h.strikes.set(strikes);
-            if strikes >= self.limits.strikes {
+            let overran = span.start.elapsed() > span.limit.saturating_mul(4);
+            if strikes >= self.limits.strikes || overran {
                 h.disabled.set(true);
             }
         }
@@ -233,16 +279,44 @@ impl Engine {
 
     /// Converts a Luau value (raw reads: no script code runs).
     pub fn convert(&self, value: Value) -> Result<ThemeValue, ThemeError> {
-        self.shielded(|| Ok(crate::convert::convert(self, value)))?
+        self.alive()?;
+        let r = self.shielded(|| Ok(crate::convert::convert(self, value)));
+        self.fatal(r.and_then(|r| r))
+    }
+
+    /// Whether a fatal error ([`ThemeError::is_fatal`]) stopped the engine:
+    /// the host drops it (and the theme) then. Everything fails after, with
+    /// that error.
+    pub fn is_dead(&self) -> bool {
+        self.shared.dead.borrow().is_some()
+    }
+
+    fn alive(&self) -> Result<(), ThemeError> {
+        match &*self.shared.dead.borrow() {
+            Some(e) => Err(e.clone()),
+            None => Ok(()),
+        }
+    }
+
+    /// Stops the engine if `r` is a fatal error.
+    fn fatal<T>(&self, r: Result<T, ThemeError>) -> Result<T, ThemeError> {
+        if let Err(e) = &r
+            && e.is_fatal()
+        {
+            self.shared
+                .dead
+                .borrow_mut()
+                .get_or_insert_with(|| e.clone());
+        }
+        r
     }
 
     /// A [`HostTable`] with room for `array` entries and `fields` named
     /// ones.
     pub fn host_table(&self, array: usize, fields: usize) -> Result<HostTable, ThemeError> {
-        let table = self
-            .lua
-            .create_table_with_capacity(array, fields)
-            .map_err(|e| classify(&e, &self.limits))?;
+        self.alive()?;
+        let table =
+            self.fatal(self.shielded(|| self.lua.create_table_with_capacity(array, fields)))?;
         table.set_readonly(true);
         Ok(HostTable {
             engine: self.id,
@@ -263,6 +337,7 @@ impl Engine {
         host: &HostTable,
         fill: impl FnOnce(&Table) -> mlua::Result<R>,
     ) -> Result<R, ThemeError> {
+        self.alive()?;
         if host.engine != self.id {
             return Err(ThemeError::Unsupported(
                 "a host table from another theme engine".into(),
@@ -323,56 +398,39 @@ impl Engine {
         })))
     }
 
-    /// Runs `f`, which enters the VM, under a deadline `budget` from now
-    /// (or an earlier one already running), and maps what goes wrong.
+    /// Runs `f`, which enters the VM, under the span's deadline (or an
+    /// earlier one already running), and maps what goes wrong.
     fn guarded<T>(
         &self,
-        budget: Duration,
+        span: &Span,
         f: impl FnOnce() -> mlua::Result<T>,
     ) -> Result<T, ThemeError> {
-        let entry = Entry::new(&self.shared, budget);
+        let entry = Entry::new(&self.shared, span.start.checked_add(span.limit));
         let result = self.shielded(f);
         let timed_out = entry.timed_out();
         drop(entry);
-        match result {
+        self.fatal(match result {
+            // A fatal error stands, whatever the clock says.
+            Err(e) if e.is_fatal() => Err(e),
             // However the script ended: it caught the interrupt's error,
             // or one library call ran past the deadline uninterrupted.
-            _ if timed_out => Err(ThemeError::Timeout(budget)),
-            Err(ThemeError::Memory(cap)) => {
-                // Luau doesn't collect when an allocation fails: free what
-                // the failed call left now, so the next one has room.
-                let _ = self.lua.gc_collect();
-                Err(ThemeError::Memory(cap))
-            }
+            _ if timed_out => Err(ThemeError::Timeout(span.limit)),
             other => other,
-        }
+        })
     }
 
-    /// Runs `f` with a backstop for panics inside mlua: the engine is then
-    /// dead, and says so.
+    /// Runs `f` with a backstop for panics inside mlua, which are fatal.
     fn shielded<T>(&self, f: impl FnOnce() -> mlua::Result<T>) -> Result<T, ThemeError> {
-        if self.shared.dead.get() {
-            return Err(runtime(
-                "this theme was stopped after an internal error",
-                "",
-                &self.limits,
-            ));
-        }
         match catch_unwind(AssertUnwindSafe(f)) {
             Ok(Ok(v)) => Ok(v),
             Ok(Err(e)) => Err(classify(&e, &self.limits)),
             Err(panic) => {
-                self.shared.dead.set(true);
                 let what = panic
                     .downcast_ref::<&str>()
                     .map(|s| s.to_string())
                     .or_else(|| panic.downcast_ref::<String>().cloned())
                     .unwrap_or_default();
-                Err(runtime(
-                    &format!("internal error, the theme is stopped: {what}"),
-                    "",
-                    &self.limits,
-                ))
+                Err(ThemeError::Internal(cap(&what, self.limits.message_bytes)))
             }
         }
     }
@@ -389,9 +447,10 @@ struct Entry<'a> {
 }
 
 impl<'a> Entry<'a> {
-    fn new(shared: &'a Shared, budget: Duration) -> Self {
+    /// `end`: `None` for no deadline of its own.
+    fn new(shared: &'a Shared, end: Option<Instant>) -> Self {
         let outer = shared.deadline.get();
-        let deadline = match (outer, Instant::now().checked_add(budget)) {
+        let deadline = match (outer, end) {
             (Some(o), Some(d)) => Some(o.min(d)),
             (Some(o), None) => Some(o),
             (None, d) => d,

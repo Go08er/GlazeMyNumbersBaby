@@ -106,8 +106,8 @@ impl PartialEq for ThemeValue {
     }
 }
 
-/// Written as a Luau literal, one entry a line (what `gmnb --check-theme`
-/// prints).
+/// Written as a Luau literal, one entry a line (for messages and theme
+/// authors' tools).
 impl fmt::Display for ThemeValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.write(f, 0)
