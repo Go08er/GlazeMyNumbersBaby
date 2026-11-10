@@ -1,0 +1,993 @@
+-- GMNB theme API, version 1: type definitions for luau-lsp.
+--
+-- Editor setup (VS Code, luau-lsp):
+--   "luau-lsp.types.definitionFiles": ["path/to/gmnb.d.luau"],
+--   "luau-lsp.platform.type": "standard"
+--
+-- The contract these types belong to is docs/theming.md. Where the two
+-- disagree, the document wins and this file has a bug.
+
+---------------------------------------------------------------------------
+-- Values
+---------------------------------------------------------------------------
+
+-- A colour as the gmnb helpers return it: red, green, blue and opacity, 0 to 1.
+export type Rgba = { r: number, g: number, b: number, a: number? }
+
+-- "#rrggbb", "#rrggbbaa", or an Rgba.
+export type Color = string | Rgba
+
+-- { x, y }
+export type Point = { number }
+
+-- { x, y, w, h } by name.
+export type Rect = { x: number, y: number, w: number, h: number }
+
+-- Made by gmnb.linear / gmnb.radial / gmnb.conic.
+--   angle, at     relative to the box being painted; work everywhere.
+--   from, to, center, radius in pixels: draw hooks only.
+export type Gradient = {
+	kind: "linear" | "radial" | "conic",
+	colors: { Rgba },
+	-- Where each colour sits, 0 to 1.
+	stops: { number },
+	-- linear: CSS degrees (0 up, 90 right, 180 down). conic: where it starts.
+	angle: number?,
+	-- linear, pixels.
+	from: Point?,
+	to: Point?,
+	-- radial and conic: the centre as fractions of the box (0.5, 0.5 = middle).
+	at: Point?,
+	-- radial and conic: the centre in pixels.
+	center: Point?,
+	-- radial: pixels; in a style also "closest-side", "farthest-side",
+	-- "closest-corner" or "farthest-corner".
+	radius: (number | string)?,
+	-- radial: the vertical radius when it differs (an ellipse).
+	radius_y: number?,
+}
+
+export type Paint = Color | Gradient
+
+-- One paint, or layers of them, topmost first.
+export type Fill = Paint | { Paint }
+
+export type Shadow = {
+	x: number?,
+	y: number?,
+	blur: number?,
+	spread: number?,
+	color: Color,
+	inset: boolean?,
+}
+
+-- Drawn inside the element's edge; never changes its size.
+export type Border = { width: number, color: Color }
+
+-- Pixels; 999 or more is fully round. Or four corners: top-left, top-right,
+-- bottom-right, bottom-left.
+export type Radius = number | { number }
+
+-- Pixels: one value, { vertical, horizontal } or { top, right, bottom, left }.
+export type Spacing = number | { number }
+
+export type Font = {
+	-- A family name, or several to fall back through. Names only: the font
+	-- files come from the theme's `fonts` list or the system.
+	family: (string | { string })?,
+	-- Pixels.
+	size: number?,
+	-- 1..1000.
+	weight: number?,
+	italic: boolean?,
+	-- Letter spacing in em.
+	spacing: number?,
+	-- OpenType features: { "tnum", "lnum" }, or "ss01=0" to turn one off.
+	features: { string }?,
+	-- Variable-font axes: { opsz = 24 }.
+	variations: { [string]: number }?,
+}
+
+export type Ease = "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out" | "spring" | { number }
+
+-- Milliseconds, or milliseconds with an ease (which defaults to "ease-out").
+export type Duration = number | { ms: number, ease: Ease? }
+
+-- Which properties ease when a state changes, and how long for.
+export type Transition = {
+	background: Duration?,
+	color: Duration?,
+	shadow: Duration?,
+	transform: Duration?,
+	filter: Duration?,
+	opacity: Duration?,
+}
+
+-- The ring around what holds the keyboard focus.
+export type FocusRing = {
+	width: number?,
+	color: Color?,
+	-- Pixels between the element's edge and the ring (negative: inside).
+	offset: number?,
+	radius: number?,
+}
+
+export type Icon = {
+	-- Pixels (the icons are drawn on a 24-unit grid and scaled to this).
+	size: number?,
+	-- Line width in pixels at that size.
+	stroke: number?,
+	color: Color?,
+}
+
+-- How an element differs while hovered, pressed, checked, disabled...
+-- Anything left out stays as the element is at rest.
+export type State = {
+	background: Fill?,
+	-- A colour laid over the background (how the base look shows hover and press).
+	overlay: Color?,
+	color: Color?,
+	-- The text and icon at this opacity, the background as it was (how
+	-- the base look shows a disabled key).
+	fade: number?,
+	border: (Border | false)?,
+	shadow: { Shadow }?,
+	opacity: number?,
+	-- 1 = unchanged.
+	brightness: number?,
+	saturation: number?,
+	scale: number?,
+	-- Degrees.
+	rotate: number?,
+	-- Only `weight` is read.
+	font: Font?,
+	icon: Icon?,
+	transition: Transition?,
+}
+
+export type Text = {
+	color: Color?,
+	font: Font?,
+	-- A text shadow list (halos).
+	shadow: { Shadow }?,
+	margin: Spacing?,
+}
+
+export type Surface = {
+	background: Fill?,
+	border: (Border | false)?,
+	shadow: { Shadow }?,
+	radius: Radius?,
+	padding: Spacing?,
+	margin: Spacing?,
+}
+
+-- Something the user can press. Which states an element has is listed in
+-- docs/theming.md; a state it doesn't have is reported and ignored.
+export type Control = {
+	background: Fill?,
+	color: Color?,
+	border: (Border | false)?,
+	shadow: { Shadow }?,
+	radius: Radius?,
+	font: Font?,
+	padding: Spacing?,
+	margin: Spacing?,
+	min_width: number?,
+	min_height: number?,
+	opacity: number?,
+	icon: Icon?,
+	transition: Transition?,
+	hover: State?,
+	active: State?,
+	checked: State?,
+	disabled: State?,
+}
+
+---------------------------------------------------------------------------
+-- Tokens: the few values most of the look derives from
+---------------------------------------------------------------------------
+
+export type Colors = {
+	-- The window.
+	bg: Color?,
+	-- Raised: number keys, fields, cards, popovers, the graph.
+	surface: Color?,
+	-- Function keys, the history panel, filled buttons, chips.
+	surface2: Color?,
+	border: Color?,
+	fg: Color?,
+	-- Secondary text.
+	fg_dim: Color?,
+	-- Disabled text, scrollbars.
+	fg_faint: Color?,
+	-- Fills: the equals key, what is switched on.
+	accent: Color?,
+	-- Text on `accent`.
+	on_accent: Color?,
+	-- The accent as text and lines on `bg` and `surface`.
+	accent_text: Color?,
+	-- Laid over a control under the pointer / being pressed.
+	hover: Color?,
+	press: Color?,
+	danger: Color?,
+	-- Six graph colours.
+	series: ({ Rgba } | { string })?,
+}
+
+-- Font families: one name, or several to fall back through.
+export type Fonts = {
+	-- Everything but the readout.
+	ui: (string | { string })?,
+	-- The calculator's readout, and the converter's and date page's values.
+	display: (string | { string })?,
+}
+
+-- The six sizes of text the base look is set in. Their family is
+-- `fonts.ui` unless they name one.
+export type TextStyles = {
+	body: Font?,
+	strong: Font?,
+	small: Font?,
+	caption: Font?,
+	key: Font?,
+	title: Font?,
+}
+
+export type Shape = {
+	-- Keys, buttons.
+	radius: number?,
+	-- List rows, text fields.
+	row_radius: number?,
+	-- Panels, cards, popovers, the graph.
+	card_radius: number?,
+}
+
+-- How thick the line icons are drawn: `stroke` on their 24-unit grid. At
+-- `size` pixels the line is stroke * (taper + (1 - taper) * size / 24)
+-- pixels wide: taper 0 scales it with the icon, 1 keeps it constant.
+export type IconLines = { stroke: number?, taper: number? }
+
+-- The space around and between a page's parts, in pixels.
+export type Layout = {
+	calculator: { margin: Spacing?, gap: number?, panel_width: number?, panel_margin: Spacing? }?,
+	converter: { margin: Spacing?, gap: number?, gap_wide: number?, keypad_width: number? }?,
+	date: { margin: Spacing?, gap: number?, max_width: number? }?,
+	graph: { margin: Spacing?, gap: number?, side_width: number?, pad_height: number? }?,
+}
+
+-- Milliseconds; 0 = no animation. The base look has them all at 0.
+export type Motion = {
+	-- Switching pages (Standard to Graphing...).
+	page: number?,
+	-- Switching calculator modes.
+	mode: number?,
+	-- History / Memory.
+	panel: number?,
+	-- Programmer: keypad / bits.
+	flip: number?,
+	-- Graphing, narrow: equations / graph; and the side panel's own pages.
+	graph_view: number?,
+	graph_side: number?,
+	-- Date: difference / add-subtract.
+	date: number?,
+	-- A new history row sliding in; an equation row appearing.
+	history_row: number?,
+	equation_row: number?,
+	-- A navigation icon drawing itself when its row is picked.
+	icon_draw: number?,
+	-- A curve drawing itself; the graph gliding to a new zoom.
+	graph_draw: number?,
+	graph_zoom: number?,
+}
+
+---------------------------------------------------------------------------
+-- The style tree: what `style(ctx)` may return. Everything is optional;
+-- what is left out keeps its base value.
+---------------------------------------------------------------------------
+
+export type WindowStyle = {
+	-- Painted under everything and faded by the Background opacity setting.
+	background: Fill?,
+	color: Color?,
+	-- The font of everything not given one below.
+	font: Font?,
+	-- Text shadow for text drawn straight on the backdrop (title, labels).
+	text_halo: { Shadow }?,
+	-- The same for text on keys, buttons, fields, panels, cards, popovers
+	-- and the sidebar. Disabled text never has a halo.
+	raised_text_halo: { Shadow }?,
+}
+
+export type HeaderStyle = {
+	background: Fill?,
+	height: number?,
+	title: Text?,
+	-- Menu, History, Keep on top and the pages' own header buttons.
+	button: Control?,
+	-- Minimise, maximise, close.
+	controls: Control?,
+	-- Close only, where it differs (hover and active).
+	close: Control?,
+}
+
+export type NavStyle = {
+	background: Fill?,
+	shadow: { Shadow }?,
+	-- The sidebar's width (it never takes more than 85% of the window).
+	width: number?,
+	-- The app name beside the menu button.
+	title: Text?,
+	show_title: boolean?,
+	-- "Calculator", "Converter".
+	header: Text?,
+	uppercase_headers: boolean?,
+	-- `checked` is the page being shown.
+	row: Control?,
+	settings: Control?,
+}
+
+export type DisplaySizes = {
+	standard: number?,
+	scientific: number?,
+	programmer: number?,
+	compact: number?,
+}
+
+export type Glow = {
+	color: Color,
+	-- Blur radius as a fraction of the font size.
+	blur: number,
+}
+
+export type DisplayStyle = {
+	background: Fill?,
+	radius: Radius?,
+	-- Space left and right of the text.
+	padding_x: number?,
+	-- The readout's height per mode; "auto" sizes it to its text.
+	heights: { standard: (number | "auto")?, scientific: (number | "auto")?, programmer: (number | "auto")?, compact: (number | "auto")? }?,
+	-- The value's largest font size per mode (it shrinks to fit).
+	sizes: DisplaySizes?,
+	min_size: number?,
+	value: {
+		font: Font?,
+		color: Paint?,
+		-- When the display shows an error.
+		error_color: Paint?,
+		error_scale: number?,
+		glow: (Glow | false)?,
+	}?,
+	expression: Text?,
+	-- An expression too long for its line shrinks down to this size before
+	-- it is cut short at its start.
+	expression_min_size: number?,
+	-- Shadows around the whole readout (see-through windows).
+	halo: { Shadow }?,
+}
+
+export type KeysStyle = {
+	gap: number?,
+	gap_compact: number?,
+	radius: Radius?,
+	min_width: number?,
+	min_height: number?,
+	padding: Spacing?,
+	transition: Transition?,
+	icon: Icon?,
+	number: Control?,
+	-- "function" is a Luau keyword, hence the short name.
+	func: Control?,
+	operator: Control?,
+	equals: Control?,
+	-- A toggle key that is on (2nd, hyp...).
+	on: State?,
+	-- What every key adds while hovered, pressed or disabled, unless its
+	-- own class says otherwise.
+	hover: State?,
+	active: State?,
+	disabled: State?,
+	-- The graphing page's small keypad.
+	pad: { gap: number?, radius: Radius?, min_height: number?, font: Font? }?,
+}
+
+export type Reveal = "always" | "hover"
+
+export type PanelStyle = {
+	background: Fill?,
+	border: (Border | false)?,
+	shadow: { Shadow }?,
+	radius: Radius?,
+	padding: Spacing?,
+	margin: Spacing?,
+	-- The narrow window's bottom sheet.
+	sheet: Surface?,
+	-- History / Memory.
+	tabs: { stretch: boolean?, gap: number?, item: Control? }?,
+	title: Text?,
+	row: Control?,
+	expression: Text?,
+	result: Text?,
+	-- The x on a history row. "hover": shown while its row is hovered or
+	-- holds the keyboard focus.
+	delete: Control?,
+	delete_reveal: Reveal?,
+	-- MC, M+, M- on a memory row.
+	memory_button: Control?,
+	memory_reveal: Reveal?,
+	empty: Text?,
+}
+
+export type ProgrammerStyle = {
+	-- HEX, DEC, OCT, BIN: `checked` is the base in use.
+	radix: { row: Control?, name: Text?, name_checked: Color?, value: Text? }?,
+	bit: Control?,
+	bit_index: Text?,
+}
+
+export type DateStyle = {
+	label: Text?,
+	field: Control?,
+	-- The frame around a result (none in the base look).
+	result_panel: Surface?,
+	result: { size: number?, font: Font? }?,
+	add_result: { size: number?, font: Font? }?,
+	subresult: Text?,
+	calendar: {
+		title: Text?,
+		weekday: Text?,
+		-- `checked` is the chosen day.
+		day: Control?,
+		other_month: Color?,
+		today: (Border | false)?,
+		-- The ring on the day the arrow keys are on.
+		focus: FocusRing?,
+	}?,
+}
+
+export type ConverterStyle = {
+	-- `checked` is the field being typed into.
+	field: Control?,
+	-- A bar marking the field being typed into.
+	marker: ({ color: Color, width: number, height: number } | false)?,
+	value: { size: number?, font: Font?, checked_weight: number?, focus: FocusRing? }?,
+	symbol: Text?,
+	unit: Control?,
+	swap: Control?,
+	caption: Text?,
+	chip: Control?,
+	-- The playful comparison chip: how it differs from `chip`.
+	whimsy: State?,
+	whimsy_icon: boolean?,
+	ratio: Text?,
+	timestamp: Text?,
+	link: Control?,
+}
+
+export type CanvasStyle = {
+	background: Paint?,
+	radius: number?,
+	border: (Border | false)?,
+	grid_minor: Color?,
+	grid_major: Color?,
+	axis: { color: Color?, width: number? }?,
+	label: Text?,
+	-- Shaded regions (inequalities): the curve's colour at this opacity.
+	fill_opacity: number?,
+	-- A blurred copy under each curve: `width` times the line's width.
+	glow: ({ blur: number, width: number, opacity: number } | false)?,
+	trace: {
+		-- The cross-hair: the curve's colour at this opacity, dashed if
+		-- `hair_dash` gives the lengths of dash and gap.
+		hair_opacity: number?,
+		hair_dash: ({ number } | false)?,
+		-- A disc behind the dot, `grow` pixels larger: a colour, or
+		-- "series" for the curve's colour at `opacity`.
+		halo: ({ grow: number, color: Color | "series", opacity: number? } | false)?,
+		ring: (Border | false)?,
+		bubble: { background: Color?, color: Color?, radius: number?, font: Font?, border: (Border | false)?, shadow: { Shadow }? }?,
+	}?,
+}
+
+export type GraphStyle = {
+	side: Surface?,
+	-- The line above the keypad.
+	divider: (Color | false)?,
+	row: Surface?,
+	row_error: State?,
+	-- The equation's text field: how it differs from `field`.
+	entry: FieldStyle?,
+	-- Style, analyse and remove.
+	row_button: Control?,
+	error: Text?,
+	swatch: {
+		size: number?,
+		hidden_opacity: number?,
+		-- A glow in the equation's own colour.
+		glow: ({ blur: number, spread: number } | false)?,
+		active_scale: number?,
+		transition: Transition?,
+	}?,
+	add: Control?,
+	variable: Text?,
+	analysis: { title: Text?, card: Surface?, card_title: Text?, value: Text?, text: Text?, note: Text? }?,
+	toolbar: Surface?,
+	toolbar_button: Control?,
+	canvas: CanvasStyle?,
+}
+
+export type SliderStyle = {
+	track: { height: number?, color: Color?, radius: number? }?,
+	fill: Color?,
+	knob: { size: number?, color: Color?, halo: Color?, halo_size: number? }?,
+}
+
+export type SwitchStyle = {
+	width: number?,
+	height: number?,
+	off: Color?,
+	on: Color?,
+	knob: Color?,
+	knob_on: Color?,
+}
+
+export type FieldStyle = {
+	background: Fill?,
+	color: Color?,
+	border: (Border | false)?,
+	shadow: { Shadow }?,
+	radius: Radius?,
+	font: Font?,
+	padding: Spacing?,
+	min_height: number?,
+	placeholder: Color?,
+	selection: Color?,
+	caret: Color?,
+	-- While it has the keyboard focus / holds something invalid.
+	focus: State?,
+	error: State?,
+}
+
+-- Colours of stock widgets the app doesn't draw itself (the Settings and
+-- About dialogs, menus, dropdown lists, the colour chooser).
+export type StockColors = {
+	window: Color?,
+	view: Color?,
+	headerbar: Color?,
+	sidebar: Color?,
+	dialog: Color?,
+	popover: Color?,
+	card: Color?,
+	fg: Color?,
+	accent: Color?,
+	accent_bg: Color?,
+	accent_fg: Color?,
+	destructive: Color?,
+	error: Color?,
+}
+
+export type Style = {
+	colors: (Colors | BaseColors)?,
+	fonts: Fonts?,
+	text: TextStyles?,
+	shape: Shape?,
+	icons: IconLines?,
+	motion: Motion?,
+	layout: Layout?,
+	-- Widget families left to the toolkit's own drawing, in the `stock`
+	-- colours: "segmented", "field", "slider", "switch", "scrollbar",
+	-- "menu", "toast", "tooltip", "button", "card", "focus". Of their style
+	-- only `font` and `radius` still apply.
+	native: { string }?,
+
+	window: WindowStyle?,
+	-- Containers whose text sits straight on the backdrop.
+	plain: { background: Fill?, radius: Radius? }?,
+	header: HeaderStyle?,
+	nav: NavStyle?,
+	display: DisplayStyle?,
+	keys: KeysStyle?,
+	panel: PanelStyle?,
+	programmer: ProgrammerStyle?,
+	date: DateStyle?,
+	converter: ConverterStyle?,
+	graph: GraphStyle?,
+
+	-- Shared controls.
+	icon_button: Control?,
+	-- MC MR M+ M- MS, DEG, F-E, the programmer toolbar.
+	text_button: Control?,
+	text_button_gap: number?,
+	-- "Trigonometry" and "Function": buttons that open a flyout of keys.
+	flyout_button: Control?,
+	-- Filled buttons.
+	button: Control?,
+	-- Two- and three-way switches; `checked` is the choice.
+	segmented: { gap: number?, item: Control? }?,
+	field: FieldStyle?,
+	-- Rows of menus and lists; `checked` is the selected row.
+	row: Control?,
+	section: Text?,
+	slider: SliderStyle?,
+	switch: SwitchStyle?,
+	scrollbar: { width: number?, color: Color?, radius: number? }?,
+	card: Surface?,
+	-- Flyouts: the keys' own popovers, the calendar, the graph's options.
+	popover: Surface?,
+	-- Menus and dropdown lists.
+	menu: Surface?,
+	toast: { background: Fill?, color: Color?, radius: Radius?, font: Font?, min_height: number?, padding: Spacing? }?,
+	tooltip: { background: Fill?, color: Color?, radius: Radius?, font: Font?, padding: Spacing? }?,
+	focus: FocusRing?,
+	-- The shade over what a sheet or the sidebar covers.
+	scrim: Color?,
+	stock: StockColors?,
+}
+
+---------------------------------------------------------------------------
+-- ctx: what a theme is told
+---------------------------------------------------------------------------
+
+export type OptionValue = string | number | boolean
+
+export type Ctx = {
+	dark: boolean,
+	-- The desktop's accent colour: nil if it shares none, or if the user
+	-- turned "Use the desktop's accent colour" off.
+	accent: Rgba?,
+	-- The Background opacity setting, 0.1 to 1. Below 1 the desktop shows
+	-- through the window's background.
+	opacity: number,
+	-- This theme's options by id (saved values, else their defaults).
+	options: { [string]: OptionValue },
+	-- False when the desktop asks for reduced motion.
+	motion: boolean,
+	-- The desktop's interface font.
+	font: { family: string, size: number },
+	-- The base look's tokens for this `dark`, `accent` and `opacity`.
+	-- `text_scrim` is the layer of `bg` the base look puts under text on a
+	-- see-through window (transparent at full opacity).
+	base: { colors: BaseColors, text: BaseText, shape: Shape, text_scrim: Rgba },
+}
+
+-- The base tokens, all present.
+export type BaseColors = {
+	bg: Rgba,
+	surface: Rgba,
+	surface2: Rgba,
+	border: Rgba,
+	fg: Rgba,
+	fg_dim: Rgba,
+	fg_faint: Rgba,
+	accent: Rgba,
+	on_accent: Rgba,
+	accent_text: Rgba,
+	hover: Rgba,
+	press: Rgba,
+	danger: Rgba,
+	series: { Rgba },
+}
+
+export type BaseText = { body: Font, strong: Font, small: Font, caption: Font, key: Font, title: Font }
+
+---------------------------------------------------------------------------
+-- Drawing
+---------------------------------------------------------------------------
+
+export type Stroke = number | {
+	width: number,
+	cap: ("butt" | "round" | "square")?,
+	join: ("miter" | "round" | "bevel")?,
+	dash: { number }?,
+	dash_offset: number?,
+}
+
+export type Path = {
+	move_to: (self: Path, x: number, y: number) -> Path,
+	line_to: (self: Path, x: number, y: number) -> Path,
+	quad_to: (self: Path, cx: number, cy: number, x: number, y: number) -> Path,
+	curve_to: (self: Path, c1x: number, c1y: number, c2x: number, c2y: number, x: number, y: number) -> Path,
+	close: (self: Path) -> Path,
+	rect: (self: Path, x: number, y: number, w: number, h: number) -> Path,
+	rounded_rect: (self: Path, x: number, y: number, w: number, h: number, radius: Radius) -> Path,
+	circle: (self: Path, cx: number, cy: number, r: number) -> Path,
+}
+
+-- A picture from the theme's images folder, or generated noise.
+export type Image = { width: number, height: number }
+
+-- One character of the display's value, laid out by the app.
+export type Glyph = { index: number, x: number, y: number, w: number, h: number }
+
+export type Draw = {
+	-- Shapes.
+	rect: (self: Draw, x: number, y: number, w: number, h: number, paint: Paint) -> (),
+	rounded_rect: (self: Draw, x: number, y: number, w: number, h: number, radius: Radius, paint: Paint) -> (),
+	circle: (self: Draw, cx: number, cy: number, r: number, paint: Paint) -> (),
+	fill: (self: Draw, path: Path, paint: Paint, rule: ("winding" | "even-odd")?) -> (),
+	stroke: (self: Draw, path: Path, stroke: Stroke, paint: Paint) -> (),
+	border: (self: Draw, x: number, y: number, w: number, h: number, radius: Radius, width: number, color: Color) -> (),
+	shadow: (self: Draw, x: number, y: number, w: number, h: number, radius: Radius, shadow: Shadow) -> (),
+	-- Text and pictures.
+	text: (self: Draw, text: string, x: number, y: number, font: Font, paint: Paint) -> (),
+	text_size: (self: Draw, text: string, font: Font) -> (number, number),
+	glyph: (self: Draw, glyph: Glyph, paint: Paint) -> (),
+	image: (self: Draw, image: Image, x: number, y: number, w: number, h: number) -> (),
+	tile: (self: Draw, image: Image, x: number, y: number, w: number, h: number) -> (),
+	-- Groups: everything drawn until the matching pop() is affected.
+	push_clip: (self: Draw, x: number, y: number, w: number, h: number, radius: Radius?) -> (),
+	push_opacity: (self: Draw, opacity: number) -> (),
+	push_blur: (self: Draw, radius: number) -> (),
+	push_shadow: (self: Draw, shadows: { Shadow }) -> (),
+	-- Two parts, each ended by pop(): first the mask, then what shows through it.
+	push_mask: (self: Draw, mode: ("alpha" | "inverted-alpha" | "luminance" | "inverted-luminance")?) -> (),
+	-- Two parts, each ended by pop(): first what is underneath, then what is blended onto it.
+	push_blend: (self: Draw, mode: "multiply" | "screen" | "overlay" | "darken" | "lighten" | "color-dodge" | "color-burn" | "hard-light" | "soft-light" | "difference" | "exclusion" | "color" | "hue" | "saturation" | "luminosity") -> (),
+	pop: (self: Draw) -> (),
+	-- Transforms.
+	save: (self: Draw) -> (),
+	restore: (self: Draw) -> (),
+	translate: (self: Draw, dx: number, dy: number) -> (),
+	scale: (self: Draw, sx: number, sy: number?) -> (),
+	rotate: (self: Draw, degrees: number) -> (),
+}
+
+---------------------------------------------------------------------------
+-- Frames and events
+---------------------------------------------------------------------------
+
+export type KeyKind = "number" | "operator" | "func" | "equals" | "toggle" | "other"
+
+export type Event = {
+	-- "press": a control was used. "result" / "error": a calculation ended.
+	-- "show": a keypad came into view. "option": one of the theme's
+	-- options changed.
+	kind: "press" | "result" | "error" | "show" | "option",
+	-- Seconds since it happened.
+	age: number,
+	-- Where: the press point, or the middle of `rect`. In the layer's
+	-- coordinates, like `rect` (the control, the display, the keypad).
+	x: number,
+	y: number,
+	rect: Rect,
+	page: "calculator" | "converter" | "date" | "graphing" | "settings",
+	-- press: what was pressed and how.
+	source: ("key" | "button" | "swap" | "date")?,
+	via: ("pointer" | "keyboard")?,
+	-- press on a key: which one. `id` is the same for the same key every
+	-- time; use it for variety, not meaning.
+	key: { id: number, kind: KeyKind }?,
+	-- option: which one, and its new value.
+	id: string?,
+	value: OptionValue?,
+}
+
+export type KeyCell = {
+	-- Present on keys the calculator knows by number.
+	id: number?,
+	kind: KeyKind,
+	rect: Rect,
+	row: number,
+	col: number,
+	-- Its corner radius, from the style.
+	radius: number,
+	enabled: boolean,
+	hovered: boolean,
+	pressed: boolean,
+	checked: boolean,
+}
+
+export type DisplayGlyphs = {
+	glyphs: { Glyph },
+	-- The fitted font size, and where the text sits.
+	size: number,
+	rect: Rect,
+}
+
+export type DisplayValue = {
+	text: string,
+	glyphs: { Glyph },
+	size: number,
+	rect: Rect,
+	-- The band the value sits in, the readout's full width.
+	band: Rect,
+	error: boolean,
+	align: "start" | "end",
+	role: "calculator" | "converter" | "date",
+	-- While a change is being shown: what kind, how long ago, and the
+	-- first glyph that differs from the old value.
+	change: { kind: "typing" | "result" | "replace" | "error", age: number, from: number }?,
+	-- The value before the change, for as long as `change` is there.
+	previous: DisplayGlyphs?,
+}
+
+export type Frame = {
+	width: number,
+	height: number,
+	-- Seconds this layer has spent animating; stands still otherwise.
+	time: number,
+	-- Seconds since this layer's previous frame while it animates, else 0.
+	dt: number,
+	-- False: the desktop asked for reduced motion. Draw a still picture;
+	-- there are no events and requests for more frames are ignored.
+	motion: boolean,
+	-- True: nothing has happened for a while and the app has stopped the
+	-- clock. Requests for more frames wait until something happens.
+	settled: boolean,
+	-- The window is the one in use.
+	active: boolean,
+	-- Where the pointer is, for layers with `pointer = true`.
+	pointer: { x: number, y: number }?,
+	-- Newest last.
+	events: { Event },
+	ctx: Ctx,
+	-- The keypad layer: every cell of the keypad being drawn.
+	keys: { KeyCell }?,
+	-- The display layer: the value to paint.
+	value: DisplayValue?,
+}
+
+-- What a draw hook returns: nil for "this picture stands until something
+-- changes", 0 for "again next frame", or seconds until the next frame.
+export type Again = number?
+
+export type Placement = { dx: number?, dy: number?, scale: number?, opacity: number? }
+
+export type Layer = {
+	draw: ((draw: Draw, frame: Frame) -> Again)?,
+	-- Which events this layer is told about, and for how many seconds each
+	-- stays in `frame.events`.
+	events: { press: number?, result: number?, error: number?, show: number?, option: number? }?,
+	-- True: `frame.pointer` is filled in and the layer is redrawn as the
+	-- pointer moves over it.
+	pointer: boolean?,
+	-- Keypad only: move, scale or fade one cell (an entrance, say).
+	place: ((key: KeyCell, frame: Frame) -> Placement?)?,
+}
+
+---------------------------------------------------------------------------
+-- Options
+---------------------------------------------------------------------------
+
+export type Preview = { width: number, height: number, ctx: Ctx }
+
+export type OptionAction = {
+	label: string,
+	tooltip: string?,
+	-- Returns the options to change, by id.
+	run: (options: { [string]: OptionValue }, ctx: Ctx) -> { [string]: OptionValue },
+}
+
+export type Option = {
+	id: string,
+	type: "choice" | "color" | "toggle" | "slider" | "note",
+	label: string?,
+	description: string?,
+	-- A heading to gather options under.
+	group: string?,
+	default: OptionValue?,
+	-- choice
+	choices: { { id: string, label: string } }?,
+	-- choice: draw a tile for one choice; the choices then show as a grid of tiles.
+	preview: ((draw: Draw, frame: Preview, choice: string) -> ())?,
+	-- slider
+	min: number?,
+	max: number?,
+	step: number?,
+	-- slider: how the value is shown.
+	format: ("number" | "percent")?,
+	-- Shown only when this returns true.
+	visible: ((options: { [string]: OptionValue }, ctx: Ctx) -> boolean)?,
+	-- Buttons beside the option.
+	actions: { OptionAction }?,
+}
+
+---------------------------------------------------------------------------
+-- The theme: what theme.luau returns
+---------------------------------------------------------------------------
+
+export type Theme = {
+	api: number,
+	name: string,
+	description: string?,
+	author: string?,
+	version: string?,
+	license: string?,
+	-- Font files in the theme's folder to make available by family name.
+	fonts: { string }?,
+	-- Shown in About: a title, and a text file in the theme's folder.
+	credits: { { title: string, file: string } }?,
+	options: { Option }?,
+	style: ((ctx: Ctx) -> Style)?,
+	layers: {
+		-- The whole window, under everything.
+		background: Layer?,
+		-- Each keypad, over its keys.
+		keypad: Layer?,
+		-- Each readout: paints the value in place of the app.
+		display: Layer?,
+		-- The whole window, over everything.
+		overlay: Layer?,
+	}?,
+}
+
+---------------------------------------------------------------------------
+-- The gmnb library
+---------------------------------------------------------------------------
+
+export type GradientSpec = {
+	colors: { Color },
+	-- Where each colour sits, 0 to 1, one per colour. Left out, they are
+	-- spread evenly.
+	stops: { number }?,
+	angle: number?,
+	from: Point?,
+	to: Point?,
+	at: Point?,
+	center: Point?,
+	radius: (number | string)?,
+	radius_y: number?,
+}
+
+export type Easings = {
+	linear: (p: number) -> number,
+	in_quad: (p: number) -> number,
+	out_quad: (p: number) -> number,
+	in_out_quad: (p: number) -> number,
+	in_cubic: (p: number) -> number,
+	out_cubic: (p: number) -> number,
+	in_out_cubic: (p: number) -> number,
+	out_quart: (p: number) -> number,
+	out_back: (p: number) -> number,
+}
+
+export type Gmnb = {
+	-- The API version of the running app.
+	api: number,
+
+	-- Colours.
+	white: Rgba,
+	black: Rgba,
+	transparent: Rgba,
+	TEXT_CONTRAST: number,
+	UI_CONTRAST: number,
+	hex: (text: string) -> Rgba,
+	-- Any Color as an Rgba.
+	color: (c: Color) -> Rgba,
+	rgb: (r: number, g: number, b: number, a: number?) -> Rgba,
+	hsl: (h: number, s: number, l: number, a: number?) -> Rgba,
+	to_hsl: (c: Color) -> (number, number, number),
+	to_hex: (c: Color) -> string,
+	mix: (a: Color, b: Color, t: number) -> Rgba,
+	alpha: (c: Color, a: number) -> Rgba,
+	over: (top: Color, bottom: Color) -> Rgba,
+	complement: (c: Color) -> Rgba,
+	luminance: (c: Color) -> number,
+	contrast: (a: Color, b: Color) -> number,
+	worst_contrast: (c: Color, against: { Rgba } | { string }) -> number,
+	with_contrast: (c: Color, against: Color, target: number) -> Rgba,
+	gradient_for_text: (text: Color, a: Color, b: Color, target: number) -> (Rgba, Rgba),
+	readable_gradient: (a: Color, b: Color, light: Color, dark: Color, target: number) -> (Rgba, Rgba, Rgba),
+
+	-- The base look's colours for any mode and accent.
+	base: (dark: boolean, accent: Color?) -> BaseColors,
+
+	-- Paints.
+	linear: (spec: GradientSpec) -> Gradient,
+	radial: (spec: GradientSpec) -> Gradient,
+	conic: (spec: GradientSpec) -> Gradient,
+
+	-- Drawing resources.
+	path: () -> Path,
+	svg_path: (d: string) -> Path,
+	image: (file: string) -> Image,
+	noise: (spec: { size: number?, seed: number?, color: Color?, opacity: number? }) -> Image,
+
+	-- Motion.
+	ease: Easings,
+
+	-- A note for the theme's author (Settings shows the latest few).
+	warn: (message: string) -> (),
+}
+
+declare gmnb: Gmnb
