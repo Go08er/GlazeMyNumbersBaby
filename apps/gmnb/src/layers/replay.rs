@@ -10,6 +10,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::{Rc, Weak};
 
 use gmnb_media::Player;
 use gmnb_theme::draw::{self, BlendMode, DisplayList, Filter, MaskMode, Op};
@@ -89,8 +90,9 @@ pub struct Cache {
     /// Pictures a theme fills: the texture, and the version it is of.
     canvases: RefCell<HashMap<ImageId, (u64, gdk::Texture)>>,
     frames: RefCell<HashMap<ImageId, Frames>>,
-    /// The last few fields' pictures, by their number.
-    fields: RefCell<Vec<(u64, gdk::Texture)>>,
+    /// The textures of fields' pictures, each kept while its picture is
+    /// alive: in a layer's picture, or as the last a field made.
+    fields: RefCell<Vec<(Weak<FieldPicture>, gdk::Texture)>>,
     /// The theme's animations. Made when one is first drawn; its thread,
     /// when one first needs a frame after its first. Gone with the theme.
     player: RefCell<Option<Player>>,
@@ -99,11 +101,10 @@ pub struct Cache {
 
 /// Layouts kept at once: more, and the cache starts again.
 const LAYOUTS: usize = 256;
-/// Fields' pictures kept as textures at once: the ones on screen (a layer
-/// may show two), and no heap of old frames of a field that moves. One
-/// dropped while its picture still stands is made again from the
-/// picture's own bytes.
-const FIELDS: usize = 4;
+/// Fields' textures kept at once, should more pictures than that ever be
+/// alive (a bound no theme within its limits comes near). The oldest
+/// goes, and is made again of its picture's own bytes if it is drawn.
+const FIELDS: usize = 64;
 
 /// What the animations have cost, for the gates (`GMNB_THEME_STATS`).
 #[derive(Clone, Copy, Debug, Default)]
@@ -290,16 +291,27 @@ impl Cache {
     }
 
     /// The texture of a field's picture.
-    fn field(&self, picture: &FieldPicture) -> Option<gdk::Texture> {
+    ///
+    /// A texture is kept for as long as its picture is: a field that
+    /// moves makes a new picture every frame, and the old one's texture
+    /// goes with it (no heap of old frames); one that stands, in however
+    /// many layers and tiles, is never made a texture of twice. The
+    /// texture is of the picture's own bytes, so keeping it costs no
+    /// memory the picture doesn't.
+    fn field(&self, picture: &Rc<FieldPicture>) -> Option<gdk::Texture> {
         let mut fields = self.fields.borrow_mut();
-        if let Some((_, texture)) = fields.iter().find(|(serial, _)| *serial == picture.serial) {
+        fields.retain(|(of, _)| of.strong_count() > 0);
+        if let Some((_, texture)) = fields
+            .iter()
+            .find(|(of, _)| std::ptr::eq(of.as_ptr(), Rc::as_ptr(picture)))
+        {
             return Some(texture.clone());
         }
         let made = texture_of(picture.width, picture.height, picture.pixels.clone(), true)?;
         if fields.len() >= FIELDS {
             fields.remove(0);
         }
-        fields.push((picture.serial, made.clone()));
+        fields.push((Rc::downgrade(picture), made.clone()));
         Some(made)
     }
 

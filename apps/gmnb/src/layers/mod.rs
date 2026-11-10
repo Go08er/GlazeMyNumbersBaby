@@ -1467,7 +1467,7 @@ return { api = 1, name = "Pictures", layers = { background = { draw = function(d
     draw:tile(still, 240, 0, 80, 40)
     draw:image(moving, 0, 120, 80, 60)
     draw:tile(moving, 80, 120, 80, 60)
-    draw:field(160, 120, 160, 120, { data = grid, cols = 2, rows = 2, channels = 1, ramp = ramp, scale = 0.5 })
+    draw:field(160, 120, 160, 120, { data = grid, cols = 2, rows = 2, channels = 1, ramp = ramp, scale = 0.5 + frame.time })
     -- Pictures that aren't there draw nothing.
     draw:image(gmnb.image("none.png"), 0, 0, 320, 240)
     draw:image(gmnb.image("cut.png"), 0, 0, 320, 240)
@@ -1533,6 +1533,27 @@ end } } }
                 .any(|n| n.contains("cut.png can't be decoded") && n.contains("draws nothing")),
             "{notes:?}"
         );
+
+        // A field that has changed is a new picture. Its texture is kept
+        // beside the old one's while the old picture is still someone's
+        // (here: the first frame's), and the old one's goes with it.
+        // (Drawn where nothing may move, so that the animation asks for
+        // no frame.)
+        let moved = Frame {
+            time: 1.0,
+            motion: false,
+            ..Frame::sized(w, h)
+        };
+        let moved = match theme.draw(LayerKind::Background, &Ctx::default(), &moved) {
+            Ok(drawn) => drawn,
+            Err(e) => panic!("{e:?}"),
+        };
+        replay::replay(&gtk::Snapshot::new(), &moved.list, &scene);
+        assert_eq!(cache.textures(), 5);
+        drop(drawn);
+        replay::replay(&gtk::Snapshot::new(), &moved.list, &scene);
+        assert_eq!(cache.textures(), 4);
+        assert_eq!(cache.media().threads, 0);
 
         let node = s.to_node().expect("a picture");
         let renderer = gsk::CairoRenderer::new();

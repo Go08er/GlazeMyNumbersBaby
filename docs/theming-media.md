@@ -367,8 +367,8 @@ colouring pass at `quality = 0.5` included, 0.5 ms thirty times a second.
 Together about 3% of one core while the window is in use, and nothing at
 rest. (Handing each picture to the graphics card and redrawing the window
 thirty times a second come on top: the whole app, with the software
-renderer, used 10 to 12% of a core, and 2 MiB of memory more than with
-the same theme standing still.) The same picture worked out per pixel on
+renderer, used 9 to 12% of a core, and 1 to 2 MiB of memory more than
+with the same theme standing still.) The same picture worked out per pixel on
 the processor takes 62 ms a frame.
 
 A field that hasn't changed isn't coloured again. Drawn with the same
@@ -1175,10 +1175,12 @@ byte for byte, to these steps written out plainly with the library's own
 `floor` (120 fields, ramps and sizes, over a million pixels), and to a
 stored hash.
 
-The texture is of the picture's own bytes, without a copy. The app keeps
-the textures of the last four fields' pictures (`layers/replay.rs`), so
-a field that moves leaves no heap of old frames behind it; one let go
-while its picture still stands is made again of the same bytes.
+The texture is of the picture's own bytes, without a copy, and the app
+keeps it for as long as the picture is alive (`layers/replay.rs`): in a
+layer's last frame, or as the last picture its field made. A field that
+moves leaves no heap of old frames behind it (the first build kept the
+last sixteen textures: 5.6 MiB for the swirl), and one that stands is
+made a texture of once, in however many layers and tiles it is drawn.
 
 **Where and how often.** The pass runs inside the `draw:field` call that
 asks for it, on that call's time. Per layer (per keypad, per readout) it

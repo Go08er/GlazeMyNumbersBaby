@@ -224,6 +224,10 @@ crates/gmnb-theme   GMNB's themes (docs/theming.md): a sandboxed Luau VM
                     (mlua) with a heap cap and deadlines, the theme API's
                     values and its schema, the resolved style and the CSS
                     written from it; never linked into DGMNB
+crates/gmnb-media   What a theme shows that is a picture (docs/theming-media.md):
+                    the four still formats decoded by Rust crates behind
+                    size caps, animations composited and played on one
+                    thread, the field pass; never linked into DGMNB
 apps/gmnb           The GTK 4 / libadwaita application
 apps/gmnb-launcher  Installed as `gmnb`: checks the CPU, then runs GMNB
 apps/dgmnb          The software-drawn application (winit, softbuffer,
@@ -234,11 +238,12 @@ tools/fonts/        How DGMNB's embedded font subsets are made
 
 ## Verification
 
-`nix develop -c cargo test --workspace` runs **1,165 tests** (counts include
-doctests; seven more are `#[ignore]`d: a live currency fetch, the full
+`nix develop -c cargo test --workspace` runs **1,431 tests** (counts include
+doctests; ten more are `#[ignore]`d: a live currency fetch, the full
 metamorphic graph sweep, 20,000 random saved sessions, the
 cross-checking tester's long run, single-expression check and case list,
-and the theme engine's frame-call timing).
+the theme engine's frame-call timing, and three measurements of what a
+theme's pictures cost).
 `cargo run --release -p graphing --example sweep`
 checks graph analysis against about 3,400 generated functions (shifted,
 offset, scaled and stretched variants, close and far centres, jumps,
@@ -267,7 +272,8 @@ upstream sources with g++:
 | appcore (71) | Keyboard map, key scripts, a text field's undo history (typed runs, its bound, redo cleared, the selection restored), converter paste validation, settings storage (huge/corrupt files, per-section budgets, a long calculator session that used to cost the whole file), colour contrast, saved-equation sanitising, D-Bus wire format (both byte orders), hostile and fuzzed messages, portal signals from impostors and the OpenURI request flow against a stand-in portal on a private bus; the base palette pinned, readable for any accent, and the least scrim that keeps text readable on a see-through window |
 | crmath (1) | The vendored CORE-MATH's two builds (baseline and x86-64-v3) give the same bits |
 | gmnb-theme (58 + 1 ignored) | The theme sandbox against hostile scripts: runaway loops at load and in calls (also inside `pcall`, coroutines, a sort comparator and a backtracking pattern), one library call past the deadline (a timeout, and four times past it switches the hook off at once), the contract's budgets and a span shared by several calls, recursion through Luau and C, memory bombs (fatal: the engine stops) and host work with the heap full, `require`/`loadstring`/`getfenv`/`debug` gone, the exact globals left, read-only libraries and host tables, bytecode refused, huge and odd error values; the value tree's caps (depth, values, 4 KiB strings), cycles, mixed and sparse tables, NaN and infinities, metamethods that never run; strikes disabling a hook; the frame-call cost (ignored: `--release -- --ignored`); the host's tables counted apart from the theme's heap. The style pipeline: `{}` resolves to exactly the base, the base pinned against DGMNB's constants, unknown keys and wrong types noted with the base kept, numbers clamped, the load and `style` limits, `ctx` as the contract has it, theme files kept inside their folder, discovery and "your copy", both built-in themes run for every palette, light and dark, at three opacities with no notes; every property the stylesheet reads emitted, a theme's values as CSS, no theme string reaching the stylesheet as text, the main and live providers, and the readability rules |
-| gmnb (34), gmnb-launcher (5), dgmnb (68) | GDK key translation, a field's undo keys, the 0.2 settings brought forward (old keys kept, each theme entry loading by itself), the theme hooks of the environment, theming installing no timers, licence text that parses as markup, the theme engine (linked, a hook called); the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it), where it finds GMNB, and a notification that hangs given up on; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown and pipe deadlines |
+| gmnb-media (57 + 1 ignored) | Each decoder with good and hostile files (cut short, the wrong first bytes, a header claiming 60 000×60 000, a GIF of more frames than allowed, a WebP whose bitstream claims another size than its header, a decoder that panics); every frame of a GIF, an animated PNG and an animated WebP against pictures written out by hand, every disposal and blend; timing, loops and the next frame under a clock the test holds; the player's thread (not started for a first frame, a quarter core kept, 0 wake-ups at rest, one that fails or panics); what playing and decoding hold, under a counting allocator; the field pass byte for byte against its steps written out plainly, and a stored hash |
+| gmnb (35), gmnb-launcher (5), dgmnb (68) | GDK key translation, a field's undo keys, the 0.2 settings brought forward (old keys kept, each theme entry loading by itself), the theme hooks of the environment, theming installing no timers, licence text that parses as markup, the theme engine (linked, a hook called); the launcher's CPU check on injected CPU flags (Haswell passes; Nehalem, Sandy Bridge and a Gemini Lake Celeron don't; each x86-64-v3 feature alone stops it), where it finds GMNB, and a notification that hangs given up on; DGMNB licence wrapping, text shaping and font coverage, SVG icons, text editing, accessibility tree soundness, hole markers, keyboard tracing up steep lines, scrolled-out controls, keyboard-scrollable panels, the display's spoken value, touch pinch, clipboard teardown and pipe deadlines |
 
 The oracles live in `tools/oracle/` and need the upstream repository checked
 out at `reference/calculator` to regenerate the golden files.
