@@ -1712,8 +1712,9 @@ medians of 200 frames): the background with thirteen pulses 0.21 ms, a
 keypad with the pointer over it and a ripple 0.10 ms, the readout
 mid-result 0.06 ms; the limit is 8 ms. Most of a frame is the theme
 making colours and gradients: the `gmnb` library's functions therefore
-run with the heap cap lifted and put back (each builds one small value),
-which more than halved the background's frame.
+run with the heap cap lifted (each builds one small value), which more
+than halved the background's frame. The cap is checked as it is put
+back, so it holds through them to within that one value.
 
 ### The sandbox, exactly
 
