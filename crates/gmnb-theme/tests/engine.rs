@@ -1291,6 +1291,9 @@ fn searches_the_interrupt_cant_stop_are_refused() {
     // told, present or not.
     let plain = "local s = string.rep('a', 200000) local p = string.rep('a', 100000) .. 'b'";
     let set = "local s = string.rep('a', 20000) local p = '^[' .. string.rep('b', 20000) .. 'a]*c'";
+    // The same set after a `%b` whose closing byte is `%`.
+    let balanced = "local s = 'x%' .. string.rep('a', 20000)
+                    local p = '^%bx%[' .. string.rep('b', 20000) .. 'a]*c'";
     for (setup, body, what) in [
         (plain, "return (string.find(s, p, 1, true))", "string.find"),
         (plain, "return (s:find(p))", "string.find"),
@@ -1299,6 +1302,7 @@ fn searches_the_interrupt_cant_stop_are_refused() {
         (set, "return (string.match(s, p))", "string.match"),
         (set, "return (s:gsub(p, ''))", "string.gsub"),
         (set, "for _ in s:gmatch(p) do end", "string.gmatch"),
+        (balanced, "return (s:find(p))", "string.find"),
         ("", "table.move({}, 1, 10000000, 2, {})", "table.move"),
     ] {
         let e = engine();
@@ -1411,7 +1415,7 @@ fn the_bounded_library_works_as_before() {
     };
     let out: Vec<&str> = out.iter().map(|v| v.as_str().unwrap()).collect();
     assert_eq!(
-        &out[..22],
+        out,
         [
             "5 7",
             "2 2",
@@ -1434,27 +1438,11 @@ fn the_bounded_library_works_as_before() {
             "2",
             "a1",
             // Errors are still errors, with the functions' own messages.
-            out[20],
-            out[21],
+            "false malformed pattern (missing ']')",
+            "false invalid argument #2 to 'sort' (function expected, got number)",
+            "false invalid argument #1 to 'find' (table expected, got nil)",
         ]
     );
-    assert!(
-        out[20].starts_with("false ") && out[20].contains("malformed pattern"),
-        "{}",
-        out[20]
-    );
-    assert!(
-        out[21].starts_with("false ") && out[21].contains("invalid argument #2 to 'sort'"),
-        "{}",
-        out[21]
-    );
-    assert!(
-        out[22].starts_with("false ") && out[22].contains("invalid argument #1 to 'find'"),
-        "{}",
-        out[22]
-    );
-    eprintln!("ERRS {:?}", &out[20..]);
-    assert_eq!(out.len(), 23);
 }
 
 #[test]

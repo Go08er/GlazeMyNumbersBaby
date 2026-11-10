@@ -250,6 +250,9 @@ fn longest_set(p: &[u8]) -> usize {
     let mut i = 0;
     while i < p.len() {
         match p[i] {
+            // `%bxy` takes the two bytes after it as they are (`%` too);
+            // any other escape, one.
+            b'%' if p.get(i + 1) == Some(&b'b') => i += 4,
             b'%' => i += 2,
             b'[' => {
                 let start = i;
@@ -1037,6 +1040,10 @@ mod tests {
             ("[%]]", 4),
             ("%[abc]", 1),
             ("%f[%w]", 4),
+            // `%b` takes two bytes, `%` and `[` too.
+            ("%bx%[abc]", 5),
+            ("%b[][ab]", 4),
+            ("%b()", 1),
             // No end: Luau refuses it before matching.
             ("[abc", 1),
             ("[ab][abcd", 4),
