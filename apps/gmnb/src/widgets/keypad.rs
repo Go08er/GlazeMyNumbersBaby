@@ -483,6 +483,9 @@ impl Keypad {
             self.sync_text(id);
         }
         self.sync_gap();
+        // Its cells move at the same size: a layer that draws the keypad
+        // is told them again.
+        self.cell_changed();
         self.queue_draw();
     }
 
