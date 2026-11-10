@@ -814,7 +814,7 @@ local STRIPE = 32
 -- `mask` repeated over the rectangle, filled with `color`.
 local function cut_out(draw: Draw, mask: Image, x: number, y: number, w: number, h: number, color: Rgba)
 	draw:push_mask("alpha")
-	draw:tile(mask, x, y, w, h)
+	draw:tile(mask, x, y, w, h, NEAREST)
 	draw:pop()
 	draw:rect(x, y, w, h, color)
 	draw:pop()
@@ -833,7 +833,7 @@ end
 local function background(draw: Draw, frame: Frame): Again
 	local s = scheme(frame.ctx)
 	local w, h = frame.width, frame.height
-	draw:tile(if s.dark then wall_dark else wall_light, 0, 0, w, h)
+	draw:tile(if s.dark then wall_dark else wall_light, 0, 0, w, h, NEAREST)
 	if frame.ctx.options.living == true then
 		-- The loop plays on this layer's clock, and the app draws the layer
 		-- again whenever its next frame is due: eight times a second. Under

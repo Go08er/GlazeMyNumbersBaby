@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use appcore::color::{TEXT_CONTRAST, UI_CONTRAST, contrast};
-use gmnb_theme::draw::{MaskMode, Op};
+use gmnb_theme::draw::{Filter, MaskMode, Op};
 use gmnb_theme::events::{Cause, Event, EventKind, KeyKind, Page, Source as PressSource, Via};
 use gmnb_theme::layer::{
     ChangeKind, DisplayValue, Drawn, Failure, Frame, GlyphBox, Glyphs, KeyCell, Keys, LayerKind,
@@ -345,16 +345,18 @@ fn glazeds_layers_draw_within_their_limits() {
         let wall = pics.walls[dark as usize];
         assert!(matches!(
             drawn.list.ops[0],
-            Op::Tile { image, rect, .. } if image == wall && rect == [0.0, 0.0, 760.0, 640.0]
+            Op::Tile { image, rect, filter: Filter::Nearest } if image == wall && rect == [0.0, 0.0, 760.0, 640.0]
         ));
         let hems: Vec<ImageId> = drawn
             .list
             .ops
             .iter()
             .filter_map(|op| match op {
-                Op::Tile { image, rect, .. } if *rect == [0.0, AWNING, 760.0, HEADER - AWNING] => {
-                    Some(*image)
-                }
+                Op::Tile {
+                    image,
+                    rect,
+                    filter: Filter::Nearest,
+                } if *rect == [0.0, AWNING, 760.0, HEADER - AWNING] => Some(*image),
                 _ => None,
             })
             .collect();
