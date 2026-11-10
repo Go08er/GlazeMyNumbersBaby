@@ -345,14 +345,14 @@ fn glazeds_layers_draw_within_their_limits() {
         let wall = pics.walls[dark as usize];
         assert!(matches!(
             drawn.list.ops[0],
-            Op::Tile { image, rect } if image == wall && rect == [0.0, 0.0, 760.0, 640.0]
+            Op::Tile { image, rect, .. } if image == wall && rect == [0.0, 0.0, 760.0, 640.0]
         ));
         let hems: Vec<ImageId> = drawn
             .list
             .ops
             .iter()
             .filter_map(|op| match op {
-                Op::Tile { image, rect } if *rect == [0.0, AWNING, 760.0, HEADER - AWNING] => {
+                Op::Tile { image, rect, .. } if *rect == [0.0, AWNING, 760.0, HEADER - AWNING] => {
                     Some(*image)
                 }
                 _ => None,

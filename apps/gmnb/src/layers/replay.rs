@@ -339,6 +339,9 @@ pub struct Scene<'a> {
     pub pango: &'a pango::Context,
     /// The display layer: the value's characters, and the old value's.
     pub glyphs: [&'a [Glyph]; 2],
+    /// The surface's pixels to the window's (2 on a screen of twice the
+    /// pixels).
+    pub scale: f32,
 }
 
 fn stops(g: &Gradient) -> Vec<gsk::ColorStop> {
@@ -483,6 +486,32 @@ fn to_stroke(stroke: &draw::Stroke) -> gsk::Stroke {
         s.set_dash_offset(stroke.dash_offset);
     }
     s
+}
+
+/// `texture` scaled into `r` with `filter`. Hard pixels on a screen of
+/// more pixels than the window's are set in the screen's own: the
+/// renderers would scale the texture to the window's pixels first, and
+/// then smoothly up to the screen's.
+fn scaled_texture(
+    s: &gtk::Snapshot,
+    texture: &gdk::Texture,
+    filter: Filter,
+    r: draw::Rect,
+    scale: f32,
+) {
+    if filter == Filter::Nearest && scale > 1.0 {
+        let k = scale;
+        s.save();
+        s.scale(1.0 / k, 1.0 / k);
+        s.append_scaled_texture(
+            texture,
+            gsk::ScalingFilter::Nearest,
+            &rect([r[0] * k, r[1] * k, r[2] * k, r[3] * k]),
+        );
+        s.restore();
+    } else {
+        s.append_scaled_texture(texture, scaling(filter), &rect(r));
+    }
 }
 
 fn scaling(filter: Filter) -> gsk::ScalingFilter {
@@ -682,7 +711,7 @@ pub fn replay(s: &gtk::Snapshot, list: &DisplayList, scene: &Scene) {
                 }
                 let texture = scene.theme.and_then(|t| scene.cache.texture(t, *image));
                 if let Some(texture) = texture {
-                    s.append_scaled_texture(&texture, scaling(*filter), &rect(*r));
+                    scaled_texture(s, &texture, *filter, *r, scene.scale);
                 }
             }
             Op::Animation {
@@ -699,7 +728,7 @@ pub fn replay(s: &gtk::Snapshot, list: &DisplayList, scene: &Scene) {
                     .theme
                     .and_then(|t| scene.cache.frame(t, *image, *frame, *still));
                 if let Some(texture) = texture {
-                    s.append_scaled_texture(&texture, scaling(*filter), &rect(*r));
+                    scaled_texture(s, &texture, *filter, *r, scene.scale);
                 }
             }
             Op::Field { picture, rect: r } => {
@@ -712,21 +741,36 @@ pub fn replay(s: &gtk::Snapshot, list: &DisplayList, scene: &Scene) {
                     s.append_scaled_texture(&texture, gsk::ScalingFilter::Linear, &rect(*r));
                 }
             }
-            Op::Tile { image, rect: r } => {
+            Op::Tile {
+                image,
+                rect: r,
+                filter,
+            } => {
                 if empty(*r) {
                     continue;
                 }
                 let texture = scene.theme.and_then(|t| scene.cache.texture(t, *image));
                 if let Some(texture) = texture {
-                    let tile = graphene::Rect::new(
-                        r[0],
-                        r[1],
-                        texture.width() as f32,
-                        texture.height() as f32,
-                    );
-                    s.push_repeat(&rect(*r), Some(&tile));
-                    s.append_texture(&texture, &tile);
-                    s.pop();
+                    let (w, h) = (texture.width() as f32, texture.height() as f32);
+                    if *filter == Filter::Nearest && scene.scale > 1.0 {
+                        // In the screen's own pixels, as `scaled_texture`.
+                        let k = scene.scale;
+                        let tile = [r[0] * k, r[1] * k, w * k, h * k];
+                        s.save();
+                        s.scale(1.0 / k, 1.0 / k);
+                        s.push_repeat(
+                            &rect([r[0] * k, r[1] * k, r[2] * k, r[3] * k]),
+                            Some(&rect(tile)),
+                        );
+                        s.append_scaled_texture(&texture, gsk::ScalingFilter::Nearest, &rect(tile));
+                        s.pop();
+                        s.restore();
+                    } else {
+                        let tile = graphene::Rect::new(r[0], r[1], w, h);
+                        s.push_repeat(&rect(*r), Some(&tile));
+                        s.append_texture(&texture, &tile);
+                        s.pop();
+                    }
                 }
             }
             Op::PushClip { rect: r, radius } => match radius {

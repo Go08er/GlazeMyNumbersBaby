@@ -393,7 +393,9 @@ draw:image(image, x, y, w, h, { filter = "linear", time = 1.5, loop = false })
 | `loop` | Animations, with `time`: wrap around past the end, or hold the last frame. | `true` |
 
 `draw:tile` takes stills and `gmnb.pixels` pictures; of an animation it
-tiles the first frame.
+tiles the first frame. Of the options it reads only `filter`, which
+matters only where the screen has more pixels than the window (scale 2):
+there `"nearest"` keeps a tile's pixels hard.
 
 ## Sound
 

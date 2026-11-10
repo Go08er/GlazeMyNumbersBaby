@@ -805,7 +805,8 @@ export type Draw = {
 	text_size: (self: Draw, text: string, font: Font?) -> (number, number),
 	glyph: (self: Draw, glyph: Glyph, paint: Paint) -> (),
 	image: (self: Draw, image: Picture, x: number, y: number, w: number, h: number, options: ImageOptions?) -> (),
-	tile: (self: Draw, image: Picture, x: number, y: number, w: number, h: number) -> (),
+	-- Of `options` only `filter` is read.
+	tile: (self: Draw, image: Picture, x: number, y: number, w: number, h: number, options: ImageOptions?) -> (),
 	field: (self: Draw, x: number, y: number, w: number, h: number, spec: FieldSpec) -> (),
 	-- Groups: everything drawn until the matching pop() is affected.
 	push_clip: (self: Draw, x: number, y: number, w: number, h: number, radius: Radius?) -> (),

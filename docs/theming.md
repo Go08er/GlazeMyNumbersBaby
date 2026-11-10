@@ -1155,9 +1155,9 @@ the layer's; paints may be colours or gradients everywhere.
 | `draw:text(text, x, y, font, paint)` | `append_layout` (gradient: `push_mask` + `append_layout` + `pop` + gradient + `pop`); `x, y` is the top-left |
 | `draw:text_size(text, font)` → `w, h` | Pango layout pixel size; draws nothing |
 | `draw:glyph(glyph, paint)` | `append_layout` of one laid-out character of the display's value, at its place |
-| `draw:image(image, x, y, w, h, options?)` | `append_scaled_texture`; `options.filter` is `"trilinear"` (the default for stills), `"linear"` or `"nearest"`. An [animation](theming-media.md#animated-pictures) draws its current frame. |
+| `draw:image(image, x, y, w, h, options?)` | `append_scaled_texture`; `options.filter` is `"trilinear"` (the default for stills), `"linear"` or `"nearest"`. An [animation](theming-media.md#animated-pictures) draws its current frame. On a screen of more pixels than the window's (scale 2) a `"nearest"` picture is set in the screen's own pixels: the toolkit's renderers would scale it to the window's first and then smoothly up, and its hard pixels would be soft. |
 | `draw:field(x, y, w, h, spec)` | A grid of numbers coloured per pixel by the app through a ramp, then `append_scaled_texture`. See [Fields](theming-media.md#fields-swirls-plasma-contours). |
-| `draw:tile(image, x, y, w, h)` | `push_repeat` + `append_texture` + `pop`: the image repeated at its own size |
+| `draw:tile(image, x, y, w, h, options?)` | `push_repeat` + `append_texture` + `pop`: the image repeated at its own size. Of `options` only `filter` is read, and only on a screen of more pixels than the window's: `"nearest"` keeps its pixels hard there, as `draw:image`'s does (the default, `"linear"`, is smooth) |
 | `draw:push_clip(x, y, w, h, radius?)` | `push_clip` / `push_rounded_clip` |
 | `draw:push_opacity(opacity)` | `push_opacity` |
 | `draw:push_blur(radius)` | `push_blur` |

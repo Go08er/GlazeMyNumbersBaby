@@ -277,10 +277,12 @@ pub enum Op {
         filter: Filter,
     },
     /// The picture repeated at its own size over `rect` (of an animation,
-    /// its first frame).
+    /// its first frame), sampled with `filter` on a screen of more pixels
+    /// than the window's.
     Tile {
         image: ImageId,
         rect: Rect,
+        filter: Filter,
     },
     /// One frame of an animation scaled into `rect`. `still`: nothing
     /// moves (reduced motion, a preview), and `frame` is the first; the
@@ -1406,10 +1408,11 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                     let rect = rect(name, x, y, w, h)?;
                     // `options`: how it is sampled, and for an animation
                     // where in it and whether it wraps. (`draw:tile`
-                    // takes none.)
+                    // takes only `filter`.)
                     let options = match &options {
-                        Value::Table(o) if !tile => Some(o),
-                        Value::Nil | Value::Table(_) => None,
+                        Value::Table(o) => Some(o),
+                        Value::Nil => None,
+                        _ if tile => return Err(bad(name, "options are a table { filter = … }")),
                         _ => {
                             return Err(bad(
                                 name,
@@ -1418,6 +1421,7 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                         }
                     };
                     let option = |key: &str| match options {
+                        Some(_) if tile && key != "filter" => Ok(Value::Nil),
                         Some(o) => o.raw_get::<Value>(key),
                         None => Ok(Value::Nil),
                     };
@@ -1457,7 +1461,11 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                     let kind = pictures.get(image).map(|p| p.kind.clone());
                     let op = match kind {
                         // Of an animation a tile is its first frame.
-                        _ if tile => Op::Tile { image, rect },
+                        _ if tile => Op::Tile {
+                            image,
+                            rect,
+                            filter: filter.unwrap_or(Filter::Linear),
+                        },
                         Some(PictureKind::Animation(_, timeline)) => {
                             // Nothing moves under reduced motion or in a
                             // preview, whatever `time` says.
