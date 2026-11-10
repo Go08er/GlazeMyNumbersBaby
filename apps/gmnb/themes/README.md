@@ -7,7 +7,20 @@ written against is [docs/theming.md](../../../docs/theming.md).
 |---|---|
 | `aurora/` | The look GMNB had up to 0.2, grown since: an aurora behind glass keys, in seven palettes. It uses every part of the API (style, three draw layers, options with drawn previews, its own font, sounds), and works its colours out from each palette so that all of them stay readable. Its sounds are glass and breath, synthesised from two recipes, with a chord for each palette. |
 | `mono/` | The base look with a different accent, corners and typeface, in twenty lines. Start here. |
+| `glazed/` | An 8-bit doughnut shop that takes the app's name at its word: press = and the number comes out glazed, with sprinkles. Where Aurora is computed light, this one is pictures and matter: stills drawn by a script (`make_assets.py`: a tiled wall, the hem of an awning cut out of masks and filled with the flavour's colours), a GIF loop that repeats in space as well as in time (sprinkles falling), two pictures the theme works out pixel by pixel (`gmnb.pixels`: the icing shown through the digits' own shapes, and the doughnut that lives on the readout's shelf), keys moved by `place` (they sink, hop and stack themselves), an overlay (a fountain of sprinkles from the = key), a pixel typeface (Jersey 10) and chip-tune sounds in which every flavour has its own scale. Nothing eases: things step and land, thirty times a second at most. Five flavours. |
 | `swirls/` | The paint that flows behind s0y b0y, the homepage of GMNB's owner, with a calculator of dark glass standing in it. The worked example of `draw:field`: see below. |
+
+Glazed's typeface, Jersey 10, is `fonts/ttf/Jersey10-Regular.ttf` of its
+upstream, <https://github.com/scfried/soft-type-jersey>, at commit
+`d8446c4c9c2ba14cf408c295be35213c006e19ff`, unchanged (SHA-256
+`db9cbd091617048a145d249daa2b815fe7083be6ab66ac26626e21a4e01c3e82`), with
+that repository's `OFL.txt` beside it.
+
+Every file in `glazed/images/` is written by `glazed/make_assets.py`, which
+needs nothing but Python (`python3 -I make_assets.py --check` says whether
+the files are what it would write). A picture added there is added to the
+theme's list in `crates/gmnb-theme/src/theme.rs` too: a built-in theme's
+files are compiled into the app one by one.
 
 GMNB's base look is not a theme. It is what a theme that returns `{}` looks
 like: the same as DGMNB.

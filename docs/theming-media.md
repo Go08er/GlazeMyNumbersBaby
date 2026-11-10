@@ -1745,9 +1745,11 @@ well under any music playing.
     the result it brings about.
 11. **DGMNB**: the widened `cargo tree` check.
 12. **A built-in theme's sounds** (`crates/gmnb-theme/tests/aurora_sound.rs`
-    for Aurora, `swirls_sound.rs` for Swirls): they load with no note, each within the gain a built-in
-    theme may have; every event plays what the theme means it to, in every
-    palette, and nothing lasts longer than the budget of
+    for Aurora, `glazed_sound.rs` for Glazed, `swirls_sound.rs` for Swirls):
+    they load with no note, each within the gain a built-in theme may have;
+    every event plays what the theme means it to, in every palette (Glazed:
+    in every flavour, whose notes are the same sounds at other speeds, and a
+    slower sound is a longer one), and nothing lasts longer than the budget of
     [Designing sounds](#designing-sounds-a-few-rules-that-work) allows;
     its `sound` function answers some 9000 events with no failure in the
     2 ms it has (processor time: 14 µs a call measured, the stand-in's own

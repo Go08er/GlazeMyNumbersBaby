@@ -19,6 +19,9 @@ const PALETTES: [&str; 7] = [
     "aurora", "ember", "abyss", "orchard", "graphite", "system", "custom",
 ];
 
+/// Glazed's flavours.
+const FLAVOURS: [&str; 5] = ["strawberry", "blueberry", "matcha", "lemon", "caramel"];
+
 fn built_in(id: &str) -> Theme {
     Theme::load(Source::built_in(id).unwrap(), Limits::default()).unwrap()
 }
@@ -46,6 +49,7 @@ fn every_style() -> Vec<(String, Style)> {
     let mut out = Vec::new();
     let mut aurora = built_in("aurora");
     let mut mono = built_in("mono");
+    let mut glazed = built_in("glazed");
     for dark in [false, true] {
         for opacity in [1.0, 0.5, 0.1] {
             let ctx = Ctx {
@@ -54,6 +58,11 @@ fn every_style() -> Vec<(String, Style)> {
                 ..Ctx::default()
             };
             out.push((format!("base dark={dark} {opacity}"), Style::base(&ctx)));
+            for flavour in FLAVOURS {
+                let ctx = with(&glazed, dark, opacity, &[("flavour", text(flavour))]);
+                let style = glazed.style(&ctx).unwrap().style.clone();
+                out.push((format!("glazed {flavour} dark={dark} {opacity}"), style));
+            }
             for palette in PALETTES {
                 let ctx = with(&aurora, dark, opacity, &[("palette", text(palette))]);
                 let style = aurora.style(&ctx).unwrap().style.clone();
@@ -966,7 +975,24 @@ fn page_pairs(style: &Style, plain_text: bool) -> Vec<(String, Rgba, f32, Vec<Fi
 /// worked out to).
 #[test]
 fn every_text_reads_on_what_is_under_it() {
-    let bad = unreadable(styles_where(|name| !name.starts_with("aurora")));
+    let bad = unreadable(styles_where(|name| {
+        !name.starts_with("aurora") && !name.starts_with("glazed")
+    }));
+    assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// Rules 3 and 4 for Glazed, in each of its five flavours: the keys, the
+/// chrome and the pages. Its other options (the doughnut, the falling
+/// sprinkles, the fountain) change no colour. Everything of it that
+/// carries text is a solid card, so on a see-through window its page
+/// texts count as they do at full opacity. What its layers paint (the
+/// awning under the header, the icing on the digits) is checked where
+/// the layers are run: `tests/glazed.rs`, `what_glazed_paints_reads`.
+#[test]
+fn glazeds_page_texts_read() {
+    let styles = styles_where(|name| name.starts_with("glazed"));
+    assert_eq!(styles.len(), FLAVOURS.len() * 2 * 3);
+    let bad = unreadable(styles);
     assert!(bad.is_empty(), "{} fail:\n{}", bad.len(), bad.join("\n"));
 }
 
@@ -1097,6 +1123,7 @@ fn unreadable(styles: Vec<(String, Style)>) -> Vec<String> {
             let plain_text = desktop.is_none()
                 || base_look
                 || name.starts_with("aurora")
+                || name.starts_with("glazed")
                 || name.starts_with("swirls");
             let mut all = page_pairs(&style, plain_text);
             all.extend(chrome_pairs(&style));

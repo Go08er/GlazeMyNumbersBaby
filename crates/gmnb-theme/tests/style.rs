@@ -763,6 +763,7 @@ fn discovery_lists_built_ins_then_the_users() {
         [
             ("aurora", BuiltIn),
             ("mono", UserCopy),
+            ("glazed", BuiltIn),
             ("swirls", BuiltIn),
             ("broken", User),
             ("zebra", User),
@@ -772,20 +773,21 @@ fn discovery_lists_built_ins_then_the_users() {
     let listed = theme::list(&sources, &Limits::default());
     assert_eq!(listed[0].meta.as_ref().unwrap().name, "Aurora");
     assert_eq!(listed[1].meta.as_ref().unwrap().name, "My Mono");
-    assert_eq!(listed[2].meta.as_ref().unwrap().name, "Swirls");
+    assert_eq!(listed[2].meta.as_ref().unwrap().name, "Glazed");
+    assert_eq!(listed[3].meta.as_ref().unwrap().name, "Swirls");
     assert!(
-        listed[3]
+        listed[4]
             .meta
             .as_ref()
             .unwrap_err()
             .contains("syntax error")
     );
     assert_eq!(
-        listed[4].meta.as_ref().unwrap().description.as_deref(),
+        listed[5].meta.as_ref().unwrap().description.as_deref(),
         Some("Stripes.")
     );
-    assert_eq!(listed[5].meta.as_ref().unwrap().name, "Zebra");
-    assert_eq!(theme::discover(None, None).len(), 3);
+    assert_eq!(listed[6].meta.as_ref().unwrap().name, "Zebra");
+    assert_eq!(theme::discover(None, None).len(), 4);
     let _ = std::fs::remove_dir_all(&root);
 }
 

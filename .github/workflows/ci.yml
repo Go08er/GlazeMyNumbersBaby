@@ -37,12 +37,17 @@ jobs:
           # decide them and checked against docs/theming-media.md's budget
           # (peak, loudness, lengths, low end). Add a theme here when it
           # gains sounds.
-          for theme in aurora swirls; do
+          for theme in aurora glazed swirls; do
             out=$(mktemp -d)
             GMNB_SOUND=null nix develop -c cargo run --release --locked -q -p gmnb-sound \
               --example render -- "apps/gmnb/themes/$theme" "$out"
             python3 -I tools/theming/sound_check.py "$out"
           done
+      - name: Glazed's pictures are what its script draws (make_assets.py --check)
+        run: |
+          # Every picture a built-in theme ships is made by a script in its
+          # folder: here, that the files committed are the ones it makes.
+          python3 -I apps/gmnb/themes/glazed/make_assets.py --check
       - name: DGMNB Wayland clipboard test (private headless weston)
         run: |
           set -o pipefail

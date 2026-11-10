@@ -8,9 +8,12 @@ writing a theme; from [How style reaches the app](#how-style-reaches-the-app)
 on it is also the specification the app is built to.
 
 - The matching type definitions are [`types/gmnb.d.luau`](../types/gmnb.d.luau).
-- Three themes ship with the app and serve as examples:
+- Four themes ship with the app and serve as examples:
   [`mono`](../apps/gmnb/themes/mono/theme.luau) (20 lines),
-  [`aurora`](../apps/gmnb/themes/aurora/theme.luau) (everything) and
+  [`aurora`](../apps/gmnb/themes/aurora/theme.luau) (everything a theme
+  can compute),
+  [`glazed`](../apps/gmnb/themes/glazed/theme.luau) (pictures, keys that
+  move, an overlay, a scale of sounds) and
   [`swirls`](../apps/gmnb/themes/swirls/theme.luau) (a picture the theme
   computes, behind glass).
 - Animated pictures, pictures a theme computes, and sound have a chapter
@@ -147,7 +150,7 @@ mytheme/
   `~/.var/app/io.github.Go08er.GlazeMyNumbersBaby/data/gmnb/themes/<id>/`.
   No extra permission is needed. Settings → Theme → *Open themes folder*
   opens it either way.
-- Built-in themes (`aurora`, `mono`) are compiled into the app from
+- Built-in themes (`aurora`, `mono`, `glazed`) are compiled into the app from
   `apps/gmnb/themes/`. A folder of yours with the same id replaces the
   built-in one; Settings marks it "your copy".
 - `theme.luau` is Luau source text, at most 512 KiB. Compiled bytecode is
@@ -1555,7 +1558,35 @@ How each of Aurora's effects is made:
 | The keyboard flash of a key | **Built in**: the key is `active` for 110 ms | |
 | Outfit | A font file in the theme's folder, named in `fonts` | |
 
-There are no effect presets: nothing in the app is specific to Aurora.
+How each of Glazed's effects is made. Glazed is the other half of the API:
+where Aurora computes light, it shows pictures, moves keys and makes a
+noise.
+
+| Effect | How | Why |
+|---|---|---|
+| The five flavours | **Scripted** (`style`): a flavour is two colours, and every ink and surface is worked out from them against what it lies on | No colour option, so no generated palette to guard: ten schemes, each checked. |
+| Keys as blocks: a line, a glint, a lip, a hard shadow; pressed, the lip is gone | **Declared** (borders and shadow lists with no blur; no transitions at all) | A state that changes at once is the look. |
+| The tiled wall | A **still** the theme's script draws (`gmnb.image`, `draw:tile`) | Four colours, 200 bytes; tiling it costs one node. |
+| The awning's hem in the flavour's colours | Three **stills used as masks** (`draw:push_mask`, `draw:tile`, then a rectangle of the colour) | One set of pictures serves every flavour, light and dark: a still can't be recoloured, a mask can be filled. |
+| Sprinkles falling down the wall | An **animated picture** (`gmnb.animation`, a 128-frame GIF the script writes), drawn side by side with hard pixels | The loop repeats in space as it does in time, so nine copies of one small animation cover a window, decoded once off the interface's thread. The app schedules its frames; the hook returns nothing. |
+| The icing on the digits of a result (one that = or a function key gave): it pours, its drips run ahead, sprinkles land on it | A **picture the theme computes** (`gmnb.pixels`, 256×28, a dozen steps of the pour) shown through the **glyphs as a mask** (`display` layer); only on digits of 28 px and more, because the icing is held to large text's 3:1 | A drip is a pixel-stepped edge no gradient makes, and through the digits' own shapes it needs no knowledge of the typeface but two of its measures. |
+| The doughnut on the readout's shelf: it nods, blinks, jumps for a result, ducks as the number grows towards it | A second **computed picture** (24×24, worked out from a few numbers: squash, face, where it looks), placed by the `display` layer from the events' ages | No sprite sheet: one function is every pose, in every flavour, and Settings' tiles draw the same function as rectangles. |
+| Keys that sink under a finger, hop when let go, stack themselves when the keypad appears; the hop a result sends through them; the shake of an error | **Scripted** (`place`), in whole art pixels | The stylesheet has no "move down two pixels" for a state, and no events. |
+| The fountain of sprinkles from the = key; a new flavour's shower | **Scripted** (`overlay` layer): thirty rectangles a frame for a second | Over the keys, never over the number: the throw is worked out from where the readout ends. |
+| The same burst from frame to frame | **Scripted**: events carry no name, so the theme knows one again by its place and its growing age | A burst seeded by the frame would flicker. |
+| The equals key's icing and sprinkles; crumbs under a press | **Scripted** (`keypad` layer) | |
+| A scale to each flavour, a jingle timed to the icing | **Scripted** (`sound`, `gmnb.synth`): thirteen recipes; a key's note is one sound at another speed | Sound that follows the look needs the same options the look has. |
+| Jersey 10 | A font file in the theme's folder, set at whole multiples of its own pixel where it has to be sharp (the readout, the number keys), and at one and a half for words | The app sets text unhinted, to a quarter of a pixel: a pixel face is only crisp where its pixels are whole ones. |
+| The flavours' tiles in Settings | **Scripted** (`preview`) | |
+
+What Glazed asks of the engine while it lives, measured as Aurora's was
+(release build, 760×640, the software renderer): the wall's loop at eight
+frames a second costs 5 to 6% of a core, where Aurora's drift takes 55%;
+at rest, in a window not in use, under reduced motion and once the app
+has settled, nothing runs at all.
+
+There are no effect presets: nothing in the app is specific to Aurora or
+to Glazed.
 
 ### How each of Swirls' effects is made
 
@@ -1741,7 +1772,16 @@ colour on the canvas (which lies on the backdrop, not in a `plain`
 container); the readout's value, its error colour and its expression on
 the readout's own scrim; a card's heading. For Aurora the whole table is
 `auroras_page_texts_read`, and `auroras_generated_palettes_read` runs it
-again for System and Freestyle generated from rule 2's colours. The
+again for System and Freestyle generated from rule 2's colours. For
+Glazed it is `glazeds_page_texts_read`, in each of its five flavours.
+The table sees a style's fills, not what a layer draws, so a theme whose
+layers paint under text, or paint the text, owes a test of its own:
+Glazed's is `what_glazed_paints_reads` (`tests/glazed.rs`), which runs
+the layers and holds the header's title and buttons to 4.5 on both
+stripes of the awning its background layer draws, and every colour of
+a glazed number, read out of the icing's picture pixel by pixel, to 3
+on the readout's fill (and digits under 28 px, which are not large
+text, wear no icing). The
 bits' indexes need 2.45, as the placeholder does (open point 9):
 `the_bits_indexes_read`.
 
@@ -1764,7 +1804,8 @@ opacity 0.1 and 0.5, each stack composited over
 white desktop. Every pair must reach **3**; in the base look, `fg` pairs
 must reach 4.5 (its scrim is computed to). Halos are not counted. Text
 straight on a page counts wherever the style puts something under it in
-`plain.background`: the base look's scrim, Aurora's frost.
+`plain.background`: the base look's scrim, Aurora's frost, Glazed's cards
+(solid at every opacity: only its wall thins).
 
 ## For implementers
 

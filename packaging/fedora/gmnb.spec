@@ -8,7 +8,7 @@ Name:           gmnb
 Version:        0.3.0
 Release:        1%{?dist}
 Summary:        GlazeMyNumbers,Baby: a pointlessly beautiful calculator
-# The Inter, Noto subset and Outfit typefaces embedded in the binary are OFL-1.1; the rest are the
+# The Inter, Noto subset, Outfit and Jersey 10 typefaces embedded in the binary are OFL-1.1; the rest are the
 # crates compiled in (THIRD-PARTY-LICENSES.txt).
 License:        MIT AND OFL-1.1 AND Apache-2.0 AND BSD-3-Clause AND CDLA-Permissive-2.0 AND ISC AND Unicode-3.0 AND Zlib
 URL:            https://github.com/Go08er/GlazeMyNumbersBaby
@@ -105,7 +105,7 @@ for id in %{app_id} %{dapp_id}; do
 done
 
 %files
-%license LICENSE THIRD-PARTY-LICENSES.txt apps/gmnb/themes/aurora/fonts/OFL-Outfit.txt apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt
+%license LICENSE THIRD-PARTY-LICENSES.txt apps/gmnb/themes/aurora/fonts/OFL-Outfit.txt apps/gmnb/themes/glazed/fonts/OFL-Jersey10.txt apps/dgmnb/assets/fonts/OFL-Inter.txt apps/dgmnb/assets/fonts/OFL-Noto.txt
 %doc README.md
 %{_bindir}/gmnb
 %{_libexecdir}/gmnb/
