@@ -142,10 +142,27 @@ fn animations() -> Vec<(&'static str, Vec<u8>)> {
         gif_frames.push(g);
         webp_frames.push(wp);
     }
+    // A GIF's frames may be larger than its canvas (only what lies on it
+    // is shown), and its decoder holds a whole frame as palette indices:
+    // here each is eight times the canvas's pixels.
+    let big = (SIDE as f64 * 8f64.sqrt()) as u16;
+    let oversized: Vec<GifFrame> = (0..4)
+        .map(|i| {
+            let mut f = GifFrame::new(0, 0, big, big, 0);
+            for index in &mut f.indices {
+                *index = rng.below(4) as u8 + i % 2;
+            }
+            f
+        })
+        .collect();
     vec![
         ("GIF", gif(SIDE as u16, SIDE as u16, &gif_frames)),
         ("APNG", apng(SIDE, SIDE, None, &apng_frames, None)),
         ("WebP", webp_anim(SIDE, SIDE, &webp_frames)),
+        (
+            "GIF, frames larger than the canvas",
+            gif(SIDE as u16, SIDE as u16, &oversized),
+        ),
     ]
 }
 

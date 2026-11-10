@@ -52,6 +52,10 @@ pub struct Timeline {
     /// canvas a frame asks to have put back as it was (GIF disposal 3,
     /// APNG `previous`), at four bytes a pixel. 0 for most files.
     pub restore: u64,
+    /// A GIF's largest frame, in pixels: its decoder holds a frame as
+    /// palette indices, a byte a pixel, and a frame may be larger than
+    /// the canvas (only what lies on the canvas is shown). 0 for others.
+    largest: u64,
 }
 
 /// A frame's delay as it is played.
@@ -81,6 +85,7 @@ impl Timeline {
             starts,
             duration: if delays.len() > 1 { at } else { 0.0 },
             restore,
+            largest: 0,
         }
     }
 
@@ -93,6 +98,7 @@ impl Timeline {
             starts: vec![0.0],
             duration: 0.0,
             restore: 0,
+            largest: 0,
         }
     }
 
@@ -127,7 +133,7 @@ impl Timeline {
     /// Four frames are the player's: the first (which stands for the
     /// animation when nothing moves), the one shown, the one ahead or
     /// being decoded, and the canvas the frames are composited on. On
-    /// top comes what the format's decoder keeps: for a GIF its frame as
+    /// top comes what the format's decoder keeps: for a GIF its largest frame as
     /// palette indices (a byte a pixel); for a PNG up to two frames of
     /// its own buffers; for a WebP the frame being decoded, for as long
     /// as that takes. And [`Timeline::restore`].
@@ -140,6 +146,9 @@ impl Timeline {
             return frame;
         }
         let decoder = match self.format {
+            // A frame larger than the canvas, and an eighth more: what the
+            // decoder holds beside it, counted.
+            Format::Gif if self.largest > frame / 4 => self.largest + self.largest / 8,
             Format::Gif => frame / 4,
             Format::Png => frame * 2,
             Format::Webp | Format::Jpeg => frame,
@@ -242,7 +251,9 @@ fn gif(bytes: &Bytes, width: u32, height: u32, limits: &AnimLimits) -> Result<Ti
         .map_err(broken)?;
     let mut delays = Vec::new();
     let mut restore = 0;
+    let mut largest = 0;
     while let Some(frame) = decoder.next_frame_info().map_err(broken)? {
+        largest = largest.max(u64::from(frame.width) * u64::from(frame.height));
         if delays.len() as u32 >= limits.frames {
             return Err(too_many(limits));
         }
@@ -257,7 +268,10 @@ fn gif(bytes: &Bytes, width: u32, height: u32, limits: &AnimLimits) -> Result<Ti
     if delays.is_empty() {
         return Err(broken("the GIF file has no picture"));
     }
-    Ok(Timeline::new(Format::Gif, width, height, &delays, restore))
+    Ok(Timeline {
+        largest,
+        ..Timeline::new(Format::Gif, width, height, &delays, restore)
+    })
 }
 
 /// An animated PNG's frames, by its `fcTL` chunks: nothing is inflated.
