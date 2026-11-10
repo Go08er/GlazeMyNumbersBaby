@@ -455,6 +455,8 @@ pub fn register(
     // `gmnb.warn` goes where `print` does: the theme's log.
     let print: Function = lua.globals().raw_get("print")?;
     g.raw_set("warn", print)?;
+    // `gmnb.synth`, `gmnb.sound`, `gmnb.note`.
+    crate::sound::register(lua, &g)?;
     drawing(lua, &g)?;
     lua.globals().raw_set("gmnb", g)?;
     Ok(())

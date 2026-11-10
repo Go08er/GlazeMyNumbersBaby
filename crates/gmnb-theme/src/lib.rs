@@ -71,6 +71,7 @@ mod engine;
 mod error;
 pub mod library;
 pub mod schema;
+pub mod sound;
 pub mod states;
 pub mod style;
 pub mod theme;

@@ -1255,6 +1255,7 @@ name = "gmnb-theme"
 version = "0.3.0"
 dependencies = [
  "appcore",
+ "gmnb-sound",
  "mlua",
 ]
 

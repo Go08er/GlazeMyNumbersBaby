@@ -10,6 +10,9 @@ authors.workspace = true
 [dependencies]
 # The base colours and measurements (DGMNB's), and the colour maths.
 appcore.workspace = true
+# What a theme's sounds are made of: recipes, the table of sounds by event
+# (the engine itself is the app's to start).
+gmnb-sound.workspace = true
 # Luau only (its C++ is built by `cc`; mlua has no default features). No
 # `send` (GMNB's themes live on the main thread), no `async`, no JIT.
 mlua = { version = "0.12.2", default-features = false, features = ["luau"] }
