@@ -274,7 +274,7 @@ local function build(id: string, dark: boolean): Scheme
 		series = series,
 		shadow = alpha(black, if dark then 0.5 else 0.2),
 		glint = alpha(white, if dark then 0.1 else 0.6),
-		hover = alpha(white, if dark then 0.07 else 0.3),
+		hover = if dark then alpha(white, 0.08) else alpha(CHOCOLATE, 0.07),
 		press = alpha(black, if dark then 0.14 else 0.06),
 	}
 end
@@ -496,9 +496,9 @@ local function style(ctx: Ctx): Style
 			min_size = 20,
 			value = {
 				font = { family = JERSEY, weight = 400 },
-				-- The display layer paints the value. This is what it would
-				-- be without it: iced above, dough below.
-				color = gmnb.linear({ angle = 180, colors = { s.glaze, s.glaze, ink, ink }, stops = { 0, 0.5, 0.5, 1 } }),
+				-- The display layer paints the value. Without it (a hook that
+				-- failed) the number is plain dough.
+				color = ink,
 				error_color = s.danger,
 				error_scale = 0.5,
 				glow = false,
@@ -1049,6 +1049,12 @@ local POUR = 0.4
 local SPRINKLE_TIME = 0.45
 -- How far down a digit the icing comes, as a part of its height.
 local ICED = 0.44
+-- The icing is a second colour of the number's, and reads on the case as
+-- large text has to (3, where small text needs 4.5). So only large digits
+-- wear it: from this size up, where Jersey's capitals are fifteen pixels
+-- high and its strokes three thick. A number shrunk further to fit its
+-- readout (some twenty digits in the narrowest window) stays plain.
+local ICED_FROM = 28
 
 -- How far below the icing's line the icing hangs at column `x`: drips.
 local function drip(x: number): number
@@ -1268,30 +1274,39 @@ local function display(draw: Draw, frame: Frame): Again
 	draw:pop()
 	draw:border(0, 0, w, h, KEY_RADIUS, 2, s.line)
 
-	-- Whether what stands is a result. Without motion nothing says so, and
-	-- every number is shown at its best.
-	if not frame.motion then
-		glazed = true
-	elseif kind == "result" then
-		glazed = true
-	elseif kind ~= "none" then
-		glazed = false
-	end
-
-	-- What the events say: a result to cheer, an error, a key pressed.
+	-- What the events say: a result to cheer, an error, a key pressed; and
+	-- of the newest result, whether = or a function key brought it about.
 	local cheer: number? = nil
 	local oops: number? = nil
 	local tap: number? = nil
+	local earned: boolean? = nil
 	for _, e in frame.events do
 		if e.page == "calculator" then
-			if e.kind == "result" and (e.cause == "equals" or e.cause == "function") then
-				cheer, oops = e.age, nil
+			if e.kind == "result" then
+				earned = e.cause == "equals" or e.cause == "function"
+				if earned then
+					cheer, oops = e.age, nil
+				end
 			elseif e.kind == "error" then
 				oops, cheer = e.age, nil
 			elseif e.kind == "press" then
 				tap = e.age
 			end
 		end
+	end
+
+	-- Whether what stands is a result to glaze: one that = or a function
+	-- key gave, not the running total an operator shows on the way there,
+	-- nor a number typed, pasted or recalled. Without motion nothing says
+	-- which it is, and every number is shown at its best.
+	if not frame.motion then
+		glazed = true
+	elseif kind == "result" then
+		if earned ~= nil then
+			glazed = earned
+		end
+	elseif kind ~= "none" then
+		glazed = false
 	end
 
 	-- The doughnut on the shelf, left of the number. It ducks behind the
@@ -1379,7 +1394,7 @@ local function display(draw: Draw, frame: Frame): Again
 	glyphs(if v.error then s.danger else s.ink)
 
 	-- The icing, through the digits' own shapes.
-	if glazed and not v.error and #v.glyphs > 0 then
+	if glazed and not v.error and #v.glyphs > 0 and v.size >= ICED_FROM then
 		local poured, sprinkled = 1, 1
 		if kind == "result" then
 			poured = math.min(age / POUR, 1)

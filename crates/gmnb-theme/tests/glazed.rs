@@ -746,18 +746,41 @@ fn glazeds_layers_draw_within_their_limits() {
     assert!(dropping.list.ops.contains(&Op::Translate(0.0, -6.0)));
     // A result: the icing pours, through the digits' own shapes, and the
     // sprinkles land after it. Each frame of it asks for the next.
+    // (Without the doughnut here, whose jump asks for frames of its own.)
+    // The running total an operator shows is no such result: it stays
+    // plain.
+    let bare = ctx(
+        &theme,
+        false,
+        "strawberry",
+        &[("living", false), ("buddy", false)],
+    );
+    let running = display(
+        &bare,
+        value(
+            &now,
+            3,
+            false,
+            Some((ChangeKind::Result, 0.2)),
+            Role::Calculator,
+        ),
+        vec![(0.2, &total)],
+        0.0,
+    );
+    assert_eq!((count(&running, glyph), count(&running, mask)), (5, 0));
+    assert_eq!(running.again, None);
     let mut filled = Vec::new();
     for (age, pouring) in [(0.05, true), (0.2, true), (0.5, true), (0.9, false)] {
         let d = display(
-            &nothing_living,
+            &bare,
             value(
                 &now,
-                3,
+                4,
                 false,
                 Some((ChangeKind::Result, age)),
                 Role::Calculator,
             ),
-            vec![],
+            vec![(age, &result)],
             0.0,
         );
         assert_eq!(d.again, pouring.then_some(frame), "{age}");
@@ -944,6 +967,7 @@ fn glazeds_layers_draw_within_their_limits() {
         tick();
         let f = Frame {
             value: Some(v),
+            events: vec![(age, &result)],
             ..Frame::sized(344.0, 122.0)
         };
         let t = Instant::now();
@@ -1000,7 +1024,8 @@ fn style_of(theme: &mut Theme, c: &Ctx) -> Style {
 /// - the header's title and buttons on both of the awning's stripes
 ///   (the background layer draws them under a header with no fill);
 /// - every colour a glazed number is painted in (the dough, the icing,
-///   its shine and rim, each sprinkle) on the display case: large text;
+///   its shine and rim, each sprinkle) on the display case: large text,
+///   and digits under 28 px, which are not, wear no icing;
 /// - an error's colour there; a page's line in the window's own colour;
 /// - the equals key's icing leaves the key's own colour under its sign.
 #[test]
@@ -1010,6 +1035,13 @@ fn what_glazed_paints_reads() {
     let pics = pictures(&theme);
     let mut worst_awning = f32::INFINITY;
     let mut worst_glaze = f32::INFINITY;
+    // (A value's glyphs and size are told anew when its version changes:
+    // every number drawn here has one of its own.)
+    let mut version = 0;
+    let mut next = || {
+        version += 1;
+        version
+    };
     for flavour in FLAVOURS {
         for dark in [false, true] {
             let name = format!("{flavour} dark={dark}");
@@ -1051,14 +1083,15 @@ fn what_glazed_paints_reads() {
             }
 
             // A glazed number, in a frame without motion (every number
-            // is then glazed), at each size a readout has.
+            // is then glazed), at the sizes a readout has, down to the
+            // least at which digits are iced.
             let case = style.fill("display.background").samples_over([0.0; 4])[0];
             assert_eq!(case[3], 1.0);
-            for size in [74.667, 56.0, 20.0] {
+            for size in [74.667, 56.0, 28.0] {
                 tick();
                 let now = digits(5, 344.0, size);
                 let f = Frame {
-                    value: Some(value(&now, 1, false, None, Role::Calculator)),
+                    value: Some(value(&now, next(), false, None, Role::Calculator)),
                     motion: false,
                     ..Frame::sized(344.0, 122.0)
                 };
@@ -1081,7 +1114,7 @@ fn what_glazed_paints_reads() {
                 // What shows through them: the icing's picture, every
                 // pixel of it.
                 let colours = colours_of(&theme, pics.icing);
-                assert!(colours.len() >= 4, "{name}: {colours:?}");
+                assert!(colours.len() >= 3, "{name}: {colours:?}");
                 for p in colours {
                     assert_eq!(p[3], 255);
                     let got = on(rgba(p), case);
@@ -1089,11 +1122,29 @@ fn what_glazed_paints_reads() {
                     assert!(got >= UI_CONTRAST, "{name} at {size}: icing {p:?} {got:.2}");
                 }
             }
+            // Smaller digits are not large text, and 3 is not enough for
+            // them: they wear no icing, and are the text colour alone.
+            for size in [27.0, 20.0] {
+                tick();
+                let small = digits(5, 344.0, size);
+                let f = Frame {
+                    value: Some(value(&small, next(), false, None, Role::Calculator)),
+                    motion: false,
+                    ..Frame::sized(344.0, 122.0)
+                };
+                let d = ok(theme.draw(LayerKind::Display, &c, &f));
+                for op in &d.list.ops {
+                    assert!(!matches!(op, Op::PushMask(_)), "{name} at {size}");
+                    if let Op::Glyph { paint, .. } = op {
+                        assert_eq!(solid(paint), style.color("window.color"));
+                    }
+                }
+            }
             // An error, and a page's line.
             tick();
             let now = digits(5, 344.0, 37.3);
             let f = Frame {
-                value: Some(value(&now, 2, true, None, Role::Calculator)),
+                value: Some(value(&now, next(), true, None, Role::Calculator)),
                 ..Frame::sized(344.0, 122.0)
             };
             let d = ok(theme.draw(LayerKind::Display, &c, &f));
@@ -1106,7 +1157,7 @@ fn what_glazed_paints_reads() {
             }
             let plain = style.fill("plain.background").samples_over([0.0; 4])[0];
             let f = Frame {
-                value: Some(value(&now, 3, false, None, Role::Converter)),
+                value: Some(value(&now, next(), false, None, Role::Converter)),
                 ..Frame::sized(344.0, 60.0)
             };
             for op in &ok(theme.draw(LayerKind::Display, &c, &f)).list.ops {

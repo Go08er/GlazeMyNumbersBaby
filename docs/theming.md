@@ -1559,14 +1559,14 @@ noise.
 | The tiled wall | A **still** the theme's script draws (`gmnb.image`, `draw:tile`) | Four colours, 200 bytes; tiling it costs one node. |
 | The awning's hem in the flavour's colours | Three **stills used as masks** (`draw:push_mask`, `draw:tile`, then a rectangle of the colour) | One set of pictures serves every flavour, light and dark: a still can't be recoloured, a mask can be filled. |
 | Sprinkles falling down the wall | An **animated picture** (`gmnb.animation`, a 128-frame GIF the script writes), drawn side by side with hard pixels | The loop repeats in space as it does in time, so nine copies of one small animation cover a window, decoded once off the interface's thread. The app schedules its frames; the hook returns nothing. |
-| The icing on a result's digits: it pours, its drips run ahead, sprinkles land on it | A **picture the theme computes** (`gmnb.pixels`, 256×28, a dozen steps of the pour) shown through the **glyphs as a mask** (`display` layer) | A drip is a pixel-stepped edge no gradient makes, and through the digits' own shapes it needs no knowledge of the typeface but two of its measures. |
+| The icing on the digits of a result (one that = or a function key gave): it pours, its drips run ahead, sprinkles land on it | A **picture the theme computes** (`gmnb.pixels`, 256×28, a dozen steps of the pour) shown through the **glyphs as a mask** (`display` layer); only on digits of 28 px and more, because the icing is held to large text's 3:1 | A drip is a pixel-stepped edge no gradient makes, and through the digits' own shapes it needs no knowledge of the typeface but two of its measures. |
 | The doughnut on the readout's shelf: it nods, blinks, jumps for a result, ducks as the number grows towards it | A second **computed picture** (24×24, worked out from a few numbers: squash, face, where it looks), placed by the `display` layer from the events' ages | No sprite sheet: one function is every pose, in every flavour, and Settings' tiles draw the same function as rectangles. |
 | Keys that sink under a finger, hop when let go, stack themselves when the keypad appears; the hop a result sends through them; the shake of an error | **Scripted** (`place`), in whole art pixels | The stylesheet has no "move down two pixels" for a state, and no events. |
 | The fountain of sprinkles from the = key; a new flavour's shower | **Scripted** (`overlay` layer): thirty rectangles a frame for a second | Over the keys, never over the number: the throw is worked out from where the readout ends. |
 | The same burst from frame to frame | **Scripted**: events carry no name, so the theme knows one again by its place and its growing age | A burst seeded by the frame would flicker. |
 | The equals key's icing and sprinkles; crumbs under a press | **Scripted** (`keypad` layer) | |
 | A scale to each flavour, a jingle timed to the icing | **Scripted** (`sound`, `gmnb.synth`): thirteen recipes; a key's note is one sound at another speed | Sound that follows the look needs the same options the look has. |
-| Jersey 10 | A font file in the theme's folder, set at whole multiples of its own pixel | |
+| Jersey 10 | A font file in the theme's folder, set at whole multiples of its own pixel where it has to be sharp (the readout, the number keys), and at one and a half for words | The app sets text unhinted, to a quarter of a pixel: a pixel face is only crisp where its pixels are whole ones. |
 | The flavours' tiles in Settings | **Scripted** (`preview`) | |
 
 What Glazed asks of the engine while it lives, measured as Aurora's was
@@ -1718,7 +1718,8 @@ Glazed's is `what_glazed_paints_reads` (`tests/glazed.rs`), which runs
 the layers and holds the header's title and buttons to 4.5 on both
 stripes of the awning its background layer draws, and every colour of
 a glazed number, read out of the icing's picture pixel by pixel, to 3
-on the readout's fill. The
+on the readout's fill (and digits under 28 px, which are not large
+text, wear no icing). The
 bits' indexes need 2.45, as the placeholder does (open point 9):
 `the_bits_indexes_read`.
 
