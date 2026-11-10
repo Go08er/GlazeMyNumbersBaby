@@ -1470,3 +1470,34 @@ fn a_theme_listed_but_not_chosen_cant_hold_up_settings() {
         t.elapsed()
     );
 }
+
+#[test]
+fn reading_what_a_hook_returns_counts_against_its_time() {
+    // The script takes no time at all; reading back the 20 000-entry map
+    // it returns (raw, as the caps allow) takes the host some 9 ms. That
+    // is the call's work, past a 2 ms limit (a `place`, a `sound`): a
+    // timeout, and the hook off after three (at once if it took four
+    // times the limit), as for a slow script.
+    let big = "local t = {} for i = 1, 19990 do t['key' .. i] = i end
+               return function() return t end";
+    let e = roomy();
+    let f = hook(&e, big);
+    while !f.is_disabled() {
+        let r = e.call(&f, Budget::Custom(ms(2)), ()).map(|_| "a value");
+        assert_eq!(r, Err(ThemeError::Timeout(ms(2))));
+        assert!(f.strikes() <= 3);
+    }
+    // Within its time it is read as before.
+    let f = hook(&e, big);
+    assert!(matches!(
+        e.call(&f, Budget::Custom(ms(1000)), ()),
+        Ok(ThemeValue::Map(m)) if m.len() == 19990
+    ));
+    // A span shared by several calls (a keypad frame's `place` calls): the
+    // call whose reading uses it up is the one that fails.
+    let f = hook(&e, big);
+    let span = e.span(Budget::Custom(ms(2)));
+    let r = e.call_in(&f, &span, ()).map(|_| "a value");
+    assert_eq!(r, Err(ThemeError::Timeout(ms(2))));
+    assert_eq!(f.strikes(), 1);
+}

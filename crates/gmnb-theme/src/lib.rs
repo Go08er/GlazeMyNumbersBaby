@@ -48,8 +48,9 @@
 //! under its deadline until the host call returns: a script that catches the timeout error
 //! with `pcall` is stopped at its next loop or call, coroutines included,
 //! and a call that returns after its deadline (one long library call, which
-//! Luau can't interrupt) is a [`ThemeError::Timeout`] too. Several calls
-//! can share one limit (a [`Span`]).
+//! Luau can't interrupt) is a [`ThemeError::Timeout`] too, as is a hook
+//! call whose value takes the host past the limit to read back. Several
+//! calls can share one limit (a [`Span`]).
 //!
 //! Each [`FunctionHandle`] counts its failures and is disabled after
 //! [`Limits::strikes`] of them, or at once after a call that ran more than

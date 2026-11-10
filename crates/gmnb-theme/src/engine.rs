@@ -622,7 +622,14 @@ impl Engine {
                 let f: Function = self.lua.registry_value(&h.key)?;
                 f.call::<Value>(args)
             })
-            .and_then(|v| self.convert(v));
+            .and_then(|v| self.convert(v))
+            // Reading back what the hook returned is its call's work too
+            // (up to some 10 ms at the caps): a call it takes past the
+            // limit ran past its deadline.
+            .and_then(|v| match span.is_over() {
+                true => Err(ThemeError::Timeout(span.limit)),
+                false => Ok(v),
+            });
         if result.is_err() {
             let strikes = h.strikes.get().saturating_add(1);
             h.strikes.set(strikes);

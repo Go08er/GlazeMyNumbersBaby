@@ -1508,7 +1508,9 @@ sounds.
 Every entry into the theme's code runs under its time limit, the first
 load included. **A time limit is of processor time**: what the theme's
 code has run, not what the clock on the wall says. A machine busy with
-other things doesn't fail a theme that did nothing slow. Files (`fonts`, `credits`, `gmnb.image`) are relative
+other things doesn't fail a theme that did nothing slow. Reading back
+what a hook returned counts against its call (a table near the caps
+takes some 10 ms to read). Files (`fonts`, `credits`, `gmnb.image`) are relative
 paths inside the theme's own folder; `..`, absolute paths and links that
 lead outside are refused. The same holds for `gmnb.animation` and
 `gmnb.sound`. A picture is never decoded inside a theme's call (a still
