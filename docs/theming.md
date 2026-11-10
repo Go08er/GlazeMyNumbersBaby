@@ -1979,7 +1979,8 @@ deadline itself between its arguments). `table.sort` compares strings
 from Luau too: two long strings alike to their last byte cost their
 length at each comparison. An error a library function
 raises inside one of these names no line of its own (the traceback has
-the theme's).
+the theme's); a comparison that fails inside `table.sort`, of strings or
+tables, says `library:0:`.
 
 ### Tests the engine must have
 

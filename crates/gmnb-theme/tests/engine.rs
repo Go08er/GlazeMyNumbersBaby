@@ -1412,6 +1412,8 @@ fn the_bounded_library_works_as_before() {
         add(pcall(string.find, "x", "["))
         add(pcall(table.sort, { 1 }, 5))
         add(pcall(table.find, nil, 1))
+        add(pcall(table.sort, { 3, "a" }))
+        add(pcall(table.sort, { "a", 3 }))
         return out
         "##,
     );
@@ -1446,6 +1448,9 @@ fn the_bounded_library_works_as_before() {
             "false malformed pattern (missing ']')",
             "false invalid argument #2 to 'sort' (function expected, got number)",
             "false invalid argument #1 to 'find' (table expected, got nil)",
+            "false attempt to compare string < number",
+            // Strings are compared from Luau now, in a chunk without lines.
+            "false library:0: attempt to compare number < string",
         ]
     );
 }
