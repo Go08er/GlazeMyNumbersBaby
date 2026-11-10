@@ -85,6 +85,32 @@ pub struct Prefix {
     pub gap: f32,
 }
 
+/// A cell of a grid a FitLabel's line is set about.
+pub struct CellAt {
+    grid: glib::WeakRef<gtk::Grid>,
+    key: glib::WeakRef<gtk::Widget>,
+    cells: (usize, usize),
+    at: (usize, usize),
+}
+
+impl CellAt {
+    /// How far DGMNB's cell middle lies from the key's allocated one.
+    fn shift(&self) -> (f32, f32) {
+        let (Some(grid), Some(key)) = (self.grid.upgrade(), self.key.upgrade()) else {
+            return (0.0, 0.0);
+        };
+        let Some(at) = key.compute_bounds(&grid) else {
+            return (0.0, 0.0);
+        };
+        let size = (grid.width() as f32, grid.height() as f32);
+        let (x, y) = cell_middle(size, self.cells, self.at, grid.row_spacing() as f32);
+        (
+            x - (at.x() + at.width() / 2.0),
+            y - (at.y() + at.height() / 2.0),
+        )
+    }
+}
+
 /// Pixels from Pango units.
 fn px(units: i32) -> f32 {
     units as f32 / pango::SCALE as f32
@@ -101,9 +127,9 @@ mod imp {
         pub prefix: RefCell<Option<Prefix>>,
         /// Shadows round the text (a see-through window's halo).
         pub halo: RefCell<Vec<gmnb_theme::types::Shadow>>,
-        /// How far the middle the line is set about lies from the
-        /// allocation's (DGMNB's keys sit in cells of fractional size).
-        pub shift: Cell<(f32, f32)>,
+        /// The cell of a grid whose middle the line is set about
+        /// (DGMNB's keys sit in cells of fractional size).
+        pub cell: RefCell<Option<CellAt>>,
     }
 
     impl Default for FitLabel {
@@ -115,7 +141,7 @@ mod imp {
                 align: Cell::new(Align::Start),
                 prefix: RefCell::default(),
                 halo: RefCell::default(),
-                shift: Cell::new((0.0, 0.0)),
+                cell: RefCell::default(),
             }
         }
     }
@@ -157,7 +183,12 @@ mod imp {
             let layout = obj.layout_at_size(size, &self.text.borrow(), None);
             // The capitals centred, on a whole pixel, as DGMNB sets a line
             // (`H`'s ink is the cap height).
-            let (dx, dy) = self.shift.get();
+            // Worked out as it is drawn, from the allocations then.
+            let (dx, dy) = self
+                .cell
+                .borrow()
+                .as_ref()
+                .map_or((0.0, 0.0), |c| c.shift());
             let baseline = |font: Option<&Font>, size: f32| {
                 let probe = obj.layout_at_size(size, "H", font);
                 let (ink, _) = probe.extents();
@@ -297,27 +328,23 @@ impl FitLabel {
         }
     }
 
-    /// Sets the line about `middle`, a point of `grid`'s, where `key` (an
-    /// ancestor of the label's, in `grid`) has its own middle as the
-    /// toolkit allocated it: DGMNB's keys sit in cells of fractional size.
-    pub fn centre_on(
+    /// Sets the line about the middle of DGMNB's cell `at` = (row,
+    /// column) of `grid` (a `gtk::Grid` of `cells` = (rows, columns),
+    /// its own spacing apart), where `key` is the label's ancestor in it.
+    pub fn set_cell(
         &self,
-        middle: (f32, f32),
+        grid: &gtk::Grid,
         key: &impl IsA<gtk::Widget>,
-        grid: &impl IsA<gtk::Widget>,
+        cells: (usize, usize),
+        at: (usize, usize),
     ) {
-        if let Some(at) = key.compute_bounds(grid) {
-            let dx = middle.0 - (at.x() + at.width() / 2.0);
-            let dy = middle.1 - (at.y() + at.height() / 2.0);
-            self.set_shift(dx, dy);
-        }
-    }
-
-    /// Sets the line about a middle `dx`, `dy` from the allocation's.
-    pub fn set_shift(&self, dx: f32, dy: f32) {
-        if self.imp().shift.replace((dx, dy)) != (dx, dy) {
-            self.queue_draw();
-        }
+        self.imp().cell.replace(Some(CellAt {
+            grid: grid.downgrade(),
+            key: key.upcast_ref::<gtk::Widget>().downgrade(),
+            cells,
+            at,
+        }));
+        self.queue_draw();
     }
 
     pub fn set_prefix(&self, prefix: Option<Prefix>) {

@@ -25,7 +25,7 @@ use graphing::{EquationId, Graph, TrigUnit};
 use gtk::{gdk, gio, glib};
 
 use super::{Ctx, Page};
-use crate::widgets::fit::{self, Align, FitLabel, SizeBin};
+use crate::widgets::fit::{Align, FitLabel};
 use crate::widgets::graph_view::GraphView;
 use crate::widgets::icon::{PathIcon, paths};
 use crate::widgets::width_bin::WidthBin;
@@ -158,8 +158,6 @@ pub struct GraphingPage {
     /// The pad's labels (and whether each is a number key's), set in the
     /// style's key fonts.
     pad_labels: RefCell<Vec<(FitLabel, bool)>>,
-    /// The pad's keys by row and column.
-    pad_keys: RefCell<Vec<(gtk::Button, usize, usize)>>,
     /// The icons the style sizes: each with the control it is in.
     icons: RefCell<Vec<(glib::WeakRef<PathIcon>, &'static str)>>,
     focused: RefCell<Option<glib::WeakRef<gtk::Entry>>>,
@@ -338,8 +336,7 @@ impl GraphingPage {
         side_stack.set_vexpand(true);
         side.append(&side_stack);
         side.append(&divider);
-        let pad_bin = SizeBin::new(&pad);
-        side.append(&pad_bin);
+        side.append(&pad);
 
         let view_stack = gtk::Stack::new();
         view_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
@@ -389,7 +386,6 @@ impl GraphingPage {
             side_stack: side_stack.clone(),
             pad: pad.clone(),
             pad_labels: RefCell::default(),
-            pad_keys: RefCell::default(),
             icons: RefCell::new(icons.iter().map(|(i, p)| (i.downgrade(), *p)).collect()),
             focused: RefCell::new(None),
             mode_toggle: mode_toggle.clone(),
@@ -404,14 +400,6 @@ impl GraphingPage {
         view_stack.add_named(&side, Some("equations"));
         view_stack.add_named(&overlay, Some("graph"));
         page.build_pad(&pad);
-        {
-            let weak = Rc::downgrade(&page);
-            pad_bin.connect_size(move |_, _| {
-                if let Some(p) = weak.upgrade() {
-                    p.place_pad_labels(p.pad.width(), p.pad.height());
-                }
-            });
-        }
         settings.set_popover(Some(&page.settings_popover()));
 
         {
@@ -634,13 +622,15 @@ impl GraphingPage {
                     text.set_margin_start(inset);
                     text.set_margin_end(inset);
                     b.set_child(Some(&text));
+                    // About DGMNB's cell middle, not the toolkit's
+                    // rounded allocation's.
+                    text.set_cell(pad, &b, (GRAPH_PAD.len(), row.len()), (r, c));
                     self.pad_labels.borrow_mut().push((text, number));
                 }
                 crate::a11y::name_button(&b, appcore::keys::graph_pad_name(label));
                 b.add_css_class("wc-key");
                 b.add_css_class(if number { "wc-num" } else { "wc-fn" });
                 b.add_css_class("wc-pad-key");
-                self.pad_keys.borrow_mut().push((b.clone(), r, c));
                 // Not focused by a click, unlike the calculator's keys: it
                 // types into the equation, which keeps the focus
                 // (upstream's GraphingNumPad keys can't take it at all).
@@ -662,25 +652,6 @@ impl GraphingPage {
                 });
                 pad.attach(&b, c as i32, r as i32, 1, 1);
             }
-        }
-    }
-
-    /// Sets each pad key's label about the middle DGMNB's cell has: the
-    /// pad's height and width shared out in fractions, which the toolkit
-    /// can't allocate.
-    fn place_pad_labels(&self, w: i32, h: i32) {
-        let (rows, cols) = (GRAPH_PAD.len(), GRAPH_PAD[0].len());
-        let gap = self.pad.row_spacing() as f32;
-        let labels = self.pad_labels.borrow();
-        for (b, r, c) in self.pad_keys.borrow().iter() {
-            let Some((label, _)) = labels
-                .iter()
-                .find(|(l, _)| l.parent().as_ref() == Some(b.upcast_ref()))
-            else {
-                continue;
-            };
-            let cell = fit::cell_middle((w as f32, h as f32), (rows, cols), (*r, *c), gap);
-            label.centre_on(cell, b, &self.pad);
         }
     }
 
