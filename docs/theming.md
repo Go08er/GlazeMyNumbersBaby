@@ -1193,8 +1193,12 @@ up to 10^6 (as is `draw:circle`'s), and SVG data may reach no further than
 10^6 from the origin, every relative step counted, nor have an arc of a
 larger radius (else `gmnb.svg_path` is an error): the toolkit's circles,
 corners and arcs cost it more to draw the larger they are in the path's
-own units. Measured on its software renderer, a circle of radius 10^7
-took a tenth of a second, and an arc of radius 10^10 hung it.
+own units, and the further from the origin (it works them out in single
+precision, to half a unit). Measured on its software renderer, a circle
+of radius 10^7 took a tenth of a second, one of 10^6 about (10^6, 10^6)
+half that, and an arc of radius 10^10 hung it. So a circle or a rounded
+rectangle (`draw:circle` too) whose points reach past 10^5 is drawn as
+the cubic curves it is made of, which cost no more out there.
 
 Pictures: `gmnb.image("images/stars.png")` loads a PNG, JPEG, WebP or GIF
 from the theme's folder (decoded by the app itself, not by the toolkit's

@@ -1243,10 +1243,29 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
         "circle",
         lua.create_function(move |_, (_, x, y, r, p): (Value, f64, f64, f64, Value)| {
             let what = "circle";
-            let op = Op::Circle {
-                center: [coord(what, x)?, coord(what, y)?],
-                radius: coord(what, r)?.clamp(0.0, path::MAX_RADIUS),
-                paint: paint(&k, what, &p)?,
+            let ([x, y], r) = (
+                [coord(what, x)?, coord(what, y)?],
+                coord(what, r)?.clamp(0.0, path::MAX_RADIUS),
+            );
+            let paint = paint(&k, what, &p)?;
+            let reach = (x.abs() + r).max(y.abs() + r);
+            // Far from the origin, the curves a circle is made of (see
+            // `path::CONTOUR_REACH`).
+            let op = if reach > path::CONTOUR_REACH && r > 0.0 {
+                let path = Rc::new(Path {
+                    segments: path::circle_curves(x, y, r),
+                });
+                Op::Fill {
+                    path,
+                    paint,
+                    rule: FillRule::Winding,
+                }
+            } else {
+                Op::Circle {
+                    center: [x, y],
+                    radius: r,
+                    paint,
+                }
             };
             s.recorder.borrow_mut().push(what, op)
         })?,

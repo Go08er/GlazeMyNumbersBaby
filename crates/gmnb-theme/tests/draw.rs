@@ -584,35 +584,83 @@ fn scales_one_inside_another_stay_within_what_can_be_drawn() {
 }
 
 /// A circle, or a path's rounded corner, of radius 10^7 cost the toolkit
-/// a tenth of a second to draw, each (its software renderer; a path may
-/// hold 16 384): radii are taken up to 10^6, which cost nothing more than
-/// small ones. SVG data reaches no further (its own test, in `path.rs`).
+/// a tenth of a second to draw, each (a path may hold 16 384), and so did
+/// one of radius 10^6 a million pixels out: the toolkit works its circles
+/// and corners out in single precision, to half a unit. Radii are taken up
+/// to 10^6, and a circle or a rounded rectangle reaching past 10^5 is
+/// given as the cubic curves it is made of, which cost no more out there.
+/// (SVG data reaches no further than 10^6: its own test, in `path.rs`.)
 #[test]
-fn circles_and_rounded_corners_are_no_larger_than_draw_cheaply() {
+fn circles_and_rounded_corners_far_out_are_drawn_as_curves() {
     let (theme, _d) = background(
         "radius",
-        "local p = gmnb.path():circle(1, 2, 1e7):rounded_rect(0, 0, 4e7, 4e7, { 1e7, 5, 2e6, 0 })",
+        r##"local p = gmnb.path():circle(1, 2, 50):circle(1, 2, 1e7)
+            :rounded_rect(0, 0, 4e7, 4e7, { 1e7, 5, 2e6, 0 }):rounded_rect(1, 2, 30, 40, 99)"##,
         r##"
+        draw:circle(3, 4, 10, "#ffffff")
         draw:circle(3, 4, 1e7, "#ffffff")
+        draw:circle(1e6, 0, 1, "#ffffff")
         draw:fill(p, "#ffffff")
         local ok, why = pcall(gmnb.svg_path, "M0 0 A1e12 1e12 0 1 1 10 10 Z")
         assert(not ok and string.find(tostring(why), "past"), tostring(why))
         "##,
     );
     let ops = ops(&theme);
+    // About the window: the toolkit's own circle.
     assert!(
-        matches!(ops[0], Op::Circle { center: [3.0, 4.0], radius, .. } if radius == 1.0e6),
+        matches!(ops[0], Op::Circle { center: [3.0, 4.0], radius, .. } if radius == 10.0),
         "{:?}",
         ops[0]
     );
-    let Op::Fill { path, .. } = &ops[1] else {
-        panic!("{:?}", ops[1]);
+    // Far out, or far reaching: curves, the radius taken up to 10^6.
+    let curves = |op: &Op| match op {
+        Op::Fill { path, .. } => path.segments.clone(),
+        other => panic!("{other:?}"),
     };
-    assert_eq!(path.segments[0], Segment::Circle(1.0, 2.0, 1.0e6));
     assert_eq!(
-        path.segments[1],
-        Segment::RoundedRect(0.0, 0.0, 1.0e7, 1.0e7, Radius([1.0e6, 5.0, 1.0e6, 0.0]))
+        curves(&ops[1]),
+        gmnb_theme::path::circle_curves(3.0, 4.0, 1.0e6)
     );
+    assert_eq!(
+        curves(&ops[2]),
+        gmnb_theme::path::circle_curves(1.0e6, 0.0, 1.0)
+    );
+    let k = 0.552_284_8f32;
+    assert_eq!(
+        curves(&ops[2])[..2],
+        [
+            Segment::MoveTo(1.0e6 + 1.0, 0.0),
+            Segment::CurveTo(1.0e6 + 1.0, k, 1.0e6 + k, 1.0, 1.0e6, 1.0),
+        ]
+    );
+    let path = curves(&ops[3]);
+    assert_eq!(path[0], Segment::Circle(1.0, 2.0, 50.0));
+    assert_eq!(
+        path[1..7],
+        gmnb_theme::path::circle_curves(1.0, 2.0, 1.0e6)[..]
+    );
+    // The rounded rectangle, coordinates taken up to 10^7, its corners
+    // to 10^6, clockwise from its top left.
+    let rounded =
+        gmnb_theme::path::rounded_curves(0.0, 0.0, 1.0e7, 1.0e7, &Radius([1.0e6, 5.0, 1.0e6, 0.0]));
+    assert_eq!(path[7..17], rounded[..]);
+    assert_eq!(rounded[0], Segment::MoveTo(1.0e6, 0.0));
+    assert_eq!(rounded[1], Segment::LineTo(1.0e7 - 5.0, 0.0));
+    assert_eq!(rounded[3], Segment::LineTo(1.0e7, 1.0e7 - 1.0e6));
+    assert_eq!(rounded[5], Segment::LineTo(0.0, 1.0e7));
+    assert_eq!(rounded[7], Segment::LineTo(0.0, 1.0e6));
+    // A small one stays the toolkit's, its corners as given (the toolkit
+    // scales them down to fit).
+    assert_eq!(
+        path[17],
+        Segment::RoundedRect(1.0, 2.0, 30.0, 40.0, Radius([99.0; 4]))
+    );
+    assert_eq!(path.len(), 18);
+    // Corners too large for the rectangle are scaled down together.
+    let fitted = gmnb_theme::path::rounded_curves(0.0, 0.0, 10.0, 40.0, &Radius([10.0; 4]));
+    assert_eq!(fitted[0], Segment::MoveTo(5.0, 0.0));
+    assert_eq!(fitted[1], Segment::LineTo(5.0, 0.0));
+    assert_eq!(fitted[3], Segment::LineTo(10.0, 35.0));
 }
 
 fn ops_count(theme: &Theme) -> usize {

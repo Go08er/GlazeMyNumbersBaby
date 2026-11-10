@@ -264,9 +264,78 @@ pub(crate) fn read(v: &Value, room: usize) -> Result<(Path, usize), Problem> {
         if used > room {
             return Err(Problem::TooLong);
         }
-        segments.push(segment);
+        // A circle or a rounded rectangle reaching far from the origin is
+        // given as the curves it is made of.
+        match segment {
+            Segment::Circle(x, y, r) if !near(&[x - r, x + r, y - r, y + r]) => {
+                segments.extend(circle_curves(x, y, r));
+            }
+            Segment::RoundedRect(x, y, w, h, r) if !near(&[x, x + w, y, y + h]) => {
+                segments.extend(rounded_curves(x, y, w, h, &r));
+            }
+            segment => segments.push(segment),
+        }
     }
     Ok((Path { segments }, used))
+}
+
+/// How far from the origin, in a path's own units, the points of a circle
+/// or a rounded rectangle may be for the toolkit's own shape to be drawn.
+/// Its circles and rounded corners are worked out in single precision to
+/// half a unit, and cost it more the further out they are: twenty circles
+/// of radius 10^6 about (10^6, 10^6) took a second (each 55 ms on the
+/// software renderer, 117 ms on GL), where about the window they took
+/// nothing. Further out a shape is given as cubic curves instead, which
+/// cost no more there than anywhere.
+pub const CONTOUR_REACH: f32 = 1.0e5;
+
+/// How far along its tangent a cubic curve's control point is put for a
+/// quarter circle of radius 1.
+const KAPPA: f32 = 0.552_284_8;
+
+fn near(coords: &[f32]) -> bool {
+    coords.iter().all(|c| c.abs() <= CONTOUR_REACH)
+}
+
+/// A circle as four cubic curves, clockwise from its right, as the
+/// toolkit's own goes.
+pub fn circle_curves(cx: f32, cy: f32, r: f32) -> Vec<Segment> {
+    let k = r * KAPPA;
+    vec![
+        Segment::MoveTo(cx + r, cy),
+        Segment::CurveTo(cx + r, cy + k, cx + k, cy + r, cx, cy + r),
+        Segment::CurveTo(cx - k, cy + r, cx - r, cy + k, cx - r, cy),
+        Segment::CurveTo(cx - r, cy - k, cx - k, cy - r, cx, cy - r),
+        Segment::CurveTo(cx + k, cy - r, cx + r, cy - k, cx + r, cy),
+        Segment::Close,
+    ]
+}
+
+/// A rounded rectangle as lines and cubic curves, clockwise from its top
+/// left, its corners (top left, top right, bottom right, bottom left)
+/// scaled down together when they are too large for it, as the toolkit
+/// does.
+pub fn rounded_curves(x: f32, y: f32, w: f32, h: f32, radius: &Radius) -> Vec<Segment> {
+    let [tl, tr, br, bl] = radius.0;
+    let fit = |len: f32, a: f32, b: f32| if a + b > len { len / (a + b) } else { 1.0 };
+    let f = fit(w, tl, tr)
+        .min(fit(w, bl, br))
+        .min(fit(h, tl, bl))
+        .min(fit(h, tr, br));
+    let [tl, tr, br, bl] = [tl * f, tr * f, br * f, bl * f];
+    let (r, b) = (x + w, y + h);
+    vec![
+        Segment::MoveTo(x + tl, y),
+        Segment::LineTo(r - tr, y),
+        Segment::CurveTo(r - tr + tr * KAPPA, y, r, y + tr - tr * KAPPA, r, y + tr),
+        Segment::LineTo(r, b - br),
+        Segment::CurveTo(r, b - br + br * KAPPA, r - br + br * KAPPA, b, r - br, b),
+        Segment::LineTo(x + bl, b),
+        Segment::CurveTo(x + bl - bl * KAPPA, b, x, b - bl + bl * KAPPA, x, b - bl),
+        Segment::LineTo(x, y + tl),
+        Segment::CurveTo(x, y + tl - tl * KAPPA, x + tl - tl * KAPPA, y, x + tl, y),
+        Segment::Close,
+    ]
 }
 
 /// How far from the origin SVG path data may reach, and how large an
