@@ -127,8 +127,10 @@ struct Anim {
     /// The file failed after its first frame: it stands on the frame
     /// shown.
     failed: bool,
-    /// Processor seconds a frame takes to decode (a running mean).
+    /// Processor seconds a frame takes to decode (the mean of about a
+    /// pass), and how many frames have been measured.
     cost: Option<f64>,
+    measured: u32,
     /// When a frame was last asked for, in the caller's seconds.
     last_asked: f64,
 }
@@ -149,6 +151,9 @@ pub const SHARE: f64 = 0.25;
 /// An animation counts towards the load while it was asked for a frame
 /// within this many seconds.
 const PLAYING: f64 = 1.0;
+/// Frames of an animation decoded before its mean cost is believed, and
+/// the fewest the mean is taken over.
+const MEASURED_FIRST: u32 = 24;
 
 impl Player {
     /// A player with no thread yet. `notify` is called, from the media
@@ -209,6 +214,7 @@ impl Player {
                 asked: None,
                 failed: false,
                 cost: None,
+                measured: 0,
                 last_asked: f64::NEG_INFINITY,
             },
         );
@@ -353,11 +359,17 @@ impl Player {
                 }
             };
             if d.decoded > 0 {
+                // The mean of the frames so far and, once a pass's worth
+                // is in it, of about the last pass. Frames of one file
+                // differ in what they cost (its first are the dearest,
+                // with cold caches and fresh memory), and what counts is
+                // what a pass takes.
                 let each = d.cost.as_secs_f64() / f64::from(d.decoded);
-                anim.cost = Some(match anim.cost {
-                    None => each,
-                    Some(mean) => mean + (each - mean) * 0.2,
-                });
+                anim.measured = anim.measured.saturating_add(d.decoded);
+                let pass = anim.timeline.frames().max(MEASURED_FIRST);
+                let gain = f64::from(d.decoded) / f64::from(anim.measured.min(pass));
+                let mean = anim.cost.unwrap_or(each);
+                anim.cost = Some(mean + (each - mean) * gain.min(1.0));
             }
             let frame = Arc::new(Frame {
                 index: d.index,
@@ -388,6 +400,7 @@ impl Player {
             .anims
             .values()
             .filter(|a| a.timeline.moves() && !a.failed && now - a.last_asked < PLAYING)
+            .filter(|a| a.measured >= MEASURED_FIRST)
             .filter_map(|a| Some(a.cost? / a.timeline.mean_delay()))
             .sum();
         let slow = (load / SHARE).max(1.0);

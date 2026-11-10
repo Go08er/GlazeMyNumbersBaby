@@ -99,8 +99,11 @@ pub struct Cache {
 
 /// Layouts kept at once: more, and the cache starts again.
 const LAYOUTS: usize = 256;
-/// Fields' pictures kept at once (each layer may show two).
-const FIELDS: usize = 16;
+/// Fields' pictures kept as textures at once: the ones on screen (a layer
+/// may show two), and no heap of old frames of a field that moves. One
+/// dropped while its picture still stands is made again from the
+/// picture's own bytes.
+const FIELDS: usize = 4;
 
 /// What the animations have cost, for the gates (`GMNB_THEME_STATS`).
 #[derive(Clone, Copy, Debug, Default)]

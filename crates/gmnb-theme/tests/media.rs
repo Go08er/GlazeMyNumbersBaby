@@ -363,13 +363,14 @@ fn animations_load_with_their_frames_counted_and_none_decoded() {
     assert!(theme.api().animation(ImageId(3)).is_none());
     assert!(theme.api().still(ImageId(0)).is_none());
     // Counted against the image total by what playing holds: four frames
-    // and what its format's decoder keeps.
+    // and what its format's decoder keeps; of a file of one frame, which
+    // never plays, that frame.
     let frame = |w: u64, h: u64| w * h * 4;
     let want = frame(8, 6) * 17 / 4          // a GIF: 4¼
         + frame(8, 6) * 6                    // a PNG: 6
         + frame(32, 24) * 5                  // a WebP: 5
         + frame(8, 6)                        // the GIF again, as a still
-        + frame(16, 12) * 6; // a still PNG as an animation
+        + frame(16, 12); // a still PNG as an animation
     assert_eq!(theme.api().pictures().decoded_bytes(), want);
 }
 
@@ -1540,6 +1541,59 @@ fn what_the_swirl_costs() {
             u.1,
             u.2,
             u.1 - g.1
+        );
+    }
+}
+
+/// What making pictures costs the call that makes them: the file read,
+/// its header looked at, an animation's frames counted. Not a test of
+/// anything: it needs the large test pictures that are not part of the
+/// repository (`GMNB_MEDIA_TESTMEDIA=<their folder>`), and is run for
+/// the figures, in the release profile.
+#[test]
+#[ignore = "a measurement, not a test"]
+fn what_making_a_picture_costs_its_call() {
+    let Some(media) = std::env::var_os("GMNB_MEDIA_TESTMEDIA") else {
+        eprintln!("GMNB_MEDIA_TESTMEDIA not set; nothing measured");
+        return;
+    };
+    let media = std::path::PathBuf::from(media);
+    let cpu = || gmnb_theme::media::thread_time().unwrap().as_secs_f64() * 1e3;
+    for (call, name) in [
+        ("image", "still.png"),
+        ("image", "still.jpg"),
+        ("animation", "busy-480x270.gif"),
+        ("animation", "soft-760x640.png"),
+        ("animation", "busy-760x640.webp"),
+    ] {
+        let Ok(bytes) = std::fs::read(media.join(name)) else {
+            eprintln!("{name}: not there");
+            continue;
+        };
+        let d = dir(&format!("cost-{name}"));
+        d.put(name, &bytes);
+        // The call alone: a theme that makes the picture, less one that
+        // doesn't, the fastest of several.
+        let load = |source: &str| {
+            (0..9)
+                .map(|_| {
+                    std::fs::write(d.0.join("theme.luau"), source).unwrap();
+                    let before = cpu();
+                    let theme = Theme::load(Source::folder("t", &d.0), Limits::default());
+                    let took = cpu() - before;
+                    assert!(theme.is_ok(), "{name}");
+                    took
+                })
+                .fold(f64::MAX, f64::min)
+        };
+        let empty = load("return { api = 1, name = 'T' }");
+        let with = load(&format!(
+            "local p = gmnb.{call}('{name}') assert(p.width > 0) return {{ api = 1, name = 'T' }}"
+        ));
+        eprintln!(
+            "gmnb.{call}(\"{name}\"), {:.1} MiB: {:.2} ms of the call's processor time",
+            bytes.len() as f64 / (1 << 20) as f64,
+            with - empty
         );
     }
 }

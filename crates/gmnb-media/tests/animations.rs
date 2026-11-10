@@ -754,7 +754,7 @@ fn an_animation_too_heavy_for_a_quarter_core_is_told_how_much_slower_to_play() {
     // 10 ms of processor time a frame, a frame every 20 ms: half a core
     // at full speed, twice the thread's share.
     let (mut p, wake) = player();
-    let t = Arc::new(Timeline::of_delays(Format::Gif, 4, 4, &[0.02; 8]));
+    let t = Arc::new(Timeline::of_delays(Format::Gif, 4, 4, &[0.02; 40]));
     p.open_with(
         1,
         t.clone(),
@@ -764,7 +764,15 @@ fn an_animation_too_heavy_for_a_quarter_core_is_told_how_much_slower_to_play() {
     // Nothing has been measured yet: full speed.
     assert_eq!(p.slow(0.0), 1.0);
     let started = Instant::now();
-    for i in [1, 2, 3, 4, 5] {
+    // A few frames are no measure (a file's first frames cost more than
+    // the rest): it is believed after two dozen.
+    for i in 1..=6 {
+        p.frame(1, i, started.elapsed().as_secs_f64());
+        settle(&mut p, &wake);
+    }
+    assert_eq!(p.slow(started.elapsed().as_secs_f64()), 1.0);
+    assert!(p.take_notes().is_empty());
+    for i in 7..=30 {
         p.frame(1, i, started.elapsed().as_secs_f64());
         settle(&mut p, &wake);
     }

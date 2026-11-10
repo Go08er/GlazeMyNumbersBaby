@@ -553,6 +553,9 @@ struct State {
     /// too soon: when it fires the layer is drawn again, whatever may
     /// move.
     retry: bool,
+    /// When the layer's timer last fired and had it drawn: the frame it
+    /// is then drawn in is no earlier than that.
+    woken: Option<f64>,
     /// How many frames in a row were drawn because one was owed.
     retries: u8,
     /// The frame about to be drawn is one that was owed.
@@ -667,10 +670,12 @@ impl Instance {
             let c = self.conditions(&layers, now);
             (st.clock.fire(now, c), std::mem::take(&mut st.retry))
         };
-        if retry {
-            self.state.borrow_mut().owed = true;
-        }
         if retry || matches!(fire, Fire::Draw | Fire::NotYet) {
+            {
+                let mut st = self.state.borrow_mut();
+                st.owed = retry;
+                st.woken = Some(now);
+            }
             self.redraw();
         }
     }
@@ -830,6 +835,12 @@ impl Instance {
             .upgrade()
             .and_then(|w| w.frame_clock())
             .map_or_else(now, |c| c.frame_time() as f64 / 1.0e6);
+        // A layer its timer woke has waited as long as it asked to, though
+        // the frame it is drawn in may be dated a little earlier (the
+        // toolkit rounds a frame's time to the display's refresh). An
+        // animation woken for its next frame would else find that frame
+        // not yet due, and wait a thirtieth of a second more.
+        let now = st.woken.take().map_or(now, |woken| now.max(woken));
         let c = self.conditions(&layers, now);
         let timing = st.clock.begin(now, c);
         let drawn = {
@@ -910,6 +921,17 @@ impl Instance {
                         st.retry = false;
                         wait
                     }
+                };
+                // The wait is from the frame's time, and the timer runs
+                // from this moment. The toolkit rounds a frame's time to
+                // the display's refresh, so it can be some milliseconds
+                // ahead of the moment: the timer waits those as well, or
+                // it would wake the layer before what it waits for is due
+                // (an animation's next frame), and the layer would draw
+                // what it has again.
+                let wait = match wait {
+                    Wait::Timer(seconds) => Wait::Timer(seconds + (now - self::now()).max(0.0)),
+                    wait => wait,
                 };
                 self.arm(&mut st, wait);
             }

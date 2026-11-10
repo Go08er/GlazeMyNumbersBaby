@@ -131,8 +131,14 @@ impl Timeline {
     /// palette indices (a byte a pixel); for a PNG up to two frames of
     /// its own buffers; for a WebP the frame being decoded, for as long
     /// as that takes. And [`Timeline::restore`].
+    ///
+    /// A file of one frame plays nothing: its one frame is all that is
+    /// ever held, as of a still.
     pub fn charge(&self) -> u64 {
         let frame = self.frame_bytes();
+        if !self.moves() {
+            return frame;
+        }
         let decoder = match self.format {
             Format::Gif => frame / 4,
             Format::Png => frame * 2,
