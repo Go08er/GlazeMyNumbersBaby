@@ -323,6 +323,9 @@ local AWNING = HEADER - HEM
 
 -- The keys' corners.
 local KEY_RADIUS = 6
+-- Below this height a number's capitals (twenty pixels) no longer fit
+-- between its key's two lines, and the key is a short key (section 2).
+local SHORT_KEY = 24
 -- The display case's shelf: how much of the readout's foot it takes.
 local SHELF = 10
 
@@ -360,6 +363,24 @@ local function style(ctx: Ctx): Style
 			border = outline,
 			shadow = raised(edge),
 			active = { shadow = sunk(edge), overlay = s.press },
+		}
+	end
+
+	-- A short key (a window near its least, 300 by 400, where Scientific's
+	-- keys are some fourteen pixels high and Programmer's twelve): the same
+	-- block with a thin line, its lip under it instead of inside it, and
+	-- its sign one Jersey pixel to the pixel, which is what it has room
+	-- for. Pressed, it sinks onto its lip.
+	local thin: Border = { width = 1, color = line }
+	local function short_key(face: Rgba, edge: Rgba, color: Rgba): Control
+		return {
+			background = face,
+			color = color,
+			font = jersey(1),
+			radius = 4,
+			border = thin,
+			shadow = { { y = 2, color = edge } },
+			active = { shadow = {}, overlay = s.press },
 		}
 	end
 
@@ -511,9 +532,8 @@ local function style(ctx: Ctx): Style
 			gap = 5,
 			gap_compact = 3,
 			radius = KEY_RADIUS,
-			-- A key is never squeezed flatter than its sign.
-			min_width = 36,
-			min_height = 30,
+			-- Keys shrink with the window, down to its least (300 by 400):
+			-- below SHORT_KEY high they are short keys.
 			icon = { size = 22, stroke = 2.8 },
 			hover = hover,
 			disabled = { fade = 0.3 },
@@ -522,7 +542,17 @@ local function style(ctx: Ctx): Style
 			operator = key(s.operator, s.operator_edge, s.operator_ink, jersey(2)),
 			equals = key(s.icing, s.icing_edge, s.on_icing, jersey(2)),
 			on = { background = s.icing, color = s.on_icing, shadow = raised(s.icing_edge) },
-			pad = { gap = 4, radius = 4, min_height = 30, font = jersey(1.5) },
+			short = {
+				below = SHORT_KEY,
+				gap = 3,
+				icon = { size = 14, stroke = 2 },
+				number = short_key(s.number, s.number_edge, ink),
+				func = short_key(s.func, s.func_edge, ink),
+				operator = short_key(s.operator, s.operator_edge, s.operator_ink),
+				equals = short_key(s.icing, s.icing_edge, s.on_icing),
+				on = { background = s.icing, color = s.on_icing, shadow = { { y = 2, color = s.icing_edge } } },
+			},
+			pad = { gap = 4, radius = 4, font = jersey(1.5) },
 		},
 
 		text_button = words({ 0, 6 }),
