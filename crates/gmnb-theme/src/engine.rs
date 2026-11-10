@@ -64,7 +64,8 @@ const MOVE_COUNT: usize = 1 << 20;
 ///   calling `__tostring`) calls it from Luau instead: that function may be
 ///   a library function, as uninterruptible, called once per element.
 ///   (`print` checks the deadline itself between its arguments; `gsub`'s
-///   matcher checks it between replacements.)
+///   matcher checks it between replacements.) `sort` compares strings
+///   from Luau too, each comparison costing up to their length.
 ///
 /// Everything else is as the original does it, the original doing it.
 const BOUNDED: &str = r#"
@@ -116,15 +117,17 @@ table.move = function(a, f, e, ...)
     return move(a, f, e, ...)
 end
 
--- Sorting tables compares them by `__lt` (numbers and strings, and
--- anything mixed with them, never call one).
+-- Sorting tables compares them by `__lt`, and strings byte by byte (two
+-- long strings alike to their last byte, many times over, cost their
+-- length each time). Numbers, and anything mixed with them (an error at
+-- the first such comparison), are sorted as they are.
 local function less(a, b)
     return a < b
 end
 table.sort = function(t, comp, ...)
     if comp == nil then
         local first = type(t) == "table" and type(rawget(t, 1))
-        if first ~= "table" and first ~= "userdata" then
+        if first ~= "table" and first ~= "userdata" and first ~= "string" then
             return sort(t, comp, ...)
         end
         return sort(t, less, ...)

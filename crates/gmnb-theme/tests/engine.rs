@@ -1336,9 +1336,14 @@ fn library_loops_that_call_back_keep_the_deadline() {
               local X = table.create(10000, setmetatable({}, mt))";
     let ts = "local T = setmetatable(table.create(5000, ''), {__tostring = table.concat})
               local args = table.create(7000, T) local f = string.rep('%*', 7000)";
+    // Two long strings alike but for their last byte, many times over:
+    // sorting compares them whole each time (no function called at all).
+    let strs = "local A = string.rep('a', 524288) local B = string.rep('a', 524287) .. 'b'
+                local t = table.create(20000, A) for i = 2, #t, 2 do t[i] = B end";
     for (setup, body) in [
         (n, "table.sort(t, table.find)"),
         (lt, "table.sort(t)"),
+        (strs, "table.sort(t)"),
         (eq, "return table.find(X, v)"),
         (ts, "return #string.format(f, table.unpack(args))"),
         (ts, "print(table.unpack(args))"),

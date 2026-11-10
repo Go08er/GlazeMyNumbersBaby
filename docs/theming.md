@@ -1975,7 +1975,9 @@ handed (`table.sort`'s comparator or `__lt`, `table.find`'s `__eq`,
 `table.foreach`, `table.foreachi`, `string.format`'s `%*` and
 `__tostring`) call it from Luau, so that one library function can't call
 another once per element with no check between (`print` checks the
-deadline itself between its arguments). An error a library function
+deadline itself between its arguments). `table.sort` compares strings
+from Luau too: two long strings alike to their last byte cost their
+length at each comparison. An error a library function
 raises inside one of these names no line of its own (the traceback has
 the theme's).
 
