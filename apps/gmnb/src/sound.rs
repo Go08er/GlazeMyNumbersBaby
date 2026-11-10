@@ -21,7 +21,7 @@ use gmnb_sound::{
     Bank, EventName, Play, Played, Resolver, Settings, Sink, SoundEngine, Stats, Status, Trigger,
 };
 use gmnb_theme::events::{Event, EventKind};
-use gmnb_theme::sound::{Choice, across, answers, event_name, trigger};
+use gmnb_theme::sound::{answers, decide};
 use gmnb_theme::theme::Theme;
 use gmnb_theme::{Ctx, Note};
 
@@ -52,7 +52,7 @@ pub enum Heard {
     /// `false`) for the event.
     Nothing(Option<EventName>),
     /// The same name sounded less than 30 ms ago.
-    TooSoon(EventName),
+    TooSoon(Option<EventName>),
     /// These plays, and what the engine made of each.
     Played(Option<EventName>, Vec<(Play, Played)>),
 }
@@ -200,17 +200,10 @@ impl Voice {
         if !self.engine.available() {
             return (Heard::Silent("no sound system"), asked);
         }
-        // The theme's own choice first.
-        let mut plays = None;
-        match theme.sound_choice(event, across(event, width), ctx) {
-            Some(Ok(Choice::Silence)) => return (Heard::Nothing(event_name(event)), asked),
-            Some(Ok(Choice::Plays(chosen))) => plays = Some(chosen),
-            Some(Ok(Choice::Table)) | None => {}
-            Some(Err(e)) => {
-                asked.failed = Some(e.to_string());
-                asked.switched_off = !theme.asks_sound();
-            }
-        }
+        // The theme's own choice first, then its table.
+        let decided = decide(theme, &mut loaded.resolver, event, width, ctx);
+        asked.failed = decided.failed.as_ref().map(ToString::to_string);
+        asked.switched_off = decided.switched_off;
         // A sound it made just now joins the bank (it plays once it is
         // rendered: this time it may not).
         let declared = theme.sounds_declared();
@@ -218,19 +211,12 @@ impl Voice {
             self.engine.extend(&loaded.bank, &theme.sounds().sounds);
             loaded.declared = declared;
         }
-        let name = event_name(event);
-        let plays = match plays {
-            Some(plays) => plays,
-            None => {
-                let found = name.and_then(|n| loaded.resolver.resolve(n, trigger(event, width)));
-                match found {
-                    Some(play) => vec![play],
-                    None => return (Heard::Nothing(name), asked),
-                }
-            }
-        };
+        let (name, plays) = (decided.name, decided.plays);
+        if plays.is_empty() {
+            return (Heard::Nothing(name), asked);
+        }
         if loaded.resolver.too_soon(name, now) {
-            return (Heard::TooSoon(name.unwrap_or(EventName::Press)), asked);
+            return (Heard::TooSoon(name), asked);
         }
         let played = plays
             .into_iter()
@@ -354,7 +340,7 @@ pub fn trace_line(event: &Event, heard: &Heard, asked: &Asked, took: Duration) -
         Heard::NotAnswered => "not answered".to_string(),
         Heard::Silent(why) => format!("silent: {why}"),
         Heard::Nothing(n) => format!("{}: nothing", name(n)),
-        Heard::TooSoon(n) => format!("{}: too soon", n.name()),
+        Heard::TooSoon(n) => format!("{}: too soon", name(n)),
         Heard::Played(n, plays) => {
             let plays: Vec<String> = plays
                 .iter()
@@ -748,7 +734,7 @@ return {
             360.0,
             t + Duration::from_millis(20),
         );
-        assert_eq!(again.0, Heard::TooSoon(EventName::Digit));
+        assert_eq!(again.0, Heard::TooSoon(Some(EventName::Digit)));
         let later = voice.hear(
             Some(&tones),
             &ctx,

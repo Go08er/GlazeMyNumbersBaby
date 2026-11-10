@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use gmnb_sound::{
     Curve, Effect, Entry, Env, EventName, FileData, Filter, FilterKind, Fm, Glide, Layer, Lfo, Pan,
-    Pick, Play, PlayParams, Recipe, Slot, SoundId, SoundSource, SoundTable, ThemeSounds, Trigger,
-    Varied, Wave, limits, note_name,
+    Pick, Play, PlayParams, Recipe, Resolver, Slot, SoundId, SoundSource, SoundTable, ThemeSounds,
+    Trigger, Varied, Wave, limits, note_name,
 };
 use mlua::{Lua, Table, Value};
 
@@ -102,6 +102,89 @@ pub fn trigger(event: &Event, width: f32) -> Trigger {
         key: event.key.and_then(|(id, _)| id).map(u64::from),
         across: Some((across(event, width) + 1.0) / 2.0),
     }
+}
+
+// ---- What an event plays --------------------------------------------------------
+
+/// Who decided what an event plays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum By {
+    /// The theme's `sound` function.
+    Function,
+    /// The `sounds` table, under this name (the event's own, or one its
+    /// row falls back to).
+    Table(EventName),
+    /// Nobody: sound does not answer the event, or the function left it
+    /// to the table, which has no entry for it (or `false`, or the event
+    /// has no name there).
+    Nobody,
+}
+
+/// What an event plays, and how that was decided.
+#[derive(Debug, PartialEq)]
+pub struct Decision {
+    /// Up to 4 plays; none: silence.
+    pub plays: Vec<Play>,
+    pub by: By,
+    /// The event's name in the table (what the 30 ms rule goes by).
+    pub name: Option<EventName>,
+    /// The theme's `sound` failed for this event (the table decided), and
+    /// whether that failure switched it off.
+    pub failed: Option<crate::ThemeError>,
+    pub switched_off: bool,
+}
+
+/// What an event plays: "From event to sound", steps 1 to 4, as the app
+/// decides it (the app, and the tools that render and test a theme's
+/// sounds without it, share this). Sound answers the event or not; the
+/// theme's `sound(event, ctx)` decides first; what it leaves to the table
+/// (`nil`, or a failure) the table decides: the event's name, its row,
+/// `pick` and ranges, `pan = "position"` across a window `width` wide.
+///
+/// Not here: whether the window is in use and sound is on (the app's),
+/// and the same name again within 30 ms (`Resolver::too_soon`, which the
+/// caller asks with [`Decision::name`] once it has plays).
+pub fn decide(
+    theme: &Theme,
+    resolver: &mut Resolver,
+    event: &Event,
+    width: f32,
+    ctx: &crate::Ctx,
+) -> Decision {
+    let mut d = Decision {
+        plays: Vec::new(),
+        by: By::Nobody,
+        name: event_name(event),
+        failed: None,
+        switched_off: false,
+    };
+    if !answers(event) {
+        return d;
+    }
+    match theme.sound_choice(event, across(event, width), ctx) {
+        Some(Ok(Choice::Silence)) => {
+            d.by = By::Function;
+            return d;
+        }
+        Some(Ok(Choice::Plays(plays))) => {
+            (d.plays, d.by) = (plays, By::Function);
+            return d;
+        }
+        Some(Ok(Choice::Table)) | None => {}
+        Some(Err(e)) => {
+            d.failed = Some(e);
+            d.switched_off = !theme.asks_sound();
+        }
+    }
+    let Some(name) = d.name else {
+        return d;
+    };
+    if let Some((found, _)) = resolver.table().find(name) {
+        d.by = By::Table(found);
+    }
+    d.plays
+        .extend(resolver.resolve(name, trigger(event, width)));
+    d
 }
 
 // ---- What a theme has declared ------------------------------------------------

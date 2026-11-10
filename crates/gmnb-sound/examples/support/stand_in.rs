@@ -1,122 +1,42 @@
 //! A stand-in for the app between an event and its plays
-//! (docs/theming-media.md, "From event to sound", steps 2 to 4): the event
-//! as a theme's `sound` function is given it, the `ctx` beside it, the
-//! call in its 2 ms, and the `sounds` table for what the function leaves
-//! to it.
+//! (docs/theming-media.md, "From event to sound", steps 1 to 4): the
+//! app's own decision (`gmnb_theme::sound::decide`, which the app's
+//! `apps/gmnb/src/sound.rs` calls too), with a `ctx` as the app has it
+//! just after the theme was loaded, and events made as the app makes
+//! them.
 //!
 //! The render example and the tests of a theme's sounds share this file
 //! (`#[path]`), so that what is rendered and what is tested are decided the
-//! same way. Nothing here makes a sound.
+//! same way, and the same way as in the app. Nothing here makes a sound.
 //!
-//! What it does not do: the 30 ms rule for the same event twice (step 5),
-//! and a `ctx` in full. Its `ctx` has `dark`, `opacity`, `options`,
-//! `motion` and `font`, and no `accent` or `base`.
+//! What it does not do: the window's being in use, and the 30 ms rule for
+//! the same event twice (step 5).
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
 
 use gmnb_sound::{EventName, Play, Resolver};
-use gmnb_theme::events::{Action, Event, EventKind, KeyKind, Page, Source, Via};
-use gmnb_theme::mlua::{self, Lua, Table};
-use gmnb_theme::sound::{Choice, HOOK_TIME, across, answers, event_name, parse_choice, trigger};
+use gmnb_theme::events::{Action, Cause, Event, EventKind, KeyKind, Page, Source, Via};
+pub use gmnb_theme::sound::By;
+use gmnb_theme::sound::{Choice, across, decide};
 use gmnb_theme::theme::{Theme, complete_options};
-use gmnb_theme::{Budget, Notes, OptionValue, ThemeError};
+use gmnb_theme::{Ctx, OptionValue, ThemeError};
 
 /// The window the stand-in's events happen in.
 pub const WIDTH: f32 = 400.0;
 pub const HEIGHT: f32 = 640.0;
 
-/// Who decided what an event plays.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum By {
-    /// The theme's `sound` function.
-    Function,
-    /// The `sounds` table, under this name.
-    Table(EventName),
-    /// Nobody: the function left it to the table, which has no entry for
-    /// it (or has `false`, or the event has no name).
-    Nobody,
-}
-
 pub struct StandIn<'a> {
     pub theme: &'a Theme,
     pub resolver: Resolver,
-    options: BTreeMap<String, OptionValue>,
-    ctx: Table,
+    /// What the theme's hooks are told: the app's default `ctx` (light,
+    /// no accent, opaque, moving, the default font), with the theme's
+    /// options.
+    ctx: Ctx,
     /// What the theme's author should know: what the function returned
-    /// that was no play, and its failures.
+    /// that was no play, its failures, and what else of its sounds the
+    /// theme noted.
     pub notes: Vec<String>,
-}
-
-fn set_option(t: &Table, id: &str, value: &OptionValue) -> mlua::Result<()> {
-    match value {
-        OptionValue::Text(s) => t.raw_set(id, s.as_str()),
-        OptionValue::Number(n) => t.raw_set(id, *n),
-        OptionValue::Bool(b) => t.raw_set(id, *b),
-    }
-}
-
-fn ctx_table(lua: &Lua, options: &BTreeMap<String, OptionValue>) -> mlua::Result<Table> {
-    let t = lua.create_table()?;
-    t.raw_set("dark", false)?;
-    t.raw_set("opacity", 1.0)?;
-    let o = lua.create_table()?;
-    for (id, value) in options {
-        set_option(&o, id, value)?;
-    }
-    o.set_readonly(true);
-    t.raw_set("options", o)?;
-    t.raw_set("motion", true)?;
-    let font = lua.create_table()?;
-    font.raw_set("family", "sans-serif")?;
-    font.raw_set("size", 15.0)?;
-    font.set_readonly(true);
-    t.raw_set("font", font)?;
-    t.set_readonly(true);
-    Ok(t)
-}
-
-/// An event as `sound(event, ctx)` is given it: what a layer would see
-/// (`gmnb-theme`'s `layer.rs`, `event_table`), in window coordinates, with
-/// `age` 0 and `pan`.
-fn event_table(lua: &Lua, e: &Event) -> mlua::Result<Table> {
-    let t = lua.create_table()?;
-    t.raw_set("kind", e.kind.name())?;
-    t.raw_set("age", 0.0)?;
-    t.raw_set("x", e.x)?;
-    t.raw_set("y", e.y)?;
-    let rect = lua.create_table()?;
-    for (name, v) in ["x", "y", "w", "h"].into_iter().zip(e.rect) {
-        rect.raw_set(name, v)?;
-    }
-    rect.set_readonly(true);
-    t.raw_set("rect", rect)?;
-    t.raw_set("page", e.page.name())?;
-    if let Some(source) = e.source {
-        t.raw_set("source", source.name())?;
-    }
-    if let Some(via) = e.via {
-        t.raw_set("via", via.name())?;
-    }
-    if let Some(action) = e.action {
-        t.raw_set("action", action.name())?;
-    }
-    if let Some((id, kind)) = e.key {
-        let key = lua.create_table()?;
-        if let Some(id) = id {
-            key.raw_set("id", id)?;
-        }
-        key.raw_set("kind", kind.name())?;
-        key.set_readonly(true);
-        t.raw_set("key", key)?;
-    }
-    if let Some((id, value)) = &e.option {
-        t.raw_set("id", id.as_str())?;
-        set_option(&t, "value", value)?;
-    }
-    t.raw_set("pan", across(e, WIDTH))?;
-    t.set_readonly(true);
-    Ok(t)
 }
 
 impl<'a> StandIn<'a> {
@@ -124,12 +44,13 @@ impl<'a> StandIn<'a> {
     /// defaults.
     pub fn new(theme: &'a Theme) -> StandIn<'a> {
         let options = complete_options(&theme.def.options, &BTreeMap::new());
-        let ctx = ctx_table(theme.engine().lua(), &options).expect("a table for ctx");
         StandIn {
             theme,
             resolver: Resolver::new(theme.sounds().table, 1),
-            options,
-            ctx,
+            ctx: Ctx {
+                options,
+                ..Ctx::default()
+            },
             notes: Vec::new(),
         }
     }
@@ -137,50 +58,33 @@ impl<'a> StandIn<'a> {
     /// One of the theme's options, as `ctx.options` has it from now on.
     /// (The event that tells the theme of the change is [`option`].)
     pub fn set_option(&mut self, id: &str, value: OptionValue) {
-        self.options.insert(id.to_string(), value);
-        self.ctx = ctx_table(self.theme.engine().lua(), &self.options).expect("a table for ctx");
+        self.ctx.options.insert(id.to_string(), value);
+    }
+
+    fn take_notes(&mut self) {
+        let notes = self.theme.take_sound_notes();
+        self.notes.extend(notes.iter().map(|n| n.to_string()));
     }
 
     /// What the theme's `sound` function says to `event`, in the time
     /// the app gives it. `None`: the theme has none, or it has been
     /// switched off.
     pub fn ask(&mut self, event: &Event) -> Option<Result<Choice, ThemeError>> {
-        let hook = self.theme.def.sound.as_ref()?;
-        let engine = self.theme.engine();
-        let table = event_table(engine.lua(), event).expect("a table for the event");
-        match engine.call(hook, Budget::Custom(HOOK_TIME), (table, &self.ctx)) {
-            Err(ThemeError::Disabled(_)) => None,
-            Err(e) => Some(Err(e)),
-            Ok(value) => {
-                let mut notes = Notes::default();
-                let choice = parse_choice(&value, &mut notes);
-                self.notes.extend(notes.list.iter().map(|n| n.to_string()));
-                Some(Ok(choice))
-            }
-        }
+        let asked = self
+            .theme
+            .sound_choice(event, across(event, WIDTH), &self.ctx);
+        self.take_notes();
+        asked
     }
 
     /// What the app would play for `event`, and who decided it.
     pub fn decide(&mut self, event: &Event) -> (Vec<Play>, By) {
-        if !answers(event) {
-            return (Vec::new(), By::Nobody);
+        let decided = decide(self.theme, &mut self.resolver, event, WIDTH, &self.ctx);
+        if let Some(e) = &decided.failed {
+            self.notes.push(format!("sound(): {e}"));
         }
-        match self.ask(event) {
-            Some(Ok(Choice::Silence)) => return (Vec::new(), By::Function),
-            Some(Ok(Choice::Plays(plays))) => return (plays, By::Function),
-            Some(Ok(Choice::Table)) | None => {}
-            // The table decides for an event the function failed on.
-            Some(Err(e)) => self.notes.push(format!("sound(): {e}")),
-        }
-        let Some(name) = event_name(event) else {
-            return (Vec::new(), By::Nobody);
-        };
-        let by = match self.resolver.table().find(name) {
-            Some((found, _)) => By::Table(found),
-            None => By::Nobody,
-        };
-        let play = self.resolver.resolve(name, trigger(event, WIDTH));
-        (play.into_iter().collect(), by)
+        self.take_notes();
+        (decided.plays, decided.by)
     }
 }
 
@@ -217,9 +121,21 @@ pub fn button(source: Source, action: Option<Action>, page: Page, across: f32) -
 }
 
 /// A calculation's result (`EventKind::Result`) or error, from the
-/// readout at the top of `page`.
+/// readout at the top of `page`, after = was clicked: what the `sounds`
+/// table plays.
 pub fn outcome(kind: EventKind, page: Page) -> Event {
-    Event::at(kind, page, [0.0, 80.0, WIDTH, 96.0])
+    outcome_after(kind, page, Cause::Equals)
+}
+
+/// A result or an error that a press of this kind brought about (the
+/// running total + shows is `Cause::Operator`, which the table leaves
+/// silent), clicked.
+pub fn outcome_after(kind: EventKind, page: Page, cause: Cause) -> Event {
+    Event {
+        via: Some(Via::Pointer),
+        cause: Some(cause),
+        ..Event::at(kind, page, [0.0, 80.0, WIDTH, 96.0])
+    }
 }
 
 /// The page or mode was changed.
