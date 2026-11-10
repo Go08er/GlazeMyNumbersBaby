@@ -17,6 +17,7 @@ pub mod icons;
 pub mod input;
 pub mod keys;
 pub mod modes;
+pub mod palette;
 pub mod settings;
 pub mod tz;
 
