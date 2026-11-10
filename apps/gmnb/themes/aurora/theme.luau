@@ -1295,8 +1295,8 @@ local function veil_at(draw: Draw, w: number, h: number, veil: typeof(VEILS[1]),
 end
 
 -- A pulse: a bloom of light that swells from where something happened and
--- fades. The strong ones (the equals key, a result, a new palette) also
--- send a thin wavefront running ahead of it.
+-- fades. The strong ones (the equals key, a result, the converter's swap,
+-- a new palette) also send a thin wavefront running ahead of it.
 local function pulse_at(draw: Draw, w: number, h: number, x: number, y: number, color: Rgba, strength: number, age: number)
 	local life = age / PULSE_LIFE
 	-- It comes up over three frames instead of popping in.
