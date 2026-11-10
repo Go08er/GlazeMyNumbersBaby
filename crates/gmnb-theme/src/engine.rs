@@ -39,7 +39,7 @@ const PRINT_NESTING: u32 = 4;
 /// `plain` or a pattern of no magic characters, `string.split` with a
 /// separator of two bytes or more): the string's length times the
 /// pattern's. Luau compares the pattern at every place with no interrupt
-/// between, a few milliseconds' work at this.
+/// between, some 15 ms' work at this.
 const PLAIN_WORK: usize = 1 << 30;
 /// Steps, at most, of one pattern search (`string.find`, `match`,
 /// `gmatch`, `gsub`) between two of the interrupt's checks: the string's
