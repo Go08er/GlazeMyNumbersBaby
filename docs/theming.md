@@ -277,7 +277,12 @@ A **Fill** is one paint, or up to 4 layered, topmost first:
 - **Optical size.** For the bundled Inter the app sets the `opsz` axis to
   the size in pixels, kept between 14 and 32, unless `variations.opsz` says
   otherwise. This is DGMNB's rule; left alone, the toolkit would use the
-  size in points instead.
+  size in points instead. A readout the app shrinks to fit its width
+  (the calculator's, the converter's, the date page's) is shrunk by as
+  much as it is too wide at its largest size, and a smaller optical size
+  is a wider cut: set in Inter, a shrunk readout can come out a little
+  longer than its width. Naming `variations.opsz` (the largest size's,
+  at most 32) keeps one cut at every size, as Swirls' figures do.
 
 ### Transition
 
@@ -1609,6 +1614,7 @@ picture the theme computes, and everything in it is built on that.
 | How strong the glass is | **Scripted** (`style`): the least strength at which every ink reads over every band, for this set of bands at this window opacity; the glass chosen is never thinner | White on the page's gold is 1.4 to 1. See [the readability rules](#readability-rules). |
 | A pressed key clears | **Declared** (`keys.active` with a thinner background, and a slow `transition` back) | The toolkit animates it. |
 | Figures made of paint | **Scripted** (`display` layer): the glyphs as a mask (`draw:push_mask`), and behind them a second, small field: a slice of the swirl as one number a point, kept inside the ramp's first band | With one channel and values between 0 and 1 a three-colour cyclic ramp gives only its first two colours and the blend between them, so no figure is ever dark. One ramp serves both layers (a theme may make eight). |
+| Every page in the least window, a long figure in its readout | **Declared**: keys and bits with no least size of their own; the readouts' figures name their optical size | The window may be 300×400; a readout shrunk in Inter's smaller cuts would run past its end ([Font](#font)). |
 | The panel's hairline round the readout | **Scripted** (`display` layer, `draw:border`) | The readout's own style has a background and a radius, no border. |
 | Keys swirling into place | **Scripted** (`place`): each key turned about the keypad's middle and brought in, the nearest first | |
 | The tiles in Settings | **Scripted** (`preview`): a 17 × 11 field through each set's ramp | A tile is drawn once and stands. |
@@ -1622,18 +1628,19 @@ on the page too).
 
 Measured (release build, a 760×640 window on the private headless
 compositor, the machine under a processor cap and shared with other
-work; Aurora beside it in the same runs; ranges are over four runs):
+work; Aurora beside it in the same runs; ranges are over five runs, the
+last after the merge with Glazed):
 
 | | Swirls | Aurora |
 |---|---|---|
-| The background's hook per frame, flowing (processor time; the app's colouring pass is inside it) | 0.9 ms: 0.55 the pass, 0.3 a fifth of a snapshot. 3.0 ms for the first frame at a window size (a whole snapshot) | 0.23 ms with thirteen pulses (its gradients are rasterised by the toolkit, after the hook) |
-| The same while somebody types (six stirs and a ripple alive at once) | 2.2 ms, 3.3 ms at worst; the limit is 8 | |
+| The background's hook per frame, flowing (processor time; the app's colouring pass is inside it) | 0.9 to 1.2 ms: 0.55 the pass, 0.3 a fifth of a snapshot. 3.0 ms for the first frame at a window size (a whole snapshot) | 0.23 ms with thirteen pulses (its gradients are rasterised by the toolkit, after the hook) |
+| The same while somebody types (six stirs and a ripple alive at once) | 1.8 to 2.2 ms, 3.3 ms at worst; the limit is 8 | |
 | The readout's hook per frame | 0.15 ms | 0.06 ms mid-result |
-| The keypad's, its keys coming in | 0.04 ms | 0.12 ms with the pointer over it |
-| A core, living, software renderer | 22 to 27% at 30 pictures a second | 44 to 63% at 15 |
-| A core, living, GL on llvmpipe | 82 to 93% | 136 to 142% |
+| The keypad's, its keys coming in | 0.04 to 0.09 ms | 0.12 ms with the pointer over it |
+| A core, living, software renderer | 22 to 27% at 30 pictures a second (11% at 300×400, 14% at 360×600, 34% at 1280×800) | 44 to 63% at 15 |
+| A core, living, GL on llvmpipe | 82 to 93% | 136 to 143% |
 | A core, typing all the while, software renderer | 33 to 41% | 82% |
-| At rest: reduced motion, the window not in use, held still, settled | 0 ticks of the clock in 10 s, each | 0 |
+| At rest: reduced motion (the toolkit's animations off), the window not in use, held still, settled | 0 ticks of the clock in 10 s, each | 0 |
 | Resident memory (the base look: 69 MiB) | 78 to 82 MiB | 78 MiB |
 
 `crates/gmnb-theme/tests/swirls.rs` prints the hook's figures
