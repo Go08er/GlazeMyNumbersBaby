@@ -363,7 +363,13 @@ pub struct Recorder {
     /// A hook is running.
     active: bool,
     ops: Vec<Op>,
-    open: Vec<Open>,
+    /// What is open, each with [`Recorder::zoom`] as it was when it
+    /// opened (a pop or a restore puts it back, as the toolkit does the
+    /// transform).
+    open: Vec<(Open, f64)>,
+    /// The scales in force that enlarge, multiplied (one that shrinks
+    /// counts as 1): kept within [`MAX_ZOOM`].
+    zoom: f64,
     pushes: usize,
     saves: usize,
     segments: usize,
@@ -399,6 +405,7 @@ impl Recorder {
             active: false,
             ops: Vec::new(),
             open: Vec::new(),
+            zoom: 1.0,
             pushes: 0,
             saves: 0,
             segments: 0,
@@ -464,6 +471,15 @@ impl Recorder {
                 format!("more than {} draw calls in one frame", self.limits.ops),
             ));
         }
+        // How far from the layer's origin it is drawn, at most, with the
+        // scales in force: past `DEVICE_REACH` the toolkit's software
+        // renderer crashed (a shadow of a picture 10^11 pixels across).
+        if f64::from(local_reach(&op)) * self.zoom > DEVICE_REACH {
+            return Err(bad(
+                what,
+                "drawn more than 10^8 pixels from the layer's origin, with the scales in force",
+            ));
+        }
         self.ops.push(op);
         Ok(())
     }
@@ -479,7 +495,9 @@ impl Recorder {
         }
         self.push(what, op)?;
         self.pushes += parts;
-        self.open.extend(std::iter::repeat_n(Open::Push, parts));
+        let zoom = self.zoom;
+        self.open
+            .extend(std::iter::repeat_n((Open::Push, zoom), parts));
         Ok(())
     }
 
@@ -497,6 +515,44 @@ fn bad(what: &str, problem: impl std::fmt::Display) -> mlua::Error {
 /// The largest coordinate taken: far beyond any window, small enough that
 /// the renderers' arithmetic stays exact.
 const FAR: f64 = 1.0e7;
+
+/// How far from a layer's origin, in its pixels, anything may be drawn,
+/// at most: a call that, with the scales in force, would reach further is
+/// refused. (Given a picture 10^10 pixels across or more to shadow, the
+/// toolkit's software renderer failed, or crashed; at 10^9 it drew.)
+const DEVICE_REACH: f64 = 1.0e8;
+
+/// How far from the origin, in the units it is drawn in, an operation can
+/// reach, at most (its text: a line of its bytes at its font's size).
+fn local_reach(op: &Op) -> f32 {
+    let far = |c: &[f32]| c.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    let rect = |r: &Rect| far(&[r[0], r[1], r[0] + r[2], r[1] + r[3]]);
+    let shadow = |s: &Shadow| far(&[s.x, s.y]) + s.spread.abs() + s.blur.abs();
+    match op {
+        Op::Rect { rect: r, .. }
+        | Op::RoundedRect { rect: r, .. }
+        | Op::Image { rect: r, .. }
+        | Op::Tile { rect: r, .. }
+        | Op::Animation { rect: r, .. }
+        | Op::Field { rect: r, .. }
+        | Op::PushClip { rect: r, .. } => rect(r),
+        Op::Border { rect: r, width, .. } => rect(r) + width,
+        Op::Shadow {
+            rect: r, shadow: s, ..
+        } => rect(r) + shadow(s),
+        Op::Circle { center, radius, .. } => far(center) + radius,
+        Op::Fill { path, .. } => path::reach(path),
+        Op::Stroke { path, stroke, .. } => path::reach(path) + stroke.width,
+        Op::Text { text, at, font, .. } => far(at) + font.size * (text.len() as f32 + 1.0),
+        Op::PushShadow(shadows) => shadows.iter().map(shadow).fold(0.0, f32::max),
+        _ => 0.0,
+    }
+}
+
+/// The most the scales in force at once that enlarge may multiply sizes
+/// by. With coordinates within [`FAR`] and 4096 calls, every number the
+/// toolkit works out stays a float's, however it folds them.
+const MAX_ZOOM: f64 = 1.0e14;
 
 fn coord(what: &str, n: f64) -> mlua::Result<f32> {
     if n.is_finite() {
@@ -1064,6 +1120,7 @@ impl Api {
         rec.active = true;
         rec.ops.clear();
         rec.open.clear();
+        rec.zoom = 1.0;
         rec.pushes = 0;
         rec.saves = 0;
         rec.segments = 0;
@@ -1088,7 +1145,7 @@ impl Api {
         self.shared.unbalanced.set(left > 0);
         if left > 0 {
             let (pushes, saves) = (rec.pushes, rec.saves);
-            while let Some(open) = rec.open.pop() {
+            while let Some((open, _)) = rec.open.pop() {
                 rec.ops.push(match open {
                     Open::Push => Op::Pop,
                     Open::Save => Op::Restore,
@@ -1228,10 +1285,29 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
         "circle",
         lua.create_function(move |_, (_, x, y, r, p): (Value, f64, f64, f64, Value)| {
             let what = "circle";
-            let op = Op::Circle {
-                center: [coord(what, x)?, coord(what, y)?],
-                radius: coord(what, r)?.max(0.0),
-                paint: paint(&k, what, &p)?,
+            let ([x, y], r) = (
+                [coord(what, x)?, coord(what, y)?],
+                coord(what, r)?.clamp(0.0, path::MAX_RADIUS),
+            );
+            let paint = paint(&k, what, &p)?;
+            let reach = (x.abs() + r).max(y.abs() + r);
+            // Far from the origin, the curves a circle is made of (see
+            // `path::CONTOUR_REACH`).
+            let op = if reach > path::CONTOUR_REACH && r > 0.0 {
+                let path = Rc::new(Path {
+                    segments: path::circle_curves(x, y, r),
+                });
+                Op::Fill {
+                    path,
+                    paint,
+                    rule: FillRule::Winding,
+                }
+            } else {
+                Op::Circle {
+                    center: [x, y],
+                    radius: r,
+                    paint,
+                }
             };
             s.recorder.borrow_mut().push(what, op)
         })?,
@@ -1592,6 +1668,18 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
             for i in 1..=n {
                 shadows.push(shadow(&mut rec, what, &list.raw_get::<Value>(i)?)?);
             }
+            // The blur cap is of the layer's pixels, with the scales in
+            // force: blurred by a million pixels or so, the shadow of
+            // anything, however small, crashed the toolkit's software
+            // renderer (at a scale of 10^4, a blur of 100; at 10^6, of 4
+            // on a screen of twice the pixels).
+            let cap = f64::from(rec.limits.blur);
+            if shadows.iter().any(|sh| f64::from(sh.blur) * rec.zoom > cap) {
+                return Err(rec.over(
+                    what,
+                    format!("a shadow blurred by more than {cap} px, with the scales in force"),
+                ));
+            }
             rec.open_push(what, Op::PushShadow(shadows), 1)
         })?,
     )?;
@@ -1629,16 +1717,18 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
             rec.ready(what)?;
             match rec.open.last() {
                 None => return Err(bad(what, "nothing is pushed")),
-                Some(Open::Save) => {
+                Some((Open::Save, _)) => {
                     return Err(bad(
                         what,
                         "a save is open inside this push; restore it first",
                     ));
                 }
-                Some(Open::Push) => {}
+                Some((Open::Push, _)) => {}
             }
             rec.push(what, Op::Pop)?;
-            rec.open.pop();
+            if let Some((_, zoom)) = rec.open.pop() {
+                rec.zoom = zoom;
+            }
             rec.pushes -= 1;
             Ok(())
         })?,
@@ -1658,7 +1748,8 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
             }
             rec.push(what, Op::Save)?;
             rec.saves += 1;
-            rec.open.push(Open::Save);
+            let zoom = rec.zoom;
+            rec.open.push((Open::Save, zoom));
             Ok(())
         })?,
     )?;
@@ -1671,13 +1762,15 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
             rec.ready(what)?;
             match rec.open.last() {
                 None => return Err(bad(what, "nothing is saved")),
-                Some(Open::Push) => {
+                Some((Open::Push, _)) => {
                     return Err(bad(what, "a push is open inside this save; pop it first"));
                 }
-                Some(Open::Save) => {}
+                Some((Open::Save, _)) => {}
             }
             rec.push(what, Op::Restore)?;
-            rec.open.pop();
+            if let Some((_, zoom)) = rec.open.pop() {
+                rec.zoom = zoom;
+            }
             rec.saves -= 1;
             Ok(())
         })?,
@@ -1696,8 +1789,25 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
         "scale",
         lua.create_function(move |_, (_, sx, sy): (Value, f64, Option<f64>)| {
             let what = "scale";
-            let op = Op::Scale(coord(what, sx)?, coord(what, sy.unwrap_or(sx))?);
-            s.recorder.borrow_mut().push(what, op)
+            let (sx, sy) = (coord(what, sx)?, coord(what, sy.unwrap_or(sx))?);
+            let mut rec = s.recorder.borrow_mut();
+            rec.ready(what)?;
+            // Each scale is within the coordinates' range; scales one
+            // inside another multiply, and past a float's range the
+            // toolkit's software renderer stops drawing the whole window.
+            // Only those that enlarge are counted, and a smaller one
+            // takes nothing back: the toolkit folds scales that follow
+            // one another into one, so no run of them may pass the cap.
+            let zoom = rec.zoom * f64::from(sx.abs().max(sy.abs())).max(1.0);
+            if zoom > MAX_ZOOM {
+                return Err(bad(
+                    what,
+                    "scales that together make sizes more than 10^14 times larger",
+                ));
+            }
+            rec.push(what, Op::Scale(sx, sy))?;
+            rec.zoom = zoom;
+            Ok(())
         })?,
     )?;
     let s = shared.clone();

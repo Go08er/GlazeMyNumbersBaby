@@ -902,6 +902,20 @@ the decoder as a still file made of just its own chunks (`ALPH`, `VP8 `,
 `VP8L`), so what was checked is what is decoded. A WebP shorter than its
 RIFF header says is refused as cut short.
 
+**A lossless picture's codes are counted first.** A lossless bitstream
+(`VP8L`, or the picture of opacity in an `ALPH` chunk) codes its pixels
+with groups of five Huffman codes, as many groups as the largest number
+in a small picture at its start says: up to 65 536, whatever the
+picture's size. `image-webp` builds every group, a table of up to 1024
+entries a code, before it decodes a pixel. Measured: a file of 3.8 MB,
+one pixel, made it hold 1301 MiB for two seconds. So `gmnb-media` walks
+the bitstream first, as the decoder will read it (`vp8l.rs`: the
+transforms and their small pictures, the entropy image, then every
+group's code lengths), adds up what the decoder will build, and hands it
+on only if that is within 16 MiB. libwebp's files hold a few hundred
+groups at most, well under 1 MiB of codes (the most seen, of 694
+bitstreams by cwebp, gif2webp and img2webp: 31 groups, 576 KiB).
+
 One thing is left open: a lossy bitstream also says how long each of its
 later partitions is, in 24 bits, and the decoder allocates a partition
 before finding that the file doesn't hold it. How many partitions there
@@ -1048,7 +1062,14 @@ frame, as a still is.
 decode and composite (the thread's own, `CLOCK_THREAD_CPUTIME_ID`: a
 machine busy with other things doesn't make an animation rest longer),
 the thread does not start another for `3d`. One thread serves all the
-theme's animations in turn, so the cap covers them together.
+theme's animations in turn, so the cap covers them together. The frames
+decoded and dropped on the way to one far ahead, or from the start again
+to one behind, are frames like any other: the thread rests after each
+(the first build decoded them back to back, a whole core for as long as
+that took: seconds, for a long file a theme's own clock plays
+backwards). It hears what is asked meanwhile, goes on to a later frame of
+the same animation if that is asked for, and ends at once if its player
+has gone, between two frames.
 
 **Too heavy.** The player keeps the mean processor time a frame of each
 animation takes: of the frames decoded so far and, once there are as

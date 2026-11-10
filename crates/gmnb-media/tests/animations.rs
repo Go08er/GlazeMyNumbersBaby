@@ -733,6 +733,61 @@ fn the_thread_takes_a_quarter_of_a_core_at_most() {
     assert!(p.slow(elapsed.as_secs_f64()) >= 1.0);
 }
 
+#[test]
+fn the_frames_on_the_way_to_a_far_one_are_held_to_a_quarter_core_too() {
+    // A theme's own clock can ask for any frame: one far ahead, or one
+    // behind (the file is started again). Every frame on the way is
+    // decoded, and the thread rests after each as after any other.
+    let file = apng(192, 192, None, &busy_frames(192, 60), None);
+    let (mut p, wake) = player();
+    let t = add(&mut p, 1, &file);
+    let last = t.frames() - 1;
+    let started = Instant::now();
+    let seen = wake.count();
+    p.frame(1, last, 0.0);
+    wake.after(seen);
+    let elapsed = started.elapsed();
+    p.poll();
+    assert_eq!(p.frame(1, last, 0.0).unwrap().index, last);
+    let stats = p.stats();
+    // (The thread decodes the first frame too: it starts the file anew.)
+    assert_eq!(stats.decoded, u64::from(last) + 1, "{stats:?}");
+    let share = stats.busy.as_secs_f64() / elapsed.as_secs_f64();
+    assert!(
+        share <= 0.3,
+        "{:.0}% of a core for {} frames on the way ({stats:?})",
+        share * 100.0,
+        last
+    );
+}
+
+#[test]
+fn a_thread_on_its_way_to_a_far_frame_ends_with_its_player() {
+    // A theme unloaded while the thread decodes its way to a frame far
+    // ahead: it stops there, not at the frame.
+    let file = apng(192, 192, None, &busy_frames(192, 400), None);
+    let (mut p, _wake) = player();
+    let t = add(&mut p, 1, &file);
+    p.frame(1, t.frames() - 1, 0.0);
+    std::thread::sleep(Duration::from_millis(30));
+    let watch = p.watch();
+    assert!(watch.stats().thread && !watch.stats().ended);
+    let at_drop = watch.stats();
+    drop(p);
+    let dropped = Instant::now();
+    while !watch.stats().ended {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let after = watch.stats();
+    // A frame or two more at most (one may be under way).
+    assert!(
+        after.decoded <= at_drop.decoded + 2 && dropped.elapsed() < Duration::from_secs(2),
+        "{} frames decoded and {:?} after its player went ({at_drop:?}, then {after:?})",
+        after.decoded - at_drop.decoded,
+        dropped.elapsed()
+    );
+}
+
 /// A source that takes `cost` of processor time a frame.
 struct Heavy(Duration);
 

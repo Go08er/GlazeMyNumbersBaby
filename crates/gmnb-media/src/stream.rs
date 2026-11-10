@@ -214,6 +214,35 @@ pub(crate) fn webp_picture(
     if bitstream_size(name, &bytes[data.clone()]) != Some((width, height)) {
         return Err(broken("a picture isn't the size its header says"));
     }
+    // A lossless picture (or a lossless picture of opacity) says how many
+    // groups of codes it has only inside its bitstream, and the decoder
+    // builds them all before a pixel: they are counted first.
+    let size = (width as u16, height as u16);
+    for (name, data) in &chunks {
+        let held = match name {
+            b"VP8L" => crate::vp8l::codes_held(&bytes[data.clone()], None),
+            // Its first byte says how it is compressed; then the picture.
+            b"ALPH" => match bytes[data.clone()].split_first() {
+                Some((info, picture)) if info & 3 == 1 => {
+                    crate::vp8l::codes_held(picture, Some(size))
+                }
+                _ => continue,
+            },
+            _ => continue,
+        };
+        match held {
+            Ok(_) => {}
+            Err(crate::vp8l::Refused::TooBig) => {
+                return Err(broken(format_args!(
+                    "a lossless picture whose codes would take more than {} MiB to hold",
+                    crate::vp8l::ROOM >> 20
+                )));
+            }
+            Err(crate::vp8l::Refused::Unreadable) => {
+                return Err(broken("a lossless picture that can't be read"));
+            }
+        }
+    }
     let mut file = Vec::with_capacity(within.len() + 32);
     file.extend_from_slice(b"RIFF\0\0\0\0WEBP");
     if chunks.iter().any(|(name, _)| name == b"ALPH") {
@@ -608,6 +637,30 @@ impl Stream {
         let mut out = self.canvas.clone();
         premultiply(&mut out);
         Ok((out, decoded))
+    }
+
+    /// One frame on the way to frame `index` ([`Stream::seek`] a frame at
+    /// a time): `Some` with the frame, premultiplied, and how many frames
+    /// this step decoded (0 or 1) once there; `None` after decoding a
+    /// frame on the way.
+    pub fn step(&mut self, index: u32) -> Result<Option<(Vec<u8>, u32)>, Error> {
+        if self.place.is_some_and(|p| p > index) {
+            self.rewind();
+        }
+        let mut decoded = 0;
+        if self.place != Some(index) {
+            if let Err(e) = self.advance() {
+                self.rewind();
+                return Err(e);
+            }
+            decoded = 1;
+            if self.place != Some(index) {
+                return Ok(None);
+            }
+        }
+        let mut out = self.canvas.clone();
+        premultiply(&mut out);
+        Ok(Some((out, decoded)))
     }
 }
 

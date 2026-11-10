@@ -23,7 +23,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -57,11 +57,23 @@ pub trait Source {
     /// Frame `index`, premultiplied, and how many frames were decoded to
     /// reach it.
     fn seek(&mut self, index: u32) -> Result<(Vec<u8>, u32), Error>;
+
+    /// One frame on the way to frame `index`: `Some` once there, as
+    /// [`Source::seek`] gives it; `None` after a frame decoded on the
+    /// way. The thread rests after each. (A source that can't go a frame
+    /// at a time goes all the way at once.)
+    fn step(&mut self, index: u32) -> Result<Option<(Vec<u8>, u32)>, Error> {
+        self.seek(index).map(Some)
+    }
 }
 
 impl Source for Stream {
     fn seek(&mut self, index: u32) -> Result<(Vec<u8>, u32), Error> {
         Stream::seek(self, index)
+    }
+
+    fn step(&mut self, index: u32) -> Result<Option<(Vec<u8>, u32)>, Error> {
+        Stream::step(self, index)
     }
 }
 
@@ -482,6 +494,35 @@ impl Asked {
     }
 }
 
+/// Rests until `until`, taking in what is asked meanwhile. `false`: the
+/// player has gone (the thread ends at once, not after its rest).
+fn rest(rx: &Receiver<Message>, asked: &mut Asked, shared: &Shared, until: Instant) -> bool {
+    let from = Instant::now();
+    loop {
+        let now = Instant::now();
+        if now >= until {
+            break;
+        }
+        match rx.recv_timeout(until - now) {
+            Ok(message) => asked.take(message),
+            Err(RecvTimeoutError::Timeout) => break,
+            Err(RecvTimeoutError::Disconnected) => return false,
+        }
+    }
+    let rested = from.elapsed().as_nanos() as u64;
+    shared.rested_nanos.fetch_add(rested, Ordering::Relaxed);
+    true
+}
+
+/// The processor time since `cpu` (the wall's since `wall` where the
+/// system can't tell).
+fn spent(cpu: Option<Duration>, wall: Instant) -> Duration {
+    match (cpu, thread_time()) {
+        (Some(then), Some(now)) => now.saturating_sub(then),
+        _ => wall.elapsed(),
+    }
+}
+
 /// The media thread.
 fn run(rx: Receiver<Message>, shared: &Shared, notify: &(dyn Fn() + Send + Sync)) {
     struct Ended<'a>(&'a Shared);
@@ -503,13 +544,10 @@ fn run(rx: Receiver<Message>, shared: &Shared, notify: &(dyn Fn() + Send + Sync)
             shared.wakeups.fetch_add(1, Ordering::Relaxed);
             asked.take(message);
         }
-        if let Some(until) = rest_until.take() {
-            let now = Instant::now();
-            if until > now {
-                std::thread::sleep(until - now);
-                let rested = (Instant::now() - now).as_nanos() as u64;
-                shared.rested_nanos.fetch_add(rested, Ordering::Relaxed);
-            }
+        if let Some(until) = rest_until.take()
+            && !rest(&rx, &mut asked, shared, until)
+        {
+            return;
         }
         // What was asked meanwhile: only the latest of each animation
         // counts.
@@ -523,34 +561,58 @@ fn run(rx: Receiver<Message>, shared: &Shared, notify: &(dyn Fn() + Send + Sync)
         if asked.wants.is_empty() {
             continue;
         }
-        let (key, index) = asked.wants.remove(0);
-        let Some(source) = asked.sources.get_mut(&key) else {
-            continue;
-        };
-        let (cpu, wall) = (thread_time(), Instant::now());
-        let result = match source {
-            Ok(source) => shielded(|| source.seek(index)),
-            Err(e) => Err(e.clone()),
-        };
-        let cost = match (cpu, thread_time()) {
-            (Some(then), Some(now)) => now.saturating_sub(then),
-            _ => wall.elapsed(),
-        };
-        rest_until = Some(Instant::now() + cost * 3);
-        let (pixels, decoded) = match result {
-            Ok((pixels, decoded)) => (Ok(pixels), decoded),
-            Err(e) => {
-                // A source that failed is not gone on with.
-                asked.sources.insert(key, Err(e.clone()));
-                (Err(e), 0)
+        let (key, mut index) = asked.wants.remove(0);
+        // A frame at a time, with the rest after each: the frames on the
+        // way to one far ahead (or, from the start again, to one behind)
+        // are held to the quarter core like any other.
+        let mut cost = Duration::ZERO;
+        let mut decoded = 0;
+        let result = loop {
+            let Some(source) = asked.sources.get_mut(&key) else {
+                // Closed meanwhile.
+                break None;
+            };
+            let (cpu, wall) = (thread_time(), Instant::now());
+            let step = match source {
+                Ok(source) => shielded(|| source.step(index)),
+                Err(e) => Err(e.clone()),
+            };
+            let took = spent(cpu, wall);
+            cost += took;
+            shared
+                .busy_nanos
+                .fetch_add(took.as_nanos() as u64, Ordering::Relaxed);
+            rest_until = Some(Instant::now() + took * 3);
+            match step {
+                Ok(Some((pixels, n))) => {
+                    decoded += n;
+                    shared.decoded.fetch_add(u64::from(n), Ordering::Relaxed);
+                    break Some(Ok(pixels));
+                }
+                Ok(None) => {
+                    decoded += 1;
+                    shared.decoded.fetch_add(1, Ordering::Relaxed);
+                    if let Some(until) = rest_until.take()
+                        && !rest(&rx, &mut asked, shared, until)
+                    {
+                        return;
+                    }
+                    // A later frame of this animation, asked for
+                    // meanwhile, is the one gone on to.
+                    if let Some(at) = asked.wants.iter().position(|(k, _)| *k == key) {
+                        index = asked.wants.remove(at).1;
+                    }
+                }
+                Err(e) => {
+                    // A source that failed is not gone on with.
+                    asked.sources.insert(key, Err(e.clone()));
+                    break Some(Err(e));
+                }
             }
         };
-        shared
-            .decoded
-            .fetch_add(u64::from(decoded), Ordering::Relaxed);
-        shared
-            .busy_nanos
-            .fetch_add(cost.as_nanos() as u64, Ordering::Relaxed);
+        let Some(pixels) = result else {
+            continue;
+        };
         shared
             .done
             .lock()

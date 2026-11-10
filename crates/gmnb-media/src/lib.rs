@@ -25,6 +25,7 @@ mod player;
 mod sniff;
 mod still;
 mod stream;
+mod vp8l;
 
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};

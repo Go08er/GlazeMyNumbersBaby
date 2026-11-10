@@ -495,6 +495,258 @@ fn numbers_out_of_range_are_brought_into_range() {
     assert!(matches!(ops[3], Op::Circle { radius, .. } if radius == 0.0));
 }
 
+/// Scales within the coordinates' range multiply: six of 10^7 are past a
+/// float's, and the toolkit's software renderer, given that and a blur,
+/// stopped drawing the whole window (Settings too). Past 10^14 together
+/// a scale is refused; a save or a push gives back what it held.
+#[test]
+fn scales_one_inside_another_stay_within_what_can_be_drawn() {
+    let (theme, _d) = background(
+        "zoom",
+        "",
+        r##"
+        draw:save()
+        for _ = 1, 6 do draw:scale(1e7, 1e7) end
+        draw:push_blur(4)
+        draw:rect(0, 0, 1, 1, "#ff0000")
+        draw:pop()
+        draw:restore()
+        "##,
+    );
+    let failed = message(run(&theme).unwrap_err());
+    assert!(failed.contains("draw:scale"), "{failed}");
+    // Two are 10^14: drawn. Each inside its own save, or its own push,
+    // or one of a mask's two parts, any number of times: drawn.
+    let (theme, _d) = background(
+        "zoom-kept",
+        "",
+        r##"
+        draw:save()
+        draw:scale(1e7)
+        draw:scale(-1e7, 0.5)
+        draw:rect(0, 0, 1e-7, 1e-7, "#ff0000")
+        draw:restore()
+        for _ = 1, 20 do
+            draw:save()
+            draw:scale(1e7, 1e7)
+            draw:restore()
+            draw:push_opacity(0.5)
+            draw:scale(1e7, 1e7)
+            draw:pop()
+            draw:push_mask()
+            draw:scale(1e7, 1e7)
+            draw:scale(1e7, 1e7)
+            draw:pop()
+            draw:scale(1e7, 1e7)
+            draw:scale(1e7, 1e7)
+            draw:pop()
+        end
+        draw:scale(1e7, 1e-3)
+        draw:scale(0.5, 1e7)
+        draw:scale(0.5)
+        "##,
+    );
+    let ops = ops(&theme);
+    assert_eq!(ops[1], Op::Scale(1.0e7, 1.0e7));
+    assert_eq!(ops[2], Op::Scale(-1.0e7, 0.5));
+    assert_eq!(*ops.last().unwrap(), Op::Scale(0.5, 0.5));
+    // A scale that shrinks takes nothing back: the toolkit folds scales
+    // that follow one another into one, and six of 10^7 after four of
+    // 10^-7 would be past a float's range by themselves.
+    let (theme, _d) = background(
+        "zoom-folded",
+        "",
+        r##"
+        for _ = 1, 4 do draw:scale(1e-7) end
+        draw:translate(1, 1)
+        for _ = 1, 6 do draw:scale(1e7) end
+        draw:push_blur(4)
+        draw:rect(0, 0, 1, 1, "#ff0000")
+        draw:pop()
+        "##,
+    );
+    let failed = message(run(&theme).unwrap_err());
+    assert!(failed.contains("draw:scale"), "{failed}");
+    // Whatever the scales, nothing is drawn more than 10^8 pixels from
+    // the layer's origin: given a picture 10^11 across to shadow (a scale
+    // of 10^4 and a rect of 10^7), the software renderer crashed.
+    for (body, drawn) in [
+        ("draw:scale(10) draw:rect(-1e7, 0, 1, 1e7, '#fff')", true),
+        ("draw:scale(100) draw:rect(-1e7, 0, 1, 1, '#fff')", false),
+        (
+            "draw:scale(10) draw:push_shadow({ { blur = 4, color = '#000' } }) draw:rect(5e6, 0, 1e7, 1, '#fff') draw:pop()",
+            false,
+        ),
+        ("draw:scale(1e4) draw:circle(0, 0, 1e5, '#fff')", false),
+        ("draw:scale(1e4) draw:circle(9e3, 0, 1e3, '#fff')", true),
+        (
+            "draw:scale(1e3) draw:fill(gmnb.svg_path('M0 0 L1e6 0 L0 1 Z'), '#fff')",
+            false,
+        ),
+        (
+            "draw:scale(1e3) draw:fill(gmnb.svg_path('M0 0 L24 0 L0 24 Z'), '#fff')",
+            true,
+        ),
+        (
+            "draw:scale(1e3) draw:stroke(gmnb.path():move_to(0, 0):line_to(9e4, 0), 1, '#fff')",
+            true,
+        ),
+        (
+            "draw:scale(1e3) draw:stroke(gmnb.path():move_to(0, 0):line_to(1e5, 1), 2, '#fff')",
+            false,
+        ),
+        (
+            "draw:scale(1e4) draw:text('8', 1e4, 0, { size = 20 }, '#fff')",
+            false,
+        ),
+        (
+            "draw:scale(1e5) draw:shadow(0, 0, 10, 10, 0, { x = 1e3, blur = 8, color = '#000' })",
+            false,
+        ),
+    ] {
+        let (theme, _d) = background("reach", "", body);
+        let result = run(&theme);
+        assert_eq!(result.is_ok(), drawn, "{body}: {result:?}");
+        if let Err(failure) = result {
+            assert!(message(failure).contains("10^8"), "{body}");
+        }
+    }
+    // A shadow's blur is within the cap with the scales in force: blurred
+    // by a million pixels or so (a scale of 10^6 and a blur of 4, on a
+    // screen of twice the pixels), the shadow of a 1 × 1 rect crashed the
+    // software renderer.
+    for (body, drawn) in [
+        (
+            "draw:push_shadow({ { blur = 100, color = '#000' } }) draw:pop()",
+            true,
+        ),
+        (
+            "draw:scale(2) draw:push_shadow({ { blur = 50, color = '#000' } }) draw:pop()",
+            true,
+        ),
+        (
+            "draw:scale(1e4) draw:push_shadow({ { blur = 100, color = '#000' } }) draw:pop()",
+            false,
+        ),
+        (
+            "draw:scale(1e6) draw:push_shadow({ { x = 2, blur = 4, color = '#000' } }) draw:pop()",
+            false,
+        ),
+        (
+            "draw:save() draw:scale(1e6) draw:restore() draw:push_shadow({ { blur = 4, color = '#000' } }) draw:pop()",
+            true,
+        ),
+    ] {
+        let (theme, _d) = background("shadow-zoom", "", body);
+        let result = run(&theme);
+        assert_eq!(result.is_ok(), drawn, "{body}: {result:?}");
+        if let Err(failure) = result {
+            assert!(
+                message(failure).contains("with the scales in force"),
+                "{body}"
+            );
+        }
+    }
+    // And one more after those three is refused, by itself: a hook that
+    // catches the error draws what it drew.
+    let (theme, _d) = background(
+        "zoom-caught",
+        "",
+        r##"
+        draw:scale(1e7)
+        draw:scale(1e7)
+        local ok, why = pcall(draw.scale, draw, 1.5)
+        assert(not ok and string.find(tostring(why), "draw:scale"), tostring(why))
+        draw:rect(0, 0, 1e-7, 1e-7, "#ff0000")
+        "##,
+    );
+    assert_eq!(ops_count(&theme), 3);
+}
+
+/// A circle, or a path's rounded corner, of radius 10^7 cost the toolkit
+/// a tenth of a second to draw, each (a path may hold 16 384), and so did
+/// one of radius 10^6 a million pixels out: the toolkit works its circles
+/// and corners out in single precision, to half a unit. Radii are taken up
+/// to 10^6, and a circle or a rounded rectangle reaching past 10^5 is
+/// given as the cubic curves it is made of, which cost no more out there.
+/// (SVG data reaches no further than 10^6: its own test, in `path.rs`.)
+#[test]
+fn circles_and_rounded_corners_far_out_are_drawn_as_curves() {
+    let (theme, _d) = background(
+        "radius",
+        r##"local p = gmnb.path():circle(1, 2, 50):circle(1, 2, 1e7)
+            :rounded_rect(0, 0, 4e7, 4e7, { 1e7, 5, 2e6, 0 }):rounded_rect(1, 2, 30, 40, 99)"##,
+        r##"
+        draw:circle(3, 4, 10, "#ffffff")
+        draw:circle(3, 4, 1e7, "#ffffff")
+        draw:circle(1e6, 0, 1, "#ffffff")
+        draw:fill(p, "#ffffff")
+        local ok, why = pcall(gmnb.svg_path, "M0 0 A1e12 1e12 0 1 1 10 10 Z")
+        assert(not ok and string.find(tostring(why), "past"), tostring(why))
+        "##,
+    );
+    let ops = ops(&theme);
+    // About the window: the toolkit's own circle.
+    assert!(
+        matches!(ops[0], Op::Circle { center: [3.0, 4.0], radius, .. } if radius == 10.0),
+        "{:?}",
+        ops[0]
+    );
+    // Far out, or far reaching: curves, the radius taken up to 10^6.
+    let curves = |op: &Op| match op {
+        Op::Fill { path, .. } => path.segments.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        curves(&ops[1]),
+        gmnb_theme::path::circle_curves(3.0, 4.0, 1.0e6)
+    );
+    assert_eq!(
+        curves(&ops[2]),
+        gmnb_theme::path::circle_curves(1.0e6, 0.0, 1.0)
+    );
+    let k = 0.552_284_8f32;
+    assert_eq!(
+        curves(&ops[2])[..2],
+        [
+            Segment::MoveTo(1.0e6 + 1.0, 0.0),
+            Segment::CurveTo(1.0e6 + 1.0, k, 1.0e6 + k, 1.0, 1.0e6, 1.0),
+        ]
+    );
+    let path = curves(&ops[3]);
+    assert_eq!(path[0], Segment::Circle(1.0, 2.0, 50.0));
+    assert_eq!(
+        path[1..7],
+        gmnb_theme::path::circle_curves(1.0, 2.0, 1.0e6)[..]
+    );
+    // The rounded rectangle, coordinates taken up to 10^7, its corners
+    // to 10^6, clockwise from its top left.
+    let rounded =
+        gmnb_theme::path::rounded_curves(0.0, 0.0, 1.0e7, 1.0e7, &Radius([1.0e6, 5.0, 1.0e6, 0.0]));
+    assert_eq!(path[7..17], rounded[..]);
+    assert_eq!(rounded[0], Segment::MoveTo(1.0e6, 0.0));
+    assert_eq!(rounded[1], Segment::LineTo(1.0e7 - 5.0, 0.0));
+    assert_eq!(rounded[3], Segment::LineTo(1.0e7, 1.0e7 - 1.0e6));
+    assert_eq!(rounded[5], Segment::LineTo(0.0, 1.0e7));
+    assert_eq!(rounded[7], Segment::LineTo(0.0, 1.0e6));
+    // A small one stays the toolkit's, its corners as given (the toolkit
+    // scales them down to fit).
+    assert_eq!(
+        path[17],
+        Segment::RoundedRect(1.0, 2.0, 30.0, 40.0, Radius([99.0; 4]))
+    );
+    assert_eq!(path.len(), 18);
+    // Corners too large for the rectangle are scaled down together.
+    let fitted = gmnb_theme::path::rounded_curves(0.0, 0.0, 10.0, 40.0, &Radius([10.0; 4]));
+    assert_eq!(fitted[0], Segment::MoveTo(5.0, 0.0));
+    assert_eq!(fitted[1], Segment::LineTo(5.0, 0.0));
+    assert_eq!(fitted[3], Segment::LineTo(10.0, 35.0));
+}
+
+fn ops_count(theme: &Theme) -> usize {
+    ops(theme).len()
+}
+
 #[test]
 fn the_draw_table_only_works_inside_a_hook_and_cannot_be_changed() {
     let (mut theme, _d) = load(

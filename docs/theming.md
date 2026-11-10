@@ -1188,6 +1188,17 @@ A **stroke** is a width, or `{ width, cap, join, dash, dash_offset }`
 (`GskPathBuilder`) with `move_to`, `line_to`, `quad_to`, `curve_to`,
 `close`, `rect`, `rounded_rect`, `circle`, each returning the path so
 calls chain; or from `gmnb.svg_path("M6 12.5h12")` (`gsk_path_parse`).
+A circle's radius, and a rounded rectangle's corners in a path, are taken
+up to 10^6 (as is `draw:circle`'s), and SVG data may reach no further than
+10^6 from the origin, every relative step counted, nor have an arc of a
+larger radius (else `gmnb.svg_path` is an error): the toolkit's circles,
+corners and arcs cost it more to draw the larger they are in the path's
+own units, and the further from the origin (it works them out in single
+precision, to half a unit). Measured on its software renderer, a circle
+of radius 10^7 took a tenth of a second, one of 10^6 about (10^6, 10^6)
+half that, and an arc of radius 10^10 hung it. So a circle or a rounded
+rectangle (`draw:circle` too) whose points reach past 10^5 is drawn as
+the cubic curves it is made of, which cost no more out there.
 
 Pictures: `gmnb.image("images/stars.png")` loads a PNG, JPEG, WebP or GIF
 from the theme's folder (decoded by the app itself, not by the toolkit's
@@ -1222,7 +1233,20 @@ What a call does with what it is given:
   catching the error included.
 - **A number that isn't finite** is refused. Opacities, colour parts and
   gradient stops out of range are brought into range without a word;
-  negative sizes and radii count as 0.
+  negative sizes and radii count as 0. Coordinates are taken up to
+  10^7 either way, and so is a scale; a `draw:scale` that with the scales
+  already in force would make sizes more than 10^14 times larger is
+  refused too (an error at that line), since one inside another they
+  multiply. (Only those that enlarge are counted: one that shrinks takes
+  nothing back.) (Six of 10^7 are past a float's range, and the toolkit's
+  software renderer, given that and a blur, stopped drawing the whole
+  window.) A `restore`, or the `pop` of a push, gives back the scales
+  made since. And whatever the scales, a call that would draw more than
+  10^8 pixels from the layer's origin is refused (an error at that line):
+  a text by its position and its bytes at its font's size, a path by its
+  furthest point, a shadow with its offset and blur. (Given a picture
+  10^11 pixels across to shadow, a scale of 10^4 and a rectangle of 10^7,
+  the software renderer crashed.)
 - `draw:text`'s font is laid onto `text.body` of the style; `nil` is that
   font as it is. A font that can't be read is noted and the rest of it
   used.
@@ -1485,7 +1509,7 @@ sounds.
 | Open pushes / saves at once | 32 each |
 | Path segments per frame | 16 384 |
 | Text per `draw:text` call; text calls per frame | 256 bytes; 64 |
-| Blur radius; shadow blur | 100 px |
+| Blur radius; shadow blur | 100 px (a `push_shadow`'s, of the layer's pixels with the scales in force) |
 | Images: file; decoded size; count; total decoded | 4 MiB; 2048×2048; 16; 32 MiB |
 | Noise: size; count | 512×512; 8 |
 | Fonts: file; count; total | 16 MiB; 8; 32 MiB |
