@@ -388,7 +388,12 @@ local function finish(p: Palette, dark_text: Rgba?): Scheme
 	-- the palette. Those are the floors now: the light palettes need more.
 	local strong = recede(fg, grounds, 0.86)
 	local soft = recede(fg, grounds, 0.78)
-	local dim = recede(fg, grounds, 0.62)
+	-- The dim text is also a bit's, a field's: on the text's own 4% wash.
+	local washed = table.clone(grounds)
+	for _, ground in grounds do
+		table.insert(washed, over(alpha(fg, 0.04), ground))
+	end
+	local dim = recede(fg, washed, 0.62)
 	-- A lit text button and the current number base write the accent on a
 	-- tint of the accent, and the operator keys are made of that tint.
 	local tint = alpha(accent, 0.24)
