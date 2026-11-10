@@ -1,0 +1,53 @@
+# The whole comparison of the base look with DGMNB (docs/theming.md,
+# "Acceptance: the base look is DGMNB's"): `goldens.sh OUT BIN base`
+# captures every picture named here and runs `compare --batch OUT OUT
+# --map base.map`.
+#
+# The pictures: base GMNB (GMNB_THEME=base, GMNB_ACCENT=3b6fd8 =
+# DGMNB_ACCENT) and DGMNB, light (d0) and dark (d1), at 760x640 unless
+# said: the seven pages; Standard after '1234*56=789/3=' (-keys); the
+# sidebar open (nav); Programmer with the bit grid (bits); the compact
+# window after '123'; Date with a result and Date adding days; Graphing
+# with three equations (eqs); Standard at 360x600 (small); Scientific and
+# Programmer at the least window, 300x400 (-least).
+#
+# Captured offline (goldens.sh: unshare -rn), so the converter shows the
+# rates it is shipped with, and their time, in both apps: no live data.
+#
+# Excluded, and only this (the contract's list): the app's name in the
+# sidebar's header ("GMNB", "DGMNB") and the header title it covers, 47,10
+# to 125,36.
+dgmnb-standard-d0 gmnb-standard-d0
+dgmnb-standard-d1 gmnb-standard-d1
+dgmnb-scientific-d0 gmnb-scientific-d0
+dgmnb-scientific-d1 gmnb-scientific-d1
+dgmnb-programmer-d0 gmnb-programmer-d0
+dgmnb-programmer-d1 gmnb-programmer-d1
+dgmnb-standard-d0-keys gmnb-standard-d0-keys
+dgmnb-standard-d1-keys gmnb-standard-d1-keys
+dgmnb-small-d0 gmnb-small-d0
+dgmnb-small-d1 gmnb-small-d1
+dgmnb-nav-d0 gmnb-nav-d0 exclude=47,10,78,26
+dgmnb-nav-d1 gmnb-nav-d1 exclude=47,10,78,26
+dgmnb-bits-d0 gmnb-bits-d0
+dgmnb-bits-d1 gmnb-bits-d1
+dgmnb-compact-d0 gmnb-compact-d0
+dgmnb-compact-d1 gmnb-compact-d1
+dgmnb-scientific-least-d0 gmnb-scientific-least-d0
+dgmnb-scientific-least-d1 gmnb-scientific-least-d1
+dgmnb-programmer-least-d0 gmnb-programmer-least-d0
+dgmnb-programmer-least-d1 gmnb-programmer-least-d1
+dgmnb-date-d0 gmnb-date-d0
+dgmnb-date-d1 gmnb-date-d1
+dgmnb-date-result-d0 gmnb-date-result-d0
+dgmnb-date-result-d1 gmnb-date-result-d1
+dgmnb-date-add-d0 gmnb-date-add-d0
+dgmnb-date-add-d1 gmnb-date-add-d1
+dgmnb-currency-d0 gmnb-currency-d0
+dgmnb-currency-d1 gmnb-currency-d1
+dgmnb-length-d0 gmnb-length-d0
+dgmnb-length-d1 gmnb-length-d1
+dgmnb-graphing-d0 gmnb-graphing-d0
+dgmnb-graphing-d1 gmnb-graphing-d1
+dgmnb-graphing-eqs-d0 gmnb-graphing-eqs-d0
+dgmnb-graphing-eqs-d1 gmnb-graphing-eqs-d1
