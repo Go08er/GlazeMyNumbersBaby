@@ -1,4 +1,5 @@
 mod a11y;
+mod check_theme;
 mod inert;
 mod keymap;
 mod launch;
@@ -36,6 +37,10 @@ pub static RENDERER_FROM_ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::n
 static RENDERER_SET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn main() -> glib::ExitCode {
+    // A dev command for theme authors: no window, no display needed.
+    if let Some(code) = check_theme::from_args() {
+        return code;
+    }
     launch::mark("main");
     // SAFETY: first thing in main, before GTK or any other thread starts.
     unsafe { appcore::tz::fix_sandbox_timezone() };
