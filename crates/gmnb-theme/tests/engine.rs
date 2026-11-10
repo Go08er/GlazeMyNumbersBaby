@@ -242,9 +242,10 @@ fn the_contracts_budgets() {
         );
     }
     // A span shares one limit between calls: all of a keypad frame's
-    // `place` calls.
+    // `place` calls. (Spans here are long where calls must succeed: 2 ms
+    // is no promise on a loaded machine.)
     let place = hook(&e, "return function(i) return i end");
-    let span = e.span(Budget::Place);
+    let span = e.span(Budget::Custom(Duration::from_secs(5)));
     for i in 1..=3 {
         assert_eq!(e.call_in(&place, &span, i), Ok(ThemeValue::Int(i)));
     }
@@ -267,7 +268,7 @@ fn the_contracts_budgets() {
     );
     assert_eq!(place.strikes(), 0);
     assert_eq!(
-        e.call_in(&place, &e.span(Budget::Place), 5),
+        e.call_in(&place, &e.span(Budget::Custom(Duration::from_secs(5))), 5),
         Ok(ThemeValue::Int(5))
     );
 }
