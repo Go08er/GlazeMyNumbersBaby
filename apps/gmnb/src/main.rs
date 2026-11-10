@@ -3,6 +3,7 @@ mod bench;
 mod inert;
 mod keymap;
 mod launch;
+mod layers;
 mod pages;
 mod paste;
 mod prefs;

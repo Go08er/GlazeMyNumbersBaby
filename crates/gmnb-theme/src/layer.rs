@@ -362,7 +362,7 @@ impl Frames {
 }
 
 fn event_table(lua: &Lua, age: f64, e: &Event) -> mlua::Result<Table> {
-    let t = lua.create_table_with_capacity(0, 10)?;
+    let t = lua.create_table_with_capacity(0, 11)?;
     t.raw_set("kind", e.kind.name())?;
     t.raw_set("age", age)?;
     t.raw_set("x", e.x)?;
@@ -374,6 +374,9 @@ fn event_table(lua: &Lua, age: f64, e: &Event) -> mlua::Result<Table> {
     }
     if let Some(via) = e.via {
         t.raw_set("via", via.name())?;
+    }
+    if let Some(action) = e.action {
+        t.raw_set("action", action.name())?;
     }
     if let Some((id, kind)) = e.key {
         let key = lua.create_table_with_capacity(0, 2)?;

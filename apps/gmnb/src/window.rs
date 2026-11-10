@@ -466,6 +466,7 @@ impl Window {
         hub.attach(&win);
 
         let backdrop = Backdrop::default();
+        backdrop.set_hub(&hub);
         apply_backdrop(
             &win,
             &backdrop,

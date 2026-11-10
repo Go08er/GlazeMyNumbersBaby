@@ -12,11 +12,16 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use gmnb_theme::draw::DisplayList;
+use gmnb_theme::events::{EventKind, Page};
+use gmnb_theme::layer::{Drawn, Failure, Frame, LayerKind};
 use gmnb_theme::theme::{self as themes, Action, FontFile, OptionDef, Origin, Source, Theme};
 use gmnb_theme::types::{Paint, Rgba};
-use gmnb_theme::{Ctx, Limits, Note, OptionValue, Style, Update, Writer, css, schema};
+use gmnb_theme::{Ctx, Limits, Note, OptionValue, Style, TextMeasure, Update, Writer, css, schema};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
+
+use crate::layers::{Happened, Layers};
 
 // ---------------------------------------------------------------------------
 // TRANSITION: the legacy scheme.
@@ -47,12 +52,6 @@ pub struct Scheme {
     pub on_hot: [f32; 3],
     /// Graph equation colours.
     pub series: [[f32; 3]; 6],
-    /// Whether the keypad's and the display's built-in effects (ripples,
-    /// the pointer's light, the cascade; gradient digits, glow and their
-    /// animations) run: only for a theme that has that draw layer, whose
-    /// hooks will replace them.
-    pub keypad_effects: bool,
-    pub display_effects: bool,
 }
 
 pub use appcore::color::{parse_hex, to_hex};
@@ -66,7 +65,7 @@ fn rgb3(c: Rgba) -> [f32; 3] {
 }
 
 /// TRANSITION: a [`Scheme`] from the style.
-fn legacy_scheme(style: &Style, keypad_effects: bool, display_effects: bool) -> Scheme {
+fn legacy_scheme(style: &Style) -> Scheme {
     let c = &style.tokens.colors;
     let ends = |paint: Option<&Paint>, fallback: Rgba| match paint {
         Some(Paint::Color(c)) => (*c, *c),
@@ -89,8 +88,6 @@ fn legacy_scheme(style: &Style, keypad_effects: bool, display_effects: bool) -> 
         hot_b: rgb3(hot_b),
         on_hot: rgb3(equals.map_or(c.on_accent, |e| e.color)),
         series: c.series.map(rgb3),
-        keypad_effects,
-        display_effects,
     }
 }
 
@@ -175,6 +172,10 @@ pub struct Stats {
     /// Properties in each.
     pub main_properties: usize,
     pub live_properties: usize,
+    /// What the drawing layers have cost.
+    pub layers: crate::layers::Stats,
+    /// Textures made of the theme's pictures.
+    pub textures: usize,
 }
 
 pub struct Hub {
@@ -209,6 +210,20 @@ pub struct Hub {
     /// How the user is told of a theme that failed (a toast).
     tell: RefCell<Option<Tell>>,
     stats: Cell<Stats>,
+    /// The drawing layers' runtime.
+    layers: Rc<Layers>,
+    /// The `ctx` the style was last worked out for: what frames are told.
+    frame_ctx: RefCell<Ctx>,
+    /// Measures `draw:text_size`, once a window is there to measure in.
+    measure: RefCell<Option<Rc<dyn TextMeasure>>>,
+    /// The layers whose hook was switched off, and the user told.
+    told_off: RefCell<HashSet<LayerKind>>,
+}
+
+thread_local! {
+    /// The window's hub, for widgets that draw a layer: they are made by
+    /// pages that needn't know.
+    static CURRENT: RefCell<std::rc::Weak<Hub>> = const { RefCell::new(std::rc::Weak::new()) };
 }
 
 /// The app's name for the base look in Settings.
@@ -260,7 +275,13 @@ impl Hub {
             style_subscribers: RefCell::default(),
             tell: RefCell::new(None),
             stats: Cell::default(),
+            layers: Layers::new(),
+            frame_ctx: RefCell::new(ctx.clone()),
+            measure: RefCell::new(None),
+            told_off: RefCell::default(),
         });
+        hub.layers.set_hub(&hub);
+        CURRENT.with(|c| c.replace(Rc::downgrade(&hub)));
         let sm = adw::StyleManager::default();
         let weak = Rc::downgrade(&hub);
         sm.connect_dark_notify(move |_| {
@@ -291,6 +312,16 @@ impl Hub {
         }
         hub.load(&config.theme);
         hub
+    }
+
+    /// The window's hub, if there is one.
+    pub fn current() -> Option<Rc<Hub>> {
+        CURRENT.with(|c| c.borrow().upgrade())
+    }
+
+    /// The drawing layers' runtime.
+    pub fn layers(&self) -> &Rc<Layers> {
+        &self.layers
     }
 
     // ---- ctx ---------------------------------------------------------------
@@ -485,6 +516,9 @@ impl Hub {
                     Ok(theme) => {
                         self.register_fonts(&theme);
                         self.notes.borrow_mut().extend(theme.notes.list.clone());
+                        if let Some(measure) = self.measure.borrow().as_ref() {
+                            theme.api().set_measure(measure.clone());
+                        }
                         self.theme.replace(Some(theme));
                     }
                     Err(e) => {
@@ -494,6 +528,10 @@ impl Hub {
                 },
             }
         }
+        // Nothing of the theme that was keeps running; the layers of the
+        // one that is start afresh.
+        self.told_off.borrow_mut().clear();
+        self.layers.theme_changed();
         self.apply(false);
     }
 
@@ -571,7 +609,14 @@ impl Hub {
         // What the environment asked of this option stands only until
         // the user changes it.
         self.run_options.borrow_mut().retain(|(o, _)| o != id);
+        let told = self.option_values().get(id).cloned();
         self.apply(drag);
+        // After the style: a layer that hears of it sees the new `ctx`.
+        if let Some(value) = told {
+            let mut happened = Happened::new(EventKind::Option, Page::Settings, None);
+            happened.option = Some((id.to_string(), value));
+            self.layers.emit(&happened);
+        }
     }
 
     /// Whether Settings shows `option` now.
@@ -597,6 +642,10 @@ impl Hub {
     /// writes it and tells the subscribers.
     fn apply(&self, drag: bool) {
         let ctx = self.ctx();
+        let ctx_changed = *self.frame_ctx.borrow() != ctx;
+        if ctx_changed {
+            self.frame_ctx.replace(ctx.clone());
+        }
         let mut stats = self.stats.get();
         let mut unload = None;
         let resolved = {
@@ -645,10 +694,16 @@ impl Hub {
             let name = self.active();
             self.theme.replace(None);
             self.error.replace(Some(why));
+            self.layers.theme_changed();
             self.tell(&format!(
                 "Theme “{name}” was unloaded: it ran out of memory"
             ));
             return self.apply(false);
+        }
+        // Frames are told `ctx` too: one that changed redraws the layers,
+        // whether or not the style did.
+        if ctx_changed {
+            self.layers.ctx_changed();
         }
         // A `style` that failed leaves the last one that worked standing
         // (the base look, if none did).
@@ -679,12 +734,7 @@ impl Hub {
     }
 
     fn scheme_of(&self, style: &Style) -> Scheme {
-        let has = |layer: &str| {
-            self.with_theme(|t| {
-                t.is_some_and(|t| t.def.layers.get(layer).is_some_and(|l| l.draw.is_some()))
-            })
-        };
-        legacy_scheme(style, has("keypad"), has("display"))
+        legacy_scheme(style)
     }
 
     /// Writes the style to the providers: the whole of it to the main one,
@@ -739,6 +789,126 @@ impl Hub {
         let window = window.clone().upcast::<gtk::Window>();
         self.windows.borrow_mut().push(window.downgrade());
         self.sync_window(&window, &self.style());
+        // `draw:text_size` measures as the window lays text out.
+        if self.measure.borrow().is_none() {
+            let measure = crate::layers::measure(&window);
+            self.with_theme(|t| {
+                if let Some(t) = t {
+                    t.api().set_measure(measure.clone());
+                }
+            });
+            self.measure.replace(Some(measure));
+        }
+    }
+
+    // ---- The layers ---------------------------------------------------------------
+
+    /// Runs the hooks of the theme's layer `kind` for one frame.
+    pub fn draw_layer(&self, kind: LayerKind, frame: &Frame) -> Result<Drawn, Failure> {
+        let ctx = self.frame_ctx.borrow();
+        let theme = self.theme.borrow();
+        let Some(theme) = theme.as_ref() else {
+            return Err(Failure::Off);
+        };
+        let result = theme.draw(kind, &ctx, frame);
+        self.hear(theme);
+        result
+    }
+
+    /// The tile of one choice of an option with a `preview`.
+    pub fn preview(&self, option: &OptionDef, choice: &str) -> Option<DisplayList> {
+        let ctx = self.frame_ctx.borrow();
+        let theme = self.theme.borrow();
+        let theme = theme.as_ref()?;
+        let result = theme.preview(option, choice, &ctx);
+        self.hear(theme);
+        match result {
+            Ok(list) => Some(list),
+            Err(e) => {
+                self.note("preview", e.to_string());
+                None
+            }
+        }
+    }
+
+    fn note(&self, path: &str, message: String) {
+        let note = Note {
+            path: path.into(),
+            message,
+        };
+        let mut notes = self.notes.borrow_mut();
+        if !notes.contains(&note) {
+            notes.push(note);
+        }
+        let extra = notes.len().saturating_sub(200);
+        notes.drain(..extra);
+    }
+
+    /// Takes in what the theme printed and what its drawing noted.
+    fn hear(&self, theme: &Theme) {
+        for line in theme.take_log() {
+            eprintln!("gmnb theme {}: {line}", theme.source.id);
+            self.note("print", line);
+        }
+        for note in theme.take_draw_notes() {
+            eprintln!("gmnb theme {}: {note}", theme.source.id);
+            self.note(&note.path, note.message);
+        }
+    }
+
+    /// A layer's hook failed. The frame draws nothing; the author gets a
+    /// note. A hook that has been switched off is said so to the user,
+    /// once; a theme that hit its memory limit is unloaded. Both happen
+    /// after the frame being painted: this is called from a `snapshot`.
+    pub fn layer_failed(&self, kind: LayerKind, failure: Failure) {
+        if let Failure::Failed(e) = &failure {
+            eprintln!("gmnb: layers.{}.draw: {e}", kind.name());
+            self.note(&format!("layers.{}.draw", kind.name()), e.to_string());
+        }
+        let (dead, off, name) = self.with_theme(|t| match t {
+            None => (false, false, String::new()),
+            Some(t) => (t.is_dead(), !t.draws(kind), t.def.meta.name.clone()),
+        });
+        self.layers.sync_drawn();
+        if dead {
+            glib::idle_add_local_once(|| {
+                if let Some(hub) = Hub::current() {
+                    hub.unload_dead();
+                }
+            });
+        } else if off && self.told_off.borrow_mut().insert(kind) {
+            let message = format!(
+                "Theme “{name}”: its {} drawing failed and was switched off",
+                kind.name()
+            );
+            glib::idle_add_local_once(move || {
+                if let Some(hub) = Hub::current() {
+                    hub.tell(&message);
+                }
+            });
+        }
+    }
+
+    /// Unloads a theme that hit its memory limit while drawing.
+    fn unload_dead(&self) {
+        if !self.with_theme(|t| t.is_some_and(|t| t.is_dead())) {
+            return;
+        }
+        let name = self.active();
+        self.theme.replace(None);
+        self.error
+            .replace(Some("the theme ran out of memory".into()));
+        self.layers.theme_changed();
+        self.tell(&format!(
+            "Theme “{name}” was unloaded: it ran out of memory"
+        ));
+        self.apply(false);
+    }
+
+    /// Each hook of the loaded theme's layers: its name, its failures and
+    /// whether it was switched off.
+    pub fn hooks(&self) -> Vec<(String, u32, bool)> {
+        self.with_theme(|t| t.map_or_else(Vec::new, |t| t.hooks()))
     }
 
     fn sync_window(&self, window: &gtk::Window, style: &Style) {
@@ -830,6 +1000,8 @@ impl Hub {
     pub fn stats(&self) -> Stats {
         let mut stats = self.stats.get();
         stats.machines = u32::from(self.theme.borrow().is_some());
+        stats.layers = self.layers.stats();
+        stats.textures = self.layers.cache.textures();
         stats
     }
 }
@@ -970,14 +1142,13 @@ mod tests {
             ..Ctx::default()
         };
         let style = Style::base(&ctx);
-        let s = legacy_scheme(&style, false, false);
+        let s = legacy_scheme(&style);
         let c = &style.tokens.colors;
         assert_eq!(s.base_top, rgb3(c.bg));
         assert_eq!(s.base_bottom, rgb3(c.bg));
         assert_eq!((s.hot_a, s.hot_b), (rgb3(c.accent), rgb3(c.accent)));
         assert_eq!(s.on_hot, rgb3(c.on_accent));
         assert_eq!(s.accent, rgb3(c.accent_text));
-        assert!(!s.keypad_effects && !s.display_effects);
         let colors = legacy_colors(&style, &s);
         assert!(
             colors.contains("@define-color wc_base rgb(29,29,32);"),

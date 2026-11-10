@@ -107,6 +107,8 @@ pub struct Pictures {
     asked: Vec<(String, ImageId)>,
     /// Requests that failed: asked again, they fail without another look.
     failed: Vec<String>,
+    /// Image files tried, good or bad: each has used one of the count.
+    tried: usize,
     /// Bytes all the image files take decoded.
     decoded: u64,
     noises: usize,
@@ -170,6 +172,7 @@ impl Pictures {
             list: Vec::new(),
             asked: Vec::new(),
             failed: Vec::new(),
+            tried: 0,
             decoded: 0,
             noises: 0,
             notes: Vec::new(),
@@ -242,18 +245,16 @@ impl Pictures {
             return known;
         }
         let limits = self.limits.clone();
-        let files = self
-            .list
-            .iter()
-            .filter(|p| matches!(p.kind, PictureKind::File(_)))
-            .count();
-        if files >= limits.images {
+        // A file that fails has used one of the count too: however a
+        // theme's hooks are written, the app tries at most that many.
+        if self.tried >= limits.images {
             let note = format!(
                 "gmnb.image: {file}: a theme may load {} images; left out",
                 limits.images
             );
             return self.refuse(key, note);
         }
+        self.tried += 1;
         let bytes = match self.source.read(file, limits.image_file) {
             Ok(bytes) => bytes,
             Err(e) => return self.refuse(key, format!("gmnb.image: {e}")),

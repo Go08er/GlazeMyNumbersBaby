@@ -116,6 +116,16 @@ pub struct Stroke {
     pub dash_offset: f32,
 }
 
+/// How a picture drawn at another size than its own is sampled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Filter {
+    /// Smooth, and clean when drawn much smaller. A still's default.
+    Trilinear,
+    Linear,
+    /// Hard pixels.
+    Nearest,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MaskMode {
     Alpha,
@@ -234,6 +244,7 @@ pub enum Op {
     Image {
         image: ImageId,
         rect: Rect,
+        filter: Filter,
     },
     /// The picture repeated at its own size over `rect`.
     Tile {
@@ -1145,11 +1156,39 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
         set(
             name,
             lua.create_function(
-                move |_, (_, image, x, y, w, h): (Value, Value, f64, f64, f64, f64)| {
+                move |_,
+                      (_, image, x, y, w, h, options): (
+                    Value,
+                    Value,
+                    f64,
+                    f64,
+                    f64,
+                    f64,
+                    Value,
+                )| {
                     let Value::Table(image) = image else {
                         return Err(bad(name, "expected a picture (gmnb.image, gmnb.noise)"));
                     };
                     let rect = rect(name, x, y, w, h)?;
+                    // `options.filter`; what else it may hold (an
+                    // animation's `time` and `loop`) means nothing to a
+                    // still.
+                    let filter = match &options {
+                        Value::Table(o) if !tile => match o.raw_get::<Value>("filter")? {
+                            Value::Nil => Filter::Trilinear,
+                            v => word(
+                                name,
+                                &v,
+                                &[
+                                    ("trilinear", Filter::Trilinear),
+                                    ("linear", Filter::Linear),
+                                    ("nearest", Filter::Nearest),
+                                ],
+                            )?,
+                        },
+                        Value::Nil | Value::Table(_) => Filter::Trilinear,
+                        _ => return Err(bad(name, "options are a table { filter = … }")),
+                    };
                     let mut rec = s.recorder.borrow_mut();
                     rec.ready(name)?;
                     // A picture that didn't load has no id: it draws nothing.
@@ -1167,7 +1206,11 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
                         if tile {
                             Op::Tile { image, rect }
                         } else {
-                            Op::Image { image, rect }
+                            Op::Image {
+                                image,
+                                rect,
+                                filter,
+                            }
                         },
                     )
                 },

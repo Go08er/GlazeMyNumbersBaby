@@ -22,15 +22,18 @@ pub enum EventKind {
     Error,
     Show,
     Option,
+    /// The user changed page or calculator mode.
+    Mode,
 }
 
 impl EventKind {
-    pub const ALL: [(&'static str, EventKind); 5] = [
+    pub const ALL: [(&'static str, EventKind); 6] = [
         ("press", EventKind::Press),
         ("result", EventKind::Result),
         ("error", EventKind::Error),
         ("show", EventKind::Show),
         ("option", EventKind::Option),
+        ("mode", EventKind::Mode),
     ];
 
     pub fn name(self) -> &'static str {
@@ -65,6 +68,8 @@ impl Source {
 pub enum Via {
     Pointer,
     Keyboard,
+    /// Operated through the accessibility interface.
+    Assistive,
 }
 
 impl Via {
@@ -72,6 +77,26 @@ impl Via {
         match self {
             Via::Pointer => "pointer",
             Via::Keyboard => "keyboard",
+            Via::Assistive => "assistive",
+        }
+    }
+}
+
+/// What a pressed control does, when it is one of these (what it is, its
+/// [`KeyKind`], is another matter: C and sin are both function keys).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    Clear,
+    Backspace,
+    Memory,
+}
+
+impl Action {
+    pub fn name(self) -> &'static str {
+        match self {
+            Action::Clear => "clear",
+            Action::Backspace => "backspace",
+            Action::Memory => "memory",
         }
     }
 }
@@ -135,6 +160,7 @@ pub struct Event {
     /// A press: what was pressed and how.
     pub source: Option<Source>,
     pub via: Option<Via>,
+    pub action: Option<Action>,
     /// A press on a key: its number (the same every time; absent on a key
     /// the calculator doesn't number) and its kind.
     pub key: Option<(Option<u32>, KeyKind)>,
@@ -153,6 +179,7 @@ impl Event {
             y: rect[1] + rect[3] / 2.0,
             source: None,
             via: None,
+            action: None,
             key: None,
             option: None,
         }
@@ -251,6 +278,32 @@ mod tests {
         let mut none = Ring::default();
         assert!(!none.push(0.0, press()));
         assert!(none.is_empty());
+    }
+
+    #[test]
+    fn every_kind_has_its_name() {
+        let mut r = ring(&[("mode", 1.0), ("nonsense", 1.0)]);
+        assert!(r.push(0.0, Event::at(EventKind::Mode, Page::Graphing, [0.0; 4])));
+        assert_eq!(r.at(0.0).next().map(|(_, e)| e.kind.name()), Some("mode"));
+        for (name, kind) in EventKind::ALL {
+            assert_eq!(kind.name(), name);
+        }
+        assert_eq!(
+            [
+                Via::Pointer.name(),
+                Via::Keyboard.name(),
+                Via::Assistive.name()
+            ],
+            ["pointer", "keyboard", "assistive"]
+        );
+        assert_eq!(
+            [
+                Action::Clear.name(),
+                Action::Backspace.name(),
+                Action::Memory.name()
+            ],
+            ["clear", "backspace", "memory"]
+        );
     }
 
     #[test]

@@ -365,7 +365,7 @@ impl Display {
         imp.change.set(change);
         // TRANSITION: the built-in animations stand in for a theme's
         // `display` layer; the base look has none.
-        let effects = imp.scheme.get().is_some_and(|s| s.display_effects);
+        let effects = false;
         if change != Change::None && effects && animations_enabled() && self.is_mapped() {
             imp.anim_start.set(Some(Instant::now()));
             self.ensure_ticking();
@@ -596,7 +596,7 @@ impl Display {
         let value_rect = graphene::Rect::new(0.0, base_y - 4.0, w, g.height + 8.0);
         // TRANSITION: without a `display` layer the value is the text
         // colour, flat (`display.value.color`), and has no glow.
-        let effects = scheme.display_effects;
+        let effects = false;
         let (tint_top, tint_bottom) = if !effects {
             (rgba(scheme.fg, 1.0), rgba(scheme.fg, 1.0))
         } else if imp.error.get() {

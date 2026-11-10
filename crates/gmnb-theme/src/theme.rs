@@ -416,7 +416,7 @@ pub struct Layer {
 }
 
 pub const LAYERS: [&str; 4] = ["background", "keypad", "display", "overlay"];
-pub const EVENTS: [&str; 5] = ["press", "result", "error", "show", "option"];
+pub const EVENTS: [&str; 6] = ["press", "result", "error", "show", "option", "mode"];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Credit {

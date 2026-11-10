@@ -264,7 +264,7 @@ impl Keypad {
 
     /// TRANSITION: whether the built-in effects run (see the module docs).
     fn effects(&self) -> bool {
-        self.imp().scheme.get().is_some_and(|s| s.keypad_effects) && animations_enabled()
+        false && animations_enabled()
     }
 
     /// Add a key at (row, col) spanning (rows, cols). Returns the button.
@@ -512,7 +512,7 @@ impl Keypad {
         }
         drop(pos);
 
-        let Some(scheme) = imp.scheme.get().filter(|s| s.keypad_effects) else {
+        let Some(scheme) = imp.scheme.get().filter(|_| false) else {
             return;
         };
         let key_radius = imp.radius.get();
