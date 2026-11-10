@@ -6,15 +6,16 @@ use appcore::KeyPress;
 use appcore::dbus;
 use appcore::input;
 use appcore::keys::{self, conv};
+use appcore::metrics::{controls as ctl, converter as mc, shape, text as txt};
 use unitconv::{ConverterMode, UnitConverterViewModel};
 use winit::event_loop::EventLoopProxy;
 
 use crate::app::{Cx, DATA_DIR, Msg as AppMsg, UserEvent};
 use crate::edit::TextEdit;
 use crate::gfx::Rect;
-use crate::ui::{Align, BODY, CAPTION, Frame, KeyLook, SMALL, Style, id};
+use crate::ui::{Align, BODY, CAPTION, Frame, KeyLook, SMALL, Style, id, style};
 
-const WIDE: f32 = 700.0;
+const WIDE: f32 = mc::WIDE;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Msg {
@@ -262,21 +263,23 @@ impl ConvPage {
 
     pub fn view(&mut self, f: &mut Frame, area: Rect) {
         let wide = area.w >= WIDE;
-        let area = area.inset_xy(12.0, 6.0);
+        let area = area.inset_xy(mc::MARGIN_X, mc::MARGIN_Y);
         let (values, pad) = if wide {
-            let (p, v) = area.take_right(300.0);
-            (v.take_left(v.w - 20.0).0, p)
+            let (p, v) = area.take_right(mc::KEYPAD_W);
+            (v.take_left(v.w - mc::WIDE_GAP).0, p)
         } else {
             // The keypad gives up height (down to a minimum) before the
             // values do; anything still left over scrolls.
             let needed = if self.vm.is_currency_current_category() {
-                320.0
+                mc::NEEDED_CURRENCY
             } else {
-                250.0
+                mc::NEEDED
             };
-            let pad_h = (area.h - needed).min(area.h * 0.5).clamp(168.0, 330.0);
+            let pad_h = (area.h - needed)
+                .min(area.h * mc::PAD_SHARE)
+                .clamp(mc::PAD_MIN_H, mc::PAD_MAX_H);
             let (p, v) = area.take_bottom(pad_h);
-            (v.take_top(v.h - 6.0).0, p)
+            (v.take_top(v.h - mc::NARROW_GAP).0, p)
         };
         self.values(f, values);
         self.keypad(f, pad);
@@ -314,24 +317,43 @@ impl ConvPage {
                     self.vm.value2_automation_name(),
                 )
             };
-            let field = Rect::new(r.x, y, r.w, 58.0);
+            let field = Rect::new(r.x, y, r.w, mc::FIELD_H);
             let fid = id(("conv-value", which));
             if active {
                 f.cv.fill_rect(
-                    Rect::new(field.x, field.bottom() - 3.0, 36.0, 3.0),
+                    Rect::new(
+                        field.x,
+                        field.bottom() - mc::MARKER_H,
+                        mc::MARKER_W,
+                        mc::MARKER_H,
+                    ),
                     t.accent,
                 );
             }
-            let mut vr = field.inset_xy(2.0, 0.0);
+            let mut vr = field.inset_xy(mc::FIELD_PAD_X, 0.0);
             if self.vm.currency_symbol_visible() && !sym.is_empty() {
-                let w = f.label(vr, sym, Style::new(26.0, 400.0), t.fg_dim, Align::Start);
-                vr = vr.take_left(w + 8.0).1;
+                let w = f.label(
+                    vr,
+                    sym,
+                    style(txt::CONVERTER_SYMBOL),
+                    t.fg_dim,
+                    Align::Start,
+                );
+                vr = vr.take_left(w + mc::SYMBOL_GAP).1;
             }
             f.label_fit(
                 vr,
                 value,
-                Style::new(38.0, if active { 500.0 } else { 300.0 }).tabular(),
-                14.0,
+                Style::new(
+                    txt::CONVERTER_VALUE.size,
+                    if active {
+                        txt::CONVERTER_VALUE_CHECKED_WEIGHT
+                    } else {
+                        txt::CONVERTER_VALUE.weight
+                    },
+                )
+                .tabular(),
+                txt::CONVERTER_VALUE_MIN_SIZE,
                 t.fg,
                 Align::Start,
             );
@@ -348,13 +370,13 @@ impl ConvPage {
                 n.selected = Some(active);
                 n.live = which == 2 && changed;
             }
-            y += 60.0;
+            y += mc::FIELD_STEP;
             let unit_name = unit.map(|u| u.name.clone()).unwrap_or_default();
             let ur = Rect::new(
                 r.x,
                 y,
-                (f.text.width(&unit_name, BODY) + 44.0).min(r.w),
-                34.0,
+                (f.text.width(&unit_name, BODY) + mc::UNIT_ARROW).min(r.w),
+                mc::UNIT_H,
             );
             f.button(
                 id(("unit-btn", which)),
@@ -381,9 +403,9 @@ impl ConvPage {
                     None,
                 ));
             }
-            y += 38.0;
+            y += mc::UNIT_STEP;
             if which == 1 {
-                let sw = Rect::new(r.x, y + 2.0, 36.0, 36.0);
+                let sw = Rect::new(r.x, y + mc::SWAP_TOP, ctl::ICON_BUTTON, ctl::ICON_BUTTON);
                 f.icon_button(
                     id("swap"),
                     sw,
@@ -393,10 +415,10 @@ impl ConvPage {
                     true,
                     None,
                 );
-                y += 42.0;
+                y += mc::SWAP_STEP;
             }
         }
-        y += 6.0;
+        y += mc::SECTION_GAP;
         if self.vm.is_currency_current_category() {
             // Each line is also a label for assistive technology (as the
             // original's text blocks are), the changing ones live.
@@ -408,7 +430,7 @@ impl ConvPage {
                     n.live = live;
                 }
             };
-            let line = Rect::new(r.x, y, r.w, 22.0);
+            let line = Rect::new(r.x, y, r.w, mc::RATIO_H);
             f.label(
                 line,
                 self.vm.currency_ratio_equality(),
@@ -423,18 +445,23 @@ impl ConvPage {
                 line,
                 false,
             );
-            y += 22.0;
+            y += mc::RATIO_H;
             let ts = self.vm.currency_timestamp().to_string();
-            let line = Rect::new(r.x, y, r.w, 26.0);
+            let line = Rect::new(r.x, y, r.w, mc::TIMESTAMP_H);
             let w = f.label(line, &ts, SMALL, t.fg_dim, Align::Start);
             spoken(f, "updated", &ts, line, true);
             let status = self.vm.currency_status();
             if self.fetching {
-                let line = Rect::new(r.x + w + 10.0, y, 120.0, 26.0);
+                let line = Rect::new(
+                    r.x + w + mc::UPDATING_GAP,
+                    y,
+                    mc::UPDATING_W,
+                    mc::TIMESTAMP_H,
+                );
                 f.label(line, "Updating…", SMALL, t.fg_dim, Align::Start);
                 spoken(f, "updating", "Updating rates", line, true);
             } else if status.refresh_visible() || !self.vm.is_currency_fetch_in_flight() {
-                let b = Rect::new(r.x + w + 6.0, y, 116.0, 26.0);
+                let b = Rect::new(r.x + w + mc::REFRESH_GAP, y, mc::REFRESH_W, mc::TIMESTAMP_H);
                 f.button(
                     id("refresh"),
                     b,
@@ -446,35 +473,42 @@ impl ConvPage {
                     false,
                 );
             }
-            y += 28.0;
+            y += mc::TIMESTAMP_STEP;
             let text = status.text();
             if !text.is_empty() {
-                let line = Rect::new(r.x, y, r.w, 20.0);
-                f.label_fit(line, &text, CAPTION, 9.0, t.fg_dim, Align::Start);
+                let line = Rect::new(r.x, y, r.w, mc::STATUS_H);
+                f.label_fit(
+                    line,
+                    &text,
+                    CAPTION,
+                    txt::STATUS_MIN_SIZE,
+                    t.fg_dim,
+                    Align::Start,
+                );
                 spoken(f, "status", &text, line, true);
-                y += 22.0;
+                y += mc::STATUS_STEP;
             }
         }
         let results = self.vm.supplementary_results();
         if self.vm.supplementary_visible() && !results.is_empty() {
             f.label(
-                Rect::new(r.x, y, r.w, 24.0),
+                Rect::new(r.x, y, r.w, mc::CAPTION_H),
                 "About equal to",
                 CAPTION,
                 t.fg_dim,
                 Align::Start,
             );
-            y += 26.0;
+            y += mc::CAPTION_STEP;
             let mut x = r.x;
             for (i, s) in results.iter().enumerate() {
                 let label = format!("{} {}", s.value, s.unit.abbreviation);
-                let w = f.text.width(&label, SMALL) + 20.0;
+                let w = f.text.width(&label, SMALL) + mc::CHIP_PAD_X * 2.0;
                 if x + w > r.right() {
                     x = r.x;
-                    y += 32.0;
+                    y += mc::CHIP_ROW_STEP;
                 }
-                let chip = Rect::new(x, y, w, 28.0);
-                f.cv.rounded(chip, 14.0, t.surface2);
+                let chip = Rect::new(x, y, w, mc::CHIP_H);
+                f.cv.rounded(chip, shape::CHIP_RADIUS, t.surface2);
                 f.label(chip, &label, SMALL, t.fg, Align::Center);
                 if let Some(n) = f.node(
                     id(("supp", i)),
@@ -484,10 +518,10 @@ impl ConvPage {
                 ) {
                     n.focusable = false;
                 }
-                x += w + 6.0;
+                x += w + mc::CHIP_GAP;
             }
         }
-        f.scroll_end(sid, r, y + 32.0 + off - r.y);
+        f.scroll_end(sid, r, y + mc::BOTTOM_PAD + off - r.y);
     }
 
     fn keypad(&mut self, f: &mut Frame, r: Rect) {
@@ -495,13 +529,13 @@ impl ConvPage {
         f.group(id("conv-pad"), accesskit::Role::Group, "Keypad", r);
         for (k, row, col, rs, cs) in layout {
             let cell = r.cell_span(
-                5,
-                3,
+                mc::KEY_ROWS,
+                mc::KEY_COLS,
                 row as usize,
                 col as usize,
                 rs as usize,
                 cs as usize,
-                4.0,
+                mc::KEY_GAP,
             );
             let enabled = match k.id {
                 conv::NEGATE => self.negate_enabled(),
@@ -541,14 +575,17 @@ impl ConvPage {
             .find(|h| h.id == id(("unit-btn", which)))
             .map(|h| h.rect)
             .unwrap_or(area);
-        let w = area.w.min(340.0) - 16.0;
-        let x = anchor.x.min(area.right() - w - 8.0).max(area.x + 8.0);
-        let top = (anchor.bottom() + 4.0).min(area.bottom() - 200.0);
-        let h = (area.bottom() - top - 8.0).min(420.0);
+        let w = area.w.min(mc::LIST_MAX_W) - mc::LIST_EDGE * 2.0;
+        let x = anchor
+            .x
+            .min(area.right() - w - mc::LIST_EDGE)
+            .max(area.x + mc::LIST_EDGE);
+        let top = (anchor.bottom() + mc::LIST_GAP).min(area.bottom() - mc::LIST_MIN_BELOW);
+        let h = (area.bottom() - top - mc::LIST_EDGE).min(mc::LIST_MAX_H);
         let card = Rect::new(x, top, w, h);
-        f.card(card, 12.0);
-        let inner = card.inset(8.0);
-        let (sr, list) = inner.take_top(38.0);
+        f.card(card, shape::POPUP_RADIUS);
+        let inner = card.inset(mc::LIST_PAD);
+        let (sr, list) = inner.take_top(mc::SEARCH_H);
         f.text_field(
             search_id(),
             sr,
@@ -557,7 +594,7 @@ impl ConvPage {
             false,
             "Search units",
         );
-        let list = list.take_top(list.h).0.inset_xy(0.0, 4.0);
+        let list = list.take_top(list.h).0.inset_xy(0.0, mc::LIST_INNER_PAD_Y);
         let current = if which == 1 {
             self.vm.unit1()
         } else {
@@ -567,7 +604,7 @@ impl ConvPage {
         let items = self.matches();
         let sid = id(("unit-scroll", which));
         let off = f.scroll_begin(sid, list, "Units");
-        let row_h = 36.0;
+        let row_h = mc::UNIT_ROW_STEP;
         if let Some(pos) = items.iter().position(|i| Some(i.0) == current)
             && self.search.text.is_empty()
             && f.scrolls.get(&sid).is_none_or(|s| s.content == 0.0)
@@ -577,7 +614,12 @@ impl ConvPage {
         let first = (off / row_h).floor().max(0.0) as usize;
         let last = ((off + list.h) / row_h).ceil() as usize + 1;
         for (i, (uid, name, spoken, abbr)) in items.iter().enumerate().take(last).skip(first) {
-            let row = Rect::new(list.x, list.y - off + i as f32 * row_h, list.w, row_h - 2.0);
+            let row = Rect::new(
+                list.x,
+                list.y - off + i as f32 * row_h,
+                list.w,
+                row_h - mc::UNIT_ROW_GAP,
+            );
             let sel = Some(*uid) == current;
             f.row(
                 id(("unit", which, *uid)),
@@ -586,20 +628,29 @@ impl ConvPage {
                 sel,
                 spoken,
             );
-            let (a, n) = row.inset_xy(10.0, 0.0).take_right(70.0);
+            let (a, n) = row
+                .inset_xy(mc::UNIT_ROW_PAD_X, 0.0)
+                .take_right(mc::UNIT_ABBR_W);
             f.label_fit(
                 n,
                 name,
                 BODY,
-                10.0,
+                txt::UNIT_ROW_MIN_SIZE,
                 if sel { t.accent_text } else { t.fg },
                 Align::Start,
             );
-            f.label_fit(a, abbr, SMALL, 9.0, t.fg_dim, Align::End);
+            f.label_fit(
+                a,
+                abbr,
+                SMALL,
+                txt::UNIT_ABBR_MIN_SIZE,
+                t.fg_dim,
+                Align::End,
+            );
         }
         if items.is_empty() {
             f.label(
-                list.take_top(40.0).0,
+                list.take_top(mc::EMPTY_H).0,
                 "No matching units",
                 SMALL,
                 t.fg_dim,
