@@ -1226,7 +1226,8 @@ What a call does with what it is given:
   10^7 either way, and so is a scale; a `draw:scale` that with the scales
   already in force would make sizes more than 10^14 times larger is
   refused too (an error at that line), since one inside another they
-  multiply. (Six of 10^7 are past a float's range, and the toolkit's
+  multiply. (Only those that enlarge are counted: one that shrinks takes
+  nothing back.) (Six of 10^7 are past a float's range, and the toolkit's
   software renderer, given that and a blur, stopped drawing the whole
   window.) A `restore`, or the `pop` of a push, gives back the scales
   made since.

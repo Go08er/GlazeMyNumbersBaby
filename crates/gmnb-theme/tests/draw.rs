@@ -550,6 +550,23 @@ fn scales_one_inside_another_stay_within_what_can_be_drawn() {
     assert_eq!(ops[1], Op::Scale(1.0e7, 1.0e7));
     assert_eq!(ops[2], Op::Scale(-1.0e7, 0.5));
     assert_eq!(*ops.last().unwrap(), Op::Scale(0.5, 0.5));
+    // A scale that shrinks takes nothing back: the toolkit folds scales
+    // that follow one another into one, and six of 10^7 after four of
+    // 10^-7 would be past a float's range by themselves.
+    let (theme, _d) = background(
+        "zoom-folded",
+        "",
+        r##"
+        for _ = 1, 4 do draw:scale(1e-7) end
+        draw:translate(1, 1)
+        for _ = 1, 6 do draw:scale(1e7) end
+        draw:push_blur(4)
+        draw:rect(0, 0, 1, 1, "#ff0000")
+        draw:pop()
+        "##,
+    );
+    let failed = message(run(&theme).unwrap_err());
+    assert!(failed.contains("draw:scale"), "{failed}");
     // And one more after those three is refused, by itself: a hook that
     // catches the error draws what it drew.
     let (theme, _d) = background(

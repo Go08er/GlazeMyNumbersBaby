@@ -367,8 +367,8 @@ pub struct Recorder {
     /// opened (a pop or a restore puts it back, as the toolkit does the
     /// transform).
     open: Vec<(Open, f64)>,
-    /// How much the scales in force multiply sizes by, at most: kept
-    /// within [`MAX_ZOOM`].
+    /// The scales in force that enlarge, multiplied (one that shrinks
+    /// counts as 1): kept within [`MAX_ZOOM`].
     zoom: f64,
     pushes: usize,
     saves: usize,
@@ -507,9 +507,9 @@ fn bad(what: &str, problem: impl std::fmt::Display) -> mlua::Error {
 /// the renderers' arithmetic stays exact.
 const FAR: f64 = 1.0e7;
 
-/// The most the scales in force at once may multiply sizes by. With
-/// coordinates within [`FAR`] and 4096 calls, every number the toolkit
-/// works out stays a float's.
+/// The most the scales in force at once that enlarge may multiply sizes
+/// by. With coordinates within [`FAR`] and 4096 calls, every number the
+/// toolkit works out stays a float's, however it folds them.
 const MAX_ZOOM: f64 = 1.0e14;
 
 fn coord(what: &str, n: f64) -> mlua::Result<f32> {
@@ -1722,7 +1722,10 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
             // Each scale is within the coordinates' range; scales one
             // inside another multiply, and past a float's range the
             // toolkit's software renderer stops drawing the whole window.
-            let zoom = rec.zoom * f64::from(sx.abs().max(sy.abs()));
+            // Only those that enlarge are counted, and a smaller one
+            // takes nothing back: the toolkit folds scales that follow
+            // one another into one, so no run of them may pass the cap.
+            let zoom = rec.zoom * f64::from(sx.abs().max(sy.abs())).max(1.0);
             if zoom > MAX_ZOOM {
                 return Err(bad(
                     what,
