@@ -1334,17 +1334,16 @@ fn random_recipes_never_fail() {
     assert!(noted > 1000);
 }
 
+/// Mono has no sounds. (Aurora has: tests/aurora_sound.rs.)
 #[test]
-fn the_built_in_themes_load_with_no_sound_made() {
-    for id in ["aurora", "mono"] {
-        let theme = Theme::load(Source::built_in(id).unwrap(), Limits::default()).unwrap();
-        let sounds = theme.sounds();
-        assert!(!sounds.any(), "{id}");
-        assert!(theme.take_sound_notes().is_empty());
-        assert!(
-            !theme.notes.list.iter().any(|n| n.path.starts_with("sound")),
-            "{id}: {:?}",
-            theme.notes
-        );
-    }
+fn a_built_in_theme_without_sounds_makes_none() {
+    let theme = Theme::load(Source::built_in("mono").unwrap(), Limits::default()).unwrap();
+    let sounds = theme.sounds();
+    assert!(!sounds.any());
+    assert!(theme.take_sound_notes().is_empty());
+    assert!(
+        !theme.notes.list.iter().any(|n| n.path.starts_with("sound")),
+        "{:?}",
+        theme.notes
+    );
 }
