@@ -495,6 +495,81 @@ fn numbers_out_of_range_are_brought_into_range() {
     assert!(matches!(ops[3], Op::Circle { radius, .. } if radius == 0.0));
 }
 
+/// Scales within the coordinates' range multiply: six of 10^7 are past a
+/// float's, and the toolkit's software renderer, given that and a blur,
+/// stopped drawing the whole window (Settings too). Past 10^14 together
+/// a scale is refused; a save or a push gives back what it held.
+#[test]
+fn scales_one_inside_another_stay_within_what_can_be_drawn() {
+    let (theme, _d) = background(
+        "zoom",
+        "",
+        r##"
+        draw:save()
+        for _ = 1, 6 do draw:scale(1e7, 1e7) end
+        draw:push_blur(4)
+        draw:rect(0, 0, 1, 1, "#ff0000")
+        draw:pop()
+        draw:restore()
+        "##,
+    );
+    let failed = message(run(&theme).unwrap_err());
+    assert!(failed.contains("draw:scale"), "{failed}");
+    // Two are 10^14: drawn. Each inside its own save, or its own push,
+    // or one of a mask's two parts, any number of times: drawn.
+    let (theme, _d) = background(
+        "zoom-kept",
+        "",
+        r##"
+        draw:save()
+        draw:scale(1e7)
+        draw:scale(-1e7, 0.5)
+        draw:rect(0, 0, 1, 1, "#ff0000")
+        draw:restore()
+        for _ = 1, 20 do
+            draw:save()
+            draw:scale(1e7, 1e7)
+            draw:restore()
+            draw:push_opacity(0.5)
+            draw:scale(1e7, 1e7)
+            draw:pop()
+            draw:push_mask()
+            draw:scale(1e7, 1e7)
+            draw:scale(1e7, 1e7)
+            draw:pop()
+            draw:scale(1e7, 1e7)
+            draw:scale(1e7, 1e7)
+            draw:pop()
+        end
+        draw:scale(1e7, 1e-3)
+        draw:scale(0.5, 1e7)
+        draw:scale(0.5)
+        "##,
+    );
+    let ops = ops(&theme);
+    assert_eq!(ops[1], Op::Scale(1.0e7, 1.0e7));
+    assert_eq!(ops[2], Op::Scale(-1.0e7, 0.5));
+    assert_eq!(*ops.last().unwrap(), Op::Scale(0.5, 0.5));
+    // And one more after those three is refused, by itself: a hook that
+    // catches the error draws what it drew.
+    let (theme, _d) = background(
+        "zoom-caught",
+        "",
+        r##"
+        draw:scale(1e7)
+        draw:scale(1e7)
+        local ok, why = pcall(draw.scale, draw, 1.5)
+        assert(not ok and string.find(tostring(why), "draw:scale"), tostring(why))
+        draw:rect(0, 0, 1, 1, "#ff0000")
+        "##,
+    );
+    assert_eq!(ops_count(&theme), 3);
+}
+
+fn ops_count(theme: &Theme) -> usize {
+    ops(theme).len()
+}
+
 #[test]
 fn the_draw_table_only_works_inside_a_hook_and_cannot_be_changed() {
     let (mut theme, _d) = load(

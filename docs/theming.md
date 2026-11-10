@@ -1222,7 +1222,14 @@ What a call does with what it is given:
   catching the error included.
 - **A number that isn't finite** is refused. Opacities, colour parts and
   gradient stops out of range are brought into range without a word;
-  negative sizes and radii count as 0.
+  negative sizes and radii count as 0. Coordinates are taken up to
+  10^7 either way, and so is a scale; a `draw:scale` that with the scales
+  already in force would make sizes more than 10^14 times larger is
+  refused too (an error at that line), since one inside another they
+  multiply. (Six of 10^7 are past a float's range, and the toolkit's
+  software renderer, given that and a blur, stopped drawing the whole
+  window.) A `restore`, or the `pop` of a push, gives back the scales
+  made since.
 - `draw:text`'s font is laid onto `text.body` of the style; `nil` is that
   font as it is. A font that can't be read is noted and the rest of it
   used.

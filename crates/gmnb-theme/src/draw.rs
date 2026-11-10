@@ -363,7 +363,13 @@ pub struct Recorder {
     /// A hook is running.
     active: bool,
     ops: Vec<Op>,
-    open: Vec<Open>,
+    /// What is open, each with [`Recorder::zoom`] as it was when it
+    /// opened (a pop or a restore puts it back, as the toolkit does the
+    /// transform).
+    open: Vec<(Open, f64)>,
+    /// How much the scales in force multiply sizes by, at most: kept
+    /// within [`MAX_ZOOM`].
+    zoom: f64,
     pushes: usize,
     saves: usize,
     segments: usize,
@@ -399,6 +405,7 @@ impl Recorder {
             active: false,
             ops: Vec::new(),
             open: Vec::new(),
+            zoom: 1.0,
             pushes: 0,
             saves: 0,
             segments: 0,
@@ -479,7 +486,9 @@ impl Recorder {
         }
         self.push(what, op)?;
         self.pushes += parts;
-        self.open.extend(std::iter::repeat_n(Open::Push, parts));
+        let zoom = self.zoom;
+        self.open
+            .extend(std::iter::repeat_n((Open::Push, zoom), parts));
         Ok(())
     }
 
@@ -497,6 +506,11 @@ fn bad(what: &str, problem: impl std::fmt::Display) -> mlua::Error {
 /// The largest coordinate taken: far beyond any window, small enough that
 /// the renderers' arithmetic stays exact.
 const FAR: f64 = 1.0e7;
+
+/// The most the scales in force at once may multiply sizes by. With
+/// coordinates within [`FAR`] and 4096 calls, every number the toolkit
+/// works out stays a float's.
+const MAX_ZOOM: f64 = 1.0e14;
 
 fn coord(what: &str, n: f64) -> mlua::Result<f32> {
     if n.is_finite() {
@@ -1064,6 +1078,7 @@ impl Api {
         rec.active = true;
         rec.ops.clear();
         rec.open.clear();
+        rec.zoom = 1.0;
         rec.pushes = 0;
         rec.saves = 0;
         rec.segments = 0;
@@ -1088,7 +1103,7 @@ impl Api {
         self.shared.unbalanced.set(left > 0);
         if left > 0 {
             let (pushes, saves) = (rec.pushes, rec.saves);
-            while let Some(open) = rec.open.pop() {
+            while let Some((open, _)) = rec.open.pop() {
                 rec.ops.push(match open {
                     Open::Push => Op::Pop,
                     Open::Save => Op::Restore,
@@ -1629,16 +1644,18 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
             rec.ready(what)?;
             match rec.open.last() {
                 None => return Err(bad(what, "nothing is pushed")),
-                Some(Open::Save) => {
+                Some((Open::Save, _)) => {
                     return Err(bad(
                         what,
                         "a save is open inside this push; restore it first",
                     ));
                 }
-                Some(Open::Push) => {}
+                Some((Open::Push, _)) => {}
             }
             rec.push(what, Op::Pop)?;
-            rec.open.pop();
+            if let Some((_, zoom)) = rec.open.pop() {
+                rec.zoom = zoom;
+            }
             rec.pushes -= 1;
             Ok(())
         })?,
@@ -1658,7 +1675,8 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
             }
             rec.push(what, Op::Save)?;
             rec.saves += 1;
-            rec.open.push(Open::Save);
+            let zoom = rec.zoom;
+            rec.open.push((Open::Save, zoom));
             Ok(())
         })?,
     )?;
@@ -1671,13 +1689,15 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
             rec.ready(what)?;
             match rec.open.last() {
                 None => return Err(bad(what, "nothing is saved")),
-                Some(Open::Push) => {
+                Some((Open::Push, _)) => {
                     return Err(bad(what, "a push is open inside this save; pop it first"));
                 }
-                Some(Open::Save) => {}
+                Some((Open::Save, _)) => {}
             }
             rec.push(what, Op::Restore)?;
-            rec.open.pop();
+            if let Some((_, zoom)) = rec.open.pop() {
+                rec.zoom = zoom;
+            }
             rec.saves -= 1;
             Ok(())
         })?,
@@ -1696,8 +1716,22 @@ fn draw_table(lua: &Lua, shared: &Rc<Shared>) -> mlua::Result<Table> {
         "scale",
         lua.create_function(move |_, (_, sx, sy): (Value, f64, Option<f64>)| {
             let what = "scale";
-            let op = Op::Scale(coord(what, sx)?, coord(what, sy.unwrap_or(sx))?);
-            s.recorder.borrow_mut().push(what, op)
+            let (sx, sy) = (coord(what, sx)?, coord(what, sy.unwrap_or(sx))?);
+            let mut rec = s.recorder.borrow_mut();
+            rec.ready(what)?;
+            // Each scale is within the coordinates' range; scales one
+            // inside another multiply, and past a float's range the
+            // toolkit's software renderer stops drawing the whole window.
+            let zoom = rec.zoom * f64::from(sx.abs().max(sy.abs()));
+            if zoom > MAX_ZOOM {
+                return Err(bad(
+                    what,
+                    "scales that together make sizes more than 10^14 times larger",
+                ));
+            }
+            rec.push(what, Op::Scale(sx, sy))?;
+            rec.zoom = zoom;
+            Ok(())
         })?,
     )?;
     let s = shared.clone();
