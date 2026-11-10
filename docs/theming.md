@@ -525,15 +525,18 @@ about it:
 | Outlines | Unhinted, grey levels (`text.rs`) | At scale 1 GTK's automatic font rendering hints them: every glyph moved and stretched to the pixel grid, by up to a pixel | `window.rs` `match_text_rendering`: manual rendering, no hinting (outlines or metrics), grey levels, for the whole app |
 | Across | A line at `cx − width / 2`, to a quarter of a pixel | A label rounds its text's place down to a whole pixel | `window.rs` `exact_text`: a centred or end-aligned label is laid out across its whole width (it may be ellipsized), and Pango places the line there to the fraction |
 | Down | The baseline at the place's middle plus half the capitals' height, rounded to a pixel (`ui.rs` `draw_line`) | A label centres its line box in its place, rounding down; the baseline is half the leading below the font's ascent. Inter's ascent less its descent is its cap height, so only the rounding differs | Each font's `--P-line-height` and `--P-text-nudge` (`css.rs` `text_line`): a line box and a pixel of padding above it that land the baseline on DGMNB's in any place an even number of pixels high |
-| Scripts | 62% of the label's size, raised 0.36 of it or lowered 0.16, at their own optical size | Pango's `<sup>` uses the font's own superscript size and shift (60%, 0.35), and an absolute line height is given to every run, so a raised run makes the line taller | Keys' labels are written as `<span size="62%" rise="…" line_height="1025" font="@opsz=…">` (`calculator.rs` `script_markup`): the script in a line box a pixel high. (Pango reads a `line_height` above 1024 as Pango units, up to 1024 as a factor.) A fallback font's glyph in a label (the ▾ of the flyout buttons) gets the same box |
-| Cells | Rows of equal cells (`Rect::columns`, `Rect::cell`) fall on fractions of a pixel | Whole pixels, the spare ones to the first cells: a label up to a pixel off | `width_bin.rs` `Cells` (the memory row), `Strip` (the programmer bar) and `bitflip.rs`'s grid place children to the fraction with an allocation transform, and the bits' baselines on DGMNB's pixel |
+| Scripts | 62% of the label's size, raised 0.36 of it or lowered 0.16, at their own optical size | Pango's `<sup>` uses the font's own superscript size and shift (60%, 0.35), and an absolute line height is given to every run, so a raised run makes the line taller | A key's label is not the toolkit's: `widgets/fit.rs` reads the keys' own `<sup>` / `<sub>` (`parse_markup`) and sets each script in the label's font at 62%, risen or dropped by those parts of the size, its baseline rounded with its shift as DGMNB's (`line_layout`, `draw_line`). A fallback font's glyph in a toolkit label (the ▾ of the flyout buttons) is given a line box a pixel high (`line_height="1025"`: Pango reads a `line_height` above 1024 as Pango units, up to 1024 as a factor) |
+| Cells | Rows of equal cells (`Rect::columns`, `Rect::cell`) fall on fractions of a pixel | Whole pixels, the spare ones to the first cells: a label up to a pixel off | `width_bin.rs` `Cells` (the memory row), `Strip` (the programmer bar) and `bitflip.rs`'s grid place children to the fraction with an allocation transform, and the bits' baselines on DGMNB's pixel. A key stays on the toolkit's whole pixels and its label is set about the middle of DGMNB's cell (`fit.rs` `set_cell`, `cell_middle`): the keypads (`widgets/keypad.rs`) and the graph pad |
 | Overlap | A narrow window's rows overlap | Children ask for their width, and the window grows | `Strip` asks for none of its own |
 
-Not done: the keypad (`widgets/keypad.rs`) lays keys out on GTK's grid,
-so where DGMNB's key cells are fractional (Scientific and Programmer at
-760×640: five columns of 85.6 px; Standard at 360×600: rows of 61.3 px)
-their labels sit up to a pixel off and fail the text rule. The bits'
-`place` is the recipe.
+The text the app places itself needs none of the toolkit's part of this:
+a key's label, a page's line (`widgets/fit.rs` `FitLabel`) and the
+readouts (`widgets/display.rs`) are laid out unhinted in grey levels
+(`fit.rs` `set_unhinted`, whatever the settings say), shrunk to their
+width, their capitals centred with each run's baseline on a whole pixel
+and each glyph at the nearest quarter pixel (`fit.rs` `draw_line`). A
+key's label and icon ask for no least height, so keys shrink below what
+they show, as DGMNB's do.
 
 ### Toolkit-drawn families: `native`
 
@@ -802,12 +805,16 @@ For a Control, the base states are these unless the row says otherwise:
 ### Display (the readout)
 
 Drawn by `widgets/display.rs` from `Style`. The converter's two values and
-the date page's results are lines of their own (`converter.value`, `date.result`).
+the date page's results are readouts too (to a theme's
+[`display` layer](#the-display-layer): `role` `"converter"` and `"date"`),
+but lines of their own to the style: their fonts are `converter.value` and
+`date.result`, their colour the window's, and none of the rows below
+applies to them.
 
 | Path | Kind | Base | Feeds |
 |---|---|---|---|
-| `display.background` | Fill | `base.text_scrim` | `calcdisplay` (CSS) |
-| `display.radius` | Radius | `shape.card_radius` | `calcdisplay` (CSS) |
+| `display.background` | Fill | `base.text_scrim` | `calcdisplay:not(.wc-line)` (CSS): the calculator's readout, not a page's line |
+| `display.radius` | Radius | `shape.card_radius` | `calcdisplay:not(.wc-line)` (CSS): the calculator's readout, not a page's line |
 | `display.padding_x` | number | 8 | Rust: space left and right of the text |
 | `display.heights` | per mode: number or `"auto"` | standard 116, scientific 104, programmer 84, compact 86 | Rust: the widget's height. `"auto"`: 1.6 × the expression's size + 1.28 × the mode's size + 12 |
 | `display.sizes` | per mode | 52, 52, 52, compact 40 | Rust: the value's largest size; it shrinks to fit the width |
@@ -848,6 +855,14 @@ uses `keys.on`. A class takes `keys`' shared values (`radius`, `padding`,
 `min_width`, `min_height`, `transition`, `icon`, and the three states)
 as the theme set them, unless it gives its own. Superscripts and subscripts in key labels are 62% of the
 label's size, raised 0.36 of it or lowered 0.16 (fixed, DGMNB's: [Text in its place](#text-in-its-place)).
+
+A key's label is drawn by the app (`widgets/keypad.rs`, a `FitLabel`), in
+its class's `font`: its colour is the stylesheet's (the class's `color`
+in each state), its weight a state's `font_weight` when the key is in
+that state (`checked`, then `hover` or `active`, then `disabled`, as the
+stylesheet orders them), and it is shrunk to its key's width less 8 with
+no least size. Its halo is `window.raised_text_halo`, and none while the
+key is disabled.
 
 ### History and memory panel
 
@@ -892,7 +907,7 @@ are `popover`s.
 | `date.label` | Text | `text.caption`, `fg_dim` | `.wc-section` on this page |
 | `date.field` | Control | min_height 38; radius `shape.radius`; background `surface2`; `text.body`; `fg`; padding `{ 0, 6 }`; `checked = { background accent, color on_accent }` (while its calendar is open) | `menubutton.wc-field > button.toggle`: "Tuesday, November 10, 2026  ▾", centred, at most 320 wide |
 | `date.result_panel` | Surface | nothing: no background, no padding | `.wc-result-panel` |
-| `date.result`, `date.add_result` | `{ size, font }` | 28, weight 400; the same | The page's results (Rust, `widgets/fit.rs`), shrunk to fit down to 14; out of range, the error colour |
+| `date.result`, `date.add_result` | `{ size, font }` | 28, weight 400; the same | The page's results (Rust, `widgets/display.rs`: a readout, `role = "date"`), shrunk to fit down to 14; out of range, the error colour |
 | `date.subresult` | Text | `text.body`, `fg_dim` | `.wc-subresult` |
 | `date.calendar.title` | Text | `text.strong`, `fg` | `.wc-days-title` |
 | `date.calendar.weekday` | Text | `text.caption`, `fg_dim` | `.wc-days-weekday` |
@@ -910,7 +925,7 @@ calendar sits in a `popover`; its arrows are `icon_button`s.
 |---|---|---|---|
 | `converter.field` | Control | no background; radius 0; padding 0; `checked` changes nothing | `.wc-conv-field`; `checked` is `.wc-active` (the field being typed into) |
 | `converter.marker` | `{ color, width, height }` or `false` | `{ accent, 36, 3 }` | A bar at the bottom-left of the active field: a sized background layer on the field's inner box, `.wc-conv-field.wc-active > .wc-conv-marker` (so it never shares a layer list with the field's own background). `false` writes it as transparent and 0×0. |
-| `converter.value` | `{ size, font, checked_weight, focus }` | 38; `fonts.display` weight 300 with `{ "tnum" }`; 500; `focus` | The two values (Rust, `widgets/fit.rs`), shrunk to fit down to 14; the currency's symbol before a value in `converter.symbol`, 8 px from it; the ring is `.wc-conv-field fitlabel:focus-visible` |
+| `converter.value` | `{ size, font, checked_weight, focus }` | 38; `fonts.display` weight 300 with `{ "tnum" }`; 500; `focus` | The two values (Rust, `widgets/display.rs`: readouts, `role = "converter"`), shrunk to fit down to 14; the currency's symbol before a value in `converter.symbol`, 8 px from it (the app's, whoever paints the value); the ring is `.wc-conv-field calcdisplay.wc-conv-value:focus-visible` |
 | `converter.symbol` | Text | 26 / 400, `fg_dim` | `.wc-currency-symbol` |
 | `converter.unit` | Control | min_height 34; radius `shape.radius`; background `surface2`; `text.body`; `fg`; `checked = { background accent, color on_accent }` | `dropdown.wc-unit-dropdown > button`; `checked` while its list is open. The list is a `menu`. |
 | `converter.swap` | Control | `icon_button` | `button.wc-swap` |
@@ -985,7 +1000,7 @@ A theme can draw in four places, its **layers**:
 | `background` | The whole window, under every widget, over `window.background` | The window | Faded to `ctx.opacity` together with `window.background`. Draw it opaque. |
 | `keypad` | Each keypad, over its keys | That keypad | Called once per visible keypad. Can also move its keys (`place`). |
 | `display` | Each readout | That readout | Paints the value **instead of** the app. |
-| `overlay` | The whole window, over every widget | The window | Never takes clicks. Sheets and dialogs inside the window are under it; popovers and menus are separate surfaces and are not. |
+| `overlay` | The whole window, over every widget of the page | The window | Never takes clicks. The header, the sidebar and a page's own sheets are under it. Settings and About are over it, so that no theme can cover the place it is switched off in; popovers and menus are separate surfaces and are not covered either. |
 
 ```lua
 layers = {
@@ -1012,6 +1027,9 @@ layers = {
 | `ctx` | The same `ctx` as `style` gets. |
 | `keys` | Keypad layer: every cell of this keypad. |
 | `value` | Display layer: the value to paint. |
+
+A frame and everything in it is the app's: read-only, and refilled in
+place for the next frame. Copy what you want to keep.
 
 ### Asking for the next frame
 
@@ -1060,8 +1078,16 @@ An event stays for as many seconds as the layer's `events` table says
 Every event has `age`, `page` (`"calculator"`, `"converter"`, `"date"`,
 `"graphing"`, `"settings"`), `rect` (the control, readout or keypad it
 came from) and `x`, `y`: the exact point pressed for a pointer press on a
-key, else the middle of `rect`. All in the layer's own coordinates; a
-keypad layer gets only its own keypad's events.
+key, else the middle of `rect`. All in the layer's own coordinates.
+
+- A keypad layer is told of its own keypad's keys and its own `show`,
+  never of another keypad's. Everything else reaches it like any layer.
+- An `option` event comes from nowhere in particular: its `rect` is the
+  layer's own area.
+- A layer that is not on screen is told nothing.
+- A readout that is not on screen sends no `result` or `error` (another
+  page's value changing behind the one shown; the date page's other
+  result).
 
 For `press`:
 
@@ -1121,7 +1147,8 @@ loaders: see [Decoding stills](theming-media.md#decoding-stills)). `gmnb.noise({
 makes a square of speckles: per pixel, in row order, a 32-bit xorshift
 (`s ^= s << 13; s ^= s >> 17; s ^= s << 5`, starting from `seed`, default
 `0x9e3779b9`) gives `n = (s & 0xff) / 255`, and the pixel is `color` at
-alpha `n × opacity`, premultiplied (`GdkMemoryTexture`, RGBA8). Both are
+alpha `n × opacity` (times the colour's own), premultiplied, each part cut
+down to 8 bits (`GdkMemoryTexture`, RGBA8). Both are
 remembered by their arguments: calling them every frame costs nothing
 after the first.
 
@@ -1132,8 +1159,31 @@ drawn again when the animation's next frame is due, as if `draw` had
 returned that delay; all the rules under
 [Asking for the next frame](#asking-for-the-next-frame) apply to it.
 
-Pushes must be popped and saves restored by the time `draw` returns. The
-app closes what was left open and reports it once.
+Pushes must be popped and saves restored by the time `draw` returns, in
+the order they were made (a `save` made inside a push is restored before
+that push is popped). The app closes what was left open and reports it
+once. `push_mask` and `push_blend` each count as two pushes.
+
+What a call does with what it is given:
+
+- **A wrong argument** (a colour that isn't one, a path that isn't a
+  path, a missing paint) is an error at that line, like any error in
+  Luau. Unless the hook catches it, the frame fails.
+- **Going over a cap** of the [limits](#limits-and-what-happens-when-a-theme-fails)
+  is an error too, and the frame is dropped whatever the hook does after,
+  catching the error included.
+- **A number that isn't finite** is refused. Opacities, colour parts and
+  gradient stops out of range are brought into range without a word;
+  negative sizes and radii count as 0.
+- `draw:text`'s font is laid onto `text.body` of the style; `nil` is that
+  font as it is. A font that can't be read is noted and the rest of it
+  used.
+- A picture that didn't load (see the limits) has no size and draws
+  nothing.
+
+A path holds what its builder calls put in it and can be kept between
+frames and added to; it is read when it is drawn. A glyph of
+`frame.value.previous` carries `previous = true`.
 
 ### The keypad layer
 
@@ -1165,12 +1215,22 @@ end
 ```
 
 `draw` must return `0` while `place` is still moving keys; the app does
-not guess.
+not guess. If `place` fails, or its calls together run past their limit,
+no key is moved that frame.
+
+- The cells listed are the ones on screen, by row and column.
+- `pressed` is also true for the 110 ms a key typed on the keyboard is
+  shown pressed; `checked` is a toggle that is on.
+- The graphing page's small pad is not a keypad to themes: its keys send
+  `press` events, and nothing is drawn over it.
 
 ### The display layer
 
 The app lays the value out: it picks the size that fits, shapes the text
-in `display.value.font`, and positions each character. The hook paints.
+in `display.value.font` (a converter value in `converter.value`'s font, a
+date result in `date.result`'s), and positions each character. The hook
+paints. A currency's symbol before a converter value is not part of the
+value: the app paints it.
 
 `frame.value`:
 
@@ -1397,7 +1457,9 @@ sounds.
 | Time: one `sound` call | 2 ms |
 
 Every entry into the theme's code runs under its time limit, the first
-load included. Files (`fonts`, `credits`, `gmnb.image`) are relative
+load included. **A time limit is of processor time**: what the theme's
+code has run, not what the clock on the wall says. A machine busy with
+other things doesn't fail a theme that did nothing slow. Files (`fonts`, `credits`, `gmnb.image`) are relative
 paths inside the theme's own folder; `..`, absolute paths and links that
 lead outside are refused. The same holds for `gmnb.animation` and
 `gmnb.sound`. Time the app spends decoding a picture or reading a sound
@@ -1412,6 +1474,7 @@ file inside a theme's call does not count against that call's limit.
 | A number is out of range | It is clamped. A note. |
 | A `draw` fails, runs out of time or exceeds a cap | Nothing is drawn for that layer that frame (the display paints the base way). After 3 failures the hook is switched off until the theme is reloaded, and a toast says so, once. |
 | A `draw` takes more than four times its limit | Switched off at once (a library call the app couldn't interrupt). |
+| `place` fails or runs out of time | The keys stay where they are that frame; `draw` still runs. After 3 failures `place` is switched off. |
 | The memory limit is hit | The theme is unloaded: the base look, and a toast. |
 | A font or image can't be read or is too big | The theme loads without it; a note. |
 | An animation or sound can't be read, is too big, or isn't what its first bytes promise | The same: drawing it draws nothing, playing it plays nothing; a note. |
@@ -1613,9 +1676,11 @@ must reach 4.5 (its scrim is computed to). Halos are not counted.
 | `GMNB_PALETTE=<key>` | Kept for the old scripts: the same as `GMNB_THEME=aurora` and `palette=<key>`. |
 | `GMNB_ACCENT=<hex>` or `none` | What `ctx.accent` is. |
 | `GMNB_STILL` | Layers see `motion = false`: no events, no frames, no `place`. The toolkit's own animations are untouched, as now. |
+| `GMNB_DISPLAY_RECT` | Each readout prints where in the window it is (`display rect: x y w h`), for comparing it with DGMNB's. |
+| `GMNB_ACTIVE` | The window counts as the one in use whatever the compositor says. A headless compositor never says so, and layers only animate in a window that is. |
 | `GMNB_POINTER="x,y"` | A pointer position for the first keypad's layer, as now. |
 | `GMNB_BENCH="themes=base,aurora,mono,base;opacity"` | Measure: each theme switch, and an opacity drag from 1 to 0.1 and back, each to the end of the next painted frame; prints the figures and the hub's counters, then quits. |
-| `GMNB_THEME_STATS` | Print the hub's counters once the window has settled (Luau machines, `style` calls, provider loads and their property counts). |
+| `GMNB_THEME_STATS` | Print the hub's counters once the window has settled, after 1.2 s or after as many milliseconds as its value: Luau machines, `style` calls, provider loads and their property counts; and for the layers the frames drawn by kind, the milliseconds their hooks and their replay took, the timers and frame callbacks ever armed and alive now, and each hook's failures. |
 | `GMNB_SOUND=0` | No sound for the run; nothing sound-related is created. `null`: the mixer runs with no sound server, for tests. |
 | `GMNB_SOUND_DUMP=<folder>` | Every sound the theme makes is written there as a WAV file. |
 | `GMNB_DATE_TO=YYYY-MM-DD` | The date page's "To" date (the comparison's "Date with a result"). |
@@ -1627,27 +1692,60 @@ rest keep working.
 ### Where events come from
 
 Every place 0.2 called `Ctx::pulse_at`, `Keypad::flash` or
-`Keypad::cascade` becomes an event; the colours and strengths that were
-passed there are now Aurora's business.
+`Keypad::cascade` is an event now; the colours and strengths that were
+passed there are Aurora's business. Every event goes through one
+function, `Layers::emit` (`apps/gmnb/src/layers/mod.rs`): it tells each
+layer that listens, in that layer's coordinates, and then whoever asked to
+hear all events (`Layers::listen`: sound). An event's `page` is read off
+the widget it came from (the name its page has in the window's stack).
 
-| In 0.2 | Event |
+| Where | Call | Event |
+|---|---|---|
+| `calculator.rs` `on_key`, `converter.rs` keypad `connect_pressed` (a key clicked) | `key_pressed(pad, id, Some(point))` | `press`, `source = "key"`, `x, y` = the point pressed, `rect` = the key |
+| `calculator.rs` `flash`, `converter.rs` key handler (a key typed) | `key_pressed(pad, id, None)` | `press`, `source = "key"`, `via = "keyboard"`, `x, y` = the key's middle. The key is also `active` for 110 ms. |
+| `graphing.rs` keypad buttons | `pressed(button, Source::Key, None)` | `press`, `source = "key"`, `page = "graphing"`, `key.kind = "other"`, no `key.id`, `x, y` = the button's middle |
+| `calculator.rs` `press_from` (memory row, F-E) | `pressed(button, Source::Button, …)` | `press`, `source = "button"`; the memory buttons with `action = "memory"` |
+| `converter.rs` swap | `pressed(button, Source::Swap, None)` | `press`, `source = "swap"` |
+| `date.rs` a day picked | `pressed(button, Source::Date, None)` | `press`, `source = "date"`, `rect` = the date button |
+| `Display::set_value` given `Change::Result` or `Change::Error` (the calculator's, the converter's and the date page's readouts alike) | `outcome(readout, error)` | `result` / `error` with the readout's `page`, `rect` = the readout. Not from a readout that is not on screen (another page's; the date page's other result) |
+| `Keypad` mapped; `Keypad::cascade` (the calculator's mode changed, the converter shown) | `shown(pad)` | `show`, `rect` = the keypad |
+| `Hub::set_option` | `emit` | `option`, with `id` and `value` |
+| `Window::set_mode`, after the first page | `mode_changed(page)` | `mode`, `page` = the new page, `rect` = the page |
+
+- **`action`**: a key is `"backspace"` by its icon and `"clear"` by its
+  label (C, CE); `Keypad::key_meaning`.
+- **`via`**: a keypad notes every pointer press on it and every Space or
+  Enter (capture phase, never claimed), and the backdrop does the same
+  for the rest of the window. A control that says it was used within a
+  second of a pointer press on it was used by the pointer; else within a
+  second of Space or Enter, by the keyboard; else through the
+  accessibility interface (`"assistive"`). A key typed on the keyboard
+  that presses its key on screen is always `"keyboard"`.
+
+`Display::set_value`'s `Change` also becomes `frame.value.change` for
+that readout, while a theme's display layer draws it. On the converter a
+key typed is `typing` in the value typed into and `replace` in the other;
+a unit chosen, the rates arriving and a paste are `replace` and `result`;
+the swap is `result` in both (two `result` events, one from each
+readout). On the date page a day picked and add/subtract switched are
+`result`, the step boxes `typing`, the mode switched `replace`.
+
+### Where the layers' code lives
+
+| Where | What |
 |---|---|
-| `calculator.rs` `on_key`, `converter.rs` keypad `connect_pressed` (a key clicked) | `press`, `source = "key"`, `via = "pointer"`, `x, y` = the point pressed, `rect` = the key |
-| `calculator.rs` `flash`, `converter.rs` key handler (a key typed) | `press`, `source = "key"`, `via = "keyboard"`, `x, y` = the key's middle. The key is also `active` for 110 ms. |
-| `graphing.rs` keypad buttons | `press`, `source = "key"`, `page = "graphing"`, `key.kind = "other"`, `x, y` = the button's middle |
-| `calculator.rs` `press_from` (memory row, F-E) | `press`, `source = "button"` |
-| `converter.rs` swap | `press`, `source = "swap"` |
-| `date.rs` a day picked | `press`, `source = "date"`, `rect` = the date button |
-| `calculator.rs` `sync` with `Change::Result` / `Change::Error` | `result` / `error`, `rect` = the readout |
-| Converter and date values changing with `Change::Result` | `result` with their `page` (0.2 drew nothing for these; Aurora ignores them) |
-| `Keypad` mapped; the calculator's mode changed | `show`, `rect` = the keypad |
-| `prefs.rs` palette chosen | `option`, `id = "palette"`; in general any option change |
-| A sidebar row chosen; the calculator's mode changed (new in 0.3) | `mode`, `page` = the new page, `rect` = the page |
-| C, CE, backspace, the memory buttons (new in 0.3) | their `press`, with `action` = `"clear"`, `"backspace"` or `"memory"` |
-| A control activated through the accessibility interface (new in 0.3) | its `press`, with `via = "assistive"` |
+| `crates/gmnb-theme/src/draw.rs` | The `draw` table: every call recorded into a `DisplayList` of typed `Op`s, the caps, the push/save stack |
+| `…/path.rs`, `…/picture.rs` | Paths (tables of numbers a Luau builder writes; read when drawn) and pictures (a file's header for its size, the noise recipe; pixels made when first drawn) |
+| `…/layer.rs`, `theme.rs` | The frame a hook is told, in host tables kept between frames; `Theme::draw` and `Theme::preview` |
+| `…/sched.rs`, `…/events.rs` | "Asking for the next frame" as a state machine with no clock of its own; a layer's ring of events |
+| `apps/gmnb/src/layers/mod.rs` | The runtime: an `Instance` per place a layer is drawn, the one function that arms a timer or a frame callback, `emit` |
+| `…/layers/replay.rs` | A display list into a `GtkSnapshot`, as the draw API's table maps it; textures and layouts kept between frames |
+| `widgets/backdrop.rs`, `keypad.rs`, `display.rs`, `layers/tile.rs` | Where the four layers and the previews are drawn |
 
-`Display::set_value`'s `Change` becomes `frame.value.change` for that
-readout; it is not an event.
+A layer's hook runs inside its widget's `snapshot`, and only if the
+layer needs a new picture; otherwise the picture it drew last is
+replayed. None of this crate's code knows the toolkit; none of the
+toolkit code knows Aurora.
 
 ### Fonts
 
@@ -1669,9 +1767,19 @@ readout; it is not an event.
 
 Measured for the language choice: 1000 frames of 300 calls into the app,
 with the sandbox, memory limit and deadline on, averaged 76 µs. Aurora
-makes 7 draw calls for a still background and 22 with thirteen pulses at
-once, about 30 for a keypad with the pointer over it, and at most 72 for
-a nine-digit readout mid-animation.
+makes 7 draw calls for a still background and 20 with thirteen pulses at
+once, about 30 for a keypad with the pointer over it, and about 115 for
+a nine-digit readout mid-animation in the dark (each digit twice, its
+glow and itself, each inside a save and three transforms).
+
+Measured in the real engine, under the real limits (`tests/draw.rs`,
+medians of 200 frames): the background with thirteen pulses 0.21 ms, a
+keypad with the pointer over it and a ripple 0.10 ms, the readout
+mid-result 0.06 ms; the limit is 8 ms. Most of a frame is the theme
+making colours and gradients: the `gmnb` library's functions therefore
+run with the heap cap lifted (each builds one small value), which more
+than halved the background's frame. The cap is checked as it is put
+back, so it holds through them to within that one value.
 
 ### The sandbox, exactly
 
@@ -1698,7 +1806,11 @@ the interrupt's error once; it must not buy more time).
 5. Each limit in the table above, hit on purpose, gives the listed result
    and leaves the app in the base look or with the hook off.
 6. No theme, or a theme whose hooks return `nil`: no timer and no tick
-   callback is installed (count the sources).
+   callback is installed. The policy is tested with a clock it is handed
+   (`sched.rs`: `nil` answers "arm nothing"); the app's sources are
+   counted in its code (`theming_installs_no_sources`: a timer or a frame
+   callback is made in one function only, from that answer); and the
+   running app says how many it ever armed (`GMNB_THEME_STATS`).
 7. Both built-in themes type-check against `types/gmnb.d.luau`, and every
    key they return is one the definitions name.
 8. The readability rules above.
@@ -1742,8 +1854,8 @@ Decided here, and worth a second look by the owner:
    DGMNB's fractional cell. The toolkit's own labels were hinted (until
    point 12) and are centred by their line height; on the date page, the converter and the
    graph pad those missed the comparison's ink-colour and blur limits by
-   a little. The calculator's keypad (`widgets/keypad.rs`) still uses
-   the toolkit's labels.
+   a little. The keypads' labels (`widgets/keypad.rs`) and the readouts
+   (`widgets/display.rs`) are set the same way, by the same functions.
 11. **A selected row's label counts as a mark** in the readability rules
     (3:1): the sidebar's current page and the current radix are
     `accent_text` on the accent at .16, which DGMNB's own colours put at

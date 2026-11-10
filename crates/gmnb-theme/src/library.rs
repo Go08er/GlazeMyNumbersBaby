@@ -8,13 +8,12 @@
 //! table) and return `Rgba` tables.
 //!
 //! The drawing constructors (`gmnb.path`, `gmnb.svg_path`, `gmnb.image`,
-//! `gmnb.noise`) belong to the draw API: [`register`] takes the function
-//! that adds them, and [`placeholder_drawing`] adds stand-ins that only
-//! let a theme load.
+//! `gmnb.noise`) belong to the draw API ([`crate::draw`]): [`register`]
+//! takes the function that adds them.
 
 use appcore::color::{self, Rgb};
 use appcore::palette::Palette;
-use mlua::{Function, Lua, MultiValue, Table, Value};
+use mlua::{Function, Lua, Table, Value};
 
 use crate::check::parse_hex;
 use crate::types::{Rgba, TRANSPARENT};
@@ -91,6 +90,53 @@ fn rgb(c: Rgba) -> Rgb {
 
 fn with_alpha(c: Rgb, a: f32) -> Rgba {
     [c[0], c[1], c[2], a]
+}
+
+/// Runs `f`, which reads and builds only small values of a fixed most
+/// size for the script (a colour, a gradient), with the heap cap lifted
+/// for the while.
+///
+/// Under a cap mlua wraps every store, and every field name it looks up,
+/// in a protected call, in case the allocation fails: a colour table then
+/// costs five of them, and a theme makes dozens of colours and gradients a
+/// frame. Lifted, they are plain (Aurora's background with thirteen pulses
+/// went from 0.55 ms to 0.2 ms a frame).
+///
+/// The cap is back when `f` returns, and it is checked then: if what was
+/// built took the heap over it, the call fails with the memory error the
+/// allocation would have raised. So the cap holds through these functions
+/// too, to within the one value a call builds (a theme that keeps what
+/// they return in a table it made beforehand allocates nothing itself).
+fn uncapped<R>(lua: &Lua, f: impl FnOnce() -> mlua::Result<R>) -> mlua::Result<R> {
+    struct Restore<'a>(&'a Lua, usize);
+    impl Drop for Restore<'_> {
+        fn drop(&mut self) {
+            let _ = self.0.set_memory_limit(self.1);
+        }
+    }
+    let cap = lua.set_memory_limit(0)?;
+    let result = {
+        let _restore = Restore(lua, cap);
+        f()
+    };
+    if cap != 0 && lua.used_memory() > cap {
+        return Err(mlua::Error::MemoryError(
+            "the theme's heap is over its cap".into(),
+        ));
+    }
+    result
+}
+
+/// A library function that runs with the heap cap lifted ([`uncapped`]):
+/// every one of them reads and builds only small values of a fixed most
+/// size.
+fn light<A, R, F>(lua: &Lua, f: F) -> mlua::Result<Function>
+where
+    A: mlua::FromLuaMulti,
+    R: mlua::IntoLuaMulti,
+    F: Fn(&Lua, A) -> mlua::Result<R> + mlua::MaybeSend + 'static,
+{
+    lua.create_function(move |lua, args: A| uncapped(lua, || f(lua, args)))
 }
 
 fn color_table(lua: &Lua, c: Rgba) -> mlua::Result<Table> {
@@ -220,52 +266,10 @@ return {
     out_back = function(p) return 1 + 2.70158 * (p - 1) ^ 3 + 1.70158 * (p - 1) ^ 2 end,
 }";
 
-/// Stand-ins for the draw API's constructors, so that a theme which makes
-/// its paths and pictures as it loads does load: a path whose methods do
-/// nothing, and pictures that are only a size.
-pub fn placeholder_drawing(lua: &Lua, gmnb: &Table) -> mlua::Result<()> {
-    let path = lua.create_function(|lua, _: MultiValue| {
-        let p = lua.create_table()?;
-        let chain = lua.create_function(|_, args: MultiValue| Ok(args.into_iter().next()))?;
-        for name in [
-            "move_to",
-            "line_to",
-            "quad_to",
-            "curve_to",
-            "close",
-            "rect",
-            "rounded_rect",
-            "circle",
-        ] {
-            p.raw_set(name, chain.clone())?;
-        }
-        Ok(p)
-    })?;
-    gmnb.raw_set("path", path.clone())?;
-    gmnb.raw_set("svg_path", path)?;
-    let picture = |lua: &Lua, size: f64| -> mlua::Result<Table> {
-        let t = lua.create_table()?;
-        t.raw_set("width", size)?;
-        t.raw_set("height", size)?;
-        Ok(t)
-    };
-    gmnb.raw_set(
-        "image",
-        lua.create_function(move |lua, _: MultiValue| picture(lua, 0.0))?,
-    )?;
-    gmnb.raw_set(
-        "noise",
-        lua.create_function(move |lua, spec: Value| {
-            let size = match &spec {
-                Value::Table(t) => match t.raw_get::<Value>("size")? {
-                    Value::Nil => 128.0,
-                    v => number("noise", &v)?.clamp(1.0, 512.0),
-                },
-                _ => 128.0,
-            };
-            picture(lua, f64::from(size))
-        })?,
-    )?;
+/// For an engine that draws nothing (a bare one, in a test): adds no
+/// drawing constructors. A theme's own engine gets the real ones
+/// ([`crate::draw::Api`]).
+pub fn without_drawing(_: &Lua, _: &Table) -> mlua::Result<()> {
     Ok(())
 }
 
@@ -286,18 +290,20 @@ pub fn register(
     let f = |name: &'static str, f: Function| g.raw_set(name, f);
     f(
         "hex",
-        lua.create_function(|lua, text: Value| match &text {
+        light(lua, |lua, text: Value| match &text {
             Value::String(_) => color_table(lua, color_arg("hex", &text)?),
             _ => Err(bad("hex", "expected a string")),
         })?,
     )?;
     f(
         "color",
-        lua.create_function(|lua, c: Value| color_table(lua, color_arg("color", &c)?))?,
+        light(lua, |lua, c: Value| {
+            color_table(lua, color_arg("color", &c)?)
+        })?,
     )?;
     f(
         "rgb",
-        lua.create_function(|lua, (r, g, b, a): (f64, f64, f64, Option<f64>)| {
+        light(lua, |lua, (r, g, b, a): (f64, f64, f64, Option<f64>)| {
             let c = [
                 unit("rgb", r)?,
                 unit("rgb", g)?,
@@ -309,25 +315,27 @@ pub fn register(
     )?;
     f(
         "hsl",
-        lua.create_function(|lua, (h, s, l, a): (f64, f64, f64, Option<f64>)| {
+        light(lua, |lua, (h, s, l, a): (f64, f64, f64, Option<f64>)| {
             let c = color::from_hsl(finite("hsl", h)?, unit("hsl", s)?, unit("hsl", l)?);
             color_table(lua, with_alpha(c, unit("hsl", a.unwrap_or(1.0))?))
         })?,
     )?;
     f(
         "to_hsl",
-        lua.create_function(|_, c: Value| {
+        light(lua, |_, c: Value| {
             let (h, s, l) = color::to_hsl(rgb(color_arg("to_hsl", &c)?));
             Ok((h, s, l))
         })?,
     )?;
     f(
         "to_hex",
-        lua.create_function(|_, c: Value| Ok(color::to_hex(rgb(color_arg("to_hex", &c)?))))?,
+        light(lua, |_, c: Value| {
+            Ok(color::to_hex(rgb(color_arg("to_hex", &c)?)))
+        })?,
     )?;
     f(
         "mix",
-        lua.create_function(|lua, (a, b, t): (Value, Value, f64)| {
+        light(lua, |lua, (a, b, t): (Value, Value, f64)| {
             let (a, b, t) = (
                 color_arg("mix", &a)?,
                 color_arg("mix", &b)?,
@@ -338,7 +346,7 @@ pub fn register(
     )?;
     f(
         "alpha",
-        lua.create_function(|lua, (c, a): (Value, f64)| {
+        light(lua, |lua, (c, a): (Value, f64)| {
             let c = color_arg("alpha", &c)?;
             color_table(
                 lua,
@@ -348,25 +356,27 @@ pub fn register(
     )?;
     f(
         "over",
-        lua.create_function(|lua, (top, bottom): (Value, Value)| {
+        light(lua, |lua, (top, bottom): (Value, Value)| {
             let c = color::over(color_arg("over", &top)?, color_arg("over", &bottom)?);
             color_table(lua, c)
         })?,
     )?;
     f(
         "complement",
-        lua.create_function(|lua, c: Value| {
+        light(lua, |lua, c: Value| {
             let c = color_arg("complement", &c)?;
             color_table(lua, with_alpha(color::complement(rgb(c)), c[3]))
         })?,
     )?;
     f(
         "luminance",
-        lua.create_function(|_, c: Value| Ok(color::luminance(rgb(color_arg("luminance", &c)?))))?,
+        light(lua, |_, c: Value| {
+            Ok(color::luminance(rgb(color_arg("luminance", &c)?)))
+        })?,
     )?;
     f(
         "contrast",
-        lua.create_function(|_, (a, b): (Value, Value)| {
+        light(lua, |_, (a, b): (Value, Value)| {
             Ok(color::contrast(
                 rgb(color_arg("contrast", &a)?),
                 rgb(color_arg("contrast", &b)?),
@@ -375,7 +385,7 @@ pub fn register(
     )?;
     f(
         "worst_contrast",
-        lua.create_function(|_, (c, against): (Value, Value)| {
+        light(lua, |_, (c, against): (Value, Value)| {
             let c = rgb(color_arg("worst_contrast", &c)?);
             let list: Vec<Rgb> = color_list("worst_contrast", &against, 1, 64)?
                 .into_iter()
@@ -386,7 +396,7 @@ pub fn register(
     )?;
     f(
         "with_contrast",
-        lua.create_function(|lua, (c, against, target): (Value, Value, f64)| {
+        light(lua, |lua, (c, against, target): (Value, Value, f64)| {
             let c = color_arg("with_contrast", &c)?;
             let against = rgb(color_arg("with_contrast", &against)?);
             let target = finite("with_contrast", target)?.clamp(1.0, 21.0);
@@ -398,21 +408,25 @@ pub fn register(
     )?;
     f(
         "gradient_for_text",
-        lua.create_function(|lua, (text, a, b, target): (Value, Value, Value, f64)| {
-            let what = "gradient_for_text";
-            let text = rgb(color_arg(what, &text)?);
-            let (a, b) = (color_arg(what, &a)?, color_arg(what, &b)?);
-            let target = finite(what, target)?.clamp(1.0, 21.0);
-            let (a2, b2) = color::gradient_for_text(text, rgb(a), rgb(b), target);
-            Ok((
-                color_table(lua, with_alpha(a2, a[3]))?,
-                color_table(lua, with_alpha(b2, b[3]))?,
-            ))
-        })?,
+        light(
+            lua,
+            |lua, (text, a, b, target): (Value, Value, Value, f64)| {
+                let what = "gradient_for_text";
+                let text = rgb(color_arg(what, &text)?);
+                let (a, b) = (color_arg(what, &a)?, color_arg(what, &b)?);
+                let target = finite(what, target)?.clamp(1.0, 21.0);
+                let (a2, b2) = color::gradient_for_text(text, rgb(a), rgb(b), target);
+                Ok((
+                    color_table(lua, with_alpha(a2, a[3]))?,
+                    color_table(lua, with_alpha(b2, b[3]))?,
+                ))
+            },
+        )?,
     )?;
     f(
         "readable_gradient",
-        lua.create_function(
+        light(
+            lua,
             |lua, (a, b, light, dark, target): (Value, Value, Value, Value, f64)| {
                 let what = "readable_gradient";
                 let (a, b) = (color_arg(what, &a)?, color_arg(what, &b)?);
@@ -430,7 +444,7 @@ pub fn register(
     )?;
     f(
         "base",
-        lua.create_function(|lua, (dark, accent): (bool, Value)| {
+        light(lua, |lua, (dark, accent): (bool, Value)| {
             let accent = match &accent {
                 Value::Nil => None,
                 c => Some(rgb(color_arg("base", c)?)),
@@ -442,7 +456,7 @@ pub fn register(
     for kind in ["linear", "radial", "conic"] {
         f(
             kind,
-            lua.create_function(move |lua, spec: Value| gradient(lua, kind, spec))?,
+            light(lua, move |lua, spec: Value| gradient(lua, kind, spec))?,
         )?;
     }
     g.raw_set(

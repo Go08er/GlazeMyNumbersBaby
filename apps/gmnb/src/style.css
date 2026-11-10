@@ -74,7 +74,8 @@ window.gmnb headerbar {
   background-image: var(--gmnb-header-background-image);
 }
 
-calcdisplay {
+/* (Not a page's own line of a value: widgets/display.rs, `Display::line`.) */
+calcdisplay:not(.wc-line) {
   background-color: var(--gmnb-display-background-color);
   background-image: var(--gmnb-display-background-image);
   border-radius: var(--gmnb-display-radius);
@@ -613,10 +614,7 @@ button.wc-key {
   border: none;
 }
 
-/* (A key's superscripts and subscripts are its label's markup:
-   calculator.rs script_markup.) */
-
-/* control keys.number button.wc-key.wc-num active=.wc-flash,.keyboard-activating icon=pathicon line=1 */
+/* control keys.number button.wc-key.wc-num active=.wc-flash,.keyboard-activating icon=pathicon */
 button.wc-key.wc-num {
   background-color: var(--gmnb-keys-number-background-color);
   background-image: var(--gmnb-keys-number-background-image);
@@ -633,7 +631,6 @@ button.wc-key.wc-num {
   min-height: var(--gmnb-keys-number-min-height);
   font-family: var(--gmnb-keys-number-font-family);
   font-size: var(--gmnb-keys-number-font-size);
-  line-height: var(--gmnb-keys-number-line-height);
   font-weight: var(--gmnb-keys-number-font-weight);
   font-style: var(--gmnb-keys-number-font-style);
   letter-spacing: var(--gmnb-keys-number-letter-spacing);
@@ -642,9 +639,6 @@ button.wc-key.wc-num {
 }
 button.wc-key.wc-num pathicon {
   color: var(--gmnb-keys-number-icon-color);
-}
-button.wc-key.wc-num label {
-  padding-top: var(--gmnb-keys-number-text-nudge);
 }
 button.wc-key.wc-num:hover {
   background-color: var(--gmnb-keys-number-hover-background-color);
@@ -782,7 +776,7 @@ button.wc-key.wc-num:checked:disabled pathicon {
 }
 /* end control */
 
-/* control keys.func button.wc-key.wc-fn active=.wc-flash,.keyboard-activating checked=:checked,.wc-on icon=pathicon line=1 */
+/* control keys.func button.wc-key.wc-fn active=.wc-flash,.keyboard-activating checked=:checked,.wc-on icon=pathicon */
 button.wc-key.wc-fn {
   background-color: var(--gmnb-keys-func-background-color);
   background-image: var(--gmnb-keys-func-background-image);
@@ -799,7 +793,6 @@ button.wc-key.wc-fn {
   min-height: var(--gmnb-keys-func-min-height);
   font-family: var(--gmnb-keys-func-font-family);
   font-size: var(--gmnb-keys-func-font-size);
-  line-height: var(--gmnb-keys-func-line-height);
   font-weight: var(--gmnb-keys-func-font-weight);
   font-style: var(--gmnb-keys-func-font-style);
   letter-spacing: var(--gmnb-keys-func-letter-spacing);
@@ -808,9 +801,6 @@ button.wc-key.wc-fn {
 }
 button.wc-key.wc-fn pathicon {
   color: var(--gmnb-keys-func-icon-color);
-}
-button.wc-key.wc-fn label {
-  padding-top: var(--gmnb-keys-func-text-nudge);
 }
 button.wc-key.wc-fn:hover {
   background-color: var(--gmnb-keys-func-hover-background-color);
@@ -962,7 +952,7 @@ button.wc-key.wc-fn.wc-on:disabled pathicon {
 }
 /* end control */
 
-/* control keys.operator button.wc-key.wc-op active=.wc-flash,.keyboard-activating icon=pathicon line=1 */
+/* control keys.operator button.wc-key.wc-op active=.wc-flash,.keyboard-activating icon=pathicon */
 button.wc-key.wc-op {
   background-color: var(--gmnb-keys-operator-background-color);
   background-image: var(--gmnb-keys-operator-background-image);
@@ -979,7 +969,6 @@ button.wc-key.wc-op {
   min-height: var(--gmnb-keys-operator-min-height);
   font-family: var(--gmnb-keys-operator-font-family);
   font-size: var(--gmnb-keys-operator-font-size);
-  line-height: var(--gmnb-keys-operator-line-height);
   font-weight: var(--gmnb-keys-operator-font-weight);
   font-style: var(--gmnb-keys-operator-font-style);
   letter-spacing: var(--gmnb-keys-operator-letter-spacing);
@@ -988,9 +977,6 @@ button.wc-key.wc-op {
 }
 button.wc-key.wc-op pathicon {
   color: var(--gmnb-keys-operator-icon-color);
-}
-button.wc-key.wc-op label {
-  padding-top: var(--gmnb-keys-operator-text-nudge);
 }
 button.wc-key.wc-op:hover {
   background-color: var(--gmnb-keys-operator-hover-background-color);
@@ -1128,7 +1114,7 @@ button.wc-key.wc-op:checked:disabled pathicon {
 }
 /* end control */
 
-/* control keys.equals button.wc-key.wc-eq active=.wc-flash,.keyboard-activating icon=pathicon line=1 */
+/* control keys.equals button.wc-key.wc-eq active=.wc-flash,.keyboard-activating icon=pathicon */
 button.wc-key.wc-eq {
   background-color: var(--gmnb-keys-equals-background-color);
   background-image: var(--gmnb-keys-equals-background-image);
@@ -1145,7 +1131,6 @@ button.wc-key.wc-eq {
   min-height: var(--gmnb-keys-equals-min-height);
   font-family: var(--gmnb-keys-equals-font-family);
   font-size: var(--gmnb-keys-equals-font-size);
-  line-height: var(--gmnb-keys-equals-line-height);
   font-weight: var(--gmnb-keys-equals-font-weight);
   font-style: var(--gmnb-keys-equals-font-style);
   letter-spacing: var(--gmnb-keys-equals-letter-spacing);
@@ -1154,9 +1139,6 @@ button.wc-key.wc-eq {
 }
 button.wc-key.wc-eq pathicon {
   color: var(--gmnb-keys-equals-icon-color);
-}
-button.wc-key.wc-eq label {
-  padding-top: var(--gmnb-keys-equals-text-nudge);
 }
 button.wc-key.wc-eq:hover {
   background-color: var(--gmnb-keys-equals-hover-background-color);
@@ -3552,12 +3534,13 @@ label.wc-subresult {
 }
 /* end text */
 
-/* The results (widgets/fit.rs draws them at the style's font). */
-fitlabel.wc-date-result {
+/* The results (widgets/display.rs draws them at the style's font, or the
+   theme's display layer does). */
+calcdisplay.wc-date-result {
   color: var(--gmnb-window-color);
 }
 
-fitlabel.wc-date-result.wc-error {
+calcdisplay.wc-date-result.wc-error {
   color: var(--error-color);
 }
 
@@ -4874,13 +4857,14 @@ window.gmnb.own-button .wc-inert dialog button:not(.flat):not(.circular):not(.im
   background-repeat: no-repeat;
 }
 
-/* The values (widgets/fit.rs draws them at the style's font). */
-fitlabel.wc-conv-value {
+/* The values (widgets/display.rs draws them at the style's font, or the
+   theme's display layer does). */
+calcdisplay.wc-conv-value {
   color: var(--gmnb-window-color);
 }
 
 /* A value the keyboard's focus is on (Tab; Space or Enter picks it). */
-.wc-conv-field fitlabel.wc-conv-value:focus-visible {
+.wc-conv-field calcdisplay.wc-conv-value:focus-visible {
   outline-style: solid;
   outline-width: var(--gmnb-converter-value-focus-width);
   outline-color: var(--gmnb-converter-value-focus-color);

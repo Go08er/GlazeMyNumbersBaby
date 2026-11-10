@@ -9,23 +9,21 @@
 # the bits (GMNB_BITS=1; DGMNB_CLICKS='62,260;600,500', its bit-keypad
 # switch, then the pointer off it); standard at 360x600 (small).
 #
-# Excluded, as not the chrome's: the readout (widgets/display.rs); the
-# keypad where DGMNB's cells fall on fractions of a pixel (Scientific and
-# Programmer: five columns of 85.6 px; Standard at 360x600: rows of
-# 61.3 px), whose labels widgets/keypad.rs places on GTK's whole-pixel
-# grid; and the app's name in the sidebar's header (GMNB, DGMNB), which
-# docs/theming.md excludes.
-dgmnb-standard-d0 gmnb-standard-d0 exclude=8,50,444,116
-dgmnb-standard-d1 gmnb-standard-d1 exclude=8,50,444,116
-dgmnb-standard-d0-keys gmnb-standard-d0-keys exclude=8,50,444,116
-dgmnb-standard-d1-keys gmnb-standard-d1-keys exclude=8,50,444,116
-dgmnb-scientific-d0 gmnb-scientific-d0 exclude=8,50,444,104 exclude=8,260,444,372
-dgmnb-scientific-d1 gmnb-scientific-d1 exclude=8,50,444,104 exclude=8,260,444,372
-dgmnb-programmer-d0 gmnb-programmer-d0 exclude=8,50,444,84 exclude=8,282,444,350
-dgmnb-programmer-d1 gmnb-programmer-d1 exclude=8,50,444,84 exclude=8,282,444,350
-dgmnb-bits-d0 gmnb-bits-d0 exclude=8,50,444,84
-dgmnb-bits-d1 gmnb-bits-d1 exclude=8,50,444,84
-dgmnb-small-d0 gmnb-small-d0 exclude=8,50,344,116 exclude=8,204,344,388
-dgmnb-small-d1 gmnb-small-d1 exclude=8,50,344,116 exclude=8,204,344,388
-dgmnb-nav-d0 gmnb-nav-d0 exclude=8,50,444,116 exclude=47,10,78,26
-dgmnb-nav-d1 gmnb-nav-d1 exclude=8,50,444,116 exclude=47,10,78,26
+# Excluded: the app's name in the sidebar's header (GMNB, DGMNB), which
+# docs/theming.md excludes. (The readout, widgets/display.rs, and the
+# keypads, widgets/keypad.rs, are compared with the rest: their text is
+# set as DGMNB sets it, the keys' labels about DGMNB's fractional cells.)
+dgmnb-standard-d0 gmnb-standard-d0
+dgmnb-standard-d1 gmnb-standard-d1
+dgmnb-standard-d0-keys gmnb-standard-d0-keys
+dgmnb-standard-d1-keys gmnb-standard-d1-keys
+dgmnb-scientific-d0 gmnb-scientific-d0
+dgmnb-scientific-d1 gmnb-scientific-d1
+dgmnb-programmer-d0 gmnb-programmer-d0
+dgmnb-programmer-d1 gmnb-programmer-d1
+dgmnb-bits-d0 gmnb-bits-d0
+dgmnb-bits-d1 gmnb-bits-d1
+dgmnb-small-d0 gmnb-small-d0
+dgmnb-small-d1 gmnb-small-d1
+dgmnb-nav-d0 gmnb-nav-d0 exclude=47,10,78,26
+dgmnb-nav-d1 gmnb-nav-d1 exclude=47,10,78,26

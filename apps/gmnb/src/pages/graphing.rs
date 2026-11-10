@@ -640,14 +640,8 @@ impl GraphingPage {
                 b.connect_clicked(move |b| {
                     if let Some(p) = weak.upgrade() {
                         p.insert_text(&insert);
-                        let a = p.ctx.hub.style().tokens.colors.accent;
-                        p.ctx.pulse_at(
-                            b,
-                            b.width() as f32 / 2.0,
-                            b.height() as f32 / 2.0,
-                            [a[0], a[1], a[2]],
-                            0.4,
-                        );
+                        let key = crate::layers::Source::Key;
+                        p.ctx.hub.layers().pressed(b, key, None);
                     }
                 });
                 pad.attach(&b, c as i32, r as i32, 1, 1);

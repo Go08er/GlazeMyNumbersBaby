@@ -93,6 +93,35 @@ impl Style {
         }
     }
 
+    pub fn paint(&self, path: &str) -> Option<&Paint> {
+        match self.get(path) {
+            Some(Value::Paint(p)) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn font(&self, path: &str) -> Option<&Font> {
+        match self.get(path) {
+            Some(Value::Font(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn text(&self, path: &str) -> Option<&Text> {
+        match self.get(path) {
+            Some(Value::Text(t)) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// One part of a table of named parts (`display.sizes`, `standard`).
+    pub fn part(&self, path: &str, name: &str) -> Option<&Value> {
+        match self.get(path) {
+            Some(Value::Record(parts)) => parts.get(name),
+            _ => None,
+        }
+    }
+
     pub fn icon(&self, path: &str) -> Option<Icon> {
         match self.get(path) {
             Some(Value::Icon(i)) => Some(*i),

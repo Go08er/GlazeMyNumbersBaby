@@ -38,8 +38,10 @@
 //! # Limits
 //!
 //! Every entry into the VM, the load and each hook call, runs under a
-//! deadline (an interrupt checks it at every loop and call), and stays under
-//! it until the host call returns: a script that catches the timeout error
+//! deadline (an interrupt checks it at every loop and call). The limit is
+//! of processor time, what the thread has run, so a machine busy with
+//! other things doesn't fail a theme that did nothing slow. The entry stays
+//! under its deadline until the host call returns: a script that catches the timeout error
 //! with `pcall` is stopped at its next loop or call, coroutines included,
 //! and a call that returns after its deadline (one long library call, which
 //! Luau can't interrupt) is a [`ThemeError::Timeout`] too. Several calls
@@ -67,9 +69,15 @@
 pub mod check;
 mod convert;
 pub mod css;
+pub mod draw;
 mod engine;
 mod error;
+pub mod events;
+pub mod layer;
 pub mod library;
+pub mod path;
+pub mod picture;
+pub mod sched;
 pub mod schema;
 pub mod sound;
 pub mod states;
@@ -83,6 +91,7 @@ pub mod writer;
 use std::time::Duration;
 
 pub use check::{Note, Notes};
+pub use draw::{DisplayList, DrawLimits, Op, TextMeasure};
 pub use engine::{Engine, HostTable, Log, Span};
 pub use error::ThemeError;
 pub use style::{Resolved, Style, resolve};
@@ -140,6 +149,8 @@ pub struct Limits {
     pub string_bytes: usize,
     /// All strings and map keys of a converted tree together, in bytes.
     pub total_string_bytes: usize,
+    /// The draw API's caps.
+    pub draw: DrawLimits,
 }
 
 impl Default for Limits {
@@ -164,6 +175,7 @@ impl Default for Limits {
             nodes: 20_000,
             string_bytes: 4 << 10,
             total_string_bytes: 1 << 20,
+            draw: DrawLimits::default(),
         }
     }
 }

@@ -17,6 +17,7 @@ use gtk::{gio, glib};
 use unitconv::{ConverterMode, NetworkAccessBehavior, UnitConverterViewModel};
 
 use super::{Ctx, Page};
+use crate::widgets::display::{Change, Display};
 use crate::widgets::fit::{FitLabel, Prefix, SizeBin, Texts, pango_font};
 use crate::widgets::icon::{PathIcon, paths};
 use crate::widgets::keypad::Keypad;
@@ -30,8 +31,8 @@ struct Field {
     /// the one typed into), with the marker under its value.
     frame: gtk::Box,
     /// The value, after the currency's symbol (its prefix) when there
-    /// is one.
-    value: FitLabel,
+    /// is one: a readout to a theme's `display` layer.
+    value: Display,
     dropdown: gtk::DropDown,
 }
 
@@ -73,7 +74,7 @@ pub struct ConverterPage {
 fn field(label: &str) -> Field {
     // A control too: picked (pointer or assistive technology), it is the
     // field typed into.
-    let value = FitLabel::button();
+    let value = Display::line_button();
     value.add_css_class("wc-conv-value");
     value.set_hexpand(true);
     // The marker: a bar at the bottom left, drawn as a sized background
@@ -373,13 +374,6 @@ impl ConverterPage {
         });
 
         {
-            // The keypad's own effects (TRANSITION: the layers' business).
-            let weak = Rc::downgrade(&page);
-            ctx.hub.subscribe(move |s| {
-                if let Some(p) = weak.upgrade() {
-                    p.keypad.set_scheme(*s);
-                }
-            });
             ctx.hub
                 .subscribe_style(&page.keypad, |pad, style| pad.set_style(style));
             let weak = Rc::downgrade(&page);
@@ -397,14 +391,14 @@ impl ConverterPage {
                     }
                     p.style.replace(Some(style.clone()));
                     p.lay_out();
-                    p.sync();
+                    p.sync(Change::None, Change::None);
                 }
             });
         }
         let weak = Rc::downgrade(&page);
         keypad.connect_pressed(move |id, x, y| {
             if let Some(p) = weak.upgrade() {
-                p.ctx.pulse_at(&p.keypad, x, y, accent(&p.ctx), 0.55);
+                p.ctx.hub.layers().key_pressed(&p.keypad, id, Some((x, y)));
                 p.press(id);
             }
         });
@@ -423,7 +417,7 @@ impl ConverterPage {
                                 vm.activate_value2();
                             }
                         }
-                        p.sync();
+                        p.sync(Change::None, Change::None);
                     }
                 })
             };
@@ -464,7 +458,7 @@ impl ConverterPage {
                 }
                 if p.ctx.layers.covers(d) {
                     // Covered, the unit stays (R15-M-02): back to the VM's.
-                    p.sync();
+                    p.sync(Change::None, Change::None);
                     return;
                 }
                 let Some(&id) = p.unit_ids.borrow().get(d.selected() as usize) else {
@@ -478,7 +472,7 @@ impl ConverterPage {
                         vm.set_unit2(id);
                     }
                 }
-                p.sync();
+                p.sync(Change::Replace, Change::Result);
             });
         }
         {
@@ -486,14 +480,9 @@ impl ConverterPage {
             swap.connect_clicked(move |b| {
                 if let Some(p) = weak.upgrade() {
                     p.vm.borrow_mut().swap_units();
-                    p.ctx.pulse_at(
-                        b,
-                        b.width() as f32 / 2.0,
-                        b.height() as f32 / 2.0,
-                        accent(&p.ctx),
-                        1.0,
-                    );
-                    p.sync();
+                    let swap = crate::layers::Source::Swap;
+                    p.ctx.hub.layers().pressed(b, swap, None);
+                    p.sync(Change::Result, Change::Result);
                 }
             });
         }
@@ -530,7 +519,7 @@ impl ConverterPage {
                         p.fetch_currency();
                     }
                 }
-                p.sync();
+                p.sync(Change::None, Change::None);
             });
         }
         {
@@ -592,7 +581,7 @@ impl ConverterPage {
             return;
         };
         self.vm.borrow_mut().button_pressed(cmd);
-        self.sync();
+        self.sync(Change::Typing, Change::Replace);
     }
 
     fn fetch_currency(self: &Rc<Self>) {
@@ -612,7 +601,7 @@ impl ConverterPage {
                 p.spinner.set_visible(false);
                 p.refresh.set_sensitive(true);
                 p.rebuild_units();
-                p.sync();
+                p.sync(Change::Replace, Change::Result);
             }
         });
     }
@@ -636,8 +625,10 @@ impl ConverterPage {
         self.syncing.set(false);
     }
 
-    /// Push VM state into widgets.
-    fn sync(&self) {
+    /// Push VM state into widgets. `active` and `other`: how the value
+    /// typed into and the one converted to have changed, for a theme's
+    /// `display` layer (and its `result` event).
+    fn sync(&self, active: Change, other: Change) {
         let style = self.style.borrow().clone();
         let value_font = style.as_deref().and_then(value_font);
         let unit_font = style
@@ -665,7 +656,8 @@ impl ConverterPage {
                 vm.value2_automation_name(),
             ),
         ] {
-            f.value.set_text(value);
+            f.value
+                .set_value(value, if is_active { active } else { other }, false);
             if let Some((font, checked_weight)) = &value_font {
                 let font = Font {
                     weight: if is_active {
@@ -798,7 +790,7 @@ impl Page for ConverterHandle {
         p.showing.set(true);
         p.vm.borrow_mut().set_current_mode(cm);
         p.rebuild_units();
-        p.sync();
+        p.sync(Change::Replace, Change::Replace);
         p.lay_out();
         p.keypad.cascade();
         if cm == ConverterMode::Currency {
@@ -823,8 +815,8 @@ impl Page for ConverterHandle {
         {
             return true;
         }
-        if let Some((x, y)) = p.keypad.flash(id) {
-            p.ctx.pulse_at(&p.keypad, x, y, accent(&p.ctx), 0.5);
+        if p.keypad.flash(id).is_some() {
+            p.ctx.hub.layers().key_pressed(&p.keypad, id, None);
         }
         p.press(id);
         true
@@ -844,7 +836,7 @@ impl Page for ConverterHandle {
 
     fn paste(&self, text: &str) {
         appcore::converter::paste(&mut self.0.vm.borrow_mut(), text);
-        self.0.sync();
+        self.0.sync(Change::Replace, Change::Result);
     }
 
     fn save(&self) {
@@ -870,12 +862,6 @@ fn value_font(style: &Style) -> Option<(Font, f32)> {
         ..font.clone()
     };
     Some((font, *weight as f32))
-}
-
-/// The accent, for a press's event (the layers' business).
-fn accent(ctx: &Ctx) -> [f32; 3] {
-    let a = ctx.hub.style().tokens.colors.accent;
-    [a[0], a[1], a[2]]
 }
 
 impl ConverterPage {

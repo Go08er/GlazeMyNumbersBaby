@@ -22,7 +22,7 @@ fn ctx(dark: bool, opacity: f32) -> Ctx {
 /// What a script's `return …` converts to, with the `gmnb` library there.
 fn value(src: &str) -> ThemeValue {
     let engine = Engine::with_globals(Limits::default(), |lua| {
-        gmnb_theme::library::register(lua, gmnb_theme::library::placeholder_drawing)
+        gmnb_theme::library::register(lua, gmnb_theme::library::without_drawing)
     })
     .unwrap();
     engine.load("=style", src).unwrap()

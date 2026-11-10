@@ -6,10 +6,15 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use std::cell::RefCell;
+
 use mlua::{Lua, Table, Value};
 
-use crate::check::{Notes, parse_hex};
+use crate::check::{Note, Notes, parse_hex};
+use crate::draw::{self, DisplayList};
+use crate::layer::{self, Drawn, Failure, Frame, Frames, LayerKind};
 use crate::library::{self, API};
+use crate::picture::Pictures;
 use crate::style::{Resolved, resolve};
 use crate::tokens::{Colors, Ctx, OptionValue, Tokens};
 use crate::{Budget, Engine, FunctionHandle, HostTable, Limits, ThemeError, ThemeValue};
@@ -398,8 +403,7 @@ pub fn complete_options(
         .collect()
 }
 
-/// A draw layer's hooks. Drawing is the next layer of the engine: here
-/// they are only kept.
+/// A draw layer's hooks ([`Theme::draw`] runs them).
 #[derive(Clone, Debug, Default)]
 pub struct Layer {
     pub draw: Option<FunctionHandle>,
@@ -412,7 +416,7 @@ pub struct Layer {
 }
 
 pub const LAYERS: [&str; 4] = ["background", "keypad", "display", "overlay"];
-pub const EVENTS: [&str; 5] = ["press", "result", "error", "show", "option"];
+pub const EVENTS: [&str; 6] = ["press", "result", "error", "show", "option", "mode"];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Credit {
@@ -845,8 +849,16 @@ pub struct Theme {
     pub notes: Notes,
     engine: Engine,
     ctx: HostTable,
+    /// What the `ctx` table holds now: it is refilled only for another.
+    ctx_filled: RefCell<Option<Ctx>>,
     /// The `ctx` the style was last worked out for, and what came of it.
     last: Option<(Ctx, Resolved)>,
+    /// The draw API: the `draw` table, the recorder and the pictures.
+    api: draw::Api,
+    /// The tables frames are told through.
+    frames: RefCell<Frames>,
+    /// What a preview is told.
+    preview: HostTable,
 }
 
 /// One theme of the Settings list.
@@ -877,31 +889,40 @@ impl Theme {
     /// Runs the theme's file, once, in a sandbox of its own, and checks
     /// the table it returns.
     pub fn load(source: Source, limits: Limits) -> Result<Theme, LoadError> {
-        Theme::load_with(source, limits, library::placeholder_drawing)
-    }
-
-    /// [`Theme::load`], with the draw API's constructors registered by
-    /// `drawing` (see [`library::register`]).
-    pub fn load_with(
-        source: Source,
-        limits: Limits,
-        drawing: impl FnOnce(&Lua, &Table) -> mlua::Result<()>,
-    ) -> Result<Theme, LoadError> {
         let text = source.text(limits.source_bytes)?;
-        let engine = Engine::with_globals(limits, |lua| library::register(lua, drawing))
-            .map_err(LoadError::Script)?;
+        let pictures = Pictures::new(source.clone(), limits.draw.clone());
+        let draw_limits = limits.draw.clone();
+        let mut api = None;
+        let engine = Engine::with_globals(limits, |lua| {
+            library::register(lua, |lua, gmnb| {
+                api = Some(draw::Api::register(lua, gmnb, draw_limits, pictures)?);
+                Ok(())
+            })
+        })
+        .map_err(LoadError::Script)?;
+        let Some(api) = api else {
+            return Err(LoadError::Script(ThemeError::Internal(
+                "the draw API wasn't registered".into(),
+            )));
+        };
         let name = format!("@{}/{THEME_FILE}", source.id);
         let value = engine.load(&name, &text).map_err(LoadError::Script)?;
         let mut notes = Notes::default();
         let def = parse(&value, &mut notes)?;
         let ctx = engine.host_table(0, 8).map_err(LoadError::Script)?;
+        let frames = Frames::new(&engine).map_err(LoadError::Script)?;
+        let preview = engine.host_table(0, 3).map_err(LoadError::Script)?;
         let mut theme = Theme {
             source,
             def,
             notes,
             engine,
             ctx,
+            ctx_filled: RefCell::new(None),
             last: None,
+            api,
+            frames: RefCell::new(frames),
+            preview,
         };
         theme.check_files();
         Ok(theme)
@@ -991,8 +1012,19 @@ impl Theme {
         self.engine.take_log().lines
     }
 
-    /// `ctx` as the theme sees it: refilled in place, read-only.
+    /// `ctx` as the theme sees it: refilled in place when it changed,
+    /// read-only.
     fn fill_ctx(&self, ctx: &Ctx) -> Result<(), ThemeError> {
+        if self.ctx_filled.borrow().as_ref() == Some(ctx) {
+            return Ok(());
+        }
+        self.ctx_filled.replace(None);
+        self.write_ctx(ctx)?;
+        self.ctx_filled.replace(Some(ctx.clone()));
+        Ok(())
+    }
+
+    fn write_ctx(&self, ctx: &Ctx) -> Result<(), ThemeError> {
         let lua = self.engine.lua();
         self.engine.fill(&self.ctx, |t| {
             let base = Tokens::base(ctx);
@@ -1116,6 +1148,166 @@ impl Theme {
             }
         }
         Ok(out)
+    }
+
+    // ---- Drawing -----------------------------------------------------------------
+
+    /// The theme's `layers` entry for `kind`, if it has one.
+    pub fn layer(&self, kind: LayerKind) -> Option<&Layer> {
+        self.def.layers.get(kind.name())
+    }
+
+    /// Whether `kind` has a `draw` hook that is still called.
+    pub fn draws(&self, kind: LayerKind) -> bool {
+        self.layer(kind)
+            .and_then(|l| l.draw.as_ref())
+            .is_some_and(|f| !f.is_disabled())
+    }
+
+    /// The draw API's state: the theme's pictures, and what measures
+    /// text.
+    pub fn api(&self) -> &draw::Api {
+        &self.api
+    }
+
+    /// What `draw:text` fonts are laid onto: the last style's body text.
+    fn sync_base_font(&self) {
+        if let Some((_, resolved)) = &self.last {
+            self.api.set_base_font(&resolved.style.tokens.text.body);
+        }
+    }
+
+    /// Runs a layer's hooks for one frame: `place` for each cell of a
+    /// keypad (not under reduced motion; all of them within
+    /// [`Limits::place`]), then `draw` (within [`Limits::frame`]).
+    ///
+    /// A `draw` that fails, runs out of time or goes over a cap draws
+    /// nothing and counts against the hook: after [`Limits::strikes`]
+    /// failures, or one that ran four times its limit, the hook is off
+    /// ([`Failure::Off`]) until the theme is loaded again.
+    pub fn draw(&self, kind: LayerKind, ctx: &Ctx, frame: &Frame) -> Result<Drawn, Failure> {
+        let Some(layer) = self.layer(kind) else {
+            return Err(Failure::Off);
+        };
+        let Some(hook) = layer.draw.as_ref().filter(|f| !f.is_disabled()) else {
+            return Err(Failure::Off);
+        };
+        self.fill_ctx(ctx).map_err(Failure::Failed)?;
+        self.sync_base_font();
+        let mut frames = self.frames.borrow_mut();
+        frames
+            .fill(&self.engine, frame, self.ctx.table())
+            .map_err(Failure::Failed)?;
+        let mut drawn = Drawn::default();
+        if let (Some(place), Some(keys), true) = (&layer.place, &frame.keys, frame.motion)
+            && !place.is_disabled()
+        {
+            let span = self.engine.span(Budget::Place);
+            let mut places = Vec::with_capacity(keys.cells.len());
+            for i in 0..keys.cells.len() {
+                let Some(cell) = frames.cell(keys.pad, i) else {
+                    break;
+                };
+                match self.engine.call_in(place, &span, (cell, frames.table())) {
+                    Ok(v) => places.push(layer::placement(&v)),
+                    // One failure ends this frame's placing: the cells
+                    // stay where they are.
+                    Err(_) => {
+                        places.clear();
+                        break;
+                    }
+                }
+            }
+            drawn.places = places;
+        }
+        let glyphs = frame.value.as_ref().map_or([0, 0], |v| {
+            [
+                v.glyphs.glyphs.len() as u32,
+                v.previous.map_or(0, |p| p.glyphs.len() as u32),
+            ]
+        });
+        self.api.begin(glyphs);
+        let result = self
+            .engine
+            .call(hook, Budget::Frame, (self.api.table(), frames.table()));
+        let again = match result {
+            Ok(v) => v,
+            Err(e) => {
+                self.api.abandon();
+                return Err(Failure::Failed(e));
+            }
+        };
+        match self.api.finish() {
+            Ok(list) => drawn.list = list,
+            Err(cap) => {
+                self.engine.strike(hook);
+                return Err(Failure::Failed(ThemeError::Limit(cap)));
+            }
+        }
+        drawn.again = again.as_f64();
+        Ok(drawn)
+    }
+
+    /// Draws the tile of one choice of a `choice` option with a
+    /// `preview`: a still picture of [`layer::PREVIEW_SIZE`].
+    pub fn preview(
+        &self,
+        option: &OptionDef,
+        choice: &str,
+        ctx: &Ctx,
+    ) -> Result<DisplayList, ThemeError> {
+        let OptionKind::Choice {
+            preview: Some(hook),
+            ..
+        } = &option.kind
+        else {
+            return Err(ThemeError::Unsupported("the option has no preview".into()));
+        };
+        self.fill_ctx(ctx)?;
+        self.sync_base_font();
+        let (w, h) = layer::PREVIEW_SIZE;
+        layer::preview_table(&self.engine, &self.preview, w, h, self.ctx.table())?;
+        self.api.begin([0, 0]);
+        let result = self.engine.call(
+            hook,
+            Budget::Preview,
+            (self.api.table(), self.preview.table(), choice),
+        );
+        if let Err(e) = result {
+            self.api.abandon();
+            return Err(e);
+        }
+        self.api.finish().map_err(|cap| {
+            self.engine.strike(hook);
+            ThemeError::Limit(cap)
+        })
+    }
+
+    /// What the theme's author should know of its drawing since the last
+    /// call: each message once in the theme's life.
+    pub fn take_draw_notes(&self) -> Vec<Note> {
+        self.api
+            .take_notes()
+            .into_iter()
+            .map(|message| Note {
+                path: "draw".into(),
+                message,
+            })
+            .collect()
+    }
+
+    /// Each hook of the theme's layers: its name, its failures so far and
+    /// whether it has been switched off.
+    pub fn hooks(&self) -> Vec<(String, u32, bool)> {
+        let mut out = Vec::new();
+        for (name, layer) in &self.def.layers {
+            for (hook, f) in [("draw", &layer.draw), ("place", &layer.place)] {
+                if let Some(f) = f {
+                    out.push((format!("{name}.{hook}"), f.strikes(), f.is_disabled()));
+                }
+            }
+        }
+        out
     }
 }
 
