@@ -582,7 +582,10 @@ pub fn apply_backdrop(backdrop: &Backdrop, alpha: f32) {
 /// What the theme hub starts with: the saved settings, and what the
 /// environment asks of this run (docs/theming.md, "Environment hooks"),
 /// which is never saved.
-fn theme_config(settings: &crate::settings::Settings) -> crate::theme::Config {
+fn theme_config(
+    settings: &crate::settings::Settings,
+    built_ins: crate::theme::BuiltIns,
+) -> crate::theme::Config {
     use gmnb_theme::theme::{BUILT_IN, DEV_ID};
     let env = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
     let mut run_options = Vec::new();
@@ -629,6 +632,7 @@ fn theme_config(settings: &crate::settings::Settings) -> crate::theme::Config {
         dev_dir,
         sound: settings.sound,
         sound_volume: crate::settings::sound_volume(settings.sound_volume),
+        built_ins,
     }
 }
 
@@ -663,10 +667,14 @@ impl Window {
             (d.width, d.height) = size;
         }
 
+        // The built-in themes in the themes folder, before a theme is
+        // chosen from it (a screenshot's run writes nothing).
+        let built_ins = crate::theme::install_built_ins(&store, !ephemeral);
+        crate::launch::mark("built-in-themes");
         let settings = store.data.borrow().clone();
         apply_theme_setting(&settings.theme);
         match_text_rendering();
-        let hub = Hub::new(theme_config(&settings));
+        let hub = Hub::new(theme_config(&settings, built_ins));
         crate::theme::follow_portal_accent(&hub);
 
         // Saved (or overridden) sizes are hints: keep them to what a window

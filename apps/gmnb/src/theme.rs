@@ -12,7 +12,7 @@
 //! and is what Settings' Sound rows ask and tell.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Instant;
@@ -21,7 +21,9 @@ use gmnb_theme::draw::DisplayList;
 use gmnb_theme::events::{Event, EventKind, Page};
 use gmnb_theme::layer::{Drawn, Failure, Frame, LayerKind};
 use gmnb_theme::theme::{self as themes, Action, FontFile, OptionDef, Origin, Source, Theme};
-use gmnb_theme::{Ctx, Limits, Note, OptionValue, Style, TextMeasure, Update, Writer, css, schema};
+use gmnb_theme::{
+    Ctx, Limits, Note, OptionValue, Style, TextMeasure, Update, Writer, css, install, schema,
+};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
@@ -65,6 +67,20 @@ pub struct Config {
     /// Settings' *Theme sounds* and its volume (0 to 1).
     pub sound: bool,
     pub sound_volume: f32,
+    /// What became of the built-in themes as GMNB started.
+    pub built_ins: BuiltIns,
+}
+
+/// What GMNB has made of its built-in themes this run
+/// ([`install_built_ins`]).
+#[derive(Clone, Debug, Default)]
+pub struct BuiltIns {
+    /// Those whose folder couldn't be written: GMNB's own copies stand in
+    /// for them.
+    pub embedded: Vec<String>,
+    /// Those GMNB has written into the themes folder (Settings marks
+    /// them "Comes with GMNB").
+    pub installed: BTreeSet<String>,
 }
 
 /// One theme of Settings' list.
@@ -73,8 +89,9 @@ pub struct Listed {
     pub id: String,
     pub name: String,
     pub description: String,
-    /// The user's folder replaces a built-in theme of the same id.
-    pub your_copy: bool,
+    /// A theme GMNB comes with: a folder it wrote into the themes folder,
+    /// or its own copy standing in for one.
+    pub comes_with: bool,
     /// Why it doesn't load, if it doesn't.
     pub error: Option<String>,
 }
@@ -128,6 +145,12 @@ pub struct Hub {
     portal_accent: Cell<Option<Option<[f32; 3]>>>,
     portal_watch: RefCell<Option<gio::SignalSubscription>>,
     dev_dir: Option<PathBuf>,
+    /// What became of the built-in themes: those served from GMNB's own
+    /// copies, and those it wrote into the themes folder.
+    built_ins: RefCell<BuiltIns>,
+    /// The chosen theme isn't installed (its folder is gone, or never
+    /// was): it is loaded when it is back.
+    missing: Cell<bool>,
     style: RefCell<Rc<Style>>,
     writer: RefCell<Writer>,
     main: gtk::CssProvider,
@@ -172,9 +195,72 @@ thread_local! {
 /// The app's name for the base look in Settings.
 pub const BASE_NAME: &str = "GMNB";
 
-/// `$XDG_DATA_HOME/gmnb/themes`: where the user's themes live.
+/// `$XDG_DATA_HOME/gmnb/themes`, the themes folder: where every theme
+/// lives, those GMNB comes with too (in the Flatpak, in the app's own data
+/// folder).
 pub fn user_dir() -> PathBuf {
     glib::user_data_dir().join(crate::DATA_DIR).join("themes")
+}
+
+/// The built-in themes in the themes folder as GMNB starts
+/// (`gmnb_theme::install::install`): each one never written there is
+/// written, one a newer GMNB carries changed replaces a folder that is
+/// still as GMNB wrote it, and what was written is saved in `store`. What
+/// went wrong is said on stderr. `write` false (a run that touches no
+/// saved state: a screenshot's): nothing is written, and GMNB's own copies
+/// stand in for the built-in themes that have no folder.
+pub fn install_built_ins(store: &crate::settings::Store, write: bool) -> BuiltIns {
+    use crate::settings::Persist;
+    let dir = user_dir();
+    let record = store.data.borrow().built_in_record();
+    if !write {
+        return BuiltIns {
+            embedded: install::missing(&dir, &themes::BUILT_IN),
+            installed: record.into_keys().collect(),
+        };
+    }
+    let pass = install::install(&dir, &themes::BUILT_IN, &record);
+    for line in &pass.failed {
+        eprintln!("gmnb: {line}");
+    }
+    let changed = store.data.borrow_mut().set_built_in_record(&pass.record);
+    if changed {
+        store.persist();
+    }
+    BuiltIns {
+        embedded: pass.embedded,
+        installed: pass.record.into_keys().collect(),
+    }
+}
+
+/// Settings' *Restore built-in themes*: the folder of each built-in theme
+/// that has none is written, and saved in `store`; a folder that is there
+/// is never written to (a chosen theme that was missing is then the
+/// caller's to load: [`Hub::sync_installed`]). What went wrong, a line
+/// each (also on stderr); GMNB's own copy stands in for a theme whose
+/// folder couldn't be written.
+pub fn restore_built_ins(store: &crate::settings::Store, hub: &Hub) -> Vec<String> {
+    use crate::settings::Persist;
+    let record = store.data.borrow().built_in_record();
+    let pass = install::restore(&user_dir(), &themes::BUILT_IN, &record);
+    for line in &pass.failed {
+        eprintln!("gmnb: {line}");
+    }
+    let changed = store.data.borrow_mut().set_built_in_record(&pass.record);
+    if changed {
+        store.persist();
+    }
+    {
+        let mut built_ins = hub.built_ins.borrow_mut();
+        built_ins.embedded.retain(|id| !pass.written.contains(id));
+        for id in pass.embedded {
+            if !built_ins.embedded.contains(&id) {
+                built_ins.embedded.push(id);
+            }
+        }
+        built_ins.installed.extend(pass.record.into_keys());
+    }
+    pass.failed
 }
 
 impl Hub {
@@ -218,6 +304,8 @@ impl Hub {
             portal_accent: Cell::new(None),
             portal_watch: RefCell::new(None),
             dev_dir: config.dev_dir,
+            built_ins: RefCell::new(config.built_ins),
+            missing: Cell::new(false),
             style: RefCell::new(Rc::new(Style::base(&ctx))),
             writer: RefCell::new(Writer::new(crate::STYLESHEET)),
             // Above USER: shells like Noctalia/matugen write
@@ -398,18 +486,23 @@ impl Hub {
     // ---- The theme ------------------------------------------------------------
 
     fn sources(&self) -> Vec<Source> {
-        themes::discover(Some(&user_dir()), self.dev_dir.as_deref())
+        themes::discover(
+            Some(&user_dir()),
+            &self.built_ins.borrow().embedded,
+            self.dev_dir.as_deref(),
+        )
     }
 
-    /// What Settings lists: the base look first, then the built-in themes,
-    /// then the user's. Each theme's file is run in a throwaway sandbox
-    /// for its name.
+    /// What Settings lists: the base look first, then the themes folder's
+    /// (the built-in themes' ids first, in their order, then the rest by
+    /// id), then `GMNB_THEME_DIR`'s. Each theme's file is run in a
+    /// throwaway sandbox for its name.
     pub fn list(&self) -> Vec<Listed> {
         let mut out = vec![Listed {
             id: String::new(),
             name: BASE_NAME.to_string(),
             description: "The base look".to_string(),
-            your_copy: false,
+            comes_with: false,
             error: None,
         }];
         for l in themes::list(&self.sources(), &Limits::default()) {
@@ -417,15 +510,46 @@ impl Hub {
                 Ok(meta) => (meta.name, meta.description.unwrap_or_default(), None),
                 Err(e) => (l.id.clone(), String::new(), Some(e)),
             };
+            let built_in = themes::BUILT_IN.iter().any(|b| b.id == l.id);
+            let comes_with = built_in
+                && match l.origin {
+                    Origin::BuiltIn => true,
+                    Origin::Folder => self.built_ins.borrow().installed.contains(&l.id),
+                    Origin::Dev => false,
+                };
             out.push(Listed {
                 id: l.id,
                 name,
                 description,
-                your_copy: l.origin == Origin::UserCopy,
+                comes_with,
                 error,
             });
         }
         out
+    }
+
+    /// Whether a built-in theme has nothing at its name in the themes
+    /// folder (Settings then offers *Restore built-in themes*).
+    pub fn built_ins_missing(&self) -> bool {
+        !install::missing(&user_dir(), &themes::BUILT_IN).is_empty()
+    }
+
+    /// The themes folder changed (Settings saw it, or restored a theme): a
+    /// chosen theme whose folder is gone gives way to the base look, with a
+    /// toast, as one missing at start does; one that was missing and is
+    /// back is loaded. Whether it did either.
+    pub fn sync_installed(&self) -> bool {
+        let id = self.active();
+        if id.is_empty() {
+            return false;
+        }
+        let there = self.sources().iter().any(|s| s.id == id);
+        let loaded = self.theme.borrow().is_some();
+        if (loaded && !there) || (self.missing.get() && there) {
+            self.load(&id);
+            return true;
+        }
+        false
     }
 
     /// What the installed themes credit (About → Legal): a title and a
@@ -494,6 +618,7 @@ impl Hub {
         let id = if id == themes::BASE_ID { "" } else { id };
         *self.active.borrow_mut() = id.to_string();
         self.error.replace(None);
+        self.missing.set(false);
         self.notes.borrow_mut().clear();
         self.style_failed.set(false);
         self.styled.set(false);
@@ -504,9 +629,11 @@ impl Hub {
             match self.sources().into_iter().find(|s| s.id == id) {
                 None => {
                     // Kept as the choice: the theme returns when its
-                    // folder does.
+                    // folder does. Told, as a theme that fails is.
+                    self.missing.set(true);
                     self.error
                         .replace(Some(format!("The theme “{id}” isn't installed")));
+                    self.tell(&format!("Theme “{id}” isn't installed"));
                 }
                 Some(source) => match Theme::load(source, Limits::default()) {
                     Ok(theme) => {
@@ -1159,9 +1286,9 @@ impl Hub {
 
 /// What the themes of `sources` (`themes::discover`'s) credit, for
 /// About → Legal: a title and a text each. The built-in themes' always,
-/// first: their fonts and pictures are in GMNB itself, whether or not a
-/// folder of the user's replaces the theme ("your copy"); then the
-/// user's themes' own.
+/// first, from GMNB's own copies: their fonts and pictures are in GMNB
+/// itself, whether their folders are there, changed or deleted; then what
+/// each folder credits (what is already listed is not listed again).
 fn credits(sources: &[Source]) -> Vec<(String, String)> {
     let built_in = themes::BUILT_IN
         .iter()
@@ -1295,14 +1422,30 @@ mod tests {
     }
 
     /// About → Legal credits what GMNB itself carries, the built-in
-    /// themes' fonts and the swirl, whatever the user installs: a folder
-    /// of theirs named after a built-in theme ("your copy") replaced its
-    /// credits with its own, and so did one that fails to load. A theme of
-    /// the user's adds its own.
+    /// themes' fonts and the swirl, whatever the themes folder holds: a
+    /// built-in theme's folder changed (its credits taken out), one that
+    /// fails to load, one deleted, or every one as GMNB wrote it. A theme
+    /// of the user's adds its own.
     #[test]
-    fn the_built_in_credits_stay_with_a_copy_of_the_theme() {
+    fn the_built_in_credits_stay_whatever_their_folders_hold() {
         let dir = std::env::temp_dir().join(format!("gmnb-credits-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
+        let pass = install::install(&dir, &themes::BUILT_IN, &Default::default());
+        assert_eq!(pass.written.len(), themes::BUILT_IN.len(), "{pass:?}");
+        let titles = || {
+            let listed = credits(&themes::discover(Some(&dir), &[], None));
+            listed
+                .into_iter()
+                .map(|(title, _)| title)
+                .collect::<Vec<_>>()
+        };
+        let built_in = [
+            "Outfit typeface",
+            "Jersey 10 typeface",
+            "The swirl (ColorMix, from ly)",
+        ];
+        assert_eq!(titles(), built_in, "as GMNB wrote them");
+        std::fs::remove_dir_all(dir.join("swirls")).unwrap();
         for (id, source) in [
             ("aurora", "return { api = 1, name = \"Mine\" }"),
             ("glazed", "this is not Luau"),
@@ -1315,16 +1458,13 @@ mod tests {
             std::fs::write(dir.join(id).join("theme.luau"), source).unwrap();
         }
         std::fs::write(dir.join("mine/me.txt"), "mine").unwrap();
-        let listed = credits(&themes::discover(Some(&dir), None));
+        let titles = titles();
         let _ = std::fs::remove_dir_all(&dir);
-        let titles: Vec<&str> = listed.iter().map(|(title, _)| title.as_str()).collect();
-        for title in [
-            "Outfit typeface",
-            "Jersey 10 typeface",
-            "The swirl (ColorMix, from ly)",
-            "Me",
-        ] {
-            assert!(titles.contains(&title), "{title} is not in {titles:?}");
+        for title in built_in.iter().chain(&["Me"]) {
+            assert!(
+                titles.iter().any(|t| t == title),
+                "{title} is not in {titles:?}"
+            );
         }
         assert_eq!(titles.len(), 4, "{titles:?}");
     }
@@ -1350,15 +1490,20 @@ mod tests {
     /// timer is the 110 ms flash of a key typed on the keyboard, and its
     /// one idle makes it short or not again once it has been laid out at
     /// a height on the other side of `keys.short.below` (a resize, never
-    /// at rest).
+    /// at rest). The themes folder is watched by Settings alone, while it
+    /// is open (`watch.rs`: its monitors made in `sync`, and its one timer
+    /// the moment it lets the folder settle after a change, in `changed`);
+    /// nothing else watches a folder.
     #[test]
     fn theming_installs_no_sources() {
-        const CALLS: [&str; 5] = [
+        const CALLS: [&str; 7] = [
             "timeout_add",
             "idle_add",
             "add_tick_callback",
             "source_new",
             "invoke",
+            "monitor_directory",
+            "monitor_file",
         ];
         for (name, source, allowed) in [
             ("theme.rs", include_str!("theme.rs"), &[][..]),
@@ -1390,6 +1535,11 @@ mod tests {
                 include_str!("widgets/keypad.rs"),
                 &[("timeout_add", "flash"), ("idle_add", "size_allocate")],
             ),
+            (
+                "watch.rs",
+                include_str!("watch.rs"),
+                &[("monitor_directory", "sync"), ("timeout_add", "changed")],
+            ),
         ] {
             let code = source.split("#[cfg(test)]").next().unwrap_or("");
             for call in CALLS {
@@ -1415,5 +1565,47 @@ mod tests {
                 assert_eq!(found, 1, "{name}: {call} in `{inside}`");
             }
         }
+    }
+
+    /// Only Settings' watch (`watch.rs`) watches a folder or a file: no
+    /// other source of the app makes a file monitor, so nothing is told of
+    /// the themes folder while Settings is closed. (Read from the source
+    /// tree, every file of it; tests are always run from one.)
+    #[test]
+    fn only_settings_watches_the_themes_folder() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut todo = vec![src.clone()];
+        let mut seen = 0;
+        while let Some(dir) = todo.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    todo.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                seen += 1;
+                let text = std::fs::read_to_string(&path).unwrap();
+                let code = text.split("#[cfg(test)]").next().unwrap_or("");
+                let name = path.strip_prefix(&src).unwrap().display().to_string();
+                for call in [
+                    "monitor_directory",
+                    "monitor_file",
+                    ".monitor(",
+                    "FileMonitor::",
+                ] {
+                    for (at, _) in code.match_indices(call) {
+                        let inside = function_at(code, at);
+                        assert!(
+                            name == "watch.rs" && inside == "sync" && call == "monitor_directory",
+                            "{name} makes a file monitor ({call}) in `{inside}`"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(seen > 20, "{seen} source files");
     }
 }
