@@ -35,10 +35,13 @@ pub fn show(win: &Rc<Window>) {
     // Mode.
     let group = adw::PreferencesGroup::builder().title("Mode").build();
     let theme = adw::ToggleGroup::new();
-    for (name, label) in [("light", "Light"), ("dark", "Dark"), ("system", "System")] {
+    // In DGMNB's order (its Settings page's "Style").
+    for (name, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
         theme.add(adw::Toggle::builder().name(name).label(label).build());
     }
     theme.set_active_name(Some(&ctx.store.data.borrow().theme));
+    // Its parts equal, as DGMNB's.
+    theme.set_homogeneous(true);
     theme.set_valign(gtk::Align::Center);
     let row = adw::ActionRow::builder()
         .title("Light or dark")

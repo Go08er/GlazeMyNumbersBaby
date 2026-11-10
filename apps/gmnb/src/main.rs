@@ -229,6 +229,13 @@ fn activate(app: &adw::Application) {
             }
         });
     }
+    // Dev/screenshot hook: About, as Settings' row opens it.
+    if std::env::var("GMNB_PREFS").as_deref() == Ok("about") {
+        let w = win.clone();
+        glib::timeout_add_local_once(Duration::from_millis(300), move || {
+            prefs::about(&w.widget(), &w.ctx().hub.credits());
+        });
+    }
     if std::env::var("GMNB_COMPACT").as_deref() == Ok("1") {
         let w = win.clone();
         glib::timeout_add_local_once(Duration::from_millis(300), move || {
