@@ -5,7 +5,7 @@
 %global debug_package %{nil}
 
 Name:           gmnb
-Version:        0.2.0
+Version:        0.3.0
 Release:        1%{?dist}
 Summary:        GlazeMyNumbers,Baby: a pointlessly beautiful calculator
 # The Outfit typeface embedded in the binary is OFL-1.1; the rest are the
@@ -119,6 +119,8 @@ done
 %{_datadir}/icons/hicolor/scalable/apps/%{dapp_id}.svg
 
 %changelog
+* Mon Nov 09 2026 Go08er <Go08er@users.noreply.github.com> - 0.3.0-1
+- GMNB gets scripted themes (Luau)
 * Sun Nov 01 2026 Go08er <Go08er@users.noreply.github.com> - 0.2.0-1
 - Add the dgmnb subpackage, the lean twin
 * Fri Oct 02 2026 Go08er <Go08er@users.noreply.github.com> - 0.1.0-1

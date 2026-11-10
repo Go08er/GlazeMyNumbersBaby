@@ -68,6 +68,14 @@
     <color type="primary" scheme_preference="dark">#2a2a30</color>
   </branding>
   <releases>
+    <!-- Unreleased: when v0.3.0 is tagged, drop type="development" and give
+         the tag's date (also in debian/changelog and the Fedora spec's
+         %changelog). The Packages workflow refuses a tag until then. -->
+    <release version="0.3.0" type="development" date="2026-11-09">
+      <description>
+        <p>Released alongside GMNB 0.3, from the same shared core; no changes of its own yet.</p>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-11-01">
       <description>
         <p>First release of DGMNB, the lean twin of GMNB.</p>

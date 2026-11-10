@@ -187,7 +187,7 @@ packaging/
   io.github.Go08er.GlazeMyNumbersBaby.{desktop,metainfo.xml}       GMNB
   io.github.Go08er.DontGlazeMyNumbersBaby.{desktop,metainfo.xml}   DGMNB
   icons/
-  flatpak/   canonical manifests (Flathub-style: git tag and commit + cargo-sources.json)
+  flatpak/   canonical manifests (Flathub-style: git tag, and its commit once tagged, + cargo-sources.json)
   arch/      split PKGBUILD (gmnb + dgmnb)
   debian/    copy to ./debian, then dpkg-buildpackage -b (needs rustup's cargo)
   fedora/    gmnb.spec (+ the dgmnb subpackage)

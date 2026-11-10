@@ -180,7 +180,7 @@ dependencies = [
 
 [[package]]
 name = "appcore"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "calcvm",
  "copypaste",
@@ -495,14 +495,14 @@ dependencies = [
 
 [[package]]
 name = "calcmanager"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ratpack",
 ]
 
 [[package]]
 name = "calcvm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "calcmanager",
  "copypaste",
@@ -604,7 +604,7 @@ dependencies = [
 
 [[package]]
 name = "copypaste"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "regex",
 ]
@@ -660,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "crmath"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cc",
 ]
@@ -679,14 +679,14 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "datecalc"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
 ]
 
 [[package]]
 name = "dgmnb"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "accesskit",
  "accesskit_consumer",
@@ -1175,7 +1175,7 @@ dependencies = [
 
 [[package]]
 name = "gmnb"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "appcore",
  "calcvm",
@@ -1194,11 +1194,11 @@ dependencies = [
 
 [[package]]
 name = "gmnb-launcher"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "gmnb-theme"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "mlua",
 ]
@@ -1247,7 +1247,7 @@ dependencies = [
 
 [[package]]
 name = "graphing"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "crmath",
  "egg",
@@ -2328,7 +2328,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "ratpack"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "raw-cpuid"
@@ -3039,7 +3039,7 @@ checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
 name = "unitconv"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "serde",
